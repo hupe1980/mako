@@ -106,6 +106,7 @@ pub mod stammdaten;
 pub mod steuerungsauftrag;
 pub mod stornierung;
 pub mod technik_aenderung;
+pub mod wertebestellung;
 
 pub use geraeteubernahme::{
     ANFRAGE_PIDS, BESTELLUNG_PIDS, GeraeteubernahmeCommand, GeraeteubernahmeData,
@@ -218,6 +219,7 @@ impl mako_engine::builder::EngineModule for WimModule {
             "wim-geraeteubernahme",
             "wim-stammdaten",
             "wim-stornierung",
+            wertebestellung::WORKFLOW_NAME,
             "wim-steuerungsauftrag",
             "wim-preisanfrage",
             "wim-preisliste",
@@ -369,9 +371,36 @@ impl mako_engine::builder::EngineModule for WimModule {
             router.register(pid, "wim-preisliste");
         }
 
-        // ORDCHG 39000 — Stornierung Sperr-/Entsperrauftrag.
-        // Response PIDs (39001 Bestätigung, 39002 Ablehnung) are outbox entries.
+        // ORDCHG 39002 — "Stornierung der Bestellung von Werten" (WiM Teil 2
+        // UC 4.1 Nr. 5). Its answers, ORDRSP 19013/19014, are outbox entries.
+        // 39000/39001 are Gas Sperrprozesse and are not registered here.
         router.register(stornierung::STORNIERUNG_PID, "wim-stornierung");
+
+        // ── ESA Wertebestellung (WiM Teil 2 Kap. 4) ───────────────────────
+        //
+        // The two sides register disjoint PIDs, so an integrated deployment can
+        // hold both roles without a routing conflict.
+        //
+        // MSB side: inbound ORDERS 17007 ("Bestellung und Abbestellung von
+        // Werten ESA", UC 4.1 Nr. 3 / UC 4.3 Nr. 1). §34 Abs. 2 S. 2 Nr. 10 MsbG
+        // makes serving an ESA a mandatory Zusatzleistung, so an MSB must be
+        // able to process the order that authorises delivery and the one that
+        // stops it. Its answers (ORDRSP 19011/19012) are outbox entries.
+        if roles.contains(mako_engine::marktrolle::Marktrolle::Msb) {
+            router.register(
+                wertebestellung::BESTELLUNG_PID,
+                wertebestellung::WORKFLOW_NAME,
+            );
+        }
+
+        // ESA side: the answers the MSB sends back, inbound here. Registered
+        // only for a deployment that *is* an ESA — an ESA has no Zuordnung to a
+        // Marktlokation, so nothing else may claim these.
+        if roles.contains(mako_engine::marktrolle::Marktrolle::Esa) {
+            for &pid in wertebestellung::ESA_INBOUND_PIDS {
+                router.register(pid, wertebestellung::WORKFLOW_NAME);
+            }
+        }
 
         // INVOIC 31003 (WiM-Rechnung) and 31009 (MSB-Rechnung).
         //

@@ -30,7 +30,7 @@ Both live under BK7-24-01-009 but cover entirely different processes:
 | Ruling | BK6-24-174 | BK7-24-01-009 |
 | EDIFACT | UTILMD S2.x | UTILMD G1.x |
 
-> **Saturday counts as a Werktag for both.** Sunday and public holidays do not.
+> **Saturdays, Sundays and public holidays are not Werktage** for either.
 
 ## PID Inventory
 

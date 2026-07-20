@@ -32,7 +32,7 @@
 //!
 //! - **PID 55042**: Anmeldung Messstellenbetrieb (nMSB → NB, WiM AHB S2.1)
 //! - **APERAK Frist**: **5 Werktage** (BNetzA BK6-18-032, WiM)
-//! - **Saturday counts as a Werktag**; Sunday and federal public holidays
+//! - **Saturdays, Sundays and federal public holidays are not Werktage**
 //!   do not.  This is distinct from GPKE (24 wall-clock hours) and GeLi Gas
 //!   (10 Werktage).
 //! - The NB state machine:
@@ -240,8 +240,7 @@ impl MockNb {
 /// NB receives the UTILMD 55042, dispatches a positive APERAK within 5 Werktage
 /// (BNetzA BK6-18-032), then records physical completion of the device change.
 ///
-/// Per WiM AHB: Saturday counts as a Werktag; Sunday and federal public holidays
-/// do not.  This is distinct from GPKE (24 wall-clock hours) and GeLi Gas
+/// Per WiM AHB: Saturdays, Sundays and federal public holidays are not Werktage.  This is distinct from GPKE (24 wall-clock hours) and GeLi Gas
 /// (10 Werktage).
 #[tokio::test]
 async fn e2e_wim_geraetewechsel_positive_aperak() {

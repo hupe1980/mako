@@ -724,6 +724,12 @@ pub async fn delete_energiemix_handler(
 pub struct PositionCostBreakdown {
     pub product_code: String,
     pub sparte: String,
+    /// Marktlokation this cost belongs to.
+    ///
+    /// Without it a breakdown line identifies its supply point only by the
+    /// free-text `standort_bezeichnung`, which is not a key — and the BO4E
+    /// projection has nothing to put in `lieferstellenangebotsteil`.
+    pub malo_id: Option<String>,
     pub standort_bezeichnung: Option<String>,
     pub jahresverbrauch_kwh: Decimal,
     /// Supply cost only (Grundpreis + Arbeitspreis + Leistungspreis, after discount).
@@ -856,6 +862,7 @@ fn compute_cost_breakdown(
     Some(PositionCostBreakdown {
         product_code: pos.product_code.clone(),
         sparte: pos.sparte.clone(),
+        malo_id: pos.malo_id.clone(),
         standort_bezeichnung: pos.standort_bezeichnung.clone(),
         jahresverbrauch_kwh: pos.jahresverbrauch_kwh,
         supply_netto_eur: supply_netto_eur.round_dp(2),
@@ -1049,7 +1056,7 @@ pub async fn post_angebot(
         &req,
         &positionen_json,
         &varianten_json,
-        &serde_json::Value::Array(vec![]), // varianten_enriched populated lazily on GET .../comparison
+        &serde_json::json!({}), // bo4e populated on GET .../comparison, where pricing happens
         total_netto_opt,
         total_brutto_opt,
         gueltig_bis,
@@ -1179,11 +1186,13 @@ pub async fn get_angebot_handler(
 /// endpoint renders the comparison table that a sales engineer sends to the customer,
 /// or that the B2B portal renders for self-service CPQ.
 ///
-/// ## Pre-computed vs. live
+/// ## BO4E output
 ///
-/// Scenarios are re-computed live from the current product data + stored positions.
-/// The `angebot_varianten_enriched` column stores the last computed snapshot for fast
-/// retrieval without DB roundtrips; this endpoint always returns a live recalculation.
+/// Scenarios are priced live from the current product data and the stored
+/// positions. The response also carries the priced quotation as a BO4E
+/// [`Angebot`](rubo4e::current::Angebot) under `bo4e`, and persists it to
+/// `angebote.bo4e` — this endpoint is where pricing happens, so it is where the
+/// interchange document is produced.
 pub async fn get_angebot_comparison(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
@@ -1309,6 +1318,29 @@ pub async fn get_angebot_comparison(
         szenarien.push(s);
     }
 
+    // Project the priced scenarios into the BO4E `Angebot` and persist it: this
+    // is the CPQ/ERP interchange payload, and pricing happens here.
+    let sparte = positionen.first().map(|p| p.sparte.as_str());
+    let bo4e = crate::bo4e_angebot::build_angebot(
+        &angebot.angebotsnummer,
+        &angebot.status,
+        angebot.gueltig_bis,
+        angebot.lieferbeginn,
+        sparte,
+        &szenarien,
+    );
+    match serde_json::to_value(&bo4e) {
+        Ok(v) => {
+            if let Err(e) = crate::pg::store_angebot_bo4e(&pool, angebot.id, &cfg.tenant, &v).await
+            {
+                tracing::warn!(angebot_id = %angebot.id, error = %e, "tarifbd: BO4E persist failed");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(angebot_id = %angebot.id, error = %e, "tarifbd: BO4E encode failed")
+        }
+    }
+
     Json(serde_json::json!({
         "angebot_id":          angebot.id,
         "angebotsnummer":      angebot.angebotsnummer,
@@ -1321,6 +1353,7 @@ pub async fn get_angebot_comparison(
         "varianten_count":     varianten.len(),
         "gewaehlte_variante":  angebot.gewaehlte_variante,
         "szenarien":           szenarien,
+        "bo4e":                bo4e,
         "hinweis": "Preise sind Schätzungen auf Basis aktueller Tarifpreisblätter. \
                     NNE und KA werden nur ausgewiesen wenn sie in den Positionen angegeben sind. \
                     MwSt 19 % wurde aufgeschlagen. Verbindlich ist der unterzeichnete Rahmenvertrag.",
@@ -1388,6 +1421,10 @@ pub async fn post_angebot_annehmen(
                 "lieferbeginn": angebot.lieferbeginn.map(|d| d.to_string()),
                 "laufzeit_monate": angebot.laufzeit_monate,
                 "gewaehlte_variante": angebot.gewaehlte_variante,
+                // The BO4E `Angebot` for the priced quotation. Consumers build
+                // the contract from the same object the customer was quoted,
+                // rather than re-deriving it from the scalars below.
+                "bo4e": angebot.bo4e,
                 "positionen": angebot.positionen,
                 "varianten": angebot.varianten,
                 "jahreskosten_netto_eur": angebot.jahreskosten_netto_eur,

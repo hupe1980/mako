@@ -35,7 +35,8 @@ uuid               = { workspace = true }
 tokio              = { version = "1", features = ["full"] }
 tokio-util         = { workspace = true }
 tracing            = "0.1"
-mako-service       = { workspace = true, features = ["otel", "cedar", "oidc"] }
+mako-service       = { workspace = true, features = ["otel", "cedar", "oidc", "rate-limit"] }
+futures            = { version = "0.3", default-features = false, features = ["std"] }
 rmcp               = { workspace = true }
 schemars           = { workspace = true }
 secrecy            = "0.10"
@@ -77,5 +78,7 @@ datafusion              = { workspace = true, features = ["parquet", "sql"] }
 opendal                 = { workspace = true }
 
 [dev-dependencies]
-mako-edm  = { workspace = true, features = ["testing"] }
-tokio     = { version = "1", features = ["full"] }
+mako-edm            = { workspace = true, features = ["testing"] }
+tokio               = { version = "1", features = ["full"] }
+rust_decimal_macros = { workspace = true }
+tower               = { version = "0.5", features = ["util"] }

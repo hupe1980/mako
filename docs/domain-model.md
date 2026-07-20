@@ -52,7 +52,7 @@ graph LR
     NB -->|"MSCONS: Messwerte\n(MSCONS 13xxx)"| BKV
     NB -->|"INVOIC: NNE/MMM\n31001/31002/31005"| LF
     LF -->|"INVOIC: Sperrung AWH Gas\n31011"| NB
-    NB -->|"MABIS: Summenzeitreihe\nUTILTS 13003"| BIKO
+    NB -->|"MaBiS: Summenzeitreihe\nMSCONS 13003"| BIKO
     BIKO -->|"MABIS: Abrechnungsdaten"| BKV
     BIKO ---|"settlement"| UNB
     EIV -->|"Redispatch 2.0\nORDERS/ORDRSP"| NB
@@ -92,7 +92,7 @@ required for each role per commodity (Strom / Gas).
 | **LF** | Lieferant | Energy Supplier | ✅ | ✅ | Responsible for supplying energy to market locations, settling billing with the DSO, and financially compensating the balance between profiled and metered energy quantities. |
 | **NB** | Netzbetreiber | Distribution System Operator (DSO) | ✅ | ✅ | Responsible for grid operation, grid maintenance, and routing of energy. Creates and manages market locations, metering locations, and technical resources within the grid area. Aggregates energy quantities for settlement. Gas: responsible for forwarding metering values to trading partners. |
 | **ÜNB** | Übertragungsnetzbetreiber | Transmission System Operator (TSO) | ✅ | — | Responsible for transmission grid stability, EEG allocation time-series, and short-term plausibility checks within the control zone. One TSO = one Regelzone. In MABIS: bilateral MSCONS exchange with BKV (PID 13003). |
-| **MSB** | Messstellenbetreiber | Metering Point Operator | ✅ | ✅ | Responsible for installing, operating, and maintaining meters (iMSB = incumbent, gMSB = competitive). Strom: distributes metered values, substitute values, and preliminary values to authorised partners. Gas: determines and forwards metering values to the DSO. |
+| **MSB** | Messstellenbetreiber | Metering Point Operator | ✅ | ✅ | Responsible for installing, operating, and maintaining meters. **gMSB** (grundzuständig) is the incumbent — the NB by default, per §41 MsbG; **nMSB** (nicht-grundzuständig) is the challenger a customer may switch to; **aMSB** (abgebend) is the outgoing operator in a switch. Strom: distributes metered values, substitute values, and preliminary values to authorised partners. Gas: determines and forwards metering values to the DSO. |
 | **BKV** | Bilanzkreisverantwortlicher | Balance Responsible Party (BRP) | ✅ | ✅ | Responsible for the energetic and financial balance within a Bilanzkreis. Counterparty to the BIKO (Strom) or MGV (Gas). |
 | **BIKO** | Bilanzkoordinator | Balance Coordinator | ✅ | — | Responsible for Bilanzkreisabrechnung (balance-circle settlement) and financial settlement between BKVs. See `mako-mabis` (PID 13003). |
 | **MGV** | Marktgebietsverantwortlicher | Market Area Manager | — | ✅ | Responsible for gas balance circle settlement and procurement/dispatch of balancing energy. Operates the virtual trading hub. |
@@ -100,7 +100,7 @@ required for each role per commodity (Strom / Gas).
 | **BTR** | Betreiber einer technischen Ressource | Technical Resource Operator | ✅ | — | Installs, operates, and maintains technical resources (generators, controllable loads). Does not change with DSO ownership transfer. |
 | **EIV** | Einsatzverantwortlicher | Dispatch Responsible Party | ✅ | — | Responsible for deploying controllable resources. Assigns SR-IDs to steuerable resources. Central actor in Redispatch 2.0. |
 | **DP** | Data Provider | Data Provider | ✅ | — | Forwards information to authorised trading partners on behalf of the DSO or MSB. |
-| **ESA** | Energieserviceanbieter des Anschlussnutzers | Consumer-side Energy Service Provider | ✅ | — | Acts on behalf of the end-customer (Anschlussnutzer) to request and process metering data, with explicit consumer consent. The ESA must use the data exclusively in the consumer relationship. |
+| **ESA** | Energieserviceanbieter des Anschlussnutzers | Consumer-side Energy Service Provider | ✅ | — | Acts on behalf of the end-customer (Anschlussnutzer) to request and process metering data. Has no Zuordnung to a Marktlokation: access rests on the Anschlussnutzer's consent (§49 Abs. 2 Nr. 9 MsbG) plus a bilateral contract with the MSB, which §34 Abs. 2 S. 2 Nr. 10 MsbG makes a mandatory, non-discriminatory Zusatzleistung. Data may be used only in the consumer relationship. See `Marktrolle::Esa`. |
 | **RB** | Registerbetreiber | Registry Operator | ✅ | ✅ | Operates a database for energy market data (e.g., the national Marktstammdatenregister). |
 
 ### Role pairs in key processes

@@ -95,12 +95,15 @@ capacity         = 100
 max_retries      = 4
 base_backoff_secs = 30   # retry delays: 30s, 90s, 270s, 810s
 
+mcp_api_key = "env:AGENTD_MCP_API_KEY"   # SecretString — never logged
+
+# Keys are free-form names; values are MCP endpoints. Must come last: any
+# key after a table header belongs to that table.
 [mcp_servers]
 makod    = "http://makod:8080/mcp"
 marktd   = "http://marktd:8180/mcp"
 billingd = "http://billingd:9280/mcp"
 # ... more services
-mcp_api_key = "env:AGENTD_MCP_API_KEY"   # SecretString — never logged
 
 [rag]
 enabled           = true

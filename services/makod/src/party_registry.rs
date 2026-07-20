@@ -216,8 +216,8 @@ static ROLE_TABLE: &[RoleEntry] = &[
     RoleEntry {
         abbrev: "ESA",
         sparte: RoleSparte::Strom,
-        engine_canonical: None,
-    }, // Energieserviceanbieter des Anschlussnutzers — iMS placeholder
+        engine_canonical: Some("ESA"),
+    }, // Energieserviceanbieter (PARTIN 37006) — WiM Teil 2 Kap. 4
     // ── Gas ────────────────────────────────────────────────────────────────
     RoleEntry {
         abbrev: "GNB",
@@ -844,12 +844,21 @@ mod tests {
         let parties = vec![
             party("9900001000001", &["DP"], false),
             party("9900001000002", &["EIV"], false),
-            party("9900001000003", &["ESA"], false),
             party("9800001000001", &["KN"], false),
             party("4012345000023", &["RB"], false),
         ];
         let reg = MpIdRegistry::from_config(&parties).unwrap();
         assert!(reg.deployment_role_strings().is_empty());
+    }
+
+    /// ESA gates real PID routing (WiM Teil 2 Kap. 4), so it canonicalises to an
+    /// engine role rather than being dropped as a placeholder.
+    #[test]
+    fn esa_is_an_engine_role() {
+        let parties = vec![party("9900001000003", &["ESA"], true)];
+        let reg = MpIdRegistry::from_config(&parties).unwrap();
+        assert_eq!(reg.gln_for_role("ESA"), Some("9900001000003"));
+        assert!(reg.deployment_role_strings().contains(&"ESA".to_owned()));
     }
 
     // ── Known roles ───────────────────────────────────────────────────────────
@@ -868,11 +877,10 @@ mod tests {
     }
 
     #[test]
-    fn dp_eiv_esa_kn_rb_are_known_but_excluded_from_engine() {
+    fn dp_eiv_kn_rb_are_known_but_excluded_from_engine() {
         let parties = vec![
             party("9900001000001", &["DP"], true),
             party("9900001000002", &["EIV"], false),
-            party("9900001000003", &["ESA"], false),
             party("9800001000001", &["KN"], false),
             party("4012345000023", &["RB"], false),
         ];

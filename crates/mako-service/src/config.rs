@@ -165,3 +165,74 @@ mod tests {
         assert_eq!(p, PathBuf::from("nis-syncd.toml"));
     }
 }
+
+// ── `env:` indirection ────────────────────────────────────────────────────────
+
+/// An `env:VARNAME` reference whose variable is not set.
+///
+/// Carries only the variable name — never the value — so the error is safe to
+/// log even when the reference points at a secret.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("environment variable {var:?} is referenced in the config but not set")]
+pub struct EnvRefError {
+    /// Name of the missing variable.
+    pub var: String,
+}
+
+/// Resolve an `env:VARNAME` indirection to the variable's value.
+///
+/// A value without the prefix is returned unchanged, so a config may mix
+/// literals and indirections freely.
+///
+/// A service that never calls this silently ships the placeholder as the value:
+/// `api_key = "env:SVC_API_KEY"` becomes the literal bearer token
+/// `env:SVC_API_KEY`, which authenticates against nothing and fails as a 401
+/// rather than as a configuration error.
+///
+/// # Errors
+///
+/// Returns an error naming the variable when it is referenced but unset —
+/// failing at startup rather than on the first request that needs it.
+pub fn resolve_env(value: &str) -> Result<String, EnvRefError> {
+    match value.strip_prefix("env:") {
+        Some(var) => std::env::var(var).map_err(|_| EnvRefError {
+            var: var.to_owned(),
+        }),
+        None => Ok(value.to_owned()),
+    }
+}
+
+/// [`resolve_env`], wrapping the result in a [`secrecy::SecretString`].
+///
+/// # Errors
+///
+/// As [`resolve_env`].
+pub fn resolve_env_secret(value: &str) -> Result<secrecy::SecretString, EnvRefError> {
+    resolve_env(value).map(secrecy::SecretString::from)
+}
+
+#[cfg(test)]
+mod env_indirection_tests {
+    use super::*;
+
+    #[test]
+    fn a_literal_passes_through_unchanged() {
+        assert_eq!(resolve_env("plain-value").unwrap(), "plain-value");
+    }
+
+    #[test]
+    fn an_unset_variable_names_itself_in_the_error() {
+        let err = resolve_env("env:MAKO_TEST_DEFINITELY_UNSET").unwrap_err();
+        assert!(
+            err.to_string().contains("MAKO_TEST_DEFINITELY_UNSET"),
+            "the error must name the missing variable, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_value_that_merely_contains_env_is_not_an_indirection() {
+        // Only a `env:` *prefix* indirects; a secret containing the substring
+        // must survive verbatim.
+        assert_eq!(resolve_env("prod-env:key").unwrap(), "prod-env:key");
+    }
+}

@@ -57,6 +57,20 @@ permit(
     context.principal_tenant == context.resource_tenant
 };
 
+// Reading orders (Ablesesteuerung). A reading order dispatches a field visit
+// and its result becomes a billing figure, so both reading and writing are
+// tenant-scoped like every other data action.
+permit(
+    principal,
+    action in [
+        Action::"read-reading-order",
+        Action::"write-reading-order"
+    ],
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant
+};
+
 // GDPR erasure: operator roles only.
 permit(
     principal,

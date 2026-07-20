@@ -171,7 +171,10 @@ pub use utilmd::{UtilmdBuilder, UtilmdTransactionBuilder};
 #[cfg(feature = "mscons")]
 mod mscons;
 #[cfg(feature = "mscons")]
-pub use mscons::{MeteringPointBuilder, MsconsBuilder};
+pub use mscons::{
+    MSCONS_UNITS, MeteringPointBuilder, MsconsBuilder, QTY_ENERGIE_SUMMIERT, QTY_ERSATZWERT,
+    QTY_WAHRER_WERT, is_valid_mscons_unit,
+};
 
 #[cfg(feature = "aperak")]
 mod aperak;

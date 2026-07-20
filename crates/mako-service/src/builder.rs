@@ -92,27 +92,80 @@ impl ServiceBuilder {
     /// Add a global GCRA rate limiter (requires feature `rate-limit`).
     ///
     /// Responds with `429 Too Many Requests` when the token bucket is empty.
-    /// The limiter is global across all inbound requests regardless of client.
+    /// The limiter is global across all inbound requests regardless of client,
+    /// so it bounds total load but not any individual caller — pair it with
+    /// [`Self::with_tenant_rate_limit`] on a multi-tenant deployment.
     #[must_use]
     #[cfg(feature = "rate-limit")]
     pub fn with_rate_limit(self, config: crate::rate_limit::RateLimitConfig) -> Self {
-        use axum::{
-            extract::Request, http::StatusCode, middleware::Next, response::IntoResponse as _,
-        };
+        use axum::{extract::Request, middleware::Next};
         use governor::{Quota, RateLimiter};
         use std::{num::NonZeroU32, sync::Arc};
 
         let rps = NonZeroU32::new(config.requests_per_second).unwrap_or(NonZeroU32::MIN);
-        let limiter = Arc::new(RateLimiter::direct(Quota::per_second(rps)));
+        let burst = NonZeroU32::new(config.burst.max(config.requests_per_second))
+            .unwrap_or(NonZeroU32::MIN);
+        let limiter = Arc::new(RateLimiter::direct(
+            Quota::per_second(rps).allow_burst(burst),
+        ));
         Self {
             router: self.router.layer(axum::middleware::from_fn(
                 move |req: Request, next: Next| {
                     let limiter = Arc::clone(&limiter);
                     async move {
-                        if limiter.check().is_err() {
-                            return StatusCode::TOO_MANY_REQUESTS.into_response();
+                        match limiter.check() {
+                            Ok(()) => next.run(req).await,
+                            Err(not_until) => crate::rate_limit::too_many_requests(
+                                not_until.wait_time_from(governor::clock::Clock::now(
+                                    &governor::clock::DefaultClock::default(),
+                                )),
+                                "service",
+                            ),
                         }
-                        next.run(req).await
+                    }
+                },
+            )),
+        }
+    }
+
+    /// Add a per-tenant GCRA rate limiter (requires feature `rate-limit`).
+    ///
+    /// Each caller gets its own bucket, keyed on the authenticated tenant when
+    /// the request carries one and on the peer address otherwise. This keeps a
+    /// single busy tenant from consuming the whole service allowance.
+    ///
+    /// Rejections carry `Retry-After`, so a well-behaved client backs off for
+    /// the right interval instead of retrying immediately and deepening the
+    /// overload.
+    #[must_use]
+    #[cfg(feature = "rate-limit")]
+    pub fn with_tenant_rate_limit(self, config: crate::rate_limit::RateLimitConfig) -> Self {
+        use axum::{extract::Request, middleware::Next};
+        use governor::{Quota, RateLimiter};
+        use std::{num::NonZeroU32, sync::Arc};
+
+        let rps = NonZeroU32::new(config.per_tenant_requests_per_second).unwrap_or(NonZeroU32::MIN);
+        let burst = NonZeroU32::new(config.burst.max(config.per_tenant_requests_per_second))
+            .unwrap_or(NonZeroU32::MIN);
+        let limiter: Arc<governor::DefaultKeyedRateLimiter<String>> = Arc::new(RateLimiter::keyed(
+            Quota::per_second(rps).allow_burst(burst),
+        ));
+
+        Self {
+            router: self.router.layer(axum::middleware::from_fn(
+                move |req: Request, next: Next| {
+                    let limiter = Arc::clone(&limiter);
+                    async move {
+                        let key = crate::rate_limit::caller_key(&req);
+                        match limiter.check_key(&key) {
+                            Ok(()) => next.run(req).await,
+                            Err(not_until) => crate::rate_limit::too_many_requests(
+                                not_until.wait_time_from(governor::clock::Clock::now(
+                                    &governor::clock::DefaultClock::default(),
+                                )),
+                                &key,
+                            ),
+                        }
                     }
                 },
             )),

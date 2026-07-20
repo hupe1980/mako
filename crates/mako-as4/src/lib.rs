@@ -1,7 +1,7 @@
 //! BDEW MaKo AS4 profile for German energy market communication.
 //!
 //! This crate encodes the **BDEW AS4-Profil v1.2** requirements on top
-//! of [`asx_rs`](https://docs.rs/asx-rs) v0.7, providing:
+//! of [`asx_rs`](https://docs.rs/asx-rs) v0.9, providing:
 //!
 //! - [`constants`] — BDEW-specific URIs and algorithm identifiers
 //! - [`pmode`] — [`BdewAction`] enum, [`bdew_pmode`] / [`bdew_pmode_sign_only`],
@@ -20,8 +20,39 @@
 //! | Key reference | **X509SKI** | §2.2.6.2.2 |
 //! | EC curve | **BrainpoolP256r1** (both signing and encryption) | BSI TR-03116-3 |
 //!
-//! Both algorithms are **auto-detected** by asx-rs v0.7 from the key/cert type —
+//! Both algorithms are **auto-detected** from the key/cert type —
 //! supply EC (BrainpoolP256r1) material and the correct paths are selected automatically.
+//!
+//! ## Signature scope
+//!
+//! The BDEW profile requires `PMode[1].Security.X509.Sign` to be set *"nach
+//! Maßgabe der Abschnitte 5.1.4 und 5.1.5 von \[AS4\]"* (§2.2.6.2.1), and those
+//! sections put the `eb:Messaging` SOAP header block inside the signature.
+//!
+//! The **whole `eb:Messaging` block** is signed, referenced by
+//! `wsu:Id="as4-messaging"`. That scope is what makes the signature meaningful:
+//! `PartyInfo`, `CollaborationInfo` and `Action` are the routing and
+//! authorization metadata, so a signature covering only `eb:MessageId` would
+//! leave all of it tamperable.
+//!
+//! On receive, the block the parser consumes is bound to the block the
+//! signature verified, so a relocated-but-still-resolvable signed element cannot
+//! be paired with an injected unsigned replacement (XML Signature Wrapping).
+//!
+//! ### Interop
+//!
+//! Verification is strict in one direction: a receiver requiring the full block
+//! rejects a sender that signs less, while a receiver checking only that *some*
+//! signature verified accepts a conformant sender either way. Conformant partner
+//! stacks sign the block, so strict verification rejects only non-conformant
+//! senders.
+//!
+//! ## ECDH-ES key derivation
+//!
+//! ConcatKDF uses the SP 800-56A raw-concatenation form — no `keydatalen` field,
+//! no JOSE-style length prefixes — which is what BSI TR-03116-3 §9.2 requires.
+//! The derivation determines the KEK, so a peer deriving it differently cannot
+//! decrypt the payload.
 //!
 //! ## Quick start
 //!

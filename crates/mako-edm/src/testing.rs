@@ -189,6 +189,7 @@ impl TimeSeriesRepository for InMemoryTimeSeriesRepository {
 
     async fn update_gas_quality(
         &self,
+        _tenant: &str,
         _malo_id: &str,
         _brennwert_kwh_per_m3: Option<&str>,
         _zustandszahl: Option<&str>,

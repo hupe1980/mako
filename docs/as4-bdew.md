@@ -18,6 +18,48 @@ and **1 April 2025** (Gas, BK7-22-023). This guide covers everything needed to o
 
 ---
 
+## Signature scope
+
+BDEW AS4-Profil §2.2.6.2.1 requires `PMode[1].Security.X509.Sign` to be set
+*"nach Maßgabe der Abschnitte 5.1.4 und 5.1.5 von [AS4]"*, and those sections
+place the `eb:Messaging` SOAP header block inside the signature.
+
+`makod` signs the whole `eb:Messaging` block, referenced by
+`wsu:Id="as4-messaging"`. That scope is what makes the signature meaningful:
+`PartyInfo`, `CollaborationInfo` and `Action` are the fields the pipeline routes
+and authorizes on, so a signature covering only `eb:MessageId` would leave every
+routing decision unauthenticated.
+
+On receive, the `eb:Messaging` block the parser consumes is bound to the block
+the signature verified. Without that binding an attacker can relocate the signed
+element so it still resolves by `wsu:Id`, then feed the parser an unsigned
+injected replacement — **XML Signature Wrapping**.
+
+### Interop
+
+Verification is strict in one direction. A receiver that requires the full block
+rejects a sender that signs less than it; a receiver that checks only that *some*
+signature verified accepts a conformant sender either way.
+
+Conformant partner stacks sign the block, so strict verification rejects only
+non-conformant senders.
+
+### Payload encryption
+
+ConcatKDF uses the SP 800-56A raw-concatenation form — no `keydatalen`, no
+JOSE-style length prefixes — which is what BSI TR-03116-3 §9.2 requires. The
+derivation determines the KEK, so a peer deriving it differently cannot decrypt
+the payload.
+
+### Further hardening on this profile
+
+- The `wsse:BinarySecurityToken` **PKIPath** parse is bounds-checked. PKIPath is
+  the token type BDEW mandates (§2.2.6.2.1), so this path is reached on every
+  inbound BDEW AS4 message, before authentication.
+- RSA signing keys below 2048 bits are rejected. BDEW mandates ECDSA on
+  BrainpoolP256r1, so a conformant deployment never presents one.
+- `CertHandle`'s `Debug` redacts `signing_key_pem`.
+
 ## BDEW AS4-Profil v1.2 vs PEPPOL/CEF
 
 BDEW AS4 is based on the CEF eDelivery profile but extends it with mandatory BSI TR-03116-3
@@ -302,12 +344,10 @@ to run integration tests locally immediately:
 ```toml
 [dev-dependencies]
 mako-as4 = { path = "../mako-as4", features = ["testing"] }
-# asx-rs 0.8 testing helpers used below
-asx-rs   = { version = "0.8", features = ["as4", "testing"] }
+asx-rs   = { version = "0.9", features = ["as4", "testing"] }
 ```
 
-The following uses **asx-rs v0.8.0 convenience APIs** — no manual `CertHandle`
-construction or direct `zeroize` dependency required:
+No manual `CertHandle` construction or direct `zeroize` dependency is needed:
 
 ```rust
 use mako_as4::testing::{BdewTestPki, MockAs4Endpoint};
@@ -320,16 +360,16 @@ async fn test_as4_full_round_trip() {
     let sender_pki = BdewTestPki::generate("Test NB 9900357000004");
     let receiver_pki = BdewTestPki::generate("Test LF 9900357000005");
 
-    // Mock endpoint configured to decrypt ECDH-ES messages (asx-rs 0.8 FR-1).
-    // Without with_decryption_key_pem(), encrypted messages would return HTTP 400.
+    // The mock must hold the decryption key to accept ECDH-ES messages;
+    // without it, an encrypted message returns HTTP 400.
     let mock = MockAs4Endpoint::builder()
         .with_decryption_key_pem(receiver_pki.encryption.key_pem.clone())
         .bind("127.0.0.1:0")
         .await
         .unwrap();
 
-    // with_signing_material() atomically sets cert + key and auto-derives key_id
-    // from partner_id — no manual CertHandle construction needed (asx-rs 0.8 BUG-1 fix).
+    // `with_signing_material` sets cert and key together and derives `key_id`
+    // from the partner id, so the two cannot be set inconsistently.
     let session = std::sync::Arc::new(
         SessionContextBuilder::new("sess-test", "9900357000004")
             .with_signing_material(
@@ -341,18 +381,19 @@ async fn test_as4_full_round_trip() {
             .unwrap(),
     );
 
-    // EventBus::new_for_testing() — BestEffort mode, no audit sink required (asx-rs 0.8 FR-2).
+    // BestEffort mode — no audit sink required for a test.
     let event_bus = std::sync::Arc::new(EventBus::new_for_testing());
 
-    // ... build and send As4SendRequest with partial credentials (FR-4):
-    // Only recipient_cert_pem is needed — signing falls back to session cert_handle.
+    // Partial credentials: only `recipient_cert_pem` is required, since signing
+    // falls back to the session's cert handle.
 
-    // As4HttpTransport for localhost — SSRF guard disabled (asx-rs 0.8 FR-3).
-    // Use send_to_localhost() (not send()) to bypass SSRF URL validation.
+    // Localhost transport: `send_to_localhost` bypasses the SSRF URL guard that
+    // `send` applies. Test-only — the guard exists to stop a partner-supplied
+    // endpoint pointing at internal infrastructure.
     let transport = As4HttpTransport::new_for_localhost_testing().unwrap();
     // transport.send_to_localhost(&mock.local_url(), &output).await.unwrap();
 
-    // mock.next_received() delivers the decrypted plaintext payload (FR-1).
+    // `next_received` delivers the decrypted plaintext payload.
     // let received = mock.next_received().await.unwrap();
     // assert!(received.payload.starts_with(b"UNB"));
 }
@@ -403,7 +444,7 @@ Each variant maps to the AS4 action URI `urn:bdew:as4:service:<TYPE>`.
 | `Pricat` | PRICAT | WiM Preisliste MSB |
 | `Quotes` | QUOTES | WiM Preisanfrage MSB response |
 | `Partin` | PARTIN | GPKE Kommunikationsdaten (PIDs 37000–37006), GeLi Gas (PIDs 37008–37014) |
-| `Utilts` | UTILTS | GPKE UTILTS Konfigurationsdaten, MaBiS Summenzeitreihen |
+| `Utilts` | UTILTS | Berechnungsformel, Zählzeit- und Schaltzeitdefinitionen |
 
 Non-standard types use `BdewAction::custom("TYPENAME")` which composes the full URI.
 

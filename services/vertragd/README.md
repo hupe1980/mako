@@ -99,7 +99,8 @@ tarifbd_url    = "http://tarifbd:9080"
 accountingd_url = "http://accountingd:9380"
 edmd_url       = "http://edmd:8380"
 
-[erp]
-webhook_url  = "http://erp:8000/events"
-hmac_secret  = "${ERP_HMAC_SECRET}"   # HMAC-SHA256 X-Mako-Signature on all CloudEvents
+# Outbound ERP CloudEvents. `erp_hmac_secret` puts an HMAC-SHA256
+# X-Mako-Signature on every event.
+erp_webhook_url = "http://erp:8000/events"
+erp_hmac_secret = "env:VERTRAGD_ERP_HMAC_SECRET"
 ```

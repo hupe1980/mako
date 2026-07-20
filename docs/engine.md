@@ -282,7 +282,7 @@ Within a single process the store uses a per-key `DashMap<_, Arc<Mutex<()>>>` to
 | WiM Gas | 10 Werktage | `fristen::add_werktage(d, 10, BdewMaKo)` |
 | MABIS | 1 Werktag (Prüfmitteilung) | `fristen::add_werktage(d, 1, BdewMaKo)` |
 
-**Saturday counts as a Werktag.** Sunday and public holidays do not.
+**Saturday is not a Werktag.** GPKE (BK6-24-174) Teil 1: *"alle Tage ..., die kein Samstag, Sonntag oder gesetzlicher Feiertag sind"*. A holiday observed in any single Bundesland counts nationwide, and 24.12. and 31.12. count as holidays.
 
 Deadlines are always expressed as `17:00 Europe/Berlin` on the due date (not UTC). The `fristen` module uses `time_tz::assume_timezone(Europe/Berlin)` and the Anonymous Gregorian Easter algorithm for public holiday detection (valid for all years).
 

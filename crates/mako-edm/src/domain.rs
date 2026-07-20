@@ -62,33 +62,45 @@ pub const REDISPATCH_MSCONS_PIDS: &[u32] = &[13_020, 13_021, 13_022, 13_023, 13_
 
 /// All MSCONS PIDs that `edmd` accepts (Messwesen + Redispatch 2.0).
 pub const ALL_MSCONS_PIDS: &[u32] = &[
-    13005, 13006, 13007, 13013, 13015, 13016, 13017, 13018, 13019, 13025, 13027, 13_020, 13_021,
-    13_022, 13_023, 13_026,
+    // Anything not listed falls through to the ignore branch, so a missing PID
+    // means silently discarded readings rather than a visible error.
+    13_002, 13_003, 13_005, 13_006, 13_007, 13_008, 13_009, 13_010, 13_011, 13_012, 13_013, 13_014,
+    13_015, 13_016, 13_017, 13_018, 13_019, 13_020, 13_021, 13_022, 13_023, 13_025, 13_026, 13_027,
+    13_028,
 ];
 
 /// Human-readable description of each MSCONS PID.
 ///
 /// Used in MCP tools and operator dashboards to explain what data a receipt contains.
 pub const fn mscons_pid_description(pid: u32) -> &'static str {
+    // Names are the AHB's own "Tabellenspalte" headings. An operator matching a
+    // receipt against the AHB needs the same words the AHB uses.
     match pid {
-        13005 => "Lastgang Messwerte Strom (NB → LF)",
-        13006 => "Zählerstand / Ersatzwert Strom (NB → LF)",
-        13007 => "Gasbeschaffenheitsdaten — Brennwert + Zustandszahl (NB → LF)",
-        13013 => {
-            "Allokationsliste Gas MMMA — Mehr-/Mindermengen Gas (NB → LF, GaBi Gas BK7-24-01-008)"
-        }
-        13015 => "Lastgang Summenzeitreihe SLP Strom (NB → LF)",
-        13016 => "Ausfallarbeit Strom (NB → LF)",
-        13017 => "Zählerstand Strom — Ablese-Übermittlung (NB → LF)",
-        13018 => "Messwerte Strom — korrigierte Werte (NB → LF)",
-        13019 => "Netzverluste Strom (NB → LF)",
-        13020 => "Ausfallarbeitsüberführungszeitreihe (Redispatch 2.0, NB → ÜNB)",
-        13021 => "Redispatch meteorologische Daten (Redispatch 2.0)",
-        13022 => "Redispatch Einzelzeitreihe Ausfallarbeit (Redispatch 2.0)",
-        13023 => "Redispatch Ausfallarbeitssummen (Redispatch 2.0)",
-        13025 => "Lastgang Gas — Zustandsmengen / Energiemengen (NB → LF)",
-        13026 => "Redispatch Summenzeitreihe (Redispatch 2.0, ÜNB/VNB)",
-        13027 => "Zählerstand Gas (NB → LF)",
+        13002 => "Zählerstand (Gas)",
+        13003 => "Summenzeitreihe (MaBiS)",
+        13005 => "EEG-Überführungszeitreihe",
+        13006 => "Zählerstand / Ersatzwert Strom",
+        13007 => "Gasbeschaffenheit — Brennwert + Zustandszahl",
+        13008 => "Lastgang (Gas)",
+        13009 => "Energiemenge (Gas)",
+        13010 => "Normiertes Profil",
+        13011 => "Profilschar",
+        13012 => "TEP vergleichbare Werte Referenzmessung",
+        13013 => "Marktlokationsscharfe Allokationsliste Gas (MMMA)",
+        13014 => "Marktlokationsscharfe bilanzierte Menge Strom/Gas (MMMA)",
+        13015 => "Arbeit + Leistungsmaximum im Kalenderjahr vor Lieferbeginn",
+        13016 => "Energiemenge und Leistungsmaximum",
+        13017 => "Zählerstand (Strom)",
+        13018 => "Lastgang Messlokation, Netzkoppelpunkt, Netzlokation",
+        13019 => "Energiemenge (Strom)",
+        13020 => "Ausfallarbeitsüberführungszeitreihe (Redispatch 2.0)",
+        13021 => "Übermittlung von meteorologischen Daten (Redispatch 2.0)",
+        13022 => "Redispatch 2.0 Einzelzeitreihe Ausfallarbeit",
+        13023 => "Redispatch 2.0 Ausfallarbeitssummenzeitreihe",
+        13025 => "Lastgang Marktlokation, Tranche",
+        13026 => "EEG-Überführungszeitreihe aufgrund Ausfallarbeit",
+        13027 => "Werte nach Typ 2",
+        13028 => "Grundlage POG-Ermittlung",
         _ => "Unbekannter MSCONS PID",
     }
 }
@@ -488,6 +500,13 @@ pub enum CorrectionSource {
 pub struct CorrectionRecord {
     /// MaLo for the corrected interval.
     pub malo_id: String,
+    /// OBIS register the correction applies to.
+    ///
+    /// Part of the reading's primary key. A MaLo may carry several registers at
+    /// one timestamp (import and export, HT and NT), so a correction that does
+    /// not name one cannot identify the reading it means to change.
+    #[serde(default)]
+    pub obis_code: Option<String>,
     /// Interval start (UTC).
     pub dtm_from: OffsetDateTime,
     /// Interval end (UTC).
@@ -633,4 +652,60 @@ pub struct BilanzzuordnungRecord {
     pub valid_to: Option<Date>,
     /// Data-isolation key — operator's BDEW/DVGW Codenummer or GLN.
     pub tenant: String,
+}
+
+#[cfg(test)]
+mod mscons_pid_tests {
+    use super::{ALL_MSCONS_PIDS, mscons_pid_description};
+
+    /// Every PID the platform accepts must have a name taken from the AHB.
+    ///
+    /// A receipt labelled "Unbekannter MSCONS PID" tells an operator nothing,
+    /// and a *wrong* label is worse — it sends them to the wrong AHB section.
+    #[test]
+    fn every_accepted_pid_is_named() {
+        for &pid in ALL_MSCONS_PIDS {
+            assert_ne!(
+                mscons_pid_description(pid),
+                "Unbekannter MSCONS PID",
+                "PID {pid} is accepted but has no description"
+            );
+        }
+    }
+
+    /// Names that were previously wrong, pinned to the AHB 3.2 "Tabellenspalte"
+    /// headings so a future edit cannot quietly reintroduce them.
+    #[test]
+    fn names_match_the_ahb_tabellenspalte() {
+        for (pid, expected) in [
+            (13003, "Summenzeitreihe (MaBiS)"),
+            (13005, "EEG-Überführungszeitreihe"),
+            (
+                13015,
+                "Arbeit + Leistungsmaximum im Kalenderjahr vor Lieferbeginn",
+            ),
+            (13016, "Energiemenge und Leistungsmaximum"),
+            (
+                13018,
+                "Lastgang Messlokation, Netzkoppelpunkt, Netzlokation",
+            ),
+            (13019, "Energiemenge (Strom)"),
+            (13025, "Lastgang Marktlokation, Tranche"),
+            (13026, "EEG-Überführungszeitreihe aufgrund Ausfallarbeit"),
+            (13027, "Werte nach Typ 2"),
+        ] {
+            assert_eq!(mscons_pid_description(pid), expected, "PID {pid}");
+        }
+    }
+
+    /// The Redispatch subset must be a subset of what the platform accepts.
+    #[test]
+    fn redispatch_pids_are_accepted() {
+        for &pid in super::REDISPATCH_MSCONS_PIDS {
+            assert!(
+                ALL_MSCONS_PIDS.contains(&pid),
+                "Redispatch PID {pid} is not in ALL_MSCONS_PIDS, so it would be ignored"
+            );
+        }
+    }
 }

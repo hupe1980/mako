@@ -763,7 +763,8 @@ struct Cli {
     /// **If both roles are listed and they share a PID, `build` will panic** —
     /// run separate makod instances with disjoint role sets instead.
     ///
-    /// Available roles: `NB`, `LF`, `MSB`, `NMSB`, `AMSB`, `BKV`, `UENB`, `BIKO`
+    /// Available roles: `NB`, `LF`, `MSB`, `NMSB`, `AMSB`, `BKV`, `UENB`, `BIKO`,
+    /// `ESA`
     ///
     /// When omitted, all PIDs are registered unconditionally (backward-compatible
     /// default, equivalent to `--deployment-roles NB,LF,MSB,BKV,UENB,BIKO`).
@@ -777,6 +778,24 @@ struct Cli {
         value_delimiter = ','
     )]
     deployment_roles: Vec<String>,
+
+    /// GLNs of counterparties that act as an Energieserviceanbieter (ESA).
+    ///
+    /// REQOTE 35002 is shared: an ESA Werteanfrage (WiM Teil 2 Kap. 4 UC 4.1
+    /// Nr. 1) and a Preisanfrage arrive under the same Prüfidentifikator,
+    /// because no ESA-specific REQOTE PID exists. The message carries only the
+    /// sender's GLN, not its role, so listing the known ESA partners here turns
+    /// on the decisive discriminator. Without it the classifier falls back to
+    /// the `PIA` Messprodukt marker alone.
+    ///
+    /// Comma-separated, e.g. `MAKOD_ESA_PARTNER_GLNS=9900555000005`.
+    #[arg(
+        long,
+        value_name = "GLNS",
+        env = "MAKOD_ESA_PARTNER_GLNS",
+        value_delimiter = ','
+    )]
+    esa_partner_glns: Vec<String>,
 
     /// Shared secret for `X-Mako-Signature` HMAC-SHA256 on ERP webhook POSTs.
     ///
@@ -1478,12 +1497,15 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // Shared across HTTP REST and AS4 ingest — translates parsed EDIFACT
     // messages to typed domain commands and executes them on workflow processes.
     // Also used by the AS4 loopback path for combined-role deployments.
-    let ingest_dispatcher = Arc::new(ingest_dispatcher::EdifactIngestDispatcher::new(
-        Arc::new(store.clone()),
-        store.as_snapshot_store(),
-        cli.snapshot_interval,
-        mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
-    ));
+    let ingest_dispatcher = Arc::new(
+        ingest_dispatcher::EdifactIngestDispatcher::new(
+            Arc::new(store.clone()),
+            store.as_snapshot_store(),
+            cli.snapshot_interval,
+            mako_engine::ids::TenantId::from_party_id(gln_registry.primary_gln()),
+        )
+        .with_esa_partners(cli.esa_partner_glns.clone()),
+    );
 
     // ── Shared health state ───────────────────────────────────────────────────
     //
@@ -2000,6 +2022,10 @@ fn parse_deployment_roles(roles: &[String]) -> DeploymentRoles {
             // the Uenb engine role — both are transmission system operators.
             "UENB" | "ÜNB" | "UNB" | "FNB" => Some(Marktrolle::Uenb),
             "BIKO" => Some(Marktrolle::Biko),
+            // Energieserviceanbieter — Strom only, consent-derived (§49 Abs. 2
+            // Nr. 9 MsbG). A deployment that *is* an ESA; an MSB serving one
+            // registers the inbound side under MSB.
+            "ESA" => Some(Marktrolle::Esa),
             // Gas roles that have no distinct engine deployment role — their
             // PIDs are registered unconditionally by the Gas domain modules.
             // ANB/VNB are Strom NB sub-types, normalised by deployment_role_strings.
@@ -2015,7 +2041,7 @@ fn parse_deployment_roles(roles: &[String]) -> DeploymentRoles {
                 tracing::warn!(
                     role = other,
                     "Unknown Marktrolle in --deployment-roles; valid values: \
-                     NB, LF, MSB, NMSB, AMSB, BKV, UENB/FNB, BIKO, \
+                     NB, LF, MSB, NMSB, AMSB, BKV, UENB/FNB, BIKO, ESA, \
                      GNB, ANB, VNB, LFG, GMSB, MGV"
                 );
                 None

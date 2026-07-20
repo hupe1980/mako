@@ -25,6 +25,7 @@ use rust_decimal::Decimal;
 use time::OffsetDateTime;
 
 use crate::interval::MeterInterval;
+use time_tz::{OffsetDateTimeExt as _, timezones};
 
 // ── ValidationSeverity ────────────────────────────────────────────────────────
 
@@ -496,6 +497,20 @@ pub fn validate_intervals(
         }
     }
 
+    // V07 — DST ambiguity on the autumn fall-back day.
+    //
+    // Germany repeats the local hour 02:00–03:00 when CEST ends. Stored in UTC
+    // that hour appears **twice** — once at UTC+2, once at UTC+1 — so a correct
+    // quarter-hour series has 100 intervals that day and every local wall-clock
+    // time in the repeated hour occurs exactly twice.
+    //
+    // A series that was converted from local time without carrying the offset
+    // collapses those two passes into one. The surviving interval is then
+    // ambiguous: it cannot be said which pass it measured, and one hour of
+    // energy has silently vanished. That is what this rule detects — the local
+    // time lies in the repeated hour but its partner is absent.
+    issues.extend(detect_dst_ambiguity(intervals));
+
     // Sort issues by interval index for deterministic output
     issues.sort_by_key(|i| i.interval_index.unwrap_or(usize::MAX));
 
@@ -714,6 +729,166 @@ mod tests {
             result.is_clean(),
             "UTC series should have no overlap at DST fall-back: {:?}",
             result.issues
+        );
+    }
+}
+
+/// Detect a collapsed DST fall-back hour (V07).
+///
+/// Germany repeats local 02:00–03:00 when CEST ends, so that calendar day has
+/// **25 hours**. A series converted from local time without carrying the UTC
+/// offset collapses the two passes into one and silently loses an hour of
+/// energy.
+///
+/// The test has to be immune to truncated query windows: a series that merely
+/// *starts* inside the repeated hour is not corrupt, it is just short. So this
+/// only judges a series that demonstrably covers the **whole local fall-back
+/// day** — first interval at local 00:00, last ending at local 00:00 the next
+/// day. Within that, a day carrying less than 25 hours of intervals is missing
+/// the repeat.
+fn detect_dst_ambiguity(intervals: &[MeterInterval]) -> Vec<ValidationIssue> {
+    let berlin = timezones::db::europe::BERLIN;
+    let Some(first) = intervals.first() else {
+        return Vec::new();
+    };
+    let Some(last) = intervals.last() else {
+        return Vec::new();
+    };
+
+    let start_local = first.from.to_timezone(berlin);
+    let end_local = last.to.to_timezone(berlin);
+
+    // Anchor on the start only. A *collapsed* day ends an hour early, so
+    // requiring the series to end at local midnight would exclude exactly the
+    // case this rule exists to catch. Requiring it to *begin* at local midnight
+    // is enough to distinguish a full-day series from a truncated query window.
+    if start_local.time() != time::Time::MIDNIGHT {
+        return Vec::new();
+    }
+    // Must not run past the following local midnight — beyond that the series is
+    // multi-day and the per-day arithmetic below does not apply.
+    if (end_local.date() - start_local.date()).whole_days() > 1 {
+        return Vec::new();
+    }
+
+    // A fall-back day starts at CEST (+2) and ends at CET (+1).
+    let span_hours = (last.to - first.from).whole_hours();
+    let is_fall_back_day =
+        start_local.offset().whole_hours() == 2 && end_local.offset().whole_hours() == 1;
+    if !is_fall_back_day {
+        return Vec::new();
+    }
+
+    // Sum the covered duration rather than counting intervals, so the rule holds
+    // at any resolution.
+    let covered: i64 = intervals
+        .iter()
+        .map(|iv| (iv.to - iv.from).whole_seconds())
+        .sum();
+    const TWENTY_FIVE_HOURS: i64 = 25 * 3600;
+    if covered >= TWENTY_FIVE_HOURS {
+        return Vec::new();
+    }
+
+    vec![ValidationIssue {
+        rule_id: ValidationRuleId::DstAmbiguity,
+        severity: ValidationSeverity::Error,
+        message: format!(
+            "local day {} is a DST fall-back day (25 hours) but the series covers only \
+             {covered} s over a {span_hours} h span — the repeated hour 02:00–03:00 was \
+             collapsed, so one hour of energy is missing and the surviving intervals are \
+             ambiguous between the two passes",
+            start_local.date()
+        ),
+        interval_index: Some(0),
+        affected_from: Some(first.from),
+        affected_value_kwh: None,
+    }]
+}
+
+#[cfg(test)]
+mod v07_tests {
+    use super::*;
+    use crate::interval::QualityFlag;
+    use rust_decimal_macros::dec;
+    use time::macros::datetime;
+
+    /// Build `n` consecutive quarter-hours from `start`.
+    fn qh(start: OffsetDateTime, n: i64) -> Vec<MeterInterval> {
+        (0..n)
+            .map(|i| {
+                let from = start + time::Duration::minutes(15 * i);
+                MeterInterval {
+                    from,
+                    to: from + time::Duration::minutes(15),
+                    value_kwh: dec!(1.0),
+                    quality: QualityFlag::Measured,
+                    obis_code: None,
+                }
+            })
+            .collect()
+    }
+
+    /// 2026-10-25 local runs 22:00Z (24 Oct) → 23:00Z (25 Oct): 25 hours,
+    /// 100 quarter-hours. A complete day is not ambiguous.
+    #[test]
+    fn a_complete_25_hour_fall_back_day_is_clean() {
+        let intervals = qh(datetime!(2026-10-24 22:00 UTC), 100);
+        assert!(
+            detect_dst_ambiguity(&intervals).is_empty(),
+            "a full 25-hour day must not raise V07"
+        );
+    }
+
+    /// The same local day carrying only 24 hours means the repeated hour was
+    /// collapsed — an hour of energy is gone.
+    #[test]
+    fn a_collapsed_fall_back_day_raises_v07() {
+        let intervals = qh(datetime!(2026-10-24 22:00 UTC), 96);
+        let issues = detect_dst_ambiguity(&intervals);
+        assert_eq!(issues.len(), 1, "expected V07: {issues:?}");
+        assert_eq!(issues[0].rule_id, ValidationRuleId::DstAmbiguity);
+    }
+
+    /// A window that merely starts inside the repeated hour is short, not
+    /// corrupt. This is the false positive the first implementation produced.
+    #[test]
+    fn a_truncated_window_across_the_boundary_is_not_flagged() {
+        let intervals = qh(datetime!(2026-10-25 0:45 UTC), 4);
+        assert!(
+            detect_dst_ambiguity(&intervals).is_empty(),
+            "a truncated query window must not be reported as collapsed"
+        );
+    }
+
+    /// An ordinary 24-hour day has no repeat to lose.
+    #[test]
+    fn an_ordinary_day_raises_nothing() {
+        let intervals = qh(datetime!(2026-07-14 22:00 UTC), 96);
+        assert!(detect_dst_ambiguity(&intervals).is_empty());
+    }
+
+    /// Spring forward skips an hour rather than repeating one; a 23-hour day is
+    /// correct there, so V07 must stay silent.
+    #[test]
+    fn spring_forward_raises_nothing() {
+        let intervals = qh(datetime!(2026-03-28 23:00 UTC), 92);
+        assert!(detect_dst_ambiguity(&intervals).is_empty());
+    }
+
+    /// V07 must be reachable through the public entry point — it was previously
+    /// declared but never emitted.
+    #[test]
+    fn v07_is_emitted_by_validate_intervals() {
+        let intervals = qh(datetime!(2026-10-24 22:00 UTC), 96);
+        let report = validate_intervals(&intervals, &ValidationConfig::default());
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.rule_id == ValidationRuleId::DstAmbiguity),
+            "validate_intervals must surface V07: {:?}",
+            report.issues
         );
     }
 }

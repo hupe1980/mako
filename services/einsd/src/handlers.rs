@@ -1350,3 +1350,47 @@ pub async fn post_correction_settle(
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
+
+#[cfg(test)]
+mod calendar_tests {
+    use super::days_in_month;
+
+    /// EEG settlement is per calendar month, so a wrong day count changes the
+    /// Vergütung on a legally binding Gutschrift.
+    #[test]
+    fn month_lengths_are_correct() {
+        for (m, want) in [
+            (1, 31),
+            (3, 31),
+            (4, 30),
+            (5, 31),
+            (6, 30),
+            (7, 31),
+            (8, 31),
+            (9, 30),
+            (10, 31),
+            (11, 30),
+            (12, 31),
+        ] {
+            assert_eq!(days_in_month(2026, m), want, "month {m}");
+        }
+    }
+
+    /// The Gregorian rule, not the naive "divisible by four".
+    #[test]
+    fn february_follows_the_full_gregorian_leap_rule() {
+        assert_eq!(days_in_month(2024, 2), 29, "2024 is a leap year");
+        assert_eq!(days_in_month(2026, 2), 28, "2026 is not");
+        assert_eq!(
+            days_in_month(1900, 2),
+            28,
+            "1900 is divisible by 100, not 400"
+        );
+        assert_eq!(days_in_month(2000, 2), 29, "2000 is divisible by 400");
+        assert_eq!(
+            days_in_month(2100, 2),
+            28,
+            "2100 is divisible by 100, not 400"
+        );
+    }
+}

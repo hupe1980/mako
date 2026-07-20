@@ -86,6 +86,307 @@ graph TB
 
 ---
 
+## Tenant is part of a reading's identity
+
+`meter_reads` is keyed `(tenant, malo_id, dtm_from, obis_code_norm)`.
+
+Leaving `tenant` out of the key made two tenants holding the same MaLo-ID
+collide on one row, and the ingest upsert resolved that collision by overwriting
+the value *and* reassigning ownership (`SET tenant = EXCLUDED.tenant`) — silent
+cross-tenant data loss that every read path then hid, because reads filter on
+`tenant` and the row had already changed hands.
+
+### MSCONS stores what it validates
+
+MSCONS is the primary meter-data message in German MaKo. Its interval readings
+are parsed from the `ProcessCompleted` event and written through the same
+batched `store_reads` path as every other family, so a MSCONS reading lands with
+the same primary key, unit and quality record as one that arrived by direct push.
+
+An interval whose quantity will not parse is dropped and counted, not defaulted
+to zero: a zero-kWh interval asserts that no energy flowed, which a decode
+failure does not establish.
+
+Both the receipt write and the interval store answer **500** on failure.
+`marktd` treats 2xx as delivered and will not redeliver, so answering 204 on a
+failed write would lose the process with only a log line to show for it.
+
+### Authentication is required, not defaulted
+
+`edmd` and `mabis-syncd` refuse to start without an `[oidc]` section unless
+`allow_insecure_no_auth = true` is set explicitly.
+
+The reason is what the absence would mean: `OidcVerifier::disabled` admits every
+request as `dev-admin` holding every market role, which satisfies every Cedar
+policy — including GDPR erasure and `POST /api/v1/query/sql`. Requiring the
+opt-out by name makes running unauthenticated a decision someone wrote down
+rather than one they reached by leaving a section out.
+
+```toml
+# Development only. Every request is admitted as dev-admin with all roles.
+allow_insecure_no_auth = true
+```
+
+### The cold tier is partitioned by tenant
+
+The Iceberg partition spec is `identity(tenant)`, `identity(sparte)`,
+`month(dtm_from)`. `tenant` leads because it is the coarsest and most selective
+predicate every query carries — the archive is read through a tenant-scoped
+view, so without it each scan touches every operator's files and prunes them by
+row filter instead of by manifest. It also bounds GDPR erasure: an Art. 17
+request for one tenant would otherwise implicate files holding other tenants'
+readings.
+
+### GDPR Art. 17 in the cold tier
+
+Read-time exclusion hides an erased MaLo's rows from every query. The bytes on
+disk are a separate obligation, and Art. 17 reaches them too.
+
+`iceberg-rust` 0.9.1 exposes only `fast_append` on a transaction — there is no
+public API to remove or rewrite data files — so the rewrite itself is performed
+by an external engine (Spark, Trino). Two endpoints make that obligation
+trackable rather than permanently pending:
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/v1/gdpr/erasure/{malo_id}/archive-plan` | list the data files holding the MaLo's rows and record them in `gdpr_archive_files` |
+| `POST /api/v1/gdpr/erasure/{malo_id}/archive-complete` | record that the rewrite ran, clearing `archive_deletion_pending` |
+
+Planning requires an erasure already on record — planning a rewrite for a MaLo
+nobody asked to erase would delete lawfully-held data. When no files match, the
+obligation is discharged immediately: nothing of that MaLo reached the cold tier.
+
+### The cold tier is tenant-scoped by construction
+
+`meter_reads_archive` is a **view** over the physical Iceberg table, already
+restricted to the tenant and to rows not subject to a GDPR erasure. Scoping
+therefore holds for every query in the module and for the caller-supplied SQL
+accepted by `POST /api/v1/query/sql`, rather than depending on each call site
+remembering a predicate. A query naming the physical table behind the view is
+rejected with `403`.
+
+### GDPR erasure is one transaction
+
+All five steps — request record, anonymisation, and three deletes — run in a
+single transaction and the handler names the step that failed. An erasure either
+completed or it did not: a partial one reported as success closes out the Art. 17
+request while personal data remains, and the caller cannot tell that apart from a
+MaLo that legitimately held no readings.
+
+Anonymised rows are also reset to `archived = false`, so the redacted version is
+re-exported and replaces the personal data already in the cold tier.
+
+### Cached billing periods are invalidated on ingest
+
+`meter_billing_periods` is populated read-through. `store_reads` drops any cached aggregate the new readings fall inside, and the
+read-through write refreshes a stale row rather than skipping it.
+
+Without that, a query issued mid-period caches a partial sum that is then served
+for that period indefinitely — including to `billingd` — because the read path
+prefers the cache.
+
+### Archival cannot flag a corrected row as durable
+
+`valid_from_tx` doubles as the row version: every write to `meter_reads` bumps
+it, and the archival worker's mark-archived matches on the version it exported.
+
+A correction landing mid-batch therefore leaves the row `archived = false` and
+queued for a fresh export. Without the version check, the corrected value would
+be flagged durable while Iceberg still held the pre-correction one, and partition
+release would drop the only correct copy.
+
+### Substitution is atomic
+
+A substitute reading and its §22 MessZV audit row commit in one transaction. As
+two independent writes a failure part-way would leave billable `SUBSTITUTED`
+values in `meter_reads` with no record of who substituted them or why.
+
+### Corrections name their register
+
+`CorrectionRecord` carries `obis_code`, and the update is keyed on
+`(tenant, malo_id, dtm_from, obis_code_norm)`. Matching on `dtm_to` instead would
+rewrite **every** OBIS register at that timestamp, so correcting an import
+reading also overwrote the export one.
+
+A correction advances `allocation_version` to `CORRECTION`. The
+`mr_allocation_version` index exists for mabis-syncd to find exactly these rows,
+and matches nothing if the value never leaves `INITIAL`.
+
+### Tenant scoping is not optional on any statement
+
+A MaLo-ID is not unique across tenants, so every statement touching a MaLo binds
+`tenant`. What each would otherwise do:
+
+| Statement | Consequence of an unscoped query |
+|---|---|
+| `GET /api/v1/billing-periods?tenant=` | Cedar authorises against the deployment tenant; honouring a caller-supplied parameter lets a principal cleared for its own tenant read any other tenant's portfolio |
+| `update_gas_quality` | one tenant's calorific value rewrites every tenant's gas billing rows for the same MaLo-ID, changing invoiced kWh |
+| GDPR erasure | one tenant's Art. 17 request deletes another tenant's billing aggregates |
+| quality rescore | one tenant's gap verdict is stamped onto another's readings |
+
+`update_gas_quality` takes `tenant` in its trait signature so the scope cannot be
+forgotten at a call site, and a `?tenant=` that differs from the authorised
+tenant is `403`.
+
+## Ingest is batched and validated
+
+All ingest goes through `store_reads`, a single `unnest` statement per batch.
+One statement per batch is what keeps the 100M-intervals/day target reachable,
+and it makes a partial failure impossible: the batch lands whole or not at all.
+
+`store_reads` writes the provenance columns alongside the reading:
+`allocation_version` carries the MaBiS version a value belongs to,
+`sender_mp_id` carries §22 MessZV per-interval MSB attribution across a WiM
+switch, and `push_session`, `quality_warnings` and `unit` carry the rest.
+
+### Every ingest family validates before it stores
+
+The IoT, RLM/gas direct-push and bulk-import paths all route through
+`validate_and_annotate`, which runs **V01–V10 before storing** and attaches each
+issue to the rows it names. One code path means a reading lands with the same
+quality record whichever door it came in by.
+
+Validation annotates and never rejects. Whether an interval is billable is a
+separate decision from whether it is stored — discarding a suspect reading would
+destroy the evidence needed to resolve it. Findings land in `quality_warnings`;
+when a row already carries a session-level Hampel summary, the rule findings are
+added under a `validation` key rather than replacing it. A batch with any issue
+returns `202 Accepted` with a `validation` block instead of `201`.
+
+An unrecognised `quality` flag is refused at the boundary with `422`. The column
+is CHECK-constrained, so binding an unrecognised value raw fails the insert;
+coercing it to `UNKNOWN` instead would silently strip the row from every billing
+aggregate.
+
+`stored_count` reports rows that actually committed. Each ingest family writes
+one batched statement, so a batch lands whole or not at all.
+
+### One unit contract across the ingest families
+
+Direct push parses units with `MeasurementUnit::parse_scaled` — the same
+machinery the IoT path uses — and cross-checks the result against the Sparte. A
+unit that is neither the Sparte's measured unit nor its billing unit is rejected.
+
+This closed two mis-billing paths. The gas endpoint compared the unit string
+against `"m3"`, which never matches the superscript `"m³"` that `MeasurementUnit`
+accepts, so a gas push in m³ was stored **unconverted** — roughly a tenfold
+under-count, and a value labelled `"m3"` reaching the electricity endpoint would
+be multiplied by the gas Brennwert.
+
+`brennwert_kwh_per_m3` is **required** when gas arrives in m³, on every path.
+§25 Nr. 4 MessEV requires a value determined by the recognised rules of
+technology, which a national average is not: an L-Gas supply area (Hs ≈ 8.8)
+billed at the H-Gas 10.55 is a systematic ~20 % over-charge, with nothing on the
+row recording that a default was used.
+
+### Substitute values do not overwrite measurements
+
+`POST /api/v1/meter-reads/{malo_id}/substitute` requires an `obis_code`. It is
+part of the primary key, so a substitute filed without one lands on the
+empty-string register rather than against the reading it stands in for — leaving
+**both** rows in the table, and a 100 kWh reading plus its substitute billing
+1099 kWh.
+
+The upsert's conflict action carries `WHERE meter_reads.quality IN ('FAULTY',
+'UNKNOWN')`. §17 MessZV authorises an Ersatzwert where no usable measurement
+exists, not in place of one, so a window overlapping billable data leaves that
+data untouched and returns those intervals in `skipped_measured`.
+
+Four methods are honoured: `PriorPeriodAverage`, `LinearInterpolation`,
+`ZeroFill` and `LastValueCarryForward`. Anything else is `422`.
+
+Each interval records the method that actually produced it in
+`intervals[].method`, which may differ from the request: a prior-period average
+with no matching reference slot degrades to carry-forward, then to zero, and
+linear interpolation with no closing value has no slope to follow. The response
+reports `method_requested` alongside the set of `methods_applied` — a §22 MessZV
+audit record naming a method that did not run would be a claim the value does not
+support.
+
+## `meter_reads` is partitioned, and retention actually reclaims disk
+
+`meter_reads` is range-partitioned monthly on `dtm_from`. The partition key is
+already part of the primary key `(tenant, malo_id, dtm_from, obis_code_norm)`,
+which is what a partitioned table requires of every unique constraint.
+
+The archival worker runs three partition-related steps per pass:
+
+| Step | Function | Purpose |
+|---|---|---|
+| before archiving | `ensure_meter_reads_partitions(back, ahead)` | keeps a rolling window of months; a reading whose month has no partition cannot be inserted at all |
+| archive | export to Iceberg, then mark `archived = true` | records that a row is durable in the cold tier |
+| after archiving | `drop_archived_meter_reads_partitions(cutoff)` | releases whole months whose rows are all archived |
+
+The release step is what reclaims disk: marking a row `archived` records that it
+is safe to release, and without the drop the hot tier would grow without bound
+regardless of `retention_months`.
+
+Dropping a partition is one catalogue operation. A bulk `DELETE` over the same
+rows would instead leave dead tuples for autovacuum to reclaim, competing with
+ingest for I/O on the busiest table in the schema.
+
+A partition is only released when **no row in it still has `archived = false`**.
+A stalled or failed archival run therefore delays reclamation instead of
+destroying unexported readings.
+
+`meter_reads` carries 8 secondary indexes. Most are partial, so they cover only
+the rows a query actually looks for — negative quantities, rows with warnings,
+corrections, and rows still owed an export — rather than the whole table.
+
+TimescaleDB is not used: `create_hypertable` is not applicable to an
+already-partitioned table, and native partitioning keeps the schema installable
+on any PostgreSQL 15+ instance without an extension.
+
+## Rate limiting
+
+Ingest endpoints accept unbounded batches, so an unthrottled client can saturate
+the write path for every other tenant. Two limiters apply:
+
+| Limiter | Key | Bounds |
+|---|---|---|
+| `with_tenant_rate_limit` | authenticated tenant, else peer address | any single caller |
+| `with_rate_limit` | global | their sum |
+
+A global bucket alone lets one busy tenant consume the whole allowance and starve
+every other tenant on a shared deployment, so both are applied.
+
+Rejections return `429` with a `Retry-After` header rounded **up** to whole
+seconds — rounding down would invite an immediate retry that is rejected again.
+The bucket key is a hash of the bearer token, never the token itself.
+
+```toml
+[rate_limit]
+requests_per_second            = 500   # global sustained
+burst                          = 1000  # metered ingest is bursty by nature
+per_tenant_requests_per_second = 100
+```
+
+`burst` is deliberately above the sustained rate: an MSCONS batch or an IoT
+gateway flushing a backlog arrives all at once but fits comfortably within the
+hourly budget.
+
+## V07 — DST ambiguity
+
+Germany repeats local 02:00–03:00 when CEST ends, so that day has **25 hours**.
+A series converted from local time without carrying the UTC offset collapses the
+two passes into one and silently loses an hour of energy.
+
+V07 fires when a series covers a **whole local fall-back day** but carries less
+than 25 hours. Anchoring on whole-day coverage is what makes it immune to
+truncated query windows: a series that merely *starts* inside the repeated hour
+is short, not corrupt.
+
+## Reading-order idempotency
+
+`ON CONFLICT DO NOTHING` needs a unique index to fire on. With only the surrogate
+`id` primary key every redelivered INSRPT minted a fresh UUID and created a
+duplicate order. Two partial unique indexes now back it:
+
+| Index | Covers |
+|---|---|
+| `ablese_insrpt_unique (tenant, insrpt_process_id)` | INSRPT-triggered orders |
+| `ablese_scheduled_unique (tenant, malo_id, anlass, geplant_am)` | campaign/scheduled orders, which carry no process id |
+
 ## Port layout
 
 ```
@@ -735,7 +1036,79 @@ sequenceDiagram
 | `GET` | `/api/v1/reading-orders` | List (`?malo_id=&status=&anlass=&limit=`) |
 | `GET` | `/api/v1/reading-orders/{id}` | Get status and result |
 | `PUT` | `/api/v1/reading-orders/{id}/complete` | Record meter reading result |
-| `PUT` | `/api/v1/reading-orders/{id}/cancel` | Cancel pending order |
+| `PUT` | `/api/v1/reading-orders/{id}/cancel` | Cancel pending order — no longer owed |
+| `PUT` | `/api/v1/reading-orders/{id}/fail` | Record an Ablesehindernis — still owed |
+| `GET` | `/api/v1/compliance/jahresablesung/{year}` | §40 Abs. 2 EnWG compliance report |
+
+### Cancelled vs failed
+
+Both are terminal, but only `STORNIERT` discharges the obligation.
+
+```
+OFFEN → BEAUFTRAGT → AUSGEFUEHRT   reading taken, obligation met
+   └──────────────→ STORNIERT      no longer owed
+   └──────────────→ FEHLGESCHLAGEN Ablesehindernis — still owed
+```
+
+```http
+PUT /api/v1/reading-orders/{id}/fail
+{ "grund": "KEIN_ZUTRITT", "notiz": "3x angetroffen, niemand vor Ort" }
+```
+
+| Grund | Meaning |
+|---|---|
+| `KEIN_ZUTRITT` | No access to the premises |
+| `ZAEHLER_UNZUGAENGLICH` | Meter present but blocked |
+| `ZAEHLER_DEFEKT` | Meter faulty — reading not usable |
+| `ZAEHLER_NICHT_AUFFINDBAR` | Meter not found at the recorded location |
+| `KUNDE_VERWEIGERT` | Customer refused the reading |
+| `ABLESUNG_UNPLAUSIBEL` | Value read but implausible |
+| `SONSTIGES` | Anything else — use `notiz` |
+
+A `CHECK` constraint rejects `FEHLGESCHLAGEN` without a `fehlschlag_grund`, so
+the status cannot be used to silently retire an order.
+
+### Quality history
+
+Every scoring path — MSCONS, direct push, IoT, bulk, and retroactive rescoring —
+records a verdict in `quality_assessments`. The table is a history of how a
+MaLo's data quality moved, not a snapshot of the latest opinion: a billing
+dispute is answerable only if it shows when a gap appeared, when it was
+substituted, and what the grade was at the moment an invoice was raised.
+
+Re-scoring a window supersedes the previous verdict for the same source rather
+than appending a duplicate, so the history reads as a sequence of decisions.
+
+Only grade `F` blocks billing. `C` is significant but still billable, which is
+why `billing_blocked` is stored rather than derived from the letter by each
+reader.
+
+### §40 Abs. 2 EnWG compliance report
+
+`GET /api/v1/compliance/jahresablesung/{year}` reports what became of each
+order, because only `AUSGEFUEHRT` discharges the annual-reading obligation:
+
+| Outcome | Obligation |
+|---|---|
+| `AUSGEFUEHRT` | discharged |
+| `STORNIERT` | withdrawn |
+| `FEHLGESCHLAGEN` | outstanding, with a documented Ablesehindernis |
+| `OFFEN` / `BEAUFTRAGT` past `ausfuehrt_bis` | late |
+
+`fehlschlag_gruende` breaks the failures down by Ablesehindernis, which is what
+decides whether the NB may estimate under §40a EnWG or must re-dispatch.
+
+`ablesequote` is computed over **orders raised**, not over the SLP population:
+this service knows what was ordered, and `marktd` owns how many MaLos exist. A
+MaLo that was never scheduled has no order here at all, so the population must be
+cross-checked against `marktd` — reporting a population-based rate from edmd
+would overstate coverage.
+
+A failed `JAHRESABLESUNG` past `ausfuehrt_bis` is still a §40 Abs. 2 EnWG gap, so
+it keeps appearing in `list_overdue_reading_orders` until the reading is
+re-dispatched or the quantity is estimated under §40a EnWG. Failing an order
+emits `de.edmd.reading.order.failed`; the reason decides whether the NB may
+estimate or must re-dispatch.
 
 ### iMSys auto-close
 

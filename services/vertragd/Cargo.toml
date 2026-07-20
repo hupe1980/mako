@@ -40,3 +40,6 @@ rmcp          = { workspace = true, features = ["transport-streamable-http-serve
 tokio-util    = { workspace = true }
 hmac          = { version = "0.12", features = ["std"] }
 sha2          = "0.10"
+
+[dev-dependencies]
+rust_decimal_macros = { workspace = true }

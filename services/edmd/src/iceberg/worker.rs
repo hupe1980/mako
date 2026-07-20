@@ -1,5 +1,5 @@
-//! Background archival worker — exports old `meter_reads` to Iceberg/S3
-//! and deletes them from PostgreSQL.
+//! Background archival worker — exports old `meter_reads` to Iceberg/S3 and
+//! releases the reclaimed hot-tier partitions in PostgreSQL.
 //!
 //! ## SQL catalog
 //!
@@ -11,18 +11,28 @@
 //!
 //! ## Algorithm
 //!
+//! Each pass:
+//!
+//! 0. Extend the rolling window of monthly `meter_reads` partitions.
 //! 1. Load (or create) the Iceberg table via `SqlCatalog`.
 //! 2. Select ≤ `batch_size` rows with `dtm_from < cutoff AND archived = false`.
 //! 3. Write Parquet data files via `iceberg::writer` (through FileIO → opendal → S3).
 //! 4. Commit a new Iceberg snapshot using `Transaction::fast_append`.
 //! 5. Mark rows `archived = true` in PostgreSQL (bulk UPDATE).
 //! 6. Record the batch in `archive_batches`.
+//! 7. Drop partitions past retention whose rows are all archived.
+//!
+//! Step 7 is what reclaims disk. It works on whole partitions rather than
+//! issuing a bulk `DELETE`, so releasing a month costs one catalogue operation
+//! instead of a vacuum backlog on the busiest table in the schema.
 //!
 //! Crash safety: steps 3–5 are idempotent.  If the process dies after the
 //! Iceberg commit but before marking rows archived, the next run will
 //! re-write the same rows (no data loss, possible duplicate data files —
 //! the extra files will be cleaned up by a future Iceberg `expire_snapshots`
-//! operation).
+//! operation).  Step 7 only ever drops a partition in which every row is
+//! already durable in Iceberg, so an interrupted archival run delays
+//! reclamation rather than losing readings.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -47,6 +57,12 @@ use uuid::Uuid;
 use crate::iceberg::query::OlapEngine;
 use crate::iceberg::schema::{ICEBERG_TABLE_NAME, meter_reads_partition_spec, meter_reads_schema};
 use crate::iceberg::writer::write_data_files;
+
+/// Months of empty partitions kept ahead of the current month.
+///
+/// Sized so a maintenance outage lasting weeks still leaves somewhere for
+/// current readings to land.
+const PARTITION_MONTHS_AHEAD: i32 = 3;
 
 // ── ArchiveWorker ─────────────────────────────────────────────────────────────
 
@@ -86,10 +102,21 @@ impl ArchiveWorker {
         );
 
         loop {
+            // Partition maintenance runs before archival: ingest writes into a
+            // partition that must already exist, so a missed window fails the
+            // write rather than degrading it.
+            if let Err(e) = self.maintain_partitions().await {
+                error!(error = %e, "iceberg-worker: partition maintenance failed");
+            }
+
             match self.run_once().await {
                 Ok(0) => info!("iceberg-worker: nothing to archive"),
                 Ok(n) => info!(rows_archived = n, "iceberg-worker: batch committed"),
                 Err(e) => error!(error = %e, "iceberg-worker: batch failed — will retry"),
+            }
+
+            if let Err(e) = self.release_expired_partitions().await {
+                error!(error = %e, "iceberg-worker: partition release failed");
             }
 
             tokio::select! {
@@ -100,6 +127,45 @@ impl ArchiveWorker {
                 _ = tokio::time::sleep(interval) => {}
             }
         }
+    }
+
+    /// Keep the rolling window of monthly partitions ahead of `now()`.
+    ///
+    /// A reading whose month has no partition cannot be inserted at all, so this
+    /// runs every pass rather than only at startup — a process that stays up
+    /// across a month boundary would otherwise start rejecting ingest.
+    async fn maintain_partitions(&self) -> anyhow::Result<()> {
+        sqlx::query("SELECT ensure_meter_reads_partitions($1, $2)")
+            .bind(i32::try_from(self.cfg.retention_months).unwrap_or(i32::MAX))
+            .bind(PARTITION_MONTHS_AHEAD)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Drop partitions fully past retention whose rows are all in Iceberg.
+    ///
+    /// This is the step that actually reclaims disk. Marking a row `archived`
+    /// records that it is safe to release; without this the hot tier grows
+    /// without bound regardless of `retention_months`.
+    async fn release_expired_partitions(&self) -> anyhow::Result<()> {
+        let cutoff = cutoff_time(self.cfg.retention_months);
+        let dropped: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT partition_name, rows_released
+                            FROM drop_archived_meter_reads_partitions($1)",
+        )
+        .bind(cutoff)
+        .fetch_all(&self.pool)
+        .await?;
+
+        for (name, rows) in &dropped {
+            info!(
+                partition = %name,
+                rows_released = rows,
+                "iceberg-worker: partition released — rows durable in Iceberg"
+            );
+        }
+        Ok(())
     }
 
     /// One archival pass.  Returns the number of rows archived (0 = nothing to do).
@@ -114,7 +180,8 @@ impl ArchiveWorker {
         // carry a tenant field and this query should include `AND tenant = $3`.
         let rows = sqlx::query_as::<_, RawMeterRead>(
             r"SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh,
-                     quality, pid, sparte, obis_code, tenant
+                     quality, pid, sparte, obis_code, obis_code_norm, tenant,
+                     valid_from_tx
               FROM   meter_reads
               WHERE  archived = false
                 AND  dtm_from < $1
@@ -264,22 +331,40 @@ impl ArchiveWorker {
         }
 
         // ── 5. Mark rows archived in PostgreSQL (bulk UPDATE) ─────────────────
-        let malo_ids: Vec<&str> = reads.iter().map(|r| r.malo_id.as_str()).collect();
-        let dtm_froms: Vec<OffsetDateTime> = reads.iter().map(|r| r.dtm_from).collect();
-        let dtm_tos: Vec<OffsetDateTime> = reads.iter().map(|r| r.dtm_to).collect();
+        // Matched on the full primary key. `(malo_id, dtm_from, dtm_to)` alone
+        // is not unique — two tenants may hold the same MaLo-ID, and one MaLo
+        // has one row per OBIS register — so a narrower match would mark rows
+        // that were never written to Iceberg.
+        //
+        // `valid_from_tx` is the row version, checked to close the window
+        // between the export read and this write: a correction landing mid-batch
+        // bumps it, so that row is not marked archived and stays queued for a
+        // fresh export. Without the check the corrected value would be flagged
+        // durable while Iceberg still held the pre-correction one, and partition
+        // release would then drop the only correct copy.
+        let tenants: Vec<&str> = rows.iter().map(|r| r.tenant.as_str()).collect();
+        let malo_ids: Vec<&str> = rows.iter().map(|r| r.malo_id.as_str()).collect();
+        let dtm_froms: Vec<OffsetDateTime> = rows.iter().map(|r| r.dtm_from).collect();
+        let obis_norms: Vec<&str> = rows.iter().map(|r| r.obis_code_norm.as_str()).collect();
+        let versions: Vec<OffsetDateTime> = rows.iter().map(|r| r.valid_from_tx).collect();
 
         sqlx::query(
             r"UPDATE meter_reads mr
               SET    archived = true
-              FROM   (SELECT * FROM unnest($1::text[], $2::timestamptz[], $3::timestamptz[])
-                          AS t(malo_id, dtm_from, dtm_to)) AS src
-              WHERE  mr.malo_id  = src.malo_id
-                AND  mr.dtm_from = src.dtm_from
-                AND  mr.dtm_to   = src.dtm_to",
+              FROM   (SELECT * FROM unnest($1::text[], $2::text[], $3::timestamptz[],
+                                           $4::text[], $5::timestamptz[])
+                          AS t(tenant, malo_id, dtm_from, obis_code_norm, valid_from_tx)) AS src
+              WHERE  mr.tenant         = src.tenant
+                AND  mr.malo_id        = src.malo_id
+                AND  mr.dtm_from       = src.dtm_from
+                AND  mr.obis_code_norm = src.obis_code_norm
+                AND  mr.valid_from_tx  = src.valid_from_tx",
         )
+        .bind(&tenants as &[&str])
         .bind(&malo_ids as &[&str])
         .bind(&dtm_froms)
-        .bind(&dtm_tos)
+        .bind(&obis_norms as &[&str])
+        .bind(&versions)
         .execute(&self.pool)
         .await?;
 
@@ -456,7 +541,13 @@ struct RawMeterRead {
     pid: i32,
     sparte: String,
     obis_code: Option<String>,
+    /// Normalised OBIS key as stored — part of the primary key. Read back
+    /// rather than re-derived, so the archival UPDATE cannot drift from the
+    /// normalisation the ingest path applied.
+    obis_code_norm: String,
     tenant: String,
+    /// Row version at the moment it was read for export. Any write bumps it.
+    valid_from_tx: OffsetDateTime,
     #[sqlx(default)]
     source: Option<String>,
     #[sqlx(default)]

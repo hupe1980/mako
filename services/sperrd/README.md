@@ -19,12 +19,10 @@ permanently unresolved in the LF's system — a GPKE protocol violation.
 
 ```toml
 # sperrd.toml
-database_url = "postgresql://sperrd:secret@db:5432/sperrd"
-port         = 8780
-tenant       = "9900357000004"
+database_url   = "postgresql://sperrd:secret@db:5432/sperrd"
+port           = 8780
+tenant         = "9900357000004"
 
-makod_url    = "http://makod:8080"
-
-[erp]
-webhook_url = "http://erp:8000/events"
+makod_url      = "http://makod:8080"
+makod_api_key  = "env:SPERRD_MAKOD_API_KEY"
 ```

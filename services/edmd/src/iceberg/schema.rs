@@ -62,7 +62,14 @@ pub fn meter_reads_schema() -> anyhow::Result<Arc<Schema>> {
 
 /// Build the Iceberg V2 partition spec for `meter_reads_archive`.
 ///
-/// Partition by `identity(sparte)`, `month(dtm_from)`.
+/// Partition by `identity(tenant)`, `identity(sparte)`, `month(dtm_from)`.
+///
+/// `tenant` leads because it is the coarsest and most selective predicate every
+/// query carries: the archive is read through a tenant-scoped view, so without
+/// it each scan touches every operator's files and prunes them by row filter
+/// instead of by manifest. It also gives GDPR erasure a bounded set of files to
+/// rewrite — an Art. 17 request for one tenant otherwise implicates files that
+/// hold other tenants' readings.
 ///
 /// `month` subsumes year — Iceberg 0.9.1 does not allow two time-based transforms
 /// on the same source field (year + month from field 3 would conflict).
@@ -70,6 +77,8 @@ pub fn meter_reads_schema() -> anyhow::Result<Arc<Schema>> {
 pub fn meter_reads_partition_spec() -> UnboundPartitionSpec {
     UnboundPartitionSpec::builder()
         .with_spec_id(0)
+        .add_partition_field(10, "tenant", Transform::Identity)
+        .expect("tenant partition field")
         .add_partition_field(8, "sparte", Transform::Identity)
         .expect("sparte partition field")
         .add_partition_field(3, "dtm_from_month", Transform::Month)
@@ -106,7 +115,26 @@ mod tests {
     #[test]
     fn partition_spec_builds() {
         let spec = meter_reads_partition_spec();
-        // sparte (identity) + dtm_from_month (month) = 2 fields
-        assert_eq!(spec.fields().len(), 2);
+        let names: Vec<&str> = spec.fields().iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["tenant", "sparte", "dtm_from_month"]);
+    }
+
+    #[test]
+    fn tenant_leads_the_partition_spec() {
+        // Every archive query is tenant-scoped, and GDPR erasure needs a bounded
+        // file set. A spec that does not lead with tenant makes every scan read
+        // every operator's files and prune them by row filter.
+        let spec = meter_reads_partition_spec();
+        let first = &spec.fields()[0];
+        assert_eq!(first.name, "tenant");
+        assert_eq!(
+            first.source_id,
+            meter_reads_schema()
+                .unwrap()
+                .field_by_name("tenant")
+                .expect("tenant field")
+                .id,
+            "the partition field must reference the tenant column, not a stale id"
+        );
     }
 }

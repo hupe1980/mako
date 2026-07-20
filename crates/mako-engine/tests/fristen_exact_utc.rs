@@ -85,52 +85,45 @@ fn add_hours_gpke_24h_across_fall_back() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// WiM 5-Werktage process Frist: Monday Jan 5 (2026) + 5 WT.
-/// Note: 2026-01-06 (Heilige Drei Könige) is a BDEW MaKo holiday — it is
-/// skipped. So the 5 Werktage are: Wed Jan 7, Thu Jan 8, Fri Jan 9, Sat Jan
-/// 10, Mon Jan 12. Due date = 2026-01-12 (Monday).
+/// 2026-01-06 (Heilige Drei Könige) is a BDEW MaKo holiday and Sat/Sun are not
+/// Werktage, so the five are Wed 7, Thu 8, Fri 9, Mon 12, Tue 13.
 #[test]
-fn add_werktage_5wt_monday_to_saturday() {
-    // 2026-01-05 (Monday). Jan 6 = Heilige Drei Könige (holiday).
+fn add_werktage_5wt_skips_holiday_and_weekend() {
     let start = Date::from_calendar_date(2026, Month::January, 5).unwrap();
     let due = add_werktage(start, 5, HolidayCalendar::BdewMaKo);
-    // Skip Tue Jan 6 (holiday) → Wed 7, Thu 8, Fri 9, Sat 10, Mon 12
-    let expected = Date::from_calendar_date(2026, Month::January, 12).unwrap();
+    let expected = Date::from_calendar_date(2026, Month::January, 13).unwrap();
     assert_eq!(
         due, expected,
-        "Monday + 5 WT (with Heilige Drei Könige holiday) = Mon Jan 12"
+        "Monday + 5 WT (Heilige Drei Könige skipped, Sat/Sun not Werktage) = Tue Jan 13"
     );
 }
 
 /// GeLi Gas 10-Werktage Frist: Monday Jan 5 + 10 WT.
-/// Jan 6 = Heilige Drei Könige (holiday, skipped).
-/// Werktage: Wed 7, Thu 8, Fri 9, Sat 10, Mon 12, Tue 13, Wed 14, Thu 15, Fri 16, Sat 17.
+/// Jan 6 = Heilige Drei Könige (skipped); weekends are not Werktage.
+/// Werktage: Wed 7, Thu 8, Fri 9, Mon 12, Tue 13, Wed 14, Thu 15, Fri 16, Mon 19, Tue 20.
 #[test]
 fn add_werktage_10wt_monday_two_weeks() {
-    // 2026-01-05 (Monday)
     let start = Date::from_calendar_date(2026, Month::January, 5).unwrap();
     let due = add_werktage(start, 10, HolidayCalendar::BdewMaKo);
-    // Skip Jan 6 holiday → 5 WT get us to Mon Jan 12 (see 5wt test),
-    // then 5 more: Tue 13, Wed 14, Thu 15, Fri 16, Sat 17 → Jan 17
-    let expected = Date::from_calendar_date(2026, Month::January, 17).unwrap();
+    let expected = Date::from_calendar_date(2026, Month::January, 20).unwrap();
     assert_eq!(
         due, expected,
-        "Monday + 10 WT (Heilige Drei Könige holiday) = Sat Jan 17"
+        "Monday + 10 WT (Heilige Drei Könige skipped) = Tue Jan 20"
     );
 }
 
-/// Sundays are skipped — 5 WT starting on Saturday Jan 3 (2026).
-/// Sat Jan 3 → next Werktage (starting from next day):
-/// Mon Jan 5, Tue Jan 5… wait: Jan 4 (Sun, skip), Jan 5 (Mon), Jan 6 (holiday, skip),
-/// Jan 7 (Wed), Jan 8 (Thu), Jan 9 (Fri) = 4 WT. Jan 10 (Sat) = 5th WT → Jan 10.
+/// Weekends and holidays are skipped — 5 WT starting on Saturday Jan 3 (2026).
+/// Jan 4 (Sun, skip), Jan 5 (Mon=1), Jan 6 (holiday, skip), Jan 7 (Wed=2),
+/// Jan 8 (Thu=3), Jan 9 (Fri=4), Jan 10/11 (weekend, skip), Jan 12 (Mon=5).
 #[test]
-fn add_werktage_skips_sundays() {
-    // 2026-01-03 (Saturday)
+fn add_werktage_skips_weekends_and_holidays() {
     let start = Date::from_calendar_date(2026, Month::January, 3).unwrap();
     let due = add_werktage(start, 5, HolidayCalendar::BdewMaKo);
-    // Jan 4 (Sun, skip), Jan 5 (Mon=1), Jan 6 (holiday, skip), Jan 7 (Wed=2),
-    // Jan 8 (Thu=3), Jan 9 (Fri=4), Jan 10 (Sat=5)
-    let expected = Date::from_calendar_date(2026, Month::January, 10).unwrap();
-    assert_eq!(due, expected, "add_werktage must skip Sundays and holidays");
+    let expected = Date::from_calendar_date(2026, Month::January, 12).unwrap();
+    assert_eq!(
+        due, expected,
+        "add_werktage must skip Saturdays, Sundays and holidays"
+    );
 }
 
 /// Neujahr (2026-01-01) is a holiday — starting on New Year's Eve (Wed) + 1 WT
@@ -160,32 +153,30 @@ fn deadline_at_werktage_5wt_winter_cet() {
     let received = utc(2026, Month::January, 5, 9, 0);
     let due =
         deadline_at_werktage(received, 5, HolidayCalendar::BdewMaKo).to_offset(UtcOffset::UTC);
-    // Due date: 2026-01-12 (Monday after holiday), 17:00 CET = 16:00 UTC
-    let expected = utc(2026, Month::January, 12, 16, 0);
+    // Due date: 2026-01-13 (Tuesday), 17:00 CET = 16:00 UTC
+    let expected = utc(2026, Month::January, 13, 16, 0);
     assert_eq!(
         due, expected,
-        "5 WT winter deadline (with Heilige Drei Könige) must be Mon Jan 12 at 17:00 CET = 16:00 UTC"
+        "5 WT winter deadline (Heilige Drei Könige skipped) must be Tue Jan 13 at 17:00 CET = 16:00 UTC"
     );
 }
 
 /// deadline_at_werktage with 10 WT starting on a summer Wednesday:
 /// Wed Jun 4, 2025 + 10 WT, accounting for Pfingstmontag (Jun 9 = holiday).
-/// Thu 5(1), Fri 6(2), Sat 7(3), [Mon 9 = Pfingstmontag, skip],
-/// Tue 10(4), Wed 11(5), Thu 12(6), Fri 13(7), Sat 14(8), Mon 16(9), Tue 17(10).
-/// Due: Tue Jun 17. 17:00 CEST = 15:00 UTC.
+/// Thu 5(1), Fri 6(2), [Sat 7 / Sun 8 not Werktage], [Mon 9 = Pfingstmontag, skip],
+/// Tue 10(3), Wed 11(4), Thu 12(5), Fri 13(6), Mon 16(7), Tue 17(8), Wed 18(9), Thu 19(10)…
+/// Due: Fri Jun 20. 17:00 CEST = 15:00 UTC.
 #[test]
 fn deadline_at_werktage_10wt_summer_cest() {
     // 2025-06-04 09:00 UTC = 11:00 CEST (Wednesday, summer)
     let received = utc(2025, Month::June, 4, 9, 0);
     let due =
         deadline_at_werktage(received, 10, HolidayCalendar::BdewMaKo).to_offset(UtcOffset::UTC);
-    // Thu 5(1), Fri 6(2), Sat 7(3), [Mon 9=Pfingstmontag, skip],
-    // Tue 10(4), Wed 11(5), Thu 12(6), Fri 13(7), Sat 14(8), Mon 16(9), Tue 17(10)
     // 17:00 CEST (UTC+2) = 15:00 UTC
-    let expected = utc(2025, Month::June, 17, 15, 0);
+    let expected = utc(2025, Month::June, 20, 15, 0);
     assert_eq!(
         due, expected,
-        "10 WT summer deadline (Pfingstmontag skip) must be due Tue Jun 17 at 17:00 CEST = 15:00 UTC"
+        "10 WT summer deadline (Pfingstmontag skipped) must be due Fri Jun 20 at 17:00 CEST = 15:00 UTC"
     );
 }
 
@@ -204,7 +195,7 @@ fn deadline_at_werktage_due_date_drives_offset() {
     // Tue 25(1), Wed 26(2), Thu 27(3), Fri 28(4), Sat 29(5),
     // Mon 31(6), Tue Apr 1(7), Wed 2(8), Thu 3(9), Fri 4(10)
     // Due: 2025-04-04 (Friday, CEST). 17:00 CEST = 15:00 UTC.
-    let expected = utc(2025, Month::April, 4, 15, 0);
+    let expected = utc(2025, Month::April, 7, 15, 0);
     assert_eq!(
         due, expected,
         "Due date in CEST must produce 15:00 UTC (17:00 CEST), \
@@ -223,7 +214,7 @@ fn deadline_at_werktage_crosses_spring_forward_2025() {
         deadline_at_werktage(received, 5, HolidayCalendar::BdewMaKo).to_offset(UtcOffset::UTC);
     // Fri 28(1), Sat 29(2), Mon 31(3), Tue Apr 1(4), Wed Apr 2(5)
     // Due: 2025-04-02 (Wednesday, CEST). 17:00 CEST = 15:00 UTC.
-    let expected = utc(2025, Month::April, 2, 15, 0);
+    let expected = utc(2025, Month::April, 3, 15, 0);
     assert_eq!(
         due, expected,
         "Deadline spanning spring-forward must use CEST offset on due date (15:00 UTC)"
@@ -242,7 +233,7 @@ fn deadline_at_werktage_crosses_fall_back_2025() {
     // Sat 25(1), Mon 27(2), Tue 28(3), Wed 29(4), Thu 30(5)
     // Due: 2025-10-30 (Thursday) — after fall-back (Oct 26), so CET
     // 17:00 CET (UTC+1) = 16:00 UTC
-    let expected = utc(2025, Month::October, 30, 16, 0);
+    let expected = utc(2025, Month::November, 3, 16, 0);
     assert_eq!(
         due, expected,
         "Deadline spanning fall-back must use CET offset on due date (16:00 UTC)"

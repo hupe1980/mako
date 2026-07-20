@@ -70,7 +70,7 @@ tenant         = "9900357000004"
 
 edmd_url       = "http://edmd:8380"
 
-[erp]
-webhook_url    = "http://erp:8000/events"
-hmac_secret    = "${ERP_HMAC_SECRET}"
+# Outbound ERP CloudEvents, signed with HMAC-SHA256 (X-Mako-Signature).
+erp_webhook_url = "http://erp:8000/events"
+erp_hmac_secret = "env:EINSD_ERP_HMAC_SECRET"
 ```

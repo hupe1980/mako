@@ -116,6 +116,10 @@ pub struct EdifactIngestDispatcher {
     snap_store: SlateDbSnapshotStore,
     snapshot_interval: u64,
     tenant_id: TenantId,
+    /// GLNs of counterparties acting as an Energieserviceanbieter.
+    ///
+    /// See [`EdifactIngestDispatcher::with_esa_partners`].
+    esa_partner_glns: std::collections::HashSet<String>,
 }
 
 impl EdifactIngestDispatcher {
@@ -180,7 +184,29 @@ impl EdifactIngestDispatcher {
         "wim-stammdaten",
         "wim-stornierung",
         "wim-technik-aenderung",
+        mako_wim::wertebestellung::WORKFLOW_NAME,
     ];
+
+    /// Register the GLNs of counterparties known to act as an
+    /// Energieserviceanbieter.
+    ///
+    /// REQOTE 35002 is shared: an ESA Werteanfrage (WiM Teil 2 Kap. 4 UC 4.1
+    /// Nr. 1) and a Preisanfrage arrive under the same Prüfidentifikator,
+    /// because no ESA-specific REQOTE PID exists. The sender's registered role
+    /// is the decisive discriminator — an ESA is registered via PARTIN 37006 —
+    /// and the message itself carries only the GLN, not the role. Supplying the
+    /// known ESA GLNs here turns that signal on; without it the classifier falls
+    /// back to the `PIA` Messprodukt marker alone.
+    #[must_use]
+    pub fn with_esa_partners(mut self, glns: impl IntoIterator<Item = String>) -> Self {
+        self.esa_partner_glns = glns.into_iter().collect();
+        self
+    }
+
+    /// `true` when `gln` is a registered ESA counterparty.
+    fn sender_is_esa(&self, gln: &str) -> bool {
+        !gln.is_empty() && self.esa_partner_glns.contains(gln)
+    }
 
     /// Construct a new dispatcher backed by the given stores.
     #[must_use]
@@ -195,6 +221,7 @@ impl EdifactIngestDispatcher {
             snap_store,
             snapshot_interval,
             tenant_id,
+            esa_partner_glns: std::collections::HashSet::new(),
         }
     }
 
@@ -1435,8 +1462,72 @@ impl EdifactIngestDispatcher {
                 }),
             },
 
+            // ── WiM ESA Wertebestellung (WiM Teil 2 Kap. 4) ───────────────────
+            //
+            // ORDERS 17007 (Bestellung/Abbestellung) and ORDCHG 39002
+            // (Stornierung). REQOTE 35002 arrives under "wim-preisanfrage"
+            // because the two share a PID; it is separated below.
+            name if name == mako_wim::wertebestellung::WORKFLOW_NAME => {
+                if pid == mako_wim::wertebestellung::BESTELLUNG_PID
+                    || pid == mako_wim::wertebestellung::STORNIERUNG_PID
+                {
+                    let cmd = adapters::wim_wertebestellung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // UC 4.1 Nr. 4 / Nr. 6 and UC 4.3 Nr. 2: 2 WT nach dem ÜT.
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        mako_wim::wertebestellung::ANTWORT_FRIST_WT,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
+                        &malo_id,
+                        mako_wim::wertebestellung::WORKFLOW_NAME,
+                        cmd,
+                        &fv,
+                        &[(mako_wim::wertebestellung::ANTWORT_WINDOW_LABEL, due_at)],
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: mako_wim::wertebestellung::WORKFLOW_NAME,
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+
             // ── WiM Preisanfrage REQOTE (PIDs 35001–35005) ────────────────────
             "wim-preisanfrage" => {
+                // REQOTE 35002 is shared: an ESA Werteanfrage (WiM Teil 2 UC 4.1
+                // Nr. 1) and a Preisanfrage arrive under the same PID, because no
+                // ESA-specific REQOTE Prüfidentifikator exists. Separate them on
+                // content before the Preisanfrage workflow claims the message.
+                if pid == mako_wim::wertebestellung::ANFRAGE_PID
+                    && mako_wim::wertebestellung::classify_reqote(
+                        self.sender_is_esa(&extract_sender_gln(msg)),
+                        mako_wim::wertebestellung::has_messprodukt(extract_pia_codes(msg)),
+                    ) == mako_wim::wertebestellung::ReqoteKind::EsaWerteanfrage
+                {
+                    let cmd = adapters::wim_wertebestellung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // UC 4.1 Nr. 2: "spätester ÜT ist der 5. WT nach dem ÜT von
+                    // Nr. 1". makod issues its positive AS4 Receipt for this
+                    // message in the same request, so the dispatch instant is
+                    // the ÜT the Frist counts from.
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        mako_wim::wertebestellung::ANGEBOT_FRIST_WT,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    return self
+                        .spawn_or_resume::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
+                            &malo_id,
+                            mako_wim::wertebestellung::WORKFLOW_NAME,
+                            cmd,
+                            &fv,
+                            &[(mako_wim::wertebestellung::ANGEBOT_WINDOW_LABEL, due_at)],
+                        )
+                        .await;
+                }
                 if mako_wim::preisanfrage::REQOTE_PIDS.contains(&pid) {
                     let cmd = adapters::wim_preisanfrage_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
@@ -1971,6 +2062,41 @@ pub fn extract_malo_from_msg(msg: &AnyMessage) -> String {
         .and_then(|s| s.component_str(1, 0))
         .unwrap_or("")
         .to_owned()
+}
+
+/// Extract the sender GLN from the message's `NAD+MS` segment.
+///
+/// Empty when the message carries no sender NAD.
+pub fn extract_sender_gln(msg: &AnyMessage) -> String {
+    let segs = match msg {
+        AnyMessage::Reqote(r) => r.segments(),
+        AnyMessage::Quotes(q) => q.segments(),
+        AnyMessage::Orders(o) => o.segments(),
+        AnyMessage::Ordrsp(o) => o.segments(),
+        _ => return String::new(),
+    };
+    segs.iter()
+        .find(|s| s.tag == "NAD" && s.component_str(0, 0) == Some("MS"))
+        .and_then(|s| s.component_str(1, 0))
+        .unwrap_or("")
+        .to_owned()
+}
+
+/// Extract every `PIA` product identifier from a message.
+///
+/// BDEW encodes the Messprodukt as `PIA+5+<code>::<code list>`. Used to tell an
+/// ESA Werteanfrage from a Preisanfrage, which share REQOTE PID 35002.
+pub fn extract_pia_codes(msg: &AnyMessage) -> Vec<&str> {
+    let segs = match msg {
+        AnyMessage::Reqote(r) => r.segments(),
+        AnyMessage::Quotes(q) => q.segments(),
+        AnyMessage::Orders(o) => o.segments(),
+        _ => return Vec::new(),
+    };
+    segs.iter()
+        .filter(|s| s.tag == "PIA")
+        .filter_map(|s| s.component_str(1, 0))
+        .collect()
 }
 
 /// Extract the Messlokations-ID from the first UTILMD transaction's IDE segment.

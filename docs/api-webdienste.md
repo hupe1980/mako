@@ -208,6 +208,33 @@ Gas API-Webdienste announcements.
 
 ---
 
+## Identifier validation
+
+Every BDEW identifier crossing this boundary is a validated `rubo4e::identifiers`
+type. `Deserialize` enforces the check digit, so a malformed MaLo-, MeLo-, NeLo-,
+SR- or TR-ID is rejected with **400** before it reaches a handler.
+
+This matters most for MaLo-Ident: it is the first binding API process in German
+MaKo (mandatory since 06.06.2025, 2-hour deadline) and a precondition for every
+supplier switch, so it is exactly where a bad identifier would enter and
+propagate.
+
+`MarketPartnerId` is a string, not an integer — BDEW codes may carry leading
+zeros.
+
+## Specification versions
+
+`energy-api` implements **1.0.0**, the only tag in either spec repository.
+
+Release 2.0.0 was consulted via Mitteilung Nr. 55 for 01.10.2026 and then
+**excluded** by Mitteilung Nr. 56; only **API Guideline 1.0b** binds on that
+date. The 2.0.0 material lives on a consultation branch that is still moving, and
+no `2.0.0` tag exists. `energy-api::spec_version::RELEASE_2_0_0_SCOPE` records
+what it will change when it freezes.
+
+Note the specs are split across two repositories: `EDI-Energy/api-electricity`
+(electricity APIs) and `EDI-Energy/api-directory-service` (Verzeichnisdienst).
+
 ## Further reading
 
 - [Getting Started](getting-started.md) — EDIFACT parsing and process engine first steps

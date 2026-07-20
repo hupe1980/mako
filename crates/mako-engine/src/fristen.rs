@@ -30,12 +30,12 @@
 //! use mako_engine::fristen::{self, HolidayCalendar};
 //! use time::{Date, Month};
 //!
-//! // 5 Werktage after Monday 2025-01-06 (federal only):
+//! // 5 Werktage after Monday 2025-01-06:
 //! let start = Date::from_calendar_date(2025, Month::January, 6).unwrap();
 //! let due   = fristen::add_werktage(start, 5, HolidayCalendar::BdewMaKo);
-//! // Tue 07, Wed 08, Thu 09, Fri 10, Sat 11 → 2025-01-11
-//! // (Saturday counts as Werktag in German energy regulation)
-//! assert_eq!(due, Date::from_calendar_date(2025, Month::January, 11).unwrap());
+//! // Tue 07, Wed 08, Thu 09, Fri 10, Mon 13 → 2025-01-13
+//! // (Saturday and Sunday are not Werktage in market communication)
+//! assert_eq!(due, Date::from_calendar_date(2025, Month::January, 13).unwrap());
 //! ```
 //!
 //! ## Holiday calendar: BDEW-defined Germany-wide calendar
@@ -393,9 +393,9 @@ pub fn add_hours(from: OffsetDateTime, hours: u32) -> OffsetDateTime {
 
 /// Add `n` Werktage (working days) to `from`.
 ///
-/// A Werktag is any day that is neither a Sunday nor a public holiday in the
-/// given `cal`. **Saturdays count as Werktage** in German energy regulation
-/// (BDEW AHB).
+/// GPKE (BK6-24-174) Teil 1: a Werktag is any day that is not a Saturday, a
+/// Sunday or a public holiday. A holiday observed in any single Bundesland
+/// counts nationwide, and 24.12. and 31.12. count as holidays.
 ///
 /// Use this for **WiM / GeLi Gas / MABIS** deadlines.
 ///
@@ -411,11 +411,11 @@ pub fn add_hours(from: OffsetDateTime, hours: u32) -> OffsetDateTime {
 /// use mako_engine::fristen::{self, HolidayCalendar};
 /// use time::{Date, Month};
 ///
-/// // Monday + 5 Werktage (no holidays in this week):
+/// // Monday + 5 Werktage. Saturday and Sunday are not Werktage:
 /// let start = Date::from_calendar_date(2025, Month::January, 6).unwrap();
 /// let due   = fristen::add_werktage(start, 5, HolidayCalendar::BdewMaKo);
-/// // Tue 07, Wed 08, Thu 09, Fri 10, Sat 11 → 2025-01-11
-/// assert_eq!(due, Date::from_calendar_date(2025, Month::January, 11).unwrap());
+/// // Tue 07, Wed 08, Thu 09, Fri 10, Mon 13 → 2025-01-13
+/// assert_eq!(due, Date::from_calendar_date(2025, Month::January, 13).unwrap());
 /// ```
 ///
 /// # Panics
@@ -495,7 +495,7 @@ pub fn next_werktag(from: Date, cal: HolidayCalendar) -> Date {
 ///     Time::MIDNIGHT,
 /// );
 /// let due = fristen::deadline_at_werktage(received, 5, HolidayCalendar::BdewMaKo);
-/// assert_eq!(due.date(), Date::from_calendar_date(2025, Month::January, 11).unwrap());
+/// assert_eq!(due.date(), Date::from_calendar_date(2025, Month::January, 13).unwrap());
 /// // January is CET (UTC+1): the deadline is 17:00 local time.
 /// // Local hour is 17; the UTC equivalent is 16:00.
 /// assert_eq!(due.hour(), 17);  // local time (CET)
@@ -571,10 +571,17 @@ pub fn deadline_at_werktage(
 fn is_bdew_mako_holiday(date: Date) -> bool {
     let (y, m, d) = (date.year(), date.month() as u8, date.day());
 
-    // Fixed-date holidays (bundesweit + Landesfeiertage):
+    // Fixed-date holidays. GPKE Teil 1: "Wenn in einem Bundesland ein Tag als
+    // Feiertag ausgewiesen wird, gilt dieser Tag bundesweit als Feiertag", so
+    // Landesfeiertage are included. The same passage adds: "Der 24.12. und der
+    // 31.12. eines jeden Jahres gelten als Feiertage."
     if matches!(
         (m, d),
-        (1 | 5 | 11, 1) | (1, 6) | (8, 15) | (10, 3 | 31) | (12, 25 | 26) // 2. Weihnachtstag
+        (1 | 5 | 11, 1)      // Neujahr, Tag der Arbeit, Allerheiligen
+            | (1, 6)          // Heilige Drei Könige
+            | (8, 15)         // Mariä Himmelfahrt
+            | (10, 3 | 31)    // Tag der Deutschen Einheit, Reformationstag
+            | (12, 24 | 25 | 26 | 31) // Heiligabend, Weihnachten, Silvester
     ) {
         return true;
     }
@@ -642,10 +649,15 @@ fn easter_sunday(year: i32) -> Date {
 
 /// Return `true` when `date` is a Werktag under `cal`.
 ///
-/// In German energy regulation (BDEW AHB), Sundays and public holidays are
-/// **not** Werktage. Saturdays **are** Werktage.
+/// GPKE (BK6-24-174) Teil 1 defines the term for Fristberechnung:
+///
+/// > **Werktag (WT)**: darunter sind alle Tage zu verstehen, die kein Samstag,
+/// > Sonntag oder gesetzlicher Feiertag sind.
+///
+/// **Saturday is not a Werktag** in market communication, unlike the everyday
+/// German sense of the word and unlike §193 BGB.
 fn is_werktag(date: Date, cal: HolidayCalendar) -> bool {
-    if date.weekday() == Weekday::Sunday {
+    if matches!(date.weekday(), Weekday::Saturday | Weekday::Sunday) {
         return false;
     }
     match cal {
@@ -780,8 +792,18 @@ mod tests {
     }
 
     #[test]
-    fn saturday_is_werktag() {
-        assert!(is_werktag(date(2025, 1, 4), HolidayCalendar::BdewMaKo));
+    fn saturday_is_not_a_werktag() {
+        // GPKE Teil 1: "alle Tage ..., die kein Samstag, Sonntag oder
+        // gesetzlicher Feiertag sind". 2025-01-04 is a Saturday.
+        assert!(!is_werktag(date(2025, 1, 4), HolidayCalendar::BdewMaKo));
+    }
+
+    #[test]
+    fn heiligabend_and_silvester_are_holidays() {
+        // GPKE Teil 1: "Der 24.12. und der 31.12. eines jeden Jahres gelten als
+        // Feiertage." 2025-12-24 is a Wednesday, 2025-12-31 a Wednesday.
+        assert!(!is_werktag(date(2025, 12, 24), HolidayCalendar::BdewMaKo));
+        assert!(!is_werktag(date(2025, 12, 31), HolidayCalendar::BdewMaKo));
     }
 
     #[test]
@@ -805,12 +827,12 @@ mod tests {
 
     #[test]
     fn five_werktage_plain_week() {
-        // Monday 2025-01-06, no holidays.
-        // Tue 07, Wed 08, Thu 09, Fri 10, Sat 11 → 2025-01-11
-        // (Saturday counts as Werktag in German energy regulation)
+        // Monday 2025-01-06 is Heilige Drei Könige, but the count starts from the
+        // day after: Tue 07 (+1), Wed 08 (+2), Thu 09 (+3), Fri 10 (+4),
+        // Sat 11 and Sun 12 skipped, Mon 13 (+5).
         let start = date(2025, 1, 6);
         let due = add_werktage(start, 5, HolidayCalendar::BdewMaKo);
-        assert_eq!(due, date(2025, 1, 11));
+        assert_eq!(due, date(2025, 1, 13));
     }
 
     #[test]
@@ -846,10 +868,11 @@ mod tests {
     #[test]
     fn skips_holiday_and_sunday() {
         // 2025-04-17 is Thursday before Easter.
-        // +1 Werktag: Fri 18 = Karfreitag (holiday → skip), Sat 19 is Werktag → 2025-04-19
+        // +1 Werktag: Fri 18 = Karfreitag (skip), Sat 19 / Sun 20 (not Werktage),
+        // Mon 21 = Ostermontag (skip), Tue 22 (+1).
         let start = date(2025, 4, 17);
         let due = add_werktage(start, 1, HolidayCalendar::BdewMaKo);
-        assert_eq!(due, date(2025, 4, 19));
+        assert_eq!(due, date(2025, 4, 22));
     }
 
     #[test]
@@ -895,7 +918,7 @@ mod tests {
         // January is CET (UTC+1).  17:00 CET = 16:00 UTC.
         let received = OffsetDateTime::new_utc(date(2025, 1, 6), Time::MIDNIGHT);
         let due = deadline_at_werktage(received, 5, HolidayCalendar::BdewMaKo);
-        assert_eq!(due.date(), date(2025, 1, 11));
+        assert_eq!(due.date(), date(2025, 1, 13));
         assert_eq!(
             due.to_offset(time::UtcOffset::UTC).hour(),
             16,
@@ -931,8 +954,8 @@ mod tests {
         let due = deadline_at_werktage(received, 4, HolidayCalendar::BdewMaKo);
         assert_eq!(
             due.date(),
-            date(2025, 3, 31),
-            "should land on Monday 2025-03-31"
+            date(2025, 4, 1),
+            "should land on Tuesday 2025-04-01"
         );
         assert_eq!(
             due.to_offset(time::UtcOffset::UTC).hour(),
@@ -955,8 +978,8 @@ mod tests {
         let due = deadline_at_werktage(received, 4, HolidayCalendar::BdewMaKo);
         assert_eq!(
             due.date(),
-            date(2025, 10, 27),
-            "should land on Monday 2025-10-27"
+            date(2025, 10, 28),
+            "should land on Tuesday 2025-10-28"
         );
         assert_eq!(
             due.to_offset(time::UtcOffset::UTC).hour(),
@@ -985,9 +1008,9 @@ mod tests {
         // Should start from 2025-01-07 (Tuesday Berlin date), not 2025-01-06
         assert_eq!(
             due.date(),
-            date(2025, 1, 13),
+            date(2025, 1, 14),
             "5 WT from Tuesday 2025-01-07: Wed 08 (+1), Thu 09 (+2), Fri 10 (+3), \
-             Sat 11 (+4), Mon 13 (+5) — Sunday 12 skipped"
+             Mon 13 (+4), Tue 14 (+5) — Sat 11 and Sun 12 are not Werktage"
         );
     }
 
@@ -1109,15 +1132,15 @@ mod tests {
 
     #[test]
     fn aperak_gas_folgeprozess_friday_skips_weekend_to_monday_noon() {
-        // Friday 2025-01-17 10:00 UTC: next Werktag after Friday = Saturday 18 (Samstag).
-        // Saturday is a Werktag in BDEW regulation.
+        // Friday 2025-01-17 10:00 UTC. Saturday and Sunday are not Werktage, so
+        // the next Werktag is Monday 2025-01-20.
         let received =
             OffsetDateTime::new_utc(date(2025, 1, 17), Time::from_hms(10, 0, 0).unwrap());
         let due = aperak_gas_folgeprozess_due_at(received);
         assert_eq!(
             due.to_offset(time::UtcOffset::UTC).date(),
-            date(2025, 1, 18),
-            "next Werktag after Friday = Saturday"
+            date(2025, 1, 20),
+            "next Werktag after Friday is Monday — Saturday is not a Werktag"
         );
         assert_eq!(
             due.to_offset(time::UtcOffset::UTC).hour(),
@@ -1170,13 +1193,13 @@ mod tests {
         let due = aperak_gas_folgeprozess_due_at(received);
         assert_eq!(
             due.to_offset(time::UtcOffset::UTC).date(),
-            date(2025, 3, 29),
-            "next Werktag = Saturday before spring-forward"
+            date(2025, 3, 31),
+            "next Werktag is the Monday after the spring-forward weekend"
         );
         assert_eq!(
             due.to_offset(time::UtcOffset::UTC).hour(),
-            11,
-            "CET: 12:00 local = 11:00 UTC"
+            10,
+            "the deadline lands after the 2025-03-30 spring-forward, so 12:00 CEST = 10:00 UTC"
         );
     }
 
@@ -1205,15 +1228,16 @@ mod tests {
     #[test]
     fn aperak_gas_initialprozess_3_werktage_skips_holiday() {
         // Wednesday 2025-04-16 (day before Karfreitag).
-        // +3 Werktage: Thu 17 (+1), Fri 18 = Karfreitag (skip), Sat 19 (+2), Mon 21 = Ostermontag (skip),
-        //              Tue 22 (+3).
-        // Deadline: Tuesday 2025-04-22 12:00 CEST = 10:00 UTC.
+        // +3 Werktage: Thu 17 (+1), Fri 18 = Karfreitag (skip), Sat 19 / Sun 20
+        //              (not Werktage), Mon 21 = Ostermontag (skip), Tue 22 (+2),
+        //              Wed 23 (+3).
+        // Deadline: Wednesday 2025-04-23 12:00 CEST = 10:00 UTC.
         let received =
             OffsetDateTime::new_utc(date(2025, 4, 16), Time::from_hms(10, 0, 0).unwrap());
         let due = aperak_gas_initialprozess_due_at(received);
         assert_eq!(
             due.to_offset(time::UtcOffset::UTC).date(),
-            date(2025, 4, 22)
+            date(2025, 4, 23)
         );
         assert_eq!(
             due.to_offset(time::UtcOffset::UTC).hour(),

@@ -68,6 +68,10 @@ pub struct XRechnungInfo {
     pub netto_eur: Decimal,
     /// BT-111 Invoice total VAT amount.
     pub mwst_eur: Decimal,
+    /// EN16931 BG-23 VAT breakdown, one entry per category and rate.
+    ///
+    /// Empty falls back to a single standard-rate block over the whole net.
+    pub tax_subtotals: Vec<energy_billing::invoice::TaxSubtotal>,
     /// BT-112 Invoice total amount inclusive of VAT.
     pub brutto_eur: Decimal,
 
@@ -137,7 +141,7 @@ pub fn build_zugferd_cii_xml(info: &XRechnungInfo) -> String {
         .map(format_date_yyyymmdd)
         .unwrap_or_else(|| format_date_yyyymmdd(info.issue_date));
 
-    let vat_rate = info.vat_rate_pct.round_dp(2);
+    let _vat_rate = info.vat_rate_pct.round_dp(2);
 
     // Build line items.
     let lines: String = info
@@ -246,14 +250,8 @@ pub fn build_zugferd_cii_xml(info: &XRechnungInfo) -> String {
       <!-- BT-5 Invoice currency -->
       <ram:InvoiceCurrencyCode>EUR</ram:InvoiceCurrencyCode>
 
-      <!-- BG-23 VAT breakdown -->
-      <ram:ApplicableTradeTax>
-        <ram:CalculatedAmount>{mwst_eur}</ram:CalculatedAmount>
-        <ram:TypeCode>VAT</ram:TypeCode>
-        <ram:BasisAmount>{netto_eur}</ram:BasisAmount>
-        <ram:CategoryCode>S</ram:CategoryCode>
-        <ram:RateApplicablePercent>{vat_rate}</ram:RateApplicablePercent>
-      </ram:ApplicableTradeTax>
+      <!-- BG-23 VAT breakdown — one entry per category and rate -->
+{tax_breakdown}
 
       <!-- BG-14 Billing period -->
       <ram:BillingSpecifiedPeriod>
@@ -299,7 +297,7 @@ pub fn build_zugferd_cii_xml(info: &XRechnungInfo) -> String {
         netto_eur = info.netto_eur.round_dp(2),
         mwst_eur = info.mwst_eur.round_dp(2),
         brutto_eur = info.brutto_eur.round_dp(2),
-        vat_rate = vat_rate,
+        tax_breakdown = render_tax_breakdown(info),
         due_date = due_date_fmt,
     )
 }
@@ -358,6 +356,54 @@ fn xml_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
+}
+
+/// Render the EN16931 BG-23 VAT breakdown.
+///
+/// One `ApplicableTradeTax` per distinct category and rate. A single aggregate
+/// block cannot represent an invoice that mixes rates — 19 % commodity with 7 %
+/// Fernwärme (§12 Abs. 2 Nr. 1 UStG) or 0 % Solar (§12 Abs. 3 UStG) — and the
+/// EN16931 total-reconciliation rules compare the sum of the taxable bases
+/// against the invoice net, so a collapsed breakdown fails validation.
+///
+/// Zero-rated bases are emitted with category `Z`; omitting them would leave the
+/// bases short of the net.
+fn render_tax_breakdown(info: &XRechnungInfo) -> String {
+    if info.tax_subtotals.is_empty() {
+        // No structured breakdown supplied: fall back to a single standard-rate
+        // block over the whole net, which is correct for a single-rate invoice.
+        return format!(
+            "      <ram:ApplicableTradeTax>\n\
+             \x20       <ram:CalculatedAmount>{mwst}</ram:CalculatedAmount>\n\
+             \x20       <ram:TypeCode>VAT</ram:TypeCode>\n\
+             \x20       <ram:BasisAmount>{netto}</ram:BasisAmount>\n\
+             \x20       <ram:CategoryCode>S</ram:CategoryCode>\n\
+             \x20       <ram:RateApplicablePercent>{rate}</ram:RateApplicablePercent>\n\
+             \x20     </ram:ApplicableTradeTax>",
+            mwst = info.mwst_eur.round_dp(2),
+            netto = info.netto_eur.round_dp(2),
+            rate = info.vat_rate_pct.normalize(),
+        );
+    }
+    info.tax_subtotals
+        .iter()
+        .map(|t| {
+            format!(
+                "      <ram:ApplicableTradeTax>\n\
+                 \x20       <ram:CalculatedAmount>{tax}</ram:CalculatedAmount>\n\
+                 \x20       <ram:TypeCode>VAT</ram:TypeCode>\n\
+                 \x20       <ram:BasisAmount>{base}</ram:BasisAmount>\n\
+                 \x20       <ram:CategoryCode>{cat}</ram:CategoryCode>\n\
+                 \x20       <ram:RateApplicablePercent>{rate}</ram:RateApplicablePercent>\n\
+                 \x20     </ram:ApplicableTradeTax>",
+                tax = t.tax_amount_eur.round_dp(2),
+                base = t.taxable_base_eur.round_dp(2),
+                cat = t.category.code(),
+                rate = t.rate_percent.normalize(),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 // ── BillingResult → XRechnungInfo conversion ──────────────────────────────────
@@ -467,8 +513,33 @@ pub fn info_from_rechnung_json(
         netto_eur,
         mwst_eur,
         brutto_eur,
+        // Derived from the stored positions so the breakdown cannot drift from
+        // what was billed. Empty when the JSON carries no positions, which the
+        // renderer handles by falling back to a single standard-rate block.
+        tax_subtotals: subtotals_from_rechnung_json(rechnung_json, vat_rate_pct),
         vat_rate_pct,
     }
+}
+
+/// Recover the EN16931 VAT breakdown from the stored `rechnung_json`.
+///
+/// The stored document keeps each position's `applicable_tax_rate`, so the
+/// breakdown is re-derived rather than persisted separately — a stored copy
+/// could disagree with the positions it summarises.
+fn subtotals_from_rechnung_json(
+    rechnung_json: &serde_json::Value,
+    vat_rate_pct: rust_decimal::Decimal,
+) -> Vec<energy_billing::invoice::TaxSubtotal> {
+    let Some(positions) = rechnung_json.get("positions") else {
+        return Vec::new();
+    };
+    let Ok(parsed) =
+        serde_json::from_value::<Vec<energy_billing::position::BillingPosition>>(positions.clone())
+    else {
+        return Vec::new();
+    };
+    let default_rate = vat_rate_pct / rust_decimal::Decimal::ONE_HUNDRED;
+    energy_billing::invoice::tax_subtotals_of(&parsed, default_rate)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -516,6 +587,7 @@ mod tests {
             ],
             netto_eur: dec!(106.00),
             mwst_eur: dec!(20.14),
+            tax_subtotals: Vec::new(),
             brutto_eur: dec!(126.14),
             vat_rate_pct: dec!(19),
         }

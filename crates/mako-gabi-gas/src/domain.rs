@@ -13,7 +13,7 @@
 //! - [`NominationQuantity`] — submitted / accepted / curtailed breakdown
 //! - [`GasQualityClass`] — H-Gas / L-Gas designation per DVGW G 260
 //! - [`DvgwFormatVersion`] — DVGW biannual release version management
-//! - [`GABI_GAS_CLOUD_EVENTS`] — typed `de.gabi.*` CloudEvent type constants
+//! - `cloud_events` — typed `de.gabi.*` CloudEvent type constants
 //!
 //! ## No float money rule
 //!

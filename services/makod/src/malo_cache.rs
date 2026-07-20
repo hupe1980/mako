@@ -82,7 +82,7 @@ impl SlateDbMaloCache {
         tenant_id: &str,
         result: &MaloIdentResultPositive,
     ) -> Result<(), anyhow::Error> {
-        let malo_id = result.data_market_location.malo_id.0.as_str();
+        let malo_id = result.data_market_location.malo_id.as_ref();
         let suffix = malo_suffix(tenant_id, malo_id);
         let value = serde_json::to_vec(result)?;
         self.store.kv_put(MC, &suffix, &value).await?;
@@ -259,7 +259,7 @@ impl MaloRegistry for SlateDbMaloCache {
         if let Some(id_params) = &params.identification_parameter_id
             && let Some(malo_id) = &id_params.malo_id
         {
-            let suffix = malo_suffix(tenant_id, &malo_id.0);
+            let suffix = malo_suffix(tenant_id, malo_id.as_ref());
             match self.store.kv_get(MC, &suffix).await {
                 Ok(Some(bytes)) => {
                     return serde_json::from_slice(&bytes).map(Some).map_err(|e| {

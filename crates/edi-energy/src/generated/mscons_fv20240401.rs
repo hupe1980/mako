@@ -400,8 +400,9 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
     /// Header segment ordering (before UNS+D).
     const EXPECTED_HEADER_ORDER: &[&str] = &["UNH", "BGM", "DTM", "RFF", "NAD", "CTA", "COM"];
     /// Detail segment ordering (after UNS+D).
-    const EXPECTED_DETAIL_ORDER: &[&str] =
-        &["LOC", "DTM", "CCI", "LIN", "PIA", "QTY", "STS", "UNT"];
+    const EXPECTED_DETAIL_ORDER: &[&str] = &[
+        "NAD", "LOC", "DTM", "CCI", "LIN", "PIA", "QTY", "DTM", "STS", "UNT",
+    ];
 
     /// Strict order check for the header section (no group repetition expected).
     fn check_header_section(
@@ -556,7 +557,7 @@ static AHB_13002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13002-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13002", "13002", issues);
             })
             .with_named_stateless_rule_fn("AHB-13002-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13002-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13002", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13002-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13002", issues);
             })
             .with_named_stateless_rule_fn("AHB-13002-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13002-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13002", "13002", issues);
@@ -628,7 +629,7 @@ static AHB_13003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13003-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13003", "13003", issues);
             })
             .with_named_stateless_rule_fn("AHB-13003-BGM-1001-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "BGM", "AHB-13003-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7']", |q| matches!(q, "7"), "13003", issues);
+                ahb_check_qualifier(segs, "BGM", "AHB-13003-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7', 'BK', 'Z39']", |q| matches!(q, "7" | "BK" | "Z39"), "13003", issues);
             })
             .with_named_stateless_rule_fn("AHB-13003-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13003-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13003", issues);
@@ -643,7 +644,7 @@ static AHB_13003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13003-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13003", "13003", issues);
             })
             .with_named_stateless_rule_fn("AHB-13003-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13003-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13003", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13003-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13003", issues);
             })
             .with_named_stateless_rule_fn("AHB-13003-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13003-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13003", "13003", issues);
@@ -655,7 +656,7 @@ static AHB_13003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13003-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13003", "13003", issues);
             })
             .with_named_stateless_rule_fn("AHB-13003-QTY-6063-V", |segs, issues| {
-                ahb_check_field_value(segs, "QTY", 0, "AHB-13003-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', '67']", |v| matches!(v, "220" | "67"), "13003", issues);
+                ahb_check_field_value(segs, "QTY", 0, "AHB-13003-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['79', '220', '67']", |v| matches!(v, "79" | "220" | "67"), "13003", issues);
             })
             .with_max_issues_per_rule(50)
         )
@@ -688,7 +689,7 @@ static AHB_13005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13005-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13005", "13005", issues);
             })
             .with_named_stateless_rule_fn("AHB-13005-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13005-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13005", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13005-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13005", issues);
             })
             .with_named_stateless_rule_fn("AHB-13005-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13005-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13005", "13005", issues);
@@ -733,7 +734,7 @@ static AHB_13006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13006-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13006", "13006", issues);
             })
             .with_named_stateless_rule_fn("AHB-13006-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13006-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13006", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13006-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13006", issues);
             })
             .with_named_stateless_rule_fn("AHB-13006-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-13006-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 13006", "13006", issues);
@@ -778,7 +779,7 @@ static AHB_13007_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13007-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13007", "13007", issues);
             })
             .with_named_stateless_rule_fn("AHB-13007-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13007-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13007", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13007-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13007", issues);
             })
             .with_named_stateless_rule_fn("AHB-13007-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13007-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13007", "13007", issues);
@@ -823,7 +824,7 @@ static AHB_13008_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13008-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13008", "13008", issues);
             })
             .with_named_stateless_rule_fn("AHB-13008-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13008-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13008", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13008-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13008", issues);
             })
             .with_named_stateless_rule_fn("AHB-13008-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13008-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13008", "13008", issues);
@@ -868,7 +869,7 @@ static AHB_13009_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13009-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13009", "13009", issues);
             })
             .with_named_stateless_rule_fn("AHB-13009-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13009-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13009", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13009-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13009", issues);
             })
             .with_named_stateless_rule_fn("AHB-13009-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13009-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13009", "13009", issues);
@@ -946,7 +947,7 @@ static AHB_13010_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13010-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13010", "13010", issues);
             })
             .with_named_stateless_rule_fn("AHB-13010-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13010-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13010", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13010-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13010", issues);
             })
             .with_named_stateless_rule_fn("AHB-13010-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13010-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13010", "13010", issues);
@@ -985,7 +986,7 @@ static AHB_13011_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13011-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13011", "13011", issues);
             })
             .with_named_stateless_rule_fn("AHB-13011-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13011-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13011", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13011-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13011", issues);
             })
             .with_named_stateless_rule_fn("AHB-13011-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13011-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13011", "13011", issues);
@@ -1024,7 +1025,7 @@ static AHB_13012_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13012-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13012", "13012", issues);
             })
             .with_named_stateless_rule_fn("AHB-13012-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13012-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13012", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13012-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13012", issues);
             })
             .with_named_stateless_rule_fn("AHB-13012-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13012-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13012", "13012", issues);
@@ -1063,7 +1064,7 @@ static AHB_13013_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13013-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13013", "13013", issues);
             })
             .with_named_stateless_rule_fn("AHB-13013-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13013-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13013", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13013-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13013", issues);
             })
             .with_named_stateless_rule_fn("AHB-13013-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13013-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13013", "13013", issues);
@@ -1108,7 +1109,7 @@ static AHB_13014_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13014-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13014", "13014", issues);
             })
             .with_named_stateless_rule_fn("AHB-13014-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13014-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13014", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13014-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13014", issues);
             })
             .with_named_stateless_rule_fn("AHB-13014-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13014-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13014", "13014", issues);
@@ -1153,7 +1154,7 @@ static AHB_13015_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13015-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13015", "13015", issues);
             })
             .with_named_stateless_rule_fn("AHB-13015-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13015-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13015", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13015-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13015", issues);
             })
             .with_named_stateless_rule_fn("AHB-13015-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13015-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13015", "13015", issues);
@@ -1183,7 +1184,7 @@ static AHB_13016_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13016-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13016", "13016", issues);
             })
             .with_named_stateless_rule_fn("AHB-13016-BGM-1001-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "BGM", "AHB-13016-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7', 'Z27', 'Z28']", |q| matches!(q, "7" | "Z27" | "Z28"), "13016", issues);
+                ahb_check_qualifier(segs, "BGM", "AHB-13016-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7', 'Z27', 'Z28', 'Z42']", |q| matches!(q, "7" | "Z27" | "Z28" | "Z42"), "13016", issues);
             })
             .with_named_stateless_rule_fn("AHB-13016-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13016-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13016", issues);
@@ -1198,7 +1199,7 @@ static AHB_13016_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13016-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13016", "13016", issues);
             })
             .with_named_stateless_rule_fn("AHB-13016-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13016-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13016", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13016-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13016", issues);
             })
             .with_named_stateless_rule_fn("AHB-13016-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13016-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13016", "13016", issues);
@@ -1210,7 +1211,7 @@ static AHB_13016_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13016-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13016", "13016", issues);
             })
             .with_named_stateless_rule_fn("AHB-13016-QTY-6063-V", |segs, issues| {
-                ahb_check_field_value(segs, "QTY", 0, "AHB-13016-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', '67']", |v| matches!(v, "220" | "67"), "13016", issues);
+                ahb_check_field_value(segs, "QTY", 0, "AHB-13016-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', '67', 'Z18']", |v| matches!(v, "220" | "67" | "Z18"), "13016", issues);
             })
             .with_max_issues_per_rule(50)
         )
@@ -1243,7 +1244,7 @@ static AHB_13017_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13017-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13017", "13017", issues);
             })
             .with_named_stateless_rule_fn("AHB-13017-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13017-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13017", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13017-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13017", issues);
             })
             .with_named_stateless_rule_fn("AHB-13017-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13017-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13017", "13017", issues);
@@ -1319,7 +1320,7 @@ static AHB_13018_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13018-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13018", "13018", issues);
             })
             .with_named_stateless_rule_fn("AHB-13018-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13018-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13018", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13018-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13018", issues);
             })
             .with_named_stateless_rule_fn("AHB-13018-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13018-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13018", "13018", issues);
@@ -1349,7 +1350,7 @@ static AHB_13019_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13019-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13019", "13019", issues);
             })
             .with_named_stateless_rule_fn("AHB-13019-BGM-1001-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "BGM", "AHB-13019-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7', 'Z27']", |q| matches!(q, "7" | "Z27"), "13019", issues);
+                ahb_check_qualifier(segs, "BGM", "AHB-13019-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7', 'Z27', 'Z41']", |q| matches!(q, "7" | "Z27" | "Z41"), "13019", issues);
             })
             .with_named_stateless_rule_fn("AHB-13019-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13019-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13019", issues);
@@ -1364,7 +1365,7 @@ static AHB_13019_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13019-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13019", "13019", issues);
             })
             .with_named_stateless_rule_fn("AHB-13019-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13019-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13019", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13019-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13019", issues);
             })
             .with_named_stateless_rule_fn("AHB-13019-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13019-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13019", "13019", issues);
@@ -1409,7 +1410,7 @@ static AHB_13020_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13020-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13020", "13020", issues);
             })
             .with_named_stateless_rule_fn("AHB-13020-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13020-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13020", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13020-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13020", issues);
             })
             .with_named_stateless_rule_fn("AHB-13020-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13020-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13020", "13020", issues);
@@ -1454,7 +1455,7 @@ static AHB_13021_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13021-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13021", "13021", issues);
             })
             .with_named_stateless_rule_fn("AHB-13021-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13021-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13021", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13021-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13021", issues);
             })
             .with_named_stateless_rule_fn("AHB-13021-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13021-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13021", "13021", issues);
@@ -1499,7 +1500,7 @@ static AHB_13022_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13022-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13022", "13022", issues);
             })
             .with_named_stateless_rule_fn("AHB-13022-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13022-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13022", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13022-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13022", issues);
             })
             .with_named_stateless_rule_fn("AHB-13022-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13022-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13022", "13022", issues);
@@ -1529,7 +1530,7 @@ static AHB_13023_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "BGM", "AHB-13023-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 13023", "13023", issues);
             })
             .with_named_stateless_rule_fn("AHB-13023-BGM-1001-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "BGM", "AHB-13023-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7']", |q| matches!(q, "7"), "13023", issues);
+                ahb_check_qualifier(segs, "BGM", "AHB-13023-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['7', 'Z46']", |q| matches!(q, "7" | "Z46"), "13023", issues);
             })
             .with_named_stateless_rule_fn("AHB-13023-BGM-1225-V", |segs, issues| {
                 ahb_check_field_value(segs, "BGM", 2, "AHB-13023-BGM-1225-V", "segment BGM DE 1225 (element 2, component 0): value is not one of the allowed values ['9']", |v| matches!(v, "9"), "13023", issues);
@@ -1544,7 +1545,7 @@ static AHB_13023_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13023-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13023", "13023", issues);
             })
             .with_named_stateless_rule_fn("AHB-13023-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13023-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13023", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13023-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13023", issues);
             })
             .with_named_stateless_rule_fn("AHB-13023-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13023-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13023", "13023", issues);
@@ -1556,7 +1557,7 @@ static AHB_13023_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13023-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13023", "13023", issues);
             })
             .with_named_stateless_rule_fn("AHB-13023-QTY-6063-V", |segs, issues| {
-                ahb_check_field_value(segs, "QTY", 0, "AHB-13023-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', '67']", |v| matches!(v, "220" | "67"), "13023", issues);
+                ahb_check_field_value(segs, "QTY", 0, "AHB-13023-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['79', '220', '67']", |v| matches!(v, "79" | "220" | "67"), "13023", issues);
             })
             .with_max_issues_per_rule(50)
         )
@@ -1589,7 +1590,7 @@ static AHB_13025_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13025-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13025", "13025", issues);
             })
             .with_named_stateless_rule_fn("AHB-13025-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13025-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13025", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13025-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13025", issues);
             })
             .with_named_stateless_rule_fn("AHB-13025-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13025-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13025", "13025", issues);
@@ -1634,7 +1635,7 @@ static AHB_13026_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13026-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13026", "13026", issues);
             })
             .with_named_stateless_rule_fn("AHB-13026-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13026-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13026", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13026-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13026", issues);
             })
             .with_named_stateless_rule_fn("AHB-13026-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13026-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13026", "13026", issues);
@@ -1679,7 +1680,7 @@ static AHB_13027_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13027-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13027", "13027", issues);
             })
             .with_named_stateless_rule_fn("AHB-13027-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13027-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13027", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13027-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13027", issues);
             })
             .with_named_stateless_rule_fn("AHB-13027-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13027-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13027", "13027", issues);
@@ -1724,7 +1725,7 @@ static AHB_13028_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "NAD", "AHB-13028-NAD-M", "mandatory segment NAD is missing for Pruefidentifikator 13028", "13028", issues);
             })
             .with_named_stateless_rule_fn("AHB-13028-NAD-3035-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "NAD", "AHB-13028-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['MS', 'MR']", |q| matches!(q, "MS" | "MR"), "13028", issues);
+                ahb_check_qualifier(segs, "NAD", "AHB-13028-NAD-3035-Q", "segment NAD DE 3035 (element 0, component 0): qualifier is not one of the allowed values ['DP', 'MR', 'MS']", |q| matches!(q, "DP" | "MR" | "MS"), "13028", issues);
             })
             .with_named_stateless_rule_fn("AHB-13028-LOC-M", |segs, issues| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13028-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13028", "13028", issues);

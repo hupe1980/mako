@@ -6,20 +6,24 @@
 |---|---|
 | HTTP port | `:8380` |
 | Database | PostgreSQL 15+ (sqlx 0.8, schema from `migrations/0001_schema.sql`) |
+| Partitioning | `meter_reads` is range-partitioned monthly on `dtm_from`; retention drops whole partitions once every row in them is durable in the cold tier |
 | Schema | `meter_reads` — `quantity_kwh NUMERIC(18,5)`, `tenant TEXT NOT NULL`; `meter_billing_periods` — NUMERIC aggregates, `tenant TEXT NOT NULL`; `gdpr_deletions`, `ablese_auftraege`, `direct_push_sessions`, `archive_batches`, `iceberg_catalog_entries` |
 | Inbound | CloudEvents from `marktd` — `de.mako.process.completed` (MSCONS PIDs 13005–13027), `de.mako.process.initiated` (PID 23001 INSRPT → auto reading order) |
 | Direct push | `POST /api/v1/meter-reads/rlm/{malo_id}` (Strom), `POST /api/v1/meter-reads/gas/{malo_id}` (Gas m³→kWh_Hs) — idempotent on `session_id` |
 | Quality scoring | `metering::score_intervals_f64` — Hampel filter (k=3, t=3.0, MAD×1.4826σ), auto-vectorises to AVX2/NEON; grades A/B/C/F; retroactive: `POST /api/v1/quality-score/{malo_id}` |
-| Reading orders | `POST/GET /api/v1/reading-orders` — Ablesesteuerung for LF/MSB/NB; auto-creates `INSRPT_STOERUNG` on INSRPT PID 23001 (§18 MessZV) |
+| Reading orders | `POST/GET /api/v1/reading-orders` — Ablesesteuerung for LF/MSB/NB; `/complete`, `/cancel`, `/fail` (Ablesehindernis); auto-creates `INSRPT_STOERUNG` on INSRPT PID 23001 (§18 MessZV) |
+| §40 compliance | `GET /api/v1/compliance/jahresablesung/{year}` — only `AUSGEFUEHRT` discharges the annual-reading obligation |
 | REST API | `GET /api/v1/deliveries/{malo_id}` → `Vec<Energiemenge>` · `GET /api/v1/lastgang/{malo_id}` · `GET /api/v1/zeitreihe/{malo_id}` · `GET /api/v1/billing-period/{malo_id}` · `GET /api/v1/imbalance/{malo_id}/{year}/{month}` |
 | Arrow IPC | `Accept: application/vnd.apache.arrow.stream` on `GET /api/v1/lastgang` + `GET /api/v1/zeitreihe` — 10–50× throughput vs JSON for bulk reads |
 | Archive OLAP | `GET /api/v1/archive/status` · `GET /api/v1/archive/olap/{malo_id}` · `GET /api/v1/archive/portfolio` · `GET /api/v1/archive/timeseries/{malo_id}` · `POST /api/v1/query/sql` (DataFusion) |
 | Iceberg REST | `GET /api/v1/iceberg/v1/...` — Iceberg REST catalog for DuckDB/Snowflake/Databricks direct attach |
-| GDPR | `DELETE /api/v1/gdpr/erasure/{malo_id}` — Art. 17 DSGVO hot-tier erasure + read-time cold-tier exclusion |
-| Auth | OIDC/JWT + Cedar ABAC (`read-timeseries`, `write-quality-rescore`, `read-archive-olap`); webhook HMAC-SHA256 (`X-Mako-Signature`) |
+| GDPR | `DELETE /api/v1/gdpr/erasure/{malo_id}` — Art. 17 hot-tier erasure (one transaction) + read-time cold-tier exclusion; `POST .../archive-plan` and `.../archive-complete` make the cold-tier rewrite trackable |
+| Auth | OIDC/JWT + Cedar ABAC (`read-timeseries`, `write-quality-rescore`, `read-archive-olap`, `read-reading-order`, `write-gdpr-erasure`); webhook HMAC-SHA256 (`X-Mako-Signature`). Refuses to start without `[oidc]` unless `allow_insecure_no_auth = true` |
+| Rate limiting | Per-tenant and global GCRA buckets; `429` carries `Retry-After` |
 | Health | `GET /health/live`, `GET /health/ready` (PostgreSQL ping) |
-| MCP | `POST\|GET /mcp` — 10 tools including `get_timeseries`, `get_imbalance`, `get_billing_period`, `validate_timeseries`, `trigger_jahresablesung` |
-| CloudEvents emitted | `de.edmd.reading.direct.stored`, `de.edmd.reading.quality.warning` (grade C/F) |
+| MCP | `POST\|GET /mcp` — 14 tools including `get_timeseries`, `get_imbalance`, `get_billing_period`, `validate_timeseries`, `list_overdue_reading_orders`, `trigger_jahresablesung` |
+| CloudEvents emitted | `de.edmd.reading.direct.stored`, `de.edmd.reading.quality.warning` (grade C/F), `de.edmd.reading.order.failed` |
+| Quality history | Every scoring path records a verdict in `quality_assessments`; re-scoring supersedes rather than appends |
 
 ---
 
@@ -36,18 +40,61 @@ The schema is designed for a fresh install — no incremental migration state is
 
 ## Configuration
 
+All settings live in `edmd.toml`. The binary takes three arguments:
+
 | Flag | Env var | Default | Description |
 |---|---|---|---|
-| `--listen` | `EDMD_LISTEN` | `0.0.0.0:8380` | Bind address |
-| `--database-url` | `EDMD_DATABASE_URL` | required | PostgreSQL connection string |
-| `--marktd-url` | `EDMD_MARKTD_URL` | `http://localhost:8180` | marktd base URL for subscription registration |
-| `--subscriber-id` | `EDMD_SUBSCRIBER_ID` | `edmd` | CloudEvents subscriber ID registered with marktd |
-| `--webhook-url` | `EDMD_WEBHOOK_URL` | required | Public URL that marktd will POST events to |
-| `--webhook-secret` | `EDMD_WEBHOOK_SECRET` | optional | HMAC-SHA256 secret for outbound webhook signatures |
-| `--inbound-secret` | `EDMD_INBOUND_SECRET` | optional | HMAC secret for verifying inbound `X-Mako-Signature` headers (falls back to `--webhook-secret`) |
-| `--db-pool-size` | `EDMD_DB_POOL_SIZE` | `10` | Max PostgreSQL connections |
-| `--log-level` | `EDMD_LOG_LEVEL` | `info` | Log level — overridden by `RUST_LOG` |
-| `--otel-endpoint` | `EDMD_OTEL_ENDPOINT` | optional | OTLP gRPC endpoint (e.g. `http://otel-collector:4317`) |
+| `-c`, `--config` | `EDMD_CONFIG` | `edmd.toml` | Path to the configuration file |
+| `--log-level` | `RUST_LOG` | `info` | Log level |
+| `--check` | `EDMD_CHECK` | `false` | Validate configuration and database connectivity, then exit 0 |
+
+`--check` is the container health gate: it resolves every `env:` reference, opens
+the database, and exits without binding a port.
+
+### Sections
+
+```toml
+# Required unless an [oidc] section is present. Without token verification every
+# request is admitted as `dev-admin` with all market roles.
+allow_insecure_no_auth = false
+
+[http]
+addr = "0.0.0.0:8380"
+
+[database]
+url       = "env:EDMD_DATABASE_URL"
+pool_size = 10
+
+[identity]
+tenant = "9900357000004"          # BDEW Codenummer
+
+[marktd]
+url     = "http://marktd:8180"
+api_key = "env:EDMD_MARKTD_API_KEY"
+
+[subscription]
+subscriber_id = "edmd"
+webhook_url   = "http://edmd:8380/webhook"
+
+[webhook]
+inbound_secret   = "env:EDMD_INBOUND_SECRET"   # verifies X-Mako-Signature
+erp_webhook_url  = "http://erp:9000/events"    # outbound CloudEvents
+
+[oidc]
+issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+audience = "api://mako-edmd"
+
+[rate_limit]
+requests_per_second            = 500    # global sustained
+burst                          = 1000   # ingest is bursty by nature
+per_tenant_requests_per_second = 100
+
+[otel]
+endpoint = "http://otel-collector:4317"
+
+[mcp]
+api_key = "env:EDMD_MCP_API_KEY"
+```
 
 ### Archive configuration (`[archive]` in `edmd.toml`)
 
@@ -154,10 +201,21 @@ Response:
 
 ## Database Schema
 
-| Migration | Tables |
+`migrations/0001_schema.sql` is the single authoritative DDL — the schema is
+designed for a fresh install, so no incremental migration state is maintained.
+
+| Area | Tables |
 |---|---|
-| `0001_initial_schema.sql` | `meter_data_receipts` · `meter_reads` · `meter_billing_periods` · `meter_read_corrections` |
-| `0002_archive_tracking.sql` | `archive_batches` · `iceberg_snapshots` · `archived` column on `meter_reads` |
+| Metered data | `meter_reads` (range-partitioned monthly on `dtm_from`) · `meter_data_receipts` · `meter_billing_periods` |
+| Corrections & substitution | `meter_read_corrections` · `substitute_value_log` |
+| Quality | `quality_assessments` |
+| Reading orders | `ablese_auftraege` |
+| Ingest sessions | `direct_push_sessions` |
+| Gas | `gas_quality_data` |
+| Virtual meters (§42b/§42c EnWG) | `virtual_meter_configs` |
+| Devices | `meter_exchange_events` · `smgw_sessions` · `cls_compliance_log` |
+| Cold tier | `archive_batches` · `iceberg_catalog_entries` |
+| GDPR | `gdpr_deletions` · `gdpr_archive_files` |
 
 All tables carry `tenant TEXT NOT NULL` for multi-tenant isolation — the BDEW/DVGW
 Codenummer or GLN of the operating entity (not a UUID). `meter_reads.tenant` is the

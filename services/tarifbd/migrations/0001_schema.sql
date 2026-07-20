@@ -192,11 +192,13 @@ CREATE TABLE angebote (
     varianten           JSONB       NOT NULL DEFAULT '[]',
     jahreskosten_netto_eur  NUMERIC(16, 2),
     jahreskosten_brutto_eur NUMERIC(16, 2),
-    -- Pre-computed per-variant cost breakdown for GET .../comparison.
-    -- Schema: [{label, laufzeit_monate, ist_basis, jahreskosten_netto_eur,
-    --           jahreskosten_brutto_eur, rabatt_pct, positionen_detail: [{...}]}]
-    -- Populated by POST /angebote and PUT /angebote/{id}; read by GET .../comparison.
-    angebot_varianten_enriched JSONB       NOT NULL DEFAULT '[]',
+    -- BO4E `Angebot` business object for the priced quotation.
+    --
+    -- The CPQ/ERP interchange payload: Angebot → Angebotsvariante (one per
+    -- scenario) → Angebotsteil (one per Marktlokation) → Angebotsposition (one
+    -- per cost line). Written by GET .../comparison, which is where the
+    -- scenarios are priced; '{}' until first priced.
+    bo4e                JSONB       NOT NULL DEFAULT '{}',
     gewaehlte_variante  SMALLINT,
     rahmenvertrag_id    UUID,
     accepted_at         TIMESTAMPTZ,

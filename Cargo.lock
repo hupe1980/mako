@@ -862,9 +862,9 @@ dependencies = [
 
 [[package]]
 name = "asx-rs"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e82138a5524d33a9f564f64cc11c36a2de80ea0ca14ef1fb4a78b014252e382d"
+checksum = "d3be4fb99c2c8e0ad9bf2119e95b886225426597698d4520281e1cb80ca7603e"
 dependencies = [
  "aes-gcm",
  "axum",
@@ -4197,6 +4197,7 @@ dependencies = [
  "bytes",
  "clap",
  "datafusion 52.5.0",
+ "futures",
  "iceberg",
  "iceberg-catalog-sql",
  "iceberg-datafusion",
@@ -4212,6 +4213,7 @@ dependencies = [
  "rmcp",
  "rubo4e",
  "rust_decimal",
+ "rust_decimal_macros",
  "schemars 1.2.1",
  "secrecy",
  "serde",
@@ -4223,6 +4225,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml 0.8.23",
+ "tower",
  "tracing",
  "url",
  "uuid",
@@ -4367,6 +4370,7 @@ dependencies = [
  "http",
  "p256",
  "reqwest 0.13.1",
+ "rubo4e",
  "serde",
  "serde_jcs",
  "serde_json",
@@ -4387,6 +4391,7 @@ dependencies = [
  "billing",
  "eeg-billing",
  "proptest",
+ "rubo4e",
  "rust_decimal",
  "rust_decimal_macros",
  "serde",
@@ -7488,6 +7493,7 @@ dependencies = [
  "thiserror 2.0.19",
  "time",
  "tokio",
+ "tokio-util",
  "toml 0.8.23",
  "tower-http",
  "tracing",
@@ -13219,6 +13225,7 @@ dependencies = [
  "rmcp",
  "rubo4e",
  "rust_decimal",
+ "rust_decimal_macros",
  "secrecy",
  "sepa",
  "serde",

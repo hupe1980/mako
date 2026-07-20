@@ -49,8 +49,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -196,7 +197,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "1001": [
-              "7"
+              "7",
+              "BK",
+              "Z39"
             ]
           },
           "field_rules": [
@@ -231,8 +234,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -261,6 +265,7 @@
               "element": "6063",
               "requirement": "M",
               "allowed_values": [
+                "79",
                 "220",
                 "67"
               ],
@@ -372,8 +377,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -519,8 +525,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -659,8 +666,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -800,8 +808,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -942,8 +951,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -1119,8 +1129,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -1252,8 +1263,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -1385,8 +1397,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -1517,8 +1530,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -1658,8 +1672,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -1800,8 +1815,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -1908,7 +1924,8 @@
             "1001": [
               "7",
               "Z27",
-              "Z28"
+              "Z28",
+              "Z42"
             ]
           },
           "field_rules": [
@@ -1943,8 +1960,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -1974,7 +1992,8 @@
               "requirement": "M",
               "allowed_values": [
                 "220",
-                "67"
+                "67",
+                "Z18"
               ],
               "element_index": 0
             }
@@ -2084,8 +2103,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -2259,8 +2279,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -2366,7 +2387,8 @@
           "qualifier_restrictions": {
             "1001": [
               "7",
-              "Z27"
+              "Z27",
+              "Z41"
             ]
           },
           "field_rules": [
@@ -2401,8 +2423,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -2542,8 +2565,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -2682,8 +2706,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -2822,8 +2847,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -2927,7 +2953,8 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "1001": [
-              "7"
+              "7",
+              "Z46"
             ]
           },
           "field_rules": [
@@ -2962,8 +2989,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -2992,6 +3020,7 @@
               "element": "6063",
               "requirement": "M",
               "allowed_values": [
+                "79",
                 "220",
                 "67"
               ],
@@ -3104,8 +3133,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -3245,8 +3275,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -3385,8 +3416,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []
@@ -3527,8 +3559,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3035": [
-              "MS",
-              "MR"
+              "DP",
+              "MR",
+              "MS"
             ]
           },
           "field_rules": []

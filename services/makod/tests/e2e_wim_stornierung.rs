@@ -23,7 +23,7 @@
 //!
 //! - **PID 39002**: Stornierung der Bestellung (ORDCHG, nMSB → NB)
 //! - **ORDRSP Frist**: **5 Werktage** (BNetzA BK6-18-032)
-//! - **Saturday counts as a Werktag**; Sunday and public holidays do not.
+//! - **Saturdays, Sundays and public holidays are not Werktage.**
 //! - NB state machine:
 //!   `New → StornierungReceived → ValidationPassed → Bestaetigt` (positive)
 //!   `New → StornierungReceived → ValidationPassed → Abgelehnt` (negative)

@@ -250,7 +250,7 @@ impl As4Sender for MaloIdentSender {
             // Perform the cache lookup and deliver the appropriate callback.
             match cache.lookup(&cb.tenant_id, &cb.params).await {
                 Ok(Some(result)) => {
-                    let malo_id_str = result.data_market_location.malo_id.0.clone();
+                    let malo_id_str = result.data_market_location.malo_id.as_ref().to_owned();
 
                     // Resolve the NB GLN from the MaLo record — needed both for
                     // the result cache and for the `maloid.lieferbeginn.fortsetzen`

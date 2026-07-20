@@ -13,6 +13,7 @@
 //! | `mcp_server` | see module docs |
 //! | `pg` | see module docs |
 
+pub mod angebot_bo4e;
 pub mod config;
 pub mod events;
 pub mod handlers;

@@ -30,7 +30,7 @@
 //!
 //! - **PID 44002**: Anfrage Lieferende Gas (LFN → GNB, GeLi Gas AHB G1.1)
 //! - **APERAK Frist**: **10 Werktage** (BNetzA BK7 GeLi Gas 3.0, BK7-24-01-009)
-//! - **Saturday counts as a Werktag**; Sunday and federal public holidays do not.
+//! - **Saturdays, Sundays and federal public holidays are not Werktage.**
 //!   This is distinct from GPKE (24 wall-clock hours) and WiM (5 Werktage).
 //! - The GNB state machine:
 //!   `New → Initiated → ValidationPassed → AperakSent → Active` (positive)
@@ -190,7 +190,7 @@ impl MockGnb {
 /// Antwort (44005 Bestätigung), and the workflow completes.
 ///
 /// BNetzA BK7 GeLi Gas: Antwort must be sent within **10 Werktage**.
-/// Saturday counts as a Werktag; Sunday and federal holidays do not.
+/// Saturdays, Sundays and federal holidays are not Werktage.
 #[tokio::test]
 async fn e2e_lieferende_gas_positive_aperak() {
     let gnb = MockGnb::new();

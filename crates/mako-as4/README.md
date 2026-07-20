@@ -91,7 +91,7 @@ let push_policy = mako_as4::bdew_push_policy(Some(own_decrypt_key_pem));
 ## Testing without WIRK certificates
 
 Enable the `testing` feature to generate BrainpoolP256r1 test keypairs in memory.
-The test helpers leverage the asx-rs v0.8.0 testing API:
+The test helpers build on the `asx-rs` testing API:
 
 ```toml
 [dev-dependencies]
@@ -208,6 +208,6 @@ println!("Encryption key (PEM): {}", pki.encryption.key_pem_str());
 | Crate | Role |
 |---|---|
 | `mako-as4` ← **this crate** | BDEW AS4 profile (P-Modes, constants, policy, test helpers) |
-| `asx-rs` 0.8 | AS4/ebMS3 transport engine (ECDSA signing, ECDH-ES encrypt, dedup, testing helpers) |
+| `asx-rs` 0.9 | AS4/ebMS3 transport engine (ECDSA signing, ECDH-ES encrypt, dedup, testing helpers) |
 | `makod` | Production daemon — assembles AS4 ingest, sender, and all 45+ BDEW workflows |
 

@@ -26,6 +26,11 @@ crypto    = ["dep:p256", "dep:sha2", "dep:base64ct", "dep:serde_jcs"]
 
 [dependencies]
 serde      = { version = "1", features = ["derive"] }
+# Validated BDEW identifiers (MaLo/MeLo/NeLo/SR/TR/Marktpartner). The
+# `identifiers` feature pulls only the identifier types and their serde impls,
+# not the 191-type BO4E schema. Deserialization enforces the check digit, so an
+# invalid ID is rejected at the API boundary rather than propagating.
+rubo4e     = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }
 time       = { workspace = true, features = ["serde", "formatting", "parsing"] }

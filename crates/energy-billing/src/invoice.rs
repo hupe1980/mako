@@ -54,7 +54,10 @@ pub struct Invoice {
     /// Does NOT include `Abschlag` deductions.
     pub netto_eur: Decimal,
 
-    /// MwSt amount in EUR.
+    /// MwSt amount in EUR — the aggregate across every rate.
+    ///
+    /// For the EN16931 BG-23 breakdown use [`Invoice::tax_subtotals`]: a single
+    /// aggregate cannot express an invoice that mixes rates.
     pub mwst_eur: Decimal,
 
     /// Brutto total in EUR (Netto + MwSt).
@@ -95,6 +98,16 @@ pub struct Invoice {
 }
 
 impl Invoice {
+    /// The EN16931 BG-23 VAT breakdown — one entry per distinct rate.
+    ///
+    /// Derived rather than stored, so it cannot drift from the positions.
+    /// `default_rate` applies to positions with no explicit
+    /// `applicable_tax_rate`.
+    #[must_use]
+    pub fn tax_subtotals(&self, default_rate: Decimal) -> Vec<TaxSubtotal> {
+        tax_subtotals_of(&self.positions, default_rate)
+    }
+
     /// Assemble an `Invoice` from a flat list of positions and warnings.
     ///
     /// Separates Tax and Abschlag positions from all others:
@@ -617,5 +630,252 @@ fn negate_wert_field(obj: &mut serde_json::Map<String, serde_json::Value>) {
         if let Some(neg) = negated {
             obj.insert("wert".to_owned(), neg);
         }
+    }
+}
+
+// ── EN16931 BG-23 VAT breakdown ───────────────────────────────────────────────
+
+/// EN16931 VAT category code for one tax subtotal (BT-118).
+///
+/// A structured code, not free text: EN16931 validates the category against the
+/// rate, and the wrong pairing fails a receiving system's schematron rather than
+/// merely looking odd.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum VatCategory {
+    /// `S` — standard rate.
+    Standard,
+    /// `Z` — zero-rated goods. §12 Abs. 3 UStG (Solar ≤ 30 kWp) lands here.
+    ZeroRated,
+    /// `AE` — VAT reverse charge, §13b UStG.
+    ReverseCharge,
+    /// `E` — exempt from VAT.
+    Exempt,
+}
+
+impl VatCategory {
+    /// The EN16931 code (BT-118).
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Standard => "S",
+            Self::ZeroRated => "Z",
+            Self::ReverseCharge => "AE",
+            Self::Exempt => "E",
+        }
+    }
+}
+
+/// One VAT subtotal — EN16931 BG-23.
+///
+/// EN16931 requires **one breakdown entry per distinct category and rate**, each
+/// carrying its own taxable base (BT-116) and tax amount (BT-117). A single
+/// aggregate `mwst_eur` cannot express that, and an invoice mixing rates — 19 %
+/// commodity with 7 % Fernwärme (§12 Abs. 2 Nr. 1 UStG) or 0 % Solar (§12 Abs. 3
+/// UStG) — is structurally invalid without it.
+///
+/// Zero-rated bases are included. Omitting them would make the sum of the
+/// taxable bases differ from the invoice net, which is exactly what the
+/// EN16931 total-reconciliation rules check.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TaxSubtotal {
+    /// EN16931 BT-118 category.
+    pub category: VatCategory,
+    /// Rate as a percentage (BT-119), e.g. `19`, `7`, `0`.
+    pub rate_percent: Decimal,
+    /// Taxable base in EUR (BT-116).
+    pub taxable_base_eur: Decimal,
+    /// Tax amount in EUR (BT-117).
+    pub tax_amount_eur: Decimal,
+}
+
+impl TaxSubtotal {
+    /// Project into the BO4E [`rubo4e::current::Steuerbetrag`].
+    #[must_use]
+    pub fn to_bo4e(&self) -> rubo4e::current::Steuerbetrag {
+        rubo4e::current::Steuerbetrag {
+            basiswert: Some(self.taxable_base_eur),
+            steuerwert: Some(self.tax_amount_eur),
+            // BO4E carries the rate as a percentage, matching BT-119.
+            steuersatz: Some(self.rate_percent),
+            steuerart: Some(match self.category {
+                VatCategory::ReverseCharge => rubo4e::current::Steuerart::Rcv,
+                _ => rubo4e::current::Steuerart::Ust,
+            }),
+            waehrungscode: Some(rubo4e::current::Waehrungscode::Eur),
+            ..Default::default()
+        }
+    }
+}
+
+/// Group an invoice's positions into EN16931 VAT subtotals.
+///
+/// Groups by effective rate — a position's own `applicable_tax_rate` when set,
+/// otherwise `default_rate`. `Tax`, `Abschlag` and `Info` positions are excluded
+/// from the base: they are not supplies.
+#[must_use]
+pub fn tax_subtotals_of(positions: &[BillingPosition], default_rate: Decimal) -> Vec<TaxSubtotal> {
+    use std::collections::BTreeMap;
+
+    // Keyed on the rate's string form so ordering is stable and 0.190 groups
+    // with 0.19.
+    let mut buckets: BTreeMap<String, (Decimal, Decimal)> = BTreeMap::new();
+    for p in positions {
+        if matches!(
+            p.category,
+            PositionCategory::Tax | PositionCategory::Abschlag | PositionCategory::Info
+        ) {
+            continue;
+        }
+        let rate = p.applicable_tax_rate.unwrap_or(default_rate).normalize();
+        let entry = buckets
+            .entry(rate.to_string())
+            .or_insert((rate, Decimal::ZERO));
+        entry.1 += p.net_eur;
+    }
+
+    buckets
+        .into_values()
+        .map(|(rate, base)| {
+            let pct = (rate * Decimal::ONE_HUNDRED).normalize();
+            let tax = (base * rate).round_dp(2);
+            TaxSubtotal {
+                category: if rate.is_zero() {
+                    VatCategory::ZeroRated
+                } else {
+                    VatCategory::Standard
+                },
+                rate_percent: pct,
+                taxable_base_eur: base.round_dp(2),
+                tax_amount_eur: tax,
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tax_subtotal_tests {
+    use super::*;
+    use crate::position::PositionCategory;
+    use rust_decimal_macros::dec;
+
+    fn pos(net: Decimal, rate: Option<Decimal>, cat: PositionCategory) -> BillingPosition {
+        let mut p = BillingPosition::debit("x", Decimal::ONE, "kWh", net, cat);
+        p.applicable_tax_rate = rate;
+        p
+    }
+
+    /// EN16931 BG-23 needs one entry per rate. A single aggregate cannot
+    /// represent 19 % commodity next to 7 % Fernwärme.
+    #[test]
+    fn mixed_rates_produce_one_subtotal_each() {
+        let positions = vec![
+            pos(dec!(1000), None, PositionCategory::Commodity),
+            pos(dec!(500), Some(dec!(0.07)), PositionCategory::Commodity),
+        ];
+        let subs = tax_subtotals_of(&positions, dec!(0.19));
+        assert_eq!(subs.len(), 2, "one entry per rate: {subs:?}");
+
+        let standard = subs.iter().find(|s| s.rate_percent == dec!(19)).unwrap();
+        assert_eq!(standard.taxable_base_eur, dec!(1000));
+        assert_eq!(standard.tax_amount_eur, dec!(190));
+        assert_eq!(standard.category, VatCategory::Standard);
+
+        let reduced = subs.iter().find(|s| s.rate_percent == dec!(7)).unwrap();
+        assert_eq!(reduced.taxable_base_eur, dec!(500));
+        assert_eq!(reduced.tax_amount_eur, dec!(35));
+    }
+
+    /// A zero-rated base must still appear. Omitting it leaves the sum of the
+    /// taxable bases short of the invoice net, which is what the EN16931
+    /// total-reconciliation rules check.
+    #[test]
+    fn zero_rated_positions_still_get_a_subtotal() {
+        let positions = vec![
+            pos(dec!(1000), None, PositionCategory::Commodity),
+            // §12 Abs. 3 UStG — Solar ≤ 30 kWp.
+            pos(dec!(250), Some(Decimal::ZERO), PositionCategory::Commodity),
+        ];
+        let subs = tax_subtotals_of(&positions, dec!(0.19));
+        let zero = subs
+            .iter()
+            .find(|s| s.rate_percent.is_zero())
+            .expect("zero-rated subtotal must be present");
+        assert_eq!(zero.taxable_base_eur, dec!(250));
+        assert_eq!(zero.tax_amount_eur, Decimal::ZERO);
+        assert_eq!(zero.category, VatCategory::ZeroRated);
+
+        // The bases must reconcile with the invoice net.
+        let base_sum: Decimal = subs.iter().map(|s| s.taxable_base_eur).sum();
+        assert_eq!(base_sum, dec!(1250));
+    }
+
+    /// Tax, Abschlag and Info positions are not supplies and must stay out of
+    /// the base — otherwise VAT is levied on VAT.
+    #[test]
+    fn non_supply_positions_are_excluded_from_the_base() {
+        let positions = vec![
+            pos(dec!(1000), None, PositionCategory::Commodity),
+            pos(dec!(190), None, PositionCategory::Tax),
+            pos(dec!(-300), None, PositionCategory::Abschlag),
+            pos(dec!(99), None, PositionCategory::Info),
+        ];
+        let subs = tax_subtotals_of(&positions, dec!(0.19));
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].taxable_base_eur, dec!(1000));
+        assert_eq!(subs[0].tax_amount_eur, dec!(190));
+    }
+
+    /// A credit note carries negative bases and negative tax.
+    #[test]
+    fn credit_positions_yield_negative_tax() {
+        let positions = vec![pos(dec!(-500), None, PositionCategory::Commodity)];
+        let subs = tax_subtotals_of(&positions, dec!(0.19));
+        assert_eq!(subs[0].taxable_base_eur, dec!(-500));
+        assert_eq!(subs[0].tax_amount_eur, dec!(-95));
+    }
+
+    /// Equivalent rates must group, not split into near-duplicate entries.
+    #[test]
+    fn equivalent_rate_spellings_group_together() {
+        let positions = vec![
+            pos(dec!(100), Some(dec!(0.19)), PositionCategory::Commodity),
+            pos(dec!(100), Some(dec!(0.190)), PositionCategory::Commodity),
+        ];
+        let subs = tax_subtotals_of(&positions, dec!(0.19));
+        assert_eq!(subs.len(), 1, "0.19 and 0.190 are one rate: {subs:?}");
+        assert_eq!(subs[0].taxable_base_eur, dec!(200));
+    }
+
+    /// The BO4E projection carries the rate as a percentage, matching BT-119.
+    #[test]
+    fn bo4e_projection_uses_percent_and_eur() {
+        let sub = TaxSubtotal {
+            category: VatCategory::Standard,
+            rate_percent: dec!(19),
+            taxable_base_eur: dec!(1000),
+            tax_amount_eur: dec!(190),
+        };
+        let bo = sub.to_bo4e();
+        assert_eq!(bo.steuersatz, Some(dec!(19)));
+        assert_eq!(bo.basiswert, Some(dec!(1000)));
+        assert_eq!(bo.steuerwert, Some(dec!(190)));
+        assert_eq!(bo.waehrungscode, Some(rubo4e::current::Waehrungscode::Eur));
+        assert_eq!(bo.steuerart, Some(rubo4e::current::Steuerart::Ust));
+    }
+
+    /// Reverse charge (§13b UStG) maps onto BO4E `Rcv` and EN16931 `AE`.
+    #[test]
+    fn reverse_charge_maps_to_rcv_and_ae() {
+        let sub = TaxSubtotal {
+            category: VatCategory::ReverseCharge,
+            rate_percent: Decimal::ZERO,
+            taxable_base_eur: dec!(1000),
+            tax_amount_eur: Decimal::ZERO,
+        };
+        assert_eq!(sub.category.code(), "AE");
+        assert_eq!(
+            sub.to_bo4e().steuerart,
+            Some(rubo4e::current::Steuerart::Rcv)
+        );
     }
 }

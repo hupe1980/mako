@@ -278,6 +278,7 @@ The XML is BASE64-free — returns the raw XML string.",
                         .and_then(|b| row.total_netto_eur.map(|n| b - n))
                         .unwrap_or(dec!(0)),
                     brutto_eur: row.total_brutto_eur.unwrap_or(dec!(0)),
+                    tax_subtotals: Vec::new(),
                     vat_rate_pct: dec!(19),
                 };
                 let xml = build_zugferd_cii_xml(&info);

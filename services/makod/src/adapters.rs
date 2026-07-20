@@ -85,7 +85,7 @@ use mako_wim::{
     StammdatenCommand, StornierungCommand, WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow,
     WimInsrptWorkflow, WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimRechnungCommand,
     WimRechnungWorkflow, WimStammdatenWorkflow, WimStornierungWorkflow,
-    insrpt::StorungsmeldungCommand,
+    insrpt::StorungsmeldungCommand, wertebestellung::WimWertebestellungWorkflow,
 };
 use mako_wim_gas::{
     WimGasAnmeldungCommand, WimGasAnmeldungWorkflow, WimGasInsrptWorkflow, WimGasInvoicCommand,
@@ -2560,6 +2560,109 @@ pub fn wim_preisanfrage_registry() -> AdapterRegistry<WimPreisanfrageWorkflow> {
     registry
 }
 
+// ── WiM ESA Wertebestellung (REQOTE 35002 / ORDERS 17007 / ORDCHG 39002) ─────
+
+/// Build an [`AdapterRegistry`] for the ESA Wertebestellung workflow.
+///
+/// Covers the inbound ESA→MSB leg of WiM Teil 2 Kapitel 4:
+///
+/// | PID | Message | Command |
+/// |---|---|---|
+/// | 35002 | REQOTE | `ReceiveAnfrage` (UC 4.1 Nr. 1) |
+/// | 17007 | ORDERS | `ReceiveBestellung` (UC 4.1 Nr. 3) |
+/// | 39002 | ORDCHG | `ReceiveStornierung` (UC 4.1 Nr. 5) |
+///
+/// Every command carries a [`Zustellquittung`]. makod issues its positive AS4
+/// Receipt for an inbound message in the same request, so the adapter stamps the
+/// acknowledgement at parse time — the ÜT that GPKE Teil 1 requires the Frist to
+/// be counted from.
+///
+/// [`Zustellquittung`]: mako_wim::wertebestellung::Zustellquittung
+#[must_use]
+pub fn wim_wertebestellung_registry() -> AdapterRegistry<WimWertebestellungWorkflow> {
+    use mako_wim::wertebestellung::{
+        ANFRAGE_PID, BESTELLUNG_PID, Lokationsebene, STORNIERUNG_PID, WertebestellungCommand,
+        Zustellquittung,
+    };
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for WiM Wertebestellung adapter".into(),
+                )
+            })?;
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "WiM Wertebestellung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let message_ref = MessageRef::new(msg.message_ref());
+            // The positive AS4 Receipt for this message is issued in the same
+            // request, so "now" is the ÜT.
+            let quittung = Zustellquittung::positive(time::OffsetDateTime::now_utc());
+
+            match pid.as_u32() {
+                ANFRAGE_PID => {
+                    let AnyMessage::Reqote(r) = msg else {
+                        return Err(EngineError::Deserialization(
+                            "WiM Wertebestellung adapter: PID 35002 expects a REQOTE".into(),
+                        ));
+                    };
+                    // UC 4.1: the request names a MaLo-ID, a ZPB or a NeLo-ID
+                    // depending on the level it is addressed to.
+                    let lokations_id = r
+                        .segments()
+                        .iter()
+                        .find(|s| s.tag == "LOC")
+                        .and_then(|s| s.component_str(1, 0))
+                        .unwrap_or("")
+                        .to_owned();
+                    let ebene = match lokations_id.len() {
+                        33 => Lokationsebene::Messlokation,
+                        11 => Lokationsebene::Marktlokation,
+                        _ => Lokationsebene::Netzlokation,
+                    };
+                    Ok(WertebestellungCommand::ReceiveAnfrage {
+                        pid,
+                        esa: MarktpartnerCode::new(
+                            r.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                        ),
+                        msb: MarktpartnerCode::new(
+                            r.receiver()
+                                .and_then(|n| n.party_id.as_deref())
+                                .unwrap_or(""),
+                        ),
+                        ebene,
+                        lokations_id,
+                        message_ref,
+                        quittung,
+                    })
+                }
+                BESTELLUNG_PID => Ok(WertebestellungCommand::ReceiveBestellung {
+                    pid,
+                    message_ref,
+                    quittung,
+                }),
+                STORNIERUNG_PID => Ok(WertebestellungCommand::ReceiveStornierung {
+                    pid,
+                    message_ref,
+                    quittung,
+                }),
+                other => Err(EngineError::Deserialization(format!(
+                    "WiM Wertebestellung adapter: PID {other} is not an ESA inbound PID \
+                     (expected 35002, 17007 or 39002)"
+                ))),
+            }
+        },
+    ));
+    registry
+}
+
 // ── WiM Preisliste PRICAT (PIDs 27001–27003) ──────────────────────────────────
 
 /// Build an [`AdapterRegistry`] for [`WimPreislisteWorkflow`].
@@ -2928,7 +3031,7 @@ pub fn known_fvs() -> Vec<FormatVersion> {
 /// for inbound PIDs 44042–44053 (Anmeldung neuer MSB Gas / Ende MSB Gas).
 ///
 /// **APERAK Frist:** 10 Werktage (BNetzA BK7-24-01-009).
-/// Saturday counts as a Werktag; Sunday and public holidays do not.
+/// Saturdays, Sundays and public holidays are not Werktage.
 ///
 /// # AHB validation note
 ///

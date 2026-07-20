@@ -299,11 +299,21 @@ fn str_header(h: &HeaderMap, name: &str) -> String {
         .to_owned()
 }
 
-fn parse_location(s: &str) -> LocationId {
+/// Parse a path segment into a [`LocationId`].
+///
+/// Both identifiers carry an ASCII-Verfahren check digit, so a malformed value
+/// is rejected here rather than reaching the handler. `E…` is a Netzlokation and
+/// `C…` a Steuerbare Ressource; anything else, or a failed check digit, is a
+/// client error.
+fn parse_location(s: &str) -> Result<LocationId, crate::Error> {
     if s.starts_with('E') {
-        LocationId::NetworkLocation(NeloId(s.to_owned()))
+        NeloId::new(s)
+            .map(LocationId::NetworkLocation)
+            .map_err(|e| crate::Error::InvalidIdentifier(format!("invalid NeLo-ID `{s}`: {e}")))
     } else {
-        LocationId::ControllableResource(SrId(s.to_owned()))
+        SrId::new(s)
+            .map(LocationId::ControllableResource)
+            .map_err(|e| crate::Error::InvalidIdentifier(format!("invalid SR-ID `{s}`: {e}")))
     }
 }
 
@@ -316,11 +326,15 @@ async fn handle_konfiguration<S: ControlMeasuresHandler>(
         Ok(c) => c,
         Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     };
+    let location = match parse_location(&q.location_id) {
+        Ok(l) => l,
+        Err(e) => return handler_error(e),
+    };
     match svc
         .on_konfiguration(
             str_header(&headers, "transactionId"),
             str_header(&headers, "creationDateTime"),
-            parse_location(&q.location_id),
+            location,
             command,
         )
         .await
@@ -339,11 +353,15 @@ async fn handle_initial_zustand<S: ControlMeasuresHandler>(
         Ok(c) => c,
         Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     };
+    let location = match parse_location(&q.location_id) {
+        Ok(l) => l,
+        Err(e) => return handler_error(e),
+    };
     match svc
         .on_initial_zustand(
             str_header(&headers, "transactionId"),
             str_header(&headers, "creationDateTime"),
-            parse_location(&q.location_id),
+            location,
             command,
         )
         .await
@@ -367,12 +385,16 @@ async fn handle_vorlaeufigepositiveantwort<S: ControlMeasuresHandler>(
         Ok(b) => b,
         Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     };
+    let location = match parse_location(&q.location_id) {
+        Ok(l) => l,
+        Err(e) => return handler_error(e),
+    };
     match svc
         .on_vorlaeufigepositiveantwort(
             str_header(&headers, "transactionId"),
             str_header(&headers, "creationDateTime"),
             q.reference_id,
-            parse_location(&q.location_id),
+            location,
             body.preliminary_state_positive,
         )
         .await
@@ -397,12 +419,16 @@ async fn handle_vorlaeufige_negative_antwort<S: ControlMeasuresHandler>(
         Ok(b) => b,
         Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     };
+    let location = match parse_location(&q.location_id) {
+        Ok(l) => l,
+        Err(e) => return handler_error(e),
+    };
     match svc
         .on_vorlaeufige_negative_antwort(
             str_header(&headers, "transactionId"),
             str_header(&headers, "creationDateTime"),
             q.reference_id,
-            parse_location(&q.location_id),
+            location,
             body.state_negative,
             body.reason_negative,
         )
@@ -427,12 +453,16 @@ async fn handle_positive_antwort<S: ControlMeasuresHandler>(
         Ok(b) => b,
         Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     };
+    let location = match parse_location(&q.location_id) {
+        Ok(l) => l,
+        Err(e) => return handler_error(e),
+    };
     match svc
         .on_positive_antwort(
             str_header(&headers, "transactionId"),
             str_header(&headers, "creationDateTime"),
             q.reference_id,
-            parse_location(&q.location_id),
+            location,
             body.state_positive,
         )
         .await
@@ -457,12 +487,16 @@ async fn handle_negative_antwort<S: ControlMeasuresHandler>(
         Ok(b) => b,
         Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     };
+    let location = match parse_location(&q.location_id) {
+        Ok(l) => l,
+        Err(e) => return handler_error(e),
+    };
     match svc
         .on_negative_antwort(
             str_header(&headers, "transactionId"),
             str_header(&headers, "creationDateTime"),
             q.reference_id,
-            parse_location(&q.location_id),
+            location,
             body.state_negative,
             body.reason_negative,
         )
@@ -487,12 +521,16 @@ async fn handle_information_anweisung<S: ControlMeasuresHandler>(
         Ok(b) => b,
         Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     };
+    let location = match parse_location(&q.location_id) {
+        Ok(l) => l,
+        Err(e) => return handler_error(e),
+    };
     match svc
         .on_information_anweisung(
             str_header(&headers, "transactionId"),
             str_header(&headers, "creationDateTime"),
             q.reference_id,
-            parse_location(&q.location_id),
+            location,
             body.state_unknown,
         )
         .await
@@ -525,11 +563,15 @@ async fn handle_information<S: ControlMeasuresHandler>(
         Ok(v) => v,
         Err(e) => return (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
     };
+    let location = match parse_location(&q.location_id) {
+        Ok(l) => l,
+        Err(e) => return handler_error(e),
+    };
     match svc
         .on_information(
             str_header(&headers, "transactionId"),
             str_header(&headers, "creationDateTime"),
-            parse_location(&q.location_id),
+            location,
             q.partner_id,
             command_control,
             command_regular,
@@ -543,6 +585,7 @@ async fn handle_information<S: ControlMeasuresHandler>(
 
 fn handler_error(e: Error) -> Response {
     match e {
+        Error::InvalidIdentifier(msg) => (StatusCode::BAD_REQUEST, msg).into_response(),
         Error::Http { status, body } => (
             StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             body,

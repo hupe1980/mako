@@ -96,8 +96,8 @@ pub use conversion::{
 };
 pub use demand::{DemandInterval, DemandWindow};
 pub use forecast::{
-    AnnualForecast, ForecastMethod, SubstituteValueEntry, prior_period_substitutes,
-    project_annual_consumption,
+    AnnualForecast, ForecastMethod, SubstituteValueEntry, project_annual_consumption,
+    substitute_values,
 };
 pub use imbalance::{ImbalanceSaldo, compute_imbalance};
 pub use interval::{MeasurementUnit, MeterInterval, QualityFlag, Sparte, UnitScale};

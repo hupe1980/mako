@@ -27,6 +27,8 @@ database_url = "postgresql://tarifbd:secret@db:5432/tarifbd"
 port         = 9080
 tenant       = "9900357000004"
 
-[erp]
-webhook_url = "http://erp:8000/events"
+# Optional — outbound ERP CloudEvents. `erp_hmac_secret` signs them
+# (X-Mako-Signature, HMAC-SHA256), so a receiver can verify the origin.
+erp_webhook_url = "http://erp:8000/events"
+erp_hmac_secret = "env:TARIFBD_ERP_HMAC_SECRET"
 ```

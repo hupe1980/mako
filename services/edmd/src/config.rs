@@ -157,6 +157,17 @@ pub struct Config {
     /// Iceberg/S3 archival configuration.  Disabled by default.
     #[serde(default)]
     pub archive: ArchiveConfig,
+    /// Request rate limits, global and per tenant. See `[rate_limit]` in TOML.
+    #[serde(default)]
+    pub rate_limit: mako_service::RateLimitConfig,
+    /// Start without token verification.
+    ///
+    /// With `[oidc]` absent the verifier admits every request as `dev-admin`
+    /// holding every market role, which satisfies every Cedar policy — including
+    /// GDPR erasure and the SQL query endpoint. That posture must be asked for
+    /// by name rather than reached by leaving a section out.
+    #[serde(default)]
+    pub allow_insecure_no_auth: bool,
 }
 
 #[derive(Debug, Deserialize)]

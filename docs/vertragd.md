@@ -22,6 +22,40 @@ Port: **`:9780`** · PostgreSQL · OIDC/JWT + API-key auth
 
 ---
 
+## Contract creation from the BO4E Angebot
+
+`POST /api/v1/webhooks/angebot` receives `de.angebot.angenommen` from `tarifbd`.
+The CloudEvent carries the priced quotation as a BO4E `Angebot` under
+`data.bo4e`, and the contract is built from that document rather than from the
+parallel scalar fields — so what was quoted and what is contracted cannot drift
+apart.
+
+### The accepted variant supplies the terms
+
+A quotation carries several `Angebotsvariante`s (12 months fixed, 24 months
+fixed with a discount, …), each with its own Lieferzeitraum. `gewaehlte_variante`
+selects one; `None` means the base offer, which is the first variant.
+
+`angebot_bo4e::read_accepted` therefore takes the Laufzeit and the Lieferbeginn
+from **the accepted variant**, not from the quotation header. Reading the term
+from the header is exactly the drift this path exists to prevent.
+
+| Contract field | Source in the BO4E document |
+|---|---|
+| `rahmenvertrag_nr` | `Angebot.angebotsnummer` |
+| `gueltig_von` | accepted `Angebotsteil.lieferzeitraum.startdatum` |
+| Laufzeit | whole months between the variant's start and end dates |
+| MaLo per supply point | `Angebotsteil.lieferstellenangebotsteil[].marktlokationsId` |
+| product code | `mako.angebot.teil.produktCode` (zusatz_attribut) |
+
+An out-of-range `gewaehlte_variante` falls back to the base offer rather than
+contracting a variant the customer never chose, and a document with **no**
+variants yields nothing at all — guessing would contract terms the customer
+never saw.
+
+The scalar fields remain as a fallback for a quotation accepted before it was
+ever priced (`bo4e` is `{}` until `GET /angebote/{id}/comparison` runs).
+
 ## Core responsibilities
 
 | Responsibility | Description |

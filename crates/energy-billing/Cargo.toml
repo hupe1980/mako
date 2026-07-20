@@ -9,6 +9,8 @@ repository.workspace   = true
 rust-version.workspace = true
 
 [dependencies]
+# BO4E Steuerbetrag for the EN16931 BG-23 VAT breakdown.
+rubo4e = { workspace = true }
 billing             = { workspace = true }
 eeg-billing         = { workspace = true, features = ["serde"], optional = true }
 rust_decimal        = { workspace = true }

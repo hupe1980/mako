@@ -23,7 +23,6 @@
 
 use energy_api::models::electricity::LocationId as ApiLocationId;
 use mako_engine::types::MarktpartnerCode;
-use mako_markt::domain::{NeloId, SrId};
 use mako_wim::steuerungsauftrag::LocationId as DomainLocationId;
 
 /// Convert an `energy-api` [`ApiLocationId`] into the validated domain
@@ -37,15 +36,14 @@ use mako_wim::steuerungsauftrag::LocationId as DomainLocationId;
 ///
 /// # Errors
 ///
-/// Returns `Err` if the raw string is not a valid `NeloId` or `SrId`.
-pub fn location_id_to_domain(id: &ApiLocationId) -> Result<DomainLocationId, String> {
+/// The API and domain layers now share the same validated identifier types
+/// (`rubo4e::identifiers`), so this is a variant remap with no re-parsing: the
+/// check digit was already enforced when the request was deserialized.
+#[must_use]
+pub fn location_id_to_domain(id: &ApiLocationId) -> DomainLocationId {
     match id {
-        ApiLocationId::NetworkLocation(nelo) => NeloId::try_from(nelo.0.as_str())
-            .map(DomainLocationId::Nelo)
-            .map_err(|_| format!("invalid NeloId: {}", nelo.0)),
-        ApiLocationId::ControllableResource(sr) => SrId::try_from(sr.0.as_str())
-            .map(DomainLocationId::Sr)
-            .map_err(|_| format!("invalid SrId: {}", sr.0)),
+        ApiLocationId::NetworkLocation(nelo) => DomainLocationId::Nelo(nelo.clone()),
+        ApiLocationId::ControllableResource(sr) => DomainLocationId::Sr(sr.clone()),
     }
 }
 
@@ -68,18 +66,22 @@ mod tests {
     fn location_id_nelo_to_domain() {
         // NeloId v0.6: Codetyp 'E' + 9 [A-Z0-9] + ASCII-Verfahren check digit.
         // "E0000000001" is NeloId::from_base("E000000000").
-        let id = LocationId::NetworkLocation(NeloId("E0000000001".into()));
-        let domain = location_id_to_domain(&id).expect("valid NeloId");
-        assert!(matches!(domain, DomainLocationId::Nelo(_)));
+        let id = LocationId::NetworkLocation(NeloId::new("E0000000001").expect("valid NeloId"));
+        assert!(matches!(
+            location_id_to_domain(&id),
+            DomainLocationId::Nelo(_)
+        ));
     }
 
     #[test]
     fn location_id_sr_to_domain() {
         // SrId v0.6: Codetyp 'C' + 9 [A-Z0-9] + ASCII-Verfahren check digit.
         // "C0000000003" is SrId::from_base("C000000000").
-        let id = LocationId::ControllableResource(SrId("C0000000003".into()));
-        let domain = location_id_to_domain(&id).expect("valid SrId");
-        assert!(matches!(domain, DomainLocationId::Sr(_)));
+        let id = LocationId::ControllableResource(SrId::new("C0000000003").expect("valid SrId"));
+        assert!(matches!(
+            location_id_to_domain(&id),
+            DomainLocationId::Sr(_)
+        ));
     }
 
     #[test]

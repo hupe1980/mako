@@ -270,9 +270,9 @@ if [[ "$CODE" == "200" ]]; then
     RECEIPT_EUR=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d[0] if isinstance(d,list) else d; print(r.get('settlement_eur','?'))" 2>/dev/null || echo "?")
     RECEIPT_STATUS=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d[0] if isinstance(d,list) else d; print(r.get('status','?'))" 2>/dev/null || echo "?")
     RECEIPT_KWH=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d[0] if isinstance(d,list) else d; print(r.get('einspeisemenge_kwh','?'))" 2>/dev/null || echo "?")
-    pass "GET /settlements/${BILLING_YEAR}/${BILLING_MONTH} → status=${RECEIPT_STATUS}  einspeisemenge_kwh=${RECEIPT_KWH}  settlement_eur=${RECEIPT_EUR}"
+    pass "GET /settlements?year=${BILLING_YEAR}\&month=${BILLING_MONTH} → status=${RECEIPT_STATUS}  einspeisemenge_kwh=${RECEIPT_KWH}  settlement_eur=${RECEIPT_EUR}"
 else
-    fail "GET /settlements/${BILLING_YEAR}/${BILLING_MONTH} → ${CODE}: ${BODY}"
+    fail "GET /settlements?year=${BILLING_YEAR}\&month=${BILLING_MONTH} → ${CODE}: ${BODY}"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
@@ -291,7 +291,7 @@ if [[ -n "${SETTLE_EUR:-}" && "${SETTLE_EUR}" != "?" ]]; then
     echo "  Vergütung:   EUR ${SETTLE_EUR}"
 fi
 echo
-echo "  edmd Lastgang:    ${EDMD_URL}/api/v1/billing-period/${MALO_ID}?period_from=2026-06-01&period_to=2026-07-01"
+echo "  edmd Lastgang:    ${EDMD_URL}/api/v1/billing-period/${MALO_ID}?from=2026-06-01&to=2026-07-01"
 echo "  einsd receipt:    ${EINSD_URL}/api/v1/anlagen/${TR_ID}/settlements/${BILLING_YEAR}/${BILLING_MONTH}"
 echo "  einsd MCP:        ${EINSD_URL}/mcp"
 echo "  edmd MCP:         ${EDMD_URL}/mcp"

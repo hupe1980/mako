@@ -990,3 +990,89 @@ pub fn router(state: Arc<TarifbdMcpState>, _shutdown: CancellationToken) -> Rout
         .route_service("/mcp", service)
         .layer(middleware::from_fn_with_state(state, mcp_auth_middleware))
 }
+
+#[cfg(test)]
+mod dst_tests {
+    use super::{german_local_date, german_utc_offset, last_sunday_of_month};
+    use time::Month;
+    use time::macros::{date, datetime};
+
+    /// EPEX Spot prices are hourly, so a wrong DST offset shifts every price by
+    /// an hour — the whole day's §41a dynamic tariff is then billed against the
+    /// wrong hours.
+    #[test]
+    fn offsets_switch_on_the_statutory_boundaries() {
+        // 2026: DST starts Sun 29 March, ends Sun 25 October.
+        assert_eq!(
+            last_sunday_of_month(2026, Month::March),
+            date!(2026 - 03 - 29)
+        );
+        assert_eq!(
+            last_sunday_of_month(2026, Month::October),
+            date!(2026 - 10 - 25)
+        );
+
+        // Deep winter and deep summer.
+        assert_eq!(german_utc_offset(date!(2026 - 01 - 15), 12), 1);
+        assert_eq!(german_utc_offset(date!(2026 - 07 - 15), 12), 2);
+    }
+
+    /// The spring-forward happens at 01:00 UTC: before it the offset is +1,
+    /// from it onward +2.
+    #[test]
+    fn spring_forward_flips_at_0100_utc() {
+        let d = date!(2026 - 03 - 29);
+        assert_eq!(german_utc_offset(d, 0), 1, "00:00 UTC is still CET");
+        assert_eq!(german_utc_offset(d, 1), 2, "01:00 UTC is already CEST");
+        assert_eq!(german_utc_offset(d, 12), 2);
+    }
+
+    /// The fall-back also happens at 01:00 UTC, in the other direction.
+    #[test]
+    fn fall_back_flips_at_0100_utc() {
+        let d = date!(2026 - 10 - 25);
+        assert_eq!(german_utc_offset(d, 0), 2, "00:00 UTC is still CEST");
+        assert_eq!(german_utc_offset(d, 1), 1, "01:00 UTC is back to CET");
+        assert_eq!(german_utc_offset(d, 12), 1);
+    }
+
+    /// Late-evening UTC belongs to the next German calendar day. Getting this
+    /// wrong files a price under yesterday's date.
+    #[test]
+    fn late_utc_evening_is_the_next_german_day() {
+        // 23:30 UTC in winter = 00:30 CET the next day.
+        assert_eq!(
+            german_local_date(datetime!(2026-01-15 23:30 UTC)),
+            date!(2026 - 01 - 16)
+        );
+        // 22:30 UTC in summer = 00:30 CEST the next day.
+        assert_eq!(
+            german_local_date(datetime!(2026-07-15 22:30 UTC)),
+            date!(2026 - 07 - 16)
+        );
+        // 21:30 UTC in summer is still the same German day.
+        assert_eq!(
+            german_local_date(datetime!(2026-07-15 21:30 UTC)),
+            date!(2026 - 07 - 15)
+        );
+    }
+
+    /// A month whose last day is itself a Sunday must return that day.
+    #[test]
+    fn last_sunday_handles_a_month_ending_on_sunday() {
+        // 31 May 2026 is a Sunday.
+        assert_eq!(
+            last_sunday_of_month(2026, Month::May),
+            date!(2026 - 05 - 31)
+        );
+    }
+
+    /// December must roll into the next year rather than panic.
+    #[test]
+    fn last_sunday_of_december_rolls_the_year() {
+        assert_eq!(
+            last_sunday_of_month(2026, Month::December),
+            date!(2026 - 12 - 27)
+        );
+    }
+}

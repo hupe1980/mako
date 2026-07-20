@@ -24,12 +24,15 @@ determines Anmeldung STP check #4 — comes from the NB's own NIS/GIS, not from 
 
 ```toml
 # nis-syncd.toml
-port          = 9680
-tenant        = "9900357000004"
+port           = 9680
+nb_mp_id       = "9900357000004"      # required — BDEW Codenummer of the grid operator
 
-marktd_url    = "http://marktd:8180"
-marktd_api_key = "${MARKTD_API_KEY}"
+marktd_url     = "http://marktd:8180"
+marktd_api_key = "env:MARKTD_API_KEY"
 
-[erp]
-webhook_url = "http://erp:8000/events"
+# Optional — CloudEvents receiver for topology drift notifications.
+drift_webhook_url = "http://erp:8000/events"
+
+sync_concurrency = 8
+max_batch_size   = 500
 ```

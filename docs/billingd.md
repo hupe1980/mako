@@ -281,7 +281,7 @@ BUNDLE: per-component recursion — ERP must submit individual calculate request
 
 ---
 
-## New in this release
+## Product and tariff model
 
 ### Product — type-safe dispatch
 
@@ -342,8 +342,8 @@ both sub-periods appear on one combined invoice. Tax is applied independently pe
 
 ### Pro-rata Grundpreis (move-in / move-out)
 
-`billingd` now correctly pro-rates Grundpreis when `vertragsbeginn` or `vertragsende`
-falls within the billing period. Pass these in the `BillingContext`:
+`billingd` pro-rates Grundpreis when `vertragsbeginn` or `vertragsende` falls
+within the billing period. Pass these in the `BillingContext`:
 
 ```json
 {
@@ -352,7 +352,8 @@ falls within the billing period. Pass these in the `BillingContext`:
 ```
 
 A customer joining on Jan 16 is billed 16 × rate instead of 31 × rate.
-Previously this required manual adjustment; it is now automatic.
+A customer who moves in mid-period is charged the standing rate for the days
+supplied, not the full period.
 
 ### Audit trail
 
@@ -761,6 +762,40 @@ The built-in `vpp-billing-agent` in `agentd` monitors the pipeline for completen
 - **Missing contract escalation**: alerts operator if no `vpp_contracts` row exists for the SR-ID
 
 ---
+
+## EN16931 VAT breakdown (BG-23)
+
+EN16931 requires **one VAT breakdown entry per category and rate**, each with its
+own taxable base (BT-116) and tax amount (BT-117). A single aggregate `mwst_eur`
+cannot express that.
+
+`energy_billing::invoice::tax_subtotals_of` groups the positions by effective
+rate — a position's own `applicable_tax_rate` when set, otherwise the engine
+default — and the XRechnung/ZUGFeRD generator emits one `ApplicableTradeTax`
+block per subtotal.
+
+This matters because multi-rate invoices are already reachable:
+
+| Rate | Case |
+|---|---|
+| 19 % | standard supply |
+| 7 % | Fernwärme, §12 Abs. 2 Nr. 1 UStG |
+| 0 % | Solar ≤ 30 kWp, §12 Abs. 3 UStG (Solarpaket I) |
+
+**Zero-rated bases are included** (category `Z`). Omitting them would leave the
+sum of the taxable bases short of the invoice net, which is precisely what the
+EN16931 total-reconciliation rules check.
+
+`Tax`, `Abschlag` and `Info` positions are excluded from the base — they are not
+supplies, and including them would levy VAT on VAT.
+
+Each subtotal projects to BO4E via `TaxSubtotal::to_bo4e()` →
+`rubo4e::current::Steuerbetrag`, carrying `basiswert`, `steuerwert`, `steuersatz`
+(as a percentage, matching BT-119) and `steuerart` (`Ust`, or `Rcv` for §13b
+reverse charge).
+
+The breakdown is **derived, never stored**: a persisted copy could disagree with
+the positions it summarises.
 
 ## Configuration
 

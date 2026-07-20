@@ -81,7 +81,7 @@ graph TB
 
 **Gas PIDs 31003/31004/31011:** Use the standard 5-check pipeline with `PreisblattNetznutzung` Gas tariff. PID 31004 (Stornorechnung) skips the tariff check (checks 4/5) and always resolves as `AcceptedPartial` unless arithmetic fails.
 
-**GaBi Gas PIDs 31007/31008:** Standard 5 checks + MMM Gas check 6 against Trading Hub Europe (THE) MMMA prices from `marktd`. These are Gas MGV billing PIDs (`mako-gabi-gas`). Previously the Gas MMM check was dead code — fixed in this release.
+**GaBi Gas PIDs 31007/31008:** Standard 5 checks + MMM Gas check 6 against Trading Hub Europe (THE) MMMA prices from `marktd`. These are Gas MGV billing PIDs (`mako-gabi-gas`).
 
 ---
 

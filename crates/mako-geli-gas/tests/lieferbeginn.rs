@@ -17,7 +17,7 @@
 //! # Regulatory context
 //!
 //! APERAK Frist: **10 Werktage** (GeLi Gas BNetzA BK7-24-01-009).
-//! Saturday counts as a Werktag; Sunday and federal holidays do not.
+//! Saturdays, Sundays and federal holidays are not Werktage.
 
 use mako_engine::{
     event_store::InMemoryEventStore,

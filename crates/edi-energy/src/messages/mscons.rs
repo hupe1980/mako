@@ -592,9 +592,15 @@ fn rule_sem_period_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<
 /// EDI@Energy approved unit-of-measure codes for MSCONS metering values.
 ///
 /// Source: BDEW MSCONS Application Handbook, Appendix A — Code List 6411.
+/// DE 6411 codes MSCONS admits.
+///
+/// `KWT` (Kilowatt), `D54` (Watt pro Quadratmeter) and `MTS` (Meter pro
+/// Sekunde) are the codes MIG 2.5 lists for SG10 QTY; `D54` and `MTS` carry the
+/// meteorological values of Redispatch 2.0 PID 13021, and `KWT` carries a power
+/// maximum. Omitting them rejects messages the MIG defines.
 const APPROVED_UNITS: &[&str] = &[
-    "KWH", "MWH", "GWH", "KW", "MW", "GW", "KVA", "MVA", "KVAR", "MVAR", "M3", "M3H", "HM3", "GJ",
-    "MJ", "J", "Z03", "Z12", "Z14",
+    "KWH", "MWH", "GWH", "KW", "KWT", "MW", "GW", "KVA", "MVA", "KVAR", "MVAR", "M3", "M3H", "HM3",
+    "GJ", "MJ", "J", "D54", "MTS", "Z03", "Z12", "Z14",
 ];
 
 /// `SEM-MSCONS-UNIT-UNKNOWN` — The unit-of-measure code in `QTY C186`
@@ -625,7 +631,8 @@ fn rule_sem_unit_unknown(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<
                 .with_segment("QTY")
                 .with_suggestion(
                     "Use one of the EDI@Energy MSCONS approved units (Code List 6411): \
-                     KWH MWH GWH KW MW GW KVA MVA KVAR MVAR M3 M3H HM3 GJ MJ J Z03 Z12 Z14",
+                     KWH MWH GWH KW KWT MW GW KVA MVA KVAR MVAR M3 M3H HM3 GJ MJ J \
+                     D54 MTS Z03 Z12 Z14",
                 ),
             );
         }

@@ -1478,6 +1478,15 @@ fn cmd_mabis_abrechnung_einleiten<'a>(
     Box::pin(dispatch_mabis_billing_einleiten(s, p))
 }
 
+fn cmd_mabis_summenzeitreihe_uebermitteln<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_mabis_summenzeitreihe_uebermitteln(s, p))
+}
+
 fn cmd_mabis_abrechnung_daten_einreichen<'a>(
     s: &'a CommandsApiState,
     p: &'a serde_json::Value,
@@ -3290,6 +3299,107 @@ async fn dispatch_mabis_billing_einleiten(
     Ok(DispatchOutcome::Spawned { process_id })
 }
 
+/// Dispatch `mabis.summenzeitreihe.uebermitteln` — NB/ÜNB sends a BG-SZR to the
+/// BIKO as MSCONS Prüfidentifikator 13003.
+///
+/// This is the outbound half of MaBiS, distinct from `mabis.abrechnung.*`, which
+/// models the BKV receiving an Abrechnungssummenzeitreihe and answering with a
+/// Prüfmitteilung.
+///
+/// No workflow is spawned. A Summenzeitreihe is a statement of fact, not a
+/// request: the BIKO answers asynchronously with a Datenstatus (IFTSTA
+/// 21003/21004) or a Prüfmitteilung (21000/21001), and those land back in
+/// `mabis-syncd`, which owns the version history. Spawning a process here would
+/// create a second place tracking the same state.
+///
+/// # Payload fields
+///
+/// | Field | Required | Description |
+/// |-------|----------|-------------|
+/// | `bilanzierungsgebiet_id` | Yes | MaBiS-Zählpunkt of the Bilanzierungsgebiet |
+/// | `balancing_period` | Yes | Bilanzierungsmonat, `CCYYMM` |
+/// | `version` | Yes | Versionsangabe, `CCYYMMDDHHMMSSZZZ`, ascending per §3.8.2 |
+/// | `receiver_mp_id` | Yes | BIKO code |
+/// | `sender_mp_id` | No | defaults to this operator's GLN |
+/// | `intervals` | Yes | one entry per settlement slot: `from`, `to`, `quantity_kwh` |
+async fn dispatch_mabis_summenzeitreihe_uebermitteln(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    use mako_engine::ids::{ConversationId, CorrelationId, EventId, OutboxMessageId, StreamId};
+    use mako_engine::outbox::{OutboxMessage, OutboxStore as _};
+
+    let require = |field: &str| -> Result<String, DispatchError> {
+        payload
+            .get(field)
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| DispatchError::InvalidPayload(format!("\"{field}\" is required")))
+    };
+
+    let bilanzierungsgebiet_id = require("bilanzierungsgebiet_id")?;
+    let balancing_period = require("balancing_period")?;
+    let version = require("version")?;
+    let receiver_mp_id = require("receiver_mp_id")?;
+
+    // An empty Summenzeitreihe would settle a Bilanzierungsgebiet at zero. The
+    // BIKO cannot distinguish that from a territory that genuinely drew nothing.
+    let intervals = payload
+        .get("intervals")
+        .and_then(|v| v.as_array())
+        .filter(|a| !a.is_empty())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "\"intervals\" must contain at least one settlement slot".into(),
+            )
+        })?;
+
+    let sender_mp_id = payload
+        .get("sender_mp_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or(state.sender_party_id.as_str())
+        .to_owned();
+
+    let causation = EventId::new();
+    let message = OutboxMessage {
+        message_id: OutboxMessageId::new(),
+        stream_id: StreamId::new(format!(
+            "mabis-szr|{bilanzierungsgebiet_id}|{balancing_period}"
+        )),
+        process_id: ProcessId::new(),
+        tenant_id: state.tenant_id,
+        correlation_id: CorrelationId::new(),
+        conversation_id: ConversationId::new(),
+        causation_event_id: causation,
+        message_type: "MSCONS".into(),
+        recipient: receiver_mp_id.as_str().into(),
+        payload: serde_json::json!({
+            "pid": 13003,
+            "sender_mp_id": sender_mp_id,
+            "receiver_mp_id": receiver_mp_id,
+            "bilanzierungsgebiet_id": bilanzierungsgebiet_id,
+            "balancing_period": balancing_period,
+            "version": version,
+            "intervals": intervals,
+        }),
+        payload_schema: None,
+        created_at: time::OffsetDateTime::now_utc(),
+        deliver_after: None,
+        attempt_count: 0,
+        workflow_name: "".into(),
+    };
+    let process_id = message.process_id;
+
+    state
+        .store
+        .enqueue(std::slice::from_ref(&message))
+        .await
+        .map_err(DispatchError::Engine)?;
+
+    Ok(DispatchOutcome::Spawned { process_id })
+}
+
 /// Dispatch `mabis.abrechnung.daten-einreichen` — BKV sends Prüfmitteilung.
 ///
 /// The BKV must respond to the Abrechnungssummenzeitreihe within 1 Werktag
@@ -4124,6 +4234,12 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         permitted_roles: &["BKV"],
         primary_pid: 13003,
         dispatch: cmd_mabis_abrechnung_daten_einreichen,
+    },
+    CommandDescriptor {
+        name: "mabis.summenzeitreihe.uebermitteln",
+        permitted_roles: &["NB", "ÜNB"],
+        primary_pid: 13003,
+        dispatch: cmd_mabis_summenzeitreihe_uebermitteln,
     },
     CommandDescriptor {
         name: "mabis.abrechnung.begleichen",

@@ -293,7 +293,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       OpenAI / Anthropic / AWS Bedrock SigV4; LanceDB RAG (tenant-isolated, cosine distance score filtering); WASM plugin sandboxing.
       Specialists cover billing anomaly detection, §41b/§42 compliance guard,
       annual settlement orchestration, §20 EnWG parity, SMGW BSI TR-03109 diagnostics,
-      VPP dispatch settlement audit (RED III Art. 17), MaBiS UTILTS monitoring,
+      VPP dispatch settlement audit (RED III Art. 17), MaBiS Summenzeitreihe monitoring,
       GaBi Gas 2.1 ALOCAT/IMBNOT balance monitoring, EEG batch settlement + §52 sweep, and more.
       OIDC auth on <code>POST /api/v1/run</code>; inbound HMAC verification; max_sessions semaphore;
       per-session wall-clock timeout; dead-letter queue with exponential-backoff retry worker.
@@ -365,8 +365,8 @@ EEG/KWKG settlement
 KPI reports
 §20 EnWG parity"]
         mabis["mabis-syncd :8880
-MaBiS UTILTS
-day-3/day-8 schedule"]
+MaBiS Summenzeitreihe
+MSCONS 13003 · 10. Werktag"]
         nis["nis-syncd :9680
 NIS grid import
 ~80% → ≥95% STP"]
@@ -397,7 +397,7 @@ B2C+B2B · OIDC gateway"]
 Customer Portal
 REST + SSE"]
         agentd["agentd :9580
-27 built-in specialists
+29 built-in specialists
 parallel/race dispatch · LanceDB RAG · MCP"]
     end
 
@@ -407,7 +407,7 @@ parallel/race dispatch · LanceDB RAG · MCP"]
     processd -->|commands| makod
     invoicd -->|settle/dispute| makod
     nis -->|"PUT malo_grid"| marktd
-    mabis -->|"UTILTS cmd"| makod
+    mabis -->|"MSCONS 13003"| makod
     edmd -->|"MeterBillingPeriod"| billingd
     einsd -->|"EEG credits"| accountingd
     vertragd -->|"start-supply"| processd
@@ -520,7 +520,7 @@ mako consists of 17 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/mabis-syncd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">mabis-syncd</span>
     <span class="mako-service-card__port">:8880</span>
-    <span class="mako-service-card__desc">MaBiS UTILTS synchronisation — aggregates per-MaLo Lastgang and submits Summenzeitreihen to BIKO. Scheduled day 3 (vorläufig) + day 8 (endgültig) per BK6-22-024 Anlage 3.</span>
+    <span class="mako-service-card__desc">MaBiS synchronisation — aggregates quarter-hourly Lastgang per Bilanzierungsgebiet and files Summenzeitreihen with the BIKO as MSCONS 13003. Submits on the 10. Werktag; tracks the BIKO-assigned Datenstatus and open Korrekturbedarf.</span>
   </a>
   <a href="{{ '/einsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">einsd</span>
@@ -573,7 +573,7 @@ mako consists of 17 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/agentd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">agentd</span>
     <span class="mako-service-card__port">:9580</span>
-    <span class="mako-service-card__desc">Multi-agent LLM orchestration. 27 specialists compiled into container image. Activated via [bundled_agents] config. Sequential/parallel/race dispatch. A2A agent cards. LanceDB RAG. Billing regulatory guard (§41/§41b/§42). Annual settlement. Billing anomaly AI. §17 MessZV substitute-value agent. BSI TR-03109 SMGW diagnostics. VPP dispatch settlement audit (RED III Art. 17). MaBiS deadline monitoring. Compliance (§20 EnWG). OpenAI/Anthropic/Bedrock.</span>
+    <span class="mako-service-card__desc">Multi-agent LLM orchestration. 29 specialists compiled into container image. Activated via [bundled_agents] config. Sequential/parallel/race dispatch. A2A agent cards. LanceDB RAG. Billing regulatory guard (§41/§41b/§42). Annual settlement. Billing anomaly AI. §17 MessZV substitute-value agent. BSI TR-03109 SMGW diagnostics. VPP dispatch settlement audit (RED III Art. 17). MaBiS deadline monitoring. Compliance (§20 EnWG). OpenAI/Anthropic/Bedrock.</span>
   </a>
 </div>
 

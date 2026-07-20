@@ -1989,42 +1989,69 @@ pub async fn post_angebot_webhook(
         .and_then(|v| v.as_str())
         .unwrap_or(&cfg.tenant)
         .to_owned();
-    let laufzeit_monate: i32 = data
-        .get("laufzeit_monate")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(12) as i32;
+    // Prefer the BO4E `Angebot`: it is the object the customer was quoted, and
+    // its accepted variant carries that variant's own Laufzeit and supply
+    // points. The scalar fields below are the fallback for a quotation that was
+    // accepted before it was ever priced.
+    let gewaehlte_variante = data
+        .get("gewaehlte_variante")
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|v| i16::try_from(v).ok());
+    let accepted = crate::angebot_bo4e::from_ce_data(data)
+        .as_ref()
+        .and_then(|a| crate::angebot_bo4e::read_accepted(a, gewaehlte_variante));
+
+    let laufzeit_monate: i32 = accepted
+        .as_ref()
+        .and_then(|a| a.laufzeit_monate)
+        .or_else(|| {
+            data.get("laufzeit_monate")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32)
+        })
+        .unwrap_or(12);
     let lieferbeginn_str = data
         .get("lieferbeginn")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let lieferbeginn = time::Date::parse(
-        lieferbeginn_str,
-        &time::format_description::well_known::Iso8601::DATE,
-    )
-    .unwrap_or_else(|_| {
-        // Default: first day of next month
-        let now = time::OffsetDateTime::now_utc().date();
-        let (y, m) = if now.month() as u8 == 12 {
-            (now.year() + 1, time::Month::January)
-        } else {
-            (
-                now.year(),
-                time::Month::try_from(now.month() as u8 + 1).unwrap_or(time::Month::January),
+    let lieferbeginn = accepted
+        .as_ref()
+        .and_then(|a| a.lieferbeginn)
+        .unwrap_or_else(|| {
+            time::Date::parse(
+                lieferbeginn_str,
+                &time::format_description::well_known::Iso8601::DATE,
             )
-        };
-        time::Date::from_calendar_date(y, m, 1).unwrap_or(now)
-    });
+            .unwrap_or_else(|_| {
+                // Default: first day of next month
+                let now = time::OffsetDateTime::now_utc().date();
+                let (y, m) = if now.month() as u8 == 12 {
+                    (now.year() + 1, time::Month::January)
+                } else {
+                    (
+                        now.year(),
+                        time::Month::try_from(now.month() as u8 + 1)
+                            .unwrap_or(time::Month::January),
+                    )
+                };
+                time::Date::from_calendar_date(y, m, 1).unwrap_or(now)
+            })
+        });
 
     let positionen = data
         .get("positionen")
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let angebotsnummer = data
-        .get("angebotsnummer")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_owned();
+    let angebotsnummer = accepted
+        .as_ref()
+        .and_then(|a| a.angebotsnummer.clone())
+        .or_else(|| {
+            data.get("angebotsnummer")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        })
+        .unwrap_or_default();
 
     // ── Resolve or create Kunde ───────────────────────────────────────────────
     let kunden_id = if let Some(kid) = kunden_id {

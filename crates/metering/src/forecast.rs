@@ -212,32 +212,39 @@ pub fn project_annual_consumption(
 
 /// Generate substitute values for a gap using prior-period same-slot averaging.
 ///
-/// For each missing interval in `[gap_from, gap_to)`:
-/// 1. Find the corresponding time slot in `prior_period_intervals` (same weekday, same hour).
-/// 2. Average all matching prior-period values.
-/// 3. Emit a `SubstituteValueEntry` with `Substituted` quality.
+/// Generate §17 MessZV substitute values for a gap, using `method`.
 ///
-/// Falls back to `LastValueCarryForward` when no prior-period slot is found.
+/// Every emitted [`SubstituteValueEntry`] records the method that actually
+/// produced it, which may differ from `method` when the requested strategy has
+/// no data to work from — a prior-period average with no matching reference slot
+/// falls back to carry-forward, then to zero. Reporting the requested method
+/// instead would put a claim in the §22 MessZV audit trail that the value does
+/// not support.
 ///
 /// ## §17 Abs. 2 MessZV compliance
 ///
-/// This function implements the BDEW-recommended "Vorperiodenmittelwert"
-/// (prior-period average, same time slot). The BDEW recommends using the
-/// prior week (7 days) as the reference period.
+/// [`crate::substitute::SubstituteMethod::PriorPeriodAverage`] implements the BDEW
+/// "Vorperiodenmittelwert" — the same slot of the preceding week, matched on
+/// (weekday, hour, minute) in German local time.
 ///
 /// ## Parameters
 ///
 /// - `gap_from` / `gap_to`: UTC timestamps of the gap to fill.
 /// - `interval_secs`: Expected interval length (900 for 15-min RLM).
-/// - `prior_period_intervals`: Reference intervals (e.g. prior 7 days).
-/// - `last_known_value`: Fallback value for carry-forward.
+/// - `method`: Requested substitution strategy.
+/// - `prior_period_intervals`: Reference intervals (the preceding week).
+/// - `last_known_value`: Last billable value before the gap.
+/// - `next_known_value`: First billable value after the gap, required for
+///   linear interpolation to have a slope to follow.
 #[must_use]
-pub fn prior_period_substitutes(
+pub fn substitute_values(
     gap_from: OffsetDateTime,
     gap_to: OffsetDateTime,
     interval_secs: u32,
+    method: crate::substitute::SubstituteMethod,
     prior_period_intervals: &[MeterInterval],
     last_known_value: Option<Decimal>,
+    next_known_value: Option<Decimal>,
 ) -> Vec<SubstituteValueEntry> {
     if gap_from >= gap_to || interval_secs == 0 {
         return Vec::new();
@@ -266,19 +273,56 @@ pub fn prior_period_substitutes(
         let local = cursor.to_timezone(timezones::db::europe::BERLIN);
         let key = (local.weekday(), local.hour(), local.minute());
 
-        let (value, method, ref_count) = if let Some(prior_values) = slot_map.get(&key) {
-            let avg =
-                prior_values.iter().sum::<Decimal>() / Decimal::from(prior_values.len() as u32);
-            (
-                avg,
-                ForecastMethod::PriorPeriodSameSlot,
-                prior_values.len() as u32,
-            )
-        } else if let Some(last) = last_known_value {
-            (last, ForecastMethod::LastValueCarryForward, 1)
-        } else {
-            (Decimal::ZERO, ForecastMethod::ZeroFill, 0)
+        // Each arm falls back only when its own inputs are absent, and the arm
+        // that ran is what gets reported.
+        let (value, applied, ref_count) = match method {
+            crate::substitute::SubstituteMethod::ZeroFill => {
+                (Decimal::ZERO, ForecastMethod::ZeroFill, 0)
+            }
+
+            crate::substitute::SubstituteMethod::LastValueCarryForward => match last_known_value {
+                Some(last) => (last, ForecastMethod::LastValueCarryForward, 1),
+                None => (Decimal::ZERO, ForecastMethod::ZeroFill, 0),
+            },
+
+            crate::substitute::SubstituteMethod::LinearInterpolation => {
+                // Interpolate between the last known value before the gap and
+                // the first after it. With no closing value the series has no
+                // slope to follow, so this degrades to carry-forward.
+                match (last_known_value, next_known_value) {
+                    (Some(start), Some(end)) => {
+                        let span = (gap_to - gap_from).whole_seconds();
+                        let elapsed = (cursor - gap_from).whole_seconds();
+                        let value = if span > 0 {
+                            start + (end - start) * Decimal::from(elapsed) / Decimal::from(span)
+                        } else {
+                            start
+                        };
+                        (value, ForecastMethod::LinearInterpolation, 2)
+                    }
+                    (Some(start), None) => (start, ForecastMethod::LastValueCarryForward, 1),
+                    (None, Some(end)) => (end, ForecastMethod::LastValueCarryForward, 1),
+                    (None, None) => (Decimal::ZERO, ForecastMethod::ZeroFill, 0),
+                }
+            }
+
+            crate::substitute::SubstituteMethod::PriorPeriodAverage => {
+                if let Some(prior_values) = slot_map.get(&key) {
+                    let avg = prior_values.iter().sum::<Decimal>()
+                        / Decimal::from(prior_values.len() as u32);
+                    (
+                        avg,
+                        ForecastMethod::PriorPeriodSameSlot,
+                        prior_values.len() as u32,
+                    )
+                } else if let Some(last) = last_known_value {
+                    (last, ForecastMethod::LastValueCarryForward, 1)
+                } else {
+                    (Decimal::ZERO, ForecastMethod::ZeroFill, 0)
+                }
+            }
         };
+        let method = applied;
 
         result.push(SubstituteValueEntry {
             interval: MeterInterval {
@@ -290,12 +334,20 @@ pub fn prior_period_substitutes(
             },
             method,
             reference_count: ref_count,
-            confidence_note: if ref_count > 0 {
-                Some(format!(
+            confidence_note: match applied {
+                ForecastMethod::PriorPeriodSameSlot => Some(format!(
                     "{ref_count} Referenzintervall(e) im Vorperiodenmittelwert"
-                ))
-            } else {
-                None
+                )),
+                ForecastMethod::LinearInterpolation => {
+                    Some("lineare Interpolation zwischen den Randwerten".to_owned())
+                }
+                ForecastMethod::LastValueCarryForward => {
+                    Some("letzter bekannter Messwert fortgeschrieben".to_owned())
+                }
+                ForecastMethod::ZeroFill => {
+                    Some("kein Referenzwert verfügbar — Nullwert gesetzt".to_owned())
+                }
+                _ => None,
             },
         });
 
@@ -408,7 +460,15 @@ mod tests {
         let gap_from = datetime!(2026-01-08 00:00 UTC);
         let gap_to = datetime!(2026-01-08 01:00 UTC); // 4 intervals
 
-        let subs = prior_period_substitutes(gap_from, gap_to, 900, &prior, None);
+        let subs = substitute_values(
+            gap_from,
+            gap_to,
+            900,
+            crate::substitute::SubstituteMethod::PriorPeriodAverage,
+            &prior,
+            None,
+            None,
+        );
         assert_eq!(subs.len(), 4);
         // All should use PriorPeriodSameSlot and value ≈ 1.5
         for s in &subs {
@@ -423,7 +483,15 @@ mod tests {
         // No prior-period data — should fall back to last known value
         let gap_from = datetime!(2026-06-01 00:00 UTC);
         let gap_to = datetime!(2026-06-01 00:15 UTC);
-        let subs = prior_period_substitutes(gap_from, gap_to, 900, &[], Some(dec!(2.5)));
+        let subs = substitute_values(
+            gap_from,
+            gap_to,
+            900,
+            crate::substitute::SubstituteMethod::PriorPeriodAverage,
+            &[],
+            Some(dec!(2.5)),
+            None,
+        );
         assert_eq!(subs.len(), 1);
         assert_eq!(subs[0].method, ForecastMethod::LastValueCarryForward);
         assert_eq!(subs[0].interval.value_kwh, dec!(2.5));
@@ -442,5 +510,126 @@ mod tests {
         ] {
             assert!(!m.description().is_empty());
         }
+    }
+}
+
+#[cfg(test)]
+mod db_vocabulary_tests {
+    use super::ForecastMethod;
+
+    /// `ForecastMethod`'s Debug names are not a persistence vocabulary.
+    ///
+    /// `edmd` writes substitutions to `substitute_value_log`, whose `method`
+    /// CHECK accepts only the §17 MessZV categories. Emitting the Debug form
+    /// violated that CHECK on the default path, so the audit INSERT failed after
+    /// the billable substitute had already been committed.
+    ///
+    /// This pins the variant set: adding a variant makes the exhaustive match in
+    /// `edmd::server::forecast_method_to_db` fail to compile, which is the point.
+    #[test]
+    fn every_variant_is_accounted_for() {
+        let all = [
+            ForecastMethod::PriorPeriodSameSlot,
+            ForecastMethod::WeightedRollingAverage,
+            ForecastMethod::LinearInterpolation,
+            ForecastMethod::LastValueCarryForward,
+            ForecastMethod::ZeroFill,
+            ForecastMethod::ProfileBased,
+            ForecastMethod::AnnualProjection,
+        ];
+        assert_eq!(all.len(), 7, "ForecastMethod gained or lost a variant");
+    }
+    #[test]
+    fn each_requested_strategy_is_the_one_applied() {
+        use super::substitute_values;
+        use crate::interval::{MeterInterval, QualityFlag};
+        use crate::substitute::SubstituteMethod;
+        use rust_decimal_macros::dec;
+        use time::macros::datetime;
+        let from = datetime!(2026-03-09 00:00 UTC);
+        let to = datetime!(2026-03-09 01:00 UTC); // four quarter-hours
+
+        // ZeroFill must not silently become a prior-period average, even when
+        // reference data and bracketing values are available.
+        let prior = vec![MeterInterval {
+            from: datetime!(2026-03-02 00:00 UTC),
+            to: datetime!(2026-03-02 00:15 UTC),
+            value_kwh: dec!(99),
+            quality: QualityFlag::Measured,
+            obis_code: None,
+        }];
+
+        let zero = substitute_values(
+            from,
+            to,
+            900,
+            SubstituteMethod::ZeroFill,
+            &prior,
+            Some(dec!(50)),
+            Some(dec!(70)),
+        );
+        assert_eq!(zero.len(), 4);
+        assert!(
+            zero.iter().all(|e| e.interval.value_kwh == dec!(0)),
+            "ZeroFill must produce zeros regardless of available reference data"
+        );
+        assert!(
+            zero.iter().all(|e| e.method == ForecastMethod::ZeroFill),
+            "the reported method must be the one applied"
+        );
+
+        let carry = substitute_values(
+            from,
+            to,
+            900,
+            SubstituteMethod::LastValueCarryForward,
+            &prior,
+            Some(dec!(50)),
+            Some(dec!(70)),
+        );
+        assert!(carry.iter().all(|e| e.interval.value_kwh == dec!(50)));
+
+        // Linear interpolation walks from the leading value toward the trailing
+        // one across the gap.
+        let linear = substitute_values(
+            from,
+            to,
+            900,
+            SubstituteMethod::LinearInterpolation,
+            &prior,
+            Some(dec!(0)),
+            Some(dec!(100)),
+        );
+        let values: Vec<_> = linear.iter().map(|e| e.interval.value_kwh).collect();
+        assert_eq!(values, vec![dec!(0), dec!(25), dec!(50), dec!(75)]);
+        assert!(
+            linear
+                .iter()
+                .all(|e| e.method == ForecastMethod::LinearInterpolation)
+        );
+    }
+
+    #[test]
+    fn a_strategy_with_no_data_reports_what_it_fell_back_to() {
+        use super::substitute_values;
+        use crate::substitute::SubstituteMethod;
+        use rust_decimal_macros::dec;
+        use time::macros::datetime;
+        // Linear interpolation with no closing value has no slope to follow.
+        let entries = substitute_values(
+            datetime!(2026-03-09 00:00 UTC),
+            datetime!(2026-03-09 00:15 UTC),
+            900,
+            SubstituteMethod::LinearInterpolation,
+            &[],
+            Some(dec!(42)),
+            None,
+        );
+        assert_eq!(entries[0].interval.value_kwh, dec!(42));
+        assert_eq!(
+            entries[0].method,
+            ForecastMethod::LastValueCarryForward,
+            "the audit record must name the fallback that ran, not the request"
+        );
     }
 }

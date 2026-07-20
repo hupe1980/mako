@@ -36,7 +36,7 @@ without ERP involvement for the common cases.
 
 ## Cargo features
 
-```toml
+```text
 # §7 EnWG (≥ 100k Netzkunden): must use separate binaries.
 # BNetzA audit examines binary SHA — nb-only must not contain LF PIDs.
 
@@ -164,8 +164,8 @@ Background task runs every 60 s to expire stale `Pending` entries.
 
 When `processd` receives `de.mako.process.initiated` for PIDs 35001–35005 (REQOTE Preisanfrage
 from an nMSB), it **automatically dispatches a QUOTES response** using the active
-`PreisblattMessung` from `marktd`. This eliminates the manual ERP trigger that previously
-risked APERAK ERC A97 deadline breach.
+`PreisblattMessung` from `marktd`. Dispatching from master data rather than from a manual
+ERP trigger is what keeps the response inside the APERAK ERC A97 deadline.
 
 Enabled by default. Disable for manual QUOTES dispatch (e.g. during PreisblattMessung update
 windows):

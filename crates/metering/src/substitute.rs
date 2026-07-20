@@ -29,7 +29,11 @@
 
 use crate::interval::{MeterInterval, QualityFlag};
 use rust_decimal::Decimal;
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime};
+
+/// Length of the §17 Abs. 2 MessZV reference period: the calendar week
+/// immediately preceding the gap.
+pub const REFERENCE_PERIOD_DAYS: i64 = 7;
 
 #[cfg(test)]
 use rust_decimal_macros::dec;
@@ -157,15 +161,6 @@ pub struct FillGapsConfig {
     /// Default: `3`. Gaps of ≤ this length always use linear interpolation.
     /// Gaps longer than this threshold use the `method` field.
     pub short_gap_threshold: usize,
-
-    /// Documented reason for gap filling (§22 MessZV audit trail).
-    ///
-    /// When set, the generated substitute intervals carry this reason in their
-    /// audit metadata, so a caller can persist the substitution rationale
-    /// in `meter_read_corrections`.
-    ///
-    /// `None` = reason not specified (acceptable for automated gap-fill).
-    pub reason: Option<SubstitutionReason>,
 }
 
 impl Default for FillGapsConfig {
@@ -174,7 +169,6 @@ impl Default for FillGapsConfig {
             method: SubstituteMethod::default(),
             prior_period_intervals: Vec::new(),
             short_gap_threshold: 3,
-            reason: None,
         }
     }
 }
@@ -187,7 +181,6 @@ impl FillGapsConfig {
             method: SubstituteMethod::PriorPeriodAverage,
             prior_period_intervals,
             short_gap_threshold: 3,
-            reason: None,
         }
     }
 
@@ -198,7 +191,6 @@ impl FillGapsConfig {
             method: SubstituteMethod::ZeroFill,
             prior_period_intervals: Vec::new(),
             short_gap_threshold: 0,
-            reason: None,
         }
     }
 }
@@ -245,6 +237,12 @@ pub fn fill_gaps_with_config(
 
     let mut result: Vec<MeterInterval> = Vec::new();
     let mut cursor = from;
+    // Length of the gap currently being traversed, measured once at its first
+    // missing interval. Re-measuring from the moving cursor shrinks the count as
+    // the gap is filled, so the last `short_gap_threshold` intervals of every
+    // long gap would fall back to interpolation no matter which method was
+    // configured.
+    let mut gap_len: usize = 0;
 
     while cursor < to {
         let next = cursor + Duration::seconds(expected_interval_secs);
@@ -252,9 +250,14 @@ pub fn fill_gaps_with_config(
 
         if let Some(&iv) = existing.get(&ts) {
             result.push(iv.clone());
+            gap_len = 0;
         } else {
-            // Measure gap length to decide between linear and configured method.
-            let gap_len = count_consecutive_gaps(&sorted, cursor, expected_interval_secs);
+            if gap_len == 0 {
+                gap_len = count_consecutive_gaps(&sorted, cursor, expected_interval_secs);
+            }
+            // A short gap is interpolated regardless of the configured method:
+            // §17 Abs. 2 MessZV reference-period substitution is for outages long
+            // enough that the neighbouring values say nothing useful.
             let effective_method = if gap_len <= config.short_gap_threshold && gap_len > 0 {
                 SubstituteMethod::LinearInterpolation
             } else {
@@ -390,24 +393,37 @@ fn synthesise_value(
         SubstituteMethod::ZeroFill => Decimal::ZERO,
 
         SubstituteMethod::PriorPeriodAverage => {
-            // §17 Abs. 2 MessZV requires "same time slot from the prior reference period
-            // (prior calendar week)". Callers must supply exactly 7 days of prior data;
-            // averaging across multiple weeks produces a multi-week average, not the prior-week
-            // value. This assertion guards against mis-use at the call site.
-            debug_assert!(
-                prior_period.len() <= 7 * 24 * 4,
-                "PriorPeriodAverage: prior_period should contain ≤ 7 days of data \
-                 per §17 Abs. 2 MessZV (got {} intervals — caller must pass only prior-week data)",
-                prior_period.len()
+            // §17 Abs. 2 MessZV: the same slot of the prior reference period,
+            // which is the calendar week immediately before the gap.
+            //
+            // The window is applied here rather than trusted from the caller.
+            // Averaging whatever was supplied yields a multi-week average that
+            // is not the value the regulation names, and a caller passing a
+            // longer history has no way to see that it happened.
+            let reference_start = from - Duration::days(REFERENCE_PERIOD_DAYS);
+            let in_reference_period =
+                |iv: &MeterInterval| iv.from >= reference_start && iv.from < from;
+
+            // Keyed on (weekday, hour, minute) in German local time. Matching on
+            // time-of-day alone averages a Sunday gap over five working days,
+            // which overstates an industrial load; matching in UTC shifts every
+            // slot by an hour across the DST boundary. This mirrors
+            // `forecast::prior_period_substitutes`.
+            use time_tz::{OffsetDateTimeExt, timezones};
+            let local_target = from.to_timezone(timezones::db::europe::BERLIN);
+            let target_slot = (
+                local_target.weekday(),
+                local_target.hour(),
+                local_target.minute(),
             );
-            // §17 Abs. 2 MessZV: use the same time slot from the prior reference period.
-            // Match by time-of-day (hour, minute, second) — period-independent.
-            let target_time = (from.hour(), from.minute(), from.second());
             let matches: Vec<Decimal> = prior_period
                 .iter()
                 .filter(|iv| {
-                    iv.quality.is_billable()
-                        && (iv.from.hour(), iv.from.minute(), iv.from.second()) == target_time
+                    if !iv.quality.is_billable() || !in_reference_period(iv) {
+                        return false;
+                    }
+                    let local = iv.from.to_timezone(timezones::db::europe::BERLIN);
+                    (local.weekday(), local.hour(), local.minute()) == target_slot
                 })
                 .map(|iv| iv.value_kwh)
                 .collect();
@@ -647,7 +663,6 @@ mod tests {
             method: SubstituteMethod::PriorPeriodAverage,
             prior_period_intervals: vec![prior_reading],
             short_gap_threshold: 0,
-            reason: None,
         };
         let filled = fill_gaps_with_config(&intervals, 900, from, to, &config);
 
@@ -687,7 +702,6 @@ mod tests {
             method: SubstituteMethod::ZeroFill,
             prior_period_intervals: vec![],
             short_gap_threshold: 3,
-            reason: None,
         };
         let filled = fill_gaps_with_config(&intervals, 900, from, to, &config);
         assert_eq!(filled.len(), 3);
@@ -695,6 +709,151 @@ mod tests {
         assert!(
             filled[1].value_kwh > dec!(1.0),
             "short gap must use linear interpolation, not ZeroFill"
+        );
+    }
+    #[test]
+    fn a_long_gap_keeps_its_method_all_the_way_to_the_end() {
+        // The gap length was re-measured from the moving cursor, so the count
+        // shrank as the gap filled and the last `short_gap_threshold` intervals
+        // silently reverted to interpolation.
+        use time::macros::datetime;
+        let existing = vec![
+            MeterInterval {
+                from: datetime!(2026-03-02 00:00 UTC),
+                to: datetime!(2026-03-02 00:15 UTC),
+                value_kwh: dec!(10),
+                quality: QualityFlag::Measured,
+                obis_code: None,
+            },
+            // 00:15 .. 02:00 missing — seven quarter-hours
+            MeterInterval {
+                from: datetime!(2026-03-02 02:00 UTC),
+                to: datetime!(2026-03-02 02:15 UTC),
+                value_kwh: dec!(20),
+                quality: QualityFlag::Measured,
+                obis_code: None,
+            },
+        ];
+
+        let filled = fill_gaps_with_config(
+            &existing,
+            900,
+            datetime!(2026-03-02 00:00 UTC),
+            datetime!(2026-03-02 02:15 UTC),
+            &FillGapsConfig {
+                method: SubstituteMethod::ZeroFill,
+                short_gap_threshold: 2,
+                ..Default::default()
+            },
+        );
+
+        let substituted: Vec<_> = filled
+            .iter()
+            .filter(|iv| iv.quality == QualityFlag::Substituted)
+            .collect();
+        assert_eq!(substituted.len(), 7, "seven quarter-hours are missing");
+        for iv in &substituted {
+            assert_eq!(
+                iv.value_kwh,
+                dec!(0),
+                "every interval of a 7-slot gap must use the configured ZeroFill, \
+                 including the last two — got {} at {}",
+                iv.value_kwh,
+                iv.from
+            );
+        }
+    }
+
+    #[test]
+    fn prior_period_average_distinguishes_weekdays_from_weekends() {
+        // Matching on time-of-day alone averaged a Sunday gap over the working
+        // week, overstating an industrial load.
+        use time::macros::datetime;
+        // 2026-03-01 is a Sunday; 2026-02-23..27 are Mon–Fri.
+        let mut prior = Vec::new();
+        for day in 23..=27 {
+            prior.push(MeterInterval {
+                from: datetime!(2026-02-01 08:00 UTC).replace_day(day).unwrap(),
+                to: datetime!(2026-02-01 08:15 UTC).replace_day(day).unwrap(),
+                value_kwh: dec!(100), // working-day load
+                quality: QualityFlag::Measured,
+                obis_code: None,
+            });
+        }
+        // The previous Sunday at the same slot.
+        prior.push(MeterInterval {
+            from: datetime!(2026-02-22 08:00 UTC),
+            to: datetime!(2026-02-22 08:15 UTC),
+            value_kwh: dec!(4), // weekend idle
+            quality: QualityFlag::Measured,
+            obis_code: None,
+        });
+
+        let filled = fill_gaps_with_config(
+            &[],
+            900,
+            datetime!(2026-03-01 08:00 UTC),
+            datetime!(2026-03-01 08:15 UTC),
+            &FillGapsConfig {
+                method: SubstituteMethod::PriorPeriodAverage,
+                short_gap_threshold: 0,
+                prior_period_intervals: prior,
+            },
+        );
+
+        let sunday = filled
+            .iter()
+            .find(|iv| iv.from == datetime!(2026-03-01 08:00 UTC))
+            .expect("the Sunday slot must be filled");
+        assert_eq!(
+            sunday.value_kwh,
+            dec!(4),
+            "a Sunday gap must take the prior Sunday's value, not the working-week average"
+        );
+    }
+    #[test]
+    fn only_the_preceding_week_feeds_the_prior_period_average() {
+        // The window used to be a `debug_assert` on the caller's slice length,
+        // which compiles out in release: a caller passing a longer history got a
+        // multi-week average with nothing to indicate it.
+        use time::macros::datetime;
+        let gap = datetime!(2026-03-09 08:00 UTC); // Monday
+
+        let prior = vec![
+            // Within the reference week (Monday 2026-03-02).
+            MeterInterval {
+                from: datetime!(2026-03-02 08:00 UTC),
+                to: datetime!(2026-03-02 08:15 UTC),
+                value_kwh: dec!(10),
+                quality: QualityFlag::Measured,
+                obis_code: None,
+            },
+            // Same weekday and slot, but three weeks earlier — outside it.
+            MeterInterval {
+                from: datetime!(2026-02-16 08:00 UTC),
+                to: datetime!(2026-02-16 08:15 UTC),
+                value_kwh: dec!(1000),
+                quality: QualityFlag::Measured,
+                obis_code: None,
+            },
+        ];
+
+        let filled = fill_gaps_with_config(
+            &[],
+            900,
+            gap,
+            gap + Duration::minutes(15),
+            &FillGapsConfig {
+                method: SubstituteMethod::PriorPeriodAverage,
+                short_gap_threshold: 0,
+                prior_period_intervals: prior,
+            },
+        );
+
+        assert_eq!(
+            filled[0].value_kwh,
+            dec!(10),
+            "only the preceding week counts; averaging in the older week would give 505"
         );
     }
 }

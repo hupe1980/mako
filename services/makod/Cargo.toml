@@ -33,7 +33,7 @@ energy-api   = { path = "../../crates/energy-api", features = ["server", "client
 rubo4e       = { workspace = true }
 mako-markt   = { path = "../../crates/mako-markt", features = ["marktd-client"] }
 rust_decimal = { workspace = true }
-asx-rs       = { version = "0.8", features = ["as4", "client", "interop-strict", "server"] }
+asx-rs       = { version = "0.9", features = ["as4", "client", "interop-strict", "server"] }
 edi-energy   = { path = "../../crates/edi-energy", default-features = false, features = [
     "utilmd", "mscons", "aperak", "contrl", "invoic", "remadv",
     "orders", "iftsta", "insrpt", "reqote", "partin", "ordchg", "ordrsp",
@@ -104,6 +104,7 @@ role-nb-strom  = []  # NB/DSO Strom: gpke-* NB-side, Sperrung, Konfiguration,
                      #   UTILTS, MSCONS, WiM NB-side, PARTIN 37000-37006,
                      #   INVOIC 31001/31002/31005/31006
 role-msb-strom = []  # MSB Strom: wim-* Messstellenbetrieb
+role-esa-strom = []  # ESA Strom: wim-wertebestellung ESA-side (WiM Teil 2 Kap. 4)
 # Gas roles
 role-lf-gas    = []  # LF Gas (LFG): geli-gas-* LF-side
 role-nb-gas    = []  # GNB: geli-gas-* NB-side, Sperrung Gas, PARTIN 37008-37014,

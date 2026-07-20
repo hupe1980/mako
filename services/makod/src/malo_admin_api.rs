@@ -261,12 +261,12 @@ pub(crate) async fn handle_put(
         return forbidden();
     }
     // Validate that the path parameter matches the payload MaLo-ID.
-    if body.result.data_market_location.malo_id.0 != malo_id {
+    if body.result.data_market_location.malo_id.as_ref() != malo_id {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             format!(
                 "path malo_id {malo_id:?} does not match payload maloId {:?}",
-                body.result.data_market_location.malo_id.0,
+                body.result.data_market_location.malo_id.as_ref(),
             ),
         )
             .into_response();

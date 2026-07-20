@@ -672,9 +672,11 @@ pub struct AngebotRow {
     pub laufzeit_monate: i16,
     pub positionen: serde_json::Value,
     pub varianten: serde_json::Value,
-    /// Pre-computed per-variant cost breakdown.  Populated on write;
-    /// consumed by `GET /api/v1/angebote/{id}/comparison`.
-    pub angebot_varianten_enriched: serde_json::Value,
+    /// BO4E `Angebot` business object for the priced quotation.
+    ///
+    /// `{}` until the quotation has been priced; written by
+    /// `GET /api/v1/angebote/{id}/comparison`.
+    pub bo4e: serde_json::Value,
     pub jahreskosten_netto_eur: Option<Decimal>,
     pub jahreskosten_brutto_eur: Option<Decimal>,
     pub gewaehlte_variante: Option<i16>,
@@ -762,6 +764,26 @@ pub struct AngebotVariante {
     pub product_codes_override: Option<Vec<Option<String>>>,
 }
 
+/// Persist the BO4E `Angebot` document for a priced quotation.
+///
+/// # Errors
+///
+/// Returns an error when the update fails.
+pub async fn store_angebot_bo4e(
+    pool: &PgPool,
+    id: Uuid,
+    tenant: &str,
+    bo4e: &serde_json::Value,
+) -> anyhow::Result<()> {
+    sqlx::query("UPDATE angebote SET bo4e = $1 WHERE id = $2 AND tenant = $3")
+        .bind(bo4e)
+        .bind(id)
+        .bind(tenant)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 /// Insert a new Angebot.
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_angebot(
@@ -772,7 +794,7 @@ pub async fn insert_angebot(
     req: &CreateAngebotRequest,
     positionen_json: &serde_json::Value,
     varianten_json: &serde_json::Value,
-    varianten_enriched_json: &serde_json::Value,
+    bo4e_json: &serde_json::Value,
     netto: Option<Decimal>,
     brutto: Option<Decimal>,
     gueltig_bis: Date,
@@ -783,7 +805,7 @@ pub async fn insert_angebot(
         r"INSERT INTO angebote
               (tenant, lf_mp_id, kunden_id, interessent_name, contact_email, contact_phone,
                angebotsnummer, gueltig_bis, lieferbeginn, laufzeit_monate,
-               positionen, varianten, angebot_varianten_enriched,
+               positionen, varianten, bo4e,
                jahreskosten_netto_eur, jahreskosten_brutto_eur,
                erp_angebot_id, notizen)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
@@ -801,7 +823,7 @@ pub async fn insert_angebot(
     .bind(laufzeit)
     .bind(positionen_json)
     .bind(varianten_json)
-    .bind(varianten_enriched_json)
+    .bind(bo4e_json)
     .bind(netto)
     .bind(brutto)
     .bind(&req.erp_angebot_id)

@@ -51,7 +51,6 @@ tenant        = "9900357000004"
 tarifbd_url     = "http://tarifbd:9080"
 edmd_url        = "http://edmd:8380"
 marktd_url      = "http://marktd:8180"
-einsd_url       = "http://einsd:9180"
 vertragd_url    = "http://vertragd:9780"
 
 [rates]
@@ -60,6 +59,8 @@ energiesteuer_gas_ct_per_kwh  = 0.55   # §2 Nr. 3 EnergieStG
 behg_gas_ct_per_kwh           = 1.310  # BEHG §10, 65 EUR/t × 0.20160 kg/kWh (2026)
 mwst_rate                     = 0.19
 
-[erp]
-webhook_url = "http://erp:8000/events"
+# Outbound ERP CloudEvents. `erp_hmac_secret` signs them (X-Mako-Signature,
+# HMAC-SHA256) so the receiver can verify the origin.
+erp_webhook_url = "http://erp:8000/events"
+erp_hmac_secret = "env:BILLINGD_ERP_HMAC_SECRET"
 ```

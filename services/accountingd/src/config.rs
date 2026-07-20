@@ -110,7 +110,7 @@ pub struct AccountingdConfig {
     /// SEPA Creditor Identifier (Gläubiger-ID, EPC AT-02 / ISO 20022 CdtrId).
     ///
     /// Mandatory for pain.008 SDD. Format: `DE98ZZZ09999999999`
-    /// Issued by the Bundesbank: https://extranet.bundesbank.de/scp/
+    /// Issued by the Bundesbank: <https://extranet.bundesbank.de/scp/>
     ///
     /// When absent, pain.008 generation is **blocked** (hard error at startup
     /// and at generation time) to prevent bank batch rejections.

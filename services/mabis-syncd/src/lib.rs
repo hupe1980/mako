@@ -1,16 +1,16 @@
-//! `mabis-syncd` — MaBiS UTILTS synchronisation daemon.
+//! `mabis-syncd` — MaBiS Summenzeitreihe synchronisation daemon.
 //!
 //! ## Purpose
 //!
 //! `mabis-syncd` aggregates per-MaLo Lastgang time series from `edmd` and submits
-//! **Summenzeitreihen** to the BIKO (Bilanzkoordinator) via UTILTS messages.
+//! **Summenzeitreihen** to the BIKO (Bilanzkoordinator) as MSCONS PID 13003.
 //!
 //! It is the production implementation of the aggregation pipeline described in
-//! `mako-mabis::utilts_aggregation` architecture note:
+//! `mako-mabis::summenzeitreihe` architecture note:
 //!
 //! 1. Query `edmd` for per-MaLo Lastgang (`GET /api/v1/summenzeitreihe/{malo_id}`)
 //! 2. Aggregate using `mako-mabis::SummenzeitreiheBuilder`
-//! 3. Serialise via `edi-energy` UTILTS encoder (via makod)
+//! 3. Serialise as MSCONS 13003 (via makod's `mabis.summenzeitreihe.uebermitteln`)
 //! 4. Submit via AS4 through `makod`
 //! 5. Track status in PostgreSQL (`submission_runs` table)
 //!
@@ -23,10 +23,10 @@
 //!
 //! ## Regulatory basis
 //!
-//! - **BK6-22-024 Anlage 3 MaBiS** — UTILTS submission deadlines and format
+//! - **BK6-24-174 Anlage 3 MaBiS** — Versionierung (§3.8.2), Datenstatus (§3.8.3), Fristen (§3.10)
 //! - **MaBiS (Anlage 3 zur Festlegung BK6-24-174)** — Marktregeln für die
 //!   Bilanzkreisabrechnung Strom
-//! - **UTILTS AHB S1.0 / S2.0** — EDIFACT message format
+//! - **MSCONS AHB 3.2 §8.3.1** — EDIFACT message format for PID 13003
 //!
 //! ## Configuration (`mabis-syncd.toml`)
 //!
@@ -51,9 +51,8 @@
 //! api_key = "env:MABIS_MAKOD_API_KEY"
 //!
 //! [schedule]
-//! preliminary_day = 3   # day of month to submit vorlaeufig (default: 3)
-//! final_day       = 8   # day of month to submit endgueltig (default: 8)
-//! run_hour_utc    = 5   # 05:00 UTC = 06:00 CET / 07:00 CEST
+//! erstaufschlag_werktag = 10  # Werktag after the Bilanzierungsmonat (default: 10)
+//! run_hour_utc          = 5   # 05:00 UTC = 06:00 CET / 07:00 CEST
 //! ```
 
 #![deny(unsafe_code)]

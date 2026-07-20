@@ -45,6 +45,14 @@ pub enum Error {
     /// The remote endpoint violated the API protocol.
     #[error("protocol error: {0}")]
     Protocol(String),
+
+    /// A BDEW identifier failed validation (length, alphabet or check digit).
+    ///
+    /// Surfaced as HTTP 400: the caller supplied a malformed MaLo-, MeLo-,
+    /// NeLo-, SR- or TR-ID, and accepting it would let a bad identifier enter
+    /// the identification path.
+    #[error("invalid identifier: {0}")]
+    InvalidIdentifier(String),
 }
 
 #[cfg(feature = "client")]

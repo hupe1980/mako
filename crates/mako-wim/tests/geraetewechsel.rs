@@ -16,8 +16,8 @@
 //!
 //! # Regulatory context
 //!
-//! APERAK Frist: **5 Werktage** (WiM BNetzA BK6-18-032).  Saturday counts as a
-//! Werktag; Sunday and federal holidays do not.
+//! APERAK Frist: **5 Werktage** (WiM Strom, BK6-24-174). Saturdays, Sundays and
+//! federal holidays are not Werktage.
 
 use mako_engine::{
     event_store::InMemoryEventStore,

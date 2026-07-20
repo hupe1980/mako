@@ -208,12 +208,7 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
             let domain_cmd = SteuerungsauftragCommand::ReceiveKonfiguration {
                 tx_id: tx_id.clone(),
                 sender_mp_id: party_id_to_marktpartner(sender_party_id),
-                location_id: location_id_to_domain(&location_id).map_err(|e| {
-                    energy_api::Error::Http {
-                        status: 400,
-                        body: e,
-                    }
-                })?,
+                location_id: location_id_to_domain(&location_id),
                 execution_time_from: command.execution_time_from.clone(),
                 max_power_kw: command.maximum_power_value.0.clone(),
                 execution_time_until: command.execution_time_until.clone(),
@@ -274,12 +269,7 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
             let domain_cmd = SteuerungsauftragCommand::ReceiveInitialZustand {
                 tx_id: tx_id.clone(),
                 sender_mp_id: party_id_to_marktpartner(sender_party_id),
-                location_id: location_id_to_domain(&location_id).map_err(|e| {
-                    energy_api::Error::Http {
-                        status: 400,
-                        body: e,
-                    }
-                })?,
+                location_id: location_id_to_domain(&location_id),
                 execution_time_from: command.execution_time_from.clone(),
             };
 

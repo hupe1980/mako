@@ -10,8 +10,8 @@
 //!
 //! # APERAK Frist
 //!
-//! **10 Werktage** (BK7-24-01-009).  Saturday counts as a Werktag; Sunday and
-//! federal public holidays do not.
+//! **10 Werktage** (BK7-24-01-009). Saturdays, Sundays and federal public
+//! holidays are not Werktage.
 //!
 //! # Regulatory basis
 //!

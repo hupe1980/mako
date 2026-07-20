@@ -7,7 +7,7 @@
 --
 -- §22 MessZV requires 5 decimal place kWh precision.
 -- GDPR Art. 32 requires per-tenant data isolation on every table.
--- TimescaleDB is optional; see the commented block at the end.
+-- `meter_reads` is range-partitioned monthly; see `ensure_meter_reads_partitions`.
 
 -- ── Meter data receipts ───────────────────────────────────────────────────────
 -- One row per received MSCONS process. Kept separate from meter_reads
@@ -48,20 +48,17 @@ CREATE TABLE meter_reads (
     pid                INTEGER       NOT NULL,
     sparte             TEXT          NOT NULL DEFAULT 'STROM'
                            CHECK (sparte IN ('STROM','GAS','WAERME','WASSER')),
-    -- Unit the reading is expressed in. Water is m³ and has no calorific value,
-    -- so it must never be run through the gas m³→kWh conversion; heat is kWh_th
-    -- and shares the kWh column honestly.
     -- Canonical storage unit. Ingest accepts Wh/MWh/GWh/GJ/MJ and litres and
-    -- rescales to kWh/m3 before writing, so only these two units are stored.
-    -- Gas is stored as kWh: the meter registers m3 and the Brennwert conversion
-    -- (§25 Nr. 4 MessEV) is applied at ingest. Water is stored as m3.
+    -- rescales before writing, so only these two ever land here. Gas is stored
+    -- as kWh — the meter registers m³ and the Brennwert conversion (§25 Nr. 4
+    -- MessEV) is applied at ingest. Water is m³ and has no calorific value, so
+    -- it must never pass through that conversion. Heat is kWh_th.
     unit               TEXT          NOT NULL DEFAULT 'KWH'
                            CHECK (unit IN ('KWH','M3')),
     obis_code          TEXT,
     obis_code_norm     TEXT          NOT NULL DEFAULT '',
-    -- Must match `mako_edm::domain::IngestionSource` exactly; the two had
-    -- diverged (AUTO_SUBSTITUTE was written by code but rejected by this CHECK,
-    -- and the error was swallowed). `schema_code_guard` pins them together.
+    -- Must match `mako_edm::domain::IngestionSource` exactly; `schema_code_guard`
+    -- pins the two together.
     source             TEXT          NOT NULL DEFAULT 'MSCONS'
                            CHECK (source IN (
                                'MSCONS','DIRECT_PUSH','DIRECT_GAS',
@@ -79,9 +76,107 @@ CREATE TABLE meter_reads (
 
     archived           BOOLEAN       NOT NULL DEFAULT false,
 
-    CONSTRAINT mr_pk PRIMARY KEY (malo_id, dtm_from, obis_code_norm),
+    -- `tenant` is part of the reading's identity, not a filter applied after
+    -- the fact. Without it two tenants holding the same MaLo-ID collide on one
+    -- row, and the ingest upsert resolves that collision by overwriting the
+    -- value *and* reassigning ownership — silent cross-tenant data loss.
+    CONSTRAINT mr_pk PRIMARY KEY (tenant, malo_id, dtm_from, obis_code_norm),
     CONSTRAINT mr_valid_interval CHECK (dtm_from < dtm_to)
-);
+) PARTITION BY RANGE (dtm_from);
+
+-- Monthly range partitions on `dtm_from`, which the primary key already
+-- carries — a partitioned table requires its key in every unique constraint.
+--
+-- Retention becomes a catalogue operation: expiring a month is `DROP TABLE` on
+-- one partition, which returns the disk immediately. The alternative, a bulk
+-- `DELETE` over the hot tier, leaves dead tuples for autovacuum to reclaim and
+-- competes with ingest for I/O on the busiest table in the schema.
+
+CREATE OR REPLACE FUNCTION meter_reads_partition_name(p_month DATE)
+RETURNS TEXT LANGUAGE sql IMMUTABLE AS $$
+    SELECT 'meter_reads_p' || to_char(date_trunc('month', p_month), 'YYYYMM');
+$$;
+
+-- Create the partition covering `p_month` if it does not exist.
+CREATE OR REPLACE FUNCTION ensure_meter_reads_partition(p_month DATE)
+RETURNS TEXT LANGUAGE plpgsql AS $$
+DECLARE
+    v_name  TEXT := meter_reads_partition_name(p_month);
+    v_start DATE := date_trunc('month', p_month);
+    v_end   DATE := (date_trunc('month', p_month) + INTERVAL '1 month')::date;
+BEGIN
+    EXECUTE format(
+        'CREATE TABLE IF NOT EXISTS %I PARTITION OF meter_reads
+         FOR VALUES FROM (%L) TO (%L)',
+        v_name, v_start, v_end
+    );
+    RETURN v_name;
+END;
+$$;
+
+-- Keep a rolling window of partitions ahead of `now()`. Called at startup and
+-- by the archival worker; ingest for a month with no partition would otherwise
+-- fail outright.
+CREATE OR REPLACE FUNCTION ensure_meter_reads_partitions(
+    p_months_back  INT DEFAULT 2,
+    p_months_ahead INT DEFAULT 3
+)
+RETURNS INT LANGUAGE plpgsql AS $$
+DECLARE
+    v_offset INT;
+    v_count  INT := 0;
+BEGIN
+    FOR v_offset IN -p_months_back .. p_months_ahead LOOP
+        PERFORM ensure_meter_reads_partition(
+            (date_trunc('month', now()) + (v_offset || ' month')::interval)::date
+        );
+        v_count := v_count + 1;
+    END LOOP;
+    RETURN v_count;
+END;
+$$;
+
+-- Drop partitions that lie entirely before `p_cutoff` and hold no rows still
+-- awaiting export to the cold tier.
+--
+-- The `archived = false` guard is what makes this safe: a partition is released
+-- only once every row in it is durable in Iceberg, so a stalled or failed
+-- archival run delays reclamation instead of destroying unexported readings.
+CREATE OR REPLACE FUNCTION drop_archived_meter_reads_partitions(p_cutoff TIMESTAMPTZ)
+RETURNS TABLE (partition_name TEXT, rows_released BIGINT) LANGUAGE plpgsql AS $$
+DECLARE
+    v_part    RECORD;
+    v_bound   TEXT;
+    v_upper   TIMESTAMPTZ;
+    v_pending BIGINT;
+    v_rows    BIGINT;
+BEGIN
+    FOR v_part IN
+        SELECT c.relname, pg_get_expr(c.relpartbound, c.oid) AS bound
+        FROM   pg_class c
+        JOIN   pg_inherits i ON i.inhrelid = c.oid
+        WHERE  i.inhparent = 'meter_reads'::regclass
+    LOOP
+        v_bound := v_part.bound;
+        -- Bound reads: FOR VALUES FROM ('...') TO ('...')
+        v_upper := (regexp_match(v_bound, $re$TO \('([^']+)'\)$re$))[1]::timestamptz;
+        CONTINUE WHEN v_upper IS NULL OR v_upper > p_cutoff;
+
+        EXECUTE format('SELECT count(*) FROM %I WHERE archived = false', v_part.relname)
+            INTO v_pending;
+        CONTINUE WHEN v_pending > 0;
+
+        EXECUTE format('SELECT count(*) FROM %I', v_part.relname) INTO v_rows;
+        EXECUTE format('DROP TABLE %I', v_part.relname);
+
+        partition_name := v_part.relname;
+        rows_released  := v_rows;
+        RETURN NEXT;
+    END LOOP;
+END;
+$$;
+
+SELECT ensure_meter_reads_partitions(24, 3);
 
 -- Index-only scan for billing period aggregation (covers quantity_kwh + quality)
 CREATE INDEX mr_billing_covering ON meter_reads
@@ -92,10 +187,6 @@ CREATE INDEX mr_billing_covering ON meter_reads
 -- V03: instant negative-energy detection
 CREATE INDEX mr_negative_kwh ON meter_reads (malo_id, dtm_from)
     WHERE quantity_kwh < 0;
-
--- Partial index: billable intervals for fast aggregation
-CREATE INDEX mr_billable ON meter_reads (malo_id, dtm_from)
-    WHERE quality NOT IN ('FAULTY', 'UNKNOWN');
 
 -- Direct-push source queries
 CREATE INDEX mr_source ON meter_reads (malo_id, source, dtm_from DESC);
@@ -112,21 +203,20 @@ CREATE INDEX mr_allocation_version ON meter_reads (malo_id, allocation_version, 
 CREATE INDEX mr_sender_mp_id ON meter_reads (sender_mp_id, malo_id, dtm_from)
     WHERE sender_mp_id IS NOT NULL;
 
--- Bitemporal: point-in-time reconstruction (§22 MessZV)
-CREATE INDEX mr_bitemp ON meter_reads (malo_id, dtm_from, valid_from_tx DESC);
-
 -- Corrected intervals monitoring
 CREATE INDEX mr_corrected ON meter_reads (malo_id, dtm_from)
     WHERE correction_count > 0;
 
--- Archive eligibility (rows not yet exported to cold tier)
-CREATE INDEX mr_archive_eligible ON meter_reads (dtm_from)
+-- Rows still owed an export to the cold tier. Partial on the false value, so
+-- it shrinks to nothing as a partition finishes archiving.
+CREATE INDEX mr_archive_pending ON meter_reads (dtm_from)
     WHERE archived = false;
 
-
 COMMENT ON TABLE meter_reads IS
-    'Hot-tier metered interval data. NUMERIC(18,5) for §22 MessZV 5dp kWh precision. '
-    'Rows older than retention_months are archived to the Iceberg cold tier and marked archived=true.';
+    'Hot-tier metered interval data, range-partitioned monthly on dtm_from. '
+    'NUMERIC(18,5) for §22 MessZV 5dp kWh precision. Rows older than '
+    'retention_months are exported to the Iceberg cold tier and marked '
+    'archived=true; a partition is dropped once all of its rows are archived.';
 
 -- ── Billing period aggregates ─────────────────────────────────────────────────
 -- Pre-computed from meter_reads after each MSCONS ingest. Avoids on-the-fly
@@ -167,6 +257,11 @@ CREATE TABLE meter_read_corrections (
     malo_id          TEXT          NOT NULL,
     dtm_from         TIMESTAMPTZ   NOT NULL,
     dtm_to           TIMESTAMPTZ   NOT NULL,
+    -- Register the correction applies to, normalised the same way
+    -- `meter_reads.obis_code_norm` is. Without it a point-in-time
+    -- reconstruction restores one register's prior value onto every register
+    -- the MaLo carries at that instant.
+    obis_code_norm   TEXT          NOT NULL DEFAULT '',
     original_kwh     NUMERIC(18,5) NOT NULL,
     original_quality TEXT          NOT NULL,
     corrected_kwh    NUMERIC(18,5) NOT NULL,
@@ -266,11 +361,39 @@ CREATE TABLE ablese_auftraege (
     brennwert          NUMERIC(8,4),
     zustandszahl       NUMERIC(8,4),
     ausgefuehrt_am     TIMESTAMPTZ,
+    -- Why a reading could not be taken (Ablesehindernis). Required whenever
+    -- status is FEHLGESCHLAGEN: a failed Jahresablesung leaves the §40 Abs. 2
+    -- EnWG obligation unmet, and the reason decides whether the NB may
+    -- estimate (§40a EnWG) or must re-dispatch.
+    fehlschlag_grund   TEXT
+                           CHECK (fehlschlag_grund IN (
+                               'KEIN_ZUTRITT','ZAEHLER_UNZUGAENGLICH','ZAEHLER_DEFEKT',
+                               'ZAEHLER_NICHT_AUFFINDBAR','KUNDE_VERWEIGERT',
+                               'ABLESUNG_UNPLAUSIBEL','SONSTIGES'
+                           )),
+    fehlschlag_notiz   TEXT,
+    fehlgeschlagen_am  TIMESTAMPTZ,
     mscons_ref         TEXT,
     auftrag_position_id UUID,
     insrpt_process_id  TEXT,
-    created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- A failure must name its cause, so FEHLGESCHLAGEN cannot be used to
+    -- silently retire an order that is still owed a reading.
+    CONSTRAINT ablese_fehlschlag_begruendet CHECK (
+        status <> 'FEHLGESCHLAGEN' OR fehlschlag_grund IS NOT NULL
+    )
 );
+
+-- Idempotency for INSRPT-triggered orders. `ON CONFLICT DO NOTHING` needs a
+-- unique index to fire on; with only the surrogate `id` PK every redelivered
+-- CloudEvent minted a fresh UUID and created a duplicate order.
+CREATE UNIQUE INDEX ablese_insrpt_unique ON ablese_auftraege (tenant, insrpt_process_id)
+    WHERE insrpt_process_id IS NOT NULL;
+
+-- Idempotency for scheduled/campaign orders, which carry no process id.
+CREATE UNIQUE INDEX ablese_scheduled_unique ON ablese_auftraege
+    (tenant, malo_id, anlass, geplant_am)
+    WHERE insrpt_process_id IS NULL;
 
 CREATE INDEX ablese_malo_status    ON ablese_auftraege (malo_id, tenant, status);
 CREATE INDEX ablese_geplant_offen  ON ablese_auftraege (geplant_am, status) WHERE status = 'OFFEN';
@@ -373,16 +496,37 @@ CREATE TABLE quality_assessments (
     period_from    TIMESTAMPTZ NOT NULL,
     period_to      TIMESTAMPTZ NOT NULL,
     grade          TEXT        NOT NULL CHECK (grade IN ('A','B','C','F')),
+    -- Intervals actually seen, and how many the period should hold. Coverage
+    -- alone cannot answer "how much is missing" without the denominator.
+    interval_count INTEGER     NOT NULL DEFAULT 0,
+    expected_count INTEGER,
     gaps_detected  INTEGER     NOT NULL DEFAULT 0,
     zero_run       INTEGER     NOT NULL DEFAULT 0,
     outlier_count  INTEGER     NOT NULL DEFAULT 0,
     coverage_pct   NUMERIC(5,2),
     billing_blocked BOOLEAN    NOT NULL DEFAULT false,
+    -- Ingest family the assessment was made for. Must cover every family that
+    -- scores quality, or the insert fails the constraint and the history is
+    -- silently missing for exactly the paths that produced it.
     source         TEXT        NOT NULL DEFAULT 'MSCONS'
-                       CHECK (source IN ('MSCONS','DIRECT_PUSH','CORRECTION','BATCH_RESCORE')),
+                       CHECK (source IN (
+                           'MSCONS','DIRECT_PUSH','IOT_PUSH','API_IMPORT',
+                           'CORRECTION','BATCH_RESCORE'
+                       )),
+    -- Rule findings behind the grade (V01–V10), so a disputed invoice can be
+    -- traced to the specific check that failed rather than to a letter.
+    issues_json    JSONB,
+    -- MSCONS Prüfidentifikator, when the assessment came from a MaKo process.
+    pid            INTEGER,
     assessed_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     tenant         TEXT        NOT NULL
 );
+
+-- One assessment per (MaLo, period, source). Re-scoring the same window
+-- supersedes the previous verdict rather than appending a second one, so the
+-- history reads as a sequence of decisions and not of duplicates.
+CREATE UNIQUE INDEX qa_malo_period_source ON quality_assessments
+    (tenant, malo_id, period_from, period_to, source);
 
 CREATE INDEX qa_malo_assessed  ON quality_assessments (malo_id, assessed_at DESC);
 CREATE INDEX qa_grade          ON quality_assessments (grade) WHERE grade != 'A';
@@ -450,6 +594,32 @@ CREATE TABLE gdpr_deletions (
 
     CONSTRAINT gdpr_unique_malo_tenant UNIQUE (malo_id, tenant)
 );
+
+-- Iceberg data files holding rows for an erased MaLo.
+--
+-- iceberg-rust 0.9.1 exposes only `fast_append` on a transaction — there is no
+-- public API to remove or rewrite data files — so the physical deletion is
+-- performed by an external engine (Spark, Trino) against this work list. Naming
+-- the files is what makes the Art. 17 obligation dischargeable instead of
+-- permanently pending.
+CREATE TABLE gdpr_archive_files (
+    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    deletion_id    UUID        NOT NULL REFERENCES gdpr_deletions(id) ON DELETE CASCADE,
+    file_path      TEXT        NOT NULL,
+    record_count   BIGINT,
+    file_size_bytes BIGINT,
+    planned_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Set when the operator's rewrite job has removed this file's affected rows.
+    rewritten_at   TIMESTAMPTZ,
+    tenant         TEXT        NOT NULL,
+
+    CONSTRAINT gaf_unique_file UNIQUE (deletion_id, file_path)
+);
+
+CREATE INDEX gaf_deletion ON gdpr_archive_files (deletion_id);
+-- Files still owed a rewrite.
+CREATE INDEX gaf_outstanding ON gdpr_archive_files (tenant, planned_at)
+    WHERE rewritten_at IS NULL;
 
 CREATE INDEX gd_archive_pending ON gdpr_deletions (archive_deletion_pending)
     WHERE archive_deletion_pending = true;
@@ -530,16 +700,8 @@ CREATE INDEX ccl_open_critical  ON cls_compliance_log (tenant, issue_type, detec
     WHERE severity = 'CRITICAL';
 CREATE INDEX ccl_issue_type     ON cls_compliance_log (issue_type, detected_at DESC);
 
--- TimescaleDB (optional, install before first data load) ────────────────────
--- Uncomment and run ONCE after installing the TimescaleDB extension:
---
--- SELECT create_hypertable('meter_reads', 'dtm_from',
---     chunk_time_interval => INTERVAL '7 days',
---     if_not_exists => TRUE);
---
--- ALTER TABLE meter_reads SET (
---     timescaledb.compress,
---     timescaledb.compress_orderby  = 'dtm_from',
---     timescaledb.compress_segmentby = 'malo_id, tenant'
--- );
--- SELECT add_compression_policy('meter_reads', INTERVAL '30 days');
+-- `meter_reads` is range-partitioned monthly by core PostgreSQL (see the
+-- `ensure_meter_reads_partitions` function above). TimescaleDB's
+-- `create_hypertable` is not applicable to an already-partitioned table, and
+-- native partitioning keeps the schema installable on any PostgreSQL 15+
+-- instance without an extension.

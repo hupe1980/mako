@@ -12,7 +12,7 @@
 //! ```text
 //! Requesting party → ORDCHG 39002 (Stornierung der Bestellung) ───────── NB/aMSB
 //!                                                                             │
-//! Requesting party ← ORDRSP 19013 (Bestätigung Stornierung) ←─── 5 Werktage
+//! Requesting party ← ORDRSP 19013 (Bestätigung Stornierung) ←─── 2 Werktage
 //!                  or ORDRSP 19014 (Ablehnung Stornierung)
 //! ```
 //!
@@ -21,8 +21,11 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BDEW WiM AHB Strom** — Stornierung der Bestellung (Teil 2)
-//! - **BNetzA BK6-24-174** — 5 Werktage Frist for ORDRSP response
+//! - **WiM Strom Teil 2 (Anlage 2b zu BK6-22-024), UC 4.1 Nr. 5/6** — Stornierung
+//!   einer bestätigten Bestellung und Antwort darauf
+//! - The answer Frist is **2 Werktage**: *"Unverzüglich, jedoch spätester ÜT ist
+//!   der 2. WT nach dem ÜT von Nr. 5."* The ÜT is the day of the positive
+//!   AS4-Zustellquittung, not the day the message was parsed.
 
 use std::collections::HashMap;
 
@@ -58,7 +61,7 @@ pub const BESTAETIGUNG_PID: u32 = 19_013;
 /// Per BDEW ORDRSP AHB / WiM Strom Teil 2.
 pub const ABLEHNUNG_PID: u32 = 19_014;
 
-/// Deadline label for the 5-Werktage ORDRSP response window (WiM BK6-18-032).
+/// Deadline label for the 2-Werktage ORDRSP response window (WiM Teil 2 UC 4.1 Nr. 6).
 ///
 /// Register a `Deadline` with this label immediately after `ValidationPassed`:
 ///
@@ -234,7 +237,7 @@ pub enum StornierungCommand {
     },
     /// Phase 2: Dispatch ORDRSP 19013 — cancellation accepted.
     ///
-    /// **BNetzA BK6-18-032**: ORDRSP must be sent within **5 Werktage**.
+    /// WiM Teil 2 UC 4.1 Nr. 6: ORDRSP must be sent within **2 Werktage** of the ÜT.
     Accept {
         /// Message reference assigned to the outbound ORDRSP.
         response_ref: MessageRef,
@@ -263,7 +266,7 @@ impl CommandPayload for StornierungCommand {}
 ///
 /// Implements the BDEW WiM cancellation process from the **NB/aMSB
 /// perspective** — the party that receives the ORDCHG and must issue an
-/// ORDRSP within 5 Werktage.
+/// ORDRSP within 2 Werktage.
 pub struct WimStornierungWorkflow;
 
 impl Workflow for WimStornierungWorkflow {
@@ -271,11 +274,11 @@ impl Workflow for WimStornierungWorkflow {
     type Event = StornierungEvent;
     type Command = StornierungCommand;
 
-    /// Deadline compensation for the WiM Stornierung 5-Werktage ORDRSP window.
+    /// Deadline compensation for the WiM Stornierung 2-Werktage ORDRSP window.
     ///
     /// | Label | State guard | Command emitted | BNetzA rule |
     /// |---|---|---|---|
-    /// | `"wim-stornierung-deadline"` | `StornierungReceived` or `ValidationPassed` | `TimeoutExpired` | BK6-18-032 — 5 Werktage Frist |
+    /// | `"wim-stornierung-deadline"` | `StornierungReceived` or `ValidationPassed` | `TimeoutExpired` | WiM Teil 2 UC 4.1 Nr. 6 — 2 Werktage Frist |
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,

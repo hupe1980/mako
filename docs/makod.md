@@ -242,9 +242,29 @@ Azure credentials: `AZURE_STORAGE_ACCOUNT_KEY`, or service-principal via `AZURE_
 | `shutdown_timeout_secs` | `MAKOD_SHUTDOWN_TIMEOUT_SECS` | `--shutdown-timeout-secs` | `30` | Shutdown grace period in seconds |
 | `deadline_poll_interval_secs` | `MAKOD_DEADLINE_POLL_INTERVAL_SECS` | `--deadline-poll-interval-secs` | `30` | How often the deadline scheduler polls for due deadlines (minimum 1 s; set ≤30 s for Redispatch 2.0 Activation 5-minute constraint) |
 | *(CLI/env only)* | `MAKOD_MARKTROLLEN` | `--marktrollen` | *(required when `--http-addr` is set)* | Marktrollen this instance is authorised to issue commands for (comma-separated) |
+| *(CLI/env only)* | `MAKOD_DEPLOYMENT_ROLES` | `--deployment-roles` | *(all roles)* | Roles that gate PID registration: `NB`, `LF`, `MSB`, `NMSB`, `AMSB`, `BKV`, `UENB`/`FNB`, `BIKO`, `ESA` |
+| *(CLI/env only)* | `MAKOD_ESA_PARTNER_GLNS` | `--esa-partner-glns` | *(empty)* | GLNs of counterparties acting as an Energieserviceanbieter — see below |
 
 Set `tenant_id` to your own 13-digit GLN. All process streams and inbox keys are
 scoped to this identifier.
+
+### ESA counterparties
+
+REQOTE **35002** is shared: an ESA Werteanfrage (WiM Teil 2 Kap. 4 UC 4.1 Nr. 1)
+and a Preisanfrage arrive under the same Prüfidentifikator, because no
+ESA-specific REQOTE PID exists in any published format version. WiM Teil 2
+resolves this at content level, and the sender's registered role — an ESA is
+registered via PARTIN 37006 — is the decisive signal.
+
+A NAD segment carries only the party code, not the role, so list the ESA
+counterparties in `--esa-partner-glns`. Without them the classifier falls back to
+the `PIA` Messprodukt marker alone, and a Werteanfrage that omits it is routed to
+`wim-preisanfrage`.
+
+`deployment-roles ESA` is for a deployment that **is** an ESA: it registers the
+inbound answers (QUOTES 15003, ORDRSP 19011/19012/19013/19014). An MSB *serving*
+an ESA registers ORDERS 17007 under `MSB`. The two sets are disjoint, so an
+integrated deployment may hold both.
 
 `marktrollen` declares which market-participant roles this deployment is
 authorised to issue commands for.  Every command submitted to
@@ -952,8 +972,9 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `wim.steuerungsauftrag.bestaetigen` | `MSB` | WiM | — | MSB sends final positive control-measure response |
 | `wim.steuerungsauftrag.ablehnen` | `MSB` | WiM | — | MSB sends final negative control-measure response |
 | `mabis.abrechnung.einleiten` | `BKV` | MABIS | 13003 | Open a balancing-zone billing period |
-| `mabis.abrechnung.daten-einreichen` | `BKV` | MABIS | 13003 | Submit pre-aggregated meter data |
+| `mabis.abrechnung.daten-einreichen` | `BKV` | MABIS | 13003 | BKV answers the Abrechnungssummenzeitreihe with a Prüfmitteilung (positive, or negative with `reason`) |
 | `mabis.abrechnung.begleichen` | `BKV` or `ÜNB` | MABIS | 13003 | Mark billing period settled |
+| `mabis.summenzeitreihe.uebermitteln` | `NB` or `ÜNB` | MABIS | 13003 | File a Summenzeitreihe for one Bilanzierungsgebiet with the BIKO |
 | `gpke.vollzugsmeldung.empfangen` | `NB`/`LFN`/`LFA` | GPKE | 21024–21033 | Vollzugsmeldung received via REST (manual replay) |
 | `wim.iftsta.empfangen` | `NB`/`MSB` | WiM | 21009–21018 | WiM IFTSTA status received via REST (manual replay) |
 | `wim.gas.anmeldung.bestaetigen` | `NB`/`GNB` | WiM Gas | 44042–44053 | GNB accepts GMSB Anmeldung (positive APERAK within 10 WT) |
@@ -1127,6 +1148,74 @@ curl -X POST http://localhost:8080/api/v1/commands \
 | `PUT` | `/admin/malo/{malo_id}` | Upsert a MaLo record |
 | `DELETE` | `/admin/malo/{malo_id}` | Remove a MaLo record |
 | `GET` | `/admin/malo/stats` | Per-tenant statistics |
+
+---
+
+## EDIFACT Rendering
+
+Workflow intent becomes wire bytes in `edifact_renderer.rs`, which dispatches on
+the outbox message type and — for MSCONS — on the Prüfidentifikator.
+
+```mermaid
+flowchart LR
+    cmd["POST /api/v1/commands"] --> wf["Workflow"]
+    wf --> ob[("Outbox")]
+    ob --> r["edifact_renderer"]
+    r -->|"message_type"| mt{"UTILMD · APERAK · CONTRL<br/>ORDERS · INVOIC · REMADV<br/>MSCONS · …"}
+    mt -->|"MSCONS"| pid{"Prüfidentifikator"}
+    pid --> b["edi-energy builder"]
+    b --> as4["AS4 / ebMS3"]
+```
+
+### MSCONS use cases
+
+MSCONS carries many Anwendungsfälle with materially different segment shapes, so
+the renderer dispatches on the PID. An unimplemented one is refused by name —
+rendering it in a supported shape would produce a syntactically valid message
+stating something the sender did not say.
+
+| PID | Anwendungsfall | BGM DE 1001 | Shape |
+|---|---|---|---|
+| 13003 | Summenzeitreihe (MaBiS) | `BK` | summed series over settlement slots |
+| 13023 | Redispatch 2.0 Ausfallarbeitssummenzeitreihe | `Z46` | same |
+| 13015 | Arbeit + Leistungsmaximum im Kalenderjahr vor Lieferbeginn | `Z27` | work entry plus one or two monthly maxima |
+| 13016 | Energiemenge und Leistungsmaximum | `Z28` | same |
+| 13019 | Energiemenge (Strom) | `7` | work entry only |
+
+`BGM` DE 1001 names what kind of document the message is and the receiver routes
+by it, so it is set per Anwendungsfall rather than left at a default.
+
+**Summed series (13003, 13023).** Carries the identifying 3-tuple — `LOC+172`
+(MaBiS-Zählpunkt), `DTM+492` (Bilanzierungsmonat, `CCYYMM`) and `DTM+293`
+(Versionsangabe, `CCYYMMDDHHMMSSZZZ`) — then one `QTY` per settlement slot,
+each bounded by `DTM+163`/`DTM+164`. A quantity without those bounds has no time
+reference, so the receiver cannot place it on the grid.
+
+**Work and maxima (13015, 13016, 13019).** `SG9` repeats two to three times for
+one delivery point: once for the energy from the start of the calendar year to
+Lieferbeginn, then once or twice for the highest and second-highest monthly power
+maxima, which the KAV concession-levy band depends on. Each maximum carries the
+period it fell in as `DTM+306` — format `610` (`CCYYMM`) under a monthly or
+yearly Leistungspreissystem, `102` (`CCYYMMDD`) under a daily one. 13019 carries
+energy alone and refuses a maximum, pointing at 13016.
+
+Quantities use DE 6063 `220` (Wahrer Wert) or `67` (Ersatzwert), so a substitute
+is never reported as a measurement. Units are validated against DE 6411's closed
+code list — `KWH`, `KWT`, `D54`, `MTS` (MIG 2.5).
+
+### Conformance
+
+`services/makod/tests/mscons_conformance.rs` renders each use case, parses it
+back, and validates it against the registered release profile — mandatory
+segments, segment order, group repeats and code lists — rather than asserting on
+segment substrings. A substring assertion confirms a segment the author thought
+of is present; profile validation confirms the message satisfies the rules the
+receiver applies.
+
+Messages with more than one `LIN`/`QTY` cycle are covered by `#[ignore]`d cases:
+the MSCONS profile models the AHB's SG5 (`NAD+DP`) and SG6 (`LOC`) as one group
+triggered by `LOC`, so a repeated cycle reads as out of order even when it
+conforms. Run them with `--include-ignored` to see it.
 
 ---
 

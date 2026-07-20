@@ -29,12 +29,53 @@ fn ddl_of(sql: &str, table: &str) -> String {
     sql[start..end].to_owned()
 }
 
+/// The column names a `CREATE TABLE` body actually declares.
+///
+/// A substring search over the raw DDL is not a column check: `"id"` matches
+/// inside `malo_id`, and any identifier matches inside a comment. This takes the
+/// first token of each non-comment, non-constraint line, so a test asserting on
+/// a column name is asserting on a column that exists.
+fn declared_columns(ddl: &str) -> std::collections::BTreeSet<String> {
+    ddl.lines()
+        .skip(1) // the `CREATE TABLE x (` line
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("--"))
+        .filter(|l| {
+            let upper = l.to_uppercase();
+            !upper.starts_with("CONSTRAINT")
+                && !upper.starts_with("PRIMARY KEY")
+                && !upper.starts_with("UNIQUE")
+                && !upper.starts_with("CHECK")
+                && !upper.starts_with("FOREIGN KEY")
+        })
+        .filter_map(|l| l.split_whitespace().next())
+        .map(|c| c.trim_matches(',').to_owned())
+        .collect()
+}
+
+#[test]
+fn the_column_extractor_does_not_match_substrings_or_comments() {
+    let ddl = "CREATE TABLE t (\n    -- mentions id in a comment\n    malo_id TEXT NOT NULL,\n                   tenant  TEXT NOT NULL,\n    CONSTRAINT t_pk PRIMARY KEY (tenant, malo_id)";
+    let cols = declared_columns(ddl);
+    assert!(cols.contains("malo_id"));
+    assert!(cols.contains("tenant"));
+    assert!(
+        !cols.contains("id"),
+        "`id` is a substring of `malo_id` and appears in a comment, but is not a column"
+    );
+    assert!(
+        !cols.contains("CONSTRAINT"),
+        "table constraints are not columns"
+    );
+}
+
 /// Every column the handlers reference must exist in the DDL.
 #[test]
 fn virtual_meter_configs_ddl_covers_every_queried_column() {
     let ddl = ddl_of(&migration(), "virtual_meter_configs");
 
     // Columns appearing in SELECT / INSERT / UPDATE / WHERE across server.rs.
+    let declared = declared_columns(&ddl);
     for column in [
         "id",
         "virtual_malo_id",
@@ -50,8 +91,9 @@ fn virtual_meter_configs_ddl_covers_every_queried_column() {
         "updated_at",
     ] {
         assert!(
-            ddl.contains(column),
-            "handlers query `{column}` but virtual_meter_configs does not declare it"
+            declared.contains(column),
+            "handlers query `{column}` but virtual_meter_configs does not declare it; \
+             declared columns are {declared:?}"
         );
     }
 }

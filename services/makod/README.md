@@ -262,6 +262,31 @@ token (same Cedar ABAC layer as the REST API). See the
 
 ---
 
+## EDIFACT rendering
+
+Workflow intent becomes wire bytes in `edifact_renderer.rs`, which dispatches on
+the outbox message type and — for MSCONS — on the Prüfidentifikator.
+
+| PID | Anwendungsfall | BGM DE 1001 |
+|---|---|---|
+| 13003 | Summenzeitreihe (MaBiS) | `BK` |
+| 13023 | Redispatch 2.0 Ausfallarbeitssummenzeitreihe | `Z46` |
+| 13015 | Arbeit + Leistungsmaximum im Kalenderjahr vor Lieferbeginn | `Z27` |
+| 13016 | Energiemenge und Leistungsmaximum | `Z28` |
+| 13019 | Energiemenge (Strom) | `7` |
+
+`BGM` DE 1001 names the document type the receiver routes by, so it is set per
+Anwendungsfall. An unimplemented PID is refused by name — rendering it in a
+supported shape would produce a syntactically valid message stating something the
+sender did not say.
+
+`tests/mscons_conformance.rs` renders each use case, parses it back and validates
+it against the registered release profile, rather than asserting on segment
+substrings. See the [operator guide](https://hupe1980.github.io/mako/makod#edifact-rendering)
+for the segment-level detail.
+
+---
+
 ## API reference
 
 When `--http-addr` is enabled, the full OpenAPI 3.1 spec and an interactive

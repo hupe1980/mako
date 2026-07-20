@@ -650,18 +650,42 @@ fn v07_dst_ambiguity_detected_for_local_time_storage() {
     ];
 
     let result = validate_intervals(&intervals, &ValidationConfig::rlm_strom_15min());
-    // Either V02 (overlap) or V07 (DST ambiguity) must fire.
-    let has_dst_or_overlap = result.issues.iter().any(|i| {
-        matches!(
-            i.rule_id,
-            ValidationRuleId::DstAmbiguity | ValidationRuleId::OverlapDetected
-        )
-    });
+    // Accepting "V07 *or* V02" made this test vacuous: only V02 ever fired, and
+    // V07 was declared but never emitted. A duplicated instant is an overlap, so
+    // require V02 specifically here...
     assert!(
-        has_dst_or_overlap,
-        "Duplicate UTC timestamp at DST fall-back hour must trigger V07 DstAmbiguity \
-         or V02 OverlapDetected. Issues: {:?}",
+        result
+            .issues
+            .iter()
+            .any(|i| i.rule_id == ValidationRuleId::OverlapDetected),
+        "a duplicated UTC instant is an overlap (V02). Issues: {:?}",
         result.issues
+    );
+
+    // ...and assert V07 on what it actually means: a full local fall-back day
+    // that carries only 24 hours, so the repeated 02:00–03:00 hour was collapsed
+    // and an hour of energy silently vanished. Local 2026-10-25 runs
+    // 22:00Z (24 Oct) → 23:00Z (25 Oct) — 25 hours, 100 quarter-hours.
+    let collapsed: Vec<MeterInterval> = (0..96)
+        .map(|i| {
+            let from = datetime!(2026-10-24 22:00 UTC) + time::Duration::minutes(15 * i);
+            MeterInterval {
+                from,
+                to: from + time::Duration::minutes(15),
+                value_kwh: dec!(2.5),
+                quality: QualityFlag::Measured,
+                obis_code: None,
+            }
+        })
+        .collect();
+    let collapsed_result = validate_intervals(&collapsed, &ValidationConfig::rlm_strom_15min());
+    assert!(
+        collapsed_result
+            .issues
+            .iter()
+            .any(|i| i.rule_id == ValidationRuleId::DstAmbiguity),
+        "a collapsed fall-back hour must trigger V07. Issues: {:?}",
+        collapsed_result.issues
     );
 }
 
@@ -1096,7 +1120,6 @@ fn sect17_prior_period_average_uses_matching_time_slot() {
         method: SubstituteMethod::PriorPeriodAverage,
         prior_period_intervals: prior_week,
         short_gap_threshold: 0,
-        reason: None,
     };
     let filled = fill_gaps_with_config(
         &series,

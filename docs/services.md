@@ -46,7 +46,7 @@ graph TB
         edmd[":8380 edmd\nMSCONS · iMSys direct push\nHampel · V01–V10 · virtual meters"]
         obsd[":8480 obsd\nprocess projections · KPI\n§20 EnWG parity report"]
         nis[":9680 nis-syncd\nNIS/GIS grid topology sync\nstateless · lifts STP to ≥95%"]
-        mabis[":8880 mabis-syncd\nMaBiS UTILTS Summenzeitreihe\nday-3/day-8 schedule"]
+        mabis[":8880 mabis-syncd\nMaBiS Summenzeitreihe\nMSCONS 13003 · 10. Werktag"]
         einsd[":9180 einsd\nEEG/KWKG settlement\n9 schemes · 324 tests"]
     end
 
@@ -97,7 +97,7 @@ graph TB
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [edmd](./edmd) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Hampel quality scoring, V01–V10 validation, virtual meters (§42b GGV), §17 MessZV Jahresprognose forecasting, Resampling, Ablesesteuerung (INSRPT auto-order), Iceberg/S3 OLAP |
-| [mabis-syncd](./mabis-syncd) | `:8880` | ÜNB/NB | MaBiS UTILTS synchronisation — aggregates per-MaLo Lastgang via `SummenzeitreiheBuilder`, submits to BIKO; vorläufig day 3 + endgültig day 8 schedule; per-MaLo contribution log |
+| [mabis-syncd](./mabis-syncd) | `:8880` | ÜNB/NB | MaBiS synchronisation — aggregates quarter-hourly Lastgang per Bilanzierungsgebiet via `SummenzeitreiheBuilder`, files with the BIKO as MSCONS 13003 on the 10. Werktag; records the BIKO-assigned Datenstatus and open Korrekturbedarf |
 | [einsd](./einsd) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 9 settlement schemes |
 | [obsd](./obsd) | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, automated deadline computation (GPKE 24h/WiM 5WT/GeLi Gas 10WT), `completed_at` cycle-time tracking, `GET /api/v1/audit/bnetza-report`, 6-tool MCP server |
 | [nis-syncd](./nis-syncd) | `:9680` | NB | NIS/GIS grid topology import — concurrent `tokio::task::JoinSet` sync, drift CloudEvents, `check_malo_grid` MCP tool, lifts Anmeldung STP ~80% → ≥95% (stateless) |

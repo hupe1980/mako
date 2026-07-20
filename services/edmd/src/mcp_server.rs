@@ -58,6 +58,12 @@ pub struct EdmdMcpState {
     pub pool: PgPool,
     pub tenant: String,
     pub auth: mako_service::mcp_auth::McpAuth,
+    /// `marktd` base URL — the Jahresablesung campaign enumerates SLP MaLos
+    /// from it, so a tool that creates reading orders needs the same access the
+    /// HTTP endpoint has.
+    pub marktd_url: String,
+    /// `marktd` bearer token.
+    pub marktd_api_key: secrecy::SecretString,
 }
 
 // ── Tool parameters ───────────────────────────────────────────────────────────
@@ -145,8 +151,14 @@ pub struct TriggerJahresablesungParams {
     pub nb_mp_id: String,
     /// Campaign year (default: current year).
     pub campaign_year: Option<i32>,
-    /// Dry-run: count affected MaLos but do not create reading orders.
+    /// Dry-run: report what a run would do without creating reading orders.
     pub dry_run: Option<bool>,
+    /// Cap on MaLos enumerated in one call (default 2000, max 10000).
+    ///
+    /// Bounded so the tool cannot exceed an MCP client's request timeout on a
+    /// large grid. Re-running is idempotent, so a capped run is resumed by
+    /// calling again rather than by starting over.
+    pub max_malos: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -889,11 +901,16 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
     ) -> Result<CallToolResult, McpError> {
         let limit = p.limit.unwrap_or(100).min(2000);
         let rows = sqlx::query(
+            // FEHLGESCHLAGEN is included: the order is terminal but the reading
+            // is still owed, so a failed Jahresablesung past its deadline is
+            // exactly the §40 Abs. 2 EnWG gap this tool exists to surface.
+            // Excluding it would let /fail retire an obligation silently.
             r"SELECT id, malo_id, melo_id, anlass, auftraggeber_rolle,
-                     ausfuehrender_msb, geplant_am, ausfuehrt_bis, status, created_at
+                     ausfuehrender_msb, geplant_am, ausfuehrt_bis, status,
+                     fehlschlag_grund, created_at
               FROM ablese_auftraege
               WHERE tenant = $1
-                AND status IN ('OFFEN', 'BEAUFTRAGT')
+                AND status IN ('OFFEN', 'BEAUFTRAGT', 'FEHLGESCHLAGEN')
                 AND ausfuehrt_bis < CURRENT_DATE
                 AND ($2::text IS NULL OR ausfuehrender_msb = $2)
               ORDER BY ausfuehrt_bis ASC
@@ -915,6 +932,7 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
                 "ausfuehrender_msb": r.try_get::<Option<String>, _>("ausfuehrender_msb").ok().flatten(),
                 "ausfuehrt_bis": r.try_get::<Option<time::Date>, _>("ausfuehrt_bis").ok().flatten().map(|d| d.to_string()),
                 "status": r.try_get::<String, _>("status").ok(),
+                "fehlschlag_grund": r.try_get::<Option<String>, _>("fehlschlag_grund").ok().flatten(),
                 "days_overdue": r.try_get::<Option<time::Date>, _>("ausfuehrt_bis").ok().flatten().map(|d| {
                     (time::OffsetDateTime::now_utc().date() - d).whole_days()
                 }),
@@ -931,11 +949,17 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
                     acc
                 });
 
+        let failed = orders
+            .iter()
+            .filter(|o| o["status"].as_str() == Some("FEHLGESCHLAGEN"))
+            .count();
+
         ContentBlock::json(serde_json::json!({
             "total_overdue": orders.len(),
+            "failed_count": failed,
             "by_anlass": by_anlass,
             "orders": orders,
-            "regulatory_note": "JAHRESABLESUNG overdue = §40 Abs. 2 EnWG violation. SLP Mehr-/Mindermengen will be estimated, not metered.",
+            "regulatory_note": "JAHRESABLESUNG overdue = §40 Abs. 2 EnWG violation. SLP Mehr-/Mindermengen will be estimated, not metered. FEHLGESCHLAGEN orders are listed too — the order is closed but the reading is still owed, so it needs re-dispatch or a documented §40a EnWG estimate.",
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
@@ -962,9 +986,12 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
             .campaign_year
             .unwrap_or_else(|| time::OffsetDateTime::now_utc().year());
         let dry_run = p.dry_run.unwrap_or(false);
+        // Bounded so a large grid cannot exceed the client's request timeout.
+        let max_malos = p.max_malos.unwrap_or(2_000).clamp(1, 10_000);
 
-        // Count SLP MaLos without a scheduled Jahresablesung this year
-        let (without_reading,): (i64,) = sqlx::query_as(
+        // Orders already raised for this campaign year. Reported in both modes,
+        // because "how much is left" is the question either way.
+        let (already_scheduled,): (i64,) = sqlx::query_as(
             r"SELECT COUNT(DISTINCT malo_id)
               FROM ablese_auftraege
               WHERE tenant = $1
@@ -980,23 +1007,53 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         if dry_run {
-            return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                "Dry-run: {without_reading} MaLos already scheduled for Jahresablesung {year}. \
-                 Use POST /api/v1/reading-orders/campaign to launch the full campaign \
-                 (nb_mp_id: {}, campaign_year: {year}).",
-                p.nb_mp_id
-            ))]));
+            return ContentBlock::json(serde_json::json!({
+                "dry_run": true,
+                "campaign_year": year,
+                "nb_mp_id": p.nb_mp_id,
+                "already_scheduled": already_scheduled,
+                "max_malos": max_malos,
+                "note": "no orders were created; re-run with dry_run=false to create them",
+            }))
+            .map(|b| CallToolResult::success(vec![b]));
         }
 
-        // For actual execution, recommend the HTTP endpoint (avoids MCP timeout on large grids)
-        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "To launch the Jahresablesung campaign for NB {nb_mp_id}, call:\n\
-             POST /api/v1/reading-orders/campaign\n\
-             {{\n  \"nb_mp_id\": \"{nb_mp_id}\",\n  \"campaign_year\": {year}\n}}\n\n\
-             Already scheduled this year: {without_reading} MaLos.\n\
-             The campaign is idempotent — re-running skips already-scheduled MaLos.",
-            nb_mp_id = p.nb_mp_id,
-        ))]))
+        // The same core the HTTP endpoint runs, so both raise identical orders
+        // under identical idempotency rules.
+        let req = crate::server::JahresablesungCampaignRequest {
+            nb_mp_id: p.nb_mp_id.clone(),
+            campaign_year: Some(year),
+            geplant_am: None,
+            ausfuehrt_bis: None,
+            ausfuehrender_msb: None,
+            max_malos: Some(max_malos),
+        };
+
+        match crate::server::run_jahresablesung_campaign(
+            &self.state.pool,
+            &self.state.tenant,
+            &self.state.marktd_url,
+            &self.state.marktd_api_key,
+            &req,
+        )
+        .await
+        {
+            Ok(outcome) => ContentBlock::json(serde_json::json!({
+                "campaign_year": outcome.year,
+                "nb_mp_id": p.nb_mp_id,
+                "malos_enumerated": outcome.total_malos,
+                "orders_created": outcome.created,
+                "already_scheduled_skipped": outcome.skipped,
+                "geplant_am": outcome.geplant_am.to_string(),
+                "ausfuehrt_bis": outcome.ausfuehrt_bis.to_string(),
+                "capped": outcome.total_malos >= usize::try_from(max_malos).unwrap_or(usize::MAX),
+                "legal_basis": "§40 Abs. 2 EnWG",
+                "note": "re-running is idempotent — already-scheduled MaLos are skipped, \
+                         so a capped run is resumed by calling again",
+            }))
+            .map(|b| CallToolResult::success(vec![b])),
+            Err(e) => Err(McpError::internal_error(e.detail(), None)),
+        }
     }
 }
 
@@ -1143,10 +1200,22 @@ impl EdmdMcpHandler {
                 "## Ablesesteuerung — Reading Order Lifecycle\n\n\
                  Reading orders track physical meter reads for all three market roles.\n\n\
                  ```\n\
-                 OFFEN → BEAUFTRAGT → AUSGEFUEHRT\n\
-                    └──────────────→ STORNIERT\n\
-                    └──────────────→ FEHLGESCHLAGEN\n\
+                 OFFEN → BEAUFTRAGT → AUSGEFUEHRT   (reading taken, obligation met)\n\
+                    └──────────────→ STORNIERT      (no longer owed)\n\
+                    └──────────────→ FEHLGESCHLAGEN (Ablesehindernis — still owed)\n\
                  ```\n\n\
+                 `STORNIERT` and `FEHLGESCHLAGEN` are both terminal, but only\n\
+                 `STORNIERT` discharges the obligation. A `FEHLGESCHLAGEN` order\n\
+                 past `ausfuehrt_bis` keeps appearing in\n\
+                 `list_overdue_reading_orders` until the reading is re-dispatched\n\
+                 or the quantity is estimated under §40a EnWG.\n\n\
+                 ```http\n\
+                 PUT /api/v1/reading-orders/{id}/fail\n\
+                 { \"grund\": \"KEIN_ZUTRITT\", \"notiz\": \"3x angetroffen, niemand vor Ort\" }\n\
+                 ```\n\
+                 Gründe: KEIN_ZUTRITT · ZAEHLER_UNZUGAENGLICH · ZAEHLER_DEFEKT ·\n\
+                 ZAEHLER_NICHT_AUFFINDBAR · KUNDE_VERWEIGERT · ABLESUNG_UNPLAUSIBEL ·\n\
+                 SONSTIGES\n\n\
                  ### Triggers (automatic)\n\
                  | Event | Reading order created |\n\
                  |---|---|\n\

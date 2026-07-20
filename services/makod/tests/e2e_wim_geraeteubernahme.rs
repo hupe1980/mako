@@ -23,7 +23,7 @@
 //!
 //! - **PID 17001**: Anfrage Geräteübernahmeangebot (ORDERS, nMSB → NB/aMSB)
 //! - **ORDRSP Frist**: **5 Werktage** (BNetzA BK6-18-032)
-//! - **Saturday counts as a Werktag**; Sunday and public holidays do not.
+//! - **Saturdays, Sundays and public holidays are not Werktage.**
 //! - NB/aMSB state machine (Phase 1):
 //!   `New → AnfrageReceived → ValidationPassed → AngebotGesendet` (positive)
 //!   `New → AnfrageReceived → ValidationPassed → Abgelehnt` (negative)

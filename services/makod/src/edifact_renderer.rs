@@ -159,6 +159,7 @@ pub fn render_to_wire_bytes(
         "ORDRSP" => render_ordrsp(p, msg, registry),
         "INVOIC" => render_invoic(p, msg, registry),
         "REMADV" => render_remadv(p, msg, registry),
+        "MSCONS" => render_mscons(p, msg, registry),
         other => Err(intent_only(other)),
     }
 }
@@ -749,6 +750,367 @@ fn render_remadv(
         .map_err(|e| RenderError::BuilderError(e.to_string()))
 }
 
+/// MSCONS "Übertragung Summenzeitreihe" (MaBiS), AHB 3.2 §8.3.1.
+const MSCONS_PID_SUMMENZEITREIHE: u64 = 13003;
+
+/// BGM DE 1001 document-name code for an MSCONS Anwendungsfall.
+///
+/// The code is not constant across MSCONS: it names what kind of document the
+/// message is, and the AHB fixes a different one per use case. Sending the
+/// wrong code labels a Summenzeitreihe as a Prozessdatenbericht, which the
+/// receiver routes by.
+const fn mscons_document_code(pid: u64) -> &'static str {
+    match pid {
+        // "Zeitreihen im Rahmen der Bilanzkreisabrechnung"
+        MSCONS_PID_SUMMENZEITREIHE => "BK",
+        // "Redispatch"
+        MSCONS_PID_AUSFALLARBEIT_SZR => "Z46",
+        // "Bewegungsdaten im Kalenderjahr vor Lieferbeginn"
+        MSCONS_PID_ARBEIT_LEISTUNGSMAX => "Z27",
+        // "Energiemenge und Leistungsmaximum"
+        MSCONS_PID_ENERGIEMENGE_LEISTUNGSMAX => "Z28",
+        // "Prozessdatenbericht"
+        _ => "7",
+    }
+}
+
+/// MSCONS "Energiemenge (Strom)", AHB 3.2 — energy for a billing period, with
+/// no power maximum.
+const MSCONS_PID_ENERGIEMENGE: u64 = 13019;
+
+/// MSCONS "Energiemenge und Leistungsmaximum", AHB 3.2.
+const MSCONS_PID_ENERGIEMENGE_LEISTUNGSMAX: u64 = 13016;
+
+/// MSCONS "Arbeit / Leistungsmaximum im Kalenderjahr vor Lieferbeginn",
+/// AHB 3.2 — the movement data a Netznutzungsvertrag requires when an RLM
+/// Marktlokation changes supplier mid-year (GPKE Kap. 6.1).
+const MSCONS_PID_ARBEIT_LEISTUNGSMAX: u64 = 13015;
+
+/// MSCONS "Redispatch 2.0 Ausfallarbeits-summenzeitreihe", AHB 3.2.
+///
+/// Same segment shape as the MaBiS Summenzeitreihe — a summed series over
+/// settlement slots for one Zählpunkt — so it renders through the same path.
+const MSCONS_PID_AUSFALLARBEIT_SZR: u64 = 13023;
+
+/// Render a summed MSCONS time series (Prüfidentifikator 13003 or 13023).
+///
+/// The payload carries the identifying 3-tuple — MaBiS-Zählpunkt,
+/// Bilanzierungsmonat, Version (BK6-24-174 Anlage 3 §3.8.2) — and one entry per
+/// settlement slot. MaBiS settles per quarter-hour, so the slots are the
+/// message: a period total would carry the right sum and the wrong shape.
+///
+/// # Errors
+///
+/// [`RenderError::MissingField`] when the 3-tuple or the intervals are absent —
+/// a Summenzeitreihe without them cannot be placed on the settlement grid.
+fn render_mscons(
+    p: &serde_json::Value,
+    msg: &OutboxMessage,
+    registry: &MpIdRegistry,
+) -> Result<Vec<u8>, RenderError> {
+    let mt = "MSCONS";
+
+    // MSCONS carries many Anwendungsfälle with materially different segment
+    // shapes. Dispatching on the Prüfidentifikator keeps an unsupported one from
+    // being rendered in the shape of a supported one, which would produce a
+    // syntactically valid message stating something the sender did not mean.
+    let pid = p
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    match pid {
+        // Summenzeitreihe (MaBiS) and Redispatch 2.0
+        // Ausfallarbeits-summenzeitreihe share the same shape: a summed series
+        // over settlement slots for one Zählpunkt.
+        MSCONS_PID_SUMMENZEITREIHE | MSCONS_PID_AUSFALLARBEIT_SZR => {}
+        MSCONS_PID_ARBEIT_LEISTUNGSMAX
+        | MSCONS_PID_ENERGIEMENGE
+        | MSCONS_PID_ENERGIEMENGE_LEISTUNGSMAX => {
+            return render_mscons_arbeit_leistungsmax(p, msg, registry);
+        }
+        other => {
+            return Err(RenderError::InsufficientPayload {
+                message_type: mt.into(),
+                detail: format!(
+                    "MSCONS Prüfidentifikator {other} has no renderer. Supported: \
+                     {MSCONS_PID_SUMMENZEITREIHE} (Summenzeitreihe), \
+                     {MSCONS_PID_AUSFALLARBEIT_SZR} (Redispatch Ausfallarbeits-SZR), \
+                     {MSCONS_PID_ARBEIT_LEISTUNGSMAX} (Arbeit/Leistungsmaximum), \
+                     {MSCONS_PID_ENERGIEMENGE} (Energiemenge), \
+                     {MSCONS_PID_ENERGIEMENGE_LEISTUNGSMAX} (Energiemenge + Leistungsmaximum)."
+                )
+                .into(),
+            });
+        }
+    }
+
+    let sender = p
+        .get("sender_mp_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| registry.primary_gln());
+    let receiver = p
+        .get("receiver_mp_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or(msg.recipient.as_ref());
+
+    let zaehlpunkt = p
+        .get("bilanzierungsgebiet_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| RenderError::MissingField {
+            message_type: mt.into(),
+            field: "bilanzierungsgebiet_id".into(),
+        })?;
+    let balancing_period = p
+        .get("balancing_period")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| RenderError::MissingField {
+            message_type: mt.into(),
+            field: "balancing_period (CCYYMM)".into(),
+        })?;
+    let version =
+        p.get("version")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| RenderError::MissingField {
+                message_type: mt.into(),
+                field: "version (CCYYMMDDHHMMSSZZZ)".into(),
+            })?;
+
+    let intervals = p
+        .get("intervals")
+        .and_then(|v| v.as_array())
+        .filter(|a| !a.is_empty())
+        .ok_or_else(|| RenderError::MissingField {
+            message_type: mt.into(),
+            field: "intervals".into(),
+        })?;
+
+    let message_ref = p
+        .get("message_ref")
+        .and_then(|v| v.as_str())
+        .map(msg_ref_from_uuid)
+        .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
+
+    let release = active_release(MessageType::Mscons, &ReleaseTrack::Short).ok_or_else(|| {
+        RenderError::NoActiveProfile {
+            message_type: mt.into(),
+        }
+    })?;
+
+    let mut mp = builders::MsconsBuilder::new(release)
+        .sender(sender)
+        .receiver(receiver)
+        .message_ref(message_ref)
+        .document_code(mscons_document_code(pid))
+        .pruefidentifikator(
+            edi_energy::Pruefidentifikator::new(u32::try_from(pid).unwrap_or_default()).map_err(
+                |e| RenderError::BuilderError(format!("invalid Prüfidentifikator {pid}: {e}")),
+            )?,
+        )
+        .metering_point(zaehlpunkt)
+        .balancing_period(balancing_period)
+        .version(version);
+
+    for iv in intervals {
+        let (Some(from), Some(to), Some(qty)) = (
+            iv.get("from").and_then(|v| v.as_str()),
+            iv.get("to").and_then(|v| v.as_str()),
+            iv.get("quantity_kwh").and_then(|v| v.as_str()),
+        ) else {
+            return Err(RenderError::MissingField {
+                message_type: mt.into(),
+                field: "intervals[].{from,to,quantity_kwh}".into(),
+            });
+        };
+        // DE 6063 `79` = "Energiemenge summiert (Summenwert, Bilanzsumme)";
+        // DE 6411 `KWH` (MSCONS AHB 3.2, SG10 QTY). A consumption qualifier
+        // would describe one metering point's draw, not the aggregate of a
+        // Bilanzierungsgebiet.
+        mp = mp.quantity_for_period(
+            edi_energy::builders::QTY_ENERGIE_SUMMIERT,
+            qty,
+            "KWH",
+            from,
+            to,
+        );
+    }
+
+    mp.done()
+        .serialize()
+        .map_err(|e| RenderError::BuilderError(e.to_string()))
+}
+
+/// Render MSCONS "Arbeit / Leistungsmaximum im Kalenderjahr vor Lieferbeginn"
+/// (Prüfidentifikator 13015).
+///
+/// Shape per AHB 3.2: SG9 repeats two to three times for one `NAD+DP` — once
+/// for the energy from the start of the calendar year to Lieferbeginn, then
+/// once or twice for the highest and second-highest monthly power maxima
+/// (needed for the KAV concession-levy band).
+///
+/// Each maximum carries the period it fell in as `DTM+306`: format `610`
+/// (`CCYYMM`) under a monthly or yearly Leistungspreissystem, `102`
+/// (`CCYYMMDD`) under a daily one. A magnitude without that period cannot be
+/// attributed to a month, which is what the KAV band depends on.
+///
+/// # Errors
+///
+/// [`RenderError::MissingField`] when the MaLo, the work entry or its period is
+/// absent.
+fn render_mscons_arbeit_leistungsmax(
+    p: &serde_json::Value,
+    msg: &OutboxMessage,
+    registry: &MpIdRegistry,
+) -> Result<Vec<u8>, RenderError> {
+    let pid = p
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    use edi_energy::builders::{
+        MSCONS_UNITS, QTY_ERSATZWERT, QTY_WAHRER_WERT, is_valid_mscons_unit,
+    };
+
+    let mt = "MSCONS";
+    let missing = |field: &str| RenderError::MissingField {
+        message_type: mt.into(),
+        field: field.into(),
+    };
+    // The AHB's per-Anwendungsfall table has no DE 6411 row for 13015, so the
+    // unit follows the MIG's closed code list rather than a value fixed here:
+    // the work entry is energy (`KWH`), a maximum is power (`KWT`).
+    let checked_unit = |unit: &str| -> Result<(), RenderError> {
+        if is_valid_mscons_unit(unit) {
+            Ok(())
+        } else {
+            Err(RenderError::InsufficientPayload {
+                message_type: mt.into(),
+                detail: format!(
+                    "unit {unit:?} is not a MSCONS DE 6411 code; expected one of {MSCONS_UNITS:?}"
+                )
+                .into(),
+            })
+        }
+    };
+
+    let sender = p
+        .get("sender_mp_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| registry.primary_gln());
+    let receiver = p
+        .get("receiver_mp_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or(msg.recipient.as_ref());
+    let malo_id = p
+        .get("malo_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| missing("malo_id"))?;
+
+    let arbeit = p.get("arbeit").ok_or_else(|| missing("arbeit"))?;
+    let (Some(arbeit_kwh), Some(from), Some(to)) = (
+        arbeit.get("quantity").and_then(|v| v.as_str()),
+        arbeit.get("from").and_then(|v| v.as_str()),
+        arbeit.get("to").and_then(|v| v.as_str()),
+    ) else {
+        return Err(missing("arbeit.{quantity,from,to}"));
+    };
+
+    let message_ref = p
+        .get("message_ref")
+        .and_then(|v| v.as_str())
+        .map(msg_ref_from_uuid)
+        .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
+
+    let release = active_release(MessageType::Mscons, &ReleaseTrack::Short).ok_or_else(|| {
+        RenderError::NoActiveProfile {
+            message_type: mt.into(),
+        }
+    })?;
+
+    // DE 6063 distinguishes a measured value from a substitute one. Reporting a
+    // substitute as measured would assert a reading that was never taken.
+    let qualifier = |v: &serde_json::Value| {
+        if v.get("ersatzwert").and_then(serde_json::Value::as_bool) == Some(true) {
+            QTY_ERSATZWERT
+        } else {
+            QTY_WAHRER_WERT
+        }
+    };
+
+    let arbeit_unit = arbeit.get("unit").and_then(|v| v.as_str()).unwrap_or("KWH");
+    checked_unit(arbeit_unit)?;
+
+    let mut mp = builders::MsconsBuilder::new(release)
+        .sender(sender)
+        .receiver(receiver)
+        .message_ref(message_ref)
+        .document_code(mscons_document_code(pid))
+        .pruefidentifikator(
+            edi_energy::Pruefidentifikator::new(u32::try_from(pid).unwrap_or_default()).map_err(
+                |e| RenderError::BuilderError(format!("invalid Prüfidentifikator {pid}: {e}")),
+            )?,
+        )
+        .metering_point(malo_id)
+        .quantity_for_period(qualifier(arbeit), arbeit_kwh, arbeit_unit, from, to);
+
+    let maxima = p
+        .get("leistungsmaxima")
+        .and_then(|v| v.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+
+    // 13019 is energy alone — the AHB marks no Leistungsperiode row for it, so
+    // a maximum sent under it would have no period to be attributed to.
+    if pid == MSCONS_PID_ENERGIEMENGE && !maxima.is_empty() {
+        return Err(RenderError::InsufficientPayload {
+            message_type: mt.into(),
+            detail: format!(
+                "Prüfidentifikator {MSCONS_PID_ENERGIEMENGE} carries Energiemenge only; \
+                 send {MSCONS_PID_ENERGIEMENGE_LEISTUNGSMAX} to report a Leistungsmaximum"
+            )
+            .into(),
+        });
+    }
+
+    // Up to two maxima. The AHB permits one or two; more would exceed the
+    // segment-group repeat the message allows.
+    if maxima.len() > 2 {
+        return Err(RenderError::InsufficientPayload {
+            message_type: mt.into(),
+            detail: format!(
+                "at most two Monatsleistungsmaxima may be sent, got {}",
+                maxima.len()
+            )
+            .into(),
+        });
+    }
+
+    for m in maxima {
+        let (Some(value), Some(period)) = (
+            m.get("quantity").and_then(|v| v.as_str()),
+            m.get("period").and_then(|v| v.as_str()),
+        ) else {
+            return Err(missing("leistungsmaxima[].{quantity,period}"));
+        };
+        // `610` for a `CCYYMM` period, `102` for `CCYYMMDD` — the caller knows
+        // which Leistungspreissystem applies.
+        let period_format = m
+            .get("period_format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("610");
+        // Power, not energy.
+        let unit = m.get("unit").and_then(|v| v.as_str()).unwrap_or("KWT");
+        checked_unit(unit)?;
+
+        mp = mp
+            .next_line_item()
+            .quantity(qualifier(m), value, unit)
+            .leistungsperiode(period, period_format);
+    }
+
+    mp.done()
+        .serialize()
+        .map_err(|e| RenderError::BuilderError(e.to_string()))
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Resolve the active `Release` for `(message_type, track)` from today's registry.
@@ -759,25 +1121,15 @@ fn active_release(message_type: MessageType, track: &ReleaseTrack) -> Option<Rel
         .map(|p| p.release().clone())
 }
 
-/// Return a `RenderError::InsufficientPayload` for intent-only message types.
-///
-/// MSCONS is the only type that cannot be rendered from workflow intent alone:
-/// it requires actual meter readings and quantities sourced externally from the
-/// metering data pipeline. All other EDIFACT types (ORDRSP, INVOIC, REMADV, …)
-/// are now handled by dedicated render functions above.
+/// Return a `RenderError::InsufficientPayload` for a message type with no
+/// dedicated renderer.
 fn intent_only(message_type: &str) -> RenderError {
-    let detail: Box<str> = match message_type {
-        "MSCONS" => "MSCONS requires actual meter readings, OBIS codes, and quantities — \
-             not included in the workflow intent payload. Provide metering data \
-             from the metering pipeline before dispatching via AS4."
-            .into(),
-        _ => format!(
-            "wire-format rendering for '{message_type}' is not implemented. \
-                 Add a render_{} function to edifact_renderer.rs.",
-            message_type.to_ascii_lowercase()
-        )
-        .into(),
-    };
+    let detail: Box<str> = format!(
+        "wire-format rendering for '{message_type}' is not implemented. \
+         Add a render_{} function to edifact_renderer.rs.",
+        message_type.to_ascii_lowercase()
+    )
+    .into();
     RenderError::InsufficientPayload {
         message_type: message_type.into(),
         detail,
@@ -879,13 +1231,6 @@ mod tests {
     }
 
     #[test]
-    fn intent_only_mscons_returns_insufficient_payload() {
-        let err = intent_only("MSCONS");
-        assert!(matches!(err, RenderError::InsufficientPayload { .. }));
-        assert!(is_insufficient_payload(&err));
-    }
-
-    #[test]
     fn utilmd_dtm_qualifier_by_pid() {
         assert_eq!(utilmd_dtm_qualifier(55001), "163");
         assert_eq!(utilmd_dtm_qualifier(55002), "164");
@@ -895,21 +1240,261 @@ mod tests {
     }
 
     #[test]
-    fn render_mscons_returns_insufficient_payload() {
+    fn render_mscons_without_the_identifying_tuple_is_a_missing_field() {
+        // A Summenzeitreihe is keyed by (MaBiS-ZP, Bilanzierungsmonat, Version).
+        // Rendering one without them would produce a message the BIKO cannot
+        // place on the settlement grid.
         let msg = fake_msg(
             "MSCONS",
             "9900987654321",
             serde_json::json!({
-                "type": "MovementDataRequired",
-                "pid": 13015_u32,
-                "malo": "DE0001234567890",
+                "pid": 13003_u32,
+                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
             }),
         );
         let result = render_to_wire_bytes(&msg, &test_registry("9900123456789"));
-        assert!(matches!(
-            result,
-            Err(RenderError::InsufficientPayload { .. })
-        ));
+        assert!(
+            matches!(result, Err(RenderError::MissingField { ref field, .. }) if field.contains("balancing_period")),
+            "expected a missing balancing_period, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn render_mscons_13015_carries_work_and_up_to_two_maxima() {
+        // AHB 3.2: SG9 repeats two to three times — once for the energy from
+        // the start of the calendar year to Lieferbeginn, then one or two
+        // monthly maxima, each with the month it fell in (DTM+306).
+        let msg = fake_msg(
+            "MSCONS",
+            "9900987654321",
+            serde_json::json!({
+                "pid": 13015_u32,
+                "sender_mp_id": "9900357000004",
+                "receiver_mp_id": "9900987654321",
+                "malo_id": "51238696781",
+                "arbeit": {
+                    "quantity": "184500.000",
+                    "from": "202601010000+00",
+                    "to": "202605010000+00",
+                },
+                "leistungsmaxima": [
+                    { "quantity": "412.5", "period": "202602" },
+                    { "quantity": "398.0", "period": "202601", "ersatzwert": true },
+                ],
+            }),
+        );
+        let wire =
+            render_to_wire_bytes(&msg, &test_registry("9900123456789")).expect("13015 must render");
+        let wire = String::from_utf8(wire).expect("utf-8");
+
+        // Work: DE 6063 `220` (Wahrer Wert), bounded by the billing period.
+        assert!(wire.contains("QTY+220:184500.000:KWH"), "{wire}");
+        assert!(wire.contains("DTM+163:202601010000?+00:303"), "{wire}");
+        assert!(wire.contains("DTM+164:202605010000?+00:303"), "{wire}");
+
+        // Maxima: power, each with the month it occurred in.
+        assert!(wire.contains("QTY+220:412.5:KWT"), "{wire}");
+        assert!(wire.contains("DTM+306:202602:610"), "{wire}");
+        // A substitute maximum must be declared as one, not reported as measured.
+        assert!(wire.contains("QTY+67:398.0:KWT"), "{wire}");
+        assert!(wire.contains("DTM+306:202601:610"), "{wire}");
+
+        // Three line items: one work entry plus two maxima.
+        assert_eq!(wire.matches("LIN+").count(), 3, "{wire}");
+    }
+
+    #[test]
+    fn render_mscons_13015_refuses_more_than_two_maxima() {
+        let msg = fake_msg(
+            "MSCONS",
+            "9900987654321",
+            serde_json::json!({
+                "pid": 13015_u32,
+                "malo_id": "51238696781",
+                "arbeit": { "quantity": "1", "from": "202601010000+00", "to": "202602010000+00" },
+                "leistungsmaxima": [
+                    { "quantity": "1", "period": "202601" },
+                    { "quantity": "2", "period": "202602" },
+                    { "quantity": "3", "period": "202603" },
+                ],
+            }),
+        );
+        let result = render_to_wire_bytes(&msg, &test_registry("9900123456789"));
+        assert!(
+            matches!(result, Err(RenderError::InsufficientPayload { .. })),
+            "expected a refusal, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn each_mscons_use_case_carries_its_own_bgm_document_code() {
+        // BGM DE 1001 names what kind of document the message is, and the
+        // receiver routes by it. It is not constant across MSCONS: sending the
+        // default `7` would label a Summenzeitreihe a Prozessdatenbericht.
+        for (pid, expected) in [
+            (13003_u64, "BGM+BK"), // Zeitreihen im Rahmen der Bilanzkreisabrechnung
+            (13023, "BGM+Z46"),    // Redispatch
+            (13015, "BGM+Z27"),    // Bewegungsdaten im Kalenderjahr vor Lieferbeginn
+            (13016, "BGM+Z28"),    // Energiemenge und Leistungsmaximum
+            (13019, "BGM+7"),      // Prozessdatenbericht
+        ] {
+            let payload = if pid == 13003 || pid == 13023 {
+                serde_json::json!({
+                    "pid": pid,
+                    "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
+                    "balancing_period": "202606",
+                    "version": "20260714050000+00",
+                    "intervals": [
+                        { "from": "202606010000+00", "to": "202606010015+00", "quantity_kwh": "1" },
+                    ],
+                })
+            } else {
+                serde_json::json!({
+                    "pid": pid,
+                    "malo_id": "51238696781",
+                    "arbeit": {
+                        "quantity": "1",
+                        "from": "202601010000+00",
+                        "to": "202602010000+00",
+                    },
+                })
+            };
+            let msg = fake_msg("MSCONS", "9900987654321", payload);
+            let wire = render_to_wire_bytes(&msg, &test_registry("9900123456789"))
+                .unwrap_or_else(|e| panic!("PID {pid} must render: {e:?}"));
+            let wire = String::from_utf8(wire).expect("utf-8");
+            assert!(
+                wire.contains(expected),
+                "PID {pid} must carry {expected}, got: {wire}"
+            );
+        }
+    }
+
+    #[test]
+    fn render_mscons_13019_refuses_a_leistungsmaximum() {
+        // The AHB marks no Leistungsperiode row for 13019, so a maximum sent
+        // under it would carry no period to be attributed to.
+        let msg = fake_msg(
+            "MSCONS",
+            "9900987654321",
+            serde_json::json!({
+                "pid": 13019_u32,
+                "malo_id": "51238696781",
+                "arbeit": { "quantity": "1", "from": "202601010000+00", "to": "202602010000+00" },
+                "leistungsmaxima": [{ "quantity": "5", "period": "202601" }],
+            }),
+        );
+        let result = render_to_wire_bytes(&msg, &test_registry("9900123456789"));
+        assert!(
+            matches!(result, Err(RenderError::InsufficientPayload { ref detail, .. }) if detail.contains("13016")),
+            "expected a refusal pointing at 13016, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn render_mscons_refuses_an_unrecognised_unit() {
+        // DE 6411 is a closed code list (MIG 2.5). A typo must not reach the
+        // wire as a syntactically valid but uninterpretable unit.
+        let msg = fake_msg(
+            "MSCONS",
+            "9900987654321",
+            serde_json::json!({
+                "pid": 13015_u32,
+                "malo_id": "51238696781",
+                "arbeit": {
+                    "quantity": "1",
+                    "from": "202601010000+00",
+                    "to": "202602010000+00",
+                    "unit": "kWh",
+                },
+            }),
+        );
+        let result = render_to_wire_bytes(&msg, &test_registry("9900123456789"));
+        assert!(
+            matches!(result, Err(RenderError::InsufficientPayload { .. })),
+            "lower-case `kWh` is not the DE 6411 code `KWH`, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn render_mscons_refuses_an_unsupported_pid() {
+        // A payload for an unimplemented Anwendungsfall rendered in the
+        // Summenzeitreihe shape would be syntactically valid and mean something
+        // the sender did not say.
+        let msg = fake_msg(
+            "MSCONS",
+            "9900987654321",
+            serde_json::json!({
+                "pid": 13021_u32,
+                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
+                "balancing_period": "202606",
+                "version": "20260714050000+00",
+                "intervals": [
+                    { "from": "202606010000+00", "to": "202606010015+00", "quantity_kwh": "1" },
+                ],
+            }),
+        );
+        let result = render_to_wire_bytes(&msg, &test_registry("9900123456789"));
+        assert!(
+            matches!(result, Err(RenderError::InsufficientPayload { ref detail, .. }) if detail.contains("13021")),
+            "expected a refusal naming the PID, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn render_mscons_renders_the_redispatch_ausfallarbeit_series() {
+        // 13023 shares the summed-series shape, so it renders through the same
+        // path as 13003.
+        let msg = fake_msg(
+            "MSCONS",
+            "9900987654321",
+            serde_json::json!({
+                "pid": 13023_u32,
+                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
+                "balancing_period": "202606",
+                "version": "20260714050000+00",
+                "intervals": [
+                    { "from": "202606010000+00", "to": "202606010015+00", "quantity_kwh": "7.5" },
+                ],
+            }),
+        );
+        let wire =
+            render_to_wire_bytes(&msg, &test_registry("9900123456789")).expect("13023 must render");
+        let wire = String::from_utf8(wire).expect("utf-8");
+        // DE 6063 `79` = Energiemenge summiert (MSCONS AHB 3.2, SG10 QTY).
+        assert!(wire.contains("QTY+79:7.5:KWH"), "{wire}");
+        assert!(wire.contains("DTM+293:20260714050000?+00:304"), "{wire}");
+    }
+
+    #[test]
+    fn render_mscons_emits_the_summenzeitreihe_slots() {
+        let msg = fake_msg(
+            "MSCONS",
+            "9900077000006",
+            serde_json::json!({
+                "pid": 13003_u32,
+                "sender_mp_id": "9900357000004",
+                "receiver_mp_id": "9900077000006",
+                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
+                "balancing_period": "202606",
+                "version": "20260714050000+00",
+                "intervals": [
+                    { "from": "202606010000+00", "to": "202606010015+00", "quantity_kwh": "12.5" },
+                    { "from": "202606010015+00", "to": "202606010030+00", "quantity_kwh": "13.0" },
+                ],
+            }),
+        );
+        let wire = render_to_wire_bytes(&msg, &test_registry("9900123456789"))
+            .expect("MSCONS 13003 must render");
+        let wire = String::from_utf8(wire).expect("utf-8");
+
+        assert!(wire.contains("DTM+492:202606:610"), "{wire}");
+        assert!(wire.contains("DTM+293:20260714050000?+00:304"), "{wire}");
+        assert!(wire.contains("QTY+79:12.5:KWH"), "{wire}");
+        assert!(wire.contains("QTY+79:13.0:KWH"), "{wire}");
+        // Every quantity carries its own slot bounds.
+        assert_eq!(wire.matches("DTM+163:").count(), 2, "{wire}");
+        assert_eq!(wire.matches("DTM+164:").count(), 2, "{wire}");
     }
 
     #[test]

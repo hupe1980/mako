@@ -58,7 +58,7 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
             return Ok(());
         }
         // Batch INSERT via unnest() — one round-trip per batch.
-        // ON CONFLICT (malo_id, dtm_from, obis_code_norm) is the primary key.
+        // ON CONFLICT (tenant, malo_id, dtm_from, obis_code_norm) is the primary key.
         let malo_ids: Vec<&str> = reads.iter().map(|r| r.malo_id.as_str()).collect();
         let melo_ids: Vec<Option<&str>> = reads.iter().map(|r| r.melo_id.as_deref()).collect();
         let dtm_froms: Vec<OffsetDateTime> = reads.iter().map(|r| r.dtm_from).collect();
@@ -72,31 +72,60 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
         // `1-0:1.8.0*255` are the same register.
         let obis_norms: Vec<String> = reads
             .iter()
-            .map(|r| {
-                r.obis_code.as_deref().map_or_else(String::new, |s| {
-                    s.parse::<metering::obis::ObisCode>()
-                        .map_or_else(|_| s.to_owned(), |c| c.to_string())
-                })
-            })
+            .map(|r| normalise_obis(r.obis_code.as_deref()))
             .collect();
-        // Provenance is carried on the record.
+        // Provenance travels with the reading: `allocation_version` carries the
+        // MaBiS vorläufig/endgültig distinction, and `sender_mp_id` carries §22
+        // MessZV per-interval MSB attribution across a WiM switch.
         let sources: Vec<&str> = reads.iter().map(|r| r.source.as_str()).collect();
         let tenants: Vec<&str> = reads.iter().map(|r| r.tenant.as_str()).collect();
+        let push_sessions: Vec<Option<&str>> =
+            reads.iter().map(|r| r.push_session.as_deref()).collect();
+        let quality_warnings: Vec<Option<serde_json::Value>> =
+            reads.iter().map(|r| r.quality_warnings.clone()).collect();
+        let sender_mp_ids: Vec<Option<&str>> =
+            reads.iter().map(|r| r.sender_mp_id.as_deref()).collect();
+        let allocation_versions: Vec<&str> = reads
+            .iter()
+            .map(|r| r.allocation_version.as_str())
+            .collect();
+        let units: Vec<&str> = reads
+            .iter()
+            .map(|r| r.sparte.billing_unit().as_str())
+            .collect();
 
         sqlx::query(
             r"INSERT INTO meter_reads
                   (malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality,
-                   pid, sparte, obis_code, obis_code_norm, source, tenant)
+                   pid, sparte, obis_code, obis_code_norm, source, tenant,
+                   push_session, quality_warnings, sender_mp_id,
+                   allocation_version, unit)
               SELECT * FROM unnest(
                   $1::text[], $2::text[], $3::timestamptz[], $4::timestamptz[],
                   $5::numeric[], $6::text[], $7::int4[], $8::text[],
-                  $9::text[], $10::text[], $11::text[], $12::text[]
+                  $9::text[], $10::text[], $11::text[], $12::text[],
+                  $13::text[], $14::jsonb[], $15::text[], $16::text[], $17::text[]
               )
-              ON CONFLICT (malo_id, dtm_from, obis_code_norm) DO UPDATE
-                  SET quantity_kwh = EXCLUDED.quantity_kwh,
-                      quality     = EXCLUDED.quality,
-                      obis_code   = COALESCE(EXCLUDED.obis_code, meter_reads.obis_code),
-                      tenant      = EXCLUDED.tenant",
+              ON CONFLICT (tenant, malo_id, dtm_from, obis_code_norm) DO UPDATE
+                  SET quantity_kwh       = EXCLUDED.quantity_kwh,
+                      quality            = EXCLUDED.quality,
+                      obis_code          = COALESCE(EXCLUDED.obis_code, meter_reads.obis_code),
+                      quality_warnings   = COALESCE(EXCLUDED.quality_warnings,
+                                                    meter_reads.quality_warnings),
+                      sender_mp_id       = COALESCE(EXCLUDED.sender_mp_id,
+                                                    meter_reads.sender_mp_id),
+                      allocation_version = EXCLUDED.allocation_version,
+                      -- `valid_from_tx` doubles as the row version. The archival
+                      -- worker only marks a row archived if it still matches the
+                      -- version it exported, so bumping it here makes a write
+                      -- that races an in-flight export visible to that check.
+                      valid_from_tx      = now(),
+                      -- A row whose value changed after export no longer matches
+                      -- what Iceberg holds, so it is owed a fresh export. Leaving
+                      -- `archived` set would let partition release drop the
+                      -- correction and leave the stale cold-tier value as the
+                      -- only surviving copy.
+                      archived           = false",
         )
         .bind(&malo_ids as &[&str])
         .bind(&melo_ids as &[Option<&str>])
@@ -110,9 +139,61 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
         .bind(&obis_norms as &[String])
         .bind(&sources as &[&str])
         .bind(&tenants as &[&str])
+        .bind(&push_sessions as &[Option<&str>])
+        .bind(&quality_warnings as &[Option<serde_json::Value>])
+        .bind(&sender_mp_ids as &[Option<&str>])
+        .bind(&allocation_versions as &[&str])
+        .bind(&units as &[&str])
         .execute(&self.pool)
         .await
         .map_err(|e| EdmError::Database(e.to_string()))?;
+
+        // Drop any cached billing-period aggregate the new readings fall inside.
+        //
+        // `meter_billing_periods` is populated read-through, so a query issued
+        // mid-period caches a partial sum. Without this the cached total is
+        // returned for that period forever — including to `billingd` — because
+        // the read path prefers the cache and nothing else invalidates it.
+        let periods: Vec<(String, String, OffsetDateTime, OffsetDateTime)> = {
+            let mut acc: std::collections::HashMap<(&str, &str), (OffsetDateTime, OffsetDateTime)> =
+                std::collections::HashMap::new();
+            for r in reads {
+                let e = acc
+                    .entry((r.tenant.as_str(), r.malo_id.as_str()))
+                    .or_insert((r.dtm_from, r.dtm_to));
+                e.0 = e.0.min(r.dtm_from);
+                e.1 = e.1.max(r.dtm_to);
+            }
+            acc.into_iter()
+                .map(|((t, m), (from, to))| (t.to_owned(), m.to_owned(), from, to))
+                .collect()
+        };
+
+        for (tenant, malo_id, from, to) in periods {
+            if let Err(e) = sqlx::query(
+                r"DELETE FROM meter_billing_periods
+                  WHERE tenant  = $1
+                    AND malo_id = $2
+                    AND period_from <= $4::date
+                    AND period_to   >= $3::date",
+            )
+            .bind(&tenant)
+            .bind(&malo_id)
+            .bind(from.date())
+            .bind(to.date())
+            .execute(&self.pool)
+            .await
+            {
+                // The readings are committed; a stale aggregate is a wrong
+                // answer rather than a lost one, so it is surfaced and the
+                // ingest still succeeds.
+                tracing::warn!(
+                    %malo_id, error = %e,
+                    "edmd: could not invalidate cached billing period after ingest"
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -402,7 +483,11 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
                    arbeitsmenge_kwh, spitzenleistung_kw, quality, tenant)
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
               ON CONFLICT ON CONSTRAINT mbp_tenant_period_unique
-              DO NOTHING",
+              DO UPDATE
+                  SET arbeitsmenge_kwh   = EXCLUDED.arbeitsmenge_kwh,
+                      spitzenleistung_kw = EXCLUDED.spitzenleistung_kw,
+                      quality            = EXCLUDED.quality,
+                      computed_at        = now()",
         )
         .bind(&result.malo_id)
         .bind(result.period_from)
@@ -421,6 +506,7 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
 
     async fn update_gas_quality(
         &self,
+        tenant: &str,
         malo_id: &str,
         brennwert_kwh_per_m3: Option<&str>,
         zustandszahl: Option<&str>,
@@ -432,11 +518,13 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
               SET brennwert_kwh_per_m3 = COALESCE($2, brennwert_kwh_per_m3),
                   zustandszahl        = COALESCE($3, zustandszahl)
               WHERE malo_id = $1
+                AND tenant  = $4
                 AND (brennwert_kwh_per_m3 IS NULL OR zustandszahl IS NULL)",
         )
         .bind(malo_id)
         .bind(brennwert_kwh_per_m3)
         .bind(zustandszahl)
+        .bind(tenant)
         .execute(&self.pool)
         .await
         .map_err(|e| EdmError::Database(e.to_string()))?;
@@ -468,10 +556,10 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
             // 1. Insert correction audit record
             let row = sqlx::query(
                 r"INSERT INTO meter_read_corrections
-                      (malo_id, dtm_from, dtm_to,
+                      (malo_id, dtm_from, dtm_to, obis_code_norm,
                        original_kwh, original_quality, corrected_kwh, corrected_quality,
                        reason, source, corrected_by, process_id, pid, tenant)
-                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+                  VALUES ($1,$2,$3,$14,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
                   RETURNING correction_id",
             )
             .bind(&rec.malo_id)
@@ -487,6 +575,7 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
             .bind(rec.process_id)
             .bind(rec.pid.map(|p| p as i32))
             .bind(&rec.tenant)
+            .bind(normalise_obis(rec.obis_code.as_deref()))
             .fetch_one(&mut *tx)
             .await
             .map_err(|e| mako_edm::error::EdmError::Database(e.to_string()))?;
@@ -498,21 +587,29 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
 
             // 2. Overwrite the meter_reads row with the corrected value
             //    and increment the correction counter.
+            // Keyed on the full primary key, so a correction changes only the
+            // register it names.
+            //
+            // `allocation_version` advances to CORRECTION so mabis-syncd can
+            // find what changed since the last submission, and `archived` is
+            // reset so the corrected value is re-exported to the cold tier.
+            let obis_norm = normalise_obis(rec.obis_code.as_deref());
             sqlx::query(
-                // `tenant` is part of the WHERE: without it a correction crossed
-                // tenant boundaries and rewrote another operator's readings.
                 r"UPDATE meter_reads
-                  SET quantity_kwh     = $4,
-                      quality          = $5,
-                      correction_count = correction_count + 1
-                  WHERE malo_id  = $1
-                    AND dtm_from = $2
-                    AND dtm_to   = $3
-                    AND tenant   = $6",
+                  SET quantity_kwh       = $4,
+                      quality            = $5,
+                      correction_count   = correction_count + 1,
+                      allocation_version = 'CORRECTION',
+                      valid_from_tx      = now(),
+                      archived           = false
+                  WHERE malo_id        = $1
+                    AND dtm_from       = $2
+                    AND obis_code_norm = $3
+                    AND tenant         = $6",
             )
             .bind(&rec.malo_id)
             .bind(rec.dtm_from)
-            .bind(rec.dtm_to)
+            .bind(&obis_norm)
             .bind(rec.corrected_kwh) // 0010: NUMERIC(18,5)
             .bind(quality_to_str(rec.corrected_quality))
             .bind(&rec.tenant)
@@ -602,7 +699,20 @@ fn row_to_receipt(row: &sqlx::postgres::PgRow) -> Result<MeterDataReceipt, EdmEr
     })
 }
 
-fn quality_to_str(q: QualityFlag) -> &'static str {
+/// Canonical form of an OBIS code as it enters the primary key.
+///
+/// `1-0:1.8.0` and `1-0:1.8.0*255` name the same register, and an absent code
+/// is the empty-string sentinel used by single-register meters. Every writer
+/// goes through this: two spellings of one register would otherwise become two
+/// rows, and every OBIS-blind aggregate would count the interval twice.
+fn normalise_obis(obis_code: Option<&str>) -> String {
+    obis_code.map_or_else(String::new, |s| {
+        s.parse::<metering::obis::ObisCode>()
+            .map_or_else(|_| s.to_owned(), |c| c.to_string())
+    })
+}
+
+pub(crate) fn quality_to_str(q: QualityFlag) -> &'static str {
     match q {
         QualityFlag::Measured => "MEASURED",
         QualityFlag::Estimated => "ESTIMATED",

@@ -19,16 +19,17 @@ pub type TransactionId = Uuid;
 pub type InitialTransactionId = Uuid;
 /// External reference correlating a response to a prior request (UUID RFC 4122).
 pub type ReferenceId = Uuid;
-/// 13-digit market partner identifier.
-pub type MarketPartnerId = i64;
+/// 13-digit BDEW market partner identifier.
+///
+/// A string, not an integer: BDEW codes may carry leading zeros, which an
+/// integer representation silently destroys.
+pub use rubo4e::identifiers::MarktpartnerId as MarketPartnerId;
 
-/// Network location identifier — pattern `E[A-Z0-9]{9}[0-9]`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct NeloId(pub String);
+/// Netzlokations-ID — 11 characters, ASCII-Verfahren check digit.
+pub use rubo4e::identifiers::NeloId;
 
-/// Controllable resource identifier — pattern `C[A-Z0-9]{9}[0-9]`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SrId(pub String);
+/// Steuerbare-Ressource-ID — 11 characters, ASCII-Verfahren check digit.
+pub use rubo4e::identifiers::SrId;
 
 /// Either a network location ID or a controllable resource ID.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -40,16 +41,6 @@ pub enum LocationId {
     ControllableResource(SrId),
 }
 
-impl std::fmt::Display for NeloId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-impl std::fmt::Display for SrId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
 impl std::fmt::Display for LocationId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -134,17 +125,20 @@ pub enum StateUnknown {
 
 // ── MaLo Identification ───────────────────────────────────────────────────────
 
-/// Market location identifier — 11-digit string.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct MaloId(pub String);
+/// Marktlokations-ID — 11 digits with a BDEW check digit.
+///
+/// MaLo-Ident is the first binding API process in German MaKo, and this is the
+/// identifier every switch keys on. `Deserialize` validates the check digit, so
+/// a malformed ID is rejected at the boundary instead of entering the
+/// identification path.
+pub use rubo4e::identifiers::MaloId;
 
-/// Metering location identifier — pattern `DE\d{11}[A-Z,\d]{20}`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct MeloId(pub String);
+/// Messlokations-ID — 33 characters: ISO 3166-1 alpha-2 country code plus a
+/// 31-character alphanumeric body.
+pub use rubo4e::identifiers::MeloId;
 
-/// Technical resource identifier — pattern `D[A-Z0-9]{9}[0-9]`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct TrId(pub String);
+/// Technische-Ressource-ID — 11 characters, ASCII-Verfahren check digit.
+pub use rubo4e::identifiers::TrId;
 
 /// Energy flow direction at a market location.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

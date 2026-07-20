@@ -313,6 +313,72 @@ curl "http://tarifbd:9080/api/v1/comparison-feed?limit=2&cursor=2026-07-17T10:00
 
 ---
 
+## B2B Angebot as BO4E
+
+`tarifbd` emits typed BO4E for its tariff data (`Tarifinfo`, `Tarifpreisblatt`),
+and a B2B quotation is emitted the same way — a quotation is the natural CPQ/ERP
+interchange payload, which is the point of the format.
+
+`GET /api/v1/angebote/{id}/comparison` prices the scenarios, returns the BO4E
+document under `bo4e`, and persists it to `angebote.bo4e`.
+
+### Structure
+
+BO4E nests one level deeper than the internal breakdown, and the extra level
+carries real meaning:
+
+```text
+Angebot                     one quotation      — angebotsnummer, bindefrist, sparte
+└── Angebotsvariante        one scenario       — angebotsstatus, gesamtkosten, gesamtmenge
+    └── Angebotsteil        one supply point   — lieferstellenangebotsteil (Marktlokation),
+        │                                        lieferzeitraum, gesamtkostenangebotsteil
+        └── Angebotsposition  one cost line    — positionsbezeichnung, positionskosten,
+                                                 positionsmenge, positionspreis
+```
+
+The internal `PositionCostBreakdown` conflated the supply point with its cost
+lines. Splitting them is what makes the payload interchangeable: a receiving ERP
+reads `lieferstellenangebotsteil` for the Marktlokation and `positionen` for what
+was charged against it.
+
+### Field mapping
+
+| Internal | BO4E |
+|---|---|
+| `angebotsnummer` | `Angebot.angebotsnummer` |
+| `gueltig_bis` | `Angebot.bindefrist` — BO4E's own term for the binding period |
+| `status` | `Angebotsvariante.angebotsstatus` |
+| `jahreskosten_netto_eur` | `Angebotsvariante.gesamtkosten` (`Betrag`, EUR) |
+| `jahresverbrauch_kwh` | `Angebotsteil.gesamtmengeangebotsteil` (`Menge`, kWh) |
+| `malo_id` | `Angebotsteil.lieferstellenangebotsteil[].marktlokationsId` |
+| supply / NNE / KA / levies | one `Angebotsposition` each |
+
+`ANGELEGT` maps to `Angebotsstatus::Konzeption`, not `Unverbindlich`: it has not
+been sent, so it is not yet an offer to the counterparty at all.
+
+### Extension points
+
+`Angebotsvariante` has no discount or label field and `Angebotsteil` has no
+product code, so those ride in `zusatz_attribute` — BO4E's sanctioned extension
+point, rather than a parallel private blob:
+
+| Attribute | Carries |
+|---|---|
+| `mako.angebot.variante.label` | scenario name |
+| `mako.angebot.variante.rabattProzent` | discount applied to the Arbeitspreis |
+| `mako.angebot.variante.istBasis` | marks the base scenario |
+| `mako.angebot.teil.produktCode` | internal product code |
+| `mako.angebot.teil.standortBezeichnung` | free-text site label |
+
+### Two deliberate omissions
+
+A **zero cost line is omitted**, not sent as `0.00`: BO4E cannot express "this
+levy does not apply here", and a receiving ERP cannot tell an exemption from an
+unpriced position.
+
+An **invalid MaLo-ID yields no `lieferstellenangebotsteil`** rather than a
+Marktlokation carrying a bad key — `MaloId` validates the BDEW check digit.
+
 ## Database schema
 
 ### `products`
@@ -388,6 +454,7 @@ Content-Type: application/json
 | `list_expiring_contracts` | MaLo→product assignments ending within N days (churn prevention) |
 | `list_angebote` | B2B quotations by status (ANGELEGT/VERSANDT/ANGENOMMEN/…) |
 | `get_angebot` | Full Angebot with enriched positions and variant comparisons |
+| — | The BO4E `Angebot` document is returned by `GET /angebote/{id}/comparison` and stored in `angebote.bo4e` |
 | `get_angebot_summary` | Plain-text Angebot summary for sales staff review |
 | `check_41a_epex_status` | §41a compliance: are tomorrow's EPEX prices imported? CRITICAL/WARNING/OK |
 | `get_product_energiemix` | §42 EnWG Energiemix disclosure (CO₂, fuel mix, certification) |

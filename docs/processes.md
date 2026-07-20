@@ -56,7 +56,7 @@ of work from the business perspective and the unit of implementation in the
 | GeLi Gas | 10 Werktage |
 | WiM Gas | 10 Werktage |
 
-Saturday counts as a Werktag; Sundays and public holidays do not.
+Saturdays, Sundays and public holidays are not Werktage; 24.12. and 31.12. count as holidays.
 Deadline arithmetic uses German local time (CET/CEST) — an off-by-one-hour error
 at DST transitions constitutes a regulatory deadline violation.
 
@@ -457,7 +457,7 @@ workflow for correlation; no separate receipt-only workflow exists.
 
 **Regulatory basis:** BK6-24-174 (Beschluss 24.10.2024, gültig ab 06.06.2025)
 
-**APERAK Frist:** **5 Werktage** (Samstag = Werktag)
+**APERAK Frist:** **5 Werktage** (Samstag zählt nicht)
 
 WiM regulates the competitive metering point market. The key processes from the LF
 perspective are: MSB-Wechsel (when the customer switches their metering service

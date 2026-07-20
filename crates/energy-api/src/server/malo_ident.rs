@@ -119,7 +119,7 @@ impl MaloRegistry for StaticMaloRegistry {
             .identification_parameter_id
             .as_ref()
             .and_then(|id| id.malo_id.as_ref())
-            .map(|m| m.0.as_str())
+            .map(rubo4e::identifiers::MaloId::as_ref)
             .unwrap_or("");
         Ok(self
             .entries

@@ -7,9 +7,7 @@
 //!
 //! | PID   | Direction  | Description |
 //! |-------|------------|-------------|
-//! | 17003 | LF → MSB   | Beauftragung zur Änderung der Technik (Gas) |
-//! | 17007 | LF/NB → NB | Bestellung und Abbestellung von Werten ESA |
-//! | 17008 | LF → NB    | Abbestellung von Werten |
+//! | 17011 | LF → MSB   | Beauftragung zur Änderung der Technik (Messlokationsänderung Strom) |
 //! | 17118 | MSB → MSB  | Bestellung einer Konfigurationsänderung |
 //! | 17121 | NB → MSB   | Bestellung Änderung (NB an MSB, GPKE Teil 3) |
 //! | 19003 | NB/MSB → LF| Fortführungsbestätigung |
@@ -17,8 +15,9 @@
 //! | 19005 | MSB → LF   | Auftragsbestätigung der Änderung der Technik |
 //! | 19006 | MSB → LF   | Ablehnung der Änderung der Technik |
 //! | 19007 | MSB → LF   | Ablehnung Anforderung Messwerte |
-//! | 19011 | NB/MSB → ? | Bestätigung der Ab-/Bestellung von Werten für ESA |
-//! | 19012 | NB/MSB → ? | Ablehnung der Ab-/Bestellung von Werten für ESA |
+//!
+//! The ESA Ab-/Bestellung PIDs (ORDERS 17007, ORDRSP 19011/19012/19013/19014)
+//! belong to [`crate::wertebestellung`], which models their own lifecycle.
 //!
 //! # Regulatory basis
 //!
@@ -43,11 +42,9 @@ pub const WORKFLOW_NAME: &str = "wim-technik-aenderung";
 ///
 /// | PID   | Description |
 /// |-------|-------------|
-/// | 17003 | Beauftragung Änderung Technik Gas (LF → MSB) |
-/// | 17007 | Bestellung und Abbestellung von Werten ESA |
-/// | 17008 | Abbestellung von Werten |
+/// | 17011 | Beauftragung zur Änderung der Technik (Messlokationsänderung Strom) |
 /// | 17118 | Bestellung Konfigurationsänderung (MSB → MSB) |
-pub const ORDERS_PIDS: &[u32] = &[17003, 17007, 17008, 17118];
+pub const ORDERS_PIDS: &[u32] = &[17011, 17118];
 
 /// ORDRSP PIDs received in response to technical change requests.
 ///
@@ -58,12 +55,10 @@ pub const ORDERS_PIDS: &[u32] = &[17003, 17007, 17008, 17118];
 /// | 19005 | Auftragsbestätigung der Änderung der Technik |
 /// | 19006 | Ablehnung der Änderung der Technik |
 /// | 19007 | Ablehnung Anforderung Messwerte |
-/// | 19011 | Bestätigung der Ab-/Bestellung von Werten für ESA |
-/// | 19012 | Ablehnung der Ab-/Bestellung von Werten für ESA |
-pub const ORDRSP_PIDS: &[u32] = &[19003, 19004, 19005, 19006, 19007, 19011, 19012];
+pub const ORDRSP_PIDS: &[u32] = &[19003, 19004, 19005, 19006, 19007];
 
 /// Positive ORDRSP PIDs (confirmation).
-const ORDRSP_BESTAETIGUNG_PIDS: &[u32] = &[19003, 19005, 19011];
+const ORDRSP_BESTAETIGUNG_PIDS: &[u32] = &[19003, 19005];
 
 /// Deadline label for the response window (5 Werktage, WiM Strom).
 pub const ANTWORT_WINDOW_LABEL: &str = "wim-technik-aenderung-antwort";

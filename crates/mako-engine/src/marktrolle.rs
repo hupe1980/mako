@@ -100,6 +100,22 @@ pub enum Marktrolle {
     ///
     /// Issues Abrechnungssummenzeitreihe MSCONS (PID 13003) to BKV and NB-DZR.
     Biko,
+
+    /// Energieserviceanbieter (ESA) — energy service provider acting for the
+    /// Anschlussnutzer (PARTIN 37006, "Kommunikationsdaten des ESA Strom").
+    ///
+    /// **Strom only.** An ESA has no Zuordnung to a Marktlokation: its access to
+    /// values rests on the Anschlussnutzer's consent (§49 Abs. 2 Nr. 9 MsbG) and
+    /// a bilateral contract with the MSB, which §34 Abs. 2 S. 2 Nr. 10 MsbG makes
+    /// a mandatory, non-discriminatory Zusatzleistung.
+    ///
+    /// Sends REQOTE Anfrage, ORDERS 17007 (Bestellung/Abbestellung) and
+    /// ORDCHG 39002 (Stornierung); receives QUOTES 15003 and
+    /// ORDRSP 19011/19012/19013/19014, plus the values themselves.
+    ///
+    /// This role is for a deployment that **is** an ESA. An MSB *serving* an ESA
+    /// registers the inbound side under [`Marktrolle::Msb`].
+    Esa,
 }
 
 // ── DeploymentRoles ───────────────────────────────────────────────────────────
@@ -212,6 +228,12 @@ impl DeploymentRoles {
         Self::from_roles([Marktrolle::Nb])
     }
 
+    /// ESA-only deployment (energy service provider side).
+    #[must_use]
+    pub fn esa() -> Self {
+        Self::from_roles([Marktrolle::Esa])
+    }
+
     /// LF-only deployment (supplier side).
     #[must_use]
     pub fn lf() -> Self {
@@ -255,5 +277,28 @@ impl DeploymentRoles {
 impl FromIterator<Marktrolle> for DeploymentRoles {
     fn from_iter<T: IntoIterator<Item = Marktrolle>>(iter: T) -> Self {
         Self::from_roles(iter)
+    }
+}
+
+#[cfg(test)]
+mod esa_role_tests {
+    use super::*;
+
+    /// An ESA-only deployment activates exactly that role.
+    #[test]
+    fn esa_is_a_selectable_deployment_role() {
+        let roles = DeploymentRoles::esa();
+        assert!(roles.contains(Marktrolle::Esa));
+        assert!(!roles.contains(Marktrolle::Msb));
+        assert!(!roles.is_all());
+    }
+
+    /// An integrated deployment can be both: the MSB serves ESAs and the ESA
+    /// arm consumes values. The two register disjoint PID sets.
+    #[test]
+    fn msb_and_esa_can_be_held_together() {
+        let roles = DeploymentRoles::from_roles([Marktrolle::Msb, Marktrolle::Esa]);
+        assert!(roles.contains(Marktrolle::Msb));
+        assert!(roles.contains(Marktrolle::Esa));
     }
 }

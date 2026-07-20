@@ -137,7 +137,7 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 - WiM-Rechnung (INVOIC, PID 31003) — MSB billing
 - MSB-Rechnung (INVOIC, PID 31009)
 
-**APERAK Frist (WiM):** **5 Werktage** (Samstag zählt als Werktag; Sonntag und gesetzliche Feiertage nicht)
+**APERAK Frist (WiM):** **5 Werktage** (Samstag, Sonntag und gesetzliche Feiertage zählen nicht)
 
 **Laufende Verfahren:**
 
@@ -213,7 +213,7 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 - APERAK / CONTRL acknowledgements
 - **Does NOT cover** INVOIC billing or Mehr-/Mindermengen Gas — these belong to GaBi Gas (BK7 Bilanzierung)
 
-**APERAK Frist (GeLi Gas):** **10 Werktage** (Samstag zählt als Werktag; Sonntag und gesetzliche Feiertage nicht)
+**APERAK Frist (GeLi Gas):** **10 Werktage** (Samstag, Sonntag und gesetzliche Feiertage zählen nicht)
 
 **Sonstiges / Gemeinsame Mitteilungen:**
 - Gemeinsame Mitteilungen zu Datenformaten (BK6 + BK7 joint): <https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/835_mitteilungen_datenformate/Datenformate-node.html>
@@ -252,7 +252,7 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 | WiM (Strom) | `mako-wim` | **5 Werktage** | `fristen::add_werktage(d, 5, BdewMaKo)` |
 | GeLi Gas | `mako-geli-gas` | **10 Werktage** | `fristen::add_werktage(d, 10, BdewMaKo)` |
 
-> **Werktag rule:** Saturday counts as a Werktag. Sunday and public holidays do not.
+> **Werktag rule:** Saturdays, Sundays and public holidays are not Werktage (GPKE Teil 1). 24.12. and 31.12. count as holidays.
 
 > **Redispatch 2.0 deadlines are separate** — they use UTC wall-clock hours, not Werktage:
 > 6 h (`AcknowledgementDocument`), 24 h (`StatusRequest`), and 5 min (Activation response).

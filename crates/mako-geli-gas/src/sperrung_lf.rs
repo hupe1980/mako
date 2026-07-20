@@ -40,7 +40,7 @@
 //!
 //! - **BK7-24-01-009** — GeLi Gas 3.0 (Gas Sperr-/Entsperrprozesse Gas)
 //! - GNB must respond within **10 Werktage** (German business days)
-//! - Saturday counts as a Werktag; Sunday and public holidays do not
+//! - Saturdays, Sundays and public holidays are not Werktage
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -81,7 +81,7 @@ pub const ORDRSP_STORNO_PIDS: &[u32] = &[19128, 19129];
 ///
 /// BK7-24-01-009: the GNB must send ORDRSP within **10 Werktage** of receipt.
 /// Use `mako_engine::fristen::add_werktage(date, 10, BdewMaKo)` to compute the
-/// deadline. Saturday counts as a Werktag; Sunday and public holidays do not.
+/// deadline. Saturdays, Sundays and public holidays are not Werktage.
 pub const ANTWORT_WINDOW_LABEL: &str = "geli-gas-sperrung-lf-antwort-10wt";
 
 // ── Domain data ───────────────────────────────────────────────────────────────

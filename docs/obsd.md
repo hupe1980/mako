@@ -98,7 +98,7 @@ Deadlines are derived from the PID using conservative calendar-day approximation
 | Billing / PARTIN / INSRPT PIDs | `null` (no per-process deadline) | — |
 
 > **Conservative approximations:** 7 calendar days ≥ 5 Werktage in all cases
-> (Saturday counts as a Werktag; only Sundays and public holidays do not).
+> (Saturdays, Sundays and public holidays are not Werktage).
 > `obsd` therefore never marks a process as overdue before its true BNetzA deadline.
 > Exact Werktage arithmetic lives in `processd`/`mako-engine`; `obsd` uses the coarser
 > approximation for alerting.

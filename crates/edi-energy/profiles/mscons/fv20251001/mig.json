@@ -13,12 +13,14 @@
     "CTA",
     "COM",
     "UNS",
+    "NAD",
     "LOC",
     "DTM",
     "CCI",
     "LIN",
     "PIA",
     "QTY",
+    "DTM",
     "STS",
     "UNT"
   ],
@@ -65,9 +67,15 @@
       ],
       "qualifier_restrictions": {
         "1001": [
-          "7",
           "35",
-          "Z27"
+          "7",
+          "BK",
+          "Z27",
+          "Z28",
+          "Z39",
+          "Z41",
+          "Z42",
+          "Z46"
         ]
       }
     },

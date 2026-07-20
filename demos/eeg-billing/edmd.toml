@@ -4,6 +4,11 @@
 # edmd stores MSCONS meter readings and direct iMSys/MSB pushes.
 # einsd queries edmd to auto-fetch Einspeisemenge for EEG settlement.
 
+# Demo only. Without this, edmd refuses to start when no [oidc] section is
+# present: the disabled verifier admits every request as `dev-admin` holding
+# every market role, which satisfies every Cedar policy including GDPR erasure.
+allow_insecure_no_auth = true
+
 [http]
 addr = "0.0.0.0:8380"
 

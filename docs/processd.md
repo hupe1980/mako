@@ -464,7 +464,7 @@ All escalated decisions still generate an `anmeldung_decisions` row for §20 EnW
 
 ## MSB module — REQOTE auto-response
 
-When `processd` receives `de.mako.process.initiated` for PIDs 35001–35005 (REQOTE Preisanfrage from an nMSB), it **automatically dispatches a QUOTES response** sourced from the active `PreisblattMessung` in `marktd`. This eliminates the manual ERP trigger that previously risked APERAK ERC A97 deadline breach.
+When `processd` receives `de.mako.process.initiated` for PIDs 35001–35005 (REQOTE Preisanfrage from an nMSB), it **automatically dispatches a QUOTES response** sourced from the active `PreisblattMessung` in `marktd`. Dispatching from master data rather than from a manual ERP trigger is what keeps the response inside the APERAK ERC A97 deadline.
 
 ### Decision pipeline
 

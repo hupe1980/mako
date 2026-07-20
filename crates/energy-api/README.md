@@ -108,9 +108,53 @@ let app = Router::new()
 
 ---
 
+## Identifiers
+
+All BDEW identifiers are the validated types from `rubo4e::identifiers` —
+`MaloId`, `MeloId`, `NeloId`, `SrId`, `TrId`, `MarktpartnerId` — not local
+`String` newtypes.
+
+`Deserialize` enforces the check digit, so a malformed identifier is rejected
+**at the API boundary** rather than entering the identification path. MaLo-Ident
+is the first binding API process in German MaKo (mandatory since 06.06.2025,
+2-hour deadline) and a precondition for every supplier switch, so this is the
+point where a bad ID would otherwise propagate into a switch.
+
+`MarketPartnerId` is a string, not an `i64`: BDEW codes may carry leading zeros,
+which an integer representation silently destroys.
+
+Because the API layer and `mako-markt`'s domain layer now share these types, the
+API→domain conversion in `makod`'s `api_bridge` is a variant remap with no
+re-parsing.
+
+### Wire contract
+
+The `identificationParameterId` property names are pinned by a test against
+`maloIdentV1.yaml` at tag `1.0.0`: `maloId`, `tranchenIds`, `meloIds`,
+`meterNumbers`, `customerNumber`. Serde derives these from `rename_all =
+"camelCase"`, and unknown properties are *ignored* on deserialization — so a
+field rename in Rust would silently drop the value rather than error. Note
+`tranchenIds` is mixed German/English: a tidier `tranche_ids` in Rust would
+produce `trancheIds` and stop matching.
+
+## Specification version
+
+This crate implements **1.0.0**, the only tag in either spec repository.
+
+Release **2.0.0** was put out for consultation by Mitteilung Nr. 55 for
+01.10.2026, then **excluded** by Mitteilung Nr. 56: *"Die im Release 2.0.0 zur
+Konsultation gestellten Anpassungen an den API-Webdiensten sind nicht Bestandteil
+dieser Veröffentlichung."* Only API Guideline 1.0b binds on 01.10.2026. The 2.0.0
+material exists only on the `2026-07-31-consultation` branch, which is still
+moving; there is no `2.0.0` tag. See `spec_version::RELEASE_2_0_0_STATUS`.
+
+Specs live in two **separate** repositories: `EDI-Energy/api-electricity` for the
+electricity APIs and `EDI-Energy/api-directory-service` for the Verzeichnisdienst.
+
 ## Regulatory references
 
 - **BDEW API-Webdienste Strom V1.3** — REST/JSON channel specification
+- **API Guideline 1.0b** — binding from 01.10.2026
 - **§ 14a EnWG** — statutory basis for controllable consumption devices (iMS grid control)
 - **MsbG** — Messstellenbetriebsgesetz (smart meter rollout)
 - **BNetzA BK6-24-174** — WiM process documentation (PIDs 11021–11023 via this channel)

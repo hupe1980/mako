@@ -155,17 +155,18 @@ Every CLI flag has a corresponding environment variable with the `MARKTD_` prefi
 ## Configuration file (`marktd.toml`)
 
 ```toml
-addr       = "0.0.0.0:8180"
-tenant = "9900357000004"
+[http]
+addr = "0.0.0.0:8180"
 
-[database]
-url          = "postgres://marktd:secret@localhost/marktd"
-max_conn     = 20
+[storage.postgres]
+url             = "postgres://marktd:secret@localhost/marktd"
+max_connections = 20
+min_connections = 1
 
-[auth]
-issuer       = "https://auth.example.com"
-audience     = "marktd"
-jwks_refresh = 3600   # seconds
+[oidc]
+issuer            = "https://auth.example.com"
+audience          = "marktd"
+jwks_refresh_secs = 300
 ```
 
 ---
@@ -196,7 +197,7 @@ CREATE EXTENSION IF NOT EXISTS btree_gin;
 ## Authentication and authorization
 
 `marktd` uses OIDC/JWT bearer tokens. The JWKS endpoint is discovered from the issuer URL
-(`<issuer>/.well-known/jwks.json`) and refreshed in the background every `jwks_refresh` seconds.
+(`<issuer>/.well-known/jwks.json`) and refreshed in the background every `jwks_refresh_secs` seconds.
 
 Supported signing algorithms: **RS256, ES256, PS256** only.
 HS256 and HS512 are rejected — symmetric keys are not acceptable for public OIDC issuers.
@@ -254,9 +255,10 @@ Configure `makod` to push events to `marktd`:
 
 ```toml
 # makod.toml
-[erp]
-webhook_url    = "http://marktd:8180/api/v1/events"
-webhook_secret = "shared-hmac-secret"
+[webhook]
+erp_webhook_url = "http://erp:8000/events"   # empty → EventBus fan-out instead
+inbound_path    = "/api/v1/events"
+inbound_secret  = "env:MARKTD_INBOUND_SECRET"   # verifies X-Mako-Signature
 ```
 
 ---

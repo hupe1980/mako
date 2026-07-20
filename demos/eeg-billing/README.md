@@ -88,7 +88,7 @@ Expected output:
 ✓ POST /settle/2026/6 → 200
       settlement_eur=233.57  einspeisemenge_kwh=2880.0  status=calculated
 ✓ CloudEvent received: type=de.eeg.verguetung.berechnet
-✓ GET /settlements/2026/6 → status=calculated  einspeisemenge_kwh=2880.0  settlement_eur=233.57
+✓ GET /settlements?year=2026&month=6 → status=calculated  einspeisemenge_kwh=2880.0  settlement_eur=233.57
 All EEG billing smoke tests passed.
 ```
 
@@ -97,10 +97,10 @@ All EEG billing smoke tests passed.
 | Endpoint | Description |
 |---|---|
 | `http://localhost:9180/api/v1/anlagen/TR0000000001` | Plant registration details |
-| `http://localhost:9180/api/v1/anlagen/TR0000000001/settlements/2026/6` | Settlement receipt |
-| `http://localhost:8380/api/v1/billing-period/17835382035?period_from=2026-06-01&period_to=2026-07-01` | edmd billing period aggregate |
-| `http://localhost:9180/mcp` | einsd MCP server (14 tools) |
-| `http://localhost:8380/mcp` | edmd MCP server (10 tools) |
+| `http://localhost:9180/api/v1/anlagen/TR0000000001/settlements?year=2026&month=6` | Settlement receipt |
+| `http://localhost:8380/api/v1/billing-period/17835382035?from=2026-06-01&to=2026-07-01` | edmd billing period aggregate |
+| `http://localhost:9180/mcp` | einsd MCP server (18 tools) |
+| `http://localhost:8380/mcp` | edmd MCP server (14 tools) |
 | `http://localhost:8000/events` | ERP webhook event log |
 
 ## Other settlement models

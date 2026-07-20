@@ -41,6 +41,15 @@ pub struct ArchivedMeterRead {
     pub sparte: String,
 }
 
+/// Name callers query. Always a tenant-scoped view, never the physical table.
+const ARCHIVE_TABLE: &str = "meter_reads_archive";
+
+/// Internal name the unfiltered Iceberg table is registered under.
+///
+/// Caller-supplied SQL that names this directly bypasses the tenant scope, so
+/// `POST /api/v1/query/sql` rejects any reference to it.
+pub(crate) const ARCHIVE_PHYSICAL_TABLE: &str = "__meter_reads_archive_physical";
+
 // ── OlapEngine ────────────────────────────────────────────────────────────────
 
 /// DataFusion OLAP engine backed by the Iceberg cold-tier catalog.
@@ -112,6 +121,15 @@ impl OlapEngine {
     }
 
     /// Build a fresh DataFusion SessionContext with the latest Iceberg snapshot.
+    /// Build a DataFusion context in which `meter_reads_archive` is already
+    /// restricted to this tenant and to rows not subject to a GDPR erasure.
+    ///
+    /// The physical Iceberg table is registered under an internal name and the
+    /// public name is a view over it. Scoping is therefore structural: it holds
+    /// for every query in this module and for the caller-supplied SQL accepted
+    /// by `POST /api/v1/query/sql`, rather than depending on each call site
+    /// remembering to append a predicate. A MaLo-ID is not unique across
+    /// tenants, so an unscoped archive query returns other operators' data.
     async fn fresh_ctx(&self) -> anyhow::Result<SessionContext> {
         let table = self
             .catalog
@@ -123,8 +141,21 @@ impl OlapEngine {
             iceberg_datafusion::table::IcebergStaticTableProvider::try_new_from_table(table)
                 .await
                 .map_err(|e| anyhow::anyhow!("IcebergStaticTableProvider: {e}"))?;
-        ctx.register_table("meter_reads_archive", Arc::new(provider))
+        ctx.register_table(ARCHIVE_PHYSICAL_TABLE, Arc::new(provider))
             .map_err(|e| anyhow::anyhow!("register_table: {e}"))?;
+
+        let gdpr = self.gdpr_exclusion_clause().await;
+        let view_sql = format!(
+            "CREATE VIEW {public} AS SELECT * FROM {physical} \
+             WHERE tenant = '{tenant}'{gdpr}",
+            public = ARCHIVE_TABLE,
+            physical = ARCHIVE_PHYSICAL_TABLE,
+            tenant = escape_sql(&self.tenant),
+        );
+        ctx.sql(&view_sql)
+            .await
+            .map_err(|e| anyhow::anyhow!("tenant view: {e}"))?;
+
         Ok(ctx)
     }
 
@@ -446,4 +477,87 @@ fn escape_sql(s: &str) -> String {
 fn fmt_ts(dt: OffsetDateTime) -> String {
     dt.format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
+}
+
+// ── GDPR Art. 17 — cold-tier erasure planning ─────────────────────────────────
+
+/// One Iceberg data file holding rows for an erased MaLo.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ArchiveFileToRewrite {
+    /// Object-store path of the Parquet file.
+    pub file_path: String,
+    /// Rows in the file, across all MaLos it holds.
+    pub record_count: Option<u64>,
+    /// File size in bytes.
+    pub file_size_bytes: u64,
+}
+
+impl OlapEngine {
+    /// Plan the cold-tier work for a GDPR Art. 17 erasure.
+    ///
+    /// Returns the Iceberg data files that contain rows for `malo_id` within
+    /// this engine's tenant.
+    ///
+    /// The archive is append-only through this service: iceberg-rust 0.9.1
+    /// exposes only `fast_append` on a transaction, with no public API to remove
+    /// or rewrite data files. Physical deletion is therefore performed by an
+    /// external engine against this list, and recording it is what turns a
+    /// permanently-pending obligation into a dischargeable one.
+    ///
+    /// Read-time exclusion (`gdpr_exclusion_clause`) already hides the rows from
+    /// every query, so this is about the bytes on disk rather than about
+    /// visibility.
+    ///
+    /// # Errors
+    ///
+    /// Propagates catalog and scan-planning failures.
+    pub async fn plan_erasure_files(
+        &self,
+        malo_id: &str,
+    ) -> anyhow::Result<Vec<ArchiveFileToRewrite>> {
+        use futures::TryStreamExt as _;
+        use iceberg::expr::Reference;
+        use iceberg::spec::Datum;
+
+        let table = self
+            .catalog
+            .load_table(&self.table_ident)
+            .await
+            .map_err(|e| anyhow::anyhow!("load_table: {e}"))?;
+
+        // Both predicates prune by partition: `tenant` is the leading partition
+        // field, so a single-tenant erasure never opens another operator's
+        // files. `malo_id` prunes further by column statistics.
+        let predicate = Reference::new("tenant")
+            .equal_to(Datum::string(self.tenant.clone()))
+            .and(Reference::new("malo_id").equal_to(Datum::string(malo_id.to_owned())));
+
+        let scan = table
+            .scan()
+            .with_filter(predicate)
+            .select_empty()
+            .build()
+            .map_err(|e| anyhow::anyhow!("scan build: {e}"))?;
+
+        let tasks: Vec<_> = scan
+            .plan_files()
+            .await
+            .map_err(|e| anyhow::anyhow!("plan_files: {e}"))?
+            .try_collect()
+            .await
+            .map_err(|e| anyhow::anyhow!("plan_files collect: {e}"))?;
+
+        // One entry per distinct file: a scan may split a large file into
+        // several tasks, and rewriting is a per-file operation.
+        let mut seen = std::collections::BTreeMap::new();
+        for t in tasks {
+            seen.entry(t.data_file_path.clone())
+                .or_insert(ArchiveFileToRewrite {
+                    file_path: t.data_file_path,
+                    record_count: t.record_count,
+                    file_size_bytes: t.length,
+                });
+        }
+        Ok(seen.into_values().collect())
+    }
 }

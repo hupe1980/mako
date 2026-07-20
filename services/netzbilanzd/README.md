@@ -57,7 +57,9 @@ vnb_mp_id       = "9907324000007"   # 50Hertz / TenneT / Amprion / TransnetBW
 
 # ERP webhook receives all de.netzbilanz.* CloudEvents
 erp_webhook_url = "http://erp:9000/webhooks/mako"
-mcp_api_key     = "env:NETZBILANZD_MCP_API_KEY"
+
+[mcp]
+api_key = "env:NETZBILANZD_MCP_API_KEY"
 ```
 
 ## Quick start

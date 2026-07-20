@@ -40,9 +40,25 @@ use crate::{
     },
 };
 use mako_edm::{
-    domain::{BillingPeriodQuery, QualityFlag, Sparte as EdmSparte, TimeSeriesQuery},
+    domain::{
+        BillingPeriodQuery, IngestionSource, MeterRead, QualityFlag, Sparte as EdmSparte,
+        TimeSeriesQuery,
+    },
     repository::TimeSeriesRepository,
 };
+
+/// Map the `metering` Sparte onto the `mako-edm` domain Sparte.
+///
+/// The two enums carry the same variants; they are separate types because
+/// `metering` is I/O-free and `mako-edm` is the persistence-facing model.
+const fn edm_sparte_from_metering(s: metering::interval::Sparte) -> EdmSparte {
+    match s {
+        metering::interval::Sparte::Strom => EdmSparte::Strom,
+        metering::interval::Sparte::Gas => EdmSparte::Gas,
+        metering::interval::Sparte::Waerme => EdmSparte::Waerme,
+        metering::interval::Sparte::Wasser => EdmSparte::Wasser,
+    }
+}
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
@@ -74,10 +90,23 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/reading-orders/{id}/cancel",
             put(cancel_reading_order),
         )
+        .route("/api/v1/reading-orders/{id}/fail", put(fail_reading_order))
         // N7: Jahresablesung campaign scheduler (§40 Abs. 2 EnWG)
         .route(
             "/api/v1/reading-orders/campaign",
             post(jahresablesung_campaign),
+        )
+        .route(
+            "/api/v1/compliance/jahresablesung/{year}",
+            get(jahresablesung_compliance),
+        )
+        .route(
+            "/api/v1/gdpr/erasure/{malo_id}/archive-plan",
+            post(plan_gdpr_archive_erasure),
+        )
+        .route(
+            "/api/v1/gdpr/erasure/{malo_id}/archive-complete",
+            post(complete_gdpr_archive_erasure),
         )
         // M4: iMSys / SMGW direct push — bypasses EDIFACT for RLM/iMSys customers.
         // §41a EnWG dynamic tariffs require sub-hourly resolution;
@@ -217,11 +246,11 @@ async fn metrics(State(state): State<HandlerState>) -> impl IntoResponse {
     let pool = state.repo.pool();
 
     let meter_reads: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meter_reads")
-        .fetch_one(pool)
+        .fetch_one(state.repo.pool())
         .await
         .unwrap_or(0);
     let billing_periods: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meter_billing_periods")
-        .fetch_one(pool)
+        .fetch_one(state.repo.pool())
         .await
         .unwrap_or(0);
     let pool_size = pool.size();
@@ -501,11 +530,22 @@ async fn list_billing_periods(
             .into_response();
     }
 
-    let tenant = params
-        .tenant
-        .as_deref()
-        .unwrap_or(resource_tenant)
-        .to_owned();
+    // Cedar authorised the caller against `resource_tenant`, so the query must
+    // run against that same tenant. Binding a caller-supplied `?tenant=` would
+    // let a principal cleared for its own tenant read any other tenant's
+    // portfolio, since the parameter is never re-authorised.
+    if let Some(requested) = params.tenant.as_deref()
+        && requested != resource_tenant
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "tenant parameter does not match the authorised tenant",
+            })),
+        )
+            .into_response();
+    }
+    let tenant = resource_tenant.to_owned();
 
     let fmt = format_description!("[year]-[month]-[day]");
     let from_date = params
@@ -657,15 +697,19 @@ async fn get_lastgang(
     #[allow(clippy::collapsible_if)]
     if let Some(as_of) = as_of_ts {
         if let Ok(corrections) = sqlx::query(
-            r"SELECT DISTINCT ON (malo_id, dtm_from, dtm_to)
-                  malo_id, dtm_from, dtm_to, original_kwh, original_quality
+            // Keyed on the register as well as the timestamp: a MaLo may carry
+            // several OBIS codes at one instant, and restoring by timestamp
+            // alone would apply one register's prior value to all of them.
+            r"SELECT DISTINCT ON (malo_id, dtm_from, obis_code_norm)
+                  malo_id, dtm_from, dtm_to, obis_code_norm,
+                  original_kwh, original_quality
               FROM meter_read_corrections
               WHERE malo_id = $1
                 AND dtm_from >= $2
                 AND dtm_to   <= $3
                 AND corrected_at > $4
                 AND tenant   = $5
-              ORDER BY malo_id, dtm_from, dtm_to, corrected_at ASC",
+              ORDER BY malo_id, dtm_from, obis_code_norm, corrected_at ASC",
         )
         .bind(&malo_id)
         .bind(from)
@@ -682,13 +726,17 @@ async fn get_lastgang(
                     .unwrap_or(OffsetDateTime::UNIX_EPOCH);
                 let dtm_to: OffsetDateTime =
                     corr.try_get("dtm_to").unwrap_or(OffsetDateTime::UNIX_EPOCH);
-                let orig_kwh: String = corr.try_get("original_kwh").unwrap_or_default();
+                // `original_kwh` is NUMERIC(18,5), so it reads as `Decimal`.
+                let orig_kwh: Option<rust_decimal::Decimal> = corr.try_get("original_kwh").ok();
+                let corr_obis: String = corr.try_get("obis_code_norm").unwrap_or_default();
                 let orig_quality: &str = corr.try_get("original_quality").unwrap_or("MEASURED");
 
                 // Restore original values in the reads slice
                 for read in reads.iter_mut() {
-                    if read.dtm_from == dtm_from && read.dtm_to == dtm_to {
-                        if let Ok(kwh) = orig_kwh.parse() {
+                    let read_obis = read.obis_code.clone().unwrap_or_default();
+                    if read.dtm_from == dtm_from && read.dtm_to == dtm_to && read_obis == corr_obis
+                    {
+                        if let Some(kwh) = orig_kwh {
                             read.quantity_kwh = kwh;
                         }
                         read.quality = match orig_quality {
@@ -2058,6 +2106,9 @@ pub struct RunConfig {
     pub archive: Option<crate::config::ArchiveConfig>,
     /// ERP webhook URL for outbound CloudEvents (direct push + quality warnings).
     pub erp_webhook_url: Option<String>,
+    /// Request rate limits. Ingest endpoints accept unbounded batches, so an
+    /// unthrottled client can saturate the write path for every other tenant.
+    pub rate_limit: mako_service::RateLimitConfig,
 }
 
 /// Connect to the database, run migrations, register subscription, and serve.
@@ -2136,6 +2187,8 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
     let mcp_state = Arc::new(crate::mcp_server::EdmdMcpState {
         pool: pool.clone(),
         tenant: cfg.tenant.clone(),
+        marktd_url: cfg.marktd_url.clone(),
+        marktd_api_key: cfg.marktd_api_key.clone(),
         auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
             &cfg.mcp,
             cfg.oidc.clone(),
@@ -2189,11 +2242,19 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
 
     let pool_arc = Arc::new(pool);
 
-    let app = router(state)
-        .layer(Extension(cfg.cedar))
-        .layer(Extension(cfg.oidc))
-        .layer(Extension(pool_arc.clone()))
-        .merge(crate::mcp_server::router(mcp_state, cfg.shutdown.clone()));
+    // Both limiters apply: the keyed one bounds any single caller, the global
+    // one bounds their sum.
+    let app = mako_service::ServiceBuilder::new()
+        .merge(
+            router(state)
+                .layer(Extension(cfg.cedar))
+                .layer(Extension(cfg.oidc))
+                .layer(Extension(pool_arc.clone()))
+                .merge(crate::mcp_server::router(mcp_state, cfg.shutdown.clone())),
+        )
+        .with_tenant_rate_limit(cfg.rate_limit.clone())
+        .with_rate_limit(cfg.rate_limit)
+        .build();
 
     let listener = TcpListener::bind(cfg.listen).await?;
 
@@ -2517,9 +2578,19 @@ struct ReadingOrderRow {
 
 /// `POST /api/v1/reading-orders` — schedule a meter reading.
 async fn create_reading_order(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Json(req): Json<CreateReadingOrderRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "write-reading-order", &state.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     let id = uuid::Uuid::new_v4();
     let res = sqlx::query(
         "INSERT INTO ablese_auftraege
@@ -2554,9 +2625,19 @@ async fn create_reading_order(
 
 /// `GET /api/v1/reading-orders?malo_id=&status=&anlass=&limit=`
 async fn list_reading_orders(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Query(q): Query<ListReadingOrdersQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-reading-order", &state.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     let rows = sqlx::query_as::<_, ReadingOrderRow>(
         "SELECT id,malo_id,melo_id,anlass,auftraggeber_rolle,
                 ausfuehrender_msb,geplant_am,ausfuehrt_bis,status,
@@ -2586,9 +2667,19 @@ async fn list_reading_orders(
 
 /// `GET /api/v1/reading-orders/{id}`
 async fn get_reading_order(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Path(id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-reading-order", &state.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     let row = sqlx::query_as::<_, ReadingOrderRow>(
         "SELECT id,malo_id,melo_id,anlass,auftraggeber_rolle,
                 ausfuehrender_msb,geplant_am,ausfuehrt_bis,status,
@@ -2610,10 +2701,20 @@ async fn get_reading_order(
 
 /// `PUT /api/v1/reading-orders/{id}/complete`
 async fn complete_reading_order(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Path(id): Path<uuid::Uuid>,
     Json(req): Json<CompleteReadingOrderRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "write-reading-order", &state.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     let res = sqlx::query(
         "UPDATE ablese_auftraege
          SET status='AUSGEFUEHRT',
@@ -2644,9 +2745,19 @@ async fn complete_reading_order(
 
 /// `PUT /api/v1/reading-orders/{id}/cancel`
 async fn cancel_reading_order(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Path(id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "write-reading-order", &state.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     let res = sqlx::query(
         "UPDATE ablese_auftraege SET status='STORNIERT'
          WHERE id=$1 AND tenant=$2 AND status IN ('OFFEN','BEAUFTRAGT')",
@@ -2663,10 +2774,134 @@ async fn cancel_reading_order(
     }
 }
 
+/// Body for `PUT /api/v1/reading-orders/{id}/fail`.
+#[derive(Debug, serde::Deserialize)]
+struct FailReadingOrderRequest {
+    /// Ablesehindernis — why no reading could be taken.
+    grund: String,
+    /// Free-text detail for the field report.
+    #[serde(default)]
+    notiz: Option<String>,
+}
+
+/// Ablesehindernis codes a reading order may be failed with.
+const ABLESEHINDERNIS_GRUENDE: [&str; 7] = [
+    "KEIN_ZUTRITT",
+    "ZAEHLER_UNZUGAENGLICH",
+    "ZAEHLER_DEFEKT",
+    "ZAEHLER_NICHT_AUFFINDBAR",
+    "KUNDE_VERWEIGERT",
+    "ABLESUNG_UNPLAUSIBEL",
+    "SONSTIGES",
+];
+
+/// `PUT /api/v1/reading-orders/{id}/fail`
+///
+/// Records that a dispatched reading could not be taken, with the
+/// Ablesehindernis that prevented it.
+///
+/// Distinct from `/cancel`: a cancelled order is no longer owed, whereas a
+/// failed one still is. A failed JAHRESABLESUNG past its deadline remains a
+/// §40 Abs. 2 EnWG gap, so it keeps appearing in `list_overdue_reading_orders`
+/// until it is re-dispatched or the quantity is estimated under §40a EnWG.
+async fn fail_reading_order(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(req): Json<FailReadingOrderRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "write-reading-order", &state.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    if !ABLESEHINDERNIS_GRUENDE.contains(&req.grund.as_str()) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!("unknown Ablesehindernis `{}`", req.grund),
+                "expected": ABLESEHINDERNIS_GRUENDE,
+            })),
+        )
+            .into_response();
+    }
+
+    let row = sqlx::query(
+        "UPDATE ablese_auftraege
+            SET status            = 'FEHLGESCHLAGEN',
+                fehlschlag_grund  = $1,
+                fehlschlag_notiz  = $2,
+                fehlgeschlagen_am = now()
+          WHERE id = $3 AND tenant = $4 AND status IN ('OFFEN','BEAUFTRAGT')
+          RETURNING malo_id, anlass, ausfuehrt_bis, ausfuehrender_msb",
+    )
+    .bind(&req.grund)
+    .bind(&req.notiz)
+    .bind(id)
+    .bind(&state.tenant)
+    .fetch_optional(state.repo.pool())
+    .await;
+
+    let row = match row {
+        Ok(Some(r)) => r,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    use sqlx::Row as _;
+    let malo_id: String = row.try_get("malo_id").unwrap_or_default();
+    let anlass: String = row.try_get("anlass").unwrap_or_default();
+    let ausfuehrt_bis: Option<time::Date> = row.try_get("ausfuehrt_bis").ok().flatten();
+    let ausfuehrender_msb: Option<String> = row.try_get("ausfuehrender_msb").ok().flatten();
+
+    // The order is terminal but the reading is still owed, so the failure is
+    // announced rather than just recorded.
+    if let Some(ref webhook_url) = state.erp_webhook_url {
+        let client = mako_service::http::default_client();
+        let ce = serde_json::json!({
+            "specversion": "1.0",
+            "type": "de.edmd.reading.order.failed",
+            "source": format!("urn:edmd:tenant:{}:{}", state.tenant, malo_id),
+            "id": uuid::Uuid::new_v4().to_string(),
+            "time": OffsetDateTime::now_utc().to_string(),
+            "subject": malo_id,
+            "tenant": state.tenant,
+            "datacontenttype": "application/json",
+            "data": {
+                "order_id":          id.to_string(),
+                "malo_id":           malo_id,
+                "anlass":            anlass,
+                "grund":             req.grund,
+                "notiz":             req.notiz,
+                "ausfuehrt_bis":     ausfuehrt_bis.map(|d| d.to_string()),
+                "ausfuehrender_msb": ausfuehrender_msb,
+                "recommended_action":
+                    "Re-dispatch the reading, or estimate under §40a EnWG and document the basis",
+            }
+        });
+        post_ce_with_retry(&client, webhook_url, &ce).await;
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "id": id.to_string(),
+            "status": "FEHLGESCHLAGEN",
+            "grund": req.grund,
+            "still_owed": true,
+        })),
+    )
+        .into_response()
+}
+
 // ── Jahresablesung campaign (N7 — §40 Abs. 2 EnWG) ───────────────────────────
 
 #[derive(Debug, serde::Deserialize)]
-struct JahresablesungCampaignRequest {
+pub struct JahresablesungCampaignRequest {
     /// NB MP-ID (BDEW-Codenummer) — used to filter MaLos in the NB's grid area.
     pub nb_mp_id: String,
     /// Campaign year (defaults to current year).
@@ -2717,6 +2952,106 @@ async fn jahresablesung_campaign(
     State(state): State<HandlerState>,
     Json(req): Json<JahresablesungCampaignRequest>,
 ) -> impl IntoResponse {
+    match run_jahresablesung_campaign(
+        state.repo.pool(),
+        &state.tenant,
+        &state.marktd_url,
+        &state.marktd_api_key,
+        &req,
+    )
+    .await
+    {
+        Ok(outcome) => (StatusCode::CREATED, Json(outcome.into_json(&req))).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// What a campaign run did.
+pub struct CampaignOutcome {
+    /// SLP MaLos found in the NB's grid area.
+    pub total_malos: usize,
+    /// Reading orders created.
+    pub created: usize,
+    /// MaLos that already had an order for this campaign year.
+    pub skipped: usize,
+    /// Campaign year the orders were dated in.
+    pub year: i32,
+    /// Planned reading date.
+    pub geplant_am: time::Date,
+    /// Latest acceptable reading date.
+    pub ausfuehrt_bis: time::Date,
+}
+
+impl CampaignOutcome {
+    fn into_json(self, req: &JahresablesungCampaignRequest) -> serde_json::Value {
+        serde_json::json!({
+            "nb_mp_id": req.nb_mp_id,
+            "campaign_year": self.year,
+            "geplant_am": self.geplant_am.to_string(),
+            "ausfuehrt_bis": self.ausfuehrt_bis.to_string(),
+            "total_slp_malos_enumerated": self.total_malos,
+            "reading_orders_created": self.created,
+            "already_scheduled_skipped": self.skipped,
+            "legal_basis": "§40 Abs. 2 EnWG",
+        })
+    }
+}
+
+/// Why a campaign run could not complete.
+pub enum CampaignError {
+    /// `nb_mp_id` is not a 13-digit BDEW/DVGW Codenummer.
+    InvalidNbMpId,
+    /// `marktd` could not be reached or answered with an error.
+    Marktd(String),
+}
+
+impl CampaignError {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            Self::InvalidNbMpId => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "nb_mp_id must be a 13-digit BDEW/DVGW Codenummer",
+                })),
+            )
+                .into_response(),
+            Self::Marktd(detail) => (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({ "error": detail })),
+            )
+                .into_response(),
+        }
+    }
+
+    /// Human-readable reason, for callers that are not HTTP.
+    #[must_use]
+    pub fn detail(&self) -> String {
+        match self {
+            Self::InvalidNbMpId => "nb_mp_id must be a 13-digit BDEW/DVGW Codenummer".to_owned(),
+            Self::Marktd(d) => d.clone(),
+        }
+    }
+}
+
+/// Create the Jahresablesung reading orders for one NB's grid area.
+///
+/// Shared by the HTTP endpoint and the MCP tool so both raise identical orders.
+/// A second implementation would be a second §40 Abs. 2 EnWG obligation with its
+/// own idempotency rules.
+///
+/// # Errors
+///
+/// [`CampaignError`] when `nb_mp_id` is malformed or `marktd` cannot be read.
+/// Per-MaLo insert failures are logged and skipped: a campaign that aborts
+/// half-way leaves an unrepeatable partial state, whereas re-running is
+/// idempotent.
+pub async fn run_jahresablesung_campaign(
+    pool: &sqlx::PgPool,
+    tenant: &str,
+    marktd_url: &str,
+    marktd_api_key: &secrecy::SecretString,
+    req: &JahresablesungCampaignRequest,
+) -> Result<CampaignOutcome, CampaignError> {
     use secrecy::ExposeSecret as _;
 
     let year = req
@@ -2734,18 +3069,32 @@ async fn jahresablesung_campaign(
     });
 
     let max_malos = req.max_malos.unwrap_or(5_000).min(50_000);
-    let marktd_base = state.marktd_url.trim_end_matches('/').to_owned();
-    let api_key = state.marktd_api_key.expose_secret().to_owned();
+    let marktd_base = marktd_url.trim_end_matches('/').to_owned();
+    let api_key = marktd_api_key.expose_secret().to_owned();
     let client = mako_service::http::default_client();
 
-    // Enumerate SLP MaLos from marktd (paginated, max 500 per page).
+    // Enumerate the SLP MaLos in **this NB's** grid area (paginated, 500 per
+    // page). `zuordnungstyp=NB` with `rollencodenummer` restricts the result to
+    // MaLos whose Netzbetreiber role is held by `nb_mp_id`; without it the
+    // campaign enumerates every SLP MaLo in the market and creates reading
+    // orders for locations another NB is responsible for.
+    // A BDEW/DVGW Codenummer is 13 digits. Validating rather than escaping keeps
+    // the value out of the query string unless it is well formed.
+    let nb_mp_id = req.nb_mp_id.trim();
+    if nb_mp_id.len() != 13 || !nb_mp_id.chars().all(|c| c.is_ascii_digit()) {
+        return Err(CampaignError::InvalidNbMpId);
+    }
     let mut malos: Vec<String> = Vec::new();
     let mut page = 1i64;
     let page_size = 500i64;
 
     loop {
         let url = format!(
-            "{marktd_base}/api/v1/malo?bilanzierungsmethode=SLP&size={page_size}&page={page}"
+            "{marktd_base}/api/v1/malo\
+             ?bilanzierungsmethode=SLP\
+             &zuordnungstyp=NB\
+             &rollencodenummer={nb_mp_id}\
+             &size={page_size}&page={page}"
         );
         let mut get_req = client.get(&url);
         if !api_key.is_empty() {
@@ -2755,26 +3104,18 @@ async fn jahresablesung_campaign(
             Ok(r) => r,
             Err(e) => {
                 tracing::error!(error = %e, "edmd: campaign failed to reach marktd");
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    Json(serde_json::json!({ "error": format!("marktd unreachable: {e}") })),
-                )
-                    .into_response();
+                return Err(CampaignError::Marktd(format!("marktd unreachable: {e}")));
             }
         };
         if !resp.status().is_success() {
             let status = resp.status();
             tracing::error!(%status, "edmd: marktd list_malo returned error");
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": format!("marktd error: {status}") })),
-            )
-                .into_response();
+            return Err(CampaignError::Marktd(format!("marktd error: {status}")));
         }
         let body: serde_json::Value = match resp.json().await {
             Ok(v) => v,
             Err(e) => {
-                return (StatusCode::BAD_GATEWAY, e.to_string()).into_response();
+                return Err(CampaignError::Marktd(e.to_string()));
             }
         };
 
@@ -2818,9 +3159,9 @@ async fn jahresablesung_campaign(
                AND status IN ('OFFEN','BEAUFTRAGT','AUSGEFUEHRT')",
         )
         .bind(malo_id)
-        .bind(&state.tenant)
+        .bind(tenant)
         .bind(year)
-        .fetch_one(state.repo.pool())
+        .fetch_one(pool)
         .await
         .unwrap_or(0);
 
@@ -2835,11 +3176,11 @@ async fn jahresablesung_campaign(
              VALUES ($1,$2,'JAHRESABLESUNG','NB',$3,$4,$5)",
         )
         .bind(malo_id)
-        .bind(&state.tenant)
+        .bind(tenant)
         .bind(&req.ausfuehrender_msb)
         .bind(geplant_am)
         .bind(ausfuehrt_bis)
-        .execute(state.repo.pool())
+        .execute(pool)
         .await;
 
         match res {
@@ -2859,16 +3200,135 @@ async fn jahresablesung_campaign(
         "edmd: Jahresablesung campaign complete"
     );
 
+    Ok(CampaignOutcome {
+        total_malos,
+        created: usize::try_from(created).unwrap_or(usize::MAX),
+        skipped: usize::try_from(skipped).unwrap_or(usize::MAX),
+        year,
+        geplant_am,
+        ausfuehrt_bis,
+    })
+}
+
+/// `GET /api/v1/compliance/jahresablesung/{year}`
+///
+/// §40 Abs. 2 EnWG compliance report for a campaign year.
+///
+/// The obligation is to read each SLP Marktlokation annually. This reports
+/// whether that happened, broken down by what actually became of each order —
+/// which is the distinction that matters, because only `AUSGEFUEHRT` discharges
+/// the obligation. `STORNIERT` withdraws it; `FEHLGESCHLAGEN` leaves it
+/// outstanding with a documented Ablesehindernis; anything still `OFFEN` or
+/// `BEAUFTRAGT` past its deadline is simply late.
+///
+/// **Cedar action**: `read-reading-order`
+async fn jahresablesung_compliance(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(year): Path<i32>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-reading-order", &state.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let rows = sqlx::query(
+        r"SELECT status,
+                 count(*)                                        AS orders,
+                 count(*) FILTER (WHERE ausfuehrt_bis < CURRENT_DATE
+                                    AND status <> 'AUSGEFUEHRT') AS overdue
+          FROM   ablese_auftraege
+          WHERE  tenant = $1
+            AND  anlass = 'JAHRESABLESUNG'
+            AND  extract(year FROM geplant_am) = $2
+          GROUP BY status",
+    )
+    .bind(&state.tenant)
+    .bind(year)
+    .fetch_all(state.repo.pool())
+    .await;
+
+    let rows = match rows {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    use sqlx::Row as _;
+    let mut by_status = serde_json::Map::new();
+    let (mut total, mut ausgefuehrt, mut overdue) = (0i64, 0i64, 0i64);
+    for r in &rows {
+        let status: String = r.try_get("status").unwrap_or_default();
+        let orders: i64 = r.try_get("orders").unwrap_or(0);
+        let od: i64 = r.try_get("overdue").unwrap_or(0);
+        total += orders;
+        overdue += od;
+        if status == "AUSGEFUEHRT" {
+            ausgefuehrt = orders;
+        }
+        by_status.insert(status, serde_json::json!(orders));
+    }
+
+    // Reasons the failed readings could not be taken. The Ablesehindernis
+    // decides whether the NB may estimate under §40a EnWG or must re-dispatch.
+    let grounds = sqlx::query(
+        r"SELECT fehlschlag_grund, count(*) AS n
+          FROM   ablese_auftraege
+          WHERE  tenant = $1 AND anlass = 'JAHRESABLESUNG'
+            AND  extract(year FROM geplant_am) = $2
+            AND  status = 'FEHLGESCHLAGEN'
+          GROUP BY fehlschlag_grund",
+    )
+    .bind(&state.tenant)
+    .bind(year)
+    .fetch_all(state.repo.pool())
+    .await
+    .unwrap_or_default();
+
+    let mut by_grund = serde_json::Map::new();
+    for r in &grounds {
+        let g: Option<String> = r.try_get("fehlschlag_grund").ok().flatten();
+        let n: i64 = r.try_get("n").unwrap_or(0);
+        by_grund.insert(
+            g.unwrap_or_else(|| "UNBEKANNT".to_owned()),
+            serde_json::json!(n),
+        );
+    }
+
+    // Rate against orders raised, not against the SLP population: this service
+    // knows what was ordered, and `marktd` owns how many MaLos exist. A
+    // population-based rate computed here would overstate coverage whenever a
+    // MaLo was never scheduled at all.
+    #[allow(clippy::cast_precision_loss)]
+    let quote = if total > 0 {
+        ausgefuehrt as f64 / total as f64
+    } else {
+        0.0
+    };
+
     (
-        StatusCode::CREATED,
+        StatusCode::OK,
         Json(serde_json::json!({
-            "nb_mp_id": req.nb_mp_id,
-            "campaign_year": year,
-            "geplant_am": geplant_am.to_string(),
-            "ausfuehrt_bis": ausfuehrt_bis.to_string(),
-            "total_slp_malos_enumerated": total_malos,
-            "reading_orders_created": created,
-            "skipped_already_scheduled": skipped,
+            "campaign_year":      year,
+            "orders_total":       total,
+            "ausgefuehrt":        ausgefuehrt,
+            "ablesequote":        (quote * 10_000.0).round() / 10_000.0,
+            "ueberfaellig":       overdue,
+            "by_status":          by_status,
+            "fehlschlag_gruende": by_grund,
+            "legal_basis":        "§40 Abs. 2 EnWG (jährliche Ablesung), §40a EnWG (Schätzung)",
+            "note": "`ablesequote` is over orders raised, not over the SLP population — \
+                     a MaLo that was never scheduled has no order here. Cross-check the \
+                     population with marktd.",
         })),
     )
         .into_response()
@@ -2885,9 +3345,13 @@ pub struct DirectInterval {
     /// Interval end (RFC 3339 UTC).
     #[serde(with = "time::serde::rfc3339")]
     pub to: OffsetDateTime,
-    /// Energy quantity.  For Strom: kWh.  For Gas: m\u00b3 (converted to kWh inside).
+    /// Energy quantity, expressed in [`Self::unit`].
     pub value: Decimal,
-    /// Physical unit: `"kWh"` | `"m3"` | `"kW"` (instantaneous demand).
+    /// Physical unit the meter registered, parsed by
+    /// [`metering::interval::MeasurementUnit::parse_scaled`]: `kWh`/`MWh`/`GJ`/
+    /// `MJ`/`Wh` for energy, `m3`/`m\u00b3`/`l` for volume. It must be either the
+    /// unit the Sparte is measured in or the one it is billed in; anything else
+    /// is rejected rather than stored under a guessed interpretation.
     #[serde(default = "default_unit_kwh")]
     pub unit: String,
     /// Reading quality per BDEW Messwertstatus.
@@ -2992,6 +3456,80 @@ pub struct QualityReport {
 /// timestamps to nanoseconds, then calls the SIMD-friendly scoring function
 /// that auto-vectorises the hot loops to AVX2/NEON without platform-specific
 /// intrinsics or external TSDB dependencies.
+/// Persist a quality verdict to `quality_assessments`.
+///
+/// Every scoring path records one, so the table is a history of how a MaLo's
+/// data quality moved over time rather than a snapshot of the latest opinion.
+/// That history is what makes a billing dispute answerable: it shows when a gap
+/// appeared, when it was substituted, and what the grade was at the moment an
+/// invoice was raised.
+///
+/// Re-scoring a window supersedes the previous verdict for the same source
+/// rather than appending a duplicate.
+async fn record_quality_assessment(
+    pool: &sqlx::PgPool,
+    tenant: &str,
+    malo_id: &str,
+    period_from: OffsetDateTime,
+    period_to: OffsetDateTime,
+    source: &str,
+    q: &QualityReport,
+) {
+    let outliers =
+        i32::try_from(q.outlier_intervals.len() + q.spike_intervals.len()).unwrap_or(i32::MAX);
+    // Intervals the period should hold, derived from the observed cadence.
+    // `None` when a single interval leaves no cadence to infer.
+    let expected: Option<i32> = (q.intervals_accepted > 1).then(|| {
+        let span = (period_to - period_from).whole_seconds().max(0);
+        let slot = span / i64::try_from(q.intervals_accepted).unwrap_or(1).max(1);
+        i32::try_from(if slot > 0 { span / slot } else { 0 }).unwrap_or(i32::MAX)
+    });
+    let result = sqlx::query(
+        r"INSERT INTO quality_assessments
+              (malo_id, period_from, period_to, grade, interval_count, expected_count,
+               gaps_detected, zero_run, outlier_count, coverage_pct, billing_blocked,
+               source, tenant)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          ON CONFLICT (tenant, malo_id, period_from, period_to, source) DO UPDATE
+              SET grade           = EXCLUDED.grade,
+                  interval_count  = EXCLUDED.interval_count,
+                  expected_count  = EXCLUDED.expected_count,
+                  gaps_detected   = EXCLUDED.gaps_detected,
+                  zero_run        = EXCLUDED.zero_run,
+                  outlier_count   = EXCLUDED.outlier_count,
+                  coverage_pct    = EXCLUDED.coverage_pct,
+                  billing_blocked = EXCLUDED.billing_blocked,
+                  assessed_at     = now()",
+    )
+    .bind(malo_id)
+    .bind(period_from)
+    .bind(period_to)
+    .bind(q.grade)
+    .bind(i32::try_from(q.intervals_accepted).unwrap_or(i32::MAX))
+    .bind(expected)
+    .bind(i32::try_from(q.gaps_detected).unwrap_or(i32::MAX))
+    .bind(i32::try_from(q.zero_run_length).unwrap_or(i32::MAX))
+    .bind(outliers)
+    .bind(rust_decimal::Decimal::try_from(q.coverage_pct).unwrap_or_default())
+    // Only grade F blocks billing (`metering::QualityGrade::blocks_billing`);
+    // C is significant but still billable.
+    .bind(q.grade == "F")
+    .bind(source)
+    .bind(tenant)
+    .execute(pool)
+    .await;
+
+    if let Err(e) = result {
+        // The readings are already stored; a missing assessment is a gap in the
+        // audit history rather than lost data, so it is surfaced and the request
+        // still succeeds.
+        tracing::warn!(
+            malo_id, source, error = %e,
+            "edmd: could not record quality assessment"
+        );
+    }
+}
+
 fn compute_quality(
     accepted: &[&DirectInterval],
     period_start: OffsetDateTime,
@@ -3161,6 +3699,139 @@ async fn post_ce_with_retry(client: &reqwest::Client, url: &str, ce: &serde_json
 
 /// Internal implementation shared by Strom and Gas direct-push handlers.
 #[allow(clippy::too_many_lines)]
+/// Parse a caller-supplied quality flag from its wire spelling.
+///
+/// Returns `None` for anything outside the set, so an unrecognised flag is
+/// refused at the boundary rather than stored as `UNKNOWN` — a caller that
+/// asserts a quality we cannot interpret has made a claim about billability
+/// that must not be silently downgraded.
+fn quality_flag_from_wire(s: &str) -> Option<QualityFlag> {
+    match s.to_uppercase().as_str() {
+        "MEASURED" => Some(QualityFlag::Measured),
+        "ESTIMATED" => Some(QualityFlag::Estimated),
+        "SUBSTITUTED" => Some(QualityFlag::Substituted),
+        "CALCULATED" => Some(QualityFlag::Calculated),
+        "CORRECTED" => Some(QualityFlag::Corrected),
+        "PRELIMINARY" => Some(QualityFlag::Preliminary),
+        "FAULTY" => Some(QualityFlag::Faulty),
+        "UNKNOWN" => Some(QualityFlag::Unknown),
+        _ => None,
+    }
+}
+
+/// Outcome of running the V01–V10 engine over a batch, for the ingest response.
+pub(crate) struct BatchValidation {
+    pub(crate) issue_count: usize,
+    pub(crate) billing_block_count: usize,
+    pub(crate) rules: Vec<String>,
+}
+
+impl BatchValidation {
+    /// `true` when no rule fired.
+    pub(crate) fn is_clean(&self) -> bool {
+        self.issue_count == 0
+    }
+}
+
+/// Run V01–V10 over an ingest batch and annotate the rows each issue describes.
+///
+/// Every ingest family routes through here so a reading lands with the same
+/// quality record whichever door it came in by. Issues are attached to the rows
+/// they name rather than to the MaLo as a whole, so a downstream §17 MessZV
+/// substitution decision can see which intervals are actually implicated.
+///
+/// Validation annotates and never rejects: whether an interval is billable is a
+/// separate decision from whether it is stored, and discarding a suspect reading
+/// would destroy the evidence the Netzbetreiber needs to resolve it.
+pub(crate) fn validate_and_annotate(
+    batch: &mut [MeterRead],
+    source: &str,
+    malo_id: &str,
+) -> BatchValidation {
+    if batch.is_empty() {
+        return BatchValidation {
+            issue_count: 0,
+            billing_block_count: 0,
+            rules: Vec::new(),
+        };
+    }
+
+    let to_validate: Vec<metering::MeterInterval> = batch
+        .iter()
+        .map(|r| metering::MeterInterval {
+            from: r.dtm_from,
+            to: r.dtm_to,
+            value_kwh: r.quantity_kwh,
+            quality: metering::QualityFlag::Measured,
+            obis_code: r.obis_code.clone(),
+        })
+        .collect();
+
+    let report = metering::validation::validate_intervals(
+        &to_validate,
+        &metering::validation::ValidationConfig {
+            now: Some(OffsetDateTime::now_utc()),
+            ..Default::default()
+        },
+    );
+
+    let summary = BatchValidation {
+        issue_count: report.issues.len(),
+        billing_block_count: report.billing_block_count(),
+        rules: report
+            .issues
+            .iter()
+            .map(|i| i.rule_id.to_string())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+    };
+
+    if report.is_clean() {
+        return summary;
+    }
+
+    let warnings = serde_json::json!({
+        "has_warnings": true,
+        "issue_count": report.issues.len(),
+        "billing_block_count": report.billing_block_count(),
+        "has_errors": report.has_errors(),
+        "issues": report.issues.iter().map(|i| serde_json::json!({
+            "rule": i.rule_id.to_string(),
+            "message": i.message,
+            "blocks_billing": i.blocks_billing(),
+        })).collect::<Vec<_>>(),
+        "source": source,
+    });
+
+    tracing::warn!(
+        malo_id = %malo_id,
+        source = %source,
+        issue_count = report.issues.len(),
+        billing_block_count = report.billing_block_count(),
+        "edmd: ingest validation issues (§17 MessZV)"
+    );
+
+    for (idx, read) in batch.iter_mut().enumerate() {
+        if !report.issues.iter().any(|i| i.interval_index == Some(idx)) {
+            continue;
+        }
+        // A row may already carry a session-level quality summary from Hampel
+        // scoring. The two describe different things, so the rule findings are
+        // added alongside it rather than replacing it.
+        read.quality_warnings = Some(match read.quality_warnings.take() {
+            Some(serde_json::Value::Object(mut existing)) => {
+                existing.insert("validation".to_owned(), warnings.clone());
+                existing.insert("has_warnings".to_owned(), serde_json::Value::Bool(true));
+                serde_json::Value::Object(existing)
+            }
+            _ => warnings.clone(),
+        });
+    }
+
+    summary
+}
+
 async fn post_direct_reads_inner(
     state: &HandlerState,
     malo_id: &str,
@@ -3186,16 +3857,37 @@ async fn post_direct_reads_inner(
     });
 
     // Check if this session was already committed.
-    let existing: Option<serde_json::Value> = sqlx::query_scalar(
+    //
+    // Scoped by tenant: two tenants may legitimately use the same `session_id`
+    // for the same MaLo-ID, and without it one would read the other's summary
+    // and skip its own ingest.
+    let existing: Option<serde_json::Value> = match sqlx::query_scalar(
         r"SELECT quality_summary FROM direct_push_sessions
-          WHERE session_id = $1 AND malo_id = $2 AND status = 'committed'",
+          WHERE session_id = $1 AND malo_id = $2 AND tenant = $3
+            AND status = 'committed'",
     )
     .bind(&session_id)
     .bind(malo_id)
-    .fetch_optional(pool)
+    .bind(&state.tenant)
+    .fetch_optional(state.repo.pool())
     .await
-    .ok()
-    .flatten();
+    {
+        Ok(row) => row.flatten(),
+        // A failed lookup is not evidence that the session is new. Re-ingesting
+        // on a transient database error would be safe for the readings, which
+        // upsert, but it would also re-emit the CloudEvents that trigger a
+        // billing recompute downstream.
+        Err(e) => {
+            tracing::error!(malo_id, error = %e, "edmd: direct push idempotency check failed");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": "could not verify whether this session was already committed",
+                })),
+            )
+                .into_response();
+        }
+    };
 
     if let Some(summary) = existing {
         return (
@@ -3212,9 +3904,14 @@ async fn post_direct_reads_inner(
 
     // \u2500\u2500 Interval validation + kWh conversion \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     // Gas m³ → kWh_Hs via metering::gas_m3_to_kwh_hs (§25 Nr. 4 MessEV / DVGW G 685)
-    let hs = req
-        .brennwert_kwh_per_m3
-        .unwrap_or_else(|| metering::GasConversionParams::default_erdgas_h().hs_kwh_per_m3);
+    // Units are parsed by the same `metering` machinery as the IoT path, so the
+    // ingest families share one unit contract. A string compare against `"m3"`
+    // missed the superscript `"m³"` that `MeasurementUnit` accepts, and the
+    // electricity endpoint never checked the unit against the Sparte at all.
+    let msparte = match sparte_str {
+        "GAS" => metering::interval::Sparte::Gas,
+        _ => metering::interval::Sparte::Strom,
+    };
     let z = req.zustandszahl.unwrap_or(Decimal::ONE);
 
     let mut accepted: Vec<&DirectInterval> = Vec::new();
@@ -3247,6 +3944,51 @@ async fn post_direct_reads_inner(
             rejected_count += 1;
             continue;
         }
+        let Some(scale) = metering::interval::MeasurementUnit::parse_scaled(&iv.unit) else {
+            validation_errors.push(format!(
+                "interval from={}: unknown unit `{}`; expected kWh/MWh/GJ/MJ/Wh (energy) \
+                 or m³/l (volume)",
+                iv.from, iv.unit
+            ));
+            rejected_count += 1;
+            continue;
+        };
+        if scale.unit != msparte.measured_unit() && scale.unit != msparte.billing_unit() {
+            validation_errors.push(format!(
+                "interval from={}: unit {} is not valid for sparte {} — expected {} (as measured) \
+                 or {} (as billed)",
+                iv.from,
+                scale.unit.as_str(),
+                msparte.as_str(),
+                msparte.measured_unit().as_str(),
+                msparte.billing_unit().as_str()
+            ));
+            rejected_count += 1;
+            continue;
+        }
+        if msparte.requires_conversion()
+            && scale.unit == msparte.measured_unit()
+            && req.brennwert_kwh_per_m3.is_none()
+        {
+            validation_errors.push(format!(
+                "interval from={}: brennwert_kwh_per_m3 is required when submitting gas in m³ \
+                 (§25 Nr. 4 MessEV); submit unit=kWh to supply pre-converted values",
+                iv.from
+            ));
+            rejected_count += 1;
+            continue;
+        }
+        if let Some(q) = iv.quality.as_deref()
+            && quality_flag_from_wire(q).is_none()
+        {
+            validation_errors.push(format!(
+                "interval from={}: unknown quality `{q}`; expected one of MEASURED, \
+                 ESTIMATED, SUBSTITUTED, CALCULATED, CORRECTED, PRELIMINARY, FAULTY, UNKNOWN",
+                iv.from
+            ));
+            rejected_count += 1;
+            continue;
+        }
         accepted.push(iv);
     }
 
@@ -3268,6 +4010,17 @@ async fn post_direct_reads_inner(
     let mut quality = compute_quality(&accepted, period_start, period_end);
     quality.intervals_rejected = rejected_count;
 
+    record_quality_assessment(
+        pool,
+        &state.tenant,
+        malo_id,
+        period_start,
+        period_end,
+        &source,
+        &quality,
+    )
+    .await;
+
     let quality_json = serde_json::json!({
         "intervals_accepted": quality.intervals_accepted,
         "intervals_rejected": quality.intervals_rejected,
@@ -3286,65 +4039,67 @@ async fn post_direct_reads_inner(
     let obis_code = req.obis_code.as_deref();
     let melo_id = req.melo_id.as_deref();
 
+    let sparte_enum = match sparte_str {
+        "GAS" => EdmSparte::Gas,
+        _ => EdmSparte::Strom,
+    };
+    let ingestion_source = IngestionSource::from_db_str(&source);
+
+    let mut batch: Vec<MeterRead> = Vec::with_capacity(accepted.len());
     for iv in &accepted {
-        // Convert m³ → kWh_Hs for Gas via metering::gas_m3_to_kwh_hs (§25 Nr. 4 MessEV).
-        let kwh = if iv.unit.to_lowercase() == "m3" {
-            metering::gas_m3_to_kwh_hs(iv.value, hs, z)
+        // Every accepted interval parsed in the loop above, so the unit is known
+        // and valid for this Sparte.
+        let scale = metering::interval::MeasurementUnit::parse_scaled(&iv.unit)
+            .expect("unit validated in the accept loop");
+        let rescaled = scale.apply(iv.value);
+        // m³ → kWh_Hs for Gas (§25 Nr. 4 MessEV / DVGW G 685). The Brennwert is
+        // required rather than defaulted: it varies by supply area and month, so
+        // a national average would systematically mis-bill an L-Gas network.
+        let kwh = if msparte.requires_conversion() && scale.unit == msparte.measured_unit() {
+            let hs = req
+                .brennwert_kwh_per_m3
+                .expect("brennwert presence validated in the accept loop");
+            metering::gas_m3_to_kwh_hs(rescaled, hs, z)
         } else {
-            iv.value
+            rescaled
         };
 
-        let quality_flag = iv.quality.as_deref().unwrap_or("SUBSTITUTION_VALUE");
-        // Use quality warnings JSON on first interval only (session-level, not per-interval).
-        let warnings_json: Option<&serde_json::Value> = if quality.has_warnings {
-            Some(&quality_json)
-        } else {
-            None
-        };
+        batch.push(MeterRead {
+            malo_id: malo_id.to_owned(),
+            melo_id: melo_id.map(str::to_owned),
+            dtm_from: iv.from,
+            dtm_to: iv.to,
+            quantity_kwh: kwh,
+            // Unrecognised flags are rejected in the accept loop, so the
+            // fallback only covers an omitted one. A direct push carries a
+            // register reading, so it defaults to MEASURED — matching the IoT
+            // path, and leaving substitution to the §17 MessZV flow that
+            // records who substituted and why.
+            quality: iv
+                .quality
+                .as_deref()
+                .and_then(quality_flag_from_wire)
+                .unwrap_or(QualityFlag::Measured),
+            pid: 0, // no MSCONS process behind a direct push
+            sparte: sparte_enum,
+            obis_code: obis_code.map(str::to_owned),
+            tenant: state.tenant.clone(),
+            source: ingestion_source,
+            push_session: Some(session_id.clone()),
+            // Session-level Hampel scoring. `validate_and_annotate` adds the
+            // per-interval V01–V10 findings under a `validation` key.
+            quality_warnings: quality.has_warnings.then(|| quality_json.clone()),
+            sender_mp_id: req.sender_mp_id.clone(),
+            allocation_version: "INITIAL".to_owned(),
+            valid_from_tx: Some(OffsetDateTime::now_utc()),
+        });
+    }
 
-        // obis_code_norm: canonical OBIS key used in PK (migration 0006).
-        // Empty string sentinel for single-register meters (no OBIS in push).
-        // obis_code is already Option<&str> (from req.obis_code.as_deref() above).
-        let obis_code_norm = obis_code.unwrap_or("");
-        let result = sqlx::query(
-            r"INSERT INTO meter_reads
-                  (malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality,
-                   pid, sparte, obis_code, obis_code_norm, source, push_session,
-                   quality_warnings, tenant, sender_mp_id)
-              VALUES ($1, $2, $3, $4, $5, $6,
-                      $7, $8, $9, $10, $11, $12, $13, $14, $15)
-              ON CONFLICT (malo_id, dtm_from, obis_code_norm) DO UPDATE
-                  SET quantity_kwh      = EXCLUDED.quantity_kwh,
-                      quality           = EXCLUDED.quality,
-                      source            = EXCLUDED.source,
-                      push_session      = EXCLUDED.push_session,
-                      quality_warnings  = EXCLUDED.quality_warnings,
-                      obis_code         = COALESCE(EXCLUDED.obis_code, meter_reads.obis_code),
-                      tenant            = EXCLUDED.tenant,
-                      sender_mp_id      = COALESCE(EXCLUDED.sender_mp_id, meter_reads.sender_mp_id)",
-        )
-        .bind(malo_id)
-        .bind(melo_id)
-        .bind(iv.from)
-        .bind(iv.to)
-        .bind(kwh)
-        .bind(quality_flag)
-        .bind(0_i32) // pid=0 for direct push (no MSCONS process)
-        .bind(sparte_str)
-        .bind(obis_code)
-        .bind(obis_code_norm)
-        .bind(&source)
-        .bind(&session_id)
-        .bind(warnings_json)
-        .bind(&state.tenant)
-        .bind(req.sender_mp_id.as_deref())
-        .execute(pool)
-        .await;
+    let validation = validate_and_annotate(&mut batch, "DIRECT_PUSH_VALIDATION", malo_id);
 
-        if let Err(e) = result {
-            tracing::error!(malo_id, error = %e, "edmd: direct push interval insert failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
+    if let Err(e) = state.repo.store_reads(&batch).await {
+        tracing::error!(malo_id, error = %e, "edmd: direct push batch insert failed");
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
     // \u2500\u2500 Record session \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -3366,7 +4121,7 @@ async fn post_direct_reads_inner(
     .bind(period_end)
     .bind(&quality_json)
     .bind(state.tenant.as_str())
-    .execute(pool)
+    .execute(state.repo.pool())
     .await;
 
     // \u2500\u2500 Recompute billing period aggregates \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -3411,7 +4166,7 @@ async fn post_direct_reads_inner(
     .bind(period_to_date)
     .bind(sparte_str)
     .bind(&state.tenant)
-    .execute(pool)
+    .execute(state.repo.pool())
     .await;
 
     if let Err(e) = recompute_result {
@@ -3475,7 +4230,7 @@ async fn post_direct_reads_inner(
         }
     }
 
-    let status = if quality.has_warnings {
+    let status = if quality.has_warnings || !validation.is_clean() {
         StatusCode::ACCEPTED // 202 — stored but with quality warnings
     } else {
         StatusCode::CREATED // 201 — clean store
@@ -3489,11 +4244,17 @@ async fn post_direct_reads_inner(
             "sparte": sparte_str,
             "intervals_accepted": accepted.len(),
             "intervals_rejected": rejected_count,
+            "validation_errors": validation_errors,
             "period_from": period_from_date.to_string(),
             "period_to": period_to_date.to_string(),
             "quality": quality_json,
+            "validation": {
+                "issue_count":         validation.issue_count,
+                "billing_block_count": validation.billing_block_count,
+                "rules":               validation.rules,
+            },
             "billing_period_recomputed": true,
-            "note": if quality.has_warnings {
+            "note": if quality.has_warnings || !validation.is_clean() {
                 "de.edmd.reading.quality.warning emitted — investigate before billing run"
             } else {
                 "de.edmd.reading.direct.stored emitted — billing period recomputed"
@@ -3636,6 +4397,17 @@ pub async fn post_quality_rescore(
     let mut quality = compute_quality(&refs, from_dt, to_dt);
     quality.intervals_rejected = 0;
 
+    record_quality_assessment(
+        state.repo.pool(),
+        &state.tenant,
+        &malo_id,
+        from_dt,
+        to_dt,
+        "BATCH_RESCORE",
+        &quality,
+    )
+    .await;
+
     let grade = quality.grade;
     let mut grades = std::collections::HashMap::new();
     *grades.entry("A").or_insert(0u32) += 0;
@@ -3666,6 +4438,7 @@ pub async fn post_quality_rescore(
             r#"UPDATE meter_reads
                SET quality_warnings = $1
              WHERE malo_id = $2
+               AND tenant  = $5
                AND dtm_from >= $3
                AND dtm_from < $4"#,
         )
@@ -3673,6 +4446,7 @@ pub async fn post_quality_rescore(
         .bind(&malo_id)
         .bind(from_dt)
         .bind(to_dt)
+        .bind(&state.tenant)
         .execute(state.repo.pool())
         .await;
 
@@ -3726,6 +4500,76 @@ pub async fn post_quality_rescore(
 }
 
 // ─── M7 unit tests ────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod ingest_contract_tests {
+    use super::*;
+
+    #[test]
+    fn every_wire_quality_flag_is_one_the_column_check_accepts() {
+        // The set here and the CHECK in 0001_schema.sql must agree: a flag this
+        // function accepts but the column rejects fails the insert at runtime.
+        const SCHEMA_CHECK_VALUES: [&str; 8] = [
+            "MEASURED",
+            "ESTIMATED",
+            "SUBSTITUTED",
+            "CALCULATED",
+            "CORRECTED",
+            "PRELIMINARY",
+            "FAULTY",
+            "UNKNOWN",
+        ];
+        for value in SCHEMA_CHECK_VALUES {
+            let parsed = quality_flag_from_wire(value)
+                .unwrap_or_else(|| panic!("`{value}` is in the column CHECK but is not accepted"));
+            assert_eq!(
+                crate::pg::timeseries::quality_to_str(parsed),
+                value,
+                "`{value}` must round-trip to the same spelling the column stores"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_quality_flag_is_refused_rather_than_coerced() {
+        // Binding an unrecognised flag raw would violate the column CHECK; the
+        // bulk path used to swallow that error and still count the row stored.
+        assert!(quality_flag_from_wire("SUBSTITUTION_VALUE").is_none());
+        assert!(quality_flag_from_wire("").is_none());
+        assert!(quality_flag_from_wire("banana").is_none());
+    }
+
+    #[test]
+    fn quality_flags_are_accepted_case_insensitively() {
+        assert_eq!(
+            quality_flag_from_wire("measured"),
+            Some(QualityFlag::Measured)
+        );
+    }
+
+    #[test]
+    fn the_superscript_cubic_metre_is_recognised_as_a_volume_unit() {
+        // A string compare against "m3" missed this spelling, so gas submitted
+        // as m³ was stored unconverted — roughly a tenfold under-count.
+        use metering::interval::{MeasurementUnit, Sparte};
+        for spelling in ["m3", "m³", "M3"] {
+            let scale = MeasurementUnit::parse_scaled(spelling)
+                .unwrap_or_else(|| panic!("`{spelling}` must parse as a volume unit"));
+            assert_eq!(scale.unit, MeasurementUnit::CubicMetre);
+            assert_eq!(scale.unit, Sparte::Gas.measured_unit());
+        }
+    }
+
+    #[test]
+    fn cubic_metres_are_not_a_valid_unit_for_electricity() {
+        // The electricity endpoint had no unit check, so a value labelled "m3"
+        // was multiplied by the gas Brennwert and stored as STROM.
+        use metering::interval::{MeasurementUnit, Sparte};
+        let m3 = MeasurementUnit::CubicMetre;
+        assert_ne!(m3, Sparte::Strom.measured_unit());
+        assert_ne!(m3, Sparte::Strom.billing_unit());
+    }
+}
 
 #[cfg(test)]
 mod quality_tests {
@@ -3960,9 +4804,9 @@ pub async fn post_corrections(
 ///
 /// ## Validation
 ///
-/// After storing, the batch is validated with [`metering::validate_intervals`].
-/// Intervals with `Error` severity are flagged in `quality_warnings`.
-/// A `de.edmd.reading.quality.warning` CloudEvent is emitted when issues are found.
+/// The batch is validated with [`metering::validate_intervals`] before it is
+/// stored, and the resulting issues are written to `quality_warnings` on the
+/// intervals they name, in the same statement as the readings themselves.
 #[derive(Debug, serde::Deserialize)]
 pub struct BulkReadRequest {
     /// Idempotency key — re-submitting the same `session_id` is a no-op if already committed.
@@ -4000,8 +4844,10 @@ pub struct BulkReadEntry {
 /// `POST /api/v1/meter-reads/{malo_id}/bulk`
 ///
 /// Batch ingestion endpoint. Accepts up to 50 000 intervals per request.
-/// Each interval is upserted atomically. After storing, applies the validation
-/// engine (V01–V10) and persists `quality_warnings` to `meter_reads`.
+///
+/// The whole batch is validated (V01–V10) and then written in one statement, so
+/// `stored_count` reflects rows that actually committed and a failure leaves
+/// nothing behind for the caller to reconcile.
 ///
 /// Returns a summary of stored intervals and any validation issues.
 pub async fn post_bulk_reads(
@@ -4011,7 +4857,7 @@ pub async fn post_bulk_reads(
     Path(malo_id): Path<String>,
     Json(req): Json<BulkReadRequest>,
 ) -> impl IntoResponse {
-    use metering::{MeterInterval, QualityFlag, ValidationConfig, validate_intervals};
+    use metering::QualityFlag;
     use time::format_description::well_known::Rfc3339;
 
     let resource_tenant = state.tenant.as_str();
@@ -4038,8 +4884,10 @@ pub async fn post_bulk_reads(
     // Deduplicate by session_id
     if let Some(ref sid) = req.session_id {
         let existing: Option<i64> = sqlx::query_scalar(
+            // Only a committed session is a duplicate. Matching any status made
+            // a `failed` session permanently unretryable.
             "SELECT interval_count FROM direct_push_sessions
-             WHERE session_id = $1 AND tenant = $2",
+             WHERE session_id = $1 AND tenant = $2 AND status = 'committed'",
         )
         .bind(sid)
         .bind(state.tenant.as_str())
@@ -4084,9 +4932,15 @@ pub async fn post_bulk_reads(
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    // Parse and store intervals
-    let mut stored = 0usize;
-    let mut validation_intervals: Vec<MeterInterval> = Vec::with_capacity(req.reads.len());
+    let sparte_enum = match sparte {
+        "GAS" => EdmSparte::Gas,
+        "WAERME" => EdmSparte::Waerme,
+        "WASSER" => EdmSparte::Wasser,
+        _ => EdmSparte::Strom,
+    };
+    let ingestion_source = IngestionSource::from_db_str(source);
+
+    let mut batch: Vec<MeterRead> = Vec::with_capacity(req.reads.len());
 
     for entry in &req.reads {
         let dtm_from = match OffsetDateTime::parse(&entry.dtm_from, &Rfc3339) {
@@ -4119,72 +4973,78 @@ pub async fn post_bulk_reads(
                     .into_response();
             }
         };
-        let quality_str = entry.quality.as_deref().unwrap_or("MEASURED");
-        let quality = match quality_str {
-            "MEASURED" => QualityFlag::Measured,
-            "ESTIMATED" => QualityFlag::Estimated,
-            "SUBSTITUTED" => QualityFlag::Substituted,
-            "CALCULATED" => QualityFlag::Calculated,
-            "CORRECTED" => QualityFlag::Corrected,
-            "PRELIMINARY" => QualityFlag::Preliminary,
-            "FAULTY" => QualityFlag::Faulty,
-            _ => QualityFlag::Unknown,
+        // An unrecognised flag is refused rather than coerced: binding it raw
+        // would fail the column CHECK, and treating it as UNKNOWN would silently
+        // strip the row from every billing aggregate.
+        let quality = match entry.quality.as_deref() {
+            None => QualityFlag::Measured,
+            Some(q) => match quality_flag_from_wire(q) {
+                Some(f) => f,
+                None => {
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(serde_json::json!({
+                            "error": format!(
+                                "interval {}: unknown quality `{q}`; expected one of MEASURED, \
+                                 ESTIMATED, SUBSTITUTED, CALCULATED, CORRECTED, PRELIMINARY, \
+                                 FAULTY, UNKNOWN",
+                                entry.dtm_from
+                            )
+                        })),
+                    )
+                        .into_response();
+                }
+            },
         };
 
-        let obis_norm = req.obis_code.as_deref().unwrap_or("");
-        let _ = sqlx::query(
-            r"INSERT INTO meter_reads
-                  (malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality,
-                   pid, sparte, obis_code, obis_code_norm, source, push_session, tenant)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-              ON CONFLICT (malo_id, dtm_from, obis_code_norm) DO UPDATE
-                  SET quantity_kwh = EXCLUDED.quantity_kwh,
-                      quality      = EXCLUDED.quality,
-                      source       = EXCLUDED.source,
-                      tenant       = EXCLUDED.tenant",
-        )
-        .bind(&malo_id)
-        .bind(&entry.melo_id)
-        .bind(dtm_from)
-        .bind(dtm_to)
-        .bind(qty)
-        .bind(quality_str)
-        .bind(0i32) // pid = 0 for API import
-        .bind(sparte)
-        .bind(&req.obis_code)
-        .bind(obis_norm)
-        .bind(source)
-        .bind(&session_id)
-        .bind(&state.tenant)
-        .execute(state.repo.pool())
-        .await;
-
-        stored += 1;
-        validation_intervals.push(MeterInterval {
-            from: dtm_from,
-            to: dtm_to,
-            value_kwh: qty,
+        batch.push(MeterRead {
+            malo_id: malo_id.clone(),
+            melo_id: entry.melo_id.clone(),
+            dtm_from,
+            dtm_to,
+            quantity_kwh: qty,
             quality,
+            pid: 0, // no MSCONS process behind an API import
+            sparte: sparte_enum,
             obis_code: req.obis_code.clone(),
+            tenant: state.tenant.clone(),
+            source: ingestion_source,
+            push_session: Some(session_id.clone()),
+            quality_warnings: None,
+            sender_mp_id: None,
+            allocation_version: "INITIAL".to_owned(),
+            valid_from_tx: Some(OffsetDateTime::now_utc()),
         });
     }
 
-    // Run validation engine on the batch (V01–V10)
-    let config = ValidationConfig {
-        now: Some(OffsetDateTime::now_utc()),
-        ..ValidationConfig::default()
-    };
-    validation_intervals.sort_by_key(|iv| iv.from);
-    let validation = validate_intervals(&validation_intervals, &config);
+    // Validation runs before the write so its findings can be stored with the
+    // rows they describe, in the same statement.
+    batch.sort_by_key(|r| r.dtm_from);
+    let validation = validate_and_annotate(&mut batch, "BULK_IMPORT_VALIDATION", &malo_id);
+
+    let period_from = batch.first().map(|r| r.dtm_from);
+    let period_to = batch.last().map(|r| r.dtm_to);
+
+    // One batched statement, so the count reported is the count committed.
+    if let Err(e) = state.repo.store_reads(&batch).await {
+        tracing::error!(malo_id = %malo_id, error = %e, "edmd: bulk import batch insert failed");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": e.to_string(),
+                "stored_count": 0,
+                "session_id": session_id,
+            })),
+        )
+            .into_response();
+    }
+    let stored = batch.len();
 
     let issues_summary = serde_json::json!({
         "is_clean": validation.is_clean(),
-        "has_errors": validation.has_errors(),
-        "billing_block_count": validation.billing_block_count(),
-        "issue_count": validation.issues.len(),
-        "rules_triggered": validation.issues.iter()
-            .map(|i| i.rule_id.to_string())
-            .collect::<std::collections::HashSet<_>>()
+        "billing_block_count": validation.billing_block_count,
+        "issue_count": validation.issue_count,
+        "rules_triggered": validation.rules,
     });
 
     // Persist session record
@@ -4200,8 +5060,8 @@ pub async fn post_bulk_reads(
     .bind(source)
     .bind(&req.obis_code)
     .bind(stored as i32)
-    .bind(validation_intervals.first().map(|iv| iv.from))
-    .bind(validation_intervals.last().map(|iv| iv.to))
+    .bind(period_from)
+    .bind(period_to)
     .bind(&issues_summary)
     .bind(state.tenant.as_str())
     .execute(state.repo.pool())
@@ -4240,6 +5100,35 @@ pub struct SubstituteRequest {
     /// `STROM` (default) · `GAS` · `WAERME` · `WASSER`. Determines the `unit`
     /// the substitute is stored in — a substituted water gap is m³, not kWh.
     pub sparte: Option<String>,
+    /// Why a substitute is required (§22 MessZV audit trail).
+    ///
+    /// One of the `substitute_value_log.reason` values. Defaults to
+    /// `NoMeasurementAvailable`.
+    pub reason: Option<String>,
+    /// OBIS register the gap belongs to.
+    ///
+    /// Part of the primary key, so omitting it files the substitute under the
+    /// empty-string register rather than against the reading it stands in for —
+    /// leaving both rows in the table and double-counting the interval in every
+    /// aggregate that sums without an OBIS filter.
+    pub obis_code: Option<String>,
+}
+
+/// Map a [`metering::ForecastMethod`] onto the `substitute_value_log.method`
+/// vocabulary.
+///
+/// The two vocabularies were never reconciled: `ForecastMethod` describes *how*
+/// a value was derived, the CHECK list describes §17 MessZV substitution
+/// categories. Methods with no §17 category map to `LinearInterpolation`, the
+/// closest admissible description, rather than failing the write.
+fn forecast_method_to_db(method: metering::ForecastMethod) -> &'static str {
+    use metering::ForecastMethod as F;
+    match method {
+        F::PriorPeriodSameSlot | F::WeightedRollingAverage => "PriorPeriodAverage",
+        F::LastValueCarryForward => "LastValueCarryForward",
+        F::ZeroFill => "ZeroFill",
+        F::LinearInterpolation | F::ProfileBased | F::AnnualProjection => "LinearInterpolation",
+    }
 }
 
 /// `POST /api/v1/meter-reads/{malo_id}/substitute`
@@ -4262,11 +5151,11 @@ pub async fn post_substitute_values(
     Path(malo_id): Path<String>,
     Json(req): Json<SubstituteRequest>,
 ) -> impl IntoResponse {
-    use metering::{MeterInterval, QualityFlag, SubstituteMethod, prior_period_substitutes};
+    use metering::{MeterInterval, QualityFlag, SubstituteMethod};
     use time::format_description::well_known::Rfc3339;
 
     let resource_tenant = state.tenant.as_str();
-    if let Err(e) = enforcer.check(&claims.principal(), "write-meter-reads", resource_tenant) {
+    if let Err(e) = enforcer.check(&claims.principal(), "write-gdpr-erasure", resource_tenant) {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -4308,10 +5197,25 @@ pub async fn post_substitute_values(
     let operator_id = req.operator_id.as_deref().unwrap_or("AUTO");
 
     let method = match req.method.as_deref().unwrap_or("PriorPeriodAverage") {
+        "PriorPeriodAverage" => SubstituteMethod::PriorPeriodAverage,
         "LinearInterpolation" => SubstituteMethod::LinearInterpolation,
         "ZeroFill" => SubstituteMethod::ZeroFill,
         "LastValueCarryForward" => SubstituteMethod::LastValueCarryForward,
-        _ => SubstituteMethod::PriorPeriodAverage,
+        other => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": format!("unknown substitute method `{other}`"),
+                    "supported": [
+                        "PriorPeriodAverage",
+                        "LinearInterpolation",
+                        "ZeroFill",
+                        "LastValueCarryForward",
+                    ],
+                })),
+            )
+                .into_response();
+        }
     };
 
     // Fetch prior-period reference data
@@ -4360,16 +5264,32 @@ pub async fn post_substitute_values(
         }
     };
 
-    // Get last known value for fallback
+    // Values bracketing the gap. Linear interpolation needs both ends to have a
+    // slope to follow; the other strategies use only the leading value.
     let last_known = prior_intervals.last().map(|iv| iv.value_kwh);
+    let next_known: Option<rust_decimal::Decimal> = sqlx::query_scalar(
+        r"SELECT quantity_kwh FROM meter_reads
+          WHERE malo_id = $1 AND tenant = $2 AND dtm_from >= $3
+            AND quality IN ('MEASURED','ESTIMATED','CALCULATED')
+          ORDER BY dtm_from ASC LIMIT 1",
+    )
+    .bind(&malo_id)
+    .bind(&state.tenant)
+    .bind(gap_to)
+    .fetch_optional(state.repo.pool())
+    .await
+    .ok()
+    .flatten();
 
     // Generate substitute values
-    let substitute_entries = prior_period_substitutes(
+    let substitute_entries = metering::substitute_values(
         gap_from,
         gap_to,
         interval_secs,
+        method,
         &prior_intervals,
         last_known,
+        next_known,
     );
 
     if substitute_entries.is_empty() {
@@ -4398,23 +5318,72 @@ pub async fn post_substitute_values(
 
     let mut stored = 0usize;
     let mut log_entries: Vec<serde_json::Value> = Vec::new();
+    // Intervals left alone because they already carry a billable reading.
+    let mut skipped: Vec<String> = Vec::new();
     let pool = state.repo.pool();
+
+    // Every interval's reading and its §22 MessZV audit row commit together. As
+    // two independent statements, a failure part-way left billable SUBSTITUTED
+    // values in `meter_reads` with no record of who substituted them or why.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            tracing::error!(malo_id = %malo_id, error = %e, "edmd: substitute transaction failed to begin");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    // Normalised once, the same way `store_reads` does it, so the substitute
+    // lands on the register it stands in for rather than on the empty key.
+    let obis_norm: String = req.obis_code.as_deref().map_or_else(String::new, |c| {
+        c.parse::<metering::obis::ObisCode>()
+            .map_or_else(|_| c.to_owned(), |p| p.to_string())
+    });
 
     for entry in &substitute_entries {
         let iv = &entry.interval;
-        let method_str = format!("{:?}", entry.method);
-        let reason_str = "NoMeasurementAvailable";
+        // `entry.method` is a `ForecastMethod`, whose Debug names (e.g.
+        // `PriorPeriodSameSlot`) are not the vocabulary the
+        // `substitute_value_log.method` CHECK accepts. Writing the Debug form
+        // failed the CHECK on the default code path, so the audit INSERT errored
+        // *after* the billable substitute had already been committed to
+        // `meter_reads` — a §17 Ersatzwert with no §22 audit record.
+        let method_str = forecast_method_to_db(entry.method);
+        let reason_str = req.reason.as_deref().unwrap_or("NoMeasurementAvailable");
 
         // Upsert into meter_reads.
-        if let Err(e) = sqlx::query(
-            r"INSERT INTO meter_reads
+        //
+        // The `WHERE` on the conflict action is what keeps a substitution from
+        // destroying a real reading: §17 MessZV authorises an Ersatzwert where
+        // no usable measurement exists, not in place of one. A window that
+        // overlaps billable data leaves that data untouched and reports the
+        // interval as skipped.
+        // The CTE snapshots the value being replaced before the upsert runs, so
+        // `substitute_value_log.original_kwh` records what was actually there.
+        // Without it the §22 MessZV trail says a substitute was written but not
+        // what it displaced.
+        let upserted = sqlx::query(
+            r"WITH prior AS (
+                  SELECT quantity_kwh
+                  FROM meter_reads
+                  WHERE tenant = $7 AND malo_id = $1
+                    AND dtm_from = $2 AND obis_code_norm = $9
+              )
+              INSERT INTO meter_reads
                 (malo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, unit,
-                 source, tenant)
-              VALUES ($1, $2, $3, $4, 'SUBSTITUTED', 0, $5, $6, 'AUTO_SUBSTITUTE', $7)
-              ON CONFLICT (malo_id, dtm_from, obis_code_norm) DO UPDATE
+                 obis_code, obis_code_norm, source, tenant)
+              VALUES ($1, $2, $3, $4, 'SUBSTITUTED', 0, $5, $6, $8, $9, 'AUTO_SUBSTITUTE', $7)
+              ON CONFLICT (tenant, malo_id, dtm_from, obis_code_norm) DO UPDATE
                 SET quantity_kwh = EXCLUDED.quantity_kwh,
                     quality = EXCLUDED.quality,
-                    source = EXCLUDED.source",
+                    source = EXCLUDED.source,
+                    archived = false
+                WHERE meter_reads.quality IN ('FAULTY', 'UNKNOWN')
+              RETURNING (SELECT quantity_kwh FROM prior) AS original_kwh",
         )
         .bind(&malo_id)
         .bind(iv.from)
@@ -4423,33 +5392,50 @@ pub async fn post_substitute_values(
         .bind(sparte.as_str())
         .bind(sparte.billing_unit().as_str())
         .bind(&state.tenant)
-        .execute(pool)
-        .await
-        {
-            tracing::error!(malo_id = %malo_id, error = %e, "edmd: substitute upsert failed");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
+        .bind(req.obis_code.as_deref())
+        .bind(&obis_norm)
+        .fetch_optional(&mut *tx)
+        .await;
+
+        let original_kwh: Option<rust_decimal::Decimal> = match upserted {
+            Err(e) => {
+                tracing::error!(malo_id = %malo_id, error = %e, "edmd: substitute upsert failed");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
+            // No row returned: the conflict action declined because a billable
+            // reading already covers this interval.
+            Ok(None) => {
+                skipped.push(iv.from.format(&Rfc3339).unwrap_or_default());
+                continue;
+            }
+            Ok(Some(row)) => {
+                use sqlx::Row as _;
+                row.try_get("original_kwh").ok().flatten()
+            }
+        };
 
         // §22 MessZV audit trail: which value was replaced, by what method, on
         // whose authority.
         if let Err(e) = sqlx::query(
             r"INSERT INTO substitute_value_log
-                (malo_id, dtm_from, dtm_to, method, reason, substitute_kwh, created_by, tenant)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                (malo_id, dtm_from, dtm_to, method, reason, substitute_kwh,
+                 original_kwh, created_by, tenant)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
         .bind(&malo_id)
         .bind(iv.from)
         .bind(iv.to)
-        .bind(&method_str)
+        .bind(method_str)
         .bind(reason_str)
         .bind(iv.value_kwh)
+        .bind(original_kwh)
         .bind(operator_id)
         .bind(&state.tenant)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         {
             tracing::error!(malo_id = %malo_id, error = %e, "edmd: substitute audit log failed");
@@ -4471,6 +5457,15 @@ pub async fn post_substitute_values(
         }));
     }
 
+    if let Err(e) = tx.commit().await {
+        tracing::error!(malo_id = %malo_id, error = %e, "edmd: substitute commit failed");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string(), "generated_count": 0 })),
+        )
+            .into_response();
+    }
+
     tracing::info!(
         malo_id, stored, operator_id,
         gap_from = %gap_from, gap_to = %gap_to,
@@ -4484,7 +5479,18 @@ pub async fn post_substitute_values(
             "gap_from": gap_from,
             "gap_to": gap_to,
             "generated_count": stored,
-            "method": format!("{:?}", method),
+            "method_requested": format!("{method:?}"),
+            // What each interval was actually produced by. A requested strategy
+            // with no data to work from degrades — prior-period to carry-forward
+            // to zero — and the §22 MessZV record must name what ran, not what
+            // was asked for.
+            "methods_applied": log_entries
+                .iter()
+                .filter_map(|e| e["method"].as_str())
+                .collect::<std::collections::BTreeSet<_>>(),
+            // Intervals already covered by a billable reading; §17 MessZV
+            // authorises a substitute only where no measurement exists.
+            "skipped_measured": skipped,
             "legal_basis": "§17 MessZV Abs. 2 Ersatzwertbildung",
             "intervals": log_entries,
         })),
@@ -4631,7 +5637,7 @@ async fn get_sharing_allocation(
         .bind(from)
         .bind(to)
         .bind(resource_tenant)
-        .fetch_all(pool)
+        .fetch_all(state.repo.pool())
         .await
         .unwrap_or_default();
 
@@ -4695,6 +5701,187 @@ async fn get_sharing_allocation(
         .into_response()
 }
 
+// ── GDPR Art. 17 — cold-tier erasure ──────────────────────────────────────────
+
+/// `POST /api/v1/gdpr/erasure/{malo_id}/archive-plan`
+///
+/// Plan the physical deletion of an erased MaLo's rows from the Iceberg cold
+/// tier, and record the affected data files.
+///
+/// Read-time exclusion already hides these rows from every query. This is about
+/// the bytes still on disk, which Art. 17 also reaches.
+///
+/// iceberg-rust 0.9.1 exposes only `fast_append` on a transaction — no public
+/// API removes or rewrites data files — so the rewrite itself is run by an
+/// external engine (Spark, Trino) against the returned list. Recording it turns
+/// `archive_deletion_pending` from a flag that is never cleared into an
+/// obligation with a defined discharge.
+///
+/// **Cedar action**: `write-gdpr-erasure`
+async fn plan_gdpr_archive_erasure(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+) -> impl IntoResponse {
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "write-gdpr-erasure", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let Some(ref olap) = state.olap_engine else {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "archival is not enabled; there is no cold tier to erase from",
+            })),
+        )
+            .into_response();
+    };
+
+    // The erasure must already be on record: planning a rewrite for a MaLo
+    // nobody asked to erase would delete lawfully-held data.
+    let deletion_id: Option<uuid::Uuid> =
+        sqlx::query_scalar("SELECT id FROM gdpr_deletions WHERE malo_id = $1 AND tenant = $2")
+            .bind(&malo_id)
+            .bind(resource_tenant)
+            .fetch_optional(state.repo.pool())
+            .await
+            .ok()
+            .flatten();
+
+    let Some(deletion_id) = deletion_id else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "no erasure request on record for this MaLo",
+                "hint": "DELETE /api/v1/gdpr/erasure/{malo_id} first",
+            })),
+        )
+            .into_response();
+    };
+
+    let files = match olap.plan_erasure_files(&malo_id).await {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::error!(malo_id = %malo_id, error = %e, "edmd: erasure planning failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    for f in &files {
+        let _ = sqlx::query(
+            r"INSERT INTO gdpr_archive_files
+                  (deletion_id, file_path, record_count, file_size_bytes, tenant)
+              VALUES ($1,$2,$3,$4,$5)
+              ON CONFLICT (deletion_id, file_path) DO NOTHING",
+        )
+        .bind(deletion_id)
+        .bind(&f.file_path)
+        .bind(f.record_count.map(|c| i64::try_from(c).unwrap_or(i64::MAX)))
+        .bind(i64::try_from(f.file_size_bytes).unwrap_or(i64::MAX))
+        .bind(resource_tenant)
+        .execute(state.repo.pool())
+        .await;
+    }
+
+    // No files means nothing of this MaLo reached the cold tier, so the
+    // obligation is already discharged there.
+    if files.is_empty() {
+        let _ = sqlx::query(
+            "UPDATE gdpr_deletions
+                SET archive_deletion_pending = false, archive_deletion_completed_at = now()
+              WHERE id = $1",
+        )
+        .bind(deletion_id)
+        .execute(state.repo.pool())
+        .await;
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "malo_id":      malo_id,
+            "deletion_id":  deletion_id.to_string(),
+            "files":        files,
+            "file_count":   files.len(),
+            "pending":      !files.is_empty(),
+            "next_step": if files.is_empty() {
+                "nothing of this MaLo is in the cold tier — the obligation is discharged"
+            } else {
+                "run the rewrite with an external engine, then POST .../archive-complete"
+            },
+            "legal_basis":  "DSGVO Art. 17",
+        })),
+    )
+        .into_response()
+}
+
+/// `POST /api/v1/gdpr/erasure/{malo_id}/archive-complete`
+///
+/// Record that the cold-tier rewrite has been carried out, discharging the
+/// Art. 17 obligation for the archive.
+///
+/// **Cedar action**: `write-gdpr-erasure`
+async fn complete_gdpr_archive_erasure(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+) -> impl IntoResponse {
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "write-gdpr-erasure", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let res = sqlx::query(
+        r"WITH d AS (
+              UPDATE gdpr_deletions
+                 SET archive_deletion_pending = false,
+                     archive_deletion_completed_at = now()
+               WHERE malo_id = $1 AND tenant = $2
+               RETURNING id
+          )
+          UPDATE gdpr_archive_files f
+             SET rewritten_at = now()
+            FROM d
+           WHERE f.deletion_id = d.id AND f.rewritten_at IS NULL",
+    )
+    .bind(&malo_id)
+    .bind(resource_tenant)
+    .execute(state.repo.pool())
+    .await;
+
+    match res {
+        Ok(r) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "malo_id":        malo_id,
+                "files_marked":   r.rows_affected(),
+                "archive_pending": false,
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
 // ── F-17: GDPR §17 DSGVO right to erasure ────────────────────────────────────
 
 /// `DELETE /api/v1/gdpr/erasure/{malo_id}`
@@ -4732,7 +5919,10 @@ async fn post_gdpr_erasure(
     Json(req): Json<GdprErasureRequest>,
 ) -> impl IntoResponse {
     let resource_tenant = state.tenant.as_str();
-    if let Err(e) = enforcer.check(&claims.principal(), "write-meter-reads", resource_tenant) {
+    // Erasure is irreversible and destroys billing history, so it is gated by
+    // its own action rather than by the general write permission every ingest
+    // client already holds.
+    if let Err(e) = enforcer.check(&claims.principal(), "write-gdpr-erasure", resource_tenant) {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -4742,61 +5932,123 @@ async fn post_gdpr_erasure(
 
     let pool = state.repo.pool();
 
+    // Every step runs in one transaction. An Art. 17 erasure either completed
+    // or it did not: a partial erasure reported as success closes out the
+    // request while personal data remains, and the caller has no way to tell
+    // that apart from a MaLo that legitimately held no readings.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            tracing::error!(malo_id = %malo_id, error = %e, "edmd: GDPR erasure could not begin");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    /// Abort the erasure, reporting which step failed.
+    macro_rules! erasure_step {
+        ($step:literal, $expr:expr) => {
+            match $expr {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::error!(
+                        malo_id = %malo_id, step = $step, error = %e,
+                        "edmd: GDPR Art. 17 erasure failed — rolled back"
+                    );
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": e.to_string(),
+                            "failed_step": $step,
+                            "status": "not_erased",
+                        })),
+                    )
+                        .into_response();
+                }
+            }
+        };
+    }
+
     // 1. Record the erasure request (idempotent).
-    let _ = sqlx::query(
-        r"INSERT INTO gdpr_deletions
-              (malo_id, tenant, reason, authorized_by, requested_at, archive_deletion_pending)
-          VALUES ($1, $2, $3, $4, now(), true)
-          ON CONFLICT (malo_id, tenant) DO UPDATE
-              SET reason                  = EXCLUDED.reason,
-                  authorized_by           = EXCLUDED.authorized_by,
-                  requested_at            = now(),
-                  archive_deletion_pending = true",
-    )
-    .bind(&malo_id)
-    .bind(resource_tenant)
-    .bind(&req.reason)
-    .bind(&req.authorized_by)
-    .execute(pool)
-    .await;
+    erasure_step!(
+        "record_request",
+        sqlx::query(
+            r"INSERT INTO gdpr_deletions
+                  (malo_id, tenant, reason, authorized_by, requested_at, archive_deletion_pending)
+              VALUES ($1, $2, $3, $4, now(), true)
+              ON CONFLICT (malo_id, tenant) DO UPDATE
+                  SET reason                  = EXCLUDED.reason,
+                      authorized_by           = EXCLUDED.authorized_by,
+                      requested_at            = now(),
+                      archive_deletion_pending = true",
+        )
+        .bind(&malo_id)
+        .bind(resource_tenant)
+        .bind(&req.reason)
+        .bind(&req.authorized_by)
+        .execute(&mut *tx)
+        .await
+    );
 
     // 2. Anonymize meter_reads: zero the value, mark Faulty, preserve row for audit.
-    let anonymized = sqlx::query(
-        r"UPDATE meter_reads
-          SET quantity_kwh = '0',
-              quality      = 'FAULTY',
-              source       = 'GDPR_ERASURE',
-              push_session = NULL,
-              quality_warnings = NULL,
-              sender_mp_id = NULL
-          WHERE malo_id = $1 AND tenant = $2",
-    )
-    .bind(&malo_id)
-    .bind(resource_tenant)
-    .execute(pool)
-    .await;
-
-    let anonymized_count = anonymized.as_ref().map(|r| r.rows_affected()).unwrap_or(0);
+    // `archived = false` requeues the row for re-export, so the anonymised
+    // version replaces the personal data already sitting in the cold tier.
+    let anonymized = erasure_step!(
+        "anonymize_reads",
+        sqlx::query(
+            r"UPDATE meter_reads
+              SET quantity_kwh = '0',
+                  quality      = 'FAULTY',
+                  source       = 'GDPR_ERASURE',
+                  push_session = NULL,
+                  quality_warnings = NULL,
+                  sender_mp_id = NULL,
+                  archived     = false
+              WHERE malo_id = $1 AND tenant = $2",
+        )
+        .bind(&malo_id)
+        .bind(resource_tenant)
+        .execute(&mut *tx)
+        .await
+    );
+    let anonymized_count = anonymized.rows_affected();
 
     // 3. Delete billing period aggregates (no audit trail required).
-    let _ = sqlx::query("DELETE FROM meter_billing_periods WHERE malo_id = $1")
-        .bind(&malo_id)
-        .execute(pool)
-        .await;
+    // A MaLo-ID is not unique across tenants, so an erasure request scoped to
+    // one tenant must not reach another tenant's aggregates for the same ID.
+    erasure_step!(
+        "delete_billing_periods",
+        sqlx::query("DELETE FROM meter_billing_periods WHERE malo_id = $1 AND tenant = $2")
+            .bind(&malo_id)
+            .bind(resource_tenant)
+            .execute(&mut *tx)
+            .await
+    );
 
     // 4. Delete quality assessments.
-    let _ = sqlx::query("DELETE FROM quality_assessments WHERE malo_id = $1 AND tenant = $2")
-        .bind(&malo_id)
-        .bind(resource_tenant)
-        .execute(pool)
-        .await;
+    erasure_step!(
+        "delete_quality_assessments",
+        sqlx::query("DELETE FROM quality_assessments WHERE malo_id = $1 AND tenant = $2")
+            .bind(&malo_id)
+            .bind(resource_tenant)
+            .execute(&mut *tx)
+            .await
+    );
 
     // 5. Delete substitute value log.
-    let _ = sqlx::query("DELETE FROM substitute_value_log WHERE malo_id = $1 AND tenant = $2")
-        .bind(&malo_id)
-        .bind(resource_tenant)
-        .execute(pool)
-        .await;
+    erasure_step!(
+        "delete_substitute_log",
+        sqlx::query("DELETE FROM substitute_value_log WHERE malo_id = $1 AND tenant = $2")
+            .bind(&malo_id)
+            .bind(resource_tenant)
+            .execute(&mut *tx)
+            .await
+    );
+
+    erasure_step!("commit", tx.commit().await);
 
     tracing::info!(
         malo_id,
@@ -5081,6 +6333,19 @@ async fn post_sql_query(
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
                 "error": "Only SELECT/WITH/SHOW/DESCRIBE queries are allowed"
+            })),
+        )
+            .into_response();
+    }
+
+    // Tenant scoping is carried by the `meter_reads_archive` view. Naming the
+    // physical table behind it would read every tenant's rows, so a query that
+    // mentions it at all is refused.
+    if sql_upper.contains(&crate::iceberg::query::ARCHIVE_PHYSICAL_TABLE.to_uppercase()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "query references an internal table; use `meter_reads_archive`"
             })),
         )
             .into_response();
@@ -5601,7 +6866,7 @@ async fn post_iot_reads(
     .bind(&req.session_id)
     .bind(&malo_id)
     .bind(resource_tenant)
-    .fetch_optional(pool)
+    .fetch_optional(state.repo.pool())
     .await
     .ok()
     .flatten();
@@ -5638,16 +6903,8 @@ async fn post_iot_reads(
         ));
     }
 
-    // Normalise the OBIS code so it cannot create duplicate primary-key rows:
-    // `1-0:1.8.0` and `1-0:1.8.0*255` are the same register.
-    let obis_norm = req
-        .obis_code
-        .as_deref()
-        .map(|s| {
-            s.parse::<metering::obis::ObisCode>()
-                .map_or_else(|_| s.to_owned(), |c| c.to_string())
-        })
-        .unwrap_or_default();
+    // OBIS normalisation happens once, inside `store_reads` — it feeds the
+    // primary key, so a second implementation here could drift from it.
 
     // Hampel-filter quality scoring with media-aware thresholds: heat and water
     // profiles contain long legitimate zero runs.
@@ -5687,18 +6944,17 @@ async fn post_iot_reads(
         None
     };
 
-    // `outlier_intervals` / `spike_intervals` carry RFC 3339 start timestamps.
+    // `score_intervals_f64` reports outliers as `"t+<unix_nanos>"`, not RFC 3339
+    // — it takes raw `i64` nanosecond stamps and has no calendar to format
+    // against. Parsing them as RFC 3339 silently yields an empty set, which
+    // makes the PRELIMINARY flag below unreachable.
     let outlier_stamps: std::collections::HashSet<i64> = quality
         .as_ref()
         .map(|q| {
             q.outlier_intervals
                 .iter()
                 .chain(q.spike_intervals.iter())
-                .filter_map(|ts| {
-                    time::OffsetDateTime::parse(ts, &Rfc3339)
-                        .ok()
-                        .map(|t| t.unix_timestamp_nanos() as i64)
-                })
+                .filter_map(|ts| ts.strip_prefix("t+").and_then(|n| n.parse::<i64>().ok()))
                 .collect()
         })
         .unwrap_or_default();
@@ -5707,6 +6963,7 @@ async fn post_iot_reads(
 
     let mut stored = 0usize;
     let mut rejected: Vec<String> = Vec::new();
+    let mut batch: Vec<MeterRead> = Vec::with_capacity(req.intervals.len());
 
     for iv in &req.intervals {
         let (Ok(from), Ok(to)) = (
@@ -5747,39 +7004,76 @@ async fn post_iot_reads(
             metering::gas_m3_to_kwh_hs(rescaled, hs, z)
         });
 
-        let res = sqlx::query(
-            r"INSERT INTO meter_reads
-                (malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality, pid,
-                 sparte, unit, obis_code, obis_code_norm, source, push_session, tenant)
-              VALUES ($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,'IOT_PUSH',$11,$12)
-              ON CONFLICT (malo_id, dtm_from, obis_code_norm) DO UPDATE
-                SET quantity_kwh = EXCLUDED.quantity_kwh,
-                    quality      = EXCLUDED.quality,
-                    unit         = EXCLUDED.unit,
-                    source       = EXCLUDED.source",
-        )
-        .bind(&malo_id)
-        .bind(req.melo_id.as_deref())
-        .bind(from)
-        .bind(to)
-        .bind(quantity)
-        .bind(quality_flag)
-        .bind(sparte.as_str())
-        .bind(stored_unit.as_str())
-        .bind(req.obis_code.as_deref())
-        .bind(&obis_norm)
-        .bind(&req.session_id)
-        .bind(resource_tenant)
-        .execute(pool)
-        .await;
+        // Rows are accumulated and written in one batched `unnest` statement
+        // below, so the whole push lands or none of it does.
+        batch.push(MeterRead {
+            malo_id: malo_id.clone(),
+            melo_id: req.melo_id.clone(),
+            dtm_from: from,
+            dtm_to: to,
+            quantity_kwh: quantity,
+            quality: if quality_flag == "PRELIMINARY" {
+                QualityFlag::Preliminary
+            } else {
+                QualityFlag::Measured
+            },
+            pid: 0,
+            sparte: edm_sparte_from_metering(sparte),
+            obis_code: req.obis_code.clone(),
+            tenant: resource_tenant.to_owned(),
+            source: IngestionSource::IotPush,
+            push_session: Some(req.session_id.clone()),
+            quality_warnings: None,
+            sender_mp_id: req.device_id.clone(),
+            allocation_version: "INITIAL".to_owned(),
+            valid_from_tx: Some(OffsetDateTime::now_utc()),
+        });
+        stored += 1;
+    }
 
-        match res {
-            Ok(_) => stored += 1,
-            Err(e) => {
-                tracing::warn!(malo_id = %malo_id, error = %e, "iot ingest: insert failed");
-                rejected.push(format!("{from}: {e}"));
-            }
-        }
+    let validation = validate_and_annotate(&mut batch, "IOT_PUSH_VALIDATION", &malo_id);
+
+    // The IoT path scores with `score_intervals_f64` rather than
+    // `compute_quality`, so the report is adapted before it is recorded — the
+    // history must not depend on which door the reading came in by.
+    if let (Some(q), Some(first), Some(last)) = (
+        quality.as_ref(),
+        batch.first().map(|r| r.dtm_from),
+        batch.last().map(|r| r.dtm_to),
+    ) {
+        let report = QualityReport {
+            intervals_accepted: q.intervals_analysed,
+            intervals_rejected: rejected.len(),
+            gaps_detected: q.gaps_detected,
+            zero_run_length: q.max_zero_run,
+            outlier_intervals: q.outlier_intervals.clone(),
+            spike_intervals: q.spike_intervals.clone(),
+            intervals_consistent: q.intervals_consistent,
+            has_warnings: q.has_warnings,
+            coverage_pct: q.coverage_pct,
+            grade: q.grade.as_str(),
+        };
+        record_quality_assessment(
+            pool,
+            resource_tenant,
+            &malo_id,
+            first,
+            last,
+            "IOT_PUSH",
+            &report,
+        )
+        .await;
+    }
+
+    if !batch.is_empty()
+        && let Err(e) = state.repo.store_reads(&batch).await
+    {
+        tracing::error!(malo_id = %malo_id, error = %e, "edmd: IoT batch insert failed");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
     }
 
     // Commit the session only when something landed, so a wholly-failed batch
@@ -5795,13 +7089,13 @@ async fn post_iot_reads(
         .bind(&malo_id)
         .bind(i32::try_from(stored).unwrap_or(i32::MAX))
         .bind(resource_tenant)
-        .execute(pool)
+        .execute(state.repo.pool())
         .await;
     }
 
     let status = if stored == 0 {
         StatusCode::UNPROCESSABLE_ENTITY
-    } else if warnings.is_empty() && rejected.is_empty() {
+    } else if warnings.is_empty() && rejected.is_empty() && validation.is_clean() {
         StatusCode::CREATED
     } else {
         StatusCode::ACCEPTED
@@ -5829,6 +7123,11 @@ async fn post_iot_reads(
                 "outliers":      q.outlier_intervals.len() + q.spike_intervals.len(),
                 "blocks_billing": q.grade.blocks_billing(),
             })),
+            "validation": {
+                "issue_count":         validation.issue_count,
+                "billing_block_count": validation.billing_block_count,
+                "rules":               validation.rules,
+            },
             "legal_basis": "HeizkostenV §5 Abs. 3 / §6a; MessEG §37",
         })),
     )

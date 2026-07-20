@@ -11,6 +11,7 @@
 //! | `handlers` | see module docs |
 //! | `pg` | see module docs |
 
+pub mod bo4e_angebot;
 pub mod config;
 pub mod handlers;
 pub mod mcp_server;

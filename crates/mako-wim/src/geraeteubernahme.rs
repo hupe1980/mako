@@ -1,37 +1,33 @@
-//! WiM Geräteübernahme — device commissioning request/response (PIDs 17001–17011).
+//! WiM Geräteübernahme — takeover of metering equipment at a Messlokation.
 //!
-//! Models the **NB/aMSB-side** perspective of the BDEW WiM process by which a
-//! new Messstellenbetreiber (nMSB) requests takeover of metering equipment at a
-//! Messlokation.
+//! Models the **MSBA side** of **WiM Strom Teil 1 (Anlage 2a zu BK6-22-024),
+//! Kapitel 3.2**: the new Messstellenbetreiber (MSBN) asks the outgoing MSBA for
+//! an offer on the technical equipment, then orders against it.
 //!
-//! # Two-phase process
-//!
-//! ## Phase 1: Anfrage Geräteübernahmeangebot
+//! # Message flow
 //!
 //! ```text
-//! nMSB → ORDERS 17001 (Anfrage) ───────────────────────────────────────── NB/aMSB
-//!                                                                              │
-//! nMSB ← ORDRSP 17003 (Bestätigung) or 17004 (Ablehnung) ←── 5 Werktage ───────┘
+//! MSBN ──REQOTE  Anforderung Geräteübernahmeangebot──────────────────────▶ MSBA
+//! MSBN ◀─QUOTES  15001 Geräteübernahmeangebot──── 4 WT nach ÜT von Nr. 1 ─ MSBA
+//! MSBN ──ORDERS  17001 Bestellung──────────────── 3 WT nach ÜT von Nr. 2 ▶ MSBA
+//! MSBN ◀─ORDRSP  19001 Bestellbestätigung──────── 2 WT nach ÜT von Nr. 3 ─ MSBA
+//!        or      19002 Ablehnung der Bestellung
+//! MSBN ◀─MSCONS  Zählerstand zur Geräteübernahme ───────────────────────── MSBA
 //! ```
 //!
-//! ## Phase 2: Bestellung Geräteübernahme (only after Phase 1 accepted)
+//! Each Frist is counted from the **ÜT** of the preceding step — the day of the
+//! positive AS4-Zustellquittung, not the day the message was parsed.
 //!
-//! ```text
-//! nMSB → ORDERS 17005 (Bestellung) ───────────────────────────────────── NB/aMSB
-//!                                                                              │
-//! nMSB ← ORDRSP 17007 (Bestätigung) or 17008 (Ablehnung) ←── 5 Werktage ───────┘
-//! ```
+//! # Adjacent processes sharing this workflow
 //!
-//! ## Stornierungen
-//!
-//! | Stornierung-PID | Cancels | Response PIDs |
-//! |---|---|---|
-//! | 17009 | ORDERS 17001 (Anfrage) | 17010 (Bestätigung) / 17011 (Ablehnung) |
+//! | Trigger | Answered by |
+//! |---|---|
+//! | ORDERS 17002 Weiterverpflichtung MSBA bei Ende Messstellenbetrieb | ORDRSP 19003 Fortführungsbestätigung / 19004 Ablehnung Fortführung |
+//! | ORDERS 17009 Ankündigung Gerätewechselabsicht | ORDRSP 19015 Bestätigung / 19016 Ablehnung Gerätewechselabsicht |
 //!
 //! # Regulatory basis
 //!
-//! - **BDEW WiM AHB** — Bestellung Geräteübernahmeangebot
-//! - **BNetzA BK6-18-032** — 5 Werktage Frist for ORDRSP
+//! - **WiM Strom Teil 1, Kap. 3.2** (Anlage 2a zu BK6-22-024) — Geräteübernahme
 //! - **MsbG** — governing smart-meter rollout obligations
 
 use std::collections::HashMap;
@@ -51,26 +47,18 @@ use mako_engine::{
 /// Workflow name used for PID routing and `WorkflowId` construction.
 pub const WORKFLOW_NAME: &str = "wim-geraeteubernahme";
 
-/// All ORDERS PIDs for the Geräteübernahme process family (WiM Strom Teil 1).
+/// Inbound ORDERS PIDs routed to this workflow (WiM Strom Teil 1).
 ///
-/// Per BDEW PID 3.3/4.0 xlsx (sheet "Prüf-ID Prozessschritt"):
-/// - 17001 (Bestellung Geräteübernahmeangebot): **WiM Strom Teil 1 and WiM Gas** — multi-domain.
-/// - 17002 (Weiterverpflichtung): **WiM Strom Teil 1 and WiM Gas** — multi-domain.
-/// - 17005 (Bestellung Rechnungsabwicklung MSB über LF): WiM Strom Teil 1 only.
-/// - 17009 (Anzeige Gerätewechselabsicht): **WiM Strom Teil 1 and WiM Gas** — multi-domain.
-/// - 17011 (Bestellung Angebot Änderung Technik): WiM Strom Teil 1 only.
+/// | PID | AHB name |
+/// |---|---|
+/// | 17001 | Bestellung Geräteübernahmeangebot |
+/// | 17002 | Weiterverpflichtung MSBA bei Ende Messstellenbetrieb |
+/// | 17009 | Ankündigung Gerätewechselabsicht |
 ///
-/// WiM Gas Geräteübernahme routing is not yet implemented in `mako-wim-gas`;
-/// role-based disambiguation for the Gas context is a future TODO.
-///
-/// All routing PIDs (combined for convenience).
-pub const GERAETEUBERNAHME_PIDS: &[u32] = &[
-    17001, // Bestellung Geräteübernahmeangebot (WiM Strom Teil 1 + WiM Gas)
-    17002, // Weiterverpflichtung (WiM Strom Teil 1 + WiM Gas)
-    17005, // Bestellung Rechnungsabwicklung MSB über LF (WiM Strom Teil 1)
-    17009, // Anzeige Gerätewechselabsicht (WiM Strom Teil 1 + WiM Gas)
-    17011, // Bestellung Angebot Änderung Technik (WiM Strom Teil 1)
-];
+/// 17005 ("Bestellung Angebot Rechnungsabwicklung Messstellenbetrieb") and 17011
+/// ("Beauftragung zur Änderung der Technik") are different processes and are not
+/// routed here.
+pub const GERAETEUBERNAHME_PIDS: &[u32] = &[17001, 17002, 17009];
 
 /// Anfrage PIDs — trigger a new `WimGeraeteubernahmeWorkflow` process.
 ///
@@ -79,26 +67,41 @@ pub const GERAETEUBERNAHME_PIDS: &[u32] = &[
 /// WiM Gas Geräteübernahme routing is a future TODO in `mako-wim-gas`.
 pub const ANFRAGE_PIDS: &[u32] = &[17001, 17002];
 
-/// Bestellung PIDs — continue an existing process (confirm the takeover offer).
-pub const BESTELLUNG_PIDS: &[u32] = &[17005];
+/// ORDERS 17001 — "Bestellung Geräteübernahmeangebot" (WiM Teil 1 Kap. 3.2.2 Nr. 3).
+pub const BESTELLUNG_PIDS: &[u32] = &[17001];
 
-/// Stornierung PIDs — cancel an in-progress Anfrage or Bestellung.
-///
-/// Per BDEW PID 3.3/4.0 xlsx: 17009 (Anzeige Gerätewechselabsicht) is multi-domain
-/// (WiM Strom Teil 1 + WiM Gas). Registering it here covers WiM Strom NB deployments.
-pub const STORNIERUNG_PIDS: &[u32] = &[17009, 17011];
+/// ORDERS 17009 — "Ankündigung Gerätewechselabsicht".
+pub const STORNIERUNG_PIDS: &[u32] = &[17009];
 
-/// Deadline label for the ORDRSP response window (5 Werktage, BK6-18-032).
+/// QUOTES 15001 — "Angebot Geräteübernahme" (Kap. 3.2.2 Nr. 2).
+pub const ANGEBOT_PID: u32 = 15001;
+
+/// ORDRSP 19001 — "Bestellbestätigung" (Kap. 3.2.2 Nr. 4, positive).
+pub const BESTAETIGUNG_PID: u32 = 19001;
+
+/// ORDRSP 19002 — "Ablehnung der Bestellung" (Kap. 3.2.2 Nr. 4, negative).
+pub const ABLEHNUNG_PID: u32 = 19002;
+
+/// ORDRSP 19003 / 19004 — Fortführungsbestätigung / Ablehnung Fortführung,
+/// answering ORDERS 17002 (Weiterverpflichtung).
+pub const FORTFUEHRUNG_PIDS: (u32, u32) = (19003, 19004);
+
+/// ORDRSP 19015 / 19016 — Bestätigung / Ablehnung Gerätewechselabsicht,
+/// answering ORDERS 17009.
+pub const GERAETEWECHSELABSICHT_PIDS: (u32, u32) = (19015, 19016);
+
+/// Werktage for the Geräteübernahmeangebot (Kap. 3.2.2 Nr. 2).
+pub const ANGEBOT_FRIST_WT: u32 = 4;
+
+/// Werktage for the Bestellung against a standing Angebot (Kap. 3.2.2 Nr. 3).
+pub const BESTELLUNG_FRIST_WT: u32 = 3;
+
+/// Werktage for the Bestellbestätigung (Kap. 3.2.2 Nr. 4).
 ///
-/// Register a `Deadline` with this label immediately after `ValidationPassed`:
-///
-/// ```rust,ignore
-/// let due = mako_engine::fristen::deadline_at_werktage(
-///     received_at, 5, HolidayCalendar::BdewMaKo,
-/// );
-/// let deadline = Deadline::new(process.stream_id().clone(), ..., ORDRSP_DEADLINE_LABEL, due);
-/// deadline_store.register(&deadline).await?;
-/// ```
+/// *"Unverzüglich, jedoch spätester ÜT ist der 2. WT nach dem ÜT von Nr. 3."*
+pub const BESTAETIGUNG_FRIST_WT: u32 = 2;
+
+/// Deadline label for the ORDRSP response window (2 Werktage).
 pub const ORDRSP_DEADLINE_LABEL: &str = "wim-geraeteubernahme-ordrsp-deadline";
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -107,9 +110,9 @@ pub const ORDRSP_DEADLINE_LABEL: &str = "wim-geraeteubernahme-ordrsp-deadline";
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum GeraeteubernahmeEvent {
-    /// Phase 1: nMSB Anfrage Geräteübernahmeangebot received (ORDERS 17001/17002).
+    /// Phase 1: MSBN Anfrage received (ORDERS 17001/17002/17009).
     AnfrageReceived {
-        /// ORDERS PID (17001 or 17002).
+        /// ORDERS PID (17001, 17002 or 17009).
         pid: Pruefidentifikator,
         /// GLN of the incoming MSB (nMSB).
         incoming_msb: MarktpartnerCode,
@@ -129,25 +132,25 @@ pub enum GeraeteubernahmeEvent {
         /// Reference of the validated message.
         message_ref: MessageRef,
     },
-    /// Phase 1: ORDRSP dispatched (17003 positive / 17004 negative).
+    /// Phase 1: Angebot dispatched (QUOTES 15001) or the Anfrage refused.
     AnfrageOrdrspDispatched {
-        /// `true` if the offer was accepted (17003), `false` if rejected (17004).
+        /// `true` if an Angebot was made, `false` if the Anfrage was refused.
         positive: bool,
         /// Message reference of the dispatched ORDRSP.
         response_ref: MessageRef,
         /// Rejection reason text (only set when `positive = false`).
         reason: Option<String>,
     },
-    /// Phase 2: nMSB Bestellung Geräteübernahme received (ORDERS 17005).
+    /// Phase 2: MSBN Bestellung received (ORDERS 17001, Kap. 3.2.2 Nr. 3).
     BestellungReceived {
-        /// ORDERS PID (17005).
+        /// ORDERS PID (17001).
         pid: Pruefidentifikator,
         /// EDIFACT message reference.
         message_ref: MessageRef,
     },
-    /// Phase 2: ORDRSP dispatched (17007 positive / 17008 negative).
+    /// Phase 2: ORDRSP dispatched (19001 Bestellbestätigung / 19002 Ablehnung).
     BestellungOrdrspDispatched {
-        /// `true` if transfer confirmed (17007), `false` if rejected (17008).
+        /// `true` if confirmed (19001), `false` if rejected (19002).
         positive: bool,
         /// Message reference of the dispatched ORDRSP.
         response_ref: MessageRef,
@@ -161,7 +164,7 @@ pub enum GeraeteubernahmeEvent {
     },
     /// Commissioning request cancelled by nMSB via Stornierung ORDERS.
     Storniert {
-        /// PID of the Stornierung ORDERS (17009 or 17011).
+        /// PID of the Stornierung ORDERS (17009).
         stornierung_pid: Pruefidentifikator,
         /// EDIFACT message reference of the Stornierung.
         message_ref: MessageRef,
@@ -204,7 +207,7 @@ impl EventPayload for GeraeteubernahmeEvent {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GeraeteubernahmeData {
-    /// BDEW Prüfidentifikator (17001–17011).
+    /// BDEW Prüfidentifikator (17001, 17002 or 17009).
     pub pid: Pruefidentifikator,
     /// GLN of the incoming Messstellenbetreiber (nMSB).
     pub incoming_msb: MarktpartnerCode,
@@ -316,30 +319,30 @@ pub enum GeraeteubernahmeCommand {
         /// Validation error messages when `validation_passed = false`.
         validation_errors: Vec<String>,
     },
-    /// Dispatch ORDRSP for Phase 1 (PID 17003 positive or 17004 negative).
+    /// Dispatch the Angebot (QUOTES 15001) or refuse the Anfrage.
     ///
     /// **BNetzA BK6-18-032**: ORDRSP must be sent within **5 Werktage** of
     /// receiving the Anfrage. Use `fristen::add_werktage(5, BdewMaKo)`.
     DispatchAnfrageOrdrsp {
-        /// `true` to accept (17003), `false` to reject (17004).
+        /// `true` to send an Angebot, `false` to refuse.
         positive: bool,
         /// Message reference assigned to the outbound ORDRSP.
         response_ref: MessageRef,
         /// Rejection reason (required when `positive = false`).
         reason: Option<String>,
     },
-    /// Phase 2: Inbound ORDERS 17005 — Bestellung Geräteübernahme.
+    /// Phase 2: Inbound ORDERS 17001 — Bestellung gegen das Angebot.
     ///
     /// Only valid after a positive `AnfrageOrdrspDispatched`.
     ReceiveBestellung {
-        /// ORDERS PID (17005).
+        /// ORDERS PID (17001).
         pid: Pruefidentifikator,
         /// EDIFACT message reference.
         message_ref: MessageRef,
     },
-    /// Dispatch ORDRSP for Phase 2 (PID 17007 positive or 17008 negative).
+    /// Dispatch ORDRSP for Phase 2 (19001 Bestellbestätigung / 19002 Ablehnung).
     DispatchBestellungOrdrsp {
-        /// `true` to confirm transfer (17007), `false` to reject (17008).
+        /// `true` to confirm (19001), `false` to reject (19002).
         positive: bool,
         /// Message reference assigned to the outbound ORDRSP.
         response_ref: MessageRef,
@@ -353,9 +356,9 @@ pub enum GeraeteubernahmeCommand {
         /// Physical device identifier confirmed at transfer.
         device_id: DeviceId,
     },
-    /// nMSB cancels the request via Stornierung ORDERS (17009 or 17011).
+    /// MSBN announces a Gerätewechselabsicht via ORDERS 17009.
     ReceiveStornierung {
-        /// Stornierung ORDERS PID (17009 or 17011).
+        /// ORDERS PID (17009).
         pid: Pruefidentifikator,
         /// EDIFACT message reference.
         message_ref: MessageRef,
@@ -373,7 +376,7 @@ impl CommandPayload for GeraeteubernahmeCommand {}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
-/// WiM Geräteübernahme workflow (PIDs 17001–17011).
+/// WiM Geräteübernahme workflow (WiM Strom Teil 1, Kap. 3.2).
 ///
 /// Implements the two-phase BDEW WiM commissioning request process from the
 /// **NB/aMSB perspective** — the receiving side of ORDERS messages.
@@ -929,7 +932,7 @@ mod tests {
         let events = WimGeraeteubernahmeWorkflow::handle(
             &state,
             GeraeteubernahmeCommand::ReceiveBestellung {
-                pid: Pruefidentifikator::new(17005).unwrap(),
+                pid: Pruefidentifikator::new(17001).unwrap(),
                 message_ref: MessageRef::new("MSG-ORDERS-002"),
             },
         )
@@ -1034,7 +1037,7 @@ mod tests {
         let events = WimGeraeteubernahmeWorkflow::handle(
             &state,
             GeraeteubernahmeCommand::ReceiveStornierung {
-                pid: Pruefidentifikator::new(17011).unwrap(), // WiM Strom Teil 1 Stornierung
+                pid: Pruefidentifikator::new(17009).unwrap(), // Ankündigung Gerätewechselabsicht
                 message_ref: MessageRef::new("MSG-STORNO-001"),
             },
         )

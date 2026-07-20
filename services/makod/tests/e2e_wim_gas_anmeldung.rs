@@ -33,7 +33,7 @@
 //!
 //! - **PID 44042**: Anmeldung MSB Gas (MSBN → NB, WiM Gas AWH V2.0)
 //! - **APERAK Frist**: **10 Werktage** (BNetzA BK7-24-01-009)
-//! - **Saturday counts as a Werktag**; Sunday and federal public holidays do not.
+//! - **Saturdays, Sundays and federal public holidays are not Werktage.**
 //! - The NB state machine:
 //!   `New → Initiated → ValidationPassed → AperakSent → Active` (positive)
 //!   `New → Initiated → ValidationPassed → Rejected` (negative APERAK)

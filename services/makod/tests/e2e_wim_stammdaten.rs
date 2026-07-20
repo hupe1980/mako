@@ -23,7 +23,7 @@
 //!
 //! - **PID 17132**: Anfrage zur Übermittlung von Stammdaten Strom (ORDERS, NB → MSB)
 //! - **Response Frist**: **5 Werktage** (BNetzA BK6-18-032)
-//! - **Saturday counts as a Werktag**; Sunday and public holidays do not.
+//! - **Saturdays, Sundays and public holidays are not Werktage.**
 //! - MSB state machine:
 //!   `New → AnforderungReceived → ValidationPassed → Uebermittelt` (positive)
 //!   `New → AnforderungReceived → ValidationPassed → Abgelehnt` (rejection)

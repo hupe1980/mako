@@ -3,7 +3,7 @@
 //! Verifies that:
 //!
 //! - The APERAK Frist is **10 Werktage** (BK7-24-01-009), not 5.
-//! - Saturday counts as a Werktag; Sunday and public holidays do not.
+//! - Saturdays, Sundays and public holidays are not Werktage.
 //! - `deadline_at_werktage` fires at 17:00 Europe/Berlin, not midnight UTC.
 //! - The deadline label matches `RESPONSE_WINDOW_LABEL` in the workflow constants.
 //! - A timeout fires `DeadlineExpired` and transitions the process to `Rejected`.
@@ -84,34 +84,33 @@ fn wim_gas_aperak_is_10_werktage_not_5() {
         "WiM Gas (10 WT) and WiM Strom (5 WT) deadlines must differ"
     );
 
-    // 10 WT from Mon 2025-01-06: Mon/Tue/Wed/Thu/Fri/Sat = 6 WT in first week,
-    // then Mon/Tue/Wed/Thu/Fri = 5 more = 11 total → Fri 2025-01-17 is the 10th.
-    let expected = Date::from_calendar_date(2025, Month::January, 17).unwrap();
+    // 10 WT from Mon 2025-01-06 (Heilige Drei Könige is Mon 06, already past):
+    // Tue 07 … Fri 10 = 4, Mon 13 … Fri 17 = 9, Mon 20 = 10. Weekends are not
+    // Werktage.
+    let expected = Date::from_calendar_date(2025, Month::January, 20).unwrap();
     assert_eq!(
         gas_deadline, expected,
-        "10 WT from Mon 2025-01-06 must land on Fri 2025-01-17"
+        "10 WT from Mon 2025-01-06 must land on Mon 2025-01-20"
     );
 }
 
-/// Saturday counts as a Werktag in BdewMaKo calendar.
+/// Saturday is **not** a Werktag in market communication.
 ///
-/// Starting on Friday 2025-01-10, 1 Werktag should be Saturday 2025-01-11
-/// (not Monday 2025-01-13).
+/// GPKE (BK6-24-174) Teil 1: "alle Tage ..., die kein Samstag, Sonntag oder
+/// gesetzlicher Feiertag sind". So 1 WT from Friday 2025-01-10 is Monday
+/// 2025-01-13, not Saturday.
 #[test]
-fn saturday_counts_as_werktag() {
+fn saturday_is_not_a_werktag() {
     let friday = Date::from_calendar_date(2025, Month::January, 10).unwrap();
     let next = fristen::add_werktage(friday, 1, HolidayCalendar::BdewMaKo);
     assert_eq!(
         next,
-        Date::from_calendar_date(2025, Month::January, 11).unwrap(),
-        "1 WT from Friday must land on Saturday (BdewMaKo)"
+        Date::from_calendar_date(2025, Month::January, 13).unwrap(),
+        "1 WT from Friday must skip the weekend and land on Monday"
     );
 }
 
-/// Sunday does NOT count as a Werktag.
-///
-/// 1 Werktag from Saturday 2025-01-11 (already a Werktag) should be Monday
-/// 2025-01-13 (Sunday is skipped).
+/// Counting from a Saturday still lands on the next Monday.
 #[test]
 fn sunday_skipped_in_werktag_count() {
     let saturday = Date::from_calendar_date(2025, Month::January, 11).unwrap();
@@ -130,9 +129,8 @@ fn sunday_skipped_in_werktag_count() {
 /// We use a January date (CET) and assert the UTC hour is 16.
 ///
 /// Werktag count from Wed 2025-01-08 (10 WT):
-///   Thu 9 (1), Fri 10 (2), Sat 11 (3), Mon 13 (4 — Sun 12 skipped),
-///   Tue 14 (5), Wed 15 (6), Thu 16 (7), Fri 17 (8), Sat 18 (9),
-///   Mon 20 (10 — Sun 19 skipped).
+///   Thu 9 (1), Fri 10 (2), Mon 13 (3), Tue 14 (4), Wed 15 (5),
+///   Thu 16 (6), Fri 17 (7), Mon 20 (8), Tue 21 (9), Wed 22 (10).
 #[test]
 fn deadline_fires_at_1700_berlin_not_midnight_utc() {
     // Wednesday 2025-01-08 CET (UTC+1): any hour before midnight Berlin.
@@ -146,8 +144,8 @@ fn deadline_fires_at_1700_berlin_not_midnight_utc() {
     let due_date = deadline.date();
     assert_eq!(
         due_date,
-        Date::from_calendar_date(2025, Month::January, 20).unwrap(),
-        "10 WT from Wed 2025-01-08 should land on Mon 2025-01-20"
+        Date::from_calendar_date(2025, Month::January, 22).unwrap(),
+        "10 WT from Wed 2025-01-08 should land on Wed 2025-01-22"
     );
 
     // The deadline must be at 17:00 CET = 16:00 UTC (not midnight 00:00 UTC).

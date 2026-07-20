@@ -285,6 +285,24 @@ pub async fn dispatch_deadline(
                 .await
                 .map(|_| ())
         }
+        name if name == mako_wim::wertebestellung::WORKFLOW_NAME => {
+            let p =
+                Process::<mako_wim::wertebestellung::WimWertebestellungWorkflow, _>::from_identity(
+                    Arc::clone(&event_store),
+                    identity,
+                );
+            p.execute_and_enqueue_with_retry(
+                mako_wim::wertebestellung::WertebestellungCommand::TimeoutExpired {
+                    deadline_id,
+                    label,
+                },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
         "wim-steuerungsauftrag" => {
             let p = Process::<WimSteuerungsauftragWorkflow, _>::from_identity(
                 Arc::clone(&event_store),
@@ -977,6 +995,7 @@ pub const DISPATCH_TABLE: &[&str] = &[
     "gpke-datenabruf",
     "gpke-allokationsliste",
     "wim-technik-aenderung",
+    mako_wim::wertebestellung::WORKFLOW_NAME,
     // Simple-receipt workflows (no deadline; in DISPATCH_TABLE to satisfy assert_dispatch_coverage)
     mako_gpke::messwerte::WORKFLOW_NAME,
     mako_gpke::partin::WORKFLOW_NAME,

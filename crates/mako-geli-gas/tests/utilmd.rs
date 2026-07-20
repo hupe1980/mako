@@ -56,7 +56,7 @@ use mako_geli_gas::{
 /// # Regulatory context
 ///
 /// GeLi Gas APERAK Frist: **10 Werktage** (BNetzA BK7).
-/// Saturday counts as a Werktag; Sunday and federal public holidays do not.
+/// Saturdays, Sundays and federal public holidays are not Werktage.
 const UTILMD_44001_BYTES: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+GAS-2025-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:G1.1'\

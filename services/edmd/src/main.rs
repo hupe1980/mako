@@ -48,6 +48,25 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // `OidcVerifier::disabled` admits every caller as `dev-admin` with all
+    // roles, so an omitted `[oidc]` section leaves the whole API — GDPR erasure
+    // and `POST /api/v1/query/sql` included — open to anyone who can reach the
+    // port. Refuse to start rather than let a missing section be the difference.
+    if cfg.oidc.is_none() && !cfg.allow_insecure_no_auth {
+        anyhow::bail!(
+            "no [oidc] section configured. Without it every request is admitted as \
+             `dev-admin` with all market roles and every Cedar check passes. \
+             Configure [oidc], or set allow_insecure_no_auth = true to accept an \
+             unauthenticated deployment."
+        );
+    }
+    if cfg.allow_insecure_no_auth {
+        tracing::warn!(
+            "edmd: allow_insecure_no_auth is set — every request is admitted as \
+             dev-admin with all market roles"
+        );
+    }
+
     let http = mako_service::http::default_client();
     let oidc = mako_service::oidc::OidcConfig::build_verifier(
         cfg.oidc.as_ref(),
@@ -109,6 +128,7 @@ async fn main() -> anyhow::Result<()> {
         mcp: cfg.mcp,
         shutdown,
         erp_webhook_url: cfg.webhook.erp_webhook_url,
+        rate_limit: cfg.rate_limit,
         archive: if cfg.archive.enabled {
             // Resolve env references in archive credentials.
             let mut archive = cfg.archive;

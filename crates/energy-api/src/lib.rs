@@ -53,7 +53,7 @@
 //!
 //! ```no_run
 //! # #[cfg(feature = "client")]
-//! # async fn example() -> Result<(), energy_api::Error> {
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! use energy_api::client::ControlMeasuresClient;
 //! use energy_api::models::electricity::{
 //!     CommandControl, LocationId, NeloId, MaximumPowerValue,
@@ -68,7 +68,8 @@
 //! client.send_konfiguration(
 //!     Uuid::new_v4(),
 //!     "2025-06-01T10:00:00.000Z",
-//!     &LocationId::NetworkLocation(NeloId("E1234848431".into())),
+//!     // `NeloId::new` validates the ASCII-Verfahren check digit.
+//!     &LocationId::NetworkLocation(NeloId::new("E1234848431")?),
 //!     &CommandControl {
 //!         maximum_power_value: MaximumPowerValue("10.5".into()),
 //!         execution_time_from: "2025-06-01T10:00:00Z".into(),

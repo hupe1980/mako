@@ -12,7 +12,7 @@ This supersedes BK7-19-001 and the original BK7-06-067 (2007).
 
 GeLi Gas processes use **10 Werktage** (`fristen::add_werktage(10, BdewMaKo)`)
 for the APERAK response deadline. This is the longest Frist across all process
-families. Saturday counts as a Werktag; Sunday and public holidays do not.
+families. Saturdays, Sundays and public holidays are not Werktage.
 
 ## Key difference from electricity processes
 

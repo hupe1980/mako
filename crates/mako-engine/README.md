@@ -130,7 +130,7 @@ uses the correct helper from `fristen`:
 | GeLi Gas | 10 Werktage | `fristen::add_werktage(d, 10, BdewMaKo)` |
 | WiM Gas | 10 Werktage | `fristen::add_werktage(d, 10, BdewMaKo)` |
 
-**Saturday counts as a Werktag.** Sunday and public holidays do not.
+**Saturday is not a Werktag.** GPKE (BK6-24-174) Teil 1: *"alle Tage ..., die kein Samstag, Sonntag oder gesetzlicher Feiertag sind"*. A holiday observed in any single Bundesland counts nationwide, and 24.12. and 31.12. count as holidays.
 Deadline arithmetic uses **German local time (CET/CEST)** via the `time` crate.
 
 ---
