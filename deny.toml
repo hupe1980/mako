@@ -75,6 +75,16 @@ deny = [
 # Review and tighten on every annual dependency update pass.
 
 [[bans.skip]]
+name    = "wasm-encoder"
+version = "0.245"
+reason  = "wasmtime 43 internals pin wasm-encoder 0.245 while wast 254 (via wat/wasm-compose in the same extism/mako-plugin chain) uses 0.254. Resolve when extism bumps wasmtime."
+
+[[bans.skip]]
+name    = "wasmparser"
+version = "0.245"
+reason  = "same wasmtime-43-vs-wast-254 split as wasm-encoder; one side vanishes when extism bumps wasmtime."
+
+[[bans.skip]]
 name    = "wast"
 version = "35"
 reason  = "witx 0.9 (transitive via wiggle/wasi-common of the extism/wasmtime WASM plugin sandbox in mako-plugin) pins the ancient wast 0.35; wasmtime's own tooling uses current wast. Resolve when wiggle drops witx or extism updates."
