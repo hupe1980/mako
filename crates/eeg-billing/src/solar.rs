@@ -14,7 +14,7 @@
 //!   new `Stecker-PV` category (≤ 2 kWp)
 
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 
 // ── SolarBauform ──────────────────────────────────────────────────────────────
 
@@ -215,7 +215,7 @@ impl SolarAnlageData {
 /// # Example
 /// ```rust
 /// use eeg_billing::solar::{SolarBauform, requires_ausschreibung};
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// assert!( requires_ausschreibung(dec!(1001), SolarBauform::Gebaeude));  // > 1 MWp
 /// assert!(!requires_ausschreibung(dec!(999),  SolarBauform::Gebaeude));  // ≤ 1 MWp
@@ -257,7 +257,7 @@ pub fn requires_ausschreibung(leistung_kwp: Decimal, bauform: SolarBauform) -> b
 /// ```rust
 /// use eeg_billing::solar::ustg_12_3_applies;
 /// use time::macros::date;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// // 10 kWp on residential house, commissioned Jan 2024 → zero VAT
 /// assert!(ustg_12_3_applies(dec!(10), true, date!(2024-03-01)));

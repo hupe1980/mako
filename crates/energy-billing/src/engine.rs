@@ -9,7 +9,7 @@
 //!
 //! ```rust
 //! use energy_billing::{BillingContext, InvoiceType, MeterInput, Product, Quantities, RegulatoryRates, GridInput};
-//! use rust_decimal_macros::dec;
+//! use rust_decimal::dec;
 //! use time::macros::date;
 //!
 //! let product: Product = serde_json::from_str(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#).unwrap();

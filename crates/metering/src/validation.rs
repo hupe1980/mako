@@ -289,7 +289,7 @@ impl ValidationResult {
 ///
 /// ```rust
 /// use metering::{MeterInterval, QualityFlag, validate_intervals, ValidationConfig};
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 /// use time::macros::datetime;
 ///
 /// let intervals = vec![
@@ -521,7 +521,7 @@ pub fn validate_intervals(
 mod tests {
     use super::*;
     use crate::interval::QualityFlag;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::datetime;
 
     fn iv(from: OffsetDateTime, to: OffsetDateTime, kwh: rust_decimal::Decimal) -> MeterInterval {
@@ -810,7 +810,7 @@ fn detect_dst_ambiguity(intervals: &[MeterInterval]) -> Vec<ValidationIssue> {
 mod v07_tests {
     use super::*;
     use crate::interval::QualityFlag;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::datetime;
 
     /// Build `n` consecutive quarter-hours from `start`.

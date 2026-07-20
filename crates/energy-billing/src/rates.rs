@@ -4,7 +4,7 @@
 //! statutory rates; they change with each legislative year.
 
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 use serde::{Deserialize, Serialize};
 
 // ── BEHG CO₂ price table ──────────────────────────────────────────────────────
@@ -65,7 +65,7 @@ pub const BEHG_CO2_FACTOR_L_GAS: Decimal = dec!(0.20140);
 ///
 /// ```rust
 /// use energy_billing::rates::stromsteuer_for_year;
-/// assert_eq!(stromsteuer_for_year(2024), Some(rust_decimal_macros::dec!(2.05)));
+/// assert_eq!(stromsteuer_for_year(2024), Some(rust_decimal::dec!(2.05)));
 /// assert_eq!(stromsteuer_for_year(1999), None); // before StromStG
 /// ```
 const STROMSTEUER_HISTORY: &[(i32, &str)] = &[
@@ -128,9 +128,9 @@ pub fn stromsteuer_for_year(year: i32) -> Option<Decimal> {
 /// ```rust
 /// use energy_billing::rates::energiesteuer_gas_for_year;
 /// // 2022 had the emergency reduction
-/// assert_eq!(energiesteuer_gas_for_year(2022), Some(rust_decimal_macros::dec!(0.0)));
+/// assert_eq!(energiesteuer_gas_for_year(2022), Some(rust_decimal::dec!(0.0)));
 /// // Restored from 2023
-/// assert_eq!(energiesteuer_gas_for_year(2023), Some(rust_decimal_macros::dec!(0.55)));
+/// assert_eq!(energiesteuer_gas_for_year(2023), Some(rust_decimal::dec!(0.55)));
 /// ```
 const ENERGIESTEUER_GAS_HISTORY: &[(i32, &str)] = &[
     // Emergency 0-rate (Energiesteuersenkungsgesetz 2022-03-20, in effect 01.04.2022 – 31.03.2023)
@@ -166,7 +166,7 @@ pub fn energiesteuer_gas_for_year(year: i32) -> Option<Decimal> {
 /// use energy_billing::rates::behg_ct_per_kwh_for_year;
 /// // 2024: 45 EUR/t × 0.20160 kg/kWh = 0.9072 ct/kWh
 /// let ct = behg_ct_per_kwh_for_year(2024).unwrap();
-/// assert!(ct > rust_decimal_macros::dec!(0.90) && ct < rust_decimal_macros::dec!(0.92));
+/// assert!(ct > rust_decimal::dec!(0.90) && ct < rust_decimal::dec!(0.92));
 /// ```
 #[must_use]
 pub fn behg_ct_per_kwh_for_year(year: i32) -> Option<Decimal> {

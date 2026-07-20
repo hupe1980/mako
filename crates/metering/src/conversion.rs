@@ -136,7 +136,7 @@ pub fn normalize_interval_to_kwh(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     #[test]
     fn gas_conversion_exact() {

@@ -20,7 +20,7 @@ use energy_billing::{
 };
 use proptest::prelude::*;
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 use time::macros::date;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

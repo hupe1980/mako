@@ -86,6 +86,17 @@ CREATE TABLE eeg_anlagen (
     mieter_zuschlag_ct         NUMERIC(6, 4),
     -- BNetzA Zuschlag-ID from tender result (Ausschreibungsanlagen)
     ausschreibungs_zuschlag_id TEXT,
+    -- §22 EEG 2023: the awarded anzulegender Wert, distinct from a contracted
+    -- Direktvermarktung value. Held separately so an award is never confused
+    -- with a bilaterally agreed rate.
+    zuschlagswert_ct           NUMERIC(8, 4),
+    zuschlag_datum             DATE,
+    -- §39n EEG 2023: Innovationsausschreibung pays a fixed market premium.
+    ist_innovationsausschreibung BOOLEAN NOT NULL DEFAULT false,
+    -- §22b EEG 2023: a Bürgerenergiegesellschaft (§3 Nr. 15) is exempt from
+    -- needing a valid Zuschlag, so it settles at the statutory rate even in an
+    -- auction-eligible size class.
+    ist_buergerenergie         BOOLEAN NOT NULL DEFAULT false,
 
     -- §22 EEG 2023 Repowering (clock reset)
     ist_repowering             BOOLEAN     NOT NULL DEFAULT false,
@@ -251,8 +262,9 @@ COMMENT ON TABLE settlement_receipts IS
     '§22 MessZV: 3-year immutable settlement audit log. '
     'Correction receipts (is_correction=true) coexist with originals via partial unique index.';
 
--- Partial unique: exactly one non-correction receipt per plant × period
--- Referenced by ON CONFLICT ON CONSTRAINT sr_unique_initial in pg.rs
+-- Partial unique: exactly one non-correction receipt per plant × period.
+-- Upserts must repeat the predicate — ON CONFLICT (cols) WHERE is_correction = false —
+-- because Postgres cannot infer a partial index from the column list alone.
 CREATE UNIQUE INDEX sr_unique_initial
     ON settlement_receipts (tr_id, tenant, billing_year, billing_month)
     WHERE is_correction = false;
@@ -473,3 +485,39 @@ COMMENT ON TABLE sect54_reductions IS
     'Each row = one BNetzA reduction notification for an Ausschreibungsanlage.';
 
 CREATE INDEX sect54_tr_id ON sect54_reductions (tr_id, tenant, effective_from DESC);
+
+-- ── Jahresabrechnung (§25 EEG 2023 / §14 UStG annual reconciliation) ──────────
+--
+-- The monthly settlements are the payment obligation; this is the annual
+-- statement that reconciles them. It is derived from settlement_receipts rather
+-- than recomputed, so it can never disagree with what was actually paid, and it
+-- records which months are missing rather than quietly summing eleven.
+CREATE TABLE jahresabrechnungen (
+    id                      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tr_id                   TEXT        NOT NULL,
+    tenant                  TEXT        NOT NULL,
+    billing_year            SMALLINT    NOT NULL,
+    -- Sum over the year's receipts.
+    einspeisemenge_kwh      NUMERIC(18, 3) NOT NULL DEFAULT 0,
+    settlement_eur          NUMERIC(14, 2) NOT NULL DEFAULT 0,
+    -- §52 EEG 2023 Pflichtzahlungen, kept apart from the Vergütung: they are a
+    -- separate claim and are never netted into the settlement total.
+    pflichtzahlung_eur      NUMERIC(14, 2) NOT NULL DEFAULT 0,
+    -- Months with a receipt, and the ones without.
+    months_settled          SMALLINT    NOT NULL DEFAULT 0,
+    missing_months          SMALLINT[]  NOT NULL DEFAULT '{}',
+    -- §51a: quarter-hours accrued across the year toward the Vergütungszeitraum.
+    verlaengerungsanspruch_qh BIGINT    NOT NULL DEFAULT 0,
+    -- Number of corrections issued in the year (§22 MessZV audit signal).
+    correction_count        SMALLINT    NOT NULL DEFAULT 0,
+    status                  TEXT        NOT NULL DEFAULT 'vorlaeufig'
+                            CHECK (status IN ('vorlaeufig', 'endgueltig')),
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT fk_ja_anlage FOREIGN KEY (tr_id, tenant)
+        REFERENCES eeg_anlagen (tr_id, tenant) ON DELETE CASCADE
+);
+
+-- One statement per plant and year; re-running replaces it.
+CREATE UNIQUE INDEX ja_unique ON jahresabrechnungen (tr_id, tenant, billing_year);
+CREATE INDEX ja_year ON jahresabrechnungen (tenant, billing_year);

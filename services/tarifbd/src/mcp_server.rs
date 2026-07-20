@@ -715,7 +715,7 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
     ) -> Result<CallToolResult, McpError> {
         use crate::handlers::{compute_jahreskosten_supply_netto, extract_tarif_preise};
         use crate::pg::{ComparisonFeedQuery, fetch_comparison_feed};
-        use rust_decimal_macros::dec;
+        use rust_decimal::dec;
 
         let q = ComparisonFeedQuery {
             lf_mp_id: Some(p.lf_mp_id.clone()),

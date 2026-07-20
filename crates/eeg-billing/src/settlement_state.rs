@@ -224,7 +224,7 @@ pub enum StateTransitionReason {
 ///
 /// ```rust
 /// use eeg_billing::settlement_state::{derive_settlement_state, SettlementPeriodState};
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 /// use time::macros::date;
 ///
 /// // Healthy plant — active (50 kW, Fernsteuerbarkeit installed 2024)
@@ -252,7 +252,7 @@ pub fn derive_settlement_state(
     billing_date: Date,
     eeg_gesetz_year: i16,
 ) -> SettlementPeriodState {
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     // ── Förderdauer expired ───────────────────────────────────────────────────
     if let Some(fed) = foerderendedatum
@@ -293,7 +293,7 @@ pub fn derive_settlement_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::date;
 
     #[test]

@@ -202,7 +202,7 @@ impl MeterRegister {
 mod tests {
     use super::*;
     use crate::obis::ObisCode;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::date;
 
     fn make_register(obis: ObisCode, register_number: u8) -> MeterRegister {

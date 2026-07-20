@@ -126,7 +126,7 @@ impl BiomassSettlementData {
         energiepflanzen_anteil: Decimal,
         leistung_kw: Decimal,
     ) -> Self {
-        use rust_decimal_macros::dec;
+        use rust_decimal::dec;
         let ist_guellebonusanlage = hauptbrennstoff.guellebonusanlage_eligible()
             && guelle_anteil >= dec!(0.80)
             && leistung_kw <= dec!(75);
@@ -146,7 +146,7 @@ impl BiomassSettlementData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     #[test]
     fn guellebonusanlage_qualifies_when_criteria_met() {

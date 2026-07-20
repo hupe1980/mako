@@ -22,5 +22,4 @@ serde   = ["dep:serde", "rust_decimal/serde"]
 
 [dev-dependencies]
 proptest            = "1"
-rust_decimal_macros = { workspace = true }
 time = { workspace = true, features = ["macros"] }

@@ -134,7 +134,7 @@ eeg-billing/src/
 
 ```rust
 use eeg_billing::{SettleInput, SettlementScheme, SettlementStatus, calculate_settlement};
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 
 // §21 EEG 2023 — 500 kWh × 8.11 ct/kWh = 40.55 EUR
 let out = calculate_settlement(&SettleInput {
@@ -152,7 +152,7 @@ assert_eq!(out.settlement_eur, Some(dec!(40.55)));
 // eff_AW = 6.28 + 0.4 = 6.68 ct; EPEX = 4.50 ct
 // Marktprämie = (6.68 − 4.50) × 100,000 / 100 = 2,180 EUR
 use eeg_billing::{SettleInput, SettlementScheme, calculate_settlement};
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 
 let out = calculate_settlement(&SettleInput {
     scheme: SettlementScheme::MarketPremium,
@@ -204,7 +204,7 @@ Two key differences from §51 (source: §51b Satz 2 EEG 2023):
 ```rust
 use eeg_billing::{SettleInput, SettlementScheme, TariffSource, AusschreibungMetadata,
                   calculate_settlement};
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 
 // Biogas auction plant: EPEX 1.5 ct ≤ 2 ct → AW = 0, EUR 0
 let out = calculate_settlement(&SettleInput {
@@ -243,7 +243,7 @@ For old plants that fall under a specific `§100` transition provision, supply
 ```rust
 use eeg_billing::{SettleInput, SettlementScheme, EegGesetz, calculate_settlement};
 use eeg_billing::scheme::{TariffSource, Paragraph100Rule};
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 
 // Pre-2016 plant — §51 must NEVER apply, regardless of eeg_gesetz setting.
 // TariffSource::Transitional auto-overrides to Eeg2012 → §51 exempt.
@@ -305,7 +305,7 @@ let r = apply_sect52_netting(settlement_eur, pflichtzahlung_eur);
 
 ```rust
 use eeg_billing::degression::{solar_ueberschuss_rate_for_quarter, DegressionTier, Quarter};
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 
 // 9 kWp, Q4 2024 (2 quarters after Solarpaket I), 1% tier → 8.51 × 0.99² = 8.34 ct
 let rate = solar_ueberschuss_rate_for_quarter(
@@ -323,7 +323,7 @@ assert_eq!(rate, Some(dec!(8.34)));
 ```rust
 use eeg_billing::direktverm::{is_direktvermarktung_mandatory, requires_ausschreibung};
 use eeg_billing::{EegGesetz, ErzeugungsArt};
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 
 assert!(is_direktvermarktung_mandatory(dec!(150), EegGesetz::Eeg2023)); // >100 kW: mandatory
 assert!(requires_ausschreibung(dec!(1500), ErzeugungsArt::SolarAufdach)); // >1 MWp: tender
@@ -412,8 +412,27 @@ The typical pipeline for a single billing period:
 9. SettleOutput { settlement_eur, eligible_kwh, positions, pflichtzahlung_eur, faelligkeitsdatum }
 ```
 
-VAT (§12 Abs. 3 UStG / §19 UStG Kleinunternehmer / Regelbesteuerung) is applied
-by the caller via `EegSettleTariff` + `ust::ust_tax_layers()` — not inside `calculate_settlement`.
+VAT is applied by the caller via `EegSettleTariff` + `ust::ust_tax_layers()` — not
+inside `calculate_settlement`. Every status yields exactly one tax layer, including
+the two that charge nothing:
+
+| `VatStatus` | Rate | EN 16931 category | Basis |
+|---|---|---|---|
+| `Regelbesteuerung` | 19 % | `S` — Standard | §12 Abs. 1 UStG |
+| `BefreitNach12Abs3` | 0 % | `Z` — Zero rated | §12 Abs. 3 UStG (Nullsteuersatz) |
+| `Kleinunternehmer` | 0 % | `E` — Exempt | §19 UStG (tax not levied) |
+
+A supply taxed at 0 % is still a taxable supply, so it belongs in the EN 16931
+BG-23 VAT breakdown under its own UNTDID 5305 category with a zero tax amount.
+Omitting the layer would drop that turnover from the breakdown entirely and
+understate the taxable base. §12 Abs. 3 UStG sets a zero *rate* and maps to `Z`;
+§19 UStG does not levy the tax at all and maps to `E`, which carries the
+exemption reason EN 16931 requires (BT-120).
+
+A document mixing treatments — a 0 % PV feed-in credit beside 19 % NNE grid
+charges — cannot use a single status. Build the layers directly and scope each to
+its own positions with `FixedRateTax::with_tag`, so each contributes its own
+breakdown entry.
 
 ---
 

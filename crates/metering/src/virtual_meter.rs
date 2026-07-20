@@ -398,7 +398,7 @@ fn worst_quality(a: QualityFlag, b: QualityFlag) -> QualityFlag {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::{Duration, macros::datetime};
 
     fn make_iv(from: OffsetDateTime, kwh: Decimal, quality: QualityFlag) -> MeterInterval {

@@ -2,7 +2,7 @@
 
 use billing::EuroAmount;
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 
 use crate::model::{SettleInput, SettleOutput, SettlePosition, SettlementStatus};
 use crate::scheme::SettlementScheme;
@@ -14,7 +14,7 @@ use crate::scheme::SettlementScheme;
 /// Returns `Decimal::ZERO` on overflow (> ~92 million EUR) and logs the offending value.
 fn validated_eur(d: Decimal) -> Decimal {
     EuroAmount::checked_from_decimal(d)
-        .map(|a| a.to_decimal()) // billing 0.5.1 BUG-1: error now carries input_value if needed
+        .map(billing::EuroAmount::into_decimal)
         .unwrap_or(Decimal::ZERO)
 }
 
@@ -383,7 +383,7 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
         let cap = deduplicated_pflichtverstoss
             .iter()
             .map(|v| {
-                use rust_decimal_macros::dec;
+                use rust_decimal::dec;
                 v.leistung_kw * dec!(10) * rust_decimal::Decimal::from(v.monate_des_verstosses)
             })
             .fold(

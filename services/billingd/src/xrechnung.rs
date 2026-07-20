@@ -75,6 +75,12 @@ pub struct XRechnungInfo {
     /// BT-112 Invoice total amount inclusive of VAT.
     pub brutto_eur: Decimal,
 
+    /// BT-113 Sum of amounts already paid in advance (Abschläge), gross.
+    ///
+    /// Deducted from BT-112 to give the amount due (BT-115), per BR-CO-16.
+    /// Zero on an invoice that settles no advances.
+    pub prepaid_eur: Decimal,
+
     /// Standard VAT rate applied (e.g. `19` for Germany 19%).
     pub vat_rate_pct: Decimal,
 }
@@ -276,7 +282,8 @@ pub fn build_zugferd_cii_xml(info: &XRechnungInfo) -> String {
         <ram:TaxBasisTotalAmount>{netto_eur}</ram:TaxBasisTotalAmount>
         <ram:TaxTotalAmount currencyID="EUR">{mwst_eur}</ram:TaxTotalAmount>
         <ram:GrandTotalAmount>{brutto_eur}</ram:GrandTotalAmount>
-        <ram:DuePayableAmount>{brutto_eur}</ram:DuePayableAmount>
+        <ram:TotalPrepaidAmount>{prepaid_eur}</ram:TotalPrepaidAmount>
+        <ram:DuePayableAmount>{due_payable_eur}</ram:DuePayableAmount>
       </ram:SpecifiedTradeSettlementHeaderMonetarySummation>
     </ram:ApplicableHeaderTradeSettlement>
 
@@ -297,6 +304,11 @@ pub fn build_zugferd_cii_xml(info: &XRechnungInfo) -> String {
         netto_eur = info.netto_eur.round_dp(2),
         mwst_eur = info.mwst_eur.round_dp(2),
         brutto_eur = info.brutto_eur.round_dp(2),
+        prepaid_eur = info.prepaid_eur.round_dp(2),
+        // BR-CO-16: amount due is the gross less what has already been paid.
+        // Emitting the gross here bills the customer a second time for the
+        // advances they have already settled.
+        due_payable_eur = (info.brutto_eur - info.prepaid_eur).round_dp(2),
         tax_breakdown = render_tax_breakdown(info),
         due_date = due_date_fmt,
     )
@@ -517,6 +529,9 @@ pub fn info_from_rechnung_json(
         // what was billed. Empty when the JSON carries no positions, which the
         // renderer handles by falling back to a single standard-rate block.
         tax_subtotals: subtotals_from_rechnung_json(rechnung_json, vat_rate_pct),
+        // Summed from the BO4E Vorauszahlungen the invoice actually carries, so a
+        // settling invoice bills only the balance (BR-CO-16).
+        prepaid_eur: prepaid_from_rechnung_json(rechnung_json),
         vat_rate_pct,
     }
 }
@@ -542,15 +557,39 @@ fn subtotals_from_rechnung_json(
     energy_billing::invoice::tax_subtotals_of(&parsed, default_rate)
 }
 
+/// Sum the gross of the BO4E `vorauszahlungen` block — EN 16931 BT-113.
+///
+/// Returns zero when the invoice carries no advances, which is the correct
+/// prepaid total for an invoice that settles none.
+fn prepaid_from_rechnung_json(rechnung_json: &serde_json::Value) -> rust_decimal::Decimal {
+    rechnung_json
+        .get("vorauszahlungen")
+        .and_then(serde_json::Value::as_array)
+        .map(|advances| {
+            advances
+                .iter()
+                .filter_map(|a| {
+                    a.get("betrag")?
+                        .get("wert")?
+                        .as_str()?
+                        .parse::<rust_decimal::Decimal>()
+                        .ok()
+                })
+                .sum()
+        })
+        .unwrap_or_default()
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     fn sample_info() -> XRechnungInfo {
         XRechnungInfo {
+            prepaid_eur: rust_decimal::Decimal::ZERO,
             invoice_number: "BILL-2026-001".to_owned(),
             issue_date: time::macros::date!(2026 - 07 - 01),
             due_date: Some(time::macros::date!(2026 - 07 - 31)),
@@ -591,6 +630,43 @@ mod tests {
             brutto_eur: dec!(126.14),
             vat_rate_pct: dec!(19),
         }
+    }
+
+    /// BR-CO-16: the amount due is the gross less what has already been paid.
+    /// Billing the gross would charge the customer a second time for advances
+    /// they have already settled.
+    #[test]
+    fn prepaid_advances_reduce_the_amount_due() {
+        let mut info = sample_info();
+        info.brutto_eur = dec!(1190.00);
+        info.prepaid_eur = dec!(892.50);
+        let xml = build_zugferd_cii_xml(&info);
+
+        assert!(
+            xml.contains("<ram:GrandTotalAmount>1190.00</ram:GrandTotalAmount>"),
+            "{xml}"
+        );
+        assert!(
+            xml.contains("<ram:TotalPrepaidAmount>892.50</ram:TotalPrepaidAmount>"),
+            "{xml}"
+        );
+        assert!(
+            xml.contains("<ram:DuePayableAmount>297.50</ram:DuePayableAmount>"),
+            "{xml}"
+        );
+    }
+
+    /// With no advances the amount due is the full gross.
+    #[test]
+    fn no_advances_leaves_the_full_gross_payable() {
+        let mut info = sample_info();
+        info.brutto_eur = dec!(1190.00);
+        info.prepaid_eur = Decimal::ZERO;
+        let xml = build_zugferd_cii_xml(&info);
+        assert!(
+            xml.contains("<ram:DuePayableAmount>1190.00</ram:DuePayableAmount>"),
+            "{xml}"
+        );
     }
 
     #[test]

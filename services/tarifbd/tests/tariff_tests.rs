@@ -752,7 +752,7 @@ mod angebot_validity_tests {
 #[cfg(test)]
 mod mwst_tests {
     use rust_decimal::Decimal;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     const MWST_RATE: Decimal = dec!(0.19);
 
@@ -789,7 +789,7 @@ mod mwst_tests {
 
 #[cfg(test)]
 mod comparison_feed_tests {
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use tarifbd::handlers::{
         compute_feed_etag, compute_jahreskosten_supply_netto, extract_bonus_rabatt_eur,
         extract_kuendigungsfrist_wochen, extract_laufzeit_monate, extract_mindestlaufzeit_monate,

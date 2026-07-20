@@ -267,7 +267,7 @@ pub async fn check_billing_anomaly(
     lf_mp_id: &str,
     threshold_pct: Option<Decimal>,
 ) -> anyhow::Result<BillingAnomalyReport> {
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     let threshold = threshold_pct.unwrap_or(dec!(20));
 
     let rows = sqlx::query(

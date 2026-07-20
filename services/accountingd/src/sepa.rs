@@ -312,8 +312,8 @@ pub fn calculate_interest_ct(
     is_b2b: bool,
     days: i64,
 ) -> (i64, rust_decimal::Decimal) {
+    use rust_decimal::dec;
     use rust_decimal::prelude::*;
-    use rust_decimal_macros::dec;
 
     let premium = if is_b2b { dec!(9) } else { dec!(5) };
     let annual_rate = ecb_base_rate_pct + premium;

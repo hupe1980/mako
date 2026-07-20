@@ -18,7 +18,7 @@
 //! the calculation, satisfying BNetzA §20 EnWG audit requirements.
 
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 
 // ── PositionTrace ─────────────────────────────────────────────────────────────
 
@@ -427,7 +427,7 @@ impl BillingPosition {
 /// Returns `Decimal::ZERO` on overflow (same behaviour as `eeg-billing`).
 pub(crate) fn validated_eur(amount: Decimal) -> Decimal {
     billing::EuroAmount::checked_from_decimal(amount)
-        .map(|a| a.to_decimal())
+        .map(billing::EuroAmount::into_decimal)
         .unwrap_or(Decimal::ZERO)
 }
 

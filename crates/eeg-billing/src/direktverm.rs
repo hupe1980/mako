@@ -36,7 +36,7 @@
 //! Rate: 0.4 ct/kWh for plants ≤ 100 MW; 0.2 ct/kWh for plants > 100 MW.
 
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 use time::Date;
 
 use crate::technology::ErzeugungsArt;
@@ -65,7 +65,7 @@ pub const DIREKTVERMARKTUNG_PFLICHT_KW: Decimal = dec!(100);
 /// ```rust
 /// use eeg_billing::direktverm::is_direktvermarktung_mandatory;
 /// use eeg_billing::EegGesetz;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// // 150 kW plant under EEG 2023 — mandatory
 /// assert!(is_direktvermarktung_mandatory(dec!(150), EegGesetz::Eeg2023));
@@ -98,7 +98,7 @@ pub fn is_direktvermarktung_mandatory(leistung_kw: Decimal, gesetz: EegGesetz) -
 /// ```rust
 /// use eeg_billing::direktverm::requires_ausschreibung;
 /// use eeg_billing::ErzeugungsArt;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// // 1.5 MWp solar → tender mandatory
 /// assert!(requires_ausschreibung(dec!(1500), ErzeugungsArt::SolarAufdach));
@@ -209,7 +209,7 @@ impl DirektvermarktungsPeriode {
 ///
 /// ```rust
 /// use eeg_billing::direktverm::{DirektvermarktungsPeriode, current_period};
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 /// use time::macros::date;
 ///
 /// let periods = vec![
@@ -270,7 +270,7 @@ pub enum SwitchBlockedReason {
 /// ```rust
 /// use eeg_billing::direktverm::{validate_switch_to_vergütung, SwitchBlockedReason};
 /// use eeg_billing::EegGesetz;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 /// use time::macros::date;
 ///
 /// // 80 kW voluntary plant switching once per month — OK

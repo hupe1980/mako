@@ -6,6 +6,8 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use mako_service::cedar::CedarEnforcer;
+use mako_service::oidc::Claims;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -204,10 +206,20 @@ pub async fn emit_foerderung_alert_ce(
 
 /// `POST /api/v1/anlagen`  — Register or replace a plant.
 pub async fn post_anlage(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Json(req): Json<AnlageUpsertRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "write-anlage", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     match upsert_anlage(&pool, &cfg.tenant, req).await {
         Ok(()) => StatusCode::CREATED.into_response(),
         Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
@@ -216,11 +228,21 @@ pub async fn post_anlage(
 
 /// `PUT /api/v1/anlagen/{tr_id}`  — Update an existing plant.
 pub async fn put_anlage(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Path(tr_id): Path<String>,
     Json(mut req): Json<AnlageUpsertRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "write-anlage", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     req.tr_id = tr_id;
     match upsert_anlage(&pool, &cfg.tenant, req).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -230,10 +252,20 @@ pub async fn put_anlage(
 
 /// `GET /api/v1/anlagen/{tr_id}`
 pub async fn get_anlage(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Path(tr_id): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-anlage", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(Some(row)) => Json(row).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
@@ -243,10 +275,20 @@ pub async fn get_anlage(
 
 /// `GET /api/v1/anlagen`  — List plants with optional filters.
 pub async fn get_anlagen(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Query(q): Query<AnlagenQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-anlage", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     match list_anlagen(&pool, &cfg.tenant, &q).await {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -255,10 +297,20 @@ pub async fn get_anlagen(
 
 /// `DELETE /api/v1/anlagen/{tr_id}`  — Decommission (set status = 'abgemeldet').
 pub async fn delete_anlage(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Path(tr_id): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "write-anlage", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     match decommission_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
@@ -273,10 +325,20 @@ pub async fn delete_anlage(
 /// Returns plants whose `foerderendedatum` is within 180 days of today.
 /// Used by the background alert worker and ERP dashboards.
 pub async fn get_foerderung_auslaufend(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Query(q): Query<HorizonQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-anlage", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     let days = q.days.unwrap_or(180);
     match list_expiring(&pool, &cfg.tenant, days).await {
         Ok(rows) => Json(rows).into_response(),
@@ -328,12 +390,22 @@ pub struct SettleTriggerRequest {
 /// Trigger monthly EEG settlement for one plant.  Idempotent — re-running
 /// overwrites the previous result for the same (tr_id, year, month).
 pub async fn post_settle(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Extension(http_client): Extension<Arc<reqwest::Client>>,
     Path((tr_id, year, month)): Path<(String, i16, i16)>,
     Json(req): Json<SettleTriggerRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "run-settlement", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     // Load plant to get settlement parameters.
     let anlage = match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(Some(a)) => a,
@@ -372,6 +444,7 @@ pub async fn post_settle(
             einspeisemanagement_kwh: req.einspeisemanagement_kwh,
             negative_price_quarter_hours: req.negative_price_quarter_hours,
             correction_of: None,
+            correction_reason: None,
             jahresmarktwert_ct_kwh: None, // auto-fetched by run_settlement
         },
     );
@@ -423,11 +496,21 @@ pub async fn post_settle(
 
 /// `GET /api/v1/anlagen/{tr_id}/settlements`
 pub async fn get_settlements(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Path(tr_id): Path<String>,
     Query(q): Query<SettlementsQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-settlement", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     match list_settlement_receipts(&pool, &cfg.tenant, &tr_id, q.limit.unwrap_or(24).min(200)).await
     {
         Ok(rows) => Json(rows).into_response(),
@@ -468,10 +551,21 @@ pub struct JahresmarktwertBody {
 /// technology-specific Jahresmarktwert takes precedence over the generic EPEX
 /// monthly average from `epex_monthly_prices`.
 pub async fn put_jahresmarktwert(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Extension(pool): Extension<PgPool>,
     Path((year, month, erzeugungsart)): Path<(i16, i16, String)>,
     Json(body): Json<JahresmarktwertBody>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "write-marktdaten", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     if !(1..=12).contains(&month) {
         return (StatusCode::BAD_REQUEST, "month must be 1–12").into_response();
     }
@@ -485,9 +579,20 @@ pub async fn put_jahresmarktwert(
 
 /// `GET /api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}`
 pub async fn get_jahresmarktwert(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Extension(pool): Extension<PgPool>,
     Path((year, month, erzeugungsart)): Path<(i16, i16, String)>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-marktdaten", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     match fetch_jahresmarktwert_single(&pool, year, month, &erzeugungsart).await {
         Ok(Some(p)) => Json(serde_json::json!({
             "billing_year": year,
@@ -503,10 +608,21 @@ pub async fn get_jahresmarktwert(
 
 /// `PUT /api/v1/epex-monthly/{year}/{month}`
 pub async fn put_epex_price(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Extension(pool): Extension<PgPool>,
     Path((year, month)): Path<(i16, i16)>,
     Json(body): Json<EpexPriceBody>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "write-marktdaten", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     let source = body.source.as_deref().unwrap_or("manual");
     match upsert_epex_price(&pool, year, month, body.avg_ct_kwh, source).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -516,9 +632,20 @@ pub async fn put_epex_price(
 
 /// `GET /api/v1/epex-monthly/{year}/{month}`
 pub async fn get_epex_price(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Extension(pool): Extension<PgPool>,
     Path((year, month)): Path<(i16, i16)>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-marktdaten", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     match fetch_epex_price(&pool, year, month).await {
         Ok(Some(p)) => Json(serde_json::json!({
             "billing_year": year,
@@ -556,11 +683,21 @@ pub struct RepoweringRequest {
 ///
 /// Idempotent: re-posting with the same date is safe.
 pub async fn post_repowering(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Path(tr_id): Path<String>,
     Json(req): Json<RepoweringRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     use time::format_description::well_known::Iso8601;
 
     let repowering_datum = match time::Date::parse(&req.repowering_datum, &Iso8601::DEFAULT) {
@@ -682,11 +819,21 @@ pub struct MastrRegistrierungRequest {
 ///
 /// `de.eeg.anlage.mastr_registriert` — signals ERP to release pending Vergütung.
 pub async fn post_mastr_registrierung(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Path(tr_id): Path<String>,
     Json(req): Json<MastrRegistrierungRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     use time::format_description::well_known::Iso8601;
 
     let mastr_datum = if let Some(ref ds) = req.mastr_datum {
@@ -754,9 +901,20 @@ pub async fn post_mastr_registrierung(
 /// Used during Anlage registration to auto-populate `verguetungssatz_ct`
 /// without requiring the operator to manually look up BNetzA tables.
 pub async fn post_verguetungssatz_lookup(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Extension(pool): Extension<PgPool>,
     Json(req): Json<VerguetungssatzLookupRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-marktdaten", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     match lookup_verguetungssatz(
         &pool,
         &req.erzeugungsart,
@@ -805,12 +963,22 @@ pub struct BatchSettleRequest {
 ///
 /// Returns a summary with per-plant results and aggregate totals.
 pub async fn post_batch_settle(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Extension(http_client): Extension<Arc<reqwest::Client>>,
     Path((year, month)): Path<(i16, i16)>,
     Json(req): Json<BatchSettleRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "run-settlement", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     // Resolve EPEX price once for the whole batch.
     let epex_avg_ct_kwh = match req.epex_avg_ct_kwh {
         Some(p) => Some(p),
@@ -885,6 +1053,7 @@ pub async fn post_batch_settle(
                         einspeisemanagement_kwh: None,
                         negative_price_quarter_hours: None,
                         correction_of: None,
+                        correction_reason: None,
                         jahresmarktwert_ct_kwh: None,
                     },
                 );
@@ -991,11 +1160,21 @@ pub struct ZusammenlegungRequest {
 /// This is distinct from Repowering (§22 EEG): Zusammenlegung is an
 /// administrative merger, not a hardware replacement. No new commissioning date.
 pub async fn post_zusammenlegen(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Path(child_tr_id): Path<String>,
     Json(req): Json<ZusammenlegungRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     if child_tr_id == req.parent_tr_id {
         return (
             StatusCode::BAD_REQUEST,
@@ -1052,12 +1231,22 @@ pub struct VeraeusserungsformWechselRequest {
 /// On success: updates `settlement_model`, `direktverm_mp_id`, `direktverm_aw_ct`,
 /// and `last_veraeusserungsform_switch` on the plant record.
 pub async fn post_switch_veraeusserungsform(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Extension(http_client): Extension<Arc<reqwest::Client>>,
     Path(tr_id): Path<String>,
     Json(req): Json<VeraeusserungsformWechselRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     use eeg_billing::EegGesetz;
     use eeg_billing::direktverm::{SwitchBlockedReason, validate_switch_to_vergütung};
     use time::format_description::well_known::Iso8601;
@@ -1273,11 +1462,21 @@ pub struct CorrectionSettleRequest {
 /// The correction stores `SettlementType::Correction { original_id, reason }` for
 /// traceability per §22 MessZV.
 pub async fn post_correction_settle(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
     Path((tr_id, year, month)): Path<(String, i16, i16)>,
     Json(req): Json<CorrectionSettleRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "correct-settlement", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     let anlage = match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
@@ -1328,6 +1527,10 @@ pub async fn post_correction_settle(
             correction_of: original_id
                 .as_deref()
                 .and_then(|s| uuid::Uuid::parse_str(s).ok()),
+            correction_reason: Some(match &req.reason_detail {
+                Some(detail) => format!("{:?}: {detail}", req.reason),
+                None => format!("{:?}", req.reason),
+            }),
             jahresmarktwert_ct_kwh: None,
         },
     );
@@ -1348,6 +1551,39 @@ pub async fn post_correction_settle(
             })),
         ).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `POST /api/v1/anlagen/{tr_id}/jahresabrechnung/{year}`
+///
+/// Build the annual reconciliation over the year's monthly settlements.
+///
+/// The statement is derived from the stored receipts, not recomputed, so it
+/// always agrees with what was actually settled. An incomplete year yields
+/// `status = "vorlaeufig"` and names the months still missing rather than
+/// presenting a partial sum as if it were the year.
+pub async fn post_jahresabrechnung(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Path((tr_id, year)): Path<(String, i16)>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "run-settlement", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    match crate::pg::run_jahresabrechnung(&pool, &cfg.tenant, &tr_id, year).await {
+        Ok(ja) => (StatusCode::OK, Json(ja)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 

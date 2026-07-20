@@ -34,7 +34,7 @@
 //! ```rust
 //! use eeg_billing::rates;
 //! use eeg_billing::{ErzeugungsArt};
-//! use rust_decimal_macros::dec;
+//! use rust_decimal::dec;
 //!
 //! // Gross AW for a 15 kWp solar plant (EEG 2023 initial)
 //! let lookup = rates::solar_pv_lookup(2023).expect("EEG 2023 solar PV rates known");
@@ -61,7 +61,7 @@
 //! (§7 KWKG 2023 Anlage).  §53 does NOT apply to KWKG.  See [`kwkg_zuschlag_lookup`].
 
 use billing::{Amount, BillingError, RateLookup};
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 
 // ── Solar PV ──────────────────────────────────────────────────────────────────
 
@@ -100,7 +100,7 @@ use rust_decimal_macros::dec;
 ///
 /// ```rust
 /// use eeg_billing::rates;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// // EEG 2024 (Solarpaket I): 9 kWp building-mounted PV → 8.51 ct/kWh
 /// let table = rates::solar_pv_ueberschuss_lookup(2024).expect("known year");
@@ -174,7 +174,7 @@ pub fn solar_pv_lookup(eeg_year: i16) -> Option<RateLookup> {
 ///
 /// ```rust
 /// use eeg_billing::rates;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// // EEG 2024: 9 kWp full feed-in → 13.31 ct/kWh
 /// let table = rates::solar_pv_volleinspeisung_lookup(2024).expect("known year");
@@ -226,7 +226,7 @@ pub fn solar_pv_volleinspeisung_lookup(eeg_year: i16) -> Option<RateLookup> {
 ///
 /// ```rust
 /// use eeg_billing::rates;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// let table = rates::wind_onshore_lookup(2023).unwrap();
 /// // ≤750 kW (small turbines, tender-exempt)
@@ -269,7 +269,7 @@ pub fn wind_onshore_lookup(eeg_year: i16) -> Option<RateLookup> {
 ///
 /// ```rust
 /// use eeg_billing::rates;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// let table = rates::biomasse_lookup(2023).unwrap();
 /// assert_eq!(table.rate_for(dec!(200)).unwrap(), billing::Amount::parse("0.14670").unwrap());
@@ -308,7 +308,7 @@ pub fn biomasse_lookup(eeg_year: i16) -> Option<RateLookup> {
 ///
 /// ```rust
 /// use eeg_billing::rates;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// let table = rates::kwkg_zuschlag_lookup().unwrap();
 /// // 50 kW_el CHP plant
@@ -367,7 +367,7 @@ fn amount_ct(ct_str: &str) -> Amount<5> {
 ///
 /// ```rust
 /// use eeg_billing::rates;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// let table = rates::wasserkraft_lookup(2023).unwrap();
 /// // 200 kW run-of-river plant: ≤500 kW tier
@@ -468,7 +468,7 @@ pub fn gasart_lookup(eeg_year: i16) -> Option<RateLookup> {
 ///
 /// ```rust
 /// use eeg_billing::rates;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// let rate = rates::lookup_rate("SOLAR_AUFDACH", dec!(9), 2023).unwrap();
 /// // 9 kWp ≤10 kWp bracket → 8.11 ct/kWh (EEG 2023)
@@ -521,7 +521,7 @@ pub fn lookup_rate(
 /// ```rust
 /// use eeg_billing::rates::sect53_deduction;
 /// use eeg_billing::ErzeugungsArt;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// // Solar PV and Wind: -0.4 ct/kWh
 /// assert_eq!(sect53_deduction(ErzeugungsArt::Solar),       dec!(0.4));
@@ -591,7 +591,7 @@ pub fn sect53_deduction(art: crate::technology::ErzeugungsArt) -> rust_decimal::
 ///
 /// ```rust
 /// use eeg_billing::rates;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// // 50 kW Güllekleinanlage — eligible under §44 EEG 2023
 /// let table = rates::guellekleinanlage_rate(2023).expect("known year");

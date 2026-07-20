@@ -19,7 +19,7 @@
 
 use metering::*;
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 use time::macros::datetime;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1058,7 +1058,7 @@ fn sect17_prior_period_average_uses_matching_time_slot() {
     use metering::{
         FillGapsConfig, MeterInterval, QualityFlag, SubstituteMethod, fill_gaps_with_config,
     };
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::datetime;
 
     // Reference series with a 4-slot gap: 07:00–08:00 on 2026-07-01.
@@ -1168,7 +1168,7 @@ fn sect17_prior_period_average_uses_matching_time_slot() {
 fn faulty_intervals_excluded_from_billing_sum() {
     use metering::{MeterInterval, QualityFlag};
     use rust_decimal::Decimal;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     let intervals = [
         MeterInterval {

@@ -44,7 +44,7 @@
 //! the auction projection. This is enforced via separate BNetzA notification.
 
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 
 // ── Sect52Netting ─────────────────────────────────────────────────────────────
 
@@ -89,7 +89,7 @@ pub struct NettingResult {
 ///
 /// ```rust
 /// use eeg_billing::reductions::apply_sect52_netting;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// // Vergütung: 42.55 EUR, Pflichtzahlung: 10.00 EUR
 /// // Net disbursement = 32.55 EUR, residual = 0
@@ -156,7 +156,7 @@ impl Sect53cReduction {
     ///
     /// ```rust
     /// use eeg_billing::reductions::Sect53cReduction;
-    /// use rust_decimal_macros::dec;
+    /// use rust_decimal::dec;
     ///
     /// let reduction = Sect53cReduction {
     ///     regional_factor: dec!(0.10),
@@ -211,7 +211,7 @@ impl Sect54Reduction {
     ///
     /// ```rust
     /// use eeg_billing::reductions::Sect54Reduction;
-    /// use rust_decimal_macros::dec;
+    /// use rust_decimal::dec;
     /// use time::macros::date;
     ///
     /// let reduction = Sect54Reduction {
@@ -250,7 +250,7 @@ impl Sect54Reduction {
 ///
 /// ```rust
 /// use eeg_billing::reductions::ReductionPipeline;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// // Only Pflichtzahlung applies, with §52 Abs. 6 netting enabled
 /// let pipeline = ReductionPipeline {

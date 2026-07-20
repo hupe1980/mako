@@ -235,7 +235,7 @@ Each is independently testable and suitable for crates.io publication.
 ```mermaid
 graph TD
     subgraph pure ["Pure calculation crates (zero I/O)"]
-        billing["billing 0.6 (crates.io)\nTariffSchedule · TimeOfUsePricing\nDynamicPricing · prorate\nProportionalAllocation"]
+        billing["billing 0.7 (crates.io)\nTariffSchedule · TimeOfUsePricing\nDynamicPricing · prorate\nVAT breakdown · AdvancePayment"]
         metering["metering\nMeterInterval · fill_gaps (§17)\nHampel quality · gas_m3_to_kwh_hs"]
         eeg["eeg-billing\n9 EEG/KWKG schemes\n§51/§52/§36k · 324 tests"]
         grid["grid-billing\nNNE · KA · MMM · MSB\nGridSettlement + CalculationTrace\nno rubo4e dep"]

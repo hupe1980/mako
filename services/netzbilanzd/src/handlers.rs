@@ -1719,7 +1719,7 @@ pub async fn post_remadv_webhook(
 #[cfg(test)]
 mod kostenblatt_tests {
     use super::decimal_from_json_value;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     // ── decimal_from_json_value ───────────────────────────────────────────────
 

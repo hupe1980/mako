@@ -55,6 +55,12 @@ pub struct EinsdMcpState {
     pub pool: PgPool,
     pub tenant: String,
     pub auth: mako_service::mcp_auth::McpAuth,
+    /// Needed to emit `de.eeg.settlement.*` CloudEvents from `trigger_settle`.
+    ///
+    /// A settlement run through MCP creates the same payment obligation as one
+    /// through REST, so it has to notify accountingd and the ERP the same way.
+    pub cfg: std::sync::Arc<crate::config::EinsdConfig>,
+    pub http_client: std::sync::Arc<reqwest::Client>,
 }
 
 // ── Parameter types ───────────────────────────────────────────────────────────
@@ -364,14 +370,33 @@ impl EinsdMcpHandler {
                 einspeisemanagement_kwh: None,
                 negative_price_quarter_hours: None,
                 correction_of: None,
+                correction_reason: None,
                 jahresmarktwert_ct_kwh: None,
             },
         );
 
         match run_settlement(&self.state.pool, input).await {
-            Ok(result) => ContentBlock::json(serde_json::to_value(&result).unwrap_or_default())
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None)),
+            Ok(result) => {
+                // Same obligation as the REST path, so the same notification.
+                crate::handlers::emit_settlement_ce(
+                    &self.state.cfg,
+                    &self.state.http_client,
+                    "de.eeg.settlement.berechnet",
+                    &result.tr_id,
+                    &anlage.malo_id,
+                    &result,
+                    params.billing_year,
+                    params.billing_month,
+                    anlage.bank_iban.as_deref(),
+                    anlage.bank_bic.as_deref(),
+                    anlage.zahlungsempfaenger.as_deref(),
+                )
+                .await;
+
+                ContentBlock::json(serde_json::to_value(&result).unwrap_or_default())
+                    .map(|b| CallToolResult::success(vec![b]))
+                    .map_err(|e| McpError::internal_error(e.message, None))
+            }
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
@@ -579,7 +604,7 @@ impl EinsdMcpHandler {
             r"SELECT tr_id, erzeugungsart, leistung_kwp, eeg_gesetz,
                      mastr_registriert, mastr_nummer, mastr_datum, status,
                      inbetriebnahme, foerderendedatum,
-                     kwk_strom_kwh_gesamt, kwk_max_kwh
+                     kwk_strom_kwh_gesamt, kwk_foerderdauer_h
               FROM eeg_anlagen WHERE tr_id = $1 AND tenant = $2",
         )
         .bind(&p.tr_id)
@@ -607,6 +632,19 @@ impl EinsdMcpHandler {
         let today = time::OffsetDateTime::now_utc().date();
         let foerderung_aktiv = foerderendedatum.is_none_or(|d| d >= today);
 
+        // §8 KWKG: the limit is full-load hours x installed capacity, held as those
+        // two columns rather than a stored product, so it is derived here too.
+        let kwk_max_kwh = r
+            .try_get::<Option<i32>, _>("kwk_foerderdauer_h")
+            .ok()
+            .flatten()
+            .map(|h| f64::from(h) * leistung_kwp);
+        let kwk_verbraucht_kwh = r
+            .try_get::<Option<rust_decimal::Decimal>, _>("kwk_strom_kwh_gesamt")
+            .ok()
+            .flatten()
+            .and_then(|d| TryInto::<f64>::try_into(d).ok());
+
         // §52 Abs. 1 Nr. 11 EEG 2023: MaStR not registered
         let penalty_per_month = if !mastr_ok && foerderung_aktiv {
             leistung_kwp * 10.0 // €10/kW/month (EEG 2023) or Vergütung=0 (EEG ≤2021)
@@ -628,6 +666,13 @@ impl EinsdMcpHandler {
                 "regime": if eeg_gesetz >= 2023 { "§52 EEG 2023: €10/kW/month" } else { "§47 EEG ≤2021: Vergütung = 0" },
                 "note": if !mastr_ok { "URGENT: Register in MaStR at https://www.marktstammdatenregister.de" } else { "No penalty risk" },
             },
+            "kwkg_stundenkontingent": kwk_max_kwh.map(|max| serde_json::json!({
+                "max_kwh": max,
+                "verbraucht_kwh": kwk_verbraucht_kwh,
+                "verbleibend_kwh": kwk_verbraucht_kwh.map(|v| (max - v).max(0.0)),
+                "erschoepft": kwk_verbraucht_kwh.is_some_and(|v| v >= max),
+                "basis": "§8 KWKG — Vollbenutzungsstunden x installierte Leistung",
+            })),
             "recommended_action": if !mastr_ok && foerderung_aktiv {
                 "Register plant in MaStR immediately. POST /api/v1/anlagen/{tr_id}/mastr-registrierung after registration."
             } else {
@@ -1311,7 +1356,7 @@ impl ServerHandler for EinsdMcpHandler {
              DIREKTVERMARKTUNG (§20 Marktprämie) | AUSSCHREIBUNG (§§22a/28) |\n\
              POST_EEG_SPOT (§23b: 10ct cap) | EIGENVERBRAUCH | KWKG_ZUSCHLAG (§7 KWKG 2023) |\n\
              FLEXIBILITAET (§50b, bestehende Anlagen) | FLEXIBILITAET_ZUSCHLAG (§50a, neue Anlagen)\n\n\
-             ## Tools (14)\n\
+             ## Tools (18)\n\
              Core: list_plants, get_plant, list_expiring, list_settlements, list_unsettled_plants\n\
              Rates: lookup_verguetungssatz, lookup_statutory_rate\n\
              Settlement: trigger_settle, get_epex_monthly_price, import_epex_monthly_price\n\

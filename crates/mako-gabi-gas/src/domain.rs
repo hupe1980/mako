@@ -171,7 +171,7 @@ impl GasBeschaffenheit {
     ///
     /// ```rust,no_run
     /// # use mako_gabi_gas::domain::*;
-    /// # use rust_decimal_macros::dec;
+    /// # use rust_decimal::dec;
     /// # use time::macros::date;
     /// let b = GasBeschaffenheit {
     ///     brennwert_hs_kwh_per_m3: dec!(15.0), // invalid: too high for H-Gas
@@ -1017,7 +1017,7 @@ pub enum ImbalanceDirection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::date;
 
     // ── GasBeschaffenheit ──────────────────────────────────────────────────────

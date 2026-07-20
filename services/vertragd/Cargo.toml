@@ -42,4 +42,3 @@ hmac          = { version = "0.12", features = ["std"] }
 sha2          = "0.10"
 
 [dev-dependencies]
-rust_decimal_macros = { workspace = true }

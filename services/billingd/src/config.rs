@@ -88,7 +88,7 @@ pub struct BillingdConfig {
 impl BillingdConfig {
     /// Build `RegulatoryRates` from config, falling back to statutory defaults.
     pub fn regulatory_rates(&self) -> energy_billing::RegulatoryRates {
-        use rust_decimal_macros::dec;
+        use rust_decimal::dec;
         let r = self.rates.as_ref();
         energy_billing::RegulatoryRates {
             stromsteuer_ct_per_kwh: r

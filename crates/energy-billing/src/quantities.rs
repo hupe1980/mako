@@ -160,7 +160,7 @@ pub struct SolarMeterInput {
 ///
 /// ```rust
 /// use energy_billing::GgvNutzungsplanEntry;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// let plan = vec![
 ///     GgvNutzungsplanEntry { malo_id: "51238696780".into(), fraction: dec!(0.45) },
@@ -193,7 +193,7 @@ impl GgvNutzungsplan {
     ///
     /// Returns `Err` with a diagnostic message if validation fails.
     pub fn validate(&self) -> Result<(), String> {
-        use rust_decimal_macros::dec;
+        use rust_decimal::dec;
         if self.0.is_empty() {
             return Err("GGV Nutzungsplan must have at least one entry".to_owned());
         }
@@ -339,7 +339,7 @@ impl Sect41aAnnualComparison {
         actual_eur_brutto: Decimal,
         reference_price_ct_per_kwh: Decimal,
     ) -> Self {
-        use rust_decimal_macros::dec;
+        use rust_decimal::dec;
         let reference_eur_brutto =
             (actual_kwh * reference_price_ct_per_kwh / dec!(100)).round_dp(2);
         let savings_eur = (reference_eur_brutto - actual_eur_brutto).round_dp(2);
@@ -554,7 +554,7 @@ pub struct Quantities {
 ///
 /// ```rust
 /// use energy_billing::ProsumerMeterInput;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// let m = ProsumerMeterInput {
 ///     grid_consumption_kwh: dec!(250),   // drawn from grid → full tariff
@@ -618,7 +618,7 @@ impl ProsumerMeterInput {
 ///
 /// ```rust
 /// use energy_billing::{GgvNutzungsplan, GgvNutzungsplanEntry, GgvSolarInput};
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// let plan = GgvNutzungsplan(vec![
 ///     GgvNutzungsplanEntry { malo_id: "A".into(), fraction: dec!(0.60) },
@@ -680,7 +680,7 @@ impl GgvSolarInput {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     fn plan(fractions: &[(&str, &str)]) -> GgvNutzungsplan {
         GgvNutzungsplan(
@@ -798,7 +798,7 @@ pub struct AbschlagsplanEntry {
 ///
 /// ```rust
 /// use energy_billing::Abschlagsplan;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 /// use time::macros::date;
 ///
 /// let plan = Abschlagsplan::monthly_uniform(
@@ -838,7 +838,7 @@ impl Abschlagsplan {
         annual_brutto_eur: Decimal,
         jahresverbrauch_kwh: Decimal,
     ) -> Self {
-        use rust_decimal_macros::dec;
+        use rust_decimal::dec;
         let monthly = (annual_brutto_eur / dec!(12)).round_dp(2);
         let entries = (0..months)
             .filter_map(|i| {
@@ -875,7 +875,7 @@ impl Abschlagsplan {
 #[cfg(test)]
 mod abschlagsplan_tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::date;
 
     #[test]

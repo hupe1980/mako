@@ -58,7 +58,7 @@ impl DemandInterval {
     ///
     /// ```rust
     /// use metering::demand::DemandInterval;
-    /// use rust_decimal_macros::dec;
+    /// use rust_decimal::dec;
     ///
     /// let kw = DemandInterval::energy_to_demand_kw(dec!(12.0), 900);
     /// // 12 kWh / (900s / 3600s/h) = 12 / 0.25 = 48 kW
@@ -170,7 +170,7 @@ impl DemandWindow {
 mod tests {
     use super::*;
     use crate::interval::{MeterInterval, QualityFlag};
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::datetime;
 
     #[test]

@@ -22,7 +22,7 @@
 
 use accountingd::pg::journal_mapping;
 use accountingd::sepa::calculate_interest_ct;
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 
 // ── §288 BGB Verzugszinsen calculation ────────────────────────────────────────
 

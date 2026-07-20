@@ -5155,7 +5155,7 @@ pub async fn post_substitute_values(
     use time::format_description::well_known::Rfc3339;
 
     let resource_tenant = state.tenant.as_str();
-    if let Err(e) = enforcer.check(&claims.principal(), "write-gdpr-erasure", resource_tenant) {
+    if let Err(e) = enforcer.check(&claims.principal(), "write-timeseries", resource_tenant) {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -6087,7 +6087,22 @@ async fn post_gdpr_erasure(
 ///
 /// Returns the REST catalog configuration.
 /// Required first call by all Iceberg REST clients.
-async fn iceberg_rest_config(State(state): State<HandlerState>) -> impl IntoResponse {
+async fn iceberg_rest_config(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+) -> impl IntoResponse {
+    let tenant = state.tenant.as_str();
+    // The catalog exposes table locations and schemas for the tenant's archived
+    // meter data, so it is gated by the same action as the archive queries it
+    // describes rather than left open to any caller that can reach the port.
+    if let Err(e) = enforcer.check(&claims.principal(), "read-archive-olap", tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
     Json(serde_json::json!({
         "defaults": {},
         "overrides": {
@@ -6096,12 +6111,29 @@ async fn iceberg_rest_config(State(state): State<HandlerState>) -> impl IntoResp
         "_edmd_version": "0.11.0",
         "_edmd_tenant": state.tenant,
     }))
+    .into_response()
 }
 
 /// `GET /api/v1/iceberg/v1/namespaces`
 ///
 /// Lists namespaces. edmd uses one namespace per Sparte (STROM/GAS).
-async fn iceberg_list_namespaces(State(state): State<HandlerState>) -> impl IntoResponse {
+async fn iceberg_list_namespaces(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+) -> impl IntoResponse {
+    let tenant = state.tenant.as_str();
+    // The catalog exposes table locations and schemas for the tenant's archived
+    // meter data, so it is gated by the same action as the archive queries it
+    // describes rather than left open to any caller that can reach the port.
+    if let Err(e) = enforcer.check(&claims.principal(), "read-archive-olap", tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     // Each Sparte maps to an Iceberg namespace.
     Json(serde_json::json!({
         "namespaces": [
@@ -6111,16 +6143,34 @@ async fn iceberg_list_namespaces(State(state): State<HandlerState>) -> impl Into
         "_catalog": "edmd",
         "_tenant": state.tenant,
     }))
+    .into_response()
 }
 
 /// `GET /api/v1/iceberg/v1/namespaces/{namespace}/tables`
 ///
 /// Lists tables in a namespace. edmd exposes `meter_reads` as the primary table.
 async fn iceberg_list_tables(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Path(namespace): Path<String>,
     Extension(pool): Extension<Arc<sqlx::PgPool>>,
 ) -> impl IntoResponse {
+    // The catalog exposes table locations and schemas for the tenant's archived
+    // meter data, so it is gated by the same action as the archive queries it
+    // describes rather than left open to any caller that can reach the port.
+    if let Err(e) = enforcer.check(
+        &claims.principal(),
+        "read-archive-olap",
+        state.tenant.as_str(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     use sqlx::Row as _;
     // Fetch registered catalog entries for this tenant + namespace.
     let rows = sqlx::query(
@@ -6153,7 +6203,7 @@ async fn iceberg_list_tables(
         }));
     }
 
-    Json(serde_json::json!({ "identifiers": identifiers }))
+    Json(serde_json::json!({ "identifiers": identifiers })).into_response()
 }
 
 /// `GET /api/v1/iceberg/v1/namespaces/{namespace}/tables/{table}`
@@ -6161,10 +6211,27 @@ async fn iceberg_list_tables(
 /// Returns the Iceberg table metadata for a named table.
 /// This is the primary endpoint DuckDB/Spark use to discover schema and files.
 async fn iceberg_load_table(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Path((namespace, table)): Path<(String, String)>,
     Extension(pool): Extension<Arc<sqlx::PgPool>>,
 ) -> impl IntoResponse {
+    // The catalog exposes table locations and schemas for the tenant's archived
+    // meter data, so it is gated by the same action as the archive queries it
+    // describes rather than left open to any caller that can reach the port.
+    if let Err(e) = enforcer.check(
+        &claims.principal(),
+        "read-archive-olap",
+        state.tenant.as_str(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     use sqlx::Row as _;
 
     // Look up the catalog entry from the iceberg_catalog_entries table.

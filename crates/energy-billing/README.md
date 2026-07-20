@@ -62,7 +62,7 @@ Pass 5  Cancellation sign reversal   (Stornorechnung — all signs negated)
 ```rust
 use energy_billing::{Product, BillingContext, InvoiceType, MeterInput, Quantities,
                      RegulatoryRates, GridInput};
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 use time::macros::date;
 
 // Deserialize directly from tarifbd JSONB using the "category" discriminator
@@ -208,6 +208,103 @@ pub enum InvoiceType {
     Cancellation { original_invoice_id },         // STORNORECHNUNG — all signs negated
 }
 ```
+
+---
+
+## Advance payments (Abschläge)
+
+A Jahresabrechnung (`InvoiceType::Final`) reconciles the advances the customer
+already paid. Each one is an `AbschlagDeduction`:
+
+```rust
+AbschlagDeduction {
+    datum: date!(2026 - 01 - 15),
+    betrag_eur: dec!(120.00),   // gross, as paid
+    ust_satz: dec!(0.19),       // rate this advance was invoiced at
+    beschreibung: Some("Abschlag Januar 2026".to_owned()),
+}
+```
+
+`ust_satz` is mandatory because **§14 Abs. 5 Satz 2 UStG** requires an Endrechnung
+to deduct the advances *and the tax attributable to them* — "die vereinnahmten
+Teilentgelte und die auf sie entfallenden Steuerbeträge". A gross total alone
+cannot express that: EUR 120 collected at 19 % and EUR 120 collected at 7 %
+deduct different amounts of tax. The rate is per advance rather than per invoice,
+so a rate change mid-year leaves earlier advances at the rate they were billed at.
+
+| Field | Meaning |
+|---|---|
+| `betrag_eur` | gross paid |
+| `netto_eur()` | `betrag_eur / (1 + ust_satz)`, to cents |
+| `ust_eur()` | `betrag_eur - netto_eur()` — derived, so net + tax always re-sums to the gross paid |
+
+On the resulting invoice:
+
+```text
+brutto_eur            gross for the period
+- abschlag_total_eur  gross already paid
+= zahlbetrag_eur      balance due (negative → refund)
+
+abschlag_ust_eur      tax contained in abschlag_total_eur (§14 Abs. 5 Satz 2 UStG)
+```
+
+Abschlag positions never affect `netto_eur` / `mwst_eur` / `brutto_eur` — they
+reconcile what was paid, they are not turnover.
+
+### Two lawful settlement forms
+
+`BillingContext::settlement_form` picks how a settling invoice presents them.
+Both are lawful; they differ in what the document shows, not in what the customer
+pays.
+
+| `SettlementForm` | Shows | Basis |
+|---|---|---|
+| `Endrechnung` (default) | the whole supply, then deducts the advances **and their tax** | §14 Abs. 5 Satz 2 UStG |
+| `Restrechnung` | only the remainder; advances are not listed | BMF 15.10.2024, Rn. 48 |
+
+The Endrechnung form has one failure mode worth naming: deducting the advances
+but not the tax contained in them. Under UStAE 14.8 Abs. 10 the issuer then owes
+the tax shown **plus** the advance-related portion again under §14c Abs. 1 — the
+same tax billed twice. `abschlag_ust_eur` exists so that figure is always
+available to state.
+
+The Restrechnung form is what the BMF recommends for e-invoices, because
+EN 16931's core profiles have nowhere to carry per-advance tax. Compute it with:
+
+```rust
+let residual = invoice.residual_breakdown(default_rate)?;  // supply − advances, per rate
+```
+
+Over-deduction is refused rather than silently accepted: advances exceeding the
+supply in any `(category, rate)` group would understate the output tax owed.
+
+### Crossing into `billing`
+
+```rust
+invoice.advance_payments()?   // Vec<billing::AdvancePayment> — each with its own tax
+invoice.prepayment()?         // billing::Prepayment::Itemised, or ::None
+```
+
+Advances are always itemised, never collapsed to a flat total: the per-advance tax
+is what makes the deduction lawful. `AdvancePayment` mirrors the ZUGFeRD /
+Factur-X EXTENDED group `SpecifiedAdvancePayment` (BG-X-45), the standardised
+place where per-advance tax data has a home.
+
+---
+
+## VAT breakdown (EN 16931 BG-23 / BO4E `steuerbetraege`)
+
+`Invoice::tax_subtotals(default_rate)` groups the positions into one entry per
+distinct rate, each with its own taxable base (BT-116) and tax amount (BT-117).
+A single aggregate `mwst_eur` cannot describe an invoice that mixes 19 %
+commodity with 7 % Fernwärme or 0 % PV feed-in.
+
+Zero-rated bases are included. A supply taxed at 0 % is still a taxable supply,
+and omitting it would make the sum of the bases differ from the invoice net —
+exactly what the EN 16931 total-reconciliation rules check.
+
+The breakdown is emitted as BO4E `steuerbetraege`, whose entries must sum to
+`gesamtsteuer`, and is carried into XRechnung as BG-23.
 
 ---
 

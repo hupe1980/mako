@@ -29,7 +29,6 @@ serde_json   = { workspace = true }
 time         = { workspace = true }
 uuid         = { workspace = true, features = ["v4", "serde"] }
 rust_decimal = { workspace = true }
-rust_decimal_macros = { workspace = true }
 rubo4e       = { workspace = true }
 reqwest      = { workspace = true }
 sepa         = { workspace = true, features = ["json"] }
@@ -50,4 +49,3 @@ integration-tests = []
 # Required by sqlx::test macro for per-test database provisioning
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "rust_decimal", "migrate", "macros"] }
 tokio = { version = "1", features = ["full", "test-util"] }
-rust_decimal_macros = { workspace = true }

@@ -162,7 +162,7 @@ pub fn classify_messtyp(intervals: &[MeterInterval], source: Option<&str>) -> Me
 mod tests {
     use super::*;
     use crate::interval::QualityFlag;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::datetime;
 
     fn iv_15min(i: u8) -> MeterInterval {

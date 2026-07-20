@@ -10,7 +10,7 @@ use eeg_billing::{
     SettleInput, SettlementScheme, SettlementStatus, TariffSource, calculate_settlement, rates,
 };
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 use time::macros::date;
 
 fn d(s: &str) -> Decimal {
@@ -666,7 +666,7 @@ fn eeg_settle_tariff_produces_billing_document() {
 fn eeg_settle_tariff_mit_mwst_19_percent() {
     use billing::DocumentMeta;
     use billing::Tariff;
-    use eeg_billing::tariff::EegSettleTariffMitMwSt;
+    use eeg_billing::tariff::EegSettleTariffRegelbesteuerung;
 
     let output = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FeedInTariff {
@@ -675,7 +675,7 @@ fn eeg_settle_tariff_mit_mwst_19_percent() {
         einspeisemenge_kwh: Some(dec!(1000)),
         ..SettleInput::default()
     });
-    let tariff = EegSettleTariffMitMwSt::new(&output);
+    let tariff = EegSettleTariffRegelbesteuerung::new(&output);
     let doc = tariff
         .bill(DocumentMeta::default(), &())
         .expect("bill mit MwSt");
@@ -1051,14 +1051,19 @@ fn ust_regelbesteuerung_19_pct() {
 }
 
 #[test]
-fn ust_tax_layers_empty_for_exempt() {
+fn ust_tax_layers_zero_rate_for_exempt() {
     use eeg_billing::ust::{VatStatus, ust_tax_layers};
-    // §12 Abs. 3: no USt layer
-    let layers = ust_tax_layers(VatStatus::BefreitNach12Abs3);
-    assert!(layers.is_empty());
-    // Kleinunternehmer: no USt layer
-    let layers = ust_tax_layers(VatStatus::Kleinunternehmer);
-    assert!(layers.is_empty());
+    // A 0 % supply is still a taxable supply: EN 16931 BG-23 requires it in the
+    // VAT breakdown under its own category, so the layer is present and charges
+    // nothing rather than being omitted.
+    for status in [VatStatus::BefreitNach12Abs3, VatStatus::Kleinunternehmer] {
+        let layers = ust_tax_layers(status);
+        assert_eq!(
+            layers.len(),
+            1,
+            "{status:?} must contribute a breakdown entry"
+        );
+    }
 }
 
 #[test]
@@ -1095,7 +1100,7 @@ fn ust_par12_abs3_billing_document_no_vat() {
     let doc = BillingDocument::from_positions(
         DocumentMeta::default(),
         tariff.line_items(&()).unwrap(),
-        ust_tax_layers(vat), // empty
+        ust_tax_layers(vat),
         vec![],
     )
     .unwrap();
@@ -1107,6 +1112,16 @@ fn ust_par12_abs3_billing_document_no_vat() {
         doc.net_total(),
         "§12 Abs. 3 exempt: no USt"
     );
+
+    // The turnover still appears in the EN 16931 BG-23 breakdown, zero-rated:
+    // charging no tax is not the same as having no taxable base.
+    let breakdown = doc.tax_breakdown();
+    assert_eq!(breakdown.len(), 1);
+    assert_eq!(breakdown[0].category, billing::TaxCategory::ZeroRated);
+    assert!(breakdown[0].rate.is_zero());
+    assert_eq!(breakdown[0].taxable_base, doc.net_total());
+    assert!(breakdown[0].tax_amount.is_zero());
+
     doc.assert_valid();
 }
 

@@ -13,7 +13,7 @@ use energy_billing::{
     WaermeMeterInput, behg_ct_per_kwh_for_year,
 };
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 use time::macros::date;
 
 fn rates_2026() -> RegulatoryRates {
@@ -1714,6 +1714,7 @@ fn jahresabrechnung_deducts_abschlage_from_zahlbetrag() {
         .map(|m| AbschlagDeduction {
             datum: date!(2025 - 01 - 15) + time::Duration::days(i64::from(m) * 30),
             betrag_eur: dec!(120.00),
+            ust_satz: dec!(0.19),
             beschreibung: Some(format!("Abschlag {m}/2025")),
         })
         .collect();
@@ -1748,6 +1749,55 @@ fn jahresabrechnung_deducts_abschlage_from_zahlbetrag() {
     assert_eq!(abschlag_count, 12, "12 Abschlag positions expected");
     // netto_eur / mwst_eur / brutto_eur are NOT affected by Abschlag
     assert!(invoice.brutto_eur > dec!(0));
+
+    // §14 Abs. 5 Satz 2 UStG: the tax contained in the advances is stated
+    // separately. 12 × EUR 120.00 gross at 19 % → 12 × 19.16 = EUR 229.92.
+    assert_eq!(invoice.abschlag_ust_eur, dec!(229.92));
+}
+
+/// §14 Abs. 5 Satz 2 UStG — an advance's tax is computed at the rate that advance
+/// was invoiced at, so a mid-year rate change does not retroactively restate it.
+#[test]
+fn abschlag_ust_uses_the_rate_each_advance_was_invoiced_at() {
+    use energy_billing::AbschlagDeduction;
+
+    let at_19 = AbschlagDeduction {
+        datum: date!(2025 - 01 - 15),
+        betrag_eur: dec!(119.00),
+        ust_satz: dec!(0.19),
+        beschreibung: None,
+    };
+    let at_7 = AbschlagDeduction {
+        datum: date!(2025 - 07 - 15),
+        betrag_eur: dec!(107.00),
+        ust_satz: dec!(0.07),
+        beschreibung: None,
+    };
+
+    assert_eq!(at_19.netto_eur(), dec!(100.00));
+    assert_eq!(at_19.ust_eur(), dec!(19.00));
+    assert_eq!(at_7.netto_eur(), dec!(100.00));
+    assert_eq!(at_7.ust_eur(), dec!(7.00));
+
+    // Net and tax re-sum to the gross the customer actually paid.
+    for a in [&at_19, &at_7] {
+        assert_eq!(a.netto_eur() + a.ust_eur(), a.betrag_eur);
+    }
+}
+
+/// A zero-rated advance contains no tax, and needs no special-casing.
+#[test]
+fn zero_rated_abschlag_contains_no_tax() {
+    use energy_billing::AbschlagDeduction;
+
+    let a = AbschlagDeduction {
+        datum: date!(2025 - 03 - 15),
+        betrag_eur: dec!(120.00),
+        ust_satz: Decimal::ZERO,
+        beschreibung: None,
+    };
+    assert_eq!(a.netto_eur(), dec!(120.00));
+    assert_eq!(a.ust_eur(), Decimal::ZERO);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3353,7 +3403,7 @@ fn seasonal_electricity_summer_rate_lower_than_base() {
 #[test]
 fn seasonal_price_override_contains_month_wrap_around() {
     use energy_billing::SeasonalPriceOverride;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     let winter = SeasonalPriceOverride {
         from_month: 10,

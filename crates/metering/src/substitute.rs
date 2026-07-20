@@ -36,7 +36,7 @@ use time::{Duration, OffsetDateTime};
 pub const REFERENCE_PERIOD_DAYS: i64 = 7;
 
 #[cfg(test)]
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 
 // ── SubstituteMethod ──────────────────────────────────────────────────────────
 

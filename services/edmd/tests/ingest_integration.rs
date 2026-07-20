@@ -20,7 +20,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use mako_edm::domain::{IngestionSource, MeterRead, QualityFlag, Sparte};
 use mako_edm::repository::TimeSeriesRepository;
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 use sqlx::PgPool;
 use time::macros::datetime;
 use tower::ServiceExt as _;

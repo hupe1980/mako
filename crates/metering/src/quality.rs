@@ -669,7 +669,7 @@ pub fn score_intervals_f64(
 mod tests {
     use super::*;
     use crate::interval::QualityFlag;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::{OffsetDateTime, macros::datetime};
 
     fn make_iv(from: OffsetDateTime, v: f64) -> MeterInterval {

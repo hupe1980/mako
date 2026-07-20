@@ -60,10 +60,9 @@ anyhow      = "1"
 dashmap     = "6"
 edifact-rs   = "~0.11"
 miette       = { version = "7", features = ["fancy-no-syscall"] }
-rubo4e       = { version = "0.7.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "schemars", "json"] }
-rust_decimal = { version = "1", features = ["db-postgres"] }
-billing      = { version = "0.6.0", features = ["serde"] }
-rust_decimal_macros = "1"
+rubo4e       = { version = "0.7.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "schemars", "json", "strum"] }
+rust_decimal = { version = "1", features = ["db-postgres", "macros"] }
+billing      = { version = "0.7.0", features = ["serde"] }
 serde        = { version = "1", features = ["derive"] }
 serde_json   = "1"
 thiserror    = "2"

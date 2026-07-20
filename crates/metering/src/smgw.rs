@@ -389,7 +389,7 @@ impl SmgwSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::date;
 
     fn valid_cert(cert_type: CertificateType) -> GatewayCertificate {

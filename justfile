@@ -47,6 +47,21 @@ test-edmd-db:
     EDMD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55432/edmd" \
         cargo test -p edmd --test ingest_integration -- --include-ignored --test-threads=1
 
+# Integration tests for einsd against a throwaway PostgreSQL.
+test-einsd-db:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker rm -f einsd-test >/dev/null 2>&1 || true
+    docker run -d --name einsd-test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=einsd \
+        -p 55434:5432 postgres:17-alpine >/dev/null
+    trap 'docker rm -f einsd-test >/dev/null 2>&1 || true' EXIT
+    for _ in $(seq 1 30); do
+        docker exec einsd-test pg_isready -U postgres >/dev/null 2>&1 && break
+        sleep 1
+    done
+    EINSD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55434/einsd" \
+        cargo test -p einsd --test settlement_integration -- --include-ignored --test-threads=1
+
 # Lint with warnings as errors
 clippy:
     cargo clippy --all-targets --all-features -- -D warnings

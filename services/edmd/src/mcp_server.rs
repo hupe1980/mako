@@ -3,7 +3,7 @@
 //! Exposes meter data time-series and billing-period summaries.
 //! Mounted at `/mcp` on the existing HTTP port.
 //!
-//! ## Tools (10)
+//! ## Tools (14)
 //!
 //! | Tool | Description |
 //! |---|---|

@@ -127,7 +127,7 @@ pub fn compute_imbalance(actual_kwh: Decimal, contracted_kwh: Decimal) -> Imbala
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     /// Consuming above the profile is an ungewollte **Minder**menge: the NB
     /// supplied the shortfall and invoices it.

@@ -27,7 +27,7 @@
 //! use eeg_billing::{SettleInput, SettlementScheme, SettlementStatus, calculate_settlement};
 //! use eeg_billing::tariff::EegSettleTariff;
 //! use billing::{DocumentMeta, Period};
-//! use rust_decimal_macros::dec;
+//! use rust_decimal::dec;
 //!
 //! let output = calculate_settlement(&SettleInput {
 //!     scheme: eeg_billing::SettlementScheme::FeedInTariff { verguetungssatz_ct: dec!(8.11) },
@@ -54,7 +54,8 @@
 //! assert_eq!(doc.net_total(), billing::Amount::parse("40.55000").unwrap());
 //! ```
 
-use billing::{BillingError, LineItem, TaxLayer};
+use billing::{BillingError, LineItem, TaxLayer, tax::FixedRateTax};
+use rust_decimal::dec;
 
 use crate::model::{SettleOutput, SettlementStatus};
 
@@ -118,17 +119,9 @@ impl billing::Tariff for EegSettleTariff<'_> {
 ///
 /// NOT for Kleinunternehmer (§19 UStG) or §12 Abs. 3 exempt plants (PV ≤30 kWp, post-2023).
 /// Use [`EegSettleTariff12Abs3`] or [`EegSettleTariff`] for those.
-///
-/// # Deprecated name
-///
-/// Previously called `EegSettleTariffMitMwSt` — renamed to use the legal term
-/// "Umsatzsteuer" and the correct tax-status name.
-pub type EegSettleTariffMitMwSt<'a> = EegSettleTariffRegelbesteuerung<'a>;
-
-/// See [`EegSettleTariffMitMwSt`] (now an alias for `EegSettleTariffRegelbesteuerung`).
 pub struct EegSettleTariffRegelbesteuerung<'a> {
     inner: EegSettleTariff<'a>,
-    ust_rate: rust_decimal::Decimal,
+    ust: FixedRateTax,
 }
 
 impl<'a> EegSettleTariffRegelbesteuerung<'a> {
@@ -137,18 +130,34 @@ impl<'a> EegSettleTariffRegelbesteuerung<'a> {
     pub fn new(output: &'a SettleOutput) -> Self {
         Self {
             inner: EegSettleTariff::new(output),
-            ust_rate: rust_decimal_macros::dec!(0.19),
+            ust: ust_layer(dec!(0.19)).expect("19 % is a valid rate"),
         }
     }
 
     /// Create a tariff adapter with a custom USt rate (e.g. 7 % reduced).
-    #[must_use]
-    pub fn with_rate(output: &'a SettleOutput, ust_rate: rust_decimal::Decimal) -> Self {
-        Self {
+    ///
+    /// The layer is built here rather than in `tax_layers` so that a rate read
+    /// from configuration is rejected at construction, where the caller can still
+    /// act on it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BillingError::InvalidInput`] if `ust_rate` is negative.
+    pub fn with_rate(
+        output: &'a SettleOutput,
+        ust_rate: rust_decimal::Decimal,
+    ) -> Result<Self, BillingError> {
+        Ok(Self {
             inner: EegSettleTariff::new(output),
-            ust_rate,
-        }
+            ust: ust_layer(ust_rate)?,
+        })
     }
+}
+
+/// Build the Umsatzsteuer layer, naming it with the rate as a percentage.
+fn ust_layer(rate: rust_decimal::Decimal) -> Result<FixedRateTax, BillingError> {
+    let pct = rate * rust_decimal::Decimal::from(100u32);
+    FixedRateTax::new(format!("Umsatzsteuer {pct:.0}\u{202f}%"), rate)
 }
 
 impl billing::Tariff for EegSettleTariffRegelbesteuerung<'_> {
@@ -160,12 +169,7 @@ impl billing::Tariff for EegSettleTariffRegelbesteuerung<'_> {
     }
 
     fn tax_layers(&self) -> Vec<Box<dyn TaxLayer>> {
-        use billing::tax::FixedRateTax;
-        let rate_pct = self.ust_rate * rust_decimal::Decimal::from(100u32);
-        vec![Box::new(FixedRateTax::new(
-            format!("Umsatzsteuer {rate_pct:.0}\u{202f}%"),
-            self.ust_rate,
-        ))]
+        vec![Box::new(self.ust.clone())]
     }
 }
 

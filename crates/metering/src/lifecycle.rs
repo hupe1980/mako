@@ -154,7 +154,7 @@ impl MeterExchangeEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::{date, datetime};
 
     fn make_exchange() -> MeterExchangeEvent {

@@ -64,4 +64,19 @@ pub struct EinsdConfig {
     /// See `[mcp]` section in TOML — e.g. `api_key = "env:EINSD_MCP_API_KEY"`.
     #[serde(default)]
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
+
+    /// OIDC token verification for the REST API.
+    ///
+    /// Required unless `allow_insecure_no_auth` is set: the settlement endpoints
+    /// create a payment obligation to the Anlagenbetreiber, so serving them
+    /// unauthenticated has to be a decision someone wrote down.
+    #[serde(default)]
+    pub oidc: Option<mako_service::oidc::OidcConfig>,
+
+    /// Start without token verification.
+    ///
+    /// Intended for local development and the demos. Every REST route is then
+    /// reachable by any caller that can open a socket.
+    #[serde(default)]
+    pub allow_insecure_no_auth: bool,
 }

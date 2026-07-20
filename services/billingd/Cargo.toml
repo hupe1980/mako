@@ -33,7 +33,6 @@ serde_json   = { workspace = true }
 time         = { workspace = true }
 uuid         = { workspace = true, features = ["v4", "serde"] }
 rust_decimal = { workspace = true }
-rust_decimal_macros = "1"
 reqwest      = { workspace = true }
 tracing      = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -43,5 +42,4 @@ secrecy      = { version = "0.10" }
 tokio-util   = { workspace = true }
 
 [dev-dependencies]
-rust_decimal_macros = "1"
 time = { workspace = true }

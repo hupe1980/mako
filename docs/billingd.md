@@ -795,7 +795,32 @@ Each subtotal projects to BO4E via `TaxSubtotal::to_bo4e()` →
 reverse charge).
 
 The breakdown is **derived, never stored**: a persisted copy could disagree with
-the positions it summarises.
+the positions it summarises. It is emitted on the BO4E Rechnung as
+`steuerbetraege`, whose entries must sum to `gesamtsteuer`, and carried into the
+XRechnung/ZUGFeRD CII as BG-23.
+
+## Advance payments on the invoice
+
+A Jahresabrechnung settles the Abschläge the customer already paid. They appear on
+the BO4E Rechnung as `vorauszahlungen` — one `Vorauszahlung` per payment with its
+gross amount and the date it was received, so the reconciliation is verifiable per
+payment as §41 EnWG requires, rather than as one lump sum.
+
+In the CII rendering they drive the monetary summary:
+
+| Term | CII element | Value |
+|---|---|---|
+| BT-112 | `GrandTotalAmount` | gross for the period |
+| BT-113 | `TotalPrepaidAmount` | sum of the advances, gross |
+| BT-115 | `DuePayableAmount` | BT-112 − BT-113 |
+
+BT-115 is **derived**, per EN 16931 rule BR-CO-16. Emitting the gross there would
+bill the customer a second time for advances they have already settled.
+
+The tax contained in the advances is available as `Invoice::abschlag_ust_eur`,
+which §14 Abs. 5 Satz 2 UStG requires an Endrechnung to state. See
+[`energy-billing`](../crates/energy-billing/README.md) for the two settlement
+forms — Endrechnung by deduction, or Restrechnung by residual.
 
 ## Configuration
 

@@ -814,55 +814,37 @@ async fn get_zahlungsstatus(
 /// NNE Strom positions (PIDs 31001/31006) return `None` — their `artikel_id` comes
 /// from `PreisblattNetznutzung` (BK6-20-160: classic artikelnummer replaced by artikel_id
 /// from BNetzA Netznutzungspreisblatt for GPKE Strom).
+/// Parse the BDEW Artikelnummer that `grid-billing` decided on.
+///
+/// The decision lives in the crate; this is only the codelist-name lookup.
 fn kind_to_artikelnummer(
     kind: grid_billing::BillingPositionKind,
     settlement_type: grid_billing::SettlementType,
 ) -> Option<rubo4e::current::BdewArtikelnummer> {
-    use grid_billing::{BillingPositionKind as K, SettlementType as ST};
-    use rubo4e::current::BdewArtikelnummer as A;
-    match (kind, settlement_type) {
-        (K::NneArbeit | K::NneArbeitHt | K::NneArbeitNt | K::NneArbeitModul1, ST::NneGas) => {
-            Some(A::Wirkarbeit)
-        }
-        // §14a Modul 3 Spotpreis-NNE: same article (Wirkarbeit) as other Arbeit positions
-        (K::NneArbeitModul3, ST::NneGas) => Some(A::Wirkarbeit),
-        (K::NneLeistung, ST::NneGas) => Some(A::Leistung),
-        (K::NneGasGrundpreis, _) => Some(A::Grundpreis),
-        (
-            K::NneArbeit
-            | K::NneArbeitHt
-            | K::NneArbeitNt
-            | K::NneArbeitModul1
-            | K::NneArbeitModul3
-            | K::NneLeistung,
-            _,
-        ) => None,
-        (K::Konzessionsabgabe, _) => Some(A::Konzessionsabgabe),
-        (K::Mehrmenge, _) => Some(A::Mehrmenge),
-        (K::Mindermenge, _) => Some(A::Mindermenge),
-        (K::MsbGrundgebuehr, _) => Some(A::EntgeltEinbauBetriebWartungMesstechnik),
-        (K::Messdienstleistung, _) => Some(A::EntgeltMessungAblesung),
-        (K::GasAwhSperrung | K::GasAwhEntsprrung | K::GasAwhSonstige, _) => None,
-        (K::Blindmehrarbeit, _) => Some(A::Blindmehrarbeit),
-    }
+    use std::str::FromStr as _;
+    kind.artikelnummer(settlement_type)
+        .and_then(|name| rubo4e::current::BdewArtikelnummer::from_str(name).ok())
 }
 
-/// Convert a `GridInvoice` domain result into a BO4E `Rechnung`.
+/// Convert a `SettlementResult` domain result into a BO4E `Rechnung`.
 ///
 /// `grid-billing` has no rubo4e dependency; this function owns the mapping.
-fn grid_billing_into_rechnung(invoice: &grid_billing::GridInvoice) -> rubo4e::current::Rechnung {
+/// Render a settlement, presented as an invoice, into BO4E.
+fn grid_billing_into_rechnung(
+    document: &grid_billing::InvoiceDocument,
+) -> rubo4e::current::Rechnung {
+    let invoice = &document.settlement;
     use rubo4e::current::{Betrag, Menge, Mengeneinheit, Preis, Rechnungsposition, Zeitraum};
 
     let lz = Zeitraum {
-        startdatum: Some(invoice.period_from),
-        enddatum: Some(invoice.period_to),
+        startdatum: Some(invoice.period.from()),
+        enddatum: Some(invoice.period.to()),
         ..Default::default()
     };
 
-    let positions: Vec<Rechnungsposition> = invoice
-        .positions
-        .iter()
-        .map(|p| {
+    let positions: Vec<Rechnungsposition> = document
+        .numbered_positions()
+        .map(|(number, p)| {
             let einheit = match p.unit {
                 grid_billing::QuantityUnit::Kwh => Some(Mengeneinheit::Kwh),
                 grid_billing::QuantityUnit::Kw => Some(Mengeneinheit::Kw),
@@ -871,10 +853,11 @@ fn grid_billing_into_rechnung(invoice: &grid_billing::GridInvoice) -> rubo4e::cu
                 grid_billing::QuantityUnit::Monat => Some(Mengeneinheit::Monat),
             };
             Rechnungsposition {
-                positionsnummer: Some(p.number as i64),
+                positionsnummer: Some(i64::from(number)),
                 positionstext: Some(p.text.clone()),
                 artikelnummer: kind_to_artikelnummer(p.kind, invoice.settlement_type),
-                artikel_id: p.artikel_id.clone(),
+                // Resolved from the price sheet at rendering time.
+                artikel_id: None,
                 lieferungszeitraum: Some(lz.clone()),
                 positions_menge: Some(Menge {
                     wert: Some(p.quantity),
@@ -889,21 +872,35 @@ fn grid_billing_into_rechnung(invoice: &grid_billing::GridInvoice) -> rubo4e::cu
                     wert: Some(p.net_eur.round_dp(5)),
                     ..Default::default()
                 }),
+                // The trace explains the amount above it; grid-billing is the
+                // only place it exists, and the settlement is dropped after this.
+                zusatz_attribute: serde_json::to_value(&p.trace).ok().map(|t| {
+                    vec![rubo4e::current::ZusatzAttribut {
+                        name: Some("mako:calculation_trace".to_owned()),
+                        wert: Some(t),
+                        ..Default::default()
+                    }]
+                }),
                 ..Default::default()
             }
         })
         .collect();
 
     rubo4e::current::Rechnung {
-        rechnungsnummer: Some(invoice.rechnungsnummer.clone()),
-        rechnungsdatum: Some(invoice.invoice_date),
-        faelligkeitsdatum: Some(invoice.due_date),
+        rechnungsnummer: Some(document.rechnungsnummer.clone()),
+        rechnungsdatum: Some(document.invoice_date),
+        faelligkeitsdatum: Some(document.due_date),
         rechnungsperiode: Some(lz),
         gesamtnetto: Some(Betrag {
             wert: Some(invoice.total_eur),
             ..Default::default()
         }),
         rechnungspositionen: Some(positions),
+        zusatz_attribute: Some(vec![rubo4e::current::ZusatzAttribut {
+            name: Some("mako:legal_references".to_owned()),
+            wert: Some(serde_json::json!(invoice.all_legal_refs())),
+            ..Default::default()
+        }]),
         ..Default::default()
     }
 }
@@ -1117,40 +1114,53 @@ async fn post_selbstausstellen(
         invoice_date.to_string().replace('-', "")
     );
 
+    let Ok(period) = grid_billing::SettlementPeriod::new(period_from, period_to) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "period_from must not be after period_to" })),
+        )
+            .into_response();
+    };
+
     let input = grid_billing::NneInput {
         malo_id: malo_id.clone(),
         nb_mp_id: body.nb_mp_id.clone(),
         lf_mp_id: state.tenant.clone(), // LF is selbstaussteller (= our own tenant)
-        rechnungsnummer,
-        period_from,
-        period_to,
-        invoice_date,
-        due_date,
-        arbeitsmenge_kwh: billing_period.arbeitsmenge_kwh,
-        arbeitspreis_ct_per_kwh: arbeitspreis_ct,
-        // §14a Modul 2 ToU: populate from MeterBillingPeriod when available.
-        // invoicd selbstausstellen uses flat rate; ToU billing is done by netzbilanzd.
-        arbeitsmenge_ht_kwh: billing_period.arbeitsmenge_ht_kwh,
-        arbeitspreis_ht_ct_per_kwh: None, // ToU prices come from PreisblattNetznutzung; not looked up here
-        arbeitsmenge_nt_kwh: billing_period.arbeitsmenge_nt_kwh,
-        arbeitspreis_nt_ct_per_kwh: None,
-        spitzenleistung_kw: billing_period.spitzenleistung_kw,
-        leistungspreis_eur_per_kw: if billing_period.spitzenleistung_kw.is_some() {
-            leistungspreis_eur
-        } else {
-            None
+        period,
+        arbeitspreis: grid_billing::ArbeitspreisModell::Einheitlich(grid_billing::MengePreis {
+            menge_kwh: billing_period.arbeitsmenge_kwh,
+            preis_ct_per_kwh: arbeitspreis_ct,
+        }),
+        leistungspreis: match (
+            billing_period.spitzenleistung_kw,
+            if billing_period.spitzenleistung_kw.is_some() {
+                leistungspreis_eur
+            } else {
+                None
+            },
+        ) {
+            (Some(kw), Some(p)) => Some(grid_billing::Leistungspreis {
+                spitzenleistung_kw: kw,
+                preis_eur_per_kw: p,
+            }),
+            _ => None,
         },
-        ka_satz_ct_per_kwh: None, // KA lookup not implemented; ERP can add via COMDIS
-        sect14a_modul1_reduction_factor: None,
-        nne_grundpreis_eur_per_month: None,
-        nne_grundpreis_months: None,
+        letztverbrauchergruppe: Default::default(),
+        sect19_umlage_ct_per_kwh: None,
+        offshore_umlage_ct_per_kwh: None,
+        kwkg_umlage_ct_per_kwh: None,
+        netzebene: None,
+        sect19: None,
+        gas_kapazitaet: None,
+        jahreshoechstleistung_kw: None,
+        jahresarbeit_kwh: None,
+        konzessionsabgabe: None,
+        grundpreis: None,
         tariff_sheet_id: None,
         sparte: grid_billing::Sparte::Strom,
-        ka_klasse: None,
-        sect14a_modul3_intervals: vec![],
     };
 
-    let billing_result = match grid_billing::calculate_nne_invoice(&input) {
+    let billing_result = match grid_billing::settle_nne(&input) {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(%e, malo_id, "invoicd: selbstausstellen: invoice generation failed");
@@ -1163,7 +1173,19 @@ async fn post_selbstausstellen(
     };
 
     // Convert domain invoice to BO4E Rechnung (service-layer concern; grid-billing is BO4E-free)
-    let rechnung = grid_billing_into_rechnung(&billing_result);
+    // The settlement becomes a document here — the only place an invoice number,
+    // issue date and Prüfidentifikator enter. PID 31006 is the
+    // Selbstausstellen-Netznutzungsrechnung (§20 MessZV).
+    let document = grid_billing::InvoiceDocument {
+        settlement: billing_result,
+        pid: 31006,
+        rechnungsnummer,
+        correction_of: None,
+        invoice_date,
+        due_date,
+    };
+    let billing_result = &document.settlement;
+    let rechnung = grid_billing_into_rechnung(&document);
     let rechnung_json = serde_json::to_value(&rechnung).unwrap_or_default();
 
     tracing::info!(

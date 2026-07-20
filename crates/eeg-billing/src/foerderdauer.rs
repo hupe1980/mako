@@ -371,6 +371,100 @@ pub fn verguetungszeitraum_verlaengerung_qh(lost_quarter_hours: u64, is_solar: b
     }
 }
 
+/// §51a Abs. 2 Satz 3 EEG 2023 — Volllastviertelstunden per calendar month.
+///
+/// The statutory table. Index 0 is January.
+///
+/// A solar plant's extension is not a span of wall-clock time but a *contingent*
+/// of Volllastviertelstunden, drawn down at a different rate in each month —
+/// which is what makes a December extension take far longer than a June one.
+const VOLLLASTVIERTELSTUNDEN_JE_MONAT: [u32; 12] =
+    [87, 189, 340, 442, 490, 508, 498, 453, 371, 231, 118, 73];
+
+/// The Volllastviertelstunden a whole calendar month contributes (§51a Abs. 2 Satz 3).
+///
+/// # Panics
+///
+/// Does not panic: `time::Month` is always one of the twelve.
+#[must_use]
+pub fn volllastviertelstunden_im_monat(month: time::Month) -> u32 {
+    VOLLLASTVIERTELSTUNDEN_JE_MONAT[(month as u8 - 1) as usize]
+}
+
+/// §51a Abs. 2 Satz 4–6 EEG 2023 — the date a solar plant's extended
+/// Vergütungszeitraum ends.
+///
+/// The contingent from [`verguetungszeitraum_verlaengerung_qh`] is drawn down
+/// month by month at the statutory rate until it is exhausted; the
+/// Vergütungszeitraum then runs **to the end of the month** in which the last
+/// Volllastviertelstunde falls (Satz 6).
+///
+/// The month in which the original period ends contributes only pro rata for its
+/// remaining days (Satz 4): `verbleibende Tage / Tage des Monats × VLVh des Monats`.
+///
+/// Returns `original_ende` unchanged when the contingent is zero — no negative
+/// prices means no extension.
+///
+/// ## Why this is not `original_ende + n days`
+///
+/// A contingent of 500 Volllastviertelstunden is roughly one month if it starts
+/// in June (508) and roughly seven if it starts in December (73, 87, 189, …).
+/// Converting the contingent to a fixed number of days would misstate the end of
+/// the Förderung by months for exactly the plants that lost the most revenue.
+///
+/// # Errors
+///
+/// Returns [`ComponentRange`] if the computed end date falls outside the
+/// representable range.
+pub fn solar_verlaengerung_ende(
+    original_ende: Date,
+    kontingent_vlvh: u64,
+) -> Result<Date, ComponentRange> {
+    if kontingent_vlvh == 0 {
+        return Ok(original_ende);
+    }
+
+    let mut rest = Decimal::from(kontingent_vlvh);
+    let mut jahr = original_ende.year();
+    let mut monat = original_ende.month();
+
+    // Satz 4 — the original period's own month counts only for the days left in it.
+    let tage_im_monat = u32::from(time::util::days_in_month(monat, jahr));
+    let verbleibende_tage = tage_im_monat - u32::from(original_ende.day());
+    let anteilig = Decimal::from(verbleibende_tage) / Decimal::from(tage_im_monat)
+        * Decimal::from(volllastviertelstunden_im_monat(monat));
+
+    if anteilig >= rest {
+        // Exhausted inside the original period's own month: Satz 6 still runs the
+        // Vergütungszeitraum to the end of that month.
+        return letzter_tag_des_monats(jahr, monat);
+    }
+    rest -= anteilig;
+
+    // Satz 5 — draw down whole months until the contingent is used up.
+    loop {
+        (jahr, monat) = naechster_monat(jahr, monat);
+        let monats_vlvh = Decimal::from(volllastviertelstunden_im_monat(monat));
+        if monats_vlvh >= rest {
+            // Satz 6 — to the end of the month carrying the last Volllastviertelstunde.
+            return letzter_tag_des_monats(jahr, monat);
+        }
+        rest -= monats_vlvh;
+    }
+}
+
+fn naechster_monat(jahr: i32, monat: time::Month) -> (i32, time::Month) {
+    if monat == time::Month::December {
+        (jahr + 1, time::Month::January)
+    } else {
+        (jahr, monat.next())
+    }
+}
+
+fn letzter_tag_des_monats(jahr: i32, monat: time::Month) -> Result<Date, ComponentRange> {
+    Date::from_calendar_date(jahr, monat, time::util::days_in_month(monat, jahr))
+}
+
 /// §24 Abs. 1 Nr. 4 EEG 2023 — Check whether two plants fall within the
 /// 12-consecutive-calendar-months commissioning window for Zusammenlegung.
 ///
@@ -495,7 +589,7 @@ pub fn zusammenlegung_within_12_months(ibn_a: Date, ibn_b: Date) -> bool {
 /// ```rust
 /// use eeg_billing::{Pflichtverstoss, SanktionsTyp};
 /// use eeg_billing::foerderdauer::calculate_pflichtzahlung;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// // 500 kW plant, MaStR not registered for 3 months, obligation NOT yet fulfilled
 /// let violation = Pflichtverstoss {
@@ -525,7 +619,7 @@ pub fn zusammenlegung_within_12_months(ibn_a: Date, ibn_b: Date) -> bool {
 /// ```
 pub fn calculate_pflichtzahlung(violation: &crate::model::Pflichtverstoss) -> Decimal {
     use crate::model::SanktionsTyp;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     // §52 Abs. 3 Nr. 2 — these types are ALWAYS €2/kW/month, not €10
     // (§37a Abs. 1a / §48 Abs. 6 post-commissioning; Volleinspeisung not maintained)
@@ -609,7 +703,7 @@ pub fn calculate_pflichtzahlung(violation: &crate::model::Pflichtverstoss) -> De
 /// # Example
 /// ```rust
 /// use eeg_billing::foerderdauer::wind_onshore_korrekturfaktor_corrected_aw;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// // Statutory base AW = 7.35 ct/kWh, Korrekturfaktor = 1.08 (low-wind site)
 /// let corrected = wind_onshore_korrekturfaktor_corrected_aw(dec!(7.35), dec!(1.08));
@@ -764,4 +858,97 @@ pub fn compute_billing_days_fraction(
     }
 
     None
+}
+
+#[cfg(test)]
+mod sect51a_solar_tests {
+    use super::*;
+    use time::macros::date;
+
+    /// §51a Abs. 2 Satz 3 — the statutory table, verbatim.
+    #[test]
+    fn statutory_month_table() {
+        use time::Month::*;
+        for (m, expected) in [
+            (January, 87),
+            (February, 189),
+            (March, 340),
+            (April, 442),
+            (May, 490),
+            (June, 508),
+            (July, 498),
+            (August, 453),
+            (September, 371),
+            (October, 231),
+            (November, 118),
+            (December, 73),
+        ] {
+            assert_eq!(volllastviertelstunden_im_monat(m), expected, "{m:?}");
+        }
+    }
+
+    /// No negative prices → no extension.
+    #[test]
+    fn zero_contingent_does_not_extend() {
+        let ende = date!(2045 - 06 - 15);
+        assert_eq!(solar_verlaengerung_ende(ende, 0).unwrap(), ende);
+    }
+
+    /// Satz 6 — the period runs to the end of the month carrying the last
+    /// Volllastviertelstunde, even when the contingent is exhausted on day one.
+    #[test]
+    fn small_contingent_still_runs_to_month_end() {
+        // 15 June: 15 days left of 30 → 15/30 × 508 = 254 VLVh available.
+        // A contingent of 10 is exhausted inside June, so the period ends 30 June.
+        assert_eq!(
+            solar_verlaengerung_ende(date!(2045 - 06 - 15), 10).unwrap(),
+            date!(2045 - 06 - 30)
+        );
+    }
+
+    /// Satz 4 + 5 — the partial month is consumed first, then whole months.
+    #[test]
+    fn contingent_spans_into_following_months() {
+        // 15 June leaves 254. Contingent 700 → 700-254 = 446 into July (498).
+        // 498 >= 446, so the last VLVh falls in July → end of July.
+        assert_eq!(
+            solar_verlaengerung_ende(date!(2045 - 06 - 15), 700).unwrap(),
+            date!(2045 - 07 - 31)
+        );
+    }
+
+    /// The same contingent lasts far longer starting in winter — which is the
+    /// whole reason the extension is a contingent and not a fixed span of days.
+    #[test]
+    fn winter_start_extends_much_further_than_summer_start() {
+        let contingent = 700;
+        let summer = solar_verlaengerung_ende(date!(2045 - 06 - 15), contingent).unwrap();
+        let winter = solar_verlaengerung_ende(date!(2045 - 12 - 15), contingent).unwrap();
+
+        // 15 Dec leaves 16/31 × 73 = 37.7. Then Jan 87, Feb 189, Mar 340 → 653.7
+        // still short of 700; April (442) carries the last one → end of April.
+        assert_eq!(summer, date!(2045 - 07 - 31));
+        assert_eq!(winter, date!(2046 - 04 - 30));
+    }
+
+    /// The draw-down crosses the year boundary correctly.
+    #[test]
+    fn contingent_crosses_the_year_boundary() {
+        // 31 Dec leaves 0 days of December, so the whole contingent falls in the
+        // new year: Jan 87 >= 50 → end of January.
+        assert_eq!(
+            solar_verlaengerung_ende(date!(2045 - 12 - 31), 50).unwrap(),
+            date!(2046 - 01 - 31)
+        );
+    }
+
+    /// February's length is taken from the actual year, not assumed.
+    #[test]
+    fn february_is_leap_year_aware() {
+        // 2048 is a leap year: 15 Feb leaves 14 of 29 days → 14/29 × 189 = 91.2
+        assert_eq!(
+            solar_verlaengerung_ende(date!(2048 - 02 - 15), 90).unwrap(),
+            date!(2048 - 02 - 29)
+        );
+    }
 }

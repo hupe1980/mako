@@ -251,6 +251,19 @@ impl CustomerKategorie {
 /// The annual final settlement must show each advance payment date and amount
 /// so the customer can verify the reconciliation.
 ///
+/// ## §14 Abs. 5 Satz 2 UStG
+///
+/// An Endrechnung must deduct the advances **and the tax attributable to them**
+/// ("die vereinnahmten Teilentgelte und die auf sie entfallenden Steuerbeträge"),
+/// so each advance carries the rate it was invoiced at. A gross total alone
+/// cannot express that, which is why [`ust_satz`](Self::ust_satz) is not
+/// optional: an advance collected at 19 % and one collected at 7 % deduct
+/// different amounts of tax from the same gross sum.
+///
+/// [`betrag_eur`](Self::betrag_eur) is the **gross** amount the customer paid;
+/// the net and the tax it contains are derived from it by
+/// [`netto_eur`](Self::netto_eur) and [`ust_eur`](Self::ust_eur).
+///
 /// ## Example
 ///
 /// A customer paying EUR 120/month → 12 × EUR 120 = EUR 1 440 in advances.
@@ -260,11 +273,104 @@ impl CustomerKategorie {
 pub struct AbschlagDeduction {
     /// Payment date (shown on the invoice for §41 EnWG compliance).
     pub datum: time::Date,
-    /// EUR amount already paid (positive = customer paid this amount).
+    /// Gross EUR amount already paid (positive = customer paid this amount).
     pub betrag_eur: Decimal,
+    /// VAT rate contained in `betrag_eur`, as a fraction — `0.19` for 19 %.
+    ///
+    /// This is the rate the *advance* was invoiced at, which is not necessarily
+    /// the rate on the final invoice: a rate change mid-year leaves earlier
+    /// advances at the old rate.
+    pub ust_satz: Decimal,
     /// Optional description shown on invoice (e.g. `"Abschlag März 2026"`).
     #[serde(default)]
     pub beschreibung: Option<String>,
+}
+
+impl AbschlagDeduction {
+    /// The net amount contained in the gross payment (Herausrechnung).
+    ///
+    /// `betrag_eur / (1 + ust_satz)`, rounded to cents. Returns the gross
+    /// unchanged when the rate is zero, so a zero-rated advance needs no
+    /// special-casing at the call site.
+    #[must_use]
+    pub fn netto_eur(&self) -> Decimal {
+        if self.ust_satz.is_zero() {
+            return self.betrag_eur;
+        }
+        (self.betrag_eur / (Decimal::ONE + self.ust_satz)).round_dp(2)
+    }
+
+    /// The tax contained in the gross payment.
+    ///
+    /// Derived as `betrag_eur - netto_eur` rather than `netto × rate`, so that
+    /// net and tax always re-sum to the gross the customer actually paid.
+    #[must_use]
+    pub fn ust_eur(&self) -> Decimal {
+        self.betrag_eur - self.netto_eur()
+    }
+
+    /// Project into a [`billing::AdvancePayment`] carrying this advance's own tax.
+    ///
+    /// This is the structure EN 16931's flat BT-113 cannot hold and that
+    /// §14 Abs. 5 Satz 2 UStG requires on a settling invoice. It mirrors the
+    /// ZUGFeRD / Factur-X EXTENDED group `SpecifiedAdvancePayment` (BG-X-45).
+    ///
+    /// The category is derived from the rate: a positive rate is a standard-rated
+    /// advance, a zero rate a zero-rated one. An advance under reverse charge
+    /// (§13b UStG) is not expressible this way and is not produced here — such a
+    /// supply carries no advance tax to deduct.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`billing::BillingError`] if the amounts overflow [`billing::EuroAmount`].
+    pub fn to_advance_payment(&self) -> Result<billing::AdvancePayment, billing::BillingError> {
+        let category = if self.ust_satz.is_zero() {
+            billing::TaxCategory::ZeroRated
+        } else {
+            billing::TaxCategory::Standard
+        };
+        let entry = billing::TaxBreakdownEntry::new(
+            category,
+            self.ust_satz,
+            billing::EuroAmount::checked_from_decimal(self.netto_eur())?,
+            billing::EuroAmount::checked_from_decimal(self.ust_eur())?,
+        );
+        let advance =
+            billing::AdvancePayment::new(vec![entry])?.with_received_on(self.datum.to_string());
+        Ok(match &self.beschreibung {
+            Some(r) => advance.with_reference(r.clone()),
+            None => advance,
+        })
+    }
+}
+
+// ── SettlementForm ────────────────────────────────────────────────────────────
+
+/// How a settling invoice accounts for advances the customer already paid.
+///
+/// Both shapes are lawful and both are in use; they differ in what the document
+/// shows, not in what the customer ends up paying.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SettlementForm {
+    /// **Endrechnung** — invoice the whole supply, then deduct the advances and
+    /// the tax contained in them (§14 Abs. 5 Satz 2 UStG).
+    ///
+    /// Totals and the VAT breakdown describe the full period; only the amount
+    /// payable shrinks. Deducting the advances but *not* their tax is the failure
+    /// this form has to avoid: under UStAE 14.8 Abs. 10 the issuer then owes the
+    /// tax shown plus the advance-related portion again under §14c Abs. 1 — the
+    /// same tax twice.
+    #[default]
+    Endrechnung,
+
+    /// **Restrechnung** — invoice only the remainder; the advances are not listed.
+    ///
+    /// Structurally simpler, and what the BMF recommends for e-invoices (Schreiben
+    /// v. 15.10.2024, Rn. 48), because EN 16931's core profiles have nowhere to
+    /// carry per-advance tax. The taxable base is the residual per rate rather
+    /// than the full supply.
+    Restrechnung,
 }
 
 // ── BillingContext ────────────────────────────────────────────────────────────
@@ -288,7 +394,7 @@ pub struct AbschlagDeduction {
 /// ```rust
 /// use energy_billing::{BillingContext, InvoiceType, RegulatoryRates, AbschlagDeduction};
 /// use time::macros::date;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// let ctx = BillingContext {
 ///     malo_id: "51238696781".to_owned(),
@@ -303,6 +409,7 @@ pub struct AbschlagDeduction {
 ///         AbschlagDeduction {
 ///             datum: date!(2026-01-15),
 ///             betrag_eur: dec!(120.00),
+///             ust_satz: dec!(0.19),
 ///             beschreibung: Some("Abschlag Januar 2026".to_owned()),
 ///         },
 ///     ],
@@ -332,6 +439,12 @@ pub struct BillingContext {
 
     /// Invoice type: initial, correction, cancellation, or final settlement.
     pub invoice_type: InvoiceType,
+
+    /// How advances are accounted for on a settling invoice.
+    ///
+    /// Only consulted when `abschlage` is non-empty. See [`SettlementForm`].
+    #[serde(default)]
+    pub settlement_form: SettlementForm,
 
     /// Statutory levy rates (Stromsteuer, Energiesteuer, BEHG, MwSt).
     ///
@@ -451,6 +564,7 @@ impl Default for BillingContext {
             period_from: time::Date::MIN,
             period_to: time::Date::MIN,
             invoice_type: InvoiceType::default(),
+            settlement_form: SettlementForm::default(),
             regulatory_rates: RegulatoryRates::default(),
             contract_id: None,
             vertragsbeginn: None,
@@ -502,7 +616,7 @@ impl BillingContext {
     /// };
     /// let frac = ctx.billing_days_fraction().unwrap();
     /// // 16 billable days out of 31: ≈ 0.516
-    /// assert!(frac > rust_decimal_macros::dec!(0.50) && frac < rust_decimal_macros::dec!(0.55));
+    /// assert!(frac > rust_decimal::dec!(0.50) && frac < rust_decimal::dec!(0.55));
     /// ```
     #[must_use]
     pub fn billing_days_fraction(&self) -> Option<Decimal> {
@@ -593,7 +707,7 @@ impl BillingContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::date;
 
     fn base_ctx() -> BillingContext {
@@ -645,11 +759,13 @@ mod tests {
                 AbschlagDeduction {
                     datum: date!(2026 - 01 - 15),
                     betrag_eur: dec!(100.00),
+                    ust_satz: dec!(0.19),
                     beschreibung: None,
                 },
                 AbschlagDeduction {
                     datum: date!(2026 - 02 - 15),
                     betrag_eur: dec!(120.00),
+                    ust_satz: dec!(0.19),
                     beschreibung: None,
                 },
             ],

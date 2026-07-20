@@ -95,7 +95,7 @@ impl PowerQualityInterval {
     ///
     /// ```rust
     /// use metering::power_quality::PowerQualityInterval;
-    /// use rust_decimal_macros::dec;
+    /// use rust_decimal::dec;
     /// use time::macros::datetime;
     ///
     /// let iv = PowerQualityInterval {
@@ -187,7 +187,7 @@ impl Default for PowerQualityInterval {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::datetime;
 
     fn pq(v_l1: Option<Decimal>, freq: Option<Decimal>) -> PowerQualityInterval {

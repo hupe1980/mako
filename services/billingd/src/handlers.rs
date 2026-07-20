@@ -446,7 +446,7 @@ pub async fn get_xrechnung(
         brutto,
         row.period_from,
         row.period_to,
-        rates.mwst_rate * rust_decimal_macros::dec!(100),
+        rates.mwst_rate * rust_decimal::dec!(100),
     );
     let xml = build_zugferd_cii_xml(&info);
     (
@@ -1322,7 +1322,7 @@ pub async fn post_ggv_billing(
                 // solar_arbeitspreis is also used for grid remainder in SolarProvider
                 if let Some(rabatt) = tenant.gemeinschaft_rabatt_ct_per_kwh {
                     if let Some(ap) = p.solar_arbeitspreis_ct_per_kwh {
-                        let cap = ap * rust_decimal_macros::dec!(0.10);
+                        let cap = ap * rust_decimal::dec!(0.10);
                         if rabatt > cap {
                             tracing::warn!(
                                 malo_id = %tenant.malo_id,
@@ -2079,7 +2079,7 @@ pub async fn post_submit_b2g(
         brutto,
         row.period_from,
         row.period_to,
-        rates.mwst_rate * rust_decimal_macros::dec!(100),
+        rates.mwst_rate * rust_decimal::dec!(100),
     );
     let xml = crate::xrechnung::build_zugferd_cii_xml(&info);
 
@@ -2187,9 +2187,9 @@ fn build_ubl_invoice(row: &crate::pg::BillingRecordRow, cfg: &BillingdConfig) ->
     let brutto = row.total_brutto_eur.unwrap_or_default();
     let tax_amount = brutto - netto;
     let tax_pct = if netto > rust_decimal::Decimal::ZERO {
-        (tax_amount / netto * rust_decimal_macros::dec!(100)).round_dp(2)
+        (tax_amount / netto * rust_decimal::dec!(100)).round_dp(2)
     } else {
-        rust_decimal_macros::dec!(19)
+        rust_decimal::dec!(19)
     };
     let seller_name = cfg.tenant.clone();
     let buyer_id = row.malo_id.clone();
@@ -2707,7 +2707,7 @@ fn compute_dispatch_flexibility_kwh(
     time_from: &str,
     time_until: Option<&str>,
 ) -> rust_decimal::Decimal {
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     let duration_hours = time_until
         .and_then(|tu| {

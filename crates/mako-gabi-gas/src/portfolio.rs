@@ -277,7 +277,7 @@ impl GasPortfolioBalance {
     /// ```rust,no_run
     /// # use mako_gabi_gas::portfolio::*;
     /// # use mako_gabi_gas::domain::GasDay;
-    /// # use rust_decimal_macros::dec;
+    /// # use rust_decimal::dec;
     /// # use time::macros::date;
     /// # let balance = GasPortfolioBalance { bkv_eic: "E".to_owned(), gas_day: GasDay::new(date!(2026-01-01)), positions: vec![], computed_at: time::OffsetDateTime::now_utc() };
     /// let expected_kwh = dec!(5000.0); // from VNB measurement data
@@ -382,7 +382,7 @@ impl std::error::Error for ConservationViolation {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::date;
 
     fn gas_day() -> GasDay {

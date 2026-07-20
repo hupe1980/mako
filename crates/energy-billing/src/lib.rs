@@ -19,7 +19,7 @@
 //!
 //! ```rust
 //! use energy_billing::{Product, BillingContext, InvoiceType, MeterInput, Quantities, RegulatoryRates, GridInput};
-//! use rust_decimal_macros::dec;
+//! use rust_decimal::dec;
 //! use time::macros::date;
 //!
 //! let json = r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0,"grundpreis_ct_per_day":8.0}"#;
@@ -80,10 +80,13 @@ pub mod tariff;
 
 // Core billing types
 pub use context::{
-    AbschlagDeduction, BillingContext, CustomerKategorie, InvoiceType, Verbrauchshistorie,
+    AbschlagDeduction, BillingContext, CustomerKategorie, InvoiceType, SettlementForm,
+    Verbrauchshistorie,
 };
 pub use engine::BillingEngine;
-pub use invoice::{Invoice, negate_rechnung_json_for_correction};
+pub use invoice::{
+    Invoice, TaxSubtotal, VatCategory, negate_rechnung_json_for_correction, tax_subtotals_of,
+};
 pub use position::{
     BillingPosition, BillingWarning, PositionCategory, PositionTrace, WarningSeverity,
 };

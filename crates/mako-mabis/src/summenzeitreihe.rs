@@ -361,7 +361,7 @@ impl SummenzeitreiheBuilder {
 mod tests {
     use super::*;
     use metering::{MeterInterval, QualityFlag};
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::Duration;
     use time::macros::datetime;
 

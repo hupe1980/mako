@@ -5,14 +5,14 @@
 //! The preferred calculation flow is:
 //!
 //! ```text
-//! Input → Validation → Settlement Engine → GridSettlement → Invoice Adapter → BO4E → EDIFACT
+//! Input → Validation → Settlement Engine → SettlementResult → InvoiceDocument → BO4E → EDIFACT
 //! ```
 //!
-//! [`GridSettlement`] is the canonical output. It carries every billing position
+//! [`SettlementResult`] is the canonical output. It carries every position
 //! alongside its [`CalculationTrace`], applicable [`LegalReference`]s, the
 //! [`TariffSource`] that justified each rate, and any [`SettlementWarning`]s.
 //!
-//! The service layer (`netzbilanzd`, `invoicd`) adapts `GridSettlement` into
+//! The service layer (`netzbilanzd`, `invoicd`) adapts `SettlementResult` into
 //! `rubo4e::current::Rechnung` via a local `into_rechnung()` helper — keeping
 //! BO4E as a purely rendering concern outside this crate.
 //!
@@ -31,7 +31,7 @@ use rust_decimal::Decimal;
 /// Controls which legal references are applied to each settlement position:
 /// - `Strom` → `StromNEV`, BK6 Festlegungen
 /// - `Gas` → `GasNEV`, BK7 Festlegungen
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
 pub enum Sparte {
     /// Electricity (Strom). Default.
     #[default]
@@ -46,7 +46,7 @@ pub enum Sparte {
 ///
 /// KAV bands Tarifkunden rates by the municipality's **inhabitant count**, not by
 /// the customer's annual consumption.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum GemeindeGroesse {
     /// bis 25 000 Einwohner.
     Bis25k,
@@ -63,7 +63,7 @@ pub enum GemeindeGroesse {
 /// The Tarifkunde/Sondervertragskunde split is a **contract-type** test, not a
 /// consumption threshold: KAV §2 Abs. 3 applies to Sondervertragskunden whatever
 /// they consume, and Abs. 2 bands Tarifkunden by municipality size.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum KaKundengruppe {
     /// Tarifkunde — KAV §2 Abs. 2. Rate depends on [`GemeindeGroesse`].
     ///
@@ -143,12 +143,27 @@ impl KaKundengruppe {
             Self::Exempt => "KAV §2 Abs. 7 — freigestellt",
         }
     }
+
+    /// The KAV paragraph that fixes this group's Höchstbetrag.
+    ///
+    /// Cited on the position, so the invoice states the rule it was actually
+    /// billed under. Every position used to cite §2 Abs. 2 regardless — wrong
+    /// for a Sondervertragskunde, whose ceiling is Abs. 3, and wrong again for a
+    /// customer freigestellt under Abs. 7.
+    #[must_use]
+    pub const fn kav_paragraph(self) -> &'static str {
+        match self {
+            Self::Tarifkunde { .. } | Self::Schwachlast => "§2 Abs. 2",
+            Self::Sondervertragskunde => "§2 Abs. 3",
+            Self::Exempt => "§2 Abs. 7",
+        }
+    }
 }
 
 // ── QuantityUnit ──────────────────────────────────────────────────────────────
 
 /// Unit of measure for a settlement position quantity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum QuantityUnit {
     /// Kilowatt-hours (active energy).
     Kwh,
@@ -173,7 +188,7 @@ pub enum QuantityUnit {
 /// All three modules are **mandatory** for eligible controllable loads (heat pumps,
 /// EV chargers, battery storage ≥ 4.2 kW) registered with the NB. The LF/NB
 /// must offer at least Modul 1 to all eligible customers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum Sect14aModule {
     /// Modul 1 — pauschale Reduzierung (flat reduction).
     ///
@@ -225,7 +240,7 @@ impl Sect14aModule {
 /// Which regulated settlement process produced this result.
 ///
 /// Determines which BDEW PIDs are applicable and which regulatory references apply.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum SettlementType {
     /// Netznutzungsentgelt (NNE) Strom — PID 31001 (NB → LF).
     NneStrom,
@@ -250,6 +265,11 @@ pub enum SettlementType {
     GasAwhSperrung,
     /// Redispatch 2.0 Einsatzkosten (NB → ÜNB, BK6-20-061).
     RedispatchKostenblatt,
+    /// Entgelt für dezentrale Erzeugung — §18 StromNEV, NB → Anlagenbetreiber.
+    ///
+    /// A bilateral payment relationship, not an EDIFACT market process: it has
+    /// no Prüfidentifikator and is rendered as an ordinary commercial credit.
+    DezentraleEinspeisung,
 }
 
 impl SettlementType {
@@ -267,6 +287,8 @@ impl SettlementType {
             Self::MsbRechnung => 31009,
             Self::GasAwhSperrung => 31011,
             Self::RedispatchKostenblatt => 0, // no standard PID
+            // Bilateral NB → Anlagenbetreiber payment; not an EDIFACT process.
+            Self::DezentraleEinspeisung => 0,
         }
     }
 }
@@ -277,7 +299,7 @@ impl SettlementType {
 ///
 /// Settlements are never destroyed — every correction or cancellation creates
 /// a new result that references the original. This ensures an immutable audit trail.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum SettlementStatus {
     /// Initial calculation — no prior settlement exists for this period.
     Initial,
@@ -293,10 +315,10 @@ pub enum SettlementStatus {
 
 /// Regulatory citation that justifies a billing position or rate.
 ///
-/// Every [`InvoicePosition`] should carry at least one `LegalReference`.
+/// Every [`SettlementPosition`] should carry at least one `LegalReference`.
 /// This enables full auditability: any operator or regulator can trace
 /// exactly which paragraph, ruling, and version authorised each charge.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub enum LegalReference {
     /// StromNEV — Stromnetzentgeltverordnung (grid usage charges, Strom).
     ///
@@ -315,6 +337,21 @@ pub enum LegalReference {
     /// Example: `Kav { paragraph: "§2 Abs. 2" }`.
     Kav {
         /// Paragraph reference, e.g. `"§2 Abs. 2"`.
+        paragraph: &'static str,
+    },
+    /// KWKG — Kraft-Wärme-Kopplungsgesetz.
+    ///
+    /// Example: `Kwkg { paragraph: "§26" }` for the KWKG-Umlage.
+    Kwkg {
+        /// Paragraph citation, e.g. `"§26"`.
+        paragraph: &'static str,
+    },
+    /// EnFG — Energiefinanzierungsgesetz.
+    ///
+    /// Governs which Letztverbrauchergruppe an Entnahmestelle falls into and so
+    /// which rate of a network levy applies.
+    EnFG {
+        /// Paragraph citation, e.g. `"§§21 ff."`.
         paragraph: &'static str,
     },
     /// §14a EnWG — Steuerbare Verbrauchseinrichtungen (controllable loads).
@@ -390,6 +427,8 @@ impl LegalReference {
             Self::StromNev { paragraph } => format!("StromNEV {paragraph}"),
             Self::GasNev { paragraph } => format!("GasNEV {paragraph}"),
             Self::Kav { paragraph } => format!("KAV {paragraph}"),
+            Self::Kwkg { paragraph } => format!("KWKG {paragraph}"),
+            Self::EnFG { paragraph } => format!("EnFG {paragraph}"),
             Self::Sect14aEnwg { module } => format!("§14a EnWG {}", module.label()),
             Self::MessZv { paragraph } => format!("MessZV {paragraph}"),
             Self::MsbG { paragraph } => format!("MsbG {paragraph}"),
@@ -413,7 +452,7 @@ impl LegalReference {
 ///
 /// Every rate used in a billing position must be traceable to a `TariffSource`.
 /// This enables operators and auditors to answer: *"Why was this rate used?"*
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub enum TariffSource {
     /// Rate from the published and approved `PreisblattNetznutzung` tariff sheet.
     PublishedTariffSheet {
@@ -444,7 +483,7 @@ pub enum TariffSource {
 
 // ── CalculationTrace ──────────────────────────────────────────────────────────
 
-/// Full audit record for how one [`InvoicePosition`] was computed.
+/// Full audit record for how one [`SettlementPosition`] was computed.
 ///
 /// Answers the question: *"Why is this amount on the invoice?"*
 ///
@@ -454,7 +493,7 @@ pub enum TariffSource {
 /// - Operator review
 /// - LF dispute resolution
 /// - AI-assisted invoice explainability (MCP tools)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CalculationTrace {
     /// Human-readable explanation of this position.
     ///
@@ -488,7 +527,7 @@ pub struct CalculationTrace {
 /// Warnings do not prevent the invoice from being generated but should be
 /// reviewed before dispatch. The service layer may choose to block dispatch
 /// on `Severity::Error` warnings.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SettlementWarning {
     /// Severity: informational, warning, or error.
     pub severity: WarningSeverity,
@@ -499,7 +538,7 @@ pub struct SettlementWarning {
 }
 
 /// Severity level for [`SettlementWarning`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub enum WarningSeverity {
     /// Informational — no action required.
     Info,
@@ -516,7 +555,7 @@ pub enum WarningSeverity {
 ///
 /// `grid-billing` has no `rubo4e` dependency, so this enum is the bridge:
 /// the service layer maps `BillingPositionKind` → `BdewArtikelnummer` in
-/// `into_rechnung()`. Every position in every `GridSettlement` must carry
+/// `into_rechnung()`. Every position in every `SettlementResult` must carry
 /// a `kind` so the INVOIC `Rechnungsposition.artikelnummer` is never missing.
 ///
 /// ## BDEW INVOIC AHB requirement
@@ -545,7 +584,7 @@ pub enum WarningSeverity {
 /// | `GasAwhEntsprrung` | `Entsperrkosten` | PID 31011 AWH reconnection |
 /// | `GasAwhSonstige` | `EntgeltAbrechnung` | PID 31011 other AWH |
 /// | `Blindmehrarbeit` | `Blindmehrarbeit` | Reactive energy excess |
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum BillingPositionKind {
     /// Netznutzungsentgelt Arbeit — flat-rate active energy charge (kWh).
     /// SLP or Gas. → `BdewArtikelnummer::Wirkarbeit`
@@ -603,6 +642,29 @@ pub enum BillingPositionKind {
     /// Blindmehrarbeit — reactive energy excess charge.
     /// StromNEV §18. → `BdewArtikelnummer::Blindmehrarbeit`
     Blindmehrarbeit,
+    /// Aufschlag für besondere Netznutzung (§19 StromNEV-Umlage).
+    ///
+    /// Funds the reduced individual network charges granted under §19 Abs. 2
+    /// StromNEV. Rate depends on the Letztverbrauchergruppe (EnFG).
+    Sect19StromNevUmlage,
+    /// Offshore-Netzumlage (§17f EnWG).
+    ///
+    /// Funds offshore connection cost and the compensation owed to offshore
+    /// wind farms for unavailable connections.
+    OffshoreNetzumlage,
+    /// KWKG-Umlage (§26 KWKG).
+    ///
+    /// Funds the KWK-Zuschlag paid to CHP operators.
+    KwkgUmlage,
+    /// Entgelt für dezentrale Erzeugung — §18 StromNEV, under Abschmelzung
+    /// (GBK-25-02-1#1). A payment out, so its `net_eur` is negative.
+    DezentraleEinspeisung,
+    /// §19 Abs. 2 StromNEV individual-charge reduction over the Netzentgelt.
+    /// Negative: it takes the published charge down to the agreed fraction.
+    Sect19IndividuellesEntgelt,
+    /// Gas Kapazitätsentgelt — booked capacity at the price sheet's annual
+    /// rate, pro-rated over the period. §15 GasNEV.
+    GasKapazitaetsentgelt,
 }
 
 /// One line item in a grid settlement.
@@ -611,132 +673,448 @@ pub enum BillingPositionKind {
 /// (BO4E `Rechnungsposition`, EN16931 UBL, etc.).
 ///
 /// Invariant: `net_eur == (quantity × unit_price_eur).round_dp(5)`.
-#[derive(Debug, Clone)]
-pub struct InvoicePosition {
-    /// 1-based sequence number.
-    pub number: u32,
-    /// Human-readable position description.
+/// The pricing formula behind a §14a Modul 3 spot-priced position.
+///
+/// Modelled as a value object rather than a serialised BO4E document. The engine
+/// states *what the formula was*; translating that into
+/// `LastvariablePreisposition` — or into any other representation — is the
+/// adapter's job. Carrying BO4E JSON here would put schema knowledge inside the
+/// calculation, untyped and unvalidated, which is the coupling the crate exists
+/// to avoid.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct SpotPriceFormula {
+    /// What the price refers to — for Modul 3 always the metered energy.
+    pub reference: PriceReference,
+    /// The unit the price is expressed per.
+    pub unit: QuantityUnit,
+    /// How the rate was derived.
+    pub method: TariffCalculationMethod,
+    /// The rate steps that applied, in order.
+    pub steps: Vec<PriceStep>,
+}
+
+/// What a price refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum PriceReference {
+    /// The metered energy quantity.
+    Energiemenge,
+    /// Contracted or metered capacity.
+    Leistung,
+}
+
+/// How a rate was derived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum TariffCalculationMethod {
+    /// A published fixed rate.
+    Festpreis,
+    /// Derived from a spot-market price — §14a Modul 3, BK6-22-300 Anlage 2 §3.
+    Spotpreis,
+}
+
+/// One step of a rate schedule.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PriceStep {
+    /// Lower bound of the step, inclusive.
+    pub from: Decimal,
+    /// Upper bound, exclusive; `None` for the open top step.
+    pub to: Option<Decimal>,
+    /// The rate in EUR per [`SpotPriceFormula::unit`].
+    pub unit_price_eur: Decimal,
+}
+
+/// One line of a settlement.
+///
+/// Carries no position number and no BDEW Artikel-ID: both are properties of the
+/// *document* that presents the settlement, not of the calculation. An adapter
+/// numbers the positions it renders and resolves article identifiers from the
+/// price sheet.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SettlementPosition {
+    /// Human-readable description.
     pub text: String,
-    /// Semantic position kind — used by the service layer to set
-    /// `Rechnungsposition.artikelnummer` (BDEW INVOIC AHB requirement).
+    /// Semantic kind — what was charged, independent of how it is coded.
     pub kind: BillingPositionKind,
     /// Metered or contracted quantity.
     pub quantity: Decimal,
     /// Unit of measure.
     pub unit: QuantityUnit,
-    /// Unit price in EUR (already converted from ct where applicable).
+    /// Unit price in EUR.
     pub unit_price_eur: Decimal,
     /// Net amount in EUR, rounded to 5 decimal places.
     ///
     /// May be negative for credit positions (Mindermengen, Gutschriften).
     pub net_eur: Decimal,
-    /// BDEW Artikel-ID for positions that use the new format (post-BK6-20-160).
-    ///
-    /// Used for:
-    /// - **NNE Strom** (GPKE PIDs 31001/31006): BNetzA Netznutzungspreisblatt article IDs
-    ///   (e.g. `"1-02-5-001"` for NS Grundpreis-/Arbeitspreissystem Arbeitspreis).
-    ///   The service layer populates this from the `PreisblattNetznutzung` Artikel-ID.
-    /// - **AWH Gas Sperrprozesse** (PID 31011): `"2-01-7-001"` (Sperrung) / `"2-01-7-002"` (Entsperrung)
-    ///   populated automatically by `calculate_gas_awh_invoice()`.
-    /// - **MSB** (PID 31009): `"4-02-0-xxx"` format from section 3.5 of the codelist,
-    ///   populated by the service layer from the product/Konfigurationsprodukt code.
-    ///
-    /// For Gas NNE, MMM, Konzessionsabgabe and Blindmehrarbeit, the classic
-    /// `artikelnummer` (via `BillingPositionKind`) takes precedence; this field is `None`.
-    ///
-    /// Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6 (valid 01.09.2025).
-    pub artikel_id: Option<String>,
-    /// §14a Modul 3: serialized `LastvariablePreisposition` BO4E COM for this position.
-    ///
-    /// Set when `kind == NneArbeitModul3`. Carries the pricing formula parameters
-    /// (SPOTPREIS method, `preisreferenz`, `preisBezugseinheit`) from the
-    /// `PreisblattNetznutzung.lastvariablePreispositionen` used to derive `unit_price_eur`.
-    ///
-    /// Stored as raw `serde_json::Value` so that `grid-billing` remains rubo4e-free.
-    /// The service layer (`netzbilanzd`, `billingd`) can deserialize to
-    /// `rubo4e::current::LastvariablePreisposition` for `Rechnungsposition.zusatzAttribute`
-    /// embedding, enabling ERP-side validation and portal display of the per-dispatch
-    /// tariff breakdown.
-    ///
-    /// `None` for all other position kinds.
-    pub lastvariable_preisposition_json: Option<serde_json::Value>,
-    /// Full audit trace for this position.
-    ///
-    /// Answers "why is this amount here?" and carries all legal references.
+    /// The formula behind the rate, where one applied.
+    pub spot_price_formula: Option<SpotPriceFormula>,
+    /// Why this amount is what it is.
     pub trace: CalculationTrace,
 }
 
-// ── GridSettlement ────────────────────────────────────────────────────────────
+impl BillingPositionKind {
+    /// The BDEW Artikelnummer that codes this position, as its codelist name.
+    ///
+    /// Which article number applies depends on both what was charged and what
+    /// kind of settlement it appears in — Gas NNE keeps the classic `WIRKARBEIT`
+    /// code, while Strom NNE moved to Artikel-IDs under BK6-20-160 and carries
+    /// no Artikelnummer at all.
+    ///
+    /// Returned as the codelist *name* rather than a BO4E enum so that this
+    /// crate stays free of BO4E types. A consumer parses it into whatever it
+    /// renders — `rubo4e::current::BdewArtikelnummer` implements `FromStr` over
+    /// exactly these names.
+    ///
+    /// `None` means the position carries an Artikel-ID instead, resolved from
+    /// the price sheet by the renderer.
+    ///
+    /// Source: BDEW Codeliste der Artikelnummern und Artikel-IDs v5.6.
+    #[must_use]
+    pub fn artikelnummer(self, settlement_type: SettlementType) -> Option<&'static str> {
+        use BillingPositionKind as K;
+        use SettlementType as ST;
+        match (self, settlement_type) {
+            // Gas NNE keeps the classic codes — BK6-20-160 changed Strom only.
+            (
+                K::NneArbeit
+                | K::NneArbeitHt
+                | K::NneArbeitNt
+                | K::NneArbeitModul1
+                | K::NneArbeitModul3,
+                ST::NneGas,
+            ) => Some("WIRKARBEIT"),
+            (K::NneLeistung, ST::NneGas) => Some("LEISTUNG"),
+            (K::NneGasGrundpreis, _) => Some("GRUNDPREIS"),
+            // Strom NNE: the Artikel-ID replaces the Artikelnummer.
+            (
+                K::NneArbeit
+                | K::NneArbeitHt
+                | K::NneArbeitNt
+                | K::NneArbeitModul1
+                | K::NneArbeitModul3
+                | K::NneLeistung,
+                _,
+            ) => None,
+            (K::Konzessionsabgabe, _) => Some("KONZESSIONSABGABE"),
+            (K::Mehrmenge, _) => Some("MEHRMENGE"),
+            (K::Mindermenge, _) => Some("MINDERMENGE"),
+            (K::MsbGrundgebuehr, _) => Some("ENTGELT_EINBAU_BETRIEB_WARTUNG_MESSTECHNIK"),
+            (K::Messdienstleistung, _) => Some("ENTGELT_MESSUNG_ABLESUNG"),
+            // AWH Gas positions carry a 2-01-7-xxx Artikel-ID from the input.
+            (K::GasAwhSperrung | K::GasAwhEntsprrung | K::GasAwhSonstige, _) => None,
+            (K::Blindmehrarbeit, _) => Some("BLINDMEHRARBEIT"),
+            // Netzseitige Umlagen (EnFG). `OFFSHORE_HAFTUNGSUMLAGE` is the code's
+            // legacy name — the levy was renamed Offshore-Netzumlage, the article
+            // number was not.
+            (K::Sect19StromNevUmlage, _) => Some("PARAGRAF_19_STROM_NEV_UMLAGE"),
+            // Bilateral payment outside the INVOIC market processes — the
+            // codelist has no article number for it.
+            (K::DezentraleEinspeisung, _) => None,
+            // A reduction over Strom NNE positions, which carry Artikel-IDs.
+            (K::Sect19IndividuellesEntgelt, _) => None,
+            // Capacity is the gas Leistung analogue and keeps the classic code.
+            (K::GasKapazitaetsentgelt, ST::NneGas) => Some("LEISTUNG"),
+            (K::GasKapazitaetsentgelt, _) => None,
+            (K::OffshoreNetzumlage, _) => Some("OFFSHORE_HAFTUNGSUMLAGE"),
+            (K::KwkgUmlage, _) => Some("ABGABE_KWKG"),
+        }
+    }
+}
 
-/// Result of a grid settlement calculation — pure domain type, no BO4E coupling.
+// ── Arbeitspreis model ────────────────────────────────────────────────────────
+
+/// A §14a Modul 1 reduction factor — the fraction of the published rate paid.
 ///
-/// This is the canonical output of all calculation functions in `grid-billing`.
-/// The service layer (`netzbilanzd`, `invoicd`) converts it to `rubo4e::current::Rechnung`
-/// via a local `into_rechnung()` adapter.
+/// A newtype because the range matters: `0.85` is a 15 % reduction, and a value
+/// outside `(0, 1]` is not a reduction at all. The unconstrained `Decimal` this
+/// replaces was range-checked in the validator and *not* in the engine, so a
+/// caller who skipped validation could multiply the tariff by 5.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Reduktionsfaktor(Decimal);
+
+impl Reduktionsfaktor {
+    /// The regulatory default, BNetzA BK6-22-300 Anlage 2 — 85 % of the tariff.
+    pub const REGELFALL: Self = Self(rust_decimal::dec!(0.85));
+
+    /// Build a factor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::BillingError::InvalidInput`] outside `(0, 1]`.
+    pub fn new(factor: Decimal) -> Result<Self, crate::error::BillingError> {
+        if factor <= Decimal::ZERO || factor > Decimal::ONE {
+            return Err(crate::error::BillingError::InvalidInput {
+                reason: format!("§14a Modul 1 reduction factor must be in (0, 1], got {factor}"),
+            });
+        }
+        Ok(Self(factor))
+    }
+
+    /// The factor as a fraction.
+    #[must_use]
+    pub const fn get(self) -> Decimal {
+        self.0
+    }
+}
+
+/// A metered quantity priced at a rate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct MengePreis {
+    /// Metered energy in kWh.
+    pub menge_kwh: Decimal,
+    /// Rate in ct/kWh.
+    pub preis_ct_per_kwh: Decimal,
+}
+
+/// How the Arbeitspreis is structured, and whether §14a applies.
+///
+/// One enum rather than three independent field groups. The four variants are
+/// mutually exclusive **by construction**, which removes a whole class of defect:
+///
+/// - The four HT/NT fields were 2⁴ states of which two were valid. Setting three
+///   of them fell through to flat billing with no error — the invoice looked
+///   right and was billed on the wrong basis.
+/// - Modul 1 and Modul 3 could both be set. The engine applied the flat
+///   reduction *and* the per-interval rates, double-billing the same energy.
+/// - Modul 1 and Modul 2 could both be set; the engine silently preferred
+///   Modul 2 rather than rejecting the conflict.
+///
+/// Those were runtime warnings in a validator the engine never called. They are
+/// now unrepresentable.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub enum ArbeitspreisModell {
+    /// A single rate for all metered energy.
+    Einheitlich(MengePreis),
+
+    /// **§14a Modul 1** — the published rate reduced by a flat factor.
+    ///
+    /// BNetzA BK6-22-300 Anlage 2.
+    Modul1Pauschal {
+        /// The metered energy and its published rate, before reduction.
+        basis: MengePreis,
+        /// The fraction of that rate actually paid.
+        reduktion: Reduktionsfaktor,
+    },
+
+    /// **§14a Modul 2** — time-variable rates in a Hoch-/Niedertarif split.
+    ///
+    /// Both bands are required: a Modul 2 tariff has both, and permitting one
+    /// would reintroduce the partial state this type exists to prevent.
+    Modul2ZeitVariabel {
+        /// Hochtarif band.
+        ht: MengePreis,
+        /// Niedertarif band.
+        nt: MengePreis,
+    },
+
+    /// **§14a Modul 3** — a spot-derived rate per dispatch interval.
+    ///
+    /// BNetzA BK6-22-300 Anlage 2 §3. The rates arrive already derived; this
+    /// crate never queries a spot market.
+    Modul3Spotpreis {
+        /// The dispatch intervals, each with its own rate.
+        intervalle: Vec<Sect14aModul3Interval>,
+    },
+}
+
+impl ArbeitspreisModell {
+    /// Total metered energy across the model, in kWh.
+    ///
+    /// This is the base the Konzessionsabgabe and the network levies are charged
+    /// on, so it is derived here once rather than recomputed per levy.
+    #[must_use]
+    pub fn menge_kwh(&self) -> Decimal {
+        match self {
+            Self::Einheitlich(mp) | Self::Modul1Pauschal { basis: mp, .. } => mp.menge_kwh,
+            Self::Modul2ZeitVariabel { ht, nt } => ht.menge_kwh + nt.menge_kwh,
+            Self::Modul3Spotpreis { intervalle } => intervalle.iter().map(|i| i.menge_kwh).sum(),
+        }
+    }
+
+    /// The §14a module in play, if any.
+    #[must_use]
+    pub const fn sect14a_modul(&self) -> Option<Sect14aModule> {
+        match self {
+            Self::Einheitlich(_) => None,
+            Self::Modul1Pauschal { .. } => Some(Sect14aModule::Modul1),
+            Self::Modul2ZeitVariabel { .. } => Some(Sect14aModule::Modul2),
+            Self::Modul3Spotpreis { .. } => Some(Sect14aModule::Modul3),
+        }
+    }
+}
+
+// ── Paired inputs ─────────────────────────────────────────────────────────────
+
+/// An RLM demand charge — peak demand and its rate.
+///
+/// A pair, because billing one without the other is meaningless. The two used to
+/// be independent `Option`s checked at runtime in two separate places.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Leistungspreis {
+    /// Peak demand in kW.
+    pub spitzenleistung_kw: Decimal,
+    /// Rate in EUR per kW.
+    pub preis_eur_per_kw: Decimal,
+}
+
+/// A Gas NNE Grundpreis — monthly rate and the months billed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Grundpreis {
+    /// Rate in EUR per month.
+    pub eur_per_month: Decimal,
+    /// Months in the billing period.
+    pub months: Decimal,
+}
+
+/// A Konzessionsabgabe — the rate together with the customer group it applies to.
+///
+/// Paired so the KAV §2 Höchstbetrag check can always run. They were independent
+/// `Option`s, and the ceiling check was skipped entirely when the group was
+/// absent — which is exactly when an over-charge is most likely to go unnoticed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Konzessionsabgabe {
+    /// Published rate in ct/kWh.
+    pub satz_ct_per_kwh: Decimal,
+    /// The KAV §2 customer group, which fixes the ceiling.
+    pub klasse: KaKundengruppe,
+}
+
+// ── SettlementPeriod ──────────────────────────────────────────────────────────
+
+/// The delivery period a settlement covers.
+///
+/// A validated pair rather than two loose dates. Every input struct previously
+/// carried `period_from` and `period_to` independently, and every calculation
+/// re-checked their ordering — five copies of the same guard, each able to be
+/// forgotten. Constructing this type is the check.
+///
+/// Both bounds are inclusive: a monthly period runs from the 1st to the last day
+/// of the month, matching how Netzentgelte are published and billed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct SettlementPeriod {
+    from: time::Date,
+    to: time::Date,
+}
+
+impl SettlementPeriod {
+    /// Build a period.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::BillingError::InvalidInput`] when `from` is after `to`. A
+    /// zero-length period (`from == to`) is a valid single day.
+    pub fn new(from: time::Date, to: time::Date) -> Result<Self, crate::error::BillingError> {
+        if from > to {
+            return Err(crate::error::BillingError::InvalidInput {
+                reason: format!("period start {from} is after its end {to}"),
+            });
+        }
+        Ok(Self { from, to })
+    }
+
+    /// Start of the period, inclusive.
+    #[must_use]
+    pub const fn from(&self) -> time::Date {
+        self.from
+    }
+
+    /// End of the period, inclusive.
+    #[must_use]
+    pub const fn to(&self) -> time::Date {
+        self.to
+    }
+
+    /// Number of days covered, both bounds inclusive.
+    #[must_use]
+    pub fn days(&self) -> i64 {
+        (self.to - self.from).whole_days() + 1
+    }
+}
+
+// ── SettlementResult ──────────────────────────────────────────────────────────
+
+/// What a settlement calculation produced.
+///
+/// This is the canonical output of every calculation in this crate. It answers
+/// *what is owed and why*, and deliberately not *what the invoice looks like*:
+/// invoice numbers, issue and due dates, Prüfidentifikatoren and position
+/// numbering live on [`InvoiceDocument`], which an adapter builds around this.
+///
+/// The separation is what makes a settlement recomputable. The same period can
+/// be settled twice — for a correction, a dispute, or an audit — and the two
+/// results compared, without inventing a document each time.
 ///
 /// ## Explainability
 ///
-/// Every settlement carries a full [`CalculationTrace`] per position, applied
-/// [`LegalReference`]s, and the [`TariffSource`] for each rate. The `warnings`
-/// field surfaces any non-blocking validation issues.
-///
-/// ## Immutable correction chain
-///
-/// When correcting a prior settlement, set `status = SettlementStatus::Correction`
-/// and populate `correction_of` with the original settlement's `rechnungsnummer`.
-/// The original settlement is never mutated.
-///
-/// ## PID override
-///
-/// `pid` defaults to `SettlementType::default_pid()`. Override after construction:
-/// - `31005` for Gas NNE (NneStrom → NneGas)
-/// - `31006` for selbstausstellt NNE
-/// - `31011` for GeLi Gas AWH Sperrprozesse
-#[derive(Debug, Clone)]
-pub struct GridSettlement {
-    /// BDEW Prüfidentifikator — caller may override after construction.
-    pub pid: u32,
-    /// Settlement type.
+/// Every position carries a [`CalculationTrace`]; [`Self::all_legal_refs`]
+/// collects the paragraphs the settlement rests on. `warnings` records what the
+/// engine could not do, which is as much part of the result as the amounts.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SettlementResult {
+    /// What was settled.
     pub settlement_type: SettlementType,
-    /// Lifecycle status.
+    /// Where this settlement sits in the correction lifecycle.
     pub status: SettlementStatus,
-    /// Unique invoice reference number.
-    pub rechnungsnummer: String,
-    /// If this is a correction, the `rechnungsnummer` of the original settlement.
-    pub correction_of: Option<String>,
-    /// Invoice issue date.
-    pub invoice_date: time::Date,
-    /// Payment due date (Zahlungsziel, §271 BGB).
-    pub due_date: time::Date,
-    /// Start of billing period (inclusive).
-    pub period_from: time::Date,
-    /// End of billing period (inclusive).
-    pub period_to: time::Date,
-    /// Sender MP-ID — Netzbetreiber (or MSB for PID 31009).
+    /// The delivery period.
+    pub period: SettlementPeriod,
+    /// The rules the calculation applied.
+    pub regime: crate::regulatory::RegulatoryRegime,
+    /// Commodity.
+    pub sparte: Sparte,
+    /// The metering location settled.
+    pub malo_id: String,
+    /// Sender MP-ID — Netzbetreiber, or MSB for a metering settlement.
     pub nb_mp_id: String,
-    /// Recipient MP-ID — Lieferant (NNE/MMM), MSB (PID 31009), or MGV (GaBi Gas).
-    ///
-    /// Maps to `rechnungsempfaenger` in the BO4E `Rechnung` built by the service layer.
-    /// Previously omitted, causing service-layer code to pass recipient IDs separately.
+    /// Recipient MP-ID — Lieferant, MSB, or MGV.
     pub counterparty_mp_id: String,
-    /// Ordered billing positions (each with full calculation trace).
-    pub positions: Vec<InvoicePosition>,
+    /// The positions, in calculation order.
+    pub positions: Vec<SettlementPosition>,
     /// Net total in EUR, rounded to 2 decimal places.
     pub total_eur: Decimal,
-    /// Non-blocking validation warnings.
-    ///
-    /// Empty when the settlement is clean. The service layer should review
-    /// `Warning` and `Error` severity items before dispatch.
+    /// What the engine could not do, or did with a caveat.
     pub warnings: Vec<SettlementWarning>,
 }
 
-/// Backward-compatible alias so callers using the old name continue to compile.
-///
-/// `GridInvoice` was the original output type. New code should use [`GridSettlement`]
-/// which carries full calculation traces, legal references, and settlement metadata.
-pub type GridInvoice = GridSettlement;
+// ── InvoiceDocument ───────────────────────────────────────────────────────────
 
-impl GridSettlement {
+/// A settlement presented as an invoice.
+///
+/// Everything here is a property of the document rather than of the calculation:
+/// an invoice number, the dates it was issued and falls due, the
+/// Prüfidentifikator that routes it, and the reference to whatever it corrects.
+/// None of it affects what is owed.
+///
+/// Built by an adapter around a [`SettlementResult`]; the engine never produces
+/// one, which is why the engine can be run without inventing an invoice number.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InvoiceDocument {
+    /// What the document presents.
+    pub settlement: SettlementResult,
+    /// BDEW Prüfidentifikator.
+    pub pid: u32,
+    /// Unique invoice reference.
+    pub rechnungsnummer: String,
+    /// The `rechnungsnummer` this corrects, if any.
+    pub correction_of: Option<String>,
+    /// Issue date.
+    pub invoice_date: time::Date,
+    /// Payment due date (Zahlungsziel, §271 BGB).
+    pub due_date: time::Date,
+}
+
+impl InvoiceDocument {
+    /// Positions paired with their 1-based document numbers.
+    ///
+    /// Numbering is assigned here, at rendering time, rather than carried through
+    /// the calculation as mutable state.
+    pub fn numbered_positions(&self) -> impl Iterator<Item = (u32, &SettlementPosition)> {
+        self.settlement
+            .positions
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (u32::try_from(i + 1).unwrap_or(u32::MAX), p))
+    }
+}
+
+impl SettlementResult {
     /// Number of billing positions.
     #[must_use]
     pub fn positions_count(&self) -> usize {
@@ -808,90 +1186,25 @@ pub struct NneInput {
     pub nb_mp_id: String,
     /// Invoice recipient — Lieferant MP-ID.
     pub lf_mp_id: String,
-    /// Unique invoice number (operator-generated).
-    pub rechnungsnummer: String,
-    /// Start of billing period (inclusive, German local date).
-    pub period_from: time::Date,
-    /// End of billing period (inclusive, German local date).
-    pub period_to: time::Date,
-    /// Invoice issue date.
-    pub invoice_date: time::Date,
-    /// Payment due date (Zahlungsziel).
-    pub due_date: time::Date,
-    /// Total energy consumption in kWh for the billing period.
-    ///
-    /// For Gas: already converted from m³ (brennwert × zustandszahl × volume).
-    /// Used when HT/NT split is not available (SLP, Gas, or pre-§14a deployments).
-    pub arbeitsmenge_kwh: Decimal,
-    /// Published NNE Arbeitspreis in **ct/kWh** (from `PreisblattNetznutzung`).
-    /// Used as the single Arbeit rate when HT/NT split is absent.
-    pub arbeitspreis_ct_per_kwh: Decimal,
+    /// The delivery period being settled.
+    pub period: SettlementPeriod,
 
-    // ── §14a Modul 2 time-variable (ToU) NNE ─────────────────────────────────
-    // BNetzA BK6-22-300: mandatory for all controllable loads since 01.01.2024.
-    // When both fields below are non-None, the billing engine generates two
-    // separate Arbeit positions (HT + NT) instead of a single blended position.
-    // Source: `edmd` MeterBillingPeriod.arbeitsmenge_ht_kwh / .arbeitsmenge_nt_kwh.
-    /// Hochlast (HT) consumption in kWh — §14a Modul 2 periods (higher-price band).
-    /// `None` when ToU metering is not configured for this MaLo.
-    pub arbeitsmenge_ht_kwh: Option<Decimal>,
-    /// HT Arbeitspreis in ct/kWh (from `PreisblattNetznutzung.zeitvariablePreispositionen`).
-    /// Required when `arbeitsmenge_ht_kwh` is set.
-    pub arbeitspreis_ht_ct_per_kwh: Option<Decimal>,
-    /// Niedertarif (NT) consumption in kWh — §14a Modul 2 off-peak periods.
-    /// `None` when ToU metering is not configured for this MaLo.
-    pub arbeitsmenge_nt_kwh: Option<Decimal>,
-    /// NT Arbeitspreis in ct/kWh (from `PreisblattNetznutzung.zeitvariablePreispositionen`).
-    /// Required when `arbeitsmenge_nt_kwh` is set.
-    pub arbeitspreis_nt_ct_per_kwh: Option<Decimal>,
+    /// Letztverbrauchergruppe for the network levies (EnFG §§21 ff.).
+    ///
+    /// Determines which rate of the §19 StromNEV-, Offshore- and KWKG-Umlage
+    /// applies at this Entnahmestelle.
+    pub letztverbrauchergruppe: crate::umlagen::Letztverbrauchergruppe,
 
-    // ── RLM demand charge ─────────────────────────────────────────────────────
-    /// Peak demand in **kW** (`spitzenleistung_kw` from `MeterBillingPeriod`).
+    /// §19 StromNEV-Umlage in ct/kWh, overriding the tabled rate.
     ///
-    /// `None` for SLP meters and Gas MaLos.
-    pub spitzenleistung_kw: Option<Decimal>,
-    /// Published NNE Leistungspreis in **EUR/kW** (from `PreisblattNetznutzung`).
-    ///
-    /// `None` when `spitzenleistung_kw` is `None`.
-    pub leistungspreis_eur_per_kw: Option<Decimal>,
-    /// Published Konzessionsabgabe rate in **ct/kWh** (from `PreisblattKonzessionsabgabe`).
-    ///
-    /// `None` when KA does not apply (Gas or exempt customer class).
-    pub ka_satz_ct_per_kwh: Option<Decimal>,
-
-    // ── §14a Modul 1 flat reduction ───────────────────────────────────────────
-    /// §14a Modul 1 (BNetzA BK6-22-300): rate multiplier applied to the Arbeit
-    /// positions (and Leistung if applicable) before billing.
-    ///
-    /// This is the fraction of the full rate that the customer pays — a reduction
-    /// factor of `0.85` means the customer pays 85 % of the published tariff
-    /// (15 % reduction). The regulatory default per BK6-22-300 Anlage 2 is 0.85;
-    /// the NB may publish a different approved value in the `PreisblattNetznutzung`.
-    ///
-    /// `None` when §14a Modul 1 does not apply to this MaLo. Must not be set
-    /// together with ToU HT/NT fields (Modul 2) — the validator rejects the
-    /// combination.
-    ///
-    /// # Example
-    ///
-    /// Full rate: 3.5 ct/kWh, reduction factor: 0.85 → billed rate: 2.975 ct/kWh
-    pub sect14a_modul1_reduction_factor: Option<Decimal>,
-
-    // ── Gas NNE monthly base fee ──────────────────────────────────────────────
-    /// Gas NNE monthly base fee (Grundpreis / Verrechnungspreis) in **EUR/month**.
-    ///
-    /// Per GasNEV, gas network charges may include a fixed monthly standing charge
-    /// in addition to the commodity-linked Arbeitspreis.  Supply the approved
-    /// `PreisblattNetznutzung.grundpreis_eur_per_month` value here.
-    ///
-    /// `None` for Strom NNE (Strom does not have a separate Grundpreis).
-    /// `None` when the Gas tariff is purely commodity-based (no Grundpreis).
-    pub nne_grundpreis_eur_per_month: Option<Decimal>,
-    /// Number of months to apply the `nne_grundpreis_eur_per_month` to.
-    ///
-    /// Defaults to `None` (= 0 months, no Grundpreis position generated).
-    /// Required when `nne_grundpreis_eur_per_month` is set.
-    pub nne_grundpreis_months: Option<u32>,
+    /// `None` uses the statutory rate for the delivery year and group. Set it
+    /// where an EnFG decision grants a rate the published schedule does not
+    /// express.
+    pub sect19_umlage_ct_per_kwh: Option<Decimal>,
+    /// Offshore-Netzumlage in ct/kWh, overriding the tabled rate.
+    pub offshore_umlage_ct_per_kwh: Option<Decimal>,
+    /// KWKG-Umlage in ct/kWh, overriding the tabled rate.
+    pub kwkg_umlage_ct_per_kwh: Option<Decimal>,
 
     /// Optional tariff sheet identifier for audit tracing.
     ///
@@ -903,11 +1216,6 @@ pub struct NneInput {
     ///   `SettlementType::NneStrom`
     /// - `Sparte::Gas` → `GasNEV §14`, `SettlementType::NneGas`
     pub sparte: Sparte,
-    /// KAV rate class applied to this metering point.
-    ///
-    /// Included in the calculation trace for KA positions so auditors can verify
-    /// the rate matches the correct KAV §2 tier. `None` when KA is absent.
-    pub ka_klasse: Option<KaKundengruppe>,
 
     // ── §14a Modul 3 Spotpreis-NNE per-interval dispatch data ────────────────
     /// §14a Modul 3 (BNetzA BK6-22-300 Anlage 2 §3) per-dispatch-interval positions.
@@ -926,7 +1234,56 @@ pub struct NneInput {
     /// Each interval generates one `InvoicePosition` with
     /// `kind = NneArbeitModul3` and `lastvariable_preisposition_json` populated.
     #[doc = "§14a Modul 3 per-interval input data."]
-    pub sect14a_modul3_intervals: Vec<Sect14aModul3Interval>,
+    ///
+    /// One value rather than twelve loose fields: the four shapes are mutually
+    /// exclusive by construction.
+    pub arbeitspreis: ArbeitspreisModell,
+
+    /// RLM demand charge — peak demand and its rate, or neither.
+    pub leistungspreis: Option<Leistungspreis>,
+
+    /// Gas NNE Grundpreis. `None` for Strom, which has no separate Grundpreis.
+    pub grundpreis: Option<Grundpreis>,
+
+    /// Konzessionsabgabe — rate and customer group together, so the KAV §2
+    /// ceiling can always be checked.
+    pub konzessionsabgabe: Option<Konzessionsabgabe>,
+
+    /// The Netzebene this metering point takes supply from.
+    ///
+    /// Netzentgelte are published per level, so the level is what makes a rate
+    /// checkable against a price sheet. Recorded on the settlement and in the
+    /// trace; it does not itself select a rate — this crate is given the rates.
+    pub netzebene: Option<crate::netzebene::Netzebene>,
+
+    /// Annual peak demand in kW, where the metering point has one.
+    ///
+    /// Used with the annual energy to record the Benutzungsstundenzahl in the
+    /// trace. This is the *annual* peak, which is not the same as the peak in
+    /// the billing period — a monthly settlement carries the annual figure so
+    /// the utilisation can be checked against the price sheet that priced it.
+    pub jahreshoechstleistung_kw: Option<Decimal>,
+
+    /// Annual energy in kWh, where known.
+    ///
+    /// Pairs with `jahreshoechstleistung_kw` for the Benutzungsstundenzahl, and
+    /// decides whether §17 Abs. 6 permits an Arbeitspreis-only tariff.
+    pub jahresarbeit_kwh: Option<Decimal>,
+
+    /// An agreed §19 Abs. 2 StromNEV individual charge, where one exists.
+    ///
+    /// Applied as a reduction over the Arbeits- and Leistungspreis positions,
+    /// with the statutory Mindestentgelt floor checked against the utilisation
+    /// data above. The Konzessionsabgabe and the network levies are unaffected —
+    /// the Netzbetreiber's lost revenue is compensated through the
+    /// §19 StromNEV-Umlage, billed separately.
+    pub sect19: Option<crate::sect19::Sect19Vereinbarung>,
+
+    /// A booked gas capacity, billed alongside the commodity charge.
+    ///
+    /// Gas only; §15 GasNEV. The annual rate is pro-rated over the settlement
+    /// period by calendar days.
+    pub gas_kapazitaet: Option<crate::gas::GasKapazitaet>,
 }
 
 // ── Sect14aModul3Interval ─────────────────────────────────────────────────────
@@ -960,7 +1317,7 @@ pub struct NneInput {
 /// The NNE varies per 15-min interval based on the spot market price.
 /// All controllable loads ≥ 3.7 kW registered under §14a must have Modul 1 at minimum;
 /// Modul 3 is the opt-in premium variant (lower NNE when spot prices are low).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Sect14aModul3Interval {
     /// UTC start of this controlled dispatch interval (ISO-8601).
     ///
@@ -1010,16 +1367,8 @@ pub struct MmmInput {
     pub nb_mp_id: String,
     /// Invoice recipient — Lieferant MP-ID.
     pub lf_mp_id: String,
-    /// Unique invoice number.
-    pub rechnungsnummer: String,
-    /// Start of billing period.
-    pub period_from: time::Date,
-    /// End of billing period.
-    pub period_to: time::Date,
-    /// Invoice issue date.
-    pub invoice_date: time::Date,
-    /// Payment due date.
-    pub due_date: time::Date,
+    /// The delivery period being settled.
+    pub period: SettlementPeriod,
     /// Commodity — determines which Festlegung the legal references cite.
     ///
     /// - `Sparte::Strom` → `GPKE (BK6-24-174) Teil 1 Kap. 8.4`, `GPKE BK6-22-024`
@@ -1053,16 +1402,8 @@ pub struct MsbInput {
     pub nb_mp_id: String,
     /// Invoice recipient — Messstellenbetreiber MP-ID.
     pub msb_mp_id: String,
-    /// Unique invoice number.
-    pub rechnungsnummer: String,
-    /// Start of billing period (inclusive, German local date).
-    pub period_from: time::Date,
-    /// End of billing period (inclusive, German local date).
-    pub period_to: time::Date,
-    /// Invoice issue date.
-    pub invoice_date: time::Date,
-    /// Payment due date.
-    pub due_date: time::Date,
+    /// The delivery period being settled.
+    pub period: SettlementPeriod,
     /// Grundgebühr Messstellenbetrieb in **EUR/month** (from `PreisblattMessung`).
     pub grundgebuehr_eur_per_month: Decimal,
     /// Number of full calendar months in the billing period.
@@ -1071,6 +1412,19 @@ pub struct MsbInput {
     ///
     /// `None` when the MSB provides only the meter, not a separate measurement service.
     pub messdienstleistung_eur: Option<Decimal>,
+
+    /// Which §30 MsbG case this metering point falls under.
+    ///
+    /// Fixes the Preisobergrenze the charge is checked against. `None` skips the
+    /// check, which should be rare: a metering charge above the POG is an amount
+    /// the customer is entitled to have refunded.
+    pub messstellen_kategorie: Option<crate::msbg::MessstellenKategorie>,
+
+    /// Whose share of the metering charge this settlement bills.
+    ///
+    /// §30 MsbG splits the ceiling between the Netzbetreiber and the
+    /// Letztverbraucher, so the applicable cap depends on who is being billed.
+    pub entgeltschuldner: Option<crate::msbg::Entgeltschuldner>,
 }
 
 // ── GasAwhInput ───────────────────────────────────────────────────────────────
@@ -1101,16 +1455,8 @@ pub struct GasAwhInput {
     pub nb_mp_id: String,
     /// Invoice recipient — Lieferant Gas (LFG or LFA) MP-ID.
     pub lf_mp_id: String,
-    /// Unique invoice number (operator-generated).
-    pub rechnungsnummer: String,
-    /// Start of billing period (inclusive, German local date).
-    pub period_from: time::Date,
-    /// End of billing period (inclusive, German local date).
-    pub period_to: time::Date,
-    /// Invoice issue date.
-    pub invoice_date: time::Date,
-    /// Payment due date (Zahlungsziel, §271 BGB).
-    pub due_date: time::Date,
+    /// The delivery period being settled.
+    pub period: SettlementPeriod,
     /// Optional tariff sheet identifier for audit tracing.
     pub tariff_sheet_id: Option<String>,
     /// AWH line items: each chargeable action with count and unit price.
@@ -1125,7 +1471,7 @@ pub struct GasAwhInput {
 ///
 /// ```rust
 /// # use grid_billing::AwhPositionInput;
-/// # use rust_decimal_macros::dec;
+/// # use rust_decimal::dec;
 /// let sperrung = AwhPositionInput {
 ///     beschreibung: "Sperrung Gaszähler".to_owned(),
 ///     anzahl: 1,
@@ -1159,12 +1505,14 @@ pub struct AwhPositionInput {
 
 /// Result of pre-calculation input validation.
 ///
-/// Validation runs **before** the calculation begins. A `ValidationResult`
-/// with `is_valid = false` should prevent calling `calculate_*` to avoid
-/// partial or incorrect results.
+/// For NNE there is no separate validator: the invariants that mattered are
+/// either unrepresentable — an inverted [`SettlementPeriod`], a half-set
+/// [`Leistungspreis`], two §14a modules at once — or enforced inside
+/// [`crate::settle_nne`] itself. A validator the engine did not call was how a
+/// caller who skipped it got billed on the wrong basis with no error.
 ///
-/// Use [`validate_nne_input`], [`validate_mmm_input`], or [`validate_msb_input`]
-/// to obtain a `ValidationResult` for your input.
+/// [`validate_mmm_input`], [`validate_msb_input`] and [`validate_gas_awh_input`]
+/// remain for inputs whose engines accept looser shapes.
 #[derive(Debug, Clone)]
 pub struct ValidationResult {
     /// Whether the input passed all validation checks.
@@ -1193,156 +1541,11 @@ impl ValidationResult {
     }
 }
 
-/// Validate a [`NneInput`] before calling [`crate::calculate_nne_invoice`].
-///
-/// The calculation functions also validate hard constraints and return
-/// `Err(BillingError)`. This function additionally surfaces soft warnings
-/// (e.g. suspiciously negative prices) that would not prevent calculation
-/// but should be reviewed before dispatch.
-#[must_use]
-pub fn validate_nne_input(input: &NneInput) -> ValidationResult {
-    let mut r = ValidationResult::ok();
-    if input.period_from >= input.period_to {
-        r.push(SettlementWarning {
-            severity: WarningSeverity::Error,
-            code: "INVALID_PERIOD",
-            message: "period_from must be strictly before period_to".to_owned(),
-        });
-    }
-    if input.arbeitsmenge_kwh < Decimal::ZERO {
-        r.push(SettlementWarning {
-            severity: WarningSeverity::Error,
-            code: "NEGATIVE_CONSUMPTION",
-            message: format!("arbeitsmenge_kwh is negative: {}", input.arbeitsmenge_kwh),
-        });
-    }
-    if input.arbeitspreis_ct_per_kwh < Decimal::ZERO {
-        r.push(SettlementWarning {
-            severity: WarningSeverity::Warning,
-            code: "NEGATIVE_ARBEITSPREIS",
-            message: format!(
-                "arbeitspreis_ct_per_kwh is negative: {}",
-                input.arbeitspreis_ct_per_kwh
-            ),
-        });
-    }
-    if input.spitzenleistung_kw.is_some() != input.leistungspreis_eur_per_kw.is_some() {
-        r.push(SettlementWarning {
-            severity: WarningSeverity::Error,
-            code: "MISMATCHED_RLM_FIELDS",
-            message:
-                "spitzenleistung_kw and leistungspreis_eur_per_kw must both be set or both absent"
-                    .to_owned(),
-        });
-    }
-    if input.sparte == Sparte::Gas && input.spitzenleistung_kw.is_some() {
-        r.push(SettlementWarning {
-            severity: WarningSeverity::Warning,
-            code: "GAS_WITH_LEISTUNG",
-            message: "Gas NNE typically does not use Leistungspreis — verify tariff configuration"
-                .to_owned(),
-        });
-    }
-    // Partial HT/NT field consistency: all four must be set or all four absent.
-    let tou_count = [
-        input.arbeitsmenge_ht_kwh.is_some(),
-        input.arbeitspreis_ht_ct_per_kwh.is_some(),
-        input.arbeitsmenge_nt_kwh.is_some(),
-        input.arbeitspreis_nt_ct_per_kwh.is_some(),
-    ]
-    .iter()
-    .filter(|&&b| b)
-    .count();
-    if tou_count > 0 && tou_count < 4 {
-        r.push(SettlementWarning {
-            severity: WarningSeverity::Error,
-            code: "PARTIAL_TOU_FIELDS",
-            message: format!(
-                "§14a Modul 2 ToU: {tou_count} of 4 HT/NT fields set — all four must be provided or all absent"
-            ),
-        });
-    }
-    // §14a Modul 1 and Modul 2 are mutually exclusive.
-    if input.sect14a_modul1_reduction_factor.is_some() && tou_count == 4 {
-        r.push(SettlementWarning {
-            severity: WarningSeverity::Error,
-            code: "MODUL1_AND_MODUL2_CONFLICT",
-            message:
-                "sect14a_modul1_reduction_factor (Modul 1) cannot be combined with HT/NT ToU fields (Modul 2)"
-                    .to_owned(),
-        });
-    }
-    // §14a Modul 1 and Modul 3 are mutually exclusive.
-    if input.sect14a_modul1_reduction_factor.is_some() && !input.sect14a_modul3_intervals.is_empty()
-    {
-        r.push(SettlementWarning {
-            severity: WarningSeverity::Error,
-            code: "MODUL1_AND_MODUL3_CONFLICT",
-            message:
-                "sect14a_modul1_reduction_factor (Modul 1) cannot be combined with sect14a_modul3_intervals (Modul 3)"
-                    .to_owned(),
-        });
-    }
-    // §14a Modul 3 interval sanity checks.
-    for (i, interval) in input.sect14a_modul3_intervals.iter().enumerate() {
-        if interval.period_from >= interval.period_to {
-            r.push(SettlementWarning {
-                severity: WarningSeverity::Error,
-                code: "MODUL3_INTERVAL_PERIOD_INVALID",
-                message: format!(
-                    "sect14a_modul3_intervals[{i}]: period_from must be before period_to"
-                ),
-            });
-        }
-        if interval.menge_kwh < Decimal::ZERO {
-            r.push(SettlementWarning {
-                severity: WarningSeverity::Warning,
-                code: "MODUL3_INTERVAL_NEGATIVE_MENGE",
-                message: format!(
-                    "sect14a_modul3_intervals[{i}]: menge_kwh is negative ({}) — verify Lastgang data",
-                    interval.menge_kwh
-                ),
-            });
-        }
-        if interval.nne_rate_ct_per_kwh < Decimal::ZERO {
-            r.push(SettlementWarning {
-                severity: WarningSeverity::Warning,
-                code: "MODUL3_INTERVAL_NEGATIVE_RATE",
-                message: format!(
-                    "sect14a_modul3_intervals[{i}]: nne_rate_ct_per_kwh is negative ({}) — \
-                     Modul 3 rates should be ≥ 0; verify spot formula",
-                    interval.nne_rate_ct_per_kwh
-                ),
-            });
-        }
-    }
-    if let Some(factor) = input.sect14a_modul1_reduction_factor
-        && (factor <= Decimal::ZERO || factor > Decimal::ONE)
-    {
-        r.push(SettlementWarning {
-            severity: WarningSeverity::Error,
-            code: "INVALID_MODUL1_FACTOR",
-            message: format!("sect14a_modul1_reduction_factor must be in (0, 1], got {factor}"),
-        });
-    }
-    // Gas Grundpreis: both fields must be set together.
-    if input.nne_grundpreis_eur_per_month.is_some() != input.nne_grundpreis_months.is_some() {
-        r.push(SettlementWarning {
-            severity: WarningSeverity::Error,
-            code: "GRUNDPREIS_MONTHS_MISMATCH",
-            message:
-                "nne_grundpreis_eur_per_month and nne_grundpreis_months must both be set or both absent"
-                    .to_owned(),
-        });
-    }
-    r
-}
-
-/// Validate a [`MmmInput`] before calling [`crate::calculate_mmm_invoice`].
+/// Validate a [`MmmInput`] before calling [`crate::settle_mmm`].
 #[must_use]
 pub fn validate_mmm_input(input: &MmmInput) -> ValidationResult {
     let mut r = ValidationResult::ok();
-    if input.period_from >= input.period_to {
+    if input.period.from() >= input.period.to() {
         r.push(SettlementWarning {
             severity: WarningSeverity::Error,
             code: "INVALID_PERIOD",
@@ -1372,11 +1575,11 @@ pub fn validate_mmm_input(input: &MmmInput) -> ValidationResult {
     r
 }
 
-/// Validate a [`MsbInput`] before calling [`crate::calculate_msb_invoice`].
+/// Validate a [`MsbInput`] before calling [`crate::settle_msb`].
 #[must_use]
 pub fn validate_msb_input(input: &MsbInput) -> ValidationResult {
     let mut r = ValidationResult::ok();
-    if input.period_from >= input.period_to {
+    if input.period.from() >= input.period.to() {
         r.push(SettlementWarning {
             severity: WarningSeverity::Error,
             code: "INVALID_PERIOD",
@@ -1403,7 +1606,7 @@ pub fn validate_msb_input(input: &MsbInput) -> ValidationResult {
     r
 }
 
-/// Validate a [`GasAwhInput`] before calling [`crate::calculate_gas_awh_invoice`].
+/// Validate a [`GasAwhInput`] before calling [`crate::settle_gas_awh`].
 ///
 /// Checks that:
 /// - `period_from < period_to`
@@ -1412,7 +1615,7 @@ pub fn validate_msb_input(input: &MsbInput) -> ValidationResult {
 #[must_use]
 pub fn validate_gas_awh_input(input: &GasAwhInput) -> ValidationResult {
     let mut r = ValidationResult::ok();
-    if input.period_from >= input.period_to {
+    if input.period.from() >= input.period.to() {
         r.push(SettlementWarning {
             severity: WarningSeverity::Error,
             code: "INVALID_PERIOD",
@@ -1446,4 +1649,130 @@ pub fn validate_gas_awh_input(input: &GasAwhInput) -> ValidationResult {
         }
     }
     r
+}
+
+#[cfg(test)]
+mod input_model_tests {
+    use super::*;
+    use rust_decimal::dec;
+
+    /// A reduction factor outside `(0, 1]` cannot be built.
+    ///
+    /// It used to be a bare `Decimal`, range-checked in a validator the engine
+    /// did not call — so `settle_nne` would happily multiply the published
+    /// tariff by 5.
+    #[test]
+    fn a_reduction_factor_must_actually_reduce() {
+        assert!(Reduktionsfaktor::new(dec!(0.85)).is_ok());
+        assert!(
+            Reduktionsfaktor::new(dec!(1)).is_ok(),
+            "no reduction is still valid"
+        );
+        assert!(
+            Reduktionsfaktor::new(dec!(0)).is_err(),
+            "zero is not a reduction"
+        );
+        assert!(Reduktionsfaktor::new(dec!(-0.5)).is_err());
+        assert!(
+            Reduktionsfaktor::new(dec!(5)).is_err(),
+            "5x is not a reduction"
+        );
+        assert_eq!(Reduktionsfaktor::REGELFALL.get(), dec!(0.85));
+    }
+
+    /// The charged energy is the same figure whichever model priced it.
+    ///
+    /// The Konzessionsabgabe and the three network levies are charged on it, and
+    /// each used to recompute the base with its own `if has_tou` branch.
+    #[test]
+    fn every_model_reports_the_energy_it_priced() {
+        let flat = ArbeitspreisModell::Einheitlich(MengePreis {
+            menge_kwh: dec!(1000),
+            preis_ct_per_kwh: dec!(3.5),
+        });
+        assert_eq!(flat.menge_kwh(), dec!(1000));
+
+        let tou = ArbeitspreisModell::Modul2ZeitVariabel {
+            ht: MengePreis {
+                menge_kwh: dec!(600),
+                preis_ct_per_kwh: dec!(4.0),
+            },
+            nt: MengePreis {
+                menge_kwh: dec!(400),
+                preis_ct_per_kwh: dec!(1.5),
+            },
+        };
+        assert_eq!(tou.menge_kwh(), dec!(1000), "HT + NT, not one of them");
+
+        let modul1 = ArbeitspreisModell::Modul1Pauschal {
+            basis: MengePreis {
+                menge_kwh: dec!(1000),
+                preis_ct_per_kwh: dec!(3.5),
+            },
+            reduktion: Reduktionsfaktor::REGELFALL,
+        };
+        assert_eq!(
+            modul1.menge_kwh(),
+            dec!(1000),
+            "the reduction changes the rate, not the energy"
+        );
+    }
+
+    /// Each model names its §14a module, and only one can be in play.
+    #[test]
+    fn a_model_carries_at_most_one_sect14a_module() {
+        use Sect14aModule as M;
+        let cases = [
+            (
+                ArbeitspreisModell::Einheitlich(MengePreis {
+                    menge_kwh: dec!(1),
+                    preis_ct_per_kwh: dec!(1),
+                }),
+                None,
+            ),
+            (
+                ArbeitspreisModell::Modul1Pauschal {
+                    basis: MengePreis {
+                        menge_kwh: dec!(1),
+                        preis_ct_per_kwh: dec!(1),
+                    },
+                    reduktion: Reduktionsfaktor::REGELFALL,
+                },
+                Some(M::Modul1),
+            ),
+            (
+                ArbeitspreisModell::Modul2ZeitVariabel {
+                    ht: MengePreis {
+                        menge_kwh: dec!(1),
+                        preis_ct_per_kwh: dec!(1),
+                    },
+                    nt: MengePreis {
+                        menge_kwh: dec!(1),
+                        preis_ct_per_kwh: dec!(1),
+                    },
+                },
+                Some(M::Modul2),
+            ),
+            (
+                ArbeitspreisModell::Modul3Spotpreis { intervalle: vec![] },
+                Some(M::Modul3),
+            ),
+        ];
+        for (model, expected) in cases {
+            assert_eq!(model.sect14a_modul(), expected);
+        }
+    }
+
+    /// A period is ordered by construction; a single day is valid.
+    #[test]
+    fn a_period_cannot_be_inverted() {
+        use time::macros::date;
+        assert!(SettlementPeriod::new(date!(2026 - 01 - 31), date!(2026 - 01 - 01)).is_err());
+        let one_day = SettlementPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 01))
+            .expect("a single day is a period");
+        assert_eq!(one_day.days(), 1);
+        let january =
+            SettlementPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).expect("valid");
+        assert_eq!(january.days(), 31, "both bounds are inclusive");
+    }
 }

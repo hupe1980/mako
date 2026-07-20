@@ -252,8 +252,9 @@ The XML is BASE64-free — returns the raw XML string.",
         match fetch_billing_record(&self.state.pool, id).await {
             Ok(Some(row)) => {
                 use crate::xrechnung::{XRechnungInfo, build_zugferd_cii_xml};
-                use rust_decimal_macros::dec;
+                use rust_decimal::dec;
                 let info = XRechnungInfo {
+                    prepaid_eur: rust_decimal::Decimal::ZERO,
                     invoice_number: row
                         .rechnung_json
                         .get("rechnungsnummer")
@@ -548,7 +549,7 @@ WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM
 
         let quantities = Quantities {
             electricity: Some(MeterInput {
-                arbeitsmenge_kwh: rust_decimal_macros::dec!(100),
+                arbeitsmenge_kwh: rust_decimal::dec!(100),
                 metering_mode: metering_mode.clone(),
                 ..Default::default()
             }),

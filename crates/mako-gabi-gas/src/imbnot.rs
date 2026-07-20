@@ -272,7 +272,7 @@ mod tests {
             receiver_eic: "21X000000001369Q".to_owned(),
             gas_day: GasDay::parse("2026-01-15").unwrap(),
             direction: ImbalanceDirection::Short,
-            quantity_kwh: Some(rust_decimal_macros::dec!(-15000)),
+            quantity_kwh: Some(rust_decimal::dec!(-15000)),
             document_ref: make_ref(),
         };
         let output = GaBiGasImbalanceWorkflow::handle(&state, cmd).unwrap();

@@ -80,5 +80,4 @@ opendal                 = { workspace = true }
 [dev-dependencies]
 mako-edm            = { workspace = true, features = ["testing"] }
 tokio               = { version = "1", features = ["full"] }
-rust_decimal_macros = { workspace = true }
 tower               = { version = "0.5", features = ["util"] }

@@ -41,4 +41,3 @@ rmcp            = { workspace = true }
 tokio-util      = { workspace = true }
 
 [dev-dependencies]
-rust_decimal_macros = { version = "1" }

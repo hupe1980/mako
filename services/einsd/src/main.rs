@@ -38,12 +38,8 @@
 //! | `GET`    | `/health/ready` | Readiness check |
 
 use anyhow::Context as _;
-use axum::{
-    Extension, Router,
-    routing::{get, post, put},
-};
 use einsd::{config, handlers, mcp_server, pg};
-use mako_service::{health::health_routes, load_config};
+use mako_service::load_config;
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::info;
@@ -69,10 +65,41 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let ct = mako_service::shutdown::token();
+
+    // Settling a plant creates a payment obligation to the Anlagenbetreiber, so
+    // the API is closed by default; running it open has to be stated explicitly.
+    if cfg.oidc.is_none() && !cfg.allow_insecure_no_auth {
+        anyhow::bail!(
+            "einsd: no [oidc] section and allow_insecure_no_auth is not set — \
+             refusing to serve the settlement API unauthenticated"
+        );
+    }
+    let oidc = mako_service::oidc::OidcConfig::build_verifier(
+        cfg.oidc.as_ref(),
+        &http_client,
+        &cfg.tenant,
+        ct.clone(),
+    )
+    .await?;
+
+    let cedar = Arc::new(
+        mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
+            "../policies/einsd.cedar"
+        ))
+        .map_err(|e| anyhow::anyhow!("Cedar policy error: {e}"))?,
+    );
+
     let mcp_state = std::sync::Arc::new(mcp_server::EinsdMcpState {
         pool: pool.clone(),
         tenant: cfg.tenant.clone(),
-        auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
+        auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
+            &cfg.mcp,
+            oidc.clone(),
+            Some(cedar.clone()),
+            &cfg.tenant,
+        ),
+        cfg: Arc::clone(&cfg),
+        http_client: Arc::clone(&http_client),
     });
 
     // Run database migrations at startup.
@@ -117,10 +144,15 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Background worker: auto-settle all unsettled active plants on the 2nd of each month.
+    // Background worker: auto-settle any active plant with no receipt for the
+    // previous month.
     //
-    // Triggered once on startup (in case the previous month's settlement was missed)
-    // and then every 24 h, settling any plants that were missed.
+    // Runs once 60 s after startup and then on a fixed ~23 h interval — it does
+    // not wait for a particular day of the month. Settling is idempotent per
+    // (plant, period), so a plant already settled is skipped rather than rebilled.
+    //
+    // EEG Vergütung must be paid monthly per §23 EEG 2023. The NB is responsible
+    // for initiating payment within 30 days of the billing month end.
     //
     // EEG Vergütung must be paid monthly per §23 EEG 2023.  The NB is responsible
     // for initiating payment within 30 days of the billing month end.
@@ -132,7 +164,7 @@ async fn main() -> anyhow::Result<()> {
         tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
         loop {
             let now = time::OffsetDateTime::now_utc();
-            // Auto-settle the previous month on the 2nd of each month (or on first startup).
+            // Settle the previous calendar month.
             let prev_month_year = if now.month() as u8 == 1 {
                 now.year() - 1
             } else {
@@ -187,6 +219,7 @@ async fn main() -> anyhow::Result<()> {
                             einspeisemanagement_kwh: None,
                             negative_price_quarter_hours: None,
                             correction_of: None,
+                            correction_reason: None,
                             jahresmarktwert_ct_kwh: None,
                         },
                     );
@@ -305,81 +338,15 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    let app = Router::new()
-        .merge(mcp_server::router(mcp_state, ct.clone()))
-        .merge(health_routes(|| async { true }))
-        // ── Anlage CRUD ────────────────────────────────────────────────────────
-        .route(
-            "/api/v1/anlagen",
-            post(handlers::post_anlage).get(handlers::get_anlagen),
-        )
-        .route(
-            "/api/v1/anlagen/foerderung-auslaufend",
-            get(handlers::get_foerderung_auslaufend),
-        )
-        .route(
-            "/api/v1/anlagen/{tr_id}",
-            get(handlers::get_anlage)
-                .put(handlers::put_anlage)
-                .delete(handlers::delete_anlage),
-        )
-        // ── Settlement ─────────────────────────────────────────────────────────
-        .route(
-            "/api/v1/anlagen/{tr_id}/settle/{year}/{month}",
-            post(handlers::post_settle),
-        )
-        .route(
-            "/api/v1/anlagen/{tr_id}/settlements",
-            get(handlers::get_settlements),
-        )
-        // ── Repowering (§22 EEG 2023) ──────────────────────────────────────────
-        .route(
-            "/api/v1/anlagen/{tr_id}/repowering",
-            post(handlers::post_repowering),
-        )
-        // ── MaStR registration confirmation ────────────────────────────────────
-        .route(
-            "/api/v1/anlagen/{tr_id}/mastr-registrierung",
-            post(handlers::post_mastr_registrierung),
-        )
-        // ── Zusammenlegung (§24 EEG 2023) ─────────────────────────────────────
-        .route(
-            "/api/v1/anlagen/{tr_id}/zusammenlegen",
-            post(handlers::post_zusammenlegen),
-        )
-        // ── §21b EEG 2023 — Veräußerungsform switch ───────────────────────────
-        .route(
-            "/api/v1/anlagen/{tr_id}/switch-veraeusserungsform",
-            post(handlers::post_switch_veraeusserungsform),
-        )
-        // ── §22 MessZV — Correction settlement ────────────────────────────────
-        .route(
-            "/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction",
-            post(handlers::post_correction_settle),
-        )
-        // ── Batch settlement ───────────────────────────────────────────────────
-        .route(
-            "/api/v1/settle/{year}/{month}",
-            post(handlers::post_batch_settle),
-        )
-        // ── EPEX monthly prices ────────────────────────────────────────────────
-        .route(
-            "/api/v1/epex-monthly/{year}/{month}",
-            put(handlers::put_epex_price).get(handlers::get_epex_price),
-        )
-        // ── §20 Abs. 2 Jahresmarktwert prices (ÜNB-published) ─────────────────
-        .route(
-            "/api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}",
-            put(handlers::put_jahresmarktwert).get(handlers::get_jahresmarktwert),
-        )
-        // ── EEG tariff rate lookup ─────────────────────────────────────────────
-        .route(
-            "/api/v1/verguetungssatz-lookup",
-            post(handlers::post_verguetungssatz_lookup),
-        )
-        .layer(Extension(Arc::clone(&cfg)))
-        .layer(Extension(Arc::clone(&http_client)))
-        .layer(Extension(pool));
+    let app = einsd::routes::build_router(
+        Arc::clone(&cfg),
+        Arc::clone(&http_client),
+        cedar,
+        oidc,
+        pool,
+        mcp_state,
+        ct.clone(),
+    );
 
     let port = cfg.port.unwrap_or(9180);
     let addr = format!("0.0.0.0:{port}");

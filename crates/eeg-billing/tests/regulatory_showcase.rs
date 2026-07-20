@@ -22,7 +22,7 @@ use eeg_billing::{
     negativpreis_rule_applies,
 };
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 use time::macros::date;
 
 fn d(s: &str) -> Decimal {
@@ -4130,7 +4130,7 @@ fn sect44_guellebonusanlage_rate_table() {
     let gross_aw = table.rate_for(dec!(50)).expect("50 kW in range");
     // Gross AW = 16.90 ct/kWh → Amount<5> = 0.16900 EUR/kWh
     // billing::Amount is EUR/kWh; convert to ct for readable assertion
-    let gross_aw_ct = gross_aw.to_decimal() * rust_decimal::Decimal::from(100u32);
+    let gross_aw_ct = gross_aw.into_decimal() * rust_decimal::Decimal::from(100u32);
     assert_eq!(
         gross_aw_ct.round_dp(2),
         dec!(16.90),

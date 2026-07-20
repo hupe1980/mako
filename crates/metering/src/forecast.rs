@@ -407,7 +407,7 @@ fn compute_seasonal_factor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::{Duration, macros::datetime};
 
     fn make_iv(from: OffsetDateTime, kwh: Decimal) -> MeterInterval {
@@ -544,7 +544,7 @@ mod db_vocabulary_tests {
         use super::substitute_values;
         use crate::interval::{MeterInterval, QualityFlag};
         use crate::substitute::SubstituteMethod;
-        use rust_decimal_macros::dec;
+        use rust_decimal::dec;
         use time::macros::datetime;
         let from = datetime!(2026-03-09 00:00 UTC);
         let to = datetime!(2026-03-09 01:00 UTC); // four quarter-hours
@@ -613,7 +613,7 @@ mod db_vocabulary_tests {
     fn a_strategy_with_no_data_reports_what_it_fell_back_to() {
         use super::substitute_values;
         use crate::substitute::SubstituteMethod;
-        use rust_decimal_macros::dec;
+        use rust_decimal::dec;
         use time::macros::datetime;
         // Linear interpolation with no closing value has no slope to follow.
         let entries = substitute_values(

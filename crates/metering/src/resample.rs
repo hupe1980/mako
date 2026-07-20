@@ -302,7 +302,7 @@ fn expected_count(start: OffsetDateTime, end: OffsetDateTime, source_secs: u32) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::datetime;
 
     fn make_iv(from: OffsetDateTime, value_kwh: Decimal) -> MeterInterval {

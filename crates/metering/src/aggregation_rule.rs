@@ -239,7 +239,7 @@ impl AggregationRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     #[test]
     fn sum_rule_lists_all_sources() {

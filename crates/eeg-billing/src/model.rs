@@ -217,7 +217,7 @@ pub enum SanktionsTyp {
 /// use eeg_billing::Pflichtverstoss;
 /// use eeg_billing::SanktionsTyp;
 /// use eeg_billing::foerderdauer::calculate_pflichtzahlung;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// // Missing Fernsteuerbarkeit for 3 months, 500 kW plant, obligation not yet fulfilled
 /// let violation = Pflichtverstoss {
@@ -323,7 +323,7 @@ pub enum Messkonzept {
 ///
 /// ```rust
 /// use eeg_billing::CapacityBlock;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 /// use time::macros::date;
 ///
 /// // Original 10 kWp at 9.25 ct/kWh (EEG 2020)

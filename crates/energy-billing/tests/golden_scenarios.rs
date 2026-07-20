@@ -29,7 +29,7 @@ use energy_billing::{
     BillingContext, GasMeterInput, GridInput, InvoiceType, MeterInput, PositionCategory, Product,
     Quantities, RegulatoryRates,
 };
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 use time::macros::date;
 
 // ── Scenario 7 (here ordered first as a regression guard): §41b enforcement ──
@@ -44,7 +44,7 @@ use time::macros::date;
 #[test]
 fn sect41b_dynamic_tariff_rejects_non_imsys_metering_mode() {
     use energy_billing::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::date;
 
     let rates = RegulatoryRates::default();
@@ -679,7 +679,7 @@ fn golden_2022_energiesteuer_senkung_zero_rate() {
 fn sect40a_kilowattstundenpreis_brutto_includes_all_charges() {
     use energy_billing::*;
     use rust_decimal::Decimal;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::date;
 
     // Standard household: 500 kWh @ 30 ct/kWh + 0.11 ct KA + 2.05 ct Stromsteuer + 19% MwSt
@@ -749,7 +749,7 @@ fn sect40a_kilowattstundenpreis_brutto_includes_all_charges() {
 #[test]
 fn sect41_rechnung_json_contains_mandatory_fields() {
     use energy_billing::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::date;
 
     let rates = RegulatoryRates::default();
@@ -862,7 +862,7 @@ fn sect41_rechnung_json_contains_mandatory_fields() {
 #[test]
 fn sect42c_energy_sharing_credit_reduces_effective_cost() {
     use energy_billing::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::date;
 
     let rates = RegulatoryRates::default();
@@ -969,7 +969,7 @@ fn sect42c_energy_sharing_credit_reduces_effective_cost() {
 #[test]
 fn industrie_customer_stromsteuer_befreiung_removes_levy() {
     use energy_billing::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::date;
 
     let rates = RegulatoryRates::default();

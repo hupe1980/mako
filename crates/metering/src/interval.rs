@@ -346,7 +346,7 @@ impl MeterInterval {
     /// ```rust
     /// use metering::{MeterInterval, QualityFlag};
     /// use metering::obis::ObisCode;
-    /// use rust_decimal_macros::dec;
+    /// use rust_decimal::dec;
     /// use time::macros::datetime;
     ///
     /// let iv = MeterInterval {
@@ -388,7 +388,7 @@ impl MeterInterval {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::macros::datetime;
 
     #[test]

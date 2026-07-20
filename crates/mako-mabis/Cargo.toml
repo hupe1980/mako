@@ -26,7 +26,6 @@ time         = { workspace = true }
 edi-energy  = { workspace = true, features = ["mscons"] }
 # testing feature enables InMemoryXxx stores and EngineBuilder::new().
 mako-engine = { workspace = true, features = ["testing"] }
-rust_decimal_macros = { workspace = true }
 serde_json  = { workspace = true }
 time        = { workspace = true }
 tokio       = { version = "1", features = ["full"] }

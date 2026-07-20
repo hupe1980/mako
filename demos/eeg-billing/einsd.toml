@@ -5,6 +5,12 @@
 # It queries edmd for Einspeisemenge (energy fed into the grid) and emits
 # de.eeg.verguetung.berechnet CloudEvents to the ERP webhook.
 
+# Demo only. Without this, einsd refuses to start when no [oidc] section is
+# present: the disabled verifier admits every request as `dev-admin` holding
+# every market role, which satisfies every Cedar policy including running a
+# settlement that obliges the operator to pay the Anlagenbetreiber.
+allow_insecure_no_auth = true
+
 database_url = "postgres://demo:demo-secret@postgres/einsd"
 port         = 9180
 tenant       = "9900357000004"

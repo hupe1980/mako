@@ -50,7 +50,7 @@
 
 use rust_decimal::Decimal;
 #[cfg(test)]
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 
 // ── MeteringMode ──────────────────────────────────────────────────────────────
 
@@ -391,7 +391,7 @@ pub enum MeteringError {
 /// ```rust
 /// use eeg_billing::metering::{compute_einspeisemenge, EinspeisemengeInput};
 /// use eeg_billing::Messkonzept;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// // Simple surplus feed-in: 300 kWh generated, 100 kWh self-consumed, 200 kWh fed in
 /// let input = EinspeisemengeInput {
@@ -464,7 +464,7 @@ pub fn compute_einspeisemenge(
 ///
 /// ```rust
 /// use eeg_billing::metering::{compute_tenant_allocation, EinspeisemengeInput};
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// let input = EinspeisemengeInput {
 ///     einspeisemessung_kwh: None,
@@ -539,7 +539,7 @@ pub fn compute_tenant_allocation(
 ///
 /// ```rust
 /// use eeg_billing::metering::compute_eigenverbrauch;
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// // 400 kWh generated, 250 kWh fed in → 150 kWh self-consumed
 /// let ev = compute_eigenverbrauch(Some(dec!(400)), Some(dec!(250)));

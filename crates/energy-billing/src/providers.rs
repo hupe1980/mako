@@ -5,10 +5,10 @@
 //! with `BillingEngine`.
 
 use billing::{
-    BillingError, DynamicPricing, TariffBand, TariffSchedule, TimeOfUsePricing, TouBand,
+    BillingError, Currency, DynamicPricing, TariffBand, TariffSchedule, TimeOfUsePricing, TouBand,
 };
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 
 use crate::context::BillingContext;
 use crate::position::{
@@ -136,8 +136,11 @@ impl BillingProvider for ElectricityProvider {
                     bands.push(TouBand::new("NT", price));
                 }
                 if !bands.is_empty() {
-                    let items = TimeOfUsePricing::new(bands)
-                        .with_unit("kWh")
+                    let items = TimeOfUsePricing::builder()
+                        .bands(bands)
+                        .unit("kWh")
+                        .currency(Currency::EUR)
+                        .build()?
                         .calculate(&[("HT", ht), ("NT", nt)])?;
                     for item in items {
                         let is_ht = item.has_tag("HT");
@@ -272,7 +275,7 @@ impl BillingProvider for ElectricityProvider {
                     ka_ct / dec!(100),
                     PositionCategory::GridCharge,
                 )
-                .with_legal_basis("KAV")
+                .with_legal_basis("KAV §2")
                 .with_tag("konzessionsabgabe")
                 .with_tag("nne"),
             );
@@ -1067,7 +1070,7 @@ impl BillingProvider for GasProvider {
                         ka_ct / dec!(100),
                         PositionCategory::GridCharge,
                     )
-                    .with_legal_basis("KAV")
+                    .with_legal_basis("KAV §2")
                     .with_tag("gas_konzessionsabgabe")
                     .with_tag("nne"),
                 );
@@ -2214,14 +2217,18 @@ impl BillingProvider for DynamicElectricityProvider {
         }
 
         if !priced_pairs.is_empty() {
-            let item = DynamicPricing::from_intervals(priced_pairs)
-                .and_then(|dp| dp.with_unit("kWh").calculate())
+            let item = DynamicPricing::builder()
+                .intervals(priced_pairs)
+                .unit("kWh")
+                .currency(Currency::EUR)
+                .build()
+                .and_then(|dp| dp.calculate())
                 .map_err(|e| BillingError::InvalidInput {
                     reason: format!("§41a DynamicPricing: {e}"),
                 })?;
 
             let total_kwh = item.quantity_value().unwrap_or_default();
-            let total_eur = item.net_amount.to_decimal();
+            let total_eur = item.net_amount.into_decimal();
             let avg_ct = if total_kwh.is_zero() {
                 Decimal::ZERO
             } else {
@@ -2269,7 +2276,7 @@ impl BillingProvider for DynamicElectricityProvider {
                         ka_ct / dec!(100),
                         PositionCategory::GridCharge,
                     )
-                    .with_legal_basis("KAV")
+                    .with_legal_basis("KAV §2")
                     .with_tag("konzessionsabgabe")
                     .with_tag("nne"),
                 );

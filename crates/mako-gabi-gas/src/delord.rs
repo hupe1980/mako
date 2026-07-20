@@ -451,7 +451,7 @@ mod tests {
             sender_eic: "21X000000001368S".to_owned(),
             receiver_eic: "21X000000001370C".to_owned(),
             gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
-            quantity_kwh: rust_decimal_macros::dec!(1000000),
+            quantity_kwh: rust_decimal::dec!(1000000),
             order_ref: make_order_ref(),
         })
     }
@@ -482,7 +482,7 @@ mod tests {
             sender_eic: "21X000000001368S".to_owned(),
             receiver_eic: "21X000000001370C".to_owned(),
             gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
-            quantity_kwh: rust_decimal_macros::dec!(1000000),
+            quantity_kwh: rust_decimal::dec!(1000000),
             order_ref: make_order_ref(),
         };
         let output = GaBiGasDeliveryOrderWorkflow::handle(&state, cmd).unwrap();
@@ -520,7 +520,7 @@ mod tests {
             delres_ref: make_res_ref(),
             status: DelresStatus::Modified,
             gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
-            adjusted_quantity_kwh: Some(rust_decimal_macros::dec!(900000)),
+            adjusted_quantity_kwh: Some(rust_decimal::dec!(900000)),
             rejection_reason: None,
         };
         let output = GaBiGasDeliveryOrderWorkflow::handle(&state, cmd).unwrap();
@@ -571,7 +571,7 @@ mod tests {
             sender_eic: "21X000000001368S".to_owned(),
             receiver_eic: "21X000000001370C".to_owned(),
             gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
-            quantity_kwh: rust_decimal_macros::dec!(1000000),
+            quantity_kwh: rust_decimal::dec!(1000000),
             order_ref: make_order_ref(),
         });
         let cmd = DeliveryOrderCommand::DelresDeadlineExpired {
@@ -590,7 +590,7 @@ mod tests {
             sender_eic: "21X000000001368S".to_owned(),
             receiver_eic: "21X000000001370C".to_owned(),
             gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
-            quantity_kwh: rust_decimal_macros::dec!(500000),
+            quantity_kwh: rust_decimal::dec!(500000),
             order_ref: make_order_ref(),
         };
         assert!(GaBiGasDeliveryOrderWorkflow::handle(&state, cmd).is_err());

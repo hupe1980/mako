@@ -778,7 +778,7 @@ fn compute_cost_breakdown(
     pos: &crate::pg::AngebotPositionInput,
     rabatt_pct: Option<Decimal>,
 ) -> Option<PositionCostBreakdown> {
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     let positionen = product_data
         .get("tarifpreispositionen")
@@ -1754,7 +1754,7 @@ pub fn compute_jahreskosten_supply_netto(
     preise: &crate::pg::TarifPreise,
     verbrauch_kwh: Decimal,
 ) -> Option<Decimal> {
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     let gp_eur = preise
         .grundpreis_ct_per_day
@@ -1849,7 +1849,7 @@ pub fn extract_kuendigungsfrist_wochen(data: &serde_json::Value) -> Option<i32> 
 /// Note: Returns the gross bonus value as stored; MwSt distinction is encoded
 /// in `aufAbschlaege[i].bezug` (`BRUTTO` / `NETTO`), visible in `tarifpreisblatt`.
 pub fn extract_bonus_rabatt_eur(data: &serde_json::Value) -> Option<Decimal> {
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     let auf = data.get("aufAbschlaege")?.as_array()?;
     let total: Decimal = auf
         .iter()
@@ -2089,7 +2089,7 @@ pub async fn get_comparison_feed_bo4e(
     };
 
     // ── ETag / 304 Not Modified ───────────────────────────────────────────────
-    let verbrauch_kwh = q.verbrauch_kwh.unwrap_or(rust_decimal_macros::dec!(3500));
+    let verbrauch_kwh = q.verbrauch_kwh.unwrap_or(rust_decimal::dec!(3500));
     let etag = compute_feed_etag(&rows, verbrauch_kwh, q.sparte.as_deref());
     if let Some(inm) = req_headers
         .get("if-none-match")
@@ -2196,7 +2196,7 @@ pub async fn get_comparison_feed(
     Query(q): Query<crate::pg::ComparisonFeedQuery>,
     req_headers: HeaderMap,
 ) -> impl IntoResponse {
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::format_description::well_known::Rfc3339;
 
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
@@ -2247,7 +2247,7 @@ pub async fn get_comparison_feed(
             let preise = extract_tarif_preise(&row.data);
             let netto = compute_jahreskosten_supply_netto(&preise, verbrauch_kwh);
             let brutto = netto.map(|n| {
-                use rust_decimal_macros::dec;
+                use rust_decimal::dec;
                 (n * dec!(1.19)).round_dp(2)
             });
             let netto = netto.map(|n| n.round_dp(2));

@@ -664,7 +664,7 @@ impl Product {
                 let mwst = if let Some(r) = p.mwst_rate_override {
                     r
                 } else if p.waerme_is_renewable {
-                    rust_decimal_macros::dec!(0.07)
+                    rust_decimal::dec!(0.07)
                 } else {
                     rates.mwst_rate
                 };
@@ -733,10 +733,7 @@ mod tests {
         let p: Product = serde_json::from_str(json).unwrap();
         match &p {
             Product::Strom(e) => {
-                assert_eq!(
-                    e.arbeitspreis_ct_per_kwh,
-                    Some(rust_decimal_macros::dec!(28.5))
-                );
+                assert_eq!(e.arbeitspreis_ct_per_kwh, Some(rust_decimal::dec!(28.5)));
             }
             _ => panic!("expected Strom"),
         }
@@ -753,11 +750,11 @@ mod tests {
             Product::Waermepumpe(c) => {
                 assert_eq!(
                     c.base.arbeitspreis_ct_per_kwh,
-                    Some(rust_decimal_macros::dec!(20.0))
+                    Some(rust_decimal::dec!(20.0))
                 );
                 assert_eq!(
                     c.sect14a_modul1_nne_reduktion_ct_per_kwh,
-                    Some(rust_decimal_macros::dec!(1.5))
+                    Some(rust_decimal::dec!(1.5))
                 );
             }
             _ => panic!("expected Waermepumpe"),
@@ -772,7 +769,7 @@ mod tests {
             Product::Gas(g) => {
                 assert_eq!(
                     g.gas_arbeitspreis_ct_per_kwh_hs,
-                    Some(rust_decimal_macros::dec!(7.5))
+                    Some(rust_decimal::dec!(7.5))
                 );
             }
             _ => panic!("expected Gas"),

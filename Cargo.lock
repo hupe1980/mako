@@ -13,7 +13,6 @@ dependencies = [
  "rmcp",
  "rubo4e",
  "rust_decimal",
- "rust_decimal_macros",
  "schemars 1.2.1",
  "secrecy",
  "sepa",
@@ -1137,12 +1136,11 @@ dependencies = [
 
 [[package]]
 name = "billing"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ec330504eab26d46206b94b1e09515f31b4297a32c61c45020ba28740123708"
+checksum = "81f6e37ad57957574e0d11569559c93d1b6e6a279799b71f2b3c158d514699b0"
 dependencies = [
  "rust_decimal",
- "rust_decimal_macros",
  "serde",
  "thiserror 2.0.19",
 ]
@@ -1161,7 +1159,6 @@ dependencies = [
  "rmcp",
  "rubo4e",
  "rust_decimal",
- "rust_decimal_macros",
  "schemars 1.2.1",
  "secrecy",
  "serde",
@@ -4213,7 +4210,6 @@ dependencies = [
  "rmcp",
  "rubo4e",
  "rust_decimal",
- "rust_decimal_macros",
  "schemars 1.2.1",
  "secrecy",
  "serde",
@@ -4250,7 +4246,6 @@ dependencies = [
  "billing",
  "proptest",
  "rust_decimal",
- "rust_decimal_macros",
  "serde",
  "thiserror 2.0.19",
  "time",
@@ -4268,7 +4263,6 @@ dependencies = [
  "reqwest 0.13.1",
  "rmcp",
  "rust_decimal",
- "rust_decimal_macros",
  "schemars 1.2.1",
  "secrecy",
  "serde",
@@ -4277,6 +4271,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",
@@ -4393,7 +4388,6 @@ dependencies = [
  "proptest",
  "rubo4e",
  "rust_decimal",
- "rust_decimal_macros",
  "serde",
  "serde_json",
  "time",
@@ -5273,8 +5267,7 @@ dependencies = [
  "billing",
  "proptest",
  "rust_decimal",
- "rust_decimal_macros",
- "serde_json",
+ "serde",
  "thiserror 2.0.19",
  "time",
 ]
@@ -7568,7 +7561,6 @@ dependencies = [
  "mako-engine",
  "metering",
  "rust_decimal",
- "rust_decimal_macros",
  "serde",
  "serde_json",
  "time",
@@ -7615,7 +7607,6 @@ dependencies = [
  "mako-engine",
  "metering",
  "rust_decimal",
- "rust_decimal_macros",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
@@ -7963,7 +7954,6 @@ version = "0.12.0"
 dependencies = [
  "proptest",
  "rust_decimal",
- "rust_decimal_macros",
  "serde",
  "thiserror 2.0.19",
  "time",
@@ -8155,7 +8145,6 @@ dependencies = [
  "rmcp",
  "rubo4e",
  "rust_decimal",
- "rust_decimal_macros",
  "secrecy",
  "serde",
  "serde_json",
@@ -10541,6 +10530,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "strum 0.28.0",
  "thiserror 2.0.19",
  "time",
 ]
@@ -10613,6 +10603,7 @@ dependencies = [
  "postgres-types",
  "rand 0.8.7",
  "rkyv 0.7.46",
+ "rust_decimal_macros",
  "serde",
  "serde_json",
  "wasm-bindgen",
@@ -12139,7 +12130,6 @@ dependencies = [
  "rmcp",
  "rubo4e",
  "rust_decimal",
- "rust_decimal_macros",
  "schemars 1.2.1",
  "secrecy",
  "serde",
@@ -13225,7 +13215,6 @@ dependencies = [
  "rmcp",
  "rubo4e",
  "rust_decimal",
- "rust_decimal_macros",
  "secrecy",
  "sepa",
  "serde",

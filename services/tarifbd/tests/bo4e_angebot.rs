@@ -5,7 +5,7 @@
 //! `rubo4e::current::Angebot` and find the supply point and cost lines.
 
 use rubo4e::current::{Angebot, Angebotsstatus, Mengeneinheit, Waehrungscode};
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 use tarifbd::bo4e_angebot::{
     ATTR_IST_BASIS, ATTR_LABEL, ATTR_PRODUCT_CODE, ATTR_RABATT_PCT, build_angebot, status_from_str,
 };

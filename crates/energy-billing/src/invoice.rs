@@ -4,11 +4,12 @@
 //! computes totals, and can serialise to BO4E-compatible `Rechnung` JSON.
 
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 use serde::Serialize;
 
-use crate::context::BillingContext;
+use crate::context::{AbschlagDeduction, BillingContext};
 use crate::position::{BillingPosition, BillingWarning, PositionCategory};
+use billing::BillingError;
 
 /// A completed invoice — the immutable result of `BillingEngine::bill()`.
 ///
@@ -66,10 +67,19 @@ pub struct Invoice {
     /// `zahlbetrag_eur`.
     pub brutto_eur: Decimal,
 
-    /// Total of advance payments (Abschläge) deducted on this invoice.
+    /// Total of advance payments (Abschläge) deducted on this invoice, gross.
     ///
     /// Non-zero only for `InvoiceType::Final` with `ctx.abschlage` populated.
     pub abschlag_total_eur: Decimal,
+
+    /// Tax contained in `abschlag_total_eur`.
+    ///
+    /// §14 Abs. 5 Satz 2 UStG requires an Endrechnung to deduct the advances and
+    /// the tax attributable to them, so the tax already invoiced on the advances
+    /// is stated separately rather than folded into the gross deduction. Summed
+    /// per advance at the rate that advance was invoiced at, which need not be
+    /// the rate on this invoice.
+    pub abschlag_ust_eur: Decimal,
 
     /// Amount actually due / refundable after Abschlag deduction (§41 EnWG).
     ///
@@ -108,6 +118,71 @@ impl Invoice {
         tax_subtotals_of(&self.positions, default_rate)
     }
 
+    /// The advances on this invoice as [`billing::AdvancePayment`]s.
+    ///
+    /// Empty unless the context carries `abschlage`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BillingError`] if an advance's amounts overflow.
+    pub fn advance_payments(&self) -> Result<Vec<billing::AdvancePayment>, BillingError> {
+        self.context
+            .abschlage
+            .iter()
+            .map(AbschlagDeduction::to_advance_payment)
+            .collect()
+    }
+
+    /// The advances as a [`billing::Prepayment`], in the resolution this invoice
+    /// carries.
+    ///
+    /// Itemised whenever advances are present: the per-advance tax is what makes
+    /// the deduction lawful under §14 Abs. 5 Satz 2 UStG, so it is never collapsed
+    /// to a flat total here.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BillingError`] if an advance's amounts overflow, or if the set
+    /// of advances is not a valid prepayment.
+    pub fn prepayment(&self) -> Result<billing::Prepayment, BillingError> {
+        let advances = self.advance_payments()?;
+        if advances.is_empty() {
+            return Ok(billing::Prepayment::None);
+        }
+        billing::Prepayment::itemised(advances)
+    }
+
+    /// The residual VAT breakdown for a **Restrechnung** — the whole supply per
+    /// rate, less what the advances already taxed.
+    ///
+    /// This is the form the BMF recommends for e-invoices (Schreiben v.
+    /// 15.10.2024, Rn. 48): bill the remainder and do not list the advances,
+    /// because EN 16931's core profiles have nowhere to carry per-advance tax.
+    ///
+    /// Returns the full breakdown unchanged when there are no advances.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BillingError::InvalidInput`] when an advance taxed a
+    /// `(category, rate)` group this supply does not contain, or when the
+    /// advances exceed the supply in any group — over-deduction would understate
+    /// the output tax owed.
+    pub fn residual_breakdown(
+        &self,
+        default_rate: Decimal,
+    ) -> Result<Vec<billing::TaxBreakdownEntry>, BillingError> {
+        let full: Vec<billing::TaxBreakdownEntry> = self
+            .tax_subtotals(default_rate)
+            .iter()
+            .map(TaxSubtotal::to_breakdown_entry)
+            .collect::<Result<_, _>>()?;
+        let advances = self.advance_payments()?;
+        if advances.is_empty() {
+            return Ok(full);
+        }
+        billing::advance::residual_breakdown(&full, &advances)
+    }
+
     /// Assemble an `Invoice` from a flat list of positions and warnings.
     ///
     /// Separates Tax and Abschlag positions from all others:
@@ -141,6 +216,13 @@ impl Invoice {
             .map(|p| p.net_eur.abs())
             .sum();
         let zahlbetrag_eur = brutto_eur - abschlag_total_eur;
+        // From the context, not the positions: an Abschlag position carries only
+        // the gross paid, while the rate it was invoiced at lives on the deduction.
+        let abschlag_ust_eur: Decimal = context
+            .abschlage
+            .iter()
+            .map(AbschlagDeduction::ust_eur)
+            .sum();
         let billing_run_id = context.billing_run_id.clone();
         Self {
             context,
@@ -149,6 +231,7 @@ impl Invoice {
             mwst_eur,
             brutto_eur,
             abschlag_total_eur,
+            abschlag_ust_eur,
             zahlbetrag_eur,
             billing_run_id,
             warnings,
@@ -233,6 +316,28 @@ impl Invoice {
     #[must_use]
     pub fn to_rechnung_json(&self) -> serde_json::Value {
         let ctx = &self.context;
+        // Derived from the positions, so the breakdown cannot drift from the totals.
+        let steuerbetraege_json: Vec<serde_json::Value> = self
+            .tax_subtotals(ctx.regulatory_rates.mwst_rate)
+            .iter()
+            .map(|s| serde_json::to_value(s.to_bo4e()).unwrap_or(serde_json::Value::Null))
+            .collect();
+        let vorauszahlungen_json: Vec<serde_json::Value> = ctx
+            .abschlage
+            .iter()
+            .map(|a| {
+                serde_json::json!({
+                    "_typ": "VORAUSZAHLUNG",
+                    "betrag": { "_typ": "BETRAG", "wert": a.betrag_eur.to_string(), "waehrung": "EUR" },
+                    // BO4E types this as a datetime; the payment date carries no
+                    // time of day, so it is pinned to midnight UTC.
+                    "datum": a.datum.midnight().assume_utc()
+                        .format(&time::format_description::well_known::Rfc3339)
+                        .unwrap_or_default(),
+                    "referenz": a.beschreibung,
+                })
+            })
+            .collect();
         let pos_json: Vec<serde_json::Value> = self
             .positions
             .iter()
@@ -371,11 +476,21 @@ impl Invoice {
             },
             "rechnungspositionen": pos_json,
             "zusatzAttribute": if zusatz_attribute.is_empty() { serde_json::Value::Null } else { serde_json::json!(zusatz_attribute) },
-            "gesamtnetto":  { "_typ": "BETRAG", "wert": self.netto_eur.to_string(),  "waehrung": "EUR" },
-            "gesamtsteuer": { "_typ": "BETRAG", "wert": self.mwst_eur.to_string(),   "waehrung": "EUR" },
-            "gesamtbrutto": { "_typ": "BETRAG", "wert": self.brutto_eur.to_string(), "waehrung": "EUR" },
-            "abschlagTotal": if self.abschlag_total_eur > Decimal::ZERO { serde_json::json!({ "_typ": "BETRAG", "wert": self.abschlag_total_eur.to_string(), "waehrung": "EUR" }) } else { serde_json::Value::Null },
-            "zahlbetrag": { "_typ": "BETRAG", "wert": self.zahlbetrag_eur.to_string(), "waehrung": "EUR" },
+            // Rounded to cents: these are document totals, and the Steuerbeträge
+            // they must reconcile against are themselves stated to the cent.
+            "gesamtnetto":  { "_typ": "BETRAG", "wert": self.netto_eur.round_dp(2).to_string(),  "waehrung": "EUR" },
+            "gesamtsteuer": { "_typ": "BETRAG", "wert": self.mwst_eur.round_dp(2).to_string(),   "waehrung": "EUR" },
+            "gesamtbrutto": { "_typ": "BETRAG", "wert": self.brutto_eur.round_dp(2).to_string(), "waehrung": "EUR" },
+            // BO4E: "Eine Liste mit Steuerbeträgen pro Steuerkennzeichen/Steuersatz;
+            // die Summe dieser Beträge ergibt den Wert für gesamtsteuer." Also
+            // EN 16931 BG-23, which a receiving system validates rate-by-rate:
+            // gesamtsteuer alone cannot describe an invoice that mixes rates.
+            "steuerbetraege": steuerbetraege_json,
+            // Each advance as its own BO4E Vorauszahlung, carrying the date the
+            // customer paid it — §41 EnWG requires the reconciliation to be
+            // verifiable per payment, not as one lump sum.
+            "vorauszahlungen": vorauszahlungen_json,
+            "zahlbetrag": { "_typ": "BETRAG", "wert": self.zahlbetrag_eur.round_dp(2).to_string(), "waehrung": "EUR" },
             // §40a EnWG Abs. 1 Satz 2 — Gesamtbetrag je Kilowattstunde (all-inclusive ct/kWh).
             // Only set when consumption positions exist (electricity commodity kWh known).
             "kilowattstundenpreisGesamt": kilowattstundenpreis_ct.map(|ct| serde_json::json!({
@@ -594,8 +709,28 @@ pub fn negate_rechnung_json_for_correction(
         negate_betrag_in_obj(obj, "gesamtbrutto");
         negate_betrag_in_obj(obj, "gesamtnetto");
         negate_betrag_in_obj(obj, "gesamtsteuer");
-        negate_betrag_in_obj(obj, "abschlagTotal");
         negate_betrag_in_obj(obj, "zahlbetrag");
+
+        // The VAT breakdown must follow gesamtsteuer: BO4E requires the
+        // Steuerbeträge to sum to it, and a correction that negates the total
+        // while leaving the breakdown positive fails that check.
+        if let Some(serde_json::Value::Array(steuerbetraege)) = obj.get_mut("steuerbetraege") {
+            for entry in steuerbetraege.iter_mut() {
+                if let Some(e) = entry.as_object_mut() {
+                    negate_decimal_field(e, "basiswert");
+                    negate_decimal_field(e, "steuerwert");
+                }
+            }
+        }
+
+        // Advances already paid reverse with the document they settle.
+        if let Some(serde_json::Value::Array(vorauszahlungen)) = obj.get_mut("vorauszahlungen") {
+            for entry in vorauszahlungen.iter_mut() {
+                if let Some(e) = entry.as_object_mut() {
+                    negate_betrag_in_obj(e, "betrag");
+                }
+            }
+        }
 
         if let Some(serde_json::Value::Array(positionen)) = obj.get_mut("rechnungspositionen") {
             for pos in positionen.iter_mut() {
@@ -614,6 +749,27 @@ pub fn negate_rechnung_json_for_correction(
 fn negate_betrag_in_obj(obj: &mut serde_json::Map<String, serde_json::Value>, key: &str) {
     if let Some(serde_json::Value::Object(betrag)) = obj.get_mut(key) {
         negate_wert_field(betrag);
+    }
+}
+
+/// Negate a bare decimal field, as BO4E `Steuerbetrag` carries rather than a
+/// nested `Betrag` object.
+fn negate_decimal_field(obj: &mut serde_json::Map<String, serde_json::Value>, key: &str) {
+    let Some(v) = obj.get(key) else { return };
+    let negated = match v {
+        serde_json::Value::String(s) => s
+            .parse::<Decimal>()
+            .ok()
+            .map(|d| serde_json::json!((-d).to_string())),
+        serde_json::Value::Number(n) => n
+            .to_string()
+            .parse::<Decimal>()
+            .ok()
+            .map(|d| serde_json::json!((-d).to_string())),
+        _ => None,
+    };
+    if let Some(neg) = negated {
+        obj.insert(key.to_owned(), neg);
     }
 }
 
@@ -689,6 +845,28 @@ pub struct TaxSubtotal {
 }
 
 impl TaxSubtotal {
+    /// Project into a [`billing::TaxBreakdownEntry`].
+    ///
+    /// The rate is carried as a fraction there and as a percentage here, so it is
+    /// scaled back down on the way across.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BillingError`] if the base or tax overflows [`billing::EuroAmount`].
+    pub fn to_breakdown_entry(&self) -> Result<billing::TaxBreakdownEntry, BillingError> {
+        Ok(billing::TaxBreakdownEntry::new(
+            match self.category {
+                VatCategory::Standard => billing::TaxCategory::Standard,
+                VatCategory::ZeroRated => billing::TaxCategory::ZeroRated,
+                VatCategory::ReverseCharge => billing::TaxCategory::ReverseCharge,
+                VatCategory::Exempt => billing::TaxCategory::Exempt,
+            },
+            self.rate_percent / Decimal::ONE_HUNDRED,
+            billing::EuroAmount::checked_from_decimal(self.taxable_base_eur)?,
+            billing::EuroAmount::checked_from_decimal(self.tax_amount_eur)?,
+        ))
+    }
+
     /// Project into the BO4E [`rubo4e::current::Steuerbetrag`].
     #[must_use]
     pub fn to_bo4e(&self) -> rubo4e::current::Steuerbetrag {
@@ -756,7 +934,7 @@ pub fn tax_subtotals_of(positions: &[BillingPosition], default_rate: Decimal) ->
 mod tax_subtotal_tests {
     use super::*;
     use crate::position::PositionCategory;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     fn pos(net: Decimal, rate: Option<Decimal>, cat: PositionCategory) -> BillingPosition {
         let mut p = BillingPosition::debit("x", Decimal::ONE, "kWh", net, cat);
@@ -876,6 +1054,244 @@ mod tax_subtotal_tests {
         assert_eq!(
             sub.to_bo4e().steuerart,
             Some(rubo4e::current::Steuerart::Rcv)
+        );
+    }
+}
+
+#[cfg(test)]
+mod rechnung_json_tests {
+    use super::*;
+    use crate::context::AbschlagDeduction;
+    use crate::position::PositionCategory;
+    use rust_decimal::dec;
+    use time::macros::date;
+
+    /// Build a Final invoice carrying one advance and one taxable position.
+    fn invoice_with_advance() -> Invoice {
+        let ctx = BillingContext {
+            invoice_type: crate::context::InvoiceType::Final,
+            abschlage: vec![AbschlagDeduction {
+                datum: date!(2026 - 01 - 15),
+                betrag_eur: dec!(119.00),
+                ust_satz: dec!(0.19),
+                beschreibung: Some("Abschlag Januar 2026".to_owned()),
+            }],
+            ..BillingContext::default()
+        };
+        let positions = vec![
+            // debit() takes the *unit price*: 1000 kWh x 0.30 = 300.00 net.
+            BillingPosition::debit(
+                "Arbeitspreis",
+                dec!(1000),
+                "kWh",
+                dec!(0.30),
+                PositionCategory::Commodity,
+            ),
+            BillingPosition::debit(
+                "MwSt 19 %",
+                Decimal::ONE,
+                "EUR",
+                dec!(57.00),
+                PositionCategory::Tax,
+            ),
+        ];
+        Invoice::from_positions(ctx, positions, vec![])
+    }
+
+    /// The emitted keys must be the ones BO4E defines. `rubo4e` routes unknown
+    /// keys into its extension map, so a misspelt or invented field name
+    /// deserialises to `None` on the typed field rather than failing loudly —
+    /// asserting the typed fields are populated is what catches it.
+    #[test]
+    fn rechnung_json_uses_real_bo4e_field_names() {
+        let json = invoice_with_advance().to_rechnung_json();
+        let rechnung: rubo4e::current::Rechnung =
+            serde_json::from_value(json).expect("emitted JSON is a BO4E Rechnung");
+
+        let steuerbetraege = rechnung
+            .steuerbetraege
+            .expect("steuerbetraege must be populated, not routed to the extension map");
+        assert_eq!(steuerbetraege.len(), 1);
+        assert_eq!(steuerbetraege[0].basiswert, Some(dec!(300.00)));
+        assert_eq!(steuerbetraege[0].steuerwert, Some(dec!(57.00)));
+        assert_eq!(steuerbetraege[0].steuersatz, Some(dec!(19)));
+
+        let vorauszahlungen = rechnung
+            .vorauszahlungen
+            .expect("vorauszahlungen must be populated, not routed to the extension map");
+        assert_eq!(vorauszahlungen.len(), 1);
+        assert_eq!(
+            vorauszahlungen[0].betrag.as_ref().and_then(|b| b.wert),
+            Some(dec!(119.00))
+        );
+    }
+
+    /// BO4E: the sum of `steuerbetraege` must equal `gesamtsteuer`.
+    #[test]
+    fn steuerbetraege_sum_to_gesamtsteuer() {
+        let invoice = invoice_with_advance();
+        let sum: Decimal = invoice
+            .tax_subtotals(invoice.context.regulatory_rates.mwst_rate)
+            .iter()
+            .map(|s| s.tax_amount_eur)
+            .sum();
+        assert_eq!(sum, invoice.mwst_eur);
+    }
+}
+
+#[cfg(test)]
+mod settlement_tests {
+    use super::*;
+    use crate::context::{AbschlagDeduction, InvoiceType};
+    use crate::position::PositionCategory;
+    use rust_decimal::dec;
+    use time::macros::date;
+
+    /// A year's supply of 1000.00 net + 190.00 VAT, of which 750.00 + 142.50 has
+    /// already been collected in advances.
+    fn jahresabrechnung() -> Invoice {
+        let ctx = BillingContext {
+            invoice_type: InvoiceType::Final,
+            abschlage: vec![AbschlagDeduction {
+                datum: date!(2026 - 06 - 15),
+                betrag_eur: dec!(892.50), // 750.00 net + 142.50 VAT
+                ust_satz: dec!(0.19),
+                beschreibung: Some("Abschläge 2026".to_owned()),
+            }],
+            ..BillingContext::default()
+        };
+        let positions = vec![
+            BillingPosition::debit(
+                "Arbeitspreis",
+                dec!(1000),
+                "kWh",
+                dec!(1.00),
+                PositionCategory::Commodity,
+            ),
+            BillingPosition::debit(
+                "MwSt 19 %",
+                Decimal::ONE,
+                "EUR",
+                dec!(190.00),
+                PositionCategory::Tax,
+            ),
+        ];
+        Invoice::from_positions(ctx, positions, vec![])
+    }
+
+    /// The advance projects into `billing` carrying its own tax, which is the
+    /// structure BT-113 cannot hold.
+    #[test]
+    fn advance_carries_its_own_tax_across_the_boundary() {
+        let advances = jahresabrechnung().advance_payments().unwrap();
+        assert_eq!(advances.len(), 1);
+        assert_eq!(
+            advances[0].net(),
+            billing::Amount::parse("750.00000").unwrap()
+        );
+        assert_eq!(
+            advances[0].tax_total(),
+            billing::Amount::parse("142.50000").unwrap()
+        );
+        assert_eq!(
+            advances[0].gross(),
+            billing::Amount::parse("892.50000").unwrap()
+        );
+    }
+
+    /// Advances present → itemised, never collapsed to a flat total.
+    #[test]
+    fn prepayment_is_itemised_when_advances_exist() {
+        assert!(matches!(
+            jahresabrechnung().prepayment().unwrap(),
+            billing::Prepayment::Itemised(_)
+        ));
+        let no_advances = Invoice::from_positions(BillingContext::default(), vec![], vec![]);
+        assert!(matches!(
+            no_advances.prepayment().unwrap(),
+            billing::Prepayment::None
+        ));
+    }
+
+    /// Restrechnung: the residual is the supply less what the advances taxed.
+    #[test]
+    fn residual_breakdown_bills_only_the_remainder() {
+        let residual = jahresabrechnung().residual_breakdown(dec!(0.19)).unwrap();
+        assert_eq!(residual.len(), 1);
+        assert_eq!(
+            residual[0].taxable_base,
+            billing::Amount::parse("250.00000").unwrap()
+        );
+        assert_eq!(
+            residual[0].tax_amount,
+            billing::Amount::parse("47.50000").unwrap()
+        );
+    }
+
+    /// Over-deduction is refused: it would understate the output tax owed on the
+    /// supply, which is the error §14c Abs. 1 exists to punish.
+    #[test]
+    fn advances_exceeding_the_supply_are_refused() {
+        let mut invoice = jahresabrechnung();
+        invoice.context.abschlage[0].betrag_eur = dec!(2000.00);
+        assert!(invoice.residual_breakdown(dec!(0.19)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod correction_tests {
+    use super::*;
+    use crate::context::{AbschlagDeduction, InvoiceType};
+    use crate::position::PositionCategory;
+    use rust_decimal::dec;
+    use time::macros::date;
+
+    /// A correction negates every monetary figure, and the VAT breakdown has to
+    /// travel with `gesamtsteuer` — BO4E requires the Steuerbeträge to sum to it,
+    /// so a breakdown left positive contradicts the negated total it belongs to.
+    #[test]
+    fn correction_negates_the_vat_breakdown_with_the_total() {
+        let ctx = BillingContext {
+            invoice_type: InvoiceType::Final,
+            abschlage: vec![AbschlagDeduction {
+                datum: date!(2026 - 01 - 15),
+                betrag_eur: dec!(119.00),
+                ust_satz: dec!(0.19),
+                beschreibung: None,
+            }],
+            ..BillingContext::default()
+        };
+        let positions = vec![
+            BillingPosition::debit(
+                "Arbeitspreis",
+                dec!(1000),
+                "kWh",
+                dec!(0.30),
+                PositionCategory::Commodity,
+            ),
+            BillingPosition::debit(
+                "MwSt 19 %",
+                Decimal::ONE,
+                "EUR",
+                dec!(57.00),
+                PositionCategory::Tax,
+            ),
+        ];
+        let json = Invoice::from_positions(ctx, positions, vec![]).to_rechnung_json();
+        let corrected = negate_rechnung_json_for_correction(&json, "ORIG-1", "KORR-1");
+
+        let steuer = &corrected["steuerbetraege"][0];
+        assert_eq!(steuer["basiswert"], serde_json::json!("-300.00"));
+        assert_eq!(steuer["steuerwert"], serde_json::json!("-57.00"));
+        assert_eq!(
+            corrected["gesamtsteuer"]["wert"],
+            serde_json::json!("-57.00")
+        );
+
+        // The advance reverses with the document that settles it.
+        assert_eq!(
+            corrected["vorauszahlungen"][0]["betrag"]["wert"],
+            serde_json::json!("-119.00")
         );
     }
 }

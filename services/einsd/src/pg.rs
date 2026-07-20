@@ -46,6 +46,18 @@ pub struct AnlageUpsertRequest {
     pub mieter_zuschlag_ct: Option<Decimal>,
     /// BNetzA Zuschlag-ID for Ausschreibungsanlagen.
     pub ausschreibungs_zuschlag_id: Option<String>,
+    /// §22 EEG 2023 — awarded anzulegender Wert (ct/kWh) from the BNetzA tender.
+    #[serde(default)]
+    pub zuschlagswert_ct: Option<Decimal>,
+    /// Date of the BNetzA award notification (`CCYY-MM-DD`).
+    #[serde(default)]
+    pub zuschlag_datum: Option<String>,
+    /// §39n EEG 2023 — Innovationsausschreibung (fixed market premium).
+    #[serde(default)]
+    pub ist_innovationsausschreibung: Option<bool>,
+    /// §22b EEG 2023 — Bürgerenergiegesellschaft (§3 Nr. 15).
+    #[serde(default)]
+    pub ist_buergerenergie: Option<bool>,
     // ── Repowering (§22 EEG 2023) ───────────────────────────────────────────
     /// `true` when replacing old components with new higher-capacity ones.
     /// When set, `foerderendedatum` = `repowering_datum + 20 years` (clock reset).
@@ -194,6 +206,14 @@ pub struct AnlageRow {
     pub is_biogas_sect51b: bool,
     // Ausschreibung lifecycle (migration 0006)
     pub award_expired: bool,
+    /// §22 EEG 2023 — the awarded anzulegender Wert (ct/kWh).
+    pub zuschlagswert_ct: Option<Decimal>,
+    /// Date of the BNetzA award notification.
+    pub zuschlag_datum: Option<Date>,
+    /// §39n EEG 2023 — Innovationsausschreibung.
+    pub ist_innovationsausschreibung: bool,
+    /// §22b EEG 2023 — Bürgerenergiegesellschaft (§3 Nr. 15).
+    pub ist_buergerenergie: bool,
     pub zuschlag_erloeschen_datum: Option<Date>,
     // §52 violation tracking (migration 0006)
     pub mastr_violation_start: Option<Date>,
@@ -267,6 +287,12 @@ pub async fn upsert_anlage(
     //
     // Repowering (§22 EEG): clock resets. KWKG: use kwk_foerderdauer_years.
     let is_ausschreibung = req.ausschreibungs_zuschlag_id.is_some();
+    let zuschlag_datum = req
+        .zuschlag_datum
+        .as_deref()
+        .map(|d| Date::parse(d, &time::format_description::well_known::Iso8601::DATE))
+        .transpose()
+        .map_err(|e| anyhow::anyhow!("zuschlag_datum: {e}"))?;
     let foerderendedatum = if ist_repowering {
         let basis = repowering_datum.unwrap_or(inbetriebnahme);
         eeg_billing::foerderendedatum_repowering(basis)
@@ -306,6 +332,8 @@ pub async fn upsert_anlage(
                bank_iban, bank_bic, zahlungsempfaenger,
                notes, is_biogas_sect51b, grid_area,
                biomasse_hauptbrennstoff, biomasse_guelle_anteil, biomasse_energiepflanzen_anteil,
+               zuschlagswert_ct, zuschlag_datum,
+               ist_innovationsausschreibung, ist_buergerenergie,
                updated_at
            ) VALUES (
                $1, $2, $3, $4, $5, $6,
@@ -317,7 +345,8 @@ pub async fn upsert_anlage(
                $23, $24,
                $25, $26, $27,
                $28, $29, $30,
-               $31, $32, $33, $34, $35, $36, now()
+               $31, $32, $33, $34, $35, $36,
+               $37, $38, $39, $40, now()
            )
            ON CONFLICT (tr_id, tenant) DO UPDATE SET
                malo_id                   = EXCLUDED.malo_id,
@@ -334,6 +363,10 @@ pub async fn upsert_anlage(
                settlement_model          = EXCLUDED.settlement_model,
                mieter_zuschlag_ct        = EXCLUDED.mieter_zuschlag_ct,
                ausschreibungs_zuschlag_id = EXCLUDED.ausschreibungs_zuschlag_id,
+               zuschlagswert_ct          = EXCLUDED.zuschlagswert_ct,
+               zuschlag_datum            = EXCLUDED.zuschlag_datum,
+               ist_innovationsausschreibung = EXCLUDED.ist_innovationsausschreibung,
+               ist_buergerenergie        = EXCLUDED.ist_buergerenergie,
                ist_repowering            = EXCLUDED.ist_repowering,
                ursprungs_inbetriebnahme  = EXCLUDED.ursprungs_inbetriebnahme,
                repowering_datum          = EXCLUDED.repowering_datum,
@@ -392,6 +425,10 @@ pub async fn upsert_anlage(
     .bind(&req.biomasse_hauptbrennstoff)
     .bind(req.biomasse_guelle_anteil)
     .bind(req.biomasse_energiepflanzen_anteil)
+    .bind(req.zuschlagswert_ct)
+    .bind(zuschlag_datum)
+    .bind(req.ist_innovationsausschreibung.unwrap_or(false))
+    .bind(req.ist_buergerenergie.unwrap_or(false))
     .execute(pool)
     .await
     .context("upsert eeg_anlage")?;
@@ -559,6 +596,16 @@ pub struct SettleInput {
     pub fernsteuerbarkeit_violation_start: Option<Date>,
     /// §33/§35a: whether the Zuschlag has expired. Short-circuits to FoerderungBeendet.
     pub award_expired: bool,
+    /// BNetzA Zuschlag-ID for an Ausschreibungsanlage.
+    pub ausschreibungs_zuschlag_id: Option<String>,
+    /// §22 EEG 2023 — the awarded anzulegender Wert (ct/kWh).
+    pub zuschlagswert_ct: Option<Decimal>,
+    /// Date of the BNetzA award notification.
+    pub zuschlag_datum: Option<Date>,
+    /// §39n EEG 2023 — Innovationsausschreibung.
+    pub ist_innovationsausschreibung: bool,
+    /// §22b EEG 2023 — Bürgerenergiegesellschaft (§3 Nr. 15).
+    pub ist_buergerenergie: bool,
     /// §24 capacity blocks JSONB (migration 0003) — deserialized in run_settlement.
     pub capacity_blocks_json: Option<serde_json::Value>,
     /// §53b grid area identifier for regional reduction lookup (migration 0007).
@@ -574,6 +621,8 @@ pub struct SettleInput {
     /// 1. Snapshot the existing receipt to `settlement_receipt_history`.
     /// 2. Upsert the correction, storing `correction_of` and `is_correction = true`.
     pub correction_of: Option<uuid::Uuid>,
+    /// §22 MessZV — why this correction supersedes the original.
+    pub correction_reason: Option<String>,
     /// §44b Abs. 1 EEG 2023 — Biogas >100kW: eligible kWh for this billing period.
     /// Caller tracks cumulative annual kWh and passes `min(kwh, remaining_annual_quota)`.
     /// `None` = cap does not apply.
@@ -630,7 +679,7 @@ async fn compute_biogas_sect44b_eligible(
     pool: &PgPool,
     input: &SettleInput,
 ) -> anyhow::Result<Option<Decimal>> {
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     // §44b applies only to: fermentation Biogas, >100 kW, not §51b Ausschreibung
     let is_applicable = input.erzeugungsart == "BIOGAS"
@@ -804,6 +853,12 @@ pub struct SettleOverrides {
     pub negative_price_quarter_hours: Option<u64>,
     /// §22 MessZV correction: UUID of original receipt this corrects.
     pub correction_of: Option<uuid::Uuid>,
+    /// §22 MessZV correction: why the original was superseded.
+    ///
+    /// The 3-year audit trail has to say what was corrected and why, so this is
+    /// persisted alongside the link to the original rather than only returned to
+    /// the caller.
+    pub correction_reason: Option<String>,
     /// §20 Abs. 2 technology-specific Jahresmarktwert (explicit override).
     pub jahresmarktwert_ct_kwh: Option<Decimal>,
 }
@@ -822,7 +877,7 @@ pub fn build_settle_input(
     billing_month: i16,
     overrides: SettleOverrides,
 ) -> SettleInput {
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
 
     let is_dv = matches!(
         anlage.settlement_model.as_str(),
@@ -887,7 +942,13 @@ pub fn build_settle_input(
         grid_area: anlage.grid_area.clone(),
         einspeisemanagement_kwh: overrides.einspeisemanagement_kwh,
         negative_price_quarter_hours: overrides.negative_price_quarter_hours,
+        ausschreibungs_zuschlag_id: anlage.ausschreibungs_zuschlag_id.clone(),
+        zuschlagswert_ct: anlage.zuschlagswert_ct,
+        zuschlag_datum: anlage.zuschlag_datum,
+        ist_innovationsausschreibung: anlage.ist_innovationsausschreibung,
+        ist_buergerenergie: anlage.ist_buergerenergie,
         correction_of: overrides.correction_of,
+        correction_reason: overrides.correction_reason,
         biogas_sect44b_eligible_kwh: None, // computed by run_settlement from biogas_quota_kwh_ytd
         jahresmarktwert_ct_kwh: overrides.jahresmarktwert_ct_kwh,
         biogas_quota_kwh_ytd: anlage.biogas_quota_kwh_ytd,
@@ -1006,7 +1067,8 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
                   (id, tr_id, tenant, billing_year, billing_month,
                    settlement_model, einspeisemenge_kwh, settlement_eur, status)
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-              ON CONFLICT (tr_id, tenant, billing_year, billing_month) DO UPDATE
+              ON CONFLICT (tr_id, tenant, billing_year, billing_month)
+                  WHERE is_correction = false DO UPDATE
               SET status = EXCLUDED.status, settled_at = now()",
         )
         .bind(id)
@@ -1100,7 +1162,12 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
             },
             TariffSource::Auction(AusschreibungMetadata {
                 is_biogas_sect51b: input.is_biogas_sect51b,
-                ..AusschreibungMetadata::default()
+                zuschlag_id: input.ausschreibungs_zuschlag_id.clone(),
+                award_ct: input.zuschlagswert_ct,
+                award_date: input.zuschlag_datum,
+                award_expired: input.award_expired,
+                innovation_auction: input.ist_innovationsausschreibung,
+                is_buergerenergie: input.ist_buergerenergie,
             }),
         ),
         "POST_EEG" | "POST_EEG_SPOT" => (
@@ -1347,9 +1414,9 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
                settlement_model, einspeisemenge_kwh, settlement_eur, status,
                pflichtzahlung_eur, faelligkeitsdatum,
                verlaengerungsanspruch_qh, billing_days_fraction, positions_json,
-               is_correction, correction_of)
+               is_correction, correction_of, correction_reason)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                  $10, $11, $12, $13, $14, $15, $16)
+                  $10, $11, $12, $13, $14, $15, $16, $17)
           ON CONFLICT (tr_id, tenant, billing_year, billing_month) WHERE is_correction = false DO UPDATE
           SET settlement_model          = EXCLUDED.settlement_model,
               einspeisemenge_kwh        = EXCLUDED.einspeisemenge_kwh,
@@ -1362,6 +1429,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
               positions_json            = EXCLUDED.positions_json,
               is_correction             = EXCLUDED.is_correction,
               correction_of             = EXCLUDED.correction_of,
+              correction_reason         = EXCLUDED.correction_reason,
               settled_at                = now()",
     )
     .bind(id)
@@ -1380,6 +1448,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
     .bind(positions_json)
     .bind(input.correction_of.is_some())
     .bind(input.correction_of)
+    .bind(input.correction_reason.as_deref())
     .execute(pool)
     .await
     .context("persist settlement")?;
@@ -1458,17 +1527,52 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
             bd,
             eeg_gesetz_enum.to_db_year(),
         );
-        sqlx::query(
-            r"UPDATE eeg_anlagen
-              SET settlement_state = $3, updated_at = now()
-              WHERE tr_id = $1 AND tenant = $2",
+        // Both CTEs read the same snapshot, so `prev` yields the value from before
+        // the update — the state is otherwise overwritten in place and the
+        // transition that produced it becomes unrecoverable.
+        let previous_state: Option<String> = sqlx::query_scalar(
+            r"WITH prev AS (
+                  SELECT settlement_state FROM eeg_anlagen
+                  WHERE tr_id = $1 AND tenant = $2
+                  FOR UPDATE
+              ), upd AS (
+                  UPDATE eeg_anlagen
+                  SET settlement_state = $3, updated_at = now()
+                  WHERE tr_id = $1 AND tenant = $2
+              )
+              SELECT settlement_state FROM prev",
         )
         .bind(&input.tr_id)
         .bind(&input.tenant)
         .bind(new_settlement_state.to_db_str())
-        .execute(pool)
+        .fetch_optional(pool)
         .await
-        .context("update settlement_state")?;
+        .context("update settlement_state")?
+        .flatten();
+
+        // §52 EEG 2023 changes what the operator is owed, so each change of state
+        // is recorded with the period that caused it rather than only its result.
+        let to_state = new_settlement_state.to_db_str();
+        if previous_state.as_deref() != Some(to_state) {
+            sqlx::query(
+                r"INSERT INTO settlement_state_transitions
+                      (tr_id, tenant, from_state, to_state, effective_from, reason, notes)
+                  VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            )
+            .bind(&input.tr_id)
+            .bind(&input.tenant)
+            .bind(previous_state.as_deref().unwrap_or("unbekannt"))
+            .bind(to_state)
+            .bind(bd)
+            .bind("derived_at_settlement")
+            .bind(format!(
+                "abgeleitet bei Abrechnung {:04}-{:02}",
+                input.billing_year, input.billing_month
+            ))
+            .execute(pool)
+            .await
+            .context("record settlement_state transition")?;
+        }
     }
 
     Ok(SettleResult {
@@ -1757,4 +1861,143 @@ pub async fn fetch_epex_price(
     .await
     .context("fetch_epex_price")?;
     Ok(row.and_then(|r| r.try_get::<Decimal, _>("avg_ct_kwh").ok()))
+}
+
+// ── Jahresabrechnung ─────────────────────────────────────────────────────────
+
+/// Annual reconciliation over one plant's monthly settlements.
+///
+/// Derived from `settlement_receipts` rather than recomputed: the monthly runs
+/// are what created the payment obligation, so a statement that recalculated
+/// from scratch could disagree with what was actually paid.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct Jahresabrechnung {
+    /// Plant this statement covers.
+    pub tr_id: String,
+    /// Calendar year.
+    pub billing_year: i16,
+    /// Total energy fed in across the year.
+    pub einspeisemenge_kwh: Decimal,
+    /// Total Vergütung across the year.
+    pub settlement_eur: Decimal,
+    /// §52 EEG 2023 Pflichtzahlungen — a separate claim, never netted into
+    /// `settlement_eur`.
+    pub pflichtzahlung_eur: Decimal,
+    /// How many of the twelve months carry a settlement.
+    pub months_settled: i16,
+    /// Which months do not — an incomplete year is reported, not silently summed.
+    pub missing_months: Vec<i16>,
+    /// §51a quarter-hours accrued toward the Vergütungszeitraum.
+    pub verlaengerungsanspruch_qh: i64,
+    /// Corrections issued in the year (§22 MessZV signal).
+    pub correction_count: i16,
+    /// `vorlaeufig` until every month is settled.
+    pub status: String,
+}
+
+/// Build and store the annual reconciliation for one plant and year.
+///
+/// Re-running replaces the stored statement, so it can be produced provisionally
+/// during the year and finalised once December is settled.
+///
+/// # Errors
+///
+/// Returns an error when the plant is unknown or the database is unreachable.
+pub async fn run_jahresabrechnung(
+    pool: &PgPool,
+    tenant: &str,
+    tr_id: &str,
+    year: i16,
+) -> anyhow::Result<Jahresabrechnung> {
+    // Only non-correction receipts carry the year's totals; a correction
+    // supersedes its original in place via the partial unique index, so counting
+    // both would double-count the corrected month.
+    let rows: Vec<(i16, Decimal, Decimal, Decimal, i64, bool)> = sqlx::query_as(
+        r"SELECT billing_month,
+                 COALESCE(einspeisemenge_kwh, 0),
+                 COALESCE(settlement_eur, 0),
+                 COALESCE(pflichtzahlung_eur, 0),
+                 COALESCE(verlaengerungsanspruch_qh, 0),
+                 is_correction
+          FROM settlement_receipts
+          WHERE tr_id = $1 AND tenant = $2 AND billing_year = $3",
+    )
+    .bind(tr_id)
+    .bind(tenant)
+    .bind(year)
+    .fetch_all(pool)
+    .await
+    .context("read settlement receipts for the year")?;
+
+    let mut settled_months = std::collections::BTreeSet::new();
+    let mut einspeisemenge_kwh = Decimal::ZERO;
+    let mut settlement_eur = Decimal::ZERO;
+    let mut pflichtzahlung_eur = Decimal::ZERO;
+    let mut verlaengerungsanspruch_qh: i64 = 0;
+    let mut correction_count: i16 = 0;
+
+    for (month, kwh, eur, pflicht, qh, is_correction) in rows {
+        if is_correction {
+            correction_count += 1;
+            continue;
+        }
+        settled_months.insert(month);
+        einspeisemenge_kwh += kwh;
+        settlement_eur += eur;
+        pflichtzahlung_eur += pflicht;
+        verlaengerungsanspruch_qh += qh;
+    }
+
+    let missing_months: Vec<i16> = (1..=12).filter(|m| !settled_months.contains(m)).collect();
+    let months_settled = i16::try_from(settled_months.len()).unwrap_or(i16::MAX);
+    let status = if missing_months.is_empty() {
+        "endgueltig"
+    } else {
+        "vorlaeufig"
+    };
+
+    sqlx::query(
+        r"INSERT INTO jahresabrechnungen
+              (tr_id, tenant, billing_year, einspeisemenge_kwh, settlement_eur,
+               pflichtzahlung_eur, months_settled, missing_months,
+               verlaengerungsanspruch_qh, correction_count, status, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+          ON CONFLICT (tr_id, tenant, billing_year) DO UPDATE
+          SET einspeisemenge_kwh        = EXCLUDED.einspeisemenge_kwh,
+              settlement_eur            = EXCLUDED.settlement_eur,
+              pflichtzahlung_eur        = EXCLUDED.pflichtzahlung_eur,
+              months_settled            = EXCLUDED.months_settled,
+              missing_months            = EXCLUDED.missing_months,
+              verlaengerungsanspruch_qh = EXCLUDED.verlaengerungsanspruch_qh,
+              correction_count          = EXCLUDED.correction_count,
+              status                    = EXCLUDED.status,
+              updated_at                = now()",
+    )
+    .bind(tr_id)
+    .bind(tenant)
+    .bind(year)
+    .bind(einspeisemenge_kwh)
+    .bind(settlement_eur)
+    .bind(pflichtzahlung_eur)
+    .bind(months_settled)
+    .bind(&missing_months)
+    .bind(verlaengerungsanspruch_qh)
+    .bind(correction_count)
+    .bind(status)
+    .execute(pool)
+    .await
+    .context("store Jahresabrechnung")?;
+
+    Ok(Jahresabrechnung {
+        tr_id: tr_id.to_owned(),
+        billing_year: year,
+        einspeisemenge_kwh,
+        settlement_eur,
+        pflichtzahlung_eur,
+        months_settled,
+        missing_months,
+        verlaengerungsanspruch_qh,
+        correction_count,
+        status: status.to_owned(),
+    })
 }

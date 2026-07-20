@@ -10,7 +10,7 @@ Closes the payment lifecycle on REMADV receipt. Zero `f64` in the billing path.
 | **Port** | `:8680` |
 | **Database** | PostgreSQL (`invoice_drafts`, `kostenblatt_records`, `fremdkosten_records`) |
 | **INVOIC PIDs** | 31001 (NNE Strom) · 31002 (MMM Strom/Gas) · 31005 (NNE Gas) · 31009 (MSB-Rechnung) · 31011 (AWH Sperrprozesse Gas) |
-| **Calculation** | `grid_billing::calculate_{nne,mmm,msb}_invoice()` — returns `GridInvoice` domain type. `into_rechnung()` called locally. `EuroAmount` (`i64 × 10⁻⁵`), zero `f64` |
+| **Calculation** | `grid_billing::settle_{nne,mmm,msb}()` — returns a `SettlementResult`. The service wraps it in an `InvoiceDocument` and renders via `into_rechnung()`. `EuroAmount` (`i64 × 10⁻⁵`), zero `f64` |
 | **Pre-dispatch gate** | `invoic-checker` mandatory; `check_outcome = Dispute` blocks dispatch |
 | **MMM prices** | Auto-fetches `mehr`/`minder` from `marktd` (Gas: THE monthly; Strom: ÜNB via `vnb_mp_id`) |
 | **Draft lifecycle** | `draft` → `dispatched` → `paid` / `dispatched` ← `Dispute`; `rejected` unblocks re-billing |

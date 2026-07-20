@@ -316,7 +316,8 @@ impl TariffSource {
 /// - The AW is the `award_ct`, NOT the statutory rate from §48 EEG.
 /// - A second tender is required when the first award expires (§33 EEG 2023).
 /// - Bürgerenergiegesellschaften have reduced requirements (§22b EEG 2023).
-/// - Innovation auctions (§39j EEG 2023) have additional technology bonuses.
+/// - Innovationsausschreibungen (§39n EEG 2023) pay a fixed rather than a
+///   sliding market premium.
 /// - Biogas auction plants use §51b rules (AW = 0 when EPEX ≤ 2 ct/kWh).
 #[derive(Debug, Clone, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -329,13 +330,19 @@ pub struct AusschreibungMetadata {
     pub award_date: Option<Date>,
     /// Whether the award has expired (§33 EEG 2023: unbuilt plant after N years).
     pub award_expired: bool,
-    /// Innovation auction (§39j EEG 2023) — additional technology bonus applies.
+    /// Innovationsausschreibung (§39n EEG 2023) — fixed market premium instead of
+    /// the sliding one, awarded for combinations of installation and storage.
     pub innovation_auction: bool,
-    /// **§22b EEG 2023** — Bürgerenergiegesellschaft (citizen energy cooperative).
+    /// **§22b EEG 2023** — Bürgerenergiegesellschaft (§3 Nr. 15).
     ///
-    /// Qualifying cooperatives receive special treatment:
-    /// - Exemption from certain Pönalen (§55 EEG 2023)
-    /// - Preferential bidding conditions in auctions (§36g EEG 2023)
+    /// Such a plant is exempt from the requirement of a *valid Zuschlag*
+    /// (§22 Abs. 2 Satz 2 Nr. 3 for Wind an Land, §22 Abs. 3 Satz 2 Nr. 2 for
+    /// Solaranlagen), so it is settled at the statutory rate despite falling in
+    /// an auction-eligible size class. The exemption is conditional on
+    /// notification to the Bundesnetzagentur within three weeks and on the
+    /// company having commissioned no other plant of the same kind in the
+    /// preceding three years; §22b Abs. 4 requires the status to be re-proven to
+    /// the Netzbetreiber every five years.
     pub is_buergerenergie: bool,
     /// **§51b EEG 2023** — Biogas Ausschreibungsanlage with slightly-positive price rule.
     ///

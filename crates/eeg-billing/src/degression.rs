@@ -42,7 +42,7 @@
 //! <https://www.bundesnetzagentur.de/DE/Fachthemen/ElektrizitaetundGas/ErneuerbareEnergien/Solarenergie/start.html>
 
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 use time::Date;
 
 // ── DegressionTier ────────────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ impl DegressionTier {
     ///
     /// ```rust
     /// use eeg_billing::degression::DegressionTier;
-    /// use rust_decimal_macros::dec;
+    /// use rust_decimal::dec;
     ///
     /// assert_eq!(DegressionTier::Standard.rate_pct_per_quarter(), dec!(1.00));
     /// assert_eq!(DegressionTier::None.rate_pct_per_quarter(),     dec!(0.00));
@@ -102,7 +102,7 @@ impl DegressionTier {
     ///
     /// ```rust
     /// use eeg_billing::degression::DegressionTier;
-    /// use rust_decimal_macros::dec;
+    /// use rust_decimal::dec;
     ///
     /// assert_eq!(DegressionTier::from_gw_expansion(dec!(8.5)),  DegressionTier::None);
     /// assert_eq!(DegressionTier::from_gw_expansion(dec!(11.0)), DegressionTier::Low);
@@ -219,7 +219,7 @@ pub const SOLARPAKET_I_REFERENCE_QUARTER: Quarter = Quarter {
 ///
 /// ```rust
 /// use eeg_billing::degression::{apply_degression, DegressionTier};
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// // Solarpaket I reference 8.51 ct/kWh, 4 quarters at Standard (1 %) tier
 /// // 8.51 × 0.99^4 = 8.51 × 0.96059601 ≈ 8.17 ct/kWh
@@ -300,7 +300,7 @@ fn solarpaket_i_volleinspeisung_base(leistung_kwp: Decimal) -> Option<Decimal> {
 ///
 /// ```rust
 /// use eeg_billing::degression::{solar_ueberschuss_rate_for_quarter, DegressionTier, Quarter};
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// // Reference quarter Q2 2024, ≤10 kWp, no degression
 /// let rate = solar_ueberschuss_rate_for_quarter(
@@ -343,7 +343,7 @@ pub fn solar_ueberschuss_rate_for_quarter(
 ///
 /// ```rust
 /// use eeg_billing::degression::{solar_volleinspeisung_rate_for_quarter, DegressionTier, Quarter};
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 ///
 /// // Reference quarter Q2 2024, ≤10 kWp, no degression
 /// let rate = solar_volleinspeisung_rate_for_quarter(
@@ -385,7 +385,7 @@ pub fn solar_volleinspeisung_rate_for_quarter(
 ///
 /// ```rust
 /// use eeg_billing::degression::{solar_rate_at_commissioning, DegressionTier};
-/// use rust_decimal_macros::dec;
+/// use rust_decimal::dec;
 /// use time::macros::date;
 ///
 /// // 9 kWp plant, commissioned 2025-03-01 (Q1 2025 = 3 quarters after Q2 2024)

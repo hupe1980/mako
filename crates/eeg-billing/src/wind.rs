@@ -14,7 +14,7 @@
 //! Gütegrad (ratio of modeled annual yield to reference yield at 100% site).
 
 use rust_decimal::Decimal;
-use rust_decimal_macros::dec;
+use rust_decimal::dec;
 
 // ── WindStandort ──────────────────────────────────────────────────────────────
 
@@ -67,7 +67,7 @@ impl WindStandort {
     ///
     /// ```rust
     /// use eeg_billing::wind::{WindStandort, WindStandortklasse};
-    /// use rust_decimal_macros::dec;
+    /// use rust_decimal::dec;
     ///
     /// let standort = WindStandort {
     ///     guetegrad: dec!(0.95),

@@ -351,7 +351,7 @@ mod tests {
     use super::*;
     use crate::interval::QualityFlag;
     use crate::obis::ObisCode;
-    use rust_decimal_macros::dec;
+    use rust_decimal::dec;
     use time::{Duration, macros::datetime};
     use uuid::Uuid;
 
