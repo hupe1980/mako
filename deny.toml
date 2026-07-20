@@ -469,6 +469,16 @@ version = "=0.7"
 reason  = "iceberg 0.9.1 uses petgraph 0.7; workspace uses petgraph 0.8."
 
 [[bans.skip]]
+name    = "petgraph"
+version = "=0.6"
+reason  = "wasm-compose (extism/mako-plugin wasmtime 43 chain, all-features graph) pins petgraph 0.6; workspace uses 0.8. Resolve when extism bumps wasmtime."
+
+[[bans.skip]]
+name    = "fixedbitset"
+version = "=0.4"
+reason  = "companion of petgraph 0.6 on the extism/wasmtime chain; petgraph 0.8 uses fixedbitset 0.5."
+
+[[bans.skip]]
 name    = "syn"
 version = "2.0"
 reason  = "async-trait 0.1.91 (datafusion 52/53 via edmd, lance via agentd) uses syn 3; the rest of the proc-macro graph is still on syn 2."
@@ -764,6 +774,11 @@ name    = "lz4_flex"
 version = "0.12"
 reason  = "lz4_flex 0.12 pulled by arrow 57 / datafusion 52 (lancedb chain); 0.13 is current."
 
+[[bans.skip]]
+name    = "lz4_flex"
+version = "0.11"
+reason  = "krafka 0.12 pins lz4_flex 0.11 (third leg of the split; visible in the all-features graph)."
+
 # ── nix 0.26 vs 0.31 ─────────────────────────────────────────────────────────────
 [[bans.skip]]
 name    = "nix"
@@ -794,6 +809,11 @@ reason  = "object_store three-way split after cargo update: 0.12 (slatedb), 0.13
 # The workspace runtime (figment, slatedb) uses toml 0.8 / toml_edit 0.22.
 # All duplicates below are build-time vs runtime splits — no shared state.
 # Resolve when extism/wasmtime align their build deps with the runtime toml stack.
+
+[[bans.skip]]
+name    = "toml"
+version = "=0.8"
+reason  = "runtime side of the split: figment/slatedb use toml 0.8 while cbindgen and wasmtime-internal-cache (extism/mako-plugin build chain) use toml 0.9. Build-time vs runtime — no shared state. Resolve when extism/wasmtime align."
 
 [[bans.skip]]
 name    = "toml_datetime"
