@@ -48,7 +48,7 @@ members = [
 exclude = ["fuzz"]
 
 [workspace.package]
-version     = "0.12.0"
+version     = "0.13.0"
 authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
@@ -88,20 +88,20 @@ figment-file-provider-adapter = { version = "0.1", package = "figment_file_provi
 schemars                  = { version = "1.2.1" }
 
 # ── Internal workspace crates (path + version so domain crates can be published) ─
-edi-energy       = { path = "crates/edi-energy",  version = "0.12" }
-mako-engine      = { path = "crates/mako-engine",      version = "0.12" }
-mako-markt       = { path = "crates/mako-markt",       version = "0.12" }
-mako-edm         = { path = "crates/mako-edm",         version = "0.12" }
-grid-billing     = { path = "crates/grid-billing",     version = "0.12" }
-eeg-billing      = { path = "crates/eeg-billing",      version = "0.12" }
-mako-obs         = { path = "crates/mako-obs",         version = "0.12" }
-mako-service     = { path = "crates/mako-service",     version = "0.12" }
-mako-plugin      = { path = "crates/mako-plugin",      version = "0.12" }
-invoic-checker   = { path = "crates/invoic-checker",   version = "0.12" }
-netz-checker     = { path = "crates/netz-checker",     version = "0.12" }
-energy-billing   = { path = "crates/energy-billing",   version = "0.12" }
-dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.12" }
-metering         = { path = "crates/metering",          version = "0.12" }
+edi-energy       = { path = "crates/edi-energy",  version = "0.13" }
+mako-engine      = { path = "crates/mako-engine",      version = "0.13" }
+mako-markt       = { path = "crates/mako-markt",       version = "0.13" }
+mako-edm         = { path = "crates/mako-edm",         version = "0.13" }
+grid-billing     = { path = "crates/grid-billing",     version = "0.13" }
+eeg-billing      = { path = "crates/eeg-billing",      version = "0.13" }
+mako-obs         = { path = "crates/mako-obs",         version = "0.13" }
+mako-service     = { path = "crates/mako-service",     version = "0.13" }
+mako-plugin      = { path = "crates/mako-plugin",      version = "0.13" }
+invoic-checker   = { path = "crates/invoic-checker",   version = "0.13" }
+netz-checker     = { path = "crates/netz-checker",     version = "0.13" }
+energy-billing   = { path = "crates/energy-billing",   version = "0.13" }
+dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.13" }
+metering         = { path = "crates/metering",          version = "0.13" }
 sepa             = { version = "0.3.0" }
 
 # Kafka client: pure Rust, MSRV 1.88, zero-unsafe, exactly-once semantics.
