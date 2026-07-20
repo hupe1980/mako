@@ -109,11 +109,17 @@ fn compute_sum(
     let aligned = aligned_timestamps(malo_ids.iter().map(String::as_str), sources);
     let mut result = Vec::with_capacity(aligned.len());
     for ts in aligned {
+        let Some(ivs) = malo_ids
+            .iter()
+            .map(|id| lookup(sources, id, ts))
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
         let mut sum = Decimal::ZERO;
         let mut quality = QualityFlag::Measured;
         let mut end: Option<OffsetDateTime> = None;
-        for id in malo_ids {
-            let iv = lookup(sources, id, ts);
+        for iv in ivs {
             sum += iv.value_kwh;
             quality = worst_quality(quality, iv.quality);
             end = Some(iv.to);
@@ -150,11 +156,19 @@ fn compute_residual(
     let aligned = aligned_timestamps(all_ids, sources);
     let mut result = Vec::with_capacity(aligned.len());
     for ts in aligned {
-        let total_iv = lookup(sources, total_id, ts);
+        let Some(total_iv) = lookup(sources, total_id, ts) else {
+            continue;
+        };
+        let Some(subtract_ivs) = subtract_ids
+            .iter()
+            .map(|id| lookup(sources, id, ts))
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
         let mut subtract_sum = Decimal::ZERO;
         let mut quality = total_iv.quality;
-        for id in subtract_ids {
-            let iv = lookup(sources, id, ts);
+        for iv in subtract_ivs {
             subtract_sum += iv.value_kwh;
             quality = worst_quality(quality, iv.quality);
         }
@@ -185,8 +199,11 @@ fn compute_net_grid(
     let aligned = aligned_timestamps([grid_id, gen_id].iter().copied(), sources);
     let mut result = Vec::with_capacity(aligned.len());
     for ts in aligned {
-        let grid_iv = lookup(sources, grid_id, ts);
-        let gen_iv = lookup(sources, gen_id, ts);
+        let (Some(grid_iv), Some(gen_iv)) =
+            (lookup(sources, grid_id, ts), lookup(sources, gen_id, ts))
+        else {
+            continue;
+        };
         // Net grid draw: positive = consuming from grid, negative = exporting
         result.push(MeterInterval {
             from: ts,
@@ -231,8 +248,12 @@ fn compute_ggv_constant(
     let aligned = aligned_timestamps([plant_id, tenant_id].iter().copied(), sources);
     let mut result = Vec::with_capacity(aligned.len());
     for ts in aligned {
-        let plant_iv = lookup(sources, plant_id, ts);
-        let tenant_iv = lookup(sources, tenant_id, ts);
+        let (Some(plant_iv), Some(tenant_iv)) = (
+            lookup(sources, plant_id, ts),
+            lookup(sources, tenant_id, ts),
+        ) else {
+            continue;
+        };
 
         // allocated = fraction × plant_generation (UTILTS Z82 × ZG6)
         let allocated = fraction * plant_iv.value_kwh;
@@ -293,14 +314,21 @@ fn compute_ggv_proportional(
     let mut result = Vec::with_capacity(aligned.len());
 
     for ts in aligned {
-        let plant_iv = lookup(sources, plant_id, ts);
-        let tenant_iv = lookup(sources, tenant_id, ts);
+        let (Some(plant_iv), Some(tenant_iv)) = (
+            lookup(sources, plant_id, ts),
+            lookup(sources, tenant_id, ts),
+        ) else {
+            continue;
+        };
 
         // Denominator: Σ all tenant consumptions
-        let total_consumption: Decimal = all_tenant_ids
+        let Some(total_consumption) = all_tenant_ids
             .iter()
-            .map(|id| lookup(sources, id, ts).value_kwh)
-            .sum();
+            .map(|id| lookup(sources, id, ts).map(|iv| iv.value_kwh))
+            .sum::<Option<Decimal>>()
+        else {
+            continue;
+        };
 
         // Dynamic ratio: protect against zero-division
         let net_grid_draw = if total_consumption > Decimal::ZERO {
@@ -313,9 +341,10 @@ fn compute_ggv_proportional(
         };
 
         // Worst quality across plant + all tenants (any estimated interval affects output)
-        let quality = all_tenant_ids.iter().fold(plant_iv.quality, |q, id| {
-            worst_quality(q, lookup(sources, id, ts).quality)
-        });
+        let quality = all_tenant_ids
+            .iter()
+            .filter_map(|id| lookup(sources, id, ts))
+            .fold(plant_iv.quality, |q, iv| worst_quality(q, iv.quality));
 
         result.push(MeterInterval {
             from: ts,
@@ -360,18 +389,21 @@ fn aligned_timestamps<'a>(
         .collect()
 }
 
+/// Find the interval starting at `ts` in the named source series.
+///
+/// `aligned_timestamps` guarantees the timestamp exists in every series, so a
+/// `None` can only mean the caller mutated `sources` in between — the compute
+/// fns skip such a timestamp rather than panic (a pure library must not abort
+/// the process on inconsistent input).
 fn lookup<'a>(
     sources: &'a HashMap<String, Vec<MeterInterval>>,
     malo_id: &str,
     ts: OffsetDateTime,
-) -> &'a MeterInterval {
+) -> Option<&'a MeterInterval> {
     let unix = ts.unix_timestamp();
     sources
         .get(malo_id)
         .and_then(|ivs| ivs.iter().find(|iv| iv.from.unix_timestamp() == unix))
-        .unwrap_or_else(|| {
-            panic!("timestamp {ts} was in aligned set but missing from source {malo_id}")
-        })
 }
 
 fn quality_rank(q: QualityFlag) -> u8 {

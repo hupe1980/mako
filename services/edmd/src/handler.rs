@@ -9,7 +9,7 @@
 //! | `de.mako.process.initiated`  | 23003/23008 (INSRPT Technische Änderung/Gerätebefund) | Auto-create `SONDERABLESUNG` reading order |
 //! | `de.mako.process.initiated`  | 23005/23009 (WiM Gas INSRPT) | Auto-create `SONDERABLESUNG` reading order |
 //! | `de.mako.process.completed`  | 55001 (GPKE Lieferbeginn) | Auto-create `LIEFERBEGINN` reading order |
-//! | `de.mako.process.completed`  | 55009 (GPKE Lieferende) | Auto-create `LIEFERENDE` reading order |
+//! | `de.mako.process.completed`  | 55004/55007 (GPKE Abmeldung / Beendigung der Zuordnung) | Auto-create `LIEFERENDE` reading order |
 //! | *(anything else)*            | *(any)*   | 204 No Content (ignored) |
 //!
 //! ## M2 — INSRPT → reading-order automation
@@ -22,7 +22,7 @@
 //! PIDs 23003/23008 (Technische Änderung / Gerätebefund) and WiM Gas PIDs
 //! 23005/23009 trigger `SONDERABLESUNG` orders for similar reasons.
 //!
-//! PIDs 55001/55009 (Lieferbeginn/Lieferende completion) trigger reading
+//! PIDs 55001 (Lieferbeginn) and 55004/55007 (Lieferende) completions trigger reading
 //! orders to capture the meter reading at the supply handover boundary —
 //! required for accurate Mehr-/Mindermengensaldo calculation.
 
@@ -216,12 +216,15 @@ pub async fn handle_webhook(
 
     // ── Lieferbeginn / Lieferende → reading orders ────────────────────────────
     //
-    // When a GPKE Lieferbeginn (PID 55001) or Lieferende (PID 55009) process
-    // completes, create a reading order to capture the meter reading at the
-    // supply handover boundary. This is required for accurate Mehr-/Mindermengensaldo.
+    // When a GPKE Anmeldung (PID 55001) completes, supply starts; when an
+    // Abmeldung (PID 55004, LF-initiated) or a Beendigung der Zuordnung
+    // (PID 55007, NB-initiated) completes, supply ends. Both boundaries need a
+    // reading order to capture the meter reading at the supply handover —
+    // required for an accurate Mehr-/Mindermengensaldo. (PID 55009 is the
+    // *Ablehnung* of an Abmeldung — supply continues, no reading is due.)
     //
     // Legal basis: GPKE BK6-22-024 §3; §9 MessZV Ablesung bei Lieferbeginn/-ende.
-    if ce_type == "de.mako.process.completed" && matches!(pid, 55001 | 55009) {
+    if ce_type == "de.mako.process.completed" && matches!(pid, 55001 | 55004 | 55007) {
         let (anlass, label) = if pid == 55001 {
             ("LIEFERBEGINN", "Lieferbeginn")
         } else {
@@ -235,7 +238,7 @@ pub async fn handle_webhook(
             .unwrap_or("")
             .to_owned();
 
-        // The reading date is the Lieferbeginndatum / Lieferenclatum from the event.
+        // The reading date is the Lieferbeginndatum / Lieferendedatum from the event.
         // Fall back to today when the field is absent.
         let reading_date_str = data["lieferbeginn_datum"]
             .as_str()
@@ -291,7 +294,7 @@ pub async fn handle_webhook(
                 }
             }
         }
-        // Fall through to MSCONS handling (55001/55009 are NOT MSCONS PIDs — returns NO_CONTENT)
+        // Fall through to MSCONS handling (55001/55004/55007 are NOT MSCONS PIDs — returns NO_CONTENT)
         return StatusCode::NO_CONTENT.into_response();
     }
 
@@ -519,6 +522,10 @@ pub async fn handle_webhook(
                         "subject": malo_id,
                         "tenant": state.tenant,
                         "datacontenttype": "application/json",
+                        // The MSCONS process that carried the anomalous batch —
+                        // same tracing contract as the direct-push events.
+                        "correlationid": process_id.to_string(),
+                        "causationid": process_id.to_string(),
                         "data": {
                             "malo_id": malo_id, "pid": pid,
                             "process_id": process_id.to_string(),

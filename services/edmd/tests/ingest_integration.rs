@@ -162,6 +162,49 @@ async fn the_same_register_spelled_two_ways_is_one_reading() {
 
 #[tokio::test]
 #[ignore = "requires EDMD_TEST_DATABASE_URL"]
+async fn a_value_changing_redelivery_leaves_an_audit_row() {
+    let Some(pool) = test_pool("overwrite_audit").await else {
+        return;
+    };
+    let repo = edmd::pg::PgTimeSeriesRepository::new(pool.clone());
+
+    repo.store_reads(&[read("1-0:1.8.0", dec!(10), QualityFlag::Measured)])
+        .await
+        .expect("first delivery");
+    // Same interval redelivered with a different value — §22 MessZV requires
+    // the displaced value to survive in `meter_read_corrections`.
+    repo.store_reads(&[read("1-0:1.8.0", dec!(12), QualityFlag::Measured)])
+        .await
+        .expect("redelivery");
+    // An identical redelivery must NOT add a second audit row.
+    repo.store_reads(&[read("1-0:1.8.0", dec!(12), QualityFlag::Measured)])
+        .await
+        .expect("identical redelivery");
+
+    let (count, original, corrected): (i64, rust_decimal::Decimal, rust_decimal::Decimal) =
+        sqlx::query_as(
+            "SELECT count(*), max(original_kwh), max(corrected_kwh)
+             FROM meter_read_corrections",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        count, 1,
+        "exactly one audit row: value-changing overwrites are recorded, identical ones are not"
+    );
+    assert_eq!(original, dec!(10), "the displaced value is preserved");
+    assert_eq!(corrected, dec!(12), "the overwriting value is recorded");
+
+    let source: String = sqlx::query_scalar("SELECT source FROM meter_read_corrections")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(source, "OTHER", "API_IMPORT maps to the OTHER audit source");
+}
+
+#[tokio::test]
+#[ignore = "requires EDMD_TEST_DATABASE_URL"]
 async fn two_tenants_may_hold_the_same_malo_id() {
     let Some(pool) = test_pool("tenant_isolation").await else {
         return;

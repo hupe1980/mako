@@ -180,6 +180,14 @@ pub struct ValidationConfig {
     /// Usually `now()` at ingestion time. When `None`, V08 is disabled.
     pub now: Option<OffsetDateTime>,
 
+    /// Physical plant/connection capacity ceiling in kW for V04.
+    ///
+    /// A value whose average power over its interval exceeds this ceiling is
+    /// physically impossible for the metered plant (nameplate capacity,
+    /// Anschlussleistung) and is flagged as an **Error** — unlike the
+    /// statistical spike check, which is a Warning. `None` disables the check.
+    pub max_plant_power_kw: Option<Decimal>,
+
     /// Minimum drop (kWh) between consecutive intervals that triggers V10 (RegisterRollover).
     ///
     /// When `value[i] < value[i-1] - rollover_threshold_kwh`, the interval is flagged as a
@@ -198,6 +206,7 @@ impl Default for ValidationConfig {
             zero_run_threshold: 4,
             negative_energy_is_error: true,
             now: None,
+            max_plant_power_kw: None,
             rollover_threshold_kwh: Some(Decimal::from(50_000u32)),
         }
     }
@@ -234,6 +243,13 @@ impl ValidationConfig {
     #[must_use]
     pub fn without_spike_detection(mut self) -> Self {
         self.spike_factor = f64::INFINITY;
+        self
+    }
+
+    /// Set the physical capacity ceiling (kW) for the V04 hard limit.
+    #[must_use]
+    pub fn with_plant_capacity_kw(mut self, kw: Decimal) -> Self {
+        self.max_plant_power_kw = Some(kw);
         self
     }
 }
@@ -282,8 +298,8 @@ impl ValidationResult {
 /// Validate a slice of meter intervals against the configured rules.
 ///
 /// The input slice should be pre-sorted by `from` timestamp (ascending).
-/// Unsorted input may produce spurious overlap/gap findings — use
-/// [`crate::interval::MeterInterval`]'s `Ord` implementation to sort first.
+/// Unsorted input may produce spurious overlap/gap findings — sort with
+/// `intervals.sort_by_key(|iv| iv.from)` first.
 ///
 /// ## Example
 ///
@@ -361,6 +377,28 @@ pub fn validate_intervals(
                         v,
                         v / rolling_mean,
                         rolling_mean,
+                        iv.from
+                    ),
+                )
+                .at(idx, iv),
+            );
+        }
+
+        // V04 (hard limit) — average power above the physical plant capacity.
+        //
+        // The statistical spike check above compares against the series' own
+        // rolling mean; this compares against the plant's nameplate /
+        // connection capacity, which no genuine reading can exceed.
+        if let Some(cap_kw) = config.max_plant_power_kw
+            && let Some(power_kw) = iv.demand_kw()
+            && power_kw > cap_kw
+        {
+            issues.push(
+                ValidationIssue::new(
+                    ValidationRuleId::ImpossibleSpike,
+                    ValidationSeverity::Error,
+                    format!(
+                        "average power {power_kw} kW exceeds plant capacity {cap_kw} kW at {} (V04)",
                         iv.from
                     ),
                 )
@@ -539,6 +577,40 @@ mod tests {
         let from = base + time::Duration::minutes(start_min);
         let to = from + time::Duration::minutes(15);
         iv(from, to, kwh)
+    }
+
+    #[test]
+    fn plant_capacity_ceiling_flags_impossible_power() {
+        // 30 kWh in 15 min = 120 kW average power against a 30 kW plant.
+        let intervals = vec![
+            iv_15min(0, dec!(2.5)),
+            iv_15min(15, dec!(30.0)),
+            iv_15min(30, dec!(2.8)),
+        ];
+        let cfg = ValidationConfig::default()
+            .without_spike_detection()
+            .with_plant_capacity_kw(dec!(30));
+        let result = validate_intervals(&intervals, &cfg);
+        let hard = result
+            .issues
+            .iter()
+            .filter(|i| {
+                i.rule_id == ValidationRuleId::ImpossibleSpike
+                    && i.severity == ValidationSeverity::Error
+            })
+            .count();
+        assert_eq!(hard, 1, "issues: {:?}", result.issues);
+        assert_eq!(result.issues[0].interval_index, Some(1));
+    }
+
+    #[test]
+    fn plant_capacity_ceiling_passes_plausible_power() {
+        // 5 kWh in 15 min = 20 kW — under the 30 kW ceiling.
+        let intervals = vec![iv_15min(0, dec!(5.0)), iv_15min(15, dec!(5.0))];
+        let cfg = ValidationConfig::default()
+            .without_spike_detection()
+            .with_plant_capacity_kw(dec!(30));
+        assert!(validate_intervals(&intervals, &cfg).is_clean());
     }
 
     #[test]

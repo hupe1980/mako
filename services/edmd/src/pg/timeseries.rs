@@ -95,17 +95,59 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
             .collect();
 
         sqlx::query(
-            r"INSERT INTO meter_reads
+            r"WITH incoming AS (
+                  SELECT * FROM unnest(
+                      $1::text[], $2::text[], $3::timestamptz[], $4::timestamptz[],
+                      $5::numeric[], $6::text[], $7::int4[], $8::text[],
+                      $9::text[], $10::text[], $11::text[], $12::text[],
+                      $13::text[], $14::jsonb[], $15::text[], $16::text[], $17::text[]
+                  ) AS t(malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality,
+                         pid, sparte, obis_code, obis_code_norm, source, tenant,
+                         push_session, quality_warnings, sender_mp_id,
+                         allocation_version, unit)
+              ),
+              -- §22 MessZV: an overwrite must never be silent. Any redelivery
+              -- that changes a stored value or quality leaves an immutable
+              -- audit row BEFORE the upsert applies — the CTE join sees the
+              -- pre-statement snapshot, so `original_*` is the displaced value.
+              -- This is what keeps the `as_of` bitemporal overlay complete.
+              audit AS (
+                  INSERT INTO meter_read_corrections
+                      (malo_id, dtm_from, dtm_to, obis_code_norm,
+                       original_kwh, original_quality,
+                       corrected_kwh, corrected_quality,
+                       reason, source, corrected_by, pid, tenant)
+                  SELECT mr.malo_id, mr.dtm_from, mr.dtm_to, mr.obis_code_norm,
+                         mr.quantity_kwh, mr.quality,
+                         i.quantity_kwh, i.quality,
+                         'Neulieferung überschreibt gespeichertes Intervall (automatischer §22-MessZV-Audit-Eintrag)',
+                         CASE
+                             WHEN i.source = 'MSCONS' THEN 'MSCONS_UPDATE'
+                             WHEN i.source IN ('DIRECT_PUSH', 'DIRECT_GAS', 'IOT_PUSH')
+                                 THEN 'IMSYS_DIRECT_PUSH'
+                             WHEN i.source = 'AUTO_SUBSTITUTE' THEN 'AUTO_SUBSTITUTE'
+                             ELSE 'OTHER'
+                         END,
+                         'edmd-ingest', i.pid, mr.tenant
+                  FROM incoming i
+                  JOIN meter_reads mr
+                    ON mr.tenant = i.tenant
+                   AND mr.malo_id = i.malo_id
+                   AND mr.dtm_from = i.dtm_from
+                   AND mr.obis_code_norm = i.obis_code_norm
+                  WHERE mr.quantity_kwh IS DISTINCT FROM i.quantity_kwh
+                     OR mr.quality IS DISTINCT FROM i.quality
+              )
+              INSERT INTO meter_reads
                   (malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality,
                    pid, sparte, obis_code, obis_code_norm, source, tenant,
                    push_session, quality_warnings, sender_mp_id,
                    allocation_version, unit)
-              SELECT * FROM unnest(
-                  $1::text[], $2::text[], $3::timestamptz[], $4::timestamptz[],
-                  $5::numeric[], $6::text[], $7::int4[], $8::text[],
-                  $9::text[], $10::text[], $11::text[], $12::text[],
-                  $13::text[], $14::jsonb[], $15::text[], $16::text[], $17::text[]
-              )
+              SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality,
+                     pid, sparte, obis_code, obis_code_norm, source, tenant,
+                     push_session, quality_warnings, sender_mp_id,
+                     allocation_version, unit
+              FROM incoming
               ON CONFLICT (tenant, malo_id, dtm_from, obis_code_norm) DO UPDATE
                   SET quantity_kwh       = EXCLUDED.quantity_kwh,
                       quality            = EXCLUDED.quality,

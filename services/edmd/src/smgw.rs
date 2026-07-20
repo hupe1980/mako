@@ -465,20 +465,10 @@ pub async fn run_cls_compliance_sweep(
                     }
                 });
 
-                if let Err(e) = client
-                    .post(url)
-                    .header("Content-Type", "application/cloudevents+json")
-                    .json(&ce)
-                    .send()
-                    .await
-                {
-                    tracing::warn!(
-                        error = %e,
-                        issue_type = issue.issue_type.db_str(),
-                        malo_id = %issue.malo_id,
-                        "edmd: cls-compliance-sweep: webhook delivery failed"
-                    );
-                }
+                // A lost cert-expiry warning silently runs a gateway into
+                // an expired certificate (MsbG §29 remote-readout obligation),
+                // so this retries like every other edmd compliance event.
+                crate::server::post_ce_with_retry(&client, url, &ce).await;
             }
         }
 
@@ -709,12 +699,7 @@ pub async fn put_smgw_session(
                 }
             });
             let client = mako_service::http::default_client();
-            let _ = client
-                .post(url)
-                .header("Content-Type", "application/cloudevents+json")
-                .json(&ce)
-                .send()
-                .await;
+            crate::server::post_ce_with_retry(&client, url, &ce).await;
         }
     }
 

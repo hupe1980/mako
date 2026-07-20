@@ -51,7 +51,12 @@ impl TimeSeriesRepository for InMemoryTimeSeriesRepository {
         let guard = self.reads.lock().unwrap();
         Ok(guard
             .iter()
-            .filter(|r| r.malo_id == q.malo_id && r.dtm_from >= q.from && r.dtm_to <= q.to)
+            .filter(|r| {
+                r.malo_id == q.malo_id
+                    && r.tenant == q.tenant
+                    && r.dtm_from >= q.from
+                    && r.dtm_to <= q.to
+            })
             .cloned()
             .collect())
     }
@@ -111,12 +116,12 @@ impl TimeSeriesRepository for InMemoryTimeSeriesRepository {
     async fn latest_read(
         &self,
         malo_id: &str,
-        _tenant: &str,
+        tenant: &str,
     ) -> Result<Option<MeterRead>, EdmError> {
         let guard = self.reads.lock().unwrap();
         Ok(guard
             .iter()
-            .filter(|r| r.malo_id == malo_id)
+            .filter(|r| r.malo_id == malo_id && r.tenant == tenant)
             .max_by_key(|r| r.dtm_from)
             .cloned())
     }
@@ -132,7 +137,12 @@ impl TimeSeriesRepository for InMemoryTimeSeriesRepository {
         let guard = self.reads.lock().unwrap();
         let relevant: Vec<&MeterRead> = guard
             .iter()
-            .filter(|r| r.malo_id == q.malo_id && r.dtm_from >= from_ts && r.dtm_to <= to_ts)
+            .filter(|r| {
+                r.malo_id == q.malo_id
+                    && r.tenant == q.tenant
+                    && r.dtm_from >= from_ts
+                    && r.dtm_to <= to_ts
+            })
             .collect();
 
         if relevant.is_empty() {

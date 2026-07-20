@@ -7,7 +7,7 @@
 //! - [`crate::ServiceBuilder::with_rate_limit`] — one global bucket across all
 //!   requests. Protects the process from total overload.
 //! - [`crate::ServiceBuilder::with_tenant_rate_limit`] — one bucket per caller,
-//!   keyed on the authenticated tenant (falling back to peer address for
+//!   keyed on a hash of the bearer token (falling back to peer address for
 //!   unauthenticated routes). A global bucket alone lets one busy tenant consume
 //!   the whole allowance and starve every other tenant on a shared deployment,
 //!   which a keyed bucket prevents.
@@ -74,12 +74,14 @@ impl Default for RateLimitConfig {
     }
 }
 
-/// Identify the caller a per-tenant bucket should be keyed on.
+/// Identify the caller a per-caller bucket should be keyed on.
 ///
-/// Prefers the authenticated tenant so a client cannot escape its own bucket by
-/// changing source address. Falls back to the peer address for unauthenticated
-/// routes, and to a single shared key when neither is available — bounded
-/// together is better than unbounded.
+/// Keys on a hash of the presented bearer token — one bucket per credential —
+/// so a client cannot escape its bucket by changing source address. (This is
+/// finer-grained than a per-tenant key: two tokens of the same tenant get two
+/// buckets.) Falls back to the peer address for unauthenticated routes, and to
+/// a single shared key when neither is available — bounded together is better
+/// than unbounded.
 #[cfg(feature = "rate-limit")]
 #[must_use]
 pub fn caller_key(req: &axum::extract::Request) -> String {

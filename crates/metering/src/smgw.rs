@@ -302,7 +302,11 @@ pub enum ClsChannelStatus {
 pub struct SmgwSession {
     /// SMGW device ID (assigned by manufacturer, used as Zählpunkt-ID component).
     pub device_id: String,
-    /// Firmware version string (BSI requires audit log of all firmware versions).
+    /// Currently installed firmware version string.
+    ///
+    /// Only the current version is modeled here; the per-device firmware
+    /// *history* (MessEG §22 traceability) is service-layer data — `edmd`
+    /// keeps it in the `smgw_sessions` JSONB audit columns.
     pub firmware_version: String,
     /// 13-digit BDEW Codenummer of the responsible MSB.
     pub msb_mp_id: String,

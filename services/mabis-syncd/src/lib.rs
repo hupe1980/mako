@@ -14,12 +14,18 @@
 //! 4. Submit via AS4 through `makod`
 //! 5. Track status in PostgreSQL (`submission_runs` table)
 //!
-//! ## Schedule
+//! ## Schedule (BK6-24-174 Anlage 3 §3.10, Werktage after month end)
 //!
-//! | Version | Trigger | Deadline (BK6-22-024 Anlage 3 MaBiS) |
+//! One scheduled submission per Bilanzierungsmonat: the background scheduler
+//! fires at `run_hour_utc` (default 05:00 UTC) on the configured Werktag after
+//! period end (`erstaufschlag_werktag`, default 10 — the last Werktag of the
+//! Erstaufschlag window). The window a run lands in decides its Datenstatus:
+//!
+//! | Window | Werktage after period end | Datenstatus of a new version |
 //! |---|---|---|
-//! | vorlaeufig | 3rd of month at 06:00 CET | ≤ day 3 after period end |
-//! | endgueltig | 8th of month at 06:00 CET | ≤ day 8 after period end |
+//! | Erstaufschlag (BKA) | ≤ 10 WT | Abrechnungsdaten directly |
+//! | Clearing (BKA) | ≤ 30 WT | Prüfdaten, promoted by positive Prüfmitteilung |
+//! | KBKA | after 30 WT | Prüfdaten (korrigierte Bilanzkreisabrechnung) |
 //!
 //! ## Regulatory basis
 //!

@@ -2949,9 +2949,19 @@ pub struct JahresablesungCampaignRequest {
 /// Re-running for the same NB + year is safe — already-scheduled MaLos are
 /// counted in `skipped` and not double-scheduled.
 async fn jahresablesung_campaign(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Json(req): Json<JahresablesungCampaignRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "write-reading-order", &state.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
     match run_jahresablesung_campaign(
         state.repo.pool(),
         &state.tenant,
@@ -3170,10 +3180,17 @@ pub async fn run_jahresablesung_campaign(
             continue;
         }
 
+        // `ON CONFLICT DO NOTHING` against `ablese_scheduled_unique`
+        // (tenant, malo_id, anlass, geplant_am): the pre-check above trims the
+        // common case, but only the DB constraint makes two concurrent
+        // campaign runs race-safe.
         let res = sqlx::query(
             "INSERT INTO ablese_auftraege
              (malo_id,tenant,anlass,auftraggeber_rolle,ausfuehrender_msb,geplant_am,ausfuehrt_bis)
-             VALUES ($1,$2,'JAHRESABLESUNG','NB',$3,$4,$5)",
+             VALUES ($1,$2,'JAHRESABLESUNG','NB',$3,$4,$5)
+             ON CONFLICT (tenant, malo_id, anlass, geplant_am)
+                 WHERE insrpt_process_id IS NULL
+             DO NOTHING",
         )
         .bind(malo_id)
         .bind(tenant)
@@ -3184,7 +3201,8 @@ pub async fn run_jahresablesung_campaign(
         .await;
 
         match res {
-            Ok(_) => created += 1,
+            Ok(r) if r.rows_affected() > 0 => created += 1,
+            Ok(_) => skipped += 1,
             Err(e) => {
                 tracing::warn!(malo_id, error = %e, "edmd: campaign insert failed for MaLo");
             }
@@ -3677,7 +3695,11 @@ pub async fn post_direct_reads_gas(
 /// Designed for fire-and-retry rather than fire-and-forget: a lost quality warning
 /// CloudEvent (`de.edmd.reading.quality.warning`) constitutes a compliance gap under
 /// §22 MessZV — the responsible party must be informed of quality issues.
-async fn post_ce_with_retry(client: &reqwest::Client, url: &str, ce: &serde_json::Value) {
+pub(crate) async fn post_ce_with_retry(
+    client: &reqwest::Client,
+    url: &str,
+    ce: &serde_json::Value,
+) {
     for attempt in 0u32..3 {
         match client
             .post(url)
@@ -4766,6 +4788,29 @@ pub async fn post_corrections(
             )
                 .into_response();
         }
+        // The same V06/V08-class boundary checks the ingest paths run: a
+        // corrected interval must still be a valid interval, and a correction
+        // cannot claim energy for time that has not happened yet.
+        if rec.dtm_from >= rec.dtm_to {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                format!(
+                    "correction[{}]: dtm_from {} must be before dtm_to {}",
+                    i, rec.dtm_from, rec.dtm_to
+                ),
+            )
+                .into_response();
+        }
+        if rec.dtm_from > OffsetDateTime::now_utc() + time::Duration::minutes(15) {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                format!(
+                    "correction[{}]: dtm_from {} lies in the future (V08)",
+                    i, rec.dtm_from
+                ),
+            )
+                .into_response();
+        }
     }
 
     match state.repo.store_corrections(&req.corrections).await {
@@ -5151,9 +5196,6 @@ pub async fn post_substitute_values(
     Path(malo_id): Path<String>,
     Json(req): Json<SubstituteRequest>,
 ) -> impl IntoResponse {
-    use metering::{MeterInterval, QualityFlag, SubstituteMethod};
-    use time::format_description::well_known::Rfc3339;
-
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "write-timeseries", resource_tenant) {
         return (
@@ -5162,6 +5204,23 @@ pub async fn post_substitute_values(
         )
             .into_response();
     }
+
+    run_substitute_values(state.repo.pool(), &state.tenant, &malo_id, &req).await
+}
+
+/// Core of the §17 MessZV substitute flow.
+///
+/// Shared by the HTTP handler (above) and the `trigger_substitution` MCP tool,
+/// so both write substitutes under identical guards: never over a billable
+/// reading, always with a `substitute_value_log` audit row, atomically.
+pub(crate) async fn run_substitute_values(
+    pool: &sqlx::PgPool,
+    tenant: &str,
+    malo_id: &str,
+    req: &SubstituteRequest,
+) -> axum::response::Response {
+    use metering::{MeterInterval, QualityFlag, SubstituteMethod};
+    use time::format_description::well_known::Rfc3339;
 
     let gap_from = match OffsetDateTime::parse(&req.gap_from, &Rfc3339) {
         Ok(t) => t,
@@ -5228,11 +5287,11 @@ pub async fn post_substitute_values(
             AND tenant = $4
           ORDER BY dtm_from ASC LIMIT 10000",
     )
-    .bind(&malo_id)
+    .bind(malo_id)
     .bind(prior_from)
     .bind(gap_from)
-    .bind(&state.tenant)
-    .fetch_all(state.repo.pool())
+    .bind(tenant)
+    .fetch_all(pool)
     .await;
 
     let prior_intervals: Vec<MeterInterval> = match prior_reads {
@@ -5273,10 +5332,10 @@ pub async fn post_substitute_values(
             AND quality IN ('MEASURED','ESTIMATED','CALCULATED')
           ORDER BY dtm_from ASC LIMIT 1",
     )
-    .bind(&malo_id)
-    .bind(&state.tenant)
+    .bind(malo_id)
+    .bind(tenant)
     .bind(gap_to)
-    .fetch_optional(state.repo.pool())
+    .fetch_optional(pool)
     .await
     .ok()
     .flatten();
@@ -5320,7 +5379,6 @@ pub async fn post_substitute_values(
     let mut log_entries: Vec<serde_json::Value> = Vec::new();
     // Intervals left alone because they already carry a billable reading.
     let mut skipped: Vec<String> = Vec::new();
-    let pool = state.repo.pool();
 
     // Every interval's reading and its §22 MessZV audit row commit together. As
     // two independent statements, a failure part-way left billable SUBSTITUTED
@@ -5344,7 +5402,51 @@ pub async fn post_substitute_values(
             .map_or_else(|_| c.to_owned(), |p| p.to_string())
     });
 
-    for entry in &substitute_entries {
+    // The same V01–V10 pass every ingest path runs: engine-generated values
+    // are still stored values, and an Ersatzwert derived from anomalous prior
+    // data (negative carry-forward, implausible spike) must carry its warning
+    // annotation into `quality_warnings` like any other reading.
+    let substitute_warnings: std::collections::HashMap<usize, serde_json::Value> = {
+        let series: Vec<MeterInterval> = substitute_entries
+            .iter()
+            .map(|e| e.interval.clone())
+            .collect();
+        let report = metering::validation::validate_intervals(
+            &series,
+            &metering::validation::ValidationConfig {
+                expected_interval_secs: Some(interval_secs),
+                now: Some(OffsetDateTime::now_utc()),
+                ..Default::default()
+            },
+        );
+        let mut by_index: std::collections::HashMap<usize, Vec<serde_json::Value>> =
+            std::collections::HashMap::new();
+        for issue in &report.issues {
+            if let Some(idx) = issue.interval_index {
+                by_index.entry(idx).or_default().push(serde_json::json!({
+                    "rule": issue.rule_id.to_string(),
+                    "message": issue.message,
+                    "blocks_billing": issue.blocks_billing(),
+                }));
+            }
+        }
+        by_index
+            .into_iter()
+            .map(|(idx, issues)| {
+                (
+                    idx,
+                    serde_json::json!({
+                        "has_warnings": true,
+                        "issue_count": issues.len(),
+                        "issues": issues,
+                        "source": "SUBSTITUTE_VALIDATION",
+                    }),
+                )
+            })
+            .collect()
+    };
+
+    for (entry_idx, entry) in substitute_entries.iter().enumerate() {
         let iv = &entry.interval;
         // `entry.method` is a `ForecastMethod`, whose Debug names (e.g.
         // `PriorPeriodSameSlot`) are not the vocabulary the
@@ -5375,25 +5477,27 @@ pub async fn post_substitute_values(
               )
               INSERT INTO meter_reads
                 (malo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, unit,
-                 obis_code, obis_code_norm, source, tenant)
-              VALUES ($1, $2, $3, $4, 'SUBSTITUTED', 0, $5, $6, $8, $9, 'AUTO_SUBSTITUTE', $7)
+                 obis_code, obis_code_norm, source, tenant, quality_warnings)
+              VALUES ($1, $2, $3, $4, 'SUBSTITUTED', 0, $5, $6, $8, $9, 'AUTO_SUBSTITUTE', $7, $10)
               ON CONFLICT (tenant, malo_id, dtm_from, obis_code_norm) DO UPDATE
                 SET quantity_kwh = EXCLUDED.quantity_kwh,
                     quality = EXCLUDED.quality,
                     source = EXCLUDED.source,
+                    quality_warnings = EXCLUDED.quality_warnings,
                     archived = false
                 WHERE meter_reads.quality IN ('FAULTY', 'UNKNOWN')
               RETURNING (SELECT quantity_kwh FROM prior) AS original_kwh",
         )
-        .bind(&malo_id)
+        .bind(malo_id)
         .bind(iv.from)
         .bind(iv.to)
         .bind(iv.value_kwh)
         .bind(sparte.as_str())
         .bind(sparte.billing_unit().as_str())
-        .bind(&state.tenant)
+        .bind(tenant)
         .bind(req.obis_code.as_deref())
         .bind(&obis_norm)
+        .bind(substitute_warnings.get(&entry_idx))
         .fetch_optional(&mut *tx)
         .await;
 
@@ -5426,7 +5530,7 @@ pub async fn post_substitute_values(
                  original_kwh, created_by, tenant)
               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
-        .bind(&malo_id)
+        .bind(malo_id)
         .bind(iv.from)
         .bind(iv.to)
         .bind(method_str)
@@ -5434,7 +5538,7 @@ pub async fn post_substitute_values(
         .bind(iv.value_kwh)
         .bind(original_kwh)
         .bind(operator_id)
-        .bind(&state.tenant)
+        .bind(tenant)
         .execute(&mut *tx)
         .await
         {

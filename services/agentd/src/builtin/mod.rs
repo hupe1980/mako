@@ -647,6 +647,7 @@ QUALITY_ISSUES: [list or NONE]
     default_mcp_servers: &["edmd", "makod", "marktd"],
     default_trigger_patterns: &[
         "de.edmd.reading.quality.warning",
+        "de.edmd.reading.direct.stored",
         "de.mako.process.completed",
     ],
     default_max_turns: 12,
@@ -1099,8 +1100,12 @@ You are the §17 MessZV Ersatzwertbildung specialist.
 
 1. Call edmd `get_quality_assessments` to identify F-grade intervals.
 2. For each gap: determine extent (hours) and select method per §17 MessZV.
-3. Call edmd `fill_gaps_with_config` with appropriate method and parameters.
-4. Verify result: substituted intervals should have QualityFlag=Substituted.
+3. Call edmd `trigger_substitution` with the gap window and the selected method
+   (`LinearInterpolation`, `PriorPeriodAverage`, `ZeroFill`, or
+   `LastValueCarryForward`). It never overwrites billable readings and logs
+   every value to `substitute_value_log`.
+4. Verify result: call edmd `get_timeseries` — substituted intervals carry
+   quality SUBSTITUTED.
 5. If gap > 7 days: escalate to operator (V4 — manual intervention required).
 
 ## OUTPUT FORMAT
@@ -1122,17 +1127,18 @@ LEGAL_BASIS: §17 Abs. [n] MessZV
 
 const MABIS_SYNCD_AGENT: BuiltinAgentDef = BuiltinAgentDef {
     name: "mabis-syncd-agent",
-    specialty: "MaBiS UTILTS Summenzeitreihe submission monitor. Tracks vorläufig (day 3) and endgültig (day 8) submission deadlines, detects failed aggregations, and diagnoses BIKO delivery issues.",
+    specialty: "MaBiS Summenzeitreihe submission monitor. Tracks the Werktag-based Erstaufschlag/Clearing windows (BK6-24-174 Anlage 3 §3.10), detects failed aggregations, and diagnoses BIKO delivery issues.",
     system_prompt: "\
 You are the MaBiS Summenzeitreihe submission specialist.
 
 ## TRIGGERED BY
-- `de.edmd.reading.quality.warning` — quality issue may affect UTILTS accuracy
-- Scheduled — day 3 and day 8 of each month
+- `de.edmd.reading.quality.warning` — quality issue may affect Summenzeitreihe accuracy
 
-## MABIS DEADLINES (BK6-22-024 Anlage 3)
-- Vorläufig submission: day 3 of following month, 05:00 UTC
-- Endgültig submission: day 8 of following month, 05:00 UTC
+## MABIS WINDOWS (BK6-24-174 Anlage 3 §3.10, Werktage after month end)
+- Erstaufschlag (BKA): ≤ 10 Werktage — a new version becomes Abrechnungsdaten directly
+- Clearing (BKA): ≤ 30 Werktage — a new version starts as Prüfdaten and needs a positive Prüfmitteilung
+- After 30 Werktage: KBKA (korrigierte Bilanzkreisabrechnung)
+- mabis-syncd submits at 05:00 UTC on the configured Erstaufschlag-Werktag (default 10)
 
 ## PROCEDURE
 

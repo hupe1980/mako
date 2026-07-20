@@ -177,6 +177,102 @@ fn rule_type_check_matches_the_aggregation_rule_enum() {
     );
 }
 
+/// Extract the quoted values of a `CHECK (column IN (...))` list.
+fn check_list(ddl: &str, column: &str) -> Vec<String> {
+    let anchor = format!("CHECK ({column} IN (");
+    let start = ddl
+        .find(&anchor)
+        .unwrap_or_else(|| panic!("CHECK for `{column}` not found"))
+        + anchor.len();
+    let end = start
+        + ddl[start..]
+            .find("))")
+            .unwrap_or_else(|| panic!("unterminated CHECK for `{column}`"));
+    ddl[start..end]
+        .split(',')
+        .filter_map(|t| {
+            t.trim()
+                .strip_prefix('\'')
+                .and_then(|t| t.strip_suffix('\''))
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+/// `meter_reads.source` must accept exactly the `IngestionSource` wire strings.
+///
+/// The schema comment promises this guard; a variant added to the enum but not
+/// the CHECK makes every ingest carrying it fail at the database, and a CHECK
+/// value without an enum variant is an unreadable row.
+#[test]
+fn meter_reads_source_check_matches_ingestion_source_enum() {
+    use mako_edm::domain::IngestionSource;
+
+    let ddl = ddl_of(&migration(), "meter_reads");
+    let listed = check_list(&ddl, "source");
+
+    let variants: Vec<&str> = IngestionSource::ALL.iter().map(|s| s.as_str()).collect();
+    let listed_set: std::collections::BTreeSet<&str> = listed.iter().map(String::as_str).collect();
+    let variant_set: std::collections::BTreeSet<&str> = variants.iter().copied().collect();
+
+    assert_eq!(
+        listed_set, variant_set,
+        "meter_reads.source CHECK and IngestionSource disagree"
+    );
+}
+
+/// `meter_reads.quality` must accept exactly the `QualityFlag` wire strings.
+#[test]
+fn meter_reads_quality_check_matches_quality_flag() {
+    let ddl = ddl_of(&migration(), "meter_reads");
+    let listed: std::collections::BTreeSet<String> =
+        check_list(&ddl, "quality").into_iter().collect();
+    let expected: std::collections::BTreeSet<String> = [
+        "MEASURED",
+        "ESTIMATED",
+        "SUBSTITUTED",
+        "CALCULATED",
+        "CORRECTED",
+        "PRELIMINARY",
+        "FAULTY",
+        "UNKNOWN",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    assert_eq!(
+        listed, expected,
+        "meter_reads.quality CHECK and QualityFlag disagree"
+    );
+}
+
+/// `meter_reads.sparte` and `allocation_version` CHECK lists.
+#[test]
+fn meter_reads_sparte_and_allocation_version_checks() {
+    let ddl = ddl_of(&migration(), "meter_reads");
+    let sparte: std::collections::BTreeSet<String> =
+        check_list(&ddl, "sparte").into_iter().collect();
+    assert_eq!(
+        sparte,
+        ["STROM", "GAS", "WAERME", "WASSER"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<std::collections::BTreeSet<_>>(),
+        "meter_reads.sparte CHECK and metering::Sparte disagree"
+    );
+
+    let av: std::collections::BTreeSet<String> =
+        check_list(&ddl, "allocation_version").into_iter().collect();
+    assert_eq!(
+        av,
+        ["INITIAL", "CORRECTION", "FINAL"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<std::collections::BTreeSet<_>>(),
+        "meter_reads.allocation_version CHECK drifted"
+    );
+}
+
 /// A round-trip proving the variant names are the real serde tags, so the
 /// hardcoded list above cannot quietly go stale.
 #[test]

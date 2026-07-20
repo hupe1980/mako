@@ -1,7 +1,7 @@
 //! Core aggregation + submission engine for `mabis-syncd`.
 //!
 //! Orchestrates the full MaBiS Summenzeitreihe pipeline:
-//! 1. Discover MaLos in Bilanzierungsgebiet (via edmd summenzeitreihe API)
+//! 1. Discover MaLos in Bilanzierungsgebiet (edmd `/api/v1/billing-periods`, then `/api/v1/lastgang/{malo_id}`)
 //! 2. Aggregate using `mako-mabis::SummenzeitreiheBuilder`
 //! 3. Build the MSCONS 13003 command payload for makod
 //! 4. Submit via makod command API
@@ -579,7 +579,7 @@ impl SyncEngine {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            anyhow::bail!("edmd /summenzeitreihe/{malo_id} returned {status}");
+            anyhow::bail!("edmd /lastgang/{malo_id} returned {status}");
         }
 
         let data: serde_json::Value = resp

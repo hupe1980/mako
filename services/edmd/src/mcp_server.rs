@@ -3,7 +3,7 @@
 //! Exposes meter data time-series and billing-period summaries.
 //! Mounted at `/mcp` on the existing HTTP port.
 //!
-//! ## Tools (14)
+//! ## Tools (15)
 //!
 //! | Tool | Description |
 //! |---|---|
@@ -15,8 +15,13 @@
 //! | `list_reading_orders`        | List Ablesesteuerung reading orders for a MaLo |
 //! | `list_overdue_reading_orders`| Reading orders past `ausfuehrt_bis` (§40 EnWG compliance) |
 //! | `trigger_jahresablesung`     | Launch Jahresablesung campaign for a NB grid area |
+//! | `trigger_substitution`       | Generate + store §17 MessZV Ersatzwerte for a gap window |
 //! | `get_correction_history`     | §22 MessZV audit: list corrections for a MaLo |
 //! | `validate_timeseries`        | Run validation rules V01–V10 on meter reads (gaps, spikes, quality, rollover) |
+//! | `get_quality_assessments`    | Per-batch quality history (§22 MessZV) |
+//! | `get_summenzeitreihe`        | Monthly aggregated kWh for MaBiS |
+//! | `get_annual_forecast`        | §17 MessZV Jahresprognose |
+//! | `get_gas_quality_data`       | PID 13007 Brennwert + Zustandszahl |
 //!
 //! ## Prompts (5)
 //!
@@ -115,7 +120,7 @@ pub struct GetDeviceHistoryParams {
 /// Parameters for `get_quality_warnings` MCP tool (M7 — Hampel filter quality scoring).
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetQualityWarningsParams {
-    /// 33-character Marktlokations-ID.
+    /// 11-digit Marktlokations-ID.
     pub malo_id: String,
     /// ISO-8601 start datetime (inclusive). Defaults to 30 days ago when omitted.
     pub from: Option<String>,
@@ -143,6 +148,31 @@ pub struct ListOverdueReadingOrdersParams {
     pub ausfuehrender_msb: Option<String>,
     /// Max results (default 100).
     pub limit: Option<i64>,
+}
+
+/// Parameters for `trigger_substitution`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TriggerSubstitutionParams {
+    /// 11-digit Marktlokations-ID the gap belongs to.
+    pub malo_id: String,
+    /// Gap start (UTC, RFC3339).
+    pub gap_from: String,
+    /// Gap end (UTC, RFC3339).
+    pub gap_to: String,
+    /// `PriorPeriodAverage` (default) · `LinearInterpolation` · `ZeroFill` ·
+    /// `LastValueCarryForward`.
+    pub method: Option<String>,
+    /// Interval length in seconds (default 900; use 3600 for hourly gas).
+    pub interval_secs: Option<u32>,
+    /// Prior-period reference window in days for `PriorPeriodAverage`
+    /// (default 7).
+    pub prior_days: Option<u32>,
+    /// OBIS register the gap belongs to (part of the reading identity).
+    pub obis_code: Option<String>,
+    /// `STROM` (default) · `GAS` · `WAERME` · `WASSER`.
+    pub sparte: Option<String>,
+    /// §22 MessZV audit reason (default `NoMeasurementAvailable`).
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1055,6 +1085,53 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
             Err(e) => Err(McpError::internal_error(e.detail(), None)),
         }
     }
+
+    #[tool(
+        description = "Generate and store §17 MessZV Ersatzwerte (substitute values) for a gap window. Methods: PriorPeriodAverage (default), LinearInterpolation, ZeroFill, LastValueCarryForward. Never overwrites a billable reading; every substitute is logged to substitute_value_log (§22 MessZV audit trail). Runs the same core as POST /api/v1/meter-reads/{malo_id}/substitute.",
+        annotations(
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn trigger_substitution(
+        &self,
+        Parameters(p): Parameters<TriggerSubstitutionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let req = crate::server::SubstituteRequest {
+            gap_from: p.gap_from,
+            gap_to: p.gap_to,
+            interval_secs: p.interval_secs,
+            method: p.method,
+            prior_days: p.prior_days,
+            operator_id: Some("mcp-agent".to_owned()),
+            sparte: p.sparte,
+            reason: p.reason,
+            obis_code: p.obis_code,
+        };
+
+        let resp = crate::server::run_substitute_values(
+            &self.state.pool,
+            &self.state.tenant,
+            &p.malo_id,
+            &req,
+        )
+        .await;
+
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_else(
+            |_| serde_json::json!({ "raw": String::from_utf8_lossy(&bytes).into_owned() }),
+        );
+
+        if status.is_success() {
+            ContentBlock::json(json).map(|b| CallToolResult::success(vec![b]))
+        } else {
+            Err(McpError::internal_error(json.to_string(), None))
+        }
+    }
 }
 
 #[prompt_router]
@@ -1222,7 +1299,7 @@ impl EdmdMcpHandler {
                  | INSRPT 23001 Störungsmeldung | `INSRPT_STOERUNG` (§18 MessZV, 5 Werktage) |\n\
                  | INSRPT 23003/23008 Technische Änderung | `SONDERABLESUNG` at handover date |\n\
                  | GPKE 55001 Lieferbeginn | `LIEFERBEGINN` at Lieferbeginndatum |\n\
-                 | GPKE 55009 Lieferende | `LIEFERENDE` at Lieferenclatum |\n\
+                 | GPKE 55004/55007 Abmeldung/Beendigung der Zuordnung | `LIEFERENDE` at Lieferendedatum |\n\
                  | NB campaign | `JAHRESABLESUNG` (§40 Abs. 2 EnWG) |\n\n\
                  ### Manual creation\n\
                  ```http\n\
@@ -1757,7 +1834,7 @@ impl ServerHandler for EdmdMcpHandler {
              quality assessments, Gas quality data, and manages reading orders.\n\
              M7 quality scoring uses the Hampel filter + V01-V10 validation engine.\n\
              \n\
-             ## Tools (14)\n\
+             ## Tools (15)\n\
              - `get_timeseries` — read meter reads for a MaLo in a time range\n\
              - `get_imbalance` — Mehr-/Mindermengen imbalance report (§27 MessZV)\n\
              - `get_billing_period` — MeterBillingPeriod (arbeitsmenge_kwh, brennwert, spitzenleistung)\n\
@@ -1766,6 +1843,7 @@ impl ServerHandler for EdmdMcpHandler {
              - `list_reading_orders` — Ablesesteuerung reading orders for a MaLo\n\
              - `list_overdue_reading_orders` — overdue reading orders (§40 EnWG compliance)\n\
              - `trigger_jahresablesung` — launch annual SLP reading campaign\n\
+             - `trigger_substitution` — generate + store §17 MessZV Ersatzwerte for a gap window\n\
              - `get_correction_history` — §22 MessZV bitemporal correction audit trail\n\
              - `validate_timeseries` — V01-V10 validation (gaps, spikes, DST, rollover)\n\
              - `get_quality_assessments` — per-batch quality history (§22 MessZV)\n\

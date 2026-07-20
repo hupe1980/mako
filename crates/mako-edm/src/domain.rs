@@ -224,6 +224,20 @@ pub enum IngestionSource {
 }
 
 impl IngestionSource {
+    /// Every variant — the single source of truth `schema_code_guard` pins the
+    /// `meter_reads.source` CHECK constraint against.
+    pub const ALL: [Self; 9] = [
+        Self::Mscons,
+        Self::DirectPush,
+        Self::DirectGas,
+        Self::ApiImport,
+        Self::AutoSubstitute,
+        Self::Correction,
+        Self::Manual,
+        Self::Estimated,
+        Self::IotPush,
+    ];
+
     /// Returns the DB string value for this source.
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -323,18 +337,22 @@ pub struct MeterRead {
     #[serde(default)]
     pub sender_mp_id: Option<String>,
 
-    /// MSCONS data-delivery version per BK6-22-024 §6.4 (MaBiS AllocationVersion).
+    /// MaBiS data-delivery version (AllocationVersion).
     ///
-    /// `"INITIAL"` = vorläufig (day-3); `"FINAL"` = endgültig (day-8);
+    /// `"INITIAL"` = vorläufige Summenzeitreihe (Erstaufschlag window);
+    /// `"FINAL"` = endgültige Summenzeitreihe (Clearing / Bilanzkreisabrechnung);
     /// `"CORRECTION"` = Nachbearbeitungswert.
     /// Used by `mabis-syncd` to distinguish preliminary from final Summenzeitreihen.
     #[serde(default = "default_allocation_version")]
     pub allocation_version: String,
 
-    /// Transaction time: when this row was first inserted (database clock).
+    /// Transaction time: when this row was last written (database clock).
     ///
-    /// Combined with `meter_read_corrections.corrected_at` this gives a full
-    /// bitemporal model: "what did we know at time T?" (`valid_from_tx` ≤ T).
+    /// Bumped on every upsert/correction — it is the row's write version, not
+    /// its creation time. Every value-changing overwrite also leaves an
+    /// immutable `meter_read_corrections` row, so "what did we know at time
+    /// T?" is answered by the current row minus all corrections with
+    /// `corrected_at > T` (the `as_of` overlay).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub valid_from_tx: Option<OffsetDateTime>,
 }

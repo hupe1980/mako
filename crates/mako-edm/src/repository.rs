@@ -12,7 +12,8 @@ use crate::{
 
 /// Persistent store for MSCONS meter data receipts and typed reads.
 ///
-/// **Production backend**: TimescaleDB (PostgreSQL hypertable on `dtm_from`).
+/// **Production backend**: PostgreSQL, natively RANGE-partitioned by month on
+/// `dtm_from` (see `services/edmd/migrations/0001_schema.sql`).
 /// **Test backend**: [`crate::testing::InMemoryTimeSeriesRepository`].
 pub trait TimeSeriesRepository: Send + Sync + 'static {
     /// Record that MSCONS data was received for a MaLo.
