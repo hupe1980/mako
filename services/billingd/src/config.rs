@@ -105,6 +105,11 @@ pub struct BillingdConfig {
     #[serde(default)]
     pub billing_runs: BillingRunsConfig,
 
+    /// Deterministic invoice risk scoring and the HELD dispatch gate.
+    /// See `[risk]` — `crate::risk::RiskConfig` for bands and thresholds.
+    #[serde(default)]
+    pub risk: crate::risk::RiskConfig,
+
     /// Shared secret for verifying inbound webhook HMAC-SHA256 signatures.
     ///
     /// When set, `POST /api/v1/webhooks/vpp-dispatch` (and future inbound webhook

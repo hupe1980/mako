@@ -50,9 +50,20 @@ CREATE TABLE billing_records (
     original_record_id  UUID        REFERENCES billing_records(id) ON DELETE SET NULL,
     correction_reason   TEXT,
 
-    -- B2B Sammelrechnung: NULL = standalone Einzelrechnung
+ -- B2B Sammelrechnung: NULL = standalone Einzelrechnung
     sammelrechnung_id   UUID        REFERENCES billing_records(id) ON DELETE SET NULL,
 
+    -- ── Risk scoring (deterministic release gate) ────────────────────────────
+    -- Score 0–100 from the coded findings in risk_findings; band decides the
+    -- action: AUTO_RELEASED/SAMPLE dispatch immediately, REVIEW dispatches but
+    -- queues for analysts, HELD blocks dispatch until released_by/-at is set
+    -- via POST /api/v1/billing/{id}/release.
+    risk_score        SMALLINT,
+    risk_band         TEXT CHECK (risk_band IN ('AUTO_RELEASED','SAMPLE','REVIEW','HELD')),
+    risk_findings     JSONB,
+    released_by       TEXT,
+    released_at       TIMESTAMPTZ,
+    
     -- CloudEvent ID of the emitted de.billing.rechnung.erstellt
     ce_id               UUID,
     dispatched_at       TIMESTAMPTZ,
@@ -81,6 +92,9 @@ CREATE INDEX br_outcome       ON billing_records (outcome, lf_mp_id);
 CREATE INDEX br_ce_pending    ON billing_records (lf_mp_id, created_at DESC)
     WHERE ce_id IS NULL AND outcome = 'generated';
 -- Unique: one original per (malo, lf, period, product, tenant) — corrections excluded
+CREATE INDEX br_review_queue ON billing_records (tenant, risk_score DESC)
+    WHERE risk_band IN ('REVIEW','HELD');
+
 CREATE UNIQUE INDEX br_unique_original
     ON billing_records (malo_id, lf_mp_id, period_from, period_to, product_code, tenant)
     WHERE is_correction = false AND sammelrechnung_id IS NULL;

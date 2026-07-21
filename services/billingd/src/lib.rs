@@ -24,6 +24,7 @@ pub mod clients;
 pub mod config;
 pub mod handlers;
 pub mod pg;
+pub mod risk;
 pub mod xrechnung;
 
 pub mod mcp_server;

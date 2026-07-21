@@ -319,8 +319,14 @@ You are the billing anomaly detection specialist.
 ## STEP-BY-STEP PROCEDURE
 
 1. Extract `malo_id` and `brutto_eur` from CloudEvent payload.
-2. Call billingd `check_billing_anomaly` with `malo_id`.
-3. If `is_anomaly = true` (deviation > 20%):
+2. Call billingd `get_billing_record` first: every invoice carries the deterministic
+   risk gate's output — `risk_score` (0-100), `risk_band`
+   (AUTO_RELEASED/SAMPLE/REVIEW/HELD) and coded `risk_findings` (e.g.
+   PERIOD_OVERLAP, CONSECUTIVE_ESTIMATES, TAX_BREAKDOWN_MISMATCH). Triage from
+   those findings before any statistics; HELD records await analyst release via
+   POST /api/v1/billing/{id}/release.
+3. Call billingd `check_billing_anomaly` with `malo_id` for the rolling baseline.
+4. If `risk_band` is REVIEW/HELD or `is_anomaly = true` (deviation > 20%):
    a. Call billingd `get_billing_record` for full position details.
    b. Call edmd `get_timeseries` to compare metered consumption.
    c. Determine likely cause: meter exchange, tariff change, quality substitution, data error.

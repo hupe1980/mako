@@ -298,7 +298,29 @@ async fn bill_one(
     )
     .await?;
 
-    if let Some(ref webhook_url) = cfg.erp_webhook_url {
+    // Same deterministic risk gate as the on-demand endpoint.
+    let assessment = handlers::assess_and_persist_risk(
+        pool,
+        cfg,
+        record_id,
+        &cand.malo_id,
+        &invoice,
+        &rates,
+        from,
+        to,
+    )
+    .await;
+    let held = assessment
+        .as_ref()
+        .is_some_and(|a| cfg.risk.hold_dispatch && a.band == crate::risk::RiskBand::Held);
+
+    if held {
+        tracing::warn!(
+            malo_id = %cand.malo_id, %record_id,
+            score = assessment.as_ref().map(|a| a.score),
+            "billing-run: invoice HELD by risk gate"
+        );
+    } else if let Some(ref webhook_url) = cfg.erp_webhook_url {
         handlers::emit_cloud_event(
             webhook_url,
             cfg.erp_hmac_secret.as_deref(),

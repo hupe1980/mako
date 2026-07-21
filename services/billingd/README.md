@@ -144,6 +144,45 @@ erp_webhook_url = "http://erp:8000/events"
 erp_hmac_secret = "env:BILLINGD_ERP_HMAC_SECRET"
 ```
 
+## Layered billing quality assurance
+
+The platform implements the state-of-the-art layered model — deterministic
+where regulation demands auditability, ML-ready where statistics end:
+
+1. **Rule engine (blocking)** — `energy-billing`'s validation pass: an
+   Error-severity violation (§41b iMSys, missing EPEX prices, §14a
+   double-billing, Ersatzversorgung > 3 months) means the invoice **never
+   exists** (`VALIDATION_BLOCKED`); `assert_valid` pins the arithmetic
+   invariants; the DB uniqueness guard prevents double-billing a period; and
+   metering's V01–V10 + Hampel grades (F blocks billing) guard the inputs.
+2. **Deterministic risk gate (`[risk]`, default on)** — every calculated
+   invoice is scored 0–100 from coded findings: content checks
+   (Σ Steuerbeträge vs gesamtsteuer, valid German VAT rates, negative/zero
+   consumption), engine warnings (estimated readings, Vorjahr deviation
+   > 50 %, USt-Stichtag, §40c lateness, Preisgarantie), and history checks
+   (rolling-baseline deviation, **cross-invoice period overlap/gap**,
+   **≥ 3 consecutive estimate-based invoices**). Bands: 0–19 auto-release,
+   20–49 sample, 50–79 review, **80–100 HELD — not dispatched** until
+   `POST /api/v1/billing/{id}/release`. `GET /api/v1/billing/review-queue`
+   is the analyst work list. Every point on the score is a coded,
+   human-readable finding persisted in `billing_records.risk_findings` —
+   explainability by construction, no post-hoc SHAP needed.
+3. **Statistical/ML analytics (external by design)** — the industry pattern:
+   edmd's Iceberg/S3 archive, Arrow IPC streams and DataFusion SQL are the
+   feed for external ML platforms (Isolation Forests, autoencoders,
+   time-series models); their verdicts can flow back as analyst reviews.
+   No ML runtime lives in the billing core — determinism is the product.
+4. **AI-assisted investigation** — agentd's `billing-anomaly-agent` triages
+   every `de.billing.rechnung.erstellt` event from the persisted
+   `risk_findings` first, then the rolling baseline
+   (`check_billing_anomaly`), and escalates with root-cause taxonomy;
+   `billing-regulatory-guard-agent` independently re-checks §40a/§41/§42.
+
+Inbound invoices get the mirror image: `invoic-checker` recomputes NNE
+invoices line-by-line against PRICAT price sheets (digital-twin
+reconciliation) with Ok/Warn/Dispute outcomes driving
+`gpke.abrechnung.annehmen|ablehnen`.
+
 ## §40b EnWG scheduled billing runs
 
 The config-gated `[billing_runs]` worker sweeps daily (after `run_hour_utc`,

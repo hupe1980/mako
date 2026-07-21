@@ -332,3 +332,134 @@ async fn the_monthly_abrechnungsinfo_is_claimed_exactly_once() {
         .expect("july claim");
     assert!(july);
 }
+
+// ── Deterministic risk gate ───────────────────────────────────────────────────
+
+async fn insert_period(
+    pool: &PgPool,
+    from: time::Date,
+    to: time::Date,
+    brutto: rust_decimal::Decimal,
+) -> Uuid {
+    pg::insert_billing_record(
+        pool,
+        "9910000000002",
+        "51238696781",
+        "9910000000002",
+        "STROM-BASIS",
+        "STROM",
+        from,
+        to,
+        &serde_json::json!({ "_typ": "RECHNUNG" }),
+        brutto / dec!(1.19),
+        brutto,
+    )
+    .await
+    .expect("insert record")
+}
+
+/// The history context feeds the scorer with the rolling baseline, the
+/// previous period end (gap/overlap detection) and the consecutive-estimate
+/// count — all from real SQL.
+#[tokio::test]
+#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+async fn risk_context_reads_baseline_continuity_and_estimates() {
+    let Some(pool) = test_pool("risk_context").await else {
+        return;
+    };
+    let a = insert_period(
+        &pool,
+        date!(2026 - 04 - 01),
+        date!(2026 - 04 - 30),
+        dec!(100),
+    )
+    .await;
+    let b = insert_period(
+        &pool,
+        date!(2026 - 05 - 01),
+        date!(2026 - 05 - 31),
+        dec!(120),
+    )
+    .await;
+
+    // Mark both prior invoices as estimate-based via their persisted findings.
+    for id in [a, b] {
+        pg::set_risk(
+            &pool,
+            id,
+            &billingd::risk::RiskAssessment {
+                score: 15,
+                band: billingd::risk::RiskBand::AutoReleased,
+                findings: vec![billingd::risk::RiskFinding {
+                    code: "ESTIMATED_READING".into(),
+                    weight: 15,
+                    message: "test".into(),
+                }],
+            },
+        )
+        .await
+        .expect("set risk");
+    }
+
+    let ctx = pg::risk_context(&pool, "9910000000002", "51238696781", date!(2026 - 06 - 01))
+        .await
+        .expect("context");
+    assert_eq!(
+        ctx.rolling_avg_brutto_eur,
+        Some(dec!(110.00)),
+        "mean of 100/120"
+    );
+    assert_eq!(
+        ctx.prev_period_to,
+        Some(date!(2026 - 05 - 31)),
+        "continuity anchor"
+    );
+    assert_eq!(ctx.recent_estimated_count, 2, "both priors were estimates");
+}
+
+/// HELD records enter the review queue and can be released exactly once.
+#[tokio::test]
+#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+async fn a_held_record_is_queued_and_released_exactly_once() {
+    let Some(pool) = test_pool("risk_release").await else {
+        return;
+    };
+    let id = insert_period(
+        &pool,
+        date!(2026 - 06 - 01),
+        date!(2026 - 06 - 30),
+        dec!(500),
+    )
+    .await;
+    pg::set_risk(
+        &pool,
+        id,
+        &billingd::risk::RiskAssessment {
+            score: 95,
+            band: billingd::risk::RiskBand::Held,
+            findings: vec![billingd::risk::RiskFinding {
+                code: "PERIOD_OVERLAP".into(),
+                weight: 50,
+                message: "test".into(),
+            }],
+        },
+    )
+    .await
+    .expect("set risk");
+
+    let queue = pg::list_review_queue(&pool, "9910000000002", None, 10)
+        .await
+        .expect("queue");
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].risk_band.as_deref(), Some("HELD"));
+    assert_eq!(queue[0].risk_score, Some(95));
+
+    let released = pg::release_held_record(&pool, "9910000000002", id, "analyst@example")
+        .await
+        .expect("release");
+    assert!(released.is_some(), "first release succeeds");
+    let again = pg::release_held_record(&pool, "9910000000002", id, "analyst@example")
+        .await
+        .expect("second release");
+    assert!(again.is_none(), "a record releases exactly once");
+}

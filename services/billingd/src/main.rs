@@ -150,6 +150,12 @@ async fn main() -> anyhow::Result<()> {
             post(handlers::post_calculate),
         )
         .route("/api/v1/billing", get(handlers::list_records))
+        // Risk gate: analyst work list + release of HELD records
+        .route(
+            "/api/v1/billing/review-queue",
+            get(handlers::get_review_queue),
+        )
+        .route("/api/v1/billing/:id/release", post(handlers::post_release))
         .route("/api/v1/billing/:id", get(handlers::get_record))
         .route(
             "/api/v1/billing/:id/xrechnung",

@@ -325,7 +325,30 @@ pub async fn post_calculate(
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
-    if let Some(ref webhook_url) = cfg.erp_webhook_url {
+    // Deterministic risk gate: score, persist the findings, and hold
+    // dispatch when the band demands an analyst.
+    let assessment = assess_and_persist_risk(
+        &pool,
+        &cfg,
+        record_id,
+        &malo_id,
+        &result,
+        &rates,
+        period_from,
+        period_to,
+    )
+    .await;
+    let held = assessment
+        .as_ref()
+        .is_some_and(|a| cfg.risk.hold_dispatch && a.band == crate::risk::RiskBand::Held);
+
+    if held {
+        tracing::warn!(
+            %record_id, %malo_id,
+            score = assessment.as_ref().map(|a| a.score),
+            "billingd: invoice HELD by risk gate — dispatch requires POST …/release"
+        );
+    } else if let Some(ref webhook_url) = cfg.erp_webhook_url {
         emit_cloud_event(
             webhook_url,
             cfg.erp_hmac_secret.as_deref(),
@@ -348,10 +371,124 @@ pub async fn post_calculate(
             "netto_eur": result.netto_eur,
             "brutto_eur": result.brutto_eur,
             "positions_count": result.positions.len(),
+            "risk": assessment,
+            "held": held,
             "rechnung": result.to_rechnung_json(),
         })),
     )
         .into_response()
+}
+
+/// Score a freshly calculated invoice, persist the assessment, and return it.
+///
+/// Failures degrade to `None` (unscored) rather than failing the billing run —
+/// a broken history query must not block invoice creation; the record simply
+/// stays without a band and dispatches as before.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn assess_and_persist_risk(
+    pool: &PgPool,
+    cfg: &BillingdConfig,
+    record_id: Uuid,
+    malo_id: &str,
+    invoice: &Invoice,
+    rates: &RegulatoryRates,
+    period_from: time::Date,
+    period_to: time::Date,
+) -> Option<crate::risk::RiskAssessment> {
+    if !cfg.risk.enabled {
+        return None;
+    }
+    let ctx = match crate::pg::risk_context(pool, &cfg.tenant, malo_id, period_from).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(%malo_id, error = %e, "billingd: risk context unavailable — record unscored");
+            return None;
+        }
+    };
+    let assessment = crate::risk::assess(
+        &cfg.risk,
+        invoice,
+        rates.mwst_rate,
+        period_from,
+        period_to,
+        &ctx,
+    );
+    if let Err(e) = crate::pg::set_risk(pool, record_id, &assessment).await {
+        tracing::warn!(%record_id, error = %e, "billingd: risk persistence failed");
+    }
+    Some(assessment)
+}
+
+/// `GET /api/v1/billing/review-queue?band=&limit=`
+///
+/// The analyst work list: REVIEW and HELD records, highest risk first, each
+/// carrying its coded findings.
+pub async fn get_review_queue(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<BillingdConfig>>,
+    Query(q): Query<ReviewQueueQuery>,
+) -> impl IntoResponse {
+    match crate::pg::list_review_queue(
+        &pool,
+        &cfg.tenant,
+        q.band.as_deref(),
+        q.limit.unwrap_or(100).clamp(1, 1000),
+    )
+    .await
+    {
+        Ok(rows) => {
+            Json(serde_json::json!({ "count": rows.len(), "records": rows })).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReviewQueueQuery {
+    pub band: Option<String>,
+    pub limit: Option<i64>,
+}
+
+/// `POST /api/v1/billing/{id}/release`
+///
+/// Analyst release of a HELD record: stamps who released it and dispatches
+/// the CloudEvent that the risk gate withheld. 409 when the record is not
+/// currently held.
+pub async fn post_release(
+    claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<BillingdConfig>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match crate::pg::release_held_record(&pool, &cfg.tenant, id, claims.sub()).await {
+        Ok(Some(row)) => {
+            if let Some(ref webhook_url) = cfg.erp_webhook_url {
+                emit_cloud_event(
+                    webhook_url,
+                    cfg.erp_hmac_secret.as_deref(),
+                    &pool,
+                    row.id,
+                    &row.malo_id,
+                    &row.lf_mp_id,
+                    &row.rechnung_json,
+                )
+                .await;
+            }
+            Json(serde_json::json!({
+                "id": row.id,
+                "released_by": claims.sub(),
+                "dispatched": cfg.erp_webhook_url.is_some(),
+            }))
+            .into_response()
+        }
+        Ok(None) => (
+            StatusCode::CONFLICT,
+            "record is not HELD (already released, dispatched, or unscored)",
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
 }
 
 /// `POST /api/v1/billing/{malo_id}/preview` — dry-run, no persist, no CloudEvent.

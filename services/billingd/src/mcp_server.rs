@@ -298,7 +298,11 @@ The XML is BASE64-free — returns the raw XML string.",
     // ── Billing Anomaly Detection (B6 / L1) ──────────────────────────────────
 
     #[tool(
-        description = "AI billing anomaly detection: compare latest invoice against 3-month rolling average for a MaLo. \
+        description = "Statistical anomaly check: compare latest invoice against the rolling average for a MaLo. \
+NOTE: every calculated invoice is also scored inline by the deterministic risk gate — \
+`list_billing_records`/`get_billing_record` expose `risk_score` (0-100), `risk_band` \
+(AUTO_RELEASED/SAMPLE/REVIEW/HELD) and the coded `risk_findings`; HELD records are not \
+dispatched until released via POST /api/v1/billing/{id}/release. \
 Returns deviation percentage, rolling average, and is_anomaly flag. \
 Flags invoices where |deviation| > threshold_pct (default 20%). \
 Use this to detect erroneous invoices before customers complain — powercloud's headline AI feature. \

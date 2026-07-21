@@ -611,6 +611,20 @@ seller_vat_id = "DE123456789"   # BT-31 Seller VAT registration number
 
 ---
 
+## Risk gate (deterministic release scoring)
+
+Every calculated invoice is scored by `billingd::risk` (`[risk]`, default
+on): coded findings — Σ-Steuerbeträge-Abgleich, USt-Satz-Validität,
+Null-/Negativverbrauch, Schätzwert-Ketten (§ 60 Abs. 2 MsbG),
+Perioden-Überlappung/-Lücke zur Vorrechnung, rollende Abweichung — summieren
+zu 0–100. Ab `hold_at` (Standard 80) wird der Versand angehalten:
+`GET /api/v1/billing/review-queue` listet REVIEW/HELD,
+`POST /api/v1/billing/{id}/release` gibt frei und versendet das CloudEvent.
+`risk_score`/`risk_band`/`risk_findings` sind auf jedem Record persistiert
+und in allen MCP-Record-Tools sichtbar. `hold_dispatch = false` = Shadow-Mode.
+
+---
+
 ## §40b scheduled billing runs
 
 The `[billing_runs]` worker (default off) sweeps daily after `run_hour_utc`:

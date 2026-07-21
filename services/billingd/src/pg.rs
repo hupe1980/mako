@@ -34,6 +34,16 @@ pub struct BillingRecordRow {
     pub correction_reason: Option<String>,
     /// FK to the Sammelrechnung this record is grouped under (migration 0002).
     pub sammelrechnung_id: Option<Uuid>,
+    /// Deterministic risk score 0–100 (release gate). NULL = not yet scored.
+    pub risk_score: Option<i16>,
+    /// AUTO_RELEASED | SAMPLE | REVIEW | HELD.
+    pub risk_band: Option<String>,
+    /// Coded findings explaining the score (XAI by construction).
+    pub risk_findings: Option<serde_json::Value>,
+    /// Analyst who released a HELD record.
+    pub released_by: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub released_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
 }
@@ -611,4 +621,137 @@ pub async fn claim_abrechnungsinfo(
     .await
     .context("claim_abrechnungsinfo")?;
     Ok(row.is_some())
+}
+
+// ── Risk scoring persistence ──────────────────────────────────────────────────
+
+/// History context for the deterministic risk scorer.
+pub async fn risk_context(
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+    period_from: Date,
+) -> anyhow::Result<crate::risk::RiskContext> {
+    // Baseline: mean gross of the up-to-3 latest previous invoices (≥2 needed).
+    let rolling: Option<Decimal> = sqlx::query_scalar(
+        r"SELECT CASE WHEN count(*) >= 2 THEN avg(total_brutto_eur) END
+          FROM (SELECT total_brutto_eur
+                FROM billing_records
+                WHERE tenant = $1 AND malo_id = $2
+                  AND is_correction = FALSE AND sammelrechnung_id IS NULL
+                  AND total_brutto_eur IS NOT NULL AND total_brutto_eur > 0
+                  AND period_from < $3
+                ORDER BY period_to DESC
+                LIMIT 3) t",
+    )
+    .bind(tenant)
+    .bind(malo_id)
+    .bind(period_from)
+    .fetch_one(pool)
+    .await
+    .context("risk rolling baseline")?;
+
+    // Continuity: the latest previous invoice's period end.
+    let prev_period_to: Option<Date> = sqlx::query_scalar(
+        r"SELECT max(period_to) FROM billing_records
+          WHERE tenant = $1 AND malo_id = $2
+            AND is_correction = FALSE AND sammelrechnung_id IS NULL
+            AND period_from < $3",
+    )
+    .bind(tenant)
+    .bind(malo_id)
+    .bind(period_from)
+    .fetch_one(pool)
+    .await
+    .context("risk prev period")?;
+
+    // § 60 Abs. 2 MsbG: how many of the latest 3 invoices were estimate-based.
+    let recent_estimated_count: i64 = sqlx::query_scalar(
+        r#"SELECT count(*) FROM (
+              SELECT risk_findings FROM billing_records
+              WHERE tenant = $1 AND malo_id = $2
+                AND is_correction = FALSE AND sammelrechnung_id IS NULL
+                AND period_from < $3
+              ORDER BY period_to DESC LIMIT 3) t
+          WHERE t.risk_findings @> '[{"code": "ESTIMATED_READING"}]'"#,
+    )
+    .bind(tenant)
+    .bind(malo_id)
+    .bind(period_from)
+    .fetch_one(pool)
+    .await
+    .context("risk estimated count")?;
+
+    Ok(crate::risk::RiskContext {
+        rolling_avg_brutto_eur: rolling.map(|d| d.round_kfm(2)),
+        prev_period_to,
+        recent_estimated_count,
+    })
+}
+
+/// Persist a risk assessment on its record.
+pub async fn set_risk(
+    pool: &PgPool,
+    record_id: Uuid,
+    assessment: &crate::risk::RiskAssessment,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r"UPDATE billing_records
+          SET risk_score = $2, risk_band = $3, risk_findings = $4
+          WHERE id = $1",
+    )
+    .bind(record_id)
+    .bind(i16::from(assessment.score))
+    .bind(assessment.band.as_str())
+    .bind(serde_json::to_value(&assessment.findings).unwrap_or_default())
+    .execute(pool)
+    .await
+    .context("set_risk")?;
+    Ok(())
+}
+
+/// Analyst release of a HELD record: stamps the release and returns the row
+/// for dispatch. `None` when the record is not currently HELD.
+pub async fn release_held_record(
+    pool: &PgPool,
+    tenant: &str,
+    record_id: Uuid,
+    released_by: &str,
+) -> anyhow::Result<Option<BillingRecordRow>> {
+    let row: Option<BillingRecordRow> = sqlx::query_as(
+        r"UPDATE billing_records
+          SET released_by = $3, released_at = now()
+          WHERE id = $1 AND tenant = $2 AND risk_band = 'HELD' AND released_at IS NULL
+          RETURNING *",
+    )
+    .bind(record_id)
+    .bind(tenant)
+    .bind(released_by)
+    .fetch_optional(pool)
+    .await
+    .context("release_held_record")?;
+    Ok(row)
+}
+
+/// The analyst review queue: REVIEW + HELD records, highest risk first.
+pub async fn list_review_queue(
+    pool: &PgPool,
+    tenant: &str,
+    band: Option<&str>,
+    limit: i64,
+) -> anyhow::Result<Vec<BillingRecordRow>> {
+    let rows: Vec<BillingRecordRow> = sqlx::query_as(
+        r"SELECT * FROM billing_records
+          WHERE tenant = $1
+            AND ($2::text IS NULL AND risk_band IN ('REVIEW','HELD') OR risk_band = $2)
+          ORDER BY risk_score DESC NULLS LAST, created_at DESC
+          LIMIT $3",
+    )
+    .bind(tenant)
+    .bind(band)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("list_review_queue")?;
+    Ok(rows)
 }
