@@ -47,7 +47,7 @@ graph TB
         obsd[":8480 obsd\nprocess projections · KPI\n§20 EnWG parity report"]
         nis[":9680 nis-syncd\nNIS/GIS grid topology sync\nstateless · lifts STP to ≥95%"]
         mabis[":8880 mabis-syncd\nMaBiS Summenzeitreihe\nMSCONS 13003 · 10. Werktag"]
-        einsd[":9180 einsd\nEEG/KWKG settlement\n9 schemes · 324 tests"]
+        einsd[":9180 einsd\nEEG/KWKG settlement\n9 schemes · 339 tests"]
     end
 
     subgraph lf_billing ["Retail Billing (LF)"]

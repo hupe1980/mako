@@ -30,6 +30,8 @@ psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL
     GRANT ALL PRIVILEGES ON DATABASE accountingd TO "$POSTGRES_USER";
     CREATE DATABASE vertragd;
     GRANT ALL PRIVILEGES ON DATABASE vertragd TO "$POSTGRES_USER";
+    -- agentd is optional in this demo (needs an external LLM API key);
+    -- the database is pre-created so it can be started alongside if desired.
     CREATE DATABASE agentd;
     GRANT ALL PRIVILEGES ON DATABASE agentd TO "$POSTGRES_USER";
 EOSQL

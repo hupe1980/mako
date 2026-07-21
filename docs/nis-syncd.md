@@ -7,6 +7,7 @@ description: >-
   Operator guide for nis-syncd — the stateless NIS/GIS grid topology import
   adapter that pushes malo_grid records into marktd, lifting processd NB STP
   from ~80% to ≥95%.
+mermaid: true
 ---
 
 # `nis-syncd` Operator Guide

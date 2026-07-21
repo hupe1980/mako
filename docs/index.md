@@ -8,6 +8,7 @@ description: >-
   automated APERAK deadline enforcement, 17 production microservices, BO4E ERP webhooks,
   and LanceDB-powered AI orchestration.
 permalink: /
+mermaid: true
 ---
 
 <!-- ── Hero ─────────────────────────────────────────────────────────────────── -->
@@ -167,7 +168,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       including Direktvermarktung MarketPremium, KWKG Zuschlag, and Post-EEG Spot.
       Version-aware <strong>§51 Negativpreisregel</strong> (EEG 2017/2021/2023 + Bestandsschutz),
       §52 Pflichtzahlungen (cumulative from violation start), §100 auto-override, §36k Korrekturfaktor.
-      Pure <code>eeg-billing</code> crate — <strong>324 tests</strong>, zero I/O.
+      Pure <code>eeg-billing</code> crate — <strong>339 tests</strong>, zero I/O.
     </p>
     <a href="{{ '/einsd' | relative_url }}">einsd guide →</a>
   </div>
@@ -183,7 +184,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       §41b iMSys guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label;
       historic levy lookups (incl. 2022 0-rate); §41a EPEX; §41b enforcement;
       XRechnung 3.0 / ZUGFeRD 2.3 (EN16931, B2G mandate 01.01.2027).
-      Pure <code>energy-billing</code> crate — <strong>160 tests</strong>, zero I/O, no rubo4e dep.
+      Pure <code>energy-billing</code> crate — <strong>191 tests</strong>, zero I/O, no rubo4e dep.
     </p>
     <a href="{{ '/billingd' | relative_url }}">billingd guide →</a>
   </div>
@@ -360,7 +361,7 @@ Iceberg REST catalog
 Arrow IPC · GDPR Art. 17"]
         einsd["einsd :9180
 EEG/KWKG settlement
-9 schemes · 324 tests"]
+9 schemes · 339 tests"]
         obsd["obsd :8480
 KPI reports
 §20 EnWG parity"]
@@ -379,7 +380,7 @@ Product catalog
 EPEX §41a"]
         billingd["billingd :9280
 Product typed enum
-12 categories · 160 tests
+12 categories · 191 tests
 VPP auto-billing webhook
 XRechnung 3.0"]
         accountingd["accountingd :9380
@@ -444,7 +445,7 @@ println!("PID {pid}: GPKE Lieferbeginn Strom");
 **Local development** — run services directly, infra in Docker (`cargo-watch` required):
 
 ```bash
-just infra-up            # start postgres, all 13 databases pre-created
+just infra-up            # start postgres, all 14 databases pre-created
 
 just dev marktd          # hot-reload — cargo watch -x "run -p marktd"
 just dev processd        # separate terminal per service
@@ -525,7 +526,7 @@ mako consists of 17 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/einsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">einsd</span>
     <span class="mako-service-card__port">:9180</span>
-    <span class="mako-service-card__desc">Einspeiser registry. 9 EEG/KWKG settlement schemes. §51/§51a/§51b Negativpreisregel. §100 Bestandsschutz auto-override. §25 Abs. 1 Satz 3 anteilige Zahlung. §26 Fälligkeitsdatum. §19 EInsMan compensation. §21b Veräußerungsform Wechsel. §53b/§54 regional+auction reductions. § 147 AO / GoBD correction receipts. derive_settlement_state auto-update. Repowering §22. <strong>324 eeg-billing tests</strong>. 14-tool MCP. §3 Nr. 1 Direktvermarktung compliance check. §44b Biogas quota monitoring.</span>
+    <span class="mako-service-card__desc">Einspeiser registry. 9 EEG/KWKG settlement schemes. §51/§51a/§51b Negativpreisregel. §100 Bestandsschutz auto-override. §25 Abs. 1 Satz 3 anteilige Zahlung. §26 Fälligkeitsdatum. §19 EInsMan compensation. §21b Veräußerungsform Wechsel. §53b/§54 regional+auction reductions. § 147 AO / GoBD correction receipts. derive_settlement_state auto-update. Repowering §22. <strong>339 eeg-billing tests</strong>. 14-tool MCP. §3 Nr. 1 Direktvermarktung compliance check. §44b Biogas quota monitoring.</span>
   </a>
   <a href="{{ '/obsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">obsd</span>
@@ -544,7 +545,7 @@ mako consists of 17 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/tarifbd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">tarifbd</span>
     <span class="mako-service-card__port">:9080</span>
-    <span class="mako-service-card__desc">User-defined product catalog. 13 energy categories. EPEX Spot prices for §41a. MaLo→product assignment.</span>
+    <span class="mako-service-card__desc">User-defined product catalog. 13 energy categories (incl. catalog-only BUNDLE; billingd bills 12). EPEX Spot prices for §41a. MaLo→product assignment.</span>
   </a>
   <a href="{{ '/billingd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">billingd</span>
@@ -702,7 +703,7 @@ Beyond the production services, mako exposes reusable Rust libraries:
 | [`mako-engine`](https://crates.io/crates/mako-engine) | ✅ crates.io | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines |
 | `metering` | workspace | German metering domain — `MeterInterval`, validation V01–V10, substitution (§ 60 Abs. 2 MsbG), Hampel scoring, resampling, virtual meters, SMGW/CLS (§14a), 177 tests |
 | `mako-edm` | workspace | Energy Data Management types — `MeterRead`, `QualityFlag` (8 variants), `BilanzzuordnungRecord`, `GasQualityData` (PID 13007), correction records (§ 147 AO / GoBD) |
-| `eeg-billing` | workspace | Pure EEG/KWKG settlement — 9 schemes, §51 Negativpreisregel, §52 Pflichtzahlungen, §36k Wind Korrekturfaktor, `InbetriebnahmeTyp` lifecycle, proptest invariants, **324 tests** |
+| `eeg-billing` | workspace | Pure EEG/KWKG settlement — 9 schemes, §51 Negativpreisregel, §52 Pflichtzahlungen, §36k Wind Korrekturfaktor, `InbetriebnahmeTyp` lifecycle, proptest invariants, **339 tests** |
 | `energy-billing` | workspace | Retail energy billing engine — 12 categories, HT/NT ToU, RLM demand charge, §54 EnergieStG exemption, historic levy rates (`stromsteuer_for_year`, `energiesteuer_gas_for_year`), §14a Modul 1/3, XRechnung 3.0 |
 | `grid-billing` | workspace | Role-neutral grid **settlement** engine — `GridSettlement` (+ `CalculationTrace`, `LegalReference`, `TariffSource` per position), `Sparte` (Gas/Strom), `KaKlasse`, `calculate_reversal()`, `validate_*_input()`; zero BO4E dep, no float money |
 | `invoic-checker` | workspace | INVOIC plausibility — 6 checks, ToU-aware tariff match |

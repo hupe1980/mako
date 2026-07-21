@@ -611,6 +611,28 @@ seller_vat_id = "DE123456789"   # BT-31 Seller VAT registration number
 
 ---
 
+## Invoice content & arithmetic guarantees
+
+- **Rounding has one authority**: kaufmännisches Runden (DIN 1333, half away
+  from zero) via `billing::RoundingStrategy::MidpointAwayFromZero` — the same
+  strategy the `Amount` fixed-point core applies internally.
+  `energy_billing::round_money`/`.round_kfm(dp)` delegate to it; bare
+  `Decimal::round_dp` (banker's) is banned from money paths.
+- **Rechnungsnummer scheme (§ 14 Abs. 4 Nr. 4 UStG)**: auto-generated
+  numbers embed the product code — `BILL-{malo}-{product}-{period_from}` —
+  so two products billed for the same MaLo and period never collide;
+  corrections use `KORR-{original}` and a second correction of the same
+  original is refused (`409`).
+- **Schlussrechnung (§40c EnWG)**: `POST …/calculate` with
+  `"schlussrechnung": true` renders `rechnungsart = SCHLUSSRECHNUNG` and
+  settles the paid advances passed as `"abschlaege": [{datum, betrag_eur,
+  ust_satz}]` — each at the VAT rate it was invoiced at (§ 14 Abs. 5 UStG).
+- **Verbraucherinformationen (§40 Abs. 2 EnWG)**: every `rechnung_json`
+  carries the supplier identity from config plus the statutory hints
+  (Schlichtungsstelle Energie § 111b EnWG, BNetzA Verbraucherservice,
+  Energieberatung, § 41c Wechselhinweis) — the engine defaults guarantee
+  they are never silently absent.
+
 ## Risk gate (deterministic release scoring)
 
 Every calculated invoice is scored by `billingd::risk` (`[risk]`, default

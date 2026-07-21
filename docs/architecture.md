@@ -7,6 +7,7 @@ description: >-
   mako system architecture: event-sourced process runtime, AS4/REST transport,
   ERP integration via CloudEvents 1.0, API-Webdienste Strom, and all seventeen
   companion daemons (makod, marktd, processd, invoicd, netzbilanzd, sperrd, edmd, obsd, nis-syncd, einsd, tarifbd, billingd, accountingd, portald, vertragd, agentd, mabis-syncd).
+mermaid: true
 ---
 
 # Architecture
@@ -221,8 +222,8 @@ Each is independently testable and suitable for crates.io publication.
 | `mako-engine` | Event-sourced process runtime | `Workflow`, `EventStore`, `OutboxStore`, `DeadlineStore` |
 | `mako-markt` | Market data domain types + repo traits | `MaloId`, `MeloId`, `MarktpartnerId`, `VersorgungsStatus` |
 | `grid-billing` | NNE/KA/MMM/MSB grid **settlement** engine | `calculate_nne_invoice`, `GridSettlement` (+ `CalculationTrace`, `LegalReference`); `Sparte` drives Gas/Strom refs; `calculate_reversal()`; no rubo4e dep; `into_rechnung()` in service layer |
-| `energy-billing` | Pure multi-product retail energy billing (LF) | `Product` typed enum (12 categories, serde-tagged); `BillingEngine`/`BillingProvider` pipeline; `ControllableLoadProvider` (§14a); `validate()` + `bill_batch()`; `Invoice.warnings` + `§41b` guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label; HT/NT (`billing::TimeOfUsePricing`); block tariffs (`billing::TariffSchedule`); **RLM demand charge** (`leistungspreis_strom_ct_per_kw_month`); **gas §54 exemption**; **historic levy rates**; §41a EPEX; `Invoice::merge()`, `Invoice::allocate_proportionally()`; `eeg` optional feature; no `rubo4e` dep; **160 tests**; zero I/O |
-| `eeg-billing` | Pure EEG/KWKG feed-in settlement (NB) | `calculate_settlement`, 9 settlement schemes, §51/§52 rules, `InbetriebnahmeTyp`, proptest invariants, **324 tests** |
+| `energy-billing` | Pure multi-product retail energy billing (LF) | `Product` typed enum (12 categories, serde-tagged); `BillingEngine`/`BillingProvider` pipeline; `ControllableLoadProvider` (§14a); `validate()` + `bill_batch()`; `Invoice.warnings` + `§41b` guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label; HT/NT (`billing::TimeOfUsePricing`); block tariffs (`billing::TariffSchedule`); **RLM demand charge** (`leistungspreis_strom_ct_per_kw_month`); **gas §54 exemption**; **historic levy rates**; §41a EPEX; `Invoice::merge()`, `Invoice::allocate_proportionally()`; `eeg` optional feature; no `rubo4e` dep; **191 tests**; zero I/O |
+| `eeg-billing` | Pure EEG/KWKG feed-in settlement (NB) | `calculate_settlement`, 9 settlement schemes, §51/§52 rules, `InbetriebnahmeTyp`, proptest invariants, **339 tests** |
 | `metering` | German energy metering domain | `MeterInterval`, `aggregate`, `fill_gaps` / `fill_gaps_with_config` (§ 60 Abs. 2 MsbG — `FillGapsConfig` supports `PriorPeriodAverage`), `gas_m3_to_kwh_hs`, `score_intervals` (Hampel A/B/C/F) |
 | `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
 | `netz-checker` | NB Anmeldung 6-check validation | `check_anmeldung`, ERC A02/A05/A06/A97/A99 |
@@ -237,9 +238,9 @@ graph TD
     subgraph pure ["Pure calculation crates (zero I/O)"]
         billing["billing 0.7 (crates.io)\nTariffSchedule · TimeOfUsePricing\nDynamicPricing · prorate\nVAT breakdown · AdvancePayment"]
         metering["metering\nMeterInterval · fill_gaps (§17)\nHampel quality · gas_m3_to_kwh_hs"]
-        eeg["eeg-billing\n9 EEG/KWKG schemes\n§51/§52/§36k · 324 tests"]
+        eeg["eeg-billing\n9 EEG/KWKG schemes\n§51/§52/§36k · 339 tests"]
         grid["grid-billing\nNNE · KA · MMM · MSB\nGridSettlement + CalculationTrace\nno rubo4e dep"]
-        energy["energy-billing\nProduct (12 typed variants)\nBillingEngine · validate/bill/batch\nControllableLoadProvider (§14a)\n§41b iMSys guard\nInvoice.warnings + PositionTrace\n160 tests · zero I/O · no rubo4e"]
+        energy["energy-billing\nProduct (12 typed variants)\nBillingEngine · validate/bill/batch\nControllableLoadProvider (§14a)\n§41b iMSys guard\nInvoice.warnings + PositionTrace\n191 tests · zero I/O · no rubo4e"]
     end
 
     subgraph daemons ["Production daemons"]
@@ -776,12 +777,12 @@ test files that `use {service_name}::*` without any database or HTTP infrastruct
 | AS4 inbound routing | Integration | `e2e_ahb_conformance.rs` — real fixture EDIFACT → full pipeline |
 | EEG settlement formulas | Unit (no DB) | `cargo test -p einsd --test settlement_tests` (18 tests) |
 | IBAN mod-97 algorithm | Unit (no DB) | `cargo test -p accountingd --test unit_tests` (**71 tests**: IBAN, FIFO open-items, GDPR anonymization, auto-dunning, decimal precision) |
-| Billing arithmetic | Unit (no DB) | `cargo test -p energy-billing --all-features` (**160 tests**: unit + proptest + golden master) |
+| Billing arithmetic | Unit (no DB) | `cargo test -p energy-billing --all-features` (**191 tests**: unit + proptest + golden master) |
 
 Run all pure-logic tests without a database:
 
 ```bash
-cargo test -p energy-billing --all-features  # 160 tests: all categories, §41b guard, §54 EnergieStG, historic rates
+cargo test -p energy-billing --all-features  # 191 tests: all categories, §41b guard, §54 EnergieStG, historic rates
            -p accountingd --test unit_tests \
            -p einsd --test settlement_tests
 ```

@@ -9,6 +9,7 @@ description: >
   (Redispatch 2.0), MaLo grid topology (NB STP), trading-partner management,
   price sheets, Cedar ABAC, EventBus fan-out.
   PostgreSQL-backed, OIDC-secured, OpenAPI 3.1, CloudEvents 1.0 outbound webhooks.
+mermaid: true
 ---
 
 # `marktd` Operator Guide
@@ -29,7 +30,7 @@ Beyond data storage, `marktd` includes:
 
 - **EventBus fan-out** — enriches inbound `de.mako.*` events with `marktrole` and fans out
   to all registered subscribers (ERP, `processd`, `invoicd`, `obsd`) via HMAC-signed webhooks.
-- **VersorgungsStatus derivation** — three-phase lifecycle: `announce_lf_next` (55001/44001 `process.initiated`), `confirm_supply` (55003/44003 `process.completed`), `end_supply` (55013/44013 `process.completed`). Tracks `lf_mp_id_next` + `lf_next_lieferbeginn` (pending transition), appends every change to `versorgungsstatus_history`, and supports `?at=YYYY-MM-DD` point-in-time queries.
+- **VersorgungsStatus derivation** — four-phase lifecycle: `announce_lf_next` (55001/44001 `process.initiated`), `confirm_supply` (55003/44003 `process.completed`), `end_supply` (55013/44013 `process.completed`), `clear_lf_next` (55004/44004 — a cancelled/rejected Lieferbeginn resets the announced future supplier). Tracks `lf_mp_id_next` + `lf_next_lieferbeginn` (pending transition), appends every change to `versorgungsstatus_history`, and supports `?at=YYYY-MM-DD` point-in-time queries.
 
 `marktd` is a **pure data hub**. Automated Anmeldung STP decisions are the
 responsibility of `processd`'s NB module, which subscribes to `marktd`'s EventBus
@@ -174,12 +175,16 @@ tenant_id = "9900357000004"        # required — operator primary MP-ID
 
 [webhook]
 inbound_path   = "/api/v1/events"             # default
-inbound_secret = "env:MAKOD_WEBHOOK_SECRET"   # optional; omit for dev
+inbound_secret = "env:MAKOD_WEBHOOK_SECRET"   # required unless allow_insecure_no_auth
 
-# [oidc]            # omit to disable auth (dev only — never omit in production)
-# issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
-# audience = "api://mako-marktd"
-# jwks_refresh_secs = 300
+[oidc]              # required unless allow_insecure_no_auth
+issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+audience = "api://mako-marktd"
+jwks_refresh_secs = 300
+
+# marktd is fail-closed: without [oidc] AND webhook.inbound_secret it refuses
+# to start. The insecure dev posture must be requested by name:
+# allow_insecure_no_auth = true
 
 # [otel]            # omit to disable tracing
 # endpoint = "http://otel-collector:4317"
@@ -932,7 +937,12 @@ X-Mako-Signature: <hmac-sha256-hex>
 ### Signature verification
 
 `X-Mako-Signature` is an HMAC-SHA256 hex digest over the raw request body
-computed with the `secret` registered in the subscription:
+computed with the `secret` registered in the subscription.
+
+The subscription secret is an **integrity** key stored in plaintext in
+`subscriptions.webhook_secret` — protect it with least-privilege database
+grants and storage-level encryption; it never protects confidentiality of
+customer data.
 
 ```python
 import hmac, hashlib
@@ -1094,14 +1104,24 @@ Migrations have not run. Check `DATABASE_URL` and PostgreSQL connectivity.
 `marktd` exposes an MCP (Model Context Protocol) Streamable HTTP server at
 `POST /mcp` / `GET /mcp`. The same OIDC + Cedar authorization layer applies.
 
-**Current tools:**
+**Tools (18)** — plus `get_info` for a self-describing capability summary:
 
 | Tool | Description |
 |---|---|
-| `get_malo` | Fetch a MaLo by ID — returns MaLoId, Sparte, Netzgebiet, active contract, NB entry |
-| `list_partners` | List registered market partners (GLN, name, roles) |
-| `get_preisblatt` | Fetch the price sheet valid for a given NB GLN and date |
-| `get_versorgungsstatus` | Read supply state for a MaLo (LieferStatus, LF GLN, NB GLN, dates) |
+| `get_malo` / `list_malo` | Fetch one MaLo / list MaLos (Sparte, Netzgebiet, NB) |
+| `get_melo` / `get_melo_standorteigenschaften` | MeLo record / site properties |
+| `get_partner` / `list_partners` | Market-partner registry (MP-ID, name, roles) |
+| `get_preisblatt` | Price sheet for an NB MP-ID and date (Netznutzung) |
+| `list_pricat_versions` / `dispatch_pricat` | PRICAT version history / dispatch |
+| `get_versorgungsstatus` / `get_versorgungsstatus_history` / `get_versorgung_at` | Supply state — current, history, point-in-time |
+| `get_lokationszuordnung` | B5 location-graph edges (MaLo↔MeLo↔NeLo↔SR/TR) |
+| `get_nb_contract` | NB contract record for a MaLo |
+| `get_nb_energiemix` | §42 EnWG grid-area energy mix |
+| `get_correlation` | Process correlation for a MaLo |
+| `get_technische_ressource` / `get_steuerbare_ressource` | §14a device registry |
+
+**Prompts (4):** `lookup_malo`, `versorgungswechsel`, `investigate_supply_gap`,
+`grid_topology` — guided multi-tool investigations for LLM clients.
 
 ---
 
@@ -1120,6 +1140,7 @@ A Lieferantenwechsel spans three distinct phases, each triggering a targeted par
 | **Announce** | `process.initiated` | 55001 / 44001 | `announce_lf_next` | Sets `lf_mp_id_next` (WHO) + `lf_next_lieferbeginn` (WHEN). Does **not** change `lieferstatus`. |
 | **Confirm** | `process.completed` | 55003 / 44003 | `confirm_supply` | Atomic SQL: `lf_mp_id ← lf_mp_id_next`, `lieferbeginn ← lf_next_lieferbeginn`, `lieferstatus = Beliefert`, clears `lf_mp_id_next`. |
 | **End** | `process.completed` | 55013 / 44013 | `end_supply` | `lieferstatus = Unbeliefert`, clears `lf_mp_id`/`lieferbeginn` — preserves `lf_mp_id_next` if another transition is already announced. |
+| **Clear** | any | 55004 / 44004 | `clear_lf_next` | Lieferbeginn cancelled/rejected: resets `lf_mp_id_next` + `lf_next_lieferbeginn` so no consumer acts on a switch that will not happen. Idempotent — a no-op when nothing is announced. |
 
 All three operations are idempotent under at-least-once EventBus delivery.
 

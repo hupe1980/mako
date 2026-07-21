@@ -21,7 +21,7 @@ remote_theme: just-the-docs/just-the-docs@v0.11.0
 # ── Appearance ────────────────────────────────────────────────────────────────
 color_scheme: light   # "light" | "dark" — users can toggle in sidebar
 logo: "/assets/img/mako-logo.svg"
-favicon_ico: "/assets/img/favicon.ico"
+favicon_ico: "/assets/img/mako-logo.svg"
 
 # ── Navigation ────────────────────────────────────────────────────────────────
 # Navigation order is controlled by `nav_order` front matter on each page.
@@ -125,4 +125,4 @@ defaults:
       path: ""
     values:
       layout: default
-      image: /assets/img/og-card.png
+      image: /assets/img/mako-logo.svg

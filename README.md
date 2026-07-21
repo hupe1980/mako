@@ -33,27 +33,40 @@ flowchart LR
         MAKOD["makod<br/>AS4 sign+encrypt · UNB…UNZ<br/>signed receipts · PID router"]
         PROCESSD["processd<br/>STP decisions"]
         MARKTD["marktd<br/>Market Data Hub"]
+        NIS["nis-syncd<br/>NIS/GIS topology"]
+        SPERRD["sperrd<br/>Sperrung tracking"]
     end
 
     subgraph Settlement["Settlement & billing"]
         EDMD["edmd<br/>meter data · § 60 Abs. 2 MsbG"]
         NETZB["netzbilanzd<br/>NNE · MMM"]
         EINSD["einsd<br/>EEG/KWKG"]
-        BILLINGD["billingd<br/>retail billing engine"]
+        BILLINGD["billingd<br/>retail billing · risk gate"]
+        INVOICD["invoicd<br/>INVOIC checking"]
+        MABIS["mabis-syncd<br/>MaBiS 13003"]
+        TARIFBD["tarifbd<br/>product catalog · EPEX"]
     end
 
     subgraph Business["Customer & operations"]
-        VERTRAGD["vertragd<br/>contracts"]
+        VERTRAGD["vertragd<br/>contracts · §40b cadence"]
         ACCOUNTINGD["accountingd<br/>FI-CA ledger"]
+        PORTALD["portald<br/>customer portal"]
+        OBSD["obsd<br/>BNetzA KPIs"]
         AGENTD["agentd<br/>29 LLM specialists"]
         ERP["ERP / operator systems"]
     end
 
     MP <-->|"AS4/ebMS3 · EDIFACT"| MAKOD
     MAKOD --> PROCESSD --> MARKTD
-    MARKTD --> EDMD --> NETZB & EINSD & BILLINGD
+    NIS --> MARKTD
+    MARKTD --> EDMD --> NETZB & EINSD & BILLINGD & MABIS
+    MAKOD --> INVOICD
+    TARIFBD --> BILLINGD
     BILLINGD --> ACCOUNTINGD
     VERTRAGD --> BILLINGD
+    PROCESSD --> SPERRD
+    EDMD & VERTRAGD --> PORTALD
+    MAKOD -.->|"de.mako.*"| OBSD
     MAKOD & BILLINGD & EDMD -.->|"CloudEvents"| AGENTD
     AGENTD -.->|"de.agent.decision.made"| ERP
     ACCOUNTINGD --> ERP
@@ -86,8 +99,8 @@ flowchart LR
 | Crate / service | Purpose |
 |---|---|
 | `grid-billing` | Role-neutral German grid **settlement** engine — `calculate_nne_invoice`, `calculate_mmm_invoice`, `calculate_msb_invoice`, `calculate_reversal`; returns `GridSettlement` (no BO4E dep); every position carries `CalculationTrace` with `LegalReference`s (StromNEV §17/§21, GasNEV §14, KAV §2, §14a EnWG, ARegV) and `TariffSource`; `Sparte` enum drives Gas vs. Strom legal refs automatically; `KaKlasse` annotates KAV tier; `ValidationResult` pre-calculation validation; zero I/O |
-| `eeg-billing` | Pure EEG/KWKG feed-in settlement library — `calculate_settlement` for all 9 settlement schemes (`SettlementScheme + TariffSource`, EEG 2000–2023 + KWKG 2023); §51 Negativpreisregel (version-aware: EEG 2017/2021/2023 thresholds + Bestandsschutz); §51a Verlängerungsanspruch; §52 Pflichtzahlungen (€10/kW) + §52 Abs. 6 Netting; §20 Abs. 3 Managementprämie; §23a quarterly degression; §36k Wind Korrekturfaktor; §24 multi-block `CapacityBlock`; `SettlementPeriodState` lifecycle state machine; 324 tests; zero float money; no I/O |
-| `energy-billing` | Retail energy billing engine (LF role) — `Product` typed enum (12 categories, serde-tagged); per-category typed structs (`ElectricityProduct`, `GasProduct`, …); `ControllableLoadProvider` for §14a; `BillingEngine.validate()` + `bill_batch()`; `Invoice.warnings`; §41b iMSys guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label; RLM demand charge; §54 EnergieStG exemption; historic levy lookups; §41a EPEX; HT/NT ToU; XRechnung 3.0 / ZUGFeRD 2.3; **160 tests**; zero I/O; no `rubo4e` dep |
+| `eeg-billing` | Pure EEG/KWKG feed-in settlement library — `calculate_settlement` for all 9 settlement schemes (`SettlementScheme + TariffSource`, EEG 2000–2023 + KWKG 2023); §51 Negativpreisregel (version-aware: EEG 2017/2021/2023 thresholds + Bestandsschutz); §51a Verlängerungsanspruch; §52 Pflichtzahlungen (€10/kW) + §52 Abs. 6 Netting; §20 Abs. 3 Managementprämie; §23a quarterly degression; §36k Wind Korrekturfaktor; §24 multi-block `CapacityBlock`; `SettlementPeriodState` lifecycle state machine; 339 tests; zero float money; no I/O |
+| `energy-billing` | Retail energy billing engine (LF role) — `Product` typed enum (12 categories, serde-tagged); per-category typed structs (`ElectricityProduct`, `GasProduct`, …); `ControllableLoadProvider` for §14a; `BillingEngine.validate()` + `bill_batch()`; `Invoice.warnings`; §41b iMSys guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label; RLM demand charge; §54 EnergieStG exemption; historic levy lookups; §41a EPEX; HT/NT ToU; XRechnung 3.0 / ZUGFeRD 2.3; **191 tests**; zero I/O; no `rubo4e` dep |
 | `metering` | German energy metering domain library — `MeterInterval`, Gas m³→kWh_Hs (§25 Nr. 4 MessEV / DVGW G 685 incl. `G685Rounding`); billing period aggregation; SLP/RLM/iMSys classification; BDEW 2025 load profiles (H25/G25/L25/P25/S25) + Dynamisierung; Zählzeitdefinition resolution (§14a); §29/§45 MsbG rollout obligations; Hampel quality scoring; V01–V10 validation engine (incl. plant-capacity ceiling); virtual meters (§42b EnWG GGV Solarpaket I); BSI TR-03109 `SmgwSession`/`ClsChannel`; § 60 Abs. 2 MsbG Jahresprognose with confidence bounds; zero I/O, no async, no float money |
 | `invoic-checker` | INVOIC plausibility — 6 checks (period validity, position arithmetic, document total, tariff match ToU-aware, tariff found, MMM settlement price check) |
 | `netz-checker` | NB Anmeldung validation — 6 deterministic checks, ERC A02/A05/A06/A97/A99; no I/O |
@@ -102,13 +115,13 @@ flowchart LR
 | `invoicd` | `:8280` | LF | INVOIC plausibility-check — 6 checks, auto-settle/dispute, § 147 AO / GoBD receipts |
 | `netzbilanzd` | `:8680` | NB | NNE/KA/MMM/MSB/AWH billing — generates INVOIC 31001/31002/31005/31009/31011, full REMADV lifecycle, §14a Modul 2 ToU, §42a GGV, 13-tool MCP server |
 | `sperrd` | `:8780` | NB | Sperrung execution tracking — IFTSTA 21039 auto-dispatch, `GET /stats` compliance snapshot, 5-tool MCP server |
-| `edmd` | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest, Hampel quality scoring, V01–V10 validation, virtual meters (§42b GGV), § 60 Abs. 2 MsbG Jahresprognose, Iceberg/S3 OLAP, 15-tool MCP server |
+| `edmd` | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest (optional per-message HMAC), Hampel quality scoring, V01–V10 validation, virtual meters (§42b GGV), § 60 Abs. 2 MsbG Jahresprognose **and Schätzwert-Bestätigungsschleife** (estimated-reading confirmation tracking with overdue escalation), §22 EnWG Netzverlust indicator, Iceberg/S3 OLAP, 15-tool MCP server |
 | `mabis-syncd` | `:8880` | ÜNB/NB | MaBiS Summenzeitreihen (MSCONS 13003) — aggregates per-MaLo Lastgang from edmd; submits to BIKO on the 10. Werktag; Erstaufschlag 1.–10. WT / Clearing 11.–30. WT / KBKA windows per BK6-24-174 Anlage 3 §3.10 |
 | `einsd` | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 9 settlement schemes, §52 sanctions, §51 neg-price, 14 MCP tools + 6 prompts |
 | `obsd` | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, automated deadline computation, `GET /api/v1/audit/bnetza-report` |
 | `nis-syncd` | `:9680` | NB | NIS/GIS grid topology import — concurrent sync, drift detection, `check_malo_grid` MCP tool |
 | `tarifbd` | `:9080` | LF | Product & Tariff Catalog — **13 categories** (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/SHARING §42c); OIDC/JWT auth; `product_status` DRAFT/PUBLISHED workflow; §42d comparison portal feed (ETag-cached, BO4E `Tarifinfo`); EPEX Spot for §41a; B2B Angebote ANGELEGT→ANGENOMMEN; **14-tool MCP server + 3 prompts** |
-| `billingd` | `:9280` | LF | Energy Billing Engine — **all commercial prices user-defined in `tarifbd`**; pure calculation via `energy-billing` crate (**160 tests**); `STROM` (SLP/RLM Eintarif/HT/NT; `leistungspreis_strom_ct_per_kw_month` demand charge; §14a Modul 1/3 via `ControllableLoadProvider`; §41b iMSys guard); `GAS` (§25 Nr. 4 MessEV Brennwertkorrektur, Energiesteuer, **§54 KWK exemption**, BEHG CO₂, RLM Leistungspreis, indexed TTF/NCG); `WAERME`; `SOLAR` §42b/§42a; `EEG`/`EINSPEISUNG`; §41a EPEX dynamic; **§41b iMSys enforcement**; `StromsteuerBefreiung` typed enum (§9 Nr. 1-5); `EnergieQuellen` CO₂ label; `Invoice.warnings`; **historic levy lookups** (`stromsteuer_for_year`, `energiesteuer_gas_for_year` incl. 2022 0-rate); **VPP auto-billing** (`de.vpp.dispatch.confirmed` → `Rechnung`, RED III Art. 17); XRechnung 3.0 / ZUGFeRD 2.3 (EN16931); **12 MCP tools** |
+| `billingd` | `:9280` | LF | Energy Billing Engine — **all commercial prices user-defined in `tarifbd`**; pure calculation via `energy-billing` crate (**191 tests**); `STROM` (SLP/RLM Eintarif/HT/NT; `leistungspreis_strom_ct_per_kw_month` demand charge; §14a Modul 1/3 via `ControllableLoadProvider`; §41b iMSys guard); `GAS` (§25 Nr. 4 MessEV Brennwertkorrektur, Energiesteuer, **§54 KWK exemption**, BEHG CO₂, RLM Leistungspreis, indexed TTF/NCG); `WAERME`; `SOLAR` §42b/§42a; `EEG`/`EINSPEISUNG`; §41a EPEX dynamic; **§41b iMSys enforcement**; `StromsteuerBefreiung` typed enum (§9 Nr. 1-5); `EnergieQuellen` CO₂ label; `Invoice.warnings`; **historic levy lookups** (`stromsteuer_for_year`, `energiesteuer_gas_for_year`; commodity-aware VAT history incl. the 7 % gas/Fernwärme window 10/2022–03/2024); **VPP auto-billing** (`de.vpp.dispatch.confirmed` → `Rechnung`, RED III Art. 17); XRechnung 3.0 / ZUGFeRD 2.3 (EN16931); **deterministic risk gate** (banded 0–100 scoring, HELD dispatch block + analyst release); **§40b billing-run worker** (cadence from vertragd, monthly iMSys Abrechnungsinformation); **12 MCP tools** |
 | `accountingd` | `:9380` | LF | Massenkontokorrent / Customer Account Ledger — double-entry SKR 03/04 journal; aging analysis; Verzugszinsen §288 BGB; Zahlungsvereinbarung (payment plans); FRST/RCUR-separated pain.008 + Gläubiger-ID (EPC AT-02); CAMT.054 dedup import; IBAN hash encryption (pgcrypto); OIDC/JWT + inbound HMAC; auto-Mahnwesen; 107 tests |
 | `portald` | `:9480` | LF | Customer Portal read-model gateway — aggregates Lastgang/invoices/balance/VersorgungsStatus/EEG into single REST + SSE API; OIDC auth |
 | `vertragd` | `:9780` | LF | Contract & Customer Management — Kunden (B2C + B2B), Rahmenverträge (cascade Kündigung, `angebot_id` CPQ traceability), Versorgungsverträge; OIDC/JWT auth; Preisgarantie guard (§41 EnWG); `widerruf-kuendigung`; dispatch retry (3×); proactive expiry notifications; GDPR Art. 15/17/20; OIDC→MaLo authorization gateway; **16-tool MCP server + 4 prompts** |
@@ -675,6 +688,19 @@ dvgw-edi = { version = "0.12", default-features = false, features = ["nomint", "
 ---
 
 ## 🔧 Development
+
+The `justfile` is the front door — every gate below has a recipe:
+
+```bash
+just            # list all recipes
+just check      # cargo check, all targets & features
+just test       # full test suite
+just ci         # the complete CI gate (check + test + clippy + fmt + deny + codegen/profile/PID validation)
+just test-edmd-db      # real-PostgreSQL integration suite (throwaway postgres:17 container)
+just test-billingd-db  # … same pattern exists for einsd, vertragd, tarifbd, marktd
+```
+
+Raw cargo equivalents:
 
 ```bash
 # Check all targets — minimum gate before any commit

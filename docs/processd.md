@@ -8,6 +8,7 @@ description: >
   decisions (netz-checker), LF E_0624 auto-response, LFN bootstrap (Strom + Gas),
   Gas Datenabruf, LFW24 Vorlauffrist validation. Role-gated features for
   §7 EnWG separation. Cedar ABAC, MCP tools, PostgreSQL audit log.
+mermaid: true
 ---
 
 # `processd` Operator Guide

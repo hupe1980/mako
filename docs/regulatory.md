@@ -61,7 +61,7 @@ graph LR
     BK7_24 -->|"mako-geli-gas\nmako-wim-gas"| GAS_impl["GeLi Gas 3.0\nWiM Gas"]
     BK7_14 -->|"mako-gabi-gas\ndvgw-edi"| DVGW_impl["8 DVGW messages\nGaBi Gas 2.1"]
     ENW41 -->|"vertragd"| LF_impl["B2C/B2B contracts\nGDPR Art. 15/17/20"]
-    EEG -->|"eeg-billing\neinsd"| EEG_impl["9 settlement schemes\n324 tests"]
+    EEG -->|"eeg-billing\neinsd"| EEG_impl["9 settlement schemes\n339 tests"]
     BSI -->|"metering\nedmd"| IOT_impl["SmgwSession\nClsChannel"]
     MsbG -->|"metering\nedmd"| SUB_impl["V01-V10 validation\nFill gaps · Forecast"]
     NNNEV -->|"grid-billing\nnetzbilanzd"| NNE_impl["NNE/KA/MMM\n§14a Modul 1/2/3"]

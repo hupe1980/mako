@@ -11,7 +11,7 @@ description: >
   §36k Wind Korrekturfaktor, §42b GGV multi-meter Messkonzept,
   §51 Negativpreisregel, §52 Pflichtzahlungen + §52 Abs. 6 Netting,
   SettlementPeriodState lifecycle, Repowering §22, Zusammenlegung §24,
-  KWKG Förderdauer, 324 eeg-billing tests, 14 MCP tools, eeg-agent.
+  KWKG Förderdauer, 339 eeg-billing tests, 14 MCP tools, eeg-agent.
 ---
 
 # `einsd` — Einspeiser Registry + EEG/KWKG Settlement
@@ -32,7 +32,7 @@ graph TB
     Operator["NB Operator / ERP"]
     edmd["edmd :8380\nMSCONS Einspeisemenge\nauto-fetch"]
     einsd["einsd :9180"]
-    eeg_billing["eeg-billing crate\n9 settlement schemes\n§20 Abs.3 Managementprämie\n§23a degression · §36k wind\n§51b biogas Ausschreibung\n§42b GGV Messkonzept\n§52 Abs.6 netting\nSettlementPeriodState · InbetriebnahmeTyp\n324 tests · no I/O"]
+    eeg_billing["eeg-billing crate\n9 settlement schemes\n§20 Abs.3 Managementprämie\n§23a degression · §36k wind\n§51b biogas Ausschreibung\n§42b GGV Messkonzept\n§52 Abs.6 netting\nSettlementPeriodState · InbetriebnahmeTyp\n339 tests · no I/O"]
     db[("PostgreSQL\n8 migrations\neeg_anlagen · settlement_receipts\nsettlement_receipt_history\nsettlement_state_transitions\nsect53b_reductions · sect54_reductions\nepex_monthly_prices · eeg_verguetungssaetze")]
     erp["ERP webhook\nCloudEvents 1.0"]
     agentd["agentd :9580\neeg-agent\n(all de.eeg.* events)"]
@@ -1065,7 +1065,7 @@ See [agentd operator guide](./agentd.md) for the full trigger→action mapping.
 
 ## Testing
 
-**324 tests** (eeg-billing) across four suites:
+**339 tests** (eeg-billing) across four suites:
 
 ```bash
 cargo test -p eeg-billing -p einsd --all-features

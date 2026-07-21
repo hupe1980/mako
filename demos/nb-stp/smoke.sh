@@ -664,7 +664,7 @@ if [[ -n "$NETZBILANZD_URL" ]]; then
     pass "GET /api/v1/billing/summary → $code  total_gross_eur=$TOTAL"
 
     # n5. Audit export
-    info "[n5/6] GET /api/v1/billing/audit — §22 MessZV BNetzA export"
+    info "[n5/6] GET /api/v1/billing/audit — § 147 AO / GoBD BNetzA export"
     resp=$(netzbilanzd_get "/api/v1/billing/audit?limit=10")
     code=$(status "$resp")
     [[ "$code" == "200" ]] || fail "GET /billing/audit returned $code"

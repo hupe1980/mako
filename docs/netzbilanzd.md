@@ -8,6 +8,7 @@ description: >-
   INVOIC 31001, 31002, 31005, 31009, and 31011 invoices for the NB (Netzbetreiber) role,
   self-validates via invoic-checker, dispatches via makod, and closes the payment lifecycle
   on REMADV receipt.
+mermaid: true
 ---
 
 # `netzbilanzd` Operator Guide

@@ -96,7 +96,7 @@ implementation will differ from other domain crates:
 
 - **§ 46 EnWG** — statutory basis for distribution grid concession competition (Strom and Gas)
 - **BDEW AWH Netzbetreiberwechselprozesse Strom V1.2** (2025-10-30) — Strom NBW process documentation
-- **BDEW AWH Marktprozesse Netzbetreiberwechsel Sparte Gas V1.0** (2026-06-26) — Gas NBW process documentation (new)
+- **BDEW AWH Marktprozesse Netzbetreiberwechsel Sparte Gas V1.0** (2026-06-26) — Gas NBW process documentation
 - **BNetzA GPKE Mitteilung Nr. 71** (01.07.2024) — Empfehlung Marktprozesse NBW Strom
 - **BDEW PARTIN AHB** — Application Handbook for NBW PARTIN messages (PIDs 37000–37014)
 - **BNetzA BK6 / BK7** — governing regulatory chambers (electricity / gas)

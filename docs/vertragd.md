@@ -476,6 +476,7 @@ Initial startup delay staggers workers to avoid DB contention.
 | `POST` | `/api/v1/kunden/{id}/vertraege` | Create Versorgungsvertrag (idempotent on `erp_contract_id`) |
 | `GET` | `/api/v1/kunden/{id}/vertraege` | List supply contracts for customer |
 | `GET` | `/api/v1/vertraege` | All active contracts (`?tenant=&status=`) |
+| `GET` | `/api/v1/vertraege/billing-candidates` | §40b EnWG: active supply components + `abrechnungszyklus` — billingd's billing-run work list |
 | `GET` | `/api/v1/vertraege/expiring` | Near-expiry contracts (`?days=30`) — §13 GasGVV / §41 EnWG |
 | `GET` | `/api/v1/vertraege/{id}` | Contract + Komponenten + status |
 | `POST` | `/api/v1/vertraege/{id}/tarifwechsel` | Change product code; blocked within Preisgarantie window |
@@ -492,6 +493,20 @@ Initial startup delay staggers workers to avoid DB contention.
 | `GET` | `/health/ready` | Readiness |
 
 ---
+
+
+## §40b EnWG billing cadence
+
+Every Versorgungsvertrag carries an `abrechnungszyklus`
+(`MONATLICH` / `VIERTELJAEHRLICH` / `HALBJAEHRLICH` / `JAEHRLICH`, default
+annual). §40b EnWG obliges the supplier to *offer* the shorter cadences —
+the customer's choice is a contract fact, stored on the contract and
+CHECK-pinned in the schema. `GET /api/v1/vertraege/billing-candidates`
+projects all active Vertragskomponenten with their cadence, supply window
+(`lieferbeginn`/`lieferende`) and market-partner IDs; billingd's daily
+billing-run worker consumes it to compute each contract's most recently
+completed period and issue §40c-compliant invoices without an operator in
+the loop.
 
 ## CloudEvents emitted
 

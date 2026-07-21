@@ -7,6 +7,7 @@ description: >-
   Operator guide for sperrd — the Sperrung execution tracking daemon that
   auto-dispatches IFTSTA 21039 (field confirmation) when the field-service
   team reports execution, preventing permanent GPKE protocol violations.
+mermaid: true
 ---
 
 # `sperrd` Operator Guide

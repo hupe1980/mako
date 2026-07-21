@@ -68,5 +68,4 @@ Gas-only deployment.
 - **BNetzA BK7-24-01-009** — GeLi Gas 3.0 / WiM Gas ruling,
   Beschluss 12.09.2025, abgeschlossen 24.09.2025
 - **BDEW/VKU/GEODE/FNBGas AWH WiM Gas V2.0** (2025-08-04) —
-  `docs/pdfs/bdew-mako/BDEW_VKU_GEODE_FNBGas_AWH_WiMGas_V2_0_20250804.pdf`
-- **UTILMD AHB Gas 1.1 / 1.2** — EDIFACT message specification
+  - **UTILMD AHB Gas 1.1 / 1.2** — EDIFACT message specification

@@ -28,7 +28,7 @@ Key responsibilities:
 - Run the **Hampel-filter quality scorer** and **V01–V10 validation engine** on all inbound interval data. Emit `de.edmd.reading.quality.warning` CloudEvents for grade C/F data.
 - Schedule and track **reading orders** (Ablesesteuerung) for all three market roles (LF, MSB, NB). Auto-creates `INSRPT_STOERUNG` orders when a WiM INSRPT PID 23001 Störungsmeldung arrives.
 - Compute and serve **virtual meter time series** (Sum, Residual, PvSelfConsumption, GgvConstantAllocation, GgvProportionalAllocation per §42b EnWG Solarpaket I GGV community solar) on demand.
-- Generate **§ 60 Abs. 2 MsbG annual forecasts** (Jahresprognose) and **prior-period substitute values** for gap intervals.
+- Generate **§ 60 Abs. 2 MsbG annual forecasts** (Jahresprognose — daily-average projection with automatic prior-year **seasonal correction** when the same window one year earlier has data) and **prior-period substitute values** for gap intervals.
 - Provide resampled Lastgang (hourly / daily / monthly / yearly buckets) and monthly Summenzeitreihe for MaBiS.
 - Provide a time-series query API for ERP and `netzbilanzd`.
 - Export BO4E `Lastgang` objects and `Zeitreihe` objects for ERP and API-Webdienste Strom consumers.
@@ -450,6 +450,10 @@ duplicate order. Two partial unique indexes now back it:
 │  GET  /api/v1/iceberg/v1/config                                           │
 │  GET  /api/v1/iceberg/v1/namespaces[/{ns}/tables[/{table}]]              │
 │                                                                            │
+│  ── § 60 Abs. 2 MsbG + §22 EnWG ──────────────────────────────────────── │
+│  GET  /api/v1/confirmations                 ← Schätzwert-Bestätigungen    │
+│  GET  /api/v1/netzverlust                   ← indicative grid-loss balance│
+│                                                                            │
 │  ── GDPR ─────────────────────────────────────────────────────────────── │
 │  DELETE /api/v1/gdpr/erasure/{malo_id}      ← Art. 17 DSGVO erasure      │
 │                                                                            │
@@ -725,6 +729,13 @@ endpoint accepts:
   ]
 }
 ```
+
+Optional per-message authentication: set `message_hmac_secret` (supports
+`"env:VAR"`) in `[kafka_ingest]` and every record must carry an
+`x-mako-signature` header (`sha256=<hex>` over the record value, the
+platform's webhook signing scheme); forged or unsigned records are skipped
+like poison pills — never stored. Without the secret, the **topic ACL is the
+trust boundary**: restrict produce rights to the head-end system.
 
 Delivery is **at-least-once**: offsets commit only after the batch is stored,
 and a replay is idempotent on the primary key (a value-changing replay leaves
