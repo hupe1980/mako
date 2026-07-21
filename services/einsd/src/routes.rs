@@ -74,7 +74,7 @@ pub fn build_router(
             "/api/v1/anlagen/{tr_id}/switch-veraeusserungsform",
             post(crate::handlers::post_switch_veraeusserungsform),
         )
-        // ── §22 MessZV — Correction settlement ────────────────────────────────
+        // ── § 147 AO / GoBD — Correction settlement ────────────────────────────────
         .route(
             "/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction",
             post(crate::handlers::post_correction_settle),

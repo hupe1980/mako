@@ -2,8 +2,8 @@
 //!
 //! ## Legal basis
 //!
-//! - **§3 MessZV**: RLM = registrierende Lastgangmessung (15-min or 60-min intervals).
-//! - **§4 MessZV**: SLP = Standardlastprofil (daily, monthly, or annual totals).
+//! - **§ 2 MsbG**: RLM = registrierende Lastgangmessung (15-min or 60-min intervals).
+//! - **§ 12 StromNZV**: SLP = Standardlastprofil (daily, monthly, or annual totals).
 //! - **§41a Abs. 2 EnWG**: iMSys (intelligente Messsysteme) require 15-min
 //!   interval resolution for dynamic tariff billing.
 //! - **BNetzA MaBiS-Beschluss BK6-12-200**: RLM threshold ≥ 100 000 kWh/year.
@@ -27,10 +27,10 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
 pub enum Messtyp {
     /// Standard load profile — daily or monthly aggregates.
-    /// No 15-min resolution. §4 MessZV.
+    /// No 15-min resolution. § 12 StromNZV.
     Slp,
     /// Registrierende Lastgangmessung — 15-min or 60-min intervals.
-    /// Required for ≥100 000 kWh/year. §3 MessZV.
+    /// Required for ≥100 000 kWh/year. § 2 MsbG.
     Rlm,
     /// iMSys / SMGW direct push — always 15-min.
     /// Required for §41a EnWG dynamic tariff billing.

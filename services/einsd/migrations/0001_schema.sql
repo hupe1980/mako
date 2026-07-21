@@ -3,13 +3,13 @@
 -- Regulatory frameworks:
 --   EEG 2000–2023 (§§20–22, §24, §21 Abs. 3, §42b, §44b, §48–54)
 --   KWKG 2023 (§7 KWK-Zuschlag)
---   §22 MessZV (3-year settlement audit trail)
+--   § 147 AO / GoBD (3-year settlement audit trail)
 --
 -- Tables:
 --   eeg_anlagen               — central plant register (composite PK: tr_id + tenant)
---   settlement_receipts       — monthly settlement audit log (§22 MessZV)
+--   settlement_receipts       — monthly settlement audit log (§ 147 AO / GoBD)
 --   settlement_state_transitions — state machine audit trail
---   settlement_receipt_history — §22 MessZV immutable correction snapshots
+--   settlement_receipt_history — § 147 AO / GoBD immutable correction snapshots
 --   eeg_verguetungssaetze     — EEG/KWKG tariff reference data
 --   epex_monthly_prices       — monthly EPEX Spot reference (Marktprämie)
 --   jahresmarktwert_preise    — technology-specific Jahresmarktwert (§20 Abs. 2 EEG)
@@ -217,7 +217,7 @@ CREATE INDEX ea_notification_pending ON eeg_anlagen (tenant, last_veraeusserungs
     WHERE veraeusserungsform_notification_sent_at IS NULL AND last_veraeusserungsform_switch IS NOT NULL;
 
 -- ── Monthly settlement receipts ───────────────────────────────────────────────
--- §22 MessZV: 3-year retention. Written before any CloudEvent dispatch.
+-- § 147 AO / GoBD: 3-year retention. Written before any CloudEvent dispatch.
 -- Correction receipts (is_correction = true) coexist freely with originals.
 
 CREATE TABLE settlement_receipts (
@@ -237,7 +237,7 @@ CREATE TABLE settlement_receipts (
     billing_days_fraction       NUMERIC(8, 6),
     -- §52 EEG: separate Pflichtzahlung (penalty) amount
     pflichtzahlung_eur          NUMERIC(14, 5),
-    -- §22 MessZV: itemized position snapshot for audit trail
+    -- § 147 AO / GoBD: itemized position snapshot for audit trail
     positions_json              JSONB,
     -- Full rubo4e::current::Rechnung JSONB
     rechnung_json               JSONB,
@@ -250,7 +250,7 @@ CREATE TABLE settlement_receipts (
     ce_id                       UUID,
     error_detail                TEXT,
 
-    -- Correction chain support (§22 MessZV)
+    -- Correction chain support (§ 147 AO / GoBD)
     is_correction               BOOLEAN     NOT NULL DEFAULT false,
     correction_of               UUID,       -- FK to original receipt.id
     correction_reason           TEXT,
@@ -259,7 +259,7 @@ CREATE TABLE settlement_receipts (
 );
 
 COMMENT ON TABLE settlement_receipts IS
-    '§22 MessZV: 3-year immutable settlement audit log. '
+    '§ 147 AO / GoBD: 3-year immutable settlement audit log. '
     'Correction receipts (is_correction=true) coexist with originals via partial unique index.';
 
 -- Partial unique: exactly one non-correction receipt per plant × period.
@@ -270,7 +270,7 @@ CREATE UNIQUE INDEX sr_unique_initial
     WHERE is_correction = false;
 
 COMMENT ON INDEX sr_unique_initial IS
-    '§22 MessZV: exactly one initial receipt per billing period per plant. '
+    '§ 147 AO / GoBD: exactly one initial receipt per billing period per plant. '
     'Correction receipts excluded — they accumulate freely as an immutable audit chain. '
     'Named index supports ON CONFLICT ON CONSTRAINT sr_unique_initial in upsert code.';
 
@@ -304,7 +304,7 @@ COMMENT ON TABLE settlement_state_transitions IS
 
 CREATE INDEX sst_tr_id ON settlement_state_transitions (tr_id, tenant, effective_from DESC);
 
--- ── §22 MessZV: correction receipt snapshots ─────────────────────────────────
+-- ── § 147 AO / GoBD: correction receipt snapshots ─────────────────────────────────
 
 CREATE TABLE settlement_receipt_history (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -321,7 +321,7 @@ CREATE TABLE settlement_receipt_history (
 );
 
 COMMENT ON TABLE settlement_receipt_history IS
-    '§22 MessZV: immutable snapshot taken before each correction upsert. '
+    '§ 147 AO / GoBD: immutable snapshot taken before each correction upsert. '
     'settlement_data = full receipt JSONB for forensic tracing.';
 
 CREATE INDEX srh_original_id ON settlement_receipt_history (original_id);
@@ -508,7 +508,7 @@ CREATE TABLE jahresabrechnungen (
     missing_months          SMALLINT[]  NOT NULL DEFAULT '{}',
     -- §51a: quarter-hours accrued across the year toward the Vergütungszeitraum.
     verlaengerungsanspruch_qh BIGINT    NOT NULL DEFAULT 0,
-    -- Number of corrections issued in the year (§22 MessZV audit signal).
+    -- Number of corrections issued in the year (§ 147 AO / GoBD audit signal).
     correction_count        SMALLINT    NOT NULL DEFAULT 0,
     status                  TEXT        NOT NULL DEFAULT 'vorlaeufig'
                             CHECK (status IN ('vorlaeufig', 'endgueltig')),

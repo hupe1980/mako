@@ -19,7 +19,7 @@
 //! | `list_plants_without_mastr` | Find plants not registered in MaStR (§52 §11 EEG 2023 violation) |
 //! | `check_direktvermarktung_compliance` | List plants >100 kW not in Direktvermarktung (§3 Nr. 1 + §20 EEG) |
 //! | `check_sect44b_quota` | Check §44b biogas annual 45%-cap quota status |
-//! | `get_settlement_state_history` | Fetch §22 MessZV audit trail of settlement state transitions |
+//! | `get_settlement_state_history` | Fetch § 147 AO / GoBD audit trail of settlement state transitions |
 //! | `get_jahresmarktwert` | Look up stored §20 Abs. 2 technology-specific monthly Marktwert |
 //!
 //! ## Prompts (6)
@@ -1010,7 +1010,7 @@ fall back to EPEX in that case). Use 'DEFAULT' as erzeugungsart to check the gen
 
     #[tool(
         name = "get_settlement_state_history",
-        description = "Fetch the §22 MessZV audit trail of settlement state transitions for a plant \
+        description = "Fetch the § 147 AO / GoBD audit trail of settlement state transitions for a plant \
 (tr_id). Returns all state changes (Active → Reduced → Suspended → PostEeg → Ended) with \
 effective dates and transition reasons. Required for BNetzA regulatory audit and §20 EnWG \
 compliance reporting."
@@ -1054,7 +1054,7 @@ compliance reporting."
             "tr_id": params.tr_id,
             "total": items.len(),
             "transitions": items,
-            "legal_basis": "§22 MessZV: 3-year audit trail of settlement state transitions.",
+            "legal_basis": "§ 147 AO / GoBD: 3-year audit trail of settlement state transitions.",
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))

@@ -164,6 +164,9 @@ pub struct Config {
     /// `enabled = true`. See [`KafkaIngestConfig`].
     #[serde(default)]
     pub kafka_ingest: Option<KafkaIngestConfig>,
+    /// § 60 Abs. 2 MsbG confirmation loop for estimated/substituted readings.
+    #[serde(default)]
+    pub confirmation: ConfirmationConfig,
     /// Start without token verification.
     ///
     /// With `[oidc]` absent the verifier admits every request as `dev-admin`
@@ -200,6 +203,16 @@ pub struct KafkaIngestConfig {
     /// Poll timeout in milliseconds.
     #[serde(default = "kafka_default_poll_ms")]
     pub poll_ms: u64,
+    /// Optional per-message HMAC-SHA256 authentication.
+    ///
+    /// When set (supports `"env:VAR"`), every record must carry an
+    /// `x-mako-signature` header (`sha256=<hex>` over the record value,
+    /// same scheme as the platform's webhook signing); records with a
+    /// missing or wrong signature are skipped and counted. When unset, the
+    /// topic itself is the trust boundary — restrict topic ACLs to the
+    /// head-end system.
+    #[serde(default)]
+    pub message_hmac_secret: Option<String>,
 }
 
 fn kafka_default_topic() -> String {
@@ -259,6 +272,42 @@ pub struct WebhookConfig {
     /// ERP webhook URL for outbound CloudEvents (`de.edmd.reading.direct.stored`,
     /// `de.edmd.reading.quality.warning`). Omit to disable outbound notifications.
     pub erp_webhook_url: Option<String>,
+}
+
+/// `[confirmation]` — § 60 Abs. 2 MsbG estimated-reading confirmation loop.
+///
+/// Every stored ESTIMATED/SUBSTITUTED interval opens an obligation to
+/// replace it with a plausibilised real value. The daily worker marks
+/// obligations older than `deadline_weeks` as UEBERFAELLIG and emits
+/// `de.edmd.reading.confirmation.overdue`. No statute fixes the deadline —
+/// the 8-week default aligns with the MaBiS Bilanzkreisabrechnung
+/// correction window.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfirmationConfig {
+    /// Whether the overdue-escalation worker runs. Default: true — the
+    /// tracking table is always populated; only the escalation is optional.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Weeks until an unreplaced estimate counts as overdue. Default: 8.
+    #[serde(default = "default_confirmation_deadline_weeks")]
+    pub deadline_weeks: i64,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_confirmation_deadline_weeks() -> i64 {
+    8
+}
+
+impl Default for ConfirmationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            deadline_weeks: default_confirmation_deadline_weeks(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

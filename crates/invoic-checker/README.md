@@ -114,7 +114,7 @@ match engine.check(&input).await? {
 | 31001 | NNE-Rechnung Strom | NB → LF |
 | 31002 | MMM-Rechnung Strom | NB → LF |
 | 31005 | Selbst ausgest. NNE-Rechnung | LF → LF |
-| 31006 | Selbst ausgest. Rechnung (§22 MessZV) | LF → LF |
+| 31006 | Selbst ausgest. Rechnung (§ 147 AO / GoBD) | LF → LF |
 | 31007 | Aggreg. MMM-Rechnung Gas | NB → MGV |
 | 31008 | Selbst ausgest. Aggreg. MMM-Rechnung Gas | MGV → MGV |
 | 31009 | MSB-Rechnung | MSB → LF |
@@ -156,5 +156,5 @@ match engine.check(&input).await? {
 - **BK7-24-01-008** — INVOIC AHB Gas (GaBi Gas PIDs 31007/31008)
 - **BK7 billing** — WiM Gas PIDs 31003/31004
 - **§7 Allgemeine Festlegungen V6.1d** — Zahlungsziel 30 days (Strom + Gas)
-- **§22 MessZV** — Pflicht zur Rechnungslegung (MSB-Rechnung receipt persistence)
+- **§ 147 AO / GoBD** — Pflicht zur Rechnungslegung (MSB-Rechnung receipt persistence)
 - **REMADV AHB 1.0** — ERC-code mapping for dispute messages

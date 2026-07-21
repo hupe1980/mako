@@ -1450,7 +1450,7 @@ mod tests {
 
     // ── Regulatory correctness tests ─────────────────────────────────────────
 
-    /// §21 MessZV Zahlungsziel: invoice must carry a valid due_date > invoice_date.
+    /// Lieferantenrahmenvertrag Strom Zahlungsziel: invoice must carry a valid due_date > invoice_date.
     #[test]
     fn nne_due_date_after_invoice_date() {
         use grid_billing::{NneInput, settle_nne};
@@ -1485,7 +1485,7 @@ mod tests {
             sparte: grid_billing::Sparte::Strom,
         };
         let settlement = settle_nne(&input).expect("must succeed");
-        // §21 MessZV Zahlungsziel is a property of the document, not of what was
+        // Lieferantenrahmenvertrag Strom Zahlungsziel is a property of the document, not of what was
         // calculated — so it is asserted where the dates now live.
         let document = super::as_document(settlement);
         assert!(
@@ -1812,7 +1812,7 @@ mod tests {
         );
     }
 
-    /// BNetzA §22 MessZV retention: billing period must be recorded accurately.
+    /// BNetzA § 147 AO / GoBD retention: billing period must be recorded accurately.
     /// Guards that a short 2-day period (e.g. partial month on supply start) works.
     #[test]
     fn period_ordering_validity() {

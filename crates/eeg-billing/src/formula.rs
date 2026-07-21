@@ -529,7 +529,7 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
         }
     }
 
-    // Record the applied fraction in SettleOutput for audit trail (§22 MessZV)
+    // Record the applied fraction in SettleOutput for audit trail (§ 147 AO / GoBD)
     result.billing_days_fraction_applied =
         billing_days_fraction.filter(|&f| f > Decimal::ZERO && f < rust_decimal::Decimal::ONE);
 

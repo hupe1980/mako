@@ -2,7 +2,7 @@
 //!
 //! Every INVOIC event handled by `invoicd` is written here **before** the
 //! corresponding REMADV/COMDIS command is dispatched to makod.  This satisfies
-//! the §22 MessZV / §41 EnWG 3-year retention obligation.
+//! the § 147 AO / GoBD / §41 EnWG 3-year retention obligation.
 //!
 //! ## Idempotency
 //!

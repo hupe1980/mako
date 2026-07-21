@@ -218,7 +218,7 @@ struct Cli {
     ///
     /// - Outbound APERAK and CONTRL messages enqueued in the outbox are lost.
     /// - In-flight MaKo processes cannot be resumed after a restart.
-    /// - Regulatory audit requirements (§22 MessZV, BDEW AHB) cannot be met.
+    /// - Regulatory audit requirements (§ 147 AO / GoBD, BDEW AHB) cannot be met.
     ///
     /// Set `--data-dir` (or `MAKOD_DATA_DIR`) to a persistent path, or use
     /// `--object-store=s3` / `--object-store=gcs` / `--object-store=azure`
@@ -238,7 +238,7 @@ struct Cli {
     /// intentional (e.g. in integration tests, local smoke tests, or CI).
     ///
     /// **Do not set this in production.**  Volatile mode cannot meet the
-    /// regulatory durability requirements of §22 MessZV and BDEW AHB.
+    /// regulatory durability requirements of § 147 AO / GoBD and BDEW AHB.
     ///
     /// Can also be set via `MAKOD_ALLOW_VOLATILE=1`.
     #[arg(long, env = "MAKOD_ALLOW_VOLATILE", default_value_t = false)]
@@ -1246,7 +1246,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     //  • `dl_sink_shutdown` — signals graceful shutdown from the teardown path
     //  • `dl_sink_ingest`   — shared between the REST and AS4 EdifactApiState
     //                         instances so ingest-path rejections also land in
-    //                         the durable dead-letter queue (§22 MessZV)
+    //                         the durable dead-letter queue (§ 147 AO / GoBD)
     //  • the original `dl_sink` — consumed by EngineBuilder below
     let (dl_sink, dl_worker) = store.as_dead_letter_sink();
     let dl_sink_shutdown = dl_sink.clone();
@@ -2477,7 +2477,7 @@ async fn open_store(cli: &Cli) -> anyhow::Result<SlateDbStore> {
                          or set --allow-volatile (MAKOD_ALLOW_VOLATILE=1) to acknowledge that\n\
                          all event-store data will be lost on exit.\n\n\
                          Volatile mode cannot meet the regulatory durability requirements of\n\
-                         §22 MessZV and BDEW AHB. Never use it in production."
+                         § 147 AO / GoBD and BDEW AHB. Never use it in production."
                     );
                 }
                 tracing::warn!(
@@ -2507,7 +2507,7 @@ async fn open_store(cli: &Cli) -> anyhow::Result<SlateDbStore> {
                     tracing::warn!(
                         endpoint,
                         "S3 endpoint uses plain HTTP — event data is transmitted \
-                         unencrypted. This violates §22 MessZV audit-trail \
+                         unencrypted. This violates § 147 AO / GoBD audit-trail \
                          confidentiality requirements. Use HTTPS in production."
                     );
                 } else {

@@ -1,7 +1,7 @@
 //! MCP (Model Context Protocol) server for `invoicd`.
 //!
 //! Exposes INVOIC receipt reads, dispute management, Gas/Strom billing
-//! reconciliation, and §22 MessZV compliance monitoring to LLM tooling via
+//! reconciliation, and § 147 AO / GoBD compliance monitoring to LLM tooling via
 //! the MCP Streamable HTTP transport.  Mounted at `/mcp` on the existing
 //! HTTP port.
 //!
@@ -592,7 +592,7 @@ impl InvoicdMcpHandler {
                     a. Use `get_receipt` to confirm Zahlungsziel and current status.\n\
                     b. Use `dispatch_remadv` tool (or POST /api/v1/receipts/{id}/dispatch-remadv).\n\
                  3. The REMADV (33001 accept / 33002 dispute) is sent via makod EDIFACT pipeline.\n\
-                 4. §22 MessZV: REMADV must be dispatched within the payment term.\n\
+                 4. § 147 AO / GoBD: REMADV must be dispatched within the payment term.\n\
                     Missed dispatches are a compliance violation — escalate to operations.",
             ),
         ]
@@ -600,13 +600,13 @@ impl InvoicdMcpHandler {
 
     #[prompt(
         name = "monthly-billing-review",
-        description = "Guided monthly INVOIC billing reconciliation (§22 MessZV)"
+        description = "Guided monthly INVOIC billing reconciliation (§ 147 AO / GoBD)"
     )]
     async fn monthly_billing_review_prompt(&self) -> Vec<PromptMessage> {
         vec![
             PromptMessage::new_text(
                 Role::User,
-                "I need to perform my monthly INVOIC billing review for §22 MessZV compliance.",
+                "I need to perform my monthly INVOIC billing review for § 147 AO / GoBD compliance.",
             ),
             PromptMessage::new_text(
                 Role::Assistant,
@@ -624,7 +624,7 @@ impl InvoicdMcpHandler {
                  - Period failures → verify edmd has complete Lastgang for the billing period\n\
                  \n\
                  **3. Overdue REMADV**\n\
-                 Call `list_overdue_remadv` — any result here is a §22 MessZV gap.\n\
+                 Call `list_overdue_remadv` — any result here is a § 147 AO / GoBD gap.\n\
                  Use `dispatch_remadv` to manually trigger the REMADV for each overdue receipt.\n\
                  \n\
                  **4. Payment confirmation**\n\
@@ -633,7 +633,7 @@ impl InvoicdMcpHandler {
                  \n\
                  **5. Retention audit**\n\
                  Query: `SELECT COUNT(*) FROM invoic_receipts WHERE received_at < now() - INTERVAL '3 years'`\n\
-                 These rows are eligible for deletion per §22 MessZV (3-year retention period).",
+                 These rows are eligible for deletion per § 147 AO / GoBD (3-year retention period).",
             ),
         ]
     }
@@ -695,7 +695,7 @@ impl ServerHandler for InvoicdMcpHandler {
         .with_instructions(
             "# invoicd — INVOIC Billing Validation\n\
              \n\
-             Validates INVOIC billing from NB/MSB against NNE/MSB price sheets (§22 MessZV).\n\
+             Validates INVOIC billing from NB/MSB against NNE/MSB price sheets (§ 147 AO / GoBD).\n\
              Covers all German energy billing PIDs: Strom (31001/31002/31005/31006), \
              WiM Gas (31003/31004), GaBi Gas (31007/31008), WiM MSB (31009), GeLi Gas (31011).\n\
              \n\
@@ -711,7 +711,7 @@ impl ServerHandler for InvoicdMcpHandler {
              ## Prompts\n\
              - `resolve-dispute`          — guided dispute investigation workflow\n\
              - `check-overdue-remadv`     — find and action overdue REMADV dispatches\n\
-             - `monthly-billing-review`   — §22 MessZV monthly reconciliation checklist\n\
+             - `monthly-billing-review`   — § 147 AO / GoBD monthly reconciliation checklist\n\
              - `detect-systematic-errors` — find NB counterparties with systematic billing errors\n\
              \n\
              ## Outcomes\n\

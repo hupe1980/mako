@@ -2,7 +2,7 @@
 //!
 //! ## Legal basis
 //!
-//! - **§52 MessZV**: Messstellenbetreiber must document meter exchanges.
+//! - **WiM Gerätewechsel-Dokumentation**: Messstellenbetreiber must document meter exchanges.
 //! - **§14 MsbG**: Meter data must be available at supply handover.
 //! - **BDEW GPKE**: Zählerwechsel triggers a Sonderablesung (INSRPT PID 23003).
 //!

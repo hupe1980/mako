@@ -293,7 +293,7 @@ async fn main() -> anyhow::Result<()> {
             delivery_timeout: Duration::from_secs(cfg.webhook.delivery_timeout_secs),
             max_retry_attempts: cfg.webhook.max_retry_attempts,
         },
-        pool.clone(), // DLQ writes on delivery failure — §22 MessZV compliance
+        pool.clone(), // DLQ writes on delivery failure — § 147 AO / GoBD compliance
         shutdown.clone(),
     );
 
@@ -639,7 +639,7 @@ async fn main() -> anyhow::Result<()> {
             )
             // Inbound makod events
             .route(&inbound_path, post(ingest_event::<_, _, _, _, _, _>))
-            // Dead-letter queue admin (F-003 — §22 MessZV compliance)
+            // Dead-letter queue admin (F-003 — § 147 AO / GoBD compliance)
             .route("/admin/fanout/dlq", get(list_dlq))
             .route("/admin/fanout/dlq/{id}", delete(delete_dlq_entry))
             .route("/admin/fanout/dlq/{id}/retry", post(retry_dlq_entry))

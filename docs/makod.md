@@ -71,7 +71,7 @@ See the individual service READMEs for setup details.
 > In volatile mode you cannot:
 > - Resume in-flight MaKo processes after restart
 > - Guarantee delivery of APERAK and CONTRL responses
-> - Meet regulatory audit requirements (§22 MessZV, BDEW AHB)
+> - Meet regulatory audit requirements (§ 147 AO / GoBD, BDEW AHB)
 >
 > Use volatile mode only for automated integration tests, local debugging,
 > and CI pipelines where data loss is acceptable.
@@ -726,7 +726,7 @@ Both static auth keys and OIDC tokens are accepted, whichever is configured.
 | `list_overdue_deadlines` | `read_only` | All APERAK/response deadlines currently overdue — alert if non-empty |
 | **`list_active_processes`** | `read_only` | **Total count of registered process instances (capacity planning)** |
 | **`get_outbox_status`** | `read_only` | **Pending outbox count + oldest message age — alert when stuck > 5 min** |
-| **`list_dead_letters`** | `read_only` | **20 most recent permanently dead-lettered messages (§22 MessZV — requires investigation)** |
+| **`list_dead_letters`** | `read_only` | **20 most recent permanently dead-lettered messages (§ 147 AO / GoBD — requires investigation)** |
 
 Call `list_commands` first — it returns every command name, its Marktrolle(n),
 primary Prüfidentifikator, and whether a `marktrolle` override is required at

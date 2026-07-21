@@ -124,11 +124,11 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/quality-score/{malo_id}",
             post(post_quality_rescore),
         )
-        // §22 MessZV bitemporal corrections: audit-trail preserving retroactive corrections.
+        // § 60 Abs. 6 MsbG bitemporal corrections: audit-trail preserving retroactive corrections.
         .route("/api/v1/corrections/{malo_id}", post(post_corrections))
         // Bulk ingestion: batched direct-push reads (performance path for large MSCONS deliveries)
         .route("/api/v1/meter-reads/{malo_id}/bulk", post(post_bulk_reads))
-        // §17 MessZV auto-substitute: fill gaps using prior-period average method
+        // § 60 Abs. 2 MsbG auto-substitute: fill gaps using prior-period average method
         .route(
             "/api/v1/meter-reads/{malo_id}/substitute",
             post(post_substitute_values),
@@ -156,7 +156,7 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/quality-assessments/{malo_id}",
             get(list_quality_assessments),
         )
-        // M11: Annual forecast (§17 MessZV Jahresprognose)
+        // M11: Annual forecast (§ 60 Abs. 2 MsbG Jahresprognose)
         .route("/api/v1/forecast/{malo_id}", get(get_annual_forecast))
         // M12: Summenzeitreihe — MABIS-ready monthly aggregated series
         .route(
@@ -165,6 +165,10 @@ pub fn router(state: HandlerState) -> Router {
         )
         // M13: Gas quality data (PID 13007 Gasbeschaffenheitsdaten)
         .route("/api/v1/gas-quality/{malo_id}", get(get_gas_quality))
+        // §22 EnWG Verlustenergie — indicative grid-loss balance
+        .route("/api/v1/netzverlust", get(get_netzverlust))
+        // § 60 Abs. 2 MsbG — estimated-reading confirmation obligations
+        .route("/api/v1/confirmations", get(list_confirmations))
         // Iceberg/S3 archive endpoints
         .route("/api/v1/archive/status", get(get_archive_status))
         .route("/api/v1/archive/olap/{malo_id}", get(get_archive_olap))
@@ -629,7 +633,7 @@ struct LastgangParams {
     /// Bitemporal point-in-time query (RFC 3339).
     ///
     /// When set, the query returns the meter reads **as they were stored at this timestamp**,
-    /// not the current (potentially corrected) values. Enables §22 MessZV point-in-time
+    /// not the current (potentially corrected) values. Enables § 60 Abs. 6 MsbG point-in-time
     /// billing reconstruction: "what did we know at invoice date 2026-07-01T00:00:00Z?".
     ///
     /// Implementation: queries `meter_read_corrections` to find the state before any
@@ -667,7 +671,7 @@ async fn get_lastgang(
         .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
         .unwrap_or_else(OffsetDateTime::now_utc);
 
-    // ── Bitemporal query: ?as_of= (§22 MessZV point-in-time reconstruction) ──
+    // ── Bitemporal query: ?as_of= (§ 60 Abs. 6 MsbG point-in-time reconstruction) ──
     // When `as_of` is set, undo any corrections applied AFTER that timestamp.
     // This allows invoice auditors to reconstruct the exact billing basis at
     // any historical point in time.
@@ -1131,7 +1135,7 @@ struct ResampledParams {
 /// |---|---|
 /// | `HOUR` | Hourly dashboard chart (default) |
 /// | `DAY` | Daily totals for SLP billing |
-/// | `MONTH` | Monthly totals for MMM / §27 MessZV |
+/// | `MONTH` | Monthly totals for MMM / § 13 StromNZV |
 /// | `YEAR` | Annual settlement |
 ///
 /// Each bucket carries:
@@ -1629,7 +1633,7 @@ async fn delete_virtual_meter(
 /// `GET /api/v1/quality-assessments/{malo_id}`
 ///
 /// Returns the quality assessment history for a MaLo.
-/// Each batch ingest produces one quality assessment row per §22 MessZV audit trail.
+/// Each batch ingest produces one quality assessment row per § 60 Abs. 6 MsbG audit trail.
 async fn list_quality_assessments(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1704,7 +1708,7 @@ async fn list_quality_assessments(
 /// `GET /api/v1/forecast/{malo_id}?from=&to=`
 ///
 /// Computes an annual energy consumption forecast from the available meter reads
-/// in the given window. Returns the projected annual kWh per §17 MessZV.
+/// in the given window. Returns the projected annual kWh per § 60 Abs. 2 MsbG.
 ///
 /// This is useful for:
 /// - Setting Abschlag (advance payment) amounts
@@ -1779,7 +1783,36 @@ async fn get_annual_forecast(
         })
         .collect();
 
-    match project_annual_consumption(&malo_id, &intervals, None) {
+    // Same window one year earlier: with prior-year data the projection
+    // applies the seasonal correction factor (a winter-only observation no
+    // longer over-projects the year). Passing `None` here made the seasonal
+    // branch unreachable — every API forecast was the naive daily × 365.
+    let prior_q = TimeSeriesQuery {
+        malo_id: malo_id.clone(),
+        from: from - time::Duration::days(365),
+        to: to - time::Duration::days(365),
+        sparte: None,
+        tenant: state.tenant.clone(),
+    };
+    let prior_intervals: Vec<metering::MeterInterval> = match state.repo.query(&prior_q).await {
+        Ok(prior) => prior
+            .iter()
+            .map(|r| metering::MeterInterval {
+                from: r.dtm_from,
+                to: r.dtm_to,
+                value_kwh: r.quantity_kwh,
+                quality: r.quality,
+                obis_code: r.obis_code.clone(),
+            })
+            .collect(),
+        Err(e) => {
+            tracing::debug!(error = %e, malo_id, "edmd: no prior-year window for seasonal correction");
+            Vec::new()
+        }
+    };
+    let prior = (!prior_intervals.is_empty()).then_some(prior_intervals.as_slice());
+
+    match project_annual_consumption(&malo_id, &intervals, prior) {
         Some(forecast) => Json(serde_json::json!({
             "malo_id": forecast.malo_id,
             "observation_from": forecast.observation_from,
@@ -1790,7 +1823,7 @@ async fn get_annual_forecast(
             "seasonal_correction_applied": forecast.seasonal_correction_applied,
             "seasonal_factor": forecast.seasonal_factor,
             "method": format!("{:?}", forecast.method),
-            "legal_basis": "§17 MessZV Jahresprognose",
+            "legal_basis": "§ 60 Abs. 2 MsbG Jahresprognose",
         }))
         .into_response(),
         None => (
@@ -1803,6 +1836,184 @@ async fn get_annual_forecast(
     }
 }
 
+// ── Netzverlust (§22 EnWG) ────────────────────────────────────────────────────
+
+/// `GET /api/v1/netzverlust?from=&to=`
+///
+/// Indicative grid-loss balance over the tenant's metered portfolio:
+/// infeed (OBIS `x:2.*` — generation feed-in and imports) minus offtake
+/// (OBIS `x:1.*`). §22 Abs. 1 EnWG obliges the Netzbetreiber to procure
+/// Verlustenergie; this figure is the metering-side indicator for that
+/// quantity. Accuracy is bounded by metering coverage — unmetered infeed
+/// or offtake shows up as phantom loss/gain, which is why the response
+/// labels itself indicative rather than settlement-grade.
+async fn get_netzverlust(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Query(params): Query<SimpleTimeParams>,
+) -> impl IntoResponse {
+    use time::format_description::well_known::Rfc3339;
+
+    if let Err(e) = enforcer.check(
+        &claims.principal(),
+        "read-timeseries",
+        state.tenant.as_str(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let from = params
+        .from
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    let to = params
+        .to
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or_else(OffsetDateTime::now_utc);
+
+    // OBIS measurement group C decides the direction: C=1 forward active
+    // energy (offtake from grid), C=2 reverse active energy (infeed).
+    // `obis_code_norm` is `medium-channel:C.D.E`, so match on `:1.`/`:2.`.
+    let row = sqlx::query(
+        r"SELECT
+              COALESCE(SUM(quantity_kwh) FILTER (WHERE obis_code_norm LIKE '%:2.%'), 0)
+                  AS einspeisung_kwh,
+              COALESCE(SUM(quantity_kwh) FILTER (WHERE obis_code_norm LIKE '%:1.%'), 0)
+                  AS entnahme_kwh
+          FROM meter_reads
+          WHERE tenant = $1
+            AND dtm_from >= $2 AND dtm_to <= $3
+            AND sparte = 'STROM'
+            AND quality NOT IN ('FAULTY', 'UNKNOWN')",
+    )
+    .bind(&state.tenant)
+    .bind(from)
+    .bind(to)
+    .fetch_one(state.repo.pool())
+    .await;
+
+    match row {
+        Ok(r) => {
+            use sqlx::Row as _;
+            let einspeisung: rust_decimal::Decimal =
+                r.try_get("einspeisung_kwh").unwrap_or_default();
+            let entnahme: rust_decimal::Decimal = r.try_get("entnahme_kwh").unwrap_or_default();
+            let losses = metering::network_losses(einspeisung, entnahme);
+            Json(serde_json::json!({
+                "from": from.format(&Rfc3339).unwrap_or_default(),
+                "to": to.format(&Rfc3339).unwrap_or_default(),
+                "einspeisung_kwh": losses.einspeisung_kwh,
+                "entnahme_kwh": losses.entnahme_kwh,
+                "verlust_kwh": losses.verlust_kwh,
+                "verlust_prozent": losses.verlust_prozent,
+                "legal_basis": "§22 Abs. 1 EnWG (Verlustenergie)",
+                "hinweis": "Indikative Kennzahl — Genauigkeit hängt von der \
+                            Messabdeckung ab; keine abrechnungsfähige Größe.",
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "edmd: netzverlust query failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+// ── § 60 Abs. 2 MsbG confirmations ────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct ConfirmationListParams {
+    /// Filter: OFFEN | BESTAETIGT | UEBERFAELLIG. Default: all open kinds.
+    status: Option<String>,
+    limit: Option<i64>,
+}
+
+/// `GET /api/v1/confirmations?status=&limit=`
+///
+/// Open/overdue obligations to replace estimated or substituted intervals
+/// with plausibilised real values (§ 60 Abs. 2 MsbG). Resolution happens
+/// automatically on ingest of a MEASURED/CORRECTED value for the same slot.
+async fn list_confirmations(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Query(params): Query<ConfirmationListParams>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(
+        &claims.principal(),
+        "read-timeseries",
+        state.tenant.as_str(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    let limit = params.limit.unwrap_or(200).clamp(1, 2000);
+    let status = params.status.as_deref();
+    let rows = sqlx::query(
+        r"SELECT malo_id, dtm_from, dtm_to, obis_code_norm, quality,
+                 created_at, status, resolved_at, resolved_by
+          FROM estimated_read_confirmations
+          WHERE tenant = $1
+            AND ($2::text IS NULL AND status IN ('OFFEN','UEBERFAELLIG')
+                 OR status = $2)
+          ORDER BY created_at ASC
+          LIMIT $3",
+    )
+    .bind(&state.tenant)
+    .bind(status)
+    .bind(limit)
+    .fetch_all(state.repo.pool())
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            use sqlx::Row as _;
+            use time::format_description::well_known::Rfc3339;
+            let items: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|r| {
+                    let fmt = |c: &str| {
+                        r.try_get::<OffsetDateTime, _>(c)
+                            .ok()
+                            .and_then(|t| t.format(&Rfc3339).ok())
+                    };
+                    serde_json::json!({
+                        "malo_id": r.try_get::<String, _>("malo_id").unwrap_or_default(),
+                        "dtm_from": fmt("dtm_from"),
+                        "dtm_to": fmt("dtm_to"),
+                        "obis_code_norm": r.try_get::<String, _>("obis_code_norm").unwrap_or_default(),
+                        "quality": r.try_get::<String, _>("quality").unwrap_or_default(),
+                        "created_at": fmt("created_at"),
+                        "status": r.try_get::<String, _>("status").unwrap_or_default(),
+                        "resolved_at": fmt("resolved_at"),
+                        "resolved_by": r.try_get::<Option<String>, _>("resolved_by").unwrap_or(None),
+                    })
+                })
+                .collect();
+            Json(serde_json::json!({
+                "count": items.len(),
+                "confirmations": items,
+                "legal_basis": "§ 60 Abs. 2 MsbG (Plausibilisierung und Ersatzwertbildung)",
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "edmd: confirmations query failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 // ── Summenzeitreihe (M12) ─────────────────────────────────────────────────────
 
 /// `GET /api/v1/summenzeitreihe/{malo_id}?from=&to=`
@@ -1811,7 +2022,7 @@ async fn get_annual_forecast(
 ///
 /// This is the canonical data format for:
 /// - MABIS balance group accounting (PID 13003)
-/// - Mehr-/Mindermengensaldo (§27 MessZV)
+/// - Mehr-/Mindermengensaldo (§ 13 StromNZV)
 /// - Annual Jahresabrechnung summaries
 ///
 /// Each month bucket includes: `total_kwh`, `peak_kw`, `coverage_pct`, `quality`.
@@ -1898,7 +2109,7 @@ async fn get_summenzeitreihe(
         "total_kwh": total_kwh,
         "month_count": months.len(),
         "months": months,
-        "legal_basis": "MABIS PID 13003 / §27 MessZV Mehr-Mindermengensaldo",
+        "legal_basis": "MABIS PID 13003 / § 13 StromNZV Mehr-Mindermengensaldo",
     }))
     .into_response()
 }
@@ -2111,6 +2322,8 @@ pub struct RunConfig {
     pub rate_limit: mako_service::RateLimitConfig,
     /// Kafka ingest consumer (None or `enabled = false` → not started).
     pub kafka_ingest: Option<crate::config::KafkaIngestConfig>,
+    /// § 60 Abs. 2 MsbG confirmation loop (overdue escalation worker).
+    pub confirmation: crate::config::ConfirmationConfig,
 }
 
 /// Connect to the database, run migrations, register subscription, and serve.
@@ -2285,12 +2498,25 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
     {
         use crate::smgw::spawn_cls_compliance_worker;
         spawn_cls_compliance_worker(
+            pool_arc.clone(),
+            smgw_tenant.clone(),
+            smgw_webhook_url.clone(),
+            30,     // cert_warning_days — warn 30 days before expiry (BSI TR-03109-4 §6.3)
+            2,      // comm_fault_threshold_hours — § 60 Abs. 2 MsbG: substitute after 2h silence
+            86_400, // interval_secs — sweep daily
+            cfg.shutdown.clone(),
+        );
+    }
+
+    // § 60 Abs. 2 MsbG confirmation loop — escalates estimated/substituted
+    // intervals that were never replaced by a plausibilised real value.
+    if cfg.confirmation.enabled {
+        crate::confirmation::spawn_confirmation_worker(
             pool_arc,
             smgw_tenant,
             smgw_webhook_url,
-            30,     // cert_warning_days — warn 30 days before expiry (BSI TR-03109-4 §6.3)
-            2,      // comm_fault_threshold_hours — §17 MessZV: substitute after 2h silence
-            86_400, // interval_secs — sweep daily
+            cfg.confirmation.deadline_weeks,
+            86_400, // daily
             cfg.shutdown.clone(),
         );
     }
@@ -3432,7 +3658,7 @@ pub struct DirectPushRequest {
     pub obis_code: Option<String>,
     /// 33-character MeLo-ID (optional but recommended for device tracing).
     pub melo_id: Option<String>,
-    /// MP-ID of the sender (MSB or SMGW system). Stored as `sender_mp_id` per §22 MessZV
+    /// MP-ID of the sender (MSB or SMGW system). Stored as `sender_mp_id` per § 60 Abs. 6 MsbG
     /// per-interval MSB attribution — required after a WiM MSB switch (PID 55039).
     pub sender_mp_id: Option<String>,
     /// Metered intervals (15-min for iMSys; 60-min or 1440-min for SLP).
@@ -3708,7 +3934,7 @@ pub async fn post_direct_reads_gas(
 ///
 /// Designed for fire-and-retry rather than fire-and-forget: a lost quality warning
 /// CloudEvent (`de.edmd.reading.quality.warning`) constitutes a compliance gap under
-/// §22 MessZV — the responsible party must be informed of quality issues.
+/// § 60 Abs. 6 MsbG — the responsible party must be informed of quality issues.
 pub(crate) async fn post_ce_with_retry(
     client: &reqwest::Client,
     url: &str,
@@ -3773,7 +3999,7 @@ impl BatchValidation {
 ///
 /// Every ingest family routes through here so a reading lands with the same
 /// quality record whichever door it came in by. Issues are attached to the rows
-/// they name rather than to the MaLo as a whole, so a downstream §17 MessZV
+/// they name rather than to the MaLo as a whole, so a downstream § 60 Abs. 2 MsbG
 /// substitution decision can see which intervals are actually implicated.
 ///
 /// Validation annotates and never rejects: whether an interval is billable is a
@@ -3798,7 +4024,10 @@ pub(crate) fn validate_and_annotate(
             from: r.dtm_from,
             to: r.dtm_to,
             value_kwh: r.quantity_kwh,
-            quality: metering::QualityFlag::Measured,
+            // The read's actual quality flag — hardcoding `Measured` here made
+            // V09 (non-billable quality) unfireable on every ingest path: a
+            // batch arriving as FAULTY/UNKNOWN validated as if it were clean.
+            quality: r.quality,
             obis_code: r.obis_code.clone(),
         })
         .collect();
@@ -3845,7 +4074,7 @@ pub(crate) fn validate_and_annotate(
         source = %source,
         issue_count = report.issues.len(),
         billing_block_count = report.billing_block_count(),
-        "edmd: ingest validation issues (§17 MessZV)"
+        "edmd: ingest validation issues (§ 60 Abs. 2 MsbG)"
     );
 
     for (idx, read) in batch.iter_mut().enumerate() {
@@ -4109,7 +4338,7 @@ async fn post_direct_reads_inner(
             // Unrecognised flags are rejected in the accept loop, so the
             // fallback only covers an omitted one. A direct push carries a
             // register reading, so it defaults to MEASURED — matching the IoT
-            // path, and leaving substitution to the §17 MessZV flow that
+            // path, and leaving substitution to the § 60 Abs. 2 MsbG flow that
             // records who substituted and why.
             quality: iv
                 .quality
@@ -4180,7 +4409,22 @@ async fn post_direct_reads_inner(
               COALESCE(SUM(quantity_kwh), 0) AS arbeitsmenge_kwh,
               -- Spitzenleistung: peak 15-min slot converted to kW (×4)
               MAX(quantity_kwh) * 4 AS spitzenleistung_kw,
-              'VALID' AS quality,
+              -- Worst quality across contributing reads (same ranking as
+              -- metering::QualityFlag). The previous literal 'VALID' is not
+              -- in the quality vocabulary and read back as UNKNOWN.
+              COALESCE(CASE MAX(CASE quality
+                          WHEN 'MEASURED'    THEN 0
+                          WHEN 'ESTIMATED'   THEN 1
+                          WHEN 'SUBSTITUTED' THEN 2
+                          WHEN 'CALCULATED'  THEN 3
+                          WHEN 'CORRECTED'   THEN 4
+                          ELSE 5 END)
+                  WHEN 0 THEN 'MEASURED'
+                  WHEN 1 THEN 'ESTIMATED'
+                  WHEN 2 THEN 'SUBSTITUTED'
+                  WHEN 3 THEN 'CALCULATED'
+                  WHEN 4 THEN 'CORRECTED'
+                  ELSE 'PRELIMINARY' END, 'UNKNOWN') AS quality,
               now() AS computed_at,
               $5 AS tenant
           FROM meter_reads
@@ -4717,13 +4961,13 @@ mod quality_tests {
     }
 }
 
-// ── §22 MessZV Bitemporal Corrections ─────────────────────────────────────────
+// ── § 60 Abs. 6 MsbG Bitemporal Corrections ─────────────────────────────────────────
 
 /// `POST /api/v1/corrections/{malo_id}`
 ///
 /// Submit one or more retroactive corrections to stored meter intervals.
 ///
-/// ## §22 MessZV compliance
+/// ## § 60 Abs. 6 MsbG compliance
 ///
 /// Every correction creates an immutable `meter_read_corrections` row that
 /// preserves the original value, corrected value, reason, and operator identity.
@@ -4798,7 +5042,9 @@ pub async fn post_corrections(
         if rec.reason.trim().is_empty() {
             return (
                 axum::http::StatusCode::BAD_REQUEST,
-                format!("correction[{i}].reason must not be empty (§22 MessZV audit requirement)"),
+                format!(
+                    "correction[{i}].reason must not be empty (§ 60 Abs. 6 MsbG audit requirement)"
+                ),
             )
                 .into_response();
         }
@@ -4833,7 +5079,7 @@ pub async fn post_corrections(
             tracing::info!(
                 malo_id,
                 corrected_count = count,
-                "edmd: {} interval(s) corrected (§22 MessZV)",
+                "edmd: {} interval(s) corrected (§ 60 Abs. 6 MsbG)",
                 count
             );
             (
@@ -5138,7 +5384,7 @@ pub async fn post_bulk_reads(
         .into_response()
 }
 
-// ── §17 MessZV Auto-Substitute (post_substitute_values) ───────────────────────
+// ── § 60 Abs. 2 MsbG Auto-Substitute (post_substitute_values) ───────────────────────
 
 /// Request body for `POST /api/v1/meter-reads/{malo_id}/substitute`.
 #[derive(Debug, serde::Deserialize)]
@@ -5159,7 +5405,7 @@ pub struct SubstituteRequest {
     /// `STROM` (default) · `GAS` · `WAERME` · `WASSER`. Determines the `unit`
     /// the substitute is stored in — a substituted water gap is m³, not kWh.
     pub sparte: Option<String>,
-    /// Why a substitute is required (§22 MessZV audit trail).
+    /// Why a substitute is required (§ 60 Abs. 6 MsbG audit trail).
     ///
     /// One of the `substitute_value_log.reason` values. Defaults to
     /// `NoMeasurementAvailable`.
@@ -5177,7 +5423,7 @@ pub struct SubstituteRequest {
 /// vocabulary.
 ///
 /// The two vocabularies were never reconciled: `ForecastMethod` describes *how*
-/// a value was derived, the CHECK list describes §17 MessZV substitution
+/// a value was derived, the CHECK list describes § 60 Abs. 2 MsbG substitution
 /// categories. Methods with no §17 category map to `LinearInterpolation`, the
 /// closest admissible description, rather than failing the write.
 fn forecast_method_to_db(method: metering::ForecastMethod) -> &'static str {
@@ -5192,14 +5438,14 @@ fn forecast_method_to_db(method: metering::ForecastMethod) -> &'static str {
 
 /// `POST /api/v1/meter-reads/{malo_id}/substitute`
 ///
-/// Generate and store §17 MessZV substitute values for a gap interval.
+/// Generate and store § 60 Abs. 2 MsbG substitute values for a gap interval.
 ///
 /// This endpoint:
 /// 1. Validates the requested gap window.
 /// 2. Fetches prior-period reference data from `meter_reads`.
 /// 3. Calls `metering::prior_period_substitutes()` to generate values.
 /// 4. Stores the generated intervals as `AUTO_SUBSTITUTE` source.
-/// 5. Records each substitution in `substitute_value_log` for §22 MessZV audit.
+/// 5. Records each substitution in `substitute_value_log` for § 60 Abs. 6 MsbG audit.
 /// 6. Returns the generated intervals with their methods and confidence notes.
 ///
 /// **Cedar action**: `write-meter-reads`
@@ -5222,7 +5468,7 @@ pub async fn post_substitute_values(
     run_substitute_values(state.repo.pool(), &state.tenant, &malo_id, &req).await
 }
 
-/// Core of the §17 MessZV substitute flow.
+/// Core of the § 60 Abs. 2 MsbG substitute flow.
 ///
 /// Shared by the HTTP handler (above) and the `trigger_substitution` MCP tool,
 /// so both write substitutes under identical guards: never over a billable
@@ -5394,7 +5640,7 @@ pub(crate) async fn run_substitute_values(
     // Intervals left alone because they already carry a billable reading.
     let mut skipped: Vec<String> = Vec::new();
 
-    // Every interval's reading and its §22 MessZV audit row commit together. As
+    // Every interval's reading and its § 60 Abs. 6 MsbG audit row commit together. As
     // two independent statements, a failure part-way left billable SUBSTITUTED
     // values in `meter_reads` with no record of who substituted them or why.
     let mut tx = match pool.begin().await {
@@ -5474,13 +5720,13 @@ pub(crate) async fn run_substitute_values(
         // Upsert into meter_reads.
         //
         // The `WHERE` on the conflict action is what keeps a substitution from
-        // destroying a real reading: §17 MessZV authorises an Ersatzwert where
+        // destroying a real reading: § 60 Abs. 2 MsbG authorises an Ersatzwert where
         // no usable measurement exists, not in place of one. A window that
         // overlaps billable data leaves that data untouched and reports the
         // interval as skipped.
         // The CTE snapshots the value being replaced before the upsert runs, so
         // `substitute_value_log.original_kwh` records what was actually there.
-        // Without it the §22 MessZV trail says a substitute was written but not
+        // Without it the § 60 Abs. 6 MsbG trail says a substitute was written but not
         // what it displaced.
         let upserted = sqlx::query(
             r"WITH prior AS (
@@ -5536,7 +5782,7 @@ pub(crate) async fn run_substitute_values(
             }
         };
 
-        // §22 MessZV audit trail: which value was replaced, by what method, on
+        // § 60 Abs. 6 MsbG audit trail: which value was replaced, by what method, on
         // whose authority.
         if let Err(e) = sqlx::query(
             r"INSERT INTO substitute_value_log
@@ -5587,7 +5833,7 @@ pub(crate) async fn run_substitute_values(
     tracing::info!(
         malo_id, stored, operator_id,
         gap_from = %gap_from, gap_to = %gap_to,
-        "edmd: §17 MessZV substitute values generated"
+        "edmd: § 60 Abs. 2 MsbG substitute values generated"
     );
 
     (
@@ -5600,16 +5846,16 @@ pub(crate) async fn run_substitute_values(
             "method_requested": format!("{method:?}"),
             // What each interval was actually produced by. A requested strategy
             // with no data to work from degrades — prior-period to carry-forward
-            // to zero — and the §22 MessZV record must name what ran, not what
+            // to zero — and the § 60 Abs. 6 MsbG record must name what ran, not what
             // was asked for.
             "methods_applied": log_entries
                 .iter()
                 .filter_map(|e| e["method"].as_str())
                 .collect::<std::collections::BTreeSet<_>>(),
-            // Intervals already covered by a billable reading; §17 MessZV
+            // Intervals already covered by a billable reading; § 60 Abs. 2 MsbG
             // authorises a substitute only where no measurement exists.
             "skipped_measured": skipped,
-            "legal_basis": "§17 MessZV Abs. 2 Ersatzwertbildung",
+            "legal_basis": "§ 60 Abs. 2 MsbG Abs. 2 Ersatzwertbildung",
             "intervals": log_entries,
         })),
     )
@@ -6011,7 +6257,7 @@ async fn complete_gdpr_archive_erasure(
 /// 1. Inserts a row in `gdpr_deletions` (idempotent on `malo_id + tenant`).
 /// 2. **Soft-deletes** all `meter_reads` rows for this MaLo by marking them
 ///    `quality = 'FAULTY'` and replacing `quantity_kwh` with `'0'`
-///    (§22 MessZV: audit trail must be preserved — rows are not physically deleted).
+///    (§ 60 Abs. 6 MsbG: audit trail must be preserved — rows are not physically deleted).
 /// 3. Deletes `meter_billing_periods` rows (no audit trail obligation).
 /// 4. Deletes `quality_assessments` rows.
 /// 5. Hard deletion of Iceberg Parquet data must be done by the operator
@@ -6019,7 +6265,7 @@ async fn complete_gdpr_archive_erasure(
 ///
 /// ## Regulatory basis
 ///
-/// DSGVO Art. 17 right to erasure. §22 MessZV (3-year audit trail) applies
+/// DSGVO Art. 17 right to erasure. § 60 Abs. 6 MsbG (3-year audit trail) applies
 /// to *billing-relevant* data — once anonymized, the obligation is satisfied.
 #[derive(serde::Deserialize)]
 struct GdprErasureRequest {
@@ -6184,7 +6430,7 @@ async fn post_gdpr_erasure(
             "archive_pending":   true,
             "legal_basis":       "DSGVO Art. 17 right to erasure",
             "audit_note": "meter_reads rows anonymized (quantity=0, quality=FAULTY) — \
-                           §22 MessZV audit trail row structure preserved. \
+                           § 60 Abs. 6 MsbG audit trail row structure preserved. \
                            Iceberg Parquet deletion is scheduled via archive rewrite pipeline.",
         })),
     )
@@ -7174,7 +7420,7 @@ async fn post_iot_reads(
             continue;
         }
 
-        // An outlier is flagged, not discarded: §17 MessZV substitution is a
+        // An outlier is flagged, not discarded: § 60 Abs. 2 MsbG substitution is a
         // downstream decision.
         // `PRELIMINARY` (MSCONS Z84, vorläufiger Wert): measured but not yet
         // confirmed. `FAULTY` would assert a defect the filter cannot establish.

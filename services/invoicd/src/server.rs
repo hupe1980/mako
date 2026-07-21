@@ -4,7 +4,7 @@
 //! - `POST /webhook`                                  — inbound MarktEvent CloudEvents from `marktd` (HMAC-auth)
 //! - `GET  /api/v1/receipts`                          — query INVOIC receipts (OIDC+Cedar)
 //! - `GET  /api/v1/receipts/:id`                      — get a single receipt (OIDC+Cedar)
-//! - `POST /api/v1/receipts/:id/confirm-payment`      — ERP confirms payment received; sets `payment_confirmed_at` (§22 MessZV)
+//! - `POST /api/v1/receipts/:id/confirm-payment`      — ERP confirms payment received; sets `payment_confirmed_at` (§ 147 AO / GoBD)
 //! - `GET  /api/v1/disputes`                          — list open disputes (OIDC+Cedar)
 //! - `GET  /api/v1/overdue-remadv`                    — receipts approaching `pay_by` without dispatch
 //! - `GET  /api/v1/zahlungsstatus/{malo_id}`          — payment status per MaLo (pending / settled / overdue)
@@ -111,7 +111,9 @@ async fn metrics(State(state): State<HandlerState>) -> impl IntoResponse {
         0
     };
 
-    out.push_str("# HELP invoicd_receipts_total Total INVOIC receipts persisted (§22 MessZV).\n");
+    out.push_str(
+        "# HELP invoicd_receipts_total Total INVOIC receipts persisted (§ 147 AO / GoBD).\n",
+    );
     out.push_str("# TYPE invoicd_receipts_total gauge\n");
     out.push_str(&format!("invoicd_receipts_total {receipt_count}\n"));
     out.push_str("# HELP invoicd_disputes_total Receipts with Dispute outcome.\n");
@@ -307,7 +309,7 @@ async fn list_disputes(
 /// REMADV has yet been dispatched (`dispatched_at IS NULL`).
 ///
 /// Alert rule: run every 6 h; alert when non-empty.  Undispatched REMADV past
-/// the Zahlungsziel is a §22 MessZV compliance gap.
+/// the Zahlungsziel is a § 147 AO / GoBD compliance gap.
 ///
 /// Source: GPKE BK6-22-024; Allgemeine Festlegungen §7 (Zahlungsziel).
 async fn list_overdue_remadv(
@@ -386,7 +388,7 @@ async fn list_overdue_remadv(
 /// Called by the ERP when it confirms that payment for an invoice has been
 /// received (bank transfer confirmed).  Sets `payment_confirmed_at = now()`.
 ///
-/// This closes the §22 MessZV payment audit trail: every `invoic_receipt`
+/// This closes the § 147 AO / GoBD payment audit trail: every `invoic_receipt`
 /// record transitions from `dispatched` → `payment_confirmed` state once
 /// the ERP sends this callback.
 ///
@@ -915,14 +917,14 @@ fn grid_billing_into_rechnung(
 /// - `marktd` must have a valid `PreisblattNetznutzung` for the NB
 /// - `marktd` must have a valid `NbContractRecord` for the MaLo
 ///
-/// # §22 MessZV
+/// # § 147 AO / GoBD
 ///
 /// The receipt is written to `invoic_receipts` (direction=Outbound,
 /// outcome=Dispatched) in a single PostgreSQL transaction BEFORE the command
 /// is dispatched to `makod`.  A crash between persist and dispatch is
 /// recoverable; a crash before persist would violate 3-year retention.
 ///
-/// Source: GPKE Teil 3 BK6-24-174; §22 MessZV.
+/// Source: GPKE Teil 3 BK6-24-174; § 147 AO / GoBD.
 #[derive(Debug, serde::Deserialize)]
 struct SelbstausstellenRequest {
     /// Start of billing period (ISO 8601 date `YYYY-MM-DD`).
@@ -1175,7 +1177,7 @@ async fn post_selbstausstellen(
     // Convert domain invoice to BO4E Rechnung (service-layer concern; grid-billing is BO4E-free)
     // The settlement becomes a document here — the only place an invoice number,
     // issue date and Prüfidentifikator enter. PID 31006 is the
-    // Selbstausstellen-Netznutzungsrechnung (§20 MessZV).
+    // Selbstausstellen-Netznutzungsrechnung (INVOIC AHB Selbstausstellung).
     let document = grid_billing::InvoiceDocument {
         settlement: billing_result,
         pid: 31006,
@@ -1197,7 +1199,7 @@ async fn post_selbstausstellen(
         "invoicd: selbstausstellen 31006 — full Rechnung generated"
     );
 
-    // ── Step 5: Persist as Dispatched (§22 MessZV) ───────────────────────────
+    // ── Step 5: Persist as Dispatched (§ 147 AO / GoBD) ───────────────────────────
     let process_id = uuid::Uuid::new_v4();
     let now = time::OffsetDateTime::now_utc();
 
@@ -1221,7 +1223,7 @@ async fn post_selbstausstellen(
 
     if let Err(e) = pg::upsert_receipt(pool, &row).await {
         tracing::warn!(%e, "invoicd: failed to persist selbstausstellen receipt");
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "failed to persist receipt — §22 MessZV; aborting dispatch" }))).into_response();
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "failed to persist receipt — § 147 AO / GoBD; aborting dispatch" }))).into_response();
     }
 
     // ── Step 6: Dispatch to makod ─────────────────────────────────────────────
@@ -1439,7 +1441,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         .unwrap_or_else(|| secrecy::SecretString::new(String::new().into()));
     let makod = MakodClient::new(&cfg.makod_url, api_key);
 
-    // ── PostgreSQL pool (§22 MessZV compliance) ───────────────────────────────
+    // ── PostgreSQL pool (§ 147 AO / GoBD compliance) ───────────────────────────────
     let pool = if let Some(ref url) = cfg.database_url {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(cfg.db_max_connections)
@@ -1453,7 +1455,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         Some(pool)
     } else {
         tracing::warn!(
-            "invoicd: no --database-url configured — INVOIC receipts will NOT be persisted (§22 MessZV violation in production)"
+            "invoicd: no --database-url configured — INVOIC receipts will NOT be persisted (§ 147 AO / GoBD violation in production)"
         );
         None
     };
@@ -1500,7 +1502,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
 
         // Spawn the payment-overdue worker (polls every 6 h).
         // Emits `de.invoic.payment.overdue` when `pay_by` has passed
-        // without `payment_confirmed_at` being set — closes §22 MessZV dunning gap.
+        // without `payment_confirmed_at` being set — closes § 147 AO / GoBD dunning gap.
         crate::payment_overdue::spawn(
             db_pool.clone(),
             cfg.tenant.clone(),

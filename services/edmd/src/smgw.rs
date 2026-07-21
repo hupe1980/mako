@@ -9,7 +9,7 @@
 //! | **BK6-22-300 §4** | §14a Konfigurationsprodukt must be assigned before load control |
 //! | **BSI TR-03109-1 §5.3** | CLS channel must be Active before control commands |
 //! | **BSI TR-03109-4 §6.3** | MSB must monitor certificate expiry across the fleet |
-//! | **§17 MessZV §2** | Communication fault triggers substitute-value obligation |
+//! | **§ 60 Abs. 2 MsbG §2** | Communication fault triggers substitute-value obligation |
 //!
 //! ## Architecture
 //!
@@ -38,7 +38,7 @@
 //! | `CERT_EXPIRING` | WARNING | TLS cert expiry ≤ 30 days | Renewal required |
 //! | `TLS_CERT_MISSING` | CRITICAL | No TLS cert in session | SMGW Admin Protocol broken |
 //! | `CLS_NOT_COMPLIANT` | WARNING | Active channel, no Konfigurationsprodukt | DSO control impossible |
-//! | `COMMUNICATION_FAULT` | CRITICAL | No contact > 2h | §17 MessZV substitution + Sonderablesung |
+//! | `COMMUNICATION_FAULT` | CRITICAL | No contact > 2h | § 60 Abs. 2 MsbG substitution + Sonderablesung |
 //! | `GATEWAY_REVOKED` | CRITICAL | `status = REVOKED` | Security incident — replace immediately |
 
 use std::sync::Arc;
@@ -199,11 +199,11 @@ pub fn check_session_compliance(
             description: match hours {
                 Some(h) => format!(
                     "SMGW {} no contact for {h}h (threshold: {comm_fault_threshold_hours}h) \
-                     — §17 MessZV substitute values required",
+                     — § 60 Abs. 2 MsbG substitute values required",
                     session.device_id
                 ),
                 None => format!(
-                    "SMGW {} has never been contacted — §17 MessZV substitute values required",
+                    "SMGW {} has never been contacted — § 60 Abs. 2 MsbG substitute values required",
                     session.device_id
                 ),
             },

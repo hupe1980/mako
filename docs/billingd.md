@@ -27,7 +27,7 @@ Port: **`:9280`**
 Every billing run is **deterministic and reproducible**: given the same inputs (product, meter,
 tariff), the output is always the same `Rechnung`. This means:
 
-- BNetzA §22 MessZV compliance: auditors can re-run the calculation from stored inputs
+- BNetzA § 147 AO / GoBD compliance: auditors can re-run the calculation from stored inputs
 - No hidden state: all inputs are either stored in `tarifbd`, `edmd`, or `marktd`
 - Testable: `energy-billing` has **190 tests** (property-based, golden master, integration) — zero I/O, zero async, all pure Rust
 
@@ -86,7 +86,7 @@ graph TB
     edmd["edmd :8380\nMeterBillingPeriod\n(arbeitsmenge, spitzenleistung)"]
     marktd["marktd :8180\nPreisblattNetznutzung\nPreisblattKonzessionsabgabe"]
     calculator["energy-billing crate\nProduct → BillingEngine → Invoice"]
-    pg[("PostgreSQL\nbilling_records\n§22 MessZV")]
+    pg[("PostgreSQL\nbilling_records\n§ 147 AO / GoBD")]
     erp_hook["ERP webhook\nde.billing.rechnung.erstellt"]
     accountingd["accountingd :9380\n→ debit entry"]
 
@@ -158,7 +158,7 @@ Variants: `Eintarif`, `Zweitarif` (HT/NT), `Mehrtarif` (multiple registers).
 **§41a EPEX dynamic**: when `dynamic_epex = true` in the product, `billingd` fetches
 15-min Lastgang and prices per hour from `tarifbd`. `arbeitspreis_ct_per_kwh` is ignored.
 
-**RLM demand charge**: For large commercial customers with measured peak demand (§4 MessZV,
+**RLM demand charge**: For large commercial customers with measured peak demand (§ 12 StromNZV,
 ≥100 MWh/year), set `leistungspreis_strom_ct_per_kw_month` in the product definition.
 `billingd` bills `spitzenleistung_kw × rate` as a `Leistungspreis` position.
 Supply `spitzenleistung_kw` from `edmd` MeterBillingPeriod. Applies to `metering_mode: RLM`
@@ -315,8 +315,8 @@ let invoice = engine.bill(ctx, &quantities)?;
 | `anlage_kwp` on product → auto-0% MwSt | §12 Abs. 3 UStG (Solarpaket I 2023) |
 | `industrie_stromsteuer_befreiung` → exemption notice | §9 Abs. 1 Nr. 4 StromStG |
 | `preisgarantie_bis` → disclosure on invoice | §41 Abs. 1 Nr. 4 EnWG |
-| `MeteringMode` (SLP/RLM/iMSys) on MeterInput | §3/§4 MessZV, §31 MsbG |
-| `is_estimated` flag → §17 MessZV notice | §17 Abs. 1 MessZV |
+| `MeteringMode` (SLP/RLM/iMSys) on MeterInput | §3/§ 12 StromNZV, §31 MsbG |
+| `is_estimated` flag → § 60 Abs. 2 MsbG notice | § 60 Abs. 2 MsbG |
 | `zaehler_replaced` flag → Zählerwechsel notice | §41 EnWG |
 | `Sect41aAnnualComparison` in Quantities | §41a Abs. 6 EnWG |
 | `InvoiceType::PartialInvoice` | §41 EnWG, StromGVV §17 |
@@ -368,7 +368,7 @@ Every billing run now generates a unique `billing_run_id` (UUID v4). It is store
 - `billing_records.billing_run_id` in PostgreSQL
 - `rechnung_json.zusatzAttribute["billingRunId"]`
 
-This links each database record to the exact calculation output for §22 MessZV compliance.
+This links each database record to the exact calculation output for § 147 AO / GoBD compliance.
 
 ## Triggering a billing run
 
@@ -485,7 +485,7 @@ at the correction path.
 | `GET` | `/api/v1/billing/{id}` | Fetch single record with full `Rechnung` JSONB |
 | `GET` | `/api/v1/billing/{id}/xrechnung` | XRechnung 3.0 / ZUGFeRD 2.3 CII XML |
 | `GET` | `/api/v1/billing/{id}/ubl` | PEPPOL BIS Billing 3.0 UBL 2.1 (EN16931) |
-| `POST` | `/api/v1/billing/{id}/correction` | Korrekturrechnung / Stornorechnung (§22 MessZV) |
+| `POST` | `/api/v1/billing/{id}/correction` | Korrekturrechnung / Stornorechnung (§ 147 AO / GoBD) |
 | `POST` | `/api/v1/billing/{malo_id}/tarifwechsel` | Combined invoice for mid-period price change (§41 EnWG) |
 | `POST` | `/api/v1/billing/{id}/submit-b2g` | XRechnung B2G submission (§27 EGovG) |
 | `GET` | `/health` | Liveness |
@@ -509,7 +509,7 @@ and six prompts are available to LLM agents:
 | `get_xrechnung` | Fetch XRechnung 3.0 / ZUGFeRD 2.3 CII XML for B2G submission |
 | `check_billing_anomaly` | Rolling 3-month deviation check — flags invoices outside threshold |
 | `list_vpp_settlements` | List VPP aggregation settlement records |
-| `list_corrections` | List Korrekturrechnung / Stornorechnung records (§22 MessZV) |
+| `list_corrections` | List Korrekturrechnung / Stornorechnung records (§ 147 AO / GoBD) |
 | `list_product_categories` | Describe all 13 billing categories and their required product fields |
 | `get_billing_summary` | Aggregate stats per MaLo: total billed, avg monthly, by category |
 | `validate_tariff_config` | Pre-flight: §41b iMSys guard, KAV plausibility, missing fields |
@@ -530,7 +530,7 @@ The `tariff-optimization-agent` in `agentd` calls `list_billing_records` and
 
 ---
 
-## Korrekturrechnung (§22 MessZV)
+## Korrekturrechnung (§ 147 AO / GoBD)
 
 `POST /api/v1/billing/{id}/correction` creates a Korrekturrechnung or Stornorechnung:
 
@@ -541,7 +541,7 @@ The `tariff-optimization-agent` in `agentd` calls `list_billing_records` and
 - `negate: true` → Stornorechnung (all positions negated, `is_correction: true` in DB)
 - `negate: false` → Korrekturrechnung (amended positions only)
 
-Both variants include `zusatzAttribute.originalRechnungsnummer` for §22 MessZV audit trail.
+Both variants include `zusatzAttribute.originalRechnungsnummer` for § 147 AO / GoBD audit trail.
 
 A second correction of the same original is refused with `409 Conflict` —
 `KORR-{original_nr}` must stay einmalig (§14 Abs. 4 Nr. 4 UStG), and a double
@@ -664,7 +664,7 @@ Useful for:
 | `malo_id`, `lf_mp_id` | MaLo + LF identity |
 | `product_code`, `category` | Product reference (`VPP` for dispatch settlements) |
 | `period_from`, `period_to` | Billing period |
-| `rechnung_json` | Full BO4E `Rechnung` JSONB (§22 MessZV) |
+| `rechnung_json` | Full BO4E `Rechnung` JSONB (§ 147 AO / GoBD) |
 | `total_netto_eur`, `total_brutto_eur` | Cached totals for fast reporting |
 | `outcome` | `generated` → `dispatched` → `paid`/`disputed` |
 | `ce_id` | CloudEvent ID of emitted `de.billing.rechnung.erstellt` |

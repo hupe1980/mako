@@ -1,7 +1,7 @@
 -- ── billingd schema — Energy Billing Engine ──────────────────────────────────
 --
 -- `billing_records`: immutable audit log of every generated invoice.
---   Full rubo4e::current::Rechnung JSONB for §22 MessZV compliance (3-year retention).
+--   Full rubo4e::current::Rechnung JSONB for § 147 AO / GoBD compliance (3-year retention).
 --   Supports Einzelrechnung, Korrektur/Storno (is_correction), and B2B Sammelrechnung.
 --
 -- `billing_run_log`: monthly batch run audit + idempotency guard.
@@ -28,7 +28,7 @@ CREATE TABLE billing_records (
     period_from         DATE        NOT NULL,
     period_to           DATE        NOT NULL,
 
-    -- Full rubo4e::current::Rechnung JSONB (§22 MessZV 3-year retention)
+    -- Full rubo4e::current::Rechnung JSONB (§ 147 AO / GoBD 3-year retention)
     rechnung_json       JSONB       NOT NULL,
     bo4e_version        TEXT        NOT NULL DEFAULT 'v202607.0.0',
 
@@ -45,7 +45,7 @@ CREATE TABLE billing_records (
                             'cancelled'     -- cancelled before dispatch
                         )),
 
-    -- Correction invoice fields (§22 MessZV Stornorechnung / Korrekturrechnung)
+    -- Correction invoice fields (§ 147 AO / GoBD Stornorechnung / Korrekturrechnung)
     is_correction       BOOLEAN     NOT NULL DEFAULT false,
     original_record_id  UUID        REFERENCES billing_records(id) ON DELETE SET NULL,
     correction_reason   TEXT,
@@ -62,7 +62,7 @@ CREATE TABLE billing_records (
 );
 
 COMMENT ON TABLE billing_records IS
-    '§22 MessZV: 3-year audit ledger for all generated invoices. '
+    '§ 147 AO / GoBD: 3-year audit ledger for all generated invoices. '
     'Supports original invoices, Storno/Korrektur chains, and B2B Sammelrechnungen.';
 
 COMMENT ON COLUMN billing_records.is_correction IS

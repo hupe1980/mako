@@ -290,7 +290,7 @@ docker compose down -v   # destroy all volumes (full reset)
 | makod operator reference | [makod guide](./makod.md) |
 | marktd operator reference | [marktd guide](./marktd.md) |
 | processd — NB STP + LF E_0624 | [processd guide](./processd.md) |
-| INVOIC plausibility, §22 MessZV | [invoicd guide](./invoicd.md) |
+| INVOIC plausibility, § 147 AO / GoBD | [invoicd guide](./invoicd.md) |
 | Energy data, imbalance, billing periods | [edmd guide](./edmd.md) |
 | Process observability, §20 parity | [obsd guide](./obsd.md) |
 | Full system architecture | [Architecture](./architecture.md) |

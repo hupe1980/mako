@@ -1,5 +1,6 @@
 #![allow(async_fn_in_trait)]
 
+use rust_decimal::Decimal;
 use time::Date;
 
 use crate::{
@@ -90,8 +91,8 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
         &self,
         tenant: &str,
         malo_id: &str,
-        brennwert_kwh_per_m3: Option<&str>,
-        zustandszahl: Option<&str>,
+        brennwert_kwh_per_m3: Option<Decimal>,
+        zustandszahl: Option<Decimal>,
     ) -> Result<u64, EdmError>;
 
     /// Record a retroactive correction to one or more meter read intervals.
@@ -105,7 +106,7 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
     /// 3. `meter_reads.correction_count` is incremented.
     ///
     /// This gives the **query layer** the latest (corrected) value, while the
-    /// **audit layer** retains the full correction history per §22 MessZV.
+    /// **audit layer** retains the full correction history per § 60 Abs. 6 MsbG.
     ///
     /// ## Atomicity
     ///

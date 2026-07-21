@@ -10,7 +10,7 @@
 //! | `get_xrechnung` | Fetch XRechnung 3.0 / ZUGFeRD 2.3 CII XML for B2G submission |
 //! | `check_billing_anomaly` | AI anomaly detection: rolling 3-month average vs latest invoice |
 //! | `list_vpp_settlements` | List VPP aggregation settlement records |
-//! | `list_corrections` | List Korrekturrechnung / Stornorechnung records (§22 MessZV) |
+//! | `list_corrections` | List Korrekturrechnung / Stornorechnung records (§ 147 AO / GoBD) |
 //! | `calculate_billing` | Trigger a billing calculation run for a MaLo |
 //! | `list_product_categories` | Describe all 12 billing categories and their required fields |
 //! | `get_billing_summary` | Aggregate billing stats per MaLo (total billed, avg monthly) |
@@ -385,7 +385,7 @@ CloudEvent de.vpp.settlement.berechnet is emitted per settlement. RED III Articl
     }
 
     #[tool(
-        description = "List Korrekturrechnung and Stornorechnung records (§22 MessZV audit trail). \
+        description = "List Korrekturrechnung and Stornorechnung records (§ 147 AO / GoBD audit trail). \
 Returns all correction/reversal billing records for a MaLo. \
 Each record includes original_record_id, correction_reason, and whether it negates the original.",
         annotations(read_only_hint = true, open_world_hint = false)

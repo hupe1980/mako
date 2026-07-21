@@ -70,7 +70,7 @@ pub struct MeterBillingPeriod {
     pub period_end: Date,
     pub kwh_ht: Decimal,
     pub kwh_nt: Decimal,
-    pub spitzenleistung_kw: Option<Decimal>,   // RLM §2 Nr. 17 MessZV
+    pub spitzenleistung_kw: Option<Decimal>,   // RLM § 12 StromNZV
     pub brennwert_kwh_m3: Option<Decimal>,     // Gas §25 Nr. 4 MessEV
     pub zustandszahl: Option<Decimal>,          // Gas §25 Nr. 4 MessEV
 }
@@ -83,7 +83,7 @@ reads raw intervals directly.
 
 ## Mehr-/Mindermengen imbalance
 
-`compute_imbalance` computes the Mehr-/Mindermengensaldo per §27 MessZV:
+`compute_imbalance` computes the Mehr-/Mindermengensaldo per § 13 StromNZV:
 
 ```rust
 pub fn compute_imbalance(
@@ -116,8 +116,8 @@ Never enable `testing` in production builds.
 
 ## Regulatory basis
 
-- **§22 MessZV** — Pflicht zur Aufbewahrung von Zählerstandsgängen
-- **§27 MessZV** — Mehr-/Mindermengensaldo-Berechnung
+- **§ 60 Abs. 6 MsbG** — Pflicht zur Aufbewahrung von Zählerstandsgängen
+- **§ 13 StromNZV** — Mehr-/Mindermengensaldo-Berechnung
 - **§41a EnWG** — 15-Minuten-Lastgang mandatory for iMSys customers (since 2025)
 - **§25 Nr. 4 MessEV / DVGW G 685** — Brennwertkorrektur (m³ → kWh_Hs)
 - **MSCONS AHB** — Meter reading message format (EDI@Energy)

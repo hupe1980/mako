@@ -320,7 +320,7 @@ pub enum DeadLetterReason {
 }
 ```
 
-`AuditContext` carries §22 MessZV structured audit fields (`message_type`, `pid`, `sender_eic`, `receiver_eic`, `message_ref`, `process_id`, `tenant_id`, `correlation_id`, `timestamp`). Build it with the builder methods on `AuditContext::now()`.
+`AuditContext` carries § 147 AO / GoBD structured audit fields (`message_type`, `pid`, `sender_eic`, `receiver_eic`, `message_ref`, `process_id`, `tenant_id`, `correlation_id`, `timestamp`). Build it with the builder methods on `AuditContext::now()`.
 
 `LogDeadLetterSink` (default) emits `tracing::warn!` with all available audit fields. `NoopDeadLetterSink` is available behind the `testing` feature. Implement `DeadLetterSink` to write to Prometheus, a database, or a page channel.
 

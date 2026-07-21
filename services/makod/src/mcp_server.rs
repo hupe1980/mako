@@ -806,11 +806,11 @@ impl MakodMcpHandler {
     ///
     /// Dead-lettered messages have exhausted all delivery retries or were
     /// rejected with a permanent error.  Each entry needs operator investigation.
-    /// Under §22 MessZV, dead-lettered EDIFACT messages must be resolved within
+    /// Under § 147 AO / GoBD, dead-lettered EDIFACT messages must be resolved within
     /// the regulatory deadline window.
     #[tool(
         annotations(read_only_hint = true, open_world_hint = false),
-        description = "Return the 20 most recent permanently dead-lettered messages (§22 MessZV)."
+        description = "Return the 20 most recent permanently dead-lettered messages (§ 147 AO / GoBD)."
     )]
     async fn list_dead_letters(&self) -> Result<CallToolResult, McpError> {
         let records = self
@@ -837,7 +837,7 @@ impl MakodMcpHandler {
             "items": items,
             "note": "Dead-lettered messages have permanently failed delivery. \
                      Investigate each entry and re-submit via POST /api/v1/commands \
-                     or the ERP command API. §22 MessZV requires timely resolution.",
+                     or the ERP command API. § 147 AO / GoBD requires timely resolution.",
         }))
         .map(|block| CallToolResult::success(vec![block]))
         .map_err(|e| McpError::internal_error(e.message, None))

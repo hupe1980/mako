@@ -13,7 +13,7 @@ use std::sync::Arc;
 /// | 2 | melo_id | String? | Messlokations-ID |
 /// | 3 | dtm_from | Timestamptz | Interval start (UTC) |
 /// | 4 | dtm_to | Timestamptz | Interval end (UTC) |
-/// | 5 | quantity_kwh | Decimal(18,5) | §22 MessZV 5-decimal precision |
+/// | 5 | quantity_kwh | Decimal(18,5) | § 60 Abs. 6 MsbG 5-decimal precision |
 /// | 6 | quality | String | MEASURED/ESTIMATED/… |
 /// | 7 | pid | Int | Source MSCONS PID |
 /// | 8 | sparte | String | STROM/GAS |
@@ -29,7 +29,7 @@ pub fn meter_reads_schema() -> anyhow::Result<Arc<Schema>> {
             NestedField::required(3, "dtm_from", Type::Primitive(PrimitiveType::Timestamptz))
                 .into(),
             NestedField::required(4, "dtm_to", Type::Primitive(PrimitiveType::Timestamptz)).into(),
-            // Decimal(18,5) — preserves §22 MessZV 5-decimal-place precision.
+            // Decimal(18,5) — preserves § 60 Abs. 6 MsbG 5-decimal-place precision.
             // Avoids the TRY_CAST overhead that STRING would require in DataFusion.
             NestedField::required(
                 5,

@@ -460,7 +460,7 @@ breakdown entry.
 - §53b/§54 DB lookups — resolved by `einsd` before calling `calculate_settlement`
 - §55 Pönalen computation — `einsd` tracks commissioning deadlines
 - §52 cumulative months tracking — `einsd` computes from `violation_start` dates
-- §22 MessZV receipt archival — `einsd` manages `settlement_receipt_history`
+- § 147 AO / GoBD receipt archival — `einsd` manages `settlement_receipt_history`
 - Redispatch 2.0 compensation (§13a/§14 EnWG) — see `crates/mako-redispatch`
 - SEPA CT payment dispatch — handled by `accountingd`
 - EPEX Spot price import — handled by `einsd`

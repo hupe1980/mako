@@ -2,7 +2,7 @@
 //!
 //! # Regulatory basis
 //!
-//! §22 MessZV / §41 EnWG require a durable payment audit trail.  `invoicd`
+//! § 147 AO / GoBD / §41 EnWG require a durable payment audit trail.  `invoicd`
 //! dispatches REMADV but has no feedback path from the banking system.
 //! This worker closes the gap: when `pay_by` has passed and
 //! `payment_confirmed_at IS NULL`, the ERP has not called

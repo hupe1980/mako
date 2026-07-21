@@ -5,7 +5,7 @@
 //! - **§18 Abs. 1 StromNEV**: Grid tariffs for RLM customers include a power-demand
 //!   component (Leistungspreis). The billing basis is the highest 15-minute average
 //!   demand (Spitzenleistung) within the billing period.
-//! - **§2 Nr. 17 MessZV**: "Spitzenleistung" — the maximum arithmetic mean of the
+//! - **§ 12 StromNZV**: "Spitzenleistung" — the maximum arithmetic mean of the
 //!   active power in any 15-minute interval during the billing period.
 //! - **BDEW Metering Code 2.0**: defines how 15-min intervals are computed from
 //!   SMGW or RLM read-out data.
@@ -76,7 +76,7 @@ impl DemandInterval {
 
 /// Tracks the peak demand (Spitzenleistung) over a billing period.
 ///
-/// Per §2 Nr. 17 MessZV and §18 StromNEV: the Spitzenleistung is the **maximum**
+/// Per § 12 StromNZV and §18 StromNEV: the Spitzenleistung is the **maximum**
 /// 15-minute average demand during the billing period. This type accumulates
 /// demand intervals and exposes the peak.
 #[derive(Debug, Clone, Default)]
@@ -102,7 +102,7 @@ impl DemandWindow {
     ///
     /// Returns `None` when no intervals have been added.
     ///
-    /// Per §2 Nr. 17 MessZV, this is the billing-relevant Spitzenleistung.
+    /// Per § 12 StromNZV, this is the billing-relevant Spitzenleistung.
     #[must_use]
     pub fn peak_kw(&self) -> Option<Decimal> {
         self.intervals
@@ -203,7 +203,7 @@ mod tests {
             });
         }
 
-        // §2 Nr. 17 MessZV: peak = maximum 15-min average demand
+        // § 12 StromNZV: peak = maximum 15-min average demand
         assert_eq!(window.peak_kw(), Some(dec!(48)));
         assert_eq!(window.len(), 4);
     }

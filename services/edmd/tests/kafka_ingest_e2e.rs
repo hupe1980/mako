@@ -143,6 +143,7 @@ async fn produced_batches_land_in_meter_reads_and_poison_is_skipped() {
         .expect("produce anomalous");
 
     let cfg = edmd::config::KafkaIngestConfig {
+        message_hmac_secret: None,
         enabled: true,
         bootstrap_servers: broker.bootstrap_servers(),
         topic: topic.to_owned(),

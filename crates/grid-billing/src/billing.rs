@@ -1059,8 +1059,8 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
 ///
 /// ## Legal references
 ///
-/// - Grundgebühr Messstellenbetrieb → `MsbG §§6–7`, `MessZV §2`
-/// - Messdienstleistung → `MessZV §2`
+/// - Grundgebühr Messstellenbetrieb → `MsbG §§6–7`, `MsbG §2`
+/// - Messdienstleistung → `MsbG §2`
 ///
 /// ## Errors
 ///

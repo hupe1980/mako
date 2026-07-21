@@ -23,13 +23,13 @@
 //! | `POST` | `/api/v1/billing/drafts/{id}/correction` | Stornorechnung / Korrekturrechnung |
 //! | `GET`  | `/api/v1/billing/malo/{malo_id}` | Billing history per MaLo (lightweight) |
 //! | `GET`  | `/api/v1/billing/summary` | Monthly billing totals by PID and status |
-//! | `GET`  | `/api/v1/billing/audit` | §22 MessZV BNetzA audit export |
+//! | `GET`  | `/api/v1/billing/audit` | § 147 AO / GoBD BNetzA audit export |
 //! | `POST` | `/api/v1/webhooks/remadv` | REMADV CloudEvent ingest (status update) |
 //! | `GET/PUT` | `/api/v1/redispatch/kostenblatt/{activation_id}` | Redispatch 2.0 Kostenblatt |
 //! | `POST` | `/api/v1/redispatch/kostenblatt/{activation_id}/compute` | Auto-compute from edmd Lastgang (15-min sum) |
 //! | `GET`  | `/api/v1/redispatch/kostenblatt/gaps/{year}/{month}` | Activations without dispatch_kwh data |
 //! | `POST` | `/api/v1/redispatch/kostenblatt/submit/{year}/{month}` | Submit pending |
-//! | `GET/PUT` | `/api/v1/billing/fremdkosten/{draft_id}` | Fremdkosten (§22 MessZV) |
+//! | `GET/PUT` | `/api/v1/billing/fremdkosten/{draft_id}` | Fremdkosten (§ 147 AO / GoBD) |
 //! | `GET`  | `/health` | Liveness check |
 //! | `GET`  | `/health/ready` | Readiness check |
 //! | `POST` | `/mcp` | MCP server (13 tools, 6 prompts) — NB billing AI tooling |
@@ -172,7 +172,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/redispatch/kostenblatt/gaps/:year/:month",
             get(handlers::get_kostenblatt_gaps),
         )
-        // Fremdkosten typed BO4E REST (§22 MessZV external cost pass-through)
+        // Fremdkosten typed BO4E REST (§ 147 AO / GoBD external cost pass-through)
         .route(
             "/api/v1/billing/fremdkosten/:draft_id",
             put(handlers::put_fremdkosten).get(handlers::get_fremdkosten),
@@ -222,7 +222,7 @@ fn billing_routes() -> Router {
             "/drafts/dispatch-batch",
             post(handlers::post_dispatch_batch),
         )
-        // Korrekturrechnung / Stornorechnung (§22 MessZV audit trail)
+        // Korrekturrechnung / Stornorechnung (§ 147 AO / GoBD audit trail)
         .route(
             "/drafts/:id/correction",
             post(handlers::post_draft_correction),
@@ -231,7 +231,7 @@ fn billing_routes() -> Router {
         .route("/malo/:malo_id", get(handlers::get_malo_billing_history))
         // Monthly billing summary (REST equivalent of get_billing_summary MCP tool)
         .route("/summary", get(handlers::get_billing_summary_rest))
-        // §22 MessZV BNetzA audit export
+        // § 147 AO / GoBD BNetzA audit export
         .route("/audit", get(handlers::get_billing_audit))
 }
 

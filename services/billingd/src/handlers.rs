@@ -1076,7 +1076,7 @@ async fn enrich_gas_meter(
 
     // ── Step 3: gasqualitaet annotation from marktd MaLo ──────────────────────
     // Informational only — billing always uses the measured Brennwert.
-    // Annotated on the invoice as `ZusatzAttribut` for §22 MessZV audit trail
+    // Annotated on the invoice as `ZusatzAttribut` for § 147 AO / GoBD audit trail
     // and for H2-blend detection in downstream AI agents (eeg-compliance-agent).
     if meter.gasqualitaet.is_none() {
         match marktd.get_malo(malo_id).await {
@@ -1245,7 +1245,7 @@ pub(crate) async fn emit_cloud_event_inner(
     }
 }
 
-// ── Korrekturrechnung (L8 — §22 MessZV) ──────────────────────────────────────
+// ── Korrekturrechnung (L8 — § 147 AO / GoBD) ──────────────────────────────────────
 
 /// Request body for `POST /api/v1/billing/{id}/correction`.
 #[derive(Debug, serde::Deserialize)]
@@ -1271,7 +1271,7 @@ pub struct CorrectionRequest {
 /// 4. Emits `de.billing.rechnung.erstellt` (with `is_correction: true`) to the
 ///    ERP webhook so `accountingd` creates a CREDIT ledger entry.
 ///
-/// ## §22 MessZV compliance
+/// ## § 147 AO / GoBD compliance
 ///
 /// The original record is **never modified** — corrections always produce new
 /// records.  Both the original and the correction are kept in `billing_records`

@@ -72,7 +72,7 @@ primary = true
 }
 
 /// Without `--allow-volatile` and without `--data-dir`, the daemon refuses to
-/// start — volatile storage cannot meet §22 MessZV durability.
+/// start — volatile storage cannot meet § 147 AO / GoBD durability.
 #[test]
 fn refuses_volatile_storage_without_explicit_flag() {
     let dir = tempfile::tempdir().expect("tempdir");

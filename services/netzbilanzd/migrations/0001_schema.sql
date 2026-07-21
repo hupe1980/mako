@@ -102,7 +102,7 @@ CREATE TABLE kostenblatt_records (
     activation_start_utc    TIMESTAMPTZ,
     activation_end_utc      TIMESTAMPTZ,
 
-    -- Provenance of dispatch_kwh for §22 MessZV auditability:
+    -- Provenance of dispatch_kwh for § 147 AO / GoBD auditability:
     --   'lastgang_sum'    — summed from edmd 15-min intervals (most precise)
     --   'billing_period'  — fallback: edmd billing-period aggregate
     --   'manual_override' — supplied by operator
@@ -140,7 +140,7 @@ COMMENT ON COLUMN kostenblatt_records.einsatzkosten_eur IS
     'Always consistent — cannot be set directly.';
 
 COMMENT ON COLUMN kostenblatt_records.dispatch_source IS
-    '§22 MessZV provenance tracking: lastgang_sum (15-min edmd data) is most precise; '
+    '§ 147 AO / GoBD provenance tracking: lastgang_sum (15-min edmd data) is most precise; '
     'billing_period is a fallback; manual_override requires operator justification.';
 
 CREATE INDEX kb_period           ON kostenblatt_records (tenant, period_year, period_month, status);
@@ -157,7 +157,7 @@ CREATE INDEX kb_pending_15th     ON kostenblatt_records (period_year, period_mon
 -- ── Fremdkosten (external cost pass-through) ──────────────────────────────────
 -- Typed BO4E Fremdkosten/FremdkostenBlock/FremdkostenPosition linked to an invoice draft.
 -- External fees (ÜNB balancing charges, third-party MSB) passed through to LF in INVOIC.
--- Merged into Rechnung.zusatzAttribute on dispatch per §22 MessZV.
+-- Merged into Rechnung.zusatzAttribute on dispatch per § 147 AO / GoBD.
 
 CREATE TABLE fremdkosten_records (
     id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -176,7 +176,7 @@ CREATE TABLE fremdkosten_records (
 );
 
 COMMENT ON TABLE fremdkosten_records IS
-    '§22 MessZV typed external-cost pass-through. '
+    '§ 147 AO / GoBD typed external-cost pass-through. '
     'One record per invoice draft; multiple cost blocks embedded in fremdkosten_json. '
     'Merged into Rechnung.zusatzAttribute on dispatch.';
 

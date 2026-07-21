@@ -1,18 +1,18 @@
-//! Energy forecast generation for §17 MessZV substitute values.
+//! Energy forecast generation for § 60 Abs. 2 MsbG substitute values.
 //!
-//! When meter readings are unavailable, §17 MessZV requires substitute values.
+//! When meter readings are unavailable, § 60 Abs. 2 MsbG requires substitute values.
 //! For longer gaps (> 3 intervals), prior-period averaging or profile-based
 //! forecasting is the BDEW-recommended approach.
 //!
 //! This module provides:
 //! 1. **Annual forecast** — project total annual consumption from a partial year's data
-//! 2. **Short-term gap fill** — prior-period same-slot average for §17 Abs. 2 MessZV
+//! 2. **Short-term gap fill** — prior-period same-slot average for § 60 Abs. 2 MsbG
 //! 3. **Seasonal index** — detect consumption patterns (summer/winter)
 //!
 //! ## Legal basis
 //!
-//! - **§17 Abs. 1 MessZV**: MSB must supply substitute values for unavailable measurements.
-//! - **§17 Abs. 2 MessZV**: Prior-period same-slot average is the preferred method.
+//! - **§ 60 Abs. 2 MsbG**: MSB must supply substitute values for unavailable measurements.
+//! - **§ 60 Abs. 2 MsbG**: Prior-period same-slot average is the preferred method.
 //! - **BDEW Richtlinie**: Prognosewert for SLP; Ersatzwert for RLM.
 //! - **VDE-AR-N 4400**: Technical rules for substitute value generation.
 //!
@@ -40,7 +40,7 @@ use crate::interval::{MeterInterval, QualityFlag};
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
 pub enum ForecastMethod {
-    /// §17 Abs. 2 MessZV: same time slot from prior week(s).
+    /// § 60 Abs. 2 MsbG: same time slot from prior week(s).
     PriorPeriodSameSlot,
     /// Weighted rolling average over the same time slot from N prior periods.
     WeightedRollingAverage,
@@ -62,7 +62,7 @@ impl ForecastMethod {
     pub fn description(self) -> &'static str {
         match self {
             Self::PriorPeriodSameSlot => {
-                "Vorperiodenmittelwert gleicher Zeitschlitz (§17 Abs. 2 MessZV)"
+                "Vorperiodenmittelwert gleicher Zeitschlitz (§ 60 Abs. 2 MsbG)"
             }
             Self::WeightedRollingAverage => "Gewichteter gleitender Mittelwert",
             Self::LinearInterpolation => "Lineare Interpolation zwischen Messwerten",
@@ -80,7 +80,7 @@ impl ForecastMethod {
 ///
 /// Every substitute interval produced by this module includes the generation
 /// method, the reference data used, and any confidence notes. This satisfies
-/// the §17 MessZV traceability requirement.
+/// the § 60 Abs. 2 MsbG traceability requirement.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct SubstituteValueEntry {
@@ -255,16 +255,16 @@ pub fn project_annual_consumption(
 
 /// Generate substitute values for a gap using prior-period same-slot averaging.
 ///
-/// Generate §17 MessZV substitute values for a gap, using `method`.
+/// Generate § 60 Abs. 2 MsbG substitute values for a gap, using `method`.
 ///
 /// Every emitted [`SubstituteValueEntry`] records the method that actually
 /// produced it, which may differ from `method` when the requested strategy has
 /// no data to work from — a prior-period average with no matching reference slot
 /// falls back to carry-forward, then to zero. Reporting the requested method
-/// instead would put a claim in the §22 MessZV audit trail that the value does
+/// instead would put a claim in the § 60 Abs. 6 MsbG audit trail that the value does
 /// not support.
 ///
-/// ## §17 Abs. 2 MessZV compliance
+/// ## § 60 Abs. 2 MsbG compliance
 ///
 /// [`crate::substitute::SubstituteMethod::PriorPeriodAverage`] implements the BDEW
 /// "Vorperiodenmittelwert" — the same slot of the preceding week, matched on
@@ -593,7 +593,7 @@ mod db_vocabulary_tests {
     /// `ForecastMethod`'s Debug names are not a persistence vocabulary.
     ///
     /// `edmd` writes substitutions to `substitute_value_log`, whose `method`
-    /// CHECK accepts only the §17 MessZV categories. Emitting the Debug form
+    /// CHECK accepts only the § 60 Abs. 2 MsbG categories. Emitting the Debug form
     /// violated that CHECK on the default path, so the audit INSERT failed after
     /// the billable substitute had already been committed.
     ///

@@ -133,7 +133,7 @@ impl Default for Verbraucherinformationen {
 ///                  →  Final (annual Schlussabrechnung)
 /// ```
 ///
-/// ## §22 MessZV compliance
+/// ## § 147 AO / GoBD compliance
 ///
 /// Corrections must reference the original invoice ID for the 3-year audit trail.
 /// Cancellations reverse the original to EUR 0.
@@ -153,7 +153,7 @@ pub enum InvoiceType {
     /// `rechnungsart` = `"GUTSCHRIFT"`
     CreditNote,
 
-    /// Correction superseding an earlier invoice (§22 MessZV).
+    /// Correction superseding an earlier invoice (§ 147 AO / GoBD).
     ///
     /// The original invoice must be referenced in the accounting system.
     /// The net effect is: `original + correction = corrected total`.
@@ -264,7 +264,7 @@ impl Default for InvoiceType {
 /// ## Legal basis
 ///
 /// - §2 Nr. 4 StromStG — definition of "Unternehmen des produzierenden Gewerbes"
-/// - §4 MessZV / §14 NAV — RLM metering thresholds
+/// - § 12 StromNZV / §14 NAV — RLM metering thresholds
 /// - §41 Abs. 1 EnWG — invoice disclosure requirements vary by customer type
 /// - Grundversorgung (StromGVV) vs. Sondervertrag — different contract law
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -285,7 +285,7 @@ pub enum CustomerKategorie {
 
     /// Industrial / large commercial customer (Sonderkunde).
     ///
-    /// B2B ≥ 100 MWh/year electricity (§4 MessZV), RLM mandatory.
+    /// B2B ≥ 100 MWh/year electricity (§ 12 StromNZV), RLM mandatory.
     /// Sondervertrag, not Grundversorgung. Eligible for §9 Nr. 1–3 StromStG
     /// industrial exemption, KWKG Selbstbehaltsgrenze, and capacity pricing.
     Industrie,

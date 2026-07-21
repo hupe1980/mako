@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 
 // ── Meter input types ─────────────────────────────────────────────────────────
 
-/// Metering mode of the delivery point (§3/§4 MessZV, §41a EnWG).
+/// Metering mode of the delivery point (§3/§ 12 StromNZV, §41a EnWG).
 ///
 /// Determines billing granularity, permissible tariff types, and substitution
 /// rules for missing interval data.
@@ -28,7 +28,7 @@ pub enum MeteringMode {
     #[default]
     Slp,
     /// Registrierende Leistungsmessung (RLM) — measured 15-minute interval billing.
-    /// Required for customers ≥ 100 MWh/year (§4 MessZV, §14 NAV).
+    /// Required for customers ≥ 100 MWh/year (§ 12 StromNZV, §14 NAV).
     Rlm,
     /// Intelligentes Messsystem (iMSys) — Smart Meter Gateway.
     /// Enables §41a EnWG dynamic tariffs. Required for > 6 MWh/year (§31 MsbG).
@@ -47,7 +47,7 @@ pub struct MeterInput {
     /// Low-tariff energy in kWh (NT, for Zweitarif). `None` = single tariff.
     #[serde(default)]
     pub arbeitsmenge_nt_kwh: Option<Decimal>,
-    /// Peak demand in kW (Spitzenleistung, §2 Nr. 17 MessZV).
+    /// Peak demand in kW (Spitzenleistung, § 12 StromNZV).
     #[serde(default)]
     pub spitzenleistung_kw: Option<Decimal>,
     /// §14a EnWG: hours the controllable device was under NB management.
@@ -77,10 +77,10 @@ pub struct MeterInput {
     #[serde(default)]
     pub metering_mode: MeteringMode,
 
-    /// `true` when the consumption figure is an estimate (§17 Abs. 1 MessZV Ersatzwert).
+    /// `true` when the consumption figure is an estimate (§ 60 Abs. 2 MsbG Ersatzwert).
     ///
     /// Estimated readings must be labeled on the invoice. The meter operator must
-    /// confirm or replace the estimate within 8 weeks (§17 Abs. 1 MessZV).
+    /// confirm or replace the estimate within 8 weeks (§ 60 Abs. 2 MsbG).
     #[serde(default)]
     pub is_estimated: bool,
 
@@ -126,7 +126,7 @@ pub struct GasMeterInput {
     /// Meter reading at period end, in m³ (§40 Abs. 2 Nr. 6 EnWG).
     #[serde(default)]
     pub zaehlerstand_bis: Option<Decimal>,
-    /// Reading is an estimate / Ersatzwert (§40a EnWG, §17 Abs. 1 MessZV).
+    /// Reading is an estimate / Ersatzwert (§40a EnWG, § 60 Abs. 2 MsbG).
     /// Must be prominently labeled on the bill; the customer may demand a
     /// correction once a real reading arrives.
     #[serde(default)]

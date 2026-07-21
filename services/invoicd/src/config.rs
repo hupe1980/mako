@@ -51,7 +51,7 @@ use std::path::Path;
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub http: HttpConfig,
-    /// Required for §22 MessZV / §41 EnWG compliance (3-year receipt retention).
+    /// Required for § 147 AO / GoBD / §41 EnWG compliance (3-year receipt retention).
     pub database: DatabaseConfig,
     pub identity: IdentityConfig,
     pub makod: MakodConfig,

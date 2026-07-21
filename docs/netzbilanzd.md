@@ -328,7 +328,7 @@ flowchart LR
 | `nne_gas` | GasNEV §14 | — | — | — |
 | `mmm_strom` | — | — | — | GPKE (BK6-24-174) Teil 1 Kap. 8.4 · GPKE BK6-22-024 |
 | `mmm_gas` | — | — | — | GaBi Gas 2.1 (BK7-24-01-008) · GeLi Gas 3.0 (BK7-24-01-009) |
-| `msb_31009` | — | — | — | MsbG §§6–7 · MessZV §2 |
+| `msb_31009` | — | — | — | MsbG §§6–7 · MsbG §2 |
 
 ---
 
@@ -457,13 +457,13 @@ Accepted `type` values: `de.invoic.receipt.settled`, `de.invoic.receipt.disputed
 | Method | Path | Description |
 |---|---|---|
 | `GET`  | `/api/v1/billing/summary` | Monthly totals by PID × status (`?year=&month=`) |
-| `GET`  | `/api/v1/billing/audit` | §22 MessZV BNetzA audit export (`?from=&to=&pid=&status=&limit=`) |
+| `GET`  | `/api/v1/billing/audit` | § 147 AO / GoBD BNetzA audit export (`?from=&to=&pid=&status=&limit=`) |
 | `GET`  | `/api/v1/billing/malo/{malo_id}` | Per-MaLo billing history (lightweight, no JSONB) |
 
 The `audit` endpoint returns up to 50 000 rows without Rechnung JSONB for fast
 BNetzA audit responses. Full Rechnung BO4E is available via the individual `GET /drafts/{id}`.
 
-### Fremdkosten (§22 MessZV external costs)
+### Fremdkosten (§ 147 AO / GoBD external costs)
 
 Associates typed `rubo4e::current::Fremdkosten` + `FremdkostenBlock` + `FremdkostenPosition`
 with an existing draft (e.g. ÜNB balancing charges):
@@ -588,7 +588,7 @@ are allowed (dev mode).
 | `dispatch_draft` | Check dispatch readiness; instructs on REST call |
 | `reject_draft` | Reject a draft (unlocks same period for re-billing) |
 | `trigger_mmm_auto_run` | Prepare MMM auto-run request body for one MaLo |
-| `list_corrections` | Stornorechnung / Korrekturrechnung audit trail (§22 MessZV) |
+| `list_corrections` | Stornorechnung / Korrekturrechnung audit trail (§ 147 AO / GoBD) |
 | `get_payment_stats` | Paid vs. outstanding totals by PID (Zahlungsverzug detection) |
 | `list_paid_invoices` | All REMADV-confirmed paid invoices |
 
@@ -686,7 +686,7 @@ CREATE TABLE invoice_drafts (
     status           TEXT        NOT NULL DEFAULT 'draft',
                      -- 'draft'|'dispatched'|'paid'|'rejected'
     dispatch_ref     TEXT,                  -- makod command UUID
-    reject_reason    TEXT,                  -- §22 MessZV audit note
+    reject_reason    TEXT,                  -- § 147 AO / GoBD audit note
     original_draft_id UUID REFERENCES invoice_drafts(id) ON DELETE SET NULL,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -738,8 +738,8 @@ CREATE TABLE fremdkosten_records (
 | GPKE BK6-22-024 §5 | NNE invoice generation and dispatch (INVOIC 31001) |
 | GPKE (BK6-24-174) Teil 1 Kap. 8.4 | MMM settlement reflecting actual vs. SLP profile deviation (INVOIC 31002) |
 | KAV §2 | KA as separate Rechnungsposition; §17 residential (1.32 ct/kWh) and commercial (0.11 ct/kWh) rates accepted |
-| §21 MessZV | Zahlungsziel (due_date) recorded per invoice; §22 MessZV 3-year retention enforced in PostgreSQL |
-| §22 MessZV | BNetzA audit export via `GET /api/v1/billing/audit`; Stornorechnung/Korrekturrechnung with `originalRechnungsnummer` + `korrekturGrund` |
+| Lieferantenrahmenvertrag Strom | Zahlungsziel (due_date) recorded per invoice; § 147 AO / GoBD 3-year retention enforced in PostgreSQL |
+| § 147 AO / GoBD | BNetzA audit export via `GET /api/v1/billing/audit`; Stornorechnung/Korrekturrechnung with `originalRechnungsnummer` + `korrekturGrund` |
 | WiM BK6-24-174 | MSB-Rechnung (INVOIC 31009): NB → MSB metering service fee |
 | GeLi Gas 3.0 (BK7-24-01-009) §5.4 | AWH Sperrprozesse Gas (INVOIC 31011): GNB → LFG for billable Sperrprozess actions |
 | §14a EnWG (BK6-22-300) | Time-of-Use NNE with separate HT/NT positions; mandatory for controllable loads from 01.01.2024 |

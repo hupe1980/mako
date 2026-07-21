@@ -1431,7 +1431,7 @@ async fn emit_veraeusserungsform_ce(
     }
 }
 
-// ── §22 MessZV — Correction Settlement ───────────────────────────────────────
+// ── § 147 AO / GoBD — Correction Settlement ───────────────────────────────────────
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction`.
 #[derive(Debug, serde::Deserialize)]
@@ -1448,19 +1448,19 @@ pub struct CorrectionSettleRequest {
 
 /// `POST /api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction`
 ///
-/// **§22 MessZV — Correction Settlement.**
+/// **§ 147 AO / GoBD — Correction Settlement.**
 ///
 /// Creates a correction receipt that supersedes the original settlement for the
 /// given billing period. The original receipt is preserved for audit trail.
 ///
 /// Use cases:
-/// - Corrected meter reading arrives (§22 MessZV).
+/// - Corrected meter reading arrives (§ 147 AO / GoBD).
 /// - Tariff error discovered.
 /// - MaStR registration retroactively confirmed (retroactive §52 sanction removal).
 /// - Capacity correction.
 ///
 /// The correction stores `SettlementType::Correction { original_id, reason }` for
-/// traceability per §22 MessZV.
+/// traceability per § 147 AO / GoBD.
 pub async fn post_correction_settle(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1523,7 +1523,7 @@ pub async fn post_correction_settle(
             managementpraemie_ct_override: None,
             einspeisemanagement_kwh: None,
             negative_price_quarter_hours: None,
-            // §22 MessZV: correction receipt linked to original
+            // § 147 AO / GoBD: correction receipt linked to original
             correction_of: original_id
                 .as_deref()
                 .and_then(|s| uuid::Uuid::parse_str(s).ok()),
@@ -1547,7 +1547,7 @@ pub async fn post_correction_settle(
                 "billing_month": month,
                 "settlement_eur": result.settlement_eur,
                 "status": result.status,
-                "note": "§22 MessZV correction receipt created. Original receipt preserved for audit trail.",
+                "note": "§ 147 AO / GoBD correction receipt created. Original receipt preserved for audit trail.",
             })),
         ).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),

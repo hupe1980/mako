@@ -50,7 +50,7 @@ graph LR
     subgraph transport ["Transport & Metering"]
         AS4["AS4-Profil v1.2\nBrainpoolP256r1"]
         BSI["BSI TR-03109\niMSys · §14a CLS"]
-        MessZV["§17 MessZV\nErsatzwert · Jahresprognose"]
+        MsbG["§ 60 Abs. 2 MsbG\nErsatzwert · Jahresprognose"]
         NNNEV["StromNEV/GasNEV/KAV\nGrid charges"]
     end
 
@@ -63,7 +63,7 @@ graph LR
     ENW41 -->|"vertragd"| LF_impl["B2C/B2B contracts\nGDPR Art. 15/17/20"]
     EEG -->|"eeg-billing\neinsd"| EEG_impl["9 settlement schemes\n324 tests"]
     BSI -->|"metering\nedmd"| IOT_impl["SmgwSession\nClsChannel"]
-    MessZV -->|"metering\nedmd"| SUB_impl["V01-V10 validation\nFill gaps · Forecast"]
+    MsbG -->|"metering\nedmd"| SUB_impl["V01-V10 validation\nFill gaps · Forecast"]
     NNNEV -->|"grid-billing\nnetzbilanzd"| NNE_impl["NNE/KA/MMM\n§14a Modul 1/2/3"]
 ```
 
@@ -81,7 +81,7 @@ graph LR
 | **§42b Abs. 5 EnWG** (Solarpaket I — GGV Gemeinschaftliche Gebäudeversorgung) | Strom | `metering` crate (`GgvConstantAllocation`, `GgvProportionalAllocation`), `edmd` |
 | **§42a EEG** (Residuallast) | Strom | `metering` crate (`Residual` rule), `edmd` |
 | **EEG 2000–2023 / KWKG** (Feed-in settlement) | Strom | `eeg-billing` crate (9 schemes), `einsd` |
-| **§17 MessZV** (Ersatzwertbildung, Jahresprognose, Substitution) | Both | `metering` crate (V01–V10 validation, `fill_gaps`, `project_annual_consumption`), `edmd` |
+| **§ 60 Abs. 2 MsbG** (Ersatzwertbildung, Jahresprognose, Substitution) | Both | `metering` crate (V01–V10 validation, `fill_gaps`, `project_annual_consumption`), `edmd` |
 | **BSI TR-03109** (iMSys / SMGW lifecycle, §14a CLS channels) | Strom | `metering` (`SmgwSession`, `ClsChannel`), `edmd` |
 | **StromNEV / GasNEV / KAV** (grid charge settlement) | Both | `grid-billing` crate, `netzbilanzd` |
 | **§14a EnWG** (Steuerbare Verbrauchseinrichtungen — Modul 1/2/3) | Strom | `grid-billing` (`Sect14aModule`), `processd` (produktcode check BK6-24-174) |

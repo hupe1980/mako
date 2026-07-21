@@ -615,7 +615,7 @@ CREATE INDEX malo_grid_big
 -- Operators inspect via GET /admin/fanout/dlq; retry via POST /admin/fanout/dlq/{id}/retry;
 -- discard via DELETE /admin/fanout/dlq/{id}.
 --
--- §22 MessZV: silent drop of an `de.mako.process.initiated` event to invoicd
+-- § 147 AO / GoBD: silent drop of an `de.mako.process.initiated` event to invoicd
 -- would cause the INVOIC plausibility check never to run, violating the
 -- 3-year receipt retention obligation. This table provides the recovery path.
 CREATE TABLE fanout_dlq (

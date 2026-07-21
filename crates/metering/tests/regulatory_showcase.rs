@@ -7,7 +7,7 @@
 //! Run: `cargo test -p metering --test regulatory_showcase`
 //!
 //! ## Legal sources
-//! - **MessZV**: Messzugangsverordnung (§§2–27)
+//! - **MsbG**: Messzugangsverordnung (§§2–27)
 //! - **MessEG/MessEV**: §33 MessEG + §25 Nr. 4/Nr. 7 MessEV — the exceptions
 //!   that make a *derived* kWh lawful (Brennwert × Zustandszahl). Not GasGVV:
 //!   that ordinance has no §24 and never mentions Brennwert.
@@ -23,10 +23,10 @@ use rust_decimal::dec;
 use time::macros::datetime;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §2 Nr. 17 MessZV — Spitzenleistung (peak demand)
+// § 12 StromNZV — Spitzenleistung (peak demand)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §2 Nr. 17 MessZV: Spitzenleistung = höchste Viertelstundenleistung.
+/// § 12 StromNZV: Spitzenleistung = höchste Viertelstundenleistung.
 /// For 15-min RLM: demand_kw = kwh × 4.
 #[test]
 fn peak_demand_is_highest_15min_quarter() {
@@ -59,7 +59,7 @@ fn peak_demand_is_highest_15min_quarter() {
     assert_eq!(period.arbeitsmenge_kwh, dec!(8.75)); // sum
 }
 
-/// §2 Nr. 17 MessZV: SLP has no Spitzenleistung.
+/// § 12 StromNZV: SLP has no Spitzenleistung.
 #[test]
 fn slp_has_no_spitzenleistung() {
     let base = datetime!(2026-07-01 0:00 UTC);
@@ -159,10 +159,10 @@ fn gas_zero_volume_is_zero_kwh() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §3 / §4 MessZV — SLP/RLM/iMSys classification
+// §3 / § 12 StromNZV — SLP/RLM/iMSys classification
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §3 MessZV: 15-min intervals → RLM.
+/// § 2 MsbG: 15-min intervals → RLM.
 #[test]
 fn fifteen_min_intervals_classify_as_rlm() {
     let base = datetime!(2026-01-01 0:00 UTC);
@@ -198,7 +198,7 @@ fn smgw_source_forces_imsys() {
     );
 }
 
-/// §4 MessZV: daily SLP reads → Slp.
+/// § 12 StromNZV: daily SLP reads → Slp.
 #[test]
 fn daily_intervals_classify_as_slp() {
     let base = datetime!(2026-01-01 0:00 UTC);
@@ -267,7 +267,7 @@ fn balanced_period_no_imbalance() {
     assert_eq!(saldo.delta_pct(), Some(Decimal::ZERO));
 }
 
-/// §27 MessZV: imbalance percentage calculation.
+/// § 13 StromNZV: imbalance percentage calculation.
 /// 50 kWh on 1000 contracted = 5%.
 #[test]
 fn imbalance_delta_pct() {
@@ -275,7 +275,7 @@ fn imbalance_delta_pct() {
     assert_eq!(saldo.delta_pct(), Some(dec!(5)));
 }
 
-/// §27 MessZV: mehr and minder are mutually exclusive.
+/// § 13 StromNZV: mehr and minder are mutually exclusive.
 #[test]
 fn mehr_and_minder_mutually_exclusive() {
     for (actual, contracted) in [
@@ -530,21 +530,21 @@ fn demand_kw_zero_duration_is_none() {
     assert_eq!(iv.demand_kw(), None);
 }
 
-/// QualityFlag billability rules per §17 MessZV.
+/// QualityFlag billability rules per § 60 Abs. 2 MsbG.
 ///
 /// CRITICAL REGULATORY REQUIREMENT: `Estimated` (Prognosewert) IS billable.
-/// §17 MessZV requires substitute values including estimates for advance billing.
+/// § 60 Abs. 2 MsbG requires substitute values including estimates for advance billing.
 /// Excluding estimated values would produce zero arbeitsmenge for SLP customers.
 #[test]
 fn quality_flag_billability() {
-    // All of these are valid billing bases per §17 MessZV
+    // All of these are valid billing bases per § 60 Abs. 2 MsbG
     assert!(
         QualityFlag::Measured.is_billable(),
         "Measured must be billable"
     );
     assert!(
         QualityFlag::Substituted.is_billable(),
-        "Substituted (Ersatzwert) must be billable per §17 MessZV"
+        "Substituted (Ersatzwert) must be billable per § 60 Abs. 2 MsbG"
     );
     assert!(
         QualityFlag::Calculated.is_billable(),
@@ -558,10 +558,10 @@ fn quality_flag_billability() {
         QualityFlag::Preliminary.is_billable(),
         "Preliminary must be billable"
     );
-    // §17 MessZV FIX: Estimated (Prognosewert) IS billable — used in Abschlagsrechnung
+    // § 60 Abs. 2 MsbG FIX: Estimated (Prognosewert) IS billable — used in Abschlagsrechnung
     assert!(
         QualityFlag::Estimated.is_billable(),
-        "Estimated (Prognosewert) must be billable per §17 MessZV advance billing"
+        "Estimated (Prognosewert) must be billable per § 60 Abs. 2 MsbG advance billing"
     );
     // Only Faulty and Unknown block billing
     assert!(
@@ -1047,7 +1047,7 @@ fn leap_year_2024_02_29_96_intervals_clean() {
     );
 }
 
-/// §17 MessZV prior-period substitution uses only same-slot values.
+/// § 60 Abs. 2 MsbG prior-period substitution uses only same-slot values.
 ///
 /// Given 5 prior-week intervals at time 07:00 UTC and 5 at 07:15 UTC,
 /// `fill_gaps_with_config` using `PriorPeriodAverage` must:
@@ -1143,12 +1143,12 @@ fn sect17_prior_period_average_uses_matching_time_slot() {
     assert_eq!(
         sub_0700.unwrap().value_kwh,
         dec!(3.0),
-        "§17 MessZV: 07:00 slot must use prior-week 07:00 value (3.0 kWh)"
+        "§ 60 Abs. 2 MsbG: 07:00 slot must use prior-week 07:00 value (3.0 kWh)"
     );
     assert_eq!(
         sub_0715.unwrap().value_kwh,
         dec!(5.0),
-        "§17 MessZV: 07:15 slot must use prior-week 07:15 value (5.0 kWh)"
+        "§ 60 Abs. 2 MsbG: 07:15 slot must use prior-week 07:15 value (5.0 kWh)"
     );
 
     // Both substituted intervals must carry Substituted quality flag.
@@ -1211,6 +1211,6 @@ fn faulty_intervals_excluded_from_billing_sum() {
     assert_eq!(
         billing_total,
         dec!(3.0),
-        "§22 MessZV: FAULTY interval (99.9 kWh) must be excluded from billing total"
+        "§ 60 Abs. 6 MsbG: FAULTY interval (99.9 kWh) must be excluded from billing total"
     );
 }

@@ -4,7 +4,7 @@
 //!
 //! | Rule | ID | Regulatory basis |
 //! |---|---|---|
-//! | Gap detection | V01 | §17 MessZV — missing intervals require substitute values |
+//! | Gap detection | V01 | § 60 Abs. 2 MsbG — missing intervals require substitute values |
 //! | Overlap detection | V02 | Duplicate/overlapping intervals are data errors |
 //! | Negative energy | V03 | Consumption values < 0 indicate wiring error or rollover |
 //! | Impossible spike | V04 | Value > `spike_factor × rolling_mean` suggests error |
@@ -70,7 +70,7 @@ pub enum ValidationRuleId {
     /// V10 — value dropped sharply (≥ rollover threshold) suggesting meter rollover.
     ///
     /// Triggered when `value[i] << value[i-1]` by more than `rollover_threshold_kwh`.
-    /// §14 MessZV: meter replacement and rollover events must be documented.
+    /// WiM Gerätewechsel-Dokumentation: meter replacement and rollover events must be documented.
     RegisterRollover,
 }
 
@@ -191,7 +191,7 @@ pub struct ValidationConfig {
     /// Minimum drop (kWh) between consecutive intervals that triggers V10 (RegisterRollover).
     ///
     /// When `value[i] < value[i-1] - rollover_threshold_kwh`, the interval is flagged as a
-    /// potential meter rollover (§14 MessZV: rollover events must be documented).
+    /// potential meter rollover (WiM Gerätewechsel-Dokumentation: rollover events must be documented).
     ///
     /// Typical meter max: 99 999.9 kWh. Default: `50 000` kWh (flags drops > 50 MWh).
     /// Set to `None` to disable rollover detection.
@@ -467,7 +467,7 @@ pub fn validate_intervals(
                     ValidationRuleId::NonBillableQuality,
                     ValidationSeverity::Error,
                     format!(
-                        "quality {:?} is not billable at {} — substitute value required (§17 MessZV)",
+                        "quality {:?} is not billable at {} — substitute value required (§ 60 Abs. 2 MsbG)",
                         iv.quality, iv.from
                     ),
                 )
@@ -492,7 +492,7 @@ pub fn validate_intervals(
                 );
             }
 
-            // V10 — register rollover (§14 MessZV — must be documented)
+            // V10 — register rollover (WiM Gerätewechsel-Dokumentation — must be documented)
             if let Some(threshold) = config.rollover_threshold_kwh {
                 let drop = prev.value_kwh - iv.value_kwh;
                 if drop >= threshold {
@@ -502,7 +502,7 @@ pub fn validate_intervals(
                             ValidationSeverity::Warning,
                             format!(
                                 "value dropped {:.3} kWh ({:.3} → {:.3}) at {} — \
-                                 possible meter rollover (§14 MessZV)",
+                                 possible meter rollover (WiM Gerätewechsel-Dokumentation)",
                                 drop, prev.value_kwh, iv.value_kwh, iv.from
                             ),
                         )
@@ -524,7 +524,7 @@ pub fn validate_intervals(
                     rule_id: ValidationRuleId::GapDetected,
                     severity: ValidationSeverity::Error,
                     message: format!(
-                        "gap of {} interval(s) between {} and {} — substitute values required (§17 MessZV)",
+                        "gap of {} interval(s) between {} and {} — substitute values required (§ 60 Abs. 2 MsbG)",
                         gap_count, a.to, b.from
                     ),
                     interval_index: Some(idx + 1),

@@ -15,12 +15,12 @@
 //! | `list_reading_orders`        | List Ablesesteuerung reading orders for a MaLo |
 //! | `list_overdue_reading_orders`| Reading orders past `ausfuehrt_bis` (§40 EnWG compliance) |
 //! | `trigger_jahresablesung`     | Launch Jahresablesung campaign for a NB grid area |
-//! | `trigger_substitution`       | Generate + store §17 MessZV Ersatzwerte for a gap window |
-//! | `get_correction_history`     | §22 MessZV audit: list corrections for a MaLo |
+//! | `trigger_substitution`       | Generate + store § 60 Abs. 2 MsbG Ersatzwerte for a gap window |
+//! | `get_correction_history`     | § 60 Abs. 6 MsbG audit: list corrections for a MaLo |
 //! | `validate_timeseries`        | Run validation rules V01–V10 on meter reads (gaps, spikes, quality, rollover) |
-//! | `get_quality_assessments`    | Per-batch quality history (§22 MessZV) |
+//! | `get_quality_assessments`    | Per-batch quality history (§ 60 Abs. 6 MsbG) |
 //! | `get_summenzeitreihe`        | Monthly aggregated kWh for MaBiS |
-//! | `get_annual_forecast`        | §17 MessZV Jahresprognose |
+//! | `get_annual_forecast`        | § 60 Abs. 2 MsbG Jahresprognose |
 //! | `get_gas_quality`            | PID 13007 Brennwert + Zustandszahl |
 //!
 //! ## Prompts (5)
@@ -171,7 +171,7 @@ pub struct TriggerSubstitutionParams {
     pub obis_code: Option<String>,
     /// `STROM` (default) · `GAS` · `WAERME` · `WASSER`.
     pub sparte: Option<String>,
-    /// §22 MessZV audit reason (default `NoMeasurementAvailable`).
+    /// § 60 Abs. 6 MsbG audit reason (default `NoMeasurementAvailable`).
     pub reason: Option<String>,
 }
 
@@ -1087,7 +1087,7 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
     }
 
     #[tool(
-        description = "Generate and store §17 MessZV Ersatzwerte (substitute values) for a gap window. Methods: PriorPeriodAverage (default), LinearInterpolation, ZeroFill, LastValueCarryForward. Never overwrites a billable reading; every substitute is logged to substitute_value_log (§22 MessZV audit trail). Runs the same core as POST /api/v1/meter-reads/{malo_id}/substitute.",
+        description = "Generate and store § 60 Abs. 2 MsbG Ersatzwerte (substitute values) for a gap window. Methods: PriorPeriodAverage (default), LinearInterpolation, ZeroFill, LastValueCarryForward. Never overwrites a billable reading; every substitute is logged to substitute_value_log (§ 60 Abs. 6 MsbG audit trail). Runs the same core as POST /api/v1/meter-reads/{malo_id}/substitute.",
         annotations(
             destructive_hint = true,
             idempotent_hint = true,
@@ -1296,7 +1296,7 @@ impl EdmdMcpHandler {
                  ### Triggers (automatic)\n\
                  | Event | Reading order created |\n\
                  |---|---|\n\
-                 | INSRPT 23001 Störungsmeldung | `INSRPT_STOERUNG` (§18 MessZV, 5 Werktage) |\n\
+                 | INSRPT 23001 Störungsmeldung | `INSRPT_STOERUNG` (WiM Störungsmeldung, 5 Werktage) |\n\
                  | INSRPT 23003/23008 Technische Änderung | `SONDERABLESUNG` at handover date |\n\
                  | GPKE 55001 Lieferbeginn | `LIEFERBEGINN` at Lieferbeginndatum |\n\
                  | GPKE 55004/55007 Abmeldung/Beendigung der Zuordnung | `LIEFERENDE` at Lieferendedatum |\n\
@@ -1325,14 +1325,14 @@ impl EdmdMcpHandler {
 
     // ── New Phase-2 tools ─────────────────────────────────────────────────────
 
-    /// `get_correction_history` — list retroactive corrections for a MaLo (§22 MessZV).
+    /// `get_correction_history` — list retroactive corrections for a MaLo (§ 60 Abs. 6 MsbG).
     ///
     /// Returns all `meter_read_corrections` rows for the given MaLo in descending
     /// chronological order. Each row shows the original value, corrected value, reason,
-    /// and operator — enabling full §22 MessZV audit trail reconstruction.
+    /// and operator — enabling full § 60 Abs. 6 MsbG audit trail reconstruction.
     #[tool(
         name = "get_correction_history",
-        description = "§22 MessZV audit: list all retroactive corrections applied to a MaLo's \
+        description = "§ 60 Abs. 6 MsbG audit: list all retroactive corrections applied to a MaLo's \
                        meter reads. Each entry shows original value, corrected value, reason, \
                        source (MSCONS_UPDATE/OPERATOR/AUTO_SUBSTITUTE), and timestamp.",
         annotations(read_only_hint = true, open_world_hint = false)
@@ -1403,7 +1403,7 @@ impl EdmdMcpHandler {
             "period": { "from": from_ts.format(&Rfc3339).ok(), "to": to_ts.format(&Rfc3339).ok() },
             "correction_count": corrections.len(),
             "corrections": corrections,
-            "_note": "Use POST /api/v1/corrections/{malo_id} to submit new corrections (§22 MessZV)"
+            "_note": "Use POST /api/v1/corrections/{malo_id} to submit new corrections (§ 60 Abs. 6 MsbG)"
         });
         serde_json::to_string_pretty(&out)
             .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
@@ -1422,8 +1422,8 @@ impl EdmdMcpHandler {
                        for a MaLo. Identifies gaps (V01), overlaps (V02), negative energy (V03), \
                        impossible spikes (V04), zero-runs (V05), inconsistent intervals (V06), \
                        DST ambiguity (V07), future timestamps (V08), non-billable quality (V09), \
-                       and register rollover (V10, §14 MessZV). Use before billing to detect \
-                       intervals requiring §17 MessZV substitute values.",
+                       and register rollover (V10, WiM Gerätewechsel-Dokumentation). Use before billing to detect \
+                       intervals requiring § 60 Abs. 2 MsbG substitute values.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn validate_timeseries(
@@ -1514,7 +1514,7 @@ impl EdmdMcpHandler {
             "issue_count": result.issues.len(),
             "issues": issues_json,
             "_note": if result.billing_block_count() > 0 {
-                format!("{} interval(s) require §17 MessZV substitute values before billing", result.billing_block_count())
+                format!("{} interval(s) require § 60 Abs. 2 MsbG substitute values before billing", result.billing_block_count())
             } else {
                 "All intervals are billing-eligible".to_owned()
             }
@@ -1524,12 +1524,12 @@ impl EdmdMcpHandler {
             .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 
-    /// Get per-batch quality assessment history for a MaLo (§22 MessZV audit trail).
+    /// Get per-batch quality assessment history for a MaLo (§ 60 Abs. 6 MsbG audit trail).
     #[tool(
         name = "get_quality_assessments",
         description = "Retrieve quality assessment history for a MaLo — per-batch \
                        grade (A/B/C/F), coverage %, gap count, billing_blocked flag. \
-                       Use to investigate recurring quality issues or §22 MessZV audit. \
+                       Use to investigate recurring quality issues or § 60 Abs. 6 MsbG audit. \
                        Params: malo_id (required), from / to (ISO 8601, optional).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
@@ -1591,13 +1591,13 @@ impl EdmdMcpHandler {
         .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 
-    /// Get Summenzeitreihe (monthly aggregated energy) for MaBiS and §27 MessZV.
+    /// Get Summenzeitreihe (monthly aggregated energy) for MaBiS and § 13 StromNZV.
     #[tool(
         name = "get_summenzeitreihe",
         description = "Get monthly aggregated energy (Summenzeitreihe) for a MaLo. \
                        Returns total_kwh per calendar month with coverage percentage. \
                        Used for MaBiS UTILTS submissions (BK6-22-024 Anlage 3) and \
-                       Mehr-/Mindermengensaldo (§27 MessZV). \
+                       Mehr-/Mindermengensaldo (§ 13 StromNZV). \
                        Params: malo_id (required), from / to (ISO 8601 UTC).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
@@ -1667,16 +1667,16 @@ impl EdmdMcpHandler {
             "total_kwh": total_kwh.to_string(),
             "month_count": months.len(),
             "months": months,
-            "legal_basis": "MaBiS BK6-22-024 Anlage 3 / §27 MessZV Mehr-Mindermengensaldo",
+            "legal_basis": "MaBiS BK6-22-024 Anlage 3 / § 13 StromNZV Mehr-Mindermengensaldo",
         }))
         .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
         .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 
-    /// Get §17 MessZV annual energy forecast (Jahresprognose) for a MaLo.
+    /// Get § 60 Abs. 2 MsbG annual energy forecast (Jahresprognose) for a MaLo.
     #[tool(
         name = "get_annual_forecast",
-        description = "Compute §17 MessZV annual energy consumption forecast (Jahresprognose) \
+        description = "Compute § 60 Abs. 2 MsbG annual energy consumption forecast (Jahresprognose) \
                        for a MaLo from available meter reads. Returns projected_annual_kwh, \
                        observed_kwh, observed_days, seasonal_correction_applied. \
                        Minimum 7 days of data required. \
@@ -1741,7 +1741,46 @@ impl EdmdMcpHandler {
             })
             .collect();
 
-        match metering::project_annual_consumption(&p.malo_id, &intervals, None) {
+        // Prior-year window enables the seasonal correction branch — without
+        // it every forecast is the naive daily × 365 projection.
+        let prior_rows = sqlx::query(
+            r"SELECT dtm_from, dtm_to, quantity_kwh, quality
+              FROM meter_reads
+              WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3
+                AND tenant = $4
+                AND quality NOT IN ('FAULTY', 'UNKNOWN')
+              ORDER BY dtm_from ASC LIMIT 200000",
+        )
+        .bind(&p.malo_id)
+        .bind(from - time::Duration::days(365))
+        .bind(to - time::Duration::days(365))
+        .bind(&self.state.tenant)
+        .fetch_all(&self.state.pool)
+        .await
+        .unwrap_or_default();
+        let prior_intervals: Vec<MeterInterval> = prior_rows
+            .iter()
+            .filter_map(|r| {
+                let qty: rust_decimal::Decimal = r.try_get("quantity_kwh").ok()?;
+                let quality_str: &str = r.try_get("quality").ok()?;
+                let quality = match quality_str {
+                    "MEASURED" => QualityFlag::Measured,
+                    "ESTIMATED" => QualityFlag::Estimated,
+                    "SUBSTITUTED" => QualityFlag::Substituted,
+                    _ => QualityFlag::Unknown,
+                };
+                Some(MeterInterval {
+                    from: r.try_get("dtm_from").ok()?,
+                    to: r.try_get("dtm_to").ok()?,
+                    value_kwh: qty,
+                    quality,
+                    obis_code: None,
+                })
+            })
+            .collect();
+        let prior = (!prior_intervals.is_empty()).then_some(prior_intervals.as_slice());
+
+        match metering::project_annual_consumption(&p.malo_id, &intervals, prior) {
             Some(forecast) => serde_json::to_string_pretty(&serde_json::json!({
                 "malo_id": forecast.malo_id,
                 "observation_from": forecast.observation_from,
@@ -1751,7 +1790,7 @@ impl EdmdMcpHandler {
                 "projected_annual_kwh": forecast.projected_annual_kwh.to_string(),
                 "seasonal_correction_applied": forecast.seasonal_correction_applied,
                 "method": format!("{:?}", forecast.method),
-                "legal_basis": "§17 MessZV Jahresprognose",
+                "legal_basis": "§ 60 Abs. 2 MsbG Jahresprognose",
             }))
             .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
             .map_err(|e| McpError::internal_error(e.to_string(), None)),
@@ -1836,19 +1875,19 @@ impl ServerHandler for EdmdMcpHandler {
              \n\
              ## Tools (15)\n\
              - `get_timeseries` — read meter reads for a MaLo in a time range\n\
-             - `get_imbalance` — Mehr-/Mindermengen imbalance report (§27 MessZV)\n\
+             - `get_imbalance` — Mehr-/Mindermengen imbalance report (§ 13 StromNZV)\n\
              - `get_billing_period` — MeterBillingPeriod (arbeitsmenge_kwh, brennwert, spitzenleistung)\n\
              - `get_device_history` — M9 RAG: comprehensive device history for LanceDB indexing\n\
              - `get_quality_warnings` — M7: Hampel quality warnings (grade A/B/C/F)\n\
              - `list_reading_orders` — Ablesesteuerung reading orders for a MaLo\n\
              - `list_overdue_reading_orders` — overdue reading orders (§40 EnWG compliance)\n\
              - `trigger_jahresablesung` — launch annual SLP reading campaign\n\
-             - `trigger_substitution` — generate + store §17 MessZV Ersatzwerte for a gap window\n\
-             - `get_correction_history` — §22 MessZV bitemporal correction audit trail\n\
+             - `trigger_substitution` — generate + store § 60 Abs. 2 MsbG Ersatzwerte for a gap window\n\
+             - `get_correction_history` — § 60 Abs. 6 MsbG bitemporal correction audit trail\n\
              - `validate_timeseries` — V01-V10 validation (gaps, spikes, DST, rollover)\n\
-             - `get_quality_assessments` — per-batch quality history (§22 MessZV)\n\
-             - `get_summenzeitreihe` — monthly aggregated kWh for MaBiS / §27 MessZV\n\
-             - `get_annual_forecast` — §17 MessZV Jahresprognose from available reads\n\
+             - `get_quality_assessments` — per-batch quality history (§ 60 Abs. 6 MsbG)\n\
+             - `get_summenzeitreihe` — monthly aggregated kWh for MaBiS / § 13 StromNZV\n\
+             - `get_annual_forecast` — § 60 Abs. 2 MsbG Jahresprognose from available reads\n\
              - `get_gas_quality` — PID 13007 Brennwert + Zustandszahl for Gas kWh_Hs conversion\n\
              \n\
              ## Prompts (5)\n\
@@ -1859,7 +1898,7 @@ impl ServerHandler for EdmdMcpHandler {
              - Grade F blocks billing; grade C/F emits de.edmd.reading.quality.warning.\n\
              - Direct push: POST /api/v1/meter-reads/rlm/{malo_id} for 15-min RLM (M4).\n\
              - Virtual meters: GET /api/v1/virtual/{id}/lastgang (§42b EEG GGV).\n\
-             - Substitute values: POST /api/v1/meter-reads/{malo_id}/substitute (§17 MessZV).",
+             - Substitute values: POST /api/v1/meter-reads/{malo_id}/substitute (§ 60 Abs. 2 MsbG).",
         )
     }
 }

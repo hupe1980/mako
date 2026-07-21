@@ -552,7 +552,7 @@ impl SyncEngine {
         let to_str = to.format(&Rfc3339).unwrap_or_default();
 
         // `as_of` reconstructs the data as it stood when an earlier version was
-        // filed (§22 MessZV). A correction under the KBKA has to be able to say
+        // filed (§ 60 Abs. 6 MsbG). A correction under the KBKA has to be able to say
         // what changed since the version the BIKO settled, which requires the
         // earlier state, not just the current one.
         let url = match as_of {

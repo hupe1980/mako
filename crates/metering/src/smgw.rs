@@ -64,7 +64,7 @@ pub enum GatewayStatus {
     Revoked,
     /// Replaced by a new gateway — historical record only.
     Replaced,
-    /// Temporarily unreachable (communication fault, §17 MessZV substitution required).
+    /// Temporarily unreachable (communication fault, § 60 Abs. 2 MsbG substitution required).
     CommunicationFault,
 }
 
@@ -75,7 +75,7 @@ impl GatewayStatus {
         matches!(self, Self::Operational)
     }
 
-    /// `true` when §17 MessZV substitute values are required (no data delivery).
+    /// `true` when § 60 Abs. 2 MsbG substitute values are required (no data delivery).
     #[must_use]
     pub fn requires_substitute_values(self) -> bool {
         matches!(
@@ -379,7 +379,7 @@ impl SmgwSession {
 
     /// `true` when the gateway has not been heard from in more than `threshold_hours`.
     ///
-    /// Per BSI TR-03109 and §17 MessZV: after 2 hours of silence, substitute values
+    /// Per BSI TR-03109 and § 60 Abs. 2 MsbG: after 2 hours of silence, substitute values
     /// must be generated and a Sonderablesung order should be created.
     #[must_use]
     pub fn is_communication_fault(&self, threshold_hours: i64) -> bool {

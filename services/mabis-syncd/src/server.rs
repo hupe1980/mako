@@ -115,7 +115,7 @@ async fn trigger_sync(
         .as_str()
         .and_then(|s| Uuid::parse_str(s).ok());
     // Reconstruct the readings as they stood at this instant instead of taking
-    // current values (§22 MessZV). Used to rebuild what an earlier version
+    // current values (§ 60 Abs. 6 MsbG). Used to rebuild what an earlier version
     // contained when preparing a correction.
     let as_of = body["as_of"].as_str().and_then(|s| {
         OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()

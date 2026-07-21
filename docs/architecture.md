@@ -62,7 +62,7 @@ graph TB
 
     subgraph invoicd ["invoicd :8280 — INVOIC settlement (LF)"]
         CHK["invoic-checker\n5+1 plausibility checks\n(check 6 = MMM settlement prices)\n+ selbstausstellen 31006"]
-        INV_DB["PostgreSQL\ninvoic_receipts (§22 MessZV)"]
+        INV_DB["PostgreSQL\ninvoic_receipts (§ 147 AO / GoBD)"]
         CHK --> INV_DB
     end
 
@@ -223,7 +223,7 @@ Each is independently testable and suitable for crates.io publication.
 | `grid-billing` | NNE/KA/MMM/MSB grid **settlement** engine | `calculate_nne_invoice`, `GridSettlement` (+ `CalculationTrace`, `LegalReference`); `Sparte` drives Gas/Strom refs; `calculate_reversal()`; no rubo4e dep; `into_rechnung()` in service layer |
 | `energy-billing` | Pure multi-product retail energy billing (LF) | `Product` typed enum (12 categories, serde-tagged); `BillingEngine`/`BillingProvider` pipeline; `ControllableLoadProvider` (§14a); `validate()` + `bill_batch()`; `Invoice.warnings` + `§41b` guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label; HT/NT (`billing::TimeOfUsePricing`); block tariffs (`billing::TariffSchedule`); **RLM demand charge** (`leistungspreis_strom_ct_per_kw_month`); **gas §54 exemption**; **historic levy rates**; §41a EPEX; `Invoice::merge()`, `Invoice::allocate_proportionally()`; `eeg` optional feature; no `rubo4e` dep; **160 tests**; zero I/O |
 | `eeg-billing` | Pure EEG/KWKG feed-in settlement (NB) | `calculate_settlement`, 9 settlement schemes, §51/§52 rules, `InbetriebnahmeTyp`, proptest invariants, **324 tests** |
-| `metering` | German energy metering domain | `MeterInterval`, `aggregate`, `fill_gaps` / `fill_gaps_with_config` (§17 MessZV — `FillGapsConfig` supports `PriorPeriodAverage`), `gas_m3_to_kwh_hs`, `score_intervals` (Hampel A/B/C/F) |
+| `metering` | German energy metering domain | `MeterInterval`, `aggregate`, `fill_gaps` / `fill_gaps_with_config` (§ 60 Abs. 2 MsbG — `FillGapsConfig` supports `PriorPeriodAverage`), `gas_m3_to_kwh_hs`, `score_intervals` (Hampel A/B/C/F) |
 | `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
 | `netz-checker` | NB Anmeldung 6-check validation | `check_anmeldung`, ERC A02/A05/A06/A97/A99 |
 | `mako-obs` | Process observability types | `ProcessProjection`, `KpiReport`, `DeadlineRisk` |
@@ -315,7 +315,7 @@ All **seventeen** daemons share a common operational model:
 | `makod` | `:8080` / `:4080` / `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 45+ workflows, AS4 ingest, deadlines | `makod.toml` |
 | `marktd` | `:8180` | Market Data Hub — MaLo/MeLo/NeLo/TR/SR, Lokationszuordnung graph, preisblaetter, VersorgungsStatus, `event_log` replay, EventBus fan-out; **Geraet** typed konfigurationen sub-resource (16-variant `Konfigurationsparameter` enum, GIN-indexed); **Zaehlzeitdefinition** typed endpoint; ZaehlzeitRegister auto-population from WiM Stammdaten | `marktd.toml` |
 | `processd` | `:8580` | Process decision engine — NB STP (`netz-checker`) + LF E_0624 auto-response | `processd.toml` |
-| `invoicd` | `:8280` | INVOIC plausibility — REMADV, selbstausstellen, overdue-REMADV, §22 MessZV audit | `invoicd.toml` |
+| `invoicd` | `:8280` | INVOIC plausibility — REMADV, selbstausstellen, overdue-REMADV, § 147 AO / GoBD audit | `invoicd.toml` |
 | `netzbilanzd` | `:8680` | NNE/KA/MMM billing daemon (NB role) — generates INVOIC 31001/31002/31005, invoice draft lifecycle | `netzbilanzd.toml` |
 | `sperrd` | `:8780` | Sperrung execution tracker (NB role) — `sperr_orders` lifecycle, IFTSTA 21039 auto-dispatch | `sperrd.toml` |
 | `nis-syncd` | `:9680` | NIS/GIS grid topology import (NB role, stateless) — pushes `malo_grid` to `marktd`; STP ~80%→≥95% | `nis-syncd.toml` |
@@ -328,7 +328,7 @@ All **seventeen** daemons share a common operational model:
 | `portald` | `:9480` | Customer Portal read-model gateway (LF role, stateless) — aggregates Lastgang, invoices, account balance, VersorgungsStatus, EEG settlement; `/dashboard` parallel aggregation; `/events` SSE stream; OIDC-gated | `portald.toml` |
 | `vertragd` | `:9780` | Contract & Customer Management (LF role) — `Kunden` (B2C + B2B) with `kunden_identitaeten` (N OIDC logins per company, rolle=VOLLZUGRIFF/ADMIN/FINANZEN/TECHNIK/READONLY, optional `standort_filter` for site-scoped B2B access); `Rahmenverträge` (B2B portfolio: Sammelrechnung, indexation, volume discount, `angebot_id` CPQ); `Versorgungsverträge` per site/commodity (ANGELEGT→IN_BEARBEITUNG→TEILERFUELLUNG→AKTIV→GEKÜNDIGT→ABGELAUFEN); triggers GPKE/GeLi Gas Lieferbeginn/-ende via `processd`; Tarifwechsel + Preisgarantie guard (§41 EnWG); Kündigung with coordinated Schlussablesung; auto-renewal worker; Preisanpassungsbenachrichtigung worker (§41 Abs. 3 EnWG); OIDC sub → MaLo authorization gateway (`GET /kunden/authenticate`) for `portald`; **GDPR Art. 15 export** (`/export`); **GDPR Art. 17 pseudonymization** (`/anonymize`) with immutable audit log; `Zahlungsinformation` typed IBAN/SEPA; 3 DB migrations; 9-tool MCP server | `vertragd.toml` |
 | `mabis-syncd` | `:8880` | MaBiS synchronisation daemon (ÜNB/NB role) — aggregates per-MaLo quarter-hourly Lastgang from `edmd` via `mako-mabis::SummenzeitreiheBuilder`, submits Summenzeitreihen to the BIKO as MSCONS PID 13003 through `makod`; ascending version per (Bilanzierungsgebiet, Bilanzierungsmonat) and BIKO-assigned Datenstatus per BK6-24-174 Anlage 3; submits on the 10. Werktag (Erstaufschlag); `submission_runs`, `submission_malo_log` and `pruefmitteilung` tables | `mabis-syncd.toml` |
-| `agentd` | `:9580` | Multi-agent LLM orchestration daemon — Orchestrator + Specialist Mesh; OpenAI / Anthropic / AWS Bedrock SigV4; ReAct loop with MCP tool calls across all 17 services; LanceDB RAG (persistent ANN, S3/GCS/local); TOML-defined custom agents + compiled-in specialist catalog; **29 bundled specialists** incl. `billing-regulatory-guard-agent` (§41/§41b compliance), `jahresabrechnung-agent` (annual settlement), `replacement-value-agent` (§17 MessZV), `mabis-syncd-agent` (UTILTS deadlines), `smgw-diagnostics-agent` (BSI TR-03109 + §14a CLS) | [agentd guide](agentd) |
+| `agentd` | `:9580` | Multi-agent LLM orchestration daemon — Orchestrator + Specialist Mesh; OpenAI / Anthropic / AWS Bedrock SigV4; ReAct loop with MCP tool calls across all 17 services; LanceDB RAG (persistent ANN, S3/GCS/local); TOML-defined custom agents + compiled-in specialist catalog; **29 bundled specialists** incl. `billing-regulatory-guard-agent` (§41/§41b compliance), `jahresabrechnung-agent` (annual settlement), `replacement-value-agent` (§ 60 Abs. 2 MsbG), `mabis-syncd-agent` (UTILTS deadlines), `smgw-diagnostics-agent` (BSI TR-03109 + §14a CLS) | [agentd guide](agentd) |
 
 ### `marktd` — Market Data Hub (`:8180`)
 
@@ -380,7 +380,7 @@ to `versorgungsstatus_history`, enabling both full audit logs and bitemporal
 
 Fan-out deliveries are retried with exponential back-off. Events that exhaust
 all retry attempts are written to `fanout_dlq` rather than silently dropped.
-This durable failure path ensures §22 MessZV compliance — a silent drop of a
+This durable failure path ensures § 147 AO / GoBD compliance — a silent drop of a
 `de.mako.process.initiated` event to `invoicd` would prevent the INVOIC
 plausibility check from running. Operators inspect and retry via
 `GET|POST|DELETE /admin/fanout/dlq`.
@@ -420,7 +420,7 @@ match, tariff found), persists the receipt to PostgreSQL, then issues
 
 The PostgreSQL persistence provides a durable audit trail of all received
 invoices, plausibility outcomes, and check findings — satisfying the 3-year
-retention requirement under §22 MessZV and §41 EnWG.
+retention requirement under § 147 AO / GoBD and §41 EnWG.
 
 **Supported PIDs:** 31001, 31002, 31005, 31006 (GPKE MMM-Rechnung); 31009
 (WiM MSB-Rechnung).
@@ -578,6 +578,44 @@ See the [`mako-service` README](https://github.com/hupe1980/mako/tree/main/crate
 for code examples covering every module.
 
 ---
+
+## EDM reference architecture mapping
+
+Classic German EDM platforms (Robotron ecount, SAP IS-U EDM, Kisters BelVis)
+bundle the whole energy-data value chain into one system. mako distributes
+the same layers across single-purpose daemons around one metered-data spine
+(`edmd`). The mapping, layer by layer:
+
+| EDM reference layer | Home | Notes |
+|---|---|---|
+| Data acquisition | `edmd` — MSCONS via marktd webhook, direct iMSys/RLM/Gas push, IoT push, bulk, optional Kafka consumer | All paths converge on the same V01–V10 validation; SMGW registry handles compliance, not transport |
+| Time-series database | `edmd` — PostgreSQL hot tier (monthly partitions, overlap-excluded, bitemporal corrections) + Apache Iceberg/S3 cold tier with DataFusion OLAP and Iceberg REST catalog | `?as_of=` reconstruction; `allocation_version` INITIAL/CORRECTION/FINAL |
+| Validation engine (VEE) | `metering::validation` (pure V01–V10) invoked on every ingest path | Annotate-only by design: suspect readings are stored with `quality_warnings`, never discarded — billing blockage is a separate decision |
+| Substitute values (§ 60 Abs. 2 MsbG) | `metering::substitute` + `edmd` REST/MCP — linear interpolation, prior-period average, carry-forward, zero-fill; full `substitute_value_log` audit | Manual values enter via the §22 corrections endpoint |
+| Calculation engine | `metering` (pure): aggregation, HT/NT, Spitzenleistung, G685 gas conversion, virtual meters, § 13 StromNZV imbalance, §22 EnWG Netzverlust indicator | Fixed typed rules instead of a free-form formula editor — deterministic by construction |
+| Forecasting | `edmd /forecast` — § 60 Abs. 2 MsbG Jahresprognose (daily-average projection with prior-year seasonal correction) | Deliberately no ML runtime in-core; see non-goals |
+| Balancing / settlement | `mabis-syncd` (MaBiS Summenzeitreihen, PID 13003, 10-Werktage Erstaufschlag), `netzbilanzd` (NNE/KA/MMM/MSB settlement), `mako-gabi-gas` in makod (GaBi Gas) | edmd serves `/summenzeitreihe` and `/billing-period` to both |
+| Market communication | `makod` — 17 EDIFACT message types incl. MSCONS/UTILMD/APERAK/INVOIC/CONTRL, deadline scheduler, CONTRL/APERAK auto-acknowledgement | Protocol processor by design; business state lives in the daemons |
+| Billing interface | `billingd` (LF retail, §40–§42 EnWG) and `invoicd` (INVOIC plausibility via `invoic-checker`) consume edmd's `MeterBillingPeriod` and Lastgang | edmd stays billing-free: it answers "what flowed", never "what it costs" |
+| Reporting & analytics | `obsd` (BNetzA KPI, §20 EnWG parity report), edmd OLAP (`/archive/*`, `/query/sql`, Arrow IPC), `portald` (customer dashboard), `agentd` (LLM analytics over MCP) | Headless: cockpit rendering is a frontend concern |
+| Workflow automation | Config-gated workers per daemon: edmd Iceberg archival + CLS/SMGW compliance, billingd §40b billing runs, accountingd Abschlag/SEPA/dunning, mabis-syncd submission windows | mmma-worker pattern: hourly tick, gated, idempotent via SQL claim |
+
+**Deliberate non-goals** (differences to the monolithic reference, by design):
+
+- **No SCADA/Leittechnik acquisition** — mako is a market-communication and
+  metering platform; grid operation systems stay upstream and can push via
+  the IoT/bulk APIs.
+- **No in-core ML forecasting** — `metering` is pure and deterministic; an
+  ML runtime (ONNX/PyTorch) would belong in a dedicated service that reads
+  edmd and writes forecast series back as `CALCULATED` quality.
+- **No weather ingestion** — Redispatch 2.0 meteorological MSCONS (PID
+  13021) is stored as time series; a weather-driven forecaster would join
+  the ML service above.
+- **Water is metering-only** — `Sparte::WASSER` reads are stored and
+  validated, but no water tariff, billing, or market process exists.
+- **No operator cockpit UI** — every layer is API/MCP-first; obsd and
+  portald serve machine-readable projections for whatever frontend the
+  operator runs.
 
 ## End-to-end: UTILMD 55001 Lieferbeginn
 

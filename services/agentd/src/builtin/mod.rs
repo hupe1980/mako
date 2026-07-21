@@ -250,7 +250,7 @@ MSB (Messstellenbetreiber), and AWH (abrechnungswürdige Handlungen bei Sperrpro
 2. Call netzbilanzd `get_billing_summary` for MaLo billing history.
 3. For overdue alerts: call netzbilanzd `list_billing_records` with `outcome=generated` to find undispatched drafts.
 4. Check CalculationTrace completeness: each position must have `explanation`, `legal_refs`, and `tariff_source`.
-5. Verify §22 MessZV: check if the billing period has historical audit records.
+5. Verify § 147 AO / GoBD: check if the billing period has historical audit records.
 6. Recommend dispatch or flag issues.
 
 ## KOSTENBLATT & MMM DEADLINES
@@ -407,7 +407,7 @@ DISPATCH_SAFE: [YES|NO]
 
 const JAHRESABRECHNUNG_AGENT: BuiltinAgentDef = BuiltinAgentDef {
     name: "jahresabrechnung-agent",
-    specialty: "Annual Schlussabrechnung orchestrator (LF role). Fetches 12-month edmd data, retrieves Abschläge from billingd, generates Final invoice, verifies Zahlbetrag, and checks §22 MessZV completeness.",
+    specialty: "Annual Schlussabrechnung orchestrator (LF role). Fetches 12-month edmd data, retrieves Abschläge from billingd, generates Final invoice, verifies Zahlbetrag, and checks § 147 AO / GoBD completeness.",
     system_prompt: "\
 You are the Jahresabrechnung specialist for the Lieferant (LF) role.
 
@@ -439,7 +439,7 @@ Invoked with `malo_id` and `billing_year` in the event context.
 ### Step 5 — Regulatory check
 1. §41 EnWG fields: Zählernummer, Verbrauchshistorie, Energiemix present?
 2. §40a: Kilowattstundenpreis present for Haushalt?
-3. §22 MessZV: if is_estimated=true, flag for operator sign-off before dispatch.
+3. § 147 AO / GoBD: if is_estimated=true, flag for operator sign-off before dispatch.
 
 ## OUTPUT FORMAT
 ```
@@ -656,7 +656,7 @@ QUALITY_ISSUES: [list or NONE]
 
 const METER_DATA_AGENT: BuiltinAgentDef = BuiltinAgentDef {
     name: "meter-data-agent",
-    specialty: "MSCONS meter data quality and §17 MessZV substitute value analysis. Detects missing intervals, validates Hampel quality grades, and recommends Ersatzwertbildung methods.",
+    specialty: "MSCONS meter data quality and § 60 Abs. 2 MsbG substitute value analysis. Detects missing intervals, validates Hampel quality grades, and recommends Ersatzwertbildung methods.",
     system_prompt: "\
 You are the energy data management and meter quality specialist.
 
@@ -669,7 +669,7 @@ You are the energy data management and meter quality specialist.
 1. Extract `malo_id` from event payload.
 2. Call edmd `get_quality_assessments` for current quality grades (A/B/C/F).
 3. For F-grade intervals: call edmd `get_timeseries` to identify gap extent.
-4. Determine appropriate §17 MessZV substitute method:
+4. Determine appropriate § 60 Abs. 2 MsbG substitute method:
    - Short gap (≤ 6h): linear interpolation
    - Medium gap (≤ 24h): prior-period average (same time-slot last week)
    - Long gap: profile-based substitution
@@ -681,7 +681,7 @@ DATA_STATUS: [COMPLETE|PARTIAL|MISSING]
 QUALITY_GRADE: [A|B|C|F]
 GAP_HOURS: [total hours of missing data]
 AFFECTED_BILLING_PERIOD: [YES|NO]
-RECOMMENDED_SUBSTITUTION: [method per §17 MessZV]
+RECOMMENDED_SUBSTITUTION: [method per § 60 Abs. 2 MsbG]
 ```",
     default_mcp_servers: &["edmd", "marktd"],
     default_trigger_patterns: &[
@@ -1082,15 +1082,15 @@ KPI_SUMMARY: [key metrics]
 
 const REPLACEMENT_VALUE_AGENT: BuiltinAgentDef = BuiltinAgentDef {
     name: "replacement-value-agent",
-    specialty: "§17 MessZV Ersatzwertbildung orchestrator. Selects and applies the correct substitute-value method (linear/prior-period/profile) for missing meter intervals, with full audit trail.",
+    specialty: "§ 60 Abs. 2 MsbG Ersatzwertbildung orchestrator. Selects and applies the correct substitute-value method (linear/prior-period/profile) for missing meter intervals, with full audit trail.",
     system_prompt: "\
-You are the §17 MessZV Ersatzwertbildung specialist.
+You are the § 60 Abs. 2 MsbG Ersatzwertbildung specialist.
 
 ## TRIGGERED BY
 - `de.edmd.reading.quality.warning` — quality grade F or gap detected
 - `de.mako.process.completed` — billing period needs quality check
 
-## SUBSTITUTE VALUE METHODS (§17 MessZV)
+## SUBSTITUTE VALUE METHODS (§ 60 Abs. 2 MsbG)
 - V1 (≤ 6h gap): linear interpolation between neighbors
 - V2 (≤ 24h): prior-period average (same time-slot from previous week)
 - V3 (> 24h): standardized load profile (SLP-based)
@@ -1099,7 +1099,7 @@ You are the §17 MessZV Ersatzwertbildung specialist.
 ## PROCEDURE
 
 1. Call edmd `get_quality_assessments` to identify F-grade intervals.
-2. For each gap: determine extent (hours) and select method per §17 MessZV.
+2. For each gap: determine extent (hours) and select method per § 60 Abs. 2 MsbG.
 3. Call edmd `trigger_substitution` with the gap window and the selected method
    (`LinearInterpolation`, `PriorPeriodAverage`, `ZeroFill`, or
    `LastValueCarryForward`). It never overwrites billable readings and logs
@@ -1114,7 +1114,7 @@ SUBSTITUTION_STATUS: [APPLIED|PENDING_REVIEW|ESCALATED]
 GAP_HOURS_TOTAL: [number]
 METHOD_APPLIED: [V1|V2|V3|V4|NONE]
 AUDIT_TRAIL: [description of substitution decision]
-LEGAL_BASIS: §17 Abs. [n] MessZV
+LEGAL_BASIS: §17 Abs. [n] MsbG
 ```",
     default_mcp_servers: &["edmd", "marktd", "obsd"],
     default_trigger_patterns: &[
@@ -1200,7 +1200,7 @@ For each CLS channel in `session.cls_channels`:
 
 ### Step 5 — Communication fault
 If `last_contact_at` is > 2 hours ago → `COMMUNICATION_FAULT`:
-- Trigger Sonderablesung via `POST /api/v1/reading-orders` (§17 MessZV)
+- Trigger Sonderablesung via `POST /api/v1/reading-orders` (§ 60 Abs. 2 MsbG)
 - Alert MSB field service
 
 ### Step 6 — Trigger immediate re-scan if needed
@@ -1212,7 +1212,7 @@ Call `POST /api/v1/smgw/compliance/scan` to run a side-effecting sweep that:
 - TLS certificate: issued by BSI-approved CA, renew ≥ 30 days before expiry (TR-03109-4 §6.3)
 - SMGW must maintain active session with MSB backend (TR-03109-1 §3.2)
 - CLS channel + Konfigurationsprodukt required for §14a load control (BK6-22-300)
-- Communication fault > 2h → §17 MessZV substitute values mandatory
+- Communication fault > 2h → § 60 Abs. 2 MsbG substitute values mandatory
 
 ## OUTPUT FORMAT
 ```

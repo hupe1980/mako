@@ -559,7 +559,7 @@ pub async fn list_kostenblatt_gaps(
     .context("list_kostenblatt_gaps")
 }
 
-// ── Fremdkosten (§22 MessZV external cost pass-through, BO4E typed) ───────────
+// ── Fremdkosten (§ 147 AO / GoBD external cost pass-through, BO4E typed) ───────────
 
 /// Stored Fremdkosten record row.
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -734,7 +734,7 @@ pub async fn fetch_billing_record(
     .context("fetch_billing_record")
 }
 
-// ── Korrekturrechnung (MSB 31009 correction, §22 MessZV) ─────────────────────
+// ── Korrekturrechnung (MSB 31009 correction, § 147 AO / GoBD) ─────────────────────
 
 /// Create a Korrekturrechnung (correction invoice) linked to an original draft.
 ///
@@ -789,7 +789,7 @@ pub async fn insert_correction_draft(
             "rechnungsart".to_owned(),
             serde_json::Value::String(rechnungsart.to_owned()),
         );
-        // §22 MessZV: carry originalRechnungsnummer as ZusatzAttribut.
+        // § 147 AO / GoBD: carry originalRechnungsnummer as ZusatzAttribut.
         let original_nr = original_rechnung
             .get("rechnungsnummer")
             .and_then(|v| v.as_str())
@@ -845,7 +845,7 @@ pub async fn insert_correction_draft(
 /// Mark a dispatched invoice draft as paid (REMADV 33001/33003/33004).
 ///
 /// `remadv_ref` is the EDIFACT reference from the REMADV message
-/// (stored for BNetzA §22 MessZV 3-year audit trail).
+/// (stored for BNetzA § 147 AO / GoBD 3-year audit trail).
 ///
 /// Returns `Ok(true)` when the update succeeded (draft was in `dispatched` status).
 /// Returns `Ok(false)` when the draft does not exist or is not in `dispatched` status.
@@ -896,7 +896,7 @@ pub async fn mark_draft_disputed(
     Ok(rows > 0)
 }
 
-// ── BNetzA §22 MessZV audit export ────────────────────────────────────────────
+// ── BNetzA § 147 AO / GoBD audit export ────────────────────────────────────────────
 
 /// Audit export query params.
 pub struct AuditQuery {
@@ -910,7 +910,7 @@ pub struct AuditQuery {
 
 /// Full audit export row (lightweight — no Rechnung JSONB).
 ///
-/// Satisfies BNetzA §22 MessZV 3-year retention requirement.
+/// Satisfies BNetzA § 147 AO / GoBD 3-year retention requirement.
 /// The full Rechnung JSONB can be fetched separately via `fetch_draft(id)`.
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct AuditRow {
@@ -933,7 +933,7 @@ pub struct AuditRow {
     pub updated_at: time::OffsetDateTime,
 }
 
-/// Export invoice records for BNetzA audit (§22 MessZV 3-year retention).
+/// Export invoice records for BNetzA audit (§ 147 AO / GoBD 3-year retention).
 ///
 /// Filters by date range, PID, and status.  Does not return `rechnung` JSONB
 /// to keep response payload manageable for large portfolios.

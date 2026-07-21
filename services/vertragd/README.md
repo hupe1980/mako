@@ -21,7 +21,7 @@ MaLo IDs.
 | **MaKo triggering** | `POST processd /start-supply` (`lieferbeginn_datum`) / `/start-supply-gas` (`zaehlpunkt` + `process_date`, YYYYMMDD) per commodity; dispatched over the rows **actually inserted**, so an idempotent re-POST of the same `erp_contract_id` fires no second UTILMD; **3× exponential-backoff retry**; failures flagged by `find_stuck_komponents` after 5 WT |
 | **Tarifwechsel** | `POST /api/v1/vertraege/{id}/tarifwechsel` — changes product without new UTILMD; **blocked within `preisgarantie_bis` window**; override logged to `preisgarantie_override_log` with operator JWT sub |
 | **Preisgarantie** | `PUT/GET /api/v1/vertraege/{id}/preisgarantie` — typed `rubo4e::current::Preisgarantie` COM |
-| **Kündigung** | `POST processd /end-supply[-gas]` Lieferende (3× retry) **plus** an independent `edmd` Schlussablesung reading order (§9 MessZV) fired regardless of the Lieferende outcome; §14 StromGVV / §13 GasGVV notice period enforced |
+| **Kündigung** | `POST processd /end-supply[-gas]` Lieferende (3× retry) **plus** an independent `edmd` Schlussablesung reading order (GPKE Beginn-/Schlussablesung) fired regardless of the Lieferende outcome; §14 StromGVV / §13 GasGVV notice period enforced |
 | **Kündigung Widerruf** | `POST /api/v1/vertraege/{id}/widerruf-kuendigung` — reverts GEKÜNDIGT → AKTIV before lieferende; §20 EnWG LF right to withdraw |
 | **Rahmenvertrag Cascade** | `POST /api/v1/rahmenvertraege/{id}/kuendigen` — terminates all active child Versorgungsverträge; individual notice periods respected; returns dispatched/skipped summary |
 | **Stornierung** | `POST /api/v1/vertraege/{id}/stornieren` — pre-activation cancel (ANGELEGT/IN_BEARBEITUNG only) |

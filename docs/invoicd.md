@@ -7,7 +7,7 @@ mermaid: true
 description: >
   invoicd operator guide: INVOIC plausibility-check daemon (LF role). Handles all
   inbound billing PIDs (31001/31002/31005/31006/31009), runs invoic-checker, dispatches
-  REMADV, persists receipts for §22 MessZV, emits payment CloudEvents to ERP.
+  REMADV, persists receipts for § 147 AO / GoBD, emits payment CloudEvents to ERP.
 ---
 
 # `invoicd` Operator Guide
@@ -18,7 +18,7 @@ It subscribes to `marktd`'s EventBus, receives inbound INVOIC events, and:
 1. Fetches the `PreisblattNetznutzung` and `NbContractRecord` from `marktd`.
 2. Runs **5+1 deterministic checks** via `invoic-checker` (check 6 applies to MMM PIDs only).
 3. Auto-settles (REMADV 33001) or disputes (REMADV 33002).
-4. Persists every receipt to PostgreSQL for the **3-year §22 MessZV** audit trail.
+4. Persists every receipt to PostgreSQL for the **3-year § 147 AO / GoBD** audit trail.
 5. Emits `de.invoic.receipt.*` CloudEvents to your ERP — **durable at-least-once delivery** with exponential-backoff retry.
 
 ```mermaid
@@ -26,11 +26,11 @@ graph TB
     marktd["marktd :8180\nEventBus"]
     invoicd["invoicd :8280\n(this service)"]
     makod["makod :8080"]
-    pg["PostgreSQL\ninvoic_receipts\n(§22 MessZV, 3y)"]
+    pg["PostgreSQL\ninvoic_receipts\n(§ 147 AO / GoBD, 3y)"]
 
     marktd -->|"de.mako.process.initiated\n(PID 31001/02/05/06/09)\nHMAC POST /webhook"| invoicd
     invoicd -->|"GET /api/v1/preisblaetter/{nb_mp_id}"| marktd
-    invoicd -->|"Persist receipt BEFORE dispatch\n(§22 MessZV atomic)"| pg
+    invoicd -->|"Persist receipt BEFORE dispatch\n(§ 147 AO / GoBD atomic)"| pg
     invoicd -->|"REMADV 33001/33002\nwim.rechnung.annehmen/.ablehnen"| makod
     invoicd -->|"de.invoic.receipt.settled/disputed\ndurable at-least-once\n(inline + outbox worker retry)"| erp["ERP webhook"]
 ```
@@ -192,13 +192,13 @@ blocks the regulatory obligation.  Reconcile dead-lettered events by querying
 
 ---
 
-## Idempotency and §22 MessZV
+## Idempotency and § 147 AO / GoBD
 
 `invoicd` writes each receipt to PostgreSQL **before** dispatching any command
 to `makod`. The `invoic_receipts` table has a `UNIQUE (process_id)` constraint,
 so re-delivery of the same `de.mako.process.initiated` event is a no-op.
 
-Receipts must be retained for **3 years** (§22 MessZV / §41 EnWG).
+Receipts must be retained for **3 years** (§ 147 AO / GoBD / §41 EnWG).
 The `received_at` column drives the retention query:
 
 ```sql
@@ -213,7 +213,7 @@ WHERE received_at < now() - INTERVAL '3 years';
 
 After `invoicd` dispatches a REMADV, the payment is settled via bank transfer
 outside the EDIFACT process. `invoicd` provides an ERP callback endpoint to
-close the §22 MessZV / §41 EnWG payment audit trail and a status query endpoint
+close the § 147 AO / GoBD / §41 EnWG payment audit trail and a status query endpoint
 for accounts-payable reconciliation.
 
 ### `POST /api/v1/receipts/{id}/confirm-payment`
@@ -291,8 +291,8 @@ stateDiagram-v2
     Dispatched --> Overdue : pay_by passes without confirmation
     Overdue --> Settled : POST /confirm-payment (late ERP ack)
     Disputed --> Resolved : POST /resolve-dispute (operator closes after NB agreement)
-    Resolved --> [*] : §22 MessZV audit trail complete
-    Settled --> [*] : §22 MessZV audit trail complete
+    Resolved --> [*] : § 147 AO / GoBD audit trail complete
+    Settled --> [*] : § 147 AO / GoBD audit trail complete
 ```
 
 ---
@@ -322,7 +322,7 @@ invoicd --config /etc/invoicd/invoicd.toml
 addr = "0.0.0.0:8280"          # default
 
 [database]
-# Required for §22 MessZV 3-year receipt retention.
+# Required for § 147 AO / GoBD 3-year receipt retention.
 url             = "env:DATABASE_URL"   # required; use env: for secrets
 max_connections = 5                    # default
 
@@ -398,7 +398,7 @@ curl -s http://marktd:8180/api/v1/subscriptions/invoicd \
 
 ## LF selbstausgestellt INVOIC (PID 31006)
 
-When the LF issues the invoice itself (§20 MessZV selbstausgestellt), trigger via:
+When the LF issues the invoice itself (INVOIC AHB Selbstausstellung selbstausgestellt), trigger via:
 
 ```bash
 curl -X POST http://invoicd:8280/api/v1/selbstausstellen/10001234567 \
@@ -418,7 +418,7 @@ The endpoint performs the following pipeline:
 3. Extracts `ArbeitspreisWirkarbeit` and `LeistungspreisWirkleistung` from typed `Preisposition.preisstaffeln`.
 4. Calls `grid_billing::calculate_nne_invoice(NneInput)` to produce a `GridSettlement`
    (`GridInvoice` is a backward-compatible alias).
-   `invoicd` calls `into_rechnung()` locally to build the §22-MessZV-compliant `Rechnung`
+   `invoicd` calls `into_rechnung()` locally to build the GoBD-compliant `Rechnung`
    — `grid-billing` has no `rubo4e` dependency.
 5. Persists the real `Rechnung` JSON to `invoic_receipts` (audit trail).
 6. Dispatches `gpke.abrechnung.selbstausstellen` to `makod` with the full `rechnung` payload, which enqueues the outbound INVOIC 31006 for AS4 delivery to the NB.
@@ -453,7 +453,7 @@ The `[edmd]` section is required. Without it, `POST /api/v1/selbstausstellen` re
 |--------|-------------|
 | `resolve-dispute` | Guided dispute investigation (check classification + resolution steps) |
 | `check-overdue-remadv` | Monitor and action overdue REMADV dispatches |
-| `monthly-billing-review` | §22 MessZV monthly reconciliation checklist |
+| `monthly-billing-review` | § 147 AO / GoBD monthly reconciliation checklist |
 | `detect-systematic-errors` | Find NB counterparties with systematic billing errors |
 
 The `invoice-reconciliation-agent` in `agentd` subscribes to `de.invoic.payment.overdue` and `de.invoic.receipt.disputed`, runs the systematic-error detection workflow automatically, and escalates when a single NB exceeds 10% dispute rate over 2+ consecutive months.
@@ -476,13 +476,13 @@ not have received the REMADV and will begin a dispute window.
 
 | Metric | Description |
 |--------|-------------|
-| `invoicd_receipts_total` | Total INVOIC receipts persisted (§22 MessZV) |
+| `invoicd_receipts_total` | Total INVOIC receipts persisted (§ 147 AO / GoBD) |
 | `invoicd_disputes_total` | Receipts with `Dispute` outcome |
 | `invoicd_overdue_remadv_total` | Receipts with `pay_by < now() + 3 days` and no `dispatched_at` |
 | `invoicd_receipts_by_pid_outcome{pid, outcome}` | Receipt count broken down by PID and outcome |
 
 ```sql
--- invoic_receipts (§22 MessZV, 3-year retention)
+-- invoic_receipts (§ 147 AO / GoBD, 3-year retention)
 SELECT
   process_id,    -- UUID, unique business key
   pid,           -- 31001 | 31002 | 31005 | 31006 | 31009

@@ -361,7 +361,7 @@ pub enum LegalReference {
         /// Module: Modul1 (flat reduction), Modul2 (HT/NT), or Modul3 (spot).
         module: Sect14aModule,
     },
-    /// MessZV — Messzugangsverordnung (metering access).
+    /// MsbG — Messzugangsverordnung (metering access).
     MessZv {
         /// Paragraph citation, e.g. `"§2"`, `"§17"`.
         paragraph: &'static str,
@@ -430,7 +430,7 @@ impl LegalReference {
             Self::Kwkg { paragraph } => format!("KWKG {paragraph}"),
             Self::EnFG { paragraph } => format!("EnFG {paragraph}"),
             Self::Sect14aEnwg { module } => format!("§14a EnWG {}", module.label()),
-            Self::MessZv { paragraph } => format!("MessZV {paragraph}"),
+            Self::MessZv { paragraph } => format!("MsbG {paragraph}"),
             Self::MsbG { paragraph } => format!("MsbG {paragraph}"),
             Self::BnetzaDecision { reference } => format!("BNetzA {reference}"),
             Self::BdewAhb { reference } => format!("BDEW {reference}"),
@@ -628,7 +628,7 @@ pub enum BillingPositionKind {
     /// MsbG §§6–7. → `BdewArtikelnummer::EntgeltEinbauBetriebWartungMesstechnik`
     MsbGrundgebuehr,
     /// Messdienstleistung — periodic reading service fee.
-    /// MessZV §2. → `BdewArtikelnummer::EntgeltMessungAblesung`
+    /// MsbG §2. → `BdewArtikelnummer::EntgeltMessungAblesung`
     Messdienstleistung,
     /// Gas AWH Sperrung — abrechnungswürdige Handlung disconnection.
     /// BK7-24-01-009 §5.4. → `BdewArtikelnummer::Sperrkosten`

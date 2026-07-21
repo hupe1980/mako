@@ -114,14 +114,14 @@ assert_eq!(quantity.energy_kwh_hs, dec!(1030.102)); // rounded to 3 dp
 
 `validate()` returns `Err(GasBeschaffenheitValidationError)` listing all violated constraints.
 
-### `GasQualityFlag` — measurement quality per §17 MessZV / GaBi Gas 2.1 (BK7-24-01-008)
+### `GasQualityFlag` — measurement quality per § 60 Abs. 2 MsbG / GaBi Gas 2.1 (BK7-24-01-008)
 
 ```rust
 // Every gas measurement interval carries a quality flag
 match flag {
     GasQualityFlag::Measured     => /* direct MSCONS Gas reading */,
     GasQualityFlag::Estimated    => /* SLP Gas profile (G0, H0, G1–G6) */,
-    GasQualityFlag::Substituted  => /* §17 MessZV replacement value */,
+    GasQualityFlag::Substituted  => /* § 60 Abs. 2 MsbG replacement value */,
     GasQualityFlag::Calculated   => /* DVGW G 685 m³ → kWh_Hs conversion result */,
     GasQualityFlag::Corrected    => /* revised value, prior version preserved */,
     GasQualityFlag::Rejected     => /* failed validation — triggers Ersatzwertbildung */,

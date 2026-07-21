@@ -2,9 +2,9 @@
 //!
 //! ## Legal basis
 //!
-//! - **§2 Nr. 17 MessZV**: Spitzenleistung = höchste Viertelstundenleistung im Abrechnungszeitraum.
-//! - **§3 MessZV**: RLM = registrierende Lastgangmessung (15-min intervals).
-//! - **§4 MessZV**: SLP = Standardlastprofil (daily or monthly totals).
+//! - **§ 12 StromNZV**: Spitzenleistung = höchste Viertelstundenleistung im Abrechnungszeitraum.
+//! - **§ 2 MsbG**: RLM = registrierende Lastgangmessung (15-min intervals).
+//! - **§ 12 StromNZV**: SLP = Standardlastprofil (daily or monthly totals).
 //! - **GPKE BK6-22-024 §3**: MMM billing requires arbeitsmenge_kwh + spitzenleistung_kw.
 //!
 //! ## Spitzenleistung (peak demand)
@@ -165,7 +165,7 @@ pub struct BillingPeriod {
     /// Total energy in kWh (Arbeitsmenge, sum of all intervals).
     pub arbeitsmenge_kwh: Decimal,
 
-    /// Peak demand in kW (§2 Nr. 17 MessZV Spitzenleistung).
+    /// Peak demand in kW (§ 12 StromNZV Spitzenleistung).
     ///
     /// `None` for SLP or when `config.include_spitzenleistung = false`.
     /// For RLM: `max(interval_kwh / duration_h)` across all intervals.
@@ -328,7 +328,7 @@ mod tests {
             iv(base, dec!(2.0)),
             iv(base + time::Duration::minutes(15), dec!(3.0)),
         ];
-        // Mark second interval as Estimated — §17 MessZV: Estimated IS billable
+        // Mark second interval as Estimated — § 60 Abs. 2 MsbG: Estimated IS billable
         // (Prognosewert is the statutory mechanism for advance billing).
         intervals[1].quality = QualityFlag::Estimated;
         let period = aggregate(&intervals, AggregationConfig::rlm_strom());
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn spitzenleistung_mess_zv_definition() {
-        // §2 Nr. 17 MessZV: Spitzenleistung = höchste Viertelstundenleistung
+        // § 12 StromNZV: Spitzenleistung = höchste Viertelstundenleistung
         // 3.5 kWh in 15 min = 14 kW
         // 1.0 kWh in 15 min = 4 kW
         // Peak = 14 kW

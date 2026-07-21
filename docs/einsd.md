@@ -721,7 +721,7 @@ the 2nd — §26 EEG: payments due by 15th of following month).
 
 ---
 
-## §22 MessZV — Correction Settlement
+## § 147 AO / GoBD — Correction Settlement
 
 When meter data or tariffs are corrected, create a correction receipt:
 
@@ -737,7 +737,7 @@ Content-Type: application/json
 ```
 
 The correction:
-1. Snapshots the original receipt to `settlement_receipt_history` (immutable, §22 MessZV)
+1. Snapshots the original receipt to `settlement_receipt_history` (immutable, § 147 AO / GoBD)
 2. Re-runs settlement with corrected inputs
 3. Stores `is_correction = true` and `correction_of = <original_id>` in the new receipt
 
@@ -871,7 +871,7 @@ See [BNetzA Einspeisevergütungen](https://www.bundesnetzagentur.de/DE/Fachtheme
 | `POST` | `/api/v1/anlagen/{tr_id}/switch-veraeusserungsform` | **§21b** monthly Veräußerungsform switch |
 | `GET` | `/api/v1/anlagen/foerderung-auslaufend` | Expiring within N days |
 | `POST` | `/api/v1/anlagen/{tr_id}/settle/{year}/{month}` | Monthly settlement (§19 EInsMan + §51a QH supported) |
-| `POST` | `/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction` | **§22 MessZV** correction receipt (original preserved in history) |
+| `POST` | `/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction` | **§ 147 AO / GoBD** correction receipt (original preserved in history) |
 | `POST` | `/api/v1/settle/{year}/{month}` | Batch settle all active plants |
 | `GET` | `/api/v1/anlagen/{tr_id}/settlements` | Settlement history |
 | `PUT/GET` | `/api/v1/epex-monthly/{year}/{month}` | EPEX monthly average |
@@ -967,13 +967,13 @@ Immutable active receipt per billing period. Unique per `(tr_id, tenant, billing
 | `faelligkeitsdatum` | §26 Abs. 1 EEG 2023 — 15th of following calendar month |
 | `verlaengerungsanspruch_qh` | §51a quarter-hours accrued this period |
 | `billing_days_fraction` | §25 partial month factor (mid-month commissioning/expiry) |
-| `positions_json` | §22 MessZV — itemized billing positions JSONB snapshot |
+| `positions_json` | § 147 AO / GoBD — itemized billing positions JSONB snapshot |
 | `is_correction` | `true` when this receipt supersedes a prior calculation |
 | `correction_of` | UUID of the original receipt this corrects (traceability chain) |
 
 ### `settlement_receipt_history`
 
-§22 MessZV immutable snapshots. One row per correction — captures the full original receipt as JSONB before any correction upsert overwrites it. Query this table to reconstruct the billing history for any plant and period.
+§ 147 AO / GoBD immutable snapshots. One row per correction — captures the full original receipt as JSONB before any correction upsert overwrites it. Query this table to reconstruct the billing history for any plant and period.
 
 ### `settlement_state_transitions`
 

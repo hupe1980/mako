@@ -478,7 +478,7 @@ impl Paragraph100Rule {
 ///
 /// DSOs perform settlement corrections and retroactive adjustments frequently:
 /// corrected meter readings, changed tariffs, regulatory reprocessing.
-/// Tracking the settlement type is essential for §22 MessZV-compliant bookkeeping.
+/// Tracking the settlement type is essential for § 147 AO / GoBD-compliant bookkeeping.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

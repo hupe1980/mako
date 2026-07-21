@@ -362,7 +362,7 @@ impl MdmdMcpHandler {
     /// Read the current PreisblattNetznutzung for a Netzbetreiber.
     ///
     /// Returns the price sheet used by `invoicd` to validate INVOIC billing
-    /// plausibility (§22 MessZV).  Pass `date` to retrieve the sheet valid
+    /// plausibility (§ 147 AO / GoBD).  Pass `date` to retrieve the sheet valid
     /// on a specific billing date (default: today).
     #[tool(
         description = "Read the PreisblattNetznutzung (NNE price sheet) for an NB GLN",
@@ -492,7 +492,7 @@ impl MdmdMcpHandler {
     ///
     /// Returns netzebene, bilanzierungsmethode (RLM/SLP), billing_schedule
     /// (MONTHLY/QUARTERLY/ANNUALLY), and validity period.  `invoicd` uses this
-    /// to validate billing-cycle plausibility (§22 MessZV).  Pass `date` to
+    /// to validate billing-cycle plausibility (§ 147 AO / GoBD).  Pass `date` to
     /// retrieve the contract valid on a specific billing date; defaults to today.
     #[tool(
         description = "Read the active NB network contract for a MaLo (netzebene, billing_schedule, RLM/SLP)",
@@ -1317,7 +1317,7 @@ impl ServerHandler for MdmdMcpHandler {
              - `get_melo_standorteigenschaften` — Redispatch 2.0 site properties for a MeLo\n\
              - `list_partners` — list registered trading partners (MP-ID, AS4 endpoint, channels)\n\
              - `get_partner` — read a single trading partner by MP-ID\n\
-             - `get_preisblatt` — read the PreisblattNetznutzung for an NB (used by invoicd for §22 MessZV)\n\
+             - `get_preisblatt` — read the PreisblattNetznutzung for an NB (used by invoicd for § 147 AO / GoBD)\n\
              - `get_versorgungsstatus` — read VersorgungsStatus (Beliefert/Unbeliefert/…) for a MaLo\n\
              - `get_versorgungsstatus_history` — full supply state transition history for a MaLo\n\
              - `get_versorgung_at` — point-in-time VersorgungsStatus for a MaLo on a given date\n\

@@ -1,6 +1,6 @@
 -- ── invoicd schema — INVOIC Plausibility & Settlement ────────────────────────
 --
--- §22 MessZV: INVOIC receipts must be retained for 3 years.
+-- § 147 AO / GoBD: INVOIC receipts must be retained for 3 years.
 -- Every INVOIC event received is persisted here before any REMADV/COMDIS
 -- command is dispatched to makod (persist-before-dispatch invariant).
 --
@@ -65,7 +65,7 @@ CREATE TABLE invoic_receipts (
 );
 
 COMMENT ON TABLE invoic_receipts IS
-    '§22 MessZV: 3-year INVOIC receipt ledger. Written before REMADV/COMDIS dispatch. '
+    '§ 147 AO / GoBD: 3-year INVOIC receipt ledger. Written before REMADV/COMDIS dispatch. '
     'Supports PIDs 31001/31002/31005/31006/31007/31008/31009/31011.';
 
 COMMENT ON COLUMN invoic_receipts.pay_by IS

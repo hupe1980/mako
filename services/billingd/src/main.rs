@@ -159,7 +159,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/billing/:malo_id/preview",
             post(handlers::post_preview),
         )
-        // L8: Korrekturrechnung / Stornorechnung (§22 MessZV audit trail)
+        // L8: Korrekturrechnung / Stornorechnung (§ 147 AO / GoBD audit trail)
         .route(
             "/api/v1/billing/:id/correction",
             post(handlers::post_correction),

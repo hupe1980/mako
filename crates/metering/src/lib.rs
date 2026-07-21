@@ -1,7 +1,7 @@
 //! German energy metering domain library.
 //!
 //! A **standalone**, **pure** library for meter data calculations required by
-//! BDEW MaKo, MessZV, GasGVV, and EnWG.  Zero I/O, no async, no float money.
+//! BDEW MaKo, MsbG, GasGVV, and EnWG.  Zero I/O, no async, no float money.
 //!
 //! This crate supersedes the `meter-quality` crate, which has been folded in.
 //!
@@ -13,11 +13,11 @@
 //! | [`conversion`] | Gas m³ → kWh_Hs (§25 Nr. 4 MessEV / DVGW G 685) |
 //! | [`aggregation`] | Billing period: `arbeitsmenge_kwh`, `spitzenleistung_kw`, HT/NT |
 //! | [`classification`] | SLP/RLM/iMSys detection, interval length |
-//! | [`imbalance`] | Mehr-/Mindermengensaldo (§27 MessZV, compute_imbalance) |
+//! | [`imbalance`] | Mehr-/Mindermengensaldo (§ 13 StromNZV, compute_imbalance) |
 //! | [`quality`] | Hampel-filter quality scoring (M7), `score_intervals_raw` for f64 |
 //! | [`validation`] | V01–V10 validation engine incl. plant-capacity ceiling |
-//! | [`substitute`] | §17 MessZV Ersatzwertbildung (4 methods, slot matching) |
-//! | [`forecast`] | §17 MessZV Jahresprognose with 95% confidence bounds |
+//! | [`substitute`] | § 60 Abs. 2 MsbG Ersatzwertbildung (4 methods, slot matching) |
+//! | [`forecast`] | § 60 Abs. 2 MsbG Jahresprognose with 95% confidence bounds |
 //! | [`load_profile`] | SLP classes incl. BDEW 2025 (H25/G25/L25/P25/S25) + Dynamisierung |
 //! | [`zaehlzeit`] | Zählzeitdefinition — time-variable register resolution (§14a EnWG) |
 //! | [`rollout`] | §29 MsbG Pflichteinbaufälle + §45 MsbG Rollout-Fahrplan |
@@ -78,6 +78,7 @@ pub mod imbalance;
 pub mod interval;
 pub mod lifecycle;
 pub mod load_profile;
+pub mod losses;
 pub mod measurement_point;
 pub mod measurement_series;
 pub mod obis;
@@ -115,6 +116,7 @@ pub use lifecycle::{
     MeterExchangeEvent, MeterLifecycleEvent, MeterLifecycleEventType, MeterStatus,
 };
 pub use load_profile::LoadProfile;
+pub use losses::{NetworkLosses, network_losses};
 pub use measurement_point::{EnergyFlow, MarktRolle, MeasurementPoint};
 pub use measurement_series::{
     MeasurementSeries, MeasurementSource, ProvenanceEntry, ProvenanceEventType,

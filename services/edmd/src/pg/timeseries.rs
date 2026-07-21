@@ -75,8 +75,8 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
             .map(|r| normalise_obis(r.obis_code.as_deref()))
             .collect();
         // Provenance travels with the reading: `allocation_version` carries the
-        // MaBiS vorläufig/endgültig distinction, and `sender_mp_id` carries §22
-        // MessZV per-interval MSB attribution across a WiM switch.
+        // MaBiS vorläufig/endgültig distinction, and `sender_mp_id` carries the
+        // per-interval MSB attribution across a WiM switch (§ 60 Abs. 6 MsbG).
         let sources: Vec<&str> = reads.iter().map(|r| r.source.as_str()).collect();
         let tenants: Vec<&str> = reads.iter().map(|r| r.tenant.as_str()).collect();
         let push_sessions: Vec<Option<&str>> =
@@ -106,7 +106,7 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
                          push_session, quality_warnings, sender_mp_id,
                          allocation_version, unit)
               ),
-              -- §22 MessZV: an overwrite must never be silent. Any redelivery
+              -- § 60 Abs. 6 MsbG: an overwrite must never be silent. Any redelivery
               -- that changes a stored value or quality leaves an immutable
               -- audit row BEFORE the upsert applies — the CTE join sees the
               -- pre-statement snapshot, so `original_*` is the displaced value.
@@ -120,7 +120,7 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
                   SELECT mr.malo_id, mr.dtm_from, mr.dtm_to, mr.obis_code_norm,
                          mr.quantity_kwh, mr.quality,
                          i.quantity_kwh, i.quality,
-                         'Neulieferung überschreibt gespeichertes Intervall (automatischer §22-MessZV-Audit-Eintrag)',
+                         'Neulieferung überschreibt gespeichertes Intervall (automatischer Audit-Eintrag, § 60 Abs. 6 MsbG)',
                          CASE
                              WHEN i.source = 'MSCONS' THEN 'MSCONS_UPDATE'
                              WHEN i.source IN ('DIRECT_PUSH', 'DIRECT_GAS', 'IOT_PUSH')
@@ -186,6 +186,52 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
         .bind(&sender_mp_ids as &[Option<&str>])
         .bind(&allocation_versions as &[&str])
         .bind(&units as &[&str])
+        .execute(&self.pool)
+        .await
+        .map_err(|e| EdmError::Database(e.to_string()))?;
+
+        // § 60 Abs. 2 MsbG confirmation loop — one round-trip each way:
+        // estimated/substituted intervals open an obligation, real values for
+        // the same slot discharge any open one.
+        sqlx::query(
+            r"INSERT INTO estimated_read_confirmations
+                  (tenant, malo_id, dtm_from, dtm_to, obis_code_norm, quality)
+              SELECT t.tenant, t.malo_id, t.dtm_from, t.dtm_to, t.obis_code_norm, t.quality
+              FROM unnest($1::text[], $2::text[], $3::timestamptz[],
+                          $4::timestamptz[], $5::text[], $6::text[])
+                   AS t(tenant, malo_id, dtm_from, dtm_to, obis_code_norm, quality)
+              WHERE t.quality IN ('ESTIMATED', 'SUBSTITUTED')
+              ON CONFLICT (tenant, malo_id, dtm_from, obis_code_norm) DO NOTHING",
+        )
+        .bind(&tenants as &[&str])
+        .bind(&malo_ids as &[&str])
+        .bind(&dtm_froms)
+        .bind(&dtm_tos)
+        .bind(&obis_norms as &[String])
+        .bind(&qualities as &[&str])
+        .execute(&self.pool)
+        .await
+        .map_err(|e| EdmError::Database(e.to_string()))?;
+
+        sqlx::query(
+            r"UPDATE estimated_read_confirmations e
+              SET status = 'BESTAETIGT', resolved_at = now(), resolved_by = t.source
+              FROM unnest($1::text[], $2::text[], $3::timestamptz[],
+                          $4::text[], $5::text[], $6::text[])
+                   AS t(tenant, malo_id, dtm_from, obis_code_norm, quality, source)
+              WHERE e.tenant = t.tenant
+                AND e.malo_id = t.malo_id
+                AND e.dtm_from = t.dtm_from
+                AND e.obis_code_norm = t.obis_code_norm
+                AND e.status IN ('OFFEN', 'UEBERFAELLIG')
+                AND t.quality IN ('MEASURED', 'CORRECTED')",
+        )
+        .bind(&tenants as &[&str])
+        .bind(&malo_ids as &[&str])
+        .bind(&dtm_froms)
+        .bind(&obis_norms as &[String])
+        .bind(&qualities as &[&str])
+        .bind(&sources as &[&str])
         .execute(&self.pool)
         .await
         .map_err(|e| EdmError::Database(e.to_string()))?;
@@ -406,11 +452,12 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
         .map_err(|e| EdmError::Database(e.to_string()))?;
 
         if let Some(row) = pre {
+            // NUMERIC columns read natively — the previous TEXT-based
+            // parse also swallowed the NUMERIC ht/nt columns (sqlx type
+            // mismatch → None), so cached reads silently lost the HT/NT
+            // split.
             let parse_dec = |col: &str| -> Option<Decimal> {
-                row.try_get::<Option<String>, _>(col)
-                    .ok()
-                    .flatten()
-                    .and_then(|s| s.parse().ok())
+                row.try_get::<Option<Decimal>, _>(col).ok().flatten()
             };
             let sparte_str: String = row.try_get("sparte").unwrap_or_else(|_| "STROM".into());
             let messtyp_str: String = row.try_get("messtyp").unwrap_or_else(|_| "SLP".into());
@@ -550,8 +597,8 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
         &self,
         tenant: &str,
         malo_id: &str,
-        brennwert_kwh_per_m3: Option<&str>,
-        zustandszahl: Option<&str>,
+        brennwert_kwh_per_m3: Option<Decimal>,
+        zustandszahl: Option<Decimal>,
     ) -> Result<u64, EdmError> {
         // Use COALESCE so that an already-set value is never overwritten by NULL.
         // Update rows that still have any NULL gas quality field.
@@ -658,6 +705,29 @@ impl TimeSeriesRepository for PgTimeSeriesRepository {
             .execute(&mut *tx)
             .await
             .map_err(|e| mako_edm::error::EdmError::Database(e.to_string()))?;
+
+            // 3. § 60 Abs. 2 MsbG: a correction that lands a real value
+            //    discharges the open confirmation for this slot.
+            if matches!(
+                rec.corrected_quality,
+                mako_edm::QualityFlag::Measured | mako_edm::QualityFlag::Corrected
+            ) {
+                sqlx::query(
+                    r"UPDATE estimated_read_confirmations
+                      SET status = 'BESTAETIGT', resolved_at = now(), resolved_by = $5
+                      WHERE tenant = $4 AND malo_id = $1 AND dtm_from = $2
+                        AND obis_code_norm = $3
+                        AND status IN ('OFFEN', 'UEBERFAELLIG')",
+                )
+                .bind(&rec.malo_id)
+                .bind(rec.dtm_from)
+                .bind(&obis_norm)
+                .bind(&rec.tenant)
+                .bind(source_str)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| mako_edm::error::EdmError::Database(e.to_string()))?;
+            }
         }
 
         tx.commit()

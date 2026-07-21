@@ -218,7 +218,7 @@ async fn a_value_changing_redelivery_leaves_an_audit_row() {
     repo.store_reads(&[read("1-0:1.8.0", dec!(10), QualityFlag::Measured)])
         .await
         .expect("first delivery");
-    // Same interval redelivered with a different value — §22 MessZV requires
+    // Same interval redelivered with a different value — § 60 Abs. 6 MsbG requires
     // the displaced value to survive in `meter_read_corrections`.
     repo.store_reads(&[read("1-0:1.8.0", dec!(12), QualityFlag::Measured)])
         .await
@@ -315,7 +315,7 @@ async fn a_partition_holding_unexported_rows_is_not_released() {
     );
 }
 
-// ── Substitution (§17 MessZV) ─────────────────────────────────────────────────
+// ── Substitution (§ 60 Abs. 2 MsbG) ─────────────────────────────────────────────────
 
 #[tokio::test]
 #[ignore = "requires EDMD_TEST_DATABASE_URL"]
@@ -560,5 +560,101 @@ async fn rescoring_a_window_supersedes_rather_than_duplicates() {
     assert!(
         !blocked,
         "clearing the block must persist with the new grade"
+    );
+}
+
+// ── § 60 Abs. 2 MsbG confirmation loop ────────────────────────────────────────
+
+/// An estimated interval opens an obligation; the real value for the same
+/// slot discharges it; the deadline sweep escalates what stays open.
+#[tokio::test]
+#[ignore = "requires EDMD_TEST_DATABASE_URL"]
+async fn estimated_reading_opens_and_real_reading_discharges_the_confirmation() {
+    let Some(pool) = test_pool("confirmation_loop").await else {
+        return;
+    };
+    let repo = edmd::pg::PgTimeSeriesRepository::new(pool.clone());
+
+    // 1. An ESTIMATED interval opens an OFFEN obligation.
+    repo.store_reads(&[read("1-0:1.8.0", dec!(12), QualityFlag::Estimated)])
+        .await
+        .expect("store estimate");
+    let (status, quality): (String, String) = sqlx::query_as(
+        "SELECT status, quality FROM estimated_read_confirmations
+         WHERE tenant = 'T1' AND malo_id = '51238696781'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("obligation opened");
+    assert_eq!(status, "OFFEN");
+    assert_eq!(quality, "ESTIMATED");
+
+    // 2. The MEASURED value for the same slot discharges it.
+    repo.store_reads(&[read("1-0:1.8.0", dec!(11), QualityFlag::Measured)])
+        .await
+        .expect("store real value");
+    let (status, resolved_by): (String, Option<String>) = sqlx::query_as(
+        "SELECT status, resolved_by FROM estimated_read_confirmations
+         WHERE tenant = 'T1' AND malo_id = '51238696781'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("obligation resolved");
+    assert_eq!(status, "BESTAETIGT", "real value discharges the obligation");
+    assert!(resolved_by.is_some());
+}
+
+/// The daily sweep flips open obligations past the deadline to UEBERFAELLIG
+/// and leaves fresh ones alone.
+#[tokio::test]
+#[ignore = "requires EDMD_TEST_DATABASE_URL"]
+async fn the_deadline_sweep_escalates_only_stale_obligations() {
+    let Some(pool) = test_pool("confirmation_overdue").await else {
+        return;
+    };
+    let repo = edmd::pg::PgTimeSeriesRepository::new(pool.clone());
+
+    // A substituted interval (fresh) …
+    repo.store_reads(&[read("1-0:1.8.0", dec!(9), QualityFlag::Substituted)])
+        .await
+        .expect("store substitute");
+    // … and a second one whose creation we backdate past the deadline.
+    let mut old = read("1-0:2.8.0", dec!(3), QualityFlag::Substituted);
+    old.dtm_from = datetime!(2026-01-01 00:00 UTC);
+    old.dtm_to = datetime!(2026-01-01 00:15 UTC);
+    repo.store_reads(&[old])
+        .await
+        .expect("store old substitute");
+    sqlx::query(
+        "UPDATE estimated_read_confirmations
+         SET created_at = now() - interval '10 weeks'
+         WHERE obis_code_norm LIKE '%2.8%'",
+    )
+    .execute(&pool)
+    .await
+    .expect("backdate");
+
+    let flipped = edmd::confirmation::mark_overdue_confirmations(&pool, "T1", 8)
+        .await
+        .expect("sweep");
+    assert_eq!(flipped, 1, "only the stale obligation escalates");
+
+    let statuses: Vec<(String, String)> = sqlx::query_as(
+        "SELECT obis_code_norm, status FROM estimated_read_confirmations ORDER BY obis_code_norm",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        statuses
+            .iter()
+            .any(|(o, s)| o.contains("1.8") && s == "OFFEN"),
+        "fresh obligation stays OFFEN: {statuses:?}"
+    );
+    assert!(
+        statuses
+            .iter()
+            .any(|(o, s)| o.contains("2.8") && s == "UEBERFAELLIG"),
+        "stale obligation escalated: {statuses:?}"
     );
 }

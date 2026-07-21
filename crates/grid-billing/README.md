@@ -312,7 +312,7 @@ and `KA_CHARGED_WHILE_EXEMPT` when a rate is applied to a §2 Abs. 7 exemption.
 - **NNE Strom** (PID 31001) — flat-rate Arbeit, Leistung (RLM), Konzessionsabgabe
 - **NNE Gas** (PID 31005) — GasNEV §14 legal basis, auto-set when `Sparte::Gas`
 - **§14a Modul 2 ToU** — mandatory HT/NT Arbeit split for controllable loads (BNetzA BK6-22-300)
-- **Selbst ausgestellte NNE** (PID 31006) — LF runs the identical formula (§20 MessZV)
+- **Selbst ausgestellte NNE** (PID 31006) — LF runs the identical formula (INVOIC AHB Selbstausstellung)
 - **MMM Strom** (PID 31002) — Mehr-/Mindermengensaldo, GPKE (BK6-24-174) Teil 1 Kap. 8.4
 - **MMM Gas** (PID 31002) — Gas imbalance, GaBi Gas 2.1 (BK7-24-01-008)
 - **MSB-Rechnung** (PID 31009) — Grundgebühr Messstellenbetrieb + optional Messdienstleistung
@@ -617,7 +617,7 @@ the underlying master data.
 | Consumer | Role | Use case |
 |---|---|---|
 | `netzbilanzd` | **NB** | Generate INVOIC 31001/31002/31005/31009/31011 to LF/MSB/LFG |
-| `invoicd` | **LF** | §20 MessZV selbstausstellen PID 31006 — same formula, LF-initiated |
+| `invoicd` | **LF** | INVOIC AHB Selbstausstellung selbstausstellen PID 31006 — same formula, LF-initiated |
 
 ## Quick start
 

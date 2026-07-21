@@ -101,7 +101,7 @@ disagree with what was actually paid.
 | `pflichtzahlung_eur` | §52 EEG 2023 — a separate claim, never netted into the Vergütung |
 | `months_settled` / `missing_months` | an incomplete year names its gaps |
 | `verlaengerungsanspruch_qh` | §51a quarter-hours accrued toward the Vergütungszeitraum |
-| `correction_count` | §22 MessZV corrections issued in the year |
+| `correction_count` | § 147 AO / GoBD corrections issued in the year |
 | `status` | `vorlaeufig` until all twelve months are settled, then `endgueltig` |
 
 Two things it deliberately does not do. It never presents a partial sum as the
@@ -124,7 +124,7 @@ is [`policies/einsd.cedar`](policies/einsd.cedar).
 | `write-anlage` | plant `POST`/`PUT`/`DELETE` | `NB`, `LF`, `UENB` |
 | `run-settlement` | `.../settle/...`, `/api/v1/settle/...` | `NB`, `LF`, `UENB` |
 | `manage-lifecycle` | repowering (§22), zusammenlegen (§24), MaStR, §21b switch | `NB`, `LF`, `UENB` |
-| `correct-settlement` | `.../correction` (§22 MessZV) | `NB`, `UENB` |
+| `correct-settlement` | `.../correction` (§ 147 AO / GoBD) | `NB`, `UENB` |
 | `write-marktdaten` | EPEX / Jahresmarktwert `PUT` | `NB`, `LF`, `UENB` |
 
 Writes are role-gated because settling a plant creates a payment obligation to

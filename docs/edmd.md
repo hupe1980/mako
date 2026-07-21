@@ -9,7 +9,7 @@ description: >
   readings, iMSys direct push for §41a real-time billing, Hampel-filter quality scoring
   (V01–V10 validation), virtual meters (§42b EnWG GGV Solarpaket I —
   GgvConstantAllocation CCI+ZG6 Beispiel 1 + GgvProportionalAllocation variable Beispiel 3,
-  with Pos() cap per §42b Abs. 5), §17 MessZV substitution + forecasting,
+  with Pos() cap per §42b Abs. 5), § 60 Abs. 2 MsbG substitution + forecasting,
   reading-order scheduling (Ablesesteuerung), MeterBillingPeriod (RLM
   Spitzenleistung + Gas Brennwert/Zustandszahl), Mehr-/Mindermengensaldo
   imbalance, BSI TR-03109 SMGW lifecycle, Iceberg/S3 OLAP archive, MCP server.
@@ -28,7 +28,7 @@ Key responsibilities:
 - Run the **Hampel-filter quality scorer** and **V01–V10 validation engine** on all inbound interval data. Emit `de.edmd.reading.quality.warning` CloudEvents for grade C/F data.
 - Schedule and track **reading orders** (Ablesesteuerung) for all three market roles (LF, MSB, NB). Auto-creates `INSRPT_STOERUNG` orders when a WiM INSRPT PID 23001 Störungsmeldung arrives.
 - Compute and serve **virtual meter time series** (Sum, Residual, PvSelfConsumption, GgvConstantAllocation, GgvProportionalAllocation per §42b EnWG Solarpaket I GGV community solar) on demand.
-- Generate **§17 MessZV annual forecasts** (Jahresprognose) and **prior-period substitute values** for gap intervals.
+- Generate **§ 60 Abs. 2 MsbG annual forecasts** (Jahresprognose) and **prior-period substitute values** for gap intervals.
 - Provide resampled Lastgang (hourly / daily / monthly / yearly buckets) and monthly Summenzeitreihe for MaBiS.
 - Provide a time-series query API for ERP and `netzbilanzd`.
 - Export BO4E `Lastgang` objects and `Zeitreihe` objects for ERP and API-Webdienste Strom consumers.
@@ -41,15 +41,15 @@ The **domain calculation logic** is provided by the [`metering`](https://github.
 | Function / Type | §-basis | Used in |
 |---|---|---|
 | `gas_m3_to_kwh_hs(m3, hs, z)` | §25 Nr. 4 MessEV / DVGW G 685 | Gas direct push |
-| `aggregate(intervals, AggregationConfig)` | §2 Nr. 17 MessZV | `MeterBillingPeriod` |
-| `classify_messtyp(intervals, source)` | §3/§4 MessZV, §41a EnWG | iMSys classification |
-| `compute_imbalance(actual, contracted)` | §27 MessZV | Mehr-/Mindermengensaldo |
+| `aggregate(intervals, AggregationConfig)` | § 12 StromNZV | `MeterBillingPeriod` |
+| `classify_messtyp(intervals, source)` | §3/§ 12 StromNZV, §41a EnWG | iMSys classification |
+| `compute_imbalance(actual, contracted)` | § 13 StromNZV | Mehr-/Mindermengensaldo |
 | `score_intervals(intervals, config)` | — | Hampel quality scoring (A/B/C/F) |
-| `validate_intervals(intervals, config)` | §17–22 MessZV | V01–V10 validation engine |
-| `resample(intervals, config)` | §27 MessZV, MaBiS | Hourly/daily/monthly resampling |
+| `validate_intervals(intervals, config)` | §17–22 MsbG | V01–V10 validation engine |
+| `resample(intervals, config)` | § 13 StromNZV, MaBiS | Hourly/daily/monthly resampling |
 | `compute_virtual_meter(rule, sources)` | §42b EEG, §42a EEG | GGV community solar, Residuallast |
-| `project_annual_consumption(intervals, _)` | §17 MessZV Jahresprognose | Annual consumption forecast |
-| `prior_period_substitutes(gap, _, _, prior, _)` | §17 Abs. 2 MessZV | Prior-period gap filling |
+| `project_annual_consumption(intervals, _)` | § 60 Abs. 2 MsbG Jahresprognose | Annual consumption forecast |
+| `prior_period_substitutes(gap, _, _, prior, _)` | § 60 Abs. 2 MsbG | Prior-period gap filling |
 | `SmgwSession`, `ClsChannel` | BSI TR-03109, §14a EnWG | SMGW lifecycle + CLS management |
 
 ```mermaid
@@ -197,7 +197,7 @@ release would drop the only correct copy.
 
 ### Substitution is atomic
 
-A substitute reading and its §22 MessZV audit row commit in one transaction. As
+A substitute reading and its § 60 Abs. 6 MsbG audit row commit in one transaction. As
 two independent writes a failure part-way would leave billable `SUBSTITUTED`
 values in `meter_reads` with no record of who substituted them or why.
 
@@ -236,7 +236,7 @@ and it makes a partial failure impossible: the batch lands whole or not at all.
 
 `store_reads` writes the provenance columns alongside the reading:
 `allocation_version` carries the MaBiS version a value belongs to,
-`sender_mp_id` carries §22 MessZV per-interval MSB attribution across a WiM
+`sender_mp_id` carries § 60 Abs. 6 MsbG per-interval MSB attribution across a WiM
 switch, and `push_session`, `quality_warnings` and `unit` carry the rest.
 
 ### Every ingest family validates before it stores
@@ -288,7 +288,7 @@ empty-string register rather than against the reading it stands in for — leavi
 1099 kWh.
 
 The upsert's conflict action carries `WHERE meter_reads.quality IN ('FAULTY',
-'UNKNOWN')`. §17 MessZV authorises an Ersatzwert where no usable measurement
+'UNKNOWN')`. § 60 Abs. 2 MsbG authorises an Ersatzwert where no usable measurement
 exists, not in place of one, so a window overlapping billable data leaves that
 data untouched and returns those intervals in `skipped_measured`.
 
@@ -299,7 +299,7 @@ Each interval records the method that actually produced it in
 `intervals[].method`, which may differ from the request: a prior-period average
 with no matching reference slot degrades to carry-forward, then to zero, and
 linear interpolation with no closing value has no slope to follow. The response
-reports `method_requested` alongside the set of `methods_applied` — a §22 MessZV
+reports `method_requested` alongside the set of `methods_applied` — a § 60 Abs. 6 MsbG
 audit record naming a method that did not run would be a claim the value does not
 support.
 
@@ -411,7 +411,7 @@ duplicate order. Two partial unique indexes now back it:
 │  GET  /api/v1/zeitreihe/{malo_id}           ← BO4E Zeitreihe              │
 │  GET  /api/v1/lastgang/{malo_id}/resampled  ← hourly/daily/monthly        │
 │  GET  /api/v1/summenzeitreihe/{malo_id}     ← MaBiS monthly aggregate     │
-│  GET  /api/v1/forecast/{malo_id}            ← §17 MessZV Jahresprognose   │
+│  GET  /api/v1/forecast/{malo_id}            ← § 60 Abs. 2 MsbG Jahresprognose   │
 │  GET  /api/v1/gas-quality/{malo_id}         ← Brennwert + Zustandszahl    │
 │  GET  /api/v1/corrections/{malo_id}         ← bitemporal audit trail      │
 │  GET  /api/v1/quality-assessments/{malo_id} ← Hampel rescore history      │
@@ -494,9 +494,9 @@ resolution column. The shared rule set lives in `metering::sharing`.
 | `ce_type` | `makopid` | Action |
 |-----------|-----------|--------|
 | `de.mako.process.completed` | MSCONS set | Store meter readings |
-| `de.mako.process.completed` | 55001 (GPKE Anmeldung) | Auto-create `LIEFERBEGINN` reading order (§9 MessZV) |
-| `de.mako.process.completed` | 55004 / 55007 (GPKE Abmeldung / Beendigung der Zuordnung) | Auto-create `LIEFERENDE` reading order (§9 MessZV) |
-| `de.mako.process.initiated` | 23001 (INSRPT Störungsmeldung) | Auto-create `INSRPT_STOERUNG` reading order (§18 MessZV) |
+| `de.mako.process.completed` | 55001 (GPKE Anmeldung) | Auto-create `LIEFERBEGINN` reading order (GPKE Beginn-/Schlussablesung) |
+| `de.mako.process.completed` | 55004 / 55007 (GPKE Abmeldung / Beendigung der Zuordnung) | Auto-create `LIEFERENDE` reading order (GPKE Beginn-/Schlussablesung) |
+| `de.mako.process.initiated` | 23001 (INSRPT Störungsmeldung) | Auto-create `INSRPT_STOERUNG` reading order (WiM Störungsmeldung) |
 | `de.mako.process.initiated` | 23003 / 23004 / 23008 (INSRPT Technische Änderung / Gerätebefund) | Auto-create `SONDERABLESUNG` reading order |
 | `de.mako.process.initiated` | 23005 / 23009 (WiM Gas INSRPT) | Auto-create `SONDERABLESUNG` reading order |
 | anything else | — | 204 No Content (ignored) |
@@ -701,7 +701,7 @@ Head-end systems and LoRaWAN network servers that manage large gateway fleets
 stream reading batches instead of pushing per-gateway HTTP. The optional
 Kafka consumer drains such a topic through **the same path as every other
 ingest**: V01–V10 validation, quality-warning annotation, PK-idempotent
-upsert with the §22 MessZV overwrite audit trail.
+upsert with the § 60 Abs. 6 MsbG overwrite audit trail.
 
 ```toml
 [kafka_ingest]
@@ -759,7 +759,7 @@ wider tolerances:
 
 On the IoT path an outlier is stored as **`PRELIMINARY`** (MSCONS Z84, vorläufiger
 Wert) rather than discarded: measured, not yet confirmed. `FAULTY` would assert a
-defect the filter cannot establish, and §17 MessZV substitution is a downstream
+defect the filter cannot establish, and § 60 Abs. 2 MsbG substitution is a downstream
 decision. This function:
 
 - Converts Decimal quantities to f64 once per batch — lossless for kWh ≤ 10¹³
@@ -791,7 +791,7 @@ because outlier detection doesn't require accounting precision.
 | **C** | Significant issues | Manual review recommended |
 | **F** | Unusable | Block billing run |
 
-Any validation finding (grade C or F) emits a `de.edmd.reading.quality.warning` CloudEvent to the ERP webhook. In `agentd` that event triggers the `msb-history-agent` (LanceDB RAG indexing), the `meter-data-agent` (grade-F investigation), and the `replacement-value-agent` (§17 MessZV Ersatzwertbildung via edmd `trigger_substitution`).
+Any validation finding (grade C or F) emits a `de.edmd.reading.quality.warning` CloudEvent to the ERP webhook. In `agentd` that event triggers the `msb-history-agent` (LanceDB RAG indexing), the `meter-data-agent` (grade-F investigation), and the `replacement-value-agent` (§ 60 Abs. 2 MsbG Ersatzwertbildung via edmd `trigger_substitution`).
 
 ### Retroactive rescoring
 
@@ -815,7 +815,26 @@ Returns `{ malo_id, rows_rescored, warnings_found, grade }`.
 | NB | `JAHRESABLESUNG`, `SPERRUNG`, `ENTSPERRUNG` |
 | MSB | `SONDERABLESUNG`, `INSRPT_STOERUNG`, `ISMS_AUSLESUNG` |
 
-### INSRPT → reading order automation (§18 MessZV)
+### § 60 Abs. 2 MsbG — Schätzwert-Bestätigungsschleife
+
+Jedes gespeicherte Intervall mit Qualität `ESTIMATED`/`SUBSTITUTED` öffnet
+eine Bestätigungspflicht in `estimated_read_confirmations` — der MSB schuldet
+einen plausibilisierten realen Wert. Die Auflösung geschieht automatisch,
+sobald für denselben Slot (MaLo, `dtm_from`, Register) ein `MEASURED`- oder
+`CORRECTED`-Wert eintrifft (Ingest oder Korrekturpfad). Der tägliche Worker
+(`[confirmation]`, Standard aktiv) eskaliert offene Einträge nach
+`deadline_weeks` (Standard 8 — angelehnt an das MaBiS-BKA-Korrekturfenster;
+eine gesetzliche Frist existiert nicht) auf `UEBERFAELLIG` und emittiert
+`de.edmd.reading.confirmation.overdue`. Abfrage:
+`GET /api/v1/confirmations?status=UEBERFAELLIG`.
+
+```toml
+[confirmation]
+enabled        = true
+deadline_weeks = 8
+```
+
+### INSRPT → reading order automation (WiM Störungsmeldung)
 
 When `edmd` receives `de.mako.process.initiated` for PID 23001 (INSRPT Störungsmeldung), it **automatically** creates an `INSRPT_STOERUNG` reading order:
 
@@ -842,12 +861,12 @@ This eliminates the risk of billing a zero-reading period after a device swap �
 | `list_reading_orders` | Ablesesteuerung orders for a MaLo |
 | `list_overdue_reading_orders` | §40 EnWG compliance gaps |
 | `trigger_jahresablesung` | Launch or preview annual reading campaign |
-| `trigger_substitution` | Generate + store §17 MessZV Ersatzwerte for a gap window |
-| `get_correction_history` | Bitemporal correction audit trail (§22 MessZV) |
+| `trigger_substitution` | Generate + store § 60 Abs. 2 MsbG Ersatzwerte for a gap window |
+| `get_correction_history` | Bitemporal correction audit trail (§ 60 Abs. 6 MsbG) |
 | `validate_timeseries` | Run V01–V10 validation on stored meter reads |
-| `get_quality_assessments` | Per-batch quality history (§22 MessZV) |
+| `get_quality_assessments` | Per-batch quality history (§ 60 Abs. 6 MsbG) |
 | `get_summenzeitreihe` | Monthly aggregated kWh for MaBiS |
-| `get_annual_forecast` | §17 MessZV Jahresprognose |
+| `get_annual_forecast` | § 60 Abs. 2 MsbG Jahresprognose |
 | `get_gas_quality` | PID 13007 Brennwert + Zustandszahl |
 
 Prompts: `analyze-consumption`, `submit-mscons`, `quality-assessment`, `jahresablesung-workflow`, `reading-order-lifecycle`.
@@ -1661,7 +1680,7 @@ compliance sweep per **MsbG §21c** and **BSI TR-03109-4 §6.3**.
 `edmd` already owns meter-data push sessions (`direct_push_sessions`) and reading-order
 scheduling. SMGW connectivity is a metering-domain concern: when a gateway's TLS cert
 expires or a CLS channel loses its §14a Konfigurationsprodukt, meter data stops flowing
-and substitute values (§17 MessZV) become mandatory. `edmd` detects both conditions and
+and substitute values (§ 60 Abs. 2 MsbG) become mandatory. `edmd` detects both conditions and
 emits `de.edmd.cls.compliance_issue` CloudEvents so `agentd`'s `smgw-diagnostics-agent`
 can escalate to the MSB and ERP system automatically.
 
@@ -1688,7 +1707,7 @@ issue types in priority order:
 | Priority | `issue_type` | Severity | Legal basis |
 |---|---|---|---|
 | 1 | `GATEWAY_REVOKED` | **CRITICAL** | MsbG §29 — replace immediately |
-| 2 | `COMMUNICATION_FAULT` | **CRITICAL** | §17 MessZV — substitute values required after 2h silence |
+| 2 | `COMMUNICATION_FAULT` | **CRITICAL** | § 60 Abs. 2 MsbG — substitute values required after 2h silence |
 | 3 | `TLS_CERT_MISSING` | **CRITICAL** | BSI TR-03109-4 — SMGW Admin Protocol unreachable |
 | 4 | `CERT_EXPIRED` | **CRITICAL** | BSI TR-03109-4 §6.3 — §14a eligibility lost |
 | 5 | `CERT_EXPIRING` | WARNING | BSI TR-03109-4 §6.3 — 30-day renewal window |
@@ -1788,7 +1807,7 @@ curl -s -X POST "http://edmd:8380/api/v1/smgw/compliance/scan" \
 
 `agentd`'s `smgw-diagnostics-agent` subscribes to `de.edmd.cls.compliance_issue` and
 automatically escalates to the MSB team, suggests remediation steps, and checks whether
-the same device has open §17 MessZV substitute-value orders.
+the same device has open § 60 Abs. 2 MsbG substitute-value orders.
 
 ### Mermaid: daily sweep flow
 

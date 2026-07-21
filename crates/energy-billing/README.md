@@ -40,7 +40,7 @@ supplier's own HT/NT split.
 ## Warnings that actually fire
 
 `invoice.warnings` now carries machine-readable codes beyond the §41b guard:
-`ESTIMATED_READING` (§17 Abs. 1 MessZV), `PREISGARANTIE_ENDET` (ends within 30
+`ESTIMATED_READING` (§ 60 Abs. 2 MsbG), `PREISGARANTIE_ENDET` (ends within 30
 days of the period), `VERBRAUCH_ABWEICHUNG_50PCT` (deviation beyond half the
 prior year's consumption). All three were promised in the `BillingWarning`
 docstring and previously either Info positions — visible on paper, invisible to
@@ -310,7 +310,7 @@ pub enum InvoiceType {
     Final,               // SCHLUSSRECHNUNG — Jahresabrechnung, deducts ctx.abschlage
     CreditNote,          // GUTSCHRIFT — LF pays generator (EEG, EINSPEISUNG)
     PartialInvoice,      // TEILRECHNUNG — §41 EnWG move-in/move-out / Tarifwechsel
-    Correction { original_invoice_id, reason },  // KORREKTURRECHNUNG (§22 MessZV)
+    Correction { original_invoice_id, reason },  // KORREKTURRECHNUNG (§ 147 AO / GoBD)
     Cancellation { original_invoice_id },         // STORNORECHNUNG — all signs negated
 }
 ```
@@ -427,7 +427,7 @@ pub struct MeterInput {
     pub zaehlerstand_von:    Option<Decimal>,  // start reading
     pub zaehlerstand_bis:    Option<Decimal>,  // end reading
     pub metering_mode:       MeteringMode,     // Slp | Rlm | Imsys
-    pub is_estimated:        bool,             // §17 MessZV notice on invoice
+    pub is_estimated:        bool,             // § 60 Abs. 2 MsbG notice on invoice
     pub zaehler_replaced:    bool,             // Zählerwechsel notice on invoice
 }
 ```
@@ -583,7 +583,7 @@ if invoice.has_errors() {
 | §12 Abs. 2 Nr. 1 UStG | Reduced 7% MwSt for renewable Fernwärme |
 | §12 Abs. 3 UStG | 0% MwSt for PV ≤ 30 kWp (Solarpaket I, since 01.01.2023) |
 | §14a EnWG | Controllable loads Modul 1/3 (BK6-24-174) via `ControllableLoadProvider` |
-| §17 Abs. 1 MessZV | Estimated reading notice on invoice |
+| § 60 Abs. 2 MsbG | Estimated reading notice on invoice |
 | §40a / §40b EnWG | Mandatory ct/kWh; structured price-comparison data in JSON |
 | §41 Abs. 1 EnWG | Invoice content (Zählerstand, Netzbetreiber, Preisgarantie, Energiemix) |
 | §41 Abs. 1 Nr. 3 EnWG | Verbrauchshistorie (prior-year + national average) |

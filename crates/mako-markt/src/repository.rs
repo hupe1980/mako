@@ -129,7 +129,7 @@ pub struct MaloRecord {
     ///
     /// Used for:
     /// - Gas tariff routing in `billingd` (Brennwert/Zustandszahl defaults differ by quality)
-    /// - Invoice audit annotation (`ZusatzAttribut.gasqualitaet` per §22 MessZV)
+    /// - Invoice audit annotation (`ZusatzAttribut.gasqualitaet` per § 147 AO / GoBD)
     /// - H2-blend detection for future DVGW G 260 billing compliance
     pub gasqualitaet: Option<String>,
     /// Energy direction (`Aussp` = generation, `Einsp` = consumption).
@@ -1829,7 +1829,7 @@ pub struct ZaehlerRecord {
 /// These cover the full spectrum of properties that an MSB must track per device
 /// under **MsbG §23** (device records), **BSI TR-03109-1/3** (SMGW firmware and
 /// TLS certificates), **§14a EnWG BK6-22-300** (CLS remote-control capability),
-/// and **§27 MessZV** (calibration and maintenance intervals).
+/// and **§ 13 StromNZV** (calibration and maintenance intervals).
 ///
 /// Values are always strings; use ISO 8601 (`YYYY-MM-DD`) for dates and
 /// `"true"` / `"false"` for booleans.  Custom keys use `Sonstiges` with the
@@ -1871,7 +1871,7 @@ pub enum Konfigurationsparameter {
     Hersteller,
     /// Commissioning date (`YYYY-MM-DD`).
     Inbetriebnahmedatum,
-    /// Last maintenance visit date (`YYYY-MM-DD`) — §27 MessZV Kalibrierpflicht.
+    /// Last maintenance visit date (`YYYY-MM-DD`) — § 13 StromNZV Kalibrierpflicht.
     LetzteWartung,
     /// Next scheduled maintenance date (`YYYY-MM-DD`).
     NaechsteWartung,

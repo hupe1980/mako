@@ -324,7 +324,7 @@ The `mako-gabi-gas` crate exposes a rich, regulation-accurate domain vocabulary:
 | `GasDay` | Typed gas market day (DST-aware, 06:00 CET start, 23/25-hour DST days) |
 | `GasQuantity` | Decimal-precision kWh_Hs with m³ + conversion metadata |
 | `GasBeschaffenheit` | Brennwert (Hs/Hu) + Zustandszahl; `.validate()` checks DVGW G 260 ranges |
-| `GasQualityFlag` | 7-state quality flag (Measured/Estimated/Substituted/Calculated/Corrected/Rejected/Unknown) per §17 MessZV |
+| `GasQualityFlag` | 7-state quality flag (Measured/Estimated/Substituted/Calculated/Corrected/Rejected/Unknown) per § 60 Abs. 2 MsbG |
 | `AllocationVersion` | Initial/Correction(n)/Final per KoV §6.4 |
 | `GasMarketRole` | 9-role typed enum (LF, NB, FNB, VNB, BKV, MGV, MSB, Händler, TNB) |
 | `GasImbalanceSaldo` | Mehr/Minder/Balanced with `ausgleichsenergie_price_ct_per_kwh` per KoV §9 |

@@ -5,7 +5,7 @@
 //! 2. Collect the matching subscriber URLs and secrets
 //! 3. For each subscriber, spawn a separate `Send` delivery task using reqwest
 //! 4. On final retry failure, write the event to the `fanout_dlq` table — no
-//!    events are silently dropped (§22 MessZV compliance)
+//!    events are silently dropped (§ 147 AO / GoBD compliance)
 //!
 //! The channel carries `serde_json::Value` (CloudEvent envelopes) so the
 //! worker is decoupled from the typed `MarktEvent` struct.  This also means
@@ -135,7 +135,7 @@ where
 /// Spawn a `Send + 'static` delivery task.  Only reqwest is used here — no repo calls.
 ///
 /// On final retry exhaustion the event is written to `fanout_dlq` via `dlq_pool`
-/// so no events are silently dropped (§22 MessZV compliance).
+/// so no events are silently dropped (§ 147 AO / GoBD compliance).
 fn deliver(
     sub: Subscription,
     body: Arc<Vec<u8>>,
@@ -182,7 +182,7 @@ fn deliver(
 
             attempt += 1;
             if attempt >= config.max_retry_attempts {
-                // Write to DLQ instead of silently dropping — §22 MessZV compliance.
+                // Write to DLQ instead of silently dropping — § 147 AO / GoBD compliance.
                 error!(
                     subscriber_id = %sub.subscriber_id,
                     webhook_url   = %sub.webhook_url,

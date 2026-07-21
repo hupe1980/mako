@@ -95,7 +95,7 @@ pub struct EdifactApiState {
     pub partner_store: Option<Arc<SlateDbPartnerStore>>,
     /// Tenant identifier for partner store writes.
     pub tenant_id: TenantId,
-    /// Dead-letter sink for §22 MessZV audit records.
+    /// Dead-letter sink for § 147 AO / GoBD audit records.
     ///
     /// Every rejected, unroutable, or test-flagged message must produce a
     /// structured dead-letter record.  Use `LogDeadLetterSink` for production
@@ -391,7 +391,7 @@ pub(crate) async fn ingest_edifact(
     //    pre-scan parse would double-charge CPU for every production request.
     //
     // 2. **Richer context**: each `MessageEnvelope` carries the interchange
-    //    header alongside the message, so the §22 MessZV `AuditContext` for
+    //    header alongside the message, so the § 147 AO / GoBD `AuditContext` for
     //    `UnknownPid` rejections can include the interchange sender/receiver/ref
     //    instead of synthesising a timestamp-only context.
     //
@@ -481,7 +481,7 @@ pub(crate) async fn ingest_edifact(
             (Some(_), None) => MessageStatus::UnknownPid,
         };
 
-        // Dead-letter unroutable messages (§22 MessZV).
+        // Dead-letter unroutable messages (§ 147 AO / GoBD).
         if matches!(status, MessageStatus::UnknownPid) {
             let ctx = AuditContext::from_interchange(
                 &env.header.sender_id,

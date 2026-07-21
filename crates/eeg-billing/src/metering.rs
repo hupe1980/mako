@@ -65,13 +65,13 @@ pub enum MeteringMode {
     /// **SLP** — Standardlastprofil (Standard load profile).
     ///
     /// Monthly read-out. Annual settlement with monthly advance payment.
-    /// Applies to plants ≤ 30 kW (§4 MessZV) using the standard annual billing cycle.
+    /// Applies to plants ≤ 30 kW (§ 12 StromNZV) using the standard annual billing cycle.
     Slp,
 
     /// **RLM** — Registrierende Leistungsmessung (Registered load measurement).
     ///
     /// 15-minute interval metering. Monthly billing based on measured quarter-hour data.
-    /// Mandatory for plants > 30 kW (§3 MessZV, §41a EnWG).
+    /// Mandatory for plants > 30 kW (§ 2 MsbG, §41a EnWG).
     /// Spitzenleistung (peak power) is tracked separately for NNE billing.
     Rlm,
 
@@ -82,7 +82,7 @@ pub enum MeteringMode {
     /// Enables automatic §51 negative-price interval tracking.
     ///
     /// For EEG billing: enables automatic quality-flagged interval data,
-    /// substitute value handling (§17 MessZV), and §51a quarter-hour counting.
+    /// substitute value handling (§ 60 Abs. 2 MsbG), and §51a quarter-hour counting.
     IMsys,
 }
 

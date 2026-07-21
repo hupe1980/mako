@@ -69,7 +69,7 @@ impl BillingProvider for ElectricityProvider {
         let mut w = Vec::new();
         let meter = quantities.electricity.as_ref();
 
-        // An estimated reading is billable (§17 Abs. 1 MessZV), but the caller
+        // An estimated reading is billable (§ 60 Abs. 2 MsbG), but the caller
         // must know it happened: the customer can demand a corrected invoice
         // once a real reading arrives, so dispatch systems treat it differently.
         // This was an Info *position* only — visible on paper, invisible to code.
@@ -77,7 +77,7 @@ impl BillingProvider for ElectricityProvider {
             w.push(BillingWarning {
                 code: "ESTIMATED_READING",
                 severity: WarningSeverity::Warning,
-                message: "billed on an estimated reading (§17 Abs. 1 MessZV) — \
+                message: "billed on an estimated reading (§ 60 Abs. 2 MsbG) — \
                           expect a correction when the real reading arrives"
                     .to_owned(),
             });
@@ -584,12 +584,12 @@ impl BillingProvider for ElectricityProvider {
             }
         }
 
-        // ── §17 Abs. 1 MessZV — Estimated reading notice ──────────────────────
+        // ── § 60 Abs. 2 MsbG — Estimated reading notice ──────────────────────
         if meter.is_estimated {
             positions.push(BillingPosition {
-                description: "Abrechnungswert: Schätzung gemäß §17 Abs. 1 MessZV                               — Bestätigung innerhalb 8 Wochen"
+                description: "Abrechnungswert: Schätzung gemäß § 60 Abs. 2 MsbG                               — Bestätigung innerhalb 8 Wochen"
                     .to_owned(),
-                legal_basis: Some("§17 Abs. 1 MessZV".to_owned()),
+                legal_basis: Some("§ 60 Abs. 2 MsbG".to_owned()),
                 quantity: Decimal::ZERO,
                 unit: String::new(),
                 unit_price_eur: Decimal::ZERO,
@@ -994,14 +994,14 @@ impl BillingProvider for GasProvider {
         quantities: &Quantities,
     ) -> Vec<BillingWarning> {
         let mut w = Vec::new();
-        // §40a EnWG / §17 Abs. 1 MessZV: an estimated reading is billable but
+        // §40a EnWG / § 60 Abs. 2 MsbG: an estimated reading is billable but
         // the caller must know it happened — dispatch systems treat it
         // differently and the customer can demand a corrected invoice.
         if quantities.gas.as_ref().is_some_and(|m| m.is_estimated) {
             w.push(BillingWarning {
                 code: "ESTIMATED_READING",
                 severity: WarningSeverity::Warning,
-                message: "billed on an estimated gas reading (§40a EnWG, §17 Abs. 1 MessZV) — \
+                message: "billed on an estimated gas reading (§40a EnWG, § 60 Abs. 2 MsbG) — \
                           expect a correction when the real reading arrives"
                     .to_owned(),
             });
@@ -1385,11 +1385,11 @@ impl BillingProvider for GasProvider {
             });
         }
 
-        // ── §40a EnWG / §17 Abs. 1 MessZV — estimated reading notice ──────────
+        // ── §40a EnWG / § 60 Abs. 2 MsbG — estimated reading notice ──────────
         // The estimation basis must carry an explicit, prominently marked hint.
         if meter.is_estimated {
             positions.push(BillingPosition {
-                description: "Abrechnungswert: Schätzung gemäß §40a EnWG / §17 Abs. 1 MessZV — \
+                description: "Abrechnungswert: Schätzung gemäß §40a EnWG / § 60 Abs. 2 MsbG — \
                               auf Wunsch Korrektur nach realer Ablesung"
                     .to_owned(),
                 legal_basis: Some("§40a EnWG".to_owned()),

@@ -6,7 +6,7 @@
 //! |---|---|
 //! | API summaries (client dashboards) | Hourly or daily |
 //! | MMM billing (GPKE BK6-22-024 §3) | Monthly totals |
-//! | Mehr-/Mindermengensaldo (§27 MessZV) | Monthly |
+//! | Mehr-/Mindermengensaldo (§ 13 StromNZV) | Monthly |
 //! | MABIS Summenzeitreihe | Monthly |
 //! | SLP compatibility (daily totals) | Daily |
 //!
@@ -25,9 +25,9 @@
 //!
 //! ## Regulatory basis
 //!
-//! - **§3 MessZV**: RLM = 15-min interval metering.
+//! - **§ 2 MsbG**: RLM = 15-min interval metering.
 //! - **GPKE BK6-22-024 §3**: MMM billing uses monthly arbeitsmenge totals.
-//! - **§27 MessZV**: Mehr-/Mindermengen use calendar-month totals.
+//! - **§ 13 StromNZV**: Mehr-/Mindermengen use calendar-month totals.
 
 use std::collections::BTreeMap;
 
@@ -119,7 +119,7 @@ impl ResampleConfig {
         }
     }
 
-    /// Monthly totals — used for MMM billing and Mehr-/Mindermengensaldo (§27 MessZV).
+    /// Monthly totals — used for MMM billing and Mehr-/Mindermengensaldo (§ 13 StromNZV).
     #[must_use]
     pub fn to_monthly() -> Self {
         Self {

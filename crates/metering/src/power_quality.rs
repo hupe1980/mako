@@ -10,7 +10,7 @@
 //!
 //! - **BSI TR-03109-1** (Smart Meter Gateway) — power quality measurement requirements
 //! - **DIN EN 50160** — voltage characteristics in public distribution networks
-//! - **§10a MessZV** — smart meter data management obligations
+//! - **§ 60 MsbG** — smart meter data management obligations
 //! - **MsbG §29** — Messstellenbetreiber power quality reporting
 //!
 //! ## OBIS codes for power quality

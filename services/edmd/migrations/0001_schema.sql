@@ -5,7 +5,7 @@
 -- TEXT NOT NULL for tenant isolation on every table (no nullable UUIDs),
 -- and all indexes co-located with the table they serve.
 --
--- §22 MessZV requires 5 decimal place kWh precision.
+-- § 60 Abs. 6 MsbG requires 5 decimal place kWh precision.
 -- GDPR Art. 32 requires per-tenant data isolation on every table.
 -- `meter_reads` is range-partitioned monthly; see `ensure_meter_reads_partitions`.
 
@@ -36,7 +36,7 @@ CREATE INDEX mdr_tenant        ON meter_data_receipts (tenant, malo_id);
 
 -- ── Typed meter reads (hot tier) ─────────────────────────────────────────────
 -- One row per 15-min (or coarser) interval per MaLo per OBIS code.
--- Quantity is NUMERIC(18,5) for exact §22 MessZV 5-decimal-place precision.
+-- Quantity is NUMERIC(18,5) for exact § 60 Abs. 6 MsbG 5-decimal-place precision.
 -- Tenant is TEXT NOT NULL for mandatory data isolation.
 
 CREATE TABLE meter_reads (
@@ -239,7 +239,7 @@ CREATE INDEX mr_archive_pending ON meter_reads (dtm_from)
 
 COMMENT ON TABLE meter_reads IS
     'Hot-tier metered interval data, range-partitioned monthly on dtm_from. '
-    'NUMERIC(18,5) for §22 MessZV 5dp kWh precision. Rows older than '
+    'NUMERIC(18,5) for § 60 Abs. 6 MsbG 5dp kWh precision. Rows older than '
     'retention_months are exported to the Iceberg cold tier and marked '
     'archived=true; a partition is dropped once all of its rows are archived.';
 
@@ -259,10 +259,10 @@ CREATE TABLE meter_billing_periods (
     arbeitsmenge_ht_kwh  NUMERIC(18,5),
     arbeitsmenge_nt_kwh  NUMERIC(18,5),
     spitzenleistung_kw   NUMERIC(18,5),
-    brennwert_kwh_per_m3 TEXT,          -- Gas: Hs kWh/m³ (stays TEXT: external data)
-    zustandszahl         TEXT,          -- Gas: compressibility factor (stays TEXT)
-    zaehlerstand_anfang  TEXT,
-    zaehlerstand_ende    TEXT,
+    brennwert_kwh_per_m3 NUMERIC(10,4),  -- Gas: Hs kWh/m³ (same typing as gas_quality_data)
+    zustandszahl         NUMERIC(8,4),   -- Gas: compressibility factor
+    zaehlerstand_anfang  NUMERIC(18,5),  -- §40 Abs. 2 Nr. 6 EnWG register reading
+    zaehlerstand_ende    NUMERIC(18,5),
     quality              TEXT          NOT NULL DEFAULT 'UNKNOWN',
     tenant               TEXT          NOT NULL,
     computed_at          TIMESTAMPTZ   NOT NULL DEFAULT now()
@@ -275,7 +275,7 @@ CREATE INDEX mbp_tenant_malo_v2
     ON meter_billing_periods (tenant, malo_id, period_from, period_to)
     WHERE tenant <> '';
 
--- ── Bitemporal corrections (§22 MessZV audit trail) ──────────────────────────
+-- ── Bitemporal corrections (§ 60 Abs. 6 MsbG audit trail) ──────────────────────────
 
 CREATE TABLE meter_read_corrections (
     correction_id    UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -559,7 +559,7 @@ CREATE INDEX qa_billing_block  ON quality_assessments (malo_id, billing_blocked)
     WHERE billing_blocked = true;
 CREATE INDEX qa_tenant         ON quality_assessments (tenant);
 
--- ── Substitute value log (§17 MessZV audit trail) ────────────────────────────
+-- ── Substitute value log (§ 60 Abs. 2 MsbG audit trail) ────────────────────────────
 
 CREATE TABLE substitute_value_log (
     id              UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -574,7 +574,7 @@ CREATE TABLE substitute_value_log (
                             'ZeroFill','LastValueCarryForward','ManualEntry'
                         )),
     reason          TEXT,
-    -- Operator who authorised the Ersatzwert (§22 MessZV attributability).
+    -- Operator who authorised the Ersatzwert (§ 60 Abs. 6 MsbG attributability).
     created_by      TEXT,
     created_at      TIMESTAMPTZ   NOT NULL DEFAULT now(),
     tenant          TEXT          NOT NULL
@@ -696,7 +696,7 @@ CREATE INDEX smgw_session_gin    ON smgw_sessions USING GIN (session);
 --   CERT_EXPIRING       — 30-day advance warning; MSB must renew
 --   TLS_CERT_MISSING    — SMGW unreachable via SMGW Admin Protocol
 --   CLS_NOT_COMPLIANT   — §14a Konfigurationsprodukt not assigned; DSO control impossible
---   COMMUNICATION_FAULT — No contact > 2h; §17 MessZV substitute values required
+--   COMMUNICATION_FAULT — No contact > 2h; § 60 Abs. 2 MsbG substitute values required
 --   GATEWAY_REVOKED     — Security incident; immediate replacement required (MsbG §29)
 
 CREATE TABLE cls_compliance_log (
@@ -730,3 +730,37 @@ CREATE INDEX ccl_issue_type     ON cls_compliance_log (issue_type, detected_at D
 -- `create_hypertable` is not applicable to an already-partitioned table, and
 -- native partitioning keeps the schema installable on any PostgreSQL 15+
 -- instance without an extension.
+
+-- ── § 60 Abs. 2 MsbG — Schätz-/Ersatzwert-Bestätigung ────────────────────────
+-- Every stored ESTIMATED/SUBSTITUTED interval opens a confirmation entry: the
+-- MSB owes a plausibilised real value. The entry resolves automatically when
+-- a MEASURED/CORRECTED value for the same slot arrives (ingest or §-audit
+-- correction path); a config-gated worker marks entries UEBERFAELLIG after
+-- the operator-configured deadline (default 8 weeks — aligned with the
+-- MaBiS Bilanzkreisabrechnung correction window; no statute fixes a number).
+
+CREATE TABLE estimated_read_confirmations (
+    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant         TEXT        NOT NULL,
+    malo_id        TEXT        NOT NULL,
+    dtm_from       TIMESTAMPTZ NOT NULL,
+    dtm_to         TIMESTAMPTZ NOT NULL,
+    obis_code_norm TEXT        NOT NULL DEFAULT '',
+    -- Quality at creation: ESTIMATED or SUBSTITUTED.
+    quality        TEXT        NOT NULL CHECK (quality IN ('ESTIMATED','SUBSTITUTED')),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    status         TEXT        NOT NULL DEFAULT 'OFFEN'
+                       CHECK (status IN ('OFFEN','BESTAETIGT','UEBERFAELLIG')),
+    resolved_at    TIMESTAMPTZ,
+    -- Source of the resolving real value (e.g. MSCONS, DIRECT_PUSH, OPERATOR).
+    resolved_by    TEXT,
+    UNIQUE (tenant, malo_id, dtm_from, obis_code_norm)
+);
+
+CREATE INDEX erc_open ON estimated_read_confirmations (tenant, created_at)
+    WHERE status IN ('OFFEN','UEBERFAELLIG');
+
+COMMENT ON TABLE estimated_read_confirmations IS
+    '§ 60 Abs. 2 MsbG: open obligations to replace estimated/substituted '
+    'intervals with plausibilised real values. Auto-resolved by ingest of a '
+    'MEASURED/CORRECTED value for the same (malo, dtm_from, register).';

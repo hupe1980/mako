@@ -20,16 +20,16 @@ metering arithmetic. It has no I/O, no async, and no floating-point money.
 | `interval` | `MeterInterval`, `QualityFlag`, `Sparte` | Core interval + quality types |
 | `obis` | `ObisCode` | Typed OBIS codes (IEC 62056-21 / BDEW) with `default_resolution()` |
 | `validation` | `validate_intervals()`, `ValidationIssue` (V01–V10) | Gap / overlap / spike (statistical + plant-capacity ceiling) / DST / rollover detection |
-| `substitute` | `fill_gaps()`, `SubstituteMethod`, `SubstitutionReason` | §17 MessZV Ersatzwertbildung |
-| `forecast` | `project_annual_consumption()`, `prior_period_substitutes()` | §17 MessZV Jahresprognose (with 95 % confidence bounds) + §17 Abs. 2 prior-period gap-fill |
+| `substitute` | `fill_gaps()`, `SubstituteMethod`, `SubstitutionReason` | § 60 Abs. 2 MsbG Ersatzwertbildung |
+| `forecast` | `project_annual_consumption()`, `prior_period_substitutes()` | § 60 Abs. 2 MsbG Jahresprognose (with 95 % confidence bounds) + §17 Abs. 2 prior-period gap-fill |
 | `resample` | `resample()`, `ResampledBucket` | Down-sample 15-min → hourly / daily / monthly |
 | `virtual_meter` | `compute_virtual_meter()`, `AggregationRule` | §42b EnWG GGV: `GgvConstantAllocation` (CCI+ZG6) + `GgvProportionalAllocation` (variable); Residuallast (§42a) |
 | `smgw` | `SmgwSession`, `ClsChannel`, `GatewayCertificate` | BSI TR-03109 gateway lifecycle, §14a CLS channels |
 | `measurement_point` | `MeasurementPoint`, `MarktRolle`, `EnergyFlow` | MaLo + MeLo + OBIS + role binding |
-| `measurement_series` | `MeasurementSeries`, `MeasurementSource`, `ProvenanceEntry` | §22 MessZV provenance / explainability |
+| `measurement_series` | `MeasurementSeries`, `MeasurementSource`, `ProvenanceEntry` | § 60 Abs. 6 MsbG provenance / explainability |
 | `register` | `MeterRegister`, `EnergyDirection`, `RegisterUnit` | HT/NT register + Wandlerfaktor metadata |
-| `aggregation` | `aggregate()`, `BillingPeriod`, `HtNtSplit` | §2 Nr. 17 MessZV Spitzenleistung + HT/NT |
-| `classification` | `classify_messtyp()`, `Messtyp` | SLP/RLM/iMSys (§3/§4 MessZV, §41a EnWG) |
+| `aggregation` | `aggregate()`, `BillingPeriod`, `HtNtSplit` | § 12 StromNZV Spitzenleistung + HT/NT |
+| `classification` | `classify_messtyp()`, `Messtyp` | SLP/RLM/iMSys (§3/§ 12 StromNZV, §41a EnWG) |
 | `quality` | `score_intervals()`, `QualityGrade` | Hampel-filter quality scoring (A/B/C/F) |
 | `demand` | `DemandWindow`, `DemandInterval` | 15-min demand / Spitzenleistung |
 | `tariff_window` | `TariffWindow`, `HtNtSchedule` | DST-aware HT/NT window classification |
@@ -37,7 +37,7 @@ metering arithmetic. It has no I/O, no async, and no floating-point money.
 | `zaehlzeit` | `Zaehlzeitdefinition`, `ZaehlzeitFenster` | §14a EnWG / UTILTS time-variable register resolution, DST-correct, `split_energy()` |
 | `rollout` | `classify_rollout_obligation()`, `ROLLOUT_MILESTONES` | §29 MsbG Pflichteinbaufälle (>6 000 kWh/a, §14a, >7 kW) + §45 Rollout-Fahrplan |
 | `conversion` | `gas_m3_to_kwh_hs()`, `G685Rounding` | §25 Nr. 4 MessEV / DVGW G 685 incl. published NB rounding practice (z 4 dp, Hs 3 dp; final rounding configurable) |
-| `imbalance` | `compute_imbalance()`, `ImbalanceSaldo` | §27 MessZV Mehr-/Mindermengensaldo |
+| `imbalance` | `compute_imbalance()`, `ImbalanceSaldo` | § 13 StromNZV Mehr-/Mindermengensaldo |
 | `resolution` | `IntervalResolution` | Typed interval lengths (15-min / hourly / daily …) |
 | `sharing` | §42c EnWG Energy-Sharing metering eligibility — pure capability/delivery rules over `Messtyp` and `IntervalLengthClass` |
 | `lifecycle` | `MeterExchangeEvent`, `MeterStatus` | WiM meter exchange domain events |
@@ -148,8 +148,8 @@ The GJ and MJ factors are held as **exact rationals**, not decimals: 1 GJ is
 | Variant | Billable | Description |
 |---|---|---|
 | `Measured` | ✅ | Direct meter reading |
-| `Estimated` | ✅ | Prognosewert (valid for Abschlag per §17 MessZV) |
-| `Substituted` | ✅ | §17 MessZV Ersatzwert |
+| `Estimated` | ✅ | Prognosewert (valid for Abschlag per § 60 Abs. 2 MsbG) |
+| `Substituted` | ✅ | § 60 Abs. 2 MsbG Ersatzwert |
 | `Calculated` | ✅ | Derived (e.g. Residuallast) |
 | `Corrected` | ✅ | Retroactive correction |
 | `Preliminary` | ✅ | Vorläufiger Wert |
@@ -245,13 +245,13 @@ println!("Billing blocked: {}", result.billing_block_count());
 
 ---
 
-## §17 MessZV substitute value generation
+## § 60 Abs. 2 MsbG substitute value generation
 
 ```rust
 // Automatic: linear for short gaps, carry-forward for long
 let filled = fill_gaps(&intervals, 900, period_from, period_to);
 
-// Prior-period averaging per §17 Abs. 2 MessZV
+// Prior-period averaging per § 60 Abs. 2 MsbG
 let filled = fill_gaps_with_config(
     &intervals, 900, period_from, period_to,
     &FillGapsConfig::prior_period(prior_week_intervals),
@@ -274,7 +274,7 @@ println!("Projected annual kWh: {}", forecast.projected_annual_kwh);
 ## Resampling
 
 ```rust
-// Down-sample 15-min RLM data to monthly totals (for MaBiS §27 MessZV)
+// Down-sample 15-min RLM data to monthly totals (for MaBiS § 13 StromNZV)
 let monthly = resample(&intervals, &ResampleConfig::to_monthly());
 for bucket in &monthly {
     println!("{}: {} kWh (coverage {:.1}%)",
@@ -359,7 +359,7 @@ let expiring = session.expiring_certificates(today, 30);
 // §14a CLS channel compliance
 assert!(session.has_section_14a_cls());
 
-// Communication fault detection (triggers §17 MessZV substitute)
+// Communication fault detection (triggers § 60 Abs. 2 MsbG substitute)
 if session.is_communication_fault(2) { // 2h threshold
     // create Sonderablesung reading order
 }
@@ -381,7 +381,7 @@ println!("Spitzenlast:  {:?} kW", agg.spitzenleistung_kw);
 
 | Preset | Messtyp | Detail |
 |---|---|---|
-| `rlm_strom()` | RLM | Spitzenleistung §2 Nr. 17 MessZV + DST-aware HT/NT |
+| `rlm_strom()` | RLM | Spitzenleistung § 12 StromNZV + DST-aware HT/NT |
 | `slp_strom()` | SLP | HT/NT split only |
 | `rlm_zweitarif()` | RLM | Custom HT/NT window |
 | `gas()` | Gas | Single total (m³ → kWh_Hs, no tariff split) |
@@ -400,8 +400,8 @@ pub fn classify_messtyp(
 
 | `Messtyp` | Criteria | Basis |
 |---|---|---|
-| `Slp` | < 100 MWh/a (Strom) or < 1.500 MWh/a (Gas) | §3 MessZV |
-| `Rlm` | ≥ 100 MWh/a (Strom) or ≥ 1.500 MWh/a (Gas) | §4 MessZV |
+| `Slp` | < 100 MWh/a (Strom) or < 1.500 MWh/a (Gas) | § 2 MsbG |
+| `Rlm` | ≥ 100 MWh/a (Strom) or ≥ 1.500 MWh/a (Gas) | § 12 StromNZV |
 | `Imsys` | Pflichteinbau iMSys (§41a EnWG) | §41a EnWG |
 
 ---
@@ -436,7 +436,7 @@ pub fn compute_imbalance(
 
 `ImbalanceResult` contains `delta_kwh` and `delta_pct`.
 Positive = Mehrmenge (actual > forecast); negative = Mindermenge.
-Basis: **§27 MessZV**.
+Basis: **§ 13 StromNZV**.
 
 ---
 
@@ -501,7 +501,7 @@ cargo test -p metering --all-features
 The suite covers: gas conversion (DVGW G 685, incl. the published NB rounding
 examples), aggregation (RLM/SLP/Gas), Messtyp classification, imbalance
 arithmetic, the V01–V10 validation engine (DST transitions, V07 ambiguity,
-plant-capacity ceiling), §17 MessZV substitute methods and forecast confidence
+plant-capacity ceiling), § 60 Abs. 2 MsbG substitute methods and forecast confidence
 bounds, resampling, §42b EnWG GGV virtual meters (Beispiel 1 constant +
 Beispiel 3 proportional, Pos() cap, zero-division guard), §42a Residuallast,
 BSI TR-03109 SMGW + CLS lifecycle, Zählzeitdefinition resolution, MsbG §29/§45
@@ -513,11 +513,11 @@ showcase suite with the exact 2026 DST dates (92/100 intervals).
 
 ## Regulatory basis
 
-- **§3, §4 MessZV** — SLP/RLM classification thresholds
-- **§2 Nr. 17 MessZV** — Spitzenleistung definition for RLM
-- **§17 MessZV** — Ersatzwertbildung + Jahresprognose (substitute values + annual forecast)
-- **§22 MessZV** — 3-year provenance retention (`MeasurementSeries`, `ProvenanceEntry`)
-- **§27 MessZV** — Mehr-/Mindermengensaldo
+- **§3, § 12 StromNZV** — SLP/RLM classification thresholds
+- **§ 12 StromNZV** — Spitzenleistung definition for RLM
+- **§ 60 Abs. 2 MsbG** — Ersatzwertbildung + Jahresprognose (substitute values + annual forecast)
+- **§ 60 Abs. 6 MsbG** — 3-year provenance retention (`MeasurementSeries`, `ProvenanceEntry`)
+- **§ 13 StromNZV** — Mehr-/Mindermengensaldo
 - **§25 Nr. 4 MessEV / DVGW G 685** — Gas Brennwertkorrektur
 - **§41a EnWG** — 15-Minuten-Lastgang and iMSys Pflichteinbau
 - **§42a/§42b EEG** — Residuallast / GGV community solar virtual meters

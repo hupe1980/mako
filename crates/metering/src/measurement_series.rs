@@ -25,8 +25,8 @@
 //!
 //! ## Legal basis
 //!
-//! - **§22 MessZV**: 3-year retention with full provenance for billing data.
-//! - **§17 MessZV**: Substitute values must be traceable to their generation method.
+//! - **§ 60 Abs. 6 MsbG**: 3-year retention with full provenance for billing data.
+//! - **§ 60 Abs. 2 MsbG**: Substitute values must be traceable to their generation method.
 //! - **BDEW MSCONS AHB**: Each MSCONS time series is a named series per OBIS code.
 
 use time::OffsetDateTime;
@@ -81,7 +81,7 @@ pub enum MeasurementSource {
         reason: String,
     },
 
-    /// Automatic §17 MessZV substitute value generation.
+    /// Automatic § 60 Abs. 2 MsbG substitute value generation.
     ///
     /// Triggered by gap detection (V01) in the validation engine.
     AutoSubstitute {
@@ -91,7 +91,7 @@ pub enum MeasurementSource {
         reason: crate::substitute::SubstitutionReason,
     },
 
-    /// Retroactive §22 MessZV correction.
+    /// Retroactive § 60 Abs. 6 MsbG correction.
     ///
     /// Applied when an earlier value was found to be wrong.
     RetroactiveCorrection {
@@ -130,14 +130,14 @@ impl MeasurementSource {
             Self::Mscons { .. } => "MSCONS",
             Self::SmgwDirectPush { .. } => "SMGW-Direktpush",
             Self::ManualEntry { .. } => "Manuelle Eingabe",
-            Self::AutoSubstitute { .. } => "§17 MessZV Auto-Ersatzwert",
-            Self::RetroactiveCorrection { .. } => "§22 MessZV Korrektur",
+            Self::AutoSubstitute { .. } => "§ 60 Abs. 2 MsbG Auto-Ersatzwert",
+            Self::RetroactiveCorrection { .. } => "§ 60 Abs. 6 MsbG Korrektur",
             Self::VirtualMeter { .. } => "Virtueller Zähler",
             Self::RedispatchImport { .. } => "Redispatch 2.0",
         }
     }
 
-    /// `true` when this source produces billable intervals per §17 MessZV.
+    /// `true` when this source produces billable intervals per § 60 Abs. 2 MsbG.
     #[must_use]
     pub fn is_billable_source(&self) -> bool {
         matches!(
@@ -155,7 +155,7 @@ impl MeasurementSource {
 /// An immutable audit record for a change applied to a series or interval.
 ///
 /// Provenance entries are append-only — they record what happened and when,
-/// but never overwrite earlier entries. This satisfies the §22 MessZV
+/// but never overwrite earlier entries. This satisfies the § 60 Abs. 6 MsbG
 /// 3-year audit trail requirement.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -194,7 +194,7 @@ pub enum ProvenanceEventType {
 /// A named, annotated time series of meter intervals with full provenance.
 ///
 /// This is the richest representation of meter data in the `metering` crate.
-/// It combines all context required to answer §22 MessZV audit questions.
+/// It combines all context required to answer § 60 Abs. 6 MsbG audit questions.
 ///
 /// ## Usage
 ///

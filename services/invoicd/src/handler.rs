@@ -78,7 +78,7 @@ pub struct HandlerState {
     /// outcome is escalated to a `Dispute` instead of automatic approval.
     /// `0` means `Warn` is always approved.
     pub auto_dispute_threshold_eur_cents: i64,
-    /// PostgreSQL pool for persisting receipts (§22 MessZV compliance).
+    /// PostgreSQL pool for persisting receipts (§ 147 AO / GoBD compliance).
     /// `None` in development mode — receipts are NOT persisted.
     pub pool: Option<sqlx::PgPool>,
     /// Operator tenant identifier written to every receipt row.
@@ -348,7 +348,7 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
         _ => "Dispute",
     };
 
-    // ── §22 MessZV: persist receipt BEFORE dispatching ────────────────────────
+    // ── § 147 AO / GoBD: persist receipt BEFORE dispatching ────────────────────────
     //
     // The receipt must be written before the REMADV/COMDIS command is sent.
     // If persistence fails we log an error but still dispatch — the REMADV
@@ -385,14 +385,14 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
                 %err,
                 process_id = %process_id,
                 pid,
-                "invoicd: failed to persist receipt — §22 MessZV compliance gap; continuing with dispatch"
+                "invoicd: failed to persist receipt — § 147 AO / GoBD compliance gap; continuing with dispatch"
             );
         }
     } else {
         warn!(
             process_id = %process_id,
             pid,
-            "invoicd: no database configured — receipt NOT persisted (§22 MessZV violation in production)"
+            "invoicd: no database configured — receipt NOT persisted (§ 147 AO / GoBD violation in production)"
         );
     }
 
@@ -625,7 +625,7 @@ async fn handle_wim_31009_initiated(state: HandlerState, subject: String, data: 
         _ => "Dispute",
     };
 
-    // ── 5. §22 MessZV: persist receipt BEFORE dispatching ────────────────────
+    // ── 5. § 147 AO / GoBD: persist receipt BEFORE dispatching ────────────────────
     if let Some(pool) = &state.pool {
         let findings_json =
             serde_json::to_value(&report.findings).unwrap_or(serde_json::Value::Array(vec![]));
@@ -658,7 +658,7 @@ async fn handle_wim_31009_initiated(state: HandlerState, subject: String, data: 
         if let Err(err) = pg::upsert_receipt(pool, &row).await {
             warn!(
                 %err, process_id = %process_id, pid = 31009,
-                "invoicd: WiM 31009 failed to persist receipt — §22 MessZV gap; continuing"
+                "invoicd: WiM 31009 failed to persist receipt — § 147 AO / GoBD gap; continuing"
             );
         }
     }
@@ -888,7 +888,7 @@ async fn handle_gas_invoic_initiated(
         _ => "Dispute",
     };
 
-    // §22 MessZV: persist receipt BEFORE dispatching.
+    // § 147 AO / GoBD: persist receipt BEFORE dispatching.
     if let Some(pool) = &state.pool {
         let findings_json =
             serde_json::to_value(&report.findings).unwrap_or(serde_json::Value::Array(vec![]));
@@ -914,7 +914,7 @@ async fn handle_gas_invoic_initiated(
         };
         if let Err(err) = pg::upsert_receipt(pool, &row).await {
             warn!(%err, process_id = %process_id, pid,
-                "invoicd: Gas invoice failed to persist receipt — §22 MessZV gap; continuing");
+                "invoicd: Gas invoice failed to persist receipt — § 147 AO / GoBD gap; continuing");
         }
     }
 
@@ -1087,7 +1087,7 @@ async fn handle_gas_stornorechnung(state: HandlerState, subject: String, data: s
             tenant: state.tenant.clone(),
         };
         if let Err(err) = pg::upsert_receipt(pool, &row).await {
-            warn!(%err, process_id = %process_id, "invoicd: Gas 31004 persist failed — §22 MessZV gap");
+            warn!(%err, process_id = %process_id, "invoicd: Gas 31004 persist failed — § 147 AO / GoBD gap");
         }
     }
 

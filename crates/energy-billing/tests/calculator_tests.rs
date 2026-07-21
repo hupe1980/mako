@@ -4091,7 +4091,7 @@ fn metering_mode_imsys_stored_on_meter_input() {
 
 #[test]
 fn is_estimated_meter_produces_info_position() {
-    // §17 Abs. 1 MessZV — estimated reading must be labeled on the invoice.
+    // § 60 Abs. 2 MsbG — estimated reading must be labeled on the invoice.
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
@@ -4129,7 +4129,7 @@ fn is_estimated_meter_produces_info_position() {
     assert_eq!(
         est_pos.len(),
         1,
-        "Must have §17 MessZV estimated reading notice"
+        "Must have § 60 Abs. 2 MsbG estimated reading notice"
     );
     assert!(
         est_pos[0].description.contains("Sch\u{00e4}tzung"),

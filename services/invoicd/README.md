@@ -12,7 +12,7 @@ counterparty.
 Every checked invoice is persisted to PostgreSQL **before** the command is
 dispatched, in a single transaction that also records the payment deadline
 (`pay_by`) from the invoice's `DTM+faelligkeitsdatum` field. This satisfies the
-**3-year retention requirement under §22 MessZV and §41 EnWG** and enables
+**3-year retention requirement under § 147 AO / GoBD and §41 EnWG** and enables
 automated REMADV deadline tracking.
 
 ---
@@ -116,7 +116,7 @@ CREATE TABLE invoic_receipts (
 
 **Atomicity guarantee.** `direction`, `outcome`, `findings`, `pay_by`, and
 `rechnung` are written in a single PostgreSQL transaction before any command is
-dispatched to `makod`. A crash between the two would violate §22 MessZV
+dispatched to `makod`. A crash between the two would violate § 147 AO / GoBD
 retention — so persistence always comes first.
 
 **ERP notification.** After REMADV dispatch, `invoicd` POSTs a `de.invoic.receipt.*`
@@ -168,7 +168,7 @@ Returns the full receipt including `findings` JSONB and `pay_by`.
 ### `POST /api/v1/receipts/{id}/confirm-payment` — ERP payment confirmation
 
 Called by the ERP when a bank transfer is confirmed. Sets `payment_confirmed_at`
-on the receipt row, closing the §22 MessZV payment audit trail.
+on the receipt row, closing the § 147 AO / GoBD payment audit trail.
 
 ```bash
 curl -X POST http://invoicd:8280/api/v1/receipts/<uuid>/confirm-payment \
@@ -302,7 +302,7 @@ amount `invoicd` accepts anyway — useful for rounding tolerances that do not
 warrant a formal dispute.
 
 When `--database-url` is omitted, migrations are skipped and no receipt is
-persisted. The plausibility check still runs but §22 MessZV compliance is not
+persisted. The plausibility check still runs but § 147 AO / GoBD compliance is not
 met — only acceptable in CI / development.
 
 ---
@@ -329,7 +329,7 @@ invoicd:
 
 ## Regulatory basis
 
-- **§22 MessZV / §41 EnWG** — 3-year billing receipt retention (PostgreSQL persistence)
+- **§ 147 AO / GoBD / §41 EnWG** — 3-year billing receipt retention (PostgreSQL persistence)
 - **BK6-24-174** — GPKE Teil 1–3 (Lieferantenwechsel, Netznutzungsabrechnung)
 - INVOIC AHB for PIDs 31001, 31002, 31005, 31006
 - REMADV AHB (outbound via `makod` after `gpke.abrechnung.annehmen`)

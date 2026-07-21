@@ -201,8 +201,8 @@ impl TimeSeriesRepository for InMemoryTimeSeriesRepository {
         &self,
         _tenant: &str,
         _malo_id: &str,
-        _brennwert_kwh_per_m3: Option<&str>,
-        _zustandszahl: Option<&str>,
+        _brennwert_kwh_per_m3: Option<Decimal>,
+        _zustandszahl: Option<Decimal>,
     ) -> Result<u64, EdmError> {
         // In-memory stub — no-op for testing.
         Ok(0)

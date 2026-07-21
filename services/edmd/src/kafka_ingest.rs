@@ -27,7 +27,7 @@
 //!
 //! At-least-once: offsets are committed only after the batch is stored. A
 //! replayed batch is idempotent — `store_reads` upserts on the primary key,
-//! and a value-changing replay leaves a §22 MessZV audit row like any other
+//! and a value-changing replay leaves a § 60 Abs. 6 MsbG audit row like any other
 //! redelivery. Records that fail to parse are logged and skipped (a poison
 //! pill must not wedge the partition); records that fail to store abort the
 //! poll loop iteration without committing, so they are redelivered.
@@ -131,9 +131,20 @@ async fn run_consumer(
         .await
         .map_err(|e| anyhow::anyhow!("kafka subscribe {}: {e}", cfg.topic))?;
 
+    // Per-message HMAC (optional): resolve the secret once. `env:` refs are
+    // resolved here so the TOML never carries the raw key.
+    let message_secret: Option<String> = match cfg.message_hmac_secret.as_deref() {
+        Some(raw) => Some(
+            crate::config::resolve_env(raw)
+                .map_err(|e| anyhow::anyhow!("kafka message_hmac_secret: {e}"))?,
+        ),
+        None => None,
+    };
+
     info!(
         topic = %cfg.topic,
         group = %cfg.group_id,
+        message_auth = message_secret.is_some(),
         "edmd kafka-ingest: consuming"
     );
 
@@ -156,6 +167,28 @@ async fn run_consumer(
             let Some(value) = record.value.as_ref() else {
                 continue; // tombstone
             };
+            // Per-message authentication when configured: unauthenticated
+            // records are skipped like poison pills — one forged producer
+            // must not wedge the partition, and must not store data either.
+            if let Some(ref secret) = message_secret {
+                let provided = record
+                    .headers
+                    .iter()
+                    .find(|(k, _)| k.as_ref() == b"x-mako-signature")
+                    .and_then(|(_, v)| v.as_ref())
+                    .and_then(|v| std::str::from_utf8(v).ok());
+                let ok = provided.is_some_and(|sig| {
+                    mako_markt::cloudevents::verify_signature(secret.as_bytes(), value, sig)
+                });
+                if !ok {
+                    warn!(
+                        topic = %record.topic, partition = record.partition,
+                        offset = record.offset,
+                        "edmd kafka-ingest: message signature missing/invalid — record skipped"
+                    );
+                    continue;
+                }
+            }
             let batch: WireBatch = match serde_json::from_slice(value) {
                 Ok(b) => b,
                 Err(e) => {
@@ -276,7 +309,7 @@ async fn store_batch(
             malo_id = %malo_id,
             billing_blocks = validation.billing_block_count,
             rules = ?validation.rules,
-            "edmd kafka-ingest: validation issues annotated (§17 MessZV)"
+            "edmd kafka-ingest: validation issues annotated (§ 60 Abs. 2 MsbG)"
         );
     }
 

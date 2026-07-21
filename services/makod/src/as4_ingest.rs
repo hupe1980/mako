@@ -332,7 +332,7 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                             rejected += 1;
                             // Count parse/validation failures for Prometheus alerting.
                             EngineMetrics::global().validation_failed("edifact", "parse_error");
-                            // §22 MessZV: a message that fails to parse inside an
+                            // § 147 AO / GoBD: a message that fails to parse inside an
                             // otherwise-accepted interchange must leave a durable
                             // trace — the AS4 receipt confirms receipt of the whole
                             // interchange, so a metric + log alone would make the
@@ -370,7 +370,7 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                                 (Some(_), None) => MessageStatus::UnknownPid,
                             };
 
-                            // Dead-letter unroutable messages (§22 MessZV).
+                            // Dead-letter unroutable messages (§ 147 AO / GoBD).
                             if matches!(status, MessageStatus::UnknownPid) {
                                 use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
                                 let ctx = AuditContext::now()

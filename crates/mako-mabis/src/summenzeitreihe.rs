@@ -156,7 +156,7 @@ impl Summenzeitreihe {
 
     /// Convert to monthly resampled buckets using the `metering` crate.
     ///
-    /// This is the canonical output for MABIS §27 MessZV monthly summaries.
+    /// This is the canonical output for MABIS § 13 StromNZV monthly summaries.
     /// Each bucket = one calendar month. Reporting only — the filed message
     /// carries the quarter-hourly slots.
     #[must_use]

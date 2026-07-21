@@ -5,7 +5,7 @@
 //! | `ce_type`                    | `makopid` | Action |
 //! |------------------------------|-----------|--------|
 //! | `de.mako.process.completed`  | MSCONS set | Store `MeterDataReceipt` |
-//! | `de.mako.process.initiated`  | 23001 (INSRPT Störungsmeldung) | Auto-create `INSRPT_STOERUNG` reading order (§18 MessZV) |
+//! | `de.mako.process.initiated`  | 23001 (INSRPT Störungsmeldung) | Auto-create `INSRPT_STOERUNG` reading order (WiM Störungsmeldung) |
 //! | `de.mako.process.initiated`  | 23003/23008 (INSRPT Technische Änderung/Gerätebefund) | Auto-create `SONDERABLESUNG` reading order |
 //! | `de.mako.process.initiated`  | 23005/23009 (WiM Gas INSRPT) | Auto-create `SONDERABLESUNG` reading order |
 //! | `de.mako.process.completed`  | 55001 (GPKE Lieferbeginn) | Auto-create `LIEFERBEGINN` reading order |
@@ -14,7 +14,7 @@
 //!
 //! ## M2 — INSRPT → reading-order automation
 //!
-//! When an INSRPT Störungsmeldung (PID 23001, LF → MSB) arrives, §18 MessZV
+//! When an INSRPT Störungsmeldung (PID 23001, LF → MSB) arrives, WiM Störungsmeldung
 //! mandates a Sonderablesung.  `edmd` auto-creates an `ablese_auftraege` row
 //! with `anlass = 'INSRPT_STOERUNG'` so field-service scheduling is never
 //! blocked on manual ERP input.
@@ -123,7 +123,7 @@ pub async fn handle_webhook(
 
     // ── M2+: INSRPT → auto-create reading orders ──────────────────────────────
     //
-    // PID 23001: Störungsmeldung (LF→MSB) → INSRPT_STOERUNG (§18 MessZV)
+    // PID 23001: Störungsmeldung (LF→MSB) → INSRPT_STOERUNG (WiM Störungsmeldung)
     // PID 23003: Technische Änderung / Geräteübernahme → SONDERABLESUNG
     // PID 23005: WiM Gas INSRPT → SONDERABLESUNG
     // PID 23008: Gerätebefund (device inspection) → SONDERABLESUNG
@@ -132,7 +132,7 @@ pub async fn handle_webhook(
         && matches!(pid, 23001 | 23003 | 23004 | 23005 | 23008 | 23009)
     {
         let (anlass, description) = match pid {
-            23001 => ("INSRPT_STOERUNG", "§18 MessZV Störungsmeldung"),
+            23001 => ("INSRPT_STOERUNG", "WiM Störungsmeldung Störungsmeldung"),
             23003 => ("SONDERABLESUNG", "INSRPT Technische Änderung (PID 23003)"),
             23004 => (
                 "SONDERABLESUNG",
@@ -223,7 +223,7 @@ pub async fn handle_webhook(
     // required for an accurate Mehr-/Mindermengensaldo. (PID 55009 is the
     // *Ablehnung* of an Abmeldung — supply continues, no reading is due.)
     //
-    // Legal basis: GPKE BK6-22-024 §3; §9 MessZV Ablesung bei Lieferbeginn/-ende.
+    // Legal basis: GPKE BK6-22-024 §3; GPKE Beginn-/Schlussablesung Ablesung bei Lieferbeginn/-ende.
     if ce_type == "de.mako.process.completed" && matches!(pid, 55001 | 55004 | 55007) {
         let (anlass, label) = if pid == 55001 {
             ("LIEFERBEGINN", "Lieferbeginn")
@@ -285,7 +285,7 @@ pub async fn handle_webhook(
                         malo_id = %malo_id,
                         anlass,
                         geplant_am = %geplant_am,
-                        "edmd: auto-created {label} reading order (§9 MessZV)"
+                        "edmd: auto-created {label} reading order (GPKE Beginn-/Schlussablesung)"
                     );
                 }
                 Ok(_) => debug!(malo_id = %malo_id, "edmd: {label} reading order already exists"),
@@ -378,17 +378,16 @@ pub async fn handle_webhook(
         // The ProcessCompleted payload carries `brennwert_kwh_per_m3` and
         // `zustandszahl` extracted by the makod adapter from `QTY+Z08`/`QTY+Z10`.
         if GAS_QUALITY_PIDS.contains(&pid) {
-            let brennwert = data["brennwert_kwh_per_m3"].as_str().map(str::to_owned);
-            let zustandszahl = data["zustandszahl"].as_str().map(str::to_owned);
+            let brennwert = data["brennwert_kwh_per_m3"]
+                .as_str()
+                .and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
+            let zustandszahl = data["zustandszahl"]
+                .as_str()
+                .and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
             if brennwert.is_some() || zustandszahl.is_some() {
                 match state
                     .repo
-                    .update_gas_quality(
-                        &state.tenant,
-                        &malo_id,
-                        brennwert.as_deref(),
-                        zustandszahl.as_deref(),
-                    )
+                    .update_gas_quality(&state.tenant, &malo_id, brennwert, zustandszahl)
                     .await
                 {
                     Ok(n) => info!(
@@ -510,7 +509,7 @@ pub async fn handle_webhook(
                     process_id = %process_id, pid, malo_id = %malo_id,
                     issue_count = validation.issue_count,
                     billing_block_count = validation.billing_block_count,
-                    "edmd: MSCONS ingest validation issues (§17 MessZV — substitute values may be required)"
+                    "edmd: MSCONS ingest validation issues (§ 60 Abs. 2 MsbG — substitute values may be required)"
                 );
 
                 if let Some(ref webhook_url) = state.erp_webhook_url {

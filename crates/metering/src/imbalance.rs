@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn mess_zv_mehr_minder_mutually_exclusive() {
-        // §27 MessZV: Mehr and Minder are mutually exclusive
+        // § 13 StromNZV: Mehr and Minder are mutually exclusive
         for (actual, contracted) in [
             (dec!(900), dec!(1000)),
             (dec!(1100), dec!(1000)),

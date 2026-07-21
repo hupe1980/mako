@@ -27,7 +27,7 @@
 //!
 //! ## Regulatory basis
 //!
-//! - **§3 MessZV**: MeLo is the physical measurement reference.
+//! - **§ 2 MsbG**: MeLo is the physical measurement reference.
 //! - **BDEW MaKo**: MaLo is the billing reference.
 //! - **BSI TR-03109**: Zählpunkt-ID ties MeLo to the SMGW.
 

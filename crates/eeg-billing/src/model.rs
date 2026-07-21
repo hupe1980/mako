@@ -265,7 +265,7 @@ pub struct Pflichtverstoss {
     pub technischer_defekt: bool,
 }
 
-/// The metering concept (§2 Nr. 20 EEG 2023 / §3 MessZV).
+/// The metering concept (§2 Nr. 20 EEG 2023 / § 2 MsbG).
 ///
 /// Documents how Einspeisemenge is measured. Affects which tariff rules apply
 /// and which MaLo/MeLo combination is used for billing.
@@ -833,7 +833,7 @@ pub struct SettleOutput {
     /// `None` when the fraction is 1.0 (full month, no proration applied).
     /// `Some(f)` when partial-month proration was applied.
     ///
-    /// Store in the settlement receipt for §22 MessZV audit trail.
+    /// Store in the settlement receipt for § 147 AO / GoBD audit trail.
     pub billing_days_fraction_applied: Option<Decimal>,
 
     /// **§26 Abs. 1 EEG 2023** — Fälligkeitsdatum for this period's advance payment.

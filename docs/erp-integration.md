@@ -159,7 +159,7 @@ message is dead-lettered.
 | invoicd → makod | `POST /api/v1/commands` | `gpke.abrechnung.annehmen` or `gpke.abrechnung.ablehnen` |
 | invoicd → ERP | `de.invoic.receipt.settled/disputed` CloudEvents | Durable at-least-once payment notifications |
 | invoicd → ERP | `de.invoic.payment.overdue` CloudEvents | Background worker every 6 h — unpaid invoices past `pay_by` |
-| ERP → invoicd | `POST /api/v1/receipts/{id}/confirm-payment` | Close §22 MessZV payment audit trail when bank transfer confirmed |
+| ERP → invoicd | `POST /api/v1/receipts/{id}/confirm-payment` | Close § 147 AO / GoBD payment audit trail when bank transfer confirmed |
 | ERP → invoicd | `GET /api/v1/zahlungsstatus/{malo_id}` | AR reconciliation — settled / pending / overdue counts |
 | edmd API → ERP | `GET /api/v1/deliveries/{malo_id}` | BO4E `Vec<Energiemenge>` — typed meter readings for billing import |
 | edmd API → ERP | `GET /api/v1/lastgang/{malo_id}` | BO4E `Lastgang` — interval time series grouped by OBIS register |
@@ -174,7 +174,7 @@ graph TB
     ERP["ERP System\n(SAP / Powercloud / custom)"]
     makod["makod :8080 / :4080\nEDIFACT ↔ AS4 · SlateDB\nGPKE / WiM / GeLi Gas / MABIS"]
     marktd["marktd :8180 · PostgreSQL\nMaLo/MeLo/contracts · Vertrag\ntyped rubo4e::current API\nEventBus fan-out"]
-    invoicd["invoicd :8280 · PostgreSQL\nINVOIC plausibility · REMADV\n§22 MessZV receipts"]
+    invoicd["invoicd :8280 · PostgreSQL\nINVOIC plausibility · REMADV\n§ 147 AO / GoBD receipts"]
     edmd["edmd :8380 · PostgreSQL\nVec<Energiemenge> deliveries\nLastgang · MeterBillingPeriod"]
     obsd["obsd :8480 · PostgreSQL\nprocess projections\nBNetzA §20 KPI reports"]
     processd["processd :8580\nNB STP netz-checker\nLF E_0624 auto-response"]
@@ -891,7 +891,7 @@ For the Lieferant (LF) role, received INVOIC messages (PIDs 31001, 31002, 31005,
 invoice through the ERP, deploy [`invoicd`](invoicd.md) as
 an autonomous sidecar. It subscribes to `de.mako.process.initiated` events from
 `marktd`, runs the `invoic-checker` pipeline, **persists every receipt to PostgreSQL**
-(satisfying the 3-year retention requirement under §22 MessZV and §41 EnWG), and
+(satisfying the 3-year retention requirement under § 147 AO / GoBD and §41 EnWG), and
 issues the settlement command — all without any ERP involvement.
 
 ### Full billing flow
@@ -972,7 +972,7 @@ Subscribe to trigger your accounts-payable dunning flow automatically:
 ```
 
 **Payment confirmation** — when the bank transfer clears, POST to close the
-§22 MessZV audit trail:
+§ 147 AO / GoBD audit trail:
 
 ```http
 POST http://invoicd:8280/api/v1/receipts/{id}/confirm-payment

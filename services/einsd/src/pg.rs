@@ -615,13 +615,13 @@ pub struct SettleInput {
     /// §51a EEG 2023 — quarter-hours during negative-price periods for Verlängerungsanspruch.
     pub negative_price_quarter_hours: Option<u64>,
     // fernsteuerbarkeit_datum is declared above alongside other plant fields
-    /// §22 MessZV — UUID of the original receipt this corrects (None for initial settlements).
+    /// § 147 AO / GoBD — UUID of the original receipt this corrects (None for initial settlements).
     ///
     /// When Some, `run_settlement` will:
     /// 1. Snapshot the existing receipt to `settlement_receipt_history`.
     /// 2. Upsert the correction, storing `correction_of` and `is_correction = true`.
     pub correction_of: Option<uuid::Uuid>,
-    /// §22 MessZV — why this correction supersedes the original.
+    /// § 147 AO / GoBD — why this correction supersedes the original.
     pub correction_reason: Option<String>,
     /// §44b Abs. 1 EEG 2023 — Biogas >100kW: eligible kWh for this billing period.
     /// Caller tracks cumulative annual kWh and passes `min(kwh, remaining_annual_quota)`.
@@ -851,9 +851,9 @@ pub struct SettleOverrides {
     pub einspeisemanagement_kwh: Option<Decimal>,
     /// §51a quarter-hours during negative EPEX for this period.
     pub negative_price_quarter_hours: Option<u64>,
-    /// §22 MessZV correction: UUID of original receipt this corrects.
+    /// § 147 AO / GoBD correction: UUID of original receipt this corrects.
     pub correction_of: Option<uuid::Uuid>,
-    /// §22 MessZV correction: why the original was superseded.
+    /// § 147 AO / GoBD correction: why the original was superseded.
     ///
     /// The 3-year audit trail has to say what was corrected and why, so this is
     /// persisted alongside the link to the original rather than only returned to
@@ -1348,7 +1348,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
     let verlaengerungsanspruch_qh = output.verlaengerungsanspruch_qh as i64;
     // Use the fraction actually applied by the library (may be auto-computed from dates)
     let billing_days_fraction_stored = output.billing_days_fraction_applied;
-    // Serialize positions to JSONB for §22 MessZV 3-year audit trail.
+    // Serialize positions to JSONB for § 147 AO / GoBD 3-year audit trail.
     // Each position: { description, legal_basis, kwh, rate_ct_kwh, eur }
     let positions_json = serde_json::to_value(
         output
@@ -1369,7 +1369,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
 
     let id = Uuid::new_v4();
 
-    // ── §22 MessZV: snapshot ANY existing initial receipt before overwrite ────
+    // ── § 147 AO / GoBD: snapshot ANY existing initial receipt before overwrite ────
     // This ensures a complete audit trail even for re-runs of initial settlements.
     // Corrections already snapshot via the correction_of path below; initial re-runs
     // (operator clicking "re-settle" without using the correction endpoint) also need
@@ -1388,7 +1388,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
     .await
     .context("check existing initial receipt")?;
 
-    // §22 MessZV: snapshot original receipt before correction overwrites it
+    // § 147 AO / GoBD: snapshot original receipt before correction overwrites it
     let snapshot_id = existing_initial_id.or(input.correction_of);
     if let Some(original_id) = snapshot_id {
         sqlx::query(
@@ -1889,7 +1889,7 @@ pub struct Jahresabrechnung {
     pub missing_months: Vec<i16>,
     /// §51a quarter-hours accrued toward the Vergütungszeitraum.
     pub verlaengerungsanspruch_qh: i64,
-    /// Corrections issued in the year (§22 MessZV signal).
+    /// Corrections issued in the year (§ 147 AO / GoBD signal).
     pub correction_count: i16,
     /// `vorlaeufig` until every month is settled.
     pub status: String,

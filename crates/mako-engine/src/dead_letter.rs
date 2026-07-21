@@ -49,10 +49,10 @@ use time_tz::{OffsetDateTimeExt as _, timezones};
 /// time (e.g. `pid` is not available for a parse failure before the PID is
 /// decoded). Callers fill in as many fields as they have.
 ///
-/// These fields map to §22 MessZV audit-log requirements for AS4 message
+/// These fields map to § 147 AO / GoBD audit-log requirements for AS4 message
 /// rejection events:
 ///
-/// | Field | §22 MessZV requirement |
+/// | Field | § 147 AO / GoBD requirement |
 /// |---|---|
 /// | `message_type` | Nachrichtentyp (UTILMD, MSCONS, APERAK, …) |
 /// | `release_code` | Releasekennung (S2.1, G1.1, 2.4c, …) |
@@ -92,7 +92,7 @@ impl AuditContext {
     /// Create an `AuditContext` with only a timestamp, all other fields `None`.
     ///
     /// The timestamp is set to the current wall-clock time in **German local time**
-    /// (CET = UTC+1 in winter, CEST = UTC+2 in summer), satisfying the §22 MessZV
+    /// (CET = UTC+1 in winter, CEST = UTC+2 in summer), satisfying the § 147 AO / GoBD
     /// requirement for German-timezone audit records.
     ///
     /// Use builder-style setters to fill in known fields:
@@ -132,7 +132,7 @@ impl AuditContext {
     /// tenant_id, correlation_id) are `None` and should be set via builder setters
     /// when available.
     ///
-    /// Satisfies the §22 MessZV requirement that every dead-letter record carries at
+    /// Satisfies the § 147 AO / GoBD requirement that every dead-letter record carries at
     /// minimum the sender GLN, receiver GLN, and interchange reference.
     #[must_use]
     pub fn from_interchange(sender_id: &str, receiver_id: &str, control_ref: &str) -> Self {
@@ -218,7 +218,7 @@ impl Default for AuditContext {
 ///
 /// The variant gives the dispatch path enough information to emit an
 /// actionable CONTRL or log entry. Each variant carries an [`AuditContext`]
-/// with the §22 MessZV fields required for regulatory audit logging.
+/// with the § 147 AO / GoBD fields required for regulatory audit logging.
 ///
 /// Adding new variants is a non-breaking change thanks to `#[non_exhaustive]`.
 #[derive(Debug, Clone)]
@@ -233,7 +233,7 @@ pub enum DeadLetterReason {
     UnknownPid {
         /// The numeric Prüfidentifikator that had no registered workflow.
         pid: crate::ids::Pid,
-        /// §22 MessZV structured audit context.
+        /// § 147 AO / GoBD structured audit context.
         context: AuditContext,
     },
 
@@ -246,7 +246,7 @@ pub enum DeadLetterReason {
     UnknownConversation {
         /// The `conversation_id` from the inbound EDIFACT interchange.
         conversation_id: String,
-        /// §22 MessZV structured audit context.
+        /// § 147 AO / GoBD structured audit context.
         context: AuditContext,
     },
 
@@ -261,7 +261,7 @@ pub enum DeadLetterReason {
         expected: String,
         /// The format version string carried in the inbound message.
         received: String,
-        /// §22 MessZV structured audit context.
+        /// § 147 AO / GoBD structured audit context.
         context: AuditContext,
     },
 
@@ -274,7 +274,7 @@ pub enum DeadLetterReason {
     DuplicateMessage {
         /// The inbox deduplication key (typically the AS4 `MessageId`).
         inbox_key: String,
-        /// §22 MessZV structured audit context.
+        /// § 147 AO / GoBD structured audit context.
         context: AuditContext,
     },
 
@@ -285,7 +285,7 @@ pub enum DeadLetterReason {
     ProcessingError {
         /// Short, human-readable description of the failure.
         message: String,
-        /// §22 MessZV structured audit context.
+        /// § 147 AO / GoBD structured audit context.
         context: AuditContext,
     },
 
@@ -296,7 +296,7 @@ pub enum DeadLetterReason {
     /// processed as production. The interchange is rejected at the ingest boundary
     /// without being forwarded to any workflow.
     TestMessage {
-        /// §22 MessZV structured audit context (contains sender, receiver, control_ref).
+        /// § 147 AO / GoBD structured audit context (contains sender, receiver, control_ref).
         context: AuditContext,
     },
 
@@ -441,7 +441,7 @@ impl DeadLetterSink for LogDeadLetterSink {
         // which sink is wired — mirrors SlateDbDeadLetterSink behaviour so
         // alerting works in non-SlateDB and smoke environments too.
         crate::metrics::EngineMetrics::global().dead_letter_recorded(reason.label());
-        // Emit all §22 MessZV structured audit fields when available.
+        // Emit all § 147 AO / GoBD structured audit fields when available.
         if let Some(ctx) = reason.audit_context() {
             tracing::warn!(
                 reason = reason.label(),

@@ -120,7 +120,7 @@ fn queries_do_not_name_columns_absent_from_eeg_anlagen() {
 /// Every column the correction path writes must exist.
 ///
 /// `correction_reason` was accepted from the caller, echoed back in the
-/// response, and never stored — so the §22 MessZV audit trail lost the stated
+/// response, and never stored — so the § 147 AO / GoBD audit trail lost the stated
 /// reason for every correction.
 #[test]
 fn the_correction_audit_columns_are_written() {

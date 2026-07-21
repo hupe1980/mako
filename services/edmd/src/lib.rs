@@ -44,6 +44,7 @@
 //! | `--inbound-secret` | `EDMD_INBOUND_SECRET` | *(optional)* |
 
 pub mod config;
+pub mod confirmation;
 pub mod handler;
 pub mod iceberg;
 pub mod kafka_ingest;

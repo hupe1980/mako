@@ -1,15 +1,42 @@
-//! §17 MessZV substitute value generation (Ersatzwertbildung).
+//! Substitute value generation (Ersatzwertbildung) per § 60 Abs. 2 MsbG.
 //!
 //! When meter readings are missing or faulty, the Messstellenbetreiber must
-//! generate substitute values (Ersatzwerte) before billing. This module
-//! implements the standard methods defined by §17 MessZV and BDEW practice.
+//! plausibilise the series and generate substitute values (Ersatzwerte)
+//! before the data is used downstream. This module implements the standard
+//! methods used in German metering practice.
 //!
 //! ## Legal basis
 //!
-//! - **§17 Abs. 1 MessZV**: The MSB must supply substitute values when measurements
-//!   are unavailable. Estimated (Prognosewert) and substituted values are billable.
-//! - **BDEW MSCONS AHB**: Defines how `Messwertstatus` flags map to substitute types.
-//! - **VDE-AR-N 4400**: Technical rules for substitute value methods.
+//! - **§ 60 Abs. 2 MsbG**: names "die Plausibilisierung und die
+//!   Ersatzwertbildung" as duties of the Messstellenbetreiber in the
+//!   standard data-processing chain. (The often-cited "§ 60 Abs. 2 MsbG" was the
+//!   pre-2016 anchor — the MsbG was repealed by Art. 12 G. v. 29.08.2016
+//!   and folded into the MsbG.)
+//! - **BDEW MSCONS AHB**: defines how `Messwertstatus` flags (Wahrer Wert /
+//!   Ersatzwert / Vorschlagswert) travel in market communication.
+//! - **VDE-AR-N 4400 (Metering Code)**: the technical Anwendungsregel for
+//!   Ersatzwert procedures — see conformance mapping below.
+//!
+//! ## VDE-AR-N 4400 conformance mapping
+//!
+//! The VDE-AR-N 4400 text is a paywalled VDE Anwendungsregel; the mapping
+//! below states which of its publicly documented substitute procedures each
+//! method corresponds to. Where the Anwendungsregel text could not be
+//! verified verbatim, the behaviour is **configurable** (thresholds, method
+//! choice, reference period) rather than hard-coded to an unverifiable
+//! claim — the operator's metering-code compliance settings win.
+//!
+//! | This crate | VDE-AR-N 4400 procedure | Verified? |
+//! |---|---|---|
+//! | `LinearInterpolation` | Interpolation between adjacent plausible values for short gaps | public summaries; threshold configurable (`short_gap_threshold`) |
+//! | `PriorPeriodAverage` | Vergleichstag/-woche method: same time slot of a comparable prior period | public summaries; reference window configurable (`REFERENCE_PERIOD_DAYS`) |
+//! | `LastValueCarryForward` | Fortschreibung des letzten plausiblen Wertes (conservative fallback) | public summaries |
+//! | `ZeroFill` | Documented plant shutdown / confirmed zero delivery | operator-asserted, audit-logged |
+//! | `ManualEntry` | Manual replacement by the operator | audit-logged via the §-audit correction path |
+//!
+//! Every generated Ersatzwert carries `QualityFlag::Substituted`, the
+//! `SubstituteMethod`, and lands in the caller's substitution audit log —
+//! the traceability the Anwendungsregel and § 60 Abs. 2 MsbG both demand.
 //!
 //! ## Methods implemented
 //!
@@ -24,14 +51,14 @@
 //!
 //! [`fill_gaps`] uses automatic method selection (linear for short gaps, carry-forward
 //! for longer ones). Use [`fill_gaps_with_config`] with [`FillGapsConfig`] to specify
-//! a preferred method — in particular [`SubstituteMethod::PriorPeriodAverage`] per
-//! §17 Abs. 2 MessZV requires providing `prior_period_intervals`.
+//! a preferred method — in particular [`SubstituteMethod::PriorPeriodAverage`]
+//! (Vergleichswoche) requires providing `prior_period_intervals`.
 
 use crate::interval::{MeterInterval, QualityFlag};
 use rust_decimal::Decimal;
 use time::{Duration, OffsetDateTime};
 
-/// Length of the §17 Abs. 2 MessZV reference period: the calendar week
+/// Length of the § 60 Abs. 2 MsbG reference period: the calendar week
 /// immediately preceding the gap.
 pub const REFERENCE_PERIOD_DAYS: i64 = 7;
 
@@ -40,7 +67,7 @@ use rust_decimal::dec;
 
 // ── SubstituteMethod ──────────────────────────────────────────────────────────
 
-/// Method used to generate a substitute value per §17 MessZV.
+/// Method used to generate a substitute value per § 60 Abs. 2 MsbG.
 ///
 /// Stored in the generated `MeterInterval.quality` as `Substituted` but
 /// the method can be tracked separately for audit purposes.
@@ -56,7 +83,7 @@ pub enum SubstituteMethod {
 
     /// Average of the same time slot from a prior reference period.
     ///
-    /// Per §17 Abs. 2 MessZV: use the same quarter-hour from the prior week.
+    /// Per § 60 Abs. 2 MsbG: use the same quarter-hour from the prior week.
     /// Requires [`FillGapsConfig::prior_period_intervals`] to be populated.
     /// Falls back to `LastValueCarryForward` when no matching slot is found.
     PriorPeriodAverage,
@@ -75,7 +102,7 @@ pub enum SubstituteMethod {
 /// Controls which [`SubstituteMethod`] is applied and provides prior-period
 /// reference data for [`SubstituteMethod::PriorPeriodAverage`].
 ///
-/// ## Example — prior-period averaging per §17 Abs. 2 MessZV
+/// ## Example — prior-period averaging per § 60 Abs. 2 MsbG
 ///
 /// ```rust,ignore
 /// use metering::{fill_gaps_with_config, FillGapsConfig, SubstituteMethod};
@@ -86,20 +113,20 @@ pub enum SubstituteMethod {
 /// let config = FillGapsConfig::prior_period(prior);
 /// let filled = fill_gaps_with_config(&current, 900, period_from, period_to, &config);
 /// ```
-/// Reason why a substitute value was generated (for §22 MessZV audit trail).
+/// Reason why a substitute value was generated (for § 60 Abs. 6 MsbG audit trail).
 ///
 /// Stored alongside each synthetic interval so that auditors and billing systems
 /// can explain every line item.
 ///
 /// ## Legal basis
 ///
-/// §17 MessZV requires the MSB to document the substitute value method.
-/// §22 MessZV requires a 3-year audit trail for all billing-relevant data.
+/// § 60 Abs. 2 MsbG requires the MSB to document the substitute value method.
+/// § 60 Abs. 6 MsbG requires a 3-year audit trail for all billing-relevant data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
 pub enum SubstitutionReason {
-    /// §17 Abs. 1 MessZV — no measurement available for this interval.
+    /// § 60 Abs. 2 MsbG — no measurement available for this interval.
     NoMeasurementAvailable,
     /// Meter hardware failure or communication fault.
     MeterFault,
@@ -124,7 +151,7 @@ impl SubstitutionReason {
     #[must_use]
     pub fn description(&self) -> &'static str {
         match self {
-            Self::NoMeasurementAvailable => "Kein Messwert verfügbar (§17 Abs. 1 MessZV)",
+            Self::NoMeasurementAvailable => "Kein Messwert verfügbar (§ 60 Abs. 2 MsbG)",
             Self::MeterFault => "Zählerdefekt oder Kommunikationsstörung",
             Self::GatewayCommFailure => "SMGW-Kommunikationsfehler",
             Self::PlausibilityCheckFailed => "Plausibilitätsprüfung fehlgeschlagen",
@@ -197,7 +224,7 @@ impl FillGapsConfig {
 
 // ── fill_gaps ─────────────────────────────────────────────────────────────────
 
-/// §17 MessZV — Fill gaps with a [`FillGapsConfig`] specifying the substitute method.
+/// § 60 Abs. 2 MsbG — Fill gaps with a [`FillGapsConfig`] specifying the substitute method.
 ///
 /// Provides full control over gap-filling strategy — use this when the MSB
 /// has determined the appropriate method:
@@ -256,7 +283,7 @@ pub fn fill_gaps_with_config(
                 gap_len = count_consecutive_gaps(&sorted, cursor, expected_interval_secs);
             }
             // A short gap is interpolated regardless of the configured method:
-            // §17 Abs. 2 MessZV reference-period substitution is for outages long
+            // § 60 Abs. 2 MsbG reference-period substitution is for outages long
             // enough that the neighbouring values say nothing useful.
             let effective_method = if gap_len <= config.short_gap_threshold && gap_len > 0 {
                 SubstituteMethod::LinearInterpolation
@@ -307,7 +334,7 @@ fn count_consecutive_gaps(
     count
 }
 
-/// §17 MessZV — Fill gaps in a meter interval series with substitute values.
+/// § 60 Abs. 2 MsbG — Fill gaps in a meter interval series with substitute values.
 ///
 /// Identifies gaps (missing expected intervals) and fills them using the
 /// best available method:
@@ -316,12 +343,12 @@ fn count_consecutive_gaps(
 /// 2. **Longer gaps**: last-value carry-forward (conservative; MSB may override)
 ///
 /// Use [`fill_gaps_with_config`] to specify an explicit method such as
-/// [`SubstituteMethod::PriorPeriodAverage`] per §17 Abs. 2 MessZV.
+/// [`SubstituteMethod::PriorPeriodAverage`] per § 60 Abs. 2 MsbG.
 ///
 /// Only gaps within `[from, to)` are filled. Leading and trailing gaps are
 /// not synthesised — they indicate metering system issues requiring manual review.
 ///
-/// Filled intervals carry `quality = QualityFlag::Substituted` (billable per §17 MessZV Abs. 1).
+/// Filled intervals carry `quality = QualityFlag::Substituted` (billable per § 60 Abs. 2 MsbG Abs. 1).
 ///
 /// ## Parameters
 ///
@@ -393,7 +420,7 @@ fn synthesise_value(
         SubstituteMethod::ZeroFill => Decimal::ZERO,
 
         SubstituteMethod::PriorPeriodAverage => {
-            // §17 Abs. 2 MessZV: the same slot of the prior reference period,
+            // § 60 Abs. 2 MsbG: the same slot of the prior reference period,
             // which is the calendar week immediately before the gap.
             //
             // The window is applied here rather than trusted from the caller.
@@ -610,7 +637,7 @@ mod tests {
 
     // ── fill_gaps_with_config tests ────────────────────────────────────────────
 
-    /// §17 Abs. 2 MessZV — PriorPeriodAverage uses the same time slot from prior week.
+    /// § 60 Abs. 2 MsbG — PriorPeriodAverage uses the same time slot from prior week.
     #[test]
     fn fill_gaps_prior_period_average_uses_matching_slot() {
         // Prior period: 00:15 slot had 3.0 kWh last week

@@ -561,10 +561,10 @@ impl NetzbilanzMcpHandler {
     /// List Korrekturrechnung and Stornorechnung records.
     ///
     /// Corrections are drafts with `rechnungsart` = `KORREKTURRECHNUNG` or
-    /// `STORNORECHNUNG` and a non-null `original_draft_id`.  Used for §22 MessZV
+    /// `STORNORECHNUNG` and a non-null `original_draft_id`.  Used for § 147 AO / GoBD
     /// 3-year audit trail and COMDIS 29001 dispute resolution.
     #[tool(
-        description = "List all Korrekturrechnung and Stornorechnung drafts (§22 MessZV audit trail). Filter by malo_id.",
+        description = "List all Korrekturrechnung and Stornorechnung drafts (§ 147 AO / GoBD audit trail). Filter by malo_id.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_corrections(
@@ -673,9 +673,9 @@ impl NetzbilanzMcpHandler {
 
     /// List all paid invoices for a period (REMADV 33001/33003/33004 confirmed).
     ///
-    /// Used for ERP accounts-receivable confirmation and BNetzA §22 MessZV audit.
+    /// Used for ERP accounts-receivable confirmation and BNetzA § 147 AO / GoBD audit.
     #[tool(
-        description = "List all paid invoice drafts (REMADV 33001/33003 confirmed). For ERP AR reconciliation and §22 MessZV audit.",
+        description = "List all paid invoice drafts (REMADV 33001/33003 confirmed). For ERP AR reconciliation and § 147 AO / GoBD audit.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_paid_invoices(
@@ -749,7 +749,7 @@ impl NetzbilanzMcpHandler {
                  2. Use `get_nne_draft` for the full Rechnung BO4E and invoic-checker findings.\n\
                  3. Identify the ERC code in the REMADV (Z32=Tariff deviation, Z34=Period invalid, Z35=MMM price).\n\
                  4. Fix root cause: update tariff in marktd, correct Messreihe in edmd, or verify MMMA prices.\n\
-                 5. POST /api/v1/billing/drafts/{id}/correction to generate a Korrekturrechnung (§22 MessZV).\n\
+                 5. POST /api/v1/billing/drafts/{id}/correction to generate a Korrekturrechnung (§ 147 AO / GoBD).\n\
                  6. Dispatch the correction and confirm with the LF.",
             ),
         ]
@@ -887,7 +887,7 @@ impl NetzbilanzMcpHandler {
                  | 31009 | MSB-Rechnung (metering service) | NB → MSB | per MSB contract | `msb_31009` |\n\
                  | 31011 | AWH Sperrprozesse Gas (GeLi Gas) | GNB → LFG | per Sperrprozess close | `nne_gas_awh_31011` |\n\n\
                  **Key compliance rules:**\n\
-                 - §22 MessZV: 3-year retention; Stornorechnung/Korrekturrechnung for corrections\n\
+                 - § 147 AO / GoBD: 3-year retention; Stornorechnung/Korrekturrechnung for corrections\n\
                  - invoic-checker blocks dispatch on Dispute outcome (NB can only send defensible invoices)\n\
                  - REMADV 33002 (dispute) → COMDIS 29001 (makod) for formal escalation\n\
                  - GPKE (BK6-24-174) Teil 1 Kap. 8.4: MMM settlement due annually; `mmm-run/{malo_id}` auto-fetches profil_kwh\n\
@@ -925,7 +925,7 @@ impl ServerHandler for NetzbilanzMcpHandler {
              - `dispatch_draft` — check status + provide REST dispatch instruction\n\
              - `reject_draft` — reject a draft (re-enables billing for same MaLo/period)\n\
              - `trigger_mmm_auto_run` — prepare MMM auto-run request body for a MaLo\n\
-             - `list_corrections` — list Stornorechnung/Korrekturrechnung (§22 MessZV audit)\n\
+             - `list_corrections` — list Stornorechnung/Korrekturrechnung (§ 147 AO / GoBD audit)\n\
              - `get_payment_stats` — payment totals by PID × status (Zahlungsverzug detection)\n\
              - `list_paid_invoices` — REMADV 33001/33003/33004 confirmed paid invoices\n\n\
              ## Billing types\n\

@@ -6,7 +6,7 @@
 //! - [`GasQuantity`] — Decimal-precise energy in kWh_Hs with m³ conversion
 //! - [`GasBeschaffenheit`] — Brennwert (Hs/Hu) and Zustandszahl from DVGW G 685
 //! - [`GasBeschaffenheitValidationError`] — DVGW G 260 range check results
-//! - [`GasQualityFlag`] — measurement quality state per §17 MessZV
+//! - [`GasQualityFlag`] — measurement quality state per § 60 Abs. 2 MsbG
 //! - [`Bilanzkreis`] — BKV balance group with period and status
 //! - [`DeliveryPoint`] — entry/exit point (Einspeise- / Ausspeisepunkt)
 //! - [`GasImbalanceSaldo`] — nomination vs. allocation deviation with Ausgleichsenergie price
@@ -262,14 +262,14 @@ impl std::error::Error for GasBeschaffenheitValidationError {}
 
 // ── GasQualityFlag ────────────────────────────────────────────────────────────
 
-/// Quality flag for a gas measurement interval per §17 MessZV.
+/// Quality flag for a gas measurement interval per § 60 Abs. 2 MsbG.
 ///
 /// Gas measurements can originate from direct measurement (MSCONS), be estimated
 /// by a standard load profile (SLP), or be replaced by a substitute value when
 /// the primary measurement is unavailable.
 ///
 /// The flag determines whether an interval is billable and which regulatory
-/// handling applies (§17 MessZV Ersatzwertbildung for Gas RLM).
+/// handling applies (§ 60 Abs. 2 MsbG Ersatzwertbildung for Gas RLM).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum GasQualityFlag {
@@ -277,12 +277,12 @@ pub enum GasQualityFlag {
     Measured,
     /// Value estimated using SLP Gas standard load profile (G0, H0, G1–G6).
     Estimated,
-    /// Value substituted per §17 MessZV (prior-period average, SLP scaling, or linear).
+    /// Value substituted per § 60 Abs. 2 MsbG (prior-period average, SLP scaling, or linear).
     Substituted,
     /// Value calculated from a DVGW G 685 conversion (m³ × Hs × Z).
     Calculated,
     /// Corrected value superseding a previous Measured/Substituted value.
-    /// Per §22 MessZV: corrections are stored immutably, not overwriting originals.
+    /// Per § 147 AO / GoBD: corrections are stored immutably, not overwriting originals.
     Corrected,
     /// Value rejected by quality validation (outside physical bounds, duplicate, etc.).
     /// Rejected intervals are NOT billable and trigger an Ersatzwertbildung process.

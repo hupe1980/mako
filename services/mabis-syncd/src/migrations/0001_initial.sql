@@ -92,7 +92,7 @@ CREATE TABLE submission_runs (
     CONSTRAINT sr_version_unique
         UNIQUE (tenant, bilanzierungsgebiet_id, period_from, period_to, version),
     -- A Datenstatus without a timestamp loses when the BIKO assigned it, which
-    -- the §22 MessZV audit trail needs.
+    -- the § 60 Abs. 6 MsbG audit trail needs.
     CONSTRAINT sr_datenstatus_timed CHECK (
         (datenstatus IS NULL) = (datenstatus_at IS NULL)
     ),

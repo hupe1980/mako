@@ -295,7 +295,7 @@ async fn a_correction_may_coexist_with_the_receipt_it_corrects() {
         .expect("both receipts must be storable");
     }
 
-    // §22 MessZV: the audit trail must say why the original was superseded.
+    // § 147 AO / GoBD: the audit trail must say why the original was superseded.
     let reason: Option<String> = sqlx::query_scalar(
         "SELECT correction_reason FROM settlement_receipts WHERE is_correction = true",
     )

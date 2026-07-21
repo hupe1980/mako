@@ -1182,7 +1182,7 @@ async fn dispatch_lieferende(
         "lieferende_datum": lieferende.to_string(),
     });
 
-    // The Schlussablesung reading order (§9 MessZV) is the LF's OWN obligation
+    // The Schlussablesung reading order (GPKE Beginn-/Schlussablesung) is the LF's OWN obligation
     // and does not depend on the Lieferende UTILMD reaching the NB. Fire it
     // first and unconditionally — a failed processd call must never suppress
     // the final-reading order (that was the previous behaviour and left the

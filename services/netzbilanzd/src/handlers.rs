@@ -1205,7 +1205,7 @@ pub async fn post_ggv_nne(
         .into_response()
 }
 
-// ── Korrekturrechnung / Stornorechnung (§22 MessZV audit trail) ───────────────
+// ── Korrekturrechnung / Stornorechnung (§ 147 AO / GoBD audit trail) ───────────────
 
 /// Request body for `POST /api/v1/billing/drafts/{id}/correction`.
 #[derive(Debug, serde::Deserialize)]
@@ -1220,7 +1220,7 @@ pub struct DraftCorrectionRequest {
 
 /// `POST /api/v1/billing/drafts/{id}/correction`
 ///
-/// **Korrekturrechnung / Stornorechnung (§22 MessZV).**
+/// **Korrekturrechnung / Stornorechnung (§ 147 AO / GoBD).**
 ///
 /// Creates a correction or reversal for an existing INVOIC draft.
 ///
@@ -1259,11 +1259,11 @@ pub async fn post_draft_correction(
     }
 }
 
-// ── Fremdkosten REST API (§22 MessZV external cost pass-through, BO4E typed) ──
+// ── Fremdkosten REST API (§ 147 AO / GoBD external cost pass-through, BO4E typed) ──
 
 /// `PUT /api/v1/billing/fremdkosten/{draft_id}`
 ///
-/// **§22 MessZV — typed external cost pass-through.**
+/// **§ 147 AO / GoBD — typed external cost pass-through.**
 ///
 /// Associates a typed `rubo4e::current::Fremdkosten` + `FremdkostenBlock` +
 /// `FremdkostenPosition` payload with an existing INVOIC draft.
@@ -1427,7 +1427,7 @@ pub struct MarkPaidRequest {
 /// when a REMADV indicating payment is received from the LF.
 ///
 /// Regulatory basis: INVOIC AHB 1.0 §3 — NB must track payment status for
-/// §22 MessZV 3-year retention and BNetzA audit readiness.
+/// § 147 AO / GoBD 3-year retention and BNetzA audit readiness.
 pub async fn mark_paid(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
@@ -1575,11 +1575,11 @@ pub struct AuditExportQuery {
 
 /// `GET /api/v1/billing/audit`
 ///
-/// **§22 MessZV BNetzA audit export.**
+/// **§ 147 AO / GoBD BNetzA audit export.**
 ///
 /// Returns all invoice records (lightweight, no Rechnung JSONB) filtered by
 /// date range, PID, and status.  Used for:
-/// - BNetzA §22 MessZV 3-year retention audit (Prüfung der Abrechnungsunterlagen)
+/// - BNetzA § 147 AO / GoBD 3-year retention audit (Prüfung der Abrechnungsunterlagen)
 /// - Annual NNE portfolio reconciliation
 /// - Automated ERP import jobs
 ///
@@ -1603,7 +1603,7 @@ pub async fn get_billing_audit(
         Ok(rows) => Json(serde_json::json!({
             "count": rows.len(),
             "records": rows,
-            "regulatory_note": "§22 MessZV: 3-year retention; full Rechnung via GET /api/v1/billing/drafts/{id}",
+            "regulatory_note": "§ 147 AO / GoBD: 3-year retention; full Rechnung via GET /api/v1/billing/drafts/{id}",
         })).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }

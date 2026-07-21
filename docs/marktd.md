@@ -950,7 +950,7 @@ The fan-out worker retries failed deliveries with exponential back-off
 (1 s → 2 s → 4 s → … → 64 s, capped). After exhausting all attempts the event
 is written to the `fanout_dlq` table rather than silently dropped.
 
-This durable failure path is required by **§22 MessZV / §41 EnWG**: a silent
+This durable failure path is required by **§ 147 AO / GoBD / §41 EnWG**: a silent
 drop of a `de.mako.process.initiated` event to `invoicd` would mean the INVOIC
 plausibility check never runs, and the 3-year receipt retention obligation
 cannot be satisfied.
@@ -1556,9 +1556,9 @@ WHERE geraet_konfigurationen @> '[{"parameter":"SMGW_CERT_ABLAUFDATUM"}]'
 | `CLS_KANAL_ID` | string | BK6-24-174 §4.3 | CLS channel ID for §14a Steuerungsauftrag routing |
 | `GWA_CODENUMMER` | 13-digit | BDEW | GWA (Gateway-Administrator) BDEW-Codenummer |
 | `HERSTELLER` | string | MsbG §23 | Manufacturer name |
-| `INBETRIEBNAHMEDATUM` | ISO date | §27 MessZV | Commissioning date |
-| `LETZTE_WARTUNG` | ISO date | §27 MessZV | Last maintenance date |
-| `NAECHSTE_WARTUNG` | ISO date | §27 MessZV | Next scheduled maintenance date |
+| `INBETRIEBNAHMEDATUM` | ISO date | § 13 StromNZV | Commissioning date |
+| `LETZTE_WARTUNG` | ISO date | § 13 StromNZV | Last maintenance date |
+| `NAECHSTE_WARTUNG` | ISO date | § 13 StromNZV | Next scheduled maintenance date |
 | `AUSLESEE_PROTOKOLL` | enum string | — | Readout protocol: `"SML"` / `"DLMS"` / `"IEC62056"` |
 | `MSB_VERTRAGSNUMMER` | string | MsbG §23 | MSB contract number for this device |
 | `SONSTIGES` | string | — | Custom parameter — use `notiz` for the actual key name |

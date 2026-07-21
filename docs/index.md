@@ -340,7 +340,7 @@ Anmeldung STP ≥95%
 LF E_0624 45-min auto"]
         invoicd["invoicd :8280
 invoic-checker 6 checks
-§22 MessZV receipts"]
+§ 147 AO / GoBD receipts"]
         netzbilanzd["netzbilanzd :8680
 NNE/KA/MMM/MSB billing
 GridSettlement · CalculationTrace"]
@@ -496,7 +496,7 @@ mako consists of 17 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/invoicd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">invoicd</span>
     <span class="mako-service-card__port">:8280</span>
-    <span class="mako-service-card__desc">INVOIC 6-check plausibility pipeline. Auto-settle/dispute. §22 MessZV PostgreSQL receipts.</span>
+    <span class="mako-service-card__desc">INVOIC 6-check plausibility pipeline. Auto-settle/dispute. § 147 AO / GoBD PostgreSQL receipts.</span>
   </a>
   <a href="{{ '/netzbilanzd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">netzbilanzd</span>
@@ -515,7 +515,7 @@ mako consists of 17 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/edmd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">edmd</span>
     <span class="mako-service-card__port">:8380</span>
-    <span class="mako-service-card__desc">MSCONS meter readings (PIDs 13005–13027). iMSys direct push (§41a). Hampel quality scoring (A/B/C/F, AVX2/NEON). Virtual meters (§42b GGV Solarpaket I). §17 MessZV forecasting &amp; substitution. Ablesesteuerung. Iceberg/S3 OLAP archive with Parquet Bloom filters. Arrow IPC bulk export. Iceberg REST catalog (DuckDB/Snowflake/Databricks). GDPR Art. 17 erasure.</span>
+    <span class="mako-service-card__desc">MSCONS meter readings (PIDs 13005–13027). iMSys direct push (§41a). Hampel quality scoring (A/B/C/F, AVX2/NEON). Virtual meters (§42b GGV Solarpaket I). § 60 Abs. 2 MsbG forecasting &amp; substitution. Ablesesteuerung. Iceberg/S3 OLAP archive with Parquet Bloom filters. Arrow IPC bulk export. Iceberg REST catalog (DuckDB/Snowflake/Databricks). GDPR Art. 17 erasure.</span>
   </a>
   <a href="{{ '/mabis-syncd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">mabis-syncd</span>
@@ -525,7 +525,7 @@ mako consists of 17 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/einsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">einsd</span>
     <span class="mako-service-card__port">:9180</span>
-    <span class="mako-service-card__desc">Einspeiser registry. 9 EEG/KWKG settlement schemes. §51/§51a/§51b Negativpreisregel. §100 Bestandsschutz auto-override. §25 Abs. 1 Satz 3 anteilige Zahlung. §26 Fälligkeitsdatum. §19 EInsMan compensation. §21b Veräußerungsform Wechsel. §53b/§54 regional+auction reductions. §22 MessZV correction receipts. derive_settlement_state auto-update. Repowering §22. <strong>324 eeg-billing tests</strong>. 14-tool MCP. §3 Nr. 1 Direktvermarktung compliance check. §44b Biogas quota monitoring.</span>
+    <span class="mako-service-card__desc">Einspeiser registry. 9 EEG/KWKG settlement schemes. §51/§51a/§51b Negativpreisregel. §100 Bestandsschutz auto-override. §25 Abs. 1 Satz 3 anteilige Zahlung. §26 Fälligkeitsdatum. §19 EInsMan compensation. §21b Veräußerungsform Wechsel. §53b/§54 regional+auction reductions. § 147 AO / GoBD correction receipts. derive_settlement_state auto-update. Repowering §22. <strong>324 eeg-billing tests</strong>. 14-tool MCP. §3 Nr. 1 Direktvermarktung compliance check. §44b Biogas quota monitoring.</span>
   </a>
   <a href="{{ '/obsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">obsd</span>
@@ -573,7 +573,7 @@ mako consists of 17 independently deployable services. Each ships a built-in MCP
   <a href="{{ '/agentd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">agentd</span>
     <span class="mako-service-card__port">:9580</span>
-    <span class="mako-service-card__desc">Multi-agent LLM orchestration. 29 specialists compiled into container image. Activated via [bundled_agents] config. Sequential/parallel/race dispatch. A2A agent cards. LanceDB RAG. Billing regulatory guard (§41/§41b/§42). Annual settlement. Billing anomaly AI. §17 MessZV substitute-value agent. BSI TR-03109 SMGW diagnostics. VPP dispatch settlement audit (RED III Art. 17). MaBiS deadline monitoring. Compliance (§20 EnWG). OpenAI/Anthropic/Bedrock.</span>
+    <span class="mako-service-card__desc">Multi-agent LLM orchestration. 29 specialists compiled into container image. Activated via [bundled_agents] config. Sequential/parallel/race dispatch. A2A agent cards. LanceDB RAG. Billing regulatory guard (§41/§41b/§42). Annual settlement. Billing anomaly AI. § 60 Abs. 2 MsbG substitute-value agent. BSI TR-03109 SMGW diagnostics. VPP dispatch settlement audit (RED III Art. 17). MaBiS deadline monitoring. Compliance (§20 EnWG). OpenAI/Anthropic/Bedrock.</span>
   </a>
 </div>
 
@@ -700,8 +700,8 @@ Beyond the production services, mako exposes reusable Rust libraries:
 |---|---|---|
 | [`edi-energy`](https://crates.io/crates/edi-energy) | ✅ crates.io | Parse · validate · build all 17 EDI@Energy EDIFACT types |
 | [`mako-engine`](https://crates.io/crates/mako-engine) | ✅ crates.io | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines |
-| `metering` | workspace | German metering domain — `MeterInterval`, validation V01–V10, substitution (§17 MessZV), Hampel scoring, resampling, virtual meters, SMGW/CLS (§14a), 177 tests |
-| `mako-edm` | workspace | Energy Data Management types — `MeterRead`, `QualityFlag` (8 variants), `BilanzzuordnungRecord`, `GasQualityData` (PID 13007), correction records (§22 MessZV) |
+| `metering` | workspace | German metering domain — `MeterInterval`, validation V01–V10, substitution (§ 60 Abs. 2 MsbG), Hampel scoring, resampling, virtual meters, SMGW/CLS (§14a), 177 tests |
+| `mako-edm` | workspace | Energy Data Management types — `MeterRead`, `QualityFlag` (8 variants), `BilanzzuordnungRecord`, `GasQualityData` (PID 13007), correction records (§ 147 AO / GoBD) |
 | `eeg-billing` | workspace | Pure EEG/KWKG settlement — 9 schemes, §51 Negativpreisregel, §52 Pflichtzahlungen, §36k Wind Korrekturfaktor, `InbetriebnahmeTyp` lifecycle, proptest invariants, **324 tests** |
 | `energy-billing` | workspace | Retail energy billing engine — 12 categories, HT/NT ToU, RLM demand charge, §54 EnergieStG exemption, historic levy rates (`stromsteuer_for_year`, `energiesteuer_gas_for_year`), §14a Modul 1/3, XRechnung 3.0 |
 | `grid-billing` | workspace | Role-neutral grid **settlement** engine — `GridSettlement` (+ `CalculationTrace`, `LegalReference`, `TariffSource` per position), `Sparte` (Gas/Strom), `KaKlasse`, `calculate_reversal()`, `validate_*_input()`; zero BO4E dep, no float money |
