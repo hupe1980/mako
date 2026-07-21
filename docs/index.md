@@ -256,7 +256,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       Preisgarantie guard blocks tariff changes within price-lock window (§41 EnWG);
       every bypass is logged to an immutable <code>preisgarantie_override_log</code> with operator JWT sub.
       Kündigung Widerruf (<code>POST /widerruf-kuendigung</code>) reverts before Lieferende.
-      §41 Abs. 3 EnWG 6-week advance notice dispatched automatically 42 days before <code>wirksamkeit</code>.
+      42-day advance notice dispatched automatically before <code>wirksamkeit</code> — covers §5 Abs. 2 StromGVV/GasGVV (six weeks, Grundversorgung) and exceeds §41 Abs. 5 EnWG (one month for Haushaltskunden).
       Proactive expiry alerts emit <code>de.vertrag.ablauf.ankuendigung</code> 30 days before contract end.
       CPQ pipeline: <code>de.angebot.angenommen</code> → Rahmenvertrag with <code>angebot_id</code> traceability.
     </p>

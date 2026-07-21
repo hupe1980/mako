@@ -74,6 +74,7 @@ pub struct ProductRow {
 pub async fn upsert_product(
     pool: &PgPool,
     lf_mp_id: &str,
+    tenant: &str,
     product_code: &str,
     req: ProductUpsertRequest,
 ) -> anyhow::Result<Uuid> {
@@ -85,22 +86,25 @@ pub async fn upsert_product(
         r"INSERT INTO product_history (lf_mp_id, product_code, data, energiemix, bo4e_version)
           SELECT lf_mp_id, product_code, data, energiemix, bo4e_version
           FROM products
-          WHERE lf_mp_id = $1 AND product_code = $2 AND (valid_from = $3 OR $3 IS NULL)
+          WHERE lf_mp_id = $1 AND product_code = $2 AND tenant = $4
+            AND (valid_from = $3 OR $3 IS NULL)
           ORDER BY updated_at DESC
           LIMIT 1",
     )
     .bind(lf_mp_id)
     .bind(product_code)
     .bind(valid_from)
+    .bind(tenant)
     .execute(pool)
-    .await;
+    .await
+    .context("archive product_history before upsert")?;
 
     let row = sqlx::query(
         r"INSERT INTO products
               (lf_mp_id, product_code, category, name, sparte, register_count, kundentyp,
                dyn_source, valid_from, valid_to, data, bo4e_version, product_status,
-               energiemix, oekolabel, updated_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now())
+               energiemix, oekolabel, tenant, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now())
           ON CONFLICT (lf_mp_id, product_code, valid_from) DO UPDATE
           SET category      = EXCLUDED.category,
               name          = EXCLUDED.name,
@@ -132,6 +136,7 @@ pub async fn upsert_product(
     .bind(&req.product_status)
     .bind(&req.energiemix)
     .bind(&req.oekolabel)
+    .bind(tenant)
     .fetch_one(pool)
     .await
     .context("upsert product")?;
@@ -142,14 +147,16 @@ pub async fn upsert_product(
 pub async fn fetch_product(
     pool: &PgPool,
     lf_mp_id: &str,
+    tenant: &str,
     product_code: &str,
 ) -> anyhow::Result<Option<ProductRow>> {
     sqlx::query_as::<_, ProductRow>(
-        "SELECT * FROM products WHERE lf_mp_id = $1 AND product_code = $2
+        "SELECT * FROM products WHERE lf_mp_id = $1 AND product_code = $2 AND tenant = $3
          ORDER BY valid_from DESC NULLS LAST LIMIT 1",
     )
     .bind(lf_mp_id)
     .bind(product_code)
+    .bind(tenant)
     .fetch_optional(pool)
     .await
     .context("fetch product")
@@ -167,18 +174,20 @@ pub async fn fetch_product(
 pub async fn soft_delete_product(
     pool: &PgPool,
     lf_mp_id: &str,
+    tenant: &str,
     product_code: &str,
 ) -> anyhow::Result<bool> {
     let today = time::OffsetDateTime::now_utc().date();
     let res = sqlx::query(
         r"UPDATE products
           SET valid_to = $3, updated_at = now()
-          WHERE lf_mp_id = $1 AND product_code = $2
+          WHERE lf_mp_id = $1 AND product_code = $2 AND tenant = $4
             AND (valid_to IS NULL OR valid_to > $3)",
     )
     .bind(lf_mp_id)
     .bind(product_code)
     .bind(today)
+    .bind(tenant)
     .execute(pool)
     .await
     .context("soft_delete_product")?;
@@ -188,15 +197,23 @@ pub async fn soft_delete_product(
 pub async fn fetch_product_history(
     pool: &PgPool,
     lf_mp_id: &str,
+    tenant: &str,
     product_code: &str,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
+    // product_history carries no tenant column; scope it through the owning
+    // product row so one operator cannot read another's price history.
     let rows = sqlx::query(
-        "SELECT id, lf_mp_id, product_code, data, energiemix, bo4e_version, changed_at
-         FROM product_history WHERE lf_mp_id = $1 AND product_code = $2
-         ORDER BY changed_at DESC LIMIT 100",
+        "SELECT h.id, h.lf_mp_id, h.product_code, h.data, h.energiemix, h.bo4e_version, h.changed_at
+         FROM product_history h
+         WHERE h.lf_mp_id = $1 AND h.product_code = $2
+           AND EXISTS (SELECT 1 FROM products p
+                       WHERE p.lf_mp_id = h.lf_mp_id AND p.product_code = h.product_code
+                         AND p.tenant = $3)
+         ORDER BY h.changed_at DESC LIMIT 100",
     )
     .bind(lf_mp_id)
     .bind(product_code)
+    .bind(tenant)
     .fetch_all(pool)
     .await
     .context("fetch_product_history")?;
@@ -257,6 +274,7 @@ pub struct EnergiemixResponse {
 pub async fn upsert_energiemix(
     pool: &PgPool,
     lf_mp_id: &str,
+    tenant: &str,
     product_code: &str,
     req: EnergimixUpsertRequest,
 ) -> anyhow::Result<()> {
@@ -265,12 +283,13 @@ pub async fn upsert_energiemix(
           SET energiemix = $3,
               oekolabel  = $4,
               updated_at = now()
-          WHERE lf_mp_id = $1 AND product_code = $2",
+          WHERE lf_mp_id = $1 AND product_code = $2 AND tenant = $5",
     )
     .bind(lf_mp_id)
     .bind(product_code)
     .bind(&req.energiemix)
     .bind(&req.oekolabel)
+    .bind(tenant)
     .execute(pool)
     .await
     .context("upsert energiemix")?;
@@ -285,17 +304,19 @@ pub async fn upsert_energiemix(
 pub async fn fetch_energiemix(
     pool: &PgPool,
     lf_mp_id: &str,
+    tenant: &str,
     product_code: &str,
 ) -> anyhow::Result<Option<EnergiemixResponse>> {
     let row = sqlx::query(
         r"SELECT lf_mp_id, product_code, energiemix, oekolabel, updated_at
           FROM products
-          WHERE lf_mp_id = $1 AND product_code = $2
+          WHERE lf_mp_id = $1 AND product_code = $2 AND tenant = $3
           ORDER BY valid_from DESC NULLS LAST
           LIMIT 1",
     )
     .bind(lf_mp_id)
     .bind(product_code)
+    .bind(tenant)
     .fetch_optional(pool)
     .await
     .context("fetch energiemix")?;
@@ -318,14 +339,16 @@ pub async fn fetch_energiemix(
 pub async fn delete_energiemix(
     pool: &PgPool,
     lf_mp_id: &str,
+    tenant: &str,
     product_code: &str,
 ) -> anyhow::Result<bool> {
     let res = sqlx::query(
         "UPDATE products SET energiemix = NULL, oekolabel = NULL, updated_at = now()
-         WHERE lf_mp_id = $1 AND product_code = $2",
+         WHERE lf_mp_id = $1 AND product_code = $2 AND tenant = $3",
     )
     .bind(lf_mp_id)
     .bind(product_code)
+    .bind(tenant)
     .execute(pool)
     .await
     .context("delete energiemix")?;
@@ -347,6 +370,7 @@ pub struct ProductListQuery {
 pub async fn list_products(
     pool: &PgPool,
     lf_mp_id: &str,
+    tenant: &str,
     q: &ProductListQuery,
 ) -> anyhow::Result<Vec<ProductRow>> {
     let include_drafts = q.include_drafts.unwrap_or(false);
@@ -354,7 +378,7 @@ pub async fn list_products(
     sqlx::query_as::<_, ProductRow>(
         r"SELECT DISTINCT ON (product_code) *
           FROM products
-          WHERE lf_mp_id = $1
+          WHERE lf_mp_id = $1 AND tenant = $8
             AND ($2::text IS NULL OR category = $2)
             AND ($3::text IS NULL OR sparte = $3)
             AND ($4::text IS NULL OR kundentyp = $4)
@@ -370,6 +394,7 @@ pub async fn list_products(
     .bind(include_drafts)
     .bind(include_expired)
     .bind(q.limit.unwrap_or(100).min(1000))
+    .bind(tenant)
     .fetch_all(pool)
     .await
     .context("list_products")
@@ -391,6 +416,7 @@ pub async fn get_customer_product(
     pool: &PgPool,
     malo_id: &str,
     lf_mp_id: &str,
+    tenant: &str,
 ) -> anyhow::Result<Option<CustomerProductRow>> {
     let row = sqlx::query(
         r"SELECT cp.malo_id, cp.lf_mp_id, cp.product_code, cp.assigned_from, cp.assigned_to
@@ -407,7 +433,7 @@ pub async fn get_customer_product(
 
     if let Some(r) = row {
         let product_code: String = r.try_get("product_code")?;
-        let product = fetch_product(pool, lf_mp_id, &product_code).await?;
+        let product = fetch_product(pool, lf_mp_id, tenant, &product_code).await?;
         Ok(Some(CustomerProductRow {
             malo_id: r.try_get("malo_id")?,
             lf_mp_id: r.try_get("lf_mp_id")?,
@@ -431,6 +457,7 @@ pub async fn assign_product(
     pool: &PgPool,
     malo_id: &str,
     lf_mp_id: &str,
+    tenant: &str,
     req: AssignProductRequest,
 ) -> anyhow::Result<()> {
     use time::format_description::well_known::Iso8601;
@@ -441,12 +468,13 @@ pub async fn assign_product(
     let product = sqlx::query(
         r"SELECT valid_from, valid_to, sparte, product_status
           FROM products
-          WHERE lf_mp_id = $1 AND product_code = $2
+          WHERE lf_mp_id = $1 AND product_code = $2 AND tenant = $3
           ORDER BY valid_from DESC NULLS LAST
           LIMIT 1",
     )
     .bind(lf_mp_id)
     .bind(&req.product_code)
+    .bind(tenant)
     .fetch_optional(pool)
     .await
     .context("check product exists")?;
@@ -481,7 +509,11 @@ pub async fn assign_product(
         );
     }
 
-    // Close previous assignment if active.
+    // Close the previous assignment and open the new one in ONE transaction.
+    // Two separate statements let a failure between them leave the MaLo with
+    // no active product (a Tarifwechsel that lost the customer's tariff), and
+    // the DEFERRABLE INITIALLY DEFERRED FK only has effect inside a shared tx.
+    let mut tx = pool.begin().await.context("begin assign tx")?;
     sqlx::query(
         r"UPDATE customer_products SET assigned_to = $3, updated_at = now()
           WHERE malo_id = $1 AND lf_mp_id = $2 AND assigned_to IS NULL",
@@ -489,11 +521,10 @@ pub async fn assign_product(
     .bind(malo_id)
     .bind(lf_mp_id)
     .bind(assigned_from)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .context("close previous assignment")?;
 
-    // Insert new assignment.
     sqlx::query(
         r"INSERT INTO customer_products (malo_id, lf_mp_id, product_code, assigned_from)
           VALUES ($1, $2, $3, $4)
@@ -504,9 +535,10 @@ pub async fn assign_product(
     .bind(lf_mp_id)
     .bind(&req.product_code)
     .bind(assigned_from)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .context("assign product")?;
+    tx.commit().await.context("commit assign tx")?;
 
     Ok(())
 }
@@ -785,6 +817,34 @@ pub async fn store_angebot_bo4e(
 }
 
 /// Insert a new Angebot.
+#[allow(clippy::too_many_arguments)]
+/// Look up an existing Angebot by its ERP-supplied idempotency key.
+///
+/// `erp_angebot_id` is a tenant-scoped idempotency handle: an ERP that retries
+/// `POST /angebote` with the same key must get the existing quotation back, not
+/// a duplicate with a fresh Angebotsnummer.
+pub async fn fetch_angebot_id_by_erp_id(
+    pool: &PgPool,
+    tenant: &str,
+    erp_angebot_id: &str,
+) -> anyhow::Result<Option<(Uuid, String)>> {
+    let row = sqlx::query(
+        "SELECT id, angebotsnummer FROM angebote
+         WHERE tenant = $1 AND erp_angebot_id = $2 LIMIT 1",
+    )
+    .bind(tenant)
+    .bind(erp_angebot_id)
+    .fetch_optional(pool)
+    .await
+    .context("fetch_angebot_id_by_erp_id")?;
+    Ok(row.map(|r| {
+        (
+            r.try_get("id").unwrap_or_default(),
+            r.try_get("angebotsnummer").unwrap_or_default(),
+        )
+    }))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_angebot(
     pool: &PgPool,

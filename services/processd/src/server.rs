@@ -353,6 +353,8 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         .route("/api/v1/queue/{id}/reject", post(rest::reject_queue_entry))
         .route("/api/v1/start-supply", post(rest::start_supply))
         .route("/api/v1/start-supply-gas", post(rest::start_supply_gas))
+        .route("/api/v1/end-supply", post(rest::end_supply))
+        .route("/api/v1/end-supply-gas", post(rest::end_supply_gas))
         .route("/metrics", get(rest::metrics))
         .with_state(state)
         .layer(axum::Extension(cfg.oidc.clone()))
@@ -878,6 +880,117 @@ mod rest {
                     "malo_id": malo_id,
                     "status": "initiated",
                     "message": "GeLi Gas Lieferbeginn (PID 44001) initiated — awaiting GNB confirmation (10 Werktage)"
+                })),
+            )
+                .into_response(),
+            Err(e) => (
+                StatusCode::BAD_GATEWAY,
+                axum::Json(serde_json::json!({
+                    "error": "MAKOD_DISPATCH_FAILED",
+                    "message": e.to_string()
+                })),
+            )
+                .into_response(),
+        }
+    }
+
+    /// `POST /api/v1/end-supply` — ERP initiates a GPKE Lieferende (Strom).
+    ///
+    /// Forwards to makod `gpke.lieferende.anmelden` (PID 55002). The notice
+    /// period that governs *when* a Lieferende is valid is enforced upstream
+    /// in `vertragd` (§14 StromGVV); this endpoint validates only that the
+    /// mandatory fields are present.
+    pub async fn end_supply(
+        State(state): State<ProcessdState>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> impl IntoResponse {
+        end_supply_inner(
+            state,
+            &body,
+            "gpke.lieferende.anmelden",
+            "processd-end-supply",
+        )
+        .await
+    }
+
+    /// `POST /api/v1/end-supply-gas` — ERP initiates a GeLi Gas Lieferende (44002).
+    pub async fn end_supply_gas(
+        State(state): State<ProcessdState>,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> impl IntoResponse {
+        end_supply_inner(
+            state,
+            &body,
+            "geli.lieferende.anmelden",
+            "processd-end-supply-gas",
+        )
+        .await
+    }
+
+    /// Shared Lieferende dispatch for Strom and Gas.
+    async fn end_supply_inner(
+        state: ProcessdState,
+        body: &serde_json::Value,
+        command: &str,
+        key_prefix: &str,
+    ) -> axum::response::Response {
+        let malo_id = match body
+            .get("malo_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            Some(id) => id.to_owned(),
+            None => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    axum::Json(serde_json::json!({
+                        "error": "MISSING_MALO_ID",
+                        "message": "\"malo_id\" is required"
+                    })),
+                )
+                    .into_response();
+            }
+        };
+        let lieferende_str = match body
+            .get("lieferende_datum")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            Some(d) => d.to_owned(),
+            None => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    axum::Json(serde_json::json!({
+                        "error": "MISSING_LIEFERENDE",
+                        "message": "\"lieferende_datum\" is required (ISO-8601 date)"
+                    })),
+                )
+                    .into_response();
+            }
+        };
+
+        // Idempotent on (malo, date): a redelivered Kündigung must not open a
+        // second Lieferende process at makod.
+        let idempotency_key = format!("{key_prefix}-{malo_id}-{lieferende_str}");
+        let cmd = mako_markt::makod_client::ForwardCommand {
+            marktrolle: Some("LF".to_owned()),
+            command: command.to_owned(),
+            malo_id: Some(malo_id.clone()),
+            melo_id: None,
+            payload: serde_json::json!({
+                "malo_id": malo_id,
+                "lieferende_datum": lieferende_str,
+            }),
+        };
+        match state.makod.post_command(&idempotency_key, &cmd).await {
+            Ok(accepted) => (
+                StatusCode::ACCEPTED,
+                axum::Json(serde_json::json!({
+                    "process_id": accepted.process_id,
+                    "command": command,
+                    "malo_id": malo_id,
+                    "lieferende_datum": lieferende_str,
+                    "status": "initiated",
                 })),
             )
                 .into_response(),

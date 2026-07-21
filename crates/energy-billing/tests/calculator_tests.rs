@@ -832,28 +832,47 @@ fn dynamic_strom_two_intervals_produce_positive_brutto() {
 }
 
 #[test]
-fn dynamic_strom_missing_price_uses_zero_and_logs() {
-    let _from = time::macros::date!(2026 - 01 - 15);
-    let _to = time::macros::date!(2026 - 01 - 15);
+fn dynamic_strom_missing_price_hard_blocks_the_run() {
+    use energy_billing::EngineError;
     let tariff = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0}"#);
     let intervals = [DynamicInterval {
         timestamp_utc: time::macros::datetime!(2026-01-15 10:00 UTC),
         kwh: dec!(1),
     }];
-    // No price entry for this hour → should bill 0 ct/kWh
-    let r = bill(
-        &tariff,
-        Quantities {
-            dynamic_intervals: intervals.to_vec(),
+    let (f, t) = period();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        lf_mp_id: "9900000000001".to_owned(),
+        rechnungsnummer: "TEST".to_owned(),
+        period: BillingPeriod::new(f, t).unwrap(),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates_2026(),
+        ..Default::default()
+    };
+    let q = Quantities {
+        // iMSys so the §41b guard passes and we reach the price check.
+        electricity: Some(energy_billing::MeterInput {
+            metering_mode: energy_billing::MeteringMode::Imsys,
             ..Default::default()
-        },
-    );
-    // Missing price → billed at 0 ct/kWh. Netto should be near 0 (Stromsteuer still applies).
-    // Total ≈ 1 kWh × 0 ct_EPEX + 1 kWh × 2.05ct Stromsteuer × 1.19 ≈ 0.024 EUR
-    assert!(
-        r.brutto_eur >= dec!(0),
-        "Missing EPEX price must not produce negative brutto"
-    );
+        }),
+        dynamic_intervals: intervals.to_vec(),
+        ..Default::default()
+    };
+    // §41a: consumed energy with no EPEX price must hard-block, never silently
+    // bill zero. A degraded partial invoice would under-bill and be unverifiable.
+    let err = tariff
+        .build_engine(&GridInput::default(), &rates_2026())
+        .bill(ctx, &q)
+        .expect_err("missing EPEX price for consumed energy must block the run");
+    match err {
+        EngineError::ValidationBlocked { warnings } => assert!(
+            warnings
+                .iter()
+                .any(|w| w.code == "SECT41A_MISSING_EPEX_PRICES"),
+            "expected the §41a missing-price block, got: {warnings:?}"
+        ),
+        other => panic!("expected ValidationBlocked, got {other:?}"),
+    }
 }
 
 // ── E-Mobility ───────────────────────────────────────────────────────────────
@@ -3014,7 +3033,7 @@ fn heat_positions_carry_7pct_applicable_tax_rate() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Indexed Prices (§41 Abs. 3 EnWG)
+// Indexed Prices (§41 EnWG Sonderkundenvertrag)
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Gas indexed to TTF: effective price = base + spread + TTF × factor

@@ -750,3 +750,61 @@ fn kuendigung_rejected_for_non_active_contracts() {
         );
     }
 }
+
+// ── processd Lieferbeginn dispatch contract (D3) ──────────────────────────────
+//
+// These pin the exact field names processd requires. The service previously
+// sent `lieferbeginn` (processd wants `lieferbeginn_datum`) and omitted the
+// gas `zaehlpunkt`/`process_date`, so every dispatch 422'd and the contract
+// stuck in ANGELEGT.
+
+#[test]
+fn strom_lieferbeginn_body_uses_lieferbeginn_datum() {
+    let d = time::macros::date!(2026 - 10 - 01);
+    let body = vertragd::handlers::lieferbeginn_body(
+        false,
+        "51238696781",
+        None,
+        "9900000000001",
+        "9800000000002",
+        d,
+    );
+    assert_eq!(body["lieferbeginn_datum"], "2026-10-01");
+    assert!(
+        body.get("lieferbeginn").is_none(),
+        "the legacy `lieferbeginn` field must be gone — processd 422s on it"
+    );
+    assert_eq!(body["malo_id"], "51238696781");
+    assert_eq!(body["lf_mp_id"], "9800000000002");
+}
+
+#[test]
+fn gas_lieferbeginn_body_carries_zaehlpunkt_and_process_date() {
+    let d = time::macros::date!(2026 - 10 - 01);
+    let body = vertragd::handlers::lieferbeginn_body(
+        true,
+        "51238696781",
+        Some("DE00056266802AO6G56M11SN51G21M24S"),
+        "9900000000001",
+        "9800000000002",
+        d,
+    );
+    // BK7-24-01-009 AHB: zaehlpunkt is mandatory; process_date is YYYYMMDD.
+    assert_eq!(body["zaehlpunkt"], "DE00056266802AO6G56M11SN51G21M24S");
+    assert_eq!(body["process_date"], "20261001");
+    assert!(body.get("lieferbeginn_datum").is_none());
+}
+
+#[test]
+fn gas_lieferbeginn_falls_back_to_malo_when_no_melo() {
+    let d = time::macros::date!(2026 - 10 - 01);
+    let body = vertragd::handlers::lieferbeginn_body(
+        true,
+        "51238696781",
+        None,
+        "9900000000001",
+        "9800000000002",
+        d,
+    );
+    assert_eq!(body["zaehlpunkt"], "51238696781");
+}

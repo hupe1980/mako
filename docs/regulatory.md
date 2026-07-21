@@ -85,7 +85,7 @@ graph LR
 | **BSI TR-03109** (iMSys / SMGW lifecycle, §14a CLS channels) | Strom | `metering` (`SmgwSession`, `ClsChannel`), `edmd` |
 | **StromNEV / GasNEV / KAV** (grid charge settlement) | Both | `grid-billing` crate, `netzbilanzd` |
 | **§14a EnWG** (Steuerbare Verbrauchseinrichtungen — Modul 1/2/3) | Strom | `grid-billing` (`Sect14aModule`), `processd` (produktcode check BK6-24-174) |
-| **§41 EnWG** (Preisgarantie, §41 Abs. 3 Preisanpassung, Kündigung) | Both | `vertragd` |
+| **§41 EnWG** (Vertragsinhalte, Abs. 5 Preisänderungs-Unterrichtung + Sonderkündigungsrecht) / **§5 Abs. 2 StromGVV/GasGVV** (6-Wochen-Frist) | Both | `vertragd` |
 | **§41a EnWG** (Dynamic tariffs — EPEX Spot day-ahead) | Strom | `tarifbd` (EPEX prices), `billingd` (§41b iMSys guard) |
 | **GDPR Art. 15/17/20** (data export, pseudonymization, portability) | — | `vertragd` (`/export`, `/anonymize`), `accountingd` (`/anonymize`) |
 | **XRechnung 3.0 / ZUGFeRD 2.3** (EN16931 e-invoice) | — | `billingd` |

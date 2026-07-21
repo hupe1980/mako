@@ -6,7 +6,7 @@ parent: Services
 mermaid: true
 description: >
   tarifbd operator guide: Product & Tariff Catalog daemon (LF role).
-  User-defined energy products (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE);
+  User-defined energy products (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/SHARING);
   all prices in Tarifpreisblatt JSONB; product version history;
   MaLo→product assignment, hourly EPEX Spot day-ahead prices for §41a dynamic tariffs.
 ---
@@ -95,15 +95,15 @@ Content-Type: application/json
     "bezeichnung": "Strom Zuhause Classic 2026",
     "gueltigkeit": { "startdatum": "2026-01-01" },
     "tarifpreispositionen": [
-      { "leistungstyp": "GRUNDPREIS",   "preisstaffeln": [{ "preis": "0.20" }] },
-      { "leistungstyp": "ARBEITSPREIS", "preisstaffeln": [{ "preis": "0.32" }] }
+      { "preistyp": "GRUNDPREIS",          "preisstaffeln": [{ "preis": "0.20" }] },
+      { "preistyp": "ARBEITSPREIS_EINTARIF", "preisstaffeln": [{ "preis": "0.32" }] }
     ]
   }
 }
 ```
 
 `billingd` extracts `grundpreis_ct_per_day` (20 ct/day) and `arbeitspreis_ct_per_kwh`
-(32 ct/kWh) by traversing `data.tarifpreispositionen` keyed on `leistungstyp`.
+(32 ct/kWh) by traversing `data.tarifpreispositionen` keyed on `preistyp`.
 
 ---
 
@@ -212,7 +212,7 @@ Both endpoints accept identical query parameters and return the same ETag/cachin
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `sparte` | string | all | Filter: `STROM` \| `GAS` \| `WAERME` |
-| `kundentyp` | string | all | Filter: `Haushalt` \| `Gewerbe` \| `Waermepumpe` \| `Ladesaeule` |
+| `kundentyp` | string | all | Filter: `Haushalt` \| `Gewerbe` \| `Waermepumpe` \| `Ladesaeule` \| `Einspeiser` \| `HEMS` \| `Gewerbe_RLM` |
 | `verbrauch_kwh` | decimal | `3500` | Annual consumption for `jahreskosten` estimation |
 | `oekolabel` | string | — | Show only products with this label (e.g. `OK_POWER`) |
 | `include_dynamic` | bool | `true` | Include §41a EPEX-linked dynamic tariffs |
@@ -393,7 +393,7 @@ Marktlokation carrying a bad key — `MaloId` validates the BDEW check digit.
 | `name` | TEXT | Human-readable name |
 | `sparte` | TEXT | `STROM` / `GAS` / `WAERME` / NULL |
 | `register_count` | TEXT | `Eintarif` / `Zweitarif` / `Mehrtarif` |
-| `kundentyp` | TEXT | `Haushalt` / `Gewerbe` / `Waermepumpe` / `Ladesaeule` |
+| `kundentyp` | TEXT | `Haushalt` / `Gewerbe` / `Waermepumpe` / `Ladesaeule` / `Einspeiser` / `HEMS` / `Gewerbe_RLM` |
 | `dyn_source` | TEXT | `"epex-spot-day-ahead"` for §41a; NULL for fixed. Only this value is accepted — all others are rejected with 422 |
 | `valid_from` | DATE | Tariff validity start |
 | `valid_to` | DATE | Tariff validity end (soft-delete via `DELETE` sets this to today) |

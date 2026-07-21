@@ -241,7 +241,7 @@ impl BillingProvider for ElectricityProvider {
                         .with_tag("strom"),
                 );
             } else if let Some(idx) = &product.indexed_price {
-                // ── Indexed price (B2B, §41 Abs. 3 EnWG) ──────────────────────
+                // ── Indexed price (B2B, §41 EnWG Sonderkundenvertrag) ─────────
                 // Effective price = base + spread + index_value × factor.
                 // When index_value is not available, no arbeitspreis position is added.
                 if let Some(effective_ct) = idx.effective_ct_per_kwh() {
@@ -251,7 +251,7 @@ impl BillingProvider for ElectricityProvider {
                             kwh,
                             effective_ct,
                             "kWh",
-                            "§41 Abs. 3 EnWG",
+                            "§41 EnWG",
                             &["strom", "indexed"],
                         )
                         .with_tag("strom")
@@ -1100,7 +1100,7 @@ impl BillingProvider for GasProvider {
                                 }
                             })
                             .unwrap_or_else(|| "Arbeitspreis Gas".to_owned()),
-                        "§41 Abs. 3 EnWG",
+                        "§41 EnWG",
                     )
                 } else if seasonal_gas_ap.is_some() {
                     let season_label = product
@@ -2286,6 +2286,7 @@ impl BillingProvider for DynamicElectricityProvider {
         // marktd). This is the typical production path when `build_engine()` creates
         // the provider before prices are known.
         let mut missing_price_intervals: u32 = 0;
+        let mut missing_price_kwh = Decimal::ZERO;
         let mut priced_pairs: Vec<(Decimal, billing::Amount<5>)> =
             Vec::with_capacity(quantities.dynamic_intervals.len());
 
@@ -2306,6 +2307,10 @@ impl BillingProvider for DynamicElectricityProvider {
 
             let Some(price_ct) = price_ct else {
                 missing_price_intervals += 1;
+                // Consumption in an unpriced interval cannot be billed at all —
+                // track it so an incomplete price series hard-blocks below
+                // rather than silently under-billing.
+                missing_price_kwh += interval.kwh;
                 continue;
             };
 
@@ -2326,12 +2331,35 @@ impl BillingProvider for DynamicElectricityProvider {
             }
         }
 
+        // §41a EnWG requires a dynamic tariff to be billed on verifiable market
+        // prices for the consumed energy. Consumption in an interval with no
+        // EPEX price cannot be billed at all — dropping it would silently
+        // under-bill and produce an unverifiable invoice. Any missing-price
+        // interval that carries consumption hard-blocks the run, exactly like
+        // the §41b iMSys guard, rather than degrading to a partial bill.
+        if missing_price_kwh > Decimal::ZERO {
+            return Err(EngineError::ValidationBlocked {
+                warnings: vec![BillingWarning {
+                    code: "SECT41A_MISSING_EPEX_PRICES",
+                    severity: WarningSeverity::Error,
+                    message: format!(
+                        "§41a EnWG: {missing_price_intervals} interval(s) totalling \
+                         {missing_price_kwh} kWh have no EPEX Spot price. A dynamic \
+                         tariff cannot be billed on an incomplete price series — import \
+                         the missing prices (PUT /api/v1/epex-prices/{{date}}) or the \
+                         invoice would silently under-bill."
+                    ),
+                }],
+            });
+        }
+        // Missing prices only in zero-consumption intervals are harmless (no
+        // money is at stake); note them for observability and continue.
         if missing_price_intervals > 0 {
             tracing::warn!(
                 missing_intervals = missing_price_intervals,
                 total_intervals = quantities.dynamic_intervals.len(),
-                "DynamicElectricityProvider: {missing_price_intervals} interval(s) skipped \
-                 (no EPEX price data). Set quantities.dynamic_epex_prices from marktd."
+                "DynamicElectricityProvider: {missing_price_intervals} zero-consumption \
+                 interval(s) had no EPEX price."
             );
         }
 

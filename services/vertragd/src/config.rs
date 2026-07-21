@@ -42,6 +42,14 @@ pub struct VertragdConfig {
     /// Default: 50.
     #[serde(default = "VertragdConfig::default_max_identitaeten")]
     pub max_identitaeten_per_kunde: u32,
+    /// Start without token verification.
+    ///
+    /// With `[oidc]` absent the verifier admits every request with dev claims,
+    /// which satisfies every handler — GDPR export, IBAN write and customer
+    /// mutation included. That posture must be asked for by name rather than
+    /// reached by leaving the section out; `main` refuses to start otherwise.
+    #[serde(default)]
+    pub allow_insecure_no_auth: bool,
 }
 
 impl VertragdConfig {

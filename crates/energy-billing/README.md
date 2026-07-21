@@ -465,7 +465,7 @@ pub struct MeterInput {
 |---|---|---|
 | `gas_energiesteuer_befreiung` | §54 EnergieStG | KWK / industrial exemption notice |
 | `gas_leistungspreis_ct_per_kw_month` | §41 EnWG | RLM demand charge for large gas customers |
-| `gas_indexed_price` | §41 Abs. 3 EnWG | B2B TTF/NCG indexed price (alias: `indexed_price`) |
+| `gas_indexed_price` | §41 EnWG (Sonderkundenvertrag) | B2B TTF/NCG indexed price (alias: `indexed_price`) |
 
 ---
 

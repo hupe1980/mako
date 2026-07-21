@@ -168,7 +168,7 @@ impl TarifbdMcpHandler {
             include_expired: None,
             limit: Some(p.limit.unwrap_or(50).min(100)),
         };
-        match list_products(&self.state.pool, &p.lf_mp_id, &q).await {
+        match list_products(&self.state.pool, &p.lf_mp_id, &self.state.tenant, &q).await {
             Ok(products) => ContentBlock::json(serde_json::json!({
                 "lf_mp_id": p.lf_mp_id,
                 "count": products.len(),
@@ -189,7 +189,14 @@ impl TarifbdMcpHandler {
         Parameters(p): Parameters<GetProductParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::fetch_product;
-        match fetch_product(&self.state.pool, &p.lf_mp_id, &p.product_code).await {
+        match fetch_product(
+            &self.state.pool,
+            &p.lf_mp_id,
+            &self.state.tenant,
+            &p.product_code,
+        )
+        .await
+        {
             Ok(Some(product)) => {
                 ContentBlock::json(serde_json::to_value(product).unwrap_or_default())
                     .map(|b| CallToolResult::success(vec![b]))
@@ -212,7 +219,7 @@ impl TarifbdMcpHandler {
         Parameters(p): Parameters<CustomerProductParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::get_customer_product;
-        match get_customer_product(&self.state.pool, &p.malo_id, &p.lf_mp_id).await {
+        match get_customer_product(&self.state.pool, &p.malo_id, &p.lf_mp_id, &self.state.tenant).await {
             Ok(Some(assignment)) => ContentBlock::json(serde_json::to_value(assignment).unwrap_or_default())
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None)),
@@ -422,7 +429,8 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
         description = "Check §41a EnWG EPEX Day-Ahead import status. Returns the latest date for \
                        which EPEX prices are imported and whether tomorrow's prices are already \
                        available. Critical for §41a compliance: D-1 prices must be imported before \
-                       billing can proceed for dynamic tariff customers."
+                       billing can proceed for dynamic tariff customers.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn check_41a_epex_status(
         &self,
@@ -476,14 +484,22 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
         description = "Get the §42 EnWG Energiemix disclosure data for a product. Returns the \
                        BO4E Energiemix COM including fuel mix percentages, CO2 emissions (g/kWh), \
                        radioactive waste (mg/kWh), and Oekolabel certification. Mandatory on \
-                       annual invoices for electricity products."
+                       annual invoices for electricity products.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_product_energiemix(
         &self,
         Parameters(p): Parameters<GetProductParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::fetch_energiemix;
-        match fetch_energiemix(&self.state.pool, &p.lf_mp_id, &p.product_code).await {
+        match fetch_energiemix(
+            &self.state.pool,
+            &p.lf_mp_id,
+            &self.state.tenant,
+            &p.product_code,
+        )
+        .await
+        {
             Ok(Some(mix)) => {
                 let val = serde_json::to_value(mix).unwrap_or_default();
                 Ok(CallToolResult::success(vec![ContentBlock::text(
@@ -512,89 +528,29 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
         &self,
         Parameters(p): Parameters<ValidateTariffConfigParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Re-run the same validation logic used in PUT /api/v1/products/{lf}/{code}.
-        // This ensures the MCP tool is authoritative — not a separate implementation.
-        use crate::handlers::VALID_PREISTYPEN;
-
+        // Single-source of truth: run the EXACT validation the PUT endpoint
+        // runs (`crate::handlers::normalize_tarifpreisblatt`), so config that
+        // this tool blesses cannot be rejected by the write path and vice
+        // versa. Previously this was a separate re-implementation that
+        // diverged on `_version`, `preisstaffeln`, and the sparte↔category
+        // cross-check.
         let category = p.category.to_uppercase();
-        let tarifpreisblatt_categories = &[
-            "STROM",
-            "GAS",
-            "WAERME",
-            "SOLAR",
-            "EEG",
-            "EINSPEISUNG",
-            "WAERMEPUMPE",
-            "WALLBOX",
-            "SHARING",
-        ];
-        let is_bo4e = tarifpreisblatt_categories.contains(&category.as_str());
-
-        // Check _typ for BO4E categories
-        if is_bo4e {
-            match p.data.get("_typ").and_then(|v| v.as_str()) {
-                None => {
-                    return Ok(CallToolResult::success(vec![ContentBlock::text(
-                        "INVALID: missing _typ field. Add: \"_typ\": \"TARIFPREISBLATT\""
-                            .to_owned(),
-                    )]));
-                }
-                Some(t) if t.to_uppercase() != "TARIFPREISBLATT" => {
-                    return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                        "INVALID: _typ must be 'TARIFPREISBLATT' for category {category}, got '{t}'"
-                    ))]));
-                }
-                _ => {}
+        match crate::handlers::normalize_tarifpreisblatt(&category, p.data.clone()) {
+            Ok(_) => Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                "VALID: category={category}. The payload passes the same validation as \
+                 PUT /api/v1/products/{{lf}}/{{code}} (preistyp whitelist, _typ/_version, \
+                 scalar preisstaffeln, sparte↔category, BO4E Tarifpreisblatt roundtrip)."
+            ))])),
+            Err((_status, body)) => {
+                let msg = body
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("validation failed")
+                    .to_owned();
+                Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                    "INVALID: {msg}"
+                ))]))
             }
-        }
-
-        // Check preistyp whitelist
-        let mut errors: Vec<String> = Vec::new();
-        if let Some(positionen) = p
-            .data
-            .get("tarifpreispositionen")
-            .and_then(|v| v.as_array())
-        {
-            for (i, pos) in positionen.iter().enumerate() {
-                if let Some(pt) = pos.get("preistyp").and_then(|v| v.as_str()) {
-                    let upper = pt.to_uppercase();
-                    if !VALID_PREISTYPEN.contains(&upper.as_str()) {
-                        errors.push(format!(
-                            "tarifpreispositionen[{i}].preistyp '{pt}' is not in the whitelist"
-                        ));
-                    }
-                }
-            }
-        }
-
-        if errors.is_empty() {
-            // Attempt full BO4E roundtrip for BO4E categories
-            let result_msg = if is_bo4e {
-                match serde_json::from_value::<rubo4e::current::Tarifpreisblatt>(p.data.clone()) {
-                    Ok(_) => format!(
-                        "VALID: category={category}, _typ=TARIFPREISBLATT. \
-                         All preistyp entries are whitelisted. \
-                         BO4E Tarifpreisblatt deserialised without errors."
-                    ),
-                    Err(e) => format!(
-                        "INVALID (BO4E schema): {e}. \
-                         Check sparte, tariftyp, kundentypen, registeranzahl enum values."
-                    ),
-                }
-            } else {
-                format!(
-                    "VALID: category={category} (non-BO4E category, free-form data accepted). All preistyp entries whitelisted."
-                )
-            };
-            Ok(CallToolResult::success(vec![ContentBlock::text(
-                result_msg,
-            )]))
-        } else {
-            Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-                "INVALID: {} error(s):\n{}",
-                errors.len(),
-                errors.join("\n")
-            ))]))
         }
     }
 
@@ -613,7 +569,14 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::fetch_product;
 
-        let product = match fetch_product(&self.state.pool, &p.lf_mp_id, &p.product_code).await {
+        let product = match fetch_product(
+            &self.state.pool,
+            &p.lf_mp_id,
+            &self.state.tenant,
+            &p.product_code,
+        )
+        .await
+        {
             Ok(Some(pr)) => pr,
             Ok(None) => {
                 return Err(McpError::resource_not_found(
@@ -685,7 +648,7 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
         Parameters(p): Parameters<GetProductParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::fetch_product_history;
-        match fetch_product_history(&self.state.pool, &p.lf_mp_id, &p.product_code).await {
+        match fetch_product_history(&self.state.pool, &p.lf_mp_id, &self.state.tenant, &p.product_code).await {
             Ok(history) => ContentBlock::json(serde_json::json!({
                 "lf_mp_id":     p.lf_mp_id,
                 "product_code": p.product_code,

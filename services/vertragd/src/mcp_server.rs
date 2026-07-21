@@ -189,9 +189,9 @@ impl VertragdMcpHandler {
 
     /// List all upcoming Tarifwechsel (planned but not yet applied).
     ///
-    /// Includes §41 Abs. 3 EnWG 6-week notification status.
+    /// Includes §5 Abs. 2 StromGVV/GasGVV (6 Wochen) / §41 Abs. 5 EnWG (1 Monat) 6-week notification status.
     #[tool(
-        description = "List all Vertragskomponenten with a pending future Tarifwechsel. Shows whether the §41 Abs. 3 EnWG 6-week advance notification was sent.",
+        description = "List all Vertragskomponenten with a pending future Tarifwechsel. Shows whether the §5 Abs. 2 StromGVV/GasGVV (6 Wochen) / §41 Abs. 5 EnWG (1 Monat) 6-week advance notification was sent.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_pending_tarifwechsel(
@@ -218,7 +218,7 @@ impl VertragdMcpHandler {
         ContentBlock::json(serde_json::json!({
             "count": rows.len(),
             "pending": rows,
-            "regulatory_note": "§41 Abs. 3 EnWG: customer must be notified ≥6 weeks before effective date. preisanpassung_notif_sent=false = notification still pending.",
+            "regulatory_note": "Price-change notice: §5 Abs. 2 StromGVV/GasGVV requires six weeks (Grundversorgung); §41 Abs. 5 EnWG requires one month for Haushaltskunden in Sonderverträgen. vertragd notifies 42 days ahead, covering both. preisanpassung_notif_sent=false = notification still pending.",
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
@@ -687,7 +687,7 @@ impl VertragdMcpHandler {
                  **Step 2 — Options**\n\n\
                  **Option A: Wait** — schedule the Tarifwechsel for `wirksamkeit > preisgarantie_bis`.\n\
                  This is the legally correct path. Use `store_pending_tarifwechsel` (via API) with future wirksamkeit.\n\
-                 The background worker will apply it automatically and emit §41 Abs. 3 EnWG 42-day notice.\n\n\
+                 The background worker will apply it automatically and emit §5 Abs. 2 StromGVV/GasGVV (6 Wochen) / §41 Abs. 5 EnWG (1 Monat) 42-day notice.\n\n\
                  **Option B: Operator override with customer consent**\n\
                  Only if the customer has explicitly consented (written waiver of price-lock rights).\n\
                  `POST /api/v1/vertraege/{id}/tarifwechsel` with `override_preisgarantie: true`.\n\
@@ -696,7 +696,7 @@ impl VertragdMcpHandler {
                  This log is immutable and may be reviewed by BNetzA.\n\n\
                  **Step 3 — After the change**\n\
                  Verify `list_pending_tarifwechsel` — `preisanpassung_notif_sent` must become true.\n\
-                 The §41 Abs. 3 EnWG 42-day advance notice will fire automatically.",
+                 The §5 Abs. 2 StromGVV/GasGVV (6 Wochen) / §41 Abs. 5 EnWG (1 Monat) 42-day advance notice will fire automatically.",
             ),
         ]
     }
@@ -723,7 +723,7 @@ impl ServerHandler for VertragdMcpHandler {
              - `get_kunde_by_sub` — OIDC sub → Kunde + active MaLo IDs (portald auth)\n\
              - `get_rahmenvertrag` — B2B framework contract with all child Versorgungsverträge\n\
              - `list_expiring_contracts` — vertragsende/preisgarantie_bis within N days (§41 EnWG)\n\
-             - `list_pending_tarifwechsel` — upcoming Tarifwechsel + §41 Abs. 3 EnWG notification status\n\
+             - `list_pending_tarifwechsel` — upcoming Tarifwechsel + §5 Abs. 2 StromGVV/GasGVV (6 Wochen) / §41 Abs. 5 EnWG (1 Monat) notification status\n\
              - `list_pending_kuendigungen` — GEKÜNDIGT contracts with future lieferende\n\
              - `check_preisgarantie` — check if Tarifwechsel is blocked for a contract (§41 EnWG)\n\
              - `check_mako_trigger_status` — Lieferbeginn UTILMD dispatch status per contract\n\

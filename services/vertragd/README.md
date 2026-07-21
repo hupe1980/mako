@@ -8,8 +8,8 @@ MaLo IDs.
 | Feature | Detail |
 |---|---|
 | **HTTP port** | `:9780` |
-| **Database** | PostgreSQL (3 migrations, sqlx 0.8 dynamic queries) |
-| **Auth** | OIDC/JWT + Cedar ABAC (MCP: API-key bearer) |
+| **Database** | PostgreSQL (single consolidated `0001_schema.sql`, sqlx 0.8 dynamic queries) |
+| **Auth** | OIDC/JWT on every data endpoint (verified `Claims` extractor); fail-closed startup (refuses to boot without `[oidc]` unless `allow_insecure_no_auth = true`); MCP: independent API-key/OIDC layer. Every query is tenant-scoped |
 | **Kunden** | B2C persons + B2B companies; `Geschaeftspartner` schema-validated on PUT |
 | **B2C Person** | `PUT/GET /api/v1/kunden/{id}/person` — `rubo4e::current::Person` BO (GDPR Art. 15) |
 | **Zahlungsinformation** | `PUT/GET /api/v1/kunden/{id}/zahlungsinformation` — typed `Zahlungsinformation` COM; IBAN mod-97 validated |
@@ -18,10 +18,10 @@ MaLo IDs.
 | **B2B portal access** | `kunden_identitaeten` — N OIDC logins per company; role-based + site-scoped (`standort_filter`) |
 | **Rahmenverträge** | B2B framework contracts with Sammelrechnung, indexation, `angebot_id` (CPQ) |
 | **Versorgungsverträge** | Per-site/commodity; status machine ANGELEGT→AKTIV→ABGELAUFEN; idempotent on `erp_contract_id` |
-| **MaKo triggering** | `POST processd /start-supply` per commodity on contract creation; **3× exponential-backoff retry** (10s, 20s, 40s) — failures detected by `find_stuck_komponents` after 5 WT |
+| **MaKo triggering** | `POST processd /start-supply` (`lieferbeginn_datum`) / `/start-supply-gas` (`zaehlpunkt` + `process_date`, YYYYMMDD) per commodity; dispatched over the rows **actually inserted**, so an idempotent re-POST of the same `erp_contract_id` fires no second UTILMD; **3× exponential-backoff retry**; failures flagged by `find_stuck_komponents` after 5 WT |
 | **Tarifwechsel** | `POST /api/v1/vertraege/{id}/tarifwechsel` — changes product without new UTILMD; **blocked within `preisgarantie_bis` window**; override logged to `preisgarantie_override_log` with operator JWT sub |
 | **Preisgarantie** | `PUT/GET /api/v1/vertraege/{id}/preisgarantie` — typed `rubo4e::current::Preisgarantie` COM |
-| **Kündigung** | Coordinated Lieferende + Schlussablesung across all commodities; §14 StromGVV / §13 GasGVV notice period enforced |
+| **Kündigung** | `POST processd /end-supply[-gas]` Lieferende (3× retry) **plus** an independent `edmd` Schlussablesung reading order (§9 MessZV) fired regardless of the Lieferende outcome; §14 StromGVV / §13 GasGVV notice period enforced |
 | **Kündigung Widerruf** | `POST /api/v1/vertraege/{id}/widerruf-kuendigung` — reverts GEKÜNDIGT → AKTIV before lieferende; §20 EnWG LF right to withdraw |
 | **Rahmenvertrag Cascade** | `POST /api/v1/rahmenvertraege/{id}/kuendigen` — terminates all active child Versorgungsverträge; individual notice periods respected; returns dispatched/skipped summary |
 | **Stornierung** | `POST /api/v1/vertraege/{id}/stornieren` — pre-activation cancel (ANGELEGT/IN_BEARBEITUNG only) |
@@ -79,13 +79,15 @@ curl -X POST http://vertragd:9780/api/v1/rahmenvertraege/{id}/kuendigen \
 # → 202 {"dispatched": 8, "skipped": 1, "skipped_details": [...]}
 ```
 
-## Database migrations
+## Database schema
 
-| Migration | Contents |
-|---|---|
-| `0001_initial.sql` | `kunden`, `kunden_identitaeten`, `rahmenvertraege`, `versorgungsvertraege`, `vertragskomponenten`, `received_events`; `person` column; pending Tarifwechsel columns |
-| `0002_zahlungsinformation.sql` | `kunden.zahlungsinformation JSONB` for IBAN/SEPA |
-| `0003_correctness_gdpr.sql` | Unique partial index for `upsert_kunde` idempotency; `anonymization_log`; `preisgarantie_override_log` |
+`migrations/0001_schema.sql` is the single authoritative DDL — designed for a
+fresh install, no incremental migration state. Tables: `kunden`,
+`kunden_identitaeten`, `rahmenvertraege`, `versorgungsvertraege`,
+`vertragskomponenten`, `received_events`, `anonymization_log`,
+`preisgarantie_override_log`. `kunden.zahlungsinformation` is JSONB (IBAN/SEPA);
+`upsert_kunde` idempotency is the partial unique index on
+`(tenant, erp_kunde_id)`.
 
 ## Configuration
 

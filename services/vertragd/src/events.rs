@@ -4,6 +4,11 @@ use serde_json::Value;
 use uuid::Uuid;
 
 /// Build a `de.vertrag.*` CloudEvent.
+///
+/// Every event carries the workspace-standard tracing attributes:
+/// `tenantid` (data-isolation scope) and `correlationid` (the Vertrag the
+/// event belongs to — same value as `subject`, so consumers correlate all
+/// lifecycle events of one contract without parsing `data`).
 pub fn build_cloud_event(event_type: &str, vertrag_id: Uuid, tenant: &str, data: Value) -> Value {
     serde_json::json!({
         "specversion": "1.0",
@@ -12,22 +17,29 @@ pub fn build_cloud_event(event_type: &str, vertrag_id: Uuid, tenant: &str, data:
         "id": Uuid::new_v4().to_string(),
         "time": time::OffsetDateTime::now_utc().to_string(),
         "subject": vertrag_id.to_string(),
+        "tenantid": tenant,
+        "correlationid": vertrag_id.to_string(),
         "datacontenttype": "application/json",
         "data": data,
     })
 }
 
-/// CloudEvent types emitted by `vertragd`:
+/// CloudEvent types emitted by `vertragd` (every emission goes through
+/// [`build_cloud_event`] and is HMAC-signed by the caller):
 ///
 /// | Event type | When |
 /// |---|---|
-/// | `de.vertrag.aktiv` | All components confirmed, billing running |
-/// | `de.vertrag.teilerfuellung` | First component confirmed, others pending |
-/// | `de.vertrag.abgelehnt` | NB rejected one or more components |
-/// | `de.vertrag.gekuendigt` | Lieferende dispatched for all components |
-/// | `de.vertrag.abgeschlossen` | All components ended, Schlussrechnung trigger |
-/// | `de.vertrag.komponente.bestaetigt` | Individual component NB-confirmed |
-/// | `de.vertrag.rahmen.aktiv` | Rahmenvertrag activated |
+/// | `de.vertrag.aktiv` | All components NB-confirmed, billing may start |
+/// | `de.vertrag.gekuendigt` | Lieferende dispatched (Rahmenvertrag cascade, per child) |
+/// | `de.vertrag.kuendigung` | Kündigung accepted, Lieferende dispatched |
+/// | `de.vertrag.kuendigung_widerrufen` | Kündigung withdrawn before Lieferende |
+/// | `de.vertrag.tarifwechsel` | Product change applied immediately |
+/// | `de.vertrag.tarifwechsel_geplant` | Future-dated product change stored |
+/// | `de.vertrag.preisgarantie_updated` | Price guarantee stored/replaced |
+/// | `de.vertrag.preisaenderung.ankuendigung` | Notice worker, ≤ 42 days before Wirksamkeit |
+/// | `de.vertrag.autoerneuerung.ankuendigung` | 30 days before auto-renewal |
+/// | `de.vertrag.ablauf.ankuendigung` | 30 days before vertragsende / preisgarantie_bis |
+///
 /// CloudEvent types consumed from the MaKo event bus.
 pub fn parse_mako_outcome(ce: &Value) -> Option<MakoOutcome> {
     let ce_type = ce.get("type")?.as_str()?;

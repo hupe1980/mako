@@ -56,7 +56,7 @@ COMMENT ON TABLE products IS
 
 COMMENT ON COLUMN products.category IS
     'STROM|GAS|WAERME|SOLAR|EEG|EINSPEISUNG|WAERMEPUMPE|WALLBOX|HEMS|EMOBILITY|'
-    'ENERGIEDIENSTLEISTUNG|BUNDLE';
+    'ENERGIEDIENSTLEISTUNG|BUNDLE|SHARING (13 categories; SHARING = §42c Energy Sharing)';
 
 COMMENT ON COLUMN products.energiemix IS
     '§42 EnWG: rubo4e::current::Energiemix COM — CO₂ emissions, energy sources, '
@@ -86,19 +86,16 @@ CREATE INDEX products_status      ON products (lf_mp_id, product_status, valid_f
 -- Comparison portal feed index (covers pagination ORDER BY) — PUBLISHED only
 CREATE INDEX products_feed_idx    ON products (lf_mp_id, updated_at DESC, product_code ASC)
     WHERE category IN ('STROM','GAS','WAERME','SOLAR','WAERMEPUMPE','WALLBOX')
-      AND product_status = 'PUBLISHED'
-      AND (valid_to IS NULL OR valid_to >= CURRENT_DATE);
+      AND product_status = 'PUBLISHED';
 -- Sparte + kundentyp for portal "show Haushalt Strom tariffs" filter — PUBLISHED only
 CREATE INDEX products_feed_sparte_idx ON products (lf_mp_id, sparte, kundentyp, updated_at DESC)
     WHERE category IN ('STROM','GAS','WAERME','SOLAR','WAERMEPUMPE','WALLBOX')
-      AND product_status = 'PUBLISHED'
-      AND (valid_to IS NULL OR valid_to >= CURRENT_DATE);
+      AND product_status = 'PUBLISHED';
 -- §41a dynamic tariff portal filter — PUBLISHED only
 CREATE INDEX products_feed_dynamic_idx ON products (lf_mp_id, updated_at DESC)
     WHERE dyn_source IS NOT NULL
       AND category IN ('STROM','WAERMEPUMPE','WALLBOX')
-      AND product_status = 'PUBLISHED'
-      AND (valid_to IS NULL OR valid_to >= CURRENT_DATE);
+      AND product_status = 'PUBLISHED';
 -- Tenant filter
 CREATE INDEX products_tenant      ON products (tenant, lf_mp_id, valid_from DESC NULLS LAST);
 
@@ -128,10 +125,15 @@ CREATE TABLE customer_products (
     assigned_from   DATE    NOT NULL,
     assigned_to     DATE,               -- NULL = currently active
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (malo_id, lf_mp_id, assigned_from),
-    FOREIGN KEY (lf_mp_id, product_code, assigned_from)
-        REFERENCES products (lf_mp_id, product_code, valid_from)
-        DEFERRABLE INITIALLY DEFERRED
+    PRIMARY KEY (malo_id, lf_mp_id, assigned_from)
+    -- No FK to products: a customer is assigned from a date that need not equal
+    -- any single product version's `valid_from` (a Tarifwechsel assigns from an
+    -- arbitrary wirksamkeit date, while `products` may hold several versions per
+    -- code). A version-pinned FK — the previous
+    -- `(lf_mp_id, product_code, assigned_from) → products(...,valid_from)` —
+    -- both mismodels this and is rejected by PostgreSQL at commit for any
+    -- assignment where `assigned_from != valid_from`. Product existence is
+    -- enforced in `pg::assign_product` (exists + PUBLISHED + date-window guards).
 );
 
 COMMENT ON TABLE customer_products IS

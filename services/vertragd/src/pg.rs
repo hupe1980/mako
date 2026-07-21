@@ -242,7 +242,7 @@ pub async fn upsert_kunde(pool: &PgPool, tenant: &str, input: &CreateKundeInput)
     // Use RETURNING id so ON CONFLICT returns the *existing* row's id,
     // not the freshly generated UUID that was never inserted.
     // The WHERE clause matches the unique partial index kunden_erp_unique
-    // created in migration 0003 (erp_kunde_id IS NOT NULL rows only).
+    // created in the consolidated schema (0001_schema.sql) (erp_kunde_id IS NOT NULL rows only).
     let row = sqlx::query(
         "INSERT INTO kunden
          (id,tenant,kunden_nr,kundentyp,geschaeftspartner,
@@ -505,13 +505,39 @@ fn days_in_month(year: i32, month: u8) -> u8 {
     }
 }
 
+/// A component row as it exists in the database after insert — carries the
+/// real primary key the MaKo dispatch needs (not a request-body echo).
+#[derive(Debug, Clone)]
+pub struct InsertedKomponente {
+    pub id: Uuid,
+    pub sparte: String,
+    pub malo_id: Option<String>,
+    pub melo_id: Option<String>,
+    pub nb_mp_id: Option<String>,
+    pub lieferbeginn: Date,
+}
+
+/// Result of [`insert_versorgungsvertrag`].
+///
+/// `komponenten` is **empty on an idempotent conflict replay** — the second
+/// POST of the same `erp_contract_id` returns the existing contract with no
+/// components to dispatch, which is what prevents a duplicate Lieferbeginn
+/// UTILMD. The handler dispatches over exactly these rows, never over the
+/// request body.
+#[derive(Debug, Clone)]
+pub struct InsertedVertrag {
+    pub id: Uuid,
+    pub is_new: bool,
+    pub komponenten: Vec<InsertedKomponente>,
+}
+
 pub async fn insert_versorgungsvertrag(
     pool: &PgPool,
     kunden_id: Uuid,
     tenant: &str,
     lf_mp_id: &str,
     input: &CreateVersorgungsvertragInput,
-) -> Result<Uuid> {
+) -> Result<InsertedVertrag> {
     let id = Uuid::new_v4();
     let row = sqlx::query(
         "INSERT INTO versorgungsvertraege
@@ -546,13 +572,26 @@ pub async fn insert_versorgungsvertrag(
     let actual_id: Uuid = row.try_get("id")?;
     // Only insert components for fresh inserts (not on idempotent conflict replay).
     // id = $1 is true only when the row was genuinely inserted; false on conflict.
-    let is_new_insert: bool = row.try_get("is_new_insert").unwrap_or(true);
-    if is_new_insert {
+    let is_new: bool = row.try_get("is_new_insert").unwrap_or(true);
+    let mut komponenten = Vec::new();
+    if is_new {
         for komp in &input.komponenten {
-            insert_komponente(pool, actual_id, lf_mp_id, komp).await?;
+            let komp_id = insert_komponente(pool, actual_id, lf_mp_id, komp).await?;
+            komponenten.push(InsertedKomponente {
+                id: komp_id,
+                sparte: komp.sparte.clone(),
+                malo_id: komp.malo_id.clone(),
+                melo_id: komp.melo_id.clone(),
+                nb_mp_id: komp.nb_mp_id.clone(),
+                lieferbeginn: komp.lieferbeginn,
+            });
         }
     }
-    Ok(actual_id)
+    Ok(InsertedVertrag {
+        id: actual_id,
+        is_new,
+        komponenten,
+    })
 }
 
 pub async fn insert_komponente(
@@ -734,14 +773,20 @@ pub async fn list_aktive_malo_ids(
     Ok(rows.into_iter().map(|(m,)| m).collect())
 }
 
-pub async fn update_vertrag_status(pool: &PgPool, id: Uuid, status: &str) -> Result<()> {
+pub async fn update_vertrag_status(
+    pool: &PgPool,
+    id: Uuid,
+    tenant: &str,
+    status: &str,
+) -> Result<()> {
     sqlx::query(
         "UPDATE versorgungsvertraege SET status=$1, updated_at=now(),
          completed_at = CASE WHEN $1 IN ('ABGELAUFEN','STORNIERT') THEN now() ELSE completed_at END
-         WHERE id=$2",
+         WHERE id=$2 AND tenant=$3",
     )
     .bind(status)
     .bind(id)
+    .bind(tenant)
     .execute(pool)
     .await?;
     Ok(())
@@ -1058,13 +1103,20 @@ pub async fn find_tarifwechsel_due_today(
 /// (i.e., `pending_wirksamkeit` is in [today+41d, today+42d]) and the notification
 /// has not yet been sent.
 ///
-/// The window is 1 day wide so the daily background run fires exactly once.
+/// Catch-up semantics: everything whose Wirksamkeit lies within the next 42
+/// days and has not been notified yet is returned. `preisanpassung_notif_sent`
+/// (set by the caller after emission) is what makes the daily run fire once
+/// per component — NOT a narrow date window. A one-day window would silently
+/// skip the notice whenever the worker missed a single day; a late notice is
+/// still owed (§5 Abs. 2 StromGVV/GasGVV six weeks; §41 Abs. 5 EnWG one month
+/// for Haushaltskunden), and the caller can see from `pending_wirksamkeit`
+/// how much notice actually remains.
 pub async fn find_tarifwechsel_needing_notif(
     pool: &PgPool,
     tenant: &str,
     today: Date,
 ) -> Result<Vec<PendingTarifwechselRow>> {
-    let window_start = today + time::Duration::days(41);
+    let window_start = today;
     let window_end = today + time::Duration::days(42);
     Ok(sqlx::query_as::<_, PendingTarifwechselRow>(
         r"SELECT k.id AS komp_id,
@@ -1079,8 +1131,8 @@ pub async fn find_tarifwechsel_needing_notif(
           FROM vertragskomponenten k
           JOIN versorgungsvertraege v ON v.id = k.vertrag_id
           WHERE k.tenant = $1
-            AND k.pending_wirksamkeit >= $2
-            AND k.pending_wirksamkeit <  $3
+            AND k.pending_wirksamkeit >  $2
+            AND k.pending_wirksamkeit <= $3
             AND k.pending_product_code IS NOT NULL
             AND k.preisanpassung_notif_sent = FALSE",
     )
@@ -1179,20 +1231,34 @@ pub async fn list_kunden(
 /// limitation: processd processes are idempotent and will be rejected by the NB if
 /// Lieferbeginn was already confirmed).
 pub async fn storniere_vertrag(pool: &PgPool, id: Uuid, tenant: &str) -> anyhow::Result<()> {
-    // Mark all non-terminal components STORNIERT.
+    // The contract row FIRST, guarded on state: Stornierung is a
+    // pre-activation cancel. A contract in AKTIV/TEILERFUELLUNG carries a
+    // confirmed MaKo commitment — cancelling it here would contradict the
+    // NB-confirmed Lieferbeginn; that path is Kündigung, not Stornierung.
+    // The guard lives in SQL, not only in the handler, so no other caller
+    // can bypass it.
+    let updated = sqlx::query(
+        "UPDATE versorgungsvertraege SET status = 'STORNIERT', updated_at = now()
+         WHERE id = $1 AND tenant = $2
+           AND status IN ('ANGELEGT','IN_BEARBEITUNG')",
+    )
+    .bind(id)
+    .bind(tenant)
+    .execute(pool)
+    .await?;
+    if updated.rows_affected() == 0 {
+        anyhow::bail!(
+            "Stornierung refused: contract is not in ANGELEGT/IN_BEARBEITUNG \
+             (active supply must be terminated via Kündigung)"
+        );
+    }
+    // Then the components — tenant-scoped like every other mutation.
     sqlx::query(
         r"UPDATE vertragskomponenten
           SET status = 'STORNIERT', updated_at = now()
           WHERE vertrag_id = $1
+            AND tenant = $2
             AND status NOT IN ('AKTIV','BEENDET','BESTAETIGT','STORNIERT')",
-    )
-    .bind(id)
-    .execute(pool)
-    .await?;
-    // Mark the contract STORNIERT.
-    sqlx::query(
-        "UPDATE versorgungsvertraege SET status = 'STORNIERT', updated_at = now()
-         WHERE id = $1 AND tenant = $2",
     )
     .bind(id)
     .bind(tenant)
@@ -1738,7 +1804,7 @@ pub async fn apply_auto_renewal(pool: &PgPool, id: Uuid, new_end: Date) -> anyho
 /// - `kunden_identitaeten.email` / `display_name` — nulled
 /// - `kunden_identitaeten.aktiv` — set false (prevents portal access)
 ///
-/// An immutable log entry is created in `anonymization_log` (migration 0003).
+/// An immutable log entry is created in `anonymization_log` (the consolidated schema (0001_schema.sql)).
 pub async fn anonymize_kunde(
     pool: &PgPool,
     kunden_id: Uuid,
@@ -1802,7 +1868,7 @@ pub async fn anonymize_kunde(
     .execute(pool)
     .await?;
 
-    // Write immutable audit log entry (migration 0003).
+    // Write immutable audit log entry (the consolidated schema (0001_schema.sql)).
     sqlx::query(
         r"INSERT INTO anonymization_log
           (tenant, kunden_id, anonymized_fields, requested_by, retention_basis)

@@ -193,7 +193,7 @@ flowchart TD
 
     aktiv --> kuendigen["POST /vertraege/{id}/kuendigen\n{ lieferende: '2026-12-31' }"]
     kuendigen --> end_supply["processd /end-supply per commodity\n+ edmd LIEFERENDE Ablesesteuerung"]
-    end_supply --> beendet["Vertrag: ABGELAUFEN\nde.vertrag.abgeschlossen → ERP"]
+    end_supply --> beendet["Vertrag: ABGELAUFEN\nSchlussrechnung basis → billingd"]
 
     style aktiv fill:#22c55e,color:#fff
     style beendet fill:#94a3b8,color:#fff
@@ -216,7 +216,7 @@ stateDiagram-v2
     IN_BEARBEITUNG --> STORNIERT: all positions ABGELEHNT
 
     note right of AKTIV: billingd bills monthly\nper Vertragskomponente
-    note right of ABGELAUFEN: Schlussrechnung emitted\nde.vertrag.abgeschlossen
+    note right of ABGELAUFEN: Schlussrechnung basis (billingd)
 ```
 
 ---
@@ -228,12 +228,17 @@ stateDiagram-v2
 
 ```
 1.  Customer logs in → portald receives JWT
-2.  portald: GET vertragd /api/v1/kunden/by-sub/{sub}
-    → { kunde, identity: { rolle, standort_filter }, active_malo_ids: [...] }
-3.  portald scopes all requests to returned malo_ids
+2.  portald: GET vertragd /api/v1/kunden/authenticate?malo_id=51238696781
+    (forwards the customer's Bearer token; vertragd verifies it via the same
+     OIDC Claims check as every other endpoint)
+    → { kunden_id, kundentyp, malo_id }   on 200, else a uniform 403
+3.  portald scopes all further requests to the returned kunden_id
 
-Per-request check (for sensitive data):
-    GET vertragd /api/v1/kunden/authenticate?malo_id=51238696781
+The `GET /api/v1/kunden/by-sub/{sub}` endpoint resolves a sub to a Kunde +
+scoped MaLo IDs for operator/MCP use; the portald request path uses
+`authenticate`, which returns a uniform 403 for every not-authorized outcome
+(unknown sub, unowned MaLo, out-of-site MaLo) so a token holder cannot
+enumerate which subjects or MaLo IDs exist.
     → 200 OK   (sub owns this MaLo within standort_filter scope)
     → 403      (no matching active KundenIdentitaet or site out of scope)
 ```
@@ -496,15 +501,21 @@ All events are delivered as CloudEvents 1.0 JSON to `erp.webhook_url` with an
 | Event type | When |
 |---|---|
 | `de.vertrag.aktiv` | All commodity Komponenten confirmed by NB |
-| `de.vertrag.teilerfuellung` | First Komponente confirmed, others still pending |
-| `de.vertrag.tarifwechsel` | Product change committed (immediate or on `wirksamkeit`) |
-| `de.vertrag.tarifwechsel_geplant` | Future Tarifwechsel stored (applied by background worker) |
-| `de.vertrag.preisaenderung.ankuendigung` | 42 days before `wirksamkeit` (§41 Abs. 3 EnWG ≥ 6 weeks notice) |
+| `de.vertrag.gekuendigt` | Lieferende dispatched (Rahmenvertrag cascade, per child contract) |
+| `de.vertrag.kuendigung_widerrufen` | Kündigung revoked via `POST /widerruf-kuendigung`; contract returned to AKTIV |
+| `de.vertrag.tarifwechsel` | Product change committed immediately (handler or due-worker) |
+| `de.vertrag.tarifwechsel_geplant` | Future-dated Tarifwechsel stored (applied later by the due-worker) |
+| `de.vertrag.preisgarantie_updated` | Price guarantee stored or replaced |
+| `de.vertrag.preisaenderung.ankuendigung` | ≤ 42 days before `wirksamkeit` (§5 Abs. 2 StromGVV/GasGVV six weeks; §41 Abs. 5 EnWG one month for Haushaltskunden) |
 | `de.vertrag.autoerneuerung.ankuendigung` | 30 days before auto-renewal (§13 GasGVV / §14 StromGVV) |
 | `de.vertrag.ablauf.ankuendigung` | 30 days before `vertragsende` or `preisgarantie_bis` expiry (§13 GasGVV / §41 EnWG) |
-| `de.vertrag.abgeschlossen` | All Lieferende confirmed; Schlussrechnung trigger |
-| `de.vertrag.kuendigung_widerrufen` | Kündigung revoked via `POST /widerruf-kuendigung`; contract returned to AKTIV |
-| `de.vertrag.position.abgelehnt` | NB rejected a commodity (ERC A02 / A05 / A97) |
+
+Every event goes through the same builder — CloudEvents 1.0 with `tenantid`
+and `correlationid` (the Vertrag id) — and is HMAC-signed (`X-Mako-Signature:
+sha256=…`) when an `erp_hmac_secret` is configured, background workers
+included. The price-change notice advances its `preisanpassung_notif_sent`
+flag only on a confirmed 2xx delivery, so a failed webhook is retried rather
+than silently skipped.
 
 ---
 

@@ -73,7 +73,7 @@ Port: **`:9480`**
 |--------|------|-------------|
 | `GET`  | `/api/v1/portal/{malo_id}/vertrag` | Current supply contract (resolved via `vertragd`) |
 | `POST` | `/api/v1/portal/{malo_id}/tarifwechsel` | Tariff switch (§41 Abs. 1 EnWG; min. 14 days notice) |
-| `POST` | `/api/v1/portal/{malo_id}/kuendigen` | Contract termination (§41 Abs. 3 EnWG; min. 14 days) |
+| `POST` | `/api/v1/portal/{malo_id}/kuendigen` | Contract termination (notice period per contract; §20 StromGVV/GasGVV two weeks in Grundversorgung) |
 | `PUT`  | `/api/v1/portal/{malo_id}/kontakt` | Update contact data (GDPR Art. 16) |
 | `PUT`  | `/api/v1/portal/{malo_id}/sepa` | Update SEPA direct-debit mandate |
 | `GET`  | `/api/v1/portal/{malo_id}/invoices/{id}/download` | ZUGFeRD 2.3 / XRechnung 3.0 CII XML |

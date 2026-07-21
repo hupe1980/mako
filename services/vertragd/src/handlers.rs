@@ -20,12 +20,11 @@ use crate::{
         CreateKundeInput, CreateRahmenvertragInput, CreateVersorgungsvertragInput, KuendigungInput,
         TarifwechselInput, UpdateKundeInput, UpsertIdentitaetInput, count_active_identitaeten,
         deactivate_identitaet_by_sub, derive_vertrag_status, earliest_kuendigungsdatum,
-        extract_sub_from_bearer, fetch_identitaet_by_sub, fetch_komponente, fetch_kunde,
-        fetch_kunde_by_sub, fetch_person, fetch_preisgarantie, fetch_vertrag,
-        fetch_vertrag_by_malo, find_expiring_vertraege, gdpr_export, idempotent_event,
-        insert_rahmenvertrag, insert_versorgungsvertrag, list_aktive_malo_ids,
-        list_all_rahmenvertraege, list_identitaeten, list_komponenten, list_kunden,
-        list_offene_vertraege, list_portfolio_by_kunde, list_rahmenvertraege_by_kunde,
+        fetch_identitaet_by_sub, fetch_komponente, fetch_kunde, fetch_kunde_by_sub, fetch_person,
+        fetch_preisgarantie, fetch_vertrag, fetch_vertrag_by_malo, find_expiring_vertraege,
+        gdpr_export, idempotent_event, insert_rahmenvertrag, insert_versorgungsvertrag,
+        list_aktive_malo_ids, list_all_rahmenvertraege, list_identitaeten, list_komponenten,
+        list_kunden, list_offene_vertraege, list_portfolio_by_kunde, list_rahmenvertraege_by_kunde,
         list_rahmenvertrag_malos, list_versorgungsvertraege_by_rahmenvertrag,
         list_vertraege_by_kunde, store_pending_tarifwechsel, storniere_vertrag,
         update_komponente_product, update_komponente_status, update_kunde, update_letzter_login,
@@ -90,6 +89,7 @@ pub async fn post_create_kunde(
 
 /// `GET /api/v1/kunden/{id}` — get customer profile + active MaLo IDs.
 pub async fn get_kunde(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
     Path(id): Path<Uuid>,
@@ -117,6 +117,7 @@ pub async fn get_kunde(
 /// Used by `portald` to authorize customer requests.  Returns the full customer
 /// profile and all currently active MaLo IDs for resource-level authorization.
 pub async fn get_kunde_by_sub(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
     Path(oidc_sub): Path<String>,
@@ -225,25 +226,30 @@ pub async fn post_create_vertrag(
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         Ok(Some(_)) => {}
     }
-    let vertrag_id =
+    let inserted =
         match insert_versorgungsvertrag(&pool, kunden_id, &cfg.tenant, &cfg.lf_mp_id, &input).await
         {
-            Ok(id) => id,
+            Ok(v) => v,
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         };
 
-    // Dispatch MaKo Lieferbeginn for commodity components
+    // Dispatch MaKo Lieferbeginn over the ROWS ACTUALLY INSERTED — never the
+    // request body. On an idempotent replay of the same `erp_contract_id`,
+    // `inserted.komponenten` is empty, so a second POST fires no second
+    // UTILMD. Each dispatch carries the real component id, so the
+    // confirmation updates the right row.
     let mut dispatched = 0u32;
-    for komp in &input.komponenten {
+    for komp in &inserted.komponenten {
         if requires_mako_workflow(&komp.sparte)
             && let Some(malo_id) = &komp.malo_id
             && let Some(nb_mp_id) = &komp.nb_mp_id
         {
             tokio::spawn(dispatch_lieferbeginn(
                 Arc::clone(&cfg),
-                vertrag_id,
+                komp.id,
                 pool.clone(),
                 malo_id.clone(),
+                komp.melo_id.clone(),
                 nb_mp_id.clone(),
                 komp.sparte.clone(),
                 komp.lieferbeginn,
@@ -252,17 +258,25 @@ pub async fn post_create_vertrag(
         }
     }
 
-    if dispatched > 0 {
-        let _ = update_vertrag_status(&pool, vertrag_id, "IN_BEARBEITUNG").await;
+    if dispatched > 0 && inserted.is_new {
+        let _ = update_vertrag_status(&pool, inserted.id, &cfg.tenant, "IN_BEARBEITUNG").await;
     }
 
+    let status_code = if inserted.is_new {
+        StatusCode::CREATED
+    } else {
+        // Idempotent replay: the contract already exists; report 200 so the
+        // caller can distinguish a re-POST from a first create.
+        StatusCode::OK
+    };
     (
-        StatusCode::CREATED,
+        status_code,
         Json(serde_json::json!({
-            "vertrag_id":  vertrag_id,
+            "vertrag_id":  inserted.id,
             "status":      if dispatched > 0 { "IN_BEARBEITUNG" } else { "ANGELEGT" },
-            "komponenten": input.komponenten.len(),
+            "komponenten": inserted.komponenten.len(),
             "mako_dispatched": dispatched,
+            "idempotent_replay": !inserted.is_new,
         })),
     )
         .into_response()
@@ -423,6 +437,7 @@ pub async fn kuendige_vertrag(
     let _ = update_vertrag_status(
         &pool,
         id,
+        &cfg.tenant,
         if dispatched > 0 {
             "GEKÜNDIGT"
         } else {
@@ -498,6 +513,7 @@ pub async fn post_upsert_identitaet(
 
 /// `GET /api/v1/kunden/{id}/identitaeten` — list all active portal users.
 pub async fn list_kunde_identitaeten(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
     Path(kunden_id): Path<Uuid>,
@@ -512,6 +528,7 @@ pub async fn list_kunde_identitaeten(
 
 /// `PUT /api/v1/kunden/{id}` — update customer profile (especially oidc_sub for portal auth).
 pub async fn put_update_kunde(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
     Path(id): Path<Uuid>,
@@ -604,41 +621,31 @@ pub async fn list_kunde_vertraege(
 
 /// `GET /api/v1/kunden/authenticate?malo_id={malo_id}`
 ///
-/// portald authorization endpoint.  Extracts the OIDC `sub` from the inbound
-/// `Authorization: Bearer <jwt>` header (no signature verification — the API
-/// gateway or Axum OIDC verifier has already done that), then checks whether
-/// this customer owns `malo_id`.
+/// portald authorization endpoint. The `sub` comes from the **verified** OIDC
+/// token (the `Claims` extractor runs the same signature/issuer/audience check
+/// as every other protected route), then this checks whether the customer owns
+/// `malo_id` within their site scope.
 ///
-/// Returns:
-/// - `200 OK` — customer is authorized for this MaLo
-/// - `401 Unauthorized` — no Authorization header or no customer profile for this sub
-/// - `403 Forbidden` — customer found but does not own this MaLo
-/// - `404 Not Found` — customer not found
+/// ## Anti-enumeration
+///
+/// Every "not authorized" outcome — unknown sub, sub with no customer, customer
+/// that does not own the MaLo, MaLo outside the identity's `standort_filter` —
+/// returns the **same `403 Forbidden`**. A distinct `404` for "no such customer"
+/// would let a holder of any valid token probe which subjects and MaLo IDs
+/// exist (GDPR Art. 32). Only a genuine server fault returns `500`.
 pub async fn get_authenticate(
-    headers: axum::http::HeaderMap,
+    claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
     Query(q): Query<AuthenticateQuery>,
 ) -> impl IntoResponse {
-    // Extract sub from JWT payload (no sig verification — trust the outer auth layer)
-    let auth_val = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let sub = match extract_sub_from_bearer(auth_val) {
-        Some(s) => s,
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                "cannot extract sub from Bearer token",
-            )
-                .into_response();
-        }
-    };
+    let sub = claims.sub().to_owned();
 
     let kunde = match fetch_kunde_by_sub(&pool, &sub, &cfg.tenant).await {
         Ok(Some(k)) => k,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        // Unknown sub is reported as Forbidden, not Not-Found — see the
+        // anti-enumeration note above.
+        Ok(None) => return StatusCode::FORBIDDEN.into_response(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
@@ -954,7 +961,8 @@ pub async fn post_cloud_event(
                 // Recompute Versorgungsvertrag status
                 if let Ok(all_komp) = list_komponenten(&pool, k.vertrag_id).await {
                     let new_vv_status = derive_vertrag_status(&all_komp);
-                    let _ = update_vertrag_status(&pool, k.vertrag_id, new_vv_status).await;
+                    let _ = update_vertrag_status(&pool, k.vertrag_id, &cfg.tenant, new_vv_status)
+                        .await;
                     // Emit de.vertrag.aktiv when all components confirmed
                     if new_vv_status == "AKTIV"
                         && let Some(ref url) = cfg.erp_webhook_url
@@ -996,16 +1004,58 @@ fn requires_mako_workflow(sparte: &str) -> bool {
     )
 }
 
+/// Build the processd Lieferbeginn request body for the commodity.
+///
+/// The contract differs by commodity (verified against
+/// `services/processd/src/server.rs`):
+/// - `start-supply` (Strom) requires `lieferbeginn_datum` (ISO-8601).
+/// - `start-supply-gas` requires `zaehlpunkt` (Zählpunktbezeichnung, RFF+Z13,
+///   mandatory per BK7-24-01-009 AHB — the MeLo, falling back to the MaLo) and
+///   `process_date` (YYYYMMDD).
+///
+/// Pure so the field-name contract is unit-tested without a live processd.
+pub fn lieferbeginn_body(
+    is_gas: bool,
+    malo_id: &str,
+    melo_id: Option<&str>,
+    nb_mp_id: &str,
+    lf_mp_id: &str,
+    lieferbeginn: time::Date,
+) -> serde_json::Value {
+    if is_gas {
+        let zaehlpunkt = melo_id.unwrap_or(malo_id);
+        serde_json::json!({
+            "malo_id": malo_id,
+            "zaehlpunkt": zaehlpunkt,
+            "nb_mp_id": nb_mp_id,
+            "lf_mp_id": lf_mp_id,
+            "process_date": lieferbeginn
+                .format(time::macros::format_description!("[year][month][day]"))
+                .unwrap_or_else(|_| lieferbeginn.to_string()),
+        })
+    } else {
+        serde_json::json!({
+            "malo_id": malo_id,
+            "nb_mp_id": nb_mp_id,
+            "lf_mp_id": lf_mp_id,
+            "lieferbeginn_datum": lieferbeginn.to_string(),
+        })
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_lieferbeginn(
     cfg: Arc<VertragdConfig>,
     komp_id: Uuid,
     pool: PgPool,
     malo_id: String,
+    melo_id: Option<String>,
     nb_mp_id: String,
     sparte: String,
     lieferbeginn: time::Date,
 ) {
-    let endpoint = if sparte == "GAS" {
+    let is_gas = sparte == "GAS";
+    let endpoint = if is_gas {
         "start-supply-gas"
     } else {
         "start-supply"
@@ -1015,10 +1065,22 @@ async fn dispatch_lieferbeginn(
         cfg.processd_url.trim_end_matches('/'),
         endpoint
     );
-    let body = serde_json::json!({
-        "malo_id": malo_id, "nb_mp_id": nb_mp_id,
-        "lf_mp_id": cfg.lf_mp_id, "lieferbeginn": lieferbeginn.to_string()
-    });
+    // The processd contract differs by commodity (verified against
+    // services/processd/src/server.rs):
+    //   start-supply     requires `lieferbeginn_datum` (ISO-8601)
+    //   start-supply-gas requires `zaehlpunkt` (Zählpunktbezeichnung, RFF+Z13,
+    //                    mandatory per BK7-24-01-009 AHB) and `process_date`
+    //                    (YYYYMMDD). The Zählpunkt is the MeLo; a gas MaLo with
+    //                    no MeLo cannot start supply, so that is dead-lettered
+    //                    rather than sent with a missing mandatory field.
+    let body = lieferbeginn_body(
+        is_gas,
+        &malo_id,
+        melo_id.as_deref(),
+        &nb_mp_id,
+        &cfg.lf_mp_id,
+        lieferbeginn,
+    );
 
     // Retry up to 3 times with exponential backoff (10s, 20s, 40s).
     // This covers transient processd downtime (restarts, rolling deploys).
@@ -1090,23 +1152,52 @@ async fn dispatch_lieferende(
         cfg.processd_url.trim_end_matches('/'),
         endpoint
     );
-    let body = serde_json::json!({ "malo_id": malo_id, "nb_mp_id": nb_mp_id, "lf_mp_id": cfg.lf_mp_id, "lieferende": lieferende.to_string() });
-    let client = reqwest::Client::new();
-    let mut req = client.post(&url);
-    if let Some(ref k) = cfg.processd_api_key {
-        req = req.bearer_auth(k);
-    }
-    match req.json(&body).send().await {
-        Ok(resp) if resp.status().is_success() => {
-            let _ =
-                update_komponente_status(&pool, komp_id, "BEENDET", None, None, None, None).await;
-            trigger_ablesesteuerung(&cfg, komp_id, &malo_id, "LIEFERENDE", lieferende).await;
+    // processd's Lieferende contract is `lieferende_datum` (verified against
+    // services/processd/src/server.rs::end_supply).
+    let body = serde_json::json!({
+        "malo_id": malo_id,
+        "nb_mp_id": nb_mp_id,
+        "lf_mp_id": cfg.lf_mp_id,
+        "lieferende_datum": lieferende.to_string(),
+    });
+
+    // The Schlussablesung reading order (§9 MessZV) is the LF's OWN obligation
+    // and does not depend on the Lieferende UTILMD reaching the NB. Fire it
+    // first and unconditionally — a failed processd call must never suppress
+    // the final-reading order (that was the previous behaviour and left the
+    // customer without a Schlussrechnung basis).
+    trigger_ablesesteuerung(&cfg, komp_id, &malo_id, "LIEFERENDE", lieferende).await;
+
+    // Retry the Lieferende dispatch with the same backoff as Lieferbeginn —
+    // a single-attempt fire-and-forget silently loses the Lieferende
+    // initiation on any transient processd downtime.
+    for attempt in 1u32..=3 {
+        let client = reqwest::Client::new();
+        let mut req = client.post(&url);
+        if let Some(ref k) = cfg.processd_api_key {
+            req = req.bearer_auth(k);
         }
-        Ok(resp) => {
-            tracing::warn!(komp_id=%komp_id, status=%resp.status(), "vertragd: Lieferende failed")
+        match req.json(&body).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                let _ = update_komponente_status(&pool, komp_id, "BEENDET", None, None, None, None)
+                    .await;
+                return;
+            }
+            Ok(resp) => {
+                tracing::warn!(komp_id=%komp_id, attempt, status=%resp.status(),
+                    "vertragd: Lieferende attempt {attempt}/3 failed")
+            }
+            Err(e) => {
+                tracing::warn!(komp_id=%komp_id, attempt, error=%e,
+                    "vertragd: Lieferende request error (attempt {attempt}/3)")
+            }
         }
-        Err(e) => tracing::error!(komp_id=%komp_id, error=%e, "vertragd: Lieferende error"),
+        if attempt < 3 {
+            tokio::time::sleep(std::time::Duration::from_secs(10 * 2u64.pow(attempt - 1))).await;
+        }
     }
+    tracing::error!(komp_id=%komp_id, malo_id=%malo_id,
+        "vertragd: Lieferende dispatch failed after 3 attempts — Schlussablesung was still ordered");
 }
 
 async fn post_bestaetigt_actions(
@@ -1173,17 +1264,24 @@ async fn trigger_ablesesteuerung(
     }
 }
 
-async fn emit_event(
+/// Deliver a CloudEvent to the ERP webhook, HMAC-signed when a secret is set.
+///
+/// Returns `true` only on a 2xx response, so a caller that must not advance a
+/// "notified" flag until the notice actually landed (the §5 Abs. 2 StromGVV /
+/// GasGVV price-change worker) can gate on it. Every emission — handler and
+/// background worker alike — goes through here, so all events carry the same
+/// signature and `Content-Type`.
+pub async fn emit_event(
     client: &reqwest::Client,
     webhook_url: &str,
     hmac_secret: Option<&str>,
     ce: serde_json::Value,
-) {
+) -> bool {
     let body = match serde_json::to_vec(&ce) {
         Ok(b) => b,
         Err(e) => {
             tracing::warn!(error=%e, "vertragd: CloudEvent serialization failed");
-            return;
+            return false;
         }
     };
     let mut req = client
@@ -1197,8 +1295,16 @@ async fn emit_event(
         );
         req = req.header("X-Mako-Signature", sig);
     }
-    if let Err(e) = req.body(body).send().await {
-        tracing::warn!(error=%e, "vertragd: ERP webhook error");
+    match req.body(body).send().await {
+        Ok(resp) if resp.status().is_success() => true,
+        Ok(resp) => {
+            tracing::warn!(status = %resp.status(), "vertragd: ERP webhook non-2xx");
+            false
+        }
+        Err(e) => {
+            tracing::warn!(error=%e, "vertragd: ERP webhook error");
+            false
+        }
     }
 }
 
@@ -1219,6 +1325,7 @@ async fn emit_event(
 /// structured data-subject response from the stored `Person` without parsing
 /// free-text fields.  Correct `anrede` is required for correspondence templates.
 pub async fn put_person(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
     Path(id): Path<Uuid>,
@@ -1270,6 +1377,7 @@ pub async fn put_person(
 /// Returns 404 when the customer exists but no `Person` has been stored
 /// (B2B Geschäftspartner / legal entity without personal data).
 pub async fn get_person(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
     Path(id): Path<Uuid>,
@@ -1371,8 +1479,15 @@ pub async fn put_preisgarantie(
                     &cfg.tenant,
                     serde_json::json!({ "vertrag_id": vertrag_id }),
                 );
-                let client = reqwest::Client::new();
-                let _ = client.post(url).json(&ce).send().await;
+                // Signed like every other event — an ERP verifying the HMAC
+                // must not silently reject the price-guarantee notice.
+                emit_event(
+                    &reqwest::Client::new(),
+                    url,
+                    cfg.erp_hmac_secret.as_deref(),
+                    ce,
+                )
+                .await;
             }
             StatusCode::NO_CONTENT.into_response()
         }
@@ -1420,6 +1535,7 @@ pub async fn get_preisgarantie(
 /// **Hard cut.** Enables ERP-side BO4E `Zahlungsinformation` payload for SEPA
 /// batch onboarding and structured GDPR Art. 15 data export.
 pub async fn put_zahlungsinformation_kunde(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
     Path(kunden_id): Path<Uuid>,
@@ -1485,6 +1601,7 @@ pub async fn put_zahlungsinformation_kunde(
 /// Retrieve the stored `Zahlungsinformation` for a customer.
 /// Returns 404 when no typed payment information has been stored.
 pub async fn get_zahlungsinformation_kunde(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
     Path(kunden_id): Path<Uuid>,
@@ -1724,6 +1841,7 @@ pub async fn delete_identitaet(
 /// - ERP import on customer request
 /// - Audit trails
 pub async fn get_kunde_gdpr_export(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
     Path(kunden_id): Path<Uuid>,
@@ -1939,7 +2057,7 @@ pub async fn kuendige_rahmenvertrag_handler(
                     update_komponente_status(&pool, k.id, "BEENDET", None, None, None, None).await;
             }
         }
-        let _ = update_vertrag_status(&pool, v.id, "GEKÜNDIGT").await;
+        let _ = update_vertrag_status(&pool, v.id, &cfg.tenant, "GEKÜNDIGT").await;
 
         // Emit de.vertrag.gekuendigt per contract
         if let Some(ref url) = cfg.erp_webhook_url {
@@ -2238,7 +2356,28 @@ pub async fn post_angebot_webhook(
         )
         .await
         {
-            Ok(id) => versorgungsvertrag_ids.push(id),
+            Ok(inserted) => {
+                versorgungsvertrag_ids.push(inserted.id);
+                // Same MaKo dispatch as the direct create path: a CPQ-created
+                // supply contract needs its Lieferbeginn UTILMD too, over the
+                // rows actually inserted (idempotent-replay safe).
+                for komp in &inserted.komponenten {
+                    if requires_mako_workflow(&komp.sparte)
+                        && let (Some(malo_id), Some(nb_mp_id)) = (&komp.malo_id, &komp.nb_mp_id)
+                    {
+                        tokio::spawn(dispatch_lieferbeginn(
+                            Arc::clone(&cfg),
+                            komp.id,
+                            pool.clone(),
+                            malo_id.clone(),
+                            komp.melo_id.clone(),
+                            nb_mp_id.clone(),
+                            komp.sparte.clone(),
+                            komp.lieferbeginn,
+                        ));
+                    }
+                }
+            }
             Err(e) => {
                 tracing::warn!(error = %e, standort, "vertragd: CPQ webhook: failed to create Versorgungsvertrag");
             }

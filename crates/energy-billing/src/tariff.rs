@@ -191,7 +191,7 @@ pub struct BlockTierInput {
 
 // ── IndexedPriceConfig ────────────────────────────────────────────────────────
 
-/// Indexed price for B2B contracts — §41 Abs. 3 EnWG.
+/// Indexed price for B2B contracts (§41 EnWG Sonderkundenvertrag).
 ///
 /// Effective = base_ct + spread_ct + (index_value × factor_ct_per_unit).
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -257,7 +257,7 @@ pub struct ElectricityProduct {
     /// Block/graduated tariff tiers. Overrides arbeitspreis_ct_per_kwh when set.
     #[serde(default)]
     pub block_tiers: Option<Vec<BlockTierInput>>,
-    /// B2B indexed price (Phelix Base, EEX etc.). §41 Abs. 3 EnWG.
+    /// B2B indexed price (Phelix Base, EEX etc.) — §41 EnWG Sonderkundenvertrag.
     #[serde(default)]
     pub indexed_price: Option<IndexedPriceConfig>,
     #[serde(default)]
@@ -356,7 +356,7 @@ pub struct GasProduct {
     /// RLM demand charge (ct/kW/month) for large gas customers. §41 EnWG.
     #[serde(default)]
     pub gas_leistungspreis_ct_per_kw_month: Option<Decimal>,
-    /// B2B indexed gas price (TTF, NCG, GASPOOL). §41 Abs. 3 EnWG.
+    /// B2B indexed gas price (TTF, NCG, GASPOOL) — §41 EnWG Sonderkundenvertrag.
     /// Also accepted as `"indexed_price"` for backward compat.
     #[serde(default, alias = "indexed_price")]
     pub gas_indexed_price: Option<IndexedPriceConfig>,

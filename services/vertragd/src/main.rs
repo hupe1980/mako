@@ -61,7 +61,7 @@ use mako_service::{health::health_routes, load_config};
 use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::info;
-use vertragd::{config, handlers, mcp_server, pg};
+use vertragd::{config, events, handlers, mcp_server, pg};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -88,8 +88,23 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // ── OIDC/JWT authentication ───────────────────────────────────────────────
-    // Disabled in dev (OidcVerifier::disabled) when `oidc` section is absent.
-    // All write endpoints require a valid Bearer token in production.
+    // Fail closed: without an [oidc] section every request is admitted with
+    // synthetic dev claims, which would expose the GDPR export, the IBAN write
+    // path, and every customer record unauthenticated. That posture must be
+    // asked for by name, never reached by omission.
+    if cfg.oidc.is_none() && !cfg.allow_insecure_no_auth {
+        anyhow::bail!(
+            "no [oidc] section configured. Without it every request is admitted with \
+             dev claims — GDPR customer data, IBANs and contract mutation included. \
+             Configure [oidc], or set allow_insecure_no_auth = true to accept an \
+             unauthenticated deployment."
+        );
+    }
+    if cfg.allow_insecure_no_auth {
+        tracing::warn!(
+            "vertragd: allow_insecure_no_auth is set — every request is admitted with dev claims"
+        );
+    }
     let ct = mako_service::shutdown::token();
     let oidc = mako_service::oidc::OidcConfig::build_verifier(
         cfg.oidc.as_ref(),
@@ -256,22 +271,26 @@ async fn main() -> anyhow::Result<()> {
                 if let Ok(due) = pg::find_auto_renewal_due(&pool_ar, &cfg_ar.tenant, 30).await {
                     for row in &due {
                         if let Some(ref url) = cfg_ar.erp_webhook_url {
-                            let ce = serde_json::json!({
-                                "specversion": "1.0",
-                                "type": "de.vertrag.autoerneuerung.ankuendigung",
-                                "source": format!("urn:vertragd:lf:{}", cfg_ar.lf_mp_id),
-                                "id": uuid::Uuid::new_v4().to_string(),
-                                "time": time::OffsetDateTime::now_utc().to_string(),
-                                "data": {
+                            let ce = events::build_cloud_event(
+                                "autoerneuerung.ankuendigung",
+                                row.id,
+                                &cfg_ar.tenant,
+                                serde_json::json!({
                                     "vertrag_id": row.id.to_string(),
                                     "vertrags_nr": row.vertrags_nr,
                                     "kunden_id": row.kunden_id.to_string(),
                                     "vertragsende": row.vertragsende.to_string(),
                                     "renewal_monate": row.renewal_monate,
                                     "regulatory_basis": "§13 GasGVV / §14 StromGVV"
-                                }
-                            });
-                            let _ = client_ar.post(url).json(&ce).send().await;
+                                }),
+                            );
+                            handlers::emit_event(
+                                &client_ar,
+                                url,
+                                cfg_ar.erp_hmac_secret.as_deref(),
+                                ce,
+                            )
+                            .await;
                         }
                     }
                 }
@@ -333,27 +352,24 @@ async fn main() -> anyhow::Result<()> {
                             );
                             // Emit tarifwechsel CE
                             if let Some(ref url) = cfg_bg.erp_webhook_url {
-                                let ce = serde_json::json!({
-                                    "specversion": "1.0",
-                                    "type": "de.vertrag.tarifwechsel",
-                                    "source": format!("urn:vertragd:lf:{}", cfg_bg.lf_mp_id),
-                                    "id": uuid::Uuid::new_v4().to_string(),
-                                    "time": time::OffsetDateTime::now_utc().to_string(),
-                                    "datacontenttype": "application/json",
-                                    "data": {
+                                let ce = events::build_cloud_event(
+                                    "tarifwechsel",
+                                    row.vertrag_id,
+                                    &cfg_bg.tenant,
+                                    serde_json::json!({
                                         "komp_id": row.komp_id.to_string(),
                                         "malo_id": row.malo_id,
                                         "new_product_code": row.pending_product_code,
                                         "wirksamkeit": row.pending_wirksamkeit.to_string(),
-                                    }
-                                });
-                                let client = client_bg.clone();
-                                let _ = client
-                                    .post(url)
-                                    .header("Content-Type", "application/cloudevents+json")
-                                    .json(&ce)
-                                    .send()
-                                    .await;
+                                    }),
+                                );
+                                handlers::emit_event(
+                                    &client_bg,
+                                    url,
+                                    cfg_bg.erp_hmac_secret.as_deref(),
+                                    ce,
+                                )
+                                .await;
                             }
                         }
                     }
@@ -373,45 +389,40 @@ async fn main() -> anyhow::Result<()> {
                                 "vertragd: emitting Preisanpassungsbenachrichtigung (§41 Abs. 3 EnWG)"
                             );
                             if let Some(ref url) = cfg_bg.erp_webhook_url {
-                                let ce = serde_json::json!({
-                                    "specversion": "1.0",
-                                    "type": "de.vertrag.preisaenderung.ankuendigung",
-                                    "source": format!("urn:vertragd:lf:{}", cfg_bg.lf_mp_id),
-                                    "id": uuid::Uuid::new_v4().to_string(),
-                                    "time": time::OffsetDateTime::now_utc().to_string(),
-                                    "datacontenttype": "application/json",
-                                    "data": {
+                                let days_until = (row.pending_wirksamkeit - today).whole_days();
+                                let ce = events::build_cloud_event(
+                                    "preisaenderung.ankuendigung",
+                                    row.vertrag_id,
+                                    &cfg_bg.tenant,
+                                    serde_json::json!({
                                         "komp_id": row.komp_id.to_string(),
                                         "malo_id": row.malo_id,
                                         "current_product_code": row.current_product_code,
                                         "new_product_code": row.pending_product_code,
                                         "wirksamkeit": row.pending_wirksamkeit.to_string(),
-                                        "days_until_change": 42,
-                                        "regulatory_basis": "\u{00a7}41 Abs. 3 EnWG",
-                                    }
-                                });
-                                let client = client_bg.clone();
-                                match client
-                                    .post(url)
-                                    .header("Content-Type", "application/cloudevents+json")
-                                    .json(&ce)
-                                    .send()
-                                    .await
+                                        "days_until_change": days_until,
+                                        "regulatory_basis": "\u{00a7}5 Abs. 2 StromGVV/GasGVV (6 Wochen) / \u{00a7}41 Abs. 5 EnWG (1 Monat)",
+                                    }),
+                                );
+                                // Advance the notified flag ONLY on confirmed
+                                // delivery — a lost notice is still owed, so a
+                                // failed send is retried on the next daily run.
+                                if handlers::emit_event(
+                                    &client_bg,
+                                    url,
+                                    cfg_bg.erp_hmac_secret.as_deref(),
+                                    ce,
+                                )
+                                .await
                                 {
-                                    Ok(_) => {
-                                        let _ = pg::mark_preisanpassung_notif_sent(
-                                            &pool_bg,
-                                            row.komp_id,
-                                        )
-                                        .await;
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            komp_id = %row.komp_id,
-                                            error = %e,
-                                            "vertragd: Preisanpassungsbenachrichtigung webhook failed -- will retry"
-                                        );
-                                    }
+                                    let _ =
+                                        pg::mark_preisanpassung_notif_sent(&pool_bg, row.komp_id)
+                                            .await;
+                                } else {
+                                    tracing::warn!(
+                                        komp_id = %row.komp_id,
+                                        "vertragd: Preisanpassungsbenachrichtigung webhook failed -- will retry"
+                                    );
                                 }
                             } else {
                                 // No webhook configured: mark sent anyway so we don't log endlessly.
@@ -457,14 +468,11 @@ async fn main() -> anyhow::Result<()> {
                         }
                         for row in &rows {
                             if let Some(ref url) = cfg_exp.erp_webhook_url {
-                                let ce = serde_json::json!({
-                                    "specversion": "1.0",
-                                    "type": "de.vertrag.ablauf.ankuendigung",
-                                    "source": format!("urn:vertragd:lf:{}", cfg_exp.lf_mp_id),
-                                    "id": uuid::Uuid::new_v4().to_string(),
-                                    "time": time::OffsetDateTime::now_utc().to_string(),
-                                    "datacontenttype": "application/json",
-                                    "data": {
+                                let ce = events::build_cloud_event(
+                                    "ablauf.ankuendigung",
+                                    row.id,
+                                    &cfg_exp.tenant,
+                                    serde_json::json!({
                                         "vertrag_id": row.id.to_string(),
                                         "kunden_id": row.kunden_id.to_string(),
                                         "vertrags_nr": row.vertrags_nr,
@@ -474,23 +482,15 @@ async fn main() -> anyhow::Result<()> {
                                         "kundentyp": row.kundentyp,
                                         "standort_bezeichnung": row.standort_bezeichnung,
                                         "regulatory_basis": "§13 GasGVV / §14 StromGVV / §41 EnWG",
-                                    }
-                                });
-                                let body = match serde_json::to_vec(&ce) {
-                                    Ok(b) => b,
-                                    Err(_) => continue,
-                                };
-                                let mut req = client_exp
-                                    .post(url)
-                                    .header("Content-Type", "application/cloudevents+json");
-                                if let Some(ref secret) = cfg_exp.erp_hmac_secret {
-                                    let sig = format!(
-                                        "sha256={}",
-                                        mako_service::webhook::hmac_hex(secret.as_bytes(), &body,)
-                                    );
-                                    req = req.header("X-Mako-Signature", sig);
-                                }
-                                let _ = req.body(body).send().await;
+                                    }),
+                                );
+                                handlers::emit_event(
+                                    &client_exp,
+                                    url,
+                                    cfg_exp.erp_hmac_secret.as_deref(),
+                                    ce,
+                                )
+                                .await;
                             }
                         }
                     }

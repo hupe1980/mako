@@ -119,7 +119,7 @@ pub const VALID_PREISTYPEN: &[&str] = &[
 /// `tarifpreispositionen` (with ALLCAPS `preistyp`) are merged back so that
 /// mako-extended preistyp values survive the round-trip without being mapped to
 /// `"UNKNOWN"` by `Preistyp`'s catch-all serde variant.
-fn normalize_tarifpreisblatt(
+pub fn normalize_tarifpreisblatt(
     category: &str,
     mut data: serde_json::Value,
 ) -> Result<serde_json::Value, (StatusCode, serde_json::Value)> {
@@ -232,6 +232,38 @@ fn normalize_tarifpreisblatt(
                 }),
             )
         })?;
+
+        // ── Cross-validation: the BO4E `sparte` must match the product
+        //    category. A GAS product carrying `sparte: Strom` (or vice versa)
+        //    would misroute in billing, so it is rejected here rather than
+        //    stored inconsistently. Categories in the Strom family
+        //    (SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/SHARING) expect Strom.
+        if let Some(sparte) = typed.sparte {
+            use rubo4e::current::Sparte;
+            // WAERME is intentionally omitted — BO4E splits it into Fernwaerme
+            // and Nahwaerme, so a single category → sparte mapping would be
+            // wrong. Only the unambiguous Strom/Gas families are cross-checked.
+            let expected = match category {
+                "GAS" => Some(Sparte::Gas),
+                "STROM" | "SOLAR" | "EEG" | "EINSPEISUNG" | "WAERMEPUMPE" | "WALLBOX"
+                | "SHARING" => Some(Sparte::Strom),
+                _ => None,
+            };
+            if let Some(exp) = expected
+                && sparte != exp
+            {
+                return Err((
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    serde_json::json!({
+                        "error": format!(
+                            "sparte {sparte:?} does not match category {category} \
+                             (expected {exp:?})"
+                        )
+                    }),
+                ));
+            }
+        }
+
         let mut canonical = serde_json::to_value(&typed).unwrap_or_default();
         if let Some(positionen) = data.get("tarifpreispositionen") {
             canonical["tarifpreispositionen"] = positionen.clone();
@@ -259,6 +291,40 @@ fn normalize_energiemix(
             serde_json::json!({ "error": format!("invalid Energiemix payload: {e}") }),
         )
     })?;
+
+    // §42 Abs. 2 Nr. 2 EnWG completeness: the energy-source breakdown must be
+    // present and account for the whole supply. An empty `{}` Energiemix used
+    // to be accepted and would satisfy neither the invoice nor the portal
+    // disclosure obligation. The `anteil[]` shares (Prozent) must sum to
+    // ~100 % (±0.5 for rounding).
+    let berr = |msg: String| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            serde_json::json!({ "error": msg }),
+        )
+    };
+    let anteile = mix
+        .anteil
+        .as_ref()
+        .filter(|a| !a.is_empty())
+        .ok_or_else(|| {
+            berr(
+                "§42 EnWG: Energiemix requires a non-empty `anteil[]` energy-source \
+                  breakdown (Erneuerbare/Kernenergie/fossil shares)."
+                    .to_owned(),
+            )
+        })?;
+    let sum: rust_decimal::Decimal = anteile
+        .iter()
+        .filter_map(|h| h.anteil_prozent.as_ref())
+        .copied()
+        .sum();
+    if (sum - rust_decimal::Decimal::from(100)).abs() > rust_decimal::Decimal::new(5, 1) {
+        return Err(berr(format!(
+            "§42 EnWG: Energiemix `anteil[]` shares sum to {sum} %, must be ~100 %."
+        )));
+    }
+
     let canonical = serde_json::to_value(&mix).unwrap_or_default();
     Ok((mix, canonical))
 }
@@ -269,6 +335,7 @@ fn normalize_energiemix(
 pub async fn put_product(
     claims: Claims,
     Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
     Path((lf_mp_id, product_code)): Path<(String, String)>,
     Json(mut req): Json<ProductUpsertRequest>,
 ) -> impl IntoResponse {
@@ -321,19 +388,80 @@ pub async fn put_product(
         Ok(v) => v,
         Err((status, json)) => return (status, Json(json)).into_response(),
     };
-    match upsert_product(&pool, &lf_mp_id, &product_code, req).await {
-        Ok(id) => (StatusCode::OK, Json(serde_json::json!({ "id": id }))).into_response(),
+    let category = req.category.clone();
+    let status = req.product_status.clone();
+    match upsert_product(&pool, &lf_mp_id, claims.tenant(), &product_code, req).await {
+        Ok(id) => {
+            // Notify the ERP / tarifbd-agent so §42 Energiemix completeness and
+            // §41a EPEX checks run against the new version. The agent's
+            // `de.tarifbd.product.updated` trigger was previously dead — nothing
+            // ever emitted it.
+            emit_tarifbd_event(
+                &cfg,
+                "de.tarifbd.product.updated",
+                &product_code,
+                serde_json::json!({
+                    "lf_mp_id": lf_mp_id,
+                    "product_code": product_code,
+                    "category": category,
+                    "product_status": status,
+                }),
+            )
+            .await;
+            (StatusCode::OK, Json(serde_json::json!({ "id": id }))).into_response()
+        }
         Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+    }
+}
+
+/// Fire-and-forget CloudEvent to the ERP webhook, HMAC-signed when a secret is
+/// configured. The signature is computed over the exact bytes sent (the body
+/// is transmitted verbatim, not re-serialised), so a verifying subscriber sees
+/// a matching digest.
+async fn emit_tarifbd_event(
+    cfg: &TarifbdConfig,
+    event_type: &str,
+    subject: &str,
+    data: serde_json::Value,
+) {
+    let Some(webhook_url) = cfg.erp_webhook_url.as_deref() else {
+        return;
+    };
+    let ce = serde_json::json!({
+        "specversion": "1.0",
+        "type": event_type,
+        "source": format!("urn:tarifbd:lf:{}", cfg.tenant),
+        "id": uuid::Uuid::new_v4().to_string(),
+        "time": time::OffsetDateTime::now_utc().to_string(),
+        "subject": subject,
+        "tenantid": cfg.tenant,
+        "datacontenttype": "application/json",
+        "data": data,
+    });
+    let body = serde_json::to_string(&ce).unwrap_or_default();
+    let client = mako_service::http::default_client();
+    let mut builder = client
+        .post(webhook_url)
+        .header("Content-Type", "application/cloudevents+json");
+    if let Some(ref secret) = cfg.erp_hmac_secret {
+        let sig = format!(
+            "sha256={}",
+            mako_service::webhook::hmac_hex(secret.as_bytes(), body.as_bytes())
+        );
+        builder = builder.header("X-Mako-Signature", sig);
+    }
+    if let Err(e) = builder.body(body).send().await {
+        tracing::warn!(error = %e, event_type, "tarifbd: ERP webhook error");
     }
 }
 
 /// `GET /api/v1/products/{lf_mp_id}/{product_code}`
 pub async fn get_product(
-    _claims: Claims,
+    claims: Claims,
     Extension(pool): Extension<PgPool>,
     Path((lf_mp_id, product_code)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    match fetch_product(&pool, &lf_mp_id, &product_code).await {
+    match fetch_product(&pool, &lf_mp_id, claims.tenant(), &product_code).await {
         Ok(Some(row)) => Json(row).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -342,12 +470,12 @@ pub async fn get_product(
 
 /// `GET /api/v1/products/{lf_mp_id}`
 pub async fn list_products_handler(
-    _claims: Claims,
+    claims: Claims,
     Extension(pool): Extension<PgPool>,
     Path(lf_mp_id): Path<String>,
     Query(q): Query<ProductListQuery>,
 ) -> impl IntoResponse {
-    match list_products(&pool, &lf_mp_id, &q).await {
+    match list_products(&pool, &lf_mp_id, claims.tenant(), &q).await {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -355,11 +483,11 @@ pub async fn list_products_handler(
 
 /// `GET /api/v1/products/{lf_mp_id}/{product_code}/history`
 pub async fn get_product_history(
-    _claims: Claims,
+    claims: Claims,
     Extension(pool): Extension<PgPool>,
     Path((lf_mp_id, product_code)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    match fetch_product_history(&pool, &lf_mp_id, &product_code).await {
+    match fetch_product_history(&pool, &lf_mp_id, claims.tenant(), &product_code).await {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -388,7 +516,7 @@ pub async fn delete_product(
         )
             .into_response();
     }
-    match soft_delete_product(&pool, &lf_mp_id, &product_code).await {
+    match soft_delete_product(&pool, &lf_mp_id, claims.tenant(), &product_code).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -409,7 +537,7 @@ pub async fn get_customer_product_handler(
     Query(q): Query<CustomerProductQuery>,
 ) -> impl IntoResponse {
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
-    match get_customer_product(&pool, &malo_id, lf_mp_id).await {
+    match get_customer_product(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(row)) => Json(row).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -487,7 +615,7 @@ pub async fn put_customer_product_handler(
     Path(malo_id): Path<String>,
     Json(req): Json<AssignProductRequest>,
 ) -> impl IntoResponse {
-    match assign_product(&pool, &malo_id, &cfg.tenant, req).await {
+    match assign_product(&pool, &malo_id, &cfg.tenant, &cfg.tenant, req).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => {
             // Distinguish "product not found" (409) from other errors (422).
@@ -619,7 +747,7 @@ pub async fn put_energiemix(
     };
     req.energiemix = canonical;
 
-    match upsert_energiemix(&pool, &lf_mp_id, &product_code, req).await {
+    match upsert_energiemix(&pool, &lf_mp_id, claims.tenant(), &product_code, req).await {
         Ok(()) => StatusCode::OK.into_response(),
         Err(e) if e.to_string().contains("not found") => {
             (StatusCode::NOT_FOUND,
@@ -647,11 +775,11 @@ pub async fn put_energiemix(
 ///
 /// Returns 404 if the product has no Energiemix set.
 pub async fn get_energiemix(
-    _claims: Claims,
+    claims: Claims,
     Extension(pool): Extension<PgPool>,
     Path((lf_mp_id, product_code)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    match fetch_energiemix(&pool, &lf_mp_id, &product_code).await {
+    match fetch_energiemix(&pool, &lf_mp_id, claims.tenant(), &product_code).await {
         Ok(Some(row)) if !row.energiemix.is_null() => Json(row).into_response(),
         Ok(_) => (
             StatusCode::NOT_FOUND,
@@ -683,7 +811,7 @@ pub async fn delete_energiemix_handler(
         )
             .into_response();
     }
-    match delete_energiemix(&pool, &lf_mp_id, &product_code).await {
+    match delete_energiemix(&pool, &lf_mp_id, claims.tenant(), &product_code).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -919,6 +1047,7 @@ fn default_gueltig_bis() -> time::Date {
 /// `de.angebot.angenommen` → ERP webhook.  The ERP or `vertragd` creates the
 /// `Rahmenvertrag` + `Versorgungsverträge` from the accepted Angebot data.
 pub async fn post_angebot(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
     Json(req): Json<CreateAngebotRequest>,
@@ -972,7 +1101,7 @@ pub async fn post_angebot(
     let mut total_netto = Decimal::ZERO;
 
     for pos in &req.positionen {
-        let product = fetch_product(&pool, lf_mp_id, &pos.product_code)
+        let product = fetch_product(&pool, lf_mp_id, &cfg.tenant, &pos.product_code)
             .await
             .ok()
             .flatten();
@@ -1042,6 +1171,27 @@ pub async fn post_angebot(
     };
 
     let positionen_json = serde_json::Value::Array(enriched_positionen);
+
+    // Idempotency: an ERP that retries the same `erp_angebot_id` gets the
+    // existing quotation back (200), never a duplicate. Without this a retry
+    // storm would mint a fresh Angebotsnummer per attempt.
+    if let Some(ref erp_id) = req.erp_angebot_id {
+        match crate::pg::fetch_angebot_id_by_erp_id(&pool, &cfg.tenant, erp_id).await {
+            Ok(Some((id, angebotsnummer))) => {
+                return (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "id": id,
+                        "angebotsnummer": angebotsnummer,
+                        "idempotent_replay": true,
+                    })),
+                )
+                    .into_response();
+            }
+            Ok(None) => {}
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    }
 
     let angebotsnummer = match next_angebotsnummer(&pool, &cfg.tenant).await {
         Ok(n) => n,
@@ -1124,6 +1274,7 @@ pub struct AngebotListQuery {
 
 /// `GET /api/v1/angebote`
 pub async fn list_angebote_handler(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
     Query(q): Query<AngebotListQuery>,
@@ -1144,6 +1295,7 @@ pub async fn list_angebote_handler(
 
 /// `GET /api/v1/angebote/{id}`
 pub async fn get_angebot_handler(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
     Path(id): Path<uuid::Uuid>,
@@ -1194,6 +1346,7 @@ pub async fn get_angebot_handler(
 /// `angebote.bo4e` — this endpoint is where pricing happens, so it is where the
 /// interchange document is produced.
 pub async fn get_angebot_comparison(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
     Path(id): Path<uuid::Uuid>,
@@ -1228,7 +1381,7 @@ pub async fn get_angebot_comparison(
         std::collections::HashMap::new();
     for pos in &positionen {
         if !product_cache.contains_key(&pos.product_code) {
-            let p = fetch_product(&pool, lf_mp_id, &pos.product_code)
+            let p = fetch_product(&pool, lf_mp_id, &cfg.tenant, &pos.product_code)
                 .await
                 .unwrap_or(None);
             product_cache.insert(pos.product_code.clone(), p);
@@ -1237,7 +1390,9 @@ pub async fn get_angebot_comparison(
             if let Some(ref overrides) = v.product_codes_override {
                 for code in overrides.iter().flatten() {
                     if !product_cache.contains_key(code) {
-                        let p = fetch_product(&pool, lf_mp_id, code).await.unwrap_or(None);
+                        let p = fetch_product(&pool, lf_mp_id, &cfg.tenant, code)
+                            .await
+                            .unwrap_or(None);
                         product_cache.insert(code.clone(), p);
                     }
                 }
@@ -1365,6 +1520,7 @@ pub async fn get_angebot_comparison(
 ///
 /// Mark an Angebot as VERSANDT (sent to customer).
 pub async fn post_angebot_versenden(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
     Path(id): Path<uuid::Uuid>,
@@ -1490,7 +1646,10 @@ pub async fn post_angebot_ablehnen(
 ///
 /// Mark all Angebote past `gueltig_bis` as ABGELAUFEN.
 /// Called by the background task; also available for manual triggers.
-pub async fn post_expire_angebote(Extension(pool): Extension<PgPool>) -> impl IntoResponse {
+pub async fn post_expire_angebote(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+) -> impl IntoResponse {
     match expire_stale_angebote(&pool).await {
         Ok(n) => Json(serde_json::json!({ "expired": n })).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -1522,6 +1681,7 @@ pub struct UpdateAngebotRequest {
 /// Re-calculates `jahreskosten_netto_eur` / `jahreskosten_brutto_eur` when
 /// `positionen` are updated so the totals stay in sync.
 pub async fn put_angebot(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
     Path(id): Path<uuid::Uuid>,
@@ -1554,7 +1714,7 @@ pub async fn put_angebot(
         let mut enriched: Vec<serde_json::Value> = Vec::new();
         let mut total_netto = rust_decimal::Decimal::ZERO;
         for pos in new_pos {
-            let product = fetch_product(&pool, lf_mp_id, &pos.product_code)
+            let product = fetch_product(&pool, lf_mp_id, &cfg.tenant, &pos.product_code)
                 .await
                 .ok()
                 .flatten();

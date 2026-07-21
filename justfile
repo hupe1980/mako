@@ -77,6 +77,36 @@ test-billingd-db:
     BILLINGD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55435/billingd" \
         cargo test -p billingd --test records_integration -- --include-ignored --test-threads=1
 
+# Integration tests for vertragd against a throwaway PostgreSQL.
+test-vertragd-db:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker rm -f vertragd-test >/dev/null 2>&1 || true
+    docker run -d --name vertragd-test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=vertragd \
+        -p 55436:5432 postgres:17-alpine >/dev/null
+    trap 'docker rm -f vertragd-test >/dev/null 2>&1 || true' EXIT
+    for _ in $(seq 1 30); do
+        docker exec vertragd-test pg_isready -U postgres >/dev/null 2>&1 && break
+        sleep 1
+    done
+    VERTRAGD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55436/vertragd" \
+        cargo test -p vertragd --test dispatch_integration -- --include-ignored --test-threads=1
+
+# Integration tests for tarifbd against a throwaway PostgreSQL.
+test-tarifbd-db:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker rm -f tarifbd-test >/dev/null 2>&1 || true
+    docker run -d --name tarifbd-test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=tarifbd \
+        -p 55437:5432 postgres:17-alpine >/dev/null
+    trap 'docker rm -f tarifbd-test >/dev/null 2>&1 || true' EXIT
+    for _ in $(seq 1 30); do
+        docker exec tarifbd-test pg_isready -U postgres >/dev/null 2>&1 && break
+        sleep 1
+    done
+    TARIFBD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55437/tarifbd" \
+        cargo test -p tarifbd --test catalog_integration -- --include-ignored --test-threads=1
+
 # Lint with warnings as errors
 clippy:
     cargo clippy --all-targets --all-features -- -D warnings
