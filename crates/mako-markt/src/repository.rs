@@ -1353,6 +1353,21 @@ pub trait VersorgungsStatusRepository: Send + Sync {
         nb_mp_id: &str,
         process_id: Option<Uuid>,
     ) -> Result<(), MdmError>;
+
+    /// Clear a pending future-Lieferant announcement without touching the
+    /// active supply.
+    ///
+    /// Invoked when a Lieferbeginn is cancelled or rejected (GPKE 55004 /
+    /// GeLi Gas 44004): the previously announced `lf_mp_id_next` /
+    /// `lf_next_lieferbeginn` must be reset so downstream consumers do not act
+    /// on a supplier switch that will not happen. Idempotent: a no-op when no
+    /// pending announcement exists.
+    async fn clear_lf_next(
+        &self,
+        malo_id: &MaloId,
+        tenant: &str,
+        process_id: Option<Uuid>,
+    ) -> Result<(), MdmError>;
 }
 
 // ── Netz-Element-Lokation (NeLo) ──────────────────────────────────────────────

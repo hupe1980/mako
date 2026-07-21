@@ -380,16 +380,18 @@ impl MdmdMcpHandler {
             })
             .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
 
+        // `preisblaetter` is keyed on nb_mp_id (the NB's own MP-ID) — it has no
+        // `tenant` column; single-tenant isolation is enforced at the Cedar
+        // layer, not here. The column list matches the table: the JSONB payload
+        // is `data`, not `preisblatt`.
         let row = sqlx::query_as::<_, (uuid::Uuid, time::Date, serde_json::Value)>(
-            r"SELECT id, valid_from, preisblatt
+            r"SELECT id, valid_from, data
               FROM preisblaetter
-              WHERE tenant = $1
-                AND nb_mp_id = $2
-                AND valid_from <= $3
+              WHERE nb_mp_id = $1
+                AND valid_from <= $2
               ORDER BY valid_from DESC
               LIMIT 1",
         )
-        .bind(&self.state.tenant)
         .bind(&p.nb_mp_id)
         .bind(date)
         .fetch_optional(&self.state.pool)
@@ -1308,14 +1310,17 @@ impl ServerHandler for MdmdMcpHandler {
              \n\
              Provides MaLo/MeLo master data, trading partner registry, NNE price sheets, supply status, and grid topology.\n\
              \n\
-             ## Tools (13)\n\
+             ## Tools (18)\n\
              - `get_malo` — read a MaLo by 11-digit ID (sparte, netzebene, bilanzierungsmethode, regelzone, full BO4E data)\n\
              - `list_malo` — list/filter MaLos by sparte, bilanzierungsmethode, netzebene\n\
              - `get_melo` — read a MeLo by ID (netzebene_messung, regelzone, standorteigenschaften)\n\
-             - `list_partners` — list registered trading partners (GLN, AS4 endpoint, channels)\n\
+             - `get_melo_standorteigenschaften` — Redispatch 2.0 site properties for a MeLo\n\
+             - `list_partners` — list registered trading partners (MP-ID, AS4 endpoint, channels)\n\
+             - `get_partner` — read a single trading partner by MP-ID\n\
              - `get_preisblatt` — read the PreisblattNetznutzung for an NB (used by invoicd for §22 MessZV)\n\
              - `get_versorgungsstatus` — read VersorgungsStatus (Beliefert/Unbeliefert/…) for a MaLo\n\
              - `get_versorgungsstatus_history` — full supply state transition history for a MaLo\n\
+             - `get_versorgung_at` — point-in-time VersorgungsStatus for a MaLo on a given date\n\
              - `get_lokationszuordnung` — temporal NB/MSB/LF role assignments for a MaLo\n\
              - `get_nb_contract` — active NB network contract (netzebene, billing_schedule, RLM/SLP)\n\
              - `get_correlation` — look up a process correlation by process_id or erp_order_id\n\
@@ -1325,10 +1330,10 @@ impl ServerHandler for MdmdMcpHandler {
              - `get_technische_ressource` — smart meter / generation unit by TR-ID\n\
              - `get_steuerbare_ressource` — §14a EnWG controllable load + Konfigurationsprodukte by SR-ID\n\
              \n\
-             ## Prompts (5)\n\
-             `lookup-malo`, `investigate-supply-gap`, `versorgungswechsel-tracking`, `grid-topology`, `msb-preisanfrage`\n\
+             ## Prompts (4)\n\
+             `lookup-malo`, `investigate-supply-gap`, `versorgungswechsel-tracking`, `grid-topology`\n\
              \n\
-             All reads are tenant-scoped. Cross-tenant access is denied by Cedar ABAC.\n\
+             All access is scoped to this deployment's tenant. Cross-tenant access is denied by Cedar ABAC.\n\
              §9 EnWG Informatorisches Unbundling: LF actors must not access NB-private endpoints.",
             )
     }

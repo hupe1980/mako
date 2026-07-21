@@ -307,6 +307,23 @@ where
                                 "event_ingest: failed to end_supply"
                             );
                         }
+                    } else if matches!(pid, 55004 | 44004) {
+                        // Lieferbeginn cancelled/rejected (GPKE 55004 / GeLi Gas
+                        // 44004): reset the announced future Lieferant so no
+                        // consumer acts on a supplier switch that will not
+                        // happen. The schema documents this clearing; without it
+                        // `lf_mp_id_next` was stale forever.
+                        if let Err(e) = vs
+                            .clear_lf_next(&malo_id, &state.tenant_gln, process_id)
+                            .await
+                        {
+                            tracing::warn!(
+                                malo_id = %malo_str,
+                                pid,
+                                error = %e,
+                                "event_ingest: failed to clear_lf_next"
+                            );
+                        }
                     }
                 }
             }

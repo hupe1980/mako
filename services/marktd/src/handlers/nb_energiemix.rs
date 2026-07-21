@@ -107,6 +107,41 @@ pub async fn put_nb_energiemix(
                 .into_response();
         }
     };
+    // §42 Abs. 2 Nr. 2 EnWG completeness: the grid-area Reststrommix must carry
+    // an energy-source breakdown that accounts for the whole supply. An empty
+    // Energiemix satisfies neither the invoice nor the portal disclosure
+    // obligation, so it is rejected here rather than stored as a hollow record.
+    match typed.anteil.as_ref().filter(|a| !a.is_empty()) {
+        None => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "§42 EnWG: Energiemix requires a non-empty `anteil[]` \
+                              energy-source breakdown"
+                })),
+            )
+                .into_response();
+        }
+        Some(anteile) => {
+            let sum: rust_decimal::Decimal = anteile
+                .iter()
+                .filter_map(|h| h.anteil_prozent.as_ref())
+                .copied()
+                .sum();
+            if (sum - rust_decimal::Decimal::from(100)).abs() > rust_decimal::Decimal::new(5, 1) {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": format!(
+                            "§42 EnWG: Energiemix `anteil[]` shares sum to {sum} %, must be ~100 %"
+                        )
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
     let canonical = serde_json::to_value(&typed).unwrap_or_default();
 
     let year = req

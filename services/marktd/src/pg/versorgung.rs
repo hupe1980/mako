@@ -572,4 +572,61 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
             .map_err(|e| MdmError::Internal(e.to_string()))?;
         Ok(())
     }
+
+    async fn clear_lf_next(
+        &self,
+        malo_id: &MaloId,
+        tenant: &str,
+        process_id: Option<uuid::Uuid>,
+    ) -> Result<(), MdmError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        // Only touches rows that actually carry a pending announcement, so a
+        // duplicate cancellation is a genuine no-op (no version bump, no
+        // history row). Active supply fields are untouched.
+        let updated = sqlx::query(
+            r#"UPDATE versorgungsstatus
+               SET lf_mp_id_next       = NULL,
+                   lf_next_lieferbeginn = NULL,
+                   last_process_id      = $3,
+                   updated_at           = now(),
+                   version              = version + 1
+               WHERE malo_id = $1 AND tenant = $2
+                 AND lf_mp_id_next IS NOT NULL"#,
+        )
+        .bind(malo_id)
+        .bind(tenant)
+        .bind(process_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        if updated.rows_affected() > 0 {
+            sqlx::query(
+                r#"INSERT INTO versorgungsstatus_history
+                   (malo_id, tenant, lieferstatus, lf_mp_id, lf_mp_id_next,
+                    lf_next_lieferbeginn, lieferbeginn, lieferende,
+                    msb_mp_id, nb_mp_id, last_process_id, version, valid_from)
+                   SELECT malo_id, tenant, lieferstatus, lf_mp_id, lf_mp_id_next,
+                          lf_next_lieferbeginn, lieferbeginn, lieferende,
+                          msb_mp_id, nb_mp_id, last_process_id, version, now()
+                   FROM versorgungsstatus
+                   WHERE malo_id = $1 AND tenant = $2"#,
+            )
+            .bind(malo_id)
+            .bind(tenant)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Ok(())
+    }
 }

@@ -761,6 +761,49 @@ impl VersorgungsStatusRepository for InMemoryVersorgungsStatusRepository {
         self.history.write().await.push(hist);
         Ok(())
     }
+
+    async fn clear_lf_next(
+        &self,
+        malo_id: &MaloId,
+        tenant: &str,
+        process_id: Option<uuid::Uuid>,
+    ) -> Result<(), MdmError> {
+        let key = (malo_id.as_ref().to_owned(), tenant.to_owned());
+        let mut store = self.store.write().await;
+        let Some(entry) = store.get_mut(&key) else {
+            return Ok(());
+        };
+        if entry.lf_mp_id_next.is_none() {
+            return Ok(()); // no pending announcement — no-op
+        }
+        entry.lf_mp_id_next = None;
+        entry.lf_next_lieferbeginn = None;
+        entry.last_process_id = process_id;
+        entry.updated_at = time::OffsetDateTime::now_utc();
+        entry.version += 1;
+        let rec = entry.clone();
+        drop(store);
+        self.history
+            .write()
+            .await
+            .push(VersorgungsStatusHistoryRecord {
+                id: rec.version,
+                malo_id: rec.malo_id.clone(),
+                tenant: rec.tenant.clone(),
+                lieferstatus: rec.lieferstatus,
+                lf_mp_id: rec.lf_mp_id.clone(),
+                lf_mp_id_next: rec.lf_mp_id_next.clone(),
+                lf_next_lieferbeginn: rec.lf_next_lieferbeginn,
+                lieferbeginn: rec.lieferbeginn,
+                lieferende: rec.lieferende,
+                msb_mp_id: rec.msb_mp_id.clone(),
+                nb_mp_id: rec.nb_mp_id.clone(),
+                last_process_id: rec.last_process_id,
+                version: rec.version,
+                valid_from: rec.updated_at,
+            });
+        Ok(())
+    }
 }
 
 #[allow(dead_code)]

@@ -107,6 +107,21 @@ test-tarifbd-db:
     TARIFBD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55437/tarifbd" \
         cargo test -p tarifbd --test catalog_integration -- --include-ignored --test-threads=1
 
+# Integration tests for marktd against a throwaway PostgreSQL.
+test-marktd-db:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker rm -f marktd-test >/dev/null 2>&1 || true
+    docker run -d --name marktd-test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=marktd \
+        -p 55438:5432 postgres:17-alpine >/dev/null
+    trap 'docker rm -f marktd-test >/dev/null 2>&1 || true' EXIT
+    for _ in $(seq 1 30); do
+        docker exec marktd-test pg_isready -U postgres >/dev/null 2>&1 && break
+        sleep 1
+    done
+    MARKTD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55438/marktd" \
+        cargo test -p marktd --test versorgung_integration -- --include-ignored --test-threads=1
+
 # Lint with warnings as errors
 clippy:
     cargo clippy --all-targets --all-features -- -D warnings

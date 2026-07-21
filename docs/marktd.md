@@ -876,7 +876,7 @@ the raw `data` JSONB for backward compatibility:
 | marktd master data | `de.markt.partner.updated` | `PUT /api/v1/partners/{mp_id}` |
 | marktd NB contract | `de.markt.nb-contract.updated` | `PUT /api/v1/nb-contracts/{id}` — carries `vertragsart`, `version`, `tenant` in `data` |
 | marktd PRICAT | `de.markt.pricat.published` | `PUT /api/v1/preisblaetter/{nb_mp_id}` |
-| marktd supply | `de.markt.versorgung.beliefert` | `confirm_supply` triggered by PIDs 55003/44003 |
+| marktd supply | `de.markt.versorgung.changed` | any VersorgungsStatus transition (announce/confirm/end/clear), incl. PIDs 55003/44003 |
 | makod process relay | `de.mako.process.initiated` | forwarded from `makod` ingest |
 | makod process relay | `de.mako.aperak.accepted` | forwarded from `makod` ingest |
 | makod process relay | `de.mako.aperak.rejected` | forwarded from `makod` ingest |
@@ -2100,8 +2100,8 @@ domain events. Each event carries the `markt*` extension attributes listed below
 | `de.markt.nb-contract.updated` | `contract_id` | NB contract PUT | ERP |
 | `de.markt.sr.konfigurationsprodukt.updated` | `sr_id` | SR Konfigurationsprodukt replace | `processd` (§14a eligibility check), ERP |
 | `de.markt.geraet.konfiguration.updated` | `geraet_id` | Geraet konfigurationen PUT | `edmd` cert-expiry worker, `processd` §14a auto-ack check, ERP |
-| `de.markt.mmma.gas.imported` | `year-month` | Monthly Gas MMM price import | `netzbilanzd`, `invoicd` |
-| `de.markt.mmma.strom.imported` | `year-month` | Monthly Strom MMM price import | `netzbilanzd`, `invoicd` |
+| `de.markt.mmma.import.success` | `year-month`, `commodity` | Monthly MMMA/MMM price import (Gas or Strom) | `netzbilanzd`, `invoicd` |
+| `de.markt.mmma.import.failed` | `year-month`, `commodity` | Monthly import fetch/parse/store failure | operator |
 
 ### `de.markt.geraet.konfiguration.updated` data payload
 

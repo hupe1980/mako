@@ -40,7 +40,7 @@ and any historical state can be retrieved by date via `?at=YYYY-MM-DD`.
 | **Authorization** | Cedar ABAC (`policies/marktd.cedar`) — per-tenant, role-gated |
 | **API spec** | OpenAPI 3.1 at `/swagger-ui/` and `/api-docs/openapi.json` |
 | **Events** | Outbound CloudEvents 1.0 (`application/cloudevents+json`) + HMAC-SHA256 |
-| **Emitted events** | `de.markt.malo.updated`, `de.markt.nb-contract.updated`, `de.markt.pricat.published`, `de.markt.versorgung.beliefert`, `de.markt.sr.konfigurationsprodukt.updated`, `de.markt.mmma.strom.imported`, `de.markt.mmma.gas.imported` |
+| **Emitted events** | `de.markt.malo.updated`, `de.markt.melo.updated`, `de.markt.partner.updated`, `de.markt.nb-contract.updated`, `de.markt.versorgung.changed`, `de.markt.pricat.published`, `de.markt.sr.konfigurationsprodukt.updated`, `de.markt.geraet.konfiguration.updated`, `de.markt.mmma.import.success`, `de.markt.mmma.import.failed`, `de.markt.subscription.test` |
 | **Typed BO4E API** | All `GET` responses return canonical `rubo4e::current` types — `Marktlokation`, `Messlokation`, `Zaehler`, `Geraet`. Every `PUT` validates `_typ` and enum fields (422 on violation). `nb_contracts` stores full BO4E `Vertrag` JSONB. |
 | **Konfigurationsprodukte** | Typed sub-resource on `SteuerbareRessource`: `GET/PUT/DELETE /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte`. `produktcode` is mandatory (BK6-24-174 §4.3). Emits `de.markt.sr.konfigurationsprodukt.updated`. |
 | **MMMA import worker** | Background worker auto-imports monthly Ausgleichsenergie prices (Gas + Strom) on the 1st of each month. Configurable `gas_url` / `strom_url` — supports `https://` and `file:///` sources. POST `/api/v1/mmma-preise/import-trigger` for on-demand. |
@@ -246,6 +246,17 @@ def verify(secret: str, body: bytes, signature: str) -> bool:
     return hmac.compare_digest(expected, signature)
 ```
 
+#### Webhook secret at rest
+
+The per-subscription `webhook_secret` is stored **in plaintext** in the
+`subscriptions.webhook_secret` column and used directly as the HMAC-SHA256
+signing key. It is an integrity secret (it lets a subscriber verify a delivery
+originated from this hub), not a confidentiality key over customer data.
+Protect it with database-level controls: least-privilege grants on the
+`subscriptions` table and PostgreSQL storage/volume encryption. Application-layer
+envelope encryption (AES-256-GCM keyed from config/KMS, decrypted at the three
+signing sites) is a planned enhancement — the schema does **not** encrypt today.
+
 ### Inbound events (pull from makod)
 
 `marktd` can receive process lifecycle events from `makod` via `POST /api/v1/events`.
@@ -367,7 +378,7 @@ curl -s -X POST "http://marktd:8180/api/v1/mmma-preise/import-trigger?year=2026&
   -H "Authorization: Bearer $TOKEN"
 ```
 
-Each successful import emits `de.markt.mmma.strom.imported` or `de.markt.mmma.gas.imported`.
+Each import emits `de.markt.mmma.import.success` or `de.markt.mmma.import.failed` (the `data.commodity` field distinguishes Gas from Strom).
 
 ---
 

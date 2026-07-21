@@ -212,6 +212,31 @@ async fn main() -> anyhow::Result<()> {
         .build()
         .context("building HTTP client")?;
 
+    // Fail closed: without [oidc] every request is admitted with dev claims,
+    // and without webhook.inbound_secret the POST /events endpoint accepts
+    // unsigned events that mutate VersorgungsStatus and the device registry.
+    // Either gap must be asked for by name, never reached by omission.
+    if !cfg.allow_insecure_no_auth {
+        if cfg.oidc.is_none() {
+            anyhow::bail!(
+                "no [oidc] section configured — every request would be admitted with \
+                 dev claims. Configure [oidc], or set allow_insecure_no_auth = true."
+            );
+        }
+        if cfg.webhook.inbound_secret.is_none() {
+            anyhow::bail!(
+                "no webhook.inbound_secret configured — POST /events would accept unsigned \
+                 events that mutate master data. Configure it, or set \
+                 allow_insecure_no_auth = true."
+            );
+        }
+    } else {
+        tracing::warn!(
+            "marktd: allow_insecure_no_auth is set — dev claims accepted and unsigned \
+             inbound events accepted"
+        );
+    }
+
     let verifier = mako_service::oidc::OidcConfig::build_verifier(
         cfg.oidc.as_ref(),
         &http,

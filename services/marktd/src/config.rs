@@ -63,6 +63,15 @@ pub struct Config {
     /// `PUT /api/v1/mmma-preise/gas/{year}/{month}` by the ERP.
     #[serde(default)]
     pub mmma_import: MmmaImportConfig,
+    /// Start without token verification AND without inbound webhook signing.
+    ///
+    /// Without `[oidc]` every request is admitted with synthetic dev claims,
+    /// and without `webhook.inbound_secret` the `POST /events` endpoint accepts
+    /// unsigned events that mutate VersorgungsStatus and the device registry.
+    /// Both postures must be asked for by name — `main` refuses to start when
+    /// either is missing unless this flag is set.
+    #[serde(default)]
+    pub allow_insecure_no_auth: bool,
 }
 
 // ── Storage ───────────────────────────────────────────────────────────────────

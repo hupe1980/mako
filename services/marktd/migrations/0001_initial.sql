@@ -423,7 +423,7 @@ CREATE INDEX process_correlation_running
 CREATE TABLE subscriptions (
     subscriber_id  TEXT        PRIMARY KEY,
     webhook_url    TEXT        NOT NULL,
-    webhook_secret TEXT,                            -- AES-256-GCM encrypted (base64); NULL = no HMAC
+    webhook_secret TEXT,                            -- HMAC-SHA256 signing key, plaintext at rest; NULL = no signature. Protect via Postgres least-privilege / storage encryption. See marktd README "Webhook secret at rest".
     roles          TEXT[]      NOT NULL DEFAULT '{}',
     event_types    TEXT[]      NOT NULL DEFAULT '{}',
     sparten        TEXT[]      NOT NULL DEFAULT '{}',

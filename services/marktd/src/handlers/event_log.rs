@@ -13,9 +13,13 @@
 //! - `limit`: max rows (default 500, max 5000).
 
 use axum::{Extension, Json, extract::Query, http::StatusCode, response::IntoResponse};
+use mako_service::cedar::CedarEnforcer;
 use serde::Deserialize;
 use sqlx::PgPool;
+use std::sync::Arc;
 use tracing::warn;
+
+use super::{Claims, TenantGln};
 
 /// Query parameters for `GET /admin/events`.
 #[derive(Debug, Deserialize)]
@@ -33,8 +37,21 @@ pub struct EventLogQuery {
 /// ordered by `received_at ASC` (oldest first for deterministic replay).
 pub async fn list_event_log(
     Extension(pool): Extension<PgPool>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(TenantGln(tenant)): Extension<TenantGln>,
+    claims: Claims,
     Query(q): Query<EventLogQuery>,
 ) -> impl IntoResponse {
+    // The replay log carries full CloudEvent data payloads (PII: MaLo IDs,
+    // partner identities, supply history). It is operator forensics, gated
+    // like the DLQ admin routes — not an open endpoint.
+    if enforcer
+        .check(&claims.principal(), "manage-fanout", &tenant)
+        .is_err()
+    {
+        return (StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+
     let limit = q.limit.unwrap_or(500).clamp(1, 5000);
 
     // Parse optional RFC 3339 timestamps.
