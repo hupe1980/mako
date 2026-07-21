@@ -4,6 +4,7 @@
 //! a `TariffInput` (the product definition from `tarifbd`) and register them
 //! with `BillingEngine`.
 
+use crate::rates::RoundMoney;
 use billing::{Currency, DynamicPricing, TariffBand, TariffSchedule, TimeOfUsePricing, TouBand};
 use rust_decimal::Decimal;
 use rust_decimal::dec;
@@ -182,7 +183,7 @@ impl BillingProvider for ElectricityProvider {
                 // Negative quantities return Err; zero quantities are skipped silently.
                 let mut bands = Vec::new();
                 if let Some(ap_ht) = product.arbeitspreis_ht_ct_per_kwh {
-                    let price = billing::Amount::<5>::try_from((ap_ht / dec!(100)).round_dp(5))
+                    let price = billing::Amount::<5>::try_from((ap_ht / dec!(100)).round_kfm(5))
                         .map_err(|_| EngineError::PriceOutOfRange {
                             field: "arbeitspreis_ht_ct_per_kwh".to_owned(),
                             value: ap_ht,
@@ -190,7 +191,7 @@ impl BillingProvider for ElectricityProvider {
                     bands.push(TouBand::new("HT", price));
                 }
                 if let Some(ap_nt) = product.arbeitspreis_nt_ct_per_kwh {
-                    let price = billing::Amount::<5>::try_from((ap_nt / dec!(100)).round_dp(5))
+                    let price = billing::Amount::<5>::try_from((ap_nt / dec!(100)).round_kfm(5))
                         .map_err(|_| EngineError::PriceOutOfRange {
                             field: "arbeitspreis_nt_ct_per_kwh".to_owned(),
                             value: ap_nt,
@@ -282,7 +283,9 @@ impl BillingProvider for ElectricityProvider {
         // ── Grid charges (NNE / KA) ────────────────────────────────────────────
         let kwh_for_grid = kwh;
         if let Some(nne_gp) = grid.nne_grundpreis_eur_per_year {
-            let daily = nne_gp / dec!(365);
+            // Leap-aware: an EUR/year rate divides by that year's actual days
+            // (366 in 2024/2028), or the daily rate overstates the Grundpreis.
+            let daily = nne_gp / Decimal::from(time::util::days_in_year(ctx.period_from().year()));
             // Active contract days, not the full billing period: the NNE
             // Grundpreis accrues only while the contract supplies the MaLo, the
             // same clipping the commodity Grundpreis applies. Billing the full
@@ -714,7 +717,7 @@ impl ElectricityProvider {
 
         // Informational: self-consumption and energy balance
         if self_kwh > Decimal::ZERO {
-            let self_supply_pct = (prosumer.self_supply_ratio() * dec!(100)).round_dp(1);
+            let self_supply_pct = (prosumer.self_supply_ratio() * dec!(100)).round_kfm(1);
             positions.push(BillingPosition {
                 description: format!(
                     "Eigenverbrauch PV: {self_kwh:.3}\u{202f}kWh (Selbstversorgungsgrad {self_supply_pct:.1}\u{202f}%)",
@@ -985,6 +988,42 @@ impl GasProvider {
 }
 
 impl BillingProvider for GasProvider {
+    fn validate_warnings(
+        &self,
+        ctx: &BillingContext,
+        quantities: &Quantities,
+    ) -> Vec<BillingWarning> {
+        let mut w = Vec::new();
+        // §40a EnWG / §17 Abs. 1 MessZV: an estimated reading is billable but
+        // the caller must know it happened — dispatch systems treat it
+        // differently and the customer can demand a corrected invoice.
+        if quantities.gas.as_ref().is_some_and(|m| m.is_estimated) {
+            w.push(BillingWarning {
+                code: "ESTIMATED_READING",
+                severity: WarningSeverity::Warning,
+                message: "billed on an estimated gas reading (§40a EnWG, §17 Abs. 1 MessZV) — \
+                          expect a correction when the real reading arrives"
+                    .to_owned(),
+            });
+        }
+        // Gas carried 7 % USt from 01.10.2022 to 31.03.2024 (§28 Abs. 5
+        // UStG) and 16 % in H2/2020. A period straddling a window boundary
+        // has no single correct rate — split at the Stichtag and merge.
+        if crate::rates::mwst_rate_for_gas_waerme_period(ctx.period_from(), ctx.period_to())
+            .is_none()
+        {
+            w.push(BillingWarning {
+                code: "MWST_STICHTAG_IM_ZEITRAUM",
+                severity: WarningSeverity::Warning,
+                message: "Abrechnungszeitraum überschreitet eine USt-Satzgrenze für Gas \
+                          (§28 Abs. 5 UStG) — am Stichtag splitten und Teilrechnungen \
+                          zusammenführen"
+                    .to_owned(),
+            });
+        }
+        w
+    }
+
     fn bill(
         &self,
         ctx: &BillingContext,
@@ -1011,7 +1050,7 @@ impl BillingProvider for GasProvider {
         } else {
             let hs = meter.brennwert_kwh_per_qm3.unwrap_or(dec!(10.55));
             let z = meter.zustandszahl.unwrap_or(dec!(1.0));
-            (meter.messung_qm3 * hs * z).round_dp(3)
+            (meter.messung_qm3 * hs * z).round_kfm(3)
         };
 
         let mut positions: Vec<BillingPosition> = Vec::new();
@@ -1151,7 +1190,10 @@ impl BillingProvider for GasProvider {
 
             // ── Gas NNE ────────────────────────────────────────────────────────
             if let Some(nne_gp) = grid.gas_nne_grundpreis_eur_per_year {
-                let daily = nne_gp / dec!(365);
+                // Leap-aware: an EUR/year rate divides by that year's actual days
+                // (366 in 2024/2028), or the daily rate overstates the Grundpreis.
+                let daily =
+                    nne_gp / Decimal::from(time::util::days_in_year(ctx.period_from().year()));
                 // Active contract days — see the Strom NNE Grundpreis.
                 positions.push(
                     BillingPosition::debit(
@@ -1265,7 +1307,9 @@ impl BillingProvider for GasProvider {
             .filter(|v| *v != Decimal::ZERO)
         {
             let kwh_total = meter.kwh_hs.unwrap_or_else(|| {
-                let bw = meter.brennwert_kwh_per_qm3.unwrap_or(dec!(10.0));
+                // Same default as the main kWh_Hs conversion — a diverging
+                // fallback made the AufAbschlag quantity base inconsistent.
+                let bw = meter.brennwert_kwh_per_qm3.unwrap_or(dec!(10.55));
                 let zz = meter.zustandszahl.unwrap_or(dec!(1.0));
                 meter.messung_qm3 * bw * zz
             });
@@ -1302,6 +1346,59 @@ impl BillingProvider for GasProvider {
                 net_eur: crate::position::validated_eur(aa_month * months_frac),
                 category: cat,
                 tags: vec!["auf_abschlag".to_owned(), "gas".to_owned()],
+                applicable_tax_rate: None,
+                trace: crate::position::PositionTrace::default(),
+            });
+        }
+
+        // ── Zählerstand info position (§40 Abs. 2 Nr. 6 EnWG) ─────────────────
+        // Meter identity + start/end readings in m³ — same display duty as
+        // the electricity provider fulfils for kWh registers.
+        if meter.zaehlerstand_von.is_some() || meter.zaehlerstand_bis.is_some() {
+            let label = format!(
+                "Zählerstand: {} – {} m³",
+                meter
+                    .zaehlerstand_von
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_owned()),
+                meter
+                    .zaehlerstand_bis
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "-".to_owned()),
+            );
+            let zid = meter
+                .zaehlernummer
+                .as_deref()
+                .or(ctx.zaehler_id.as_deref())
+                .unwrap_or("-");
+            positions.push(BillingPosition {
+                description: label,
+                legal_basis: Some("§40 Abs. 2 Nr. 6 EnWG".to_owned()),
+                quantity: Decimal::ZERO,
+                unit: "m³".to_owned(),
+                unit_price_eur: Decimal::ZERO,
+                net_eur: Decimal::ZERO,
+                category: PositionCategory::Info,
+                tags: vec!["zaehlerstand".to_owned(), zid.to_owned()],
+                applicable_tax_rate: None,
+                trace: crate::position::PositionTrace::default(),
+            });
+        }
+
+        // ── §40a EnWG / §17 Abs. 1 MessZV — estimated reading notice ──────────
+        // The estimation basis must carry an explicit, prominently marked hint.
+        if meter.is_estimated {
+            positions.push(BillingPosition {
+                description: "Abrechnungswert: Schätzung gemäß §40a EnWG / §17 Abs. 1 MessZV — \
+                              auf Wunsch Korrektur nach realer Ablesung"
+                    .to_owned(),
+                legal_basis: Some("§40a EnWG".to_owned()),
+                quantity: Decimal::ZERO,
+                unit: String::new(),
+                unit_price_eur: Decimal::ZERO,
+                net_eur: Decimal::ZERO,
+                category: PositionCategory::Info,
+                tags: vec!["schatzwert".to_owned(), "messZV".to_owned()],
                 applicable_tax_rate: None,
                 trace: crate::position::PositionTrace::default(),
             });
@@ -1349,6 +1446,29 @@ impl HeatProvider {
 }
 
 impl BillingProvider for HeatProvider {
+    fn validate_warnings(
+        &self,
+        ctx: &BillingContext,
+        _quantities: &Quantities,
+    ) -> Vec<BillingWarning> {
+        let mut w = Vec::new();
+        // Fernwärme carried 7 % USt from 01.10.2022 to 31.03.2024 (§28
+        // Abs. 6 UStG) and 16 % in H2/2020 — same split discipline as gas.
+        if crate::rates::mwst_rate_for_gas_waerme_period(ctx.period_from(), ctx.period_to())
+            .is_none()
+        {
+            w.push(BillingWarning {
+                code: "MWST_STICHTAG_IM_ZEITRAUM",
+                severity: WarningSeverity::Warning,
+                message: "Abrechnungszeitraum überschreitet eine USt-Satzgrenze für \
+                          Fernwärme (§28 Abs. 6 UStG) — am Stichtag splitten und \
+                          Teilrechnungen zusammenführen"
+                    .to_owned(),
+            });
+        }
+        w
+    }
+
     fn bill(
         &self,
         ctx: &BillingContext,
@@ -1563,7 +1683,7 @@ impl BillingProvider for SolarProvider {
             }
 
             // Info position: PV coverage ratio (useful for \u00a740a Kilowattstundenpreis reporting)
-            let ratio_pct = (ggv.pv_coverage_ratio() * dec!(100)).round_dp(1);
+            let ratio_pct = (ggv.pv_coverage_ratio() * dec!(100)).round_kfm(1);
             positions.push(BillingPosition {
                 description: format!(
                     "GGV Solarstromanteil: {ratio_pct}\u{202f}% ({pv_kwh:.3}\u{202f}kWh von {:.3}\u{202f}kWh)",
@@ -2325,7 +2445,7 @@ impl BillingProvider for DynamicElectricityProvider {
             // EPEX prices are typically 2 dp in ct/kWh → 4 dp after /100, so this
             // never loses precision in practice.
             if let Ok(price_eur) =
-                billing::Amount::<5>::try_from((effective_ct / dec!(100)).round_dp(5))
+                billing::Amount::<5>::try_from((effective_ct / dec!(100)).round_kfm(5))
             {
                 priced_pairs.push((interval.kwh, price_eur));
             }
@@ -2376,7 +2496,7 @@ impl BillingProvider for DynamicElectricityProvider {
             let avg_ct = if total_kwh.is_zero() {
                 Decimal::ZERO
             } else {
-                (total_eur * dec!(100) / total_kwh).round_dp(4)
+                (total_eur * dec!(100) / total_kwh).round_kfm(4)
             };
             positions.push(BillingPosition {
                 description: format!("Arbeitspreis {source_name} (∅ {avg_ct:.4} ct/kWh)",),
@@ -2445,7 +2565,9 @@ impl BillingProvider for DynamicElectricityProvider {
 
         // NNE Grundpreis
         if let Some(nne_gp) = grid.nne_grundpreis_eur_per_year {
-            let daily = nne_gp / dec!(365);
+            // Leap-aware: an EUR/year rate divides by that year's actual days
+            // (366 in 2024/2028), or the daily rate overstates the Grundpreis.
+            let daily = nne_gp / Decimal::from(time::util::days_in_year(ctx.period_from().year()));
             // Active contract days, not the full billing period: the NNE
             // Grundpreis accrues only while the contract supplies the MaLo, the
             // same clipping the commodity Grundpreis applies. Billing the full
@@ -2666,7 +2788,7 @@ fn build_block_tariff_positions(
 
     for (idx, tier) in tiers.iter().enumerate() {
         let price_eur =
-            billing::Amount::<5>::try_from((tier.preis_ct_per_kwh / dec!(100)).round_dp(5))
+            billing::Amount::<5>::try_from((tier.preis_ct_per_kwh / dec!(100)).round_kfm(5))
                 .map_err(|_| EngineError::PriceOutOfRange {
                     field: format!("blocktarif_stufe_{}_preis_ct_per_kwh", idx + 1),
                     value: tier.preis_ct_per_kwh,

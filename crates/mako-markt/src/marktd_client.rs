@@ -980,6 +980,36 @@ impl MarktdClient {
         Ok(Some(body))
     }
 
+    /// `GET /api/v1/melos/{melo_id}/zaehler` — Zähler registered at a `MeLo`.
+    ///
+    /// Returns the `zaehler_id`s (Zählernummern) only — the device registry's
+    /// answer to "which meter serves this metering location". Used by billingd
+    /// to put the §40 Abs. 2 Nr. 6 `EnWG` meter identity on the bill.
+    pub async fn list_zaehler_ids(&self, melo_id: &str) -> Result<Vec<String>, MarktdClientError> {
+        let url = format!("{}/api/v1/melos/{}/zaehler", self.base_url, melo_id);
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        let body = resp
+            .json::<Vec<serde_json::Value>>()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
+        Ok(body
+            .iter()
+            .filter_map(|z| z.get("zaehler_id").and_then(|v| v.as_str()))
+            .map(str::to_owned)
+            .collect())
+    }
+
     /// `PUT /api/v1/zaehler/{zaehler_id}/register`
     ///
     /// Upsert a `ZaehlzeitRegisterRecord` for a given Zähler.  Idempotent: the

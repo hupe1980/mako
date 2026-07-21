@@ -110,8 +110,30 @@ CREATE TABLE billing_run_log (
 );
 
 COMMENT ON TABLE billing_run_log IS
-    'Monthly automated batch run audit trail and idempotency guard. '
-    'UNIQUE (tenant, lf_mp_id, year, month) prevents double-runs.';
+    '§40b EnWG billing-run audit: one row per (tenant, lf, calendar month), '
+    'accumulated across the daily worker sweeps of that month. Per-invoice '
+    'idempotency lives in billing_records (unique malo+period+product); this '
+    'table answers "did the scheduled runs of month X happen, and how did '
+    'they go".';
+
+-- ── §40b Abs. 2 EnWG — monthly Abrechnungsinformation log ────────────────────
+-- Customers with remote-readable meters (iMSys) receive a free monthly
+-- consumption/cost information. One row per delivered info; the UNIQUE guard
+-- makes the daily worker idempotent per month.
+
+CREATE TABLE abrechnungsinfo_log (
+    id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant        TEXT        NOT NULL,
+    malo_id       TEXT        NOT NULL,
+    info_year     SMALLINT    NOT NULL,
+    info_month    SMALLINT    NOT NULL CHECK (info_month BETWEEN 1 AND 12),
+    sent_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant, malo_id, info_year, info_month)
+);
+
+COMMENT ON TABLE abrechnungsinfo_log IS
+    '§40b Abs. 2 EnWG: monthly Abrechnungsinformation dispatch log for '
+    'iMSys/fernauslesbare MaLos. UNIQUE guard = one info per MaLo and month.';
 
 -- ── VPP (Virtual Power Plant) contracts ──────────────────────────────────────
 -- Maps SteuerbareRessource-ID → billing parameters for auto-settlement of

@@ -107,3 +107,13 @@ edmd_url       = "http://edmd:8380"
 erp_webhook_url = "http://erp:8000/events"
 erp_hmac_secret = "env:VERTRAGD_ERP_HMAC_SECRET"
 ```
+
+## §40b EnWG billing cadence
+
+Every Versorgungsvertrag carries an `abrechnungszyklus`
+(`MONATLICH` / `VIERTELJAEHRLICH` / `HALBJAEHRLICH` / `JAEHRLICH`, default
+annual) — §40b EnWG obliges the supplier to offer the shorter cadences; the
+customer's choice is a contract fact. `GET
+/api/v1/vertraege/billing-candidates` lists all active supply components with
+their cadence and supply window; billingd's billing-run worker consumes it to
+schedule §40c-compliant invoices.

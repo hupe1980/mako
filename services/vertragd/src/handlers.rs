@@ -339,6 +339,27 @@ pub async fn get_vertrag_by_malo(
     }
 }
 
+/// `GET /api/v1/vertraege/billing-candidates` — active supply components with
+/// their §40b EnWG billing cadence.
+///
+/// Consumed by billingd's billing-run worker: one entry per active
+/// Vertragskomponente with a MaLo, carrying the contract's
+/// `abrechnungszyklus` (MONATLICH/VIERTELJAEHRLICH/HALBJAEHRLICH/JAEHRLICH)
+/// and the supply window for period clipping.
+pub async fn list_billing_candidates_handler(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+) -> impl IntoResponse {
+    match crate::pg::list_billing_candidates(&pool, &cfg.tenant).await {
+        Ok(rows) => Json(serde_json::json!({
+            "count": rows.len(),
+            "candidates": rows,
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 /// `GET /api/v1/vertraege` — list open contracts.
 pub async fn list_vertraege(
     Extension(pool): Extension<PgPool>,

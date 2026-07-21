@@ -27,7 +27,7 @@
 //! | `HEMS` | `calculate_hems` | Platform + event billing |
 //! | `EMOBILITY` | `calculate_emobility` | CPO/EMSP service billing |
 //! | `ENERGIEDIENSTLEISTUNG` | `calculate_energiedienstleistung` | MSB, EMS, maintenance |
-//! | `BUNDLE` | composite | Per-component recursion via tarifbd |
+//! | `SHARING` | `EnergyShareProvider` | §42c EnWG Energiegemeinschaft credit |
 //!
 //! Port: `:9280`
 //!
@@ -54,7 +54,7 @@ use axum::{
     Extension, Router,
     routing::{get, post},
 };
-use billingd::{clients, config, handlers, mcp_server};
+use billingd::{billing_runs, clients, config, handlers, mcp_server};
 use mako_markt::marktd_client::MarktdClient;
 use mako_service::{health::health_routes, load_config};
 use secrecy::SecretString;
@@ -69,11 +69,36 @@ async fn main() -> anyhow::Result<()> {
     let cfg: config::BillingdConfig = load_config("billingd").context("load config")?;
     let cfg = Arc::new(cfg);
 
+    // Fail closed: without `[oidc]` every billing endpoint (calculate,
+    // correction, VPP contract mutation) accepts any caller. That posture
+    // must be requested by name via `allow_insecure_no_auth`.
+    if !cfg.allow_insecure_no_auth && cfg.oidc.is_none() {
+        anyhow::bail!(
+            "refusing to start without [oidc]: the billing API would accept \
+             unauthenticated calculate/correction/mutation requests. \
+             Configure [oidc] or set allow_insecure_no_auth = true (dev only)."
+        );
+    }
+    // The VPP auto-billing webhook mutates billing state on inbound events;
+    // running it without HMAC verification is only allowed by name.
+    if !cfg.allow_insecure_no_auth && cfg.vpp_auto_billing && cfg.inbound_webhook_secret.is_none() {
+        anyhow::bail!(
+            "refusing to start: vpp_auto_billing is enabled but inbound_webhook_secret \
+             is not set — unsigned webhooks could trigger billing. Configure \
+             inbound_webhook_secret or set allow_insecure_no_auth = true (dev only)."
+        );
+    }
+    if cfg.allow_insecure_no_auth {
+        tracing::warn!(
+            "allow_insecure_no_auth is set — HTTP API authentication is degraded (dev mode)"
+        );
+    }
+
     let pool = PgPool::connect(&cfg.database_url)
         .await
         .context("connect PostgreSQL")?;
 
-    // Run migrations (0001_initial.sql → 0002_vpp_contracts.sql → …).
+    // Run migrations (currently a single 0001_schema.sql).
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await
@@ -94,6 +119,29 @@ async fn main() -> anyhow::Result<()> {
             .as_deref()
             .unwrap_or("http://localhost:9780"),
     ));
+
+    // ── OIDC/JWT authentication ───────────────────────────────────────────────
+    let http = mako_service::http::default_client();
+    let ct = mako_service::shutdown::token();
+
+    // ── §40b EnWG scheduled billing runs (config-gated) ──────────────────────
+    billing_runs::spawn_billing_run_worker(
+        Arc::clone(&cfg),
+        pool.clone(),
+        Arc::clone(&tarifbd),
+        Arc::clone(&edmd),
+        Arc::clone(&marktd),
+        Arc::clone(&vertragd),
+        ct.clone(),
+    );
+    let oidc = mako_service::oidc::OidcConfig::build_verifier(
+        cfg.oidc.as_ref(),
+        &http,
+        &cfg.tenant,
+        ct.clone(),
+    )
+    .await
+    .context("OIDC setup")?;
 
     let app = Router::new()
         .merge(health_routes(|| async { true }))
@@ -160,6 +208,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/billing/:id/ubl",
             axum::routing::get(handlers::get_ubl),
         )
+        .layer(Extension(oidc))
         .layer(Extension(Arc::clone(&cfg)))
         .layer(Extension(tarifbd))
         .layer(Extension(edmd))

@@ -3,6 +3,7 @@
 //! Separates *what we're billing* (quantities, products) from *how we're billing it*
 //! (period, identifiers, invoice type, regulatory rates).
 
+use crate::rates::RoundMoney;
 use rust_decimal::Decimal;
 
 use crate::rates::RegulatoryRates;
@@ -57,6 +58,68 @@ pub struct Vertragsinformationen {
     /// Next scheduled Abrechnungstermin.
     #[serde(default)]
     pub naechster_abrechnungstermin: Option<time::Date>,
+}
+
+/// §40 Abs. 2 EnWG — consumer information the invoice must state.
+///
+/// Nr. 1 (supplier identity and contact), Nr. 9 (rights in dispute
+/// resolution, Schlichtungsstelle Energie per §111b EnWG), Nr. 10 (contact
+/// data of the Verbraucherservice der Bundesnetzagentur) and Nr. 11
+/// (Energieberatung contact). These change no amount, but a Letztverbraucher
+/// invoice without them is incomplete under §40 Abs. 2.
+///
+/// [`Default`] carries the statutory public contact data — the
+/// Schlichtungsstelle and BNetzA entries are fixed by law, not by operator —
+/// so a bill can never silently lack the mandatory hints. The supplier
+/// fields must be filled by the caller (billingd config).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Verbraucherinformationen {
+    /// §40 Abs. 2 Nr. 1: supplier name as displayed on the bill.
+    #[serde(default)]
+    pub lieferant_name: Option<String>,
+    /// §40 Abs. 2 Nr. 1: supplier postal address.
+    #[serde(default)]
+    pub lieferant_anschrift: Option<String>,
+    /// §40 Abs. 2 Nr. 1: customer-service contact (hotline and/or e-mail).
+    #[serde(default)]
+    pub lieferant_kontakt: Option<String>,
+    /// §40 Abs. 2 Nr. 9: dispute-resolution hint incl. Schlichtungsstelle
+    /// Energie contact (§111b EnWG).
+    pub schlichtungsstelle: String,
+    /// §40 Abs. 2 Nr. 10: Verbraucherservice der Bundesnetzagentur contact.
+    pub bnetza_verbraucherservice: String,
+    /// §40 Abs. 2 Nr. 11: Energieberatung contact hint (Verbraucherzentrale).
+    pub energieberatung: String,
+    /// §40 Abs. 2 Nr. 12: supplier-switch hint incl. §41c price-comparison
+    /// tools.
+    pub wechselhinweis: String,
+}
+
+impl Default for Verbraucherinformationen {
+    fn default() -> Self {
+        Self {
+            lieferant_name: None,
+            lieferant_anschrift: None,
+            lieferant_kontakt: None,
+            schlichtungsstelle: "Bei Streitigkeiten können Sie die Schlichtungsstelle Energie e.V. \
+                 anrufen (§111b EnWG): Friedrichstraße 133, 10117 Berlin, \
+                 Tel. 030 2757240-0, info@schlichtungsstelle-energie.de, \
+                 www.schlichtungsstelle-energie.de. Voraussetzung ist, dass der \
+                 Lieferant Ihrer Beschwerde nicht binnen vier Wochen abgeholfen hat."
+                .to_owned(),
+            bnetza_verbraucherservice: "Verbraucherservice der Bundesnetzagentur für den Bereich Elektrizität \
+                 und Gas: Postfach 8001, 53105 Bonn, Tel. 030 22480-500, \
+                 verbraucherservice-energie@bnetza.de."
+                .to_owned(),
+            energieberatung: "Unabhängige Energieberatung erhalten Sie bei der \
+                 Energieberatung der Verbraucherzentrale, www.verbraucherzentrale-energieberatung.de."
+                .to_owned(),
+            wechselhinweis: "Informationen zum Lieferantenwechsel und behördlich zugelassene \
+                 Preisvergleichsinstrumente (§41c EnWG) finden Sie unter \
+                 www.bundesnetzagentur.de."
+                .to_owned(),
+        }
+    }
 }
 
 // ── InvoiceType ───────────────────────────────────────────────────────────────
@@ -322,7 +385,7 @@ impl AbschlagDeduction {
         if self.ust_satz.is_zero() {
             return self.betrag_eur;
         }
-        (self.betrag_eur / (Decimal::ONE + self.ust_satz)).round_dp(2)
+        (self.betrag_eur / (Decimal::ONE + self.ust_satz)).round_kfm(2)
     }
 
     /// The tax contained in the gross payment.
@@ -658,6 +721,13 @@ pub struct BillingContext {
     #[serde(default)]
     pub vertragsinformationen: Option<Vertragsinformationen>,
 
+    /// §40 Abs. 2 EnWG — consumer information (supplier contact,
+    /// Schlichtungsstelle, BNetzA Verbraucherservice, Energieberatung,
+    /// Wechselhinweis). `None` falls back to
+    /// [`Verbraucherinformationen::default`] at render time — the statutory
+    /// hints are never omitted from a Rechnung.
+    pub verbraucherinformationen: Option<Verbraucherinformationen>,
+
     /// §42 EnWG — Stromkennzeichnung, structured.
     ///
     /// Fuel-mix percentages, the specific CO₂ emissions (§42 Abs. 2 Nr. 2 —
@@ -798,7 +868,7 @@ impl BillingContext {
         }
 
         let frac = Decimal::from(billable) / Decimal::from(period_days);
-        Some(frac.round_dp(6))
+        Some(frac.round_kfm(6))
     }
 
     /// Total advance payments included in this context.
@@ -887,7 +957,7 @@ mod tests {
         let frac = ctx.billing_days_fraction().unwrap();
         // billable: Jan 16..31 = 16 days out of 31
         let expected = Decimal::from(16) / Decimal::from(31);
-        assert_eq!(frac, expected.round_dp(6));
+        assert_eq!(frac, expected.round_kfm(6));
     }
 
     #[test]
@@ -899,7 +969,7 @@ mod tests {
         let frac = ctx.billing_days_fraction().unwrap();
         // billable: Jan 01..15 = 15 days out of 31
         let expected = Decimal::from(15) / Decimal::from(31);
-        assert_eq!(frac, expected.round_dp(6));
+        assert_eq!(frac, expected.round_kfm(6));
     }
 
     #[test]

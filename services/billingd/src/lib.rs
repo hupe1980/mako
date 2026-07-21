@@ -19,6 +19,7 @@
 //! The billing calculation engine itself lives in the `energy_billing` crate
 //! and is used directly via `energy_billing::Product::build_engine()`.
 
+pub mod billing_runs;
 pub mod clients;
 pub mod config;
 pub mod handlers;

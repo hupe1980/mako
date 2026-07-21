@@ -12,7 +12,7 @@
 //! | `list_vpp_settlements` | List VPP aggregation settlement records |
 //! | `list_corrections` | List Korrekturrechnung / Stornorechnung records (§22 MessZV) |
 //! | `calculate_billing` | Trigger a billing calculation run for a MaLo |
-//! | `list_product_categories` | Describe all 13 billing categories and their required fields |
+//! | `list_product_categories` | Describe all 12 billing categories and their required fields |
 //! | `get_billing_summary` | Aggregate billing stats per MaLo (total billed, avg monthly) |
 //! | `validate_tariff_config` | Pre-flight validation: §41b iMSys guard, KAV plausibility, missing fields |
 //! | `explain_invoice_position` | Explain how a billing position was calculated (PositionTrace audit) |
@@ -28,6 +28,7 @@
 //! | `eeg-billing` | Configure EEG/EINSPEISUNG billing for feed-in plants |
 //! | `gas-billing` | Configure Gas billing — Brennwertkorrektur, BEHG CO₂, H2-blend |
 
+use energy_billing::RoundMoney;
 use std::sync::Arc;
 
 use axum::{
@@ -251,37 +252,31 @@ The XML is BASE64-free — returns the raw XML string.",
         use crate::pg::fetch_billing_record;
         match fetch_billing_record(&self.state.pool, id).await {
             Ok(Some(row)) => {
-                use crate::xrechnung::{XRechnungInfo, build_zugferd_cii_xml};
-                use rust_decimal::dec;
-                let info = XRechnungInfo {
-                    prepaid_eur: rust_decimal::Decimal::ZERO,
-                    invoice_number: row
-                        .rechnung_json
-                        .get("rechnungsnummer")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("UNKNOWN")
-                        .to_owned(),
-                    issue_date: row.period_to,
-                    due_date: None,
-                    period_from: row.period_from,
-                    period_to: row.period_to,
-                    seller_mp_id: self.state.tenant.clone(),
-                    seller_name: self.state.seller_name.clone(),
-                    seller_vat_id: self.state.seller_vat_id.clone(),
-                    seller_address: None,
-                    buyer_id: row.malo_id.clone(),
-                    buyer_name: row.malo_id.clone(),
-                    malo_id: row.malo_id.clone(),
-                    positions: Vec::new(),
-                    netto_eur: row.total_netto_eur.unwrap_or(dec!(0)),
-                    mwst_eur: row
-                        .total_brutto_eur
-                        .and_then(|b| row.total_netto_eur.map(|n| b - n))
-                        .unwrap_or(dec!(0)),
-                    brutto_eur: row.total_brutto_eur.unwrap_or(dec!(0)),
-                    tax_subtotals: Vec::new(),
-                    vat_rate_pct: dec!(19),
+                use crate::xrechnung::{build_zugferd_cii_xml, info_from_rechnung_json};
+                // Single source with the HTTP endpoint: positions, tax
+                // breakdown, prepaid advances and zahlungsziel all come from
+                // the stored rechnung_json — no hardcoded 19 % / 0-prepaid.
+                let netto = row.total_netto_eur.unwrap_or_default();
+                let brutto = row.total_brutto_eur.unwrap_or_default();
+                let mwst = brutto - netto;
+                let vat_rate_pct = if netto > rust_decimal::Decimal::ZERO {
+                    (mwst / netto * rust_decimal::dec!(100)).round_kfm(2)
+                } else {
+                    rust_decimal::dec!(19)
                 };
+                let info = info_from_rechnung_json(
+                    &row.rechnung_json,
+                    &row.malo_id,
+                    &row.lf_mp_id,
+                    &self.state.seller_name,
+                    self.state.seller_vat_id.clone(),
+                    netto,
+                    mwst,
+                    brutto,
+                    row.period_from,
+                    row.period_to,
+                    vat_rate_pct,
+                );
                 let xml = build_zugferd_cii_xml(&info);
                 ContentBlock::json(serde_json::json!({
                     "billing_record_id": id,
@@ -495,7 +490,7 @@ WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM
             { "category": "HEMS", "description": "Home Energy Management System — platform subscription + optimization events", "required": ["hems_subscription_eur_per_month"], "optional": ["hems_optimization_event_eur", "hems_readout_event_eur"], "meter": "hems_meter.months, hems_meter.optimization_events, hems_meter.readout_events" },
             { "category": "EMOBILITY", "description": "EV charging CPO/EMSP — service fee + kWh + session fees", "required": ["emobility_service_fee_eur or emobility_kwh_price_ct"], "optional": ["emobility_session_fee_eur", "emobility_roaming_fee_eur"], "meter": "emobility_meter.months, emobility_meter.kwh_charged, emobility_meter.sessions" },
             { "category": "ENERGIEDIENSTLEISTUNG", "description": "Energy services (MSB, maintenance, analytics) — flat fee + event count", "required": ["service_fee_eur or service_event_price_eur"], "optional": [], "meter": "service_meter.months, service_meter.event_count" },
-            { "category": "BUNDLE", "description": "Composite product — NOT YET IMPLEMENTED. Submit individual calculate requests per component.", "required": [], "note": "Returns 501 Not Implemented. Submit separate requests per component product." }
+            { "category": "SHARING", "description": "§42c EnWG Energiegemeinschaft — community energy sharing credit against the residual supply", "required": ["sharing product configuration"], "meter": "electricity meter + sharing allocation" }
         ]);
         ContentBlock::json(categories)
             .map(|b| CallToolResult::success(vec![b]))

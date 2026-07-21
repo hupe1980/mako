@@ -2,6 +2,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use anyhow::Context as _;
+use energy_billing::RoundMoney;
 use rust_decimal::Decimal;
 use serde::Serialize;
 use sqlx::{PgPool, Row};
@@ -363,8 +364,8 @@ pub async fn check_billing_anomaly(
         lf_mp_id: lf_mp_id.to_owned(),
         latest_record_id: Some(latest_id),
         latest_brutto_eur: Some(latest),
-        rolling_avg_brutto_eur: Some(avg.round_dp(2)),
-        deviation_pct: Some(deviation_pct.round_dp(2)),
+        rolling_avg_brutto_eur: Some(avg.round_kfm(2)),
+        deviation_pct: Some(deviation_pct.round_kfm(2)),
         is_anomaly,
         sample_count: prior.len() as i64,
         threshold_pct: threshold,
@@ -509,4 +510,105 @@ pub async fn record_vpp_dispatch(
     .await
     .context("record_vpp_dispatch")?;
     Ok(())
+}
+
+// ── §40b EnWG billing-run + Abrechnungsinformation logs ───────────────────────
+
+/// Accumulate a daily billing-run sweep into the month's `billing_run_log`
+/// row (§40b EnWG audit): first sweep of the month inserts, later sweeps add
+/// their counts. `failed` sticks once set — a month with any failed sweep
+/// needs operator attention even if a later sweep succeeded.
+pub async fn record_billing_run(
+    pool: &PgPool,
+    tenant: &str,
+    lf_mp_id: &str,
+    year: i16,
+    month: i16,
+    records: i32,
+    errors: i32,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r"INSERT INTO billing_run_log
+              (tenant, lf_mp_id, billing_year, billing_month,
+               records_count, errors_count, status)
+          VALUES ($1, $2, $3, $4, $5, $6,
+                  CASE WHEN $6 > 0 THEN 'failed' ELSE 'completed' END)
+          ON CONFLICT (tenant, lf_mp_id, billing_year, billing_month) DO UPDATE
+          SET records_count = billing_run_log.records_count + EXCLUDED.records_count,
+              errors_count  = billing_run_log.errors_count  + EXCLUDED.errors_count,
+              status        = CASE
+                                  WHEN billing_run_log.status = 'failed'
+                                       OR EXCLUDED.errors_count > 0 THEN 'failed'
+                                  ELSE 'completed'
+                              END,
+              run_at        = now()",
+    )
+    .bind(tenant)
+    .bind(lf_mp_id)
+    .bind(year)
+    .bind(month)
+    .bind(records)
+    .bind(errors)
+    .execute(pool)
+    .await
+    .context("record_billing_run")?;
+    Ok(())
+}
+
+/// A scheduled invoice for this MaLo and period already exists (any outcome).
+///
+/// The billing-run worker's per-invoice idempotency: `billing_records` is
+/// unique on (malo, period, product, tenant), so an existing row for the
+/// window means the period is billed (or awaiting dispatch) and the worker
+/// skips it.
+pub async fn billing_record_exists_for_period(
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+    period_from: Date,
+    period_to: Date,
+) -> anyhow::Result<bool> {
+    let row = sqlx::query(
+        "SELECT 1 FROM billing_records
+         WHERE tenant = $1 AND malo_id = $2
+           AND period_from = $3 AND period_to = $4
+           AND is_correction = false
+         LIMIT 1",
+    )
+    .bind(tenant)
+    .bind(malo_id)
+    .bind(period_from)
+    .bind(period_to)
+    .fetch_optional(pool)
+    .await
+    .context("billing_record_exists_for_period")?;
+    Ok(row.is_some())
+}
+
+/// Claim the monthly §40b Abs. 2 Abrechnungsinformation for a MaLo.
+///
+/// Returns `true` when this call inserted the claim (caller must now send the
+/// info), `false` when the month was already delivered — the UNIQUE guard
+/// makes the daily worker idempotent.
+pub async fn claim_abrechnungsinfo(
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+    year: i16,
+    month: i16,
+) -> anyhow::Result<bool> {
+    let row = sqlx::query(
+        r"INSERT INTO abrechnungsinfo_log (tenant, malo_id, info_year, info_month)
+          VALUES ($1, $2, $3, $4)
+          ON CONFLICT (tenant, malo_id, info_year, info_month) DO NOTHING
+          RETURNING id",
+    )
+    .bind(tenant)
+    .bind(malo_id)
+    .bind(year)
+    .bind(month)
+    .fetch_optional(pool)
+    .await
+    .context("claim_abrechnungsinfo")?;
+    Ok(row.is_some())
 }

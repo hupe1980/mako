@@ -6,6 +6,8 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use energy_billing::RoundMoney;
+use mako_service::oidc::Claims;
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -191,7 +193,7 @@ fn engine_error_body(context: &str, e: &energy_billing::EngineError) -> String {
 /// All `*_meter` fields are optional — the engine selects the correct one based on
 /// `tariff.category`.  Unsupported meter inputs for the active category are silently
 /// ignored.  Supply `tariff` and/or `meter` as overrides to skip external lookups.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct CalculateRequest {
     pub lf_mp_id: String,
     /// §41 Abs. 1 Nr. 5 EnWG — Netzbetreiber identification on the invoice.
@@ -226,6 +228,16 @@ pub struct CalculateRequest {
     pub emobility_meter: Option<EmobilityMeterInput>,
     /// Service usage input (ENERGIEDIENSTLEISTUNG category).
     pub service_meter: Option<ServiceMeterInput>,
+    /// Issue a Schlussrechnung (§40c EnWG: end of supply — move-out or
+    /// supplier switch). Sets `rechnungsart = SCHLUSSRECHNUNG` and settles
+    /// the paid `abschlaege` against the consumption bill.
+    #[serde(default)]
+    pub schlussrechnung: bool,
+    /// Paid advance payments to settle on this invoice (§40c Abs. 2 EnWG:
+    /// credits are offset with the next Abschlag or refunded within two
+    /// weeks). Each entry carries the VAT rate it was invoiced at.
+    #[serde(default)]
+    pub abschlaege: Vec<energy_billing::AbschlagDeduction>,
 }
 
 // ── Calculate ─────────────────────────────────────────────────────────────────
@@ -242,6 +254,7 @@ pub struct CalculateRequest {
 /// 7. Emit `de.billing.rechnung.erstellt` CloudEvent
 #[allow(clippy::too_many_arguments)]
 pub async fn post_calculate(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
     Extension(tarifbd): Extension<Arc<TarifbdClient>>,
@@ -261,13 +274,20 @@ pub async fn post_calculate(
         Err(e) => return e.into_response(),
     };
 
-    let rates = cfg.regulatory_rates_for_period(period_from, period_to);
-    let rechnungsnummer = req
-        .rechnungsnummer
-        .clone()
-        .unwrap_or_else(|| format!("BILL-{malo_id}-{period_from}"));
+    let rates = cfg.regulatory_rates_for_period(tariff.category_str(), period_from, period_to);
+    // §14 Abs. 4 Nr. 4 UStG: the Rechnungsnummer must be einmalig. The DB
+    // uniqueness spans (malo, period, product, tenant) — two products billed
+    // for the same MaLo and period are distinct invoices, so the product code
+    // is part of the number series.
+    let rechnungsnummer = req.rechnungsnummer.clone().unwrap_or_else(|| {
+        format!(
+            "BILL-{malo_id}-{}-{period_from}",
+            tariff.product_code().unwrap_or(tariff.category_str())
+        )
+    });
 
     let result = match dispatch_calculator(
+        &cfg,
         &tariff,
         &req,
         &malo_id,
@@ -308,6 +328,7 @@ pub async fn post_calculate(
     if let Some(ref webhook_url) = cfg.erp_webhook_url {
         emit_cloud_event(
             webhook_url,
+            cfg.erp_hmac_secret.as_deref(),
             &pool,
             record_id,
             &malo_id,
@@ -336,6 +357,7 @@ pub async fn post_calculate(
 /// `POST /api/v1/billing/{malo_id}/preview` — dry-run, no persist, no CloudEvent.
 #[allow(clippy::too_many_arguments)]
 pub async fn post_preview(
+    _claims: Claims,
     Extension(_pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
     Extension(tarifbd): Extension<Arc<TarifbdClient>>,
@@ -353,12 +375,13 @@ pub async fn post_preview(
         Ok(t) => t,
         Err(e) => return e.into_response(),
     };
-    let rates = cfg.regulatory_rates_for_period(period_from, period_to);
+    let rates = cfg.regulatory_rates_for_period(tariff.category_str(), period_from, period_to);
     let rechnungsnummer = req
         .rechnungsnummer
         .clone()
         .unwrap_or_else(|| format!("PREVIEW-{malo_id}-{period_from}"));
     let result = match dispatch_calculator(
+        &cfg,
         &tariff,
         &req,
         &malo_id,
@@ -465,6 +488,7 @@ async fn build_quantities(
 /// Returns an `Invoice` instead of a `BillingResult`.
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_invoice(
+    cfg: &BillingdConfig,
     tariff: &Product,
     req: &CalculateRequest,
     malo_id: &str,
@@ -477,15 +501,6 @@ async fn dispatch_invoice(
     tarifbd: &Arc<TarifbdClient>,
     vertragd: &Arc<VertragdClient>,
 ) -> Result<Invoice, (StatusCode, String)> {
-    // BUNDLE: requires component recursion — not yet supported
-    if tariff.category_str() == "BUNDLE" {
-        return Err((
-            StatusCode::NOT_IMPLEMENTED,
-            "BUNDLE billing: resolve component products and submit individual calculate requests"
-                .to_owned(),
-        ));
-    }
-
     let grid = req.grid.clone().unwrap_or_default();
     let quantities = build_quantities(
         tariff,
@@ -513,6 +528,21 @@ async fn dispatch_invoice(
             None
         }
     };
+
+    // §40 Abs. 2 Nr. 6 EnWG — meter identity. The device registry (marktd)
+    // is the authority: MaLo → Lokationszuordnung → MeLo → Zähler. Soft
+    // dependency, logged when missing.
+    let zaehler_id = resolve_zaehlernummer(marktd, malo_id).await;
+    if zaehler_id.is_none() {
+        tracing::warn!(%malo_id, "billingd: no Zählernummer resolvable via marktd — invoice will lack §40 Abs. 2 Nr. 6 meter identity");
+    }
+
+    // §40 Abs. 2 Nr. 7/8 EnWG — consumption comparison. Prior-year kWh from
+    // edmd (same window one year earlier); the comparable-customer-group
+    // value comes from operator config (Stromspiegel/BDEW reference data),
+    // pro-rated to the billing period's length.
+    let verbrauchshistorie =
+        resolve_verbrauchshistorie(cfg, edmd, malo_id, period_from, period_to).await;
     let vertragsinformationen = vertrag.as_ref().map(|v| {
         energy_billing::Vertragsinformationen {
             vertragsdauer: Some(match v.vertrag.vertragsende {
@@ -538,7 +568,15 @@ async fn dispatch_invoice(
         rechnungsnummer: rechnungsnummer.to_owned(),
         period: BillingPeriod::new(period_from, period_to)
             .expect("parse_period guarantees from < to"),
-        invoice_type: InvoiceType::Initial,
+        // §40c EnWG: a Schlussrechnung (end of supply) settles the account;
+        // the engine renders rechnungsart = SCHLUSSRECHNUNG and deducts the
+        // paid Abschläge below from the Zahlbetrag.
+        invoice_type: if req.schlussrechnung {
+            InvoiceType::Final
+        } else {
+            InvoiceType::Initial
+        },
+        abschlage: req.abschlaege.clone(),
         regulatory_rates: rates.clone(),
         contract_id: vertrag.as_ref().map(|v| {
             v.vertrag
@@ -550,6 +588,23 @@ async fn dispatch_invoice(
         vertragsbeginn: vertrag.as_ref().map(|v| v.vertrag.vertragsbeginn),
         vertragsende: vertrag.as_ref().and_then(|v| v.vertrag.vertragsende),
         vertragsinformationen,
+        // §40 Abs. 2 Nr. 6 EnWG — Zählernummer from the marktd device registry.
+        zaehler_id,
+        // §40 Abs. 2 Nr. 7/8 EnWG — Vorjahresverbrauch + Vergleichsgruppe.
+        verbrauchshistorie,
+        // §40 Abs. 2 Nr. 1/9/10/11/12 EnWG — supplier contact from config;
+        // the statutory Schlichtungsstelle/BNetzA/Beratung hints come from
+        // the engine defaults.
+        verbraucherinformationen: Some(energy_billing::Verbraucherinformationen {
+            lieferant_name: Some(
+                cfg.seller_name
+                    .clone()
+                    .unwrap_or_else(|| cfg.tenant.clone()),
+            ),
+            lieferant_anschrift: cfg.seller_address.clone(),
+            lieferant_kontakt: cfg.seller_contact.clone(),
+            ..Default::default()
+        }),
         // Propagate minimum invoice from product definition (tarifbd) to billing context.
         minimum_invoice_eur_brutto: tariff.minimum_invoice_eur_brutto(),
         // §42 EnWG — the product's Stromkennzeichnung, structured, so the
@@ -571,29 +626,112 @@ async fn dispatch_invoice(
         )
     })?;
 
-    // §40c EnWG — Abrechnungen must be issued within six weeks of the end of
-    // the Abrechnungszeitraum (final invoices: of the end of supply). The
-    // engine is clock-free by design, so the deadline is checked here, where a
-    // clock legitimately exists: generation time is what the law measures.
-    let deadline = period_to + time::Duration::weeks(6);
+    // §40c EnWG — Abrechnungen must reach the customer within six weeks of
+    // the end of the Abrechnungszeitraum (Schlussrechnungen: of the end of
+    // supply); **three weeks** for monthly billing. The engine is clock-free
+    // by design, so the deadline is checked here, where a clock legitimately
+    // exists: generation time is what the law measures.
+    let deadline_weeks = if (period_to - period_from).whole_days() <= 32 {
+        3 // §40c Abs. 1 S. 2: monatliche Abrechnung → drei Wochen
+    } else {
+        6
+    };
+    let deadline = period_to + time::Duration::weeks(deadline_weeks);
     let today = time::OffsetDateTime::now_utc().date();
     if today > deadline {
         tracing::warn!(
             %malo_id,
             %period_to,
             %deadline,
-            "billingd: invoice issued after the §40c EnWG six-week deadline"
+            "billingd: invoice issued after the §40c EnWG deadline"
         );
         invoice.warnings.push(energy_billing::BillingWarning {
             code: "SECT40C_DEADLINE_EXCEEDED",
             severity: energy_billing::WarningSeverity::Warning,
             message: format!(
                 "issued {today}, after the §40c EnWG deadline of {deadline} \
-                 (six weeks past the period end {period_to})"
+                 ({deadline_weeks} weeks past the period end {period_to})"
             ),
         });
     }
     Ok(invoice)
+}
+
+/// Resolve the Zählernummer serving a MaLo via the marktd device registry:
+/// MaLo → Lokationszuordnung (B5 graph) → MeLo → Zähler.
+///
+/// Returns the first registered Zähler of the first linked MeLo — the common
+/// single-meter case. Multi-meter locations carry their per-meter identity in
+/// `MeterInput::zaehlernummer` from the caller instead.
+async fn resolve_zaehlernummer(
+    marktd: &Arc<mako_markt::marktd_client::MarktdClient>,
+    malo_id: &str,
+) -> Option<String> {
+    let edges = marktd.get_lokationen(malo_id, "malo", None).await.ok()?;
+    let melo_id = edges
+        .iter()
+        .find(|e| e.nach_typ == "melo")
+        .map(|e| e.nach_id.clone())
+        .or_else(|| {
+            edges
+                .iter()
+                .find(|e| e.von_typ == "melo")
+                .map(|e| e.von_id.clone())
+        })?;
+    marktd
+        .list_zaehler_ids(&melo_id)
+        .await
+        .ok()?
+        .into_iter()
+        .next()
+}
+
+/// The same calendar window one year earlier, Feb 29 clamped to Feb 28.
+fn year_earlier(d: time::Date) -> time::Date {
+    d.replace_year(d.year() - 1)
+        .unwrap_or_else(|_| d - time::Duration::days(365))
+}
+
+/// §40 Abs. 2 Nr. 7/8 EnWG — assemble the consumption comparison.
+///
+/// Prior-year consumption comes from edmd (soft dependency); the
+/// comparable-customer-group annual value comes from operator config and is
+/// pro-rated to the billing period. Returns `None` when neither source
+/// yields a figure, so the engine omits the comparison positions instead of
+/// rendering empty ones.
+async fn resolve_verbrauchshistorie(
+    cfg: &BillingdConfig,
+    edmd: &Arc<EdmdClient>,
+    malo_id: &str,
+    period_from: time::Date,
+    period_to: time::Date,
+) -> Option<energy_billing::Verbrauchshistorie> {
+    let vorjahr_kwh = match edmd
+        .get_billing_period(malo_id, year_earlier(period_from), year_earlier(period_to))
+        .await
+    {
+        Ok(Some(m)) if m.arbeitsmenge_kwh > Decimal::ZERO => Some(m.arbeitsmenge_kwh),
+        Ok(_) => None,
+        Err(e) => {
+            tracing::debug!(%malo_id, error = %e, "billingd: no prior-year consumption from edmd");
+            None
+        }
+    };
+
+    let bundesdurchschnitt_kwh = cfg.vergleichsgruppe_kwh_pro_jahr.map(|annual| {
+        let days = Decimal::from((period_to - period_from).whole_days() + 1);
+        let year_days = Decimal::from(time::util::days_in_year(period_from.year()));
+        energy_billing::round_money(annual * days / year_days, 0)
+    });
+
+    if vorjahr_kwh.is_none() && bundesdurchschnitt_kwh.is_none() {
+        return None;
+    }
+    Some(energy_billing::Verbrauchshistorie {
+        vorjahr_kwh,
+        bundesdurchschnitt_kwh,
+        kundengruppe: cfg.vergleichsgruppe_label.clone(),
+    })
 }
 
 /// Backward-compat shim: dispatch and return Invoice.
@@ -601,7 +739,8 @@ async fn dispatch_invoice(
 /// Called by existing HTTP handlers.
 /// New callers should use `dispatch_invoice` directly.
 #[allow(clippy::too_many_arguments)]
-async fn dispatch_calculator(
+pub(crate) async fn dispatch_calculator(
+    cfg: &BillingdConfig,
     tariff: &Product,
     req: &CalculateRequest,
     malo_id: &str,
@@ -615,6 +754,7 @@ async fn dispatch_calculator(
     vertragd: &Arc<VertragdClient>,
 ) -> Result<Invoice, (StatusCode, String)> {
     dispatch_invoice(
+        cfg,
         tariff,
         req,
         malo_id,
@@ -633,6 +773,7 @@ async fn dispatch_calculator(
 // ── Records ────────────────────────────────────────────────────────────────────
 
 pub async fn list_records(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Query(q): Query<RecordsQuery>,
 ) -> impl IntoResponse {
@@ -659,6 +800,7 @@ pub struct RecordsQuery {
 }
 
 pub async fn get_record(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
@@ -671,6 +813,7 @@ pub async fn get_record(
 
 /// `GET /api/v1/billing/{id}/xrechnung` — ZUGFeRD 2.3 / XRechnung 3.0 CII XML.
 pub async fn get_xrechnung(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
     Path(id): Path<Uuid>,
@@ -682,7 +825,7 @@ pub async fn get_xrechnung(
     };
     // The stored record's own period decides its rates — an XRechnung rendered
     // for an old record must state the VAT rate that period was billed under.
-    let rates = cfg.regulatory_rates_for_period(row.period_from, row.period_to);
+    let rates = cfg.regulatory_rates_for_period(&row.category, row.period_from, row.period_to);
     let netto = row.total_netto_eur.unwrap_or_default();
     let brutto = row.total_brutto_eur.unwrap_or_default();
     let mwst = brutto - netto;
@@ -727,7 +870,7 @@ fn parse_period(from: &str, to: &str) -> Result<(time::Date, time::Date), String
     Ok((pf, pt))
 }
 
-async fn resolve_tariff(
+pub(crate) async fn resolve_tariff(
     req: &CalculateRequest,
     tarifbd: &TarifbdClient,
     malo_id: &str,
@@ -830,21 +973,26 @@ async fn enrich_gas_meter(
     let mut enriched_bw_from_edmd_quality = false;
     let mut enriched_gq_from_marktd = false;
 
-    // ── Step 1: Volume + conversion factors from edmd billing period ──────────
-    // Fetch only when the caller did not supply a volume reading.
-    // The billing period endpoint carries the DSO-confirmed summary quantities.
-    if meter.messung_qm3 == rust_decimal::Decimal::ZERO {
+    // ── Step 1: Energy + conversion factors from edmd billing period ──────────
+    // Fetch only when the caller supplied neither a volume nor an energy value.
+    // edmd reports gas energy as kWh_Hs (`arbeitsmenge_kwh`, Brennwert already
+    // applied by the DSO's MSCONS data) plus the applied conversion factors and
+    // the §40 Abs. 2 Nr. 6 register readings.
+    if meter.messung_qm3 == rust_decimal::Decimal::ZERO && meter.kwh_hs.is_none() {
         match edmd
             .get_gas_billing_period(malo_id, period_from, period_to)
             .await
         {
             Ok(Some(GasBillingPeriod {
-                messung_qm3,
+                kwh_hs,
                 brennwert_kwh_per_qm3,
                 zustandszahl,
                 spitzenleistung_kw,
+                zaehlerstand_von,
+                zaehlerstand_bis,
+                is_estimated,
             })) => {
-                meter.messung_qm3 = messung_qm3;
+                meter.kwh_hs = kwh_hs;
                 if meter.brennwert_kwh_per_qm3.is_none() {
                     meter.brennwert_kwh_per_qm3 = brennwert_kwh_per_qm3;
                 }
@@ -854,6 +1002,13 @@ async fn enrich_gas_meter(
                 if meter.spitzenleistung_kw.is_none() {
                     meter.spitzenleistung_kw = spitzenleistung_kw;
                 }
+                if meter.zaehlerstand_von.is_none() {
+                    meter.zaehlerstand_von = zaehlerstand_von;
+                }
+                if meter.zaehlerstand_bis.is_none() {
+                    meter.zaehlerstand_bis = zaehlerstand_bis;
+                }
+                meter.is_estimated |= is_estimated;
                 enriched_from_edmd_period = true;
             }
             Ok(None) => {
@@ -1017,8 +1172,9 @@ async fn fetch_epex_prices(
     }
 }
 
-async fn emit_cloud_event(
+pub(crate) async fn emit_cloud_event(
     webhook_url: &str,
+    hmac_secret: Option<&str>,
     pool: &PgPool,
     record_id: Uuid,
     malo_id: &str,
@@ -1027,6 +1183,7 @@ async fn emit_cloud_event(
 ) {
     emit_cloud_event_inner(
         webhook_url,
+        hmac_secret,
         pool,
         record_id,
         malo_id,
@@ -1037,8 +1194,10 @@ async fn emit_cloud_event(
     .await
 }
 
-async fn emit_cloud_event_inner(
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn emit_cloud_event_inner(
     webhook_url: &str,
+    hmac_secret: Option<&str>,
     pool: &PgPool,
     record_id: Uuid,
     malo_id: &str,
@@ -1063,14 +1222,19 @@ async fn emit_cloud_event_inner(
             "rechnung": rechnung
         }
     });
+    let body = serde_json::to_vec(&ce).unwrap_or_default();
     let client = reqwest::Client::new();
-    match client
+    let mut req = client
         .post(webhook_url)
         .header("Content-Type", "application/cloudevents+json")
-        .json(&ce)
-        .send()
-        .await
-    {
+        .body(body.clone());
+    // The config documents `erp_hmac_secret` as signing outbound events —
+    // an unsigned emit would be the recurring divergent-worker-event defect.
+    if let Some(secret) = hmac_secret {
+        let sig = mako_markt::cloudevents::compute_signature(secret.as_bytes(), &body);
+        req = req.header("X-Mako-Signature", sig);
+    }
+    match req.send().await {
         Ok(resp) if resp.status().is_success() => {
             let _ = mark_dispatched(pool, record_id, ce_id).await;
         }
@@ -1113,6 +1277,7 @@ pub struct CorrectionRequest {
 /// records.  Both the original and the correction are kept in `billing_records`
 /// for the mandatory 3-year audit trail.
 pub async fn post_correction(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
     Path(id): Path<Uuid>,
@@ -1130,6 +1295,28 @@ pub async fn post_correction(
             "cannot create a correction of a correction — correct the original record instead",
         )
             .into_response();
+    }
+
+    // §14 Abs. 4 Nr. 4 UStG: `KORR-{original_nr}` must stay einmalig — a
+    // second correction of the same original would duplicate the number and
+    // double-negate the amounts in accounting.
+    match sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM billing_records WHERE original_record_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    {
+        Ok(0) => {}
+        Ok(_) => {
+            return (
+                StatusCode::CONFLICT,
+                "a correction for this record already exists — bill the corrected \
+                 amounts as a new invoice instead of correcting twice",
+            )
+                .into_response();
+        }
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 
     // Produce a Korrekturrechnung JSON by negating the original via the library function.
@@ -1172,6 +1359,7 @@ pub async fn post_correction(
     if let Some(ref webhook_url) = cfg.erp_webhook_url {
         emit_cloud_event_inner(
             webhook_url,
+            cfg.erp_hmac_secret.as_deref(),
             &pool,
             correction_id,
             &original.malo_id,
@@ -1331,9 +1519,9 @@ pub struct TarifwechselRequest {
 /// on the next invoice showing the old and new price with their respective
 /// applicable periods.
 pub async fn post_tarifwechsel(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
-    Extension(rates): Extension<Arc<RegulatoryRates>>,
     Path(malo_id): Path<String>,
     Json(req): Json<TarifwechselRequest>,
 ) -> impl IntoResponse {
@@ -1362,7 +1550,12 @@ pub async fn post_tarifwechsel(
     let base_nr = format!("TW-{malo_id}-{period_from}",);
 
     // ── Sub-period A: period_from → switch_date - 1 ───────────────────────────
+    // Each leg is billed under the statutory rates of *its own* dates and
+    // commodity — that is the point of the split (§41 Abs. 5 EnWG price
+    // change; a leg inside a VAT window carries that window's rate).
     let period_a_to = switch_date - time::Duration::days(1);
+    let rates_a =
+        cfg.regulatory_rates_for_period(req.old_tariff.category_str(), period_from, period_a_to);
     let run_id_a = Uuid::new_v4().to_string();
     let ctx_a = BillingContext {
         malo_id: malo_id.clone(),
@@ -1371,7 +1564,7 @@ pub async fn post_tarifwechsel(
         period: BillingPeriod::new(period_from, period_a_to)
             .expect("switch date is validated inside the period"),
         invoice_type: InvoiceType::Initial,
-        regulatory_rates: (*rates).clone(),
+        regulatory_rates: rates_a.clone(),
         nb_mp_id: req.nb_mp_id.clone(),
         billing_run_id: Some(run_id_a),
         ..Default::default()
@@ -1380,7 +1573,7 @@ pub async fn post_tarifwechsel(
         electricity: req.old_meter.clone(),
         ..Default::default()
     };
-    let engine_a = req.old_tariff.build_engine(&grid, &rates);
+    let engine_a = req.old_tariff.build_engine(&grid, &rates_a);
     let inv_a = match engine_a.bill(ctx_a, &quantities_a) {
         Ok(i) => i,
         Err(e) => {
@@ -1393,6 +1586,8 @@ pub async fn post_tarifwechsel(
     };
 
     // ── Sub-period B: switch_date → period_to ─────────────────────────────────
+    let rates_b =
+        cfg.regulatory_rates_for_period(req.new_tariff.category_str(), switch_date, period_to);
     let run_id_b = Uuid::new_v4().to_string();
     let ctx_b = BillingContext {
         malo_id: malo_id.clone(),
@@ -1401,7 +1596,7 @@ pub async fn post_tarifwechsel(
         period: BillingPeriod::new(switch_date, period_to)
             .expect("switch date is validated inside the period"),
         invoice_type: InvoiceType::Initial,
-        regulatory_rates: (*rates).clone(),
+        regulatory_rates: rates_b.clone(),
         nb_mp_id: req.nb_mp_id.clone(),
         billing_run_id: Some(run_id_b),
         ..Default::default()
@@ -1410,7 +1605,7 @@ pub async fn post_tarifwechsel(
         electricity: req.new_meter.clone(),
         ..Default::default()
     };
-    let engine_b = req.new_tariff.build_engine(&grid, &rates);
+    let engine_b = req.new_tariff.build_engine(&grid, &rates_b);
     let inv_b = match engine_b.bill(ctx_b, &quantities_b) {
         Ok(i) => i,
         Err(e) => {
@@ -1457,6 +1652,7 @@ pub async fn post_tarifwechsel(
     if let Some(ref webhook_url) = cfg.erp_webhook_url {
         emit_cloud_event_inner(
             webhook_url,
+            cfg.erp_hmac_secret.as_deref(),
             &pool,
             record_id,
             &malo_id,
@@ -1495,6 +1691,7 @@ pub async fn post_tarifwechsel(
 /// network charges for locally consumed PV electricity.
 #[allow(clippy::too_many_arguments)]
 pub async fn post_ggv_billing(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
     Extension(tarifbd): Extension<Arc<TarifbdClient>>,
@@ -1548,7 +1745,7 @@ pub async fn post_ggv_billing(
             std::collections::HashMap::new()
         };
 
-    let rates = cfg.regulatory_rates_for_period(period_from, period_to);
+    let rates = cfg.regulatory_rates_for_period("SOLAR", period_from, period_to);
     let mut tenant_results: Vec<serde_json::Value> = Vec::with_capacity(req.tenants.len());
     let mut parts: Vec<(String, Invoice)> = Vec::with_capacity(req.tenants.len());
 
@@ -1755,6 +1952,7 @@ pub async fn post_ggv_billing(
     if let Some(ref webhook_url) = cfg.erp_webhook_url {
         emit_cloud_event(
             webhook_url,
+            cfg.erp_hmac_secret.as_deref(),
             &pool,
             sammel_id,
             &ggv_id,
@@ -1848,6 +2046,7 @@ pub struct VppBillingRequest {
 /// RED III Article 17 (§ 41b EnWG transposition, expected 2026):
 /// Aggregators must provide transparent settlement invoices per dispatch event.
 pub async fn post_vpp_billing(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
     Path(vpp_id): Path<String>,
@@ -2052,6 +2251,7 @@ pub struct SammelrechnungRequest {
 /// resolution and per-site audit trails remain available.
 #[allow(clippy::too_many_arguments)]
 pub async fn post_sammelrechnung(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
     Extension(tarifbd): Extension<Arc<TarifbdClient>>,
@@ -2079,7 +2279,7 @@ pub async fn post_sammelrechnung(
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("vertragd: {e}")).into_response(),
     };
 
-    let rates = cfg.regulatory_rates_for_period(period_from, period_to);
+    let rates = cfg.regulatory_rates_for_period("STROM", period_from, period_to);
     let sammel_nr = req
         .rechnungsnummer
         .clone()
@@ -2092,6 +2292,8 @@ pub async fn post_sammelrechnung(
 
     for entry in &malos {
         let dummy_req = CalculateRequest {
+            schlussrechnung: false,
+            abschlaege: Vec::new(),
             lf_mp_id: req.lf_mp_id.clone(),
             nb_mp_id: None,
             period_from: req.period_from.clone(),
@@ -2119,6 +2321,7 @@ pub async fn post_sammelrechnung(
         };
 
         let result = match dispatch_calculator(
+            &cfg,
             &tariff,
             &dummy_req,
             &entry.malo_id,
@@ -2224,6 +2427,7 @@ pub async fn post_sammelrechnung(
     if let Some(ref webhook_url) = cfg.erp_webhook_url {
         emit_cloud_event(
             webhook_url,
+            cfg.erp_hmac_secret.as_deref(),
             &pool,
             sammel_id,
             &rahmenvertrag_id,
@@ -2283,6 +2487,7 @@ pub struct SubmitB2gRequest {
 /// layer; the same transport can be used for PEPPOL BIS once the ERP is
 /// registered as an AP.
 pub async fn post_submit_b2g(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
     Path(id): Path<Uuid>,
@@ -2294,7 +2499,7 @@ pub async fn post_submit_b2g(
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
-    let rates = cfg.regulatory_rates_for_period(row.period_from, row.period_to);
+    let rates = cfg.regulatory_rates_for_period(&row.category, row.period_from, row.period_to);
     let netto = row.total_netto_eur.unwrap_or_default();
     let brutto = row.total_brutto_eur.unwrap_or_default();
     let mwst = brutto - netto;
@@ -2374,6 +2579,7 @@ pub async fn post_submit_b2g(
 ///
 /// The UBL XML can be transmitted via PEPPOL AS4 to any EU member-state portal.
 pub async fn get_ubl(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
     Path(id): Path<Uuid>,
@@ -2412,12 +2618,19 @@ fn build_ubl_invoice(row: &crate::pg::BillingRecordRow, cfg: &BillingdConfig) ->
         .and_then(|v| v.as_str())
         .unwrap_or("UNKNOWN");
     let issue_date = row.period_to.to_string();
-    let due_date = row.period_to.to_string();
+    // §40c EnWG: payment due at the earliest two weeks after receipt of the
+    // payment request — use the engine-stamped zahlungsziel (issue + 14 d).
+    let due_date = row
+        .rechnung_json
+        .get("zahlungsziel")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| (row.period_to + time::Duration::days(14)).to_string());
     let netto = row.total_netto_eur.unwrap_or_default();
     let brutto = row.total_brutto_eur.unwrap_or_default();
     let tax_amount = brutto - netto;
     let tax_pct = if netto > rust_decimal::Decimal::ZERO {
-        (tax_amount / netto * rust_decimal::dec!(100)).round_dp(2)
+        (tax_amount / netto * rust_decimal::dec!(100)).round_kfm(2)
     } else {
         rust_decimal::dec!(19)
     };
@@ -2537,6 +2750,7 @@ fn build_ubl_invoice(row: &crate::pg::BillingRecordRow, cfg: &BillingdConfig) ->
 /// Used to configure the capacity price and billing identifiers that `billingd`
 /// needs when auto-settling a `de.vpp.dispatch.confirmed` dispatch event.
 pub async fn put_vpp_contract(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
     Path(sr_id): Path<String>,
@@ -2558,6 +2772,7 @@ pub async fn put_vpp_contract(
 ///
 /// List all VPP contracts for this tenant.
 pub async fn list_vpp_contracts(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
 ) -> impl IntoResponse {
@@ -2668,8 +2883,14 @@ pub async fn post_vpp_webhook(
         }
         Ok(false) => {}
         Err(e) => {
-            tracing::warn!(tx_id, error = %e, "billingd: vpp_dispatch_ledger check failed");
-            // Fail-open: continue processing to avoid blocking billing.
+            // Fail closed: proceeding without the ledger answer risks billing
+            // the same dispatch twice. The sender retries on 5xx.
+            tracing::error!(tx_id, error = %e, "billingd: vpp_dispatch_ledger check failed");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "idempotency ledger unavailable — retry later",
+            )
+                .into_response();
         }
     }
 
@@ -2894,6 +3115,7 @@ pub async fn post_vpp_webhook(
         });
         emit_cloud_event(
             webhook_url,
+            cfg.erp_hmac_secret.as_deref(),
             &pool,
             record_id,
             &contract.malo_id,
@@ -2939,7 +3161,7 @@ fn compute_dispatch_flexibility_kwh(
         })
         .unwrap_or(dec!(0.25)); // 15-minute default
 
-    (max_power_kw * duration_hours).round_dp(6)
+    (max_power_kw * duration_hours).round_kfm(6)
 }
 
 /// Extract the calendar date (UTC) from an ISO-8601 timestamp string.

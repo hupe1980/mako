@@ -372,27 +372,20 @@ impl EdmdClient {
 
         let body: serde_json::Value = resp.json().await.context("parse billing period")?;
         let meter = MeterInput {
-            arbeitsmenge_kwh: body
-                .get("arbeitsmenge_kwh")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok())
+            arbeitsmenge_kwh: decimal_from_json(body.get("arbeitsmenge_kwh"))
                 .unwrap_or(Decimal::ZERO),
-            arbeitsmenge_ht_kwh: body
-                .get("arbeitsmenge_ht_kwh")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok()),
-            arbeitsmenge_nt_kwh: body
-                .get("arbeitsmenge_nt_kwh")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok()),
-            spitzenleistung_kw: body
-                .get("spitzenleistung_kw")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok()),
-            steuerung_stunden: body
-                .get("steuerung_stunden")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok()),
+            arbeitsmenge_ht_kwh: decimal_from_json(body.get("arbeitsmenge_ht_kwh")),
+            arbeitsmenge_nt_kwh: decimal_from_json(body.get("arbeitsmenge_nt_kwh")),
+            spitzenleistung_kw: decimal_from_json(body.get("spitzenleistung_kw")),
+            steuerung_stunden: decimal_from_json(body.get("steuerung_stunden")),
+            // §40 Abs. 2 Nr. 6 EnWG — start/end register readings for the bill.
+            zaehlerstand_von: decimal_from_json(body.get("zaehlerstand_anfang")),
+            zaehlerstand_bis: decimal_from_json(body.get("zaehlerstand_ende")),
+            // §40a EnWG — how the readings were determined: edmd collapses the
+            // contributing reads to a worst-quality flag; anything that is not
+            // a real measurement must be labeled as estimated on the bill.
+            is_estimated: quality_is_estimated(&body),
+            metering_mode: metering_mode_from_messtyp(&body),
             ..Default::default()
         };
         Ok(Some(meter))
@@ -400,8 +393,15 @@ impl EdmdClient {
 
     /// Fetch Lastgang intervals for §41a dynamic billing.
     ///
-    /// Calls `GET /api/v1/lastgang/{malo_id}?from={from}&to={to}` and
-    /// returns `Vec<DynamicInterval>` (one entry per timestamp).
+    /// Calls `GET /api/v1/lastgang/{malo_id}?from={from}&to={to}` with
+    /// **RFC3339** bounds (edmd rejects bare dates: an unparsable bound
+    /// silently widened the window to epoch..now) and parses the **BO4E
+    /// `Lastgang`** response shape edmd actually emits — one `Lastgang`
+    /// object per OBIS code, each with `werte[]` of
+    /// `{wert, status, zeitraum{startdatum, startuhrzeit}}`. The previous
+    /// flat `{timestamp_utc, wert}` parser matched nothing, so every §41a
+    /// dynamic run saw zero intervals and hard-blocked.
+    ///
     /// Returns an empty Vec when the MaLo has no Lastgang data.
     pub async fn get_lastgang(
         &self,
@@ -409,9 +409,18 @@ impl EdmdClient {
         period_from: time::Date,
         period_to: time::Date,
     ) -> Result<Vec<DynamicInterval>> {
+        // Whole-day window: [from 00:00Z, day-after-to 00:00Z).
+        let from_dt = period_from.midnight().assume_utc();
+        let to_dt = (period_to + time::Duration::days(1))
+            .midnight()
+            .assume_utc();
+        let rfc3339 = time::format_description::well_known::Rfc3339;
         let url = format!(
             "{}/api/v1/lastgang/{}?from={}&to={}",
-            self.base_url, malo_id, period_from, period_to,
+            self.base_url,
+            malo_id,
+            from_dt.format(&rfc3339).context("format from")?,
+            to_dt.format(&rfc3339).context("format to")?,
         );
         let mut req = self.client.get(&url);
         if let Some(key) = &self.api_key {
@@ -425,32 +434,41 @@ impl EdmdClient {
             .map_err(|e| anyhow::anyhow!("edmd lastgang {e}"))?;
 
         let body: serde_json::Value = resp.json().await.context("parse lastgang")?;
-        let intervals = body
+        let mut intervals: Vec<DynamicInterval> = body
             .as_array()
             .cloned()
             .unwrap_or_default()
             .iter()
-            .filter_map(|v| {
-                let ts_str = v
-                    .get("timestamp_utc")
-                    .or_else(|| v.get("zeitstempel"))
-                    .and_then(|s| s.as_str())?;
-                let kwh_str = v
-                    .get("wert")
-                    .or_else(|| v.get("kwh"))
-                    .and_then(|s| s.as_str())?;
+            .flat_map(|lastgang| {
+                lastgang
+                    .get("werte")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .filter_map(|w| {
+                let kwh = decimal_from_json(w.get("wert"))?;
+                let zeitraum = w.get("zeitraum")?;
+                let datum = zeitraum.get("startdatum")?.as_str()?;
+                // `startuhrzeit` is `HH:MM:SS+00:00`; missing → midnight.
+                let uhrzeit = zeitraum
+                    .get("startuhrzeit")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("00:00:00+00:00");
                 let ts = time::OffsetDateTime::parse(
-                    ts_str,
+                    &format!("{datum}T{uhrzeit}"),
                     &time::format_description::well_known::Rfc3339,
                 )
                 .ok()?;
-                let kwh: Decimal = kwh_str.parse().ok()?;
                 Some(DynamicInterval {
                     timestamp_utc: ts,
                     kwh,
                 })
             })
             .collect();
+        // Multiple OBIS Lastgänge arrive concatenated — price lookup needs
+        // chronological order.
+        intervals.sort_by_key(|i| i.timestamp_utc);
         Ok(intervals)
     }
 
@@ -488,31 +506,25 @@ impl EdmdClient {
 
         let body: serde_json::Value = resp.json().await.context("parse gas billing period")?;
 
-        // `messung_qm3` (or legacy `arbeitsmenge_m3`) signals this is a gas MaLo.
-        // If absent, the MaLo is likely an electricity meter — return None.
-        let messung_qm3 = body
-            .get("messung_qm3")
-            .and_then(|v| decimal_from_json(Some(v)))
-            .or_else(|| {
-                body.get("arbeitsmenge_m3")
-                    .and_then(|v| decimal_from_json(Some(v)))
-            });
-
-        let Some(messung_qm3) = messung_qm3 else {
+        // edmd's `MeterBillingPeriod` identifies the commodity via `sparte` and
+        // reports gas energy as `arbeitsmenge_kwh` (kWh_Hs) with the applied
+        // `brennwert_kwh_per_m3`/`zustandszahl` alongside — it never emits a
+        // raw `messung_qm3` volume. The old volume-based detection therefore
+        // matched nothing, and gas MaLos silently fell back to defaults.
+        let sparte = body.get("sparte").and_then(|v| v.as_str()).unwrap_or("");
+        if sparte != "GAS" {
             return Ok(None);
-        };
+        }
 
         Ok(Some(GasBillingPeriod {
-            messung_qm3,
-            brennwert_kwh_per_qm3: body
-                .get("brennwert_kwh_per_m3")
-                .and_then(|v| decimal_from_json(Some(v))),
-            zustandszahl: body
-                .get("zustandszahl")
-                .and_then(|v| decimal_from_json(Some(v))),
-            spitzenleistung_kw: body
-                .get("spitzenleistung_kw")
-                .and_then(|v| decimal_from_json(Some(v))),
+            kwh_hs: decimal_from_json(body.get("arbeitsmenge_kwh")),
+            brennwert_kwh_per_qm3: decimal_from_json(body.get("brennwert_kwh_per_m3")),
+            zustandszahl: decimal_from_json(body.get("zustandszahl")),
+            spitzenleistung_kw: decimal_from_json(body.get("spitzenleistung_kw")),
+            // §40 Abs. 2 Nr. 6 EnWG — register readings (m³ at the gas meter).
+            zaehlerstand_von: decimal_from_json(body.get("zaehlerstand_anfang")),
+            zaehlerstand_bis: decimal_from_json(body.get("zaehlerstand_ende")),
+            is_estimated: quality_is_estimated(&body),
         }))
     }
 
@@ -577,14 +589,39 @@ impl EdmdClient {
 /// in m³ plus the DSO-supplied conversion factors for m³ → kWh_Hs.
 #[derive(Debug, Clone)]
 pub struct GasBillingPeriod {
-    /// Volume at meter conditions (m³).
-    pub messung_qm3: Decimal,
+    /// Gas energy in kWh_Hs — edmd's `arbeitsmenge_kwh` for `sparte = GAS`
+    /// (the Brennwert conversion is already applied by the DSO's MSCONS data).
+    pub kwh_hs: Option<Decimal>,
     /// Abrechnungsbrennwert in kWh/m³ (from edmd, sourced from MSCONS PID 13007).
     pub brennwert_kwh_per_qm3: Option<Decimal>,
     /// Zustandszahl — dimensionless volume conversion factor.
     pub zustandszahl: Option<Decimal>,
     /// Peak demand in kW (Spitzenleistung) for Gas RLM billing.
     pub spitzenleistung_kw: Option<Decimal>,
+    /// Register reading at period start, m³ (§40 Abs. 2 Nr. 6 EnWG).
+    pub zaehlerstand_von: Option<Decimal>,
+    /// Register reading at period end, m³ (§40 Abs. 2 Nr. 6 EnWG).
+    pub zaehlerstand_bis: Option<Decimal>,
+    /// The period's worst quality flag was an estimate/Ersatzwert (§40a EnWG).
+    pub is_estimated: bool,
+}
+
+/// `true` when the period's collapsed quality flag means the value was not a
+/// real measurement (§40a EnWG: estimation must be labeled on the bill).
+fn quality_is_estimated(body: &serde_json::Value) -> bool {
+    matches!(
+        body.get("quality").and_then(|v| v.as_str()),
+        Some("ESTIMATED" | "SUBSTITUTED" | "CALCULATED" | "PRELIMINARY")
+    )
+}
+
+/// Map edmd's `messtyp` (SLP/RLM/IMSYS) onto the engine's `MeteringMode`.
+fn metering_mode_from_messtyp(body: &serde_json::Value) -> energy_billing::MeteringMode {
+    match body.get("messtyp").and_then(|v| v.as_str()) {
+        Some("RLM") => energy_billing::MeteringMode::Rlm,
+        Some("IMSYS") => energy_billing::MeteringMode::Imsys,
+        _ => energy_billing::MeteringMode::Slp,
+    }
 }
 
 /// One gas quality record from `edmd GET /api/v1/gas-quality/{malo_id}`.
@@ -669,6 +706,46 @@ impl VertragdClient {
             .map_err(|e| anyhow::anyhow!("vertragd {e}"))?;
         resp.json().await.context("parse vertrag by malo")
     }
+
+    /// `GET /api/v1/vertraege/billing-candidates`
+    ///
+    /// Active supply components with their §40b EnWG billing cadence — the
+    /// work list for the scheduled billing-run worker.
+    pub async fn get_billing_candidates(&self) -> Result<Vec<BillingCandidate>> {
+        let url = format!("{}/api/v1/vertraege/billing-candidates", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .context("vertragd GET billing-candidates")?;
+        resp.error_for_status_ref()
+            .map_err(|e| anyhow::anyhow!("vertragd {e}"))?;
+        let body: serde_json::Value = resp.json().await.context("parse billing candidates")?;
+        let candidates = body
+            .get("candidates")
+            .cloned()
+            .unwrap_or(serde_json::Value::Array(vec![]));
+        serde_json::from_value(candidates).context("deserialize billing candidates")
+    }
+}
+
+/// One entry of `GET /api/v1/vertraege/billing-candidates`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct BillingCandidate {
+    pub malo_id: String,
+    pub lf_mp_id: String,
+    #[serde(default)]
+    pub nb_mp_id: Option<String>,
+    pub sparte: String,
+    /// §40b EnWG cadence: MONATLICH / VIERTELJAEHRLICH / HALBJAEHRLICH / JAEHRLICH.
+    pub abrechnungszyklus: String,
+    pub vertragsbeginn: time::Date,
+    #[serde(default)]
+    pub vertragsende: Option<time::Date>,
+    pub lieferbeginn: time::Date,
+    #[serde(default)]
+    pub lieferende: Option<time::Date>,
 }
 
 /// Response of `GET /api/v1/vertraege/by-malo/{malo_id}`.

@@ -17,6 +17,7 @@
 //! This makes every invoice amount reproducible and auditable without re-running
 //! the calculation, satisfying BNetzA §20 EnWG audit requirements.
 
+use crate::rates::RoundMoney;
 use rust_decimal::Decimal;
 use rust_decimal::dec;
 
@@ -84,7 +85,7 @@ impl PositionTrace {
         Self {
             formula: format!(
                 "{quantity:.3} {unit} × {unit_price_eur:.5} EUR/{unit} = {:.5} EUR",
-                gross.round_dp(5)
+                gross.round_kfm(5)
             ),
             input_quantity: quantity,
             input_unit_price_eur: unit_price_eur,
@@ -107,7 +108,7 @@ impl PositionTrace {
         Self {
             formula: format!(
                 "{rate:.4} × {netto_base_eur:.5} EUR = {:.5} EUR",
-                gross.round_dp(5)
+                gross.round_kfm(5)
             ),
             input_quantity: netto_base_eur,
             input_unit_price_eur: rate,
@@ -424,11 +425,15 @@ impl BillingPosition {
 /// Round and range-validate a monetary EUR amount to 5 decimal places.
 ///
 /// Uses [`billing::EuroAmount`] internally to detect overflow (max ~92 M EUR).
-/// Returns `Decimal::ZERO` on overflow (same behaviour as `eeg-billing`).
+/// Beyond the fixed-point range the amount is kept and rounded directly —
+/// zeroing it (the old behaviour) silently erased the position's value,
+/// which is exactly the silent-degradation failure a billing engine must
+/// not have. An out-of-range line then fails loudly downstream in the
+/// EN16931 total-reconciliation checks instead of vanishing.
 pub(crate) fn validated_eur(amount: Decimal) -> Decimal {
     billing::EuroAmount::checked_from_decimal(amount)
         .map(billing::EuroAmount::into_decimal)
-        .unwrap_or(Decimal::ZERO)
+        .unwrap_or_else(|_| amount.round_kfm(5))
 }
 
 // ── Convenience constructors ──────────────────────────────────────────────────

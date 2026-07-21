@@ -3,6 +3,7 @@
 //! Collects all `BillingPosition` items from the `BillingEngine` providers,
 //! computes totals, and can serialise to BO4E-compatible `Rechnung` JSON.
 
+use crate::rates::RoundMoney;
 use rust_decimal::Decimal;
 use rust_decimal::dec;
 use serde::Serialize;
@@ -298,7 +299,7 @@ impl Invoice {
             return None;
         }
         // brutto_eur / kWh × 100 → ct/kWh
-        Some((self.brutto_eur / total_kwh * dec!(100)).round_dp(4))
+        Some((self.brutto_eur / total_kwh * dec!(100)).round_kfm(4))
     }
 
     /// Produce a BO4E-compatible `Rechnung` JSONB for `accountingd` ingestion.
@@ -530,9 +531,9 @@ impl Invoice {
             "zusatzAttribute": if zusatz_attribute.is_empty() { serde_json::Value::Null } else { serde_json::json!(zusatz_attribute) },
             // Rounded to cents: these are document totals, and the Steuerbeträge
             // they must reconcile against are themselves stated to the cent.
-            "gesamtnetto":  { "_typ": "BETRAG", "wert": self.netto_eur.round_dp(2).to_string(),  "waehrung": "EUR" },
-            "gesamtsteuer": { "_typ": "BETRAG", "wert": self.mwst_eur.round_dp(2).to_string(),   "waehrung": "EUR" },
-            "gesamtbrutto": { "_typ": "BETRAG", "wert": self.brutto_eur.round_dp(2).to_string(), "waehrung": "EUR" },
+            "gesamtnetto":  { "_typ": "BETRAG", "wert": self.netto_eur.round_kfm(2).to_string(),  "waehrung": "EUR" },
+            "gesamtsteuer": { "_typ": "BETRAG", "wert": self.mwst_eur.round_kfm(2).to_string(),   "waehrung": "EUR" },
+            "gesamtbrutto": { "_typ": "BETRAG", "wert": self.brutto_eur.round_kfm(2).to_string(), "waehrung": "EUR" },
             // BO4E: "Eine Liste mit Steuerbeträgen pro Steuerkennzeichen/Steuersatz;
             // die Summe dieser Beträge ergibt den Wert für gesamtsteuer." Also
             // EN 16931 BG-23, which a receiving system validates rate-by-rate:
@@ -542,7 +543,7 @@ impl Invoice {
             // customer paid it — §41 EnWG requires the reconciliation to be
             // verifiable per payment, not as one lump sum.
             "vorauszahlungen": vorauszahlungen_json,
-            "zahlbetrag": { "_typ": "BETRAG", "wert": self.zahlbetrag_eur.round_dp(2).to_string(), "waehrung": "EUR" },
+            "zahlbetrag": { "_typ": "BETRAG", "wert": self.zahlbetrag_eur.round_kfm(2).to_string(), "waehrung": "EUR" },
             // §40a EnWG Abs. 1 Satz 2 — Gesamtbetrag je Kilowattstunde (all-inclusive ct/kWh).
             // Only set when consumption positions exist (electricity commodity kWh known).
             "kilowattstundenpreisGesamt": kilowattstundenpreis_ct.map(|ct| serde_json::json!({
@@ -564,7 +565,7 @@ impl Invoice {
                     .map(|eur_year| serde_json::json!({ "_typ": "BETRAG", "wert": eur_year.to_string(), "waehrung": "EUR" })),
                 "arbeitspreisCtProKwh": self.positions.iter()
                     .filter(|p| (p.has_tag("strom") || p.has_tag("gas")) && p.category == crate::position::PositionCategory::Commodity && p.unit.starts_with("kWh"))
-                    .map(|p| (p.unit_price_eur * dec!(100)).round_dp(4))
+                    .map(|p| (p.unit_price_eur * dec!(100)).round_kfm(4))
                     .next()
                     .map(|ct| ct.to_string()),
                 "gesamtpreisCtProKwh": kilowattstundenpreis_ct.map(|ct| ct.to_string()),
@@ -574,6 +575,14 @@ impl Invoice {
                 "_typ": "MARKTTEILNEHMER",
                 "externeKundenId": ctx.malo_id
             },
+            // §40 Abs. 2 EnWG Nr. 1/9/10/11/12 — supplier contact,
+            // Schlichtungsstelle Energie (§111b EnWG), BNetzA
+            // Verbraucherservice, Energieberatung and Wechselhinweis. Falls
+            // back to the statutory defaults so the mandatory hints are never
+            // silently absent from a Letztverbraucher invoice.
+            "verbraucherinformationen": serde_json::to_value(
+                ctx.verbraucherinformationen.clone().unwrap_or_default()
+            ).unwrap_or(serde_json::Value::Null),
             "zahlungsziel": zahlungsziel.to_string()
         })
     }
@@ -673,7 +682,7 @@ impl Invoice {
                     if total_frac.is_zero() {
                         pos.quantity
                     } else {
-                        (pos.quantity * fractions[i] / total_frac).round_dp(4)
+                        (pos.quantity * fractions[i] / total_frac).round_kfm(4)
                     }
                 };
                 let mut split_pos = pos.clone();
@@ -966,7 +975,7 @@ pub fn tax_subtotals_of(positions: &[BillingPosition], default_rate: Decimal) ->
         .into_values()
         .map(|(rate, base)| {
             let pct = (rate * Decimal::ONE_HUNDRED).normalize();
-            let tax = (base * rate).round_dp(2);
+            let tax = (base * rate).round_kfm(2);
             TaxSubtotal {
                 category: if rate.is_zero() {
                     VatCategory::ZeroRated
@@ -974,7 +983,7 @@ pub fn tax_subtotals_of(positions: &[BillingPosition], default_rate: Decimal) ->
                     VatCategory::Standard
                 },
                 rate_percent: pct,
-                taxable_base_eur: base.round_dp(2),
+                taxable_base_eur: base.round_kfm(2),
                 tax_amount_eur: tax,
             }
         })

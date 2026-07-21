@@ -198,6 +198,11 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/vertraege/by-malo/:malo_id",
             get(handlers::get_vertrag_by_malo),
         )
+        // §40b EnWG billing cadence — consumed by billingd's billing-run worker
+        .route(
+            "/api/v1/vertraege/billing-candidates",
+            get(handlers::list_billing_candidates_handler),
+        )
         // Expiring contracts monitor (§13 GasGVV / §14 StromGVV / §41 EnWG)
         .route(
             "/api/v1/vertraege/expiring",

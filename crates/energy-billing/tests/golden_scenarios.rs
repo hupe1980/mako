@@ -12,7 +12,7 @@
 //! 3. **EEG feed-in Gutschrift** — solar plant operator monthly credit note
 //! 4. **RLM demand charge** — large commercial electricity with Leistungspreis
 //! 5. **Gas Energiesteuer exemption** — CHP (KWK) §54 EnergieStG
-//! 6. **2022 Energiesteuersenkung** — historic zero-rate check
+//! 6. **Historic rates 2022** — heating gas stayed 0.55; the relief was 7 % USt
 //! 7. **§41b enforcement** — dynamic tariff rejects non-iMSys metering mode
 //! 8. **§40a Kilowattstundenpreis** — mandatory all-inclusive price per kWh
 //! 9. **§41 mandatory fields** — rechnung_json contains all §41 EnWG fields
@@ -626,35 +626,39 @@ fn golden_gas_energiesteuer_exempt_kwk() {
     );
 }
 
-// ── Scenario 6: Historic rate — 2022 Energiesteuersenkung (0-rate) ────────────
+// ── Scenario 6: Historic rates — heating gas was never zero-rated ─────────────
 
-/// **Golden: Gas correction invoice using 2022 emergency 0-rate Energiesteuer**
+/// **Golden: heating-gas Energiesteuer stayed 0.55 ct/kWh through 2022.**
 ///
-/// Germany temporarily reduced the gas Energiesteuer to 0 ct/kWh from
-/// 01.04.2022 to 31.03.2023 (Energiesteuersenkungsgesetz).
+/// The 2022 Energiesteuersenkungsgesetz (BGBl. I 2022 S. 810) reduced
+/// **motor-fuel** rates (§2 Abs. 1 EnergieStG) for June–August 2022 only —
+/// the "Tankrabatt". Heating gas (§2 Abs. 3 Nr. 4) was never reduced; the
+/// actual gas reliefs were the Dezember-Soforthilfe (EWSG) and the USt cut
+/// to 7 % from 01.10.2022 to 31.03.2024 (§28 Abs. 5/6 UStG).
 ///
-/// For a retroactive correction of a 2022 invoice, the correct rate is 0 ct/kWh.
-/// This tests that `energiesteuer_gas_for_year(2022)` returns 0 and that
-/// the `effective_energiesteuer_gas_for_year` method applies it correctly.
+/// A retroactive correction of a 2022 gas invoice therefore uses 0.55 ct/kWh
+/// Energiesteuer and — for periods wholly inside the window — 7 % USt.
 #[test]
-fn golden_2022_energiesteuer_senkung_zero_rate() {
+fn golden_2022_heating_gas_energiesteuer_stays_055() {
     use energy_billing::energiesteuer_gas_for_year;
-    use rust_decimal::Decimal;
 
-    // Verify the historic rate lookup
-    let rate_2022 = energiesteuer_gas_for_year(2022).expect("2022 rate must be known");
-    assert_eq!(
-        rate_2022,
-        Decimal::ZERO,
-        "2022 Energiesteuersenkung: must be 0 ct/kWh"
-    );
+    // The heating-gas rate is constant through the crisis years.
+    for year in [2021, 2022, 2023, 2024] {
+        let rate = energiesteuer_gas_for_year(year).expect("rate must be known");
+        assert_eq!(
+            rate,
+            dec!(0.55),
+            "EnergieStG heating gas {year}: 0.55 ct/kWh — the 2022 Tankrabatt was fuels-only"
+        );
+    }
 
-    // 2023 restored rate
-    let rate_2023 = energiesteuer_gas_for_year(2023).expect("2023 rate must be known");
+    // The real 2022/23 relief: 7 % USt on gas/Wärme (§28 Abs. 5/6 UStG).
+    use energy_billing::mwst_rate_for_gas_waerme_period;
+    use time::macros::date;
     assert_eq!(
-        rate_2023,
-        dec!(0.55),
-        "2023 restored rate must be 0.55 ct/kWh"
+        mwst_rate_for_gas_waerme_period(date!(2023 - 01 - 01), date!(2023 - 12 - 31)),
+        Some(dec!(0.07)),
+        "calendar year 2023 gas bills carry 7 % USt"
     );
 
     // Stromsteuer has been 2.05 ct since 2003

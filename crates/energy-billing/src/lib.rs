@@ -81,7 +81,8 @@ pub mod tariff;
 // Core billing types
 pub use context::{
     AbschlagDeduction, BillingContext, BillingPeriod, CustomerKategorie, InvoiceType,
-    SettlementForm, Verbrauchshistorie, Vertragsart, Vertragsinformationen,
+    SettlementForm, Verbraucherinformationen, Verbrauchshistorie, Vertragsart,
+    Vertragsinformationen,
 };
 pub use engine::BillingEngine;
 pub use error::EngineError;
@@ -100,8 +101,9 @@ pub use quantities::{
     WaermeMeterInput,
 };
 pub use rates::{
-    BEHG_CO2_FACTOR_H_GAS, BEHG_CO2_FACTOR_L_GAS, RegulatoryRates, behg_ct_per_kwh_for_year,
-    energiesteuer_gas_for_year, mwst_rate_for_period, stromsteuer_for_year,
+    BEHG_CO2_FACTOR_H_GAS, BEHG_CO2_FACTOR_L_GAS, RegulatoryRates, RoundMoney,
+    behg_ct_per_kwh_for_year, energiesteuer_gas_for_year, mwst_rate_for_gas_waerme_period,
+    mwst_rate_for_period, round_money, stromsteuer_for_year,
 };
 
 // Typed Product enum + per-category product structs
@@ -119,5 +121,9 @@ pub use providers::{
     HemsProvider, MwStProvider, ServiceProvider, SolarProvider,
 };
 
-// The arithmetic core's error — reachable through [`EngineError::Arithmetic`].
-pub use billing::BillingError;
+// The arithmetic core — `Amount<P>` fixed-point money, the canonical
+// `RoundingStrategy` (kaufmännisch by convention in this workspace), and the
+// error reachable through [`EngineError::Arithmetic`]. `round_money` /
+// `RoundMoney` delegate their mode to this crate; use `Amount` directly
+// where the precision is statutory (cents, 10⁻⁵-EUR unit prices).
+pub use billing::{Amount, BillingError, EuroAmount, RoundingStrategy};

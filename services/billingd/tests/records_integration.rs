@@ -214,3 +214,121 @@ async fn a_correction_references_its_untouched_original() {
     assert_eq!(netto, dec!(100));
     assert_eq!(outcome, "dispatched");
 }
+
+/// §14 Abs. 4 Nr. 4 UStG: the handler refuses a second correction of the same
+/// original via `count(*) WHERE original_record_id = $1` — this proves that
+/// exact detection query sees the first correction.
+#[tokio::test]
+#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+async fn a_second_correction_of_the_same_original_is_detected() {
+    let Some(pool) = test_pool("second_correction").await else {
+        return;
+    };
+    let original = insert_draft(&pool, dec!(100)).await;
+    pg::mark_dispatched(&pool, original, Uuid::new_v4())
+        .await
+        .expect("dispatch");
+
+    let before: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM billing_records WHERE original_record_id = $1")
+            .bind(original)
+            .fetch_one(&pool)
+            .await
+            .expect("count before");
+    assert_eq!(before, 0, "no correction exists yet");
+
+    pg::insert_correction_record(
+        &pool,
+        "9910000000002",
+        "51238696781",
+        "9910000000002",
+        "STROM-BASIS",
+        "STROM",
+        date!(2026 - 01 - 01),
+        date!(2026 - 01 - 31),
+        &serde_json::json!({ "_typ": "RECHNUNG", "rechnungsart": "KORREKTURRECHNUNG" }),
+        dec!(-100),
+        dec!(-119),
+        original,
+        Some("erste Korrektur"),
+    )
+    .await
+    .expect("insert first correction");
+
+    let after: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM billing_records WHERE original_record_id = $1")
+            .bind(original)
+            .fetch_one(&pool)
+            .await
+            .expect("count after");
+    assert_eq!(
+        after, 1,
+        "the guard query the handler runs must see the existing correction \
+         so KORR-{{nr}} stays einmalig"
+    );
+}
+
+/// §40b: the month's `billing_run_log` row accumulates daily sweeps, and a
+/// single failed sweep marks the whole month for operator attention.
+#[tokio::test]
+#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+async fn the_monthly_run_log_accumulates_daily_sweeps() {
+    let Some(pool) = test_pool("run_log").await else {
+        return;
+    };
+    pg::record_billing_run(&pool, "9910000000002", "9910000000002", 2026, 7, 5, 0)
+        .await
+        .expect("first sweep");
+    pg::record_billing_run(&pool, "9910000000002", "9910000000002", 2026, 7, 3, 1)
+        .await
+        .expect("second sweep");
+
+    let (records, errors, status): (i32, i32, String) = sqlx::query_as(
+        "SELECT records_count, errors_count, status FROM billing_run_log
+         WHERE tenant = $1 AND billing_year = 2026 AND billing_month = 7",
+    )
+    .bind("9910000000002")
+    .fetch_one(&pool)
+    .await
+    .expect("one accumulated row");
+    assert_eq!(records, 8, "sweeps accumulate");
+    assert_eq!(errors, 1);
+    assert_eq!(status, "failed", "a failed sweep sticks for the month");
+
+    // A later clean sweep does not launder the failure away.
+    pg::record_billing_run(&pool, "9910000000002", "9910000000002", 2026, 7, 2, 0)
+        .await
+        .expect("third sweep");
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM billing_run_log
+         WHERE tenant = $1 AND billing_year = 2026 AND billing_month = 7",
+    )
+    .bind("9910000000002")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "failed");
+}
+
+/// §40b Abs. 2: the monthly Abrechnungsinformation is claimed exactly once
+/// per MaLo and month — the second daily sweep must not re-send it.
+#[tokio::test]
+#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+async fn the_monthly_abrechnungsinfo_is_claimed_exactly_once() {
+    let Some(pool) = test_pool("abrechnungsinfo").await else {
+        return;
+    };
+    let first = pg::claim_abrechnungsinfo(&pool, "9910000000002", "51238696781", 2026, 6)
+        .await
+        .expect("first claim");
+    assert!(first, "first sweep claims the month");
+    let second = pg::claim_abrechnungsinfo(&pool, "9910000000002", "51238696781", 2026, 6)
+        .await
+        .expect("second claim");
+    assert!(!second, "second sweep must not re-send");
+    // A different month claims independently.
+    let july = pg::claim_abrechnungsinfo(&pool, "9910000000002", "51238696781", 2026, 7)
+        .await
+        .expect("july claim");
+    assert!(july);
+}

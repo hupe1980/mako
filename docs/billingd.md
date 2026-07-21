@@ -7,7 +7,7 @@ mermaid: true
 description: >
   billingd operator guide: Multi-Product Billing Engine (LF role).
   Energy billing engine — user-defined product prices from tarifbd;
-  12 categories (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE);
+  12 categories (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/SHARING);
   §41a EPEX dynamic; §25 Nr. 4 MessEV Brennwertkorrektur; §14a Modul 1/3;
   XRechnung 3.0 / ZUGFeRD 2.3 (EN16931, B2G mandate 01.01.2027).
 ---
@@ -29,7 +29,7 @@ tariff), the output is always the same `Rechnung`. This means:
 
 - BNetzA §22 MessZV compliance: auditors can re-run the calculation from stored inputs
 - No hidden state: all inputs are either stored in `tarifbd`, `edmd`, or `marktd`
-- Testable: `energy-billing` has **160 tests** (property-based, golden master, integration) — zero I/O, zero async, all pure Rust
+- Testable: `energy-billing` has **190 tests** (property-based, golden master, integration) — zero I/O, zero async, all pure Rust
 
 ---
 
@@ -181,11 +181,15 @@ CO₂-Abgabe BEHG         [from billingd.toml] ~1.31 ct/kWh_Hs (65 EUR/t CO₂, 
 MwSt                    [from billingd.toml] 19%
 ```
 
-**Historic statutory rates:** For retroactive correction invoices (e.g. billing period 2022),
-use `RegulatoryRates::effective_energiesteuer_gas_for_year(tariff, year)` to apply the correct
-rate. Germany had a **0 ct/kWh Energiesteuer** during 01.04.2022–31.03.2023 (Energiesteuersenkungsgesetz).
-Similarly, `effective_stromsteuer_for_year()` and `effective_behg_gas_for_year()` support
-historic billing corrections across all statutory levies.
+**Historic statutory rates:** For retroactive correction invoices, the year tables in
+`energy_billing::rates` apply the correct historical defaults: `effective_stromsteuer_for_year()`,
+`effective_energiesteuer_gas_for_year()` (heating gas has been a constant 0.55 ct/kWh_Hs —
+the 2022 Energiesteuersenkungsgesetz reduced motor-fuel rates only) and
+`effective_behg_gas_for_year()`. VAT history is commodity-aware:
+`mwst_rate_for_period()` covers the 2020 COVID 16 % window, and
+`mwst_rate_for_gas_waerme_period()` additionally covers the **7 % gas/Fernwärme window
+01.10.2022–31.03.2024** (§28 Abs. 5/6 UStG). Periods straddling a VAT boundary return
+`None` — split at the Stichtag and merge the invoices.
 
 Supply `gas_meter.messung_qm3` + `brennwert_kwh_per_qm3` + `zustandszahl` in the request.
 `billingd` computes `kWh_Hs = m³ × Hs × Z` and uses it for all price positions.
@@ -539,6 +543,10 @@ The `tariff-optimization-agent` in `agentd` calls `list_billing_records` and
 
 Both variants include `zusatzAttribute.originalRechnungsnummer` for §22 MessZV audit trail.
 
+A second correction of the same original is refused with `409 Conflict` —
+`KORR-{original_nr}` must stay einmalig (§14 Abs. 4 Nr. 4 UStG), and a double
+negation would corrupt the accounting ledger.
+
 ---
 
 ### ENERGIEDIENSTLEISTUNG products
@@ -590,10 +598,33 @@ Content-Type: application/xml; charset=UTF-8
 Content-Disposition: attachment; filename="xrechnung-{id}.xml"
 ```
 
+**Due date (BT-9):** rendered from the Rechnung's `zahlungsziel` (issue + 14
+days) — §40c EnWG lets payment become due at the earliest two weeks after
+receipt of the payment request. The UBL endpoint and the MCP `get_xrechnung`
+tool use the same value; all three render the stored per-rate `steuerbetraege`
+as the EN16931 BG-23 breakdown, so 19 % / 7 % / 0 % mixed invoices reconcile.
+
 **Configuration for XRechnung:**
 ```toml
 seller_vat_id = "DE123456789"   # BT-31 Seller VAT registration number
 ```
+
+---
+
+## §40b scheduled billing runs
+
+The `[billing_runs]` worker (default off) sweeps daily after `run_hour_utc`:
+active contracts and their `abrechnungszyklus` come from vertragd
+(`GET /api/v1/vertraege/billing-candidates`); each contract's most recently
+completed period (previous month/quarter/half, or the rolling year before the
+`vertragsbeginn` anniversary for JAEHRLICH) is billed through the same
+pipeline as `POST …/calculate`, skipping periods that already have a
+`billing_records` row. Monthly audit lives in `billing_run_log` (one
+accumulated row per tenant/LF/month; any failed sweep pins the month
+`failed`). iMSys MaLos additionally receive the free monthly
+Abrechnungsinformation (§40b Abs. 2 EnWG) as
+`de.billing.abrechnungsinformation.monatlich`, logged in
+`abrechnungsinfo_log` — exactly once per MaLo and month.
 
 ---
 

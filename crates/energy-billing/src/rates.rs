@@ -7,6 +7,43 @@ use rust_decimal::Decimal;
 use rust_decimal::dec;
 use serde::{Deserialize, Serialize};
 
+/// Kaufmännisches Runden (DIN 1333): round half **away from zero**.
+///
+/// German commercial practice — and the EN 16931 / XRechnung validation
+/// ecosystem — expect half-up rounding, while `Decimal::round_dp` defaults
+/// to banker's rounding (MidpointNearestEven). Every monetary and quantity
+/// rounding in this crate goes through this one helper so the mode cannot
+/// drift between call sites. Away-from-zero (not literal half-up) keeps
+/// credit notes and Stornorechnungen symmetric to their originals:
+/// round(-0.005) = -0.01 mirrors round(0.005) = 0.01.
+///
+/// The mode itself is **not defined here**: it is
+/// [`billing::RoundingStrategy::MidpointAwayFromZero`] — the same strategy
+/// the `billing` arithmetic core applies inside every `Amount` conversion,
+/// multiplication and division. One authority, two call styles: typed
+/// fixed-point via `billing::Amount` where the precision is statutory, and
+/// this helper where a runtime `dp` is needed on a raw `Decimal`.
+#[must_use]
+pub fn round_money(value: Decimal, dp: u32) -> Decimal {
+    value.round_dp_with_strategy(dp, billing::RoundingStrategy::MidpointAwayFromZero.into())
+}
+
+/// Method-call form of [`round_money`] — `x.round_kfm(2)`.
+///
+/// Named after *kaufmännisches Runden* so a grep for `round_dp(` finding
+/// nothing is the invariant: no call site silently falls back to banker's.
+pub trait RoundMoney {
+    /// Round to `dp` decimal places, half away from zero (DIN 1333).
+    #[must_use]
+    fn round_kfm(&self, dp: u32) -> Decimal;
+}
+
+impl RoundMoney for Decimal {
+    fn round_kfm(&self, dp: u32) -> Decimal {
+        round_money(*self, dp)
+    }
+}
+
 // ── BEHG CO₂ price table ──────────────────────────────────────────────────────
 
 /// BEHG §10 CO₂ price in EUR/t by calendar year.
@@ -112,42 +149,53 @@ pub fn stromsteuer_for_year(year: i32) -> Option<Decimal> {
 
 // ── Energiesteuer Gas history (§2 Nr. 3 EnergieStG) ───────────────────────────
 
-/// §2 Nr. 3 EnergieStG Erdgas H standard rate in ct/kWh_Hs by calendar year.
+/// §2 Abs. 3 Nr. 4 EnergieStG Erdgas (Heizstoff) rate in ct/kWh_Hs by year.
 ///
-/// The rate for Erdgas H has been **0.55 ct/kWh** since the EnergieStG reform.
-/// Note: there was a temporary reduction to 0.0 ct/kWh during the energy
-/// crisis (Energiesteuersenkungsgesetz, 20.03.2022 – 31.03.2023).
-///
-/// | Period | ct/kWh_Hs |
-/// |---|---|
-/// | 01.04.2022 – 31.03.2023 | **0.00** (Energiesteuersenkung, BGBl. I 2022 S. 421) |
-/// | from 01.04.2023 | **0.55** (rate restored) |
+/// The heating-gas rate is **5.50 EUR/MWh = 0.55 ct/kWh** and has been
+/// constant since the 2003 Ökosteuer stage, carried over into the EnergieStG
+/// (in force since 01.08.2006). The 2022 Energiesteuersenkungsgesetz
+/// (BGBl. I 2022 S. 810, 01.06.–31.08.2022) reduced **motor-fuel** rates
+/// (§2 Abs. 1) only — heating gas was never reduced; the actual 2022/23 gas
+/// reliefs were the Dezember-Soforthilfe (EWSG) and the USt cut to 7 %
+/// (§28 Abs. 5/6 UStG, see [`mwst_rate_for_gas_waerme_period`]).
 ///
 /// `None` = year not in table; use `RegulatoryRates::energiesteuer_gas_ct_per_kwh`.
 ///
 /// ```rust
 /// use energy_billing::rates::energiesteuer_gas_for_year;
-/// // 2022 had the emergency reduction
-/// assert_eq!(energiesteuer_gas_for_year(2022), Some(rust_decimal::dec!(0.0)));
-/// // Restored from 2023
+/// // No heating-gas reduction existed in 2022 (the Tankrabatt was fuels-only)
+/// assert_eq!(energiesteuer_gas_for_year(2022), Some(rust_decimal::dec!(0.55)));
 /// assert_eq!(energiesteuer_gas_for_year(2023), Some(rust_decimal::dec!(0.55)));
 /// ```
 const ENERGIESTEUER_GAS_HISTORY: &[(i32, &str)] = &[
-    // Emergency 0-rate (Energiesteuersenkungsgesetz 2022-03-20, in effect 01.04.2022 – 31.03.2023)
-    // For annual billing we map 2022 → 0.00; for monthly billing callers should use overrides.
-    (2022, "0.00"),
-    // Rate restored from 01.04.2023
+    (2006, "0.55"),
+    (2007, "0.55"),
+    (2008, "0.55"),
+    (2009, "0.55"),
+    (2010, "0.55"),
+    (2011, "0.55"),
+    (2012, "0.55"),
+    (2013, "0.55"),
+    (2014, "0.55"),
+    (2015, "0.55"),
+    (2016, "0.55"),
+    (2017, "0.55"),
+    (2018, "0.55"),
+    (2019, "0.55"),
+    (2020, "0.55"),
+    (2021, "0.55"),
+    (2022, "0.55"),
     (2023, "0.55"),
     (2024, "0.55"),
     (2025, "0.55"),
     (2026, "0.55"),
 ];
 
-/// Return the §2 Nr. 3 EnergieStG gas rate (ct/kWh_Hs) for a given calendar year.
+/// Return the §2 Abs. 3 Nr. 4 EnergieStG heating-gas rate (ct/kWh_Hs) for a
+/// given calendar year.
 ///
-/// This handles the 2022 emergency 0-rate and subsequent restoration.
-/// For prior years (before 2022), returns `None` — use the configured
-/// `RegulatoryRates::energiesteuer_gas_ct_per_kwh`.
+/// For years before the EnergieStG (pre-2006), returns `None` — use the
+/// configured `RegulatoryRates::energiesteuer_gas_ct_per_kwh`.
 #[must_use]
 pub fn energiesteuer_gas_for_year(year: i32) -> Option<Decimal> {
     ENERGIESTEUER_GAS_HISTORY
@@ -391,6 +439,46 @@ pub fn mwst_rate_for_period(from: time::Date, to: time::Date) -> Option<Decimal>
     }
 }
 
+/// The Umsatzsteuer rate in force for a **gas or Fernwärme** billing period.
+///
+/// Gas delivered via the Erdgasnetz and heat via a Wärmenetz had two statutory
+/// departures from 19 %:
+///
+/// - 01.07.2020 – 31.12.2020: **16 %** (COVID reduction, §28 Abs. 1–3 UStG a.F.)
+/// - 01.10.2022 – 31.03.2024: **7 %** (Gesetz zur temporären Senkung des
+///   Umsatzsteuersatzes auf Gaslieferungen über das Erdgasnetz, §28 Abs. 5/6
+///   UStG — extended to Fernwärme by the Finanzausschuss)
+///
+/// Returns `None` when the period straddles a window boundary: no single rate
+/// is correct for such a period and picking one silently would misbill part of
+/// it. The caller splits the period at the Stichtag and merges the invoices.
+#[must_use]
+pub fn mwst_rate_for_gas_waerme_period(from: time::Date, to: time::Date) -> Option<Decimal> {
+    const WINDOWS: &[(time::Date, time::Date, Decimal)] = &[
+        (
+            time::macros::date!(2020 - 07 - 01),
+            time::macros::date!(2020 - 12 - 31),
+            dec!(0.16),
+        ),
+        (
+            time::macros::date!(2022 - 10 - 01),
+            time::macros::date!(2024 - 03 - 31),
+            dec!(0.07),
+        ),
+    ];
+    for (von, bis, rate) in WINDOWS {
+        let inside = from >= *von && to <= *bis;
+        let overlaps = from <= *bis && to >= *von;
+        if inside {
+            return Some(*rate);
+        }
+        if overlaps {
+            return None; // straddles this window's boundary — split the period
+        }
+    }
+    Some(dec!(0.19))
+}
+
 #[cfg(test)]
 mod mwst_period_tests {
     use super::*;
@@ -422,6 +510,40 @@ mod mwst_period_tests {
         );
         assert_eq!(
             mwst_rate_for_period(date!(2020 - 12 - 15), date!(2021 - 01 - 15)),
+            None
+        );
+    }
+
+    /// Gas/Wärme: the §28 Abs. 5/6 UStG 7 % window (01.10.2022 – 31.03.2024).
+    #[test]
+    fn the_gas_waerme_seven_percent_window() {
+        // Wholly inside the 7 % window
+        assert_eq!(
+            mwst_rate_for_gas_waerme_period(date!(2022 - 10 - 01), date!(2023 - 09 - 30)),
+            Some(dec!(0.07))
+        );
+        assert_eq!(
+            mwst_rate_for_gas_waerme_period(date!(2024 - 01 - 01), date!(2024 - 03 - 31)),
+            Some(dec!(0.07))
+        );
+        // COVID window still yields 16 %
+        assert_eq!(
+            mwst_rate_for_gas_waerme_period(date!(2020 - 07 - 01), date!(2020 - 12 - 31)),
+            Some(dec!(0.16))
+        );
+        // Outside every window → 19 %
+        assert_eq!(
+            mwst_rate_for_gas_waerme_period(date!(2026 - 01 - 01), date!(2026 - 12 - 31)),
+            Some(dec!(0.19))
+        );
+        // Straddling the window end (Q1/Q2 2024) → split required
+        assert_eq!(
+            mwst_rate_for_gas_waerme_period(date!(2024 - 03 - 01), date!(2024 - 04 - 30)),
+            None
+        );
+        // A gas annual bill Oct 2022 – Sep 2023 straddling the window start
+        assert_eq!(
+            mwst_rate_for_gas_waerme_period(date!(2022 - 09 - 01), date!(2023 - 08 - 31)),
             None
         );
     }

@@ -76,6 +76,9 @@ pub struct VersorgungsvertragRow {
     pub kundentyp: String,
     pub preisgarantie_bis: Option<Date>,
     pub kuendigungsfrist_monate: i32,
+    /// §40b EnWG billing cadence: MONATLICH / VIERTELJAEHRLICH /
+    /// HALBJAEHRLICH / JAEHRLICH.
+    pub abrechnungszyklus: String,
     pub auto_renewal: bool,
     pub bundle_code: Option<String>,
     pub standort_bezeichnung: Option<String>,
@@ -656,6 +659,45 @@ pub async fn list_komponenten(
 /// (Vertragsdauer, Kündigungsfrist, next Kündigungstermin) on the invoice —
 /// the contract, not the tariff, is where they live. Newest active contract
 /// wins when a MaLo re-contracted within the tenant.
+/// One active supply component with its contract's §40b billing cadence —
+/// the unit of work for billingd's billing-run worker.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct BillingCandidateRow {
+    pub malo_id: String,
+    pub lf_mp_id: String,
+    pub nb_mp_id: Option<String>,
+    pub sparte: String,
+    /// §40b EnWG cadence chosen on the contract.
+    pub abrechnungszyklus: String,
+    pub vertragsbeginn: Date,
+    pub vertragsende: Option<Date>,
+    pub lieferbeginn: Date,
+    pub lieferende: Option<Date>,
+}
+
+/// All active supply components eligible for scheduled billing (§40b EnWG).
+pub async fn list_billing_candidates(
+    pool: &PgPool,
+    tenant: &str,
+) -> Result<Vec<BillingCandidateRow>> {
+    let rows: Vec<BillingCandidateRow> = sqlx::query_as(
+        "SELECT k.malo_id, k.lf_mp_id, k.nb_mp_id, k.sparte,
+                v.abrechnungszyklus, v.vertragsbeginn, v.vertragsende,
+                k.lieferbeginn, k.lieferende
+         FROM versorgungsvertraege v
+         JOIN vertragskomponenten k ON k.vertrag_id = v.id
+         WHERE v.tenant = $1
+           AND v.status IN ('TEILERFUELLUNG','AKTIV','GEKÜNDIGT')
+           AND k.status = 'AKTIV'
+           AND k.malo_id IS NOT NULL
+         ORDER BY k.malo_id",
+    )
+    .bind(tenant)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 pub async fn fetch_vertrag_by_malo(
     pool: &PgPool,
     malo_id: &str,

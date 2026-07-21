@@ -153,6 +153,13 @@ CREATE TABLE versorgungsvertraege (
     preisgarantie_bis       DATE,
     preisgarantie           JSONB,      -- BO4E Preisgarantie COM (synced with preisgarantie_bis)
     kuendigungsfrist_monate INTEGER     NOT NULL DEFAULT 1,
+    -- §40b EnWG: chosen billing cadence. The supplier must offer monthly,
+    -- quarterly and semi-annual billing in addition to the annual default;
+    -- the customer's choice is a contract fact and drives the billingd
+    -- billing-run worker.
+    abrechnungszyklus       TEXT        NOT NULL DEFAULT 'JAEHRLICH' CHECK (abrechnungszyklus IN (
+                                'MONATLICH','VIERTELJAEHRLICH','HALBJAEHRLICH','JAEHRLICH'
+                            )),
     auto_renewal            BOOLEAN     NOT NULL DEFAULT false,
     renewal_monate          INTEGER     NOT NULL DEFAULT 12,
     naechste_moegliche_kuendigung DATE,

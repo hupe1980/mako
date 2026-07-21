@@ -24,6 +24,7 @@
 //! `XRechnungInfo` — a flat DTO assembled from the stored `billing_records.rechnung_json`
 //! — and returns a well-formed XML `String`.
 
+use energy_billing::RoundMoney;
 use rust_decimal::Decimal;
 
 // ── Input types ───────────────────────────────────────────────────────────────
@@ -147,7 +148,7 @@ pub fn build_zugferd_cii_xml(info: &XRechnungInfo) -> String {
         .map(format_date_yyyymmdd)
         .unwrap_or_else(|| format_date_yyyymmdd(info.issue_date));
 
-    let _vat_rate = info.vat_rate_pct.round_dp(2);
+    let _vat_rate = info.vat_rate_pct.round_kfm(2);
 
     // Build line items.
     let lines: String = info
@@ -301,14 +302,14 @@ pub fn build_zugferd_cii_xml(info: &XRechnungInfo) -> String {
         buyer_name = xml_escape(&info.buyer_name),
         period_from = period_from_fmt,
         period_to = period_to_fmt,
-        netto_eur = info.netto_eur.round_dp(2),
-        mwst_eur = info.mwst_eur.round_dp(2),
-        brutto_eur = info.brutto_eur.round_dp(2),
-        prepaid_eur = info.prepaid_eur.round_dp(2),
+        netto_eur = info.netto_eur.round_kfm(2),
+        mwst_eur = info.mwst_eur.round_kfm(2),
+        brutto_eur = info.brutto_eur.round_kfm(2),
+        prepaid_eur = info.prepaid_eur.round_kfm(2),
         // BR-CO-16: amount due is the gross less what has already been paid.
         // Emitting the gross here bills the customer a second time for the
         // advances they have already settled.
-        due_payable_eur = (info.brutto_eur - info.prepaid_eur).round_dp(2),
+        due_payable_eur = (info.brutto_eur - info.prepaid_eur).round_kfm(2),
         tax_breakdown = render_tax_breakdown(info),
         due_date = due_date_fmt,
     )
@@ -346,12 +347,12 @@ fn build_line_item(pos: &XRechnungPosition) -> String {
     </ram:IncludedSupplyChainTradeLineItem>"#,
         id = pos.id,
         description = xml_escape(&pos.description),
-        net_price = pos.net_price_eur.round_dp(4),
+        net_price = pos.net_price_eur.round_kfm(4),
         unit_code = unit_code,
-        quantity = pos.quantity.round_dp(3),
+        quantity = pos.quantity.round_kfm(3),
         vat_cat = xml_escape(&pos.vat_category),
-        vat_rate = pos.vat_rate_pct.round_dp(2),
-        net_total = pos.net_total_eur.round_dp(2),
+        vat_rate = pos.vat_rate_pct.round_kfm(2),
+        net_total = pos.net_total_eur.round_kfm(2),
     )
 }
 
@@ -392,8 +393,8 @@ fn render_tax_breakdown(info: &XRechnungInfo) -> String {
              \x20       <ram:CategoryCode>S</ram:CategoryCode>\n\
              \x20       <ram:RateApplicablePercent>{rate}</ram:RateApplicablePercent>\n\
              \x20     </ram:ApplicableTradeTax>",
-            mwst = info.mwst_eur.round_dp(2),
-            netto = info.netto_eur.round_dp(2),
+            mwst = info.mwst_eur.round_kfm(2),
+            netto = info.netto_eur.round_kfm(2),
             rate = info.vat_rate_pct.normalize(),
         );
     }
@@ -408,8 +409,8 @@ fn render_tax_breakdown(info: &XRechnungInfo) -> String {
                  \x20       <ram:CategoryCode>{cat}</ram:CategoryCode>\n\
                  \x20       <ram:RateApplicablePercent>{rate}</ram:RateApplicablePercent>\n\
                  \x20     </ram:ApplicableTradeTax>",
-                tax = t.tax_amount_eur.round_dp(2),
-                base = t.taxable_base_eur.round_dp(2),
+                tax = t.tax_amount_eur.round_kfm(2),
+                base = t.taxable_base_eur.round_kfm(2),
                 cat = t.category.code(),
                 rate = t.rate_percent.normalize(),
             )
@@ -508,10 +509,22 @@ pub fn info_from_rechnung_json(
         })
         .unwrap_or_default();
 
+    // §40c EnWG: payment becomes due at the earliest two weeks after receipt
+    // of the payment request. The engine stamps `zahlungsziel` (issue + 14 d)
+    // into every Rechnung; render it as BT-9 so the invoice does not imply
+    // immediate maturity.
+    let due_date = rechnung_json
+        .get("zahlungsziel")
+        .and_then(|v| v.as_str())
+        .and_then(|s| {
+            time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT).ok()
+        })
+        .or(Some(issue_date + time::Duration::days(14)));
+
     XRechnungInfo {
         invoice_number,
         issue_date,
-        due_date: None, // Operators should configure Zahlungsziel
+        due_date,
         period_from,
         period_to,
         seller_mp_id: lf_mp_id.to_owned(),
@@ -536,25 +549,49 @@ pub fn info_from_rechnung_json(
     }
 }
 
-/// Recover the EN16931 VAT breakdown from the stored `rechnung_json`.
+/// Recover the EN16931 VAT breakdown (BG-23) from the stored `rechnung_json`.
 ///
-/// The stored document keeps each position's `applicable_tax_rate`, so the
-/// breakdown is re-derived rather than persisted separately — a stored copy
-/// could disagree with the positions it summarises.
+/// The engine writes the authoritative per-rate breakdown into the BO4E
+/// `steuerbetraege` array (basiswert/steuerwert/steuersatz); reading it back
+/// keeps the CII output byte-for-byte consistent with what was billed —
+/// including 19 % / 7 % / 0 % mixed invoices.
 fn subtotals_from_rechnung_json(
     rechnung_json: &serde_json::Value,
-    vat_rate_pct: rust_decimal::Decimal,
+    _vat_rate_pct: rust_decimal::Decimal,
 ) -> Vec<energy_billing::invoice::TaxSubtotal> {
-    let Some(positions) = rechnung_json.get("positions") else {
-        return Vec::new();
-    };
-    let Ok(parsed) =
-        serde_json::from_value::<Vec<energy_billing::position::BillingPosition>>(positions.clone())
+    use energy_billing::invoice::{TaxSubtotal, VatCategory};
+    let Some(entries) = rechnung_json
+        .get("steuerbetraege")
+        .and_then(serde_json::Value::as_array)
     else {
         return Vec::new();
     };
-    let default_rate = vat_rate_pct / rust_decimal::Decimal::ONE_HUNDRED;
-    energy_billing::invoice::tax_subtotals_of(&parsed, default_rate)
+    let dec_of = |v: Option<&serde_json::Value>| -> Option<rust_decimal::Decimal> {
+        let v = v?;
+        if let Some(s) = v.as_str() {
+            return s.parse().ok();
+        }
+        v.as_f64()
+            .and_then(|f| rust_decimal::Decimal::try_from(f).ok())
+    };
+    entries
+        .iter()
+        .filter_map(|e| {
+            let base = dec_of(e.get("basiswert"))?;
+            let tax = dec_of(e.get("steuerwert"))?;
+            let rate_pct = dec_of(e.get("steuersatz")).unwrap_or_default();
+            Some(TaxSubtotal {
+                category: if rate_pct.is_zero() {
+                    VatCategory::ZeroRated
+                } else {
+                    VatCategory::Standard
+                },
+                rate_percent: rate_pct,
+                taxable_base_eur: base,
+                tax_amount_eur: tax,
+            })
+        })
+        .collect()
 }
 
 /// Sum the gross of the BO4E `vorauszahlungen` block — EN 16931 BT-113.

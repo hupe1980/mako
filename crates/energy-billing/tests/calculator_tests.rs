@@ -255,6 +255,7 @@ fn gas_kwh_hs_direct_determines_arbeit() {
         kwh_hs: Some(dec!(500)),
         gasqualitaet: None,
         spitzenleistung_kw: None,
+        ..Default::default()
     };
     let r = bill(
         &tariff,
@@ -285,6 +286,7 @@ fn gas_brennwert_conversion_equivalent_to_kwh_hs() {
         kwh_hs: None,
         gasqualitaet: None,
         spitzenleistung_kw: None,
+        ..Default::default()
     };
     let m2 = GasMeterInput {
         messung_qm3: dec!(0),
@@ -293,6 +295,7 @@ fn gas_brennwert_conversion_equivalent_to_kwh_hs() {
         kwh_hs: Some(dec!(1000)),
         gasqualitaet: None,
         spitzenleistung_kw: None,
+        ..Default::default()
     };
     let r1 = bill(
         &tariff,
@@ -517,6 +520,7 @@ fn gas_gasqualitaet_added_as_zusatz_attribut() {
         kwh_hs: Some(dec!(500)),
         gasqualitaet: Some("H2_BLEND".into()),
         spitzenleistung_kw: None,
+        ..Default::default()
     };
     let r = bill(
         &tariff,
@@ -570,6 +574,7 @@ fn gas_no_gasqualitaet_no_zusatz_attribut() {
         kwh_hs: Some(dec!(100)),
         gasqualitaet: None,
         spitzenleistung_kw: None,
+        ..Default::default()
     };
     let r = bill(
         &tariff,
@@ -755,6 +760,7 @@ fn gas_nne_and_bilanzierungsumlage_add_to_brutto() {
         kwh_hs: Some(dec!(500)),
         gasqualitaet: None,
         spitzenleistung_kw: None,
+        ..Default::default()
     };
     let grid_with = GridInput {
         gas_nne_arbeitspreis_ct_per_kwh: Some(dec!(4)),

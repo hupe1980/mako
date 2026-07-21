@@ -49,6 +49,7 @@ use crate::invoice::Invoice;
 use crate::position::{BillingPosition, BillingWarning, WarningSeverity};
 use crate::provider::BillingProvider;
 use crate::quantities::Quantities;
+use crate::rates::RoundMoney;
 
 /// The composition root for multi-product invoice generation.
 #[derive(Default)]
@@ -191,7 +192,7 @@ impl BillingEngine {
                 let gap_netto = if divisor.is_zero() {
                     gap_brutto
                 } else {
-                    (gap_brutto / divisor).round_dp(5)
+                    (gap_brutto / divisor).round_kfm(5)
                 };
 
                 // Strip old Tax positions and re-run tax pass with top-up included.

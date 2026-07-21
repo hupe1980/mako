@@ -3,6 +3,7 @@
 //! The single container for all product meter data. Replaces positional
 //! parameters passed to each `calculate_*` function.
 
+use crate::rates::RoundMoney;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use time::OffsetDateTime;
@@ -115,6 +116,21 @@ pub struct GasMeterInput {
     /// Applicable to large gas customers with RLM metering (> 1.5 GWh/year).
     #[serde(default)]
     pub spitzenleistung_kw: Option<Decimal>,
+    /// Zählernummer (§40 Abs. 2 Nr. 6 EnWG — meter identity on the bill).
+    /// Overrides `BillingContext::zaehler_id` for this meter.
+    #[serde(default)]
+    pub zaehlernummer: Option<String>,
+    /// Meter reading at period start, in m³ (§40 Abs. 2 Nr. 6 EnWG).
+    #[serde(default)]
+    pub zaehlerstand_von: Option<Decimal>,
+    /// Meter reading at period end, in m³ (§40 Abs. 2 Nr. 6 EnWG).
+    #[serde(default)]
+    pub zaehlerstand_bis: Option<Decimal>,
+    /// Reading is an estimate / Ersatzwert (§40a EnWG, §17 Abs. 1 MessZV).
+    /// Must be prominently labeled on the bill; the customer may demand a
+    /// correction once a real reading arrives.
+    #[serde(default)]
+    pub is_estimated: bool,
 }
 
 /// District heat meter data.
@@ -341,8 +357,8 @@ impl Sect41aAnnualComparison {
     ) -> Self {
         use rust_decimal::dec;
         let reference_eur_brutto =
-            (actual_kwh * reference_price_ct_per_kwh / dec!(100)).round_dp(2);
-        let savings_eur = (reference_eur_brutto - actual_eur_brutto).round_dp(2);
+            (actual_kwh * reference_price_ct_per_kwh / dec!(100)).round_kfm(2);
+        let savings_eur = (reference_eur_brutto - actual_eur_brutto).round_kfm(2);
         Self {
             actual_kwh,
             actual_eur_brutto,
@@ -680,7 +696,7 @@ impl GgvSolarInput {
         }
         (self.pv_delivered_kwh() / self.actual_consumption_kwh)
             .min(Decimal::ONE)
-            .round_dp(4)
+            .round_kfm(4)
     }
 }
 
@@ -853,7 +869,12 @@ pub struct Abschlagsplan {
 impl Abschlagsplan {
     /// Build a uniform monthly advance payment plan for `months` months.
     ///
-    /// `monthly_eur = annual_brutto.round_dp(2) / 12`, applied each month.
+    /// The annual amount is **distributed exactly** over a 12-month cycle via
+    /// [`billing::Amount::distribute`] (largest-remainder): any 12 consecutive
+    /// instalments sum to precisely `annual_brutto_eur` at cent precision.
+    /// Naïve `round(annual / 12)` per month drifts up to 6 ct per year — a
+    /// reconciliation gap §13 Abs. 3 StromGVV's refund duty would surface on
+    /// every Jahresrechnung.
     #[must_use]
     pub fn monthly_uniform(
         malo_id: impl Into<String>,
@@ -863,7 +884,17 @@ impl Abschlagsplan {
         jahresverbrauch_kwh: Decimal,
     ) -> Self {
         use rust_decimal::dec;
-        let monthly = (annual_brutto_eur / dec!(12)).round_dp(2);
+        // Exact-sum 12-month cycle; conversion failure (absurd magnitude)
+        // degrades to the plain division, never to a panic.
+        let cycle: Vec<Decimal> = billing::Amount::<2>::checked_from_decimal(annual_brutto_eur)
+            .and_then(|a| a.distribute(12))
+            .map(|parts| {
+                parts
+                    .into_iter()
+                    .map(billing::Amount::into_decimal)
+                    .collect()
+            })
+            .unwrap_or_else(|_| vec![(annual_brutto_eur / dec!(12)).round_kfm(2); 12]);
         let entries = (0..months)
             .filter_map(|i| {
                 let total_months = start_date.month() as u32 - 1 + i;
@@ -875,7 +906,7 @@ impl Abschlagsplan {
                 let date = time::Date::from_calendar_date(year, month, day).ok()?;
                 Some(AbschlagsplanEntry {
                     faellig_am: date,
-                    betrag_eur: monthly,
+                    betrag_eur: cycle[(i % 12) as usize],
                     beschreibung: Some(format!("Abschlag {:02}/{}", month as u8, year)),
                 })
             })
@@ -915,6 +946,38 @@ mod abschlagsplan_tests {
         assert_eq!(plan.entries[0].betrag_eur, dec!(120.00));
         assert_eq!(plan.entries[11].faellig_am.year(), 2026);
         assert_eq!(plan.total_eur(), dec!(1440.00));
+    }
+
+    #[test]
+    fn monthly_uniform_distributes_indivisible_annual_exactly() {
+        // 1000.00 / 12 = 83.333… — naïve per-month rounding gives
+        // 12 × 83.33 = 999.96, a 4 ct gap the Jahresrechnung would have to
+        // reconcile. Largest-remainder distribution closes it.
+        let plan = Abschlagsplan::monthly_uniform(
+            "51238696781",
+            date!(2026 - 01 - 01),
+            12,
+            dec!(1000.00),
+            dec!(2500),
+        );
+        assert_eq!(plan.total_eur(), dec!(1000.00), "instalments sum exactly");
+        // Every instalment is within one cent of the uniform value.
+        for e in &plan.entries {
+            assert!(
+                e.betrag_eur == dec!(83.33) || e.betrag_eur == dec!(83.34),
+                "uniform ± 1 ct, got {}",
+                e.betrag_eur
+            );
+        }
+        // A 24-month plan sums to exactly two annual amounts.
+        let two_years = Abschlagsplan::monthly_uniform(
+            "51238696781",
+            date!(2026 - 01 - 01),
+            24,
+            dec!(1000.00),
+            dec!(2500),
+        );
+        assert_eq!(two_years.total_eur(), dec!(2000.00));
     }
 
     #[test]
