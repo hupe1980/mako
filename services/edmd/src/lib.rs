@@ -5,7 +5,7 @@
 //!
 //! `edmd` is an L3 application service that receives MSCONS process-completion
 //! events from `marktd` via webhook fan-out and stores meter data receipts in
-//! a PostgreSQL/TimescaleDB database.  It **never** connects to `makod` directly.
+//! a PostgreSQL database (monthly RANGE partitions).  It **never** connects to `makod` directly.
 //!
 //! ```text
 //! makod ──(CloudEvents)──► marktd ──(webhook fan-out)──► edmd POST /webhook
@@ -14,7 +14,7 @@
 //!                                                             │
 //!                                                   TimeSeriesRepository::store_receipt()
 //!                                                             │
-//!                                                       PostgreSQL / TimescaleDB
+//!                                                       PostgreSQL (partitioned)
 //! ```
 //!
 //! ## Routes

@@ -1,4 +1,4 @@
-//! PostgreSQL/TimescaleDB repository implementations for `edmd`.
+//! PostgreSQL repository implementations for `edmd`.
 
 pub mod timeseries;
 

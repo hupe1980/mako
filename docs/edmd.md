@@ -36,7 +36,7 @@ Key responsibilities:
 - Accumulate **Mehr-/Mindermengensaldo** imbalance records per MaLo.
 - **Apache Iceberg V2 OLAP archival**: automatically export `meter_reads` older than the configured retention window (default 12 months) to Parquet files on S3/GCS/Azure in Iceberg V2 table format.
 
-The **domain calculation logic** is provided by the [`metering`](https://github.com/hupe1980/mako/tree/main/crates/metering) library crate (zero I/O, no async, 177 tests):
+The **domain calculation logic** is provided by the [`metering`](https://github.com/hupe1980/mako/tree/main/crates/metering) library crate (zero I/O, no async):
 
 | Function / Type | §-basis | Used in |
 |---|---|---|
@@ -848,7 +848,7 @@ This eliminates the risk of billing a zero-reading period after a device swap �
 | `get_quality_assessments` | Per-batch quality history (§22 MessZV) |
 | `get_summenzeitreihe` | Monthly aggregated kWh for MaBiS |
 | `get_annual_forecast` | §17 MessZV Jahresprognose |
-| `get_gas_quality_data` | PID 13007 Brennwert + Zustandszahl |
+| `get_gas_quality` | PID 13007 Brennwert + Zustandszahl |
 
 Prompts: `analyze-consumption`, `submit-mscons`, `quality-assessment`, `jahresablesung-workflow`, `reading-order-lifecycle`.
 

@@ -12,7 +12,8 @@
 //!                                       │
 //!                         ┌─────────────▼──────────────┐
 //!                         │  TimeSeriesRepository       │
-//!                         │  (TimescaleDB in prod)      │
+//!                         │  (PostgreSQL, monthly RANGE  │
+//!                         │   partitions in prod)       │
 //!                         └─────────────┬──────────────┘
 //!                                       │
 //!              ┌────────────────────────┼──────────────────────────┐

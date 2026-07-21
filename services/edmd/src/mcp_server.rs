@@ -21,7 +21,7 @@
 //! | `get_quality_assessments`    | Per-batch quality history (§22 MessZV) |
 //! | `get_summenzeitreihe`        | Monthly aggregated kWh for MaBiS |
 //! | `get_annual_forecast`        | §17 MessZV Jahresprognose |
-//! | `get_gas_quality_data`       | PID 13007 Brennwert + Zustandszahl |
+//! | `get_gas_quality`            | PID 13007 Brennwert + Zustandszahl |
 //!
 //! ## Prompts (5)
 //!
@@ -1849,7 +1849,7 @@ impl ServerHandler for EdmdMcpHandler {
              - `get_quality_assessments` — per-batch quality history (§22 MessZV)\n\
              - `get_summenzeitreihe` — monthly aggregated kWh for MaBiS / §27 MessZV\n\
              - `get_annual_forecast` — §17 MessZV Jahresprognose from available reads\n\
-             - `get_gas_quality_data` — PID 13007 Brennwert + Zustandszahl for Gas kWh_Hs conversion\n\
+             - `get_gas_quality` — PID 13007 Brennwert + Zustandszahl for Gas kWh_Hs conversion\n\
              \n\
              ## Prompts (5)\n\
              - `analyze-consumption`, `submit-mscons`, `quality-assessment`,\n\

@@ -8,7 +8,8 @@
 | Database | PostgreSQL 15+ (sqlx 0.8, schema from `migrations/0001_schema.sql`) |
 | Partitioning | `meter_reads` is range-partitioned monthly on `dtm_from`; retention drops whole partitions once every row in them is durable in the cold tier |
 | Schema | `meter_reads` — `quantity_kwh NUMERIC(18,5)`, `tenant TEXT NOT NULL`; `meter_billing_periods` — NUMERIC aggregates, `tenant TEXT NOT NULL`; `gdpr_deletions`, `ablese_auftraege`, `direct_push_sessions`, `archive_batches`, `iceberg_catalog_entries` |
-| Inbound | CloudEvents from `marktd` — `de.mako.process.completed` (MSCONS PIDs 13005–13027), `de.mako.process.initiated` (PID 23001 INSRPT → auto reading order) |
+| Inbound | CloudEvents from `marktd` — `de.mako.process.completed` (MSCONS PIDs 13005–13027; GPKE 55001 → LIEFERBEGINN and 55004/55007 → LIEFERENDE reading orders), `de.mako.process.initiated` (INSRPT 23001/23003/23004/23005/23008/23009 → auto reading orders) |
+| Kafka ingest | Optional `[kafka_ingest]` consumer (krafka) for head-end systems — at-least-once, earliest offset reset, same V01–V10 + audit path as REST; e2e-tested against an in-process `FakeBroker` |
 | Direct push | `POST /api/v1/meter-reads/rlm/{malo_id}` (Strom), `POST /api/v1/meter-reads/gas/{malo_id}` (Gas m³→kWh_Hs) — idempotent on `session_id` |
 | Quality scoring | `metering::score_intervals_f64` — Hampel filter (k=3, t=3.0, MAD×1.4826σ), auto-vectorises to AVX2/NEON; grades A/B/C/F; retroactive: `POST /api/v1/quality-score/{malo_id}` |
 | Reading orders | `POST/GET /api/v1/reading-orders` — Ablesesteuerung for LF/MSB/NB; `/complete`, `/cancel`, `/fail` (Ablesehindernis); auto-creates `INSRPT_STOERUNG` on INSRPT PID 23001 (§18 MessZV) |
@@ -18,12 +19,14 @@
 | Archive OLAP | `GET /api/v1/archive/status` · `GET /api/v1/archive/olap/{malo_id}` · `GET /api/v1/archive/portfolio` · `GET /api/v1/archive/timeseries/{malo_id}` · `POST /api/v1/query/sql` (DataFusion) |
 | Iceberg REST | `GET /api/v1/iceberg/v1/...` — Iceberg REST catalog for DuckDB/Snowflake/Databricks direct attach |
 | GDPR | `DELETE /api/v1/gdpr/erasure/{malo_id}` — Art. 17 hot-tier erasure (one transaction) + read-time cold-tier exclusion; `POST .../archive-plan` and `.../archive-complete` make the cold-tier rewrite trackable |
-| Auth | OIDC/JWT + Cedar ABAC (`read-timeseries`, `write-quality-rescore`, `read-archive-olap`, `read-reading-order`, `write-gdpr-erasure`); webhook HMAC-SHA256 (`X-Mako-Signature`). Refuses to start without `[oidc]` unless `allow_insecure_no_auth = true` |
+| Auth | OIDC/JWT + Cedar ABAC — reads tenant-scoped, **writes role-gated** (`write-meter-reads` → MSB/admin; series mutation, reading orders, GDPR erasure → MSB/NB/admin; LF-role tokens are read-only; gates pinned by the `cedar_policy` test suite); webhook HMAC-SHA256 (`X-Mako-Signature`). Refuses to start without `[oidc]` unless `allow_insecure_no_auth = true` |
 | Rate limiting | Per-tenant and global GCRA buckets; `429` carries `Retry-After` |
 | Health | `GET /health/live`, `GET /health/ready` (PostgreSQL ping) |
-| MCP | `POST\|GET /mcp` — 14 tools including `get_timeseries`, `get_imbalance`, `get_billing_period`, `validate_timeseries`, `list_overdue_reading_orders`, `trigger_jahresablesung` |
+| MCP | `POST\|GET /mcp` — 15 tools + 5 prompts, including `get_timeseries`, `validate_timeseries`, `trigger_substitution` (§17 MessZV Ersatzwerte), `trigger_jahresablesung`, `get_correction_history` |
 | CloudEvents emitted | `de.edmd.reading.direct.stored`, `de.edmd.reading.quality.warning` (grade C/F), `de.edmd.reading.order.failed` |
 | Quality history | Every scoring path records a verdict in `quality_assessments`; re-scoring supersedes rather than appends |
+| §22 audit trail | Every value-changing overwrite — corrections **and** redeliveries, on every transport — leaves an immutable `meter_read_corrections` row; `?as_of=` reconstructs prior knowledge states |
+| Overlap exclusion | Per-partition `EXCLUDE USING gist` (`btree_gist`): a delivery whose range overlaps a stored reading is refused rather than double-counted |
 
 ---
 
@@ -94,6 +97,13 @@ endpoint = "http://otel-collector:4317"
 
 [mcp]
 api_key = "env:EDMD_MCP_API_KEY"
+
+# Optional: high-throughput reading intake from a Kafka topic.
+[kafka_ingest]
+enabled           = true
+bootstrap_servers = "kafka-1:9092,kafka-2:9092"
+topic             = "edmd.meter-reads"   # default
+group_id          = "edmd-ingest"        # default
 ```
 
 ### Archive configuration (`[archive]` in `edmd.toml`)
@@ -113,10 +123,12 @@ iceberg_catalog_schema = "iceberg_catalog"
 iceberg_catalog_name   = "edmd"
 ```
 
-**Storage layout.** Parquet files are written with ZSTD level 3, `DELTA_BINARY_PACKED`
-encoding on timestamps (exploits delta-of-delta = 0 for 15-min intervals),
-`RLE_DICTIONARY` on `malo_id`/`quality`/`sparte`/`obis_code`, and Bloom filters
-on `malo_id` (1 % FPR) for fast single-MaLo lookup from cold tier.
+**Storage layout.** Data files are partition-aware — one Parquet writer per
+`(tenant, sparte, month)` partition tuple — written with ZSTD level 3,
+`DELTA_BINARY_PACKED` encoding on timestamps (exploits delta-of-delta = 0 for
+15-min intervals), dictionary encoding on the low-cardinality string columns,
+and Bloom filters on `malo_id` (1 % FPR) for fast single-MaLo lookup from
+cold tier.
 
 The PostgreSQL database stores the Iceberg SQL catalog — no external catalog
 service (Nessie, Apache Polaris, AWS Glue) required.
@@ -217,9 +229,10 @@ designed for a fresh install, so no incremental migration state is maintained.
 | Cold tier | `archive_batches` · `iceberg_catalog_entries` |
 | GDPR | `gdpr_deletions` · `gdpr_archive_files` |
 
-All tables carry `tenant TEXT NOT NULL` for multi-tenant isolation — the BDEW/DVGW
-Codenummer or GLN of the operating entity (not a UUID). `meter_reads.tenant` is the
-authoritative column; `meter_data_receipts.tenant` uses the same type for consistency.
+All tables carry `tenant TEXT NOT NULL` for multi-tenant isolation — the
+operator's MP-ID (BDEW/DVGW Codenummer, not a UUID). It is part of the
+`meter_reads` primary key, and every query filters on it. Each `meter_reads`
+partition additionally carries the `EXCLUDE USING gist` overlap constraint.
 
 ---
 
@@ -249,6 +262,22 @@ edmd :8380
   ├──► netzbilanzd :8680   — MeterBillingPeriod (HT/NT kwh) for NNE / §14a ToU billing
   └──► ERP / operator dashboard — historical reads and billing data
 ```
+
+## Testing
+
+Three real-PostgreSQL suites run via `just test-edmd-db` (throwaway Docker
+Postgres, schema-isolated per test):
+
+- `ingest_integration` — ingest identity, tenant isolation, §17 substitute
+  guard, the §22 overwrite audit row, overlap exclusion, §40 Ablesequote.
+- `iceberg_archive` — write → commit → DataFusion read-back, concurrent
+  writers on one catalog, crash-recovery idempotency, GDPR read exclusion.
+- `kafka_ingest_e2e` — real producer + real consumer against krafka's
+  in-process `FakeBroker`: produce → group join → V01–V10 → audited store →
+  offset commit, poison pill included. No Kafka container.
+
+`cedar_policy` and `schema_code_guard` pin the authorization gates and the
+schema↔enum contracts on every plain `cargo test`.
 
 ## See Also
 

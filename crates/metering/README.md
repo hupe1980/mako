@@ -1,10 +1,13 @@
 # metering
 
-**German energy metering domain library — interval types, gas conversion, billing period aggregation,
-SLP/RLM/iMSys classification, BSI TR-03109 SMGW lifecycle, virtual meters (§42b EnWG GGV Solarpaket I),
-resampling, forecasting, and Hampel-filter quality scoring.
+**German energy metering domain library — interval types, gas conversion (incl.
+G 685 rounding), billing period aggregation, SLP/RLM/iMSys classification,
+BDEW 2025 load profiles with Dynamisierung, Zählzeitdefinition resolution,
+MsbG rollout obligations, BSI TR-03109 SMGW lifecycle, virtual meters
+(§42b EnWG GGV Solarpaket I), resampling, forecasting with confidence bounds,
+and Hampel-filter quality scoring.
 
-214 tests · zero I/O · no async · no float money**
+Zero I/O · no async · no float money**
 
 `metering` is the pure domain library used by [`edmd`](../../services/edmd/),
 [`mako-gabi-gas`](../mako-gabi-gas/), and [`mako-mabis`](../mako-mabis/) for all
@@ -16,9 +19,9 @@ metering arithmetic. It has no I/O, no async, and no floating-point money.
 |---|---|---|
 | `interval` | `MeterInterval`, `QualityFlag`, `Sparte` | Core interval + quality types |
 | `obis` | `ObisCode` | Typed OBIS codes (IEC 62056-21 / BDEW) with `default_resolution()` |
-| `validation` | `ValidationEngine`, `ValidationIssue` (V01–V10) | Gap / overlap / spike / DST / rollover detection |
+| `validation` | `validate_intervals()`, `ValidationIssue` (V01–V10) | Gap / overlap / spike (statistical + plant-capacity ceiling) / DST / rollover detection |
 | `substitute` | `fill_gaps()`, `SubstituteMethod`, `SubstitutionReason` | §17 MessZV Ersatzwertbildung |
-| `forecast` | `project_annual_consumption()`, `prior_period_substitutes()` | §17 MessZV Jahresprognose + §17 Abs. 2 prior-period gap-fill |
+| `forecast` | `project_annual_consumption()`, `prior_period_substitutes()` | §17 MessZV Jahresprognose (with 95 % confidence bounds) + §17 Abs. 2 prior-period gap-fill |
 | `resample` | `resample()`, `ResampledBucket` | Down-sample 15-min → hourly / daily / monthly |
 | `virtual_meter` | `compute_virtual_meter()`, `AggregationRule` | §42b EnWG GGV: `GgvConstantAllocation` (CCI+ZG6) + `GgvProportionalAllocation` (variable); Residuallast (§42a) |
 | `smgw` | `SmgwSession`, `ClsChannel`, `GatewayCertificate` | BSI TR-03109 gateway lifecycle, §14a CLS channels |
@@ -30,8 +33,10 @@ metering arithmetic. It has no I/O, no async, and no floating-point money.
 | `quality` | `score_intervals()`, `QualityGrade` | Hampel-filter quality scoring (A/B/C/F) |
 | `demand` | `DemandWindow`, `DemandInterval` | 15-min demand / Spitzenleistung |
 | `tariff_window` | `TariffWindow`, `HtNtSchedule` | DST-aware HT/NT window classification |
-| `load_profile` | `LoadProfile` | German SLP load profile types (H0/G0–G6/L0–L2 …) |
-| `conversion` | `gas_m3_to_kwh_hs()`, `GasConversionParams` | §25 Nr. 4 MessEV / DVGW G 685 |
+| `load_profile` | `LoadProfile`, `Dynamization`, `DynamicSlpProfile` | SLP classes incl. BDEW 2025 (H25/G25/L25/P25/S25); Dynamisierungsfunktion (factors 4 dp, result 3 dp) |
+| `zaehlzeit` | `Zaehlzeitdefinition`, `ZaehlzeitFenster` | §14a EnWG / UTILTS time-variable register resolution, DST-correct, `split_energy()` |
+| `rollout` | `classify_rollout_obligation()`, `ROLLOUT_MILESTONES` | §29 MsbG Pflichteinbaufälle (>6 000 kWh/a, §14a, >7 kW) + §45 Rollout-Fahrplan |
+| `conversion` | `gas_m3_to_kwh_hs()`, `G685Rounding` | §25 Nr. 4 MessEV / DVGW G 685 incl. published NB rounding practice (z 4 dp, Hs 3 dp; final rounding configurable) |
 | `imbalance` | `compute_imbalance()`, `ImbalanceSaldo` | §27 MessZV Mehr-/Mindermengensaldo |
 | `resolution` | `IntervalResolution` | Typed interval lengths (15-min / hourly / daily …) |
 | `sharing` | §42c EnWG Energy-Sharing metering eligibility — pure capability/delivery rules over `Messtyp` and `IntervalLengthClass` |
@@ -493,12 +498,16 @@ outlier indices.
 cargo test -p metering --all-features
 ```
 
-214 tests covering: gas conversion (DVGW G 685), aggregation (RLM/SLP/Gas), Messtyp
-classification, imbalance arithmetic, V01–V10 validation engine (incl. DST transitions and
-V07 DST ambiguity), §17 MessZV substitute methods, resampling (hourly/daily/monthly),
-§42b EnWG GGV virtual meters (Beispiel 1 constant + Beispiel 3 proportional, Pos() cap,
-zero-division guard), §42a Residuallast, BSI TR-03109 SMGW + CLS lifecycle,
-measurement series provenance, register + ObisCode.
+The suite covers: gas conversion (DVGW G 685, incl. the published NB rounding
+examples), aggregation (RLM/SLP/Gas), Messtyp classification, imbalance
+arithmetic, the V01–V10 validation engine (DST transitions, V07 ambiguity,
+plant-capacity ceiling), §17 MessZV substitute methods and forecast confidence
+bounds, resampling, §42b EnWG GGV virtual meters (Beispiel 1 constant +
+Beispiel 3 proportional, Pos() cap, zero-division guard), §42a Residuallast,
+BSI TR-03109 SMGW + CLS lifecycle, Zählzeitdefinition resolution, MsbG §29/§45
+rollout classification, BDEW 2025 profile Dynamisierung, measurement series
+provenance, register + ObisCode — plus property tests and the regulatory
+showcase suite with the exact 2026 DST dates (92/100 intervals).
 
 ---
 
@@ -512,5 +521,7 @@ measurement series provenance, register + ObisCode.
 - **§25 Nr. 4 MessEV / DVGW G 685** — Gas Brennwertkorrektur
 - **§41a EnWG** — 15-Minuten-Lastgang and iMSys Pflichteinbau
 - **§42a/§42b EEG** — Residuallast / GGV community solar virtual meters
-- **§14a EnWG** — Steuerbare Verbrauchseinrichtungen (CLS channels)
+- **§14a EnWG** — Steuerbare Verbrauchseinrichtungen (CLS channels, Zählzeitdefinition)
+- **§29 / §45 MsbG** — iMSys Pflichteinbaufälle and the Rollout-Fahrplan quotas
+- **BDEW Anwendungshilfe SLP Strom (17.03.2025)** — H25/G25/L25/P25/S25 profiles and Dynamisierung rounding
 - **BSI TR-03109** — Smart Meter Gateway lifecycle and certificates

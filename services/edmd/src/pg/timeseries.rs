@@ -13,7 +13,7 @@ use mako_edm::{
     repository::TimeSeriesRepository,
 };
 
-/// PostgreSQL/TimescaleDB-backed time-series repository.
+/// PostgreSQL-backed time-series repository (monthly RANGE partitions).
 #[derive(Clone, Debug)]
 pub struct PgTimeSeriesRepository {
     pool: PgPool,

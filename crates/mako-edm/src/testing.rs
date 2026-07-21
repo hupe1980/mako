@@ -17,7 +17,7 @@ use crate::{
 /// Thread-safe in-memory time-series store.
 ///
 /// Suitable for unit tests and service integration tests that do not require
-/// a real PostgreSQL/TimescaleDB backend.
+/// a real PostgreSQL backend.
 #[derive(Debug, Default)]
 pub struct InMemoryTimeSeriesRepository {
     receipts: Mutex<Vec<MeterDataReceipt>>,

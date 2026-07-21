@@ -41,11 +41,11 @@ model = "gpt-4o"
 | `eeg-agent` | `de.eeg.anlage.foerderung_auslaufend` | einsd, edmd |
 | `payment-reconciliation-agent` | `de.accounting.payment.due` | accountingd |
 | `compliance-agent` | `de.obs.stp.parity.alert` | obsd, processd |
-| `msb-history-agent` | `de.edmd.reading.quality.warning` | edmd, makod, marktd |
+| `msb-history-agent` | `de.edmd.reading.quality.warning`, `de.edmd.reading.direct.stored`, `de.mako.process.completed` | edmd, makod, marktd |
 | `meter-data-agent` | `de.edmd.reading.quality.warning` | edmd, marktd |
 | `grid-anomaly-agent` | `de.markt.grid.drift.detected` | marktd, obsd |
 | `tariff-optimization-agent` | `de.billing.rechnung.erstellt` | billingd, tarifbd, edmd |
-| `replacement-value-agent` | `de.edmd.reading.quality.warning` | edmd, marktd, obsd |
+| `replacement-value-agent` | `de.edmd.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd, obsd |
 | `mabis-syncd-agent` | `de.edmd.reading.quality.warning` | edmd, obsd, marktd |
 | `smgw-diagnostics-agent` | `de.edmd.reading.direct.stored` | edmd, marktd, processd |
 | `invoice-reconciliation-agent` | `de.invoic.receipt.*` | invoicd, billingd |
