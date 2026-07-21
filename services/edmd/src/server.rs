@@ -2109,6 +2109,8 @@ pub struct RunConfig {
     /// Request rate limits. Ingest endpoints accept unbounded batches, so an
     /// unthrottled client can saturate the write path for every other tenant.
     pub rate_limit: mako_service::RateLimitConfig,
+    /// Kafka ingest consumer (None or `enabled = false` → not started).
+    pub kafka_ingest: Option<crate::config::KafkaIngestConfig>,
 }
 
 /// Connect to the database, run migrations, register subscription, and serve.
@@ -2210,6 +2212,18 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         olap_engine,
         erp_webhook_url: cfg.erp_webhook_url,
     };
+    // ── Kafka ingest consumer (optional) ─────────────────────────────────────
+    // High-throughput intake for head-end systems that stream reading batches
+    // instead of pushing per-gateway HTTP. Same validation, same store, same
+    // audit trail as the REST paths.
+    if let Some(kafka_cfg) = cfg.kafka_ingest.as_ref().filter(|k| k.enabled) {
+        crate::kafka_ingest::spawn(
+            kafka_cfg.clone(),
+            state.repo.clone(),
+            state.tenant.clone(),
+            cfg.shutdown.clone(),
+        );
+    }
 
     {
         use mako_markt::marktd_client::{MarktdClient, SubscriptionRequest};
@@ -6485,7 +6499,9 @@ async fn post_sql_query(
     Json(req): Json<SqlQueryRequest>,
 ) -> impl IntoResponse {
     let resource_tenant = state.tenant.as_str();
-    if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
+    // Caller-supplied SQL runs against the archive tier, so it is gated by the
+    // archive capability, not the generic hot-tier read action.
+    if let Err(e) = enforcer.check(&claims.principal(), "read-archive-olap", resource_tenant) {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({ "error": e.to_string() })),

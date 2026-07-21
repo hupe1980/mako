@@ -108,7 +108,7 @@ sepa             = { version = "0.3.0" }
 # Required by mako-service feature "kafka" (EventBus scale-out backend).
 # Activate at >500 MaLo or >20 webhook subscribers — see event_bus.rs.
 # Default features include: compression (gzip/snappy/lz4), ring (rustls crypto).
-krafka           = { version = "0.12" }
+krafka           = { version = "0.13" }
 
 # ── Apache Iceberg OLAP tier (edmd) ─────────────────────────────────────────
 # Exact versions shipped in the iceberg 0.9.1 release (verified from crate source):

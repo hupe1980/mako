@@ -162,6 +162,53 @@ async fn the_same_register_spelled_two_ways_is_one_reading() {
 
 #[tokio::test]
 #[ignore = "requires EDMD_TEST_DATABASE_URL"]
+async fn a_cross_batch_overlapping_interval_is_refused() {
+    let Some(pool) = test_pool("overlap_exclusion").await else {
+        return;
+    };
+    let repo = edmd::pg::PgTimeSeriesRepository::new(pool.clone());
+
+    // A stored quarter-hour [00:00, 00:15).
+    repo.store_reads(&[read("1-0:1.8.0", dec!(10), QualityFlag::Measured)])
+        .await
+        .expect("first delivery");
+
+    // A later batch delivers an HOURLY interval [00:00 … wait — same dtm_from
+    // hits the PK. The dangerous case is a DIFFERENT start overlapping the
+    // stored range: [00:05, 00:20) — the PK cannot see it and V02 cannot see
+    // it (different batch). Only the EXCLUDE constraint can.
+    let mut overlapping = read("1-0:1.8.0", dec!(3), QualityFlag::Measured);
+    overlapping.dtm_from = datetime!(2026-07-01 00:05 UTC);
+    overlapping.dtm_to = datetime!(2026-07-01 00:20 UTC);
+    let result = repo.store_reads(&[overlapping]).await;
+    assert!(
+        result.is_err(),
+        "an interval overlapping a stored range must be refused, not double-counted"
+    );
+
+    // Adjacent intervals stay legal: [00:15, 00:30) touches but does not overlap.
+    let mut adjacent = read("1-0:1.8.0", dec!(2), QualityFlag::Measured);
+    adjacent.dtm_from = datetime!(2026-07-01 00:15 UTC);
+    adjacent.dtm_to = datetime!(2026-07-01 00:30 UTC);
+    repo.store_reads(&[adjacent])
+        .await
+        .expect("adjacent interval is not an overlap ([) ranges)");
+
+    // A different OBIS register may cover the same instant.
+    let other_register = read("1-0:2.8.0", dec!(4), QualityFlag::Measured);
+    repo.store_reads(&[other_register])
+        .await
+        .expect("another register at the same instant is legal");
+
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM meter_reads")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 3, "stored + adjacent + other register");
+}
+
+#[tokio::test]
+#[ignore = "requires EDMD_TEST_DATABASE_URL"]
 async fn a_value_changing_redelivery_leaves_an_audit_row() {
     let Some(pool) = test_pool("overwrite_audit").await else {
         return;

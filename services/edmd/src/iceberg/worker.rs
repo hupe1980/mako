@@ -169,7 +169,10 @@ impl ArchiveWorker {
     }
 
     /// One archival pass.  Returns the number of rows archived (0 = nothing to do).
-    async fn run_once(&self) -> anyhow::Result<u64> {
+    ///
+    /// Public so the integration tests (and ops tooling) can drive a single
+    /// deterministic pass without the timer loop.
+    pub async fn run_once(&self) -> anyhow::Result<u64> {
         let cutoff = cutoff_time(self.cfg.retention_months);
         let batch_size = self.cfg.batch_size as i64;
 
@@ -237,11 +240,25 @@ impl ArchiveWorker {
             .collect::<std::collections::HashSet<_>>()
             .len() as i32;
 
+        // The batch's tenant: edmd deployments are single-tenant, so a batch
+        // normally has exactly one. A mixed batch is recorded as '' rather
+        // than mislabelled with an arbitrary member.
+        let batch_tenant = {
+            let mut tenants: Vec<&str> = rows.iter().map(|r| r.tenant.as_str()).collect();
+            tenants.sort_unstable();
+            tenants.dedup();
+            if let [one] = tenants.as_slice() {
+                (*one).to_owned()
+            } else {
+                String::new()
+            }
+        };
+
         sqlx::query(
             r"INSERT INTO archive_batches
                   (batch_id, cutoff_before, dtm_from_min, dtm_from_max, row_count,
-                   malo_count, s3_prefix, status)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, 'writing')",
+                   malo_count, s3_prefix, status, tenant)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, 'writing', $8)",
         )
         .bind(batch_id)
         .bind(cutoff)
@@ -250,6 +267,7 @@ impl ArchiveWorker {
         .bind(row_count as i64)
         .bind(malo_count)
         .bind(&s3_prefix)
+        .bind(&batch_tenant)
         .execute(&self.pool)
         .await?;
 
@@ -401,6 +419,7 @@ async fn build_catalog(cfg: &ArchiveConfig, database_url: &str) -> anyhow::Resul
     use std::collections::HashMap;
 
     let catalog = SqlCatalogBuilder::default()
+        .with_storage_factory(crate::iceberg::storage_factory(cfg)?)
         .load(
             &cfg.iceberg_catalog_name,
             HashMap::from_iter([
@@ -536,7 +555,10 @@ struct RawMeterRead {
     melo_id: Option<String>,
     dtm_from: OffsetDateTime,
     dtm_to: OffsetDateTime,
-    quantity_kwh: String,
+    /// Decoded as `Decimal` — the column is NUMERIC(18,5); decoding it as
+    /// `String` fails at runtime (sqlx has no NUMERIC→TEXT conversion), which
+    /// the `iceberg_archive` integration tests caught.
+    quantity_kwh: Decimal,
     quality: String,
     pid: i32,
     sparte: String,
@@ -560,7 +582,7 @@ fn raw_to_read(r: &RawMeterRead) -> MeterRead {
         melo_id: r.melo_id.clone(),
         dtm_from: r.dtm_from,
         dtm_to: r.dtm_to,
-        quantity_kwh: r.quantity_kwh.parse().unwrap_or(Decimal::ZERO),
+        quantity_kwh: r.quantity_kwh,
         quality: match r.quality.as_str() {
             "MEASURED" => QualityFlag::Measured,
             "ESTIMATED" => QualityFlag::Estimated,

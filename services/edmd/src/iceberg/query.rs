@@ -214,7 +214,7 @@ impl OlapEngine {
         let gdpr = self.gdpr_exclusion_clause().await;
         let sql = format!(
             "SELECT malo_id, \
-                    COALESCE(SUM(quantity_kwh), 0.0) AS total_kwh, \
+                    COALESCE(SUM(CAST(quantity_kwh AS DOUBLE)), 0.0) AS total_kwh, \
                     COUNT(*) AS read_count, MIN(dtm_from) AS period_from, MAX(dtm_to) AS period_to \
              FROM meter_reads_archive \
              WHERE dtm_from >= TIMESTAMP '{f}' AND dtm_to <= TIMESTAMP '{t}'{gdpr} \
@@ -258,8 +258,12 @@ impl OlapEngine {
         limit: usize,
     ) -> anyhow::Result<Vec<ArchivedMeterRead>> {
         let gdpr = self.gdpr_exclusion_clause().await;
+        // `quantity_kwh` is Arrow Decimal128(18,5); it is cast to VARCHAR in
+        // SQL because the row decoder below reads string columns — a raw
+        // Decimal128 downcast to StringArray silently yields zero rows.
         let sql = format!(
-            "SELECT malo_id, melo_id, dtm_from, dtm_to, quantity_kwh, quality, obis_code, sparte \
+            "SELECT malo_id, melo_id, dtm_from, dtm_to, \
+                    CAST(quantity_kwh AS VARCHAR) AS quantity_kwh, quality, obis_code, sparte \
              FROM meter_reads_archive \
              WHERE malo_id = '{m}' AND dtm_from >= TIMESTAMP '{f}' AND dtm_to <= TIMESTAMP '{t}'{gdpr} \
              ORDER BY dtm_from LIMIT {limit}",
@@ -270,58 +274,25 @@ impl OlapEngine {
         let batches = self.fresh_ctx().await?.sql(&sql).await?.collect().await?;
         let mut rows = Vec::new();
         for b in &batches {
-            use datafusion::arrow::array::{StringArray, TimestampMicrosecondArray};
-            macro_rules! str_col {
-                ($n:literal) => {
-                    b.column_by_name($n)
-                        .and_then(|a| a.as_any().downcast_ref::<StringArray>())
-                };
-            }
-            macro_rules! ts_col {
-                ($n:literal) => {
-                    b.column_by_name($n)
-                        .and_then(|a| a.as_any().downcast_ref::<TimestampMicrosecondArray>())
-                };
-            }
             for i in 0..b.num_rows() {
-                let Some(ids) = str_col!("malo_id") else {
-                    break;
-                };
-                if ids.is_null(i) {
+                let Some(malo) = get_str(b, "malo_id", i) else {
                     continue;
-                }
-                let Some(df) = ts_col!("dtm_from") else { break };
-                let Some(dt) = ts_col!("dtm_to") else { break };
-                let Some(qty) = str_col!("quantity_kwh") else {
-                    break;
+                };
+                let Some(dtm_from) = get_ts(b, "dtm_from", i) else {
+                    continue;
+                };
+                let Some(dtm_to) = get_ts(b, "dtm_to", i) else {
+                    continue;
                 };
                 rows.push(ArchivedMeterRead {
-                    malo_id: ids.value(i).to_owned(),
-                    melo_id: str_col!("melo_id")
-                        .and_then(|a| (!a.is_null(i)).then(|| a.value(i).to_owned())),
-                    dtm_from: if df.is_null(i) {
-                        continue;
-                    } else {
-                        micros_to_odt(df.value(i))
-                    },
-                    dtm_to: if dt.is_null(i) {
-                        continue;
-                    } else {
-                        micros_to_odt(dt.value(i))
-                    },
-                    quantity_kwh: if qty.is_null(i) {
-                        "0".to_owned()
-                    } else {
-                        qty.value(i).to_owned()
-                    },
-                    quality: str_col!("quality")
-                        .and_then(|a| (!a.is_null(i)).then(|| a.value(i).to_owned()))
-                        .unwrap_or_else(|| "UNKNOWN".to_owned()),
-                    obis_code: str_col!("obis_code")
-                        .and_then(|a| (!a.is_null(i)).then(|| a.value(i).to_owned())),
-                    sparte: str_col!("sparte")
-                        .and_then(|a| (!a.is_null(i)).then(|| a.value(i).to_owned()))
-                        .unwrap_or_else(|| "STROM".to_owned()),
+                    malo_id: malo,
+                    melo_id: get_str(b, "melo_id", i),
+                    dtm_from,
+                    dtm_to,
+                    quantity_kwh: get_str(b, "quantity_kwh", i).unwrap_or_else(|| "0".to_owned()),
+                    quality: get_str(b, "quality", i).unwrap_or_else(|| "UNKNOWN".to_owned()),
+                    obis_code: get_str(b, "obis_code", i),
+                    sparte: get_str(b, "sparte", i).unwrap_or_else(|| "STROM".to_owned()),
                 });
             }
         }
@@ -370,13 +341,18 @@ impl OlapEngine {
                         serde_json::Value::Null
                     } else {
                         match field.data_type() {
-                            DataType::Utf8 | DataType::LargeUtf8 => {
-                                let arr = col
-                                    .as_any()
-                                    .downcast_ref::<datafusion::arrow::array::StringArray>();
-                                arr.map(|a| serde_json::Value::String(a.value(row_idx).to_owned()))
+                            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                                get_str(batch, field.name(), row_idx)
+                                    .map(serde_json::Value::String)
                                     .unwrap_or(serde_json::Value::Null)
                             }
+                            DataType::Timestamp(_, _) => get_ts(batch, field.name(), row_idx)
+                                .and_then(|ts| {
+                                    ts.format(&time::format_description::well_known::Rfc3339)
+                                        .ok()
+                                })
+                                .map(serde_json::Value::String)
+                                .unwrap_or(serde_json::Value::Null),
                             DataType::Int64 => {
                                 let arr = col
                                     .as_any()
@@ -405,10 +381,9 @@ impl OlapEngine {
                                 arr.map(|a| serde_json::Value::Bool(a.value(row_idx)))
                                     .unwrap_or(serde_json::Value::Null)
                             }
-                            _ => {
-                                // Generic fallback: use Arrow's display formatter.
-                                serde_json::Value::String(format!("{:?}", col))
-                            }
+                            other => serde_json::Value::String(format!(
+                                "<unsupported column type {other}>"
+                            )),
                         }
                     };
                     obj.insert(field.name().clone(), val);
@@ -427,6 +402,31 @@ impl OlapEngine {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Read a string cell regardless of Arrow representation.
+///
+/// DataFusion's parquet scan yields `Utf8View` (`StringViewArray`) by default;
+/// a plan that materialises through a view or cast can yield `Utf8`
+/// (`StringArray`) or `LargeUtf8`. Downcasting to only one of them silently
+/// decodes zero rows — caught by the `iceberg_archive` integration tests.
+fn get_str(
+    b: &datafusion::arrow::record_batch::RecordBatch,
+    col: &str,
+    i: usize,
+) -> Option<String> {
+    use datafusion::arrow::array::{Array, LargeStringArray, StringArray, StringViewArray};
+    let a = b.column_by_name(col)?;
+    if let Some(s) = a.as_any().downcast_ref::<StringArray>() {
+        return (!s.is_null(i)).then(|| s.value(i).to_owned());
+    }
+    if let Some(s) = a.as_any().downcast_ref::<LargeStringArray>() {
+        return (!s.is_null(i)).then(|| s.value(i).to_owned());
+    }
+    if let Some(s) = a.as_any().downcast_ref::<StringViewArray>() {
+        return (!s.is_null(i)).then(|| s.value(i).to_owned());
+    }
+    None
+}
 
 fn get_f64(b: &datafusion::arrow::record_batch::RecordBatch, col: &str, i: usize) -> Option<f64> {
     use datafusion::arrow::array::PrimitiveArray;

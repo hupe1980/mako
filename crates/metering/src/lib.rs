@@ -15,6 +15,14 @@
 //! | [`classification`] | SLP/RLM/iMSys detection, interval length |
 //! | [`imbalance`] | Mehr-/Mindermengensaldo (§27 MessZV, compute_imbalance) |
 //! | [`quality`] | Hampel-filter quality scoring (M7), `score_intervals_raw` for f64 |
+//! | [`validation`] | V01–V10 validation engine incl. plant-capacity ceiling |
+//! | [`substitute`] | §17 MessZV Ersatzwertbildung (4 methods, slot matching) |
+//! | [`forecast`] | §17 MessZV Jahresprognose with 95% confidence bounds |
+//! | [`load_profile`] | SLP classes incl. BDEW 2025 (H25/G25/L25/P25/S25) + Dynamisierung |
+//! | [`zaehlzeit`] | Zählzeitdefinition — time-variable register resolution (§14a EnWG) |
+//! | [`rollout`] | §29 MsbG Pflichteinbaufälle + §45 MsbG Rollout-Fahrplan |
+//! | [`smgw`] | SMGW sessions, certificates, CLS channels (BSI TR-03109) |
+//! | [`virtual_meter`] | Sum/Residual/GGV virtual meters (§42b EnWG) |
 //!
 //! # Quick start — billing period
 //!
@@ -78,12 +86,14 @@ pub mod quality;
 pub mod register;
 pub mod resample;
 pub mod resolution;
+pub mod rollout;
 pub mod sharing;
 pub mod smgw;
 pub mod substitute;
 pub mod tariff_window;
 pub mod validation;
 pub mod virtual_meter;
+pub mod zaehlzeit;
 
 // ── Re-exports ────────────────────────────────────────────────────────────────
 

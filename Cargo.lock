@@ -4199,6 +4199,7 @@ dependencies = [
  "iceberg-catalog-sql",
  "iceberg-datafusion",
  "iceberg-storage-opendal",
+ "krafka",
  "mako-edm",
  "mako-markt",
  "mako-service",
@@ -4216,6 +4217,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "subtle",
+ "tempfile",
  "thiserror 2.0.19",
  "time",
  "tokio",
@@ -6382,9 +6384,9 @@ dependencies = [
 
 [[package]]
 name = "krafka"
-version = "0.12.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35cf40db3d90338d041227b406f5814b60d1ae1b8eb061507d8c6b1adc3cbbd0"
+checksum = "de6a254d15320a880e0e4bca7d222e1058b2c0a0dd07d7ed1e3b20a12c26efc4"
 dependencies = [
  "ahash 0.8.12",
  "arc-swap",
@@ -6409,7 +6411,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-util",
  "tracing",
- "webpki-roots 0.26.11",
+ "webpki-roots 1.0.9",
  "zeroize",
 ]
 

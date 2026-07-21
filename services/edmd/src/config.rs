@@ -160,6 +160,10 @@ pub struct Config {
     /// Request rate limits, global and per tenant. See `[rate_limit]` in TOML.
     #[serde(default)]
     pub rate_limit: mako_service::RateLimitConfig,
+    /// Kafka ingest consumer. Disabled unless the section is present with
+    /// `enabled = true`. See [`KafkaIngestConfig`].
+    #[serde(default)]
+    pub kafka_ingest: Option<KafkaIngestConfig>,
     /// Start without token verification.
     ///
     /// With `[oidc]` absent the verifier admits every request as `dev-admin`
@@ -168,6 +172,44 @@ pub struct Config {
     /// by name rather than reached by leaving a section out.
     #[serde(default)]
     pub allow_insecure_no_auth: bool,
+}
+
+/// `[kafka_ingest]` — high-throughput meter-reading intake from a Kafka topic.
+///
+/// ```toml
+/// [kafka_ingest]
+/// enabled           = true
+/// bootstrap_servers = "kafka-1:9092,kafka-2:9092"
+/// topic             = "edmd.meter-reads"
+/// group_id          = "edmd-ingest"
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KafkaIngestConfig {
+    /// Enable the consumer. Default: `false`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Comma-separated bootstrap servers.
+    pub bootstrap_servers: String,
+    /// Topic carrying the JSON batch documents.
+    #[serde(default = "kafka_default_topic")]
+    pub topic: String,
+    /// Consumer group id.
+    #[serde(default = "kafka_default_group")]
+    pub group_id: String,
+    /// Poll timeout in milliseconds.
+    #[serde(default = "kafka_default_poll_ms")]
+    pub poll_ms: u64,
+}
+
+fn kafka_default_topic() -> String {
+    "edmd.meter-reads".to_owned()
+}
+fn kafka_default_group() -> String {
+    "edmd-ingest".to_owned()
+}
+fn kafka_default_poll_ms() -> u64 {
+    500
 }
 
 #[derive(Debug, Deserialize)]

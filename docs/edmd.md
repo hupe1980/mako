@@ -309,6 +309,15 @@ support.
 already part of the primary key `(tenant, malo_id, dtm_from, obis_code_norm)`,
 which is what a partitioned table requires of every unique constraint.
 
+Every partition additionally carries an `EXCLUDE USING gist` constraint
+(`btree_gist`) over `(tenant, malo_id, obis_code_norm, tstzrange(dtm_from,
+dtm_to, '[)'))`: the primary key stops identical starts and V02 catches
+overlaps inside one batch, but only this constraint refuses a later delivery
+whose range overlaps a stored one — the double-counting case no application
+check can see. Adjacent intervals stay legal (half-open ranges); a redelivery
+of the same interval hits the primary key and takes the audited upsert path
+instead.
+
 The archival worker runs three partition-related steps per pass:
 
 | Step | Function | Purpose |
@@ -685,6 +694,51 @@ governs the monthly consumption *message*, not the meter.
 | 422 | Unknown `sparte`/`unit`, unit/Sparte mismatch, or nothing storable |
 
 ---
+
+## Kafka batch ingest (head-end systems)
+
+Head-end systems and LoRaWAN network servers that manage large gateway fleets
+stream reading batches instead of pushing per-gateway HTTP. The optional
+Kafka consumer drains such a topic through **the same path as every other
+ingest**: V01–V10 validation, quality-warning annotation, PK-idempotent
+upsert with the §22 MessZV overwrite audit trail.
+
+```toml
+[kafka_ingest]
+enabled           = true
+bootstrap_servers = "kafka-1:9092,kafka-2:9092"
+topic             = "edmd.meter-reads"     # default
+group_id          = "edmd-ingest"          # default
+```
+
+One JSON document per Kafka record, the same batch shape the bulk REST
+endpoint accepts:
+
+```json
+{
+  "malo_id": "51238696781",
+  "sparte": "STROM",
+  "source": "IOT_PUSH",
+  "intervals": [
+    {"from": "2026-07-01T00:00:00Z", "to": "2026-07-01T00:15:00Z",
+     "value_kwh": "1.25", "quality": "MEASURED", "obis_code": "1-0:1.8.0"}
+  ]
+}
+```
+
+Delivery is **at-least-once**: offsets commit only after the batch is stored,
+and a replay is idempotent on the primary key (a value-changing replay leaves
+a correction-audit row like any other redelivery). Unparseable records are
+logged and skipped so a poison pill cannot wedge the partition; storage
+failures abort without committing and the batch is redelivered. A fresh
+consumer group starts at the **earliest** offset — readings produced before
+the group's first commit are a backlog to drain, not a feed to tail.
+
+The path is covered end-to-end by `tests/kafka_ingest_e2e.rs`: a real
+producer and the real consumer talk to krafka's in-process `FakeBroker`
+(`test-broker` feature) over an actual TCP socket — produce → group join →
+fetch → V01–V10 → audited store → offset commit, poison pill included, with
+no Kafka container.
 
 ## Hampel-filter quality scoring
 
@@ -1792,25 +1846,31 @@ Response `200 OK`:
 
 ## Cedar ABAC
 
-`edmd` uses Cedar for access control. Grant the `read-timeseries` action to
-principals that need meter data access:
+`edmd` enforces two layers with Cedar: every action requires the caller's
+tenant to match the deployment tenant, and **write actions additionally
+require a market role** (`mako_roles` JWT claim). An LF-role service account
+of the same tenant — a portal integration, a billing reader — can read
+everything but write nothing.
+
+| Action group | Actions | Required role |
+|---|---|---|
+| Reads | `read-timeseries`, `read-imbalance`, `read-billing-period`, `read-corrections`, `read-archive-olap`, `read-archive-status`, `read-reading-order`, `use-mcp` | any (tenant match only) |
+| Reading ingest | `write-meter-reads` (direct push, gas, IoT, SMGW registry) | `MSB` or `admin` |
+| Series mutation | `write-timeseries`, `write-corrections`, `write-quality-rescore` (bulk import, §22 corrections, §17 substitutes, virtual meters, rescore) | `MSB`, `NB`, or `admin` |
+| Field dispatch | `write-reading-order` (orders + §40 EnWG campaign) | `NB`, `MSB`, or `admin` |
+| Erasure | `write-gdpr-erasure` (Art. 17 DSGVO) | `NB`, `MSB`, or `admin` |
+
+`POST /api/v1/query/sql` is gated by `read-archive-olap` (the archive
+capability), not the generic hot-tier read action.
+
+The shipped policy is `policies/edmd.cedar`; the `cedar_policy` test suite
+pins these gates, so a widening edit fails CI. Example — a same-tenant read
+grant:
 
 ```cedar
 permit(
   principal,
   action == Action::"read-timeseries",
-  resource
-) when {
-  context.principal_tenant == context.resource_tenant
-};
-```
-
-Add `read-archive-olap` for access to Iceberg OLAP endpoints:
-
-```cedar
-permit(
-  principal,
-  action == Action::"read-archive-olap",
   resource
 ) when {
   context.principal_tenant == context.resource_tenant

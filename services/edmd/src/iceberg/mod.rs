@@ -26,17 +26,24 @@ use iceberg::io::{
 };
 use iceberg_storage_opendal::OpenDalStorageFactory;
 
-/// Build an [`iceberg::io::FileIO`] from the archive configuration.
-pub fn build_file_io(cfg: &ArchiveConfig) -> anyhow::Result<FileIO> {
+/// The OpenDAL storage factory for the configured warehouse scheme.
+///
+/// Shared by [`build_file_io`] (the writer's FileIO) and the SQL catalog
+/// builder — the catalog constructs its own FileIO from this factory when it
+/// reads and writes table metadata, so omitting it there makes every catalog
+/// operation fail at runtime (caught by the `iceberg_archive` tests).
+pub fn storage_factory(
+    cfg: &ArchiveConfig,
+) -> anyhow::Result<Arc<dyn iceberg::io::StorageFactory>> {
     let scheme = cfg
         .storage_uri
         .split_once("://")
         .map(|(s, _)| s.to_ascii_lowercase())
         .unwrap_or_else(|| "file".to_owned());
 
-    let factory: Arc<dyn iceberg::io::StorageFactory> = match scheme.as_str() {
+    Ok(match scheme.as_str() {
         "s3" | "s3a" => Arc::new(OpenDalStorageFactory::S3 {
-            configured_scheme: scheme.clone(),
+            configured_scheme: scheme,
             customized_credential_load: None,
         }),
         "gs" | "gcs" => Arc::new(OpenDalStorageFactory::Gcs),
@@ -46,7 +53,18 @@ pub fn build_file_io(cfg: &ArchiveConfig) -> anyhow::Result<FileIO> {
              Supported: s3://, s3a://, gs://, file://",
             cfg.storage_uri
         ),
-    };
+    })
+}
+
+/// Build an [`iceberg::io::FileIO`] from the archive configuration.
+pub fn build_file_io(cfg: &ArchiveConfig) -> anyhow::Result<FileIO> {
+    let scheme = cfg
+        .storage_uri
+        .split_once("://")
+        .map(|(s, _)| s.to_ascii_lowercase())
+        .unwrap_or_else(|| "file".to_owned());
+
+    let factory = storage_factory(cfg)?;
 
     let mut b = FileIOBuilder::new(factory);
 

@@ -32,50 +32,71 @@ permit(
     context.principal_tenant == context.resource_tenant
 };
 
-// Same-tenant write.
-//
-// Note: the guard below checks tenant only. `context.principal_roles` is passed
-// by the enforcer but never evaluated here, so despite the historical comment
-// naming "MSB, LF, or admin" there is no role gating — any authenticated
-// principal of the right tenant may write. Add a `principal_roles.contains(..)`
-// clause here if that needs tightening.
-//
-// `write-timeseries` and `write-quality-rescore` are used by
-// `post_bulk_reads`, `post_corrections` and `post_quality_rescore` but were
-// never declared. Cedar is default-deny, so those endpoints returned 403 for
-// every caller regardless of role.
+// Meter-reading ingest: the MSB delivers readings (iMSys/SMGW direct push,
+// gas push, IoT push, SMGW registry). Defense in depth on top of the tenant
+// check — an LF-role service account of the same tenant (e.g. a portal
+// integration) must not be able to write measurement data.
+permit(
+    principal,
+    action == Action::"write-meter-reads",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    (context.principal_roles.contains("MSB") ||
+     context.principal_roles.contains("admin"))
+};
+
+// Stored-series mutation: bulk import, §22 MessZV corrections, §17 MessZV
+// substitute values, virtual-meter configuration, quality rescore. Operated
+// by the metering-side roles (MSB field data, NB grid operations) or an
+// operator account.
 permit(
     principal,
     action in [
-        Action::"write-meter-reads",
         Action::"write-corrections",
         Action::"write-timeseries",
         Action::"write-quality-rescore"
     ],
     resource
 ) when {
-    context.principal_tenant == context.resource_tenant
+    context.principal_tenant == context.resource_tenant &&
+    (context.principal_roles.contains("MSB") ||
+     context.principal_roles.contains("NB") ||
+     context.principal_roles.contains("admin"))
 };
 
-// Reading orders (Ablesesteuerung). A reading order dispatches a field visit
-// and its result becomes a billing figure, so both reading and writing are
-// tenant-scoped like every other data action.
+// Reading orders (Ablesesteuerung). Reads are open to the tenant; creating,
+// completing, or cancelling an order — and launching the §40 Abs. 2 EnWG
+// Jahresablesung campaign — dispatches field work, so it needs the NB or MSB
+// role.
 permit(
     principal,
-    action in [
-        Action::"read-reading-order",
-        Action::"write-reading-order"
-    ],
+    action == Action::"read-reading-order",
     resource
 ) when {
     context.principal_tenant == context.resource_tenant
 };
 
-// GDPR erasure: operator roles only.
+permit(
+    principal,
+    action == Action::"write-reading-order",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    (context.principal_roles.contains("NB") ||
+     context.principal_roles.contains("MSB") ||
+     context.principal_roles.contains("admin"))
+};
+
+// GDPR erasure (Art. 17 DSGVO): destructive — operator roles only. An
+// LF-role token of the right tenant is refused.
 permit(
     principal,
     action == Action::"write-gdpr-erasure",
     resource
 ) when {
-    context.principal_tenant == context.resource_tenant
+    context.principal_tenant == context.resource_tenant &&
+    (context.principal_roles.contains("NB") ||
+     context.principal_roles.contains("MSB") ||
+     context.principal_roles.contains("admin"))
 };

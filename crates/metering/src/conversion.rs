@@ -99,6 +99,79 @@ pub fn gas_m3_to_kwh_hs(
     volume_m3 * hs_kwh_per_m3 * zustandszahl
 }
 
+// ── G 685 rounding ────────────────────────────────────────────────────────────
+
+/// How the final kWh amount of a G 685 thermal-energy calculation is rounded.
+///
+/// DVGW G 685 governs the calculation, but Netzbetreiber practice on the
+/// *final* rounding demonstrably diverges (published Merkblätter show both
+/// whole-kWh and two-decimal results), and the normative text is not freely
+/// citable — so the final rounding is a configuration choice, not a
+/// hard-coded claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
+pub enum G685FinalRounding {
+    /// No rounding — full Decimal precision (default; round at display time).
+    #[default]
+    None,
+    /// Kaufmännisch to whole kWh (observed NB practice, e.g. eneregio).
+    WholeKwh,
+    /// Two decimal places (observed NB practice, e.g. Stadtwerke Mühlacker).
+    TwoDecimals,
+}
+
+/// Input rounding per published G 685 Netzbetreiber practice.
+///
+/// Consistently observed across NB Merkblätter zur thermischen Gasabrechnung:
+/// Zustandszahl to **4** decimal places, Abrechnungsbrennwert to **3**
+/// decimal places (kWh/m³). Both are applied to the inputs before the
+/// multiplication so the stored calculation matches the published invoice
+/// arithmetic digit for digit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct G685Rounding {
+    /// Decimal places for the Zustandszahl (default 4).
+    pub zustandszahl_dp: u32,
+    /// Decimal places for the Abrechnungsbrennwert (default 3).
+    pub brennwert_dp: u32,
+    /// Final-amount rounding (default `None`).
+    pub final_rounding: G685FinalRounding,
+}
+
+impl Default for G685Rounding {
+    fn default() -> Self {
+        Self {
+            zustandszahl_dp: 4,
+            brennwert_dp: 3,
+            final_rounding: G685FinalRounding::None,
+        }
+    }
+}
+
+/// G 685 thermal-energy calculation with explicit rounding.
+///
+/// `kWh = V(m³) × round(Hs, brennwert_dp) × round(z, zustandszahl_dp)`,
+/// then the configured final rounding. Rounding is kaufmännisch
+/// (`MidpointAwayFromZero`), the German commercial rule (§ 1 Abs. 4 analog).
+#[must_use]
+pub fn gas_m3_to_kwh_hs_rounded(
+    volume_m3: Decimal,
+    hs_kwh_per_m3: Decimal,
+    zustandszahl: Decimal,
+    rounding: G685Rounding,
+) -> Decimal {
+    use rust_decimal::RoundingStrategy::MidpointAwayFromZero;
+    let hs = hs_kwh_per_m3.round_dp_with_strategy(rounding.brennwert_dp, MidpointAwayFromZero);
+    let z = zustandszahl.round_dp_with_strategy(rounding.zustandszahl_dp, MidpointAwayFromZero);
+    let kwh = volume_m3 * hs * z;
+    match rounding.final_rounding {
+        G685FinalRounding::None => kwh,
+        G685FinalRounding::WholeKwh => kwh.round_dp_with_strategy(0, MidpointAwayFromZero),
+        G685FinalRounding::TwoDecimals => kwh.round_dp_with_strategy(2, MidpointAwayFromZero),
+    }
+}
+
 /// Normalize a raw meter interval to kWh.
 ///
 /// For Strom intervals already in kWh: returns `interval.value_kwh` unchanged.
@@ -376,6 +449,37 @@ mod warm_water_tests {
         assert_eq!(
             warm_water_heat_kwh_unmetered(Decimal::from(75u32), brennwert),
             Decimal::from(2400u32) * d("1.11")
+        );
+    }
+
+    #[test]
+    fn g685_rounded_matches_the_published_eneregio_example() {
+        // eneregio Merkblatt: 895 m³ × combined factor 10,8494 (= z 0,9543 ×
+        // Hs 11,369) = 9.710 kWh, rounded to whole kWh.
+        let kwh = gas_m3_to_kwh_hs_rounded(
+            Decimal::from(895u32),
+            Decimal::from_str_exact("11.369").unwrap(),
+            Decimal::from_str_exact("0.9543").unwrap(),
+            G685Rounding {
+                final_rounding: G685FinalRounding::WholeKwh,
+                ..G685Rounding::default()
+            },
+        );
+        assert_eq!(kwh, Decimal::from(9710u32));
+    }
+
+    #[test]
+    fn g685_input_rounding_is_kaufmaennisch() {
+        // z given with 5 places rounds to 4 (0.95435 → 0.9544, away from zero).
+        let kwh = gas_m3_to_kwh_hs_rounded(
+            Decimal::ONE,
+            Decimal::from_str_exact("10.0005").unwrap(), // → 10.001 (3 dp)
+            Decimal::from_str_exact("0.95435").unwrap(), // → 0.9544 (4 dp)
+            G685Rounding::default(),
+        );
+        assert_eq!(
+            kwh,
+            Decimal::from_str_exact("10.001").unwrap() * Decimal::from_str_exact("0.9544").unwrap()
         );
     }
 }

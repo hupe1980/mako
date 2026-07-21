@@ -129,6 +129,7 @@ async fn main() -> anyhow::Result<()> {
         shutdown,
         erp_webhook_url: cfg.webhook.erp_webhook_url,
         rate_limit: cfg.rate_limit,
+        kafka_ingest: cfg.kafka_ingest,
         archive: if cfg.archive.enabled {
             // Resolve env references in archive credentials.
             let mut archive = cfg.archive;

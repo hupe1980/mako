@@ -45,7 +45,7 @@ test-edmd-db:
         sleep 1
     done
     EDMD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55432/edmd" \
-        cargo test -p edmd --test ingest_integration -- --include-ignored --test-threads=1
+        cargo test -p edmd --test ingest_integration --test iceberg_archive --test kafka_ingest_e2e -- --include-ignored --test-threads=1
 
 # Integration tests for einsd against a throwaway PostgreSQL.
 test-einsd-db:

@@ -51,13 +51,14 @@ pub async fn write_data_files(
     reads: &[MeterRead],
     _file_io: &FileIO, // FileIO is taken from table.file_io() — kept for API clarity
 ) -> anyhow::Result<Vec<DataFile>> {
+    use iceberg::spec::{Literal, PartitionKey, Struct};
+    use std::collections::BTreeMap;
+
     if reads.is_empty() {
         return Ok(Vec::new());
     }
 
     let schema = table.metadata().current_schema().clone();
-
-    let record_batch = rows_to_record_batch(reads, table)?;
 
     let location_gen = DefaultLocationGenerator::new(table.metadata().clone())
         .map_err(|e| anyhow::anyhow!("location generator: {e}"))?;
@@ -67,66 +68,109 @@ pub async fn write_data_files(
     // because the internal counter resets to 0, causing Iceberg catalog commit failures
     // or silent data corruption on re-committed files.
     let sink_id = Uuid::new_v4();
-    let file_name_gen =
-        DefaultFileNameGenerator::new(format!("edmd-{}-", sink_id), None, DataFileFormat::Parquet);
 
-    let props = WriterProperties::builder()
-        // ZSTD level 3 — best ratio for archival data; decompression is rare
-        .set_compression(Compression::ZSTD(ZstdLevel::try_new(3).unwrap_or_default()))
-        // Bloom filter on malo_id: probabilistic MaLo presence test (1% FPR)
-        // eliminates ~99% of Parquet file reads for single-MaLo cold-tier queries
-        .set_column_bloom_filter_enabled(ColumnPath::from("malo_id"), true)
-        .set_column_bloom_filter_ndv(ColumnPath::from("malo_id"), 100_000)
-        .set_column_bloom_filter_fpp(ColumnPath::from("malo_id"), 0.01)
-        // DELTA_BINARY_PACKED on timestamps: regular 15-min intervals have
-        // delta-of-delta = 0 → ~1 bit per timestamp (Gorilla §5.2 principle)
-        .set_column_encoding(ColumnPath::from("dtm_from"), Encoding::DELTA_BINARY_PACKED)
-        .set_column_encoding(ColumnPath::from("dtm_to"), Encoding::DELTA_BINARY_PACKED)
-        // RLE_DICTIONARY on low-cardinality string columns (quality: 8 values,
-        // sparte: 2 values, obis_code: typically <20 per tenant)
-        .set_column_encoding(ColumnPath::from("quality"), Encoding::RLE_DICTIONARY)
-        .set_column_encoding(ColumnPath::from("sparte"), Encoding::RLE_DICTIONARY)
-        .set_column_encoding(ColumnPath::from("malo_id"), Encoding::RLE_DICTIONARY)
-        .set_column_encoding(ColumnPath::from("obis_code"), Encoding::RLE_DICTIONARY)
-        .set_column_encoding(
-            ColumnPath::from("allocation_version"),
-            Encoding::RLE_DICTIONARY,
-        )
-        .build();
+    // The table is partitioned by (tenant, sparte, month(dtm_from)); every
+    // data file must carry the partition tuple its rows belong to, so the
+    // batch is grouped and each group written by its own DataFileWriter.
+    // Committing an unpartitioned file into a partitioned table fails with
+    // "Partition value is not compatible with partition type" — caught by
+    // the `iceberg_archive` integration tests.
+    let mut groups: BTreeMap<(String, &'static str, i32), Vec<MeterRead>> = BTreeMap::new();
+    for r in reads {
+        let key = (
+            r.tenant.clone(),
+            sparte_str(r.sparte),
+            months_since_epoch(r.dtm_from),
+        );
+        groups.entry(key).or_default().push(r.clone());
+    }
 
-    // ParquetWriterBuilder takes (properties, schema) — FileIO/location are in rolling writer.
-    let parquet_builder = ParquetWriterBuilder::new(props, schema);
+    let spec = table.metadata().default_partition_spec();
+    let mut all_files: Vec<DataFile> = Vec::new();
 
-    // RollingFileWriterBuilder wraps the parquet builder with FileIO and path generators.
-    let rolling_builder = RollingFileWriterBuilder::new_with_default_file_size(
-        parquet_builder,
-        table.file_io().clone(),
-        location_gen,
-        file_name_gen,
-    );
+    for (group_idx, ((tenant, sparte, month), group_rows)) in groups.into_iter().enumerate() {
+        let record_batch = rows_to_record_batch(&group_rows, table)?;
+        let file_name_gen = DefaultFileNameGenerator::new(
+            format!("edmd-{sink_id}-p{group_idx}-"),
+            None,
+            DataFileFormat::Parquet,
+        );
+        let partition_key = PartitionKey::new(
+            (**spec).clone(),
+            schema.clone(),
+            Struct::from_iter([
+                Some(Literal::string(&tenant)),
+                Some(Literal::string(sparte)),
+                Some(Literal::int(month)),
+            ]),
+        );
 
-    // DataFileWriterBuilder tracks statistics (record count, file size, min/max).
-    let mut writer = DataFileWriterBuilder::new(rolling_builder)
-        .build(None)
-        .await
-        .map_err(|e| anyhow::anyhow!("DataFileWriter build: {e}"))?;
+        let props = WriterProperties::builder()
+            // ZSTD level 3 — best ratio for archival data; decompression is rare
+            .set_compression(Compression::ZSTD(ZstdLevel::try_new(3).unwrap_or_default()))
+            // Bloom filter on malo_id: probabilistic MaLo presence test (1% FPR)
+            // eliminates ~99% of Parquet file reads for single-MaLo cold-tier queries
+            .set_column_bloom_filter_enabled(ColumnPath::from("malo_id"), true)
+            .set_column_bloom_filter_ndv(ColumnPath::from("malo_id"), 100_000)
+            .set_column_bloom_filter_fpp(ColumnPath::from("malo_id"), 0.01)
+            // DELTA_BINARY_PACKED on timestamps: regular 15-min intervals have
+            // delta-of-delta = 0 → ~1 bit per timestamp (Gorilla §5.2 principle)
+            .set_column_encoding(ColumnPath::from("dtm_from"), Encoding::DELTA_BINARY_PACKED)
+            .set_column_encoding(ColumnPath::from("dtm_to"), Encoding::DELTA_BINARY_PACKED)
+            // Low-cardinality string columns (quality: 8 values, sparte: 2,
+            // obis_code: typically <20 per tenant) use dictionary encoding — the
+            // parquet default, controlled by the dictionary flag. Setting
+            // `RLE_DICTIONARY` via `set_column_encoding` instead panics at write
+            // time ("Dictionary encoding can not be used as fallback encoding") —
+            // caught by the `iceberg_archive` integration tests.
+            .set_column_dictionary_enabled(ColumnPath::from("quality"), true)
+            .set_column_dictionary_enabled(ColumnPath::from("sparte"), true)
+            .set_column_dictionary_enabled(ColumnPath::from("malo_id"), true)
+            .set_column_dictionary_enabled(ColumnPath::from("obis_code"), true)
+            .set_column_dictionary_enabled(ColumnPath::from("allocation_version"), true)
+            .build();
 
-    writer
-        .write(record_batch)
-        .await
-        .map_err(|e| anyhow::anyhow!("iceberg write: {e}"))?;
+        // ParquetWriterBuilder takes (properties, schema) — FileIO/location are
+        // in the rolling writer.
+        let parquet_builder = ParquetWriterBuilder::new(props, schema.clone());
 
-    let data_files = writer
-        .close()
-        .await
-        .map_err(|e| anyhow::anyhow!("iceberg close: {e}"))?;
+        let rolling_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            parquet_builder,
+            table.file_io().clone(),
+            location_gen.clone(),
+            file_name_gen,
+        );
+
+        // DataFileWriterBuilder tracks statistics (record count, file size, min/max).
+        let mut writer = DataFileWriterBuilder::new(rolling_builder)
+            .build(Some(partition_key))
+            .await
+            .map_err(|e| anyhow::anyhow!("DataFileWriter build: {e}"))?;
+
+        writer
+            .write(record_batch)
+            .await
+            .map_err(|e| anyhow::anyhow!("iceberg write: {e}"))?;
+
+        all_files.extend(
+            writer
+                .close()
+                .await
+                .map_err(|e| anyhow::anyhow!("iceberg close: {e}"))?,
+        );
+    }
 
     debug!(
         rows = reads.len(),
-        files = data_files.len(),
+        files = all_files.len(),
         "iceberg: data files written"
     );
-    Ok(data_files)
+    Ok(all_files)
+}
+
+/// The Iceberg `month` transform value: whole months since 1970-01.
+fn months_since_epoch(ts: OffsetDateTime) -> i32 {
+    (ts.year() - 1970) * 12 + (u8::from(ts.month()) as i32 - 1)
 }
 
 // ── Arrow record batch ────────────────────────────────────────────────────────
@@ -155,7 +199,7 @@ fn rows_to_record_batch(rows: &[MeterRead], table: &Table) -> anyhow::Result<Rec
                 .map(|r| odt_to_micros(r.dtm_from))
                 .collect::<Vec<_>>(),
         )
-        .with_timezone("UTC"),
+        .with_timezone("+00:00"),
     );
     let dtm_to: ArrayRef = Arc::new(
         TimestampMicrosecondArray::from(
@@ -163,7 +207,7 @@ fn rows_to_record_batch(rows: &[MeterRead], table: &Table) -> anyhow::Result<Rec
                 .map(|r| odt_to_micros(r.dtm_to))
                 .collect::<Vec<_>>(),
         )
-        .with_timezone("UTC"),
+        .with_timezone("+00:00"),
     );
     let qty: ArrayRef = {
         // Convert NUMERIC(18,5) Decimal to i128 scaled by 10^5 for Arrow Decimal128.

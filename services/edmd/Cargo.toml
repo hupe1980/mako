@@ -36,6 +36,7 @@ tokio              = { version = "1", features = ["full"] }
 tokio-util         = { workspace = true }
 tracing            = "0.1"
 mako-service       = { workspace = true, features = ["otel", "cedar", "oidc", "rate-limit"] }
+krafka             = { workspace = true }
 futures            = { version = "0.3", default-features = false, features = ["std"] }
 rmcp               = { workspace = true }
 schemars           = { workspace = true }
@@ -79,5 +80,8 @@ opendal                 = { workspace = true }
 
 [dev-dependencies]
 mako-edm            = { workspace = true, features = ["testing"] }
+## `test-broker` gives the kafka_ingest e2e test an in-process broker.
+krafka              = { workspace = true, features = ["test-broker"] }
+tempfile            = "3"
 tokio               = { version = "1", features = ["full"] }
 tower               = { version = "0.5", features = ["util"] }

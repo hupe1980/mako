@@ -9,6 +9,11 @@
 -- GDPR Art. 32 requires per-tenant data isolation on every table.
 -- `meter_reads` is range-partitioned monthly; see `ensure_meter_reads_partitions`.
 
+-- `btree_gist` provides GiST equality operators for TEXT so the per-partition
+-- interval-overlap EXCLUDE constraint can combine (tenant, malo_id,
+-- obis_code_norm) equality with tstzrange overlap. Shipped in postgres contrib.
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
 -- ── Meter data receipts ───────────────────────────────────────────────────────
 -- One row per received MSCONS process. Kept separate from meter_reads
 -- so receipt metadata is available even before typed interval data arrives.
@@ -110,6 +115,26 @@ BEGIN
          FOR VALUES FROM (%L) TO (%L)',
         v_name, v_start, v_end
     );
+    -- Cross-batch overlap exclusion (per partition): the PK stops identical
+    -- dtm_from values and V02 catches overlaps within one batch, but only
+    -- this constraint stops a second delivery from storing a range that
+    -- overlaps an existing one. Half-open [) ranges keep adjacent intervals
+    -- legal. PostgreSQL cannot enforce EXCLUDE on the partitioned parent
+    -- (the constraint does not compare the partition key with =), so it is
+    -- attached to every partition; an interval crossing a month boundary is
+    -- already impossible because its row lives in the partition of dtm_from
+    -- and dtm_to is capped by the CHECK to the same reading.
+    BEGIN
+        EXECUTE format(
+            'ALTER TABLE %I ADD CONSTRAINT %I EXCLUDE USING gist (
+                 tenant WITH =, malo_id WITH =, obis_code_norm WITH =,
+                 tstzrange(dtm_from, dtm_to, ''[)'') WITH &&
+             )',
+            v_name, v_name || '_no_overlap'
+        );
+    EXCEPTION WHEN duplicate_object OR duplicate_table THEN
+        NULL; -- constraint already exists (idempotent re-run)
+    END;
     RETURN v_name;
 END;
 $$;

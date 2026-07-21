@@ -131,10 +131,51 @@ pub struct AnnualForecast {
     pub seasonal_factor: Decimal,
     /// Method used for projection.
     pub method: ForecastMethod,
-    /// Confidence interval lower bound (kWh), if computable.
+    /// 95% confidence interval lower bound (kWh), clamped at zero.
+    ///
+    /// From the day-to-day variability of the observed period: with daily
+    /// sums treated as independent draws, the annual-total standard deviation
+    /// is `sd_daily × √365`, and the bounds are `projection ± 1.96 × sd_annual`
+    /// (seasonally scaled like the projection itself). Informational — the
+    /// billed figure is always `projected_annual_kwh`.
     pub confidence_lower_kwh: Option<Decimal>,
-    /// Confidence interval upper bound (kWh), if computable.
+    /// 95% confidence interval upper bound (kWh). See `confidence_lower_kwh`.
     pub confidence_upper_kwh: Option<Decimal>,
+}
+
+/// 95% CI half-width for the annual projection, from daily-sum variability.
+///
+/// Returns `None` with fewer than two observed days or when the statistics
+/// degenerate. Computed in `f64` — the bounds are diagnostics, not billed
+/// quantities, and the projection itself stays exact `Decimal`.
+fn confidence_half_width(intervals: &[MeterInterval], seasonal_factor: Decimal) -> Option<Decimal> {
+    use std::collections::BTreeMap;
+
+    let mut daily: BTreeMap<time::Date, Decimal> = BTreeMap::new();
+    for iv in intervals.iter().filter(|iv| iv.quality.is_billable()) {
+        *daily.entry(iv.from.date()).or_insert(Decimal::ZERO) += iv.value_kwh;
+    }
+    if daily.len() < 2 {
+        return None;
+    }
+
+    let n = daily.len() as f64;
+    let values: Vec<f64> = daily
+        .values()
+        .filter_map(|d| d.to_string().parse::<f64>().ok())
+        .collect();
+    if values.len() != daily.len() {
+        return None;
+    }
+    let mean = values.iter().sum::<f64>() / n;
+    let var = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1.0);
+    let sd_daily = var.sqrt();
+    let factor: f64 = seasonal_factor.to_string().parse().ok()?;
+    let half = 1.96 * sd_daily * 365.0_f64.sqrt() * factor;
+    if !half.is_finite() {
+        return None;
+    }
+    Decimal::try_from(half).ok().map(|d| d.round_dp(3))
 }
 
 // ── project_annual_consumption ────────────────────────────────────────────────
@@ -203,8 +244,10 @@ pub fn project_annual_consumption(
         } else {
             ForecastMethod::AnnualProjection
         },
-        confidence_lower_kwh: None,
-        confidence_upper_kwh: None,
+        confidence_lower_kwh: confidence_half_width(intervals, seasonal_factor)
+            .map(|h| (projected - h).max(Decimal::ZERO).round_dp(3)),
+        confidence_upper_kwh: confidence_half_width(intervals, seasonal_factor)
+            .map(|h| (projected + h).round_dp(3)),
     })
 }
 
@@ -447,6 +490,36 @@ mod tests {
     #[test]
     fn empty_intervals_returns_none() {
         assert!(project_annual_consumption("test", &[], None).is_none());
+    }
+
+    #[test]
+    fn confidence_bounds_bracket_the_projection() {
+        // 14 days with day-to-day variation → computable 95% CI.
+        let base = datetime!(2026-01-01 00:00 UTC);
+        let intervals: Vec<_> = (0..14 * 96)
+            .map(|i| {
+                let day = i / 96;
+                let kwh = if day % 2 == 0 { dec!(1.0) } else { dec!(1.4) };
+                make_iv(base + Duration::minutes(15 * i), kwh)
+            })
+            .collect();
+        let f = project_annual_consumption("51238696781", &intervals, None).expect("forecast");
+        let lower = f.confidence_lower_kwh.expect("lower bound computed");
+        let upper = f.confidence_upper_kwh.expect("upper bound computed");
+        assert!(lower < f.projected_annual_kwh && f.projected_annual_kwh < upper);
+        assert!(lower >= Decimal::ZERO, "lower bound clamped at zero");
+    }
+
+    #[test]
+    fn constant_consumption_has_a_tight_interval() {
+        let base = datetime!(2026-01-01 00:00 UTC);
+        let intervals: Vec<_> = (0..14 * 96)
+            .map(|i| make_iv(base + Duration::minutes(15 * i), dec!(1.0)))
+            .collect();
+        let f = project_annual_consumption("51238696781", &intervals, None).expect("forecast");
+        // Zero day-to-day variance → CI collapses onto the projection.
+        assert_eq!(f.confidence_lower_kwh, Some(f.projected_annual_kwh));
+        assert_eq!(f.confidence_upper_kwh, Some(f.projected_annual_kwh));
     }
 
     #[test]

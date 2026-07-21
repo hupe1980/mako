@@ -1,7 +1,7 @@
 // marktd authorization policies — FV2025-10-01+
 //
 // Principal attributes (from JWT):
-//   context.principal_tenant  — `mako_tenant` custom claim (operator GLN)
+//   context.principal_tenant  — `mako_tenant` custom claim (operator MP-ID)
 //   context.principal_roles   — `mako_roles` custom claim (["NB", "LF", ...])
 //
 // Resource attribute:
@@ -9,8 +9,8 @@
 //                                (= cfg.makod.tenant_id for this instance)
 //
 // Isolation model:
-//   A token issued by the IDP carries `mako_tenant = "<operator-GLN>".
-//   The running marktd instance is configured with the same GLN in `tenant_id`.
+//   A token issued by the IDP carries `mako_tenant = "<operator-MP-ID>".
+//   The running marktd instance is configured with the same MP-ID in `tenant_id`.
 //   Access is permitted only when the two match.  This prevents cross-tenant
 //   data leakage even if a valid token for another tenant reaches this instance.
 //

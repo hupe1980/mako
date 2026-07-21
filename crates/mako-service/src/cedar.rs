@@ -87,7 +87,7 @@ pub struct CedarPrincipal {
     /// `sub` claim — unique user identifier, used as Cedar entity ID.
     pub sub: String,
     /// `mako_tenant` custom JWT claim — data isolation boundary (typically the
-    /// operator's GLN).
+    /// operator's MP-ID).
     pub tenant: String,
     /// `mako_roles` custom JWT claim — energy-market roles (e.g. `["NB", "LF"]`).
     pub roles: Vec<String>,
@@ -138,7 +138,7 @@ impl CedarEnforcer {
         resource_tenant: &str,
     ) -> Result<(), CedarError> {
         // Escape double-quotes inside IDs so Cedar does not confuse them with
-        // string delimiters.  In practice sub/tenant GLNs never contain `"`.
+        // string delimiters.  In practice sub/tenant MP-IDs never contain `"`.
         let p_uid = build_uid("User", &principal.sub)?;
         let a_uid = build_uid("Action", action)?;
         let r_uid = build_uid("Resource", resource_tenant)?;
