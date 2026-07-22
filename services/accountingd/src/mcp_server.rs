@@ -36,6 +36,10 @@ pub struct AccountingdMcpState {
     pub pool: PgPool,
     pub tenant: String,
     pub auth: mako_service::mcp_auth::McpAuth,
+    /// SEPA creditor identity from config — pain.008 needs all three.
+    pub creditor_iban: Option<String>,
+    pub creditor_name: Option<String>,
+    pub creditor_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -391,24 +395,44 @@ Only generates for MaLo accounts that have an IBAN + signed mandate (sequence_ty
                     .iter()
                     .map(|(mandate, acct)| (mandate, acct.abschlag_ct))
                     .collect();
-                // Use tenant as creditor name fallback; in production creditor_iban comes from config.
-                let creditor = &self.state.tenant;
-                match build_pain_008(creditor, creditor, None, &refs) {
-                    Ok(batches) => ContentBlock::json(serde_json::json!({
+                let (Some(creditor_iban), Some(creditor_id)) = (
+                    self.state.creditor_iban.as_deref(),
+                    self.state.creditor_id.as_deref(),
+                ) else {
+                    return Err(McpError::internal_error(
+                        "SEPA creditor identity incomplete — set creditor_iban and \
+                         creditor_id (Gläubiger-ID) in accountingd.toml"
+                            .to_owned(),
+                        None,
+                    ));
+                };
+                let creditor_name = self
+                    .state
+                    .creditor_name
+                    .as_deref()
+                    .unwrap_or(&self.state.tenant);
+                let collection_date =
+                    (time::OffsetDateTime::now_utc() + time::Duration::days(2)).date();
+                match build_pain_008(
+                    creditor_iban,
+                    creditor_name,
+                    creditor_id,
+                    collection_date,
+                    &refs,
+                ) {
+                    Ok(run) => ContentBlock::json(serde_json::json!({
                         "mandate_count": refs.len(),
-                        "batch_count": batches.len(),
-                        "batches": batches.iter().map(|b| serde_json::json!({
-                            "sequence_type": format!("{:?}", b.sequence_type),
-                            "entry_count": b.entry_count,
-                            "total_ct": b.total_ct,
-                            "pain_008_xml": &b.xml,
-                        })).collect::<Vec<_>>(),
-                        "hint": "Submit each batch XML to your bank / payment gateway for SEPA direct debit execution."
+                        "collection_date": collection_date.to_string(),
+                        "entry_count": run.entry_count,
+                        "total_ct": run.total_ct,
+                        "groups": run.groups,
+                        "pain_008_xml": &run.xml,
+                        "hint": "Submit the XML to your bank / payment gateway — one message, one PmtInf group per SequenceType."
                     }))
                     .map(|b| CallToolResult::success(vec![b]))
                     .map_err(|e| McpError::internal_error(e.message, None)),
                     Err(e) => Err(McpError::internal_error(
-                        format!("pain.008 generation failed: {e}. Configure creditor_iban in accountingd.toml."),
+                        format!("pain.008 generation failed: {e}"),
                         None,
                     )),
                 }
@@ -528,10 +552,10 @@ SEPA pre-notification failures. \
                     acct.account_id,
                     &self.state.tenant,
                     "ABSCHLAG",
-                    acct.abschlag_ct, // positive = debit (charge to customer)
+                    -acct.abschlag_ct, // advance payment = credit (reduces balance)
                     Some(&ref_id),
                     Some("de.accounting.abschlag.posted"),
-                    None,
+                    Some(&ref_id), // deterministic ce_id → idempotent per (malo, month)
                     today,
                     Some(&format!("Monatlicher Abschlag Tag {day}")),
                 )

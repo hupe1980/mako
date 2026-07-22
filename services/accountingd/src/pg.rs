@@ -14,6 +14,7 @@ pub struct AccountRow {
     pub malo_id: String,
     pub lf_mp_id: String,
     pub tenant: String,
+    pub kunden_nr: Option<String>,
     pub iban: Option<String>,
     pub mandatsref: Option<String>,
     pub abschlag_ct: i64,
@@ -81,6 +82,61 @@ pub async fn fetch_account_by_id(
         .fetch_optional(pool)
         .await
         .context("fetch_account_by_id")
+}
+
+/// Link an account to its business partner (vertragd `kunden_nr`).
+pub async fn set_account_kunden_nr(
+    pool: &PgPool,
+    malo_id: &str,
+    lf_mp_id: &str,
+    tenant: &str,
+    kunden_nr: &str,
+) -> anyhow::Result<u64> {
+    let r = sqlx::query(
+        "UPDATE accounts SET kunden_nr = $1, updated_at = now() \
+         WHERE malo_id = $2 AND lf_mp_id = $3 AND tenant = $4",
+    )
+    .bind(kunden_nr)
+    .bind(malo_id)
+    .bind(lf_mp_id)
+    .bind(tenant)
+    .execute(pool)
+    .await
+    .context("set_account_kunden_nr")?;
+    Ok(r.rows_affected())
+}
+
+/// All accounts belonging to one business partner (cross-MaLo).
+pub async fn list_accounts_by_bp(
+    pool: &PgPool,
+    tenant: &str,
+    kunden_nr: &str,
+) -> anyhow::Result<Vec<AccountRow>> {
+    sqlx::query_as::<_, AccountRow>(
+        "SELECT * FROM accounts WHERE tenant = $1 AND kunden_nr = $2 ORDER BY malo_id",
+    )
+    .bind(tenant)
+    .bind(kunden_nr)
+    .fetch_all(pool)
+    .await
+    .context("list_accounts_by_bp")
+}
+
+/// Consolidated balance across all of a business partner's accounts (ct).
+pub async fn bp_consolidated_balance(
+    pool: &PgPool,
+    tenant: &str,
+    kunden_nr: &str,
+) -> anyhow::Result<i64> {
+    let total: Option<i64> = sqlx::query_scalar(
+        "SELECT SUM(balance_ct)::bigint FROM accounts WHERE tenant = $1 AND kunden_nr = $2",
+    )
+    .bind(tenant)
+    .bind(kunden_nr)
+    .fetch_one(pool)
+    .await
+    .context("bp_consolidated_balance")?;
+    Ok(total.unwrap_or(0))
 }
 
 #[derive(Debug, Deserialize)]
@@ -213,7 +269,7 @@ pub async fn jahresabschluss_already_settled(
     billing_year: i16,
 ) -> anyhow::Result<Option<i64>> {
     sqlx::query_scalar::<_, i64>(
-        "SELECT zahlbetrag_ct FROM jahresabschluss_runs \\
+        "SELECT zahlbetrag_ct FROM jahresabschluss_runs \
          WHERE tenant = $1 AND malo_id = $2 AND billing_year = $3 LIMIT 1",
     )
     .bind(tenant)
@@ -288,9 +344,13 @@ pub async fn persist_sepa_collection(
     Ok(row.try_get("run_id")?)
 }
 
-/// Mark a SEPA collection run as dispatched to the ERP.
-pub async fn mark_sepa_collection_dispatched(pool: &PgPool, run_id: Uuid) -> anyhow::Result<()> {
-    sqlx::query(
+/// Atomically claim a SEPA collection run for dispatch.
+///
+/// Returns `true` only for the caller that flips the run from a non-dispatched
+/// state to `DISPATCHED`; a second replica or a same-day restart gets `false`
+/// and must NOT re-POST the pain.008 (which would double-collect at the bank).
+pub async fn mark_sepa_collection_dispatched(pool: &PgPool, run_id: Uuid) -> anyhow::Result<bool> {
+    let r = sqlx::query(
         "UPDATE sepa_collection_runs
          SET dispatch_status = 'DISPATCHED', dispatched_at = now()
          WHERE run_id = $1 AND dispatch_status != 'DISPATCHED'",
@@ -299,7 +359,7 @@ pub async fn mark_sepa_collection_dispatched(pool: &PgPool, run_id: Uuid) -> any
     .execute(pool)
     .await
     .context("mark_sepa_collection_dispatched")?;
-    Ok(())
+    Ok(r.rows_affected() > 0)
 }
 
 /// Append an entry to the account master-data audit log (§238 HGB traceability).
@@ -486,20 +546,26 @@ pub async fn write_entry_with_value_date(
     value_date: Date,
     description: Option<&str>,
 ) -> anyhow::Result<Uuid> {
-    // Idempotency: skip if CloudEvent already processed.
+    let mut tx = pool.begin().await.context("begin tx")?;
+
+    // Idempotency gate INSIDE the transaction: claim the CloudEvent before doing
+    // any work. ON CONFLICT DO NOTHING means a concurrent redelivery that already
+    // claimed the (tenant, ce_id) gets zero rows here and returns a no-op — no
+    // TOCTOU window, no double-booking. (The UNIQUE index on
+    // ledger_entries (tenant, ce_id) is the backstop.)
     if let Some(ce) = ce_id {
-        let exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM processed_events WHERE ce_id = $1)")
-                .bind(ce)
-                .fetch_one(pool)
-                .await
-                .context("check idempotency")?;
-        if exists {
+        let claimed = sqlx::query(
+            "INSERT INTO processed_events (tenant, ce_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(tenant)
+        .bind(ce)
+        .execute(&mut *tx)
+        .await
+        .context("claim idempotency key")?;
+        if claimed.rows_affected() == 0 {
             return Ok(Uuid::nil()); // already processed — idempotent no-op
         }
     }
-
-    let mut tx = pool.begin().await.context("begin tx")?;
 
     // Lock account row for serializable balance update.
     sqlx::query("SELECT account_id FROM accounts WHERE account_id = $1 FOR UPDATE")
@@ -541,14 +607,19 @@ pub async fn write_entry_with_value_date(
     .await
     .context("update balance")?;
 
-    // Mark CloudEvent as processed (idempotency guard for CE-driven entries).
-    if let Some(ce) = ce_id {
-        sqlx::query("INSERT INTO processed_events (ce_id) VALUES ($1) ON CONFLICT DO NOTHING")
-            .bind(ce)
-            .execute(&mut *tx)
-            .await
-            .context("mark processed")?;
-    }
+    // Double-entry journal shadow (SKR 03/04): two balanced lines posted in the
+    // SAME transaction as the ledger entry — never a partial post. §238 HGB.
+    insert_journal_lines(
+        &mut tx,
+        id,
+        account_id,
+        tenant,
+        entry_type,
+        amount_ct,
+        booking_date,
+        description,
+    )
+    .await?;
 
     tx.commit().await.context("commit")?;
     Ok(id)
@@ -702,12 +773,16 @@ pub async fn transition_mandate_to_rcur(
 pub async fn fetch_mandate(
     pool: &PgPool,
     mandate_id: Uuid,
+    tenant: &str,
 ) -> anyhow::Result<Option<SepaMandateRow>> {
-    sqlx::query_as::<_, SepaMandateRow>("SELECT * FROM sepa_mandates WHERE mandate_id = $1")
-        .bind(mandate_id)
-        .fetch_optional(pool)
-        .await
-        .context("fetch_mandate")
+    sqlx::query_as::<_, SepaMandateRow>(
+        "SELECT * FROM sepa_mandates WHERE mandate_id = $1 AND tenant = $2",
+    )
+    .bind(mandate_id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await
+    .context("fetch_mandate")
 }
 
 pub async fn list_active_mandates(
@@ -769,15 +844,17 @@ pub async fn create_dunning_case(
     Ok(row.try_get("id")?)
 }
 
-pub async fn resolve_dunning_case(pool: &PgPool, id: Uuid) -> anyhow::Result<()> {
-    sqlx::query(
-        "UPDATE dunning_cases SET resolved_at = now() WHERE id = $1 AND resolved_at IS NULL",
+pub async fn resolve_dunning_case(pool: &PgPool, id: Uuid, tenant: &str) -> anyhow::Result<u64> {
+    let r = sqlx::query(
+        "UPDATE dunning_cases SET resolved_at = now() \
+         WHERE id = $1 AND tenant = $2 AND resolved_at IS NULL",
     )
     .bind(id)
+    .bind(tenant)
     .execute(pool)
     .await
     .context("resolve_dunning_case")?;
-    Ok(())
+    Ok(r.rows_affected())
 }
 
 pub async fn list_open_dunning(
@@ -851,6 +928,7 @@ pub async fn list_accounts_with_mandates(
             malo_id: r.try_get("malo_id")?,
             lf_mp_id: r.try_get("lf_mp_id")?,
             tenant: r.try_get("tenant")?,
+            kunden_nr: r.try_get("kunden_nr").ok(),
             iban: r.try_get("a_iban")?,
             mandatsref: r.try_get("a_mandatsref")?,
             abschlag_ct: r.try_get("abschlag_ct")?,
@@ -943,6 +1021,7 @@ pub async fn find_accounts_due_for_sepa(
             malo_id: r.try_get("malo_id")?,
             lf_mp_id: r.try_get("lf_mp_id")?,
             tenant: r.try_get("tenant")?,
+            kunden_nr: r.try_get("kunden_nr").ok(),
             iban: r.try_get("a_iban")?,
             mandatsref: r.try_get("a_mandatsref")?,
             abschlag_ct: r.try_get("abschlag_ct")?,
@@ -1407,6 +1486,135 @@ pub struct AutoDunningResult {
 /// When a new Mahnstufe 1/2/3 is created, the corresponding Mahngebühr (from
 /// `dunning_fee_stufe{1,2,3}_ct`) is posted as a `MAHNGEBUEHR` ledger entry if > 0.
 /// This updates `balance_ct` atomically (via `write_entry`).
+/// Try to acquire a session-level PostgreSQL advisory lock for a worker.
+///
+/// Returns the held connection when the lock is won (a second replica gets
+/// `None` and must skip the cycle) — so only one instance runs a given worker
+/// at a time, on top of the per-run idempotency guards. Call
+/// [`release_worker_lock`] with the same connection when done.
+pub async fn try_worker_lock(
+    pool: &PgPool,
+    key: i64,
+) -> Option<sqlx::pool::PoolConnection<sqlx::Postgres>> {
+    let mut conn = pool.acquire().await.ok()?;
+    let got: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+        .bind(key)
+        .fetch_one(&mut *conn)
+        .await
+        .ok()?;
+    if got { Some(conn) } else { None }
+}
+
+/// Release a worker advisory lock held on `conn` (same connection that took it).
+pub async fn release_worker_lock(conn: &mut sqlx::PgConnection, key: i64) {
+    let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
+        .bind(key)
+        .execute(conn)
+        .await;
+}
+
+/// Advisory-lock keys (stable, distinct per worker).
+pub const LOCK_ABSCHLAG: i64 = 0x_acc0_0001;
+pub const LOCK_SEPA_N5: i64 = 0x_acc0_0002;
+pub const LOCK_DUNNING: i64 = 0x_acc0_0003;
+
+/// Live financial metrics for the Prometheus `/metrics` endpoint.
+#[derive(Debug, Default)]
+pub struct FinancialMetrics {
+    pub accounts_total: i64,
+    pub open_receivables_ct: i64,
+    pub credit_balances_ct: i64,
+    pub dunning_stufe1: i64,
+    pub dunning_stufe2: i64,
+    pub dunning_stufe3: i64,
+    pub sepa_runs_pending: i64,
+    pub sperrung_pending: i64,
+}
+
+pub async fn financial_metrics(pool: &PgPool, tenant: &str) -> anyhow::Result<FinancialMetrics> {
+    let row = sqlx::query(
+        r"SELECT
+            (SELECT COUNT(*) FROM accounts WHERE tenant = $1)::bigint AS accounts_total,
+            (SELECT COALESCE(SUM(balance_ct), 0) FROM accounts WHERE tenant = $1 AND balance_ct > 0)::bigint AS open_receivables_ct,
+            (SELECT COALESCE(-SUM(balance_ct), 0) FROM accounts WHERE tenant = $1 AND balance_ct < 0)::bigint AS credit_balances_ct,
+            (SELECT COUNT(*) FROM dunning_cases WHERE tenant = $1 AND stufe = 1 AND resolved_at IS NULL)::bigint AS d1,
+            (SELECT COUNT(*) FROM dunning_cases WHERE tenant = $1 AND stufe = 2 AND resolved_at IS NULL)::bigint AS d2,
+            (SELECT COUNT(*) FROM dunning_cases WHERE tenant = $1 AND stufe = 3 AND resolved_at IS NULL)::bigint AS d3,
+            (SELECT COUNT(*) FROM sepa_collection_runs WHERE tenant = $1 AND dispatch_status = 'PENDING')::bigint AS sepa_pending,
+            (SELECT COUNT(*) FROM dunning_cases WHERE tenant = $1 AND stufe = 3 AND resolved_at IS NULL AND sperrauftrag_ce_id IS NOT NULL)::bigint AS sperrung_pending",
+    )
+    .bind(tenant)
+    .fetch_one(pool)
+    .await
+    .context("financial_metrics")?;
+    Ok(FinancialMetrics {
+        accounts_total: row.get("accounts_total"),
+        open_receivables_ct: row.get("open_receivables_ct"),
+        credit_balances_ct: row.get("credit_balances_ct"),
+        dunning_stufe1: row.get("d1"),
+        dunning_stufe2: row.get("d2"),
+        dunning_stufe3: row.get("d3"),
+        sepa_runs_pending: row.get("sepa_pending"),
+        sperrung_pending: row.get("sperrung_pending"),
+    })
+}
+
+/// Mahnstufe-3 dunning cases that qualify for a Sperrung request:
+/// unresolved, at Stufe 3, arrears ≥ threshold, not yet handed to sperrd.
+/// Returns `(case_id, malo_id, lf_mp_id, amount_due_ct)`.
+pub async fn list_sperrung_candidates(
+    pool: &PgPool,
+    tenant: &str,
+    threshold_ct: i64,
+) -> anyhow::Result<Vec<(Uuid, String, String, i64)>> {
+    let rows = sqlx::query(
+        r"SELECT dc.id, a.malo_id, a.lf_mp_id, dc.amount_due_ct
+          FROM dunning_cases dc
+          JOIN accounts a ON a.account_id = dc.account_id
+          WHERE dc.tenant = $1
+            AND dc.stufe = 3
+            AND dc.resolved_at IS NULL
+            AND dc.sperrauftrag_ce_id IS NULL
+            AND dc.amount_due_ct >= $2",
+    )
+    .bind(tenant)
+    .bind(threshold_ct)
+    .fetch_all(pool)
+    .await
+    .context("list_sperrung_candidates")?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            (
+                r.get::<Uuid, _>("id"),
+                r.get::<String, _>("malo_id"),
+                r.get::<String, _>("lf_mp_id"),
+                r.get::<i64, _>("amount_due_ct"),
+            )
+        })
+        .collect())
+}
+
+/// Record that a Sperrauftrag was handed to sperrd (idempotency: won't re-post).
+pub async fn mark_sperrauftrag_dispatched(
+    pool: &PgPool,
+    case_id: Uuid,
+    tenant: &str,
+    reference: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE dunning_cases SET sperrauftrag_ce_id = $1 \
+         WHERE id = $2 AND tenant = $3",
+    )
+    .bind(reference)
+    .bind(case_id)
+    .bind(tenant)
+    .execute(pool)
+    .await
+    .context("mark_sperrauftrag_dispatched")?;
+    Ok(())
+}
+
 pub async fn run_auto_dunning(
     pool: &PgPool,
     tenant: &str,
@@ -1541,7 +1749,7 @@ pub async fn run_auto_dunning(
 
     for (old_case_id, account_id, amount_due_ct) in &overdue_stufe1 {
         // Resolve the old Mahnstufe 1 case.
-        resolve_dunning_case(pool, *old_case_id)
+        resolve_dunning_case(pool, *old_case_id, tenant)
             .await
             .context("auto_dunning: resolve Mahnstufe1")?;
 
@@ -1603,7 +1811,7 @@ pub async fn run_auto_dunning(
     let stufe3_due_date = today + time::Duration::days(7); // shorter final deadline
 
     for (old_case_id, account_id, amount_due_ct) in &overdue_stufe2 {
-        resolve_dunning_case(pool, *old_case_id)
+        resolve_dunning_case(pool, *old_case_id, tenant)
             .await
             .context("auto_dunning: resolve Mahnstufe2")?;
 
@@ -1681,11 +1889,19 @@ pub fn journal_mapping(entry_type: &str, amount_ct: i64) -> JournalMapping {
     let is_debit = amount_ct > 0;
 
     match entry_type {
-        "RECHNUNG" | "ABSCHLAG" => JournalMapping {
+        "RECHNUNG" => JournalMapping {
             debit_skr: "1400",
             debit_desc: "Forderungen aus L+L",
             credit_skr: "4000",
             credit_desc: "Energieerlöse",
+        },
+        // Abschlag = Abschlagszahlung (advance payment received): Bank in,
+        // customer receivable reduced — a payment, not revenue.
+        "ABSCHLAG" => JournalMapping {
+            debit_skr: "1200",
+            debit_desc: "Bankguthaben",
+            credit_skr: "1400",
+            credit_desc: "Forderungen aus L+L (Abschlag)",
         },
         "STORNO" if is_debit => JournalMapping {
             debit_skr: "1400",
@@ -1764,7 +1980,7 @@ pub fn journal_mapping(entry_type: &str, amount_ct: i64) -> JournalMapping {
 /// Constraint: `debit.amount_ct == credit.amount_ct` — enforced by this function.
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_journal_lines(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     ledger_entry_id: Uuid,
     account_id: Uuid,
     tenant: &str,
@@ -1773,7 +1989,7 @@ pub async fn insert_journal_lines(
     booking_date: time::Date,
     description: Option<&str>,
 ) -> anyhow::Result<()> {
-    let abs_ct = amount_ct.unsigned_abs() as i64;
+    let abs_ct = i64::try_from(amount_ct.unsigned_abs()).unwrap_or(i64::MAX);
     if abs_ct == 0 {
         return Ok(());
     }
@@ -1797,7 +2013,7 @@ pub async fn insert_journal_lines(
     .bind(description)
     .bind(m.credit_skr)
     .bind(m.credit_desc)
-    .execute(pool)
+    .execute(&mut *conn)
     .await
     .context("insert_journal_lines")?;
 

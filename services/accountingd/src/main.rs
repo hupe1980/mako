@@ -16,10 +16,12 @@
 //!
 //! | CE type | Trigger |
 //! |---|---|
-//! | `de.accounting.payment.due` | Upcoming SEPA direct debit |
-//! | `de.accounting.mahnung.issued` | Dunning notice issued |
-//! | `de.accounting.sperrauftrag` | Mahnstufe 3 → sperrd trigger |
-//! | `de.accounting.bankruecklast` | SEPA return received |
+//! | `de.accounting.payment.due` | SEPA collection run dispatched (once per run) |
+//! | `de.accounting.erstattung.faellig` | Jahresabschluss refund (pain.001 attached) |
+//!
+//! All outbound CloudEvents are HMAC-signed (`X-Mako-Signature`) when
+//! `erp_hmac_secret` is set. A Mahnstufe-3 case ≥ the Sperrung threshold is
+//! handed to `sperrd` directly (`POST /api/v1/sperr-orders`), not as a CE.
 //!
 //! Port: `:9380`
 
@@ -62,8 +64,15 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    let readiness_pool = pool.clone();
     let app = Router::new()
-        .merge(health_routes(|| async { true }))
+        .merge(health_routes(move || {
+            // Readiness reflects DB reachability — a pod with an unreachable
+            // Postgres must fall out of the load-balancer, not keep taking
+            // (and losing) financial traffic.
+            let pool = readiness_pool.clone();
+            async move { sqlx::query("SELECT 1").execute(&pool).await.is_ok() }
+        }))
         // ── CloudEvent ingest ──────────────────────────────────────────────────
         .route("/webhook", post(handlers::ingest_webhook))
         // ── Account endpoints ──────────────────────────────────────────────────
@@ -103,7 +112,24 @@ async fn main() -> anyhow::Result<()> {
         )
         // ── Payment import ─────────────────────────────────────────────────────
         .route("/api/v1/payments/import", post(handlers::import_payments))
+        .route(
+            "/api/v1/payments/import/camt054",
+            post(handlers::import_payments_camt054),
+        )
         // ── Offene Posten ──────────────────────────────────────────────────────
+        .route(
+            "/api/v1/accounts/{malo_id}/business-partner",
+            axum::routing::put(handlers::put_account_business_partner),
+        )
+        .route(
+            "/api/v1/business-partners/{kunden_nr}/accounts",
+            get(handlers::get_bp_accounts),
+        )
+        .route(
+            "/api/v1/business-partners/{kunden_nr}/balance",
+            get(handlers::get_bp_balance),
+        )
+        .route("/metrics", get(handlers::metrics))
         .route("/api/v1/offene-posten", get(handlers::get_offene_posten))
         // ── Dunning ────────────────────────────────────────────────────────────
         .route("/api/v1/dunning", get(handlers::get_dunning))
@@ -197,6 +223,9 @@ async fn main() -> anyhow::Result<()> {
         pool: pool.clone(),
         tenant: cfg.tenant.clone(),
         auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
+        creditor_iban: cfg.creditor_iban.clone(),
+        creditor_name: cfg.creditor_name.clone(),
+        creditor_id: cfg.creditor_id.clone(),
     });
     let ct = mako_service::shutdown::token();
     let app = app.merge(mcp_server::router(mcp_state, ct.clone()));
@@ -215,6 +244,16 @@ async fn main() -> anyhow::Result<()> {
             // Initial delay to let the service start up cleanly.
             tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
             loop {
+                let Some(mut wlock) =
+                    accountingd::pg::try_worker_lock(&pool_bg, accountingd::pg::LOCK_ABSCHLAG)
+                        .await
+                else {
+                    tracing::debug!(
+                        "accountingd: Abschlag worker — another replica holds the lock"
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
+                    continue;
+                };
                 let now_utc = time::OffsetDateTime::now_utc();
                 let today = now_utc.date();
                 let day_of_month = today.day() as i16;
@@ -237,10 +276,13 @@ async fn main() -> anyhow::Result<()> {
                                 acct.account_id,
                                 &tenant_bg,
                                 "ABSCHLAG",
-                                acct.abschlag_ct,
+                                // Advance payment = CREDIT (negative): reduces the
+                                // customer's balance. The full annual Rechnung is
+                                // booked as a debit; balance nets to the Nachzahlung.
+                                -acct.abschlag_ct,
                                 Some(&ref_id),
                                 Some("de.accounting.abschlag.posted"),
-                                None,
+                                Some(&ref_id), // deterministic ce_id → idempotent per (malo, month)
                                 today,
                                 Some(&format!("Monatlicher Abschlag Tag {day_of_month}")),
                             )
@@ -261,6 +303,8 @@ async fn main() -> anyhow::Result<()> {
                         tracing::error!(error = %e, "accountingd: Abschlagslauf DB error");
                     }
                 }
+                accountingd::pg::release_worker_lock(&mut wlock, accountingd::pg::LOCK_ABSCHLAG)
+                    .await;
                 // Sleep ~24h; use 23h to drift-proof against DST transitions.
                 tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
             }
@@ -302,8 +346,9 @@ async fn main() -> anyhow::Result<()> {
                             "accountingd: SEPA N-5 — generating pain.008 pre-notifications"
                         );
 
-                        // Build pain.008 XML batches (one per SequenceType per SEPA Rulebook §3.8).
-                        // P1-2: hard error if creditor_iban is missing/invalid — skip batch with error log.
+                        // Build one pain.008 message — one PmtInf group per
+                        // SequenceType (SEPA Rulebook §3.8), one audit row.
+                        // P1-2: hard error if creditor_iban is missing/invalid — skip run with error log.
                         let entries: Vec<(&accountingd::pg::SepaMandateRow, i64)> =
                             pairs.iter().map(|(m, a)| (m, a.abschlag_ct)).collect();
                         let creditor_iban = match cfg_sepa
@@ -327,15 +372,26 @@ async fn main() -> anyhow::Result<()> {
                             .creditor_name
                             .as_deref()
                             .unwrap_or(&cfg_sepa.tenant);
-                        let creditor_id = cfg_sepa.creditor_id.as_deref();
+                        let Some(creditor_id) =
+                            cfg_sepa.creditor_id.as_deref().filter(|s| !s.is_empty())
+                        else {
+                            tracing::error!(
+                                "accountingd: SEPA N-5 — creditor_id (Gläubiger-ID) not \
+                                 configured; the EPC rulebook mandates CdtrSchmeId. \
+                                 pain.008 generation BLOCKED."
+                            );
+                            tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
+                            continue;
+                        };
 
-                        let batches = match accountingd::sepa::build_pain_008(
+                        let run = match accountingd::sepa::build_pain_008(
                             creditor_iban,
                             creditor_name,
                             creditor_id,
+                            target_date,
                             &entries,
                         ) {
-                            Ok(b) => b,
+                            Ok(r) => r,
                             Err(e) => {
                                 tracing::error!(
                                     error = %e,
@@ -347,10 +403,11 @@ async fn main() -> anyhow::Result<()> {
                             }
                         };
 
-                        // Dispatch each batch (FRST / RCUR / ...) separately
-                        for batch in &batches {
-                            // Persist pain.008 XML for audit and ERP replay
-                            if let Err(e) = accountingd::pg::persist_sepa_collection(
+                        {
+                            let batch = &run;
+                            // Persist the single pain.008 message for audit and ERP
+                            // replay — exactly one row per (tenant, collection_date).
+                            let run_id = match accountingd::pg::persist_sepa_collection(
                                 &pool_sepa,
                                 &cfg_sepa.tenant,
                                 target_date,
@@ -360,11 +417,29 @@ async fn main() -> anyhow::Result<()> {
                             )
                             .await
                             {
-                                tracing::warn!(error = %e, "accountingd: SEPA N-5 — failed to persist sepa_collection_run");
-                            }
+                                Ok(id) => Some(id),
+                                Err(e) => {
+                                    tracing::warn!(error = %e, "accountingd: SEPA N-5 — failed to persist sepa_collection_run");
+                                    None
+                                }
+                            };
+
+                            // Claim the run for dispatch: only the caller that flips
+                            // PENDING→DISPATCHED emits the CE — a replica or a same-day
+                            // restart must not re-POST the pain.008 (double collection).
+                            let may_dispatch = match run_id {
+                                Some(id) => {
+                                    accountingd::pg::mark_sepa_collection_dispatched(&pool_sepa, id)
+                                        .await
+                                        .unwrap_or(false)
+                                }
+                                None => false,
+                            };
 
                             // Emit `de.accounting.payment.due` CE to ERP webhook
-                            if let Some(ref url) = cfg_sepa.erp_webhook_url {
+                            if let (true, Some(url)) =
+                                (may_dispatch, cfg_sepa.erp_webhook_url.as_ref())
+                            {
                                 let ce = serde_json::json!({
                                     "specversion": "1.0",
                                     "type": "de.accounting.payment.due",
@@ -374,7 +449,7 @@ async fn main() -> anyhow::Result<()> {
                                     "datacontenttype": "application/json",
                                     "data": {
                                         "due_date": target_date.to_string(),
-                                        "sequence_type": format!("{:?}", batch.sequence_type),
+                                        "groups": batch.groups,
                                         "account_count": batch.entry_count,
                                         "total_ct": batch.total_ct,
                                         "pain008_xml": &batch.xml,
@@ -414,7 +489,7 @@ async fn main() -> anyhow::Result<()> {
                                     "accountingd: SEPA N-5 — no erp_webhook_url configured; pain.008 generated but not dispatched"
                                 );
                             }
-                        } // end for batch in batches
+                        } // end single-run scope
                     }
                     Ok(_) => {
                         tracing::debug!(
@@ -451,6 +526,14 @@ async fn main() -> anyhow::Result<()> {
             // Stagger start relative to other workers.
             tokio::time::sleep(tokio::time::Duration::from_secs(180)).await;
             loop {
+                let Some(mut wlock) =
+                    accountingd::pg::try_worker_lock(&pool_dun, accountingd::pg::LOCK_DUNNING)
+                        .await
+                else {
+                    tracing::debug!("accountingd: dunning worker — another replica holds the lock");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
+                    continue;
+                };
                 let grace_days = cfg_dun.dunning_grace_days.unwrap_or(30);
                 let fee1 = cfg_dun.dunning_fee_stufe1_ct.unwrap_or(0);
                 let fee2 = cfg_dun.dunning_fee_stufe2_ct.unwrap_or(500); // 5.00 EUR default
@@ -474,23 +557,66 @@ async fn main() -> anyhow::Result<()> {
                                 sperrauftrag = result.sperrauftrag_triggered,
                                 "accountingd: auto-dunning run completed"
                             );
-                            // Emit CloudEvent for each Sperrauftrag to ERP webhook.
-                            if result.sperrauftrag_triggered > 0
-                                && let Some(ref url) = cfg_dun.erp_webhook_url
-                            {
-                                let ce = serde_json::json!({
-                                    "specversion": "1.0",
-                                    "type": "de.accounting.sperrauftrag.batch",
-                                    "source": format!("urn:accountingd:{}", cfg_dun.tenant),
-                                    "id": uuid::Uuid::new_v4().to_string(),
-                                    "time": time::OffsetDateTime::now_utc().to_string(),
-                                    "data": {
-                                        "count": result.sperrauftrag_triggered,
-                                        "tenant": cfg_dun.tenant,
+                            // §19 StromGVV handoff: for each qualifying Mahnstufe-3
+                            // case (arrears ≥ threshold), create a Sperrauftrag in
+                            // sperrd. Idempotent via dunning_cases.sperrauftrag_ce_id.
+                            if let Some(ref sperrd_url) = cfg_dun.sperrd_url {
+                                let threshold = cfg_dun.sperrung_threshold_ct.unwrap_or(10_000);
+                                match accountingd::pg::list_sperrung_candidates(
+                                    &pool_dun,
+                                    &cfg_dun.tenant,
+                                    threshold,
+                                )
+                                .await
+                                {
+                                    Ok(candidates) => {
+                                        let client = mako_service::http::default_client();
+                                        for (case_id, malo_id, lf_mp_id, amount_ct) in candidates {
+                                            let body = serde_json::json!({
+                                                "malo_id": malo_id,
+                                                "lf_mp_id": lf_mp_id,
+                                                "order_type": "sperrung",
+                                            });
+                                            let url = format!("{sperrd_url}/api/v1/sperr-orders");
+                                            match client.post(&url).json(&body).send().await {
+                                                Ok(resp) if resp.status().is_success() => {
+                                                    let reference = resp
+                                                        .json::<serde_json::Value>()
+                                                        .await
+                                                        .ok()
+                                                        .and_then(|v| {
+                                                            v.get("id")
+                                                                .and_then(|i| i.as_str())
+                                                                .map(str::to_owned)
+                                                        })
+                                                        .unwrap_or_else(|| {
+                                                            format!("sperrd:{malo_id}")
+                                                        });
+                                                    if let Err(e) =
+                                                        accountingd::pg::mark_sperrauftrag_dispatched(
+                                                            &pool_dun, case_id, &cfg_dun.tenant,
+                                                            &reference,
+                                                        )
+                                                        .await
+                                                    {
+                                                        tracing::warn!(error = %e, "accountingd: mark_sperrauftrag_dispatched failed");
+                                                    } else {
+                                                        tracing::info!(malo_id, amount_ct, "accountingd: Sperrauftrag created in sperrd (§19 StromGVV)");
+                                                    }
+                                                }
+                                                Ok(resp) => {
+                                                    tracing::warn!(status = %resp.status(), malo_id, "accountingd: sperrd rejected Sperrauftrag")
+                                                }
+                                                Err(e) => {
+                                                    tracing::warn!(error = %e, malo_id, "accountingd: sperrd POST failed")
+                                                }
+                                            }
+                                        }
                                     }
-                                });
-                                let client = mako_service::http::default_client();
-                                let _ = client.post(url).json(&ce).send().await;
+                                    Err(e) => {
+                                        tracing::error!(error = %e, "accountingd: list_sperrung_candidates failed")
+                                    }
+                                }
                             }
                         } else {
                             tracing::debug!("accountingd: auto-dunning — no actions needed today");
@@ -501,6 +627,8 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
 
+                accountingd::pg::release_worker_lock(&mut wlock, accountingd::pg::LOCK_DUNNING)
+                    .await;
                 // Run daily; 23h to drift-proof against DST transitions.
                 tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
             }

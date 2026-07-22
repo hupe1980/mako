@@ -527,7 +527,7 @@ mako consists of 17 independently deployable services. 16 of them ship a built-i
   <a href="{{ '/accountingd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">accountingd</span>
     <span class="mako-service-card__port">:9380</span>
-    <span class="mako-service-card__desc">Massenkontokorrent ledger. Double-entry SKR 03/04. Aging analysis. Verzugszinsen §288 BGB. Zahlungsvereinbarung. FRST/RCUR-separated pain.008 + Gläubiger-ID. CAMT.054 dedup import. IBAN hash encryption. Auto-dunning (Mahnstufe 1–3). OIDC auth + inbound HMAC. GDPR Art. 17. 107 tests.</span>
+    <span class="mako-service-card__desc">Massenkontokorrent ledger — immutable, in-tx double-entry (SKR 03/04). FIFO open items. Aging. Verzugszinsen §288 BGB. Zahlungsvereinbarung. pain.008 multi-group single message + mandatory Gläubiger-ID. camt.054 XML + JSON dedup import. Idempotent CE ingest. OIDC auth + inbound HMAC. GDPR Art. 17. 87 tests.</span>
   </a>
 </div>
 

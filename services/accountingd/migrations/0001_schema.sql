@@ -34,6 +34,11 @@ CREATE TABLE accounts (
     lf_mp_id            TEXT        NOT NULL,
     tenant              TEXT        NOT NULL,
 
+    -- Business-partner key (Geschäftspartner) linking to vertragd.kunden.kunden_nr.
+    -- One customer may hold N market-location accounts; grouping by this key gives
+    -- FI-CA-style contract-account aggregation (cross-MaLo balance & dunning).
+    kunden_nr           TEXT,
+
     -- SEPA mandate IBAN (denormalized for fast payment-matching lookup)
     -- Stored as plaintext; for encrypted deployments set iban_encrypted=true
     -- and store pgp_sym_encrypt(iban, key) here instead.
@@ -89,6 +94,7 @@ COMMENT ON COLUMN accounts.anonymized_at IS
 CREATE INDEX acct_tenant       ON accounts (tenant, lf_mp_id);
 CREATE INDEX acct_malo_tenant  ON accounts (malo_id, tenant);
 CREATE INDEX acct_overdue      ON accounts (tenant)
+CREATE INDEX acct_bp ON accounts (tenant, kunden_nr) WHERE kunden_nr IS NOT NULL;
     WHERE balance_ct > 0;
 
 -- ── Ledger entries (immutable) ────────────────────────────────────────────────
@@ -108,7 +114,7 @@ CREATE TABLE ledger_entries (
         'EEG_MARKTPRAEMIE', -- credit: EEG Direktvermarktung Marktprämie
         'BANKRUECKLAST',    -- debit:  returned SEPA direct debit (R-transaction)
         'MAHNGEBUEHR',      -- debit:  dunning fee (Mahnstufe escalation)
-        'ABSCHLAG',         -- debit:  monthly advance payment (§40 Abs. 1 EnWG)
+        'ABSCHLAG',         -- credit: monthly advance payment (§40 Abs. 1 EnWG)
         'JAHRESABSCHLUSS',  -- signed: annual Mehr-/Mindermengenabrechnung settlement
         'KORREKTUR'         -- signed: manual operator correction (audit-trailed)
     )),
@@ -143,7 +149,9 @@ COMMENT ON COLUMN ledger_entries.entry_type IS
 
 CREATE INDEX le_account_date ON ledger_entries (account_id, booking_date DESC);
 CREATE INDEX le_tenant_date  ON ledger_entries (tenant, booking_date DESC);
-CREATE INDEX le_ce_id        ON ledger_entries (ce_id) WHERE ce_id IS NOT NULL;
+-- UNIQUE so a concurrent redelivery of the same CloudEvent cannot double-book
+-- (the ledger insert itself is the idempotency gate, not a prior SELECT).
+CREATE UNIQUE INDEX le_ce_id ON ledger_entries (tenant, ce_id) WHERE ce_id IS NOT NULL;
 CREATE INDEX le_reference_id ON ledger_entries (reference_id) WHERE reference_id IS NOT NULL;
 
 -- ── SEPA direct-debit mandates ────────────────────────────────────────────────
@@ -155,9 +163,10 @@ CREATE TABLE sepa_mandates (
     iban            TEXT        NOT NULL,
     bic             TEXT,
     kontoinhaber    TEXT,
-    -- Unique creditor-assigned Mandatsreferenz (SEPA SDD, ISO 20022).
+    -- Unique creditor-assigned Mandatsreferenz (SEPA SDD AT-01, ISO 20022
+    -- Max35Text — also reused as the pain.008 EndToEndId).
     -- P1-1 fix: UNIQUE per tenant (not globally) to avoid cross-tenant namespace collisions.
-    mandatsref      TEXT        NOT NULL,
+    mandatsref      TEXT        NOT NULL CHECK (char_length(mandatsref) BETWEEN 1 AND 35),
     -- FRST = first collection; RCUR = recurring; FNAL = final; OOFF = one-off
     sequence_type   TEXT        NOT NULL CHECK (sequence_type IN ('FRST', 'RCUR', 'FNAL', 'OOFF')),
     signed_at       DATE        NOT NULL,
@@ -201,8 +210,10 @@ CREATE INDEX dc_overdue ON dunning_cases (tenant, due_date)
 -- ── Processed events (idempotency guard) ─────────────────────────────────────
 
 CREATE TABLE processed_events (
-    ce_id           TEXT        PRIMARY KEY,
-    processed_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    tenant          TEXT        NOT NULL,
+    ce_id           TEXT        NOT NULL,
+    processed_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, ce_id)
 );
 
 -- ── GDPR Art. 17 anonymization log (INSERT-only) ──────────────────────────────
@@ -483,6 +494,25 @@ COMMENT ON TABLE journal_lines IS
     'Regulatory: §238 HGB Buchführungspflicht.';
 
 CREATE INDEX jl_entry      ON journal_lines (ledger_entry_id);
+
+-- Double-entry invariant, enforced at COMMIT: for every ledger_entry the Soll
+-- sum must equal the Haben sum. DEFERRED so the two rows can be inserted in
+-- either order within one transaction. §238 HGB Buchführungspflicht.
+CREATE OR REPLACE FUNCTION journal_lines_balanced() RETURNS trigger AS $$
+BEGIN
+    IF (SELECT COALESCE(SUM(CASE WHEN side = 'D' THEN amount_ct ELSE -amount_ct END), 0)
+        FROM journal_lines WHERE ledger_entry_id = NEW.ledger_entry_id) <> 0 THEN
+        RAISE EXCEPTION 'journal_lines unbalanced (Soll != Haben) for ledger_entry %',
+            NEW.ledger_entry_id;
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER journal_lines_balance_check
+    AFTER INSERT ON journal_lines
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION journal_lines_balanced();
 CREATE INDEX jl_account    ON journal_lines (account_id, booking_date DESC);
 CREATE INDEX jl_skr        ON journal_lines (skr_account, tenant, booking_date DESC);
 CREATE INDEX jl_tenant     ON journal_lines (tenant, booking_date DESC);

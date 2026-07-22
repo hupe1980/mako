@@ -10966,10 +10966,11 @@ dependencies = [
 
 [[package]]
 name = "sepa"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "833e5efc507790e63c15be5f8372daaa5b2a01577b9f47190ba7dbf3aaa227a6"
+checksum = "46578a2a693ac6ee0ff36fdab3056321870290c10f152e8aa06c7ed7d7299376"
 dependencies = [
+ "quick-xml 0.41.0",
  "serde_json",
  "thiserror 2.0.19",
 ]
@@ -11793,9 +11794,9 @@ dependencies = [
 
 [[package]]
 name = "sse-stream"
-version = "0.2.4"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "39f24a9b78c40b90817bbcd1821c74ddfd74916aadd29403d001532a9195532d"
+checksum = "c123f296ade4ec4b8b0f6162116e6629f5146922ca5ab40ca9d3c2e73ab4761e"
 dependencies = [
  "bytes",
  "futures-util",
@@ -12439,9 +12440,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-stream"
-version = "0.1.18"
+version = "0.1.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32da49809aab5c3bc678af03902d4ccddea2a87d028d86392a4b1560c6906c70"
+checksum = "a3d06f0b082ba57c26b79407372e57cf2a1e28124f78e9479fe80322cf53420b"
 dependencies = [
  "futures-core",
  "pin-project-lite",

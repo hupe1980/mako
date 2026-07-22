@@ -102,7 +102,7 @@ netz-checker     = { path = "crates/netz-checker",     version = "0.13" }
 energy-billing   = { path = "crates/energy-billing",   version = "0.13" }
 dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.13" }
 metering         = { path = "crates/metering",          version = "0.13" }
-sepa             = { version = "0.3.0" }
+sepa             = { version = "0.4.0" }
 
 # Kafka client: pure Rust, MSRV 1.88, zero-unsafe, exactly-once semantics.
 # Required by mako-service feature "kafka" (EventBus scale-out backend).

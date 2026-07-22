@@ -8,17 +8,9 @@
 //! - Double-entry SKR 03 account mapping
 //! - SEPA pain.008 batch splitting (FRST vs RCUR)
 //!
-//! ## Database-backed integration tests
-//!
-//! Tests marked `#[ignore]` require a live PostgreSQL instance.
-//! Run them with:
-//!
-//! ```bash
-//! export DATABASE_URL="postgres://accountingd:secret@localhost:5432/accountingd_test"
-//! cargo test -p accountingd --test integration_tests -- --include-ignored
-//! ```
-//!
-//! These tests provision the schema via `sqlx::migrate!` at test start.
+//! Pure (no-DB) integration tests. The DB-backed financial scenario tests
+//! (idempotency, Abschlag netting, double-entry balance) live in
+//! `tests/db_scenarios.rs` and run against a live PostgreSQL.
 
 use accountingd::pg::journal_mapping;
 use accountingd::sepa::calculate_interest_ct;
@@ -187,7 +179,7 @@ fn test_pain008_frst_rcur_separation() {
             iban: "DE89370400440532013000".into(),
             bic: None,
             kontoinhaber: Some("Test Kunde".into()),
-            mandatsref: format!("REF-{seq}-{}", Uuid::new_v4()),
+            mandatsref: format!("REF-{seq}-{}", &Uuid::new_v4().simple().to_string()[..8]),
             sequence_type: seq.to_owned(),
             signed_at: Date::from_calendar_date(2024, time::Month::January, 1).unwrap(),
             revoked_at: None,
@@ -201,61 +193,65 @@ fn test_pain008_frst_rcur_separation() {
     let mandates = [&frst, &rcur1, &rcur2];
     let entries: Vec<(&SepaMandateRow, i64)> = mandates.iter().map(|m| (*m, 5000i64)).collect();
 
-    let batches = build_pain_008(
+    let run = build_pain_008(
         "DE89370400440532013000",
         "Test Energie GmbH",
-        None,
+        "DE98ZZZ09999999999",
+        Date::from_calendar_date(2026, time::Month::July, 25).unwrap(),
         &entries,
     )
     .expect("build_pain_008 should succeed");
 
+    // One message, one PmtInf group per SequenceType (Rulebook §3.8).
     assert_eq!(
-        batches.len(),
+        run.groups.len(),
         2,
-        "FRST and RCUR must be in separate batches"
+        "FRST and RCUR are separate PmtInf groups"
     );
-    let frst_batch = batches
-        .iter()
-        .find(|b| format!("{:?}", b.sequence_type) == "Frst");
-    let rcur_batch = batches
-        .iter()
-        .find(|b| format!("{:?}", b.sequence_type) == "Rcur");
-    assert!(frst_batch.is_some(), "must have a FRST batch");
-    assert!(rcur_batch.is_some(), "must have a RCUR batch");
-    assert_eq!(frst_batch.unwrap().entry_count, 1, "FRST batch has 1 entry");
+    assert_eq!(run.groups[0].sequence_type, "FRST");
+    assert_eq!(run.groups[0].entry_count, 1);
+    assert_eq!(run.groups[1].sequence_type, "RCUR");
+    assert_eq!(run.groups[1].entry_count, 2);
+    assert_eq!(run.entry_count, 3);
+    assert_eq!(run.total_ct, 15_000);
     assert_eq!(
-        rcur_batch.unwrap().entry_count,
+        run.xml.matches("<PmtInf>").count(),
         2,
-        "RCUR batch has 2 entries"
+        "single file carries both PmtInf blocks"
+    );
+    assert!(
+        run.xml.contains("<SeqTp>FRST</SeqTp>") && run.xml.contains("<SeqTp>RCUR</SeqTp>"),
+        "both sequence types present in one message"
     );
 }
 
 #[test]
-fn test_pain008_includes_creditor_name_not_iban() {
-    // Regression: old code passed creditor_iban_str as creditor_name (bug fix verification)
+fn test_pain008_empty_run_is_an_error() {
+    // A run with no billable mandates must fail loudly, not emit an empty file.
     use accountingd::sepa::build_pain_008;
+    use time::Date;
 
-    let batches = build_pain_008(
-        "DE89370400440532013000", // creditor IBAN
-        "Muster Energie GmbH",    // creditor NAME — must NOT appear as IBAN in XML
-        None,
+    let result = build_pain_008(
+        "DE89370400440532013000",
+        "Muster Energie GmbH",
+        "DE98ZZZ09999999999",
+        Date::from_calendar_date(2026, time::Month::July, 25).unwrap(),
         &[],
-    )
-    .expect("build even with empty entries");
-
-    // Empty entries → no batches (the function returns empty vec for no entries)
-    assert_eq!(
-        batches.len(),
-        0,
-        "no entries → no batches (all were empty groups)"
     );
+    assert!(result.is_err(), "no entries → error, not an empty message");
 }
 
 #[test]
 fn test_pain008_invalid_creditor_iban_fails() {
     use accountingd::sepa::build_pain_008;
 
-    let result = build_pain_008("INVALID-IBAN", "Test", None, &[]);
+    let result = build_pain_008(
+        "INVALID-IBAN",
+        "Test",
+        "DE98ZZZ09999999999",
+        time::Date::from_calendar_date(2026, time::Month::July, 25).unwrap(),
+        &[],
+    );
     assert!(
         result.is_err(),
         "invalid creditor IBAN must return an error"
@@ -272,8 +268,26 @@ fn test_pain008_creditor_id_validated() {
     use accountingd::sepa::build_pain_008;
 
     // Invalid Gläubiger-ID format should fail
-    let result = build_pain_008("DE89370400440532013000", "Test", Some("INVALID-CI"), &[]);
+    let result = build_pain_008(
+        "DE89370400440532013000",
+        "Test",
+        "INVALID-CI",
+        time::Date::from_calendar_date(2026, time::Month::July, 25).unwrap(),
+        &[],
+    );
     assert!(result.is_err(), "invalid creditor_id must return an error");
+
+    // Regression (sepa 0.4): the canonical DE98ZZZ09999999999 has CORRECT
+    // check digits per EPC262-08 (computed over the national identifier,
+    // excluding the Creditor Business Code). sepa 0.3 rejected it.
+    assert!(
+        accountingd::sepa::validate_creditor_id("DE98ZZZ09999999999").is_ok(),
+        "genuine Gläubiger-ID must validate"
+    );
+    assert!(
+        accountingd::sepa::validate_creditor_id("DE74ZZZ09999999999").is_err(),
+        "wrong check digits must be rejected"
+    );
 }
 
 // ── CAMT.054 deduplication hash stability ─────────────────────────────────────

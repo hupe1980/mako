@@ -28,9 +28,9 @@ use crate::{
     pg::{
         CreateMandateRequest, UpdateAccountRequest, create_dunning_case, create_mandate,
         fetch_account, fetch_account_by_id, fetch_mandate, fetch_vorauszahlung,
-        list_active_mandates, list_ledger, list_ledger_year, list_open_dunning,
-        list_overdue_accounts, resolve_dunning_case, update_account_tenanted, upsert_account,
-        upsert_vorauszahlung, write_entry,
+        jahresabschluss_already_settled, list_active_mandates, list_ledger, list_ledger_year,
+        list_open_dunning, list_overdue_accounts, record_jahresabschluss, resolve_dunning_case,
+        update_account_tenanted, upsert_account, upsert_vorauszahlung, write_entry,
     },
     sepa::build_pain_008,
 };
@@ -58,6 +58,32 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         .zip(b.iter())
         .fold(0u8, |acc, (x, y)| acc | (x ^ y))
         == 0
+}
+
+/// POST an outbound CloudEvent to the ERP, HMAC-signing the body with
+/// `erp_hmac_secret` (`X-Mako-Signature: sha256=…`) so the receiver can verify
+/// authenticity. Best-effort: delivery failures are logged, not fatal.
+async fn post_signed_ce(cfg: &AccountingdConfig, url: &str, ce: &serde_json::Value) {
+    let body = match serde_json::to_vec(ce) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!(error = %e, "accountingd: failed to serialise outbound CE");
+            return;
+        }
+    };
+    let client = mako_service::http::default_client();
+    let mut req = client
+        .post(url)
+        .header("Content-Type", "application/cloudevents+json")
+        .body(body.clone());
+    if let Some(secret) = &cfg.erp_hmac_secret {
+        use secrecy::ExposeSecret;
+        let sig = mako_service::webhook::hmac_hex(secret.expose_secret().as_bytes(), &body);
+        req = req.header("X-Mako-Signature", format!("sha256={sig}"));
+    }
+    if let Err(e) = req.send().await {
+        tracing::warn!(error = %e, url, "accountingd: outbound CE dispatch failed");
+    }
 }
 
 // ── Account endpoints ─────────────────────────────────────────────────────────
@@ -164,6 +190,7 @@ pub async fn get_kontoauszug(
 
 /// `PUT /api/v1/accounts/{malo_id}/abschlag`  — update monthly advance payment
 pub async fn put_abschlag(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
@@ -332,8 +359,9 @@ pub async fn ingest_webhook(
                 {
                     tracing::error!(
                         error = %e,
-                        "accountingd: ledger write FAILED — entry discarded; investigate DB health"
+                        "accountingd: ledger write FAILED — returning 500 so the sender redelivers"
                     );
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
             }
             StatusCode::OK.into_response()
@@ -388,8 +416,9 @@ pub async fn ingest_webhook(
                 {
                     tracing::error!(
                         error = %e,
-                        "accountingd: ledger write FAILED — entry discarded; investigate DB health"
+                        "accountingd: ledger write FAILED — returning 500 so the sender redelivers"
                     );
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
             }
             StatusCode::OK.into_response()
@@ -446,8 +475,9 @@ pub async fn ingest_webhook(
                 {
                     tracing::error!(
                         error = %e,
-                        "accountingd: ledger write FAILED — entry discarded; investigate DB health"
+                        "accountingd: ledger write FAILED — returning 500 so the sender redelivers"
                     );
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
             }
             StatusCode::OK.into_response()
@@ -523,8 +553,9 @@ pub async fn ingest_webhook(
                 {
                     tracing::error!(
                         error = %e,
-                        "accountingd: ledger write FAILED — entry discarded; investigate DB health"
+                        "accountingd: ledger write FAILED — returning 500 so the sender redelivers"
                     );
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
 
                 // ── SCT Inst / SCT CORE auto-payout ─────────────────────────────
@@ -675,8 +706,9 @@ pub async fn ingest_webhook(
                 {
                     tracing::error!(
                         error = %e,
-                        "accountingd: ledger write FAILED — entry discarded; investigate DB health"
+                        "accountingd: ledger write FAILED — returning 500 so the sender redelivers"
                     );
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
             }
             StatusCode::OK.into_response()
@@ -705,6 +737,7 @@ pub async fn ingest_webhook(
 /// When `bank_transaction_id` is absent, a stable hash of (iban+amount+date+reference)
 /// is used as the deduplication key.
 pub async fn import_payments(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Json(entries): Json<Vec<serde_json::Value>>,
@@ -839,6 +872,328 @@ pub async fn import_payments(
     .into_response()
 }
 
+/// `POST /api/v1/payments/import/camt054` — ingest a **camt.054 XML document**
+/// exactly as the bank delivers it (Bank-to-Customer Debit/Credit Notification).
+///
+/// Batch-booked entries are expanded per `TxDtls`, so a batched SEPA collection
+/// imports every underlying transaction. SEPA returns (Rückläufer) become
+/// `BANKRUECKLAST` debits; ordinary credits become `ZAHLUNG`. The same
+/// `bank_import_log` deduplication as the JSON import applies, keyed on
+/// `AcctSvcrRef` (falling back to a stable hash of the transaction fields).
+pub async fn import_payments_camt054(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    body: String,
+) -> impl IntoResponse {
+    let doc = match crate::sepa::parse_camt054(&body) {
+        Ok(d) => d,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("camt.054 parse failed: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let mut accepted = 0usize;
+    let mut deduplicated = 0usize;
+    let mut skipped = 0usize;
+    let mut total = 0usize;
+
+    for notification in &doc.notifications {
+        for entry in &notification.entries {
+            // One import per transaction detail; entry-level fallback when the
+            // bank reported no TxDtls (single unbatched booking).
+            let details: Vec<Option<&crate::sepa::EntryDetail>> = if entry.details.is_empty() {
+                vec![None]
+            } else {
+                entry.details.iter().map(Some).collect()
+            };
+
+            for detail in details {
+                total += 1;
+                let amount_ct = detail
+                    .and_then(|d| d.amount_ct)
+                    .unwrap_or(entry.amount_ct)
+                    .abs();
+                let signed_ct = if entry.signed_ct() < 0 {
+                    -amount_ct
+                } else {
+                    amount_ct
+                };
+                let counterparty_iban = detail
+                    .and_then(|d| d.counterparty_iban.as_deref())
+                    .unwrap_or("");
+                if counterparty_iban.is_empty() {
+                    skipped += 1;
+                    continue;
+                }
+                let reference = detail
+                    .and_then(|d| d.reference.as_deref().or(d.end_to_end_id.as_deref()))
+                    .unwrap_or("camt.054 import");
+                let value_date = entry
+                    .value_date
+                    .as_deref()
+                    .or(entry.booking_date.as_deref())
+                    .unwrap_or_default();
+                let Ok(date) = time::Date::parse(
+                    value_date,
+                    &time::format_description::well_known::Iso8601::DEFAULT,
+                ) else {
+                    skipped += 1;
+                    continue;
+                };
+
+                let bank_txn_id = entry
+                    .account_servicer_ref
+                    .clone()
+                    .map(|r| {
+                        // A batched entry shares one AcctSvcrRef — disambiguate
+                        // per detail with the EndToEndId when present.
+                        match detail.and_then(|d| d.end_to_end_id.as_deref()) {
+                            Some(e2e) => format!("{r}#{e2e}"),
+                            None => r,
+                        }
+                    })
+                    .unwrap_or_else(|| {
+                        let key =
+                            format!("{counterparty_iban}|{signed_ct}|{value_date}|{reference}");
+                        format!(
+                            "{:016x}",
+                            key.bytes().fold(0u64, |acc, b| {
+                                acc.wrapping_mul(1099511628211).wrapping_add(u64::from(b))
+                            })
+                        )
+                    });
+
+                match crate::pg::bank_import_already_processed(&pool, &cfg.tenant, &bank_txn_id)
+                    .await
+                {
+                    Ok(true) => {
+                        deduplicated += 1;
+                        continue;
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "accountingd: dedup check failed — processing entry anyway");
+                    }
+                    Ok(false) => {}
+                }
+
+                let account_row = sqlx::query(
+                    "SELECT account_id FROM accounts WHERE iban_hash = encode(digest(upper(replace($1,' ','')), 'sha256'), 'hex') AND tenant = $2 LIMIT 1",
+                )
+                .bind(counterparty_iban)
+                .bind(&cfg.tenant)
+                .fetch_optional(&pool)
+                .await;
+
+                let Ok(Some(row)) = account_row else {
+                    skipped += 1;
+                    continue;
+                };
+                let account_id: Uuid = row.try_get("account_id").unwrap_or(Uuid::nil());
+                if account_id == Uuid::nil() {
+                    skipped += 1;
+                    continue;
+                }
+
+                let is_return = detail
+                    .and_then(|d| d.return_reason_code.as_deref())
+                    .is_some();
+                let entry_type = if is_return || signed_ct < 0 {
+                    "BANKRUECKLAST"
+                } else {
+                    "ZAHLUNG"
+                };
+                // Bank-statement sign → ledger sign. The ledger convention is
+                // positive = Forderung (debit): an incoming payment (bank credit)
+                // REDUCES the receivable → negative ZAHLUNG; a returned direct
+                // debit (bank debit) RE-OPENS the receivable → positive
+                // BANKRUECKLAST. This is the negation of the camt CashEntry
+                // convention (matches the JSON path's `to_ledger_ct`).
+                let ledger_ct = -signed_ct;
+                let description = match detail.and_then(|d| d.return_reason_code.as_deref()) {
+                    Some(code) => format!("camt.054 Rückläufer ({code})"),
+                    None => "camt.054 Zahlungseingang".to_owned(),
+                };
+
+                match write_entry(
+                    &pool,
+                    account_id,
+                    &cfg.tenant,
+                    entry_type,
+                    ledger_ct,
+                    Some(reference),
+                    None,
+                    None,
+                    date,
+                    Some(&description),
+                )
+                .await
+                {
+                    Ok(ledger_id) => {
+                        if let Err(e) = crate::pg::record_bank_import(
+                            &pool,
+                            &cfg.tenant,
+                            &bank_txn_id,
+                            signed_ct.abs(),
+                            Some(counterparty_iban),
+                            date,
+                            ledger_id,
+                        )
+                        .await
+                        {
+                            tracing::warn!(error = %e, "accountingd: bank_import_log insert failed");
+                        }
+                        accepted += 1;
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            "accountingd: ledger write FAILED — entry discarded; investigate DB health"
+                        );
+                        skipped += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    Json(serde_json::json!({
+        "msg_id": doc.msg_id,
+        "accepted": accepted,
+        "deduplicated": deduplicated,
+        "skipped": skipped,
+        "total": total,
+    }))
+    .into_response()
+}
+
+// ── Prometheus metrics ────────────────────────────────────────────────────────
+
+/// `GET /metrics` — Prometheus exposition of live financial + operational gauges.
+///
+/// Queried on scrape (no in-memory counters to drift). Exposes the money-path
+/// signals an SRE alerts on: open receivables, credit balances awaiting refund,
+/// dunning progression, and stuck SEPA runs.
+pub async fn metrics(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+) -> impl IntoResponse {
+    let m = match crate::pg::financial_metrics(&pool, &cfg.tenant).await {
+        Ok(m) => m,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("# metrics query failed: {e}\n"),
+            )
+                .into_response();
+        }
+    };
+    let t = &cfg.tenant;
+    let body = format!(
+        "# HELP accountingd_accounts_total Number of customer accounts.\n\
+         # TYPE accountingd_accounts_total gauge\n\
+         accountingd_accounts_total{{tenant=\"{t}\"}} {}\n\
+         # HELP accountingd_open_receivables_ct Sum of positive balances (ct).\n\
+         # TYPE accountingd_open_receivables_ct gauge\n\
+         accountingd_open_receivables_ct{{tenant=\"{t}\"}} {}\n\
+         # HELP accountingd_credit_balances_ct Sum of credit balances owed to customers (ct).\n\
+         # TYPE accountingd_credit_balances_ct gauge\n\
+         accountingd_credit_balances_ct{{tenant=\"{t}\"}} {}\n\
+         # HELP accountingd_dunning_open Open dunning cases by Mahnstufe.\n\
+         # TYPE accountingd_dunning_open gauge\n\
+         accountingd_dunning_open{{tenant=\"{t}\",stufe=\"1\"}} {}\n\
+         accountingd_dunning_open{{tenant=\"{t}\",stufe=\"2\"}} {}\n\
+         accountingd_dunning_open{{tenant=\"{t}\",stufe=\"3\"}} {}\n\
+         # HELP accountingd_sepa_runs_pending SEPA collection runs not yet dispatched.\n\
+         # TYPE accountingd_sepa_runs_pending gauge\n\
+         accountingd_sepa_runs_pending{{tenant=\"{t}\"}} {}\n\
+         # HELP accountingd_sperrung_pending Mahnstufe-3 cases handed to sperrd.\n\
+         # TYPE accountingd_sperrung_pending gauge\n\
+         accountingd_sperrung_pending{{tenant=\"{t}\"}} {}\n",
+        m.accounts_total,
+        m.open_receivables_ct,
+        m.credit_balances_ct,
+        m.dunning_stufe1,
+        m.dunning_stufe2,
+        m.dunning_stufe3,
+        m.sepa_runs_pending,
+        m.sperrung_pending,
+    );
+    (
+        StatusCode::OK,
+        [("Content-Type", "text/plain; version=0.0.4")],
+        body,
+    )
+        .into_response()
+}
+
+// ── Business partner (Geschäftspartner) aggregation ───────────────────────────
+
+/// `PUT /api/v1/accounts/{malo_id}/business-partner` — link an account to a
+/// vertragd `kunden_nr` so its balance/dunning aggregate with the customer's
+/// other market locations (FI-CA contract-account model).
+pub async fn put_account_business_partner(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(malo_id): Path<String>,
+    Query(q): Query<AccountQuery>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
+    let Some(kunden_nr) = body.get("kunden_nr").and_then(|v| v.as_str()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "kunden_nr required" })),
+        )
+            .into_response();
+    };
+    match crate::pg::set_account_kunden_nr(&pool, &malo_id, lf_mp_id, &cfg.tenant, kunden_nr).await
+    {
+        Ok(0) => StatusCode::NOT_FOUND.into_response(),
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/business-partners/{kunden_nr}/accounts` — all accounts.
+pub async fn get_bp_accounts(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(kunden_nr): Path<String>,
+) -> impl IntoResponse {
+    match crate::pg::list_accounts_by_bp(&pool, &cfg.tenant, &kunden_nr).await {
+        Ok(rows) => Json(serde_json::json!({
+            "kunden_nr": kunden_nr,
+            "account_count": rows.len(),
+            "accounts": rows,
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/business-partners/{kunden_nr}/balance` — consolidated balance.
+pub async fn get_bp_balance(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(kunden_nr): Path<String>,
+) -> impl IntoResponse {
+    match crate::pg::bp_consolidated_balance(&pool, &cfg.tenant, &kunden_nr).await {
+        Ok(total_ct) => Json(serde_json::json!({
+            "kunden_nr": kunden_nr,
+            "balance_ct": total_ct,
+            "balance_eur": format_ct_as_eur(total_ct),
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 // ── Offene Posten ─────────────────────────────────────────────────────────────
 
 /// `GET /api/v1/offene-posten`  — overdue accounts
@@ -895,6 +1250,7 @@ pub async fn get_dunning(
 
 /// `POST /api/v1/dunning/{account_id}/escalate`  — manual dunning escalation
 pub async fn escalate_dunning(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(account_id): Path<Uuid>,
@@ -927,11 +1283,14 @@ pub async fn escalate_dunning(
 
 /// `POST /api/v1/dunning/{id}/resolve`
 pub async fn resolve_dunning(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    match resolve_dunning_case(&pool, id).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+    match resolve_dunning_case(&pool, id, &cfg.tenant).await {
+        Ok(0) => StatusCode::NOT_FOUND.into_response(),
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -960,6 +1319,21 @@ pub async fn post_mandate(
         )
             .into_response();
     }
+    // Mandatsreferenz is Max35Text (SEPA AT-01) and doubles as the pain.008
+    // EndToEndId — an over-long value would make every future collection file
+    // schema-invalid, so reject it at the boundary.
+    let ref_len = req.mandatsref.chars().count();
+    if ref_len == 0 || ref_len > 35 {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!(
+                    "mandatsref must be 1–35 characters (SEPA Max35Text), got {ref_len}"
+                )
+            })),
+        )
+            .into_response();
+    }
     match create_mandate(&pool, &cfg.tenant, req).await {
         Ok(id) => (
             StatusCode::CREATED,
@@ -973,9 +1347,10 @@ pub async fn post_mandate(
 /// `GET /api/v1/sepa/mandates/{mandate_id}`
 pub async fn get_mandate(
     Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(mandate_id): Path<Uuid>,
 ) -> impl IntoResponse {
-    match fetch_mandate(&pool, mandate_id).await {
+    match fetch_mandate(&pool, mandate_id, &cfg.tenant).await {
         Ok(Some(row)) => Json(row).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -991,16 +1366,19 @@ pub async fn get_mandate(
 /// Does NOT affect existing `accounts.iban` or `mandatsref` columns —
 /// update those separately if needed via `PUT /api/v1/accounts/{malo_id}`.
 pub async fn delete_mandate(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(mandate_id): Path<Uuid>,
 ) -> impl IntoResponse {
     let today = time::OffsetDateTime::now_utc().date();
     let rows = sqlx::query(
         "UPDATE sepa_mandates SET revoked_at = $1, updated_at = now() \
-         WHERE mandate_id = $2 AND revoked_at IS NULL",
+         WHERE mandate_id = $2 AND tenant = $3 AND revoked_at IS NULL",
     )
     .bind(today)
     .bind(mandate_id)
+    .bind(&cfg.tenant)
     .execute(&pool)
     .await;
 
@@ -1013,6 +1391,7 @@ pub async fn delete_mandate(
 
 /// `POST /api/v1/sepa/run`  — generate pain.008 XML for all active mandates with positive balance
 pub async fn run_sepa(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
 ) -> impl IntoResponse {
@@ -1051,25 +1430,39 @@ pub async fn run_sepa(
     };
 
     let creditor_name = cfg.creditor_name.as_deref().unwrap_or(&cfg.tenant);
-    let creditor_id = cfg.creditor_id.as_deref();
+    let Some(creditor_id) = cfg.creditor_id.as_deref().filter(|s| !s.is_empty()) else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "creditor_id not configured — the EPC rulebook mandates CdtrSchmeId; \
+                          set the Gläubiger-ID (Bundesbank registry) in accountingd.toml"
+            })),
+        )
+            .into_response();
+    };
 
-    match build_pain_008(creditor_iban, creditor_name, creditor_id, &direct_debits) {
-        Ok(batches) => {
-            // Return all batches as a JSON array (FRST, RCUR, etc. separate per Rulebook §3.8)
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "batch_count": batches.len(),
-                    "batches": batches.iter().map(|b| serde_json::json!({
-                        "sequence_type": format!("{:?}", b.sequence_type),
-                        "entry_count": b.entry_count,
-                        "total_ct": b.total_ct,
-                        "xml": &b.xml,
-                    })).collect::<Vec<_>>(),
-                })),
-            )
-                .into_response()
-        }
+    // Ad-hoc runs collect at the SDD CORE minimum lead time (D-1, submit today).
+    let collection_date = (time::OffsetDateTime::now_utc() + time::Duration::days(2)).date();
+
+    match build_pain_008(
+        creditor_iban,
+        creditor_name,
+        creditor_id,
+        collection_date,
+        &direct_debits,
+    ) {
+        Ok(run) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                // One pain.008 message; FRST/RCUR/… are separate PmtInf groups inside it.
+                "collection_date": collection_date.to_string(),
+                "entry_count": run.entry_count,
+                "total_ct": run.total_ct,
+                "groups": run.groups,
+                "xml": &run.xml,
+            })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -1098,6 +1491,7 @@ pub async fn run_sepa(
 /// Typed `Vorauszahlung` enables `portald` Jahresabschluss preview and
 /// auto-adjustment when deviation exceeds 10 %.
 pub async fn put_vorauszahlung(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
@@ -1243,6 +1637,7 @@ pub struct BuchenRequest {
 /// Supply `reference_id` — re-posting with the same `reference_id` will create
 /// a new entry (no idempotency guard on this endpoint; use with care).
 pub async fn post_buchen(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
@@ -1368,6 +1763,7 @@ pub struct JahresabschlussQuery {
 ///
 /// Emits CloudEvent `de.accounting.jahresabschluss.abgeschlossen` on commit.
 pub async fn post_jahresabschluss(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
@@ -1450,32 +1846,123 @@ pub async fn post_jahresabschluss(
         .into_response();
     }
 
-    let today = OffsetDateTime::now_utc().date();
-    let ce_id = Uuid::new_v4().to_string();
-
-    // 3. Write settlement entry when non-zero using JAHRESABSCHLUSS entry type
-    // for clear auditability separate from regular RECHNUNG/GUTSCHRIFT entries.
-    if settlement_ct != 0 {
-        let description = format!(
-            "{} Jahresabschluss {year} (Abschlag gesamt: {} ct, Rechnung gesamt: {} ct)",
-            action, abschlag_sum, rechnung_sum
-        );
-        if let Err(e) = write_entry(
-            &pool,
-            acct.account_id,
-            lf_mp_id,
-            "JAHRESABSCHLUSS",
-            settlement_ct,
-            None,
-            Some("de.accounting.jahresabschluss.abgeschlossen"),
-            Some(&ce_id),
-            today,
-            Some(&description),
-        )
-        .await
-        {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    // Idempotency: a Jahresabschluss for (tenant, malo, year) runs exactly once.
+    // Re-invocation (retry, double-click, concurrent) returns the prior result
+    // instead of writing a second settlement entry and re-recalibrating Abschlag.
+    let billing_year_i16 = i16::try_from(year).unwrap_or(0);
+    match jahresabschluss_already_settled(&pool, &cfg.tenant, &malo_id, billing_year_i16).await {
+        Ok(Some(prior_ct)) => {
+            return Json(serde_json::json!({
+                "malo_id": malo_id,
+                "year": year,
+                "settlement_ct": prior_ct,
+                "settlement_eur": format_ct_as_eur(prior_ct),
+                "committed": true,
+                "already_settled": true,
+            }))
+            .into_response();
         }
+        Ok(None) => {}
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+
+    let today = OffsetDateTime::now_utc().date();
+    // Deterministic idempotency key — the write_entry gate (processed_events +
+    // UNIQUE(tenant, ce_id)) makes a redelivery a no-op even under a race.
+    let ce_id = format!("jahresabschluss:{malo_id}:{year}");
+
+    // 3. Realise the settlement.
+    //
+    // The running balance already equals `settlement_ct` (full-cost RECHNUNG
+    // debits + ABSCHLAG advance-payment credits), so a **Nachzahlung** needs NO
+    // ledger entry — it is the open receivable, collected by the SEPA/dunning
+    // path. An **Erstattung** (customer overpaid) is realised here: we book a
+    // debit that clears the credit balance to zero and pay the money out via
+    // pain.001 — but only when the account carries an IBAN. Without one the
+    // credit is carried forward and offset against the next Rechnung
+    // (§40 EnWG "Verrechnung mit der nächsten Abrechnung").
+    let mut settlement_entry_id: Option<Uuid> = None;
+    let mut refund_pain001: Option<String> = None;
+    if settlement_ct < 0 {
+        let refund_ct = -settlement_ct; // positive: amount owed to the customer
+        match acct.iban.as_deref().filter(|i| !i.is_empty()) {
+            Some(customer_iban) => {
+                let creditor_name = cfg.creditor_name.as_deref().unwrap_or(&cfg.tenant);
+                let creditor_iban = match cfg.creditor_iban.as_deref().filter(|s| !s.is_empty()) {
+                    Some(i) => i,
+                    None => {
+                        return (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            Json(serde_json::json!({
+                                "error": "Erstattung due but creditor_iban (payer account) not configured"
+                            })),
+                        )
+                            .into_response();
+                    }
+                };
+                let e2e = format!("REFUND-{malo_id}-{year}");
+                let customer_name = format!("Kunde {malo_id}");
+                match crate::sepa::build_pain_001(
+                    creditor_name,
+                    creditor_iban,
+                    &[(customer_iban, &customer_name, refund_ct, &e2e)],
+                    false,
+                ) {
+                    Ok(xml) => refund_pain001 = Some(xml),
+                    Err(e) => {
+                        return (
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            Json(serde_json::json!({ "error": format!("refund pain.001 build failed: {e}") })),
+                        )
+                            .into_response();
+                    }
+                }
+                // Clearing debit: zeroes the credit balance the refund pays out.
+                let desc = format!("Erstattung Jahresabschluss {year} (Auszahlung an Kunde)");
+                match write_entry(
+                    &pool,
+                    acct.account_id,
+                    &cfg.tenant,
+                    "JAHRESABSCHLUSS",
+                    refund_ct,
+                    None,
+                    Some("de.accounting.erstattung.faellig"),
+                    Some(&ce_id),
+                    today,
+                    Some(&desc),
+                )
+                .await
+                {
+                    Ok(id) => settlement_entry_id = id,
+                    Err(e) => {
+                        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                    }
+                }
+            }
+            None => {
+                tracing::info!(
+                    malo_id,
+                    refund_ct,
+                    "accountingd: Erstattung carried forward — account has no IBAN for refund"
+                );
+            }
+        }
+    }
+
+    // Record the run so a re-call is a no-op (audit + idempotency guard).
+    if let Err(e) = record_jahresabschluss(
+        &pool,
+        &cfg.tenant,
+        &malo_id,
+        billing_year_i16,
+        rechnung_sum,
+        abschlag_sum,
+        settlement_ct,
+        settlement_entry_id,
+    )
+    .await
+    {
+        tracing::error!(malo_id, error = %e, "accountingd: record_jahresabschluss failed");
     }
 
     // 4. Update monthly Abschlag (§40 Abs. 1 EnWG: Abschlag must match actual consumption).
@@ -1502,6 +1989,28 @@ pub async fn post_jahresabschluss(
         );
     }
 
+    // 5. Dispatch the refund to the ERP/bank for execution (signed CE).
+    if let Some(ref xml) = refund_pain001
+        && let Some(url) = cfg.erp_webhook_url.as_deref()
+    {
+        let refund_ct = -settlement_ct;
+        let ce = serde_json::json!({
+            "specversion": "1.0",
+            "type": "de.accounting.erstattung.faellig",
+            "source": format!("urn:accountingd:{}", cfg.tenant),
+            "id": format!("{ce_id}:refund"),
+            "time": OffsetDateTime::now_utc().to_string(),
+            "datacontenttype": "application/json",
+            "data": {
+                "malo_id": malo_id,
+                "year": year,
+                "refund_ct": refund_ct,
+                "pain001_xml": xml,
+            }
+        });
+        post_signed_ce(&cfg, url, &ce).await;
+    }
+
     Json(serde_json::json!({
         "malo_id": malo_id,
         "year": year,
@@ -1511,6 +2020,7 @@ pub async fn post_jahresabschluss(
         "settlement_eur": format_ct_as_eur(settlement_ct),
         "new_monthly_abschlag_ct": new_abschlag_ct,
         "action": action,
+        "refund_issued": refund_pain001.is_some(),
         "dry_run": false,
         "committed": true,
         "ce_id": ce_id,
@@ -1538,6 +2048,7 @@ pub struct ZahlungsQuery {
 /// - Atomically syncs `accounts.iban` column from `typed.iban` so that
 ///   `import_payments` (CAMT.054) matching continues to work.
 pub async fn put_zahlungsinformation(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
@@ -1781,6 +2292,7 @@ pub struct AnonymizeRequest {
 /// - `409` — already anonymized
 /// - `422` — missing `requested_by` or `legal_basis`
 pub async fn post_anonymize(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
@@ -1855,6 +2367,7 @@ pub struct ReconcileQuery {
 /// A non-zero `drift_ct` indicates a bug and must be investigated before repair.
 /// This endpoint is idempotent: running it multiple times with `repair=true` is safe.
 pub async fn post_reconcile(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
@@ -2068,6 +2581,7 @@ pub struct RunEegPayoutsRequest {
 ///
 /// Returns a summary JSON with `generated`, `skipped_no_iban`, `errors`.
 pub async fn post_run_eeg_payouts(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Json(req): Json<RunEegPayoutsRequest>,
@@ -2184,7 +2698,9 @@ pub async fn post_run_eeg_payouts(
 
         let payment_type = if use_instant { "SCT_INST" } else { "SCT_CORE" };
 
+        let debtor_name = cfg.creditor_name.as_deref().unwrap_or(&cfg.tenant);
         let pain_xml = match build_pain_001(
+            debtor_name,
             &debtor_iban,
             &[(&creditor_iban, &creditor_name, amount_ct, &e2e_ref)],
             use_instant,
@@ -2282,6 +2798,7 @@ pub struct Pain002StatusUpdate {
 /// `RJCT` / `CANC` → sets `pain002_reason` for audit; emits
 /// `de.accounting.eeg.payout.rejected` CloudEvent if ERP webhook is configured.
 pub async fn put_eeg_payout_status(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(payout_id): Path<uuid::Uuid>,
@@ -2462,7 +2979,9 @@ pub(crate) async fn create_eeg_payout_order(
             .unwrap_or("AUTO")
     );
 
+    let debtor_name = cfg.creditor_name.as_deref().unwrap_or(&cfg.tenant);
     let pain_xml = match build_pain_001(
+        debtor_name,
         debtor_iban,
         &[(
             params.creditor_iban,

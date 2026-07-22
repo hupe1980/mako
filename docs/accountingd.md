@@ -7,12 +7,12 @@ mermaid: true
 description: >
   accountingd operator guide — Massenkontokorrent / Customer Account Ledger (LF role).
   11 entry types, double-entry journal (SKR 03/04), FIFO open-item management,
-  CAMT.054 dedup import, SEPA pain.008 (FRST/RCUR separated, Gläubiger-ID) + pain.001 XML (sepa 0.3.0),
+  camt.054 XML + JSON dedup import, SEPA pain.008 (multi-group single message, mandatory Gläubiger-ID) + pain.001 XML,
   Verzugszinsen §288 BGB, payment plans (Zahlungsvereinbarung), aging analysis,
   Mahnwesen automatic rule engine (Mahnstufe 1–3), OIDC/JWT auth,
   inbound HMAC verification, GDPR Art. 17 pseudonymization,
   balance reconciliation, EEG Gutschrift + Marktprämie ingest, Jahresabschluss §40 EnWG,
-  107 tests.
+  87 tests.
 ---
 
 # `accountingd` — Massenkontokorrent / Customer Account Ledger
@@ -78,7 +78,7 @@ graph TB
 | `EEG_MARKTPRAEMIE` | -credit | `de.eeg.marktpraemie.berechnet` — §20 EEG Direktvermarktung |
 | `BANKRUECKLAST` | +debit | Returned SEPA direct debit |
 | `MAHNGEBUEHR` | +debit | Dunning fee per Mahnstufe (configurable) |
-| `ABSCHLAG` | +debit | Monthly advance payment (Abschlagslauf scheduler) |
+| `ABSCHLAG` | −credit | Monthly advance payment — reduces the balance (Abschlagslauf scheduler) |
 | `JAHRESABSCHLUSS` | ±signed | Annual Mehr-/Mindermengenabrechnung (§40 EnWG) |
 | `KORREKTUR` | ±signed | Manual operator correction via `POST /buchen` |
 
@@ -155,12 +155,17 @@ for operator override (e.g. grace extensions, special B2B arrangements).
 | `POST` | `/api/v1/sepa/mandates` | Register SEPA mandate (IBAN validated via mod-97) — OIDC required |
 | `GET` | `/api/v1/sepa/mandates/{id}` | Fetch mandate |
 | `DELETE` | `/api/v1/sepa/mandates/{id}` | **Revoke mandate** (§58 ZAG) |
-| `POST` | `/api/v1/sepa/run` | Generate pain.008 XML batches (FRST/RCUR separated, Gläubiger-ID) |
+| `POST` | `/api/v1/sepa/run` | Generate one pain.008 message (one `PmtInf` group per SequenceType, mandatory Gläubiger-ID) |
+| `POST` | `/api/v1/payments/import/camt054` | Ingest a camt.054 XML notification (batch-booked entries expanded per `TxDtls`; returns → `BANKRUECKLAST`) |
 | `GET` | `/api/v1/eeg/payouts` | List EEG payout orders (`?status=PDNG\|ACCP\|RJCT\|CANC`) |
 | `GET` | `/api/v1/eeg/payouts/{id}` | Single EEG payout with `pain001_xml` for audit |
 | `POST` | `/api/v1/eeg/payouts/run` | **Batch-generate** pain.001 for all unbatched `EEG_GUTSCHRIFT` entries |
 | `PUT` | `/api/v1/eeg/payouts/{id}/status` | Process pain.002 `ACCP`/`RJCT`/`CANC` |
-| `POST` | `/api/v1/jahresabschluss/{malo_id}` | **Annual settlement** (§40 EnWG, idempotent per year) |
+| `POST` | `/api/v1/jahresabschluss/{malo_id}` | **Annual settlement** (§40 EnWG, idempotent per year; refund on Erstattung) |
+| `PUT` | `/api/v1/accounts/{malo_id}/business-partner` | Link account to a `kunden_nr` |
+| `GET` | `/api/v1/business-partners/{kunden_nr}/accounts` | All accounts of a business partner |
+| `GET` | `/api/v1/business-partners/{kunden_nr}/balance` | Consolidated balance |
+| `GET` | `/metrics` | Prometheus financial + operational gauges |
 | `GET` | `/health` · `/health/ready` | Liveness / readiness |
 
 ---
@@ -215,12 +220,60 @@ Response:
 }
 ```
 
-When committed, writes a `JAHRESABSCHLUSS` entry (positive = Nachzahlung; negative = Erstattung)
-and updates the monthly `abschlag_ct` to `actual_annual ÷ 12` (§40 Abs. 1 EnWG).
+### Model
 
-The annual sum includes: `RECHNUNG` + `STORNO` + `MAHNGEBUEHR` (net billed amounts including reversals).
+ABSCHLAG entries are advance-payment **credits** (negative) and the annual
+Jahresrechnung is booked as a **full-cost debit** (`gesamtbrutto`), so the
+running balance already equals the settlement:
+
+```
+settlement_ct = rechnung_sum + abschlag_sum   (abschlag_sum is negative)
+              = 1300.00 − 1200.00 = 100.00     → Nachzahlung
+```
+
+- **Nachzahlung** (settlement > 0): **no** settlement entry is written — the
+  balance *is* the open receivable, collected by the SEPA/dunning path.
+- **Erstattung** (settlement < 0): a clearing debit zeroes the credit balance
+  and a **pain.001** refund is generated to the customer's IBAN (returned in
+  the response and dispatched as `de.accounting.erstattung.faellig`). Without a
+  stored IBAN the credit is carried forward and offset against the next
+  Rechnung.
+
+The run is idempotent per `(tenant, malo_id, year)` via `jahresabschluss_runs`
+and recalibrates the monthly `abschlag_ct` to `actual_annual ÷ 12`.
+The annual sum includes `RECHNUNG` + `STORNO` + `MAHNGEBUEHR`.
 
 ---
+
+## Business partner aggregation (FI-CA contract account)
+
+One customer (`vertragd.kunden.kunden_nr`) may hold several market-location
+accounts. Linking them enables cross-MaLo balance and dunning:
+
+```bash
+# Link an account to its business partner
+curl -X PUT ".../api/v1/accounts/51238696780/business-partner" \
+  -H 'Content-Type: application/json' -d '{"kunden_nr":"K-100234"}'
+
+# Consolidated view
+curl ".../api/v1/business-partners/K-100234/accounts"
+curl ".../api/v1/business-partners/K-100234/balance"
+```
+
+## Sperrung handoff (§19 Abs. 2 StromGVV)
+
+When the auto-dunning worker escalates a case to Mahnstufe 3 and the undisputed
+arrears reach `sperrung_threshold_ct` (default 100 EUR), accountingd posts a
+Sperrauftrag to `sperrd` (`POST /api/v1/sperr-orders`, `order_type: "sperrung"`).
+The handoff is idempotent (`dunning_cases.sperrauftrag_ce_id`); `sperrd` owns the
+4-week-notice / 8-Werktage-announcement scheduling.
+
+## Metrics
+
+`GET /metrics` exposes Prometheus gauges queried live on scrape:
+`accountingd_open_receivables_ct`, `accountingd_credit_balances_ct`,
+`accountingd_dunning_open{stufe}`, `accountingd_sepa_runs_pending`,
+`accountingd_sperrung_pending`, `accountingd_accounts_total`.
 
 ## Vorauszahlung (§40 Abs. 1 EnWG)
 
@@ -242,7 +295,7 @@ from `abschlag_ct` when no typed value has been stored.
 ## IBAN validation
 
 Every SEPA mandate PUT validates the IBAN using **ISO 13616 mod-97** via the
-[`sepa`](https://crates.io/crates/sepa) 0.3.0 crate (`sepa::validate_iban`).
+[`sepa`](https://crates.io/crates/sepa) crate (`sepa::validate_iban`).
 Covered by **21 tests** in `unit_tests.rs` (DE, GB, NL, AT, CH, checksum failures, length, lowercase).
 
 ---
@@ -347,7 +400,7 @@ scoped by `tenant`.
 CAMT.054 matching uses `iban_hash` (SHA-256 of normalised IBAN, stored as a generated column in PostgreSQL via `pgcrypto`).
 This lookup works correctly even when `iban_encrypted = true` — the hash is computed at write time and persisted alongside the encrypted value.
 
-Amount parsing uses `sepa::ct_from_eur_str` (sepa 0.3.0) — integer arithmetic only, **no f64**.
+Amount parsing uses `sepa::ct_from_eur_str` — integer arithmetic only, **no f64**.
 
 ---
 
@@ -483,9 +536,13 @@ any other double-entry general ledger via `GET /api/v1/accounts/{malo_id}/ledger
 
 ---
 
-## SEPA payments (sepa 0.3.0)
+## SEPA payments
 
-`accountingd` uses the [`sepa`](https://crates.io/crates/sepa) crate v0.3.0 which adds several capabilities beyond the 0.2 pain.008-only API:
+`accountingd` uses the [`sepa`](https://crates.io/crates/sepa) crate (0.4) —
+schema defaults are the current SEPA releases (`pain.008.001.08`,
+`pain.001.001.09`), names are transliterated into the SEPA character set, and
+every message is validated before serialisation (`build()` returns `Err`
+instead of emitting a bank-rejectable file):
 
 ```mermaid
 graph LR
@@ -496,6 +553,7 @@ graph LR
     subgraph in ["Bank responses"]
         pain002["pain.002 parser\nPayment Status Report\n(PUT /eeg/payouts/{id}/status)"]
         camt053["camt.053 parser\nEnd-of-day statement\n(reconciliation)"]
+        camt054["camt.054 parser\nDebit/Credit notification\n(/payments/import/camt054)"]
     end
     creditor["Creditor Identifier\n(EPC AT-02)"]
     creditor --> pain008
@@ -508,25 +566,34 @@ graph LR
 curl -X POST "http://accountingd:9380/api/v1/sepa/run" > batches.json
 ```
 
-Returns a JSON array of XML batches — **one batch per `SequenceType`** (FRST, RCUR, FNAL, OOFF).
-The EPC SDD Core Rulebook §3.8 requires FRST and RCUR to be in separate payment information blocks; many German clearing houses enforce this at file level. Mixing them causes batch rejection.
+Returns **one pain.008 message** containing one `PmtInf` group per
+`SequenceType` present (FRST, RCUR, FNAL, OOFF — in that order, with
+`PmtInfId = <MsgId>-<SEQ>`). The EPC SDD Core Rulebook §3.8 requires FRST and
+RCUR in separate payment-information blocks; they live in separate groups of
+the same file, so a collection run is a single bank submission and a single
+`sepa_collection_runs` audit row.
 
-Each batch in the response:
+Response shape:
 ```json
 {
-  "sequence_type": "RCUR",
-  "entry_count": 42,
-  "total_ct": 315000,
+  "collection_date": "2026-07-25",
+  "entry_count": 43,
+  "total_ct": 320000,
+  "groups": [
+    { "sequence_type": "FRST", "entry_count": 1,  "total_ct": 5000 },
+    { "sequence_type": "RCUR", "entry_count": 42, "total_ct": 315000 }
+  ],
   "xml": "<?xml version=\"1.0\"?>..."
 }
 ```
 
 Key features of the pain.008 generator:
 - **Typed `SequenceType`**: FRST/RCUR/FNAL/OOFF dispatch per mandate
-- **Gläubiger-ID (EPC AT-02)**: `creditor_id` from config is validated via `sepa::validate_creditor_id` and included as `<CdtrSchmeId>` — mandatory for all SDD batches; missing CI generates a WARN but does not block (configure before go-live)
+- **Gläubiger-ID (EPC AT-02)**: `creditor_id` from config is validated via `sepa::validate_creditor_id` (correct EPC262-08 check digits) and included as `<CdtrSchmeId>` — **required**; a missing or invalid CI blocks the run (the EPC rulebook mandates it, banks reject without it)
+- **`Mandatsreferenz` = `EndToEndId`**: capped at 35 characters (Max35Text) — enforced at mandate registration and by a DB CHECK
 - **`with_description`**: Each entry carries `"Abschlag YYYY-MM"` as RemittanceInfo (`Ustrd`) — visible on debtor's bank statement
 - **Hard error**: missing or invalid `creditor_iban` returns HTTP 503 (no silent placeholder IBAN)
-- **N-5 scheduler**: Background worker auto-generates and dispatches pain.008 5 days before each `billing_day`; each batch is persisted in `sepa_collection_runs` for audit and ERP replay
+- **N-5 scheduler**: Background worker auto-generates and dispatches the pain.008 message 5 days before each `billing_day`; persisted once per collection date in `sepa_collection_runs` for audit and ERP replay
 
 To revoke a mandate (§58 ZAG — customer right to revoke before cut-off):
 ```bash
@@ -913,7 +980,7 @@ matching (powercloud-equivalent >98% match rate).
 
 ## Testing
 
-**107 tests** (`cargo test -p accountingd --all-features`):
+**87 tests** (`cargo test -p accountingd`):
 
 **Unit tests** (75 in `unit_tests.rs`, no database required):
 - IBAN validation (21 tests): DE/GB/NL/AT/CH, checksum, length, lowercase
@@ -929,7 +996,7 @@ matching (powercloud-equivalent >98% match rate).
 **Integration tests** (16 in `integration_tests.rs`, pure logic, no database required):
 - §288 BGB Verzugszinsen: B2C (+5pp) and B2B (+9pp) interest rates, formula correctness
 - SKR 03/04 journal mapping: correct account codes for all key entry types
-- SEPA pain.008 FRST/RCUR batch separation: 1 FRST + 2 RCUR → 2 separate batches
+- SEPA pain.008 FRST/RCUR separation: 1 FRST + 2 RCUR → one message with two `PmtInf` groups
 - `creditor_id` (Gläubiger-ID) validation and inclusion in XML
 - CAMT.054 deduplication hash: stable / deterministic for same input
 - pain.008 `creditor_name` bug regression: IBAN string no longer passed as creditor name

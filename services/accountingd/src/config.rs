@@ -85,8 +85,13 @@ pub struct AccountingdConfig {
     pub erp_hmac_secret: Option<SecretString>,
 
     /// `sperrd` base URL — triggered when a Mahnstufe-3 dunning case is raised.
-    /// When set, `accountingd` auto-creates a `sperr_orders` entry.
+    /// When set, a Mahnstufe-3 case ≥ `sperrung_threshold_ct` posts a Sperrauftrag
+    /// to `sperrd` (`POST /api/v1/sperr-orders`).
     pub sperrd_url: Option<String>,
+
+    /// Minimum undisputed arrears to request a Sperrung (§19 Abs. 2 StromGVV:
+    /// ≥ 100 EUR). Default: 10_000 ct.
+    pub sperrung_threshold_ct: Option<i64>,
 
     /// Dunning fee in ct (× 10⁻² EUR) per Mahnstufe level.
     /// Default: Stufe 1 = 0, Stufe 2 = 500 (= 5.00 EUR), Stufe 3 = 1000 (= 10.00 EUR)

@@ -129,9 +129,10 @@ pub fn redispatch_verguetung(
     // Same money boundary as the settle_* functions: every EUR result must be
     // representable as an EuroAmount before it leaves the crate.
     for v in [entgangene, zusaetzliche, ersparte, total] {
-        EuroAmount::checked_from_decimal(v).map_err(|_| BillingError::MonetaryOverflow {
-            input_value: Some(v),
-        })?;
+        let _representable =
+            EuroAmount::checked_from_decimal(v).map_err(|_| BillingError::MonetaryOverflow {
+                input_value: Some(v),
+            })?;
     }
 
     let basis = match input.verguetungsart {

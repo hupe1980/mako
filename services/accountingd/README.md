@@ -9,22 +9,28 @@ no SEPA collection.
 | **HTTP port** | `:9380` |
 | **Database** | PostgreSQL (sqlx 0.8, 16 tables) |
 | **Auth** | OIDC/JWT on write endpoints + inbound webhook HMAC-SHA256 |
-| **Ledger** | Immutable `ledger_entries`; `amount_ct != 0` CHECK; idempotent on CloudEvent `ce_id` |
-| **Double-entry** | `journal_lines` shadow — balanced Soll/Haben per entry (SKR 03/04) |
+| **Ledger** | Immutable `ledger_entries`; `amount_ct != 0` CHECK; idempotent via **UNIQUE (tenant, ce_id)** claimed inside the write transaction |
+| **Double-entry** | `journal_lines` posted **in the same transaction** as every ledger entry; a **deferred DB trigger** enforces Soll = Haben (SKR 03/04, §238 HGB) |
 | **Vorauszahlung** | `PUT/GET /api/v1/accounts/{malo_id}/vorauszahlung` — typed `rubo4e::current::Vorauszahlung` (§40 Abs. 1 EnWG) |
 | **Aging analysis** | `GET /api/v1/aging` — receivables by 0–30d / 31–60d / 61–90d / >90d |
 | **Verzugszinsen** | `GET/POST /api/v1/accounts/{malo_id}/interest-charges` — §288 BGB B2C/B2B |
 | **Payment plans** | `GET/POST /api/v1/accounts/{malo_id}/payment-plans` — Zahlungsvereinbarung |
 | **SEPA mandates** | IBAN validated via **ISO 13616 mod-97** on PUT; `sepa_mandates` table (UNIQUE per tenant) |
-| **SEPA scheduler** | N-5 background worker generates **FRST/RCUR-separated** pain.008 batches; each persisted in `sepa_collection_runs` |
+| **SEPA scheduler** | N-5 background worker generates **one pain.008 message per collection date** (one `PmtInf` group per SequenceType, mandatory Gläubiger-ID); persisted in `sepa_collection_runs` |
 | **SEPA Gläubiger-ID** | `creditor_id` config field (EPC AT-02); validated via `sepa::validate_creditor_id`; included as `<CdtrSchmeId>` |
 | **FRST→RCUR transition** | Auto-transitions FRST mandate to RCUR after first successful collection |
 | **CAMT.054 import** | `POST /api/v1/payments/import` — deduplicated by `bank_transaction_id` (prevents re-import) |
 | **IBAN encryption ready** | `iban_hash` generated column (pgcrypto SHA-256); `iban_encrypted` flag; CAMT.054 matching uses hash |
-| **Mahnwesen** | Mahnstufe 1→2→3; auto-dunning worker (opt-in); `de.accounting.sperrauftrag` → `sperrd` |
-| **Jahresabschluss** | Annual reconciliation (§40 EnWG); idempotent per year via `jahresabschluss_runs` |
+| **Abschlag model** | ABSCHLAG booked as advance-payment **credit** (negative); full-cost Jahresrechnung as debit — the balance nets to the Nachzahlung/Erstattung |
+| **Mahnwesen** | Mahnstufe 1→2→3; auto-dunning worker (advisory-locked, opt-in) |
+| **Sperrung handoff** | Mahnstufe-3 arrears ≥ `sperrung_threshold_ct` (§19 Abs. 2 StromGVV, default 100 EUR) → `POST sperrd /api/v1/sperr-orders` (idempotent) |
+| **Business partner** | `kunden_nr` links accounts to `vertragd.kunden`; `GET /api/v1/business-partners/{kunden_nr}/{accounts,balance}` aggregate cross-MaLo |
+| **Refund payout** | Jahresabschluss Erstattung → **pain.001** to the customer IBAN (credit balance carried forward when no IBAN) |
+| **Metrics** | `GET /metrics` — Prometheus gauges (open receivables, credit balances, dunning by Mahnstufe, pending SEPA runs) |
+| **Worker safety** | Abschlag/dunning workers hold a PostgreSQL advisory lock; all money workers are idempotent (per-run guards) |
+| **Jahresabschluss** | Annual settlement (§40 EnWG); idempotent per year via `jahresabschluss_runs`; recalibrates the monthly Abschlag |
 | **MCP** | 12 tools at `/mcp` |
-| **Tests** | 107 tests (75 unit + 16 integration, no DB required; additional DB-backed tests via `integration-tests` feature) |
+| **Tests** | 87 pure tests (71 unit + 16 integration) + 4 DB-backed scenario tests (`tests/db_scenarios.rs`, run with `DATABASE_URL` + `--ignored`) |
 | **Health** | `GET /health/live`, `GET /health/ready` |
 
 ## Security

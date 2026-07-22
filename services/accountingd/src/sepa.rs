@@ -1,118 +1,103 @@
-//! SEPA payment utilities for `accountingd` — powered by `sepa` 0.3.0.
-//!
-//! ## New capabilities in sepa 0.3.0
+//! SEPA payment utilities for `accountingd` — powered by the `sepa` crate.
 //!
 //! | Capability | API | Use in accountingd |
 //! |---|---|---|
 //! | IBAN validation | `validate_iban` | mandate PUT, import_payments, creditor check |
 //! | BIC validation | `validate_bic` | mandate PUT |
-//! | SEPA Creditor ID (EPC AT-02) | `validate_creditor_id` | pain.008 CI field |
-//! | pain.008 CORE + B2B | `Pain008Builder` + `DirectDebitEntry` | N-5 scheduler, run_sepa |
-//! | Typed SequenceType | `SequenceType::Frst/Rcur/Fnal/Ooff` | per-mandate dispatch |
-//! | B2B scheme | `DirectDebitScheme::B2b` | future B2B contracts |
-//! | Entry description | `DirectDebitEntry::with_description` | bank statement clarity |
-//! | Entry sequence override | `DirectDebitEntry::with_sequence_type` | FRST/RCUR per-entry |
-//! | pain.001 SCT + SCT Inst | `Pain001Builder` + `CreditTransferEntry` | EEG Vergütung payout |
+//! | SEPA Creditor ID (EPC AT-02) | `validate_creditor_id` | pain.008 `CdtrSchmeId` (mandatory) |
+//! | pain.008 CORE + B2B | `Pain008Builder` + `DirectDebitGroup` | N-5 scheduler, run_sepa |
+//! | Multi-group messages | one `PmtInf` per `SequenceType` in **one file** | single submission + single audit row |
+//! | pain.001 SCT + SCT Inst | `Pain001Builder` + `CreditTransferGroup` | EEG Vergütung payout |
 //! | pain.002 status report | `parse_pain002` | bank rejection → BANKRUECKLAST auto-entry |
 //! | camt.053 statement | `parse_camt053` | end-of-day bank reconciliation |
-//! | camt.054 notification | `camt054::parse_simple_json` | import_payments JSON |
+//! | camt.054 notification | `parse_camt054` (XML) + `parse_simple_json` | payment import |
 //! | EUR string ↔ ct | `ct_to_eur_str` / `ct_from_eur_str` | format helpers |
-//! | Streaming XML write | `Pain008Builder::write_xml_to_io` | large mandate batches |
+//!
+//! Schema defaults are the current SEPA releases (`pain.008.001.08`,
+//! `pain.001.001.09`); names and remittance text are transliterated into the
+//! SEPA character set (`ä → ae`, DK style) while identifiers are rejected on
+//! out-of-set characters — the bank echoes identifiers back verbatim, so
+//! rewriting them would break reconciliation.
 
-// ── Re-exports from sepa 0.3.0 ────────────────────────────────────────────────
+// ── Re-exports from the sepa crate ────────────────────────────────────────────
 
-// IBAN + BIC (unchanged API)
-pub use sepa::{Iban, IbanError, validate_bic, validate_iban};
-
-// SEPA Creditor Identifier (EPC AT-02) — new in 0.3.0
-pub use sepa::{CreditorId, CreditorIdError, validate_creditor_id};
-
-// pain.008 SDD Direct Debit — upgraded in 0.3.0 with typed enums
-pub use sepa::{DirectDebitEntry, Pain008Builder};
-pub use sepa::{DirectDebitScheme, SequenceType};
-
-// pain.001 Credit Transfer (SCT + SCT Instant) — new in 0.3.0
+pub use sepa::camt::{CashEntry, EntryDetail};
 pub use sepa::pain001::LocalInstrument;
-pub use sepa::{CreditTransferEntry, Pain001Builder};
-
-// pain.002 Payment Status Report parser — new in 0.3.0
-pub use sepa::{Pain002Document, PaymentStatus, parse_pain002};
-
-// camt.053 Bank-to-Customer Statement parser — new in 0.3.0
 pub use sepa::{Camt053Document, parse_camt053};
-
-// Money utilities — ct_from_eur_str is new in 0.3.0
+pub use sepa::{Camt054Document, parse_camt054};
+pub use sepa::{CreditTransferEntry, CreditTransferGroup, Pain001Builder};
+pub use sepa::{CreditorId, CreditorIdError, validate_creditor_id};
+pub use sepa::{DirectDebitEntry, DirectDebitGroup, Pain008Builder};
+pub use sepa::{DirectDebitScheme, SequenceType};
+pub use sepa::{Iban, IbanError, validate_bic, validate_iban};
+pub use sepa::{Pain002Document, PaymentStatus, parse_pain002};
 pub use sepa::{ct_from_eur_str, ct_to_eur_str};
 
 use crate::pg::SepaMandateRow;
 
-// ── pain.008 batch output ─────────────────────────────────────────────────────
+// ── pain.008 run output ───────────────────────────────────────────────────────
 
-/// One pain.008 XML batch with its sequence type.
+/// One pain.008 message covering a collection date — a single file with one
+/// `PmtInf` group per `SequenceType` present in the input.
 ///
-/// The SEPA SDD Core Rulebook requires `FRST` and `RCUR` mandates to be in separate
-/// `<PmtInf>` blocks. `build_pain_008` returns one batch per unique `SequenceType`
-/// found in the input entries, so callers receive at most 4 batches (FRST, RCUR, FNAL, OOFF).
+/// The SEPA SDD Rulebook requires `FRST` and `RCUR` collections in separate
+/// payment-information blocks; since sepa 0.4 those blocks live in **one
+/// message**, so a collection run is one bank submission and one audit row in
+/// `sepa_collection_runs` (whose `UNIQUE (tenant, collection_date)` previously
+/// silently dropped the second of two per-sequence files).
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct Pain008Batch {
-    /// SEPA SequenceType for all entries in this batch (serialized as string e.g. "FRST").
-    #[serde(serialize_with = "serialize_sequence_type")]
-    pub sequence_type: SequenceType,
-    /// Generated pain.008.003.02 XML string.
+pub struct Pain008Run {
+    /// Generated pain.008.001.08 XML (validated before serialisation).
     pub xml: String,
-    /// Total amount in ct across all entries in this batch.
+    /// Total amount in ct across all groups.
     pub total_ct: i64,
-    /// Number of mandate entries in this batch.
+    /// Number of mandate entries across all groups.
     pub entry_count: usize,
+    /// Per-`PmtInf` breakdown, in emission order.
+    pub groups: Vec<Pain008GroupInfo>,
 }
 
-fn serialize_sequence_type<S>(seq: &SequenceType, s: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    let label = match seq {
-        SequenceType::Frst => "FRST",
-        SequenceType::Rcur => "RCUR",
-        SequenceType::Fnal => "FNAL",
-        SequenceType::Ooff => "OOFF",
-        _ => "RCUR", // fallback for any future variants
-    };
-    s.serialize_str(label)
+/// Summary of one `PmtInf` block inside a [`Pain008Run`].
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Pain008GroupInfo {
+    /// SEPA SequenceType of the block (`"FRST"`, `"RCUR"`, `"FNAL"`, `"OOFF"`).
+    pub sequence_type: String,
+    /// Mandate entries in this block.
+    pub entry_count: usize,
+    /// Total amount in ct in this block.
+    pub total_ct: i64,
 }
 
 // ── pain.008 Direct Debit builder ─────────────────────────────────────────────
 
-/// Build pain.008.003.02 XML batches from `accountingd`'s active mandate rows.
+/// Build one pain.008 message from `accountingd`'s active mandate rows.
 ///
-/// ## FRST/RCUR batch separation (SEPA Rulebook §3.8)
+/// ## FRST/RCUR separation (SEPA Rulebook §3.8)
 ///
-/// The EPC SEPA SDD Core Rulebook requires that `FRST` (first collection) and
-/// `RCUR` (recurring) mandates be in **separate payment information blocks**.
-/// Many German clearing houses enforce this at the file level.
-///
-/// This function returns one `Pain008Batch` per distinct `SequenceType` found
-/// in `entries`.  The scheduler stores each batch separately in `sepa_collection_runs`
-/// and dispatches them individually to the bank.
+/// Entries are grouped by `SequenceType` into separate `PmtInf` blocks of the
+/// **same message**, emitted in the fixed order FRST, RCUR, FNAL, OOFF with
+/// `PmtInfId = <MsgId>-<SEQ>` for bank-statement reconciliation.
 ///
 /// ## Gläubiger-ID (EPC AT-02, mandatory)
 ///
-/// `creditor_id_str` is the SEPA Creditor Identifier (e.g. `DE74ZZZ09999999999`).
-/// When `Some`, it is validated via `validate_creditor_id` and included in the
-/// `CdtrSchmeId` element.  Banks will **reject** batches without a valid CI.
-/// Obtain your CI from your bank or the Bundesbank creditor registry.
+/// `creditor_id_str` is required: the EPC rulebook mandates `CdtrSchmeId`, and
+/// the sepa crate refuses to build a group without it. Obtain the identifier
+/// from the Bundesbank creditor registry.
 ///
 /// ## Parameters
 ///
 /// - `creditor_iban_str` — IBAN of the LF's bank account (creditor side)
-/// - `creditor_name`     — Name of the LF/creditor (e.g. "Muster Energie GmbH")
-/// - `creditor_id_str`   — SEPA Creditor Identifier (EPC AT-02), **mandatory in production**
+/// - `creditor_name`     — name of the LF/creditor (transliterated to SEPA charset)
+/// - `creditor_id_str`   — SEPA Creditor Identifier (EPC AT-02)
+/// - `collection_date`   — requested collection date (`ReqdColltnDt`)
 /// - `entries`           — slice of `(mandate_row, amount_ct)` pairs
 pub fn build_pain_008(
     creditor_iban_str: &str,
     creditor_name: &str,
-    creditor_id_str: Option<&str>,
+    creditor_id_str: &str,
+    collection_date: time::Date,
     entries: &[(&SepaMandateRow, i64)],
-) -> anyhow::Result<Vec<Pain008Batch>> {
+) -> anyhow::Result<Pain008Run> {
     let creditor_iban = validate_iban(creditor_iban_str).map_err(|e| {
         anyhow::anyhow!(
             "creditor IBAN '{creditor_iban_str}' is invalid: {e}. \
@@ -120,66 +105,65 @@ pub fn build_pain_008(
              pain.008 generation is blocked until this is corrected."
         )
     })?;
-
-    // Validate and parse the Gläubiger-ID (mandatory per EPC SDD Rulebook §2.4).
-    // Warn in dev mode when absent; production banks will reject without it.
-    let parsed_creditor_id = match creditor_id_str {
-        Some(id_str) => {
-            let id = validate_creditor_id(id_str).map_err(|e| {
-                anyhow::anyhow!(
-                    "creditor_id '{id_str}' is invalid: {e}. \
-                     Obtain your SEPA Creditor Identifier from your bank."
-                )
-            })?;
-            Some(id)
-        }
-        None => {
-            tracing::warn!(
-                "accountingd: creditor_id not configured — pain.008 XML missing CdtrSchmeId. \
-                 Banks may reject the batch. Set [creditor_id] in accountingd.toml."
-            );
-            None
-        }
-    };
+    let creditor_id = validate_creditor_id(creditor_id_str).map_err(|e| {
+        anyhow::anyhow!(
+            "creditor_id '{creditor_id_str}' is invalid: {e}. \
+             Set the SEPA Creditor Identifier (Bundesbank registry) in \
+             [creditor_id] config — the EPC rulebook mandates CdtrSchmeId."
+        )
+    })?;
 
     let today = time::OffsetDateTime::now_utc();
+    let msg_id = format!(
+        "DD-{}-{:02}-{:02}",
+        collection_date.year(),
+        collection_date.month() as u8,
+        collection_date.day()
+    );
+    let collection_date_str = format!(
+        "{}-{:02}-{:02}",
+        collection_date.year(),
+        collection_date.month() as u8,
+        collection_date.day()
+    );
 
-    // Group entries by SequenceType — SEPA Rulebook requires separate batches.
-    use std::collections::HashMap;
-    let mut groups: HashMap<&'static str, Vec<(&SepaMandateRow, i64)>> = HashMap::new();
+    // Fixed emission order — deterministic files for golden tests and audits.
+    const SEQ_ORDER: [(&str, SequenceType); 4] = [
+        ("FRST", SequenceType::Frst),
+        ("RCUR", SequenceType::Rcur),
+        ("FNAL", SequenceType::Fnal),
+        ("OOFF", SequenceType::Ooff),
+    ];
 
-    for &(mandate, amount_ct) in entries {
-        let key: &'static str = match mandate.sequence_type.as_str() {
-            "FRST" => "FRST",
-            "FNAL" => "FNAL",
-            "OOFF" => "OOFF",
-            _ => "RCUR", // default for RCUR and unknown values
-        };
-        groups.entry(key).or_default().push((mandate, amount_ct));
-    }
+    let mut builder = Pain008Builder::new(creditor_name).msg_id(msg_id.clone());
+    let mut groups_info = Vec::new();
+    let mut total_ct = 0i64;
+    let mut entry_count = 0usize;
 
-    let mut batches = Vec::with_capacity(groups.len());
-
-    // Process each sequence type as a separate batch
-    for (seq_key, group_entries) in &groups {
-        let seq_type = match *seq_key {
-            "FRST" => SequenceType::Frst,
-            "FNAL" => SequenceType::Fnal,
-            "OOFF" => SequenceType::Ooff,
-            _ => SequenceType::Rcur,
-        };
-
-        let msg_id = format!("DD-{}-{:02}-{}", today.year(), today.month() as u8, seq_key);
-
-        let mut builder = Pain008Builder::new(creditor_name, &creditor_iban)
-            .msg_id(msg_id)
-            .sequence_type(seq_type);
-
-        // Apply Gläubiger-ID when configured
-        if let Some(ref cid) = parsed_creditor_id {
-            builder = builder.creditor_id(cid.clone());
+    for (seq_key, seq_type) in SEQ_ORDER {
+        let group_entries: Vec<&(&SepaMandateRow, i64)> = entries
+            .iter()
+            .filter(|(m, _)| {
+                let key = match m.sequence_type.as_str() {
+                    "FRST" => "FRST",
+                    "FNAL" => "FNAL",
+                    "OOFF" => "OOFF",
+                    _ => "RCUR",
+                };
+                key == seq_key
+            })
+            .collect();
+        if group_entries.is_empty() {
+            continue;
         }
 
+        let mut group = DirectDebitGroup::new(creditor_name, &creditor_iban, creditor_id.clone())
+            .sequence_type(seq_type)
+            .collection_date(collection_date_str.clone())
+            .payment_info_id(format!("{msg_id}-{seq_key}"));
+
+        let mut group_ct = 0i64;
+        let mut group_n = 0usize;
         for (mandate, amount_ct) in group_entries {
             let debtor_iban = match validate_iban(&mandate.iban) {
                 Ok(iban) => iban,
@@ -187,14 +171,13 @@ pub fn build_pain_008(
                     tracing::warn!(
                         mandate_id = %mandate.mandate_id,
                         error = %e,
-                        "accountingd: skipping mandate with invalid debtor IBAN in pain.008 batch"
+                        "accountingd: skipping mandate with invalid debtor IBAN in pain.008"
                     );
                     continue;
                 }
             };
 
             let description = format!("Abschlag {}-{:02}", today.year(), today.month() as u8);
-
             let mut entry = DirectDebitEntry::new(
                 mandate.mandatsref.clone(),
                 mandate.signed_at.to_string(),
@@ -214,29 +197,41 @@ pub fn build_pain_008(
                 entry = entry.with_bic(bic);
             }
 
-            builder = builder.add_entry(entry);
+            group_ct += *amount_ct;
+            group_n += 1;
+            group = group.add_entry(entry);
         }
 
-        if builder.entry_count() == 0 {
-            continue; // skip empty batches (all mandates had invalid IBANs)
+        if group_n == 0 {
+            continue; // every mandate in this sequence had an invalid IBAN
         }
-
-        let total_ct = builder.total_ct();
-        let entry_count = builder.entry_count();
-        let xml = builder.build_xml();
-
-        batches.push(Pain008Batch {
-            sequence_type: seq_type,
-            xml,
-            total_ct,
-            entry_count,
+        total_ct += group_ct;
+        entry_count += group_n;
+        groups_info.push(Pain008GroupInfo {
+            sequence_type: seq_key.to_owned(),
+            entry_count: group_n,
+            total_ct: group_ct,
         });
+        builder = builder.add_group(group);
     }
 
-    Ok(batches)
+    if entry_count == 0 {
+        anyhow::bail!("pain.008 run has no billable mandates (all entries invalid or empty)");
+    }
+
+    let xml = builder
+        .build()
+        .map_err(|e| anyhow::anyhow!("pain.008 validation failed: {e}"))?;
+
+    Ok(Pain008Run {
+        xml,
+        total_ct,
+        entry_count,
+        groups: groups_info,
+    })
 }
 
-// ── pain.001 Credit Transfer (new in sepa 0.3.0) ─────────────────────────────
+// ── pain.001 Credit Transfer ─────────────────────────────────────────────────
 
 /// Build a pain.001 SEPA Credit Transfer XML for outgoing payments.
 ///
@@ -244,21 +239,25 @@ pub fn build_pain_008(
 ///
 /// 1. **EEG Einspeisevergütung** — NB pays plant operator for monthly feed-in
 ///    (triggered by `de.eeg.verguetung.berechnet` from `einsd`).
-/// 2. **Customer refund** — After Jahresabschluss, issue `GUTSCHRIFT` ledger entry
-///    AND a pain.001 to actually transfer funds back to the customer.
-/// 3. **§19 EEG Einspeisemanagement compensation** — NB must pay for curtailed kWh.
+/// 2. **Customer refund** — after Jahresabschluss, issue a `GUTSCHRIFT` ledger
+///    entry AND a pain.001 to actually transfer funds back to the customer.
+/// 3. **§19 EEG Einspeisemanagement compensation** — NB pays for curtailed kWh.
 ///
-/// ## SCT Instant (10-second settlement)
+/// ## SCT Instant
 ///
-/// Pass `instant = true` to switch to pain.001.001.09 namespace (SCT Inst).
-/// Required for real-time EEG compensation payments under §19 EEG 2023.
+/// Pass `instant = true` to emit `LclInstrm = INST`. The message stays on
+/// `pain.001.001.09`, where `ReqdExctnDt` is emitted in the schema-valid
+/// `<Dt>` choice form. Debtor agents without a known BIC use the EPC
+/// "IBAN only" form — `NOTPROVIDED` is never written as a BIC.
 ///
 /// ## Parameters
 ///
+/// - `debtor_name`     — the operator/LF's legal name (`Dbtr/Nm`)
 /// - `debtor_iban_str` — the operator/LF's own bank account (debit side)
-/// - `entries` — slice of `(creditor_iban, creditor_name, amount_ct, end_to_end_ref)`
-/// - `instant` — use SCT Instant (pain.001.001.09) instead of standard SCT (003.03)
+/// - `entries`         — slice of `(creditor_iban, creditor_name, amount_ct, end_to_end_ref)`
+/// - `instant`         — request SCT Instant execution
 pub fn build_pain_001(
+    debtor_name: &str,
     debtor_iban_str: &str,
     entries: &[(&str, &str, i64, &str)],
     instant: bool,
@@ -274,16 +273,14 @@ pub fn build_pain_001(
         today.day()
     );
 
-    let mut builder = Pain001Builder::new(debtor_iban_str.to_owned(), &debtor_iban).msg_id(msg_id);
-
+    let mut group = CreditTransferGroup::new(debtor_name, &debtor_iban);
     if instant {
-        builder = builder.local_instrument(LocalInstrument::Inst);
+        group = group.local_instrument(LocalInstrument::Inst);
     }
-
     for (creditor_iban_str, creditor_name, amount_ct, e2e_ref) in entries {
         let creditor_iban = validate_iban(creditor_iban_str)
             .map_err(|e| anyhow::anyhow!("creditor IBAN '{creditor_iban_str}' invalid: {e}"))?;
-        builder = builder.add_entry(CreditTransferEntry::new(
+        group = group.add_entry(CreditTransferEntry::new(
             creditor_name.to_string(),
             creditor_iban,
             *amount_ct,
@@ -291,7 +288,11 @@ pub fn build_pain_001(
         ));
     }
 
-    Ok(builder.build_xml())
+    Pain001Builder::new(debtor_name)
+        .msg_id(msg_id)
+        .add_group(group)
+        .build()
+        .map_err(|e| anyhow::anyhow!("pain.001 validation failed: {e}"))
 }
 
 // ── Verzugszinsen §288 BGB calculation ───────────────────────────────────────
