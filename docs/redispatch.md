@@ -58,7 +58,7 @@ contains at least one of `Marktrolle::Nb`, `Marktrolle::Unb`, or
 ```mermaid
 graph LR
     subgraph "Transport boundary"
-        AS4["AS4/ebMS3\n(SOAP/MTOM)\nXML sniff: first byte <"]
+        AS4["AS4/ebMS3\n(SOAP/MTOM)\nXML sniff: first byte &lt;"]
     end
 
     subgraph "redispatch-xml"

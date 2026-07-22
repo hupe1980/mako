@@ -191,7 +191,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">🧾</div>
     <h3>Energy Billing Engine</h3>
     <p>
-      <strong>12 product categories</strong> — STROM (SLP/HT/NT/RLM), GAS, WAERME, SOLAR,
+      <strong>13 product categories</strong> — STROM (SLP/HT/NT/RLM), GAS, WAERME, WASSER (Trinkwasser + gesplittete Abwassergebühr), SOLAR,
       EEG/EINSPEISUNG, §14a WAERMEPUMPE/WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG,
       §42c SHARING.
       `Product` typed enum with per-category structs; `ControllableLoadProvider` for §14a;
@@ -211,7 +211,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <h3>Grid Settlement Engine</h3>
     <p>
       <code>grid-billing</code> calculates NNE, KA, MMM, MSB, and AWH Sperrprozesse invoices
-      for PIDs 31001/31002/31005/31006/31009/31011.
+      for PIDs 31001/31002/31005/31006/31009/31011 (31006 selbst ausgestellt is billed by invoicd on the LF side).
       Every position carries a <strong><code>CalculationTrace</code></strong> with explanation,
       legal refs (StromNEV §21, GasNEV §14, KAV §2, §14a EnWG), and tariff source.
       <code>BillingPositionKind</code> on every position drives the service-layer BDEW Artikelnummer
@@ -517,7 +517,7 @@ mako consists of 17 independently deployable services. 16 of them ship a built-i
   <a href="{{ '/tarifbd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">tarifbd</span>
     <span class="mako-service-card__port">:9080</span>
-    <span class="mako-service-card__desc">User-defined product catalog. 13 energy categories (incl. catalog-only BUNDLE; billingd bills 12). EPEX Spot prices for §41a. MaLo→product assignment.</span>
+    <span class="mako-service-card__desc">User-defined product catalog. 14 categories (incl. catalog-only BUNDLE; billingd bills 13). EPEX Spot prices for §41a. MaLo→product assignment.</span>
   </a>
   <a href="{{ '/billingd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">billingd</span>
@@ -675,9 +675,9 @@ Beyond the production services, mako exposes reusable Rust libraries:
 | [`mako-engine`](https://crates.io/crates/mako-engine) | ✅ crates.io | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines |
 | `metering` | workspace | German metering domain — `MeterInterval`, validation V01–V10, substitution (§ 60 Abs. 2 MsbG), Hampel scoring, resampling, virtual meters, SMGW/CLS (§14a), 177 tests |
 | `mako-edm` | workspace | Energy Data Management types — `MeterRead`, `QualityFlag` (8 variants), `BilanzzuordnungRecord`, `GasQualityData` (PID 13007), correction records (§ 147 AO / GoBD) |
-| `eeg-billing` | workspace | Pure EEG/KWKG settlement — 9 schemes, §51 Negativpreisregel, §52 Pflichtzahlungen, §36k Wind Korrekturfaktor, `InbetriebnahmeTyp` lifecycle, proptest invariants, **339 tests** |
-| `energy-billing` | workspace | Retail energy billing engine — 12 categories, HT/NT ToU, RLM demand charge, §54 EnergieStG exemption, historic levy rates (`stromsteuer_for_year`, `energiesteuer_gas_for_year`), §14a Modul 1/3, XRechnung 3.0 |
-| `grid-billing` | workspace | Role-neutral grid **settlement** engine — `GridSettlement` (+ `CalculationTrace`, `LegalReference`, `TariffSource` per position), `Sparte` (Gas/Strom), `KaKlasse`, `calculate_reversal()`, `validate_*_input()`, §13a EnWG `redispatch_verguetung`; zero BO4E dep, no float money |
+| `eeg-billing` | workspace | Pure EEG/KWKG settlement — 10 schemes, §51 Negativpreisregel, §52 Pflichtzahlungen, §36k Wind Korrekturfaktor, `InbetriebnahmeTyp` lifecycle, proptest invariants, **339 tests** |
+| `energy-billing` | workspace | Retail energy billing engine — 13 categories (incl. municipal WASSER), HT/NT ToU, RLM demand charge, §54 EnergieStG exemption, historic levy rates (`stromsteuer_for_year`, `energiesteuer_gas_for_year`), §14a Modul 1/3, XRechnung 3.0 |
+| `grid-billing` | workspace | Role-neutral grid **settlement** engine — `SettlementResult` (+ `CalculationTrace`, `LegalReference`, `TariffSource` per position), `Sparte` (Gas/Strom), `KaKlasse`, `calculate_reversal()`, `validate_*_input()`, §13a EnWG `redispatch_verguetung`; zero BO4E dep, no float money |
 | `invoic-checker` | workspace | INVOIC plausibility — 6 checks, ToU-aware tariff match |
 | `netz-checker` | workspace | NB Anmeldung validation — 6 deterministic checks, ERC A02–A99 |
 | `mako-gpke` | workspace | GPKE workflows — UTILMD Strom + INVOIC + ORDERS Sperr/Konfig + PARTIN (37000–37006) |

@@ -12,7 +12,7 @@
 //! | `list_vpp_settlements` | List VPP aggregation settlement records |
 //! | `list_corrections` | List Korrekturrechnung / Stornorechnung records (§ 147 AO / GoBD) |
 //! | `calculate_billing` | Trigger a billing calculation run for a MaLo |
-//! | `list_product_categories` | Describe all 12 billing categories and their required fields |
+//! | `list_product_categories` | Describe all 13 billing categories and their required fields |
 //! | `get_billing_summary` | Aggregate billing stats per MaLo (total billed, avg monthly) |
 //! | `validate_tariff_config` | Pre-flight validation: §41b iMSys guard, KAV plausibility, missing fields |
 //! | `explain_invoice_position` | Explain how a billing position was calculated (PositionTrace audit) |

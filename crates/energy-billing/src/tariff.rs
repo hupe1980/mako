@@ -16,6 +16,7 @@
 //! Product::Wallbox(ControllableLoadProduct)     → ControllableLoadProvider (§14a)
 //! Product::Gas(GasProduct)                      → GasProvider
 //! Product::Waerme(HeatProduct)                  → HeatProvider
+//! Product::Wasser(WaterProduct)                 → WaterProvider (Trinkwasser + Abwasser)
 //! Product::Solar(SolarProduct)                  → SolarProvider
 //! Product::Eeg(EegProduct)                      → EegProvider
 //! Product::Einspeisung(EinspeisungProduct)       → EinspeisungProvider
@@ -408,6 +409,59 @@ pub struct HeatProduct {
     pub minimum_invoice_eur_brutto: Option<Decimal>,
 }
 
+/// Legal regime of the Abwasser charge — decides the USt treatment.
+///
+/// Over 90 % of German municipalities levy wastewater as a public-law fee
+/// (Gebühr per KAG-Satzung), which is a hoheitliche Leistung outside the
+/// scope of USt. Privatised operators charge a privatrechtliches Entgelt at
+/// the 19 % Regelsteuersatz instead.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AbwasserRegime {
+    /// Öffentlich-rechtliche Gebühr (KAG-Satzung) — no USt.
+    #[default]
+    PublicLawFee,
+    /// Privatrechtliches Entgelt — 19 % USt.
+    PrivateLawCharge,
+}
+
+/// Municipal drinking-water / wastewater product — WASSER.
+///
+/// Water is not a MaKo commodity — there is no market-communication regime,
+/// no EDIFACT, no BNetzA. The category exists for multi-utility (Stadtwerke)
+/// deployments that bill water alongside energy on the same platform:
+///
+/// - **Trinkwasser** (AVBWasserV / municipal statute): Grundpreis +
+///   Mengenpreis, always at the ermäßigter USt-Satz of 7 %
+///   (§12 Abs. 2 Nr. 1 UStG, Anlage 2 Nr. 34 — water is a foodstuff).
+/// - **Abwasser** (gesplittete Abwassergebühr, mandated by case law —
+///   VGH Baden-Württemberg, 11.03.2010): Schmutzwasser per m³ on the
+///   Frischwassermaßstab minus metered Absetzungen, plus
+///   Niederschlagswasser per m² of sealed surface per year.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WaterProduct {
+    #[serde(default)]
+    pub product_code: Option<String>,
+    /// Trinkwasser Grundpreis (Systempreis, typically by meter size) in EUR/month.
+    #[serde(default)]
+    pub wasser_grundpreis_eur_per_month: Option<Decimal>,
+    /// Trinkwasser Mengenpreis in EUR/m³ (7 % USt).
+    #[serde(default)]
+    pub wasser_mengenpreis_eur_per_m3: Option<Decimal>,
+    /// Schmutzwassergebühr in EUR/m³ (Frischwassermaßstab minus Absetzungen).
+    #[serde(default)]
+    pub schmutzwasser_eur_per_m3: Option<Decimal>,
+    /// Niederschlagswassergebühr in EUR per m² sealed surface per **year**.
+    #[serde(default)]
+    pub niederschlagswasser_eur_per_m2_year: Option<Decimal>,
+    /// USt treatment of the Abwasser positions. Trinkwasser is always 7 %.
+    #[serde(default)]
+    pub abwasser_regime: AbwasserRegime,
+    /// Override for the Trinkwasser USt rate (edge cases only).
+    #[serde(default)]
+    pub mwst_rate_override: Option<Decimal>,
+}
+
 /// Solar PV / Eigenverbrauch / §42b GGV / §21 Abs. 3 Mieterstrom product — SOLAR.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SolarProduct {
@@ -559,6 +613,8 @@ pub enum Product {
     Gas(GasProduct),
     #[serde(rename = "WAERME")]
     Waerme(HeatProduct),
+    #[serde(rename = "WASSER")]
+    Wasser(WaterProduct),
     #[serde(rename = "SOLAR")]
     Solar(SolarProduct),
     #[serde(rename = "EEG")]
@@ -585,6 +641,7 @@ impl Product {
             Self::Wallbox(_) => "WALLBOX",
             Self::Gas(_) => "GAS",
             Self::Waerme(_) => "WAERME",
+            Self::Wasser(_) => "WASSER",
             Self::Solar(_) => "SOLAR",
             Self::Eeg(_) => "EEG",
             Self::Einspeisung(_) => "EINSPEISUNG",
@@ -603,6 +660,7 @@ impl Product {
             Self::Waermepumpe(p) | Self::Wallbox(p) => p.base.product_code.as_deref(),
             Self::Gas(p) => p.product_code.as_deref(),
             Self::Waerme(p) => p.product_code.as_deref(),
+            Self::Wasser(p) => p.product_code.as_deref(),
             Self::Solar(p) => p.product_code.as_deref(),
             Self::Eeg(p) => p.product_code.as_deref(),
             Self::Einspeisung(p) => p.product_code.as_deref(),
@@ -657,7 +715,7 @@ impl Product {
         use crate::providers::{
             ControllableLoadProvider, DynamicElectricityProvider, EegProvider, EinspeisungProvider,
             ElectricityProvider, EmobilityProvider, EnergyShareProvider, GasProvider, HeatProvider,
-            HemsProvider, MwStProvider, ServiceProvider, SolarProvider,
+            HemsProvider, MwStProvider, ServiceProvider, SolarProvider, WaterProvider,
         };
         use std::collections::HashMap;
 
@@ -700,6 +758,15 @@ impl Product {
                 };
                 BillingEngine::new()
                     .add(HeatProvider::new(p.clone()))
+                    .add(MwStProvider::new(mwst))
+            }
+            Self::Wasser(p) => {
+                // Trinkwasser is 7 % (§12 Abs. 2 Nr. 1 UStG); the provider sets
+                // explicit per-position rates, so the engine default only backs
+                // up positions that somehow lack one.
+                let mwst = p.mwst_rate_override.unwrap_or(rust_decimal::dec!(0.07));
+                BillingEngine::new()
+                    .add(WaterProvider::new(p.clone()))
                     .add(MwStProvider::new(mwst))
             }
             Self::Solar(p) => {

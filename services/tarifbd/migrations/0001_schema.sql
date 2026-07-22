@@ -17,12 +17,12 @@ CREATE TABLE products (
     product_code    TEXT    NOT NULL,
     -- Billing calculation template — determines which billingd calculator is invoked
     category        TEXT    NOT NULL CHECK (category IN (
-                        'STROM', 'GAS', 'WAERME', 'SOLAR', 'EEG', 'EINSPEISUNG',
-                        'WAERMEPUMPE', 'WALLBOX', 'HEMS', 'EMOBILITY',
+                        'STROM', 'GAS', 'WAERME', 'WASSER', 'SOLAR', 'EEG',
+                        'EINSPEISUNG', 'WAERMEPUMPE', 'WALLBOX', 'HEMS', 'EMOBILITY',
                         'ENERGIEDIENSTLEISTUNG', 'BUNDLE', 'SHARING'
                     )),
     name            TEXT    NOT NULL,
-    sparte          TEXT,   -- STROM | GAS | WAERME | NULL
+    sparte          TEXT,   -- STROM | GAS | WAERME | WASSER | NULL
     -- Tariff structure: Eintarif | Zweitarif | Mehrtarif
     register_count  TEXT,
     -- Customer segment; NULL = universal
@@ -56,7 +56,7 @@ COMMENT ON TABLE products IS
 
 COMMENT ON COLUMN products.category IS
     'STROM|GAS|WAERME|SOLAR|EEG|EINSPEISUNG|WAERMEPUMPE|WALLBOX|HEMS|EMOBILITY|'
-    'ENERGIEDIENSTLEISTUNG|BUNDLE|SHARING (13 categories; SHARING = §42c Energy Sharing)';
+    'ENERGIEDIENSTLEISTUNG|BUNDLE|SHARING (14 categories; SHARING = §42c Energy Sharing)';
 
 COMMENT ON COLUMN products.energiemix IS
     '§42 EnWG: rubo4e::current::Energiemix COM — CO₂ emissions, energy sources, '

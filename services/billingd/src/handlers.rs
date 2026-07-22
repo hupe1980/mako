@@ -29,7 +29,8 @@ use energy_billing::{
     BillingContext, BillingPeriod, BillingPosition, BillingProvider as _, DynamicInterval,
     EegMeterInput, EmobilityMeterInput, GasMeterInput, GridInput, HemsMeterInput, Invoice,
     InvoiceType, MeterInput, MwStProvider, PositionCategory, Product, Quantities, RegulatoryRates,
-    ServiceMeterInput, SolarMeterInput, WaermeMeterInput, negate_rechnung_json_for_correction,
+    ServiceMeterInput, SolarMeterInput, WaermeMeterInput, WasserMeterInput,
+    negate_rechnung_json_for_correction,
 };
 
 /// Build a VPP settlement through the engine's canonical invoice path.
@@ -218,6 +219,9 @@ pub struct CalculateRequest {
     pub gas_meter: Option<GasMeterInput>,
     /// Fernwärme meter input (WAERME category).
     pub waerme_meter: Option<WaermeMeterInput>,
+    /// Wasser/Abwasser meter + property input (WASSER category).
+    #[serde(default)]
+    pub wasser_meter: Option<WasserMeterInput>,
     /// Solar / Eigenverbrauch input (SOLAR category).
     pub solar_meter: Option<SolarMeterInput>,
     /// EEG / Direktvermarktung feed-in input (EEG / EINSPEISUNG category).
@@ -594,6 +598,9 @@ async fn build_quantities(
         }
         "WAERME" => {
             q.heat = Some(req.waerme_meter.clone().unwrap_or_default());
+        }
+        "WASSER" => {
+            q.wasser = Some(req.wasser_meter.clone().unwrap_or_default());
         }
         "SOLAR" => {
             q.solar = Some(req.solar_meter.clone().unwrap_or_default());
@@ -2442,6 +2449,7 @@ pub async fn post_sammelrechnung(
             rechnungsnummer: Some(format!("{sammel_nr}-{}", entry.malo_id)),
             gas_meter: None,
             waerme_meter: None,
+            wasser_meter: None,
             solar_meter: None,
             eeg_meter: None,
             hems_meter: None,

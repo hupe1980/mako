@@ -239,7 +239,7 @@ pub async fn put_preisblatt(
             .into_response();
     }
 
-    // ── M7: Validate lastvariablePreispositionen (§14a Modul 3, BK6-22-300 Anlage 2 §3) ──
+    // ── Validate lastvariablePreispositionen (§14a Modul 3, BK6-22-300 Anlage 2 §3) ──
     //
     // Validates each element against `rubo4e::current::LastvariablePreisposition`.
     // Rules enforced beyond the BO4E schema:
@@ -420,7 +420,7 @@ pub type PreisblattMessungRepoExt = Arc<PgPreisblattMessungRepository>;
 
 /// Response body for `GET /api/v1/preisblaetter-messung/{msb_mp_id}`.
 ///
-/// ## M5 — typed `zeitvariablePreispositionen`
+/// ## Typed `zeitvariablePreispositionen`
 ///
 /// `zeitvariable_preispositionen` is exposed as a typed `Vec<ZeitvariablePreisposition>`
 /// (deserialized from stored JSONB). This enables consumers (`invoicd` check 4,
@@ -516,7 +516,7 @@ pub async fn get_preisblatt_messung(
                 .cloned()
                 .unwrap_or_default();
 
-            // M5: Deserialize `zeitvariablePreispositionen` as typed
+            // Deserialize `zeitvariablePreispositionen` as typed
             // `Vec<ZeitvariablePreisposition>` for downstream typed consumption.
             let raw_zvp = record
                 .data
@@ -535,7 +535,7 @@ pub async fn get_preisblatt_messung(
                                 msb_mp_id = %msb_mp_id,
                                 error = %e,
                                 "schema drift: stored ZeitvariablePreisposition cannot be \
-                                 deserialised — re-PUT the PreisblattMessung to normalize (M5)"
+                                 deserialised — re-PUT the PreisblattMessung to normalize"
                             );
                         })
                         .ok()
@@ -607,7 +607,7 @@ pub async fn put_preisblatt_messung(
     // ── Basic BO4E schema validation ─────────────────────────────────────────
     // Catches wrong `_typ`, missing required fields, and invalid enum values.
     // `ZeitvariablePreisposition` elements are stored in `_additional` extension
-    // data of `PreisblattMessung` — they are validated separately below (M5).
+    // data of `PreisblattMessung` — they are validated separately below.
     if let Err(e) = serde_json::from_value::<PreisblattMessung>(req.data.clone()) {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -618,7 +618,7 @@ pub async fn put_preisblatt_messung(
             .into_response();
     }
 
-    // ── M5: Full ZeitvariablePreisposition validation ────────────────────────
+    // ── Full ZeitvariablePreisposition validation ────────────────────────
     //
     // The basic `PreisblattMessung` schema check above validates the outer envelope.
     // Now extract `zeitvariablePreispositionen` from the raw JSON and apply

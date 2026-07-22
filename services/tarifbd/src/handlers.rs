@@ -35,7 +35,7 @@ pub const BO4E_VERSION: &str = "v202607.0.0";
 /// For these categories `_typ: "TARIFPREISBLATT"` is required (injected if
 /// absent) and the full BO4E envelope is validated via
 /// `rubo4e::current::Tarifpreisblatt`.  All other categories
-/// (`HEMS`, `EMOBILITY`, `ENERGIEDIENSTLEISTUNG`, `BUNDLE`) use a free-form
+/// (`WASSER`, `HEMS`, `EMOBILITY`, `ENERGIEDIENSTLEISTUNG`, `BUNDLE`) use a free-form
 /// structure — only `tarifpreispositionen` is validated if present.
 const TARIFPREISBLATT_CATEGORIES: &[&str] = &[
     "STROM",
@@ -102,7 +102,7 @@ pub const VALID_PREISTYPEN: &[&str] = &[
 /// | Category | `_typ` injection | BO4E envelope validation |
 /// |---|---|---|
 /// | `STROM`, `GAS`, `WAERME`, `SOLAR`, `EEG`, `EINSPEISUNG`, `WAERMEPUMPE`, `WALLBOX` | ✓ `"TARIFPREISBLATT"` | ✓ via `rubo4e::current::Tarifpreisblatt` |
-/// | `HEMS`, `EMOBILITY`, `ENERGIEDIENSTLEISTUNG`, `BUNDLE` | ✗ | ✗ |
+/// | `WASSER`, `HEMS`, `EMOBILITY`, `ENERGIEDIENSTLEISTUNG`, `BUNDLE` | ✗ | ✗ |
 ///
 /// ## Position validation (all categories)
 ///
@@ -245,6 +245,7 @@ pub fn normalize_tarifpreisblatt(
             // wrong. Only the unambiguous Strom/Gas families are cross-checked.
             let expected = match category {
                 "GAS" => Some(Sparte::Gas),
+                "WASSER" => Some(Sparte::Wasser),
                 "STROM" | "SOLAR" | "EEG" | "EINSPEISUNG" | "WAERMEPUMPE" | "WALLBOX"
                 | "SHARING" => Some(Sparte::Strom),
                 _ => None,

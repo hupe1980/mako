@@ -25,7 +25,9 @@
 //!
 //! ## No float money
 //!
-//! All amounts use `rust_decimal::Decimal` and the `billing::EuroAmount` newtype.
+//! Quantities, rates, and factors are `rust_decimal::Decimal`; every EUR
+//! result is range-checked through the `billing::EuroAmount` newtype
+//! (`Amount<5>`) before it leaves the crate.
 //!
 //! ## Example
 //!

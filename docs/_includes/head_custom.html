@@ -83,7 +83,7 @@
       "@type": "ListItem",
       "position": 2,
       "name": "{{ page.parent }}",
-      "item": "{{ site.url }}{{ site.baseurl }}/{{ page.parent | downcase | replace: ' ', '-' | replace: '&', 'and' }}"
+      "item": "{{ site.url }}{{ site.baseurl }}/{{ page.parent | replace: ' & ', ' ' | downcase | replace: ' ', '-' }}"
     },{
       "@type": "ListItem",
       "position": 3,

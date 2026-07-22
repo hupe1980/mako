@@ -1,11 +1,11 @@
 //! Deterministic invoice risk scoring — the release gate between "calculated"
 //! and "dispatched".
 //!
-//! Best-in-class billing platforms layer their quality assurance: rule-based
-//! validation (the engine's `ValidationBlocked` — an invoice with an
-//! Error-severity violation never exists), statistical baselines, and a
-//! banded risk score that routes analyst attention instead of a binary
-//! pass/fail. This module is that scoring layer — **deterministic and
+//! Quality assurance is layered: rule-based validation (the engine's
+//! `ValidationBlocked` — an invoice with an Error-severity violation never
+//! exists), statistical baselines, and a banded risk score that routes
+//! analyst attention instead of a binary pass/fail. This module is the
+//! scoring layer — **deterministic and
 //! explainable by construction**: every point on the score is a coded
 //! [`RiskFinding`] with a human-readable reason, so no SHAP values are
 //! needed to justify a hold. ML-based detection deliberately lives outside

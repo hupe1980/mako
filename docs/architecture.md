@@ -222,7 +222,7 @@ Each is independently testable and suitable for crates.io publication.
 | `mako-engine` | Event-sourced process runtime | `Workflow`, `EventStore`, `OutboxStore`, `DeadlineStore` |
 | `mako-markt` | Market data domain types + repo traits | `MaloId`, `MeloId`, `MarktpartnerId`, `VersorgungsStatus` |
 | `grid-billing` | NNE/KA/MMM/MSB grid **settlement** engine | `calculate_nne_invoice`, `GridSettlement` (+ `CalculationTrace`, `LegalReference`); `Sparte` drives Gas/Strom refs; `calculate_reversal()`; no rubo4e dep; `into_rechnung()` in service layer |
-| `energy-billing` | Pure multi-product retail energy billing (LF) | `Product` typed enum (12 categories, serde-tagged); `BillingEngine`/`BillingProvider` pipeline; `ControllableLoadProvider` (§14a); `validate()` + `bill_batch()`; `Invoice.warnings` + `§41b` guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label; HT/NT (`billing::TimeOfUsePricing`); block tariffs (`billing::TariffSchedule`); **RLM demand charge** (`leistungspreis_strom_ct_per_kw_month`); **gas §54 exemption**; **historic levy rates**; §41a EPEX; `Invoice::merge()`, `Invoice::allocate_proportionally()`; `eeg` optional feature; no `rubo4e` dep; **191 tests**; zero I/O |
+| `energy-billing` | Pure multi-product retail energy billing (LF) | `Product` typed enum (13 categories, serde-tagged); `BillingEngine`/`BillingProvider` pipeline; `ControllableLoadProvider` (§14a); `validate()` + `bill_batch()`; `Invoice.warnings` + `§41b` guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label; HT/NT (`billing::TimeOfUsePricing`); block tariffs (`billing::TariffSchedule`); **RLM demand charge** (`leistungspreis_strom_ct_per_kw_month`); **gas §54 exemption**; **historic levy rates**; §41a EPEX; `Invoice::merge()`, `Invoice::allocate_proportionally()`; `eeg` optional feature; no `rubo4e` dep; **191 tests**; zero I/O |
 | `eeg-billing` | Pure EEG/KWKG feed-in settlement (NB) | `calculate_settlement`, 9 settlement schemes, §51/§52 rules, `InbetriebnahmeTyp`, proptest invariants, **339 tests** |
 | `metering` | German energy metering domain | `MeterInterval`, `aggregate`, `fill_gaps` / `fill_gaps_with_config` (§ 60 Abs. 2 MsbG — `FillGapsConfig` supports `PriorPeriodAverage`), `gas_m3_to_kwh_hs`, `score_intervals` (Hampel A/B/C/F) |
 | `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
@@ -615,8 +615,11 @@ the same layers across single-purpose daemons around one metered-data spine
 - **No weather ingestion** — Redispatch 2.0 meteorological MSCONS (PID
   13021) is stored as time series; a weather-driven forecaster would join
   the ML service above.
-- **Water is metering-only** — `Sparte::WASSER` reads are stored and
-  validated, but no water tariff, billing, or market process exists.
+- **Water has no market process** — `Sparte::WASSER` reads are stored and
+  validated in `metering`/`edmd`, and multi-utility retail invoicing is
+  covered by the `energy-billing` WASSER category (Trinkwasser +
+  gesplittete Abwassergebühr). There is no water market communication —
+  no EDIFACT, no MaKo processes.
 - **No operator cockpit UI** — every layer is API/MCP-first; obsd and
   portald serve machine-readable projections for whatever frontend the
   operator runs.
@@ -740,6 +743,63 @@ makod (binary)
 - `mako-geli-gas` `geli-gas-stornierung-lf`: Lf-only (44023/44024 inbound as LFN/LFA)
 
 See [PID Reference](./pid-reference.md) for the complete table.
+
+---
+
+## Billing crate family
+
+Four crates, cut by **legal regime and counterparty pair** — not by technique:
+
+| Crate | Regime | Parties | Core |
+|---|---|---|---|
+| [`billing`](https://crates.io/crates/billing) (crates.io) | none — generic | any | `Amount<P>` fixed-point money, `RoundingStrategy`, tariff schedules, proration, penny-exact allocation, period documents |
+| `energy-billing` | §§40–41b EnWG, StromStG, EnergieStG, BEHG | LF → end customer | retail invoices for 13 product categories (incl. municipal WASSER) |
+| `grid-billing` | StromNEV/GasNEV, KAV, MsbG, §§13a/14a EnWG | NB ↔ LF/MSB/ANB | regulated network settlement (NNE/KA/MMM/MSB/AWH, §13a Redispatch-Vergütung) |
+| `eeg-billing` | EEG (2000–2024), KWKG 2023 | NB → Anlagenbetreiber | statutory subsidy settlement, 10 schemes |
+
+The domain crates share **no billing logic with each other** — everything
+reusable (money arithmetic, schedules, allocation) already lives in `billing`.
+That is why there is no `utilities-billing` umbrella crate: merging three
+unrelated regulatory cores would couple their release cadence and feature
+flags while extracting nothing new. Conversely, splitting further (per
+product category, per PID family) would break the invariant each crate
+enforces internally — one legal regime, one warning/trace vocabulary, one
+test corpus per regime.
+
+**Water** has no market-communication regime — no MaKo, no EDIFACT, no
+BNetzA — so it is not a crate but a **product category in `energy-billing`**
+(`WASSER`, like the equally non-MaKo WAERME): Trinkwasser Grundpreis +
+Mengenpreis at 7 % USt (§12 Abs. 2 Nr. 1 UStG, Anlage 2 Nr. 34) and the
+gesplittete Abwassergebühr (Schmutzwasser on the Frischwassermaßstab minus
+metered Absetzungen such as Gartenwasser or Schleppwasser, plus
+Niederschlagswasser per m² sealed surface), with the public-law fee outside
+USt and private-law charges at 19 %. Metering stays in `metering`/`edmd`
+(`Sparte::WASSER`).
+**Telco** is a different industry (TKG) and stays out of this workspace
+entirely; the generic `billing` crate on crates.io is the piece a telco
+biller would reuse.
+
+### Money types — the `Decimal` / `Amount` split
+
+The calculation pipelines run on `rust_decimal::Decimal`; monetary *results*
+pass through `billing::EuroAmount` (= `Amount<5>`, an `i64` scaled by 10⁻⁵):
+
+- **Pipelines need non-money operands** — kWh, kW, months, percentage
+  factors, ct→EUR divisions, pro-rata day fractions. A fixed-point money
+  type cannot represent a quantity or a factor, and forcing every
+  intermediate product through `Amount<P>` would demand a precision
+  commitment at each step. `Decimal` is exact (28 significant digits, no
+  binary float), so nothing is lost in the pipeline.
+- **Results must be representable money.** Every EUR amount that leaves a
+  billing crate is rounded and range-checked through `EuroAmount` — the
+  settle functions in `grid-billing` (incl. `redispatch_verguetung`), the
+  position builder in `eeg-billing`, and the tax lines in `energy-billing`
+  all refuse or reject values outside the `Amount<5>` range instead of
+  letting a downstream consumer truncate them.
+- **Statutory-precision paths use `Amount<5>` directly.** Where the
+  regulation fixes the arithmetic unit — §41a EPEX hourly pricing in
+  `energy-billing` — the computation itself runs in `Amount<5>` with the
+  canonical kaufmännische `RoundingStrategy::MidpointAwayFromZero`.
 
 ---
 

@@ -18,7 +18,7 @@ MSRV 1.94
 |---|---|
 | **No I/O** | All inputs are passed as arguments. No database calls, no HTTP. |
 | **No async** | Synchronous — wraps cheaply in `tokio::task::spawn_blocking`. |
-| **No float money** | All amounts use `billing::EuroAmount` (i64 × 10⁻⁵ EUR) internally. |
+| **No float money** | Amounts are computed in `rust_decimal::Decimal`; every EUR result is rounded and range-checked through `billing::EuroAmount` (i64 × 10⁻⁵ EUR). |
 | **Deterministic** | Same inputs always produce the same output. Pure functions. |
 | **EEG-version-aware** | `EegGesetz` enum drives all version-specific rule dispatch. |
 | **Domain-rich** | Multiple domain modules covering settlement, metering, degression, sanctions, repowering. |
@@ -73,6 +73,7 @@ receives the already-resolved AW from the caller.
 | `Eigenverbrauch` | §21 Abs. 3 EEG | No EEG feed-in remuneration is calculated. |
 | `FlexibilityPremium` | §50b EEG 2023 | `kwh × (verguetung + flex_praemie) / 100` |
 | `FlexibilitySurcharge` | §50a EEG 2023 | `kw × rate / 12` (monthly capacity payment) |
+| `SonstigeDirektvermarktung` | §21a EEG | EUR 0 — direct third-party sale, no NB payment; period recorded in settlement history |
 
 ### §20 Abs. 3 EEG 2023 — Managementprämie
 

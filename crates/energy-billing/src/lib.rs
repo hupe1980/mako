@@ -52,6 +52,7 @@
 //! | `WALLBOX` | `ControllableLoadProvider` (§14a) | §14a EnWG |
 //! | `GAS` | `GasProvider` | §41 EnWG |
 //! | `WAERME` | `HeatProvider` | §41 EnWG |
+//! | `WASSER` | `WaterProvider` | AVBWasserV; §12 Abs. 2 Nr. 1 UStG (7 %); gesplittete Abwassergebühr |
 //! | `SOLAR` | `SolarProvider` | §21 Abs. 3/§42a EEG 2023 |
 //! | `EEG` | `EegProvider` (→ eeg-billing) | §§20–21 EEG 2023 |
 //! | `EINSPEISUNG` | `EinspeisungProvider` | §20 EEG 2023 |
@@ -94,11 +95,11 @@ pub use position::{
 };
 pub use provider::{BillingProvider, EpexSpotSource, SpotPriceSource};
 pub use quantities::{
-    Abschlagsplan, AbschlagsplanEntry, DynamicInterval, EegMeterInput, EmobilityMeterInput,
-    EnergyShareMeterInput, GasMeterInput, GgvNutzungsplan, GgvNutzungsplanEntry, GgvSolarInput,
-    GridInput, HemsMeterInput, MeterInput, MeteringMode, ProsumerMeterInput, Quantities,
-    Sect14aModul2Verbrauch, Sect41aAnnualComparison, ServiceMeterInput, SolarMeterInput,
-    WaermeMeterInput,
+    Abschlagsplan, AbschlagsplanEntry, Absetzung, AbsetzungsGrund, DynamicInterval, EegMeterInput,
+    EmobilityMeterInput, EnergyShareMeterInput, GasMeterInput, GgvNutzungsplan,
+    GgvNutzungsplanEntry, GgvSolarInput, GridInput, HemsMeterInput, MeterInput, MeteringMode,
+    ProsumerMeterInput, Quantities, Sect14aModul2Verbrauch, Sect41aAnnualComparison,
+    ServiceMeterInput, SolarMeterInput, WaermeMeterInput, WasserMeterInput,
 };
 pub use rates::{
     BEHG_CO2_FACTOR_H_GAS, BEHG_CO2_FACTOR_L_GAS, RegulatoryRates, RoundMoney,
@@ -108,17 +109,17 @@ pub use rates::{
 
 // Typed Product enum + per-category product structs
 pub use tariff::{
-    BlockTierInput, ControllableLoadProduct, EegProduct, EinspeisungProduct, ElectricityProduct,
-    EmobilityProduct, EnergieQuellen, GasProduct, HeatProduct, HemsProduct, IndexedPriceConfig,
-    Product, SeasonalPriceOverride, ServiceProduct, SharingProduct, SolarProduct,
-    StromsteuerBefreiung,
+    AbwasserRegime, BlockTierInput, ControllableLoadProduct, EegProduct, EinspeisungProduct,
+    ElectricityProduct, EmobilityProduct, EnergieQuellen, GasProduct, HeatProduct, HemsProduct,
+    IndexedPriceConfig, Product, SeasonalPriceOverride, ServiceProduct, SharingProduct,
+    SolarProduct, StromsteuerBefreiung, WaterProduct,
 };
 
 // Concrete providers
 pub use providers::{
     ControllableLoadProvider, DynamicElectricityProvider, EegProvider, EinspeisungProvider,
     ElectricityProvider, EmobilityProvider, EnergyShareProvider, GasProvider, HeatProvider,
-    HemsProvider, MwStProvider, ServiceProvider, SolarProvider,
+    HemsProvider, MwStProvider, ServiceProvider, SolarProvider, WaterProvider,
 };
 
 // The arithmetic core — `Amount<P>` fixed-point money, the canonical

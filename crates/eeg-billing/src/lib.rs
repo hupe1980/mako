@@ -2,10 +2,11 @@
 //!
 //! Implements all settlement models defined in **EEG** (multiple versions 2000–2024)
 //! and **KWKG 2023**. Zero I/O, zero async — every function is deterministic
-//! and synchronous. No floating-point money: all monetary arithmetic uses
-//! [`billing::EuroAmount`] (`i64 × 10⁻⁵ EUR`) internally.
+//! and synchronous. No floating-point money: amounts are computed in
+//! `rust_decimal::Decimal`, and every EUR result is rounded and
+//! range-checked through [`billing::EuroAmount`] (`i64 × 10⁻⁵ EUR`).
 //!
-//! # Settlement schemes (9)
+//! # Settlement schemes (10)
 //!
 //! | `SettlementScheme` | Formula | Legal basis |
 //! |---|---|---|
@@ -18,6 +19,8 @@
 //! | `KwkSurcharge` | `eligible_kwh × rate / 100` (hour-limit cap) | §7 KWKG 2023 |
 //! | `FlexibilityPremium` | Vergütung + `kwh × flex_praemie_ct / 100` | §50b EEG 2023 (bestehende Anlagen) |
 //! | `FlexibilitySurcharge` | `kw × rate / 12` (monthly capacity payment) | §50a EEG 2023 (neue Anlagen) |
+//! | `TemporaryFeedInTariff` | `kwh × verguetungssatz_ct / 100` (reduced Ausfallvergütung) | §21 Abs. 1 Nr. 2 EEG 2023 |
+//! | `SonstigeDirektvermarktung` | EUR 0 — revenue on the open market, no NB payment | §21a EEG |
 //!
 //! # One formula — all EEG versions (2000–2024)
 //!

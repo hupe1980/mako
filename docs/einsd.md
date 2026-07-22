@@ -6,7 +6,7 @@ parent: Services
 mermaid: true
 description: >
   einsd operator guide — Einspeiser Registry + EEG/KWKG Settlement daemon.
-  9 settlement schemes (SettlementScheme + TariffSource), EEG version-aware Bestandsschutz,
+  10 settlement schemes (SettlementScheme + TariffSource), EEG version-aware Bestandsschutz,
   §20 Abs. 3 Managementprämie (see implementation notes), §23a quarterly degression,
   §36k Wind Korrekturfaktor, §42b GGV multi-meter Messkonzept,
   §51 Negativpreisregel, §52 Pflichtzahlungen + §52 Abs. 6 Netting,
@@ -18,7 +18,7 @@ description: >
 
 `einsd` is the **Einspeiser Registry and EEG/KWKG Settlement daemon**. It manages the full
 lifecycle of decentralised renewable feed-in plants under the EEG (all versions 2000–2023+)
-and CHP plants under the KWKG, covering **9 settlement schemes** and all generation technology
+and CHP plants under the KWKG, covering **10 settlement schemes** and all generation technology
 types.
 
 Settlement arithmetic is implemented in the separate
@@ -32,7 +32,7 @@ graph TB
     Operator["NB Operator / ERP"]
     edmd["edmd :8380\nMSCONS Einspeisemenge\nauto-fetch"]
     einsd["einsd :9180"]
-    eeg_billing["eeg-billing crate\n9 settlement schemes\n§20 Abs.3 Managementprämie\n§23a degression · §36k wind\n§51b biogas Ausschreibung\n§42b GGV Messkonzept\n§52 Abs.6 netting\nSettlementPeriodState · InbetriebnahmeTyp\n339 tests · no I/O"]
+    eeg_billing["eeg-billing crate\n10 settlement schemes\n§20 Abs.3 Managementprämie\n§23a degression · §36k wind\n§51b biogas Ausschreibung\n§42b GGV Messkonzept\n§52 Abs.6 netting\nSettlementPeriodState · InbetriebnahmeTyp\n339 tests · no I/O"]
     db[("PostgreSQL\n8 migrations\neeg_anlagen · settlement_receipts\nsettlement_receipt_history\nsettlement_state_transitions\nsect53b_reductions · sect54_reductions\nepex_monthly_prices · eeg_verguetungssaetze")]
     erp["ERP webhook\nCloudEvents 1.0"]
     agentd["agentd :9580\neeg-agent\n(all de.eeg.* events)"]

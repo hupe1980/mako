@@ -562,13 +562,13 @@ async fn main() -> anyhow::Result<()> {
                 "/api/v1/steuerbare-ressourcen/{sr_id}",
                 get(get_steuerbare_ressource).put(put_steuerbare_ressource),
             )
-            // M1: typed Konfigurationsprodukte sub-resource — used by makod before
+            // typed Konfigurationsprodukte sub-resource — used by makod before
             // dispatching wim.steuerungsauftrag.bestaetigen to validate produktcode
             .route(
                 "/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte",
                 get(get_konfigurationsprodukte).put(put_konfigurationsprodukte),
             )
-            // M1: individual product DELETE by produktcode
+            // individual product DELETE by produktcode
             .route(
                 "/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte/{produktcode}",
                 axum::routing::delete(delete_konfigurationsprodukt),
@@ -620,7 +620,7 @@ async fn main() -> anyhow::Result<()> {
                 "/api/v1/geraete/{geraet_id}",
                 axum::routing::put(put_geraet),
             )
-            // ZaehlzeitRegister + ZaehlzeitSaison (M4 — iMSys TOU register definitions)
+            // ZaehlzeitRegister + ZaehlzeitSaison (iMSys TOU register definitions)
             .route(
                 "/api/v1/zaehler/{zaehler_id}/register",
                 get(list_zaehler_register).put(put_zaehler_register),
@@ -655,7 +655,7 @@ async fn main() -> anyhow::Result<()> {
             .layer(Extension(InboundWebhookSecret(inbound_secret)))
             // Pool extension for idempotency check in ingest_event
             .layer(Extension(pool.clone()))
-            // Preisblatt repository extension (M4)
+            // Preisblatt repository extension
             .layer(Extension(preisblatt_repo))
             // PreisblattMessung repository extension (B5 — MSB metering tariffs)
             .layer(Extension(preisblatt_messung_repo))
@@ -687,11 +687,11 @@ async fn main() -> anyhow::Result<()> {
             .layer(Extension(lz_repo))
             // Device registry extension (B3)
             .layer(Extension(device_repo))
-            // ZaehlzeitRegister + ZaehlzeitSaison (M4 — iMSys TOU)
+            // ZaehlzeitRegister + ZaehlzeitSaison (iMSys TOU)
             .layer(Extension(zaehzeit_repo))
             // event_tx extension for handlers that emit CloudEvents without AppState
             .layer(Extension(state.event_tx.clone()))
-            // Cedar ABAC enforcer (M6)
+            // Cedar ABAC enforcer
             .layer(Extension(cedar))
             // Tenant GLN for handlers without AppState access (e.g. preisblatt)
             .layer(Extension(TenantGln(cfg.makod.tenant.clone())))
@@ -699,7 +699,7 @@ async fn main() -> anyhow::Result<()> {
             .layer(Extension(http.clone()))
             // Limit request bodies to 2 MiB to guard against accidental large payloads.
             .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
-            // MCP server (M7)
+            // MCP server
             .merge(marktd::mcp_server::router(mcp_state, shutdown.clone()));
 
     // ── Listen ────────────────────────────────────────────────────────────────

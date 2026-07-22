@@ -1,6 +1,6 @@
 [package]
 name         = "energy-billing"
-description  = "Pure multi-product retail energy billing for German markets. STROM, GAS, WAERME, SOLAR, EEG, EINSPEISUNG, §14a WAERMEPUMPE/WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, §41a EPEX dynamic. Regulatory rates: §3 StromStG, §2 EnergieStG, BEHG CO₂. BO4E Rechnung JSON. Zero I/O, zero async, no float money."
+description  = "Pure multi-product retail utility billing for German markets. STROM, GAS, WAERME, WASSER (Trinkwasser + gesplittete Abwassergebühr), SOLAR, EEG, EINSPEISUNG, §14a WAERMEPUMPE/WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, §41a EPEX dynamic. Regulatory rates: §3 StromStG, §2 EnergieStG, BEHG CO₂. BO4E Rechnung JSON. Zero I/O, zero async, no float money."
 version.workspace      = true
 authors.workspace      = true
 edition.workspace      = true

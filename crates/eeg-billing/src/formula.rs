@@ -9,13 +9,19 @@ use crate::scheme::SettlementScheme;
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-/// Validate and round a settlement amount to 5 decimal places via [`EuroAmount`].
+/// Round a settlement amount to 5 decimal places via [`EuroAmount`].
 ///
-/// Returns `Decimal::ZERO` on overflow (> ~92 million EUR) and logs the offending value.
+/// # Panics
+///
+/// Panics when the amount exceeds the `EuroAmount` range (≈ 9.2 × 10¹³ EUR).
+/// This is the same contract as the `Decimal` arithmetic that produces the
+/// amount — it panics on overflow one step earlier. No physical EEG
+/// settlement can reach this range; reaching it means the input data is
+/// corrupt, and a silently altered amount would be worse than the panic.
 fn validated_eur(d: Decimal) -> Decimal {
     EuroAmount::checked_from_decimal(d)
         .map(billing::EuroAmount::into_decimal)
-        .unwrap_or(Decimal::ZERO)
+        .unwrap_or_else(|_| panic!("settlement amount {d} EUR exceeds the EuroAmount range"))
 }
 
 /// Build a single [`SettlePosition`] from its components.

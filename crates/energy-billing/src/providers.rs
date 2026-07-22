@@ -18,8 +18,9 @@ use crate::position::{
 use crate::provider::BillingProvider;
 use crate::quantities::{GridInput, Quantities};
 use crate::tariff::{
-    ControllableLoadProduct, EegProduct, EinspeisungProduct, ElectricityProduct, EmobilityProduct,
-    GasProduct, HeatProduct, HemsProduct, ServiceProduct, SharingProduct, SolarProduct,
+    AbwasserRegime, ControllableLoadProduct, EegProduct, EinspeisungProduct, ElectricityProduct,
+    EmobilityProduct, GasProduct, HeatProduct, HemsProduct, ServiceProduct, SharingProduct,
+    SolarProduct, WaterProduct,
 };
 
 // ── ElectricityProvider ───────────────────────────────────────────────────────
@@ -1555,6 +1556,196 @@ impl BillingProvider for HeatProvider {
                 }
             }
         }
+        Ok(positions)
+    }
+}
+
+// ── WaterProvider ─────────────────────────────────────────────────────────────
+
+/// WASSER billing provider — Trinkwasser + gesplittete Abwassergebühr.
+///
+/// Positions and their USt treatment:
+///
+/// | Position | Base | USt |
+/// |---|---|---|
+/// | Grundpreis Trinkwasser | months × EUR/month | 7 % (§12 Abs. 2 Nr. 1 UStG, Anlage 2 Nr. 34) |
+/// | Mengenpreis Trinkwasser | frischwasser m³ × EUR/m³ | 7 % |
+/// | Schmutzwassergebühr | (frischwasser − Absetzungen) m³ × EUR/m³ | none (public-law fee) or 19 % (private charge) |
+/// | Niederschlagswassergebühr | versiegelte Fläche m² × EUR/m²/a, pro-rated | same as Schmutzwasser |
+///
+/// Absetzungen (Gartenwasser, Schleppwasser, Verdunstung, …) reduce only the
+/// Schmutzwasser volume — the drinking water that fed them was delivered and
+/// stays billed. Each Absetzung is shown as a 0-EUR Info position so the
+/// deduction is auditable on the invoice.
+pub struct WaterProvider {
+    product: WaterProduct,
+}
+
+impl WaterProvider {
+    pub fn new(product: WaterProduct) -> Self {
+        Self { product }
+    }
+}
+
+impl BillingProvider for WaterProvider {
+    fn validate_warnings(
+        &self,
+        _ctx: &BillingContext,
+        quantities: &Quantities,
+    ) -> Vec<BillingWarning> {
+        let mut w = Vec::new();
+        let meter = quantities.wasser.clone().unwrap_or_default();
+        let p = &self.product;
+
+        if !meter.absetzungen.is_empty() && p.schmutzwasser_eur_per_m3.is_none() {
+            w.push(BillingWarning {
+                code: "ABSETZUNG_OHNE_SCHMUTZWASSERPREIS",
+                severity: WarningSeverity::Warning,
+                message: "Absetzungen übermittelt, aber kein Schmutzwasserpreis im Tarif — \
+                          die Absetzung hat keine Wirkung"
+                    .to_owned(),
+            });
+        }
+        if p.niederschlagswasser_eur_per_m2_year.is_some() && meter.versiegelte_flaeche_m2.is_none()
+        {
+            w.push(BillingWarning {
+                code: "NIEDERSCHLAGSWASSER_OHNE_FLAECHE",
+                severity: WarningSeverity::Warning,
+                message: "Niederschlagswasserpreis im Tarif, aber keine versiegelte Fläche \
+                          übermittelt — gesplittete Abwassergebühr unvollständig"
+                    .to_owned(),
+            });
+        }
+        if meter.absetzung_total_m3() > meter.frischwasser_m3 {
+            w.push(BillingWarning {
+                code: "ABSETZUNG_UEBERSTEIGT_FRISCHWASSER",
+                severity: WarningSeverity::Error,
+                message: format!(
+                    "Absetzungen ({} m³) übersteigen den Frischwasserbezug ({} m³) — \
+                     Zählerstände prüfen",
+                    meter.absetzung_total_m3(),
+                    meter.frischwasser_m3
+                ),
+            });
+        }
+        w
+    }
+
+    fn bill(
+        &self,
+        _ctx: &BillingContext,
+        quantities: &Quantities,
+        _prior: &[BillingPosition],
+    ) -> Result<Vec<BillingPosition>, EngineError> {
+        let meter = quantities.wasser.clone().unwrap_or_default();
+        let p = &self.product;
+        let mut positions: Vec<BillingPosition> = Vec::new();
+        let months = meter.months.unwrap_or(dec!(1));
+
+        let absetzung_m3 = meter.absetzung_total_m3();
+        if absetzung_m3 > meter.frischwasser_m3 {
+            return Err(EngineError::ValidationBlocked {
+                warnings: self.validate_warnings(_ctx, quantities),
+            });
+        }
+
+        let trinkwasser_rate = p.mwst_rate_override.unwrap_or(dec!(0.07));
+        // Public-law Gebühr is hoheitlich — outside the scope of USt. The
+        // explicit zero keeps the position out of every MwSt bucket.
+        let abwasser_rate = match p.abwasser_regime {
+            AbwasserRegime::PublicLawFee => Decimal::ZERO,
+            AbwasserRegime::PrivateLawCharge => dec!(0.19),
+        };
+
+        if let Some(gp) = p.wasser_grundpreis_eur_per_month {
+            let mut pos = BillingPosition::debit(
+                "Grundpreis Trinkwasser",
+                months,
+                "Monate",
+                gp,
+                PositionCategory::Commodity,
+            )
+            .with_legal_basis("AVBWasserV")
+            .with_tag("wasser");
+            pos.applicable_tax_rate = Some(trinkwasser_rate);
+            positions.push(pos);
+        }
+
+        if let Some(mp) = p.wasser_mengenpreis_eur_per_m3
+            && meter.frischwasser_m3 > Decimal::ZERO
+        {
+            let mut pos = BillingPosition::debit(
+                "Mengenpreis Trinkwasser",
+                meter.frischwasser_m3,
+                "m³",
+                mp,
+                PositionCategory::Commodity,
+            )
+            .with_legal_basis("§12 Abs. 2 Nr. 1 UStG i. V. m. Anlage 2 Nr. 34 (7 % USt)")
+            .with_tag("wasser");
+            pos.applicable_tax_rate = Some(trinkwasser_rate);
+            positions.push(pos);
+        }
+
+        if let Some(sw) = p.schmutzwasser_eur_per_m3 {
+            let schmutzwasser_m3 = meter.frischwasser_m3 - absetzung_m3;
+            if schmutzwasser_m3 > Decimal::ZERO {
+                let mut pos = BillingPosition::debit(
+                    "Schmutzwassergebühr",
+                    schmutzwasser_m3,
+                    "m³",
+                    sw,
+                    PositionCategory::Fee,
+                )
+                .with_legal_basis("Gesplittete Abwassergebühr (KAG-Satzung, Frischwassermaßstab)")
+                .with_tag("wasser")
+                .with_tag("abwasser");
+                pos.applicable_tax_rate = Some(abwasser_rate);
+                pos.trace.formula = format!(
+                    "({} m³ Frischwasser − {} m³ Absetzungen) × {} EUR/m³",
+                    meter.frischwasser_m3, absetzung_m3, sw
+                );
+                positions.push(pos);
+            }
+
+            // One auditable 0-EUR Info position per Absetzung.
+            for a in &meter.absetzungen {
+                let mut pos = BillingPosition::debit(
+                    format!("Absetzung {} (nicht eingeleitet)", a.grund.label()),
+                    a.m3,
+                    "m³",
+                    Decimal::ZERO,
+                    PositionCategory::Info,
+                )
+                .with_legal_basis("Absetzung nicht eingeleiteter Wassermengen (KAG-Satzung)")
+                .with_tag("wasser")
+                .with_tag("abwasser");
+                pos.applicable_tax_rate = Some(Decimal::ZERO);
+                positions.push(pos);
+            }
+        }
+
+        if let (Some(nsw), Some(flaeche)) = (
+            p.niederschlagswasser_eur_per_m2_year,
+            meter.versiegelte_flaeche_m2,
+        ) && flaeche > Decimal::ZERO
+        {
+            let mut pos = BillingPosition::debit(
+                "Niederschlagswassergebühr",
+                flaeche,
+                "m²",
+                nsw / dec!(12) * months,
+                PositionCategory::Fee,
+            )
+            .with_legal_basis("Gesplittete Abwassergebühr (KAG-Satzung, Flächenmaßstab)")
+            .with_tag("wasser")
+            .with_tag("abwasser");
+            pos.applicable_tax_rate = Some(abwasser_rate);
+            pos.trace.formula =
+                format!("{flaeche} m² versiegelte Fläche × {nsw} EUR/m²/a × {months}/12 Monate");
+            positions.push(pos);
+        }
+
         Ok(positions)
     }
 }

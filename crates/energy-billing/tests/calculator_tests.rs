@@ -6,11 +6,12 @@
 //! Run: `cargo test -p energy-billing --test calculator_tests`
 
 use energy_billing::{
-    AbschlagDeduction, BillingContext, BillingEngine, BillingPeriod, DynamicInterval,
-    EegMeterInput, ElectricityProvider, EmobilityMeterInput, GasMeterInput, GasProvider, GridInput,
-    HemsMeterInput, InvoiceType, MeterInput, MeteringMode, MwStProvider, PositionCategory, Product,
-    Quantities, RegulatoryRates, Sect41aAnnualComparison, ServiceMeterInput, SolarMeterInput,
-    WaermeMeterInput, behg_ct_per_kwh_for_year,
+    AbschlagDeduction, Absetzung, AbsetzungsGrund, BillingContext, BillingEngine, BillingPeriod,
+    DynamicInterval, EegMeterInput, ElectricityProvider, EmobilityMeterInput, GasMeterInput,
+    GasProvider, GridInput, HemsMeterInput, InvoiceType, MeterInput, MeteringMode, MwStProvider,
+    PositionCategory, Product, Quantities, RegulatoryRates, Sect41aAnnualComparison,
+    ServiceMeterInput, SolarMeterInput, WaermeMeterInput, WasserMeterInput,
+    behg_ct_per_kwh_for_year,
 };
 use rust_decimal::Decimal;
 use rust_decimal::dec;
@@ -315,6 +316,146 @@ fn gas_brennwert_conversion_equivalent_to_kwh_hs() {
         r1.brutto_eur, r2.brutto_eur,
         "Brennwert and kwh_hs must be equivalent"
     );
+}
+
+// ── Wasser ────────────────────────────────────────────────────────────────────
+
+fn wasser_tariff() -> Product {
+    j(r#"{
+        "category":"WASSER",
+        "wasser_grundpreis_eur_per_month": 8.50,
+        "wasser_mengenpreis_eur_per_m3": 2.10,
+        "schmutzwasser_eur_per_m3": 2.80,
+        "niederschlagswasser_eur_per_m2_year": 1.20
+    }"#)
+}
+
+fn wasser_q(m: WasserMeterInput) -> Quantities {
+    Quantities {
+        wasser: Some(m),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn wasser_trinkwasser_carries_7_pct_and_public_abwasser_no_ust() {
+    // 30 m³ freshwater, 100 m² sealed surface, one month, public-law fee.
+    let inv = bill(
+        &wasser_tariff(),
+        wasser_q(WasserMeterInput {
+            frischwasser_m3: dec!(30),
+            versiegelte_flaeche_m2: Some(dec!(100)),
+            months: Some(dec!(1)),
+            ..Default::default()
+        }),
+    );
+    // Netto: Grundpreis 8.50 + Mengenpreis 30×2.10=63.00 + Schmutzwasser
+    // 30×2.80=84.00 + Niederschlagswasser 100×1.20/12=10.00 → 165.50.
+    assert_eq!(inv.netto_eur, dec!(165.50));
+    // USt only on the Trinkwasser block: 7 % × (8.50 + 63.00) = 5.005.
+    assert_eq!(inv.mwst_eur.round_dp(3), dec!(5.005));
+    // Exactly one 7 % tax position and no 19 % position.
+    let tax: Vec<_> = inv
+        .positions
+        .iter()
+        .filter(|p| p.category == PositionCategory::Tax)
+        .collect();
+    assert_eq!(tax.len(), 1, "public-law Abwasser must not create USt");
+}
+
+#[test]
+fn wasser_absetzung_reduces_schmutzwasser_only() {
+    // 30 m³ freshwater with 8 m³ garden + 2 m³ Schleppwasser deductions:
+    // Trinkwasser stays at 30 m³, Schmutzwasser drops to 20 m³.
+    let base = bill(
+        &wasser_tariff(),
+        wasser_q(WasserMeterInput {
+            frischwasser_m3: dec!(30),
+            months: Some(dec!(1)),
+            ..Default::default()
+        }),
+    );
+    let deducted = bill(
+        &wasser_tariff(),
+        wasser_q(WasserMeterInput {
+            frischwasser_m3: dec!(30),
+            absetzungen: vec![
+                Absetzung {
+                    m3: dec!(8),
+                    grund: AbsetzungsGrund::Gartenwasser,
+                },
+                Absetzung {
+                    m3: dec!(2),
+                    grund: AbsetzungsGrund::Schleppwasser,
+                },
+            ],
+            months: Some(dec!(1)),
+            ..Default::default()
+        }),
+    );
+    // 10 m³ × 2.80 EUR/m³ less Schmutzwasser; Trinkwasser unchanged.
+    assert_eq!(base.netto_eur - deducted.netto_eur, dec!(28.00));
+    // Both Absetzungen are visible as 0-EUR Info positions.
+    let infos: Vec<_> = deducted
+        .positions
+        .iter()
+        .filter(|p| p.category == PositionCategory::Info)
+        .collect();
+    assert_eq!(infos.len(), 2);
+    assert!(
+        infos
+            .iter()
+            .any(|p| p.description.contains("Schleppwasser"))
+    );
+}
+
+#[test]
+fn wasser_private_regime_taxes_abwasser_at_19_pct() {
+    let tariff = j(r#"{
+        "category":"WASSER",
+        "wasser_mengenpreis_eur_per_m3": 2.00,
+        "schmutzwasser_eur_per_m3": 3.00,
+        "abwasser_regime": "PRIVATE_LAW_CHARGE"
+    }"#);
+    let inv = bill(
+        &tariff,
+        wasser_q(WasserMeterInput {
+            frischwasser_m3: dec!(10),
+            months: Some(dec!(1)),
+            ..Default::default()
+        }),
+    );
+    // 7 % on 20.00 Trinkwasser = 1.40; 19 % on 30.00 Abwasser = 5.70.
+    assert_eq!(inv.mwst_eur, dec!(7.10));
+}
+
+#[test]
+fn wasser_absetzung_exceeding_frischwasser_blocks_billing() {
+    let (f, t) = period();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        lf_mp_id: "9900000000001".to_owned(),
+        rechnungsnummer: "TEST".to_owned(),
+        period: BillingPeriod::new(f, t).unwrap(),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates_2026(),
+        ..Default::default()
+    };
+    let q = wasser_q(WasserMeterInput {
+        frischwasser_m3: dec!(5),
+        absetzungen: vec![Absetzung {
+            m3: dec!(6),
+            grund: AbsetzungsGrund::Gartenwasser,
+        }],
+        months: Some(dec!(1)),
+        ..Default::default()
+    });
+    // An Absetzung above the freshwater intake is a meter-reading error —
+    // billing on it would under-charge the sewage fee unverifiably.
+    wasser_tariff()
+        .build_engine(&GridInput::default(), &rates_2026())
+        .bill(ctx, &q)
+        .expect_err("Absetzung > Frischwasser must block the run");
 }
 
 // ── Wärme ─────────────────────────────────────────────────────────────────────

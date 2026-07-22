@@ -133,9 +133,9 @@ pub struct MakodConfig {
     pub base_url: String,
     /// Bearer token / API key.  Use `"env:MAKOD_API_KEY"` for env-var resolution.
     pub api_key: String,
-    /// Tenant identifier — the operator's primary MP-ID string
-    /// (BDEW-Codenummer starting with 99). Used as the `tenant_gln` in
-    /// outbound CloudEvents source URNs.
+    /// Tenant identifier — data-isolation key written to every database row.
+    /// Typically the operator's BDEW- or DVGW-Codenummer, but any stable
+    /// unique string is valid. Also used in outbound CloudEvents source URNs.
     pub tenant: String,
 }
 

@@ -1,7 +1,7 @@
 //! Handlers for device registry endpoints:
 //! - `GET|PUT /api/v1/steuerbare-ressourcen/{sr_id}` (B4b)
-//! - `GET|PUT|DELETE /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte` (M1)
-//! - `DELETE /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte/{produktcode}` (M1)
+//! - `GET|PUT|DELETE /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte`
+//! - `DELETE /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte/{produktcode}`
 //! - `GET|PUT /api/v1/technische-ressourcen/{tr_id}` (B9)
 //! - `GET /api/v1/malos/{malo_id}/technische-ressourcen` (B9)
 //! - `GET /api/v1/melos/{melo_id}/zaehler` (B3)
@@ -72,7 +72,7 @@ where
 
 pub type DeviceRepoExt = Arc<PgDeviceRepository>;
 
-// ── Response DTOs (M6 typed Zaehler/Geraet) ──────────────────────────────────
+// ── Response DTOs (typed Zaehler/Geraet) ─────────────────────────────────────
 
 /// Typed API response for a `Zaehler` (meter) record.
 ///
@@ -247,7 +247,7 @@ pub async fn put_steuerbare_ressource(
 /// Returns the contracted iMS control products (`Vec<Konfigurationsprodukt>`)
 /// for the given `SteuerbareRessource`.
 ///
-/// Used by `makod` before dispatching `wim.steuerungsauftrag.bestaetigen` (M1):
+/// Used by `makod` before dispatching `wim.steuerungsauftrag.bestaetigen`:
 /// the MSB MUST only confirm a Steuerungsauftrag for products that are actually
 /// under contract.  An uncontracted `produktcode` → reject with ablehnen.
 ///
@@ -259,7 +259,7 @@ pub async fn put_steuerbare_ressource(
 ///
 /// Each element is deserialized from JSONB and re-serialized as a canonical
 /// `rubo4e::current::Konfigurationsprodukt`.  Stored JSONB that no longer
-/// matches the schema (e.g. from a pre-M1 manual write) is silently filtered
+/// matches the schema (e.g. from a legacy manual write) is silently filtered
 /// out and reported in the `schema_drift` counter.
 pub async fn get_konfigurationsprodukte(
     Extension(repo): Extension<SrRepoExt>,
@@ -320,7 +320,7 @@ pub async fn get_konfigurationsprodukte(
 ///
 /// Atomically replace the contracted iMS control products
 /// (`Vec<Konfigurationsprodukt>`) for an existing `SteuerbareRessource`
-/// (M1 — §14a Modul 3, BK6-24-174 §4.3).
+/// (§14a Modul 3, BK6-24-174 §4.3).
 ///
 /// ## Validation (BK6-24-174 §4.3)
 ///
@@ -585,7 +585,7 @@ pub async fn put_zaehler(
     let eichung_bis = req.eichung_bis.as_deref().and_then(|s| parse_date(s).ok());
     let mut data = req.data;
     inject_bo4e_typ(&mut data, "ZAEHLER");
-    // M6 hard cut: validate schema on write.
+    // Hard cut: validate schema on write.
     let canonical_data = match validate_and_normalise::<Zaehler>(data, "ZAEHLER") {
         Ok(v) => v,
         Err((status, body)) => return (status, Json(body)).into_response(),
@@ -729,7 +729,7 @@ pub async fn put_geraet(
 
     let mut data = req.data;
     inject_bo4e_typ(&mut data, "GERAET");
-    // M6 hard cut: validate schema on write.
+    // Hard cut: validate schema on write.
     let canonical_data = match validate_and_normalise::<Geraet>(data, "GERAET") {
         Ok(v) => v,
         Err((status, body)) => return (status, Json(body)).into_response(),
@@ -1152,7 +1152,7 @@ pub async fn list_technische_ressourcen_by_malo(
     }
 }
 
-// ── ZaehlzeitRegister + ZaehlzeitSaison (M4 — iMSys TOU) ────────────────────
+// ── ZaehlzeitRegister + ZaehlzeitSaison (iMSys TOU) ─────────────────────────
 
 pub type ZaehlzeitRepoExt = Arc<crate::pg::PgZaehlzeitRepository>;
 

@@ -99,7 +99,7 @@ The billing calculator is in the **pure `energy-billing` crate** — **191 tests
 cargo test -p energy-billing --all-features
 ```
 
-Tests cover all 12 product categories (incl. §42c SHARING), §41b iMSys guard, §9 StromStG typed exemptions,
+Tests cover all 13 product categories (incl. §42c SHARING and municipal WASSER), §41b iMSys guard, §9 StromStG typed exemptions,
 `EnergieQuellen` CO₂ label, MwSt override, EEG Gutschrift, HT/NT ToU, gas Brennwert,
 Mieterstrom, Tarifwechsel merge, proportional allocation, batch billing, and pre-flight validation.
 

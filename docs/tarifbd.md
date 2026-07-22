@@ -39,6 +39,7 @@ queried only by billing engines and portals.
 graph LR
     STROM["STROM\nSLP/RLM\nEintarif/Zweitarif\n§41a EPEX dynamic"]
     GAS["GAS\n§10 Brennwertkorrektur\nEnergiesteuer + BEHG"]
+    WASSER["WASSER\nTrinkwasser 7 % USt\ngesplittete Abwassergebühr"]
     WAERME["WAERME / SOLAR\nFernwärme · Mieterstrom\n§42b/§42a"]
     EEG["EEG / EINSPEISUNG\nFeed-in Vergütung\nMarktprämie / KWKG"]
     SMART["WAERMEPUMPE / WALLBOX\n§14a Modul 1/3\n(like STROM)"]
@@ -46,7 +47,7 @@ graph LR
     BUNDLE["BUNDLE\nComponent references\nper-position billing"]
     SHARING["SHARING\n§42c EnWG Energy Sharing\ncommunity allocation"]
     tarifbd["tarifbd :9080"]
-    STROM & GAS & WAERME & EEG --> tarifbd
+    STROM & GAS & WASSER & WAERME & EEG --> tarifbd
     SMART & SERV & BUNDLE & SHARING --> tarifbd
     tarifbd -->|"GET customer/{malo_id}/product"| billingd["billingd :9280"]
     tarifbd -->|"GET epex-prices/{date}/hourly"| billingd
@@ -388,7 +389,7 @@ Marktlokation carrying a bad key — `MaloId` validates the BDEW check digit.
 | `id` | UUID | Primary key |
 | `lf_mp_id` | TEXT | Operator BDEW-Codenummer |
 | `product_code` | TEXT | Operator-assigned product identifier |
-| `category` | TEXT | 13 values: `STROM`/`GAS`/`WAERME`/`SOLAR`/`EEG`/`EINSPEISUNG`/`WAERMEPUMPE`/`WALLBOX`/`HEMS`/`EMOBILITY`/`ENERGIEDIENSTLEISTUNG`/`BUNDLE`/`SHARING` |
+| `category` | TEXT | 14 values: `STROM`/`GAS`/`WAERME`/`WASSER`/`SOLAR`/`EEG`/`EINSPEISUNG`/`WAERMEPUMPE`/`WALLBOX`/`HEMS`/`EMOBILITY`/`ENERGIEDIENSTLEISTUNG`/`BUNDLE`/`SHARING` |
 | `product_status` | TEXT | `PUBLISHED` (default) — visible to billingd and portals; `DRAFT` — staged, invisible until published |
 | `name` | TEXT | Human-readable name |
 | `sparte` | TEXT | `STROM` / `GAS` / `WAERME` / NULL |

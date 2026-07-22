@@ -10,8 +10,8 @@
 //! | `get_timeseries`             | Read meter data for a MaLo in a time range |
 //! | `get_imbalance`              | Mehr-/Mindermengen imbalance report |
 //! | `get_billing_period`         | MeterBillingPeriod summary (arbeitsmenge, spitzenleistung, brennwert) |
-//! | `get_device_history`         | M9 RAG: comprehensive device history for LanceDB indexing |
-//! | `get_quality_warnings`       | M7: Hampel quality warnings (grade A/B/C/F) |
+//! | `get_device_history`         | RAG: comprehensive device history for LanceDB indexing |
+//! | `get_quality_warnings`       | Hampel quality warnings (grade A/B/C/F) |
 //! | `list_reading_orders`        | List Ablesesteuerung reading orders for a MaLo |
 //! | `list_overdue_reading_orders`| Reading orders past `ausfuehrt_bis` (§40 EnWG compliance) |
 //! | `trigger_jahresablesung`     | Launch Jahresablesung campaign for a NB grid area |
@@ -29,7 +29,7 @@
 //! |---|---|
 //! | `analyze-consumption`      | Step-by-step consumption analysis |
 //! | `submit-mscons`            | Step-by-step MSCONS ingestion guide |
-//! | `quality-assessment`       | M7 Hampel quality assessment guide |
+//! | `quality-assessment`       | Hampel quality assessment guide |
 //! | `jahresablesung-workflow`  | §40 Abs. 2 EnWG Jahresablesung campaign guide |
 //! | `reading-order-lifecycle`  | Reading order lifecycle: OFFEN → AUSGEFUEHRT |
 
@@ -104,9 +104,9 @@ pub struct GetBillingPeriodParams {
     pub period_to: Option<String>,
 }
 
-// ── M9: Device history RAG ─────────────────────────────────────────────────
+// ── Device history RAG ─────────────────────────────────────────────────────
 
-/// Parameters for `get_device_history` MCP tool (M9 — LanceDB MSB service history RAG).
+/// Parameters for `get_device_history` MCP tool (LanceDB MSB service history RAG).
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetDeviceHistoryParams {
     /// 11-digit Marktlokations-ID.
@@ -115,9 +115,9 @@ pub struct GetDeviceHistoryParams {
     pub days_back: Option<i64>,
 }
 
-// ── M7: Quality warnings ───────────────────────────────────────────────────
+// ── Quality warnings ───────────────────────────────────────────────────────
 
-/// Parameters for `get_quality_warnings` MCP tool (M7 — Hampel filter quality scoring).
+/// Parameters for `get_quality_warnings` MCP tool (Hampel filter quality scoring).
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetQualityWarningsParams {
     /// 11-digit Marktlokations-ID.
@@ -428,7 +428,7 @@ impl EdmdMcpHandler {
     ///
     /// Returns arbeitsmenge (total kWh), spitzenleistung_kw (RLM Strom peak
     /// demand), and Gas conversion factors (brennwert, zustandszahl).
-    /// Used by `invoicd` (M16) for RLM plausibility and by `netzbilanzd` (N4)
+    /// Used by `invoicd` for RLM plausibility and by `netzbilanzd` (N4)
     /// for NNE invoice generation.
     #[tool(
         description = "Get aggregated billing period summary for a MaLo (arbeitsmenge, spitzenleistung, brennwert, zustandszahl). Used by invoicd and netzbilanzd.",
@@ -555,7 +555,7 @@ impl EdmdMcpHandler {
         }
     }
 
-    // ── M9: Device history RAG ─────────────────────────────────────────────
+    // ── Device history RAG ─────────────────────────────────────────────────
 
     #[tool(
         description = "M9 RAG indexing: Comprehensive device history summary for a MaLo. \
@@ -764,13 +764,13 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
         .map_err(|e| McpError::internal_error(e.message, None))
     }
 
-    /// `get_quality_warnings` — M7: query Hampel-filter quality warnings for a MaLo.
+    /// `get_quality_warnings` — query Hampel-filter quality warnings for a MaLo.
     ///
     /// Returns `meter_reads` rows where `quality_warnings->>'has_warnings' = 'true'`
     /// in the given time range, structured by the Hampel-k3-t3 algorithm.
     #[allow(dead_code)]
     #[tool(
-        description = "M7: Query Hampel-filter quality warnings for a MaLo in a time range. \
+        description = "Query Hampel-filter quality warnings for a MaLo in a time range. \
 Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
@@ -1183,7 +1183,7 @@ impl EdmdMcpHandler {
 
     #[prompt(
         name = "quality-assessment",
-        description = "Step-by-step: assess meter read quality for a MaLo using the Hampel filter (M7)"
+        description = "Step-by-step: assess meter read quality for a MaLo using the Hampel filter"
     )]
     async fn quality_assessment_prompt(&self) -> Vec<PromptMessage> {
         vec![
@@ -1193,8 +1193,8 @@ impl EdmdMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "M7 quality scoring uses the **Hampel filter** (window k=3, threshold t=3.0 robust sigma).\n\
-                 This is state-of-the-art for time-series meter data quality assessment.\n\n\
+                "Quality scoring uses the **Hampel filter** (window k=3, threshold t=3.0 robust sigma) — \n\
+                 sliding-window median/MAD outlier detection robust to the outliers it detects.\n\n\
                  ## Steps\n\
                  1. Call `get_quality_warnings(malo_id, from, to)` to see existing quality issues.\n\
                  2. Check `grade` field: A (clean) | B (minor) | C (significant) | F (unusable).\n\
@@ -1871,14 +1871,14 @@ impl ServerHandler for EdmdMcpHandler {
              \n\
              Stores MSCONS meter data, iMSys direct push (15-min RLM), virtual meters, \
              quality assessments, Gas quality data, and manages reading orders.\n\
-             M7 quality scoring uses the Hampel filter + V01-V10 validation engine.\n\
+             Quality scoring uses the Hampel filter + V01-V10 validation engine.\n\
              \n\
              ## Tools (15)\n\
              - `get_timeseries` — read meter reads for a MaLo in a time range\n\
              - `get_imbalance` — Mehr-/Mindermengen imbalance report (§ 13 StromNZV)\n\
              - `get_billing_period` — MeterBillingPeriod (arbeitsmenge_kwh, brennwert, spitzenleistung)\n\
              - `get_device_history` — M9 RAG: comprehensive device history for LanceDB indexing\n\
-             - `get_quality_warnings` — M7: Hampel quality warnings (grade A/B/C/F)\n\
+             - `get_quality_warnings` — Hampel quality warnings (grade A/B/C/F)\n\
              - `list_reading_orders` — Ablesesteuerung reading orders for a MaLo\n\
              - `list_overdue_reading_orders` — overdue reading orders (§40 EnWG compliance)\n\
              - `trigger_jahresablesung` — launch annual SLP reading campaign\n\
@@ -1896,7 +1896,7 @@ impl ServerHandler for EdmdMcpHandler {
              \n\
              ## Notes\n\
              - Grade F blocks billing; grade C/F emits de.edmd.reading.quality.warning.\n\
-             - Direct push: POST /api/v1/meter-reads/rlm/{malo_id} for 15-min RLM (M4).\n\
+             - Direct push: POST /api/v1/meter-reads/rlm/{malo_id} for 15-min RLM.\n\
              - Virtual meters: GET /api/v1/virtual/{id}/lastgang (§42b EEG GGV).\n\
              - Substitute values: POST /api/v1/meter-reads/{malo_id}/substitute (§ 60 Abs. 2 MsbG).",
         )

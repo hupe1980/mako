@@ -133,6 +133,80 @@ pub struct GasMeterInput {
     pub is_estimated: bool,
 }
 
+/// Reason a metered water volume did not reach the sewer.
+///
+/// Absetzungen reduce the **Schmutzwasser** volume only (Frischwassermaßstab:
+/// every m³ of drinking water counts as sewage unless proven otherwise via a
+/// calibrated deduction meter) — the Trinkwasser delivery itself is always
+/// billed in full.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AbsetzungsGrund {
+    /// Garden irrigation via Gartenwasserzähler.
+    Gartenwasser,
+    /// Water carried away in products or processes (Schleppwasser).
+    Schleppwasser,
+    /// Evaporation losses (e.g. cooling towers).
+    Verdunstung,
+    /// Water bound in production output.
+    Produktionswasser,
+    /// Other municipally recognised deduction.
+    Sonstige,
+}
+
+impl AbsetzungsGrund {
+    /// German label for position texts.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Gartenwasser => "Gartenwasser",
+            Self::Schleppwasser => "Schleppwasser",
+            Self::Verdunstung => "Verdunstung",
+            Self::Produktionswasser => "Produktionswasser",
+            Self::Sonstige => "sonstige Absetzung",
+        }
+    }
+}
+
+/// One metered non-discharged water volume (Absetzung).
+///
+/// Municipal statutes require a separately installed, calibrated meter
+/// (geeichter Absetzungszähler) for each deduction.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Absetzung {
+    /// Metered volume in m³.
+    pub m3: Decimal,
+    /// Why the volume never reached the sewer.
+    pub grund: AbsetzungsGrund,
+}
+
+/// Water / wastewater meter and property data (WASSER).
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct WasserMeterInput {
+    /// Drinking water delivered in m³ — the basis for the Trinkwasser
+    /// Mengenpreis **and** (minus Absetzungen) the Schmutzwasser volume.
+    #[serde(default)]
+    pub frischwasser_m3: Decimal,
+    /// Metered non-discharged volumes, deducted from Schmutzwasser only.
+    #[serde(default)]
+    pub absetzungen: Vec<Absetzung>,
+    /// Sealed surface area (m²) draining into the sewer — the
+    /// Niederschlagswasser base of the gesplittete Abwassergebühr.
+    #[serde(default)]
+    pub versiegelte_flaeche_m2: Option<Decimal>,
+    /// Pro-rata months (defaults to 1 = one full billing month).
+    #[serde(default)]
+    pub months: Option<Decimal>,
+}
+
+impl WasserMeterInput {
+    /// Total metered Absetzung volume in m³.
+    #[must_use]
+    pub fn absetzung_total_m3(&self) -> Decimal {
+        self.absetzungen.iter().map(|a| a.m3).sum()
+    }
+}
+
 /// District heat meter data.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct WaermeMeterInput {
@@ -481,6 +555,8 @@ pub struct Quantities {
     pub gas: Option<GasMeterInput>,
     /// District heat / Fernwärme (WAERME).
     pub heat: Option<WaermeMeterInput>,
+    /// Drinking water / wastewater (WASSER).
+    pub wasser: Option<WasserMeterInput>,
     /// Solar self-consumption / Mieterstrom / GGV (SOLAR) — simple single-rate path.
     pub solar: Option<SolarMeterInput>,
     /// §42b EEG 2023 (Solarpaket I) — GGV community solar hybrid billing.

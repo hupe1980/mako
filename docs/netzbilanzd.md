@@ -110,7 +110,7 @@ graph LR
    | `lastprofil` | `marktd GET /api/v1/malo/{id}` → `bilanzierungsmethode` | `billing_type = "mmm_*"`, field absent |
 
 2. **Invoice generation** — pure `grid-billing` library, no I/O.
-   Returns `GridSettlement` (domain type, no BO4E dep) with:
+   Returns `SettlementResult` (domain type, no BO4E dep) with:
    - **`counterparty_mp_id`** — auto-populated from `lf_mp_id` (NNE/MMM) or `msb_mp_id` (PID 31009)
    - **`CalculationTrace`** per position — `explanation`, `legal_refs`, `tariff_source`, `gross_eur`
    - **`LegalReference`** list — e.g. `StromNEV §21`, `KAV §2 Abs. 2`, `§14a EnWG Modul 2`
@@ -291,7 +291,7 @@ Set `AwhPositionInput.artikel_id` to the appropriate code when building the `POS
 
 ## Calculation audit trail
 
-Every `GridSettlement` returned by `grid-billing` carries a full `CalculationTrace`
+Every `SettlementResult` returned by `grid-billing` carries a full `CalculationTrace`
 per position. This answers *"why is this amount on the invoice?"* without re-running
 the calculation — a BNetzA §20 EnWG regulatory requirement.
 
@@ -312,8 +312,8 @@ so it survives serialization.
 ```mermaid
 flowchart LR
     input["NneInput\n(sparte, tariff_sheet_id,\nka_klasse, ...)"]
-    calc["grid_billing::\ncalculate_nne_invoice()"]
-    gs["GridSettlement\ncounterparty_mp_id\npositions[n].trace\n  .explanation\n  .legal_refs\n  .tariff_source"]
+    calc["grid_billing::\nsettle_nne()"]
+    gs["SettlementResult\ncounterparty_mp_id\npositions[n].trace\n  .explanation\n  .legal_refs\n  .tariff_source"]
     rechnung["rubo4e::Rechnung\nrechnungspositionen"]
     db[("invoice_drafts\n.rechnung_json")]
 

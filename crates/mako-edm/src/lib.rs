@@ -39,7 +39,7 @@
 //!
 //! Source: GPKE BK6-24-174, WiM BK6-24-174; direction NB → LF.
 //!
-//! ## M15 — `MeterBillingPeriod`
+//! ## `MeterBillingPeriod`
 //!
 //! [`domain::MeterBillingPeriod`] aggregates meter reads for one MaLo over a
 //! billing period.  It is the input for:

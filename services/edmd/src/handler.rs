@@ -12,7 +12,7 @@
 //! | `de.mako.process.completed`  | 55004/55007 (GPKE Abmeldung / Beendigung der Zuordnung) | Auto-create `LIEFERENDE` reading order |
 //! | *(anything else)*            | *(any)*   | 204 No Content (ignored) |
 //!
-//! ## M2 — INSRPT → reading-order automation
+//! ## INSRPT → reading-order automation
 //!
 //! When an INSRPT Störungsmeldung (PID 23001, LF → MSB) arrives, WiM Störungsmeldung
 //! mandates a Sonderablesung.  `edmd` auto-creates an `ablese_auftraege` row
@@ -81,7 +81,7 @@ pub struct HandlerState {
     pub marktd_url: String,
     /// `marktd` bearer token.
     pub marktd_api_key: secrecy::SecretString,
-    /// ERP webhook URL for outbound CloudEvents from direct push (M4) and quality warnings (M7).
+    /// ERP webhook URL for outbound CloudEvents from direct push and quality warnings.
     pub erp_webhook_url: Option<String>,
 }
 

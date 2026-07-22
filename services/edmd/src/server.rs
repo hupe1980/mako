@@ -108,7 +108,7 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/gdpr/erasure/{malo_id}/archive-complete",
             post(complete_gdpr_archive_erasure),
         )
-        // M4: iMSys / SMGW direct push — bypasses EDIFACT for RLM/iMSys customers.
+        // iMSys / SMGW direct push — bypasses EDIFACT for RLM/iMSys customers.
         // §41a EnWG dynamic tariffs require sub-hourly resolution;
         // MSCONS round-trip adds 15–60 min latency.
         .route(
@@ -119,7 +119,7 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/meter-reads/gas/{malo_id}",
             post(post_direct_reads_gas),
         )
-        // M7: retroactive quality scoring for existing meter_reads (MSCONS or direct push).
+        // retroactive quality scoring for existing meter_reads (MSCONS or direct push).
         .route(
             "/api/v1/quality-score/{malo_id}",
             post(post_quality_rescore),
@@ -133,12 +133,12 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/meter-reads/{malo_id}/substitute",
             post(post_substitute_values),
         )
-        // M8: resampled Lastgang — down-sample to hourly / daily / monthly buckets
+        // resampled Lastgang — down-sample to hourly / daily / monthly buckets
         .route(
             "/api/v1/lastgang/{malo_id}/resampled",
             get(get_lastgang_resampled),
         )
-        // M9: Virtual meter — compute derived time series from AggregationRule
+        // Virtual meter — compute derived time series from AggregationRule
         .route(
             "/api/v1/virtual/{virtual_malo_id}/lastgang",
             get(get_virtual_lastgang),
@@ -151,19 +151,19 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/virtual/{virtual_malo_id}",
             get(get_virtual_meter).delete(delete_virtual_meter),
         )
-        // M10: Quality assessments — per-batch quality history
+        // Quality assessments — per-batch quality history
         .route(
             "/api/v1/quality-assessments/{malo_id}",
             get(list_quality_assessments),
         )
-        // M11: Annual forecast (§ 60 Abs. 2 MsbG Jahresprognose)
+        // Annual forecast (§ 60 Abs. 2 MsbG Jahresprognose)
         .route("/api/v1/forecast/{malo_id}", get(get_annual_forecast))
-        // M12: Summenzeitreihe — MABIS-ready monthly aggregated series
+        // Summenzeitreihe — MABIS-ready monthly aggregated series
         .route(
             "/api/v1/summenzeitreihe/{malo_id}",
             get(get_summenzeitreihe),
         )
-        // M13: Gas quality data (PID 13007 Gasbeschaffenheitsdaten)
+        // Gas quality data (PID 13007 Gasbeschaffenheitsdaten)
         .route("/api/v1/gas-quality/{malo_id}", get(get_gas_quality))
         // §22 EnWG Verlustenergie — indicative grid-loss balance
         .route("/api/v1/netzverlust", get(get_netzverlust))
@@ -398,7 +398,7 @@ async fn get_imbalance(
 ///
 /// Returns the aggregated billing-period summary for a MaLo.
 ///
-/// Consumed by `invoicd` for RLM plausibility (M16) and by `netzbilanzd` for
+/// Consumed by `invoicd` for RLM plausibility and by `netzbilanzd` for
 /// NNE invoice generation (N4).  Includes:
 /// - `arbeitsmenge_kwh` — total energy quantity
 /// - `spitzenleistung_kw` — peak demand (RLM Strom only)
@@ -1115,7 +1115,7 @@ async fn get_zeitreihe(
     Json(zeitreihen).into_response()
 }
 
-// ── Resampled Lastgang (M8) ───────────────────────────────────────────────────
+// ── Resampled Lastgang ───────────────────────────────────────────────────
 
 /// Query parameters for resampled Lastgang.
 #[derive(Debug, serde::Deserialize)]
@@ -1264,7 +1264,7 @@ async fn get_lastgang_resampled(
     .into_response()
 }
 
-// ── Virtual meter endpoints (M9) ──────────────────────────────────────────────
+// ── Virtual meter endpoints ──────────────────────────────────────────────
 
 /// Query params shared by virtual meter and other new endpoints.
 #[derive(Debug, serde::Deserialize)]
@@ -1628,7 +1628,7 @@ async fn delete_virtual_meter(
     }
 }
 
-// ── Quality assessments (M10) ─────────────────────────────────────────────────
+// ── Quality assessments ─────────────────────────────────────────────────
 
 /// `GET /api/v1/quality-assessments/{malo_id}`
 ///
@@ -1703,7 +1703,7 @@ async fn list_quality_assessments(
     }
 }
 
-// ── Annual forecast (M11) ─────────────────────────────────────────────────────
+// ── Annual forecast ─────────────────────────────────────────────────────
 
 /// `GET /api/v1/forecast/{malo_id}?from=&to=`
 ///
@@ -2014,7 +2014,7 @@ async fn list_confirmations(
     }
 }
 
-// ── Summenzeitreihe (M12) ─────────────────────────────────────────────────────
+// ── Summenzeitreihe ─────────────────────────────────────────────────────
 
 /// `GET /api/v1/summenzeitreihe/{malo_id}?from=&to=`
 ///
@@ -2114,7 +2114,7 @@ async fn get_summenzeitreihe(
     .into_response()
 }
 
-// ── Gas quality endpoint (M13) ────────────────────────────────────────────────
+// ── Gas quality endpoint ────────────────────────────────────────────────
 
 /// `GET /api/v1/gas-quality/{malo_id}`
 ///
@@ -2457,7 +2457,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
                         secret
                     }),
                     // Receive MSCONS completions for meter data storage
-                    // + INSRPT initiations for reading-order auto-creation (M2+)
+                    // + INSRPT initiations for reading-order auto-creation
                     // + Lieferbeginn/Lieferende completions for supply handover readings
                     event_types: &["de.mako.process.completed", "de.mako.process.initiated"],
                     makopid_filter: mako_edm::domain::MSCONS_PIDS,
@@ -3592,7 +3592,7 @@ async fn jahresablesung_compliance(
         .into_response()
 }
 
-// \u2500\u2500 M4: iMSys / SMGW 15-min direct push \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// \u2500\u2500 iMSys / SMGW 15-min direct push \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 
 /// One 15-min (or other fixed-length) metered interval in a direct-push batch.
 #[derive(Debug, serde::Deserialize)]
@@ -3869,7 +3869,7 @@ fn compute_quality(
 ///
 /// Submit the same `session_id` twice to get the stored result back without re-processing.
 ///
-/// ## Quality scoring (M7)
+/// ## Quality scoring
 ///
 /// Gap detection, consecutive-zero analysis, and 3-sigma outlier detection run at
 /// ingest time.  If `has_warnings = true`, `edmd` emits `de.edmd.reading.quality.warning`
@@ -4262,7 +4262,7 @@ async fn post_direct_reads_inner(
             .into_response();
     }
 
-    // \u2500\u2500 Quality scoring (M7) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    // \u2500\u2500 Quality scoring \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     let period_start = accepted.iter().map(|iv| iv.from).min().unwrap();
     let period_end = accepted.iter().map(|iv| iv.to).max().unwrap();
 
@@ -4477,7 +4477,7 @@ async fn post_direct_reads_inner(
         });
         post_ce_with_retry(&client, webhook_url, &stored_ce).await;
 
-        // If quality warnings detected, emit de.edmd.reading.quality.warning (M7).
+        // If quality warnings detected, emit de.edmd.reading.quality.warning.
         if quality.has_warnings {
             let warn_ce = serde_json::json!({
                 "specversion": "1.0",
@@ -4538,7 +4538,7 @@ async fn post_direct_reads_inner(
         .into_response()
 }
 
-// ─── M7: retroactive quality rescoring ──────────────────────────────────────
+// ─── retroactive quality rescoring ──────────────────────────────────────
 
 /// Optional query parameters for retroactive quality rescoring.
 #[derive(Debug, serde::Deserialize)]
@@ -4552,7 +4552,7 @@ pub struct QualityRescoreQuery {
 /// `POST /api/v1/quality-score/{malo_id}[?from=&to=]`
 ///
 /// Retroactively re-scores **all** `meter_reads` for `malo_id` in the given
-/// date window using the Hampel filter (M7 quality algorithm).
+/// date window using the Hampel filter.
 ///
 /// This is useful when:
 /// - MSCONS-ingested historical data was stored without quality scoring

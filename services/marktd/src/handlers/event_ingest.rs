@@ -330,7 +330,7 @@ where
         }
     }
 
-    // M4: WiM Stammdaten Übermittlung (PIDs 17102–17133) — auto-update ZaehlzeitRegister.
+    // WiM Stammdaten Übermittlung (PIDs 17102–17133) — auto-update ZaehlzeitRegister.
     //
     // When the MSB transmits register definitions via ORDERS 17102–17133, `makod`
     // emits a ProcessCompleted outbox entry carrying `melo_id` + `zaehlwerke`
@@ -395,7 +395,7 @@ where
     StatusCode::ACCEPTED.into_response()
 }
 
-// ── ZaehlzeitRegister auto-update (M4 — WiM Stammdaten) ──────────────────────
+// ── ZaehlzeitRegister auto-update (WiM Stammdaten) ───────────────────────────
 
 /// Upsert `ZaehlzeitRegister` + `ZaehlzeitSaison` records from parsed ZAK+ZE
 /// JSON objects extracted from WiM ORDERS 17102–17133.

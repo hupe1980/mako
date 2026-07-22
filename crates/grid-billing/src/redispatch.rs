@@ -19,6 +19,7 @@
 //! reference Lastgang in the Duldungsfall, from the transmitted schedule in
 //! the Aufforderungsfall) and the payment run live in the service layer.
 
+use billing::EuroAmount;
 use rust_decimal::Decimal;
 
 use crate::error::BillingError;
@@ -124,6 +125,14 @@ pub fn redispatch_verguetung(
     let zusaetzliche = round(input.zusaetzliche_aufwendungen_eur);
     let ersparte = round(input.ersparte_aufwendungen_eur);
     let total = entgangene + zusaetzliche - ersparte;
+
+    // Same money boundary as the settle_* functions: every EUR result must be
+    // representable as an EuroAmount before it leaves the crate.
+    for v in [entgangene, zusaetzliche, ersparte, total] {
+        EuroAmount::checked_from_decimal(v).map_err(|_| BillingError::MonetaryOverflow {
+            input_value: Some(v),
+        })?;
+    }
 
     let basis = match input.verguetungsart {
         RedispatchVerguetungsart::Eeg => "entgangene EEG-Vergütung (§13a Abs. 2 S. 3 Nr. 5 EnWG)",

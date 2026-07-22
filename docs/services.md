@@ -52,7 +52,7 @@ graph TB
 
     subgraph lf_billing ["Retail Billing (LF)"]
         tarifbd[":9080 tarifbd\n13 categories · §42d feed\nEPEX §41a · B2B Angebote"]
-        billingd[":9280 billingd\n12 categories · XRechnung 3.0\nRLM demand · §54 exemption"]
+        billingd[":9280 billingd\n13 categories · XRechnung 3.0\nRLM demand · §54 exemption"]
         accountingd[":9380 accountingd\nMassenkontokorrent\nSEPA FRST/RCUR · GLN ID · Aging · §288 BGB"]
     end
 
@@ -107,7 +107,7 @@ graph TB
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [tarifbd](./tarifbd) | `:9080` | LF | Product & Tariff Catalog — user-defined energy products, EPEX Spot for §41a, B2B Angebote/quotations |
-| [billingd](./billingd) | `:9280` | LF | Energy Billing Engine — 12 categories, §41a dynamic, §42a GGV community solar, XRechnung 3.0 / ZUGFeRD 2.3 |
+| [billingd](./billingd) | `:9280` | LF | Energy Billing Engine — 13 categories, §41a dynamic, §42a GGV community solar, XRechnung 3.0 / ZUGFeRD 2.3 |
 | [accountingd](./accountingd) | `:9380` | LF | Customer Account Ledger — double-entry SKR 03/04; aging analysis; Verzugszinsen §288 BGB; Zahlungsvereinbarung; SEPA pain.008 (FRST/RCUR separated, Gläubiger-ID EPC AT-02); CAMT.054 dedup; IBAN hash (pgcrypto); OIDC/JWT + inbound HMAC; auto-dunning; GDPR Art. 17; **107 tests** |
 
 ## B2C & AI

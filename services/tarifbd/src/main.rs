@@ -11,6 +11,7 @@
 //! | `STROM` | Electricity SLP/RLM, Eintarif/Zweitarif/Mehrtarif | `calculate_strom` |
 //! | `GAS` | Natural gas SLP/RLM with Brennwertkorrektur | `calculate_gas` |
 //! | `WAERME` | District heat / Fernwärme | `calculate_waerme` |
+//! | `WASSER` | Drinking water + gesplittete Abwassergebühr (municipal) | `calculate_wasser` |
 //! | `SOLAR` | Mieterstrom §42b, §42a Gemeinschaftliche Gebäudeversorgung | `calculate_solar` |
 //! | `EEG` | Feed-in settlement: Vergütung, Marktprämie, Managementprämie | `calculate_eeg` |
 //! | `EINSPEISUNG` | Non-EEG Direktvermarktung settlement | `calculate_einspeisung` |
@@ -20,6 +21,7 @@
 //! | `EMOBILITY` | CPO/EMSP charging services | `calculate_emobility` |
 //! | `ENERGIEDIENSTLEISTUNG` | MSB, EMS, smart meter, maintenance | `calculate_energiedienstleistung` |
 //! | `BUNDLE` | Composite: references component product codes | per-component |
+//! | `SHARING` | §42c EnWG Energy Sharing | `calculate_strom` + share allocation |
 //!
 //! ## Pricing schema (`data.tarifpreispositionen`)
 //!

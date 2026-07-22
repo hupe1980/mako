@@ -7,7 +7,7 @@ mermaid: true
 description: >
   billingd operator guide: Multi-Product Billing Engine (LF role).
   Energy billing engine — user-defined product prices from tarifbd;
-  12 categories (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/SHARING);
+  13 categories (STROM/GAS/WAERME/WASSER/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/SHARING);
   §41a EPEX dynamic; §25 Nr. 4 MessEV Brennwertkorrektur; §14a Modul 1/3;
   XRechnung 3.0 / ZUGFeRD 2.3 (EN16931, B2G mandate 01.01.2027).
 ---
@@ -44,7 +44,7 @@ billingd (HTTP service)
     │   HTTP endpoints · tarifbd/edmd/marktd clients
     │
     └── energy-billing (pure crate, crates.io)
-            │   Product (typed enum, 12 variants)
+            │   Product (typed enum, 13 variants)
             │   Quantities · BillingContext · RegulatoryRates
             │   BillingEngine (provider pipeline, validate + bill + bill_batch)
             │   Invoice { positions, warnings, netto_eur, mwst_eur, brutto_eur }
@@ -120,6 +120,7 @@ graph LR
     subgraph heat_gas ["Gas & Heat"]
         GAS["GAS<br/>§25 Nr. 4 MessEV Brennwertkorrektur<br/>Energiesteuer §2 EnergieStG<br/>BEHG CO₂"]
         WAERME["WAERME<br/>Grundpreis + Leistungspreis<br/>+ Arbeitspreis (kWh_th)"]
+        WASSER["WASSER<br/>Trinkwasser 7 % USt<br/>gesplittete Abwassergebühr<br/>Absetzungen (Schleppwasser)"]
     end
     subgraph solar_eeg ["Solar & Feed-in"]
         SOLAR["SOLAR<br/>§42b Mieterstrom-Aufschlag<br/>§42a GGV-Rabatt<br/>Eigenverbrauch supply"]
@@ -132,6 +133,7 @@ graph LR
         EDL["ENERGIEDIENSTLEISTUNG<br/>MSB / EMS packages<br/>Flat fee + per-event"]
     end
     BUNDLE["BUNDLE<br/>Component references<br/>→ per-position recursion"]
+    SHARING["SHARING<br/>§42c Energy Sharing<br/>community credit"]
 ```
 
 ### STROM — Electricity
@@ -301,7 +303,7 @@ let engine = product.build_engine(&grid, &rates);
 let invoice = engine.bill(ctx, &quantities)?;
 ```
 
-`Product` has 12 exhaustive variants, each wrapping a typed per-category struct:
+`Product` has 13 exhaustive variants, each wrapping a typed per-category struct:
 `Strom(ElectricityProduct)`, `Waermepumpe/Wallbox(ControllableLoadProduct)`,
 `Gas(GasProduct)`, `Waerme(HeatProduct)`, `Solar(SolarProduct)`,
 `Eeg(EegProduct)`, `Einspeisung(EinspeisungProduct)`,

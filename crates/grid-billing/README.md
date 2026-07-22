@@ -100,34 +100,25 @@ ordinance leaves it: on the price sheet, not in this crate.
 
 ## Invalid inputs are unrepresentable
 
-`NneInput` used to be 28 fields with 14 `Option`s. The cross-field rules lived in
-a `validate_nne_input` that **the engine never called** — so a caller who skipped
-it was billed on the wrong basis with no error. Those rules are now in the types:
+`NneInput`'s cross-field rules live in the types, not in a validator a caller
+could forget:
 
-| Was | Is |
+| Rule | Enforced by |
 |---|---|
-| 4 HT/NT `Option`s = 2⁴ states, 2 valid | `ArbeitspreisModell` — one variant at a time |
-| Modul 1 + Modul 3 both set → same energy billed twice | mutually exclusive variants |
-| Modul 1 + Modul 2 both set → engine silently preferred Modul 2 | mutually exclusive variants |
-| `reduction_factor: Option<Decimal>`, range-checked only in the validator | `Reduktionsfaktor`, `(0, 1]` enforced at construction |
-| `spitzenleistung_kw` / `leistungspreis_eur_per_kw` — half-set representable | `Leistungspreis` — a pair |
-| `nne_grundpreis_eur_per_month` / `_months` — half-set representable | `Grundpreis` — a pair |
-| `ka_satz_ct_per_kwh` / `ka_klasse` independent; **the KAV ceiling check was skipped when the group was absent** | `Konzessionsabgabe` — a pair, so the Höchstbetrag is always checked |
-| `period_from` / `period_to` on five structs, ordering re-checked five times | `SettlementPeriod` — constructing it is the check |
+| Exactly one Arbeitspreis form (einheitlich, Modul 1, HT/NT Modul 2, or Modul 3 spot) | `ArbeitspreisModell` — one variant at a time; `Modul3Spotpreis` replaces the flat position, so the same energy is never billed twice |
+| §14a modules are mutually exclusive | `ArbeitspreisModell` — `Modul1Pauschal`/`Modul2ZeitVariabel`/`Modul3Spotpreis` are variants of the same enum |
+| Reduction factors in `(0, 1]` | `Reduktionsfaktor` enforces the range at construction |
+| Leistungspreis needs both peak and rate | `Leistungspreis` — a pair |
+| Grundpreis needs both rate and months | `Grundpreis` — a pair |
+| KAV Höchstbetrag is always checked | `Konzessionsabgabe` pairs the rate with its `KaKlasse` |
+| Period ordering | `SettlementPeriod` — constructing it is the check |
 
-The engine now enforces what the types cannot express — negative energy, empty or
-inverted Modul 3 intervals — and does it inside `settle_nne`, not in a validator
-a caller may forget.
-
-`validate_nne_input` is gone. `settle_nne` is pure and cheap: run it and read
-`warnings`. The other three validators remain for inputs whose engines accept
+What the types cannot express — negative energy, empty or inverted Modul 3
+intervals — `settle_nne` enforces itself and returns `Err`. There is no
+separate NNE validator: `settle_nne` is pure and cheap, run it and read
+`warnings`. `validate_mmm_input` / `validate_msb_input` /
+`validate_gas_awh_input` exist for the settlement types whose engines accept
 looser shapes.
-
-### Modul 3 no longer double-bills
-
-The old cascade emitted the flat Arbeit position **and then** appended the Modul 3
-interval positions, charging the same energy twice. `Modul3Spotpreis` replaces the
-flat position rather than adding to it.
 
 ## Settlement, not invoice
 
@@ -146,12 +137,10 @@ supersedes — and is built by an adapter around a settlement.
 
 The separation is what makes a settlement recomputable: the same period can be
 settled twice, for a correction or a dispute or an audit, and the two results
-compared, without inventing an invoice number each time. Previously the engine
-could not be run at all without one.
+compared, without inventing an invoice number each time.
 
 Position numbering follows the same rule. `InvoiceDocument::numbered_positions()`
-assigns 1-based numbers at rendering time; the engine no longer threads a counter
-through the calculation.
+assigns 1-based numbers at rendering time; the engine carries no counter.
 
 ## No BO4E inside the engine
 
@@ -263,8 +252,8 @@ settlement for a 2025 period still cites the ordinance that governed it and one
 for 2026 does not. `LegalReference::citation` appends "(außer Kraft seit
 01.01.2026)" to a repealed ordinance, keeping archived invoices self-explanatory.
 
-Konzessionsabgabe was **never** governed by StromNZV or GasNZV — it is KAV plus
-§48 EnWG. StromNZV §17 and GasNZV §7 do not say what they were long cited for.
+Konzessionsabgabe is governed by the KAV plus §48 EnWG — not by StromNZV §17
+or GasNZV §7, which concern balancing-group and network-access matters.
 
 ## Mehr-/Mindermengen sign convention
 

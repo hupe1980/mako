@@ -19,9 +19,8 @@ certification) and `to_rechnung_json` emits it as the `stromkennzeichnung`
 ZusatzAttribut with the structure intact. billingd copies it from the tarifbd
 product via `Product::energiequellen()`.
 
-The structured type existed on the product all along, was parsed from tarifbd
-and validated by the MCP tool — and the invoice emitted only a legacy free-text
-string that billingd never even populated. The free-text field is gone.
+The invoice emits the structured type — there is no free-text Energiemix
+field.
 
 ## §14a — all three modules
 
@@ -39,17 +38,15 @@ supplier's own HT/NT split.
 
 ## Warnings that actually fire
 
-`invoice.warnings` now carries machine-readable codes beyond the §41b guard:
+`invoice.warnings` carries machine-readable codes beyond the §41b guard:
 `ESTIMATED_READING` (§ 60 Abs. 2 MsbG), `PREISGARANTIE_ENDET` (ends within 30
 days of the period), `VERBRAUCH_ABWEICHUNG_50PCT` (deviation beyond half the
-prior year's consumption). All three were promised in the `BillingWarning`
-docstring and previously either Info positions — visible on paper, invisible to
-code — or absent entirely. They are `Warning` severity: they inform dispatch,
+prior year's consumption). They are `Warning` severity: they inform dispatch,
 they do not block it.
 
 Every position built through the shared helpers (Arbeitspreis, Grundpreis, and
-all levy positions — Stromsteuer, Energiesteuer, BEHG, KA, NNE) now carries a
-populated `PositionTrace`; previously 3 of ~22 position constructions did.
+all levy positions — Stromsteuer, Energiesteuer, BEHG, KA, NNE) carries a
+populated `PositionTrace`.
 
 ## Explainability reaches the stored invoice
 
@@ -60,9 +57,6 @@ trace, and the attribute is the sanctioned place for what the schema does not
 model. This is the only surviving record of *why* an amount is what it is once
 the `Invoice` value is dropped after storage; billingd's
 `explain_invoice_position` MCP tool reads it from there.
-
-It previously read a `trace` key that `to_rechnung_json` never wrote — the tool
-promised seven audit fields and always returned null.
 
 ## Period-correct rates
 
@@ -78,10 +72,9 @@ still wins.
 
 Three coexist, each matching how its charge is contractually quoted:
 per-day charges bill **active contract days** (clipped to
-`vertragsbeginn`/`vertragsende`); annual EUR/a charges bill **days/365**;
-monthly EUR/month charges bill **days/30.4375**. The NNE Grundpreis previously
-billed the *full period* days unclipped — a mid-month move-in paid a full month
-of network base charge; it now clips like the commodity Grundpreis.
+`vertragsbeginn`/`vertragsende`) — this includes the NNE Grundpreis, so a
+mid-month move-in pays only its active days; annual EUR/a charges bill
+**days/365**; monthly EUR/month charges bill **days/30.4375**.
 
 ## Typed errors
 
@@ -125,11 +118,12 @@ billingd (HTTP service)
     │
     └── energy-billing (pure crate)
             │
-            ├── Product                — typed enum with 12 per-category variants
+            ├── Product                — typed enum with 13 per-category variants
             │     ├── Strom(ElectricityProduct)
             │     ├── Waermepumpe/Wallbox(ControllableLoadProduct)   §14a
             │     ├── Gas(GasProduct)
             │     ├── Waerme(HeatProduct)
+            │     ├── Wasser(WaterProduct)                        Trinkwasser + Abwasser
             │     ├── Solar(SolarProduct)
             │     ├── Eeg(EegProduct)
             │     ├── Einspeisung(EinspeisungProduct)
@@ -228,6 +222,7 @@ Each category has its own struct with only the relevant fields — no silent fie
 | `Wallbox(ControllableLoadProduct)` | `WALLBOX` | `ControllableLoadProvider` | §14a Modul 1/3 mandatory |
 | `Gas(GasProduct)` | `GAS` | `GasProvider` | Brennwertkorrektur; Energiesteuer; BEHG CO₂ |
 | `Waerme(HeatProduct)` | `WAERME` | `HeatProvider` | Fernwärme; auto-7% MwSt renewable |
+| `Wasser(WaterProduct)` | `WASSER` | `WaterProvider` | Trinkwasser 7 % USt; gesplittete Abwassergebühr (Schmutzwasser − Absetzungen, Niederschlagswasser m²); public-law fee outside USt |
 | `Solar(SolarProduct)` | `SOLAR` | `SolarProvider` | §42b GGV; §42a Mieterstrom; 0% MwSt ≤30 kWp |
 | `Eeg(EegProduct)` | `EEG` | `EegProvider` | LF-side Gutschrift; `eeg` feature for §51/§52 |
 | `Einspeisung(EinspeisungProduct)` | `EINSPEISUNG` | `EinspeisungProvider` | Direktvermarktung Marktwert − Gebühr |
@@ -606,7 +601,7 @@ cargo test -p energy-billing --all-features
 | Suite | Tests | Coverage |
 |---|---|---|
 | Unit tests (lib) | 39 | `RegulatoryRates`, levy lookups, `prorate_days`, `InvoiceType`, `Product` enum roundtrip, `StromsteuerBefreiung`, tariff deserialization |
-| `calculator_tests` | 118 | All 12 categories, §14a/§41a/§41b, GGV, seasonal, indexed, prosumer, block tariffs, RLM demand charge, multi-rate MwSt, cancellation, BO4E JSON, pro-rata, Tarifwechsel, `bill_batch`, `validate` |
+| `calculator_tests` | 122 | All 13 categories (incl. WASSER), §14a/§41a/§41b, GGV, seasonal, indexed, prosumer, block tariffs, RLM demand charge, multi-rate MwSt, cancellation, BO4E JSON, pro-rata, Tarifwechsel, `bill_batch`, `validate` |
 | `golden_scenarios` | 11 | Golden master: SLP electricity; gas + levies; EEG Gutschrift; RLM demand charge; §54 KWK exemption; historic rates 2022 (heating gas constant 0.55, 7 % gas-USt window); §41b rejection; §40a ct/kWh; §41 mandatory fields; §42c sharing; §9 exemption |
 | `proptest_invoice` | 8 | Property-based: `brutto == netto + mwst`, cancellation sign, 0% MwSt, gas arithmetic, demand charge non-negative, StromStG year table |
 | Doc tests | 15 | Inline usage examples |
