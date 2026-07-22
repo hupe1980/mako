@@ -296,7 +296,7 @@ pub use wechselprozesse::{
 /// - PID 55607 (Ankündigung Zuordnung LF, UTILMD) → `"gpke-ankuendigung-zuordnung-lf"`
 /// - PIDs 17115/17116/17117 (Sperrung/Entsperrung, ORDERS) → `"gpke-sperrung"`
 /// - **PID 55555** (Anfrage Daten der individuellen Bestellung, UTILMD) → `"gpke-anfrage-bestellung"`
-/// - PIDs 31001, 31002, 31005–31009 (billing, INVOIC) → `"gpke-abrechnung"`
+/// - PIDs 31001, 31002, 31005, 31006 (billing, INVOIC) → `"gpke-abrechnung"`
 ///   _(31003 → `mako-wim`; 31004 → `mako-wim-gas`)_
 /// - PIDs 19001, 19002 (inbound ORDRSP, NB role only) → `"gpke-konfiguration"`
 ///

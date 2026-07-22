@@ -355,7 +355,7 @@ marktd   = "http://marktd:8180/mcp"
 billingd = "http://billingd:9280/mcp"
 edmd     = "http://edmd:8380/mcp"
 obsd     = "http://obsd:8480/mcp"
-# ... all 17 services at their respective ports
+# ... every MCP-exposing service (16 — mabis-syncd has no MCP server)
 mcp_api_key = "env:AGENTD_MCP_API_KEY"
 
 trigger_event_types = [

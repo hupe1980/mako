@@ -3676,17 +3676,11 @@ fn default_source() -> String {
 
 /// Quality report returned in the direct-push response and stored in `meter_reads.quality_warnings`.
 ///
-/// ## M7 — Best-in-class quality scoring
-///
-/// This struct uses the **Hampel filter** (sliding-window robust outlier detection)
-/// rather than the simpler global 3-sigma rule.  The Hampel filter is the
-/// state-of-the-art algorithm for time-series meter data because:
-///
-/// - Uses **median** (not mean) → robust to existing outliers
-/// - Uses **MAD** (Median Absolute Deviation) → scale estimate not distorted by outliers  
-/// - **Sliding window** → captures local behaviour, not global
-/// - `sigma = 1.4826 × MAD` (the constant converts MAD to equivalent Gaussian σ)
-/// - Flag `x[i]` as outlier if `|x[i] − window_median| > threshold × sigma`
+/// Outlier detection uses the **Hampel filter** (sliding-window median/MAD)
+/// rather than a global 3-sigma rule: the median and MAD are robust to the
+/// outliers being detected, and the sliding window captures local behaviour.
+/// `sigma = 1.4826 × MAD` converts MAD to the equivalent Gaussian σ;
+/// `x[i]` is flagged when `|x[i] − window_median| > threshold × sigma`.
 #[derive(Debug, serde::Serialize)]
 pub struct QualityReport {
     pub intervals_accepted: usize,

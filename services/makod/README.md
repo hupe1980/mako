@@ -9,7 +9,7 @@ For the complete operator reference — including persistence configuration, AS4
 ## Port layout
 
 ```
-:4080  ← AS4/ebMS3 inbound  (EDIFACT via SOAP/MTOM, WS-Security)
+:4080  ← AS4/ebMS3 inbound  (EDIFACT + Redispatch XML via SOAP/MTOM, WS-Security)
 :8080  ← HTTP REST API       (POST /edifact, ERP Command API, admin)
 :8090  ← API-Webdienste Strom (iMS REST/JSON — energy-api)
 ```
@@ -23,7 +23,7 @@ All three ports are optional and independently enabled via CLI flags or environm
 | Module | Domain | Key PIDs |
 |---|---|---|
 | `GpkeModule` | GPKE — 16 workflows: Lieferbeginn/-ende Strom (LF+NB), Neuanlage, Abmeldung LF, Ankündigung ZuordnungLF, Sperrung (NB+LF-Antwort), Abrechnung, Datenabruf, Allokationsliste, Messwerte, Konfiguration, Anfrage Bestellung, Ankündigung, UTILTS, PARTIN Strom | 55001–55018/55022–55024/55555/55600–55609, ORDERS 17xxx, INVOIC 31001–31006, PARTIN 37000–37006 |
-| `WimModule` | WiM Strom — 10 workflows: MSB-Wechsel, Geräteübernahme, Stammdaten, Preisanfrage/Preisliste, Abrechnung, INSRPT, Stornierung, iMS-Steuerungsauftrag | 55039/55042/55051/55168, ORDERS 17001–17133, INVOIC 31009, INSRPT 23001–23012 |
+| `WimModule` | WiM Strom — 11 workflows: MSB-Wechsel, Geräteübernahme, Stammdaten, Technik-Änderung, Preisanfrage/Preisliste, Abrechnung, INSRPT, Stornierung, Wertebestellung, iMS-Steuerungsauftrag | 55039/55042/55051/55168, ORDERS 17001–17133, INVOIC 31009, INSRPT 23001–23012 |
 | `GeliGasModule` | GeLi Gas 3.0 — 9 workflows: UTILMD G Lieferantenwechsel, Stornierung (LF+GNB), Sperrung (LF+GNB), MSCONS Messdaten, Datenabruf, INVOIC 31011 (AWH), PARTIN Gas | 44001–44024, 17103/17104, MSCONS 13002/13007–13009, ORDERS 17115–17117 (Gas), INVOIC 31011, PARTIN 37008–37014 |
 | `WimGasModule` | WiM Gas — MSB-Wechsel Gas, Stornierung WiM Gas, INVOIC Gas billing, INSRPT Gas | 44022–44024, 44039–44053, 44168–44170, INVOIC 31003/31004, INSRPT 23005/23009 |
 | `MabisModule` | MABIS — Bilanzkreisabrechnung Strom (BKV↔ÜNB) + Clearingliste | 13003, 55065/55069/55070 |
@@ -37,11 +37,17 @@ All three ports are optional and independently enabled via CLI flags or environm
 ### Development — volatile in-memory (data lost on restart)
 
 ```bash
+cat > makod.toml <<'TOML'
+[[party]]
+mp_id   = "9900357000004"
+roles   = ["LF"]
+primary = true
+TOML
+
 cargo run -p makod -- \
+  --config makod.toml \
   --allow-volatile \
-  --http-addr 127.0.0.1:8080 \
-  --tenant-id 9900357000004 \
-  --marktrollen LF
+  --http-addr 127.0.0.1:8080
 ```
 
 > `--allow-volatile` is required when `--data-dir` is omitted. Without it, `makod` refuses to start and prints an error directing you to set `--data-dir` or pass the flag explicitly. This prevents accidental production deployments without persistent storage.
@@ -53,18 +59,18 @@ cargo run -p makod -- \
 cargo build -p makod --release
 
 ./target/release/makod \
+  --config /etc/makod/makod.toml \
   --data-dir /var/lib/makod \
   --http-addr 0.0.0.0:8080 \
   --auth-key erp-prod=$(openssl rand -hex 32) \
   --as4-addr  0.0.0.0:4080 \
-  --tenant-id 9900357000004 \
   --erp-webhook-url https://erp.example.com/mako/events
 ```
 
 ### Startup validation — no workers started
 
 ```bash
-./target/release/makod --check --data-dir /var/lib/makod --tenant-id 9900357000004
+./target/release/makod --check --config /etc/makod/makod.toml --data-dir /var/lib/makod
 ```
 
 `--check` validates configuration, loads profiles, and runs all adapter startup checks, then exits with code 0 on success. Use this in deployment pipelines before starting the live process.
@@ -76,7 +82,7 @@ cargo build -p makod --release
 Every enabled port exposes `GET /health`:
 
 ```
-HTTP 200  {"status":"ok","version":"0.10.0","uptime_secs":142}
+HTTP 200  {"status":"ok","version":"0.13.0","uptime_secs":142}
 HTTP 503  {"status":"degraded","reason":"deadline_scheduler not running"}
 ```
 
@@ -102,8 +108,8 @@ Adjust the timeout via `--shutdown-timeout-secs <N>`.
 |---|---|---|
 | `--data-dir <DIR>` | `MAKOD_DATA_DIR` | Persistent SlateDB path. Omit only with `--allow-volatile`. |
 | `--allow-volatile` | `MAKOD_ALLOW_VOLATILE` | Permit in-memory (non-durable) mode. Never use in production. |
-| `--tenant-id <ID>` | `MAKOD_TENANT_ID` | Operator BDEW code / GLN / EIC. |
-| `--marktrollen <ROLES>` | `MAKOD_MARKTROLLEN` | **Required** when `--http-addr` is set. Comma-separated Marktrollen (e.g. `LF,LFG`, `NB,MSB`). An unlisted role is rejected with `422`. |
+| `--config <FILE>` | `MAKOD_CONFIG` | TOML config file. **Required** — must define at least one `[[party]]` entry (`mp_id` + `roles`); the primary entry is the operator identity. |
+| `--marktrollen <ROLES>` | `MAKOD_MARKTROLLEN` | Optional override of the role allow-list (comma-separated, e.g. `LF,LFG`, `NB,MSB`). Defaults to all roles from `[[party]]`. A command for an unlisted role is rejected with `422`. |
 | `--http-addr <ADDR>` | `MAKOD_HTTP_ADDR` | Enable HTTP REST API on this address. |
 | `--auth-key <NAME=TOKEN>` | `MAKOD_AUTH_KEYS` | Named API key for Bearer authentication. Repeatable. At least one `--auth-key` or `--oidc-issuer` is required when `--http-addr` is set. |
 | `--oidc-issuer <URL>` | `MAKOD_OIDC_ISSUER` | OIDC issuer URL. `makod` fetches `<URL>/.well-known/openid-configuration` at startup and validates JWT bearer tokens. |
@@ -324,11 +330,13 @@ End-to-end tests covering all process families live in `tests/`:
 | `e2e_lieferbeginn.rs` | GPKE LF-Anmeldung bilateral (LFN ↔ NB, PIDs 55001/55003/55004) |
 | `e2e_lieferende.rs` | GPKE Lieferende bilateral (PIDs 55002/55005/55006) |
 | `e2e_lieferantenwechsel.rs` | Full supplier-switch saga with APERAK timeout |
-| `e2e_gpke_lf_abmeldung.rs` | GPKE Kündigung Lieferbeginn (PIDs 55016/55017/55018) |
+| `e2e_gpke_lf_abmeldung.rs` | GPKE Abmeldung/Beendigung der Zuordnung (NB→LF, PIDs 55007/55008/55009) |
 | `e2e_gpke_neuanlage.rs` | GPKE Neuanlage (new grid connection) |
+| `e2e_gpke_ankuendigung_zuordnung_lf.rs` | GPKE Ankündigung Zuordnung (NB→LFN, PID 55607) |
 | `e2e_sperrung.rs` | GPKE Sperrung/Entsperrung ORDERS/ORDRSP |
-| `e2e_netznutzungsabrechnung.rs` | GPKE INVOIC billing (31001–31008) |
+| `e2e_netznutzungsabrechnung.rs` | GPKE INVOIC billing (31001/31002/31005/31006) |
 | `e2e_anfrage_bestellung.rs` | GPKE Anfrage individuelle Bestellung (PID 55555) |
+| `e2e_loopback.rs` | VIU self-addressed loopback + FV coexistence |
 | `e2e_wim_*.rs` | WiM Strom MSB-Wechsel, Gerätewechsel, Geräteübernahme, Stammdaten, Steuerungsauftrag, Stornierung |
 | `e2e_wim_gas_anmeldung.rs` | WiM Gas Anmeldung (PIDs 44039–44053) |
 | `e2e_lieferbeginn_gas.rs` | GeLi Gas bilateral (PIDs 44001/44003/44004) |

@@ -1122,19 +1122,26 @@ The AS4 endpoint URL is carried in the `COM` segment with qualifier `"AK"`
 
 ## Redispatch 2.0
 
-**Regulatory basis:** BNetzA BK6 (Beschluss BK6-20-160 und Folgebeschlüsse)
+**Regulatory basis:** §§ 13, 13a, 14 EnWG; BNetzA Beschlüsse BK6-20-059,
+BK6-20-060, BK6-20-061 (see [Redispatch 2.0](redispatch.md) for the
+per-ruling deadline table)
 
-Redispatch 2.0 uses **XML-based messages** (not EDIFACT) alongside IFTSTA status
-messages. The `mako-redispatch` crate handles the IFTSTA-based status workflow;
-the XML document formats are parsed by `redispatch-xml`.
+Redispatch 2.0 uses **XML-based messages** (not EDIFACT) alongside IFTSTA
+status messages. `redispatch-xml` parses/validates the nine document types,
+`mako-redispatch` runs the eight event-sourced workflows, and `makod`'s AS4
+ingest joins the two (XML sniff → parse → `document_kind` → workflow, with
+the 5-min/6h/24h deadlines registered at spawn).
 
-| Process | Roles | Format | IFTSTA PID | Crate |
+| Process | Roles | Format | IFTSTA PID | Workflow |
 |---|---|---|---|---|
-| Aktivierungsauftrag | NB → BTR | ActivationDocument (XML) | IFTSTA **21037/21038** | `mako-redispatch` ✅ |
-| Kaskade | NB → NB | Kaskade (XML) | — | `redispatch-xml` ✅ |
-| Stammdaten | NB → BTR | Stammdaten (XML) | — | `redispatch-xml` ✅ |
-| Netzrestriktion | NB → BTR | NetworkConstraintDocument (XML) | — | `redispatch-xml` ✅ |
-| PlannedResourceSchedule | NB → NB | PlannedResourceScheduleDocument (XML) | — | `redispatch-xml` ✅ |
+| Aktivierungsauftrag | NB → BTR | ActivationDocument (XML) | IFTSTA **21037/21038** | `redispatch-aktivierung` ✅ |
+| Stammdaten | BTR → NB | Stammdaten (XML) | — | `redispatch-stammdaten` ✅ |
+| Planungsdaten | NB → NB | PlannedResourceScheduleDocument (XML) | — | `redispatch-planungsdaten` ✅ |
+| Nichtbeanspruchbarkeit | BTR → NB | Unavailability_MarketDocument (XML) | — | `redispatch-verfuegbarkeit` ✅ |
+| Netzengpass | NB ↔ NB | NetworkConstraintDocument (XML) | — | `redispatch-netzengpass` ✅ |
+| Kaskade | NB → NB | Kaskade (XML) | — | `redispatch-kaskade` ✅ |
+| Statusanfrage | bidirectional | StatusRequest_MarketDocument (XML) | — | `redispatch-statusanfrage` ✅ |
+| Kostenblatt | VNB → ÜNB | Kostenblatt (XML) | — | `redispatch-kostenblatt` ✅ |
 
 **Message flow — Redispatch Aktivierung:**
 

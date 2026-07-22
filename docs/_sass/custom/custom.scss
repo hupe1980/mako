@@ -18,7 +18,6 @@ $c-blue:       #2563eb;
 $c-blue-d:     #1d4ed8;
 $c-slate:      #0f172a;
 $c-slate-md:   #1e293b;
-$c-code-bg:    #f8f8f8;
 
 // ── CSS custom property overrides ─────────────────────────────────────────────
 :root {
@@ -32,6 +31,41 @@ $c-code-bg:    #f8f8f8;
   --mako-radius-sm:               6px;
   --mako-shadow-card:             0 1px 3px rgba(0,0,0,.08),0 4px 12px rgba(0,0,0,.06);
   --mako-shadow-card-hover:       0 2px 8px rgba(0,0,0,.1),0 8px 24px rgba(245,158,11,.12);
+}
+
+// ── Dark-scheme overrides ─────────────────────────────────────────────────────
+// The theme toggle (nav_footer_custom.html) stamps `data-theme` on <html> and
+// switches the Just the Docs scheme stylesheet via jtd.setTheme(). Custom
+// components below read var(--color-*) and adapt automatically; only literal
+// colors need explicit dark values.
+[data-theme="dark"] {
+  --mako-warning-fg:     #fbbf24;
+  --mako-warning-bg:     rgba(245, 158, 11, 0.12);
+  --mako-warning-border: rgba(245, 158, 11, 0.35);
+  --mako-shadow-card:       0 1px 3px rgba(0,0,0,.4), 0 4px 12px rgba(0,0,0,.3);
+  --mako-shadow-card-hover: 0 2px 8px rgba(0,0,0,.5), 0 8px 24px rgba(245,158,11,.15);
+}
+
+// ── Theme toggle button (sidebar footer) ─────────────────────────────────────
+.mako-theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: transparent;
+  color: var(--color-fg-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--mako-radius-sm);
+  font-size: 0.78rem;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+
+  &:hover {
+    color: $c-amber-d;
+    border-color: $c-amber;
+  }
+
+  &__icon { font-size: 0.9rem; }
 }
 
 // ── Typography ────────────────────────────────────────────────────────────────
@@ -115,9 +149,9 @@ h1,h2,h3,h4 { letter-spacing: -0.01em; }
   &__warning {
     display: inline-block;
     font-size: 0.82rem;
-    color: #92400e;
-    background: #fef3c7;
-    border: 1px solid #fde68a;
+    color: var(--mako-warning-fg, #92400e);
+    background: var(--mako-warning-bg, #fef3c7);
+    border: 1px solid var(--mako-warning-border, #fde68a);
     border-radius: var(--mako-radius-sm);
     padding: 0.35rem 0.85rem;
   }
@@ -408,35 +442,6 @@ figure.highlight {
   border-left: 3px solid $c-amber;
   border-radius: 0 var(--mako-radius-sm) var(--mako-radius-sm) 0;
   font-size: 0.875rem;
-}
-
-// ── Quick-start tab panels (label + code pairing) ─────────────────────────────
-.mako-code-tabs {
-  margin: 1.5rem 0 2rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--mako-radius);
-  overflow: hidden;
-}
-
-.mako-code-tab-header {
-  display: flex;
-  background: var(--color-code-background);
-  border-bottom: 1px solid var(--color-border);
-  font-size: 0.8rem;
-  font-weight: 600;
-  padding: 0 0.75rem;
-  gap: 0.25rem;
-
-  span {
-    padding: 0.5rem 0.75rem;
-    color: var(--color-fg-muted);
-    cursor: default;
-
-    &.active {
-      color: $c-amber-d;
-      border-bottom: 2px solid $c-amber;
-    }
-  }
 }
 
 // ── Tables ────────────────────────────────────────────────────────────────────

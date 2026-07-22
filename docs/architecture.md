@@ -275,6 +275,9 @@ Product::Waerme(HeatProduct)                  → HeatProvider
 Product::Solar(SolarProduct)                  → SolarProvider
 Product::Eeg(EegProduct)                      → EegProvider
 Product::Einspeisung(EinspeisungProduct)       → EinspeisungProvider
+Product::Hems(HemsProduct)                     → HemsProvider
+Product::Emobility(EmobilityProduct)           → EmobilityProvider
+Product::Energiedienstleistung(ServiceProduct) → ServiceProvider
 Product::Sharing(SharingProduct)               → ElectricityProvider + EnergyShareProvider
 ```
 
@@ -297,7 +300,7 @@ Pass 5  Cancellation sign reversal   (Stornorechnung)
 
 | Crate | Version | Purpose |
 |---|---|---|
-| [`billing`](https://crates.io/crates/billing) | `0.6` | Generic tariff billing engine — graduated/volume/block/capacity pricing (`TariffSchedule`), HT/NT (`TimeOfUsePricing`), EPEX intervals (`DynamicPricing`), `prorate`/`merge_period_documents`, penny-correct `ProportionalAllocation`; used by `energy-billing` and `eeg-billing` |
+| [`billing`](https://crates.io/crates/billing) | `0.7` | Generic tariff billing engine — graduated/volume/block/capacity pricing (`TariffSchedule`), HT/NT (`TimeOfUsePricing`), EPEX intervals (`DynamicPricing`), `prorate`/`merge_period_documents`, penny-correct `ProportionalAllocation`; used by `energy-billing` and `eeg-billing` |
 | [`sepa`](https://crates.io/crates/sepa) | `0.3` | SEPA payment utilities — IBAN (ISO 13616 + 56-country registry), BIC (ISO 9362), `CreditorId` (EPC AT-02), pain.008 SDD CORE+B2B XML (`Pain008Builder`, typed `SequenceType`), pain.001 SCT+SCT Instant XML (`Pain001Builder`), pain.002 status report parser, camt.053 end-of-day statement parser, camt.054 notification types; `ct_from_eur_str` / `ct_to_eur_str`; used by `accountingd` and `vertragd` |
 
 ---
@@ -415,8 +418,8 @@ See [`processd` Operator Guide](./processd.md).
 
 `invoicd` is the autonomous INVOIC plausibility-check pipeline for the
 Lieferant role. It subscribes to `de.mako.process.initiated` events from `marktd`,
-runs five checks (period validity, position arithmetic, document total, tariff
-match, tariff found), persists the receipt to PostgreSQL, then issues
+runs six checks (period validity, position arithmetic, document total, tariff
+match, Zahlungsziel, MMM settlement price), persists the receipt to PostgreSQL, then issues
 `gpke.abrechnung.annehmen` or `gpke.abrechnung.ablehnen` back to `makod`.
 
 The PostgreSQL persistence provides a durable audit trail of all received
@@ -666,7 +669,7 @@ sequenceDiagram
 
 1. Render EDIFACT interchange via `edi-energy` builders.
 2. Look up trading partner AS4 endpoint in `PartnerStore`.
-3. Sign + encrypt with operator BrainpoolP256r1 credentials (`asx-rs` v0.8 — ECDSA-SHA256 + ECDH-ES key agreement via `with_signing_material(cert, key)`).
+3. Sign + encrypt with operator BrainpoolP256r1 credentials (`asx-rs` v0.10 — ECDSA-SHA256 + ECDH-ES key agreement via `with_signing_material(cert, key)`).
 4. POST via `asx-rs` AS4 sender.
 5. On HTTP 200: delete outbox entry. On 4xx/5xx: back-off and retry.
 

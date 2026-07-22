@@ -7,7 +7,7 @@ description: >
   Run the full mako NB STP demo stack — makod, marktd, processd, and a webhook
   receiver — in under 5 minutes. Submit a UTILMD 55001, watch processd
   auto-accept via netz-checker, and receive the UTILMD 55003 confirmation.
-  Version 0.12.0, BDEW FV2026-10-01 compliant.
+  Version 0.13.0, BDEW FV2026-10-01 compliant.
 ---
 
 # Getting Started
@@ -35,7 +35,7 @@ sequenceDiagram
 
     LF->>makod: POST /edifact<br/>UTILMD 55001
     makod-->>webhook: APERAK BGM+312<br/>(45-min deadline, auto)
-    makod->>marktd: de.mako.process.initiated<br/>HMAC POST /api/v1/mako/events
+    makod->>marktd: de.mako.process.initiated<br/>HMAC POST /api/v1/events (demo override)
     marktd->>processd: de.mako.process.initiated<br/>HMAC POST /webhook
     marktd-->>webhook: de.mako.process.initiated<br/>(ERP subscription)
     processd->>marktd: GET /api/v1/versorgung/{malo_id}

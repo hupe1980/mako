@@ -26,7 +26,7 @@ API-Webdienste Strom.
 ┌───────────────────────────────────────────────────────────────┐
 │  makod                                                        │
 │                                                               │
-│  :4080  ← AS4/ebMS3 inbound (EDIFACT via SOAP/MTOM)          │
+│  :4080  ← AS4/ebMS3 inbound (EDIFACT + Redispatch XML)       │
 │  :8080  ← HTTP REST API  (POST /edifact, admin endpoints)    │
 │  :8090  ← API-Webdienste Strom (iMS REST/JSON)               │
 │                                                               │
@@ -79,10 +79,9 @@ See the individual service READMEs for setup details.
 
 ```bash
 cargo run -p makod -- \
+  --config makod.toml \
   --allow-volatile \
-  --http-addr 127.0.0.1:8080 \
-  --tenant-id 9900357000004 \
-  --marktrollen LF
+  --http-addr 127.0.0.1:8080
 ```
 
 Without `--allow-volatile`, makod **refuses to start** in volatile mode and
@@ -97,18 +96,18 @@ or via the config file (`storage.allow_volatile = true`).
 
 ```bash
 cargo run -p makod -- \
+  --config makod.toml \
   --data-dir /var/lib/makod \
   --http-addr 0.0.0.0:8080 \
-  --auth-key erp-prod=$(openssl rand -hex 32) \
-  --tenant-id 9900357000004
+  --auth-key erp-prod=$(openssl rand -hex 32)
 ```
 
 ### Full production deployment
 
 ```bash
 makod \
+  --config /etc/makod/makod.toml \
   --data-dir /var/lib/makod \
-  --tenant-id 9900357000004 \
   --http-addr 0.0.0.0:8080 \
   --auth-key erp-sap=$(openssl rand -hex 32) \
   --auth-key ops-grafana=$(openssl rand -hex 32) \
@@ -144,8 +143,10 @@ bucket   = "my-makod-events"
 prefix   = "makod"              # key prefix within the bucket
 # endpoint = "http://minio:9000"  # uncomment for MinIO / S3-compatible
 
-[engine]
-tenant_id = "9900357000004"     # your 13-digit GLN
+[[party]]
+mp_id   = "9900357000004"       # your 13-digit GLN
+roles   = ["NB"]                # this identity's Marktrollen
+primary = true                  # storage partition key + default sender MP-ID
 
 [http]
 addr           = "0.0.0.0:8080"
@@ -239,15 +240,38 @@ Azure credentials: `AZURE_STORAGE_ACCOUNT_KEY`, or service-principal via `AZURE_
 
 | TOML key | Env var | CLI flag | Default | Description |
 |---|---|---|---|---|
-| `tenant_id` | `MAKOD_TENANT_ID` | `--tenant-id` | `"default"` | Operator GLN or opaque ID |
 | `shutdown_timeout_secs` | `MAKOD_SHUTDOWN_TIMEOUT_SECS` | `--shutdown-timeout-secs` | `30` | Shutdown grace period in seconds |
 | `deadline_poll_interval_secs` | `MAKOD_DEADLINE_POLL_INTERVAL_SECS` | `--deadline-poll-interval-secs` | `30` | How often the deadline scheduler polls for due deadlines (minimum 1 s; set ≤30 s for Redispatch 2.0 Activation 5-minute constraint) |
-| *(CLI/env only)* | `MAKOD_MARKTROLLEN` | `--marktrollen` | *(required when `--http-addr` is set)* | Marktrollen this instance is authorised to issue commands for (comma-separated) |
+| *(CLI/env only)* | `MAKOD_MARKTROLLEN` | `--marktrollen` | *(all `[[party]]` roles)* | Optional override of the Marktrollen this instance accepts commands for (comma-separated) |
 | *(CLI/env only)* | `MAKOD_DEPLOYMENT_ROLES` | `--deployment-roles` | *(all roles)* | Roles that gate PID registration: `NB`, `LF`, `MSB`, `NMSB`, `AMSB`, `BKV`, `UENB`/`FNB`, `BIKO`, `ESA` |
 | *(CLI/env only)* | `MAKOD_ESA_PARTNER_GLNS` | `--esa-partner-glns` | *(empty)* | GLNs of counterparties acting as an Energieserviceanbieter — see below |
 
-Set `tenant_id` to your own 13-digit GLN. All process streams and inbox keys are
-scoped to this identifier.
+Operator identity does not live in `[engine]` — it comes from the `[[party]]`
+entries (see below). All process streams and inbox keys are scoped to the
+primary party's MP-ID.
+
+### `[[party]]` — operator identities (required)
+
+At least one `[[party]]` entry is required; makod refuses to start without one.
+An operator holding multiple Marktpartner-IDs (e.g. separate BDEW registrations
+for NB, LF, and MSB subsidiaries) lists one entry per identity.
+
+| TOML key | Required | Description |
+|---|---|---|
+| `mp_id` | yes | 13-digit BDEW-Codenummer (`99…`), DVGW-Codenummer (`98…`), GS1 GLN, or 16-char EIC |
+| `roles` | yes | Marktrollen this identity is registered for: `NB`, `LF`, `MSB`, `GNB`, `LFG`, `gMSB`, `MGV`, `BKV`, `UNB`, `ANB`, `VNB`, `NMSB`, `AMSB` |
+| `primary` | no | Marks the storage partition key (derives the engine `TenantId` and the default EDIFACT sender MP-ID). When absent, the first entry is primary. |
+
+```toml
+[[party]]
+mp_id   = "9900001000001"
+roles   = ["NB"]
+primary = true
+
+[[party]]
+mp_id = "9900001000002"
+roles = ["LF", "LFG"]
+```
 
 ### ESA counterparties
 
@@ -573,7 +597,7 @@ principal entity ID in your policies.
 | TOML key | Env var | CLI flag | Description |
 |---|---|---|---|
 | `addr` | `MAKOD_AS4_ADDR` | `--as4-addr` | TCP listen address |
-| `party_id` | `MAKOD_AS4_PARTY_ID` | `--as4-party-id` | Operator GLN (defaults to `engine.tenant_id`) |
+| `party_id` | `MAKOD_AS4_PARTY_ID` | `--as4-party-id` | Operator GLN (defaults to the primary `[[party]]` MP-ID) |
 | `signing_key_pem` | `MAKOD_AS4_SIGNING_KEY_PEM` | `--as4-signing-key-pem` | PEM key (inline) |
 | `signing_key_pem_file` | — | — | Path to PEM key file *(preferred)* |
 | `signing_cert_pem` | `MAKOD_AS4_SIGNING_CERT_PEM` | `--as4-signing-cert-pem` | PEM cert (inline) |
@@ -999,7 +1023,7 @@ LF-licensed deployment from accidentally issuing NB commands, and vice versa.
 
 | Field | Source |
 |---|---|
-| `sender_mp_id` | Always our operator GLN from `--tenant-id` |
+| `sender_mp_id` | Always our operator GLN — the primary `[[party]]` MP-ID (role-specific entries override per command) |
 | `receiver_mp_id` | Resolved from the MaLo cache (`data_market_location_network_operators`) |
 | `pruefidentifikator` | Derived from command name (e.g. `gpke.lieferbeginn.anmelden` → 55001) |
 | `message_ref` | Generated by the engine (UUID); replay-stable across retries |

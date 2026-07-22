@@ -1,5 +1,6 @@
 //! End-to-end test: GPKE Netznutzungsabrechnung / Mehr-Mindermengen —
-//! INVOIC-based billing (PIDs 31001, 31002, 31005–31009).
+//! INVOIC-based billing (PIDs 31001, 31002, 31005; workflow registers
+//! 31001/31002/31005/31006).
 //!
 //! Models the NB (Netzbetreiber) side of the GPKE billing workflow.  The NB
 //! processes an outbound INVOIC addressed to the supplier (LF) and tracks
@@ -7,8 +8,8 @@
 //!
 //! **Note**: PID 31004 ("Stornorechnung") belongs to WiM Gas per
 //! `docs/pid-reference.md`. It is NOT a GPKE PID.
-//! **Note**: PID 31009 ("MSB-Rechnung", GPKE Teil 3) was moved here from
-//! `mako-wim::rechnung` per `docs/pid-reference.md`.
+//! **Note**: PID 31009 ("MSB-Rechnung") is registered by `mako-wim`'s
+//! `wim-rechnung` workflow, not here — see `crates/mako-wim/src/rechnung.rs`.
 //!
 //! # Regulatory basis
 //!

@@ -83,7 +83,7 @@ impl IntoMdmResponse for MdmError {
 
 /// The instance's primary tenant GLN, injected as an Axum `Extension`.
 ///
-/// Set once at startup from `cfg.makod.tenant_id`.
+/// Set once at startup from `cfg.makod.tenant`.
 /// Used by handlers that don't have direct access to `AppState` (e.g. `preisblatt`)
 /// as the `resource_tenant` argument to [`mako_service::cedar::CedarEnforcer::check`].
 #[derive(Debug, Clone)]

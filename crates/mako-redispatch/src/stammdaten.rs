@@ -235,7 +235,12 @@ impl Workflow for StammdatenWorkflow {
     /// Fire deadline commands when the ACK or forward windows expire.
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
         match (deadline.label(), state) {
-            (ACK_WINDOW_LABEL, StammdatenState::Received(_)) => {
+            // 6h ACK window while Received; 1-Werktag forward window (VNB →
+            // ÜNB, BK6-20-060) while Acknowledged — the latter was previously
+            // defined but never enforced, so an acknowledged Stammdaten
+            // document that was never forwarded now expires visibly.
+            (ACK_WINDOW_LABEL, StammdatenState::Received(_))
+            | (FORWARD_WINDOW_LABEL, StammdatenState::Acknowledged { .. }) => {
                 Some(StammdatenCommand::TimeoutExpired {
                     deadline_id: deadline.deadline_id(),
                     label: deadline.label().into(),
@@ -336,8 +341,14 @@ impl Workflow for StammdatenWorkflow {
             },
 
             StammdatenCommand::TimeoutExpired { deadline_id, label } => {
+                let is_forward_window = &*label == FORWARD_WINDOW_LABEL;
                 match state {
-                    // Terminal states — deadline is a no-op.
+                    // 1-Werktag forward window: an acknowledged document the
+                    // VNB never forwarded to the ÜNB expires visibly.
+                    StammdatenState::Acknowledged(_) if is_forward_window => {
+                        Ok(vec![StammdatenEvent::DeadlineExpired { deadline_id, label }].into())
+                    }
+                    // Terminal / already-progressed states — no-op.
                     StammdatenState::Acknowledged(_)
                     | StammdatenState::Forwarded(_)
                     | StammdatenState::DeadlineExpired { .. } => Ok(vec![].into()),
@@ -457,5 +468,37 @@ mod tests {
         )
         .unwrap();
         assert!(output.events.is_empty());
+    }
+
+    #[test]
+    fn unforwarded_stammdaten_expires_after_the_forward_window() {
+        let data = ReceivedData {
+            mrid: "sd-001".into(),
+            sender: "4012345000001".into(),
+            receiver: "4012345000002".into(),
+            doc_type: "Z01".into(),
+            anlagen_count: 1,
+            received_at: "2025-10-15T09:00:00Z".into(),
+        };
+        let state = StammdatenState::Acknowledged(data);
+        let out = StammdatenWorkflow::handle(
+            &state,
+            StammdatenCommand::TimeoutExpired {
+                deadline_id: DeadlineId::new(),
+                label: FORWARD_WINDOW_LABEL.into(),
+            },
+        )
+        .expect("forward-window timeout handled");
+        assert_eq!(out.events.len(), 1, "1-Werktag forward window must fire");
+        // The 6h ACK label stays a no-op in Acknowledged.
+        let noop = StammdatenWorkflow::handle(
+            &state,
+            StammdatenCommand::TimeoutExpired {
+                deadline_id: DeadlineId::new(),
+                label: ACK_WINDOW_LABEL.into(),
+            },
+        )
+        .expect("ack timeout in acknowledged is noop");
+        assert!(noop.events.is_empty());
     }
 }

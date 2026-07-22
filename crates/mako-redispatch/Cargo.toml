@@ -10,6 +10,11 @@ rust-version.workspace = true
 keywords     = ["redispatch", "energy", "mako", "bdew", "congestion"]
 categories   = ["data-structures"]
 
+# Format-agnostic by design (like mako-gpke/mako-wim/mako-mabis): the engine
+# never depends on a format crate. The XML half (`redispatch-xml`) and the
+# DocumentType → RedispatchDocumentKind mapping live at the transport
+# boundary in makod, which depends on both crates.
+
 [dependencies]
 mako-engine      = { workspace = true }
 serde            = { workspace = true }
@@ -17,10 +22,6 @@ serde_json       = { workspace = true }
 thiserror        = { workspace = true }
 time             = { workspace = true }
 uuid             = { workspace = true }
-
-[dev-dependencies]
-# redispatch-xml is only needed for integration tests (parse → route pipeline).
-redispatch-xml   = { path = "../redispatch-xml" }
 
 [features]
 testing = ["mako-engine/testing"]

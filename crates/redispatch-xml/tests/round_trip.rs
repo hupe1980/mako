@@ -738,3 +738,48 @@ fn market_participant_id_try_from() {
     assert!(MarketParticipantId::try_from("12345678901234").is_err()); // 14 digits
     assert!(MarketParticipantId::try_from("404539900000X").is_err()); // non-digit
 }
+
+// ── Namespace-checked round trip ─────────────────────────────────────────────
+
+/// `parse(serialize(doc))` must survive the namespace-checked path — the
+/// serializer injects the XSD's default `xmlns`, so a serialized document is
+/// a valid wire document, not just `parse_as`-compatible.
+#[test]
+fn serialized_activation_survives_the_namespace_checked_parse() {
+    let doc = ActivationDocument {
+        document_identification: sample_doc_id(),
+        document_version: sample_doc_version(),
+        document_type: AttrV {
+            v: ActivationDocType::RedispatchActivation,
+        },
+        process_type: AttrV {
+            v: ActivationProcessType::Redispatch,
+        },
+        sender_identification: sample_sender(),
+        sender_role: AttrV {
+            v: MarketRoleType::GridOperator,
+        },
+        receiver_identification: sample_receiver(),
+        receiver_role: AttrV {
+            v: MarketRoleType::ResourceProvider,
+        },
+        creation_date_time: AttrV { v: sample_ts() },
+        activation_time_interval: sample_interval(),
+        order_identification: None,
+        order_identification_version: None,
+        time_series: vec![sample_activation_ts()],
+        reason: None,
+    };
+
+    let xml = redispatch_xml::serialize(&redispatch_xml::Document::from(doc)).unwrap();
+    let xml_str = std::str::from_utf8(&xml).unwrap();
+    assert!(
+        xml_str.contains("xmlns=\"urn:entsoe.eu:wgedi:errp:activationdocument:5:0\""),
+        "serializer must emit the ERRP namespace, got: {}",
+        &xml_str[..200.min(xml_str.len())]
+    );
+
+    // The strict, namespace-checked entry point — not parse_as.
+    let back = redispatch_xml::parse(&xml).expect("namespace-checked parse succeeds");
+    assert!(matches!(back, redispatch_xml::Document::Activation(_)));
+}

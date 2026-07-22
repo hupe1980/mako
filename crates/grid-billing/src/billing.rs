@@ -1117,7 +1117,7 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
             LegalReference::MsbG {
                 paragraph: "§§6–7"
             },
-            LegalReference::MessZv { paragraph: "§2" },
+            LegalReference::MsbG { paragraph: "§30" },
         ],
         None,
     );
@@ -1140,7 +1140,9 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
                 input_quantity: Decimal::ONE,
                 input_unit_price_eur: msl,
                 gross_eur: msl,
-                legal_refs: vec![LegalReference::MessZv { paragraph: "§2" }],
+                legal_refs: vec![LegalReference::MsbG {
+                    paragraph: "§§34–35",
+                }],
                 tariff_source: None,
                 regulatory_reduction_factor: None,
                 rounding_note: Some("flat fee — rounded to 5 dp"),
@@ -2151,7 +2153,6 @@ mod tests {
             LegalReference::Sect14aEnwg {
                 module: Sect14aModule::Modul2,
             },
-            LegalReference::MessZv { paragraph: "§2" },
             LegalReference::MsbG {
                 paragraph: "§§6–7"
             },

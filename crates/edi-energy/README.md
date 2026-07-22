@@ -23,7 +23,7 @@ it is also useful standalone for:
 | `aperak` | Application Error and Acknowledgement | APERAK | 2.1i · 2.2 |
 | `contrl` | Interchange Control Response | CONTRL | 2.0b |
 | `invoic` | Invoice | INVOIC | 2.8e |
-| `remadv` | Remittance Advice | REMADV | 2.9e |
+| `remadv` | Remittance Advice | REMADV | 2.9f |
 | `orders` | Purchase Order | ORDERS | 1.4b · 1.4c |
 | `ordrsp` | Purchase Order Response | ORDRSP | 1.4b · 1.4c |
 | `ordchg` | Purchase Order Change | ORDCHG | 1.1 |
@@ -36,8 +36,9 @@ it is also useful standalone for:
 | `partin` | Party Information | PARTIN | 1.0f · 1.1 |
 | `utilts` | Utility Time Series | UTILTS | 1.1e |
 
-The default feature set enables all 17 message types. Use explicit feature
-selection to reduce binary size for production tooling.
+The default feature set enables `utilmd`, `mscons`, `aperak`, and `contrl` —
+the four message types every MaKo deployment needs. Enable the other flags
+explicitly (or `--all-features`) for the full set of 17.
 
 ## Quick Start
 
@@ -45,7 +46,7 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-edi-energy = "0.11"
+edi-energy = "0.13"
 ```
 
 ### Parse and validate
@@ -131,9 +132,10 @@ automatically — no per-message format selection is needed.
 
 | Feature | Default | Description |
 |---|---|---|
-| All message-type flags above | ✓ on | Enable the corresponding profile and parser |
-| `serde` | ✓ on | `serde::{Serialize, Deserialize}` on public types |
-| `diagnostics` | ✓ on | Rich validation error messages with segment context |
+| `utilmd`, `mscons`, `aperak`, `contrl` | ✓ on | The default message-type set |
+| All other message-type flags above | off | Enable the corresponding profile and parser |
+| `serde` | off | `serde::{Serialize, Deserialize}` on public types |
+| `diagnostics` | off | Rich validation error messages with segment context |
 | `tracing` | off | Emit `tracing` events during parse (performance overhead) |
 | `archive` | off | Include expired profile versions (`FV2024-10-01` and earlier) |
 

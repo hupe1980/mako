@@ -536,6 +536,8 @@ sequenceDiagram
 | `GET` | `/api/v1/redispatch/kostenblatt` | List by period (`?year=&month=&status=`) |
 | `POST`| `/api/v1/redispatch/kostenblatt/{activation_id}/compute` | Auto-compute via edmd |
 | `POST`| `/api/v1/redispatch/kostenblatt/submit/{year}/{month}` | Submit all pending |
+| `GET` | `/api/v1/redispatch/kostenblatt/gaps/{year}/{month}` | Activations still missing a Kostenblatt for the period |
+| `POST`| `/api/v1/redispatch/verguetung/{activation_id}/compute` | Compute the §13a Abs. 2 EnWG angemessene Vergütung for one activation (Ausfallarbeit via edmd Lastgang) |
 
 ---
 

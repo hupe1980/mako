@@ -10,7 +10,7 @@ addr = "0.0.0.0:8180"
 [makod]
 base_url  = "http://makod:8080"
 api_key   = ""
-tenant_id = "9900357000004"
+tenant = "9900357000004"
 
 [webhook]
 inbound_path = "/api/v1/events"

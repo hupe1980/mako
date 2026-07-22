@@ -102,7 +102,8 @@ let msg = parse_with_config(bytes, config)?;
 A single UNB…UNZ envelope may contain multiple UNH…UNT messages of any type. `parse_interchange` returns a lazy iterator; messages are parsed and dispatched one at a time.
 
 ```rust
-use std::io::{BufReader, File};
+use std::fs::File;
+use std::io::BufReader;
 use edi_energy::{parse_interchange, EdiEnergyMessage};
 
 let file = File::open("bulk.edi")?;

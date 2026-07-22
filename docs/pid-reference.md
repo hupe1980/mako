@@ -434,9 +434,9 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 17206 | Anforderung Bilanzierungsgebietsclearingliste | MaBiS | NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
 | 17207 | Ab-/Bestellung BK-SZR auf Aggregationsebene RZ | MaBiS | BKV → ÜNB | — | ✅ | — | ✅ | ✅ | — |
 | 17208 | Anforderung Clearingliste ÜNB-DZR | MaBiS | ÜNB → BIKO | — | ✅ | — | ✅ | ✅ | — |
-| 17209 | Anforderung Ausfallarbeit | Redispatch 2.0 | aNB → ANB | — | ✅ | — | ✅ | ✅ | — |
-| 17210 | Anforderung Lieferantenausfallarbeitsclearingliste | MaBiS | LF → ANB | — | ✅ | — | ✅ | ✅ | — |
-| 17211 | Reklamation Profile bzw. Profilscharen | MABIS | LF → NB | — | ✅ | — | ✅ | ✅ | — |
+| 17209 | Anforderung Ausfallarbeit | Redispatch 2.0 | aNB → ANB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
+| 17210 | Anforderung Lieferantenausfallarbeitsclearingliste | MaBiS | LF → ANB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
+| 17211 | Reklamation Profile bzw. Profilscharen | MABIS | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
 | 17301 | Anforderung von Stammdaten bzw. Messwerten | HKN-R (NB↔UBA) | HKN-R → NB | — | ✅ | — | ✅ | ✅ | — |
 
 ## ORDRSP AHB
@@ -480,9 +480,9 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 19131 | Mitteilung zur Beendigung Konfiguration | GPKE Teil 3 | MSB → NB · MSB → MSB · MSB → LF | 17129 | ✅ | — | ✅ | ✅ | — |
 | 19132 | Mitteilung zur Bestellung Konfiguration | GPKE Teil 3 | MSB → NB · MSB → MSB · MSB → LF | 17130 | ✅ | — | ✅ | ✅ | — |
 | 19133 | Bearbeitungsstand Bestellung Änderung Abrechnungsdaten | GPKE Teil 2 | NB → LF | 17133 | ✅ | — | ✅ | ✅ | — |
-| 19204 | Ablehnung Ab-/Bestellung der Aggregationsebene | MaBiS | ÜNB → BKV | — | ✅ | — | ✅ | ✅ | — |
-| 19301 | Abl. der Anforderung | HKN-R (NB↔UBA) | NB → HKN-R | — | ✅ | — | ✅ | ✅ | — |
-| 19302 | Best. der Anforderung zum Beenden des Abos zur Stammdaten bzw. Messwertübermittlung | HKN-R (NB↔UBA) | NB → HKN-R | — | ✅ | — | ✅ | ✅ | — |
+| 19204 | Ablehnung Ab-/Bestellung der Aggregationsebene | MaBiS | ÜNB → BKV | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
+| 19301 | Abl. der Anforderung | HKN-R (NB↔UBA) | NB → HKN-R | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
+| 19302 | Best. der Anforderung zum Beenden des Abos zur Stammdaten bzw. Messwertübermittlung | HKN-R (NB↔UBA) | NB → HKN-R | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
 
 ## ORDCHG AHB
 
@@ -553,12 +553,12 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 13017 | Zählerstand (Strom) | HKN-R (NB↔UBA) / GPKE Teil 4 / WiM Strom Teil 1 / WiM Strom Teil 2 | NB → HKN-R · MSB → LF · MSBN → MSBA · MSBA → MSBN · MSB → MSB · MSB → NB · LF → MSB · NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-messwerte` |
 | 13018 | Lastgang Messlokation, Netzkoppelpunkt, Netzlokation | MaBiS / BK-Treue / MaBiS / GPKE Teil 4 / WiM Strom Teil 2 | NB → NB · NB → ÜNB · MSB → LF · MSB → MSB · MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-messwerte` |
 | 13019 | Energiemenge (Strom) | HKN-R (NB↔UBA) / GPKE Teil 2 / GPKE Teil 4 / WiM Strom Teil 2 | NB → HKN-R · NB → LF · MSB → LF · MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-messwerte` |
-| 13020 | Ausfallarbeitsüberführungszeitreihe | MaBiS | ANB → ÜNB · ANB → BIKO · BIKO → BKV · ÜNB → BIKO · BIKO → ANB | — | ✅ | — | ✅ | ✅ | — |
-| 13021 | Übermittlung von meteorologischen Daten | Redispatch 2.0 | BTR → ANB · ANB → aNB | — | ✅ | — | ✅ | ✅ | — |
-| 13022 | Redispatch 2.0 Einzelzeitreihe Ausfallarbeit | Redispatch 2.0 / MaBiS | NB → BTR · BTR → NB · aNB → ANB · ANB → LF · ANB → aNB | — | ✅ | — | ✅ | ✅ | — |
-| 13023 | Redispatch 2.0 Ausfallarbeitssummenzeitreihe | MaBiS | ANB → LF | — | ✅ | — | ✅ | ✅ | — |
+| 13020 | Ausfallarbeitsüberführungszeitreihe | MaBiS | ANB → ÜNB · ANB → BIKO · BIKO → BKV · ÜNB → BIKO · BIKO → ANB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
+| 13021 | Übermittlung von meteorologischen Daten | Redispatch 2.0 | BTR → ANB · ANB → aNB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
+| 13022 | Redispatch 2.0 Einzelzeitreihe Ausfallarbeit | Redispatch 2.0 / MaBiS | NB → BTR · BTR → NB · aNB → ANB · ANB → LF · ANB → aNB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
+| 13023 | Redispatch 2.0 Ausfallarbeitssummenzeitreihe | MaBiS | ANB → LF | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
 | 13025 | Lastgang Marktlokation, Tranche | HKN-R (NB↔UBA) / GPKE Teil 4 / WiM Strom Teil 2 | NB → HKN-R · MSB → LF · MSB → NB · MSB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-messwerte` |
-| 13026 | EEG-Überf.-ZR Aufgrund Ausfallarbeit | EEG-Überf.-ZR | BIKO → BKV · BIKO → NB | — | ✅ | — | ✅ | ✅ | — |
+| 13026 | EEG-Überf.-ZR Aufgrund Ausfallarbeit | EEG-Überf.-ZR | BIKO → BKV · BIKO → NB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
 | 13027 | Werte nach Typ 2 | WiM Strom Teil 2 | MSB → NB · MSB → LF · MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-messwerte` |
 | 13028 | Grundlage POG-Ermittlung | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | — |
 

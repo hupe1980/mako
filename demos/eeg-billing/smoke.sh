@@ -292,7 +292,7 @@ if [[ -n "${SETTLE_EUR:-}" && "${SETTLE_EUR}" != "?" ]]; then
 fi
 echo
 echo "  edmd Lastgang:    ${EDMD_URL}/api/v1/billing-period/${MALO_ID}?from=2026-06-01&to=2026-07-01"
-echo "  einsd receipt:    ${EINSD_URL}/api/v1/anlagen/${TR_ID}/settlements/${BILLING_YEAR}/${BILLING_MONTH}"
+echo "  einsd receipt:    ${EINSD_URL}/api/v1/anlagen/${TR_ID}/settlements?year=${BILLING_YEAR}&month=${BILLING_MONTH}"
 echo "  einsd MCP:        ${EINSD_URL}/mcp"
 echo "  edmd MCP:         ${EDMD_URL}/mcp"
 echo "  ERP events:       ${WEBHOOK_URL}/events"

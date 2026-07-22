@@ -152,6 +152,49 @@ pub enum ResponseType {
     PartialRejection,
 }
 
+/// Abruf variant in the Aufforderungsfall (Stammdaten `AbrufartAufforderungsfall`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Abrufart {
+    /// Z01 — Delta: the schedule states the *change* against the planned value.
+    Delta,
+    /// Z02 — Sollwert: the schedule states the absolute target value.
+    Sollwert,
+}
+
+/// How an activation is executed — the central Redispatch 2.0 case split
+/// (BK6-20-060: Aufforderungsfall vs Duldungsfall).
+///
+/// - **Aufforderungsfall**: the Einsatzverantwortliche (EIV/BTR) steers the
+///   resource itself according to the transmitted schedule. The 5-minute
+///   activation-response window applies — the NB *waits* for ACR/AAR.
+/// - **Duldungsfall**: the Netzbetreiber steers the resource directly via the
+///   technical Steuerkanal (the operator merely tolerates the measure). No
+///   counterparty response is awaited, so the 5-minute response deadline
+///   does **not** apply; the NB records its own ACR when steering succeeds.
+///
+/// Downstream, the case decides the §13a `EnWG` settlement path: Duldungsfall
+/// Ausfallarbeit is derived from measured vs. reference Lastgang, while the
+/// Aufforderungsfall settles against the transmitted schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "fall")]
+pub enum Abwicklung {
+    /// EIV-steered per schedule; 5-minute response window enforced.
+    Aufforderungsfall {
+        /// Delta (Z01) or Sollwert (Z02) schedule semantics.
+        abrufart: Abrufart,
+    },
+    /// NB-steered via Steuerkanal; no response window.
+    Duldungsfall,
+}
+
+impl Abwicklung {
+    /// Whether the 5-minute activation-response window applies.
+    #[must_use]
+    pub fn response_window_applies(self) -> bool {
+        matches!(self, Self::Aufforderungsfall { .. })
+    }
+}
+
 // ── Events ────────────────────────────────────────────────────────────────────
 
 /// Events emitted by the Aktivierung workflow.
@@ -162,6 +205,8 @@ pub enum AktivierungEvent {
     AcoReceived {
         /// MRID (UUID) of the ACO document.
         mrid: String,
+        /// Aufforderungsfall vs Duldungsfall for this activation.
+        abwicklung: Abwicklung,
         /// Ordered MW to redispatch.
         ordered_mw: f64,
         /// Resource object identifier (NDE coding scheme, BDEW resource code).
@@ -214,6 +259,27 @@ pub enum AktivierungEvent {
         /// Final aggregate response type.
         response_type: ResponseType,
     },
+    /// An `AcknowledgementDocument` was received for a sent document.
+    AckReceived {
+        /// MRID of the `AcknowledgementDocument`.
+        ack_mrid: String,
+        /// The acknowledged document's MRID.
+        acknowledged_mrid: String,
+        /// A01 accepted / A02 rejected.
+        reason_code: String,
+    },
+    /// A Redispatch MSCONS/ORDERS/ORDRSP market message was received
+    /// (audit record; no state transition).
+    MarketMessageReceived {
+        /// The message's Prüfidentifikator.
+        pid: u32,
+        /// Sender MP-ID.
+        sender: String,
+        /// Receiver MP-ID.
+        receiver: String,
+        /// EDIFACT message reference.
+        message_ref: String,
+    },
     /// IFTSTA Vollzugsmeldung received (PID 21037 or 21038).
     IftstaReceived {
         /// IFTSTA Prüfidentifikator (21037 = NB view, 21038 = BTR view).
@@ -243,6 +309,8 @@ impl EventPayload for AktivierungEvent {
             Self::AarSent { .. } => "AktivierungAarSent",
             Self::AnbResponseReceived { .. } => "AktivierungAnbResponseReceived",
             Self::ResponseForwarded { .. } => "AktivierungResponseForwarded",
+            Self::AckReceived { .. } => "AktivierungAckReceived",
+            Self::MarketMessageReceived { .. } => "AktivierungMarketMessageReceived",
             Self::IftstaReceived { .. } => "AktivierungIftstaReceived",
             Self::DeadlineExpired { .. } => "AktivierungDeadlineExpired",
         }
@@ -257,6 +325,8 @@ impl EventPayload for AktivierungEvent {
 pub struct AcoData {
     /// MRID of the initiating ACO.
     pub mrid: String,
+    /// Aufforderungsfall (EIV steers) or Duldungsfall (NB steers).
+    pub abwicklung: Abwicklung,
     /// Ordered MW.
     pub ordered_mw: f64,
     /// Resource identifier.
@@ -347,6 +417,10 @@ pub enum AktivierungCommand {
     ReceiveAco {
         /// MRID of the ACO document.
         mrid: String,
+        /// Aufforderungsfall vs Duldungsfall — from the resource's Stammdaten
+        /// (`StatusDuldungsfall`/`AbrufartAufforderungsfall`), resolved by the
+        /// transport layer before the command is issued.
+        abwicklung: Abwicklung,
         /// Ordered MW.
         ordered_mw: f64,
         /// Resource object identifier.
@@ -403,6 +477,31 @@ pub enum AktivierungCommand {
         /// Final aggregate response type.
         response_type: ResponseType,
     },
+    /// Any other Redispatch EDIFACT market message received
+    /// (MSCONS 13020/13021/13022/13023/13026, ORDERS 17209–17211,
+    /// ORDRSP 19204/19301/19302). Audit-only — drives no transition, but
+    /// gives every registered PID a handler instead of a silent route.
+    ReceiveMarketMessage {
+        /// The message's Prüfidentifikator.
+        pid: u32,
+        /// Sender MP-ID.
+        sender: String,
+        /// Receiver MP-ID.
+        receiver: String,
+        /// EDIFACT message reference.
+        message_ref: String,
+    },
+    /// `AcknowledgementDocument` received for a document this process sent
+    /// (correlation-routed via `ReceivingDocumentIdentification`). Audit
+    /// record — the 6h ACK deadline simply stops mattering once this lands.
+    ReceiveAck {
+        /// MRID of the `AcknowledgementDocument`.
+        ack_mrid: String,
+        /// The `ReceivingDocumentIdentification` it acknowledges.
+        acknowledged_mrid: String,
+        /// A01 accepted / A02 rejected.
+        reason_code: String,
+    },
     /// IFTSTA Vollzugsmeldung received (PID 21037 or 21038).
     ReceiveIftsta {
         /// IFTSTA PID (21037 = NB view, 21038 = BTR view).
@@ -455,9 +554,25 @@ impl Workflow for AktivierungWorkflow {
 
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
         match (deadline.label(), state) {
+            // 5-minute response window (BK6-20-060): only meaningful in the
+            // Aufforderungsfall — in the Duldungsfall the NB steers the
+            // resource itself and awaits no counterparty response, so a
+            // mistakenly scheduled window is ignored here.
             (
                 ACTIVATION_RESPONSE_WINDOW_LABEL,
-                AktivierungState::ActivationOrdered(_) | AktivierungState::DispatchedToAnb(_),
+                AktivierungState::ActivationOrdered(data) | AktivierungState::DispatchedToAnb(data),
+            ) if data.abwicklung.response_window_applies() => {
+                Some(AktivierungCommand::TimeoutExpired {
+                    deadline_id: deadline.deadline_id(),
+                    label: deadline.label().into(),
+                })
+            }
+            // 6h AcknowledgementDocument window (BK6-20-059): our sent
+            // ACR/AAR was never technically acknowledged — escalate. This
+            // label was previously defined but never handled.
+            (
+                ACK_WINDOW_LABEL,
+                AktivierungState::Confirmed { .. } | AktivierungState::PartialRejection { .. },
             ) => Some(AktivierungCommand::TimeoutExpired {
                 deadline_id: deadline.deadline_id(),
                 label: deadline.label().into(),
@@ -470,6 +585,7 @@ impl Workflow for AktivierungWorkflow {
         match event {
             AktivierungEvent::AcoReceived {
                 mrid,
+                abwicklung,
                 ordered_mw,
                 resource_id,
                 period,
@@ -478,6 +594,7 @@ impl Workflow for AktivierungWorkflow {
                 received_at,
             } => AktivierungState::ActivationOrdered(AcoData {
                 mrid: mrid.clone(),
+                abwicklung: *abwicklung,
                 ordered_mw: *ordered_mw,
                 resource_id: resource_id.clone(),
                 period: period.clone(),
@@ -521,18 +638,35 @@ impl Workflow for AktivierungWorkflow {
                 other => other,
             },
 
-            // IFTSTA is audit-only — does not drive state transitions.
-            AktivierungEvent::IftstaReceived { .. } => state,
+            // Audit-only events — do not drive state transitions.
+            AktivierungEvent::IftstaReceived { .. }
+            | AktivierungEvent::AckReceived { .. }
+            | AktivierungEvent::MarketMessageReceived { .. } => state,
 
-            AktivierungEvent::DeadlineExpired { label, .. } => match state {
-                AktivierungState::Confirmed { .. }
-                | AktivierungState::PartialRejection { .. }
-                | AktivierungState::Done(_)
-                | AktivierungState::DeadlineExpired { .. } => state,
-                _ => AktivierungState::DeadlineExpired {
-                    reason: format!("deadline expired: {label}"),
-                },
-            },
+            AktivierungEvent::DeadlineExpired { label, .. } => {
+                let is_ack_window = &**label == ACK_WINDOW_LABEL;
+                match state {
+                    // 6h ACK window: an unacknowledged ACR/AAR is a terminal
+                    // error even from Confirmed/PartialRejection.
+                    AktivierungState::Confirmed { .. }
+                    | AktivierungState::PartialRejection { .. }
+                        if is_ack_window =>
+                    {
+                        AktivierungState::DeadlineExpired {
+                            reason: format!(
+                                "AcknowledgementDocument not received within the 6h window ({label})"
+                            ),
+                        }
+                    }
+                    AktivierungState::Confirmed { .. }
+                    | AktivierungState::PartialRejection { .. }
+                    | AktivierungState::Done(_)
+                    | AktivierungState::DeadlineExpired { .. } => state,
+                    _ => AktivierungState::DeadlineExpired {
+                        reason: format!("deadline expired: {label}"),
+                    },
+                }
+            }
         }
     }
 
@@ -546,6 +680,7 @@ impl Workflow for AktivierungWorkflow {
         match command {
             AktivierungCommand::ReceiveAco {
                 mrid,
+                abwicklung,
                 ordered_mw,
                 resource_id,
                 period,
@@ -558,6 +693,7 @@ impl Workflow for AktivierungWorkflow {
                 }
                 Ok(vec![AktivierungEvent::AcoReceived {
                     mrid,
+                    abwicklung,
                     ordered_mw,
                     resource_id,
                     period,
@@ -659,6 +795,32 @@ impl Workflow for AktivierungWorkflow {
                 ))),
             },
 
+            AktivierungCommand::ReceiveAck {
+                ack_mrid,
+                acknowledged_mrid,
+                reason_code,
+            } => Ok(vec![AktivierungEvent::AckReceived {
+                ack_mrid,
+                acknowledged_mrid,
+                reason_code,
+            }]
+            .into()),
+
+            // MSCONS/ORDERS/ORDRSP: audit record in any state — every
+            // registered PID now has a handler.
+            AktivierungCommand::ReceiveMarketMessage {
+                pid,
+                sender,
+                receiver,
+                message_ref,
+            } => Ok(vec![AktivierungEvent::MarketMessageReceived {
+                pid,
+                sender,
+                receiver,
+                message_ref,
+            }]
+            .into()),
+
             // IFTSTA is accepted in any non-terminal state — audit record only.
             AktivierungCommand::ReceiveIftsta {
                 pid,
@@ -673,13 +835,24 @@ impl Workflow for AktivierungWorkflow {
             }]
             .into()),
 
-            AktivierungCommand::TimeoutExpired { deadline_id, label } => match state {
-                AktivierungState::Confirmed { .. }
-                | AktivierungState::PartialRejection { .. }
-                | AktivierungState::Done(_)
-                | AktivierungState::DeadlineExpired { .. } => Ok(vec![].into()),
-                _ => Ok(vec![AktivierungEvent::DeadlineExpired { deadline_id, label }].into()),
-            },
+            AktivierungCommand::TimeoutExpired { deadline_id, label } => {
+                match (state, &*label) {
+                    // 6h ACK escalation is valid from a sent-response state.
+                    (
+                        AktivierungState::Confirmed { .. }
+                        | AktivierungState::PartialRejection { .. },
+                        ACK_WINDOW_LABEL,
+                    ) => Ok(vec![AktivierungEvent::DeadlineExpired { deadline_id, label }].into()),
+                    (
+                        AktivierungState::Confirmed { .. }
+                        | AktivierungState::PartialRejection { .. }
+                        | AktivierungState::Done(_)
+                        | AktivierungState::DeadlineExpired { .. },
+                        _,
+                    ) => Ok(vec![].into()),
+                    _ => Ok(vec![AktivierungEvent::DeadlineExpired { deadline_id, label }].into()),
+                }
+            }
         }
     }
 }
@@ -691,6 +864,9 @@ mod tests {
 
     fn aco_data() -> AcoData {
         AcoData {
+            abwicklung: Abwicklung::Aufforderungsfall {
+                abrufart: Abrufart::Sollwert,
+            },
             mrid: "aco-001".into(),
             ordered_mw: 50.0,
             resource_id: "4012345678901".into(),
@@ -701,8 +877,24 @@ mod tests {
         }
     }
 
+    fn test_deadline(label: &str) -> Deadline {
+        use mako_engine::ids::{ProcessId, StreamId, TenantId};
+        use mako_engine::version::WorkflowId;
+        Deadline::new(
+            StreamId::new("process/test"),
+            ProcessId::new(),
+            TenantId::new(),
+            WorkflowId::new(WORKFLOW_NAME, "FV2025-10-01"),
+            label,
+            time::OffsetDateTime::now_utc(),
+        )
+    }
+
     fn receive_aco_cmd() -> AktivierungCommand {
         AktivierungCommand::ReceiveAco {
+            abwicklung: Abwicklung::Aufforderungsfall {
+                abrufart: Abrufart::Sollwert,
+            },
             mrid: "aco-001".into(),
             ordered_mw: 50.0,
             resource_id: "4012345678901".into(),
@@ -774,6 +966,36 @@ mod tests {
     }
 
     #[test]
+    fn ack_received_is_audit_only_and_accepted_in_any_state() {
+        for state in [
+            AktivierungState::New,
+            AktivierungState::ActivationOrdered(aco_data()),
+            AktivierungState::Confirmed {
+                data: aco_data(),
+                acr_mrid: "acr-001".into(),
+            },
+        ] {
+            let output = AktivierungWorkflow::handle(
+                &state,
+                AktivierungCommand::ReceiveAck {
+                    ack_mrid: "ack-001".into(),
+                    acknowledged_mrid: "aco-001".into(),
+                    reason_code: String::new(),
+                },
+            )
+            .unwrap();
+            assert!(matches!(
+                output.events.as_slice(),
+                [AktivierungEvent::AckReceived { .. }]
+            ));
+            // Audit-only: the ACK never changes the process state.
+            let before = format!("{state:?}");
+            let after = AktivierungWorkflow::apply(state, &output.events[0]);
+            assert_eq!(before, format!("{after:?}"));
+        }
+    }
+
+    #[test]
     fn iftsta_accepted_in_any_state() {
         for state in [
             AktivierungState::New,
@@ -798,5 +1020,61 @@ mod tests {
                 [AktivierungEvent::IftstaReceived { pid: 21037, .. }]
             ));
         }
+    }
+
+    #[test]
+    fn duldungsfall_ignores_the_response_window_deadline() {
+        // NB steers the resource itself — no counterparty response is
+        // awaited, so the 5-minute window must not expire the process.
+        let mut data = aco_data();
+        data.abwicklung = Abwicklung::Duldungsfall;
+        let state = AktivierungState::ActivationOrdered(data);
+        let deadline = test_deadline(ACTIVATION_RESPONSE_WINDOW_LABEL);
+        assert!(
+            AktivierungWorkflow::on_deadline(&deadline, &state).is_none(),
+            "Duldungsfall must not time out waiting for a response"
+        );
+        // Aufforderungsfall keeps the hard 5-minute constraint.
+        let state2 = AktivierungState::ActivationOrdered(aco_data());
+        assert!(AktivierungWorkflow::on_deadline(&deadline, &state2).is_some());
+    }
+
+    #[test]
+    fn unacknowledged_response_escalates_after_the_ack_window() {
+        let state = AktivierungState::Confirmed {
+            data: aco_data(),
+            acr_mrid: "ACR-1".into(),
+        };
+        let deadline = test_deadline(ACK_WINDOW_LABEL);
+        let cmd = AktivierungWorkflow::on_deadline(&deadline, &state)
+            .expect("6h ACK window fires from Confirmed");
+        let out = AktivierungWorkflow::handle(&state, cmd).expect("timeout handled");
+        let next = out.events.iter().fold(state, AktivierungWorkflow::apply);
+        assert!(
+            matches!(&next, AktivierungState::DeadlineExpired { reason } if reason.contains("Acknowledgement")),
+            "got {next:?}"
+        );
+    }
+
+    #[test]
+    fn market_messages_are_audited_in_any_state() {
+        let state = AktivierungState::Confirmed {
+            data: aco_data(),
+            acr_mrid: "ACR-1".into(),
+        };
+        let out = AktivierungWorkflow::handle(
+            &state,
+            AktivierungCommand::ReceiveMarketMessage {
+                pid: 13_020,
+                sender: "9900000000001".into(),
+                receiver: "9900000000002".into(),
+                message_ref: "MSG-1".into(),
+            },
+        )
+        .expect("audit accepted");
+        assert_eq!(out.events.len(), 1);
+        // No state transition.
+        let next = out.events.iter().fold(state, AktivierungWorkflow::apply);
+        assert!(matches!(next, AktivierungState::Confirmed { .. }));
     }
 }

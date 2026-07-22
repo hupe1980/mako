@@ -576,7 +576,7 @@ Partners are managed at runtime via the REST admin API — see
 | `mako-geli-gas` | GeLi Gas — Lieferbeginn/-ende Gas, Gas Sperrung (LF role), Gas Datenabruf, INVOIC 31011 (AWH Sperrprozesse Gas) | 44001–44021, 17103, 17104, 19103, 19104, 19116, 19117, 19128, 19129, 31011 | **10 Werktage** |
 | `mako-wim-gas` | WiM Gas — Messstellenwechsel Gas, INSRPT Gas, WiM-Rechnung Gas | 44039–44053, 44168–44170, 23005, 23009, 31003, 31004 | **10 Werktage** |
 | `mako-mabis` | MABIS — Bilanzkreisabrechnung | 13003 (MSCONS Summenzeitreihe, IFTSTA 21000–21005) | n/a (batch, not saga) |
-| `mako-gabi-gas` | GaBi Gas — Kapazitätsabrechnung Gas | INVOIC 31010 | n/a (billing, calendar-driven) |
+| `mako-gabi-gas` | GaBi Gas 2.1 — allocation, nomination, schedules, imbalance, transport (ALOCAT/NOMINT/NOMRES/SCHEDL/IMBNOT/TRANOT/DELORD/DELRES) + Kapazitäts-/Mehr-Mindermengen-INVOIC | INVOIC 31007/31008/31010, ORDERS 17110, ORDRSP 19110, MSCONS 13013, synthetic 90001–90062 | KoV deadlines (GasDay D-1 14:00 etc.) |
 
 ### MABIS architecture note
 
@@ -666,8 +666,11 @@ dedicated operator guide:
 Quick start (development, volatile in-memory):
 
 ```bash
-cargo run -p makod -- --http-addr 127.0.0.1:8080 --tenant-id 9900357000004
+cargo run -p makod -- --config makod.toml --allow-volatile --http-addr 127.0.0.1:8080
 ```
+
+`makod.toml` needs at least one `[[party]]` entry (`mp_id` + `roles`) — the
+operator identity that scopes all process streams.
 
 Omitting `--data-dir` starts in volatile in-memory mode — all process state is
 lost on restart. A `WARN` is emitted at startup.

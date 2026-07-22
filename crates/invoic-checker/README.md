@@ -78,33 +78,6 @@ For PID 31009 (MSB-Rechnung), use `check_msb_rechnung()` which applies
 
 ---
 
-## Usage
-
-```rust
-use invoic_checker::{InvoicCheckEngine, InvoicCheckInput, CheckResult};
-
-let engine = InvoicCheckEngine::new(tariff_repo, mmma_store);
-
-let input = InvoicCheckInput {
-    pid: 31001,
-    rechnung_json: serde_json::from_str(raw_invoic)?,
-    malo_id: "51238696780".to_owned(),
-    ..Default::default()
-};
-
-match engine.check(&input).await? {
-    CheckResult::Accept(summary) => {
-        // dispatch REMADV 33001 (Zahlungsavis)
-    }
-    CheckResult::Dispute { check, reason } => {
-        // dispatch REMADV 33002 — include check number and reason
-    }
-    CheckResult::Warn(summary) => {
-        // log and auto-accept
-    }
-}
-```
-
 ---
 
 ## Supported PIDs

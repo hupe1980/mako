@@ -257,7 +257,7 @@ curl -X PUT http://marktd:8180/api/v1/preisblaetter/9904234560001 \
          ┌──────────────▼──────────────────────┐
          │           invoicd :8280              │
          │  ① fetch PreisblattNetznutzung       │◄── GET marktd :8180
-         │  ② invoic-checker (5 checks)         │
+         │  ② invoic-checker (6 checks)         │
          │  ③ persist receipt + pay_by (atomic) │
          │  ④ dispatch annehmen / ablehnen      │
          └──────────────┬──────────────────────┘

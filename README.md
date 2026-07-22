@@ -117,7 +117,7 @@ flowchart LR
 | `sperrd` | `:8780` | NB | Sperrung execution tracking — IFTSTA 21039 auto-dispatch, `GET /stats` compliance snapshot, 5-tool MCP server |
 | `edmd` | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest (optional per-message HMAC), Hampel quality scoring, V01–V10 validation, virtual meters (§42b GGV), § 60 Abs. 2 MsbG Jahresprognose **and Schätzwert-Bestätigungsschleife** (estimated-reading confirmation tracking with overdue escalation), §22 EnWG Netzverlust indicator, Iceberg/S3 OLAP, 15-tool MCP server |
 | `mabis-syncd` | `:8880` | ÜNB/NB | MaBiS Summenzeitreihen (MSCONS 13003) — aggregates per-MaLo Lastgang from edmd; submits to BIKO on the 10. Werktag; Erstaufschlag 1.–10. WT / Clearing 11.–30. WT / KBKA windows per BK6-24-174 Anlage 3 §3.10 |
-| `einsd` | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 9 settlement schemes, §52 sanctions, §51 neg-price, 14 MCP tools + 6 prompts |
+| `einsd` | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 9 settlement schemes, §52 sanctions, §51 neg-price, 18 MCP tools + 6 prompts |
 | `obsd` | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, automated deadline computation, `GET /api/v1/audit/bnetza-report` |
 | `nis-syncd` | `:9680` | NB | NIS/GIS grid topology import — concurrent sync, drift detection, `check_malo_grid` MCP tool |
 | `tarifbd` | `:9080` | LF | Product & Tariff Catalog — **13 categories** (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/SHARING §42c); OIDC/JWT auth; `product_status` DRAFT/PUBLISHED workflow; §42d comparison portal feed (ETag-cached, BO4E `Tarifinfo`); EPEX Spot for §41a; B2B Angebote ANGELEGT→ANGENOMMEN; **14-tool MCP server + 3 prompts** |
@@ -172,10 +172,10 @@ flowchart LR
 | Category | Detail |
 |---|---|
 | 🆔 **Validated domain IDs** | `MaloId` (11-digit BDEW check-digit), `MeloId` (DE+31-char), `MarktpartnerId` (13-digit; auto-derives NAD DE3055 agency code `293`/`332`/`9` from prefix) |
-| 🗂️ **Nine repository traits** | `MaloRepository`, `MeloRepository`, `ContractRepository`, `SubscriptionRepository`, `CorrelationIndex`, `PartnerRepository`, `LokationszuordnungRepository`, `TechnischeRessourceRepository`, `SteuerbareRessourceRepository` — AFIT, no `dyn Trait` overhead |
+| 🗂️ **24 repository traits** | One trait per aggregate — `MaloRepository`, `MeloRepository`, `ContractRepository`, `PartnerRepository`, `LokationszuordnungRepository`, `TechnischeRessourceRepository`, `SteuerbareRessourceRepository`, `CorrelationIndex`, … — AFIT, no `dyn Trait` overhead |
 | ⏳ **Temporal role assignments** | `Lokationszuordnung` with `valid_from`/`valid_to` — evaluated against CET/CEST German calendar date at query time |
 | 📨 **CloudEvents 1.0** | Outbound events (`MarktEvent`) with HMAC-SHA256 signing; `InboundMakoEvent` for receiving `makod` lifecycle events |
-| 🧪 **`testing` feature** | `InMemory*` test doubles for all six traits — no PostgreSQL required in unit tests |
+| 🧪 **`testing` feature** | `InMemory*` test doubles for every repository trait — no PostgreSQL required in unit tests |
 | 🚫 **Zero framework deps** | No axum, sqlx, or async runtime — pure domain library; all I/O lives in `services/marktd` |
 
 ### BO4E typed API (`marktd`)
@@ -215,7 +215,7 @@ flowchart LR
 
 ```toml
 [dependencies]
-edi-energy = "0.12"
+edi-energy = "0.13"
 ```
 
 ```rust
@@ -233,8 +233,8 @@ println!("Valid: {}", report.is_valid());
 
 ```toml
 [dependencies]
-mako-engine = { version = "0.12", features = ["testing"] }
-mako-gpke   = "0.12"
+mako-engine = { version = "0.13", features = ["testing"] }
+mako-gpke   = "0.13"
 ```
 
 ```rust
@@ -264,7 +264,7 @@ let state = process.state().await?;
 
 ```toml
 [dependencies]
-dvgw-edi = "0.12"
+dvgw-edi = "0.13"
 ```
 
 ```rust
@@ -291,7 +291,7 @@ let pid = msg.detect_pid(Some("Z01"));
 
 ```toml
 [dependencies]
-redispatch-xml = "0.12"
+redispatch-xml = "0.13"
 ```
 
 ```rust
@@ -318,7 +318,7 @@ let out = serialize(&doc)?;
 
 ```toml
 [dependencies]
-mako-markt = { version = "0.12", features = ["testing"] }
+mako-markt = { version = "0.13", features = ["testing"] }
 ```
 
 ```rust
@@ -326,7 +326,7 @@ use mako_markt::domain::{MaloId, MeloId, MarktpartnerId};
 
 // Validated identifiers — construction returns Err on malformed input
 let malo_id = MaloId::new("51238696780")?;
-let melo_id = MeloId::new("DE00056266802AO6G00000H")?;
+let melo_id = MeloId::new("DE0001234567890123456789012345678")?;
 let mp_id   = "9900357000004".parse::<MarktpartnerId>()?;
 
 // NAD DE3055 agency code derived from MP-ID prefix automatically:
@@ -410,13 +410,13 @@ let repo = InMemoryMaloRepository::default();
 | [makod Operator Guide](./docs/makod.md) | Production daemon: persistence, ports, auth, MCP, Kubernetes |
 | [marktd Operator Guide](./docs/marktd.md) | Market Data Hub: MaLo/MeLo, subscriptions, VersorgungsStatus, OIDC, Docker |
 | [processd Operator Guide](./docs/processd.md) | NB Anmeldung STP (netz-checker, ≥ 95 %) + LF E_0624 auto-response + MSB-Wechsel STP; §7 EnWG role features |
-| [invoicd Operator Guide](./docs/invoicd.md) | INVOIC plausibility-check daemon: § 147 AO / GoBD receipts, 6-check pipeline (incl. AufAbschlag check 6) |
+| [invoicd Operator Guide](./docs/invoicd.md) | INVOIC plausibility-check daemon: § 147 AO / GoBD receipts, 6-check pipeline (incl. MMM settlement-price check 6) |
 | [netzbilanzd Operator Guide](./docs/netzbilanzd.md) | NNE/KA/MMM billing daemon: invoice generation, draft lifecycle, dispatch to `makod` |
 | [sperrd Operator Guide](./docs/sperrd.md) | Sperrung execution tracker: order lifecycle, IFTSTA 21039 auto-dispatch, GPKE compliance |
 | [nis-syncd Operator Guide](./docs/nis-syncd.md) | NIS/GIS grid topology import: sync, dry-run, drift detection, STP impact |
 | [edmd Operator Guide](./docs/edmd.md) | Energy Data Management: MSCONS storage, BO4E `Energiemenge` deliveries, `Lastgang`/`Zeitreihe`, `MeterBillingPeriod` |
 | [obsd Operator Guide](./docs/obsd.md) | Observability: process projections, KPI reports, §20 EnWG parity |
-| [einsd Operator Guide](./docs/einsd.md) | EEG/KWKG Settlement: 9 settlement schemes, §20 Abs. 3 Managementprämie, §23a degression, §36k wind, §42b GGV metering, Repowering §22, KWKG Förderdauer, 14 MCP tools, eeg-agent |
+| [einsd Operator Guide](./docs/einsd.md) | EEG/KWKG Settlement: 9 settlement schemes, §20 Abs. 3 Managementprämie, §23a degression, §36k wind, §42b GGV metering, Repowering §22, KWKG Förderdauer, 18 MCP tools, eeg-agent |
 | [tarifbd Operator Guide](./docs/tarifbd.md) | Product & Tariff Catalog: STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE, EPEX Spot prices for §41a |
 | [billingd Operator Guide](./docs/billingd.md) | Energy Billing Engine: STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY; §41a dynamic; XRechnung 3.0 |
 | [accountingd Operator Guide](./docs/accountingd.md) | Massenkontokorrent: double-entry SKR 03/04, aging, Verzugszinsen §288 BGB, Zahlungsvereinbarung, SEPA pain.008 (FRST/RCUR separated, Gläubiger-ID), CAMT.054 dedup, OIDC auth, GDPR Art. 17, 107 tests |
@@ -552,7 +552,7 @@ mako/
 │   │                        # adapters.rs, edifact_renderer.rs, erp_adapter.rs
 │   │                        # partner_api.rs, deadline_dispatch.rs, health.rs
 │   │                        # mcp_server.rs  ← MCP server (tools + resources + prompts)
-│   │                        # CLI: --data-dir, --as4-addr, --http-addr, --tenant-id
+│   │                        # CLI: --config, --data-dir, --as4-addr, --http-addr
 │   ├── marktd/              # Market Data Hub daemon
 │   │   └── src/             # main.rs, config.rs, handlers/, pg/, fanout.rs
 │   │                        # PostgreSQL · OIDC/JWT · OpenAPI 3.1 · EventBus fan-out
@@ -622,7 +622,7 @@ By default UTILMD, MSCONS, APERAK, and CONTRL are compiled in:
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.12", features = ["invoic", "remadv", "orders"] }
+edi-energy = { version = "0.13", features = ["invoic", "remadv", "orders"] }
 ```
 
 | Flag | Default | Enables |
@@ -654,7 +654,7 @@ edi-energy = { version = "0.12", features = ["invoic", "remadv", "orders"] }
 All 8 format parsers are compiled in by default. Disable unused formats to reduce binary size:
 
 ```toml
-dvgw-edi = { version = "0.12", default-features = false, features = ["nomint", "nomres"] }
+dvgw-edi = { version = "0.13", default-features = false, features = ["nomint", "nomres"] }
 ```
 
 | Flag | Default | Enables |
@@ -667,6 +667,7 @@ dvgw-edi = { version = "0.12", default-features = false, features = ["nomint", "
 | `tranot` | ✅ | `TransportNotificationMessage` and TRANOT parsing |
 | `delord` | ✅ | `DeliveryOrderMessage` and DELORD parsing |
 | `delres` | ✅ | `DeliveryResponseMessage` and DELRES parsing |
+| `decimal` | ✅ | `Decimal`-based `quantity_decimal()` on `AlocatQuantity` (preferred for billing) |
 | `serde` | | `Serialize`/`Deserialize` on all public types |
 | `tracing` | | Structured tracing spans during parse dispatch |
 
@@ -674,8 +675,8 @@ dvgw-edi = { version = "0.12", default-features = false, features = ["nomint", "
 
 | Flag | Default | Enables |
 |---|---|---|
-| *(default)* | ✅ | All domain types, six repository traits, CloudEvents, `InboundMakoEvent` |
-| `testing` | | `InMemory*` test doubles for all six traits — **never enable in production** |
+| *(default)* | ✅ | All domain types, all repository traits, CloudEvents, `InboundMakoEvent` |
+| `testing` | | `InMemory*` test doubles for every repository trait — **never enable in production** |
 
 ## ⚙️ Feature Flags — `mako-engine` / `makod`
 

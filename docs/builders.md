@@ -33,7 +33,17 @@ The `edi_energy::builders` module provides a fluent, type-state builder API for 
 | `ContrlBuilder` | CONTRL (interchange control acknowledgements) |
 | `InvoicBuilder` | INVOIC (invoices) *(requires `invoic` feature)* |
 | `RemadvBuilder` | REMADV (remittance advice) *(requires `remadv` feature)* |
-| `OrdersBuilder` | ORDERS (purchase orders) *(requires `orders` feature)* |
+| `OrdersBuilder` | ORDERS (orders, e.g. Sperrung/Konfiguration) *(requires `orders` feature)* |
+| `OrdrespBuilder` | ORDRSP (order responses) *(requires `ordrsp` feature)* |
+| `OrdchgBuilder` | ORDCHG (order changes/cancellations) *(requires `ordchg` feature)* |
+| `IftstaBuilder` | IFTSTA (status reports) *(requires `iftsta` feature)* |
+| `InsrptBuilder` | INSRPT (inspection reports) *(requires `insrpt` feature)* |
+| `PartinBuilder` | PARTIN (party information) *(requires `partin` feature)* |
+| `PricatBuilder` | PRICAT (price catalogues) *(requires `pricat` feature)* |
+| `QuotesBuilder` | QUOTES (quotations) *(requires `quotes` feature)* |
+| `ReqoteBuilder` | REQOTE (requests for quotation) *(requires `reqote` feature)* |
+| `ComdisBuilder` | COMDIS (commercial disputes) *(requires `comdis` feature)* |
+| `UtiltsBuilder` | UTILTS (Berechnungsformeln) *(requires `utilts` feature)* |
 
 ---
 

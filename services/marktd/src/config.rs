@@ -20,7 +20,7 @@
 //! [makod]
 //! base_url  = "http://makod:8080"
 //! api_key   = "env:MAKOD_API_KEY"
-//! tenant_id = "9900357000004"
+//! tenant   = "9900357000004"
 //!
 //! [webhook]
 //! inbound_path   = "/api/v1/mako/events"
@@ -133,9 +133,10 @@ pub struct MakodConfig {
     pub base_url: String,
     /// Bearer token / API key.  Use `"env:MAKOD_API_KEY"` for env-var resolution.
     pub api_key: String,
-    /// Primary GLN of the tenant (BDEW-Codenummer starting with 99).
-    /// Used as the `tenant_gln` in outbound CloudEvents source URN.
-    pub tenant_id: String,
+    /// Tenant identifier — the operator's primary MP-ID string
+    /// (BDEW-Codenummer starting with 99). Used as the `tenant_gln` in
+    /// outbound CloudEvents source URNs.
+    pub tenant: String,
 }
 
 // ── Inbound webhooks (from makod) ─────────────────────────────────────────────

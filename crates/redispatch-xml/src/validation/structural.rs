@@ -52,9 +52,15 @@ pub(crate) fn check_participant_id(id: &MarketParticipantId, result: &mut Valida
 /// Since [`UtcDateTime::new`] already rejects non-UTC offsets, this is a
 /// belt-and-suspenders check for values that bypassed the constructor.
 pub(crate) fn check_utc_offset(ts: &UtcDateTime, result: &mut ValidationResult) {
-    // UtcDateTime guarantees UTC at construction; no further check needed.
-    let _ = ts;
-    let _ = result;
+    // `UtcDateTime` rejects non-UTC offsets at construction and
+    // deserialization; this re-checks the invariant for values built through
+    // any future bypass so the error variant is real, not decorative.
+    let inner = ts.inner();
+    if inner.offset() != time::UtcOffset::UTC {
+        result
+            .errors
+            .push(ValidationError::TimestampNotUtc(inner.to_string()));
+    }
 }
 
 /// Validate that a [`TimeInterval`] has `end` after `start`.

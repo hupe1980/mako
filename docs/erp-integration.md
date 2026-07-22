@@ -59,8 +59,8 @@ openssl rand -hex 32
 
 ```bash
 makod \
+  --config /etc/makod/makod.toml \
   --data-dir /var/lib/makod \
-  --tenant-id 9900357000004 \
   --erp-webhook-url https://erp.example.com/mako/events \
   --erp-webhook-secret a3f8c1d2...
 ```

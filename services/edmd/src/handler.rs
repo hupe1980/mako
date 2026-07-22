@@ -301,8 +301,8 @@ pub async fn handle_webhook(
     // 3. Route: only process.completed events for known MSCONS PIDs (Messwesen + Redispatch 2.0).
     //
     // `MSCONS_PIDS` = Messwesen PIDs (13005–13027, excl. 13003/13013).
-    // `ALL_MSCONS_PIDS` = MSCONS_PIDS + REDISPATCH_MSCONS_PIDS (13020–13026).
-    // Redispatch 2.0 Ausfallarbeit/meteorological data (PIDs 13020–13026) must also be stored
+    // `ALL_MSCONS_PIDS` = MSCONS_PIDS + REDISPATCH_MSCONS_PIDS (13020–13023, 13026).
+    // Redispatch 2.0 Ausfallarbeit/meteorological data (PIDs 13020–13023, 13026) must also be stored
     // in `edmd` for OLAP aggregation and archive, even though `mako-redispatch` handles the
     // workflow routing (the two concerns are orthogonal).
     if ce_type == "de.mako.process.completed" && ALL_MSCONS_PIDS.contains(&pid) {

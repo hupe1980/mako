@@ -390,9 +390,9 @@ impl CommandPayload for AbrechnungCommand {}
 
 /// GPKE billing workflow for INVOIC-based processes.
 ///
-/// Covers Netznutzungsabrechnung (31001/31002), Mehr-/Mindermengen (31005/31006)
-/// and MSB-Rechnung (31009) processes. These are the GPKE-domain billing PIDs
-/// in INVOIC AHB 2.8e / 1.0. PID 31004 belongs to `mako-wim-gas`.
+/// Covers Netznutzungsabrechnung (31001/31002) and Mehr-/Mindermengen
+/// (31005/31006). These are the GPKE-domain billing PIDs in INVOIC
+/// AHB 2.8e / 1.0. PID 31004 belongs to `mako-wim-gas`; 31009 to `mako-wim`.
 ///
 /// Spawn via [`mako_engine::process::Process`]:
 /// ```rust,ignore

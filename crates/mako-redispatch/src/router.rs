@@ -13,8 +13,8 @@
 //!
 //! ```rust,ignore
 //! // In makod's AS4 ingest path — transport boundary only:
-//! let doc = redispatch_xml::parse(bytes)?;
-//! let kind = RedispatchDocumentKind::from(doc.document_type()); // From impl in makod
+//! let doc = redispatch_xml::parse_and_validate(bytes)?;
+//! let kind = makod::redispatch_xml_ingest::document_kind(doc.document_type());
 //! let workflow_name = router.route(kind)?;
 //! // resume the workflow process and dispatch the command …
 //! ```
@@ -30,10 +30,12 @@ use thiserror::Error;
 /// Domain-owned classification of a Redispatch 2.0 XML document.
 ///
 /// Mirrors the nine XML root-element types defined by the BDEW Redispatch 2.0
-/// schema family, but is **independent of `redispatch-xml`**. The conversion
-/// from a parsed `redispatch_xml::documents::DocumentType` to this type is done
-/// at the `makod` transport boundary, keeping `mako-redispatch` free of any
-/// format-layer dependency.
+/// schema family, but is **independent of `redispatch-xml`** — the engine
+/// stays format-agnostic, like `mako-gpke`/`mako-wim`/`mako-mabis` vs.
+/// `edi-energy`. The canonical conversion from a parsed
+/// `redispatch_xml::documents::DocumentType` lives at the transport boundary
+/// (`makod::redispatch_xml_ingest::document_kind`, exhaustive so the two
+/// enums cannot drift).
 ///
 /// # Non-exhaustive
 ///

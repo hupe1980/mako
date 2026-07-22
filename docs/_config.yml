@@ -19,7 +19,7 @@ github_username: hupe1980
 remote_theme: just-the-docs/just-the-docs@v0.11.0
 
 # ── Appearance ────────────────────────────────────────────────────────────────
-color_scheme: light   # "light" | "dark" — users can toggle in sidebar
+color_scheme: light   # initial scheme; the sidebar-footer toggle (nav_footer_custom.html) switches light/dark and persists in localStorage
 logo: "/assets/img/mako-logo.svg"
 favicon_ico: "/assets/img/mako-logo.svg"
 

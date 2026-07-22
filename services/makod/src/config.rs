@@ -75,9 +75,10 @@ pub struct ConfigFile {
     pub erp: Option<ErpConfig>,
     /// `[[party]]` — one entry per BDEW market-participant identity.
     ///
-    /// Use this instead of `[engine] tenant_id` + `--marktrollen` when the
-    /// operator holds **multiple Marktpartner-IDs** (e.g. separate BDEW registrations
-    /// for NB, LF, and MSB roles).  The first entry marked `primary = true` (or
+    /// The single source of truth for operator identity — at least one entry is
+    /// required. An operator holding **multiple Marktpartner-IDs** (e.g. separate
+    /// BDEW registrations for NB, LF, and MSB roles) lists one entry per identity.
+    /// The first entry marked `primary = true` (or
     /// the first entry in document order when none is marked) becomes the
     /// storage partition key and the default EDIFACT sender MP-ID fallback.
     ///
@@ -281,7 +282,7 @@ pub struct As4Config {
     /// AS4 inbound listen address, e.g. `"0.0.0.0:4080"`.
     pub addr: Option<std::net::SocketAddr>,
 
-    /// BDEW party ID (GLN) for this MSH. Defaults to `engine.tenant_id`.
+    /// BDEW party ID (GLN) for this MSH. Defaults to the primary `[[party]]` MP-ID.
     pub party_id: Option<String>,
 
     /// PEM-encoded RSA private key for WS-Security XML-DSig signing (inline).

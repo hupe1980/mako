@@ -692,7 +692,7 @@ pub async fn post_kostenblatt_compute(
                         StatusCode::NOT_FOUND,
                         format!(
                             "no Lastgang or billing-period data for MaLo {} in activation \
-                             window {} / {}. Ingest Redispatch MSCONS (PIDs 13020–13026) or \
+                             window {} / {}. Ingest Redispatch MSCONS (PIDs 13020–13023, 13026) or \
                              supply dispatch_kwh_override.",
                             req.malo_id, req.activation_start_utc, req.activation_end_utc
                         ),
@@ -1855,5 +1855,155 @@ mod kostenblatt_tests {
                 "dispatch_source must be lowercase: {v}"
             );
         }
+    }
+}
+
+// ── §13a EnWG Vergütung (Redispatch 2.0 compensation) ─────────────────────────
+
+/// Request body for `POST /api/v1/redispatch/verguetung/{activation_id}/compute`.
+#[derive(Debug, serde::Deserialize)]
+pub struct VerguetungComputeRequest {
+    /// 11-digit MaLo-ID of the affected resource's grid connection.
+    pub malo_id: String,
+    /// UTC activation start — RFC 3339.
+    pub activation_start_utc: String,
+    /// UTC activation end — RFC 3339.
+    pub activation_end_utc: String,
+    /// Z01 EEG / Z02 KWKG / Z03 sonstige (Redispatch Stammdaten).
+    pub verguetungsart: grid_billing::RedispatchVerguetungsart,
+    /// EEG/KWKG plants: the anzulegender Wert in ct/kWh — the lost statutory
+    /// remuneration basis (§13a Abs. 2 S. 3 Nr. 5 EnWG). Ignored when
+    /// `entgangene_einnahmen_eur_override` is supplied.
+    #[serde(default)]
+    pub anzulegender_wert_ct_per_kwh: Option<rust_decimal::Decimal>,
+    /// Proven lost revenue in EUR (Nr. 3) — required for Z03, optional
+    /// override for Z01/Z02.
+    #[serde(default)]
+    pub entgangene_einnahmen_eur_override: Option<rust_decimal::Decimal>,
+    /// Zusätzliche Aufwendungen in EUR (Nr. 1/2/4). Default 0.
+    #[serde(default)]
+    pub zusaetzliche_aufwendungen_eur: rust_decimal::Decimal,
+    /// Ersparte Aufwendungen in EUR (Satz 4). Default 0.
+    #[serde(default)]
+    pub ersparte_aufwendungen_eur: rust_decimal::Decimal,
+    /// Manual Ausfallarbeit override — when set, edmd is not queried.
+    #[serde(default)]
+    pub ausfallarbeit_kwh_override: Option<rust_decimal::Decimal>,
+}
+
+/// `POST /api/v1/redispatch/verguetung/{activation_id}/compute`
+///
+/// §13a Abs. 2 EnWG: compute the angemessene Vergütung for one redispatch
+/// activation. The Ausfallarbeit comes from the same edmd Lastgang window
+/// resolution the Kostenblatt uses (15-min interval sum over the activation
+/// window); the compensation arithmetic is `grid_billing::redispatch_verguetung`
+/// (entgangene Einnahmen + zusätzliche Aufwendungen − ersparte Aufwendungen).
+///
+/// This is a **calculation endpoint** — the figure and its per-component
+/// trace are returned for the operator's payment run; nothing is persisted.
+pub async fn post_verguetung_compute(
+    Extension(cfg): Extension<Arc<crate::config::NetzbilanzConfig>>,
+    Extension(http_client): Extension<Arc<reqwest::Client>>,
+    Path(activation_id): Path<String>,
+    Json(req): Json<VerguetungComputeRequest>,
+) -> impl IntoResponse {
+    use rust_decimal::Decimal;
+    use time::format_description::well_known::Rfc3339;
+
+    if time::OffsetDateTime::parse(&req.activation_start_utc, &Rfc3339).is_err()
+        || time::OffsetDateTime::parse(&req.activation_end_utc, &Rfc3339).is_err()
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            "activation_start_utc/activation_end_utc must be RFC 3339",
+        )
+            .into_response();
+    }
+
+    // Ausfallarbeit: override → edmd Lastgang window sum.
+    let (ausfallarbeit_kwh, source) = if let Some(kwh) = req.ausfallarbeit_kwh_override {
+        (kwh, "manual_override")
+    } else {
+        let Some(edmd_url) = cfg.edmd_url.as_deref().map(|u| u.trim_end_matches('/')) else {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "edmd_url not configured — supply ausfallarbeit_kwh_override",
+            )
+                .into_response();
+        };
+        let shim = KostenblattComputeRequest {
+            tr_id: String::new(),
+            malo_id: req.malo_id.clone(),
+            period_year: 0,
+            period_month: 1,
+            uenb_mp_id: String::new(),
+            vnb_mp_id: String::new(),
+            activation_start_utc: req.activation_start_utc.clone(),
+            activation_end_utc: req.activation_end_utc.clone(),
+            arbeitspreis_eur_per_kwh: Decimal::ZERO,
+            dispatch_kwh_override: None,
+        };
+        match fetch_dispatch_kwh_from_lastgang(&http_client, edmd_url, &req.malo_id, &cfg, &shim)
+            .await
+        {
+            Some(kwh) => (kwh, "lastgang_sum"),
+            None => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    format!(
+                        "no Lastgang data for MaLo {} in the activation window — ingest \
+                         Redispatch MSCONS (PIDs 13020–13023, 13026) or supply \
+                         ausfallarbeit_kwh_override",
+                        req.malo_id
+                    ),
+                )
+                    .into_response();
+            }
+        }
+    };
+
+    // Entgangene Einnahmen basis by Vergütungsart.
+    let entgangene = match (
+        req.entgangene_einnahmen_eur_override,
+        req.anzulegender_wert_ct_per_kwh,
+        req.verguetungsart,
+    ) {
+        (Some(eur), _, _) => eur,
+        (None, Some(aw_ct), _) => grid_billing::eeg_entgangene_einnahmen(ausfallarbeit_kwh, aw_ct),
+        (None, None, grid_billing::RedispatchVerguetungsart::Sonstige) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Z03 (sonstige) requires entgangene_einnahmen_eur_override — lost market \
+                 revenue must be proven, not derived (§13a Abs. 2 S. 3 Nr. 3 EnWG)",
+            )
+                .into_response();
+        }
+        (None, None, _) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "EEG/KWKG plants require anzulegender_wert_ct_per_kwh (or an explicit \
+                 entgangene_einnahmen_eur_override)",
+            )
+                .into_response();
+        }
+    };
+
+    let input = grid_billing::RedispatchVerguetungInput {
+        ausfallarbeit_kwh,
+        verguetungsart: req.verguetungsart,
+        entgangene_einnahmen_eur: entgangene,
+        zusaetzliche_aufwendungen_eur: req.zusaetzliche_aufwendungen_eur,
+        ersparte_aufwendungen_eur: req.ersparte_aufwendungen_eur,
+    };
+    match grid_billing::redispatch_verguetung(&input) {
+        Ok(v) => Json(serde_json::json!({
+            "activation_id": activation_id,
+            "malo_id": req.malo_id,
+            "ausfallarbeit_source": source,
+            "verguetung": v,
+            "legal_basis": "§13a Abs. 2 EnWG",
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
     }
 }

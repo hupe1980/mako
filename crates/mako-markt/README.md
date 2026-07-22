@@ -27,7 +27,7 @@ Key design choices:
 | **Stateless library** | No axum, no sqlx, no async runtime in this crate. All I/O lives in `services/marktd`. |
 | **Validated domain identifiers** | [`MaloId`], [`MeloId`], and [`MarktpartnerId`] validate format and checksum at construction time — invalid IDs are rejected at the system boundary. |
 | **Temporal role assignments** | `lokationszuordnung` entries carry `valid_from`/`valid_to` date ranges. Queries are always resolved against a reference date (German local time, CET/CEST). |
-| **Generic `AppState`** | Seven generic type parameters — one per repository trait — enable fully static dispatch with no `dyn Trait` overhead. |
+| **Generic `AppState`** | One generic type parameter per repository trait — fully static dispatch with no `dyn Trait` overhead. |
 | **AFIT** | All repository traits use `async fn in trait` (stable since Rust 1.75, MSRV 1.89). |
 
 ---
@@ -102,6 +102,8 @@ All traits use AFIT and return `Result<_, MdmError>`. Every trait has two implem
 | Implementation | Use |
 |---|---|
 | `Pg*Repository` in `services/marktd/src/pg/` | Production — PostgreSQL via sqlx 0.8+ |
+| `InMemory*` (behind the `testing` feature) | Unit tests — no PostgreSQL required |
+
 ### `VersorgungsStatusRepository`
 
 Persists the current supply state for each MaLo.  Records are automatically derived
@@ -262,8 +264,10 @@ let state = Arc::new(AppState {
 
 | Flag | Enables |
 |---|---|
-| *(default)* | All domain types, traits, CloudEvents, makod client |
+| *(default)* | All domain types, repository traits, CloudEvents |
 | `testing` | `InMemory*` test doubles — **never enable in production builds** |
+| `makod-client` | HTTP client for the makod admin API (`reqwest`) |
+| `marktd-client` | HTTP client for the marktd REST API (`reqwest`) |
 
 ---
 

@@ -171,7 +171,7 @@ url = "env:DATABASE_URL"  # required; use env: for secrets
 [makod]
 base_url  = "http://makod:8080"   # required
 api_key   = "env:MAKOD_API_KEY"   # required
-tenant_id = "9900357000004"        # required — operator primary MP-ID
+tenant = "9900357000004"           # required — operator primary MP-ID
 
 [webhook]
 inbound_path   = "/api/v1/events"             # default
@@ -370,7 +370,7 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/admin/fanout/dlq` | `manage-fanout` | List unresolved DLQ entries |
 | `POST` | `/admin/fanout/dlq/{id}/retry` | `manage-fanout` | Re-deliver a DLQ entry |
 | `DELETE` | `/admin/fanout/dlq/{id}` | `manage-fanout` | Discard a DLQ entry |
-| `GET` | `/admin/events` | — | CloudEvent replay log — `?from=RFC3339&to=RFC3339&type=&limit=` |
+| `GET` | `/admin/events` | `manage-fanout` | CloudEvent replay log — `?from=RFC3339&to=RFC3339&type=&limit=` |
 | `GET` | `/metrics` | — | Prometheus metrics (no auth, internal only) |
 
 ---
@@ -1079,7 +1079,7 @@ Intentional. An existing `source=api` row cannot be overwritten by
 to update operator-controlled price sheets.
 
 **Auto-responder dispatching ablehnen for all requests**
-Check rule 3 (NB in grid): your operator GLN (`tenant_id` in `marktd.toml`)
+Check rule 3 (NB in grid): your operator MP-ID (`tenant` in `marktd.toml`)
 must appear in the MaLo's `lokationszuordnung` as `zuordnungstyp = "NB"`.
 Upload the MaLo with `PUT /api/v1/malo/{malo_id}` including the NB entry.
 
@@ -2121,6 +2121,8 @@ domain events. Each event carries the `markt*` extension attributes listed below
 | `de.markt.nb-contract.updated` | `contract_id` | NB contract PUT | ERP |
 | `de.markt.sr.konfigurationsprodukt.updated` | `sr_id` | SR Konfigurationsprodukt replace | `processd` (§14a eligibility check), ERP |
 | `de.markt.geraet.konfiguration.updated` | `geraet_id` | Geraet konfigurationen PUT | `edmd` cert-expiry worker, `processd` §14a auto-ack check, ERP |
+| `de.markt.partner.updated` | `mp_id` | Marktpartner PUT | `makod` partner sync, ERP |
+| `de.markt.versorgung.changed` | `malo_id` | VersorgungsStatus transition | `vertragd`, `billingd`, ERP |
 | `de.markt.mmma.import.success` | `year-month`, `commodity` | Monthly MMMA/MMM price import (Gas or Strom) | `netzbilanzd`, `invoicd` |
 | `de.markt.mmma.import.failed` | `year-month`, `commodity` | Monthly import fetch/parse/store failure | operator |
 

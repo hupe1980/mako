@@ -361,11 +361,6 @@ pub enum LegalReference {
         /// Module: Modul1 (flat reduction), Modul2 (HT/NT), or Modul3 (spot).
         module: Sect14aModule,
     },
-    /// MsbG — Messzugangsverordnung (metering access).
-    MessZv {
-        /// Paragraph citation, e.g. `"§2"`, `"§17"`.
-        paragraph: &'static str,
-    },
     /// MsbG — Messstellenbetriebsgesetz (metering point operation).
     MsbG {
         /// Paragraph citation, e.g. `"§§6–7"`.
@@ -430,7 +425,6 @@ impl LegalReference {
             Self::Kwkg { paragraph } => format!("KWKG {paragraph}"),
             Self::EnFG { paragraph } => format!("EnFG {paragraph}"),
             Self::Sect14aEnwg { module } => format!("§14a EnWG {}", module.label()),
-            Self::MessZv { paragraph } => format!("MsbG {paragraph}"),
             Self::MsbG { paragraph } => format!("MsbG {paragraph}"),
             Self::BnetzaDecision { reference } => format!("BNetzA {reference}"),
             Self::BdewAhb { reference } => format!("BDEW {reference}"),

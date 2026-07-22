@@ -23,7 +23,7 @@ no SEPA collection.
 | **IBAN encryption ready** | `iban_hash` generated column (pgcrypto SHA-256); `iban_encrypted` flag; CAMT.054 matching uses hash |
 | **Mahnwesen** | Mahnstufe 1→2→3; auto-dunning worker (opt-in); `de.accounting.sperrauftrag` → `sperrd` |
 | **Jahresabschluss** | Annual reconciliation (§40 EnWG); idempotent per year via `jahresabschluss_runs` |
-| **MCP** | 14 tools at `/mcp` |
+| **MCP** | 12 tools at `/mcp` |
 | **Tests** | 107 tests (75 unit + 16 integration, no DB required; additional DB-backed tests via `integration-tests` feature) |
 | **Health** | `GET /health/live`, `GET /health/ready` |
 

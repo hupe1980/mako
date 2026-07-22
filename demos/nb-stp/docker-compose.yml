@@ -6,7 +6,6 @@
 #   • marktd    :8180 — Market Data Hub (MaLo/MeLo/NeLo/TR/SR, Lokationszuordnung graph, event_log replay)
 #   • processd  :8580 — NB STP auto-responder + LF E_0624 auto-response (netz-checker, §20 parity)
 #   • makod     :8080 — EDIFACT process engine (in-memory; use slatedb feature for persistent storage)
-#   • nis-syncd :9680 — NIS/GIS grid topology import adapter (stateless, lifts NB STP to ≥95%)
 #
 # Excluded from demo (run separately when needed):
 #   sperrd   — Sperrung tracking (not needed for core NB STP flow)

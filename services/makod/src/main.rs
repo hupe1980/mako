@@ -23,7 +23,7 @@
 //!       --azure-account <ACCOUNT>          Azure Storage account [env: MAKOD_AZURE_ACCOUNT=]
 //!       --http-addr <ADDR>                 HTTP REST API listen address [env: MAKOD_HTTP_ADDR=]
 //!       --api-webdienste-addr <ADDR>       API-Webdienste Strom listen address [env: MAKOD_API_WEBDIENSTE_ADDR=]
-//!       --tenant-id <ID>                   Operator tenant identifier (BDEW code / GLN / EIC) [env: MAKOD_TENANT_ID=] [default: default]
+//!       --config <FILE>                    TOML config file — required: must define at least one [[party]] entry [env: MAKOD_CONFIG=]
 //!       --as4-addr <ADDR>                  AS4 inbound transport address [env: MAKOD_AS4_ADDR=]
 //!       --as4-signing-key-pem <PEM>        PEM private key for AS4 signing (ECDSA BrainpoolP256r1) [env: MAKOD_AS4_SIGNING_KEY_PEM=]
 //!       --as4-signing-cert-pem <PEM>       PEM X.509 certificate for AS4 signing [env: MAKOD_AS4_SIGNING_CERT_PEM=]
@@ -133,6 +133,7 @@ mod openapi;
 mod partner_api;
 mod party_registry;
 mod projection_worker;
+mod redispatch_xml_ingest;
 mod startup;
 mod verzeichnisdienst_worker;
 mod webdienste;
@@ -553,7 +554,7 @@ struct Cli {
     /// BDEW party ID (13-digit GLN) of this operator's AS4 Message Service Handler.
     ///
     /// Used as the `<eb:PartyId>` in generated AS4 signal messages (receipts,
-    /// errors). Defaults to `--tenant-id` when omitted.
+    /// errors). Defaults to the primary `[[party]]` MP-ID when omitted.
     ///
     /// Can also be set via the `MAKOD_AS4_PARTY_ID` environment variable.
     #[arg(long, value_name = "GLN", env = "MAKOD_AS4_PARTY_ID")]
@@ -922,7 +923,7 @@ struct Cli {
     ///
     /// Not settable via CLI flags.  Populated by `apply_config_file` when the
     /// TOML config file contains `[[party]]` entries.  When non-empty, takes
-    /// precedence over `--tenant-id` / `[engine] tenant_id` for GLN routing.
+    /// precedence over the primary `[[party]]` MP-ID for GLN routing.
     #[arg(skip)]
     parties: Vec<config::PartyConfig>,
 

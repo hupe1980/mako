@@ -27,6 +27,11 @@ dvgw-edi         = { path = "../../crates/dvgw-edi" }
 mako-gabi-gas    = { path = "../../crates/mako-gabi-gas" }
 mako-mabis       = { path = "../../crates/mako-mabis" }
 mako-redispatch  = { path = "../../crates/mako-redispatch" }
+# The format half of the Redispatch transport boundary — parses the nine
+# BDEW XML document types the AS4 leg carries (mirrors edi-energy for
+# EDIFACT). makod is the only crate depending on both halves; the canonical
+# DocumentType → RedispatchDocumentKind mapping lives in redispatch_xml_ingest.
+redispatch-xml   = { path = "../../crates/redispatch-xml" }
 edifact-rs       = { workspace = true }
 mako-as4     = { path = "../../crates/mako-as4", features = ["server"] }
 energy-api   = { path = "../../crates/energy-api", features = ["server", "client"] }

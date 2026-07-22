@@ -111,11 +111,11 @@ pub enum MeasurementSource {
         source_malo_ids: Vec<String>,
     },
 
-    /// Redispatch 2.0 time-series import (PIDs 13020–13026).
+    /// Redispatch 2.0 time-series import (PIDs 13020–13023, 13026).
     ///
     /// Ausfallarbeit, meteorological data, and other Redispatch quantities.
     RedispatchImport {
-        /// MSCONS PID (13020–13026).
+        /// MSCONS PID (13020–13023, 13026).
         pid: u32,
         /// Activation ID or process reference.
         activation_ref: Option<String>,

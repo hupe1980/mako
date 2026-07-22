@@ -889,7 +889,7 @@ bank_api_key    = "env:BANK_API_KEY"
 
 ## MCP server
 
-`accountingd` exposes **14 tools** at `/mcp` (Streamable HTTP 2025-11-25):
+`accountingd` exposes **12 tools** at `/mcp` (Streamable HTTP 2025-11-25):
 
 | Tool | Description |
 |---|---|
@@ -905,8 +905,6 @@ bank_api_key    = "env:BANK_API_KEY"
 | `compute_bilanzielle_abgrenzung` | pRAP/aRAP calculation for HGB §250 period close |
 | `suggest_payment_match` | AI payment reconciliation — match CAMT.054 to open Rechnungen |
 | `post_manual_booking` | Create an operator-authorised ledger entry |
-| `get_aging_report` | Receivables aging analysis by bucket |
-| `list_payment_plans` | List Zahlungsvereinbarung for a MaLo |
 
 The `payment-reconciliation-agent` in `agentd` uses these tools for automated payment
 matching (powercloud-equivalent >98% match rate).

@@ -3,6 +3,21 @@
 Event-sourced process engine for **Redispatch 2.0** congestion-management
 workflows under §§ 13, 13a, 14 EnWG. Part of the `mako` workspace.
 
+## Format boundary
+
+This crate is format-agnostic: workflows and the type router know only the
+domain enum `RedispatchDocumentKind` — the same layering as
+`mako-gpke`/`mako-wim`/`mako-mabis`, which never depend on `edi-energy`.
+The **canonical** `DocumentType → RedispatchDocumentKind` mapping lives at
+the transport boundary in `makod` (`redispatch_xml_ingest::document_kind`),
+the only crate that depends on both halves. The mapping is exhaustive, so a
+tenth XML document type fails compilation instead of silently never
+routing; makod's `tests/redispatch_xml_pipeline.rs` proves the full wire
+path (raw ActivationDocument XML → namespace-checked parse → kind → router
+→ `redispatch-aktivierung`) and asserts a routing decision for all nine
+document types (the AcknowledgementDocument is correlation-routed by
+design).
+
 ## Regulatory scope
 
 Redispatch 2.0 is mandatory for all German grid operators (ÜNB and VNB) and
@@ -65,8 +80,10 @@ are registered by `RedispatchModule` in `makod`.
 
 Unlike GPKE/WiM/GeLi Gas (EDIFACT `RFF+Z13` Prüfidentifikatoren), Redispatch
 2.0 XML documents are routed by `RedispatchRouter` based on XML document type,
-not EDIFACT PID. The `makod` inbound dispatcher detects `application/xml`
-content and calls `redispatch_xml::detect(bytes)` before routing.
+not EDIFACT PID. The `makod` AS4 ingest sniffs XML payloads (first
+non-whitespace byte `<`), parses them with
+`redispatch_xml::parse_and_validate`, and maps the document type to a
+`RedispatchDocumentKind` before routing.
 
 ## Regulatory basis
 
@@ -113,7 +130,7 @@ workflows — the standard Werktage-based GPKE/WiM scheduler is insufficient.
 
 | Crate | Role |
 |---|---|
-| `redispatch-xml` | XML format layer — parse · serialize · validate (required by this crate) |
+| `redispatch-xml` | XML format layer — parse · serialize · validate (joined with this crate in `makod`) |
 | `mako-redispatch` ← **this crate** | Event-sourced process engine — 8 workflows, `RedispatchRouter`, `RedispatchModule` |
 | `edi-energy` | IFTSTA status messages (EDIFACT, PIDs 21037/21038) |
 | `mako-engine` | Event-sourced workflow runtime (`Workflow`, `Process`, `EventStore`) |

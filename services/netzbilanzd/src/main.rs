@@ -167,6 +167,11 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/redispatch/kostenblatt/:activation_id/compute",
             post(handlers::post_kostenblatt_compute),
         )
+        // §13a Abs. 2 EnWG — angemessene Vergütung for one activation
+        .route(
+            "/api/v1/redispatch/verguetung/:activation_id/compute",
+            post(handlers::post_verguetung_compute),
+        )
         // N5a: Kostenblatt gap detection — activations without dispatch_kwh data.
         .route(
             "/api/v1/redispatch/kostenblatt/gaps/:year/:month",

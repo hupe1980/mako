@@ -1767,10 +1767,57 @@ impl EdifactIngestDispatcher {
                 workflow_name: "gabi-gas-delivery-order",
                 reason: "phase2_dispatch_not_yet_implemented",
             }),
-            "redispatch-aktivierung" => Ok(IngestOutcome::Skipped {
-                workflow_name: "redispatch-aktivierung",
-                reason: "phase2_dispatch_not_yet_implemented",
-            }),
+            // ── Redispatch 2.0 Aktivierung (EDIFACT leg) ─────────────────────
+            // IFTSTA 21037/21038 Vollzugsmeldungen and the MSCONS/ORDERS/ORDRSP
+            // Ausfallarbeit family are recorded on the activation process —
+            // spawned when none exists yet, so no Redispatch market message is
+            // silently dropped. The XML ActivationDocument itself travels the
+            // AS4 XML channel (outside this EDIFACT dispatcher); its state
+            // machine is driven via the engine API and the deadline table.
+            "redispatch-aktivierung" => match pid {
+                21037 | 21038 => {
+                    let (sender, receiver, message_ref) = redispatch_envelope(msg);
+                    let key = redispatch_process_key(msg, &message_ref, &sender, pid);
+                    let cmd = mako_redispatch::aktivierung::AktivierungCommand::ReceiveIftsta {
+                        pid,
+                        sender,
+                        receiver,
+                        message_ref,
+                    };
+                    self.spawn_or_resume::<mako_redispatch::aktivierung::AktivierungWorkflow>(
+                        &key,
+                        "redispatch-aktivierung",
+                        cmd,
+                        &fv,
+                        &[],
+                    )
+                    .await
+                }
+                13020 | 13021 | 13022 | 13023 | 13026 | 17209 | 17210 | 17211 | 19204 | 19301
+                | 19302 => {
+                    let (sender, receiver, message_ref) = redispatch_envelope(msg);
+                    let key = redispatch_process_key(msg, &message_ref, &sender, pid);
+                    let cmd =
+                        mako_redispatch::aktivierung::AktivierungCommand::ReceiveMarketMessage {
+                            pid,
+                            sender,
+                            receiver,
+                            message_ref,
+                        };
+                    self.spawn_or_resume::<mako_redispatch::aktivierung::AktivierungWorkflow>(
+                        &key,
+                        "redispatch-aktivierung",
+                        cmd,
+                        &fv,
+                        &[],
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "redispatch-aktivierung",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
             "wim-technik-aenderung" => Ok(IngestOutcome::Skipped {
                 workflow_name: "wim-technik-aenderung",
                 reason: "phase2_dispatch_not_yet_implemented",
@@ -1793,6 +1840,53 @@ impl EdifactIngestDispatcher {
                 })
             }
         }
+    }
+
+    // ── Redispatch XML entry points ───────────────────────────────────────────
+
+    /// Spawn or resume a Redispatch workflow from the AS4 **XML** leg.
+    ///
+    /// Same machinery as the EDIFACT path, but the version key is the BDEW
+    /// Redispatch XSD release (not a MIG `FormatVersion` detected from the
+    /// interchange — XML documents carry their version in the namespace).
+    /// `spawn_deadlines` are registered atomically with the first events.
+    pub(crate) async fn spawn_or_resume_redispatch<W>(
+        &self,
+        key: &str,
+        workflow_name_static: &'static str,
+        cmd: W::Command,
+        spawn_deadlines: &[(&'static str, time::OffsetDateTime)],
+    ) -> Result<IngestOutcome, EngineError>
+    where
+        W: Workflow + 'static,
+        W::Command: CommandPayload + Clone,
+        W::State: serde::Serialize,
+        Arc<SlateDbStore>: mako_engine::event_store::AtomicAppend,
+    {
+        // BDEW Redispatch 2.0 XSD release 1.1f (Fehlerkorrektur 2026-02-19).
+        let fv = FormatVersion::new("FV2026-02-19");
+        self.spawn_or_resume::<W>(key, workflow_name_static, cmd, &fv, spawn_deadlines)
+            .await
+    }
+
+    /// Resume an existing Redispatch process by business key (no spawn).
+    ///
+    /// Used for correlation-routed documents (`AcknowledgementDocument`):
+    /// the key is the MRID of the document being acknowledged, under which
+    /// the target process was registered at spawn.
+    pub(crate) async fn resume_redispatch<W>(
+        &self,
+        key: &str,
+        workflow_name_static: &'static str,
+        cmd: W::Command,
+    ) -> Result<IngestOutcome, EngineError>
+    where
+        W: Workflow + 'static,
+        W::Command: CommandPayload + Clone,
+        W::State: serde::Serialize,
+    {
+        self.resume_by_malo::<W>(key, workflow_name_static, cmd)
+            .await
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
@@ -2046,6 +2140,46 @@ pub fn extract_malo_from_invoic(msg: &AnyMessage) -> String {
 /// BDEW convention: `LOC+<qualifier>+<malo_id>::<code_list>:Z13`.
 /// Applies to ORDERS, ORDRSP, and UTILMD messages.
 /// Returns an empty string when the LOC segment is absent (INVOIC, IFTSTA, …).
+/// Envelope facts (sender NAD+MS, receiver NAD+MR, BGM document number) for
+/// Redispatch EDIFACT messages (IFTSTA/MSCONS/ORDERS/ORDRSP).
+fn redispatch_envelope(msg: &AnyMessage) -> (String, String, String) {
+    let segs = match msg {
+        AnyMessage::Iftsta(m) => m.segments(),
+        AnyMessage::Mscons(m) => m.segments(),
+        AnyMessage::Orders(o) => o.segments(),
+        AnyMessage::Ordrsp(o) => o.segments(),
+        _ => return (String::new(), String::new(), String::new()),
+    };
+    let party = |qualifier: &str| {
+        segs.iter()
+            .find(|s| s.tag == "NAD" && s.component_str(0, 0) == Some(qualifier))
+            .and_then(|s| s.component_str(1, 0))
+            .unwrap_or("")
+            .to_owned()
+    };
+    let message_ref = segs
+        .iter()
+        .find(|s| s.tag == "BGM")
+        .and_then(|s| s.component_str(1, 0))
+        .unwrap_or("")
+        .to_owned();
+    (party("MS"), party("MR"), message_ref)
+}
+
+/// Correlation key for the Redispatch activation process: the MaLo when the
+/// message carries one, else the BGM reference, else sender+PID (a stable
+/// last-resort bucket so the audit record still lands somewhere queryable).
+fn redispatch_process_key(msg: &AnyMessage, message_ref: &str, sender: &str, pid: u32) -> String {
+    let malo = extract_malo_from_msg(msg);
+    if !malo.is_empty() {
+        malo
+    } else if !message_ref.is_empty() {
+        message_ref.to_owned()
+    } else {
+        format!("{sender}-{pid}")
+    }
+}
+
 pub fn extract_malo_from_msg(msg: &AnyMessage) -> String {
     let segs = match msg {
         AnyMessage::Orders(o) => o.segments(),

@@ -384,9 +384,14 @@ For Helm charts, map `[subscription]` to `values.yaml` under `processd.subscript
 | Tool | Role | Description |
 |------|------|-------------|
 | `list_decisions` | NB | Last N Anmeldung decisions with ERC codes and affiliate flag |
+| `get_decision` | NB | Single Anmeldung decision by UUID |
 | `get_stp_rate` | NB | STP rate over last N days vs. 95 % target |
+| `get_stp_breakdown_by_erc` | NB | Rejection breakdown by ERC code |
+| `list_affiliate_decisions` | NB | Decisions involving affiliated suppliers (§20 EnWG parity) |
 | `list_pending_approvals` | LF | Pending approval queue entries (most urgent first) |
 | `get_queue_entry` | LF | Single queue entry by UUID |
+| `approve_queue_entry` | LF | Approve a queue entry (dispatches the response) |
+| `reject_queue_entry` | LF | Reject a queue entry with a reason code |
 
 ---
 

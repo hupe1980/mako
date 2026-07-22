@@ -240,7 +240,7 @@ async fn main() -> anyhow::Result<()> {
     let verifier = mako_service::oidc::OidcConfig::build_verifier(
         cfg.oidc.as_ref(),
         &http,
-        &cfg.makod.tenant_id,
+        &cfg.makod.tenant,
         shutdown.clone(),
     )
     .await?;
@@ -282,7 +282,7 @@ async fn main() -> anyhow::Result<()> {
         partner_repo,
         makod_client,
         event_tx,
-        tenant_gln: cfg.makod.tenant_id.clone(),
+        tenant_gln: cfg.makod.tenant.clone(),
     });
 
     spawn_fanout(
@@ -356,7 +356,7 @@ async fn main() -> anyhow::Result<()> {
             Arc::new(cfg.mmma_import.clone()),
             mmma_gas_repo,
             mmma_strom_repo,
-            cfg.makod.tenant_id.clone(),
+            cfg.makod.tenant.clone(),
             event_tx_for_workers.clone(),
             shutdown.clone(),
         );
@@ -365,12 +365,12 @@ async fn main() -> anyhow::Result<()> {
     // ── MCP server ────────────────────────────────────────────────────────────
     let mcp_state = Arc::new(marktd::mcp_server::MdmdMcpState {
         pool: pool.clone(),
-        tenant: cfg.makod.tenant_id.clone(),
+        tenant: cfg.makod.tenant.clone(),
         auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
             &cfg.mcp,
             verifier.clone(),
             Some(cedar.clone()),
-            &cfg.makod.tenant_id,
+            &cfg.makod.tenant,
         ),
     });
     let inbound_path = cfg.webhook.inbound_path.clone();
@@ -694,7 +694,7 @@ async fn main() -> anyhow::Result<()> {
             // Cedar ABAC enforcer (M6)
             .layer(Extension(cedar))
             // Tenant GLN for handlers without AppState access (e.g. preisblatt)
-            .layer(Extension(TenantGln(cfg.makod.tenant_id.clone())))
+            .layer(Extension(TenantGln(cfg.makod.tenant.clone())))
             // HTTP client extension for test_subscription direct delivery
             .layer(Extension(http.clone()))
             // Limit request bodies to 2 MiB to guard against accidental large payloads.

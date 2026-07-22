@@ -177,21 +177,19 @@ impl EngineModule for RedispatchModule {
 
     fn register_pids(&self, router: &mut PidRouter) {
         // Redispatch 2.0 uses XML document-type routing, not EDIFACT PIDs.
-        // EDIFACT IFTSTA PIDs carry Redispatch status messages:
+        // EDIFACT IFTSTA Vollzugsmeldungen for Redispatch 2.0:
         //
-        // PID 21035 — Redispatch / Statusmeldung
-        // PID 21036 — Redispatch / Statusmeldung Aktivierungsauftrag
-        // PID 21037 — Redispatch / Statusmeldung Einspeisemanagement
-        // PID 21038 — Redispatch / Statusmeldung Abrechnungsinformation
-        // PID 21040 — Redispatch / Statusmeldung Bilanzkreiszuordnung
+        // PID 21037 — Vollzugsmeldung (NB view)
+        // PID 21038 — Vollzugsmeldung (BTR view)
         //
+        // 21035/21036/21040 are NOT Redispatch PIDs (see aktivierung.rs).
         // Source: IFTSTA AHB 2.1 + PID 4.0 (01.04.2026).
         // These route to the Aktivierung workflow via conversation-ID lookup.
         for &pid in aktivierung::IFTSTA_PIDS {
             router.register(pid, aktivierung::WORKFLOW_NAME);
         }
 
-        // Redispatch 2.0 MSCONS time-series data (PIDs 13020–13026).
+        // Redispatch 2.0 MSCONS time-series data (PIDs 13020–13023, 13026).
         //
         // These carry Ausfallarbeit, meteorological data, and EEG
         // transfer time-series correlated to the Aktivierung process.

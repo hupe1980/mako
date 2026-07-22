@@ -1,7 +1,7 @@
 ---
 layout: default
 title: BDEW AS4 Guide
-nav_order: 16
+nav_order: 17
 parent: Reference
 mermaid: true
 description: >
@@ -344,7 +344,7 @@ to run integration tests locally immediately:
 ```toml
 [dev-dependencies]
 mako-as4 = { path = "../mako-as4", features = ["testing"] }
-asx-rs   = { version = "0.9", features = ["as4", "testing"] }
+asx-rs   = { version = "0.10", features = ["as4", "testing"] }
 ```
 
 No manual `CertHandle` construction or direct `zeroize` dependency is needed:

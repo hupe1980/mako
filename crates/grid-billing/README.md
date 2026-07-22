@@ -317,6 +317,7 @@ and `KA_CHARGED_WHILE_EXEMPT` when a rate is applied to a §2 Abs. 7 exemption.
 - **MMM Gas** (PID 31002) — Gas imbalance, GaBi Gas 2.1 (BK7-24-01-008)
 - **MSB-Rechnung** (PID 31009) — Grundgebühr Messstellenbetrieb + optional Messdienstleistung
 - **GeLi Gas AWH Sperrprozesse** (PID 31011) — abrechnungswürdige Handlungen (BK7-24-01-009 §5.4)
+- **§13a EnWG Redispatch-Vergütung** — `redispatch_verguetung()` computes the angemessene Vergütung per activation (entgangene Einnahmen + zusätzliche − ersparte Aufwendungen; `eeg_entgangene_einnahmen()` for the Nr. 5 EEG basis)
 - **Reversal (Stornorechnung)** — `calculate_reversal()` negates any prior settlement immutably
 
 All calculations are **pure functions** — zero I/O, zero async, no side effects.
@@ -494,7 +495,6 @@ pub enum LegalReference {
     Sect14aEnwg { module: Sect14aModule },      // Modul1 | Modul2 | Modul3
     BnetzaDecision { reference: &'static str }, // "BK6-22-300"
     BdewAhb  { reference: &'static str },       // "GPKE BK6-22-024"
-    MessZv   { paragraph: &'static str },       // "§2"
     MsbG     { paragraph: &'static str },       // "§§6–7"
     StromNzv { paragraph: &'static str },       // "§15" MMM
     GasNzv   { paragraph: &'static str },       // "§14" Gas MMM
@@ -623,7 +623,7 @@ the underlying master data.
 
 ```toml
 [dependencies]
-grid-billing = { version = "0.10" }
+grid-billing = { version = "0.13" }
 rust_decimal = "1"
 time         = "0.3"
 ```
@@ -845,10 +845,10 @@ assert_eq!(storno.correction_of.as_deref(), Some("NNE-2026-01-0001"));
 ### Pre-calculation validation
 
 ```rust,no_run
-use grid_billing::{NneInput, Sparte, validate_nne_input, WarningSeverity};
+use grid_billing::{MmmInput, validate_mmm_input};
 
-let input = NneInput { /* … */ };
-let v = validate_nne_input(&input);
+let input = MmmInput { /* … */ };
+let v = validate_mmm_input(&input);
 
 if !v.is_valid {
     for w in &v.warnings {
@@ -856,8 +856,12 @@ if !v.is_valid {
     }
     return;
 }
-let settlement = settle_nne(&input).unwrap();
+let settlement = grid_billing::settle_mmm(&input).unwrap();
 ```
+
+(`settle_nne` validates inline — malformed NNE input returns `Err` directly;
+`validate_mmm_input` / `validate_msb_input` / `validate_gas_awh_input` exist
+for the settlement types where a pre-flight warning list is useful.)
 
 ### Service-layer conversion to BO4E `Rechnung`
 
@@ -973,15 +977,6 @@ Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6, Section 3.2 (valid 01
 | **`calculate_correction()` pair** | Returns `(reversal, replacement)` — both get status set atomically; caller dispatches both. |
 | **Pure functions** | All `calculate_*` functions are sync with no side effects. |
 | **`recomputed_total` guard** | `debug_assert_eq!(result.total_eur, result.recomputed_total())` inside every `calculate_*` — catches rounding bugs in debug builds. |
-|---|---|
-| **No floating-point money** | `rust_decimal::Decimal` throughout; `billing::EuroAmount` for overflow guard. No `f64`. |
-| **No rubo4e dependency** | Returns `SettlementResult`; service layer owns `into_rechnung()`. |
-| **`counterparty_mp_id` auto-populated** | `lf_mp_id` (NNE/MMM) or `msb_mp_id` (PID 31009) copied automatically — service layer always has the recipient. |
-| **`Sparte` drives settlement type** | `Sparte::Gas` → `SettlementType::NneGas`, `GasNEV §14`, PID 31005. No manual override needed. |
-| **Every position cites regulation** | `trace.legal_refs` is non-empty for every position. Enables BNetzA audit without re-calculation. |
-| **Immutable correction chain** | `calculate_reversal()` mirrors positions, sets `status = Reversal`, links via `correction_of`. Original never mutated. |
-| **Pure functions** | All `calculate_*` functions are sync with no side effects. |
-| **Decimal-only input** | All rates via `Decimal::from_str_exact`. Never `Decimal::try_from(f64)`. |
 
 ## See also
 
@@ -990,12 +985,3 @@ Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6, Section 3.2 (valid 01
 - [`invoicd`](../../services/invoicd/README.md) — LF service using `grid-billing` for selbstausstellen
 - [Operator guide → netzbilanzd](../../docs/netzbilanzd.md)
 
-`grid-billing` computes BDEW INVOIC billing positions for:
-
-- **NNE** (Netznutzungsentgelt) — flat-rate or §14a Modul 2 ToU (HT/NT split)
-- **KA** (Konzessionsabgabe) — KAV §2, included as separate position
-- **MMM** (Mehr-/Mindermengensaldo) — actual vs. SLP profile deviation, credit when Mindermengen dominate
-- **MSB-Rechnung** — metering service fee (NB → MSB, PID 31009)
-
-All calculations are **pure functions** — zero I/O, zero async, no side effects.
-All monetary arithmetic uses `EuroAmount` = `i64 × 10⁻⁵ EUR` — no `f64` anywhere in the billing path.

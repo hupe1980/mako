@@ -20,17 +20,17 @@
 //! validated against BDEW-published XSD schemas (topicGroupId 25 in the BDEW
 //! MaKo document API).
 //!
-//! | Document type | XSD version | Valid from |
+//! | Document type | XSD version | Latest revision |
 //! |---|---|---|
-//! | `ActivationDocument` | 1.1f | 2025-10-01 |
-//! | `PlannedResourceScheduleDocument` | 1.0f | 2025-10-01 |
-//! | `AcknowledgementDocument` | 1.0f | 2025-10-01 |
-//! | `Stammdaten` | 1.4b | 2025-10-01 |
-//! | `StatusRequest_MarketDocument` | 1.1 | 2025-10-01 |
-//! | `Unavailability_MarketDocument` | 1.1b | 2025-10-01 |
-//! | `Kaskade` | 1.0 | 2025-10-01 |
-//! | `NetworkConstraintDocument` | 1.1b | 2025-10-01 |
-//! | `Kostenblatt` | 1.0d | 2025-10-01 |
+//! | `ActivationDocument` | 1.1f | Fehlerkorrektur 2026-02-19 |
+//! | `PlannedResourceScheduleDocument` | 1.0f | Fehlerkorrektur 2026-02-19 |
+//! | `AcknowledgementDocument` | 1.0g | 2025-10-01 |
+//! | `Stammdaten` | 1.4b | Fehlerkorrektur 2026-02-19 |
+//! | `StatusRequest_MarketDocument` | 1.1 | 2025-04-01 |
+//! | `Unavailability_MarketDocument` | 1.1b | Fehlerkorrektur 2025-04-16 |
+//! | `Kaskade` | 1.0 | Fehlerkorrektur 2026-02-19 |
+//! | `NetworkConstraintDocument` | 1.1b | 2025-04-01 |
+//! | `Kostenblatt` | 1.0d | Fehlerkorrektur 2025-04-16 |
 //!
 //! These are **not** EDIFACT. IFTSTA status messages for the Redispatch 2.0
 //! workflow are handled separately by the `edi-energy` crate.

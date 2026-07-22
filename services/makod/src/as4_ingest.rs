@@ -284,6 +284,121 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                     payload_bytes  = edifact.len(),
                     "AS4 inbound: message received",
                 );
+                // ── Synchronous receipt builder ───────────────────────────────
+                // BDEW AS4-Profil §2.2.4: the receipt must be signed and echo
+                // the inbound message's ds:Reference digests (NRR).  Unsigned
+                // receipts are a dev/test fallback only — strict counterparties
+                // reject them.  Shared by the EDIFACT and Redispatch-XML legs.
+                let send_receipt = || {
+                    let receipt_id = format!("makod@{}", Uuid::new_v4());
+                    let receipt = match &self.receipt_credentials {
+                        Some(credentials) => generate_signed_receipt_for_output(
+                            &self.session,
+                            &receipt_id,
+                            &output,
+                            &ingress.body,
+                            &ingress.content_type,
+                            credentials,
+                        ),
+                        None => {
+                            tracing::warn!(
+                                as4_message_id = %msg_id,
+                                "AS4 inbound: no receipt-signing credentials configured — \
+                                 emitting UNSIGNED receipt without NRI. This violates BDEW \
+                                 AS4-Profil §2.2.4; configure with_receipt_credentials for \
+                                 production.",
+                            );
+                            generate_receipt_for_output(&self.session, &receipt_id, &output)
+                        }
+                    };
+                    match receipt {
+                        Ok(receipt_xml) => {
+                            tracing::debug!(
+                                as4_message_id = %msg_id,
+                                receipt_id     = %receipt_id,
+                                signed         = self.receipt_credentials.is_some(),
+                                "AS4 inbound: sending synchronous receipt",
+                            );
+                            HandlerOutcome::ok_with_body(receipt_xml, "application/soap+xml")
+                        }
+                        Err(e) => {
+                            // Receipt generation failure is non-fatal for the
+                            // business payload — message was already dispatched.
+                            // Return 200 without a receipt body; the sender will
+                            // retry and hit the dedup path.
+                            tracing::error!(
+                                as4_message_id = %msg_id,
+                                error          = %e,
+                                "AS4 inbound: receipt generation failed — returning 200 without body",
+                            );
+                            HandlerOutcome::ok()
+                        }
+                    }
+                };
+
+                // ── Redispatch 2.0 XML leg ────────────────────────────────────
+                // The BDEW AS4 channel carries two payload formats: EDIFACT
+                // interchanges and the nine Redispatch 2.0 XML document types
+                // (BK6-20-059/-061).  XML payloads never enter the EDIFACT
+                // pipeline — no UNB envelope, no test indicator, no CONTRL
+                // obligation.
+                if crate::redispatch_xml_ingest::looks_like_xml(&edifact) {
+                    let Some(dispatcher) = self.ingest.dispatcher.as_deref() else {
+                        tracing::error!(
+                            as4_message_id = %msg_id,
+                            "AS4 ingest: XML payload received but no Phase 2 dispatcher \
+                             is wired — rejecting so the sender retransmits",
+                        );
+                        return HandlerOutcome::bad_request(
+                            "XML payload received but workflow dispatch is not configured",
+                        );
+                    };
+                    return match crate::redispatch_xml_ingest::dispatch_redispatch_xml(
+                        dispatcher, &edifact,
+                    )
+                    .await
+                    {
+                        Ok(crate::ingest_dispatcher::IngestOutcome::Skipped {
+                            workflow_name,
+                            reason,
+                        }) => {
+                            // Parse/validation failure or unroutable document —
+                            // reject *without* a receipt: an AS4 receipt asserts
+                            // successful reception, and the sender must correct
+                            // and retransmit.
+                            tracing::warn!(
+                                as4_message_id = %msg_id,
+                                workflow       = %workflow_name,
+                                reason         = %reason,
+                                "AS4 ingest: Redispatch XML payload rejected",
+                            );
+                            HandlerOutcome::bad_request(format!(
+                                "Redispatch XML rejected: {reason}"
+                            ))
+                        }
+                        Ok(outcome) => {
+                            tracing::info!(
+                                as4_message_id = %msg_id,
+                                outcome        = ?outcome,
+                                "AS4 ingest: Redispatch XML document dispatched",
+                            );
+                            send_receipt()
+                        }
+                        Err(e) => {
+                            // No durable business record was written — reject so
+                            // the AS4 retransmission gives us another attempt.
+                            tracing::error!(
+                                as4_message_id = %msg_id,
+                                error          = %e,
+                                "AS4 ingest: Redispatch XML dispatch failed",
+                            );
+                            HandlerOutcome::bad_request(format!(
+                                "Redispatch XML dispatch failed: {e}"
+                            ))
+                        }
+                    };
+                }
+
                 // ── Test-indicator guard (§AF §3 / Allgemeine Festlegungen V6.1d §3) ──
                 // Reject before dispatching any messages.
                 if let Ok(pi) = self.ingest.platform.parse_interchange_full(&edifact[..])
@@ -442,55 +557,8 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                         .await;
                 }
 
-                // ── Synchronous receipt ───────────────────────────────────────
-                // BDEW AS4-Profil §2.2.4: the receipt must be signed and echo
-                // the inbound message's ds:Reference digests (NRR).  Unsigned
-                // receipts are a dev/test fallback only — strict counterparties
-                // reject them.
-                let receipt_id = format!("makod@{}", Uuid::new_v4());
-                let receipt = match &self.receipt_credentials {
-                    Some(credentials) => generate_signed_receipt_for_output(
-                        &self.session,
-                        &receipt_id,
-                        &output,
-                        &ingress.body,
-                        &ingress.content_type,
-                        credentials,
-                    ),
-                    None => {
-                        tracing::warn!(
-                            as4_message_id = %msg_id,
-                            "AS4 inbound: no receipt-signing credentials configured — \
-                             emitting UNSIGNED receipt without NRI. This violates BDEW \
-                             AS4-Profil §2.2.4; configure with_receipt_credentials for \
-                             production.",
-                        );
-                        generate_receipt_for_output(&self.session, &receipt_id, &output)
-                    }
-                };
-                match receipt {
-                    Ok(receipt_xml) => {
-                        tracing::debug!(
-                            as4_message_id = %msg_id,
-                            receipt_id     = %receipt_id,
-                            signed         = self.receipt_credentials.is_some(),
-                            "AS4 inbound: sending synchronous receipt",
-                        );
-                        HandlerOutcome::ok_with_body(receipt_xml, "application/soap+xml")
-                    }
-                    Err(e) => {
-                        // Receipt generation failure is non-fatal for the
-                        // business payload — message was already dispatched.
-                        // Return 200 without a receipt body; the sender will
-                        // retry and hit the dedup path.
-                        tracing::error!(
-                            as4_message_id = %msg_id,
-                            error          = %e,
-                            "AS4 inbound: receipt generation failed — returning 200 without body",
-                        );
-                        HandlerOutcome::ok()
-                    }
-                }
+                // ── Synchronous receipt (BDEW AS4-Profil §2.2.4) ──────────────
+                send_receipt()
             }
 
             // `As4ReceiveOutcome` is `#[non_exhaustive]` — keep a catch-all for

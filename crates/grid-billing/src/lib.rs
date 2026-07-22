@@ -105,6 +105,7 @@ pub mod error;
 pub mod gas;
 pub mod msbg;
 pub mod netzebene;
+pub mod redispatch;
 pub mod regulatory;
 pub mod sect18;
 pub mod sect19;
@@ -113,6 +114,10 @@ pub mod umlagen;
 
 pub use billing::{correct, reverse, settle_gas_awh, settle_mmm, settle_msb, settle_nne};
 pub use error::BillingError;
+pub use redispatch::{
+    RedispatchVerguetung, RedispatchVerguetungInput, RedispatchVerguetungsart,
+    eeg_entgangene_einnahmen, redispatch_verguetung,
+};
 pub use types::{
     // The settlement — what is owed and why.
     ArbeitspreisModell,

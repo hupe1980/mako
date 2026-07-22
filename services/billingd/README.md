@@ -93,7 +93,7 @@ nothing while the working client function sat as dead code.
 ## Billing arithmetic
 
 All monetary amounts use `billing::Amount<5>` (`EuroAmount` — `i64 × 10⁻⁵` EUR). Never `f64`.
-The billing calculator is in the **pure `energy-billing` crate** — **190 tests** with no I/O:
+The billing calculator is in the **pure `energy-billing` crate** — **191 tests** with no I/O:
 
 ```bash
 cargo test -p energy-billing --all-features

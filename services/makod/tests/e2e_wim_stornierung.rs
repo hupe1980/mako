@@ -1,8 +1,8 @@
-//! End-to-end test: nMSB → NB WiM Stornierung (PID 39002).
+//! End-to-end test: WiM Stornierung der Bestellung (ORDCHG PID 39002,
+//! ESA → MSB per WiM Strom Teil 2).
 //!
-//! A mock NB (Netzbetreiber / aMSB) receives an ORDCHG 39002 (Stornierung
-//! Sperr-/Entsperrauftrag) from the requesting party and dispatches a positive
-//! or negative ORDRSP response.
+//! A mock MSB receives an ORDCHG 39002 (Stornierung der Bestellung) from the
+//! requesting party and dispatches a positive or negative ORDRSP response.
 //!
 //! # Protocol trace
 //!

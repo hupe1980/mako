@@ -40,6 +40,7 @@ pub mod openapi;
 pub mod partner_api;
 pub mod party_registry;
 pub mod projection_worker;
+pub mod redispatch_xml_ingest;
 // startup symbols (MakodCtx, WorkersConfig, spawn_workers, validate_adapter_coverage)
 // are pub(crate) and called only from main.rs. The lib target sees them as dead code
 // because main.rs is a separate compilation unit. Allow dead_code here; the binary

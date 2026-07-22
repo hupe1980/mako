@@ -11,7 +11,7 @@ description: >
   §36k Wind Korrekturfaktor, §42b GGV multi-meter Messkonzept,
   §51 Negativpreisregel, §52 Pflichtzahlungen + §52 Abs. 6 Netting,
   SettlementPeriodState lifecycle, Repowering §22, Zusammenlegung §24,
-  KWKG Förderdauer, 339 eeg-billing tests, 14 MCP tools, eeg-agent.
+  KWKG Förderdauer, 339 eeg-billing tests, 18 MCP tools, eeg-agent.
 ---
 
 # `einsd` — Einspeiser Registry + EEG/KWKG Settlement
@@ -184,7 +184,7 @@ biomasse plants get the 500 kW exemption (Nr. 2). Under EEG 2021 both use 500 kW
 
 ## Settlement Models
 
-`einsd` supports **9 settlement schemes** via the `eeg-billing` crate.
+`einsd` supports **10 settlement schemes** via the `eeg-billing` crate.
 The scheme is stored as `settlement_model` in `settlement_receipts` and selected when calling
 `POST /settle/{year}/{month}`.
 
@@ -200,6 +200,7 @@ The scheme is stored as `settlement_model` in `settlement_receipts` and selected
 | `FLEXIBILITY_PREMIUM` | §50b EEG 2023 | `kwh × (verguetung + flex_praemie) / 100` | `de.eeg.verguetung.berechnet` |
 | `FLEXIBILITY_SURCHARGE` | §50a EEG 2023 | `kw × rate_eur_per_kw / 12` (capacity payment) | `de.eeg.verguetung.berechnet` |
 | `TEMPORARY_FEED_IN_TARIFF` | §21 Abs. 1 Nr. 2 EEG 2023 | `kwh × verguetungssatz_ct / 100` (at reduced rate) | `de.eeg.verguetung.berechnet` |
+| `SONSTIGE_DIREKTVERMARKTUNG` | §21a EEG | EUR 0 EEG payment (revenue on the open market) | _(none)_ |
 
 **Ausschreibung** is not a separate scheme. It is `MARKET_PREMIUM` with
 `tariff_source = Auction` — it uses the MarketPremium calculation with an **auction-determined
@@ -440,8 +441,7 @@ formula; actual BNetzA-published quarterly rates are stored in `eeg_verguetungss
 
 For plants commissioned after Q2 2024, use `lookup_statutory_rate` MCP tool or
 `GET /api/v1/verguetungssatz-lookup` to retrieve the correctly degresssed rate for the
-commissioning quarter. The MCP tool `calculate_theoretical_rate` can verify the expected
-rate from first principles.
+commissioning quarter.
 
 **§23a degression tiers** (based on previous year's installed GW):
 
@@ -1042,12 +1042,14 @@ All events: `application/cloudevents+json` + `X-Mako-Signature` HMAC.
 
 At `/mcp` (Streamable HTTP 2025-11-25). Auth: `Authorization: Bearer <mcp_api_key>`.
 
-**14 tools:**
+**18 tools:**
 `list_plants` · `get_plant` · `list_expiring` · `list_settlements` ·
 `lookup_verguetungssatz` · `lookup_statutory_rate` · `trigger_settle` ·
 `list_unsettled_plants` · `get_epex_monthly_price` · `import_epex_monthly_price` ·
 `get_compliance_status` · `list_plants_without_mastr` ·
-`check_direktvermarktung_compliance` · `check_sect44b_quota`
+`check_direktvermarktung_compliance` · `check_sect44b_quota` ·
+`import_jahresmarktwert` · `get_jahresmarktwert_tool` ·
+`get_settlement_state_history` · `explain_settlement`
 
 | Tool | Description |
 |---|---|

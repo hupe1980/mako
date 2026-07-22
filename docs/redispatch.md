@@ -1,7 +1,8 @@
 ---
 layout: default
 title: Redispatch 2.0
-nav_order: 8
+parent: Reference
+nav_order: 16
 mermaid: true
 description: >-
   Redispatch 2.0 in mako: XML document types, 8 event-sourced workflows,
@@ -57,15 +58,11 @@ contains at least one of `Marktrolle::Nb`, `Marktrolle::Unb`, or
 ```mermaid
 graph LR
     subgraph "Transport boundary"
-        HTTP["HTTP REST\nContent-Type: application/xml"]
-        AS4["AS4/ebMS3\n(SOAP/MTOM)"]
+        AS4["AS4/ebMS3\n(SOAP/MTOM)\nXML sniff: first byte <"]
     end
 
     subgraph "redispatch-xml"
-        DETECT["detect(bytes)\n→ DocumentType"]
-        PARSE["parse(bytes)\n→ Document enum"]
-        VALIDATE["validate(doc)\n→ ValidationResult"]
-        DETECT --> PARSE --> VALIDATE
+        PARSE["parse_and_validate(bytes)\n→ Document enum"]
     end
 
     subgraph "edi-energy"
@@ -87,9 +84,9 @@ graph LR
         PIDR --> WF2
     end
 
-    HTTP & AS4 --> DETECT
+    AS4 --> PARSE
     PARSE --> ROUTER
-    HTTP & AS4 --> IFTSTA --> PIDR
+    AS4 --> IFTSTA --> PIDR
 ```
 
 ---
@@ -171,6 +168,33 @@ Redispatch deadline scheduler →  polls every 30 s         (UTC, 5-min activati
 ```
 
 ---
+
+## Aufforderungsfall vs Duldungsfall
+
+The central Redispatch 2.0 case split (BK6-20-060) is a behavioral branch in
+the Aktivierung workflow, not just master data:
+
+| | Aufforderungsfall | Duldungsfall |
+|---|---|---|
+| Who steers | EIV/BTR per transmitted schedule (`AbrufartAufforderungsfall`: Z01 Delta / Z02 Sollwert) | The NB directly via the technical Steuerkanal (marktd `nelo.steuerkanal`) |
+| 5-min response window | **Enforced** — the process expires when no ACR/AAR arrives | **Not applicable** — no counterparty response is awaited; a mistakenly scheduled window is ignored |
+| §13a settlement basis | Transmitted schedule | Measured vs. reference Lastgang |
+
+`AktivierungCommand::ReceiveAco` carries the case (`Abwicklung`), resolved by
+the transport layer from the resource's Stammdaten.
+
+## §13a EnWG compensation
+
+`grid_billing::redispatch_verguetung` computes the angemessene Vergütung
+(§13a Abs. 2 EnWG): entgangene Einnahmen (for EEG/KWKG plants via
+`eeg_entgangene_einnahmen` from the anzulegender Wert — Nr. 5; for others the
+proven lost revenue — Nr. 3) plus zusätzliche Aufwendungen (Nr. 1/2/4) minus
+ersparte Aufwendungen (Satz 4 — reimbursed to the NB; the net may be
+negative). netzbilanzd exposes it as
+`POST /api/v1/redispatch/verguetung/{activation_id}/compute`, resolving the
+Ausfallarbeit from the same edmd 15-min Lastgang window the BK6-20-061
+Kostenblatt uses. Calculation endpoint only — the payment run is the
+operator's ERP.
 
 ## Workflow overview
 
@@ -263,21 +287,46 @@ if result.is_valid() {
 
 ## Integration with `makod`
 
-The `makod` daemon routes inbound messages by content type:
+Both transport legs are wired end-to-end:
 
-1. `Content-Type: application/xml` → calls `redispatch_xml::detect(bytes)` to
-   identify the document type, then dispatches via `RedispatchRouter`.
-2. `Content-Type: application/edifact` with `RFF+Z13:21037` or `21038` →
-   dispatched via `PidRouter` to `redispatch-aktivierung`.
-3. `AcknowledgementDocument` → correlation key extracted from
-   `ReceivingDocumentIdentification`, process looked up in `ProcessRegistry`,
-   ACK delivered directly.
+1. **EDIFACT leg.** IFTSTA 21037/21038 Vollzugsmeldungen
+   and the MSCONS (13020–13023, 13026) / ORDERS (17209–17211) / ORDRSP
+   (19204, 19301, 19302) Ausfallarbeit family resolve via the `PidRouter` to
+   `redispatch-aktivierung` and are executed on the activation process by the
+   ingest dispatcher — spawned when none exists yet, so no Redispatch market
+   message is silently dropped. Correlation key: MaLo where the message
+   carries one, else the BGM document reference.
+2. **XML leg.** The AS4 ingest sniffs XML payloads (first non-whitespace
+   byte `<` — EDIFACT interchanges start with `UNA`/`UNB`) and hands them to
+   `redispatch_xml_ingest::dispatch_redispatch_xml`: `redispatch-xml`
+   parses, namespace-checks and validates the document, the canonical
+   `document_kind` mapping (exhaustive — enum drift fails compilation)
+   picks the workflow, and the dispatcher spawns/resumes the process with
+   the regulatory deadlines registered **atomically with the first events**:
+   - `ActivationDocument` → `ReceiveAco` with the **5-minute response
+     window** and the 6-hour ACK window. The Abwicklung defaults to
+     Aufforderungsfall/Sollwert — the strict case; resolving a Duldungsfall
+     from the resource's Stammdaten relaxes it, never the reverse.
+   - `Stammdaten` → 6-hour ACK window + forward window.
+   - The six ack-forward document types → their 6h/24h ack windows.
+   - `AcknowledgementDocument` is delivered by **correlation**
+     (`ReceivingDocumentIdentification` → the process registered under the
+     acknowledged document's MRID), never type-routed.
+
+   A parse/validation failure or unroutable document is rejected without an
+   AS4 receipt (the receipt would assert successful reception), so the
+   sender corrects and retransmits. Deadlines fire through
+   `deadline_dispatch` (all 8 workflows covered). The
+   `redispatch_xml_pipeline` integration test in makod proves parse → kind
+   → route for all nine document types.
 
 ### Startup coverage check
 
-`makod` panics at startup if `DeploymentRoles` includes `Nb`/`Unb`/`Anb` but
-`RedispatchModule` is not registered. This prevents silent misconfiguration
-in regulatory-critical deployments.
+`deadline_dispatch::assert_dispatch_coverage` panics at startup when a
+registered Redispatch workflow lacks a deadline-dispatch entry — a deadline
+that can be scheduled but never fired would otherwise fail silently.
+`RedispatchModule` itself is registered for NB/ÜNB deployments (default
+feature set or `role-nb-strom`).
 
 ---
 
