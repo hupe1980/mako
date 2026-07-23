@@ -13,13 +13,19 @@ applyTo: "crates/mako-gpke/**, crates/mako-wim/**, crates/mako-geli-gas/**, crat
 | 17115–17117 (Sperrung Strom, ORDERS) | `mako-gpke` `gpke-sperrung` | BK6-22-024 |
 | 17134–17135 (Konfiguration, ORDERS) | `mako-gpke` `gpke-konfiguration` | BK6-22-024 |
 | 19001–19002 (ORDRSP) | `mako-gpke` `gpke-konfiguration` ⁿBNB-role⁾ · `mako-wim` `wim-geraeteubernahme` | BK6-24-174 |
-| 31001–31002, 31005–31008 | `mako-gpke` `gpke-abrechnung` (INVOIC) | BK6-24-174 |
+| 31001–31002, 31005–31006 | `mako-gpke` `gpke-abrechnung` (INVOIC) | BK6-24-174 |
+| 31007–31008 | `mako-gabi-gas` `gabi-gas-invoic` (Aggreg. MMM-Rechnung Gas) | BK7-24-01-008 |
 | 37000–37006 | `mako-gpke` `gpke-partin` (PARTIN Strom) | PARTIN AHB 1.0f |
-| 11001–11003 | `mako-wim` | BK6-24-174 |
+| 35001–35005 (REQOTE), 15001–15005 (QUOTES) | `mako-wim` `wim-preisanfrage` | BK6-24-174 |
+| 27001–27003 (PRICAT) | `mako-wim` `wim-preisliste` | BK6-24-174 |
+| 17001–17011 (Geräteübernahme, ORDERS) | `mako-wim` `wim-geraeteubernahme` | BK6-24-174 |
+| 17011/17118/17121 → 19003–19007 (Technik-Änderung) | `mako-wim` `wim-technik-aenderung` | BK6-24-174 |
+| **ESA Wertebestellung** 35002/15003/17007/17008/39002/19011–19014 | `mako-wim` `wim-wertebestellung` (MSB) · `mako-wim` `esa-wertebestellung` (ESA) | WiM Strom Teil 2 |
 | 31009 | `mako-wim` `wim-rechnung` (MSB-Rechnung) | BK6-24-174 |
 | 23001, 23003, 23004, 23008 | `mako-wim` `wim-insrpt` (Strom 5WT / combined) · `mako-wim-gas` `wim-gas-insrpt` (Gas-only 10WT) | BK6-24-174 / BK7-24-01-009 |
 | 23005, 23009 | `mako-wim-gas` `wim-gas-insrpt` (Gas-only INSRPT, always 10WT) | BK7-24-01-009 |
-| 13003 | `mako-mabis` | BK6-24-174 |
+| 13003, 13010–13012 | `mako-mabis` `mabis-billing` (Bilanzkreisabrechnung Strom) | BK6-24-174 |
+| 55065, 55069, 55070 (UTILMD Clearingliste) | `mako-mabis` `mabis-clearingliste` | BK6-24-174 |
 | 44001–44021 | `mako-geli-gas` (UTILMD G Lieferantenwechsel Gas) | BK7-24-01-009 |
 | 17115–17117 (Sperrung Gas, ORDERS) | `mako-geli-gas` `geli-gas-sperrung-lf` | BK7-24-01-009 |
 | 37008–37014 | `mako-geli-gas` `geli-gas-partin` (PARTIN Gas) | PARTIN AHB 1.0f |
@@ -36,7 +42,10 @@ applyTo: "crates/mako-gpke/**, crates/mako-wim/**, crates/mako-geli-gas/**, crat
 44555, 56001–56010, 13001, 11004–11099.
 
 **PIDs 44022–44024 — ownership note:**
-These are multi-domain (WiM Gas / GeLi Gas 2.0 per BDEW PID 3.3/4.0). **Currently routed to `mako-wim-gas` `wim-gas-stornierung`.** GeLi Gas Stornierung role routing (LFN/LFA context) is a TODO in `mako-geli-gas`.
+These are multi-domain (WiM Gas / GeLi Gas 2.0 per BDEW PID 3.3/4.0). In a WiM-Gas
+deployment they route to `mako-wim-gas` `wim-gas-stornierung`; the GeLi Gas
+role-conditional Stornierung is implemented as `mako-geli-gas` `geli-gas-stornierung`
+(Nb) and `geli-gas-stornierung-lf` (Lf).
 
 ## APERAK Fristen — never mix these up
 
@@ -71,8 +80,9 @@ Saturday = Werktag. Sundays and German public holidays do not count. All deadlin
 ## crates/mako-mabis
 
 - Governed by **BK6-24-174**.
-- Only PID **13003** (Bilanzkreisabrechnung Strom, BKV↔ÜNB). No other PIDs.
-- PIDs 13002–13028 (excl. 13003) are Messwesen PIDs — they do not belong here.
+- MSCONS **13003 + 13010–13012** (Bilanzkreisabrechnung Strom, BKV↔ÜNB/BIKO) via
+  `mabis-billing`; UTILMD Clearinglisten **55065/55069/55070** via `mabis-clearingliste`.
+- The remaining 130xx Messwesen PIDs do **not** belong here.
 
 ## crates/mako-wim-gas
 

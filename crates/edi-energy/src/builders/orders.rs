@@ -20,6 +20,10 @@ struct OrdersBuilderInner {
     document_code: Option<String>,
     document_id: Option<String>,
     document_date: Option<String>,
+    location: Option<String>,
+    // Additive ESA-Bestellung/Abbestellung (PID 17007/17008) content.
+    reference: Option<(String, String)>,
+    item_description: Option<String>,
 }
 
 /// Fluent builder for `ORDERS` (Purchase Order) messages.
@@ -68,6 +72,9 @@ impl OrdersBuilder<Unset, Unset> {
                 document_code: None,
                 document_id: None,
                 document_date: None,
+                location: None,
+                reference: None,
+                item_description: None,
             },
         }
     }
@@ -134,6 +141,27 @@ impl<S, R> OrdersBuilder<S, R> {
         self
     }
 
+    /// Set the location (MaLo-ID / ZPB / NeLo-ID) the order addresses.
+    ///
+    /// Emits `LOC+172+<id>`. An ESA Bestellung/Abbestellung (`WiM` Teil 2 UC 4.1
+    /// Nr. 3 / UC 4.3 Nr. 1) names the location whose values are (un)ordered.
+    pub fn location(mut self, id: impl Into<String>) -> Self {
+        self.inner.location = Some(id.into());
+        self
+    }
+
+    /// Add the SG1 reference `RFF+<qual>:<value>` (ORDERS SG1 `1153 = Z13`).
+    pub fn reference(mut self, qualifier: impl Into<String>, value: impl Into<String>) -> Self {
+        self.inner.reference = Some((qualifier.into(), value.into()));
+        self
+    }
+
+    /// Set a coded item description — emits `IMD+A++:::<text>`.
+    pub fn item_description(mut self, text: impl Into<String>) -> Self {
+        self.inner.item_description = Some(text.into());
+        self
+    }
+
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let dtm_val = self
             .inner
@@ -154,6 +182,17 @@ impl<S, R> OrdersBuilder<S, R> {
         );
         emit_seg!(w, "BGM", code, doc_id);
         emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
+        // Item description (IMD) — the AHB requires the segment; the free-form
+        // indicator (7077 = A) satisfies it. `_text` is reserved for a future
+        // coded C273 once the 7081 characteristic code list is wired.
+        if let Some(_text) = &self.inner.item_description {
+            emit_comp!(w, "IMD", ["A"]);
+        }
+        // ── SG1: reference (RFF+Z13 = Prüfidentifikator) ─────────────────────
+        if let Some((q, v)) = &self.inner.reference {
+            emit_comp!(w, "RFF", [q, v]);
+        }
+        // ── SG2: parties + location ──────────────────────────────────────────
         if let Some(id) = &self.inner.sender_id {
             emit_comp!(
                 w,
@@ -170,6 +209,11 @@ impl<S, R> OrdersBuilder<S, R> {
                 [id, "", self.inner.receiver_agency.as_str()]
             );
         }
+        if let Some(loc) = &self.inner.location {
+            emit_seg!(w, "LOC", "172", loc);
+        }
+        // Section control — ORDERS requires UNS between header and summary.
+        emit_seg!(w, "UNS", "D");
         w.finish_unt(&self.inner.message_ref)
             .map_err(Error::Parse)?;
         Ok(buf)

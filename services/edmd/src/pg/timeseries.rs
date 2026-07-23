@@ -817,7 +817,7 @@ fn row_to_receipt(row: &sqlx::postgres::PgRow) -> Result<MeterDataReceipt, EdmEr
 /// is the empty-string sentinel used by single-register meters. Every writer
 /// goes through this: two spellings of one register would otherwise become two
 /// rows, and every OBIS-blind aggregate would count the interval twice.
-fn normalise_obis(obis_code: Option<&str>) -> String {
+pub(crate) fn normalise_obis(obis_code: Option<&str>) -> String {
     obis_code.map_or_else(String::new, |s| {
         s.parse::<metering::obis::ObisCode>()
             .map_or_else(|_| s.to_owned(), |c| c.to_string())
@@ -837,7 +837,7 @@ pub(crate) fn quality_to_str(q: QualityFlag) -> &'static str {
     }
 }
 
-fn str_to_quality(s: &str) -> QualityFlag {
+pub(crate) fn str_to_quality(s: &str) -> QualityFlag {
     match s {
         "MEASURED" => QualityFlag::Measured,
         "ESTIMATED" => QualityFlag::Estimated,
@@ -859,7 +859,7 @@ fn sparte_to_str(s: Sparte) -> &'static str {
 /// Unknown values fall back to `Strom`. That fallback is lossy by design — the
 /// column is CHECK-constrained, so an unknown value means the schema and this
 /// code have diverged, which the `schema_code_guard` tests exist to catch.
-fn str_to_sparte(s: &str) -> Sparte {
+pub(crate) fn str_to_sparte(s: &str) -> Sparte {
     match s {
         "GAS" => Sparte::Gas,
         "WAERME" => Sparte::Waerme,

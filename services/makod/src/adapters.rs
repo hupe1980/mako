@@ -51,6 +51,19 @@ fn convert_pid(p: edi_energy::Pruefidentifikator) -> Result<Pruefidentifikator, 
     Pruefidentifikator::new(p.as_u32())
         .map_err(|e| EngineError::Deserialization(format!("PID out of range: {e}")))
 }
+
+/// Parse a `CCYYMMDD` DTM value (format 102) into a UTC datetime at midnight.
+fn parse_ccyymmdd(v: &str) -> Option<time::OffsetDateTime> {
+    if v.len() != 8 || !v.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let year: i32 = v[0..4].parse().ok()?;
+    let month = time::Month::try_from(v[4..6].parse::<u8>().ok()?).ok()?;
+    let day: u8 = v[6..8].parse().ok()?;
+    time::Date::from_calendar_date(year, month, day)
+        .ok()
+        .map(|d| d.midnight().assume_utc())
+}
 use mako_gabi_gas::{
     AllocationCommand, GaBiGasAllocationWorkflow, GaBiGasInvoicCommand, GaBiGasInvoicWorkflow,
     GaBiGasNominationWorkflow, NominationCommand, NomresAcceptance,
@@ -82,9 +95,9 @@ use mako_mabis::{
 };
 use mako_wim::{
     DeviceChangeCommand, GeraeteubernahmeCommand, PreisanfrageCommand, PreislisteCommand,
-    StammdatenCommand, StornierungCommand, WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow,
-    WimInsrptWorkflow, WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimRechnungCommand,
-    WimRechnungWorkflow, WimStammdatenWorkflow, WimStornierungWorkflow,
+    StammdatenCommand, WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow,
+    WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimRechnungCommand, WimRechnungWorkflow,
+    WimStammdatenWorkflow, esa_wertebestellung::EsaWertebestellungWorkflow,
     insrpt::StorungsmeldungCommand, wertebestellung::WimWertebestellungWorkflow,
 };
 use mako_wim_gas::{
@@ -1229,102 +1242,6 @@ pub fn wim_stammdaten_registry() -> AdapterRegistry<WimStammdatenWorkflow> {
                 melo_id,
                 document_date,
                 message_ref,
-                validation_passed,
-                validation_errors,
-            })
-        },
-    ));
-    registry
-}
-
-// ── WiM Stornierung (PID 39002) ──────────────────────────────────────────────
-
-/// Build an [`AdapterRegistry`] for [`WimStornierungWorkflow`].
-///
-/// Handles the single inbound ORDCHG PID 39002 (Stornierung der Bestellung) and produces a
-/// [`StornierungCommand::ReceiveOrdchg`].
-///
-/// - The MeLo ID is extracted from the `IDE` segment (element 1, component 0).
-/// - The `cancelled_ref` is extracted from the `RFF` segment with qualifier
-///   `Z13` (element 0, component 1), which references the original ORDERS.
-#[must_use]
-pub fn wim_stornierung_registry() -> AdapterRegistry<WimStornierungWorkflow> {
-    let mut registry = AdapterRegistry::new();
-    registry.register(FnAdapter::new(
-        is_known_fv,
-        |raw: &dyn Any, _fv: &FormatVersion| {
-            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
-                EngineError::Deserialization(
-                    "expected AnyMessage for WiM Stornierung adapter".into(),
-                )
-            })?;
-
-            let AnyMessage::Ordchg(o) = msg else {
-                return Err(EngineError::Deserialization(
-                    "WiM Stornierung adapter: expected ORDCHG message".into(),
-                ));
-            };
-
-            let pid = msg
-                .detect_pruefidentifikator()
-                .map_err(|e| {
-                    EngineError::Deserialization(format!(
-                        "WiM Stornierung adapter: PID detection failed: {e}"
-                    ))
-                })
-                .and_then(convert_pid)?;
-
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
-
-            let sender =
-                MarktpartnerCode::new(o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""));
-            let receiver = MarktpartnerCode::new(
-                o.receiver()
-                    .and_then(|n| n.party_id.as_deref())
-                    .unwrap_or(""),
-            );
-            let document_date = o
-                .dtm()
-                .iter()
-                .find(|d| d.is_document_date())
-                .and_then(|d| d.value_str())
-                .unwrap_or("")
-                .to_owned();
-            let message_ref = MessageRef::new(msg.message_ref());
-
-            // MeLo from the IDE segment (element 1, component 0 = object ID).
-            let melo_id = MeLo::new(
-                o.segments()
-                    .iter()
-                    .find(|s| s.tag == "IDE")
-                    .and_then(|s| s.component_str(1, 0))
-                    .unwrap_or(""),
-            );
-
-            // Original ORDERS reference from RFF+Z13 (element 0: qual=comp[0], ref=comp[1]).
-            let cancelled_ref = o
-                .segments()
-                .iter()
-                .find(|s| s.tag == "RFF" && s.component_str(0, 0) == Some("Z13"))
-                .and_then(|s| s.component_str(0, 1))
-                .map(MessageRef::new);
-
-            Ok(StornierungCommand::ReceiveOrdchg {
-                pid,
-                sender,
-                receiver,
-                melo_id,
-                document_date,
-                message_ref,
-                cancelled_ref,
                 validation_passed,
                 validation_errors,
             })
@@ -2581,8 +2498,8 @@ pub fn wim_preisanfrage_registry() -> AdapterRegistry<WimPreisanfrageWorkflow> {
 #[must_use]
 pub fn wim_wertebestellung_registry() -> AdapterRegistry<WimWertebestellungWorkflow> {
     use mako_wim::wertebestellung::{
-        ANFRAGE_PID, BESTELLUNG_PID, Lokationsebene, STORNIERUNG_PID, WertebestellungCommand,
-        Zustellquittung,
+        ABBESTELLUNG_PID, ANFRAGE_PID, BESTELLUNG_PID, Lokationsebene, STORNIERUNG_PID,
+        WertebestellungCommand, Zustellquittung,
     };
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
@@ -2641,13 +2558,41 @@ pub fn wim_wertebestellung_registry() -> AdapterRegistry<WimWertebestellungWorkf
                         lokations_id,
                         message_ref,
                         quittung,
+                        // Filled by the makod ingest consent gate before spawn.
+                        consent_block: None,
                     })
                 }
                 BESTELLUNG_PID => Ok(WertebestellungCommand::ReceiveBestellung {
                     pid,
                     message_ref,
                     quittung,
+                    // Filled by the makod ingest consent gate before spawn.
+                    consent_block: None,
                 }),
+                ABBESTELLUNG_PID => {
+                    // UC 4.3 Nr. 1: the ESA ends a running delivery. The stop
+                    // date travels in DTM+Z11 where present; else it stops now.
+                    let beendigung_zum = msg
+                        .segments()
+                        .iter()
+                        .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some("Z11"))
+                        .and_then(|s| s.component_str(0, 1))
+                        .and_then(|v| {
+                            time::Date::parse(
+                                v,
+                                &time::format_description::well_known::Iso8601::DEFAULT,
+                            )
+                            .ok()
+                            .map(|d| d.midnight().assume_utc())
+                        })
+                        .unwrap_or_else(time::OffsetDateTime::now_utc);
+                    Ok(WertebestellungCommand::ReceiveAbbestellung {
+                        pid,
+                        message_ref,
+                        beendigung_zum,
+                        quittung,
+                    })
+                }
                 STORNIERUNG_PID => Ok(WertebestellungCommand::ReceiveStornierung {
                     pid,
                     message_ref,
@@ -2655,7 +2600,108 @@ pub fn wim_wertebestellung_registry() -> AdapterRegistry<WimWertebestellungWorkf
                 }),
                 other => Err(EngineError::Deserialization(format!(
                     "WiM Wertebestellung adapter: PID {other} is not an ESA inbound PID \
-                     (expected 35002, 17007 or 39002)"
+                     (expected 35002, 17007, 17008 or 39002)"
+                ))),
+            }
+        },
+    ));
+    registry
+}
+
+/// Build an [`AdapterRegistry`] for [`EsaWertebestellungWorkflow`].
+///
+/// The ESA-origination side: it *receives* the MSB's answers and resumes the
+/// process it started. Maps the inbound MSB→ESA responses to `Receive*`:
+///
+/// | PID | Message | Command |
+/// |---|---|---|
+/// | 15003 | QUOTES | `ReceiveAngebot` (UC 4.1 Nr. 2) |
+/// | 19011 | ORDRSP | `ReceiveBestaetigung` (Ab-/Bestellung) |
+/// | 19012 | ORDRSP | `ReceiveAblehnung` (Ab-/Bestellung) |
+/// | 19013 | ORDRSP | `ReceiveStornierungAntwort` (Bestätigung) |
+/// | 19014 | ORDRSP | `ReceiveStornierungAntwort` (Ablehnung) |
+#[must_use]
+pub fn esa_wertebestellung_registry() -> AdapterRegistry<EsaWertebestellungWorkflow> {
+    use mako_wim::esa_wertebestellung::{
+        ABLEHNUNG_PID, ANGEBOT_PID, BESTAETIGUNG_PID, EsaWertebestellungCommand,
+        STORNO_ABLEHNUNG_PID, STORNO_BESTAETIGUNG_PID,
+    };
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for ESA Wertebestellung adapter".into(),
+                )
+            })?;
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "ESA Wertebestellung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let message_ref = MessageRef::new(msg.message_ref());
+            // Rejection reason (ORDRSP 19012/19014) from the first FTX free text.
+            let reason = msg
+                .segments()
+                .iter()
+                .find(|s| s.tag == "FTX")
+                .and_then(|s| s.component_str(4, 0))
+                .map(str::to_owned);
+
+            match pid.as_u32() {
+                ANGEBOT_PID => {
+                    // QUOTES 15003 carries both the Angebot and the Ablehnung der
+                    // Anfrage. They are told apart by the Bindungsfrist
+                    // (DTM+273, offer validity): an Angebot has one, an
+                    // Ablehnung does not.
+                    let bindungsfrist = msg
+                        .segments()
+                        .iter()
+                        .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some("273"))
+                        .and_then(|s| s.component_str(0, 1))
+                        .and_then(parse_ccyymmdd);
+                    if let Some(bindungsfrist) = bindungsfrist {
+                        Ok(EsaWertebestellungCommand::ReceiveAngebot {
+                            message_ref,
+                            bindungsfrist,
+                        })
+                    } else {
+                        // No Bindungsfrist → Ablehnung der Anfrage. Reason from
+                        // the FTX free text (element 3, per the AHB).
+                        let reason = msg
+                            .segments()
+                            .iter()
+                            .find(|s| s.tag == "FTX")
+                            .and_then(|s| s.component_str(3, 0))
+                            .map(str::to_owned);
+                        Ok(EsaWertebestellungCommand::ReceiveAnfrageAblehnung { reason })
+                    }
+                }
+                BESTAETIGUNG_PID => {
+                    Ok(EsaWertebestellungCommand::ReceiveBestaetigung { message_ref })
+                }
+                ABLEHNUNG_PID => Ok(EsaWertebestellungCommand::ReceiveAblehnung {
+                    message_ref,
+                    reason,
+                }),
+                p @ (STORNO_BESTAETIGUNG_PID | STORNO_ABLEHNUNG_PID) => {
+                    Ok(EsaWertebestellungCommand::ReceiveStornierungAntwort {
+                        pid,
+                        message_ref,
+                        reason: if p == STORNO_ABLEHNUNG_PID {
+                            reason
+                        } else {
+                            None
+                        },
+                    })
+                }
+                other => Err(EngineError::Deserialization(format!(
+                    "ESA Wertebestellung adapter: PID {other} is not an ESA inbound response \
+                     (expected 15003, 19011, 19012, 19013 or 19014)"
                 ))),
             }
         },

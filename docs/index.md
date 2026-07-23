@@ -156,7 +156,11 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">⚙️</div>
     <h3>Event-Sourced Process Runtime</h3>
     <p>
-      45+ durable, replayable MaKo workflows built on <code>mako-engine</code>.
+      45+ durable, replayable MaKo workflows built on <code>mako-engine</code> —
+      GPKE &amp; GeLi&nbsp;Gas supplier switch, WiM Messstellenbetrieb (incl. the
+      <strong>WiM&nbsp;Teil&nbsp;2 ESA Wertebestellung</strong>, §34 MsbG: one correlated
+      REQOTE→QUOTES→ORDERS→ORDRSP→ORDCHG subscription lifecycle),
+      MaBiS, and Redispatch&nbsp;2.0.
       Atomic dual-write (events + APERAK outbox in one <code>WriteBatch</code>) guarantees
       no lost messages on crash. FV2025-10-01 and FV2026-10-01 coexist simultaneously.
     </p>
@@ -656,6 +660,11 @@ mako ships AHB/MIG profiles for every active BDEW format version:
     <div class="mako-compliance-card__id">§41a EnWG</div>
     <div class="mako-compliance-card__desc">Dynamic EPEX tariffs — mandatory from 2025</div>
     <div class="mako-compliance-card__date">Since 01.01.2025</div>
+  </div>
+  <div class="mako-compliance-card">
+    <div class="mako-compliance-card__id">§34 / §60 MsbG</div>
+    <div class="mako-compliance-card__desc">WiM Teil 2 — ESA Wertebestellung &amp; Typ-2 value delivery</div>
+    <div class="mako-compliance-card__date">Consent-gated (GDPR Art. 7)</div>
   </div>
 </div>
 

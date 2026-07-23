@@ -81,7 +81,7 @@ flowchart LR
 | `edi-energy` | Parse · validate · build all 17 EDI@Energy EDIFACT message types |
 | `mako-engine` | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines |
 | `mako-gpke` | GPKE workflows — UTILMD Strom supplier-switch (55001–55018) + Anfrage Daten (55555, GPKE Teil 4) + Sperrung ORDERS (17115–17117) + INVOIC (31001–31002, 31005–31006) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002) + PARTIN Strom (37000–37006) |
-| `mako-wim` | WiM Strom workflows — UTILMD (55039, 55042, 55051, 55168) + MSB-Rechnung INVOIC (31009) + ORDERS/ORDRSP (various) |
+| `mako-wim` | WiM Strom workflows — MSB-Wechsel UTILMD (55039, 55042, 55051, 55168) + Geräteübernahme ORDERS (17001–17011) + Stammdaten + Preisanfrage REQOTE/QUOTES (35001–35005 / 15001–15005) + Preisliste PRICAT (27001–27003) + Technik-Änderung (17011/17118/17121 → 19003–19007) + INSRPT (23001/23003/23004/23008) + iMS Steuerungsauftrag + MSB-Rechnung INVOIC (31009). **WiM Teil 2 ESA Wertebestellung** (§34 MsbG) — one `wim-wertebestellung`/`esa-wertebestellung` process spans REQOTE 35002 → QUOTES 15003 → ORDERS 17007/17008 → ORDRSP 19011/19012 → ORDCHG 39002 Storno → ORDRSP 19013/19014, plus MSCONS 13027 Werte-nach-Typ-2 delivery |
 | `mako-geli-gas` | GeLi Gas 3.0 workflows — UTILMD G supplier-switch Gas (44001–44021) + INVOIC 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) |
 | `mako-mabis` | MABIS workflows — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB) + PIDs 55065/55069/55070 (Clearingliste) |
 | `mako-wim-gas` | WiM Gas workflows — UTILMD G MSB-change (44022–44024, 44039–44053, 44168–44170) + INSRPT Gas (23005, 23009) + WiM-Rechnung INVOIC (31003, 31004) |

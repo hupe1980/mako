@@ -20,6 +20,7 @@ struct OrdchgBuilderInner {
     document_code: Option<String>,
     document_id: Option<String>,
     document_date: Option<String>,
+    reference: Option<(String, String)>,
 }
 
 /// Fluent builder for `ORDCHG` (Purchase Order Change) messages.
@@ -70,6 +71,7 @@ impl OrdchgBuilder<Unset, Unset> {
                 document_code: None,
                 document_id: None,
                 document_date: None,
+                reference: None,
             },
         }
     }
@@ -138,6 +140,16 @@ impl<S, R> OrdchgBuilder<S, R> {
         self
     }
 
+    /// Add the SG1 reference `RFF+<qual>:<value>`.
+    ///
+    /// ORDCHG SG1 `1153 ∈ {ON, TN, Z13}`. Mandatory — the ORDCHG carries no LOC,
+    /// so a Stornierung identifies its target through this reference (e.g.
+    /// `ON` = the Bestellung's order number, `Z13` = Prüfidentifikator).
+    pub fn reference(mut self, qualifier: impl Into<String>, value: impl Into<String>) -> Self {
+        self.inner.reference = Some((qualifier.into(), value.into()));
+        self
+    }
+
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let dtm_val = self
             .inner
@@ -158,6 +170,11 @@ impl<S, R> OrdchgBuilder<S, R> {
         );
         emit_seg!(w, "BGM", code, doc_id, "1");
         emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
+        // ── SG1: reference (mandatory; the ORDCHG has no LOC) ────────────────
+        if let Some((q, v)) = &self.inner.reference {
+            emit_comp!(w, "RFF", [q, v]);
+        }
+        // ── SG3: parties ─────────────────────────────────────────────────────
         if let Some(id) = &self.inner.sender_id {
             emit_comp!(
                 w,

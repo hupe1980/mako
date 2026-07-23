@@ -243,6 +243,63 @@ COMMENT ON TABLE meter_reads IS
     'retention_months are exported to the Iceberg cold tier and marked '
     'archived=true; a partition is dropped once all of its rows are archived.';
 
+-- ── ESA Typ-2 value store (Codeliste 1.4 Kap. 4.6 · WiM Strom Teil 2 §4) ──────
+-- ESA-delivered "Werte nach Typ 2" (MSCONS PID 13027) are NON-AUTHORITATIVE:
+-- they have no bearing on Netznutzungs-, Bilanzkreis- or Mehr-/Mindermengen-
+-- abrechnung, and only Kapitel-2 (Typ-1) values are relevant on divergence.
+--
+-- They live in this SEPARATE table, never in `meter_reads`, so no billing query
+-- can reach them by omission — the separation is structural, not a runtime
+-- filter. This table deliberately carries NONE of the billing machinery that
+-- hangs off meter_reads: no meter_billing_periods aggregation, no
+-- meter_read_corrections audit, no substitute_value_log, no allocation_version,
+-- no Iceberg archival. A Typ-2 value is stored as delivered and read back
+-- verbatim; it is never reconciled, corrected, or substituted.
+--
+-- Not partitioned: Typ-2 volume is bounded (one ESA subscription per MaLo) and
+-- there is no retention-via-partition-drop requirement, so a plain table with a
+-- direct GiST overlap-exclusion constraint is simpler and sufficient.
+CREATE TABLE esa_typ2_reads (
+    malo_id        TEXT          NOT NULL,
+    melo_id        TEXT,
+    dtm_from       TIMESTAMPTZ   NOT NULL,
+    dtm_to         TIMESTAMPTZ   NOT NULL,
+    quantity_kwh   NUMERIC(18,5) NOT NULL,
+    quality        TEXT          NOT NULL DEFAULT 'UNKNOWN'
+                       CHECK (quality IN (
+                           'MEASURED','ESTIMATED','SUBSTITUTED','CALCULATED',
+                           'CORRECTED','PRELIMINARY','FAULTY','UNKNOWN'
+                       )),
+    pid            INTEGER       NOT NULL,
+    sparte         TEXT          NOT NULL DEFAULT 'STROM'
+                       CHECK (sparte IN ('STROM','GAS','WAERME','WASSER')),
+    unit           TEXT          NOT NULL DEFAULT 'KWH'
+                       CHECK (unit IN ('KWH','M3')),
+    obis_code      TEXT,
+    obis_code_norm TEXT          NOT NULL DEFAULT '',
+    -- Codeliste 1.4 Kap. 4.6 delivery path — pinned to `Typ2DeliveryPath`.
+    delivery_path  TEXT          NOT NULL DEFAULT 'MSCONS_BACKEND'
+                       CHECK (delivery_path IN ('MSCONS_BACKEND','SMGW_DIRECT')),
+    sender_mp_id   TEXT,
+    tenant         TEXT          NOT NULL,
+    received_at    TIMESTAMPTZ   NOT NULL DEFAULT now(),
+
+    CONSTRAINT et2_pk PRIMARY KEY (tenant, malo_id, dtm_from, obis_code_norm),
+    CONSTRAINT et2_valid_interval CHECK (dtm_from < dtm_to),
+    -- A second delivery must not store a range overlapping an existing one.
+    CONSTRAINT et2_no_overlap EXCLUDE USING gist (
+        tenant WITH =, malo_id WITH =, obis_code_norm WITH =,
+        tstzrange(dtm_from, dtm_to, '[)') WITH &&
+    )
+);
+
+CREATE INDEX et2_malo_dtm ON esa_typ2_reads (tenant, malo_id, dtm_from);
+
+COMMENT ON TABLE esa_typ2_reads IS
+    'ESA-delivered "Werte nach Typ 2" (MSCONS 13027). Non-authoritative per '
+    'Codeliste 1.4 Kap. 4.6 / WiM Strom Teil 2 §4 — separate from meter_reads so '
+    'no billing query can reach it. Never reconciled, corrected, or substituted.';
+
 -- ── Billing period aggregates ─────────────────────────────────────────────────
 -- Pre-computed from meter_reads after each MSCONS ingest. Avoids on-the-fly
 -- aggregation in billing period API calls. All numeric columns are NUMERIC(18,5).
@@ -371,8 +428,11 @@ CREATE TABLE ablese_auftraege (
                                'SPERRUNG','ENTSPERRUNG',
                                'SONDERABLESUNG','INSRPT_STOERUNG','ISMS_AUSLESUNG'
                            )),
+    -- ESA is a valid Auftraggeber: an ESA may order value delivery from the MSB
+    -- (WiM Strom Teil 2 Kap. 4 / §60 Abs. 1 MsbG), so a reading order can be
+    -- raised on its behalf.
     auftraggeber_rolle TEXT        NOT NULL
-                           CHECK (auftraggeber_rolle IN ('LF','MSB','NB')),
+                           CHECK (auftraggeber_rolle IN ('LF','MSB','NB','ESA')),
     ausfuehrender_msb  TEXT,
     geplant_am         DATE        NOT NULL,
     ausfuehrt_bis      DATE,

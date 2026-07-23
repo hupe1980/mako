@@ -19,6 +19,18 @@ struct QuotesBuilderInner {
     message_ref: String,
     document_id: Option<String>,
     document_date: Option<String>,
+    location: Option<String>,
+    pruefidentifikator: Option<u32>,
+    order_reference: Option<String>,
+    bindungsfrist: Option<String>,
+    reason: Option<String>,
+    // Additive ESA-Angebot (PID 15003) content — only emitted when set, so the
+    // Geräteübernahme Angebote (15001/15002) that share this builder are unaffected.
+    reference: Option<(String, String)>,
+    currency: Option<String>,
+    contact: Option<(String, String)>,
+    product: Option<String>,
+    price: Option<String>,
 }
 
 /// Fluent builder for `QUOTES` (Quotation) messages.
@@ -67,6 +79,16 @@ impl QuotesBuilder<Unset, Unset> {
                 message_ref: "1".to_owned(),
                 document_id: None,
                 document_date: None,
+                location: None,
+                pruefidentifikator: None,
+                order_reference: None,
+                bindungsfrist: None,
+                reason: None,
+                reference: None,
+                currency: None,
+                contact: None,
+                product: None,
+                price: None,
             },
         }
     }
@@ -127,6 +149,80 @@ impl<S, R> QuotesBuilder<S, R> {
         self
     }
 
+    /// Set the Prüfidentifikator (BGM DE 1004) — e.g. 15003 (ESA Angebot).
+    pub fn pruefidentifikator(mut self, pid: u32) -> Self {
+        self.inner.pruefidentifikator = Some(pid);
+        self
+    }
+
+    /// Reference the original request this quotes (RFF+ACW).
+    pub fn order_reference(mut self, reference: impl Into<String>) -> Self {
+        self.inner.order_reference = Some(reference.into());
+        self
+    }
+
+    /// Set the location (MaLo-ID / ZPB / NeLo-ID) this Angebot concerns.
+    ///
+    /// Emits `LOC+172+<id>` so the ESA can correlate the answer to the process
+    /// it started (the QUOTES otherwise carries no location).
+    pub fn location(mut self, id: impl Into<String>) -> Self {
+        self.inner.location = Some(id.into());
+        self
+    }
+
+    /// Set the Bindungsfrist (offer validity) — emits `DTM+273+<CCYYMMDD>:102`.
+    ///
+    /// DE 2005 `273` ("Validity period") is the QUOTES MIG-permitted qualifier
+    /// for the offer's binding period (the MIG restricts 2005 to
+    /// `{137,76,203,469,472,279,273}`). Present on an Angebot; **absent** on an
+    /// Ablehnung der Anfrage — its presence is what tells the ESA an Angebot
+    /// apart from a rejection.
+    pub fn bindungsfrist(mut self, date_ccyymmdd: impl Into<String>) -> Self {
+        self.inner.bindungsfrist = Some(date_ccyymmdd.into());
+        self
+    }
+
+    /// Set the rejection reason — emits `FTX+ACB` free text (Ablehnung).
+    ///
+    /// DE 4451 `ACB` ("Additional information") is the only FTX qualifier the
+    /// QUOTES MIG permits.
+    pub fn reason(mut self, text: impl Into<String>) -> Self {
+        self.inner.reason = Some(text.into());
+        self
+    }
+
+    /// Add an SG1 reference `RFF+<qual>:<value>` (e.g. `Z13` = Prüfidentifikator).
+    ///
+    /// The QUOTES MIG restricts SG1 `1153` to `{AAV, ACW, Z13}`.
+    pub fn reference(mut self, qualifier: impl Into<String>, value: impl Into<String>) -> Self {
+        self.inner.reference = Some((qualifier.into(), value.into()));
+        self
+    }
+
+    /// Set the currency (SG4) — emits `CUX+2:<ISO>:4` (`6347=2`, `6343=4`).
+    pub fn currency(mut self, iso: impl Into<String>) -> Self {
+        self.inner.currency = Some(iso.into());
+        self
+    }
+
+    /// Set the SG14 contact — emits `CTA+IC+:<name>` and `COM+<comm>:EM`.
+    pub fn contact(mut self, name: impl Into<String>, comm: impl Into<String>) -> Self {
+        self.inner.contact = Some((name.into(), comm.into()));
+        self
+    }
+
+    /// Set the SG27 line-item product — emits `LIN+1` and `PIA+5+<product>:SRW`.
+    pub fn product(mut self, product: impl Into<String>) -> Self {
+        self.inner.product = Some(product.into());
+        self
+    }
+
+    /// Set the SG31 price — emits `PRI+CAL:<value>`.
+    pub fn price(mut self, value: impl Into<String>) -> Self {
+        self.inner.price = Some(value.into());
+        self
+    }
+
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let dtm_val = self
             .inner
@@ -137,15 +233,41 @@ impl<S, R> QuotesBuilder<S, R> {
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
 
-        let doc_id = self.inner.document_id.as_deref().unwrap_or("");
+        let pid_str = self.inner.pruefidentifikator.map(|p| format!("{p:05}"));
+        let bgm_1004 = pid_str
+            .as_deref()
+            .or(self.inner.document_id.as_deref())
+            .unwrap_or("");
         emit_comp!(
             w,
             "UNH",
             [&self.inner.message_ref],
             ["QUOTES", "D", "10A", "UN", self.inner.release.as_str()]
         );
-        emit_seg!(w, "BGM", "310", doc_id);
+        emit_seg!(w, "BGM", "310", bgm_1004);
         emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
+        // Bindungsfrist (offer validity, DE 2005 = 273) — present only on an
+        // Angebot; the MIG does not permit Z12 here.
+        if let Some(bf) = &self.inner.bindungsfrist {
+            emit_comp!(w, "DTM", ["273", bf, "102"]);
+        }
+        // Ablehnungsgrund (Ablehnung der Anfrage) — top-level FTX (DE 4451 = ACB),
+        // before the SG1 reference group.
+        if let Some(reason) = &self.inner.reason {
+            emit_comp!(w, "FTX", ["ACB"], [""], [""], [reason]);
+        }
+        // ── SG1: references ──────────────────────────────────────────────────
+        if let Some(order_ref) = &self.inner.order_reference {
+            emit_comp!(w, "RFF", ["ACW", order_ref]);
+        }
+        if let Some((q, v)) = &self.inner.reference {
+            emit_comp!(w, "RFF", [q, v]);
+        }
+        // ── SG4: currency (CUX+2:<ISO>:4) ────────────────────────────────────
+        if let Some(iso) = &self.inner.currency {
+            emit_comp!(w, "CUX", ["2", iso, "4"]);
+        }
+        // ── SG11: parties + location ─────────────────────────────────────────
         if let Some(id) = &self.inner.sender_id {
             emit_comp!(
                 w,
@@ -161,6 +283,23 @@ impl<S, R> QuotesBuilder<S, R> {
                 ["MR"],
                 [id, "", self.inner.receiver_agency.as_str()]
             );
+        }
+        // ── SG14: contact — before LOC per the QUOTES segment order ──────────
+        if let Some((name, comm)) = &self.inner.contact {
+            emit_comp!(w, "CTA", ["IC"], ["", name]);
+            emit_comp!(w, "COM", [comm, "EM"]);
+        }
+        if let Some(loc) = &self.inner.location {
+            emit_seg!(w, "LOC", "172", loc);
+        }
+        // ── SG27: line item + product ────────────────────────────────────────
+        if let Some(product) = &self.inner.product {
+            emit_seg!(w, "LIN", "1");
+            emit_comp!(w, "PIA", ["5"], [product, "SRW"]);
+            // ── SG31: price ──────────────────────────────────────────────────
+            if let Some(price) = &self.inner.price {
+                emit_comp!(w, "PRI", ["CAL", price]);
+            }
         }
         w.finish_unt(&self.inner.message_ref)
             .map_err(Error::Parse)?;

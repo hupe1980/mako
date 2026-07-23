@@ -68,9 +68,10 @@ pub mod testing;
 pub use domain::{
     ALL_MSCONS_PIDS, BilanzierungsgebietId, BilanzkreisId, BilanzzuordnungRecord,
     BillingPeriodQuery, CorrectionRecord, CorrectionRequest, CorrectionResponse, CorrectionSource,
-    GAS_MMMA_PIDS, GAS_QUALITY_PIDS, GasQualityData, ImbalanceReport, IngestionSource, MSCONS_PIDS,
-    Messtyp, MeterBillingPeriod, MeterDataReceipt, MeterRead, QualityFlag, REDISPATCH_MSCONS_PIDS,
-    Sparte, TimeSeriesQuery, mscons_pid_description,
+    ESA_TYP2_PIDS, GAS_MMMA_PIDS, GAS_QUALITY_PIDS, GasQualityData, ImbalanceReport,
+    IngestionSource, MSCONS_PIDS, Messtyp, MeterBillingPeriod, MeterDataReceipt, MeterRead,
+    QualityFlag, REDISPATCH_MSCONS_PIDS, Sparte, TimeSeriesQuery, Typ2DeliveryPath, Typ2Read,
+    mscons_pid_description,
 };
 pub use error::EdmError;
-pub use repository::TimeSeriesRepository;
+pub use repository::{TimeSeriesRepository, Typ2Repository};

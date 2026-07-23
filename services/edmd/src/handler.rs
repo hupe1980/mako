@@ -36,10 +36,10 @@ use axum::{
 };
 use mako_edm::{
     domain::{
-        ALL_MSCONS_PIDS, GAS_QUALITY_PIDS, IngestionSource, MeterDataReceipt, MeterRead,
-        QualityFlag, Sparte as EdmSparte,
+        ALL_MSCONS_PIDS, ESA_TYP2_PIDS, GAS_QUALITY_PIDS, IngestionSource, MeterDataReceipt,
+        MeterRead, QualityFlag, Sparte as EdmSparte, Typ2DeliveryPath, Typ2Read,
     },
-    repository::TimeSeriesRepository,
+    repository::{TimeSeriesRepository, Typ2Repository},
 };
 use mako_markt::cloudevents::verify_signature;
 use secrecy::{ExposeSecret, SecretString};
@@ -65,12 +65,14 @@ fn quality_from_mscons(status: Option<&str>) -> QualityFlag {
 }
 
 use crate::iceberg::query::OlapEngine;
-use crate::pg::PgTimeSeriesRepository;
+use crate::pg::{PgTimeSeriesRepository, PgTyp2Repository};
 
 /// Shared application state for the webhook handler.
 #[derive(Clone)]
 pub struct HandlerState {
     pub repo: PgTimeSeriesRepository,
+    /// Separate store for ESA "Werte nach Typ 2" (non-authoritative; never billing).
+    pub typ2_repo: PgTyp2Repository,
     pub inbound_secret: Arc<Option<SecretString>>,
     /// Tenant identifier — used as Cedar resource_tenant for REST queries.
     pub tenant: String,
@@ -480,6 +482,46 @@ pub async fn handle_webhook(
                     process_id = %process_id, pid, malo_id = %malo_id, skipped,
                     "edmd: MSCONS intervals dropped as undecodable"
                 );
+            }
+
+            // ── ESA "Werte nach Typ 2" (PID 13027) fork ───────────────────────
+            // These are non-authoritative (Codeliste 1.4 Kap. 4.6 · WiM Teil 2
+            // §4). They must never enter `meter_reads` — a billing query would
+            // sum them by omission. Route them to the separate Typ-2 store, with
+            // no validation/substitution machinery: a Typ-2 value is stored as
+            // delivered and never reconciled or corrected.
+            if ESA_TYP2_PIDS.contains(&pid) {
+                let typ2: Vec<Typ2Read> = batch
+                    .into_iter()
+                    .map(|m| Typ2Read {
+                        malo_id: m.malo_id,
+                        melo_id: m.melo_id,
+                        dtm_from: m.dtm_from,
+                        dtm_to: m.dtm_to,
+                        quantity_kwh: m.quantity_kwh,
+                        quality: m.quality,
+                        pid: m.pid,
+                        sparte: m.sparte,
+                        obis_code: m.obis_code,
+                        tenant: m.tenant,
+                        delivery_path: Typ2DeliveryPath::MsconsBackend,
+                        sender_mp_id: m.sender_mp_id,
+                        received_at: None,
+                    })
+                    .collect();
+                let stored = typ2.len();
+                if let Err(err) = state.typ2_repo.store_typ2_reads(&typ2).await {
+                    error!(
+                        %err, process_id = %process_id, pid, malo_id = %malo_id,
+                        "edmd: ESA Typ-2 store failed — signalling redelivery"
+                    );
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+                info!(
+                    process_id = %process_id, pid, malo_id = %malo_id, stored,
+                    "edmd: stored ESA Typ-2 values (non-authoritative, separate store)"
+                );
+                return StatusCode::NO_CONTENT.into_response();
             }
 
             // Warnings attach to the intervals they name, in the same statement

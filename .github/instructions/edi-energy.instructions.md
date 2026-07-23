@@ -47,7 +47,7 @@ Classic UTILMD releases (5.5.x) can be **parsed** but **not validated** — `val
 
 ## Profile YAML and Codegen
 
-- Profile source of truth: `crates/edi-energy/profiles/<FV>/<message_type>/<pid>.yaml`
+- Profile source of truth: `crates/edi-energy/profiles/<message_type>/<fvYYYYMMDD>/{mig.json, ahb.json, codelists.json}` (schemas in `profiles/schemas/*.schema.json`)
 - Generated Rust: `crates/edi-energy/src/generated/` — **never edit by hand**
 - Regenerate after any YAML change: `cargo xtask codegen`
 - Validate profiles: `cargo xtask validate-profiles`

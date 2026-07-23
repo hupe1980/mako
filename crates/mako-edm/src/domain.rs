@@ -26,7 +26,12 @@ pub use metering::{QualityFlag, Sparte};
 /// | 13018 | NB → LF (Strom)  | Messwerte Strom — korrigierte Werte |
 /// | 13019 | NB → LF (Strom)  | Netzverluste Strom |
 /// | 13025 | NB → LF (Gas)    | Lastgang Gas (Zustandsmengen / Energiemengen) |
-/// | 13027 | NB → LF (Gas)    | Zählerstand Gas |
+/// | 13027 | MSB → ESA        | Werte nach Typ 2 (ESA, non-authoritative) |
+///
+/// This is the set `edmd` **subscribes to / accepts** from `marktd` (the
+/// `makopid_filter`), not the set that lands in `meter_reads`. PID 13027 is
+/// received here but routed to the separate, non-billing Typ-2 store at ingest
+/// time — see [`ESA_TYP2_PIDS`], [`Typ2Read`], and the handler fork.
 ///
 /// ## Note on PIDs 13002–13028
 ///
@@ -39,9 +44,24 @@ pub use metering::{QualityFlag, Sparte};
 /// meter-data receipts and interval values are stored here in `edmd`.
 ///
 /// Source: MSCONS AHB 3.1g; BDEW BK6-24-174 Anlage 1; BK7-24-01-008.
+///
+/// This is the subscription/accept filter. 13027 is included because `edmd` must
+/// **receive** ESA Typ-2 values — but they are routed to a separate store, not
+/// `meter_reads`. See [`ESA_TYP2_PIDS`].
 pub const MSCONS_PIDS: &[u32] = &[
     13005, 13006, 13007, 13013, 13015, 13016, 13017, 13018, 13019, 13025, 13027,
 ];
+
+/// MSCONS PIDs carrying ESA-delivered **"Werte nach Typ 2"** (MSB → ESA).
+///
+/// These values are **non-authoritative** (Codeliste der Konfigurationen 1.4,
+/// Kap. 4.6; WiM Strom Teil 2 §4): they have *no bearing* on Netznutzungs-,
+/// Bilanzkreis- or Mehr-/Mindermengenabrechnung, and only Kapitel-2 (Typ-1)
+/// values are relevant on divergence. `edmd` receives them (they are in
+/// [`MSCONS_PIDS`]) but the ingest handler forks on this set and stores them in
+/// a **separate** table ([`Typ2Read`] → `esa_typ2_reads`) that no billing query
+/// can reach — the separation is a schema decision, not a runtime filter.
+pub const ESA_TYP2_PIDS: &[u32] = &[13027];
 
 /// MSCONS PIDs for Redispatch 2.0 time-series data delivery.
 ///
@@ -272,6 +292,87 @@ impl IngestionSource {
             _ => Self::Mscons,
         }
     }
+}
+
+/// The transport an ESA Typ-2 value arrived on (Codeliste 1.4 Kap. 4.6).
+///
+/// Stored in `esa_typ2_reads.delivery_path`. Both paths carry the *same*
+/// non-authoritative Typ-2 values; only the transport differs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Typ2DeliveryPath {
+    /// 4.6.1 — "Werte nach Typ 2 aus Backend": EDIFACT MSCONS from the MSB.
+    #[default]
+    MsconsBackend,
+    /// 4.6.2 — "Werte nach Typ 2 aus SMGW": XML over SM-PKI, direct from the iMS.
+    SmgwDirect,
+}
+
+impl Typ2DeliveryPath {
+    /// Every variant — `schema_code_guard` pins the CHECK constraint against it.
+    pub const ALL: [Self; 2] = [Self::MsconsBackend, Self::SmgwDirect];
+
+    /// Returns the DB string value.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MsconsBackend => "MSCONS_BACKEND",
+            Self::SmgwDirect => "SMGW_DIRECT",
+        }
+    }
+
+    /// Parse from a DB string value.
+    #[must_use]
+    pub fn from_db_str(s: &str) -> Self {
+        match s {
+            "SMGW_DIRECT" => Self::SmgwDirect,
+            _ => Self::MsconsBackend,
+        }
+    }
+}
+
+/// An ESA-delivered **"Werte nach Typ 2"** interval (MSCONS PID 13027).
+///
+/// Deliberately *not* a [`MeterRead`], and stored in a *separate* table
+/// (`esa_typ2_reads`), because Typ-2 data is non-authoritative: Codeliste 1.4
+/// Kap. 4.6 and WiM Strom Teil 2 §4 give it **no bearing** on Netznutzungs-,
+/// Bilanzkreis- or Mehr-/Mindermengenabrechnung. The separation is structural —
+/// there is no `source`/`pid` discriminator on the billing store that could
+/// leak by omission, and this type carries **none** of `MeterRead`'s billing
+/// machinery (no `allocation_version`, no correction/substitution provenance,
+/// no billing-period participation): a Typ-2 value is stored as delivered and
+/// never reconciled against, corrected, or substituted for a Typ-1 value.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Typ2Read {
+    /// 11-digit Marktlokations-ID.
+    pub malo_id: String,
+    /// 33-character Messlokations-ID, if available.
+    pub melo_id: Option<String>,
+    /// Interval start (UTC).
+    pub dtm_from: OffsetDateTime,
+    /// Interval end (UTC).
+    pub dtm_to: OffsetDateTime,
+    /// Energy quantity in kWh (or m³ for water/gas volume, per `sparte`).
+    pub quantity_kwh: Decimal,
+    /// Quality of the reading, as delivered by the MSB.
+    pub quality: QualityFlag,
+    /// Source PID — 13027 for the MSCONS backend path.
+    pub pid: u32,
+    /// Energy commodity.
+    pub sparte: Sparte,
+    /// OBIS-Kennzahl, when the delivery carried one.
+    pub obis_code: Option<String>,
+    /// Tenant data-isolation key.
+    pub tenant: String,
+    /// Which transport delivered this value (Codeliste 1.4 Kap. 4.6).
+    #[serde(default)]
+    pub delivery_path: Typ2DeliveryPath,
+    /// MP-ID of the MSB that delivered the values.
+    #[serde(default)]
+    pub sender_mp_id: Option<String>,
+    /// When `edmd` received the value (database clock on write).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub received_at: Option<OffsetDateTime>,
 }
 
 /// Default allocation version for `serde` deserialization — see `MeterRead.allocation_version`.

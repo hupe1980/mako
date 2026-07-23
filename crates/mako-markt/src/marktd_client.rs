@@ -35,8 +35,9 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::repository::{
-    MaloGridRecord, MaloTypedFields, PreisblattDienstleistungRecord, PreisblattHardwareRecord,
-    PreisblattKaRecord, VersorgungsStatusRecord,
+    ConsentDecision, ConsentPerspective, MaloGridRecord, MaloTypedFields,
+    PreisblattDienstleistungRecord, PreisblattHardwareRecord, PreisblattKaRecord,
+    VersorgungsStatusRecord,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -256,6 +257,53 @@ impl MarktdClient {
         resp.json::<MaloTypedFields>()
             .await
             .map(Some)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// `GET /api/v1/esa/consent-check` — gate an ESA message.
+    ///
+    /// Returns a [`ConsentDecision`] for `(esa_mp_id, msb_mp_id, location_id)`.
+    /// `allowed: false` is the clearing case (revoked consent or an
+    /// unestablished framework agreement) the caller answers with an Ablehnung.
+    ///
+    /// `perspective` sets how a *missing* record reads:
+    /// [`ConsentPerspective::MsbInbound`] allows it (self-assertion; `BNetzA`
+    /// forbids form-based rejection); [`ConsentPerspective::EsaOutbound`] blocks
+    /// it (the ESA has no lawful basis to originate the request).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MarktdClientError::Http`] on network or HTTP errors — the
+    /// caller decides whether to fail open (the gate is defence-in-depth; the
+    /// durable stop signal is the 17008 Abbestellung fired on revocation).
+    pub async fn esa_consent_check(
+        &self,
+        esa_mp_id: &str,
+        msb_mp_id: &str,
+        location_id: &str,
+        perspective: ConsentPerspective,
+    ) -> Result<ConsentDecision, MarktdClientError> {
+        let perspective = match perspective {
+            ConsentPerspective::MsbInbound => "msb_inbound",
+            ConsentPerspective::EsaOutbound => "esa_outbound",
+        };
+        let url = format!("{}/api/v1/esa/consent-check", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[
+                ("esa_mp_id", esa_mp_id),
+                ("msb_mp_id", msb_mp_id),
+                ("location_id", location_id),
+                ("perspective", perspective),
+            ])
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        resp.json::<ConsentDecision>()
+            .await
             .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
     }
 

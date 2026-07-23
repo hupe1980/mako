@@ -244,7 +244,9 @@ Azure credentials: `AZURE_STORAGE_ACCOUNT_KEY`, or service-principal via `AZURE_
 | `deadline_poll_interval_secs` | `MAKOD_DEADLINE_POLL_INTERVAL_SECS` | `--deadline-poll-interval-secs` | `30` | How often the deadline scheduler polls for due deadlines (minimum 1 s; set ≤30 s for Redispatch 2.0 Activation 5-minute constraint) |
 | *(CLI/env only)* | `MAKOD_MARKTROLLEN` | `--marktrollen` | *(all `[[party]]` roles)* | Optional override of the Marktrollen this instance accepts commands for (comma-separated) |
 | *(CLI/env only)* | `MAKOD_DEPLOYMENT_ROLES` | `--deployment-roles` | *(all roles)* | Roles that gate PID registration: `NB`, `LF`, `MSB`, `NMSB`, `AMSB`, `BKV`, `UENB`/`FNB`, `BIKO`, `ESA` |
-| *(CLI/env only)* | `MAKOD_ESA_PARTNER_GLNS` | `--esa-partner-glns` | *(empty)* | GLNs of counterparties acting as an Energieserviceanbieter — see below |
+| *(CLI/env only)* | `MAKOD_ESA_PARTNER_MP_IDS` | `--esa-partner-mp-ids` | *(empty)* | Market-partner IDs of counterparties acting as an Energieserviceanbieter — see below |
+| *(CLI/env only)* | `MAKOD_MARKTD_URL` | `--marktd-url` | *(unset)* | Cluster-internal marktd base URL. Enables the ESA consent gate + M1 Konfigurationsprodukt guard — see below |
+| *(CLI/env only)* | `MAKOD_MARKTD_API_KEY` | `--marktd-api-key` | *(empty)* | Bearer token for machine-to-machine calls to `--marktd-url` |
 
 Operator identity does not live in `[engine]` — it comes from the `[[party]]`
 entries (see below). All process streams and inbox keys are scoped to the
@@ -282,14 +284,167 @@ resolves this at content level, and the sender's registered role — an ESA is
 registered via PARTIN 37006 — is the decisive signal.
 
 A NAD segment carries only the party code, not the role, so list the ESA
-counterparties in `--esa-partner-glns`. Without them the classifier falls back to
+counterparties in `--esa-partner-mp-ids`. Without them the classifier falls back to
 the `PIA` Messprodukt marker alone, and a Werteanfrage that omits it is routed to
 `wim-preisanfrage`.
 
 `deployment-roles ESA` is for a deployment that **is** an ESA: it registers the
 inbound answers (QUOTES 15003, ORDRSP 19011/19012/19013/19014). An MSB *serving*
-an ESA registers ORDERS 17007 under `MSB`. The two sets are disjoint, so an
-integrated deployment may hold both.
+an ESA registers ORDERS 17007 under `MSB`; it answers on the wire by rendering
+QUOTES 15003 (Angebot/Ablehnung) and ORDRSP 19011–19014 (Ab-/Bestellung and
+Stornierung), so the 5-WT / 2-WT windows can actually be closed. The two sets
+are disjoint, so an integrated deployment may hold both.
+
+#### The ordering handshake (WiM Teil 2, Kap. 4)
+
+The whole Wertebestellung — Werteanfrage, Angebot, Bestellung, delivery, and
+either cancellation path — is one correlated process on each side
+(`esa-wertebestellung` for the ESA, `wim-wertebestellung` for the MSB):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant ESA as ESA · esa-wertebestellung
+    participant MSB as MSB · wim-wertebestellung
+    ESA->>MSB: REQOTE 35002 Werteanfrage (LOC = MaLo)
+    MSB-->>ESA: QUOTES 15003 Angebot · DTM+273 Bindungsfrist
+    Note over ESA,MSB: 5 WT · no Bindungsfrist ⇒ Ablehnung der Anfrage
+    ESA->>MSB: ORDERS 17007 Bestellung (within Bindungsfrist)
+    MSB-->>ESA: ORDRSP 19011 Bestätigung / 19012 Ablehnung
+    Note over ESA,MSB: 2 WT · ORDRSP has no LOC ⇒ correlate by RFF+ACW
+    loop §60 Abs. 1 MsbG · daily by 09:30
+        MSB-->>ESA: MSCONS 13027 Werte nach Typ 2
+    end
+    alt Stornierung before first delivery (UC 4.1 Nr. 5)
+        ESA->>MSB: ORDCHG 39002 Storno · RFF+ON = Bestellung
+        MSB-->>ESA: ORDRSP 19013 Bestätigung / 19014 Ablehnung
+    else Abbestellung during delivery (UC 4.3)
+        ESA->>MSB: ORDERS 17008 Abbestellung
+        MSB-->>ESA: ORDRSP 19011 Bestätigung
+    end
+```
+
+Only the REQOTE, QUOTES and ORDERS carry a `LOC` (the MaLo). The conformant
+ORDRSP and ORDCHG carry none — they are correlated to the running process by the
+order reference each echoes (`RFF+ACW` on an answer, `RFF+ON` on the Storno), the
+Belegnummer of the order it responds to. The 39002 Stornierung is part of the
+same subscription lifecycle; it is not a standalone process.
+
+#### Consent gate
+
+When `--marktd-url` is set, an inbound ESA Werteanfrage (REQOTE 35002) and
+Bestellung (ORDERS 17007) are gated against the marktd consent registry before
+the Wertebestellung workflow runs. makod calls `GET /api/v1/esa/consent-check`
+with the sender (ESA), receiver (MSB) and location, and:
+
+- **revoked consent** — a consent for the location was granted and then
+  withdrawn (GDPR Art. 7(3)) with nothing superseding it → the message is
+  answered with an Ablehnung (QUOTES 15003 for the Anfrage, ORDRSP 19012 for the
+  Bestellung). This is the Widerruf clearing case.
+- **unestablished framework agreement** — a framework agreement is on record but
+  has no EDI agreement or carries a negative cert state → Ablehnung (the UC 4.1.1
+  Vorbedingung is unmet).
+- **active consent** or **no consent record at all** → the message proceeds. A
+  missing record is *never* a rejection: the MSB holds the ESA's self-assertion,
+  and BNetzA Mitteilung Nr. 3 (07.02.2024) forbids rejecting a request because
+  the consent deviates from the BDEW template.
+
+The gate fails **open**: if marktd is unreachable the message proceeds and a
+warning is logged. It is defence-in-depth — the durable stop signal for a
+withdrawn consent is the **17008 Abbestellung** that marktd fires on revocation.
+Without `--marktd-url` the gate is disabled and every ESA message proceeds.
+
+The check above uses `perspective=msb_inbound`, because this deployment is the
+**MSB receiving** an ESA order: it holds only the ESA's self-assertion, so a
+missing consent record is never a rejection.
+
+#### The ESA (outbound) direction is stricter
+
+Consent has asymmetric force. When a deployment **is** the ESA and *originates*
+outbound requests (Werteanfrage 35002, Bestellung 17007), it is the data
+controller that obtained the Einwilligung — a missing consent record means **no
+lawful basis** (GDPR Art. 7), not self-assertion. The same endpoint answers this
+with `perspective=esa_outbound`, which blocks a missing record
+(`code: no_consent`) as well as revoked consent and unestablished framework
+agreements. Revocation additionally obliges the ESA to **stop** by sending the
+17008 Abbestellung (GDPR Art. 7(3)).
+
+#### ESA-outbound origination workflow
+
+An ESA deployment (`--marktrollen ESA`) originates the order handshake through
+the `esa-wertebestellung` workflow, driven by these commands:
+
+| Command | Message | Consent gate |
+|---|---|---|
+| `esa.werteanfrage.stellen` | REQOTE 35002 Werteanfrage | `esa_outbound` (strict) |
+| `esa.bestellung.beauftragen` | ORDERS 17007 Bestellung | `esa_outbound` (re-checked) |
+| `esa.stornierung.beauftragen` | ORDCHG 39002 Stornierung | — (before delivery) |
+| `esa.abbestellung.beauftragen` | ORDERS 17008 Abbestellung | **none** — the stop action |
+
+The MSB's answers come back inbound and resume the process. The QUOTES 15003
+Angebot still carries a `LOC`, so it correlates by MaLo. The ORDRSP
+19011/19012/19013/19014 answers carry **no** `LOC` in their MIG-conformant form,
+so they correlate by the **order reference** the answer echoes in `RFF+ACW` (the
+Belegnummer of the ORDERS/ORDCHG the ESA sent). The ESA indexes its process under
+each outbound order Belegnummer for exactly this lookup; symmetrically, the MSB
+indexes its process under each inbound ORDERS Belegnummer so the LOC-less ORDCHG
+39002 Stornierung (which references the original Bestellung in `RFF+ON`) resumes
+it. A
+`werteanfrage`/`bestellung` is refused (`422`) unless the strict `esa_outbound`
+consent check passes — the ESA is the consent holder and must not request values
+it has no lawful basis for. On the outbound side the gate **fails closed**: if
+marktd is unreachable the request is refused rather than sent without a confirmed
+basis. The **Abbestellung is never gated** — it is the GDPR Art. 7(3) act of
+stopping, so it must always be possible.
+
+This closes the revocation loop end-to-end: marktd's consent revocation
+(`DELETE /api/v1/esa/einwilligungen/{id}`) emits `de.markt.einwilligung.widerrufen`
+**and** posts `esa.abbestellung.beauftragen` to makod, which resumes the running
+`esa-wertebestellung` process and sends the 17008 Abbestellung to the MSB.
+
+#### MSB → ESA value delivery (UC 4.2)
+
+The counterpart to the ordering handshake: once the MSB holds a confirmed
+Bestellung it owes the ESA the ordered values — the §60 Abs. 1 MsbG delivery
+duty (daily, by 09:30). The command `wim.wertebestellung.liefern` (role `MSB`)
+emits an **outbound MSCONS 13027 "Werte nach Typ 2" addressed to the ESA**
+(NAD+MR = the ESA's MP-ID — a recipient that is neither NB nor LF):
+
+```jsonc
+POST /api/v1/commands
+{ "command": "wim.wertebestellung.liefern",
+  "payload": { "malo_id": "…",
+               "reads": [ { "dtm_from": "…", "dtm_to": "…",
+                            "quantity_kwh": "0.250", "obis_code": "1-0:1.29.0" } ] } }
+```
+
+It resumes the MSB-side `wim-wertebestellung` process and runs `LiefereWerte`,
+which is admissible **only** while the process is in `lieferung_erlaubt` (a
+confirmed Bestellung). So an MSB can neither accept a Bestellung it cannot
+fulfil nor deliver without one; `ProcessNotFound` (`404`) means no active
+subscription. Each delivery leaves an auditable `WerteUebermittelt` event. The
+values are non-authoritative and land in the ESA deployment's separate Typ-2
+store (`edmd.esa_typ2_reads`), never a billing path.
+
+#### MSB-side answer commands (the loopback half)
+
+The `esa.*` commands drive the ESA half; these drive the **MSB half**, so mako
+can play both roles and a Wertebestellung runs end to end in one deployment (or
+against a real ESA). Each resumes the MSB-side `wim-wertebestellung` process for
+the MaLo (role `MSB`):
+
+| Command | Answer on the wire |
+|---|---|
+| `wim.wertebestellung.anbieten` | QUOTES 15003 Angebot (carries the Bindungsfrist in `DTM+273`) |
+| `wim.wertebestellung.anfrage-ablehnen` | QUOTES 15003 Ablehnung (reason in `FTX+ACB`, **no** Bindungsfrist) |
+| `wim.wertebestellung.bestellung-beantworten` | ORDRSP 19011 (`accept:true`) / 19012 (`accept:false`, needs `reason`) |
+| `wim.wertebestellung.stornierung-beantworten` | ORDRSP 19013 / 19014 |
+| `wim.wertebestellung.abbestellung-bestaetigen` | ORDRSP 19011 |
+
+The Angebot and the Anfrage-Ablehnung both travel as QUOTES 15003; the ESA tells
+them apart by the **Bindungsfrist** — an Angebot carries `DTM+273`, an Ablehnung
+does not (its reason rides `FTX+ACB`). So the ESA's `esa-wertebestellung` process
+resumes into `AngebotErhalten` or `Abgelehnt` correctly without a second PID.
 
 `marktrollen` declares which market-participant roles this deployment is
 authorised to issue commands for.  Every command submitted to
@@ -325,7 +480,7 @@ irrelevant for a particular operator — reducing binary size and attack surface
 | `role-lf-gas` | `mako-geli-gas` (LF side): `geli-gas-stornierung-lf`, `geli-gas-sperrung-lf`, `geli-gas-mscons` |
 | `role-nb-strom` | `mako-gpke` (NB side): `gpke-supplier-change`, `gpke-sperrung`, `gpke-konfiguration`, `gpke-konfiguration-aenderung`, `gpke-neuanlage`, `gpke-partin`, `mako-wim` (NB side), **`mako-redispatch`** (Redispatch 2.0 is gated to NB Strom / ÜNB — LF and MSB deployments are out of scope per BK6-20-059/060/061) |
 | `role-nb-gas` | `mako-geli-gas` (GNB side): `geli-gas-supplier-change`, `geli-gas-sperrung-nb`, `geli-gas-stornierung`, `geli-gas-datenabruf`, `geli-gas-partin`, `geli-gas-sperrprozesse-invoic` |
-| `role-msb-strom` | `mako-wim`: `wim-device-change`, `wim-geraeteubernahme`, `wim-stammdaten`, `wim-preisanfrage`, `wim-preisliste`, `wim-rechnung`, `wim-insrpt`, `wim-stornierung` |
+| `role-msb-strom` | `mako-wim`: `wim-device-change`, `wim-geraeteubernahme`, `wim-stammdaten`, `wim-preisanfrage`, `wim-preisliste`, `wim-rechnung`, `wim-insrpt`, `wim-wertebestellung` |
 | `role-msb-gas` | `mako-wim-gas`: all WiM Gas workflows |
 
 ### Composite flags

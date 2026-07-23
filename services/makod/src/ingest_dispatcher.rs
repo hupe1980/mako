@@ -63,7 +63,6 @@ use mako_mabis::{MabisBillingWorkflow, MabisClearinglisteWorkflow};
 use mako_wim::{
     WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow,
     WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimRechnungWorkflow, WimStammdatenWorkflow,
-    WimStornierungWorkflow,
 };
 use mako_wim_gas::{
     WimGasAnmeldungWorkflow, WimGasInsrptWorkflow, WimGasInvoicWorkflow, WimGasKuendigungWorkflow,
@@ -120,6 +119,11 @@ pub struct EdifactIngestDispatcher {
     ///
     /// See [`EdifactIngestDispatcher::with_esa_partners`].
     esa_partner_mp_ids: std::collections::HashSet<String>,
+    /// marktd client used to gate inbound ESA messages against the consent
+    /// registry. `None` disables the gate (dev mode / marktd not configured).
+    ///
+    /// See [`EdifactIngestDispatcher::with_marktd_client`].
+    marktd_client: Option<Arc<mako_markt::marktd_client::MarktdClient>>,
 }
 
 impl EdifactIngestDispatcher {
@@ -131,6 +135,7 @@ impl EdifactIngestDispatcher {
     /// `register_pids`, add its name here AND add the corresponding `match`
     /// arm in `dispatch` below.
     pub const KNOWN_WORKFLOW_NAMES: &'static [&'static str] = &[
+        mako_wim::esa_wertebestellung::WORKFLOW_NAME,
         "gabi-gas-allocation",
         "gabi-gas-delivery-order",
         "gabi-gas-imbnot",
@@ -182,7 +187,6 @@ impl EdifactIngestDispatcher {
         "wim-preisliste",
         "wim-rechnung",
         "wim-stammdaten",
-        "wim-stornierung",
         "wim-technik-aenderung",
         mako_wim::wertebestellung::WORKFLOW_NAME,
     ];
@@ -194,18 +198,135 @@ impl EdifactIngestDispatcher {
     /// Nr. 1) and a Preisanfrage arrive under the same Prüfidentifikator,
     /// because no ESA-specific REQOTE PID exists. The sender's registered role
     /// is the decisive discriminator — an ESA is registered via PARTIN 37006 —
-    /// and the message itself carries only the GLN, not the role. Supplying the
-    /// known ESA GLNs here turns that signal on; without it the classifier falls
-    /// back to the `PIA` Messprodukt marker alone.
+    /// and the message itself carries only the market-partner ID, not the role.
+    /// Supplying the known ESA partner IDs here turns that signal on; without it
+    /// the classifier falls back to the `PIA` Messprodukt marker alone.
     #[must_use]
-    pub fn with_esa_partners(mut self, glns: impl IntoIterator<Item = String>) -> Self {
-        self.esa_partner_mp_ids = glns.into_iter().collect();
+    pub fn with_esa_partners(mut self, mp_ids: impl IntoIterator<Item = String>) -> Self {
+        self.esa_partner_mp_ids = mp_ids.into_iter().collect();
+        self
+    }
+
+    /// Wire the marktd consent-registry gate for inbound ESA messages.
+    ///
+    /// With a client set, an ESA Werteanfrage (REQOTE 35002) or Bestellung
+    /// (ORDERS 17007) is checked against the registry before the workflow runs.
+    /// A revoked consent or an unestablished framework agreement is answered
+    /// with an Ablehnung (the clearing case) rather than being processed.
+    /// Without a client the gate is off and every ESA message proceeds.
+    #[must_use]
+    pub fn with_marktd_client(
+        mut self,
+        client: Option<Arc<mako_markt::marktd_client::MarktdClient>>,
+    ) -> Self {
+        self.marktd_client = client;
         self
     }
 
     /// `true` when `gln` is a registered ESA counterparty.
     fn sender_is_esa(&self, mp_id: &str) -> bool {
         !mp_id.is_empty() && self.esa_partner_mp_ids.contains(mp_id)
+    }
+
+    /// Gate an inbound ESA `WertebestellungCommand` against the consent registry.
+    ///
+    /// Sets `consent_block` on `ReceiveAnfrage`/`ReceiveBestellung` when marktd
+    /// reports the delivery is blocked (a revoked consent or an unestablished
+    /// framework agreement — the clearing case). Everything else is left
+    /// untouched: no marktd client configured, a non-gated command variant, an
+    /// active consent, self-assertion, or a marktd error all leave the command
+    /// as-is. Failing open is deliberate — the gate is defence-in-depth, and the
+    /// durable stop signal remains the 17008 Abbestellung fired on revocation.
+    async fn gate_esa_consent(
+        &self,
+        msg: &AnyMessage,
+        cmd: mako_wim::wertebestellung::WertebestellungCommand,
+    ) -> mako_wim::wertebestellung::WertebestellungCommand {
+        use mako_wim::wertebestellung::WertebestellungCommand as C;
+        let Some(marktd) = &self.marktd_client else {
+            return cmd;
+        };
+        // Only the two inbound-order commands are gated.
+        if !matches!(cmd, C::ReceiveAnfrage { .. } | C::ReceiveBestellung { .. }) {
+            return cmd;
+        }
+        let esa = extract_sender_mp_id(msg);
+        let msb = extract_receiver_mp_id(msg);
+        let location = extract_malo_from_msg(msg);
+        // REQOTE carries the location in LOC, not IDE — fall back for the Anfrage.
+        let location = if location.is_empty() {
+            if let C::ReceiveAnfrage { lokations_id, .. } = &cmd {
+                lokations_id.clone()
+            } else {
+                location
+            }
+        } else {
+            location
+        };
+        if esa.is_empty() || location.is_empty() {
+            return cmd;
+        }
+
+        // The ingest boundary is the MSB *receiving* an ESA order — lenient:
+        // a missing consent record is self-assertion, never a rejection.
+        let decision = match marktd
+            .esa_consent_check(
+                &esa,
+                &msb,
+                &location,
+                mako_markt::repository::ConsentPerspective::MsbInbound,
+            )
+            .await
+        {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e, esa = %esa, location = %location,
+                    "ESA consent gate: marktd check failed — failing open (17008 remains the stop signal)"
+                );
+                return cmd;
+            }
+        };
+        if decision.allowed {
+            return cmd;
+        }
+        tracing::info!(
+            esa = %esa, location = %location, code = ?decision.code,
+            "ESA consent gate: blocking inbound message — {}", decision.reason
+        );
+        match cmd {
+            C::ReceiveAnfrage {
+                pid,
+                esa,
+                msb,
+                ebene,
+                lokations_id,
+                message_ref,
+                quittung,
+                ..
+            } => C::ReceiveAnfrage {
+                pid,
+                esa,
+                msb,
+                ebene,
+                lokations_id,
+                message_ref,
+                quittung,
+                consent_block: Some(decision.reason),
+            },
+            C::ReceiveBestellung {
+                pid,
+                message_ref,
+                quittung,
+                ..
+            } => C::ReceiveBestellung {
+                pid,
+                message_ref,
+                quittung,
+                consent_block: Some(decision.reason),
+            },
+            other => other,
+        }
     }
 
     /// Construct a new dispatcher backed by the given stores.
@@ -222,6 +343,7 @@ impl EdifactIngestDispatcher {
             snapshot_interval,
             tenant_id,
             esa_partner_mp_ids: std::collections::HashSet::new(),
+            marktd_client: None,
         }
     }
 
@@ -614,28 +736,6 @@ impl EdifactIngestDispatcher {
                 }
                 _ => Ok(IngestOutcome::Skipped {
                     workflow_name: "wim-geraeteubernahme",
-                    reason: "pid_not_in_dispatch_table",
-                }),
-            },
-
-            // ── WiM Stornierung (Strom) — PID 39002 ──────────────────────────
-            // PID 39002: Stornierung der Bestellung (ORDCHG, nMSB → NB) — spawn.
-            "wim-stornierung" => match pid {
-                39002 => {
-                    let cmd = adapters::wim_stornierung_registry().dispatch(raw, &fv)?;
-                    let melo_id = extract_melo_from_orders(msg);
-                    // No APERAK Frist for pure stornierung — no outbox deadline needed.
-                    self.spawn_or_resume::<WimStornierungWorkflow>(
-                        &melo_id,
-                        "wim-stornierung",
-                        cmd,
-                        &fv,
-                        &[],
-                    )
-                    .await
-                }
-                _ => Ok(IngestOutcome::Skipped {
-                    workflow_name: "wim-stornierung",
                     reason: "pid_not_in_dispatch_table",
                 }),
             },
@@ -1464,14 +1564,30 @@ impl EdifactIngestDispatcher {
 
             // ── WiM ESA Wertebestellung (WiM Teil 2 Kap. 4) ───────────────────
             //
-            // ORDERS 17007 (Bestellung/Abbestellung) and ORDCHG 39002
+            // ORDERS 17007 (Bestellung), 17008 (Abbestellung) and ORDCHG 39002
             // (Stornierung). REQOTE 35002 arrives under "wim-preisanfrage"
             // because the two share a PID; it is separated below.
             name if name == mako_wim::wertebestellung::WORKFLOW_NAME => {
-                if pid == mako_wim::wertebestellung::BESTELLUNG_PID
-                    || pid == mako_wim::wertebestellung::STORNIERUNG_PID
+                if pid == mako_wim::wertebestellung::STORNIERUNG_PID {
+                    // ORDCHG 39002 Stornierung carries no LOC — correlate by the
+                    // original Bestellung's Belegnummer echoed in RFF+ON. Resume
+                    // only; a Stornierung without a running order is an orphan.
+                    let cmd = adapters::wim_wertebestellung_registry().dispatch(raw, &fv)?;
+                    let cmd = self.gate_esa_consent(msg, cmd).await;
+                    let order_ref = extract_order_ref_from_msg(msg);
+                    self.resume_by_malo::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
+                        &order_ref,
+                        mako_wim::wertebestellung::WORKFLOW_NAME,
+                        cmd,
+                    )
+                    .await
+                } else if pid == mako_wim::wertebestellung::BESTELLUNG_PID
+                    || pid == mako_wim::wertebestellung::ABBESTELLUNG_PID
                 {
                     let cmd = adapters::wim_wertebestellung_registry().dispatch(raw, &fv)?;
+                    // Consent gate: a revoked consent between Angebot and
+                    // Bestellung turns the order into an ORDRSP 19012 Ablehnung.
+                    let cmd = self.gate_esa_consent(msg, cmd).await;
                     let malo_id = extract_malo_from_msg(msg);
                     // UC 4.1 Nr. 4 / Nr. 6 and UC 4.3 Nr. 2: 2 WT nach dem ÜT.
                     let due_at = fristen::deadline_at_werktage(
@@ -1479,17 +1595,52 @@ impl EdifactIngestDispatcher {
                         mako_wim::wertebestellung::ANTWORT_FRIST_WT,
                         HolidayCalendar::BdewMaKo,
                     );
-                    self.spawn_or_resume::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
+                    // Also index the process under this ORDERS' Belegnummer so a
+                    // later ORDCHG Stornierung (which has no LOC) can resume it.
+                    let order_belegnr = msg.message_ref();
+                    self.spawn_or_resume_keyed::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
                         &malo_id,
                         mako_wim::wertebestellung::WORKFLOW_NAME,
                         cmd,
                         &fv,
                         &[(mako_wim::wertebestellung::ANTWORT_WINDOW_LABEL, due_at)],
+                        &[order_belegnr],
                     )
                     .await
                 } else {
                     Ok(IngestOutcome::Skipped {
                         workflow_name: mako_wim::wertebestellung::WORKFLOW_NAME,
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+
+            // ── ESA Wertebestellung — ESA origination side ────────────────────
+            // The MSB's answers come back inbound and resume the process this
+            // ESA started. Never spawns — a stray response with no matching
+            // process is Skipped.
+            //
+            // QUOTES 15003 still carries a LOC, so it correlates by MaLo. The
+            // ORDRSP 19011-19014 answers carry no LOC and correlate by the order
+            // reference echoed in RFF+ACW (the Belegnummer of the ORDERS/ORDCHG
+            // this ESA sent, under which the process was indexed).
+            name if name == mako_wim::esa_wertebestellung::WORKFLOW_NAME => {
+                if mako_wim::esa_wertebestellung::ESA_INBOUND_PIDS.contains(&pid) {
+                    let cmd = adapters::esa_wertebestellung_registry().dispatch(raw, &fv)?;
+                    let key = if matches!(msg, AnyMessage::Ordrsp(_)) {
+                        extract_order_ref_from_msg(msg)
+                    } else {
+                        extract_malo_from_msg(msg)
+                    };
+                    self.resume_by_malo::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow>(
+                        &key,
+                        mako_wim::esa_wertebestellung::WORKFLOW_NAME,
+                        cmd,
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: mako_wim::esa_wertebestellung::WORKFLOW_NAME,
                         reason: "pid_not_in_dispatch_table",
                     })
                 }
@@ -1508,6 +1659,10 @@ impl EdifactIngestDispatcher {
                     ) == mako_wim::wertebestellung::ReqoteKind::EsaWerteanfrage
                 {
                     let cmd = adapters::wim_wertebestellung_registry().dispatch(raw, &fv)?;
+                    // Consent gate: a revoked consent or an unestablished
+                    // framework agreement answers the Werteanfrage with a
+                    // QUOTES 15003 Ablehnung instead of an Angebot.
+                    let cmd = self.gate_esa_consent(msg, cmd).await;
                     let malo_id = extract_malo_from_msg(msg);
                     // UC 4.1 Nr. 2: "spätester ÜT ist der 5. WT nach dem ÜT von
                     // Nr. 1". makod issues its positive AS4 Receipt for this
@@ -1920,6 +2075,35 @@ impl EdifactIngestDispatcher {
         W: Workflow + 'static,
         W::Command: CommandPayload + Clone,
         W::State: serde::Serialize,
+        Arc<SlateDbStore>: mako_engine::event_store::AtomicAppend,
+    {
+        self.spawn_or_resume_keyed::<W>(
+            malo_id,
+            workflow_name_static,
+            cmd,
+            fv,
+            spawn_deadlines,
+            &[],
+        )
+        .await
+    }
+
+    /// [`spawn_or_resume`](Self::spawn_or_resume) that also indexes the process
+    /// under `extra_keys` (e.g. an inbound ORDERS' Belegnummer) so a later
+    /// LOC-less ORDRSP/ORDCHG can resume it by the echoed order reference.
+    async fn spawn_or_resume_keyed<W>(
+        &self,
+        malo_id: &str,
+        workflow_name_static: &'static str,
+        cmd: W::Command,
+        fv: &FormatVersion,
+        spawn_deadlines: &[(&'static str, time::OffsetDateTime)],
+        extra_keys: &[&str],
+    ) -> Result<IngestOutcome, EngineError>
+    where
+        W: Workflow + 'static,
+        W::Command: CommandPayload + Clone,
+        W::State: serde::Serialize,
         // `execute_and_enqueue_with_deadlines` requires `AtomicAppend`:
         Arc<SlateDbStore>: mako_engine::event_store::AtomicAppend,
     {
@@ -1946,10 +2130,9 @@ impl EdifactIngestDispatcher {
 
         if let Some(first) = matching.first() {
             // Existing process — idempotent continuation.
-            let process = Process::<W, Arc<SlateDbStore>>::from_identity(
-                Arc::clone(&self.store),
-                (*first).clone(),
-            );
+            let identity = (*first).clone();
+            let process =
+                Process::<W, Arc<SlateDbStore>>::from_identity(Arc::clone(&self.store), identity);
             let process_id = process.process_id();
             process
                 .execute_and_enqueue_with_snapshot_and_retry(
@@ -1959,6 +2142,11 @@ impl EdifactIngestDispatcher {
                     self.snapshot_interval,
                 )
                 .await?;
+            // Register any additional correlation keys (e.g. the Belegnummer of
+            // this inbound ORDERS) so a later LOC-less message can resume this
+            // process by reference.
+            self.register_extra_keys(&registry, process_id, (*first).clone(), extra_keys)
+                .await;
             return Ok(IngestOutcome::Dispatched {
                 workflow_name: workflow_name_static,
                 process_id,
@@ -2009,7 +2197,7 @@ impl EdifactIngestDispatcher {
         // Register under MaLo business key for future correlation lookups.
         let identity = process.identity();
         if let Err(e) = registry
-            .register_correlated(self.tenant_id, malo_id, process_id, identity)
+            .register_correlated(self.tenant_id, malo_id, process_id, identity.clone())
             .await
         {
             tracing::warn!(
@@ -2019,11 +2207,40 @@ impl EdifactIngestDispatcher {
                 "ingest dispatcher: MaLo registry failed (non-fatal — process was spawned)",
             );
         }
+        self.register_extra_keys(&registry, process_id, identity, extra_keys)
+            .await;
 
         Ok(IngestOutcome::Spawned {
             workflow_name: workflow_name_static,
             process_id,
         })
+    }
+
+    /// Register a process under additional correlation keys (best-effort).
+    ///
+    /// Used to index a Wertebestellung process by the Belegnummer of an inbound
+    /// ORDERS so a later ORDRSP/ORDCHG — which carry no LOC — can resume it by
+    /// the echoed order reference.
+    async fn register_extra_keys<R: mako_engine::registry::ProcessRegistry>(
+        &self,
+        registry: &R,
+        process_id: ProcessId,
+        identity: ProcessIdentity,
+        extra_keys: &[&str],
+    ) {
+        for key in extra_keys.iter().filter(|k| !k.is_empty()) {
+            if let Err(e) = registry
+                .register_correlated(self.tenant_id, key, process_id, identity.clone())
+                .await
+            {
+                tracing::warn!(
+                    process_id = %process_id,
+                    key        = %key,
+                    error      = %e,
+                    "ingest dispatcher: order-reference registry failed (non-fatal)",
+                );
+            }
+        }
     }
 
     /// Look up an existing process by MaLo and execute the continuation command.
@@ -2189,6 +2406,10 @@ pub fn extract_malo_from_msg(msg: &AnyMessage) -> String {
         // Used by gpke-allokationsliste to correlate MSCONS 13013/13014 with the
         // process that was spawned when the LF sent ORDERS 17110/17114.
         AnyMessage::Mscons(m) => m.segments(),
+        // REQOTE/QUOTES carry the addressed location in LOC — the ESA
+        // Wertebestellung handshake correlates on it.
+        AnyMessage::Reqote(r) => r.segments(),
+        AnyMessage::Quotes(q) => q.segments(),
         _ => return String::new(),
     };
     // The location travels in LOC where the profile has one; the GPKE/GeLi
@@ -2208,6 +2429,32 @@ pub fn extract_malo_from_msg(msg: &AnyMessage) -> String {
         .to_owned()
 }
 
+/// Extract the echoed order reference from an ORDRSP / ORDCHG.
+///
+/// These two messages carry **no** LOC in their conformant ESA-Wertebestellung
+/// form, so they cannot be correlated by MaLo. Instead:
+/// - an **ORDRSP** answer echoes the order it answers in `RFF+ACW`, and
+/// - the ESA's **ORDCHG** Stornierung references the original Bestellung's
+///   Belegnummer in `RFF+ON`.
+///
+/// The referenced process is registered under that Belegnummer (the dispatcher
+/// indexes it under the inbound ORDERS' Belegnummer via `extra_keys`), so
+/// returning it here lets the dispatcher resume the correct process. Empty when
+/// absent.
+pub fn extract_order_ref_from_msg(msg: &AnyMessage) -> String {
+    let segs = match msg {
+        AnyMessage::Ordrsp(o) => o.segments(),
+        AnyMessage::Ordchg(o) => o.segments(),
+        _ => return String::new(),
+    };
+    segs.iter()
+        .find(|s| s.tag == "RFF" && matches!(s.component_str(0, 0), Some("ACW" | "ON")))
+        .and_then(|s| s.component_str(0, 1))
+        .filter(|v| !v.is_empty())
+        .unwrap_or("")
+        .to_owned()
+}
+
 /// Extract the sender GLN from the message's `NAD+MS` segment.
 ///
 /// Empty when the message carries no sender NAD.
@@ -2221,6 +2468,24 @@ pub fn extract_sender_mp_id(msg: &AnyMessage) -> String {
     };
     segs.iter()
         .find(|s| s.tag == "NAD" && s.component_str(0, 0) == Some("MS"))
+        .and_then(|s| s.component_str(1, 0))
+        .unwrap_or("")
+        .to_owned()
+}
+
+/// Extract the receiver GLN from the message's `NAD+MR` segment.
+///
+/// Empty when the message carries no receiver NAD.
+pub fn extract_receiver_mp_id(msg: &AnyMessage) -> String {
+    let segs = match msg {
+        AnyMessage::Reqote(r) => r.segments(),
+        AnyMessage::Quotes(q) => q.segments(),
+        AnyMessage::Orders(o) => o.segments(),
+        AnyMessage::Ordrsp(o) => o.segments(),
+        _ => return String::new(),
+    };
+    segs.iter()
+        .find(|s| s.tag == "NAD" && s.component_str(0, 0) == Some("MR"))
         .and_then(|s| s.component_str(1, 0))
         .unwrap_or("")
         .to_owned()

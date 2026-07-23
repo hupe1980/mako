@@ -334,6 +334,12 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/api/v1/versorgung/{malo_id}` | `read-versorgungsstatus` | Current VersorgungsStatus; add `?at=YYYY-MM-DD` for point-in-time |
 | `GET` | `/api/v1/versorgung/{malo_id}/history` | `read-versorgungsstatus` | Full supply-state change history (newest first, paged) |
 | `PUT` | `/api/v1/versorgung/{malo_id}` | `write-versorgungsstatus` | Upsert VersorgungsStatus (ERP-driven override) |
+| `POST` | `/api/v1/esa/einwilligungen` | — | Grant an ESA consent (§49 Abs. 2 Nr. 9 MsbG). Emits `de.markt.einwilligung.erteilt`. Evidence-agnostic |
+| `GET` | `/api/v1/esa/einwilligungen` | — | List active consents (`?esa_mp_id=`) |
+| `GET` | `/api/v1/esa/einwilligungen/{id}` | — | Get a consent |
+| `DELETE` | `/api/v1/esa/einwilligungen/{id}` | — | Revoke (GDPR Art. 7(3)) — emits `de.markt.einwilligung.widerrufen` and fires the 17008 Abbestellung at makod |
+| `PUT`/`GET` | `/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}` | — | Bilateral EDI@Energy framework agreement + AS4 cert state |
+| `GET` | `/api/v1/esa/consent-check` | — | Gate an ESA message (`?esa_mp_id=&msb_mp_id=&location_id=&perspective=`) → `{allowed, code, reason}`. `perspective=msb_inbound` (default, lenient: missing record = self-assertion) or `esa_outbound` (strict: missing record = no lawful basis). makod calls this before running the Wertebestellung workflow |
 | `GET` | `/api/v1/nelo` | `read-nelo` | List NeLos (`?nb_mp_id=` filters by Netzbetreiber) |
 | `GET` | `/api/v1/nelo/{id}` | `read-nelo` | Get a NeLo by EIC / BDEW Codenummer |
 | `PUT` | `/api/v1/nelo/{id}` | `write-nelo` (NB role) | Insert or update a NeLo |

@@ -936,3 +936,80 @@ CREATE INDEX nb_energiemix_year  ON nb_energiemix (tenant, gueltig_fuer DESC);
 COMMENT ON TABLE nb_energiemix IS
     'Annual grid-area Energiemix published by the NB per §42 EnWG. '
     'One row per (nb_mp_id, year). LFs use this for §42 Abs. 5 Reststrommix disclosure.';
+
+-- ── ESA consent registry (§49 Abs. 2 Nr. 9 MsbG) ─────────────────────────────
+--
+-- The Energieserviceanbieter des Anschlussnutzers (ESA) is the only §49-berechtigte
+-- Stelle whose authority is purely consent-derived: it may receive metering values
+-- for any location for which it holds a GDPR-Art.-7-compliant Einwilligung of the
+-- Anschlussnutzer. The consent document itself never travels in a market message
+-- (the MSB holds only the ESA's self-assertion), so this registry records the
+-- consent's existence and lifecycle — NOT its form.
+--
+-- Evidence-agnostic by regulatory requirement: BNetzA forbids rejecting a consent
+-- for deviating from the BDEW Muster-Einwilligungserklärung. `evidence_uri` /
+-- `evidence_hash` are stored verbatim and NEVER validated for shape.
+
+CREATE TABLE esa_einwilligungen (
+    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant              TEXT        NOT NULL,
+    -- Opaque reference to the Anschlussnutzer who granted consent (no PII stored
+    -- here — the ESA/operator maps this to the natural person).
+    anschlussnutzer_ref TEXT        NOT NULL,
+    -- MP-ID of the ESA the consent authorises.
+    esa_mp_id           TEXT        NOT NULL,
+    -- Locations (MaLo/MeLo/NeLo/ZPB) the consent covers.
+    location_ids        TEXT[]      NOT NULL,
+    -- Free-form scope of the consent (e.g. "lastgang", "zaehlerstaende").
+    scope               TEXT        NOT NULL DEFAULT 'werte',
+    granted_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Effective window; valid_to NULL = open-ended until revoked.
+    valid_from          DATE        NOT NULL DEFAULT CURRENT_DATE,
+    valid_to            DATE,
+    -- GDPR Art. 7(3): set on Widerruf. Non-NULL ⇒ consent no longer a lawful basis.
+    revoked_at          TIMESTAMPTZ,
+    -- Opaque evidence pointer + hash of the Einwilligungserklärung. Stored
+    -- verbatim, never validated for form (BNetzA: any legally sufficient
+    -- consent must be accepted).
+    evidence_uri        TEXT,
+    evidence_hash       TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- One active (non-revoked) consent per (tenant, esa, Anschlussnutzer) — a new
+-- grant supersedes by revoking the old one in the handler.
+CREATE UNIQUE INDEX esa_einw_active
+    ON esa_einwilligungen (tenant, esa_mp_id, anschlussnutzer_ref)
+    WHERE revoked_at IS NULL;
+CREATE INDEX esa_einw_esa    ON esa_einwilligungen (tenant, esa_mp_id);
+-- GIN index so "which consents cover location X" is fast (revocation fan-out).
+CREATE INDEX esa_einw_locs   ON esa_einwilligungen USING GIN (location_ids);
+
+COMMENT ON TABLE esa_einwilligungen IS
+    'ESA consent registry (§49 Abs. 2 Nr. 9 MsbG). Evidence-agnostic: '
+    'evidence_uri/hash are stored verbatim and never validated for form '
+    '(BNetzA forbids rejecting consent for deviating from the BDEW template). '
+    'Revocation (Art. 7(3) GDPR) fires the 17008 Abbestellung.';
+
+-- ── ESA framework agreements (EDI-Vereinbarung MSB ↔ ESA) ────────────────────
+--
+-- The bilateral EDI@Energy framework agreement and certificate state between the
+-- MSB and an ESA. Required for the AS4 leg to carry ESA value delivery.
+
+CREATE TABLE esa_framework_agreements (
+    tenant          TEXT        NOT NULL,
+    -- MSB the ESA has an agreement with.
+    msb_mp_id       TEXT        NOT NULL,
+    esa_mp_id       TEXT        NOT NULL,
+    signed_at       TIMESTAMPTZ,
+    -- Whether the EDI@Energy framework agreement is in place.
+    edi_agreement   BOOLEAN     NOT NULL DEFAULT false,
+    -- AS4 certificate exchange state (e.g. "pending", "active", "expired").
+    cert_state      TEXT        NOT NULL DEFAULT 'pending',
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, msb_mp_id, esa_mp_id)
+);
+
+COMMENT ON TABLE esa_framework_agreements IS
+    'Bilateral EDI@Energy framework agreement + AS4 cert state between MSB and ESA.';

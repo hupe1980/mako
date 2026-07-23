@@ -81,10 +81,10 @@ use mako_redispatch::{
 use mako_wim::{
     DeviceChangeCommand, GeraeteubernahmeCommand, INSRPT_WORKFLOW_NAME as WIM_INSRPT_WORKFLOW,
     PreisanfrageCommand, PreislisteCommand, StammdatenCommand, SteuerungsauftragCommand,
-    StornierungCommand, StorungsmeldungCommand, TechnikAenderungCommand, WimDeviceChangeWorkflow,
+    StorungsmeldungCommand, TechnikAenderungCommand, WimDeviceChangeWorkflow,
     WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimPreisanfrageWorkflow, WimPreislisteWorkflow,
     WimRechnungCommand, WimRechnungWorkflow, WimStammdatenWorkflow, WimSteuerungsauftragWorkflow,
-    WimStornierungWorkflow, WimTechnikAenderungWorkflow,
+    WimTechnikAenderungWorkflow,
 };
 use mako_wim_gas::{
     WimGasAnmeldungCommand, WimGasAnmeldungWorkflow, WimGasInsrptWorkflow, WimGasInvoicCommand,
@@ -271,20 +271,6 @@ pub async fn dispatch_deadline(
                 .await
                 .map(|_| ())
         }
-        "wim-stornierung" => {
-            let p = Process::<WimStornierungWorkflow, _>::from_identity(
-                Arc::clone(&event_store),
-                identity,
-            );
-            p.execute_and_enqueue_with_retry(
-                StornierungCommand::TimeoutExpired { deadline_id, label },
-                3,
-            )
-            .await?;
-            p.take_snapshot(&snap_store, snapshot_interval)
-                .await
-                .map(|_| ())
-        }
         name if name == mako_wim::wertebestellung::WORKFLOW_NAME => {
             let p =
                 Process::<mako_wim::wertebestellung::WimWertebestellungWorkflow, _>::from_identity(
@@ -293,6 +279,23 @@ pub async fn dispatch_deadline(
                 );
             p.execute_and_enqueue_with_retry(
                 mako_wim::wertebestellung::WertebestellungCommand::TimeoutExpired {
+                    deadline_id,
+                    label,
+                },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        name if name == mako_wim::esa_wertebestellung::WORKFLOW_NAME => {
+            let p = Process::<
+                mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow,
+                _,
+            >::from_identity(Arc::clone(&event_store), identity);
+            p.execute_and_enqueue_with_retry(
+                mako_wim::esa_wertebestellung::EsaWertebestellungCommand::TimeoutExpired {
                     deadline_id,
                     label,
                 },
@@ -985,7 +988,6 @@ pub const DISPATCH_TABLE: &[&str] = &[
     "wim-device-change",
     "wim-geraeteubernahme",
     "wim-stammdaten",
-    "wim-stornierung",
     "wim-steuerungsauftrag",
     "wim-preisanfrage",
     "wim-preisliste",
@@ -996,6 +998,7 @@ pub const DISPATCH_TABLE: &[&str] = &[
     "gpke-allokationsliste",
     "wim-technik-aenderung",
     mako_wim::wertebestellung::WORKFLOW_NAME,
+    mako_wim::esa_wertebestellung::WORKFLOW_NAME,
     // Simple-receipt workflows (no deadline; in DISPATCH_TABLE to satisfy assert_dispatch_coverage)
     mako_gpke::messwerte::WORKFLOW_NAME,
     mako_gpke::partin::WORKFLOW_NAME,

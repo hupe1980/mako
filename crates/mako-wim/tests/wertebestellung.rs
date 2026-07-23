@@ -9,8 +9,9 @@ use mako_engine::{
     workflow::Workflow,
 };
 use mako_wim::wertebestellung::{
-    ANFRAGE_PID, ANGEBOT_WINDOW_LABEL, ANTWORT_WINDOW_LABEL, BESTELLUNG_PID, BINDUNGSFRIST_LABEL,
-    Lokationsebene, STORNIERUNG_PID, WertebestellungCommand as C, WertebestellungEvent as E,
+    ABBESTELLUNG_PID, ABLEHNUNG_PID, ANFRAGE_PID, ANGEBOT_PID, ANGEBOT_WINDOW_LABEL,
+    ANTWORT_WINDOW_LABEL, BESTAETIGUNG_PID, BESTELLUNG_PID, BINDUNGSFRIST_LABEL, Lokationsebene,
+    STORNIERUNG_PID, WertebestellungCommand as C, WertebestellungEvent as E,
     WertebestellungState as S, WimWertebestellungWorkflow as W, Zustellquittung,
 };
 use time::macros::datetime;
@@ -41,6 +42,7 @@ fn anfrage() -> C {
         lokations_id: "51238696780".to_owned(),
         message_ref: mref("REQ-1"),
         quittung: quittung(),
+        consent_block: None,
     }
 }
 
@@ -69,6 +71,7 @@ fn bestellung() -> C {
         pid: pid(BESTELLUNG_PID),
         message_ref: mref("ORD-1"),
         quittung: Zustellquittung::positive(datetime!(2026-03-09 09:00 UTC)),
+        consent_block: None,
     }
 }
 
@@ -165,6 +168,7 @@ fn a_negative_zustellquittung_cannot_start_a_frist() {
         lokations_id: "51238696780".to_owned(),
         message_ref: mref("REQ-NEG"),
         quittung: Zustellquittung::negative(datetime!(2026-03-02 09:00 UTC)),
+        consent_block: None,
     };
     let err = W::handle(&S::default(), cmd).unwrap_err();
     assert!(
@@ -204,6 +208,7 @@ fn a_bestellung_after_the_bindungsfrist_is_rejected() {
         pid: pid(BESTELLUNG_PID),
         message_ref: mref("ORD-LATE"),
         quittung: Zustellquittung::positive(datetime!(2026-03-17 09:00 UTC)),
+        consent_block: None,
     };
     let err = W::handle(&state, late).unwrap_err();
     assert!(
@@ -271,7 +276,7 @@ fn stornierung_is_refused_once_delivery_has_begun() {
     let out = W::handle(
         &state,
         C::ReceiveAbbestellung {
-            pid: pid(BESTELLUNG_PID),
+            pid: pid(ABBESTELLUNG_PID),
             message_ref: mref("ORD-END"),
             beendigung_zum: datetime!(2026-04-01 00:00 UTC),
             quittung: quittung(),
@@ -372,6 +377,7 @@ fn each_step_rejects_a_foreign_pid() {
         lokations_id: "51238696780".to_owned(),
         message_ref: mref("REQ-X"),
         quittung: quittung(),
+        consent_block: None,
     };
     let err = W::handle(&S::default(), wrong).unwrap_err();
     assert!(err.to_string().contains("35002"), "got: {err}");
@@ -387,6 +393,7 @@ fn an_anfrage_without_a_location_id_is_rejected() {
         lokations_id: "  ".to_owned(),
         message_ref: mref("REQ-Y"),
         quittung: quittung(),
+        consent_block: None,
     };
     let err = W::handle(&S::default(), bad).unwrap_err();
     assert!(err.to_string().contains("Netzlokation"), "got: {err}");
@@ -540,4 +547,215 @@ fn esa_inbound_covers_every_msb_answer() {
             "ESA deployment must receive PID {pid}"
         );
     }
+}
+
+// ── Outbound leg — the MSB answers the ESA on the wire ────────────────────────
+
+#[test]
+fn send_angebot_enqueues_quotes_15003_to_the_esa() {
+    let mut state = S::default();
+    let out = W::handle(&state, anfrage()).unwrap();
+    for ev in &out.events {
+        state = W::apply(state.clone(), ev);
+    }
+    let out = W::handle(&state, angebot()).unwrap();
+    assert_eq!(out.outbox.len(), 1, "an Angebot must be sent on the wire");
+    let ob = &out.outbox[0];
+    assert_eq!(ob.message_type.as_ref(), "QUOTES");
+    assert_eq!(ob.recipient.as_ref(), "9900555000005"); // the ESA
+    assert_eq!(ob.payload["pid"].as_u64(), Some(u64::from(ANGEBOT_PID)));
+    assert_eq!(ob.payload["sender"].as_str(), Some("9900357000004")); // the MSB
+}
+
+#[test]
+fn answer_bestellung_enqueues_ordrsp_confirm_or_reject() {
+    let confirm = drive_to_outbox(
+        vec![anfrage(), angebot(), bestellung()],
+        accept_bestellung(),
+    );
+    assert_eq!(confirm.message_type.as_ref(), "ORDRSP");
+    assert_eq!(
+        confirm.payload["pid"].as_u64(),
+        Some(u64::from(BESTAETIGUNG_PID))
+    );
+    // The ORDRSP carries no LOC — it echoes the Bestellung's Belegnummer
+    // (`ORD-1`) in RFF+ACW so the ESA can correlate the answer.
+    assert_eq!(
+        confirm.payload["order_reference"].as_str(),
+        Some("ORD-1"),
+        "ORDRSP must echo the answered Bestellung Belegnummer"
+    );
+
+    let reject = drive_to_outbox(
+        vec![anfrage(), angebot(), bestellung()],
+        C::AnswerBestellung {
+            accept: false,
+            message_ref: mref("RSP-2"),
+            reason: Some("Messprodukt nicht lieferbar".to_owned()),
+        },
+    );
+    assert_eq!(
+        reject.payload["pid"].as_u64(),
+        Some(u64::from(ABLEHNUNG_PID))
+    );
+}
+
+/// A revoked consent (gated at ingest) turns the Werteanfrage straight into a
+/// QUOTES 15003 Ablehnung — the process ends in `Abgelehnt`, no Angebot window.
+#[test]
+fn a_blocked_consent_rejects_the_anfrage_with_a_quotes_ablehnung() {
+    let blocked = C::ReceiveAnfrage {
+        pid: pid(ANFRAGE_PID),
+        esa: mp("9900555000005"),
+        msb: mp("9900357000004"),
+        ebene: Lokationsebene::Marktlokation,
+        lokations_id: "51238696780".to_owned(),
+        message_ref: mref("REQ-BLOCKED"),
+        quittung: quittung(),
+        consent_block: Some("Einwilligung wurde widerrufen".to_owned()),
+    };
+    let out = W::handle(&S::default(), blocked).unwrap();
+    // No Angebot deadline is armed — the process is done.
+    assert!(out.deadlines.is_empty(), "a blocked Anfrage arms no window");
+    let ob = out.outbox.into_iter().next().expect("Ablehnung sent");
+    assert_eq!(&*ob.message_type, "QUOTES");
+    assert_eq!(ob.payload["pid"].as_u64(), Some(u64::from(ANGEBOT_PID)));
+    // Folding the event lands the process in Abgelehnt.
+    let state = W::apply(S::default(), &out.events[0]);
+    assert_eq!(state.label(), "Abgelehnt");
+}
+
+/// Consent can be revoked between the Angebot and the Bestellung — a blocked
+/// order is answered with an ORDRSP 19012 Ablehnung.
+#[test]
+fn a_blocked_consent_rejects_the_bestellung_with_an_ordrsp_ablehnung() {
+    let mut state = S::default();
+    for cmd in [anfrage(), angebot()] {
+        let out = W::handle(&state, cmd).unwrap();
+        for ev in &out.events {
+            state = W::apply(state.clone(), ev);
+        }
+    }
+    let blocked = C::ReceiveBestellung {
+        pid: pid(BESTELLUNG_PID),
+        message_ref: mref("ORD-BLOCKED"),
+        quittung: Zustellquittung::positive(datetime!(2026-03-09 09:00 UTC)),
+        consent_block: Some("Einwilligung wurde widerrufen".to_owned()),
+    };
+    let out = W::handle(&state, blocked).unwrap();
+    let ob = out.outbox.into_iter().next().expect("Ablehnung sent");
+    assert_eq!(&*ob.message_type, "ORDRSP");
+    assert_eq!(ob.payload["pid"].as_u64(), Some(u64::from(ABLEHNUNG_PID)));
+    for ev in &out.events {
+        state = W::apply(state.clone(), ev);
+    }
+    assert_eq!(state.label(), "Abgelehnt");
+}
+
+/// Drive `cmds` to build state, then run `final_cmd` and return its single outbox.
+fn drive_to_outbox(cmds: Vec<C>, final_cmd: C) -> mako_engine::outbox::PendingOutbox {
+    let mut state = S::default();
+    for cmd in cmds {
+        let out = W::handle(&state, cmd).unwrap();
+        for ev in &out.events {
+            state = W::apply(state.clone(), ev);
+        }
+    }
+    let out = W::handle(&state, final_cmd).unwrap();
+    out.outbox
+        .into_iter()
+        .next()
+        .expect("an answer must be sent")
+}
+
+// ── UC 4.2 — Typ-2 value delivery (outbound MSCONS 13027, MSB → ESA) ───────────
+
+use mako_wim::wertebestellung::WERTE_UEBERMITTLUNG_PID;
+
+fn typ2_reads() -> serde_json::Value {
+    serde_json::json!([
+        { "dtm_from": "2026-03-10T00:00:00Z", "dtm_to": "2026-03-10T00:15:00Z",
+          "quantity_kwh": "0.250", "obis_code": "1-0:1.29.0" },
+        { "dtm_from": "2026-03-10T00:15:00Z", "dtm_to": "2026-03-10T00:30:00Z",
+          "quantity_kwh": "0.310", "obis_code": "1-0:1.29.0" }
+    ])
+}
+
+/// A confirmed Bestellung authorises delivery: `LiefereWerte` emits an outbound
+/// MSCONS 13027 addressed to the ESA and records the transmission.
+#[test]
+fn liefere_werte_emits_mscons_13027_addressed_to_the_esa() {
+    let state = authorised();
+    let out = W::handle(
+        &state,
+        C::LiefereWerte {
+            message_ref: mref("WERTE-1"),
+            reads: typ2_reads(),
+        },
+    )
+    .unwrap();
+    // The wire message is MSCONS 13027, recipient = the ESA.
+    let ob = out.outbox.first().expect("MSCONS delivery sent");
+    assert_eq!(&*ob.message_type, "MSCONS");
+    assert_eq!(
+        ob.payload["pid"].as_u64(),
+        Some(u64::from(WERTE_UEBERMITTLUNG_PID))
+    );
+    assert_eq!(ob.payload["receiver_mp_id"].as_str(), Some("9900555000005"));
+    assert_eq!(ob.recipient.as_ref(), "9900555000005");
+    assert_eq!(ob.payload["reads"].as_array().map(Vec::len), Some(2));
+    // An auditable transmission event is recorded, and delivery has begun.
+    assert!(matches!(
+        out.events.as_slice(),
+        [E::WerteUebermittelt {
+            interval_count: 2,
+            ..
+        }]
+    ));
+    let mut s = state.clone();
+    for ev in &out.events {
+        s = W::apply(s.clone(), ev);
+    }
+    assert!(
+        !s.lieferung_erlaubt() || matches!(s.label(), "BestellungBestaetigt"),
+        "state stays authorised"
+    );
+}
+
+/// Delivery is refused before a Bestellung is confirmed — the §60 Abs. 1 gate.
+#[test]
+fn delivery_without_a_confirmed_bestellung_is_refused() {
+    // Only the Anfrage received; no Angebot, no Bestellung.
+    let mut state = S::default();
+    let out = W::handle(&state, anfrage()).unwrap();
+    for ev in &out.events {
+        state = W::apply(state.clone(), ev);
+    }
+    let err = W::handle(
+        &state,
+        C::LiefereWerte {
+            message_ref: mref("WERTE-X"),
+            reads: typ2_reads(),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("BestellungBestaetigt"),
+        "delivery must gate on a confirmed Bestellung, got: {err}"
+    );
+}
+
+/// A delivery with no interval values is rejected.
+#[test]
+fn a_delivery_with_no_intervals_is_rejected() {
+    let state = authorised();
+    let err = W::handle(
+        &state,
+        C::LiefereWerte {
+            message_ref: mref("WERTE-EMPTY"),
+            reads: serde_json::json!([]),
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("Intervallwerte"), "got: {err}");
 }

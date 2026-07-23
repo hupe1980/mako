@@ -6,6 +6,7 @@
 pub mod contract;
 pub mod correlation;
 pub mod device;
+pub mod einwilligung;
 pub mod lokationszuordnung;
 pub mod malo;
 pub mod malo_grid;
@@ -25,6 +26,7 @@ pub use correlation::PgCorrelationIndex;
 pub use device::PgDeviceRepository;
 pub use device::PgSteuerbareRessourceRepository;
 pub use device::PgTechnischeRessourceRepository;
+pub use einwilligung::PgEinwilligungRepository;
 pub use lokationszuordnung::PgLokationszuordnungRepository;
 pub use malo::PgMaloRepository;
 pub use malo_grid::PgMaloGridRepository;

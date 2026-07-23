@@ -68,7 +68,6 @@ use mako_mabis::{BILLING_WORKFLOW_NAME, CLEARINGLISTE_WORKFLOW_NAME};
 use mako_wim::{
     GERAETEUBERNAHME_WORKFLOW_NAME, INSRPT_WORKFLOW_NAME, PREISANFRAGE_WORKFLOW_NAME,
     PREISLISTE_WORKFLOW_NAME, RECHNUNG_WORKFLOW_NAME, STAMMDATEN_WORKFLOW_NAME,
-    STORNIERUNG_WORKFLOW_NAME as WIM_STORNIERUNG_WORKFLOW_NAME,
     WORKFLOW_NAME as WIM_DEVICE_CHANGE_WORKFLOW_NAME,
 };
 use mako_wim_gas::{
@@ -177,10 +176,6 @@ pub(crate) fn validate_adapter_coverage() {
         (
             STAMMDATEN_WORKFLOW_NAME,
             adapters::wim_stammdaten_registry().validate_policy(fc, &known),
-        ),
-        (
-            WIM_STORNIERUNG_WORKFLOW_NAME,
-            adapters::wim_stornierung_registry().validate_policy(fc, &known),
         ),
         (
             RECHNUNG_WORKFLOW_NAME,

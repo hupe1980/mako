@@ -818,18 +818,31 @@ struct Cli {
     /// REQOTE 35002 is shared: an ESA Werteanfrage (WiM Teil 2 Kap. 4 UC 4.1
     /// Nr. 1) and a Preisanfrage arrive under the same Prüfidentifikator,
     /// because no ESA-specific REQOTE PID exists. The message carries only the
-    /// sender's GLN, not its role, so listing the known ESA partners here turns
-    /// on the decisive discriminator. Without it the classifier falls back to
-    /// the `PIA` Messprodukt marker alone.
+    /// sender's market-partner ID, not its role, so listing the known ESA
+    /// partners here turns on the decisive discriminator. Without it the
+    /// classifier falls back to the `PIA` Messprodukt marker alone.
     ///
-    /// Comma-separated, e.g. `MAKOD_ESA_PARTNER_GLNS=9900555000005`.
+    /// Comma-separated, e.g. `MAKOD_ESA_PARTNER_MP_IDS=9900555000005`.
     #[arg(
         long,
-        value_name = "GLNS",
-        env = "MAKOD_ESA_PARTNER_GLNS",
+        value_name = "MP_IDS",
+        env = "MAKOD_ESA_PARTNER_MP_IDS",
         value_delimiter = ','
     )]
     esa_partner_mp_ids: Vec<String>,
+
+    /// Cluster-internal marktd base URL, e.g. `http://marktd:8180`.
+    ///
+    /// When set, inbound ESA messages (REQOTE 35002 Werteanfrage, ORDERS 17007
+    /// Bestellung) are gated against the marktd consent registry: a revoked
+    /// consent or an unestablished framework agreement is answered with an
+    /// Ablehnung instead of being processed. Without it the gate is disabled.
+    #[arg(long, value_name = "URL", env = "MAKOD_MARKTD_URL")]
+    marktd_url: Option<String>,
+
+    /// Bearer token for machine-to-machine calls to `--marktd-url`.
+    #[arg(long, value_name = "TOKEN", env = "MAKOD_MARKTD_API_KEY")]
+    marktd_api_key: Option<String>,
 
     /// Shared secret for `X-Mako-Signature` HMAC-SHA256 on ERP webhook POSTs.
     ///
@@ -1528,6 +1541,19 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // to avoid registering all ~40 generated profile modules twice.
     let platform = Arc::new(Platform::with_all_profiles());
 
+    // ── marktd client ─────────────────────────────────────────────────────────
+    //
+    // Optional: gates inbound ESA messages against the consent registry and
+    // backs the M1 Konfigurationsprodukt guard. Shared by the ingest dispatcher
+    // and the commands API.
+    let marktd_client = cli.marktd_url.as_ref().map(|url| {
+        Arc::new(mako_markt::marktd_client::MarktdClient::new(
+            url.clone(),
+            SecretString::from(cli.marktd_api_key.clone().unwrap_or_default()),
+            mako_service::http::default_client(),
+        ))
+    });
+
     // ── Phase 2 ingest dispatcher ─────────────────────────────────────────────
     //
     // Shared across HTTP REST and AS4 ingest — translates parsed EDIFACT
@@ -1540,7 +1566,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             cli.snapshot_interval,
             mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
         )
-        .with_esa_partners(cli.esa_partner_mp_ids.clone()),
+        .with_esa_partners(cli.esa_partner_mp_ids.clone())
+        .with_marktd_client(marktd_client.clone()),
     );
 
     // ── Shared health state ───────────────────────────────────────────────────
@@ -1649,10 +1676,9 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             snapshot_store: store.as_snapshot_store(),
             malo_cache: malo_cache.clone(),
             maloid_result_cache: malo_cache::MaloIdentResultCache::new(store.clone()),
-            // M1: Konfigurationsprodukt guard — wired up from config when
-            // [m1] marktd_url and marktd_api_key are provided.
+            // M1: Konfigurationsprodukt guard — enabled when --marktd-url is set.
             // Falls back to `None` (guard disabled) when not configured.
-            marktd_client: None,
+            marktd_client: marktd_client.clone(),
         });
         let metrics_state = Arc::new(
             metrics_api::MetricsState::new(

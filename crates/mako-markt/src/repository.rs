@@ -2253,3 +2253,206 @@ pub trait NbEnergiemixRepository: Send + Sync {
         nb_mp_id: &str,
     ) -> Result<Vec<i16>, MdmError>;
 }
+
+// ── ESA consent registry (§49 Abs. 2 Nr. 9 MsbG) ──────────────────────────────
+
+/// One ESA consent (Einwilligung) — the ESA's lawful basis for holding a
+/// location's metering values (§49 Abs. 2 Nr. 9 MsbG, GDPR Art. 7).
+///
+/// Evidence-agnostic: `evidence_uri`/`evidence_hash` are stored verbatim and
+/// never validated for form (BNetzA forbids rejecting consent for deviating
+/// from the BDEW template).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EinwilligungRecord {
+    #[serde(default)]
+    pub id: Uuid,
+    #[serde(default)]
+    pub tenant: String,
+    /// Opaque reference to the Anschlussnutzer (no PII stored here).
+    pub anschlussnutzer_ref: String,
+    /// MP-ID of the ESA the consent authorises.
+    pub esa_mp_id: String,
+    /// Locations (MaLo/MeLo/NeLo/ZPB) the consent covers.
+    pub location_ids: Vec<String>,
+    #[serde(default = "default_scope")]
+    pub scope: String,
+    #[serde(default = "unix_epoch", with = "time::serde::rfc3339")]
+    pub granted_at: time::OffsetDateTime,
+    #[serde(with = "date_iso")]
+    pub valid_from: Date,
+    #[serde(default, with = "date_iso::opt")]
+    pub valid_to: Option<Date>,
+    /// GDPR Art. 7(3): non-`None` once revoked.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub revoked_at: Option<time::OffsetDateTime>,
+    /// Opaque evidence pointer/hash — stored verbatim, never form-validated.
+    #[serde(default)]
+    pub evidence_uri: Option<String>,
+    #[serde(default)]
+    pub evidence_hash: Option<String>,
+}
+
+fn default_scope() -> String {
+    "werte".to_owned()
+}
+
+/// Bilateral EDI@Energy framework agreement + AS4 cert state (MSB ↔ ESA).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EsaFrameworkAgreement {
+    #[serde(default)]
+    pub tenant: String,
+    pub msb_mp_id: String,
+    pub esa_mp_id: String,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub signed_at: Option<time::OffsetDateTime>,
+    #[serde(default)]
+    pub edi_agreement: bool,
+    #[serde(default = "default_cert_state")]
+    pub cert_state: String,
+}
+
+fn default_cert_state() -> String {
+    "pending".to_owned()
+}
+
+/// Which side of the ESA relationship is gating a message.
+///
+/// The consent has **asymmetric** force. The MSB holds only the ESA's
+/// self-assertion, so a missing record is not its problem to reject. The ESA is
+/// the data controller that obtained the Einwilligung, so for the ESA a missing
+/// record means no lawful basis at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsentPerspective {
+    /// MSB *receiving* an inbound ESA order. Lenient: a missing consent record
+    /// is self-assertion and never blocks (BNetzA forbids form-based rejection).
+    #[default]
+    MsbInbound,
+    /// ESA *originating* an outbound request (Werteanfrage/Bestellung), or about
+    /// to hold values. Strict: the ESA must hold a recorded, non-revoked consent
+    /// — a missing record is no lawful basis (GDPR Art. 7), so it blocks.
+    EsaOutbound,
+}
+
+/// Why an ESA-message consent check allowed or blocked delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsentCode {
+    /// An active, non-revoked consent covers the location — deliver.
+    Active,
+    /// No consent record for the location, seen from the **MSB** side. The ESA's
+    /// self-assertion stands and BNetzA Mitteilung Nr. 3 (07.02.2024) forbids
+    /// rejecting on consent *form*, so absence alone never blocks — deliver.
+    SelfAssertion,
+    /// No consent record for the location, seen from the **ESA** side. The ESA
+    /// holds no lawful basis (GDPR Art. 7) and must not originate the request —
+    /// block.
+    NoConsent,
+    /// A recorded consent for the location has been revoked (GDPR Art. 7(3)) and
+    /// no active consent superseded it — block (the Widerruf clearing case).
+    Revoked,
+    /// A framework agreement exists but is not established (no EDI agreement or a
+    /// negative cert state) — the UC 4.1.1 Vorbedingung is unmet, so block.
+    FrameworkRejected,
+}
+
+impl ConsentCode {
+    /// Whether this outcome permits the message.
+    #[must_use]
+    pub const fn allowed(self) -> bool {
+        matches!(self, Self::Active | Self::SelfAssertion)
+    }
+}
+
+/// Outcome of gating an inbound ESA message against the consent registry.
+///
+/// Absence of a consent record is **not** a block: the MSB holds the ESA's
+/// self-assertion and BNetzA forbids rejecting on form. Only an explicit
+/// negative signal — a revoked consent, or a framework agreement that is on
+/// record but not established — blocks delivery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsentDecision {
+    /// `true` when the inbound ESA message may be processed.
+    pub allowed: bool,
+    /// Machine-readable reason.
+    pub code: ConsentCode,
+    /// Human-readable reason (also used verbatim as the Ablehnung Begründung).
+    pub reason: String,
+}
+
+impl ConsentDecision {
+    /// Build a decision from a [`ConsentCode`], filling in the standard reason.
+    #[must_use]
+    pub fn from_code(code: ConsentCode) -> Self {
+        let reason = match code {
+            ConsentCode::Active => "aktive Einwilligung liegt vor",
+            ConsentCode::SelfAssertion => {
+                "keine Einwilligung erfasst — Zusicherung des ESA gilt (keine Formprüfung)"
+            }
+            ConsentCode::NoConsent => {
+                "keine Einwilligung erfasst — der ESA hat keine Rechtsgrundlage (GDPR Art. 7)"
+            }
+            ConsentCode::Revoked => {
+                "Einwilligung wurde widerrufen (GDPR Art. 7 Abs. 3) — keine Belieferung"
+            }
+            ConsentCode::FrameworkRejected => {
+                "Rahmenvertrag/EDI-Vereinbarung nicht etabliert (Vorbedingung UC 4.1.1)"
+            }
+        };
+        Self {
+            allowed: code.allowed(),
+            code,
+            reason: reason.to_owned(),
+        }
+    }
+}
+
+/// Registry of ESA consents and framework agreements (`esa_einwilligungen`,
+/// `esa_framework_agreements`).
+#[allow(async_fn_in_trait)]
+pub trait EinwilligungRepository: Send + Sync {
+    /// Grant a consent, superseding any active consent for the same
+    /// `(tenant, esa, Anschlussnutzer)`. Returns the new consent id.
+    async fn grant(&self, rec: EinwilligungRecord) -> Result<Uuid, MdmError>;
+
+    /// Fetch a consent by id (tenant-scoped).
+    async fn get(&self, tenant: &str, id: Uuid) -> Result<Option<EinwilligungRecord>, MdmError>;
+
+    /// List active (non-revoked) consents for an ESA.
+    async fn list_for_esa(
+        &self,
+        tenant: &str,
+        esa_mp_id: &str,
+    ) -> Result<Vec<EinwilligungRecord>, MdmError>;
+
+    /// Revoke a consent (Art. 7(3)). Returns the revoked record when it existed
+    /// and was still active, so the caller can fire the 17008 Abbestellung.
+    async fn revoke(&self, tenant: &str, id: Uuid) -> Result<Option<EinwilligungRecord>, MdmError>;
+
+    /// Upsert a framework agreement.
+    async fn upsert_framework(&self, rec: EsaFrameworkAgreement) -> Result<(), MdmError>;
+
+    /// Fetch a framework agreement.
+    async fn get_framework(
+        &self,
+        tenant: &str,
+        msb_mp_id: &str,
+        esa_mp_id: &str,
+    ) -> Result<Option<EsaFrameworkAgreement>, MdmError>;
+
+    /// Gate an ESA message for `location_id` against the registry.
+    ///
+    /// A revoked consent or an unestablished framework agreement always blocks.
+    /// A *missing* consent record depends on `perspective`: lenient
+    /// ([`ConsentPerspective::MsbInbound`]) treats it as self-assertion and
+    /// allows; strict ([`ConsentPerspective::EsaOutbound`]) treats it as no
+    /// lawful basis and blocks.
+    async fn consent_check(
+        &self,
+        tenant: &str,
+        esa_mp_id: &str,
+        msb_mp_id: &str,
+        location_id: &str,
+        perspective: ConsentPerspective,
+    ) -> Result<ConsentDecision, MdmError>;
+}

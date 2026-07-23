@@ -33,7 +33,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     handler::{HandlerState, handle_webhook},
     iceberg::query::OlapEngine,
-    pg::PgTimeSeriesRepository,
+    pg::{PgTimeSeriesRepository, PgTyp2Repository},
     smgw::{
         get_smgw_compliance, get_smgw_session, list_smgw_sessions, post_smgw_compliance_scan,
         put_smgw_session,
@@ -44,7 +44,7 @@ use mako_edm::{
         BillingPeriodQuery, IngestionSource, MeterRead, QualityFlag, Sparte as EdmSparte,
         TimeSeriesQuery,
     },
-    repository::TimeSeriesRepository,
+    repository::{TimeSeriesRepository, Typ2Repository},
 };
 
 /// Map the `metering` Sparte onto the `mako-edm` domain Sparte.
@@ -76,6 +76,10 @@ pub fn router(state: HandlerState) -> Router {
         .route("/api/v1/billing-periods", get(list_billing_periods))
         .route("/api/v1/lastgang/{malo_id}", get(get_lastgang))
         .route("/api/v1/zeitreihe/{malo_id}", get(get_zeitreihe))
+        // ESA "Werte nach Typ 2" — a deliberately separate read path from the
+        // billing endpoints above. It reads `esa_typ2_reads` only, never
+        // `meter_reads`, so Typ-2 data is unreachable from any billing query.
+        .route("/api/v1/esa/typ2/{malo_id}", get(get_esa_typ2))
         // ── Ablesesteuerung ───────────────────────────────────────────────────
         .route(
             "/api/v1/reading-orders",
@@ -1009,6 +1013,66 @@ fn edm_sparte_to_medium(s: EdmSparte) -> Medium {
 /// - `medium` reflects the commodity (Strom / Gas).
 ///
 /// Source: BO4E-Standard Zeitreihe; API-Webdienste Strom §5.3.
+/// `GET /api/v1/esa/typ2/{malo_id}` — read ESA "Werte nach Typ 2" for a MaLo.
+///
+/// Reads the separate `esa_typ2_reads` store exclusively. These values are
+/// non-authoritative (Codeliste 1.4 Kap. 4.6 · WiM Strom Teil 2 §4) and have no
+/// bearing on billing — this endpoint exists so the ESA can retrieve what it was
+/// delivered, kept structurally apart from every billing/aggregation endpoint.
+async fn get_esa_typ2(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+    Query(params): Query<LastgangParams>,
+) -> impl IntoResponse {
+    use time::format_description::well_known::Rfc3339;
+
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let from = params
+        .from
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    let to = params
+        .to
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or_else(OffsetDateTime::now_utc);
+
+    let q = TimeSeriesQuery {
+        malo_id: malo_id.clone(),
+        from,
+        to,
+        sparte: None,
+        tenant: state.tenant.clone(),
+    };
+
+    match state.typ2_repo.query_typ2(&q).await {
+        Ok(reads) => Json(serde_json::json!({
+            "malo_id": malo_id,
+            "non_authoritative": true,
+            "hinweis": "Werte nach Typ 2 — ohne Bezug zur Netznutzungs-, Bilanzkreis- \
+                        oder Mehr-/Mindermengenabrechnung (Codeliste 1.4 Kap. 4.6).",
+            "count": reads.len(),
+            "werte": reads,
+        }))
+        .into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, malo_id, "edmd: get_esa_typ2 query failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 async fn get_zeitreihe(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -2413,11 +2477,13 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
     });
 
     let repo = PgTimeSeriesRepository::new(pool.clone());
+    let typ2_repo = PgTyp2Repository::new(pool.clone());
     // Clone the webhook URL and tenant before they are moved into HandlerState.
     let smgw_webhook_url = cfg.erp_webhook_url.clone();
     let smgw_tenant = cfg.tenant.clone();
     let state = HandlerState {
         repo,
+        typ2_repo,
         inbound_secret: Arc::new(cfg.inbound_secret),
         tenant: cfg.tenant,
         marktd_url: cfg.marktd_url.clone(),

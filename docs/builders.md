@@ -33,15 +33,15 @@ The `edi_energy::builders` module provides a fluent, type-state builder API for 
 | `ContrlBuilder` | CONTRL (interchange control acknowledgements) |
 | `InvoicBuilder` | INVOIC (invoices) *(requires `invoic` feature)* |
 | `RemadvBuilder` | REMADV (remittance advice) *(requires `remadv` feature)* |
-| `OrdersBuilder` | ORDERS (orders, e.g. Sperrung/Konfiguration) *(requires `orders` feature)* |
-| `OrdrespBuilder` | ORDRSP (order responses) *(requires `ordrsp` feature)* |
-| `OrdchgBuilder` | ORDCHG (order changes/cancellations) *(requires `ordchg` feature)* |
+| `OrdersBuilder` | ORDERS (orders, e.g. Sperrung/Konfiguration; **ESA Bestellung/Abbestellung 17007/17008 — full MIG conformance** via `.reference()` (SG1 RFF+Z13), `.item_description()` (IMD), `.location()` (LOC+172), plus the mandatory `UNS`) *(requires `orders` feature)* |
+| `OrdrespBuilder` | ORDRSP (order responses; **ESA-Antwort 19011–19014 — full MIG+AHB conformance**; BGM DE 1001 = `7`, `.pruefidentifikator()` sets the PID in BGM DE 1004, `.order_reference()` the SG1 RFF+ACW that echoes the answered order, `.adjustment()` → SG2 AJT, `.adjustment_reason()` → SG2 coded FTX, `.item_description()` → IMD, `.line_item()` → SG27 LIN). ORDRSP carries **no** LOC — the ESA correlates the answer by the RFF+ACW echo *(requires `ordrsp` feature)* |
+| `OrdchgBuilder` | ORDCHG (order changes/cancellations; **ESA Stornierung 39002 — full MIG conformance**; `.reference()` emits the mandatory SG1 RFF — ORDCHG carries **no** LOC) *(requires `ordchg` feature)* |
 | `IftstaBuilder` | IFTSTA (status reports) *(requires `iftsta` feature)* |
 | `InsrptBuilder` | INSRPT (inspection reports) *(requires `insrpt` feature)* |
 | `PartinBuilder` | PARTIN (party information) *(requires `partin` feature)* |
 | `PricatBuilder` | PRICAT (price catalogues) *(requires `pricat` feature)* |
-| `QuotesBuilder` | QUOTES (quotations) *(requires `quotes` feature)* |
-| `ReqoteBuilder` | REQOTE (requests for quotation) *(requires `reqote` feature)* |
+| `QuotesBuilder` | QUOTES (quotations / **ESA Angebot 15003 — full MIG+AHB conformance**; `.pruefidentifikator()`, `.order_reference()`, `.reference()` (SG1 RFF), `.location()`, `.bindungsfrist()` → `DTM+273`, `.reason()` → `FTX+ACB`, `.currency()` → `CUX`, `.contact()` → `CTA+COM`, `.product()` → `LIN+PIA`, `.price()` → `PRI`) *(requires `quotes` feature)* |
+| `ReqoteBuilder` | REQOTE (requests for quotation / **ESA Werteanfrage 35002 — full MIG conformance**; `.reference()` (SG1 RFF+Z13), `.location()` (LOC+172), `.contact()` (CTA+COM), `.line_item()` (LIN)) *(requires `reqote` feature)* |
 | `ComdisBuilder` | COMDIS (commercial disputes) *(requires `comdis` feature)* |
 | `UtiltsBuilder` | UTILTS (Berechnungsformeln) *(requires `utilts` feature)* |
 

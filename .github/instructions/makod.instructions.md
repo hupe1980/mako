@@ -7,7 +7,7 @@ applyTo: "services/makod/**"
 
 ## Role
 
-`makod` is the only binary crate that assembles all domain workflow crates (`mako-gpke`, `mako-wim`, `mako-geli-gas`, `mako-mabis`) into a single `EngineContext`. It owns:
+`makod` is the only binary crate that assembles all domain workflow crates (`mako-gpke`, `mako-wim`, `mako-wim-gas`, `mako-geli-gas`, `mako-gabi-gas`, `mako-mabis`, `mako-redispatch`) into a single `EngineContext`. It owns:
 - Persistence backend selection (in-memory vs. SlateDB)
 - Object store configuration (local / S3 / GCS)
 - OTLP instrumentation setup

@@ -221,6 +221,62 @@ fn meter_reads_source_check_matches_ingestion_source_enum() {
     );
 }
 
+/// `esa_typ2_reads.delivery_path` must accept exactly the `Typ2DeliveryPath`
+/// wire strings — the Typ-2 store's CHECK is pinned to the enum the same way.
+#[test]
+fn esa_typ2_reads_delivery_path_check_matches_enum() {
+    use mako_edm::domain::Typ2DeliveryPath;
+
+    let ddl = ddl_of(&migration(), "esa_typ2_reads");
+    let listed: std::collections::BTreeSet<String> =
+        check_list(&ddl, "delivery_path").into_iter().collect();
+    let expected: std::collections::BTreeSet<String> = Typ2DeliveryPath::ALL
+        .iter()
+        .map(|p| p.as_str().to_owned())
+        .collect();
+    assert_eq!(
+        listed, expected,
+        "esa_typ2_reads.delivery_path CHECK and Typ2DeliveryPath disagree"
+    );
+}
+
+/// The Typ-2 store must exist as a table separate from `meter_reads`, and 13027
+/// must be flagged as a Typ-2 PID so the ingest handler forks it away from the
+/// billing store. This guard fails if either half of the separation is removed.
+#[test]
+fn esa_typ2_reads_is_a_separate_table_and_13027_is_forked() {
+    let sql = migration();
+    assert!(
+        sql.contains("CREATE TABLE esa_typ2_reads"),
+        "the ESA Typ-2 store table is missing — Typ-2 values would fall back to meter_reads"
+    );
+    // 13027 is subscribed/received (in MSCONS_PIDS) but forked to the Typ-2 store.
+    assert!(
+        mako_edm::domain::MSCONS_PIDS.contains(&13027),
+        "edmd must still subscribe to 13027 to receive Typ-2 values"
+    );
+    assert!(
+        mako_edm::domain::ESA_TYP2_PIDS.contains(&13027),
+        "PID 13027 must be in ESA_TYP2_PIDS so the ingest handler routes it to esa_typ2_reads"
+    );
+}
+
+/// An ESA may order value delivery from the MSB (WiM Strom Teil 2 Kap. 4 · §60
+/// Abs. 1 MsbG), so a reading order can be raised on its behalf — the
+/// `auftraggeber_rolle` CHECK must admit `ESA` alongside LF/MSB/NB.
+#[test]
+fn ablese_auftraege_auftraggeber_rolle_admits_esa() {
+    let ddl = ddl_of(&migration(), "ablese_auftraege");
+    let listed: std::collections::BTreeSet<String> =
+        check_list(&ddl, "auftraggeber_rolle").into_iter().collect();
+    for role in ["LF", "MSB", "NB", "ESA"] {
+        assert!(
+            listed.contains(role),
+            "auftraggeber_rolle CHECK must admit {role}; got {listed:?}"
+        );
+    }
+}
+
 /// `meter_reads.quality` must accept exactly the `QualityFlag` wire strings.
 #[test]
 fn meter_reads_quality_check_matches_quality_flag() {

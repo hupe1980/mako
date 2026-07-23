@@ -17,7 +17,7 @@
 //! | Stammdaten Anfrage / Übermittlung | 17132 (req), 17102–17133 (resp) | ORDERS | `stammdaten` | ✅ Implemented |
 //! | Preisanfrage (REQOTE/QUOTES) | 35001–35005 (REQOTE in), 15001–15005 (QUOTES in) | REQOTE, QUOTES | `preisanfrage` | ✅ Implemented |
 //! | Preisliste (PRICAT) | 27001–27003 | PRICAT | `preisliste` | ✅ Implemented |
-//! | Stornierung Sperr-/Entsperrauftrag | 39000 | ORDCHG | `stornierung` | ✅ Implemented |
+//! | ESA Wertebestellung (Anfrage/Angebot/Bestellung/Storno) | 35002, 15003, 17007/17008, 39002, 19011–19014 | REQOTE/QUOTES/ORDERS/ORDCHG/ORDRSP | `wertebestellung`, `esa_wertebestellung` | ✅ Implemented |
 //! | WiM-Rechnung / MSB-Rechnung (INVOIC) | 31003, 31009 | INVOIC | `rechnung` | ✅ Implemented (auto-REMADV pending in deadline_dispatch) |
 //!
 //! ## Architecture
@@ -96,6 +96,7 @@
 #![allow(clippy::map_unwrap_or)]
 #![allow(clippy::items_after_statements)]
 
+pub mod esa_wertebestellung;
 pub mod geraeteubernahme;
 pub mod geraetewechsel;
 pub mod insrpt;
@@ -104,7 +105,6 @@ pub mod preisliste;
 pub mod rechnung;
 pub mod stammdaten;
 pub mod steuerungsauftrag;
-pub mod stornierung;
 pub mod technik_aenderung;
 pub mod wertebestellung;
 
@@ -151,12 +151,6 @@ pub use steuerungsauftrag::{
     SteuerungsauftragData, SteuerungsauftragEvent, SteuerungsauftragState,
     WORKFLOW_NAME as STEUERUNGSAUFTRAG_WORKFLOW_NAME, WimSteuerungsauftragWorkflow,
 };
-pub use stornierung::{
-    ABLEHNUNG_PID, BESTAETIGUNG_PID, STORNIERUNG_DEADLINE_LABEL, STORNIERUNG_PID,
-    StornierungCommand, StornierungData, StornierungEvent, StornierungProjection,
-    StornierungRecord, StornierungRecordData, StornierungState,
-    WORKFLOW_NAME as STORNIERUNG_WORKFLOW_NAME, WimStornierungWorkflow,
-};
 pub use technik_aenderung::{
     AuftragData as TechnikAenderungAuftragData, ORDERS_PIDS as TECHNIK_AENDERUNG_ORDERS_PIDS,
     ORDRSP_PIDS as TECHNIK_AENDERUNG_ORDRSP_PIDS, TechnikAenderungCommand, TechnikAenderungEvent,
@@ -180,7 +174,7 @@ pub use technik_aenderung::{
 /// | 17001–17011 | `wim-geraeteubernahme` | Geräteübernahme ORDERS (nMSB → NB) | any |
 /// | 17132 | `wim-stammdaten` | Stammdaten Anforderung Strom (NB → MSB), MSB role | any |
 /// | 17102–17133 | `wim-stammdaten` | Stammdatenübermittlung responses (MSB → NB), NB role | **Nb only** |
-/// | 39000 | `wim-stornierung` | Stornierung (ORDCHG) | any |
+/// | 39002 | `wim-wertebestellung` | ESA Stornierung der Bestellung (ORDCHG) | **Msb only** |
 /// | 19001, 19002 | `wim-geraeteubernahme` | ORDRSP Bestellbestätigung/Ablehnung from NB | **nMSB only** |
 /// | 19015, 19016 | `wim-geraeteubernahme` | ORDRSP Gerätewechselabsicht Bestätigung/Ablehnung | **nMSB only** |
 ///
@@ -218,8 +212,8 @@ impl mako_engine::builder::EngineModule for WimModule {
             "wim-device-change",
             "wim-geraeteubernahme",
             "wim-stammdaten",
-            "wim-stornierung",
             wertebestellung::WORKFLOW_NAME,
+            esa_wertebestellung::WORKFLOW_NAME,
             "wim-steuerungsauftrag",
             "wim-preisanfrage",
             "wim-preisliste",
@@ -371,34 +365,45 @@ impl mako_engine::builder::EngineModule for WimModule {
             router.register(pid, "wim-preisliste");
         }
 
-        // ORDCHG 39002 — "Stornierung der Bestellung von Werten" (WiM Teil 2
-        // UC 4.1 Nr. 5). Its answers, ORDRSP 19013/19014, are outbox entries.
-        // 39000/39001 are Gas Sperrprozesse and are not registered here.
-        router.register(stornierung::STORNIERUNG_PID, "wim-stornierung");
-
         // ── ESA Wertebestellung (WiM Teil 2 Kap. 4) ───────────────────────
         //
         // The two sides register disjoint PIDs, so an integrated deployment can
         // hold both roles without a routing conflict.
         //
-        // MSB side: inbound ORDERS 17007 ("Bestellung und Abbestellung von
-        // Werten ESA", UC 4.1 Nr. 3 / UC 4.3 Nr. 1). §34 Abs. 2 S. 2 Nr. 10 MsbG
-        // makes serving an ESA a mandatory Zusatzleistung, so an MSB must be
-        // able to process the order that authorises delivery and the one that
-        // stops it. Its answers (ORDRSP 19011/19012) are outbox entries.
+        // MSB side: inbound ORDERS 17007 Bestellung (UC 4.1 Nr. 3), 17008
+        // Abbestellung (UC 4.3 Nr. 1) and ORDCHG 39002 Stornierung (UC 4.1 Nr. 5)
+        // — all resume the *same* subscription process. §34 Abs. 2 S. 2 Nr. 10
+        // MsbG makes serving an ESA a mandatory Zusatzleistung, so an MSB must be
+        // able to process the order that authorises delivery, the one that stops
+        // it, and the cancellation of a not-yet-delivered Bestellung. The answers
+        // (ORDRSP 19011/19012/19013/19014) are outbox entries. The Stornierung
+        // carries no LOC — it is correlated by the Bestellung's Belegnummer
+        // echoed in RFF+ON (see the makod ingest dispatcher).
         if roles.contains(mako_engine::marktrolle::Marktrolle::Msb) {
             router.register(
                 wertebestellung::BESTELLUNG_PID,
                 wertebestellung::WORKFLOW_NAME,
             );
+            router.register(
+                wertebestellung::ABBESTELLUNG_PID,
+                wertebestellung::WORKFLOW_NAME,
+            );
+            router.register(
+                wertebestellung::STORNIERUNG_PID,
+                wertebestellung::WORKFLOW_NAME,
+            );
         }
 
-        // ESA side: the answers the MSB sends back, inbound here. Registered
-        // only for a deployment that *is* an ESA — an ESA has no Zuordnung to a
-        // Marktlokation, so nothing else may claim these.
+        // ESA side: this deployment *is* the ESA and originates the order
+        // handshake (REQOTE 35002 / ORDERS 17007 / ORDCHG 39002 / ORDERS 17008).
+        // The MSB's answers (QUOTES 15003, ORDRSP 19011-19014) are inbound here
+        // and resume the esa-wertebestellung process. Registered only for a
+        // deployment that *is* an ESA — an ESA has no Zuordnung to a
+        // Marktlokation, so nothing else may claim these. The set is disjoint
+        // from the MSB inbound PIDs, so an integrated deployment holds both.
         if roles.contains(mako_engine::marktrolle::Marktrolle::Esa) {
-            for &pid in wertebestellung::ESA_INBOUND_PIDS {
-                router.register(pid, wertebestellung::WORKFLOW_NAME);
+            for &pid in esa_wertebestellung::ESA_INBOUND_PIDS {
+                router.register(pid, esa_wertebestellung::WORKFLOW_NAME);
             }
         }
 

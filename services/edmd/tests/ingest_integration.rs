@@ -18,8 +18,10 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use mako_edm::domain::{IngestionSource, MeterRead, QualityFlag, Sparte};
-use mako_edm::repository::TimeSeriesRepository;
+use mako_edm::domain::{
+    IngestionSource, MeterRead, QualityFlag, Sparte, TimeSeriesQuery, Typ2DeliveryPath, Typ2Read,
+};
+use mako_edm::repository::{TimeSeriesRepository, Typ2Repository};
 use rust_decimal::dec;
 use sqlx::PgPool;
 use time::macros::datetime;
@@ -408,7 +410,8 @@ async fn the_readiness_probe_reports_a_live_database() {
         return;
     };
     let state = edmd::handler::HandlerState {
-        repo: edmd::pg::PgTimeSeriesRepository::new(pool),
+        repo: edmd::pg::PgTimeSeriesRepository::new(pool.clone()),
+        typ2_repo: edmd::pg::PgTyp2Repository::new(pool),
         inbound_secret: std::sync::Arc::new(None),
         tenant: "T1".to_owned(),
         olap_engine: None,
@@ -657,4 +660,154 @@ async fn the_deadline_sweep_escalates_only_stale_obligations() {
             .any(|(o, s)| o.contains("2.8") && s == "UEBERFAELLIG"),
         "stale obligation escalated: {statuses:?}"
     );
+}
+
+// ── ESA "Werte nach Typ 2" separation (Codeliste 1.4 Kap. 4.6) ────────────────
+
+fn typ2_state(pool: PgPool) -> edmd::handler::HandlerState {
+    edmd::handler::HandlerState {
+        repo: edmd::pg::PgTimeSeriesRepository::new(pool.clone()),
+        typ2_repo: edmd::pg::PgTyp2Repository::new(pool),
+        inbound_secret: std::sync::Arc::new(None),
+        tenant: "T1".to_owned(),
+        olap_engine: None,
+        marktd_url: String::new(),
+        marktd_api_key: secrecy::SecretString::from(String::new()),
+        erp_webhook_url: None,
+    }
+}
+
+/// A 13027 delivery must land in `esa_typ2_reads` and NEVER in `meter_reads` —
+/// the whole point of the separate store: no billing query can reach it.
+#[tokio::test]
+#[ignore = "requires EDMD_TEST_DATABASE_URL"]
+async fn typ2_13027_lands_in_the_separate_store_never_meter_reads() {
+    let Some(pool) = test_pool("typ2_webhook").await else {
+        return;
+    };
+    let body = serde_json::json!({
+        "specversion": "1.0",
+        "type": "de.mako.process.completed",
+        "subject": "11111111-1111-1111-1111-111111111111",
+        "time": "2026-01-01T00:00:00Z",
+        "data": {
+            "pid": 13027,
+            "malo_id": "51238696780",
+            "sparte": "STROM",
+            "sender": "9900357000004",
+            "reads": [{
+                "dtm_from": "2026-01-01T00:00:00Z",
+                "dtm_to": "2026-01-01T00:15:00Z",
+                "quantity_kwh": "1.5",
+                "quality": "MEASURED"
+            }]
+        }
+    });
+    let response = edmd::server::router(typ2_state(pool.clone()))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/webhook")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let typ2_count: i64 = sqlx::query_scalar("SELECT count(*) FROM esa_typ2_reads")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let meter_count: i64 = sqlx::query_scalar("SELECT count(*) FROM meter_reads")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(typ2_count, 1, "the Typ-2 value must be in esa_typ2_reads");
+    assert_eq!(
+        meter_count, 0,
+        "a Typ-2 value must NEVER enter the billing meter_reads store"
+    );
+}
+
+/// The Typ-2 store is readable on its own path but invisible to the billing
+/// read paths (`query`, `billing_period`) that feed invoicing.
+#[tokio::test]
+#[ignore = "requires EDMD_TEST_DATABASE_URL"]
+async fn typ2_store_is_invisible_to_billing_read_paths() {
+    let Some(pool) = test_pool("typ2_repo").await else {
+        return;
+    };
+    let typ2 = edmd::pg::PgTyp2Repository::new(pool.clone());
+    let read = Typ2Read {
+        malo_id: "51238696780".to_owned(),
+        melo_id: None,
+        dtm_from: datetime!(2026-01-01 00:00 UTC),
+        dtm_to: datetime!(2026-01-01 00:15 UTC),
+        quantity_kwh: dec!(1.5),
+        quality: QualityFlag::Measured,
+        pid: 13027,
+        sparte: Sparte::Strom,
+        obis_code: Some("1-0:1.8.0".to_owned()),
+        tenant: "T1".to_owned(),
+        delivery_path: Typ2DeliveryPath::MsconsBackend,
+        sender_mp_id: Some("9900357000004".to_owned()),
+        received_at: None,
+    };
+    typ2.store_typ2_reads(&[read]).await.unwrap();
+
+    let q = TimeSeriesQuery {
+        malo_id: "51238696780".to_owned(),
+        from: datetime!(2025-12-31 00:00 UTC),
+        to: datetime!(2026-01-02 00:00 UTC),
+        sparte: None,
+        tenant: "T1".to_owned(),
+    };
+
+    // The Typ-2 read path returns the value.
+    let got = typ2.query_typ2(&q).await.unwrap();
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].delivery_path, Typ2DeliveryPath::MsconsBackend);
+
+    // The billing read paths see nothing — they only read meter_reads.
+    let repo = edmd::pg::PgTimeSeriesRepository::new(pool.clone());
+    assert!(
+        repo.query(&q).await.unwrap().is_empty(),
+        "the Lastgang/query billing path must not see Typ-2 values"
+    );
+    let meter_count: i64 = sqlx::query_scalar("SELECT count(*) FROM meter_reads")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        meter_count, 0,
+        "meter_reads must be untouched by a Typ-2 store"
+    );
+}
+
+/// An ESA may order value delivery from the MSB (§60 Abs. 1 MsbG), so a reading
+/// order with `auftraggeber_rolle = 'ESA'` must be accepted by the CHECK.
+#[tokio::test]
+#[ignore = "requires EDMD_TEST_DATABASE_URL"]
+async fn an_esa_reading_order_is_accepted() {
+    let Some(pool) = test_pool("ablese_esa").await else {
+        return;
+    };
+    sqlx::query(
+        "INSERT INTO ablese_auftraege
+             (malo_id, anlass, auftraggeber_rolle, geplant_am, ausfuehrt_bis, status, tenant)
+         VALUES ('51238696780','SONDERABLESUNG','ESA','2026-03-10','2026-03-20','OFFEN','T1')",
+    )
+    .execute(&pool)
+    .await
+    .expect("an ESA-raised reading order must be accepted by the auftraggeber_rolle CHECK");
+
+    let rolle: String = sqlx::query_scalar(
+        "SELECT auftraggeber_rolle FROM ablese_auftraege WHERE malo_id = '51238696780'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rolle, "ESA");
 }

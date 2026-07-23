@@ -80,7 +80,7 @@ use mako_redispatch::{
 use mako_wim::{
     WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimPreisanfrageWorkflow,
     WimPreislisteWorkflow, WimRechnungWorkflow, WimStammdatenWorkflow,
-    WimSteuerungsauftragWorkflow, WimStornierungWorkflow,
+    WimSteuerungsauftragWorkflow,
 };
 use mako_wim_gas::{
     WimGasAnmeldungWorkflow, WimGasInvoicWorkflow, WimGasKuendigungWorkflow,
@@ -317,15 +317,6 @@ pub async fn dispatch_migrations(
                 store,
                 WimStammdatenWorkflow,
                 "wim-stammdaten",
-                from,
-                to
-            );
-            identity!(
-                report,
-                count,
-                store,
-                WimStornierungWorkflow,
-                "wim-stornierung",
                 from,
                 to
             );

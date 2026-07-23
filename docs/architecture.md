@@ -722,10 +722,13 @@ makod (binary)
 ├── registers mako-gpke    → PIDs 55001–55024, 55555, 55607–55609, 17115–17117 (Strom NB),
 │                            17134/17135, 19001/19002, 31001–31002, 31005–31006, 37000–37006
 ├── registers mako-wim     → PIDs 55039, 55042, 55051, 55168, 31009, 23001/23003/23004/23008,
-│                            17001–17011, 19001/19002 (nMSB role), 39000, 35001–35005, 15001–15005
+│                            17001–17011, 19001/19002 (nMSB role), 35001–35005, 15001–15005,
+│                            27001–27003, 17011/17118/17121 (Technik-Änderung),
+│                            ESA Wertebestellung (Msb role): 35002, 15003, 17007/17008,
+│                            39002, 19011–19014
 ├── registers mako-geli-gas → PIDs 44001–44021, 44022* (Nb role), 44023–44024* (Lf role),
 │                             37008–37014, 31011, 17115–17117 (Gas NB)
-├── registers mako-mabis   → PID 13003
+├── registers mako-mabis   → PIDs 13003, 13010–13012, 55065/55069/55070 (Clearingliste)
 ├── registers mako-wim-gas → PIDs 44022–44024* (Msb/Nmsb role), 44039–44053, 44168–44170,
 │                            31003, 31004, 23005, 23009
 ├── registers mako-gabi-gas → PIDs 31007, 31008, 31010, ORDERS 17110, ORDRSP 19110,

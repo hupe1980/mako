@@ -8,12 +8,12 @@ applyTo: "xtask/**"
 ## General
 
 - `xtask` is a binary crate — `anyhow` is acceptable here (no `thiserror` required).
-- MSRV still applies: 1.88. Do not use features introduced after 1.88.
+- MSRV still applies: 1.94. Do not use features introduced after 1.94.
 - Each task is a separate source file under `xtask/src/`. Add new tasks there and wire them into `main.rs`.
 
 ## Codegen Pipeline
 
-The codegen task reads profile YAML from `crates/edi-energy/profiles/<FV>/<message_type>/<pid>.yaml` and emits Rust source into `crates/edi-energy/src/generated/`. The generated files are committed to the repo.
+The codegen task reads profile JSON from `crates/edi-energy/profiles/<message_type>/<fvYYYYMMDD>/{mig.json, ahb.json, codelists.json}` and emits Rust source into `crates/edi-energy/src/generated/`. The generated files are committed to the repo.
 
 ```bash
 cargo xtask codegen              # regenerate after any profile YAML change

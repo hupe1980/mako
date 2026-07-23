@@ -7,15 +7,16 @@
 | HTTP port | `:8380` |
 | Database | PostgreSQL 17+ (sqlx 0.8, schema from `migrations/0001_schema.sql`) |
 | Partitioning | `meter_reads` is range-partitioned monthly on `dtm_from`; retention drops whole partitions once every row in them is durable in the cold tier |
-| Schema | `meter_reads` — `quantity_kwh NUMERIC(18,5)`, `tenant TEXT NOT NULL`; `meter_billing_periods` — NUMERIC aggregates, `tenant TEXT NOT NULL`; `gdpr_deletions`, `ablese_auftraege`, `direct_push_sessions`, `archive_batches`, `iceberg_catalog_entries` |
-| Inbound | CloudEvents from `marktd` — `de.mako.process.completed` (MSCONS PIDs 13005–13027; GPKE 55001 → LIEFERBEGINN and 55004/55007 → LIEFERENDE reading orders), `de.mako.process.initiated` (INSRPT 23001/23003/23004/23005/23008/23009 → auto reading orders) |
+| Schema | `meter_reads` — `quantity_kwh NUMERIC(18,5)`, `tenant TEXT NOT NULL`; `meter_billing_periods` — NUMERIC aggregates, `tenant TEXT NOT NULL`; **`esa_typ2_reads`** — separate ESA Typ-2 store (see below); `gdpr_deletions`, `ablese_auftraege`, `direct_push_sessions`, `archive_batches`, `iceberg_catalog_entries` |
+| ESA Typ-2 store | ESA-delivered "Werte nach Typ 2" (MSCONS **13027**) are **non-authoritative** (Codeliste 1.4 Kap. 4.6 · WiM Strom Teil 2 §4) — no bearing on Netznutzungs-/Bilanzkreis-/Mehr-/Mindermengenabrechnung. They land in a **separate `esa_typ2_reads` table**, never `meter_reads`, so no billing query can reach them by omission. No correction, substitution, reconciliation, or billing-period participation. Read via `GET /api/v1/esa/typ2/{malo_id}` |
+| Inbound | CloudEvents from `marktd` — `de.mako.process.completed` (MSCONS billing PIDs 13005–13025 → `meter_reads`; **13027 → `esa_typ2_reads`**; GPKE 55001 → LIEFERBEGINN and 55004/55007 → LIEFERENDE reading orders), `de.mako.process.initiated` (INSRPT 23001/23003/23004/23005/23008/23009 → auto reading orders) |
 | Kafka ingest | Optional `[kafka_ingest]` consumer (krafka) for head-end systems — at-least-once, earliest offset reset, same V01–V10 + audit path as REST; e2e-tested against an in-process `FakeBroker`**Trust boundary: topic-level** — no per-message auth; restrict topic ACLs to the head-end system |
 | Direct push | `POST /api/v1/meter-reads/rlm/{malo_id}` (Strom), `POST /api/v1/meter-reads/gas/{malo_id}` (Gas m³→kWh_Hs) — idempotent on `session_id` |
 | Quality scoring | `metering::score_intervals_f64` — Hampel filter (k=3, t=3.0, MAD×1.4826σ), auto-vectorises to AVX2/NEON; grades A/B/C/F; retroactive: `POST /api/v1/quality-score/{malo_id}` |
-| Reading orders | `POST/GET /api/v1/reading-orders` — Ablesesteuerung for LF/MSB/NB; `/complete`, `/cancel`, `/fail` (Ablesehindernis); auto-creates `INSRPT_STOERUNG` on INSRPT PID 23001 (WiM Störungsmeldung) |
+| Reading orders | `POST/GET /api/v1/reading-orders` — Ablesesteuerung for LF/MSB/NB/ESA (an ESA may order value delivery, §60 Abs. 1 MsbG); `/complete`, `/cancel`, `/fail` (Ablesehindernis); auto-creates `INSRPT_STOERUNG` on INSRPT PID 23001 (WiM Störungsmeldung) |
 | § 60 MsbG confirmations | Every stored ESTIMATED/SUBSTITUTED interval opens an obligation in `estimated_read_confirmations`; auto-discharged when a MEASURED/CORRECTED value for the slot arrives (ingest or correction path). Daily worker (`[confirmation]`, default on, `deadline_weeks = 8` — aligned with the MaBiS BKA correction window, no statute fixes a number) escalates stale ones to UEBERFAELLIG and emits `de.edmd.reading.confirmation.overdue`; `GET /api/v1/confirmations?status=` lists them |
 | §40 compliance | `GET /api/v1/compliance/jahresablesung/{year}` — only `AUSGEFUEHRT` discharges the annual-reading obligation |
-| REST API | `GET /api/v1/deliveries/{malo_id}` → `Vec<Energiemenge>` · `GET /api/v1/lastgang/{malo_id}` · `GET /api/v1/zeitreihe/{malo_id}` · `GET /api/v1/billing-period/{malo_id}` · `GET /api/v1/imbalance/{malo_id}/{year}/{month}` · `GET /api/v1/netzverlust?from=&to=` (§22 EnWG indicative grid-loss balance) |
+| REST API | `GET /api/v1/deliveries/{malo_id}` → `Vec<Energiemenge>` · `GET /api/v1/lastgang/{malo_id}` · `GET /api/v1/zeitreihe/{malo_id}` · `GET /api/v1/billing-period/{malo_id}` · `GET /api/v1/imbalance/{malo_id}/{year}/{month}` · `GET /api/v1/netzverlust?from=&to=` (§22 EnWG indicative grid-loss balance) · `GET /api/v1/esa/typ2/{malo_id}` (ESA Typ-2 store — never billing) |
 | Arrow IPC | `Accept: application/vnd.apache.arrow.stream` on `GET /api/v1/lastgang` + `GET /api/v1/zeitreihe` — 10–50× throughput vs JSON for bulk reads |
 | Archive OLAP | `GET /api/v1/archive/status` · `GET /api/v1/archive/olap/{malo_id}` · `GET /api/v1/archive/portfolio` · `GET /api/v1/archive/timeseries/{malo_id}` · `POST /api/v1/query/sql` (DataFusion) |
 | Iceberg REST | `GET /api/v1/iceberg/v1/...` — Iceberg REST catalog for DuckDB/Snowflake/Databricks direct attach |
@@ -219,7 +220,8 @@ designed for a fresh install, so no incremental migration state is maintained.
 
 | Area | Tables |
 |---|---|
-| Metered data | `meter_reads` (range-partitioned monthly on `dtm_from`) · `meter_data_receipts` · `meter_billing_periods` |
+| Metered data (authoritative / Typ-1) | `meter_reads` (range-partitioned monthly on `dtm_from`) · `meter_data_receipts` · `meter_billing_periods` |
+| ESA Typ-2 (non-authoritative) | `esa_typ2_reads` — separate store, no billing reach, no correction/substitution/aggregation machinery |
 | Corrections & substitution | `meter_read_corrections` · `substitute_value_log` |
 | Quality | `quality_assessments` |
 | Reading orders | `ablese_auftraege` |

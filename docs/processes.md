@@ -496,7 +496,6 @@ on a 55040 Bestätigung.
 | Process | Sender → Empfänger | INVOIC PID | Content | Crate |
 |---|---|---|---|---|
 | MSB-Rechnung | MSB → LF | INVOIC **31009** | Messstellenbetriebsabrechnung | `mako-wim` ✅ |
-| Stornierung WiM | ESA → MSB | ORDCHG **39002** | Storno Bestellung von Werten | `mako-wim` ✅ |
 
 ### Technik-Änderung und Gerätekonfiguration
 
@@ -507,16 +506,70 @@ Teil 1 and AWH Änderung Technik (BK6-24-174). APERAK Frist: **5 Werktage**.
 
 | Process | Initiator → Responder | ORDERS PID | Antwort | Crate |
 |---|---|---|---|---|
-| Beauftragung Änderung Technik (Gas / MeLo) | LF → MSB | **17003** | ORDRSP 19005/19006 | `mako-wim` ✅ |
-| Bestellung Werte ESA | LF/NB → MSB | **17007** | ORDRSP 19011/19012 | `mako-wim` ✅ |
-| Abbestellung Werte ESA | ESA → MSB | **17008** | ORDRSP 19007 (Ablehnung) | `mako-wim` ✅ |
-| Konfigurationsänderung (MSB → MSB) | MSB → MSB | **17118** | ORDRSP 19003/19004 | `mako-wim` ✅ |
+| Änderung der Technik (Messlokationsänderung Strom) | LF → MSB | **17011** | ORDRSP 19005/19006 | `mako-wim` ✅ |
+| Konfigurationsänderung | MSB → MSB | **17118** | ORDRSP 19003/19004 | `mako-wim` ✅ |
+| Bestellung Änderung (GPKE Teil 3) | NB → MSB | **17121** | ORDRSP 19003/19004 | `mako-wim` ✅ |
 
 
 > **ORDRSP semantics:** 19005 = Auftragsbestätigung Änderung Technik · 19006 = Ablehnung ·
-> 19011 = Bestätigung Ab-/Bestellung Werte ESA · 19012 = Ablehnung ·
-> 19007 = Ablehnung Anforderung Messwerte · 19003 = Fortführungsbestätigung (MSB→MSB) ·
-> 19004 = Ablehnung Fortführung. All ORDRSP 19003–19012 route to `wim-technik-aenderung`.
+> 19003 = Fortführungsbestätigung · 19004 = Ablehnung Fortführung ·
+> 19007 = Ablehnung Anforderung Messwerte. ORDRSP 19003–19007 route to
+> `wim-technik-aenderung`. The ESA Ab-/Bestellung answers (ORDRSP 19011–19014)
+> belong to the ESA Wertebestellung below, **not** here.
+
+### ESA Wertebestellung (WiM Strom Teil 2, Kap. 4)
+
+**Workflows:** `wim-wertebestellung` (MSB side), `esa-wertebestellung` (ESA side).
+
+An Energieserviceanbieter (ESA) subscribes to a Marktlokation's metered values
+from the Messstellenbetreiber. §34 Abs. 2 S. 2 Nr. 10 MsbG makes serving an ESA a
+mandatory Zusatzleistung. The whole exchange — Anfrage, Angebot, Bestellung,
+delivery, and either cancellation path — is **one correlated process on each
+side**, not a bag of independent messages.
+
+| Step | Message | Direction | Antwort | Frist |
+|---|---|---|---|---|
+| Werteanfrage (UC 4.1 Nr. 1) | REQOTE **35002** | ESA → MSB | QUOTES 15003 | 5 WT |
+| Angebot / Ablehnung (UC 4.1 Nr. 2) | QUOTES **15003** | MSB → ESA | — | Bindungsfrist |
+| Bestellung (UC 4.1 Nr. 3) | ORDERS **17007** | ESA → MSB | ORDRSP 19011/19012 | 2 WT |
+| Wertelieferung (UC 4.2) | MSCONS **13027** | MSB → ESA | — | §60 Abs. 1 MsbG, daily |
+| Stornierung (UC 4.1 Nr. 5) | ORDCHG **39002** | ESA → MSB | ORDRSP 19013/19014 | 2 WT |
+| Abbestellung (UC 4.3 Nr. 1) | ORDERS **17008** | ESA → MSB | ORDRSP 19011 | 2 WT |
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant ESA as ESA · esa-wertebestellung
+    participant MSB as MSB · wim-wertebestellung
+    ESA->>MSB: REQOTE 35002 Werteanfrage (LOC = MaLo)
+    MSB-->>ESA: QUOTES 15003 Angebot · DTM+273 Bindungsfrist
+    Note over ESA,MSB: 5 WT · no Bindungsfrist ⇒ Ablehnung der Anfrage
+    ESA->>MSB: ORDERS 17007 Bestellung (within Bindungsfrist)
+    MSB-->>ESA: ORDRSP 19011 Bestätigung / 19012 Ablehnung
+    Note over ESA,MSB: 2 WT · ORDRSP carries no LOC ⇒ correlate by RFF+ACW
+    loop §60 Abs. 1 MsbG · daily
+        MSB-->>ESA: MSCONS 13027 Werte nach Typ 2
+    end
+    alt Stornierung before first delivery
+        ESA->>MSB: ORDCHG 39002 Storno · RFF+ON = Bestellung
+        MSB-->>ESA: ORDRSP 19013 / 19014
+    else Abbestellung during delivery
+        ESA->>MSB: ORDERS 17008 Abbestellung
+        MSB-->>ESA: ORDRSP 19011
+    end
+```
+
+**Correlation.** REQOTE, QUOTES and ORDERS carry a `LOC` (the MaLo). The
+MIG-conformant ORDRSP and ORDCHG carry **none** — they are correlated to the
+running process by the order reference each echoes: an answer references the order
+it answers in `RFF+ACW`, and the 39002 Stornierung references the original
+Bestellung in `RFF+ON`. REQOTE 35002 is shared with the Preisanfrage catalog; the
+sender's registered ESA role (or a `PIA` Messprodukt marker) selects the
+Wertebestellung. The 39002 Stornierung is part of this subscription lifecycle,
+not a standalone process. See the
+[makod ESA counterparties guide](./makod.md#esa-counterparties) for the consent
+gate (§49 Abs. 2 Nr. 9 MsbG / GDPR Art. 7) and the loopback command surface.
+
 ### Preisanfrage, Angebote und Preislisten
 
 Allows market participants to request and receive price offers (REQOTE/QUOTES)
@@ -528,8 +581,8 @@ or configuration change. **Workflow:** `wim-preisanfrage` / `wim-preisliste`.
 | Process | Initiator → Responder | PID | Crate |
 |---|---|---|---|
 | Anfrage Geräteübernahmeangebot | MSBN → MSBA | REQOTE **35001** | `mako-wim` ✅ |
-| Anfrage Rechnungsabwicklung MSB | LF → MSB | REQOTE **35002** | `mako-wim` ✅ |
-| Anfrage Werte | ESA → MSB | REQOTE **35003** | `mako-wim` ✅ |
+| Anfrage (shared with the ESA Werteanfrage, see above) | LF / **ESA** → MSB | REQOTE **35002** | `mako-wim` ✅ |
+| Anfrage von Werten für Rechnungsabwicklung | LF → MSB | REQOTE **35003** | `mako-wim` ✅ |
 | Anfrage Konfigurationsangebot | NB/LF → MSB | REQOTE **35004** | `mako-wim` ✅ |
 | Anfrage Angebot Änderung Technik | NB/LF → MSB | REQOTE **35005** | `mako-wim` ✅ |
 | Angebot Geräteübernahme | MSBA → MSBN | QUOTES **15001** | `mako-wim` ✅ |

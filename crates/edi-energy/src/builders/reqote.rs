@@ -20,6 +20,11 @@ struct ReqoteBuilderInner {
     document_code: Option<String>,
     document_id: Option<String>,
     document_date: Option<String>,
+    location: Option<String>,
+    // Additive ESA-Werteanfrage (PID 35002) content — only emitted when set.
+    reference: Option<(String, String)>,
+    contact: Option<(String, String)>,
+    line_item: bool,
 }
 
 /// Fluent builder for `REQOTE` (Request for Quotation) messages.
@@ -68,6 +73,10 @@ impl ReqoteBuilder<Unset, Unset> {
                 document_code: None,
                 document_id: None,
                 document_date: None,
+                location: None,
+                reference: None,
+                contact: None,
+                line_item: false,
             },
         }
     }
@@ -134,6 +143,33 @@ impl<S, R> ReqoteBuilder<S, R> {
         self
     }
 
+    /// Set the location (MaLo-ID / ZPB / NeLo-ID) the request addresses.
+    ///
+    /// Emits `LOC+172+<id>`. The ESA Werteanfrage (`WiM` Teil 2 UC 4.1 Nr. 1)
+    /// names the location the values are requested for.
+    pub fn location(mut self, id: impl Into<String>) -> Self {
+        self.inner.location = Some(id.into());
+        self
+    }
+
+    /// Add an SG1 reference `RFF+<qual>:<value>` (REQOTE `1153 ∈ {Z13,AGO,AEP,AGK}`).
+    pub fn reference(mut self, qualifier: impl Into<String>, value: impl Into<String>) -> Self {
+        self.inner.reference = Some((qualifier.into(), value.into()));
+        self
+    }
+
+    /// Set the SG14 contact — emits `CTA+IC+:<name>` and `COM+<comm>:EM`.
+    pub fn contact(mut self, name: impl Into<String>, comm: impl Into<String>) -> Self {
+        self.inner.contact = Some((name.into(), comm.into()));
+        self
+    }
+
+    /// Emit a `LIN+1` line item (SG27) — the AHB requires one for PID 35002.
+    pub fn line_item(mut self) -> Self {
+        self.inner.line_item = true;
+        self
+    }
+
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let dtm_val = self
             .inner
@@ -154,6 +190,11 @@ impl<S, R> ReqoteBuilder<S, R> {
         );
         emit_seg!(w, "BGM", code, doc_id);
         emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
+        // ── SG1: reference (RFF+Z13 = Prüfidentifikator) ─────────────────────
+        if let Some((q, v)) = &self.inner.reference {
+            emit_comp!(w, "RFF", [q, v]);
+        }
+        // ── SG11: parties ────────────────────────────────────────────────────
         if let Some(id) = &self.inner.sender_id {
             emit_comp!(
                 w,
@@ -169,6 +210,18 @@ impl<S, R> ReqoteBuilder<S, R> {
                 ["MR"],
                 [id, "", self.inner.receiver_agency.as_str()]
             );
+        }
+        // ── SG14: contact — before LOC per the REQOTE segment order ──────────
+        if let Some((name, comm)) = &self.inner.contact {
+            emit_comp!(w, "CTA", ["IC"], ["", name]);
+            emit_comp!(w, "COM", [comm, "EM"]);
+        }
+        if let Some(loc) = &self.inner.location {
+            emit_seg!(w, "LOC", "172", loc);
+        }
+        // ── SG27: line item ──────────────────────────────────────────────────
+        if self.inner.line_item {
+            emit_seg!(w, "LIN", "1");
         }
         w.finish_unt(&self.inner.message_ref)
             .map_err(Error::Parse)?;

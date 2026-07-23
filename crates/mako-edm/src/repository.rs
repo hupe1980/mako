@@ -6,7 +6,7 @@ use time::Date;
 use crate::{
     domain::{
         BillingPeriodQuery, ImbalanceReport, MeterBillingPeriod, MeterDataReceipt, MeterRead,
-        TimeSeriesQuery,
+        TimeSeriesQuery, Typ2Read,
     },
     error::EdmError,
 };
@@ -118,4 +118,28 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
         &self,
         records: &[crate::domain::CorrectionRecord],
     ) -> Result<Vec<uuid::Uuid>, EdmError>;
+}
+
+/// Persistent store for **ESA "Werte nach Typ 2"** intervals (MSCONS PID 13027).
+///
+/// A deliberately separate trait and table (`esa_typ2_reads`) from
+/// [`TimeSeriesRepository`]. Typ-2 data is non-authoritative (Codeliste 1.4
+/// Kap. 4.6; WiM Strom Teil 2 §4) and must never reach a billing path — so it
+/// shares *no* read method with the billing store. There is no `imbalance`,
+/// `billing_period`, `latest_read`, `store_corrections` or substitute-value
+/// method here **by design**: a Typ-2 value can only be stored and read back
+/// verbatim, never aggregated for invoicing.
+pub trait Typ2Repository: Send + Sync + 'static {
+    /// Upsert a batch of ESA Typ-2 intervals.
+    ///
+    /// Idempotent on `(tenant, malo_id, dtm_from, obis_code_norm)`: a
+    /// re-delivery overwrites the prior value. There is no correction audit
+    /// trail — a Typ-2 value carries no legal reconciliation obligation.
+    async fn store_typ2_reads(&self, reads: &[Typ2Read]) -> Result<(), EdmError>;
+
+    /// Read ESA Typ-2 intervals for a MaLo over a time window.
+    ///
+    /// The *only* read path. It is not — and must never become — reachable from
+    /// any billing aggregation.
+    async fn query_typ2(&self, q: &TimeSeriesQuery) -> Result<Vec<Typ2Read>, EdmError>;
 }

@@ -21,7 +21,7 @@
 //! ESA ◀─ORDRSP 19013 / 19014─────────── 2 WT nach ÜT der Stornierung ── MSB
 //!
 //! (once delivery is running)
-//! ESA ──ORDERS 17007 Abbestellung─────────────────────────────────────▶ MSB
+//! ESA ──ORDERS 17008 Abbestellung─────────────────────────────────────▶ MSB
 //! ESA ◀─ORDRSP 19011 / 19012──────────── 2 WT nach ÜT der Abbestellung ─ MSB
 //! ```
 //!
@@ -50,6 +50,7 @@ use mako_engine::{
     error::WorkflowError,
     fristen::{HolidayCalendar, deadline_at_werktage},
     ids::DeadlineId,
+    outbox::PendingOutbox,
     types::{MarktpartnerCode, MessageRef, Pruefidentifikator},
     workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
@@ -70,12 +71,15 @@ pub const ANFRAGE_PID: u32 = 35002;
 /// QUOTES — "Angebot zur Anfrage von Werten für ESA" (MSB → ESA), UC 4.1 Nr. 2.
 pub const ANGEBOT_PID: u32 = 15003;
 
-/// ORDERS — "Bestellung und Abbestellung von Werten ESA" (ESA → MSB).
-///
-/// One PID carries both UC 4.1 Nr. 3 (Bestellung) and UC 4.3 Nr. 1
-/// (Abbestellung); [`WertebestellungCommand`] keeps them apart, since they are
-/// admissible at different points in the lifecycle.
+/// ORDERS — "Bestellung von Werten ESA" (ESA → MSB), UC 4.1 Nr. 3.
 pub const BESTELLUNG_PID: u32 = 17007;
+
+/// ORDERS — "Abbestellung von Werten ESA" (ESA → MSB), UC 4.3 Nr. 1.
+///
+/// Distinct from [`BESTELLUNG_PID`]: 17007 orders a delivery, 17008 ends a
+/// running one. Both are ORDERS; the Prüfidentifikator in BGM DE 1004 tells
+/// them apart.
+pub const ABBESTELLUNG_PID: u32 = 17008;
 
 /// ORDCHG — "Stornierung der Bestellung von Werten" (ESA → MSB), UC 4.1 Nr. 5.
 pub const STORNIERUNG_PID: u32 = 39002;
@@ -92,8 +96,19 @@ pub const STORNO_BESTAETIGUNG_PID: u32 = 19013;
 /// ORDRSP — "Ablehnung der Stornierung einer Bestellung für ESA" (MSB → ESA).
 pub const STORNO_ABLEHNUNG_PID: u32 = 19014;
 
+/// MSCONS — "Werte nach Typ 2" (MSB → ESA), UC 4.2. The MSB's delivery duty
+/// under §60 Abs. 1 MsbG: it transmits the ordered values to the ESA, daily by
+/// 09:30. These values are non-authoritative (no billing bearing) and land in
+/// the ESA deployment's separate Typ-2 store (`esa_typ2_reads`).
+pub const WERTE_UEBERMITTLUNG_PID: u32 = 13027;
+
 /// Every PID this workflow accepts inbound (ESA → MSB).
-pub const INBOUND_PIDS: &[u32] = &[ANFRAGE_PID, BESTELLUNG_PID, STORNIERUNG_PID];
+pub const INBOUND_PIDS: &[u32] = &[
+    ANFRAGE_PID,
+    BESTELLUNG_PID,
+    ABBESTELLUNG_PID,
+    STORNIERUNG_PID,
+];
 
 /// PIDs an **ESA-role** deployment receives inbound (MSB → ESA).
 ///
@@ -305,6 +320,17 @@ pub enum WertebestellungEvent {
         /// Trigger (loss of Zuordnung, contract end, technical reason).
         reason: String,
     },
+    /// UC 4.2 — a Typ-2 value delivery (MSCONS 13027) was sent to the ESA.
+    ///
+    /// Emitted once per transmission: the §60 Abs. 1 MsbG delivery duty leaves an
+    /// auditable record of each daily Übermittlung. The first one also closes
+    /// the Stornierung window (delivery has begun).
+    WerteUebermittelt {
+        /// Reference of the outbound MSCONS.
+        message_ref: MessageRef,
+        /// Number of interval values transmitted.
+        interval_count: u32,
+    },
     /// First values delivered; the Stornierung window closes (UC 4.3 Vorbedingung).
     LieferungBegonnen,
     /// A regulatory window elapsed without the required answer.
@@ -328,6 +354,7 @@ impl EventPayload for WertebestellungEvent {
             Self::StornierungAbgelehnt { .. } => "WertebestellungStornierungAbgelehnt",
             Self::AbbestellungEingegangen { .. } => "WertebestellungAbbestellungEingegangen",
             Self::AbbestellungBestaetigt { .. } => "WertebestellungAbbestellungBestaetigt",
+            Self::WerteUebermittelt { .. } => "WertebestellungWerteUebermittelt",
             Self::LieferungBegonnen => "WertebestellungLieferungBegonnen",
             Self::BeendetDurchMsb { .. } => "WertebestellungBeendetDurchMsb",
             Self::FristVersaeumt { .. } => "WertebestellungFristVersaeumt",
@@ -349,6 +376,11 @@ pub struct WertebestellungData {
     pub ebene: Lokationsebene,
     /// MaLo-ID, ZPB or NeLo-ID.
     pub lokations_id: String,
+    /// Belegnummer of the most recent inbound ORDERS/ORDCHG. The ORDRSP answer
+    /// echoes it in `RFF+ACW` so the ESA can correlate the answer — an ORDRSP
+    /// carries no LOC, so the MaLo is not available for correlation.
+    #[serde(default)]
+    pub inbound_order_ref: Option<String>,
 }
 
 /// State of an ESA Wertebestellung process.
@@ -484,6 +516,12 @@ pub enum WertebestellungCommand {
         message_ref: MessageRef,
         /// AS4 acknowledgement of the inbound message.
         quittung: Zustellquittung,
+        /// Consent-registry gate, checked at the makod ingest boundary. `Some`
+        /// carries the Begründung of a blocked delivery (revoked consent or an
+        /// unestablished framework agreement) — the Anfrage is answered with a
+        /// QUOTES 15003 Ablehnung instead of proceeding. `None` allows it (an
+        /// active consent, self-assertion, or no gate configured).
+        consent_block: Option<String>,
     },
     /// UC 4.1 Nr. 2 — send QUOTES 15003 with a Bindungsfrist.
     SendAngebot {
@@ -505,6 +543,11 @@ pub enum WertebestellungCommand {
         message_ref: MessageRef,
         /// AS4 acknowledgement of the inbound message.
         quittung: Zustellquittung,
+        /// Consent-registry gate re-checked at ingest — consent can be revoked
+        /// between the Angebot and the Bestellung. `Some` carries the Begründung
+        /// of a blocked order, answered with an ORDRSP 19012 Ablehnung; `None`
+        /// allows it.
+        consent_block: Option<String>,
     },
     /// UC 4.1 Nr. 4 — answer the Bestellung.
     AnswerBestellung {
@@ -549,6 +592,21 @@ pub enum WertebestellungCommand {
         /// Reference of the outbound ORDRSP 19011.
         message_ref: MessageRef,
     },
+    /// UC 4.2 — deliver Typ-2 values to the ESA (outbound MSCONS 13027).
+    ///
+    /// Admissible only once delivery is authorised ([`WertebestellungState::lieferung_erlaubt`]),
+    /// which is the §60 Abs. 1 MsbG guard: the MSB must hold a confirmed
+    /// Bestellung before it may transmit — so it cannot accept an order it
+    /// cannot fulfil, nor deliver without one.
+    LiefereWerte {
+        /// Reference of the outbound MSCONS.
+        message_ref: MessageRef,
+        /// Interval values to transmit — a JSON array of
+        /// `{ dtm_from, dtm_to, quantity_kwh, obis_code, ersatzwert? }`. Passed
+        /// through verbatim into the MSCONS render intent; the workflow only
+        /// gates and addresses it.
+        reads: serde_json::Value,
+    },
     /// Mark the first values as delivered, closing the Stornierung window.
     ///
     /// UC 4.3 Vorbedingung: an Abbestellung presupposes that *"eine Stornierung
@@ -578,6 +636,11 @@ impl CommandPayload for WertebestellungCommand {}
 
 /// ESA Wertebestellung workflow (WiM Strom Teil 2, Kapitel 4).
 pub struct WimWertebestellungWorkflow;
+
+/// Format a datetime as `CCYYMMDD` for a DTM segment value (format code 102).
+fn ccyymmdd(dt: OffsetDateTime) -> String {
+    format!("{:04}{:02}{:02}", dt.year(), u8::from(dt.month()), dt.day())
+}
 
 fn require_pid(pid: Pruefidentifikator, expected: u32, what: &str) -> Result<(), WorkflowError> {
     if pid.as_u32() == expected {
@@ -609,6 +672,7 @@ impl Workflow for WimWertebestellungWorkflow {
                 msb: msb.clone(),
                 ebene: *ebene,
                 lokations_id: lokations_id.clone(),
+                inbound_order_ref: None,
             })),
             E::AngebotAbgegeben { bindungsfrist, .. } => match state {
                 S::AnfrageEingegangen(data) => S::AngebotAbgegeben {
@@ -620,8 +684,11 @@ impl Workflow for WimWertebestellungWorkflow {
             E::AnfrageAbgelehnt { reason } | E::BestellungAbgelehnt { reason } => S::Abgelehnt {
                 reason: reason.clone(),
             },
-            E::BestellungEingegangen { .. } => match state {
-                S::AngebotAbgegeben { data, .. } => S::BestellungEingegangen(data),
+            E::BestellungEingegangen { message_ref, .. } => match state {
+                S::AngebotAbgegeben { mut data, .. } => {
+                    data.inbound_order_ref = Some(message_ref.as_str().to_owned());
+                    S::BestellungEingegangen(data)
+                }
                 other => other,
             },
             E::BestellungBestaetigt { .. } => match state {
@@ -631,8 +698,11 @@ impl Workflow for WimWertebestellungWorkflow {
                 },
                 other => other,
             },
-            E::StornierungEingegangen { .. } => match state {
-                S::BestellungBestaetigt { data, .. } => S::StornierungEingegangen(data),
+            E::StornierungEingegangen { message_ref, .. } => match state {
+                S::BestellungBestaetigt { mut data, .. } => {
+                    data.inbound_order_ref = Some(message_ref.as_str().to_owned());
+                    S::StornierungEingegangen(data)
+                }
                 other => other,
             },
             E::StornierungBestaetigt { .. } => match state {
@@ -647,11 +717,18 @@ impl Workflow for WimWertebestellungWorkflow {
                 },
                 other => other,
             },
-            E::AbbestellungEingegangen { beendigung_zum, .. } => match state {
-                S::BestellungBestaetigt { data, .. } => S::AbbestellungEingegangen {
-                    data,
-                    beendigung_zum: *beendigung_zum,
-                },
+            E::AbbestellungEingegangen {
+                beendigung_zum,
+                message_ref,
+                ..
+            } => match state {
+                S::BestellungBestaetigt { mut data, .. } => {
+                    data.inbound_order_ref = Some(message_ref.as_str().to_owned());
+                    S::AbbestellungEingegangen {
+                        data,
+                        beendigung_zum: *beendigung_zum,
+                    }
+                }
                 other => other,
             },
             E::AbbestellungBestaetigt { .. } => match state {
@@ -662,6 +739,15 @@ impl Workflow for WimWertebestellungWorkflow {
                 other => other,
             },
             E::LieferungBegonnen => match state {
+                S::BestellungBestaetigt { data, .. } => S::BestellungBestaetigt {
+                    data,
+                    lieferung_begonnen: true,
+                },
+                other => other,
+            },
+            // A delivery closes the Stornierung window (first values have gone
+            // out); it never changes the confirmed/winding-down state otherwise.
+            E::WerteUebermittelt { .. } => match state {
                 S::BestellungBestaetigt { data, .. } => S::BestellungBestaetigt {
                     data,
                     lieferung_begonnen: true,
@@ -687,6 +773,32 @@ impl Workflow for WimWertebestellungWorkflow {
         state: &Self::State,
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
+        // Build the outbound render intent that answers the ESA on the wire.
+        // The renderer turns this into QUOTES/ORDRSP with the PID in BGM DE 1004.
+        fn esa_answer(
+            message_type: &'static str,
+            pid: u32,
+            data: &WertebestellungData,
+            message_ref: &MessageRef,
+        ) -> PendingOutbox {
+            PendingOutbox::new(
+                message_type,
+                data.esa.as_str(),
+                serde_json::json!({
+                    "pid": pid,
+                    "sender": data.msb.as_str(),
+                    "receiver": data.esa.as_str(),
+                    "message_ref": message_ref.as_str(),
+                    // Echo the location so the ESA can correlate a QUOTES answer
+                    // (which still carries a LOC) to the process it started.
+                    "location": data.lokations_id,
+                    // Echo the Belegnummer of the order this answers. An ORDRSP
+                    // carries no LOC, so the ESA correlates it via `RFF+ACW`.
+                    "order_reference": data.inbound_order_ref,
+                }),
+            )
+        }
+
         use WertebestellungCommand as C;
         use WertebestellungEvent as E;
         use WertebestellungState as S;
@@ -700,6 +812,7 @@ impl Workflow for WimWertebestellungWorkflow {
                 lokations_id,
                 message_ref,
                 quittung,
+                consent_block,
             } => {
                 if !matches!(state, S::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -710,6 +823,27 @@ impl Workflow for WimWertebestellungWorkflow {
                         "Anfrage auf Ebene {} ohne Lokations-ID",
                         ebene.as_str()
                     )));
+                }
+                // Consent gate (checked at ingest): a revoked consent or an
+                // unestablished framework agreement blocks the Anfrage. Answer
+                // with a QUOTES 15003 Ablehnung built from the command's parties
+                // (state is still New, so there is no `data` to draw from yet).
+                if let Some(reason) = consent_block {
+                    let outbox = PendingOutbox::new(
+                        "QUOTES",
+                        esa.as_str(),
+                        serde_json::json!({
+                            "pid": ANGEBOT_PID,
+                            "sender": msb.as_str(),
+                            "receiver": esa.as_str(),
+                            "message_ref": message_ref.as_str(),
+                            "location": lokations_id,
+                        }),
+                    );
+                    return Ok(WorkflowOutput::with_outbox(
+                        vec![E::AnfrageAbgelehnt { reason }],
+                        vec![outbox],
+                    ));
                 }
                 let due = quittung.frist(ANGEBOT_FRIST_WT)?;
                 Ok(WorkflowOutput {
@@ -730,18 +864,37 @@ impl Workflow for WimWertebestellungWorkflow {
                 message_ref,
                 bindungsfrist,
             } => {
-                if !matches!(state, S::AnfrageEingegangen(_)) {
+                let Some(data) = state
+                    .data()
+                    .filter(|_| matches!(state, S::AnfrageEingegangen(_)))
+                else {
                     return Err(WorkflowError::invalid_state(
                         "AnfrageEingegangen",
                         state.label(),
                     ));
-                }
+                };
+                // The Angebot carries its Bindungsfrist on the wire (DTM+Z12) so
+                // the ESA reads the real offer-validity end rather than a
+                // synthesised default — and so an Angebot is distinguishable
+                // from an Anfrage-Ablehnung (which carries none).
+                let outbox = PendingOutbox::new(
+                    "QUOTES",
+                    data.esa.as_str(),
+                    serde_json::json!({
+                        "pid": ANGEBOT_PID,
+                        "sender": data.msb.as_str(),
+                        "receiver": data.esa.as_str(),
+                        "location": data.lokations_id,
+                        "message_ref": message_ref.as_str(),
+                        "bindungsfrist": ccyymmdd(bindungsfrist),
+                    }),
+                );
                 Ok(WorkflowOutput {
                     events: vec![E::AngebotAbgegeben {
                         message_ref,
                         bindungsfrist,
                     }],
-                    outbox: Vec::new(),
+                    outbox: vec![outbox],
                     // UC 4.1 Nr. 3 bounds the Bestellung by the MSB's own
                     // Bindungsfrist rather than by a fixed Werktage count.
                     deadlines: vec![PendingDeadline::new(BINDUNGSFRIST_LABEL, bindungsfrist)],
@@ -749,19 +902,42 @@ impl Workflow for WimWertebestellungWorkflow {
             }
 
             C::RejectAnfrage { reason } => {
-                if !matches!(state, S::AnfrageEingegangen(_)) {
+                let Some(data) = state
+                    .data()
+                    .filter(|_| matches!(state, S::AnfrageEingegangen(_)))
+                else {
                     return Err(WorkflowError::invalid_state(
                         "AnfrageEingegangen",
                         state.label(),
                     ));
-                }
-                Ok(vec![E::AnfrageAbgelehnt { reason }].into())
+                };
+                // Ablehnung der Anfrage is answered with QUOTES 15003 (the
+                // renderer derives the message reference from the event id).
+                // Ablehnung der Anfrage: QUOTES 15003 with the reason (FTX) and
+                // *no* Bindungsfrist — its absence is what tells the ESA this is
+                // a rejection, not an Angebot.
+                let outbox = PendingOutbox::new(
+                    "QUOTES",
+                    data.esa.as_str(),
+                    serde_json::json!({
+                        "pid": ANGEBOT_PID,
+                        "sender": data.msb.as_str(),
+                        "receiver": data.esa.as_str(),
+                        "location": data.lokations_id,
+                        "reason": reason.clone(),
+                    }),
+                );
+                Ok(WorkflowOutput::with_outbox(
+                    vec![E::AnfrageAbgelehnt { reason }],
+                    vec![outbox],
+                ))
             }
 
             C::ReceiveBestellung {
                 pid,
                 message_ref,
                 quittung,
+                consent_block,
             } => {
                 let S::AngebotAbgegeben { bindungsfrist, .. } = state else {
                     return Err(WorkflowError::invalid_state(
@@ -776,6 +952,19 @@ impl Workflow for WimWertebestellungWorkflow {
                         "Bestellung ging am {} ein, die Bindungsfrist des Angebots endete am {}",
                         quittung.received_at, bindungsfrist
                     )));
+                }
+                // Consent can be revoked between the Angebot and the Bestellung:
+                // re-gate at ingest and answer a blocked order with an ORDRSP
+                // 19012 Ablehnung (the state carries the parties for the wire).
+                if let Some(reason) = consent_block {
+                    let data = state.data().ok_or_else(|| {
+                        WorkflowError::invalid_state("AngebotAbgegeben", state.label())
+                    })?;
+                    let outbox = esa_answer("ORDRSP", ABLEHNUNG_PID, data, &message_ref);
+                    return Ok(WorkflowOutput::with_outbox(
+                        vec![E::BestellungAbgelehnt { reason }],
+                        vec![outbox],
+                    ));
                 }
                 let due = quittung.frist(ANTWORT_FRIST_WT)?;
                 Ok(WorkflowOutput {
@@ -793,24 +982,37 @@ impl Workflow for WimWertebestellungWorkflow {
                 message_ref,
                 reason,
             } => {
-                if !matches!(state, S::BestellungEingegangen(_)) {
+                let Some(data) = state
+                    .data()
+                    .filter(|_| matches!(state, S::BestellungEingegangen(_)))
+                else {
                     return Err(WorkflowError::invalid_state(
                         "BestellungEingegangen",
                         state.label(),
                     ));
-                }
+                };
                 if accept {
-                    Ok(vec![E::BestellungBestaetigt { message_ref }].into())
+                    let outbox = esa_answer("ORDRSP", BESTAETIGUNG_PID, data, &message_ref);
+                    Ok(WorkflowOutput::with_outbox(
+                        vec![E::BestellungBestaetigt { message_ref }],
+                        vec![outbox],
+                    ))
                 } else {
-                    Ok(vec![E::BestellungAbgelehnt {
-                        reason: reason.ok_or_else(|| {
-                            WorkflowError::rejected(
+                    reason.map_or_else(
+                        || {
+                            Err(WorkflowError::rejected(
                                 "Ablehnung der Bestellung erfordert eine Begründung \
                                  (UC 4.1 Nr. 4: \"informiert der MSB den ESA über die Gründe\")",
-                            )
-                        })?,
-                    }]
-                    .into())
+                            ))
+                        },
+                        |reason| {
+                            let outbox = esa_answer("ORDRSP", ABLEHNUNG_PID, data, &message_ref);
+                            Ok(WorkflowOutput::with_outbox(
+                                vec![E::BestellungAbgelehnt { reason }],
+                                vec![outbox],
+                            ))
+                        },
+                    )
                 }
             }
 
@@ -856,23 +1058,37 @@ impl Workflow for WimWertebestellungWorkflow {
                 message_ref,
                 reason,
             } => {
-                if !matches!(state, S::StornierungEingegangen(_)) {
+                let Some(data) = state
+                    .data()
+                    .filter(|_| matches!(state, S::StornierungEingegangen(_)))
+                else {
                     return Err(WorkflowError::invalid_state(
                         "StornierungEingegangen",
                         state.label(),
                     ));
-                }
+                };
                 if accept {
-                    Ok(vec![E::StornierungBestaetigt { message_ref }].into())
+                    let outbox = esa_answer("ORDRSP", STORNO_BESTAETIGUNG_PID, data, &message_ref);
+                    Ok(WorkflowOutput::with_outbox(
+                        vec![E::StornierungBestaetigt { message_ref }],
+                        vec![outbox],
+                    ))
                 } else {
-                    Ok(vec![E::StornierungAbgelehnt {
-                        reason: reason.ok_or_else(|| {
-                            WorkflowError::rejected(
+                    reason.map_or_else(
+                        || {
+                            Err(WorkflowError::rejected(
                                 "Ablehnung der Stornierung erfordert eine Begründung",
-                            )
-                        })?,
-                    }]
-                    .into())
+                            ))
+                        },
+                        |reason| {
+                            let outbox =
+                                esa_answer("ORDRSP", STORNO_ABLEHNUNG_PID, data, &message_ref);
+                            Ok(WorkflowOutput::with_outbox(
+                                vec![E::StornierungAbgelehnt { reason }],
+                                vec![outbox],
+                            ))
+                        },
+                    )
                 }
             }
 
@@ -888,7 +1104,7 @@ impl Workflow for WimWertebestellungWorkflow {
                         state.label(),
                     ));
                 }
-                require_pid(pid, BESTELLUNG_PID, "Abbestellung von Werten")?;
+                require_pid(pid, ABBESTELLUNG_PID, "Abbestellung von Werten")?;
                 let due = quittung.frist(ANTWORT_FRIST_WT)?;
                 Ok(WorkflowOutput {
                     events: vec![E::AbbestellungEingegangen {
@@ -902,13 +1118,60 @@ impl Workflow for WimWertebestellungWorkflow {
             }
 
             C::AnswerAbbestellung { message_ref } => {
-                if !matches!(state, S::AbbestellungEingegangen { .. }) {
+                let Some(data) = state
+                    .data()
+                    .filter(|_| matches!(state, S::AbbestellungEingegangen { .. }))
+                else {
                     return Err(WorkflowError::invalid_state(
                         "AbbestellungEingegangen",
                         state.label(),
                     ));
-                }
-                Ok(vec![E::AbbestellungBestaetigt { message_ref }].into())
+                };
+                let outbox = esa_answer("ORDRSP", BESTAETIGUNG_PID, data, &message_ref);
+                Ok(WorkflowOutput::with_outbox(
+                    vec![E::AbbestellungBestaetigt { message_ref }],
+                    vec![outbox],
+                ))
+            }
+
+            C::LiefereWerte { message_ref, reads } => {
+                // §60 Abs. 1 MsbG delivery duty: the MSB may transmit only once
+                // it holds a confirmed Bestellung. This gate is what stops it
+                // accepting an order it cannot fulfil, and stops delivery
+                // without one.
+                let Some(data) = state.data().filter(|_| state.lieferung_erlaubt()) else {
+                    return Err(WorkflowError::invalid_state(
+                        "BestellungBestaetigt|AbbestellungEingegangen",
+                        state.label(),
+                    ));
+                };
+                let intervals = reads.as_array().filter(|a| !a.is_empty()).ok_or_else(|| {
+                    WorkflowError::rejected(
+                        "Werteübermittlung ohne Intervallwerte — reads muss ein nicht-leeres \
+                         Array sein",
+                    )
+                })?;
+                let interval_count = u32::try_from(intervals.len()).unwrap_or(u32::MAX);
+                // Outbound MSCONS 13027 addressed to the ESA (NAD+MR = ESA).
+                let outbox = PendingOutbox::new(
+                    "MSCONS",
+                    data.esa.as_str(),
+                    serde_json::json!({
+                        "pid": WERTE_UEBERMITTLUNG_PID,
+                        "sender_mp_id": data.msb.as_str(),
+                        "receiver_mp_id": data.esa.as_str(),
+                        "malo_id": data.lokations_id,
+                        "message_ref": message_ref.as_str(),
+                        "reads": reads,
+                    }),
+                );
+                Ok(WorkflowOutput::with_outbox(
+                    vec![E::WerteUebermittelt {
+                        message_ref,
+                        interval_count,
+                    }],
+                    vec![outbox],
+                ))
             }
 
             C::MarkLieferungBegonnen => match state {

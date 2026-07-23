@@ -170,9 +170,10 @@ With neither signal the message stays a Preisanfrage, preserving existing
 routing. The function is parser-free: the caller extracts the `PIA` codes, so
 `mako-wim` keeps no dependency on the EDIFACT reader.
 
-The role signal needs the ESA counterparty GLNs, since a NAD segment carries only
-the party code. Supply them to `makod` with `--esa-partner-glns` (or
-`MAKOD_ESA_PARTNER_GLNS`); without them only the `PIA` marker is active.
+The role signal needs the ESA counterparty market-partner IDs, since a NAD segment
+carries only the party code, not the role. Supply them to `makod` with
+`--esa-partner-mp-ids` (or `MAKOD_ESA_PARTNER_MP_IDS`); without them only the
+`PIA` marker is active.
 
 ### Role-gated registration
 

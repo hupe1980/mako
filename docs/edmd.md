@@ -26,7 +26,7 @@ Key responsibilities:
 - Store MSCONS meter readings (SLP and RLM) via the webhook from `marktd`.
 - Accept **iMSys / SMGW direct push** (15-min intervals in JSON, bypassing EDIFACT) for §41a real-time billing.
 - Run the **Hampel-filter quality scorer** and **V01–V10 validation engine** on all inbound interval data. Emit `de.edmd.reading.quality.warning` CloudEvents for grade C/F data.
-- Schedule and track **reading orders** (Ablesesteuerung) for all three market roles (LF, MSB, NB). Auto-creates `INSRPT_STOERUNG` orders when a WiM INSRPT PID 23001 Störungsmeldung arrives.
+- Schedule and track **reading orders** (Ablesesteuerung) for the market roles LF, MSB, NB and ESA (an ESA may order value delivery under §60 Abs. 1 MsbG). Auto-creates `INSRPT_STOERUNG` orders when a WiM INSRPT PID 23001 Störungsmeldung arrives.
 - Compute and serve **virtual meter time series** (Sum, Residual, PvSelfConsumption, GgvConstantAllocation, GgvProportionalAllocation per §42b EnWG Solarpaket I GGV community solar) on demand.
 - Generate **§ 60 Abs. 2 MsbG annual forecasts** (Jahresprognose — daily-average projection with automatic prior-year **seasonal correction** when the same window one year earlier has data) and **prior-period substitute values** for gap intervals.
 - Provide resampled Lastgang (hourly / daily / monthly / yearly buckets) and monthly Summenzeitreihe for MaBiS.
@@ -59,7 +59,7 @@ graph TB
     edmd["edmd :8380\n(this service)"]
 
     subgraph hot["Hot tier — PostgreSQL"]
-        pg["meter_reads NUMERIC(18,5)\nmeter_billing_periods\nablese_auftraege\ndirect_push_sessions\narchive_batches\ngdpr_deletions"]
+        pg["meter_reads NUMERIC(18,5)\nesa_typ2_reads (Typ-2, non-billing)\nmeter_billing_periods\nablese_auftraege\ndirect_push_sessions\narchive_batches\ngdpr_deletions"]
     end
 
     subgraph cold["Cold tier — S3 / GCS / AzureDLS"]
@@ -302,6 +302,38 @@ linear interpolation with no closing value has no slope to follow. The response
 reports `method_requested` alongside the set of `methods_applied` — a § 60 Abs. 6 MsbG
 audit record naming a method that did not run would be a claim the value does not
 support.
+
+## ESA "Werte nach Typ 2" live in a separate store, unreachable from billing
+
+ESA-delivered values (MSCONS PID **13027**, "Werte nach Typ 2") are
+**non-authoritative**. *Codeliste der Konfigurationen* 1.4 Kap. 4.6 and WiM Strom
+Teil 2 §4 are explicit: these values have *no bearing* on Netznutzungs-,
+Bilanzkreis- or Mehr-/Mindermengenabrechnung, and on any divergence only the
+Kapitel-2 (Typ-1) values are relevant.
+
+`edmd` enforces this as a **schema decision, not a runtime filter**. Typ-2 values
+land in their own table, `esa_typ2_reads`, and never in `meter_reads`:
+
+- **The ingest forks at the source.** edmd still *subscribes to* 13027 (it must
+  receive the values), but on a 13027 delivery the handler forks on
+  `ESA_TYP2_PIDS`, routes to `Typ2Repository::store_typ2_reads`, and returns — it
+  never reaches the `meter_reads` upsert, validation, or substitution paths.
+- **The billing read paths are structurally blind.** Every billing consumer
+  (`billingd`, `netzbilanzd`, `mabis-syncd`, `invoicd`) reads values through
+  edmd endpoints that aggregate `meter_reads` only. There is no `source`/`pid`
+  discriminator on the billing store that could leak a Typ-2 row by omission,
+  because the row is not there at all.
+- **No billing machinery hangs off the Typ-2 store.** `esa_typ2_reads` has no
+  `meter_billing_periods` aggregation, no `meter_read_corrections` audit, no
+  `substitute_value_log`, no `allocation_version`, and no Iceberg archival. A
+  Typ-2 value is stored as delivered and read back verbatim via
+  `GET /api/v1/esa/typ2/{malo_id}`; it is never reconciled against, corrected,
+  or substituted for a Typ-1 value.
+
+The separation is guarded by `schema_code_guard` tests (the table must exist, and
+13027 must be in `ESA_TYP2_PIDS` so the handler forks it) and by a real-Postgres
+test proving a 13027 delivery lands in `esa_typ2_reads` with `meter_reads`
+untouched.
 
 ## `meter_reads` is partitioned, and retention actually reclaims disk
 
@@ -1608,6 +1640,7 @@ with open('reads.arrows', 'rb') as f:
 |---|---|---|
 | `GET /api/v1/lastgang/{malo_id}` | BO4E `Lastgang` | ✓ |
 | `GET /api/v1/zeitreihe/{malo_id}` | BO4E `Zeitreihe` | ✓ |
+| `GET /api/v1/esa/typ2/{malo_id}` | ESA Typ-2 values (`esa_typ2_reads`) — non-authoritative, never billing | — |
 
 **Arrow schema** (per response row):
 

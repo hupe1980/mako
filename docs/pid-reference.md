@@ -399,7 +399,8 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 17004 | Anforderung von Werten | WiM Strom Teil 2 / GeLi Gas 2.0 | NB → MSB · MSB → MSB · LF → MSB | — | ✅ | ✅ | ✅ | ✅ | — |
 | 17005 | Bestellung Angebot Rechnungsabwicklung Messstellenbetrieb | WiM Strom Teil 1 | LF → MSB | — | ✅ | — | ✅ | ✅ | — |
 | 17006 | Beendigung Rechnungsabwicklung MSB über LF | WiM Strom Teil 1 | MSB → LF · LF → MSB | — | ✅ | — | ✅ | ✅ | — |
-| 17007 | Bestellung und Abbestellung von Werten ESA | WiM Strom Teil 2 Kap. 4 | ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-wertebestellung` |
+| 17007 | Bestellung von Werten ESA | WiM Strom Teil 2 Kap. 4 | ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-wertebestellung` (MSB inbound) / `esa-wertebestellung` (ESA outbound) |
+| 17008 | Abbestellung von Werten ESA | WiM Strom Teil 2 Kap. 4 | ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-wertebestellung` (MSB inbound) / `esa-wertebestellung` (ESA outbound) |
 | 17009 | Ankündigung Gerätewechselabsicht | WiM Gas / WiM Strom Teil 1 | MSBN → MSBA | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme` |
 | 17011 | Beauftragung zur Änderung der Technik (Messlokationsänderung Strom) | WiM Strom Teil 1 | NB → MSB · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-technik-aenderung` |
 | 17101 | Anfrage Stammdaten Marktlokation (Gas) | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | — |
@@ -454,8 +455,8 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 19010 | Ablehnung Beendigung Rechnungsabwicklung MSB | WiM Strom Teil 1 | LF → MSB · MSB → LF | — | ✅ | — | ✅ | ✅ | — |
 | 19011 | Bestätigung der Ab-/Bestellung von Werten für ESA | WiM Strom Teil 2 Kap. 4 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-wertebestellung` |
 | 19012 | Ablehnung der Ab-/Bestellung von Werten für ESA | WiM Strom Teil 2 Kap. 4 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-wertebestellung` |
-| 19013 | Bestätigung der Stornierung einer Bestellung | WiM Strom Teil 2 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-stornierung` |
-| 19014 | Ablehnung der Stornierung einer Bestellung | WiM Strom Teil 2 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-stornierung` |
+| 19013 | Bestätigung der Stornierung einer Bestellung | WiM Strom Teil 2 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-wertebestellung` |
+| 19014 | Ablehnung der Stornierung einer Bestellung | WiM Strom Teil 2 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-wertebestellung` |
 | 19015 | Bestätigung Gerätewechselabsicht | WiM Gas / WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme` |
 | 19016 | Ablehnung Gerätewechselabsicht | WiM Gas / WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme` |
 | 19101 | Ablehnung der Anfrage  Stammdaten | GPKE Teil 4 / GeLi Gas 2.0 | NB → MSB · NB → LF | 17101 | ✅ | ✅ | ✅ | ✅ | — |
@@ -490,7 +491,7 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
 | 39000 | Stornierung Sperr-/Entsperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | LF → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung` (inbound NB-role) · `mako-gpke` `gpke-sperrung-lf` (outbound LF-role) |
 | 39001 | Weiterleitung der Stornierung | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → MSB | — | ✅ | ✅ | ✅ | ✅ | — |
-| 39002 | Stornierung der Bestellung | WiM Strom Teil 2 | ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-stornierung` |
+| 39002 | Stornierung der Bestellung | WiM Strom Teil 2 | ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-wertebestellung` |
 
 ## IFTSTA AHB
 
@@ -611,8 +612,8 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
 | 35001 | Anfrage Geräteübernahmeangebot | WiM Gas / WiM Strom Teil 1 | MSBN → MSBA | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-preisanfrage` (Strom 5WT) · Gas-only deployment: `mako-wim-gas` `wim-gas-preisanfrage` (10WT) |
-| 35002 | Anfrage Rechnungsabwicklung MSB über LF | WiM Strom Teil 1 | LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
-| 35003 | Anfrage von Werten | WiM Strom Teil 2 | ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
+| 35002 | Anfrage (shared: Preisanfrage **and** ESA Werteanfrage) | WiM Strom Teil 1 / Teil 2 | LF → MSB · **ESA → MSB** | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage`; an ESA sender (WiM Teil 2 UC 4.1 Nr. 1) reclassifies to `wim-wertebestellung` |
+| 35003 | Anfrage von Werten für Rechnungsabwicklung | WiM Strom Teil 1 | LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
 | 35004 | Anfrage einer Konfiguration | GPKE Teil 3 | NB → MSB · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
 | 35005 | Anfrage Angebot Änderung Technik | AWH Änd. Technik | NB → MSB · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
 

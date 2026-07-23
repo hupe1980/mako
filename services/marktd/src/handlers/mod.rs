@@ -10,6 +10,7 @@ pub mod contract;
 pub mod correlation;
 pub mod device;
 pub mod dlq;
+pub mod einwilligung;
 pub mod event_ingest;
 pub mod event_log;
 pub mod health;

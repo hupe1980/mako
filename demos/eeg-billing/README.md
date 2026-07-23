@@ -111,7 +111,7 @@ The `einsd` service supports 9 EEG/KWKG settlement schemes. To test other models
 |---|---|---|
 | §21 fixed tariff | `FEED_IN_TARIFF` | Small solar, wind ≤750 kW |
 | §20 Direktvermarktung | `MARKET_PREMIUM` | Plants > threshold MW |
-| §38a Mieterstrom | `TENANT_ELECTRICITY` | Building community solar |
+| Mieterstromzuschlag (§21 Abs. 3 EEG 2023, rate per §48a) | `TENANT_ELECTRICITY` | Building community solar |
 | Post-EEG Spot | `POST_EEG` | Plants after 20-year Förderung |
 | KWK-Zuschlag | `KWK_SURCHARGE` | Combined heat & power (KWKG) |
 | §50 Flexibilitätsprämie | `FLEXIBILITY_PREMIUM` | Biomass demand response |

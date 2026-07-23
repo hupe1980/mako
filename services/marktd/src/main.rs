@@ -36,6 +36,10 @@ use marktd::{
             put_zaehler, put_zaehler_register, put_zaehler_saison,
         },
         dlq::{delete_dlq_entry, list_dlq, retry_dlq_entry},
+        einwilligung::{
+            consent_check, get_einwilligung, get_framework, grant_einwilligung,
+            list_einwilligungen, put_framework, revoke_einwilligung,
+        },
         event_ingest::{InboundWebhookSecret, ingest_event},
         event_log::list_event_log,
         health::{health, health_ready},
@@ -64,7 +68,7 @@ use marktd::{
     },
     openapi::swagger_ui,
     pg::{
-        PgContractRepository, PgCorrelationIndex, PgDeviceRepository,
+        PgContractRepository, PgCorrelationIndex, PgDeviceRepository, PgEinwilligungRepository,
         PgLokationszuordnungRepository, PgMaloGridRepository, PgMaloRepository, PgMeloRepository,
         PgMmmPreisStromRepository, PgMmmaPreisGasRepository, PgNbContractRepository,
         PgNeLoRepository, PgPartnerRepository, PgPreisblattDienstleistungRepository,
@@ -190,6 +194,7 @@ async fn main() -> anyhow::Result<()> {
     let tr_repo = std::sync::Arc::new(PgTechnischeRessourceRepository::new(pool.clone()));
     let lz_repo = std::sync::Arc::new(PgLokationszuordnungRepository::new(pool.clone()));
     let device_repo = std::sync::Arc::new(PgDeviceRepository::new(pool.clone()));
+    let einwilligung_repo = std::sync::Arc::new(PgEinwilligungRepository::new(pool.clone()));
     let zaehzeit_repo = std::sync::Arc::new(PgZaehlzeitRepository::new(pool.clone()));
     let nb_contract_repo = std::sync::Arc::new(PgNbContractRepository::new(pool.clone()));
     let vs_repo = std::sync::Arc::new(PgVersorgungsStatusRepository::new(pool.clone()));
@@ -250,6 +255,9 @@ async fn main() -> anyhow::Result<()> {
         &cfg.makod.base_url,
         makod_api_key,
     ));
+    // Clone for the ESA consent handler's Extension — the revocation path fires
+    // the 17008 Abbestellung at makod.
+    let makod_client_ext = Arc::clone(&makod_client);
 
     // ── MPSC event channel ─────────────────────────────────────────────────
     // Unlike broadcast, unbounded MPSC never drops events when the receiver
@@ -431,6 +439,22 @@ async fn main() -> anyhow::Result<()> {
                 get(get_correlation::<_, _, _, _, _, _>),
             )
             // Partners
+            // ESA consent registry (§49 Abs. 2 Nr. 9 MsbG)
+            .route(
+                "/api/v1/esa/einwilligungen",
+                axum::routing::post(grant_einwilligung).get(list_einwilligungen),
+            )
+            .route(
+                "/api/v1/esa/einwilligungen/{id}",
+                get(get_einwilligung).delete(revoke_einwilligung),
+            )
+            .route(
+                "/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}",
+                put(put_framework).get(get_framework),
+            )
+            // Inbound-message gate: revoked consent / unestablished framework
+            // → allowed:false (the Ablehnung clearing case).
+            .route("/api/v1/esa/consent-check", get(consent_check))
             .route("/api/v1/partners", get(list_partners::<_, _, _, _, _, _>))
             .route(
                 "/api/v1/partners/{mp_id}",
@@ -687,6 +711,9 @@ async fn main() -> anyhow::Result<()> {
             .layer(Extension(lz_repo))
             // Device registry extension (B3)
             .layer(Extension(device_repo))
+            // ESA consent registry repo + makod client (for the 17008 wire)
+            .layer(Extension(einwilligung_repo))
+            .layer(Extension(makod_client_ext))
             // ZaehlzeitRegister + ZaehlzeitSaison (iMSys TOU)
             .layer(Extension(zaehzeit_repo))
             // event_tx extension for handlers that emit CloudEvents without AppState
