@@ -13,7 +13,7 @@
 //! | 37003 | Kommunikationsdaten des MSBN Strom     | MSBN → LF       | GPKE Teil 4 |
 //! | 37004 | Kommunikationsdaten des MSBA Strom     | MSBA → LF       | GPKE Teil 4 |
 //! | 37005 | Kommunikationsdaten des ÜNB Strom      | ÜNB → LF        | GPKE Teil 4 |
-//! | 37006 | Kommunikationsdaten des BKV Strom      | BKV → LF/NB     | GPKE Teil 4 |
+//! | 37006 | Kommunikationsdaten des ESA Strom      | ESA → LF/NB/MSB | GPKE Teil 4 |
 //!
 //! Gas PARTIN PIDs 37008–37014 are handled by `mako-geli-gas` (`geli-gas-partin`).
 //! Gas party GLNs differ from Strom party GLNs; keeping them separate ensures
@@ -44,7 +44,7 @@ pub const WORKFLOW_NAME: &str = "gpke-partin";
 /// - 37003: MSBN sends communication data (multi-party)
 /// - 37004: MSBA sends communication data (multi-party)
 /// - 37005: ÜNB sends communication data to LF (LF receives)
-/// - 37006: BKV Strom sends communication data
+/// - 37006: ESA Strom sends communication data (registers the Energieserviceanbieter)
 ///
 /// Gas PARTIN PIDs (37008–37014) are owned by `mako-geli-gas` (`geli-gas-partin`).
 pub const PARTIN_STROM_PIDS: &[u32] = &[37000, 37001, 37002, 37003, 37004, 37005, 37006];

@@ -35,7 +35,7 @@ fn quittung() -> Zustellquittung {
 
 fn anfrage() -> C {
     C::ReceiveAnfrage {
-        pid: pid(ANFRAGE_PID),
+        pid: ANFRAGE_PID,
         esa: mp("9900555000005"),
         msb: mp("9900357000004"),
         ebene: Lokationsebene::Marktlokation,
@@ -68,7 +68,7 @@ fn angebot() -> C {
 
 fn bestellung() -> C {
     C::ReceiveBestellung {
-        pid: pid(BESTELLUNG_PID),
+        pid: BESTELLUNG_PID,
         message_ref: mref("ORD-1"),
         quittung: Zustellquittung::positive(datetime!(2026-03-09 09:00 UTC)),
         consent_block: None,
@@ -161,7 +161,7 @@ fn bestellung_starts_a_two_werktage_answer_window_from_the_uet() {
 #[test]
 fn a_negative_zustellquittung_cannot_start_a_frist() {
     let cmd = C::ReceiveAnfrage {
-        pid: pid(ANFRAGE_PID),
+        pid: ANFRAGE_PID,
         esa: mp("9900555000005"),
         msb: mp("9900357000004"),
         ebene: Lokationsebene::Marktlokation,
@@ -205,7 +205,7 @@ fn a_bestellung_after_the_bindungsfrist_is_rejected() {
         }
     }
     let late = C::ReceiveBestellung {
-        pid: pid(BESTELLUNG_PID),
+        pid: BESTELLUNG_PID,
         message_ref: mref("ORD-LATE"),
         quittung: Zustellquittung::positive(datetime!(2026-03-17 09:00 UTC)),
         consent_block: None,
@@ -236,7 +236,7 @@ fn stornierung_is_allowed_before_delivery_begins() {
     let out = W::handle(
         &state,
         C::ReceiveStornierung {
-            pid: pid(STORNIERUNG_PID),
+            pid: STORNIERUNG_PID,
             message_ref: mref("CHG-1"),
             quittung: quittung(),
         },
@@ -261,7 +261,7 @@ fn stornierung_is_refused_once_delivery_has_begun() {
     let err = W::handle(
         &state,
         C::ReceiveStornierung {
-            pid: pid(STORNIERUNG_PID),
+            pid: STORNIERUNG_PID,
             message_ref: mref("CHG-2"),
             quittung: quittung(),
         },
@@ -276,7 +276,7 @@ fn stornierung_is_refused_once_delivery_has_begun() {
     let out = W::handle(
         &state,
         C::ReceiveAbbestellung {
-            pid: pid(ABBESTELLUNG_PID),
+            pid: ABBESTELLUNG_PID,
             message_ref: mref("ORD-END"),
             beendigung_zum: datetime!(2026-04-01 00:00 UTC),
             quittung: quittung(),
@@ -320,7 +320,7 @@ fn refused_stornierung_restores_the_confirmed_bestellung() {
     let mut state = authorised();
     for cmd in [
         C::ReceiveStornierung {
-            pid: pid(STORNIERUNG_PID),
+            pid: STORNIERUNG_PID,
             message_ref: mref("CHG-3"),
             quittung: quittung(),
         },
@@ -386,7 +386,7 @@ fn each_step_rejects_a_foreign_pid() {
 #[test]
 fn an_anfrage_without_a_location_id_is_rejected() {
     let bad = C::ReceiveAnfrage {
-        pid: pid(ANFRAGE_PID),
+        pid: ANFRAGE_PID,
         esa: mp("9900555000005"),
         msb: mp("9900357000004"),
         ebene: Lokationsebene::Netzlokation,
@@ -543,7 +543,7 @@ fn msb_and_esa_pid_sets_are_disjoint() {
 fn esa_inbound_covers_every_msb_answer() {
     for pid in [19011_u32, 19012, 19013, 19014, 15003] {
         assert!(
-            ESA_INBOUND_PIDS.contains(&pid),
+            ESA_INBOUND_PIDS.iter().any(|p| p.as_u32() == pid),
             "ESA deployment must receive PID {pid}"
         );
     }
@@ -563,7 +563,10 @@ fn send_angebot_enqueues_quotes_15003_to_the_esa() {
     let ob = &out.outbox[0];
     assert_eq!(ob.message_type.as_ref(), "QUOTES");
     assert_eq!(ob.recipient.as_ref(), "9900555000005"); // the ESA
-    assert_eq!(ob.payload["pid"].as_u64(), Some(u64::from(ANGEBOT_PID)));
+    assert_eq!(
+        ob.payload["pid"].as_u64(),
+        Some(u64::from(ANGEBOT_PID.as_u32()))
+    );
     assert_eq!(ob.payload["sender"].as_str(), Some("9900357000004")); // the MSB
 }
 
@@ -576,7 +579,7 @@ fn answer_bestellung_enqueues_ordrsp_confirm_or_reject() {
     assert_eq!(confirm.message_type.as_ref(), "ORDRSP");
     assert_eq!(
         confirm.payload["pid"].as_u64(),
-        Some(u64::from(BESTAETIGUNG_PID))
+        Some(u64::from(BESTAETIGUNG_PID.as_u32()))
     );
     // The ORDRSP carries no LOC — it echoes the Bestellung's Belegnummer
     // (`ORD-1`) in RFF+ACW so the ESA can correlate the answer.
@@ -596,7 +599,7 @@ fn answer_bestellung_enqueues_ordrsp_confirm_or_reject() {
     );
     assert_eq!(
         reject.payload["pid"].as_u64(),
-        Some(u64::from(ABLEHNUNG_PID))
+        Some(u64::from(ABLEHNUNG_PID.as_u32()))
     );
 }
 
@@ -605,7 +608,7 @@ fn answer_bestellung_enqueues_ordrsp_confirm_or_reject() {
 #[test]
 fn a_blocked_consent_rejects_the_anfrage_with_a_quotes_ablehnung() {
     let blocked = C::ReceiveAnfrage {
-        pid: pid(ANFRAGE_PID),
+        pid: ANFRAGE_PID,
         esa: mp("9900555000005"),
         msb: mp("9900357000004"),
         ebene: Lokationsebene::Marktlokation,
@@ -619,7 +622,10 @@ fn a_blocked_consent_rejects_the_anfrage_with_a_quotes_ablehnung() {
     assert!(out.deadlines.is_empty(), "a blocked Anfrage arms no window");
     let ob = out.outbox.into_iter().next().expect("Ablehnung sent");
     assert_eq!(&*ob.message_type, "QUOTES");
-    assert_eq!(ob.payload["pid"].as_u64(), Some(u64::from(ANGEBOT_PID)));
+    assert_eq!(
+        ob.payload["pid"].as_u64(),
+        Some(u64::from(ANGEBOT_PID.as_u32()))
+    );
     // Folding the event lands the process in Abgelehnt.
     let state = W::apply(S::default(), &out.events[0]);
     assert_eq!(state.label(), "Abgelehnt");
@@ -637,7 +643,7 @@ fn a_blocked_consent_rejects_the_bestellung_with_an_ordrsp_ablehnung() {
         }
     }
     let blocked = C::ReceiveBestellung {
-        pid: pid(BESTELLUNG_PID),
+        pid: BESTELLUNG_PID,
         message_ref: mref("ORD-BLOCKED"),
         quittung: Zustellquittung::positive(datetime!(2026-03-09 09:00 UTC)),
         consent_block: Some("Einwilligung wurde widerrufen".to_owned()),
@@ -645,7 +651,10 @@ fn a_blocked_consent_rejects_the_bestellung_with_an_ordrsp_ablehnung() {
     let out = W::handle(&state, blocked).unwrap();
     let ob = out.outbox.into_iter().next().expect("Ablehnung sent");
     assert_eq!(&*ob.message_type, "ORDRSP");
-    assert_eq!(ob.payload["pid"].as_u64(), Some(u64::from(ABLEHNUNG_PID)));
+    assert_eq!(
+        ob.payload["pid"].as_u64(),
+        Some(u64::from(ABLEHNUNG_PID.as_u32()))
+    );
     for ev in &out.events {
         state = W::apply(state.clone(), ev);
     }
@@ -699,7 +708,7 @@ fn liefere_werte_emits_mscons_13027_addressed_to_the_esa() {
     assert_eq!(&*ob.message_type, "MSCONS");
     assert_eq!(
         ob.payload["pid"].as_u64(),
-        Some(u64::from(WERTE_UEBERMITTLUNG_PID))
+        Some(u64::from(WERTE_UEBERMITTLUNG_PID.as_u32()))
     );
     assert_eq!(ob.payload["receiver_mp_id"].as_str(), Some("9900555000005"));
     assert_eq!(ob.recipient.as_ref(), "9900555000005");

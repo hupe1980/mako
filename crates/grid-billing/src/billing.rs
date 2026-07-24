@@ -170,6 +170,29 @@ fn make_tariff_source(sheet_id: Option<&str>) -> Option<TariffSource> {
     })
 }
 
+/// Push the `REGIME_TURNOVER_IN_PERIOD` warning when the delivery period
+/// crosses a regulatory turnover (see [`crate::regulatory`]).
+///
+/// Such a period is governed by different rules at its start and its end, so a
+/// single settlement over it applies the wrong rules to part of the supply.
+/// Every settlement builder emits this the same way, so the caller learns to
+/// split the period regardless of which document type it asked for.
+pub(crate) fn warn_if_straddles_turnover(
+    period_from: time::Date,
+    period_to: time::Date,
+    warnings: &mut Vec<SettlementWarning>,
+) {
+    if crate::regulatory::RegulatoryRegime::straddles_turnover(period_from, period_to) {
+        warnings.push(SettlementWarning {
+            severity: WarningSeverity::Warning,
+            code: "REGIME_TURNOVER_IN_PERIOD",
+            message: "the delivery period crosses a regulatory turnover; different \
+                      rules govern its start and its end — split the period"
+                .to_owned(),
+        });
+    }
+}
+
 // ── NNE invoice (PID 31001 / 31005 / 31006) ──────────────────────────────────
 
 /// Calculate a NNE settlement (PID 31001 Strom, 31005 Gas, 31006 selbstausstellt).
@@ -206,7 +229,9 @@ fn make_tariff_source(sheet_id: Option<&str>) -> Option<TariffSource> {
 ///
 /// ## Errors
 ///
-/// [`BillingError::InvalidInput`] or [`BillingError::MonetaryOverflow`].
+/// [`BillingError::InvalidInput`], [`BillingError::MonetaryOverflow`], or
+/// [`BillingError::UnsupportedEntgeltRegime`] for a period governed by AgNeS
+/// (from 01.01.2029), whose methodology is not yet festgelegt.
 #[must_use = "handle the BillingError"]
 pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
     // The period is ordered by construction, the Leistungspreis is paired by
@@ -255,10 +280,20 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         });
     }
 
+    // Resolved once from the period and recorded on the result. NNE positions
+    // are priced on the Entgelt axis (StromNEV §§17/21, GasNEV §§14–15, the
+    // §19 individual forms), which AgNeS replaces from 2029 — so a period the
+    // Verordnung methodology no longer governs is refused here rather than
+    // computed with lapsed math and merely tagged.
+    let regime =
+        crate::regulatory::RegulatoryRegime::for_period(input.period.from(), input.period.to());
+    regime.ensure_berechenbar()?;
+
     let tariff_src = make_tariff_source(input.tariff_sheet_id.as_deref());
     let mut positions: Vec<SettlementPosition> = Vec::new();
     let mut total = Decimal::ZERO;
     let mut warnings: Vec<SettlementWarning> = Vec::new();
+    warn_if_straddles_turnover(input.period.from(), input.period.to(), &mut warnings);
 
     // Sparte determines settlement type and Arbeit legal reference
     let (settlement_type, arbeit_ref) = match input.sparte {
@@ -853,10 +888,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
     let result = SettlementResult {
         malo_id: input.malo_id.clone(),
         sparte: input.sparte,
-        regime: crate::regulatory::RegulatoryRegime::for_period(
-            input.period.from(),
-            input.period.to(),
-        ),
+        regime,
         settlement_type,
         status: SettlementStatus::Initial,
         period: input.period,
@@ -909,21 +941,16 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
     // Resolved once from the period; every decision below matches on the regime
     // rather than re-comparing dates, so a future turnover is a new variant the
     // compiler makes us handle everywhere it matters.
+    //
+    // Exempt from `ensure_berechenbar` (the AgNeS guard): Mehr-/Mindermengen
+    // prices are formed on the *Netzzugang* axis — GPKE (BK6-24-174) Teil 1
+    // Kap. 8.4 for Strom, GaBi Gas 2.1 (BK7-24-01-008) for Gas, both market-
+    // price based — not by the StromNEV/ARegV Entgeltbildung that AgNeS
+    // (GBK-25-01) replaces. A 2029 MMM settlement therefore stays computable.
     let mut warnings: Vec<SettlementWarning> = Vec::new();
     let regime =
         crate::regulatory::RegulatoryRegime::for_period(input.period.from(), input.period.to());
-    if crate::regulatory::RegulatoryRegime::straddles_turnover(
-        input.period.from(),
-        input.period.to(),
-    ) {
-        warnings.push(SettlementWarning {
-            severity: WarningSeverity::Warning,
-            code: "REGIME_TURNOVER_IN_PERIOD",
-            message: "the delivery period crosses a regulatory turnover; different \
-                      rules govern its start and its end — split the period"
-                .to_owned(),
-        });
-    }
+    warn_if_straddles_turnover(input.period.from(), input.period.to(), &mut warnings);
     use crate::regulatory::NetzzugangRegime as NZ;
     let mmm_refs = match (input.sparte, regime.netzzugang()) {
         (Sparte::Gas, NZ::Nzv) => vec![
@@ -1039,10 +1066,7 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
     Ok(SettlementResult {
         malo_id: input.malo_id.clone(),
         sparte: input.sparte,
-        regime: crate::regulatory::RegulatoryRegime::for_period(
-            input.period.from(),
-            input.period.to(),
-        ),
+        regime,
         settlement_type: mmm_settlement_type,
         status: SettlementStatus::Initial,
         period: input.period,
@@ -1078,10 +1102,16 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
             reason: "grundgebuehr_eur_per_month must be non-negative".to_owned(),
         });
     }
+    // Exempt from `ensure_berechenbar` (the AgNeS guard): Messstellenbetrieb
+    // charges are formed under the MsbG (§§6–7, §30 Preisobergrenzen), which
+    // does not lapse with StromNEV/ARegV at the end of 2028 — AgNeS (GBK-25-01)
+    // replaces the Netzentgeltbildung, not the metering-charge law.
+    let mut warnings: Vec<SettlementWarning> = Vec::new();
+    warn_if_straddles_turnover(input.period.from(), input.period.to(), &mut warnings);
+
     // §30 MsbG Preisobergrenze. The ceiling is annual and the charge monthly, so
     // the charge is annualised before comparison — billing a year in monthly
     // instalments does not raise the cap.
-    let mut warnings: Vec<SettlementWarning> = Vec::new();
     if let (Some(kategorie), Some(schuldner)) =
         (input.messstellen_kategorie, input.entgeltschuldner)
     {
@@ -1218,6 +1248,17 @@ pub fn reverse(original: &SettlementResult) -> SettlementResult {
         })
         .collect();
 
+    // Exempt from `ensure_berechenbar` (the AgNeS guard): a reversal prices
+    // nothing — it mirrors amounts an already-guarded builder computed, under
+    // the regime recorded on the original. Refusing here would make a
+    // Verordnung-era settlement irreversible once the 2029 turnover has
+    // passed, which is the opposite of what the guard protects.
+    //
+    // The turnover warning is re-emitted, though: a straddling period is as
+    // wrong reversed as it was billed, and the mirror should say so too.
+    let mut warnings: Vec<SettlementWarning> = Vec::new();
+    warn_if_straddles_turnover(original.period.from(), original.period.to(), &mut warnings);
+
     SettlementResult {
         // A reversal is the same supply under the same rules — only the signs
         // differ, so identity and regime carry over unchanged.
@@ -1231,7 +1272,7 @@ pub fn reverse(original: &SettlementResult) -> SettlementResult {
         counterparty_mp_id: original.counterparty_mp_id.clone(),
         positions: reversed_positions,
         total_eur: -original.total_eur,
-        warnings: Vec::new(),
+        warnings,
     }
 }
 
@@ -1268,6 +1309,9 @@ pub fn correct(
     original: &SettlementResult,
     mut replacement: SettlementResult,
 ) -> (SettlementResult, SettlementResult) {
+    // No AgNeS guard here: the reversal prices nothing (see [`reverse`]) and
+    // the replacement was computed by a settlement builder that already ran
+    // `ensure_berechenbar` for its own period.
     let reversal = reverse(original);
     replacement.status = SettlementStatus::Correction;
     (reversal, replacement)
@@ -1301,6 +1345,10 @@ pub fn correct(
 /// - `period_from >= period_to`
 /// - `awh_positionen` is empty
 /// - Any position has `anzahl == 0` or `preis_eur < 0`
+///
+/// [`BillingError::UnsupportedEntgeltRegime`] for a period governed by AgNeS
+/// (from 01.01.2029) — the GasNEV §14 charge authorisation the AWH positions
+/// rest on lapses with 2028.
 #[must_use = "handle the BillingError"]
 pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingError> {
     if input.period.from() >= input.period.to() {
@@ -1325,6 +1373,17 @@ pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingEr
             });
         }
     }
+
+    // AWH charges rest on the GasNEV §14 charge authorisation, i.e. on the
+    // Entgelt axis that lapses with 2028 — so a period under AgNeS is refused
+    // like an NNE settlement, not billed under an authorisation that no
+    // longer exists.
+    let regime =
+        crate::regulatory::RegulatoryRegime::for_period(input.period.from(), input.period.to());
+    regime.ensure_berechenbar()?;
+
+    let mut warnings: Vec<SettlementWarning> = Vec::new();
+    warn_if_straddles_turnover(input.period.from(), input.period.to(), &mut warnings);
 
     let tariff_src = make_tariff_source(input.tariff_sheet_id.as_deref());
     let awh_legal_refs = vec![
@@ -1376,10 +1435,7 @@ pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingEr
         malo_id: input.malo_id.clone(),
         // AWH Sperrprozesse are a Gas process (GeLi Gas 3.0 §5.4).
         sparte: Sparte::Gas,
-        regime: crate::regulatory::RegulatoryRegime::for_period(
-            input.period.from(),
-            input.period.to(),
-        ),
+        regime,
         settlement_type: SettlementType::GasAwhSperrung,
         status: SettlementStatus::Initial,
         period: input.period,
@@ -1387,7 +1443,7 @@ pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingEr
         counterparty_mp_id: input.lf_mp_id.clone(),
         positions,
         total_eur,
-        warnings: Vec::new(),
+        warnings,
     };
     debug_assert_eq!(
         result.total_eur,
@@ -2621,6 +2677,118 @@ mod tests {
     fn mmm_strom_uses_mmm_strom_settlement_type() {
         let r = settle_mmm(&base_mmm()).unwrap();
         assert_eq!(r.settlement_type, SettlementType::MmmStrom);
+    }
+
+    // ── AgNeS refusal (regime turnover 2028 → 2029) ───────────────────────────
+
+    /// NNE positions are priced under StromNEV/GasNEV — a 2029 period is
+    /// governed by AgNeS (GBK-25-01), whose tables are not festgelegt, so the
+    /// settlement is refused rather than computed under lapsed rules.
+    #[test]
+    fn a_2029_nne_settlement_is_refused_under_agnes() {
+        let mut i = base_nne();
+        i.period = SettlementPeriod::new(date!(2029 - 01 - 01), date!(2029 - 01 - 31)).unwrap();
+        let err = settle_nne(&i).expect_err("an AgNeS period must be refused");
+        assert!(matches!(
+            err,
+            BillingError::UnsupportedEntgeltRegime { tarifjahr: 2029 }
+        ));
+        assert!(err.to_string().contains("GBK-25-01"), "{err}");
+    }
+
+    /// AWH charges rest on the GasNEV §14 authorisation — same refusal.
+    #[test]
+    fn a_2029_gas_awh_settlement_is_refused_under_agnes() {
+        let input = GasAwhInput {
+            malo_id: "51238696780".into(),
+            nb_mp_id: "9900357000004".into(),
+            lf_mp_id: "9900012345678".into(),
+            period: SettlementPeriod::new(date!(2029 - 01 - 01), date!(2029 - 01 - 31)).unwrap(),
+            tariff_sheet_id: None,
+            awh_positionen: vec![AwhPositionInput {
+                beschreibung: "Sperrung Gaszähler".into(),
+                anzahl: 1,
+                preis_eur: d("45.00"),
+                artikel_id: Some("2-01-7-001".to_owned()),
+            }],
+        };
+        assert!(matches!(
+            settle_gas_awh(&input),
+            Err(BillingError::UnsupportedEntgeltRegime { tarifjahr: 2029 })
+        ));
+    }
+
+    /// MMM prices are formed on the Netzzugang axis (GPKE / GaBi Gas), not by
+    /// the Entgeltbildung AgNeS replaces — a 2029 MMM settlement stays
+    /// computable, and its regime tag records the AgNeS Entgelt axis.
+    #[test]
+    fn a_2029_mmm_settlement_stays_computable() {
+        let mut i = base_mmm();
+        i.period = SettlementPeriod::new(date!(2029 - 02 - 01), date!(2029 - 02 - 28)).unwrap();
+        let r = settle_mmm(&i).expect("MMM does not price on the Entgelt axis");
+        assert_eq!(r.regime.entgelt(), crate::regulatory::EntgeltRegime::AgNeS);
+    }
+
+    /// MSB charges are formed under MsbG, which does not lapse with the
+    /// Verordnungen — a 2029 MSB settlement stays computable.
+    #[test]
+    fn a_2029_msb_settlement_stays_computable() {
+        let mut i = base_msb();
+        i.period = SettlementPeriod::new(date!(2029 - 02 - 01), date!(2029 - 02 - 28)).unwrap();
+        let r = settle_msb(&i).expect("MSB does not price on the Entgelt axis");
+        assert_eq!(r.regime.entgelt(), crate::regulatory::EntgeltRegime::AgNeS);
+    }
+
+    // ── REGIME_TURNOVER_IN_PERIOD is emitted by every builder ─────────────────
+
+    /// A period across the 2025/2026 Netzzugang turnover warns on NNE too —
+    /// not only on MMM, where the check first lived.
+    #[test]
+    fn a_straddling_nne_period_warns() {
+        let mut i = base_nne();
+        i.period = SettlementPeriod::new(date!(2025 - 12 - 15), date!(2026 - 01 - 15)).unwrap();
+        let r = settle_nne(&i).unwrap();
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.code == "REGIME_TURNOVER_IN_PERIOD"),
+            "warnings: {:?}",
+            r.warnings
+        );
+    }
+
+    /// …and on MSB, which is exempt from the AgNeS guard but must still report
+    /// a period the turnover cuts in two.
+    #[test]
+    fn a_straddling_msb_period_warns() {
+        let mut i = base_msb();
+        i.period = SettlementPeriod::new(date!(2028 - 12 - 15), date!(2029 - 01 - 15)).unwrap();
+        let r = settle_msb(&i).unwrap();
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.code == "REGIME_TURNOVER_IN_PERIOD"),
+            "warnings: {:?}",
+            r.warnings
+        );
+    }
+
+    /// A reversal re-emits the turnover warning: the mirror of a straddling
+    /// settlement straddles just the same.
+    #[test]
+    fn a_reversal_of_a_straddling_settlement_carries_the_warning() {
+        let mut i = base_nne();
+        i.period = SettlementPeriod::new(date!(2025 - 12 - 15), date!(2026 - 01 - 15)).unwrap();
+        let original = settle_nne(&i).unwrap();
+        let reversal = reverse(&original);
+        assert!(
+            reversal
+                .warnings
+                .iter()
+                .any(|w| w.code == "REGIME_TURNOVER_IN_PERIOD"),
+            "warnings: {:?}",
+            reversal.warnings
+        );
     }
 }
 

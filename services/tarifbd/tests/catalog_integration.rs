@@ -241,3 +241,98 @@ async fn erp_angebot_id_lookup_finds_existing_quotation() {
         .expect("lookup");
     assert!(cross.is_none(), "erp_angebot_id lookup is tenant-scoped");
 }
+
+// ── nEHS price series — upsert, latest-at-or-before, source discipline ────────
+
+#[tokio::test]
+#[ignore = "requires TARIFBD_TEST_DATABASE_URL"]
+async fn nehs_price_upsert_latest_and_source_check() {
+    use rust_decimal::dec;
+    use time::macros::date;
+
+    let Some(pool) = test_pool("nehs").await else {
+        return;
+    };
+
+    let put = |d, eur, src: Option<&str>| {
+        pg::upsert_nehs_price(
+            &pool,
+            d,
+            pg::NehsImportRequest {
+                eur_per_t: eur,
+                source: src.map(str::to_owned),
+            },
+        )
+    };
+
+    // Two weekly auction points (the EEX series is weekly from 01.07.2026).
+    put(date!(2026 - 07 - 01), dec!(63.50), Some("auktion"))
+        .await
+        .expect("first auction price");
+    put(date!(2026 - 07 - 08), dec!(64.25), Some("auktion"))
+        .await
+        .expect("second auction price");
+
+    // Latest at-or-before: a mid-week billing date resolves to the 01.07 price.
+    let hit = pg::latest_nehs_price(&pool, date!(2026 - 07 - 05))
+        .await
+        .expect("query")
+        .expect("price expected");
+    assert_eq!(hit, (date!(2026 - 07 - 01), dec!(63.50)));
+
+    // On the second auction date, that price wins.
+    let hit = pg::latest_nehs_price(&pool, date!(2026 - 07 - 08))
+        .await
+        .expect("query")
+        .expect("price expected");
+    assert_eq!(hit, (date!(2026 - 07 - 08), dec!(64.25)));
+
+    // Before the series begins: no price at all.
+    assert!(
+        pg::latest_nehs_price(&pool, date!(2026 - 06 - 30))
+            .await
+            .expect("query")
+            .is_none(),
+        "no price before the first series entry"
+    );
+
+    // Re-import on the same date replaces the row (ON CONFLICT DO UPDATE).
+    put(date!(2026 - 07 - 08), dec!(65.00), Some("nachkauf"))
+        .await
+        .expect("same-date re-import");
+    let hit = pg::latest_nehs_price(&pool, date!(2026 - 07 - 08))
+        .await
+        .expect("query")
+        .expect("price expected");
+    assert_eq!(hit, (date!(2026 - 07 - 08), dec!(65.00)));
+
+    // Omitted source defaults to 'manual'.
+    put(date!(2026 - 07 - 15), dec!(68), None)
+        .await
+        .expect("manual default");
+    let src: String = sqlx::query_scalar("SELECT source FROM nehs_prices WHERE price_date = $1")
+        .bind(date!(2026 - 07 - 15))
+        .fetch_one(&pool)
+        .await
+        .expect("read back source");
+    assert_eq!(src, "manual");
+
+    // Unknown source is rejected in the pg layer (handler surfaces 422)…
+    let err = put(date!(2026 - 07 - 22), dec!(60), Some("boerse"))
+        .await
+        .expect_err("unknown source must be rejected");
+    assert!(err.to_string().contains("unknown source"), "got: {err}");
+
+    // …and the SQL CHECK constraint backstops writes that bypass it.
+    let raw = sqlx::query(
+        "INSERT INTO nehs_prices (price_date, eur_per_t, source) VALUES ($1, $2, 'boerse')",
+    )
+    .bind(date!(2026 - 07 - 29))
+    .bind(dec!(60))
+    .execute(&pool)
+    .await;
+    assert!(
+        raw.is_err(),
+        "CHECK must reject unknown source at SQL level"
+    );
+}

@@ -26,7 +26,7 @@
 //!         check_session_compliance()    append cls_compliance_log
 //!                   │                      │
 //!                   ▼                      ▼
-//!       de.edmd.cls.compliance_issue   GET /api/v1/smgw/compliance
+//!       de.messwert.cls.compliance_issue   GET /api/v1/smgw/compliance
 //!       CloudEvent (ERP webhook)       (on-demand status endpoint)
 //! ```
 //!
@@ -346,7 +346,7 @@ pub fn check_session_compliance(
 
 /// Run a full fleet compliance sweep: query all `smgw_sessions`, check each
 /// session, log issues to `cls_compliance_log`, and emit
-/// `de.edmd.cls.compliance_issue` CloudEvents to the ERP webhook.
+/// `de.messwert.cls.compliance_issue` CloudEvents to the ERP webhook.
 ///
 /// Called by the daily background worker and by
 /// `POST /api/v1/smgw/compliance/scan` (on-demand).
@@ -441,12 +441,12 @@ pub async fn run_cls_compliance_sweep(
                 tracing::warn!(error = %e, "edmd: cls-compliance-sweep: failed to log issue");
             }
 
-            // ── 3. Emit de.edmd.cls.compliance_issue CloudEvent ───────────────
+            // ── 3. Emit de.messwert.cls.compliance_issue CloudEvent ───────────────
             if let Some(url) = erp_webhook_url {
                 let ce = serde_json::json!({
                     "specversion": "1.0",
                     "id": event_id,
-                    "type": "de.edmd.cls.compliance_issue",
+                    "type": mako_events::messwert::CLS_COMPLIANCE_ISSUE,
                     "source": format!("urn:edmd:tenant:{}:cls-compliance-worker", tenant),
                     "subject": issue.malo_id,
                     "time": scanned_at.to_string(),
@@ -680,7 +680,7 @@ pub async fn put_smgw_session(
             let ce = serde_json::json!({
                 "specversion": "1.0",
                 "id": event_id,
-                "type": "de.edmd.cls.compliance_issue",
+                "type": mako_events::messwert::CLS_COMPLIANCE_ISSUE,
                 "source": format!("urn:edmd:tenant:{}:smgw-upsert", tenant),
                 "subject": issue.malo_id,
                 "time": OffsetDateTime::now_utc().to_string(),
@@ -975,7 +975,7 @@ pub async fn get_smgw_compliance(
 /// Trigger an immediate, side-effecting compliance sweep:
 /// - Runs `run_cls_compliance_sweep()` synchronously
 /// - Logs all found issues to `cls_compliance_log`
-/// - Emits `de.edmd.cls.compliance_issue` CloudEvents for each issue
+/// - Emits `de.messwert.cls.compliance_issue` CloudEvents for each issue
 ///
 /// Use this endpoint for manual compliance audits or integration tests.
 /// The daily background worker calls the same logic automatically.

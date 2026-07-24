@@ -395,11 +395,11 @@ pub async fn put_product(
         Ok(id) => {
             // Notify the ERP / tarifbd-agent so §42 Energiemix completeness and
             // §41a EPEX checks run against the new version. The agent's
-            // `de.tarifbd.product.updated` trigger was previously dead — nothing
+            // `de.tarif.product.updated` trigger was previously dead — nothing
             // ever emitted it.
             emit_tarifbd_event(
                 &cfg,
-                "de.tarifbd.product.updated",
+                mako_events::tarif::PRODUCT_UPDATED,
                 &product_code,
                 serde_json::json!({
                     "lf_mp_id": lf_mp_id,
@@ -702,6 +702,63 @@ pub async fn get_epex_monthly_average(
             "year": year,
             "month": month,
             "avg_ct_kwh": avg,
+        }))
+        .into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── nEHS certificate prices (BEHG CO₂) ────────────────────────────────────────
+
+/// `PUT /api/v1/nehs-prices/{date}`
+///
+/// Import one dated nEHS certificate price (EUR/t CO₂) — an EEX auction
+/// clearing price (weekly from 01.07.2026), the Verkaufsphase price (68 EUR/t)
+/// or a manual entry. Body: `{ "eur_per_t": 63.50, "source": "auktion" }`.
+pub async fn put_nehs_price(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Path(date_str): Path<String>,
+    Json(req): Json<crate::pg::NehsImportRequest>,
+) -> impl IntoResponse {
+    use time::format_description::well_known::Iso8601;
+    let date = match time::Date::parse(&date_str, &Iso8601::DEFAULT) {
+        Ok(d) => d,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, "invalid date, expected YYYY-MM-DD").into_response();
+        }
+    };
+    match crate::pg::upsert_nehs_price(&pool, date, req).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/nehs-prices/latest?date=YYYY-MM-DD`
+///
+/// Most recent nEHS price at or before `date` (defaults to today). Used by
+/// `billingd` to derive the Gas CO₂ component (CO2KostAufG §3 pass-through).
+pub async fn get_nehs_price_latest(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    use time::format_description::well_known::Iso8601;
+    let date = match q.get("date") {
+        Some(s) => match time::Date::parse(s, &Iso8601::DEFAULT) {
+            Ok(d) => d,
+            Err(_) => {
+                return (StatusCode::BAD_REQUEST, "invalid date, expected YYYY-MM-DD")
+                    .into_response();
+            }
+        },
+        None => time::OffsetDateTime::now_utc().date(),
+    };
+    match crate::pg::latest_nehs_price(&pool, date).await {
+        Ok(Some((price_date, eur_per_t))) => Json(serde_json::json!({
+            "price_date": price_date.to_string(),
+            "eur_per_t": eur_per_t,
         }))
         .into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
@@ -1045,7 +1102,7 @@ fn default_gueltig_bis() -> time::Date {
 /// ## Acceptance lifecycle
 ///
 /// `POST /api/v1/angebote/{id}/annehmen` transitions to ANGENOMMEN and emits
-/// `de.angebot.angenommen` → ERP webhook.  The ERP or `vertragd` creates the
+/// `de.tarif.angebot.angenommen` → ERP webhook.  The ERP or `vertragd` creates the
 /// `Rahmenvertrag` + `Versorgungsverträge` from the accepted Angebot data.
 pub async fn post_angebot(
     _claims: Claims,
@@ -1544,7 +1601,7 @@ pub struct AnnehmenRequest {
 /// Digitally accept an Angebot.
 ///
 /// Validates that the Angebot is still within its `gueltig_bis` window, then
-/// transitions to `ANGENOMMEN` and emits `de.angebot.angenommen` to the
+/// transitions to `ANGENOMMEN` and emits `de.tarif.angebot.angenommen` to the
 /// configured ERP webhook.  The ERP or `vertragd` creates the `Rahmenvertrag`
 /// from the CloudEvent payload.
 pub async fn post_angebot_annehmen(
@@ -1559,11 +1616,11 @@ pub async fn post_angebot_annehmen(
         Err(e) => return (StatusCode::CONFLICT, e.to_string()).into_response(),
     };
 
-    // Emit de.angebot.angenommen CloudEvent.
+    // Emit de.tarif.angebot.angenommen CloudEvent.
     if let Some(ref webhook_url) = cfg.erp_webhook_url {
         let ce = serde_json::json!({
             "specversion": "1.0",
-            "type": "de.angebot.angenommen",
+            "type": mako_events::tarif::ANGEBOT_ANGENOMMEN,
             "source": format!("urn:tarifbd:lf:{}", cfg.tenant),
             "id": uuid::Uuid::new_v4().to_string(),
             "time": time::OffsetDateTime::now_utc().to_string(),
@@ -1622,7 +1679,7 @@ pub async fn post_angebot_annehmen(
             "angebotsnummer": angebot.angebotsnummer,
             "status": "ANGENOMMEN",
             "gewaehlte_variante": angebot.gewaehlte_variante,
-            "message": "Angebot angenommen — de.angebot.angenommen CloudEvent dispatched",
+            "message": "Angebot angenommen — de.tarif.angebot.angenommen CloudEvent dispatched",
         })),
     )
         .into_response()

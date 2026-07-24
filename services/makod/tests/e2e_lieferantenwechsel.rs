@@ -150,6 +150,7 @@ impl MockLfn {
                 receiver: MarktpartnerCode::new(NB_ID),
                 location_id: MaLo::new(malo_id),
                 process_date: process_date.to_owned(),
+                transaktionsgrund: None,
             })
             .await
             .expect("LFN: execute InitiateAnmeldung (55001)");
@@ -206,6 +207,7 @@ impl MockLfn {
                 receiver: MarktpartnerCode::new(LFA_ID),
                 location_id: MaLo::new(malo_id),
                 process_date: process_date.to_owned(),
+                transaktionsgrund: None,
             })
             .await
             .expect("LFN: execute InitiateAnmeldung (55016)");
@@ -353,6 +355,7 @@ impl MockNb {
                     bilanzierungsgebiet: None,
                     bilanzierungsmethode: None,
                     fallgruppe: None,
+                    transaktionsgrund: None,
                     validation_passed: true,
                     validation_errors: vec![],
                 }
@@ -524,6 +527,7 @@ impl MockLfa {
                     bilanzierungsgebiet: None,
                     bilanzierungsmethode: None,
                     fallgruppe: None,
+                    transaktionsgrund: None,
                     validation_passed: true,
                     validation_errors: vec![],
                 }

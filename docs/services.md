@@ -31,7 +31,7 @@ graph TB
     ext["BDEW Counterparty<br/>(NB · LF · MSB · BKV)"]
 
     subgraph protocol ["Protocol & Market Data"]
-        makod[":8080 makod\nEDIFACT runtime · 45+ workflows\nAS4 · SlateDB · MCP"]
+        makod[":8080 makod\nEDIFACT runtime · 55+ workflows\nAS4 · SlateDB · MCP"]
         marktd[":8180 marktd\nMaLo/MeLo/NeLo · contracts\nVersorgungsStatus · EventBus"]
         processd[":8580 processd\nAnmeldung STP ≥95%\nLF E_0624 auto · §14a"]
     end
@@ -80,7 +80,7 @@ graph TB
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [makod](./makod) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 45+ GPKE/WiM/GeLi Gas/MABIS/GaBi Gas workflows, AS4/REST/iMS |
+| [makod](./makod) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 55+ GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas workflows, AS4/REST/iMS |
 | [marktd](./marktd) | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus, typed BO4E API, EventBus fan-out, MMMA monthly import worker |
 | [processd](./processd) | `:8580` | NB + LF + MSB | Process Decision Engine — Anmeldung STP ≥95%, LF E_0624 45-min auto-response, MSB REQOTE auto-response, §14a Steuerungsauftrag produktcode check |
 

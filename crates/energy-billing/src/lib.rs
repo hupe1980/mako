@@ -103,8 +103,8 @@ pub use quantities::{
 };
 pub use rates::{
     BEHG_CO2_FACTOR_H_GAS, BEHG_CO2_FACTOR_L_GAS, RegulatoryRates, RoundMoney,
-    behg_ct_per_kwh_for_year, energiesteuer_gas_for_year, mwst_rate_for_gas_waerme_period,
-    mwst_rate_for_period, round_money, stromsteuer_for_year,
+    behg_ct_per_kwh_for_year, behg_ct_per_kwh_from_price, energiesteuer_gas_for_year,
+    mwst_rate_for_gas_waerme_period, mwst_rate_for_period, round_money, stromsteuer_for_year,
 };
 
 // Typed Product enum + per-category product structs

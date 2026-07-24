@@ -7,7 +7,7 @@ mod tests {
     use mako_markt::{
         domain::MaloId,
         repository::{
-            LieferStatus, Lokationszuordnung, NbEnergiemixRepository as _, VersorgungsStatusRecord,
+            LieferStatus, NbEnergiemixRepository as _, Rollenzuordnung, VersorgungsStatusRecord,
             VersorgungsStatusRepository as _,
         },
         testing::{InMemoryNbEnergiemixRepository, InMemoryVersorgungsStatusRepository},
@@ -41,6 +41,7 @@ mod tests {
             lieferende,
             msb_mp_id: None,
             nb_mp_id: nb_mp_id.to_owned(),
+            eog_seit: None,
             last_process_id: None,
             updated_at: time::OffsetDateTime::now_utc(),
             version: 0, // will be overwritten by repo
@@ -412,13 +413,13 @@ mod tests {
     }
 
     // ═════════════════════════════════════════════════════════════════════
-    // Lokationszuordnung temporal semantics
+    // Rollenzuordnung temporal semantics
     // ═════════════════════════════════════════════════════════════════════
 
     /// Open-ended assignment (valid_to = None) is valid today.
     #[test]
-    fn lokationszuordnung_open_ended_is_valid_today() {
-        let a = Lokationszuordnung {
+    fn rollenzuordnung_open_ended_is_valid_today() {
+        let a = Rollenzuordnung {
             zuordnungstyp: "NB".to_owned(),
             rollencodenummer: "9904234560001".to_owned(),
             valid_from: date!(2020 - 01 - 01),
@@ -431,8 +432,8 @@ mod tests {
 
     /// Assignment with past valid_to is NOT valid today.
     #[test]
-    fn lokationszuordnung_past_assignment_is_expired() {
-        let a = Lokationszuordnung {
+    fn rollenzuordnung_past_assignment_is_expired() {
+        let a = Rollenzuordnung {
             zuordnungstyp: "LF".to_owned(),
             rollencodenummer: "9910000000001".to_owned(),
             valid_from: date!(2020 - 01 - 01),
@@ -445,8 +446,8 @@ mod tests {
 
     /// Future assignment is not yet valid.
     #[test]
-    fn lokationszuordnung_future_assignment_not_yet_valid() {
-        let a = Lokationszuordnung {
+    fn rollenzuordnung_future_assignment_not_yet_valid() {
+        let a = Rollenzuordnung {
             zuordnungstyp: "MSB".to_owned(),
             rollencodenummer: "9900001234567".to_owned(),
             valid_from: date!(2099 - 01 - 01), // far future
@@ -492,6 +493,7 @@ mod geli_gas_tests {
             lieferende,
             msb_mp_id: Some("9880000000001".to_owned()), // DVGW GMSB
             nb_mp_id: "9870000000001".to_owned(),        // DVGW GNB
+            eog_seit: None,
             last_process_id: None,
             updated_at: time::OffsetDateTime::now_utc(),
             tenant: "test".to_owned(),

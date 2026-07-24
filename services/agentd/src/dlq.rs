@@ -305,7 +305,7 @@ pub async fn run_retry_pass(state: &std::sync::Arc<crate::handlers::AppState>) {
                 // Emit exhaustion alert CloudEvent to audit webhook
                 let alert_ce = serde_json::json!({
                     "specversion": "1.0",
-                    "type": "de.agent.session.dlq.exhausted",
+                    "type": mako_events::agent::SESSION_DLQ_EXHAUSTED,
                     "source": format!("agentd/{}", state.cfg.tenant),
                     "id": uuid::Uuid::new_v4().to_string(),
                     "time": time::OffsetDateTime::now_utc()

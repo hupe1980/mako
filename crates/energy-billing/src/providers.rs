@@ -2000,6 +2000,8 @@ impl EegProvider {
 }
 
 impl BillingProvider for EegProvider {
+    // `ctx` is consumed only by the eeg-feature path below.
+    #[cfg_attr(not(feature = "eeg"), allow(unused_variables))]
     fn bill(
         &self,
         ctx: &BillingContext,

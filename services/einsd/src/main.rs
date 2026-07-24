@@ -228,9 +228,9 @@ async fn main() -> anyhow::Result<()> {
                     {
                         let ce_type = match anlage.settlement_model.as_str() {
                             "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" => {
-                                "de.eeg.marktpraemie.berechnet"
+                                mako_events::eeg::MARKTPRAEMIE_BERECHNET
                             }
-                            _ => "de.eeg.verguetung.berechnet",
+                            _ => mako_events::eeg::VERGUETUNG_BERECHNET,
                         };
                         handlers::emit_settlement_ce(
                             &auto_cfg,

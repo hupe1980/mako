@@ -81,7 +81,7 @@ pub const STORNIERUNG_PIDS: &[u32] = &[44022, 44023, 44024];
 /// Only PID 44022 (Anfrage nach Stornierung) is received inbound on the GNB side.
 /// PIDs 44023/44024 are **outbound** from GNB — they are dispatched via the outbox
 /// and do not need PID-router registration for inbound routing.
-pub const ANFRAGE_PID: u32 = 44022;
+pub const ANFRAGE_PID: Pruefidentifikator = Pruefidentifikator::const_new(44022);
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 

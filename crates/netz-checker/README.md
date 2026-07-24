@@ -25,11 +25,11 @@ The result drives automatic `bestaetigen` or `ablehnen` dispatch in `processd`.
 | # | Rule | Reject code | Escalate? |
 |---|------|-------------|-----------|
 | 1 | Grid record present (`MaloGridRecord` is `Some`) | — | ✓ missing data |
-| 2 | No conflicting active supply (`lf_mp_id_next` is `None`) | A06 | |
-| 3 | `process_date ≥ today_berlin(now)` | A97 | |
-| 4 | Bilanzierungsgebiet matches grid record (when both present) | A02 | |
-| 5 | LF GLN in partner directory (`partner_known = true`) | A05 | |
-| 6 | Mindestvorlauffrist met (SLP: > today; RLM: ≥ 2 Werktage) | A99 | |
+| 2 | MaLo participates in market communication (not Stillgelegt/Ruhend) | A02 | |
+| 3 | No conflicting Anmeldung in Bearbeitung (`lf_mp_id_next` is `None`) | A06 | |
+| 4 | Date plausibility, Transaktionsgrund-aware — Strom: LFW24 future rule (one full Werktag between receipt and Zuordnungsbeginn; retroactivity abolished for **all** Transaktionsgründe); Gas: E03 Wechsel ≥ 10 WT future-only, E01/E02 retroactive up to 6 weeks (+3 WT) for SLP metering | A07 (Strom) / E17 (Gas) | ✓ Gas backdated without Transaktionsgrund |
+| 5 | Bilanzierungsgebiet matches grid record (when both present) | A05 | ✓ grid record incomplete |
+| 6 | LF GLN in partner directory (`partner_known = true`) | A05 | |
 
 Checks run in order; the first failure short-circuits and returns the result immediately.
 
@@ -82,15 +82,27 @@ match result {
 
 ## ERC codes
 
-| Code | Meaning | Check |
-|------|---------|-------|
-| `A02` | Bilanzierungsgebiet mismatch | 4 |
-| `A05` | Unknown Marktpartner | 5 |
-| `A06` | Conflicting active supply or duplicate Anmeldung | 2 |
-| `A97` | Invalid date (retroactive start) | 3 |
-| `A99` | Mindestvorlauffrist not met | 6 |
+| Code | Meaning (EBD E_0622 / G_0011) | Check |
+|------|-------------------------------|-------|
+| `A02` | Marktlokation nimmt nicht an der Marktkommunikation teil (Stillgelegt/Ruhend) | 2 |
+| `A06` | Andere Anmeldung in Bearbeitung / duplicate Anmeldung | 3 |
+| `A07` | Vorlauffrist wurde nicht eingehalten (Strom LFW24 date rule) | 4 |
+| `E17` | Ablehnung wg. Fristüberschreitung (Gas date rules) | 4 |
+| `A05` | Anforderungen können nicht erfüllt werden (Bilanzierungsgebiet / unknown Marktpartner) | 5, 6 |
 
-Source: APERAK AHB 1.0 + GPKE AHB (BK6-22-024) + GeLi Gas AHB (BK7-24-01-009).
+Source: EBD 4.2 E_0622 (GPKE, BK6-24-174) + AWH GeLi Gas 2.0 V1.2 Kap. 2.2 +
+EBD 4.2 Kap. 13.6 codeliste G_0011. Note: `A97` is **not** a date code (it was
+the pre-LFW24 AHB-Prüfung result code, deleted in EBD 4.x); `A99` „Sonstiges"
+ends 01.10.2026 — neither is used.
+
+### Gas retroactive window (AWH GeLi Gas 2.0 Kap. 2.2)
+
+Retroactive An-/Abmeldungen are permitted for non-Wechsel Transaktionsgründe
+(E01 Ein-/Auszug, E02 Einzug in Neuanlage) on SLP-metered MaLos, up to
+**6 weeks + 3 WT Bearbeitungsfrist** before receipt. RLM / SMGW-attached
+metering is future-only; Wechsel (E03) requires ≥ 10 WT lead. The
+Bearbeitungsfrist default (3 WT) follows the E/G rule — the AWH does not
+quantify it for An-/Abmeldungen (documented ambiguity).
 
 ---
 

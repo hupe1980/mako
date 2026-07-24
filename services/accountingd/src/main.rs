@@ -281,7 +281,7 @@ async fn main() -> anyhow::Result<()> {
                                 // booked as a debit; balance nets to the Nachzahlung.
                                 -acct.abschlag_ct,
                                 Some(&ref_id),
-                                Some("de.accounting.abschlag.posted"),
+                                Some(mako_events::accounting::ABSCHLAG_POSTED),
                                 Some(&ref_id), // deterministic ce_id → idempotent per (malo, month)
                                 today,
                                 Some(&format!("Monatlicher Abschlag Tag {day_of_month}")),
@@ -442,7 +442,7 @@ async fn main() -> anyhow::Result<()> {
                             {
                                 let ce = serde_json::json!({
                                     "specversion": "1.0",
-                                    "type": "de.accounting.payment.due",
+                                    "type": mako_events::accounting::PAYMENT_DUE,
                                     "source": format!("urn:accountingd:{}", cfg_sepa.tenant),
                                     "id": uuid::Uuid::new_v4().to_string(),
                                     "time": time::OffsetDateTime::now_utc().to_string(),

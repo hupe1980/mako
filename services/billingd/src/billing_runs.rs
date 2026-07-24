@@ -426,7 +426,7 @@ async fn deliver_abrechnungsinfo(
     };
     let ce = serde_json::json!({
         "specversion": "1.0",
-        "type": "de.billing.abrechnungsinformation.monatlich",
+        "type": mako_events::billing::ABRECHNUNGSINFORMATION_MONATLICH,
         "source": format!("urn:billingd:lf:{}", cand.lf_mp_id),
         "id": uuid::Uuid::new_v4().to_string(),
         "time": time::OffsetDateTime::now_utc().to_string(),

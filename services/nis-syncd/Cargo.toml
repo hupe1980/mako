@@ -18,6 +18,7 @@ name = "nis-syncd"
 path = "src/main.rs"
 
 [dependencies]
+mako-events = { workspace = true }
 mako-markt   = { workspace = true, features = ["marktd-client"] }
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
 axum         = { version = "0.8" }

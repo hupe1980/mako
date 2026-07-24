@@ -23,11 +23,13 @@ graph TB
     makod["makod :8080"]
     pg["PostgreSQL\nanmeldung_decisions\napproval_queue"]
 
-    marktd -->|"de.mako.process.initiated\nHMAC POST /webhook"| processd
+    marktd -->|"de.mako.process.initiated\nde.markt.versorgung.gap-detected\nHMAC POST /webhook"| processd
 
     subgraph NB ["NB module (--features nb-only)"]
         NC["netz-checker\n6 deterministic checks\nSTP target ≥ 95%"]
+        EOG["EoG gap closure\n§36/§38 EnWG · §38 timer"]
         NC --> pg
+        EOG --> pg
     end
 
     subgraph LF ["LF module (--features lf-only)"]
@@ -37,7 +39,7 @@ graph TB
 
     processd --> NB
     processd --> LF
-    NB -->|"gpke.lieferbeginn.bestaetigen/ablehnen\nPOST /api/v1/commands"| makod
+    NB -->|"gpke.lieferbeginn.bestaetigen/ablehnen\ngpke.eog.anmelden\nPOST /api/v1/commands"| makod
     LF -->|"gpke.nb-lieferende.bestaetigen/ablehnen\ngeli.lieferbeginn.anmelden\nPOST /api/v1/commands"| makod
     NB & LF -->|"GET /api/v1/versorgung\nGET /api/v1/malo/{id}/grid"| marktd
 ```
@@ -56,6 +58,7 @@ graph TB
 │  POST /api/v1/queue/{id}/approve|reject  ← operator action       │
 │  POST /api/v1/start-supply              ← LFN Strom bootstrap    │
 │  POST /api/v1/start-supply-gas          ← LFN Gas 44001 bootstrap│
+│  GET  /api/v1/eog           ← EoG gap-closure case log (§36/§38) │
 │  GET  /health/live  /health/ready                                │
 │  POST|GET /mcp       ← MCP Streamable HTTP (2025-11-25)          │
 └────────────────────────────────────────────────────────────────────┘
@@ -108,11 +111,11 @@ de.mako.process.initiated (PID 55001/55016/44001)
 | # | Rule | On failure |
 |---|------|------------|
 | 1 | `MaloGridRecord` exists for the MaLo | `Escalate` |
-| 2 | `lf_mp_id_next` is `None` (no pending Lieferbeginn) | `Reject A06` |
-| 3 | `process_date ≥ today` (no retroactive starts) | `Reject A97` |
-| 4 | Bilanzierungsgebiet in UTILMD matches grid record | `Reject A02` |
-| 5 | LF MP-ID in partner directory | `Reject A05` |
-| 6 | Mindestvorlauffrist met (SLP: tomorrow+; RLM: 2 Werktage+) | `Reject A99` |
+| 2 | MaLo participates in MaKo (not Stillgelegt/Ruhend) | `Reject A02` |
+| 3 | `lf_mp_id_next` is `None` (no Anmeldung in Bearbeitung) | `Reject A06` |
+| 4 | Date plausibility (Transaktionsgrund-aware) — Strom: LFW24 future rule; Gas: E03 ≥ 10 WT, E01/E02 retroactive ≤ 6 weeks (+3 WT) for SLP | `Reject A07` (Strom) / `Reject E17` (Gas); Gas backdated without Transaktionsgrund → `Escalate` |
+| 5 | Bilanzierungsgebiet in UTILMD matches grid record | `Reject A05` |
+| 6 | LF MP-ID in partner directory | `Reject A05` |
 
 ### STP rate targets
 
@@ -160,6 +163,47 @@ own_mp_ids = ["9900357000004", "9800357000004"]
 `obsd` records `initiator_is_affiliate = true` on the resulting `ProcessProjection`
 and the KPI report exposes the parity delta for **BNetzA audit evidence**.
 See [obsd §20 EnWG parity](obsd#20-enwg-parity) for query examples.
+
+---
+
+## NB module — EoG gap closure (§36/§38 EnWG)
+
+Every consuming Marktlokation must be assigned to a Bilanzkreis at all times
+(GPKE Teil 2 Kap. 2.3). The EoG module closes supply gaps automatically:
+
+```
+de.markt.versorgung.gap-detected           (marktd: 55005/44005 completed,
+  │                                         no announced successor)
+  ├─ record case in eog_activations         (idempotent per MaLo)
+  ├─ [eog.auto_activate] GET /api/v1/grundversorger/{nb_mp_id}?sparte=…
+  │    └─ found → gpke.eog.anmelden → makod → UTILMD 55013 to the E/G
+  │       (Zuordnungsbeginn = day after Lieferende — retroactive allowed)
+  │    └─ missing → case stays `detected`; operator provisions the
+  │       §36 Abs. 2 Feststellung and re-triggers
+  └─ de.markt.versorgung.eog-begonnen → case `active`
+       (eog_art = Ersatz-/Grundversorgung as classified by the E/G in 55014;
+        eog_seit = Zuordnungsbeginn)
+```
+
+**§38 timer.** A daily worker enforces the three-month maximum
+(§38 Abs. 4 S. 1 EnWG, calendar months from `eog_seit` — not from detection):
+`warn_days_before_expiry` days ahead the case turns `expiring`, at expiry
+`expired`; both emit `de.markt.versorgung.ersatz-auslaufend` to
+`eog.notify_webhook_url`. `Grundversorgung` cases have no statutory maximum.
+After expiry the follow-up is operator-driven: Haushaltskunden transition into
+Grundversorgung automatically **without a market message** (the E/G's billing
+switches regime); otherwise the NB secures the Bilanzkreis (vertragliche
+Ersatzbelieferung, STS `E06`) or interrupts the Anschlussnutzung.
+
+**Operator surface.** `GET /api/v1/eog?status=detected|angemeldet|active|expiring|expired`.
+
+```toml
+[eog]
+auto_activate            = true       # default false — record-only
+default_transaktionsgrund = "ZT6"     # SG4 STS DE9013 for automatic Anmeldungen
+warn_days_before_expiry  = 14
+notify_webhook_url       = "https://erp.example/hooks/eog"
+```
 
 ---
 
@@ -214,15 +258,18 @@ curl -X POST http://processd:8580/api/v1/start-supply \
 | `malo_id` | ✓ | 11-digit Strom Marktlokations-ID |
 | `lieferbeginn_datum` | ✓ | ISO-8601 date (YYYY-MM-DD) |
 
-**Vorlauffrist rules (15:00 CET/CEST cutoff):**
+**Vorlauffrist rules (LFW24, BK6-24-174 GPKE Teil 2, SD Lieferbeginn Prozessschritt 1):**
 
-| Submission time | Earliest allowed Lieferbeginn |
+"Spätester ÜT ist der Tag vor dem letzten WT vor dem Zuordnungsbeginn" — the
+Frist is day-granular (ÜT = calendar day of the AS4 receipt); there is no
+time-of-day cutoff.
+
+| Submission (Berlin date) | Earliest allowed Lieferbeginn |
 |---|---|
-| Before 15:00 Berlin | Next Arbeitstag (+1 Werktag) |
-| At or after 15:00 Berlin | übernächster Arbeitstag (+2 Werktage) |
+| Today | Calendar day after the next Werktag after today |
 | Retroactive date (`< today_berlin`) | Rejected with `RETROACTIVE_DATE` |
 
-Response includes `earliest_lieferbeginn` and `berlin_time_at_submission` for
+Response includes `earliest_lieferbeginn` and `berlin_date_at_submission` for
 operator transparency.
 
 ### Gas: `POST /api/v1/start-supply-gas`
@@ -346,6 +393,12 @@ auto_accept = false   # true → dispatch bestaetigen automatically on Accept
 auto_respond   = true   # false → all E_0624 routed to approval_queue
 queue_ttl_secs = 2700   # 45 min — LFW24 deadline
 
+[eog]                                     # §36/§38 EnWG gap closure (NB role)
+auto_activate             = false         # true → dispatch gpke.eog.anmelden on gap-detected
+default_transaktionsgrund = "ZT6"         # SG4 STS DE9013 for automatic Anmeldungen
+warn_days_before_expiry   = 14            # §38 Abs. 4 3-month warning lead
+# notify_webhook_url      = "https://erp.example/hooks/eog"   # ersatz-auslaufend CloudEvents
+
 # [oidc]                # omit to disable auth (dev only — never omit in production)
 # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 # audience = "api://mako-processd"
@@ -435,8 +488,8 @@ de.mako.process.initiated (PID 55039 / 55042)
   → GET marktd /api/v1/partners/{nmsb_mp_id}  ← nMSB registered?
   → GET marktd /api/v1/technische-ressourcen/{sr_id} ← SR linked?
   → evaluate_msb_anmeldung / evaluate_msb_kuendigung (pure, no I/O)
-      Accept   → wim.msb-wechsel.anmeldung.bestaetigen
-      Reject   → wim.msb-wechsel.anmeldung.ablehnen (ERC code)
+      Accept   → wim.geraetewechsel.bestaetigen
+      Reject   → wim.geraetewechsel.ablehnen (ERC code in reason)
       Escalate → operator alert (manual decision required)
 ```
 
@@ -470,7 +523,7 @@ All escalated decisions still generate an `anmeldung_decisions` row for §20 EnW
 
 ## MSB module — REQOTE auto-response
 
-When `processd` receives `de.mako.process.initiated` for PIDs 35001–35005 (REQOTE Preisanfrage from an nMSB), it **automatically dispatches a QUOTES response** sourced from the active `PreisblattMessung` in `marktd`. Dispatching from master data rather than from a manual ERP trigger is what keeps the response inside the APERAK ERC A97 deadline.
+When `processd` receives `de.mako.process.initiated` for PIDs 35001–35005 (REQOTE Preisanfrage from an nMSB), it **automatically dispatches a QUOTES response** sourced from the active `PreisblattMessung` in `marktd`. Dispatching from master data rather than from a manual ERP trigger is what keeps the response inside the REQOTE answer window.
 
 ### Decision pipeline
 

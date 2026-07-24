@@ -22,7 +22,7 @@
 //! | `get_versorgungsstatus`           | Read the current VersorgungsStatus for a MaLo |
 //! | `get_versorgungsstatus_history`   | Read full supply-state change history |
 //! | `get_versorgung_at`               | Point-in-time VersorgungsStatus query |
-//! | `get_lokationszuordnung`          | Read active role assignments for a MaLo |
+//! | `get_rollenzuordnung`          | Read active role assignments for a MaLo |
 //! | `get_nb_contract`                 | Read the NB contract for a MaLo |
 //! | `get_correlation`                 | Correlate process ID or ERP order ref |
 //! | `list_pricat_versions`            | List available PRICAT versions for an NB |
@@ -143,7 +143,7 @@ pub struct GetMeloParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct GetLokaionsZuordnungParams {
+pub struct GetRollenzuordnungParams {
     /// 11-digit MaLo ID.
     pub malo_id: String,
     /// Reference date (YYYY-MM-DD). Defaults to today.
@@ -822,12 +822,12 @@ Returns the version_id that was queued. Actual dispatch is asynchronous. \
     }
 
     #[tool(
-        description = "Get temporal role assignments (Lokationszuordnung) for a MaLo: NB, MSB, LF with valid_from/valid_to dates. Essential for GPKE/GeLi process routing.",
+        description = "Get temporal role assignments (Rollenzuordnung) for a MaLo: NB, MSB, LF with valid_from/valid_to dates. Essential for GPKE/GeLi process routing.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
-    async fn get_lokationszuordnung(
+    async fn get_rollenzuordnung(
         &self,
-        Parameters(p): Parameters<GetLokaionsZuordnungParams>,
+        Parameters(p): Parameters<GetRollenzuordnungParams>,
     ) -> Result<CallToolResult, McpError> {
         let date = p
             .date
@@ -839,7 +839,7 @@ Returns the version_id that was queued. Actual dispatch is asynchronous. \
 
         let rows = sqlx::query(
             r"SELECT zuordnungstyp, rollencodenummer, valid_from, valid_to
-              FROM lokationszuordnung
+              FROM rollenzuordnungen
               WHERE malo_id = $1
                 AND valid_from <= $2
                 AND (valid_to IS NULL OR valid_to >= $2)
@@ -1231,7 +1231,7 @@ impl MdmdMcpHandler {
                 "1. `get_versorgungsstatus` — compare current vs expected status.\n\
                  2. `get_versorgungsstatus_history` — see all transitions with timestamps.\n\
                  3. `get_correlation` with erp_order_id — find the triggering process.\n\
-                 4. `get_lokationszuordnung` — verify NB/MSB/LF role assignments are current.\n\
+                 4. `get_rollenzuordnung` — verify NB/MSB/LF role assignments are current.\n\
                  5. Status Unbeliefert means no active Liefervertrag — check:\n\
                     - Was UTILMD 55001 (Lieferbeginn) sent and APERAK received?\n\
                     - Was 55003 (NB-Bestätigung) received from NB?\n\
@@ -1260,7 +1260,7 @@ impl MdmdMcpHandler {
                     - lf_mp_id set = Beliefert (55003 confirmation received)\n\
                  3. `get_correlation` by process_id — see workflow_name=gpke-supplier-change, status=RUNNING/COMPLETED\n\
                  4. `get_versorgungsstatus_history` — review full transition timeline\n\
-                 5. `get_lokationszuordnung` — verify new LF role assignment valid_from matches Lieferbeginn\n\
+                 5. `get_rollenzuordnung` — verify new LF role assignment valid_from matches Lieferbeginn\n\
                  6. `get_nb_contract` — confirm NB contract valid_from ≤ Lieferbeginn\n\n\
                  GPKE deadlines: NB must respond within 24h (APERAK) and 10 Werktage (55002/55003/55004).\n\
                  APERAK 45-min deadline is enforced by makod automatically.",
@@ -1270,7 +1270,7 @@ impl MdmdMcpHandler {
 
     #[prompt(
         name = "grid-topology",
-        description = "Investigate grid topology: MaLo → MeLo → NeLo → lokationszuordnung chains"
+        description = "Investigate grid topology: MaLo → MeLo → NeLo → rollenzuordnung chains"
     )]
     async fn grid_topology_prompt(&self) -> Vec<PromptMessage> {
         vec![
@@ -1282,7 +1282,7 @@ impl MdmdMcpHandler {
                 Role::Assistant,
                 "## Grid Topology Investigation\n\n\
                  1. `get_malo` — start with malo_id; check sparte, netzebene, bilanzierungsgebiet, regelzone\n\
-                 2. `get_lokationszuordnung` — temporal role chain:\n\
+                 2. `get_rollenzuordnung` — temporal role chain:\n\
                     - NB (or GNB for Gas): grid operator\n\
                     - MSB: Messstellenbetreiber (meter operator)\n\
                     - LF/LFG: active supplier\n\
@@ -1292,7 +1292,7 @@ impl MdmdMcpHandler {
                     - regelzone: for MABIS IFTSTA routing (→ ÜNB)\n\
                  4. For §14a EnWG steuerbare Ressourcen: `get_steuerbare_ressource`\n\
                  5. For MSB device info: `get_technische_ressource` (smart meter, generation unit)\n\
-                 6. lokationszuordnungen (the graph edges): GET /api/v1/malo/{id}/lokationen\n\
+                 6. lokationszuordnungen (the graph edges): GET /api/v1/malos/{id}/lokationen\n\
                     returns BFS-traversal of all linked MaLo/MeLo/NeLo nodes.",
             ),
         ]
@@ -1321,7 +1321,7 @@ impl ServerHandler for MdmdMcpHandler {
              - `get_versorgungsstatus` — read VersorgungsStatus (Beliefert/Unbeliefert/…) for a MaLo\n\
              - `get_versorgungsstatus_history` — full supply state transition history for a MaLo\n\
              - `get_versorgung_at` — point-in-time VersorgungsStatus for a MaLo on a given date\n\
-             - `get_lokationszuordnung` — temporal NB/MSB/LF role assignments for a MaLo\n\
+             - `get_rollenzuordnung` — temporal NB/MSB/LF role assignments for a MaLo\n\
              - `get_nb_contract` — active NB network contract (netzebene, billing_schedule, RLM/SLP)\n\
              - `get_correlation` — look up a process correlation by process_id or erp_order_id\n\
              - `list_pricat_versions` — PRICAT 27003 version history for an NB\n\

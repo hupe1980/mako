@@ -55,7 +55,33 @@ pub async fn handle_webhook(
     let ce_type = event["type"].as_str().unwrap_or("").to_owned();
 
     // ── 3. Route by event type ────────────────────────────────────────────
-    if ce_type != "de.mako.process.initiated" {
+    // 3a. EoG gap-closure automation (§36/§38 EnWG, NB role) — consumes the
+    //     de.markt.versorgung.* triggers before the process.initiated guard.
+    #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+    if ce_type == mako_events::markt::VERSORGUNG_GAP_DETECTED
+        || ce_type == mako_events::markt::VERSORGUNG_EOG_BEGONNEN
+    {
+        use crate::eog_module;
+        return match eog_module::handle_versorgung_event(
+            &event,
+            &state.eog,
+            &state.marktd,
+            &state.makod,
+            &state.pool,
+            &state.tenant,
+            &state.own_mp_id,
+        )
+        .await
+        {
+            Ok(_) => StatusCode::OK.into_response(),
+            Err(e) => {
+                warn!(error = %e, "processd EoG: event handling failed");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        };
+    }
+
+    if ce_type != mako_events::mako::PROCESS_INITIATED {
         debug!(ce_type, "processd: non-initiated event ignored");
         return StatusCode::NO_CONTENT.into_response();
     }
@@ -186,7 +212,7 @@ pub async fn handle_webhook(
             (Some(true), true) => {
                 // Auto-confirm: SR is remote-switchable and produktcode is contracted.
                 let cmd = mako_markt::makod_client::ForwardCommand {
-                    command: "wim.steuerungsauftrag.bestaetigen".to_owned(),
+                    command: mako_markt::commands::WIM_STEUERUNGSAUFTRAG_BESTAETIGEN.to_owned(),
                     marktrolle: None,
                     malo_id: None,
                     melo_id: None,
@@ -218,7 +244,7 @@ pub async fn handle_webhook(
                     "processd: Steuerungsauftrag ablehnen — produktcode not in contracted konfigurationsprodukte (BK6-24-174 §4.3)"
                 );
                 let cmd = mako_markt::makod_client::ForwardCommand {
-                    command: "wim.steuerungsauftrag.ablehnen".to_owned(),
+                    command: mako_markt::commands::WIM_STEUERUNGSAUFTRAG_ABLEHNEN.to_owned(),
                     marktrolle: None,
                     malo_id: None,
                     melo_id: None,

@@ -27,6 +27,8 @@
 //!   format and PID definitions (MSCONS AHB)
 //! - **MSCONS G1.x** — EDI@Energy metered gas data format
 
+use mako_engine::types::Pruefidentifikator;
+
 // ── PID constants ─────────────────────────────────────────────────────────────
 
 /// Workflow key for the GaBi Gas MMM Allokationsliste data delivery process.
@@ -35,12 +37,12 @@ pub const WORKFLOW_NAME: &str = "gabi-gas-mmma";
 /// ORDERS PID used when LF requests the Gas Allokationsliste from NB.
 ///
 /// Gas-only (⚡=— in ORDERS AHB 1.0). See module-level doc for routing note.
-pub const ORDERS_ANFRAGE_PID: u32 = 17110;
+pub const ORDERS_ANFRAGE_PID: Pruefidentifikator = Pruefidentifikator::const_new(17110);
 
 /// ORDRSP rejection PID: NB declines the Gas Allokationsliste request.
 ///
 /// Gas-only (⚡=— in ORDRSP AHB 1.0). See module-level doc for routing note.
-pub const ORDRSP_ABLEHNUNG_PID: u32 = 19110;
+pub const ORDRSP_ABLEHNUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(19110);
 
 /// MSCONS Prüfidentifikatoren for Gas MMM Allokationsliste data delivery.
 ///

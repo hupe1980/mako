@@ -92,12 +92,18 @@ fn default_bo4e_version() -> String {
 
 // ── MaLo ─────────────────────────────────────────────────────────────────────
 
-/// Point-in-time `lokationszuordnung` record extracted from a `MARKTLOKATION`.
+/// Point-in-time market-role assignment (`rollenzuordnung`) for a `MARKTLOKATION`:
+/// which Marktpartner (NB, LF, MSB, …) holds which role, and for which validity
+/// period.
 ///
 /// The `malo_id` is implicit (always the parent `MaloRecord.malo_id`) and
 /// is therefore not repeated here.
+///
+/// **Not** the BO4E `Lokationszuordnung` business object — that BO models the
+/// MaLo/MeLo/NeLo/TR/SR location-bundle *graph* and lives in
+/// [`LokationszuordnungEdge`] (table `lokationszuordnungen`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Lokationszuordnung {
+pub struct Rollenzuordnung {
     pub zuordnungstyp: String,
     pub rollencodenummer: String,
     #[serde(with = "date_iso")]
@@ -108,7 +114,7 @@ pub struct Lokationszuordnung {
 
 /// Stored MaLo record as returned by repository reads.
 ///
-/// `lokationszuordnung` contains only the role assignments valid at the
+/// `rollenzuordnung` contains only the role assignments valid at the
 /// `at` date passed to `MaloRepository::find` / `MaloRepository::list`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaloRecord {
@@ -154,10 +160,15 @@ pub struct MaloRecord {
     /// Determines the GaBi billing category for Gas RLM MaLos.
     /// Required for `netzbilanzd` Gas MMM settlement routing.
     pub fallgruppe: Option<String>,
+    /// Lokationsbündel object code extracted from
+    /// `Marktlokation.lokationsbuendelObjektcode` — groups the locations that
+    /// are bundled for market communication (UTILMD Lokationsbündelstruktur).
+    #[serde(default)]
+    pub lokationsbuendel_objektcode: Option<String>,
     pub version: i64,
     pub data: MaloPayload,
     /// Role assignments valid at the requested reference date.
-    pub lokationszuordnung: Vec<Lokationszuordnung>,
+    pub rollenzuordnung: Vec<Rollenzuordnung>,
     pub updated_at: time::OffsetDateTime,
     /// BO4E schema version of the `data` payload (e.g. `"v202607.0.0"`).
     #[serde(default = "default_bo4e_version")]
@@ -186,6 +197,10 @@ pub struct MeloRecord {
     /// - Gas billing zone assignment (`druckstufe`) for GeLi Gas MMM
     /// - netz-checker check 5 (Bilanzierungszone at MeLo level)
     pub standorteigenschaften: Option<serde_json::Value>,
+    /// Lokationsbündel object code extracted from
+    /// `Messlokation.lokationsbuendelObjektcode` (UTILMD Lokationsbündelstruktur).
+    #[serde(default)]
+    pub lokationsbuendel_objektcode: Option<String>,
     pub version: i64,
     pub data: MeloPayload,
     pub updated_at: time::OffsetDateTime,
@@ -252,11 +267,12 @@ pub struct PartnerRecord {
     /// 13-digit Marktpartner-ID.
     pub mp_id: MarktpartnerId,
     pub display_name: Option<String>,
-    pub marktrolle: Option<String>,
+    /// BO4E market role (serialises as the BDEW code, e.g. `"LF"`, `"NB"`, `"MSB"`).
+    pub marktrolle: Option<rubo4e::current::Marktrolle>,
     pub sparte: Option<Sparte>,
-    /// Coding authority: `"BDEW"` | `"DVGW"` | `"GS1"`.
+    /// Coding authority: `BDEW` | `DVGW` | `GLN` (BO4E `Rollencodetyp`).
     /// Derived from the MP-ID prefix; stored for fast AS4 routing lookups.
-    pub rollencodetyp: Option<String>,
+    pub rollencodetyp: Option<rubo4e::current::Rollencodetyp>,
     /// AS4 endpoint URL list from `Marktteilnehmer.makoadresse`.
     /// Used by `makod` for dynamic AS4 destination routing.
     pub makoadresse: Vec<String>,
@@ -267,6 +283,38 @@ pub struct PartnerRecord {
     pub version: i64,
     #[serde(default = "unix_epoch", with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
+}
+
+impl PartnerRecord {
+    /// Present the stored partner as a BO4E `Marktteilnehmer`.
+    ///
+    /// Field mapping:
+    /// - `mp_id` → `rollencodenummer`
+    /// - `marktrolle` / `rollencodetyp` → carried as-is (already typed)
+    /// - `sparte` → BO4E `Sparte`
+    /// - `makoadresse` → `makoadresse` (omitted when empty)
+    /// - `display_name` → `geschaeftspartner.organisationsname`
+    #[must_use]
+    pub fn to_marktteilnehmer(&self) -> rubo4e::current::Marktteilnehmer {
+        let geschaeftspartner = self.display_name.as_ref().map(|name| {
+            Box::new(rubo4e::current::Geschaeftspartner {
+                organisationsname: Some(name.clone()),
+                ..Default::default()
+            })
+        });
+        rubo4e::current::Marktteilnehmer {
+            rollencodenummer: Some(self.mp_id.clone()),
+            marktrolle: self.marktrolle,
+            rollencodetyp: self.rollencodetyp,
+            sparte: self.sparte.map(|s| match s {
+                Sparte::Strom => rubo4e::current::Sparte::Strom,
+                Sparte::Gas => rubo4e::current::Sparte::Gas,
+            }),
+            makoadresse: (!self.makoadresse.is_empty()).then(|| self.makoadresse.clone()),
+            geschaeftspartner,
+            ..Default::default()
+        }
+    }
 }
 
 /// Process correlation entry.
@@ -308,9 +356,9 @@ pub struct PageResult<T> {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct MaloFilter {
     pub sparte: Option<Sparte>,
-    /// Filter by `zuordnungstyp` in active `lokationszuordnung` (e.g. `"NB"`, `"LF"`).
+    /// Filter by `zuordnungstyp` in active `rollenzuordnung` (e.g. `"NB"`, `"LF"`).
     pub zuordnungstyp: Option<String>,
-    /// Filter by `rollencodenummer` (GLN) in active `lokationszuordnung`.
+    /// Filter by `rollencodenummer` (GLN) in active `rollenzuordnung`.
     pub rollencodenummer: Option<String>,
     /// Filter by Gas GaBi RLM Fallgruppe (e.g. `"GABI_RLM_MIT_TAGESBAND"`).
     /// Applies to Gas MaLos only; Strom MaLos have no Fallgruppe.
@@ -381,7 +429,7 @@ pub trait MaloRepository: Send + Sync {
         malo_id: &MaloId,
         sparte: Sparte,
         data: MaloPayload,
-        lokationszuordnung: Vec<Lokationszuordnung>,
+        rollenzuordnung: Vec<Rollenzuordnung>,
         if_match: Option<i64>,
         bo4e_version: &str,
     ) -> Result<i64, MdmError>;
@@ -403,14 +451,14 @@ pub trait MaloRepository: Send + Sync {
         fallgruppe: Option<&str>,
     ) -> Result<(), MdmError>;
 
-    /// Return the `MARKTLOKATION` with `lokationszuordnung` valid at `at`.
+    /// Return the `MARKTLOKATION` with `rollenzuordnung` valid at `at`.
     ///
     /// `at` defaults to today (German local date).
     async fn find(&self, malo_id: &MaloId, at: Date) -> Result<Option<MaloRecord>, MdmError>;
 
     /// Return a paged list filtered by the given predicates.
     ///
-    /// `at` is the reference date for `lokationszuordnung` validity.
+    /// `at` is the reference date for `rollenzuordnung` validity.
     async fn list(&self, filter: MaloFilter, at: Date) -> Result<PageResult<MaloRecord>, MdmError>;
 }
 
@@ -1171,6 +1219,15 @@ pub struct VersorgungsStatusRecord {
     pub msb_mp_id: Option<String>,
     /// GLN of the Netzbetreiber responsible for this MaLo.
     pub nb_mp_id: String,
+    /// Start date of the running Ersatz-/Grundversorgung (§38/§36 EnWG).
+    ///
+    /// Set by `begin_eog_supply` when `lieferstatus` transitions to
+    /// `Ersatzversorgung` or `Grundversorgung`; cleared on any other
+    /// transition. For `Ersatzversorgung` this anchors the statutory
+    /// 3-month maximum (§38 Abs. 2 EnWG) enforced by the `processd`
+    /// EoG timer.
+    #[serde(default, with = "date_iso::opt")]
+    pub eog_seit: Option<Date>,
     /// `process_id` of the last process that triggered a state change.
     pub last_process_id: Option<Uuid>,
     /// Last time this record was updated (RFC 3339).
@@ -1368,6 +1425,75 @@ pub trait VersorgungsStatusRepository: Send + Sync {
         tenant: &str,
         process_id: Option<Uuid>,
     ) -> Result<(), MdmError>;
+
+    /// Record the start of the statutory fallback supply (§38/§36 EnWG).
+    ///
+    /// Called when the EoG Zuordnung completes (UTILMD 55013/44013
+    /// `de.mako.process.completed`): the Grundversorger becomes the supplier
+    /// of record. Atomically sets
+    /// - `lieferstatus = Ersatzversorgung` or `Grundversorgung`
+    ///   (`eog_status` must be one of the two; any other value is an error),
+    /// - `lf_mp_id = gv_mp_id`, `lieferbeginn = eog_seit`,
+    /// - `eog_seit = start of the fallback supply` (anchors the §38 Abs. 2
+    ///   3-month maximum for `Ersatzversorgung`),
+    ///
+    /// while preserving `lf_mp_id_next` / `lf_next_lieferbeginn` — a pending
+    /// regular supplier switch ends the fallback supply on confirmation.
+    /// Appends to `versorgungsstatus_history` on every successful write.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)] // regulatory transition carries its full context
+    async fn begin_eog_supply(
+        &self,
+        malo_id: &MaloId,
+        tenant: &str,
+        gv_mp_id: &str,
+        nb_mp_id: &str,
+        eog_status: LieferStatus,
+        eog_seit: Option<Date>,
+        process_id: Option<Uuid>,
+    ) -> Result<(), MdmError>;
+}
+
+// ── Grundversorger (§36 EnWG) ─────────────────────────────────────────────────
+
+/// The Grundversorger determined for a Netzgebiet per §36 Abs. 2 EnWG.
+///
+/// The supplier with the most Haushaltskunden in the Netzgebiet, festgestellt
+/// by the NB every three years. Master data — maintained by the operator (or
+/// an import), read by the `processd` gap-closure automation to address the
+/// UTILMD 55013/44013 EoG Zuordnung.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrundversorgerRecord {
+    /// GLN of the Netzbetreiber whose Netzgebiet this entry covers.
+    pub nb_mp_id: String,
+    /// Commodity.
+    pub sparte: Sparte,
+    /// MP-ID of the Grundversorger (the LF addressed by the EoG Zuordnung).
+    pub gv_mp_id: String,
+    /// Date of the §36 Abs. 2 Feststellung (three-year cycle).
+    #[serde(default, with = "date_iso::opt")]
+    pub festgestellt_am: Option<Date>,
+    /// Last time this record was updated (RFC 3339).
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: time::OffsetDateTime,
+    /// Tenant identifier (not serialized in API responses).
+    #[serde(skip_serializing, default)]
+    pub tenant: String,
+}
+
+/// Repository for the per-Netzgebiet Grundversorger determination (§36 EnWG).
+#[allow(async_fn_in_trait)]
+pub trait GrundversorgerRepository: Send + Sync {
+    /// Fetch the Grundversorger for a Netzbetreiber and Sparte.
+    async fn find(
+        &self,
+        tenant: &str,
+        nb_mp_id: &str,
+        sparte: Sparte,
+    ) -> Result<Option<GrundversorgerRecord>, MdmError>;
+
+    /// Insert or update the Grundversorger entry.
+    async fn upsert(&self, record: &GrundversorgerRecord) -> Result<(), MdmError>;
 }
 
 // ── Netz-Element-Lokation (NeLo) ──────────────────────────────────────────────
@@ -1733,6 +1859,11 @@ pub struct LokationszuordnungEdge {
     pub valid_from: Option<time::Date>,
     /// `None` = open-ended (currently active).
     pub valid_to: Option<time::Date>,
+    /// Lokationsbündelcode extracted from the BO4E payload
+    /// (`data.lokationsbuendelcode`) on upsert — identifies the Lokationsbündel
+    /// this edge belongs to (UTILMD Lokationsbündelstruktur).
+    #[serde(default)]
+    pub lokationsbuendelcode: Option<String>,
     /// Full BO4E `Lokationszuordnung` payload.
     pub data: serde_json::Value,
     /// BFS traversal depth from root (0 = direct edge from root).
@@ -1745,6 +1876,15 @@ pub struct LokationszuordnungEdge {
 /// Enables single-query recursive traversal of the full MaLo → MeLo → NeLo →
 /// SR/TR graph for topology-dependent operations (Redispatch 2.0, iMS E-mobility
 /// Steuerungsauftrag routing, MSB Stammdaten hierarchy).
+///
+/// # Single-write-path invariant (MaLo ↔ MeLo)
+///
+/// The `melo → malo` edges of this graph are ALSO maintained by the MeLo write
+/// path (`MeloRepository::upsert` in marktd's PG implementation) in the same
+/// transaction that sets the `melo.malo_id` FK: the FK is a derived convenience
+/// for "current parent", the graph is the authoritative temporal history, and
+/// the two never contradict. Writers other than the MeLo PUT and the graph API
+/// must not touch `melo.malo_id` directly.
 #[allow(async_fn_in_trait)]
 pub trait LokationszuordnungRepository: Send + Sync {
     /// Insert or replace a directed edge.
@@ -1856,7 +1996,7 @@ pub enum Konfigurationsparameter {
     /// BSI TR-03109-3 SMGW TLS certificate SHA-256 fingerprint (64 lowercase hex chars).
     ///
     /// Used by the `edmd` certificate-expiry background worker to emit
-    /// `de.edmd.cls.compliance_issue` before expiry.
+    /// `de.messwert.cls.compliance_issue` before expiry.
     SmgwTlsCertFingerprint,
     /// SMGW TLS certificate expiry date (`YYYY-MM-DD`).
     ///
@@ -2455,4 +2595,246 @@ pub trait EinwilligungRepository: Send + Sync {
         location_id: &str,
         perspective: ConsentPerspective,
     ) -> Result<ConsentDecision, MdmError>;
+}
+
+// ── §20b EnWG Netzzugangsplattform ────────────────────────────────────────────
+
+/// Use case of a §20b EnWG Netzzugangsplattform request (Abs. 2 Nr. 1–3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetzzugangAntragTyp {
+    /// §20b Abs. 2 Nr. 1 — Zählpunktanordnung (umgangssprachlich Messkonzept)
+    /// hinter einem Netzanschluss.
+    Zaehlpunktanordnung,
+    /// §20b Abs. 2 Nr. 2 — Verrechnungskonzept (Verrechnungsformel) hinter
+    /// einem Netzanschluss.
+    Verrechnungskonzept,
+    /// §20b Abs. 2 Nr. 3 — Registrierung einer Energy-Sharing-Vereinbarung
+    /// nach §42c EnWG.
+    EnergySharingVereinbarung,
+}
+
+impl NetzzugangAntragTyp {
+    /// Stable snake_case string used in SQL CHECK constraints and JSON.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Zaehlpunktanordnung => "zaehlpunktanordnung",
+            Self::Verrechnungskonzept => "verrechnungskonzept",
+            Self::EnergySharingVereinbarung => "energysharing_vereinbarung",
+        }
+    }
+}
+
+/// Action on a §20b request. `Registrierung` applies only to
+/// [`NetzzugangAntragTyp::EnergySharingVereinbarung`]; the other two use cases
+/// carry the statutory Bestellung/Änderung/Abbestellung triple.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetzzugangAktion {
+    /// Erstmalige Bestellung.
+    Bestellung,
+    /// Änderung.
+    Aenderung,
+    /// Abbestellung.
+    Abbestellung,
+    /// Registrierung (§42c-Vereinbarung only).
+    Registrierung,
+}
+
+impl NetzzugangAktion {
+    /// Stable snake_case string used in SQL CHECK constraints and JSON.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bestellung => "bestellung",
+            Self::Aenderung => "aenderung",
+            Self::Abbestellung => "abbestellung",
+            Self::Registrierung => "registrierung",
+        }
+    }
+}
+
+/// Lifecycle state of a §20b request as tracked by the projection.
+///
+/// `Erfasst` on command acceptance, `Uebermittelt` once the makod outbox
+/// sender delivered it (to the platform endpoint or, while none exists, to the
+/// operator's ERP webhook for manual submission via the NB Webportal),
+/// `Bestaetigt`/`Abgelehnt` when the answer arrives, `Fehlgeschlagen` when
+/// delivery exhausted its retries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetzzugangStatus {
+    /// Recorded; not yet delivered.
+    Erfasst,
+    /// Delivered to the platform endpoint or handed to the operator.
+    Uebermittelt,
+    /// Confirmed by the platform / Netzbetreiber.
+    Bestaetigt,
+    /// Rejected by the platform / Netzbetreiber.
+    Abgelehnt,
+    /// Delivery failed permanently.
+    Fehlgeschlagen,
+}
+
+impl NetzzugangStatus {
+    /// Stable snake_case string used in SQL CHECK constraints and JSON.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Erfasst => "erfasst",
+            Self::Uebermittelt => "uebermittelt",
+            Self::Bestaetigt => "bestaetigt",
+            Self::Abgelehnt => "abgelehnt",
+            Self::Fehlgeschlagen => "fehlgeschlagen",
+        }
+    }
+}
+
+/// A §20b EnWG Netzzugangsplattform request (Antrag) and its lifecycle state.
+///
+/// The platform itself does not exist yet (no BNetzA Festlegung under §20b
+/// Abs. 3 as of 2026-07); the record is transport-agnostic: the payload is the
+/// canonical JSON the adapter delivers, `platform_ref` is the platform's
+/// reference once one is assigned.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetzzugangAntrag {
+    #[serde(default)]
+    pub id: Uuid,
+    #[serde(default)]
+    pub tenant: String,
+    /// §20b use case.
+    pub antrag_typ: NetzzugangAntragTyp,
+    /// Action within the use case.
+    pub aktion: NetzzugangAktion,
+    /// The Netzanschluss the request concerns (operator-scoped identifier).
+    pub netzanschluss_id: String,
+    /// MP-ID of the responsible Netzbetreiber.
+    pub nb_mp_id: String,
+    /// Requester on whose behalf the request is made (Anschlussnehmer /
+    /// Anschlussnutzer / §20-Anspruchsberechtigter) — opaque reference, no PII.
+    pub antragsteller_ref: String,
+    /// Lifecycle state.
+    #[serde(default = "default_netzzugang_status")]
+    pub status: NetzzugangStatus,
+    /// Canonical request payload delivered to the platform.
+    #[serde(default)]
+    pub payload: serde_json::Value,
+    /// Reference assigned by the platform, once known.
+    #[serde(default)]
+    pub platform_ref: Option<String>,
+    #[serde(default = "unix_epoch", with = "time::serde::rfc3339")]
+    pub created_at: time::OffsetDateTime,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub submitted_at: Option<time::OffsetDateTime>,
+}
+
+fn default_netzzugang_status() -> NetzzugangStatus {
+    NetzzugangStatus::Erfasst
+}
+
+/// Registry of §20b EnWG Netzzugangsplattform requests.
+#[allow(async_fn_in_trait)]
+pub trait NetzzugangRepository: Send + Sync {
+    /// Insert or update a request by id (tenant-scoped). Returns the id.
+    async fn upsert(&self, rec: NetzzugangAntrag) -> Result<Uuid, MdmError>;
+
+    /// Fetch a request by id (tenant-scoped).
+    async fn get(&self, tenant: &str, id: Uuid) -> Result<Option<NetzzugangAntrag>, MdmError>;
+
+    /// List requests, optionally filtered by status and/or Netzanschluss.
+    async fn list(
+        &self,
+        tenant: &str,
+        status: Option<NetzzugangStatus>,
+        netzanschluss_id: Option<&str>,
+    ) -> Result<Vec<NetzzugangAntrag>, MdmError>;
+
+    /// Update lifecycle state (and optionally the platform reference).
+    /// Returns the updated record when it existed.
+    async fn set_status(
+        &self,
+        tenant: &str,
+        id: Uuid,
+        status: NetzzugangStatus,
+        platform_ref: Option<String>,
+    ) -> Result<Option<NetzzugangAntrag>, MdmError>;
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod partner_record_tests {
+    use super::*;
+
+    fn sample_partner() -> PartnerRecord {
+        PartnerRecord {
+            mp_id: "9900357000004".parse().expect("valid MP-ID"),
+            display_name: Some("Stadtwerke Musterstadt Netz GmbH".to_owned()),
+            marktrolle: Some(rubo4e::current::Marktrolle::Nb),
+            sparte: Some(Sparte::Strom),
+            rollencodetyp: Some(rubo4e::current::Rollencodetyp::Bdew),
+            makoadresse: vec!["https://as4.musterstadt.example/msh".to_owned()],
+            channels: serde_json::json!({}),
+            version: 1,
+            updated_at: time::OffsetDateTime::UNIX_EPOCH,
+        }
+    }
+
+    /// The typed enums keep the wire format the TEXT columns and existing API
+    /// clients rely on: bare BDEW codes.
+    #[test]
+    fn typed_enums_stay_string_compatible() {
+        let p = sample_partner();
+        let json = serde_json::to_value(&p).expect("serialise");
+        assert_eq!(json["marktrolle"], "NB");
+        assert_eq!(json["rollencodetyp"], "BDEW");
+
+        let round: PartnerRecord = serde_json::from_value(json).expect("deserialise");
+        assert_eq!(round.marktrolle, Some(rubo4e::current::Marktrolle::Nb));
+        assert_eq!(
+            round.rollencodetyp,
+            Some(rubo4e::current::Rollencodetyp::Bdew)
+        );
+
+        // strum Display matches the serde repr — the PG TEXT binding uses it.
+        assert_eq!(rubo4e::current::Marktrolle::Nb.to_string(), "NB");
+        assert_eq!(rubo4e::current::Rollencodetyp::Gln.to_string(), "GLN");
+        assert_eq!("LF".parse(), Ok(rubo4e::current::Marktrolle::Lf));
+    }
+
+    /// `to_marktteilnehmer` maps every stored field into the BO4E shape.
+    #[test]
+    fn to_marktteilnehmer_maps_all_fields() {
+        let p = sample_partner();
+        let mt = p.to_marktteilnehmer();
+
+        assert_eq!(
+            mt.rollencodenummer.as_ref().map(ToString::to_string),
+            Some("9900357000004".to_owned())
+        );
+        assert_eq!(mt.marktrolle, Some(rubo4e::current::Marktrolle::Nb));
+        assert_eq!(mt.rollencodetyp, Some(rubo4e::current::Rollencodetyp::Bdew));
+        assert_eq!(mt.sparte, Some(rubo4e::current::Sparte::Strom));
+        assert_eq!(
+            mt.makoadresse,
+            Some(vec!["https://as4.musterstadt.example/msh".to_owned()])
+        );
+        assert_eq!(
+            mt.geschaeftspartner
+                .as_ref()
+                .and_then(|g| g.organisationsname.clone()),
+            Some("Stadtwerke Musterstadt Netz GmbH".to_owned())
+        );
+        // The BO discriminator is set by the type's Default.
+        assert_eq!(mt.typ, Some(rubo4e::current::BoTyp::Marktteilnehmer));
+
+        // An empty makoadresse list is omitted, not serialised as [].
+        let mut bare = sample_partner();
+        bare.makoadresse.clear();
+        bare.display_name = None;
+        let mt = bare.to_marktteilnehmer();
+        assert_eq!(mt.makoadresse, None);
+        assert!(mt.geschaeftspartner.is_none());
+    }
 }

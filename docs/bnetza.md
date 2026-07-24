@@ -11,7 +11,7 @@ description: >
 # BNetzA Regulatory Reference
 
 Reference document for Bundesnetzagentur rulings that govern German energy market
-communication (MaKo). Extracted from official BNetzA pages as of 2026-06-28.
+communication (MaKo). Extracted from official BNetzA pages as of 2026-07-23.
 
 Sources:
 - BK6 Netzzugang/Messwesen: <https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/NetzZ.html>
@@ -30,8 +30,10 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 
 **Current ruling:**
 - **BK6-24-174** (Beschluss 24.10.2024) — GPKE Teil 1–3 + WiM + MaBiS
-- **BK6-22-024** (Beschluss 21.03.2024) — GPKE Teil 4 (Stammdatenprozesse); Mitteilung Nr. 4
-  vom 06.12.2024 konkretisiert Fristen
+- **BK6-22-024** (Beschluss 21.03.2024) — **LFW24-Festlegung** („beschleunigter werktäglicher
+  Lieferantenwechsel in 24 Stunden", statutory anchor **§20a EnWG**): re-issued GPKE Teil 2
+  und Teil 4 and absorbed the MPES processes into the GPKE (effective 06.06.2025).
+  Go-live 06.06.2025 — postponed from 04.04.2025 by Mitteilung Nr. 4 vom 06.12.2024
 - **Gültig seit: 06.06.2025**
 
 **Process documents (Lesefassungen):**
@@ -68,7 +70,8 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 
 | Nr. | Gegenstand | Datum |
 |---|---|---|
-| 72 | Empfehlung zur Anwendung der BDEW-Anwendungshilfe „Ermittlung des Mehr-/Mindermengenpreises **Strom**" | 05.02.2026 |
+| 73 | Az. BK6-06-009 — Energy Sharing (**§42c EnWG**) läuft über das **Dienstleistungsmodell** innerhalb der bestehenden Lieferanten-/Bilanzkreiszuordnung: keine neuen MaKo-Prozesse, keine GPKE-Änderungen; Fristen 01.06.2026 / 01.06.2028 bekräftigt | 07.07.2026 |
+| 72 | Empfehlung zur Anwendung der neuen BDEW-Anwendungshilfe „Ermittlung des Mehr-/Mindermengenpreises **Strom**" (auf Basis der BDEW-2025-Standardlastprofile) | 05.02.2026 |
 | 71 | Empfehlung zur Anwendung „Marktprozesse Netzbetreiberwechsel Strom" | 01.07.2024 |
 | 66 | Empfehlung zur Anwendung „Prozesse zur Ermittlung und Abrechnung von Mehr-/Mindermengen Strom und Gas" (superseded by Mitteilung 72 for Strom) | 27.01.2020 |
 | 46 | Prozesse zur Ermittlung der Abrechnung von Mehr-/Mindermengen Strom und Gas (nicht mehr aktuell, s. Mitteilung 66) | 22.01.2015 |
@@ -78,6 +81,16 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 > only, confirming that PIDs 31005–31006 are Strom GPKE processes.
 > PIDs 31007–31008 (Aggreg. MMM-Rechnung, NB → MGV) are Gas-only (MGV is a Gas-domain role)
 > and belong to GaBi Gas (`mako-gabi-gas` `gabi-gas-invoic`), not GPKE.
+
+---
+
+### MPES — Marktprozesse für erzeugende Marktlokationen (Strom)
+
+**Status:** merged into GPKE.
+
+- **BK6-20-160** (standalone MPES) — gültig bis **05.06.2025**
+- Seit **06.06.2025** sind die MPES-Prozesse in **GPKE Teil 2** aufgegangen (via BK6-22-024 / LFW24)
+- Erzeugende-MaLo PIDs **55077/55078/55080** und **55601** live in der GPKE
 
 ---
 
@@ -100,7 +113,10 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 
 | Az. | Gegenstand | Eröffnet |
 |---|---|---|
-| BK6-24-210 | Festlegungsverfahren MaBiS-Hub | 02.10.2024 |
+| BK6-24-210-1 | MaBiS-Hub — Messwertverarbeitung / Pseudonymisierung | 02.10.2024 |
+| BK6-24-210-2 | MaBiS-Hub — Abrechnung | 02.10.2024 |
+
+> **MaBiS-Hub:** no Beschluss yet (the H1-2026 target slipped; -1 consultation closed 17.11.2025); Hub go-live still planned H2 2028.
 
 **Selected Mitteilungen:**
 
@@ -157,7 +173,7 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 
 ### Redispatch 2.0 — Koordination von Einspeisungen
 
-**Page:** <https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/836_Redispatch/Redispatch_node.html>
+**Page:** <https://www.bundesnetzagentur.de/DE/Beschlusskammern/1_GZ/BK6-GZ/2023/BK6-23-241/BK6-23-241_beschluss.html>
 
 **Current rulings:**
 
@@ -166,6 +182,7 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 | **BK6-20-059** | `AcknowledgementDocument` (6 h), `StatusRequest` (24 h) | 2021-10-01 |
 | **BK6-20-060** | `Stammdaten` forwarding (1 Werktag), Activation (5 min) | 2021-10-01 |
 | **BK6-20-061** | `Kostenblatt` submission (15th of following month) | 2021-10-01 |
+| **BK6-23-241** | Fortentwicklung der Bilanzierung von Redispatch-Maßnahmen (Beschluss 07.05.2026) — staged transition from Prognosemodell to Planwertmodell in Verteilnetzen | staged |
 
 **Scope:**
 - All German TSOs (ÜNB) and DSOs (VNB) plus connected asset operators (ANB)
@@ -177,6 +194,10 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 **Regulatory context:** Mandatory since NABEG 2019, § 13 ff. EnWG.
 Covers renewable (EE) and combined heat-and-power (KWK) plants ≥ 100 kW,
 plus all installations permanently remote-controllable by a grid operator.
+
+**Bilanzieller Ausgleich (§14 EnWG, amended late 2025):** until **31.12.2031** the
+**BKV** performs the bilanzielle Ausgleich of DSO redispatch measures (with DSO
+compensation); from **2032** the Netzbetreiber-Ausgleich returns.
 
 ---
 
@@ -193,6 +214,9 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 - **GeLi Gas 3.0** — **BK7-24-01-009** (Beschluss 12.09.2025, abgeschlossen 24.09.2025)
   - [Beschluss PDF](https://www.bundesnetzagentur.de/DE/Beschlusskammern/1_GZ/BK7-GZ/2024/BK7-24-0009/Anlagen/BK7-24-01-0009_Beschluss_Download_BF.pdf)
   - [Anlage PDF](https://www.bundesnetzagentur.de/DE/Beschlusskammern/1_GZ/BK7-GZ/2024/BK7-24-0009/Anlagen/BK7-24-01-0009_Anlage_Download_BF.pdf)
+  - **Anwendung:** Tenor gilt ab **01.01.2026** (Ziff. 18) — mit Ausnahme von Ziff. 13–16:
+    der Widerruf von BK7-17-026 und der neue **Messstellenbetreiberrahmenvertrag Gas**
+    (§9 Abs. 1 Ziff. 3 MsbG) werden zum **01.10.2026** wirksam bzw. fällig
 
 **Previous rulings:**
 
@@ -234,6 +258,10 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 
 **Page:** <https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK07/BK7_04_Erdgas/BK7_41_Bilanz_Konvert/BK7_Bilanz_Konvert.html>
 
+**Current ruling:**
+- **GaBi Gas 2.1** — **BK7-24-01-008**, wirksam seit **01.01.2026**; ersetzt die
+  Bilanzierungsregeln der GasNZV (GasNZV am 31.12.2025 außer Kraft getreten)
+
 **Scope:**
 - Bilanzierung in Gasbilanzkreisen (Allokation, Nominierung)
 - Regelenergie Gas
@@ -241,6 +269,21 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 - Konvertierung im qualitätsübergreifenden Gasmarktgebiet
 - INVOIC Gas billing: Kapazitätsrechnung (PID 31010)
 - DVGW message types: ALOCAT, NOMINT, NOMRES
+
+---
+
+## Mitteilungen zu den Datenformaten (BK6 + BK7 gemeinsam)
+
+**Page:** <https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/835_mitteilungen_datenformate/Datenformate-node.html>
+
+| Nr. | Gegenstand | Datum |
+|---|---|---|
+| 56 | Finale Datenformate, verbindlich zum **01.10.2026**: UTILMD Strom 2.2, UTILMD Gas 1.2, MSCONS 3.2, ORDERS/ORDRSP 1.1b, EBD 4.3; neues Attribut „fernsteuerbar" (§10b EEG) auf der TR | 01.04.2026 |
+| 55 | Konsultation der Datenformate zum **01.10.2026** | 02.02.2026 |
+| 54 | Datenformate verbindlich zum **01.04.2026** | 01.10.2025 |
+| 53 | Konsultation Konzept API-Webdienste | 01.09.2025 |
+| 51 | Datenformate verbindlich zum **01.10.2025** | — |
+| 50 | Aussetzung der Pflicht zur Content-Verschlüsselung (Gas) | 26.03.2025 |
 
 ---
 

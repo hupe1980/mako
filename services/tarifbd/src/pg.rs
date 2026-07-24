@@ -622,6 +622,92 @@ pub async fn monthly_epex_average(
     Ok(row.and_then(|r| r.try_get::<Option<Decimal>, _>("avg").ok().flatten()))
 }
 
+// ── nEHS certificate prices (BEHG CO₂) ────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct NehsImportRequest {
+    /// EUR per tonne CO₂ (auction clearing / Verkaufsphase price).
+    pub eur_per_t: Decimal,
+    /// `auktion` | `verkaufsphase` | `nachkauf` | `manual`.
+    pub source: Option<String>,
+}
+
+/// Valid `nehs_prices.source` values — mirrored by the SQL CHECK constraint.
+pub const NEHS_SOURCES: &[&str] = &["auktion", "verkaufsphase", "nachkauf", "manual"];
+
+/// Validate an nEHS import request; returns the effective source on success
+/// (`None` defaults to `"manual"`). Rejects non-positive prices and unknown
+/// sources — the handler maps the error to 422, and the table's CHECK
+/// constraint backstops writes that bypass this layer.
+pub fn validate_nehs_import(req: &NehsImportRequest) -> anyhow::Result<&str> {
+    if req.eur_per_t <= Decimal::ZERO {
+        anyhow::bail!("eur_per_t must be positive");
+    }
+    let source = req.source.as_deref().unwrap_or("manual");
+    if !NEHS_SOURCES.contains(&source) {
+        anyhow::bail!(
+            "unknown source {source:?} — expected one of: {}",
+            NEHS_SOURCES.join(", ")
+        );
+    }
+    Ok(source)
+}
+
+/// Upsert one dated nEHS certificate price.
+///
+/// Rejects unknown `source` values before the database does (the table has a
+/// matching CHECK constraint), so the handler surfaces a clean 422 instead of
+/// a raw constraint-violation message.
+pub async fn upsert_nehs_price(
+    pool: &PgPool,
+    date: Date,
+    req: NehsImportRequest,
+) -> anyhow::Result<()> {
+    let source = validate_nehs_import(&req)?;
+    sqlx::query(
+        r"INSERT INTO nehs_prices (price_date, eur_per_t, source)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (price_date) DO UPDATE
+            SET eur_per_t = EXCLUDED.eur_per_t,
+                source = EXCLUDED.source,
+                imported_at = now()",
+    )
+    .bind(date)
+    .bind(req.eur_per_t)
+    .bind(source)
+    .execute(pool)
+    .await
+    .context("upsert_nehs_price")?;
+    Ok(())
+}
+
+/// Most recent nEHS price on or before `date` (EUR/t), if any.
+///
+/// The auction series is weekly (Wednesdays, from 01.07.2026), so billing
+/// looks up the latest price at or before the delivery/billing date.
+pub async fn latest_nehs_price(
+    pool: &PgPool,
+    date: Date,
+) -> anyhow::Result<Option<(Date, Decimal)>> {
+    let row = sqlx::query(
+        r"SELECT price_date, eur_per_t
+          FROM nehs_prices
+          WHERE price_date <= $1
+          ORDER BY price_date DESC
+          LIMIT 1",
+    )
+    .bind(date)
+    .fetch_optional(pool)
+    .await
+    .context("latest_nehs_price")?;
+    Ok(row.map(|r| {
+        (
+            r.get::<Date, _>("price_date"),
+            r.get::<Decimal, _>("eur_per_t"),
+        )
+    }))
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 fn parse_date_opt(s: &Option<String>) -> anyhow::Result<Option<Date>> {
@@ -1331,4 +1417,63 @@ pub async fn fetch_comparison_feed(
         rows.truncate(fetch_limit as usize);
         rows
     })
+}
+
+#[cfg(test)]
+mod nehs_validation_tests {
+    use super::{NEHS_SOURCES, NehsImportRequest, validate_nehs_import};
+    use rust_decimal::dec;
+
+    #[test]
+    fn every_known_source_is_accepted() {
+        for &src in NEHS_SOURCES {
+            let req = NehsImportRequest {
+                eur_per_t: dec!(63.50),
+                source: Some(src.to_owned()),
+            };
+            assert_eq!(
+                validate_nehs_import(&req).expect("known source"),
+                src,
+                "source {src:?} must validate"
+            );
+        }
+    }
+
+    #[test]
+    fn omitted_source_defaults_to_manual() {
+        let req = NehsImportRequest {
+            eur_per_t: dec!(68),
+            source: None,
+        };
+        assert_eq!(validate_nehs_import(&req).unwrap(), "manual");
+    }
+
+    #[test]
+    fn unknown_source_is_rejected() {
+        let req = NehsImportRequest {
+            eur_per_t: dec!(63.50),
+            source: Some("boerse".to_owned()),
+        };
+        let err = validate_nehs_import(&req).expect_err("unknown source must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("unknown source"), "got: {msg}");
+        assert!(
+            msg.contains("auktion"),
+            "message lists valid sources: {msg}"
+        );
+    }
+
+    #[test]
+    fn non_positive_price_is_rejected() {
+        for eur in [dec!(0), dec!(-1)] {
+            let req = NehsImportRequest {
+                eur_per_t: eur,
+                source: None,
+            };
+            assert!(
+                validate_nehs_import(&req).is_err(),
+                "{eur} must be rejected"
+            );
+        }
+    }
 }

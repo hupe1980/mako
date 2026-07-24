@@ -169,10 +169,13 @@ impl ProcessdMcpHandler {
         description = "Get Anmeldung rejection breakdown by ERC code for the last N days. \
 NB role. Returns (erc_code, count) pairs ordered by frequency. \
 Use this when STP drops below 95% to identify the root cause: \
-A02 = MaLo/grid data missing (fix: PUT malo_grid in marktd or run nis-syncd), \
-A05 = NB Preisblatt missing (fix: PUT preisblaetter in marktd), \
-A06 = Lieferbeginn date invalid, \
-A97 = affiliate initiator (§20 EnWG — operator must approve manually)."
+A02 = MaLo nimmt nicht an der MaKo teil (Stillgelegt/Ruhend), \
+A06 = andere Anmeldung in Bearbeitung (duplicate), \
+A07 (Strom) / E17 (Gas) = Datums-/Fristverletzung (LFW24 future rule; \
+Gas 6-week retroactive window for E01/E02, 10 WT lead for E03), \
+A05 = Anforderungen nicht erfüllbar (Bilanzierungsgebiet/unknown partner). \
+Escalate = data gap (grid record missing) or affiliate initiator \
+(§20 EnWG — operator must approve manually)."
     )]
     async fn get_stp_breakdown_by_erc(
         &self,
@@ -522,7 +525,9 @@ impl ProcessdMcpHandler {
                 Role::Assistant,
                 "For Strom (GPKE UTILMD PID 55001):\n\
                  POST /api/v1/start-supply with malo_id, lieferbeginn_datum (YYYY-MM-DD).\n\
-                 LFW24 Vorlauffrist: submission must be before 15:00 on the Meldetermin.\n\n\
+                 LFW24 Vorlauffrist: earliest Lieferbeginn is the day after the next Werktag \
+                 (spätester ÜT ist der Tag vor dem letzten WT vor dem Zuordnungsbeginn — \
+                 BK6-24-174 GPKE Teil 2, SD Lieferbeginn).\n\n\
                  For Gas (GeLi Gas UTILMD G PID 44001):\n\
                  POST /api/v1/start-supply-gas with malo_id, lieferbeginn_datum, gasqualitaet.\n\n\
                  processd validates:\n\

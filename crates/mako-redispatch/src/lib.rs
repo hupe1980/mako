@@ -77,6 +77,8 @@
 
 pub mod ack_forward;
 pub mod aktivierung;
+pub mod ausfallarbeit;
+pub mod bilarem;
 pub mod router;
 pub mod stammdaten;
 

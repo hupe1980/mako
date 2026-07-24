@@ -44,6 +44,8 @@ pub struct VersorgungsStatusResponse {
     pub lieferende: Option<String>,
     pub msb_mp_id: Option<String>,
     pub nb_mp_id: String,
+    /// Start of the running Ersatz-/Grundversorgung (§38/§36 EnWG), if any.
+    pub eog_seit: Option<String>,
     pub last_process_id: Option<String>,
     pub updated_at: String,
     pub version: i64,
@@ -61,6 +63,7 @@ impl From<VersorgungsStatusRecord> for VersorgungsStatusResponse {
             lieferende: r.lieferende.map(|d| d.to_string()),
             msb_mp_id: r.msb_mp_id,
             nb_mp_id: r.nb_mp_id,
+            eog_seit: r.eog_seit.map(|d| d.to_string()),
             last_process_id: r.last_process_id.map(|u| u.to_string()),
             updated_at: r
                 .updated_at
@@ -122,6 +125,10 @@ pub struct VersorgungsStatusUpsertRequest {
     pub lieferende: Option<String>,
     pub msb_mp_id: Option<String>,
     pub nb_mp_id: String,
+    /// Start of the Ersatz-/Grundversorgung (ISO date). Required when
+    /// `lieferstatus` is `Ersatzversorgung`/`Grundversorgung`, forbidden
+    /// otherwise (DB CHECK).
+    pub eog_seit: Option<String>,
     pub last_process_id: Option<uuid::Uuid>,
 }
 
@@ -393,6 +400,12 @@ where
         lieferende,
         msb_mp_id: body.msb_mp_id,
         nb_mp_id: body.nb_mp_id,
+        eog_seit: body
+            .eog_seit
+            .as_deref()
+            .map(|s| time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT))
+            .transpose()
+            .unwrap_or(None),
         last_process_id: body.last_process_id,
         updated_at: time::OffsetDateTime::now_utc(),
         tenant: state.tenant_gln.clone(),
@@ -406,7 +419,7 @@ where
             let malo_id_str2 = malo_id_str.clone();
             let evt = MarktEvent::new(
                 &state.tenant_gln,
-                "de.markt.versorgung.changed",
+                mako_events::markt::VERSORGUNG_CHANGED,
                 malo_id_str2,
                 serde_json::json!({
                     "lieferstatus": body.lieferstatus,

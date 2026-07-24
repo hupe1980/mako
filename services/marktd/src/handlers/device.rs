@@ -418,7 +418,7 @@ pub async fn put_konfigurationsprodukte(
             // Emit CloudEvent so ERP subscribers and processd see the update.
             let evt = MarktEvent::new(
                 &tenant_gln,
-                "de.markt.sr.konfigurationsprodukt.updated",
+                mako_events::markt::SR_KONFIGURATIONSPRODUKT_UPDATED,
                 sr_id.clone(),
                 serde_json::json!({
                     "sr_id": sr_id,
@@ -503,7 +503,7 @@ pub async fn delete_konfigurationsprodukt(
         Ok(_) => {
             let evt = MarktEvent::new(
                 &tenant_gln,
-                "de.markt.sr.konfigurationsprodukt.updated",
+                mako_events::markt::SR_KONFIGURATIONSPRODUKT_UPDATED,
                 sr_id.clone(),
                 serde_json::json!({
                     "sr_id": sr_id,
@@ -910,7 +910,7 @@ pub async fn get_geraet_konfigurationen(
 ///
 /// Setting `SmgwCertAblaufdatum` triggers the `edmd` certificate-expiry background
 /// worker to start monitoring.  When the expiry date is ≤ 30 days away, `edmd`
-/// emits `de.edmd.cls.compliance_issue`.
+/// emits `de.messwert.cls.compliance_issue`.
 pub async fn put_geraet_konfigurationen(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -964,7 +964,7 @@ pub async fn put_geraet_konfigurationen(
             // receive configuration updates without polling.
             let evt = MarktEvent::new(
                 &tenant_gln,
-                "de.markt.geraet.konfiguration.updated",
+                mako_events::markt::GERAET_KONFIGURATION_UPDATED,
                 geraet_id.clone(),
                 serde_json::json!({
                     "geraet_id":  geraet_id,

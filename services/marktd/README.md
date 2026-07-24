@@ -16,13 +16,14 @@ EventBus subscription. `marktd` emits events; `processd` reacts. This keeps `mar
 independently testable and deployable without any decision logic.
 
 `marktd` runs a **VersorgungsStatus derivation pipeline** that tracks the full
-supplier-transition lifecycle in three atomic DB operations:
+supplier-transition lifecycle in four atomic DB operations:
 
 | Event | PID | Operation | Effect |
 |---|---|---|---|
 | `de.mako.process.initiated` | 55001 / 44001 | `announce_lf_next` | Sets `lf_mp_id_next` + `lf_next_lieferbeginn` (WHO + WHEN of the pending transition). Does NOT change `lieferstatus`. |
 | `de.mako.process.completed` | 55003 / 44003 | `confirm_supply` | Atomic SQL: `lf_mp_id ← lf_mp_id_next`, `lieferbeginn ← lf_next_lieferbeginn`, `lieferstatus = Beliefert`, clears `lf_mp_id_next`. |
-| `de.mako.process.completed` | 55013 / 44013 | `end_supply` | `lieferstatus = Unbeliefert`, clears `lf_mp_id` — but preserves `lf_mp_id_next` if a future LF is already announced. |
+| `de.mako.process.completed` | 55005 / 44005 | `end_supply` | `lieferstatus = Unbeliefert`, clears `lf_mp_id` — preserves `lf_mp_id_next`; no successor → emits `de.markt.versorgung.gap-detected`. |
+| `de.mako.process.completed` | 55013 / 44013 | `begin_eog_supply` | `lieferstatus = Ersatzversorgung`/`Grundversorgung`, `lf_mp_id = E/G`, `eog_seit` set (§38 Abs. 4 anchor); emits `de.markt.versorgung.eog-begonnen`. |
 
 Every write appends a row to `versorgungsstatus_history` in the same transaction.
 ERP and `processd` always have fresh supply-state data without manual intervention,
@@ -40,7 +41,7 @@ and any historical state can be retrieved by date via `?at=YYYY-MM-DD`.
 | **Authorization** | Cedar ABAC (`policies/marktd.cedar`) — per-tenant, role-gated |
 | **API spec** | OpenAPI 3.1 at `/swagger-ui/` and `/api-docs/openapi.json` |
 | **Events** | Outbound CloudEvents 1.0 (`application/cloudevents+json`) + HMAC-SHA256 |
-| **Emitted events** | `de.markt.malo.updated`, `de.markt.melo.updated`, `de.markt.partner.updated`, `de.markt.nb-contract.updated`, `de.markt.versorgung.changed`, `de.markt.pricat.published`, `de.markt.sr.konfigurationsprodukt.updated`, `de.markt.geraet.konfiguration.updated`, `de.markt.mmma.import.success`, `de.markt.mmma.import.failed`, `de.markt.einwilligung.erteilt`, `de.markt.einwilligung.widerrufen`, `de.markt.subscription.test` |
+| **Emitted events** | `de.markt.malo.updated`, `de.markt.melo.updated`, `de.markt.partner.updated`, `de.markt.nb-contract.updated`, `de.markt.versorgung.changed`, `de.markt.pricat.published`, `de.markt.sr.konfigurationsprodukt.updated`, `de.markt.geraet.konfiguration.updated`, `de.markt.mmma.import.success`, `de.markt.mmma.import.failed`, `de.markt.einwilligung.erteilt`, `de.markt.einwilligung.widerrufen`, `de.markt.versorgung.gap-detected`, `de.markt.versorgung.eog-begonnen`, `de.markt.subscription.test` |
 | **Typed BO4E API** | All `GET` responses return canonical `rubo4e::current` types — `Marktlokation`, `Messlokation`, `Zaehler`, `Geraet`. Every `PUT` validates `_typ` and enum fields (422 on violation). `nb_contracts` stores full BO4E `Vertrag` JSONB. |
 | **Konfigurationsprodukte** | Typed sub-resource on `SteuerbareRessource`: `GET/PUT/DELETE /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte`. `produktcode` is mandatory (BK6-24-174 §4.3). Emits `de.markt.sr.konfigurationsprodukt.updated`. |
 | **MMMA import worker** | Background worker auto-imports monthly Ausgleichsenergie prices (Gas + Strom) on the 1st of each month. Configurable `gas_url` / `strom_url` — supports `https://` and `file:///` sources. POST `/api/v1/mmma-preise/import-trigger` for on-demand. |
@@ -61,7 +62,7 @@ and any historical state can be retrieved by date via `?at=YYYY-MM-DD`.
 | `GET` | `/ready` | Readiness probe (PostgreSQL connectivity) |
 | `GET` | `/api/v1/malos` | List Marktlokationen (paginated, filterable) |
 | `GET` | `/api/v1/malos/{malo_id}` | Fetch single MaLo (at German reference date) |
-| `PUT` | `/api/v1/malos/{malo_id}` | Upsert MaLo + Lokationszuordnung |
+| `PUT` | `/api/v1/malos/{malo_id}` | Upsert MaLo + Rollenzuordnung |
 | `GET` | `/api/v1/melos` | List Messlokationen (paginated) |
 | `GET` | `/api/v1/melos/{melo_id}` | Fetch single MeLo |
 | `PUT` | `/api/v1/melos/{melo_id}` | Upsert MeLo |
@@ -76,6 +77,7 @@ and any historical state can be retrieved by date via `?at=YYYY-MM-DD`.
 | `GET` | `/api/v1/versorgung/{malo_id}` | Fetch VersorgungsStatus — add `?at=YYYY-MM-DD` for point-in-time |
 | `GET` | `/api/v1/versorgung/{malo_id}/history` | Full supply-state change history (newest first, paged) |
 | `PUT` | `/api/v1/versorgung/{malo_id}` | Admin override for VersorgungsStatus |
+| `GET`/`PUT` | `/api/v1/grundversorger/{nb_mp_id}` | Grundversorger Feststellung (§36 Abs. 2 EnWG; `?sparte=STROM\|GAS`) — read by the processd EoG gap closure |
 | `GET` | `/api/v1/malo/{id}/grid` | Fetch NB grid topology record for a MaLo (read by `processd` NB module) |
 | `PUT` | `/api/v1/malo/{id}/grid` | Upsert NB grid topology (sourced from NIS/GIS; read by `processd`) |
 | `GET` | `/api/v1/nelo` | List Netz-Element-Lokationen (`?nb_mp_id=` filter) |
@@ -177,10 +179,10 @@ Migrations run automatically at startup.  The schema is defined across two migra
 
 - `migrations/0001_initial.sql` — complete schema (all tables)
 
-Tables: `malo`, `melo`, `lokationszuordnung`, `contracts`, `nb_contracts`,
+Tables: `malo`, `melo`, `rollenzuordnungen`, `contracts`, `nb_contracts`,
 `versorgungsstatus`, `versorgungsstatus_history`, `nelo`, `preisblaetter`,
 `pricat_versions`, `pricat_dispatch_log`, `partners`, `subscriptions`,
-`process_correlation`, `processed_events`.
+`process_correlation`, `processed_events`, `grundversorger`.
 
 ### PostgreSQL requirements
 
@@ -274,16 +276,16 @@ inbound_secret  = "env:MARKTD_INBOUND_SECRET"   # verifies X-Mako-Signature
 
 ---
 
-## Temporal location assignments (Lokationszuordnung)
+## Temporal role assignments (Rollenzuordnung)
 
-Every `MaLo` carries a list of role assignments (`lokationszuordnung`) with validity
+Every `MaLo` carries a list of role assignments (`rollenzuordnung`) with validity
 date ranges in German local time (CET/CEST):
 
 ```json
 {
   "malo_id": "51238696780",
   "sparte": "STROM",
-  "lokationszuordnung": [
+  "rollenzuordnung": [
     {
       "zuordnungstyp":    "NB",
       "rollencodenummer": "9900357000004",

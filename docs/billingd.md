@@ -68,7 +68,12 @@ billingd (HTTP service)
 returning `Result<Invoice, EngineError>`; each error variant carries a stable
 machine-readable `code()` that `billingd` surfaces in structured error bodies.
 `Invoice` carries `positions: Vec<BillingPosition>`, `warnings: Vec<BillingWarning>`, and
-exposes `to_rechnung_json()` (BO4E-compatible JSONB for `accountingd` ingestion).
+exposes `to_rechnung()` — a fully-typed `rubo4e::Rechnung` (Decimal-exact money;
+canonical BO4E fields: `rechnungstyp`, `istStorno`, `originalRechnungsnummer`,
+`faelligkeitsdatum`, `zuZahlen`, typed `marktlokation`/`zaehler`/`vertrag`;
+mako-specific §40b/§40-Abs.-2 facts ride as `zusatzAttribute`).
+`to_rechnung_json()` is its thin serialization wrapper (JSONB for `accountingd`
+ingestion and the stored `billing_records.rechnung_json`).
 Helper methods: `.assert_valid()`, `.total_by_tag()`, `.positions_by_tag()`,
 `.kilowattstundenpreis_brutto_ct()`, `.has_errors()`.
 
@@ -182,6 +187,20 @@ Energiesteuer Erdgas    [from billingd.toml] §2 EnergieStG  0.55 ct/kWh_Hs
 CO₂-Abgabe BEHG         [from billingd.toml] ~1.31 ct/kWh_Hs (65 EUR/t CO₂, 2026)
 MwSt                    [from billingd.toml] 19%
 ```
+
+Since 2026 the nEHS certificate price is **auction-formed** (§10 Abs. 1 BEHG:
+weekly EEX auctions from 01.07.2026 within the 55–65 EUR/t corridor,
+Verkaufsphase at 68 EUR/t), so on the live bill/preview paths billingd
+overlays the **dated market price** from tarifbd's `nehs_prices` series onto
+the year-table default. Resolution order: explicit `[rates]` override →
+`GET /api/v1/nehs-prices/latest?date={period_from}` (start-of-period basis,
+consistent with `regulatory_rates_for_period`; converted via
+`energy_billing::behg_ct_per_kwh_from_price`) → year-table fallback. The
+EUR/t→ct/kWh conversion uses the H-Gas CO₂ factor (0.20160 kg/kWh) unless
+`[rates] behg_co2_factor_kg_per_kwh` overrides it (L-Gas: 0.20140).
+Historical XRechnung re-renders keep the stored record's rates
+(CO2KostAufG §3: the pass-through follows the supplier's actual CO₂ costs at
+billing time).
 
 **Historic statutory rates:** For retroactive correction invoices, the year tables in
 `energy_billing::rates` apply the correct historical defaults: `effective_stromsteuer_for_year()`,
@@ -600,7 +619,7 @@ Content-Type: application/xml; charset=UTF-8
 Content-Disposition: attachment; filename="xrechnung-{id}.xml"
 ```
 
-**Due date (BT-9):** rendered from the Rechnung's `zahlungsziel` (issue + 14
+**Due date (BT-9):** rendered from the Rechnung's `faelligkeitsdatum` (issue + 14
 days) — §40c EnWG lets payment become due at the earliest two weeks after
 receipt of the payment request. The UBL endpoint and the MCP `get_xrechnung`
 tool use the same value; all three render the stored per-rate `steuerbetraege`
@@ -626,7 +645,8 @@ seller_vat_id = "DE123456789"   # BT-31 Seller VAT registration number
   corrections use `KORR-{original}` and a second correction of the same
   original is refused (`409`).
 - **Schlussrechnung (§40c EnWG)**: `POST …/calculate` with
-  `"schlussrechnung": true` renders `rechnungsart = SCHLUSSRECHNUNG` and
+  `"schlussrechnung": true` renders the Schlussrechnung (typed
+  `rechnungstyp`; the exact label rides as the `rechnungsart` ZusatzAttribut) and
   settles the paid advances passed as `"abschlaege": [{datum, betrag_eur,
   ust_satz}]` — each at the VAT rate it was invoiced at (§ 14 Abs. 5 UStG).
 - **Verbraucherinformationen (§40 Abs. 2 EnWG)**: every `rechnung_json`

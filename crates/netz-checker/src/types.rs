@@ -14,7 +14,8 @@ use mako_markt::domain::Sparte;
 /// Classification of metering point.
 ///
 /// Used to apply the correct Mindestvorlauffrist rule:
-/// - `Slp`: SLP (Standardlastprofil) — 15:00 CET/CEST cutoff applies.
+/// - `Slp`: SLP (Standardlastprofil) — LFW24 day rule applies (spätester ÜT
+///   ist der Tag vor dem letzten WT vor dem Zuordnungsbeginn).
 /// - `Rlm`: RLM (Registrierende Lastgangmessung) — 2 Werktage minimum lead.
 /// - `Imsys`: intelligentes Messsystem (iMSys) — treated as SLP for Vorlauffrist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,6 +73,15 @@ pub struct AnmeldungAnfrage {
     /// For Gas processes this is always `Slp` (GeLi Gas operates on gas MaLos
     /// which are billed as SLP equivalents unless explicitly flagged as RLM Gas).
     pub messtyp: Messtyp,
+    /// SG4 STS Transaktionsgrund (DE9013) from the UTILMD, when transmitted —
+    /// e.g. `E01` Ein-/Auszug (Umzug), `E03` Lieferantenwechsel, `E06`
+    /// Ersatzbelieferung.
+    ///
+    /// Drives the date-plausibility rules (check 3): GPKE permits a
+    /// retroactive Lieferbeginn for Ein-/Auszug within the statutory
+    /// backdating window, but not for a regular Wechsel. `None` (legacy
+    /// messages or extraction failure) is treated conservatively.
+    pub transaktionsgrund: Option<String>,
 }
 
 // ── MaloGridRecord ────────────────────────────────────────────────────────────

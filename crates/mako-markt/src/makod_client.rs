@@ -105,7 +105,9 @@ pub struct CommandAccepted {
 pub struct MakodPartner {
     pub mp_id: String,
     pub display_name: Option<String>,
-    pub marktrolle: Option<String>,
+    /// BO4E market role — serialises as the BDEW code (e.g. `"LF"`), which is
+    /// exactly the string makod's admin API expects.
+    pub marktrolle: Option<rubo4e::current::Marktrolle>,
     pub channels: serde_json::Value,
 }
 

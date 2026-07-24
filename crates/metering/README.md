@@ -476,7 +476,7 @@ deviation is 0, so `t × sigma` is 0 and every nonzero value scores as an outlie
 |---|---|---|
 | `A` | Clean — within threshold | Billing proceeds normally |
 | `B` | Slightly suspicious | Logged; billing proceeds |
-| `C` | Likely outlier | `de.edmd.reading.quality.warning` CloudEvent emitted |
+| `C` | Likely outlier | `de.messwert.reading.quality.warning` CloudEvent emitted |
 | `F` | Severe outlier / substituted | Billing run blocked; operator alert |
 
 `hampel_filter` is also exposed as a low-level primitive that returns raw

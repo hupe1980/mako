@@ -19,4 +19,25 @@ pub enum BillingError {
         /// The value that caused the overflow, if available.
         input_value: Option<rust_decimal::Decimal>,
     },
+
+    /// The delivery period is governed by an Entgelt regime whose methodology
+    /// cannot be computed yet.
+    ///
+    /// StromNEV/GasNEV and the ARegV lapse with the end of 2028; the successor
+    /// system AgNeS (GBK-25-01) is draft only — the Rahmenfestlegung is
+    /// expected end-2026, and its parameter tables follow as configuration
+    /// once they become binding. Refusing is deliberate: computing under the
+    /// lapsed Verordnung math and merely tagging the result AgNeS would be
+    /// wrong under both regimes. See
+    /// [`crate::regulatory::RegulatoryRegime::ensure_berechenbar`].
+    #[error(
+        "cannot price Netzentgelte for Tarifjahr {tarifjahr}: the period is governed by the \
+         AgNeS Entgelt regime (GBK-25-01), whose parameter tables are not yet festgelegt — \
+         the Rahmenfestlegung is expected end-2026, and the methodology follows as \
+         configuration once binding"
+    )]
+    UnsupportedEntgeltRegime {
+        /// The calendar year whose rates the settlement would have priced.
+        tarifjahr: i32,
+    },
 }

@@ -549,7 +549,7 @@ Content-Type: application/json
   "channels": [
     { "qualifier": "AK", "address": "https://partner.example/as4/inbox" }
   ],
-  "roles": ["NbStrom"]
+  "roles": ["NB"]
 }
 ```
 

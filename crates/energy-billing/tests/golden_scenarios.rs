@@ -162,7 +162,7 @@ fn golden_strom_slp_eintarif_jan_2026() {
     let rates = RegulatoryRates {
         stromsteuer_ct_per_kwh: dec!(2.05),
         energiesteuer_gas_ct_per_kwh: dec!(0.55),
-        behg_gas_ct_per_kwh: dec!(1.310),
+        behg_gas_ct_per_kwh: dec!(1.3104),
         mwst_rate: dec!(0.19),
     };
 
@@ -415,12 +415,22 @@ fn golden_eeg_gutschrift_10kwp_jan_2026() {
         "EEG brutto golden"
     );
 
-    // Verify JSON includes correct rechnungsart
+    // Verify JSON includes the correct process label. BO4E Rechnungstyp has no
+    // Gutschrift value, so the typed field stays absent and the label rides as
+    // the "rechnungsart" ZusatzAttribut.
     let json = invoice.to_rechnung_json();
+    assert!(
+        json["rechnungstyp"].is_null(),
+        "GUTSCHRIFT has no Rechnungstyp"
+    );
+    let rechnungsart = json["zusatzAttribute"]
+        .as_array()
+        .and_then(|attrs| attrs.iter().find(|a| a["name"] == "rechnungsart"))
+        .map(|a| a["wert"].clone())
+        .unwrap_or(serde_json::Value::Null);
     assert_eq!(
-        json["rechnungsart"].as_str().unwrap(),
-        "GUTSCHRIFT",
-        "EEG credit note must be rechnungsart GUTSCHRIFT"
+        rechnungsart, "GUTSCHRIFT",
+        "EEG credit note must be tagged rechnungsart GUTSCHRIFT"
     );
 }
 
@@ -463,7 +473,7 @@ fn golden_rlm_demand_charge() {
     let rates = RegulatoryRates {
         stromsteuer_ct_per_kwh: dec!(2.05),
         energiesteuer_gas_ct_per_kwh: dec!(0.55),
-        behg_gas_ct_per_kwh: dec!(1.310),
+        behg_gas_ct_per_kwh: dec!(1.3104),
         mwst_rate: dec!(0.19),
     };
 
@@ -540,7 +550,7 @@ fn golden_rlm_demand_charge() {
 /// - Gas Arbeitspreis: 8.00 ct/kWh_Hs
 /// - Grundpreis: 0
 /// - Energiesteuer: EXEMPT (§54 EnergieStG KWK)
-/// - BEHG: 1.310 ct/kWh_Hs (BEHG applies even to KWK plants)
+/// - BEHG: 1.3104 ct/kWh_Hs (BEHG applies even to KWK plants)
 /// - MwSt: 19%
 ///
 /// ## Consumption
@@ -549,7 +559,7 @@ fn golden_rlm_demand_charge() {
 /// ## Expected
 /// - No Energiesteuer levy position
 /// - Exemption info position must appear
-/// - BEHG applies: 50 000 × 1.310 ct / 100 = 655.00 EUR
+/// - BEHG applies: 50 000 × 1.3104 ct / 100 = 655.20 EUR
 #[test]
 fn golden_gas_energiesteuer_exempt_kwk() {
     let tariff: Product = serde_json::from_str(
@@ -564,7 +574,7 @@ fn golden_gas_energiesteuer_exempt_kwk() {
     let rates = RegulatoryRates {
         stromsteuer_ct_per_kwh: dec!(2.05),
         energiesteuer_gas_ct_per_kwh: dec!(0.55),
-        behg_gas_ct_per_kwh: dec!(1.310),
+        behg_gas_ct_per_kwh: dec!(1.3104),
         mwst_rate: dec!(0.19),
     };
 
@@ -611,13 +621,13 @@ fn golden_gas_energiesteuer_exempt_kwk() {
         "KWK invoice must have Energiesteuer Befreiung info position"
     );
 
-    // BEHG still applies: 50 000 × 1.310 ct / 100 = 655.00 EUR
+    // BEHG still applies: 50 000 × 1.3104 ct / 100 = 655.20 EUR
     let behg = invoice
         .positions
         .iter()
         .find(|p| p.tags.iter().any(|t| t == "behg"))
         .expect("BEHG position must exist even for KWK gas");
-    let expected_behg = dec!(50000) * dec!(1.310) / dec!(100);
+    let expected_behg = dec!(50000) * dec!(1.3104) / dec!(100);
     let diff = (behg.net_eur - expected_behg).abs();
     assert!(
         diff < dec!(0.01),

@@ -115,7 +115,7 @@ async fn check_and_emit(
 
         let event = serde_json::json!({
             "specversion": "1.0",
-            "type":        "de.invoic.payment.overdue",
+            "type":        mako_events::invoic::PAYMENT_OVERDUE,
             "source":      format!("urn:invoicd:tenant:{tenant}"),
             "subject":     process_id,
             "id":          uuid::Uuid::new_v4().to_string(),

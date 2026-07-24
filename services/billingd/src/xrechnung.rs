@@ -109,16 +109,26 @@ pub struct XRechnungPosition {
 
 // ── Unit code mapping ─────────────────────────────────────────────────────────
 
-/// Map billingd unit strings to UN/ECE Rec 20 codes used in CII.
+/// Map unit codes to UN/ECE Rec 20 codes used in CII.
+///
+/// Accepts both the BO4E `Mengeneinheit` codes the stored Rechnung carries
+/// (`KWH`, `TAG`, `MONAT`, `KUBIKMETER`, …) and legacy free-text spellings.
 fn unit_to_unece(unit: &str) -> &str {
     match unit.to_lowercase().as_str() {
         "kwh" => "KWH", // kilowatt hour
+        "mwh" => "MWH", // megawatt hour
         "kw" => "KWT",  // kilowatt
-        "tage" | "day" | "days" => "DAY",
+        "tag" | "tage" | "day" | "days" => "DAY",
+        "woche" | "wochen" | "week" | "weeks" => "WEE",
         "monat" | "monate" | "month" | "months" => "MON",
+        "jahr" | "jahre" | "year" | "years" => "ANN",
+        "stunde" | "stunden" | "hour" | "hours" | "h" => "HUR",
+        "kubikmeter" | "m³" | "m3" => "MTQ",      // cubic metre
+        "prozent" | "%" => "P1",                  // percent
+        "stueck" | "stück" => "H87",              // piece
         "ereignis" | "event" | "events" => "C62", // one (dimensionless unit)
         "gb" => "E34",                            // gigabyte
-        "minuten" | "min" | "minutes" => "MIN",
+        "minute" | "minuten" | "min" | "minutes" => "MIN",
         "pauschal" | "flat" => "C62",
         _ => "C62",
     }
@@ -510,11 +520,11 @@ pub fn info_from_rechnung_json(
         .unwrap_or_default();
 
     // §40c EnWG: payment becomes due at the earliest two weeks after receipt
-    // of the payment request. The engine stamps `zahlungsziel` (issue + 14 d)
-    // into every Rechnung; render it as BT-9 so the invoice does not imply
-    // immediate maturity.
+    // of the payment request. The engine stamps the BO4E `faelligkeitsdatum`
+    // (issue + 14 d) into every Rechnung; render it as BT-9 so the invoice
+    // does not imply immediate maturity.
     let due_date = rechnung_json
-        .get("zahlungsziel")
+        .get("faelligkeitsdatum")
         .and_then(|v| v.as_str())
         .and_then(|s| {
             time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT).ok()

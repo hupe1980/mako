@@ -70,6 +70,8 @@ pub struct Config {
     pub lf: LfConfig,
     #[serde(default)]
     pub msb: MsbConfig,
+    #[serde(default)]
+    pub eog: EogConfig,
     /// OIDC configuration.  When omitted, authentication is **disabled** and
     /// all API requests are accepted with synthetic dev-admin claims.
     /// **Never omit this in production.**
@@ -184,7 +186,14 @@ fn default_subscriber_id() -> String {
     "processd".to_owned()
 }
 fn default_event_types() -> String {
-    "de.mako.process.initiated".to_owned()
+    // PROCESS_INITIATED drives the NB/LF/MSB STP modules; the two
+    // versorgung events drive the EoG gap-closure automation (§38 EnWG).
+    format!(
+        "{},{},{}",
+        mako_events::mako::PROCESS_INITIATED,
+        mako_events::markt::VERSORGUNG_GAP_DETECTED,
+        mako_events::markt::VERSORGUNG_EOG_BEGONNEN,
+    )
 }
 
 impl Default for SubscriptionConfig {
@@ -210,6 +219,45 @@ pub struct NbConfig {
     /// record and partner coverage (STP target ≥ 95 %).
     #[serde(default)]
     pub auto_accept: bool,
+}
+
+// ── EoG module (§36/§38 EnWG gap closure) ─────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EogConfig {
+    /// When `true`, a detected supply gap dispatches `gpke.eog.anmelden`
+    /// (UTILMD 55013) automatically. Requires a Grundversorger Feststellung
+    /// in marktd (`PUT /api/v1/grundversorger/{nb_mp_id}`).
+    #[serde(default)]
+    pub auto_activate: bool,
+    /// SG4 STS Transaktionsgrund for automatic Anmeldungen (default `ZT6`).
+    #[serde(default = "default_eog_transaktionsgrund")]
+    pub default_transaktionsgrund: String,
+    /// Days before the §38 Abs. 4 3-month maximum at which the warning fires.
+    #[serde(default = "default_eog_warn_days")]
+    pub warn_days_before_expiry: u32,
+    /// Webhook for `de.markt.versorgung.ersatz-auslaufend` CloudEvents.
+    #[serde(default)]
+    pub notify_webhook_url: Option<String>,
+}
+
+fn default_eog_transaktionsgrund() -> String {
+    "ZT6".to_owned()
+}
+fn default_eog_warn_days() -> u32 {
+    14
+}
+
+impl Default for EogConfig {
+    fn default() -> Self {
+        Self {
+            auto_activate: false,
+            default_transaktionsgrund: default_eog_transaktionsgrund(),
+            warn_days_before_expiry: default_eog_warn_days(),
+            notify_webhook_url: None,
+        }
+    }
 }
 
 // ── LF module ─────────────────────────────────────────────────────────────────

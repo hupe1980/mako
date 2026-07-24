@@ -160,6 +160,39 @@ pub fn redispatch_verguetung(
     })
 }
 
+/// BilAReM financial correction for fluctuating plants in the Planwertmodell
+/// (BK6-23-241, BilAReM Kap. 4): the residual between actual Ausfallarbeit and
+/// the plan-based bilanzieller Ausgleich is settled **financially only** —
+/// no ex-post energy correction:
+///
+/// `Korr_fin = (W_A − W_Ausgl) / 1000 × ID-AEP`
+///
+/// with `W_A`/`W_Ausgl` in kWh per quarter-hour and the Intraday-
+/// Auktionspreis (`ID-AEP`, fallback ID1/EPEX) in EUR/MWh. A positive result
+/// is owed to the Anlagenbetreiber-side Bilanzkreis, a negative one to the
+/// Netzbetreiber.
+///
+/// # Errors
+///
+/// Rejects non-finite arithmetic via the shared money boundary (result must
+/// round to a valid EUR amount).
+pub fn bilarem_finanzielle_korrektur(
+    ausfallarbeit_kwh: Decimal,
+    ausgleich_kwh: Decimal,
+    id_aep_eur_per_mwh: Decimal,
+) -> Result<Decimal, BillingError> {
+    let korr = (ausfallarbeit_kwh - ausgleich_kwh) / Decimal::from(1000) * id_aep_eur_per_mwh;
+    let rounded =
+        korr.round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero);
+    // Money boundary: must be representable as EUR cents.
+    if rounded.abs() > Decimal::from(10_000_000) {
+        return Err(BillingError::InvalidInput {
+            reason: format!("BilAReM Korr_fin out of range: {rounded}"),
+        });
+    }
+    Ok(rounded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +214,20 @@ mod tests {
         .unwrap();
         assert_eq!(v.verguetung_eur, dec!(940.00));
         assert!(v.trace.iter().any(|l| l.contains("Nr. 5")));
+    }
+
+    #[test]
+    fn bilarem_korrektur_settles_the_residual_financially() {
+        // W_A 1200 kWh vs. plan-based Ausgleich 1000 kWh at ID-AEP 80 EUR/MWh:
+        // (1200 − 1000)/1000 × 80 = 16.00 EUR to the Anlagenbetreiber side.
+        let k = bilarem_finanzielle_korrektur(dec!(1200), dec!(1000), dec!(80)).unwrap();
+        assert_eq!(k, dec!(16.00));
+        // Overshoot of the Ausgleich flows back to the NB (negative).
+        let k = bilarem_finanzielle_korrektur(dec!(800), dec!(1000), dec!(80)).unwrap();
+        assert_eq!(k, dec!(-16.00));
+        // Negative ID-AEP inverts the direction — no clamping.
+        let k = bilarem_finanzielle_korrektur(dec!(1200), dec!(1000), dec!(-50)).unwrap();
+        assert_eq!(k, dec!(-10.00));
     }
 
     #[test]

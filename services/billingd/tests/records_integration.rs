@@ -179,7 +179,11 @@ async fn a_correction_references_its_untouched_original() {
         "STROM",
         date!(2026 - 01 - 01),
         date!(2026 - 01 - 31),
-        &serde_json::json!({ "_typ": "RECHNUNG", "rechnungsart": "KORREKTURRECHNUNG" }),
+        &serde_json::json!({
+            "_typ": "RECHNUNG",
+            "istOriginal": false,
+            "zusatzAttribute": [{ "name": "rechnungsart", "wert": "KORREKTURRECHNUNG" }]
+        }),
         dec!(-100),
         dec!(-119),
         original,
@@ -246,7 +250,11 @@ async fn a_second_correction_of_the_same_original_is_detected() {
         "STROM",
         date!(2026 - 01 - 01),
         date!(2026 - 01 - 31),
-        &serde_json::json!({ "_typ": "RECHNUNG", "rechnungsart": "KORREKTURRECHNUNG" }),
+        &serde_json::json!({
+            "_typ": "RECHNUNG",
+            "istOriginal": false,
+            "zusatzAttribute": [{ "name": "rechnungsart", "wert": "KORREKTURRECHNUNG" }]
+        }),
         dec!(-100),
         dec!(-119),
         original,

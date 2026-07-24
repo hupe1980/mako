@@ -425,7 +425,7 @@ pub struct MeterRead {
     /// Automated quality warnings produced at ingest time (Hampel filter, gap detection).
     ///
     /// Schema: `{ "gaps_detected": N, "zero_run_length": N, "outlier_factor": 0.0 }`.
-    /// `None` = no warnings. Triggers `de.edmd.reading.quality.warning` CloudEvent.
+    /// `None` = no warnings. Triggers `de.messwert.reading.quality.warning` CloudEvent.
     #[serde(default)]
     pub quality_warnings: Option<serde_json::Value>,
 

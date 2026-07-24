@@ -165,7 +165,7 @@ All EEG versions (2017, 2021, 2023) deduct a flat amount from the gross `anzuleg
 | `SOLAR` / `SOLAR_AUFDACH` | Rooftop PV | §21 + §48 EEG 2023 |
 | `SOLAR_FREFLAECHE` | Ground-mounted PV | §28 EEG 2023 |
 | `SOLAR_AGRIPV` | Agri-PV | §51a EEG 2023 |
-| `SOLAR_MIETERSTROM` | Building community solar | §38a EEG 2023 |
+| `SOLAR_MIETERSTROM` | Building community solar | §21 Abs. 3 EEG 2023 |
 | `SOLAR_STECKER` | Balkonkraftwerk <800 W | §9 EEG 2023 |
 | `WIND_ONSHORE` | Wind onshore | §§21, 28, 36 EEG 2023 |
 | `WIND_OFFSHORE` | Wind offshore | §§70ff EEG 2023 |
@@ -191,11 +191,11 @@ The scheme is stored as `settlement_model` in `settlement_receipts` and selected
 | `SettlementScheme` | Regulation | Formula | CloudEvent |
 |---|---|---|---|
 | `FEED_IN_TARIFF` | §21 EEG | `kwh × verguetungssatz_ct / 100` | `de.eeg.verguetung.berechnet` |
-| `TENANT_ELECTRICITY` | §38a EEG 2023 | `kwh × (verguetung + mieter_zuschlag) / 100` | `de.eeg.verguetung.berechnet` |
+| `TENANT_ELECTRICITY` | §21 Abs. 3 EEG 2023 | `kwh × (verguetung + mieter_zuschlag) / 100` | `de.eeg.verguetung.berechnet` |
 | `MARKET_PREMIUM` | §20 EEG | see §20 Abs. 3 note below | `de.eeg.marktpraemie.berechnet` |
 | `MARKET_PREMIUM` + `TariffSource::Auction` | §§22a,28 EEG | same formula, AW from BNetzA tender | `de.eeg.marktpraemie.berechnet` |
 | `POST_EEG` | post-20yr §21b | `kwh × EPEX_avg_ct / 100` (configurable floor) | `de.eeg.verguetung.berechnet` |
-| `EIGENVERBRAUCH` | §38a EEG | EUR 0 (no feed-in remuneration) | _(none)_ |
+| `EIGENVERBRAUCH` | §21 Abs. 3 EEG | EUR 0 (no feed-in remuneration) | _(none)_ |
 | `KWK_SURCHARGE` | §7 KWKG 2023 | `eligible_kwh × rate / 100` (hour-limit cap) | `de.eeg.verguetung.berechnet` |
 | `FLEXIBILITY_PREMIUM` | §50b EEG 2023 | `kwh × (verguetung + flex_praemie) / 100` | `de.eeg.verguetung.berechnet` |
 | `FLEXIBILITY_SURCHARGE` | §50a EEG 2023 | `kw × rate_eur_per_kw / 12` (capacity payment) | `de.eeg.verguetung.berechnet` |
@@ -928,7 +928,7 @@ One row per Technische Ressource. PK: `(tr_id, tenant)`.
 | `foerderendedatum` | DATE | Dec 31 of year+20 (statutory); exact 20y for Ausschreibung |
 | `settlement_model` | TEXT | `FEED_IN_TARIFF`, `MARKET_PREMIUM`, … |
 | `direktverm_aw_ct` | NUMERIC? | Statutory AW in ct/kWh (before Managementprämie) |
-| `mieter_zuschlag_ct` | NUMERIC? | Mieterstrom surcharge ct/kWh (§38a) |
+| `mieter_zuschlag_ct` | NUMERIC? | Mieterstrom surcharge ct/kWh (§21 Abs. 3 EEG 2023) |
 | `mastr_registriert` | BOOL | MaStR confirmed; `false` → §52 penalty |
 | `mastr_nummer` | TEXT? | MaStR Registrierungsnummer (`SEE900000012345`) |
 | `bank_iban` | TEXT? | IBAN for EEG Vergütung payment (SEPA CT, NB→Betreiber) |
@@ -1060,7 +1060,7 @@ At `/mcp` (Streamable HTTP 2025-11-25). Auth: `Authorization: Bearer <mcp_api_ke
 `register-eeg-plant` · `settle-monthly` · `check-foerderung-expiry` ·
 `ausschreibung-workflow` · `post-eeg-transition` · `anlagenerweiterung`
 
-The `eeg-agent` specialist in `agentd` handles `de.eeg.*` CloudEvents **and** `de.edmd.reading.direct.stored` (for iMSys rollout detection — lifts the <100 kW §51 Negativpreisregel exemption on first iMSys push).
+The `eeg-agent` specialist in `agentd` handles `de.eeg.*` CloudEvents **and** `de.messwert.reading.direct.stored` (for iMSys rollout detection — lifts the <100 kW §51 Negativpreisregel exemption on first iMSys push).
 See [agentd operator guide](./agentd.md) for the full trigger→action mapping.
 
 ---

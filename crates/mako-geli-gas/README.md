@@ -38,6 +38,9 @@ families. Saturdays, Sundays and public holidays are not Werktage.
 | 44004   | Ablehnung Lieferbeginn Gas — NB → LFN               | UTILMD G1/G2  | ⚠️ Registered — partial handling |
 | 44005   | Bestätigung Lieferende Gas — NB → LFN               | UTILMD G1/G2  | ⚠️ Registered — partial handling |
 | 44006   | Ablehnung Lieferende Gas — NB → LFN                 | UTILMD G1/G2  | ⚠️ Registered — partial handling |
+| 44013   | Anmeldung / Zuordnung EOG (§36/§38 EnWG) — GNB → LF | UTILMD G1/G2  | ✅ Implemented (`EogAnmeldung` variant) |
+| 44014   | Bestätigung EOG Anmeldung — LF → GNB                | UTILMD G1/G2  | ↩ Derived from 44013 accept |
+| 44015   | Ablehnung EOG Anmeldung — LF → GNB                  | UTILMD G1/G2  | ↩ Derived from 44013 reject |
 | 44017   | Kündigung Lieferbeginn Gas — LFN → LFA              | UTILMD G1/G2  | ⚠️ Registered — partial handling |
 | 44018   | Bestätigung Kündigung Lieferbeginn Gas — LFA → LFN  | UTILMD G1/G2  | ⚠️ Registered — partial handling |
 | 17103   | Anfrage Abrechnungsbrennwert / Zustandszahl         | ORDERS 1.4b   | ✅ Implemented                    |

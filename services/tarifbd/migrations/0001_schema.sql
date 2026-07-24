@@ -163,9 +163,36 @@ COMMENT ON TABLE epex_prices IS
 
 CREATE INDEX epex_date ON epex_prices (price_date DESC);
 
+-- ── nEHS certificate prices (BEHG CO₂) ────────────────────────────────────────
+--
+-- Since 2026 nEHS certificates are auctioned (§10 Abs. 1 BEHG: weekly EEX
+-- auctions from 01.07.2026 within the §10 Abs. 2 corridor of 55–65 EUR/t,
+-- Verkaufsphase at 68 EUR/t). The CO₂ component of Gas/Wärme billing is
+-- therefore market-formed; this dated series carries the supplier's
+-- acquisition prices (CO2KostAufG §3: pass through the actual CO₂ costs).
+CREATE TABLE nehs_prices (
+    price_date      DATE           PRIMARY KEY,
+    -- EUR per tonne CO₂ (auction clearing price or Verkaufsphase price)
+    eur_per_t       NUMERIC(10, 2) NOT NULL CHECK (eur_per_t > 0),
+    -- Provenance of the price point:
+    --   'auktion'       — EEX weekly auction clearing price
+    --   'verkaufsphase' — fixed Verkaufsphase price (68 EUR/t)
+    --   'nachkauf'      — supplementary purchase
+    --   'manual'        — operator entry
+    source          TEXT           NOT NULL DEFAULT 'manual'
+                    CHECK (source IN ('auktion', 'verkaufsphase', 'nachkauf', 'manual')),
+    imported_at     TIMESTAMPTZ    NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE nehs_prices IS
+    'BEHG/nEHS certificate prices (EUR/t CO₂), dated. Since 2026 auctioned at '
+    'EEX; used by billingd to derive the Gas CO₂ component per CO2KostAufG.';
+
+CREATE INDEX nehs_date ON nehs_prices (price_date DESC);
+
 -- ── B2B Angebote (formal quotation workflow) ──────────────────────────────────
 -- Lifecycle: ANGELEGT → VERSANDT → ANGENOMMEN | ABGELEHNT | ABGELAUFEN.
--- On ANGENOMMEN: emits de.angebot.angenommen → vertragd creates Rahmenvertrag.
+-- On ANGENOMMEN: emits de.tarif.angebot.angenommen → vertragd creates Rahmenvertrag.
 
 CREATE TABLE angebote (
     id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -215,7 +242,7 @@ CREATE TABLE angebote (
 
 COMMENT ON TABLE angebote IS
     'Formal B2B quotation (Angebot) for C&I/RLM customers. '
-    'Acceptance emits de.angebot.angenommen → vertragd creates Rahmenvertrag.';
+    'Acceptance emits de.tarif.angebot.angenommen → vertragd creates Rahmenvertrag.';
 
 COMMENT ON COLUMN angebote.varianten IS
     'Array of AngebotVariante: alternative scenarios for comparison. '

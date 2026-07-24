@@ -87,9 +87,21 @@
 //! PIDs 55008 (Bestätigung) and 55009 (Ablehnung) are outbound responses derived
 //! by `GpkeLfAbmeldungWorkflow` and never routed as inbound.
 //!
-//! **Note on AHB coverage:** PIDs 55010–55015 (NB-initiated processes) are confirmed
-//! present in UTILMD AHB Strom 2.1 (FV2025-10-01) but require separate NB-side
-//! workflows that are not yet implemented.
+//! ### Ersatz-/Grundversorgung — routed to `gpke-eog`
+//!
+//! | PID   | Process name (AHB)              | Direction | Status |
+//! |-------|---------------------------------|-----------|--------|
+//! | 55013 | Anmeldung / Zuordnung EOG       | NB → LF   | ✅ Implemented |
+//! | 55014 | Bestätigung EOG Anmeldung       | LF → NB   | ✅ Implemented |
+//! | 55015 | Ablehnung EOG Anmeldung         | LF → NB   | ✅ Implemented |
+//!
+//! [`GpkeEogWorkflow`] covers both roles: the NB initiates the Zuordnung
+//! (statutory fallback supply, §36/§38 EnWG) and the Grundversorger
+//! responds. See [`eog`] for the full model.
+//!
+//! **Note on AHB coverage:** PIDs 55010–55012 ("Anfrage zur Beendigung der
+//! Zuordnung", the NB Abmeldeanfrage toward the LFA) are present in UTILMD
+//! AHB Strom 2.1 but not yet implemented (see ROADMAP).
 //!
 //! The 3 inbound ANFRAGE PIDs share [`GpkeSupplierChangeWorkflow`] (workflow name:
 //! `"gpke-supplier-change"`). The `pruefidentifikator` stored in
@@ -174,6 +186,7 @@ pub mod anfrage_bestellung;
 pub mod ankuendigung_zuordnung_lf;
 pub mod comdis;
 pub mod datenabruf;
+pub mod eog;
 pub mod konfiguration;
 pub mod konfiguration_aenderung;
 pub mod lf_abmeldung;
@@ -212,14 +225,18 @@ pub use ankuendigung_zuordnung_lf::{
     WORKFLOW_NAME as ANKUENDIGUNG_ZUORDNUNG_LF_WORKFLOW_NAME,
 };
 pub use comdis::{
-    COMDIS_APERAK_WINDOW_LABEL, COMDIS_PIDS, COMDIS_RECORDS_DDL, ComdisOutcome, GpkeComdisCommand,
-    GpkeComdisData, GpkeComdisEvent, GpkeComdisState, GpkeComdisWorkflow,
-    WORKFLOW_NAME as COMDIS_WORKFLOW_NAME,
+    COMDIS_APERAK_WINDOW_LABEL, COMDIS_PIDS, ComdisOutcome, GpkeComdisCommand, GpkeComdisData,
+    GpkeComdisEvent, GpkeComdisState, GpkeComdisWorkflow, WORKFLOW_NAME as COMDIS_WORKFLOW_NAME,
 };
 pub use datenabruf::{
     DatanabrufCommand, DatanabrufEvent, DatanabrufState, GpkeDatanabrufWorkflow,
     ORDERS_ANFRAGE_PIDS as DATENABRUF_ORDERS_PIDS, ORDRSP_ABLEHNUNG_PIDS as DATENABRUF_ORDRSP_PIDS,
     WORKFLOW_NAME as DATENABRUF_WORKFLOW_NAME,
+};
+pub use eog::{
+    EOG_ANMELDUNG_PID, EOG_ANTWORT_PIDS, EOG_PIDS, EOG_RESPONSE_WINDOW_LABEL, EogCommand, EogData,
+    EogEvent, EogState, GpkeEogWorkflow, Versorgungsart, WORKFLOW_NAME as EOG_WORKFLOW_NAME,
+    eog_antwort_due_at, eog_response_pid,
 };
 pub use konfiguration::{
     BeauftragungData, GpkeKonfigurationWorkflow, KONFIGURATION_WINDOW_LABEL, KonfigurationCommand,
@@ -322,7 +339,8 @@ pub use wechselprozesse::{
 ///   by `GpkeKonfigurationWorkflow`. They are never routed as inbound.
 ///
 /// PIDs 55007–55009 (NB-seitiges Lieferende) are handled by `GpkeLfAbmeldungWorkflow`.
-/// PID 55010 (pre-LFW24 Stornierung) is not present in AHB Strom 2.1 and is CONTRL-rejected.
+/// PIDs 55013–55015 (Ersatz-/Grundversorgung) are handled by `GpkeEogWorkflow`.
+/// PIDs 55010–55012 (Anfrage zur Beendigung der Zuordnung) are not yet implemented.
 ///
 /// [`DeploymentRoles`]: mako_engine::marktrolle::DeploymentRoles
 /// [`Marktrolle::Nb`]: mako_engine::marktrolle::Marktrolle::Nb
@@ -350,6 +368,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
     fn workflow_names(&self) -> &'static [&'static str] {
         &[
             "gpke-supplier-change",
+            eog::WORKFLOW_NAME,
             lf_anmeldung::WORKFLOW_NAME,
             sperrung::WORKFLOW_NAME,
             sperrung_lf::WORKFLOW_NAME,
@@ -392,6 +411,13 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             router.register(pid, "gpke-lf-abmeldung");
         }
 
+        // PIDs 55013–55015 (Ersatz-/Grundversorgung, §36/§38 EnWG) — gpke-eog.
+        // 55013 spawns the LF/GV responder role; 55014/55015 resume the
+        // NB initiator role (correlated by MaLo).
+        for &pid in EOG_PIDS {
+            router.register(pid, eog::WORKFLOW_NAME);
+        }
+
         // PID 55607 (Ankündigung Zuordnung LF, NB→LFN) — GPKE Teil 2 §2.2, BK6-24-174.
         // LF-role makod receives PID 55607 and responds with 55608/55609.
         for &pid in ANKUENDIGUNG_ZUORDNUNG_PIDS {
@@ -430,7 +456,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
 
         // IFTSTA 21039 (Auftragsstatus Sperren, NB → LF).
         // LF receives the execution status from NB after the Sperrung is carried out.
-        router.register(IFTSTA_SPERRUNG_PID, sperrung_lf::WORKFLOW_NAME);
+        router.register(IFTSTA_SPERRUNG_PID.as_u32(), sperrung_lf::WORKFLOW_NAME);
 
         // INVOIC-based: all 6 billing PIDs use `GpkeAbrechnungWorkflow`.
         for &pid in INVOIC_PIDS {
@@ -461,7 +487,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // inbound from the invoicer and belongs to the billing cycle.
         //
         // Source: COMDIS AHB 1.0, GPKE Teil 2/Teil 3, BK6-24-174.
-        router.register(COMDIS_ABLEHNUNG_REMADV_PID, "gpke-abrechnung");
+        router.register(COMDIS_ABLEHNUNG_REMADV_PID.as_u32(), "gpke-abrechnung");
 
         // ORDRSP inbound PIDs for Konfigurationseinrichtung (19001/19002).
         //
@@ -535,7 +561,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // LFN queries NB for data about a specific order. NB must respond
         // within 24 wall-clock hours (BK6-22-024 §5). Governed by BK6-24-174.
         router.register(
-            anfrage_bestellung::ANFRAGE_PID,
+            anfrage_bestellung::ANFRAGE_PID.as_u32(),
             anfrage_bestellung::WORKFLOW_NAME,
         );
 
@@ -713,11 +739,13 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         }
         // ANFRAGE_PID is a scalar constant (55555); verify it's in the valid
         // Prüfidentifikator range as a sanity check.
-        if anfrage_bestellung::ANFRAGE_PID < 10_000 || anfrage_bestellung::ANFRAGE_PID > 99_999 {
+        if anfrage_bestellung::ANFRAGE_PID.as_u32() < 10_000
+            || anfrage_bestellung::ANFRAGE_PID.as_u32() > 99_999
+        {
             return Err(format!(
                 "gpke: anfrage_bestellung::ANFRAGE_PID {} is outside the valid \
                  Prüfidentifikator range 10000–99999",
-                anfrage_bestellung::ANFRAGE_PID,
+                anfrage_bestellung::ANFRAGE_PID.as_u32(),
             ));
         }
         Ok(())

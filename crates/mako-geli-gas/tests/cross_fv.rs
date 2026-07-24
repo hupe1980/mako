@@ -99,6 +99,7 @@ async fn cross_fv_antwort_accepted_on_fv_start_process() {
         validation_errors: vec![],
         received_at: time::OffsetDateTime::now_utc(),
         bilanzierungsmethode: None,
+        transaktionsgrund: None,
         fallgruppe: None,
         gasqualitaet: None,
     })
@@ -186,6 +187,7 @@ async fn cross_fv_aperak_timeout_fires_on_validation_passed() {
         validation_errors: vec![],
         received_at: time::OffsetDateTime::now_utc(),
         bilanzierungsmethode: None,
+        transaktionsgrund: None,
         fallgruppe: None,
         gasqualitaet: None,
     })

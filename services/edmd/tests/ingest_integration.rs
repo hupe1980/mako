@@ -687,7 +687,7 @@ async fn typ2_13027_lands_in_the_separate_store_never_meter_reads() {
     };
     let body = serde_json::json!({
         "specversion": "1.0",
-        "type": "de.mako.process.completed",
+        "type": mako_events::mako::PROCESS_COMPLETED,
         "subject": "11111111-1111-1111-1111-111111111111",
         "time": "2026-01-01T00:00:00Z",
         "data": {

@@ -96,6 +96,7 @@
 #![allow(clippy::map_unwrap_or)]
 #![allow(clippy::items_after_statements)]
 
+pub mod consent;
 pub mod esa_wertebestellung;
 pub mod geraeteubernahme;
 pub mod geraetewechsel;
@@ -296,7 +297,7 @@ impl mako_engine::builder::EngineModule for WimModule {
         //
         // Note: 17101 (“Anfrage zur Übermittlung von Stammdaten Gas”) is the GAS counterpart
         // and belongs to mako-wim-gas, not here.
-        router.register(stammdaten::ANFORDERUNG_PID, "wim-stammdaten");
+        router.register(stammdaten::ANFORDERUNG_PID.as_u32(), "wim-stammdaten");
 
         // Nb role: inbound Stammdatenübermittlung responses (MSB → NB).
         //
@@ -381,15 +382,15 @@ impl mako_engine::builder::EngineModule for WimModule {
         // echoed in RFF+ON (see the makod ingest dispatcher).
         if roles.contains(mako_engine::marktrolle::Marktrolle::Msb) {
             router.register(
-                wertebestellung::BESTELLUNG_PID,
+                wertebestellung::BESTELLUNG_PID.as_u32(),
                 wertebestellung::WORKFLOW_NAME,
             );
             router.register(
-                wertebestellung::ABBESTELLUNG_PID,
+                wertebestellung::ABBESTELLUNG_PID.as_u32(),
                 wertebestellung::WORKFLOW_NAME,
             );
             router.register(
-                wertebestellung::STORNIERUNG_PID,
+                wertebestellung::STORNIERUNG_PID.as_u32(),
                 wertebestellung::WORKFLOW_NAME,
             );
         }
@@ -403,7 +404,7 @@ impl mako_engine::builder::EngineModule for WimModule {
         // from the MSB inbound PIDs, so an integrated deployment holds both.
         if roles.contains(mako_engine::marktrolle::Marktrolle::Esa) {
             for &pid in esa_wertebestellung::ESA_INBOUND_PIDS {
-                router.register(pid, esa_wertebestellung::WORKFLOW_NAME);
+                router.register(pid.as_u32(), esa_wertebestellung::WORKFLOW_NAME);
             }
         }
 
@@ -443,7 +444,7 @@ impl mako_engine::builder::EngineModule for WimModule {
         // workflow instance via conversation ID correlation.
         //
         // Source: COMDIS AHB 1.0, WiM Strom Teil 1, BK6-24-174.
-        router.register(rechnung::WIM_COMDIS_ABLEHNUNG_PID, "wim-rechnung");
+        router.register(rechnung::WIM_COMDIS_ABLEHNUNG_PID.as_u32(), "wim-rechnung");
 
         // IFTSTA WiM PIDs 21009–21018 (MSB-Wechsel status messages).
         //
@@ -497,8 +498,10 @@ impl mako_engine::builder::EngineModule for WimModule {
 
         // WiM Technikänderung — device/config change requests (ORDERS/ORDRSP).
         //
-        // Covers LF→MSB (17003), ESA orders (17007/17008), MSB→MSB (17118).
-        // ORDRSP: Bestätigung (19003/19005/19011) and Ablehnung (19004/19006/19007/19012).
+        // Covers LF→MSB Änderung der Technik (17011) and MSB→MSB Bestellung
+        // Konfigurationsänderung (17118). The ESA order PIDs (17007/17008,
+        // ORDRSP 19011–19014) belong to `wertebestellung`.
+        // ORDRSP: Bestätigung (19003/19005) and Ablehnung (19004/19006/19007).
         for &pid in technik_aenderung::ORDERS_PIDS {
             router.register(pid, technik_aenderung::WORKFLOW_NAME);
         }

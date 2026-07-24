@@ -240,6 +240,7 @@ fn send_antwort_lieferbeginn_accepted_emits_mscons_13015_outbox() {
     let malo = MaLo::new("51238696781");
     let new_supplier = MarktpartnerCode::new("4012345000023");
     let data = InitiatedData {
+        transaktionsgrund: None,
         location_id: malo.clone(),
         new_supplier: new_supplier.clone(),
         grid_operator: MarktpartnerCode::new("9900357000004"),
@@ -299,6 +300,7 @@ fn send_antwort_lieferbeginn_with_msb_emits_orders_17134_outbox() {
     let new_supplier = MarktpartnerCode::new("4012345000023");
     let msb_mp_id = MarktpartnerCode::new("9904357000003");
     let data = InitiatedData {
+        transaktionsgrund: None,
         location_id: malo.clone(),
         new_supplier: new_supplier.clone(),
         grid_operator: MarktpartnerCode::new("9900357000004"),
@@ -356,6 +358,7 @@ fn send_antwort_lieferende_accepted_no_cross_domain_outbox() {
     let malo = MaLo::new("51238696781");
     let new_supplier = MarktpartnerCode::new("4012345000023");
     let data = InitiatedData {
+        transaktionsgrund: None,
         location_id: malo.clone(),
         new_supplier: new_supplier.clone(),
         grid_operator: MarktpartnerCode::new("9900357000004"),

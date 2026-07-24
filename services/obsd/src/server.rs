@@ -387,7 +387,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
                         let secret: &str = s.expose_secret();
                         secret
                     }),
-                    event_types: &["de.mako.process.completed"],
+                    event_types: &[mako_events::mako::PROCESS_COMPLETED],
                     makopid_filter: &[],
                     active: true,
                 },

@@ -239,14 +239,17 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
         // payment. Without this registration, REMADV is silently dropped.
         //
         // Source: REMADV AHB 1.0, GaBi Gas, BK7.
-        router.register(invoic::GABI_GAS_REMADV_PID, "gabi-gas-invoic");
+        router.register(invoic::GABI_GAS_REMADV_PID.as_u32(), "gabi-gas-invoic");
 
         // COMDIS 29001 — inbound Ablehnung REMADV (payer role).
         //
         // The FNB/VNB can reject the BKV's REMADV via COMDIS 29001.
         //
         // Source: COMDIS AHB 1.0, GaBi Gas, BK7.
-        router.register(invoic::GABI_GAS_COMDIS_ABLEHNUNG_PID, "gabi-gas-invoic");
+        router.register(
+            invoic::GABI_GAS_COMDIS_ABLEHNUNG_PID.as_u32(),
+            "gabi-gas-invoic",
+        );
 
         // NOMINT / NOMRES synthetic PIDs (DVGW, 90011/90012/90021/90022).
         for &pid in nomination::NOMINATION_PIDS {
@@ -259,17 +262,17 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
         }
 
         // SCHEDL transport schedule (DVGW, 90031).
-        router.register(schedl::SCHEDL_PID, "gabi-gas-schedl");
+        router.register(schedl::SCHEDL_PID.as_u32(), "gabi-gas-schedl");
 
         // IMBNOT imbalance notification (DVGW, 90041).
-        router.register(imbnot::IMBNOT_PID, "gabi-gas-imbnot");
+        router.register(imbnot::IMBNOT_PID.as_u32(), "gabi-gas-imbnot");
 
         // TRANOT transport notification (DVGW, 90051).
-        router.register(tranot::TRANOT_PID, "gabi-gas-tranot");
+        router.register(tranot::TRANOT_PID.as_u32(), "gabi-gas-tranot");
 
         // DELORD / DELRES delivery order cycle (DVGW, 90061/90062).
         for &pid in delord::DELIVERY_ORDER_PIDS {
-            router.register(pid, "gabi-gas-delivery-order");
+            router.register(pid.as_u32(), "gabi-gas-delivery-order");
         }
 
         // MMM Allokationsliste Gas — MSCONS 13013 (NB → LF, Gas-only).

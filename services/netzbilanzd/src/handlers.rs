@@ -77,7 +77,7 @@ pub async fn run_billing(
                     emit_cloud_event(
                         Arc::clone(&http_client),
                         url.clone(),
-                        "de.netzbilanz.invoic.drafted",
+                        mako_events::netzbilanz::INVOIC_DRAFTED,
                         serde_json::json!({ "draft_id": id, "tenant": cfg.tenant }),
                     );
                 }
@@ -154,7 +154,7 @@ pub async fn dispatch_draft(
                 emit_cloud_event(
                     Arc::clone(&http_client),
                     url.clone(),
-                    "de.netzbilanz.invoic.dispatched",
+                    mako_events::netzbilanz::INVOIC_DISPATCHED,
                     serde_json::json!({ "draft_id": id, "dispatch_ref": ref_id, "tenant": cfg.tenant }),
                 );
             }
@@ -399,6 +399,17 @@ pub async fn put_kostenblatt(
     Path(activation_id): Path<String>,
     Json(req): Json<UpsertKostenblattRequest>,
 ) -> impl IntoResponse {
+    // Validate the optional payload by typed round-trip — the stored JSON must
+    // actually be a `rubo4e::current::Kosten`, not merely claim to be one.
+    if let Some(kosten_json) = &req.kosten_json
+        && let Err(e) = serde_json::from_value::<rubo4e::current::Kosten>(kosten_json.clone())
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("invalid Kosten payload: {e}"),
+        )
+            .into_response();
+    }
     let einsatzkosten = req.dispatch_kwh * req.arbeitspreis_eur_per_kwh;
     match upsert_kostenblatt(&pool, &cfg.tenant, &activation_id, &req).await {
         Ok(id) => (
@@ -789,7 +800,7 @@ pub async fn post_kostenblatt_compute(
         emit_cloud_event(
             Arc::clone(&http_client),
             webhook_url.clone(),
-            "de.netzbilanz.kostenblatt.computed",
+            mako_events::netzbilanz::KOSTENBLATT_COMPUTED,
             serde_json::json!({
                 "record_id":              record_id,
                 "activation_id":          activation_id,
@@ -827,15 +838,18 @@ pub async fn post_kostenblatt_compute(
 
 /// Fetch the total dispatched energy (kWh) for an activation window from edmd Lastgang.
 ///
-/// Calls `GET /api/v1/lastgang/{malo_id}?from={start}&to={end}` and sums all
-/// 15-min interval `wert` values.
+/// Calls `GET /api/v1/lastgang/{malo_id}?from={start}&to={end}` and deserialises
+/// the response as the shape edmd actually emits: `Vec<rubo4e::current::Lastgang>`
+/// (one entry per OBIS group), each carrying its interval values under
+/// `werte: Vec<Zeitreihenwert>` with `wert` (kWh) and `zeitraum` (interval bounds).
 ///
-/// Handles both:
-/// - Array format: `[{ "wert": "1.25", "timestamp_utc": "..." }, ...]`
-/// - BO4E Lastgang format: `{ "werteliste": [{ "wert": "1.25", ... }] }`
+/// Values are additionally filtered to the activation window via each value's
+/// `zeitraum` where present (defensive — edmd already filters server-side by
+/// `from`/`to`); values without a parseable `zeitraum` are trusted as-is.
 ///
-/// Returns `None` when the Lastgang endpoint returns 404, an empty array, or
-/// a sum of zero — the caller should fall back to billing-period in that case.
+/// Returns `None` when the Lastgang endpoint returns 404, a non-2xx status, an
+/// unparseable body, or a sum of zero — the caller falls back to the
+/// billing-period aggregate in that case.
 async fn fetch_dispatch_kwh_from_lastgang(
     client: &reqwest::Client,
     edmd_url: &str,
@@ -843,7 +857,7 @@ async fn fetch_dispatch_kwh_from_lastgang(
     cfg: &NetzbilanzConfig,
     req: &KostenblattComputeRequest,
 ) -> Option<rust_decimal::Decimal> {
-    use rust_decimal::Decimal;
+    use time::format_description::well_known::Rfc3339;
     let url = format!(
         "{edmd_url}/api/v1/lastgang/{malo_id}?from={}&to={}",
         req.activation_start_utc, req.activation_end_utc
@@ -852,7 +866,7 @@ async fn fetch_dispatch_kwh_from_lastgang(
     if let Some(key) = cfg.edmd_api_key.as_deref() {
         http_req = http_req.bearer_auth(key);
     }
-    let body: serde_json::Value = match http_req.send().await {
+    let lastgaenge: Vec<rubo4e::current::Lastgang> = match http_req.send().await {
         Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND => return None,
         Ok(r) if !r.status().is_success() => {
             tracing::debug!(
@@ -862,33 +876,51 @@ async fn fetch_dispatch_kwh_from_lastgang(
             );
             return None;
         }
-        Ok(r) => r.json().await.unwrap_or_default(),
+        Ok(r) => match r.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    %e, malo_id,
+                    "N5 Kostenblatt: lastgang body is not a BO4E Lastgang list — \
+                     falling back to billing-period"
+                );
+                return None;
+            }
+        },
         Err(e) => {
             tracing::warn!(%e, malo_id, "N5 Kostenblatt: lastgang fetch error");
             return None;
         }
     };
 
-    // Extract interval values from either response format.
-    let intervals: Vec<&serde_json::Value> = if let Some(arr) = body.as_array() {
-        // Direct array: [{ "wert": "...", "timestamp_utc": "..." }, ...]
-        arr.iter().collect()
-    } else if let Some(arr) = body.get("werteliste").and_then(|v| v.as_array()) {
-        // BO4E Lastgang: { "werteliste": [{ "wert": "...", "zeitstempel": "..." }] }
-        arr.iter().collect()
-    } else if let Some(arr) = body.get("zeitreihenwerteliste").and_then(|v| v.as_array()) {
-        arr.iter().collect()
-    } else {
-        return None;
-    };
+    let window_start = time::OffsetDateTime::parse(&req.activation_start_utc, &Rfc3339).ok();
+    let window_end = time::OffsetDateTime::parse(&req.activation_end_utc, &Rfc3339).ok();
+    sum_lastgang_kwh(&lastgaenge, window_start, window_end)
+}
 
-    let total: Decimal = intervals
+/// Sum all interval `wert` values across the OBIS groups of an edmd Lastgang
+/// response, filtered to the activation window `[window_start, window_end)`.
+///
+/// Returns `None` for an empty response or a sum of zero (the caller's fallback
+/// signal). Values whose `zeitraum` cannot be resolved to a UTC instant are
+/// included — edmd has already filtered server-side.
+fn sum_lastgang_kwh(
+    lastgaenge: &[rubo4e::current::Lastgang],
+    window_start: Option<time::OffsetDateTime>,
+    window_end: Option<time::OffsetDateTime>,
+) -> Option<rust_decimal::Decimal> {
+    use rust_decimal::Decimal;
+    let total: Decimal = lastgaenge
         .iter()
-        .filter_map(|v| {
-            v.get("wert")
-                .or_else(|| v.get("kwh"))
-                .and_then(decimal_from_json_value)
+        .flat_map(|lg| lg.werte.iter().flatten())
+        .filter(|zw| {
+            // A value with no resolvable interval start is kept (see doc comment).
+            let Some(t) = zw.zeitraum.as_ref().and_then(zeitraum_start_utc) else {
+                return true;
+            };
+            window_start.is_none_or(|s| t >= s) && window_end.is_none_or(|e| t < e)
         })
+        .filter_map(|zw| zw.wert)
         .sum();
 
     if total > Decimal::ZERO {
@@ -896,6 +928,18 @@ async fn fetch_dispatch_kwh_from_lastgang(
     } else {
         None
     }
+}
+
+/// Resolve a BO4E `Zeitraum` interval start to a UTC instant.
+///
+/// edmd emits `startdatum` (date) + `startuhrzeit` (`"HH:MM:SS+00:00"`, always
+/// UTC). Returns `None` when either part is missing or unparseable.
+fn zeitraum_start_utc(z: &rubo4e::current::Zeitraum) -> Option<time::OffsetDateTime> {
+    let date = z.startdatum?;
+    let hms = z.startuhrzeit.as_deref()?.get(..8)?;
+    let format = time::macros::format_description!("[hour]:[minute]:[second]");
+    let t = time::Time::parse(hms, &format).ok()?;
+    Some(date.with_time(t).assume_utc())
 }
 
 /// Parse a JSON value as `rust_decimal::Decimal`.
@@ -1290,6 +1334,17 @@ pub async fn put_fremdkosten(
         )
             .into_response();
     }
+    // Validate by typed round-trip — the stored JSON must actually deserialize
+    // as `rubo4e::current::Fremdkosten`, not merely carry the right `_typ`.
+    if let Err(e) =
+        serde_json::from_value::<rubo4e::current::Fremdkosten>(req.fremdkosten_json.clone())
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!("invalid Fremdkosten payload: {e}"),
+        )
+            .into_response();
+    }
     match upsert_fremdkosten(&pool, &cfg.tenant, draft_id, &req).await {
         Ok(id) => (
             StatusCode::OK,
@@ -1441,7 +1496,7 @@ pub async fn mark_paid(
                 emit_cloud_event(
                     Arc::clone(&http_client),
                     url.clone(),
-                    "de.netzbilanz.invoic.paid",
+                    mako_events::netzbilanz::INVOIC_PAID,
                     serde_json::json!({
                         "draft_id": id,
                         "remadv_ref": req.remadv_ref,
@@ -1496,7 +1551,7 @@ pub async fn mark_disputed(
                 emit_cloud_event(
                     Arc::clone(&http_client),
                     url.clone(),
-                    "de.netzbilanz.invoic.disputed",
+                    mako_events::netzbilanz::INVOIC_DISPUTED,
                     serde_json::json!({
                         "draft_id": id,
                         "erc_code": req.erc_code,
@@ -1657,7 +1712,7 @@ pub async fn post_remadv_webhook(
     };
 
     let result = match body.ce_type.as_str() {
-        "de.invoic.receipt.settled" | "de.netzbilanz.invoic.paid" => {
+        mako_events::invoic::RECEIPT_SETTLED | mako_events::netzbilanz::INVOIC_PAID => {
             let remadv_ref = body
                 .data
                 .get("remadv_ref")
@@ -1665,7 +1720,7 @@ pub async fn post_remadv_webhook(
                 .unwrap_or("webhook");
             mark_draft_paid(&pool, id, remadv_ref).await
         }
-        "de.invoic.receipt.disputed" | "de.netzbilanz.invoic.disputed" => {
+        mako_events::invoic::RECEIPT_DISPUTED | mako_events::netzbilanz::INVOIC_DISPUTED => {
             let erc = body
                 .data
                 .get("erc_code")
@@ -1691,9 +1746,9 @@ pub async fn post_remadv_webhook(
         Ok(true) => {
             // Emit downstream CloudEvent
             let ce_type = if body.ce_type.contains("settled") {
-                "de.netzbilanz.invoic.paid"
+                mako_events::netzbilanz::INVOIC_PAID
             } else {
-                "de.netzbilanz.invoic.disputed"
+                mako_events::netzbilanz::INVOIC_DISPUTED
             };
             if let Some(ref url) = cfg.erp_webhook_url {
                 emit_cloud_event(
@@ -1720,6 +1775,31 @@ pub async fn post_remadv_webhook(
 mod kostenblatt_tests {
     use super::decimal_from_json_value;
     use rust_decimal::dec;
+
+    // ── typed BO4E round-trip validation (PUT kostenblatt / fremdkosten) ─────
+
+    #[test]
+    fn kosten_roundtrip_accepts_valid_payload() {
+        // BO4E is Option-heavy: a minimal payload with correct shapes passes.
+        let v = serde_json::json!({
+            "_typ": "KOSTEN",
+            "kostenbloecke": [{ "kostenblockbezeichnung": "UENB" }],
+        });
+        assert!(serde_json::from_value::<rubo4e::current::Kosten>(v).is_ok());
+    }
+
+    #[test]
+    fn kosten_roundtrip_rejects_wrong_shape() {
+        // `kostenbloecke` must be an array of blocks, not a scalar.
+        let v = serde_json::json!({ "kostenbloecke": 42 });
+        assert!(serde_json::from_value::<rubo4e::current::Kosten>(v).is_err());
+    }
+
+    #[test]
+    fn fremdkosten_roundtrip_rejects_wrong_shape() {
+        let v = serde_json::json!({ "kostenbloecke": "not-a-list" });
+        assert!(serde_json::from_value::<rubo4e::current::Fremdkosten>(v).is_err());
+    }
 
     // ── decimal_from_json_value ───────────────────────────────────────────────
 
@@ -1777,54 +1857,107 @@ mod kostenblatt_tests {
 
     // ── Lastgang response parsing ─────────────────────────────────────────────
 
-    #[test]
-    fn sum_lastgang_array_format() {
-        // Array format: [{ "wert": "1.25", "timestamp_utc": "..." }, ...]
-        let response = serde_json::json!([
-            { "wert": "1.25", "timestamp_utc": "2026-01-15T10:00:00Z" },
-            { "wert": "1.30", "timestamp_utc": "2026-01-15T10:15:00Z" },
-            { "wert": "0.80", "timestamp_utc": "2026-01-15T10:30:00Z" }
+    use super::sum_lastgang_kwh;
+    use time::format_description::well_known::Rfc3339;
+
+    fn utc(s: &str) -> time::OffsetDateTime {
+        time::OffsetDateTime::parse(s, &Rfc3339).expect("valid RFC 3339")
+    }
+
+    /// Realistic edmd response: `Vec<Lastgang>`, one per OBIS group, values under
+    /// `werte[].wert` with `zeitraum` interval bounds (the shape emitted by
+    /// edmd `get_lastgang` / `read_to_zeitreihenwert`).
+    fn edmd_shaped_response() -> Vec<rubo4e::current::Lastgang> {
+        let body = serde_json::json!([
+            {
+                "_typ": "LASTGANG",
+                "obisKennzahl": "1-0:1.29.0",
+                "sparte": "STROM",
+                "zeitIntervallLaenge": { "wert": "15", "einheit": "VIERTEL_STUNDE" },
+                "werte": [
+                    {
+                        "wert": "1.25",
+                        "status": "ENERGIEMENGE_SUMMIERT",
+                        "zeitraum": {
+                            "startdatum": "2026-01-15",
+                            "startuhrzeit": "10:00:00+00:00",
+                            "enddatum": "2026-01-15",
+                            "enduhrzeit": "10:15:00+00:00"
+                        }
+                    },
+                    {
+                        "wert": "1.30",
+                        "zeitraum": {
+                            "startdatum": "2026-01-15",
+                            "startuhrzeit": "10:15:00+00:00",
+                            "enddatum": "2026-01-15",
+                            "enduhrzeit": "10:30:00+00:00"
+                        }
+                    },
+                    {
+                        "wert": "0.80",
+                        "zeitraum": {
+                            "startdatum": "2026-01-15",
+                            "startuhrzeit": "10:30:00+00:00",
+                            "enddatum": "2026-01-15",
+                            "enduhrzeit": "10:45:00+00:00"
+                        }
+                    }
+                ]
+            }
         ]);
-        let intervals: Vec<&serde_json::Value> = response.as_array().unwrap().iter().collect();
-        let total: rust_decimal::Decimal = intervals
-            .iter()
-            .filter_map(|v| v.get("wert").and_then(decimal_from_json_value))
-            .sum();
-        assert_eq!(total, dec!(3.35));
+        serde_json::from_value(body).expect("edmd-shaped JSON parses as Vec<Lastgang>")
     }
 
+    /// The typed parser sums `werte[].wert` from the shape edmd actually emits.
     #[test]
-    fn sum_lastgang_bo4e_format() {
-        // BO4E Lastgang: { "werteliste": [{ "wert": "...", ... }] }
-        let response = serde_json::json!({
-            "zeitIntervallLaenge": "PT15M",
-            "werteliste": [
-                { "wert": "2.50", "zeitstempel": "2026-01-15T10:00:00Z", "status": "67" },
-                { "wert": "2.75", "zeitstempel": "2026-01-15T10:15:00Z", "status": "67" }
-            ]
+    fn sum_lastgang_edmd_shape() {
+        let lastgaenge = edmd_shaped_response();
+        let total = sum_lastgang_kwh(&lastgaenge, None, None);
+        assert_eq!(total, Some(dec!(3.35)));
+    }
+
+    /// The activation window filters out intervals starting outside it.
+    #[test]
+    fn sum_lastgang_filters_to_activation_window() {
+        let lastgaenge = edmd_shaped_response();
+        // Window covers only the first two 15-min intervals.
+        let total = sum_lastgang_kwh(
+            &lastgaenge,
+            Some(utc("2026-01-15T10:00:00Z")),
+            Some(utc("2026-01-15T10:30:00Z")),
+        );
+        assert_eq!(total, Some(dec!(2.55)));
+    }
+
+    /// Regression documentation: the shapes the OLD parser probed — a top-level
+    /// array of `{ "wert": ... }` items, or `werteliste` — are NOT what edmd
+    /// emits, and would have yielded `None` (silent billing-period fallback) had
+    /// they reached the typed sum. Deserialising them as `Vec<Lastgang>` either
+    /// fails outright or produces no `werte`, so the sum is `None`.
+    #[test]
+    fn old_probed_shapes_yield_none() {
+        // Old shape 1: flat array of interval objects.
+        let flat = serde_json::json!([
+            { "wert": "1.25", "timestamp_utc": "2026-01-15T10:00:00Z" },
+            { "kwh": "1.30", "timestamp_utc": "2026-01-15T10:15:00Z" }
+        ]);
+        if let Ok(parsed) = serde_json::from_value::<Vec<rubo4e::current::Lastgang>>(flat) {
+            assert_eq!(sum_lastgang_kwh(&parsed, None, None), None);
+        }
+
+        // Old shape 2: single object with "werteliste" — not a JSON array,
+        // so it cannot even deserialise as Vec<Lastgang>.
+        let werteliste = serde_json::json!({
+            "werteliste": [{ "wert": "2.50", "zeitstempel": "2026-01-15T10:00:00Z" }]
         });
-        let intervals: Vec<&serde_json::Value> = response
-            .get("werteliste")
-            .and_then(|v| v.as_array())
-            .unwrap()
-            .iter()
-            .collect();
-        let total: rust_decimal::Decimal = intervals
-            .iter()
-            .filter_map(|v| v.get("wert").and_then(decimal_from_json_value))
-            .sum();
-        assert_eq!(total, dec!(5.25));
+        assert!(serde_json::from_value::<Vec<rubo4e::current::Lastgang>>(werteliste).is_err());
     }
 
+    /// Empty response → `None` (billing-period fallback preserved).
     #[test]
-    fn empty_lastgang_returns_zero() {
-        let response = serde_json::json!([]);
-        let intervals: Vec<&serde_json::Value> = response.as_array().unwrap().iter().collect();
-        let total: rust_decimal::Decimal = intervals
-            .iter()
-            .filter_map(|v| v.get("wert").and_then(decimal_from_json_value))
-            .sum();
-        assert_eq!(total, dec!(0));
+    fn empty_lastgang_returns_none() {
+        assert_eq!(sum_lastgang_kwh(&[], None, None), None);
     }
 
     // ── Einsatzkosten calculation ─────────────────────────────────────────────

@@ -59,6 +59,7 @@ fn receive_utilmd_cmd(validation_passed: bool) -> GasSupplierChangeCommand {
         },
         received_at: time::OffsetDateTime::now_utc(),
         bilanzierungsmethode: None,
+        transaktionsgrund: None,
         fallgruppe: None,
         gasqualitaet: None,
     }
@@ -172,6 +173,7 @@ async fn unsupported_pid_is_rejected() {
             validation_errors: vec![],
             received_at: time::OffsetDateTime::now_utc(),
             bilanzierungsmethode: None,
+            transaktionsgrund: None,
             fallgruppe: None,
             gasqualitaet: None,
         })

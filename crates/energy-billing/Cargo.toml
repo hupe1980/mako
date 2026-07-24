@@ -9,8 +9,8 @@ repository.workspace   = true
 rust-version.workspace = true
 
 [dependencies]
-# BO4E Steuerbetrag for the EN16931 BG-23 VAT breakdown.
-rubo4e = { workspace = true }
+# BO4E bridge (feature `bo4e`): typed Rechnung/Steuerbetrag construction.
+rubo4e = { workspace = true, optional = true }
 billing             = { workspace = true }
 eeg-billing         = { workspace = true, features = ["serde"], optional = true }
 rust_decimal        = { workspace = true }
@@ -25,8 +25,12 @@ tracing             = { version = "0.1", default-features = false }
 ## Enable EEG settlement delegation to `eeg-billing`.
 ## Required for `EegProvider` full-accuracy path (`quantities.eeg_full`).
 eeg = ["dep:eeg-billing"]
+## BO4E bridge: `Invoice::to_rechnung()`/`to_rechnung_json()`,
+## `TaxSubtotal::to_bo4e()`, `InvoiceType::rechnungstyp()`. Off by default so
+## the core billing engine stays rubo4e-free (billing-crate policy).
+bo4e = ["dep:rubo4e"]
 ## Enable all optional features.
-full = ["eeg"]
+full = ["eeg", "bo4e"]
 
 [dev-dependencies]
 time = { workspace = true, features = ["macros"] }
@@ -36,6 +40,7 @@ proptest   = "1"
 [[test]]
 name = "calculator_tests"
 path = "tests/calculator_tests.rs"
+required-features = ["bo4e"]
 
 [[test]]
 name = "proptest_invoice"
@@ -44,3 +49,4 @@ path = "tests/proptest_invoice.rs"
 [[test]]
 name = "golden_scenarios"
 path = "tests/golden_scenarios.rs"
+required-features = ["bo4e"]

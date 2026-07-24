@@ -21,7 +21,7 @@ pub struct TarifbdConfig {
     /// token; only the public comparison feed is unauthenticated.
     pub oidc: Option<mako_service::oidc::OidcConfig>,
 
-    /// ERP webhook URL for `de.tarifbd.product.updated` notifications.
+    /// ERP webhook URL for `de.tarif.product.updated` notifications.
     pub erp_webhook_url: Option<String>,
 
     /// HMAC-SHA256 secret for outbound webhook signing.

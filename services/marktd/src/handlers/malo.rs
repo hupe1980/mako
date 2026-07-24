@@ -18,8 +18,8 @@ use mako_markt::{
     domain::{MaloId, Sparte},
     error::MdmError,
     repository::{
-        AppState, ContractRepository, CorrelationIndex, Lokationszuordnung, MaloFilter,
-        MaloRepository, MeloRepository, PageResult, PartnerRepository, SubscriptionRepository,
+        AppState, ContractRepository, CorrelationIndex, MaloFilter, MaloRepository, MeloRepository,
+        PageResult, PartnerRepository, Rollenzuordnung, SubscriptionRepository,
     },
 };
 use mako_service::cedar::CedarEnforcer;
@@ -97,7 +97,7 @@ pub struct MaloUpsertRequest {
     pub data: serde_json::Value,
     #[serde(default)]
     #[schema(value_type = Vec<Object>)]
-    pub lokationszuordnung: Vec<Lokationszuordnung>,
+    pub rollenzuordnung: Vec<Rollenzuordnung>,
     /// BO4E schema version of `data` (e.g. `"v202607.0.0"`). Defaults to current.
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
@@ -144,8 +144,12 @@ pub struct MaloResponse {
     /// `GABI_RLM_IM_NOMINIERUNGSERSATZVERFAHREN`. Required for Gas MMM settlement routing.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fallgruppe: Option<String>,
+    /// Lokationsbündel object code (`Marktlokation.lokationsbuendelObjektcode`,
+    /// UTILMD Lokationsbündelstruktur).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lokationsbuendel_objektcode: Option<String>,
     #[schema(value_type = Vec<Object>)]
-    pub lokationszuordnung: Vec<Lokationszuordnung>,
+    pub rollenzuordnung: Vec<Rollenzuordnung>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -253,13 +257,13 @@ where
 
     // Extract fields for the makod MaLo cache push from the canonical payload.
     let nb_mp_id = req
-        .lokationszuordnung
+        .rollenzuordnung
         .iter()
         .find(|z| z.zuordnungstyp == "NB" || z.zuordnungstyp == "GNB")
         .map(|z| z.rollencodenummer.clone())
         .unwrap_or_else(|| state.tenant_gln.clone());
     let msb_mp_id = req
-        .lokationszuordnung
+        .rollenzuordnung
         .iter()
         .find(|z| z.zuordnungstyp == "MSB" || z.zuordnungstyp == "GMSB")
         .map(|z| z.rollencodenummer.clone());
@@ -281,7 +285,7 @@ where
             &malo_id,
             req.sparte,
             canonical_data,
-            req.lokationszuordnung,
+            req.rollenzuordnung,
             if_match,
             &req.bo4e_version,
         )
@@ -316,7 +320,7 @@ where
             // Emit de.markt.malo.updated so ERP subscribers and obsd get notified.
             let evt = MarktEvent::new(
                 &state.tenant_gln,
-                "de.markt.malo.updated",
+                mako_events::markt::MALO_UPDATED,
                 malo_id_str,
                 serde_json::json!({ "version": version }),
             )
@@ -407,7 +411,8 @@ where
                 bilanzierungsmethode: r.bilanzierungsmethode,
                 regelzone: r.regelzone,
                 fallgruppe: r.fallgruppe,
-                lokationszuordnung: r.lokationszuordnung,
+                lokationsbuendel_objektcode: r.lokationsbuendel_objektcode,
+                rollenzuordnung: r.rollenzuordnung,
             };
             (
                 StatusCode::OK,
@@ -491,7 +496,8 @@ where
                         bilanzierungsmethode: r.bilanzierungsmethode,
                         regelzone: r.regelzone,
                         fallgruppe: r.fallgruppe,
-                        lokationszuordnung: r.lokationszuordnung,
+                        lokationsbuendel_objektcode: r.lokationsbuendel_objektcode,
+                        rollenzuordnung: r.rollenzuordnung,
                     })
                 })
                 .collect();
@@ -509,7 +515,7 @@ where
 
 /// Returns today's date in German local time (CET/CEST via Europe/Berlin).
 ///
-/// Regulatory deadlines and `lokationszuordnung` validity queries must use
+/// Regulatory deadlines and `rollenzuordnung` validity queries must use
 /// German local time, not UTC.  Using UTC causes off-by-one errors around
 /// midnight during winter/summer transitions.
 pub(crate) fn today_berlin() -> Date {

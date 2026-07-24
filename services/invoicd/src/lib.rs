@@ -61,5 +61,4 @@ pub mod handler;
 pub mod mcp_server;
 pub mod payment_overdue;
 pub mod pg;
-pub mod preisblatt_client;
 pub mod server;

@@ -9,6 +9,7 @@
 
 use anyhow::{Context, Result};
 use mako_edm::BilanzierungsgebietId;
+use mako_engine::types::Pruefidentifikator;
 use mako_mabis::{Summenzeitreihe, SummenzeitreiheBuilder};
 use rust_decimal::Decimal;
 use time::{Date, Duration, OffsetDateTime};
@@ -20,7 +21,7 @@ use crate::pg;
 use crate::pg::{Abrechnungslauf, SubmissionPhase};
 
 /// Prüfidentifikator for "Übertragung Summenzeitreihe" (MSCONS AHB 3.2 §8.3.1).
-pub const MSCONS_SUMMENZEITREIHE_PID: u32 = 13003;
+pub const MSCONS_SUMMENZEITREIHE_PID: Pruefidentifikator = Pruefidentifikator::const_new(13003);
 
 /// Bilanzierungsmonat as EDIFACT format 610 (`CCYYMM`).
 fn fmt_edifact_month(d: OffsetDateTime) -> String {

@@ -74,13 +74,13 @@ pub const BESTELLUNG_PIDS: &[u32] = &[17001];
 pub const STORNIERUNG_PIDS: &[u32] = &[17009];
 
 /// QUOTES 15001 — "Angebot Geräteübernahme" (Kap. 3.2.2 Nr. 2).
-pub const ANGEBOT_PID: u32 = 15001;
+pub const ANGEBOT_PID: Pruefidentifikator = Pruefidentifikator::const_new(15001);
 
 /// ORDRSP 19001 — "Bestellbestätigung" (Kap. 3.2.2 Nr. 4, positive).
-pub const BESTAETIGUNG_PID: u32 = 19001;
+pub const BESTAETIGUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(19001);
 
 /// ORDRSP 19002 — "Ablehnung der Bestellung" (Kap. 3.2.2 Nr. 4, negative).
-pub const ABLEHNUNG_PID: u32 = 19002;
+pub const ABLEHNUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(19002);
 
 /// ORDRSP 19003 / 19004 — Fortführungsbestätigung / Ablehnung Fortführung,
 /// answering ORDERS 17002 (Weiterverpflichtung).

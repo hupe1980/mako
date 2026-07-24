@@ -106,11 +106,24 @@ pub struct MeloResponse {
     /// Required for Redispatch 2.0 `NetworkConstraintDocument` and Gas billing zones.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub standorteigenschaften: Option<serde_json::Value>,
+    /// Lokationsbündel object code (`Messlokation.lokationsbuendelObjektcode`,
+    /// UTILMD Lokationsbündelstruktur).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lokationsbuendel_objektcode: Option<String>,
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// `PUT /api/v1/melo/:id`
+///
+/// # Single-write-path invariant (MaLo ↔ MeLo)
+///
+/// This PUT is the only writer of the `melo.malo_id` FK, and the repository
+/// maintains the corresponding `melo → malo` edge in the temporal
+/// `lokationszuordnungen` graph in the same transaction: the graph is always a
+/// superset of the FK (the FK is a derived convenience for "current parent"),
+/// and reparenting closes the previous open edge (`valid_to`). See
+/// `marktd::pg::melo` for the reconciliation rules.
 #[utoipa::path(
     put,
     path = "/api/v1/melo/{id}",
@@ -197,7 +210,7 @@ where
             let melo_id_str = melo_id.to_string();
             let evt = MarktEvent::new(
                 &state.tenant_gln,
-                "de.markt.melo.updated",
+                mako_events::markt::MELO_UPDATED,
                 melo_id_str,
                 serde_json::json!({ "version": version }),
             )
@@ -275,6 +288,7 @@ where
                 netzebene_messung: r.netzebene_messung,
                 regelzone: r.regelzone,
                 standorteigenschaften: r.standorteigenschaften,
+                lokationsbuendel_objektcode: r.lokationsbuendel_objektcode,
             };
             (
                 StatusCode::OK,

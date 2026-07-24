@@ -29,7 +29,7 @@ impl AgentDecision {
     pub fn to_cloud_event(&self, tenant: &str) -> Value {
         serde_json::json!({
             "specversion": "1.0",
-            "type": "de.agent.decision.made",
+            "type": mako_events::agent::DECISION_MADE,
             "source": format!("agentd/{tenant}/{}", self.agent_name),
             "id": uuid::Uuid::new_v4().to_string(),
             "time": time::OffsetDateTime::now_utc()
@@ -266,7 +266,7 @@ mod tests {
         let d = make_decision("mako-agent", "completed");
         let ce = d.to_cloud_event("9910000000002");
         assert_eq!(ce["specversion"], "1.0");
-        assert_eq!(ce["type"], "de.agent.decision.made");
+        assert_eq!(ce["type"], mako_events::agent::DECISION_MADE);
         assert!(ce["id"].as_str().is_some_and(|s| !s.is_empty()));
         assert!(ce["time"].as_str().is_some_and(|s| s.contains('T')));
         let src = ce["source"].as_str().unwrap();

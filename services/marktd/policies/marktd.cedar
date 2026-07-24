@@ -36,6 +36,8 @@ permit(
         Action::"read-device",
         Action::"read-sr",
         Action::"read-sharing-eligibility",
+        Action::"read-netzzugang",
+        Action::"read-msb-rv-gas",
         Action::"use-mcp"
     ],
     resource
@@ -56,7 +58,9 @@ permit(
         Action::"write-versorgungsstatus",
         Action::"write-malo-grid",
         Action::"write-device",
-        Action::"write-sr"
+        Action::"write-sr",
+        Action::"write-netzzugang",
+        Action::"write-msb-rv-gas"
     ],
     resource
 ) when {

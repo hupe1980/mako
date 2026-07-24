@@ -378,33 +378,3 @@ impl Workflow for GpkeComdisWorkflow {
         }
     }
 }
-
-// ── DB schema ─────────────────────────────────────────────────────────────────
-
-/// DDL for the `comdis_records` business table.
-///
-/// Deploy in `invoicd` (LF role) and `netzbilanzd` (NB role).
-/// The engine workflow tracks COMDIS state; this table mirrors the outcome for
-/// operator reporting and BNetzA compliance documentation.
-pub const COMDIS_RECORDS_DDL: &str = r"
-CREATE TABLE IF NOT EXISTS comdis_records (
-    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant              TEXT        NOT NULL,
-    rechnungsnummer     TEXT        NOT NULL,
-    comdis_ref          TEXT        NOT NULL,
-    lf_mp_id            TEXT        NOT NULL,
-    nb_mp_id            TEXT        NOT NULL,
-    disputed_amount_ct  BIGINT      NOT NULL,
-    status              TEXT        NOT NULL DEFAULT 'open'
-                        CHECK (status IN ('open','answered','resolved','escalated')),
-    counter_ref         TEXT,
-    outcome             TEXT
-                        CHECK (outcome IN ('settled','withdrawn','escalated_bnetza') OR outcome IS NULL),
-    received_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-    answered_at         TIMESTAMPTZ,
-    resolved_at         TIMESTAMPTZ,
-    UNIQUE (tenant, rechnungsnummer, comdis_ref)
-);
-CREATE INDEX IF NOT EXISTS comdis_records_status   ON comdis_records (tenant, status);
-CREATE INDEX IF NOT EXISTS comdis_records_lf_mp_id ON comdis_records (tenant, lf_mp_id);
-";

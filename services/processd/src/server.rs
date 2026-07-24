@@ -61,6 +61,11 @@ pub struct ProcessdState {
     pub marktd: Arc<mako_markt::marktd_client::MarktdClient>,
     /// M3: When `true`, auto-dispatch QUOTES from PreisblattMessung on REQOTE arrival.
     pub msb_auto_preisanfrage: bool,
+    /// Shared PG pool — used by the EoG module and REST case queries.
+    pub pool: sqlx::PgPool,
+    /// EoG gap-closure config (§36/§38 EnWG).
+    #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+    pub eog: Arc<crate::eog_module::EogModuleConfig>,
 }
 
 // ── RunConfig ─────────────────────────────────────────────────────────────────
@@ -81,6 +86,11 @@ pub struct RunConfig {
     pub lf_queue_ttl_secs: u64,
     /// M3: When `true`, auto-dispatch QUOTES from `PreisblattMessung` on REQOTE (PID 35001–35005) arrival.
     pub msb_auto_preisanfrage: bool,
+    /// EoG gap-closure automation (§36/§38 EnWG) — see `[eog]` in TOML.
+    pub eog_auto_activate: bool,
+    pub eog_default_transaktionsgrund: String,
+    pub eog_warn_days_before_expiry: u32,
+    pub eog_notify_webhook_url: Option<String>,
     /// Webhook URL to register with `marktd` on startup (self-registration).
     /// `None` → skip self-registration (useful in tests / standalone mode).
     pub self_register_webhook_url: Option<String>,
@@ -320,7 +330,55 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         own_mp_id: cfg.own_mp_id.clone(),
         marktd: marktd_for_state,
         msb_auto_preisanfrage: cfg.msb_auto_preisanfrage,
+        pool: pool.clone(),
+        #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+        eog: Arc::new(crate::eog_module::EogModuleConfig {
+            auto_activate: cfg.eog_auto_activate,
+            default_transaktionsgrund: cfg.eog_default_transaktionsgrund.clone(),
+            warn_days_before_expiry: cfg.eog_warn_days_before_expiry,
+            notify_webhook_url: cfg.eog_notify_webhook_url.clone(),
+        }),
     };
+
+    // ── Background: §38 EnWG Ersatzversorgung 3-month timer (daily) ────────
+    #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+    {
+        let timer_pool = pool.clone();
+        let timer_cfg = crate::eog_module::EogModuleConfig {
+            auto_activate: cfg.eog_auto_activate,
+            default_transaktionsgrund: cfg.eog_default_transaktionsgrund.clone(),
+            warn_days_before_expiry: cfg.eog_warn_days_before_expiry,
+            notify_webhook_url: cfg.eog_notify_webhook_url.clone(),
+        };
+        let timer_tenant = cfg.tenant.clone();
+        let timer_shutdown = cfg.shutdown.clone();
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            // First sweep shortly after startup, then daily.
+            let mut interval = tokio::time::interval(Duration::from_secs(86_400));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        match crate::eog_module::sweep_ersatzversorgung_timer(
+                            &timer_pool, &timer_cfg, &timer_tenant, &client,
+                        ).await {
+                            Ok((warned, expired)) if warned + expired > 0 => {
+                                tracing::warn!(
+                                    warned, expired,
+                                    "processd EoG: §38 timer sweep — operator review via \
+                                     GET /api/v1/eog?status=expiring|expired"
+                                );
+                            }
+                            Err(e) => tracing::warn!(error = %e, "processd EoG: timer sweep failed"),
+                            _ => {}
+                        }
+                    }
+                    _ = timer_shutdown.cancelled() => break,
+                }
+            }
+        });
+    }
 
     // ── MCP state ──────────────────────────────────────────────────────────
     let mcp_state = Arc::new(ProcessdMcpState {
@@ -355,6 +413,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         .route("/api/v1/start-supply-gas", post(rest::start_supply_gas))
         .route("/api/v1/end-supply", post(rest::end_supply))
         .route("/api/v1/end-supply-gas", post(rest::end_supply_gas))
+        .route("/api/v1/eog", get(rest::list_eog_cases))
         .route("/metrics", get(rest::metrics))
         .with_state(state)
         .layer(axum::Extension(cfg.oidc.clone()))
@@ -417,6 +476,32 @@ mod rest {
         }
     }
 
+    /// `GET /api/v1/eog?status=…` — EoG gap-closure case log (§36/§38 EnWG).
+    pub async fn list_eog_cases(
+        State(state): State<ProcessdState>,
+        Extension(pool): Extension<PgPool>,
+        axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+    ) -> impl IntoResponse {
+        #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+        {
+            match crate::eog_module::list_cases(
+                &pool,
+                &state.tenant,
+                q.get("status").map(String::as_str),
+            )
+            .await
+            {
+                Ok(rows) => Json(serde_json::to_value(rows).unwrap_or_default()).into_response(),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            }
+        }
+        #[cfg(not(any(feature = "role-nb-strom", feature = "role-nb-gas")))]
+        {
+            let _ = (pool, state, q);
+            (StatusCode::NOT_IMPLEMENTED, "NB role not compiled in").into_response()
+        }
+    }
+
     /// Approve a LFA E_0624 approval queue entry.
     ///
     /// This dispatches `gpke.nb-lieferende.bestaetigen` (PID 55008 Strom) to `makod`
@@ -447,9 +532,9 @@ mod rest {
         // Gas stornierung 44023: GNB confirmed 44023 — this is an inbound response, not an ERP approval;
         //   approval queue entries for 44023 indicate operator review of an automated accept.
         let command = match entry.pid as u32 {
-            55008 => "gpke.nb-lieferende.bestaetigen",
-            44022 | 44023 => "geli.gas.stornierung.initiieren",
-            _ => "gpke.nb-lieferende.bestaetigen",
+            55008 => mako_markt::commands::GPKE_NB_LIEFERENDE_BESTAETIGEN,
+            44022 | 44023 => mako_markt::commands::GELI_GAS_STORNIERUNG_INITIIEREN,
+            _ => mako_markt::commands::GPKE_NB_LIEFERENDE_BESTAETIGEN,
         };
 
         // Dispatch einwilligung to makod — BEFORE marking as Approved.
@@ -516,7 +601,7 @@ mod rest {
         // Gas stornierung 44022/44023: reject means the operator declines to initiate stornierung.
         //   Mark as Rejected in the queue without dispatching to makod.
         let command = match entry.pid as u32 {
-            55008 => "gpke.nb-lieferende.ablehnen",
+            55008 => mako_markt::commands::GPKE_NB_LIEFERENDE_ABLEHNEN,
             44022 | 44023 => {
                 // For Gas stornierung rejections, there is no inbound command to dispatch
                 // (the GNB was not queried). Mark as Rejected immediately.
@@ -529,7 +614,7 @@ mod rest {
                     Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
                 };
             }
-            _ => "gpke.nb-lieferende.ablehnen",
+            _ => mako_markt::commands::GPKE_NB_LIEFERENDE_ABLEHNEN,
         };
 
         // Dispatch ablehnen to makod — BEFORE marking as Rejected.
@@ -631,8 +716,8 @@ mod rest {
 
     /// `POST /api/v1/start-supply` — ERP initiates a GPKE Lieferbeginn (Strom SLP).
     ///
-    /// Validates the LFW24 Mindestvorlauffrist (15:00 CET/CEST cutoff) and
-    /// dispatches `gpke.lieferbeginn.anmelden` to `makod`.
+    /// Validates the LFW24 Mindestvorlauffrist and dispatches
+    /// `gpke.lieferbeginn.anmelden` to `makod`.
     ///
     /// ## Request body (JSON)
     ///
@@ -640,11 +725,17 @@ mod rest {
     /// |---------------------|--------|----------|-------|
     /// | `malo_id`           | string | ✓        | 11-digit Strom Marktlokations-ID |
     /// | `lieferbeginn_datum` | string | ✓        | ISO-8601 date (YYYY-MM-DD) |
+    /// | `transaktionsgrund` | string | —        | SG4 STS DE9013 (`E01` Ein-/Auszug, `E03` Wechsel); forwarded onto the outbound UTILMD. The Strom date rule is identical for both (LFW24) |
     ///
-    /// ## LFW24 Vorlauffrist (BK6-22-024)
+    /// ## LFW24 Vorlauffrist (BK6-22-024, consolidated in BK6-24-174 GPKE Teil 2)
     ///
-    /// - Submission **before 15:00 CET/CEST** → Lieferbeginn can be the next Arbeitstag.
-    /// - Submission **at or after 15:00 CET/CEST** → Lieferbeginn must be the übernächster Arbeitstag.
+    /// SD "Lieferbeginn" Prozessschritt 1: "Unverzüglich nach Vorliegen des
+    /// Anmeldegrundes, jedoch **spätester ÜT ist der Tag vor dem letzten WT vor
+    /// dem Zuordnungsbeginn**." The Frist is day-granular (ÜT = calendar day of
+    /// the AS4 receipt) — there is **no time-of-day cutoff**.
+    ///
+    /// - Earliest Lieferbeginn for a submission today: the calendar day **after
+    ///   the next Werktag** after today (Berlin date).
     /// - Retroactive dates (`lieferbeginn_datum` < today Berlin) are always rejected.
     pub async fn start_supply(
         State(state): State<ProcessdState>,
@@ -689,6 +780,14 @@ mod rest {
             }
         };
 
+        // Optional SG4 STS Transaktionsgrund — forwarded onto the outbound
+        // UTILMD. Under LFW24 the Strom date rule is Transaktionsgrund-
+        // independent, so it does not alter the validation below.
+        let transaktionsgrund = body
+            .get("transaktionsgrund")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+
         // Parse the requested Lieferbeginn date.
         let lieferbeginn = match time::Date::parse(
             &lieferbeginn_str,
@@ -707,15 +806,19 @@ mod rest {
             }
         };
 
-        // ── LFW24 Vorlauffrist validation (BK6-22-024) ────────────────────────
+        // ── LFW24 Vorlauffrist validation ─────────────────────────────────────
         //
-        // German local time (CET = UTC+1, CEST = UTC+2) determines the cutoff.
-        // The 15:00 cutoff is set by BK6-22-024 §3.2 (LFW24, effective 2025-06-06).
+        // Source: BK6-24-174 GPKE Teil 2 (Lesefassung), SD "Lieferbeginn"
+        // Prozessschritt 1 (the LFW24 rules of BK6-22-024, in force since
+        // 2025-06-06): "Unverzüglich nach Vorliegen des Anmeldegrundes, jedoch
+        // spätester ÜT ist der Tag vor dem letzten WT vor dem Zuordnungsbeginn."
+        // The Frist is day-granular — there is no time-of-day cutoff. Inverted:
+        // the earliest Zuordnungsbeginn is the calendar day after the next
+        // Werktag after the submission day (German local date).
         let berlin = timezones::db::europe::BERLIN;
         let now_utc = time::OffsetDateTime::now_utc();
         let now_berlin = now_utc.to_timezone(berlin);
         let today_berlin = now_berlin.date();
-        let now_berlin_hour = now_berlin.hour();
 
         if lieferbeginn < today_berlin {
             return (
@@ -730,14 +833,12 @@ mod rest {
                 .into_response();
         }
 
-        // Earliest allowed Lieferbeginn based on current Berlin time:
-        //   before 15:00 → next Arbeitstag
-        //   at/after 15:00 → übernächster Arbeitstag
-        let base = if now_berlin_hour < 15 {
-            fristen::add_werktage(today_berlin, 1, HolidayCalendar::BdewMaKo)
-        } else {
-            fristen::add_werktage(today_berlin, 2, HolidayCalendar::BdewMaKo)
-        };
+        // Earliest allowed Lieferbeginn: the calendar day after the next
+        // Werktag after today (the Werktag in between is the NB's processing
+        // day — its answer is due 11:00 Uhr des 1. WT nach dem ÜT).
+        let base = fristen::add_werktage(today_berlin, 1, HolidayCalendar::BdewMaKo)
+            .next_day()
+            .expect("date overflow");
 
         if lieferbeginn < base {
             return (
@@ -748,12 +849,12 @@ mod rest {
                         "LFW24 Mindestvorlauffrist not met. \
                          Earliest allowed Lieferbeginn: {base}. \
                          Requested: {lieferbeginn}. \
-                         (Submission {}15:00 CET/CEST → +1/+2 Arbeitstag)",
-                        if now_berlin_hour < 15 { "before " } else { "at/after " }
+                         (Spätester ÜT ist der Tag vor dem letzten WT vor dem \
+                         Zuordnungsbeginn — BK6-24-174 GPKE Teil 2, SD Lieferbeginn)"
                     ),
                     "earliest_lieferbeginn": base.to_string(),
-                    "berlin_time": format!("{:02}:{:02}", now_berlin_hour, now_berlin.minute()),
-                    "cutoff_rule": "before 15:00 → +1 Arbeitstag; at/after 15:00 → +2 Arbeitstag"
+                    "berlin_date": today_berlin.to_string(),
+                    "cutoff_rule": "spätester ÜT = Tag vor dem letzten WT vor dem Zuordnungsbeginn (day-granular, no time-of-day cutoff)"
                 })),
             )
                 .into_response();
@@ -763,12 +864,15 @@ mod rest {
         let idempotency_key = format!("processd-start-supply-{malo_id}-{lieferbeginn}");
         let cmd = mako_markt::makod_client::ForwardCommand {
             marktrolle: Some("LF".to_owned()),
-            command: "gpke.lieferbeginn.anmelden".to_owned(),
+            command: mako_markt::commands::GPKE_LIEFERBEGINN_ANMELDEN.to_owned(),
             malo_id: Some(malo_id.clone()),
             melo_id: None,
             payload: serde_json::json!({
                 "malo_id": malo_id,
                 "lieferbeginn_datum": lieferbeginn.to_string(),
+                // Optional SG4 STS Transaktionsgrund (E01 Ein-/Auszug,
+                // E03 Wechsel) — forwarded onto the outbound UTILMD.
+                "transaktionsgrund": transaktionsgrund,
             }),
         };
         match state.makod.post_command(&idempotency_key, &cmd).await {
@@ -782,7 +886,7 @@ mod rest {
                     "status": "initiated",
                     "vorlauffrist": {
                         "earliest_allowed": base.to_string(),
-                        "berlin_time_at_submission": format!("{:02}:{:02}", now_berlin_hour, now_berlin.minute()),
+                        "berlin_date_at_submission": today_berlin.to_string(),
                     }
                 })),
             )
@@ -866,7 +970,7 @@ mod rest {
         let idempotency_key = format!("processd-start-supply-gas-{malo_id}");
         let cmd = mako_markt::makod_client::ForwardCommand {
             marktrolle: Some("LF".to_owned()),
-            command: "geli.lieferbeginn.anmelden".to_owned(),
+            command: mako_markt::commands::GELI_LIEFERBEGINN_ANMELDEN.to_owned(),
             malo_id: Some(malo_id.clone()),
             melo_id: None,
             payload: body,
@@ -907,7 +1011,7 @@ mod rest {
         end_supply_inner(
             state,
             &body,
-            "gpke.lieferende.anmelden",
+            mako_markt::commands::GPKE_LIEFERENDE_ANMELDEN,
             "processd-end-supply",
         )
         .await
@@ -921,7 +1025,7 @@ mod rest {
         end_supply_inner(
             state,
             &body,
-            "geli.lieferende.anmelden",
+            mako_markt::commands::GELI_LIEFERENDE_ANMELDEN,
             "processd-end-supply-gas",
         )
         .await

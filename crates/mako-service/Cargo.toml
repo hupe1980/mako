@@ -53,6 +53,7 @@ plugins = []
 wasm-plugins = ["plugins", "mako-plugin/wasm"]
 
 [dependencies]
+mako-events = { workspace = true }
 thiserror  = { workspace = true }
 anyhow     = { workspace = true }
 serde      = { workspace = true }

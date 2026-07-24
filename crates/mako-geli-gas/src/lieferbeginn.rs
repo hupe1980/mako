@@ -461,6 +461,11 @@ pub enum GasSupplierChangeCommand {
         /// `"SLP"` | `"RLM"` | `"IMS"` — propagated to `ProcessInitiated` outbox
         /// so `marktd` can update `malo.bilanzierungsmethode`.
         bilanzierungsmethode: Option<String>,
+        /// SG4 STS Transaktionsgrund (DE9013, category 7) — e.g. `E01`
+        /// Ein-/Auszug, `E03` Lieferantenwechsel, `E06` Ersatzbelieferung.
+        /// Drives the netz-checker date-plausibility rules and is propagated
+        /// into the `ProcessInitiated` outbox payload.
+        transaktionsgrund: Option<String>,
         /// Gas GaBi RLM Fallgruppe from UTILMD G `TM+Z10` segment (L1/N1).
         /// Only set for Gas RLM MaLos. Propagated to `ProcessInitiated` outbox
         /// so `marktd` can update `malo.fallgruppe`.
@@ -704,6 +709,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 validation_errors,
                 received_at,
                 bilanzierungsmethode,
+                transaktionsgrund,
                 fallgruppe,
                 gasqualitaet,
             } => {
@@ -778,6 +784,9 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                                     "bilanzierungsmethode": bilanzierungsmethode,
                                     "fallgruppe":           fallgruppe,
                                     "gasqualitaet":         gasqualitaet,
+                                    // SG4 STS Transaktionsgrund — consumed by processd
+                                    // netz-checker (date-plausibility rules).
+                                    "transaktionsgrund":    transaktionsgrund,
                                 }),
                             )
                             .caused_by(1),
@@ -1239,6 +1248,7 @@ mod tests {
             },
             received_at: time::OffsetDateTime::now_utc(),
             bilanzierungsmethode: None,
+            transaktionsgrund: None,
             fallgruppe: None,
             gasqualitaet: None,
         }

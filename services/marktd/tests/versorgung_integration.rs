@@ -141,13 +141,55 @@ async fn announce_confirm_end_walks_the_lieferstatus_and_records_history() {
     assert_eq!(active.lf_mp_id.as_deref(), Some("9911111111111"));
     assert!(active.lf_mp_id_next.is_none(), "pending promoted to active");
 
-    // 55013: end → Unbeliefert, active LF cleared.
+    // 55005 (Bestätigung Lieferende): end → Unbeliefert, active LF cleared.
     vs.end_supply(&m, TENANT, "9900000000001", Some(uuid::Uuid::new_v4()))
         .await
         .expect("end");
     let ended = vs.find(&m, TENANT).await.expect("find").expect("row");
     assert_eq!(ended.lieferstatus.to_string(), "Unbeliefert");
     assert!(ended.lf_mp_id.is_none());
+    assert!(ended.eog_seit.is_none());
+
+    // 55013 (Anmeldung/Zuordnung EOG completed): the Grundversorger becomes
+    // the supplier of record — §38 EnWG Ersatzversorgung, eog_seit anchors
+    // the 3-month maximum (may be retroactive).
+    vs.begin_eog_supply(
+        &m,
+        TENANT,
+        "9922222222222",
+        "9900000000001",
+        mako_markt::repository::LieferStatus::Ersatzversorgung,
+        Some(time::macros::date!(2026 - 11 - 15)),
+        Some(uuid::Uuid::new_v4()),
+    )
+    .await
+    .expect("begin eog");
+    let eog = vs.find(&m, TENANT).await.expect("find").expect("row");
+    assert_eq!(eog.lieferstatus.to_string(), "Ersatzversorgung");
+    assert_eq!(eog.lf_mp_id.as_deref(), Some("9922222222222"));
+    assert_eq!(eog.eog_seit, Some(time::macros::date!(2026 - 11 - 15)));
+
+    // A regular switch confirmation ends the fallback supply and clears
+    // the §38 clock.
+    vs.announce_lf_next(
+        &m,
+        TENANT,
+        "9911111111111",
+        Some(time::macros::date!(2027 - 01 - 01)),
+        "9900000000001",
+        Some(uuid::Uuid::new_v4()),
+    )
+    .await
+    .expect("announce during EoG");
+    vs.confirm_supply(&m, TENANT, Some(uuid::Uuid::new_v4()))
+        .await
+        .expect("confirm ends EoG");
+    let back = vs.find(&m, TENANT).await.expect("find").expect("row");
+    assert_eq!(back.lieferstatus.to_string(), "Beliefert");
+    assert!(
+        back.eog_seit.is_none(),
+        "confirm_supply clears the §38 clock"
+    );
 
     // Every transition left a history row.
     let hist_count: i64 = sqlx::query_scalar(
@@ -159,8 +201,8 @@ async fn announce_confirm_end_walks_the_lieferstatus_and_records_history() {
     .await
     .unwrap();
     assert!(
-        hist_count >= 3,
-        "announce+confirm+end each recorded, got {hist_count}"
+        hist_count >= 6,
+        "announce+confirm+end+eog+announce+confirm each recorded, got {hist_count}"
     );
 }
 

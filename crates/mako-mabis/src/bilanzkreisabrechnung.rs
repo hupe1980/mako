@@ -168,6 +168,12 @@ pub struct BillingData {
     pub biko_id: BikoId,
     /// BDEW Prüfidentifikator (13003 for Bilanzkreisabrechnung Strom —
     /// "Summenzeitreihen und Ausfallarbeitssummen", MSCONS AHB 2.4c/2.5).
+    ///
+    /// Redispatch note: MaBiS Anlage 1 Kap. 17 is revoked with the end of
+    /// **30.09.2026** (BK6-23-241 Tenor Ziff. 5); its surviving 17.1/17.3
+    /// content continues as "Anlage zur BilAReM" from 01.10.2026 (see
+    /// `mako_redispatch::bilarem::MABIS_ANLAGE1_KAP17_ENDE`). The
+    /// Ausfallarbeitssummen carried under this PID follow that regime.
     pub pruefidentifikator: Pruefidentifikator,
     /// Whether this is a preliminary or final billing.
     pub version: BillingVersion,
@@ -372,7 +378,7 @@ pub const IFTSTA_PIDS: &[u32] = &[21_000, 21_001, 21_002, 21_003, 21_004, 21_005
 ///
 /// The only MaBiS IFTSTA PID that carries a `DataStatus` code and drives the
 /// billing stream to `Settled`. All other MaBiS IFTSTA PIDs are informational.
-pub const IFTSTA_DATENSTATUS_PID: u32 = 21_004;
+pub const IFTSTA_DATENSTATUS_PID: Pruefidentifikator = Pruefidentifikator::const_new(21_004);
 
 impl Workflow for MabisBillingWorkflow {
     type State = BillingState;
@@ -540,7 +546,7 @@ impl Workflow for MabisBillingWorkflow {
                 data_status,
                 ..
             } => {
-                if pid.as_u32() == IFTSTA_DATENSTATUS_PID {
+                if pid == IFTSTA_DATENSTATUS_PID {
                     // PID 21004: Statusmeldung vom BIKO an BKV/NB.
                     // This is the Datenstatus confirmation that transitions
                     // the billing stream from PruefmitteilungSent → Settled.

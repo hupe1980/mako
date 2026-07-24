@@ -24,12 +24,12 @@ impl ProcessState {
     #[must_use]
     pub fn from_ce_type(ce_type: &str) -> Option<Self> {
         match ce_type {
-            "de.mako.process.initiated" => Some(Self::Initiated),
-            "de.mako.aperak.accepted" => Some(Self::Running),
-            "de.mako.aperak.rejected" => Some(Self::Rejected),
-            "de.mako.aperak.timeout" => Some(Self::AperakTimeout),
-            "de.mako.process.completed" => Some(Self::Completed),
-            "de.mako.process.failed" => Some(Self::Cancelled),
+            mako_events::mako::PROCESS_INITIATED => Some(Self::Initiated),
+            mako_events::mako::APERAK_ACCEPTED => Some(Self::Running),
+            mako_events::mako::APERAK_REJECTED => Some(Self::Rejected),
+            mako_events::mako::APERAK_TIMEOUT => Some(Self::AperakTimeout),
+            mako_events::mako::PROCESS_COMPLETED => Some(Self::Completed),
+            mako_events::mako::PROCESS_FAILED => Some(Self::Cancelled),
             _ => None,
         }
     }

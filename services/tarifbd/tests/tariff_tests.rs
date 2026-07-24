@@ -1231,12 +1231,12 @@ mod sharing_category_tests {
 mod hmac_signing_tests {
     use mako_service::webhook::hmac_hex;
 
-    /// Verify that de.angebot.angenommen CloudEvent payloads are HMAC-signed.
+    /// Verify that de.tarif.angebot.angenommen CloudEvent payloads are HMAC-signed.
     /// The X-Mako-Signature header must be present when erp_hmac_secret is configured.
     #[test]
     fn hmac_sha256_of_ce_body_is_deterministic() {
         let secret = b"test-secret";
-        let body = r#"{"specversion":"1.0","type":"de.angebot.angenommen"}"#;
+        let body = r#"{"specversion":"1.0","type":"de.tarif.angebot.angenommen"}"#;
         let sig1 = hmac_hex(secret, body.as_bytes());
         let sig2 = hmac_hex(secret, body.as_bytes());
         assert_eq!(sig1, sig2, "HMAC must be deterministic");

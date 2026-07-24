@@ -45,7 +45,7 @@
 use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
-    types::MessageRef,
+    types::{MessageRef, Pruefidentifikator},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
 use rust_decimal::Decimal;
@@ -60,13 +60,13 @@ use crate::domain::GasDay;
 /// |-------|---------|-------------------|
 /// | 90061 | DELORD  | BKV/GH → FNB/MGV  |
 /// | 90062 | DELRES  | FNB/MGV → BKV/GH  |
-pub const DELIVERY_ORDER_PIDS: &[u32] = &[90061, 90062];
+pub const DELIVERY_ORDER_PIDS: &[Pruefidentifikator] = &[DELORD_PID, DELRES_PID];
 
 /// Synthetic PID for the outbound DELORD delivery order.
-pub const DELORD_PID: u32 = 90061;
+pub const DELORD_PID: Pruefidentifikator = Pruefidentifikator::const_new(90061);
 
 /// Synthetic PIDs for the inbound DELRES delivery response.
-pub const DELRES_PID: u32 = 90062;
+pub const DELRES_PID: Pruefidentifikator = Pruefidentifikator::const_new(90062);
 
 /// Workflow key for PID router registration.
 pub const WORKFLOW_NAME: &str = "gabi-gas-delivery-order";
@@ -372,7 +372,7 @@ impl Workflow for GaBiGasDeliveryOrderWorkflow {
                 if !matches!(state, DeliveryOrderState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
                 }
-                if synthetic_pid != DELORD_PID {
+                if synthetic_pid != DELORD_PID.as_u32() {
                     return Err(WorkflowError::rejected(format!(
                         "PID {synthetic_pid} is not a valid DELORD PID (expected {DELORD_PID})"
                     )));
@@ -463,10 +463,10 @@ mod tests {
 
     #[test]
     fn delord_pid_is_90061() {
-        assert_eq!(DELORD_PID, 90061);
-        assert_eq!(DELRES_PID, 90062);
-        assert!(DELIVERY_ORDER_PIDS.contains(&90061));
-        assert!(DELIVERY_ORDER_PIDS.contains(&90062));
+        assert_eq!(DELORD_PID.as_u32(), 90061);
+        assert_eq!(DELRES_PID.as_u32(), 90062);
+        assert!(DELIVERY_ORDER_PIDS.contains(&DELORD_PID));
+        assert!(DELIVERY_ORDER_PIDS.contains(&DELRES_PID));
     }
 
     #[test]

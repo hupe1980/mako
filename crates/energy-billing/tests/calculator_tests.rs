@@ -53,6 +53,15 @@ fn elec(kwh: rust_decimal::Decimal) -> Quantities {
     }
 }
 
+/// The `wert` of a document-level ZusatzAttribut, or `Null` when absent.
+fn zusatz_wert<'a>(json: &'a serde_json::Value, name: &str) -> &'a serde_json::Value {
+    json["zusatzAttribute"]
+        .as_array()
+        .and_then(|attrs| attrs.iter().find(|a| a["name"] == name))
+        .map(|a| &a["wert"])
+        .unwrap_or(&serde_json::Value::Null)
+}
+
 // ── Canonical billing helpers ─────────────────────────────────────────────────
 //
 // All helpers dispatch through `TariffInput::build_engine()` — the same code
@@ -518,7 +527,8 @@ fn eeg_verguetung_is_credit_note() {
         },
     );
     // EEG Vergütung: positive brutto (amount paid TO the generator),
-    // tagged as rechnungsart = "GUTSCHRIFT" in the JSON
+    // tagged as the "rechnungsart" ZusatzAttribut GUTSCHRIFT (BO4E has no
+    // Gutschrift value in Rechnungstyp, so the typed field stays absent).
     assert!(
         r.brutto_eur > dec!(0),
         "EEG Vergütung must be positive, got {}",
@@ -531,9 +541,13 @@ fn eeg_verguetung_is_credit_note() {
         r.brutto_eur
     );
     let _j_r = r.to_rechnung_json();
-    let rechnungsart = _j_r["rechnungsart"].as_str().unwrap_or("");
+    assert!(
+        _j_r["rechnungstyp"].is_null(),
+        "GUTSCHRIFT has no Rechnungstyp"
+    );
     assert_eq!(
-        rechnungsart, "GUTSCHRIFT",
+        zusatz_wert(&_j_r, "rechnungsart"),
+        "GUTSCHRIFT",
         "EEG invoice must be tagged GUTSCHRIFT"
     );
 }
@@ -641,8 +655,7 @@ fn einspeisung_net_settlement_is_gutschrift() {
         "Direktvermarktung brutto must be positive"
     );
     let _j_r = r.to_rechnung_json();
-    let rechnungsart = _j_r["rechnungsart"].as_str().unwrap_or("");
-    assert_eq!(rechnungsart, "GUTSCHRIFT");
+    assert_eq!(zusatz_wert(&_j_r, "rechnungsart"), "GUTSCHRIFT");
 }
 
 // ── GasQualitaet audit annotation ─────────────────────────────────────────────
@@ -1197,22 +1210,28 @@ fn rechnung_json_has_gesamtsteuer() {
 }
 
 #[test]
-fn rechnung_json_has_rechnungsart_and_herausgeber() {
+fn rechnung_json_has_rechnungstyp_and_rechnungsersteller() {
     let (_f, _t) = period();
     let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":10}"#);
     let r = bill(&tariff, elec(dec!(100)));
     let _json_obj = r.to_rechnung_json();
     let obj = _json_obj.as_object().unwrap();
     assert_eq!(obj["_typ"].as_str(), Some("RECHNUNG"));
-    // InvoiceType::Initial now maps to "RECHNUNG" (actual metered consumption billing).
-    // Use InvoiceType::AdvancePayment for "ABSCHLAGSRECHNUNG" (estimated advance payments).
-    assert_eq!(obj["rechnungsart"].as_str(), Some("RECHNUNG"));
-    assert_eq!(obj["marktlokationsId"].as_str(), Some("51238696781"));
-    let herausgeber = &obj["herausgeber"];
-    assert_eq!(
-        herausgeber["marktpartnercode"].as_str(),
-        Some("9900000000001")
-    );
+    // InvoiceType::Initial maps to the BO4E Rechnungstyp ENDKUNDENRECHNUNG
+    // (actual metered consumption billed to the end customer). Use
+    // InvoiceType::AdvancePayment for ABSCHLAGSRECHNUNG (estimated advances).
+    assert_eq!(obj["rechnungstyp"].as_str(), Some("ENDKUNDENRECHNUNG"));
+    // The delivery point is a typed Marktlokation. The test id fails the BDEW
+    // checksum on purpose, so it must appear as the generic `_id` while the
+    // validated `marktlokationsId` field stays absent — a wrong check digit
+    // must never masquerade as a valid MaLo-ID.
+    let malo = &obj["marktlokation"];
+    assert_eq!(malo["_id"].as_str(), Some("51238696781"));
+    assert!(malo["marktlokationsId"].is_null());
+    // Issuer: BO4E Geschaeftspartner has no Marktpartner-code field, so the
+    // code rides as a ZusatzAttribut on rechnungsersteller.
+    let ersteller = &obj["rechnungsersteller"];
+    assert_eq!(zusatz_wert(ersteller, "marktpartnercode"), "9900000000001");
 }
 
 // ── KA / Konzessionsabgabe ────────────────────────────────────────────────────
@@ -1548,7 +1567,7 @@ fn billing_result_position_total_by_tag() {
 }
 
 #[test]
-fn rechnung_json_has_rechnungsempfaenger_and_zahlungsziel() {
+fn rechnung_json_has_rechnungsempfaenger_and_faelligkeitsdatum() {
     let (_f, _t) = period();
     let r = bill(
         &j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":10}"#),
@@ -1562,16 +1581,17 @@ fn rechnung_json_has_rechnungsempfaenger_and_zahlungsziel() {
         "rechnung_json must have rechnungsempfaenger"
     );
     let emp = &obj["rechnungsempfaenger"];
-    assert_eq!(emp["externeKundenId"].as_str(), Some("51238696781"));
-    // zahlungsziel must be a date string in the future
+    assert_eq!(zusatz_wert(emp, "externeKundenId"), "51238696781");
+    // faelligkeitsdatum (BO4E due date, was zahlungsziel) must be a date
+    // string in the future: period_to + 14 days per §40c EnWG.
     assert!(
-        obj.contains_key("zahlungsziel"),
-        "rechnung_json must have zahlungsziel"
+        obj.contains_key("faelligkeitsdatum"),
+        "rechnung_json must have faelligkeitsdatum"
     );
-    let ziel = obj["zahlungsziel"].as_str().unwrap_or("");
-    assert!(
-        ziel.starts_with("2026"),
-        "zahlungsziel must be 2026: {ziel}"
+    let ziel = obj["faelligkeitsdatum"].as_str().unwrap_or("");
+    assert_eq!(
+        ziel, "2026-02-14",
+        "faelligkeitsdatum must be period_to + 14 days: {ziel}"
     );
 }
 
@@ -2406,7 +2426,8 @@ fn strom_rechnung_json_includes_sect40a_kilowattstundenpreis() {
     invoice.assert_valid();
 
     let json = invoice.to_rechnung_json();
-    let kw_preis = &json["kilowattstundenpreisGesamt"];
+    // §40a data has no BO4E field; it rides as a structured ZusatzAttribut.
+    let kw_preis = zusatz_wert(&json, "kilowattstundenpreisGesamt");
     assert!(
         !kw_preis.is_null(),
         "kilowattstundenpreisGesamt must be present for electricity"
@@ -3715,7 +3736,8 @@ fn sect40b_preisvergleichsdaten_in_rechnung_json() {
     invoice.assert_valid();
 
     let json = invoice.to_rechnung_json();
-    let pvd = &json["preisvergleichsdaten"];
+    // §40b data has no BO4E field; it rides as a structured ZusatzAttribut.
+    let pvd = zusatz_wert(&json, "preisvergleichsdaten");
     assert!(!pvd.is_null(), "preisvergleichsdaten must be present");
     assert_eq!(pvd["rechtlicheGrundlage"].as_str(), Some("§40b EnWG"));
 
@@ -3745,20 +3767,25 @@ fn sect40b_preisvergleichsdaten_in_rechnung_json() {
 // InvoiceType — Rechnungsart mapping
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// `InvoiceType::Initial` maps to BO4E `"RECHNUNG"` (actual consumption billing).
+/// `InvoiceType::Initial` maps to BO4E Rechnungstyp `ENDKUNDENRECHNUNG`
+/// (actual consumption billed to the end customer).
 #[test]
-fn initial_invoice_type_maps_to_rechnung() {
+fn initial_invoice_type_maps_to_endkundenrechnung() {
     let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
     let invoice = bill(&tariff, elec(dec!(100)));
     let json = invoice.to_rechnung_json();
     assert_eq!(
-        json["rechnungsart"].as_str(),
-        Some("RECHNUNG"),
-        "Initial billing (metered consumption) must be RECHNUNG"
+        json["rechnungstyp"].as_str(),
+        Some("ENDKUNDENRECHNUNG"),
+        "Initial billing (metered consumption) must be ENDKUNDENRECHNUNG"
+    );
+    assert!(
+        json["istStorno"].is_null(),
+        "a normal invoice carries no Storno flag"
     );
 }
 
-/// `InvoiceType::AdvancePayment` maps to BO4E `"ABSCHLAGSRECHNUNG"`.
+/// `InvoiceType::AdvancePayment` maps to BO4E Rechnungstyp `ABSCHLAGSRECHNUNG`.
 #[test]
 fn advance_payment_invoice_type_maps_to_abschlagsrechnung() {
     let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
@@ -3771,7 +3798,7 @@ fn advance_payment_invoice_type_maps_to_abschlagsrechnung() {
     );
     let json = invoice.to_rechnung_json();
     assert_eq!(
-        json["rechnungsart"].as_str(),
+        json["rechnungstyp"].as_str(),
         Some("ABSCHLAGSRECHNUNG"),
         "AdvancePayment must produce ABSCHLAGSRECHNUNG"
     );
@@ -3805,10 +3832,15 @@ fn cancellation_invoice_reverses_all_signs() {
     );
     cancellation.assert_valid();
 
-    // The cancellation JSON must say STORNORECHNUNG
+    // The cancellation JSON must carry the BO4E Storno marking: istStorno +
+    // originalRechnungsnummer, plus the process label as ZusatzAttribut.
     let json = cancellation.to_rechnung_json();
-    assert_eq!(json["rechnungsart"].as_str(), Some("STORNORECHNUNG"));
-    assert_eq!(json["originalRechnungsId"].as_str(), Some("INV-2026-001"));
+    assert_eq!(json["istStorno"].as_bool(), Some(true));
+    assert_eq!(
+        json["originalRechnungsnummer"].as_str(),
+        Some("INV-2026-001")
+    );
+    assert_eq!(zusatz_wert(&json, "rechnungsart"), "STORNORECHNUNG");
 
     // Netto and Brutto of cancellation = -(original)
     assert_eq!(
@@ -3846,9 +3878,13 @@ fn correction_invoice_has_original_reference_in_json() {
     invoice.assert_valid();
 
     let json = invoice.to_rechnung_json();
-    assert_eq!(json["rechnungsart"].as_str(), Some("KORREKTURRECHNUNG"));
+    assert_eq!(zusatz_wert(&json, "rechnungsart"), "KORREKTURRECHNUNG");
+    assert!(
+        json["istStorno"].is_null(),
+        "a Korrektur is not a Storno — it bills the corrected amount"
+    );
     assert_eq!(
-        json["originalRechnungsId"].as_str(),
+        json["originalRechnungsnummer"].as_str(),
         Some("INV-2026-005"),
         "Correction must reference original invoice ID"
     );
@@ -3900,9 +3936,9 @@ fn nb_mp_id_appears_in_rechnung_json_when_set() {
         "netzbetreiber must be present when nb_mp_id is set"
     );
     assert_eq!(
-        nb["marktpartnercode"].as_str(),
+        nb["rollencodenummer"].as_str(),
         Some("9900000000099"),
-        "netzbetreiber.marktpartnercode must match nb_mp_id"
+        "netzbetreiber.rollencodenummer must match nb_mp_id"
     );
 }
 
@@ -4430,8 +4466,13 @@ fn sect41a_annual_comparison_negative_savings_when_more_expensive() {
 
 #[test]
 fn partial_invoice_type_maps_to_teilrechnung() {
-    // §41 EnWG — Teilrechnung for partial supply periods.
+    // §41 EnWG — Teilrechnung for partial supply periods. BO4E's closest
+    // Rechnungstyp is ZWISCHENRECHNUNG; the exact label survives as attribute.
     assert_eq!(InvoiceType::PartialInvoice.rechnungsart(), "TEILRECHNUNG");
+    assert_eq!(
+        InvoiceType::PartialInvoice.rechnungstyp(),
+        Some(rubo4e::current::Rechnungstyp::Zwischenrechnung)
+    );
     assert!(!InvoiceType::PartialInvoice.is_reversal());
 }
 

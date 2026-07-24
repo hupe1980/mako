@@ -269,8 +269,8 @@ pub struct WebhookConfig {
     /// HMAC-SHA256 secret for verifying inbound webhooks from `marktd`.
     /// Use `"env:EDMD_INBOUND_SECRET"`.
     pub inbound_secret: Option<String>,
-    /// ERP webhook URL for outbound CloudEvents (`de.edmd.reading.direct.stored`,
-    /// `de.edmd.reading.quality.warning`). Omit to disable outbound notifications.
+    /// ERP webhook URL for outbound CloudEvents (`de.messwert.reading.direct.stored`,
+    /// `de.messwert.reading.quality.warning`). Omit to disable outbound notifications.
     pub erp_webhook_url: Option<String>,
 }
 
@@ -279,7 +279,7 @@ pub struct WebhookConfig {
 /// Every stored ESTIMATED/SUBSTITUTED interval opens an obligation to
 /// replace it with a plausibilised real value. The daily worker marks
 /// obligations older than `deadline_weeks` as UEBERFAELLIG and emits
-/// `de.edmd.reading.confirmation.overdue`. No statute fixes the deadline —
+/// `de.messwert.reading.confirmation.overdue`. No statute fixes the deadline —
 /// the 8-week default aligns with the MaBiS Bilanzkreisabrechnung
 /// correction window.
 #[derive(Debug, Deserialize)]
@@ -327,9 +327,9 @@ fn default_subscriber_id() -> String {
 }
 fn default_event_types() -> Vec<String> {
     vec![
-        "de.mako.process.initiated".to_owned(),
-        "de.mako.process.completed".to_owned(),
-        "de.mako.edifact.inbound".to_owned(),
+        mako_events::mako::PROCESS_INITIATED.to_owned(),
+        mako_events::mako::PROCESS_COMPLETED.to_owned(),
+        mako_events::mako::EDIFACT_INBOUND.to_owned(),
     ]
 }
 

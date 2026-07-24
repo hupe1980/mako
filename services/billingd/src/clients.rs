@@ -53,7 +53,34 @@ impl TarifbdClient {
         Ok(Some(tariff))
     }
 
-    #[allow(dead_code)]
+    /// `GET /api/v1/nehs-prices/latest?date=…` — most recent nEHS certificate
+    /// price (EUR/t CO₂) at or before `date`. Since 2026 the nEHS price is
+    /// auction-formed (§10 Abs. 1 BEHG); billingd derives the Gas CO₂
+    /// component from this series when no explicit override is configured.
+    pub async fn get_latest_nehs_price(&self, date: time::Date) -> Result<Option<Decimal>> {
+        let url = format!("{}/api/v1/nehs-prices/latest?date={}", self.base_url, date);
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .context("tarifbd GET nehs-prices latest")?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| anyhow::anyhow!("tarifbd nehs {e}"))?;
+        let body: serde_json::Value = resp.json().await.context("parse nehs latest")?;
+        Ok(body
+            .get("eur_per_t")
+            .and_then(|v| {
+                v.as_str()
+                    .map(str::to_owned)
+                    .or_else(|| v.as_f64().map(|f| f.to_string()))
+            })
+            .and_then(|s| s.parse::<Decimal>().ok()))
+    }
+
     pub async fn get_hourly_epex_prices(
         &self,
         period_from: time::Date,

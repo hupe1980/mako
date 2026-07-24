@@ -244,7 +244,7 @@ async fn main() -> anyhow::Result<()> {
         )
         // CloudEvent webhook
         .route("/api/v1/events", post(handlers::post_cloud_event))
-        // CPQ: de.angebot.angenommen → auto-create Rahmenvertrag + Versorgungsverträge
+        // CPQ: de.tarif.angebot.angenommen → auto-create Rahmenvertrag + Versorgungsverträge
         .route(
             "/api/v1/webhooks/angebot",
             axum::routing::post(handlers::post_angebot_webhook),
@@ -277,7 +277,7 @@ async fn main() -> anyhow::Result<()> {
                     for row in &due {
                         if let Some(ref url) = cfg_ar.erp_webhook_url {
                             let ce = events::build_cloud_event(
-                                "autoerneuerung.ankuendigung",
+                                mako_events::vertrag::AUTOERNEUERUNG_ANKUENDIGUNG,
                                 row.id,
                                 &cfg_ar.tenant,
                                 serde_json::json!({
@@ -358,7 +358,7 @@ async fn main() -> anyhow::Result<()> {
                             // Emit tarifwechsel CE
                             if let Some(ref url) = cfg_bg.erp_webhook_url {
                                 let ce = events::build_cloud_event(
-                                    "tarifwechsel",
+                                    mako_events::vertrag::TARIFWECHSEL,
                                     row.vertrag_id,
                                     &cfg_bg.tenant,
                                     serde_json::json!({
@@ -396,7 +396,7 @@ async fn main() -> anyhow::Result<()> {
                             if let Some(ref url) = cfg_bg.erp_webhook_url {
                                 let days_until = (row.pending_wirksamkeit - today).whole_days();
                                 let ce = events::build_cloud_event(
-                                    "preisaenderung.ankuendigung",
+                                    mako_events::vertrag::PREISAENDERUNG_ANKUENDIGUNG,
                                     row.vertrag_id,
                                     &cfg_bg.tenant,
                                     serde_json::json!({
@@ -474,7 +474,7 @@ async fn main() -> anyhow::Result<()> {
                         for row in &rows {
                             if let Some(ref url) = cfg_exp.erp_webhook_url {
                                 let ce = events::build_cloud_event(
-                                    "ablauf.ankuendigung",
+                                    mako_events::vertrag::ABLAUF_ANKUENDIGUNG,
                                     row.id,
                                     &cfg_exp.tenant,
                                     serde_json::json!({

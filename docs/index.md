@@ -66,7 +66,7 @@ mermaid: true
 <!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
 <div class="mako-kpis">
   <div class="mako-kpi">
-    <span class="mako-kpi__value">247</span>
+    <span class="mako-kpi__value">255</span>
     <span class="mako-kpi__label">Prüfidentifikatoren</span>
   </div>
   <div class="mako-kpi">
@@ -74,7 +74,7 @@ mermaid: true
     <span class="mako-kpi__label">EDIFACT message types</span>
   </div>
   <div class="mako-kpi">
-    <span class="mako-kpi__value">45+</span>
+    <span class="mako-kpi__value">55+</span>
     <span class="mako-kpi__label">event-sourced workflows</span>
   </div>
   <div class="mako-kpi">
@@ -97,12 +97,14 @@ mermaid: true
 
 ## What is mako?
 
-mako is an **open-source Rust workspace** that implements the German energy market
-communication standard (**BDEW MaKo / EDI@Energy**) end-to-end.
+mako is the **open-source market-operations platform for the German energy market** —
+every regulated process modeled as a correct, auditable, event-sourced workflow, for every
+market role (NB, LF, MSB, ESA). It implements **BDEW MaKo / EDI@Energy** end-to-end and is
+the only platform in this market whose source you can read, verify, and extend.
 
 It solves two hard problems at once:
 
-- **Protocol correctness** — All 247 Prüfidentifikatoren across 17 EDIFACT message types are validated at AHB/MIG layer, not just schema layer. APERAK 45-minute deadline enforcement is built into the event-sourced runtime, not bolted on.
+- **Protocol correctness** — All 255 Prüfidentifikatoren across 17 EDIFACT message types are validated at AHB/MIG layer, not just schema layer. APERAK 45-minute deadline enforcement is built into the event-sourced runtime, not bolted on.
 - **Operational scale** — 17 independently deployable microservices cover the full lifecycle: supplier-switch processes, NNE billing, EEG settlement, B2C/B2B contract management with multi-user portal access, customer account ledger, and AI-powered automation.
 
 Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type safety needed to represent complex regulatory invariants at compile time — not runtime.
@@ -156,7 +158,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">⚙️</div>
     <h3>Event-Sourced Process Runtime</h3>
     <p>
-      45+ durable, replayable MaKo workflows built on <code>mako-engine</code> —
+      55+ durable, replayable MaKo workflows built on <code>mako-engine</code> —
       GPKE &amp; GeLi&nbsp;Gas supplier switch, WiM Messstellenbetrieb (incl. the
       <strong>WiM&nbsp;Teil&nbsp;2 ESA Wertebestellung</strong>, §34 MsbG: one correlated
       REQOTE→QUOTES→ORDERS→ORDRSP→ORDCHG subscription lifecycle),
@@ -205,7 +207,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       In <code>billingd</code>: a deterministic <strong>risk gate</strong> scores every invoice
       and HOLDs anomalies for operator release, and <strong>§40b EnWG billing runs</strong>
       deliver monthly/quarterly cycles plus iMSys monthly Abrechnungsinformation.
-      Pure <code>energy-billing</code> crate — <strong>191 tests</strong>, zero I/O, no rubo4e dep.
+      Pure <code>energy-billing</code> crate — <strong>191 tests</strong>, zero I/O, rubo4e behind the opt-in <code>bo4e</code> feature.
     </p>
     <a href="{{ '/billingd' | relative_url }}">billingd guide →</a>
   </div>
@@ -261,7 +263,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       and runs a daily compliance sweep — checking TLS cert validity, 30-day expiry warnings,
       CLS channel §14a Konfigurationsprodukt, and communication faults.
       All issues are logged to <code>cls_compliance_log</code> and emitted as
-      <code>de.edmd.cls.compliance_issue</code> CloudEvents, triggering the
+      <code>de.messwert.cls.compliance_issue</code> CloudEvents, triggering the
       <code>smgw-diagnostics-agent</code> in <code>agentd</code>.
     </p>
     <p>
@@ -297,7 +299,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       Kündigung Widerruf (<code>POST /widerruf-kuendigung</code>) reverts before Lieferende.
       42-day advance notice dispatched automatically before <code>wirksamkeit</code> — covers §5 Abs. 2 StromGVV/GasGVV (six weeks, Grundversorgung) and exceeds §41 Abs. 5 EnWG (one month for Haushaltskunden).
       Proactive expiry alerts emit <code>de.vertrag.ablauf.ankuendigung</code> 30 days before contract end.
-      CPQ pipeline: <code>de.angebot.angenommen</code> → Rahmenvertrag with <code>angebot_id</code> traceability.
+      CPQ pipeline: <code>de.tarif.angebot.angenommen</code> → Rahmenvertrag with <code>angebot_id</code> traceability.
     </p>
     <p>
       <strong>GDPR Art. 15/17/20</strong> built-in — full PII export, irreversible pseudonymization
@@ -357,7 +359,7 @@ graph TB
     BDEW["BDEW counterparty (NB · MSB · LF)"]
 
     subgraph core ["Protocol & Market Data"]
-        makod["makod — EDIFACT + Redispatch XML · 45+ workflows"]
+        makod["makod — EDIFACT + Redispatch XML · 55+ workflows"]
         marktd["marktd — MaLo/MeLo master data hub"]
     end
 
@@ -454,7 +456,7 @@ mako consists of 17 independently deployable services. 16 of them ship a built-i
   <a href="{{ '/makod' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">makod</span>
     <span class="mako-service-card__port">:8080 · :4080 · :8090</span>
-    <span class="mako-service-card__desc">45+ GPKE/WiM/GeLi Gas/MABIS/GaBi Gas/Redispatch workflows. AS4 sign+encrypt (asx-rs v0.10, BrainpoolP256r1) carrying EDIFACT + Redispatch XML. REST, iMS. SlateDB event store. 11 AS4 security tests.</span>
+    <span class="mako-service-card__desc">55+ GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas/Redispatch workflows. AS4 sign+encrypt (asx-rs v0.10, BrainpoolP256r1) carrying EDIFACT + Redispatch XML. REST, iMS. SlateDB event store. 11 AS4 security tests.</span>
   </a>
   <a href="{{ '/marktd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">marktd</span>
@@ -595,7 +597,7 @@ sequenceDiagram
   </div>
   <div class="mako-principle">
     <strong>Annual format versions in hours, not months</strong>
-    <code>cargo xtask codegen</code> regenerates all 247 AHB profiles from BDEW PDFs.
+    <code>cargo xtask codegen</code> regenerates all 255 AHB profiles from BDEW PDFs.
     FV2025-10-01 and FV2026-10-01 coexist in the same running instance.
   </div>
   <div class="mako-principle">
@@ -688,7 +690,7 @@ Beyond the production services, mako exposes reusable Rust libraries:
 | `energy-billing` | workspace | Retail energy billing engine — 13 categories (incl. municipal WASSER), HT/NT ToU, RLM demand charge, §54 EnergieStG exemption, historic levy rates (`stromsteuer_for_year`, `energiesteuer_gas_for_year`), §14a Modul 1/3, XRechnung 3.0 |
 | `grid-billing` | workspace | Role-neutral grid **settlement** engine — `SettlementResult` (+ `CalculationTrace`, `LegalReference`, `TariffSource` per position), `Sparte` (Gas/Strom), `KaKlasse`, `calculate_reversal()`, `validate_*_input()`, §13a EnWG `redispatch_verguetung`; zero BO4E dep, no float money |
 | `invoic-checker` | workspace | INVOIC plausibility — 6 checks, ToU-aware tariff match |
-| `netz-checker` | workspace | NB Anmeldung validation — 6 deterministic checks, ERC A02–A99 |
+| `netz-checker` | workspace | NB Anmeldung validation — 6 deterministic checks, ERC A02/A05/A06/A07/E17 |
 | `mako-gpke` | workspace | GPKE workflows — UTILMD Strom + INVOIC + ORDERS Sperr/Konfig + PARTIN (37000–37006) |
 | `mako-wim` | workspace | WiM Strom workflows — MSB-Wechsel, INSRPT, Preisanfrage, INVOIC 31009 |
 | `mako-geli-gas` | workspace | GeLi Gas 3.0 — UTILMD G + ORDERS Sperrung Gas + INVOIC 31011 + PARTIN Gas |

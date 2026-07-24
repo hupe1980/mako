@@ -28,5 +28,5 @@ webhook_url   = "http://edmd:8380/webhook"
 subscriber_id = "edmd-demo"
 
 [webhook]
-# ERP webhook: edmd emits de.edmd.reading.direct.stored when meter data is pushed
+# ERP webhook: edmd emits de.messwert.reading.direct.stored when meter data is pushed
 erp_webhook_url = "http://webhook:8000/events"

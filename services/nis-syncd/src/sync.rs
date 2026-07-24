@@ -229,7 +229,7 @@ async fn emit_drift_event(webhook_url: &str, nb_mp_id: &str, report: &SyncReport
         "specversion":     "1.0",
         "id":              Uuid::new_v4().to_string(),
         "source":          format!("urn:nis-syncd:nb:{nb_mp_id}"),
-        "type":            "de.markt.grid.drift.detected",
+        "type":            mako_events::markt::GRID_DRIFT_DETECTED,
         "time":            OffsetDateTime::now_utc()
                                .format(&Rfc3339)
                                .unwrap_or_default(),

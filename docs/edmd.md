@@ -25,7 +25,7 @@ Key responsibilities:
 
 - Store MSCONS meter readings (SLP and RLM) via the webhook from `marktd`.
 - Accept **iMSys / SMGW direct push** (15-min intervals in JSON, bypassing EDIFACT) for §41a real-time billing.
-- Run the **Hampel-filter quality scorer** and **V01–V10 validation engine** on all inbound interval data. Emit `de.edmd.reading.quality.warning` CloudEvents for grade C/F data.
+- Run the **Hampel-filter quality scorer** and **V01–V10 validation engine** on all inbound interval data. Emit `de.messwert.reading.quality.warning` CloudEvents for grade C/F data.
 - Schedule and track **reading orders** (Ablesesteuerung) for the market roles LF, MSB, NB and ESA (an ESA may order value delivery under §60 Abs. 1 MsbG). Auto-creates `INSRPT_STOERUNG` orders when a WiM INSRPT PID 23001 Störungsmeldung arrives.
 - Compute and serve **virtual meter time series** (Sum, Residual, PvSelfConsumption, GgvConstantAllocation, GgvProportionalAllocation per §42b EnWG Solarpaket I GGV community solar) on demand.
 - Generate **§ 60 Abs. 2 MsbG annual forecasts** (Jahresprognose — daily-average projection with automatic prior-year **seasonal correction** when the same window one year earlier has data) and **prior-period substitute values** for gap intervals.
@@ -74,7 +74,7 @@ graph TB
     marktd -->|"de.mako.process.initiated (23001 INSRPT)\nde.mako.edifact.inbound (MSCONS)\nHMAC POST /webhook"| edmd
     smgw -->|"POST /api/v1/meter-reads/rlm/{malo_id}\nPOST /api/v1/meter-reads/gas/{malo_id}"| edmd
     edmd --> qa
-    qa -->|"grade A/B/C/F\nde.edmd.reading.quality.warning"| hot
+    qa -->|"grade A/B/C/F\nde.messwert.reading.quality.warning"| hot
     edmd --> hot
     hot -->|"rows > 12 months"| worker
     worker -->|"write Parquet\ncommit snapshot"| cold
@@ -834,7 +834,7 @@ because outlier detection doesn't require accounting precision.
 | **C** | Significant issues | Manual review recommended |
 | **F** | Unusable | Block billing run |
 
-Any validation finding (grade C or F) emits a `de.edmd.reading.quality.warning` CloudEvent to the ERP webhook. In `agentd` that event triggers the `msb-history-agent` (LanceDB RAG indexing), the `meter-data-agent` (grade-F investigation), and the `replacement-value-agent` (§ 60 Abs. 2 MsbG Ersatzwertbildung via edmd `trigger_substitution`).
+Any validation finding (grade C or F) emits a `de.messwert.reading.quality.warning` CloudEvent to the ERP webhook. In `agentd` that event triggers the `msb-history-agent` (LanceDB RAG indexing), the `meter-data-agent` (grade-F investigation), and the `replacement-value-agent` (§ 60 Abs. 2 MsbG Ersatzwertbildung via edmd `trigger_substitution`).
 
 ### Retroactive rescoring
 
@@ -868,7 +868,7 @@ sobald für denselben Slot (MaLo, `dtm_from`, Register) ein `MEASURED`- oder
 (`[confirmation]`, Standard aktiv) eskaliert offene Einträge nach
 `deadline_weeks` (Standard 8 — angelehnt an das MaBiS-BKA-Korrekturfenster;
 eine gesetzliche Frist existiert nicht) auf `UEBERFAELLIG` und emittiert
-`de.edmd.reading.confirmation.overdue`. Abfrage:
+`de.messwert.reading.confirmation.overdue`. Abfrage:
 `GET /api/v1/confirmations?status=UEBERFAELLIG`.
 
 ```toml
@@ -1123,9 +1123,9 @@ sequenceDiagram
     MSB->>edmd: PUT /api/v1/reading-orders/{id}/complete<br/>{ zaehlerstand_kwh: 12345.678 }
     edmd-->>MSB: 204 No Content
 
-    Note over edmd: status = AUSGEFUEHRT<br/>emits de.edmd.ablesung.ausgefuehrt
+    Note over edmd: status = AUSGEFUEHRT<br/>emits de.messwert.ablesung.ausgefuehrt
 
-    edmd->>billingd: de.edmd.ablesung.ausgefuehrt CloudEvent
+    edmd->>billingd: de.messwert.ablesung.ausgefuehrt CloudEvent
     Note over billingd: Schlussrechnung can now<br/>use actual reading value
 ```
 
@@ -1223,7 +1223,7 @@ would overstate coverage.
 A failed `JAHRESABLESUNG` past `ausfuehrt_bis` is still a §40 Abs. 2 EnWG gap, so
 it keeps appearing in `list_overdue_reading_orders` until the reading is
 re-dispatched or the quantity is estimated under §40a EnWG. Failing an order
-emits `de.edmd.reading.order.failed`; the reason decides whether the NB may
+emits `de.messwert.reading.order.failed`; the reason decides whether the NB may
 estimate or must re-dispatch.
 
 ### iMSys auto-close
@@ -1245,7 +1245,7 @@ matches `geplant_am` within ±1 day.
 | `Residual` | §42a EEG | Grid feed-in = gross generation − own consumption |
 | `PvSelfConsumption` | §42b EEG | Prosumer: net grid draw after PV self-use |
 | `GgvConstantAllocation` | §42b Abs. 5 EnWG | GGV tenant with fixed allocation fraction (UTILTS CCI+ZG6) |
-| `GgvProportionalAllocation` | §42b Abs. 5 EnWG | GGV tenant with dynamic consumption-based allocation. **Also carries §42c Energy Sharing**: the allocation arithmetic is identical and the regimes are distinguished by `legal_basis` (§42b = in-building, no grid transit; §42c = via the public grid). Should BNetzA's §42c Festlegung mandate different arithmetic, that needs its own variant. |
+| `GgvProportionalAllocation` | §42b Abs. 5 EnWG | GGV tenant with dynamic consumption-based allocation. **Also carries §42c Energy Sharing**: the allocation arithmetic is identical and the regimes are distinguished by `legal_basis` (§42b = in-building, no grid transit; §42c = via the public grid). Per BNetzA Mitteilung Nr. 73 (07.07.2026, Az. BK6-06-009), Energy Sharing §42c is implemented via the Dienstleistungsmodell inside the existing market model — no §42c-specific process arithmetic is mandated. |
 
 ### GGV allocation formulas (BDEW Anwendungshilfe, 25.01.2024)
 
@@ -1725,7 +1725,7 @@ compliance sweep per **MsbG §21c** and **BSI TR-03109-4 §6.3**.
 scheduling. SMGW connectivity is a metering-domain concern: when a gateway's TLS cert
 expires or a CLS channel loses its §14a Konfigurationsprodukt, meter data stops flowing
 and substitute values (§ 60 Abs. 2 MsbG) become mandatory. `edmd` detects both conditions and
-emits `de.edmd.cls.compliance_issue` CloudEvents so `agentd`'s `smgw-diagnostics-agent`
+emits `de.messwert.cls.compliance_issue` CloudEvents so `agentd`'s `smgw-diagnostics-agent`
 can escalate to the MSB and ERP system automatically.
 
 ### Data model
@@ -1764,7 +1764,7 @@ and graceful shutdown via `CancellationToken`. On each sweep:
 
 1. Query all `smgw_sessions` for the tenant.
 2. For each session, run `check_session_compliance()` (pure — no I/O).
-3. For each issue found: insert into `cls_compliance_log` + emit `de.edmd.cls.compliance_issue`.
+3. For each issue found: insert into `cls_compliance_log` + emit `de.messwert.cls.compliance_issue`.
 4. Tracing logs the sweep result (sessions scanned, issue count, `has_critical`).
 
 ### SMGW session API
@@ -1825,13 +1825,13 @@ curl -s -X POST "http://edmd:8380/api/v1/smgw/compliance/scan" \
   -H "Authorization: Bearer <token>" | jq '{sessions_scanned, sessions_with_issues}'
 ```
 
-### `de.edmd.cls.compliance_issue` CloudEvent
+### `de.messwert.cls.compliance_issue` CloudEvent
 
 ```json
 {
   "specversion": "1.0",
   "id":          "a1b2c3d4-...",
-  "type":        "de.edmd.cls.compliance_issue",
+  "type":        "de.messwert.cls.compliance_issue",
   "source":      "urn:edmd:tenant:9900000000003:cls-compliance-worker",
   "subject":     "10001234567",
   "time":        "2026-07-18T05:00:00Z",
@@ -1849,7 +1849,7 @@ curl -s -X POST "http://edmd:8380/api/v1/smgw/compliance/scan" \
 }
 ```
 
-`agentd`'s `smgw-diagnostics-agent` subscribes to `de.edmd.cls.compliance_issue` and
+`agentd`'s `smgw-diagnostics-agent` subscribes to `de.messwert.cls.compliance_issue` and
 automatically escalates to the MSB team, suggests remediation steps, and checks whether
 the same device has open § 60 Abs. 2 MsbG substitute-value orders.
 
@@ -1868,7 +1868,7 @@ sequenceDiagram
         Worker->>Worker: check_session_compliance()<br/>(pure — no I/O)
         alt has issues
             Worker->>Log: INSERT cls_compliance_log
-            Worker->>ERP: POST de.edmd.cls.compliance_issue<br/>(CloudEvent per issue)
+            Worker->>ERP: POST de.messwert.cls.compliance_issue<br/>(CloudEvent per issue)
         end
     end
     Worker->>Worker: tracing::info!(sessions_scanned, compliance_pct)

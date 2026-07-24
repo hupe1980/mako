@@ -315,34 +315,11 @@ impl GasQualityFlag {
 
 /// CloudEvent type constants for GaBi Gas domain events (`de.gabi.*`).
 ///
-/// Use `de.gabi.*` as a single glob in `agentd.toml` `trigger_event_types`
-/// to activate the `gabi-gas-agent` on all GaBi Gas events.
-pub mod cloud_events {
-    /// MSCONS gas measurement received and ingested (PID 13007 or 13013).
-    pub const MEASUREMENT_RECEIVED: &str = "de.gabi.measurement.received";
-    /// ALOCAT allocation list processed — new allocation version available.
-    pub const ALLOCATION_COMPLETED: &str = "de.gabi.allocation.completed";
-    /// NOMINT nomination submitted by BKV to FNB or MGV.
-    pub const NOMINATION_CREATED: &str = "de.gabi.nomination.created";
-    /// NOMRES nomination response received — confirmed, curtailed, or rejected.
-    pub const NOMINATION_CONFIRMED: &str = "de.gabi.nomination.confirmed";
-    /// IMBNOT processed — `GasImbalanceSaldo` calculated for a gas day.
-    pub const IMBALANCE_CALCULATED: &str = "de.gabi.imbalance.calculated";
-    /// Allocation correction record created (Initial → Correction or → Final).
-    pub const CORRECTION_CREATED: &str = "de.gabi.correction.created";
-    /// INVOIC 31007/31008 (MMM-Rechnung Gas) received from NB.
-    pub const INVOIC_MMM_RECEIVED: &str = "de.gabi.invoic.mmm.received";
-    /// INVOIC 31010 (Kapazitätsrechnung) received from FNB/VNB.
-    pub const INVOIC_KAPAZITAET_RECEIVED: &str = "de.gabi.invoic.kapazitaet.received";
-    /// ALOCAT Initial allocation missing beyond D+3 12:00 CET deadline.
-    pub const ALOCAT_MISSING: &str = "de.gabi.alocat.missing";
-    /// GaBi Gas IMBNOT imbalance notification received from FNB/MGV.
-    pub const IMBNOT_RECEIVED: &str = "de.gabi.imbnot.received";
-    /// Gas quality parameters outside DVGW G 260 valid ranges.
-    pub const GAS_QUALITY_VIOLATION: &str = "de.gabi.quality.violation";
-    /// KoV §6.4 Final allocation deadline M+2 approaching or missed.
-    pub const FINAL_ALOCAT_DEADLINE: &str = "de.gabi.alocat.final.deadline";
-}
+/// Re-exported from the workspace-wide [`mako_events`] catalog (single
+/// source of truth). Use `de.gabi.*` as a single glob in `agentd.toml`
+/// `trigger_event_types` to activate the `gabi-gas-agent` on all GaBi Gas
+/// events.
+pub use mako_events::gabi as cloud_events;
 
 // ── DVGW format version management ───────────────────────────────────────────
 

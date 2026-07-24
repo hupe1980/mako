@@ -71,7 +71,7 @@ pub const WIM_REMADV_PIDS: &[u32] = &[33001, 33002];
 /// COMDIS PID for inbound Ablehnung REMADV in WiM (payer role).
 ///
 /// Source: COMDIS AHB 1.0, WiM Strom Teil 1, BK6-24-174.
-pub const WIM_COMDIS_ABLEHNUNG_PID: u32 = 29001;
+pub const WIM_COMDIS_ABLEHNUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(29001);
 
 /// Workflow key for WiM billing processes.
 pub const WORKFLOW_NAME: &str = "wim-rechnung";
@@ -101,7 +101,7 @@ pub enum WimRechnungEvent {
         ///
         /// PID 31003 (WiM-Rechnung) belongs to `mako-wim-gas`; it is not handled here.
         pruefidentifikator: Pruefidentifikator,
-        /// BO4E `Rechnung` object (rubo4e v0.5, schema v202607).
+        /// BO4E `Rechnung` object (`rubo4e::current`, schema v202607).
         ///
         /// Serialised at the transport boundary by the EDIFACT adapter and
         /// embedded here so that `invoicd` can run plausibility checks
@@ -194,7 +194,7 @@ pub enum WimRechnungCommand {
         validation_passed: bool,
         /// Validation error descriptions (empty when `validation_passed`).
         validation_errors: Vec<String>,
-        /// BO4E `Rechnung` object (rubo4e v0.5, schema v202607).
+        /// BO4E `Rechnung` object (`rubo4e::current`, schema v202607).
         ///
         /// Built by the EDIFACT adapter from the raw INVOIC segments.  Stored
         /// in the `InvoicReceived` event and forwarded in the `ProcessInitiated`

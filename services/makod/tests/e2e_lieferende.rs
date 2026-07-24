@@ -121,6 +121,7 @@ impl MockLfn {
                 receiver: MarktpartnerCode::new(NB_ID),
                 location_id: MaLo::new(malo_id),
                 process_date: process_date.to_owned(),
+                transaktionsgrund: None,
             })
             .await
             .expect("LFN: execute InitiateAnmeldung 55002");
@@ -258,6 +259,7 @@ impl MockNb {
                     bilanzierungsgebiet: None,
                     bilanzierungsmethode: None,
                     fallgruppe: None,
+                    transaktionsgrund: None,
                     validation_passed: true, // bypass AHB profile check
                     validation_errors: vec![],
                 }

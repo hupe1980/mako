@@ -132,12 +132,12 @@ pub const AUFTRAG_ANTWORT_WINDOW_LABEL: &str = "wim-device-change-antwort-5-werk
 /// resolve their Ablehnungsgründe through EBD codes (55040→`E_0200`,
 /// 55043/55044→`E_0201`, 55052/55053→`E_0202`, 55169/55170→`E_0240`).
 ///
-/// **However**, `crates/edi-energy/src/generated/` currently emits rule packs for
-/// the four *request* PIDs only, so `validate()` on an inbound response yields
-/// `ProfileNotFound`. The adapter therefore treats a missing profile as
-/// "not validated" rather than "invalid", and the Bestätigung/Ablehnung decision
-/// rides on the PID. Regenerating the profiles from AHB Kap. 10 would let these
-/// be schema-validated too — tracked as a codegen follow-up, not a spec limit.
+/// `crates/edi-energy/src/generated/` emits rule packs for all twelve PIDs —
+/// the eight Antwort packs enforce BGM (mirrors the request's Dokumentencode),
+/// DTM+137, NAD MS/MR, IDE+24 and the `SG4 STS+E01` Status der Antwort (the
+/// Prüfschritt code in DE 9013 resolves through the EBD lists above; the MIG
+/// dialect carries no DE 1131). Inbound responses are therefore fully
+/// schema-validated; the Bestätigung/Ablehnung decision still rides on the PID.
 pub const DEVICE_CHANGE_ANTWORT_PIDS: &[(u32, u32, bool)] = &[
     (55_040, 55_039, true),
     (55_041, 55_039, false),

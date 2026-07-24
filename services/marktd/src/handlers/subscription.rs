@@ -172,7 +172,7 @@ where
 
     let ping = MarktEvent::new(
         &state.tenant_gln,
-        "de.markt.subscription.test",
+        mako_events::markt::SUBSCRIPTION_TEST,
         format!("subscriptions/{}", sub.subscriber_id),
         serde_json::json!({ "message": "ping" }),
     );

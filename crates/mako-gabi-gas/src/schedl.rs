@@ -32,7 +32,7 @@
 
 use mako_engine::{
     error::WorkflowError,
-    types::MessageRef,
+    types::{MessageRef, Pruefidentifikator},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
 
@@ -41,10 +41,10 @@ use crate::domain::GasDay;
 // ── Synthetic PID ─────────────────────────────────────────────────────────────
 
 /// Synthetic PID for the SCHEDL transport schedule message.
-pub const SCHEDL_PID: u32 = 90031;
+pub const SCHEDL_PID: Pruefidentifikator = Pruefidentifikator::const_new(90031);
 
 /// All PIDs handled by this workflow.
-pub const SCHEDL_PIDS: &[u32] = &[SCHEDL_PID];
+pub const SCHEDL_PIDS: &[Pruefidentifikator] = &[SCHEDL_PID];
 
 /// Workflow key for PID router registration.
 pub const WORKFLOW_NAME: &str = "gabi-gas-schedl";
@@ -185,7 +185,7 @@ impl Workflow for GaBiGasSchedlWorkflow {
         if !matches!(state, SchedlState::New) {
             return Err(WorkflowError::invalid_state("New", state.label()));
         }
-        if synthetic_pid != SCHEDL_PID {
+        if synthetic_pid != SCHEDL_PID.as_u32() {
             return Err(WorkflowError::rejected(format!(
                 "expected SCHEDL PID {SCHEDL_PID}, got {synthetic_pid}",
             )));
@@ -221,8 +221,8 @@ mod tests {
 
     #[test]
     fn schedl_pid_is_90031() {
-        assert_eq!(SCHEDL_PID, 90031);
-        assert!(SCHEDL_PIDS.contains(&90031));
+        assert_eq!(SCHEDL_PID.as_u32(), 90031);
+        assert!(SCHEDL_PIDS.contains(&SCHEDL_PID));
     }
 
     #[test]

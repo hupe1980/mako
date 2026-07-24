@@ -387,10 +387,10 @@ fn default_session_timeout_secs() -> u64 {
 }
 fn default_triggers() -> Vec<String> {
     vec![
-        "de.mako.process.escalated".into(),
-        "de.invoic.receipt.disputed".into(),
-        "de.accounting.mahnung.issued".into(),
-        "de.eeg.anlage.foerderung_auslaufend".into(),
+        mako_events::mako::PROCESS_FAILED.into(),
+        mako_events::invoic::RECEIPT_DISPUTED.into(),
+        mako_events::accounting::MAHNUNG_ISSUED.into(),
+        mako_events::eeg::ANLAGE_FOERDERUNG_AUSLAUFEND.into(),
     ]
 }
 

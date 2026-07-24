@@ -32,17 +32,17 @@
 
 use mako_engine::{
     error::WorkflowError,
-    types::MessageRef,
+    types::{MessageRef, Pruefidentifikator},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
 
 // ── Synthetic PID ─────────────────────────────────────────────────────────────
 
 /// Synthetic PID for the TRANOT transport notification message.
-pub const TRANOT_PID: u32 = 90051;
+pub const TRANOT_PID: Pruefidentifikator = Pruefidentifikator::const_new(90051);
 
 /// All PIDs handled by this workflow.
-pub const TRANOT_PIDS: &[u32] = &[TRANOT_PID];
+pub const TRANOT_PIDS: &[Pruefidentifikator] = &[TRANOT_PID];
 
 /// Workflow key for PID router registration.
 pub const WORKFLOW_NAME: &str = "gabi-gas-tranot";
@@ -217,7 +217,7 @@ impl Workflow for GaBiGasTransportNotificationWorkflow {
         if !matches!(state, TransportNotificationState::New) {
             return Err(WorkflowError::invalid_state("New", state.label()));
         }
-        if synthetic_pid != TRANOT_PID {
+        if synthetic_pid != TRANOT_PID.as_u32() {
             return Err(WorkflowError::rejected(format!(
                 "expected TRANOT PID {TRANOT_PID}, got {synthetic_pid}",
             )));
@@ -257,8 +257,8 @@ mod tests {
 
     #[test]
     fn tranot_pid_is_90051() {
-        assert_eq!(TRANOT_PID, 90051);
-        assert!(TRANOT_PIDS.contains(&90051));
+        assert_eq!(TRANOT_PID.as_u32(), 90051);
+        assert!(TRANOT_PIDS.contains(&TRANOT_PID));
     }
 
     #[test]

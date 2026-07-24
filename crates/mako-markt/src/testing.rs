@@ -19,11 +19,12 @@ use crate::{
     error::MdmError,
     repository::{
         ContractRecord, ContractRepository, CorrelationEntry, CorrelationFilter, CorrelationIndex,
-        LieferStatus, Lokationszuordnung, MaloFilter, MaloGridRecord, MaloGridRepository,
-        MaloRecord, MaloRepository, MeloRecord, MeloRepository, NeLoRecord, NeLoRepository,
-        PageResult, PartnerRecord, PartnerRepository, PreisblattSource, PriCatDispatchEntry,
-        PriCatDispatchState, PriCatRepository, PriCatVersion, Subscription, SubscriptionRepository,
-        VersorgungsStatusHistoryRecord, VersorgungsStatusRecord, VersorgungsStatusRepository,
+        GrundversorgerRecord, GrundversorgerRepository, LieferStatus, MaloFilter, MaloGridRecord,
+        MaloGridRepository, MaloRecord, MaloRepository, MeloRecord, MeloRepository, NeLoRecord,
+        NeLoRepository, PageResult, PartnerRecord, PartnerRepository, PreisblattSource,
+        PriCatDispatchEntry, PriCatDispatchState, PriCatRepository, PriCatVersion, Rollenzuordnung,
+        Subscription, SubscriptionRepository, VersorgungsStatusHistoryRecord,
+        VersorgungsStatusRecord, VersorgungsStatusRepository,
     },
 };
 
@@ -41,7 +42,7 @@ impl MaloRepository for InMemoryMaloRepository {
         malo_id: &MaloId,
         sparte: Sparte,
         data: serde_json::Value,
-        _lokationszuordnung: Vec<Lokationszuordnung>,
+        _rollenzuordnung: Vec<Rollenzuordnung>,
         if_match: Option<i64>,
         bo4e_version: &str,
     ) -> Result<i64, MdmError> {
@@ -93,9 +94,13 @@ impl MaloRepository for InMemoryMaloRepository {
                     .get("fallgruppenzuordnung")
                     .and_then(|v| v.as_str())
                     .map(ToOwned::to_owned),
+                lokationsbuendel_objektcode: data
+                    .get("lokationsbuendelObjektcode")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned),
                 version,
                 data,
-                lokationszuordnung: vec![],
+                rollenzuordnung: vec![],
                 updated_at: time::OffsetDateTime::now_utc(),
                 bo4e_version: bo4e_version.to_owned(),
             },
@@ -197,6 +202,10 @@ impl MeloRepository for InMemoryMeloRepository {
                     .and_then(|v| v.as_str())
                     .map(ToOwned::to_owned),
                 standorteigenschaften: data.get("standorteigenschaften").cloned(),
+                lokationsbuendel_objektcode: data
+                    .get("lokationsbuendelObjektcode")
+                    .and_then(|v| v.as_str())
+                    .map(ToOwned::to_owned),
                 version,
                 data,
                 updated_at: time::OffsetDateTime::now_utc(),
@@ -557,6 +566,7 @@ impl VersorgungsStatusRepository for InMemoryVersorgungsStatusRepository {
                 lieferende: h.lieferende,
                 msb_mp_id: h.msb_mp_id.clone(),
                 nb_mp_id: h.nb_mp_id.clone(),
+                eog_seit: None,
                 last_process_id: h.last_process_id,
                 updated_at: h.valid_from,
                 version: h.version,
@@ -635,6 +645,7 @@ impl VersorgungsStatusRepository for InMemoryVersorgungsStatusRepository {
             lieferende: None,
             msb_mp_id: None,
             nb_mp_id: nb_mp_id.to_owned(),
+            eog_seit: None,
             last_process_id: process_id,
             updated_at: now,
             version: 0,
@@ -729,6 +740,7 @@ impl VersorgungsStatusRepository for InMemoryVersorgungsStatusRepository {
             lieferende: None,
             msb_mp_id: None,
             nb_mp_id: nb_mp_id.to_owned(),
+            eog_seit: None,
             last_process_id: process_id,
             updated_at: now,
             version: 0,
@@ -804,15 +816,109 @@ impl VersorgungsStatusRepository for InMemoryVersorgungsStatusRepository {
             });
         Ok(())
     }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn begin_eog_supply(
+        &self,
+        malo_id: &MaloId,
+        tenant: &str,
+        gv_mp_id: &str,
+        nb_mp_id: &str,
+        eog_status: LieferStatus,
+        eog_seit: Option<time::Date>,
+        process_id: Option<uuid::Uuid>,
+    ) -> Result<(), MdmError> {
+        if !matches!(
+            eog_status,
+            LieferStatus::Ersatzversorgung | LieferStatus::Grundversorgung
+        ) {
+            return Err(MdmError::Unprocessable {
+                reason: "begin_eog_supply requires Ersatzversorgung or Grundversorgung".into(),
+            });
+        }
+        let key = (malo_id.as_ref().to_owned(), tenant.to_owned());
+        let mut store = self.store.write().await;
+        let now = time::OffsetDateTime::now_utc();
+        let entry = store.entry(key).or_insert_with(|| VersorgungsStatusRecord {
+            malo_id: malo_id.clone(),
+            tenant: tenant.to_owned(),
+            lieferstatus: eog_status,
+            lf_mp_id: None,
+            lf_mp_id_next: None,
+            lf_next_lieferbeginn: None,
+            lieferbeginn: None,
+            lieferende: None,
+            msb_mp_id: None,
+            nb_mp_id: nb_mp_id.to_owned(),
+            eog_seit: None,
+            last_process_id: process_id,
+            updated_at: now,
+            version: 0,
+        });
+        entry.lieferstatus = eog_status;
+        entry.lf_mp_id = Some(gv_mp_id.to_owned());
+        entry.lieferbeginn = eog_seit;
+        entry.eog_seit = eog_seit;
+        entry.nb_mp_id = nb_mp_id.to_owned();
+        entry.last_process_id = process_id;
+        entry.updated_at = now;
+        entry.version += 1;
+        let rec = entry.clone();
+        drop(store);
+        self.history
+            .write()
+            .await
+            .push(VersorgungsStatusHistoryRecord {
+                id: rec.version,
+                malo_id: rec.malo_id.clone(),
+                tenant: rec.tenant.clone(),
+                lieferstatus: rec.lieferstatus,
+                lf_mp_id: rec.lf_mp_id.clone(),
+                lf_mp_id_next: rec.lf_mp_id_next.clone(),
+                lf_next_lieferbeginn: rec.lf_next_lieferbeginn,
+                lieferbeginn: rec.lieferbeginn,
+                lieferende: rec.lieferende,
+                msb_mp_id: rec.msb_mp_id.clone(),
+                nb_mp_id: rec.nb_mp_id.clone(),
+                last_process_id: rec.last_process_id,
+                version: rec.version,
+                valid_from: now,
+            });
+        Ok(())
+    }
 }
 
-#[allow(dead_code)]
-fn _assert_lieferstatus_variants_used() {
-    // Keep LieferStatus variants from triggering dead_code warnings in testing.
-    let _ = LieferStatus::Grundversorgung;
-    let _ = LieferStatus::Ersatzversorgung;
-    let _ = LieferStatus::Ruhend;
-    let _ = LieferStatus::Stillgelegt;
+// ── InMemoryGrundversorgerRepository ─────────────────────────────────────────
+
+/// Key: `(tenant, nb_mp_id, sparte)`.
+type GrundversorgerKey = (String, String, Sparte);
+
+/// In-memory `GrundversorgerRepository` for unit tests.
+#[derive(Clone, Default)]
+pub struct InMemoryGrundversorgerRepository {
+    store: Arc<RwLock<HashMap<GrundversorgerKey, GrundversorgerRecord>>>,
+}
+
+impl GrundversorgerRepository for InMemoryGrundversorgerRepository {
+    async fn find(
+        &self,
+        tenant: &str,
+        nb_mp_id: &str,
+        sparte: Sparte,
+    ) -> Result<Option<GrundversorgerRecord>, MdmError> {
+        let key = (tenant.to_owned(), nb_mp_id.to_owned(), sparte);
+        Ok(self.store.read().await.get(&key).cloned())
+    }
+
+    async fn upsert(&self, record: &GrundversorgerRecord) -> Result<(), MdmError> {
+        let key = (
+            record.tenant.clone(),
+            record.nb_mp_id.clone(),
+            record.sparte,
+        );
+        self.store.write().await.insert(key, record.clone());
+        Ok(())
+    }
 }
 
 // ── InMemoryNeLoRepository ────────────────────────────────────────────────────
@@ -1353,6 +1459,10 @@ impl crate::repository::LokationszuordnungRepository for InMemoryLokationszuordn
             nach_typ: nach_typ.to_owned(),
             valid_from,
             valid_to,
+            lokationsbuendelcode: data
+                .get("lokationsbuendelcode")
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned),
             data,
             depth: 0,
         });

@@ -270,7 +270,7 @@ token (same Cedar ABAC layer as the REST API). See the
 
 ## EDIFACT rendering
 
-Workflow intent becomes wire bytes in `edifact_renderer.rs`, which dispatches on
+Workflow intent becomes wire bytes in `orchestrator/edifact_renderer/` (split per message type), which dispatches on
 the outbox message type and — for MSCONS — on the Prüfidentifikator.
 
 | PID | Anwendungsfall | BGM DE 1001 |

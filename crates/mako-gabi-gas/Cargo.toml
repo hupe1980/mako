@@ -1,7 +1,7 @@
 [package]
 name         = "mako-gabi-gas"
 version.workspace     = true
-description  = "GaBi Gas process engine for German gas market balancing communication (Gasbilanzierung) — coming soon"
+description  = "GaBi Gas process engine for German gas market balancing communication (Gasbilanzierung)"
 authors.workspace     = true
 edition.workspace     = true
 license.workspace     = true
@@ -11,6 +11,7 @@ keywords     = ["gabi-gas", "gas", "balancing", "mako", "dvgw"]
 categories   = ["data-structures"]
 
 [dependencies]
+mako-events  = { workspace = true }
 dvgw-edi     = { workspace = true }
 mako-edm     = { workspace = true }
 mako-engine  = { workspace = true }

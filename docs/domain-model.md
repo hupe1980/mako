@@ -456,6 +456,25 @@ All types:
 > untrusted input enters the system — i.e., in the EDIFACT parser adapters,
 > not in the typed wrappers.
 
+### `Sparte` across layers — deliberately distinct enums
+
+Four crates define their own `Sparte` enum. This is **by design**, not
+duplication — each models a different domain with a different legal variant
+set, and two of the serde casings are load-bearing wire formats:
+
+| Crate | Variants | Why |
+|---|---|---|
+| `metering::Sparte` | Strom, Gas, **Waerme, Wasser** | Physical metering commodities — heat/water submetering under HeizkostenV is metered but is *not* market communication |
+| `mako-engine::types::Sparte` | Strom, Gas | MaKo message routing — selects the WiM APERAK Frist (5 vs 10 Werktage); serialized **lowercase** in stored process events |
+| `mako-markt::Sparte` | Strom, Gas | MaKo master data — a Marktlokation exists only for Strom/Gas; serialized **SCREAMING_SNAKE** at the REST boundary |
+| `grid-billing::Sparte` | Strom, Gas | Legal-reference selector (StromNEV vs GasNEV) — regulated grid settlement has no Waerme/Wasser |
+
+Adding Waerme/Wasser to the MaKo-side enums would create invalid states (a
+Wasser MaLo cannot exist), and unifying the serde casings would break stored
+event streams and the public REST contract. The same reasoning applies to the
+SQL CHECKs: `marktd` restricts `sparte` to `STROM`/`GAS`, while `edmd` also
+accepts `WAERME`/`WASSER` for submetering series.
+
 ---
 
 ## Further Reading

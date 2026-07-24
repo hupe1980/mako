@@ -60,3 +60,45 @@ CREATE INDEX ad_tenant_decided ON anmeldung_decisions (tenant, decided_at DESC);
 -- §20 parity report
 CREATE INDEX ad_affiliate      ON anmeldung_decisions (tenant, initiator_is_affiliate, decided_at DESC)
     WHERE initiator_is_affiliate = true;
+
+-- ── EoG gap-closure case log (§36/§38 EnWG) ───────────────────────────────────
+--
+-- One row per Marktlokation currently (or last) in the Ersatz-/Grundversorgung
+-- pipeline. Written by the eog_module on de.markt.versorgung.gap-detected,
+-- promoted on de.markt.versorgung.eog-begonnen, expired by the daily §38
+-- timer worker (3 months from eog_seit — the possibly retroactive
+-- Zuordnungsbeginn, §38 Abs. 4 S. 1 EnWG).
+
+CREATE TABLE eog_activations (
+    id              BIGSERIAL   PRIMARY KEY,
+    tenant          TEXT        NOT NULL,
+    malo_id         TEXT        NOT NULL,
+    sparte          TEXT        NOT NULL CHECK (sparte IN ('STROM', 'GAS')),
+    status          TEXT        NOT NULL DEFAULT 'detected' CHECK (status IN (
+                        'detected',    -- gap seen, no GV found / auto_activate off
+                        'angemeldet',  -- gpke.eog.anmelden dispatched to makod
+                        'active',      -- EoG running (eog-begonnen received)
+                        'expiring',    -- §38 3-month maximum approaching (warned)
+                        'expired',     -- 3 months elapsed — operator action required
+                        'closed'       -- regular supply resumed
+                    )),
+    gv_mp_id        TEXT,
+    eog_art         TEXT CHECK (eog_art IN ('ERSATZVERSORGUNG', 'GRUNDVERSORGUNG') OR eog_art IS NULL),
+    eog_seit        DATE,
+    haushaltskunde  BOOLEAN,
+    detail          TEXT,
+    warned_at       TIMESTAMPTZ,
+    expired_at      TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant, malo_id)
+);
+
+COMMENT ON TABLE eog_activations IS
+    'NB EoG gap-closure automation case log. Timer scans active Ersatzversorgung '
+    'rows daily against eog_seit + 3 months (§38 Abs. 4 S. 1 EnWG). '
+    'Grundversorgung rows have no statutory maximum and never expire.';
+
+CREATE INDEX eog_tenant_status ON eog_activations (tenant, status);
+CREATE INDEX eog_timer ON eog_activations (tenant, eog_seit)
+    WHERE status IN ('active', 'expiring') AND eog_art = 'ERSATZVERSORGUNG';

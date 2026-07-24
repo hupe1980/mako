@@ -196,6 +196,7 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
         receiver: MarktpartnerCode::new(NB_ID),
         location_id: MaLo::new(MALO_ID),
         process_date: "20250201".to_owned(),
+        transaktionsgrund: None,
     };
 
     // Inspect outbox via the pure Workflow::handle — no store required.
@@ -278,6 +279,7 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
         validation_errors: vec![],
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
+        transaktionsgrund: None,
         fallgruppe: None,
     })
     .await
@@ -479,6 +481,7 @@ async fn bilateral_lieferbeginn_rejection_path() {
         receiver: MarktpartnerCode::new(NB_ID),
         location_id: MaLo::new(MALO_ID),
         process_date: "20250301".to_owned(),
+        transaktionsgrund: None,
     })
     .await
     .expect("LFN Initiate");
@@ -501,6 +504,7 @@ async fn bilateral_lieferbeginn_rejection_path() {
         validation_errors: vec![],
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
+        transaktionsgrund: None,
         fallgruppe: None,
     })
     .await
@@ -572,6 +576,7 @@ async fn bilateral_24h_aperak_deadline_fires_on_timeout() {
         receiver: MarktpartnerCode::new(NB_ID),
         location_id: MaLo::new(MALO_ID),
         process_date: "20250301".to_owned(),
+        transaktionsgrund: None,
     })
     .await
     .unwrap();
@@ -594,6 +599,7 @@ async fn bilateral_24h_aperak_deadline_fires_on_timeout() {
         validation_errors: vec![],
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
+        transaktionsgrund: None,
         fallgruppe: None,
     })
     .await

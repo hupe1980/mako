@@ -84,7 +84,7 @@ pub const ORDRSP_STORNO_PIDS: &[u32] = &[19128, 19129];
 /// IFTSTA inbound PID: Auftragsstatus (Sperren/Entsperren) from NB → LF.
 ///
 /// 21039 is sent by the NB after executing the Sperrung/Entsperrung.
-pub const IFTSTA_SPERRUNG_PID: u32 = 21039;
+pub const IFTSTA_SPERRUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(21039);
 
 /// Deadline label for the 24-hour NB response window.
 ///
@@ -503,7 +503,7 @@ impl Workflow for GpkeSperrungLfWorkflow {
                 message_ref,
                 sender,
             } => {
-                if pid.as_u32() != IFTSTA_SPERRUNG_PID {
+                if pid != IFTSTA_SPERRUNG_PID {
                     return Err(WorkflowError::rejected(format!(
                         "expected IFTSTA PID 21039, got {pid}",
                     )));

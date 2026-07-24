@@ -1895,7 +1895,7 @@ impl ServerHandler for EdmdMcpHandler {
              - `jahresablesung-workflow`, `reading-order-lifecycle`\n\
              \n\
              ## Notes\n\
-             - Grade F blocks billing; grade C/F emits de.edmd.reading.quality.warning.\n\
+             - Grade F blocks billing; grade C/F emits de.messwert.reading.quality.warning.\n\
              - Direct push: POST /api/v1/meter-reads/rlm/{malo_id} for 15-min RLM.\n\
              - Virtual meters: GET /api/v1/virtual/{id}/lastgang (§42b EEG GGV).\n\
              - Substitute values: POST /api/v1/meter-reads/{malo_id}/substitute (§ 60 Abs. 2 MsbG).",

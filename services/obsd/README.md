@@ -148,7 +148,7 @@ Indexes cover `(pid, state)`, `malo_id`, `partner_gln`, `deadline_at`, and `star
 | `de.mako.process.initiated` | INSERT projection row with state `initiated` |
 | `de.mako.process.aperak_sent` | Update `last_event_at` |
 | `de.mako.process.completed` | Set state `completed` |
-| `de.mako.process.timed_out` | Set state `timed_out`, record `erc_code` |
+| `de.mako.aperak.timeout` | Set state `aperak_timeout`, record `erc_code` |
 | `de.mako.process.dead_lettered` | Set state `dead_lettered` |
 
 Projection rows are never deleted — they provide the historical view used by BNetzA KPI reports.

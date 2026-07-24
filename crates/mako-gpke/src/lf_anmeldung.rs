@@ -115,9 +115,9 @@ pub enum LfAnmeldungEvent {
         pruefidentifikator: Pruefidentifikator,
         /// MaLo / supply point identifier.
         location_id: MaLo,
-        /// Our own GLN (the Lieferant).
+        /// Our own market-partner ID (the Lieferant).
         sender: MarktpartnerCode,
-        /// Counterparty GLN (NB or LFA).
+        /// Counterparty market-partner ID (NB or LFA).
         receiver: MarktpartnerCode,
         /// Requested supply start / end / cancellation date.
         process_date: String,
@@ -165,9 +165,9 @@ pub struct LfAnmeldungData {
     pub pruefidentifikator: Pruefidentifikator,
     /// MaLo / supply point identifier.
     pub location_id: MaLo,
-    /// Our own GLN (the Lieferant).
+    /// Our own market-partner ID (the Lieferant).
     pub sender: MarktpartnerCode,
-    /// Counterparty GLN (NB or LFA).
+    /// Counterparty market-partner ID (NB or LFA).
     pub receiver: MarktpartnerCode,
     /// Requested supply start / end / cancellation date.
     pub process_date: String,
@@ -217,14 +217,17 @@ pub enum LfAnmeldungCommand {
     InitiateAnmeldung {
         /// Outbound request PID (55001, 55002, 55016, or 55077).
         pid: Pruefidentifikator,
-        /// Our own GLN (the Lieferant, from `--tenant-id`).
+        /// Our own market-partner ID (the Lieferant, from `--tenant-id`).
         sender: MarktpartnerCode,
-        /// Counterparty GLN (NB or LFA), resolved from the MaLo cache.
+        /// Counterparty market-partner ID (NB or LFA), resolved from the MaLo cache.
         receiver: MarktpartnerCode,
         /// Supply point identifier.
         location_id: MaLo,
         /// Requested process date (Lieferbeginn-/Lieferende-/Kündigungs-Datum).
         process_date: String,
+        /// SG4 STS Transaktionsgrund (DE9013) — `E01` Ein-/Auszug,
+        /// `E03` Wechsel. Rendered as the outbound STS segment.
+        transaktionsgrund: Option<String>,
     },
     /// Inbound NB/LFA response (55003–55006, 55017, 55018, 55078, 55080) received via AS4.
     ///
@@ -349,6 +352,7 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                 receiver,
                 location_id,
                 process_date,
+                transaktionsgrund,
             } => {
                 if !matches!(state, LfAnmeldungState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -379,12 +383,15 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                     "UTILMD",
                     receiver.as_str(),
                     serde_json::json!({
-                        "direction":    "outbound",
-                        "pid":          pid.as_u32(),
-                        "sender":       sender.as_str(),
-                        "receiver":     receiver.as_str(),
-                        "malo":         location_id.as_str(),
-                        "process_date": process_date,
+                        "direction":         "outbound",
+                        "pid":               pid.as_u32(),
+                        "sender":            sender.as_str(),
+                        "receiver":          receiver.as_str(),
+                        "malo":              location_id.as_str(),
+                        "process_date":      process_date,
+                        // SG4 STS Transaktionsgrund (E01 Ein-/Auszug, E03
+                        // Wechsel) — rendered as the outbound STS segment.
+                        "transaktionsgrund": transaktionsgrund,
                     }),
                 );
 
@@ -454,6 +461,7 @@ mod tests {
             receiver: MarktpartnerCode::new("9900123456789"),
             location_id: MaLo::new("10001234567"),
             process_date: "2026-10-01".to_owned(),
+            transaktionsgrund: None,
         }
     }
 

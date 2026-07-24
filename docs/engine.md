@@ -550,7 +550,7 @@ PartnerRecord {
       ├── qualifier "EM" → email address
       ├── qualifier "TE" → telephone
       └── qualifier "FX" → fax
-    roles:        Vec<MarketRole>,      // LfStrom, NbStrom, MsbStrom, …
+    roles:        Vec<Marktrolle>,      // serialised as BDEW codes: "LF", "NB", "MSB", …
     valid_from:   Option<OffsetDateTime>, // DTM+137
     contacts:     Vec<ContactPerson>,   // CTA/NAD/COM groups
     country_code: Option<Box<str>>,     // NAD country (e.g. "DE")

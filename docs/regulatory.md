@@ -32,7 +32,7 @@ graph LR
 
     subgraph strom ["Strom frameworks"]
         BK6_24["BK6-24-174\nGPKE + WiM + MaBiS"]
-        BK6_22["BK6-22-024\nStammdaten · Sperrung"]
+        BK6_22["BK6-22-024\nLFW24 · GPKE Teil 2+4"]
         BK6_20["BK6-20-059/060/061\nRedispatch 2.0"]
     end
 
@@ -57,7 +57,7 @@ graph LR
     BNetzA --> strom
     BNetzA --> gas
 
-    BK6_24 -->|"mako-gpke\nmako-wim\nmako-mabis"| GPKE_impl["247 PIDs covered\n(100%)"]
+    BK6_24 -->|"mako-gpke\nmako-wim\nmako-mabis"| GPKE_impl["255 PIDs covered\n(100%)"]
     BK7_24 -->|"mako-geli-gas\nmako-wim-gas"| GAS_impl["GeLi Gas 3.0\nWiM Gas"]
     BK7_14 -->|"mako-gabi-gas\ndvgw-edi"| DVGW_impl["8 DVGW messages\nGaBi Gas 2.1"]
     ENW41 -->|"vertragd"| LF_impl["B2C/B2B contracts\nGDPR Art. 15/17/20"]
@@ -74,7 +74,7 @@ graph LR
 | Regulation | Domain | Implementation |
 |---|---|---|
 | **BK6-24-174** (GPKE + WiM + MaBiS, in force 06.06.2025) | Strom | `mako-gpke`, `mako-wim`, `mako-mabis` |
-| **BK6-22-024** (GPKE Teil 4 — Stammdaten, Sperrung) | Strom | `mako-gpke` |
+| **BK6-22-024** (LFW24 — 24h-Lieferantenwechsel, §20a EnWG; re-issued GPKE Teil 2 + Teil 4, MPES absorbed into GPKE, in force 06.06.2025) | Strom | `mako-gpke` |
 | **BK7-24-01-009** (GeLi Gas 3.0, BK7 Beschluss 12.09.2025) | Gas | `mako-geli-gas`, `mako-wim-gas` |
 | **BK7-24-01-008** (GaBi Gas 2.1 — Kapazitätsabrechnung, DVGW) | Gas | `mako-gabi-gas`, `dvgw-edi` |
 | **PARTIN AHB 1.0f** (Kommunikationsdaten Strom + Gas) | Both | `mako-gpke` (37000–37006), `mako-geli-gas` (37008–37014) |
@@ -90,14 +90,20 @@ graph LR
 | **GDPR Art. 15/17/20** (data export, pseudonymization, portability) | — | `vertragd` (`/export`, `/anonymize`), `accountingd` (`/anonymize`) |
 | **XRechnung 3.0 / ZUGFeRD 2.3** (EN16931 e-invoice) | — | `billingd` |
 | **BK6-20-059/060/061** (Redispatch 2.0) | Strom | `mako-redispatch` (8 workflows), `redispatch-xml` (9 document types), `makod` (AS4 EDIFACT+XML ingest), `grid-billing` (§13a Vergütung) |
+| **BK6-23-241** (BilAReM, Beschluss 07.05.2026 — Planwert-/Prognosemodell, Kap.-3 Ausfallarbeit) | Strom | `mako-redispatch` (`bilarem` model/migration + `ausfallarbeit` engine), `grid-billing` (`bilarem_finanzielle_korrektur`), `netzbilanzd` (compute endpoints) |
+| **§19 Abs. 2/3 StromNEV + BK8-25-003-A / GBK-25-01 (AgNeS, draft)** | Strom | `grid-billing::regulatory` (regime turnovers as dates; **AgNeS-era Entgelt settlements are refused** until the Rahmenfestlegung supplies parameters) |
+| **§20b EnWG** (Netzzugangsplattform, G. v. 18.12.2025 — no Festlegung/API yet) | Both | `makod` (`netzzugang.*` commands, outbox-reliable sender + signed ERP-webhook fallback), `marktd` (`netzzugang_antraege` registry) |
 | **BDEW AS4-Profil v1.2** (BrainpoolP256r1, sign+encrypt, ECDH-ES AES128-GCM) | — | `mako-as4` |
 | **§20 EnWG** (Diskriminierungsfreiheit, §20 Abs. 1 S. 3) | Both | `obsd` (`bnetza-report`), Cedar ABAC |
 | **MsbG §29 Abs. 3** (SMGW certificate expiry monitoring) | Strom | `edmd` (SMGW cert sweep worker) |
 
-> **Format version coexistence.** `FV2025-10-01` (production) and `FV2026-10-01` (next)
-> coexist in the same running instance. A process started under the old format version
-> continues under those rules until it completes — no data migration required.
+> **Format version coexistence.** Format releases ship on a semi-annual cadence
+> (April + October) with per-message, fv-dated profiles — e.g. `fv20260401`
+> (binding since 01.04.2026, Mitteilung Nr. 54) and `fv20261001` (binding
+> 01.10.2026, Mitteilung Nr. 56). Multiple format versions coexist in the same
+> running instance. A process started under an older format version continues
+> under those rules until it completes — no data migration required.
 >
-> **PID coverage.** `cargo xtask validate-pruefids` verifies all 247 Prüfidentifikatoren
+> **PID coverage.** `cargo xtask validate-pruefids` verifies all 255 Prüfidentifikatoren
 > in the workspace are correctly registered. CI enforces 100% coverage.
 

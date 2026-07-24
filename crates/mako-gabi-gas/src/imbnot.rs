@@ -33,7 +33,7 @@
 
 use mako_engine::{
     error::WorkflowError,
-    types::MessageRef,
+    types::{MessageRef, Pruefidentifikator},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
 use rust_decimal::Decimal;
@@ -43,10 +43,10 @@ use crate::domain::GasDay;
 // ── Synthetic PID ─────────────────────────────────────────────────────────────
 
 /// Synthetic PID for the IMBNOT imbalance notification message.
-pub const IMBNOT_PID: u32 = 90041;
+pub const IMBNOT_PID: Pruefidentifikator = Pruefidentifikator::const_new(90041);
 
 /// All PIDs handled by this workflow.
-pub const IMBNOT_PIDS: &[u32] = &[IMBNOT_PID];
+pub const IMBNOT_PIDS: &[Pruefidentifikator] = &[IMBNOT_PID];
 
 /// Workflow key for PID router registration.
 pub const WORKFLOW_NAME: &str = "gabi-gas-imbnot";
@@ -221,7 +221,7 @@ impl Workflow for GaBiGasImbalanceWorkflow {
         if !matches!(state, ImbalanceState::New) {
             return Err(WorkflowError::invalid_state("New", state.label()));
         }
-        if synthetic_pid != IMBNOT_PID {
+        if synthetic_pid != IMBNOT_PID.as_u32() {
             return Err(WorkflowError::rejected(format!(
                 "expected IMBNOT PID {IMBNOT_PID}, got {synthetic_pid}",
             )));
@@ -259,8 +259,8 @@ mod tests {
 
     #[test]
     fn imbnot_pid_is_90041() {
-        assert_eq!(IMBNOT_PID, 90041);
-        assert!(IMBNOT_PIDS.contains(&90041));
+        assert_eq!(IMBNOT_PID.as_u32(), 90041);
+        assert!(IMBNOT_PIDS.contains(&IMBNOT_PID));
     }
 
     #[test]

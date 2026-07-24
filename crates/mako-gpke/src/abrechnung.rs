@@ -83,7 +83,7 @@ pub const REMADV_PIDS: &[u32] = &[33001, 33002, 33003, 33004];
 /// outbound; the payer receives it inbound.
 ///
 /// Source: COMDIS AHB 1.0, GPKE Teil 2/Teil 3, BK6-24-174.
-pub const COMDIS_ABLEHNUNG_REMADV_PID: u32 = 29001;
+pub const COMDIS_ABLEHNUNG_REMADV_PID: Pruefidentifikator = Pruefidentifikator::const_new(29001);
 
 /// Deadline label for the INVOIC settlement response window.
 ///
@@ -119,7 +119,7 @@ pub enum AbrechnungEvent {
         pruefidentifikator: Pruefidentifikator,
         /// BO4E invoice domain object produced by the `makod` anti-corruption
         /// layer (EDIFACT → `Rechnung` translation).  Stored in events so that
-        /// `invoicd` can run [`invoic_checker::InvoicCheckEngine::check`]
+        /// `invoicd` can run the `invoic-checker` plausibility checks
         /// directly from the event store — without re-fetching the original
         /// EDIFACT message.
         ///
@@ -219,7 +219,7 @@ pub struct AbrechnungData {
     /// BO4E invoice domain object (EDIFACT → BO4E translation by `makod` adapter).
     ///
     /// Downstream services (`invoicd`) read this field from the event store
-    /// to run [`invoic_checker::InvoicCheckEngine::check`] without accessing
+    /// to run the `invoic-checker` plausibility checks without accessing
     /// the original EDIFACT archive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rechnung: Option<Box<Rechnung>>,

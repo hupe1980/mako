@@ -135,17 +135,17 @@ pub async fn handle_webhook(
     debug!(ce_type, pid, "invoicd: received event");
 
     // ── 3. Route by ce_type + pid ─────────────────────────────────────────────
-    if ce_type == "de.mako.process.initiated" && INVOIC_PIDS.contains(&pid) {
+    if ce_type == mako_events::mako::PROCESS_INITIATED && INVOIC_PIDS.contains(&pid) {
         let subject = event["subject"].as_str().unwrap_or("").to_owned();
         handle_invoic_initiated(state, subject, data.clone()).await;
-    } else if ce_type == "de.mako.process.initiated" && GAS_INVOIC_PIDS.contains(&pid) {
+    } else if ce_type == mako_events::mako::PROCESS_INITIATED && GAS_INVOIC_PIDS.contains(&pid) {
         let subject = event["subject"].as_str().unwrap_or("").to_owned();
         handle_gas_invoic_initiated(state, subject, pid, data.clone()).await;
-    } else if ce_type == "de.mako.process.initiated" && pid == 31004 {
+    } else if ce_type == mako_events::mako::PROCESS_INITIATED && pid == 31004 {
         // WiM Gas Stornorechnung: auto-accept without tariff check.
         let subject = event["subject"].as_str().unwrap_or("").to_owned();
         handle_gas_stornorechnung(state, subject, data.clone()).await;
-    } else if ce_type == "de.mako.process.initiated" && pid == 31009 {
+    } else if ce_type == mako_events::mako::PROCESS_INITIATED && pid == 31009 {
         // WiM MSB-Rechnung (PID 31009): uses PreisblattMessung, not NNE.
         let subject = event["subject"].as_str().unwrap_or("").to_owned();
         handle_wim_31009_initiated(state, subject, data.clone()).await;
@@ -1202,9 +1202,9 @@ pub async fn emit_payment_event(state: &HandlerState, ctx: PaymentEventCtx<'_>) 
     };
 
     let ce_type = match ctx.outcome {
-        "Dispute" => "de.invoic.receipt.disputed",
-        "Dispatched" => "de.invoic.receipt.dispatched",
-        _ => "de.invoic.receipt.settled",
+        "Dispute" => mako_events::invoic::RECEIPT_DISPUTED,
+        "Dispatched" => mako_events::invoic::RECEIPT_DISPATCHED,
+        _ => mako_events::invoic::RECEIPT_SETTLED,
     };
 
     let payload = serde_json::json!({

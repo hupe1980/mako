@@ -8,14 +8,23 @@ use serde::Deserialize;
 /// Update annually as BNetzA / BMWK publish new levies.
 #[derive(Debug, Deserialize)]
 pub struct RatesConfig {
-    /// Stromsteuer §3 StromStG — ct/kWh (default 2.05, valid since 01.07.2023).
+    /// Stromsteuer §3 StromStG — ct/kWh (default 2.05, valid since 01.04.2003).
     pub stromsteuer_ct_per_kwh: Option<Decimal>,
     /// Energiesteuer Erdgas §2 Nr. 3 EnergieStG — ct/kWh_Hs (default 0.55).
     pub energiesteuer_gas_ct_per_kwh: Option<Decimal>,
-    /// CO₂-Abgabe BEHG Erdgas — ct/kWh_Hs (default 1.310 = 65 EUR/t × 0.20160 kg/kWh, 2026).
+    /// CO₂-Abgabe BEHG Erdgas — ct/kWh_Hs (default 1.3104 = 65 EUR/t × 0.20160 kg/kWh ÷ 10, 2026).
     /// From 2026 the nEHS price is set by auction inside the §10 BEHG corridor;
     /// configure the operator's actual procurement cost here.
     pub behg_gas_ct_per_kwh: Option<Decimal>,
+    /// CO₂ conversion factor (kg CO₂/kWh_Hs) used when deriving the BEHG
+    /// component from the nEHS market-price series (EUR/t → ct/kWh).
+    ///
+    /// Defaults to the H-Gas factor 0.20160 (DVGW G 685). An L-Gas deployment
+    /// (primarily NW Germany) configures 0.20140 here
+    /// (`energy_billing::BEHG_CO2_FACTOR_L_GAS`). Only relevant when no
+    /// explicit `behg_gas_ct_per_kwh` override is set — an explicit ct/kWh
+    /// override bypasses the market-price derivation entirely.
+    pub behg_co2_factor_kg_per_kwh: Option<Decimal>,
     /// MwSt rate as decimal fraction (default 0.19).
     pub mwst_rate: Option<Decimal>,
 }
@@ -179,7 +188,9 @@ impl BillingdConfig {
             energiesteuer_gas_ct_per_kwh: r
                 .and_then(|r| r.energiesteuer_gas_ct_per_kwh)
                 .unwrap_or(dec!(0.55)),
-            behg_gas_ct_per_kwh: r.and_then(|r| r.behg_gas_ct_per_kwh).unwrap_or(dec!(1.310)),
+            behg_gas_ct_per_kwh: r
+                .and_then(|r| r.behg_gas_ct_per_kwh)
+                .unwrap_or(dec!(1.3104)),
             mwst_rate: r.and_then(|r| r.mwst_rate).unwrap_or(dec!(0.19)),
         }
     }
@@ -200,6 +211,22 @@ impl BillingdConfig {
     /// helpers returning `None`; here it falls back to the configured default
     /// so preview paths keep working, and the engine's own per-position rates
     /// decide the rest.
+    /// Explicitly configured BEHG override (ct/kWh), when the operator pinned
+    /// one in `[rates]`. An explicit override always wins over the nEHS
+    /// market-price series.
+    pub fn behg_override(&self) -> Option<rust_decimal::Decimal> {
+        self.rates.as_ref().and_then(|r| r.behg_gas_ct_per_kwh)
+    }
+
+    /// Configured CO₂ conversion factor (kg CO₂/kWh_Hs) for the EUR/t → ct/kWh
+    /// derivation from the nEHS market-price series. `None` = H-Gas default
+    /// (0.20160, DVGW G 685); an L-Gas deployment configures 0.20140.
+    pub fn behg_co2_factor(&self) -> Option<rust_decimal::Decimal> {
+        self.rates
+            .as_ref()
+            .and_then(|r| r.behg_co2_factor_kg_per_kwh)
+    }
+
     pub fn regulatory_rates_for_period(
         &self,
         category: &str,

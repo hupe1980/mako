@@ -39,7 +39,9 @@
 //! **PIDs 55007–55009 — NB-initiated Lieferende:** These PIDs are **present**
 //! in UTILMD AHB Strom 2.1 (FV2025-10-01) and are handled by the separate
 //! [`super::lf_abmeldung::GpkeLfAbmeldungWorkflow`] (LF-side). They are NOT
-//! registered here. Only PID 55010 (Stornierung pre-LFW24) was removed.
+//! registered here. PIDs 55013–55015 (Ersatz-/Grundversorgung) are handled by
+//! [`super::eog::GpkeEogWorkflow`]; 55010–55012 (Anfrage zur Beendigung der
+//! Zuordnung — the NB Abmeldeanfrage) are not yet implemented.
 //!
 //! # Regulatory basis
 //!
@@ -148,6 +150,9 @@ pub enum SupplierChangeEvent {
         /// Process-specific date (e.g. Lieferbeginn-Datum, DTM 163), `YYYYMMDD`.
         #[serde(default)]
         process_date: String,
+        /// SG4 STS Transaktionsgrund (DE9013), when transmitted.
+        #[serde(default)]
+        transaktionsgrund: Option<String>,
         /// EDIFACT message reference.
         message_ref: MessageRef,
         /// BDEW Prüfidentifikator.
@@ -255,6 +260,9 @@ pub struct InitiatedData {
     /// Process-specific date (e.g. Lieferbeginn-Datum, DTM 163) from the UTILMD (`YYYYMMDD`).
     #[serde(default)]
     pub process_date: String,
+    /// SG4 STS Transaktionsgrund (DE9013), when transmitted.
+    #[serde(default)]
+    pub transaktionsgrund: Option<String>,
     /// BDEW Prüfidentifikator — identifies the process family and step.
     pub pruefidentifikator: Pruefidentifikator,
 }
@@ -374,6 +382,13 @@ pub enum SupplierChangeCommand {
         /// Only set for Gas RLM MaLos. Populated from TM qualifier Z10 + category code.
         /// Stored in `marktd` `malo.fallgruppe` for Gas GaBi MMM billing.
         fallgruppe: Option<String>,
+        /// SG4 STS Transaktionsgrund (DE9013, category 7) — e.g. `E01`
+        /// Ein-/Auszug (Umzug), `E03` Lieferantenwechsel, `Z33`, `E06`.
+        ///
+        /// Drives the `netz-checker` date-plausibility rules: GPKE permits a
+        /// retroactive Lieferbeginn for Ein-/Auszug but not for a regular
+        /// Wechsel. Propagated into the `ProcessInitiated` outbox payload.
+        transaktionsgrund: Option<String>,
         /// EDIFACT message reference.
         message_ref: MessageRef,
         /// UTC timestamp at which the inbound UTILMD was received at the transport layer.
@@ -593,6 +608,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 grid_operator,
                 document_date,
                 process_date,
+                transaktionsgrund,
                 pruefidentifikator,
                 ..
             } => SupplierChangeState::Initiated(InitiatedData {
@@ -601,6 +617,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 grid_operator: grid_operator.clone(),
                 document_date: document_date.clone(),
                 process_date: process_date.clone(),
+                transaktionsgrund: transaktionsgrund.clone(),
                 pruefidentifikator: *pruefidentifikator,
             }),
             SupplierChangeEvent::ValidationPassed { .. } => {
@@ -678,6 +695,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 bilanzierungsgebiet,
                 bilanzierungsmethode,
                 fallgruppe,
+                transaktionsgrund,
                 message_ref,
                 received_at,
                 validation_passed,
@@ -709,6 +727,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                     grid_operator: receiver.clone(),
                     document_date,
                     process_date: process_date.clone(),
+                    transaktionsgrund: transaktionsgrund.clone(),
                     message_ref: message_ref.clone(),
                     pruefidentifikator: pid,
                 }];
@@ -748,6 +767,9 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                                 // marktd to update malo columns (L1/N1).
                                 "bilanzierungsmethode":  bilanzierungsmethode,
                                 "fallgruppe":            fallgruppe,
+                                // SG4 STS Transaktionsgrund — consumed by processd
+                                // netz-checker (date-plausibility rules).
+                                "transaktionsgrund":     transaktionsgrund,
                             }),
                         )
                         // Caused by ValidationPassed (index 1), not Initiated (index 0),

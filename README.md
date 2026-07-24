@@ -8,7 +8,15 @@
 
 > **⚠️ Experimental** — Pre-1.0. APIs may change between releases. Not yet recommended for production without thorough in-house testing.
 
-A **Rust workspace** for end-to-end German energy market communication (**BDEW MaKo / EDI@Energy**) — from raw EDIFACT bytes to production microservices.
+**mako is the open-source market-operations platform for the German energy market**: every
+regulated process — market communication, metering data, settlement, billing — modeled as a
+correct, auditable, event-sourced workflow, for every market role (NB, LF, MSB, ESA), from
+raw EDIFACT bytes to production microservices. In a sector of closed suites facing the
+IS-U sunset, mako is the only end-to-end platform whose source you can read, verify, and
+extend — built for the regulatory pace (LFW24, §14a, §41a, §42b/c, the EDIFACT→API
+transition) that batch-era systems strain under. The domain layer is deliberately split
+from transport and format so that when the market moves — MaBiS-Hub, the EDIFACT→API
+target landscape, European harmonization — mako moves with a codegen run, not a rewrite.
 
 The workspace covers the full BDEW MaKo stack across four layers:
 
@@ -80,7 +88,7 @@ flowchart LR
 |---|---|
 | `edi-energy` | Parse · validate · build all 17 EDI@Energy EDIFACT message types |
 | `mako-engine` | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines |
-| `mako-gpke` | GPKE workflows — UTILMD Strom supplier-switch (55001–55018) + Anfrage Daten (55555, GPKE Teil 4) + Sperrung ORDERS (17115–17117) + INVOIC (31001–31002, 31005–31006) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002) + PARTIN Strom (37000–37006) |
+| `mako-gpke` | GPKE workflows — UTILMD Strom supplier-switch (55001–55018) + **Ersatz-/Grundversorgung** (55013–55015, §36/§38 EnWG, both roles) + Anfrage Daten (55555, GPKE Teil 4) + Sperrung ORDERS (17115–17117) + INVOIC (31001–31002, 31005–31006) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002) + PARTIN Strom (37000–37006) |
 | `mako-wim` | WiM Strom workflows — MSB-Wechsel UTILMD (55039, 55042, 55051, 55168) + Geräteübernahme ORDERS (17001–17011) + Stammdaten + Preisanfrage REQOTE/QUOTES (35001–35005 / 15001–15005) + Preisliste PRICAT (27001–27003) + Technik-Änderung (17011/17118/17121 → 19003–19007) + INSRPT (23001/23003/23004/23008) + iMS Steuerungsauftrag + MSB-Rechnung INVOIC (31009). **WiM Teil 2 ESA Wertebestellung** (§34 MsbG) — one `wim-wertebestellung`/`esa-wertebestellung` process spans REQOTE 35002 → QUOTES 15003 → ORDERS 17007/17008 → ORDRSP 19011/19012 → ORDCHG 39002 Storno → ORDRSP 19013/19014, plus MSCONS 13027 Werte-nach-Typ-2 delivery |
 | `mako-geli-gas` | GeLi Gas 3.0 workflows — UTILMD G supplier-switch Gas (44001–44021) + INVOIC 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) |
 | `mako-mabis` | MABIS workflows — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB) + PIDs 55065/55069/55070 (Clearingliste) |
@@ -98,20 +106,20 @@ flowchart LR
 
 | Crate / service | Purpose |
 |---|---|
-| `grid-billing` | Role-neutral German grid **settlement** engine — `calculate_nne_invoice`, `calculate_mmm_invoice`, `calculate_msb_invoice`, `calculate_reversal`; returns `GridSettlement` (no BO4E dep); every position carries `CalculationTrace` with `LegalReference`s (StromNEV §17/§21, GasNEV §14, KAV §2, §14a EnWG, ARegV) and `TariffSource`; `Sparte` enum drives Gas vs. Strom legal refs automatically; `KaKlasse` annotates KAV tier; `ValidationResult` pre-calculation validation; zero I/O |
+| `grid-billing` | Role-neutral German grid **settlement** engine — `settle_nne`, `settle_mmm`, `settle_msb`, `settle_gas_awh`, `reverse`, `correct`; returns `SettlementResult`/`InvoiceDocument`; every position carries `CalculationTrace` with `LegalReference`s (StromNEV §17/§21, GasNEV §14, KAV §2, §14a EnWG, ARegV) and `TariffSource`; `Sparte` drives Gas vs. Strom legal refs; `KaKundengruppe` annotates the KAV tier; regime turnovers enforced (`ensure_berechenbar` refuses AgNeS-era settlements); zero I/O; BO4E only via the opt-in `bo4e` feature (`grid_billing::bo4e::into_rechnung`) |
 | `eeg-billing` | Pure EEG/KWKG feed-in settlement library — `calculate_settlement` for all 9 settlement schemes (`SettlementScheme + TariffSource`, EEG 2000–2023 + KWKG 2023); §51 Negativpreisregel (version-aware: EEG 2017/2021/2023 thresholds + Bestandsschutz); §51a Verlängerungsanspruch; §52 Pflichtzahlungen (€10/kW) + §52 Abs. 6 Netting; §20 Abs. 3 Managementprämie; §23a quarterly degression; §36k Wind Korrekturfaktor; §24 multi-block `CapacityBlock`; `SettlementPeriodState` lifecycle state machine; 339 tests; zero float money; no I/O |
-| `energy-billing` | Retail energy billing engine (LF role) — `Product` typed enum (13 categories, serde-tagged); per-category typed structs (`ElectricityProduct`, `GasProduct`, …); `ControllableLoadProvider` for §14a; `BillingEngine.validate()` + `bill_batch()`; `Invoice.warnings`; §41b iMSys guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label; RLM demand charge; §54 EnergieStG exemption; historic levy lookups; §41a EPEX; HT/NT ToU; XRechnung 3.0 / ZUGFeRD 2.3; **191 tests**; zero I/O; no `rubo4e` dep |
+| `energy-billing` | Retail energy billing engine (LF role) — `Product` typed enum (13 categories, serde-tagged); per-category typed structs (`ElectricityProduct`, `GasProduct`, …); `ControllableLoadProvider` for §14a; `BillingEngine.validate()` + `bill_batch()`; `Invoice.warnings`; §41b iMSys guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label; RLM demand charge; §54 EnergieStG exemption; historic levy lookups; §41a EPEX; HT/NT ToU; XRechnung 3.0 / ZUGFeRD 2.3; **191 tests**; zero I/O; rubo4e behind the opt-in `bo4e` feature (typed `Rechnung` bridge) |
 | `metering` | German energy metering domain library — `MeterInterval`, Gas m³→kWh_Hs (§25 Nr. 4 MessEV / DVGW G 685 incl. `G685Rounding`); billing period aggregation; SLP/RLM/iMSys classification; BDEW 2025 load profiles (H25/G25/L25/P25/S25) + Dynamisierung; Zählzeitdefinition resolution (§14a); §29/§45 MsbG rollout obligations; Hampel quality scoring; V01–V10 validation engine (incl. plant-capacity ceiling); virtual meters (§42b EnWG GGV Solarpaket I); BSI TR-03109 `SmgwSession`/`ClsChannel`; § 60 Abs. 2 MsbG Jahresprognose with confidence bounds; zero I/O, no async, no float money |
 | `invoic-checker` | INVOIC plausibility — 6 checks (period validity, position arithmetic, document total, tariff match ToU-aware, tariff found, MMM settlement price check) |
-| `netz-checker` | NB Anmeldung validation — 6 deterministic checks, ERC A02/A05/A06/A97/A99; no I/O |
+| `netz-checker` | NB Anmeldung validation — 6 deterministic checks, ERC A02/A05/A06/A07/E17 (EBD E_0622 / G_0011); no I/O |
 
 ### Production Services (17 daemons)
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| `makod` | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 45+ GPKE/WiM/GeLi Gas/MABIS/GaBi Gas workflows, AS4/REST/iMS, Cedar ABAC, OIDC/JWT, MCP server |
-| `marktd` | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus, typed BO4E API, EventBus fan-out, MMMA monthly import worker |
-| `processd` | `:8580` | NB+LF+MSB | Process Decision Engine — Anmeldung STP ≥ 95%, LF E_0624 45-min auto-response, MSB REQOTE auto-response, §14a Steuerungsauftrag |
+| `makod` | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 55+ GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas workflows, AS4/REST/iMS, Cedar ABAC, OIDC/JWT, MCP server |
+| `marktd` | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus incl. Ersatz-/Grundversorgung, Grundversorger registry (§36 Abs. 2), typed BO4E API, EventBus fan-out, MMMA monthly import worker |
+| `processd` | `:8580` | NB+LF+MSB | Process Decision Engine — Anmeldung STP ≥ 95%, EoG gap closure + §38 timer, LF E_0624 45-min auto-response, MSB REQOTE auto-response, §14a Steuerungsauftrag |
 | `invoicd` | `:8280` | LF | INVOIC plausibility-check — 6 checks, auto-settle/dispute, § 147 AO / GoBD receipts |
 | `netzbilanzd` | `:8680` | NB | NNE/KA/MMM/MSB/AWH billing — generates INVOIC 31001/31002/31005/31009/31011, full REMADV lifecycle, §14a Modul 2 ToU, §42a GGV, 13-tool MCP server |
 | `sperrd` | `:8780` | NB | Sperrung execution tracking — IFTSTA 21039 auto-dispatch, `GET /stats` compliance snapshot, 5-tool MCP server |
@@ -172,15 +180,15 @@ flowchart LR
 | Category | Detail |
 |---|---|
 | 🆔 **Validated domain IDs** | `MaloId` (11-digit BDEW check-digit), `MeloId` (DE+31-char), `MarktpartnerId` (13-digit; auto-derives NAD DE3055 agency code `293`/`332`/`9` from prefix) |
-| 🗂️ **24 repository traits** | One trait per aggregate — `MaloRepository`, `MeloRepository`, `ContractRepository`, `PartnerRepository`, `LokationszuordnungRepository`, `TechnischeRessourceRepository`, `SteuerbareRessourceRepository`, `CorrelationIndex`, … — AFIT, no `dyn Trait` overhead |
-| ⏳ **Temporal role assignments** | `Lokationszuordnung` with `valid_from`/`valid_to` — evaluated against CET/CEST German calendar date at query time |
+| 🗂️ **27 repository traits** | One trait per aggregate — `MaloRepository`, `MeloRepository`, `ContractRepository`, `PartnerRepository`, `LokationszuordnungRepository`, `TechnischeRessourceRepository`, `SteuerbareRessourceRepository`, `CorrelationIndex`, … — AFIT, no `dyn Trait` overhead |
+| ⏳ **Temporal role assignments** | `Rollenzuordnung` with `valid_from`/`valid_to` — evaluated against CET/CEST German calendar date at query time |
 | 📨 **CloudEvents 1.0** | Outbound events (`MarktEvent`) with HMAC-SHA256 signing; `InboundMakoEvent` for receiving `makod` lifecycle events |
 | 🧪 **`testing` feature** | `InMemory*` test doubles for every repository trait — no PostgreSQL required in unit tests |
 | 🚫 **Zero framework deps** | No axum, sqlx, or async runtime — pure domain library; all I/O lives in `services/marktd` |
 
 ### BO4E typed API (`marktd`)
 
-**41 active `rubo4e::current` types — schema validated at every read/write boundary.**
+**64 active `rubo4e::current` types — schema validated at every read/write boundary.**
 
 | Category | Detail |
 |---|---|
@@ -547,11 +555,12 @@ mako/
 │
 ├── services/
 │   ├── makod/               # Protocol daemon
-│   │   └── src/             # main.rs, config.rs, as4_ingest.rs, as4_sender.rs
-│   │                        # edifact_api.rs, commands_api.rs, webdienste.rs
-│   │                        # adapters.rs, edifact_renderer.rs, erp_adapter.rs
-│   │                        # partner_api.rs, deadline_dispatch.rs, health.rs
-│   │                        # mcp_server.rs  ← MCP server (tools + resources + prompts)
+│   │   └── src/             # main.rs, startup.rs + seam folders:
+│   │                        # transport/    (as4_ingest, as4_sender, contrl_ack, webdienste, …)
+│   │                        # orchestrator/ (ingest_dispatcher/, commands_api/, adapters/,
+│   │                        #                edifact_renderer/, deadline_dispatch, netzzugang)
+│   │                        # api/          (edifact_api, admin/read APIs, mcp_server, openapi)
+│   │                        # core/         (config, cedar_authz, party_registry, malo_cache, …)
 │   │                        # CLI: --config, --data-dir, --as4-addr, --http-addr
 │   ├── marktd/              # Market Data Hub daemon
 │   │   └── src/             # main.rs, config.rs, handlers/, pg/, fanout.rs

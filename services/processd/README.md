@@ -17,6 +17,7 @@ without ERP involvement for the common cases.
 | **MSB** | `msb_module` | 55039, 55042 (MSB-Wechsel STP) | 5 WT | device/partner checks |
 | **MSB** | `msb_module` | 35001–35005 (REQOTE auto-response) | APERAK window | `PreisblattMessung` lookup |
 | **MSB/NB** | `handler` | `wim-steuerungsauftrag` | immediate | `konfigurationsprodukte` contract check |
+| **NB** | `eog_module` | gap → 55013 dispatch (§36/§38 EnWG) | unverzüglich; §38 timer: 3 months | `grundversorger` Feststellung from `marktd` |
 
 ## Features at a glance
 
@@ -28,9 +29,10 @@ without ERP involvement for the common cases.
 | **Authorization** | Cedar ABAC (`policies/processd.cedar`) |
 | **NB STP rate target** | ≥ 95 % (requires NIS grid records via `nis-syncd` or manual provisioning) |
 | **LF E_0624 window** | 45 min (2700 s) regulatory deadline; entries expire 5 min before |
-| **REQOTE auto-response** | Auto-dispatches QUOTES from `PreisblattMessung`; eliminates ERC A97 deadline risk. Disable: `[msb] auto_preisanfrage = false` |
+| **REQOTE auto-response** | Auto-dispatches QUOTES from `PreisblattMessung`; eliminates the REQOTE answer-deadline risk. Disable: `[msb] auto_preisanfrage = false` |
 | **§14a Steuerungsauftrag** | Auto-confirms iMS ORDERS when `istFernschaltbar=true` AND `produktcode` is in `konfigurationsprodukte` (BK6-24-174 §4.3) |
 | **§20 EnWG parity** | `initiator_is_affiliate` on every `anmeldung_decisions` row |
+| **EoG gap closure** | `de.markt.versorgung.gap-detected` → Grundversorger lookup → `gpke.eog.anmelden`; daily §38 Abs. 4 3-month timer (`eog_activations`, `GET /api/v1/eog`); `[eog]` config |
 
 ---
 
@@ -71,11 +73,11 @@ de.mako.process.initiated (PID 55001/55016/44001)
 | # | Rule | Outcome on failure |
 |---|------|-------------------|
 | 1 | Grid record present in `marktd` | `Escalate` |
-| 2 | No conflicting active supply (`lf_mp_id_next` is `None`) | `Reject A06` |
-| 3 | `process_date ≥ today_berlin(now)` (no retroactive starts) | `Reject A97` |
-| 4 | Bilanzierungsgebiet consistent (UTILMD matches grid record) | `Reject A02` |
-| 5 | LF GLN in partner directory | `Reject A05` |
-| 6 | Mindestvorlauffrist met (SLP: > today; RLM: ≥ 2 Werktage) | `Reject A99` |
+| 2 | MaLo participates in MaKo (not Stillgelegt/Ruhend) | `Reject A02` |
+| 3 | No conflicting Anmeldung in Bearbeitung (`lf_mp_id_next` is `None`) | `Reject A06` |
+| 4 | Date plausibility, Transaktionsgrund-aware — Strom: LFW24 future rule (one full Werktag between receipt and Zuordnungsbeginn); Gas: E03 ≥ 10 WT future-only, E01/E02 retroactive ≤ 6 weeks (+3 WT) for SLP | `Reject A07` (Strom) / `Reject E17` (Gas); Gas backdated without Transaktionsgrund → `Escalate` |
+| 5 | Bilanzierungsgebiet consistent (UTILMD matches grid record) | `Reject A05` |
+| 6 | LF GLN in partner directory | `Reject A05` |
 
 ### STP targets
 
@@ -143,6 +145,9 @@ Background task runs every 60 s to expire stale `Pending` entries.
 | `GET` | `/api/v1/queue` | List LF approval queue entries |
 | `POST` | `/api/v1/queue/{id}/approve` | Approve a queue entry (LF) |
 | `POST` | `/api/v1/queue/{id}/reject` | Reject a queue entry (LF) |
+| `POST` | `/api/v1/start-supply` · `/api/v1/start-supply-gas` | LFN bootstrap (Strom / Gas) |
+| `POST` | `/api/v1/end-supply` · `/api/v1/end-supply-gas` | LF Lieferende bootstrap |
+| `GET` | `/api/v1/eog` | EoG gap-closure case log (§36/§38 EnWG; `?status=` filter) |
 | `GET` | `/health/live` | Liveness probe |
 | `GET` | `/health/ready` | Readiness probe |
 | `GET\|POST` | `/mcp` | MCP Streamable HTTP (spec 2025-11-25) |
@@ -165,7 +170,7 @@ Background task runs every 60 s to expire stale `Pending` entries.
 When `processd` receives `de.mako.process.initiated` for PIDs 35001–35005 (REQOTE Preisanfrage
 from an nMSB), it **automatically dispatches a QUOTES response** using the active
 `PreisblattMessung` from `marktd`. Dispatching from master data rather than from a manual
-ERP trigger is what keeps the response inside the APERAK ERC A97 deadline.
+ERP trigger is what keeps the response inside the REQOTE answer window.
 
 Enabled by default. Disable for manual QUOTES dispatch (e.g. during PreisblattMessung update
 windows):

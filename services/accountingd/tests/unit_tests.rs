@@ -448,12 +448,24 @@ fn bankruecklast_is_debit() {
 fn ce_type_to_entry_type_mapping() {
     // Mapping: CloudEvent type → ledger entry_type
     let expected = [
-        ("de.billing.rechnung.erstellt", "RECHNUNG", false),
-        ("de.billing.rechnung.erstellt", "STORNO", true), // is_correction=true
-        ("de.billing.gutschrift.erstellt", "GUTSCHRIFT", false),
-        ("de.invoic.receipt.settled", "ZAHLUNG", false),
-        ("de.eeg.verguetung.berechnet", "EEG_GUTSCHRIFT", false),
-        ("de.eeg.marktpraemie.berechnet", "EEG_MARKTPRAEMIE", false),
+        (mako_events::billing::RECHNUNG_ERSTELLT, "RECHNUNG", false),
+        (mako_events::billing::RECHNUNG_ERSTELLT, "STORNO", true), // is_correction=true
+        (
+            mako_events::billing::GUTSCHRIFT_ERSTELLT,
+            "GUTSCHRIFT",
+            false,
+        ),
+        (mako_events::invoic::RECEIPT_SETTLED, "ZAHLUNG", false),
+        (
+            mako_events::eeg::VERGUETUNG_BERECHNET,
+            "EEG_GUTSCHRIFT",
+            false,
+        ),
+        (
+            mako_events::eeg::MARKTPRAEMIE_BERECHNET,
+            "EEG_MARKTPRAEMIE",
+            false,
+        ),
     ];
     for (ce, entry, is_correction) in expected {
         // Just verify the mapping is documented and consistent

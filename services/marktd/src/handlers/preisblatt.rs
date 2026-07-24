@@ -376,7 +376,7 @@ pub async fn put_preisblatt(
                         // subscribers and the obsd observability daemon are notified.
                         let evt = MarktEvent::new(
                             &tenant2,
-                            "de.markt.pricat.published",
+                            mako_events::markt::PRICAT_PUBLISHED,
                             nb_gln2.clone(),
                             serde_json::json!({
                                 "nb_mp_id": nb_gln2,

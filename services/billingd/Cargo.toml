@@ -18,9 +18,10 @@ name = "billingd"
 path = "src/main.rs"
 
 [dependencies]
+mako-events = { workspace = true }
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
 billing      = { workspace = true }
-energy-billing = { workspace = true, features = ["eeg"] }
+energy-billing = { workspace = true, features = ["eeg", "bo4e"] }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }
 mako-markt   = { workspace = true, features = ["marktd-client"] }

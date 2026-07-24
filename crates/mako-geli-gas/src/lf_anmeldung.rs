@@ -208,6 +208,10 @@ pub enum GeliGasLfAnmeldungCommand {
         zaehlpunkt: String,
         /// Requested Lieferbeginn or Lieferende date (YYYYMMDD, in CET/CEST).
         process_date: String,
+        /// SG4 STS Transaktionsgrund (DE9013) — `E01` Ein-/Auszug (retroactive
+        /// permitted within the 6-week window for SLP metering), `E02` Einzug
+        /// in Neuanlage, `E03` Wechsel (future-only, ≥ 10 WT).
+        transaktionsgrund: Option<String>,
         /// UTC wall-clock time when the ERP command was received.
         received_at: OffsetDateTime,
     },
@@ -327,6 +331,7 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
                 malo_id,
                 zaehlpunkt,
                 process_date,
+                transaktionsgrund,
                 received_at: _,
             } => {
                 if !matches!(state, GeliGasLfAnmeldungState::New) {
@@ -355,13 +360,17 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
                         "UTILMD",
                         receiver.as_str(),
                         serde_json::json!({
-                            "direction":    "outbound",
-                            "pid":          pid.as_u32(),
-                            "sender":       sender.as_str(),
-                            "receiver":     receiver.as_str(),
-                            "malo":         malo_id.as_str(),
-                            "zaehlpunkt":   zaehlpunkt,
-                            "process_date": process_date,
+                            "direction":         "outbound",
+                            "pid":               pid.as_u32(),
+                            "sender":            sender.as_str(),
+                            "receiver":          receiver.as_str(),
+                            "malo":              malo_id.as_str(),
+                            "zaehlpunkt":        zaehlpunkt,
+                            "process_date":      process_date,
+                            // SG4 STS Transaktionsgrund — E01/E02 permit the
+                            // 6-week retroactive window (AWH GeLi Gas 2.0
+                            // Kap. 2.2); E03 is future-only.
+                            "transaktionsgrund": transaktionsgrund,
                         }),
                     ),
                     // ProcessInitiated CE — notifies marktd → processd/invoicd/edmd.
@@ -474,6 +483,7 @@ mod tests {
             malo_id: MaLo::new("DE0001234567890"),
             zaehlpunkt: "DE00123456789012345678901234567890".to_owned(),
             process_date: "20261001".to_owned(),
+            transaktionsgrund: None,
             received_at: time::OffsetDateTime::now_utc(),
         };
         let output = GeliGasLfAnmeldungWorkflow::handle(&state, cmd).unwrap();
@@ -558,6 +568,7 @@ mod tests {
             malo_id: MaLo::new("DE0001234567890"),
             zaehlpunkt: "DE00123456789012345678901234567890".to_owned(),
             process_date: "20261001".to_owned(),
+            transaktionsgrund: None,
             received_at: time::OffsetDateTime::now_utc(),
         };
         assert!(GeliGasLfAnmeldungWorkflow::handle(&state, cmd).is_err());

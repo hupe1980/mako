@@ -256,7 +256,8 @@ async fn ahb_55001_lieferbeginn_validates_and_dispatches() {
         receiver: cmd_receiver,
         location_id: cmd_location,
         document_date: cmd_doc_date,
-        process_date: String::new(), // not present in minimal fixture
+        process_date: String::new(),
+        transaktionsgrund: None, // not present in minimal fixture
         message_ref: cmd_ref,
         received_at: time::OffsetDateTime::now_utc(),
         bilanzierungsgebiet: None,
@@ -330,6 +331,7 @@ async fn ahb_55002_lieferende_validates_and_dispatches() {
         location_id: cmd_location,
         document_date: cmd_doc_date,
         process_date: String::new(),
+        transaktionsgrund: None,
         message_ref: cmd_ref,
         received_at: time::OffsetDateTime::now_utc(),
         bilanzierungsgebiet: None,
@@ -494,6 +496,7 @@ async fn ahb_44001_lieferbeginn_gas_validates_and_dispatches() {
         malo_id: cmd_malo,
         document_date: String::new(),
         process_date: String::new(),
+        transaktionsgrund: None,
         message_ref: cmd_ref,
         bilanzierungsmethode: None,
         fallgruppe: None,

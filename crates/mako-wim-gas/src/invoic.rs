@@ -76,7 +76,7 @@ pub const WIM_GAS_REMADV_PIDS: &[u32] = &[33001, 33002];
 /// After the NB sends REMADV, the gMSB (invoicer) can reject it via COMDIS 29001.
 ///
 /// Source: COMDIS AHB 1.0, WiM Gas, BK7-24-01-009.
-pub const WIM_GAS_COMDIS_ABLEHNUNG_PID: u32 = 29001;
+pub const WIM_GAS_COMDIS_ABLEHNUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(29001);
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 

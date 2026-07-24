@@ -35,7 +35,7 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use crate::repository::{
-    ConsentDecision, ConsentPerspective, MaloGridRecord, MaloTypedFields,
+    ConsentDecision, ConsentPerspective, GrundversorgerRecord, MaloGridRecord, MaloTypedFields,
     PreisblattDienstleistungRecord, PreisblattHardwareRecord, PreisblattKaRecord,
     VersorgungsStatusRecord,
 };
@@ -95,13 +95,14 @@ pub struct SubscriptionRequest<'a> {
 // ── Circuit-breaker inner state ───────────────────────────────────────────────
 
 struct CbInner {
-    cache: HashMap<(String, time::Date), CacheEntry>,
+    cache: HashMap<(String, time::Date), CacheEntry<PreisblattNetznutzung>>,
+    cache_messung: HashMap<(String, time::Date), CacheEntry<PreisblattMessung>>,
     cb_failures: u32,
     cb_open_until: Option<OffsetDateTime>,
 }
 
-struct CacheEntry {
-    sheet: Option<PreisblattNetznutzung>,
+struct CacheEntry<T> {
+    sheet: Option<T>,
     expires_at: OffsetDateTime,
 }
 
@@ -122,26 +123,27 @@ impl CbInner {
         }
     }
 
-    fn get_cached(&self, nb_mp_id: &str, date: time::Date) -> Option<PreisblattNetznutzung> {
-        let entry = self.cache.get(&(nb_mp_id.to_owned(), date))?;
-        if OffsetDateTime::now_utc() < entry.expires_at {
-            entry.sheet.clone()
-        } else {
-            None
-        }
+    /// Look up a fresh cache entry. `None` means "no usable entry — fetch";
+    /// `Some(None)` is a cached 404 miss served without hitting `marktd`.
+    #[allow(clippy::option_option)] // outer = cache hit/miss, inner = cached 404
+    fn cache_lookup<T: Clone>(
+        map: &HashMap<(String, time::Date), CacheEntry<T>>,
+        mp_id: &str,
+        date: time::Date,
+    ) -> Option<Option<T>> {
+        map.get(&(mp_id.to_owned(), date))
+            .filter(|e| OffsetDateTime::now_utc() < e.expires_at)
+            .map(|e| e.sheet.clone())
     }
 
-    fn set_cached(
-        &mut self,
-        nb_mp_id: &str,
+    fn cache_store<T>(
+        map: &mut HashMap<(String, time::Date), CacheEntry<T>>,
+        mp_id: &str,
         date: time::Date,
-        sheet: Option<PreisblattNetznutzung>,
+        sheet: Option<T>,
     ) {
         let expires_at = OffsetDateTime::now_utc() + time::Duration::seconds(CACHE_TTL_SECS);
-        self.cache.insert(
-            (nb_mp_id.to_owned(), date),
-            CacheEntry { sheet, expires_at },
-        );
+        map.insert((mp_id.to_owned(), date), CacheEntry { sheet, expires_at });
     }
 }
 
@@ -188,6 +190,7 @@ impl MarktdClient {
             api_key,
             cb: std::sync::Arc::new(Mutex::new(CbInner {
                 cache: HashMap::new(),
+                cache_messung: HashMap::new(),
                 cb_failures: 0,
                 cb_open_until: None,
             })),
@@ -208,6 +211,38 @@ impl MarktdClient {
         malo_id: &str,
     ) -> Result<Option<VersorgungsStatusRecord>, MarktdClientError> {
         let url = format!("{}/api/v1/versorgung/{}", self.base_url, malo_id);
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        resp.json()
+            .await
+            .map(Some)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// `GET /api/v1/grundversorger/{nb_mp_id}?sparte=…` — the §36 Abs. 2 `EnWG`
+    /// Grundversorger Feststellung for a Netzbetreiber and Sparte.
+    ///
+    /// Used by the `processd` `EoG` gap-closure automation to address the
+    /// UTILMD 55013/44013 Zuordnung. Returns `None` on 404 (no Feststellung
+    /// recorded — the gap must then be escalated to the operator).
+    pub async fn get_grundversorger(
+        &self,
+        nb_mp_id: &str,
+        sparte: crate::domain::Sparte,
+    ) -> Result<Option<GrundversorgerRecord>, MarktdClientError> {
+        let url = format!(
+            "{}/api/v1/grundversorger/{}?sparte={}",
+            self.base_url, nb_mp_id, sparte
+        );
         let resp = self
             .client
             .get(&url)
@@ -305,6 +340,68 @@ impl MarktdClient {
         resp.json::<ConsentDecision>()
             .await
             .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// `PUT /api/v1/netzzugang/antraege` — upsert a §20b
+    /// Netzzugangsplattform request in the marktd registry.
+    ///
+    /// Used by the makod `netzzugang` adapter to project a request when its
+    /// command is accepted (`erfasst`) and after outbox delivery
+    /// (`uebermittelt` / `fehlgeschlagen`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MarktdClientError::Http`] on network or HTTP errors.
+    pub async fn upsert_netzzugang_antrag(
+        &self,
+        antrag: &crate::repository::NetzzugangAntrag,
+    ) -> Result<uuid::Uuid, MarktdClientError> {
+        #[derive(serde::Deserialize)]
+        struct IdBody {
+            id: uuid::Uuid,
+        }
+        let url = format!("{}/api/v1/netzzugang/antraege", self.base_url);
+        let resp = self
+            .client
+            .put(&url)
+            .json(antrag)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        resp.json::<IdBody>()
+            .await
+            .map(|b| b.id)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// `PATCH /api/v1/netzzugang/antraege/{id}/status` — advance a §20b
+    /// request's lifecycle state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MarktdClientError::Http`] on network or HTTP errors.
+    pub async fn set_netzzugang_status(
+        &self,
+        id: uuid::Uuid,
+        status: crate::repository::NetzzugangStatus,
+        platform_ref: Option<&str>,
+    ) -> Result<(), MarktdClientError> {
+        let url = format!("{}/api/v1/netzzugang/antraege/{id}/status", self.base_url);
+        let resp = self
+            .client
+            .patch(&url)
+            .json(&serde_json::json!({
+                "status": status,
+                "platform_ref": platform_ref,
+            }))
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        Ok(())
     }
 
     /// `GET /api/v1/malo/{malo_id}/grid` — NB grid topology record.    ///
@@ -413,31 +510,89 @@ impl MarktdClient {
         nb_mp_id: &str,
         billing_date: time::Date,
     ) -> Result<Option<PreisblattNetznutzung>, MarktdClientError> {
+        self.get_sheet_with_cb(
+            "preisblaetter",
+            nb_mp_id,
+            billing_date,
+            |inner| CbInner::cache_lookup(&inner.cache, nb_mp_id, billing_date),
+            |inner, sheet| CbInner::cache_store(&mut inner.cache, nb_mp_id, billing_date, sheet),
+        )
+        .await
+    }
+
+    /// `GET /api/v1/preisblaetter-messung/{msb_mp_id}?date={billing_date}` — MSB Preisblatt.
+    ///
+    /// Returns the `PreisblattMessung` for the MSB valid on `billing_date`, or `None` on 404.
+    /// Used by `invoicd` for PID 31009 tariff checks (positions 4+5).
+    ///
+    /// Hardened like [`Self::get_preisblatt`]: responses (including 404 misses)
+    /// are cached for `CACHE_TTL_SECS` (1 hour) and the shared circuit breaker
+    /// degrades to `Ok(None)` while open.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MarktdClientError::Http`] on non-404 HTTP errors when the circuit is closed.
+    pub async fn get_preisblatt_messung(
+        &self,
+        msb_mp_id: &str,
+        billing_date: time::Date,
+    ) -> Result<Option<PreisblattMessung>, MarktdClientError> {
+        self.get_sheet_with_cb(
+            "preisblaetter-messung",
+            msb_mp_id,
+            billing_date,
+            |inner| CbInner::cache_lookup(&inner.cache_messung, msb_mp_id, billing_date),
+            |inner, sheet| {
+                CbInner::cache_store(&mut inner.cache_messung, msb_mp_id, billing_date, sheet);
+            },
+        )
+        .await
+    }
+
+    /// Shared fetch path for the date-scoped Preisblatt endpoints: 1-hour TTL
+    /// cache + circuit breaker.
+    ///
+    /// The breaker state is shared across sheet kinds — three consecutive
+    /// `marktd` failures on either endpoint open the circuit for both, because
+    /// the failure mode being guarded is "`marktd` is down", not a
+    /// per-endpoint condition. While open, returns `Ok(None)` so callers
+    /// degrade to structural checks instead of erroring.
+    async fn get_sheet_with_cb<T, L, S>(
+        &self,
+        endpoint: &str,
+        mp_id: &str,
+        billing_date: time::Date,
+        cache_lookup: L,
+        cache_store: S,
+    ) -> Result<Option<T>, MarktdClientError>
+    where
+        T: serde::de::DeserializeOwned + Clone,
+        L: FnOnce(&CbInner) -> Option<Option<T>>,
+        S: FnOnce(&mut CbInner, Option<T>),
+    {
         let now = OffsetDateTime::now_utc();
-        let inner = self.cb.lock().await;
-
-        // Serve from cache if available.
-        if inner
-            .cache
-            .contains_key(&(nb_mp_id.to_owned(), billing_date))
         {
-            let cached = inner.get_cached(nb_mp_id, billing_date);
-            return Ok(cached);
-        }
+            let inner = self.cb.lock().await;
 
-        // Check circuit.
-        if inner.is_cb_open(now) {
-            warn!(
-                nb_mp_id,
-                %billing_date,
-                "MarktdClient: circuit open — degrading to structural checks only"
-            );
-            return Ok(None);
-        }
-        drop(inner); // Release mutex before async HTTP call.
+            // Serve from cache if fresh (a cached 404 miss is also served).
+            if let Some(cached) = cache_lookup(&inner) {
+                return Ok(cached);
+            }
+
+            // Check circuit.
+            if inner.is_cb_open(now) {
+                warn!(
+                    mp_id,
+                    %billing_date,
+                    endpoint,
+                    "MarktdClient: circuit open — degrading to structural checks only"
+                );
+                return Ok(None);
+            }
+        } // Release mutex before the async HTTP call.
 
         let date_str = billing_date.to_string(); // "YYYY-MM-DD"
-        let url = format!("{}/api/v1/preisblaetter/{}", self.base_url, nb_mp_id);
+        let url = format!("{}/api/v1/{}/{}", self.base_url, endpoint, mp_id);
         let result = self
             .client
             .get(&url)
@@ -450,27 +605,27 @@ impl MarktdClient {
         match result {
             Err(e) => {
                 inner.record_failure(now);
-                warn!(%e, nb_mp_id, "MarktdClient: preisblatt fetch failed");
+                warn!(%e, mp_id, endpoint, "MarktdClient: preisblatt fetch failed");
                 Err(MarktdClientError::Http(e.to_string()))
             }
             Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => {
                 inner.record_success();
-                inner.set_cached(nb_mp_id, billing_date, None);
+                cache_store(&mut inner, None);
                 Ok(None)
             }
             Ok(resp) if !resp.status().is_success() => {
                 inner.record_failure(now);
                 let status = resp.status().as_u16();
                 warn!(
-                    nb_mp_id,
-                    status, "MarktdClient: preisblatt returned non-2xx"
+                    mp_id,
+                    status, endpoint, "MarktdClient: preisblatt returned non-2xx"
                 );
                 Err(MarktdClientError::Http(format!("HTTP {status}")))
             }
-            Ok(resp) => match resp.json::<PreisblattNetznutzung>().await {
+            Ok(resp) => match resp.json::<T>().await {
                 Ok(sheet) => {
                     inner.record_success();
-                    inner.set_cached(nb_mp_id, billing_date, Some(sheet.clone()));
+                    cache_store(&mut inner, Some(sheet.clone()));
                     Ok(Some(sheet))
                 }
                 Err(e) => {
@@ -479,51 +634,6 @@ impl MarktdClient {
                 }
             },
         }
-    }
-
-    /// `GET /api/v1/preisblaetter-messung/{msb_mp_id}?date={billing_date}` — MSB Preisblatt.
-    ///
-    /// Returns the `PreisblattMessung` for the MSB valid on `billing_date`, or `None` on 404.
-    /// Used by `invoicd` for PID 31009 tariff checks (positions 4+5).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MarktdClientError::Http`] on non-404 HTTP errors.
-    pub async fn get_preisblatt_messung(
-        &self,
-        msb_mp_id: &str,
-        billing_date: time::Date,
-    ) -> Result<Option<PreisblattMessung>, MarktdClientError> {
-        let date_str = billing_date.to_string();
-        let url = format!(
-            "{}/api/v1/preisblaetter-messung/{}",
-            self.base_url, msb_mp_id
-        );
-        let resp = self
-            .client
-            .get(&url)
-            .query(&[("date", &date_str)])
-            .bearer_auth(self.api_key.expose_secret())
-            .send()
-            .await
-            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
-
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        if !resp.status().is_success() {
-            let status = resp.status().as_u16();
-            warn!(
-                msb_mp_id,
-                status, "MarktdClient: preisblatt-messung returned non-2xx"
-            );
-            return Err(MarktdClientError::Http(format!("HTTP {status}")));
-        }
-        let sheet = resp
-            .json::<PreisblattMessung>()
-            .await
-            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
-        Ok(Some(sheet))
     }
 
     /// `GET /api/v1/preisblaetter-ka/{nb_mp_id}?date=…&sparte=STROM&kundengruppe=Tarifkunden`
@@ -1168,5 +1278,51 @@ impl MarktdClient {
             .await
             .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
         Ok(Some(body))
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unreachable_client() -> MarktdClient {
+        // TEST-NET-1 style refused endpoint: nothing listens on the discard
+        // port locally, so every request fails fast with a connect error.
+        MarktdClient::new(
+            "http://127.0.0.1:9",
+            SecretString::from("test-key"),
+            reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_millis(200))
+                .timeout(std::time::Duration::from_millis(400))
+                .build()
+                .expect("client"),
+        )
+    }
+
+    /// `get_preisblatt_messung` shares the TTL/circuit-breaker hardening with
+    /// `get_preisblatt`: after `CB_FAILURE_THRESHOLD` consecutive failures the
+    /// circuit opens and the client degrades to `Ok(None)` instead of erroring.
+    #[tokio::test]
+    async fn preisblatt_messung_circuit_opens_after_threshold() {
+        let client = unreachable_client();
+        let date = time::Date::from_calendar_date(2026, time::Month::July, 1).expect("date");
+
+        for _ in 0..CB_FAILURE_THRESHOLD {
+            let r = client.get_preisblatt_messung("9900000000001", date).await;
+            assert!(r.is_err(), "closed circuit surfaces the network error");
+        }
+
+        // Circuit is now open — degrade to Ok(None) without a network call.
+        let r = client.get_preisblatt_messung("9900000000001", date).await;
+        assert!(matches!(r, Ok(None)), "open circuit degrades to Ok(None)");
+
+        // The breaker is shared across sheet kinds: Netznutzung degrades too.
+        let r = client.get_preisblatt("9900000000001", date).await;
+        assert!(
+            matches!(r, Ok(None)),
+            "breaker is shared with get_preisblatt"
+        );
     }
 }

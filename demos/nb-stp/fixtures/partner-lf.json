@@ -12,7 +12,7 @@
       "address": "edifact@demo-lieferant.example.com"
     }
   ],
-  "roles": ["LfStrom"],
+  "roles": ["LF"],
   "contacts": [
     {
       "name": "EDI Support",

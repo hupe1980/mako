@@ -19,6 +19,8 @@ use utoipa_swagger_ui::SwaggerUi;
         (name = "partners", description = "Trading partner directory"),
         (name = "versorgung", description = "VersorgungsStatus per MaLo"),
         (name = "pricat", description = "PRICAT 27003 version history and dispatch"),
+        (name = "netzzugang", description = "§20b EnWG Netzzugangsplattform request registry"),
+        (name = "msb-rahmenvertraege-gas", description = "Gas MSB-Rahmenvertrag registry (GeLi Gas 3.0, KoV XV Anlage 8)"),
         (name = "health", description = "Health endpoints"),
     ),
     paths(
@@ -33,6 +35,13 @@ use utoipa_swagger_ui::SwaggerUi;
         crate::handlers::pricat::get_pricat_history,
         crate::handlers::pricat::get_dispatch_log,
         crate::handlers::pricat::post_pricat_dispatch,
+        crate::handlers::netzzugang::upsert_antrag,
+        crate::handlers::netzzugang::list_antraege,
+        crate::handlers::netzzugang::get_antrag,
+        crate::handlers::netzzugang::set_antrag_status,
+        crate::handlers::msb_rahmenvertrag_gas::upsert_msb_rv_gas,
+        crate::handlers::msb_rahmenvertrag_gas::list_msb_rv_gas,
+        crate::handlers::msb_rahmenvertrag_gas::get_msb_rv_gas,
     ),
     components(schemas(
         crate::handlers::malo::MaloUpsertRequest,
@@ -45,6 +54,9 @@ use utoipa_swagger_ui::SwaggerUi;
         crate::handlers::subscription::SubscriptionResponse,
         crate::handlers::pricat::PriCatVersionSummary,
         crate::handlers::pricat::DispatchLogEntry,
+        crate::handlers::netzzugang::StatusBody,
+        crate::pg::msb_rahmenvertrag_gas::MsbRahmenvertragGas,
+        crate::pg::msb_rahmenvertrag_gas::MsbRvGasStatus,
     )),
 )]
 pub struct ApiDoc;

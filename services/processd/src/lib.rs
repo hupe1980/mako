@@ -42,3 +42,6 @@ pub mod lf_module;
 
 #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
 pub mod msb_module;
+
+#[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+pub mod eog_module;

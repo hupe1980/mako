@@ -6,7 +6,7 @@
 //! discharge entries automatically when a MEASURED/CORRECTED value arrives.
 //! This worker is the escalation half: entries older than the configured
 //! deadline flip to `UEBERFAELLIG` and are reported as a
-//! `de.edmd.reading.confirmation.overdue` CloudEvent.
+//! `de.messwert.reading.confirmation.overdue` CloudEvent.
 //!
 //! ## Deadline
 //!
@@ -94,7 +94,7 @@ pub fn spawn_confirmation_worker(
             // One aggregate event per sweep — the endpoint lists the details.
             let payload = serde_json::json!({
                 "specversion": "1.0",
-                "type": "de.edmd.reading.confirmation.overdue",
+                "type": mako_events::messwert::READING_CONFIRMATION_OVERDUE,
                 "source": format!("urn:edmd:{tenant}"),
                 "id": uuid::Uuid::new_v4().to_string(),
                 "time": time::OffsetDateTime::now_utc()

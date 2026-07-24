@@ -103,6 +103,9 @@
 #![warn(missing_docs)]
 
 pub mod billing;
+/// BO4E bridge (feature `bo4e`): [`crate::InvoiceDocument`] → `rubo4e` Rechnung.
+#[cfg(feature = "bo4e")]
+pub mod bo4e;
 pub mod error;
 pub mod gas;
 pub mod msbg;
@@ -118,7 +121,16 @@ pub use billing::{correct, reverse, settle_gas_awh, settle_mmm, settle_msb, sett
 pub use error::BillingError;
 pub use redispatch::{
     RedispatchVerguetung, RedispatchVerguetungInput, RedispatchVerguetungsart,
-    eeg_entgangene_einnahmen, redispatch_verguetung,
+    bilarem_finanzielle_korrektur, eeg_entgangene_einnahmen, redispatch_verguetung,
+};
+pub use regulatory::{
+    // Which rules were in force for the delivery period — resolved once, at
+    // the edge, and recorded on every SettlementResult.
+    EntgeltRegime,
+    NetzzugangRegime,
+    RegulatoryRegime,
+    SECT19_ABS3_LETZTER_TAG,
+    SECT19_ABS3_UEBERGANG_ENDE,
 };
 pub use types::{
     // The settlement — what is owed and why.

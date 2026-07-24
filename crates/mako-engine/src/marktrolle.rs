@@ -116,6 +116,151 @@ pub enum Marktrolle {
     /// This role is for a deployment that **is** an ESA. An MSB *serving* an ESA
     /// registers the inbound side under [`Marktrolle::Msb`].
     Esa,
+
+    /// Gasnetzbetreiber (GNB) — gas network operator (GeLi Gas counterpart of NB).
+    ///
+    /// Receives GeLi Gas Lieferbeginn/Lieferende ANFRAGE messages (44001 ff.)
+    /// and issues the corresponding ANTWORT messages (44003–44006).
+    Gnb,
+
+    /// Lieferant Gas (LFG) — gas supplier (GeLi Gas counterpart of LF).
+    ///
+    /// Initiates GeLi Gas Lieferbeginn/Lieferende (44001/44002) and receives
+    /// the GNB's ANTWORT messages.
+    Lfg,
+
+    /// Lieferant neu (LFN) — the incoming supplier in a Lieferantenwechsel.
+    ///
+    /// Distinct from the generic [`Marktrolle::Lf`] where a process step is
+    /// specific to the *gaining* side of a switch.
+    Lfn,
+
+    /// Lieferant alt (LFA) — the outgoing supplier in a Lieferantenwechsel.
+    ///
+    /// Distinct from the generic [`Marktrolle::Lf`] where a process step is
+    /// specific to the *losing* side of a switch.
+    Lfa,
+
+    /// Marktgebietsverantwortlicher (MGV) — gas market-area manager.
+    ///
+    /// **Gas only.** Operates the Virtueller Handelspunkt and GaBi Gas
+    /// balancing (THE in Germany). Declares its communication data via
+    /// PARTIN 37011 ("Kommunikationsdaten des MGV Gas").
+    Mgv,
+}
+
+impl Marktrolle {
+    /// The canonical upper-case BDEW role code (e.g. `"NB"`, `"ÜNB"`, `"LFG"`).
+    #[must_use]
+    pub const fn as_code(self) -> &'static str {
+        match self {
+            Self::Nb => "NB",
+            Self::Lf => "LF",
+            Self::Msb => "MSB",
+            Self::Nmsb => "NMSB",
+            Self::Amsb => "AMSB",
+            Self::Bkv => "BKV",
+            Self::Uenb => "ÜNB",
+            Self::Biko => "BIKO",
+            Self::Esa => "ESA",
+            Self::Gnb => "GNB",
+            Self::Lfg => "LFG",
+            Self::Lfn => "LFN",
+            Self::Lfa => "LFA",
+            Self::Mgv => "MGV",
+        }
+    }
+
+    /// Parse a canonical upper-case BDEW role code back into a [`Marktrolle`].
+    ///
+    /// Round-trips [`as_code`] exactly (including the umlaut in `"ÜNB"`).
+    /// Returns `None` for anything else — callers decide whether an unknown
+    /// code is an error or simply "not one of ours".
+    ///
+    /// [`as_code`]: Marktrolle::as_code
+    #[must_use]
+    pub fn from_code(code: &str) -> Option<Self> {
+        Some(match code {
+            "NB" => Self::Nb,
+            "LF" => Self::Lf,
+            "MSB" => Self::Msb,
+            "NMSB" => Self::Nmsb,
+            "AMSB" => Self::Amsb,
+            "BKV" => Self::Bkv,
+            "ÜNB" => Self::Uenb,
+            "BIKO" => Self::Biko,
+            "ESA" => Self::Esa,
+            "GNB" => Self::Gnb,
+            "LFG" => Self::Lfg,
+            "LFN" => Self::Lfn,
+            "LFA" => Self::Lfa,
+            "MGV" => Self::Mgv,
+            _ => return None,
+        })
+    }
+
+    /// Map a PARTIN Prüfidentifikator to the sender's [`Marktrolle`].
+    ///
+    /// PARTIN (PIDs 37000–37014) distributes market-participant communication
+    /// data; the PID identifies the sender's role:
+    ///
+    /// | PID | Sender | `Marktrolle` |
+    /// |---|---|---|
+    /// | 37000 | LF Strom | [`Lf`](Self::Lf) |
+    /// | 37001 | NB Strom | [`Nb`](Self::Nb) |
+    /// | 37002 | MSB Strom | [`Msb`](Self::Msb) |
+    /// | 37003 | BKV Strom | [`Bkv`](Self::Bkv) |
+    /// | 37004 | BIKO Strom | [`Biko`](Self::Biko) |
+    /// | 37005 | ÜNB Strom | [`Uenb`](Self::Uenb) |
+    /// | 37006 | ESA Strom | [`Esa`](Self::Esa) |
+    /// | 37008 | LF Gas | [`Lfg`](Self::Lfg) |
+    /// | 37009 | NB Gas | [`Gnb`](Self::Gnb) |
+    /// | 37010 | MSB Gas | [`Msb`](Self::Msb) |
+    /// | 37011 | MGV Gas | [`Mgv`](Self::Mgv) |
+    /// | 37012 | NB Gas (spartenübergreifend) | [`Gnb`](Self::Gnb) |
+    /// | 37013 | MSB Gas (spartenübergreifend) | [`Msb`](Self::Msb) |
+    /// | 37014 | MSB Strom (spartenübergreifend) | [`Msb`](Self::Msb) |
+    ///
+    /// Returns `None` for unrecognised codes (37007 is a gap in the AHB).
+    #[must_use]
+    pub fn from_partin_pid(pid: u32) -> Option<Self> {
+        match pid {
+            37000 => Some(Self::Lf),
+            37001 => Some(Self::Nb),
+            37002 | 37010 | 37013 | 37014 => Some(Self::Msb),
+            37003 => Some(Self::Bkv),
+            37004 => Some(Self::Biko),
+            37005 => Some(Self::Uenb),
+            37006 => Some(Self::Esa),
+            37008 => Some(Self::Lfg),
+            37009 | 37012 => Some(Self::Gnb),
+            37011 => Some(Self::Mgv),
+            _ => None,
+        }
+    }
+}
+
+// Serde representation: the canonical BDEW role code (`"NB"`, `"ÜNB"`, `"LFG"`, …).
+// Used verbatim in persisted partner records and API payloads, so the wire
+// format matches EDIFACT/BO4E role codes exactly.
+impl serde::Serialize for Marktrolle {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_code())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Marktrolle {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let code = String::deserialize(deserializer)?;
+        Self::from_code(&code)
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown Marktrolle code {code:?}")))
+    }
+}
+
+impl std::fmt::Display for Marktrolle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_code())
+    }
 }
 
 // ── DeploymentRoles ───────────────────────────────────────────────────────────
@@ -277,6 +422,215 @@ impl DeploymentRoles {
 impl FromIterator<Marktrolle> for DeploymentRoles {
     fn from_iter<T: IntoIterator<Item = Marktrolle>>(iter: T) -> Self {
         Self::from_roles(iter)
+    }
+}
+
+// ── Command licensing ─────────────────────────────────────────────────────────
+
+/// Why [`resolve_role`] rejected a command submission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LicensingError {
+    /// The command permits several roles and the caller asserted none —
+    /// the engine cannot infer which hat the caller is wearing.
+    MarktrolleRequired,
+    /// The asserted role is not in the command's permitted set.
+    RoleNotPermitted,
+    /// The effective role is not among the deployment's configured roles.
+    RoleNotConfigured,
+}
+
+impl std::fmt::Display for LicensingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::MarktrolleRequired => {
+                f.write_str("multi-role command requires an asserted Marktrolle")
+            }
+            Self::RoleNotPermitted => {
+                f.write_str("asserted Marktrolle is not permitted for this command")
+            }
+            Self::RoleNotConfigured => {
+                f.write_str("deployment is not configured for the required Marktrolle")
+            }
+        }
+    }
+}
+
+impl std::error::Error for LicensingError {}
+
+/// Resolve and validate the effective [`Marktrolle`] for a command submission.
+///
+/// Pure licensing policy — no registry lookup, no I/O:
+///
+/// - **Single-role commands** (`permitted.len() == 1`): the role is inferred
+///   from the permitted set; any `asserted` role is deliberately **ignored**
+///   so ERP connectors that always send a fixed role are not rejected.
+/// - **Multi-role commands** (`permitted.len() != 1`): `asserted` must be
+///   `Some` ([`LicensingError::MarktrolleRequired`]) and must be a member of
+///   `permitted` ([`LicensingError::RoleNotPermitted`]).
+///
+/// The effective role is then cross-checked against the deployment
+/// configuration: [`DeploymentRoles::all`] admits every role; an explicit
+/// (possibly empty) role set admits only its members
+/// ([`LicensingError::RoleNotConfigured`]).
+///
+/// # Errors
+///
+/// See [`LicensingError`] for the three rejection reasons.
+pub fn resolve_role(
+    permitted: &[Marktrolle],
+    asserted: Option<Marktrolle>,
+    configured: &DeploymentRoles,
+) -> Result<Marktrolle, LicensingError> {
+    let effective = if permitted.len() == 1 {
+        // Single-role command — fully implied; asserted role is ignored.
+        permitted[0]
+    } else {
+        let r = asserted.ok_or(LicensingError::MarktrolleRequired)?;
+        if !permitted.contains(&r) {
+            return Err(LicensingError::RoleNotPermitted);
+        }
+        r
+    };
+
+    if !configured.contains(effective) {
+        return Err(LicensingError::RoleNotConfigured);
+    }
+
+    Ok(effective)
+}
+
+#[cfg(test)]
+mod licensing_tests {
+    use super::*;
+
+    #[test]
+    fn code_round_trip_for_every_role() {
+        for role in [
+            Marktrolle::Nb,
+            Marktrolle::Lf,
+            Marktrolle::Msb,
+            Marktrolle::Nmsb,
+            Marktrolle::Amsb,
+            Marktrolle::Bkv,
+            Marktrolle::Uenb,
+            Marktrolle::Biko,
+            Marktrolle::Esa,
+            Marktrolle::Gnb,
+            Marktrolle::Lfg,
+            Marktrolle::Lfn,
+            Marktrolle::Lfa,
+            Marktrolle::Mgv,
+        ] {
+            assert_eq!(Marktrolle::from_code(role.as_code()), Some(role));
+        }
+        assert_eq!(Marktrolle::from_code("ÜNB"), Some(Marktrolle::Uenb));
+        assert_eq!(
+            Marktrolle::from_code("nb"),
+            None,
+            "codes are case-sensitive"
+        );
+        assert_eq!(Marktrolle::from_code(""), None);
+    }
+
+    #[test]
+    fn serde_round_trips_as_bdew_code() {
+        for role in [Marktrolle::Nb, Marktrolle::Uenb, Marktrolle::Lfg] {
+            let json = serde_json::to_string(&role).unwrap();
+            assert_eq!(json, format!("\"{}\"", role.as_code()));
+            let back: Marktrolle = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, role);
+        }
+        assert!(serde_json::from_str::<Marktrolle>("\"LfStrom\"").is_err());
+    }
+
+    #[test]
+    fn from_partin_pid_covers_all_partin_pids() {
+        for pid in [
+            37000u32, 37001, 37002, 37003, 37004, 37005, 37006, 37008, 37009, 37010, 37011, 37012,
+            37013, 37014,
+        ] {
+            assert!(
+                Marktrolle::from_partin_pid(pid).is_some(),
+                "from_partin_pid({pid}) should return Some"
+            );
+        }
+        assert_eq!(Marktrolle::from_partin_pid(37000), Some(Marktrolle::Lf));
+        assert_eq!(Marktrolle::from_partin_pid(37008), Some(Marktrolle::Lfg));
+        assert_eq!(Marktrolle::from_partin_pid(37009), Some(Marktrolle::Gnb));
+        assert_eq!(Marktrolle::from_partin_pid(37011), Some(Marktrolle::Mgv));
+        assert_eq!(Marktrolle::from_partin_pid(37014), Some(Marktrolle::Msb));
+        // PID 37007 is not in the AHB (gap)
+        assert_eq!(Marktrolle::from_partin_pid(37007), None);
+        assert_eq!(Marktrolle::from_partin_pid(0), None);
+    }
+
+    #[test]
+    fn single_permitted_infers_and_ignores_assertion() {
+        let configured = DeploymentRoles::lf();
+        // No assertion → inferred.
+        assert_eq!(
+            resolve_role(&[Marktrolle::Lf], None, &configured),
+            Ok(Marktrolle::Lf)
+        );
+        // A wrong assertion is ignored, not rejected.
+        assert_eq!(
+            resolve_role(&[Marktrolle::Lf], Some(Marktrolle::Nb), &configured),
+            Ok(Marktrolle::Lf)
+        );
+    }
+
+    #[test]
+    fn multi_permitted_requires_assertion() {
+        let permitted = [Marktrolle::Nb, Marktrolle::Msb];
+        let configured = DeploymentRoles::nb_msb();
+        assert_eq!(
+            resolve_role(&permitted, None, &configured),
+            Err(LicensingError::MarktrolleRequired)
+        );
+        assert_eq!(
+            resolve_role(&permitted, Some(Marktrolle::Msb), &configured),
+            Ok(Marktrolle::Msb)
+        );
+    }
+
+    #[test]
+    fn multi_permitted_rejects_foreign_assertion() {
+        let permitted = [Marktrolle::Nb, Marktrolle::Msb];
+        let configured = DeploymentRoles::lf();
+        assert_eq!(
+            resolve_role(&permitted, Some(Marktrolle::Lf), &configured),
+            Err(LicensingError::RoleNotPermitted)
+        );
+    }
+
+    #[test]
+    fn configured_cross_check_rejects_unconfigured_role() {
+        // Resolves to LF; only NB is configured.
+        assert_eq!(
+            resolve_role(&[Marktrolle::Lf], None, &DeploymentRoles::nb()),
+            Err(LicensingError::RoleNotConfigured)
+        );
+        // Empty explicit set admits nothing.
+        assert_eq!(
+            resolve_role(&[Marktrolle::Lf], None, &DeploymentRoles::from_roles([])),
+            Err(LicensingError::RoleNotConfigured)
+        );
+    }
+
+    #[test]
+    fn deployment_roles_all_admits_every_role() {
+        assert_eq!(
+            resolve_role(&[Marktrolle::Biko], None, &DeploymentRoles::all()),
+            Ok(Marktrolle::Biko)
+        );
+        assert_eq!(
+            resolve_role(
+                &[Marktrolle::Bkv, Marktrolle::Uenb],
+                Some(Marktrolle::Uenb),
+                &DeploymentRoles::all()
+            ),
+            Ok(Marktrolle::Uenb)
+        );
     }
 }
 

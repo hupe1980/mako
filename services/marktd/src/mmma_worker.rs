@@ -222,7 +222,7 @@ pub async fn run_import_cycle(
                 emit_event(
                     event_tx,
                     tenant,
-                    "de.markt.mmma.import.failed",
+                    mako_events::markt::MMMA_IMPORT_FAILED,
                     serde_json::json!({
                         "commodity": "gas",
                         "year": year, "month": month,
@@ -243,7 +243,7 @@ pub async fn run_import_cycle(
                     emit_event(
                         event_tx,
                         tenant,
-                        "de.markt.mmma.import.failed",
+                        mako_events::markt::MMMA_IMPORT_FAILED,
                         serde_json::json!({
                             "commodity": "gas",
                             "year": year, "month": month,
@@ -285,7 +285,7 @@ pub async fn run_import_cycle(
                         emit_event(
                             event_tx,
                             tenant,
-                            "de.markt.mmma.import.success",
+                            mako_events::markt::MMMA_IMPORT_SUCCESS,
                             serde_json::json!({
                                 "commodity": "gas",
                                 "year": year, "month": month,
@@ -322,7 +322,7 @@ pub async fn run_import_cycle(
                 emit_event(
                     event_tx,
                     tenant,
-                    "de.markt.mmma.import.failed",
+                    mako_events::markt::MMMA_IMPORT_FAILED,
                     serde_json::json!({
                         "commodity": "strom",
                         "year": year, "month": month,
@@ -343,7 +343,7 @@ pub async fn run_import_cycle(
                     emit_event(
                         event_tx,
                         tenant,
-                        "de.markt.mmma.import.failed",
+                        mako_events::markt::MMMA_IMPORT_FAILED,
                         serde_json::json!({
                             "commodity": "strom",
                             "year": year, "month": month,
@@ -385,7 +385,7 @@ pub async fn run_import_cycle(
                         emit_event(
                             event_tx,
                             tenant,
-                            "de.markt.mmma.import.success",
+                            mako_events::markt::MMMA_IMPORT_SUCCESS,
                             serde_json::json!({
                                 "commodity": "strom",
                                 "year": year, "month": month,

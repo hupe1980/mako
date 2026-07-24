@@ -72,6 +72,8 @@ graph LR
 | `PUT` | `/api/v1/epex-prices/{date}` | Import EPEX day-ahead prices (24-entry array, idempotent) |
 | `GET` | `/api/v1/epex-prices/{date}/hourly` | 24-hour ct/kWh array |
 | `GET` | `/api/v1/epex-prices/{year}/{month}/average` | Monthly average — used by `einsd` Direktvermarktung |
+| `PUT` | `/api/v1/nehs-prices/{date}` | Import a dated nEHS certificate price (EUR/t CO₂) — EEX auction clearing (weekly from 01.07.2026, §10 BEHG corridor 55–65 €/t), Verkaufsphase (68 €) or manual. `source` ∈ `auktion`/`verkaufsphase`/`nachkauf`/`manual` (CHECK-constrained; anything else → 422) |
+| `GET` | `/api/v1/nehs-prices/latest?date=` | Most recent nEHS price at or before `date` — used by `billingd` for the Gas CO₂ component (CO2KostAufG §3) |
 | `POST/GET` | `/api/v1/angebote` | B2B Angebot (quotation) — ANGELEGT→VERSANDT→ANGENOMMEN/ABGELEHNT/ABGELAUFEN |
 | `GET` | `/health` | Liveness |
 | `GET` | `/health/ready` | Readiness |

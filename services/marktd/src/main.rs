@@ -42,6 +42,7 @@ use marktd::{
         },
         event_ingest::{InboundWebhookSecret, ingest_event},
         event_log::list_event_log,
+        grundversorger::{get_grundversorger, put_grundversorger},
         health::{health, health_ready},
         lokationszuordnung::{
             delete_lokationszuordnung, get_malo_lokationen, get_melo_lokationen,
@@ -52,10 +53,14 @@ use marktd::{
         melo::{get_melo, get_melo_standorteigenschaften, put_melo},
         metrics::metrics_handler,
         mmma_preise,
+        msb_rahmenvertrag_gas::{get_msb_rv_gas, list_msb_rv_gas, upsert_msb_rv_gas},
         nb_contract::{get_nb_contract, list_nb_contracts, put_nb_contract},
         nb_energiemix::{get_nb_energiemix, get_nb_energiemix_history, put_nb_energiemix},
         nelo::{get_nelo, list_nelos, put_nelo},
-        partner::{get_as4_address, get_partner, list_partners, put_partner},
+        netzzugang::{get_antrag, list_antraege, set_antrag_status, upsert_antrag},
+        partner::{
+            get_as4_address, get_partner, get_partner_marktteilnehmer, list_partners, put_partner,
+        },
         preisblatt::{
             get_preisblatt, get_preisblatt_dienstleistung, get_preisblatt_hardware,
             get_preisblatt_ka, get_preisblatt_messung, put_preisblatt,
@@ -69,9 +74,10 @@ use marktd::{
     openapi::swagger_ui,
     pg::{
         PgContractRepository, PgCorrelationIndex, PgDeviceRepository, PgEinwilligungRepository,
-        PgLokationszuordnungRepository, PgMaloGridRepository, PgMaloRepository, PgMeloRepository,
-        PgMmmPreisStromRepository, PgMmmaPreisGasRepository, PgNbContractRepository,
-        PgNeLoRepository, PgPartnerRepository, PgPreisblattDienstleistungRepository,
+        PgGrundversorgerRepository, PgLokationszuordnungRepository, PgMaloGridRepository,
+        PgMaloRepository, PgMeloRepository, PgMmmPreisStromRepository, PgMmmaPreisGasRepository,
+        PgMsbRahmenvertragGasRepository, PgNbContractRepository, PgNeLoRepository,
+        PgNetzzugangRepository, PgPartnerRepository, PgPreisblattDienstleistungRepository,
         PgPreisblattHardwareRepository, PgPreisblattKaRepository, PgPreisblattMessungRepository,
         PgPreisblattRepository, PgPriCatRepository, PgSteuerbareRessourceRepository,
         PgSubscriptionRepository, PgTechnischeRessourceRepository, PgVersorgungsStatusRepository,
@@ -178,7 +184,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Repositories ──────────────────────────────────────────────────────────
     let malo_repo = PgMaloRepository::new(pool.clone());
-    let melo_repo = PgMeloRepository::new(pool.clone());
+    let melo_repo = PgMeloRepository::new(pool.clone(), cfg.makod.tenant.clone());
     let contract_repo = PgContractRepository::new(pool.clone());
     let sub_repo = PgSubscriptionRepository::new(pool.clone());
     let ci = PgCorrelationIndex::new(pool.clone());
@@ -195,12 +201,15 @@ async fn main() -> anyhow::Result<()> {
     let lz_repo = std::sync::Arc::new(PgLokationszuordnungRepository::new(pool.clone()));
     let device_repo = std::sync::Arc::new(PgDeviceRepository::new(pool.clone()));
     let einwilligung_repo = std::sync::Arc::new(PgEinwilligungRepository::new(pool.clone()));
+    let netzzugang_repo = std::sync::Arc::new(PgNetzzugangRepository::new(pool.clone()));
+    let msb_rv_gas_repo = std::sync::Arc::new(PgMsbRahmenvertragGasRepository::new(pool.clone()));
     let zaehzeit_repo = std::sync::Arc::new(PgZaehlzeitRepository::new(pool.clone()));
     let nb_contract_repo = std::sync::Arc::new(PgNbContractRepository::new(pool.clone()));
     let vs_repo = std::sync::Arc::new(PgVersorgungsStatusRepository::new(pool.clone()));
     let pricat_repo = std::sync::Arc::new(PgPriCatRepository::new(pool.clone()));
     let nelo_repo = std::sync::Arc::new(PgNeLoRepository::new(pool.clone()));
     let malo_grid_repo = Arc::new(PgMaloGridRepository::new(pool.clone()));
+    let grundversorger_repo = Arc::new(PgGrundversorgerRepository::new(pool.clone()));
     let mmma_gas_repo = std::sync::Arc::new(PgMmmaPreisGasRepository::new(pool.clone()));
     let mmm_strom_repo = std::sync::Arc::new(PgMmmPreisStromRepository::new(pool.clone()));
 
@@ -448,6 +457,22 @@ async fn main() -> anyhow::Result<()> {
                 "/api/v1/esa/einwilligungen/{id}",
                 get(get_einwilligung).delete(revoke_einwilligung),
             )
+            // §20b EnWG Netzzugangsplattform request registry
+            .route(
+                "/api/v1/netzzugang/antraege",
+                axum::routing::put(upsert_antrag).get(list_antraege),
+            )
+            .route("/api/v1/netzzugang/antraege/{id}", get(get_antrag))
+            .route(
+                "/api/v1/netzzugang/antraege/{id}/status",
+                axum::routing::patch(set_antrag_status),
+            )
+            // Gas MSB-Rahmenvertrag registry (GeLi Gas 3.0 Tenor 13–16)
+            .route(
+                "/api/v1/msb-rahmenvertraege-gas",
+                axum::routing::put(upsert_msb_rv_gas).get(list_msb_rv_gas),
+            )
+            .route("/api/v1/msb-rahmenvertraege-gas/{id}", get(get_msb_rv_gas))
             .route(
                 "/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}",
                 put(put_framework).get(get_framework),
@@ -510,6 +535,11 @@ async fn main() -> anyhow::Result<()> {
             .route(
                 "/api/v1/partners/{mp_id}/as4-address",
                 get(get_as4_address::<_, _, _, _, _, _>),
+            )
+            // Typed BO4E Marktteilnehmer view of a stored partner
+            .route(
+                "/api/v1/partners/{mp_id}/marktteilnehmer",
+                get(get_partner_marktteilnehmer::<_, _, _, _, _, _>),
             )
             // PRICAT version history + manual dispatch (Phase 2)
             .route("/api/v1/pricat/{nb_mp_id}/history", get(get_pricat_history))
@@ -580,6 +610,11 @@ async fn main() -> anyhow::Result<()> {
             .route(
                 "/api/v1/malo/{id}/grid",
                 get(get_malo_grid).put(put_malo_grid),
+            )
+            // Grundversorger Feststellung (§36 Abs. 2 EnWG — EoG gap closure)
+            .route(
+                "/api/v1/grundversorger/{nb_mp_id}",
+                get(get_grundversorger).put(put_grundversorger),
             )
             // SteuerbareRessource registry (B4b — WiM iMS Steuerungsauftrag)
             .route(
@@ -703,6 +738,8 @@ async fn main() -> anyhow::Result<()> {
             .layer(Extension(nelo_repo))
             // MaLo grid topology extension (N7)
             .layer(Extension(malo_grid_repo))
+            // Grundversorger Feststellung extension (§36 EnWG EoG)
+            .layer(Extension(grundversorger_repo))
             // SteuerbareRessource registry extension (B4b)
             .layer(Extension(sr_repo))
             // TechnischeRessource registry extension (B9)
@@ -713,6 +750,8 @@ async fn main() -> anyhow::Result<()> {
             .layer(Extension(device_repo))
             // ESA consent registry repo + makod client (for the 17008 wire)
             .layer(Extension(einwilligung_repo))
+            .layer(Extension(netzzugang_repo))
+            .layer(Extension(msb_rv_gas_repo))
             .layer(Extension(makod_client_ext))
             // ZaehlzeitRegister + ZaehlzeitSaison (iMSys TOU)
             .layer(Extension(zaehzeit_repo))

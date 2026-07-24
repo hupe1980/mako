@@ -134,11 +134,12 @@ fn default_subscriber_id() -> String {
 }
 fn default_event_types() -> Vec<String> {
     vec![
-        "de.mako.process.initiated".to_owned(),
-        "de.mako.process.completed".to_owned(),
-        "de.mako.process.timed_out".to_owned(),
-        "de.mako.process.failed".to_owned(),
-        "de.mako.aperak.rejected".to_owned(),
+        mako_events::mako::PROCESS_INITIATED.to_owned(),
+        mako_events::mako::PROCESS_COMPLETED.to_owned(),
+        mako_events::mako::APERAK_ACCEPTED.to_owned(),
+        mako_events::mako::APERAK_TIMEOUT.to_owned(),
+        mako_events::mako::PROCESS_FAILED.to_owned(),
+        mako_events::mako::APERAK_REJECTED.to_owned(),
     ]
 }
 

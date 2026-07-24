@@ -130,7 +130,7 @@ pub async fn handle_webhook(
     // PID 23005: WiM Gas INSRPT → SONDERABLESUNG
     // PID 23008: Gerätebefund (device inspection) → SONDERABLESUNG
     // PID 23009: WiM Gas INSRPT → SONDERABLESUNG
-    if ce_type == "de.mako.process.initiated"
+    if ce_type == mako_events::mako::PROCESS_INITIATED
         && matches!(pid, 23001 | 23003 | 23004 | 23005 | 23008 | 23009)
     {
         let (anlass, description) = match pid {
@@ -226,7 +226,7 @@ pub async fn handle_webhook(
     // *Ablehnung* of an Abmeldung — supply continues, no reading is due.)
     //
     // Legal basis: GPKE BK6-22-024 §3; GPKE Beginn-/Schlussablesung Ablesung bei Lieferbeginn/-ende.
-    if ce_type == "de.mako.process.completed" && matches!(pid, 55001 | 55004 | 55007) {
+    if ce_type == mako_events::mako::PROCESS_COMPLETED && matches!(pid, 55001 | 55004 | 55007) {
         let (anlass, label) = if pid == 55001 {
             ("LIEFERBEGINN", "Lieferbeginn")
         } else {
@@ -307,7 +307,7 @@ pub async fn handle_webhook(
     // Redispatch 2.0 Ausfallarbeit/meteorological data (PIDs 13020–13023, 13026) must also be stored
     // in `edmd` for OLAP aggregation and archive, even though `mako-redispatch` handles the
     // workflow routing (the two concerns are orthogonal).
-    if ce_type == "de.mako.process.completed" && ALL_MSCONS_PIDS.contains(&pid) {
+    if ce_type == mako_events::mako::PROCESS_COMPLETED && ALL_MSCONS_PIDS.contains(&pid) {
         let subject = event["subject"].as_str().unwrap_or("").to_owned();
         let process_id: Uuid = match subject.parse() {
             Ok(id) => id,
@@ -557,7 +557,7 @@ pub async fn handle_webhook(
                 if let Some(ref webhook_url) = state.erp_webhook_url {
                     let payload = serde_json::json!({
                         "specversion": "1.0",
-                        "type": "de.edmd.reading.quality.warning",
+                        "type": mako_events::messwert::READING_QUALITY_WARNING,
                         "source": format!("urn:edmd:tenant:{}:{}", state.tenant, malo_id),
                         "id": uuid::Uuid::new_v4().to_string(),
                         "subject": malo_id,

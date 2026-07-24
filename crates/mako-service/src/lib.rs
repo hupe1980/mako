@@ -27,6 +27,11 @@ pub mod webhook;
 #[cfg(all(feature = "cedar", feature = "oidc"))]
 pub mod mcp_auth;
 
+/// Schema-validated Cedar engine with named-key / OIDC bearer authentication.
+/// Feature-gated: requires both `cedar` and `oidc` features.
+#[cfg(all(feature = "cedar", feature = "oidc"))]
+pub mod cedar_schema;
+
 #[cfg(feature = "cedar")]
 pub mod cedar;
 
@@ -39,6 +44,8 @@ pub mod metrics;
 #[cfg(feature = "rate-limit")]
 pub mod rate_limit;
 
+/// Compile-time catalog of every CloudEvents `type` in the workspace.
+pub use mako_events as cloud_events;
 pub use mako_plugin::{PluginContext, PluginError, PluginManifest, PluginRegistry};
 
 pub use builder::ServiceBuilder;

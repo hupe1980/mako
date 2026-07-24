@@ -18,6 +18,7 @@ name = "obsd"
 path = "src/lib.rs"
 
 [dependencies]
+mako-events = { workspace = true }
 mako-markt = { workspace = true, features = ["marktd-client"] }
 mako-obs  = { workspace = true }
 

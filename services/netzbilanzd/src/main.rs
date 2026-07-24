@@ -172,6 +172,16 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/redispatch/verguetung/:activation_id/compute",
             post(handlers::post_verguetung_compute),
         )
+        // BilAReM Kap. 3 (BK6-23-241) — stateless Ausfallarbeit engine:
+        // per-TR W_A series for all Abrechnungsvarianten + Kap.-3.4 Überbauung.
+        .route(
+            "/api/v1/redispatch/ausfallarbeit/compute",
+            post(netzbilanzd::ausfallarbeit_api::post_ausfallarbeit_compute),
+        )
+        .route(
+            "/api/v1/redispatch/ausfallarbeit/ueberbauung",
+            post(netzbilanzd::ausfallarbeit_api::post_ausfallarbeit_ueberbauung),
+        )
         // N5a: Kostenblatt gap detection — activations without dispatch_kwh data.
         .route(
             "/api/v1/redispatch/kostenblatt/gaps/:year/:month",
@@ -274,7 +284,7 @@ async fn spawn_dispatch_alert(
     });
     let body = serde_json::json!({
         "specversion": "1.0",
-        "type": "de.netzbilanz.invoic.dispatch_overdue",
+        "type": mako_events::netzbilanz::INVOIC_DISPATCH_OVERDUE,
         "source": "netzbilanzd",
         "id": uuid::Uuid::new_v4().to_string(),
         "time": time::OffsetDateTime::now_utc()
@@ -344,7 +354,7 @@ async fn spawn_kostenblatt_alert(
     );
     let body = serde_json::json!({
         "specversion": "1.0",
-        "type": "de.netzbilanz.kostenblatt.deadline_approaching",
+        "type": mako_events::netzbilanz::KOSTENBLATT_DEADLINE_APPROACHING,
         "source": "netzbilanzd",
         "id": uuid::Uuid::new_v4().to_string(),
         "time": time::OffsetDateTime::now_utc()

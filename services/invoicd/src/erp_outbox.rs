@@ -101,9 +101,9 @@ async fn flush(
 
     for row in rows {
         let ce_type = match row.outcome.as_str() {
-            "Dispute" => "de.invoic.receipt.disputed",
-            "Dispatched" => "de.invoic.receipt.dispatched",
-            _ => "de.invoic.receipt.settled",
+            "Dispute" => mako_events::invoic::RECEIPT_DISPUTED,
+            "Dispatched" => mako_events::invoic::RECEIPT_DISPATCHED,
+            _ => mako_events::invoic::RECEIPT_SETTLED,
         };
 
         let pay_by_str = row.pay_by.map(|d| {

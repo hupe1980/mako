@@ -101,7 +101,7 @@ pub async fn grant_einwilligung(
             emit(
                 &event_tx,
                 &tenant,
-                "de.markt.einwilligung.erteilt",
+                mako_events::markt::EINWILLIGUNG_ERTEILT,
                 id.to_string(),
                 serde_json::json!({
                     "einwilligung_id": id,
@@ -174,7 +174,7 @@ pub async fn revoke_einwilligung(
     emit(
         &event_tx,
         &tenant,
-        "de.markt.einwilligung.widerrufen",
+        mako_events::markt::EINWILLIGUNG_WIDERRUFEN,
         id.to_string(),
         serde_json::json!({
             "einwilligung_id": id,

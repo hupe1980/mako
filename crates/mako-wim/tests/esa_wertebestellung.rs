@@ -2,7 +2,7 @@
 
 use mako_engine::{
     error::WorkflowError,
-    types::{MarktpartnerCode, MessageRef, Pruefidentifikator},
+    types::{MarktpartnerCode, MessageRef},
     workflow::Workflow,
 };
 use mako_wim::esa_wertebestellung::{
@@ -12,10 +12,6 @@ use mako_wim::esa_wertebestellung::{
     STORNO_BESTAETIGUNG_PID,
 };
 use time::macros::datetime;
-
-fn pid(v: u32) -> Pruefidentifikator {
-    Pruefidentifikator::new(v).expect("valid PID")
-}
 
 fn mref(s: &str) -> MessageRef {
     MessageRef::new(s)
@@ -89,7 +85,10 @@ fn werteanfrage_emits_reqote_35002_and_arms_the_angebot_window() {
     assert_eq!(state.label(), "AnfrageGesendet");
     let ob = out.outbox.first().expect("REQOTE sent");
     assert_eq!(&*ob.message_type, "REQOTE");
-    assert_eq!(ob.payload["pid"].as_u64(), Some(u64::from(ANFRAGE_PID)));
+    assert_eq!(
+        ob.payload["pid"].as_u64(),
+        Some(u64::from(ANFRAGE_PID.as_u32()))
+    );
     assert_eq!(ob.payload["location"].as_str(), Some("51238696780"));
     assert!(
         out.deadlines
@@ -126,7 +125,10 @@ fn bestellung_emits_orders_17007() {
     assert_eq!(state.label(), "BestellungGesendet");
     let ob = out.outbox.first().expect("ORDERS sent");
     assert_eq!(&*ob.message_type, "ORDERS");
-    assert_eq!(ob.payload["pid"].as_u64(), Some(u64::from(BESTELLUNG_PID)));
+    assert_eq!(
+        ob.payload["pid"].as_u64(),
+        Some(u64::from(BESTELLUNG_PID.as_u32()))
+    );
 }
 
 #[test]
@@ -182,7 +184,7 @@ fn abbestellung_is_the_revocation_path_and_ends_delivery() {
     assert_eq!(&*ob.message_type, "ORDERS");
     assert_eq!(
         ob.payload["pid"].as_u64(),
-        Some(u64::from(ABBESTELLUNG_PID))
+        Some(u64::from(ABBESTELLUNG_PID.as_u32()))
     );
     // The MSB confirms with ORDRSP 19011 → Beendet.
     let (s, _) = step(
@@ -262,11 +264,14 @@ fn stornierung_before_delivery_voids_the_order() {
     assert_eq!(s.label(), "StornierungGesendet");
     let ob = out.outbox.first().expect("ORDCHG sent");
     assert_eq!(&*ob.message_type, "ORDCHG");
-    assert_eq!(ob.payload["pid"].as_u64(), Some(u64::from(STORNIERUNG_PID)));
+    assert_eq!(
+        ob.payload["pid"].as_u64(),
+        Some(u64::from(STORNIERUNG_PID.as_u32()))
+    );
     let (s, _) = step(
         &s,
         C::ReceiveStornierungAntwort {
-            pid: pid(STORNO_BESTAETIGUNG_PID),
+            pid: STORNO_BESTAETIGUNG_PID,
             message_ref: mref("RSP-ST"),
             reason: None,
         },

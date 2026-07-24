@@ -231,7 +231,7 @@ subscriber_id = "obsd"                       # default
 event_types   = [
   "de.mako.process.initiated",
   "de.mako.process.completed",
-  "de.mako.process.timed_out",
+  "de.mako.aperak.timeout",
   "de.mako.process.failed",
   "de.mako.aperak.rejected",
 ]

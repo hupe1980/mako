@@ -1,0 +1,416 @@
+//! WiM Strom ingest dispatch arms.
+//!
+//! Split out of the flat `ingest_dispatcher` module. The spawn/resume
+//! machinery, extraction helpers, and the consent gate live in `super`.
+
+use super::*;
+
+impl EdifactIngestDispatcher {
+    /// Phase-2 dispatch arms for the WiM Strom workflow family:
+    /// `wim-device-change`
+    /// `wim-geraeteubernahme`
+    /// `wim-rechnung`
+    /// `wim-insrpt`
+    /// `wim-stammdaten`
+    /// `wim-preisanfrage`
+    /// `wim-preisliste`
+    /// `wim-technik-aenderung`
+    pub(super) async fn dispatch_wim(
+        &self,
+        msg: &AnyMessage,
+        workflow_name: &str,
+        pid: u32,
+    ) -> Result<IngestOutcome, EngineError> {
+        let fv = detect_format_version(msg);
+        let raw: &dyn Any = msg;
+
+        match workflow_name {
+            // ── WiM Messstellenbetrieb — EDIFACT/AS4 channel ──────────────
+            // PIDs 55042/55039: nMSB initiates (Anmeldung/Kündigung → NB) — spawn.
+            // PIDs 55051/55168: NB initiates (Ende/Verpflichtungsanfrage → MSB) — spawn.
+            //
+            // NOTE: the REST API-Webdienste channel (WimOrderHandler in webdienste.rs)
+            // is the primary transport for API-capable counterparties.  This arm
+            // covers the AS4/EDIFACT path for counterparties that only support AS4.
+            // MeLo ID is extracted from the first UTILMD transaction IDE segment
+            // (object_id component) — the same field the wim_registry adapter uses.
+            "wim-device-change" => match pid {
+                55042 | 55039 | 55051 | 55168 => {
+                    let cmd = adapters::wim_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_utilmd(msg);
+                    // Process Frist: 5 Werktage (BK6-24-174 WiM Strom Teil 1).
+                    // APERAK AHB 1.0 §2.4.1: Strom UTILMD — 45 min on weekdays.
+                    let process_due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        5,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
+                    self.spawn_or_resume::<WimDeviceChangeWorkflow>(
+                        &melo_id,
+                        "wim-device-change",
+                        cmd,
+                        &fv,
+                        &[
+                            (mako_wim::GERAETEWECHSEL_APERAK_WINDOW_LABEL, process_due_at),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
+                    )
+                    .await
+                }
+                // Antwort PIDs (55040/55041, 55043/55044, 55052/55053, 55169/55170)
+                // close an order **we** sent — resume, never spawn. An answer with
+                // no open order is Skipped rather than creating an orphan stream.
+                55040 | 55041 | 55043 | 55044 | 55052 | 55053 | 55169 | 55170 => {
+                    let cmd = adapters::wim_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_utilmd(msg);
+                    self.resume_by_malo::<WimDeviceChangeWorkflow>(
+                        &melo_id,
+                        "wim-device-change",
+                        cmd,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-device-change",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+            // ── WiM Geräteübernahme (nMSB role) ──────────────────────────────
+            // PIDs 17001/17002: nMSB → NB Anfrage/Weiterverpflichtung — spawn.
+            // PID  17005:       NB   → MSB Bestellung Rechnungsabwicklung — spawn.
+            // PIDs 17009/17011: Stornierung (ORDCHG) — spawn.
+            // PIDs 19001/19002: ORDRSP Bestätigung/Ablehnung (NB → nMSB) — resume.
+            //
+            // Note: PIDs 19001/19002 are multi-domain — GPKE Konfiguration (NB role)
+            // and WiM Geräteübernahme (nMSB role) share them.  Role-conditional
+            // routing in the PidRouter ensures only one workflow is registered per
+            // role (both cannot be active simultaneously — build() panics if both are).
+            "wim-geraeteubernahme" => match pid {
+                17001 | 17002 | 17005 | 17009 | 17011 => {
+                    let cmd = adapters::wim_geraeteubernahme_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_orders(msg);
+                    // Process Frist: 5 Werktage (BK6-24-174 WiM Strom Teil 1).
+                    // APERAK AHB 1.0 §2.4.1: Strom ORDERS — 45 min on weekdays.
+                    let process_due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        5,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
+                    self.spawn_or_resume::<WimGeraeteubernahmeWorkflow>(
+                        &melo_id,
+                        "wim-geraeteubernahme",
+                        cmd,
+                        &fv,
+                        &[
+                            (
+                                mako_wim::GERAETEUBERNAHME_ORDRSP_DEADLINE_LABEL,
+                                process_due_at,
+                            ),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
+                    )
+                    .await
+                }
+                19001 | 19002 => {
+                    let cmd = adapters::wim_geraeteubernahme_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_orders(msg);
+                    self.resume_by_malo::<WimGeraeteubernahmeWorkflow>(
+                        &melo_id,
+                        "wim-geraeteubernahme",
+                        cmd,
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-geraeteubernahme",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+            // ── WiM Rechnung (Strom) — PID 31009 ─────────────────────────────
+            // PID 31009: MSB-Rechnung (MSB → NB, multi-domain GPKE/WiM) — spawn.
+            "wim-rechnung" => match pid {
+                31009 => {
+                    let cmd = adapters::wim_rechnung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_invoic(msg);
+                    // Settlement deadline: 5 Werktage (BK6-24-174 WiM Strom).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        5,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<WimRechnungWorkflow>(
+                        malo_id.as_str(),
+                        "wim-rechnung",
+                        cmd,
+                        &fv,
+                        &[(mako_wim::WIM_RECHNUNG_WINDOW_LABEL, due_at)],
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-rechnung",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+            // ── WiM INSRPT (Strom) — PIDs 23001, 23003, 23004, 23008, 23011/23012 ──
+            // PIDs 23001: INSRPT Anfrage Störungsmeldung (gMSB → NB) — spawn.
+            // PIDs 23003/23004/23008/23011/23012: INSRPT Antwort — resume.
+            "wim-insrpt" => match pid {
+                23001 => {
+                    let cmd = adapters::wim_insrpt_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_utilmd(msg);
+                    // INSRPT Frist: 5 Werktage (BK6-24-174 WiM Strom).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        5,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<WimInsrptWorkflow>(
+                        &melo_id,
+                        "wim-insrpt",
+                        cmd,
+                        &fv,
+                        &[(mako_wim::insrpt::ANTWORT_WINDOW_LABEL, due_at)],
+                    )
+                    .await
+                }
+                23003 | 23004 | 23008 | 23011 | 23012 => {
+                    let cmd = adapters::wim_insrpt_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_utilmd(msg);
+                    self.resume_by_malo::<WimInsrptWorkflow>(&melo_id, "wim-insrpt", cmd)
+                        .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-insrpt",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+            // ── WiM Stammdaten ORDERS (PID 17132 inbound, 17102–17133 inbound) ──────
+            "wim-stammdaten" => match pid {
+                17132 => {
+                    let cmd = adapters::wim_stammdaten_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_orders(msg);
+                    // Process Frist: 5 Werktage (BK6-24-174).
+                    // APERAK AHB 1.0 §2.4.1: Strom ORDERS — 45 min on weekdays.
+                    let process_due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        5,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
+                    self.spawn_or_resume::<WimStammdatenWorkflow>(
+                        &melo_id,
+                        "wim-stammdaten",
+                        cmd,
+                        &fv,
+                        &[
+                            (
+                                mako_wim::stammdaten::STAMMDATEN_DEADLINE_LABEL,
+                                process_due_at,
+                            ),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
+                    )
+                    .await
+                }
+                // PIDs 17102–17133: Stammdatenübermittlung response (MSB → NB).
+                // Extract ZAK+ZE+ZD register definitions and resume the existing
+                // wim-stammdaten process started by PID 17132.
+                // No new deadline — this message resolves the 5-Werktage window.
+                17102..=17133 => {
+                    let cmd =
+                        adapters::wim_stammdaten_uebermittlung_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_orders(msg);
+                    self.spawn_or_resume::<WimStammdatenWorkflow>(
+                        &melo_id,
+                        "wim-stammdaten",
+                        cmd,
+                        &fv,
+                        &[], // no new deadlines — resolves the existing 5WT window
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-stammdaten",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
+
+            // ── WiM ESA Wertebestellung (WiM Teil 2 Kap. 4) ───────────────────
+            //
+            // ORDERS 17007 (Bestellung), 17008 (Abbestellung) and ORDCHG 39002
+            // (Stornierung). REQOTE 35002 arrives under "wim-preisanfrage"
+            // because the two share a PID; it is separated below.
+            name if name == mako_wim::wertebestellung::WORKFLOW_NAME => {
+                if pid == mako_wim::wertebestellung::STORNIERUNG_PID.as_u32() {
+                    // ORDCHG 39002 Stornierung carries no LOC — correlate by the
+                    // original Bestellung's Belegnummer echoed in RFF+ON. Resume
+                    // only; a Stornierung without a running order is an orphan.
+                    let cmd = adapters::wim_wertebestellung_registry().dispatch(raw, &fv)?;
+                    let cmd = self.gate_esa_consent(msg, cmd).await;
+                    let order_ref = extract_order_ref_from_msg(msg);
+                    self.resume_by_malo::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
+                        &order_ref,
+                        mako_wim::wertebestellung::WORKFLOW_NAME,
+                        cmd,
+                    )
+                    .await
+                } else if pid == mako_wim::wertebestellung::BESTELLUNG_PID.as_u32()
+                    || pid == mako_wim::wertebestellung::ABBESTELLUNG_PID.as_u32()
+                {
+                    let cmd = adapters::wim_wertebestellung_registry().dispatch(raw, &fv)?;
+                    // Consent gate: a revoked consent between Angebot and
+                    // Bestellung turns the order into an ORDRSP 19012 Ablehnung.
+                    let cmd = self.gate_esa_consent(msg, cmd).await;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // UC 4.1 Nr. 4 / Nr. 6 and UC 4.3 Nr. 2: 2 WT nach dem ÜT.
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        mako_wim::wertebestellung::ANTWORT_FRIST_WT,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    // Also index the process under this ORDERS' Belegnummer so a
+                    // later ORDCHG Stornierung (which has no LOC) can resume it.
+                    let order_belegnr = msg.message_ref();
+                    self.spawn_or_resume_keyed::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
+                        malo_id.as_str(),
+                        mako_wim::wertebestellung::WORKFLOW_NAME,
+                        cmd,
+                        &fv,
+                        &[(mako_wim::wertebestellung::ANTWORT_WINDOW_LABEL, due_at)],
+                        &[order_belegnr],
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: mako_wim::wertebestellung::WORKFLOW_NAME,
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+
+            // ── ESA Wertebestellung — ESA origination side ────────────────────
+            // The MSB's answers come back inbound and resume the process this
+            // ESA started. Never spawns — a stray response with no matching
+            // process is Skipped.
+            //
+            // QUOTES 15003 still carries a LOC, so it correlates by MaLo. The
+            // ORDRSP 19011-19014 answers carry no LOC and correlate by the order
+            // reference echoed in RFF+ACW (the Belegnummer of the ORDERS/ORDCHG
+            // this ESA sent, under which the process was indexed).
+            name if name == mako_wim::esa_wertebestellung::WORKFLOW_NAME => {
+                if mako_wim::esa_wertebestellung::ESA_INBOUND_PIDS
+                    .iter()
+                    .any(|p| p.as_u32() == pid)
+                {
+                    let cmd = adapters::esa_wertebestellung_registry().dispatch(raw, &fv)?;
+                    let key = if matches!(msg, AnyMessage::Ordrsp(_)) {
+                        extract_order_ref_from_msg(msg)
+                    } else {
+                        String::from(extract_malo_from_msg(msg))
+                    };
+                    self.resume_by_malo::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow>(
+                        &key,
+                        mako_wim::esa_wertebestellung::WORKFLOW_NAME,
+                        cmd,
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: mako_wim::esa_wertebestellung::WORKFLOW_NAME,
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+            // ── WiM Preisanfrage REQOTE (PIDs 35001–35005) ────────────────────
+            "wim-preisanfrage" => {
+                // REQOTE 35002 is shared: an ESA Werteanfrage (WiM Teil 2 UC 4.1
+                // Nr. 1) and a Preisanfrage arrive under the same PID, because no
+                // ESA-specific REQOTE Prüfidentifikator exists. Separate them on
+                // content before the Preisanfrage workflow claims the message.
+                if pid == mako_wim::wertebestellung::ANFRAGE_PID.as_u32()
+                    && mako_wim::wertebestellung::classify_reqote(
+                        self.sender_is_esa(extract_sender_mp_id(msg).as_str()),
+                        mako_wim::wertebestellung::has_messprodukt(extract_pia_codes(msg)),
+                    ) == mako_wim::wertebestellung::ReqoteKind::EsaWerteanfrage
+                {
+                    let cmd = adapters::wim_wertebestellung_registry().dispatch(raw, &fv)?;
+                    // Consent gate: a revoked consent or an unestablished
+                    // framework agreement answers the Werteanfrage with a
+                    // QUOTES 15003 Ablehnung instead of an Angebot.
+                    let cmd = self.gate_esa_consent(msg, cmd).await;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // UC 4.1 Nr. 2: "spätester ÜT ist der 5. WT nach dem ÜT von
+                    // Nr. 1". makod issues its positive AS4 Receipt for this
+                    // message in the same request, so the dispatch instant is
+                    // the ÜT the Frist counts from.
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        mako_wim::wertebestellung::ANGEBOT_FRIST_WT,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    return self
+                        .spawn_or_resume::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
+                            malo_id.as_str(),
+                            mako_wim::wertebestellung::WORKFLOW_NAME,
+                            cmd,
+                            &fv,
+                            &[(mako_wim::wertebestellung::ANGEBOT_WINDOW_LABEL, due_at)],
+                        )
+                        .await;
+                }
+                if mako_wim::preisanfrage::REQOTE_PIDS.contains(&pid) {
+                    let cmd = adapters::wim_preisanfrage_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // Preisanfrage deadline: 5 Werktage (BK6-24-174).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        5,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<WimPreisanfrageWorkflow>(
+                        malo_id.as_str(),
+                        "wim-preisanfrage",
+                        cmd,
+                        &fv,
+                        &[(mako_wim::preisanfrage::PREISANFRAGE_DEADLINE_LABEL, due_at)],
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "wim-preisanfrage",
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+            // ── WiM Preisliste PRICAT (PIDs 27001–27003) ──────────────────────
+            "wim-preisliste" => {
+                if mako_wim::preisliste::PRICAT_PIDS.contains(&pid) {
+                    let cmd = adapters::wim_preisliste_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // Price list is a publish-only workflow; no statutory deadline.
+                    self.spawn_or_resume::<WimPreislisteWorkflow>(
+                        malo_id.as_str(),
+                        "wim-preisliste",
+                        cmd,
+                        &fv,
+                        &[],
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "wim-preisliste",
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
+            "wim-technik-aenderung" => Ok(IngestOutcome::Skipped {
+                workflow_name: "wim-technik-aenderung",
+                reason: "phase2_dispatch_not_yet_implemented",
+            }),
+            wf_name => unknown_workflow_skip(wf_name, pid),
+        }
+    }
+}

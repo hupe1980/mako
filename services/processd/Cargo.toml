@@ -53,6 +53,7 @@ name = "processd"
 path = "src/lib.rs"
 
 [dependencies]
+mako-events = { workspace = true }
 mako-markt    = { workspace = true, features = ["makod-client", "marktd-client"] }
 mako-engine   = { workspace = true }
 netz-checker  = { path = "../../crates/netz-checker" }

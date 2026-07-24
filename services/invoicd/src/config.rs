@@ -183,8 +183,8 @@ fn default_subscriber_id() -> String {
 }
 fn default_event_types() -> Vec<String> {
     vec![
-        "de.mako.process.initiated".to_owned(),
-        "de.mako.process.completed".to_owned(),
+        mako_events::mako::PROCESS_INITIATED.to_owned(),
+        mako_events::mako::PROCESS_COMPLETED.to_owned(),
     ]
 }
 

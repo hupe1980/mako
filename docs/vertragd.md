@@ -24,7 +24,7 @@ Port: **`:9780`** · PostgreSQL · OIDC/JWT + API-key auth
 
 ## Contract creation from the BO4E Angebot
 
-`POST /api/v1/webhooks/angebot` receives `de.angebot.angenommen` from `tarifbd`.
+`POST /api/v1/webhooks/angebot` receives `de.tarif.angebot.angenommen` from `tarifbd`.
 The CloudEvent carries the priced quotation as a BO4E `Angebot` under
 `data.bo4e`, and the contract is built from that document rather than from the
 parallel scalar fields — so what was quoted and what is contracted cannot drift
@@ -488,7 +488,7 @@ Initial startup delay staggers workers to avoid DB contention.
 | `GET` | `/api/v1/rahmenvertraege/{id}` | Single Rahmenvertrag with all child Versorgungsverträge |
 | `GET\|PUT` | `/api/v1/vertraege/{id}/preisgarantie` | Typed `rubo4e::current::Preisgarantie` COM |
 | `POST` | `/api/v1/events` | Inbound CloudEvents from `makod` / `processd` |
-| `POST` | `/api/v1/webhooks/angebot` | CPQ: `de.angebot.angenommen` → auto-create Rahmenvertrag + Versorgungsverträge from Angebot |
+| `POST` | `/api/v1/webhooks/angebot` | CPQ: `de.tarif.angebot.angenommen` → auto-create Rahmenvertrag + Versorgungsverträge from Angebot |
 | `GET` | `/health` | Liveness |
 | `GET` | `/health/ready` | Readiness |
 

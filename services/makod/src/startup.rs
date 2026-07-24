@@ -476,6 +476,13 @@ pub(crate) struct WorkersConfig {
     pub erp_webhook_secret: Option<SecretString>,
     // ── EDIFACT outbox webhook (dev/no-AS4 mode) ─────────────────────────
     pub edifact_outbox_webhook_url: Option<String>,
+    // ── §20b EnWG Netzzugangsplattform adapter ───────────────────────────
+    /// Platform endpoint URL — absent until a §20b interface exists; the
+    /// sender then falls back to the ERP webhook (operator submits via the
+    /// NB Webportal).
+    pub netzzugang_endpoint_url: Option<String>,
+    /// marktd client for the `netzzugang_antraege` projection.
+    pub marktd_client: Option<Arc<mako_markt::marktd_client::MarktdClient>>,
     /// When `true`, allow the daemon to start without AS4 signing credentials
     /// and without an EDIFACT outbox webhook configured.  Defaults to `false`
     /// for production safety — set to `true` only in integration-test or
@@ -670,6 +677,15 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
         info!(partners = ?glns, "AS4 partner P-Mode registry loaded");
     }
 
+    // ── §20b Netzzugangsplattform sender (shared by both outbox senders) ──
+    let netzzugang_sender = Arc::new(crate::netzzugang::NetzzugangSender::new(
+        cfg.http_client.clone(),
+        cfg.netzzugang_endpoint_url.clone(),
+        cfg.erp_webhook_url.clone(),
+        cfg.erp_webhook_secret.clone(),
+        cfg.marktd_client.clone(),
+    ));
+
     // ── Outbox delivery worker ────────────────────────────────────────────
     //
     // BdewAs4Sender when signing credentials are present; MaloIdentSender
@@ -734,7 +750,8 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
             })),
             Arc::clone(&cfg.platform),
             cfg.as4_lenient_receipts,
-        )?;
+        )?
+        .with_netzzugang(Arc::clone(&netzzugang_sender));
 
         info!(
             party_id        = %party_id,
@@ -756,7 +773,8 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
             Arc::clone(&cfg.mp_id_registry),
             cfg.http_client.clone(),
             malo_sender,
-        );
+        )
+        .with_netzzugang(Arc::clone(&netzzugang_sender));
         info!(
             url = %edifact_webhook_url,
             "EDIFACT outbox webhook sender active (WebhookEdifactSender) — \

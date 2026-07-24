@@ -202,7 +202,10 @@ impl mako_engine::builder::EngineModule for WimGasModule {
         // COMDIS 29001 — inbound Ablehnung REMADV (gMSB rejects NB's REMADV).
         //
         // Source: COMDIS AHB 1.0, WiM Gas, BK7-24-01-009.
-        router.register(invoic::WIM_GAS_COMDIS_ABLEHNUNG_PID, "wim-gas-invoic");
+        router.register(
+            invoic::WIM_GAS_COMDIS_ABLEHNUNG_PID.as_u32(),
+            "wim-gas-invoic",
+        );
 
         // INSRPT Störungsmeldungen (WiM Gas).
         //

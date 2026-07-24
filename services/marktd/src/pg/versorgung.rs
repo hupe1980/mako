@@ -56,6 +56,7 @@ fn map_row(row: &PgRow) -> Result<VersorgungsStatusRecord, sqlx::Error> {
         lieferende: row.try_get("lieferende")?,
         msb_mp_id: row.try_get("msb_mp_id")?,
         nb_mp_id: row.try_get("nb_mp_id")?,
+        eog_seit: row.try_get("eog_seit")?,
         last_process_id: row.try_get("last_process_id")?,
         updated_at: row.try_get("updated_at")?,
         tenant: row.try_get("tenant")?,
@@ -110,6 +111,9 @@ fn history_to_current(h: VersorgungsStatusHistoryRecord) -> VersorgungsStatusRec
         lieferende: h.lieferende,
         msb_mp_id: h.msb_mp_id,
         nb_mp_id: h.nb_mp_id,
+        // History rows do not snapshot eog_seit; point-in-time views derive
+        // the EoG regime from `lieferstatus` alone.
+        eog_seit: None,
         last_process_id: h.last_process_id,
         updated_at: h.valid_from,
         version: h.version,
@@ -152,6 +156,7 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
                     msb_mp_id          = $10,
                     nb_mp_id           = $11,
                     last_process_id  = $12,
+                    eog_seit         = $14,
                     updated_at       = now(),
                     version          = $13
                 WHERE malo_id = $1 AND tenant = $2 AND EXISTS (SELECT 1 FROM cte)"#,
@@ -169,6 +174,7 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
             .bind(&rec.nb_mp_id)
             .bind(rec.last_process_id)
             .bind(new_version)
+            .bind(rec.eog_seit)
             .execute(&mut *tx)
             .await
             .map_err(|e| MdmError::Internal(e.to_string()))?
@@ -178,8 +184,8 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
                 r#"INSERT INTO versorgungsstatus
                    (malo_id, tenant, lieferstatus, lf_mp_id, lf_mp_id_next,
                     lf_next_lieferbeginn, lieferbeginn, lieferende,
-                    msb_mp_id, nb_mp_id, last_process_id, updated_at, version)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), 1)
+                    msb_mp_id, nb_mp_id, last_process_id, eog_seit, updated_at, version)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now(), 1)
                    ON CONFLICT (malo_id, tenant) DO UPDATE
                    SET lieferstatus    = EXCLUDED.lieferstatus,
                        lf_mp_id         = EXCLUDED.lf_mp_id,
@@ -190,6 +196,7 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
                        msb_mp_id        = EXCLUDED.msb_mp_id,
                        nb_mp_id         = EXCLUDED.nb_mp_id,
                        last_process_id = EXCLUDED.last_process_id,
+                       eog_seit       = EXCLUDED.eog_seit,
                        updated_at     = now(),
                        version        = versorgungsstatus.version + 1"#,
             )
@@ -204,6 +211,7 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
             .bind(&rec.msb_mp_id)
             .bind(&rec.nb_mp_id)
             .bind(rec.last_process_id)
+            .bind(rec.eog_seit)
             .execute(&mut *tx)
             .await
             .map_err(|e| MdmError::Internal(e.to_string()))?
@@ -479,6 +487,7 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
                    lieferbeginn         = lf_next_lieferbeginn,
                    lf_mp_id_next          = NULL,
                    lf_next_lieferbeginn = NULL,
+                   eog_seit             = NULL,
                    last_process_id      = $3,
                    updated_at           = now(),
                    version              = version + 1
@@ -537,6 +546,7 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
                SET lieferstatus    = 'Unbeliefert',
                    lf_mp_id        = NULL,
                    lieferbeginn    = NULL,
+                   eog_seit        = NULL,
                    nb_mp_id        = $3,
                    last_process_id = $4,
                    updated_at      = now(),
@@ -544,6 +554,88 @@ impl VersorgungsStatusRepository for PgVersorgungsStatusRepository {
         )
         .bind(malo_id)
         .bind(tenant)
+        .bind(nb_mp_id)
+        .bind(process_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        sqlx::query(
+            r#"INSERT INTO versorgungsstatus_history
+               (malo_id, tenant, lieferstatus, lf_mp_id, lf_mp_id_next,
+                lf_next_lieferbeginn, lieferbeginn, lieferende,
+                msb_mp_id, nb_mp_id, last_process_id, version, valid_from)
+               SELECT malo_id, tenant, lieferstatus, lf_mp_id, lf_mp_id_next,
+                      lf_next_lieferbeginn, lieferbeginn, lieferende,
+                      msb_mp_id, nb_mp_id, last_process_id, version, now()
+               FROM versorgungsstatus
+               WHERE malo_id = $1 AND tenant = $2"#,
+        )
+        .bind(malo_id)
+        .bind(tenant)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn begin_eog_supply(
+        &self,
+        malo_id: &MaloId,
+        tenant: &str,
+        gv_mp_id: &str,
+        nb_mp_id: &str,
+        eog_status: LieferStatus,
+        eog_seit: Option<Date>,
+        process_id: Option<uuid::Uuid>,
+    ) -> Result<(), MdmError> {
+        if !matches!(
+            eog_status,
+            LieferStatus::Ersatzversorgung | LieferStatus::Grundversorgung
+        ) {
+            return Err(MdmError::Unprocessable {
+                reason: "begin_eog_supply requires Ersatzversorgung or Grundversorgung".into(),
+            });
+        }
+        // The CHECK constraint requires eog_seit while the fallback runs;
+        // default a missing start date to today (Berlin calendar date is
+        // resolved at query time, storage keeps the civil date).
+        let eog_seit = eog_seit.unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        // The E/G becomes the supplier of record; preserve a pending regular
+        // switch (lf_mp_id_next / lf_next_lieferbeginn) — its confirmation
+        // ends the fallback supply.
+        sqlx::query(
+            r#"INSERT INTO versorgungsstatus
+               (malo_id, tenant, lieferstatus, lf_mp_id, lieferbeginn,
+                nb_mp_id, eog_seit, last_process_id, updated_at, version)
+               VALUES ($1, $2, $3, $4, $5, $6, $5, $7, now(), 1)
+               ON CONFLICT (malo_id, tenant) DO UPDATE
+               SET lieferstatus    = EXCLUDED.lieferstatus,
+                   lf_mp_id        = EXCLUDED.lf_mp_id,
+                   lieferbeginn    = EXCLUDED.lieferbeginn,
+                   nb_mp_id        = EXCLUDED.nb_mp_id,
+                   eog_seit        = EXCLUDED.eog_seit,
+                   last_process_id = EXCLUDED.last_process_id,
+                   updated_at      = now(),
+                   version         = versorgungsstatus.version + 1"#,
+        )
+        .bind(malo_id)
+        .bind(tenant)
+        .bind(eog_status.to_string())
+        .bind(gv_mp_id)
+        .bind(eog_seit)
         .bind(nb_mp_id)
         .bind(process_id)
         .execute(&mut *tx)

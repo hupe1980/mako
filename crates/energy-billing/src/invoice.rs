@@ -302,99 +302,151 @@ impl Invoice {
         Some((self.brutto_eur / total_kwh * dec!(100)).round_kfm(4))
     }
 
-    /// Produce a BO4E-compatible `Rechnung` JSONB for `accountingd` ingestion.
+    /// Produce the fully-typed BO4E [`rubo4e::current::Rechnung`] for this invoice.
+    ///
+    /// This is the single source of the invoice document shape; the JSONB stored
+    /// by `billingd` and ingested by `accountingd` is exactly
+    /// `serde_json::to_value(self.to_rechnung())` (see [`Invoice::to_rechnung_json`]).
     ///
     /// ## Rechnungsdatum
     ///
     /// Set to `period_to` (last day of the billing period). The library is pure
     /// and has no concept of "today". Callers that need a different issue date
-    /// should mutate the returned JSON.
+    /// should set `rechnungsdatum` on the returned BO.
     ///
-    /// ## Zahlungsziel
+    /// ## Fälligkeitsdatum
     ///
-    /// `period_to + 14 days` — standard German energy retail practice.
-    /// Override in the returned JSON for contract-specific payment terms.
+    /// `period_to + 14 days` (§40c EnWG: payment due at the earliest two weeks
+    /// after receipt of the payment request). Override on the returned BO for
+    /// contract-specific payment terms.
+    ///
+    /// ## Where mako-specific facts live
+    ///
+    /// Everything with a BO4E-canonical field uses it (`rechnungstyp`,
+    /// `originalRechnungsnummer`, `marktlokation`, `zaehler`, `netzbetreiber`,
+    /// `vertrag`, `faelligkeitsdatum`, `zuZahlen`, …). Facts BO4E does not model
+    /// ride as `zusatzAttribute` (§40a Kilowattstundenpreis, §40b
+    /// Preisvergleichsdaten, §40 Abs. 2 Verbraucherinformationen, §42
+    /// Stromkennzeichnung, contract facts, audit ids). Per-position facts with
+    /// no BO4E home (`rechtlicheGrundlage`, `positionstyp`, `kategorie`) ride
+    /// as extension keys on the position so audit tooling keeps reading the
+    /// same flat fields.
+    ///
+    /// ## Money is Decimal-exact
+    ///
+    /// Every legally relevant amount (`gesamtnetto`, `gesamtsteuer`,
+    /// `gesamtbrutto`, `zuZahlen`, position amounts, Steuerbeträge,
+    /// Vorauszahlungen) is a `rust_decimal::Decimal` end to end — rubo4e
+    /// serialises `Decimal` as a JSON string, so no value ever passes through
+    /// an `f64`.
     #[must_use]
-    pub fn to_rechnung_json(&self) -> serde_json::Value {
+    #[allow(clippy::too_many_lines)]
+    #[cfg(feature = "bo4e")]
+    pub fn to_rechnung(&self) -> rubo4e::current::Rechnung {
+        use rubo4e::current as bo;
         let ctx = &self.context;
+
+        let betrag_eur = |wert: Decimal| bo::Betrag {
+            wert: Some(wert),
+            waehrung: Some(bo::Waehrungscode::Eur),
+            ..Default::default()
+        };
+
         // Derived from the positions, so the breakdown cannot drift from the totals.
-        let steuerbetraege_json: Vec<serde_json::Value> = self
+        let steuerbetraege: Vec<bo::Steuerbetrag> = self
             .tax_subtotals(ctx.regulatory_rates.mwst_rate)
             .iter()
-            .map(|s| serde_json::to_value(s.to_bo4e()).unwrap_or(serde_json::Value::Null))
+            .map(TaxSubtotal::to_bo4e)
             .collect();
-        let vorauszahlungen_json: Vec<serde_json::Value> = ctx
+
+        // Each advance as its own BO4E Vorauszahlung, carrying the date the
+        // customer paid it — §41 EnWG requires the reconciliation to be
+        // verifiable per payment, not as one lump sum.
+        let vorauszahlungen: Vec<bo::Vorauszahlung> = ctx
             .abschlage
             .iter()
-            .map(|a| {
-                serde_json::json!({
-                    "_typ": "VORAUSZAHLUNG",
-                    "betrag": { "_typ": "BETRAG", "wert": a.betrag_eur.to_string(), "waehrung": "EUR" },
-                    // BO4E types this as a datetime; the payment date carries no
-                    // time of day, so it is pinned to midnight UTC.
-                    "datum": a.datum.midnight().assume_utc()
-                        .format(&time::format_description::well_known::Rfc3339)
-                        .unwrap_or_default(),
-                    "referenz": a.beschreibung,
-                })
+            .map(|a| bo::Vorauszahlung {
+                betrag: Some(betrag_eur(a.betrag_eur)),
+                // BO4E types this as a datetime; the payment date carries no
+                // time of day, so it is pinned to midnight UTC.
+                datum: Some(a.datum.midnight().assume_utc()),
+                referenz: a.beschreibung.clone(),
+                ..Default::default()
             })
             .collect();
-        let pos_json: Vec<serde_json::Value> = self
+
+        let rechnungspositionen: Vec<bo::Rechnungsposition> = self
             .positions
             .iter()
             .enumerate()
             .map(|(i, p)| {
-                serde_json::json!({
-                    "_typ": "RECHNUNGSPOSITION",
-                    "positionsnummer": i + 1,
-                    "positionstext": p.description,
-                    "rechtlicheGrundlage": p.legal_basis,
-                    "positionsMenge": {
-                        "_typ": "MENGE",
-                        "wert": p.quantity.to_string(),
-                        "einheit": p.unit
-                    },
-                    "einzelpreis": {
-                        "_typ": "PREIS",
-                        "wert": p.unit_price_eur.to_string(),
-                        "einheit": "EUR"
-                    },
-                    "gesamtpreis": {
-                        "_typ": "BETRAG",
-                        "wert": p.net_eur.to_string(),
-                        "waehrung": "EUR"
-                    },
-                    "positionstyp": p.tags.first().map(String::as_str).unwrap_or("POSITION"),
-                    "kategorie": format!("{:?}", p.category),
-                    // The calculation trace travels with the position it explains.
-                    // BO4E has no field for one, so it rides as a ZusatzAttribut —
-                    // the sanctioned place for what the schema does not model. This
-                    // is the only surviving record of *why* the amount is what it
-                    // is once the Invoice value is dropped after storage.
-                    "zusatzAttribute": serde_json::to_value(&p.trace).ok().map(|t| {
-                        serde_json::json!([{
-                            "_typ": "ZUSATZ_ATTRIBUT",
-                            "name": "mako:calculation_trace",
-                            "wert": t,
-                        }])
+                let einheit = mengeneinheit_of(&p.unit);
+                let mut attrs: Vec<bo::ZusatzAttribut> = Vec::new();
+                // The calculation trace travels with the position it explains.
+                // BO4E has no field for one, so it rides as a ZusatzAttribut —
+                // the sanctioned place for what the schema does not model. This
+                // is the only surviving record of *why* the amount is what it
+                // is once the Invoice value is dropped after storage.
+                if let Ok(t) = serde_json::to_value(&p.trace) {
+                    attrs.push(zusatz_attribut("mako:calculation_trace", t));
+                }
+                // Units the BO4E Mengeneinheit vocabulary cannot express
+                // ("EUR", "Ereignisse", "Sessionen", …) keep their original
+                // spelling here instead of being silently dropped.
+                if einheit.is_none() && !p.unit.is_empty() {
+                    attrs.push(zusatz_attribut(
+                        "mako:einheit",
+                        serde_json::Value::String(p.unit.clone()),
+                    ));
+                }
+                let mut pos = bo::Rechnungsposition {
+                    positionsnummer: Some((i + 1) as i64),
+                    positionstext: Some(p.description.clone()),
+                    positions_menge: Some(bo::Menge {
+                        wert: Some(p.quantity),
+                        einheit,
+                        ..Default::default()
                     }),
-                })
+                    einzelpreis: Some(bo::Preis {
+                        wert: Some(p.unit_price_eur),
+                        einheit: Some(bo::Waehrungseinheit::Eur),
+                        ..Default::default()
+                    }),
+                    gesamtpreis: Some(betrag_eur(p.net_eur)),
+                    zusatz_attribute: Some(attrs),
+                    ..Default::default()
+                };
+                // BO4E Rechnungsposition has no field for these; they ride as
+                // extension keys (round-trip-preserved by rubo4e) so the audit
+                // tooling keeps reading the same flat fields it always did.
+                if let Some(lb) = &p.legal_basis {
+                    pos._additional
+                        .try_insert("rechtlicheGrundlage".to_owned(), serde_json::json!(lb));
+                }
+                pos._additional.try_insert(
+                    "positionstyp".to_owned(),
+                    serde_json::json!(p.tags.first().map(String::as_str).unwrap_or("POSITION")),
+                );
+                pos._additional.try_insert(
+                    "kategorie".to_owned(),
+                    serde_json::json!(format!("{:?}", p.category)),
+                );
+                pos
             })
             .collect();
 
-        let zahlungsziel = ctx.period_to() + time::Duration::days(14);
+        let faelligkeitsdatum = ctx.period_to() + time::Duration::days(14);
 
         // Collect ZusatzAttribute from info positions tagged "gasqualitaet"
-        let mut zusatz_attribute: Vec<serde_json::Value> = self
+        let mut zusatz_attribute: Vec<bo::ZusatzAttribut> = self
             .positions
             .iter()
             .filter(|p| p.has_tag("gasqualitaet") && p.category == PositionCategory::Info)
             .map(|p| {
-                serde_json::json!({
-                    "_typ": "ZUSATZ_ATTRIBUT",
-                    "name": "gasqualitaet",
-                    "wert": p.legal_basis.as_deref().unwrap_or("")
-                })
+                zusatz_attribut(
+                    "gasqualitaet",
+                    serde_json::json!(p.legal_basis.as_deref().unwrap_or("")),
+                )
             })
             .collect();
 
@@ -416,11 +468,7 @@ impl Invoice {
                 ),
             ] {
                 if let Some(wert) = wert {
-                    zusatz_attribute.push(serde_json::json!({
-                        "_typ": "ZUSATZ_ATTRIBUT",
-                        "name": name,
-                        "wert": wert
-                    }));
+                    zusatz_attribute.push(zusatz_attribut(name, serde_json::json!(wert)));
                 }
             }
         }
@@ -430,59 +478,57 @@ impl Invoice {
         if let Some(quellen) = &ctx.energiequellen
             && let Ok(wert) = serde_json::to_value(quellen)
         {
-            zusatz_attribute.push(serde_json::json!({
-                "_typ": "ZUSATZ_ATTRIBUT",
-                "name": "stromkennzeichnung",
-                "wert": wert
-            }));
+            zusatz_attribute.push(zusatz_attribut("stromkennzeichnung", wert));
         }
 
         // §41 EnWG Abs. 1 Nr. 3 — Verbrauchshistorie summary as ZusatzAttribut
         if let Some(vh) = &ctx.verbrauchshistorie {
             if let Some(vj) = vh.vorjahr_kwh {
-                zusatz_attribute.push(serde_json::json!({
-                    "_typ": "ZUSATZ_ATTRIBUT",
-                    "name": "verbrauchVorjahr",
-                    "wert": vj.to_string()
-                }));
+                zusatz_attribute.push(zusatz_attribut(
+                    "verbrauchVorjahr",
+                    serde_json::json!(vj.to_string()),
+                ));
             }
             if let Some(avg) = vh.bundesdurchschnitt_kwh {
-                zusatz_attribute.push(serde_json::json!({
-                    "_typ": "ZUSATZ_ATTRIBUT",
-                    "name": "verbrauchBundesdurchschnitt",
-                    "wert": avg.to_string()
-                }));
+                zusatz_attribute.push(zusatz_attribut(
+                    "verbrauchBundesdurchschnitt",
+                    serde_json::json!(avg.to_string()),
+                ));
             }
         }
 
         // Audit trail: billing run ID for ERP reconciliation and duplicate detection.
         if let Some(run_id) = &self.billing_run_id {
-            zusatz_attribute.push(serde_json::json!({
-                "_typ": "ZUSATZ_ATTRIBUT",
-                "name": "billingRunId",
-                "wert": run_id
-            }));
+            zusatz_attribute.push(zusatz_attribut("billingRunId", serde_json::json!(run_id)));
         }
 
         // Customer category for downstream ERP routing and regulatory rule selection.
-        {
-            let kat = format!("{:?}", ctx.kundenkategorie);
-            zusatz_attribute.push(serde_json::json!({
-                "_typ": "ZUSATZ_ATTRIBUT",
-                "name": "kundenkategorie",
-                "wert": kat
-            }));
-        }
+        zusatz_attribute.push(zusatz_attribut(
+            "kundenkategorie",
+            serde_json::json!(format!("{:?}", ctx.kundenkategorie)),
+        ));
 
         // The contractual regime the prices come from — Grundversorgung invoices
         // bill the published Allgemeine Preise (§36 EnWG, §5 StromGVV/GasGVV),
         // Ersatzversorgung the §38 EnWG fallback terms. Emitted for every
         // invoice so the regime is explicit, not inferred from the tariff.
-        zusatz_attribute.push(serde_json::json!({
-            "_typ": "ZUSATZ_ATTRIBUT",
-            "name": "vertragsart",
-            "wert": ctx.vertragsart.label()
-        }));
+        zusatz_attribute.push(zusatz_attribut(
+            "vertragsart",
+            serde_json::json!(ctx.vertragsart.label()),
+        ));
+
+        // Process-level Rechnungsart labels the BO4E `Rechnungstyp` vocabulary
+        // cannot express (GUTSCHRIFT, KORREKTURRECHNUNG, STORNORECHNUNG,
+        // TEILRECHNUNG) survive as a ZusatzAttribut; the typed `rechnungstyp`,
+        // `istStorno` and `originalRechnungsnummer` fields carry what BO4E can.
+        if ctx.invoice_type.rechnungstyp().is_none()
+            || ctx.invoice_type == crate::context::InvoiceType::PartialInvoice
+        {
+            zusatz_attribute.push(zusatz_attribut(
+                "rechnungsart",
+                serde_json::json!(ctx.invoice_type.rechnungsart()),
+            ));
+        }
 
         // §40a EnWG Abs. 1 — Kilowattstundenpreis (all-inclusive total price per kWh).
         // Compute from brutto_eur / billable kWh. Use total eligible kWh from positions.
@@ -503,66 +549,34 @@ impl Invoice {
             None
         };
 
-        serde_json::json!({
-            "_typ": "RECHNUNG",
-            "rechnungsnummer": ctx.rechnungsnummer,
-            "rechnungsart": ctx.invoice_type.rechnungsart(),
-            "rechnungsdatum": ctx.period_to().to_string(),  // deterministic: no now()
-            "originalRechnungsId": ctx.invoice_type.original_invoice_id(),
-            "marktlokationsId": ctx.malo_id,
-            "zaehlerIdLieferstelle": ctx.zaehler_id,
-            "herausgeber": {
-                "_typ": "MARKTTEILNEHMER",
-                "marktpartnercode": ctx.lf_mp_id
-            },
-            // §41 Abs. 1 Nr. 5 EnWG — Netzbetreiber identification (mandatory on energy invoices).
-            // Identifies the network operator providing grid access at the delivery point.
-            "netzbetreiber": ctx.nb_mp_id.as_deref().map(|id| serde_json::json!({
-                "_typ": "MARKTTEILNEHMER",
-                "marktpartnercode": id
-            })),
-            "vertragsId": ctx.contract_id,
-            "rechnungsperiode": {
-                "_typ": "ZEITRAUM",
-                "startdatum": ctx.period_from().to_string(),
-                "enddatum": ctx.period_to().to_string()
-            },
-            "rechnungspositionen": pos_json,
-            "zusatzAttribute": if zusatz_attribute.is_empty() { serde_json::Value::Null } else { serde_json::json!(zusatz_attribute) },
-            // Rounded to cents: these are document totals, and the Steuerbeträge
-            // they must reconcile against are themselves stated to the cent.
-            "gesamtnetto":  { "_typ": "BETRAG", "wert": self.netto_eur.round_kfm(2).to_string(),  "waehrung": "EUR" },
-            "gesamtsteuer": { "_typ": "BETRAG", "wert": self.mwst_eur.round_kfm(2).to_string(),   "waehrung": "EUR" },
-            "gesamtbrutto": { "_typ": "BETRAG", "wert": self.brutto_eur.round_kfm(2).to_string(), "waehrung": "EUR" },
-            // BO4E: "Eine Liste mit Steuerbeträgen pro Steuerkennzeichen/Steuersatz;
-            // die Summe dieser Beträge ergibt den Wert für gesamtsteuer." Also
-            // EN 16931 BG-23, which a receiving system validates rate-by-rate:
-            // gesamtsteuer alone cannot describe an invoice that mixes rates.
-            "steuerbetraege": steuerbetraege_json,
-            // Each advance as its own BO4E Vorauszahlung, carrying the date the
-            // customer paid it — §41 EnWG requires the reconciliation to be
-            // verifiable per payment, not as one lump sum.
-            "vorauszahlungen": vorauszahlungen_json,
-            "zahlbetrag": { "_typ": "BETRAG", "wert": self.zahlbetrag_eur.round_kfm(2).to_string(), "waehrung": "EUR" },
-            // §40a EnWG Abs. 1 Satz 2 — Gesamtbetrag je Kilowattstunde (all-inclusive ct/kWh).
-            // Only set when consumption positions exist (electricity commodity kWh known).
-            "kilowattstundenpreisGesamt": kilowattstundenpreis_ct.map(|ct| serde_json::json!({
-                "_typ": "PREIS",
-                "wert": ct.to_string(),
-                "einheit": "ct/kWh",
-                "bezugswert": "KWH",
-                "rechtlicheGrundlage": "§40a EnWG"
-            })),
-            // §40b EnWG — Strukturierte Preisvergleichsdaten für Vergleichsportale.
-            // Enables price comparison portals (e.g. Verivox, Check24, BNetzA tools)
-            // to ingest tariff structure from the invoice machine-readably.
-            "preisvergleichsdaten": {
-                "_typ": "PREISVERGLEICH",
+        // §40a EnWG Abs. 1 Satz 2 — Gesamtbetrag je Kilowattstunde (all-inclusive
+        // ct/kWh). Not a lawful BO4E Preis (its Einheit is ct/kWh, not a
+        // Waehrungseinheit), so it rides as a structured ZusatzAttribut.
+        // Only set when consumption positions exist (electricity commodity kWh known).
+        if let Some(ct) = kilowattstundenpreis_ct {
+            zusatz_attribute.push(zusatz_attribut(
+                "kilowattstundenpreisGesamt",
+                serde_json::json!({
+                    "wert": ct.to_string(),
+                    "einheit": "ct/kWh",
+                    "bezugswert": "KWH",
+                    "rechtlicheGrundlage": "§40a EnWG"
+                }),
+            ));
+        }
+
+        // §40b EnWG — Strukturierte Preisvergleichsdaten für Vergleichsportale.
+        // Enables price comparison portals (e.g. Verivox, Check24, BNetzA tools)
+        // to ingest tariff structure from the invoice machine-readably. No BO4E
+        // home exists, so it rides as a structured ZusatzAttribut.
+        zusatz_attribute.push(zusatz_attribut(
+            "preisvergleichsdaten",
+            serde_json::json!({
                 "grundpreisEurProJahr": self.positions.iter()
                     .filter(|p| p.has_tag("commodity") && p.unit == "Tage")
                     .map(|p| p.unit_price_eur * dec!(365))
                     .next()
-                    .map(|eur_year| serde_json::json!({ "_typ": "BETRAG", "wert": eur_year.to_string(), "waehrung": "EUR" })),
+                    .map(|eur_year| serde_json::json!({ "wert": eur_year.to_string(), "waehrung": "EUR" })),
                 "arbeitspreisCtProKwh": self.positions.iter()
                     .filter(|p| (p.has_tag("strom") || p.has_tag("gas")) && p.category == crate::position::PositionCategory::Commodity && p.unit.starts_with("kWh"))
                     .map(|p| (p.unit_price_eur * dec!(100)).round_kfm(4))
@@ -570,21 +584,127 @@ impl Invoice {
                     .map(|ct| ct.to_string()),
                 "gesamtpreisCtProKwh": kilowattstundenpreis_ct.map(|ct| ct.to_string()),
                 "rechtlicheGrundlage": "§40b EnWG"
-            },
-            "rechnungsempfaenger": {
-                "_typ": "MARKTTEILNEHMER",
-                "externeKundenId": ctx.malo_id
-            },
-            // §40 Abs. 2 EnWG Nr. 1/9/10/11/12 — supplier contact,
-            // Schlichtungsstelle Energie (§111b EnWG), BNetzA
-            // Verbraucherservice, Energieberatung and Wechselhinweis. Falls
-            // back to the statutory defaults so the mandatory hints are never
-            // silently absent from a Letztverbraucher invoice.
-            "verbraucherinformationen": serde_json::to_value(
-                ctx.verbraucherinformationen.clone().unwrap_or_default()
-            ).unwrap_or(serde_json::Value::Null),
-            "zahlungsziel": zahlungsziel.to_string()
-        })
+            }),
+        ));
+
+        // §40 Abs. 2 EnWG Nr. 1/9/10/11/12 — supplier contact,
+        // Schlichtungsstelle Energie (§111b EnWG), BNetzA Verbraucherservice,
+        // Energieberatung and Wechselhinweis. Falls back to the statutory
+        // defaults so the mandatory hints are never silently absent from a
+        // Letztverbraucher invoice. BO4E does not model them, so they ride as
+        // one structured ZusatzAttribut.
+        if let Ok(vi) =
+            serde_json::to_value(ctx.verbraucherinformationen.clone().unwrap_or_default())
+        {
+            zusatz_attribute.push(zusatz_attribut("verbraucherinformationen", vi));
+        }
+
+        // §41 Abs. 1 Nr. 5 EnWG — Netzbetreiber identification (mandatory on
+        // energy invoices). Identifies the network operator providing grid
+        // access at the delivery point. A code that is not a valid 13-digit
+        // Marktpartner-ID still survives, as a ZusatzAttribut on the BO.
+        let netzbetreiber = ctx.nb_mp_id.as_deref().map(|id| {
+            let rollencodenummer = rubo4e::identifiers::MarktpartnerId::new(id).ok();
+            let zusatz_attribute = rollencodenummer
+                .is_none()
+                .then(|| vec![zusatz_attribut("marktpartnercode", serde_json::json!(id))]);
+            Box::new(bo::Marktteilnehmer {
+                rollencodenummer,
+                zusatz_attribute,
+                ..Default::default()
+            })
+        });
+
+        bo::Rechnung {
+            rechnungsnummer: Some(ctx.rechnungsnummer.clone()),
+            rechnungstyp: ctx.invoice_type.rechnungstyp(),
+            // BO4E marks a Stornorechnung with `istStorno`, not a Rechnungstyp.
+            ist_storno: ctx.invoice_type.is_reversal().then_some(true),
+            original_rechnungsnummer: ctx.invoice_type.original_invoice_id().map(str::to_owned),
+            rechnungsdatum: Some(ctx.period_to()), // deterministic: no now()
+            faelligkeitsdatum: Some(faelligkeitsdatum),
+            // The delivery point as a typed Marktlokation. `_id` always carries
+            // the raw string; `marktlokationsId` only when it passes the BDEW
+            // checksum — a synthetic or aggregate subject id must not claim to
+            // be a valid MaLo-ID.
+            marktlokation: (!ctx.malo_id.is_empty()).then(|| {
+                Box::new(bo::Marktlokation {
+                    id: Some(ctx.malo_id.clone()),
+                    marktlokations_id: rubo4e::identifiers::MaloId::new(&ctx.malo_id).ok(),
+                    ..Default::default()
+                })
+            }),
+            // §41 EnWG — Zählernummer, as the typed Zaehler BO.
+            zaehler: ctx.zaehler_id.as_ref().map(|z| {
+                vec![Box::new(bo::Zaehler {
+                    zaehlernummer: Some(z.clone()),
+                    ..Default::default()
+                })]
+            }),
+            // The issuer. Geschaeftspartner has no Marktpartner-code field, so
+            // the code rides as a ZusatzAttribut; the display name comes from
+            // the §40 Abs. 2 Nr. 1 supplier identity when provided.
+            rechnungsersteller: Some(Box::new(bo::Geschaeftspartner {
+                organisationsname: ctx
+                    .verbraucherinformationen
+                    .as_ref()
+                    .and_then(|vi| vi.lieferant_name.clone()),
+                zusatz_attribute: Some(vec![zusatz_attribut(
+                    "marktpartnercode",
+                    serde_json::json!(ctx.lf_mp_id),
+                )]),
+                ..Default::default()
+            })),
+            netzbetreiber,
+            vertrag: ctx.contract_id.as_ref().map(|c| {
+                Box::new(bo::Vertrag {
+                    vertragsnummer: Some(c.clone()),
+                    ..Default::default()
+                })
+            }),
+            rechnungsperiode: Some(bo::Zeitraum {
+                startdatum: Some(ctx.period_from()),
+                enddatum: Some(ctx.period_to()),
+                ..Default::default()
+            }),
+            rechnungspositionen: Some(rechnungspositionen),
+            zusatz_attribute: (!zusatz_attribute.is_empty()).then_some(zusatz_attribute),
+            // Rounded to cents: these are document totals, and the Steuerbeträge
+            // they must reconcile against are themselves stated to the cent.
+            gesamtnetto: Some(betrag_eur(self.netto_eur.round_kfm(2))),
+            gesamtsteuer: Some(betrag_eur(self.mwst_eur.round_kfm(2))),
+            gesamtbrutto: Some(betrag_eur(self.brutto_eur.round_kfm(2))),
+            // BO4E: "Eine Liste mit Steuerbeträgen pro Steuerkennzeichen/Steuersatz;
+            // die Summe dieser Beträge ergibt den Wert für gesamtsteuer." Also
+            // EN 16931 BG-23, which a receiving system validates rate-by-rate:
+            // gesamtsteuer alone cannot describe an invoice that mixes rates.
+            steuerbetraege: Some(steuerbetraege),
+            vorauszahlungen: Some(vorauszahlungen),
+            // BO4E `zuZahlen`: gesamtbrutto − vorausbezahlt (§41 EnWG balance).
+            zu_zahlen: Some(betrag_eur(self.zahlbetrag_eur.round_kfm(2))),
+            // The recipient. The engine knows the customer only through the
+            // MaLo; the reference survives as a ZusatzAttribut on the BO.
+            rechnungsempfaenger: Some(Box::new(bo::Geschaeftspartner {
+                zusatz_attribute: Some(vec![zusatz_attribut(
+                    "externeKundenId",
+                    serde_json::json!(ctx.malo_id),
+                )]),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+    }
+
+    /// The BO4E `Rechnung` as a `serde_json::Value` — exactly
+    /// `serde_json::to_value(self.to_rechnung())`.
+    ///
+    /// Kept for callers that store or transport the document as JSONB.
+    /// Serialising a fully-owned BO cannot fail, so an error is unreachable in
+    /// practice; it would surface as `Value::Null` rather than a panic.
+    #[must_use]
+    #[cfg(feature = "bo4e")]
+    pub fn to_rechnung_json(&self) -> serde_json::Value {
+        serde_json::to_value(self.to_rechnung()).unwrap_or(serde_json::Value::Null)
     }
 
     /// Merge two invoices for adjacent billing periods (§41 EnWG Tarifwechsel).
@@ -721,6 +841,45 @@ impl Invoice {
     }
 }
 
+// ── BO4E construction helpers ─────────────────────────────────────────────────
+
+/// A BO4E `ZusatzAttribut` — the sanctioned extension point for facts the
+/// schema does not model.
+#[cfg(feature = "bo4e")]
+fn zusatz_attribut(name: &str, wert: serde_json::Value) -> rubo4e::current::ZusatzAttribut {
+    rubo4e::current::ZusatzAttribut {
+        name: Some(name.to_owned()),
+        wert: Some(wert),
+        ..Default::default()
+    }
+}
+
+/// Map an engine unit string onto the BO4E `Mengeneinheit` vocabulary.
+///
+/// Returns `None` for units BO4E cannot express (`"EUR"` on tax lines,
+/// `"Ereignisse"`, `"Sessionen"`, `"m²"`, …); the caller preserves the original
+/// spelling as a `mako:einheit` ZusatzAttribut in that case. `"kWh_Hs"` maps to
+/// `KWH`: gas is billed in kWh on the superior calorific basis (§25 Nr. 4
+/// MessEV), and the Brennwert derivation is recorded in the position trace.
+#[cfg(feature = "bo4e")]
+fn mengeneinheit_of(unit: &str) -> Option<rubo4e::current::Mengeneinheit> {
+    use rubo4e::current::Mengeneinheit as M;
+    match unit {
+        "kWh" | "kWh_Hs" => Some(M::Kwh),
+        "MWh" => Some(M::Mwh),
+        "kW" => Some(M::Kw),
+        "Tag" | "Tage" => Some(M::Tag),
+        "Woche" | "Wochen" => Some(M::Woche),
+        "Monat" | "Monate" => Some(M::Monat),
+        "Jahr" | "Jahre" => Some(M::Jahr),
+        "h" | "Stunde" | "Stunden" => Some(M::Stunde),
+        "m³" | "m3" => Some(M::Kubikmeter),
+        "%" => Some(M::Prozent),
+        "Stück" => Some(M::Stueck),
+        _ => None,
+    }
+}
+
 // ── Correction / Storno helpers ───────────────────────────────────────────────
 
 /// Produce a Korrekturrechnung (correction invoice) JSON from a stored Rechnung JSON.
@@ -735,9 +894,11 @@ impl Invoice {
 ///
 /// ## What this produces
 ///
-/// - `rechnungsart` → `"KORREKTURRECHNUNG"` (or `"STORNORECHNUNG"` for full cancellations)
 /// - `istOriginal` → `false`
 /// - `originalRechnungsnummer` → the original invoice number
+/// - ZusatzAttribut `rechnungsart` → `"KORREKTURRECHNUNG"` (BO4E has no
+///   Korrektur value in `Rechnungstyp`; the process label rides as the same
+///   attribute `to_rechnung()` uses)
 /// - All `wert` monetary fields → sign-negated
 ///
 /// ## Moved from `handlers.rs`
@@ -760,15 +921,12 @@ pub fn negate_rechnung_json_for_correction(
             "rechnungsnummer".to_owned(),
             serde_json::json!(new_rechnungsnummer),
         );
-        obj.insert(
-            "rechnungsart".to_owned(),
-            serde_json::json!("KORREKTURRECHNUNG"),
-        );
+        upsert_rechnungsart_attribut(obj, "KORREKTURRECHNUNG");
 
         negate_betrag_in_obj(obj, "gesamtbrutto");
         negate_betrag_in_obj(obj, "gesamtnetto");
         negate_betrag_in_obj(obj, "gesamtsteuer");
-        negate_betrag_in_obj(obj, "zahlbetrag");
+        negate_betrag_in_obj(obj, "zuZahlen");
 
         // The VAT breakdown must follow gesamtsteuer: BO4E requires the
         // Steuerbeträge to sum to it, and a correction that negates the total
@@ -803,6 +961,29 @@ pub fn negate_rechnung_json_for_correction(
         }
     }
     corrected
+}
+
+/// Set (or replace) the `rechnungsart` ZusatzAttribut on a stored Rechnung JSON.
+///
+/// Tolerates a missing or `null` `zusatzAttribute` array — older or
+/// hand-assembled documents still get the label.
+fn upsert_rechnungsart_attribut(obj: &mut serde_json::Map<String, serde_json::Value>, label: &str) {
+    let attrs = obj
+        .entry("zusatzAttribute")
+        .or_insert_with(|| serde_json::json!([]));
+    if !attrs.is_array() {
+        *attrs = serde_json::json!([]);
+    }
+    if let Some(arr) = attrs.as_array_mut() {
+        if let Some(existing) = arr
+            .iter_mut()
+            .find(|a| a.get("name").and_then(|n| n.as_str()) == Some("rechnungsart"))
+        {
+            existing["wert"] = serde_json::json!(label);
+        } else {
+            arr.push(serde_json::json!({ "name": "rechnungsart", "wert": label }));
+        }
+    }
 }
 
 fn negate_betrag_in_obj(obj: &mut serde_json::Map<String, serde_json::Value>, key: &str) {
@@ -929,6 +1110,7 @@ impl TaxSubtotal {
 
     /// Project into the BO4E [`rubo4e::current::Steuerbetrag`].
     #[must_use]
+    #[cfg(feature = "bo4e")]
     pub fn to_bo4e(&self) -> rubo4e::current::Steuerbetrag {
         rubo4e::current::Steuerbetrag {
             basiswert: Some(self.taxable_base_eur),
@@ -990,7 +1172,7 @@ pub fn tax_subtotals_of(positions: &[BillingPosition], default_rate: Decimal) ->
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "bo4e"))]
 mod tax_subtotal_tests {
     use super::*;
     use crate::position::PositionCategory;
@@ -1118,7 +1300,7 @@ mod tax_subtotal_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "bo4e"))]
 mod rechnung_json_tests {
     use super::*;
     use crate::context::AbschlagDeduction;
@@ -1183,6 +1365,232 @@ mod rechnung_json_tests {
         assert_eq!(
             vorauszahlungen[0].betrag.as_ref().and_then(|b| b.wert),
             Some(dec!(119.00))
+        );
+    }
+
+    /// Every §40/§41/§42 EnWG Pflichtangabe the JSON builder used to emit must
+    /// survive the typed-BO migration — enumerated one by one, not sampled.
+    ///
+    /// Typed fields: Zählernummer (§41 Abs. 1 Nr. 6 → `zaehler`), Netzbetreiber
+    /// (§41 Abs. 1 Nr. 5 → `netzbetreiber.rollencodenummer`), Abrechnungszeitraum
+    /// (§40 Abs. 1 → `rechnungsperiode`), Fälligkeit (§40c → `faelligkeitsdatum`).
+    /// ZusatzAttribute: contract facts (§40 Abs. 1), Verbraucherinformationen
+    /// (§40 Abs. 2), Kilowattstundenpreis (§40a), Preisvergleichsdaten (§40b),
+    /// Verbrauchshistorie (§41 Abs. 1 Nr. 3), Stromkennzeichnung (§42), plus
+    /// the mako audit facts (billingRunId, kundenkategorie, vertragsart).
+    #[test]
+    fn every_sect40_pflichtangabe_survives_the_typed_migration() {
+        use time::macros::date;
+        let ctx = BillingContext {
+            malo_id: "51238696780".to_owned(), // valid BDEW checksum
+            lf_mp_id: "9900000000001".to_owned(),
+            rechnungsnummer: "R40-PFLICHT-1".to_owned(),
+            period: crate::BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31))
+                .unwrap(),
+            zaehler_id: Some("1EFW1234567".to_owned()),
+            nb_mp_id: Some("9900357000004".to_owned()),
+            contract_id: Some("V-2026-042".to_owned()),
+            billing_run_id: Some("run-1".to_owned()),
+            verbrauchshistorie: Some(crate::context::Verbrauchshistorie {
+                vorjahr_kwh: Some(dec!(5800)),
+                bundesdurchschnitt_kwh: Some(dec!(3500)),
+                kundengruppe: None,
+            }),
+            vertragsinformationen: Some(crate::context::Vertragsinformationen {
+                vertragsdauer: Some("24 Monate".to_owned()),
+                kuendigungsfrist: Some("6 Wochen".to_owned()),
+                naechstmoeglicher_kuendigungstermin: Some(date!(2026 - 12 - 31)),
+                naechster_abrechnungstermin: Some(date!(2027 - 01 - 31)),
+            }),
+            energiequellen: Some(crate::tariff::EnergieQuellen {
+                erneuerbar_pct: dec!(100),
+                co2_g_per_kwh: Decimal::ZERO,
+                hkn_certified: true,
+                ..Default::default()
+            }),
+            ..BillingContext::default()
+        };
+        let positions = vec![
+            {
+                let mut p = BillingPosition::debit(
+                    "Arbeitspreis",
+                    dec!(500),
+                    "kWh",
+                    dec!(0.30),
+                    PositionCategory::Commodity,
+                );
+                p.tags.push("strom".to_owned());
+                p.tags.push("arbeitspreis".to_owned());
+                p
+            },
+            BillingPosition::debit(
+                "MwSt 19 %",
+                Decimal::ONE,
+                "EUR",
+                dec!(28.50),
+                PositionCategory::Tax,
+            ),
+        ];
+        let invoice = Invoice::from_positions(ctx, positions, vec![]);
+        let rechnung = invoice.to_rechnung();
+
+        // Typed §40/§41 fields.
+        assert_eq!(
+            rechnung
+                .zaehler
+                .as_ref()
+                .and_then(|z| z[0].zaehlernummer.clone()),
+            Some("1EFW1234567".to_owned()),
+            "§41 Abs. 1 Nr. 6 — Zählernummer"
+        );
+        assert_eq!(
+            rechnung
+                .netzbetreiber
+                .as_ref()
+                .and_then(|nb| nb.rollencodenummer.as_ref())
+                .map(|id| id.as_ref().to_owned()),
+            Some("9900357000004".to_owned()),
+            "§41 Abs. 1 Nr. 5 — Netzbetreiber"
+        );
+        assert_eq!(
+            rechnung
+                .marktlokation
+                .as_ref()
+                .and_then(|m| m.marktlokations_id.as_ref())
+                .map(|id| id.as_ref().to_owned()),
+            Some("51238696780".to_owned()),
+            "checksum-valid MaLo lands in the typed field"
+        );
+        assert_eq!(
+            rechnung
+                .vertrag
+                .as_ref()
+                .and_then(|v| v.vertragsnummer.clone()),
+            Some("V-2026-042".to_owned())
+        );
+        assert_eq!(rechnung.faelligkeitsdatum, Some(date!(2026 - 02 - 14)));
+        let periode = rechnung
+            .rechnungsperiode
+            .as_ref()
+            .expect("rechnungsperiode");
+        assert_eq!(periode.startdatum, Some(date!(2026 - 01 - 01)));
+        assert_eq!(periode.enddatum, Some(date!(2026 - 01 - 31)));
+
+        // Every ZusatzAttribut Pflichtangabe, by name.
+        let attrs = rechnung.zusatz_attribute.as_ref().expect("zusatzAttribute");
+        let names: Vec<&str> = attrs.iter().filter_map(|a| a.name.as_deref()).collect();
+        for required in [
+            "vertragsdauer",                       // §40 Abs. 1
+            "kuendigungsfrist",                    // §40 Abs. 1
+            "naechstmoeglicher_kuendigungstermin", // §40 Abs. 1
+            "naechster_abrechnungstermin",         // §40 Abs. 1
+            "verbraucherinformationen",            // §40 Abs. 2 Nr. 1/9/10/11/12
+            "kilowattstundenpreisGesamt",          // §40a
+            "preisvergleichsdaten",                // §40b
+            "verbrauchVorjahr",                    // §41 Abs. 1 Nr. 3a
+            "verbrauchBundesdurchschnitt",         // §41 Abs. 1 Nr. 3b
+            "stromkennzeichnung",                  // §42
+            "billingRunId",                        // audit trail
+            "kundenkategorie",                     // ERP routing
+            "vertragsart",                         // §36/§38/§41 regime
+        ] {
+            assert!(
+                names.contains(&required),
+                "Pflichtangabe {required:?} missing; present: {names:?}"
+            );
+        }
+
+        // The §40 Abs. 2 statutory hints fall back to their defaults — never
+        // silently absent from a Letztverbraucher invoice.
+        let vi = attrs
+            .iter()
+            .find(|a| a.name.as_deref() == Some("verbraucherinformationen"))
+            .and_then(|a| a.wert.clone())
+            .expect("verbraucherinformationen wert");
+        for key in [
+            "schlichtungsstelle",
+            "bnetza_verbraucherservice",
+            "energieberatung",
+            "wechselhinweis",
+        ] {
+            assert!(
+                vi[key].as_str().is_some_and(|s| !s.is_empty()),
+                "§40 Abs. 2 hint {key:?} must be non-empty"
+            );
+        }
+    }
+
+    /// Legally relevant totals round-trip Decimal-exact through the JSON —
+    /// serialised as strings by rubo4e, never through an `f64`.
+    #[test]
+    fn money_round_trips_decimal_exact() {
+        let ctx = BillingContext {
+            abschlage: vec![AbschlagDeduction {
+                datum: date!(2026 - 03 - 15),
+                betrag_eur: dec!(119.01),
+                ust_satz: dec!(0.19),
+                beschreibung: None,
+            }],
+            invoice_type: crate::context::InvoiceType::Final,
+            ..BillingContext::default()
+        };
+        // An awkward net that exercises rounding: 333.335 → totals to the cent.
+        let positions = vec![
+            BillingPosition::debit(
+                "Arbeitspreis",
+                dec!(1111.1),
+                "kWh",
+                dec!(0.30003),
+                PositionCategory::Commodity,
+            ),
+            BillingPosition::debit(
+                "MwSt 19 %",
+                Decimal::ONE,
+                "EUR",
+                dec!(63.33),
+                PositionCategory::Tax,
+            ),
+        ];
+        let invoice = Invoice::from_positions(ctx, positions, vec![]);
+        let json = invoice.to_rechnung_json();
+        let back: rubo4e::current::Rechnung =
+            serde_json::from_value(json).expect("typed round-trip");
+
+        let wert = |b: &Option<rubo4e::current::Betrag>| b.as_ref().and_then(|b| b.wert);
+        assert_eq!(
+            wert(&back.gesamtnetto),
+            Some(invoice.netto_eur.round_kfm(2))
+        );
+        assert_eq!(
+            wert(&back.gesamtsteuer),
+            Some(invoice.mwst_eur.round_kfm(2))
+        );
+        assert_eq!(
+            wert(&back.gesamtbrutto),
+            Some(invoice.brutto_eur.round_kfm(2))
+        );
+        assert_eq!(
+            wert(&back.zu_zahlen),
+            Some(invoice.zahlbetrag_eur.round_kfm(2))
+        );
+        assert_eq!(
+            back.vorauszahlungen.as_ref().unwrap()[0]
+                .betrag
+                .as_ref()
+                .and_then(|b| b.wert),
+            Some(dec!(119.01)),
+            "advance gross survives to the exact cent"
+        );
+        // Position amounts survive at full engine precision (5 dp), exactly.
+        let pos = &back.rechnungspositionen.as_ref().unwrap()[0];
+        assert_eq!(
+            pos.gesamtpreis.as_ref().and_then(|b| b.wert),
+            Some(invoice.positions[0].net_eur)
+        );
+        assert_eq!(invoice.positions[0].net_eur, dec!(333.36333));
+        assert_eq!(
+            pos.einzelpreis.as_ref().and_then(|p| p.wert),
+            Some(dec!(0.30003))
         );
     }
 

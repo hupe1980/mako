@@ -43,6 +43,7 @@ fn map_edge(
         nach_typ: row.try_get("nach_typ")?,
         valid_from: row.try_get("valid_from").unwrap_or(None),
         valid_to: row.try_get("valid_to").unwrap_or(None),
+        lokationsbuendelcode: row.try_get("lokationsbuendelcode").unwrap_or(None),
         data: row.try_get("data")?,
         depth,
     })
@@ -64,16 +65,24 @@ impl LokationszuordnungRepository for PgLokationszuordnungRepository {
         // Use two separate upsert paths matching the two partial unique indexes:
         // - open-ended edges (valid_from IS NULL): ON CONFLICT (tenant, von_id, nach_id) WHERE valid_from IS NULL
         // - dated edges: ON CONFLICT (tenant, von_id, nach_id, valid_from) WHERE valid_from IS NOT NULL
+        //
+        // `lokationsbuendelcode` is extracted from the BO4E Lokationszuordnung
+        // payload into a typed column (JSONB-fidelity + typed-column pattern).
+        let lokationsbuendelcode = data
+            .get("lokationsbuendelcode")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
         let id = if valid_from.is_none() {
             sqlx::query_scalar::<_, String>(
                 r"INSERT INTO lokationszuordnungen
-                      (tenant, von_id, von_typ, nach_id, nach_typ, valid_from, valid_to, data, updated_at)
-                  VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, now())
+                      (tenant, von_id, von_typ, nach_id, nach_typ, valid_from, valid_to, lokationsbuendelcode, data, updated_at)
+                  VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8, now())
                   ON CONFLICT (tenant, von_id, nach_id) WHERE valid_from IS NULL
                   DO UPDATE SET
                       von_typ    = EXCLUDED.von_typ,
                       nach_typ   = EXCLUDED.nach_typ,
                       valid_to   = EXCLUDED.valid_to,
+                      lokationsbuendelcode = EXCLUDED.lokationsbuendelcode,
                       data       = EXCLUDED.data,
                       updated_at = now()
                   RETURNING id::TEXT",
@@ -84,6 +93,7 @@ impl LokationszuordnungRepository for PgLokationszuordnungRepository {
             .bind(nach_id)
             .bind(nach_typ)
             .bind(valid_to)
+            .bind(&lokationsbuendelcode)
             .bind(&data)
             .fetch_one(&self.pool)
             .await
@@ -91,13 +101,14 @@ impl LokationszuordnungRepository for PgLokationszuordnungRepository {
         } else {
             sqlx::query_scalar::<_, String>(
                 r"INSERT INTO lokationszuordnungen
-                      (tenant, von_id, von_typ, nach_id, nach_typ, valid_from, valid_to, data, updated_at)
-                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+                      (tenant, von_id, von_typ, nach_id, nach_typ, valid_from, valid_to, lokationsbuendelcode, data, updated_at)
+                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
                   ON CONFLICT (tenant, von_id, nach_id, valid_from) WHERE valid_from IS NOT NULL
                   DO UPDATE SET
                       von_typ    = EXCLUDED.von_typ,
                       nach_typ   = EXCLUDED.nach_typ,
                       valid_to   = EXCLUDED.valid_to,
+                      lokationsbuendelcode = EXCLUDED.lokationsbuendelcode,
                       data       = EXCLUDED.data,
                       updated_at = now()
                   RETURNING id::TEXT",
@@ -109,6 +120,7 @@ impl LokationszuordnungRepository for PgLokationszuordnungRepository {
             .bind(nach_typ)
             .bind(valid_from)
             .bind(valid_to)
+            .bind(&lokationsbuendelcode)
             .bind(&data)
             .fetch_one(&self.pool)
             .await
@@ -130,10 +142,10 @@ impl LokationszuordnungRepository for PgLokationszuordnungRepository {
         // When at_date IS NULL, all edges are returned regardless of validity.
         let rows = sqlx::query(
             r"WITH RECURSIVE graph(id, tenant, von_id, von_typ, nach_id, nach_typ,
-                                    valid_from, valid_to, data, depth) AS (
+                                    valid_from, valid_to, lokationsbuendelcode, data, depth) AS (
                 -- Seed: direct edges from root
                 SELECT id::TEXT, tenant, von_id, von_typ, nach_id, nach_typ,
-                       valid_from, valid_to, data, 0
+                       valid_from, valid_to, lokationsbuendelcode, data, 0
                 FROM lokationszuordnungen
                 WHERE tenant = $1
                   AND von_id = $2
@@ -142,7 +154,8 @@ impl LokationszuordnungRepository for PgLokationszuordnungRepository {
                 UNION ALL
                 -- Recursive: follow edges from each reached node, depth < 8
                 SELECT lz.id::TEXT, lz.tenant, lz.von_id, lz.von_typ, lz.nach_id,
-                       lz.nach_typ, lz.valid_from, lz.valid_to, lz.data, g.depth + 1
+                       lz.nach_typ, lz.valid_from, lz.valid_to, lz.lokationsbuendelcode,
+                       lz.data, g.depth + 1
                 FROM lokationszuordnungen lz
                 JOIN graph g ON lz.von_id = g.nach_id AND lz.tenant = g.tenant
                 WHERE g.depth < 8
@@ -175,7 +188,7 @@ impl LokationszuordnungRepository for PgLokationszuordnungRepository {
     ) -> Result<Vec<LokationszuordnungEdge>, MdmError> {
         let rows = sqlx::query(
             r"SELECT id::TEXT, tenant, von_id, von_typ, nach_id, nach_typ,
-                     valid_from, valid_to, data
+                     valid_from, valid_to, lokationsbuendelcode, data
               FROM lokationszuordnungen
               WHERE tenant = $1
                 AND von_id = $2

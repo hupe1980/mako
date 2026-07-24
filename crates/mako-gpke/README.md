@@ -29,7 +29,11 @@ the APERAK response deadline — not Werktage. This is enforced by BK6-22-024.
 | 55004 | Ablehnung Lieferbeginn                                | NB → LFN    | ↩ Derived from 55001 reject |
 | 55005 | Bestätigung Lieferende                                | NB → LFN    | ↩ Derived from 55002 accept |
 | 55006 | Ablehnung Lieferende                                  | NB → LFN    | ↩ Derived from 55002 reject |
-| 55007–55010 | (removed in LFW24 — not in AHB S2.x)           | —           | ❌ Removed |
+| 55007 | Ankündigung NB-seitiges Lieferende                    | NB → LFN    | ✅ Implemented (`gpke-lf-abmeldung`) |
+| 55010–55012 | Anfrage zur Beendigung der Zuordnung (NB Abmeldeanfrage) | NB ↔ LFA | ⏳ Not yet implemented (see ROADMAP) |
+| 55013 | Anmeldung / Zuordnung EOG (§36/§38 EnWG)              | NB → LF     | ✅ Implemented (`gpke-eog`, both roles) |
+| 55014 | Bestätigung EOG Anmeldung                             | LF → NB     | ✅ Implemented (`gpke-eog`) |
+| 55015 | Ablehnung EOG Anmeldung                               | LF → NB     | ✅ Implemented (`gpke-eog`) |
 | 55017 | Kündigung Lieferbeginn                                | LFN → LFA   | ✅ Implemented |
 | 55018 | Bestätigung Kündigung Lieferbeginn                    | LFA → LFN   | ↩ Derived from 55017 always |
 | 55555 | Anfrage Daten der individuellen Bestellung            | LFN → NB    | ✅ Implemented (GPKE Teil 4, BK6-24-174) |

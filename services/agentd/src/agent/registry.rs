@@ -247,38 +247,10 @@ fn build_agent(ac: &AgentConfig, cfg: &AgentdConfig, _ovr: &AgentOverride) -> Re
     })
 }
 
-/// Simple glob matching: `*` matches any sequence, `?` matches any single char.
+/// Event-type pattern matching — delegates to the shared canonical matcher
+/// in [`mako_events::matches`] (`*` any sequence, `?` one char).
 pub fn glob_match(pattern: &str, value: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-    let mut pi = 0usize;
-    let mut vi = 0usize;
-    let p: Vec<char> = pattern.chars().collect();
-    let v: Vec<char> = value.chars().collect();
-    let mut star_pi: Option<usize> = None;
-    let mut star_vi = 0usize;
-
-    while vi < v.len() {
-        if pi < p.len() && (p[pi] == '?' || p[pi] == v[vi]) {
-            pi += 1;
-            vi += 1;
-        } else if pi < p.len() && p[pi] == '*' {
-            star_pi = Some(pi);
-            star_vi = vi;
-            pi += 1;
-        } else if let Some(sp) = star_pi {
-            pi = sp + 1;
-            star_vi += 1;
-            vi = star_vi;
-        } else {
-            return false;
-        }
-    }
-    while pi < p.len() && p[pi] == '*' {
-        pi += 1;
-    }
-    pi == p.len()
+    mako_events::matches(pattern, value)
 }
 
 #[cfg(test)]
@@ -288,35 +260,47 @@ mod tests {
     #[test]
     fn glob_exact_match() {
         assert!(glob_match(
-            "de.mako.process.initiated",
-            "de.mako.process.initiated"
+            mako_events::mako::PROCESS_INITIATED,
+            mako_events::mako::PROCESS_INITIATED
         ));
         assert!(!glob_match(
-            "de.mako.process.initiated",
-            "de.mako.process.completed"
+            mako_events::mako::PROCESS_INITIATED,
+            mako_events::mako::PROCESS_COMPLETED
         ));
     }
 
     #[test]
     fn glob_trailing_wildcard() {
-        assert!(glob_match("de.mako.process.*", "de.mako.process.initiated"));
-        assert!(glob_match("de.mako.process.*", "de.mako.process.completed"));
+        assert!(glob_match(
+            "de.mako.process.*",
+            mako_events::mako::PROCESS_INITIATED
+        ));
+        assert!(glob_match(
+            "de.mako.process.*",
+            mako_events::mako::PROCESS_COMPLETED
+        ));
         assert!(!glob_match(
             "de.mako.process.*",
-            "de.invoic.receipt.disputed"
+            mako_events::invoic::RECEIPT_DISPUTED
         ));
     }
 
     #[test]
     fn glob_mid_wildcard() {
-        assert!(glob_match("de.mako.*", "de.mako.process.initiated"));
+        assert!(glob_match(
+            "de.mako.*",
+            mako_events::mako::PROCESS_INITIATED
+        ));
         assert!(glob_match("de.mako.*", "de.mako.aperak.sent"));
-        assert!(!glob_match("de.mako.*", "de.invoic.receipt.disputed"));
+        assert!(!glob_match(
+            "de.mako.*",
+            mako_events::invoic::RECEIPT_DISPUTED
+        ));
     }
 
     #[test]
     fn glob_star_matches_everything() {
-        assert!(glob_match("*", "de.mako.process.initiated"));
+        assert!(glob_match("*", mako_events::mako::PROCESS_INITIATED));
         assert!(glob_match("*", ""));
     }
 
@@ -354,8 +338,8 @@ mod tests {
             use_rag: false,
             is_builtin: false,
         };
-        assert!(!agent.matches_trigger("de.mako.process.initiated"));
-        assert!(!agent.matches_trigger("de.invoic.receipt.disputed"));
+        assert!(!agent.matches_trigger(mako_events::mako::PROCESS_INITIATED));
+        assert!(!agent.matches_trigger(mako_events::invoic::RECEIPT_DISPUTED));
     }
 
     #[test]
@@ -382,19 +366,19 @@ mod tests {
             mcp_servers: vec![],
             trigger_patterns: vec![
                 "de.eeg.*".into(),
-                "de.mako.process.initiated".into(),
-                "de.edmd.reading.direct.stored".into(),
+                mako_events::mako::PROCESS_INITIATED.into(),
+                mako_events::messwert::READING_DIRECT_STORED.into(),
             ],
             max_turns: 10,
             use_rag: false,
             is_builtin: false,
         };
-        assert!(agent.matches_trigger("de.eeg.anlage.foerderung_auslaufend"));
-        assert!(agent.matches_trigger("de.mako.process.initiated"));
+        assert!(agent.matches_trigger(mako_events::eeg::ANLAGE_FOERDERUNG_AUSLAUFEND));
+        assert!(agent.matches_trigger(mako_events::mako::PROCESS_INITIATED));
         assert!(
-            agent.matches_trigger("de.edmd.reading.direct.stored"),
+            agent.matches_trigger(mako_events::messwert::READING_DIRECT_STORED),
             "eeg-agent must trigger on iMSys direct push for rollout detection"
         );
-        assert!(!agent.matches_trigger("de.invoic.receipt.disputed"));
+        assert!(!agent.matches_trigger(mako_events::invoic::RECEIPT_DISPUTED));
     }
 }

@@ -8,17 +8,18 @@
 //!
 //! # Purpose
 //!
-//! Implements the **six deterministic NB checks** required by GPKE (BK6-22-024)
-//! and GeLi Gas (BK7-24-01-009) for Anmeldung decisions:
+//! Implements the **six deterministic NB checks** required by GPKE
+//! (BK6-24-174, EBD E_0622) and GeLi Gas (AWH GeLi Gas 2.0, codeliste
+//! G_0011) for Anmeldung decisions:
 //!
 //! | # | Rule | Outcome on failure |
 //! |---|------|-------------------|
 //! | 1 | MaLo exists in NB grid | `Escalate` (data gap) |
-//! | 2 | No conflicting active supply (`lf_mp_id_next` already set) | `Reject(A06)` |
-//! | 3 | `process_date ≥ today` (no retroactive start) | `Reject(A97)` |
-//! | 4 | Network area consistent (Bilanzierungsgebiet matches) | `Reject(A02)` |
-//! | 5 | LF registered in partner directory | `Reject(A05)` |
-//! | 6 | Mindestvorlauffrist met (Strom SLP: 15:00 cutoff; RLM: per AHB) | `Reject(A99)` |
+//! | 2 | MaLo participates in MaKo (not Stillgelegt/Ruhend) | `Reject(A02)` |
+//! | 3 | No conflicting Anmeldung in Bearbeitung | `Reject(A06)` |
+//! | 4 | Date plausibility, Transaktionsgrund-aware (Strom: LFW24 future rule; Gas: 6-week retro window for E01/E02 SLP, 10 WT for E03) | `Reject(A07)` Strom / `Reject(E17)` Gas / `Escalate` |
+//! | 5 | Bilanzierungsgebiet consistent | `Reject(A05)` |
+//! | 6 | LF registered in partner directory | `Reject(A05)` |
 //!
 //! Checks are evaluated in order; the first failing check short-circuits the
 //! rest.  A `NetzCheckResult::Accept` means **all** applicable rules passed.
@@ -48,6 +49,8 @@
 //!     process_date:     time::Date::from_calendar_date(2026, time::Month::August, 1).unwrap(),
 //!     sparte:           mako_markt::domain::Sparte::Strom,
 //!     messtyp:          netz_checker::Messtyp::Slp,
+//!     // SG4 STS Transaktionsgrund — E01 Ein-/Auszug, E03 Wechsel, …
+//!     transaktionsgrund: Some("E03".to_owned()),
 //! };
 //! ```
 

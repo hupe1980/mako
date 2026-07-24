@@ -12,6 +12,7 @@
 //! | `handlers` | see module docs |
 //! | `pg` | see module docs |
 
+pub mod ausfallarbeit_api;
 pub mod billing;
 pub mod config;
 pub mod handlers;

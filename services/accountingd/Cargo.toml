@@ -18,6 +18,7 @@ name = "accountingd"
 path = "src/main.rs"
 
 [dependencies]
+mako-events = { workspace = true }
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }

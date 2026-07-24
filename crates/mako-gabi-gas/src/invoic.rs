@@ -105,7 +105,7 @@ pub const SETTLEMENT_WINDOW_LABEL: &str = "gabi-gas-invoic-settlement-deadline";
 /// - PIDs 31007/31008 (Aggreg. MMM-Rechnung Gas): MGV sends REMADV to NB
 ///
 /// Source: REMADV AHB 1.0, GaBi Gas, BK7.
-pub const GABI_GAS_REMADV_PID: u32 = 33001;
+pub const GABI_GAS_REMADV_PID: Pruefidentifikator = Pruefidentifikator::const_new(33001);
 
 /// COMDIS PID for GaBi Gas billing (inbound Ablehnung REMADV, invoicer role).
 ///
@@ -114,7 +114,7 @@ pub const GABI_GAS_REMADV_PID: u32 = 33001;
 /// - PIDs 31007/31008: NB rejects an MGV REMADV
 ///
 /// Source: COMDIS AHB 1.0, GaBi Gas, BK7.
-pub const GABI_GAS_COMDIS_ABLEHNUNG_PID: u32 = 29001;
+pub const GABI_GAS_COMDIS_ABLEHNUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(29001);
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 

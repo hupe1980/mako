@@ -167,6 +167,7 @@ async fn end_to_end_lieferbeginn_strom_pipeline() {
         validation_errors,
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
+        transaktionsgrund: None,
         fallgruppe: None,
     };
 
@@ -278,6 +279,7 @@ async fn wrong_pid_returns_workflow_error() {
             validation_errors: vec![],
             bilanzierungsgebiet: None,
             bilanzierungsmethode: None,
+            transaktionsgrund: None,
             fallgruppe: None,
         })
         .await;

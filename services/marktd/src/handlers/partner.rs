@@ -127,10 +127,32 @@ where
         }
     }
 
-    let is_lf = record
-        .marktrolle
-        .as_deref()
-        .is_some_and(|r| r.eq_ignore_ascii_case("LF") || r.eq_ignore_ascii_case("LFG"));
+    // Typed enum validation: serde maps any unknown role string (e.g. a typo,
+    // or the legacy EDIFACT zuordnungstyp "LFG" — BO4E models gas suppliers as
+    // "LF" + Rollencodetyp DVGW) to `Marktrolle::Unknown`. Reject it here so a
+    // bad role never reaches the store silently.
+    if record.marktrolle == Some(rubo4e::current::Marktrolle::Unknown) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "invalid marktrolle: expected a BO4E Marktrolle code \
+                          (e.g. LF, NB, MSB, UENB, BKV); gas suppliers use LF \
+                          with rollencodetyp DVGW"
+            })),
+        )
+            .into_response();
+    }
+    if record.rollencodetyp == Some(rubo4e::current::Rollencodetyp::Unknown) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "invalid rollencodetyp: expected BDEW, DVGW or GLN"
+            })),
+        )
+            .into_response();
+    }
+
+    let is_lf = record.marktrolle == Some(rubo4e::current::Marktrolle::Lf);
     let lf_mp_id = gln_str.clone();
     record.mp_id = mp_id;
 
@@ -138,7 +160,7 @@ where
         Ok(version) => {
             let evt = MarktEvent::new(
                 &state.tenant_gln,
-                "de.markt.partner.updated",
+                mako_events::markt::PARTNER_UPDATED,
                 gln_str,
                 serde_json::json!({ "version": version }),
             )
@@ -301,8 +323,7 @@ where
                 .filter(|p| {
                     let role_ok = q.marktrolle.as_deref().is_none_or(|r| {
                         p.marktrolle
-                            .as_deref()
-                            .is_some_and(|mr| mr.eq_ignore_ascii_case(r))
+                            .is_some_and(|mr| mr.to_string().eq_ignore_ascii_case(r))
                     });
                     let sparte_ok = q.sparte.as_deref().is_none_or(|s| {
                         p.sparte
@@ -313,6 +334,60 @@ where
                 .collect();
             Json(filtered).into_response()
         }
+        Err(e) => e.into_response(),
+    }
+}
+
+// ── BO4E Marktteilnehmer view ─────────────────────────────────────────────────
+
+/// `GET /api/v1/partners/{mp_id}/marktteilnehmer`
+///
+/// Returns the stored partner as a typed BO4E `Marktteilnehmer`:
+/// `mp_id` → `rollencodenummer`, plus `marktrolle`, `rollencodetyp`, `sparte`,
+/// `makoadresse` and `display_name` → `geschaeftspartner.organisationsname`.
+///
+/// Returns 404 when the partner is not registered.
+pub async fn get_partner_marktteilnehmer<Ma, Me, Co, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    claims: Claims,
+    Path(mp_id_str): Path<String>,
+) -> impl IntoResponse
+where
+    Ma: MaloRepository + Clone,
+    Me: MeloRepository + Clone,
+    Co: ContractRepository + Clone,
+    Su: SubscriptionRepository + Clone,
+    Ci: CorrelationIndex + Clone,
+    Pa: PartnerRepository + Clone,
+{
+    if enforcer
+        .check(&claims.principal(), "read-partner", &state.tenant_gln)
+        .is_err()
+    {
+        return MdmError::Forbidden {
+            reason: "access denied",
+        }
+        .into_response();
+    }
+    let mp_id = match mp_id_str.parse::<MarktpartnerId>() {
+        Ok(id) => id,
+        Err(e) => {
+            return MdmError::InvalidMpId {
+                mp_id: mp_id_str,
+                reason: e.to_string(),
+            }
+            .into_response();
+        }
+    };
+
+    match state.partner_repo.find(&mp_id).await {
+        Ok(Some(p)) => Json(p.to_marktteilnehmer()).into_response(),
+        Ok(None) => MdmError::NotFound {
+            resource_type: "partner",
+            id: mp_id_str,
+        }
+        .into_response(),
         Err(e) => e.into_response(),
     }
 }

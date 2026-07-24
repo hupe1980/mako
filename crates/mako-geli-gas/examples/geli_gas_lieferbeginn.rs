@@ -50,7 +50,8 @@ use mako_geli_gas::{
 // BGM+E01 is used for GeLi Gas Anmeldung in UTILMD G.
 // NAD+MS = neuer Gaslieferant (sender)
 // NAD+MR = Gasnetzbetreiber (receiver)
-// IDE+Z19 = Marktlokation identifier (MaLo, not MeLo — key gas/electricity difference)// - MaLo ID: 52695662085 (11-char format, [A-Z0-9]{11})
+// IDE+Z19 = Marktlokation identifier (MaLo, not MeLo — key gas/electricity difference)
+// - MaLo ID: 52695662085 (11-char format, [A-Z0-9]{11})
 const UTILMD_LIEFERBEGINN_GAS: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+GELI-2025-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:G1.1'\
@@ -192,6 +193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             validation_errors: validation_errors.clone(),
             received_at: time::OffsetDateTime::now_utc(),
             bilanzierungsmethode: None,
+            transaktionsgrund: None,
             fallgruppe: None,
             gasqualitaet: None,
         })
@@ -386,6 +388,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             validation_errors: vec![],
             received_at: time::OffsetDateTime::now_utc(),
             bilanzierungsmethode: None,
+            transaktionsgrund: None,
             fallgruppe: None,
             gasqualitaet: None,
         })

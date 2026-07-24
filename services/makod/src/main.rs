@@ -107,37 +107,30 @@
 //!   └── API-Webdienste    — BDEW Webdienste Strom (optional; --api-webdienste-addr)
 //! ```
 
-mod adapters;
-mod api_bridge;
-mod as4_ingest;
-mod as4_sender;
-mod cedar_authz;
-mod commands_api;
-mod config;
-mod contrl_ack;
-mod deadline_dispatch;
-mod edifact_api;
-mod edifact_renderer;
-mod erp_adapter;
-mod health;
-mod ingest_dispatcher;
-mod invoic_api;
-mod malo_admin_api;
-mod malo_cache;
-mod malo_ident_sender;
-mod mcp_server;
-mod metrics_api;
-mod migration_api;
-mod oidc_verifier;
-mod openapi;
-mod partner_api;
-mod party_registry;
-mod projection_worker;
-mod redispatch_xml_ingest;
+mod api;
+mod core;
+mod orchestrator;
 mod startup;
-mod verzeichnisdienst_worker;
-mod webdienste;
-mod worker_health;
+mod transport;
+
+// Flat-path aliases so every historical `crate::<module>` path keeps resolving
+// inside the binary crate (which compiles the module tree independently of the
+// lib target). Mirrors the re-export block in lib.rs.
+use crate::api::{
+    edifact_api, invoic_api, malo_admin_api, mcp_server, metrics_api, migration_api, openapi,
+    partner_api,
+};
+use crate::core::{
+    cedar_authz, config, erp_adapter, health, malo_cache, party_registry, worker_health,
+};
+use crate::orchestrator::{
+    adapters, commands_api, deadline_dispatch, edifact_renderer, ingest_dispatcher, netzzugang,
+    projection_worker,
+};
+use crate::transport::{
+    api_bridge, as4_ingest, as4_sender, contrl_ack, malo_ident_sender, redispatch_xml_ingest,
+    verzeichnisdienst_worker, webdienste,
+};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -727,6 +720,15 @@ struct Cli {
     /// variable.
     #[arg(long, value_name = "URL", env = "MAKOD_EDIFACT_OUTBOX_WEBHOOK_URL")]
     edifact_outbox_webhook_url: Option<String>,
+
+    /// §20b EnWG Netzzugangsplattform endpoint URL (optional).
+    ///
+    /// No platform interface exists yet (no BNetzA Festlegung under §20b
+    /// Abs. 3); when unset, §20b requests are delivered to the ERP webhook as
+    /// `de.mako.netzzugang.uebermittlungsbedarf` CloudEvents so the operator
+    /// can submit them via the Netzbetreiber's Webportal.
+    #[arg(long, value_name = "URL", env = "MAKOD_NETZZUGANG_ENDPOINT_URL")]
+    netzzugang_endpoint_url: Option<String>,
 
     /// Allow startup without AS4 signing credentials and without an EDIFACT
     /// outbox webhook.  By default (when this flag is absent) makod refuses
@@ -1607,10 +1609,10 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             "--oidc-audience / MAKOD_OIDC_AUDIENCE is required when \
              --oidc-issuer / MAKOD_OIDC_ISSUER is set",
         )?;
-        let verifier = oidc_verifier::OidcVerifier::new(issuer, audience, &http_client)
+        let verifier = mako_service::oidc::OidcVerifier::new(issuer, audience, &http_client)
             .await
             .context("OIDC verifier initialisation failed")?;
-        verifier.spawn_refresh_task(
+        let _jwks_refresh = verifier.spawn_refresh_task(
             http_client.clone(),
             cli.oidc_jwks_refresh_secs,
             shutdown_token.clone(),
@@ -2041,6 +2043,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         erp_webhook_url: cli.erp_webhook_url.clone(),
         erp_webhook_secret: cli.erp_webhook_secret.clone(),
         edifact_outbox_webhook_url: cli.edifact_outbox_webhook_url.clone(),
+        netzzugang_endpoint_url: cli.netzzugang_endpoint_url.clone(),
+        marktd_client: marktd_client.clone(),
         allow_no_as4_signing: cli.allow_no_as4_signing,
         snapshot_interval: cli.snapshot_interval,
         deadline_poll_interval_secs: cli.deadline_poll_interval_secs,

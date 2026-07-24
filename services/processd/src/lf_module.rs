@@ -6,7 +6,10 @@
 //! |-----|---------|----------|-------------|
 //! | 55008 | LFA E_0624 Abmeldung | 45 min | Evaluate from VersorgungsStatus |
 //! | 55022 | Zuordnungsanfrage | 45 min | Confirm `lf_mp_id_next` if known |
-//! | 55013 | Abmeldung-Bestätigung | — | Update `lieferstatus = Unbeliefert` via marktd |
+//!
+//! PID 55013 (Anmeldung/Zuordnung EOG, NB → E/G) is **not** an LF-module
+//! concern — it is handled by `mako-gpke::eog` (`gpke-eog` workflow) and,
+//! on the NB side, by the `eog_module` gap-closure automation.
 //!
 //! # Decision logic for E_0624 (PID 55008)
 //!
@@ -260,7 +263,7 @@ pub async fn process_e0624(
             if config.auto_respond {
                 let cmd = ForwardCommand {
                     marktrolle: None,
-                    command: "gpke.nb-lieferende.bestaetigen".to_owned(),
+                    command: mako_markt::commands::GPKE_NB_LIEFERENDE_BESTAETIGEN.to_owned(),
                     malo_id: Some(payload.malo_id.clone()),
                     melo_id: None,
                     payload: serde_json::json!({
@@ -282,7 +285,7 @@ pub async fn process_e0624(
             if config.auto_respond {
                 let cmd = ForwardCommand {
                     marktrolle: None,
-                    command: "gpke.nb-lieferende.ablehnen".to_owned(),
+                    command: mako_markt::commands::GPKE_NB_LIEFERENDE_ABLEHNEN.to_owned(),
                     malo_id: Some(payload.malo_id.clone()),
                     melo_id: None,
                     payload: serde_json::json!({
@@ -350,6 +353,7 @@ mod tests {
             lieferende: None,
             msb_mp_id: None,
             nb_mp_id: "9900000000001".to_owned(),
+            eog_seit: None,
             last_process_id: None,
             updated_at: OffsetDateTime::now_utc(),
             tenant: "9900000000002".to_owned(),

@@ -31,8 +31,8 @@ model = "gpt-4o"
 
 | Specialist | Trigger events | MCP tools used |
 |---|---|---|
-| `mako-agent` | `de.mako.process.escalated`, `de.mako.aperak.*` | makod, marktd, obsd |
-| `deadline-alert-agent` | `de.mako.process.timedout` | obsd, makod |
+| `mako-agent` | `de.mako.process.failed`, `de.mako.aperak.*` | makod, marktd, obsd |
+| `deadline-alert-agent` | `de.mako.aperak.timeout` | obsd, makod |
 | `billing-agent` | `de.invoic.receipt.disputed` | invoicd, billingd, accountingd |
 | `billing-anomaly-agent` | `de.billing.rechnung.erstellt` | billingd, edmd |
 | `billing-regulatory-guard-agent` | `de.billing.rechnung.erstellt` | billingd, marktd |
@@ -41,21 +41,21 @@ model = "gpt-4o"
 | `eeg-agent` | `de.eeg.anlage.foerderung_auslaufend` | einsd, edmd |
 | `payment-reconciliation-agent` | `de.accounting.payment.due` | accountingd |
 | `compliance-agent` | `de.obs.stp.parity.alert` | obsd, processd |
-| `msb-history-agent` | `de.edmd.reading.quality.warning`, `de.edmd.reading.direct.stored`, `de.mako.process.completed` | edmd, makod, marktd |
-| `meter-data-agent` | `de.edmd.reading.quality.warning` | edmd, marktd |
+| `msb-history-agent` | `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.completed` | edmd, makod, marktd |
+| `meter-data-agent` | `de.messwert.reading.quality.warning` | edmd, marktd |
 | `grid-anomaly-agent` | `de.markt.grid.drift.detected` | marktd, obsd |
 | `tariff-optimization-agent` | `de.billing.rechnung.erstellt` | billingd, tarifbd, edmd |
-| `replacement-value-agent` | `de.edmd.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd, obsd |
-| `mabis-syncd-agent` | `de.edmd.reading.quality.warning` | edmd, obsd, marktd |
-| `smgw-diagnostics-agent` | `de.edmd.reading.direct.stored` | edmd, marktd, processd |
+| `replacement-value-agent` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd, obsd |
+| `mabis-syncd-agent` | `de.messwert.reading.quality.warning` | edmd, obsd, marktd |
+| `smgw-diagnostics-agent` | `de.messwert.reading.direct.stored` | edmd, marktd, processd |
 | `invoice-reconciliation-agent` | `de.invoic.receipt.*` | invoicd, billingd |
 | `netzbilanz-agent` | `de.netzbilanz.invoic.*` | netzbilanzd, marktd |
 | `nis-syncd-agent` | `de.markt.grid.drift.detected` | marktd, processd |
 | `portald-agent` | `de.vertrag.*` | portald, vertragd, billingd |
-| `processd-agent` | `de.mako.process.escalated` | processd, obsd, marktd |
+| `processd-agent` | `de.mako.process.failed` | processd, obsd, marktd |
 | `regulatory-reporting-agent` | manual | obsd, marktd, processd |
 | `sperrd-agent` | `de.accounting.sperrauftrag` | sperrd, accountingd |
-| `tarifbd-agent` | `de.tarifbd.*` | tarifbd, billingd |
+| `tarifbd-agent` | `de.tarif.*` | tarifbd, billingd |
 | `vertragd-agent` | `de.vertrag.*` | vertragd, processd, marktd |
 | `vpp-billing-agent` | `de.vpp.dispatch.confirmed`, `de.vpp.settlement.berechnet` | billingd, marktd, obsd |
 | `gabi-gas-agent` | `de.gabi.imbalance.*`, `de.gabi.alocat.missing`, `de.gabi.nomination.*` | makod, netzbilanzd, marktd, obsd |

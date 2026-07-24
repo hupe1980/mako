@@ -63,7 +63,7 @@ pub const WORKFLOW_NAME: &str = "wim-stammdaten";
 ///
 /// This crate (`mako-wim`) handles **Strom** stammdaten only. The Gas counterpart
 /// (PID 17101) belongs to `mako-wim-gas`; see [`ANFORDERUNG_PID_GAS`].
-pub const ANFORDERUNG_PID: u32 = 17132;
+pub const ANFORDERUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(17132);
 
 /// ORDERS PID for Stammdaten Anforderung **Gas** (NB → MSB, Gas domain).
 ///
@@ -71,7 +71,7 @@ pub const ANFORDERUNG_PID: u32 = 17132;
 ///
 /// This constant is provided here for documentation and cross-reference only.
 /// The Gas workflow is implemented in `mako-wim-gas`, not in this crate.
-pub const ANFORDERUNG_PID_GAS: u32 = 17101;
+pub const ANFORDERUNG_PID_GAS: Pruefidentifikator = Pruefidentifikator::const_new(17101);
 
 /// ORDERS PIDs for Stammdatenübermittlung responses (17102–17133, MSB → NB).
 ///
@@ -405,7 +405,7 @@ impl Workflow for WimStammdatenWorkflow {
                 if !matches!(state, StammdatenState::New) {
                     return Err(WorkflowError::invalid_state("New", state.status_str()));
                 }
-                if pid.as_u32() != ANFORDERUNG_PID {
+                if pid != ANFORDERUNG_PID {
                     return Err(WorkflowError::rejected(format!(
                         "PID {} is not a Stammdaten-Anforderung PID (expected {ANFORDERUNG_PID})",
                         pid.as_u32()

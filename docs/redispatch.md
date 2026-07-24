@@ -27,12 +27,43 @@ exchange and **IFTSTA (EDIFACT)** only for final status confirmations.
 
 | BNetzA decision | Topic | Effective |
 |---|---|---|
-| BK6-20-059 | `AcknowledgementDocument` deadline (6 h), `StatusRequest` deadline (24 h) | 2021-10-01 |
-| BK6-20-060 | `Stammdaten` forwarding (1 Werktag), Activation response (5 min) | 2021-10-01 |
-| BK6-20-061 | `Kostenblatt` submission (15th of following month) | 2021-10-01 |
+| BK6-20-059 | `AcknowledgementDocument` deadline (6 h), `StatusRequest` deadline (24 h) | 2021-10-01 (TZ 1 ended 30.06.2026; TZ 2 process descriptions survive until the new EDI@Energy documents apply) |
+| BK6-20-060 | `Stammdaten` forwarding (1 Werktag), Activation response (5 min) | 2021-10-01 (revoked by BK6-23-241) |
+| BK6-20-061 | `Kostenblatt` submission (15th of following month) | 2021-10-01 (revoked by BK6-23-241) |
+| **BK6-23-241** | **BilAReM** — Bilanzieller Ausgleich von Redispatch-Maßnahmen: Planwertmodell (NB-side Ausgleich via korrespondierende Fahrpläne against a dedicated Redispatch-Bilanzkreis) alongside the Prognosemodell (BKV keeps the imbalance, §14 Abs. 1 S. 3/1b EnWG, until 31.12.2031); one-way SR migration at quarter boundaries with ≥6-month notice (soll-target 01.01.2031); Pauschal-Abrechnung grandfathering ends 31.12.2028; MaBiS Anlage 1 Kap. 17 revoked 30.09.2026 (survivors continue as Anlage zur BilAReM) | 2026-07-01 (ÜNB); formats follow the EDI@Energy expert group on relative deadlines |
 
 NABEG 2019 and the above BNetzA decisions implement the legal obligation.
 Absence of a conformant implementation is a regulatory violation under § 14 EnWG.
+
+The BilAReM domain layer spans three seams:
+
+- `mako_redispatch::bilarem` — `Bilanzierungsmodell`, `Abrechnungsverfahren`
+  admissibility, quarter-boundary + 6-month-notice `Zuordnungsmitteilung`
+  validation, all key dates as constants.
+- `mako_redispatch::ausfallarbeit` — the full Kap.-3 Ausfallarbeit engine per
+  the final Anlage (Beschluss 07.05.2026): `P_lim` determination
+  (Aufforderungs-/Duldungsfall, Referenzprofil/beidseitige Fixierung), Wind
+  Spitz-/vereinfachte Spitzabrechnung (`KF = P_VZ,ist/P_VZ,theo`, Nennleistung
+  cap), the Wind-Bin-Verfahren for WEA auf See (`KF_Bin = KF_LBin × KF_V`,
+  0,5-m/s bins per DIN EN 61400-12-1, `m ≥ 3`, Ersatzwert chain
+  Vormonat → Folgemonat → 12-Monats-Mittel → 1, `KF_V ∈ ]0;1[`), Solar
+  Spitz (irradiation-scaled, `P_WR` bound) and Pauschal (Anlagenfaktor table,
+  UTC+1), the grandfathered Wind-/Solar-Pauschal-Fortschreibung,
+  nicht-fluktuierende Spitz-/Pauschal-Abrechnung, the Kap.-3.4 Überbauungs-cap
+  (`Σ W_A ≤ P_anschl × ¼ h − Einspeisung`, pro-rata Kürzung by installed
+  capacity with clamp-and-redistribute), and the § 24 Abs. 3 S. 2 EEG 2023
+  MaLo→TR split.
+- `grid_billing::bilarem_finanzielle_korrektur`
+  (`Korr_fin = (W_A − W_Ausgl)/1000 × ID-AEP` — the financial-only residual
+  settlement for fluctuating plants in the Planwertmodell).
+
+`netzbilanzd` exposes the engine as stateless, schema-validated compute
+endpoints — `POST /api/v1/redispatch/ausfallarbeit/compute` (per-TR `W_A`
+series + sum for every Abrechnungsvariante) and
+`POST /api/v1/redispatch/ausfallarbeit/ueberbauung` (Kap.-3.4 cap across the
+TR of one Netzlokation). The caller supplies the quarter-hour input series
+(SCADA/edmd/DWD sourcing stays operator-side); the EDI@Energy wire formats
+plug in once published (go-live ≤ 6 months after publication).
 
 ---
 

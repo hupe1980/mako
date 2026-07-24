@@ -63,7 +63,7 @@ impl RoundMoney for Decimal {
 /// | 2023 | 30   | 0.605 |
 /// | 2024 | 45   | 0.907 |
 /// | 2025 | 55   | 1.109 |
-/// | 2026 | 65   | 1.310 |
+/// | 2026 | 65   | 1.3104 |
 const BEHG_EUR_PER_T: &[(i32, u32)] = &[
     (2021, 25),
     (2022, 30),
@@ -221,11 +221,24 @@ pub fn behg_ct_per_kwh_for_year(year: i32) -> Option<Decimal> {
     BEHG_EUR_PER_T
         .iter()
         .find(|(y, _)| *y == year)
-        .map(|(_, eur_per_t)| {
-            // ct/kWh = EUR/t × CO₂_factor kg/kWh × (1 t / 1000 kg) × (100 ct / 1 EUR)
-            // = EUR/t × CO₂_factor / 10
-            Decimal::from(*eur_per_t) * BEHG_CO2_FACTOR_H_GAS / dec!(10)
-        })
+        .map(|(_, eur_per_t)| behg_ct_per_kwh_from_price(Decimal::from(*eur_per_t), None))
+}
+
+/// Convert an nEHS certificate price (EUR/t CO₂) into the Gas CO₂ cost
+/// component in ct/kWh.
+///
+/// Since 2026 nEHS certificates are **auctioned** (§10 Abs. 1 BEHG: weekly EEX
+/// auctions from 01.07.2026 inside the 55–65 EUR/t corridor of §10 Abs. 2,
+/// followed by a Verkaufsphase at 68 EUR/t), so the CO₂ component is
+/// market-formed rather than a statutory fixed price. Callers supply the
+/// supplier's actual acquisition price (CO2KostAufG §3 passes through the
+/// **tatsächlich aufgewendete** CO₂ costs) — e.g. from a dated market-price
+/// series — and optionally an L-Gas factor via `factor`.
+///
+/// `ct/kWh = EUR/t × CO₂-factor kg/kWh ÷ 10`
+#[must_use]
+pub fn behg_ct_per_kwh_from_price(eur_per_t: Decimal, factor: Option<Decimal>) -> Decimal {
+    eur_per_t * factor.unwrap_or(BEHG_CO2_FACTOR_H_GAS) / dec!(10)
 }
 
 // ── RegulatoryRates ───────────────────────────────────────────────────────────
@@ -236,7 +249,8 @@ pub fn behg_ct_per_kwh_for_year(year: i32) -> Option<Decimal> {
 /// 2025/2026 published rates and will be superseded by operator configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegulatoryRates {
-    /// §3 StromStG — ct/kWh (current: 2.05 ct/kWh since 01.07.2023).
+    /// §3 StromStG — ct/kWh (current: 2.05 ct/kWh since 01.04.2003,
+    /// BGBl. I 2002 S. 4602; see [`stromsteuer_for_year`]).
     pub stromsteuer_ct_per_kwh: Decimal,
     /// §2 Nr. 3 EnergieStG Erdgas H — ct/kWh_Hs (current: 0.55 ct/kWh).
     pub energiesteuer_gas_ct_per_kwh: Decimal,
@@ -252,7 +266,7 @@ impl Default for RegulatoryRates {
         Self {
             stromsteuer_ct_per_kwh: dec!(2.05),
             energiesteuer_gas_ct_per_kwh: dec!(0.55),
-            behg_gas_ct_per_kwh: dec!(1.310), // 65 EUR/t × 0.20160 kg_CO₂/kWh_Hs (2026, BEHG §10)
+            behg_gas_ct_per_kwh: dec!(1.3104), // 65 EUR/t × 0.20160 kg_CO₂/kWh_Hs ÷ 10 (2026, BEHG §10)
             mwst_rate: dec!(0.19),
         }
     }
@@ -399,6 +413,19 @@ mod tests {
     fn behg_unknown_year_returns_none() {
         assert!(behg_ct_per_kwh_for_year(2020).is_none());
         assert!(behg_ct_per_kwh_for_year(2030).is_none());
+    }
+
+    #[test]
+    fn behg_from_price_uses_explicit_l_gas_factor() {
+        // L-Gas deployment: 65 EUR/t × 0.20140 kg/kWh ÷ 10 = 1.3091 ct/kWh
+        let ct = behg_ct_per_kwh_from_price(dec!(65), Some(BEHG_CO2_FACTOR_L_GAS));
+        assert_eq!(ct, dec!(65) * dec!(0.20140) / dec!(10));
+        // Distinct from the H-Gas default path
+        assert_ne!(ct, behg_ct_per_kwh_from_price(dec!(65), None));
+        assert_eq!(
+            behg_ct_per_kwh_from_price(dec!(65), None),
+            dec!(65) * BEHG_CO2_FACTOR_H_GAS / dec!(10)
+        );
     }
 
     #[test]

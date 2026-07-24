@@ -210,7 +210,37 @@ pub enum InvoiceType {
 }
 
 impl InvoiceType {
-    /// BO4E Rechnungsart string for the rechnung_json field.
+    /// The typed BO4E [`Rechnungstyp`](rubo4e::current::Rechnungstyp), where the
+    /// BO4E vocabulary has a value:
+    ///
+    /// | `InvoiceType` | BO4E `rechnungstyp` |
+    /// |---|---|
+    /// | `Initial` | `ENDKUNDENRECHNUNG` |
+    /// | `AdvancePayment` | `ABSCHLAGSRECHNUNG` |
+    /// | `Final` | `ABSCHLUSSRECHNUNG` (Schlussrechnung) |
+    /// | `PartialInvoice` | `ZWISCHENRECHNUNG` (mid-period settlement) |
+    /// | `CreditNote` / `Correction` / `Cancellation` | `None` |
+    ///
+    /// The three `None` cases have no BO4E Rechnungstyp; they are carried by
+    /// `istStorno`, `originalRechnungsnummer` and the `rechnungsart`
+    /// ZusatzAttribut on the emitted Rechnung.
+    #[must_use]
+    #[cfg(feature = "bo4e")]
+    pub fn rechnungstyp(&self) -> Option<rubo4e::current::Rechnungstyp> {
+        use rubo4e::current::Rechnungstyp as R;
+        match self {
+            Self::Initial => Some(R::Endkundenrechnung),
+            Self::AdvancePayment => Some(R::Abschlagsrechnung),
+            Self::Final => Some(R::Abschlussrechnung),
+            Self::PartialInvoice => Some(R::Zwischenrechnung),
+            Self::CreditNote | Self::Correction { .. } | Self::Cancellation { .. } => None,
+        }
+    }
+
+    /// Process-level Rechnungsart label (mako vocabulary, superset of BO4E).
+    ///
+    /// Emitted as the `rechnungsart` ZusatzAttribut for invoice types the BO4E
+    /// `Rechnungstyp` enum cannot express losslessly.
     #[must_use]
     pub fn rechnungsart(&self) -> &'static str {
         match self {

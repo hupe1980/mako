@@ -18,6 +18,7 @@ name = "agentd"
 path = "src/main.rs"
 
 [dependencies]
+mako-events = { workspace = true }
 mako-service = { workspace = true, features = ["otel", "oidc", "cedar"] }
 axum         = { version = "0.8" }
 tokio        = { version = "1", features = ["full"] }

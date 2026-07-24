@@ -56,9 +56,18 @@ pub enum EntgeltRegime {
     /// ARegV when they lapse at the end of 2028.
     ///
     /// Modelled ahead of time so a settlement for a 2029 period is refused
-    /// explicitly rather than computed under rules that no longer exist. The
-    /// substantive methodology is not implemented: the framework Festlegung was
-    /// still in consultation when this was written.
+    /// explicitly rather than computed under rules that no longer exist —
+    /// [`RegulatoryRegime::ensure_berechenbar`] is that refusal, and every
+    /// builder that prices charges on this axis calls it
+    /// ([`crate::billing::settle_nne`], [`crate::billing::settle_gas_awh`]).
+    /// Builders whose charges are *not* formed on this axis are exempt and say
+    /// so where they resolve their regime: Mehr-/Mindermengen (Netzzugang
+    /// axis), Messstellenbetrieb (MsbG), §18 dezentrale Erzeugung (its own
+    /// sunset, GBK-25-02-1#1) and reversals (pure mirrors of an
+    /// already-computed settlement).
+    ///
+    /// The substantive methodology is not implemented: the framework
+    /// Festlegung was still in consultation when this was written.
     AgNeS,
 }
 
@@ -79,6 +88,25 @@ const NZV_LETZTER_TAG: Date = time::macros::date!(2025 - 12 - 31);
 
 /// Last day on which StromNEV and ARegV apply.
 const VERORDNUNG_LETZTER_TAG: Date = time::macros::date!(2028 - 12 - 31);
+
+/// §19 Abs. 3 StromNEV (Sondernetzentgelte für singulär genutzte
+/// Betriebsmittel) no longer applies from 01.01.2026 (BK8-25-003-A,
+/// 16.09.2025) — this crate has never emitted an Abs.-3 position.
+///
+/// Transition: Netznutzer that are **not** operators of general-supply
+/// networks keep their entitlement through 31.12.2028; the individual
+/// §19 Abs. 2 forms (atypische Netznutzung / Bandlast, implemented in
+/// [`crate::sect19`]) are unaffected by BK8-25-003-A. The AgNes successor
+/// system (GBK-25-01: Kapazitätspreis for Großverbraucher, generator
+/// capacity charge of 4–7 €/kW/a with 20-year Bestandsschutz, from
+/// 01.01.2029) is **draft only** — the Rahmenfestlegung is expected end-2026,
+/// so [`EntgeltRegime::AgNeS`] carries no parameter tables yet; model AgNes
+/// prices as configuration when they become binding.
+pub const SECT19_ABS3_LETZTER_TAG: Date = time::macros::date!(2025 - 12 - 31);
+
+/// End of the §19 Abs. 3 transition window for non-network-operator
+/// Netznutzer (BK8-25-003-A Tenor 2).
+pub const SECT19_ABS3_UEBERGANG_ENDE: Date = time::macros::date!(2028 - 12 - 31);
 
 impl RegulatoryRegime {
     /// Resolve the regime governing a delivery period.
@@ -135,6 +163,33 @@ impl RegulatoryRegime {
     #[must_use]
     pub const fn tarifjahr(&self) -> i32 {
         self.tarifjahr
+    }
+
+    /// Refuse to price Netzentgelte under a regime whose methodology does not
+    /// exist yet.
+    ///
+    /// The AgNeS successor system (GBK-25-01) is draft only: the
+    /// Rahmenfestlegung is expected end-2026, and its parameter tables follow
+    /// as configuration once binding. Until then, a settlement whose Entgelt
+    /// axis resolves to [`EntgeltRegime::AgNeS`] must be refused rather than
+    /// computed with the lapsed Verordnung math and merely tagged.
+    ///
+    /// Builders whose charges are not formed on the Entgelt axis do not call
+    /// this — see the exemption comments at [`crate::billing::settle_mmm`],
+    /// [`crate::billing::settle_msb`], [`crate::sect18`] and
+    /// [`crate::billing::reverse`].
+    ///
+    /// # Errors
+    ///
+    /// [`crate::BillingError::UnsupportedEntgeltRegime`] when the Entgelt axis
+    /// is [`EntgeltRegime::AgNeS`].
+    pub fn ensure_berechenbar(&self) -> Result<(), crate::error::BillingError> {
+        match self.entgelt {
+            EntgeltRegime::Verordnung => Ok(()),
+            EntgeltRegime::AgNeS => Err(crate::error::BillingError::UnsupportedEntgeltRegime {
+                tarifjahr: self.tarifjahr,
+            }),
+        }
     }
 
     /// `true` when the period crosses a regime turnover.
@@ -217,5 +272,47 @@ mod tests {
     fn the_tarifjahr_follows_the_period_start() {
         let r = RegulatoryRegime::for_period(date!(2026 - 03 - 01), date!(2026 - 03 - 31));
         assert_eq!(r.tarifjahr(), 2026);
+    }
+
+    /// The AgNeS refusal is real: a regime on the AgNeS Entgelt axis cannot be
+    /// priced, and the error names the Festlegung and why nothing is computable.
+    #[test]
+    fn an_agnes_regime_is_not_berechenbar() {
+        let last_verordnung =
+            RegulatoryRegime::for_period(date!(2028 - 12 - 01), date!(2028 - 12 - 31));
+        assert!(last_verordnung.ensure_berechenbar().is_ok());
+
+        let agnes = RegulatoryRegime::for_period(date!(2029 - 01 - 01), date!(2029 - 01 - 31));
+        let err = agnes
+            .ensure_berechenbar()
+            .expect_err("an AgNeS period must be refused");
+        assert!(matches!(
+            err,
+            crate::error::BillingError::UnsupportedEntgeltRegime { tarifjahr: 2029 }
+        ));
+        let msg = err.to_string();
+        assert!(msg.contains("GBK-25-01"), "must name the Festlegung: {msg}");
+        assert!(
+            msg.contains("nicht") || msg.contains("not yet festgelegt"),
+            "must say the parameter tables are not yet festgelegt: {msg}"
+        );
+    }
+
+    /// The regulatory surface is re-exported at the crate root — resolving
+    /// these paths is the (compile-time) proof.
+    #[test]
+    fn the_regulatory_surface_is_re_exported_at_the_crate_root() {
+        use crate::{
+            EntgeltRegime as ReexportedEntgelt, NetzzugangRegime as ReexportedNetzzugang,
+            RegulatoryRegime as ReexportedRegime, SECT19_ABS3_LETZTER_TAG,
+            SECT19_ABS3_UEBERGANG_ENDE,
+        };
+        let r = ReexportedRegime::new(
+            ReexportedNetzzugang::EnwgFestlegung,
+            ReexportedEntgelt::Verordnung,
+            2026,
+        );
+        assert_eq!(r.tarifjahr(), 2026);
+        assert!(SECT19_ABS3_LETZTER_TAG < SECT19_ABS3_UEBERGANG_ENDE);
     }
 }

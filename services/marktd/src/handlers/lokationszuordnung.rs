@@ -1,7 +1,7 @@
 //! Handlers for the `Lokationszuordnung` location-graph endpoints (B5).
 //!
 //! Routes:
-//!   GET    /api/v1/malo/{id}/lokationen                — recursive graph from a MaLo
+//!   GET    /api/v1/malos/{id}/lokationen               — recursive graph from a MaLo
 //!   GET    /api/v1/melos/{id}/lokationen               — recursive graph from a MeLo
 //!   PUT    /api/v1/lokationszuordnungen                — upsert a directed edge
 //!   DELETE /api/v1/lokationszuordnungen/{von_id}/{nach_id} — hard-delete an edge pair
@@ -64,7 +64,7 @@ pub struct GraphQuery {
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
-/// `GET /api/v1/malo/{id}/lokationen`
+/// `GET /api/v1/malos/{id}/lokationen`
 ///
 /// Recursively traverses the MaKo location graph starting at the given `MaLo-ID`.
 /// Returns all reachable edges (MaLo → MeLo → NeLo → SR/TR) ordered by depth.

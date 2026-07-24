@@ -30,6 +30,7 @@ infrastructure library they build on.
 | **Event sourcing** | State is rebuilt by replaying the append-only event log. Audit trails, bug reproductions, and format-version migrations are a consequence of the model, not bolt-ons. |
 | **Format-version coexistence** | `FV2025-10-01` and `FV2026-10-01` coexist in the same running instance. A process started under the old format version continues under those rules until it completes. |
 | **Persist before dispatch** | `invoicd` writes each INVOIC receipt to PostgreSQL before issuing the settlement command to `makod`. A crash between check and dispatch is recoverable; a crash between persist and dispatch is not a data-loss event. |
+| **One deployment, one operator** | A mako deployment serves a single market operator; isolation between operators is per-deployment (separate processes, databases, and AS4 identities), not row-level SaaS tenancy. Where a `tenant` column or `TenantId` appears (`mako-engine` streams, `edmd`, `tarifbd`), it carries the operator's own MP-ID — it scopes data to the configured party (e.g. multiple LF brands sharing one `tarifbd`), it does not implement cross-operator multi-tenancy. Provisioning for managed hosting is a control-plane concern of the hosted offering. |
 
 ---
 
@@ -226,7 +227,7 @@ Each is independently testable and suitable for crates.io publication.
 | `eeg-billing` | Pure EEG/KWKG feed-in settlement (NB) | `calculate_settlement`, 9 settlement schemes, §51/§52 rules, `InbetriebnahmeTyp`, proptest invariants, **339 tests** |
 | `metering` | German energy metering domain | `MeterInterval`, `aggregate`, `fill_gaps` / `fill_gaps_with_config` (§ 60 Abs. 2 MsbG — `FillGapsConfig` supports `PriorPeriodAverage`), `gas_m3_to_kwh_hs`, `score_intervals` (Hampel A/B/C/F) |
 | `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
-| `netz-checker` | NB Anmeldung 6-check validation | `check_anmeldung`, ERC A02/A05/A06/A97/A99 |
+| `netz-checker` | NB Anmeldung 6-check validation | `check_anmeldung`, ERC A02/A05/A06/A07/E17 |
 | `mako-obs` | Process observability types | `ProcessProjection`, `KpiReport`, `DeadlineRisk` |
 | `mako-service` | **Service SDK** — cross-cutting infrastructure for all 17 daemons | `load_config`, `DatabaseConfig`, `HttpConfig`, `shutdown::token/serve`, `OidcConfig::build_verifier`, `McpAuth`, `McpAuthConfig`, `init_tracing_from_env`, `CedarEnforcer`, `EventBus`, `ServiceBuilder` |
 | `mako-plugin` | WASM plugin extension system | `PluginRegistry`, 5 extension-point traits, Extism sandbox |
@@ -316,16 +317,16 @@ All **seventeen** daemons share a common operational model:
 
 | Daemon | Port | Role | Config file |
 |--------|------|------|-------------|
-| `makod` | `:8080` / `:4080` / `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 45+ workflows, AS4 ingest, deadlines | `makod.toml` |
+| `makod` | `:8080` / `:4080` / `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 55+ workflows, AS4 ingest, deadlines | `makod.toml` |
 | `marktd` | `:8180` | Market Data Hub — MaLo/MeLo/NeLo/TR/SR, Lokationszuordnung graph, preisblaetter, VersorgungsStatus, `event_log` replay, EventBus fan-out; **Geraet** typed konfigurationen sub-resource (16-variant `Konfigurationsparameter` enum, GIN-indexed); **Zaehlzeitdefinition** typed endpoint; ZaehlzeitRegister auto-population from WiM Stammdaten | `marktd.toml` |
 | `processd` | `:8580` | Process decision engine — NB STP (`netz-checker`) + LF E_0624 auto-response | `processd.toml` |
 | `invoicd` | `:8280` | INVOIC plausibility — REMADV, selbstausstellen, overdue-REMADV, § 147 AO / GoBD audit | `invoicd.toml` |
 | `netzbilanzd` | `:8680` | NNE/KA/MMM billing daemon (NB role) — generates INVOIC 31001/31002/31005, invoice draft lifecycle | `netzbilanzd.toml` |
 | `sperrd` | `:8780` | Sperrung execution tracker (NB role) — `sperr_orders` lifecycle, IFTSTA 21039 auto-dispatch | `sperrd.toml` |
 | `nis-syncd` | `:9680` | NIS/GIS grid topology import (NB role, stateless) — pushes `malo_grid` to `marktd`; STP ~80%→≥95% | `nis-syncd.toml` |
-| `edmd` | `:8380` | Energy data management — MSCONS meter readings, BO4E `Energiemenge` deliveries, `Lastgang` + `Zeitreihe` time-series, `MeterBillingPeriod`; **§14a SMGW compliance** (MsbG §21c): `smgw_sessions` + `cls_compliance_log` tables, daily `check_session_compliance()` sweep, `de.edmd.cls.compliance_issue` CloudEvents | `edmd.toml` |
+| `edmd` | `:8380` | Energy data management — MSCONS meter readings, BO4E `Energiemenge` deliveries, `Lastgang` + `Zeitreihe` time-series, `MeterBillingPeriod`; **§14a SMGW compliance** (MsbG §21c): `smgw_sessions` + `cls_compliance_log` tables, daily `check_session_compliance()` sweep, `de.messwert.cls.compliance_issue` CloudEvents | `edmd.toml` |
 | `obsd` | `:8480` | Process observability — KPI reports, deadline-risk alerts, §20 EnWG parity | `obsd.toml` |
-| `einsd` | `:9180` | Einspeiser Registry + EEG/KWKG Settlement (NB/LF role) — **9 settlement schemes** (Vergütung, Mieterstrom §38a, Direktvermarktung, Ausschreibung, Post-EEG Spot, Eigenverbrauch, KWKG-Zuschlag §7 KWKG 2023, Flexibilitätsprämie §50 EEG, Flexibilitätszuschlag §50b EEG); Repowering §22 EEG; KWKG Förderdauer; built-in rate table EEG 2000–2023 + KWKG 2023; CloudEvents `de.eeg.verguetung.berechnet` + `de.eeg.marktpraemie.berechnet` + `de.eeg.anlage.foerderung_auslaufend` | `einsd.toml` |
+| `einsd` | `:9180` | Einspeiser Registry + EEG/KWKG Settlement (NB/LF role) — **9 settlement schemes** (Vergütung, Mieterstrom §21 Abs. 3 EEG, Direktvermarktung, Ausschreibung, Post-EEG Spot, Eigenverbrauch, KWKG-Zuschlag §7 KWKG 2023, Flexibilitätsprämie §50 EEG, Flexibilitätszuschlag §50b EEG); Repowering §22 EEG; KWKG Förderdauer; built-in rate table EEG 2000–2023 + KWKG 2023; CloudEvents `de.eeg.verguetung.berechnet` + `de.eeg.marktpraemie.berechnet` + `de.eeg.anlage.foerderung_auslaufend` | `einsd.toml` |
 | `tarifbd` | `:9080` | Product & Tariff Catalog (LF role) — user-defined energy products (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE); all prices in `Tarifpreisblatt` JSONB; version history; MaLo→product assignment; EPEX Spot for §41a | `tarifbd.toml` |
 | `billingd` | `:9280` | Energy Billing Engine (LF role) — all prices user-defined in `tarifbd`; 13 categories (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/VPP); §41a dynamic; VPP auto-billing webhook (`de.vpp.dispatch.confirmed` → `Rechnung`); `/preview` dry-run; XRechnung 3.0 / ZUGFeRD 2.3; `de.billing.rechnung.erstellt` | `billingd.toml` |
 | `accountingd` | `:9380` | Customer Account Ledger (LF role) — running Kundenkonto ledger; idempotent CE ingest (billing/EEG credits); **FIFO open-item management** (`/open-items`); camt.054 XML + JSON import; SEPA pain.008 XML (multi-group single message, hard `creditor_iban`/`creditor_id` validation); pain.001 SCT credit-transfer; **auto-dunning rule engine** (Mahnstufe 1–3, background worker); **balance reconciliation** (`/reconcile`); **GDPR Art. 17 pseudonymization** (`/anonymize`); Mahnwesen Mahnstufe 1–3; 6 DB migrations | `accountingd.toml` |
@@ -378,7 +379,7 @@ forwarded unchanged in every outbound webhook, enabling end-to-end distributed t
 
 `marktd` fans events out to all registered subscribers via HMAC-SHA256-signed HTTP webhooks.
 The `VersorgungsStatus` is derived automatically on `de.mako.process.completed`
-(PIDs 55003/44003 → Beliefert, 55013/44013 → Unbeliefert). Every supply-state change is written
+(PIDs 55003/44003 → Beliefert, 55005/44005 → Unbeliefert; 55013/44013 → Ersatz-/Grundversorgung via `begin_eog_supply`). Every supply-state change is written
 to `versorgungsstatus_history`, enabling both full audit logs and bitemporal
 "as-of" queries by date.
 
@@ -649,7 +650,7 @@ sequenceDiagram
     processd->>marktd: GET /api/v1/versorgung/{malo_id}  (VersorgungsStatus)
     processd->>marktd: GET /api/v1/malo/{malo_id}/grid  (NIS grid record)
     processd->>marktd: GET /api/v1/partners/{lf_mp_id}  (partner known?)
-    Note over processd: netz_checker::evaluate<br/>check 1: grid record exists<br/>check 2: no pending Anmeldung (A06)<br/>check 3: not retroactive (A97)<br/>check 4: Bilanzierungsgebiet match (A02)<br/>check 5: LF in partner directory (A05)<br/>check 6: Mindestvorlauffrist met (A99)<br/>→ Accept (or Reject/Escalate)
+    Note over processd: netz_checker::evaluate<br/>check 1: grid record exists (else Escalate)<br/>check 2: MaLo participates in MaKo (A02)<br/>check 3: no Anmeldung in Bearbeitung (A06)<br/>check 4: date plausibility (A07 Strom / E17 Gas)<br/>check 5: Bilanzierungsgebiet match (A05)<br/>check 6: LF in partner directory (A05)<br/>→ Accept (or Reject/Escalate)
     processd->>makod: POST /api/v1/commands  gpke.lieferbeginn.bestaetigen
     Note over makod: Workflow::handle → events + UTILMD 55003 outbox<br/>AtomicAppend::append_with_outbox (single WriteBatch)
     makod-->>LF: UTILMD PID 55003 Bestätigung Lieferbeginn (via AS4/REST)

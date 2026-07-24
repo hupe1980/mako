@@ -28,6 +28,7 @@ CREATE TABLE malo (
     fallgruppe           TEXT,  -- Gas GaBi RLM Fallgruppe: 'GABI_RLM_MIT_TAGESBAND' | 'GABI_RLM_OHNE_TAGESBAND'
                                 --   | 'GABI_RLM_IM_NOMINIERUNGSERSATZVERFAHREN'
                                 -- Determines GaBi billing category for Gas RLM MaLos.
+    lokationsbuendel_objektcode TEXT,  -- Marktlokation.lokationsbuendelObjektcode (UTILMD Lokationsbündelstruktur)
     version      BIGINT      NOT NULL DEFAULT 1,
     data         JSONB       NOT NULL,              -- full BO4E MARKTLOKATION
     bo4e_version TEXT        NOT NULL DEFAULT 'v202607.0.0',
@@ -40,9 +41,9 @@ CREATE INDEX malo_bilanzierungsmethode ON malo (bilanzierungsmethode) WHERE bila
 CREATE INDEX malo_regelzone ON malo (regelzone) WHERE regelzone IS NOT NULL;
 CREATE INDEX malo_fallgruppe ON malo (fallgruppe) WHERE fallgruppe IS NOT NULL;
 
--- ── Lokationszuordnung (role assignments, temporal) ───────────────────────────
+-- ── Rollenzuordnung (MaLo role assignments, temporal) ───────────────────────────
 
-CREATE TABLE lokationszuordnung (
+CREATE TABLE rollenzuordnungen (
     malo_id          TEXT  NOT NULL REFERENCES malo (malo_id) ON DELETE CASCADE,
     zuordnungstyp    TEXT  NOT NULL,                -- NB | GNB | MSB | GMSB | LF | LFG | …
     rollencodenummer TEXT  NOT NULL,                -- 13-digit BDEW/DVGW GLN
@@ -51,10 +52,10 @@ CREATE TABLE lokationszuordnung (
     PRIMARY KEY (malo_id, zuordnungstyp, valid_from)
 );
 
-CREATE INDEX lokationszuordnung_malo_id
-    ON lokationszuordnung (malo_id);
-CREATE INDEX lokationszuordnung_rollencodenummer
-    ON lokationszuordnung (rollencodenummer);
+CREATE INDEX rollenzuordnungen_malo_id
+    ON rollenzuordnungen (malo_id);
+CREATE INDEX rollenzuordnungen_rollencodenummer
+    ON rollenzuordnungen (rollencodenummer);
 
 -- ── Messlokation ──────────────────────────────────────────────────────────────
 
@@ -69,6 +70,7 @@ CREATE TABLE melo (
     -- and Gas billing zone lookup (StandorteigenschaftenGas.druckstufe, bilanzierungsgebietEic).
     -- NULL when the incoming PUT does not carry standorteigenschaften.
     standorteigenschaften  JSONB,
+    lokationsbuendel_objektcode TEXT,  -- Messlokation.lokationsbuendelObjektcode (UTILMD Lokationsbündelstruktur)
     version      BIGINT      NOT NULL DEFAULT 1,
     data         JSONB       NOT NULL,              -- full BO4E MESSLOKATION
     bo4e_version TEXT        NOT NULL DEFAULT 'v202607.0.0',
@@ -177,11 +179,18 @@ CREATE TABLE versorgungsstatus (
     lieferende        DATE,
     msb_mp_id           TEXT,
     nb_mp_id            TEXT        NOT NULL,
+    eog_seit          DATE,               -- Start of the running Ersatz-/Grundversorgung (§38/§36 EnWG);
+                                          -- anchors the §38 Abs. 2 3-month maximum. Set by begin_eog_supply,
+                                          -- cleared on confirm_supply / end_supply.
     last_process_id   UUID,
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     version           BIGINT      NOT NULL DEFAULT 1,
 
-    PRIMARY KEY (malo_id, tenant)
+    PRIMARY KEY (malo_id, tenant),
+    -- eog_seit exists exactly while the statutory fallback supply runs.
+    CONSTRAINT versorgungsstatus_eog_seit_scope CHECK (
+        (lieferstatus IN ('Ersatzversorgung', 'Grundversorgung')) = (eog_seit IS NOT NULL)
+    )
 );
 
 CREATE INDEX versorgungsstatus_tenant_status
@@ -191,6 +200,28 @@ CREATE INDEX versorgungsstatus_tenant_lf
     WHERE lf_mp_id IS NOT NULL;
 CREATE INDEX versorgungsstatus_tenant_nb
     ON versorgungsstatus (tenant, nb_mp_id);
+-- §38 timer scans: all running Ersatzversorgungen ordered by start date.
+CREATE INDEX versorgungsstatus_eog
+    ON versorgungsstatus (tenant, eog_seit)
+    WHERE lieferstatus = 'Ersatzversorgung';
+
+-- ── Grundversorger (§36 Abs. 2 EnWG) ──────────────────────────────────────────
+--
+-- The supplier with the most Haushaltskunden in the Netzgebiet, festgestellt
+-- by the NB every three years (zum 1. Juli, published by 30. September).
+-- Master data maintained by the operator; read by the processd gap-closure
+-- automation to address the UTILMD 55013/44013 EoG Zuordnung.
+
+CREATE TABLE grundversorger (
+    tenant          TEXT        NOT NULL,
+    nb_mp_id        TEXT        NOT NULL,
+    sparte          TEXT        NOT NULL CHECK (sparte IN ('STROM', 'GAS')),
+    gv_mp_id        TEXT        NOT NULL,
+    festgestellt_am DATE,               -- date of the §36 Abs. 2 Feststellung
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (tenant, nb_mp_id, sparte)
+);
 
 -- ── NB price sheets (PreisblattNetznutzung) ───────────────────────────────────
 --
@@ -565,6 +596,7 @@ CREATE TABLE lokationszuordnungen (
     nach_typ     TEXT        NOT NULL CHECK (nach_typ IN ('malo', 'melo', 'nelo', 'sr', 'tr')),
     valid_from   DATE,                   -- NULL = from epoch
     valid_to     DATE,                   -- NULL = open-ended
+    lokationsbuendelcode TEXT,           -- extracted from data.lokationsbuendelcode on upsert
     data         JSONB       NOT NULL DEFAULT '{}',  -- full BO4E Lokationszuordnung
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -1013,3 +1045,84 @@ CREATE TABLE esa_framework_agreements (
 
 COMMENT ON TABLE esa_framework_agreements IS
     'Bilateral EDI@Energy framework agreement + AS4 cert state between MSB and ESA.';
+
+-- ── §20b EnWG Netzzugangsplattform — request registry ─────────────────────────
+--
+-- Projection of §20b requests submitted through the makod netzzugang adapter:
+-- Zählpunktanordnungen (Abs. 2 Nr. 1), Verrechnungskonzepte (Abs. 2 Nr. 2) and
+-- the Registrierung von §42c-Vereinbarungen (Abs. 2 Nr. 3). The national
+-- platform has no published interface yet (no Festlegung under §20b Abs. 3 as
+-- of 2026-07); `payload` is the canonical JSON the adapter delivers and
+-- `platform_ref` the platform's reference once one exists.
+CREATE TABLE netzzugang_antraege (
+    id                 UUID        PRIMARY KEY,
+    tenant             TEXT        NOT NULL,
+    antrag_typ         TEXT        NOT NULL
+        CHECK (antrag_typ IN ('zaehlpunktanordnung',
+                              'verrechnungskonzept',
+                              'energysharing_vereinbarung')),
+    aktion             TEXT        NOT NULL
+        CHECK (aktion IN ('bestellung', 'aenderung', 'abbestellung',
+                          'registrierung')),
+    netzanschluss_id   TEXT        NOT NULL,
+    nb_mp_id           TEXT        NOT NULL,
+    -- Opaque requester reference (Anschlussnehmer/-nutzer) — no PII.
+    antragsteller_ref  TEXT        NOT NULL,
+    status             TEXT        NOT NULL DEFAULT 'erfasst'
+        CHECK (status IN ('erfasst', 'uebermittelt', 'bestaetigt',
+                          'abgelehnt', 'fehlgeschlagen')),
+    payload            JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    platform_ref       TEXT,
+    -- Optimistic-locking version; incremented on every successful write.
+    version            BIGINT      NOT NULL DEFAULT 1,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    submitted_at       TIMESTAMPTZ,
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX nz_antraege_tenant_status
+    ON netzzugang_antraege (tenant, status);
+CREATE INDEX nz_antraege_anschluss
+    ON netzzugang_antraege (tenant, netzanschluss_id);
+
+COMMENT ON TABLE netzzugang_antraege IS
+    '§20b EnWG Netzzugangsplattform requests (Zählpunktanordnung / Verrechnungskonzept / §42c-Registrierung) and their lifecycle state.';
+
+-- ── Messstellenbetreiberrahmenvertrag Gas (GeLi Gas 3.0) ──────────────────────
+--
+-- GeLi Gas 3.0 (BK7-24-01-009, Tenor Ziff. 13–16): the old BNetzA-imposed Gas
+-- MSB-Rahmenvertrag (BK7-17-026) is revoked effective 01.10.2026; GNB and MSB
+-- must conclude the market-developed replacement (KoV XV Anlage 8, versioned
+-- with the KoV) in its jeweils gültige Fassung. GNB duties: publish the
+-- contract on their website, enable conclusion for any MSB
+-- non-discriminatorily, and migrate existing BK7-17-026 contracts by the
+-- deadline. One row per (GNB, MSB) conclusion; legal basis §9 Abs. 1 Nr. 3
+-- i.V.m. Abs. 4 MsbG.
+CREATE TABLE msb_rahmenvertraege_gas (
+    id            UUID        PRIMARY KEY,
+    tenant        TEXT        NOT NULL,
+    gnb_mp_id     TEXT        NOT NULL,
+    msb_mp_id     TEXT        NOT NULL,
+    -- Contract text edition, e.g. 'KoV XV Anlage 8' (pre-01.10.2026 legacy:
+    -- 'BK7-17-026').
+    fassung       TEXT        NOT NULL DEFAULT 'KoV XV Anlage 8',
+    status        TEXT        NOT NULL DEFAULT 'angeboten'
+        CHECK (status IN ('angeboten', 'abgeschlossen',
+                          'anpassung_erforderlich', 'beendet')),
+    signed_at     TIMESTAMPTZ,
+    valid_from    DATE        NOT NULL,
+    valid_to      DATE,
+    -- Full BO4E Vertrag payload (vertragsart RAHMENVERTRAG).
+    vertrag       JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    version       BIGINT      NOT NULL DEFAULT 1,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX msb_rv_gas_parties
+    ON msb_rahmenvertraege_gas (tenant, gnb_mp_id, msb_mp_id, valid_from);
+CREATE INDEX msb_rv_gas_status
+    ON msb_rahmenvertraege_gas (tenant, status);
+
+COMMENT ON TABLE msb_rahmenvertraege_gas IS
+    'Gas MSB framework contracts (GeLi Gas 3.0 Tenor 13–16, KoV XV Anlage 8): per-(GNB,MSB) conclusion state incl. the BK7-17-026 migration duty by 01.10.2026.';

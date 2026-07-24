@@ -347,7 +347,7 @@ mod tests {
     fn markt_event_source_prefix() {
         let event = MarktEvent::new(
             "9900000000001",
-            "de.markt.malo.updated",
+            mako_events::markt::MALO_UPDATED,
             "DE000000000001",
             serde_json::json!({}),
         );
@@ -358,7 +358,7 @@ mod tests {
     fn markt_event_with_extensions_sets_marktrole() {
         let event = MarktEvent::new(
             "9900000000001",
-            "de.markt.malo.updated",
+            mako_events::markt::MALO_UPDATED,
             "DE000000000001",
             serde_json::json!({}),
         )
@@ -381,7 +381,7 @@ mod tests {
     fn markt_event_roundtrip_json() {
         let orig = MarktEvent::new(
             "9900000000001",
-            "de.markt.versorgung.beliefert",
+            mako_events::markt::VERSORGUNG_BELIEFERT,
             "51238696780",
             serde_json::json!({"lieferstatus": "Beliefert"}),
         )
@@ -396,6 +396,6 @@ mod tests {
         assert_eq!(back.marktmaloid, orig.marktmaloid);
         assert_eq!(back.marktrole, orig.marktrole);
         assert_eq!(back.makopid, orig.makopid);
-        assert_eq!(back.ce_type, "de.markt.versorgung.beliefert");
+        assert_eq!(back.ce_type, mako_events::markt::VERSORGUNG_BELIEFERT);
     }
 }

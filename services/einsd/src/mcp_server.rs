@@ -381,7 +381,7 @@ impl EinsdMcpHandler {
                 crate::handlers::emit_settlement_ce(
                     &self.state.cfg,
                     &self.state.http_client,
-                    "de.eeg.settlement.berechnet",
+                    mako_events::eeg::SETTLEMENT_BERECHNET,
                     &result.tr_id,
                     &anlage.malo_id,
                     &result,

@@ -254,7 +254,7 @@ pub async fn put_nb_contract(
             // Vertrag caches without polling.
             let evt = MarktEvent::new(
                 &tenant_gln.0,
-                "de.markt.nb-contract.updated",
+                mako_events::markt::NB_CONTRACT_UPDATED,
                 id,
                 serde_json::json!({
                     "version": version,

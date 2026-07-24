@@ -50,7 +50,7 @@ use mako_engine::{
 /// | PID   | Name                                                               |
 /// |-------|--------------------------------------------------------------------|
 /// | 31011 | Rechnung sonstige Leistung (AWH Sperrprozesse Gas, VNB → LFN/LFA) |
-pub const SPERRPROZESSE_INVOIC_PID: u32 = 31011;
+pub const SPERRPROZESSE_INVOIC_PID: Pruefidentifikator = Pruefidentifikator::const_new(31011);
 
 /// Workflow key used for PID router registration.
 pub const WORKFLOW_NAME: &str = "geli-gas-sperrprozesse-invoic";
@@ -353,7 +353,7 @@ impl Workflow for GeliGasSperrprozesseInvoicWorkflow {
                 if !matches!(state, GeliGasSperrprozesseInvoicState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
                 }
-                if pid.as_u32() != SPERRPROZESSE_INVOIC_PID {
+                if pid != SPERRPROZESSE_INVOIC_PID {
                     return Err(WorkflowError::rejected(format!(
                         "expected GeLi Gas AWH INVOIC PID {SPERRPROZESSE_INVOIC_PID}, got {pid}",
                     )));

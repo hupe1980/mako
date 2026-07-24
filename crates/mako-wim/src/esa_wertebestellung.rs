@@ -372,10 +372,15 @@ impl CommandPayload for EsaWertebestellungCommand {}
 /// ESA-origination Wertebestellung workflow (WiM Strom Teil 2, Kapitel 4).
 pub struct EsaWertebestellungWorkflow;
 
-fn require_pid(pid: Pruefidentifikator, allowed: &[u32], what: &str) -> Result<(), WorkflowError> {
-    if allowed.contains(&pid.as_u32()) {
+fn require_pid(
+    pid: Pruefidentifikator,
+    allowed: &[Pruefidentifikator],
+    what: &str,
+) -> Result<(), WorkflowError> {
+    if allowed.contains(&pid) {
         Ok(())
     } else {
+        let allowed: Vec<u32> = allowed.iter().map(|a| a.as_u32()).collect();
         Err(WorkflowError::rejected(format!(
             "{what} erwartet PID {allowed:?}, erhielt {pid}"
         )))
@@ -494,7 +499,7 @@ impl Workflow for EsaWertebestellungWorkflow {
         // PID in BGM DE 1004 and the location in LOC.
         fn esa_send(
             message_type: &'static str,
-            pid: u32,
+            pid: Pruefidentifikator,
             data: &EsaWertebestellungData,
             message_ref: &MessageRef,
             order_reference: Option<&str>,
@@ -717,7 +722,7 @@ impl Workflow for EsaWertebestellungWorkflow {
                     &[STORNO_BESTAETIGUNG_PID, STORNO_ABLEHNUNG_PID],
                     "Antwort auf Stornierung",
                 )?;
-                if pid.as_u32() == STORNO_BESTAETIGUNG_PID {
+                if pid == STORNO_BESTAETIGUNG_PID {
                     Ok(WorkflowOutput::events(vec![E::StornierungBestaetigt {
                         message_ref,
                     }]))

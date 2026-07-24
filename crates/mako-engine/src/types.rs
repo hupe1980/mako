@@ -274,9 +274,31 @@ impl Pruefidentifikator {
         }
     }
 
+    /// Construct a `Pruefidentifikator` in const context.
+    ///
+    /// Intended for typed PID constants:
+    ///
+    /// ```rust
+    /// use mako_engine::types::Pruefidentifikator;
+    /// const BESTELLUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(17007);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics at **compile time** (const evaluation) when `code` is outside
+    /// `10000–99999`, so an out-of-range constant cannot build.
+    #[must_use]
+    pub const fn const_new(code: u32) -> Self {
+        assert!(
+            code >= Self::MIN && code <= Self::MAX,
+            "invalid Pruefidentifikator: must be a 5-digit code in 10000-99999"
+        );
+        Self(code)
+    }
+
     /// Returns the numeric code.
     #[must_use]
-    pub fn as_u32(self) -> u32 {
+    pub const fn as_u32(self) -> u32 {
         self.0
     }
 }
@@ -336,6 +358,22 @@ mod tests {
         // Different types even though same inner value:
         let _: MaLo = malo_val;
         let _: MeLo = messlokation;
+    }
+
+    #[test]
+    fn pruefidentifikator_const_new_and_structural_match() {
+        const BESTELLUNG: Pruefidentifikator = Pruefidentifikator::const_new(17007);
+        const ABBESTELLUNG: Pruefidentifikator = Pruefidentifikator::const_new(17008);
+        assert_eq!(BESTELLUNG.as_u32(), 17007);
+        // Typed constants must be usable directly as match patterns
+        // (structural equality via derived PartialEq/Eq on a plain u32 field).
+        let got = Pruefidentifikator::new(17008).unwrap();
+        let label = match got {
+            BESTELLUNG => "bestellung",
+            ABBESTELLUNG => "abbestellung",
+            _ => "other",
+        };
+        assert_eq!(label, "abbestellung");
     }
 
     #[test]

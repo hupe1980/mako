@@ -194,6 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             validation_errors: validation_errors.clone(),
             bilanzierungsgebiet: None,
             bilanzierungsmethode: None,
+            transaktionsgrund: None,
             fallgruppe: None,
         })
         .await?;
@@ -378,6 +379,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             validation_errors: vec![],
             bilanzierungsgebiet: None,
             bilanzierungsmethode: None,
+            transaktionsgrund: None,
             fallgruppe: None,
         })
         .await

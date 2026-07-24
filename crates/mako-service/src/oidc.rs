@@ -8,7 +8,10 @@
 //! - Accepts only asymmetric algorithms: RS256/384/512, ES256/384, PS256/384/512
 //! - HS* (symmetric HMAC) algorithms are rejected unconditionally
 //! - JWKS is cached in-process; a background task refreshes it on a configurable interval
-//! - The `mako_tenant` custom claim is required — tokens without it are rejected
+//! - The [`Claims`] extractor requires the `mako_tenant` custom claim — tokens
+//!   without it are rejected with 401.  Services that call
+//!   [`OidcVerifier::verify`] directly (e.g. `makod`, which authorizes via
+//!   Cedar on the `sub` claim alone) accept tenant-less tokens.
 //!
 //! ## Quick-start
 //!
@@ -33,7 +36,7 @@
 //!
 //! | Claim | Type | Required | Description |
 //! |---|---|---|---|
-//! | `mako_tenant` | `string` | **yes** | Operator GLN or tenant slug — data-isolation boundary |
+//! | `mako_tenant` | `string` | **yes** (for the [`Claims`] extractor) | Operator GLN or tenant slug — data-isolation boundary |
 //! | `mako_roles`  | `string[]` | no | Energy-market roles: `"NB"`, `"LF"`, `"MSB"`, … |
 //! | `mako_sparte` | `string[]` | no | Grid commodity: `"STROM"`, `"GAS"` |
 
@@ -73,8 +76,10 @@ pub struct JwtClaims {
     /// `sub` — unique user identifier; used as the Cedar principal entity ID.
     pub sub: String,
     /// Custom claim `mako_tenant` — data-isolation boundary (operator GLN or
-    /// tenant slug).  The IDP must include this claim in every token.
-    pub mako_tenant: String,
+    /// tenant slug).  `None` when the IDP does not emit the claim; the
+    /// [`Claims`] Axum extractor rejects such tokens with 401, while services
+    /// that authorize on `sub` alone (e.g. `makod`'s Cedar layer) accept them.
+    pub mako_tenant: Option<String>,
     /// Custom claim `mako_roles: ["NB", "LF", ...]` — energy-market roles.
     pub mako_roles: Vec<String>,
     /// Custom claim `mako_sparte: ["STROM", "GAS"]`.
@@ -86,6 +91,12 @@ impl JwtClaims {
     #[must_use]
     pub fn has_role(&self, role: &str) -> bool {
         self.mako_roles.iter().any(|r| r.eq_ignore_ascii_case(role))
+    }
+
+    /// The `mako_tenant` claim, when present.
+    #[must_use]
+    pub fn tenant(&self) -> Option<&str> {
+        self.mako_tenant.as_deref()
     }
 }
 
@@ -114,6 +125,9 @@ pub enum OidcError {
 
     #[error("JWT algorithm {0:?} is not permitted; only asymmetric algorithms are accepted")]
     AlgorithmDenied(String),
+
+    #[error("JWT is missing the required `mako_tenant` claim")]
+    MissingTenant,
 }
 
 // ── OidcVerifier ─────────────────────────────────────────────────────────────
@@ -189,7 +203,7 @@ impl OidcVerifier {
     pub fn disabled_claims(&self) -> JwtClaims {
         JwtClaims {
             sub: "dev-admin".to_owned(),
-            mako_tenant: self.inner.disabled_tenant.clone(),
+            mako_tenant: Some(self.inner.disabled_tenant.clone()),
             mako_roles: vec!["NB".to_owned(), "LF".to_owned(), "MSB".to_owned()],
             mako_sparte: vec!["STROM".to_owned(), "GAS".to_owned()],
         }
@@ -293,7 +307,8 @@ impl OidcVerifier {
         #[derive(Deserialize)]
         struct RawClaims {
             sub: String,
-            mako_tenant: String,
+            #[serde(default)]
+            mako_tenant: Option<String>,
             #[serde(default)]
             mako_roles: Vec<String>,
             #[serde(default)]
@@ -318,23 +333,34 @@ impl OidcVerifier {
     }
 
     /// Spawn a background Tokio task to refresh JWKS every `interval_secs` seconds.
-    pub fn spawn_refresh_task(self, http: Client, interval_secs: u64, shutdown: CancellationToken) {
+    ///
+    /// The task exits cleanly when `shutdown` is cancelled.  The returned
+    /// [`tokio::task::JoinHandle`] can be awaited after cancellation to confirm
+    /// the task has stopped; dropping it detaches the task.
+    pub fn spawn_refresh_task(
+        &self,
+        http: Client,
+        interval_secs: u64,
+        shutdown: CancellationToken,
+    ) -> tokio::task::JoinHandle<()> {
+        let this = self.clone();
         tokio::spawn(async move {
-            let interval = std::time::Duration::from_secs(interval_secs);
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+            ticker.tick().await; // skip the first (immediate) tick
             loop {
                 tokio::select! {
-                    _ = tokio::time::sleep(interval) => {
-                        if let Err(e) = self.refresh(&http).await {
+                    _ = ticker.tick() => {
+                        if let Err(e) = this.refresh(&http).await {
                             tracing::warn!(error = %e, "OIDC: JWKS refresh failed (will retry)");
                         }
                     }
                     _ = shutdown.cancelled() => {
                         tracing::debug!("OIDC: JWKS refresh task shutting down");
-                        break;
+                        return;
                     }
                 }
             }
-        });
+        })
     }
 
     async fn fetch_jwks_from(http: &Client, url: &str) -> Result<JwkSet, OidcError> {
@@ -384,9 +410,15 @@ impl Claims {
     }
 
     /// Returns the caller's tenant (data-isolation boundary from `mako_tenant` claim).
+    ///
+    /// Invariant: the [`FromRequestParts`] extractor rejects tokens without
+    /// `mako_tenant` (401), so `Claims` obtained from a handler argument always
+    /// carries a tenant.  If a `Claims` is constructed by hand from tenant-less
+    /// [`JwtClaims`], this returns `""` — which fails every tenant-equality
+    /// check (deny by default).
     #[must_use]
     pub fn tenant(&self) -> &str {
-        &self.0.mako_tenant
+        self.0.mako_tenant.as_deref().unwrap_or_default()
     }
 
     /// Build a [`CedarPrincipal`] for use with [`crate::cedar::CedarEnforcer::check`].
@@ -394,7 +426,7 @@ impl Claims {
     pub fn principal(&self) -> CedarPrincipal {
         CedarPrincipal {
             sub: self.0.sub.clone(),
-            tenant: self.0.mako_tenant.clone(),
+            tenant: self.0.mako_tenant.clone().unwrap_or_default(),
             roles: self.0.mako_roles.clone(),
         }
     }
@@ -450,6 +482,11 @@ where
         let token = bearer.ok_or(AuthError(OidcError::MissingKid))?;
 
         let claims = verifier.verify(token).map_err(AuthError)?;
+        // Enforce the tenant invariant at extraction time: every `Claims`
+        // handed to a handler carries `mako_tenant` (data-isolation boundary).
+        if claims.mako_tenant.is_none() {
+            return Err(AuthError(OidcError::MissingTenant));
+        }
         Ok(Claims(claims))
     }
 }
@@ -531,8 +568,7 @@ impl OidcConfig {
             let v = OidcVerifier::new(&c.issuer, &c.audience, http)
                 .await
                 .context("OIDC discovery")?;
-            v.clone()
-                .spawn_refresh_task(http.clone(), c.jwks_refresh_secs, shutdown);
+            let _refresh = v.spawn_refresh_task(http.clone(), c.jwks_refresh_secs, shutdown);
             Ok(v)
         } else {
             tracing::warn!(
@@ -541,5 +577,277 @@ impl OidcConfig {
             );
             Ok(OidcVerifier::disabled(tenant_id))
         }
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jsonwebtoken::{EncodingKey, Header};
+
+    // ── Test RSA-2048 key pair (test-only, never used in production) ──────────
+    //
+    // Private key in PKCS#8 PEM format; JWK n/e derived from it.
+    // Generated with `openssl genrsa 2048`.
+
+    const TEST_RSA_PRIVATE_KEY_PEM: &str = concat!(
+        "-----BEGIN PRIVATE KEY-----\n",
+        "MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCv6YP9yEHHvG3o\n",
+        "gIPI2GVw16HoDxXnD2TnnRiQCH/ChaYOA580amRfdmnazjlpdiE+DpMtlAMEOIF9\n",
+        "E/I5n9ivRdBZG0G0BurdiJ7KiYJ0aS7jfZOXknUHesPiqHxxGT4Sr3EZfuIRNq8h\n",
+        "DoihfuXXJmS1oJK94FNcVyRYc8N2kwv+n++Tcu0rgLH6Ax4OWYGXR58VzmcK4zmJ\n",
+        "IV37zV50rBVl3SQNZk01ZPhxdyLaIvgNrjvx7gyshob2RPJZ+xCU3vKcW90IEhAN\n",
+        "cvDAoTTQylVPo/KyViwptEEi10GS127GD3U5Qz9w+YZY1FdaR0jEx+yOWUx7NOcS\n",
+        "Bnu/sBt3AgMBAAECggEAUKRIpWEVwrY/Xkv33e1Rx4KajtLHlCaK9+Cc/35d7zMs\n",
+        "dhUz+Sfivp5+lVdfm1iTkarFzqmhHmC2/7tSmhcMkwD6q7aijqBzL75vKOMT4kDL\n",
+        "xW7uZ5g0vQqK3Q+nCIPtYEx8GReBFCoQ66MJgJs3S0Om/FpRmujI3jZ2i3P6QZMP\n",
+        "rdXQRmZ8vYdqc6X/RwLOYw4JJPoCLiCMTqXoUgxWot3Mysoin6sQwPss9hV2Yz97\n",
+        "V/eBIungHV+/n3AZ0XLOg8Dna2rM6+y1k/JCAXlxfAZygPvzhcFrCH/fLDEsn3SU\n",
+        "qnKsCt8nIAo1LHEeTE3/2KGVIQ2ggvQPFNabrqEp1QKBgQD2xsWmeaC8NygSsD2n\n",
+        "RAcwQVBiaZIP/8JA9x3Gy826CKy/cQxGgJm9hlLKexX2AKvwfaF5IQaJq6LU9qBf\n",
+        "8uKs+ZL94aeTS1Fdx8JuoMz3RrsR172LQO425PVbSuglijm8zBOqOzKBjM9nrVpi\n",
+        "Apxdw9w+LJUMi/VA46Cf2k+LMwKBgQC2fLGXufMFd6/sj2NfBEfRBQNL98TDiApF\n",
+        "iv7Dgn47jFXGhZ0M03hvLzkNf+IdaFzlGZwLbIo3HibRwBzgnLIG4pV6TkGB8JSY\n",
+        "lZvwZp4V7gc/04OBWoCQb63wioFUwJ/xmAg0LeVwLI5Q8CT8MahERKvph3PkYVb0\n",
+        "J0Bd0mTOrQKBgBfu5zRiD2ixoL1PQmt6eYgAjZ89xeCvWVObo9On6Gfmd3qJqDse\n",
+        "NcrfwB/LGDInloVYadSpk0y+zKgC00L692j3O35L6EiswVNrEDxSdA53WaU9WzCq\n",
+        "N3AzfGhCN4mMglUBJdcYrqlJ0sOnWGCxCCE/4ZhWEo6I9Fw6t1VJgvVpAoGAFgXE\n",
+        "VOAu8Nj51R2Uy3GzzQjC1hcnmsU/IBdfGW8VFtCfxV54joSywxA63WMygYQHueo2\n",
+        "R7aok3BDFQsPMRgX7/bGPUVWaH0FIcjkUcXAjDr2iwBWnXSzkTq5Dg9Y/kZkxv4m\n",
+        "900WpEvsPN5OSFUhzmNPL9aV6NjKapqWDPyIB90CgYBv4T8eGAgWHe88TuhbF5g6\n",
+        "RUGAhxSOKQIqKqwxnTcUyn++6Tzdv5VSi+9MFHFv7LLf22SJIwbzeuNY2b+r9BqO\n",
+        "1XJ8n4YQsvhchT9f1FYhg0cSsADCpoNU09Ofb1dLisWarF1OOj5HrjmR/4O/LiWC\n",
+        "nwgjtyDMWSb/tW+M8+qBew==\n",
+        "-----END PRIVATE KEY-----\n",
+    );
+
+    // JWK `n` (base64url-encoded modulus, no padding) derived from the key above.
+    const TEST_JWK_N: &str = "r-mD_chBx7xt6ICDyNhlcNeh6A8V5w9k550YkAh_woWmDgOfNGpkX3Zp2s45aXYhPg6TL\
+         ZQDBDiBfRPyOZ_Yr0XQWRtBtAbq3YieyomCdGku432Tl5J1B3rD4qh8cRk-Eq9xGX7iET\
+         avIQ6IoX7l1yZktaCSveBTXFckWHPDdpML_p_vk3LtK4Cx-gMeDlmBl0efFc5nCuM5iSFd\
+         -81edKwVZd0kDWZNNWT4cXci2iL4Da478e4MrIaG9kTyWfsQlN7ynFvdCBIQDXLwwKE00M\
+         pVT6PyslYsKbRBItdBktduxg91OUM_cPmGWNRXWkdIxMfsjllMezTnEgZ7v7Abdw";
+
+    // e = 65537 → AQAB
+    const TEST_JWK_E: &str = "AQAB";
+    const TEST_KID: &str = "test-key-1";
+
+    fn test_jwks() -> JwkSet {
+        serde_json::from_value(serde_json::json!({
+            "keys": [{
+                "kty": "RSA",
+                "use": "sig",
+                "kid": TEST_KID,
+                "alg": "RS256",
+                "n": TEST_JWK_N,
+                "e": TEST_JWK_E
+            }]
+        }))
+        .expect("valid test JWK")
+    }
+
+    #[derive(serde::Serialize)]
+    struct TestClaims<'a> {
+        sub: &'a str,
+        iss: &'a str,
+        aud: &'a str,
+        exp: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        nbf: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mako_tenant: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mako_roles: Option<Vec<&'a str>>,
+    }
+
+    fn encode_rs256(claims: &TestClaims<'_>) -> String {
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some(TEST_KID.to_owned());
+        jsonwebtoken::encode(
+            &header,
+            claims,
+            &EncodingKey::from_rsa_pem(TEST_RSA_PRIVATE_KEY_PEM.as_bytes()).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn make_rs256_token(sub: &str, iss: &str, aud: &str, exp: u64) -> String {
+        encode_rs256(&TestClaims {
+            sub,
+            iss,
+            aud,
+            exp,
+            nbf: None,
+            mako_tenant: None,
+            mako_roles: None,
+        })
+    }
+
+    fn verifier() -> OidcVerifier {
+        OidcVerifier::from_jwks_for_testing("https://idp.example.com", "makod", test_jwks())
+    }
+
+    // ── verify — happy path ───────────────────────────────────────────────────
+
+    #[test]
+    fn rs256_valid_sub_only_token_accepted() {
+        // makod-style token: `sub` only, no mako_tenant custom claim.
+        let token = make_rs256_token(
+            "user-123",
+            "https://idp.example.com",
+            "makod",
+            9_999_999_999,
+        );
+        let claims = verifier()
+            .verify(&token)
+            .expect("valid RS256 token must verify");
+        assert_eq!(claims.sub, "user-123");
+        assert_eq!(claims.tenant(), None);
+        assert!(claims.mako_roles.is_empty());
+    }
+
+    #[test]
+    fn rs256_token_with_mako_claims_accepted() {
+        let token = encode_rs256(&TestClaims {
+            sub: "user-456",
+            iss: "https://idp.example.com",
+            aud: "makod",
+            exp: 9_999_999_999,
+            nbf: None,
+            mako_tenant: Some("9900357000004"),
+            mako_roles: Some(vec!["NB", "LF"]),
+        });
+        let claims = verifier().verify(&token).expect("must verify");
+        assert_eq!(claims.tenant(), Some("9900357000004"));
+        assert!(claims.has_role("nb"));
+        assert!(!claims.has_role("MSB"));
+    }
+
+    // ── verify — algorithm rejection ──────────────────────────────────────────
+
+    #[test]
+    fn hs256_token_is_rejected() {
+        let header = Header::new(Algorithm::HS256);
+        #[derive(serde::Serialize)]
+        struct Hs256Claims {
+            sub: String,
+            iss: String,
+            aud: Vec<String>,
+            exp: u64,
+        }
+        let token = jsonwebtoken::encode(
+            &header,
+            &Hs256Claims {
+                sub: "user1".to_owned(),
+                iss: "https://idp.example.com".to_owned(),
+                aud: vec!["makod".to_owned()],
+                exp: 9_999_999_999,
+            },
+            &EncodingKey::from_secret(b"test-secret"),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            verifier().verify(&token),
+            Err(OidcError::AlgorithmDenied(_))
+        ));
+    }
+
+    // ── verify — wrong audience ───────────────────────────────────────────────
+
+    #[test]
+    fn wrong_audience_rejected() {
+        // Verifier expects "makod", token carries "other-service".
+        let token = make_rs256_token(
+            "user-123",
+            "https://idp.example.com",
+            "other-service",
+            9_999_999_999,
+        );
+        assert!(matches!(
+            verifier().verify(&token),
+            Err(OidcError::TokenInvalid(_))
+        ));
+    }
+
+    // ── verify — expired token ────────────────────────────────────────────────
+
+    #[test]
+    fn expired_token_rejected() {
+        let token = make_rs256_token("user-123", "https://idp.example.com", "makod", 1); // exp=1 is in the past
+        assert!(matches!(
+            verifier().verify(&token),
+            Err(OidcError::TokenInvalid(_))
+        ));
+    }
+
+    // ── verify — future nbf rejected ─────────────────────────────────────────
+
+    #[test]
+    fn future_nbf_rejected() {
+        let token = encode_rs256(&TestClaims {
+            sub: "user-123",
+            iss: "https://idp.example.com",
+            aud: "makod",
+            exp: 9_999_999_999,
+            nbf: Some(4_000_000_000), // ~year 2096 — not-yet-valid
+            mako_tenant: None,
+            mako_roles: None,
+        });
+        assert!(matches!(
+            verifier().verify(&token),
+            Err(OidcError::TokenInvalid(_))
+        ));
+    }
+
+    // ── verify — unknown kid ──────────────────────────────────────────────────
+
+    #[test]
+    fn unknown_kid_returns_error() {
+        let token = make_rs256_token(
+            "user-123",
+            "https://idp.example.com",
+            "makod",
+            9_999_999_999,
+        );
+        // Empty JWKS — kid "test-key-1" will not be found.
+        let verifier = OidcVerifier::from_jwks_for_testing(
+            "https://idp.example.com",
+            "makod",
+            JwkSet { keys: vec![] },
+        );
+        assert!(matches!(
+            verifier.verify(&token),
+            Err(OidcError::UnknownKid(_))
+        ));
+    }
+
+    // ── Claims tenant invariant ───────────────────────────────────────────────
+
+    #[test]
+    fn claims_tenant_returns_str_when_present() {
+        let claims = Claims(JwtClaims {
+            sub: "u".to_owned(),
+            mako_tenant: Some("9900357000004".to_owned()),
+            mako_roles: vec![],
+            mako_sparte: vec![],
+        });
+        assert_eq!(claims.tenant(), "9900357000004");
+    }
+
+    #[test]
+    fn claims_tenant_defaults_to_empty_for_tenantless_token() {
+        // Hand-constructed Claims without a tenant deny by default ("" never
+        // equals a real tenant GLN).  The Axum extractor never produces this.
+        let claims = Claims(JwtClaims {
+            sub: "u".to_owned(),
+            mako_tenant: None,
+            mako_roles: vec![],
+            mako_sparte: vec![],
+        });
+        assert_eq!(claims.tenant(), "");
+        assert_eq!(claims.principal().tenant, "");
     }
 }

@@ -155,6 +155,16 @@ pub fn settle_dezentrale_einspeisung(
 
     let mut positions = Vec::new();
     let mut warnings = Vec::new();
+    // Exempt from `ensure_berechenbar` (the AgNeS guard): the §18 payment has
+    // its own, earlier sunset — GBK-25-02-1#1 ends it with 2028, and a 2029+
+    // period settles to zero with the Info below. Nothing is ever priced under
+    // lapsed rules here, so refusing on the Entgelt axis would only turn an
+    // already-explicit "nothing is payable" into an error.
+    crate::billing::warn_if_straddles_turnover(
+        input.period.from(),
+        input.period.to(),
+        &mut warnings,
+    );
     if faktor.is_zero() {
         warnings.push(crate::types::SettlementWarning {
             severity: crate::types::WarningSeverity::Info,
@@ -308,6 +318,23 @@ mod tests {
             settle_dezentrale_einspeisung(&i),
             Err(BillingError::InvalidInput { .. })
         ));
+    }
+
+    /// A period across the 2025/2026 Netzzugang turnover crosses no
+    /// Abschmelzung step, so it settles — but it carries the same
+    /// REGIME_TURNOVER_IN_PERIOD warning every other builder emits.
+    #[test]
+    fn a_period_across_the_netzzugang_turnover_warns() {
+        let r =
+            settle_dezentrale_einspeisung(&base(p(date!(2025 - 12 - 15), date!(2026 - 01 - 15))))
+                .expect("no Abschmelzung step is crossed");
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.code == "REGIME_TURNOVER_IN_PERIOD"),
+            "warnings: {:?}",
+            r.warnings
+        );
     }
 
     /// From 2029 nothing is payable: no position, an Info saying why.

@@ -17,6 +17,7 @@ members = [
     "crates/mako-nbw",
     "crates/mako-markt",
     "crates/mako-edm",
+    "crates/mako-events",
     "crates/mako-obs",
     "crates/mako-service",
     "crates/mako-plugin",
@@ -92,6 +93,7 @@ edi-energy       = { path = "crates/edi-energy",  version = "0.13" }
 mako-engine      = { path = "crates/mako-engine",      version = "0.13" }
 mako-markt       = { path = "crates/mako-markt",       version = "0.13" }
 mako-edm         = { path = "crates/mako-edm",         version = "0.13" }
+mako-events      = { path = "crates/mako-events",      version = "0.13" }
 grid-billing     = { path = "crates/grid-billing",     version = "0.13" }
 eeg-billing      = { path = "crates/eeg-billing",      version = "0.13" }
 mako-obs         = { path = "crates/mako-obs",         version = "0.13" }

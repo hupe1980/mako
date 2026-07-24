@@ -1,0 +1,11 @@
+[package]
+name             = "mako-events"
+version.workspace = true
+description      = "Compile-time catalog of every CloudEvents `type` used across the mako workspace"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]

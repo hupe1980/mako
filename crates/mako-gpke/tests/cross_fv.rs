@@ -165,6 +165,7 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
         receiver: MarktpartnerCode::new(NB_ID),
         location_id: MaLo::new(MALO_ID),
         process_date: "20250201".to_owned(),
+        transaktionsgrund: None,
     })
     .await
     .expect("LFN InitiateAnmeldung must succeed");
@@ -202,6 +203,7 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
             .collect(),
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
+        transaktionsgrund: None,
         fallgruppe: None,
     })
     .await
@@ -345,6 +347,7 @@ async fn cross_fv_rejection_also_terminates_cleanly() {
         receiver: MarktpartnerCode::new(NB_ID),
         location_id: MaLo::new(MALO_ID),
         process_date: "20250201".to_owned(),
+        transaktionsgrund: None,
     })
     .await
     .expect("LFN InitiateAnmeldung must succeed");
@@ -423,6 +426,7 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
             .collect(),
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
+        transaktionsgrund: None,
         fallgruppe: None,
     })
     .await
@@ -464,6 +468,7 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
         receiver: MarktpartnerCode::new(NB_ID),
         location_id: MaLo::new(MALO_ID),
         process_date: "20250201".to_owned(),
+        transaktionsgrund: None,
     })
     .await
     .expect("LFN InitiateAnmeldung (S2.1 process) must succeed");

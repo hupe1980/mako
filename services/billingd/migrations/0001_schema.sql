@@ -23,7 +23,7 @@ CREATE TABLE billing_records (
                             'STROM', 'GAS', 'WAERME', 'SOLAR', 'EEG', 'EINSPEISUNG',
                             'WAERMEPUMPE', 'WALLBOX', 'HEMS', 'EMOBILITY',
                             'ENERGIEDIENSTLEISTUNG', 'BUNDLE', 'SAMMEL',
-                            'SHARING', 'VPP'
+                            'SHARING', 'VPP', 'WASSER'
                         )),
     period_from         DATE        NOT NULL,
     period_to           DATE        NOT NULL,

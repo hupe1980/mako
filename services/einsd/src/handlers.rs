@@ -180,7 +180,7 @@ pub async fn emit_foerderung_alert_ce(
     let ce_id = uuid::Uuid::new_v4();
     let payload = serde_json::json!({
         "specversion": "1.0",
-        "type": "de.eeg.anlage.foerderung_auslaufend",
+        "type": mako_events::eeg::ANLAGE_FOERDERUNG_AUSLAUFEND,
         "source": format!("urn:einsd:tenant:{}", cfg.tenant),
         "id": ce_id.to_string(),
         "time": time::OffsetDateTime::now_utc().to_string(),
@@ -456,8 +456,10 @@ pub async fn post_settle(
             // de.eeg.marktpraemie.berechnet — DIREKTVERMARKTUNG, AUSSCHREIBUNG
             if result.status == "calculated" {
                 let ce_type = match anlage.settlement_model.as_str() {
-                    "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" => "de.eeg.marktpraemie.berechnet",
-                    _ => "de.eeg.verguetung.berechnet",
+                    "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" => {
+                        mako_events::eeg::MARKTPRAEMIE_BERECHNET
+                    }
+                    _ => mako_events::eeg::VERGUETUNG_BERECHNET,
                 };
                 let ce_id = emit_settlement_ce(
                     &cfg,
@@ -881,7 +883,7 @@ pub async fn post_mastr_registrierung(
                 let _ = reqwest::Client::new()
                     .post(webhook_url)
                     .header("ce-id", ce_id.to_string())
-                    .header("ce-type", "de.eeg.anlage.mastr_registriert")
+                    .header("ce-type", mako_events::eeg::ANLAGE_MASTR_REGISTRIERT)
                     .header("ce-source", format!("/einsd/anlagen/{tr_id}"))
                     .header("ce-specversion", "1.0")
                     .header("ce-time", now.to_string())
@@ -1064,9 +1066,9 @@ pub async fn post_batch_settle(
                 {
                     let ce_type = match settlement_model.as_str() {
                         "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" | "MARKET_PREMIUM" => {
-                            "de.eeg.marktpraemie.berechnet"
+                            mako_events::eeg::MARKTPRAEMIE_BERECHNET
                         }
-                        _ => "de.eeg.verguetung.berechnet",
+                        _ => mako_events::eeg::VERGUETUNG_BERECHNET,
                     };
                     emit_settlement_ce(
                         &cfg, &client, ce_type, &tr_id, &malo_id, result, year, month, None, None,
@@ -1395,7 +1397,7 @@ async fn emit_veraeusserungsform_ce(
     let now = time::OffsetDateTime::now_utc();
     let payload = serde_json::json!({
         "specversion": "1.0",
-        "type": "de.eeg.veraeusserungsform.gewechselt",
+        "type": mako_events::eeg::VERAEUSSERUNGSFORM_GEWECHSELT,
         "source": format!("urn:einsd:tenant:{}", cfg.tenant),
         "id": ce_id.to_string(),
         "time": now.to_string(),

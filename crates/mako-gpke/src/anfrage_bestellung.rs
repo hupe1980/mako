@@ -47,7 +47,7 @@ use mako_engine::{
 /// The single UTILMD PID handled by [`GpkeAnfrageBestellungWorkflow`].
 ///
 /// 55555 = "Anfrage Daten der individuellen Bestellung" (LFN → NB, GPKE Teil 4).
-pub const ANFRAGE_PID: u32 = 55555;
+pub const ANFRAGE_PID: Pruefidentifikator = Pruefidentifikator::const_new(55555);
 
 /// Stable workflow name used as `WorkflowId.name` in the process registry.
 pub const WORKFLOW_NAME: &str = "gpke-anfrage-bestellung";
@@ -364,7 +364,7 @@ impl Workflow for GpkeAnfrageBestellungWorkflow {
                 if !matches!(state, AnfrageBestellungState::New) {
                     return Err(WorkflowError::invalid_state("New", state.status_str()));
                 }
-                if pid.as_u32() != ANFRAGE_PID {
+                if pid != ANFRAGE_PID {
                     return Err(WorkflowError::rejected(format!(
                         "unsupported PID {pid} for GpkeAnfrageBestellungWorkflow \
                          (expected {ANFRAGE_PID})",

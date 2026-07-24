@@ -8,6 +8,7 @@ version = "0.13.0"
 dependencies = [
  "anyhow",
  "axum",
+ "mako-events",
  "mako-service",
  "reqwest 0.13.1",
  "rmcp",
@@ -111,6 +112,7 @@ dependencies = [
  "hex",
  "hmac 0.12.1",
  "lancedb",
+ "mako-events",
  "mako-service",
  "reqwest 0.13.1",
  "secrecy",
@@ -1153,6 +1155,7 @@ dependencies = [
  "axum",
  "billing",
  "energy-billing",
+ "mako-events",
  "mako-markt",
  "mako-service",
  "reqwest 0.13.1",
@@ -4201,6 +4204,7 @@ dependencies = [
  "iceberg-storage-opendal",
  "krafka",
  "mako-edm",
+ "mako-events",
  "mako-markt",
  "mako-service",
  "metering",
@@ -4261,6 +4265,7 @@ dependencies = [
  "axum",
  "billing",
  "eeg-billing",
+ "mako-events",
  "mako-service",
  "reqwest 0.13.1",
  "rmcp",
@@ -5269,8 +5274,10 @@ version = "0.13.0"
 dependencies = [
  "billing",
  "proptest",
+ "rubo4e",
  "rust_decimal",
  "serde",
+ "serde_json",
  "thiserror 2.0.19",
  "time",
 ]
@@ -6014,6 +6021,7 @@ dependencies = [
  "grid-billing",
  "invoic-checker",
  "mako-edm",
+ "mako-events",
  "mako-markt",
  "mako-service",
  "reqwest 0.13.1",
@@ -7541,6 +7549,7 @@ name = "mako-engine"
 version = "0.13.0"
 dependencies = [
  "criterion 0.5.1",
+ "mako-events",
  "rand 0.10.2",
  "serde",
  "serde_json",
@@ -7555,12 +7564,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mako-events"
+version = "0.13.0"
+
+[[package]]
 name = "mako-gabi-gas"
 version = "0.13.0"
 dependencies = [
  "dvgw-edi",
  "mako-edm",
  "mako-engine",
+ "mako-events",
  "metering",
  "rust_decimal",
  "serde",
@@ -7590,7 +7604,6 @@ version = "0.13.0"
 dependencies = [
  "anyhow",
  "edi-energy",
- "invoic-checker",
  "mako-engine",
  "rubo4e",
  "serde",
@@ -7621,6 +7634,7 @@ name = "mako-markt"
 version = "0.13.0"
 dependencies = [
  "hmac 0.12.1",
+ "mako-events",
  "reqwest 0.13.1",
  "rubo4e",
  "rust_decimal",
@@ -7645,6 +7659,7 @@ version = "0.13.0"
 name = "mako-obs"
 version = "0.13.0"
 dependencies = [
+ "mako-events",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
@@ -7670,6 +7685,7 @@ name = "mako-redispatch"
 version = "0.13.0"
 dependencies = [
  "mako-engine",
+ "rust_decimal",
  "serde",
  "serde_json",
  "thiserror 2.0.19",
@@ -7691,6 +7707,7 @@ dependencies = [
  "hmac 0.12.1",
  "jsonwebtoken",
  "krafka",
+ "mako-events",
  "mako-plugin",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -7760,9 +7777,9 @@ dependencies = [
  "fd-lock",
  "governor",
  "hmac 0.12.1",
- "jsonwebtoken",
  "mako-as4",
  "mako-engine",
+ "mako-events",
  "mako-gabi-gas",
  "mako-geli-gas",
  "mako-gpke",
@@ -7783,7 +7800,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "subtle",
  "tempfile",
  "thiserror 2.0.19",
  "time",
@@ -7830,6 +7846,7 @@ dependencies = [
  "clap",
  "hmac 0.12.1",
  "jiff",
+ "mako-events",
  "mako-markt",
  "mako-service",
  "metering",
@@ -8143,7 +8160,9 @@ dependencies = [
  "axum",
  "grid-billing",
  "invoic-checker",
+ "mako-events",
  "mako-markt",
+ "mako-redispatch",
  "mako-service",
  "reqwest 0.13.1",
  "rmcp",
@@ -8174,6 +8193,7 @@ version = "0.13.0"
 dependencies = [
  "anyhow",
  "axum",
+ "mako-events",
  "mako-markt",
  "mako-service",
  "reqwest 0.13.1",
@@ -8531,6 +8551,7 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
+ "mako-events",
  "mako-markt",
  "mako-obs",
  "mako-service",
@@ -9480,6 +9501,7 @@ dependencies = [
  "axum",
  "clap",
  "mako-engine",
+ "mako-events",
  "mako-markt",
  "mako-service",
  "netz-checker",
@@ -12130,6 +12152,7 @@ version = "0.13.0"
 dependencies = [
  "anyhow",
  "axum",
+ "mako-events",
  "mako-service",
  "reqwest 0.13.1",
  "rmcp",
@@ -13215,6 +13238,7 @@ dependencies = [
  "anyhow",
  "axum",
  "hmac 0.12.1",
+ "mako-events",
  "mako-markt",
  "mako-service",
  "reqwest 0.13.1",

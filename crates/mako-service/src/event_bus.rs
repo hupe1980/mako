@@ -518,7 +518,7 @@ mod tests {
     async fn noop_bus_always_succeeds() {
         let bus = NoopBus;
         bus.publish(
-            "de.mako.process.initiated",
+            mako_events::mako::PROCESS_INITIATED,
             serde_json::json!({"process_id": "test"}),
         )
         .await
@@ -529,7 +529,7 @@ mod tests {
     async fn webhook_bus_enqueues_without_error() {
         let bus = WebhookBus::new(WebhookBusConfig::default());
         bus.publish(
-            "de.mako.process.initiated",
+            mako_events::mako::PROCESS_INITIATED,
             serde_json::json!({"process_id": "test", "pid": 55001}),
         )
         .await

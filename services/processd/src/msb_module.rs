@@ -1,8 +1,8 @@
 //! MSB process decision module — WiM Strom MSB-Wechsel STP (M6).
 //!
 //! Consumes `de.mako.process.initiated` events for WiM MSB device-change PIDs:
-//! - **55039** WiM Kündigung MSB (nMSB → NB)
-//! - **55042** WiM Anmeldung MSB (nMSB → NB)
+//! - **55039** WiM Kündigung MSB (nMSB → aMSB, answered by the incumbent MSB)
+//! - **55042** WiM Anmeldung MSB (nMSB → NB, answered by the NB)
 //!
 //! # Decision pipeline
 //!
@@ -12,8 +12,8 @@
 //!   → GET /api/v1/malo/{malo_id}                  ← marktd (bilanzierungsmethode)
 //!   → GET /api/v1/steuerbare-ressourcen/{sr_id}   ← marktd (§14a SR linked?)
 //!   → evaluate_msb_wechsel(anfrage, zaehler_count, malo, sr)
-//!       Accept   → MakodClient { wim.msb-wechsel.bestaetigen }
-//!       Reject   → MakodClient { wim.msb-wechsel.ablehnen, erc_code }
+//!       Accept   → MakodClient { wim.geraetewechsel.bestaetigen }
+//!       Reject   → MakodClient { wim.geraetewechsel.ablehnen, erc_code }
 //!       Escalate → operator alert (requires manual decision)
 //! ```
 //!
@@ -236,6 +236,26 @@ pub fn evaluate_msb_kuendigung(
     MsbDecisionOutcome::Accept
 }
 
+// ── Command name mapping ──────────────────────────────────────────────────────
+
+/// Registered `makod` command + Marktrolle for answering an inbound
+/// MSB-Wechsel order (PID 55039/55042).
+///
+/// Both PIDs resolve to the same command pair — `makod` routes the answer into
+/// the `wim-geraetewechsel` process it spawned for the inbound order, which
+/// already knows whether it is an Anmeldung or a Kündigung. The Marktrolle
+/// differs: PID 55042 (Anmeldung, MSBN → NB) is answered by the NB, PID 55039
+/// (Kündigung, MSBN → MSBA) by the incumbent MSB.
+fn geraetewechsel_answer_command(pid: u32, accept: bool) -> (&'static str, &'static str) {
+    let command = if accept {
+        mako_markt::commands::WIM_GERAETEWECHSEL_BESTAETIGEN
+    } else {
+        mako_markt::commands::WIM_GERAETEWECHSEL_ABLEHNEN
+    };
+    let marktrolle = if pid == 55042 { "NB" } else { "MSB" };
+    (command, marktrolle)
+}
+
 // ── STP handler ───────────────────────────────────────────────────────────────
 
 /// Process an inbound `de.mako.process.initiated` event for PID 55039 or 55042.
@@ -245,10 +265,15 @@ pub fn evaluate_msb_kuendigung(
 ///
 /// # Decision commands dispatched to `makod`
 ///
-/// | Outcome | PID 55042 (Anmeldung) | PID 55039 (Kündigung) |
+/// Both PIDs answer through the same registered command pair — the
+/// Anmeldung/Kündigung distinction lives in the `wim-geraetewechsel` process
+/// that `makod` spawned for the inbound order (keyed by MeLo). The Marktrolle
+/// depends on the PID: 55042 is answered by the NB, 55039 by the incumbent MSB.
+///
+/// | Outcome | PID 55042 (Anmeldung, as NB) | PID 55039 (Kündigung, as MSB) |
 /// |---|---|---|
-/// | Accept | `wim.msb-wechsel.anmeldung.bestaetigen` | `wim.msb-wechsel.kuendigung.bestaetigen` |
-/// | Reject | `wim.msb-wechsel.anmeldung.ablehnen` (ERC) | `wim.msb-wechsel.kuendigung.ablehnen` (ERC) |
+/// | Accept | `wim.geraetewechsel.bestaetigen` | `wim.geraetewechsel.bestaetigen` |
+/// | Reject | `wim.geraetewechsel.ablehnen` (ERC in reason) | `wim.geraetewechsel.ablehnen` (ERC in reason) |
 /// | Escalate | operator alert (no command) | operator alert (no command) |
 pub async fn handle_msb_wechsel(
     cfg: &MsbModuleConfig,
@@ -309,13 +334,9 @@ pub async fn handle_msb_wechsel(
                 "processd MSB STP: Accept"
             );
             if cfg.auto_accept {
-                let command_name = if payload.pid == 55042 {
-                    "wim.msb-wechsel.anmeldung.bestaetigen"
-                } else {
-                    "wim.msb-wechsel.kuendigung.bestaetigen"
-                };
+                let (command_name, marktrolle) = geraetewechsel_answer_command(payload.pid, true);
                 let cmd = mako_markt::makod_client::ForwardCommand {
-                    marktrolle: Some("NB".to_owned()),
+                    marktrolle: Some(marktrolle.to_owned()),
                     command: command_name.to_owned(),
                     malo_id: Some(payload.malo_id.clone()),
                     melo_id: Some(payload.melo_id.clone()),
@@ -348,20 +369,18 @@ pub async fn handle_msb_wechsel(
                 reason,
                 "processd MSB STP: Reject"
             );
-            let command_name = if payload.pid == 55042 {
-                "wim.msb-wechsel.anmeldung.ablehnen"
-            } else {
-                "wim.msb-wechsel.kuendigung.ablehnen"
-            };
+            let (command_name, marktrolle) = geraetewechsel_answer_command(payload.pid, false);
             let cmd = mako_markt::makod_client::ForwardCommand {
-                marktrolle: Some("NB".to_owned()),
+                marktrolle: Some(marktrolle.to_owned()),
                 command: command_name.to_owned(),
                 malo_id: Some(payload.malo_id.clone()),
                 melo_id: Some(payload.melo_id.clone()),
                 payload: serde_json::json!({
                     "process_id": payload.process_id,
                     "erc_code": erc_code,
-                    "reason": reason,
+                    // makod's APERAK dispatch forwards `reason`; carry the ERC
+                    // code inside it so the rejection ground survives the hop.
+                    "reason": format!("{erc_code}: {reason}"),
                 }),
             };
             let idem = format!("msb-wechsel-reject-{}", payload.process_id);
@@ -411,7 +430,7 @@ const REQOTE_PIDS: &[u32] = &[35001, 35002, 35003, 35004, 35005];
 /// ## Regulatory basis
 ///
 /// - **BK6-24-174** REQOTE/QUOTES AHB 1.2 — response window per APERAK deadline.
-/// - Escalation on missing PreisblattMessung prevents ERC A97 deadline breach from
+/// - Escalation on missing PreisblattMessung prevents an APERAK-Frist breach from
 ///   auto-dispatching wrong prices.
 ///
 /// ## Returns
@@ -489,7 +508,7 @@ pub async fn handle_preisanfrage_reqote(
         Ok(Some(preisblatt)) => {
             // PreisblattMessung found — dispatch QUOTES auto-response.
             let cmd = mako_markt::makod_client::ForwardCommand {
-                command: "wim.preisanfrage.angebot-senden".to_owned(),
+                command: mako_markt::commands::WIM_PREISANFRAGE_ANGEBOT_SENDEN.to_owned(),
                 marktrolle: Some("MSB".to_owned()),
                 malo_id: None,
                 melo_id: if melo_id.is_empty() {
@@ -602,5 +621,51 @@ mod tests {
     fn kuendigung_accept_when_valid() {
         let result = evaluate_msb_kuendigung(&payload(55039, None), true, true);
         assert!(matches!(result, MsbDecisionOutcome::Accept));
+    }
+
+    // ── Command name mapping ───────────────────────────────────────────────────
+    //
+    // The posted names must come from the shared `mako_markt::commands` list —
+    // makod's registry test asserts every name in that list is registered, so
+    // the pair of tests closes the processd → makod drift gap that previously
+    // let `wim.msb-wechsel.*` (an unregistered name) fail every answer with 422.
+
+    #[test]
+    fn answer_command_anmeldung_is_nb() {
+        assert_eq!(
+            geraetewechsel_answer_command(55042, true),
+            ("wim.geraetewechsel.bestaetigen", "NB")
+        );
+        assert_eq!(
+            geraetewechsel_answer_command(55042, false),
+            ("wim.geraetewechsel.ablehnen", "NB")
+        );
+    }
+
+    #[test]
+    fn answer_command_kuendigung_is_msb() {
+        assert_eq!(
+            geraetewechsel_answer_command(55039, true),
+            ("wim.geraetewechsel.bestaetigen", "MSB")
+        );
+        assert_eq!(
+            geraetewechsel_answer_command(55039, false),
+            ("wim.geraetewechsel.ablehnen", "MSB")
+        );
+    }
+
+    #[test]
+    fn posted_commands_are_in_shared_registry_list() {
+        for name in [
+            geraetewechsel_answer_command(55042, true).0,
+            geraetewechsel_answer_command(55039, false).0,
+            mako_markt::commands::WIM_PREISANFRAGE_ANGEBOT_SENDEN,
+        ] {
+            assert!(
+                mako_markt::commands::DISPATCHED_BY_SERVICES.contains(&name),
+                "{name:?} missing from mako_markt::commands::DISPATCHED_BY_SERVICES — \
+                 makod's registry cross-check would not cover it"
+            );
+        }
     }
 }

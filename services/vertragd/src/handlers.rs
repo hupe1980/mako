@@ -875,9 +875,9 @@ pub async fn tarifwechsel_vertrag(
 
     // Emit CloudEvent (tarifwechsel for immediate, tarifwechsel_geplant for future)
     let ce_type = if is_future {
-        "tarifwechsel_geplant"
+        mako_events::vertrag::TARIFWECHSEL_GEPLANT
     } else {
-        "tarifwechsel"
+        mako_events::vertrag::TARIFWECHSEL
     };
     if let Some(ref url) = cfg.erp_webhook_url {
         emit_event(
@@ -993,7 +993,7 @@ pub async fn post_cloud_event(
                             url,
                             cfg.erp_hmac_secret.as_deref(),
                             build_cloud_event(
-                                "aktiv",
+                                mako_events::vertrag::AKTIV,
                                 k.vertrag_id,
                                 &cfg.tenant,
                                 serde_json::json!({"vertrag_id": k.vertrag_id}),
@@ -1495,7 +1495,7 @@ pub async fn put_preisgarantie(
             // Emit CloudEvent to ERP.
             if let Some(ref url) = cfg.erp_webhook_url {
                 let ce = build_cloud_event(
-                    "preisgarantie_updated",
+                    mako_events::vertrag::PREISGARANTIE_UPDATED,
                     vertrag_id,
                     &cfg.tenant,
                     serde_json::json!({ "vertrag_id": vertrag_id }),
@@ -1958,7 +1958,7 @@ pub async fn widerruf_kuendigung_handler(
                     url,
                     cfg.erp_hmac_secret.as_deref(),
                     build_cloud_event(
-                        "kuendigung_widerrufen",
+                        mako_events::vertrag::KUENDIGUNG_WIDERRUFEN,
                         id,
                         &cfg.tenant,
                         serde_json::json!({ "vertrag_id": id }),
@@ -2087,7 +2087,7 @@ pub async fn kuendige_rahmenvertrag_handler(
                 url,
                 cfg.erp_hmac_secret.as_deref(),
                 build_cloud_event(
-                    "gekuendigt",
+                    mako_events::vertrag::GEKUENDIGT,
                     v.id,
                     &cfg.tenant,
                     serde_json::json!({
@@ -2117,7 +2117,7 @@ pub async fn kuendige_rahmenvertrag_handler(
 
 /// `POST /api/v1/webhooks/angebot`
 ///
-/// Receive `de.angebot.angenommen` from `tarifbd` and auto-create:
+/// Receive `de.tarif.angebot.angenommen` from `tarifbd` and auto-create:
 /// 1. A `Rahmenvertrag` (with `angebot_id` set for traceability)
 /// 2. One `Versorgungsvertrag` per unique standort in the accepted positionen
 /// 3. `Vertragskomponente` rows for each position (sparte/MaLo/product)
@@ -2142,8 +2142,12 @@ pub async fn post_angebot_webhook(
     Json(ce): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     // Validate CE type
-    if ce.get("type").and_then(|v| v.as_str()) != Some("de.angebot.angenommen") {
-        return (StatusCode::BAD_REQUEST, "expected de.angebot.angenommen").into_response();
+    if ce.get("type").and_then(|v| v.as_str()) != Some(mako_events::tarif::ANGEBOT_ANGENOMMEN) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "expected de.tarif.angebot.angenommen",
+        )
+            .into_response();
     }
 
     let data = match ce.get("data") {

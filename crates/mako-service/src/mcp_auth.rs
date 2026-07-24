@@ -456,6 +456,14 @@ impl McpAuth {
             // ── OIDC path ──────────────────────────────────────────────────
             match self.oidc.verify(&token) {
                 Ok(claims) => {
+                    // MCP callers must carry the `mako_tenant` claim — the
+                    // data-isolation boundary all downstream checks key on.
+                    // (Tenant-less tokens are only meaningful for makod's
+                    // sub-based Cedar layer, which does not use McpAuth.)
+                    if claims.mako_tenant.is_none() {
+                        return (StatusCode::UNAUTHORIZED, "401 Unauthorized: invalid token")
+                            .into_response();
+                    }
                     // Optional Cedar policy check.
                     if let Some(ref cedar) = self.cedar {
                         let principal = crate::oidc::Claims(claims.clone()).principal();

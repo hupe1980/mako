@@ -1953,6 +1953,228 @@
       ]
     },
     {
+      "code": 55040,
+      "name": "Bestätigung Kündigung MSB (NB -> MSBN)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E35"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.1: Antwort auf 55039 — BGM 1001 spiegelt den Dokumentencode der Anfrage (E35)."
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          },
+          "required_qualifiers": {
+            "9015": [
+              "E01"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.1: SG4 STS+7 Transaktionsgrund (Muss) und SG4 STS+E01 'Status der Antwort' (Muss) — der Prüfschritt-Code (DE 9013) kommt aus Codeliste Strom S_0054 (EBD E_0200); die Antwort schließt den Vorgang der Anfrage 55039."
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "code": 55041,
+      "name": "Ablehnung Kündigung MSB (NB -> MSBN)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E35"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.1: Antwort auf 55039 — BGM 1001 spiegelt den Dokumentencode der Anfrage (E35)."
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          },
+          "required_qualifiers": {
+            "9015": [
+              "E01"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.1: SG4 STS+7 Transaktionsgrund (Muss) und SG4 STS+E01 'Status der Antwort' (Muss) — der Prüfschritt-Code (DE 9013) kommt aus Codeliste Strom S_0090 (EBD E_0200); die Antwort schließt den Vorgang der Anfrage 55039."
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "code": 55042,
       "name": "Anmeldung MSB (MSBN -> NB)",
       "segment_rules": [
@@ -2046,6 +2268,228 @@
       ]
     },
     {
+      "code": 55043,
+      "name": "Bestätigung Anmeldung MSB (NB -> MSBN)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.2: Antwort auf 55042 — BGM 1001 spiegelt den Dokumentencode der Anfrage (E01)."
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          },
+          "required_qualifiers": {
+            "9015": [
+              "E01"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.2: SG4 STS+7 Transaktionsgrund (Muss) und SG4 STS+E01 'Status der Antwort' (Muss) — der Prüfschritt-Code (DE 9013) kommt aus Codeliste Strom S_0055 (EBD E_0201); die Antwort schließt den Vorgang der Anfrage 55042."
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "code": 55044,
+      "name": "Ablehnung Anmeldung MSB (NB -> MSBN)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.2: Antwort auf 55042 — BGM 1001 spiegelt den Dokumentencode der Anfrage (E01)."
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          },
+          "required_qualifiers": {
+            "9015": [
+              "E01"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.2: SG4 STS+7 Transaktionsgrund (Muss) und SG4 STS+E01 'Status der Antwort' (Muss) — der Prüfschritt-Code (DE 9013) kommt aus Codeliste Strom S_0056 (EBD E_0201); die Antwort schließt den Vorgang der Anfrage 55042."
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "code": 55051,
       "name": "Abmeldung MSB (NB -> nMSB)",
       "segment_rules": [
@@ -2102,6 +2546,228 @@
               "element_index": 0
             }
           ]
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "code": 55052,
+      "name": "Bestätigung Abmeldung MSB (nMSB -> NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E02"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.4: Antwort auf 55051 — BGM 1001 spiegelt den Dokumentencode der Anfrage (E02)."
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          },
+          "required_qualifiers": {
+            "9015": [
+              "E01"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.4: SG4 STS+7 Transaktionsgrund (Muss) und SG4 STS+E01 'Status der Antwort' (Muss) — der Prüfschritt-Code (DE 9013) kommt aus Codeliste Strom S_0059 (EBD E_0202); die Antwort schließt den Vorgang der Anfrage 55051."
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "code": 55053,
+      "name": "Ablehnung Abmeldung MSB (nMSB -> NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E02"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.4: Antwort auf 55051 — BGM 1001 spiegelt den Dokumentencode der Anfrage (E02)."
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          },
+          "required_qualifiers": {
+            "9015": [
+              "E01"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.4: SG4 STS+7 Transaktionsgrund (Muss) und SG4 STS+E01 'Status der Antwort' (Muss) — der Prüfschritt-Code (DE 9013) kommt aus Codeliste Strom S_0060 (EBD E_0202); die Antwort schließt den Vorgang der Anfrage 55051."
         },
         {
           "tag": "RFF",
@@ -2450,10 +3116,153 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "1001": [
-              "E01"
+              "E01",
+              "Z40"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.3: E01 [637] bei Verpflichtungsanfrage, Z40 [638] bei Aufforderung zur Übernahme der einzelnen Messlokation durch den gMSB"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": [
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "E01",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "76",
+              "_description": "Kap. 10.3: SG4 DTM+76 (Datum zum geplanten Leistungsbeginn) ist Muss"
+            },
+            {
+              "when_tag": "BGM",
+              "when_element_index": 0,
+              "when_value": "Z40",
+              "then_requirement": "M",
+              "then_qualifier_index": 0,
+              "then_qualifier_value": "76",
+              "_description": "Kap. 10.3: SG4 DTM+76 (Datum zum geplanten Leistungsbeginn) ist Muss"
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
             ]
           },
           "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.3: SG4 STS+7 Transaktionsgrund (9013 ∈ E01/E02/E03) ist Muss; die Antwort-STS (E01) gehört zu 55169/55170"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16",
+              "Z17",
+              "Z18",
+              "Z19",
+              "Z20",
+              "Z21",
+              "Z22"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.3: Lokationsbündel — Marktlokation (Z16) Muss [671], Messlokation (Z17) Muss [675]; NeLo/SR/TR/Tranche/ruhende MaLo Soll"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "code": 55169,
+      "name": "Bestätigung Verpflichtungsanfrage / Aufforderung (gMSB -> NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.3: Antwort auf 55168 — BGM 1001 spiegelt den Dokumentencode der Anfrage (E01)."
         },
         {
           "tag": "DTM",
@@ -2498,6 +3307,151 @@
               "element_index": 0
             }
           ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          },
+          "required_qualifiers": {
+            "9015": [
+              "E01"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.3: SG4 STS+7 Transaktionsgrund (Muss) und SG4 STS+E01 'Status der Antwort' (Muss) — der Prüfschritt-Code (DE 9013) kommt aus Codeliste Strom S_0063 (EBD E_0240); die Antwort schließt den Vorgang der Anfrage 55168."
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16",
+              "Z17",
+              "Z18",
+              "Z19",
+              "Z20",
+              "Z21",
+              "Z22"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.3: die Bestätigung trägt das Lokationsbündel der Anfrage — Marktlokation (Z16) Muss [671], Messlokation (Z17) Muss [675]; NeLo/SR/TR/Tranche/ruhende MaLo Soll."
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "code": 55170,
+      "name": "Ablehnung Verpflichtungsanfrage / Aufforderung (gMSB -> NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.3: Antwort auf 55168 — BGM 1001 spiegelt den Dokumentencode der Anfrage (E01)."
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          },
+          "required_qualifiers": {
+            "9015": [
+              "E01"
+            ]
+          },
+          "field_rules": [],
+          "_description": "Kap. 10.3: SG4 STS+7 Transaktionsgrund (Muss) und SG4 STS+E01 'Status der Antwort' (Muss) — der Prüfschritt-Code (DE 9013) kommt aus Codeliste Strom S_0064 (EBD E_0240); die Antwort schließt den Vorgang der Anfrage 55168."
         },
         {
           "tag": "RFF",

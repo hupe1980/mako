@@ -31,12 +31,18 @@ of work from the business perspective and the unit of implementation in the
 > production. A combined instance is equally valid. Each section in this catalog
 > is documented as **self-contained** — no cross-commodity knowledge required.
 
-**Both format versions coexist simultaneously:**
+**Format versions ship on a semi-annual cadence (April + October).** The workspace
+carries **per-message, fv-dated profiles** (`crates/edi-energy/profiles/<message>/fv<yyyymmdd>/`):
+a message type only gets a new fv directory when its format actually changes in a release.
+Multiple format versions coexist in the same engine instance simultaneously.
 
-| Format version | Valid period |
-|---|---|
-| `FV2025-10-01` | 2025-10-01 – 2026-09-30 (current production) |
-| `FV2026-10-01` | from 2026-10-01 (next release — profiles already deployed) |
+| Release | Binding | Message types with changed formats |
+|---|---|---|
+| `fv20260401` | since 2026-04-01 (Mitteilung Nr. 54) | INVOIC, ORDERS, ORDRSP, ORDCHG, PARTIN, PRICAT, QUOTES, REMADV, REQOTE, UTILTS |
+| `fv20261001` | from 2026-10-01 (Mitteilung Nr. 56) | UTILMD (Strom 2.2 / Gas 1.2), MSCONS 3.2, APERAK, COMDIS, IFTSTA |
+
+Message types untouched by a release keep their previous profile (e.g. CONTRL and
+INSRPT last changed with `fv20260101`).
 
 **Status legend:**
 
@@ -105,7 +111,7 @@ Quick reference across all process families. Each row is a top-level domain.
 | **WiM Gas INSRPT** | 🔥 | `mako-wim-gas` `wim-gas-insrpt` | INSRPT 23005/23009 (Gas-only) | 10 WT | BK7-24-01-009 |
 | **WiM Gas Abrechnung** | 🔥 | `mako-wim-gas` `wim-gas-invoic` | INVOIC 31003/31004 | — | BK7-24-01-009 |
 | **GaBi Gas Abrechnung** | 🔥 | `mako-gabi-gas` `gabi-gas-invoic` | INVOIC 31007/31008/31010 | — | BK7-24-01-008 |
-| **GaBi Gas Allokationsliste (MMMA)** | 🔥 | `mako-gabi-gas` `gabi-gas-mmma` | ORDERS 17110 · ORDRSP 19110 · MSCONS 13013 | — | BK7-24-01-008 |
+| **GaBi Gas Allokationsliste (MMMA)** | 🔥 | `mako-gabi-gas` `gabi-gas-mmma` | MSCONS 13013 (ORDERS 17110 / ORDRSP 19110 currently routed via `mako-gpke` `gpke-allokationsliste`) | — | BK7-24-01-008 |
 | **GaBi Gas ALOCAT** | 🔥 | `mako-gabi-gas` `gabi-gas-allocation` | Synthetic PIDs 90001–90003 | — | DVGW ALOCAT 5.11a |
 | **GaBi Gas NOMINT/NOMRES** | 🔥 | `mako-gabi-gas` `gabi-gas-nomination` | Synthetic PIDs 90011/90012/90021/90022 | — | DVGW NOMINT 4.6 FK |
 | **GaBi Gas SCHEDL** | 🔥 | `mako-gabi-gas` `gabi-gas-schedl` | Synthetic PIDs | — | DVGW G685/G2000 |
@@ -174,8 +180,7 @@ NB and LFA must respond within 24 h.
 
 | Scenario | Mindestvorlauffrist | Notes |
 |---|---|---|
-| Standardwechsel | 7 Werktage vor Lieferbeginn | Eingang bei NB und LFA auf demselben Kalendertag |
-| Schneller Lieferantenwechsel | nächster Werktag | Eingang bis 12:00 Uhr des Vortages |
+| Lieferbeginn (LFW24, 24h-Wechsel) | Tag nach dem nächsten WT nach dem ÜT | Spätester ÜT ist der Tag vor dem letzten WT vor dem Zuordnungsbeginn (day-granular, kein Uhrzeit-Cutoff) — BK6-24-174 GPKE Teil 2, SD Lieferbeginn Schritt 1. Seit LFW24 gibt es keine separate „Standardwechsel“-Frist mehr; frühere Anmeldung ist zulässig („unverzüglich nach Vorliegen des Anmeldegrundes“) |
 | Neuanlage MaLo | keine Mindestfrist | Lieferbeginn = Tag der Fertigstellung |
 | Stornierung Zuordnung | bis 24 h vor Lieferbeginn | Nur der ursprüngliche Sender darf stornieren |
 
@@ -183,11 +188,15 @@ NB and LFA must respond within 24 h.
 > must be submitted on the **same calendar day**. The NB coordinates the transition;
 > the actual LFA disconnection follows automatically at Lieferbeginn-Datum.
 
-**Grund- und Ersatzversorgung (GEV / EOG):** When a customer has no active
-supplier (e.g. after LFA exit, insolvency), the NB activates the basic supplier
-(Grundversorger). The NB sends an End-of-Contract / EOG notification to the
-outgoing LF and registers the basic supplier automatically. Standard GPKE PIDs
-apply (55007–55015 range) via the `gpke-supplier-change` workflow.
+**Ersatz-/Grundversorgung (EoG, §36/§38 EnWG):** When a MaLo draws energy
+without an assignable supply contract (after Lieferende without successor,
+supplier insolvency, Erlöschen der Zuordnungsermächtigung), the NB assigns it
+to the Grundversorger via UTILMD **55013** (Anmeldung / Zuordnung EOG — the
+`gpke-eog` workflow; retroactive Zuordnungsbeginn allowed). The E/G answers
+with **55014** (stating Ersatz- vs. Grundversorgung and the Bilanzkreis) or
+**55015**; no answer → the NB assigns with the pre-deposited default
+Bilanzkreis. Ersatzversorgung ends by law after three months (§38 Abs. 4);
+the `processd` EoG module automates gap detection and the timer.
 
 | Process | Initiator → Responder | Anfrage PID | Antwort OK | Antwort NG | Crate |
 |---|---|---|---|---|---|
@@ -262,7 +271,7 @@ PIDs 17115 and 17117 are shared between **GPKE Strom** (NB-role inbound) and
 | Auftragsstatus Sperren | NB → LF/MSB/ÜNB | — | IFTSTA **21039** | — | `mako-gpke` ✅ |
 | Info Entsperrauftrag | NB → MSB | — | IFTSTA **21040** | — | — |
 | Stornierung Sperrauftrag | LF → NB | ORDCHG **39000** | ORDRSP 19128 | ORDRSP 19129 | `mako-gpke` ✅ |
-| Weiterleitung Stornierung | NB → MSB | ORDCHG **39001** | — | — | — |
+| Weiterleitung Stornierung | NB → MSB | ORDCHG **39001** | — | — | `mako-gpke` ✅ |
 
 **Message flow — Sperrauftrag Strom (LF-initiiert):**
 
@@ -686,7 +695,7 @@ There is no per-process deadline (Frist) — the submission windows are calendar
 
 ## GeLi Gas — Lieferantenwechsel Gas
 
-**Regulatory basis:** BK7-24-01-009 (Beschluss 12.09.2025, gültig ab 24.09.2025)
+**Regulatory basis:** BK7-24-01-009 (Beschluss 12.09.2025, Tenor gültig ab 01.01.2026; KoV-XV-Cluster ab 01.10.2026)
 Supersedes BK7-19-001 and BK7-06-067.
 
 **APERAK Frist:** **10 Werktage** (longest Frist across all MaKo process families)
@@ -990,7 +999,7 @@ with APERAK within **10 Werktage** (BK7-24-01-009).
 
 ## WiM Gas — Messstellenbetrieb Gas
 
-**Regulatory basis:** BK7-24-01-009 (Beschluss 12.09.2025, gültig ab 24.09.2025)
+**Regulatory basis:** BK7-24-01-009 (Beschluss 12.09.2025, Tenor gültig ab 01.01.2026; KoV-XV-Cluster ab 01.10.2026)
 
 **APERAK Frist:** **10 Werktage**
 
@@ -1312,8 +1321,9 @@ only the PIDs it owns; a Strom-only instance never loads any Gas crate and vice 
 
 ### Format versions and process transitions
 
-A process started under `FV2025-10-01` continues under those AHB rules until it
-completes, even after the `FV2026-10-01` cutover on 2026-10-01. Both format versions
-coexist simultaneously in the same engine instance.
+A process started under an older format version continues under those AHB rules
+until it completes, even after a cutover (e.g. the `FV2026-10-01` cutover on
+2026-10-01). Multiple format versions coexist simultaneously in the same engine
+instance.
 `WorkflowVersionPolicy::ForwardCompatible` is the mandatory default for all MaKo
 workflows. See [Schema Versioning](schema-versioning) for details.

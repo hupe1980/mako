@@ -68,7 +68,7 @@ use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::{error::EngineError, ids::TenantId, types::MarktpartnerCode};
+use crate::{error::EngineError, ids::TenantId, marktrolle::Marktrolle, types::MarktpartnerCode};
 
 // ── CommunicationChannel ──────────────────────────────────────────────────────
 
@@ -147,79 +147,6 @@ pub struct ContactPerson {
     pub channels: Vec<CommunicationChannel>,
 }
 
-// ── MarketRole ────────────────────────────────────────────────────────────────
-
-/// The market role of a trading partner as declared in their PARTIN message.
-///
-/// Matches BDEW PARTIN Prüfidentifikator prefixes:
-///
-/// | PID | Role |
-/// |---|---|
-/// | 37000 | Lieferant Strom (`LfStrom`) |
-/// | 37001 | Netzbetreiber Strom (`NbStrom`) |
-/// | 37002 | Messstellenbetreiber Strom (`MsbStrom`) |
-/// | 37003 | Bilanzkreisverantwortlicher Strom (`Bkv`) |
-/// | 37004 | Bilanzkoordinator Strom (`Biko`) |
-/// | 37005 | Übertragungsnetzbetreiber Strom (`Uenb`) |
-/// | 37006 | Energiedienstleister/Serviceanbieter Strom (`Esa`) |
-/// | 37008 | Lieferant Gas (`LfGas`) |
-/// | 37009 | Netzbetreiber Gas (`NbGas`) |
-/// | 37010 | Messstellenbetreiber Gas (`MsbGas`) |
-/// | 37011 | Marktgebietsverantwortlicher Gas (`Mgv`) |
-/// | 37012–37014 | Cross-commodity roles |
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[non_exhaustive]
-pub enum MarketRole {
-    /// Lieferant Strom (PID 37000)
-    LfStrom,
-    /// Netzbetreiber Strom (PID 37001)
-    NbStrom,
-    /// Messstellenbetreiber Strom (PID 37002)
-    MsbStrom,
-    /// Bilanzkreisverantwortlicher Strom (PID 37003)
-    Bkv,
-    /// Bilanzkoordinator Strom (PID 37004)
-    Biko,
-    /// Übertragungsnetzbetreiber Strom (PID 37005)
-    Uenb,
-    /// Energiedienstleister / Serviceanbieter Strom (PID 37006)
-    Esa,
-    /// Lieferant Gas (PID 37008)
-    LfGas,
-    /// Netzbetreiber Gas (PID 37009)
-    NbGas,
-    /// Messstellenbetreiber Gas (PID 37010)
-    MsbGas,
-    /// Marktgebietsverantwortlicher Gas (PID 37011)
-    Mgv,
-    /// Cross-commodity (PIDs 37012–37014)
-    CrossCommodity,
-}
-
-impl MarketRole {
-    /// Map a PARTIN Prüfidentifikator code to the corresponding `MarketRole`.
-    ///
-    /// Returns `None` for unrecognised codes.
-    #[must_use]
-    pub fn from_pid(pid: u32) -> Option<Self> {
-        match pid {
-            37000 => Some(Self::LfStrom),
-            37001 => Some(Self::NbStrom),
-            37002 => Some(Self::MsbStrom),
-            37003 => Some(Self::Bkv),
-            37004 => Some(Self::Biko),
-            37005 => Some(Self::Uenb),
-            37006 => Some(Self::Esa),
-            37008 => Some(Self::LfGas),
-            37009 => Some(Self::NbGas),
-            37010 => Some(Self::MsbGas),
-            37011 => Some(Self::Mgv),
-            37012..=37014 => Some(Self::CrossCommodity),
-            _ => None,
-        }
-    }
-}
-
 // ── PartnerRecord ─────────────────────────────────────────────────────────────
 
 /// Full trading-partner master record as stored in the [`PartnerStore`].
@@ -255,7 +182,11 @@ pub struct PartnerRecord {
     pub channels: Vec<CommunicationChannel>,
 
     /// Market roles this partner has declared via PARTIN.
-    pub roles: Vec<MarketRole>,
+    ///
+    /// Derived from the PARTIN Prüfidentifikator via
+    /// [`Marktrolle::from_partin_pid`]. Serialises as BDEW role codes
+    /// (`"LF"`, `"NB"`, `"MSB"`, …).
+    pub roles: Vec<Marktrolle>,
 
     /// Date from which this record version is valid (`DTM/137`).
     ///
@@ -741,7 +672,7 @@ mod tests {
                 CommunicationChannel::as4("https://new.example/as4"),
                 CommunicationChannel::email("edifact@sw.example"),
             ],
-            roles: vec![MarketRole::NbStrom],
+            roles: vec![Marktrolle::Nb],
             valid_from: Some(OffsetDateTime::now_utc()),
             contacts: vec![],
             country_code: Some("DE".into()),
@@ -750,7 +681,7 @@ mod tests {
         base.merge_from_partin(newer.clone());
         assert_eq!(base.as4_endpoint(), Some("https://new.example/as4"));
         assert_eq!(base.display_name.as_deref(), Some("Stadtwerke AG"));
-        assert_eq!(base.roles, vec![MarketRole::NbStrom]);
+        assert_eq!(base.roles, vec![Marktrolle::Nb]);
     }
 
     #[test]
@@ -763,7 +694,7 @@ mod tests {
             mp_id: mp_id("9900000000002"),
             display_name: Some("Current Name".into()),
             channels: vec![CommunicationChannel::as4("https://current.example/as4")],
-            roles: vec![MarketRole::NbStrom],
+            roles: vec![Marktrolle::Nb],
             valid_from: Some(new_ts),
             contacts: vec![],
             country_code: Some("DE".into()),
@@ -795,22 +726,16 @@ mod tests {
         assert_eq!(r.as4_endpoint(), Some("https://a.example/as4"));
     }
 
-    // ── MarketRole::from_pid ──────────────────────────────────────────────────
+    // ── roles serde (BDEW codes) ──────────────────────────────────────────────
 
     #[test]
-    fn market_role_from_pid_covers_all_partin_pids() {
-        for pid in [
-            37000u32, 37001, 37002, 37003, 37004, 37005, 37006, 37008, 37009, 37010, 37011, 37012,
-            37013, 37014,
-        ] {
-            assert!(
-                MarketRole::from_pid(pid).is_some(),
-                "MarketRole::from_pid({pid}) should return Some"
-            );
-        }
-        // PID 37007 is not in the AHB (gap)
-        assert!(MarketRole::from_pid(37007).is_none());
-        assert!(MarketRole::from_pid(0).is_none());
+    fn roles_serialize_as_bdew_codes() {
+        let mut r = minimal_record("9900000000002", "https://a.example/as4");
+        r.roles = vec![Marktrolle::Nb, Marktrolle::Msb];
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["roles"], serde_json::json!(["NB", "MSB"]));
+        let back: PartnerRecord = serde_json::from_value(json).unwrap();
+        assert_eq!(back.roles, vec![Marktrolle::Nb, Marktrolle::Msb]);
     }
 
     // ── InMemoryPartnerStore ──────────────────────────────────────────────────
@@ -853,7 +778,7 @@ mod tests {
             mp_id: mp_id("9900000000001"),
             display_name: Some("Partner AG".into()),
             channels: vec![CommunicationChannel::as4("https://new.example/as4")],
-            roles: vec![MarketRole::LfStrom],
+            roles: vec![Marktrolle::Lf],
             valid_from: Some(OffsetDateTime::now_utc()),
             contacts: vec![],
             country_code: Some("DE".into()),

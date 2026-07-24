@@ -809,103 +809,13 @@ async fn get_zahlungsstatus(
     }
 }
 
-// ── BO4E conversion (service-layer concern) ───────────────────────────────────
-
-/// Map `BillingPositionKind` → `BdewArtikelnummer` per BDEW Codeliste v5.6 (valid 01.09.2025).
-///
-/// NNE Strom positions (PIDs 31001/31006) return `None` — their `artikel_id` comes
-/// from `PreisblattNetznutzung` (BK6-20-160: classic artikelnummer replaced by artikel_id
-/// from BNetzA Netznutzungspreisblatt for GPKE Strom).
-/// Parse the BDEW Artikelnummer that `grid-billing` decided on.
-///
-/// The decision lives in the crate; this is only the codelist-name lookup.
-fn kind_to_artikelnummer(
-    kind: grid_billing::BillingPositionKind,
-    settlement_type: grid_billing::SettlementType,
-) -> Option<rubo4e::current::BdewArtikelnummer> {
-    use std::str::FromStr as _;
-    kind.artikelnummer(settlement_type)
-        .and_then(|name| rubo4e::current::BdewArtikelnummer::from_str(name).ok())
-}
-
-/// Convert a `SettlementResult` domain result into a BO4E `Rechnung`.
-///
-/// `grid-billing` has no rubo4e dependency; this function owns the mapping.
-/// Render a settlement, presented as an invoice, into BO4E.
-fn grid_billing_into_rechnung(
-    document: &grid_billing::InvoiceDocument,
-) -> rubo4e::current::Rechnung {
-    let invoice = &document.settlement;
-    use rubo4e::current::{Betrag, Menge, Mengeneinheit, Preis, Rechnungsposition, Zeitraum};
-
-    let lz = Zeitraum {
-        startdatum: Some(invoice.period.from()),
-        enddatum: Some(invoice.period.to()),
-        ..Default::default()
-    };
-
-    let positions: Vec<Rechnungsposition> = document
-        .numbered_positions()
-        .map(|(number, p)| {
-            let einheit = match p.unit {
-                grid_billing::QuantityUnit::Kwh => Some(Mengeneinheit::Kwh),
-                grid_billing::QuantityUnit::Kw => Some(Mengeneinheit::Kw),
-                grid_billing::QuantityUnit::Kvarh => Some(Mengeneinheit::Kwh), // reactive energy — map to kWh bucket
-                grid_billing::QuantityUnit::Kvar => Some(Mengeneinheit::Kw), // reactive power — map to kW bucket
-                grid_billing::QuantityUnit::Monat => Some(Mengeneinheit::Monat),
-            };
-            Rechnungsposition {
-                positionsnummer: Some(i64::from(number)),
-                positionstext: Some(p.text.clone()),
-                artikelnummer: kind_to_artikelnummer(p.kind, invoice.settlement_type),
-                // Resolved from the price sheet at rendering time.
-                artikel_id: None,
-                lieferungszeitraum: Some(lz.clone()),
-                positions_menge: Some(Menge {
-                    wert: Some(p.quantity),
-                    einheit,
-                    ..Default::default()
-                }),
-                einzelpreis: Some(Preis {
-                    wert: Some(p.unit_price_eur.round_dp(6)),
-                    ..Default::default()
-                }),
-                gesamtpreis: Some(Betrag {
-                    wert: Some(p.net_eur.round_dp(5)),
-                    ..Default::default()
-                }),
-                // The trace explains the amount above it; grid-billing is the
-                // only place it exists, and the settlement is dropped after this.
-                zusatz_attribute: serde_json::to_value(&p.trace).ok().map(|t| {
-                    vec![rubo4e::current::ZusatzAttribut {
-                        name: Some("mako:calculation_trace".to_owned()),
-                        wert: Some(t),
-                        ..Default::default()
-                    }]
-                }),
-                ..Default::default()
-            }
-        })
-        .collect();
-
-    rubo4e::current::Rechnung {
-        rechnungsnummer: Some(document.rechnungsnummer.clone()),
-        rechnungsdatum: Some(document.invoice_date),
-        faelligkeitsdatum: Some(document.due_date),
-        rechnungsperiode: Some(lz),
-        gesamtnetto: Some(Betrag {
-            wert: Some(invoice.total_eur),
-            ..Default::default()
-        }),
-        rechnungspositionen: Some(positions),
-        zusatz_attribute: Some(vec![rubo4e::current::ZusatzAttribut {
-            name: Some("mako:legal_references".to_owned()),
-            wert: Some(serde_json::json!(invoice.all_legal_refs())),
-            ..Default::default()
-        }]),
-        ..Default::default()
-    }
-}
+// ── BO4E conversion ───────────────────────────────────────────────────────────
+//
+// The `InvoiceDocument` → `Rechnung` rendering lives in the shared
+// feature-gated `grid_billing::bo4e` module (also used by netzbilanzd), so the two
+// services cannot drift apart again: the bridge sets `rechnungsnummer` AND
+// emits `mako:calculation_trace` / `mako:legal_references` /
+// `mako:settlement_warnings` ZusatzAttribute.
 
 /// `POST /api/v1/selbstausstellen/{malo_id}`
 ///
@@ -1187,7 +1097,7 @@ async fn post_selbstausstellen(
         due_date,
     };
     let billing_result = &document.settlement;
-    let rechnung = grid_billing_into_rechnung(&document);
+    let rechnung = grid_billing::bo4e::into_rechnung(&document);
     let rechnung_json = serde_json::to_value(&rechnung).unwrap_or_default();
 
     tracing::info!(
@@ -1523,7 +1433,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
                     let secret: &str = s.expose_secret();
                     secret
                 }),
-                event_types: &["de.mako.process.initiated"],
+                event_types: &[mako_events::mako::PROCESS_INITIATED],
                 makopid_filter: &[],
                 active: true,
             },

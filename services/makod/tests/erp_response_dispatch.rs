@@ -84,6 +84,7 @@ async fn spawn_supplier_change(
             location_id: MaLo::new(malo_id),
             document_date: "20260701".into(),
             process_date: "20261001".into(),
+            transaktionsgrund: None,
             message_ref: mako_engine::types::MessageRef::new("MSG-001"),
             received_at: time::OffsetDateTime::now_utc(),
             bilanzierungsgebiet: None,
@@ -129,6 +130,7 @@ async fn initiate_lf_anmeldung(
         receiver: MarktpartnerCode::new("9900357000004"),
         location_id: MaLo::new(malo_id),
         process_date: "2026-10-01".into(),
+        transaktionsgrund: None,
     };
     process
         .execute_and_enqueue(cmd)
@@ -215,6 +217,7 @@ async fn handle_antwort_accepted_transitions_to_active() {
             receiver: MarktpartnerCode::new("9900357000004"),
             location_id: MaLo::new(malo_id),
             process_date: "2026-10-01".into(),
+            transaktionsgrund: None,
         })
         .await
         .expect("InitiateAnmeldung");
@@ -263,6 +266,7 @@ async fn handle_antwort_rejected_transitions_to_rejected() {
             receiver: MarktpartnerCode::new("9900357000004"),
             location_id: MaLo::new(malo_id),
             process_date: "2026-10-01".into(),
+            transaktionsgrund: None,
         })
         .await
         .unwrap();

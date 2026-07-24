@@ -3,7 +3,7 @@
 use mako_markt::{
     domain::{MaloId, Sparte},
     error::MdmError,
-    repository::{Lokationszuordnung, MaloFilter, MaloRecord, MaloRepository, PageResult},
+    repository::{MaloFilter, MaloRecord, MaloRepository, PageResult, Rollenzuordnung},
 };
 use sqlx::{PgPool, Row, postgres::PgRow};
 use time::Date;
@@ -27,7 +27,7 @@ impl MaloRepository for PgMaloRepository {
         malo_id: &MaloId,
         sparte: Sparte,
         data: serde_json::Value,
-        lokationszuordnung: Vec<Lokationszuordnung>,
+        rollenzuordnung: Vec<Rollenzuordnung>,
         if_match: Option<i64>,
         bo4e_version: &str,
     ) -> Result<i64, MdmError> {
@@ -87,10 +87,14 @@ impl MaloRepository for PgMaloRepository {
             .get("fallgruppenzuordnung")
             .and_then(|v| v.as_str())
             .map(|s| s.to_owned());
+        let lokationsbuendel_objektcode = data
+            .get("lokationsbuendelObjektcode")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned());
 
         sqlx::query(
-            r#"INSERT INTO malo (malo_id, sparte, netzebene, bilanzierungsgebiet, gasqualitaet, energierichtung, bilanzierungsmethode, regelzone, fallgruppe, version, data, bo4e_version, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
+            r#"INSERT INTO malo (malo_id, sparte, netzebene, bilanzierungsgebiet, gasqualitaet, energierichtung, bilanzierungsmethode, regelzone, fallgruppe, lokationsbuendel_objektcode, version, data, bo4e_version, updated_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
                ON CONFLICT (malo_id) DO UPDATE
                SET sparte               = EXCLUDED.sparte,
                    netzebene            = EXCLUDED.netzebene,
@@ -100,6 +104,7 @@ impl MaloRepository for PgMaloRepository {
                    bilanzierungsmethode = EXCLUDED.bilanzierungsmethode,
                    regelzone            = EXCLUDED.regelzone,
                    fallgruppe           = EXCLUDED.fallgruppe,
+                   lokationsbuendel_objektcode = EXCLUDED.lokationsbuendel_objektcode,
                    version              = EXCLUDED.version,
                    data                 = EXCLUDED.data,
                    bo4e_version         = EXCLUDED.bo4e_version,
@@ -114,6 +119,7 @@ impl MaloRepository for PgMaloRepository {
         .bind(&bilanzierungsmethode)
         .bind(&regelzone)
         .bind(&fallgruppe)
+        .bind(&lokationsbuendel_objektcode)
         .bind(new_version)
         .bind(&data)
         .bind(bo4e_version)
@@ -121,30 +127,29 @@ impl MaloRepository for PgMaloRepository {
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
-        sqlx::query("DELETE FROM lokationszuordnung WHERE malo_id = $1")
+        sqlx::query("DELETE FROM rollenzuordnungen WHERE malo_id = $1")
             .bind(malo_id)
             .execute(&mut *tx)
             .await
             .map_err(|e| MdmError::Internal(e.to_string()))?;
 
         // Bulk-insert all new entries in a single round-trip using UNNEST.
-        // An empty lokationszuordnung vec is a no-op (unnest of empty arrays = 0 rows).
-        if !lokationszuordnung.is_empty() {
-            let zuordnungstypen: Vec<&str> = lokationszuordnung
+        // An empty rollenzuordnung vec is a no-op (unnest of empty arrays = 0 rows).
+        if !rollenzuordnung.is_empty() {
+            let zuordnungstypen: Vec<&str> = rollenzuordnung
                 .iter()
                 .map(|lz| lz.zuordnungstyp.as_str())
                 .collect();
-            let rollencodenummern: Vec<&str> = lokationszuordnung
+            let rollencodenummern: Vec<&str> = rollenzuordnung
                 .iter()
                 .map(|lz| lz.rollencodenummer.as_str())
                 .collect();
-            let valid_froms: Vec<Date> =
-                lokationszuordnung.iter().map(|lz| lz.valid_from).collect();
+            let valid_froms: Vec<Date> = rollenzuordnung.iter().map(|lz| lz.valid_from).collect();
             let valid_tos: Vec<Option<Date>> =
-                lokationszuordnung.iter().map(|lz| lz.valid_to).collect();
+                rollenzuordnung.iter().map(|lz| lz.valid_to).collect();
 
             sqlx::query(
-                r#"INSERT INTO lokationszuordnung
+                r#"INSERT INTO rollenzuordnungen
                        (malo_id, zuordnungstyp, rollencodenummer, valid_from, valid_to)
                    SELECT $1, unnest($2::text[]), unnest($3::text[]),
                           unnest($4::date[]), unnest($5::date[])"#,
@@ -176,6 +181,7 @@ impl MaloRepository for PgMaloRepository {
                       m.bilanzierungsmethode,
                       m.regelzone,
                       m.fallgruppe,
+                      m.lokationsbuendel_objektcode,
                       m.version,
                       m.data,
                       m.bo4e_version,
@@ -190,14 +196,14 @@ impl MaloRepository for PgMaloRepository {
                               ) ORDER BY lz.zuordnungstyp, lz.valid_from
                           ) FILTER (WHERE lz.zuordnungstyp IS NOT NULL),
                           '[]'::json
-                      ) AS lokationszuordnung
+                      ) AS rollenzuordnung
                FROM malo m
-               LEFT JOIN lokationszuordnung lz
+               LEFT JOIN rollenzuordnungen lz
                      ON  lz.malo_id   = m.malo_id
                      AND lz.valid_from <= $2
                      AND (lz.valid_to IS NULL OR lz.valid_to >= $2)
                WHERE m.malo_id = $1
-               GROUP BY m.malo_id, m.sparte, m.netzebene, m.bilanzierungsgebiet, m.gasqualitaet, m.energierichtung, m.bilanzierungsmethode, m.regelzone, m.fallgruppe, m.version, m.data, m.bo4e_version, m.updated_at"#,
+               GROUP BY m.malo_id, m.sparte, m.netzebene, m.bilanzierungsgebiet, m.gasqualitaet, m.energierichtung, m.bilanzierungsmethode, m.regelzone, m.fallgruppe, m.lokationsbuendel_objektcode, m.version, m.data, m.bo4e_version, m.updated_at"#,
         )
         .bind(malo_id)
         .bind(at)
@@ -227,6 +233,7 @@ impl MaloRepository for PgMaloRepository {
                       m.bilanzierungsmethode,
                       m.regelzone,
                       m.fallgruppe,
+                      m.lokationsbuendel_objektcode,
                       m.version,
                       m.data,
                       m.bo4e_version,
@@ -241,10 +248,10 @@ impl MaloRepository for PgMaloRepository {
                               ) ORDER BY lz.zuordnungstyp, lz.valid_from
                           ) FILTER (WHERE lz.zuordnungstyp IS NOT NULL),
                           '[]'::json
-                      ) AS lokationszuordnung,
+                      ) AS rollenzuordnung,
                       COUNT(*) OVER () AS total_count
                FROM malo m
-               LEFT JOIN lokationszuordnung lz
+               LEFT JOIN rollenzuordnungen lz
                      ON  lz.malo_id   = m.malo_id
                      AND lz.valid_from <= $1
                      AND (lz.valid_to IS NULL OR lz.valid_to >= $1)
@@ -254,7 +261,7 @@ impl MaloRepository for PgMaloRepository {
                  AND ($5::text IS NULL OR m.fallgruppe        = $5)
                  AND ($6::text IS NULL OR m.bilanzierungsmethode = $6)
                  AND ($7::text IS NULL OR m.regelzone         = $7)
-               GROUP BY m.malo_id, m.sparte, m.netzebene, m.bilanzierungsgebiet, m.gasqualitaet, m.energierichtung, m.bilanzierungsmethode, m.regelzone, m.fallgruppe, m.version, m.data, m.bo4e_version, m.updated_at
+               GROUP BY m.malo_id, m.sparte, m.netzebene, m.bilanzierungsgebiet, m.gasqualitaet, m.energierichtung, m.bilanzierungsmethode, m.regelzone, m.fallgruppe, m.lokationsbuendel_objektcode, m.version, m.data, m.bo4e_version, m.updated_at
                ORDER BY m.malo_id
                LIMIT $8 OFFSET $9"#,
         )
@@ -316,9 +323,8 @@ impl MaloRepository for PgMaloRepository {
 
 fn row_to_malo(r: PgRow) -> MaloRecord {
     let sparte_str: String = r.get("sparte");
-    let lz_json: serde_json::Value = r.get("lokationszuordnung");
-    let lokationszuordnung: Vec<Lokationszuordnung> =
-        serde_json::from_value(lz_json).unwrap_or_default();
+    let lz_json: serde_json::Value = r.get("rollenzuordnung");
+    let rollenzuordnung: Vec<Rollenzuordnung> = serde_json::from_value(lz_json).unwrap_or_default();
     MaloRecord {
         malo_id: r.get("malo_id"),
         sparte: sparte_str
@@ -331,9 +337,10 @@ fn row_to_malo(r: PgRow) -> MaloRecord {
         bilanzierungsmethode: r.try_get("bilanzierungsmethode").unwrap_or(None),
         regelzone: r.try_get("regelzone").unwrap_or(None),
         fallgruppe: r.try_get("fallgruppe").unwrap_or(None),
+        lokationsbuendel_objektcode: r.try_get("lokationsbuendel_objektcode").unwrap_or(None),
         version: r.get("version"),
         data: r.get("data"),
-        lokationszuordnung,
+        rollenzuordnung,
         updated_at: r.get("updated_at"),
         bo4e_version: r
             .try_get("bo4e_version")

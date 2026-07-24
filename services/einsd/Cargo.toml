@@ -18,6 +18,7 @@ name = "einsd"
 path = "src/main.rs"
 
 [dependencies]
+mako-events = { workspace = true }
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
 billing      = { workspace = true }
 eeg-billing  = { path = "../../crates/eeg-billing", features = ["serde"] }

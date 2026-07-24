@@ -133,6 +133,12 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/epex-prices/:year/:month/average",
             get(handlers::get_epex_monthly_average),
         )
+        // ── nEHS certificate prices (BEHG CO₂, auctioned since 2026) ──────────
+        .route("/api/v1/nehs-prices/:date", put(handlers::put_nehs_price))
+        .route(
+            "/api/v1/nehs-prices/latest",
+            get(handlers::get_nehs_price_latest),
+        )
         // ── Angebot (B2B Quotation, L4) ───────────────────────────────────────
         .route(
             "/api/v1/angebote",

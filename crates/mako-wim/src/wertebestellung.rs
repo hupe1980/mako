@@ -66,44 +66,44 @@ pub const WORKFLOW_NAME: &str = "wim-wertebestellung";
 /// The generic "Anfrage" PID. There is no ESA-specific REQOTE Prüfidentifikator
 /// in any published format version; the ESA context is carried by the Messprodukt
 /// code and by the ESA-specific QUOTES answer [`ANGEBOT_PID`].
-pub const ANFRAGE_PID: u32 = 35002;
+pub const ANFRAGE_PID: Pruefidentifikator = Pruefidentifikator::const_new(35002);
 
 /// QUOTES — "Angebot zur Anfrage von Werten für ESA" (MSB → ESA), UC 4.1 Nr. 2.
-pub const ANGEBOT_PID: u32 = 15003;
+pub const ANGEBOT_PID: Pruefidentifikator = Pruefidentifikator::const_new(15003);
 
 /// ORDERS — "Bestellung von Werten ESA" (ESA → MSB), UC 4.1 Nr. 3.
-pub const BESTELLUNG_PID: u32 = 17007;
+pub const BESTELLUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(17007);
 
 /// ORDERS — "Abbestellung von Werten ESA" (ESA → MSB), UC 4.3 Nr. 1.
 ///
 /// Distinct from [`BESTELLUNG_PID`]: 17007 orders a delivery, 17008 ends a
 /// running one. Both are ORDERS; the Prüfidentifikator in BGM DE 1004 tells
 /// them apart.
-pub const ABBESTELLUNG_PID: u32 = 17008;
+pub const ABBESTELLUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(17008);
 
 /// ORDCHG — "Stornierung der Bestellung von Werten" (ESA → MSB), UC 4.1 Nr. 5.
-pub const STORNIERUNG_PID: u32 = 39002;
+pub const STORNIERUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(39002);
 
 /// ORDRSP — "Bestätigung der Ab-/Bestellung von Werten für ESA" (MSB → ESA).
-pub const BESTAETIGUNG_PID: u32 = 19011;
+pub const BESTAETIGUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(19011);
 
 /// ORDRSP — "Ablehnung der Ab-/Bestellung von Werten für ESA" (MSB → ESA).
-pub const ABLEHNUNG_PID: u32 = 19012;
+pub const ABLEHNUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(19012);
 
 /// ORDRSP — "Bestätigung der Stornierung einer Bestellung für ESA" (MSB → ESA).
-pub const STORNO_BESTAETIGUNG_PID: u32 = 19013;
+pub const STORNO_BESTAETIGUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(19013);
 
 /// ORDRSP — "Ablehnung der Stornierung einer Bestellung für ESA" (MSB → ESA).
-pub const STORNO_ABLEHNUNG_PID: u32 = 19014;
+pub const STORNO_ABLEHNUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(19014);
 
 /// MSCONS — "Werte nach Typ 2" (MSB → ESA), UC 4.2. The MSB's delivery duty
 /// under §60 Abs. 1 MsbG: it transmits the ordered values to the ESA, daily by
 /// 09:30. These values are non-authoritative (no billing bearing) and land in
 /// the ESA deployment's separate Typ-2 store (`esa_typ2_reads`).
-pub const WERTE_UEBERMITTLUNG_PID: u32 = 13027;
+pub const WERTE_UEBERMITTLUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(13027);
 
 /// Every PID this workflow accepts inbound (ESA → MSB).
-pub const INBOUND_PIDS: &[u32] = &[
+pub const INBOUND_PIDS: &[Pruefidentifikator] = &[
     ANFRAGE_PID,
     BESTELLUNG_PID,
     ABBESTELLUNG_PID,
@@ -114,7 +114,7 @@ pub const INBOUND_PIDS: &[u32] = &[
 ///
 /// Disjoint from [`INBOUND_PIDS`], which is the MSB side, so an integrated
 /// deployment holding both roles registers both sets without a conflict.
-pub const ESA_INBOUND_PIDS: &[u32] = &[
+pub const ESA_INBOUND_PIDS: &[Pruefidentifikator] = &[
     ANGEBOT_PID,
     BESTAETIGUNG_PID,
     ABLEHNUNG_PID,
@@ -123,7 +123,7 @@ pub const ESA_INBOUND_PIDS: &[u32] = &[
 ];
 
 /// Every PID this workflow emits outbound (MSB → ESA).
-pub const OUTBOUND_PIDS: &[u32] = &[
+pub const OUTBOUND_PIDS: &[Pruefidentifikator] = &[
     ANGEBOT_PID,
     BESTAETIGUNG_PID,
     ABLEHNUNG_PID,
@@ -498,7 +498,7 @@ impl WertebestellungState {
 // ── Domain commands ───────────────────────────────────────────────────────────
 
 /// Commands for the ESA Wertebestellung workflow.
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WertebestellungCommand {
     /// UC 4.1 Nr. 1 — inbound REQOTE 35002.
     ReceiveAnfrage {
@@ -642,8 +642,12 @@ fn ccyymmdd(dt: OffsetDateTime) -> String {
     format!("{:04}{:02}{:02}", dt.year(), u8::from(dt.month()), dt.day())
 }
 
-fn require_pid(pid: Pruefidentifikator, expected: u32, what: &str) -> Result<(), WorkflowError> {
-    if pid.as_u32() == expected {
+fn require_pid(
+    pid: Pruefidentifikator,
+    expected: Pruefidentifikator,
+    what: &str,
+) -> Result<(), WorkflowError> {
+    if pid == expected {
         Ok(())
     } else {
         Err(WorkflowError::rejected(format!(
@@ -777,7 +781,7 @@ impl Workflow for WimWertebestellungWorkflow {
         // The renderer turns this into QUOTES/ORDRSP with the PID in BGM DE 1004.
         fn esa_answer(
             message_type: &'static str,
-            pid: u32,
+            pid: Pruefidentifikator,
             data: &WertebestellungData,
             message_ref: &MessageRef,
         ) -> PendingOutbox {

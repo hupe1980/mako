@@ -68,7 +68,7 @@ pub const WORKFLOW_NAME: &str = "geli-gas-stornierung-lf";
 /// to cancel a previously submitted Anmeldung, Abmeldung, or Kündigung.
 /// This PID is **not** registered in the PID router for inbound routing — it is
 /// ERP-initiated via `POST /api/v1/commands` and queued for outbound AS4 delivery.
-pub const ANFRAGE_PID_LF: u32 = 44022;
+pub const ANFRAGE_PID_LF: Pruefidentifikator = Pruefidentifikator::const_new(44022);
 
 /// Inbound response PIDs (GNB → LF) routed back to this workflow.
 ///
@@ -346,7 +346,7 @@ impl Workflow for GeliGasLfStornierungWorkflow {
                 if !matches!(state, LfStornierungState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
                 }
-                if pid.as_u32() != ANFRAGE_PID_LF {
+                if pid != ANFRAGE_PID_LF {
                     return Err(WorkflowError::rejected(format!(
                         "expected LF Stornierung Anfrage PID {ANFRAGE_PID_LF} (44022), got {pid}",
                     )));
@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     fn anfrage_pid_is_44022() {
-        assert_eq!(ANFRAGE_PID_LF, 44022);
+        assert_eq!(ANFRAGE_PID_LF.as_u32(), 44022);
     }
 
     #[test]

@@ -26,7 +26,7 @@ Key design choices:
 |---|---|
 | **Stateless library** | No axum, no sqlx, no async runtime in this crate. All I/O lives in `services/marktd`. |
 | **Validated domain identifiers** | [`MaloId`], [`MeloId`], and [`MarktpartnerId`] validate format and checksum at construction time — invalid IDs are rejected at the system boundary. |
-| **Temporal role assignments** | `lokationszuordnung` entries carry `valid_from`/`valid_to` date ranges. Queries are always resolved against a reference date (German local time, CET/CEST). |
+| **Temporal role assignments** | `rollenzuordnung` entries carry `valid_from`/`valid_to` date ranges. Queries are always resolved against a reference date (German local time, CET/CEST). |
 | **Generic `AppState`** | One generic type parameter per repository trait — fully static dispatch with no `dyn Trait` overhead. |
 | **AFIT** | All repository traits use `async fn in trait` (stable since Rust 1.75, MSRV 1.89). |
 
@@ -43,6 +43,7 @@ mako_markt
 │                   NbContractRecord (data: Vertrag JSONB, vertragsart/vertragsstatus columns)
 │                   ZaehlerRecord (data: Zaehler JSONB), GeraetRecord (data: Geraet JSONB)
 │                   VersorgungsStatusRepository, LieferStatus, VersorgungsStatusRecord
+│                   GrundversorgerRepository, GrundversorgerRecord (§36 Abs. 2 EnWG)
 │                   PriCatRepository, PriCatVersion, PriCatDispatchState
 ├── error           MdmError — RFC 7807-ready with status_u16, error_code, error_title
 ├── cloudevents     InboundMakoEvent, MarktEvent, HMAC-SHA256 signing/verification
@@ -155,7 +156,7 @@ pub trait MaloRepository: Send + Sync {
         malo_id: &MaloId,
         sparte: Sparte,
         data: MaloPayload,
-        lokationszuordnung: Vec<Lokationszuordnung>,
+        rollenzuordnung: Vec<Rollenzuordnung>,
         if_match: Option<i64>,          // ETag optimistic-concurrency guard
     ) -> Result<i64, MdmError>;         // → new version
 
@@ -168,12 +169,12 @@ pub trait MaloRepository: Send + Sync {
 ```
 
 The `at: Date` parameter is always the current German local date (CET/CEST) so that
-`lokationszuordnung` validity is evaluated against the correct calendar date, not UTC.
+`rollenzuordnung` validity is evaluated against the correct calendar date, not UTC.
 
-### Temporal `Lokationszuordnung`
+### Temporal `Rollenzuordnung`
 
 ```rust
-pub struct Lokationszuordnung {
+pub struct Rollenzuordnung {
     pub zuordnungstyp:    String,       // "NB", "LF", "MSB", …
     pub rollencodenummer: String,       // 13-digit GLN
     pub valid_from:       Date,

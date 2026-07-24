@@ -30,7 +30,7 @@ MaLo IDs.
 | **Preisanpassungsbenachrichtigung** | Daily worker emits `de.vertrag.preisaenderung.ankuendigung` 42 days before Tarifwechsel (§41 Abs. 3 EnWG ≥ 6 weeks notice) |
 | **Auto-renewal** | Daily worker extends `vertragsende` + emits 30-day advance notice (§13 GasGVV / §14 StromGVV) |
 | **Expiry notifications** | Daily worker emits `de.vertrag.ablauf.ankuendigung` 30 days before `vertragsende` or `preisgarantie_bis` expiry (§41 EnWG) |
-| **CPQ pipeline** | `POST /api/v1/webhooks/angebot` — `de.angebot.angenommen` → auto-creates Rahmenvertrag with `angebot_id` traceability + N Versorgungsverträge |
+| **CPQ pipeline** | `POST /api/v1/webhooks/angebot` — `de.tarif.angebot.angenommen` → auto-creates Rahmenvertrag with `angebot_id` traceability + N Versorgungsverträge |
 | **Max identities** | `max_identitaeten_per_kunde = 50` (configurable) — prevents resource exhaustion from unbounded portal user creation |
 | **Health** | `GET /health/live`, `GET /health/ready` |
 | **MCP** | **16 read-only tools + 4 prompts** at `/mcp` (incl. GDPR erasure workflow, Preisgarantie dispute resolution) |

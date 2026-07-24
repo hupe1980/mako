@@ -87,6 +87,9 @@ fn empty_components_makes_angelegt() {
 #[test]
 fn mako_bestaetigt_event_is_confirmed() {
     let ce = serde_json::json!({
+        // Synthetic fine-grained type — exercises the suffix matcher; no such
+        // type exists in the mako-events catalog by design (outcome types are
+        // the generic de.mako.process.* family, workflow rides in data).
         "type": "de.mako.gpke.lieferbeginn.bestaetigt",
         "data": {
             "process_id": "test-proc-1",
@@ -103,7 +106,7 @@ fn mako_bestaetigt_event_is_confirmed() {
 #[test]
 fn mako_abgelehnt_event_is_rejected_with_erc() {
     let ce = serde_json::json!({
-        "type": "de.mako.gpke.lieferbeginn.abgelehnt",
+        "type": "de.mako.gpke.lieferbeginn.abgelehnt", // synthetic — suffix matcher
         "data": {
             "process_id": "test-proc-2",
             "malo_id": "51238696780",
@@ -138,13 +141,13 @@ fn event_without_type_returns_none() {
 fn build_cloud_event_produces_valid_structure() {
     let id = Uuid::new_v4();
     let ce = build_cloud_event(
-        "aktiv",
+        mako_events::vertrag::AKTIV,
         id,
         "9900012345678",
         serde_json::json!({ "status": "AKTIV" }),
     );
     assert_eq!(ce["specversion"], "1.0");
-    assert_eq!(ce["type"], "de.vertrag.aktiv");
+    assert_eq!(ce["type"], mako_events::vertrag::AKTIV);
     assert!(ce["source"].as_str().unwrap().contains("9900012345678"));
     assert_eq!(ce["subject"], id.to_string());
     assert_eq!(ce["data"]["status"], "AKTIV");
@@ -421,7 +424,7 @@ fn wirksamkeit_one_day_after_guarantee_is_allowed() {
 #[test]
 fn completed_suffix_is_confirmed() {
     let ce = serde_json::json!({
-        "type": "de.mako.geli.lieferbeginn.completed",
+        "type": "de.mako.geli.lieferbeginn.completed", // synthetic — suffix matcher
         "data": { "process_id": "p-1", "malo_id": "51238696780" }
     });
     let outcome = parse_mako_outcome(&ce).expect("must parse");
@@ -432,7 +435,7 @@ fn completed_suffix_is_confirmed() {
 #[test]
 fn abgelehnt_without_erc_has_no_erc() {
     let ce = serde_json::json!({
-        "type": "de.mako.gpke.lieferbeginn.abgelehnt",
+        "type": "de.mako.gpke.lieferbeginn.abgelehnt", // synthetic — suffix matcher
         "data": { "malo_id": "51238696780" }
     });
     let outcome = parse_mako_outcome(&ce).expect("must parse");

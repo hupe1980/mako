@@ -33,6 +33,10 @@ impl PartnerRepository for PgPartnerRepository {
 
         let new_version = current.map_or(1, |v| v + 1);
         let sparte_str = partner.sparte.map(|s| s.to_string());
+        // Columns stay TEXT; the typed enums serialise to their BDEW codes
+        // ("LF", "NB", … / "BDEW", "DVGW", "GLN") via strum.
+        let marktrolle_str = partner.marktrolle.map(|m| m.to_string());
+        let rollencodetyp_str = partner.rollencodetyp.map(|r| r.to_string());
 
         sqlx::query(
             r#"INSERT INTO partners (mp_id, display_name, marktrolle, sparte, rollencodetyp, makoadresse, channels, version, updated_at)
@@ -49,9 +53,9 @@ impl PartnerRepository for PgPartnerRepository {
         )
         .bind(&partner.mp_id)
         .bind(&partner.display_name)
-        .bind(&partner.marktrolle)
+        .bind(&marktrolle_str)
         .bind(sparte_str)
-        .bind(&partner.rollencodetyp)
+        .bind(&rollencodetyp_str)
         .bind(&partner.makoadresse)
         .bind(&partner.channels)
         .bind(new_version)
@@ -89,12 +93,16 @@ impl PartnerRepository for PgPartnerRepository {
 fn row_to_partner(r: PgRow) -> PartnerRecord {
     let sparte_str: Option<String> = r.get("sparte");
     let makoadresse: Option<Vec<String>> = r.try_get("makoadresse").unwrap_or(None);
+    let marktrolle_str: Option<String> = r.get("marktrolle");
+    let rollencodetyp_str: Option<String> = r.try_get("rollencodetyp").unwrap_or(None);
     PartnerRecord {
         mp_id: r.get("mp_id"),
         display_name: r.get("display_name"),
-        marktrolle: r.get("marktrolle"),
+        // Stored as the BDEW code strings the enums serialise to; a legacy
+        // value the enum does not know maps to None rather than failing reads.
+        marktrolle: marktrolle_str.and_then(|s| s.parse().ok()),
         sparte: sparte_str.as_deref().map(parse_sparte),
-        rollencodetyp: r.try_get("rollencodetyp").unwrap_or(None),
+        rollencodetyp: rollencodetyp_str.and_then(|s| s.parse().ok()),
         makoadresse: makoadresse.unwrap_or_default(),
         channels: r.get("channels"),
         version: r.get("version"),

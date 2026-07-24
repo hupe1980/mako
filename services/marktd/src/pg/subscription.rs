@@ -110,11 +110,13 @@ impl SubscriptionRepository for PgSubscriptionRepository {
             .into_iter()
             .map(row_to_sub)
             .filter(|s| {
+                // Canonical shared matcher (mako_events::matches): exact,
+                // trailing-`*` prefix (the historical semantics), and full
+                // glob patterns all work.
                 s.event_types.is_empty()
-                    || s.event_types.iter().any(|t| {
-                        t == event_type
-                            || (t.ends_with('*') && event_type.starts_with(t.trim_end_matches('*')))
-                    })
+                    || s.event_types
+                        .iter()
+                        .any(|t| mako_events::matches(t, event_type))
             })
             .collect())
     }

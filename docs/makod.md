@@ -535,7 +535,14 @@ endpoint requires `Authorization: Bearer <token>`.
 
 `makod` uses [Cedar](https://cedarpolicy.com) — the same policy engine used by
 Amazon Verified Permissions — for attribute-based access control (ABAC) across
-all HTTP endpoints.
+all HTTP endpoints. The reusable mechanics (named-key registry with
+constant-time matching, Bearer/JWT routing, schema-validated policy loading)
+live in `mako_service::cedar_schema`, shared with the rest of the platform;
+makod contributes only the typed `MaKo::` domain layer (actions, resource
+entities, the embedded schema). OIDC verification likewise comes from
+`mako_service::oidc` (sub-only IdP tokens supported — `mako_tenant` is
+optional at the verifier level and enforced by the `Claims` extractor where
+services need it).
 
 ### How it works
 
@@ -864,6 +871,53 @@ cargo test -p makod --test as4_security
 > an mTLS proxy: `"API-Webdienste Strom port started WITHOUT authentication"`.
 > The warning is safe to suppress only when the port is behind a service mesh
 > or VPC boundary with network-level access controls.
+
+### §20b EnWG Netzzugangsplattform adapter
+
+§20b EnWG (in force 23.12.2025) obliges the Netzbetreiber to run a joint
+nationwide internet platform carrying, at minimum, three use cases (Abs. 2):
+Bestellung/Änderung/Abbestellung von **Zählpunktanordnungen** (Nr. 1,
+umgangssprachlich Messkonzepte) und **Verrechnungskonzepten** (Nr. 2), and the
+**Registrierung von Energy-Sharing-Vereinbarungen nach §42c** (Nr. 3). The
+statute sets no dates — timing and interfaces are BNetzA
+Festlegungskompetenz (Abs. 3), and no Festlegung or platform API has been
+published. makod therefore ships the **client side** with a pluggable
+transport:
+
+| Command | §20b anchor | Roles |
+|---|---|---|
+| `netzzugang.zaehlpunktanordnung.beauftragen` | Abs. 2 Nr. 1 (`aktion`: `bestellung`\|`aenderung`\|`abbestellung`) | LF, MSB |
+| `netzzugang.verrechnungskonzept.beauftragen` | Abs. 2 Nr. 2 (same `aktion` triple) | LF, MSB |
+| `netzzugang.energysharing.registrieren` | Abs. 2 Nr. 3 | LF |
+
+Payload: `netzanschluss_id`, `nb_mp_id`, `antragsteller_ref` (opaque
+Anschlussnehmer/-nutzer reference, no PII) and an optional free-form
+`details` object.
+
+Each accepted command projects an `erfasst` record into marktd's
+`netzzugang_antraege` registry and enqueues a `NetzzugangAntrag` outbox
+message — the same at-least-once delivery machinery every market message
+uses. The sender then:
+
+1. **`--netzzugang-endpoint-url` / `MAKOD_NETZZUGANG_ENDPOINT_URL` set** —
+   POSTs the request to the platform endpoint (for when the BNetzA
+   Festlegung publishes an interface, or an interim per-NB endpoint) and
+   advances the projection to `uebermittelt` (capturing a `platform_ref`
+   when the response carries one).
+2. **Unset** — delivers the request to the ERP webhook as a
+   `de.mako.netzzugang.uebermittlungsbedarf` CloudEvent: the operator submits
+   it via the Netzbetreiber's **Webportal**, which is the statutory minimum
+   interface (an API only "soll Berücksichtigung finden"). When
+   `--erp-webhook-secret` is configured, the POST is HMAC-SHA256-signed with
+   the same `X-Mako-Signature` header the general ERP adapter uses.
+3. **Neither configured** — the request is marked `fehlgeschlagen` in the
+   registry instead of poison-looping the outbox. A stored payload that fails
+   to deserialize is treated the same way (permanent failure — logged,
+   projected `fehlgeschlagen`, acked), never retried.
+
+The answer (`bestaetigt`/`abgelehnt`, plus the platform reference) is
+recorded via marktd's `PATCH /api/v1/netzzugang/antraege/{id}/status`; every
+state change emits `de.markt.netzzugang.antrag.updated`.
 
 ---
 
@@ -1198,6 +1252,9 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `gpke.lieferende.anmelden` | `LF` | GPKE | 55002 | Old supplier registers supply end |
 | `gpke.lieferende.bestaetigen` | `NB` | GPKE | 55005/55006 | DSO accepts/rejects supply end |
 | `gpke.kuendigung.anmelden` | `LF` | GPKE | 55017 | LF cancels a Lieferbeginn Anmeldung |
+| `gpke.eog.anmelden` | `NB` | GPKE | 55013 | NB assigns a contractless MaLo to the Grundversorger (§36/§38 EnWG gap closure) |
+| `gpke.eog.bestaetigen` | `LF` | GPKE | 55014 | E/G confirms the EoG Zuordnung (Versorgungsart + Bilanzkreis) |
+| `gpke.eog.ablehnen` | `LF` | GPKE | 55015 | E/G rejects the EoG Zuordnung (EBD E_0615: A02/A04/A05) |
 | `gpke.sperrung.beauftragen` | `LF` | GPKE | 17115 | LF orders a disconnection from the NB |
 | `gpke.entsperrung.beauftragen` | `LF` | GPKE | 17117 | LF orders a reconnection from the NB |
 | `gpke.sperrung.stornieren` | `LF` | GPKE | 39000 | LF cancels a pending Sperrauftrag (ORDCHG) |
@@ -1238,7 +1295,10 @@ GLNs resolved by the engine (sender, receiver) are intentionally absent.
 
 | Command | Required ERP payload fields |
 |---------|-----------------------------|
-| `gpke.lieferbeginn.anmelden` | `malo_id`, `lieferbeginn_datum` |
+| `gpke.lieferbeginn.anmelden` | `malo_id`, `lieferbeginn_datum`, `transaktionsgrund`¹ |
+| `gpke.eog.anmelden` | `malo_id`, `gv_mp_id`, `process_date`, `transaktionsgrund`, `haushaltskunde`¹ |
+| `gpke.eog.bestaetigen` | `malo_id`, `versorgungsart` (ZC9/ZD0/ZE3/ZZD), `bilanzkreis`¹ |
+| `gpke.eog.ablehnen` | `malo_id`, `reason` |
 | `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum` |
 | `gpke.kuendigung.anmelden` | `malo_id`, `kuendigung_datum`, `alter_lf_mp_id`¹ |
 | `gpke.sperrung.beauftragen` | `malo_id` |
@@ -1367,7 +1427,7 @@ curl -X POST http://localhost:8080/api/v1/commands \
     { "qualifier": "AK", "address": "https://partner.example/as4/inbox" },
     { "qualifier": "EM", "address": "edifact@partner.example" }
   ],
-  "roles": ["NbStrom"],
+  "roles": ["NB"],
   "valid_from": "2025-10-01T00:00:00Z",
   "country_code": "DE"
 }
@@ -1395,7 +1455,7 @@ curl -X POST http://localhost:8080/api/v1/commands \
 
 ## EDIFACT Rendering
 
-Workflow intent becomes wire bytes in `edifact_renderer.rs`, which dispatches on
+Workflow intent becomes wire bytes in `orchestrator/edifact_renderer/` (split per message type), which dispatches on
 the outbox message type and — for MSCONS — on the Prüfidentifikator.
 
 ```mermaid

@@ -113,8 +113,8 @@ You handle all GPKE (supplier-switch Strom), WiM (meter-operator change), GeLi G
 MABIS (balancing, ÜNB/NB), and GaBi Gas workflows.
 
 ## TRIGGERED BY
-- `de.mako.process.escalated` — process timed out or returned error
-- `de.mako.process.timedout` — APERAK deadline missed (APERAK AHB §2.3/§2.4.1: Strom UTILMD/ORDERS 45 Minuten werktags; Gas Folgeprozesse nächster Werktag 12:00, Initialprozesse 3 Werktage)
+- `de.mako.process.failed` — process timed out or returned error
+- `de.mako.aperak.timeout` — APERAK deadline missed (APERAK AHB §2.3/§2.4.1: Strom UTILMD/ORDERS 45 Minuten werktags; Gas Folgeprozesse nächster Werktag 12:00, Initialprozesse 3 Werktage)
 - `de.mako.aperak.*` — APERAK events
 
 ## STEP-BY-STEP PROCEDURE
@@ -138,8 +138,8 @@ LEGAL_BASIS: [§-reference if applicable]
 ```",
     default_mcp_servers: &["makod", "marktd", "obsd"],
     default_trigger_patterns: &[
-        "de.mako.process.escalated",
-        "de.mako.process.timedout",
+        mako_events::mako::PROCESS_FAILED,
+        mako_events::mako::APERAK_TIMEOUT,
         "de.mako.aperak.*",
     ],
     default_max_turns: 12,
@@ -161,7 +161,7 @@ You are the deadline alert specialist for BDEW MaKo regulatory deadlines.
 
 ## TRIGGERED BY
 - `de.obs.stp.parity.alert` — parity check failed
-- `de.mako.process.timedout` — deadline exceeded
+- `de.mako.aperak.timeout` — deadline exceeded
 
 ## STEP-BY-STEP PROCEDURE
 
@@ -183,9 +183,9 @@ RECOMMENDED_ACTION: [specific next step]
 ```",
     default_mcp_servers: &["obsd", "makod", "marktd"],
     default_trigger_patterns: &[
-        "de.mako.process.escalated",
-        "de.mako.process.timedout",
-        "de.obs.deadline.approaching",
+        mako_events::mako::PROCESS_FAILED,
+        mako_events::mako::APERAK_TIMEOUT,
+        mako_events::obs::DEADLINE_APPROACHING,
     ],
     default_max_turns: 8,
     default_use_rag: false,
@@ -224,7 +224,10 @@ CORRECTION_PATH: [specific steps to resolve]
 AMOUNT_AT_RISK_EUR: [amount]
 ```",
     default_mcp_servers: &["invoicd", "billingd", "accountingd", "netzbilanzd"],
-    default_trigger_patterns: &["de.invoic.receipt.disputed", "de.accounting.mahnung.issued"],
+    default_trigger_patterns: &[
+        mako_events::invoic::RECEIPT_DISPUTED,
+        mako_events::accounting::MAHNUNG_ISSUED,
+    ],
     default_max_turns: 15,
     default_use_rag: false,
 };
@@ -266,9 +269,9 @@ BLOCKING_ISSUES: [list or NONE]
 ```",
     default_mcp_servers: &["netzbilanzd", "marktd", "edmd"],
     default_trigger_patterns: &[
-        "de.netzbilanz.invoic.drafted",
-        "de.netzbilanz.invoic.dispatched",
-        "de.netzbilanz.invoic.dispatch_overdue",
+        mako_events::netzbilanz::INVOIC_DRAFTED,
+        mako_events::netzbilanz::INVOIC_DISPATCHED,
+        mako_events::netzbilanz::INVOIC_DISPATCH_OVERDUE,
     ],
     default_max_turns: 12,
     default_use_rag: false,
@@ -302,7 +305,7 @@ ESCALATION_LEVEL: [NONE|REMINDER|FEE|SPERR]
 RECOMMENDED_ACTION: [specific step]
 ```",
     default_mcp_servers: &["invoicd", "marktd", "netzbilanzd"],
-    default_trigger_patterns: &["de.invoic.payment.overdue", "de.invoic.receipt.*"],
+    default_trigger_patterns: &[mako_events::invoic::PAYMENT_OVERDUE, "de.invoic.receipt.*"],
     default_max_turns: 15,
     default_use_rag: false,
 };
@@ -347,7 +350,7 @@ ROOT_CAUSE: [from taxonomy above or UNKNOWN]
 RECOMMENDED_ACTION: [specific step or NONE]
 ```",
     default_mcp_servers: &["billingd", "edmd"],
-    default_trigger_patterns: &["de.billing.rechnung.erstellt"],
+    default_trigger_patterns: &[mako_events::billing::RECHNUNG_ERSTELLT],
     default_max_turns: 10,
     default_use_rag: false,
 };
@@ -406,7 +409,7 @@ FINDINGS: [list of {code, severity, paragraph, description}]
 DISPATCH_SAFE: [YES|NO]
 ```",
     default_mcp_servers: &["billingd", "marktd"],
-    default_trigger_patterns: &["de.billing.rechnung.erstellt"],
+    default_trigger_patterns: &[mako_events::billing::RECHNUNG_ERSTELLT],
     default_max_turns: 12,
     default_use_rag: false,
 };
@@ -472,7 +475,7 @@ You are the EEG plant management specialist.
 
 ## TRIGGERED BY
 - `de.eeg.anlage.foerderung_auslaufend` — plant approaching end of 20-year EEG support
-- `de.edmd.reading.direct.stored` — iMSys push (check if plant qualifies for §41a upgrade)
+- `de.messwert.reading.direct.stored` — iMSys push (check if plant qualifies for §41a upgrade)
 
 ## FÖRDERUNG EXPIRY PROCEDURE
 
@@ -482,7 +485,7 @@ You are the EEG plant management specialist.
 4. Check iMSys status: required for §41a dynamic tariffs post-EEG.
 5. Generate operator checklist.
 
-## iMSys DETECTION (de.edmd.reading.direct.stored)
+## iMSys DETECTION (de.messwert.reading.direct.stored)
 
 1. Call edmd `get_device_history` for plant's recent reading history.
 2. If readings are 15-min intervals (RLM/iMSys): plant may qualify for §41a upgrade.
@@ -499,8 +502,8 @@ RECOMMENDED_ACTION: [specific step]
 ```",
     default_mcp_servers: &["einsd", "edmd", "marktd"],
     default_trigger_patterns: &[
-        "de.eeg.anlage.foerderung_auslaufend",
-        "de.edmd.reading.direct.stored",
+        mako_events::eeg::ANLAGE_FOERDERUNG_AUSLAUFEND,
+        mako_events::messwert::READING_DIRECT_STORED,
     ],
     default_max_turns: 15,
     default_use_rag: true,
@@ -586,7 +589,10 @@ RETURN_CODE: [R-code if applicable]
 ACTION: [NONE|MAHNUNG_1|MAHNUNG_2|SPERRAUFTRAG]
 ```",
     default_mcp_servers: &["accountingd"],
-    default_trigger_patterns: &["de.accounting.payment.due", "de.accounting.bankruecklast"],
+    default_trigger_patterns: &[
+        mako_events::accounting::PAYMENT_DUE,
+        mako_events::accounting::BANKRUECKLAST,
+    ],
     default_max_turns: 10,
     default_use_rag: false,
 };
@@ -619,7 +625,7 @@ BNETZA_REPORTABLE: [YES|NO]
 ISSUES: [list or NONE]
 ```",
     default_mcp_servers: &["obsd", "processd", "marktd", "invoicd"],
-    default_trigger_patterns: &["de.obs.stp.parity.alert"],
+    default_trigger_patterns: &[mako_events::obs::STP_PARITY_ALERT],
     default_max_turns: 12,
     default_use_rag: false,
 };
@@ -631,8 +637,8 @@ const MSB_HISTORY_AGENT: BuiltinAgentDef = BuiltinAgentDef {
 You are the MSB history and WiM Strom specialist.
 
 ## TRIGGERED BY
-- `de.edmd.reading.quality.warning` — quality flag on new meter readings
-- `de.edmd.reading.direct.stored` — iMSys push (verify against expected MSB)
+- `de.messwert.reading.quality.warning` — quality flag on new meter readings
+- `de.messwert.reading.direct.stored` — iMSys push (verify against expected MSB)
 - `de.mako.process.completed` — WiM MSB-change completed
 
 ## PROCEDURE
@@ -652,9 +658,9 @@ QUALITY_ISSUES: [list or NONE]
 ```",
     default_mcp_servers: &["edmd", "makod", "marktd"],
     default_trigger_patterns: &[
-        "de.edmd.reading.quality.warning",
-        "de.edmd.reading.direct.stored",
-        "de.mako.process.completed",
+        mako_events::messwert::READING_QUALITY_WARNING,
+        mako_events::messwert::READING_DIRECT_STORED,
+        mako_events::mako::PROCESS_COMPLETED,
     ],
     default_max_turns: 12,
     default_use_rag: false,
@@ -667,7 +673,7 @@ const METER_DATA_AGENT: BuiltinAgentDef = BuiltinAgentDef {
 You are the energy data management and meter quality specialist.
 
 ## TRIGGERED BY
-- `de.edmd.reading.quality.warning` — Hampel/V01-V10 quality flag
+- `de.messwert.reading.quality.warning` — Hampel/V01-V10 quality flag
 - `de.mako.process.completed` — process that may require meter data
 
 ## PROCEDURE
@@ -691,8 +697,8 @@ RECOMMENDED_SUBSTITUTION: [method per § 60 Abs. 2 MsbG]
 ```",
     default_mcp_servers: &["edmd", "marktd"],
     default_trigger_patterns: &[
-        "de.edmd.reading.quality.warning",
-        "de.mako.process.completed",
+        mako_events::messwert::READING_QUALITY_WARNING,
+        mako_events::mako::PROCESS_COMPLETED,
     ],
     default_max_turns: 12,
     default_use_rag: false,
@@ -727,8 +733,8 @@ CORRECTION: [specific action]
 ```",
     default_mcp_servers: &["marktd", "obsd"],
     default_trigger_patterns: &[
-        "de.markt.grid.drift.detected",
-        "de.markt.nb-contract.updated",
+        mako_events::markt::GRID_DRIFT_DETECTED,
+        mako_events::markt::NB_CONTRACT_UPDATED,
     ],
     default_max_turns: 10,
     default_use_rag: false,
@@ -765,7 +771,10 @@ ELIGIBILITY_BLOCKER: [reason if NOT_ELIGIBLE]
 RECOMMENDED_ACTION: [specific step or NONE]
 ```",
     default_mcp_servers: &["billingd", "tarifbd", "edmd", "marktd"],
-    default_trigger_patterns: &["de.billing.rechnung.erstellt", "de.mako.process.completed"],
+    default_trigger_patterns: &[
+        mako_events::billing::RECHNUNG_ERSTELLT,
+        mako_events::mako::PROCESS_COMPLETED,
+    ],
     default_max_turns: 12,
     default_use_rag: false,
 };
@@ -778,10 +787,10 @@ You are the contract and customer management specialist for the Lieferant (LF) r
 
 ## TRIGGERED BY
 - `de.vertrag.*` — any contract lifecycle event
-- `de.mako.process.abgelehnt` — GPKE/GeLi Gas process rejected (contract data issue)
+- `de.mako.aperak.rejected` — GPKE/GeLi Gas process rejected (contract data issue)
 - `de.vertrag.ablauf.ankuendigung` — contract or price guarantee expiring within 30 days
 - `de.vertrag.preisaenderung.ankuendigung` — §41 Abs. 3 EnWG 42-day price-change notice
-- `de.mako.process.escalated` — stuck Lieferbeginn (§20 EnWG parity monitor)
+- `de.mako.process.failed` — stuck Lieferbeginn (§20 EnWG parity monitor)
 
 ## STEP-BY-STEP PROCEDURE
 
@@ -794,7 +803,7 @@ You are the contract and customer management specialist for the Lieferant (LF) r
    - A05: check lf_mp_id published in bdew-codes.de.
 5. For TEILERFUELLUNG: identify which component is pending — escalate if > deadline.
 
-### On process rejection (de.mako.process.abgelehnt)
+### On process rejection (de.mako.aperak.rejected)
 1. Get rejected process from processd.
 2. Call vertragd to identify the affected Vertragskomponente.
 3. Determine if contract can be re-Angemeldet after master-data correction.
@@ -827,10 +836,10 @@ REGULATORY_BASIS: [paragraph reference]
     default_mcp_servers: &["vertragd", "processd", "marktd"],
     default_trigger_patterns: &[
         "de.vertrag.*",
-        "de.mako.process.abgelehnt",
-        "de.mako.process.escalated",
-        "de.vertrag.ablauf.ankuendigung",
-        "de.vertrag.preisaenderung.ankuendigung",
+        mako_events::mako::APERAK_REJECTED,
+        mako_events::mako::PROCESS_FAILED,
+        mako_events::vertrag::ABLAUF_ANKUENDIGUNG,
+        mako_events::vertrag::PREISAENDERUNG_ANKUENDIGUNG,
     ],
     default_max_turns: 15,
     default_use_rag: true,
@@ -845,14 +854,14 @@ completeness guard. Checks for missing EPEX daily prices, stale §42 Energiemix 
 You are the product catalog, EPEX price, and §42 EnWG Energiemix compliance specialist.
 
 ## TRIGGERED BY
-- `de.tarifbd.product.updated` — new/updated product in tarifbd
-- `de.tarifbd.angebot.abgelaufen` — B2B quote expired, needs ERP follow-up
-- `de.tarifbd.epex.missing` — EPEX D-1 prices not imported by 18:00 CET
+- `de.tarif.product.updated` — new/updated product in tarifbd
+- `de.tarif.angebot.abgelaufen` — B2B quote expired, needs ERP follow-up
+- `de.tarif.epex.missing` — EPEX D-1 prices not imported by 18:00 CET
 - Annual cron (January) — check §42 Energiemix completeness for all active products
 
 ## PROCEDURE
 
-### On product update (de.tarifbd.product.updated)
+### On product update (de.tarif.product.updated)
 1. Extract `lf_mp_id` and `product_code` from event.
 2. Call tarifbd `get_product` to fetch the current product definition.
 3. Call tarifbd `validate_tariff_config` to verify BO4E schema correctness.
@@ -865,12 +874,12 @@ You are the product catalog, EPEX price, and §42 EnWG Energiemix compliance spe
    - Call tarifbd `check_41a_epex_status` to verify D-1 prices are available.
    - Alert if tomorrow's prices are missing and it is past 14:00 CET.
 
-### On Angebot expiry (de.tarifbd.angebot.abgelaufen)
+### On Angebot expiry (de.tarif.angebot.abgelaufen)
 1. Extract `angebot_id` and `lf_mp_id` from event.
 2. Call tarifbd `get_angebot` to retrieve customer and product details.
 3. Generate ERP follow-up recommendation: re-quote or mark as lost opportunity.
 
-### On EPEX missing alert (de.tarifbd.epex.missing)
+### On EPEX missing alert (de.tarif.epex.missing)
 1. Call tarifbd `check_41a_epex_status` for current coverage status.
 2. Determine gap severity (stale days).
 3. Alert operator via output: trigger immediate EPEX import.
@@ -899,9 +908,9 @@ ISSUES: [list or NONE]
 ```",
     default_mcp_servers: &["tarifbd", "marktd"],
     default_trigger_patterns: &[
-        "de.tarifbd.product.updated",
-        "de.tarifbd.angebot.abgelaufen",
-        "de.tarifbd.epex.missing",
+        mako_events::tarif::PRODUCT_UPDATED,
+        mako_events::tarif::ANGEBOT_ABGELAUFEN,
+        mako_events::tarif::EPEX_MISSING,
     ],
     default_max_turns: 12,
     default_use_rag: false,
@@ -938,9 +947,9 @@ CORRECTION: [specific step to unblock]
 ```",
     default_mcp_servers: &["processd", "marktd", "obsd"],
     default_trigger_patterns: &[
-        "de.mako.process.initiated",
-        "de.mako.process.abgelehnt",
-        "de.mako.process.escalated",
+        mako_events::mako::PROCESS_INITIATED,
+        mako_events::mako::APERAK_REJECTED,
+        mako_events::mako::PROCESS_FAILED,
     ],
     default_max_turns: 10,
     default_use_rag: false,
@@ -977,9 +986,9 @@ ACTION: [NONE|ESCALATE_OPERATOR|TRIGGER_IFTSTA]
 ```",
     default_mcp_servers: &["sperrd", "makod", "marktd"],
     default_trigger_patterns: &[
-        "de.accounting.sperrauftrag",
+        mako_events::accounting::SPERRAUFTRAG,
         "de.sperr.*",
-        "de.mako.process.completed",
+        mako_events::mako::PROCESS_COMPLETED,
     ],
     default_max_turns: 10,
     default_use_rag: false,
@@ -1012,7 +1021,10 @@ AFFECTED_MALO_IDS: [list or NONE]
 CORRECTION: [rerun sync or manual fix]
 ```",
     default_mcp_servers: &["nis-syncd", "processd", "marktd", "obsd"],
-    default_trigger_patterns: &["de.markt.grid.drift.detected", "de.markt.malo.updated"],
+    default_trigger_patterns: &[
+        mako_events::markt::GRID_DRIFT_DETECTED,
+        mako_events::markt::MALO_UPDATED,
+    ],
     default_max_turns: 10,
     default_use_rag: false,
 };
@@ -1045,9 +1057,9 @@ SUMMARY: [customer-friendly one-liner]
 ```",
     default_mcp_servers: &["portald", "billingd", "einsd", "accountingd"],
     default_trigger_patterns: &[
-        "de.billing.rechnung.erstellt",
-        "de.eeg.anlage.foerderung_auslaufend",
-        "de.accounting.mahnung.issued",
+        mako_events::billing::RECHNUNG_ERSTELLT,
+        mako_events::eeg::ANLAGE_FOERDERUNG_AUSLAUFEND,
+        mako_events::accounting::MAHNUNG_ISSUED,
         "de.vertrag.*",
     ],
     default_max_turns: 8,
@@ -1093,7 +1105,7 @@ const REPLACEMENT_VALUE_AGENT: BuiltinAgentDef = BuiltinAgentDef {
 You are the § 60 Abs. 2 MsbG Ersatzwertbildung specialist.
 
 ## TRIGGERED BY
-- `de.edmd.reading.quality.warning` — quality grade F or gap detected
+- `de.messwert.reading.quality.warning` — quality grade F or gap detected
 - `de.mako.process.completed` — billing period needs quality check
 
 ## SUBSTITUTE VALUE METHODS (§ 60 Abs. 2 MsbG)
@@ -1124,8 +1136,8 @@ LEGAL_BASIS: §17 Abs. [n] MsbG
 ```",
     default_mcp_servers: &["edmd", "marktd", "obsd"],
     default_trigger_patterns: &[
-        "de.edmd.reading.quality.warning",
-        "de.mako.process.completed",
+        mako_events::messwert::READING_QUALITY_WARNING,
+        mako_events::mako::PROCESS_COMPLETED,
     ],
     default_max_turns: 12,
     default_use_rag: false,
@@ -1138,7 +1150,7 @@ const MABIS_SYNCD_AGENT: BuiltinAgentDef = BuiltinAgentDef {
 You are the MaBiS Summenzeitreihe submission specialist.
 
 ## TRIGGERED BY
-- `de.edmd.reading.quality.warning` — quality issue may affect Summenzeitreihe accuracy
+- `de.messwert.reading.quality.warning` — quality issue may affect Summenzeitreihe accuracy
 
 ## MABIS WINDOWS (BK6-24-174 Anlage 3 §3.10, Werktage after month end)
 - Erstaufschlag (BKA): ≤ 10 Werktage — a new version becomes Abrechnungsdaten directly
@@ -1163,7 +1175,7 @@ FAILED_MALO_COUNT: [number]
 ACTION: [NONE|RETRY|ESCALATE]
 ```",
     default_mcp_servers: &["edmd", "obsd", "marktd"],
-    default_trigger_patterns: &["de.edmd.reading.quality.warning"],
+    default_trigger_patterns: &[mako_events::messwert::READING_QUALITY_WARNING],
     default_max_turns: 10,
     default_use_rag: false,
 };
@@ -1175,9 +1187,9 @@ const SMGW_DIAGNOSTICS_AGENT: BuiltinAgentDef = BuiltinAgentDef {
 You are the Smart Meter Gateway (SMGW) diagnostics specialist.
 
 ## TRIGGERED BY
-- `de.edmd.cls.compliance_issue`    — compliance issue detected by daily worker
-- `de.edmd.reading.quality.warning` — SMGW may be cause of quality degradation
-- `de.edmd.reading.direct.stored`   — verify gateway session is healthy post-push
+- `de.messwert.cls.compliance_issue`    — compliance issue detected by daily worker
+- `de.messwert.reading.quality.warning` — SMGW may be cause of quality degradation
+- `de.messwert.reading.direct.stored`   — verify gateway session is healthy post-push
 - `de.mako.process.initiated`       — §14a Steuerungsauftrag (check CLS channel)
 - `de.markt.geraet.konfiguration.updated` — device config changed, re-check compliance
 
@@ -1212,7 +1224,7 @@ If `last_contact_at` is > 2 hours ago → `COMMUNICATION_FAULT`:
 ### Step 6 — Trigger immediate re-scan if needed
 Call `POST /api/v1/smgw/compliance/scan` to run a side-effecting sweep that:
 - Logs all current issues to `cls_compliance_log`
-- Emits `de.edmd.cls.compliance_issue` CloudEvents to ERP
+- Emits `de.messwert.cls.compliance_issue` CloudEvents to ERP
 
 ## BSI TR-03109 REQUIREMENTS
 - TLS certificate: issued by BSI-approved CA, renew ≥ 30 days before expiry (TR-03109-4 §6.3)
@@ -1231,11 +1243,11 @@ RECOMMENDED_ACTION: [specific step or NONE]
 ```",
     default_mcp_servers: &["edmd", "marktd", "obsd", "processd"],
     default_trigger_patterns: &[
-        "de.edmd.cls.compliance_issue",
-        "de.edmd.reading.quality.warning",
-        "de.edmd.reading.direct.stored",
-        "de.mako.process.initiated",
-        "de.markt.geraet.konfiguration.updated",
+        mako_events::messwert::CLS_COMPLIANCE_ISSUE,
+        mako_events::messwert::READING_QUALITY_WARNING,
+        mako_events::messwert::READING_DIRECT_STORED,
+        mako_events::mako::PROCESS_INITIATED,
+        mako_events::markt::GERAET_KONFIGURATION_UPDATED,
     ],
     default_max_turns: 12,
     default_use_rag: false,
@@ -1300,7 +1312,10 @@ ACTION: [NONE|ESCALATE_MISSING_SETTLEMENT|ESCALATE_MISSING_CONTRACT|REVIEW_ARITH
 DETAIL: [human-readable explanation]
 ```",
     default_mcp_servers: &["billingd", "marktd", "obsd"],
-    default_trigger_patterns: &["de.vpp.dispatch.confirmed", "de.vpp.settlement.berechnet"],
+    default_trigger_patterns: &[
+        mako_events::vpp::DISPATCH_CONFIRMED,
+        mako_events::vpp::SETTLEMENT_BERECHNET,
+    ],
     default_max_turns: 10,
     default_use_rag: false,
 };
@@ -1373,9 +1388,9 @@ LEGAL_BASIS: [KoV §x.y or BK7-24-01-008 §n]
     default_mcp_servers: &["makod", "netzbilanzd", "marktd", "obsd"],
     default_trigger_patterns: &[
         "de.gabi.imbalance.*",
-        "de.gabi.alocat.missing",
+        mako_events::gabi::ALOCAT_MISSING,
         "de.gabi.nomination.*",
-        "de.netzbilanz.invoic.drafted",
+        mako_events::netzbilanz::INVOIC_DRAFTED,
     ],
     default_max_turns: 12,
     default_use_rag: true,
@@ -1443,9 +1458,9 @@ ACTION_REQUIRED: [YES/NO — list of specific actions]
 ```",
     default_mcp_servers: &["einsd", "edmd", "tarifbd", "obsd"],
     default_trigger_patterns: &[
-        "de.eeg.settlement.batch_due",
+        mako_events::eeg::SETTLEMENT_BATCH_DUE,
         "de.eeg.compliance.*",
-        "de.eeg.anlage.foerderung_auslaufend",
+        mako_events::eeg::ANLAGE_FOERDERUNG_AUSLAUFEND,
     ],
     default_max_turns: 20,
     default_use_rag: false,

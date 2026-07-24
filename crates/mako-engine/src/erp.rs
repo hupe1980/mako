@@ -222,15 +222,15 @@ impl ErpEventType {
     #[must_use]
     pub fn cloud_event_type(&self) -> &'static str {
         match self {
-            Self::ProcessInitiated => "de.mako.process.initiated",
-            Self::AperakAccepted => "de.mako.aperak.accepted",
-            Self::AperakRejected { .. } => "de.mako.aperak.rejected",
-            Self::AperakTimeout => "de.mako.aperak.timeout",
-            Self::ContrlReceived => "de.mako.contrl.received",
-            Self::ProcessCompleted => "de.mako.process.completed",
-            Self::MaloIdentified => "de.mako.malo.identified",
-            Self::ProcessFailed { .. } => "de.mako.process.failed",
-            Self::VppDispatchConfirmed => "de.vpp.dispatch.confirmed",
+            Self::ProcessInitiated => mako_events::mako::PROCESS_INITIATED,
+            Self::AperakAccepted => mako_events::mako::APERAK_ACCEPTED,
+            Self::AperakRejected { .. } => mako_events::mako::APERAK_REJECTED,
+            Self::AperakTimeout => mako_events::mako::APERAK_TIMEOUT,
+            Self::ContrlReceived => mako_events::mako::CONTRL_RECEIVED,
+            Self::ProcessCompleted => mako_events::mako::PROCESS_COMPLETED,
+            Self::MaloIdentified => mako_events::mako::MALO_IDENTIFIED,
+            Self::ProcessFailed { .. } => mako_events::mako::PROCESS_FAILED,
+            Self::VppDispatchConfirmed => mako_events::vpp::DISPATCH_CONFIRMED,
         }
     }
 }

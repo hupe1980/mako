@@ -65,6 +65,11 @@ pub struct AnmeldungPayload {
     pub grid_operator_gln: String,
     pub bilanzierungsgebiet: Option<String>,
     pub process_date: time::Date,
+    /// SG4 STS Transaktionsgrund (DE9013) — e.g. `E01` Ein-/Auszug,
+    /// `E03` Lieferantenwechsel. Drives the date-plausibility rules.
+    pub transaktionsgrund: Option<String>,
+    /// Bilanzierungsmethode from UTILMD TM+EM (`SLP` | `RLM` | `IMS`).
+    pub bilanzierungsmethode: Option<String>,
 }
 
 impl AnmeldungPayload {
@@ -91,6 +96,14 @@ impl AnmeldungPayload {
             .get("bilanzierungsgebiet")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
+        let transaktionsgrund = data
+            .get("transaktionsgrund")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let bilanzierungsmethode = data
+            .get("bilanzierungsmethode")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
 
         let date_str = data.get("process_date")?.as_str()?;
         let process_date = if date_str.len() == 8 {
@@ -109,6 +122,8 @@ impl AnmeldungPayload {
             grid_operator_gln,
             bilanzierungsgebiet,
             process_date,
+            transaktionsgrund,
+            bilanzierungsmethode,
         })
     }
 
@@ -119,9 +134,14 @@ impl AnmeldungPayload {
         } else {
             Sparte::Strom
         };
-        // Gas is always SLP for GeLi Gas.  Strom defaults to SLP unless
-        // the UTILMD carries an RLM marker (TODO: extract from payload when available).
-        let messtyp = Messtyp::Slp;
+        // Messtyp from the UTILMD TM+EM marker carried in the payload
+        // (Z01=SLP, Z02=RLM, Z04=IMS → adapter emits "SLP"/"RLM"/"IMS").
+        // Default SLP when absent — the conservative Vorlauffrist bound.
+        let messtyp = match self.bilanzierungsmethode.as_deref() {
+            Some("RLM") => Messtyp::Rlm,
+            Some("IMS") => Messtyp::Imsys,
+            _ => Messtyp::Slp,
+        };
         AnmeldungAnfrage {
             pid: self.pid,
             process_id: self.process_id,
@@ -132,6 +152,7 @@ impl AnmeldungPayload {
             process_date: self.process_date,
             sparte,
             messtyp,
+            transaktionsgrund: self.transaktionsgrund,
         }
     }
 }
@@ -331,15 +352,15 @@ pub async fn evaluate_and_decide(
 
 fn lieferbeginn_accept_command(pid: u32, _malo_id: &str) -> String {
     match pid {
-        44001 => "geli.gas.lieferbeginn.bestaetigen".to_owned(),
-        _ => "gpke.lieferbeginn.bestaetigen".to_owned(),
+        44001 => mako_markt::commands::GELI_LIEFERBEGINN_BESTAETIGEN.to_owned(),
+        _ => mako_markt::commands::GPKE_LIEFERBEGINN_BESTAETIGEN.to_owned(),
     }
 }
 
 fn lieferbeginn_reject_command(pid: u32, _malo_id: &str) -> String {
     match pid {
-        44001 => "geli.gas.lieferbeginn.ablehnen".to_owned(),
-        _ => "gpke.lieferbeginn.ablehnen".to_owned(),
+        44001 => mako_markt::commands::GELI_LIEFERBEGINN_ABLEHNEN.to_owned(),
+        _ => mako_markt::commands::GPKE_LIEFERBEGINN_ABLEHNEN.to_owned(),
     }
 }
 
@@ -361,7 +382,9 @@ mod tests {
                 "new_supplier": "9900357000004",
                 "grid_operator": "9900000000001",
                 "bilanzierungsgebiet": "11YF-VATTENFALL-2",
-                "process_date": "20261001"
+                "process_date": "20261001",
+                "transaktionsgrund": "E01",
+                "bilanzierungsmethode": "RLM"
             }
         });
         let payload = AnmeldungPayload::parse(&event).expect("should parse");
@@ -373,6 +396,11 @@ mod tests {
             payload.bilanzierungsgebiet.as_deref(),
             Some("11YF-VATTENFALL-2")
         );
+        assert_eq!(payload.transaktionsgrund.as_deref(), Some("E01"));
+        // Messtyp derives from the TM+EM marker in the payload.
+        let anfrage = payload.into_anfrage();
+        assert_eq!(anfrage.messtyp, netz_checker::Messtyp::Rlm);
+        assert_eq!(anfrage.transaktionsgrund.as_deref(), Some("E01"));
     }
 
     #[test]
@@ -421,7 +449,7 @@ mod tests {
     fn accept_command_gas() {
         assert_eq!(
             lieferbeginn_accept_command(44001, "51238696780"),
-            "geli.gas.lieferbeginn.bestaetigen"
+            "geli.lieferbeginn.bestaetigen"
         );
     }
 
@@ -437,7 +465,7 @@ mod tests {
     fn reject_command_gas() {
         assert_eq!(
             lieferbeginn_reject_command(44001, "51238696780"),
-            "geli.gas.lieferbeginn.ablehnen"
+            "geli.lieferbeginn.ablehnen"
         );
     }
 

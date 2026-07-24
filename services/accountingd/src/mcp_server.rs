@@ -348,7 +348,7 @@ Returns count of matched and unmatched entries.",
                         "ZAHLUNG",
                         -amt,
                         Some(reference),
-                        Some("de.accounting.payment.imported"),
+                        Some(mako_events::accounting::PAYMENT_IMPORTED),
                         None,
                         today,
                         Some("CAMT.054 Zahlungseingang"),
@@ -554,7 +554,7 @@ SEPA pre-notification failures. \
                     "ABSCHLAG",
                     -acct.abschlag_ct, // advance payment = credit (reduces balance)
                     Some(&ref_id),
-                    Some("de.accounting.abschlag.posted"),
+                    Some(mako_events::accounting::ABSCHLAG_POSTED),
                     Some(&ref_id), // deterministic ce_id → idempotent per (malo, month)
                     today,
                     Some(&format!("Monatlicher Abschlag Tag {day}")),

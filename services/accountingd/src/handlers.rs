@@ -298,7 +298,7 @@ pub async fn ingest_webhook(
         // de.billing.rechnung.erstellt:
         //   is_correction=false → RECHNUNG debit  (customer owes money)
         //   is_correction=true  → STORNO debit/credit (negated amount; billing reversal)
-        "de.billing.rechnung.erstellt" => {
+        mako_events::billing::RECHNUNG_ERSTELLT => {
             let malo_id = data
                 .and_then(|d| d.get("malo_id"))
                 .and_then(|v| v.as_str())
@@ -369,7 +369,7 @@ pub async fn ingest_webhook(
 
         // ── Credit note (billingd) ─────────────────────────────────────────────
         // de.billing.gutschrift.erstellt: credit note, negative amount (credit to customer).
-        "de.billing.gutschrift.erstellt" => {
+        mako_events::billing::GUTSCHRIFT_ERSTELLT => {
             let malo_id = data
                 .and_then(|d| d.get("malo_id"))
                 .and_then(|v| v.as_str())
@@ -431,7 +431,7 @@ pub async fn ingest_webhook(
         // a corresponding RECHNUNG should have been created by billingd already.
         // We log the settlement as a ZAHLUNG credit if `settlement_eur` is present,
         // meaning the NB confirmed receiving payment from the LF.
-        "de.invoic.receipt.settled" => {
+        mako_events::invoic::RECEIPT_SETTLED => {
             let malo_id = data
                 .and_then(|d| d.get("malo_id"))
                 .and_then(|v| v.as_str())
@@ -487,7 +487,7 @@ pub async fn ingest_webhook(
         // de.eeg.verguetung.berechnet: fixed-rate EEG settlement → EEG_GUTSCHRIFT credit.
         // When cfg.eeg.auto_payout = true: also auto-generates pain.001 SEPA Credit Transfer
         // (SCT Inst or SCT CORE per cfg.eeg.sepa_instant) for immediate payout to plant operator.
-        "de.eeg.verguetung.berechnet" => {
+        mako_events::eeg::VERGUETUNG_BERECHNET => {
             let malo_id = ce.get("subject").and_then(|v| v.as_str()).unwrap_or("");
             let tr_id = data
                 .and_then(|d| d.get("tr_id"))
@@ -668,7 +668,7 @@ pub async fn ingest_webhook(
         // ── EEG Direktvermarktung Marktprämie (einsd) ─────────────────────────
         // de.eeg.marktpraemie.berechnet: Direktvermarktung / Ausschreibung settlement.
         // Gleitende Marktprämie (§20 EEG) + Managementprämie → EEG_MARKTPRAEMIE credit.
-        "de.eeg.marktpraemie.berechnet" => {
+        mako_events::eeg::MARKTPRAEMIE_BERECHNET => {
             let malo_id = ce.get("subject").and_then(|v| v.as_str()).unwrap_or("");
             let amount_ct: i64 = data
                 .and_then(|d| d.get("settlement_eur"))
@@ -1926,7 +1926,7 @@ pub async fn post_jahresabschluss(
                     "JAHRESABSCHLUSS",
                     refund_ct,
                     None,
-                    Some("de.accounting.erstattung.faellig"),
+                    Some(mako_events::accounting::ERSTATTUNG_FAELLIG),
                     Some(&ce_id),
                     today,
                     Some(&desc),
@@ -1996,7 +1996,7 @@ pub async fn post_jahresabschluss(
         let refund_ct = -settlement_ct;
         let ce = serde_json::json!({
             "specversion": "1.0",
-            "type": "de.accounting.erstattung.faellig",
+            "type": mako_events::accounting::ERSTATTUNG_FAELLIG,
             "source": format!("urn:accountingd:{}", cfg.tenant),
             "id": format!("{ce_id}:refund"),
             "time": OffsetDateTime::now_utc().to_string(),
@@ -2851,7 +2851,7 @@ pub async fn put_eeg_payout_status(
     {
         let ce = serde_json::json!({
             "specversion": "1.0",
-            "type": "de.accounting.eeg.payout.rejected",
+            "type": mako_events::accounting::EEG_PAYOUT_REJECTED,
             "source": format!("urn:accountingd:tenant:{}", cfg.tenant),
             "id": uuid::Uuid::new_v4().to_string(),
             "time": time::OffsetDateTime::now_utc().to_string(),

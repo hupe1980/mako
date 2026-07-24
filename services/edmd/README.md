@@ -14,7 +14,7 @@
 | Direct push | `POST /api/v1/meter-reads/rlm/{malo_id}` (Strom), `POST /api/v1/meter-reads/gas/{malo_id}` (Gas m³→kWh_Hs) — idempotent on `session_id` |
 | Quality scoring | `metering::score_intervals_f64` — Hampel filter (k=3, t=3.0, MAD×1.4826σ), auto-vectorises to AVX2/NEON; grades A/B/C/F; retroactive: `POST /api/v1/quality-score/{malo_id}` |
 | Reading orders | `POST/GET /api/v1/reading-orders` — Ablesesteuerung for LF/MSB/NB/ESA (an ESA may order value delivery, §60 Abs. 1 MsbG); `/complete`, `/cancel`, `/fail` (Ablesehindernis); auto-creates `INSRPT_STOERUNG` on INSRPT PID 23001 (WiM Störungsmeldung) |
-| § 60 MsbG confirmations | Every stored ESTIMATED/SUBSTITUTED interval opens an obligation in `estimated_read_confirmations`; auto-discharged when a MEASURED/CORRECTED value for the slot arrives (ingest or correction path). Daily worker (`[confirmation]`, default on, `deadline_weeks = 8` — aligned with the MaBiS BKA correction window, no statute fixes a number) escalates stale ones to UEBERFAELLIG and emits `de.edmd.reading.confirmation.overdue`; `GET /api/v1/confirmations?status=` lists them |
+| § 60 MsbG confirmations | Every stored ESTIMATED/SUBSTITUTED interval opens an obligation in `estimated_read_confirmations`; auto-discharged when a MEASURED/CORRECTED value for the slot arrives (ingest or correction path). Daily worker (`[confirmation]`, default on, `deadline_weeks = 8` — aligned with the MaBiS BKA correction window, no statute fixes a number) escalates stale ones to UEBERFAELLIG and emits `de.messwert.reading.confirmation.overdue`; `GET /api/v1/confirmations?status=` lists them |
 | §40 compliance | `GET /api/v1/compliance/jahresablesung/{year}` — only `AUSGEFUEHRT` discharges the annual-reading obligation |
 | REST API | `GET /api/v1/deliveries/{malo_id}` → `Vec<Energiemenge>` · `GET /api/v1/lastgang/{malo_id}` · `GET /api/v1/zeitreihe/{malo_id}` · `GET /api/v1/billing-period/{malo_id}` · `GET /api/v1/imbalance/{malo_id}/{year}/{month}` · `GET /api/v1/netzverlust?from=&to=` (§22 EnWG indicative grid-loss balance) · `GET /api/v1/esa/typ2/{malo_id}` (ESA Typ-2 store — never billing) |
 | Arrow IPC | `Accept: application/vnd.apache.arrow.stream` on `GET /api/v1/lastgang` + `GET /api/v1/zeitreihe` — 10–50× throughput vs JSON for bulk reads |
@@ -25,7 +25,7 @@
 | Rate limiting | Per-tenant and global GCRA buckets; `429` carries `Retry-After` |
 | Health | `GET /health/live`, `GET /health/ready` (PostgreSQL ping) |
 | MCP | `POST\|GET /mcp` — 15 tools + 5 prompts, including `get_timeseries`, `validate_timeseries`, `trigger_substitution` (§ 60 Abs. 2 MsbG Ersatzwerte), `trigger_jahresablesung`, `get_correction_history` |
-| CloudEvents emitted | `de.edmd.reading.direct.stored`, `de.edmd.reading.quality.warning` (grade C/F), `de.edmd.reading.order.failed` |
+| CloudEvents emitted | `de.messwert.reading.direct.stored`, `de.messwert.reading.quality.warning` (grade C/F), `de.messwert.reading.order.failed` |
 | Quality history | Every scoring path records a verdict in `quality_assessments`; re-scoring supersedes rather than appends |
 | §22 audit trail | Every value-changing overwrite — corrections **and** redeliveries, on every transport — leaves an immutable `meter_read_corrections` row; `?as_of=` reconstructs prior knowledge states |
 | Overlap exclusion | Per-partition `EXCLUDE USING gist` (`btree_gist`): a delivery whose range overlaps a stored reading is refused rather than double-counted |
