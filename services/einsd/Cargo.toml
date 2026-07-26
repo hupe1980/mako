@@ -21,7 +21,7 @@ path = "src/main.rs"
 mako-events = { workspace = true }
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
 billing      = { workspace = true }
-eeg-billing  = { path = "../../crates/eeg-billing", features = ["serde"] }
+eeg-billing  = { path = "../../crates/eeg-billing", features = ["serde", "bo4e"] }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }
 axum         = { version = "0.8" }

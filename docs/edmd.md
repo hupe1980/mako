@@ -460,6 +460,8 @@ duplicate order. Two partial unique indexes back it:
 │  GET  /api/v1/smgw                          ← fleet list with issue counts│
 │  GET  /api/v1/smgw/compliance               ← read-only compliance scan   │
 │  POST /api/v1/smgw/compliance/scan          ← side-effecting fleet sweep  │
+│    (background: daily cert-expiry worker → de.messwert.smgw.cert.expiry_   │
+│     warning at 90/30/7 days before SMGW_CERT_ABLAUFDATUM, once per tier)   │
 │                                                                            │
 │  ── Reading order scheduling (Ablesesteuerung) ──────────────────────── │
 │  POST|GET /api/v1/reading-orders            ← schedule / list orders     │
@@ -552,7 +554,7 @@ resolution column. The shared rule set lives in `metering::sharing`.
 | 13019 | Netzverluste Strom | NB → LF |
 | 13020–13023, 13026 | Redispatch 2.0 Zeitreihen | NB / ÜNB → LF |
 | 13025 | Lastgang Gas — Zustandsmengen / Energiemengen | NB → LF |
-| 13027 | Zählerstand Gas | NB → LF |
+| 13027 | **Werte nach Typ 2** (ESA, non-authoritative — routed to `esa_typ2_reads`, never `meter_reads`) | MSB → ESA |
 
 **PID 13007 (Gasbeschaffenheitsdaten):** When a `de.mako.process.completed` event
 arrives for PID 13007, `edmd` automatically extracts `brennwert_kwh_per_m3` (from
@@ -819,11 +821,11 @@ because outlier detection doesn't require accounting precision.
 | Check | Detection | Grade impact |
 |-------|-----------|--------------|
 | Gap detection | Adjacent intervals where `to[i] ≠ from[i+1]` | Warnings |
-| Consecutive zero-run | Max run of zero-value intervals | Warnings if > 4 |
+| Consecutive zero-run | Max run of zero-value intervals | Warnings if run > `max_zero_run_allowed` (Strom 2 · Gas 48 · Wärme/Wasser 720) |
 | **Hampel outliers** | `\|x[i] − window_median\| > 3.0 × 1.4826 × MAD` | Warnings |
 | Spike detection | `value > 10 × window_median` of neighbours | Warnings |
 | Interval consistency | Mixed SLP/RLM interval durations | Warnings |
-| Coverage | `accepted / expected × 100 %` | Grade degrades if < 95 % |
+| Coverage | `accepted / expected × 100 %` | Grade degrades if < 99 % |
 
 ### Quality grades
 
@@ -1528,16 +1530,20 @@ aggregation versus full PostgreSQL scans.
 
 ### File layout
 
+The partition spec is `identity(tenant)`, `identity(sparte)`, `month(dtm_from)` —
+`tenant` leads, and `month` subsumes year (Iceberg 0.9.1 forbids two time-based
+transforms on the same source field, so there is no separate year level):
+
 ```
 {storage_uri}/
   data/
-    sparte=STROM/                    ← identity(sparte) partition
-      dtm_from_year=2024/            ← year(dtm_from)
-        dtm_from_month=1/            ← month(dtm_from)
+    tenant=9900357000004/            ← identity(tenant) — leading partition
+      sparte=STROM/                  ← identity(sparte)
+        dtm_from_month=2024-01/      ← month(dtm_from); year is subsumed
           edmd-archive-{uuid}.parquet
-    sparte=GAS/
-      dtm_from_year=2024/
-        ...
+      sparte=GAS/
+        dtm_from_month=2024-01/
+          ...
   metadata/
     v1.metadata.json                 ← Iceberg V2 table metadata
 ```

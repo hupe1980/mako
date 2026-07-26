@@ -4,10 +4,20 @@
 //! the BO4E enum it reproduces. §42c Energy-Sharing eligibility reads
 //! `zaehler_typ`, and a value the enum does not know deserialises to `UNKNOWN`
 //! rather than failing, so drift here degrades a delivery point silently.
+//!
+//! Since rubo4e 0.8 these guards are **structural**: every enum exposes
+//! `VARIANTS` / `COUNT` / `from_wire` / `as_wire` without the `strum` feature, so
+//! the CHECK list is proved against the enum itself rather than a hand-maintained
+//! magic number.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use rubo4e::current::Zaehlertyp;
+
+/// The catch-all wire value the CHECK list keeps so a lenient-decoded `Unknown`
+/// (a forward-compat value from a newer schema) can still round-trip to storage.
+const UNKNOWN_SENTINEL: &str = "UNKNOWN";
 
 fn migration_sql() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations/0001_initial.sql");
@@ -37,10 +47,12 @@ fn check_values(sql: &str, column: &str) -> Vec<String> {
         .collect()
 }
 
-/// Every value in the `zaehler_typ` CHECK list must be a real BO4E `Zaehlertyp`.
+/// Every value in the `zaehler_typ` CHECK list must be a real BO4E `Zaehlertyp`
+/// (or the `UNKNOWN` sentinel).
 ///
-/// Postgres accepts any string here, so an invalid one is only detected when it
-/// fails to match what the application writes.
+/// `Zaehlertyp::from_wire` is the strict parse: unlike the lenient serde path it
+/// returns `Err` for typos, legacy codes, and the literal `"UNKNOWN"`, so it is
+/// exactly the check we need — no manual `== Unknown` exclusion.
 #[test]
 fn zaehler_typ_check_values_are_real_bo4e_values() {
     let sql = migration_sql();
@@ -48,55 +60,69 @@ fn zaehler_typ_check_values_are_real_bo4e_values() {
     assert!(!values.is_empty(), "CHECK list parsed as empty");
 
     for v in &values {
-        let parsed: Result<Zaehlertyp, _> =
-            serde_json::from_value(serde_json::Value::String(v.clone()));
-        let parsed = parsed.unwrap_or_else(|e| panic!("`{v}` is not a BO4E Zaehlertyp: {e}"));
-
-        // `Unknown` is BO4E's forward-compatibility catch-all: unrecognised wire
-        // values deserialise into it rather than failing, so it must be excluded
-        // for the check above to have force.
-        if v != "UNKNOWN" {
-            assert_ne!(
-                parsed,
-                Zaehlertyp::Unknown,
-                "`{v}` fell through to Zaehlertyp::Unknown — it is not a real variant"
-            );
+        if v == UNKNOWN_SENTINEL {
+            continue; // intentional forward-compat catch-all, not a schema variant
         }
+        assert!(
+            Zaehlertyp::from_wire(v).is_ok(),
+            "`{v}` in the zaehler_typ CHECK list is not a real BO4E Zaehlertyp wire value"
+        );
     }
 }
 
-/// The CHECK list must cover the whole enum.
+/// The CHECK list must cover **exactly** the enum — every variant, and nothing
+/// stale.
 ///
-/// Pinned by count: `rubo4e` does not expose variant iteration without the
-/// `strum` feature, so a bare count is the available signal. When a BO4E release
-/// adds a Zaehlertyp this fails, which is the point — the list needs a decision,
-/// not silent divergence.
+/// Proved by set-equality against `Zaehlertyp::VARIANTS` (via `as_wire()`), which
+/// is stable for the schema version and available without `strum`. When a BO4E
+/// release adds or removes a Zaehlertyp this fails with the precise delta — the
+/// list needs a deliberate decision, not silent divergence. Replaces the former
+/// hand-pinned `= 14` magic-count guard.
 #[test]
 fn zaehler_typ_check_covers_every_bo4e_variant() {
     let sql = migration_sql();
-    let values = check_values(&sql, "zaehler_typ");
+    let list: BTreeSet<String> = check_values(&sql, "zaehler_typ")
+        .into_iter()
+        .filter(|v| v != UNKNOWN_SENTINEL)
+        .collect();
 
-    const BO4E_V202607_ZAEHLERTYP_VARIANTS: usize = 14;
+    let enum_wire: BTreeSet<String> = Zaehlertyp::VARIANTS
+        .iter()
+        .map(|v| v.as_wire().to_owned())
+        .collect();
+
     assert_eq!(
-        values.len(),
-        BO4E_V202607_ZAEHLERTYP_VARIANTS,
-        "zaehler_typ CHECK has {} values, BO4E v202607 Zaehlertyp has {}. \
-         Reconcile the migration with rubo4e and update this constant.",
-        values.len(),
-        BO4E_V202607_ZAEHLERTYP_VARIANTS
+        list.len(),
+        Zaehlertyp::COUNT,
+        "unexpected duplicate(s) in CHECK list"
+    );
+    let missing: Vec<&String> = enum_wire.difference(&list).collect();
+    let extra: Vec<&String> = list.difference(&enum_wire).collect();
+    assert!(
+        missing.is_empty() && extra.is_empty(),
+        "zaehler_typ CHECK list is out of sync with BO4E Zaehlertyp — \
+         missing {missing:?}, stale {extra:?}. Reconcile the migration with rubo4e."
     );
 }
 
 /// `Zaehlertyp` and `Geraetetyp` disagree on how many `s` belong in
-/// "Messsystem"; this pins the `Zaehlertyp` spelling.
+/// "Messsystem" (an upstream BO4E divergence, documented on both enums since
+/// rubo4e 0.8); this pins the `Zaehlertyp` spelling to the enum's own `as_wire()`.
 #[test]
 fn imsys_spelling_is_the_zaehlertyp_one() {
     let sql = migration_sql();
     let values = check_values(&sql, "zaehler_typ");
 
+    // The authoritative spelling comes from the enum itself, not a string literal.
+    let canonical = Zaehlertyp::IntelligentesMesssystem.as_wire();
+    assert_eq!(
+        canonical, "INTELLIGENTES_MESSSYSTEM",
+        "Zaehlertyp uses three s"
+    );
+
     assert!(
-        values.iter().any(|v| v == "INTELLIGENTES_MESSSYSTEM"),
-        "Zaehlertyp uses INTELLIGENTES_MESSSYSTEM (three s)"
+        values.iter().any(|v| v == canonical),
+        "zaehler_typ CHECK list must carry the Zaehlertyp spelling {canonical}"
     );
     assert!(
         !values.iter().any(|v| v == "INTELLIGENTES_MESSYSTEM"),

@@ -114,7 +114,7 @@ graph LR
    - **`counterparty_mp_id`** — auto-populated from `lf_mp_id` (NNE/MMM) or `msb_mp_id` (PID 31009)
    - **`CalculationTrace`** per position — `explanation`, `legal_refs`, `tariff_source`, `gross_eur`
    - **`LegalReference`** list — e.g. `StromNEV §21`, `KAV §2 Abs. 2`, `§14a EnWG Modul 2`
-   - **`Sparte`** on input drives legal refs + `SettlementType` automatically (`Gas` → `GasNEV §14`, PID 31005)
+   - **`Sparte`** on input drives legal refs + `SettlementType` automatically (`Gas` → `GasNEV §14`; NN-Rechnung PID 31002 for both Sparten)
 
    `netzbilanzd` calls `into_rechnung()` locally before validation and serialization.
 
@@ -172,10 +172,10 @@ surplus energy the network absorbed, and that surplus is reimbursed.
 
 | `billing_type` | PID | Direction | Description | Regulatory basis |
 |---|---|---|---|---|
-| `nne_strom` | 31001 | NB → LF | Netznutzungsentgelt Strom, monthly | GPKE BK6-22-024 |
-| `mmm_strom` | 31002 | NB → LF | Mehr-/Mindermengensaldo Strom | GPKE (BK6-24-174) Teil 1 Kap. 8.4 |
-| `mmm_gas` | 31002 | GNB → LFG | Mehr-/Mindermengensaldo Gas (THE prices) | GaBi Gas 2.1 (BK7-24-01-008) |
-| `nne_gas` | 31005 | GNB → LFG | Netznutzungsentgelt Gas, monthly | GasNEV |
+| `nne_strom` | 31002 | NB → LF | Netznutzungsentgelt Strom, monthly (NN-Rechnung) | GPKE BK6-24-174 |
+| `nne_gas` | 31002 | GNB → LFG | Netznutzungsentgelt Gas, monthly (NN-Rechnung) | GasNEV |
+| `mmm_strom` | 31005 | NB → LF | Mehr-/Mindermengensaldo Strom | GPKE (BK6-24-174) Teil 1 Kap. 8.4 |
+| `mmm_gas` | 31005 | GNB → LFG | Mehr-/Mindermengensaldo Gas (THE prices) | GaBi Gas 2.1 (BK7-24-01-008) |
 | `msb_31009` | 31009 | NB → MSB | MSB-Rechnung (metering service) | WiM BK6-24-174 |
 | `nne_gas_awh_31011` | 31011 | GNB → LFG | AWH Sperrprozesse Gas (Abrechnungswürdige Handlungen) | GeLi Gas 3.0 (BK7-24-01-009) §5.4 |
 
@@ -567,6 +567,7 @@ All events are CloudEvents 1.0 (`application/cloudevents+json`) POSTed to `erp_w
 | `de.netzbilanz.invoic.paid` | `PUT /mark-paid` or REMADV webhook | `draft_id`, `remadv_ref`, `tenant` |
 | `de.netzbilanz.invoic.disputed` | `PUT /mark-disputed` or REMADV webhook | `draft_id`, `erc_code`, `reason`, `tenant` |
 | `de.netzbilanz.invoic.dispatch_overdue` | Background worker (hourly) | `draft_ids[]`, `undispatched_count` |
+| `de.netzbilanz.kostenblatt.computed` | `POST /redispatch/kostenblatt/{id}/compute` | `record_id`, `activation_id`, `einsatzkosten_eur`, `dispatch_source` |
 | `de.netzbilanz.kostenblatt.deadline_approaching` | Background worker (daily) | `period_year`, `period_month`, `pending_count`, `days_until_deadline` |
 
 ---
@@ -670,7 +671,7 @@ Nested keys use double underscore: `NETZBILANZD_DATABASE__URL`.
 Migrations run automatically at startup via `sqlx::migrate!`.
 
 ```sql
--- invoice_drafts: core billing ledger (migrations 0001–0002)
+-- invoice_drafts: core billing ledger
 CREATE TABLE invoice_drafts (
     id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant           TEXT        NOT NULL DEFAULT 'default',
@@ -700,7 +701,7 @@ CREATE UNIQUE INDEX id_no_double_billing
     ON invoice_drafts (tenant, malo_id, period_from, period_to, pid)
     WHERE rechnungsart = 'RECHNUNG' AND status != 'rejected';
 
--- kostenblatt_records: Redispatch 2.0 Kostenblatt (migration 0001)
+-- kostenblatt_records: Redispatch 2.0 Kostenblatt
 CREATE TABLE kostenblatt_records (
     id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant                   TEXT NOT NULL,
@@ -720,7 +721,7 @@ CREATE TABLE kostenblatt_records (
     UNIQUE (tenant, activation_id, tr_id)
 );
 
--- fremdkosten_records: typed external-cost pass-through (migration 0003)
+-- fremdkosten_records: typed external-cost pass-through
 CREATE TABLE fremdkosten_records (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant            TEXT NOT NULL DEFAULT 'default',
@@ -760,4 +761,4 @@ CREATE TABLE fremdkosten_records (
 - `netzbilanzd` does **not** appear in the LF `agentd` MCP server list.
 - `billingd`/`invoicd` do **not** receive `de.netzbilanz.*` CloudEvents.
 
-See [§9 EnWG Informatorisches Unbundling](./architecture#informatorisches-unbundling).
+See [§9 EnWG Informatorisches Unbundling](./portald#informatorisches-unbundling-9-enwg).

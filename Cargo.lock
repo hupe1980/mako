@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "accountingd"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -101,7 +101,7 @@ dependencies = [
 
 [[package]]
 name = "agentd"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "arrow-array 58.4.0",
@@ -863,9 +863,9 @@ dependencies = [
 
 [[package]]
 name = "asx-rs"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b06353d96da5068d754a183e8479bcedf0baf14301f48b101502504fb701cf2"
+checksum = "d95748eb74583b9ceed792550cfc9253f97cddb99e8cff96602e26442b608138"
 dependencies = [
  "aes-gcm",
  "axum",
@@ -1138,9 +1138,9 @@ dependencies = [
 
 [[package]]
 name = "billing"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81f6e37ad57957574e0d11569559c93d1b6e6a279799b71f2b3c158d514699b0"
+checksum = "28364b102cec95d19d21e4c18c63fe806740bfb1a76f3ef46cdd41aaa7e812ac"
 dependencies = [
  "rust_decimal",
  "serde",
@@ -1149,7 +1149,7 @@ dependencies = [
 
 [[package]]
 name = "billingd"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4108,7 +4108,7 @@ dependencies = [
 
 [[package]]
 name = "dvgw-edi"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "edifact-rs",
  "rust_decimal",
@@ -4148,7 +4148,7 @@ dependencies = [
 
 [[package]]
 name = "edi-energy"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "criterion 0.5.1",
  "edifact-rs",
@@ -4164,9 +4164,9 @@ dependencies = [
 
 [[package]]
 name = "edifact-rs"
-version = "0.12.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b23ebddda19bb5b2aabad36f56371a39a4c69dfdf5c1140f4b005da177d14b6"
+checksum = "c4d5801d93e92defb3d0e012c5d297f89c615d426808db8645ec4ed37f8bd37a"
 dependencies = [
  "edifact-rs-derive",
  "memchr",
@@ -4178,9 +4178,9 @@ dependencies = [
 
 [[package]]
 name = "edifact-rs-derive"
-version = "0.12.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66abaf5b8fa44afcecd262ab75f27f46803db2570b421e9e5b6b2dd87d73e48f"
+checksum = "51a325beb8b86f7216b37e93596bdcbd1beef033f1b3510e3a818c45b3bd4965"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4189,7 +4189,7 @@ dependencies = [
 
 [[package]]
 name = "edmd"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "arrow 57.3.1",
@@ -4247,10 +4247,11 @@ dependencies = [
 
 [[package]]
 name = "eeg-billing"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "billing",
  "proptest",
+ "rubo4e",
  "rust_decimal",
  "serde",
  "thiserror 2.0.19",
@@ -4259,7 +4260,7 @@ dependencies = [
 
 [[package]]
 name = "einsd"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -4364,7 +4365,7 @@ dependencies = [
 
 [[package]]
 name = "energy-api"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "axum",
  "base64ct",
@@ -4388,7 +4389,7 @@ dependencies = [
 
 [[package]]
 name = "energy-billing"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "billing",
  "eeg-billing",
@@ -5270,7 +5271,7 @@ dependencies = [
 
 [[package]]
 name = "grid-billing"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "billing",
  "proptest",
@@ -5687,7 +5688,7 @@ dependencies = [
  "serde_with",
  "strum 0.27.2",
  "tokio",
- "typed-builder",
+ "typed-builder 0.20.1",
  "typetag",
  "url",
  "uuid",
@@ -6000,7 +6001,7 @@ dependencies = [
 
 [[package]]
 name = "invoic-checker"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "billing",
  "rubo4e",
@@ -6013,7 +6014,7 @@ dependencies = [
 
 [[package]]
 name = "invoicd"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7479,7 +7480,7 @@ dependencies = [
 
 [[package]]
 name = "mabis-syncd"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7525,14 +7526,14 @@ dependencies = [
 
 [[package]]
 name = "mako-as4"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "asx-rs",
 ]
 
 [[package]]
 name = "mako-edm"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "metering",
  "rust_decimal",
@@ -7546,7 +7547,7 @@ dependencies = [
 
 [[package]]
 name = "mako-engine"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "criterion 0.5.1",
  "mako-events",
@@ -7565,11 +7566,11 @@ dependencies = [
 
 [[package]]
 name = "mako-events"
-version = "0.13.0"
+version = "0.14.0"
 
 [[package]]
 name = "mako-gabi-gas"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "dvgw-edi",
  "mako-edm",
@@ -7586,7 +7587,7 @@ dependencies = [
 
 [[package]]
 name = "mako-geli-gas"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -7600,7 +7601,7 @@ dependencies = [
 
 [[package]]
 name = "mako-gpke"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -7615,7 +7616,7 @@ dependencies = [
 
 [[package]]
 name = "mako-mabis"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "edi-energy",
  "mako-edm",
@@ -7631,7 +7632,7 @@ dependencies = [
 
 [[package]]
 name = "mako-markt"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "hmac 0.12.1",
  "mako-events",
@@ -7653,11 +7654,11 @@ dependencies = [
 
 [[package]]
 name = "mako-nbw"
-version = "0.13.0"
+version = "0.14.0"
 
 [[package]]
 name = "mako-obs"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "mako-events",
  "serde",
@@ -7670,7 +7671,7 @@ dependencies = [
 
 [[package]]
 name = "mako-plugin"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "extism",
  "serde",
@@ -7682,7 +7683,7 @@ dependencies = [
 
 [[package]]
 name = "mako-redispatch"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "mako-engine",
  "rust_decimal",
@@ -7695,7 +7696,7 @@ dependencies = [
 
 [[package]]
 name = "mako-service"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7733,7 +7734,7 @@ dependencies = [
 
 [[package]]
 name = "mako-wim"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -7748,7 +7749,7 @@ dependencies = [
 
 [[package]]
 name = "mako-wim-gas"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "edi-energy",
@@ -7763,7 +7764,7 @@ dependencies = [
 
 [[package]]
 name = "makod"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "asx-rs",
@@ -7839,7 +7840,7 @@ dependencies = [
 
 [[package]]
 name = "marktd"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -7971,7 +7972,7 @@ dependencies = [
 
 [[package]]
 name = "metering"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "proptest",
  "rust_decimal",
@@ -8141,7 +8142,7 @@ dependencies = [
 
 [[package]]
 name = "netz-checker"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "mako-engine",
  "mako-markt",
@@ -8155,7 +8156,7 @@ dependencies = [
 
 [[package]]
 name = "netzbilanzd"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8190,7 +8191,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nis-syncd"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -8547,7 +8548,7 @@ dependencies = [
 
 [[package]]
 name = "obsd"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -9311,7 +9312,7 @@ dependencies = [
 
 [[package]]
 name = "portald"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -9498,7 +9499,7 @@ dependencies = [
 
 [[package]]
 name = "processd"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -10069,7 +10070,7 @@ dependencies = [
 
 [[package]]
 name = "redispatch-xml"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "quick-xml 0.40.1",
  "serde",
@@ -10548,9 +10549,9 @@ dependencies = [
 
 [[package]]
 name = "rubo4e"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bbb2c6ff0a8a96d2dc29aa7b69567292d6aed393fa8ca9d767748f8ed4a319a"
+checksum = "a3fdffa43e89b1ea6c927ddcba9f8e4961344fd1408556a2a9863136268c60e4"
 dependencies = [
  "garde",
  "indexmap 2.14.0",
@@ -10562,6 +10563,7 @@ dependencies = [
  "strum 0.28.0",
  "thiserror 2.0.19",
  "time",
+ "typed-builder 0.23.2",
 ]
 
 [[package]]
@@ -10991,13 +10993,14 @@ dependencies = [
 
 [[package]]
 name = "sepa"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46578a2a693ac6ee0ff36fdab3056321870290c10f152e8aa06c7ed7d7299376"
+checksum = "dcc8b8323e8981402c325e950e76ba6d1ba7ec7657dad3eb676dc9c567add47f"
 dependencies = [
  "quick-xml 0.41.0",
  "serde_json",
  "thiserror 2.0.19",
+ "time",
 ]
 
 [[package]]
@@ -11516,7 +11519,7 @@ dependencies = [
 
 [[package]]
 name = "sperrd"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -12151,7 +12154,7 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
 name = "tarifbd"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -12883,7 +12886,16 @@ version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd9d30e3a08026c78f246b173243cf07b3696d274debd26680773b6773c2afc7"
 dependencies = [
- "typed-builder-macro",
+ "typed-builder-macro 0.20.1",
+]
+
+[[package]]
+name = "typed-builder"
+version = "0.23.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "31aa81521b70f94402501d848ccc0ecaa8f93c8eb6999eb9747e72287757ffda"
+dependencies = [
+ "typed-builder-macro 0.23.2",
 ]
 
 [[package]]
@@ -12891,6 +12903,17 @@ name = "typed-builder-macro"
 version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c36781cc0e46a83726d9879608e4cf6c2505237e263a8eb8c24502989cfdb28"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "typed-builder-macro"
+version = "0.23.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "076a02dc54dd46795c2e9c8282ed40bcfb1e22747e955de9389a1de28190fb26"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -13237,7 +13260,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vertragd"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "axum",

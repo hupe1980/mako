@@ -3,6 +3,7 @@ layout: default
 title: Validation
 nav_order: 11
 parent: Reference
+mermaid: true
 description: >
   Five-layer EDIFACT validation: schema, code lists, MIG, AHB, and semantic
   rules. How to read the ValidationReport, handle PIDs, and validate in
@@ -16,6 +17,28 @@ Every EDI@Energy message can be validated against the officially registered BDEW
 ---
 
 ## The Five Validation Layers
+
+A message runs through the layers in order, from raw syntax to business meaning.
+Each layer appends its issues to one `ValidationReport`; a later layer runs even
+when an earlier one raised warnings, so a single pass reports every problem at once
+rather than stopping at the first.
+
+```mermaid
+flowchart LR
+    RAW["EDIFACT bytes<br/>UNB…UNZ"] --> L1
+    subgraph pipe ["Five validation layers — one ValidationReport"]
+        direction LR
+        L1["1 · Schema<br/>mandatory segments<br/>repetition limits"]
+        L2["2 · Code lists<br/>value ∈ permitted list"]
+        L3["3 · MIG<br/>segment order · group<br/>nesting · cardinality"]
+        L4["4 · AHB<br/>Prüfidentifikator rules<br/>mandatory/conditional/forbidden"]
+        L5["5 · Semantic<br/>cross-field business rules<br/>date coherence · references"]
+        L1 --> L2 --> L3 --> L4 --> L5
+    end
+    L5 --> REP["ValidationReport<br/>issues by layer + severity"]
+    REP -->|is_valid| OK["accept"]
+    REP -->|has errors| ERR["reject / route to APERAK"]
+```
 
 | Layer | Checks |
 |---|---|
@@ -164,7 +187,7 @@ Each issue carries:
 Enable the `serde` feature to serialize reports as JSON:
 
 ```toml
-edi-energy = { version = "0.13", features = ["serde"] }
+edi-energy = { version = "0.14", features = ["serde"] }
 ```
 
 ```rust
@@ -193,7 +216,7 @@ Output shape:
 Enable the `diagnostics` feature for `miette` integration:
 
 ```toml
-edi-energy = { version = "0.13", features = ["diagnostics"] }
+edi-energy = { version = "0.14", features = ["diagnostics"] }
 ```
 
 Reports then implement `miette::Diagnostic`, giving annotated terminal output with source spans when used with the `miette` error handler.
@@ -286,13 +309,13 @@ for issue in report.issues_by_origin("mig") { /* ... */ }
 To reproduce past validation behaviour or run tests against historical data:
 
 ```rust
-use edi_energy::{parse_with_config, ParseConfig, EdiEnergyMessage};
+use edi_energy::{Parser, ParseConfig, EdiEnergyMessage};
 use time::macros::date;
 
-let config = ParseConfig::new()
+let config = ParseConfig::default()
     .with_reference_date(date!(2024-10-01));
 
-let msg = parse_with_config(bytes, config)?;
+let msg = Parser::with_config(config).parse(bytes)?;
 let report = msg.validate()?;
 // profile selection uses Oct 1 2024 as "today"
 ```

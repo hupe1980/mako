@@ -112,17 +112,14 @@ All plugins are registered in a `PluginRegistry` at daemon startup:
 ```rust
 let mut registry = PluginRegistry::new();
 
-// Native Rust plugin
-registry.register_billing(Arc::new(MyDiscountPlugin));
-registry.register_mcp_tool(Arc::new(MyCustomTools));
-
-// WASM plugin (requires feature `wasm`)
-#[cfg(feature = "wasm")]
-registry.load_wasm("plugins/operator_rules.wasm")?;
-
-// Registry is cloned into the service state
-let app = App::new().data(registry);
+// Native Rust plugins are registered as boxed trait objects. Each
+// register_* method takes &mut self and returns &mut Self for chaining.
+registry.register_billing(Box::new(MyDiscountPlugin));
+registry.register_mcp_tool(Box::new(MyCustomTools));
 ```
+
+WASM plugins are loaded separately via the free function
+`load_wasm_plugins(&[PluginManifest])` (feature `wasm`) — see below.
 
 ---
 
@@ -150,10 +147,10 @@ Every plugin call receives a read-only `PluginContext`:
 
 ```rust
 pub struct PluginContext {
+    /// Operator tenant identifier.
     pub tenant: String,
-    pub operator_mp_id: String,
-    pub format_version: String,
-    pub extra: HashMap<String, Value>,
+    /// Plugin-specific configuration extracted from the TOML `[[plugins]]` entry.
+    pub config: serde_json::Value,
 }
 ```
 

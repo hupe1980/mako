@@ -8,7 +8,7 @@
 //! |---|---|---|
 //! | `policy_without_key_no_encryption_required` | D1 dev-mode behaviour | BDEW AS4-Profil v1.2 §2.2.6.2.2 |
 //! | `policy_with_key_requires_encryption` | D1 prod-mode behaviour | BDEW AS4-Profil v1.2 §2.2.6.2.2 |
-//! | `fragment_scope_is_soap_sender_id` | D2 no-fragmentation contract | BDEW AS4-Profil v1.2 OneWayPush |
+//! | `fragment_scope_is_strict_default` | D2 no-fragmentation contract | BDEW AS4-Profil v1.2 OneWayPush |
 //! | `sign_encrypt_pmode_defaults` | D1 bdew_pmode encrypt:true | BDEW AS4-Profil v1.2 §2.2.6.2.2 |
 //! | `sign_only_pmode_disables_encryption` | D1 sign_only contract | BDEW AS4-Profil v1.2 dev variant |
 //! | `replay_dedup_blocks_duplicate` | D2 72h replay window | BDEW AS4-Profil v1.2 §4.2 |
@@ -54,18 +54,20 @@ fn policy_with_key_requires_encryption() {
 // ── D2: fragment scope policy ─────────────────────────────────────────────────
 
 /// BDEW AS4 uses `OneWayPush` with single `UserMessage` — no fragmentation.
-/// `fragment_scope_policy` must be `UseSoapSenderId` so that passing
-/// `authenticated_sender_scope: None` (the current ingest handler value) never
-/// triggers a `PolicyViolation` error.
+/// The strict default `RequireAuthenticatedScope` is kept: asx-rs 0.11 clarified
+/// that the fragment-scope policy is consulted for *fragmented* messages only, so
+/// a `None` `authenticated_sender_scope` is already safe for non-fragmenting BDEW
+/// traffic — overriding to `UseSoapSenderId` would only weaken the policy if a
+/// fragment ever arrived.
 #[test]
-fn fragment_scope_is_soap_sender_id() {
+fn fragment_scope_is_strict_default() {
     use asx_rs::as4::FragmentScopePolicy;
     let policy = bdew_push_policy(None);
     assert_eq!(
         policy.fragment_scope_policy,
-        FragmentScopePolicy::UseSoapSenderId,
-        "BDEW does not use AS4 message fragmentation; policy must be \
-         UseSoapSenderId so authenticated_sender_scope: None is always safe"
+        FragmentScopePolicy::RequireAuthenticatedScope,
+        "BDEW does not fragment; the strict default is kept — a None scope is safe \
+         for single-message traffic and stays strict if a fragment ever arrives"
     );
 }
 
@@ -683,5 +685,95 @@ async fn inbound_encryption_enforced_when_decryption_key_set() {
             || err_str.contains("Encrypt")
             || err_str.contains("PolicyViolation"),
         "Rejection must cite encryption policy violation; got: {err_str}"
+    );
+}
+
+// ── F-011: synchronous receipt verification via asx-rs 0.11 ───────────────────
+
+/// Exercises the receipt-verification path end to end (the CR-1 fix): the sender
+/// pushes a signed AS4 message and `send_and_verify` parses the mock's
+/// synchronous `eb:Receipt` namespace-correctly and correlates it to the sent
+/// `message_id` — replacing the hand-rolled substring scan makod used to carry.
+/// Signed-receipt / Non-Repudiation-of-Receipt digest verification is owned and
+/// exhaustively tested by asx-rs itself; here `relaxed()` keeps the fixture free of
+/// PKI-fingerprint pinning while still proving our integration of the new API.
+#[tokio::test]
+async fn sync_receipt_is_verified_and_correlated() {
+    use asx_rs::as4::{As4ReceiptPolicy, As4SendRequest, send_async};
+    use asx_rs::core::SessionContextBuilder;
+    use asx_rs::observability::EventBus;
+    use asx_rs::transport::As4HttpTransport;
+    use mako_as4::pmode::{BdewAction, bdew_pmode_sign_only};
+    use mako_as4::testing::{BdewTestPki, MockAs4Endpoint};
+
+    let sender_pki = BdewTestPki::generate("Test NB 9900000000001");
+    let receiver_pki = BdewTestPki::generate("Test LF 9900000000002");
+    const SENDER_GLN: &str = "9900000000001";
+    const RECEIVER_GLN: &str = "9900000000002";
+
+    // Mock receiver answers with a SIGNED receipt (its NRI echoes the inbound signature).
+    let mock_endpoint = MockAs4Endpoint::builder()
+        .bind("127.0.0.1:0")
+        .await
+        .expect("MockAs4Endpoint must bind");
+    let endpoint_url = mock_endpoint.local_url();
+
+    // The sender signs, and must TRUST the receiver's receipt-signing cert so the
+    // receipt signature verifies against the session's trust anchors.
+    let session = Arc::new(
+        SessionContextBuilder::new("test-session-nb", SENDER_GLN)
+            .with_signing_material(
+                sender_pki.signing.cert_pem_str(),
+                sender_pki.signing.key_pem_str(),
+            )
+            .with_trust_anchor_pem(sender_pki.signing.cert_pem_str())
+            .with_trust_anchor_pem(receiver_pki.signing.cert_pem_str())
+            .build()
+            .expect("SessionContext must build"),
+    );
+    let event_bus = Arc::new(EventBus::new_for_testing());
+
+    let payload = b"UNB+UNOC:3+9900000000001:293+9900000000002:293+260101:0000+1'\
+                    UNH+1+APERAK:D:07B:UN:2.1i'UNZ+1+1'";
+
+    // A sign-only send is enough for a receipt round trip (no recipient encryption cert).
+    let policy = bdew_pmode_sign_only("pm-aperak", RECEIVER_GLN, BdewAction::Aperak)
+        .to_send_policy()
+        .expect("sign-only policy must build");
+    let output = send_async(
+        &session,
+        &event_bus,
+        As4SendRequest {
+            message_id: format!("nrr-msg-{}", uuid::Uuid::new_v4()),
+            payload: payload.to_vec(),
+            policy,
+            credentials: None,
+            payload_filename: None,
+        },
+    )
+    .await
+    .expect("sign-only send_async must succeed");
+
+    // Send + verify the synchronous receipt in one call (regulated ⇒ NRR required).
+    let transport =
+        As4HttpTransport::new_for_localhost_testing().expect("localhost test transport");
+    let outcome = transport
+        .send_and_verify_to_localhost(
+            &endpoint_url,
+            &session,
+            &event_bus,
+            &output,
+            &As4ReceiptPolicy::relaxed(),
+        )
+        .await
+        .expect("send_and_verify must deliver and parse the receipt");
+
+    assert_eq!(outcome.http.status, 200, "mock must answer 200");
+    let receipt = outcome
+        .into_receipt()
+        .expect("a verified receipt, not an eb:Error signal");
+    assert_eq!(
+        receipt.ref_to_message_id, output.message_id,
+        "verify_sync_response must correlate the receipt to the sent message_id"
     );
 }

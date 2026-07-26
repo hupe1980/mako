@@ -6,7 +6,7 @@ parent: Reference
 description: >
   dvgw-edi: parsing ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, and DELRES
   for GaBi Gas 2.1. Covers regulatory basis, message taxonomy, version management,
-  profile schema, parsing architecture, and GaBi Gas workflow integration.
+  semantic validation, parsing architecture, and GaBi Gas workflow integration.
 ---
 
 # DVGW EDI
@@ -111,68 +111,57 @@ There is no multi-year coexistence period analogous to the BDEW `FV2025-10-01` /
 only — no parser changes are required. The profile content is updated in-place
 since the segment structure is unchanged.
 
-### 3.3 Profile management in `dvgw-edi`
+### 3.3 Version handling in `dvgw-edi`
 
-Unlike `edi-energy` (which uses `FV<YYYY>-<MM>-<DD>` as the profile directory
-key), `dvgw-edi` profiles are keyed per message type and version:
+Unlike `edi-energy` (which keys compiled-in MIG/AHB JSON profiles by an
+`FV<YYYY>-<MM>-<DD>` directory), `dvgw-edi` has **no profile-JSON layer** and no
+per-version profile directory. There is exactly one typed constructor per message
+family, and it is version-agnostic within that family:
 
-```
-crates/dvgw-edi/profiles/
-  alocat/
-    v5_11a/
-      mig.json
-      ahb.json
-  nomint/
-    v4_6/
-      mig.json
-      ahb.json
-  nomres/
-    v4_7/
-      mig.json
-      ahb.json
-  schedl/
-    v4_4/
-      mig.json
-  imbnot/
-    v5_7a/
-      mig.json
-  tranot/
-    v5_8b/
-      mig.json
-  delord/
-    v4_5/
-      mig.json
-  delres/
-    v4_6/
-      mig.json
-```
+- `DvgwPlatform::parse` tokenises the interchange, reads the message type from the
+  UNH segment (DE 0065, component 0) via `DvgwMessageType::from_unh_code`, and
+  dispatches to the single concrete constructor for that type (see
+  [section 5.1](#51-edifact-tokeniser)).
+- The wire version string in UNH DE 0057 (association assigned code) is captured
+  as [`DvgwVersion`](../crates/dvgw-edi/src/version.rs) — `DvgwVersion::parse`
+  accepts any non-empty value and round-trips the raw string faithfully — but it
+  does **not** select a different code path.
 
-A `valid_from` field in each `mig.json` records when the version became mandatory.
-FK corrections update the profile content in-place.
+Because the typed constructors read the segment fields directly, FK
+(Fehlerkorrektur) editorial corrections require no code change, and the biannual
+structural releases are absorbed by the same constructor as long as the field
+positions the constructor reads are unchanged.
 
 ---
 
-## 4. Profile Schema
+## 4. Validation & PID Routing
 
-### 4.1 Schema design
+### 4.1 Semantic rule packs
 
-`dvgw-edi` profiles use the **exact same `mig.json` / `ahb.json` schema** as
-`edi-energy` (`schema_version: 1`). Two DVGW-specific `mig.json` fields:
+`dvgw-edi` has no compiled-in MIG/AHB JSON profiles. Conformance checking is done
+by in-code **semantic rule packs** built in
+[`crates/dvgw-edi/src/validate.rs`](../crates/dvgw-edi/src/validate.rs).
 
-```json
-{
-  "schema_version": 1,
-  "message_type": "ALOCAT",
-  "release": "5.11a",
-  "valid_from": "2024-10-01",
-  "dvgw_source": "ALOCAT 5.11a Stand 02.04.2024",
-  "segments": [ /* ... */ ],
-  "segment_groups": [ /* ... */ ]
-}
-```
+`DvgwPlatform::validate` runs two passes:
 
-- `dvgw_source`: literal document title from the DVGW publication, for traceability
-- `valid_from`: ISO-8601 date the version became mandatory
+1. **Envelope validation** — when a UNB/UNZ interchange wrapper is present, it is
+   checked with `edifact_rs::validate_envelope_lenient_owned`. A structurally
+   unrecoverable interchange returns `Err(Error::Parse(…))`; count-only mismatches
+   are folded into the report as issues (rule id `ENVELOPE-COUNT-MISMATCH`).
+2. **Semantic validation** — a per-message-type `edifact_rs::ProfileRulePack` is
+   built by a `*_pack()` function (`alocat_pack`, `nomint_pack`, `nomres_pack`,
+   `schedl_pack`, `imbnot_pack`, `tranot_pack`, `delord_pack`, `delres_pack`), each
+   gated behind its message-type Cargo feature. The pack registers stateless rule
+   closures that check DVGW mandatory elements — BGM presence, the `NAD+MS` /
+   `NAD+MR` role segments, message-specific `DTM` timing qualifiers (e.g.
+   `DTM+137` Gasdatum for ALOCAT/NOMINT), and correlation references. The pack is
+   fed to `ValidationContext::builder().with_profile_pack(pack)…validate_lenient_owned`.
+
+Findings are returned as `DvgwIssue` items in a [`DvgwReport`](../crates/dvgw-edi/src/report.rs)
+rather than as hard errors, so a message that parses but violates a semantic rule
+still yields a struct plus a list of issues. Rule closures emit
+`ValidationSeverity::Error` / `Warning` with a stable `rule_id`
+(e.g. `SEM-ALOCAT-DTM-137-REQUIRED`, `SEM-ALOCAT-LOC-EXPECTED`).
 
 ### 4.2 Synthetic PID routing
 
@@ -244,9 +233,9 @@ ALOCAT 5.11a is the most structurally complex DVGW format, with up to
 | SG7 | STS | Status qualifier (e.g. preliminary / final) |
 | SG8–SG14 | Various | Measurement point details, contract refs |
 
-The current parser extracts the flat LOC/QTY/STS/DTM groups via the
-`AlocatMessage::quantities` field. Full group-hierarchy parsing is added when
-profile JSON is committed.
+The parser extracts the flat LOC/QTY/STS/DTM groups via the
+`AlocatMessage::quantities` field, exposing each allocated quantity with its
+status qualifier and time window.
 
 ### 5.3 NOMINT/NOMRES correlation
 
@@ -334,8 +323,8 @@ The `mako-gabi-gas` crate exposes a rich, regulation-accurate domain vocabulary:
 
 ### 6.3 Implementation patterns
 
-The `dvgw-edi` / `mako-gabi-gas` crates follow the same conventions as all
-other domain workflow crates in this workspace:
+The `dvgw-edi` / `mako-gabi-gas` crates follow the same workflow conventions as
+all other domain workflow crates in this workspace:
 
 | Concern | Reference |
 |---|---|
@@ -344,8 +333,14 @@ other domain workflow crates in this workspace:
 | Adapter registry | `services/makod/src/adapters.rs` |
 | Startup validation | `services/makod/src/main.rs` — `adapter.validate_policy()` |
 | `DISPATCH_TABLE` enforcement | `deadline_dispatch::assert_dispatch_coverage()` |
-| Profile JSON schema | `crates/edi-energy/profiles/mscons/fv20251001/mig.json` |
-| AHB JSON schema | `crates/edi-energy/profiles/mscons/fv20251001/ahb.json` |
+
+**Two validation layers, two crates.** `mako-gabi-gas` also carries the
+edi-energy EDIFACT message types (MSCONS 13013 MMMA, INVOIC), which *are*
+validated through the AHB/MIG profile-JSON layer
+(`crates/edi-energy/profiles/mscons/fv20251001/{mig,ahb}.json`). The DVGW
+transport messages in `dvgw-edi` itself (ALOCAT, NOMINT, NOMRES, …) have **no
+profile-JSON layer** — they are parsed and validated entirely in typed Rust code
+(see §3.3, §4.1).
 
 ---
 

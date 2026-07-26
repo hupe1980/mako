@@ -1303,7 +1303,7 @@ fn to_line_item_verguetung_debit_with_qty_and_rate() {
     use billing::Amount;
     assert_eq!(
         item.net_amount,
-        Amount::<5>::from_decimal(d("81.10")).unwrap()
+        Amount::<5>::checked_from_decimal(d("81.10")).unwrap()
     );
     // Tagged with legal_basis
     assert_eq!(

@@ -9,8 +9,9 @@ use super::*;
 
 /// Helper: dispatch `AbrechnungCommand::SendInvoic` for a given PID.
 ///
-/// Called by `gpke.nne.rechnung.stellen` (31001), `gpke.mmm.rechnung.stellen`
-/// (31002), and `gpke.nne-gas.rechnung.stellen` (31005).
+/// Called by `gpke.nne.rechnung.stellen` and `gpke.nne-gas.rechnung.stellen`
+/// (both PID 31002, NN-Rechnung — the Sparte is carried in the payload, not the
+/// PID) and `gpke.mmm.rechnung.stellen` (PID 31005, MMM-Rechnung).
 ///
 /// Spawns a new `GpkeAbrechnungWorkflow` in the invoicer role so that inbound
 /// REMADV responses from the LF are routed back to the correct process.
@@ -58,7 +59,7 @@ pub(super) fn cmd_gpke_nne_rechnung_stellen<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(dispatch_nne_send_invoic(s, p, 31001))
+    Box::pin(dispatch_nne_send_invoic(s, p, 31002))
 }
 
 pub(super) fn cmd_gpke_mmm_rechnung_stellen<'a>(
@@ -67,7 +68,7 @@ pub(super) fn cmd_gpke_mmm_rechnung_stellen<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(dispatch_nne_send_invoic(s, p, 31002))
+    Box::pin(dispatch_nne_send_invoic(s, p, 31005))
 }
 
 pub(super) fn cmd_gpke_nne_gas_rechnung_stellen<'a>(
@@ -76,7 +77,7 @@ pub(super) fn cmd_gpke_nne_gas_rechnung_stellen<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(dispatch_nne_send_invoic(s, p, 31005))
+    Box::pin(dispatch_nne_send_invoic(s, p, 31002))
 }
 
 /// Stub for WiM MSB-Rechnung dispatch (PID 31009 outbound from netzbilanzd).

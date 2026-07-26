@@ -1,0 +1,14 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a9db442751ab0a7747ac3b6c371e9c97f1c98847db0ad952acd07ddf85f9b787 # shrinks to kwh = 888203.59, negative_kwh = 0.00, rate = 0.0001
+cc 553471f97bb717c7278ac8721b76fab918e85c0082a0bf561c07068a0e0fbd89 # shrinks to kwh = 0.01, rate = 0.0001
+cc e1563bd59a1f3e3bc42241772a91ce85ec1723db5a2e60202a136870024e79da # shrinks to kwh = 0.01, rate = 0.0001
+cc bde4b482051819e327a7582bce9ea29d1a5cb0a92ea6f4c95f9ca0320a79904f # shrinks to kwh = 0.01, rate_ct = 0.0001, max_kwh = 53015616.45, paid_kwh = 0.00
+cc 3f49e73d9a59d3e79c70319d13bb92b8e55bcd0b818bbb7c7bf553583380cae8 # shrinks to kwh = 0.01, aw_ct = 13.5201, epex_ct = 0.00
+cc d3ab980eb16c6a467f9f141f67baca1cc30112ecb0290ef4bff2309c0fda02f4 # shrinks to kwh = 0.01, rate = 0.0001, leistung = 1, months = 0, fulfilled = false, defect = false
+cc bada09e2b34b854079b14fb5fd2a8717cb7dcac86654b3284e2a7eaa967a156c # shrinks to kwh = 0.01, verguetung_ct = 0.0000, zuschlag_ct = 0.0001
+cc 3469b5cf39b5f02dce60db928ca9c550eba1ec86e17fa35e52df63d127f8f7e9 # shrinks to kwh = 12559.66, epex = 0.00, floor = 0.01

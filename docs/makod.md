@@ -513,7 +513,7 @@ roles compiled in; use feature flags to produce smaller operator-specific images
 
 ```dockerfile
 # Lieferant-only image
-FROM rust:1.89 AS build
+FROM rust:1.94 AS build
 RUN cargo build -p makod --release \
     --no-default-features \
     --features role-lf,slatedb
@@ -803,11 +803,17 @@ downgrades both refusals to warnings for dev/test.
 
 **Signed receipts and receipt-verified delivery.** Inbound messages are
 answered with a **signed** `eb:Receipt` echoing the inbound signature digests
-as NonRepudiationInformation (asx-rs ≥ 0.10). Outbound deliveries are only
-acknowledged after the counterparty's synchronous `eb:Receipt` is verified to
-reference the sent message id; an unverifiable receipt is a retryable failure
-that backs off and eventually dead-letters. `--as4-lenient-receipts`
-downgrades that check to a warning for interop debugging.
+as NonRepudiationInformation. Outbound deliveries are acknowledged only after
+asx-rs's `verify_sync_response` (0.11) verifies the counterparty's synchronous
+signal: it parses the SOAP namespace-correctly, checks the receipt signature
+**covers** the acted-on `eb:SignalMessage`, confirms `RefToMessageId`, verifies
+every NonRepudiationInformation digest against what the sent message was signed
+over, and enforces a replay window — the Non-Repudiation-of-Receipt guarantee,
+proven rather than assumed. A returned `eb:Error` is surfaced as a typed
+rejection (with its ebMS3 code) so retry-vs-dead-letter routing keys on the real
+reason; an unverifiable receipt is a retryable failure that backs off and
+eventually dead-letters. `--as4-lenient-receipts` drops to asx-rs's `relaxed()`
+policy (accepts unsigned / non-NRR receipts) for interop bring-up.
 
 **Per-sender rate limiting.** The AS4 port applies two independent GCRA
 limits: per peer IP (100 req/s, burst 50) and per sender MP-ID (50 req/s,
@@ -838,7 +844,7 @@ message id, so delivery retries reuse the same DAR.
 
 ### AS4 security test coverage
 
-`makod` ships **11 automated tests** in `services/makod/tests/as4_security.rs` that
+`makod` ships **12 automated tests** in `services/makod/tests/as4_security.rs` that
 verify BDEW AS4-Profil v1.2 compliance without WIRK certificates:
 
 ```mermaid
@@ -873,17 +879,22 @@ cargo test -p makod --test as4_security
 | TOML key | Env var | CLI flag | Description |
 |---|---|---|---|
 | `addr` | `MAKOD_API_WEBDIENSTE_ADDR` | `--api-webdienste-addr` | TCP listen address |
+| *(CLI/env only)* | `MAKOD_WEBDIENSTE_ALLOW_UNAUTHENTICATED` | `--webdienste-allow-unauthenticated` | Disable the built-in bearer/OIDC + Cedar auth layer on `:8090` — only behind an mTLS-terminating proxy |
 
-> **Security requirement — mTLS**: The BDEW API-Webdienste Strom specification
-> requires mutual TLS (mTLS) with certificates issued by the BDEW PKI CA.
-> The `:8090` port has **no built-in bearer-token or mTLS guard** — deploy it
-> behind a reverse proxy (Nginx, Envoy, AWS ALB) that enforces mTLS with the
-> BDEW PKI CA before forwarding requests in production.
+> **Authentication & mTLS**: By default every `:8090` route sits behind
+> bearer/OIDC authentication and the Cedar `UseWebdienste` action — the same
+> auth layer as the REST API — plus a body-size limit. On top of that, the
+> BDEW API-Webdienste Strom specification requires mutual TLS (mTLS) with
+> certificates issued by the BDEW PKI CA; `makod` does not terminate TLS
+> itself, so deploy it behind a reverse proxy (Nginx, Envoy, AWS ALB) that
+> enforces mTLS with the BDEW PKI CA in production.
 >
-> `makod` emits a `WARN` at startup when `--api-webdienste-addr` is set without
-> an mTLS proxy: `"API-Webdienste Strom port started WITHOUT authentication"`.
-> The warning is safe to suppress only when the port is behind a service mesh
-> or VPC boundary with network-level access controls.
+> `--webdienste-allow-unauthenticated` (env
+> `MAKOD_WEBDIENSTE_ALLOW_UNAUTHENTICATED`) turns the built-in bearer/OIDC +
+> Cedar auth layer off — set it only when a fronting proxy terminates mTLS
+> with the BDEW PKI CA and enforces access itself. When set, `makod` emits a
+> `WARN` at startup: `"--webdienste-allow-unauthenticated: API-Webdienste
+> Strom port has NO authentication."`
 
 ### §20b EnWG Netzzugangsplattform adapter
 
@@ -1005,7 +1016,7 @@ a Claude conversation, or `@resource malo://10001234567` in VS Code Copilot Chat
 
 ### Prompts
 
-Three guided workflow prompts are built in and pre-fill the relevant tool calls with
+Six guided workflow prompts are built in and pre-fill the relevant tool calls with
 context and step-by-step instructions:
 
 | Prompt | Arguments | Description |
@@ -1550,7 +1561,7 @@ It uses a **4-stage cargo-chef + distroless** build:
 
 | Stage | Base | Purpose |
 |---|---|---|
-| `chef` | `lukemathwalker/cargo-chef:latest-rust-1.89-bookworm` | Rust toolchain + native build deps (`libssl-dev`, `libclang-dev`, `cmake`, `nasm`) |
+| `chef` | `lukemathwalker/cargo-chef:latest-rust-1.94-bookworm` | Rust toolchain + native build deps (`libssl-dev`, `libclang-dev`, `cmake`, `nasm`) |
 | `planner` | `chef` | `cargo chef prepare` — analyses workspace manifests, emits `recipe.json` |
 | `builder` | `chef` | `cargo chef cook` (cached dep layer) → `cargo build -p makod` → `strip` |
 | `runtime` | `gcr.io/distroless/cc-debian12:nonroot` | Minimal runtime: glibc + libgcc + CA certs + tzdata only; no shell, no package manager |
@@ -1573,13 +1584,13 @@ the GitHub Container Registry:
 docker pull ghcr.io/hupe1980/makod:latest
 
 # Pin to a specific version
-docker pull ghcr.io/hupe1980/makod:0.12.0
+docker pull ghcr.io/hupe1980/makod:0.14.0
 
 # Smoke-test the image
-docker run --rm ghcr.io/hupe1980/makod:0.12.0 --check
+docker run --rm ghcr.io/hupe1980/makod:0.14.0 --check
 ```
 
-Images are tagged with the semver version (`0.12.0`), major.minor (`0.12`), and `latest`.
+Images are tagged with the semver version (`0.14.0`), major.minor (`0.14`), and `latest`.
 
 ### Building locally
 
@@ -1648,7 +1659,7 @@ spec:
     spec:
       containers:
         - name: makod
-          image: ghcr.io/hupe1980/makod:0.12.0
+          image: ghcr.io/hupe1980/makod:0.14.0
           ports:
             - containerPort: 4080    # AS4
             - containerPort: 8080    # HTTP REST
@@ -1705,7 +1716,9 @@ traffic is routed.
 
 ## Background Workers
 
-Three background tasks run continuously after startup:
+`startup::spawn_workers` launches the background workers as Tokio tasks, all
+cancelled on graceful shutdown. The two primary event-driven flows — outbox
+delivery and deadline firing — are:
 
 ```mermaid
 graph LR
@@ -1720,8 +1733,41 @@ graph LR
 
 | Worker | Poll interval | Purpose |
 |--------|--------------|---------|
-| **OutboxWorker** | Continuous, exponential backoff | Drains `OutboxStore` and delivers via AS4 or HTTP |
-| **DeadlineScheduler** | Every 30 s | Fires overdue process deadlines (APERAK Frist, Zahlungsfrist) |
+| **OutboxWorker** | Continuous, exponential backoff | Drains `OutboxStore` and delivers EDIFACT via AS4 or MaLo callbacks |
+| **OutboxErpWorker** | Continuous (optional, `--erp-webhook-url`) | POSTs BO4E CloudEvents from the outbox to the ERP webhook |
+| **DeadlineScheduler** | Every 30 s (`--deadline-poll-interval-secs`) | Fires overdue process deadlines (APERAK Frist, Zahlungsfrist) |
+| **Projection checkpoint** | `--projection-checkpoint-interval` | Persists projection checkpoints for crash-safe replay |
+| **Inbox purge** | Periodic | Evicts expired AS4 dedup entries from the inbox store |
+
+A JWKS refresh loop also runs when OIDC is enabled (see [OIDC](#oidc)).
+
+---
+
+## CONTRL Empfangsbestätigung (Sparte Gas)
+
+Per **CONTRL AHB 1.0 §2.3.1**, the receiver must return a CONTRL Empfangsbestätigung
+(UCI DE0083 = 7) within **6 wall-clock hours** for *every* inbound **Gas**
+Übertragungsdatei (and every Gas APERAK); in Strom, CONTRL is only sent on syntax
+error. The obligation is a property of the *interchange*, keyed purely on Sparte —
+it is independent of which message types (UTILMD, INVOIC, MSCONS, ORDERS …) it
+contains.
+
+makod determines the interchange Sparte from the **recipient MP-ID** (UNB DE0010 —
+the own party the interchange is addressed to). Every `[[party]]` entry covers
+exactly one Sparte (BDEW §2.13), so `MpIdRegistry::sparte_of(recipient)` is
+authoritative. This is deliberately *not* inferred from the Prüfidentifikator or
+the release code: INVOIC/ORDERS/MSCONS release codes carry no Sparte prefix (only
+UTILMD does, `G…`/`S…`), and the NAD DE3055 agency code (`293` BDEW) is shared
+across both sectors — so a Gas NN-Rechnung (31002), MMM (31005) or MSB-Rechnung
+(31009) is only recognised as Gas via the recipient MP-ID.
+
+When the recipient is a sparte-neutral party or not one of our own MP-IDs, makod
+falls back to a conservative message-level heuristic (an unambiguous Gas-only PID
+such as UTILMD G 44xxx / INVOIC 31003/31004/31007/31008/31010/31011, or a Gas
+UTILMD release track). The CONTRL and its 6h escalation deadline are written in one
+transaction (`enqueue_outbox_with_deadlines`), so a crash can never queue the
+acknowledgement without its deadline. The CONTRL sender is the recipient MP-ID —
+the Sparte-correct own GLN, even in a combined Strom+Gas deployment.
 
 ---
 
@@ -1747,7 +1793,7 @@ Enable the `tracing` feature in `edi-energy` to get per-message parse/validate
 spans:
 
 ```toml
-edi-energy = { version = "0.12", features = ["tracing"] }
+edi-energy = { version = "0.14", features = ["tracing"] }
 ```
 
 These integrate with OpenTelemetry exporters when a global subscriber is

@@ -31,7 +31,7 @@ behalf of the LF, and how to parse a `9900357000004` out of a NAD segment.
 ## Market Role Interaction Map
 
 The following diagram shows how the core Marktrollen interact via the key MaKo processes.
-Gas-only roles (MGV, KN) and the BIKO are omitted for clarity — see the party role table below.
+Gas-only roles (MGV, KN) are omitted for clarity — see the party role table below.
 
 ```mermaid
 graph LR

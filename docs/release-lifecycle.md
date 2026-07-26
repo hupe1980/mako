@@ -69,19 +69,25 @@ Place the PDFs in a local working directory.
 ### 2. Extract profile data
 
 ```bash
-cargo xtask extract-pdf --input <working-dir>/UTILMD_MIG_S3.1.pdf \
-    --output crates/edi-energy/profiles/utilmd/fv20271001/mig.json
+cargo xtask extract-pdf --file <working-dir>/UTILMD_MIG_S3.1.pdf \
+    --message-type utilmd --release fv20271001
 
-cargo xtask extract-pdf --input <working-dir>/UTILMD_AHB_S3.1.pdf \
-    --output crates/edi-energy/profiles/utilmd/fv20271001/ahb.json
+cargo xtask extract-pdf --file <working-dir>/UTILMD_AHB_S3.1.pdf \
+    --message-type utilmd --release fv20271001
 ```
+
+The output directory is derived from `--message-type` and `--release`
+(`crates/edi-energy/profiles/utilmd/fv20271001/`). Each run writes
+`mig.draft.json` and `ahb.draft.json`. Review the drafts against the PDF, remove
+the `_WARNING` fields, and rename them to `mig.json` / `ahb.json` before
+continuing.
 
 ### 3. Import updated code lists
 
 ```bash
 cargo xtask import-codelists \
-    --input docs/codelists/DE_Qualifier_20271001.csv \
-    --profile crates/edi-energy/profiles/utilmd/fv20271001/
+    --file docs/codelists/DE_Qualifier_20271001.csv \
+    --message-type utilmd --release fv20271001
 ```
 
 ### 4. Update `valid_from` / `valid_until` in the JSON
@@ -112,7 +118,7 @@ This runs the JSON Schema checker against all profile files. Fix any reported er
 cargo xtask codegen
 ```
 
-This regenerates all 37 files under `crates/edi-energy/src/generated/`. Never edit these files by hand.
+This regenerates all files under `crates/edi-energy/src/generated/`. Never edit these files by hand.
 
 ### 7. Verify codegen is stable
 
@@ -120,7 +126,7 @@ This regenerates all 37 files under `crates/edi-energy/src/generated/`. Never ed
 cargo xtask codegen --check
 ```
 
-Should report `All generated files are up to date.`
+Should report `xtask codegen --check: all generated files are up to date.`
 
 ### 8. Run the test suite
 
@@ -148,18 +154,23 @@ When all profile and code changes are merged and `just ci` is green:
 1. **Bump the workspace version** with `cargo xtask bump-version <X.Y.Z>`.
 2. **Create and push a tag**: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. The `release.yml` GitHub Actions workflow runs automatically:
-   - Runs `just ci` as a final gate.
-   - Publishes all workspace crates to [crates.io](https://crates.io) via `cargo publish`.
-   - Builds and pushes multi-arch Docker images (`linux/amd64`, `linux/arm64`) to `ghcr.io/hupe1980/makod` with tags `X.Y.Z`, `X.Y`, and `latest`.
+   - Runs pre-flight `fmt` / `clippy` / `test`, `validate-profiles`,
+     `validate-pruefids`, and the `codegen --check` drift gate.
+   - Publishes the workspace's library crates to [crates.io](https://crates.io)
+     via `cargo publish`, in dependency order.
+   - Builds and pushes multi-arch Docker images (`linux/amd64`, `linux/arm64`)
+     for each service daemon to `ghcr.io/hupe1980/<service>` (e.g.
+     `ghcr.io/hupe1980/makod`) with tags `X.Y.Z`, `X.Y`, and `latest`.
 
-The Docker image is built using the workspace `Dockerfile` (cargo-chef + distroless).
-See the [makod Operator Guide](./makod.md#docker-deployment) for image details and
+The Docker images are built from the workspace `Dockerfile` (cargo-chef +
+distroless) via `docker buildx bake`. See the
+[makod Operator Guide](./makod.md#docker-deployment) for image details and
 deployment patterns.
 
 To see a human-readable diff between two annual releases (useful for release notes and reviewing spec changes):
 
 ```bash
-cargo xtask release-diff --from utilmd/fv20251001 --to utilmd/fv20261001
+cargo xtask release-diff --message-type utilmd --from fv20251001 --to fv20261001
 ```
 
 Output shows:

@@ -213,10 +213,10 @@ When `drift_detected = true` **and** `drift_webhook_url` is configured,
 ```
 
 Route this event to an Alertmanager receiver, a Slack webhook, or your incident
-management system.  Configure the URL in `nis-syncd.toml`:
+management system.  Configure the URL in `nis-syncd.toml` (a flat top-level key):
 
 ```toml
-[marktd]
+# nis-syncd.toml
 drift_webhook_url = "https://alertmanager:9093/api/v2/alerts"
 ```
 

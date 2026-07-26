@@ -309,21 +309,24 @@ pub fn qualifies_for_12_abs3(
 /// ```
 #[must_use]
 pub fn ust_tax_layers(status: VatStatus) -> Vec<Box<dyn TaxLayer>> {
+    // billing 0.8: `zero_rated` / `exempt` validate the category/reason pairing up
+    // front (EN 16931 zero-tax families) instead of at breakdown time, and
+    // `.boxed()` replaces `Box::new(_) as Box<dyn TaxLayer>`.
     let layer = match status {
         VatStatus::Regelbesteuerung => FixedRateTax::new("Umsatzsteuer 19\u{202f}%", dec!(0.19))
             .expect("19 % is a valid rate")
             .with_category(TaxCategory::Standard),
+        // §12 Abs. 3 UStG is a zero *rate* (category Z) — no exemption reason.
         VatStatus::BefreitNach12Abs3 => {
-            FixedRateTax::new("Umsatzsteuer 0\u{202f}% (§12 Abs. 3 UStG)", Decimal::ZERO)
-                .expect("0 % is a valid rate")
-                .with_category(TaxCategory::ZeroRated)
+            FixedRateTax::zero_rated("Umsatzsteuer 0\u{202f}% (§12 Abs. 3 UStG)")
         }
-        VatStatus::Kleinunternehmer => FixedRateTax::new("Umsatzsteuer (§19 UStG)", Decimal::ZERO)
-            .expect("0 % is a valid rate")
-            .with_category(TaxCategory::Exempt)
-            .with_exemption_reason(
-                "Kein Ausweis von Umsatzsteuer, da Kleinunternehmer gemäß §19 UStG",
-            ),
+        // §19 UStG is a genuine exemption (category E) requiring a reason (BT-120).
+        VatStatus::Kleinunternehmer => FixedRateTax::exempt(
+            "Umsatzsteuer (§19 UStG)",
+            TaxCategory::Exempt,
+            "Kein Ausweis von Umsatzsteuer, da Kleinunternehmer gemäß §19 UStG",
+        )
+        .expect("§19 exemption is a valid (category, reason) pairing"),
     };
-    vec![Box::new(layer)]
+    vec![layer.boxed()]
 }

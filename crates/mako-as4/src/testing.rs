@@ -28,7 +28,7 @@
 //! # }
 //! ```
 
-// Re-export asx-rs v0.6 testing primitives
+// Re-export asx-rs testing primitives
 pub use asx_rs::as4::mock_endpoint::{MockAs4Endpoint, MockReceivedMessage};
 pub use asx_rs::fixtures::{
     EcCurve, generate_self_signed_ec_keypair, generate_self_signed_rsa_keypair,
@@ -72,7 +72,7 @@ impl BdewKeypair {
 /// Both signing and encryption keypairs use `BrainpoolP256r1` as mandated by
 /// BDEW AS4-Profil v1.2 §2.2.6.2.1/§2.2.6.2.2 (BSI TR-03116-3 §9.1/§9.2).
 ///
-/// The `purpose` parameter is informational for callers — asx-rs v0.6 generates
+/// The `purpose` parameter is informational for callers — asx-rs generates
 /// a single cert with both `digitalSignature + keyAgreement` KeyUsage, which is
 /// sufficient for local testing. Production WIRK certs use separate KeyUsage.
 ///

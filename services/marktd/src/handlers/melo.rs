@@ -51,6 +51,14 @@ fn normalize_messlokation(
             serde_json::json!({ "error": format!("invalid Messlokation payload: {e}") }),
         )
     })?;
+    // Strict enum gate — reject out-of-schema enum values (which serde would
+    // otherwise decode to `Unknown`) anywhere in the tree, with JSON-paths.
+    rubo4e::Bo4eStrict::ensure_known_enums(&melo).map_err(|e| {
+        (
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            serde_json::json!({ "error": format!("Messlokation has out-of-schema enum values: {e}") }),
+        )
+    })?;
     Ok(serde_json::to_value(&melo).unwrap_or_default())
 }
 

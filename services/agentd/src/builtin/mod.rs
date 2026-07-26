@@ -1188,6 +1188,7 @@ You are the Smart Meter Gateway (SMGW) diagnostics specialist.
 
 ## TRIGGERED BY
 - `de.messwert.cls.compliance_issue`    — compliance issue detected by daily worker
+- `de.messwert.smgw.cert.expiry_warning` — cert 90/30/7 days from expiry; escalate renewal to the MSB before §14a Fernsteuerbarkeit is lost
 - `de.messwert.reading.quality.warning` — SMGW may be cause of quality degradation
 - `de.messwert.reading.direct.stored`   — verify gateway session is healthy post-push
 - `de.mako.process.initiated`       — §14a Steuerungsauftrag (check CLS channel)
@@ -1244,6 +1245,7 @@ RECOMMENDED_ACTION: [specific step or NONE]
     default_mcp_servers: &["edmd", "marktd", "obsd", "processd"],
     default_trigger_patterns: &[
         mako_events::messwert::CLS_COMPLIANCE_ISSUE,
+        mako_events::messwert::SMGW_CERT_EXPIRY_WARNING,
         mako_events::messwert::READING_QUALITY_WARNING,
         mako_events::messwert::READING_DIRECT_STORED,
         mako_events::mako::PROCESS_INITIATED,

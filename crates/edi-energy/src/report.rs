@@ -25,11 +25,12 @@ fn classify_rule_origin(rule_id: &str) -> Option<&'static str> {
     }
 }
 
-/// Owned snapshot of a single validation issue.
+/// The mako-facing projection of a single [`edifact_rs::ValidationIssue`].
 ///
-/// Mirrors [`edifact_rs::ValidationIssue`] but owns all strings so it can be
-/// sent across threads, stored, or serialized independently of the underlying
-/// `ValidationReport`.
+/// `ValidationIssue` is already owned and serializable; this type exists to shape
+/// the *mako* serialization contract — camelCase field names, a curated field set,
+/// severity as a stable string, and two derived fields the raw issue does not carry
+/// (`rule_origin` and the resolved `pruefidentifikator`).
 ///
 /// Unconditionally available (no feature gate required).  The `serde` feature
 /// adds `#[derive(Serialize)]` so instances can be JSON-encoded directly.
@@ -47,7 +48,7 @@ pub struct ValidationIssueSummary {
     pub rule_id: Option<String>,
     /// Stable error code assigned by the validator, if any.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub error_code: Option<&'static str>,
+    pub error_code: Option<String>,
     /// Tag of the EDIFACT segment where the issue occurred, e.g. `"DTM"`.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub segment_tag: Option<String>,
@@ -56,7 +57,7 @@ pub struct ValidationIssueSummary {
     pub segment_occurrence: Option<u16>,
     /// Segment group name in which the issue occurred (e.g. `"SG4"`), if available.
     ///
-    /// Populated from [`edifact_rs::ValidationIssue::segment_group`] (edifact-rs 0.9+).
+    /// Populated from [`edifact_rs::ValidationIssue::segment_group`].
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub segment_group: Option<String>,
     /// 0-based data-element index within the segment.
@@ -73,16 +74,14 @@ pub struct ValidationIssueSummary {
     pub suggestion: Option<String>,
     /// Byte offset of the first byte of the affected region in the source input.
     ///
-    /// Populated from [`edifact_rs::ValidationIssue::span`]`.start` (0.11.0+)
-    /// when the issue carries a full span; otherwise from `issue.offset`.
+    /// The start of [`edifact_rs::ValidationIssue::span`].
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub offset: Option<usize>,
     /// Exclusive byte offset of the end of the affected region in the source input.
     ///
     /// Together with [`offset`](Self::offset) this forms a half-open byte range
     /// `[offset, byte_end)` that maps directly to an LSP `Range` or a `miette`
-    /// source span.  `None` when the issue has no span (only a start offset or
-    /// no position information at all).
+    /// source span.  `None` when the issue has no span.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub byte_end: Option<usize>,
     /// The BDEW Prüfidentifikator (process variant code) associated with this
@@ -127,7 +126,7 @@ impl ValidationIssueSummary {
     ///
     /// The PID is resolved in priority order:
     /// 1. `issue.context_get("pid")` — set per-issue by AHB rule closures via
-    ///    `with_context_entry("pid", …)` (edifact-rs 0.9.1+,).
+    ///    `with_context_entry("pid", …)`.
     /// 2. `pruefidentifikator` — report-level fallback for callers that set the
     ///    PID on the report rather than on individual issues.
     ///
@@ -144,12 +143,14 @@ impl ValidationIssueSummary {
         let rule_origin = issue.rule_id.as_deref().and_then(classify_rule_origin);
 
         Self {
-            // Use the as_str() helper added in edifact-rs 0.9 instead of a
+            // Use the as_str() helper instead of a
             // hand-written match — future severity variants are handled automatically.
             severity: issue.severity.as_str(),
             message: issue.message.clone(),
             rule_id: issue.rule_id.clone(),
-            error_code: issue.error_code,
+            // edifact-rs 0.13: error_code is now Option<Cow<'static, str>>, so it
+            // survives a serde round-trip; we own it here for a self-contained summary.
+            error_code: issue.error_code.as_deref().map(str::to_owned),
             segment_tag: issue.segment_tag.clone(),
             segment_occurrence: issue.segment_occurrence,
             segment_group: issue.segment_group.as_deref().map(str::to_owned),
@@ -157,8 +158,9 @@ impl ValidationIssueSummary {
             component_index: issue.component_index,
             message_ref: issue.message_ref.clone(),
             suggestion: issue.suggestion.clone(),
-            offset: issue.span().map(|s| s.start).or(issue.offset),
-            byte_end: issue.span().map(|s| s.end),
+            // edifact-rs 0.13: the redundant `offset` field was collapsed into `span`.
+            offset: issue.span.map(|s| s.start),
+            byte_end: issue.span.map(|s| s.end),
             pruefidentifikator: resolved_pid,
             rule_origin,
         }

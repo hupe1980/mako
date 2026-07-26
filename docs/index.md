@@ -28,7 +28,7 @@ mermaid: true
       <img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue" alt="MIT or Apache-2.0 license">
     </a>
     <img src="https://img.shields.io/badge/BDEW-FV2026--10--01-green" alt="BDEW format version FV2026-10-01">
-    <img src="https://img.shields.io/badge/unsafe-0_blocks-red?logo=rust" alt="Zero unsafe blocks">
+    <img src="https://img.shields.io/badge/unsafe__code-denied-green?logo=rust" alt="unsafe_code denied workspace-wide">
     <img src="https://img.shields.io/badge/mako--service-service_sdk-f59e0b?logo=rust" alt="mako-service shared SDK for all 17 daemons">
   </div>
 
@@ -86,8 +86,8 @@ mermaid: true
     <span class="mako-kpi__label">MCP tools (AI-ready)</span>
   </div>
   <div class="mako-kpi">
-    <span class="mako-kpi__value">0</span>
-    <span class="mako-kpi__label">unsafe blocks</span>
+    <span class="mako-kpi__value">1</span>
+    <span class="mako-kpi__label">audited unsafe block</span>
   </div>
 </div>
 
@@ -182,13 +182,16 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
 
   <div class="mako-feature">
     <div class="mako-feature__icon">🌱</div>
-    <h3>EEG/KWKG Settlement</h3>
+    <h3>EEG/KWKG Settlement &amp; Gutschrift</h3>
     <p>
       <strong>10 settlement schemes</strong> from §21 FeedInTariff to §50a/50b FlexibilitätsPrämien,
       including Direktvermarktung MarketPremium, KWKG Zuschlag, and Post-EEG Spot.
       Version-aware <strong>§51 Negativpreisregel</strong> (EEG 2017/2021/2023 + Bestandsschutz),
       §52 Pflichtzahlungen (cumulative from violation start), §100 auto-override, §36k Korrekturfaktor.
-      Pure <code>eeg-billing</code> crate — <strong>339 tests</strong>, zero I/O.
+      Every billable settlement issues the <strong>§14 UStG Gutschrift</strong>
+      (Gutschriftverfahren — the NB issues the document) as a BO4E <code>Rechnung</code> with the
+      per-rate USt breakdown, VAT status derived per plant (Regelbesteuerung 19 % / §12 Abs. 3
+      zero-rated / §19 exempt). Pure <code>eeg-billing</code> crate, zero I/O.
     </p>
     <a href="{{ '/einsd' | relative_url }}">einsd guide →</a>
   </div>
@@ -417,7 +420,7 @@ mako consists of 17 independently deployable services. 16 of them ship a built-i
   <a href="{{ '/makod' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">makod</span>
     <span class="mako-service-card__port">:8080 · :4080 · :8090</span>
-    <span class="mako-service-card__desc">55+ GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas/Redispatch workflows. AS4 sign+encrypt (asx-rs v0.10, BrainpoolP256r1) carrying EDIFACT + Redispatch XML. REST, iMS. SlateDB event store. 11 AS4 security tests.</span>
+    <span class="mako-service-card__desc">55+ GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas/Redispatch workflows. AS4 sign+encrypt (asx-rs v0.11, BrainpoolP256r1) carrying EDIFACT + Redispatch XML. REST, iMS. SlateDB event store. 12 AS4 security tests.</span>
   </a>
   <a href="{{ '/marktd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">marktd</span>
@@ -465,7 +468,7 @@ mako consists of 17 independently deployable services. 16 of them ship a built-i
   <a href="{{ '/einsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">einsd</span>
     <span class="mako-service-card__port">:9180</span>
-    <span class="mako-service-card__desc">Einspeiser registry. 10 EEG/KWKG settlement schemes. §51/§51a/§51b Negativpreisregel. §100 Bestandsschutz auto-override. §25 Abs. 1 Satz 3 anteilige Zahlung. §26 Fälligkeitsdatum. §19 EInsMan compensation. §21b Veräußerungsform Wechsel. §53b/§54 regional+auction reductions. § 147 AO / GoBD correction receipts. derive_settlement_state auto-update. Repowering §22. <strong>339 eeg-billing tests</strong>. 18-tool MCP. §3 Nr. 1 Direktvermarktung compliance check. §44b Biogas quota monitoring.</span>
+    <span class="mako-service-card__desc">Einspeiser registry and EEG/KWKG settlement. 10 settlement schemes with the version-aware §51 Negativpreisregel, §52 Pflichtzahlungen, §36k Korrekturfaktor and §22 Repowering. Every billable settlement issues the <strong>§14 UStG Gutschrift</strong> as a BO4E <code>Rechnung</code> with the per-rate USt breakdown, and § 147 AO / GoBD correction receipts keep the audit chain. 18-tool MCP server.</span>
   </a>
   <a href="{{ '/obsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">obsd</span>
@@ -574,7 +577,9 @@ sequenceDiagram
   <div class="mako-principle">
     <strong>BO4E at every API boundary</strong>
     <code>marktd</code> returns typed <code>rubo4e::current::Marktlokation</code>, not raw JSON.
-    Schema validation on every PUT rejects malformed data before it causes silent billing errors.
+    Every PUT is strict-validated (<code>Bo4eStrict::ensure_known_enums</code>): an out-of-schema
+    enum value anywhere in the payload is rejected with its JSON-path, never silently decoded to
+    <code>Unknown</code> where it could cause a downstream billing error.
   </div>
   <div class="mako-principle">
     <strong>MCP server in (nearly) every service</strong>
@@ -647,9 +652,9 @@ Beyond the production services, mako exposes reusable Rust libraries:
 | [`mako-engine`](https://crates.io/crates/mako-engine) | ✅ crates.io | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines |
 | `metering` | workspace | German metering domain — `MeterInterval`, validation V01–V10, substitution (§ 60 Abs. 2 MsbG), Hampel scoring, resampling, virtual meters, SMGW/CLS (§14a), 177 tests |
 | `mako-edm` | workspace | Energy Data Management types — `MeterRead`, `QualityFlag` (8 variants), `BilanzzuordnungRecord`, `GasQualityData` (PID 13007), correction records (§ 147 AO / GoBD) |
-| `eeg-billing` | workspace | Pure EEG/KWKG settlement — 10 schemes, §51 Negativpreisregel, §52 Pflichtzahlungen, §36k Wind Korrekturfaktor, `InbetriebnahmeTyp` lifecycle, proptest invariants, **339 tests** |
+| `eeg-billing` | workspace | Pure EEG/KWKG settlement — 10 schemes, §51 Negativpreisregel, §52 Pflichtzahlungen, §36k Wind Korrekturfaktor, `InbetriebnahmeTyp` lifecycle, proptest invariants; opt-in `bo4e` feature → **§14 UStG Gutschrift** (BO4E `Rechnung` + per-rate USt breakdown) |
 | `energy-billing` | workspace | Retail energy billing engine — 13 categories (incl. municipal WASSER), HT/NT ToU, RLM demand charge, §54 EnergieStG exemption, historic levy rates (`stromsteuer_for_year`, `energiesteuer_gas_for_year`), §14a Modul 1/3, XRechnung 3.0 |
-| `grid-billing` | workspace | Role-neutral grid **settlement** engine — `SettlementResult` (+ `CalculationTrace`, `LegalReference`, `TariffSource` per position), `Sparte` (Gas/Strom), `KaKlasse`, `calculate_reversal()`, `validate_*_input()`, §13a EnWG `redispatch_verguetung`; zero BO4E dep, no float money |
+| `grid-billing` | workspace | Role-neutral grid **settlement** engine — `SettlementResult` (+ `CalculationTrace`, `LegalReference`, `TariffSource` per position), `Sparte` (Gas/Strom), `KaKundengruppe` (KAV tier), `calculate_reversal()`, `validate_*_input()`, §13a EnWG `redispatch_verguetung`; zero BO4E dep, no float money |
 | `invoic-checker` | workspace | INVOIC plausibility — 6 checks, ToU-aware tariff match |
 | `netz-checker` | workspace | NB Anmeldung validation — 6 deterministic checks, ERC A02/A05/A06/A07/E17 |
 | `mako-gpke` | workspace | GPKE workflows — UTILMD Strom + INVOIC + ORDERS Sperr/Konfig + PARTIN (37000–37006) |

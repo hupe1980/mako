@@ -15,6 +15,31 @@ permanently unresolved in the LF's system — a GPKE protocol violation.
 | **GPKE compliance** | BK6-22-024: IFTSTA 21039 within ORDERS execution window |
 | **Health** | `GET /health/live`, `GET /health/ready` |
 
+## Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/sperr-orders` | List orders (filter by status) |
+| `POST` | `/api/v1/sperr-orders` | Create a Sperrung/Entsperrung order |
+| `GET` | `/api/v1/sperr-orders/stats` | Aggregate compliance-sweep counters |
+| `GET` | `/api/v1/sperr-orders/{id}` | Fetch a single order |
+| `PUT` | `/api/v1/sperr-orders/{id}/execute` | Field-service confirmation → auto-dispatch IFTSTA 21039 |
+| `PUT` | `/api/v1/sperr-orders/{id}/fail` | Mark execution failed → operator alert |
+| `PUT` | `/api/v1/sperr-orders/{id}/cancel` | Cancel a `pending` order (no IFTSTA dispatched) |
+| `GET\|POST` | `/mcp` | MCP Streamable HTTP |
+
+## MCP tools
+
+| Tool | Description |
+|------|-------------|
+| `list_sperr_orders` | List orders, filter by status or `older_than_hours` |
+| `get_sperr_order` | Fetch a single order by UUID |
+| `get_sperr_stats` | Compliance counters incl. `executed_missing_iftsta` |
+| `list_overdue_orders` | Pending orders past `planned_date` |
+| `cancel_sperr_order` | Cancel a pending order |
+
+Prompts: `execute-sperrung`, `compliance-sweep`.
+
 ## Configuration
 
 ```toml

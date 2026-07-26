@@ -112,7 +112,7 @@ impl Workflow for MyWorkflow {
 
 | Flag | Enables |
 |---|---|
-| `slatedb` | Production `SlateDbEventStore` / `SlateDbOutboxStore` — enable in binary crates only |
+| `slatedb` | Production `SlateDbStore` — a single durable `EventStore` + `OutboxStore`; enable in binary crates only |
 | `testing` | `InMemoryEventStore`, `InMemoryOutboxStore`, `NoopDeadLetterSink` — never in production |
 | `tracing` | Structured instrumentation spans on workflow execution |
 
@@ -126,9 +126,9 @@ uses the correct helper from `fristen`:
 | Process family | Deadline | Helper |
 |---|---|---|
 | GPKE | 24 wall-clock hours | `fristen::add_hours(t, 24)` |
-| WiM | 5 Werktage | `fristen::add_werktage(d, 5, BdewMaKo)` |
-| GeLi Gas | 10 Werktage | `fristen::add_werktage(d, 10, BdewMaKo)` |
-| WiM Gas | 10 Werktage | `fristen::add_werktage(d, 10, BdewMaKo)` |
+| WiM | 5 Werktage | `fristen::add_werktage(d, 5, HolidayCalendar::BdewMaKo)` |
+| GeLi Gas | 10 Werktage | `fristen::add_werktage(d, 10, HolidayCalendar::BdewMaKo)` |
+| WiM Gas | 10 Werktage | `fristen::add_werktage(d, 10, HolidayCalendar::BdewMaKo)` |
 
 **Saturday is not a Werktag.** GPKE (BK6-24-174) Teil 1: *"alle Tage ..., die kein Samstag, Sonntag oder gesetzlicher Feiertag sind"*. A holiday observed in any single Bundesland counts nationwide, and 24.12. and 31.12. count as holidays.
 Deadline arithmetic uses **German local time (CET/CEST)** via the `time` crate.

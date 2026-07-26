@@ -209,7 +209,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let utilmd_conversation_id = envs[0].conversation_id;
     let utilmd_event_id = envs[0].event_id;
 
-    // ── 10-Werktage APERAK deadline (GeLi Gas / BNetzA BK7) ──────────────────
+    // ── 10-Werktage APERAK deadline (GeLi Gas / BNetzA BK7-24-01-009) ────────
     //
     // GeLi Gas uses a 10-Werktage APERAK window — double the WiM Frist and
     // significantly longer than the GPKE 24h wall-clock window.

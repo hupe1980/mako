@@ -53,6 +53,7 @@ billingd (HTTP service)
             ├── ControllableLoadProvider §14a Modul 1/3 (WAERMEPUMPE, WALLBOX)
             ├── GasProvider              §25 Nr. 4 MessEV Brennwertkorrektur; BEHG CO₂
             ├── HeatProvider             Fernwärme; auto-7% MwSt (renewable)
+            ├── WaterProvider            Trinkwasser 7% USt; Abwasser gesplittet; Absetzungen
             ├── SolarProvider            §42b Mieterstrom; §42a GGV
             ├── EegProvider              LF-side Gutschrift; contractual §51
             ├── EinspeisungProvider      Direktvermarktung Marktwert
@@ -325,7 +326,7 @@ let invoice = engine.bill(ctx, &quantities)?;
 
 `Product` has 13 exhaustive variants, each wrapping a typed per-category struct:
 `Strom(ElectricityProduct)`, `Waermepumpe/Wallbox(ControllableLoadProduct)`,
-`Gas(GasProduct)`, `Waerme(HeatProduct)`, `Solar(SolarProduct)`,
+`Gas(GasProduct)`, `Waerme(HeatProduct)`, `Wasser(WaterProduct)`, `Solar(SolarProduct)`,
 `Eeg(EegProduct)`, `Einspeisung(EinspeisungProduct)`,
 `Hems(HemsProduct)`, `Emobility(EmobilityProduct)`, `Energiedienstleistung(ServiceProduct)`,
 `Sharing(SharingProduct)`.
@@ -930,8 +931,8 @@ tarifbd_url   = "http://tarifbd:9080"
 edmd_url      = "http://edmd:8380"
 marktd_url    = "http://marktd:8180"
 
-# §3 StromStG: Stromsteuer 2.05 ct/kWh (valid since 01.07.2023)
-stromsteuer_ct_per_kwh = "0.0205"
+# §3 StromStG: Stromsteuer 2.05 ct/kWh (valid since 01.04.2003)
+stromsteuer_ct_per_kwh = "2.05"
 mwst_rate              = "0.19"
 
 # Seller VAT ID for XRechnung / ZUGFeRD (B2G mandate 01.01.2027)

@@ -61,7 +61,7 @@ graph LR
     BK7_24 -->|"mako-geli-gas\nmako-wim-gas"| GAS_impl["GeLi Gas 3.0\nWiM Gas"]
     BK7_14 -->|"mako-gabi-gas\ndvgw-edi"| DVGW_impl["8 DVGW messages\nGaBi Gas 2.1"]
     ENW41 -->|"vertragd"| LF_impl["B2C/B2B contracts\nGDPR Art. 15/17/20"]
-    EEG -->|"eeg-billing\neinsd"| EEG_impl["10 settlement schemes\n339 tests"]
+    EEG -->|"eeg-billing\neinsd"| EEG_impl["10 settlement schemes\n§14 UStG Gutschrift"]
     BSI -->|"metering\nedmd"| IOT_impl["SmgwSession\nClsChannel"]
     MsbG -->|"metering\nedmd"| SUB_impl["V01-V10 validation\nFill gaps · Forecast"]
     NNNEV -->|"grid-billing\nnetzbilanzd"| NNE_impl["NNE/KA/MMM\n§14a Modul 1/2/3"]
@@ -81,6 +81,7 @@ graph LR
 | **§42b Abs. 5 EnWG** (Solarpaket I — GGV Gemeinschaftliche Gebäudeversorgung) | Strom | `metering` crate (`GgvConstantAllocation`, `GgvProportionalAllocation`), `edmd` |
 | **§42a EEG** (Residuallast) | Strom | `metering` crate (`Residual` rule), `edmd` |
 | **EEG 2000–2023 / KWKG** (Feed-in settlement) | Strom | `eeg-billing` crate (10 schemes), `einsd` |
+| **§14 Abs. 2 UStG** (Gutschriftverfahren — NB issues the EEG Gutschrift) | Strom | `eeg-billing` (`settlement_to_gutschrift`), `einsd` (`rechnung_json`) |
 | **§ 60 Abs. 2 MsbG** (Ersatzwertbildung, Jahresprognose, Substitution) | Both | `metering` crate (V01–V10 validation, `fill_gaps`, `project_annual_consumption`), `edmd` |
 | **BSI TR-03109** (iMSys / SMGW lifecycle, §14a CLS channels) | Strom | `metering` (`SmgwSession`, `ClsChannel`), `edmd` |
 | **StromNEV / GasNEV / KAV** (grid charge settlement) | Both | `grid-billing` crate, `netzbilanzd` |
@@ -95,7 +96,7 @@ graph LR
 | **§20b EnWG** (Netzzugangsplattform, G. v. 18.12.2025 — no Festlegung/API yet) | Both | `makod` (`netzzugang.*` commands, outbox-reliable sender + signed ERP-webhook fallback), `marktd` (`netzzugang_antraege` registry) |
 | **BDEW AS4-Profil v1.2** (BrainpoolP256r1, sign+encrypt, ECDH-ES AES128-GCM) | — | `mako-as4` |
 | **§20 EnWG** (Diskriminierungsfreiheit, §20 Abs. 1 S. 3) | Both | `obsd` (`bnetza-report`), Cedar ABAC |
-| **MsbG §29 Abs. 3** (SMGW certificate expiry monitoring) | Strom | `edmd` (SMGW cert sweep worker) |
+| **MsbG §29 Abs. 3 / BSI TR-03109-4 §6.3** (SMGW certificate expiry monitoring) | Strom | `edmd` daily cert-expiry worker — tiered 90/30/7-day `de.messwert.smgw.cert.expiry_warning` (dedup per tier); `agentd` `smgw-diagnostics-agent` escalates renewal |
 
 > **Format version coexistence.** Format releases ship on a semi-annual cadence
 > (April + October) with per-message, fv-dated profiles — e.g. `fv20260401`

@@ -549,6 +549,9 @@ pub async fn decommission_anlage(pool: &PgPool, tenant: &str, tr_id: &str) -> an
 pub struct SettleInput {
     pub tr_id: String,
     pub tenant: String,
+    /// Marktlokation of the plant — the Anlagenbetreiber, recipient of the §14 UStG
+    /// Gutschrift (the Gutschriftverfahren has the NB *issue* the document).
+    pub malo_id: String,
     pub billing_year: i16,
     pub billing_month: i16,
     pub einspeisemenge_kwh: Option<Decimal>,
@@ -662,6 +665,12 @@ pub struct SettleResult {
     pub einspeisemenge_kwh: Option<Decimal>,
     pub settlement_eur: Option<Decimal>,
     pub status: String,
+    /// §14 UStG Gutschrift number (present only for a billable settlement).
+    pub gutschrift_nummer: Option<String>,
+    /// USt shown on the Gutschrift (0 for §12 Abs. 3 / §19).
+    pub gutschrift_steuer_eur: Option<Decimal>,
+    /// Brutto (net + USt) on the Gutschrift.
+    pub gutschrift_brutto_eur: Option<Decimal>,
 }
 
 // ── §44b quota computation ─────────────────────────────────────────────────────
@@ -905,6 +914,7 @@ pub fn build_settle_input(
     SettleInput {
         tr_id: anlage.tr_id.clone(),
         tenant: tenant.to_owned(),
+        malo_id: anlage.malo_id.clone(),
         billing_year,
         billing_month,
         einspeisemenge_kwh: overrides.einspeisemenge_kwh,
@@ -975,6 +985,70 @@ pub fn build_settle_input(
 ///
 /// When the plant was commissioned in the current billing month, the settlement
 /// is prorated to the days with entitlement (commissioning day to end of month).
+/// Assemble the §14 UStG Gutschrift for a billable EEG settlement.
+///
+/// Returns `(rechnung_json, gutschrift_nummer, steuer_eur, brutto_eur)`. All `None`
+/// when document assembly fails — the failure is logged and the settlement is stored
+/// without a document rather than blocked, because the payout obligation still exists.
+fn build_gutschrift(
+    input: &SettleInput,
+    output: &eeg_billing::SettleOutput,
+) -> (
+    Option<serde_json::Value>,
+    Option<String>,
+    Option<Decimal>,
+    Option<Decimal>,
+) {
+    use billing::{Currency, DocumentMeta, Period};
+    use eeg_billing::gutschrift::settlement_to_gutschrift_with_document;
+    use eeg_billing::ust::VatStatus;
+
+    let (year, month) = (input.billing_year, input.billing_month);
+    // §12 Abs. 3 UStG (0 %) only applies to solar PV; `from_plant` decides the rest.
+    let is_solar = input.erzeugungsart.to_uppercase().starts_with("SOLAR");
+    let vat = VatStatus::from_plant(
+        is_solar,
+        input.leistung_kwp.unwrap_or(Decimal::ZERO),
+        input.inbetriebnahme,
+    );
+
+    let nummer = format!("GS-EEG-{}-{year:04}-{month:02}", input.tr_id);
+    let m = time::Month::try_from(month as u8).unwrap_or(time::Month::January);
+    let last_day = m.length(year as i32);
+    let period = Period::new(
+        format!("{year:04}-{month:02}-01"),
+        format!("{year:04}-{month:02}-{last_day:02}"),
+    );
+
+    let meta = DocumentMeta {
+        invoice_number: nummer.clone(),
+        currency: Currency::EUR,
+        period_label: format!("{year:04}-{month:02}"),
+        period: Some(period),
+        issue_date: Some(time::OffsetDateTime::now_utc().date().to_string()),
+        due_date: output.faelligkeitsdatum.map(|d| d.to_string()),
+        issuer_id: Some(input.tenant.clone()), // NB issues the Gutschrift
+        recipient_id: Some(input.malo_id.clone()), // Anlagenbetreiber (recipient)
+        ..Default::default()
+    };
+
+    match settlement_to_gutschrift_with_document(output, vat, meta) {
+        Ok((rechnung, doc)) => (
+            serde_json::to_value(&rechnung).ok(),
+            Some(nummer),
+            Some(doc.tax_total().into_decimal()),
+            Some(doc.gross_total().into_decimal()),
+        ),
+        Err(e) => {
+            tracing::warn!(
+                tr_id = %input.tr_id, error = %e,
+                "einsd: Gutschrift assembly failed — settlement stored without a document"
+            );
+            (None, None, None, None)
+        }
+    }
+}
+
 pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result<SettleResult> {
     use eeg_billing::{
         AusschreibungMetadata, SettleInput as EegInput, SettlementScheme, SettlementStatus,
@@ -1092,6 +1166,10 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
             einspeisemenge_kwh: input.einspeisemenge_kwh,
             settlement_eur: Some(rust_decimal::Decimal::ZERO),
             status: "foerderung_beendet".to_owned(),
+            // Förderung ended → nothing to bill, so no Gutschrift is issued.
+            gutschrift_nummer: None,
+            gutschrift_steuer_eur: None,
+            gutschrift_brutto_eur: None,
         });
     }
 
@@ -1367,6 +1445,19 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
     )
     .ok();
 
+    // ── §14 UStG Gutschrift (Gutschriftverfahren) ───────────────────────────────
+    // For a billable settlement the NB *issues* the settlement document to the
+    // Anlagenbetreiber. The amount alone is not a legal document — VAT law requires
+    // a Gutschrift with the per-rate breakdown. We build it here so the ledger and
+    // the SEPA payout downstream reference an actual document, and persist it in
+    // `rechnung_json`. Non-billable statuses (NoData / PriceMissing / …) issue none.
+    let (rechnung_json, gutschrift_nummer, gutschrift_steuer_eur, gutschrift_brutto_eur) =
+        if output.status == SettlementStatus::Calculated {
+            build_gutschrift(&input, &output)
+        } else {
+            (None, None, None, None)
+        };
+
     let id = Uuid::new_v4();
 
     // ── § 147 AO / GoBD: snapshot ANY existing initial receipt before overwrite ────
@@ -1414,9 +1505,10 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
                settlement_model, einspeisemenge_kwh, settlement_eur, status,
                pflichtzahlung_eur, faelligkeitsdatum,
                verlaengerungsanspruch_qh, billing_days_fraction, positions_json,
-               is_correction, correction_of, correction_reason)
+               is_correction, correction_of, correction_reason,
+               rechnung_json, gutschrift_nummer)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                  $10, $11, $12, $13, $14, $15, $16, $17)
+                  $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
           ON CONFLICT (tr_id, tenant, billing_year, billing_month) WHERE is_correction = false DO UPDATE
           SET settlement_model          = EXCLUDED.settlement_model,
               einspeisemenge_kwh        = EXCLUDED.einspeisemenge_kwh,
@@ -1430,6 +1522,8 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
               is_correction             = EXCLUDED.is_correction,
               correction_of             = EXCLUDED.correction_of,
               correction_reason         = EXCLUDED.correction_reason,
+              rechnung_json             = EXCLUDED.rechnung_json,
+              gutschrift_nummer         = EXCLUDED.gutschrift_nummer,
               settled_at                = now()",
     )
     .bind(id)
@@ -1449,6 +1543,8 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
     .bind(input.correction_of.is_some())
     .bind(input.correction_of)
     .bind(input.correction_reason.as_deref())
+    .bind(rechnung_json.clone())
+    .bind(gutschrift_nummer.clone())
     .execute(pool)
     .await
     .context("persist settlement")?;
@@ -1584,6 +1680,9 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
         einspeisemenge_kwh: effective_kwh.or(input.einspeisemenge_kwh),
         settlement_eur,
         status: status.to_owned(),
+        gutschrift_nummer,
+        gutschrift_steuer_eur,
+        gutschrift_brutto_eur,
     })
 }
 
@@ -1704,7 +1803,7 @@ pub async fn list_settlement_receipts(
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     let rows = sqlx::query(
         r"SELECT id, tr_id, billing_year, billing_month, settlement_model,
-                 einspeisemenge_kwh, settlement_eur, status, settled_at
+                 einspeisemenge_kwh, settlement_eur, status, settled_at, gutschrift_nummer
           FROM settlement_receipts
           WHERE tr_id = $1 AND tenant = $2
           ORDER BY billing_year DESC, billing_month DESC
@@ -1730,6 +1829,7 @@ pub async fn list_settlement_receipts(
                 "settlement_eur": r.try_get::<Option<Decimal>, _>("settlement_eur").ok().flatten(),
                 "status": r.try_get::<String, _>("status").ok(),
                 "settled_at": r.try_get::<OffsetDateTime, _>("settled_at").ok().map(|t| t.to_string()),
+                "gutschrift_nummer": r.try_get::<Option<String>, _>("gutschrift_nummer").ok().flatten(),
             })
         })
         .collect())

@@ -43,6 +43,13 @@ async fn main() -> anyhow::Result<()> {
     let cfg: config::AccountingdConfig = load_config("accountingd").context("load config")?;
     let cfg = Arc::new(cfg);
 
+    // Validate SEPA schema-version config at startup — a bank-incompatible schema
+    // version must fail loudly here, not silently on a rejected batch downstream.
+    let pain008_schema = accountingd::sepa::resolve_pain008_schema(cfg.pain008_schema.as_deref())
+        .context("SEPA pain.008 schema config")?;
+    accountingd::sepa::resolve_pain001_schema(cfg.pain001_schema.as_deref())
+        .context("SEPA pain.001 schema config")?;
+
     let pool = PgPool::connect(&cfg.database_url)
         .await
         .context("connect PostgreSQL")?;
@@ -226,6 +233,7 @@ async fn main() -> anyhow::Result<()> {
         creditor_iban: cfg.creditor_iban.clone(),
         creditor_name: cfg.creditor_name.clone(),
         creditor_id: cfg.creditor_id.clone(),
+        pain008_schema,
     });
     let ct = mako_service::shutdown::token();
     let app = app.merge(mcp_server::router(mcp_state, ct.clone()));
@@ -390,6 +398,7 @@ async fn main() -> anyhow::Result<()> {
                             creditor_id,
                             target_date,
                             &entries,
+                            pain008_schema,
                         ) {
                             Ok(r) => r,
                             Err(e) => {

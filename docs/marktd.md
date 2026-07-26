@@ -174,7 +174,7 @@ api_key   = "env:MAKOD_API_KEY"   # required
 tenant = "9900357000004"           # required — operator primary MP-ID
 
 [webhook]
-inbound_path   = "/api/v1/events"             # default
+inbound_path   = "/api/v1/events"             # must match makod's [erp] webhook_url (code default: /api/v1/mako/events)
 inbound_secret = "env:MAKOD_WEBHOOK_SECRET"   # required unless allow_insecure_no_auth
 
 [oidc]              # required unless allow_insecure_no_auth
@@ -313,10 +313,10 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 |---|---|---|---|
 | `GET` | `/health` | — | Health check (no auth) |
 | `GET` | `/ready` | — | Readiness check (DB ping, no auth) |
-| `PUT` | `/api/v1/malo/{malo_id}` | `write-malo` | Upsert Marktlokation; validates `_typ = MARKTLOKATION` and enum fields (422 on violation); pushes to makod MaLo cache |
+| `PUT` | `/api/v1/malo/{malo_id}` | `write-malo` | Upsert Marktlokation; validates `_typ = MARKTLOKATION` and **strictly** rejects any out-of-schema enum value anywhere in the BO (`Bo4eStrict::ensure_known_enums`, 422 with the offending JSON-path); pushes to makod MaLo cache |
 | `GET` | `/api/v1/malo/{malo_id}` | `read-malo` | Get Marktlokation as typed `rubo4e::current::Marktlokation` (canonical BO4E camelCase) |
 | `GET` | `/api/v1/malo` | `read-malo` | List Marktlokationen (schema-drift records silently filtered) |
-| `PUT` | `/api/v1/melo/{melo_id}` | `write-melo` | Upsert Messlokation; validates `_typ = MESSLOKATION` and enum fields (422 on violation) |
+| `PUT` | `/api/v1/melo/{melo_id}` | `write-melo` | Upsert Messlokation; validates `_typ = MESSLOKATION` and **strictly** rejects any out-of-schema enum value anywhere in the BO (`Bo4eStrict::ensure_known_enums`, 422 with the offending JSON-path) |
 | `GET` | `/api/v1/melo/{melo_id}` | `read-melo` | Get Messlokation as typed `rubo4e::current::Messlokation` |
 | `PUT` | `/api/v1/contracts/{id}` | `write-contract` | Upsert contract (with `valid_from` / `valid_to`) |
 | `GET` | `/api/v1/contracts/{id}` | `read-contract` | Get contract |
@@ -326,7 +326,7 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/api/v1/partners/{mp_id}/marktteilnehmer` | `read-partner` | BO4E `Marktteilnehmer` view of a partner (typed `marktrolle`/`rollencodetyp`, mp_id → `rollencodenummer`). Note: partner PUTs with the legacy literal role `"LFG"` are rejected 422 — model gas suppliers as `LF` + Rollencodetyp `DVGW` |
 | `GET/PUT` | `/api/v1/mmma-preise/gas/{year}/{month}` | `read/write-preisblatt` | Gas MMM Abrechnungspreise (Trading Hub Europe / MGV, monthly) — `{mehr_ct_kwh, minder_ct_kwh}`; queried by `netzbilanzd` for INVOIC 31007/31008 billing and `invoicd` check 6 validation |
 | `GET` | `/api/v1/mmma-preise/gas` | `read-preisblatt` | List all Gas MMM price records (newest first; `?limit=`) |
-| `GET/PUT` | `/api/v1/mmm-preise/strom/{year}/{month}` | `read/write-preisblatt` | Strom MMM prices (VNB per GPKE BK6-24-174 Teil 1 Kap. 8.4) — `{vnb_mp_id, mehr_ct_kwh, minder_ct_kwh}`; queried by `netzbilanzd` for INVOIC 31002/31005 and `invoicd` check 6 |
+| `GET/PUT` | `/api/v1/mmm-preise/strom/{year}/{month}` | `read/write-preisblatt` | Strom MMM prices (VNB per GPKE BK6-24-174 Teil 1 Kap. 8.4) — `{vnb_mp_id, mehr_ct_kwh, minder_ct_kwh}`; queried by `netzbilanzd` for MMM INVOIC 31005/31006 and `invoicd` check 6 |
 | `PUT` | `/api/v1/preisblaetter/{nb_mp_id}` | `write-preisblatt` | Upsert price sheet + store versioned snapshot + emit `de.markt.pricat.published` |
 | `GET` | `/api/v1/preisblaetter/{nb_mp_id}` | `read-preisblatt` | Get price sheet valid on date |
 | `GET` | `/api/v1/pricat/{nb_mp_id}/history` | `read-preisblatt` | List PRICAT version history (newest first) |
@@ -1397,7 +1397,7 @@ curl -s "http://marktd:8180/api/v1/mmma-preise/gas?limit=12" \
 ### Strom MMM Ausgleichsenergie — ÜNB (GPKE (BK6-24-174) Teil 1 Kap. 8.4)
 
 Published monthly per ÜNB (50Hertz, TenneT, Amprion, TransnetBW). Used by
-`netzbilanzd` for INVOIC 31002/31005 and `invoicd` check 6 on inbound Strom MMM invoices.
+`netzbilanzd` for MMM INVOIC 31005/31006 and `invoicd` check 6 on inbound Strom MMM invoices.
 
 ```bash
 # Import Strom MMM prices for TenneT (example)

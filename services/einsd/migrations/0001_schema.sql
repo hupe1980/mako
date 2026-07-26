@@ -239,8 +239,12 @@ CREATE TABLE settlement_receipts (
     pflichtzahlung_eur          NUMERIC(14, 5),
     -- § 147 AO / GoBD: itemized position snapshot for audit trail
     positions_json              JSONB,
-    -- Full rubo4e::current::Rechnung JSONB
+    -- Full §14 UStG Gutschrift as a rubo4e::current::Rechnung JSONB (Gutschriftverfahren:
+    -- the NB issues the settlement document to the Anlagenbetreiber). Populated for a
+    -- billable settlement; NULL for NoData / PriceMissing / foerderung_beendet.
     rechnung_json               JSONB,
+    -- Human-readable Gutschrift number (GS-EEG-<tr>-<year>-<month>) for lookup/idempotency.
+    gutschrift_nummer           TEXT,
     bo4e_version                TEXT        NOT NULL DEFAULT 'v202607.0.0',
     -- 'calculated' | 'price_missing' | 'no_data' | 'error' | 'foerderung_beendet'
     status                      TEXT        NOT NULL DEFAULT 'calculated',

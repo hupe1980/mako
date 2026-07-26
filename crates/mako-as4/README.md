@@ -95,7 +95,7 @@ The test helpers build on the `asx-rs` testing API:
 
 ```toml
 [dev-dependencies]
-mako-as4 = { version = "0.13", features = ["testing"] }
+mako-as4 = { version = "0.14", features = ["testing"] }
 ```
 
 ### Full sign+encrypt round-trip test
@@ -173,7 +173,7 @@ println!("Encryption key (PEM): {}", pki.encryption.key_pem_str());
 
 ## Security test coverage in makod
 
-`services/makod/tests/as4_security.rs` ships 11 tests that verify BDEW AS4 compliance:
+`services/makod/tests/as4_security.rs` ships 12 tests that verify BDEW AS4 compliance:
 
 | Test | Verifies |
 |---|---|
@@ -181,13 +181,14 @@ println!("Encryption key (PEM): {}", pki.encryption.key_pem_str());
 | `sign_only_pmode_disables_encryption` | `bdew_pmode_sign_only()` disables encryption (dev/test only) |
 | `policy_with_key_requires_encryption` | `bdew_push_policy(Some(key))` enforces `require_encrypted_inbound` |
 | `policy_without_key_no_encryption_required` | Dev-mode without decryption key does not block onboarding |
-| `fragment_scope_is_soap_sender_id` | OneWayPush never triggers fragment scope `PolicyViolation` |
+| `fragment_scope_is_strict_default` | strict default kept; fragment scope consulted for fragmented messages only |
 | `sign_encrypt_policy_is_bdew_compliant` | SOAP policy constants satisfy §2.2.6.2.1 + §2.2.6.2.2 |
 | `replay_dedup_blocks_duplicate_message_id` | 72-hour dedup window (§4.2) |
 | `tampered_signature_is_rejected` | Real `As4WsSecVerifier` rejects payload tampering |
 | `inbound_encryption_enforced_when_decryption_key_set` | `require_encrypted_inbound` rejects unencrypted messages |
 | `sign_encrypt_round_trip_via_mock_endpoint` | Full sign+encrypt→transport→decrypt round-trip |
 | `sign_only_round_trip_envelope_contains_wssec_signature` | Sign-only round-trip preserves WS-Security elements |
+| `sync_receipt_is_verified_and_correlated` | Synchronous `eb:Receipt` is parsed and correlated to the sent `message_id` (§4.6.3 NRR) |
 
 ---
 
@@ -208,6 +209,6 @@ println!("Encryption key (PEM): {}", pki.encryption.key_pem_str());
 | Crate | Role |
 |---|---|
 | `mako-as4` ← **this crate** | BDEW AS4 profile (P-Modes, constants, policy, test helpers) |
-| `asx-rs` 0.10 | AS4/ebMS3 transport engine (ECDSA signing, ECDH-ES encrypt, dedup, testing helpers) |
+| `asx-rs` 0.11 | AS4/ebMS3 transport engine (ECDSA signing, ECDH-ES encrypt, signed-receipt NRR verification, dedup, testing helpers) |
 | `makod` | Production daemon — assembles AS4 ingest, sender, and all 45+ BDEW workflows |
 

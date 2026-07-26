@@ -229,14 +229,27 @@ pub async fn put_preisblatt(
     // Validate the payload against rubo4e::current::PreisblattNetznutzung (B15).
     // This catches wrong `_typ`, invalid enum values in `preispositionen`, and
     // malformed `zeitvariablePreispositionen.zaehlzeitregister` before DB insert.
-    if let Err(e) = serde_json::from_value::<PreisblattNetznutzung>(req.data.clone()) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!("invalid PreisblattNetznutzung: {e}")
-            })),
-        )
-            .into_response();
+    match serde_json::from_value::<PreisblattNetznutzung>(req.data.clone()) {
+        Ok(bo) => {
+            if let Err(e) = rubo4e::Bo4eStrict::ensure_known_enums(&bo) {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": format!("PreisblattNetznutzung has out-of-schema enum values: {e}")
+                    })),
+                )
+                    .into_response();
+            }
+        }
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": format!("invalid PreisblattNetznutzung: {e}")
+                })),
+            )
+                .into_response();
+        }
     }
 
     // ── Validate lastvariablePreispositionen (§14a Modul 3, BK6-22-300 Anlage 2 §3) ──

@@ -14,8 +14,10 @@ Use the top-level entry points — do **not** construct segment trees manually:
 let msg = edi_energy::parse(input)?;
 
 // With custom config (e.g. reference date for release detection)
-let msg = edi_energy::Parser::new()
-    .with_config(ParseConfig::default().with_reference_date(date))
+// `with_config` is a constructor, not a builder method on `new()`.
+let msg = edi_energy::Parser::with_config(
+        ParseConfig::default().with_reference_date(date),
+    )
     .parse(input)?;
 
 // Interchange (multi-message file)
@@ -55,7 +57,7 @@ Classic UTILMD releases (5.5.x) can be **parsed** but **not validated** — `val
 
 ## Crate Lint Configuration
 
-The crate enforces `#![deny(unsafe_code)]` and `#![warn(missing_docs, clippy::pedantic)]`. Several pedantic lints are `#[allow]`-listed for generated code — do not suppress them in hand-written modules. All `#[allow]` items in `lib.rs` are explicitly justified by comments; follow the same pattern if a new allow is genuinely required.
+The crate enforces `#![deny(unsafe_code)]`, `#![deny(missing_docs)]`, and `#![warn(clippy::pedantic)]`. Several pedantic lints are `#[allow]`-listed for generated code — do not suppress them in hand-written modules. All `#[allow]` items in `lib.rs` are explicitly justified by comments; follow the same pattern if a new allow is genuinely required.
 
 ## Testing
 

@@ -11,7 +11,7 @@ description: >
   §36k Wind Korrekturfaktor, §42b GGV multi-meter Messkonzept,
   §51 Negativpreisregel, §52 Pflichtzahlungen + §52 Abs. 6 Netting,
   SettlementPeriodState lifecycle, Repowering §22, Zusammenlegung §24,
-  KWKG Förderdauer, 339 eeg-billing tests, 18 MCP tools, eeg-agent.
+  KWKG Förderdauer, §14 UStG Gutschrift, 18 MCP tools, eeg-agent.
 ---
 
 # `einsd` — Einspeiser Registry + EEG/KWKG Settlement
@@ -32,8 +32,8 @@ graph TB
     Operator["NB Operator / ERP"]
     edmd["edmd :8380\nMSCONS Einspeisemenge\nauto-fetch"]
     einsd["einsd :9180"]
-    eeg_billing["eeg-billing crate\n10 settlement schemes\n§20 Abs.3 Managementprämie\n§23a degression · §36k wind\n§51b biogas Ausschreibung\n§42b GGV Messkonzept\n§52 Abs.6 netting\nSettlementPeriodState · InbetriebnahmeTyp\n339 tests · no I/O"]
-    db[("PostgreSQL\n8 migrations\neeg_anlagen · settlement_receipts\nsettlement_receipt_history\nsettlement_state_transitions\nsect53b_reductions · sect54_reductions\nepex_monthly_prices · eeg_verguetungssaetze")]
+    eeg_billing["eeg-billing crate\n10 settlement schemes\n§20 Abs.3 Managementprämie\n§23a degression · §36k wind\n§51b biogas Ausschreibung\n§42b GGV Messkonzept\n§52 Abs.6 netting\nSettlementPeriodState · InbetriebnahmeTyp\n341 tests · no I/O"]
+    db[("PostgreSQL\neeg_anlagen · settlement_receipts\nsettlement_receipt_history\nsettlement_state_transitions\nsect53b_reductions · sect54_reductions\nepex_monthly_prices · eeg_verguetungssaetze")]
     erp["ERP webhook\nCloudEvents 1.0"]
     agentd["agentd :9580\neeg-agent\n(all de.eeg.* events)"]
 
@@ -418,7 +418,7 @@ graph LR
     EPEX -->|"> 2 ct/kWh"| NORMAL["Normal MarketPremium formula\neff_AW = AW + Managementprämie\nPrämie = max(0, eff_AW - EPEX) x kwh"]
 ```
 
-Register biogas Ausschreibungsanlagen with `is_biogas_sect51b: true` (migration 0005).
+Register biogas Ausschreibungsanlagen with `is_biogas_sect51b: true`.
 The settlement formula automatically returns EUR 0 with position label `§51b EEG 2023`
 for any period where the EPEX average is ≤ 2 ct/kWh.
 
@@ -476,7 +476,7 @@ library's abstraction for the statutory fallback remuneration).
 | Wind offshore | always |
 
 Plants above these thresholds must use `tariff_source = Auction` with the BNetzA-awarded AW.
-The `direktvermarktung_pflicht` and `capacity_blocks` columns (migration 0003) track this.
+The `direktvermarktung_pflicht` and `capacity_blocks` columns track this.
 
 ### Recording Direktvermarktung periods
 
@@ -909,7 +909,7 @@ edmd_url     = "http://edmd:8380"
 
 ## Database Schema
 
-8 migrations (see `services/einsd/migrations/`).
+Single consolidated schema (`services/einsd/migrations/0001_schema.sql`).
 
 ### `eeg_anlagen`
 
@@ -1001,7 +1001,7 @@ EPEX Spot monthly averages. Required for `MARKET_PREMIUM` and `POST_EEG`.
 
 | Type | When | Key payload fields |
 |---|---|---|
-| `de.eeg.verguetung.berechnet` | FEED\_IN\_TARIFF / POST\_EEG settled | `tr_id`, `billing_year`, `billing_month`, `settlement_eur`, `pflichtzahlung_eur`, **`bank_iban`**, **`bank_bic`**, **`zahlungsempfaenger`** |
+| `de.eeg.verguetung.berechnet` | FEED\_IN\_TARIFF / POST\_EEG settled | `tr_id`, `billing_year`, `billing_month`, `settlement_eur` (net), `pflichtzahlung_eur`, **`gutschrift_nummer`**, **`gutschrift_steuer_eur`**, **`gutschrift_brutto_eur`**, **`bank_iban`**, **`bank_bic`**, **`zahlungsempfaenger`** |
 | `de.eeg.marktpraemie.berechnet` | MARKET\_PREMIUM settled | + `epex_avg_ct_kwh`, `aw_ct`, `effective_aw_ct` |
 | `de.eeg.anlage.mastr_registriert` | MaStR confirmed | `tr_id`, `mastr_nummer` |
 | `de.eeg.anlage.foerderung_auslaufend` | Förderung ending ≤180 days | `tr_id`, `foerderendedatum`, `days_remaining` |
@@ -1010,6 +1010,20 @@ EPEX Spot monthly averages. Required for `MARKET_PREMIUM` and `POST_EEG`.
 `bank_iban`, `bank_bic`, and `zahlungsempfaenger` are forwarded from the `eeg_anlagen` record
 so `accountingd` can generate a SEPA Credit Transfer pain.001 without a secondary DB lookup.
 They are absent (null) for `EIGENVERBRAUCH` settlements (no payout).
+
+### §14 UStG Gutschrift document
+
+EEG feed-in is settled under the **Gutschriftverfahren** (§14 Abs. 2 Satz 2 UStG): the
+Netzbetreiber *issues* the settlement document to the Anlagenbetreiber. The settlement
+amount alone is not that document — VAT law requires a Gutschrift with the per-rate USt
+breakdown (EN 16931 BG-23). For every **billable** settlement `run_settlement` therefore
+builds one (`eeg-billing`'s `settlement_to_gutschrift`, VAT status derived per plant:
+Regelbesteuerung 19 % / §12 Abs. 3 zero-rated / §19 exempt) and persists it as a BO4E
+`rubo4e::current::Rechnung` in `settlement_receipts.rechnung_json`, with the
+`gutschrift_nummer` (`GS-EEG-<tr>-<year>-<month>`) for lookup. The event carries the net
+(`settlement_eur`), the USt (`gutschrift_steuer_eur`) and the brutto so `accountingd` books
+the credit against an actual document, not just an amount. Non-billable statuses
+(`no_data` / `price_missing` / `foerderung_beendet`) issue no Gutschrift.
 
 ```json
 {
@@ -1027,6 +1041,9 @@ They are absent (null) for `EIGENVERBRAUCH` settlements (no payout).
     "einspeisemenge_kwh": "280.500",
     "settlement_eur":  "22.736",
     "status":          "calculated",
+    "gutschrift_nummer":    "GS-EEG-TR-SOLAR-001-2026-07",
+    "gutschrift_steuer_eur": "4.31984",
+    "gutschrift_brutto_eur": "27.05584",
     "bank_iban":       "DE89370400440532013000",
     "bank_bic":        "COBADEFFXXX",
     "zahlungsempfaenger": "Franz Huber"
@@ -1067,7 +1084,7 @@ See [agentd operator guide](./agentd.md) for the full trigger→action mapping.
 
 ## Testing
 
-**339 tests** (eeg-billing) across four suites:
+**341 tests** (eeg-billing) across four suites:
 
 ```bash
 cargo test -p eeg-billing -p einsd --all-features
@@ -1075,10 +1092,10 @@ cargo test -p eeg-billing -p einsd --all-features
 
 | Suite | Count | Coverage |
 |---|---|---|
-| `eeg-billing` lib tests | 82 | Settlement formulas, §52 cap, positions-sum invariant |
+| `eeg-billing` lib tests | 91 | Settlement formulas, §52 cap, positions-sum invariant |
 | `prop_tests` (proptest) | 12 | INV-1–INV-10: FeedInTariff exactness, MarketPremium non-negativity, §51 bounds, API contract, PostEeg floor |
-| `regulatory_showcase` | 166 | §51/§51a/§51b, §52, §53b, §100 rules, all schemes, Bestandsschutz, `InbetriebnahmeTyp` lifecycle, §40–41 Wasserkraft, §37a Stecker-PV |
-| `eeg-billing` doctests | 64 | `EegGesetz::from_db_year`, rate helpers, foerderendedatum |
+| `regulatory_showcase` | 173 | §51/§51a/§51b, §52, §53b, §100 rules, all schemes, Bestandsschutz, `InbetriebnahmeTyp` lifecycle, §40–41 Wasserkraft, §37a Stecker-PV |
+| `eeg-billing` doctests | 65 | `EegGesetz::from_db_year`, rate helpers, foerderendedatum |
 
 ```bash
 cargo test -p eeg-billing -p einsd --all-features

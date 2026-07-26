@@ -132,6 +132,30 @@ let state = process.state_with_snapshot(&snapshot_store).await?;
 
 `execute_and_collect` returns the fully-stamped [`OutboxMessage`] entries produced by `Workflow::handle`, with `causation_event_id` set to the `event_id` of the first persisted event — identical to what `execute_and_enqueue` writes into the `OutboxStore` atomically.  Use this in tests and render pipelines where you need the outbox messages after persisting without calling `handle()` a second time.
 
+### Workflow state lifecycle
+
+Each workflow is an event-sourced FSM: `apply` folds events into a state enum,
+and `handle` gates which command is valid in each state. Nothing but the
+append-only event stream is durable — the state value is always reconstructed
+by replay. The GPKE supplier-change workflow (NB inbound side, PID 55001 →
+55003) is representative:
+
+```mermaid
+stateDiagram-v2
+    [*] --> New
+    New --> Initiated: ReceiveUtilmd
+    Initiated --> ValidationPassed: validation ok
+    Initiated --> Rejected: validation failed
+    ValidationPassed --> AntwortGesendet: SendAntwort (UTILMD 55003)
+    AntwortGesendet --> Active: positive Antwort
+    AntwortGesendet --> Rejected: negative Antwort / deadline
+    Active --> [*]
+    Rejected --> [*]
+```
+
+These variants are `SupplierChangeState` in `mako-gpke`, serialised as a tagged
+`status`/`data` object inside each event payload.
+
 ### `EngineBuilder`
 
 Type-state builder that enforces a store is registered before `build()`:
@@ -184,7 +208,7 @@ Fields not present in a stored event payload (due to being added in a later sche
 
 ## Stores
 
-All five store traits are implemented by `SlateDbStore`. In tests, swap in the `InMemoryEventStore` (and related noop/in-memory impls) via the `testing` feature flag.
+All engine store concerns are backed by one SlateDB database, exposed through per-concern store types: `SlateDbStore` implements `EventStore`, `AtomicAppend`, `OutboxStore` and `ProjectionCheckpointStore` directly, while `DeadlineStore`, `ProcessRegistry`, `InboxStore`, `SnapshotStore` and `PartnerStore` are served by dedicated sub-stores (`SlateDbDeadlineStore`, `SlateDbProcessRegistry`, …) reached via accessors. In tests, swap in the `InMemoryEventStore` (and related noop/in-memory impls) via the `testing` feature flag.
 
 ### `EventStore`
 
@@ -218,17 +242,18 @@ This is the only safe way to enqueue outbound EDIFACT — never write events fir
 FIFO delivery queue with exponential backoff and per-message jitter:
 
 ```rust
-// Enqueue an outbound message:
-store.enqueue(&outbox_msg).await?;
+// Enqueue outbound messages (batch):
+store.enqueue(&[outbox_msg]).await?;
 
-// Poll next batch for the delivery worker:
-let batch = store.pending(tenant, limit).await?;
+// Poll the next batch for the delivery worker (messages due at `now`;
+// `pending_now(limit)` uses OffsetDateTime::now_utc() for you):
+let batch = store.pending(limit, now).await?;
 
 // Acknowledge delivery:
-store.acknowledge(tenant, &message_id).await?;
+store.acknowledge(message_id).await?;
 
 // Reschedule after a transient failure (with backoff):
-store.reschedule(tenant, &message_id, next_attempt_at).await?;
+store.reschedule(message_id, next_attempt_at).await?;
 ```
 
 ### `DeadlineStore`
@@ -239,11 +264,11 @@ Time-indexed store for regulatory Fristen:
 // Register a deadline (GPKE 24h, WiM 5 Werktage, GeLi Gas 10 Werktage):
 store.register(&deadline).await?;
 
-// Poll deadlines due now:
-let due = store.due_now(tenant, limit).await?;
+// Poll deadlines due now (returns a DueNowResult with a truncation flag):
+let due = store.due_now(limit).await?;
 
 // Cancel after successful dispatch or process termination:
-store.cancel(tenant, &deadline_id).await?;
+store.cancel(deadline_id).await?;
 ```
 
 Deadlines that fire with a `VersionConflict` are **not cancelled** — the scheduler leaves them due for retry on the next poll cycle.
@@ -265,7 +290,7 @@ let identity = registry.lookup(tenant, &conv_id).await?;
 Per-key deduplication for AS4 inbound messages. `accept` returns `true` only the first time a message ID is seen:
 
 ```rust
-let is_new = inbox.accept(tenant, &message_id, ttl).await?;
+let is_new = inbox.accept(&message_id).await?;
 ```
 
 Within a single process the store uses a per-key `DashMap<_, Arc<Mutex<()>>>` to serialise concurrent `accept` calls. Multi-instance deployments partition ownership so that each aggregate key is driven by exactly one `makod` instance; the optimistic-concurrency `VersionConflict` check remains the backstop against concurrent appends.
@@ -460,8 +485,8 @@ impl Workflow for MyWorkflow {
 | Policy | Meaning | When to use |
 |---|---|---|
 | `ForwardCompatible` | Accept newer-version messages during the old version's lifetime | **Default for all MaKo workflows** — e.g. a FV2025 process can receive a FV2026-encoded APERAK |
-| `Pinned` | Reject messages from a different format version | Special-purpose only; never the default |
-| `Strict` | Enforce exact version match | Testing only |
+| `Pinned` | Accept only the format version recorded at process creation | Special-purpose only; never the default |
+| `Explicit(list)` | Accept exactly the format versions in `list` | When the acceptable set is fixed and known at compile time (e.g. a billing process handling exactly FV2025-10-01 and FV2026-10-01) |
 
 > **Do not default to `Pinned`.** A `Pinned` policy on any GPKE/WiM/GeLi Gas
 > workflow will cause the process to reject APERAKs sent by counterparties that
@@ -477,17 +502,21 @@ before the new rules can apply. The `MigrationRunner` handles this:
 
 ```rust
 use mako_engine::migration::{MigrationRunner, StateMigration, MigrationReport};
+use mako_engine::version::WorkflowId;
 
-struct UpgradeSupplierChange2025to2026;
+struct UpgradeSupplierChange2025to2026 {
+    source: WorkflowId, // "supplier-change" @ FV2025-10-01
+    target: WorkflowId, // "supplier-change" @ FV2026-10-01
+}
 
 impl StateMigration for UpgradeSupplierChange2025to2026 {
     type FromWorkflow = SupplierChangeWorkflowFV2025;
     type ToWorkflow   = SupplierChangeWorkflowFV2026;
 
-    fn from_workflow_id() -> &'static str { "supplier-change/FV2025-10-01" }
-    fn to_workflow_id()   -> &'static str { "supplier-change/FV2026-10-01" }
+    fn source_workflow_id(&self) -> &WorkflowId { &self.source }
+    fn target_workflow_id(&self) -> &WorkflowId { &self.target }
 
-    fn migrate(state: OldState) -> Result<NewState, String> {
+    fn migrate(&self, state: OldState) -> Result<NewState, String> {
         Ok(NewState {
             // Map old fields to new schema
             status: state.status,
@@ -548,9 +577,9 @@ let endpoint = record.as4_endpoint()
 
 ```
 PartnerRecord {
-    gln:          MarktpartnerId,       // 13-digit Marktpartner-ID (partition key)
+    mp_id:        MarktpartnerCode,     // 13-digit Marktpartner-ID (lookup key within a tenant)
                                         // May be BDEW-Codenummer (99…), DVGW-Codenummer (98…),
-                                        // or GS1 GLN — use nad_agency_code() to derive NAD DE3055
+                                        // or GS1 GLN
     display_name: Option<Box<str>>,     // NAD company name
     channels:     Vec<CommunicationChannel>,  // COM segments
       ├── qualifier "AK" → AS4 endpoint URL  (PARTIN AHB 1.0f DE 3155)

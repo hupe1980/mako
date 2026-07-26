@@ -118,7 +118,7 @@ services:
     ports: ["5432:5432"]
 
   marktd:
-    image: ghcr.io/hupe1980/marktd:0.13.0
+    image: ghcr.io/hupe1980/marktd:0.14.0
     depends_on: [postgres]
     environment:
       DATABASE_URL: postgres://marktd:secret@postgres/marktd
@@ -175,7 +175,7 @@ jwks_refresh_secs = 300
 
 ## Database migrations
 
-Migrations run automatically at startup.  The schema is defined across two migration files:
+Migrations run automatically at startup. The schema is defined in a single migration file:
 
 - `migrations/0001_initial.sql` — complete schema (all tables)
 

@@ -8,8 +8,8 @@ pub use asx_rs::as4::As4PushPolicy;
 pub use asx_rs::as4::FragmentScopePolicy;
 use asx_rs::core::InteropMode;
 use asx_rs::interop::{
-    BaseProfile, CanonicalizationPolicy, ProfileStack, ProfileValidationReport,
-    ProfileValidationResult, SecurityPolicy, ValidationPolicy,
+    As2ValidationPolicy, BaseProfile, CanonicalizationPolicy, ProfileStack,
+    ProfileValidationReport, ProfileValidationResult, SecurityPolicy, ValidationPolicy,
 };
 
 use crate::{
@@ -61,22 +61,20 @@ pub const PROFILE_VERSION: &str = "2.0.0";
 /// let policy = bdew_push_policy(Some(key_pem));
 /// ```
 pub fn bdew_push_policy(decryption_key_pem: Option<Vec<u8>>) -> As4PushPolicy {
-    let mut policy = As4PushPolicy::regulated();
-    if let Some(key) = decryption_key_pem {
-        policy.inbound_decryption_key_pem = Some(std::sync::Arc::from(key.as_slice()));
-        // Enforce that every inbound message is encrypted (BDEW AS4-Profil v1.2 §2.2.6.2.2).
-        // Only set when a decryption key is provided; otherwise the policy builder
-        // would reject the config (require_encrypted_inbound = true without a key).
-        policy.require_encrypted_inbound = true;
+    match decryption_key_pem {
+        // BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every inbound message to be
+        // encrypted. `regulated_with_decryption_key` (asx-rs 0.11) sets the key and
+        // `require_encrypted_inbound` together, so the invariant can no longer be
+        // split across two calls.
+        Some(key) => As4PushPolicy::regulated_with_decryption_key(key),
+        // Sign-only (development / before the BDEW PKI certs arrive).
+        None => As4PushPolicy::regulated(),
     }
-    // BDEW AS4-Profil v1.2 uses single-message `UserMessage` only — no fragmentation.
-    // `RequireAuthenticatedScope` (the strict default) would reject any multi-fragment
-    // message unless `authenticated_sender_scope` is supplied.  Since fragmentation is
-    // not used in BDEW MaKo, switch to `UseSoapSenderId` so that
-    // `authenticated_sender_scope: None` is always safe to pass.  The SOAP sender ID
-    // is already authenticated by the mandatory WS-Security XML-DSig signature.
-    policy.fragment_scope_policy = FragmentScopePolicy::UseSoapSenderId;
-    policy
+    // No `fragment_scope_policy` override: BDEW MaKo sends single-message
+    // `UserMessage` only, and `RequireAuthenticatedScope` (the strict default) is
+    // consulted for *fragmented* messages only — a `None` scope is already safe,
+    // and switching to `UseSoapSenderId` would only weaken the policy if a fragment
+    // ever arrived (asx-rs 0.11 clarified this).
 }
 
 /// Creates a [`ProfileStack`] pre-configured for BDEW MaKo AS4 compliance.
@@ -90,7 +88,10 @@ pub fn bdew_push_policy(decryption_key_pem: Option<Vec<u8>>) -> As4PushPolicy {
 /// | Signing required | `true` | BDEW KH §5.5 (mandatory) |
 /// | Encryption required | `false` | BDEW KH §5.6 (optional) |
 /// | Payload limits enforced | `true` | defense-in-depth |
-/// | AS2 MIC required | `false` | not an AS4 concept |
+///
+/// (Since asx-rs 0.11 the AS2 MIC knob lives in a separate `As2ValidationPolicy`,
+/// not the shared AS4 `ValidationPolicy` — an AS4 profile no longer carries a field
+/// that cannot apply to it.)
 ///
 /// Add partner-specific overrides via `ProfileStack::partner_overrides` if needed.
 ///
@@ -117,7 +118,7 @@ pub fn bdew_mako_profile_stack() -> ProfileStack {
             security: SecurityPolicy {
                 require_signature: true,
                 // Mandatory per BDEW AS4-Profil v1.2 §2.2.6.2.2.
-                // asx-rs v0.6 implements ECDH-ES + ConcatKDF + AES-128-KW with
+                // asx-rs implements ECDH-ES + ConcatKDF + AES-128-KW with
                 // BrainpoolP256r1 (BSI TR-03116-3 §9.2) automatically when the
                 // recipient certificate has an EC public key.
                 require_encryption: true,
@@ -125,9 +126,9 @@ pub fn bdew_mako_profile_stack() -> ProfileStack {
             validation: ValidationPolicy {
                 reject_ambiguous_headers: true,
                 enforce_payload_limits: true,
-                // AS4 does not use AS2 MIC (AS2-specific concept)
-                require_as2_mic: false,
             },
+            // AS2-only concern, modelled separately from the AS4 policy (asx-rs 0.11).
+            as2_validation: As2ValidationPolicy { require_mic: false },
         },
         extensions: Vec::new(),
         overrides: Vec::new(),
@@ -409,8 +410,10 @@ mod tests {
     #[test]
     fn profile_stack_no_as2_mic() {
         let stack = bdew_mako_profile_stack();
+        // Since asx-rs 0.11 the AS2 MIC knob lives in a separate As2ValidationPolicy,
+        // not the AS4 ValidationPolicy; an AS4 profile keeps it disabled.
         assert!(
-            !stack.base.validation.require_as2_mic,
+            !stack.base.as2_validation.require_mic,
             "AS2 MIC must not be required in an AS4 profile"
         );
     }

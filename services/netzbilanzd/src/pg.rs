@@ -268,7 +268,7 @@ pub async fn fetch_draft(pool: &PgPool, id: Uuid) -> anyhow::Result<Option<Draft
 // ── approve_and_dispatch ─────────────────────────────────────────────────────
 
 /// Validate the draft via `invoic-checker` and dispatch it to `makod` as
-/// INVOIC 31001/31002/31005/31009.  Updates status to `dispatched`.
+/// INVOIC 31002/31005/31009/31011.  Updates status to `dispatched`.
 ///
 /// Blocked when `check_outcome == 'Dispute'` — an NB must never send an INVOIC
 /// that fails its own plausibility checks.
@@ -308,11 +308,11 @@ pub async fn approve_and_dispatch(
         );
     }
 
-    // Map PID to makod command name.
+    // Map PID to makod command name (BDEW INVOIC AHB §3.1.1: 31002 = NN-Rechnung
+    // for both Strom and Gas, 31005 = MMM-Rechnung).
     let command = match pid {
-        31001 => "gpke.nne.rechnung.stellen",
-        31002 => "gpke.mmm.rechnung.stellen",
-        31005 => "gpke.nne-gas.rechnung.stellen",
+        31002 => "gpke.nne.rechnung.stellen",
+        31005 => "gpke.mmm.rechnung.stellen",
         31009 => "wim.msb-rechnung.stellen",
         // PID 31011: Rechnung sonstige Leistung (GeLi Gas AWH Sperrprozesse, GNB → LFG).
         // Regulatory basis: BK7-24-01-009 §5.4 — GNB bills LFG for billable actions

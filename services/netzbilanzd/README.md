@@ -9,7 +9,7 @@ Closes the payment lifecycle on REMADV receipt. Zero `f64` in the billing path.
 |---|---|
 | **Port** | `:8680` |
 | **Database** | PostgreSQL (`invoice_drafts`, `kostenblatt_records`, `fremdkosten_records`) |
-| **INVOIC PIDs** | 31001 (NNE Strom) · 31002 (MMM Strom/Gas) · 31005 (NNE Gas) · 31009 (MSB-Rechnung) · 31011 (AWH Sperrprozesse Gas) |
+| **INVOIC PIDs** | 31002 (NN-Rechnung, NNE Strom + Gas) · 31005 (MMM Strom + Gas) · 31009 (MSB-Rechnung) · 31011 (AWH Sperrprozesse Gas) |
 | **Calculation** | `grid_billing::settle_{nne,mmm,msb}()` — returns a `SettlementResult`. The service wraps it in an `InvoiceDocument` and renders via `into_rechnung()`. `EuroAmount` (`i64 × 10⁻⁵`), zero `f64` |
 | **Pre-dispatch gate** | `invoic-checker` mandatory; `check_outcome = Dispute` blocks dispatch |
 | **MMM prices** | Auto-fetches `mehr`/`minder` from `marktd` (Gas: THE monthly; Strom: ÜNB via `vnb_mp_id`) |
@@ -23,16 +23,16 @@ Closes the payment lifecycle on REMADV receipt. Zero `f64` in the billing path.
 | **CloudEvents emitted** | `de.netzbilanz.invoic.{drafted,dispatched,paid,disputed,dispatch_overdue}` · `de.netzbilanz.kostenblatt.deadline_approaching` |
 | **MCP server** | 13 tools · 6 prompts at `/mcp` (Streamable HTTP 2025-11-25) |
 | **Retention** | § 147 AO / GoBD 3-year; `GET /api/v1/billing/audit` for BNetzA export (up to 50k rows) |
-| **Health** | `GET /health` · `GET /health/ready` |
+| **Health** | `GET /health/live` · `GET /health/ready` |
 
 ## Billing types
 
 | `billing_type` | PID | Direction | Description |
 |---|---|---|---|
-| `nne_strom` | 31001 | NB → LF | NNE Strom, flat-rate or §14a Modul 2 ToU |
-| `mmm_strom` | 31002 | NB → LF | Mehr-/Mindermengensaldo Strom |
-| `mmm_gas` | 31002 | GNB → LFG | Mehr-/Mindermengensaldo Gas (THE prices) |
-| `nne_gas` | 31005 | GNB → LFG | NNE Gas |
+| `nne_strom` | 31002 | NB → LF | NN-Rechnung Strom, flat-rate or §14a Modul 2 ToU |
+| `nne_gas` | 31002 | GNB → LFG | NN-Rechnung Gas |
+| `mmm_strom` | 31005 | NB → LF | Mehr-/Mindermengensaldo Strom |
+| `mmm_gas` | 31005 | GNB → LFG | Mehr-/Mindermengensaldo Gas (THE prices) |
 | `msb_31009` | 31009 | NB → MSB | MSB-Rechnung (Messstellenbetrieb) |
 | `nne_gas_awh_31011` | 31011 | GNB → LFG | AWH Sperrprozesse Gas (GeLi Gas 3.0 (BK7-24-01-009)) |
 

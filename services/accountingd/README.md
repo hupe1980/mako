@@ -7,7 +7,7 @@ no SEPA collection.
 | Feature | Detail |
 |---|---|
 | **HTTP port** | `:9380` |
-| **Database** | PostgreSQL (sqlx 0.8, 16 tables) |
+| **Database** | PostgreSQL (sqlx 0.8, 18 tables) |
 | **Auth** | OIDC/JWT on write endpoints + inbound webhook HMAC-SHA256 |
 | **Ledger** | Immutable `ledger_entries`; `amount_ct != 0` CHECK; idempotent via **UNIQUE (tenant, ce_id)** claimed inside the write transaction |
 | **Double-entry** | `journal_lines` posted **in the same transaction** as every ledger entry; a **deferred DB trigger** enforces Soll = Haben (SKR 03/04, §238 HGB) |
@@ -30,7 +30,7 @@ no SEPA collection.
 | **Worker safety** | Abschlag/dunning workers hold a PostgreSQL advisory lock; all money workers are idempotent (per-run guards) |
 | **Jahresabschluss** | Annual settlement (§40 EnWG); idempotent per year via `jahresabschluss_runs`; recalibrates the monthly Abschlag |
 | **MCP** | 12 tools at `/mcp` |
-| **Tests** | 87 pure tests (71 unit + 16 integration) + 4 DB-backed scenario tests (`tests/db_scenarios.rs`, run with `DATABASE_URL` + `--ignored`) |
+| **Tests** | 89 pure tests (71 unit + 18 integration) + 4 DB-backed scenario tests (`tests/db_scenarios.rs`, run with `DATABASE_URL` + `--ignored`) |
 | **Health** | `GET /health/live`, `GET /health/ready` |
 
 ## Security
@@ -51,6 +51,11 @@ The validation logic is covered by **21 unit tests** without a database.
 FRST and RCUR mandates are in separate batches (EPC SDD Core Rulebook §3.8 compliance).
 Each batch is stored in `sepa_collection_runs` for audit and ERP webhook replay.
 
+The XML schema version defaults to the current EPC releases (`pain.008.001.08`,
+`pain.001.001.09`) and can be pinned per bank with the optional `pain008_schema` /
+`pain001_schema` config keys (e.g. `pain.008.001.02` for the pre-2023 version).
+Unknown values fail at startup rather than on a rejected batch.
+
 ## Configuration
 
 ```toml
@@ -61,6 +66,8 @@ tenant                = "9900357000004"
 creditor_iban         = "DE89370400440532013000"
 creditor_id           = "DE74ZZZ09999999999"   # SEPA Gläubiger-ID (EPC AT-02)
 creditor_name         = "Muster Energie GmbH"
+# pain008_schema      = "pain.008.001.02"       # optional; default pain.008.001.08
+# pain001_schema      = "pain.001.001.03"       # optional; default pain.001.001.09
 erp_webhook_url       = "http://erp:8000/events"
 erp_hmac_secret       = "env:ACCOUNTINGD_INBOUND_HMAC_SECRET"
 dunning_auto_enabled  = true

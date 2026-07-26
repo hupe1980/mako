@@ -33,7 +33,7 @@ code focuses on domain logic instead of plumbing.
 | `cedar` | `CedarEnforcer` | Cedar ABAC policy enforcement |
 | `health` | `health_routes` | `/health/live` + `/health/ready` endpoints |
 | `http` | `default_client` | `reqwest::Client` with connect + request timeouts |
-| `webhook` | `verify_signature` | Constant-time HMAC-SHA256 webhook verification |
+| `webhook` | `verify_hmac` | Constant-time HMAC-SHA256 webhook verification |
 | `builder` | `ServiceBuilder` | Composable Axum router with health, metrics, rate-limit |
 | `event_bus` | `EventBus`, `WebhookBus` | CloudEvent fan-out (webhook + optional Kafka) |
 | `metrics` | Prometheus handler | Real `GET /metrics` when feature `metrics` is enabled |
@@ -233,9 +233,9 @@ let http = mako_service::http::default_client();
 ### Webhook verification
 
 ```rust,no_run
-use mako_service::webhook::verify_signature;
+use mako_service::webhook::verify_hmac;
 
-let ok = verify_signature(secret, &body, provided_signature);
+let ok = verify_hmac(secret, &body, provided_signature);
 // Accepts "sha256=…" and bare hex; constant-time comparison
 ```
 

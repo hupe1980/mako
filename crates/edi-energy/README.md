@@ -46,27 +46,27 @@ Add to `Cargo.toml`:
 
 ```toml
 [dependencies]
-edi-energy = "0.13"
+edi-energy = "0.14"
 ```
 
 ### Parse and validate
 
 ```rust,no_run
-use edi_energy::{parse, ValidationSummary};
+use edi_energy::{parse, EdiEnergyReport};
 
 let bytes = std::fs::read("message.edi")?;
 let msg = parse(&bytes)?;
 
 // Detect what arrived
-let pid = msg.detect_pruefidentifikator().map(|p| p.value());
+let pid = msg.detect_pruefidentifikator().map(|p| p.as_u32());
 let fv  = msg.detect_release().map(|r| r.to_string());
 println!("PID {pid:?}  FV {fv:?}");
 
 // Run AHB + MIG rule enforcement
-let report: ValidationSummary = msg.validate()?;
+let report: EdiEnergyReport = msg.validate()?;
 if !report.is_valid() {
     for err in report.errors() {
-        eprintln!("[{}] {}", err.rule_id(), err.message());
+        eprintln!("[{}] {}", err.rule_id.as_deref().unwrap_or("-"), err.message);
     }
 } else {
     println!("valid ✓");
@@ -76,10 +76,10 @@ if !report.is_valid() {
 ### Parse as hard error
 
 ```rust,no_run
-use edi_energy::{parse, into_error_result};
+use edi_energy::parse;
 
 let msg = parse(&bytes)?;
-into_error_result(msg.validate()?)?;  // returns Err if any validation error
+msg.validate()?.into_error_result()?;  // returns Err if any validation error
 ```
 
 ### Interchange stream (multiple messages)
@@ -99,18 +99,23 @@ for result in parse_interchange(reader) {
 
 ```rust,no_run
 use edi_energy::builders::UtilmdBuilder;
-use edi_energy::FormatVersion;
+use edi_energy::{Pruefidentifikator, ObjectType};
 
-let fv  = FormatVersion::parse("FV2025-10-01")?;
-let edi = UtilmdBuilder::new(fv)
-    .sender("9900357000004", "500")
-    .receiver("9904320000009", "500")
-    .pruefidentifikator(55001)
-    .marktlokation("51238696782")
-    .lieferbeginn("20251001")
-    .build()?;
+// S2.1 is the current UTILMD Strom format (fv20251001).
+let release = edi_energy::releases::utilmd_fv20251001().clone();
+let bytes = UtilmdBuilder::new(release)
+    .pruefidentifikator(Pruefidentifikator::new(55001)?)
+    .sender("4012345000023")
+    .receiver("9900357000004")
+    .document_date("20251001")
+    .document_code("E01")
+    .transaction(ObjectType::Marktlokation, "51238696782")
+    .process_date("163", "20251001") // Lieferbeginn
+    .done()
+    .build()?
+    .serialize()?;
 
-println!("{edi}");
+println!("{}", String::from_utf8_lossy(&bytes));
 ```
 
 See [`docs/builders.md`] for the full builder API and all message types.
@@ -143,7 +148,7 @@ To enable a minimal build for a single message type:
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.11", default-features = false, features = ["utilmd", "serde"] }
+edi-energy = { version = "0.14", default-features = false, features = ["utilmd", "serde"] }
 ```
 
 ## Multi-Tenant and Test Isolation

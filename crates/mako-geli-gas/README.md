@@ -70,9 +70,8 @@ families. Saturdays, Sundays and public holidays are not Werktage.
 
 > **PIDs 44002–44006, 44017–44018** are registered under
 > `geli-gas-supplier-change` and share the same `GeliGasSupplierChangeWorkflow`
-> as PID 44001. The state machine currently handles all registered PIDs via
-> the same transition logic; separate state machines for Lieferende and
-> Kündigung are planned but not yet implemented.
+> as PID 44001. The state machine handles all registered PIDs via the same
+> transition logic.
 >
 > **ORDERS PIDs 17003, 17101** are Gas-specific Stammdaten and
 > Zählpunktverwaltung Gas processes defined in ORDERS AHB 1.4b. None are

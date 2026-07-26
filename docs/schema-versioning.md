@@ -3,6 +3,7 @@ layout: default
 title: Schema Versioning
 nav_order: 10
 parent: Release & Compliance
+mermaid: true
 description: >
   Profile JSON schema versioning policy: additive changes, breaking changes,
   MIN_SCHEMA_VERSION / MAX_SCHEMA_VERSION, and the codegen compatibility matrix.
@@ -74,8 +75,22 @@ Profiles have an optional `valid_until` date (ISO 8601, e.g. `"2026-09-30"`).
 Once the BDEW transition grace period has elapsed, the profile should no longer
 be compiled by default.
 
+A profile moves through three compilation states over its lifetime:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Active : profile registered
+    Active --> Expired : valid_until date passes
+    Expired --> Archived : cargo xtask codegen --prune-expired<br/>(valid_until + grace_days elapsed, default 90 days)
+```
+
+- **Active** — compiled under the plain feature (e.g. `mscons`).
+- **Expired** — past `valid_until` but still compiled; `archived` is not yet set.
+- **Archived** — `archived: true` in `mig.json`; now gated behind the
+  `{type}-archive` / `archive` feature instead of the plain feature.
+
 The `archived` boolean field in `mig.json` is the explicit, deterministic marker
-for this.  It is set by `cargo xtask codegen --prune-expired`:
+for the final transition.  It is set by `cargo xtask codegen --prune-expired`:
 
 ```
 cargo xtask codegen --prune-expired [--grace-days N]
@@ -133,19 +148,14 @@ See `crates/edi-energy/Cargo.toml` for the full feature list.
 
 ---
 
-## Schema version history
+## Schema version
 
-| Version | Introduced | Field(s) added / changed | Codegen support |
-|---------|-----------|--------------------------|-----------------|
-| **1** | Initial release | All base fields: `release`, `valid_from`, `valid_until`, `archived`, `segments`, `pruefidentifikatoren`, `conditional_rules`, `segment_rules`, `group_rules` | `MIN_SCHEMA_VERSION = 1`, `MAX_SCHEMA_VERSION = 1` |
+Every generated profile JSON carries a `schema_version` so the codegen can reject a
+profile written for an incompatible shape. The current schema is **version 1**, which
+defines the base fields `release`, `valid_from`, `valid_until`, `archived`, `segments`,
+`pruefidentifikatoren`, `conditional_rules`, `segment_rules`, and `group_rules`.
 
-### Contributing a schema version bump
-
-When bumping `MAX_SCHEMA_VERSION` to support a new breaking field or removing
-backward-compat handling for an old version, add a row to this table in the same
-commit.  The `MAX_SCHEMA_VERSION` constant lives in `xtask/src/codegen.rs`
-inside `discover_profiles()`.
-
-Document the new field in the commit message and PR description so there is a
-clear audit trail of what each version boundary means.
+The accepted range is bounded by `MIN_SCHEMA_VERSION` and `MAX_SCHEMA_VERSION`
+(both `1`) in `discover_profiles()` (`xtask/src/codegen.rs`); a profile outside that
+range fails codegen rather than being silently misread.
 

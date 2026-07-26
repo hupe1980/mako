@@ -212,7 +212,13 @@ pub async fn put_steuerbare_ressource(
     // Validate data against rubo4e::current::SteuerbareRessource (N1).
     // An empty object `{}` is valid — all fields are optional.
     // A wrong `_typ` (e.g. "MARKTLOKATION") is rejected with 422.
-    if let Err(e) = serde_json::from_value::<SteuerbareRessource>(req.data.clone()) {
+    if let Err(e) = serde_json::from_value::<SteuerbareRessource>(req.data.clone())
+        .map_err(|e| e.to_string())
+        .and_then(|bo| {
+            rubo4e::Bo4eStrict::ensure_known_enums(&bo)
+                .map_err(|e| format!("out-of-schema enum values: {e}"))
+        })
+    {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(serde_json::json!({ "error": format!("invalid SteuerbareRessource: {e}") })),
@@ -908,9 +914,12 @@ pub async fn get_geraet_konfigurationen(
 ///
 /// ### SMGW certificate expiry monitoring
 ///
-/// Setting `SmgwCertAblaufdatum` triggers the `edmd` certificate-expiry background
-/// worker to start monitoring.  When the expiry date is ≤ 30 days away, `edmd`
-/// emits `de.messwert.cls.compliance_issue`.
+/// `SmgwCertAblaufdatum` (`SMGW_CERT_ABLAUFDATUM`) is the certificate expiry date.
+/// `edmd`'s daily certificate-expiry worker sweeps every gateway certificate and
+/// emits a tiered `de.messwert.smgw.cert.expiry_warning` at **90 / 30 / 7 days**
+/// before expiry (BSI TR-03109-4 §6.3), once per tier per certificate — an expired
+/// cert silently ends §14a Fernsteuerbarkeit. The `agentd` `smgw-diagnostics-agent`
+/// consumes the warning and escalates renewal to the MSB.
 pub async fn put_geraet_konfigurationen(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1090,6 +1099,16 @@ pub async fn put_technische_ressource(
                 .into_response();
         }
     };
+    // Strict enum gate — reject out-of-schema enum values anywhere in the tree.
+    if let Err(e) = rubo4e::Bo4eStrict::ensure_known_enums(&typed_tr) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!("TechnischeRessource has out-of-schema enum values: {e}")
+            })),
+        )
+            .into_response();
+    }
     // Prefer the explicit request fields; fall back to what the BO4E payload declares.
     let ist_fernschaltbar = req.ist_fernschaltbar.or(typed_tr.ist_fernschaltbar);
     let nutzung = req

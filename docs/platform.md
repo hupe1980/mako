@@ -25,7 +25,7 @@ The top-level `parse()` and `parse_interchange()` functions use `ReleaseRegistry
 | **Test isolation** | Concurrent tests that register custom profiles interfere with each other | Each test gets its own `Platform` |
 | **Multi-tenant gateways** | Strom and Gas tenants need different profile subsets | One `Platform` per tenant |
 | **Hot-reload** | New BDEW release requires a process restart | Swap `Arc<Platform>` at runtime |
-| **Custom DoS limits** | Global defaults may be too generous or too strict | `Platform::with_config(config)` |
+| **Custom DoS limits** | Global defaults may be too generous or too strict | `platform.parse_with_config(bytes, config)` |
 
 ---
 
@@ -46,46 +46,88 @@ let report = msg.validate()?;
 
 ## Custom Profile Subset
 
-To reduce binary size or memory at runtime, register only the profiles you need:
+`Platform::with_all_profiles()` is the supported way to obtain a platform backed
+by the crate's built-in profiles. Each call builds a fresh, independent
+`ReleaseRegistry`:
 
 ```rust
-use edi_energy::{
-    Platform,
-    registry::{ReleaseRegistry, Profile},
-};
+use edi_energy::Platform;
 
-// Use only UTILMD Strom and MSCONS
-let mut registry = ReleaseRegistry::new();
-registry.register(edi_energy::profiles::utilmd_fv20261001_strom());
-registry.register(edi_energy::profiles::mscons_fv20261001());
-
-let platform = Platform::with_registry(registry);
+let platform = Platform::with_all_profiles();
 let msg = platform.parse(bytes)?;
+```
+
+There is **no public API to build a registry containing an arbitrary subset of
+the built-in profiles at runtime**. The generated per-profile statics and the
+profile-registration entry point are crate-private and are not re-exported. The
+`edi_energy::releases` module exposes `&'static Release` *identifiers* (e.g.
+`edi_energy::releases::mscons_fv20261001()` returns a `&'static Release`), not
+`Profile` objects, so they cannot be handed to a registry constructor.
+
+To trim which built-in profiles are compiled in, use the crate's per-message-type
+**Cargo features** (`utilmd`, `mscons`, `aperak`, `invoic`, …). A profile that is
+not enabled at build time is simply absent from `with_all_profiles()`.
+
+The one runtime constructor for a custom registry is
+`ReleaseRegistry::new(Vec<&'static dyn Profile>)` combined with
+`Platform::new(registry)`. This path is intended for callers that supply **their
+own** `Profile` implementations — for example, hand-written profiles for classic
+5.5.x archive releases that the crate does not bundle:
+
+```rust
+use edi_energy::{Platform, registry::{Profile, ReleaseRegistry}};
+
+// `my_profiles::register` pushes your own `&'static dyn Profile` implementations.
+let mut profiles: Vec<&'static dyn Profile> = Vec::new();
+my_profiles::register(&mut profiles);
+
+let platform = Platform::new(ReleaseRegistry::new(profiles));
+let msg = platform.parse(bytes)?;
+```
+
+You can also override the transition grace period on any platform:
+
+```rust
+use edi_energy::Platform;
+
+// BDEW default is 7 days; widen it to 14 for a specific tenant or test scenario.
+let platform = Platform::with_all_profiles().with_transition_grace_days(14);
 ```
 
 ---
 
 ## Custom ParseConfig
 
-Override DoS limits per platform:
+`Platform` does not store a `ParseConfig`. Instead, pass a config per call via
+`parse_with_config`. `ParseConfig` exposes its DoS limits as public fields, so
+build one from `ParseConfig::default()` with struct-update syntax:
 
 ```rust
 use edi_energy::{Platform, ParseConfig};
 
-let config = ParseConfig::new()
-    .with_max_input_bytes(512_000)   // 512 KB
-    .with_max_segments(1_000);
+let config = ParseConfig {
+    max_input_bytes: Some(512_000), // 512 KB
+    max_segments: Some(1_000),
+    ..ParseConfig::default()
+};
 
-let platform = Platform::with_config(config);
+let platform = Platform::with_all_profiles();
+let msg = platform.parse_with_config(bytes, config)?;
 ```
 
-Or combine custom registry and config:
+The interchange API takes a config the same way via
+`Platform::parse_interchange_with_config(reader, config)`.
+
+The only builder-style method on `ParseConfig` is `with_reference_date`, which
+pins the date used for profile validity lookups during validation (useful for
+deterministic tests):
 
 ```rust
-let platform = Platform::builder()
-    .registry(registry)
-    .config(config)
-    .build();
+use edi_energy::ParseConfig;
+
+let config = ParseConfig::default().with_reference_date(
+    time::Date::from_calendar_date(2026, time::Month::January, 1).unwrap(),
+);
 ```
 
 ---

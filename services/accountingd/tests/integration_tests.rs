@@ -199,6 +199,7 @@ fn test_pain008_frst_rcur_separation() {
         "DE98ZZZ09999999999",
         Date::from_calendar_date(2026, time::Month::July, 25).unwrap(),
         &entries,
+        Default::default(),
     )
     .expect("build_pain_008 should succeed");
 
@@ -237,6 +238,7 @@ fn test_pain008_empty_run_is_an_error() {
         "DE98ZZZ09999999999",
         Date::from_calendar_date(2026, time::Month::July, 25).unwrap(),
         &[],
+        Default::default(),
     );
     assert!(result.is_err(), "no entries → error, not an empty message");
 }
@@ -251,6 +253,7 @@ fn test_pain008_invalid_creditor_iban_fails() {
         "DE98ZZZ09999999999",
         time::Date::from_calendar_date(2026, time::Month::July, 25).unwrap(),
         &[],
+        Default::default(),
     );
     assert!(
         result.is_err(),
@@ -274,6 +277,7 @@ fn test_pain008_creditor_id_validated() {
         "INVALID-CI",
         time::Date::from_calendar_date(2026, time::Month::July, 25).unwrap(),
         &[],
+        Default::default(),
     );
     assert!(result.is_err(), "invalid creditor_id must return an error");
 
@@ -287,6 +291,82 @@ fn test_pain008_creditor_id_validated() {
     assert!(
         accountingd::sepa::validate_creditor_id("DE74ZZZ09999999999").is_err(),
         "wrong check digits must be rejected"
+    );
+}
+
+// ── FR-1: config-selectable pain.008 / pain.001 schema version ────────────────
+
+#[test]
+fn test_schema_version_resolves_from_config() {
+    use accountingd::sepa::{resolve_pain001_schema, resolve_pain008_schema};
+
+    // Absent config → the current SEPA defaults.
+    assert_eq!(
+        resolve_pain008_schema(None).unwrap().to_string(),
+        "pain.008.001.08"
+    );
+    assert_eq!(
+        resolve_pain001_schema(None).unwrap().to_string(),
+        "pain.001.001.09"
+    );
+
+    // A bank still on the pre-2023 EPC version can be targeted from config.
+    assert_eq!(
+        resolve_pain008_schema(Some("pain.008.001.02"))
+            .unwrap()
+            .to_string(),
+        "pain.008.001.02"
+    );
+    assert_eq!(
+        resolve_pain001_schema(Some("pain.001.001.03"))
+            .unwrap()
+            .to_string(),
+        "pain.001.001.03"
+    );
+
+    // An unknown value is a hard error naming the offending string.
+    let err = resolve_pain008_schema(Some("pain.008.001.99")).unwrap_err();
+    assert!(err.to_string().contains("pain.008.001.99"));
+    assert!(resolve_pain001_schema(Some("garbage")).is_err());
+}
+
+#[test]
+fn test_pain008_emits_configured_namespace() {
+    use accountingd::pg::SepaMandateRow;
+    use accountingd::sepa::{build_pain_008, resolve_pain008_schema};
+    use time::Date;
+    use uuid::Uuid;
+
+    let mandate = SepaMandateRow {
+        mandate_id: Uuid::new_v4(),
+        account_id: Uuid::new_v4(),
+        tenant: "test".into(),
+        iban: "DE89370400440532013000".into(),
+        bic: None,
+        kontoinhaber: Some("Test Kunde".into()),
+        mandatsref: "REF-SCHEMA-01".into(),
+        sequence_type: "RCUR".into(),
+        signed_at: Date::from_calendar_date(2024, time::Month::January, 1).unwrap(),
+        revoked_at: None,
+        updated_at: time::OffsetDateTime::now_utc(),
+    };
+    let entries = [(&mandate, 5000i64)];
+
+    let schema = resolve_pain008_schema(Some("pain.008.001.02")).unwrap();
+    let run = build_pain_008(
+        "DE89370400440532013000",
+        "Test Energie GmbH",
+        "DE98ZZZ09999999999",
+        Date::from_calendar_date(2026, time::Month::July, 25).unwrap(),
+        &entries,
+        schema,
+    )
+    .expect("build_pain_008 should succeed");
+
+    assert!(
+        run.xml
+            .contains("urn:iso:std:iso:20022:tech:xsd:pain.008.001.02"),
+        "the configured schema version must appear in the emitted namespace"
     );
 }
 

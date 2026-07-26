@@ -352,8 +352,7 @@ fn amount_ct(ct_str: &str) -> Amount<5> {
 /// The parameter to `rate_for()` is the installed capacity in **kW_el**.
 /// Rates are defined in §40 EEG 2023 / §40 EEG 2021 / §29 EEG 2017.
 ///
-/// Hydro rates have not changed between EEG 2017–2023 because new hydro capacity
-/// is minimal and political pressure to adjust these rates is low.
+/// Hydro rates are unchanged across EEG 2017–2023.
 ///
 /// **Note**: Plants > 500 kW require Ausschreibung per §22 Abs. 3 Nr. 3 EEG 2023.
 /// For tendered plants, use `TariffSource::Auction` with the BNetzA awarded value.

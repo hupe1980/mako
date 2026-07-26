@@ -785,6 +785,30 @@ CREATE INDEX ccl_open_critical  ON cls_compliance_log (tenant, issue_type, detec
     WHERE severity = 'CRITICAL';
 CREATE INDEX ccl_issue_type     ON cls_compliance_log (issue_type, detected_at DESC);
 
+-- ── SMGW certificate expiry alert dedup ──────────────────────────────────────
+-- One row per (certificate, threshold tier) so each 90/30/7-day tier emits
+-- exactly once as the cert ages (BSI TR-03109-4 §6.3). `valid_to` is part of the
+-- key so a renewed certificate (new expiry date) gets a fresh set of alerts.
+-- `emitted = false` records a tier that was passed silently because a more urgent
+-- tier fired in the same sweep (e.g. a cert first seen already inside 7 days).
+CREATE TABLE smgw_cert_expiry_alerts (
+    tenant          TEXT        NOT NULL,
+    device_id       TEXT        NOT NULL,
+    cert_serial     TEXT        NOT NULL,
+    cert_type       TEXT        NOT NULL,   -- 'TLS', 'SIG', 'ENC', 'KEY_AGREEMENT'
+    valid_to        DATE        NOT NULL,   -- SMGW_CERT_ABLAUFDATUM
+    threshold_days  SMALLINT    NOT NULL CHECK (threshold_days IN (90, 30, 7)),
+    days_to_expiry  INTEGER     NOT NULL,   -- days remaining when this tier was reached
+    severity        TEXT        NOT NULL CHECK (severity IN ('CRITICAL','WARNING','INFO')),
+    emitted         BOOLEAN     NOT NULL DEFAULT true,
+    malo_id         TEXT        NOT NULL,
+    cloud_event_id  TEXT,
+    alerted_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, device_id, cert_serial, valid_to, threshold_days)
+);
+CREATE INDEX scea_tenant_recent ON smgw_cert_expiry_alerts (tenant, alerted_at DESC);
+CREATE INDEX scea_device        ON smgw_cert_expiry_alerts (tenant, device_id, valid_to);
+
 -- `meter_reads` is range-partitioned monthly by core PostgreSQL (see the
 -- `ensure_meter_reads_partitions` function above). TimescaleDB's
 -- `create_hypertable` is not applicable to an already-partitioned table, and

@@ -47,7 +47,7 @@ graph TB
         obsd[":8480 obsd\nprocess projections · KPI\n§20 EnWG parity report"]
         nis[":9680 nis-syncd\nNIS/GIS grid topology sync\nstateless · lifts STP to ≥95%"]
         mabis[":8880 mabis-syncd\nMaBiS Summenzeitreihe\nMSCONS 13003 · 10. Werktag"]
-        einsd[":9180 einsd\nEEG/KWKG settlement\n10 schemes · 339 tests"]
+        einsd[":9180 einsd\nEEG/KWKG settlement\n10 schemes · §14 UStG Gutschrift"]
     end
 
     subgraph lf_billing ["Retail Billing (LF)"]
@@ -98,7 +98,7 @@ graph TB
 |---|---|---|---|
 | [edmd](./edmd) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest, Hampel quality scoring, V01–V10 validation, virtual meters (§42b GGV), § 60 Abs. 2 MsbG Jahresprognose forecasting, Resampling, Ablesesteuerung (INSRPT auto-order), Iceberg/S3 OLAP; Cedar write actions role-gated (MSB/NB/admin); 15-tool MCP server |
 | [mabis-syncd](./mabis-syncd) | `:8880` | ÜNB/NB | MaBiS synchronisation — aggregates quarter-hourly Lastgang per Bilanzierungsgebiet via `SummenzeitreiheBuilder`, files with the BIKO as MSCONS 13003 on the 10. Werktag; records the BIKO-assigned Datenstatus and open Korrekturbedarf |
-| [einsd](./einsd) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes |
+| [einsd](./einsd) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes; issues the **§14 UStG Gutschrift** (Gutschriftverfahren) per billable settlement as a BO4E `Rechnung` with per-rate USt breakdown; 18-tool MCP server |
 | [obsd](./obsd) | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, automated deadline computation (GPKE 24h/WiM 5WT/GeLi Gas 10WT), `completed_at` cycle-time tracking, `GET /api/v1/audit/bnetza-report`, 6-tool MCP server |
 | [nis-syncd](./nis-syncd) | `:9680` | NB | NIS/GIS grid topology import — concurrent `tokio::task::JoinSet` sync, drift CloudEvents, `check_malo_grid` MCP tool, lifts Anmeldung STP ~80% → ≥95% (stateless) |
 
@@ -108,7 +108,7 @@ graph TB
 |---|---|---|---|
 | [tarifbd](./tarifbd) | `:9080` | LF | Product & Tariff Catalog — user-defined energy products, EPEX Spot for §41a, B2B Angebote/quotations |
 | [billingd](./billingd) | `:9280` | LF | Energy Billing Engine — 13 categories, §41a dynamic, §42a GGV community solar, XRechnung 3.0 / ZUGFeRD 2.3 |
-| [accountingd](./accountingd) | `:9380` | LF | Customer Account Ledger — double-entry SKR 03/04; aging analysis; Verzugszinsen §288 BGB; Zahlungsvereinbarung; SEPA pain.008 (FRST/RCUR separated, Gläubiger-ID EPC AT-02); CAMT.054 dedup; IBAN hash (pgcrypto); OIDC/JWT + inbound HMAC; auto-dunning; GDPR Art. 17; **87 tests** |
+| [accountingd](./accountingd) | `:9380` | LF | Customer Account Ledger — double-entry SKR 03/04; aging analysis; Verzugszinsen §288 BGB; Zahlungsvereinbarung; SEPA pain.008 (FRST/RCUR separated, Gläubiger-ID EPC AT-02); CAMT.054 dedup; IBAN hash (pgcrypto); OIDC/JWT + inbound HMAC; auto-dunning; GDPR Art. 17; **97 tests** |
 
 ## B2C & AI
 

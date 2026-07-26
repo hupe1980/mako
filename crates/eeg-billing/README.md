@@ -7,7 +7,7 @@ the Einspeiser Registry daemon. It covers the full EEG legal framework from EEG 
 EEG 2023 (Solarpaket I) and KWKG 2023, with all version-specific rule variants enforced
 automatically based on the plant's `EegGesetz` year.
 
-**339 tests** · zero I/O · zero async · zero `unsafe` · no float money (`rust_decimal`) ·
+**341 tests** · zero I/O · zero async · zero `unsafe` · no float money (`rust_decimal`) ·
 MSRV 1.94
 
 ---
@@ -67,7 +67,7 @@ receives the already-resolved AW from the caller.
 | `FeedInTariff` | §21 EEG | `kwh × verguetungssatz_ct / 100` |
 | `MarketPremium` | §20 EEG | `max(0, (AW + Mgmt) − EPEX) × kwh / 100` (see §20 Abs. 3) |
 | `TenantElectricity` | §21 Abs. 3 EEG 2023 | `kwh × (verguetung + zuschlag) / 100` |
-| `PostEeg` | post-20yr | `kwh × EPEX / 100` (configurable `post_eeg_price_floor`) |
+| `PostEeg` | post-20yr | `kwh × EPEX / 100` (configurable `price_floor` on the variant) |
 | `KwkSurcharge` | §7 KWKG 2023 | `eligible_kwh × rate / 100` (hour-limit cap) |
 | `TemporaryFeedInTariff` | §21 Abs. 1 Nr. 2 | Ausfallvergütung (temporary feed-in when Direktvermarkter fails) |
 | `Eigenverbrauch` | §21 Abs. 3 EEG | No EEG feed-in remuneration is calculated. |
@@ -124,10 +124,25 @@ eeg-billing/src/
 ├── wind.rs              §36k Korrekturfaktor, WindStandort, Gütegrad/Standortklasse
 ├── biomasse.rs          §43/§44 fuel classes, Güllekleinanlage (≤75 kW, ≥80% Gülle)
 │
-├── tariff.rs            billing::Tariff adapter — EegSettleTariff, VAT variants
+├── tariff.rs            billing::ScalarTariff adapter — EegSettleTariff, VAT variants
 ├── bridge.rs            settlement_to_line_items() → billing::LineItem
+├── gutschrift.rs        §14 UStG Gutschrift → rubo4e::current::Rechnung (feature `bo4e`)
 └── ust.rs               §12 Abs. 3 UStG, §19 UStG Kleinunternehmer
 ```
+
+### §14 UStG Gutschrift (feature `bo4e`)
+
+EEG feed-in is settled under the **Gutschriftverfahren** (§14 Abs. 2 Satz 2 UStG):
+the Netzbetreiber *issues* the settlement document to the Anlagenbetreiber. The
+settlement *amount* alone is not that document — VAT law requires a Gutschrift with
+the per-rate breakdown (EN 16931 BG-23).
+
+`gutschrift::settlement_to_gutschrift(output, vat, meta)` produces it as a BO4E
+`rubo4e::current::Rechnung`: it assembles a `billing::BillingDocument` (positions +
+the VAT layers for the operator's tax status — Regelbesteuerung 19 % / §12 Abs. 3
+zero-rated / §19 exempt) and renders it. The `billing` crate does the money and VAT
+(shared with `energy-billing`/`grid-billing`); the BO4E rendering lives here — the
+same per-crate `bo4e` pattern those crates follow, with **no shared bridge crate**.
 
 ---
 
@@ -510,7 +525,7 @@ Source: EEG 2023 Clearingstelle EEG|KWKG working text (23.12.2025). Cite as: *Cl
 
 ```bash
 cargo test -p eeg-billing --all-features
-# 89 lib + 12 integration + 173 regulatory showcase + 65 doctests = 339 total
+# 91 lib + 12 integration + 173 regulatory showcase + 65 doctests = 341 total
 ```
 
 The regulatory showcase (`tests/regulatory_showcase.rs`) is executable documentation

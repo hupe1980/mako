@@ -131,7 +131,7 @@ All nine document types are CIM/IEC 62325-based XML — **not** EDIFACT. The
 |---|---|---|---|
 | `ActivationDocument` | 1.1f | ÜNB → VNB → ANB | `redispatch-aktivierung` |
 | `PlannedResourceScheduleDocument` | 1.0f | ÜNB → VNB → ANB | `redispatch-planungsdaten` |
-| `AcknowledgementDocument` | 1.0f | any → sender of referenced doc | correlation routing (ProcessRegistry) |
+| `AcknowledgementDocument` | 1.0g | any → sender of referenced doc | correlation routing (ProcessRegistry) |
 | `Stammdaten` (master data) | 1.4b | ANB → VNB → ÜNB | `redispatch-stammdaten` |
 | `StatusRequest_MarketDocument` | 1.1 | bidirectional | `redispatch-statusanfrage` |
 | `Unavailability_MarketDocument` | 1.1b | ANB → VNB | `redispatch-verfuegbarkeit` |

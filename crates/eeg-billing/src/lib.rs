@@ -87,6 +87,8 @@ mod error;
 pub mod foerderdauer;
 pub mod foerderungsende;
 mod formula;
+#[cfg(feature = "bo4e")]
+pub mod gutschrift;
 pub mod metering;
 mod model;
 pub mod rates;

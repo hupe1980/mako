@@ -1647,7 +1647,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             contrl_ack: Some(Arc::new(contrl_ack::ContrlAckService::new(
                 Arc::new(store.clone()),
                 mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
-                mp_id_registry.primary_mp_id().to_owned(),
+                Arc::clone(&mp_id_registry),
             ))),
         });
         let admin_state = Arc::new(malo_admin_api::MaloAdminState {
@@ -1867,14 +1867,14 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             contrl_ack: Some(Arc::new(contrl_ack::ContrlAckService::new(
                 Arc::new(store.clone()),
                 mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
-                mp_id_registry.primary_mp_id().to_owned(),
+                Arc::clone(&mp_id_registry),
             ))),
         });
 
         let contrl_svc = Arc::new(contrl_ack::ContrlAckService::new(
             Arc::new(store.clone()),
             mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
-            mp_id_registry.primary_mp_id().to_owned(),
+            Arc::clone(&mp_id_registry),
         ));
         let handler = Arc::new(
             as4_ingest::BdewAs4IngestHandler::new(

@@ -19,8 +19,9 @@ This guide covers all available entry points for reading EDIFACT data.
 | Function | Use case |
 |---|---|
 | `parse(bytes)` | Single message from an in-memory byte slice |
-| `parse_with_config(bytes, config)` | Single message with custom DoS limits |
+| `Parser::with_config(config).parse(bytes)` | Single message with custom DoS limits |
 | `parse_interchange(reader)` | Lazy iterator over a multi-message interchange |
+| `Parser::with_config(config).parse_interchange_buffered(reader)` | Buffered interchange with eager UNB header |
 | `Platform::parse(bytes)` | Single message via an explicit platform instance |
 | `Platform::parse_interchange(reader)` | Interchange via explicit platform |
 
@@ -55,20 +56,26 @@ println!("pid:  {}", msg.detect_pruefidentifikator()?.as_u32());
 
 ---
 
-## `parse_with_config` — Custom DoS Limits
+## `Parser::with_config` — Custom DoS Limits
 
 The default `ParseConfig` is generous but bounded.
-Override limits for resource-constrained environments:
+Build a `Parser` with a custom config to override limits for
+resource-constrained environments:
+
+The fields are public; construct a config with a struct literal, filling the
+rest from `ParseConfig::default()`:
 
 ```rust
-use edi_energy::{parse_with_config, ParseConfig};
+use edi_energy::{Parser, ParseConfig};
 
-let config = ParseConfig::new()
-    .with_max_input_bytes(1_048_576)   // 1 MB hard cap
-    .with_max_segments(2_000)          // 2 000 segments max
-    .with_max_segment_bytes(32_768);   // 32 KB per segment
+let config = ParseConfig {
+    max_input_bytes: Some(1_048_576),   // 1 MB hard cap
+    max_segments: Some(2_000),          // 2 000 segments max
+    max_segment_bytes: 32_768,          // 32 KB per segment
+    ..ParseConfig::default()
+};
 
-let msg = parse_with_config(bytes, config)?;
+let msg = Parser::with_config(config).parse(bytes)?;
 ```
 
 ### Default limits
@@ -85,13 +92,13 @@ let msg = parse_with_config(bytes, config)?;
 For reproducible tests or backdate processing:
 
 ```rust
-use edi_energy::{parse_with_config, ParseConfig};
+use edi_energy::{Parser, ParseConfig};
 use time::Date;
 
-let config = ParseConfig::new()
+let config = ParseConfig::default()
     .with_reference_date(Date::from_calendar_date(2025, time::Month::January, 1)?);
 
-let msg = parse_with_config(bytes, config)?;
+let msg = Parser::with_config(config).parse(bytes)?;
 // validate() will use 2025-01-01 as "today" for release transition checks
 ```
 
@@ -118,16 +125,21 @@ for result in parse_interchange(reader) {
 }
 ```
 
-### Buffered iterator (`InterchangeFullBufferedIter`)
+### Buffered iterator (`Parser::parse_interchange_buffered`)
 
-If you need to collect all messages before processing (e.g. for transactional commit semantics), use the buffered variant:
+When you need the UNB interchange header up front (e.g. to route by sender/recipient
+before touching the payload), use the buffered variant on `Parser`. It returns the
+`InterchangeHeader` eagerly plus an `InterchangeIter` that yields one
+`MessageEnvelope` at a time:
 
 ```rust
 use std::io::Cursor;
-use edi_energy::{parse_interchange_buffered};
+use edi_energy::Parser;
 
-let reader = Cursor::new(bytes);
-let messages: Vec<_> = parse_interchange_buffered(reader)?.collect::<Result<_, _>>()?;
+let (header, iter) = Parser::new().parse_interchange_buffered(Cursor::new(bytes))?;
+println!("interchange from {}", header.sender_id);
+
+let envelopes: Vec<_> = iter.collect::<Result<_, _>>()?;
 ```
 
 ---
@@ -147,7 +159,7 @@ match &msg {
     AnyMessage::Aperak(m)  => handle_aperak(m),
     AnyMessage::Contrl(m)  => handle_contrl(m),
     AnyMessage::Invoic(m)  => handle_invoic(m),   // requires `invoic` feature
-    AnyMessage::Unknown { message_type_code, raw_segments } => {
+    AnyMessage::Unknown { message_type_code, .. } => {
         eprintln!("Unrecognised message type: {message_type_code}");
     }
     _ => {}

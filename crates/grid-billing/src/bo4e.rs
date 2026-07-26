@@ -1,11 +1,8 @@
 //! BO4E bridge — renders an [`crate::InvoiceDocument`] as a
 //! `rubo4e::current::Rechnung`. Feature-gated behind `bo4e` so the core engine
 //! stays rubo4e-free: settlements are computed in pure domain types, and only
-//! consumers that store or dispatch a grid invoice (netzbilanzd, invoicd)
-//! enable the feature. This module owns the single conversion into BO4E.
-//! Both previously carried private copies that drifted apart — one dropped the
-//! `rechnungsnummer`, the other the settlement warnings. The unified version
-//! emits the union:
+//! consumers that store or dispatch a grid invoice (netzbilanzd, invoicd) enable
+//! the feature. The rendered Rechnung carries:
 //!
 //! - `rechnungsnummer`, `rechnungsdatum`, `faelligkeitsdatum` — document facts
 //! - per-position `mako:calculation_trace` ZusatzAttribut
@@ -23,7 +20,7 @@ use rubo4e::current::{
 /// domain logic and lives in `grid-billing`. This is only the lookup from its
 /// codelist name into the BO4E enum, which `rubo4e` derives via `strum`.
 ///
-/// **Important:** NNE Strom positions (PIDs 31001/31006) do NOT use classic
+/// **Important:** NNE Strom positions (PID 31002, NN-Rechnung) do NOT use classic
 /// Artikelnummern since BK6-20-160 — for those, `grid-billing` emits no codelist
 /// name and the `artikel_id` is populated from the `PreisblattNetznutzung` by
 /// the rendering service. Source: BDEW Codeliste Artikelnummern und Artikel-ID
@@ -47,70 +44,59 @@ pub fn kind_to_artikelnummer(
 pub fn into_rechnung(document: &InvoiceDocument) -> Rechnung {
     let invoice = &document.settlement;
 
-    let lz = Zeitraum {
-        startdatum: Some(invoice.period.from()),
-        enddatum: Some(invoice.period.to()),
-        ..Default::default()
-    };
+    // Typed builders (rubo4e `builder` feature): omitted fields default to `None`,
+    // and `setter(into)` accepts the value directly.
+    let lz = Zeitraum::builder()
+        .startdatum(invoice.period.from())
+        .enddatum(invoice.period.to())
+        .build();
 
     let positions: Vec<Rechnungsposition> = document
         .numbered_positions()
         .map(|(number, p)| {
             let einheit = match p.unit {
-                QuantityUnit::Kwh => Some(Mengeneinheit::Kwh),
-                QuantityUnit::Kw => Some(Mengeneinheit::Kw),
-                QuantityUnit::Kvarh => Some(Mengeneinheit::Kwh), // reactive energy — map to kWh bucket; ERP renders as kVARh
-                QuantityUnit::Kvar => Some(Mengeneinheit::Kw), // reactive power — map to kW bucket
-                QuantityUnit::Monat => Some(Mengeneinheit::Monat),
+                QuantityUnit::Kwh => Mengeneinheit::Kwh,
+                QuantityUnit::Kw => Mengeneinheit::Kw,
+                // Reactive energy/power keep their own units — BO4E v202607
+                // `Mengeneinheit` models them directly (KVARH/KVAR), so we no
+                // longer collapse them into the kWh/kW buckets and lose fidelity.
+                QuantityUnit::Kvarh => Mengeneinheit::Kvarh,
+                QuantityUnit::Kvar => Mengeneinheit::Kvar,
+                QuantityUnit::Monat => Mengeneinheit::Monat,
             };
-            Rechnungsposition {
-                positionsnummer: Some(i64::from(number)),
-                positionstext: Some(p.text.clone()),
-                artikelnummer: kind_to_artikelnummer(p.kind, invoice.settlement_type),
-                // Artikel-ID is resolved from the price sheet at rendering time;
-                // the settlement states what was charged, not how it is coded.
-                artikel_id: None,
-                lieferungszeitraum: Some(lz.clone()),
-                positions_menge: Some(Menge {
-                    wert: Some(p.quantity),
-                    einheit,
-                    ..Default::default()
-                }),
-                einzelpreis: Some(Preis {
-                    wert: Some(p.unit_price_eur.round_dp(6)),
-                    ..Default::default()
-                }),
-                gesamtpreis: Some(Betrag {
-                    wert: Some(p.net_eur.round_dp(5)),
-                    ..Default::default()
-                }),
+            Rechnungsposition::builder()
+                .positionsnummer(i64::from(number))
+                .positionstext(p.text.clone())
+                .artikelnummer(kind_to_artikelnummer(p.kind, invoice.settlement_type))
+                // Artikel-ID (omitted) is resolved from the price sheet at
+                // rendering time; the settlement states what was charged, not
+                // how it is coded.
+                .lieferungszeitraum(lz.clone())
+                .positions_menge(Menge::builder().wert(p.quantity).einheit(einheit).build())
+                .einzelpreis(Preis::builder().wert(p.unit_price_eur.round_dp(6)).build())
+                .gesamtpreis(Betrag::builder().wert(p.net_eur.round_dp(5)).build())
                 // The calculation trace travels with the position it explains.
                 // grid-billing computes why each amount is what it is — the
                 // inputs, the applied paragraphs, the tariff source — and that
                 // is the only record of it: the engine's output is dropped once
                 // this Rechnung is stored. §20 EnWG audits and LF disputes are
                 // answered from here.
-                zusatz_attribute: trace_attribute(p),
-                ..Default::default()
-            }
+                .zusatz_attribute(trace_attribute(p))
+                .build()
         })
         .collect();
 
-    Rechnung {
-        rechnungsnummer: Some(document.rechnungsnummer.clone()),
-        rechnungsdatum: Some(document.invoice_date),
-        faelligkeitsdatum: Some(document.due_date),
-        rechnungsperiode: Some(lz),
-        gesamtnetto: Some(Betrag {
-            wert: Some(invoice.total_eur),
-            ..Default::default()
-        }),
-        rechnungspositionen: Some(positions),
+    Rechnung::builder()
+        .rechnungsnummer(document.rechnungsnummer.clone())
+        .rechnungsdatum(document.invoice_date)
+        .faelligkeitsdatum(document.due_date)
+        .rechnungsperiode(lz)
+        .gesamtnetto(Betrag::builder().wert(invoice.total_eur).build())
+        .rechnungspositionen(positions)
         // Every paragraph the settlement rests on, deduplicated across
         // positions, plus any warnings the engine raised.
-        zusatz_attribute: Some(settlement_attributes(invoice)),
-        ..Default::default()
-    }
+        .zusatz_attribute(settlement_attributes(invoice))
+        .build()
 }
 
 /// Serialise a position's [`crate::CalculationTrace`] into a BO4E
@@ -118,8 +104,8 @@ pub fn into_rechnung(document: &InvoiceDocument) -> Rechnung {
 ///
 /// BO4E has no field for a calculation trace, and inventing one would break the
 /// schema — a `ZusatzAttribut` is the sanctioned place for data a standard does
-/// not model. Returns `None` when serialisation fails rather than losing the
-/// position: an unexplained amount is better than no amount.
+/// not model. Returns `None` when serialisation fails, so the position is still
+/// emitted without its trace rather than dropped.
 fn trace_attribute(p: &crate::SettlementPosition) -> Option<Vec<ZusatzAttribut>> {
     let trace = serde_json::to_value(&p.trace).ok()?;
     Some(vec![ZusatzAttribut {
@@ -162,7 +148,7 @@ mod tests {
     fn as_document(settlement: crate::SettlementResult) -> crate::InvoiceDocument {
         crate::InvoiceDocument {
             settlement,
-            pid: 31001,
+            pid: 31002,
             rechnungsnummer: "NNE-2026-001".to_owned(),
             correction_of: None,
             invoice_date: time::macros::date!(2026 - 02 - 15),
@@ -223,7 +209,6 @@ mod tests {
             .and_then(|a| a.wert.as_ref())
             .expect("mako:calculation_trace present");
 
-        // The fields an auditor actually needs, not just any blob.
         assert!(trace.get("explanation").is_some(), "{trace}");
         assert!(trace.get("legal_refs").is_some(), "{trace}");
         assert!(trace.get("input_quantity").is_some(), "{trace}");

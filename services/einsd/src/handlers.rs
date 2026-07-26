@@ -128,6 +128,12 @@ pub async fn emit_settlement_ce(
             "einspeisemenge_kwh": result.einspeisemenge_kwh,
             "settlement_eur": result.settlement_eur,
             "status": result.status,
+            // §14 UStG Gutschrift document facts — the settlement_eur is the net;
+            // downstream (accountingd) books the net credit but now references the
+            // issued document (number + USt + brutto), not just an amount.
+            "gutschrift_nummer": result.gutschrift_nummer,
+            "gutschrift_steuer_eur": result.gutschrift_steuer_eur,
+            "gutschrift_brutto_eur": result.gutschrift_brutto_eur,
             // Bank routing fields — enables accountingd SCT Inst auto-payout
             // without a secondary DB lookup. Absent for EIGENVERBRAUCH (no payout).
             "bank_iban": bank_iban,

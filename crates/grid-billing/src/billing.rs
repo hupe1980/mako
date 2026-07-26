@@ -193,9 +193,9 @@ pub(crate) fn warn_if_straddles_turnover(
     }
 }
 
-// ── NNE invoice (PID 31001 / 31005 / 31006) ──────────────────────────────────
+// ── NNE invoice (PID 31002 — NN-Rechnung, Strom + Gas) ───────────────────────
 
-/// Calculate a NNE settlement (PID 31001 Strom, 31005 Gas, 31006 selbstausstellt).
+/// Calculate a NNE settlement (PID 31002 NN-Rechnung, Strom and Gas).
 ///
 /// Returns a [`SettlementResult`] with full [`CalculationTrace`] per position
 /// and applicable [`LegalReference`]s. The service layer converts this to
@@ -906,9 +906,9 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
     Ok(result)
 }
 
-// ── MMM invoice (PID 31002) ───────────────────────────────────────────────────
+// ── MMM invoice (PID 31005) ───────────────────────────────────────────────────
 
-/// Calculate a Mehr-/Mindermengen settlement invoice (PID 31002, Strom and Gas).
+/// Calculate a Mehr-/Mindermengen settlement invoice (PID 31005, Strom and Gas).
 ///
 /// ## Legal references
 ///
@@ -1884,20 +1884,20 @@ mod tests {
     /// The Prüfidentifikator is a property of the document, not the settlement.
     ///
     /// It used to be a mutable field the caller patched after calculation —
-    /// netzbilanzd set 31005 for Gas and 31011 for AWH that way. It now lives on
-    /// `InvoiceDocument`, where routing information belongs.
+    /// netzbilanzd set the NN-Rechnung PID 31002 and 31011 for AWH that way. It
+    /// now lives on `InvoiceDocument`, where routing information belongs.
     #[test]
     fn the_pid_lives_on_the_document_not_the_settlement() {
         let settlement = settle_nne(&base_nne()).unwrap();
         let doc = InvoiceDocument {
             settlement,
-            pid: 31005,
+            pid: 31002,
             rechnungsnummer: "NNE-2025-001".to_owned(),
             correction_of: None,
             invoice_date: date!(2025 - 02 - 15),
             due_date: date!(2025 - 03 - 15),
         };
-        assert_eq!(doc.pid, 31005);
+        assert_eq!(doc.pid, 31002);
         // and numbering is assigned at rendering time
         let numbers: Vec<u32> = doc.numbered_positions().map(|(n, _)| n).collect();
         assert_eq!(numbers.first(), Some(&1));
@@ -2230,10 +2230,11 @@ mod tests {
 
     #[test]
     fn settlement_type_default_pids() {
-        assert_eq!(SettlementType::NneStrom.default_pid(), 31001);
-        assert_eq!(SettlementType::NneGas.default_pid(), 31005);
-        assert_eq!(SettlementType::NneSelbstausstellt.default_pid(), 31006);
-        assert_eq!(SettlementType::MmmStrom.default_pid(), 31002);
+        assert_eq!(SettlementType::NneStrom.default_pid(), 31002);
+        assert_eq!(SettlementType::NneGas.default_pid(), 31002);
+        assert_eq!(SettlementType::MmmStrom.default_pid(), 31005);
+        assert_eq!(SettlementType::MmmGas.default_pid(), 31005);
+        assert_eq!(SettlementType::MmmSelbstausstellt.default_pid(), 31006);
         assert_eq!(SettlementType::MsbRechnung.default_pid(), 31009);
         assert_eq!(SettlementType::GasAwhSperrung.default_pid(), 31011);
     }

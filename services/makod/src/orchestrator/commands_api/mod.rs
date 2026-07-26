@@ -197,7 +197,7 @@
 //! | `gpke.sperrung.stornieren` | `LF` | GPKE Stornierung Sperrauftrag (ORDCHG) | 39000 |
 //! | `gpke.sperrung.bestaetigen` | `NB` | NB meldet Ausführung → IFTSTA 21039 | 17115/17117 |
 //! | `gpke.sperrung.fehlgeschlagen` | `NB` | NB meldet Nichtausführung → IFTSTA 21039 | 17115/17117 |
-//! | `gpke.abrechnung.annehmen` | `NB` | GPKE Netznutzungsabrechnung | 31001/31002 |
+//! | `gpke.abrechnung.annehmen` | `NB` | GPKE Netznutzungsabrechnung | 31002 |
 //! | `gpke.abrechnung.ablehnen` | `NB` | GPKE Abrechnungsstreit | 31001/31002 |
 //! | `geli.lieferbeginn.anmelden` | `LFG` | GeLi Gas Lieferbeginn | 44001 |
 //! | `geli.lieferbeginn.bestaetigen` | `GNB` | GeLi Gas NB bestätigt | 44003/44004 |

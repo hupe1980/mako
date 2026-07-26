@@ -91,12 +91,12 @@ docker compose ps   # wait until all containers are Up
 Expected:
 
 ```
-NAME               IMAGE              STATUS         PORTS
-demo-postgres-1    postgres:17-alpine Up (healthy)   5432/tcp
-demo-webhook-1     python:3.12-alpine Up             0.0.0.0:8000->8000/tcp
-demo-marktd-1      marktd:dev         Up             0.0.0.0:8180->8180/tcp
-demo-processd-1    processd:dev       Up             0.0.0.0:8580->8580/tcp
-demo-makod-1       makod:dev          Up             0.0.0.0:8080->8080/tcp
+NAME                 IMAGE              STATUS         PORTS
+nb-stp-postgres-1    postgres:17-alpine Up (healthy)   5432/tcp
+nb-stp-webhook-1     python:3.12-alpine Up             0.0.0.0:8000->8000/tcp
+nb-stp-marktd-1      marktd:dev         Up             0.0.0.0:8180->8180/tcp
+nb-stp-processd-1    processd:dev       Up             0.0.0.0:8580->8580/tcp
+nb-stp-makod-1       makod:dev          Up             0.0.0.0:8080->8080/tcp
 ```
 
 `processd` self-registers its EventBus subscription with `marktd` on startup —
@@ -241,26 +241,8 @@ curl -X PUT http://localhost:8180/api/v1/preisblaetter/9900357000004 \
 ```bash
 docker compose down       # keep PostgreSQL volume
 docker compose down -v    # wipe all data (full reset)
-
-## Services in this demo
-
-- **`marktd`** `:8180` — Market Data Hub (MaLo/MeLo, contracts, VersorgungsStatus, PRICAT, subscriptions, konfigurationsprodukte typed API, MMMA monthly price import worker, ZeitvariablePreisposition validation)
-- **`processd`** `:8580` — NB STP auto-responder (validates Anmeldungen, dispatches bestaetigen/ablehnen) + LF E_0624 auto-response + MSB REQOTE auto-response from PreisblattMessung + §14a Steuerungsauftrag produktcode contract check
-- **`invoicd`** `:8280` — INVOIC plausibility-check daemon (LF role; auto-settles/disputes inbound invoices)
-- **`edmd`** `:8380` — Energy Data Management (MSCONS meter readings, iMSys direct push for §41a real-time billing, Hampel-filter quality scoring A/B/C/F, V01–V10 validation, virtual meters §42b GGV, § 60 Abs. 2 MsbG Jahresprognose forecasting, Resampling, Ablesesteuerung reading orders with INSRPT auto-scheduling, Lastgang/Zeitreihe export, billing period)
-- **`mabis-syncd`** `:8880` — MaBiS synchronisation (aggregates quarter-hourly Lastgang per Bilanzierungsgebiet via `SummenzeitreiheBuilder`, files with the BIKO as MSCONS 13003 on the 10. Werktag; records the BIKO-assigned Datenstatus and open Korrekturbedarf)
-- **`obsd`** `:8480` — Observability daemon (process projections, BNetzA KPIs)
-- **`netzbilanzd`** `:8680` — NNE/KA/MMM/MSB/AWH billing daemon (NB role; generates INVOIC 31001/31002/31005/31009/31011; §14a Modul 2 ToU; §42a GGV; REMADV lifecycle; Redispatch 2.0 Kostenblatt; 13-tool MCP server)
-- **`sperrd`** `:8780` — Sperrung execution tracking (NB role; IFTSTA 21039 auto-dispatch; `GET /stats` BK6-22-024 compliance snapshot with `overdue_pending` + `executed_missing_iftsta` counts; `PUT /cancel`; tenant isolation)
-- **`nis-syncd`** `:9680` — NIS/GIS grid topology import adapter (pushes malo_grid, drift CloudEvents)
-- **`einsd`** `:9180` — Einspeiser Registry + EEG/KWKG Settlement (9 settlement models: Vergütung, Mieterstromzuschlag §21 Abs. 3 EEG 2023, Direktvermarktung Marktprämie, Ausschreibung, Post-EEG Spot, Eigenverbrauch, KWKG-Zuschlag, Flexibilitätsprämie §50b, Flexibilitätszuschlag §50a; Repowering §22 EEG; Zusammenlegung §24; KWKG Förderdauer; CloudEvents `de.eeg.verguetung.berechnet` + `de.eeg.marktpraemie.berechnet`)
-- **`tarifbd`** `:9080` — Product & Tariff Catalog (user-defined energy products: STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE; all prices in `Tarifpreisblatt` JSONB; EPEX Spot for §41a)
-- **`billingd`** `:9280` — Energy Billing Engine (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG — all prices user-defined; §41a dynamic 15-min Lastgang × EPEX; `POST /preview` dry-run; Gas Brennwertkorrektur with H2-blend `gasqualitaet` audit annotation; `GET /{id}/xrechnung` XRechnung 3.0)
-- **`accountingd`** `:9380` — Customer Account Ledger (running debit/credit ledger; CAMT.054 bank statement import; SEPA pain.008 XML with N−5 scheduler; Vorauszahlung BO4E typed; IBAN mod-97 validation; Mahnwesen Mahnstufe 1–3; Sperrauftrag trigger)
-- **`portald`** `:9480` — Customer Portal read-model gateway (aggregates edmd + billingd + accountingd + marktd + einsd; `GET /portal/{malo_id}/dashboard`; `GET /kontoauszug` + `GET /vorauszahlung`; §41 EnWG self-service write API: Tarifwechsel, Kündigung, SEPA; `GET /invoices/{id}/download` XRechnung 3.0; SSE `/events` stream; 8-tool MCP server)
-- **`vertragd`** `:9780` — Contract & Customer Management (B2C + B2B Kunden with `kunden_identitaeten` N-login portal access; Rahmenverträge for B2B portfolio contracts; Versorgungsverträge per site/commodity; Tarifwechsel §41 EnWG with Preisgarantie guard + typed BO4E `Preisgarantie` resource; Person BO4E (GDPR Art. 15); Zahlungsinformation IBAN/SEPA; **GDPR Art. 17 anonymize** endpoint with immutable `anonymization_log`; Kündigung with Schlussablesung; 9-tool MCP server; OIDC→MaLo auth gateway for portald)
-- **`agentd`** `:9580` — Multi-agent LLM orchestration daemon (Orchestrator + Specialist Mesh with **29 bundled specialists** compiled into the container image: billing anomaly AI, §20 EnWG compliance patrol, payment reconciliation, MSB device history RAG, grid anomaly detection, EEG Förderungsende lifecycle, NNE billing compliance, Sperrung BK6-22-024 compliance, NIS/GIS STP health, processd decision monitoring, portald customer service, BNetzA annual reporting, § 60 Abs. 2 MsbG replacement-value agent, MaBiS Summenzeitreihe deadline monitoring agent, BSI TR-03109 SMGW diagnostics agent, VPP dispatch settlement audit, and more; LanceDB vector store; all MCP tools wired; OpenAI/Anthropic/Bedrock providers; glob `trigger_event_types` routing)
-- **`webhook`** `:8000` — In-memory ERP event receiver
+```
 
 Authentication is disabled in this demo — suitable for local development only.
-See the [production guide](../../docs/getting-started.md) for OIDC setup.
+See the [production guide](../../docs/getting-started.md) for OIDC setup, and
+[services.md](../../docs/services.md) for the full 17-service platform.

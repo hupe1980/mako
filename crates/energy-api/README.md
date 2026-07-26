@@ -85,7 +85,7 @@ let client = ControlMeasuresClient::new(
 client.send_konfiguration(
     Uuid::new_v4(),
     "2025-06-01T10:00:00.000Z",
-    &LocationId::NetworkLocation(NeloId("E1234848431".into())),
+    &LocationId::NetworkLocation(NeloId::new("E1234848431")?),
     &CommandControl {
         maximum_power_value: MaximumPowerValue("10.5".into()),
         execution_time_from: "2025-06-01T10:00:00Z".into(),

@@ -26,6 +26,7 @@ pub use sepa::pain001::LocalInstrument;
 pub use sepa::{Camt053Document, parse_camt053};
 pub use sepa::{Camt054Document, parse_camt054};
 pub use sepa::{CreditTransferEntry, CreditTransferGroup, Pain001Builder};
+pub use sepa::{CreditTransferSchema, DirectDebitSchema};
 pub use sepa::{CreditorId, CreditorIdError, validate_creditor_id};
 pub use sepa::{DirectDebitEntry, DirectDebitGroup, Pain008Builder};
 pub use sepa::{DirectDebitScheme, SequenceType};
@@ -35,14 +36,40 @@ pub use sepa::{ct_from_eur_str, ct_to_eur_str};
 
 use crate::pg::SepaMandateRow;
 
+// ── Schema-version resolution (config → typed enum) ───────────────────────────
+
+/// Resolve a configured pain.008 schema string (e.g. `"pain.008.001.02"`) to the
+/// typed [`DirectDebitSchema`]. `None` → the current default. An unknown value is
+/// a hard error so a bank-incompatible version fails loudly at startup, not on a
+/// rejected batch.
+pub fn resolve_pain008_schema(cfg: Option<&str>) -> anyhow::Result<DirectDebitSchema> {
+    match cfg {
+        Some(s) => s
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid pain008_schema '{s}': {e}")),
+        None => Ok(DirectDebitSchema::default()),
+    }
+}
+
+/// Resolve a configured pain.001 schema string (e.g. `"pain.001.001.03"`) to the
+/// typed [`CreditTransferSchema`]. `None` → the current default; unknown → error.
+pub fn resolve_pain001_schema(cfg: Option<&str>) -> anyhow::Result<CreditTransferSchema> {
+    match cfg {
+        Some(s) => s
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid pain001_schema '{s}': {e}")),
+        None => Ok(CreditTransferSchema::default()),
+    }
+}
+
 // ── pain.008 run output ───────────────────────────────────────────────────────
 
 /// One pain.008 message covering a collection date — a single file with one
 /// `PmtInf` group per `SequenceType` present in the input.
 ///
 /// The SEPA SDD Rulebook requires `FRST` and `RCUR` collections in separate
-/// payment-information blocks; since sepa 0.4 those blocks live in **one
-/// message**, so a collection run is one bank submission and one audit row in
+/// payment-information blocks; these blocks live in **one message**, so a
+/// collection run is one bank submission and one audit row in
 /// `sepa_collection_runs` (whose `UNIQUE (tenant, collection_date)` previously
 /// silently dropped the second of two per-sequence files).
 #[derive(Debug, Clone, serde::Serialize)]
@@ -91,12 +118,15 @@ pub struct Pain008GroupInfo {
 /// - `creditor_id_str`   — SEPA Creditor Identifier (EPC AT-02)
 /// - `collection_date`   — requested collection date (`ReqdColltnDt`)
 /// - `entries`           — slice of `(mandate_row, amount_ct)` pairs
+/// - `schema`            — pain.008 XML schema version to emit (a bank's required
+///   version, e.g. `pain.008.001.02`); use `Default::default()` for the current one
 pub fn build_pain_008(
     creditor_iban_str: &str,
     creditor_name: &str,
     creditor_id_str: &str,
     collection_date: time::Date,
     entries: &[(&SepaMandateRow, i64)],
+    schema: sepa::DirectDebitSchema,
 ) -> anyhow::Result<Pain008Run> {
     let creditor_iban = validate_iban(creditor_iban_str).map_err(|e| {
         anyhow::anyhow!(
@@ -120,12 +150,11 @@ pub fn build_pain_008(
         collection_date.month() as u8,
         collection_date.day()
     );
-    let collection_date_str = format!(
-        "{}-{:02}-{:02}",
-        collection_date.year(),
-        collection_date.month() as u8,
-        collection_date.day()
-    );
+    // sepa 0.5: dates are typed (`IsoDate`), validated once at construction, so a
+    // malformed date is unrepresentable in the batch rather than a `build()` error.
+    let collection_iso = sepa::IsoDate::try_from(collection_date).map_err(|e| {
+        anyhow::anyhow!("collection date {collection_date} is not a valid ISO date: {e}")
+    })?;
 
     // Fixed emission order — deterministic files for golden tests and audits.
     const SEQ_ORDER: [(&str, SequenceType); 4] = [
@@ -135,7 +164,9 @@ pub fn build_pain_008(
         ("OOFF", SequenceType::Ooff),
     ];
 
-    let mut builder = Pain008Builder::new(creditor_name).msg_id(msg_id.clone());
+    let mut builder = Pain008Builder::new(creditor_name)
+        .msg_id(msg_id.clone())
+        .schema(schema);
     let mut groups_info = Vec::new();
     let mut total_ct = 0i64;
     let mut entry_count = 0usize;
@@ -157,9 +188,11 @@ pub fn build_pain_008(
             continue;
         }
 
-        let mut group = DirectDebitGroup::new(creditor_name, &creditor_iban, creditor_id.clone())
+        // sepa 0.5: the group borrows the Creditor Identifier (`&CreditorId`), so the
+        // same creditor identity is no longer cloned once per sequence-type group.
+        let mut group = DirectDebitGroup::new(creditor_name, &creditor_iban, &creditor_id)
             .sequence_type(seq_type)
-            .collection_date(collection_date_str.clone())
+            .collection_date(collection_iso)
             .payment_info_id(format!("{msg_id}-{seq_key}"));
 
         let mut group_ct = 0i64;
@@ -177,10 +210,22 @@ pub fn build_pain_008(
                 }
             };
 
+            // sepa 0.5: mandate signature date is a typed `IsoDate`.
+            let signed_iso = match sepa::IsoDate::try_from(mandate.signed_at) {
+                Ok(d) => d,
+                Err(e) => {
+                    tracing::warn!(
+                        mandate_id = %mandate.mandate_id,
+                        error = %e,
+                        "accountingd: skipping mandate with invalid signature date in pain.008"
+                    );
+                    continue;
+                }
+            };
             let description = format!("Abschlag {}-{:02}", today.year(), today.month() as u8);
             let mut entry = DirectDebitEntry::new(
                 mandate.mandatsref.clone(),
-                mandate.signed_at.to_string(),
+                signed_iso,
                 mandate
                     .kontoinhaber
                     .clone()
@@ -256,11 +301,14 @@ pub fn build_pain_008(
 /// - `debtor_iban_str` — the operator/LF's own bank account (debit side)
 /// - `entries`         — slice of `(creditor_iban, creditor_name, amount_ct, end_to_end_ref)`
 /// - `instant`         — request SCT Instant execution
+/// - `schema`          — pain.001 XML schema version to emit (a bank's required
+///   version, e.g. `pain.001.001.03`); use `Default::default()` for the current one
 pub fn build_pain_001(
     debtor_name: &str,
     debtor_iban_str: &str,
     entries: &[(&str, &str, i64, &str)],
     instant: bool,
+    schema: sepa::CreditTransferSchema,
 ) -> anyhow::Result<String> {
     let debtor_iban = validate_iban(debtor_iban_str)
         .map_err(|e| anyhow::anyhow!("debtor IBAN '{debtor_iban_str}' invalid: {e}"))?;
@@ -290,6 +338,7 @@ pub fn build_pain_001(
 
     Pain001Builder::new(debtor_name)
         .msg_id(msg_id)
+        .schema(schema)
         .add_group(group)
         .build()
         .map_err(|e| anyhow::anyhow!("pain.001 validation failed: {e}"))

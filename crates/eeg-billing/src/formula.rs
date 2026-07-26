@@ -19,7 +19,12 @@ use crate::scheme::SettlementScheme;
 /// settlement can reach this range; reaching it means the input data is
 /// corrupt, and a silently altered amount would be worse than the panic.
 fn validated_eur(d: Decimal) -> Decimal {
-    EuroAmount::checked_from_decimal(d)
+    // billing 0.8 made `checked_from_decimal` exact (it errors on excess
+    // precision rather than rounding). This helper's job is to *round* the
+    // high-precision settlement product down to the 5-dp money resolution, so it
+    // uses the explicit `from_decimal_rounded`; the remaining error arm is a true
+    // range overflow, which no physical EEG settlement can reach.
+    EuroAmount::from_decimal_rounded(d, billing::RoundingStrategy::MidpointAwayFromZero)
         .map(billing::EuroAmount::into_decimal)
         .unwrap_or_else(|_| panic!("settlement amount {d} EUR exceeds the EuroAmount range"))
 }

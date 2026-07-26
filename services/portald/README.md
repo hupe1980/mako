@@ -15,9 +15,31 @@ It never decodes JWTs or maintains its own MaLo maps — all authorization flows
 | **Kontoauszug** | `GET /api/v1/portal/{malo_id}/kontoauszug` — account statement |
 | **EEG** | `GET /api/v1/portal/{malo_id}/eeg` — EEG plant + settlement from `einsd` |
 | **VersorgungsStatus** | `GET /api/v1/portal/{malo_id}/versorgung` — supply status from `marktd` |
+| **Vorauszahlung** | `GET /api/v1/portal/{malo_id}/vorauszahlung` — advance-payment schedule (§40 Abs. 1 EnWG) |
+| **Contract view** | `GET /api/v1/portal/{malo_id}/vertrag` — active contract (prerequisite for Tarifwechsel/Kündigung UI) |
+| **Invoice download** | `GET /api/v1/portal/{malo_id}/invoices/{record_id}/download` — ZUGFeRD 2.3 / XRechnung 3.0 CII XML |
 | **SSE stream** | `GET /api/v1/portal/{malo_id}/events` — live event stream |
-| **Self-service writes** | `POST /portal/{malo_id}/tarifwechsel`, `POST /portal/{malo_id}/kuendigen`, `PUT /portal/{malo_id}/kontakt` |
+| **Self-service writes** | `POST /api/v1/portal/{malo_id}/tarifwechsel`, `POST /api/v1/portal/{malo_id}/kuendigen`, `PUT /api/v1/portal/{malo_id}/kontakt`, `PUT /api/v1/portal/{malo_id}/sepa` |
+| **MCP** | `/mcp` — 8 read tools + 3 guided prompts (see below) |
 | **Health** | `GET /health/live`, `GET /health/ready` |
+
+## MCP server
+
+`portald` exposes a read-only MCP server at `/mcp` (Streamable HTTP) so an LLM client
+can answer customer-service questions over the aggregated read model.
+
+| Tool | Purpose |
+|---|---|
+| `get_dashboard` | Aggregated snapshot: MaLo metadata, latest invoice, balance, supply status, EEG plants |
+| `get_lastgang` | MSCONS consumption time-series (15-min / hourly), optional ISO-8601 range |
+| `get_invoices` | Billing history (newest-first, `limit` default 10) |
+| `get_balance` | Open-items balance in EUR cents (positive = owed, negative = credit) |
+| `get_kontoauszug` | Full account statement — all ledger entries (§666 BGB transparency) |
+| `get_vorauszahlung` | Advance-payment (Abschlag) schedule, next due date (§40 Abs. 1 EnWG) |
+| `get_eeg_status` | EEG/KWKG plant list + latest settlement (Förderungsende, model, capacity) |
+| `get_versorgung` | Supply status (Beliefert / Unbeliefert / Gesperrt) and effective date |
+
+Guided prompts: `customer-overview`, `billing-dispute`, `eeg-foerderung-check`.
 
 ## Configuration
 

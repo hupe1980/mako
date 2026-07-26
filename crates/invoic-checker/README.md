@@ -30,7 +30,7 @@ prevent an immediate dispute.
 | 3 | **Document total** — sum of all positions ≈ `gesamtbrutto` (±1%) | `Warn` |
 | 4 | **Tariff match** — `einzelpreis` within tolerance of PRICAT tariff. **Skipped for Stornorechnungen** (`ist_storno=true`). | `Dispute` |
 | 5 | **Tariff found** — a PRICAT tariff record exists for the sender GLN | `Warn` (auto-accept) |
-| 6 | **MMM settlement price** — for PIDs 31002/31005/31007/31008: Mehr-/Mindermengen prices match MMMA store | `Warn` or `Dispute` |
+| 6 | **MMM settlement price** — for PIDs 31005/31006/31007/31008: Mehr-/Mindermengen prices match MMMA store | `Warn` or `Dispute` |
 
 ### Stornierung handling (`ist_storno = true`)
 
@@ -84,10 +84,10 @@ For PID 31009 (MSB-Rechnung), use `check_msb_rechnung()` which applies
 
 | PID | Process | Billing direction |
 |---|---|---|
-| 31001 | NNE-Rechnung Strom | NB → LF |
-| 31002 | MMM-Rechnung Strom | NB → LF |
-| 31005 | Selbst ausgest. NNE-Rechnung | LF → LF |
-| 31006 | Selbst ausgest. Rechnung (§ 147 AO / GoBD) | LF → LF |
+| 31001 | Abschlagsrechnung Netznutzung | NB → LF |
+| 31002 | NN-Rechnung (Netznutzung Strom + Gas) | NB → LF |
+| 31005 | MMM-Rechnung (Mehr-/Mindermengensaldo) | NB → LF |
+| 31006 | MMM Mehrmenge, selbst ausgestellt | LF → LF |
 | 31007 | Aggreg. MMM-Rechnung Gas | NB → MGV |
 | 31008 | Selbst ausgest. Aggreg. MMM-Rechnung Gas | MGV → MGV |
 | 31009 | MSB-Rechnung | MSB → LF |

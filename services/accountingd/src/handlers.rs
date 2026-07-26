@@ -747,14 +747,21 @@ pub async fn import_payments(
     let mut skipped = 0usize;
 
     for raw in &entries {
-        let Some(entry) = sepa::camt054::parse_simple_json(raw) else {
-            skipped += 1;
-            continue;
+        // sepa 0.5: parse_simple_json returns Result, naming the field and reason for a
+        // rejected row — a skipped bank import is now diagnosable, not silently dropped.
+        let entry = match sepa::camt054::parse_simple_json(raw) {
+            Ok(entry) => entry,
+            Err(e) => {
+                tracing::warn!(error = %e, "accountingd: camt.054 JSON row rejected — skipping");
+                skipped += 1;
+                continue;
+            }
         };
-        let Ok(date) = time::Date::parse(
-            &entry.value_date,
-            &time::format_description::well_known::Iso8601::DEFAULT,
-        ) else {
+        // sepa 0.5: value_date() is a validated `IsoDate` (the raw text is in value_date_raw).
+        let Some(date) = entry
+            .value_date()
+            .and_then(|iso| time::Date::try_from(iso).ok())
+        else {
             skipped += 1;
             continue;
         };
@@ -772,7 +779,7 @@ pub async fn import_payments(
                     "{}|{}|{}|{}",
                     &entry.iban,
                     entry.to_ledger_ct(),
-                    &entry.value_date,
+                    &entry.value_date_raw,
                     &entry.reference
                 );
                 // Simple deterministic key (not cryptographic — only for dedup)
@@ -914,14 +921,21 @@ pub async fn import_payments_camt054(
 
             for detail in details {
                 total += 1;
-                let amount_ct = detail
-                    .and_then(|d| d.amount_ct)
-                    .unwrap_or(entry.amount_ct)
-                    .abs();
-                let signed_ct = if entry.signed_ct() < 0 {
-                    -amount_ct
-                } else {
-                    amount_ct
+                // sepa 0.5: `EntryDetail::signed_ct()` resolves the per-detail amount
+                // (TxDtls/Amt → AmtDtls → entry total only for a single-detail entry),
+                // signed by CdtDbtInd, and is `None` when the statement doesn't
+                // determine it — precisely when the old "reuse the entry total per
+                // detail" fallback would multiply a batch by its transaction count.
+                let signed_ct = match detail {
+                    Some(d) => d.signed_ct(),
+                    None => Some(entry.signed_ct()), // single unbatched booking
+                };
+                let Some(signed_ct) = signed_ct else {
+                    tracing::warn!(
+                        "accountingd: camt.054 batch detail has no determinable amount — skipping"
+                    );
+                    skipped += 1;
+                    continue;
                 };
                 let counterparty_iban = detail
                     .and_then(|d| d.counterparty_iban.as_deref())
@@ -933,15 +947,12 @@ pub async fn import_payments_camt054(
                 let reference = detail
                     .and_then(|d| d.reference.as_deref().or(d.end_to_end_id.as_deref()))
                     .unwrap_or("camt.054 import");
-                let value_date = entry
-                    .value_date
-                    .as_deref()
-                    .or(entry.booking_date.as_deref())
-                    .unwrap_or_default();
-                let Ok(date) = time::Date::parse(
-                    value_date,
-                    &time::format_description::well_known::Iso8601::DEFAULT,
-                ) else {
+                // sepa 0.5: typed date accessors (raw text stays in *_raw).
+                let Some(date) = entry
+                    .value_date()
+                    .or_else(|| entry.booking_date())
+                    .and_then(|iso| time::Date::try_from(iso).ok())
+                else {
                     skipped += 1;
                     continue;
                 };
@@ -958,8 +969,7 @@ pub async fn import_payments_camt054(
                         }
                     })
                     .unwrap_or_else(|| {
-                        let key =
-                            format!("{counterparty_iban}|{signed_ct}|{value_date}|{reference}");
+                        let key = format!("{counterparty_iban}|{signed_ct}|{date}|{reference}");
                         format!(
                             "{:016x}",
                             key.bytes().fold(0u64, |acc, b| {
@@ -1444,12 +1454,24 @@ pub async fn run_sepa(
     // Ad-hoc runs collect at the SDD CORE minimum lead time (D-1, submit today).
     let collection_date = (time::OffsetDateTime::now_utc() + time::Duration::days(2)).date();
 
+    let dd_schema = match crate::sepa::resolve_pain008_schema(cfg.pain008_schema.as_deref()) {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
     match build_pain_008(
         creditor_iban,
         creditor_name,
         creditor_id,
         collection_date,
         &direct_debits,
+        dd_schema,
     ) {
         Ok(run) => (
             StatusCode::OK,
@@ -1902,11 +1924,23 @@ pub async fn post_jahresabschluss(
                 };
                 let e2e = format!("REFUND-{malo_id}-{year}");
                 let customer_name = format!("Kunde {malo_id}");
+                let ct_schema =
+                    match crate::sepa::resolve_pain001_schema(cfg.pain001_schema.as_deref()) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            return (
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                Json(serde_json::json!({ "error": e.to_string() })),
+                            )
+                                .into_response();
+                        }
+                    };
                 match crate::sepa::build_pain_001(
                     creditor_name,
                     creditor_iban,
                     &[(customer_iban, &customer_name, refund_ct, &e2e)],
                     false,
+                    ct_schema,
                 ) {
                     Ok(xml) => refund_pain001 = Some(xml),
                     Err(e) => {
@@ -2699,11 +2733,20 @@ pub async fn post_run_eeg_payouts(
         let payment_type = if use_instant { "SCT_INST" } else { "SCT_CORE" };
 
         let debtor_name = cfg.creditor_name.as_deref().unwrap_or(&cfg.tenant);
+        let ct_schema = match crate::sepa::resolve_pain001_schema(cfg.pain001_schema.as_deref()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(malo_id, error = %e, "accountingd: pain.001 schema config invalid");
+                errors += 1;
+                continue;
+            }
+        };
         let pain_xml = match build_pain_001(
             debtor_name,
             &debtor_iban,
             &[(&creditor_iban, &creditor_name, amount_ct, &e2e_ref)],
             use_instant,
+            ct_schema,
         ) {
             Ok(xml) => xml,
             Err(e) => {
@@ -2980,6 +3023,13 @@ pub(crate) async fn create_eeg_payout_order(
     );
 
     let debtor_name = cfg.creditor_name.as_deref().unwrap_or(&cfg.tenant);
+    let ct_schema = match crate::sepa::resolve_pain001_schema(cfg.pain001_schema.as_deref()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(malo_id = params.malo_id, error = %e, "accountingd: pain.001 schema config invalid");
+            return;
+        }
+    };
     let pain_xml = match build_pain_001(
         debtor_name,
         debtor_iban,
@@ -2990,6 +3040,7 @@ pub(crate) async fn create_eeg_payout_order(
             &e2e_ref,
         )],
         use_instant,
+        ct_schema,
     ) {
         Ok(xml) => xml,
         Err(e) => {

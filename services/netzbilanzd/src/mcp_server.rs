@@ -87,7 +87,7 @@ impl NetzbilanzMcpHandler {
     }
 
     #[tool(
-        description = "List NNE/KA/MMM invoice drafts (INVOIC 31001/31002/31005). Filter by malo_id, lf_mp_id, or status (draft/dispatched/paid/disputed). Returns summary without full Rechnung. Use after POST /api/v1/billing/run.",
+        description = "List NNE/KA/MMM invoice drafts (INVOIC 31002 NN-Rechnung / 31005 MMM). Filter by malo_id, lf_mp_id, or status (draft/dispatched/paid/disputed). Returns summary without full Rechnung. Use after POST /api/v1/billing/run.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_nne_drafts(
@@ -328,14 +328,13 @@ impl NetzbilanzMcpHandler {
     /// Monthly billing totals grouped by PID and status.
     ///
     /// Provides a concise financial summary for a billing month:
-    /// - NNE Strom (PID 31001): total kWh invoiced and total EUR
-    /// - MMM Strom (PID 31002): Mehrmengen / Mindermengen net
-    /// - NNE Gas (PID 31005): gas billing totals
+    /// - NNE (PID 31002, NN-Rechnung Strom + Gas): total kWh invoiced and total EUR
+    /// - MMM (PID 31005): Mehrmengen / Mindermengen net
     /// - MSB-Rechnung (PID 31009): metering fees
     ///
     /// Used for end-of-month reconciliation and ERP journal entry preparation.
     #[tool(
-        description = "Monthly billing summary: totals by PID (31001/31002/31005/31009) and status (draft/dispatched/paid). Use for end-of-month ERP reconciliation.",
+        description = "Monthly billing summary: totals by PID (31002 NN-Rechnung / 31005 MMM / 31009 MSB / 31011 AWH) and status (draft/dispatched/paid). Use for end-of-month ERP reconciliation.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_billing_summary(
@@ -724,10 +723,10 @@ impl NetzbilanzMcpHandler {
                  2. For §42a GGV tenants: POST /api/v1/billing/ggv-nne/{ggv_malo_id} instead.\n\
                  3. The draft is validated by invoic-checker before dispatch.\n\
                  4. GET /api/v1/billing/drafts to review the draft Rechnung BO4E.\n\
-                 5. PUT /api/v1/billing/drafts/{id}/dispatch → sends INVOIC 31001 to makod.\n\
+                 5. PUT /api/v1/billing/drafts/{id}/dispatch → sends INVOIC 31002 (NN-Rechnung) to makod.\n\
                  6. If a correction is needed: POST /api/v1/billing/drafts/{id}/correction.\n\n\
                  Use `list_nne_drafts` to monitor draft status.\n\
-                 PID 31002 (MMM-Rechnung) and 31005 (KA) follow the same flow.\n\
+                 PID 31005 (MMM-Rechnung) and 31009 (MSB) follow the same flow.\n\
                  Redispatch Kostenblatt: POST /api/v1/redispatch/kostenblatt/{activation_id}/compute.",
             ),
         ]
@@ -764,7 +763,7 @@ impl NetzbilanzMcpHandler {
             PromptMessage::new_text(Role::User, "How do I run the monthly MMM billing?"),
             PromptMessage::new_text(
                 Role::Assistant,
-                "**Monthly MMM Billing (INVOIC 31002, GPKE (BK6-24-174) Teil 1 Kap. 8.4)**\n\n\
+                "**Monthly MMM Billing (INVOIC 31005, GPKE (BK6-24-174) Teil 1 Kap. 8.4)**\n\n\
                  **Prerequisites:**\n\
                  - Import MMMA Gas prices (THE): PUT marktd /api/v1/mmma-preise/gas/{year}/{month}\n\
                  - Import Strom MMM prices (VNB): PUT marktd /api/v1/mmm-preise/strom/{year}/{month}\n\
@@ -775,7 +774,7 @@ impl NetzbilanzMcpHandler {
                  - Auto-fetches profil_kwh (SLP profile) from edmd\n\
                  - Use `billing_type = \"mmm_strom\"` for Strom, `\"mmm_gas\"` for Gas\n\n\
                  **Step 2 — Review generated drafts:**\n\
-                 Call `list_nne_drafts` with pid=31002 to see all MMM drafts.\n\
+                 Call `list_nne_drafts` with pid=31005 to see all MMM drafts.\n\
                  Call `get_billing_summary` for the month to verify totals.\n\
                  Check `list_undispatched_drafts` for any stuck drafts.\n\n\
                  **Step 3 — Batch dispatch:**\n\
@@ -784,7 +783,7 @@ impl NetzbilanzMcpHandler {
                  **Step 4 — Monitor for REMADV responses:**\n\
                  Use `list_nne_drafts` with status=dispatched to confirm delivery.\n\
                  Disputes (REMADV 33002) appear as outcome=Dispute — use `investigate-dispute` prompt.\n\n\
-                 **Regulatory basis:** GPKE (BK6-24-174) Teil 1 Kap. 8.4; BDEW INVOIC AHB 1.0 PID 31002.",
+                 **Regulatory basis:** GPKE (BK6-24-174) Teil 1 Kap. 8.4; BDEW INVOIC AHB PID 31005 (MMM-Rechnung).",
             ),
         ]
     }
@@ -880,10 +879,10 @@ impl NetzbilanzMcpHandler {
                 "**NB Outbound INVOIC Portfolio (netzbilanzd)**\n\n\
                  | PID | Process | Direction | Deadline | `billing_type` |\n\
                  |---|---|---|---|---|\n\
-                 | 31001 | NNE Strom (Netznutzungsentgelt) | NB → LF | per NbContract.billing_schedule | `nne_strom` |\n\
-                 | 31001 | GGV NNE (§42a tenant split) | NB → LF | per NbContract.billing_schedule | `nne_strom` via `/ggv-nne` |\n\
-                 | 31002 | MMM Strom (Mehr-/Mindermenge) | NB → LF | annual settlement GPKE (BK6-24-174) Teil 1 Kap. 8.4 | `mmm_strom` |\n\
-                 | 31005 | NNE Gas (Gasnetznetz) | GNB → LFG | per NbContract | `nne_gas` |\n\
+                 | 31002 | NNE Strom (Netznutzungsentgelt, NN-Rechnung) | NB → LF | per NbContract.billing_schedule | `nne_strom` |\n\
+                 | 31002 | GGV NNE (§42a tenant split) | NB → LF | per NbContract.billing_schedule | `nne_strom` via `/ggv-nne` |\n\
+                 | 31005 | MMM Strom (Mehr-/Mindermenge) | NB → LF | annual settlement GPKE (BK6-24-174) Teil 1 Kap. 8.4 | `mmm_strom` |\n\
+                 | 31002 | NNE Gas (Netznutzung Gas, NN-Rechnung) | GNB → LFG | per NbContract | `nne_gas` |\n\
                  | 31009 | MSB-Rechnung (metering service) | NB → MSB | per MSB contract | `msb_31009` |\n\
                  | 31011 | AWH Sperrprozesse Gas (GeLi Gas) | GNB → LFG | per Sperrprozess close | `nne_gas_awh_31011` |\n\n\
                  **Key compliance rules:**\n\
@@ -910,7 +909,7 @@ impl ServerHandler for NetzbilanzMcpHandler {
         .with_server_info(Implementation::new("netzbilanzd", env!("CARGO_PKG_VERSION")))
         .with_instructions(
             "netzbilanzd MCP — NNE/KA/MMM Billing Daemon (NB role).\n\
-             Generates INVOIC 31001 (NNE Strom), 31002 (MMM Strom), 31005 (NNE Gas),\n\
+             Generates INVOIC 31002 (NN-Rechnung, NNE Strom + Gas), 31005 (MMM),\n\
              31009 (MSB-Rechnung), 31011 (AWH Sperrprozesse Gas, GeLi Gas 3.0 (BK7-24-01-009)).\n\
              Pre-dispatch self-validation via invoic-checker (period · arithmetic · total · tariff).\n\
              Dispatches to makod via gpke.nne.rechnung.stellen / gpke.mmm.rechnung.stellen.\n\n\
@@ -929,9 +928,9 @@ impl ServerHandler for NetzbilanzMcpHandler {
              - `get_payment_stats` — payment totals by PID × status (Zahlungsverzug detection)\n\
              - `list_paid_invoices` — REMADV 33001/33003/33004 confirmed paid invoices\n\n\
              ## Billing types\n\
-             - nne_strom → INVOIC 31001 · nne_gas → INVOIC 31005\n\
-             - mmm_strom → INVOIC 31002 (Strom MMM, auto-fetches prices when vnb_mp_id configured)\n\
-             - mmm_gas → INVOIC 31002 (Gas MMM, THE prices auto-fetched from marktd)\n\
+             - nne_strom / nne_gas → INVOIC 31002 (NN-Rechnung; Sparte in message content)\n\
+             - mmm_strom → INVOIC 31005 (Strom MMM, auto-fetches prices when vnb_mp_id configured)\n\
+             - mmm_gas → INVOIC 31005 (Gas MMM, THE prices auto-fetched from marktd)\n\
              - msb_31009 → INVOIC 31009 (MSB-Rechnung, metering fee)\n\
              - nne_gas_awh_31011 → INVOIC 31011 (GeLi Gas AWH Sperrprozesse, GNB → LFG)\n\n\
              ## Prompts (6)\n\

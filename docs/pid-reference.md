@@ -395,7 +395,7 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 44175 | Änderung der Marktlokationsstruktur | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
 | 44176 | Antwort auf Änderung der Marktlokationsstruktur | GeLi Gas 2.0 | LF → NB | 44175 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
 | 44180 | Anfrage der Marktlokationsstruktur | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
-| 44181 | Antwort auf Anfrage der Marktlokationsstruktur | GeLi Gas 2.0 | NB → LF | 44108 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44181 | Antwort auf Anfrage der Marktlokationsstruktur | GeLi Gas 2.0 | NB → LF | 44180 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
 | 44182 | Ablehnung der Anfrage der Marktlokationsstruktur | GeLi Gas 2.0 | NB → LF | 44180 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
 | 44183 | Ende MSB von NB | AWH WiM Gas 2.0 | NB → MSB | — | — | — | ⚠️ | ✅ | — |
 

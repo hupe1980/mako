@@ -94,7 +94,7 @@ fn build_mscons() -> Result<(), Box<dyn std::error::Error>> {
         .metering_point("DE0001234567890123456789012345")
         .obis(
             rubo4e::identifiers::ObisCode::new("1-0:1.8.0")
-                .expect("valid OBIS — Wirkarbeit+ cumulative"),
+                .expect("valid OBIS — Wirkarbeit Bezug, cumulative"),
         )
         .quantity("220", "1234.567", "KWH")
         .done()

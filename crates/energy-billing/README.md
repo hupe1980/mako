@@ -596,12 +596,12 @@ if invoice.has_errors() {
 cargo test -p energy-billing --all-features
 ```
 
-**191 tests** across five suites:
+**200 tests** across five suites:
 
 | Suite | Tests | Coverage |
 |---|---|---|
-| Unit tests (lib) | 39 | `RegulatoryRates`, levy lookups, `prorate_days`, `InvoiceType`, `Product` enum roundtrip, `StromsteuerBefreiung`, tariff deserialization |
-| `calculator_tests` | 122 | All 13 categories (incl. WASSER), §14a/§41a/§41b, GGV, seasonal, indexed, prosumer, block tariffs, RLM demand charge, multi-rate MwSt, cancellation, BO4E JSON, pro-rata, Tarifwechsel, `bill_batch`, `validate` |
+| Unit tests (lib) | 42 | `RegulatoryRates`, levy lookups, `prorate_days`, `InvoiceType`, `Product` enum roundtrip, `StromsteuerBefreiung`, tariff deserialization |
+| `calculator_tests` | 124 | All 13 categories (incl. WASSER), §14a/§41a/§41b, GGV, seasonal, indexed, prosumer, block tariffs, RLM demand charge, multi-rate MwSt, cancellation, BO4E JSON, pro-rata, Tarifwechsel, `bill_batch`, `validate` |
 | `golden_scenarios` | 11 | Golden master: SLP electricity; gas + levies; EEG Gutschrift; RLM demand charge; §54 KWK exemption; historic rates 2022 (heating gas constant 0.55, 7 % gas-USt window); §41b rejection; §40a ct/kWh; §41 mandatory fields; §42c sharing; §9 exemption |
 | `proptest_invoice` | 8 | Property-based: `brutto == netto + mwst`, cancellation sign, 0% MwSt, gas arithmetic, demand charge non-negative, StromStG year table |
 | Doc tests | 15 | Inline usage examples |

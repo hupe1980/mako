@@ -63,6 +63,15 @@ fn normalize_marktlokation(
             serde_json::json!({ "error": format!("invalid Marktlokation payload: {e}") }),
         )
     })?;
+    // Strict enum gate: serde is intentionally lenient (unknown wire values decode
+    // to `Unknown`), so reject any out-of-schema enum anywhere in the tree here —
+    // one recursive call replaces per-field `== Unknown` checks and reports paths.
+    rubo4e::Bo4eStrict::ensure_known_enums(&malo).map_err(|e| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            serde_json::json!({ "error": format!("Marktlokation has out-of-schema enum values: {e}") }),
+        )
+    })?;
     let canonical = serde_json::to_value(&malo).unwrap_or_default();
     Ok((malo, canonical))
 }

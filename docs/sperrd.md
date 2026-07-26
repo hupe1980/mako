@@ -105,7 +105,9 @@ Response `204 No Content`.
 
 ### `PUT /api/v1/sperr-orders/{id}/fail`
 
-Reports a field failure. Escalates to operator review (status → `failed`).
+Reports a field failure (status → `failed`) and auto-dispatches IFTSTA 21039
+reporting non-execution (`gpke.sperrung.fehlgeschlagen` → `makod`), so the LF
+learns why the Sperrung did not happen instead of waiting out its deadline.
 
 ```json
 {
@@ -159,7 +161,7 @@ Aggregate statistics for the BK6-22-024 compliance sweep.
 stateDiagram-v2
     [*] --> pending : POST /sperr-orders
     pending --> executed : PUT /execute<br/>→ IFTSTA 21039 dispatched
-    pending --> failed : PUT /fail<br/>→ operator escalation
+    pending --> failed : PUT /fail<br/>→ IFTSTA 21039 (non-execution)
     pending --> cancelled : operator action
     executed --> [*]
     failed --> [*]
@@ -172,7 +174,7 @@ stateDiagram-v2
 |---|---|
 | `pending` | Order registered, awaiting field execution |
 | `executed` | Field team confirmed execution; IFTSTA 21039 dispatched to `makod` |
-| `failed` | Field team reported failure; no IFTSTA sent; operator must take action |
+| `failed` | Field team reported failure; IFTSTA 21039 (non-execution) dispatched to the LF; operator must reschedule |
 | `cancelled` | Order cancelled before field execution (e.g. customer paid) |
 
 ---

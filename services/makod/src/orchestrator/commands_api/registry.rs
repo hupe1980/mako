@@ -189,13 +189,13 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     CommandDescriptor {
         name: "gpke.abrechnung.annehmen",
         permitted_roles: &[Marktrolle::Lf],
-        primary_pid: pid(31001),
+        primary_pid: pid(31002),
         dispatch: cmd_gpke_abrechnung_annehmen,
     },
     CommandDescriptor {
         name: "gpke.abrechnung.ablehnen",
         permitted_roles: &[Marktrolle::Lf],
-        primary_pid: pid(31001),
+        primary_pid: pid(31002),
         dispatch: cmd_gpke_abrechnung_ablehnen,
     },
     // Self-issued INVOIC 31006 (LF selbstausgestellt): `invoicd` generates the
@@ -218,19 +218,19 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     CommandDescriptor {
         name: "gpke.nne.rechnung.stellen",
         permitted_roles: &[Marktrolle::Nb],
-        primary_pid: pid(31001),
+        primary_pid: pid(31002),
         dispatch: cmd_gpke_nne_rechnung_stellen,
     },
     CommandDescriptor {
         name: "gpke.mmm.rechnung.stellen",
         permitted_roles: &[Marktrolle::Nb],
-        primary_pid: pid(31002),
+        primary_pid: pid(31005),
         dispatch: cmd_gpke_mmm_rechnung_stellen,
     },
     CommandDescriptor {
         name: "gpke.nne-gas.rechnung.stellen",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
-        primary_pid: pid(31005),
+        primary_pid: pid(31002),
         dispatch: cmd_gpke_nne_gas_rechnung_stellen,
     },
     CommandDescriptor {

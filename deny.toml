@@ -90,6 +90,16 @@ version = "35"
 reason  = "witx 0.9 (transitive via wiggle/wasi-common of the extism/wasmtime WASM plugin sandbox in mako-plugin) pins the ancient wast 0.35; wasmtime's own tooling uses current wast. Resolve when wiggle drops witx or extism updates."
 
 [[bans.skip]]
+name    = "typed-builder"
+version = "0.20.1"
+reason  = "iceberg 0.9.1 (edmd Iceberg cold-tier archive) pins typed-builder 0.20.1; rubo4e 0.8.0 (the BO4E domain model, used workspace-wide) uses 0.23.2. Resolve when iceberg bumps typed-builder."
+
+[[bans.skip]]
+name    = "typed-builder-macro"
+version = "0.20.1"
+reason  = "proc-macro companion of typed-builder 0.20.1; same iceberg-vs-rubo4e split."
+
+[[bans.skip]]
 name    = "arrayvec"
 version = "0.5"
 reason  = "cedar-policy-formatter (transitive dep of cedar-policy 4) depends on arrayvec 0.5; ecosystem crates use 0.7. Resolve when cedar-policy-formatter updates."

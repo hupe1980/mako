@@ -242,20 +242,28 @@ impl Sect14aModule {
 /// Determines which BDEW PIDs are applicable and which regulatory references apply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum SettlementType {
-    /// Netznutzungsentgelt (NNE) Strom — PID 31001 (NB → LF).
+    /// Netznutzungsentgelt (NNE) Strom — PID 31002 (NN-Rechnung, NB → LF).
     NneStrom,
-    /// Netznutzungsentgelt (NNE) Gas — PID 31005 (NB → LF, GasNEV).
+    /// Netznutzungsentgelt (NNE) Gas — PID 31002 (NN-Rechnung, NB → LF, GasNEV).
+    ///
+    /// NNE Strom and Gas share the INVOIC Prüfidentifikator 31002 (NN-Rechnung);
+    /// the Sparte is carried in the message content, not the PID. Keeping a
+    /// separate variant preserves the correct legal references (StromNEV vs
+    /// GasNEV) without conditional logic in call sites.
     NneGas,
-    /// NNE selbst ausgestellt (NB + LF = same entity) — PID 31006.
-    NneSelbstausstellt,
-    /// Mehr-/Mindermengen settlement Strom — PID 31002 (NB → LF, GPKE (BK6-24-174) Teil 1 Kap. 8.4).
+    /// Mehr-/Mindermengen settlement Strom — PID 31005 (NB → LF, GPKE (BK6-24-174) Teil 1 Kap. 8.4).
     MmmStrom,
-    /// Mehr-/Mindermengen settlement Gas — PID 31002 (NB → LF, GaBi Gas 2.1 (BK7-24-01-008)).
+    /// Mehr-/Mindermengen settlement Gas — PID 31005 (NB → LF, GaBi Gas 2.1 (BK7-24-01-008)).
     ///
     /// Gas MMM settlement uses different legal references from Strom MMM:
     /// `GaBi Gas 2.1 (BK7-24-01-008)` and `GeLi Gas 3.0 (BK7-24-01-009)`. Using a separate variant
     /// ensures correct audit traces without conditional logic in call sites.
     MmmGas,
+    /// Mehr-/Mindermengen Mehrmenge, selbst ausgestellte Rechnung (Lieferung) — PID 31006.
+    ///
+    /// Per INVOIC AHB §3.x, PID 31006 covers the Mehrmenge leg when the Mehr-/
+    /// Mindermenge is treated as a „Lieferung“ and the invoice is self-issued.
+    MmmSelbstausstellt,
     /// Messstellenbetrieb settlement — PID 31009 (NB → MSB).
     MsbRechnung,
     /// GaBi Gas AWH Sperrprozesse settlement — PID 31011 (NB → LF, BK7-24-01-009 §5.4).
@@ -279,11 +287,11 @@ impl SettlementType {
     #[must_use]
     pub fn default_pid(self) -> u32 {
         match self {
-            Self::NneStrom => 31001,
-            Self::NneGas => 31005,
-            Self::NneSelbstausstellt => 31006,
-            Self::MmmStrom => 31002,
-            Self::MmmGas => 31002,
+            Self::NneStrom => 31002,
+            Self::NneGas => 31002,
+            Self::MmmStrom => 31005,
+            Self::MmmGas => 31005,
+            Self::MmmSelbstausstellt => 31006,
             Self::MsbRechnung => 31009,
             Self::GasAwhSperrung => 31011,
             Self::RedispatchKostenblatt => 0, // no standard PID
@@ -563,15 +571,15 @@ pub enum WarningSeverity {
 ///
 /// | `BillingPositionKind` | `BdewArtikelnummer` | INVOIC AHB ref |
 /// |---|---|---|
-/// | `NneArbeit` | `Wirkarbeit` | PID 31001/31005/31006 Arbeit |
-/// | `NneArbeitHt` | `Wirkarbeit` | PID 31001 §14a Modul 2 HT |
-/// | `NneArbeitNt` | `Wirkarbeit` | PID 31001 §14a Modul 2 NT |
-/// | `NneArbeitModul1` | `Wirkarbeit` | PID 31001 §14a Modul 1 (rate reduced) |
-/// | `NneLeistung` | `Leistung` | PID 31001/31005 RLM kW charge |
-/// | `NneGasGrundpreis` | `Grundpreis` | PID 31005 monthly base fee |
-/// | `Konzessionsabgabe` | `Konzessionsabgabe` | PID 31001/31006 KAV §2 |
-/// | `Mehrmenge` | `Mehrmenge` | PID 31002 positive imbalance |
-/// | `Mindermenge` | `Mindermenge` | PID 31002 negative imbalance (credit) |
+/// | `NneArbeit` | `Wirkarbeit` | PID 31002 (NN-Rechnung) Arbeit |
+/// | `NneArbeitHt` | `Wirkarbeit` | PID 31002 §14a Modul 2 HT |
+/// | `NneArbeitNt` | `Wirkarbeit` | PID 31002 §14a Modul 2 NT |
+/// | `NneArbeitModul1` | `Wirkarbeit` | PID 31002 §14a Modul 1 (rate reduced) |
+/// | `NneLeistung` | `Leistung` | PID 31002 RLM kW charge |
+/// | `NneGasGrundpreis` | `Grundpreis` | PID 31002 Gas monthly base fee |
+/// | `Konzessionsabgabe` | `Konzessionsabgabe` | PID 31002 KAV §2 |
+/// | `Mehrmenge` | `Mehrmenge` | PID 31005 positive imbalance |
+/// | `Mindermenge` | `Mindermenge` | PID 31005 negative imbalance (credit) |
 /// | `MsbGrundgebuehr` | `EntgeltEinbauBetriebWartungMesstechnik` | PID 31009 MSB monthly fee |
 /// | `Messdienstleistung` | `EntgeltMessungAblesung` | PID 31009 reading service |
 /// | `GasAwhSperrung` | `Sperrkosten` | PID 31011 AWH disconnection |
@@ -613,10 +621,10 @@ pub enum BillingPositionKind {
     /// → `BdewArtikelnummer::Konzessionsabgabe`
     Konzessionsabgabe,
     /// Mehrmengen — positive imbalance (actual > profiled).
-    /// PID 31002 GPKE (BK6-24-174) Teil 1 Kap. 8.4 / GaBi Gas 2.1 (BK7-24-01-008). → `BdewArtikelnummer::Mehrmenge`
+    /// PID 31005 GPKE (BK6-24-174) Teil 1 Kap. 8.4 / GaBi Gas 2.1 (BK7-24-01-008). → `BdewArtikelnummer::Mehrmenge`
     Mehrmenge,
     /// Mindermengen — negative imbalance credit note (actual < profiled).
-    /// PID 31002. → `BdewArtikelnummer::Mindermenge`
+    /// PID 31005. → `BdewArtikelnummer::Mindermenge`
     Mindermenge,
     /// MSB Grundgebühr Messstellenbetrieb — monthly metering base fee.
     /// MsbG §§6–7. → `BdewArtikelnummer::EntgeltEinbauBetriebWartungMesstechnik`
@@ -1153,8 +1161,8 @@ impl SettlementResult {
 /// Input for NNE (Netznutzungsentgelt) invoice calculation.
 ///
 /// Covers:
-/// - **PID 31001** — NNE Strom (NB → LF, monthly network usage billing)
-/// - **PID 31005** — NNE Gas (NB → LF, monthly gas network usage billing)
+/// - **PID 31002** (NN-Rechnung) — NNE Strom and Gas (NB → LF, monthly network
+///   usage billing). The Sparte is carried in the message content, not the PID.
 ///
 /// For **RLM** (Leistungsmessung) meters:
 /// - Set `spitzenleistung_kw` to the peak demand in kW.
@@ -1342,8 +1350,8 @@ pub struct Sect14aModul3Interval {
 /// Input for Mehr-/Mindermengen (MMM) settlement invoice calculation.
 ///
 /// Covers:
-/// - **PID 31002** — `MMM-Stornorechnung NNE Strom` used for Mehr-/Mindermengen
-///   settlement between NB and LF.
+/// - **PID 31005** — MMM-Rechnung used for Mehr-/Mindermengen settlement between
+///   NB and LF (Strom and Gas).
 ///
 /// Mehr-/Mindermengen settle the difference between the LF's forecast profile
 /// (SLP standard load profile) and the actual measured consumption.

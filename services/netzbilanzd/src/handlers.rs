@@ -1035,7 +1035,7 @@ pub struct GgvNneRequest {
 /// 1. Fetch GGV topology from `marktd` `GET /api/v1/malo/{ggv_malo_id}/lokationen`
 ///    — returns `Lokationszuordnung` graph edges where `beziehungstyp = "GGV_MIETER"`.
 /// 2. Determine tenant MaLo-IDs from graph edges (typ `MALO`).
-/// 3. For each tenant: compute proportional `arbeitsmenge_kwh` and generate INVOIC 31001
+/// 3. For each tenant: compute proportional `arbeitsmenge_kwh` and generate INVOIC 31002
 ///    draft via `run_billing_internal`.
 /// 4. Return all draft IDs plus attribution summary.
 #[allow(clippy::too_many_lines)]

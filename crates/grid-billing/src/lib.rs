@@ -1,8 +1,8 @@
 //! Role-neutral **German grid settlement calculation** engine.
 //!
 //! Covers all DSO/TSO-side INVOIC documents:
-//! - **NNE** (Netznutzungsentgelt) — PIDs 31001, 31005, 31006, 31011
-//! - **MMM** (Mehr-/Mindermengensaldo) — PID 31002
+//! - **NNE** (Netznutzungsentgelt) — PID 31002 (NN-Rechnung, Strom + Gas); Abschlag 31001
+//! - **MMM** (Mehr-/Mindermengensaldo) — PIDs 31005/31006 (aggregiert Gas 31007/31008)
 //! - **MSB** (Messstellenbetrieb) — PID 31009
 //!
 //! ## Calculation flow
@@ -88,7 +88,7 @@
 //! // document identity enters.
 //! let document = InvoiceDocument {
 //!     settlement,
-//!     pid: 31001,
+//!     pid: 31002,
 //!     rechnungsnummer: "NNE-2025-001".into(),
 //!     correction_of: None,
 //!     invoice_date: date!(2025-02-15),

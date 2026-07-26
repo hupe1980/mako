@@ -11,7 +11,8 @@
 //!
 //! | PID(s) | Domain crate | Price sheet | Commands |
 //! |--------|-------------|-------------|---------|
-//! | 31001, 31002, 31005, 31006 | mako-gpke | PreisblattNetznutzung | gpke.abrechnung.annehmen / ablehnen |
+//! | 31001, 31002 | mako-gpke | PreisblattNetznutzung (Abschlag / NN-Rechnung) | gpke.abrechnung.annehmen / ablehnen |
+//! | 31005, 31006 | mako-gpke | MMMA Strom prices (MMM-Rechnung) | gpke.abrechnung.annehmen / ablehnen |
 //! | 31003, 31011 | mako-wim-gas / mako-geli-gas | PreisblattNetznutzung Gas | wim.gas.rechnung.annehmen / wim.geli.gas.rechnung.annehmen |
 //! | 31004 | mako-wim-gas (Stornorechnung) | — (auto-accept) | wim.gas.stornorechnung.annehmen |
 //! | 31007, 31008 | mako-gabi-gas | PreisblattNetznutzung Gas + MMM check | gabi.gas.mmm.rechnung.annehmen / ablehnen |
@@ -65,7 +66,11 @@ const GAS_INVOIC_PIDS: &[u32] = &[31003, 31007, 31008, 31011];
 const GABI_GAS_MMM_PIDS: &[u32] = &[31007, 31008];
 
 /// Strom MMM PIDs — these need check 6 against `marktd` MMMA Strom prices.
-const STROM_MMM_PIDS: &[u32] = &[31002, 31005];
+///
+/// Per BDEW INVOIC AHB §3.1.1: 31005 = MMM-Rechnung, 31006 = MMM Mehrmenge
+/// (selbst ausgestellt). PID 31002 is the NN-Rechnung (Netznutzung) — it is
+/// checked against `PreisblattNetznutzung`, not the MMM price path.
+const STROM_MMM_PIDS: &[u32] = &[31005, 31006];
 
 /// Shared application state for the webhook handler.
 #[derive(Clone)]
@@ -251,7 +256,7 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
     };
 
     // ── Check 6 (MMM settlement prices — Strom only) ─────────────────────────
-    // For Strom MMM PIDs (31002/31005), validate that Mehrmengen/Mindermengen
+    // For Strom MMM PIDs (31005/31006), validate that Mehrmengen/Mindermengen
     // position prices match the MMMA reference stored in `marktd`.
     // Gas MMM PIDs (31007/31008) are handled by handle_gas_invoic_initiated.
     let report = {
@@ -1380,9 +1385,11 @@ mod tests {
                 "PID {strom_pid} must not be in both STROM_MMM_PIDS and GABI_GAS_MMM_PIDS"
             );
         }
-        // Strom MMM: 31002 (MMM-Rechnung), 31005 (MMM selbst ausgest.)
-        assert!(STROM_MMM_PIDS.contains(&31002u32));
+        // Strom MMM: 31005 (MMM-Rechnung), 31006 (MMM Mehrmenge selbst ausgest.)
         assert!(STROM_MMM_PIDS.contains(&31005u32));
+        assert!(STROM_MMM_PIDS.contains(&31006u32));
+        // 31002 is the NN-Rechnung (Netznutzung), not an MMM PID.
+        assert!(!STROM_MMM_PIDS.contains(&31002u32));
         // Gas MMM: 31007 (GaBi Gas MMM), 31008 (selbst ausgest.)
         assert!(GABI_GAS_MMM_PIDS.contains(&31007u32));
         assert!(GABI_GAS_MMM_PIDS.contains(&31008u32));

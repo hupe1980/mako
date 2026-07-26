@@ -25,7 +25,8 @@
 | Rate limiting | Per-tenant and global GCRA buckets; `429` carries `Retry-After` |
 | Health | `GET /health/live`, `GET /health/ready` (PostgreSQL ping) |
 | MCP | `POST\|GET /mcp` — 15 tools + 5 prompts, including `get_timeseries`, `validate_timeseries`, `trigger_substitution` (§ 60 Abs. 2 MsbG Ersatzwerte), `trigger_jahresablesung`, `get_correction_history` |
-| CloudEvents emitted | `de.messwert.reading.direct.stored`, `de.messwert.reading.quality.warning` (grade C/F), `de.messwert.reading.order.failed` |
+| CloudEvents emitted | `de.messwert.reading.direct.stored`, `de.messwert.reading.quality.warning` (grade C/F), `de.messwert.reading.order.failed`, `de.messwert.cls.compliance_issue`, `de.messwert.smgw.cert.expiry_warning` |
+| SMGW cert expiry (BSI TR-03109-4 §6.3) | Daily worker sweeps every certificate in `smgw_sessions` and emits `de.messwert.smgw.cert.expiry_warning` at **90 / 30 / 7 days** before `valid_to` (`SMGW_CERT_ABLAUFDATUM`), once per tier per certificate (dedup in `smgw_cert_expiry_alerts`); severity INFO → WARNING → CRITICAL. An expired cert silently ends §14a Fernsteuerbarkeit; `agentd` `smgw-diagnostics-agent` consumes the warning and escalates renewal to the MSB |
 | Quality history | Every scoring path records a verdict in `quality_assessments`; re-scoring supersedes rather than appends |
 | §22 audit trail | Every value-changing overwrite — corrections **and** redeliveries, on every transport — leaves an immutable `meter_read_corrections` row; `?as_of=` reconstructs prior knowledge states |
 | Overlap exclusion | Per-partition `EXCLUDE USING gist` (`btree_gist`): a delivery whose range overlaps a stored reading is refused rather than double-counted |
@@ -228,7 +229,7 @@ designed for a fresh install, so no incremental migration state is maintained.
 | Ingest sessions | `direct_push_sessions` |
 | Gas | `gas_quality_data` |
 | Virtual meters (§42b/§42c EnWG) | `virtual_meter_configs` |
-| Devices | `meter_exchange_events` · `smgw_sessions` · `cls_compliance_log` |
+| Devices | `meter_exchange_events` · `smgw_sessions` · `cls_compliance_log` · `smgw_cert_expiry_alerts` |
 | Cold tier | `archive_batches` · `iceberg_catalog_entries` |
 | GDPR | `gdpr_deletions` · `gdpr_archive_files` |
 

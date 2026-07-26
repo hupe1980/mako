@@ -10,7 +10,7 @@ no customer management. It pulls product definitions from `tarifbd`, consumption
 | **Database** | PostgreSQL (billing_records) |
 | **Auth** | OIDC/JWT on every business route — fail-closed at startup (`allow_insecure_no_auth` for dev) |
 | **Product API** | `Product` typed enum — `#[serde(tag="category")]` deserialization from tarifbd JSONB |
-| **Categories** | 12: STROM, GAS, WAERME, SOLAR, EEG, EINSPEISUNG, WAERMEPUMPE, WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, SHARING |
+| **Categories** | 13: STROM, GAS, WAERME, WASSER, SOLAR, EEG, EINSPEISUNG, WAERMEPUMPE, WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, SHARING |
 | **§41a EPEX dynamic** | 15-min Lastgang × hourly EPEX day-ahead → `STROM` dynamic category |
 | **§41b iMSys guard** | Hard error when `dynamic_epex=true` and `MeteringMode != Imsys` |
 | **§14a discount** | `ControllableLoadProvider` Modul 1 (capacity reduction) + Modul 3 (load-shedding) |
@@ -93,7 +93,7 @@ nothing while the working client function sat as dead code.
 ## Billing arithmetic
 
 All monetary amounts use `billing::Amount<5>` (`EuroAmount` — `i64 × 10⁻⁵` EUR). Never `f64`.
-The billing calculator is in the **pure `energy-billing` crate** — **191 tests** with no I/O:
+The billing calculator is in the **pure `energy-billing` crate** — **185 tests** with no I/O:
 
 ```bash
 cargo test -p energy-billing --all-features

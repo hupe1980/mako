@@ -5,7 +5,7 @@ the German electricity-grid congestion-management protocol (§§ 13, 13a, 14 EnW
 mandatory since 1 October 2021).
 
 All nine BDEW Redispatch 2.0 document types are fully implemented: parse, serialize,
-structural validation, and semantic validation. The crate targets MSRV 1.89 and is
+structural validation, and semantic validation. The crate targets MSRV 1.94 and is
 `#![deny(unsafe_code)]`.
 
 ---
@@ -30,17 +30,17 @@ conformant implementation is a regulatory violation under § 14 EnWG.
 All documents are CIM/IEC 62325-based XML, **not** EDIFACT. IFTSTA status
 messages (EDIFACT) are handled by the `edi-energy` crate.
 
-| Document type | XSD version | Valid from | Status |
-|---|---|---|---|
-| `ActivationDocument` | 1.1f | 2025-10-01 | ✅ Implemented |
-| `PlannedResourceScheduleDocument` | 1.0f | 2025-10-01 | ✅ Implemented |
-| `AcknowledgementDocument` | 1.0f | 2025-10-01 | ✅ Implemented |
-| `Stammdaten` (master data) | 1.4b | 2025-10-01 | ✅ Implemented |
-| `StatusRequest_MarketDocument` | 1.1 | 2025-10-01 | ✅ Implemented |
-| `Unavailability_MarketDocument` | 1.1b | 2025-10-01 | ✅ Implemented |
-| `Kaskade` | 1.0 | 2025-10-01 | ✅ Implemented |
-| `NetworkConstraintDocument` | 1.1b | 2025-10-01 | ✅ Implemented |
-| `Kostenblatt` | 1.0d | 2025-10-01 | ✅ Implemented |
+| Document type | XSD version | Valid from |
+|---|---|---|
+| `ActivationDocument` | 1.1f | 2025-10-01 |
+| `PlannedResourceScheduleDocument` | 1.0f | 2025-10-01 |
+| `AcknowledgementDocument` | 1.0f | 2025-10-01 |
+| `Stammdaten` (master data) | 1.4b | 2025-10-01 |
+| `StatusRequest_MarketDocument` | 1.1 | 2025-10-01 |
+| `Unavailability_MarketDocument` | 1.1b | 2025-10-01 |
+| `Kaskade` | 1.0 | 2025-10-01 |
+| `NetworkConstraintDocument` | 1.1b | 2025-10-01 |
+| `Kostenblatt` | 1.0d | 2025-10-01 |
 
 XSD schemas and application guidelines are published by BDEW at
 [bdew-mako.de](https://www.bdew-mako.de/market_communication/documents)

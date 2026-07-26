@@ -727,28 +727,60 @@ impl As4Sender for BdewAs4Sender {
                 }
             })?;
 
-            // Inspect the synchronous AS4 receipt in the response body.
-            // Per BDEW MaKo AS4-Profil 2.0 §4.6.3, the receiver must return a
-            // synchronous `eb:Receipt` SignalMessage.  Missing or mismatched
-            // receipts are non-fatal (we already got HTTP 200) but warrant a
-            // structured warning so operators can diagnose counterparty conformance
-            // issues without losing the delivery confirmation.
-            if let Err(reason) =
-                verify_sync_receipt(&outcome.body, &message_id_str, &recipient, &message_type)
-            {
-                if lenient_receipts {
+            // Verify the counterparty's synchronous AS4 signal (BDEW MaKo AS4-Profil
+            // 2.0 §4.6.3). asx-rs parses it namespace-correctly, verifies the receipt
+            // signature *and that it covers the acted-on eb:SignalMessage*, checks
+            // `RefToMessageId`, verifies every NonRepudiationInformation digest against
+            // what the sent message was signed over, and enforces a replay window — the
+            // Non-Repudiation-of-Receipt guarantee, proven end to end rather than assumed.
+            let content_type = outcome
+                .header("Content-Type")
+                .unwrap_or("application/soap+xml")
+                .to_string();
+            let receipt_policy = if lenient_receipts {
+                // Interop bring-up: accept unsigned / non-NRR receipts (still verifies
+                // any signature/digest that IS present). Never a production posture.
+                asx_rs::as4::As4ReceiptPolicy::relaxed()
+            } else {
+                asx_rs::as4::As4ReceiptPolicy::regulated()
+            };
+            match asx_rs::as4::verify_sync_response(
+                &session,
+                &event_bus,
+                &output,
+                &outcome.body,
+                &content_type,
+                &receipt_policy,
+            ) {
+                Ok(asx_rs::as4::As4SyncSignal::Receipt(_)) => {
+                    // Delivery confirmed (NRR proven under the regulated policy).
+                }
+                Ok(asx_rs::as4::As4SyncSignal::Error(err)) => {
+                    // The counterparty rejected the message with an eb:Error. This is a
+                    // confirmed rejection, not a lost receipt — the ebMS3 diagnostics
+                    // drive retry-vs-dead-letter in the outbox worker.
+                    EngineMetrics::global().outbox_delivery_attempted("counterparty_error");
+                    return Err(EngineError::Transport {
+                        endpoint: endpoint.as_str().into(),
+                        message: format!(
+                            "counterparty rejected {message_id_str} with an AS4 eb:Error: {}",
+                            err.summary()
+                        ),
+                    });
+                }
+                Err(reason) if lenient_receipts => {
                     tracing::warn!(
                         message_id   = %message_id_str,
                         recipient    = %recipient,
                         message_type = %message_type,
                         reason       = %reason,
-                        "BdewAs4Sender: --as4-lenient-receipts — synchronous \
-                         eb:Receipt verification failed; delivery acknowledged anyway",
+                        "BdewAs4Sender: --as4-lenient-receipts — receipt verification \
+                         failed; delivery acknowledged anyway",
                     );
-                } else {
-                    // Strict default: a delivery without a verifiable synchronous
-                    // receipt is not a confirmed delivery (BDEW MaKo AS4 MEP).
-                    // Transport errors are retryable — the outbox worker backs
+                }
+                Err(reason) => {
+                    // Strict default: a delivery without a verifiable synchronous receipt
+                    // is not a confirmed delivery. Retryable — the outbox worker backs
                     // off and dead-letters after the retry budget.
                     EngineMetrics::global().outbox_delivery_attempted("receipt_unverified");
                     return Err(EngineError::Transport {
@@ -759,6 +791,18 @@ impl As4Sender for BdewAs4Sender {
                         ),
                     });
                 }
+                Ok(other) if !lenient_receipts => {
+                    // `As4SyncSignal` is #[non_exhaustive]: a future signal variant is
+                    // not a confirmed receipt, so fail closed under the regulated policy.
+                    EngineMetrics::global().outbox_delivery_attempted("receipt_unverified");
+                    return Err(EngineError::Transport {
+                        endpoint: endpoint.as_str().into(),
+                        message: format!(
+                            "unrecognized synchronous AS4 signal for {message_id_str}: {other:?}"
+                        ),
+                    });
+                }
+                Ok(_) => {}
             }
 
             tracing::info!(
@@ -774,99 +818,6 @@ impl As4Sender for BdewAs4Sender {
             Ok(())
         }
     }
-}
-
-// ── Synchronous receipt inspection ───────────────────────────────────────────
-
-/// Verify the synchronous `eb:Receipt` in the counterparty's response body.
-///
-/// The BDEW MaKo AS4 MEP requires a synchronous `eb:Receipt` SignalMessage on
-/// the same HTTP connection, referencing the sent `message_id`. This returns
-/// `Err(reason)` when:
-///
-/// - the response body is empty or not UTF-8,
-/// - no `eb:Receipt` element is present,
-/// - `eb:RefToMessageId` is absent or references a different message.
-///
-/// A missing `eb:NonRepudiationInformation` is warned about but does not fail
-/// verification — the receipt still confirms receipt of the correct message.
-///
-/// The caller decides whether a failure is fatal (strict default: retryable
-/// delivery failure) or advisory (`--as4-lenient-receipts`).
-fn verify_sync_receipt(
-    body: &[u8],
-    message_id: &str,
-    recipient: &str,
-    message_type: &str,
-) -> Result<(), String> {
-    if body.is_empty() {
-        return Err(
-            "counterparty returned an empty response body — no synchronous \
-             eb:Receipt received (BDEW MaKo AS4-Profil 2.0 §4.6.3)"
-                .to_owned(),
-        );
-    }
-
-    let body_str = std::str::from_utf8(body)
-        .map_err(|_| "response body is not valid UTF-8 — cannot inspect eb:Receipt".to_owned())?;
-
-    if !body_str.contains("<eb:Receipt") && !body_str.contains("<eb3:Receipt") {
-        return Err(
-            "counterparty response does not contain eb:Receipt — synchronous \
-             receipt is absent (BDEW MaKo AS4-Profil 2.0 §4.6.3)"
-                .to_owned(),
-        );
-    }
-
-    let ref_id_opt = extract_element_text(body_str, "eb:RefToMessageId")
-        .or_else(|| extract_element_text(body_str, "eb3:RefToMessageId"));
-    match ref_id_opt {
-        Some(ref_id) if ref_id != message_id => {
-            return Err(format!(
-                "eb:Receipt.RefToMessageId {ref_id:?} does not reference the \
-                 sent message_id {message_id:?}"
-            ));
-        }
-        None => {
-            return Err(
-                "eb:Receipt present but eb:RefToMessageId is absent — cannot \
-                 verify the receipt references the correct message"
-                    .to_owned(),
-            );
-        }
-        Some(_) => {}
-    }
-
-    // BDEW MaKo AS4-Profil 2.0 §4.6.3 requires NonRepudiationInformation for
-    // signed messages. Advisory: the receipt already references the correct
-    // message, so absence is a counterparty conformance warning, not a
-    // delivery failure.
-    if !body_str.contains("<eb:NonRepudiationInformation")
-        && !body_str.contains("<eb3:NonRepudiationInformation")
-    {
-        tracing::warn!(
-            message_id   = %message_id,
-            recipient    = %recipient,
-            message_type = %message_type,
-            "BdewAs4Sender: eb:Receipt is present but eb:NonRepudiationInformation \
-             is absent (BDEW MaKo AS4-Profil 2.0 §4.6.3) — counterparty NRI gap",
-        );
-    }
-    Ok(())
-}
-
-/// Extract the text content of the first occurrence of `<tag>…</tag>` in `xml`.
-///
-/// Returns `None` when the opening tag is absent.  Does not handle CDATA
-/// sections, namespaced tags with different prefixes, or nested identical tags.
-/// Sufficient for the BDEW AS4 receipt `eb:RefToMessageId` check which always
-/// appears exactly once in a well-formed receipt.
-fn extract_element_text<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let open = format!("<{tag}>");
-    let close = format!("</{tag}>");
-    let start = xml.find(open.as_str())? + open.len();
-    let end = xml[start..].find(close.as_str()).map(|i| start + i)?;
-    Some(xml[start..end].trim())
 }
 
 // ── §AF §2.12 helpers ─────────────────────────────────────────────────────────
@@ -887,108 +838,4 @@ fn anwendungsreferenz_for(_message_type: &str) -> &'static str {
     // VL / TL / EM are only used for MSCONS, and only when the sender
     // explicitly sets UNB DE0026 — which our bare-UNH builders never do.
     ""
-}
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ── extract_element_text ───────────────────────────────────────────────────
-
-    #[test]
-    fn extract_element_text_returns_content() {
-        let xml = "<root><eb:RefToMessageId>msg-123</eb:RefToMessageId></root>";
-        assert_eq!(
-            extract_element_text(xml, "eb:RefToMessageId"),
-            Some("msg-123")
-        );
-    }
-
-    #[test]
-    fn extract_element_text_trims_whitespace() {
-        let xml = "<eb:RefToMessageId>  msg-456  </eb:RefToMessageId>";
-        assert_eq!(
-            extract_element_text(xml, "eb:RefToMessageId"),
-            Some("msg-456")
-        );
-    }
-
-    #[test]
-    fn extract_element_text_absent_returns_none() {
-        let xml = "<root><other>value</other></root>";
-        assert_eq!(extract_element_text(xml, "eb:RefToMessageId"), None);
-    }
-
-    #[test]
-    fn extract_element_text_empty_xml_returns_none() {
-        assert_eq!(extract_element_text("", "eb:RefToMessageId"), None);
-    }
-
-    // ── verify_sync_receipt ────────────────────────────────────────────────────
-    //
-    // verify_sync_receipt returns Err for missing/mismatched receipts and
-    // must never panic for edge-case inputs.
-
-    #[test]
-    fn verify_sync_receipt_rejects_empty_body() {
-        let err = verify_sync_receipt(b"", "msg-001", "9903462000005", "APERAK").unwrap_err();
-        assert!(err.contains("empty response body"), "{err}");
-    }
-
-    #[test]
-    fn verify_sync_receipt_rejects_non_utf8() {
-        let err =
-            verify_sync_receipt(&[0xFF, 0xFE], "msg-001", "9903462000005", "APERAK").unwrap_err();
-        assert!(err.contains("not valid UTF-8"), "{err}");
-    }
-
-    #[test]
-    fn verify_sync_receipt_accepts_matching_receipt_and_rejects_mismatch() {
-        let ok = b"<eb:Receipt><eb:RefToMessageId>msg-001</eb:RefToMessageId>\
-                   <eb:NonRepudiationInformation/></eb:Receipt>";
-        assert!(verify_sync_receipt(ok, "msg-001", "99", "APERAK").is_ok());
-        let err = verify_sync_receipt(ok, "msg-OTHER", "99", "APERAK").unwrap_err();
-        assert!(err.contains("does not reference"), "{err}");
-    }
-
-    #[test]
-    fn verify_sync_receipt_rejects_missing_receipt_element() {
-        let body = b"<soap:Envelope><soap:Body></soap:Body></soap:Envelope>";
-        let err = verify_sync_receipt(body, "msg-001", "9903462000005", "APERAK").unwrap_err();
-        assert!(err.contains("does not contain eb:Receipt"), "{err}");
-    }
-
-    #[test]
-    fn verify_sync_receipt_accepts_matching_receipt_in_envelope() {
-        let body = r#"<soap:Envelope>
-  <soap:Body>
-    <eb:Receipt>
-      <eb:RefToMessageId>msg-001</eb:RefToMessageId>
-      <eb:NonRepudiationInformation/>
-    </eb:Receipt>
-  </soap:Body>
-</soap:Envelope>"#;
-        assert!(verify_sync_receipt(body.as_bytes(), "msg-001", "9903462000005", "APERAK").is_ok());
-    }
-
-    #[test]
-    fn verify_sync_receipt_rejects_mismatched_ref_id() {
-        let body = r#"<eb:Receipt>
-  <eb:RefToMessageId>different-msg</eb:RefToMessageId>
-  <eb:NonRepudiationInformation/>
-</eb:Receipt>"#;
-        let err =
-            verify_sync_receipt(body.as_bytes(), "msg-001", "9903462000005", "APERAK").unwrap_err();
-        assert!(err.contains("does not reference"), "{err}");
-    }
-
-    #[test]
-    fn verify_sync_receipt_missing_nri_is_advisory_only() {
-        let body = r#"<eb:Receipt>
-  <eb:RefToMessageId>msg-001</eb:RefToMessageId>
-</eb:Receipt>"#;
-        assert!(verify_sync_receipt(body.as_bytes(), "msg-001", "9903462000005", "APERAK").is_ok());
-    }
 }

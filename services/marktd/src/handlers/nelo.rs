@@ -75,6 +75,14 @@ fn normalize_netzlokation(
             serde_json::json!({ "error": format!("invalid Netzlokation payload: {e}") }),
         )
     })?;
+    // Strict enum gate — reject out-of-schema enum values (which serde would
+    // otherwise decode to `Unknown`) anywhere in the tree, with JSON-paths.
+    rubo4e::Bo4eStrict::ensure_known_enums(&nelo).map_err(|e| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            serde_json::json!({ "error": format!("Netzlokation has out-of-schema enum values: {e}") }),
+        )
+    })?;
     let canonical = serde_json::to_value(&nelo).unwrap_or_default();
     Ok((nelo, canonical))
 }

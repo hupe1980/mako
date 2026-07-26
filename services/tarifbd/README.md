@@ -9,7 +9,7 @@
 | **Database** | PostgreSQL (products, customer_products, epex_prices) |
 | **Auth** | OIDC/JWT + Cedar ABAC |
 | **Product categories** | 14: STROM, GAS, WAERME, WASSER, SOLAR, EEG, EINSPEISUNG, WAERMEPUMPE, WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, BUNDLE, SHARING (§42c) |
-| **BO4E validation** | `Tarifpreisblatt` validated on PUT — `_typ`, `_version`, `sparte`/`tariftyp`/`kundentypen`/`registeranzahl`/`berechnungsparameter` enums; **30-value** `preistyp` whitelist |
+| **BO4E validation** | `Tarifpreisblatt` validated on PUT — `_typ`, `_version`, `sparte`/`tariftyp`/`kundentypen`/`registeranzahl`/`berechnungsparameter` enums; **28-value** `preistyp` whitelist |
 | **Energiemix** | `PUT/GET/DELETE /api/v1/products/{lf}/{code}/energiemix` — §42 EnWG Herkunftsnachweis |
 | **EPEX Spot** | `epex_prices` table (15-min MTU ct/kWh, keyed on `mtu_start` UTC); `PUT /api/v1/epex-prices/{date}` import; `GET /api/v1/epex-prices/{date}/quarter-hourly` |
 | **MaLo→product** | `GET/PUT /api/v1/customer/{malo_id}/product` — current product assignment |
@@ -18,6 +18,7 @@
 | **Soft-delete** | `DELETE /api/v1/products/{lf}/{code}` — sets `valid_to = today` (non-destructive) |
 | **Angebote** | `POST/GET /api/v1/angebote` — B2B formal quotation workflow (ANGELEGT→VERSANDT→ANGENOMMEN); auto-expires stale quotes |
 | **Health** | `GET /health/live`, `GET /health/ready` |
+| **MCP** | **14 tools + 3 prompts** at `/mcp` (Streamable HTTP); product/EPEX/Angebot lookup, §41a EPEX status, Tarifpreisblatt validation |
 
 ## Configuration
 

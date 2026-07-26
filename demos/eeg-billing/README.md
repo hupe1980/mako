@@ -21,8 +21,15 @@ ERP → POST /api/v1/anlagen/TR0000000001/settle/2026/6
                                                   Trigger EEG settlement
 einsd → GET {edmd}/api/v1/billing-period/17835382035   Auto-fetch Einspeisemenge
 einsd → calculates Vergütung (8.11 ct/kWh × ~2880 kWh ≈ EUR 233.57)
-ERP ← de.eeg.verguetung.berechnet CloudEvent     Settlement result
+einsd → issues the §14 UStG Gutschrift (BO4E Rechnung + USt breakdown)
+                                                  stored in settlement_receipts.rechnung_json
+ERP ← de.eeg.verguetung.berechnet CloudEvent     Settlement result + Gutschrift (number, net, USt, brutto)
 ```
+
+The settlement *amount* alone is not a legal document. Under the **Gutschriftverfahren**
+(§14 Abs. 2 Satz 2 UStG) the Netzbetreiber issues the Gutschrift to the plant operator, so
+`einsd` renders it as a BO4E `Rechnung` with the per-rate USt breakdown and carries the
+document facts on the CloudEvent for `accountingd` to book against.
 
 ## Settlement logic
 
@@ -50,14 +57,10 @@ docker build --target edmd-runtime    -t edmd:dev    .
 docker build --target einsd-runtime   -t einsd:dev   .
 ```
 
-Or build all demo images at once:
+Or build all three in parallel with `docker buildx bake`:
 
 ```bash
-docker build --target runtime             -t makod:dev    .
-docker build --target marktd-runtime      -t marktd:dev   .
-docker build --target processd-runtime    -t processd:dev .
-docker build --target edmd-runtime        -t edmd:dev     .
-docker build --target einsd-runtime       -t einsd:dev    .
+docker buildx bake marktd edmd einsd
 ```
 
 ## Run the demo

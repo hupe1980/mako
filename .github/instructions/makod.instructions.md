@@ -35,8 +35,10 @@ All configuration is driven by CLI flags with `MAKOD_*` environment variable ove
 | Flag | Env var | Notes |
 |---|---|---|
 | `--data-dir <DIR>` | `MAKOD_DATA_DIR` | Omitting enables volatile in-memory mode — not for production |
-| `--object-store <BACKEND>` | `MAKOD_OBJECT_STORE` | `local` / `s3` / `gcs` |
+| `--object-store <BACKEND>` | `MAKOD_OBJECT_STORE` | `local` / `s3` / `gcs` / `azure` (default `local`) |
 | `--s3-bucket` / `--s3-endpoint` | `MAKOD_S3_BUCKET` / `MAKOD_S3_ENDPOINT` | S3/MinIO |
+| `--gcs-bucket` | `MAKOD_GCS_BUCKET` | GCS |
+| `--azure-container` / `--azure-account` | `MAKOD_AZURE_CONTAINER` / `MAKOD_AZURE_ACCOUNT` | Azure Blob Storage |
 | `--log-level <LEVEL>` | `MAKOD_LOG_LEVEL` | default `info` |
 | `--log-format <FORMAT>` | `MAKOD_LOG_FORMAT` | `pretty` / `json` |
 

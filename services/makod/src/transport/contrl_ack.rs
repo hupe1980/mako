@@ -27,10 +27,13 @@
 //! - AS4 inbound — via [`crate::as4_ingest::BdewAs4IngestHandler`]
 //!
 //! Call [`ContrlAckService::emit_for_interchange`] once per successfully-parsed
-//! interchange, passing all messages contained in the UNB…UNZ.  The service
-//! enqueues a single [`OutboxMessage`] of type `"CONTRL"` which the
-//! [`OutboxWorker`] renders via `edifact_renderer::render_contrl` and delivers
-//! to the counterparty's AS4 endpoint.
+//! interchange, passing all messages contained in the UNB…UNZ **and the
+//! recipient MP-ID** (UNB DE0010 — the own party the interchange is addressed to).
+//! The recipient MP-ID resolves the interchange's Sparte via the own-party
+//! registry (each `[[party]]` is exactly one Sparte, BDEW §2.13); only Gas
+//! interchanges get a CONTRL. The service enqueues a single [`OutboxMessage`] of
+//! type `"CONTRL"` which the [`OutboxWorker`] renders via
+//! `edifact_renderer::render_contrl` and delivers to the counterparty's AS4 endpoint.
 //!
 //! Failures are logged at `error` level and do NOT propagate to the caller —
 //! the HTTP / AS4 response is unaffected by CONTRL enqueue failures.
@@ -49,6 +52,8 @@ use mako_engine::{
 };
 use time::Duration;
 
+use crate::party_registry::{MpIdRegistry, RoleSparte};
+
 // ── ContrlAckService ─────────────────────────────────────────────────────────
 
 /// CONTRL Empfangsbestätigung emitter for Gas interchanges.
@@ -66,9 +71,11 @@ pub struct ContrlAckService {
     /// queue the message without its escalation deadline.
     outbox: Arc<SlateDbStore>,
     tenant_id: TenantId,
-    /// The tenant's own market-participant identifier (GLN), emitted as the
-    /// CONTRL `sender` field (the party acknowledging the inbound interchange).
-    own_mp_id: Box<str>,
+    /// Own-party registry. Resolves the inbound interchange's recipient MP-ID
+    /// (UNB DE0010) to its [`RoleSparte`] — the authoritative Sparte signal for
+    /// the Gas-only CONTRL obligation — and supplies the CONTRL `sender` field
+    /// (the addressed own MP-ID, correct even in a multi-Sparte deployment).
+    mp_id_registry: Arc<MpIdRegistry>,
 }
 
 impl ContrlAckService {
@@ -77,17 +84,18 @@ impl ContrlAckService {
     /// - `outbox`: shared `SlateDbStore` — enqueues the CONTRL message and
     ///   registers its 6h deadline (CONTRL AHB 1.0 §2.3.1) atomically.
     /// - `tenant_id`: the active tenant identifier.
-    /// - `own_mp_id`: the tenant's market-participant code (BDEW GLN, 13 digits).
+    /// - `mp_id_registry`: the own-party registry, used to resolve the recipient
+    ///   MP-ID to its Sparte and to pick the CONTRL sender GLN.
     #[must_use]
     pub fn new(
         outbox: Arc<SlateDbStore>,
         tenant_id: TenantId,
-        own_mp_id: impl Into<Box<str>>,
+        mp_id_registry: Arc<MpIdRegistry>,
     ) -> Self {
         Self {
             outbox,
             tenant_id,
-            own_mp_id: own_mp_id.into(),
+            mp_id_registry,
         }
     }
 
@@ -110,37 +118,79 @@ impl ContrlAckService {
     /// bare UNH…UNT messages without a UNB envelope).  The CONTRL renderer treats
     /// an empty `interchange_ref` as absent.
     ///
+    /// `recipient_mp_id` is the UNB DE0010 receiver GLN — the own MP-ID the
+    /// interchange was addressed to. It determines the Sparte (each own party is
+    /// exactly one Sparte) and becomes the CONTRL sender. Pass
+    /// `pi.header.receiver_id.as_ref()`.
+    ///
     /// Passes silently when:
-    /// - No Gas message is present in `messages`.
+    /// - The interchange is not Gas (recipient MP-ID resolves to Strom, or — for a
+    ///   sparte-neutral / unknown recipient — no message carries a Gas signal).
     /// - All messages are CONTRL (§2.2.2.2 exception: no CONTRL-on-CONTRL).
-    /// - No sender GLN can be extracted from any Gas message.
+    /// - No sender GLN can be extracted from any acknowledgeable message.
     ///
     /// `messages` should contain every successfully-parsed message from one
     /// UNB…UNZ interchange.  Syntax-error messages (parse failures) are not
     /// passed here — they should trigger a CONTRL Syntaxfehlermeldung (UCI=4)
     /// via a separate path (not yet implemented, tracked as part of F-033).
-    pub async fn emit_for_interchange(&self, messages: &[&AnyMessage], interchange_ref: &str) {
-        // §2.2.2.2 exception: no CONTRL in response to CONTRL.
-        // APERAK is NOT excluded: CONTRL AHB §2.3.1 + APERAK AHB §2.3 mandate
-        // a CONTRL reply even for inbound Gas APERAKs.
-        let gas_messages: Vec<&AnyMessage> = messages
-            .iter()
-            .copied()
-            .filter(|m| !is_contrl(m) && is_gas(m))
-            .collect();
+    pub async fn emit_for_interchange(
+        &self,
+        messages: &[&AnyMessage],
+        interchange_ref: &str,
+        recipient_mp_id: &str,
+    ) {
+        // ── Determine the interchange Sparte ───────────────────────────────────
+        // The CONTRL Empfangsbestätigung obligation (CONTRL AHB 1.0 §2.3.1) is a
+        // property of the *Übertragungsdatei*, keyed purely on Sparte — every
+        // inbound Gas interchange gets a CONTRL; Strom does not.
+        //
+        // Primary signal: the recipient MP-ID (UNB DE0010) is one of our own
+        // parties, and every `[[party]]` covers exactly one Sparte (BDEW §2.13).
+        // This is authoritative — unlike PID/release heuristics, which fail for
+        // INVOIC/ORDERS/MSCONS (no Sparte prefix in the release code, and NAD
+        // DE3055 agency 293 is shared across both sectors in modern MaKo).
+        //
+        // Fallback (recipient is a sparte-neutral own party or not one of ours):
+        // the message-level Gas heuristic — an unambiguous Gas-only PID or a Gas
+        // UTILMD release track.
+        let is_gas_interchange = match self.mp_id_registry.sparte_of(recipient_mp_id) {
+            Some(RoleSparte::Gas) => true,
+            Some(RoleSparte::Strom) => false,
+            Some(RoleSparte::Both) | None => {
+                messages.iter().any(|m| !is_contrl(m) && message_is_gas(m))
+            }
+        };
 
-        if gas_messages.is_empty() {
+        if !is_gas_interchange {
             return;
         }
 
-        // Extract sender GLN from the first Gas message that has one.
-        let Some(sender_mp_id) = gas_messages.iter().find_map(|m| sender_mp_id(m)) else {
+        // §2.2.2.2 exception: no CONTRL in response to CONTRL. APERAK is NOT
+        // excluded (CONTRL AHB §2.3.1 + APERAK AHB §2.3 mandate a CONTRL even for
+        // inbound Gas APERAKs). An interchange of only CONTRL is skipped here.
+        let ackable: Vec<&AnyMessage> =
+            messages.iter().copied().filter(|m| !is_contrl(m)).collect();
+        if ackable.is_empty() {
+            return;
+        }
+
+        // Extract sender GLN (the CONTRL recipient) from the first message with one.
+        let Some(sender_mp_id) = ackable.iter().find_map(|m| sender_mp_id(m)) else {
             tracing::warn!(
-                message_count = gas_messages.len(),
+                message_count = ackable.len(),
                 "CONTRL ack: Gas interchange received but no sender GLN found \
                  in any message — Empfangsbestätigung NOT enqueued (regulatory gap)"
             );
             return;
+        };
+
+        // CONTRL sender = the own MP-ID the interchange was addressed to (the
+        // Sparte-correct GLN, even in a multi-Sparte deployment). Fall back to the
+        // primary MP-ID when the recipient was resolved only by the heuristic.
+        let contrl_sender: &str = if self.mp_id_registry.is_own_mp_id(recipient_mp_id) {
+            recipient_mp_id
+        } else {
+            self.mp_id_registry.primary_mp_id()
         };
 
         // Construct a synthetic OutboxMessage.
@@ -159,7 +209,7 @@ impl ContrlAckService {
             "CONTRL",
             sender_mp_id.as_ref(),
             serde_json::json!({
-                "sender":          self.own_mp_id.as_ref(),
+                "sender":          contrl_sender,
                 "receiver":        sender_mp_id.as_ref(),
                 "accepted":        true,
                 // UNB DE0020 interchange control reference.
@@ -237,19 +287,26 @@ fn is_contrl(msg: &AnyMessage) -> bool {
     matches!(msg, AnyMessage::Contrl(_))
 }
 
-/// Returns `true` when the message belongs to the **Gas sparte**.
+/// Message-level Gas heuristic — the **fallback** used only when the recipient
+/// MP-ID does not resolve to a single Sparte (a sparte-neutral own party, or an
+/// interchange not addressed to one of our own MP-IDs).
 ///
-/// Detection uses two complementary strategies:
+/// The authoritative signal is [`MpIdRegistry::sparte_of`] on the recipient
+/// MP-ID; this heuristic exists purely as a best-effort backstop and is
+/// deliberately conservative (only *unambiguous* Gas signals return `true`):
 ///
-/// 1. **Unambiguous Gas PIDs** (UTILMD G, INSRPT Gas, INVOIC Gas) — checked first.
+/// 1. **Unambiguous Gas-only PID** (UTILMD G, INSRPT Gas, INVOIC WiM/GaBi/AWH Gas).
 ///    These PIDs exist only in Gas profiles; no Strom message can carry them.
 ///
-/// 2. **UNH S009 release-code prefix** — fallback for messages with no PID or
-///    messages whose PID is shared between Gas and Strom (e.g. ORDERS 17115/17117
-///    used by both GPKE Sperrung Strom and GeLi Gas Sperrung Gas).
-///    Gas release codes start with `"G"` (e.g. `"G1.1"`, `"G3.0"`);
-///    Strom release codes start with `"S"` (e.g. `"S2.1"`, `"S2.2"`).
-fn is_gas(msg: &AnyMessage) -> bool {
+/// 2. **UTILMD release track** — UTILMD is the only message type whose UNH S009
+///    release code carries a Sparte prefix (`G…` = Gas, `S…` = Strom). INVOIC,
+///    ORDERS, MSCONS, IFTSTA and INSRPT releases have no Sparte prefix, so the
+///    release fallback cannot classify them — those rely on the recipient MP-ID.
+///
+/// Genuinely ambiguous PIDs (INVOIC NN/MMM/MSB 31001/31002/31005/31006/31009,
+/// ORDERS Sperrung 17115–17117) are therefore *not* resolvable by this heuristic
+/// alone; they are resolved by the recipient MP-ID in [`emit_for_interchange`].
+fn message_is_gas(msg: &AnyMessage) -> bool {
     // Strategy 1: unambiguous Gas-only PID.
     if let Ok(pid) = msg.detect_pruefidentifikator() {
         if is_unambiguous_gas_pid(pid.as_u32()) {
@@ -261,7 +318,7 @@ fn is_gas(msg: &AnyMessage) -> bool {
         }
     }
 
-    // Strategy 2: release-code prefix.
+    // Strategy 2: UTILMD release track (only UTILMD carries a G/S prefix).
     msg.detect_release()
         .ok()
         .map(|r| r.as_ref().starts_with('G'))
@@ -287,8 +344,15 @@ fn is_unambiguous_gas_pid(pid: u32) -> bool {
 
 /// Strom-only PID ranges (cannot appear in Gas interchanges).
 ///
-/// Returning `true` here short-circuits strategy 2, preventing a Strom
-/// message with an ambiguous release code from being misclassified as Gas.
+/// Returning `true` here short-circuits the release-track fallback, preventing a
+/// Strom message with an ambiguous release code from being misclassified as Gas.
+///
+/// **Not listed here:** the INVOIC PIDs 31001 (Abschlag), 31002 (NN-Rechnung),
+/// 31005/31006 (MMM) and 31009 (MSB-Rechnung). Per the BDEW INVOIC AHB these are
+/// **Sparte-agnostic** — the same Prüfidentifikator is used for Strom *and* Gas,
+/// with the Sparte carried in the message content. Classifying them as Strom-only
+/// would suppress the mandatory CONTRL for a Gas NN/MMM/MSB invoice. Their Sparte
+/// is resolved by the recipient MP-ID in [`emit_for_interchange`].
 fn is_strom_only_pid(pid: u32) -> bool {
     matches!(
         pid,
@@ -296,8 +360,6 @@ fn is_strom_only_pid(pid: u32) -> bool {
         55001..=55557
             // GPKE IFTSTA Strom (Vollzugsmeldung)
             | 21024..=21028 | 21033 | 21035 | 21045 | 21047
-            // Strom INVOIC (GPKE, WiM Strom) — 31007/31008 are Gas-only (BK7-24-01-008)
-            | 31001 | 31002 | 31005 | 31006 | 31009
             // MaBiS MSCONS / IFTSTA
             | 13003 | 21000..=21005
     )
@@ -359,23 +421,37 @@ mod tests {
     }
 
     #[test]
-    fn strom_only_excludes_gas_invoic_pids() {
-        // 31007 and 31008 are Gas-only (BK7-24-01-008, Aggreg. MMM-Rechnung Gas, NB → MGV)
-        // They must NOT appear in is_strom_only_pid even though 31005–31009 is a natural range.
+    fn strom_only_pids_are_genuinely_strom_only() {
+        // Gas-only INVOIC PIDs must NOT be Strom-only.
         assert!(!is_strom_only_pid(31007));
         assert!(!is_strom_only_pid(31008));
-        // Confirm Strom INVOIC PIDs are still classified correctly.
-        assert!(is_strom_only_pid(31001));
-        assert!(is_strom_only_pid(31002));
-        assert!(is_strom_only_pid(31005));
-        assert!(is_strom_only_pid(31006));
-        assert!(is_strom_only_pid(31009));
+        // Genuine Strom-only PIDs: UTILMD Strom, IFTSTA Strom, MaBiS.
+        assert!(is_strom_only_pid(55001));
+        assert!(is_strom_only_pid(21024));
+        assert!(is_strom_only_pid(13003));
+    }
+
+    #[test]
+    fn invoic_nne_mmm_msb_pids_are_sparte_agnostic() {
+        // Per the BDEW INVOIC AHB, 31001 (Abschlag), 31002 (NN-Rechnung),
+        // 31005/31006 (MMM) and 31009 (MSB) are used for BOTH Strom and Gas —
+        // the same PID, Sparte in the content. They must be in NEITHER PID list,
+        // so an inbound Gas NN/MMM/MSB invoice is resolved by the recipient MP-ID
+        // (not wrongly suppressed as "Strom-only").
+        for pid in [31001, 31002, 31005, 31006, 31009] {
+            assert!(!is_strom_only_pid(pid), "PID {pid} must not be Strom-only");
+            assert!(
+                !is_unambiguous_gas_pid(pid),
+                "PID {pid} must not be unambiguous-Gas"
+            );
+        }
     }
 
     #[test]
     fn ambiguous_orders_pid_not_in_either_list() {
-        // ORDERS 17115/17117 are used by both Gas and Strom Sperrung —
-        // disambiguation falls through to release-code check at runtime.
+        // ORDERS 17115/17117 are used by both Gas and Strom Sperrung, and the
+        // ORDERS release code carries no Sparte prefix — disambiguation is by the
+        // recipient MP-ID (MpIdRegistry::sparte_of) at runtime.
         assert!(!is_unambiguous_gas_pid(17115));
         assert!(!is_unambiguous_gas_pid(17117));
         assert!(!is_strom_only_pid(17115));

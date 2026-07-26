@@ -225,7 +225,7 @@ See the [Configuration](#configuration) section below for a full example.
 | Provider | Backend string | Notes |
 |---|---|---|
 | OpenAI | `openai` | `text-embedding-3-small` for embeddings; compatible with Azure OpenAI, Ollama, LM Studio |
-| Anthropic | `anthropic` | Claude 3.5 Sonnet; BM25 keyword fallback (no embedding API) |
+| Anthropic | `anthropic` | Claude (operator-configured model); BM25 keyword fallback (no embedding API) |
 | AWS Bedrock | `bedrock` | SigV4 signed requests; Claude on Bedrock or Titan embeddings |
 
 ---

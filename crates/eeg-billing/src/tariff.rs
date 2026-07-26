@@ -1,15 +1,16 @@
-//! [`billing::Tariff`] implementation bridge for EEG/KWKG settlement.
+//! [`billing::ScalarTariff`] implementation bridge for EEG/KWKG settlement.
 //!
 //! [`EegSettleTariff`] wraps a pre-computed [`SettleOutput`] and exposes it
-//! via the [`billing::Tariff`] trait, enabling EEG settlement results to be
-//! used in `billing::BillingDocument` generation alongside other tariffs.
+//! via the [`billing::ScalarTariff`] trait (billing 0.8 — no `Usage`, no ignored
+//! argument), enabling EEG settlement results to be used in
+//! `billing::BillingDocument` generation alongside other tariffs.
 //!
 //! ## Workflow
 //!
 //! 1. Call [`crate::calculate_settlement`] to compute the settlement output.
 //! 2. Handle non-billable status variants (`NoData`, `PriceMissing`).
 //! 3. Wrap the output in [`EegSettleTariff`].
-//! 4. Call `.bill(meta, &())` to produce a `BillingDocument`.
+//! 4. Call `.settle(meta)` (billing 0.8 [`billing::ScalarTariff`]) to produce a `BillingDocument`.
 //!
 //! ## Tax layers
 //!
@@ -19,7 +20,7 @@
 //! - **Kleinunternehmer (§19 UStG)**: no VAT (common for residential rooftop PV)
 //! - **§12 Abs. 3 UStG** (Photovoltaik ≤30 kWp after 01.01.2023): no VAT registration
 //!
-//! The caller adds the appropriate tax layer before calling `.bill()`.
+//! The caller adds the appropriate tax layer before calling `.settle()`.
 //!
 //! ## Example
 //!
@@ -38,8 +39,8 @@
 //! assert_eq!(output.status, SettlementStatus::Calculated);
 //!
 //! let tariff = EegSettleTariff::new(&output);
-//! use billing::Tariff as _;
-//! let doc = tariff.bill(
+//! use billing::ScalarTariff as _;
+//! let doc = tariff.settle(
 //!     DocumentMeta {
 //!         invoice_number: "EEG-2026-07-001".into(),
 //!         period_label:   "Juli 2026".into(),
@@ -48,20 +49,19 @@
 //!         issue_date: Some("2026-07-13".into()),
 //!         ..Default::default()
 //!     },
-//!     &(),
 //! ).unwrap();
 //!
 //! assert_eq!(doc.net_total(), billing::Amount::parse("40.55000").unwrap());
 //! ```
 
-use billing::{BillingError, LineItem, TaxLayer, tax::FixedRateTax};
+use billing::{BillingError, TaxLayer, tax::FixedRateTax};
 use rust_decimal::dec;
 
 use crate::model::{SettleOutput, SettlementStatus};
 
 // ── EegSettleTariff ──────────────────────────────────────────────────────────
 
-/// [`billing::Tariff`] adapter for EEG/KWKG settlement results.
+/// [`billing::ScalarTariff`] adapter for EEG/KWKG settlement results.
 ///
 /// Wraps a pre-computed [`SettleOutput`] and exposes it through the `Tariff` trait
 /// so EEG settlement can be composed with other billing positions and documents.
@@ -88,24 +88,25 @@ impl<'a> EegSettleTariff<'a> {
     }
 }
 
-impl billing::Tariff for EegSettleTariff<'_> {
-    /// `Usage = ()` — the settlement positions are already computed in `SettleOutput`.
-    type Usage = ();
-
+impl billing::ScalarTariff for EegSettleTariff<'_> {
     /// Use `BillingError` directly for compatibility with `BillingDocument` construction.
     type Error = BillingError;
 
-    fn line_items(&self, _usage: &()) -> Result<Vec<LineItem>, BillingError> {
+    /// `Infallible` — the billing layer always renders *some* document. The
+    /// domain-level not-billable reason (NoData / PriceMissing / Sanctioned /
+    /// FoerderungBeendet) lives on [`SettleOutput::status`], which is richer than a
+    /// two-state billing reason and is what callers already inspect.
+    type NotBillable = std::convert::Infallible;
+
+    /// `ScalarTariff` (billing 0.8): the positions are already computed in
+    /// `SettleOutput`, so there is no `Usage` and no ignored `_usage` argument.
+    fn positions(&self) -> Result<billing::Positions<std::convert::Infallible>, BillingError> {
         // NoData/PriceMissing → empty, Sanctioned → EUR 0 audit line, etc.
-        Ok(crate::bridge::settlement_to_line_items(self.output))
+        Ok(crate::bridge::settlement_to_line_items(self.output).into())
     }
 
-    /// Returns empty — the caller adds the USt layer via [`crate::ust::ust_tax_layers`].
-    ///
-    /// Use [`EegSettleTariffRegelbesteuerung`] for the common 19 % case.
-    fn tax_layers(&self) -> Vec<Box<dyn TaxLayer>> {
-        vec![]
-    }
+    // Tax layers default to empty — the caller adds USt via [`crate::ust::ust_tax_layers`].
+    // Use [`EegSettleTariffRegelbesteuerung`] for the common 19 % case.
 }
 
 // ── EegSettleTariffRegelbesteuerung ──────────────────────────────────────────
@@ -160,16 +161,17 @@ fn ust_layer(rate: rust_decimal::Decimal) -> Result<FixedRateTax, BillingError> 
     FixedRateTax::new(format!("Umsatzsteuer {pct:.0}\u{202f}%"), rate)
 }
 
-impl billing::Tariff for EegSettleTariffRegelbesteuerung<'_> {
-    type Usage = ();
+impl billing::ScalarTariff for EegSettleTariffRegelbesteuerung<'_> {
     type Error = BillingError;
+    type NotBillable = std::convert::Infallible;
 
-    fn line_items(&self, usage: &()) -> Result<Vec<LineItem>, BillingError> {
-        self.inner.line_items(usage)
+    fn positions(&self) -> Result<billing::Positions<std::convert::Infallible>, BillingError> {
+        billing::ScalarTariff::positions(&self.inner)
     }
 
     fn tax_layers(&self) -> Vec<Box<dyn TaxLayer>> {
-        vec![Box::new(self.ust.clone())]
+        // billing 0.8: `.boxed()` replaces `Box::new(_) as Box<dyn TaxLayer>`.
+        vec![self.ust.clone().boxed()]
     }
 }
 

@@ -7,7 +7,8 @@ through Förderdauer expiry.
 | Feature | Detail |
 |---|---|
 | **HTTP port** | `:9180` |
-| **Database** | PostgreSQL (eeg_anlagen, settlement_receipts, eeg_verguetungssaetze) |
+| **Database** | PostgreSQL (eeg_anlagen, settlement_receipts incl. `rechnung_json` + `gutschrift_nummer`, eeg_verguetungssaetze) |
+| **§14 UStG Gutschrift** | Every billable settlement issues the Gutschrift (Gutschriftverfahren — the NB issues the document) as a BO4E `Rechnung` in `settlement_receipts.rechnung_json`, VAT status derived per plant (Regelbesteuerung 19 % / §12 Abs. 3 zero-rated / §19 exempt) |
 | **Auth** | OIDC/JWT + Cedar ABAC + HMAC-signed CloudEvents |
 | **Plant types** | 19 `erzeugungsart` values: SOLAR variants, WIND_ONSHORE/OFFSHORE, BIOMASSE/BIOGAS/BIOMETHANE, KLAEGAS/GRUBENGAS/DEPONIEGAS, WASSERKRAFT, GEOTHERMIE, GEZEITEN, KWKG |
 | **Settlement models** | 9: VERGUETUNG, MIETERSTROM (§21 Abs. 3), DIREKTVERMARKTUNG (§20 Gleitende Marktprämie), AUSSCHREIBUNG, POST_EEG_SPOT, EIGENVERBRAUCH, KWKG_ZUSCHLAG (§7 KWKG 2023), FLEXIBILITAET (§50), GGV (§42b Solarpaket I) |
@@ -66,7 +67,7 @@ unless they explicitly trigger a side effect (e.g. `trigger_settle`).
 |---|---|---|
 | `eeg-billing` unit tests (102) | no | settlement arithmetic, every §-rule |
 | `tests/schema_code_guard.rs` (5) | no | the service's SQL against its own schema |
-| `tests/settlement_integration.rs` (12) | yes | the real router, real SQL, real policy |
+| `tests/settlement_integration.rs` (16) | yes | the real router, real SQL, real policy |
 
 ```bash
 just test-einsd-db      # throwaway PostgreSQL, runs the #[ignore]d suite

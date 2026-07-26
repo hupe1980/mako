@@ -753,7 +753,7 @@ impl ErpAdapter for MySapAdapter {
 }
 ```
 
-Wire it in `makod/src/erp_adapter.rs` alongside `WebhookErpAdapter`, or inject
+Wire it in `makod/src/core/erp_adapter.rs` alongside `WebhookErpAdapter`, or inject
 it into a custom `makod` binary.
 
 ### Error classification contract
@@ -854,18 +854,17 @@ With BO4E:
 
 ---
 
-## Implementation status
+## The integration surface
 
-| Item | Status |
-|---|---|
-| `ErpAdapter` / `ErpEvent` traits | ✅ Implemented (`mako-engine/src/erp.rs`) |
-| `ErpCommandSource` trait | ✅ Implemented (`mako-engine/src/erp.rs`) |
-| `WebhookErpAdapter` with HMAC-SHA256 signing | ✅ Implemented (`makod/src/erp_adapter.rs`) |
-| `OutboxErpWorker` with exponential back-off | ✅ Implemented (`makod/src/erp_adapter.rs`) |
-| `POST /api/v1/commands` REST endpoint | ✅ Implemented (`makod/src/commands_api.rs`) |
-| `PUT /admin/malo/{malo_id}` cache | ✅ Implemented |
-| `PUT /admin/partners/{mp_id}` | ✅ Implemented |
-| BO4E typed Rust crate (`rubo4e`) | ✅ In use — `rubo4e = "0.6.0"` in workspace dependencies (BO4E schema v202607); 31 active `rubo4e::current` types |
+| Component | Where | Role |
+|---|---|---|
+| `ErpAdapter` / `ErpEvent` traits | `mako-engine/src/erp.rs` | Outbound event contract |
+| `ErpCommandSource` trait | `mako-engine/src/erp.rs` | Inbound command contract |
+| `WebhookErpAdapter` (HMAC-SHA256 signed) | `makod/src/core/erp_adapter.rs` | Delivers CloudEvents to the ERP webhook |
+| `OutboxErpWorker` (exponential back-off) | `makod/src/core/erp_adapter.rs` | At-least-once delivery with retry + dead-letter |
+| `POST /api/v1/commands` | `makod/src/orchestrator/commands_api/` | ERP-initiated process commands |
+| `PUT /admin/malo/{malo_id}` · `PUT /admin/partners/{mp_id}` | `makod` | Master-data cache sync |
+| BO4E typed model (`rubo4e`) | workspace dependency | `rubo4e = "0.8"`, BO4E schema v202607; typed BOs at every API boundary, strict-decoded on ingest (`Bo4eStrict::ensure_known_enums`) |
 
 ---
 

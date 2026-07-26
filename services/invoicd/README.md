@@ -4,7 +4,7 @@
 
 `invoicd` is an autonomous microservice that receives incoming INVOIC billing
 events from [`makod`](../makod/README.md) via the [`marktd`](../marktd/README.md)
-event bus, runs a five-check plausibility pipeline against price sheets fetched
+event bus, runs a six-check plausibility pipeline against price sheets fetched
 from `marktd`, and either accepts or disputes each invoice by issuing a command
 back to `makod` — which then emits the corresponding REMADV or COMDIS to the
 counterparty.
@@ -75,7 +75,7 @@ marktd ──(POST /webhook)──► invoicd
 
 ## Persistence schema
 
-`invoicd` applies the schema at startup (`migrations/0001_initial.sql`). The schema:
+`invoicd` applies the schema at startup (`migrations/0001_schema.sql`). The schema:
 
 ```sql
 CREATE TABLE invoic_receipts (
@@ -149,7 +149,7 @@ than 1 hour. Events are never silently dropped.
 
 Receives CloudEvents 1.0 JSON from `marktd`. Signature verified via
 `X-Mako-Signature: sha256=<hex>` (HMAC-SHA256 over the raw body) when
-`--inbound-secret` is set. Rejected signatures return `401 Unauthorized`
+`[webhook].inbound_secret` is set in the TOML config. Rejected signatures return `401 Unauthorized`
 before the event body is deserialized.
 
 The daemon auto-subscribes to `de.mako.process.initiated` at startup via
@@ -200,10 +200,13 @@ OIDC+Cedar layer as REST endpoints).
 
 | Tool | Description |
 |---|---|
-| `get_receipt` | Fetch a receipt by process ID |
+| `get_receipt` | Fetch a receipt by UUID |
 | `list_disputes` | List all receipts with outcome = 'Dispute' |
-| `get_check_result` | Return the full plausibility report for an INVOIC |
+| `get_check_result` | Return the `invoic-checker` plausibility findings for a receipt |
+| `list_overdue_remadv` | Receipts approaching `Zahlungsziel` without a dispatched REMADV |
 | `get_zahlungsstatus` | Payment status per MaLo (settled / pending / overdue) |
+| `summarize_billing_month` | Monthly billing summary per NB (PID breakdown, dispute rate, EUR volume) |
+| `dispatch_remadv` | Manually trigger REMADV dispatch for a stuck receipt |
 
 ---
 
@@ -277,49 +280,118 @@ event store. `invoicd` only persists what it has personally checked (the
 
 ## Configuration
 
-All settings can be provided as CLI flags or environment variables.
+`invoicd` is configured from a single TOML file. The binary accepts only three
+CLI arguments:
 
-| Flag                          | Env var                           | Default                              |
-|-------------------------------|-----------------------------------|--------------------------------------|
-| `--listen`                    | `INVOICD_LISTEN`                  | `0.0.0.0:8280`                       |
-| `--makod-url`                 | `INVOICD_MAKOD_URL`               | `http://localhost:8080`              |
-| `--marktd-url`                  | `INVOICD_MARKTD_URL`                | `http://localhost:8180`              |
-| `--subscriber-id`             | `INVOICD_SUBSCRIBER_ID`           | `invoicd`                            |
-| `--webhook-url`               | `INVOICD_WEBHOOK_URL`             | *(required)*                         |
-| `--webhook-secret`            | `INVOICD_WEBHOOK_SECRET`          | *(optional)*                         |
-| `--inbound-secret`            | `INVOICD_INBOUND_SECRET`          | *(optional)*                         |
-| `--database-url`              | `DATABASE_URL`                    | *(optional — disables DB if absent)* |
-| `--db-max-connections`        | —                                 | `5`                                  |
-| `--tenant`                    | `INVOICD_TENANT`                  | `default`                            |
-| `--arithmetic-tolerance`      | `INVOICD_ARITHMETIC_TOLERANCE`    | `0.01`                               |
-| `--total-tolerance`           | `INVOICD_TOTAL_TOLERANCE`         | `0.01`                               |
-| `--tariff-tolerance`          | `INVOICD_TARIFF_TOLERANCE`        | `0.03`                               |
-| `--require-tariff`            | `INVOICD_REQUIRE_TARIFF`          | `false`                              |
-| `--auto-dispute-threshold`    | `INVOICD_AUTO_DISPUTE_THRESHOLD`  | `0.0` (dispute on any finding)       |
+| Flag             | Env var          | Default        | Purpose                                              |
+|------------------|------------------|----------------|------------------------------------------------------|
+| `--config`, `-c` | `INVOICD_CONFIG` | `invoicd.toml` | Path to the TOML configuration file.                 |
+| `--log-level`    | `RUST_LOG`       | `info`         | Tracing filter.                                       |
+| `--check`        | `INVOICD_CHECK`  | `false`        | Validate config + DB connectivity, then exit `0`.    |
 
-`--auto-dispute-threshold` (euros): when all dispute findings are below this
-amount `invoicd` accepts anyway — useful for rounding tolerances that do not
-warrant a formal dispute.
+All other settings live in the TOML file. Any value may be written as
+`"env:VAR_NAME"` — at load time `invoicd` substitutes the value of the
+environment variable `VAR_NAME`. Only `env:`-prefixed strings are expanded; a
+plain string is used verbatim. This is how secrets (API keys, HMAC secrets,
+`DATABASE_URL`) are kept out of the file.
 
-When `--database-url` is omitted, migrations are skipped and no receipt is
-persisted. The plausibility check still runs but § 147 AO / GoBD compliance is not
-met — only acceptable in CI / development.
+```toml
+[http]
+addr = "0.0.0.0:8280"
+
+# Required — § 147 AO / GoBD / §41 EnWG 3-year receipt retention.
+[database]
+url = "env:DATABASE_URL"
+
+[identity]
+# Tenant identifier written to every receipt row.
+tenant = "9900357000004"
+
+[makod]
+url     = "http://makod:8080"
+api_key = "env:INVOICD_MAKOD_API_KEY"   # optional
+
+[marktd]
+url     = "http://marktd:8180"
+api_key = "env:INVOICD_MARKTD_API_KEY"  # bearer token (required)
+
+[webhook]
+# HMAC-SHA256 secret used to verify inbound webhooks from marktd.
+inbound_secret = "env:INVOICD_INBOUND_SECRET"
+
+[subscription]
+# URL that marktd POSTs events to, plus the auto-subscription identity.
+webhook_url   = "http://invoicd:8280/webhook"
+subscriber_id = "invoicd"
+# Defaults to the mako process lifecycle events; override to narrow the feed.
+# event_types = ["de.mako.process.initiated", "de.mako.process.completed"]
+
+[check]
+# All tolerances are relative fractions (0.01 = 1 %).
+arithmetic_tolerance = 0.01    # per-line arithmetic
+total_tolerance      = 0.01    # document total
+tariff_tolerance     = 0.03    # tariff unit-price
+require_tariff       = false   # true → missing tariff escalates Warn → Dispute
+# INVOIC net amount (EUR) above which a Warn outcome becomes a Dispute.
+# 0.0 (default) means Warn is always auto-approved.
+auto_dispute_threshold_eur = 0.0
+# Max Zahlungsziel (rechnungsdatum → faelligkeitsdatum) in days; 0 disables.
+max_zahlungsziel_days = 30
+
+# Optional edmd connection — required for PID 31006 selbstausstellen.
+# When omitted, POST /api/v1/selbstausstellen returns 503.
+# [edmd]
+# url     = "http://edmd:8380"
+# api_key = "env:INVOICD_EDMD_API_KEY"
+
+# Optional ERP webhook for outbound de.invoic.receipt.* CloudEvents.
+# [erp]
+# webhook_url = "https://erp.example.com/webhooks/invoicd"
+# hmac_secret = "env:INVOICD_ERP_HMAC_SECRET"
+
+# Optional MCP server authentication (OIDC + API-key fallback, or dev mode).
+# [mcp]
+# api_key = "env:INVOICD_MCP_API_KEY"
+
+# Optional OIDC bearer-token verification for REST + MCP endpoints.
+# [oidc]
+# issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+# audience = "api://mako-invoicd"
+
+# Optional OpenTelemetry export.
+# [otel]
+# endpoint = "http://otel-collector:4317"
+```
+
+The `[database]` section is required: without it `invoicd` will not start.
+Persistence is mandatory because a checked receipt must be durably stored before
+any REMADV/COMDIS command is dispatched to `makod`, which is what satisfies the
+§ 147 AO / GoBD retention requirement.
+
+The tolerance fractions in `[check]` are converted to parts-per-million when the
+`invoic-checker` `CheckConfig` is built, and `auto_dispute_threshold_eur` is
+converted to EUR-cents internally.
 
 ---
 
 ## Quick start (Docker Compose)
 
+All settings live in `invoicd.toml` (see [Configuration](#configuration)); mount
+it into the container and point `INVOICD_CONFIG` at it. Secrets are injected via
+the environment variables that the file references with `env:`.
+
 ```yaml
 invoicd:
   image: ghcr.io/hupe1980/invoicd:latest
+  command: ["--config", "/etc/invoicd/invoicd.toml"]
   environment:
-    INVOICD_MAKOD_URL:       http://makod:8080
-    INVOICD_MARKTD_URL:        http://marktd:8180
-    INVOICD_WEBHOOK_URL:     http://invoicd:8280/webhook
-    INVOICD_INBOUND_SECRET:  "${MARKTD_OUTBOUND_SECRET}"
-    INVOICD_REQUIRE_TARIFF:  "true"
-    DATABASE_URL:            postgres://invoicd:secret@postgres/invoicd
-    INVOICD_TENANT:          "${TENANT}"
+    INVOICD_CONFIG:            /etc/invoicd/invoicd.toml
+    DATABASE_URL:              postgres://invoicd:secret@postgres/invoicd
+    INVOICD_MAKOD_API_KEY:     "${MAKOD_API_KEY}"
+    INVOICD_MARKTD_API_KEY:    "${MARKTD_API_KEY}"
+    INVOICD_INBOUND_SECRET:    "${MARKTD_OUTBOUND_SECRET}"
+  volumes:
+    - ./invoicd.toml:/etc/invoicd/invoicd.toml:ro
   ports:
     - "8280:8280"
   depends_on: [postgres, marktd]

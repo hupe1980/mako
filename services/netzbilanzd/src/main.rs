@@ -1,6 +1,6 @@
 //! `netzbilanzd` — NNE/KA/MMM billing daemon.
 //!
-//! Generates INVOIC 31001/31002/31005/31009/31011 invoices (NB → LF/MSB/LFG) from
+//! Generates INVOIC 31002/31005/31009/31011 invoices (NB → LF/MSB/LFG) from
 //! meter readings and tariff data.  Integrates with `marktd` (tariffs) and `edmd`
 //! (billing data).
 //!

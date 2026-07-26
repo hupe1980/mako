@@ -75,6 +75,14 @@ fn normalize_geschaeftspartner(
             serde_json::json!({ "error": format!("invalid Geschaeftspartner payload: {e}") }),
         )
     })?;
+    // Strict enum gate — reject out-of-schema enum values (which serde would
+    // otherwise decode to `Unknown`) anywhere in the tree, with JSON-paths.
+    rubo4e::Bo4eStrict::ensure_known_enums(&partner).map_err(|e| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            serde_json::json!({ "error": format!("Geschaeftspartner has out-of-schema enum values: {e}") }),
+        )
+    })?;
     Ok(serde_json::to_value(&partner).unwrap_or_default())
 }
 
@@ -130,8 +138,9 @@ where
     // Typed enum validation: serde maps any unknown role string (e.g. a typo,
     // or the legacy EDIFACT zuordnungstyp "LFG" — BO4E models gas suppliers as
     // "LF" + Rollencodetyp DVGW) to `Marktrolle::Unknown`. Reject it here so a
-    // bad role never reaches the store silently.
-    if record.marktrolle == Some(rubo4e::current::Marktrolle::Unknown) {
+    // bad role never reaches the store silently. (`is_unknown()` is the v0.8
+    // one-call detector for a lenient-decode fall-through.)
+    if record.marktrolle.is_some_and(|r| r.is_unknown()) {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(serde_json::json!({
@@ -142,7 +151,7 @@ where
         )
             .into_response();
     }
-    if record.rollencodetyp == Some(rubo4e::current::Rollencodetyp::Unknown) {
+    if record.rollencodetyp.is_some_and(|r| r.is_unknown()) {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(serde_json::json!({

@@ -239,6 +239,11 @@ pub mod messwert {
     pub const READING_CONFIRMATION_OVERDUE: &str = "de.messwert.reading.confirmation.overdue";
     /// §14a SMGW/CLS compliance issue detected (MsbG §21c sweep).
     pub const CLS_COMPLIANCE_ISSUE: &str = "de.messwert.cls.compliance_issue";
+    /// SMGW certificate approaching expiry — tiered advance warning at 90 / 30 / 7
+    /// days (BSI TR-03109-4 §6.3). An expired cert silently ends §14a
+    /// Fernsteuerbarkeit and the MsbG §29 remote-readout obligation, so each tier
+    /// fires once per certificate as it ages.
+    pub const SMGW_CERT_EXPIRY_WARNING: &str = "de.messwert.smgw.cert.expiry_warning";
 }
 
 /// Product & tariff catalog events (`de.tarif.*`), emitted by `tarifbd`.
@@ -437,6 +442,7 @@ pub fn all() -> &'static [&'static str] {
         messwert::READING_ORDER_FAILED,
         messwert::READING_CONFIRMATION_OVERDUE,
         messwert::CLS_COMPLIANCE_ISSUE,
+        messwert::SMGW_CERT_EXPIRY_WARNING,
         // de.tarif.*
         tarif::PRODUCT_UPDATED,
         tarif::ANGEBOT_ANGENOMMEN,

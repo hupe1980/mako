@@ -49,7 +49,7 @@ members = [
 exclude = ["fuzz"]
 
 [workspace.package]
-version     = "0.13.0"
+version     = "0.14.0"
 authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
@@ -59,11 +59,11 @@ rust-version = "1.94"
 [workspace.dependencies]
 anyhow      = "1"
 dashmap     = "6"
-edifact-rs   = "~0.12"
+edifact-rs   = "~0.13"
 miette       = { version = "7", features = ["fancy-no-syscall"] }
-rubo4e       = { version = "0.7.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "schemars", "json", "strum"] }
+rubo4e       = { version = "0.8.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "schemars", "json", "strum", "builder"] }
 rust_decimal = { version = "1", features = ["db-postgres", "macros"] }
-billing      = { version = "0.7.0", features = ["serde"] }
+billing      = { version = "0.8.0", features = ["serde"] }
 serde        = { version = "1", features = ["derive"] }
 serde_json   = "1"
 thiserror    = "2"
@@ -89,22 +89,22 @@ figment-file-provider-adapter = { version = "0.1", package = "figment_file_provi
 schemars                  = { version = "1.2.1" }
 
 # ── Internal workspace crates (path + version so domain crates can be published) ─
-edi-energy       = { path = "crates/edi-energy",  version = "0.13" }
-mako-engine      = { path = "crates/mako-engine",      version = "0.13" }
-mako-markt       = { path = "crates/mako-markt",       version = "0.13" }
-mako-edm         = { path = "crates/mako-edm",         version = "0.13" }
-mako-events      = { path = "crates/mako-events",      version = "0.13" }
-grid-billing     = { path = "crates/grid-billing",     version = "0.13" }
-eeg-billing      = { path = "crates/eeg-billing",      version = "0.13" }
-mako-obs         = { path = "crates/mako-obs",         version = "0.13" }
-mako-service     = { path = "crates/mako-service",     version = "0.13" }
-mako-plugin      = { path = "crates/mako-plugin",      version = "0.13" }
-invoic-checker   = { path = "crates/invoic-checker",   version = "0.13" }
-netz-checker     = { path = "crates/netz-checker",     version = "0.13" }
-energy-billing   = { path = "crates/energy-billing",   version = "0.13" }
-dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.13" }
-metering         = { path = "crates/metering",          version = "0.13" }
-sepa             = { version = "0.4.0" }
+edi-energy       = { path = "crates/edi-energy",  version = "0.14" }
+mako-engine      = { path = "crates/mako-engine",      version = "0.14" }
+mako-markt       = { path = "crates/mako-markt",       version = "0.14" }
+mako-edm         = { path = "crates/mako-edm",         version = "0.14" }
+mako-events      = { path = "crates/mako-events",      version = "0.14" }
+grid-billing     = { path = "crates/grid-billing",     version = "0.14" }
+eeg-billing      = { path = "crates/eeg-billing",      version = "0.14" }
+mako-obs         = { path = "crates/mako-obs",         version = "0.14" }
+mako-service     = { path = "crates/mako-service",     version = "0.14" }
+mako-plugin      = { path = "crates/mako-plugin",      version = "0.14" }
+invoic-checker   = { path = "crates/invoic-checker",   version = "0.14" }
+netz-checker     = { path = "crates/netz-checker",     version = "0.14" }
+energy-billing   = { path = "crates/energy-billing",   version = "0.14" }
+dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.14" }
+metering         = { path = "crates/metering",          version = "0.14" }
+sepa             = { version = "0.5.0" }
 
 # Kafka client: pure Rust, MSRV 1.88, zero-unsafe, exactly-once semantics.
 # Required by mako-service feature "kafka" (EventBus scale-out backend).
@@ -125,7 +125,7 @@ arrow                   = { version = "57", default-features = false }
 # lancedb requires arrow 58 — declared directly in agentd/Cargo.toml (not here)
 # because iceberg in edmd pins arrow 57; both can coexist since semver treats
 # arrow 57 and 58 as distinct crate versions.
-lancedb                 = { version = "0.31" }   # enabled: rubo4e 0.7.0 fixed BUG-1 (time pin)
+lancedb                 = { version = "0.31" }   # compatible with the workspace `time` pin via rubo4e
 parquet                 = { version = "57", default-features = false }
 datafusion              = { version = "52", default-features = false }
 # opendal 0.55 is exactly what iceberg 0.9.1 requires — do not upgrade.

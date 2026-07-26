@@ -40,6 +40,8 @@ pub struct AccountingdMcpState {
     pub creditor_iban: Option<String>,
     pub creditor_name: Option<String>,
     pub creditor_id: Option<String>,
+    /// pain.008 schema version to emit (validated from config at startup).
+    pub pain008_schema: crate::sepa::DirectDebitSchema,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -419,6 +421,7 @@ Only generates for MaLo accounts that have an IBAN + signed mandate (sequence_ty
                     creditor_id,
                     collection_date,
                     &refs,
+                    self.state.pain008_schema,
                 ) {
                     Ok(run) => ContentBlock::json(serde_json::json!({
                         "mandate_count": refs.len(),

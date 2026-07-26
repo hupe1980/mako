@@ -344,7 +344,7 @@ to run integration tests locally immediately:
 ```toml
 [dev-dependencies]
 mako-as4 = { path = "../mako-as4", features = ["testing"] }
-asx-rs   = { version = "0.10", features = ["as4", "testing"] }
+asx-rs   = { version = "0.11", features = ["as4", "testing"] }
 ```
 
 No manual `CertHandle` construction or direct `zeroize` dependency is needed:
@@ -400,7 +400,7 @@ async fn test_as4_full_round_trip() {
 ```
 
 For a complete, runnable example with SOAP envelope verification, see
-`services/makod/tests/as4_security.rs` — 11 tests covering the full BDEW AS4 security
+`services/makod/tests/as4_security.rs` — 12 tests covering the full BDEW AS4 security
 envelope including tampered-signature rejection and `require_encrypted_inbound` enforcement.
 
 ### Generating test certificates manually with OpenSSL
@@ -570,7 +570,7 @@ AlgorithmID/PartyUInfo/PartyVInfo = empty strings (§2.2.6.2.2)
 
 ## Security test coverage
 
-`makod` ships **11 automated tests** in `services/makod/tests/as4_security.rs` that
+`makod` ships **12 automated tests** in `services/makod/tests/as4_security.rs` that
 verify the full BDEW AS4-Profil v1.2 security envelope without WIRK certificates:
 
 ```mermaid
@@ -598,13 +598,14 @@ sequenceDiagram
 | `sign_only_pmode_disables_encryption` | `bdew_pmode_sign_only()` is dev-only | §2.2.6.2.2 |
 | `policy_with_key_requires_encryption` | `bdew_push_policy(key)` enforces `require_encrypted_inbound` | §2.2.6.2.2 |
 | `policy_without_key_no_encryption_required` | Dev-mode without key does not block onboarding | §2.2.6.2.2 |
-| `fragment_scope_is_soap_sender_id` | OneWayPush never triggers fragment `PolicyViolation` | §2.2.5 |
+| `fragment_scope_is_strict_default` | Strict `RequireAuthenticatedScope` default is kept — BDEW OneWayPush never fragments | §2.2.5 |
 | `sign_encrypt_policy_is_bdew_compliant` | SOAP policy constants satisfy §2.2.6.2.1 + §2.2.6.2.2 | §2.2.6 |
 | `replay_dedup_blocks_duplicate_message_id` | 72-hour dedup window prevents replays | §4.2 |
 | **`tampered_signature_is_rejected`** | Real `As4WsSecVerifier` rejects payload tampering | §2.2.6.2.1 |
 | **`inbound_encryption_enforced_when_decryption_key_set`** | Unencrypted inbound is rejected when key is set | §2.2.6.2.2 |
 | `sign_encrypt_round_trip_via_mock_endpoint` | Full sign+encrypt→transport→decrypt pipeline | §2.2.6 |
 | `sign_only_round_trip_envelope_contains_wssec_signature` | Sign-only maintains WS-Security elements | §2.2.6.2.1 |
+| `sync_receipt_is_verified_and_correlated` | Synchronous `eb:Receipt` is parsed namespace-correctly and correlated to the sent `message_id` | §4.6.3 |
 
 Run with: `cargo test -p makod --test as4_security`
 

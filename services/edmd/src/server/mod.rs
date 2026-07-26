@@ -539,6 +539,21 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         );
     }
 
+    // SMGW certificate-expiry alerting (BSI TR-03109-4 §6.3). Daily sweep of every
+    // certificate in `smgw_sessions`, emitting `de.messwert.smgw.cert.expiry_warning`
+    // at 90 / 30 / 7 days before `valid_to` (SMGW_CERT_ABLAUFDATUM), once per tier per
+    // certificate. An expired cert silently ends §14a Fernsteuerbarkeit.
+    {
+        use crate::smgw::spawn_smgw_cert_expiry_worker;
+        spawn_smgw_cert_expiry_worker(
+            pool_arc.clone(),
+            smgw_tenant.clone(),
+            smgw_webhook_url.clone(),
+            86_400, // interval_secs — sweep daily
+            cfg.shutdown.clone(),
+        );
+    }
+
     // § 60 Abs. 2 MsbG confirmation loop — escalates estimated/substituted
     // intervals that were never replaced by a plausibilised real value.
     if cfg.confirmation.enabled {

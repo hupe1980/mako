@@ -21,7 +21,7 @@ cargo xtask validate-profiles    # validate profiles against EDIFACT specs (leni
 cargo xtask validate-pruefids    # validate PIDs against AHB (lenient)
 ```
 
-`just ci` runs `validate-profiles-strict` and `validate-pruefids-strict` — these are the gates that fail CI.
+`just ci` runs `validate-profiles-strict` and `validate-pruefids-strict-ci` — these are the gates that fail CI.
 
 ## Profile YAML Schema
 
@@ -35,11 +35,13 @@ A profile YAML defines segments, elements, composites and AHB qualifier constrai
 
 ```bash
 cargo xtask bump-version X.Y.Z       # bumps [workspace.package].version across all Cargo.toml
-cargo xtask check-release-coverage   # verifies both active FVs have full PID coverage
+cargo xtask check-release-coverage   # every message type has a non-archived profile covering the reference date
 cargo xtask release-diff             # diffs profiles between two format versions
 ```
 
-Both `FV2025-10-01` and `FV2026-10-01` must have complete coverage — `check-release-coverage` enforces this.
+`check-release-coverage` verifies that for the reference date (`--date YYYY-MM-DD`,
+defaulting to today) every message type is covered by exactly one non-archived profile
+span, reporting any coverage gaps.
 
 ## Import Tasks
 

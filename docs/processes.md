@@ -50,7 +50,6 @@ INSRPT last changed with `fv20260101`).
 |---|---|
 | ✅ | Full state machine + AHB rule enforcement, production-safe |
 | ⚠️ | PID registered, partial handling — accepts message, limited state transitions |
-| 🔄 | Placeholder crate — not yet implemented |
 | — | Not registered; inbound messages are dead-lettered |
 
 **APERAK Frist legend:**
@@ -106,7 +105,7 @@ Quick reference across all process families. Each row is a top-level domain.
 | **GeLi Gas Messdaten (MSCONS)** | 🔥 | `mako-geli-gas` `geli-gas-mscons` | MSCONS 13002/13007/13008/13009 | — | BK7-24-01-009 |
 | **GeLi Gas Datenabruf** | 🔥 | `mako-geli-gas` `geli-gas-datenabruf` | ORDERS 17103/17104 → ORDRSP 19103/19104 | 10 WT | BK7-24-01-009 |
 | **PARTIN Gas Kommunikationsdaten** | 🔥 | `mako-geli-gas` `geli-gas-partin` | PARTIN 37008–37014 | — | PARTIN AHB 1.0f |
-| **WiM Gas MSB-Wechsel** | 🔥 | `mako-wim-gas` | UTILMD G 44039–44053/44168–44170 | 10 WT | BK7-24-01-009 |
+| **WiM Gas MSB-Wechsel** | 🔥 | `mako-wim-gas` | UTILMD G 44039–44044/44051–44053/44168–44170 | 10 WT | BK7-24-01-009 |
 | **WiM Gas Stornierung** | 🔥 | `mako-wim-gas` `wim-gas-stornierung` | UTILMD G 44022–44024 (Msb/Nmsb role) | 10 WT | BK7-24-01-009 |
 | **WiM Gas INSRPT** | 🔥 | `mako-wim-gas` `wim-gas-insrpt` | INSRPT 23005/23009 (Gas-only) | 10 WT | BK7-24-01-009 |
 | **WiM Gas Abrechnung** | 🔥 | `mako-wim-gas` `wim-gas-invoic` | INVOIC 31003/31004 | — | BK7-24-01-009 |
@@ -310,9 +309,9 @@ acknowledgement is via APERAK within 24 h.
 | Process | Sender → Empfänger | INVOIC PID | Content | Sparte | Crate |
 |---|---|---|---|---|---|
 | Abschlagsrechnung | NB → LF | INVOIC **31001** | Netznutzung Abschlag (StromNEV §21) | ⚡ | `mako-gpke` ✅ |
-| NN-Rechnung / MMM | NB → LF | INVOIC **31002** | Mehr-/Mindermengen Strom (MMM) | ⚡ | `mako-gpke` ✅ |
-| NNE Gas | NB → LF | INVOIC **31005** | Netznutzungsentgelt Gas (GasNEV §14) | 🔥 | `netzbilanzd` ✅ |
-| NNE selbstausgestellt | NB+LF same entity | INVOIC **31006** | Selbst ausgestellte NNE | ⚡ | `netzbilanzd` ✅ |
+| NN-Rechnung (Netznutzung) | NB → LF | INVOIC **31002** | Netznutzungsentgelt Strom + Gas (StromNEV §21 / GasNEV §14; Sparte in message content) | ⚡ | `netzbilanzd` ✅ |
+| MMM-Rechnung | NB → LF | INVOIC **31005** | Mehr-/Mindermengensaldo Strom + Gas | ⚡ | `netzbilanzd` ✅ |
+| MMM Mehrmenge selbst ausgestellt | NB+LF same entity | INVOIC **31006** | Mehr-/Mindermenge als Lieferung, selbst ausgestellt | ⚡ | `netzbilanzd` ✅ |
 | WiM Gas Rechnung | gMSB → NB | INVOIC **31003** | MSB-Gerätewechsel Gas | 🔥 | `mako-wim-gas` ⚠️ |
 | Stornorechnung WiM Gas | gMSB → NB | INVOIC **31004** | Storno MSB-Rechnung Gas | 🔥 | `mako-wim-gas` ⚠️ |
 | MSB-Rechnung Strom | MSB → LF | INVOIC **31009** | WiM Messstellenbetriebsabrechnung | ⚡ | `mako-wim` ✅ |
@@ -405,7 +404,7 @@ for Gemeinschaftliche Gebäudeversorgung (GGV) under §42b Abs. 5 EnWG (Solarpak
 parameter for each tenant MaLo. `edmd` evaluates these formulas via the
 `metering::AggregationRule::GgvConstantAllocation` and
 `metering::AggregationRule::GgvProportionalAllocation` variants — see the
-[edmd operator guide](../edmd#virtual-meters-42b-engw-ggv--solarpaket-i) for details
+[edmd operator guide](../edmd#virtual-meters-42b-enwg-ggv--solarpaket-i) for details
 on the computation and the §42b Abs. 5 `Pos()` cap.
 
 ---
@@ -907,7 +906,8 @@ sequenceDiagram
 
 | INVOIC PID | Content | Sender → Empfänger | Crate |
 |---|---|---|---|
-| **31005** | Netznutzungsentgelt Gas (GasNEV §14) | NB → LF | `netzbilanzd` ✅ |
+| **31002** | Netznutzungsentgelt Gas (GasNEV §14, NN-Rechnung) | NB → LF | `netzbilanzd` ✅ |
+| **31005** | Mehr-/Mindermengensaldo Gas (MMM) | NB → LF | `netzbilanzd` ✅ |
 | **31011** | AWH Sperrprozesse Gas | GNB/VNB → LF | `mako-geli-gas` ✅ |
 | **31003** | WiM Gas Rechnung (Gerätewechsel) | gMSB → NB | `mako-wim-gas` ⚠️ |
 | **31004** | Stornorechnung WiM Gas | gMSB → NB | `mako-wim-gas` ⚠️ |
@@ -975,8 +975,8 @@ with APERAK within **10 Werktage** (BK7-24-01-009).
 | Abmeldung NB-initiiert — UTILMD 55007–55009 | Abmeldung NN (GNB → LFN) — UTILMD G 44007–44009 | ✅ Direct equivalent |
 | Stornierung — UTILMD 55022–55024 | Stornierung — UTILMD G 44022–44024 | ✅ Direct equivalent (role-conditional routing) |
 | Sperrung/Entsperrung — ORDERS 17115–17117 | Sperrung/Entsperrung — ORDERS 17115–17117 | ✅ **Same PIDs**, different market; routed by commodity |
-| INVOIC NNE Strom — 31001 | **INVOIC 31005** — NNE Gas (NB → LF, GasNEV §14) | ✅ Direct equivalent. `netzbilanzd` `billing_type: "nne_gas"` generates PID 31005 via `SettlementType::NneGas`; same calculation as Strom, legal refs switch to `GasNEV §14` |
-| INVOIC MMM Strom — 31002 (NB → LF) | **GaBi Gas** INVOIC 31007/31008 (`mako-gabi-gas`) | ⚠️ Equivalent exists but **different counterparty**: Gas MMM (Aggreg. MMM-Rechnung) flows **NB → MGV** (Marktgebietsverantwortlicher), not NB → LF as in Strom. `invoicd` handles 31007/31008 with MMMA Gas (THE) price check |
+| INVOIC NNE Strom — 31002 | **INVOIC 31002** — NNE Gas (NB → LF, GasNEV §14) | ✅ Same NN-Rechnung PID for both Sparten. `netzbilanzd` `billing_type: "nne_gas"` generates PID 31002 via `SettlementType::NneGas`; same calculation as Strom, legal refs switch to `GasNEV §14` |
+| INVOIC MMM Strom — 31005 (NB → LF) | **INVOIC 31005** — MMM Gas (NB → LF); aggregierte Gas MMM (NB → MGV) uses **31007/31008** (`mako-gabi-gas`) | ⚠️ NB → LF Gas MMM shares PID 31005 with Strom; the aggregierte MMM-Rechnung flows **NB → MGV** (Marktgebietsverantwortlicher) as 31007/31008, which `invoicd` checks against MMMA Gas (THE) prices |
 | **Neuanlage MaLo** — UTILMD 55600–55605 | Embedded in UTILMD G 44001 (Lieferbeginn) | ⚠️ Gas has no separate "Neuanlage" PID set; new connections use the same 44001 PID as supplier changes |
 | **Ankündigung Zuordnung LF** — UTILMD 55607–55609 | ❌ No equivalent | Strom-only balancing group notification (§14a EnWG / iMSys demand response) |
 | **UTILTS** — 25001/25004–25010 | ❌ No equivalent | UTILTS carries Zählzeitdefinitionen (HT/NT tariff clocks) and Berechnungsformeln — concepts that don't exist in Gas regulation |
@@ -1005,8 +1005,9 @@ with APERAK within **10 Werktage** (BK7-24-01-009).
 
 **APERAK Frist:** **10 Werktage**
 
-**Implementation status:** Core switching workflows implemented. INVOIC stub
-(records receipt, settlement state machine pending). See module status below.
+The MSB-switch workflows (Kündigung, Anmeldung, Ende MSB, Verpflichtungsanfrage,
+Stornierung) enforce full state machines. INVOIC 31003/31004 record receipt with
+limited state transitions (⚠️ in the tables below).
 
 | Process | Initiator → Responder | UTILMD PID | Status | Crate |
 |---|---|---|---|---|
@@ -1015,7 +1016,6 @@ with APERAK within **10 Werktage** (BK7-24-01-009).
 | Ende MSB Gas / Vorläufige Abmeldung | gMSBA → GNB | UTILMD G **44051–44053** | ✅ | `mako-wim-gas` |
 | Verpflichtungsanfrage gMSB | GNB → gMSB | UTILMD G **44168–44170** | ✅ | `mako-wim-gas` |
 | Stornierung LF/MSB Gas ¹ | orig. → orig. | UTILMD G **44022–44024** | ✅ | `mako-wim-gas` / `mako-geli-gas` |
-| Weitere MSB-Wechsel Varianten | gMSBN/GNB | UTILMD G **44045–44050** | 🔄 | `mako-wim-gas` |
 
 > ¹ PIDs 44022–44024 are **multi-domain** per BDEW PID overview. Routing is
 > role-conditional:

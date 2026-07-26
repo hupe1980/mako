@@ -72,13 +72,29 @@ pub async fn put_bilanzierung(
             .into_response();
     }
 
-    // Type-validate the BO4E envelope (reject malformed BOs with 422).
-    if let Err(e) = serde_json::from_value::<rubo4e::current::Bilanzierung>(body.clone()) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({ "error": format!("invalid BO4E Bilanzierung: {e}") })),
-        )
-            .into_response();
+    // Type-validate the BO4E envelope (reject malformed BOs with 422), then
+    // strict-check every enum: serde decodes unknown wire values to `Unknown`,
+    // so `ensure_known_enums()` rejects typos / legacy / newer-schema values
+    // anywhere in the tree, reporting their JSON-paths.
+    match serde_json::from_value::<rubo4e::current::Bilanzierung>(body.clone()) {
+        Ok(bo) => {
+            if let Err(e) = rubo4e::Bo4eStrict::ensure_known_enums(&bo) {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": format!("Bilanzierung has out-of-schema enum values: {e}")
+                    })),
+                )
+                    .into_response();
+            }
+        }
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("invalid BO4E Bilanzierung: {e}") })),
+            )
+                .into_response();
+        }
     }
 
     // Validity start is mandatory for the temporal key.

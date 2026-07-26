@@ -605,7 +605,7 @@ pub(crate) async fn ingest_edifact(
     if let Some(contrl_svc) = state.contrl_ack.as_deref() {
         let refs: Vec<&AnyMessage> = parsed_msgs.iter().collect();
         contrl_svc
-            .emit_for_interchange(&refs, &pi.header.control_ref)
+            .emit_for_interchange(&refs, &pi.header.control_ref, &pi.header.receiver_id)
             .await;
     }
 

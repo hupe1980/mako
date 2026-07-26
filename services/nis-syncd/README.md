@@ -12,6 +12,7 @@ It is **stateless** — no database, no persistent state. Every sync run is idem
 | **Drift detection** | Emits `de.markt.grid.drift.detected` CloudEvent on Bilanzierungsgebiet divergence |
 | **STP impact** | Without `nis-syncd`: Anmeldung STP ≈ 60 %; with: ≈ 95 % |
 | **Source** | NB's own NIS (SAP IS-U, Smallworld, Schneider EcoStruxure) — NOT BNetzA MaStR |
+| **MCP** | `/mcp` — 4 tools + 2 guided prompts (see below) |
 | **Health** | `GET /health/live`, `GET /health/ready` |
 
 ## Why NIS/GIS, not MaStR?
@@ -35,4 +36,22 @@ drift_webhook_url = "http://erp:8000/events"
 
 sync_concurrency = 8
 max_batch_size   = 500
+
+# MCP auth (bearer / OIDC) for the /mcp endpoint.
+[mcp]
+# require_auth = true
 ```
+
+## MCP server
+
+`nis-syncd` exposes an MCP server at `/mcp` (Streamable HTTP) so an LLM operator can
+run and diagnose grid syncs without shelling into the service.
+
+| Tool | Purpose |
+|---|---|
+| `sync_grid` | Trigger a NIS/GIS sync (idempotent, bounded concurrency); returns a `SyncReport` (updated / skipped / drift_count / errors) |
+| `dry_run_sync` | Compare NIS export against `marktd` without writing — previews drift |
+| `check_malo_grid` | Look up one MaLo's grid record (Bilanzierungsgebiet-EIC, Netzgebiet, Sparte, last sync) |
+| `get_last_sync_report` | Return the most recent sync report without triggering a new run |
+
+Guided prompts: `run-grid-sync`, `check-stp-readiness`.

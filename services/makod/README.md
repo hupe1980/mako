@@ -82,7 +82,7 @@ cargo build -p makod --release
 Every enabled port exposes `GET /health`:
 
 ```
-HTTP 200  {"status":"ok","version":"0.13.0","uptime_secs":142}
+HTTP 200  {"status":"ok","version":"0.14.0","uptime_secs":142}
 HTTP 503  {"status":"degraded","reason":"deadline_scheduler not running"}
 ```
 
@@ -252,10 +252,15 @@ it to inspect process state and submit commands without writing integration code
 | `list_partners` | List all registered trading partners |
 | `get_partner` | Get a trading partner by 13-digit GLN |
 | `get_health` | Daemon version, tenant ID, Marktrollen, MaLo cache stats |
+| `get_process` | Look up an active process by business key (MaLo/MeLo/Vorgang) — stream ID + pending deadlines |
+| `list_overdue_deadlines` | Processes with expired regulatory deadlines (compliance alert) |
+| `list_active_processes` | Count of active (registered) process instances |
+| `get_outbox_status` | AS4 outbox delivery status — pending count and oldest-message age |
+| `list_dead_letters` | 20 most recent permanently dead-lettered messages (§147 AO / GoBD) |
 
 **Resources:** `malo://{malo_id}`, `partner://{mp_id}`
 
-**Prompts:** `gpke-lieferbeginn`, `geli-lieferbeginn`, `wim-geraetewechsel` — guided step-by-step workflows
+**Prompts:** `gpke-lieferbeginn`, `geli-lieferbeginn`, `wim-geraetewechsel`, `msb-preisanfrage`, `wim-gas-anmeldung`, `gpke-sperrung` — guided step-by-step workflows
 
 The server returns dynamic instructions at connection time, including a filtered command
 list for this instance's Marktrollen and the applicable regulatory deadlines.
@@ -344,5 +349,5 @@ End-to-end tests covering all process families live in `tests/`:
 | `e2e_mabis.rs` | MaBiS Bilanzkreisabrechnung (PID 13003) |
 | `e2e_ahb_conformance.rs` | Cross-PID AHB rule enforcement |
 | `startup_smoke.rs` | `assert_dispatch_coverage` — every registered workflow has a deadline dispatch entry; §2.13 party registry validation |
-| `as4_security.rs` | **11 AS4 security tests** — BDEW AS4-Profil v1.2 compliance: sign+encrypt defaults, tampered-signature rejection (`As4WsSecVerifier`), `require_encrypted_inbound` enforcement, 72h replay dedup, full round-trip via `MockAs4Endpoint` with decryption |
+| `as4_security.rs` | **12 AS4 security tests** — BDEW AS4-Profil v1.2 compliance: sign+encrypt defaults, tampered-signature rejection (`As4WsSecVerifier`), `require_encrypted_inbound` enforcement, 72h replay dedup, full round-trip via `MockAs4Endpoint` with decryption |
 | `erp_response_dispatch.rs` | ERP adapter response correlation |

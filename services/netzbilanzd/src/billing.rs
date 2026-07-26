@@ -57,8 +57,9 @@ pub struct BillingPosition {
     pub period_from: String,
     /// End of billing period (`YYYY-MM-DD`).
     pub period_to: String,
-    /// Invoice type: `"nne_strom"` (31001), `"nne_gas"` (31005), `"mmm_strom"` (31002, Strom MMM),
-    /// `"mmm_gas"` (31002, Gas MMM with Trading Hub Europe prices), or `"msb_31009"` (31009).
+    /// Invoice type: `"nne_strom"` / `"nne_gas"` (both PID 31002, NN-Rechnung),
+    /// `"mmm_strom"` (31005, Strom MMM), `"mmm_gas"` (31005, Gas MMM with Trading
+    /// Hub Europe prices), or `"msb_31009"` (31009).
     ///
     /// The legacy value `"mmm"` is **deprecated** — use `"mmm_strom"` or `"mmm_gas"` to avoid
     /// ambiguous price auto-fetch (the old `"mmm"` path tried Gas THE prices first, which is wrong
@@ -202,14 +203,10 @@ pub async fn run_billing_internal(
                 };
                 let r = settle_nne(&input)
                     .map_err(|e| anyhow::anyhow!("billing calc failed for {}: {e}", pos.malo_id))?;
-                // The Prüfidentifikator routes the document; it is not a
-                // property of what was calculated.
-                let pid = if pos.billing_type == "nne_gas" {
-                    31005
-                } else {
-                    31001
-                };
-                (r, pid)
+                // NN-Rechnung is PID 31002 for both Strom and Gas — the Sparte is
+                // carried in the message content, not the Prüfidentifikator
+                // (BDEW INVOIC AHB §3.1.1).
+                (r, 31002)
             }
             "mmm" | "mmm_strom" | "mmm_gas" => {
                 let actual = pos
@@ -323,7 +320,7 @@ pub async fn run_billing_internal(
                     wert: Some(serde_json::Value::String(lastprofil)),
                     ..Default::default()
                 });
-                (result, 31002)
+                (result, 31005)
             }
             "msb_31009" => {
                 let msb_mp_id = pos
@@ -472,7 +469,7 @@ pub async fn run_billing_internal(
 fn as_document(settlement: grid_billing::SettlementResult) -> grid_billing::InvoiceDocument {
     grid_billing::InvoiceDocument {
         settlement,
-        pid: 31001,
+        pid: 31002,
         rechnungsnummer: "NNE-2026-001".to_owned(),
         correction_of: None,
         invoice_date: time::macros::date!(2026 - 02 - 15),
@@ -1040,9 +1037,9 @@ mod tests {
 
     // ── NNE Gas tests ─────────────────────────────────────────────────────────
 
-    /// NNE Gas (PID 31005): billing formula same as Strom, PID must be 31005.
+    /// NNE Gas: billing formula is the same as Strom (NN-Rechnung PID 31002 for both).
     #[test]
-    fn nne_gas_pid_31005() {
+    fn nne_gas_billing_matches_strom_formula() {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
             malo_id: "10001234567".to_owned(),
@@ -1400,7 +1397,7 @@ mod tests {
         // The same settlement can be routed as three different documents — which
         // is the point of keeping the Prüfidentifikator off the calculation.
         let settlement = settle_nne(&base_nne).unwrap();
-        for pid in [31001, 31005, 31011] {
+        for pid in [31002, 31005, 31011] {
             let document = grid_billing::InvoiceDocument {
                 settlement: settlement.clone(),
                 pid,

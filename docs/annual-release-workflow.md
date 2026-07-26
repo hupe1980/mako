@@ -31,12 +31,16 @@ October 1 rollover cycle.
 
 ## Step 1 — Extract draft profiles from PDFs
 
-Run the PDF extractor for each **changed** message type:
+Run the PDF extractor for each **changed** message type, once per source PDF.
+Each run writes both `mig.draft.json` and `ahb.draft.json`; run it against the
+MIG PDF to populate the MIG draft, then against the AHB PDF for the AHB draft
+(a run that extracts zero entries leaves any existing draft untouched):
 
 ```bash
-cargo xtask extract-pdf --message-type <TYPE> --release <fvYYYYMMDD> \
-    --mig-pdf path/to/UTILMD_MIG_S2.3.pdf \
-    --ahb-pdf path/to/UTILMD_AHB_S2.3.pdf
+cargo xtask extract-pdf --file path/to/UTILMD_MIG_S2.3.pdf \
+    --message-type <TYPE> --release <fvYYYYMMDD>
+cargo xtask extract-pdf --file path/to/UTILMD_AHB_S2.3.pdf \
+    --message-type <TYPE> --release <fvYYYYMMDD>
 ```
 
 This creates **draft** JSON files in `profiles/<type>/<fvYYYYMMDD>/`:
@@ -237,7 +241,7 @@ Before merging:
 - [ ] `cargo xtask codegen --prune-expired` run; expired profiles archived
 - [ ] `cargo xtask validate-profiles` exits 0
 - [ ] `cargo xtask codegen --check` exits 0
-- [ ] `cargo xtask validate-release-codes` exits 0 — every profile `release` field matches a UNH 0057 value in a fixture (F-033)
+- [ ] `cargo xtask validate-release-codes` exits 0 — every profile `release` field matches a UNH 0057 value in a fixture
 - [ ] `cargo test --all-features` exits 0
 - [ ] At least one `.edi` fixture added for newly introduced PIDs
 - [ ] If any workflow state schema changed: bespoke `StateMigration` impl added
@@ -450,7 +454,7 @@ The `archive` meta-feature activates all per-type archive features:
 
 ```toml
 [dependencies]
-edi-energy = { version = "0.12", features = ["archive"] }
+edi-energy = { version = "0.14", features = ["archive"] }
 ```
 
 Archive features always imply their base type feature (`mscons-archive` implies

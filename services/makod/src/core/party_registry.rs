@@ -320,6 +320,15 @@ pub struct MpIdRegistry {
     /// GLN → NAD DE3055 agency code.
     #[allow(dead_code)]
     mp_id_to_agency: HashMap<Arc<str>, Arc<str>>,
+    /// Own GLN → [`RoleSparte`] of the `[[party]]` entry.
+    ///
+    /// Every `[[party]]` covers exactly one Sparte (BDEW §2.13, enforced in
+    /// [`from_config`]), so this is the authoritative Sparte of any interchange
+    /// addressed to one of our own MP-IDs — the signal used to decide the Gas-only
+    /// CONTRL Empfangsbestätigung obligation (CONTRL AHB 1.0 §2.3.1).
+    ///
+    /// [`from_config`]: MpIdRegistry::from_config
+    mp_id_to_sparte: HashMap<Arc<str>, RoleSparte>,
     /// All declared roles normalised to uppercase, deduplicated, sorted.
     ///
     /// Used by [`deployment_role_strings`] for auto-deriving engine roles.
@@ -444,6 +453,7 @@ impl MpIdRegistry {
         let mut own_mp_ids: HashSet<Arc<str>> = HashSet::new();
         let mut role_to_gln: HashMap<Box<str>, Arc<str>> = HashMap::new();
         let mut mp_id_to_agency: HashMap<Arc<str>, Arc<str>> = HashMap::new();
+        let mut mp_id_to_sparte: HashMap<Arc<str>, RoleSparte> = HashMap::new();
         let mut all_roles: Vec<Box<str>> = Vec::new();
 
         for party in parties {
@@ -455,6 +465,22 @@ impl MpIdRegistry {
                 .into();
             own_mp_ids.insert(Arc::clone(&mp_id_arc));
             mp_id_to_agency.insert(Arc::clone(&mp_id_arc), agency);
+
+            // Aggregate the party's Sparte from its roles. §2.13 (enforced above)
+            // guarantees a party never mixes Strom and Gas roles, so the first
+            // sector-specific role decides; a party with only sparte-neutral roles
+            // (e.g. RB) is `Both`.
+            let party_sparte = party
+                .roles
+                .iter()
+                .find_map(|r| match sparte_for_role(r) {
+                    Some(RoleSparte::Strom) => Some(RoleSparte::Strom),
+                    Some(RoleSparte::Gas) => Some(RoleSparte::Gas),
+                    _ => None,
+                })
+                .unwrap_or(RoleSparte::Both);
+            mp_id_to_sparte.insert(Arc::clone(&mp_id_arc), party_sparte);
+
             for role in &party.roles {
                 let key: Box<str> = role.to_uppercase().into_boxed_str();
                 all_roles.push(key.clone());
@@ -470,6 +496,7 @@ impl MpIdRegistry {
             own_mp_ids,
             role_to_gln,
             mp_id_to_agency,
+            mp_id_to_sparte,
             all_roles,
         })
     }
@@ -490,6 +517,23 @@ impl MpIdRegistry {
     #[must_use]
     pub fn primary_agency(&self) -> &str {
         &self.primary_agency
+    }
+
+    /// Returns the [`RoleSparte`] of one of our own MP-IDs.
+    ///
+    /// Because every `[[party]]` entry covers exactly one Sparte (BDEW §2.13),
+    /// the Sparte of an inbound interchange is authoritatively the Sparte of the
+    /// own MP-ID it is addressed to (UNB DE0010 receiver). This is the primary
+    /// signal for the Gas-only CONTRL Empfangsbestätigung obligation — far more
+    /// reliable than PID heuristics, since INVOIC/ORDERS/MSCONS release codes
+    /// carry no Sparte prefix and the NAD DE3055 agency code (293 BDEW) is shared
+    /// across both sectors in modern MaKo.
+    ///
+    /// Returns `None` when `mp_id` is not one of our own configured parties, and
+    /// [`RoleSparte::Both`] for a sparte-neutral party (only `RB`-type roles).
+    #[must_use]
+    pub fn sparte_of(&self, mp_id: &str) -> Option<RoleSparte> {
+        self.mp_id_to_sparte.get(mp_id).copied()
     }
 
     /// Returns the GLN for the given BDEW Marktrolle (case-insensitive).
@@ -931,6 +975,21 @@ mod tests {
         assert_eq!(reg.mp_id_for_role("NB"), Some("9900001000001"));
         assert_eq!(reg.mp_id_for_role("GNB"), Some("9800001000001"));
         assert_eq!(reg.mp_id_for_role("LFG"), Some("9800001000002"));
+    }
+
+    #[test]
+    fn sparte_of_resolves_own_mp_ids() {
+        let parties = vec![
+            party("9900001000001", &["NB", "MSB"], true),    // Strom
+            party("9800001000001", &["GNB", "GMSB"], false), // Gas
+            party("4012345000023", &["RB"], false),          // sparte-neutral (GS1 GLN)
+        ];
+        let reg = MpIdRegistry::from_config(&parties).unwrap();
+        assert_eq!(reg.sparte_of("9900001000001"), Some(RoleSparte::Strom));
+        assert_eq!(reg.sparte_of("9800001000001"), Some(RoleSparte::Gas));
+        assert_eq!(reg.sparte_of("4012345000023"), Some(RoleSparte::Both));
+        // Not one of our own parties → None (falls back to message heuristic).
+        assert_eq!(reg.sparte_of("9999999999999"), None);
     }
 
     // ── Error paths ───────────────────────────────────────────────────────────

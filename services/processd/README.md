@@ -159,9 +159,14 @@ Background task runs every 60 s to expire stale `Pending` entries.
 | Tool | Role | Description |
 |------|------|-------------|
 | `list_decisions` | NB | Recent Anmeldung STP decisions |
+| `get_decision` | NB | Single Anmeldung decision by process_id |
 | `get_stp_rate` | NB | STP rate over last N days (target ≥ 95%) |
-| `list_queue` | LF | Approval queue entries needing operator action |
+| `get_stp_breakdown_by_erc` | NB | Rejection breakdown by ERC code over last N days |
+| `list_affiliate_decisions` | NB | Decisions where `initiator_is_affiliate = true` (§20 EnWG) |
+| `list_pending_approvals` | LF | Approval queue entries needing operator action |
 | `get_queue_entry` | LF | Single queue entry by UUID |
+| `approve_queue_entry` | LF | Approve a pending E_0624 Einwilligung queue entry |
+| `reject_queue_entry` | LF | Reject a pending E_0624 Einwilligung queue entry |
 
 ---
 

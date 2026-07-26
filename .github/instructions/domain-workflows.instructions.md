@@ -12,7 +12,7 @@ applyTo: "crates/mako-gpke/**, crates/mako-wim/**, crates/mako-geli-gas/**, crat
 | 55001–55018, 55555 | `mako-gpke` | BK6-24-174 |
 | 17115–17117 (Sperrung Strom, ORDERS) | `mako-gpke` `gpke-sperrung` | BK6-22-024 |
 | 17134–17135 (Konfiguration, ORDERS) | `mako-gpke` `gpke-konfiguration` | BK6-22-024 |
-| 19001–19002 (ORDRSP) | `mako-gpke` `gpke-konfiguration` ⁿBNB-role⁾ · `mako-wim` `wim-geraeteubernahme` | BK6-24-174 |
+| 19001–19002 (ORDRSP) | `mako-gpke` `gpke-konfiguration` (NB-role) · `mako-wim` `wim-geraeteubernahme` | BK6-24-174 |
 | 31001–31002, 31005–31006 | `mako-gpke` `gpke-abrechnung` (INVOIC) | BK6-24-174 |
 | 31007–31008 | `mako-gabi-gas` `gabi-gas-invoic` (Aggreg. MMM-Rechnung Gas) | BK7-24-01-008 |
 | 37000–37006 | `mako-gpke` `gpke-partin` (PARTIN Strom) | PARTIN AHB 1.0f |
@@ -90,7 +90,7 @@ Saturday = Werktag. Sundays and German public holidays do not count. All deadlin
 - PID ownership: **44022–44024** (Stornierung Gas, multi-domain), **44039–44041** (Kündigung MSB Gas), **44042–44053** (Anmeldung / Ende MSB Gas), **44168–44170** (Verpflichtungsanfrage), **31003** (WiM-Rechnung Gas), **31004** (Stornorechnung WiM Gas).
 - APERAK deadline: **10 Werktage** (same as GeLi Gas).
 - All three workflow modules (`kuendigung`, `anmeldung`, `verpflichtungsanfrage`) are implemented with full state machines.
-- AHB profiles for these PIDs are not yet imported; the adapter layer applies `pid_has_ahb_rules()` guards.
+- These PIDs carry only draft AHB rules (`ahb.draft.json`), not finalized `ahb.json` rules, so `validate()` has no ruleset for them; the adapter layer guards them with `pid_has_ahb_rules()`.
 
 ## crates/mako-gabi-gas
 

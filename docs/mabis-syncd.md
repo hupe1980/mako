@@ -93,7 +93,7 @@ flowchart LR
 
     edmd -->|"GET /api/v1/lastgang/{malo_id}"| syncd
     syncd -->|"SummenzeitreiheBuilder\n(mako-mabis crate)"| syncd
-    syncd -->|"POST /api/v1/commands\nSubmitUtilts"| makod
+    syncd -->|"POST /api/v1/commands\nmabis.summenzeitreihe.uebermitteln"| makod
     makod -->|"MSCONS 13003 via AS4"| biko
     syncd --> pg
 
@@ -331,7 +331,7 @@ and produce a submission missing the MaLos it could not fetch.
 
 ## Authentication
 
-A MaBiS submission settles a balance group under BK6-22-024 Anlage 3 and cannot
+A MaBiS submission settles a balance group under BK6-24-174 Anlage 3 and cannot
 be withdrawn once the BIKO acks it. Every route is therefore authorised, and the
 service refuses to start without `[oidc]` unless
 `allow_insecure_no_auth = true` is set explicitly.
@@ -438,8 +438,8 @@ curl -X PUT http://mabis-syncd:8880/api/v1/runs/550e8400-e29b-41d4-a716-44665544
 | Metric / Alert | Target |
 |---|---|
 | `submission_runs.status = failed` older than 24h | Immediate escalation — regulatory deadline at risk |
-| Day 3 run missing by 10:00 CET | Vorlaeufig deadline alert (BK6-22-024 Anlage 3) |
-| Day 8 run missing by 10:00 CET | Endgueltig deadline alert |
+| No acked submission by the 10. Werktag | Erstaufschlag window closed — a later version starts as `Prüfdaten` (BK6-24-174 Anlage 3 §3.10) |
+| Open Korrekturbedarf after the 30. Werktag | Clearingphase for the ordinary BKA closing (BK6-24-174 Anlage 3 §3.10) |
 | MaLo coverage < 95% in `submission_malo_log` | Missing data — check edmd quality warnings |
 
 The **`mabis-syncd-agent`** in `agentd` monitors submission deadlines automatically and escalates via the ERP webhook when a run is overdue or missing.

@@ -77,7 +77,7 @@ Port: **`:9480`**
 | `PUT`  | `/api/v1/portal/{malo_id}/kontakt` | Update contact data (GDPR Art. 16) |
 | `PUT`  | `/api/v1/portal/{malo_id}/sepa` | Update SEPA direct-debit mandate |
 | `GET`  | `/api/v1/portal/{malo_id}/invoices/{id}/download` | ZUGFeRD 2.3 / XRechnung 3.0 CII XML |
-| `GET`  | `/health` | Liveness |
+| `GET`  | `/health/live` | Liveness |
 | `GET`  | `/health/ready` | Readiness |
 
 ---

@@ -40,6 +40,18 @@
 //! | `CLS_NOT_COMPLIANT` | WARNING | Active channel, no Konfigurationsprodukt | DSO control impossible |
 //! | `COMMUNICATION_FAULT` | CRITICAL | No contact > 2h | § 60 Abs. 2 MsbG substitution + Sonderablesung |
 //! | `GATEWAY_REVOKED` | CRITICAL | `status = REVOKED` | Security incident — replace immediately |
+//!
+//! ## Certificate-expiry advance warning
+//!
+//! Alongside the compliance sweep, a second daily worker
+//! ([`run_smgw_cert_expiry_sweep`]) emits a tiered
+//! `de.messwert.smgw.cert.expiry_warning` at **90 / 30 / 7 days** before each
+//! certificate's `valid_to` (`SMGW_CERT_ABLAUFDATUM`), once per tier per
+//! certificate (dedup in `smgw_cert_expiry_alerts`; a renewed cert with a new
+//! `valid_to` gets a fresh set). This is the *advance* warning — an
+//! already-expired cert is the `CERT_EXPIRED` compliance issue above. BSI
+//! TR-03109-4 §6.3 requires renewal ≥ 30 days before expiry; an expired cert
+//! silently ends §14a Fernsteuerbarkeit.
 
 use std::sync::Arc;
 
@@ -555,6 +567,252 @@ pub fn spawn_cls_compliance_worker(
     });
 }
 
+// ── SMGW certificate expiry alerting (BSI TR-03109-4 §6.3) ────────────────────
+
+/// Advance-warning tiers (days before `valid_to`), most-urgent first.
+///
+/// BSI TR-03109-4 §6.3 requires the MSB to renew a gateway certificate ≥ 30 days
+/// before expiry, so 30 days is the renewal deadline (a WARNING), 7 days is
+/// imminent §14a loss (CRITICAL), and 90 days is an early planning notice (INFO).
+pub const CERT_EXPIRY_TIERS: [i32; 3] = [7, 30, 90];
+
+/// The most urgent expiry tier a certificate with `days` remaining has reached,
+/// or `None` when it is further out than the widest tier (90 days). Returns the
+/// smallest threshold `≥ days`, so a cert aging past each tier alerts at that tier.
+fn most_urgent_cert_tier(days: i32) -> Option<i32> {
+    CERT_EXPIRY_TIERS.iter().copied().find(|&t| days <= t)
+}
+
+/// Severity for a given tier — see [`CERT_EXPIRY_TIERS`].
+fn cert_tier_severity(threshold_days: i32) -> &'static str {
+    match threshold_days {
+        7 => "CRITICAL",
+        30 => "WARNING",
+        _ => "INFO",
+    }
+}
+
+/// Canonical string for a certificate type (matches the `cls_compliance_log` values).
+fn cert_type_str(t: CertificateType) -> &'static str {
+    match t {
+        CertificateType::Tls => "TLS",
+        CertificateType::Sig => "SIG",
+        CertificateType::Enc => "ENC",
+        CertificateType::KeyAgreement => "KEY_AGREEMENT",
+    }
+}
+
+/// Summary of one certificate-expiry sweep.
+#[derive(Debug, Clone)]
+pub struct CertExpirySweepReport {
+    /// When the sweep ran.
+    pub scanned_at: OffsetDateTime,
+    /// SMGW sessions examined.
+    pub sessions_scanned: usize,
+    /// Non-revoked certificates examined.
+    pub certs_scanned: usize,
+    /// `de.messwert.smgw.cert.expiry_warning` events emitted this sweep.
+    pub warnings_emitted: usize,
+}
+
+/// Sweep every SMGW certificate and emit a tiered
+/// `de.messwert.smgw.cert.expiry_warning` at the 90 / 30 / 7-day marks
+/// (`SMGW_CERT_ABLAUFDATUM` = `GatewayCertificate::valid_to`).
+///
+/// Idempotent: `smgw_cert_expiry_alerts` records one row per
+/// (cert, `valid_to`, tier), so each tier fires **exactly once** as a certificate
+/// ages. A renewed certificate (new `valid_to`) gets a fresh set of alerts.
+/// Already-expired certificates are left to the CLS compliance sweep
+/// (`CERT_EXPIRED`) — this worker is the *advance* warning.
+pub async fn run_smgw_cert_expiry_sweep(
+    pool: &PgPool,
+    tenant: &str,
+    erp_webhook_url: Option<&str>,
+) -> CertExpirySweepReport {
+    let scanned_at = OffsetDateTime::now_utc();
+    let today = scanned_at.date();
+    let client = mako_service::http::default_client();
+
+    let rows = match sqlx::query("SELECT malo_id, session FROM smgw_sessions WHERE tenant = $1")
+        .bind(tenant)
+        .fetch_all(pool)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, tenant, "edmd: cert-expiry-sweep: DB error fetching sessions");
+            return CertExpirySweepReport {
+                scanned_at,
+                sessions_scanned: 0,
+                certs_scanned: 0,
+                warnings_emitted: 0,
+            };
+        }
+    };
+
+    let sessions_scanned = rows.len();
+    let mut certs_scanned = 0usize;
+    let mut warnings_emitted = 0usize;
+
+    for row in rows {
+        let malo_id: String = row.get("malo_id");
+        let session_val: serde_json::Value = row.get("session");
+        let session: SmgwSession = match serde_json::from_value(session_val) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, malo_id = %malo_id, "edmd: cert-expiry-sweep: cannot deserialise SmgwSession — skip");
+                continue;
+            }
+        };
+
+        for cert in &session.certificates {
+            if cert.is_revoked {
+                continue;
+            }
+            certs_scanned += 1;
+            let days = cert.days_to_expiry(today);
+            // Advance warning only; an expired cert is a CERT_EXPIRED compliance
+            // issue handled by the CLS sweep.
+            if days <= 0 {
+                continue;
+            }
+            // Most urgent tier the cert has reached (smallest threshold ≥ days).
+            let Some(tier) = most_urgent_cert_tier(days) else {
+                continue;
+            };
+
+            let severity = cert_tier_severity(tier);
+            let cert_type = cert_type_str(cert.cert_type);
+            let event_id = Uuid::new_v4().to_string();
+
+            // Claim this tier. The INSERT succeeds only the first time the cert
+            // reaches `tier`; a conflict means we already alerted this tier.
+            let claimed = sqlx::query(
+                r"INSERT INTO smgw_cert_expiry_alerts
+                      (tenant, device_id, cert_serial, cert_type, valid_to, threshold_days,
+                       days_to_expiry, severity, emitted, malo_id, cloud_event_id)
+                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                  ON CONFLICT (tenant, device_id, cert_serial, valid_to, threshold_days) DO NOTHING",
+            )
+            .bind(tenant)
+            .bind(&session.device_id)
+            .bind(&cert.serial_number)
+            .bind(cert_type)
+            .bind(cert.valid_to)
+            .bind(tier as i16)
+            .bind(days)
+            .bind(severity)
+            .bind(erp_webhook_url.is_some())
+            .bind(&malo_id)
+            .bind(&event_id)
+            .execute(pool)
+            .await;
+
+            match claimed {
+                Ok(res) if res.rows_affected() == 0 => continue, // already alerted this tier
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, device_id = %session.device_id, "edmd: cert-expiry-sweep: dedup insert failed");
+                    continue;
+                }
+            }
+
+            tracing::warn!(
+                malo_id = %malo_id,
+                device_id = %session.device_id,
+                cert_serial = %cert.serial_number,
+                cert_type,
+                days_to_expiry = days,
+                threshold_days = tier,
+                severity,
+                "edmd: SMGW certificate expiry warning",
+            );
+
+            if let Some(url) = erp_webhook_url {
+                let ce = serde_json::json!({
+                    "specversion": "1.0",
+                    "id": event_id,
+                    "type": mako_events::messwert::SMGW_CERT_EXPIRY_WARNING,
+                    "source": format!("urn:edmd:tenant:{tenant}:smgw-cert-expiry-worker"),
+                    "subject": malo_id,
+                    "time": scanned_at.to_string(),
+                    "datacontenttype": "application/json",
+                    "tenant": tenant,
+                    "data": {
+                        "malo_id":        malo_id,
+                        "device_id":      session.device_id,
+                        "msb_mp_id":      session.msb_mp_id,
+                        "cert_serial":    cert.serial_number,
+                        "cert_type":      cert_type,
+                        "valid_to":       cert.valid_to.to_string(),
+                        "days_to_expiry": days,
+                        "threshold_days": tier,
+                        "severity":       severity,
+                    }
+                });
+                // A lost warning silently runs a gateway into an expired certificate
+                // (§14a Fernsteuerbarkeit + MsbG §29 remote-readout), so retry like
+                // every other edmd compliance event.
+                crate::server::post_ce_with_retry(&client, url, &ce).await;
+            }
+            warnings_emitted += 1;
+        }
+    }
+
+    if warnings_emitted > 0 {
+        tracing::warn!(
+            sessions_scanned,
+            certs_scanned,
+            warnings_emitted,
+            "edmd: cert-expiry-sweep: certificate expiry warnings emitted"
+        );
+    } else {
+        tracing::info!(
+            sessions_scanned,
+            certs_scanned,
+            "edmd: cert-expiry-sweep: no certificates near expiry"
+        );
+    }
+
+    CertExpirySweepReport {
+        scanned_at,
+        sessions_scanned,
+        certs_scanned,
+        warnings_emitted,
+    }
+}
+
+/// Spawn the daily SMGW certificate-expiry background worker.
+///
+/// Runs shortly after startup, then every `interval_secs` (default daily).
+/// Stops on `shutdown_token` cancellation.
+pub fn spawn_smgw_cert_expiry_worker(
+    pool: Arc<PgPool>,
+    tenant: String,
+    erp_webhook_url: Option<String>,
+    interval_secs: u64,
+    shutdown_token: tokio_util::sync::CancellationToken,
+) {
+    tokio::spawn(async move {
+        // Slight offset from the CLS sweep so the two daily sweeps don't contend.
+        tokio::time::sleep(std::time::Duration::from_secs(45)).await;
+
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {}
+                _ = shutdown_token.cancelled() => {
+                    tracing::info!("edmd: smgw-cert-expiry-worker: shutdown requested");
+                    break;
+                }
+            }
+            run_smgw_cert_expiry_sweep(&pool, &tenant, erp_webhook_url.as_deref()).await;
+        }
+    });
+}
+
 // ── REST handlers ─────────────────────────────────────────────────────────────
 
 /// `PUT /api/v1/smgw/{malo_id}`
@@ -1004,4 +1262,45 @@ pub async fn post_smgw_compliance_scan(
     .await;
 
     Json(report).into_response()
+}
+
+#[cfg(test)]
+mod cert_expiry_tests {
+    use super::{cert_tier_severity, cert_type_str, most_urgent_cert_tier};
+    use metering::CertificateType;
+
+    #[test]
+    fn tier_is_the_smallest_threshold_reached() {
+        assert_eq!(most_urgent_cert_tier(120), None, "beyond the widest tier");
+        assert_eq!(most_urgent_cert_tier(91), None);
+        assert_eq!(most_urgent_cert_tier(90), Some(90));
+        assert_eq!(most_urgent_cert_tier(45), Some(90));
+        assert_eq!(most_urgent_cert_tier(31), Some(90));
+        assert_eq!(most_urgent_cert_tier(30), Some(30));
+        assert_eq!(most_urgent_cert_tier(8), Some(30));
+        assert_eq!(most_urgent_cert_tier(7), Some(7));
+        assert_eq!(
+            most_urgent_cert_tier(1),
+            Some(7),
+            "imminent expiry → tightest tier"
+        );
+    }
+
+    #[test]
+    fn severity_escalates_with_urgency() {
+        assert_eq!(cert_tier_severity(90), "INFO");
+        assert_eq!(cert_tier_severity(30), "WARNING");
+        assert_eq!(cert_tier_severity(7), "CRITICAL");
+    }
+
+    #[test]
+    fn cert_type_strings_match_db_check_list() {
+        assert_eq!(cert_type_str(CertificateType::Tls), "TLS");
+        assert_eq!(cert_type_str(CertificateType::Sig), "SIG");
+        assert_eq!(cert_type_str(CertificateType::Enc), "ENC");
+        assert_eq!(
+            cert_type_str(CertificateType::KeyAgreement),
+            "KEY_AGREEMENT"
+        );
+    }
 }

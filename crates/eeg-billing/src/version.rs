@@ -222,7 +222,7 @@ impl EegGesetz {
     /// | 2021–2022 | `Eeg2021` | §100 EEG 2023: old plants use EEG 2021 |
     /// | 2023 + | `Eeg2023` | Current law |
     ///
-    /// Returns `Err` only for negative values or 0 if you expected a real EEG year.
+    /// Returns `Err` for a non-positive year (`<= 0`).
     ///
     /// # Example
     ///

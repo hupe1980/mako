@@ -5,12 +5,13 @@
 | Feature | Detail |
 |---|---|
 | HTTP port | `:8480` |
-| Database | PostgreSQL 15+ (`process_projections` + `0002_affiliate_parity` migration) |
+| Database | PostgreSQL 15+ (single `process_projections` table) |
 | Inbound | All `de.mako.*` CloudEvents from `marktd` (wildcard subscriber) |
-| REST API | `GET /obs/processes`, `GET /obs/processes/{id}`, `GET /obs/kpis`, `GET /obs/overdue` |
+| REST API | `GET /obs/processes`, `GET /obs/processes/{id}`, `GET /obs/kpis`, `GET /obs/overdue`, `GET /api/v1/audit/bnetza-report` |
+| MCP | 6 tools + 2 prompts at `/mcp` (see [MCP Tools](#mcp-tools)) |
 | §20 EnWG | `initiator_is_affiliate` flag on `ProcessProjection` — affiliate vs. non-affiliate STP parity for BNetzA audit |
 | Health | `GET /health/live`, `GET /health/ready` |
-| Auth | Webhook HMAC-SHA256 (`X-Mako-Signature`); HTTP endpoints currently unauthenticated |
+| Auth | REST + MCP: OIDC/JWT + Cedar ABAC (dev bypass when no `[oidc]` configured); inbound webhook HMAC-SHA256 (`X-Mako-Signature`) |
 
 The projection is a CQRS read-model: it holds no authoritative data and is fully rebuildable by replaying the CloudEvent stream from `marktd`.
 
@@ -53,9 +54,9 @@ Migrations run automatically at startup.
 List process projections with optional filters.
 
 Query parameters:
-- `state` — filter by state: `initiated`, `completed`, `timed_out`, `dead_lettered`
+- `state` — filter by state: `initiated`, `running`, `completed`, `rejected`, `cancelled`, `aperak_timeout`
 - `pid` — filter by BDEW Prüfidentifikator (e.g. `55001`)
-- `partner_gln` — filter by counterparty GLN
+- `partner_mp_id` — filter by counterparty MP-ID (BDEW Codenummer / GLN)
 - `mdm_role` — filter by Marktrollen role of the counterparty
 - `since` — ISO 8601 datetime lower bound on `started_at`
 - `limit` — max results (default: 100)
@@ -86,7 +87,7 @@ Response:
   "workflow_name": "GpkeLfAnmeldungWorkflow",
   "state":         "initiated",
   "malo_id":       "51238696780",
-  "partner_gln":   "4012345000023",
+  "partner_mp_id": "4012345000023",
   "mdm_role":      "LF",
   "deadline_at":   "2025-10-02T08:00:00Z",
   "deadline_risk": "amber",
@@ -96,7 +97,7 @@ Response:
 }
 ```
 
-`deadline_risk` values: `green` (> 4 h to deadline), `amber` (1–4 h), `red` (< 1 h), `overdue` (past deadline).
+`deadline_risk` values: `green` (> 24 h to deadline), `amber` (< 24 h to deadline), `red` (deadline passed, process still open).
 
 ### `GET /obs/kpis`
 
@@ -112,13 +113,13 @@ curl "http://localhost:8480/obs/kpis?pid=55001&period=2025-10"
 
 ### `GET /obs/overdue`
 
-All processes where `deadline_at < now()` and `state = 'initiated'`.
+All processes where `deadline_at < now()` and the state is still non-terminal (not `completed` / `rejected` / `cancelled`), ordered by `deadline_at` ascending.
 
 ---
 
 ## Database Schema
 
-`obsd` uses a single schema file `migrations/0001_initial.sql`.
+`obsd` uses a single schema file `migrations/0001_schema.sql`.
 
 | Table | Purpose |
 |---|---|
@@ -130,9 +131,9 @@ Key columns:
 |---|---|
 | `process_id` | UUID — primary key and `makod` process identity |
 | `pid` | BDEW Prüfidentifikator |
-| `state` | `initiated` / `completed` / `timed_out` / `dead_lettered` |
+| `state` | `initiated` / `running` / `completed` / `rejected` / `cancelled` / `aperak_timeout` |
 | `deadline_at` | Regulatory response deadline (CET/CEST-aware) |
-| `deadline_risk` | Pre-computed risk level: `green` / `amber` / `red` / `overdue` |
+| `deadline_risk` | Pre-computed risk level: `green` / `amber` / `red` |
 | `erc_code` | ERC error code if process was rejected or disputed |
 
 Indexes cover `(pid, state)`, `malo_id`, `partner_gln`, `deadline_at`, and `started_at DESC` for efficient KPI aggregation and overdue queries.
@@ -146,10 +147,11 @@ Indexes cover `(pid, state)`, `malo_id`, `partner_gln`, `deadline_at`, and `star
 | Event type | Action |
 |---|---|
 | `de.mako.process.initiated` | INSERT projection row with state `initiated` |
-| `de.mako.process.aperak_sent` | Update `last_event_at` |
+| `de.mako.aperak.accepted` | Set state `running` |
+| `de.mako.aperak.rejected` | Set state `rejected`, record `erc_code` |
+| `de.mako.aperak.timeout` | Set state `aperak_timeout` |
 | `de.mako.process.completed` | Set state `completed` |
-| `de.mako.aperak.timeout` | Set state `aperak_timeout`, record `erc_code` |
-| `de.mako.process.dead_lettered` | Set state `dead_lettered` |
+| `de.mako.process.failed` | Set state `cancelled` |
 
 Projection rows are never deleted — they provide the historical view used by BNetzA KPI reports.
 
@@ -170,6 +172,23 @@ Alertmanager / Grafana / ERP system
 ```
 
 The projection is fully rebuildable by replaying the CloudEvent history from `marktd`.
+
+---
+
+## MCP Tools
+
+`obsd` exposes the read-model over MCP at `/mcp` (streamable HTTP) for the `agentd` specialists (`compliance-agent`, `processd-agent`, `deadline-alert-agent`, …). Access is gated by the same OIDC/JWT + Cedar ABAC as the REST API.
+
+| Tool | Description |
+|---|---|
+| `get_process` | Read a process projection by UUID |
+| `list_overdue_processes` | List MaKo processes past their regulatory deadline (most urgent first) |
+| `get_kpi_report` | BNetzA KPI report for a PID and billing month (`YYYY-MM`) |
+| `get_parity_report` | §20 EnWG parity: affiliate vs. non-affiliate completion rates for Lieferbeginn PIDs |
+| `get_stp_rate` | Rolling STP rate across all process families for the last N days |
+| `list_processes_by_family` | List processes by workflow family (`gpke` / `wim` / `geli-gas` / `wim-gas` / `gabi-gas` / `mabis`) |
+
+Two prompts (`audit-kpi`, `investigate-aperak-violation`) guide agents through KPI audits and APERAK deadline investigations.
 
 ## See Also
 

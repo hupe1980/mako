@@ -81,7 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             release.as_str(),
         );
 
-        // Type-specific logic via exhaustive match
+        // Type-specific handling per message variant
         match &msg {
             AnyMessage::Utilmd(u) => {
                 let doc_code = u.bgm().map(|b| b.document_code.as_str()).unwrap_or("-");

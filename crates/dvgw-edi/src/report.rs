@@ -55,7 +55,8 @@ impl From<ValidationIssue> for DvgwIssue {
         };
         let rule_id = issue.rule_id().map(str::to_owned);
         let segment_tag = issue.segment_tag().map(str::to_owned);
-        let offset = issue.offset();
+        // edifact-rs 0.13 collapsed the redundant `offset` into `span`.
+        let offset = issue.span().map(|s| s.start);
         let byte_end = issue.span().map(|s| s.end);
         let suggestion = issue.suggestion().map(str::to_owned);
         Self {

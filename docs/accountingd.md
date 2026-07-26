@@ -12,7 +12,7 @@ description: >
   Mahnwesen automatic rule engine (Mahnstufe 1–3), OIDC/JWT auth,
   inbound HMAC verification, GDPR Art. 17 pseudonymization,
   balance reconciliation, EEG Gutschrift + Marktprämie ingest, Jahresabschluss §40 EnWG,
-  87 tests.
+  97 tests.
 ---
 
 # `accountingd` — Massenkontokorrent / Customer Account Ledger
@@ -52,7 +52,7 @@ graph TB
 
     billingd -->|"de.billing.rechnung.erstellt → RECHNUNG debit\n(is_correction=true → STORNO)"| accountingd
     billingd -->|"de.billing.gutschrift.erstellt → GUTSCHRIFT credit"| accountingd
-    einsd -->|"de.eeg.verguetung.berechnet → EEG_GUTSCHRIFT credit\n+ pain.001 SCT Inst auto-payout (§25 EEG 2023)"| accountingd
+    einsd -->|"de.eeg.verguetung.berechnet (carries the §14 UStG Gutschrift: number, net, USt, brutto)\n→ EEG_GUTSCHRIFT credit + pain.001 SCT Inst auto-payout (§25 EEG 2023)"| accountingd
     einsd -->|"de.eeg.marktpraemie.berechnet → EEG_MARKTPRAEMIE credit"| accountingd
     invoicd -->|"de.invoic.receipt.settled → ZAHLUNG credit"| accountingd
 
@@ -296,7 +296,7 @@ from `abschlag_ct` when no typed value has been stored.
 
 Every SEPA mandate PUT validates the IBAN using **ISO 13616 mod-97** via the
 [`sepa`](https://crates.io/crates/sepa) crate (`sepa::validate_iban`).
-Covered by **21 IBAN tests** (of the 71 in `unit_tests.rs`) (DE, GB, NL, AT, CH, checksum failures, length, lowercase).
+Covered by **17 IBAN tests** (of the 71 in `unit_tests.rs`) (DE, GB, NL, AT, CH, checksum failures, length, lowercase).
 
 ---
 
@@ -522,7 +522,8 @@ rows (Soll/Haben), following the German chart of accounts SKR 03/04.
 
 | `entry_type` | Soll (Debit) | Haben (Credit) |
 |---|---|---|
-| `RECHNUNG`, `ABSCHLAG` | 1400 Forderungen aus L+L | 4000 Energieerlöse |
+| `RECHNUNG` | 1400 Forderungen aus L+L | 4000 Energieerlöse |
+| `ABSCHLAG` | 1200 Bankguthaben | 1400 Forderungen aus L+L |
 | `ZAHLUNG` | 1200 Bankguthaben | 1400 Forderungen aus L+L |
 | `GUTSCHRIFT` | 4000 Energieerlöse | 1400 Forderungen aus L+L |
 | `BANKRUECKLAST` | 1400 Forderungen aus L+L | 1200 Bankguthaben |
@@ -538,11 +539,14 @@ any other double-entry general ledger via `GET /api/v1/accounts/{malo_id}/ledger
 
 ## SEPA payments
 
-`accountingd` uses the [`sepa`](https://crates.io/crates/sepa) crate (0.4) —
+`accountingd` uses the [`sepa`](https://crates.io/crates/sepa) crate (0.5) —
 schema defaults are the current SEPA releases (`pain.008.001.08`,
-`pain.001.001.09`), names are transliterated into the SEPA character set, and
-every message is validated before serialisation (`build()` returns `Err`
-instead of emitting a bank-rejectable file):
+`pain.001.001.09`) and can be pinned per bank via the `pain008_schema` /
+`pain001_schema` config keys (e.g. `pain.008.001.02` for banks still on the
+pre-2023 EPC version); dates flow through the crate's typed `IsoDate`, names are
+transliterated into the SEPA character set, and every message is validated
+before serialisation (`build()` returns a located `Err` — `PmtInf[1]/Tx[…]: …`
+— instead of emitting a bank-rejectable file):
 
 ```mermaid
 graph LR
@@ -729,7 +733,7 @@ bank_api_key     = "env:BANK_API_KEY"
 When `auto_payout = false` (default), operators trigger payouts manually via
 `POST /api/v1/eeg/payouts/run`.  The table always provides a full audit trail.
 
-### pain.002 + camt.053 parsers (sepa 0.3.0)
+### pain.002 + camt.053 parsers (sepa 0.5.0)
 
 | Parser | Use case |
 |---|---|
@@ -833,43 +837,6 @@ with `operator_sub` (JWT sub), `action` (endpoint), `old_values` and `new_values
 
 ---
 
-## Configuration
-
-```toml
-database_url          = "postgresql://accountingd:secret@db:5432/accountingd"
-port                  = 9380
-tenant                = "9910000000002"
-erp_webhook_url       = "http://erp:8000/webhooks/accounting"
-sperrd_url            = "http://sperrd:8780"
-
-# Dunning fees per Mahnstufe
-dunning_fee_stufe1_ct = 0     # no fee for first reminder
-dunning_fee_stufe2_ct = 500   # 5.00 EUR
-dunning_fee_stufe3_ct = 1000  # 10.00 EUR
-dunning_grace_days    = 30
-
-# Auto-dunning rule engine (opt-in, default false)
-dunning_auto_enabled  = true   # set to true to enable daily auto-escalation
-
-# SEPA creditor IBAN (required for pain.008 generation; hard error if missing/invalid)
-creditor_iban         = "DE89370400440532013000"
-
-# SEPA N-5 pre-notification window (default: 5 calendar days)
-sepa_pre_notification_days = 5
-
-# §25 EEG 2023 — SEPA Credit Transfer payout pipeline
-# sepa_instant=true: uses pain.001.001.09 (SCT Inst, <10s) instead of pain.001.003.03 (D+1)
-# auto_payout=true: generates pain.001 immediately on de.eeg.verguetung.berechnet ingest
-# debtor_iban: LF's own bank account (debit side for outgoing EEG payouts)
-# bank_submit_url: optional HTTP endpoint to submit pain.001 XML to bank adapter
-[eeg]
-sepa_instant    = true
-auto_payout     = true
-debtor_iban     = "env:LF_BANK_IBAN"
-bank_submit_url = "https://banking-adapter.internal/api/v1/pain001"
-bank_api_key    = "env:BANK_API_KEY"
-```
-
 ## Security
 
 ### OIDC/JWT authentication
@@ -931,11 +898,19 @@ creditor_iban         = "DE89370400440532013000"
 # SEPA Creditor Identifier (Gläubiger-ID, EPC AT-02)
 # Obtain from your bank or the Bundesbank creditor registry.
 # Format example: DE74ZZZ09999999999
-# Missing: generates WARN + XML lacks CdtrSchmeId (banks may reject)
+# Required for POST /sepa/run: a missing creditor_id returns HTTP 503
+# (the EPC rulebook mandates CdtrSchmeId; the run does not fall back).
 creditor_id           = "DE74ZZZ09999999999"
 
 # Display name on pain.008 <Cdtr><Nm> (defaults to tenant if absent)
 creditor_name         = "Muster Energie GmbH"
+
+# SEPA schema versions (optional; default to the current EPC releases).
+# Set only if your bank requires the pre-2023 EPC version. Unknown values are a
+# hard error at startup — the service refuses to run rather than emit a
+# bank-rejectable file.
+# pain008_schema      = "pain.008.001.02"   # default: pain.008.001.08
+# pain001_schema      = "pain.001.001.03"   # default: pain.001.001.09
 
 # SEPA N-5 pre-notification window (default: 5 calendar days)
 sepa_pre_notification_days = 5
@@ -980,10 +955,10 @@ matching (powercloud-equivalent >98% match rate).
 
 ## Testing
 
-**87 tests** (`cargo test -p accountingd`):
+**97 tests** (`cargo test -p accountingd`):
 
-**Unit tests** (75 in `unit_tests.rs`, no database required):
-- IBAN validation (21 tests): DE/GB/NL/AT/CH, checksum, length, lowercase
+**Unit tests** (71 in `unit_tests.rs`, no database required):
+- IBAN validation (17 tests): DE/GB/NL/AT/CH, checksum, length, lowercase
 - Entry type coverage: all 11 types, sign conventions, STORNO vs KORREKTUR semantics
 - Jahresabschluss: Nachzahlung/Erstattung/Ausgeglichen, STORNO inclusion in annual sum
 - Decimal precision: `f64` vs `Decimal` rounding correctness (`1.99 EUR = 199 ct`, not 198 ct)
@@ -993,13 +968,18 @@ matching (powercloud-equivalent >98% match rate).
 - pain.008 formatting: integer arithmetic, no f64, CtrlSum validation
 - SEPA sequence types (FRST/RCUR/FNAL/OOFF), mandate revocation
 
-**Integration tests** (16 in `integration_tests.rs`, pure logic, no database required):
+**Integration tests** (18 in `integration_tests.rs`, pure logic, no database required):
 - §288 BGB Verzugszinsen: B2C (+5pp) and B2B (+9pp) interest rates, formula correctness
 - SKR 03/04 journal mapping: correct account codes for all key entry types
 - SEPA pain.008 FRST/RCUR separation: 1 FRST + 2 RCUR → one message with two `PmtInf` groups
 - `creditor_id` (Gläubiger-ID) validation and inclusion in XML
 - CAMT.054 deduplication hash: stable / deterministic for same input
 - pain.008 `creditor_name` bug regression: IBAN string no longer passed as creditor name
+
+**Inline unit tests** (4 in `handlers.rs`): IBAN mod-97 validation (DE/GB).
+
+**DB scenario tests** (4 in `db_scenarios.rs`, `#[ignore]` — require a live `DATABASE_URL`):
+- duplicate-CE idempotency, ABSCHLAG netting against RECHNUNG, balanced double-entry journal, unbalanced-pair rejection
 
 ```bash
 cargo test -p accountingd --all-features

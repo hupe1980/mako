@@ -49,7 +49,10 @@
 use rubo4e::convenience::{BetragExt, MengeExt, PreisExt};
 use rubo4e::current::{Rechnung, Rechnungsposition};
 
-use crate::{amount::EuroAmount, tariff::PreisblattStore};
+use crate::{
+    amount::{EuroAmount, euro_from_decimal},
+    tariff::PreisblattStore,
+};
 
 // ── CheckConfig ───────────────────────────────────────────────────────────────
 
@@ -379,7 +382,7 @@ impl InvoicCheckEngine {
         let total_net_invoic = rechnung
             .gesamtnetto
             .wert_decimal()
-            .and_then(EuroAmount::from_decimal);
+            .and_then(euro_from_decimal);
 
         CheckReport {
             outcome,
@@ -492,21 +495,12 @@ impl InvoicCheckEngine {
     fn check_arithmetic(rechnung: &Rechnung, config: &CheckConfig, findings: &mut Vec<Finding>) {
         for pos in rechnung.rechnungspositionen.iter().flatten() {
             let qty = pos.positions_menge.wert_decimal();
-            let price = pos
-                .einzelpreis
-                .wert_decimal()
-                .and_then(EuroAmount::from_decimal);
-            let stated_net = pos
-                .gesamtpreis
-                .wert_decimal()
-                .and_then(EuroAmount::from_decimal);
+            let price = pos.einzelpreis.wert_decimal().and_then(euro_from_decimal);
+            let stated_net = pos.gesamtpreis.wert_decimal().and_then(euro_from_decimal);
 
             if let (Some(qty), Some(price), Some(stated_net)) = (qty, price, stated_net) {
                 let computed = price.mul_qty(qty);
-                if !stated_net
-                    .within_tolerance_ppm(computed, config.arithmetic_tolerance_ppm)
-                    .unwrap_or(false)
-                {
+                if !stated_net.within_tolerance_ppm(computed, config.arithmetic_tolerance_ppm) {
                     let (line_no, malo) = pos_ident(pos);
                     findings.push(Finding {
                         kind: FindingKind::ArithmeticError,
@@ -538,11 +532,7 @@ impl InvoicCheckEngine {
             .rechnungspositionen
             .iter()
             .flatten()
-            .filter_map(|pos| {
-                pos.gesamtpreis
-                    .wert_decimal()
-                    .and_then(EuroAmount::from_decimal)
-            })
+            .filter_map(|pos| pos.gesamtpreis.wert_decimal().and_then(euro_from_decimal))
             .collect();
 
         if line_nets.is_empty() {
@@ -557,10 +547,8 @@ impl InvoicCheckEngine {
         if let Some(stated) = rechnung
             .gesamtnetto
             .wert_decimal()
-            .and_then(EuroAmount::from_decimal)
-            && !stated
-                .within_tolerance_ppm(computed, config.total_tolerance_ppm)
-                .unwrap_or(false)
+            .and_then(euro_from_decimal)
+            && !stated.within_tolerance_ppm(computed, config.total_tolerance_ppm)
         {
             findings.push(Finding::warn(
                 FindingKind::TotalMismatch,
@@ -610,10 +598,7 @@ impl InvoicCheckEngine {
         }
 
         for pos in rechnung.rechnungspositionen.iter().flatten() {
-            let Some(invoic_price) = pos
-                .einzelpreis
-                .wert_decimal()
-                .and_then(EuroAmount::from_decimal)
+            let Some(invoic_price) = pos.einzelpreis.wert_decimal().and_then(euro_from_decimal)
             else {
                 continue;
             };
@@ -656,7 +641,7 @@ impl InvoicCheckEngine {
                 .flatten()
                 .flat_map(|pp| pp.preisstaffeln.iter().flatten())
                 .filter_map(|ps| ps.preis)
-                .filter_map(EuroAmount::from_decimal)
+                .filter_map(euro_from_decimal)
                 .collect();
 
             // Extract (zaehlzeitregister, price) pairs from zeitvariablePreispositionen.
@@ -679,7 +664,7 @@ impl InvoicCheckEngine {
                                 .and_then(|p| p.get("wert"))
                                 .and_then(|w| w.as_str())
                                 .and_then(|s| rust_decimal::Decimal::from_str_exact(s).ok())
-                                .and_then(EuroAmount::from_decimal)?;
+                                .and_then(euro_from_decimal)?;
                             Some((register, price_val))
                         })
                         .collect()
@@ -729,7 +714,7 @@ impl InvoicCheckEngine {
 
             if !published
                 .iter()
-                .any(|p| invoic_price.within_tolerance_ppm(*p, tol).unwrap_or(false))
+                .any(|p| invoic_price.within_tolerance_ppm(*p, tol))
             {
                 // Report the closest published rate for diagnostics.
                 let closest = *published
@@ -755,7 +740,7 @@ impl InvoicCheckEngine {
     // ── Stage 5: MMM settlement price check ──────────────────────────────────
 
     /// Check 6 (MMM settlement): validate that `mehr_preis` / `minder_preis`
-    /// positions in an MMM INVOIC (PIDs 31002, 31005, 31007, 31008) match the
+    /// positions in an MMM INVOIC (PIDs 31005, 31006, 31007, 31008) match the
     /// reference prices from the `marktd` MMMA store within tolerance.
     ///
     /// Check a WiM MSB-Rechnung (PID 31009) against `PreisblattMessung`.
@@ -824,7 +809,7 @@ impl InvoicCheckEngine {
             .flatten()
             .flat_map(|pp| pp.preisstaffeln.iter().flatten())
             .filter_map(|ps| ps.preis)
-            .filter_map(EuroAmount::from_decimal)
+            .filter_map(euro_from_decimal)
             .collect();
 
         if preisblatt_messung.is_none() {
@@ -844,10 +829,7 @@ impl InvoicCheckEngine {
         } else {
             let tol = config.tariff_tolerance_ppm;
             for pos in rechnung.rechnungspositionen.iter().flatten() {
-                let Some(invoic_price) = pos
-                    .einzelpreis
-                    .wert_decimal()
-                    .and_then(EuroAmount::from_decimal)
+                let Some(invoic_price) = pos.einzelpreis.wert_decimal().and_then(euro_from_decimal)
                 else {
                     continue;
                 };
@@ -869,7 +851,7 @@ impl InvoicCheckEngine {
 
                 if !published_prices
                     .iter()
-                    .any(|p| invoic_price.within_tolerance_ppm(*p, tol).unwrap_or(false))
+                    .any(|p| invoic_price.within_tolerance_ppm(*p, tol))
                 {
                     let closest = *published_prices
                         .iter()
@@ -942,7 +924,7 @@ impl InvoicCheckEngine {
         let total_net_invoic = rechnung
             .gesamtnetto
             .wert_decimal()
-            .and_then(EuroAmount::from_decimal);
+            .and_then(euro_from_decimal);
 
         CheckReport {
             outcome,
@@ -1031,7 +1013,7 @@ impl InvoicCheckEngine {
         let total_net_invoic = rechnung
             .gesamtnetto
             .wert_decimal()
-            .and_then(EuroAmount::from_decimal);
+            .and_then(euro_from_decimal);
 
         CheckReport {
             outcome,
@@ -1057,16 +1039,13 @@ impl InvoicCheckEngine {
         let tol = config.tariff_tolerance_ppm;
 
         // Convert reference prices from ct/kWh → EUR/kWh
-        let ref_mehr = EuroAmount::from_decimal(mehr_ct_kwh / rust_decimal::Decimal::from(100));
-        let ref_minder = EuroAmount::from_decimal(minder_ct_kwh / rust_decimal::Decimal::from(100));
+        let ref_mehr = euro_from_decimal(mehr_ct_kwh / rust_decimal::Decimal::from(100));
+        let ref_minder = euro_from_decimal(minder_ct_kwh / rust_decimal::Decimal::from(100));
 
         let mut findings = Vec::new();
 
         for pos in rechnung.rechnungspositionen.iter().flatten() {
-            let Some(invoic_price) = pos
-                .einzelpreis
-                .wert_decimal()
-                .and_then(EuroAmount::from_decimal)
+            let Some(invoic_price) = pos.einzelpreis.wert_decimal().and_then(euro_from_decimal)
             else {
                 continue;
             };
@@ -1081,10 +1060,7 @@ impl InvoicCheckEngine {
                 continue;
             };
 
-            if !invoic_price
-                .within_tolerance_ppm(ref_p, tol)
-                .unwrap_or(false)
-            {
+            if !invoic_price.within_tolerance_ppm(ref_p, tol) {
                 let ref_raw = ref_p.to_raw() as f64;
                 let pct = if ref_raw != 0.0 {
                     ((invoic_price.to_raw() as f64 - ref_raw) / ref_raw.abs() * 100.0).abs()

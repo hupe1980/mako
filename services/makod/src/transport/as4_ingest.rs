@@ -428,11 +428,16 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                 // ── EDIFACT dispatch ──────────────────────────────────────────
                 // Collect parsed messages so they can be passed to ContrlAckService
                 // after the dispatch loop (CONTRL AHB 1.0 §2.3.1 Gas obligation).
-                let interchange_ref: String =
+                // The recipient MP-ID (UNB DE0010) drives Sparte detection and the
+                // CONTRL sender GLN.
+                let (interchange_ref, recipient_mp_id): (String, String) =
                     if let Ok(pi) = self.ingest.platform.parse_interchange_full(&edifact[..]) {
-                        pi.header.control_ref.to_string()
+                        (
+                            pi.header.control_ref.to_string(),
+                            pi.header.receiver_id.to_string(),
+                        )
                     } else {
-                        msg_id.clone()
+                        (msg_id.clone(), String::new())
                     };
                 let mut accepted = 0usize;
                 let mut rejected = 0usize;
@@ -553,7 +558,7 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                 if let Some(contrl_svc) = self.contrl_ack.as_deref() {
                     let refs: Vec<&AnyMessage> = parsed_msgs.iter().collect();
                     contrl_svc
-                        .emit_for_interchange(&refs, &interchange_ref)
+                        .emit_for_interchange(&refs, &interchange_ref, &recipient_mp_id)
                         .await;
                 }
 

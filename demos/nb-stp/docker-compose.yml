@@ -25,14 +25,9 @@
 #   docker build --target runtime             -t makod:dev       .
 #   docker build --target marktd-runtime      -t marktd:dev      .
 #   docker build --target processd-runtime    -t processd:dev    .
-#   docker build --target invoicd-runtime     -t invoicd:dev     .
-#   docker build --target edmd-runtime        -t edmd:dev        .
-#   docker build --target obsd-runtime        -t obsd:dev        .
-#   docker build --target netzbilanzd-runtime -t netzbilanzd:dev .
-#   docker build --target nis-syncd-runtime   -t nis-syncd:dev   .
 #
 # Or build all at once with docker buildx bake:
-#   docker buildx bake makod marktd processd invoicd edmd obsd netzbilanzd nis-syncd
+#   docker buildx bake makod marktd processd
 #
 # Run:
 #   docker compose up -d

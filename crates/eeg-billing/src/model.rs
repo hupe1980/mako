@@ -897,21 +897,19 @@ impl SettlePosition {
     /// EPEX prices produce a negative `net_amount` on a `Sign::Debit` item,
     /// correctly modelling the post-EEG scenario where the plant owes the NB.
     pub fn to_line_item(&self) -> billing::LineItem {
-        use billing::{LineItem, RoundingStrategy};
+        use billing::{LineItem, Quantity, RoundingStrategy, UnitPrice};
 
         let rate_eur = self.rate_ct_kwh / rust_decimal::Decimal::from(100);
-        // Use for_usage_rounded(scale=6) to prevent silent precision drift when
-        // rate_ct_kwh is derived from integer arithmetic (ct/100).  BO4E Preis.wert
-        // is defined as 6 decimal places; rounding here keeps the stored unit_price
-        // consistent with the rendered output.
-        let mut builder = LineItem::for_usage_rounded(
+        // Typed `Quantity`/`UnitPrice` (billing 0.8) replace the seven-argument
+        // `for_usage_rounded` — the two unit labels can no longer be transposed.
+        // `UnitPrice::rounded(6, …)` prevents silent precision drift when
+        // rate_ct_kwh is derived from integer arithmetic (ct/100); BO4E Preis.wert
+        // is 6 decimal places, keeping the stored unit_price consistent with the
+        // rendered output.
+        let mut builder = LineItem::for_usage(
             &self.description,
-            self.kwh,
-            "kWh",
-            rate_eur,
-            "EUR/kWh",
-            6,
-            RoundingStrategy::MidpointAwayFromZero,
+            Quantity::new(self.kwh, "kWh"),
+            UnitPrice::new(rate_eur, "EUR/kWh").rounded(6, RoundingStrategy::MidpointAwayFromZero),
         )
         .meta("legal_basis", self.legal_basis.as_str());
 

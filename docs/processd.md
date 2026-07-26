@@ -125,7 +125,7 @@ de.mako.process.initiated (PID 55001/55016/44001)
 | NIS data imported via `nis-syncd` or manual provisioning | ≥ 95 % |
 
 Grid records are sourced from the NB’s own NIS/GIS system — **not** from MaStR.
-See [marktd Grid topology](marktd#grid-topology--nisgis-integration) for import options.
+See [nis-syncd](nis-syncd) for import options.
 
 Monitor via `GET /api/v1/decisions` or the `get_stp_rate` MCP tool.
 

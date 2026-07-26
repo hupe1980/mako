@@ -121,6 +121,17 @@ pub struct AccountingdConfig {
     /// and at generation time) to prevent bank batch rejections.
     pub creditor_id: Option<String>,
 
+    /// pain.008 (SEPA Direct Debit) schema version the bank requires, e.g.
+    /// `pain.008.001.08` (current, default) or `pain.008.001.02` (EPC version
+    /// accepted by many banks until Nov 2023). Absent → the crate default.
+    /// An unknown value is a hard error at startup.
+    pub pain008_schema: Option<String>,
+
+    /// pain.001 (SEPA Credit Transfer) schema version the bank requires, e.g.
+    /// `pain.001.001.09` (current, default) or `pain.001.001.03` (pre-2023 EPC).
+    /// Absent → the crate default. An unknown value is a hard error at startup.
+    pub pain001_schema: Option<String>,
+
     /// Enable automatic Mahnwesen escalation (P1-5).
     ///
     /// When `true`, the background dunning worker runs daily and automatically:
