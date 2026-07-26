@@ -82,6 +82,7 @@ pub struct RunConfig {
     pub own_mp_id: String,
     pub tenant: String,
     pub nb_auto_accept: bool,
+    pub nb_gas_bearbeitungsfrist_wt: u32,
     pub lf_auto_respond: bool,
     pub lf_queue_ttl_secs: u64,
     /// M3: When `true`, auto-dispatch QUOTES from `PreisblattMessung` on REQOTE (PID 35001–35005) arrival.
@@ -242,6 +243,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
             own_mp_id: cfg.own_mp_id.clone(),
             tenant: cfg.tenant.clone(),
             auto_accept: cfg.nb_auto_accept,
+            gas_bearbeitungsfrist_wt: cfg.nb_gas_bearbeitungsfrist_wt,
         };
         Some(Arc::new(NbState {
             config: nb_config,

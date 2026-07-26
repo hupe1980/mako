@@ -449,8 +449,10 @@ workflow for correlation; no separate receipt-only workflow exists.
 | 21045 | EnFG Informationen (GPKE Teil 4) | LF → NB | `mako-gpke` `gpke-supplier-change` ✅ |
 | 21047 | Bearbeitungsstandsmeldung (GPKE Teil 2/4) | NB → LF · NB → ÜNB · MSB → NB · MSB → LF | `mako-gpke` `gpke-supplier-change` ✅ |
 
-> PID 21042 (Privilegierungsinformation EnFG, NB → LF) is a WiM Strom Teil 2
-> message (MSB/ESA domain). It is not registered in `mako-gpke`.
+> PID 21042 (WiM / Umsetzungsstatus, „Bestellung (WiM)", **MSB → ESA**;
+> IFTSTA AHB 2.0g Kap. 6.10, STS 4405 = 105 „beendet") is a WiM Strom Teil 2
+> message. It is the UC 4.4 „Beendigung durch MSB" notification, handled by
+> `mako-wim` (`esa-wertebestellung`), not `mako-gpke`.
 
 > **Why are 17134/17135/17121/17128–17131 NB→MSB PIDs in GPKE, not WiM?**
 > GPKE governs *what metering configuration is required* after a supplier change

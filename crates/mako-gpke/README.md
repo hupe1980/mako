@@ -224,6 +224,7 @@ Allokationsliste, exchanged between LF and NB via ORDERS and answered with MSCON
 | `wechselprozesse`           | `gpke-supplier-change`           | PIDs 55001–55002, 55017, 55022–55024 (UTILMD supplier-switch + stornierung, NB role) |
 | `lf_anmeldung`              | `gpke-lf-anmeldung`              | PIDs 55001/55002/55016/55077 (LF outbound) + 55003–55006/55017–55018/55078/55080 (LF-role receive NB ANTWORT) |
 | `lf_abmeldung`              | `gpke-lf-abmeldung`              | PID 55007 (NB → LF Kündigung) + 55008/55009 derived           |
+| `stammdatenaenderung`       | `gpke-stammdatenaenderung`       | GPKE Teil 4 Stammdatenänderung 55615–55694, 55109/55110 — inbound MaLo change → apply to marktd + Rückmeldung A01/A02 (quality feedback, tacit acceptance after 2 WT) |
 | `neuanlage`                 | `gpke-neuanlage`                 | PIDs 55600/55601 (Neuanlage MaLo, LF → NB) + 55602–55605 derived   |
 | `messwerte`                 | `gpke-messwerte`                 | MSCONS PIDs 13005/13006/13015–13019/13025/13027 (Messwerte NB/MSB → LF) |
 | `datenabruf`                | `gpke-datenabruf`                | ORDERS 17004/17102/17113 (Anfrage) + ORDRSP 19101/19102/19114 (Ablehnung) |

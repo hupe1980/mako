@@ -26,6 +26,7 @@
 //! | QUOTES | `pid` (ESA 15003), `sender`, `receiver`, `order_reference`, `document_id`, `document_date`, `message_ref` |
 //! | INVOIC | `sender`, `receiver`, `document_id`, `document_code`, `document_date`, `message_ref` |
 //! | REMADV | `sender`, `receiver`, `document_id`, `document_code`, `document_date`, `message_ref` |
+//! | IFTSTA | `pid` (WiM 21042), `sender`, `receiver`, `sts_code`, `order_reference`, `beendigung_zum`, `document_id`, `document_date`, `message_ref` |
 //!
 //! ## Not yet renderable — intent-only payloads
 //!
@@ -163,6 +164,7 @@ pub fn render_to_wire_bytes(
         "INVOIC" => render_invoic(p, msg, registry),
         "REMADV" => render_remadv(p, msg, registry),
         "MSCONS" => render_mscons(p, msg, registry),
+        "IFTSTA" => render_iftsta(p, msg, registry),
         other => Err(intent_only(other)),
     }
 }
@@ -282,6 +284,7 @@ fn finish_interchange(
 
 mod aperak;
 mod contrl;
+mod iftsta;
 mod invoic;
 mod mscons;
 mod orders;
@@ -289,6 +292,7 @@ mod utilmd;
 
 use aperak::*;
 use contrl::*;
+use iftsta::*;
 use invoic::*;
 use mscons::*;
 use orders::*;
@@ -542,6 +546,50 @@ mod tests {
             .into_error_result()
             .unwrap_or_else(|e| panic!("ORDRSP {pid} must be MIG-conformant: {e}\n{wire}"));
         }
+    }
+
+    #[test]
+    fn render_iftsta_21042_beendigung_is_mig_conformant() {
+        // UC 4.4 „Beendigung durch MSB": the MSB → ESA IFTSTA 21042 now renders
+        // to EDIFACT instead of degrading to a JSON render-intent. It must carry
+        // the SG15 RFF+Z13 Prüfidentifikator, the STS Z21/105 „beendet" status,
+        // the SG14 CNI Vorgangsnummer and the RFF+AGI back-reference.
+        let msg = fake_msg(
+            "IFTSTA",
+            "9900555000005",
+            serde_json::json!({
+                "pid": 21042_u32,
+                "sender": "4012345000023",
+                "receiver": "9900555000005",
+                "sts_code": "105",
+                "order_reference": "BEST-4711",
+                "beendigung_zum": "2026-08-01T00:00:00Z",
+            }),
+        );
+        let wire = render_to_wire_bytes(&msg, &test_registry("4012345000023"))
+            .unwrap_or_else(|e| panic!("21042 renders: {e:?}"));
+        let wire = String::from_utf8(wire.bytes).expect("utf-8");
+        assert!(
+            wire.contains("RFF+Z13:21042"),
+            "PID in SG15 RFF+Z13: {wire}"
+        );
+        assert!(
+            wire.contains("STS+Z21+:105"),
+            "STS Z21/105 „beendet\": {wire}"
+        );
+        assert!(wire.contains("CNI+1"), "Vorgangsnummer SG14 CNI: {wire}");
+        assert!(
+            wire.contains("RFF+AGI:BEST-4711"),
+            "order ref SG15 RFF+AGI: {wire}"
+        );
+        assert!(
+            wire.contains("DTM+93:20260801"),
+            "Vertragsende SG15 DTM+93 (date part only): {wire}"
+        );
+        edi_energy::EdiEnergyMessage::validate(&edi_energy::parse(wire.as_bytes()).expect("parse"))
+            .expect("validate")
+            .into_error_result()
+            .unwrap_or_else(|e| panic!("IFTSTA 21042 must be MIG-conformant: {e}\n{wire}"));
     }
 
     #[test]

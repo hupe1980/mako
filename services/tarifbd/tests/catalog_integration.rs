@@ -336,3 +336,82 @@ async fn nehs_price_upsert_latest_and_source_check() {
         "CHECK must reject unknown source at SQL level"
     );
 }
+
+/// §41a 15-min MTU: a 96-entry quarter-hour import round-trips as 96 points
+/// keyed on distinct UTC MTU starts; a legacy 60-min import is stored as 24
+/// rows but fetched as 96 quarter-hours (expanded).
+#[tokio::test]
+#[ignore = "requires TARIFBD_TEST_DATABASE_URL"]
+async fn epex_15min_and_hourly_roundtrip_to_quarter_hours() {
+    use rust_decimal::{Decimal, dec};
+    use time::macros::date;
+
+    let Some(pool) = test_pool("epex_mtu").await else {
+        return;
+    };
+
+    // 15-min import: 96 quarter-hours, price = slot index ct/kWh.
+    let day = date!(2026 - 01 - 15);
+    let prices: Vec<Decimal> = (0..96).map(Decimal::from).collect();
+    pg::upsert_epex_day(
+        &pool,
+        day,
+        pg::EpexImportRequest {
+            prices: prices.clone(),
+            mtu_minutes: Some(15),
+            source: Some("epex-spot-day-ahead".to_owned()),
+        },
+    )
+    .await
+    .expect("15-min import must succeed");
+
+    let points = pg::fetch_epex_day(&pool, day)
+        .await
+        .expect("fetch")
+        .expect("some");
+    assert_eq!(points.len(), 96, "96 quarter-hours expected");
+    // Strictly increasing, 15-min-spaced MTU starts; prices preserved in order.
+    for (i, p) in points.iter().enumerate() {
+        assert_eq!(p.avg_ct_kwh, Decimal::from(i));
+        if i > 0 {
+            assert_eq!((p.mtu_start - points[i - 1].mtu_start).whole_minutes(), 15);
+        }
+    }
+
+    // Wrong count must be rejected.
+    let bad = pg::upsert_epex_day(
+        &pool,
+        day,
+        pg::EpexImportRequest {
+            prices: vec![dec!(1); 24],
+            mtu_minutes: Some(15),
+            source: None,
+        },
+    )
+    .await;
+    assert!(bad.is_err(), "24 entries at 15-min MTU must be rejected");
+
+    // Legacy 60-min import: 24 rows stored, fetched as 96 quarter-hours where
+    // each hour's price repeats four times.
+    let hday = date!(2025 - 01 - 15);
+    let hourly: Vec<Decimal> = (0..24).map(Decimal::from).collect();
+    pg::upsert_epex_day(
+        &pool,
+        hday,
+        pg::EpexImportRequest {
+            prices: hourly,
+            mtu_minutes: Some(60),
+            source: Some("epex-spot-day-ahead".to_owned()),
+        },
+    )
+    .await
+    .expect("hourly import must succeed");
+    let hpoints = pg::fetch_epex_day(&pool, hday)
+        .await
+        .expect("fetch")
+        .expect("some");
+    assert_eq!(hpoints.len(), 96, "hourly expands to 96 quarter-hours");
+    assert_eq!(hpoints[0].avg_ct_kwh, dec!(0));
+    assert_eq!(hpoints[3].avg_ct_kwh, dec!(0)); // 4th quarter of hour 0
+    assert_eq!(hpoints[4].avg_ct_kwh, dec!(1)); // 1st quarter of hour 1
+}

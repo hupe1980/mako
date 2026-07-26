@@ -31,7 +31,8 @@
 //! Pre-LFW24 these were 11013–11015; the Gas twin is 44013–44015
 //! (`mako-geli-gas`, `GasProcessVariant::EogAnmeldung`). PIDs 55010–55012
 //! are the **separate** "Anfrage zur Beendigung der Zuordnung"
-//! (NB Abmeldeanfrage) use case, not EoG.
+//! (NB Abmeldeanfrage) use case, not EoG, and are handled by
+//! [`super::beendigung_zuordnung::GpkeBeendigungZuordnungWorkflow`].
 //!
 //! # Transaktionsgrund (SG4 STS DE9013, Anmeldung)
 //!

@@ -138,22 +138,130 @@ pub(super) async fn esa_outbound_consent_gate(
     .map_err(DispatchError::InvalidPayload)
 }
 
+fn parse_iso_date(s: &str) -> Option<time::Date> {
+    time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT).ok()
+}
+
+/// How a Werteanfrage's MSB is determined — decided purely from the payload.
+#[derive(Debug, PartialEq, Eq)]
+enum MsbResolution {
+    /// An explicit `msb_mp_id` was supplied — direct address.
+    Explicit(String),
+    /// Resolve from the per-Messlokation dated MSB timeline for the given period.
+    FromTimeline {
+        melo: String,
+        von: time::Date,
+        bis: Option<time::Date>,
+    },
+}
+
+/// Pure decision (no I/O): how should the Werteanfrage's MSB be determined?
+///
+/// An explicit `msb_mp_id` wins (direct address). Otherwise — the `WiM` Teil 2
+/// UC 4.1.1 **historical** Werteanfrage — the MSB is resolved from marktd's
+/// per-Messlokation dated timeline for the requested period. The Messlokation comes from
+/// `melo_id`, or from the location itself when it is a Messlokation (33-char ZPB);
+/// the period start from `zeitraum_von` (alias `von`), the optional end from
+/// `zeitraum_bis` (alias `bis`).
+fn plan_werteanfrage_msb(
+    payload: &serde_json::Value,
+    location: &str,
+) -> Result<MsbResolution, DispatchError> {
+    if let Some(explicit) = payload.get("msb_mp_id").and_then(|v| v.as_str()) {
+        return Ok(MsbResolution::Explicit(explicit.to_owned()));
+    }
+    let melo = payload
+        .get("melo_id")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            (esa_ebene(location) == mako_wim::esa_wertebestellung::Lokationsebene::Messlokation)
+                .then_some(location)
+        })
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "melo_id is required to resolve the responsible MSB from the timeline".to_owned(),
+            )
+        })?
+        .to_owned();
+    let von = payload
+        .get("zeitraum_von")
+        .or_else(|| payload.get("von"))
+        .and_then(|v| v.as_str())
+        .and_then(parse_iso_date)
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "zeitraum_von (period start, YYYY-MM-DD) is required to resolve the MSB for a \
+                 historical Werteanfrage"
+                    .to_owned(),
+            )
+        })?;
+    let bis = payload
+        .get("zeitraum_bis")
+        .or_else(|| payload.get("bis"))
+        .and_then(|v| v.as_str())
+        .and_then(parse_iso_date);
+    Ok(MsbResolution::FromTimeline { melo, von, bis })
+}
+
+/// Resolve the Messstellenbetreiber a Werteanfrage is addressed to, doing the
+/// marktd timeline I/O for the [`MsbResolution::FromTimeline`] case.
+///
+/// Resolves at the **start** of the requested period so a request for a past
+/// interval reaches the MSB that operated the Messlokation then rather than
+/// today's MSB. When `bis` is supplied and the timeline shows a different MSB at
+/// the end, the interval spans an MSB change and the caller must split the
+/// Werteanfrage per MSB period — resolving to a single MSB would silently
+/// mis-address part of the request.
+async fn resolve_werteanfrage_msb(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+    location: &str,
+) -> Result<String, DispatchError> {
+    let (melo, von, bis) = match plan_werteanfrage_msb(payload, location)? {
+        MsbResolution::Explicit(msb) => return Ok(msb),
+        MsbResolution::FromTimeline { melo, von, bis } => (melo, von, bis),
+    };
+    let Some(marktd) = &state.marktd_client else {
+        return Err(DispatchError::InvalidPayload(
+            "msb_mp_id is required (no marktd client configured to resolve it from the per-Messlokation \
+             MSB timeline)"
+                .to_owned(),
+        ));
+    };
+    let msb = marktd
+        .get_melo_msb_at(&melo, von)
+        .await
+        .map_err(|e| DispatchError::InvalidPayload(format!("MSB timeline lookup failed: {e}")))?
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(format!("no MSB on record for MeLo {melo} at {von}"))
+        })?;
+    if let Some(bis) = bis {
+        let msb_at_bis = marktd.get_melo_msb_at(&melo, bis).await.map_err(|e| {
+            DispatchError::InvalidPayload(format!("MSB timeline lookup failed: {e}"))
+        })?;
+        if msb_at_bis.as_deref() != Some(msb.as_str()) {
+            return Err(DispatchError::InvalidPayload(format!(
+                "the requested period {von}..={bis} spans an MSB change for MeLo {melo} (start MSB \
+                 {msb}, end MSB {}); split the Werteanfrage per MSB period",
+                msb_at_bis.as_deref().unwrap_or("none")
+            )));
+        }
+    }
+    Ok(msb)
+}
+
 /// `esa.werteanfrage.stellen` — originate REQOTE 35002 (UC 4.1 Nr. 1).
 pub(super) async fn dispatch_esa_werteanfrage(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let msb = payload
-        .get("msb_mp_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| DispatchError::InvalidPayload("msb_mp_id is required".to_owned()))?
-        .to_owned();
     let location = payload
         .get("malo_id")
         .or_else(|| payload.get("lokations_id"))
         .and_then(|v| v.as_str())
         .ok_or_else(|| DispatchError::InvalidPayload("malo_id is required".to_owned()))?
         .to_owned();
+    let msb = resolve_werteanfrage_msb(state, payload, &location).await?;
     let esa = state.sender_party_id.clone();
 
     esa_outbound_consent_gate(state, &esa, &msb, &location).await?;
@@ -481,4 +589,78 @@ pub(super) fn extract_esa_location(payload: &serde_json::Value) -> Result<String
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .ok_or_else(|| DispatchError::InvalidPayload("malo_id is required".to_owned()))
+}
+
+#[cfg(test)]
+mod werteanfrage_msb_tests {
+    use serde_json::json;
+
+    use super::{MsbResolution, plan_werteanfrage_msb};
+    use crate::orchestrator::commands_api::types::DispatchError;
+
+    const MALO: &str = "51238696780"; // 11 chars → Marktlokation
+    const MELO: &str = "DE0001234567890123456789012345678"; // 33 chars → Messlokation
+
+    fn date(s: &str) -> time::Date {
+        time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT).unwrap()
+    }
+
+    /// An explicit `msb_mp_id` short-circuits — no timeline resolution.
+    #[test]
+    fn explicit_msb_is_honoured() {
+        let p = json!({ "malo_id": MALO, "msb_mp_id": "9903666000009" });
+        assert_eq!(
+            plan_werteanfrage_msb(&p, MALO).unwrap(),
+            MsbResolution::Explicit("9903666000009".to_owned())
+        );
+    }
+
+    /// Without `msb_mp_id`, an explicit `melo_id` + period resolves from the timeline.
+    #[test]
+    fn melo_and_period_resolve_from_timeline() {
+        let p = json!({ "malo_id": MALO, "melo_id": MELO, "zeitraum_von": "2025-03-01", "zeitraum_bis": "2025-03-31" });
+        assert_eq!(
+            plan_werteanfrage_msb(&p, MALO).unwrap(),
+            MsbResolution::FromTimeline {
+                melo: MELO.to_owned(),
+                von: date("2025-03-01"),
+                bis: Some(date("2025-03-31")),
+            }
+        );
+    }
+
+    /// A Messlokation location doubles as the Messlokation when `melo_id` is omitted;
+    /// `von` is the alias for `zeitraum_von`.
+    #[test]
+    fn melo_location_is_used_when_melo_id_absent() {
+        let p = json!({ "lokations_id": MELO, "von": "2024-11-15" });
+        assert_eq!(
+            plan_werteanfrage_msb(&p, MELO).unwrap(),
+            MsbResolution::FromTimeline {
+                melo: MELO.to_owned(),
+                von: date("2024-11-15"),
+                bis: None,
+            }
+        );
+    }
+
+    /// A MaLo location with no `melo_id` cannot address the per-Messlokation timeline.
+    #[test]
+    fn malo_location_without_melo_id_is_rejected() {
+        let p = json!({ "malo_id": MALO, "zeitraum_von": "2025-03-01" });
+        assert!(matches!(
+            plan_werteanfrage_msb(&p, MALO),
+            Err(DispatchError::InvalidPayload(_))
+        ));
+    }
+
+    /// Resolution needs a period start.
+    #[test]
+    fn missing_period_start_is_rejected() {
+        let p = json!({ "melo_id": MELO });
+        assert!(matches!(
+            plan_werteanfrage_msb(&p, MALO),
+            Err(DispatchError::InvalidPayload(_))
+        ));
+    }
 }

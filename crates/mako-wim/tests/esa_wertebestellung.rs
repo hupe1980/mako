@@ -6,8 +6,8 @@ use mako_engine::{
     workflow::Workflow,
 };
 use mako_wim::esa_wertebestellung::{
-    ABBESTELLUNG_PID, ANFRAGE_PID, ANGEBOT_WINDOW_LABEL, ANTWORT_WINDOW_LABEL, BESTAETIGUNG_PID,
-    BESTELLUNG_PID, EsaWertebestellungCommand as C, EsaWertebestellungEvent,
+    ABBESTELLUNG_PID, ANFRAGE_PID, ANGEBOT_WINDOW_LABEL, ANTWORT_WINDOW_LABEL, BEENDIGUNG_MSB_PID,
+    BESTAETIGUNG_PID, BESTELLUNG_PID, EsaWertebestellungCommand as C, EsaWertebestellungEvent,
     EsaWertebestellungState as S, EsaWertebestellungWorkflow as W, Lokationsebene, STORNIERUNG_PID,
     STORNO_BESTAETIGUNG_PID,
 };
@@ -333,4 +333,46 @@ fn stornierung_references_the_original_bestellung_belegnummer() {
         "ORDCHG must reference the original Bestellung Belegnummer"
     );
     let _ = STORNIERUNG_PID;
+}
+
+// ── UC 4.4 — MSB-initiated Beendigung (IFTSTA 21042) ──────────────────────────
+
+#[test]
+fn msb_beendigung_ends_the_delivery_on_the_esa_side() {
+    // A running delivery is ended when the ESA receives IFTSTA 21042.
+    let s = beliefert();
+    let (s, out) = step(
+        &s,
+        C::ReceiveBeendigungDurchMsb {
+            message_ref: mref("IFT-21042-1"),
+            beendigung_zum: datetime!(2026-08-01 00:00 UTC),
+            reason: Some("Messstellenbetrieb endet".to_owned()),
+        },
+    )
+    .unwrap();
+    assert_eq!(s.label(), "Beendet", "UC 4.4 terminates the process");
+    assert!(
+        matches!(
+            out.events.first(),
+            Some(EsaWertebestellungEvent::BeendetDurchMsb { .. })
+        ),
+        "a BeendetDurchMsb event is emitted"
+    );
+    let _ = BEENDIGUNG_MSB_PID;
+}
+
+#[test]
+fn msb_beendigung_before_delivery_is_rejected() {
+    // Only a delivery-authorised process can be ended by the MSB.
+    let (s, _) = step(&S::default(), werteanfrage()).unwrap();
+    let err = W::handle(
+        &s,
+        C::ReceiveBeendigungDurchMsb {
+            message_ref: mref("IFT-21042-2"),
+            beendigung_zum: datetime!(2026-08-01 00:00 UTC),
+            reason: None,
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("Beliefert"), "got: {err}");
 }

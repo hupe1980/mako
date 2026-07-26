@@ -8,7 +8,7 @@ description: >
   tarifbd operator guide: Product & Tariff Catalog daemon (LF role).
   User-defined energy products (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/SHARING);
   all prices in Tarifpreisblatt JSONB; product version history;
-  MaLo→product assignment, hourly EPEX Spot day-ahead prices for §41a dynamic tariffs.
+  MaLo→product assignment, 15-min EPEX Spot day-ahead prices for §41a dynamic tariffs.
 ---
 
 # `tarifbd` — Product & Tariff Catalog
@@ -50,7 +50,7 @@ graph LR
     STROM & GAS & WASSER & WAERME & EEG --> tarifbd
     SMART & SERV & BUNDLE & SHARING --> tarifbd
     tarifbd -->|"GET customer/{malo_id}/product"| billingd["billingd :9280"]
-    tarifbd -->|"GET epex-prices/{date}/hourly"| billingd
+    tarifbd -->|"GET epex-prices/{date}/quarter-hourly"| billingd
 ```
 
 ---
@@ -69,8 +69,8 @@ graph LR
 | `PUT/GET/DELETE` | `/api/v1/products/{lf_mp_id}/{product_code}/energiemix` | §42 EnWG Energiemix sub-resource — does NOT archive product or trigger billing-period changes |
 | `GET` | `/api/v1/comparison-feed` | **Comparison portal feed** — ETag-cached, cursor-paginated tariff listing (PUBLISHED non-expired only); `jahreskosten_supply_*` for `verbrauch_kwh` |
 | `GET` | `/api/v1/comparison-feed/bo4e` | **BO4E Tarifinfo array** — §42d EnWG canonical form; direct import by Verivox / Check24 / BNetzA MTS |
-| `PUT` | `/api/v1/epex-prices/{date}` | Import EPEX day-ahead prices (24-entry array, idempotent) |
-| `GET` | `/api/v1/epex-prices/{date}/hourly` | 24-hour ct/kWh array |
+| `PUT` | `/api/v1/epex-prices/{date}` | Import EPEX day-ahead prices (96/92/100 15-min MTUs, or 24 hourly; idempotent) |
+| `GET` | `/api/v1/epex-prices/{date}/quarter-hourly` | 15-min MTU points `{mtu_start, price_ct_kwh}` |
 | `GET` | `/api/v1/epex-prices/{year}/{month}/average` | Monthly average — used by `einsd` Direktvermarktung |
 | `PUT` | `/api/v1/nehs-prices/{date}` | Import a dated nEHS certificate price (EUR/t CO₂) — EEX auction clearing (weekly from 01.07.2026, §10 BEHG corridor 55–65 €/t), Verkaufsphase (68 €) or manual. `source` ∈ `auktion`/`verkaufsphase`/`nachkauf`/`manual` (CHECK-constrained; anything else → 422) |
 | `GET` | `/api/v1/nehs-prices/latest?date=` | Most recent nEHS price at or before `date` — used by `billingd` for the Gas CO₂ component (CO2KostAufG §3) |
@@ -127,22 +127,28 @@ The previous assignment is automatically closed (`assigned_to = 2026-07-01`).
 
 ## §41a EPEX Spot feed
 
-Import the ENTSO-E day-ahead prices daily (D-1):
+The SDAC day-ahead auction settles on **15-minute Market Time Units (MTU)**
+since 2025-10-01 (EPEX SPOT go-live) — 96 quarter-hours per delivery day
+(92/100 on the DST days). Import the day-ahead prices daily (D-1) as an ordered
+array of the delivery day's MTUs, in UTC-instant order (= local wall-clock
+order). `mtu_minutes` defaults to `15`; legacy `60`-minute source data is
+accepted and expanded to quarter-hours on fetch.
 
 ```bash
-# Import 2026-07-15 prices from netztransparenz.de / ENTSO-E
+# Import 2026-07-15 (96 quarter-hour prices, ct/kWh)
 curl -s -X PUT "http://tarifbd:9080/api/v1/epex-prices/2026-07-15" \
   -H "Content-Type: application/json" \
   -d '{
-    "prices": [6.2, 5.8, 5.5, 5.3, 5.1, 5.4, 6.0, 7.2,
-               9.1, 10.5, 11.2, 11.8, 12.1, 11.9, 11.5, 10.8,
-               11.2, 12.5, 13.1, 12.8, 10.2, 8.5, 7.1, 6.5],
+    "prices": [6.2, 6.1, 6.0, 5.9, /* … 96 entries … */ 6.5],
+    "mtu_minutes": 15,
     "source": "entsoe-transparency"
   }'
 ```
 
-For `billingd` dynamic billing: `GET /api/v1/epex-prices/2026-07-15/hourly` returns
-the 24-hour array for 15-min Lastgang × EPEX multiplication (§41a pipeline).
+For `billingd` dynamic billing: `GET /api/v1/epex-prices/2026-07-15/quarter-hourly`
+returns the day's 15-min points, each `{ mtu_start (UTC RFC3339), price_ct_kwh }`,
+for the 15-min Lastgang × EPEX-MTU multiplication (§41a pipeline). The price map
+is keyed on the UTC MTU start (DST-safe).
 
 For `einsd` Direktvermarktung: `GET /api/v1/epex-prices/2026/7/average` returns the
 monthly average used in `max(0, AW − EPEX)`.
@@ -155,7 +161,7 @@ monthly average used in `max(0, AW − EPEX)`.
 Check24**, BNetzA Markttransparenzstelle, and similar integrators. The feed is also
 compliant with §42d EnWG (mandatory machine-readable tariff publication since 2024).
 
-Each entry now includes a `tarifinfo` field — a pre-built **BO4E `Tarifinfo` Business
+Each entry includes a `tarifinfo` field — a pre-built **BO4E `Tarifinfo` Business
 Object** that portals can import directly without custom ETL.  For portals that require
 a pure BO4E array, use `GET /api/v1/comparison-feed/bo4e`.
 
@@ -411,7 +417,7 @@ Temporal assignment: one row per `(malo_id, lf_mp_id, assigned_from)`.
 
 ### `epex_prices`
 
-One row per `(price_date, hour)`. 24-entry array per day. Indexed on `price_date DESC`.
+One row per 15-min MTU, keyed on `mtu_start` (UTC). `price_date` (local delivery date) is indexed for day/range queries; `mtu_minutes` records the source resolution (15 or 60).
 
 ---
 
@@ -453,7 +459,7 @@ Content-Type: application/json
 | `get_product` | Full Tarifpreisblatt JSONB including Preisstaffeln and Energiemix |
 | `get_product_history` | Version history including Energiemix changes (§42 audit trail) |
 | `get_customer_product` | Currently active product for a MaLo |
-| `get_epex_price` | Hourly EPEX day-ahead prices for a date (§41a compliance check) |
+| `get_epex_price` | 15-min MTU EPEX day-ahead prices for a date (§41a compliance check) |
 | `list_expiring_contracts` | MaLo→product assignments ending within N days (churn prevention) |
 | `list_angebote` | B2B quotations by status (ANGELEGT/VERSANDT/ANGENOMMEN/…) |
 | `get_angebot` | Full Angebot with enriched positions and variant comparisons |

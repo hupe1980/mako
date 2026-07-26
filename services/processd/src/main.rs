@@ -145,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
         own_mp_id: cfg.identity.own_mp_id,
         tenant,
         nb_auto_accept: cfg.nb.auto_accept,
+        nb_gas_bearbeitungsfrist_wt: cfg.nb.gas_bearbeitungsfrist_wt,
         lf_auto_respond: cfg.lf.auto_respond,
         lf_queue_ttl_secs: cfg.lf.queue_ttl_secs,
         msb_auto_preisanfrage: cfg.msb.auto_preisanfrage,

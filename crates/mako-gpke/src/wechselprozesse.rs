@@ -41,7 +41,8 @@
 //! [`super::lf_abmeldung::GpkeLfAbmeldungWorkflow`] (LF-side). They are NOT
 //! registered here. PIDs 55013–55015 (Ersatz-/Grundversorgung) are handled by
 //! [`super::eog::GpkeEogWorkflow`]; 55010–55012 (Anfrage zur Beendigung der
-//! Zuordnung — the NB Abmeldeanfrage) are not yet implemented.
+//! Zuordnung — the NB Abmeldeanfrage) by
+//! [`super::beendigung_zuordnung::GpkeBeendigungZuordnungWorkflow`].
 //!
 //! # Regulatory basis
 //!
@@ -389,6 +390,12 @@ pub enum SupplierChangeCommand {
         /// retroactive Lieferbeginn for Ein-/Auszug but not for a regular
         /// Wechsel. Propagated into the `ProcessInitiated` outbox payload.
         transaktionsgrund: Option<String>,
+        /// `true` when a SG4 STS Transaktionsgrundergänzung `9013=ZW3`
+        /// („Erzeugende Marktlokation") is present — an EEG-/KWKG-Einspeise-MaLo.
+        /// Kept separate from `transaktionsgrund` (the main Anmeldegrund, which is
+        /// re-rendered outbound) so `processd`'s `netz-checker` can trigger the
+        /// §10c EEG Monatserster date rule without conflating the two codes.
+        ist_erzeugende_marktlokation: bool,
         /// EDIFACT message reference.
         message_ref: MessageRef,
         /// UTC timestamp at which the inbound UTILMD was received at the transport layer.
@@ -696,6 +703,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 bilanzierungsmethode,
                 fallgruppe,
                 transaktionsgrund,
+                ist_erzeugende_marktlokation,
                 message_ref,
                 received_at,
                 validation_passed,
@@ -770,6 +778,9 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                                 // SG4 STS Transaktionsgrund — consumed by processd
                                 // netz-checker (date-plausibility rules).
                                 "transaktionsgrund":     transaktionsgrund,
+                                // Erzeugende-MaLo flag (STS 9013=ZW3) — drives the
+                                // §10c EEG Monatserster rule in the netz-checker.
+                                "ist_erzeugende_marktlokation": ist_erzeugende_marktlokation,
                             }),
                         )
                         // Caused by ValidationPassed (index 1), not Initiated (index 0),

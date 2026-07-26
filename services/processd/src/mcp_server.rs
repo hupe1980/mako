@@ -197,7 +197,6 @@ Escalate = data gap (grid record missing) or affiliate initiator \
                                 Some("A02") => "PUT /api/v1/malo/{malo_id}/grid in marktd, or run nis-syncd",
                                 Some("A05") => "PUT /api/v1/preisblaetter/{nb_mp_id} in marktd with current tariff",
                                 Some("A06") => "LF submitted a date outside the valid Vorlauffrist window",
-                                Some("A97") => "Affiliate-initiated — approve via PUT /api/v1/approval-queue/{id}/approve",
                                 Some("A99") => "Internal error — check processd logs for details",
                                 _ => "Unknown ERC — check decision detail field",
                             }
@@ -437,11 +436,13 @@ impl ProcessdMcpHandler {
                     - A02: MaLo not found in marktd (malo_grid missing or bilanzierungsgebiet mismatch)\n\
                     - A05: Preisblatt missing for the NB MP-ID + Sparte combination\n\
                     - A06: Lieferbeginn date outside allowed range (too far future / past)\n\
-                    - A97: initiator_is_affiliate = true, auto-accept blocked (§20 EnWG parity)\n\
                     - A99: internal processing error (check processd logs)\n\
-                 3. Fix A02: PUT /api/v1/malo/{malo_id}/grid in marktd with correct netzebene/bilanzierungsgebiet.\n\
-                 4. Fix A05: PUT /api/v1/preisblaetter/{nb_mp_id} in marktd with current tariff.\n\
-                 5. Fix A97: submit manual approval via PUT /api/v1/approval-queue/{id}/approve.",
+                 3. AFFILIATE (not an ERC): the decision carries `initiator_is_affiliate = true` — \
+                    auto-accept was blocked under §20 EnWG parity even though the checks passed. \
+                    These surface via `list_affiliate_decisions`, not the ERC breakdown.\n\
+                 4. Fix A02: PUT /api/v1/malo/{malo_id}/grid in marktd with correct netzebene/bilanzierungsgebiet.\n\
+                 5. Fix A05: PUT /api/v1/preisblaetter/{nb_mp_id} in marktd with current tariff.\n\
+                 6. Fix AFFILIATE: submit manual approval via PUT /api/v1/approval-queue/{id}/approve.",
             ),
         ]
     }
@@ -473,7 +474,9 @@ impl ProcessdMcpHandler {
                  → LF submitted a date outside the valid window (too far future or past).\n\
                  → Check UTILMD AHB for the PID-specific Vorlauffrist rules.\n\
                  → No action needed on NB side — this is an LF error.\n\n\
-                 **A97 (affiliate — §20 EnWG)**\n\
+                 **AFFILIATE (§20 EnWG parity — not an ERC)**\n\
+                 → Affiliate-initiated Anmeldungen pass the checks but auto-accept is blocked; \
+                   they are tracked by the `initiator_is_affiliate` marker, not an ERC bucket.\n\
                  → Call `list_affiliate_decisions(days=7)` to see affected MaLos.\n\
                  → Each entry requires manual operator review before acceptance.\n\
                  → Approve via PUT /api/v1/approval-queue/{id}/approve.\n\n\

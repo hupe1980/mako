@@ -54,7 +54,7 @@ use mako_geli_gas::{
 };
 use mako_gpke::{
     GpkeAbrechnungWorkflow, GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
-    GpkeAnkuendigungZuordnungLfWorkflow, GpkeDatanabrufWorkflow,
+    GpkeAnkuendigungZuordnungLfWorkflow, GpkeBeendigungZuordnungWorkflow, GpkeDatanabrufWorkflow,
     GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
     GpkeLfAnmeldungWorkflow, GpkeMesswerteLieferungWorkflow, GpkeNeuanlageWorkflow,
     GpkePartinWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungWorkflow,
@@ -152,6 +152,7 @@ impl EdifactIngestDispatcher {
         "geli-gas-sperrprozesse-invoic",
         "geli-gas-sperrung-lf",
         "geli-gas-sperrung-nb",
+        "geli-gas-stammdatenaenderung",
         "geli-gas-stornierung",
         "geli-gas-stornierung-lf",
         "geli-gas-supplier-change",
@@ -159,6 +160,7 @@ impl EdifactIngestDispatcher {
         "gpke-allokationsliste",
         "gpke-anfrage-bestellung",
         "gpke-ankuendigung-zuordnung-lf",
+        "gpke-beendigung-zuordnung",
         "gpke-datenabruf",
         "gpke-eog",
         "gpke-konfiguration",
@@ -170,6 +172,7 @@ impl EdifactIngestDispatcher {
         "gpke-partin",
         "gpke-sperrung",
         "gpke-sperrung-lf",
+        "gpke-stammdatenaenderung",
         "gpke-stornierung",
         "gpke-supplier-change",
         "gpke-utilts",

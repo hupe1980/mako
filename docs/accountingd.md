@@ -296,7 +296,7 @@ from `abschlag_ct` when no typed value has been stored.
 
 Every SEPA mandate PUT validates the IBAN using **ISO 13616 mod-97** via the
 [`sepa`](https://crates.io/crates/sepa) crate (`sepa::validate_iban`).
-Covered by **21 tests** in `unit_tests.rs` (DE, GB, NL, AT, CH, checksum failures, length, lowercase).
+Covered by **21 IBAN tests** (of the 71 in `unit_tests.rs`) (DE, GB, NL, AT, CH, checksum failures, length, lowercase).
 
 ---
 
@@ -949,7 +949,7 @@ bank_submit_url = "https://banking-adapter.internal/api/v1/pain001"
 bank_api_key    = "env:BANK_API_KEY"
 ```
 
-> **`creditor_iban` is now required.** Missing or invalid `creditor_iban` causes `POST /sepa/run`
+> **`creditor_iban` is required.** Missing or invalid `creditor_iban` causes `POST /sepa/run`
 > to return HTTP 503. The N-5 background worker also blocks (no silent placeholder IBAN fallback).
 
 ---

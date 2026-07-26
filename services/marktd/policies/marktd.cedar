@@ -32,12 +32,15 @@ permit(
         Action::"read-preisblatt",
         Action::"read-versorgungsstatus",
         Action::"read-nelo",
+        Action::"read-tranche",
         Action::"read-malo-grid",
         Action::"read-device",
         Action::"read-sr",
         Action::"read-sharing-eligibility",
         Action::"read-netzzugang",
         Action::"read-msb-rv-gas",
+        Action::"read-melo-msb",
+        Action::"read-bilanzierung",
         Action::"use-mcp"
     ],
     resource
@@ -60,7 +63,9 @@ permit(
         Action::"write-device",
         Action::"write-sr",
         Action::"write-netzzugang",
-        Action::"write-msb-rv-gas"
+        Action::"write-msb-rv-gas",
+        Action::"write-melo-msb",
+        Action::"write-bilanzierung"
     ],
     resource
 ) when {
@@ -92,6 +97,17 @@ permit(
 permit(
     principal,
     action == Action::"write-nelo",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    context.principal_roles.contains("NB")
+};
+
+// Tranchen (GPKE Teil 4 „Daten der Tranche") are balancing topology owned by the
+// Netzbetreiber — reads open to the tenant, writes require the NB role.
+permit(
+    principal,
+    action == Action::"write-tranche",
     resource
 ) when {
     context.principal_tenant == context.resource_tenant &&

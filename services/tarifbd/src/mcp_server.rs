@@ -8,7 +8,7 @@
 //! | `get_product` | Get a single product with full Tarifpreisblatt JSONB |
 //! | `get_product_history` | Full version history for a product (includes energiemix) |
 //! | `get_customer_product` | Look up the active product for a MaLo |
-//! | `get_epex_price` | Get EPEX day-ahead hourly prices for a date |
+//! | `get_epex_price` | Get EPEX day-ahead 15-min MTU prices for a date |
 //! | `list_expiring_contracts` | Contracts ending within N days (churn prevention) |
 //! | `list_angebote` | List B2B quotations (Angebote) — filter by status |
 //! | `get_angebot` | Fetch a single Angebot with enriched positions and variants |
@@ -236,7 +236,7 @@ impl TarifbdMcpHandler {
     }
 
     #[tool(
-        description = "Get EPEX Spot day-ahead hourly prices for a specific date. Returns up to 24 hourly entries in ct/kWh. Used for §41a dynamic tariff billing verification.",
+        description = "Get EPEX Spot day-ahead prices for a specific date as 15-minute market time units (ct/kWh, each with its UTC mtu_start). 96 entries expected for a complete day (92/100 on DST days). Used for §41a dynamic tariff billing verification.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_epex_price(
@@ -244,6 +244,7 @@ impl TarifbdMcpHandler {
         Parameters(p): Parameters<EpexPriceParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::fetch_epex_day;
+        use time::format_description::well_known::Rfc3339;
         let Ok(date) = time::Date::parse(
             &p.date,
             &time::format_description::well_known::Iso8601::DEFAULT,
@@ -251,17 +252,29 @@ impl TarifbdMcpHandler {
             return Err(McpError::invalid_params("date must be YYYY-MM-DD", None));
         };
         match fetch_epex_day(&self.state.pool, date).await {
-            Ok(Some(prices)) => ContentBlock::json(serde_json::json!({
-                "date": p.date,
-                "hours_available": prices.len(),
-                "prices_ct_kwh": prices,
-                "note": "Prices in ct/kWh. 24 entries expected for a complete day.",
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None)),
+            Ok(Some(points)) => {
+                let prices: Vec<serde_json::Value> = points
+                    .iter()
+                    .map(|pt| {
+                        serde_json::json!({
+                            "mtu_start": pt.mtu_start.format(&Rfc3339).unwrap_or_default(),
+                            "price_ct_kwh": pt.avg_ct_kwh,
+                        })
+                    })
+                    .collect();
+                ContentBlock::json(serde_json::json!({
+                    "date": p.date,
+                    "mtu_minutes": 15,
+                    "mtus_available": prices.len(),
+                    "prices_ct_kwh": prices,
+                    "note": "Prices in ct/kWh per 15-min MTU. 96 entries expected for a complete day.",
+                }))
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None))
+            }
             Ok(None) => ContentBlock::json(serde_json::json!({
                 "date": p.date,
-                "hours_available": 0,
+                "mtus_available": 0,
                 "prices_ct_kwh": [],
                 "note": "No EPEX prices imported for this date. Use PUT /api/v1/epex-prices/{date} to import.",
             }))
@@ -560,7 +573,7 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
                        formula, which billing engine method it invokes, the BO4E Rechnungsposition \
                        type it produces, and the applicable regulatory basis (e.g. §3 StromStG). \
                        For EPEX-linked products (dyn_source=epex-spot-day-ahead) shows which \
-                       hourly EPEX prices are required and how §41b iMSys guard applies.",
+                       15-min EPEX prices are required and how §41b iMSys guard applies.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn explain_invoice_position(
@@ -617,7 +630,7 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
                  Legal: §21 EEG 2023".to_owned(),
             pt if is_dynamic => format!(
                 "{pt} on dynamic tariff (dyn_source=epex-spot-day-ahead):\n\
-                 Formula: EPEX_Spot[h] × kwh[h] / 100 for each hour h\n\
+                 Formula: EPEX_Spot[q] × kwh[q] / 100 for each 15-min MTU q\n\
                  Requires: tarifbd epex_prices for each day in billing period\n\
                  §41b guard: Customer MaLo must have iMSys=true (billingd enforces)\n\
                  Missing EPEX prices → BillingError (billingd does NOT fall back silently)"
@@ -814,7 +827,7 @@ impl TarifbdMcpHandler {
                     { \"product_code\": \"STROM-EPEX-01\", \"assigned_from\": \"YYYY-MM-DD\" }\n\n\
                  4. billingd auto-detects dynamic_epex=true:\n\
                     - Fetches 15-min Lastgang from edmd\n\
-                    - Joins each interval against the EPEX hourly price for that hour\n\
+                    - Joins each 15-min interval against the EPEX price for that MTU\n\
                     - NNE from marktd (PreisblattNetznutzung) added as pass-through\n\n\
                  5. Verify: use get_epex_price to check prices are imported for upcoming dates.",
             ),
@@ -960,9 +973,9 @@ mod dst_tests {
     use time::Month;
     use time::macros::{date, datetime};
 
-    /// EPEX Spot prices are hourly, so a wrong DST offset shifts every price by
-    /// an hour — the whole day's §41a dynamic tariff is then billed against the
-    /// wrong hours.
+    /// EPEX Spot prices are 15-min MTUs, so a wrong DST offset shifts every
+    /// price — the whole day's §41a dynamic tariff is then billed against the
+    /// wrong quarter-hours.
     #[test]
     fn offsets_switch_on_the_statutory_boundaries() {
         // 2026: DST starts Sun 29 March, ends Sun 25 October.

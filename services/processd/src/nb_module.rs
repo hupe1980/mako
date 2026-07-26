@@ -48,6 +48,21 @@ pub struct NbModuleConfig {
     pub own_mp_id: String,
     pub tenant: String,
     pub auto_accept: bool,
+    /// Gas Bearbeitungsfrist (WT) added to the 6-week retroactive Anmeldung
+    /// window. Defaults to [`netz_checker::checks::GAS_BEARBEITUNGSFRIST_WT_DEFAULT`]
+    /// (3 WT); operators whose AWH reading differs may override it.
+    pub gas_bearbeitungsfrist_wt: u32,
+}
+
+impl NbModuleConfig {
+    /// Build the pure-library [`netz_checker::NetzCheckConfig`] from this config.
+    #[must_use]
+    pub fn netz_check_config(&self) -> netz_checker::NetzCheckConfig {
+        netz_checker::NetzCheckConfig {
+            gas_bearbeitungsfrist_wt: self.gas_bearbeitungsfrist_wt,
+            ..netz_checker::NetzCheckConfig::default()
+        }
+    }
 }
 
 // MarktdReader replaced by mako_markt::marktd_client::MarktdClient
@@ -68,6 +83,9 @@ pub struct AnmeldungPayload {
     /// SG4 STS Transaktionsgrund (DE9013) — e.g. `E01` Ein-/Auszug,
     /// `E03` Lieferantenwechsel. Drives the date-plausibility rules.
     pub transaktionsgrund: Option<String>,
+    /// `true` when the Anmeldung is for an Erzeugende (EEG-/KWKG-Einspeise-)
+    /// Marktlokation (STS 9013=ZW3). Triggers the §10c EEG Monatserster date rule.
+    pub ist_erzeugende_marktlokation: bool,
     /// Bilanzierungsmethode from UTILMD TM+EM (`SLP` | `RLM` | `IMS`).
     pub bilanzierungsmethode: Option<String>,
 }
@@ -100,6 +118,10 @@ impl AnmeldungPayload {
             .get("transaktionsgrund")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
+        let ist_erzeugende_marktlokation = data
+            .get("ist_erzeugende_marktlokation")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
         let bilanzierungsmethode = data
             .get("bilanzierungsmethode")
             .and_then(|v| v.as_str())
@@ -123,6 +145,7 @@ impl AnmeldungPayload {
             bilanzierungsgebiet,
             process_date,
             transaktionsgrund,
+            ist_erzeugende_marktlokation,
             bilanzierungsmethode,
         })
     }
@@ -153,6 +176,7 @@ impl AnmeldungPayload {
             sparte,
             messtyp,
             transaktionsgrund: self.transaktionsgrund,
+            ist_erzeugende_marktlokation: self.ist_erzeugende_marktlokation,
         }
     }
 }
@@ -249,7 +273,14 @@ pub async fn evaluate_and_decide(
     };
     let grid_ref = grid_nc.as_ref();
 
-    let result = netz_checker::evaluate(&anfrage, vs_ref, grid_ref, partner_known, now);
+    let result = netz_checker::evaluate(
+        &anfrage,
+        vs_ref,
+        grid_ref,
+        partner_known,
+        now,
+        &config.netz_check_config(),
+    );
 
     info!(
         %process_id, pid, %malo_id,
@@ -397,10 +428,38 @@ mod tests {
             Some("11YF-VATTENFALL-2")
         );
         assert_eq!(payload.transaktionsgrund.as_deref(), Some("E01"));
+        // Absent flag → not an Erzeugende MaLo.
+        assert!(!payload.ist_erzeugende_marktlokation);
         // Messtyp derives from the TM+EM marker in the payload.
         let anfrage = payload.into_anfrage();
         assert_eq!(anfrage.messtyp, netz_checker::Messtyp::Rlm);
         assert_eq!(anfrage.transaktionsgrund.as_deref(), Some("E01"));
+        assert!(!anfrage.ist_erzeugende_marktlokation);
+    }
+
+    #[test]
+    fn parse_erzeugende_malo_sets_eeg_flag() {
+        // An Erzeugende (EEG-/KWKG-) MaLo Anmeldung carries the STS 9013=ZW3
+        // ergänzung, surfaced by the makod adapter as `ist_erzeugende_marktlokation`.
+        let event = serde_json::json!({
+            "makopid": 55001,
+            "subject": "550e8400-e29b-41d4-a716-446655440000",
+            "data": {
+                "malo_id": "51238696780",
+                "new_supplier": "9900357000004",
+                "grid_operator": "9900000000001",
+                "process_date": "20261001",
+                "transaktionsgrund": "E01",
+                "ist_erzeugende_marktlokation": true
+            }
+        });
+        let anfrage = AnmeldungPayload::parse(&event)
+            .expect("should parse")
+            .into_anfrage();
+        assert!(
+            anfrage.ist_erzeugende_marktlokation,
+            "ZW3 Erzeugende flag must reach the netz-checker to trigger §10c EEG"
+        );
     }
 
     #[test]

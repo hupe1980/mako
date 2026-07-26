@@ -411,7 +411,7 @@ You are the billing anomaly detection specialist (strict mode: 10% threshold).
 dispatch_mode  = "parallel"
 parallel_limit = 4  # max concurrent specialists
 
-# billing.rechnung.erstellt now triggers BOTH:
+# billing.rechnung.erstellt triggers BOTH:
 # - billing-anomaly-agent    (deviation check)
 # - billing-regulatory-guard-agent  (§40/§41/§41b compliance)
 # simultaneously, returning aggregated results

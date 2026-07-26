@@ -107,7 +107,15 @@ pub mod mscons;
 pub mod partin;
 pub mod sperrung_lf;
 pub mod sperrung_nb;
+pub mod stammdatenaenderung;
 pub mod stornierung;
+
+pub use stammdatenaenderung::{
+    ANFRAGE_PIDS as GAS_STAMMDATEN_ANFRAGE_PIDS, GasAntwort, GasStammdatenCommand,
+    GasStammdatenData, GasStammdatenEvent, GasStammdatenState, GeliGasStammdatenaenderungWorkflow,
+    STAMMDATEN_PAIRS as GAS_STAMMDATEN_PAIRS, WORKFLOW_NAME as GAS_STAMMDATEN_WORKFLOW_NAME,
+    antwort_for as gas_stammdaten_antwort_for, is_aenderung_pid as gas_is_stammdaten_aenderung_pid,
+};
 
 pub use datenabruf::{
     GeliGasDatanabrufCommand, GeliGasDatanabrufEvent, GeliGasDatanabrufState,
@@ -222,6 +230,7 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
             datenabruf::WORKFLOW_NAME,
             sperrung_lf::WORKFLOW_NAME,
             sperrung_nb::WORKFLOW_NAME,
+            stammdatenaenderung::WORKFLOW_NAME,
             partin::WORKFLOW_NAME,
             // PID 31011 — Rechnung sonstige Leistung / AWH Sperrprozesse Gas (VNB → LFN/LFA).
             // GeLi Gas (BK7-24-01-009) billing for disconnection services; NOT GaBi Gas.
@@ -264,6 +273,20 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         // Strom PARTIN (37000–37006) is handled by mako-gpke gpke-partin.
         for &pid in partin::PARTIN_GAS_PIDS {
             router.register(pid, partin::WORKFLOW_NAME);
+        }
+
+        // GeLi Gas Stammdatenänderung (44109–44182). Change families (G1–G7):
+        // both the Änderung PIDs and their shared Antwort PIDs. Anfrage families
+        // (G8–G10) are registered so they no longer dead-letter. Excludes
+        // 44168–44170 (WiM Gas Verpflichtungsanfrage, WimGasModule) and 44183.
+        for &(aenderung_pid, antwort_pid, _) in stammdatenaenderung::STAMMDATEN_PAIRS {
+            router.register(aenderung_pid, stammdatenaenderung::WORKFLOW_NAME);
+            // Antwort PIDs are shared across directions — re-registering to the
+            // same workflow is an idempotent overwrite.
+            router.register(antwort_pid, stammdatenaenderung::WORKFLOW_NAME);
+        }
+        for &pid in stammdatenaenderung::ANFRAGE_PIDS {
+            router.register(pid, stammdatenaenderung::WORKFLOW_NAME);
         }
 
         // Gas Sperrung / Entsperrung (LF-side) — PIDs 17115/17117 outbound (LF → GNB),

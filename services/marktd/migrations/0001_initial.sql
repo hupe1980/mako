@@ -29,6 +29,7 @@ CREATE TABLE malo (
                                 --   | 'GABI_RLM_IM_NOMINIERUNGSERSATZVERFAHREN'
                                 -- Determines GaBi billing category for Gas RLM MaLos.
     lokationsbuendel_objektcode TEXT,  -- Marktlokation.lokationsbuendelObjektcode (UTILMD Lokationsbündelstruktur)
+    fernsteuerbar        BOOLEAN,  -- §14a EnWG Status der Fernsteuerbarkeit (UTILMD CCI+7037 Z97=true / Z96=false)
     version      BIGINT      NOT NULL DEFAULT 1,
     data         JSONB       NOT NULL,              -- full BO4E MARKTLOKATION
     bo4e_version TEXT        NOT NULL DEFAULT 'v202607.0.0',
@@ -82,6 +83,63 @@ CREATE INDEX melo_regelzone ON melo (regelzone) WHERE regelzone IS NOT NULL;
 CREATE INDEX melo_standorteigenschaften_gin
     ON melo USING GIN (standorteigenschaften jsonb_path_ops)
     WHERE standorteigenschaften IS NOT NULL;
+
+-- ── MSB-Zuordnung je Messlokation (dated timeline) ────────────────────────────
+-- WiM Teil 2 UC 4.1.1: a historical Werteanfrage must resolve which MSB served a
+-- specific MeLo at a past date. MaLo-level MSB (rollenzuordnungen /
+-- versorgungsstatus.msb_mp_id) is insufficient — a MaLo can bundle several MeLos
+-- whose MSB history differs (e.g. a partial MSB-Wechsel). This per-MeLo dated
+-- table is the authoritative source for point-in-time MSB resolution.
+CREATE TABLE melo_msb_zuordnungen (
+    tenant       TEXT        NOT NULL,
+    melo_id      TEXT        NOT NULL REFERENCES melo (melo_id) ON DELETE CASCADE,
+    msb_mp_id    TEXT        NOT NULL,              -- 13-digit MSB GLN
+    valid_from   DATE        NOT NULL,
+    valid_to     DATE,                              -- NULL = currently valid
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, melo_id, valid_from)
+);
+
+-- Point-in-time lookup: newest assignment at or before a given date.
+CREATE INDEX melo_msb_at ON melo_msb_zuordnungen (tenant, melo_id, valid_from DESC);
+
+-- ── Bilanzierung (BO4E) — first-class, temporal balancing resource ────────────
+-- BO4E `Bilanzierung` (BO #3): the balancing-relevant data of a Marktlokation
+-- with its own identity and validity — Bilanzkreis (EIC), Bilanzierungsgebiet,
+-- Aggregationsverantwortung, Prognosegrundlage, Fallgruppenzuordnung, Lastprofil,
+-- Jahresverbrauchsprognose, Kundenwert. Previously smeared across `malo` columns
+-- (denormalised current-value), the dead `mako-edm::BilanzzuordnungRecord`, and
+-- `metering::LoadProfile`. This table is the authoritative temporal home; the
+-- `data` JSONB is the full BO4E `Bilanzierung`, typed columns are extracted for
+-- indexing. Keyed per (MaLo, validity-start) for point-in-time resolution.
+CREATE TABLE bilanzierungen (
+    tenant                    TEXT        NOT NULL,
+    malo_id                   TEXT        NOT NULL,   -- BO4E marktlokationsId
+    -- Temporal validity (BO4E bilanzierungsbeginn/ende).
+    bilanzierungsbeginn       TIMESTAMPTZ NOT NULL,   -- validity start (inclusive)
+    bilanzierungsende         TIMESTAMPTZ,            -- validity end (exclusive); NULL = open
+    -- Typed columns extracted from the BO4E Bilanzierung JSONB.
+    bilanzkreis               TEXT,                   -- Bilanzkreis EIC
+    aggregationsverantwortung TEXT,                   -- NB | ÜNB
+    prognosegrundlage         TEXT,                   -- SLP | Prognose | …
+    fallgruppenzuordnung      TEXT,                   -- GaBi Fallgruppe
+    -- Full BO4E Bilanzierung (round-trip-preserving).
+    data                      JSONB       NOT NULL,
+    bo4e_version              TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    updated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (tenant, malo_id, bilanzierungsbeginn)
+);
+
+COMMENT ON TABLE bilanzierungen IS
+    'BO4E Bilanzierung (BO #3): first-class temporal balancing resource per MaLo. '
+    'Authoritative home for Bilanzkreis/Aggregationsverantwortung/Prognosegrundlage/'
+    'Fallgruppe with bilanzierungsbeginn/ende validity.';
+
+-- Point-in-time lookup: newest Bilanzierung effective at a given instant.
+CREATE INDEX biz_malo_at ON bilanzierungen (tenant, malo_id, bilanzierungsbeginn DESC);
+CREATE INDEX biz_bilanzkreis ON bilanzierungen (bilanzkreis) WHERE bilanzkreis IS NOT NULL;
+CREATE INDEX biz_data_gin ON bilanzierungen USING GIN (data jsonb_path_ops);
 
 -- ── Contracts (LF supply contracts) ──────────────────────────────────────────
 
@@ -218,6 +276,7 @@ CREATE TABLE grundversorger (
     sparte          TEXT        NOT NULL CHECK (sparte IN ('STROM', 'GAS')),
     gv_mp_id        TEXT        NOT NULL,
     festgestellt_am DATE,               -- date of the §36 Abs. 2 Feststellung
+    default_bilanzkreis TEXT,           -- GPKE Teil 4 deposited default BK (EoG ohne Antwort)
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     PRIMARY KEY (tenant, nb_mp_id, sparte)
@@ -571,6 +630,32 @@ CREATE INDEX nelo_nb_gln      ON nelo (tenant, nb_mp_id);
 CREATE INDEX nelo_tenant     ON nelo (tenant);
 CREATE INDEX nelo_steuerkanal ON nelo (tenant) WHERE steuerkanal = true;
 
+-- ── Tranche (GPKE Teil 4 „Daten der Tranche") ─────────────────────────────────
+--
+-- A Tranche is a share of a Marktlokation's energy assigned to a distinct
+-- balancing responsibility (BO4E `Tranche`). GPKE Teil 4 „Änderung Daten der
+-- Tranche" (PIDs 55619/55642/55652/55662/55686) applies to the typed columns
+-- below via the object-generic Stammdatenänderung apply path (LOC+Z21).
+
+CREATE TABLE tranche (
+    tranche_id           TEXT        NOT NULL,           -- e.g. <MaLo>-T01
+    tenant               TEXT        NOT NULL,
+    malo_id              TEXT,                            -- parent Marktlokation
+    -- ── Typed columns from the BO4E Tranche / Stammdatenänderung (LOC+Z21) ──────
+    bilanzierungsgebiet  TEXT,                            -- Bilanzierungsgebiet-EIC (LOC+237)
+    netzebene            TEXT,                            -- voltage / pressure level
+    energierichtung      TEXT,                            -- EINSPEISUNG | ENTNAHME
+    -- ─────────────────────────────────────────────────────────────────────────
+    data                 JSONB       NOT NULL DEFAULT '{}',  -- full BO4E Tranche
+    version              BIGINT      NOT NULL DEFAULT 1,
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (tranche_id, tenant)
+);
+
+CREATE INDEX tranche_malo   ON tranche (tenant, malo_id) WHERE malo_id IS NOT NULL;
+CREATE INDEX tranche_tenant ON tranche (tenant);
+
 -- ── Lokationszuordnung graph (B5) ─────────────────────────────────────────────
 --
 -- Stores directed edges of the MaKo location graph:
@@ -591,9 +676,9 @@ CREATE TABLE lokationszuordnungen (
     id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant       TEXT        NOT NULL,
     von_id       TEXT        NOT NULL,   -- source node ID (MaLo/MeLo/NeLo/SR/TR)
-    von_typ      TEXT        NOT NULL CHECK (von_typ  IN ('malo', 'melo', 'nelo', 'sr', 'tr')),
+    von_typ      TEXT        NOT NULL CHECK (von_typ  IN ('MALO', 'MELO', 'NELO', 'SR', 'TR')),  -- BO4E Lokationstyp
     nach_id      TEXT        NOT NULL,   -- target node ID
-    nach_typ     TEXT        NOT NULL CHECK (nach_typ IN ('malo', 'melo', 'nelo', 'sr', 'tr')),
+    nach_typ     TEXT        NOT NULL CHECK (nach_typ IN ('MALO', 'MELO', 'NELO', 'SR', 'TR')),  -- BO4E Lokationstyp
     valid_from   DATE,                   -- NULL = from epoch
     valid_to     DATE,                   -- NULL = open-ended
     lokationsbuendelcode TEXT,           -- extracted from data.lokationsbuendelcode on upsert
@@ -784,7 +869,11 @@ CREATE TABLE technische_ressourcen (
     tenant            TEXT        NOT NULL,
     malo_id           TEXT,                   -- linked MaLo (zugeordnete_marktlokation_id)
     melo_id           TEXT,                   -- linked MeLo (vorgelagerte_messlokation_id)
-    tr_typ            TEXT,                   -- 'EMobilitaet' | 'Erzeugung' | 'Speicher' | NULL
+    -- BO4E TechnischeRessourceNutzung: STROMVERBRAUCHSART | STROMERZEUGUNGSART | SPEICHER
+    nutzung           TEXT,
+    -- BO4E TechnischeRessourceVerbrauchsart (only for STROMVERBRAUCHSART):
+    -- KRAFT_LICHT | WAERME | E_MOBILITAET | STRASSENBELEUCHTUNG
+    verbrauchsart     TEXT,
     ist_fernschaltbar BOOLEAN,               -- can be remote-controlled (Redispatch 2.0)
     data              JSONB       NOT NULL DEFAULT '{}',  -- full BO4E TechnischeRessource
     bo4e_version      TEXT        NOT NULL DEFAULT 'v202607.0.0',
@@ -797,7 +886,7 @@ CREATE TABLE technische_ressourcen (
 CREATE INDEX tr_tenant  ON technische_ressourcen (tenant);
 CREATE INDEX tr_malo    ON technische_ressourcen (tenant, malo_id)  WHERE malo_id IS NOT NULL;
 CREATE INDEX tr_melo    ON technische_ressourcen (tenant, melo_id)  WHERE melo_id IS NOT NULL;
-CREATE INDEX tr_typ     ON technische_ressourcen (tenant, tr_typ)   WHERE tr_typ IS NOT NULL;
+CREATE INDEX tr_nutzung ON technische_ressourcen (tenant, nutzung) WHERE nutzung IS NOT NULL;
 
 -- ── CloudEvent replay log (B11) ───────────────────────────────────────────────
 --

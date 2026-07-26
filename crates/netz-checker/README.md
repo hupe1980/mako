@@ -69,7 +69,16 @@ let grid = MaloGridRecord {
 // vs: Option<&VersorgungsStatusRecord> — None if MaLo not yet in marktd
 // partner_known: true if GET /api/v1/partners/{lf_gln} returned 200
 
-let result = evaluate(&anfrage, None, Some(&grid), true, time::OffsetDateTime::now_utc());
+// config: NetzCheckConfig — holiday calendar, Gas Bearbeitungsfrist, EEG lead.
+// Use NetzCheckConfig::default() for the regulatory defaults.
+let result = evaluate(
+    &anfrage,
+    None,
+    Some(&grid),
+    true,
+    time::OffsetDateTime::now_utc(),
+    &netz_checker::NetzCheckConfig::default(),
+);
 
 match result {
     NetzCheckResult::Accept => { /* dispatch bestaetigen */ }
@@ -102,7 +111,22 @@ Retroactive An-/Abmeldungen are permitted for non-Wechsel Transaktionsgründe
 **6 weeks + 3 WT Bearbeitungsfrist** before receipt. RLM / SMGW-attached
 metering is future-only; Wechsel (E03) requires ≥ 10 WT lead. The
 Bearbeitungsfrist default (3 WT) follows the E/G rule — the AWH does not
-quantify it for An-/Abmeldungen (documented ambiguity).
+quantify it for An-/Abmeldungen (documented ambiguity) — and is **configurable**
+via `NetzCheckConfig::gas_bearbeitungsfrist_wt`.
+
+### EEG-/KWKG-MaLo Zuordnung (§10c EEG)
+
+When the Transaktionsgrund is one of `A27`–`A29`/`A31`/`A32`, Check 4 switches to
+the EEG date rule: the Zuordnungsbeginn must be a **Monatserster** and lie at
+least one whole month ahead (configurable via
+`NetzCheckConfig::eeg_zuordnung_vorlauf_monate`). Violations reject with **A07**.
+
+### Werktag arithmetic
+
+All Werktag math uses the BDEW-MaKo holiday calendar
+(`mako-engine::fristen`, selected via `NetzCheckConfig::holiday_calendar`) — not
+a bare Mon–Fri approximation. Public holidays observed in any German Bundesland
+count as non-Werktage.
 
 ---
 

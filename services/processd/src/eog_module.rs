@@ -146,18 +146,12 @@ async fn handle_gap_detected(
         );
         return Ok(());
     }
-    if sparte == mako_markt::domain::Sparte::Gas {
-        // The Gas EoG initiator command (`geli.eog.anmelden`, UTILMD G 44013)
-        // is not implemented yet — the mako-geli-gas workflow supports the
-        // GNB-initiator role but makod exposes no command (see ROADMAP).
-        // Record the case for operator action instead of mis-sending 55013.
-        warn!(
-            malo_id,
-            "processd EoG: Gas supply gap — automatic 44013 dispatch not yet \
-             available, case recorded for operator action (see ROADMAP)"
-        );
-        return Ok(());
-    }
+    // Command + PID by Sparte: Strom rides gpke.eog.anmelden (55013), Gas rides
+    // geli.eog.anmelden (44013). Both spawn a GNB-initiator EoG process in makod.
+    let (eog_command, eog_pid) = match sparte {
+        mako_markt::domain::Sparte::Gas => ("geli.eog.anmelden", 44013),
+        mako_markt::domain::Sparte::Strom => ("gpke.eog.anmelden", 55013),
+    };
 
     // Resolve the Grundversorger (§36 Abs. 2 Feststellung).
     let gv = match marktd.get_grundversorger(nb_mp_id, sparte).await {
@@ -188,7 +182,7 @@ async fn handle_gap_detected(
 
     let cmd = ForwardCommand {
         marktrolle: None,
-        command: "gpke.eog.anmelden".to_owned(),
+        command: eog_command.to_owned(),
         malo_id: Some(malo_id.to_owned()),
         melo_id: None,
         payload: serde_json::json!({
@@ -201,7 +195,9 @@ async fn handle_gap_detected(
     makod
         .post_command(&format!("processd-eog-{tenant}-{malo_id}"), &cmd)
         .await
-        .inspect_err(|e| warn!(%e, malo_id, "processd EoG: gpke.eog.anmelden dispatch failed"))?;
+        .inspect_err(
+            |e| warn!(%e, malo_id, eog_command, "processd EoG: EoG anmelden dispatch failed"),
+        )?;
 
     sqlx::query(
         r"UPDATE eog_activations
@@ -219,7 +215,9 @@ async fn handle_gap_detected(
         malo_id,
         gv_mp_id = %gv.gv_mp_id,
         %zuordnungsbeginn,
-        "processd EoG: dispatched gpke.eog.anmelden (UTILMD 55013)"
+        eog_command,
+        eog_pid,
+        "processd EoG: dispatched EoG anmelden"
     );
     Ok(())
 }

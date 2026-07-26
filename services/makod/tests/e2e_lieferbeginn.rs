@@ -256,6 +256,7 @@ impl MockNb {
                     bilanzierungsmethode: None,
                     fallgruppe: None,
                     transaktionsgrund: None,
+                    ist_erzeugende_marktlokation: false,
                     validation_passed: true, // bypass AHB profile check
                     validation_errors: vec![],
                 }

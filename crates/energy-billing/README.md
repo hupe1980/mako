@@ -244,7 +244,7 @@ Each category has its own struct with only the relevant fields — no silent fie
 | Indexed prices (TTF, Phelix, NCG) | `IndexedPriceConfig { base_ct, spread_ct, index_value, factor }` |
 | Gas indexed price | `gas_indexed_price: Option<IndexedPriceConfig>` in `GasProduct` |
 | Seasonal prices | `SeasonalPriceOverride` by month range (wraps year boundary) |
-| §41a EPEX dynamic | `billing::DynamicPricing` with per-interval kWh × price |
+| §41a EPEX dynamic | `billing::DynamicPricing`, per 15-min MTU: kWh × (spot + Aufschlag); price map keyed on the UTC MTU start |
 | §41b iMSys guard | Hard error when `dynamic_epex=true` and `MeteringMode != Imsys` |
 | Pro-rata Grundpreis | `ctx.prorate_days()` clips to `vertragsbeginn`/`vertragsende` |
 | Minimum invoice (B2B) | Pass 4 auto-top-up to `minimum_invoice_eur_brutto` |
@@ -441,8 +441,8 @@ pub struct MeterInput {
 | `leistungspreis_strom_ct_per_kw_month` | §41 EnWG | RLM demand charge (ct/kW/month) |
 | `preisgarantie_bis` | §41 Abs. 1 Nr. 4 EnWG | Price guarantee expiry on invoice |
 | `mwst_rate_override` | §12 UStG | Override 19% per product |
-| `dynamic_epex` | §41a EnWG | EPEX spot billing (requires `MeteringMode::Imsys`) |
-| `dynamic_epex_floor_ct_kwh` | §41a EnWG | Price floor for spot pass-through |
+| `dynamic_epex` | §41a EnWG | 15-min EPEX MTU spot billing (requires `MeteringMode::Imsys`) |
+| `dynamic_epex_floor_ct_kwh` | §41a EnWG | Price floor for the spot component (Aufschlag added on top) |
 | `energiequellen` | §42 Abs. 2 Nr. 2 EnWG | Typed fuel mix with CO₂ label |
 
 ### `ControllableLoadProduct` (§14a extras)

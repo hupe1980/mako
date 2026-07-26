@@ -280,6 +280,7 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
         transaktionsgrund: None,
+        ist_erzeugende_marktlokation: false,
         fallgruppe: None,
     })
     .await
@@ -505,6 +506,7 @@ async fn bilateral_lieferbeginn_rejection_path() {
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
         transaktionsgrund: None,
+        ist_erzeugende_marktlokation: false,
         fallgruppe: None,
     })
     .await
@@ -600,6 +602,7 @@ async fn bilateral_24h_aperak_deadline_fires_on_timeout() {
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
         transaktionsgrund: None,
+        ist_erzeugende_marktlokation: false,
         fallgruppe: None,
     })
     .await

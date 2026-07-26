@@ -29,7 +29,7 @@ tariff), the output is always the same `Rechnung`. This means:
 
 - BNetzA § 147 AO / GoBD compliance: auditors can re-run the calculation from stored inputs
 - No hidden state: all inputs are either stored in `tarifbd`, `edmd`, or `marktd`
-- Testable: `energy-billing` has **190 tests** (property-based, golden master, integration) — zero I/O, zero async, all pure Rust
+- Testable: `energy-billing` has **191 tests** (property-based, golden master, integration) — zero I/O, zero async, all pure Rust
 
 ---
 
@@ -163,7 +163,8 @@ Brutto
 
 Variants: `Eintarif`, `Zweitarif` (HT/NT), `Mehrtarif` (multiple registers).
 **§41a EPEX dynamic**: when `dynamic_epex = true` in the product, `billingd` fetches
-15-min Lastgang and prices per hour from `tarifbd`. `arbeitspreis_ct_per_kwh` is ignored.
+15-min Lastgang and 15-min EPEX MTU prices from `tarifbd`. `arbeitspreis_ct_per_kwh` is
+ignored; the per-MTU price is spot + `auf_abschlag_ct_per_kwh`.
 
 **RLM demand charge**: For large commercial customers with measured peak demand (§ 12 StromNZV,
 ≥100 MWh/year), set `leistungspreis_strom_ct_per_kw_month` in the product definition.
@@ -383,7 +384,7 @@ supplied, not the full period.
 
 ### Audit trail
 
-Every billing run now generates a unique `billing_run_id` (UUID v4). It is stored on
+Every billing run generates a unique `billing_run_id` (UUID v4). It is stored on
 `Invoice.billing_run_id` and propagated to:
 
 - `billing_records.billing_run_id` in PostgreSQL
@@ -441,12 +442,15 @@ Content-Type: application/json
 When the product in `tarifbd` has `dynamic_epex: true`, `billingd` automatically:
 
 1. Fetches 15-min Lastgang from `edmd` (`GET /api/v1/lastgang/{malo_id}?from=…&to=…`)
-2. Fetches hourly EPEX prices from `tarifbd` (`GET /api/v1/epex-prices/{date}/hourly`) for each day
-3. Calculates `Σ(kWh_interval × EPEX_hour_ct) / 100` as the energy cost
+2. Fetches 15-min EPEX prices from `tarifbd` (`GET /api/v1/epex-prices/{date}/quarter-hourly`),
+   keyed on each Market Time Unit's UTC start instant (SDAC 15-min go-live 2025-10-01)
+3. Calculates `Σ(kWh_MTU × (EPEX_MTU_ct + Aufschlag_ct)) / 100` as the energy cost —
+   each 15-min consumption interval is floored to its quarter-hour and joined to that MTU's price
 4. Adds NNE / Konzessionsabgabe / Stromsteuer as usual
 
 The `tariff.arbeitspreis_ct_per_kwh` field is ignored when `dynamic_epex: true` — the EPEX
-spot price from `tarifbd` is the actual price applied per hour.
+spot price from `tarifbd` is the actual price applied per 15-min MTU, plus the supplier's
+fixed `auf_abschlag_ct_per_kwh` Arbeitspreis-Aufschlag (§41a: market price + margin).
 
 **Price floor (`dynamic_epex_floor_ct_kwh`):** Set this field in the tarifbd product to cap
 how low the EPEX price can go. Common configurations:

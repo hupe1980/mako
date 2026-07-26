@@ -213,7 +213,7 @@ if let AnyMessage::Mscons(m) = &msg {
 
 - **Input bounds**: All parse functions enforce byte-count, segment-count, and per-segment byte limits before any field parsing begins. Maliciously large inputs are rejected immediately.
 - **Release-code sanitization**: Untrusted release codes from `UNH` are sanitized before being included in any log output (max 16 ASCII alphanum + `.`).
-- **Fuzz tested**: The `fuzz_parse_validate` target has accumulated 1 100+ corpus entries with zero panics or crashes.
+- **Fuzz tested**: The `fuzz_parse_validate` target has accumulated 1 373+ corpus entries with zero panics or crashes.
 
 ---
 

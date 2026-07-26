@@ -66,7 +66,7 @@ mermaid: true
 <!-- ── KPI strip ─────────────────────────────────────────────────────────── -->
 <div class="mako-kpis">
   <div class="mako-kpi">
-    <span class="mako-kpi__value">255</span>
+    <span class="mako-kpi__value">346</span>
     <span class="mako-kpi__label">Prüfidentifikatoren</span>
   </div>
   <div class="mako-kpi">
@@ -104,7 +104,7 @@ the only platform in this market whose source you can read, verify, and extend.
 
 It solves two hard problems at once:
 
-- **Protocol correctness** — All 255 Prüfidentifikatoren across 17 EDIFACT message types are validated at AHB/MIG layer, not just schema layer. APERAK 45-minute deadline enforcement is built into the event-sourced runtime, not bolted on.
+- **Protocol correctness** — All 346 Prüfidentifikatoren across 17 EDIFACT message types are validated at AHB/MIG layer, not just schema layer. APERAK 45-minute deadline enforcement is built into the event-sourced runtime, not bolted on.
 - **Operational scale** — 17 independently deployable microservices cover the full lifecycle: supplier-switch processes, NNE billing, EEG settlement, B2C/B2B contract management with multi-user portal access, customer account ledger, and AI-powered automation.
 
 Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type safety needed to represent complex regulatory invariants at compile time — not runtime.
@@ -184,7 +184,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">🌱</div>
     <h3>EEG/KWKG Settlement</h3>
     <p>
-      <strong>9 settlement schemes</strong> from §21 FeedInTariff to §50a/50b FlexibilitätsPrämien,
+      <strong>10 settlement schemes</strong> from §21 FeedInTariff to §50a/50b FlexibilitätsPrämien,
       including Direktvermarktung MarketPremium, KWKG Zuschlag, and Post-EEG Spot.
       Version-aware <strong>§51 Negativpreisregel</strong> (EEG 2017/2021/2023 + Bestandsschutz),
       §52 Pflichtzahlungen (cumulative from violation start), §100 auto-override, §36k Korrekturfaktor.
@@ -197,17 +197,14 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">🧾</div>
     <h3>Energy Billing Engine</h3>
     <p>
-      <strong>13 product categories</strong> — STROM (SLP/HT/NT/RLM), GAS, WAERME, WASSER (Trinkwasser + gesplittete Abwassergebühr), SOLAR,
-      EEG/EINSPEISUNG, §14a WAERMEPUMPE/WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG,
-      §42c SHARING.
-      `Product` typed enum with per-category structs; `ControllableLoadProvider` for §14a;
-      §41b iMSys guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label;
-      historic levy lookups (incl. 2022 0-rate); §41a EPEX; §41b enforcement;
-      XRechnung 3.0 / ZUGFeRD 2.3 (EN16931, B2G mandate 01.01.2027).
-      In <code>billingd</code>: a deterministic <strong>risk gate</strong> scores every invoice
-      and HOLDs anomalies for operator release, and <strong>§40b EnWG billing runs</strong>
-      deliver monthly/quarterly cycles plus iMSys monthly Abrechnungsinformation.
-      Pure <code>energy-billing</code> crate — <strong>191 tests</strong>, zero I/O, rubo4e behind the opt-in <code>bo4e</code> feature.
+      A typed <code>Product</code> enum across <strong>13 categories</strong> — Strom (SLP/HT/NT/RLM),
+      Gas, Wärme, Wasser, Solar, EEG/Einspeisung, §14a Wärmepumpe/Wallbox, HEMS, E-Mobility and §42c Sharing —
+      each with its own struct rather than one god-struct of optional fields.
+      Dynamic §41a EPEX tariffs, the §41b iMSys guard, historic levy tables, and
+      XRechnung 3.0 / ZUGFeRD 2.3 (EN16931) are built in.
+      In <code>billingd</code> a deterministic <strong>risk gate</strong> HOLDs anomalous invoices for
+      operator release, and <strong>§40b EnWG billing runs</strong> drive monthly/quarterly cycles.
+      Pure <code>energy-billing</code> crate — zero I/O, integer-cent money.
     </p>
     <a href="{{ '/billingd' | relative_url }}">billingd guide →</a>
   </div>
@@ -216,19 +213,11 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">📊</div>
     <h3>Grid Settlement Engine</h3>
     <p>
-      <code>grid-billing</code> calculates NNE, KA, MMM, MSB, and AWH Sperrprozesse invoices
-      for PIDs 31001/31002/31005/31006/31009/31011 (31006 selbst ausgestellt is billed by invoicd on the LF side).
-      Every position carries a <strong><code>CalculationTrace</code></strong> with explanation,
-      legal refs (StromNEV §21, GasNEV §14, KAV §2, §14a EnWG), and tariff source.
-      <code>BillingPositionKind</code> on every position drives the service-layer BDEW Artikelnummer
-      mapping (<em>Codeliste v5.6</em>) — Gas NNE/MMM/KA use classic codes
-      (9990001…); NNE Strom uses <code>artikel_id</code> per BK6-20-160; AWH Gas uses
-      <code>2-01-7-001/002</code>.
-      §14a Modul 1 flat reduction, Modul 2 HT/NT, Gas Grundpreis, reactive energy (<code>Kvarh</code>).
-      <code>calculate_reversal()</code> produces immutable Stornorechnung;
-      <code>calculate_correction()</code> returns the (reversal, replacement) pair atomically.
-      §13a EnWG <code>redispatch_verguetung</code> computes the angemessene Vergütung
-      (entgangene Einnahmen + zusätzliche − ersparte Aufwendungen) per activation.
+      <code>grid-billing</code> calculates NNE, KA, MMM, MSB, AWH Sperrprozesse and §13a
+      Redispatch invoices — role-neutral, integer-cent money, no BO4E dependency.
+      Every position carries a <strong><code>CalculationTrace</code></strong> with a plain-language
+      explanation, the legal reference (StromNEV §21, GasNEV §14, KAV §2, §14a EnWG) and its
+      tariff source, so a Stornorechnung or a correction pair reproduces exactly why each figure exists.
     </p>
     <a href="{{ '/netzbilanzd' | relative_url }}">netzbilanzd guide →</a>
   </div>
@@ -252,33 +241,15 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">📡</div>
     <h3>Smart Meter, SMGW &amp; Energy Data</h3>
     <p>
-      <code>edmd</code> accepts 15-min iMSys/SMGW data directly via JSON push — no MSCONS round-trip.
-      Quality scoring via <code>metering::score_intervals_f64</code> (Hampel filter, grades A/B/C/F)
-      auto-vectorises to AVX2/NEON on every batch; grade F blocks billing.
-      GDPR Art. 17 erasure endpoint with cold-tier read-time exclusion.
+      <code>edmd</code> ingests 15-min iMSys/SMGW data by direct JSON push — no MSCONS
+      round-trip — with SIMD-vectorised Hampel quality scoring (grade F blocks billing),
+      §14a Fernsteuerbarkeit compliance sweeps over a BSI TR-03109 SMGW registry, and §42b
+      GGV community-solar metering.
     </p>
     <p>
-      <strong>§14a Fernsteuerbarkeit compliance (MsbG §21c):</strong>
-      <code>edmd</code> maintains a BSI TR-03109 SMGW session registry (<code>smgw_sessions</code>)
-      and runs a daily compliance sweep — checking TLS cert validity, 30-day expiry warnings,
-      CLS channel §14a Konfigurationsprodukt, and communication faults.
-      All issues are logged to <code>cls_compliance_log</code> and emitted as
-      <code>de.messwert.cls.compliance_issue</code> CloudEvents, triggering the
-      <code>smgw-diagnostics-agent</code> in <code>agentd</code>.
-    </p>
-    <p>
-      <strong>Apache Iceberg V2 cold tier:</strong> automatic archival to S3/GCS/Azure with
-      ZSTD+<code>DELTA_BINARY_PACKED</code> encoding (20–60× timestamp compression), Bloom filters on
-      <code>malo_id</code>, and a built-in <strong>Iceberg REST catalog</strong> so DuckDB, Snowflake,
-      and Databricks can <code>ATTACH</code> directly — no ETL pipeline.
-      Arrow IPC bulk export (<code>Accept: application/vnd.apache.arrow.stream</code>) delivers
-      10–50× throughput vs JSON for mabis-syncd and billingd batch reads.
-    </p>
-    <p>
-      <strong>§42b EnWG Solarpaket I (GGV community solar):</strong>
-      <code>GgvConstantAllocation</code> (CCI+ZG6, <em>Beispiel 1</em>) and
-      <code>GgvProportionalAllocation</code> (<em>Beispiel 3</em>). The <code>Pos()</code>
-      operator enforces the §42b Abs. 5 per-tenant cap per 15-min interval.
+      An Apache Iceberg V2 cold tier archives to S3/GCS/Azure with a built-in REST catalog —
+      DuckDB, Snowflake, and Databricks <code>ATTACH</code> directly, no ETL — and Arrow IPC
+      bulk export streams batch reads. GDPR Art. 17 erasure with cold-tier read-time exclusion.
     </p>
     <a href="{{ '/edmd' | relative_url }}">edmd guide →</a>
   </div>
@@ -287,25 +258,15 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">🤝</div>
     <h3>Contract &amp; Customer Management</h3>
     <p>
-      <code>vertragd</code> manages B2C and B2B customers with OIDC/JWT-authenticated write endpoints,
-      role-based multi-user portal access (<code>VOLLZUGRIFF</code>/<code>ADMIN</code>/<code>FINANZEN</code>/<code>TECHNIK</code>/<code>READONLY</code>),
+      <code>vertragd</code> manages B2C and B2B customers — role-based multi-user portal access,
       B2B Rahmenverträge (portfolio pricing, Sammelrechnung, cascade Kündigung), and
-      Versorgungsverträge per site/commodity.
+      per-site Versorgungsverträge, all behind OIDC/JWT write endpoints. It is the sole
+      OIDC→MaLo authorization gateway for <code>portald</code>.
     </p>
     <p>
-      <strong>Regulatory correctness:</strong>
-      Preisgarantie guard blocks tariff changes within price-lock window (§41 EnWG);
-      every bypass is logged to an immutable <code>preisgarantie_override_log</code> with operator JWT sub.
-      Kündigung Widerruf (<code>POST /widerruf-kuendigung</code>) reverts before Lieferende.
-      42-day advance notice dispatched automatically before <code>wirksamkeit</code> — covers §5 Abs. 2 StromGVV/GasGVV (six weeks, Grundversorgung) and exceeds §41 Abs. 5 EnWG (one month for Haushaltskunden).
-      Proactive expiry alerts emit <code>de.vertrag.ablauf.ankuendigung</code> 30 days before contract end.
-      CPQ pipeline: <code>de.tarif.angebot.angenommen</code> → Rahmenvertrag with <code>angebot_id</code> traceability.
-    </p>
-    <p>
-      <strong>GDPR Art. 15/17/20</strong> built-in — full PII export, irreversible pseudonymization
-      with immutable <code>anonymization_log</code>, and typed <code>Zahlungsinformation</code>
-      (IBAN mod-97 validated). Serves as the sole OIDC→MaLo authorization gateway for <code>portald</code>.
-      <strong>16-tool MCP server + 4 prompts</strong> including GDPR erasure workflow and Preisgarantie dispute resolution.
+      Regulatory guards are built in: a §41 EnWG Preisgarantie lock with an immutable override
+      log, Kündigung-Widerruf, automatic 42-day advance notices (§5 StromGVV/GasGVV, §41 EnWG),
+      and full GDPR Art. 15/17/20 (PII export + irreversible pseudonymization).
     </p>
     <a href="{{ '/vertragd' | relative_url }}">vertragd guide →</a>
   </div>
@@ -504,7 +465,7 @@ mako consists of 17 independently deployable services. 16 of them ship a built-i
   <a href="{{ '/einsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">einsd</span>
     <span class="mako-service-card__port">:9180</span>
-    <span class="mako-service-card__desc">Einspeiser registry. 9 EEG/KWKG settlement schemes. §51/§51a/§51b Negativpreisregel. §100 Bestandsschutz auto-override. §25 Abs. 1 Satz 3 anteilige Zahlung. §26 Fälligkeitsdatum. §19 EInsMan compensation. §21b Veräußerungsform Wechsel. §53b/§54 regional+auction reductions. § 147 AO / GoBD correction receipts. derive_settlement_state auto-update. Repowering §22. <strong>339 eeg-billing tests</strong>. 14-tool MCP. §3 Nr. 1 Direktvermarktung compliance check. §44b Biogas quota monitoring.</span>
+    <span class="mako-service-card__desc">Einspeiser registry. 10 EEG/KWKG settlement schemes. §51/§51a/§51b Negativpreisregel. §100 Bestandsschutz auto-override. §25 Abs. 1 Satz 3 anteilige Zahlung. §26 Fälligkeitsdatum. §19 EInsMan compensation. §21b Veräußerungsform Wechsel. §53b/§54 regional+auction reductions. § 147 AO / GoBD correction receipts. derive_settlement_state auto-update. Repowering §22. <strong>339 eeg-billing tests</strong>. 18-tool MCP. §3 Nr. 1 Direktvermarktung compliance check. §44b Biogas quota monitoring.</span>
   </a>
   <a href="{{ '/obsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">obsd</span>
@@ -597,7 +558,7 @@ sequenceDiagram
   </div>
   <div class="mako-principle">
     <strong>Annual format versions in hours, not months</strong>
-    <code>cargo xtask codegen</code> regenerates all 255 AHB profiles from BDEW PDFs.
+    <code>cargo xtask codegen</code> regenerates every AHB rule-pack (all 346 Prüfidentifikatoren) from BDEW PDFs.
     FV2025-10-01 and FV2026-10-01 coexist in the same running instance.
   </div>
   <div class="mako-principle">

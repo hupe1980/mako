@@ -20,6 +20,10 @@ CREATE TABLE process_projections (
     deadline_at         TIMESTAMPTZ,
     -- 'green' | 'amber' | 'red'  (computed by obsd deadline worker)
     deadline_risk       TEXT        NOT NULL DEFAULT 'green',
+    -- Set by the deadline sweep worker when it has emitted
+    -- de.obs.deadline.approaching for this process — makes the alert idempotent
+    -- (emit once per process entering the approaching window).
+    deadline_alerted_at TIMESTAMPTZ,
     -- §20 EnWG parity: TRUE when initiating LF MP-ID = operator's own MP-ID
     -- (vertically integrated utility). Used in /audit/bnetza-report.
     initiator_is_affiliate BOOLEAN  NOT NULL DEFAULT false,
@@ -53,6 +57,9 @@ CREATE INDEX pp_partner      ON process_projections (partner_mp_id)
     WHERE partner_mp_id IS NOT NULL;
 CREATE INDEX pp_deadline     ON process_projections (deadline_at)
     WHERE deadline_at IS NOT NULL;
+-- Deadline sweep: open, not-yet-alerted rows ordered by deadline.
+CREATE INDEX pp_deadline_unalerted ON process_projections (deadline_at)
+    WHERE deadline_at IS NOT NULL AND deadline_alerted_at IS NULL;
 CREATE INDEX pp_started      ON process_projections (started_at DESC);
 CREATE INDEX pp_completed_at ON process_projections (completed_at)
     WHERE completed_at IS NOT NULL;

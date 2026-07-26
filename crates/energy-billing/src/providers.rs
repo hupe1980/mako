@@ -2519,7 +2519,7 @@ impl DynamicElectricityProvider {
     pub fn with_epex_map(
         product: ElectricityProduct,
         grid: GridInput,
-        epex_prices: std::collections::HashMap<(i32, u8, u8, u8), Decimal>,
+        epex_prices: std::collections::HashMap<time::OffsetDateTime, Decimal>,
     ) -> Self {
         Self::new(
             product,
@@ -2569,6 +2569,11 @@ impl BillingProvider for DynamicElectricityProvider {
         let rates = &ctx.regulatory_rates;
         let days = ctx.days();
         let floor_ct = product.dynamic_epex_floor_ct_kwh;
+        // §41a EnWG: the customer's per-kWh price is the market spot price plus
+        // the Lieferant's fixed Arbeitspreis-Aufschlag (margin). The floor caps
+        // the spot component (protecting the Lieferant against negative prices);
+        // the Aufschlag is then added on top.
+        let aufschlag_ct = product.auf_abschlag_ct_per_kwh.unwrap_or(Decimal::ZERO);
         let source_name = self.spot_price_source.source_name().to_owned();
         let mut positions: Vec<BillingPosition> = Vec::new();
 
@@ -2611,10 +2616,8 @@ impl BillingProvider for DynamicElectricityProvider {
                     if quantities.dynamic_epex_prices.is_empty() {
                         return None;
                     }
-                    use time_tz::{OffsetDateTimeExt, timezones};
-                    let berlin = timezones::db::europe::BERLIN;
-                    let local = interval.timestamp_utc.to_timezone(berlin);
-                    let key = (local.year(), local.month() as u8, local.day(), local.hour());
+                    // Floor the interval start to its 15-min MTU (DST-safe, UTC).
+                    let key = crate::provider::mtu_start(interval.timestamp_utc);
                     quantities.dynamic_epex_prices.get(&key).copied()
                 });
 
@@ -2627,11 +2630,13 @@ impl BillingProvider for DynamicElectricityProvider {
                 continue;
             };
 
-            let effective_ct = if let Some(floor) = floor_ct {
+            let spot_ct = if let Some(floor) = floor_ct {
                 price_ct.max(floor)
             } else {
                 price_ct
             };
+            // §41a: market (floored) spot + fixed Arbeitspreis-Aufschlag.
+            let effective_ct = spot_ct + aufschlag_ct;
 
             // ct/kWh → EUR/kWh as Amount<5>.  round_dp(5) first ensures the
             // Decimal has at most 5 non-zero fractional digits before conversion.
@@ -3023,8 +3028,10 @@ fn build_block_tariff_positions(
 ///
 /// ## Legal basis
 ///
-/// §42c EnWG (Energiegemeinschaften, effective 01.01.2024): participants in a
-/// registered Energiegemeinschaft may receive allocated shares of local generation.
+/// §42c EnWG (Energy Sharing, EnWG-Novelle BGBl. 2025 I Nr. 347; obligatory within
+/// a single Bilanzkreis from 01.06.2026, extended to adjacent Bilanzkreise in the
+/// same Regelzone from 01.06.2028): participants in a registered Energiegemeinschaft
+/// may receive allocated shares of local generation.
 /// The Lieferant bills full grid consumption (§41 EnWG) and separately credits the
 /// sharing allocation at the contracted sharing rate.
 ///

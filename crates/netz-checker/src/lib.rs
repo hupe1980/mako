@@ -51,12 +51,17 @@
 //!     messtyp:          netz_checker::Messtyp::Slp,
 //!     // SG4 STS Transaktionsgrund — E01 Ein-/Auszug, E03 Wechsel, …
 //!     transaktionsgrund: Some("E03".to_owned()),
+//!     // true when a ZW3 „Erzeugende Marktlokation" ergänzung is present (EEG/KWKG).
+//!     ist_erzeugende_marktlokation: false,
 //! };
 //! ```
 
 pub mod checks;
+pub mod config;
 pub mod error;
 pub mod types;
 
 pub use checks::evaluate;
+pub use config::NetzCheckConfig;
+pub use mako_engine::fristen::HolidayCalendar;
 pub use types::{AnmeldungAnfrage, MaloGridRecord, Messtyp, NetzCheckResult, RejectReason};

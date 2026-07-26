@@ -421,7 +421,7 @@ is short, not corrupt.
 
 `ON CONFLICT DO NOTHING` needs a unique index to fire on. With only the surrogate
 `id` primary key every redelivered INSRPT minted a fresh UUID and created a
-duplicate order. Two partial unique indexes now back it:
+duplicate order. Two partial unique indexes back it:
 
 | Index | Covers |
 |---|---|

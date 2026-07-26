@@ -33,6 +33,7 @@ graph TB
 
     marktd -->|"de.mako.process.*\nde.mako.aperak.*\nHMAC POST /webhook"| obsd
     obsd --> pg
+    obsd -->|"de.obs.deadline.approaching\nde.obs.stp.parity.alert\n(HMAC POST → marktd fan-out → agentd)"| marktd
     obsd -->|"deadline_risk\nalerts"| alert
     erp -->|"GET /obs/processes\nGET /obs/kpis\nGET /obs/overdue"| obsd
 ```
@@ -186,6 +187,29 @@ curl -s "http://obsd:8480/obs/overdue" \
 
 ---
 
+## Events produced
+
+`obsd` is a read-model, but two background **sweep workers** produce `de.obs.*`
+CloudEvents. They run only when `webhook.outbound_url` is configured (in
+production, the `marktd` event-ingest endpoint, whose fan-out delivers to the
+`agentd` subscribers). Events are HMAC-signed when `webhook.outbound_secret` is
+set.
+
+| Event | Producer | When | Consumed by |
+|-------|----------|------|-------------|
+| `de.obs.deadline.approaching` | deadline sweep (`deadline_sweep_secs`) | a tracked, still-open process has `deadline_at` within `deadline_warn_hours` and has not been alerted yet (idempotent per process via `deadline_alerted_at`) | agentd `deadline-alert-agent` |
+| `de.obs.stp.parity.alert` | parity sweep (`parity_sweep_secs`) | the §20 EnWG completion-rate gap between affiliate- and non-affiliate-initiated Anmeldungen (55001/55016/44001) exceeds `parity_threshold_pp` (both groups ≥ 10 samples) | agentd `compliance-agent` |
+
+**`de.obs.deadline.approaching` payload:** `process_id`, `pid`, `family`,
+`workflow_name`, `malo_id`, `partner_mp_id`, `due_at` (RFC 3339),
+`hours_remaining`, `deadline_risk`, `tenant`.
+
+**`de.obs.stp.parity.alert` payload:** `tenant`, `window_days`, `threshold_pp`,
+`affiliate` + `non_affiliate` `{total, completed, completion_rate}`,
+`parity_gap_pp` (signed — positive = affiliate favoured), `favored`, `note`.
+
+---
+
 ## Configuration reference
 
 `obsd` reads its configuration from a **TOML file** (default: `obsd.toml`),
@@ -222,7 +246,19 @@ url     = "http://marktd:8180"      # required
 api_key = "env:OBSD_MARKTD_API_KEY" # required
 
 [webhook]
-inbound_secret = "env:OBSD_INBOUND_SECRET"  # optional; omit for dev
+inbound_secret  = "env:OBSD_INBOUND_SECRET"   # optional; verifies inbound POST /webhook
+# Outbound target for the de.obs.* events obsd produces. In production this is
+# the marktd event-ingest endpoint, whose fan-out delivers to agentd. Omit to
+# disable the sweep producers.
+outbound_url    = "env:OBSD_OUTBOUND_URL"      # e.g. http://marktd:8180/api/v1/mako/events
+outbound_secret = "env:OBSD_OUTBOUND_SECRET"   # HMAC; must match the target's inbound secret
+
+[worker]
+deadline_sweep_secs = 900     # deadline sweep interval (default 15 min)
+deadline_warn_hours = 24      # alert when a deadline is within this many hours
+parity_sweep_secs   = 86400   # §20 parity sweep interval (default daily)
+parity_threshold_pp = 5.0     # parity-gap threshold in pp (BNetzA scrutiny)
+parity_window_days  = 90      # parity look-back window
 
 [subscription]
 # Self-registers with marktd on startup — no manual curl required.

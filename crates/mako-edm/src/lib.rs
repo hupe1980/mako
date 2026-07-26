@@ -66,12 +66,11 @@ pub mod testing;
 // ── Root re-exports ───────────────────────────────────────────────────────────
 
 pub use domain::{
-    ALL_MSCONS_PIDS, BilanzierungsgebietId, BilanzkreisId, BilanzzuordnungRecord,
-    BillingPeriodQuery, CorrectionRecord, CorrectionRequest, CorrectionResponse, CorrectionSource,
-    ESA_TYP2_PIDS, GAS_MMMA_PIDS, GAS_QUALITY_PIDS, GasQualityData, ImbalanceReport,
-    IngestionSource, MSCONS_PIDS, Messtyp, MeterBillingPeriod, MeterDataReceipt, MeterRead,
-    QualityFlag, REDISPATCH_MSCONS_PIDS, Sparte, TimeSeriesQuery, Typ2DeliveryPath, Typ2Read,
-    mscons_pid_description,
+    ALL_MSCONS_PIDS, BilanzierungsgebietId, BilanzkreisId, BillingPeriodQuery, CorrectionRecord,
+    CorrectionRequest, CorrectionResponse, CorrectionSource, ESA_TYP2_PIDS, GAS_MMMA_PIDS,
+    GAS_QUALITY_PIDS, GasQualityData, ImbalanceReport, IngestionSource, MSCONS_PIDS, Messtyp,
+    MeterBillingPeriod, MeterDataReceipt, MeterRead, QualityFlag, REDISPATCH_MSCONS_PIDS, Sparte,
+    TimeSeriesQuery, Typ2DeliveryPath, Typ2Read, mscons_pid_description,
 };
 pub use error::EdmError;
 pub use repository::{TimeSeriesRepository, Typ2Repository};

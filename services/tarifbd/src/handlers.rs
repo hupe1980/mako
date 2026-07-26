@@ -639,8 +639,10 @@ pub struct CustomerProductQuery {
 
 /// `PUT /api/v1/epex-prices/{date}`
 ///
-/// Import all 24 hourly EPEX day-ahead prices for a date.
-/// Body: `{ "prices": [ct_kwh_h0, ct_kwh_h1, ..., ct_kwh_h23], "source": "..." }`
+/// Import a delivery day's EPEX day-ahead prices. Body:
+/// `{ "prices": [ct_kwh_mtu0, …], "mtu_minutes": 15, "source": "..." }`.
+/// `prices` length must match the local day's MTU count (96/92/100 at 15-min,
+/// 24/23/25 at 60-min). `mtu_minutes` defaults to 15.
 pub async fn put_epex_prices(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
@@ -660,16 +662,17 @@ pub async fn put_epex_prices(
     }
 }
 
-/// `GET /api/v1/epex-prices/{date}/hourly`
+/// `GET /api/v1/epex-prices/{date}/quarter-hourly`
 ///
-/// Returns the 24-hour array of ct/kWh values for `date`.
-/// Used by `billingd` for §41a dynamic tariff billing.
-pub async fn get_epex_prices_hourly(
+/// Returns the delivery day's spot prices as 15-minute market time units, each
+/// with its UTC `mtu_start` instant and `price_ct_kwh` (legacy hourly rows are
+/// expanded to quarter-hours). Used by `billingd` for §41a dynamic billing.
+pub async fn get_epex_prices_quarter_hourly(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Path(date_str): Path<String>,
 ) -> impl IntoResponse {
-    use time::format_description::well_known::Iso8601;
+    use time::format_description::well_known::{Iso8601, Rfc3339};
     let date = match time::Date::parse(&date_str, &Iso8601::DEFAULT) {
         Ok(d) => d,
         Err(_) => {
@@ -677,12 +680,24 @@ pub async fn get_epex_prices_hourly(
         }
     };
     match fetch_epex_day(&pool, date).await {
-        Ok(Some(prices)) => Json(serde_json::json!({
-            "price_date": date_str,
-            "prices": prices,
-            "unit": "ct_per_kwh",
-        }))
-        .into_response(),
+        Ok(Some(points)) => {
+            let prices: Vec<serde_json::Value> = points
+                .iter()
+                .map(|p| {
+                    serde_json::json!({
+                        "mtu_start": p.mtu_start.format(&Rfc3339).unwrap_or_default(),
+                        "price_ct_kwh": p.avg_ct_kwh.to_string(),
+                    })
+                })
+                .collect();
+            Json(serde_json::json!({
+                "price_date": date_str,
+                "mtu_minutes": 15,
+                "unit": "ct_per_kwh",
+                "prices": prices,
+            }))
+            .into_response()
+        }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }

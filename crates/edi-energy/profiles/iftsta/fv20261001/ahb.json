@@ -2291,7 +2291,7 @@
     },
     {
       "code": 21042,
-      "name": "EnFG / Statusmeldung Privilegierungsinformation",
+      "name": "WiM / Umsetzungsstatus (Bestellung WiM, MSB an ESA)",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -2369,7 +2369,7 @@
     },
     {
       "code": 21043,
-      "name": "EnFG / Statusmeldung",
+      "name": "GPKE / Bestellungsantwort (MSB an LF/MSB/NB)",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -2445,7 +2445,7 @@
     },
     {
       "code": 21044,
-      "name": "EnFG / Statusmeldung Stammdaten",
+      "name": "GPKE / Bestellungsbeendigung (MSB an NB/LF)",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -2596,7 +2596,7 @@
     },
     {
       "code": 21047,
-      "name": "EnFG / Statusmeldung Messwerte",
+      "name": "GPKE / Bearbeitungsstandsmeldung (LF an MSB/NB/ÜNB)",
       "segment_rules": [
         {
           "tag": "BGM",

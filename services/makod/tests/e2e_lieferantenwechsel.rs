@@ -356,6 +356,7 @@ impl MockNb {
                     bilanzierungsmethode: None,
                     fallgruppe: None,
                     transaktionsgrund: None,
+                    ist_erzeugende_marktlokation: false,
                     validation_passed: true,
                     validation_errors: vec![],
                 }
@@ -528,6 +529,7 @@ impl MockLfa {
                     bilanzierungsmethode: None,
                     fallgruppe: None,
                     transaktionsgrund: None,
+                    ist_erzeugende_marktlokation: false,
                     validation_passed: true,
                     validation_errors: vec![],
                 }

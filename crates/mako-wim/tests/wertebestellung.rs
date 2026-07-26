@@ -367,10 +367,10 @@ fn rejecting_a_bestellung_requires_a_reason() {
 
 #[test]
 fn each_step_rejects_a_foreign_pid() {
-    // 21042 is IFTSTA "EnFG / Statusmeldung Privilegierungsinformation" and has
-    // nothing to do with the ESA processes.
+    // 55001 is a GPKE UTILMD Lieferbeginn — foreign to the ESA Wertebestellung
+    // Anfrage step, which only accepts REQOTE 35002.
     let wrong = C::ReceiveAnfrage {
-        pid: pid(21042),
+        pid: pid(55001),
         esa: mp("9900555000005"),
         msb: mp("9900357000004"),
         ebene: Lokationsebene::Marktlokation,
@@ -413,6 +413,20 @@ fn msb_can_terminate_a_running_delivery() {
         },
     )
     .unwrap();
+    // UC 4.4: the MSB notifies the ESA on the wire via IFTSTA 21042
+    // (WiM Umsetzungsstatus, STS 4405 = 105 „beendet").
+    let ob = out
+        .outbox
+        .first()
+        .expect("IFTSTA 21042 Beendigung emitted to the ESA");
+    assert_eq!(&*ob.message_type, "IFTSTA");
+    assert_eq!(
+        ob.payload["pid"].as_u64(),
+        Some(u64::from(
+            mako_wim::wertebestellung::BEENDIGUNG_MSB_PID.as_u32()
+        ))
+    );
+    assert_eq!(ob.payload["sts_code"].as_str(), Some("105"));
     let mut state = state;
     for ev in &out.events {
         state = W::apply(state.clone(), ev);

@@ -15,9 +15,17 @@
 
 use mako_markt::{
     domain::{MaloId, MeloId, Sparte},
-    repository::{LokationszuordnungRepository as _, MaloRepository as _, MeloRepository as _},
+    repository::{
+        LokationszuordnungRepository as _, MaloRepository as _, MeloRepository as _,
+        MeloStammdatenPatch, NeLoRecord, NeLoRepository as _, NeloStammdatenPatch, TrancheRecord,
+        TrancheRepository as _, TrancheStammdatenPatch,
+    },
 };
-use marktd::pg::{PgLokationszuordnungRepository, PgMaloRepository, PgMeloRepository};
+use marktd::pg::{
+    PgLokationszuordnungRepository, PgMaloRepository, PgMeloRepository, PgNeLoRepository,
+    PgTrancheRepository,
+};
+use rubo4e::current::Lokationstyp;
 use sqlx::PgPool;
 
 const SCHEMA: &str = include_str!("../migrations/0001_initial.sql");
@@ -94,7 +102,11 @@ async fn open_parent_edges(
         .await
         .expect("list edges")
         .into_iter()
-        .filter(|e| e.nach_typ == "malo" && e.von_typ == "melo" && e.valid_to.is_none())
+        .filter(|e| {
+            e.nach_typ == Lokationstyp::Malo
+                && e.von_typ == Lokationstyp::Melo
+                && e.valid_to.is_none()
+        })
         .map(|e| (e.nach_id, e.valid_from))
         .collect()
 }
@@ -242,9 +254,9 @@ async fn melo_put_respects_existing_open_ended_edge() {
     lz.upsert_edge(
         TENANT,
         MELO,
-        "melo",
+        Lokationstyp::Melo,
         MALO_A,
-        "malo",
+        Lokationstyp::Malo,
         None,
         None,
         serde_json::json!({ "_typ": "LOKATIONSZUORDNUNG" }),
@@ -342,9 +354,9 @@ async fn lokationsbuendel_codes_are_extracted_into_typed_columns() {
     lz.upsert_edge(
         TENANT,
         MALO_A,
-        "malo",
+        Lokationstyp::Malo,
         MELO,
-        "melo",
+        Lokationstyp::Melo,
         None,
         None,
         serde_json::json!({
@@ -375,4 +387,495 @@ async fn lokationsbuendel_codes_are_extracted_into_typed_columns() {
         .find(|e| e.nach_id == MALO_A)
         .expect("melo-put edge present");
     assert_eq!(plain.lokationsbuendelcode, None);
+}
+
+// ── Stammdatenänderung: patch_stammdaten over the typed MaLo columns ──────────
+
+/// A UTILMD Stammdatenänderung (GPKE Teil 4 / GeLi Gas) patches only the typed
+/// MaLo columns, leaving the BO4E JSONB payload and the `version` untouched,
+/// and no-ops when the MaLo is not yet known.
+#[tokio::test]
+#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+async fn patch_stammdaten_updates_typed_columns_only() {
+    use mako_markt::repository::MaloStammdatenPatch;
+
+    let Some(pool) = test_pool("patch_stammdaten").await else {
+        return;
+    };
+    let repo = PgMaloRepository::new(pool.clone());
+    let m = malo_id(MALO_A);
+
+    // No row yet → the change is a no-op, not an error.
+    let applied = repo
+        .patch_stammdaten(
+            &m,
+            &MaloStammdatenPatch {
+                netzebene: Some("NSP7".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("patch on absent MaLo");
+    assert!(!applied, "no row → no-op");
+
+    // Seed the MaLo with a BO4E payload (version 1).
+    repo.upsert(
+        &m,
+        Sparte::Strom,
+        serde_json::json!({
+            "_typ": "MARKTLOKATION",
+            "marktlokationsId": MALO_A,
+            "bilanzierungsmethode": "SLP"
+        }),
+        vec![],
+        None,
+        "v202607.0.0",
+    )
+    .await
+    .expect("seed malo");
+    let before = repo
+        .find(&m, time::OffsetDateTime::now_utc().date())
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Apply a change to several typed columns, incl. the §14a EnWG
+    // Fernsteuerbarkeit (UTILMD CCI+7037 Z97/Z96 → bool).
+    let applied = repo
+        .patch_stammdaten(
+            &m,
+            &MaloStammdatenPatch {
+                netzebene: Some("MSP".to_owned()),
+                bilanzierungsmethode: Some("RLM".to_owned()),
+                regelzone: Some("10YDE-EON------1".to_owned()),
+                fernsteuerbar: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("patch existing MaLo");
+    assert!(applied, "row present → applied");
+
+    let after = repo
+        .find(&m, time::OffsetDateTime::now_utc().date())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.netzebene.as_deref(), Some("MSP"));
+    assert_eq!(after.bilanzierungsmethode.as_deref(), Some("RLM"));
+    assert_eq!(after.regelzone.as_deref(), Some("10YDE-EON------1"));
+    assert_eq!(
+        after.fernsteuerbar,
+        Some(true),
+        "§14a Fernsteuerbarkeit applied"
+    );
+    // gasqualitaet was not in the patch → unchanged (COALESCE).
+    assert_eq!(after.gasqualitaet, before.gasqualitaet);
+    // The optimistic version is NOT bumped by a Stammdatenänderung.
+    assert_eq!(after.version, before.version, "version untouched");
+}
+
+/// A `LOC+Z17` Stammdatenänderung patches the typed MeLo columns
+/// (`netzebene_messung`, `regelzone`) via `MeloRepository::patch_stammdaten`,
+/// leaving the JSONB payload and version untouched, and no-ops when unknown.
+#[tokio::test]
+#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+async fn melo_patch_stammdaten_updates_typed_columns_only() {
+    let Some(pool) = test_pool("melo_patch").await else {
+        return;
+    };
+    let repo = PgMeloRepository::new(pool.clone(), TENANT);
+    let m = melo_id(MELO);
+
+    // No row yet → no-op.
+    let applied = repo
+        .patch_stammdaten(
+            &m,
+            &MeloStammdatenPatch {
+                netzebene_messung: Some("MSP".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("patch absent MeLo");
+    assert!(!applied, "no row → no-op");
+
+    repo.upsert(
+        &m,
+        None,
+        serde_json::json!({ "_typ": "MESSLOKATION", "messlokationsId": MELO }),
+        None,
+        "v202607.0.0",
+    )
+    .await
+    .expect("seed melo");
+    let before = repo.find(&m).await.unwrap().unwrap();
+
+    let applied = repo
+        .patch_stammdaten(
+            &m,
+            &MeloStammdatenPatch {
+                netzebene_messung: Some("NSP7".to_owned()),
+                regelzone: Some("10YDE-EON------1".to_owned()),
+            },
+        )
+        .await
+        .expect("patch existing MeLo");
+    assert!(applied);
+
+    let after = repo.find(&m).await.unwrap().unwrap();
+    assert_eq!(after.netzebene_messung.as_deref(), Some("NSP7"));
+    assert_eq!(after.regelzone.as_deref(), Some("10YDE-EON------1"));
+    assert_eq!(after.version, before.version, "version untouched");
+}
+
+/// A `LOC+Z18` Stammdatenänderung patches the typed NeLo Netzebene via
+/// `NeLoRepository::patch_stammdaten`.
+#[tokio::test]
+#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+async fn nelo_patch_stammdaten_updates_netzebene() {
+    let Some(pool) = test_pool("nelo_patch").await else {
+        return;
+    };
+    let repo = PgNeLoRepository::new(pool.clone());
+    const NELO: &str = "11XNELO-EXAMPL1";
+
+    // No row yet → no-op.
+    let applied = repo
+        .patch_stammdaten(
+            NELO,
+            TENANT,
+            &NeloStammdatenPatch {
+                netzebene: Some("HS".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("patch absent NeLo");
+    assert!(!applied, "no row → no-op");
+
+    repo.upsert(
+        NeLoRecord {
+            nelo_id: NELO.to_owned(),
+            tenant: TENANT.to_owned(),
+            name: None,
+            sparte: Sparte::Strom,
+            netzebene: Some("MS".to_owned()),
+            nb_mp_id: TENANT.to_owned(),
+            steuerkanal: None,
+            eigenschaft_msb_lokation: None,
+            grundzustaendiger_msb_codenr: None,
+            data: serde_json::json!({}),
+            version: 0,
+            updated_at: time::OffsetDateTime::now_utc(),
+        },
+        None,
+    )
+    .await
+    .expect("seed nelo");
+    let before = repo.find(NELO, TENANT).await.unwrap().unwrap();
+
+    // Patch Netzebene + the §14a Steuerkanal (UTILMD CCI+7059=Z49 ZF3/ZF2).
+    let applied = repo
+        .patch_stammdaten(
+            NELO,
+            TENANT,
+            &NeloStammdatenPatch {
+                netzebene: Some("HS".to_owned()),
+                steuerkanal: Some(true),
+            },
+        )
+        .await
+        .expect("patch existing NeLo");
+    assert!(applied);
+
+    let after = repo.find(NELO, TENANT).await.unwrap().unwrap();
+    assert_eq!(after.netzebene.as_deref(), Some("HS"));
+    assert_eq!(after.steuerkanal, Some(true), "§14a Steuerkanal applied");
+    // patch_stammdaten does not bump the optimistic version.
+    assert_eq!(after.version, before.version, "version untouched");
+}
+
+/// The MeLo Stammdatenänderung's MSB-Zuordnung lands on the dated
+/// `melo_msb_zuordnungen` timeline via `MeloMsbRepository::assign_msb` — the path
+/// the `MESSLOKATION` apply writes to. A later assignment closes the earlier one.
+#[tokio::test]
+#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+async fn melo_msb_zuordnung_from_stammdatenaenderung() {
+    use mako_markt::repository::MeloMsbRepository as _;
+    use marktd::pg::PgMeloMsbRepository;
+
+    let Some(pool) = test_pool("melo_msb").await else {
+        return;
+    };
+    // The melo_msb_zuordnungen FK requires the MeLo row to exist (the apply
+    // path degrades to a non-fatal warn when it does not).
+    PgMeloRepository::new(pool.clone(), TENANT)
+        .upsert(
+            &melo_id(MELO),
+            None,
+            serde_json::json!({ "_typ": "MESSLOKATION", "messlokationsId": MELO }),
+            None,
+            "v202607.0.0",
+        )
+        .await
+        .expect("seed melo");
+
+    let repo = PgMeloMsbRepository::new(pool.clone());
+    let d = |s: &str| {
+        time::Date::parse(s, &time::macros::format_description!("[year][month][day]")).unwrap()
+    };
+
+    // First MSB assignment effective the Änderungsdatum.
+    repo.assign_msb(TENANT, MELO, "9900111111111", d("20260101"))
+        .await
+        .expect("assign msb 1");
+    assert_eq!(
+        repo.find_msb_at(TENANT, MELO, d("20260201"))
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("9900111111111")
+    );
+
+    // A later Stammdatenänderung switches the serving MSB.
+    repo.assign_msb(TENANT, MELO, "9900222222222", d("20260601"))
+        .await
+        .expect("assign msb 2");
+    assert_eq!(
+        repo.find_msb_at(TENANT, MELO, d("20260701"))
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("9900222222222"),
+        "current MSB is the latest assignment"
+    );
+    assert_eq!(
+        repo.find_msb_at(TENANT, MELO, d("20260301"))
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("9900111111111"),
+        "history: the earlier MSB is still resolvable point-in-time"
+    );
+}
+
+/// A `LOC+Z20` Stammdatenänderung patches the TR Fernschaltbarkeit via
+/// `TechnischeRessourceRepository::patch_stammdaten` (UTILMD CAV Z58 + Z06/Z07).
+#[tokio::test]
+#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+async fn tr_patch_stammdaten_updates_fernschaltbarkeit() {
+    use mako_markt::repository::{
+        TechnischeRessourceRepository as _, TechnischeRessourceStammdatenPatch,
+    };
+    use marktd::pg::PgTechnischeRessourceRepository;
+
+    let Some(pool) = test_pool("tr_patch").await else {
+        return;
+    };
+    let repo = PgTechnischeRessourceRepository::new(pool.clone());
+    const TR: &str = "TR000000000001";
+
+    // No row yet → no-op.
+    let applied = repo
+        .patch_stammdaten(
+            TR,
+            TENANT,
+            &TechnischeRessourceStammdatenPatch {
+                ist_fernschaltbar: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("patch absent TR");
+    assert!(!applied, "no row → no-op");
+
+    repo.upsert_tr(
+        TR,
+        TENANT,
+        Some(MALO_A),
+        None,
+        Some("STROMERZEUGUNGSART"),
+        None,
+        Some(false),
+        serde_json::json!({ "_typ": "TECHNISCHERESSOURCE" }),
+        "v202607.0.0",
+    )
+    .await
+    .expect("seed tr");
+
+    // First patch: only Fernschaltbarkeit — nutzung/verbrauchsart absent → COALESCE keeps them.
+    let applied = repo
+        .patch_stammdaten(
+            TR,
+            TENANT,
+            &TechnischeRessourceStammdatenPatch {
+                ist_fernschaltbar: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("patch existing TR");
+    assert!(applied);
+
+    let after = repo.find_tr(TR, TENANT).await.unwrap().unwrap();
+    assert_eq!(
+        after.ist_fernschaltbar,
+        Some(true),
+        "Fernschaltbarkeit applied"
+    );
+    // nutzung was not in the patch → unchanged (COALESCE); verbrauchsart still NULL.
+    assert_eq!(after.nutzung.as_deref(), Some("STROMERZEUGUNGSART"));
+    assert_eq!(after.verbrauchsart, None);
+
+    // Second patch: apply the BO4E-aligned nutzung + verbrauchsart.
+    repo.patch_stammdaten(
+        TR,
+        TENANT,
+        &TechnischeRessourceStammdatenPatch {
+            nutzung: Some("STROMVERBRAUCHSART".to_owned()),
+            verbrauchsart: Some("E_MOBILITAET".to_owned()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("patch nutzung/verbrauchsart");
+    let after = repo.find_tr(TR, TENANT).await.unwrap().unwrap();
+    assert_eq!(after.nutzung.as_deref(), Some("STROMVERBRAUCHSART"));
+    assert_eq!(after.verbrauchsart.as_deref(), Some("E_MOBILITAET"));
+    assert_eq!(
+        after.ist_fernschaltbar,
+        Some(true),
+        "Fernschaltbarkeit retained"
+    );
+}
+
+/// A `LOC+Z19` SR Stammdatenänderung replaces the contracted
+/// `konfigurationsprodukte` (BO4E `Vec<Konfigurationsprodukt>`) via
+/// `SteuerbareRessourceRepository::replace_sr_konfigurationsprodukte`.
+#[tokio::test]
+#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+async fn sr_konfigurationsprodukte_replace() {
+    use mako_markt::repository::SteuerbareRessourceRepository as _;
+    use marktd::pg::PgSteuerbareRessourceRepository;
+
+    let Some(pool) = test_pool("sr_konfig").await else {
+        return;
+    };
+    let repo = PgSteuerbareRessourceRepository::new(pool.clone());
+    const SR: &str = "SR000000000001";
+
+    // Unknown SR → no-op (404 signal).
+    let applied = repo
+        .replace_sr_konfigurationsprodukte(SR, TENANT, serde_json::json!([]))
+        .await
+        .expect("replace absent SR");
+    assert!(!applied, "no row → no-op");
+
+    // Seed the SR with no products.
+    repo.upsert_sr(
+        SR,
+        TENANT,
+        Some(MALO_A),
+        None,
+        serde_json::json!({ "_typ": "STEUERBARERESSOURCE" }),
+        "v202607.0.0",
+        None,
+    )
+    .await
+    .expect("seed sr");
+
+    // Apply the extracted per-product array (produktcode + marktpartner).
+    let kp = serde_json::json!([
+        {
+            "_typ": "KONFIGURATIONSPRODUKT",
+            "produktcode": "PRODUKT_A",
+            "marktpartner": { "_typ": "MARKTTEILNEHMER", "rollencodenummer": "9900123456789" },
+            "leistungskurvendefinition": "LK001"
+        }
+    ]);
+    let applied = repo
+        .replace_sr_konfigurationsprodukte(SR, TENANT, kp.clone())
+        .await
+        .expect("replace existing SR");
+    assert!(applied);
+
+    let after = repo.find_sr(SR, TENANT).await.unwrap().unwrap();
+    let stored = after
+        .konfigurationsprodukte
+        .expect("konfigurationsprodukte set");
+    let arr = stored.as_array().expect("array");
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["produktcode"], "PRODUKT_A");
+    assert_eq!(arr[0]["marktpartner"]["rollencodenummer"], "9900123456789");
+}
+
+/// A `LOC+Z21` Stammdatenänderung patches the typed Tranche columns via
+/// `TrancheRepository::patch_stammdaten`; the greenfield table round-trips.
+#[tokio::test]
+#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+async fn tranche_patch_stammdaten_updates_typed_columns() {
+    let Some(pool) = test_pool("tranche_patch").await else {
+        return;
+    };
+    let repo = PgTrancheRepository::new(pool.clone());
+    let tranche_id = format!("{MALO_A}-T01");
+
+    // No row yet → no-op.
+    let applied = repo
+        .patch_stammdaten(
+            &tranche_id,
+            TENANT,
+            &TrancheStammdatenPatch {
+                netzebene: Some("MSP".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("patch absent Tranche");
+    assert!(!applied, "no row → no-op");
+
+    repo.upsert(
+        TrancheRecord {
+            tranche_id: tranche_id.clone(),
+            tenant: TENANT.to_owned(),
+            malo_id: Some(MALO_A.to_owned()),
+            bilanzierungsgebiet: None,
+            netzebene: None,
+            energierichtung: None,
+            data: serde_json::json!({ "_typ": "TRANCHE" }),
+            version: 0,
+            updated_at: time::OffsetDateTime::now_utc(),
+        },
+        None,
+    )
+    .await
+    .expect("seed tranche");
+    let before = repo.find(&tranche_id, TENANT).await.unwrap().unwrap();
+
+    let applied = repo
+        .patch_stammdaten(
+            &tranche_id,
+            TENANT,
+            &TrancheStammdatenPatch {
+                bilanzierungsgebiet: Some("11YW-EXAMPLE-BG1".to_owned()),
+                netzebene: Some("NSP7".to_owned()),
+                energierichtung: Some("ENTNAHME".to_owned()),
+            },
+        )
+        .await
+        .expect("patch existing Tranche");
+    assert!(applied);
+
+    let after = repo.find(&tranche_id, TENANT).await.unwrap().unwrap();
+    assert_eq!(
+        after.bilanzierungsgebiet.as_deref(),
+        Some("11YW-EXAMPLE-BG1")
+    );
+    assert_eq!(after.netzebene.as_deref(), Some("NSP7"));
+    assert_eq!(after.energierichtung.as_deref(), Some("ENTNAHME"));
+    // list_by_malo groups Tranchen under their parent MaLo.
+    let listed = repo.list_by_malo(MALO_A, TENANT, 0, 10).await.unwrap();
+    assert_eq!(listed.total, 1);
+    assert_eq!(before.version, 1);
 }

@@ -43,7 +43,7 @@ graph LR
 
     subgraph retail ["Retail / LF"]
         ENW41["§41 EnWG\nPreisgarantie · Kündigung"]
-        EEG["EEG 2000–2023\nKWKG · 9 schemes"]
+        EEG["EEG 2000–2023\nKWKG · 10 schemes"]
         SOLA["§42b EnWG\nGGV Solarpaket I"]
     end
 
@@ -57,11 +57,11 @@ graph LR
     BNetzA --> strom
     BNetzA --> gas
 
-    BK6_24 -->|"mako-gpke\nmako-wim\nmako-mabis"| GPKE_impl["255 PIDs covered\n(100%)"]
+    BK6_24 -->|"mako-gpke\nmako-wim\nmako-mabis"| GPKE_impl["346 PIDs covered\n(100%)"]
     BK7_24 -->|"mako-geli-gas\nmako-wim-gas"| GAS_impl["GeLi Gas 3.0\nWiM Gas"]
     BK7_14 -->|"mako-gabi-gas\ndvgw-edi"| DVGW_impl["8 DVGW messages\nGaBi Gas 2.1"]
     ENW41 -->|"vertragd"| LF_impl["B2C/B2B contracts\nGDPR Art. 15/17/20"]
-    EEG -->|"eeg-billing\neinsd"| EEG_impl["9 settlement schemes\n339 tests"]
+    EEG -->|"eeg-billing\neinsd"| EEG_impl["10 settlement schemes\n339 tests"]
     BSI -->|"metering\nedmd"| IOT_impl["SmgwSession\nClsChannel"]
     MsbG -->|"metering\nedmd"| SUB_impl["V01-V10 validation\nFill gaps · Forecast"]
     NNNEV -->|"grid-billing\nnetzbilanzd"| NNE_impl["NNE/KA/MMM\n§14a Modul 1/2/3"]
@@ -80,7 +80,7 @@ graph LR
 | **PARTIN AHB 1.0f** (Kommunikationsdaten Strom + Gas) | Both | `mako-gpke` (37000–37006), `mako-geli-gas` (37008–37014) |
 | **§42b Abs. 5 EnWG** (Solarpaket I — GGV Gemeinschaftliche Gebäudeversorgung) | Strom | `metering` crate (`GgvConstantAllocation`, `GgvProportionalAllocation`), `edmd` |
 | **§42a EEG** (Residuallast) | Strom | `metering` crate (`Residual` rule), `edmd` |
-| **EEG 2000–2023 / KWKG** (Feed-in settlement) | Strom | `eeg-billing` crate (9 schemes), `einsd` |
+| **EEG 2000–2023 / KWKG** (Feed-in settlement) | Strom | `eeg-billing` crate (10 schemes), `einsd` |
 | **§ 60 Abs. 2 MsbG** (Ersatzwertbildung, Jahresprognose, Substitution) | Both | `metering` crate (V01–V10 validation, `fill_gaps`, `project_annual_consumption`), `edmd` |
 | **BSI TR-03109** (iMSys / SMGW lifecycle, §14a CLS channels) | Strom | `metering` (`SmgwSession`, `ClsChannel`), `edmd` |
 | **StromNEV / GasNEV / KAV** (grid charge settlement) | Both | `grid-billing` crate, `netzbilanzd` |
@@ -104,6 +104,6 @@ graph LR
 > running instance. A process started under an older format version continues
 > under those rules until it completes — no data migration required.
 >
-> **PID coverage.** `cargo xtask validate-pruefids` verifies all 255 Prüfidentifikatoren
+> **PID coverage.** `cargo xtask validate-pruefids` verifies all 346 Prüfidentifikatoren
 > in the workspace are correctly registered. CI enforces 100% coverage.
 

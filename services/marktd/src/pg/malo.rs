@@ -91,10 +91,13 @@ impl MaloRepository for PgMaloRepository {
             .get("lokationsbuendelObjektcode")
             .and_then(|v| v.as_str())
             .map(|s| s.to_owned());
+        let fernsteuerbar = data
+            .get("fernsteuerbar")
+            .and_then(serde_json::Value::as_bool);
 
         sqlx::query(
-            r#"INSERT INTO malo (malo_id, sparte, netzebene, bilanzierungsgebiet, gasqualitaet, energierichtung, bilanzierungsmethode, regelzone, fallgruppe, lokationsbuendel_objektcode, version, data, bo4e_version, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+            r#"INSERT INTO malo (malo_id, sparte, netzebene, bilanzierungsgebiet, gasqualitaet, energierichtung, bilanzierungsmethode, regelzone, fallgruppe, lokationsbuendel_objektcode, fernsteuerbar, version, data, bo4e_version, updated_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
                ON CONFLICT (malo_id) DO UPDATE
                SET sparte               = EXCLUDED.sparte,
                    netzebene            = EXCLUDED.netzebene,
@@ -105,6 +108,7 @@ impl MaloRepository for PgMaloRepository {
                    regelzone            = EXCLUDED.regelzone,
                    fallgruppe           = EXCLUDED.fallgruppe,
                    lokationsbuendel_objektcode = EXCLUDED.lokationsbuendel_objektcode,
+                   fernsteuerbar        = EXCLUDED.fernsteuerbar,
                    version              = EXCLUDED.version,
                    data                 = EXCLUDED.data,
                    bo4e_version         = EXCLUDED.bo4e_version,
@@ -120,6 +124,7 @@ impl MaloRepository for PgMaloRepository {
         .bind(&regelzone)
         .bind(&fallgruppe)
         .bind(&lokationsbuendel_objektcode)
+        .bind(fernsteuerbar)
         .bind(new_version)
         .bind(&data)
         .bind(bo4e_version)
@@ -182,6 +187,7 @@ impl MaloRepository for PgMaloRepository {
                       m.regelzone,
                       m.fallgruppe,
                       m.lokationsbuendel_objektcode,
+                      m.fernsteuerbar,
                       m.version,
                       m.data,
                       m.bo4e_version,
@@ -203,7 +209,7 @@ impl MaloRepository for PgMaloRepository {
                      AND lz.valid_from <= $2
                      AND (lz.valid_to IS NULL OR lz.valid_to >= $2)
                WHERE m.malo_id = $1
-               GROUP BY m.malo_id, m.sparte, m.netzebene, m.bilanzierungsgebiet, m.gasqualitaet, m.energierichtung, m.bilanzierungsmethode, m.regelzone, m.fallgruppe, m.lokationsbuendel_objektcode, m.version, m.data, m.bo4e_version, m.updated_at"#,
+               GROUP BY m.malo_id, m.sparte, m.netzebene, m.bilanzierungsgebiet, m.gasqualitaet, m.energierichtung, m.bilanzierungsmethode, m.regelzone, m.fallgruppe, m.lokationsbuendel_objektcode, m.fernsteuerbar, m.version, m.data, m.bo4e_version, m.updated_at"#,
         )
         .bind(malo_id)
         .bind(at)
@@ -234,6 +240,7 @@ impl MaloRepository for PgMaloRepository {
                       m.regelzone,
                       m.fallgruppe,
                       m.lokationsbuendel_objektcode,
+                      m.fernsteuerbar,
                       m.version,
                       m.data,
                       m.bo4e_version,
@@ -261,7 +268,7 @@ impl MaloRepository for PgMaloRepository {
                  AND ($5::text IS NULL OR m.fallgruppe        = $5)
                  AND ($6::text IS NULL OR m.bilanzierungsmethode = $6)
                  AND ($7::text IS NULL OR m.regelzone         = $7)
-               GROUP BY m.malo_id, m.sparte, m.netzebene, m.bilanzierungsgebiet, m.gasqualitaet, m.energierichtung, m.bilanzierungsmethode, m.regelzone, m.fallgruppe, m.lokationsbuendel_objektcode, m.version, m.data, m.bo4e_version, m.updated_at
+               GROUP BY m.malo_id, m.sparte, m.netzebene, m.bilanzierungsgebiet, m.gasqualitaet, m.energierichtung, m.bilanzierungsmethode, m.regelzone, m.fallgruppe, m.lokationsbuendel_objektcode, m.fernsteuerbar, m.version, m.data, m.bo4e_version, m.updated_at
                ORDER BY m.malo_id
                LIMIT $8 OFFSET $9"#,
         )
@@ -319,6 +326,45 @@ impl MaloRepository for PgMaloRepository {
         .map_err(|e| mako_markt::error::MdmError::Internal(e.to_string()))?;
         Ok(())
     }
+
+    async fn patch_stammdaten(
+        &self,
+        malo_id: &mako_markt::domain::MaloId,
+        patch: &mako_markt::repository::MaloStammdatenPatch,
+    ) -> Result<bool, mako_markt::error::MdmError> {
+        if patch.is_empty() {
+            return Ok(false);
+        }
+        // COALESCE per column — a NULL argument leaves the existing value
+        // unchanged. JSONB payload and version are intentionally untouched.
+        let affected = sqlx::query(
+            r#"UPDATE malo
+               SET netzebene            = COALESCE($2, netzebene),
+                   bilanzierungsgebiet  = COALESCE($3, bilanzierungsgebiet),
+                   gasqualitaet         = COALESCE($4, gasqualitaet),
+                   energierichtung      = COALESCE($5, energierichtung),
+                   bilanzierungsmethode = COALESCE($6, bilanzierungsmethode),
+                   regelzone            = COALESCE($7, regelzone),
+                   fallgruppe           = COALESCE($8, fallgruppe),
+                   fernsteuerbar        = COALESCE($9, fernsteuerbar),
+                   updated_at           = now()
+               WHERE malo_id = $1"#,
+        )
+        .bind(malo_id.to_string())
+        .bind(&patch.netzebene)
+        .bind(&patch.bilanzierungsgebiet)
+        .bind(&patch.gasqualitaet)
+        .bind(&patch.energierichtung)
+        .bind(&patch.bilanzierungsmethode)
+        .bind(&patch.regelzone)
+        .bind(&patch.fallgruppe)
+        .bind(patch.fernsteuerbar)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| mako_markt::error::MdmError::Internal(e.to_string()))?
+        .rows_affected();
+        Ok(affected > 0)
+    }
 }
 
 fn row_to_malo(r: PgRow) -> MaloRecord {
@@ -338,6 +384,7 @@ fn row_to_malo(r: PgRow) -> MaloRecord {
         regelzone: r.try_get("regelzone").unwrap_or(None),
         fallgruppe: r.try_get("fallgruppe").unwrap_or(None),
         lokationsbuendel_objektcode: r.try_get("lokationsbuendel_objektcode").unwrap_or(None),
+        fernsteuerbar: r.try_get("fernsteuerbar").unwrap_or(None),
         version: r.get("version"),
         data: r.get("data"),
         rollenzuordnung,

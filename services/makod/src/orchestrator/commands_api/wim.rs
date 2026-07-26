@@ -355,7 +355,10 @@ pub(super) async fn dispatch_steuerungsauftrag_endantwort(
                             match marktd.get_konfigurationsprodukte(sr_id.as_ref()).await {
                                 Ok(Some(products)) => {
                                     let contracted = products.iter().any(|p| {
-                                        p.get("produktCode")
+                                        // BO4E `Konfigurationsprodukt.produktcode`; the
+                                        // camelCase/snake_case variants are legacy fallbacks.
+                                        p.get("produktcode")
+                                            .or_else(|| p.get("produktCode"))
                                             .or_else(|| p.get("produkt_code"))
                                             .and_then(|v| v.as_str())
                                             .map(|code| code == produkt_code.as_str())

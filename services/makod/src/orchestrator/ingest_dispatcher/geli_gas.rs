@@ -100,6 +100,36 @@ impl EdifactIngestDispatcher {
                     reason: "pid_not_in_spawn_table",
                 }),
             },
+            // ── GeLi Gas Stammdatenänderung (44109–44182) ─────────────────────
+            // Änderung PIDs spawn a Berechtigter process; Antwort PIDs resume a
+            // change we initiated. The workflow registers the APERAK + 10-WT
+            // Antwort deadlines. Stammdatenanfrage PIDs (G8–G10) spawn the data
+            // owner's `ReceiveAnfrage` process, which auto-answers with the
+            // requested master data (data-return).
+            "geli-gas-stammdatenaenderung" => {
+                let malo_id = extract_malo_from_msg(msg);
+                if mako_geli_gas::stammdatenaenderung::is_antwort_pid(pid)
+                    && !mako_geli_gas::stammdatenaenderung::is_aenderung_pid(pid)
+                {
+                    let cmd = adapters::geli_gas_stammdaten_registry().dispatch(raw, &fv)?;
+                    self.resume_by_malo::<mako_geli_gas::GeliGasStammdatenaenderungWorkflow>(
+                        malo_id.as_str(),
+                        "geli-gas-stammdatenaenderung",
+                        cmd,
+                    )
+                    .await
+                } else {
+                    let cmd = adapters::geli_gas_stammdaten_registry().dispatch(raw, &fv)?;
+                    self.spawn_or_resume::<mako_geli_gas::GeliGasStammdatenaenderungWorkflow>(
+                        malo_id.as_str(),
+                        "geli-gas-stammdatenaenderung",
+                        cmd,
+                        &fv,
+                        &[],
+                    )
+                    .await
+                }
+            }
             // ── GeLi Gas MSCONS data delivery ─────────────────────────────────
             // PIDs 13002, 13007–13009: MSCONS Gas Messdaten (NB/MSB → LFG) — spawn.
             "geli-gas-mscons" => match pid {

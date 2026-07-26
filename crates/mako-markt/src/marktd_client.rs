@@ -295,6 +295,46 @@ impl MarktdClient {
             .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
     }
 
+    /// `GET /api/v1/melos/{melo_id}/msb?at=YYYY-MM-DD` — resolve the
+    /// Messstellenbetreiber responsible for a Messlokation on a given date.
+    ///
+    /// Backs the `WiM` Teil 2 UC 4.1.1 historical Werteanfrage: a value request
+    /// for a past period must reach the MSB that operated the Messlokation
+    /// *then*, which the per-Messlokation dated MSB timeline
+    /// (`melo_msb_zuordnungen`) records.
+    ///
+    /// Returns `Ok(None)` when no MSB assignment covers the date (marktd 404).
+    ///
+    /// # Errors
+    /// [`MarktdClientError::Http`] on network/HTTP failure,
+    /// [`MarktdClientError::Deserialization`] on a malformed response body.
+    pub async fn get_melo_msb_at(
+        &self,
+        melo_id: &str,
+        at: time::Date,
+    ) -> Result<Option<String>, MarktdClientError> {
+        let url = format!("{}/api/v1/melos/{}/msb?at={}", self.base_url, melo_id, at);
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
+        Ok(body
+            .get("msb_mp_id")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned))
+    }
+
     /// `GET /api/v1/esa/consent-check` — gate an ESA message.
     ///
     /// Returns a [`ConsentDecision`] for `(esa_mp_id, msb_mp_id, location_id)`.

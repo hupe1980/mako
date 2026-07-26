@@ -114,8 +114,9 @@ pub const ORDRSP_PIDS: &[u32] = &[
 /// | 21044 | Bestellungsbeendigung (GPKE Teil 3) | MSB → NB · MSB → LF |
 ///
 /// Source: `docs/pid-reference.md` (generated from BDEW xlsx PID 3.3 + PID 4.0).
-/// PID 21042 (Bestellung WiM, WiM Strom Teil 2, MSB → ESA) is NOT registered
-/// here — it has no crate assignment in pid-reference.md and will dead-letter.
+/// PID 21042 (WiM / Umsetzungsstatus, „Bestellung (WiM)", MSB → ESA; IFTSTA AHB
+/// 2.0g Kap. 6.10) is a WiM Strom Teil 2 message handled by `mako-wim`
+/// (`esa-wertebestellung`), not GPKE — it is not registered here.
 pub const IFTSTA_PIDS: &[u32] = &[21_043, 21_044];
 
 /// Deadline label for the NB/MSB response window (5 Werktage, GPKE AWH Teil 3).

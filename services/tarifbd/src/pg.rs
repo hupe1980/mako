@@ -547,9 +547,40 @@ pub async fn assign_product(
 
 #[derive(Debug, Deserialize)]
 pub struct EpexImportRequest {
-    /// 24-entry array of ct/kWh values for hours 0..23.
+    /// Ordered ct/kWh values for the delivery day's market time units, in
+    /// UTC-instant order (which equals local wall-clock order). The length must
+    /// equal the number of MTUs in the local delivery day:
+    /// **96** (15-min) / **92** (spring DST) / **100** (autumn DST), or
+    /// **24 / 23 / 25** at 60-min.
     pub prices: Vec<Decimal>,
+    /// MTU length in minutes: `15` (default; SDAC 15-min go-live 2025-10-01) or
+    /// `60` (legacy hourly source). 60-min rows are expanded to quarter-hours on
+    /// fetch.
+    #[serde(default)]
+    pub mtu_minutes: Option<u16>,
     pub source: Option<String>,
+}
+
+/// One quarter-hour spot price point (fetch result, expanded to 15-min).
+#[derive(Debug, Clone)]
+pub struct EpexPricePoint {
+    /// UTC start instant of the 15-minute market time unit.
+    pub mtu_start: OffsetDateTime,
+    /// Spot price in ct/kWh.
+    pub avg_ct_kwh: Decimal,
+}
+
+/// UTC instant of Europe/Berlin local midnight for `date`.
+///
+/// Midnight never falls in a DST gap/overlap (transitions are at 02:00/03:00),
+/// so `take_first` is unambiguous.
+fn berlin_midnight_utc(date: Date) -> OffsetDateTime {
+    use time_tz::PrimitiveDateTimeExt;
+    let berlin = time_tz::timezones::db::europe::BERLIN;
+    date.midnight()
+        .assume_timezone(berlin)
+        .take_first()
+        .expect("Berlin local midnight is unambiguous")
 }
 
 pub async fn upsert_epex_day(
@@ -557,47 +588,97 @@ pub async fn upsert_epex_day(
     date: Date,
     req: EpexImportRequest,
 ) -> anyhow::Result<()> {
-    if req.prices.len() != 24 {
-        anyhow::bail!("prices must have exactly 24 entries (one per hour)");
+    let mtu_minutes: i64 = req.mtu_minutes.unwrap_or(15).into();
+    if mtu_minutes != 15 && mtu_minutes != 60 {
+        anyhow::bail!("mtu_minutes must be 15 or 60");
     }
-    let source = req.source.as_deref().unwrap_or("manual");
 
-    for (hour, price) in req.prices.iter().enumerate() {
+    // Delivery day boundaries as UTC instants. The local day spans 23/24/25 h
+    // across DST, so the MTU count is derived — never hard-coded to 24/96.
+    let day_start = berlin_midnight_utc(date);
+    let next_date = date.next_day().context("date overflow")?;
+    let day_end = berlin_midnight_utc(next_date);
+    let span_minutes = (day_end - day_start).whole_minutes();
+    let expected = usize::try_from(span_minutes / mtu_minutes).unwrap_or(0);
+    if req.prices.len() != expected {
+        anyhow::bail!(
+            "prices must have exactly {expected} entries for {date} at {mtu_minutes}-min MTU \
+             (local day is {}h; got {})",
+            span_minutes / 60,
+            req.prices.len()
+        );
+    }
+
+    let source = req.source.as_deref().unwrap_or("manual");
+    let step = time::Duration::minutes(mtu_minutes);
+
+    // Replace the whole day so a resolution change (e.g. legacy hourly → 15-min)
+    // never leaves stale rows behind (hard cut, no backfill reconciliation).
+    sqlx::query("DELETE FROM epex_prices WHERE price_date = $1")
+        .bind(date)
+        .execute(pool)
+        .await
+        .context("clear epex day")?;
+
+    for (i, price) in req.prices.iter().enumerate() {
+        let mtu_start = day_start + step * i32::try_from(i).unwrap_or(i32::MAX);
         sqlx::query(
-            r"INSERT INTO epex_prices (price_date, hour, avg_ct_kwh, source)
-              VALUES ($1, $2, $3, $4)
-              ON CONFLICT (price_date, hour) DO UPDATE
-              SET avg_ct_kwh = EXCLUDED.avg_ct_kwh,
+            r"INSERT INTO epex_prices (mtu_start, price_date, mtu_minutes, avg_ct_kwh, source)
+              VALUES ($1, $2, $3, $4, $5)
+              ON CONFLICT (mtu_start) DO UPDATE
+              SET price_date = EXCLUDED.price_date,
+                  mtu_minutes = EXCLUDED.mtu_minutes,
+                  avg_ct_kwh = EXCLUDED.avg_ct_kwh,
                   source = EXCLUDED.source,
                   imported_at = now()",
         )
+        .bind(mtu_start)
         .bind(date)
-        .bind(hour as i16)
+        .bind(i16::try_from(mtu_minutes).unwrap_or(15))
         .bind(price)
         .bind(source)
         .execute(pool)
         .await
-        .context("upsert epex hour")?;
+        .context("upsert epex mtu")?;
     }
     Ok(())
 }
 
-pub async fn fetch_epex_day(pool: &PgPool, date: Date) -> anyhow::Result<Option<Vec<Decimal>>> {
-    let rows =
-        sqlx::query("SELECT avg_ct_kwh FROM epex_prices WHERE price_date = $1 ORDER BY hour ASC")
-            .bind(date)
-            .fetch_all(pool)
-            .await
-            .context("fetch_epex_day")?;
+/// Fetch a delivery day's spot prices, normalised to **15-minute** points.
+///
+/// Legacy 60-minute rows are expanded to four identical quarter-hours so the
+/// billing layer always sees a uniform 15-min series.
+pub async fn fetch_epex_day(
+    pool: &PgPool,
+    date: Date,
+) -> anyhow::Result<Option<Vec<EpexPricePoint>>> {
+    let rows = sqlx::query(
+        "SELECT mtu_start, mtu_minutes, avg_ct_kwh FROM epex_prices \
+         WHERE price_date = $1 ORDER BY mtu_start ASC",
+    )
+    .bind(date)
+    .fetch_all(pool)
+    .await
+    .context("fetch_epex_day")?;
 
     if rows.is_empty() {
         return Ok(None);
     }
-    let prices = rows
-        .iter()
-        .filter_map(|r| r.try_get::<Decimal, _>("avg_ct_kwh").ok())
-        .collect::<Vec<_>>();
-    Ok(Some(prices))
+
+    let mut out = Vec::with_capacity(rows.len() * 4);
+    for r in &rows {
+        let mtu_start: OffsetDateTime = r.try_get("mtu_start")?;
+        let mtu_minutes: i16 = r.try_get("mtu_minutes")?;
+        let price: Decimal = r.try_get("avg_ct_kwh")?;
+        let quarters = i64::from(mtu_minutes).max(15) / 15; // 1 (15-min) or 4 (60-min)
+        for q in 0..quarters {
+            out.push(EpexPricePoint {
+                mtu_start: mtu_start + time::Duration::minutes(15 * q),
+                avg_ct_kwh: price,
+            });
+        }
+    }
+    Ok(Some(out))
 }
 
 /// Average EPEX price for a month (ct/kWh).

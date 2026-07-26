@@ -228,10 +228,11 @@ pub enum PositionCategory {
     ///
     /// ## Legal basis
     ///
-    /// §42c EnWG (Energiegemeinschaften, effective 01.01.2024):
-    /// sharing communities may distribute locally generated electricity to
-    /// participants within the same low-voltage grid area. The LF bills the
-    /// full consumption and credits the sharing allocation separately.
+    /// §42c EnWG (Energy Sharing, EnWG-Novelle BGBl. 2025 I Nr. 347; phased from
+    /// 01.06.2026 within one Bilanzkreis to 01.06.2028 across adjacent Bilanzkreise
+    /// of the same Regelzone): sharing communities may distribute locally generated
+    /// electricity to participants. The LF bills the full consumption and credits
+    /// the sharing allocation separately.
     EnergyShare,
 }
 

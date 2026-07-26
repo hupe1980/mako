@@ -1,7 +1,7 @@
 title: mako — German Energy Market Platform in Rust
 description: >-
   Full-stack German energy market communication (BDEW MaKo / EDI@Energy) in Rust.
-  17 production microservices covering EDIFACT parsing (all 247 Prüfidentifikatoren),
+  17 production microservices covering EDIFACT parsing (all 346 Prüfidentifikatoren),
   event-sourced MaKo process runtime, NNE/EEG settlement, retail billing, SEPA payments,
   AS4 transport, AI orchestration, and BO4E ERP webhooks. FV2026-10-01 compliant.
 tagline: "Full-stack German energy market communication in Rust — EDIFACT · 55+ MaKo workflows · NNE/EEG settlement · 17 microservices"

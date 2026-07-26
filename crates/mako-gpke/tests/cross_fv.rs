@@ -204,6 +204,7 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
         transaktionsgrund: None,
+        ist_erzeugende_marktlokation: false,
         fallgruppe: None,
     })
     .await
@@ -427,6 +428,7 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
         transaktionsgrund: None,
+        ist_erzeugende_marktlokation: false,
         fallgruppe: None,
     })
     .await

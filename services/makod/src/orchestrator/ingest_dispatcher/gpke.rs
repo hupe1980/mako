@@ -157,6 +157,34 @@ impl EdifactIngestDispatcher {
                     reason: "pid_not_in_spawn_table",
                 }),
             },
+            // PID 55010 (Anfrage zur Beendigung der Zuordnung, NB → LFA) — GPKE
+            // Teil 2. LFA-role makod receives 55010, answers 55011/55012.
+            "gpke-beendigung-zuordnung" => match pid {
+                55010 => {
+                    let cmd = adapters::gpke_beendigung_zuordnung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    let process_due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
+                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
+                    self.spawn_or_resume::<GpkeBeendigungZuordnungWorkflow>(
+                        malo_id.as_str(),
+                        "gpke-beendigung-zuordnung",
+                        cmd,
+                        &fv,
+                        &[
+                            (
+                                mako_gpke::BEENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL,
+                                process_due_at,
+                            ),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "gpke-beendigung-zuordnung",
+                    reason: "pid_not_in_spawn_table",
+                }),
+            },
             // ── GPKE Ersatz-/Grundversorgung (§36/§38 EnWG) ─────────────────
             //
             // PID 55013 (Anmeldung/Zuordnung EOG, NB → LF) — spawn the E/G
@@ -193,6 +221,37 @@ impl EdifactIngestDispatcher {
                     reason: "pid_not_in_spawn_table",
                 }),
             },
+            // ── GPKE Teil 4 Stammdatenänderung ──────────────────────────────
+            // Änderung PIDs spawn a Berechtigter process (apply + Rückmeldung);
+            // Rückmeldung PIDs resume a change we initiated. Deadlines (APERAK
+            // 45-min + 2-WT Rückmeldung window) are registered by the workflow.
+            "gpke-stammdatenaenderung" => {
+                let malo_id = extract_malo_from_msg(msg);
+                if mako_gpke::is_aenderung_pid(pid) {
+                    let cmd = adapters::gpke_stammdaten_registry().dispatch(raw, &fv)?;
+                    self.spawn_or_resume::<mako_gpke::GpkeStammdatenaenderungWorkflow>(
+                        malo_id.as_str(),
+                        "gpke-stammdatenaenderung",
+                        cmd,
+                        &fv,
+                        &[],
+                    )
+                    .await
+                } else if mako_gpke::is_rueckmeldung_pid(pid) {
+                    let cmd = adapters::gpke_stammdaten_registry().dispatch(raw, &fv)?;
+                    self.resume_by_malo::<mako_gpke::GpkeStammdatenaenderungWorkflow>(
+                        malo_id.as_str(),
+                        "gpke-stammdatenaenderung",
+                        cmd,
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "gpke-stammdatenaenderung",
+                        reason: "pid_not_in_spawn_table",
+                    })
+                }
+            }
             // ── GPKE LF-Anmeldung — LF side ─────────────────────────────────
             // PIDs 55003–55006, 55017, 55018: ANTWORT from NB — resume.
             "gpke-lf-anmeldung" => match pid {

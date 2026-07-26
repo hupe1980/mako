@@ -42,9 +42,9 @@ use time::OffsetDateTime;
 // Reuse the shared vocabulary from the MSB side so both directions speak the
 // same PIDs, Fristen and location model.
 pub use super::wertebestellung::{
-    ABBESTELLUNG_PID, ABLEHNUNG_PID, ANFRAGE_PID, ANGEBOT_PID, ANTWORT_FRIST_WT, BESTAETIGUNG_PID,
-    BESTELLUNG_PID, Lokationsebene, STORNIERUNG_PID, STORNO_ABLEHNUNG_PID, STORNO_BESTAETIGUNG_PID,
-    Zustellquittung,
+    ABBESTELLUNG_PID, ABLEHNUNG_PID, ANFRAGE_PID, ANGEBOT_PID, ANTWORT_FRIST_WT,
+    BEENDIGUNG_MSB_PID, BESTAETIGUNG_PID, BESTELLUNG_PID, Lokationsebene, STORNIERUNG_PID,
+    STORNO_ABLEHNUNG_PID, STORNO_BESTAETIGUNG_PID, STS_BEENDET, Zustellquittung,
 };
 
 /// Workflow name used for PID routing and `WorkflowId` construction.
@@ -148,6 +148,15 @@ pub enum EsaWertebestellungEvent {
     },
     /// First values arrived; the Stornierung window closes.
     LieferungBegonnen,
+    /// IFTSTA 21042 received (UC 4.4) — the MSB has ended the value delivery.
+    BeendetDurchMsb {
+        /// Reference of the inbound IFTSTA.
+        message_ref: MessageRef,
+        /// Date the MSB stops delivering.
+        beendigung_zum: OffsetDateTime,
+        /// Reason communicated by the MSB, when present.
+        reason: Option<String>,
+    },
     /// A regulatory window elapsed without the awaited answer.
     FristVersaeumt {
         /// Deadline label that fired.
@@ -171,6 +180,7 @@ impl EventPayload for EsaWertebestellungEvent {
             Self::AbbestellungBestaetigt { .. } => "EsaWertebestellungAbbestellungBestaetigt",
             Self::AbbestellungAbgelehnt { .. } => "EsaWertebestellungAbbestellungAbgelehnt",
             Self::LieferungBegonnen => "EsaWertebestellungLieferungBegonnen",
+            Self::BeendetDurchMsb { .. } => "EsaWertebestellungBeendetDurchMsb",
             Self::FristVersaeumt { .. } => "EsaWertebestellungFristVersaeumt",
         }
     }
@@ -354,6 +364,16 @@ pub enum EsaWertebestellungCommand {
         /// Trigger — typically `einwilligung_widerrufen`.
         grund: String,
     },
+    /// IFTSTA 21042 received (UC 4.4) — the MSB has ended the value delivery
+    /// (STS 4405 = 105 „beendet"). Terminal; needs no ESA answer.
+    ReceiveBeendigungDurchMsb {
+        /// Reference of the inbound IFTSTA.
+        message_ref: MessageRef,
+        /// Date the MSB stops delivering.
+        beendigung_zum: OffsetDateTime,
+        /// Reason communicated by the MSB, when present.
+        reason: Option<String>,
+    },
     /// Mark the first values as delivered, closing the Stornierung window.
     MarkLieferungBegonnen,
     /// A registered deadline fired.
@@ -461,6 +481,12 @@ impl Workflow for EsaWertebestellungWorkflow {
             },
             E::AbbestellungBestaetigt { .. } => match state {
                 S::AbbestellungGesendet(data) => S::Beendet(data),
+                other => other,
+            },
+            // UC 4.4: the MSB ended the delivery — terminal from any
+            // delivery-authorised state.
+            E::BeendetDurchMsb { .. } => match state {
+                S::Beliefert { data, .. } | S::AbbestellungGesendet(data) => S::Beendet(data),
                 other => other,
             },
             // A refused Abbestellung leaves delivery running.
@@ -764,6 +790,23 @@ impl Workflow for EsaWertebestellungWorkflow {
                     return Err(WorkflowError::invalid_state("Beliefert", state.label()));
                 }
                 Ok(WorkflowOutput::events(vec![E::LieferungBegonnen]))
+            }
+
+            C::ReceiveBeendigungDurchMsb {
+                message_ref,
+                beendigung_zum,
+                reason,
+            } => {
+                // UC 4.4: only a delivery-authorised process can be ended by the
+                // MSB. Idempotent if already Beendet.
+                if !state.beliefert() && !matches!(state, S::Beendet(_)) {
+                    return Err(WorkflowError::invalid_state("Beliefert", state.label()));
+                }
+                Ok(WorkflowOutput::events(vec![E::BeendetDurchMsb {
+                    message_ref,
+                    beendigung_zum,
+                    reason,
+                }]))
             }
 
             C::TimeoutExpired { label, .. } => {

@@ -97,7 +97,7 @@ graph TB
 | 4 | **Tariff unit price** within tolerance — ToU-aware: each INVOIC position’s text is matched against the `zaehlzeitregister` band code of `zeitvariablePreispositionen` entries. Flat positions fall back to `Preisstaffel` prices. **PID 31009:** uses `PreisblattMessung`. **Stornorechnungen: skipped** (`ist_storno=true` carries negated original amounts, not tariff positions) | all (not Storno) | `Warn` or `Dispute` |
 | 5 | **Tariff entry found** in price sheet | all (not Storno) | `Warn` or `Dispute` |
 | 6 | **MMM settlement price** — for Strom MMM PIDs (31002/31005): MMMA Strom reference; for Gas MMM PIDs (31007/31008): MMMA Gas reference (THE) | 31002/31005/31007/31008 | `Warn` or `Dispute` |
-| 6 | **AufAbschlag discount validation** — for PID 31009: every negative position must match a contracted `AufAbschlag` name from `PreisblattMessung.auf_abschlaege` (WiM PRICAT 27001–27003). AufAbschlag names are now fetched from `marktd` and passed to `check_msb_rechnung_with_aufabschlaege` | 31009 | `Dispute` |
+| 6 | **AufAbschlag discount validation** — for PID 31009: every negative position must match a contracted `AufAbschlag` name from `PreisblattMessung.auf_abschlaege` (WiM PRICAT 27001–27003). AufAbschlag names are fetched from `marktd` and passed to `check_msb_rechnung_with_aufabschlaege` | 31009 | `Dispute` |
 | 1 | Billing period validity (boundaries consistent, in scope) | all | `Dispute` |
 | 2 | Position arithmetic (unit price × quantity = line net; tolerance 1%) | all | `Dispute` |
 | 3 | Document total (sum of positions = Gesamtnetto; tolerance 1%) | all | `Dispute` |

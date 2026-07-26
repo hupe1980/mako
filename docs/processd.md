@@ -176,13 +176,29 @@ de.markt.versorgung.gap-detected           (marktd: 55005/44005 completed,
   │                                         no announced successor)
   ├─ record case in eog_activations         (idempotent per MaLo)
   ├─ [eog.auto_activate] GET /api/v1/grundversorger/{nb_mp_id}?sparte=…
-  │    └─ found → gpke.eog.anmelden → makod → UTILMD 55013 to the E/G
+  │    └─ found → Strom: gpke.eog.anmelden → UTILMD 55013;
+  │             Gas:   geli.eog.anmelden → UTILMD G 44013 → makod → E/G
   │       (Zuordnungsbeginn = day after Lieferende — retroactive allowed)
   │    └─ missing → case stays `detected`; operator provisions the
   │       §36 Abs. 2 Feststellung and re-triggers
   └─ de.markt.versorgung.eog-begonnen → case `active`
        (eog_art = Ersatz-/Grundversorgung as classified by the E/G in 55014;
         eog_seit = Zuordnungsbeginn)
+```
+
+The case lifecycle — the states exposed by `GET /api/v1/eog?status=…`:
+
+```mermaid
+stateDiagram-v2
+    [*] --> detected: gap-detected (55005/44005, no successor)
+    detected --> detected: Grundversorger missing (operator provisions §36 Abs. 2)
+    detected --> angemeldet: eog.anmelden → UTILMD 55013 / G 44013
+    angemeldet --> active: E/G Bestätigung 55014 (eog-begonnen)
+    angemeldet --> detected: E/G Ablehnung 55015 (EBD E_0615)
+    active --> expiring: §38 timer, warn_days_before_expiry ahead
+    expiring --> expired: three-month maximum reached (§38 Abs. 4 S. 1)
+    active --> [*]: Grundversorgung (no statutory maximum)
+    expired --> [*]: operator follow-up (Grundversorgung regime / vertragliche Ersatzbelieferung / Anschlussunterbrechung)
 ```
 
 **§38 timer.** A daily worker enforces the three-month maximum

@@ -268,7 +268,7 @@ Per-key deduplication for AS4 inbound messages. `accept` returns `true` only the
 let is_new = inbox.accept(tenant, &message_id, ttl).await?;
 ```
 
-Within a single process the store uses a per-key `DashMap<_, Arc<Mutex<()>>>` to serialise concurrent `accept` calls. Across multiple `makod` instances a distributed lock is required (not yet implemented).
+Within a single process the store uses a per-key `DashMap<_, Arc<Mutex<()>>>` to serialise concurrent `accept` calls. Multi-instance deployments partition ownership so that each aggregate key is driven by exactly one `makod` instance; the optimistic-concurrency `VersionConflict` check remains the backstop against concurrent appends.
 
 ---
 
@@ -337,16 +337,23 @@ a fired deadline into a command:
 impl Workflow for SupplierChangeWorkflow {
     // …
 
-    fn on_deadline(label: &str, state: &Self::State) -> Option<Self::Command> {
-        match label {
-            "aperak-window" if !state.aperak_sent => {
-                Some(SupplierChangeCommand::SendAperakTimeout)
+    fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
+        match (deadline.label(), state) {
+            (APERAK_STROM_WINDOW_LABEL, SupplierChangeState::Received(_)) => {
+                Some(SupplierChangeCommand::TimeoutExpired {
+                    deadline_id: deadline.deadline_id(),
+                    label: deadline.label().into(),
+                })
             }
             _ => None,
         }
     }
 }
 ```
+
+`Deadline` carries both a `deadline_id()` (the scheduler's handle) and a
+`label()` (the window it belongs to, e.g. `APERAK_STROM_WINDOW_LABEL`); the
+command echoes both so `apply` can clear exactly the deadline that fired.
 
 The `DeadlineScheduler` calls `Process::execute_timeout` every 30 seconds on
 each overdue deadline. The workflow produces an APERAK reject and appends it to
@@ -571,7 +578,7 @@ Partners are managed at runtime via the REST admin API — see
 
 | Crate | Process family | Key inbound PIDs | APERAK Frist |
 |---|---|---|---|
-| `mako-gpke` | GPKE — Lieferbeginn/-ende Strom, ORDERS Sperrung (NB role), INVOIC billing, Konfiguration | 55001–55002, 55016–55018, 55555, 17115–17117 (NB inbound), 31001–31008, 17134/17135, 19001/19002 | **24 wall-clock hours** |
+| `mako-gpke` | GPKE — Lieferbeginn/-ende Strom, NB-Abmeldeanfrage (Beendigung der Zuordnung), Ersatz-/Grundversorgung, ORDERS Sperrung (NB role), INVOIC billing, Konfiguration | 55001–55002, 55010 (55011/55012 out), 55013–55015, 55016–55018, 55555, 17115–17117 (NB inbound), 31001–31008, 17134/17135, 19001/19002 | **24 wall-clock hours** |
 | `mako-wim` | WiM Strom — Messstellenwechsel, INSRPT Strom, WiM-Rechnung | 55039, 55042, 55051, 55168, 19001/19002, 23001/23003/23004/23008 | **5 Werktage** |
 | `mako-geli-gas` | GeLi Gas — Lieferbeginn/-ende Gas, Gas Sperrung (LF role), Gas Datenabruf, INVOIC 31011 (AWH Sperrprozesse Gas) | 44001–44021, 17103, 17104, 19103, 19104, 19116, 19117, 19128, 19129, 31011 | **10 Werktage** |
 | `mako-wim-gas` | WiM Gas — Messstellenwechsel Gas, INSRPT Gas, WiM-Rechnung Gas | 44039–44053, 44168–44170, 23005, 23009, 31003, 31004 | **10 Werktage** |

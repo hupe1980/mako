@@ -77,6 +77,13 @@ pub mod mako {
 pub mod markt {
     /// Marktlokation stammdaten changed.
     pub const MALO_UPDATED: &str = "de.markt.malo.updated";
+    /// A UTILMD Stammdatenänderung (GPKE Teil 4 / GeLi Gas) was applied to a
+    /// MaLo's typed columns — carries the applied `patch` for ERP audit.
+    pub const MALO_STAMMDATEN_GEAENDERT: &str = "de.markt.malo.stammdaten-geaendert";
+    /// Object-generic Stammdatenänderung applied to a non-MaLo master-data object
+    /// (MeLo/NeLo/Tranche). The subject is the object's location id; the payload
+    /// carries the `objekt` marker.
+    pub const STAMMDATEN_GEAENDERT: &str = "de.markt.stammdaten.geaendert";
     /// Messlokation stammdaten changed.
     pub const MELO_UPDATED: &str = "de.markt.melo.updated";
     /// Marktpartner record changed.
@@ -329,12 +336,17 @@ pub mod gabi {
 }
 
 /// Process-observability events (`de.obs.*`).
+///
+/// Produced by `obsd`'s background sweep workers (`services/obsd/src/worker.rs`)
+/// and consumed by `agentd` (`compliance-agent`, `deadline-alert-agent`).
 pub mod obs {
-    /// ⚠ phantom: subscribed by agentd (`stp-parity-agent`), no emitter
-    /// yet (tracked in ROADMAP). STP parity mismatch alert.
+    /// §20 EnWG STP parity-gap alert: the completion-rate gap between affiliate-
+    /// and non-affiliate-initiated Anmeldungen exceeds the configured threshold.
+    /// Emitted by obsd's parity sweep; consumed by agentd (`compliance-agent`).
     pub const STP_PARITY_ALERT: &str = "de.obs.stp.parity.alert";
-    /// ⚠ phantom: subscribed by agentd (`deadline-agent`), no emitter yet
-    /// (tracked in ROADMAP). Process deadline approaching.
+    /// A tracked process is approaching its regulatory response deadline (within
+    /// the warn window). Emitted per process by obsd's deadline sweep; consumed
+    /// by agentd (`deadline-alert-agent`).
     pub const DEADLINE_APPROACHING: &str = "de.obs.deadline.approaching";
 }
 
@@ -363,6 +375,7 @@ pub fn all() -> &'static [&'static str] {
         mako::NETZZUGANG_UEBERMITTLUNGSBEDARF,
         // de.markt.*
         markt::MALO_UPDATED,
+        markt::MALO_STAMMDATEN_GEAENDERT,
         markt::MELO_UPDATED,
         markt::PARTNER_UPDATED,
         markt::NB_CONTRACT_UPDATED,

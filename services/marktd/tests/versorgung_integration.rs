@@ -236,3 +236,263 @@ async fn preisblatt_is_read_by_nb_mp_id_without_a_tenant_column() {
     .expect("the query must run — the old `WHERE tenant=$1` referenced a missing column");
     assert!(row.is_some(), "the price sheet is found by nb_mp_id");
 }
+
+// ── Per-MeLo dated MSB timeline (WiM Teil 2 UC 4.1.1) ─────────────────────────
+
+#[tokio::test]
+#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+async fn melo_msb_timeline_resolves_the_responsible_msb_at_a_past_date() {
+    use mako_markt::repository::MeloMsbRepository as _;
+    use marktd::pg::PgMeloMsbRepository;
+    use time::macros::date;
+
+    let Some(pool) = test_pool("melo_msb").await else {
+        return;
+    };
+    let tenant = "9900000000002";
+    let melo = "DE0001112223334445556667778889990";
+
+    // The FK requires the MeLo to exist.
+    sqlx::query("INSERT INTO melo (melo_id, data) VALUES ($1, '{}'::jsonb)")
+        .bind(melo)
+        .execute(&pool)
+        .await
+        .expect("seed melo");
+
+    let repo = PgMeloMsbRepository::new(pool.clone());
+
+    // MSB-A from 2024-01-01, then MSB-B from 2025-06-01 (closes A).
+    repo.assign_msb(tenant, melo, "9900000000010", date!(2024 - 01 - 01))
+        .await
+        .expect("assign A");
+    repo.assign_msb(tenant, melo, "9900000000011", date!(2025 - 06 - 01))
+        .await
+        .expect("assign B");
+
+    // Point-in-time resolution.
+    assert_eq!(
+        repo.find_msb_at(tenant, melo, date!(2024 - 06 - 01))
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("9900000000010"),
+        "mid-2024 → MSB-A"
+    );
+    assert_eq!(
+        repo.find_msb_at(tenant, melo, date!(2025 - 07 - 01))
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("9900000000011"),
+        "mid-2025 → MSB-B"
+    );
+    assert_eq!(
+        repo.find_msb_at(tenant, melo, date!(2025 - 06 - 01))
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("9900000000011"),
+        "the switch date itself → MSB-B (valid_from inclusive)"
+    );
+    assert!(
+        repo.find_msb_at(tenant, melo, date!(2023 - 01 - 01))
+            .await
+            .unwrap()
+            .is_none(),
+        "before any assignment → none"
+    );
+
+    // History is newest-first with the older row closed at the switch date.
+    let hist = repo.history(tenant, melo).await.unwrap();
+    assert_eq!(hist.len(), 2);
+    assert_eq!(hist[0].msb_mp_id, "9900000000011");
+    assert!(
+        hist[0].valid_to.is_none(),
+        "current assignment is open-ended"
+    );
+    assert_eq!(hist[1].msb_mp_id, "9900000000010");
+    assert_eq!(hist[1].valid_to, Some(date!(2025 - 06 - 01)));
+}
+
+// ── BO4E Bilanzierung — first-class temporal resource (BO #3) ─────────────────
+
+#[tokio::test]
+#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+async fn bilanzierung_temporal_resource_resolves_by_point_in_time() {
+    use mako_markt::repository::{BilanzierungRecord, BilanzierungRepository as _};
+    use marktd::pg::PgBilanzierungRepository;
+    use time::macros::datetime;
+
+    let Some(pool) = test_pool("bilanzierung").await else {
+        return;
+    };
+    let tenant = "9900000000002";
+    let malo = "51238696780";
+
+    let mk = |beginn, ende, bk: &str| BilanzierungRecord {
+        malo_id: malo.to_owned(),
+        bilanzierungsbeginn: beginn,
+        bilanzierungsende: ende,
+        bilanzkreis: Some(bk.to_owned()),
+        aggregationsverantwortung: Some("NB".to_owned()),
+        prognosegrundlage: Some("SLP".to_owned()),
+        fallgruppenzuordnung: None,
+        data: serde_json::json!({
+            "_typ": "BILANZIERUNG",
+            "marktlokationsId": malo,
+            "bilanzierungsbeginn": beginn.format(&time::format_description::well_known::Rfc3339).unwrap(),
+            "bilanzkreis": bk,
+        }),
+        bo4e_version: "v202607.0.0".to_owned(),
+        tenant: tenant.to_owned(),
+        updated_at: time::OffsetDateTime::now_utc(),
+    };
+
+    let repo = PgBilanzierungRepository::new(pool.clone());
+    // BK "A" valid 2024-01-01 .. 2025-06-01, then BK "B" open-ended.
+    repo.upsert(&mk(
+        datetime!(2024-01-01 00:00 UTC),
+        Some(datetime!(2025-06-01 00:00 UTC)),
+        "11YWA-------BK-A",
+    ))
+    .await
+    .expect("upsert A");
+    repo.upsert(&mk(
+        datetime!(2025-06-01 00:00 UTC),
+        None,
+        "11YWB-------BK-B",
+    ))
+    .await
+    .expect("upsert B");
+
+    async fn bk_at(
+        repo: &PgBilanzierungRepository,
+        tenant: &str,
+        malo: &str,
+        dt: time::OffsetDateTime,
+    ) -> Option<String> {
+        repo.find_at(tenant, malo, dt)
+            .await
+            .unwrap()
+            .and_then(|r| r.bilanzkreis)
+    }
+    assert_eq!(
+        bk_at(&repo, tenant, malo, datetime!(2024-06-01 00:00 UTC))
+            .await
+            .as_deref(),
+        Some("11YWA-------BK-A")
+    );
+    assert_eq!(
+        bk_at(&repo, tenant, malo, datetime!(2025-07-01 00:00 UTC))
+            .await
+            .as_deref(),
+        Some("11YWB-------BK-B")
+    );
+    assert_eq!(
+        bk_at(&repo, tenant, malo, datetime!(2025-06-01 00:00 UTC))
+            .await
+            .as_deref(),
+        Some("11YWB-------BK-B"),
+        "the switch instant resolves to the newer Bilanzierung (beginn inclusive)"
+    );
+    assert!(
+        bk_at(&repo, tenant, malo, datetime!(2023-01-01 00:00 UTC))
+            .await
+            .is_none(),
+        "before any Bilanzierung → none"
+    );
+
+    // Re-upsert on the same beginn overwrites (idempotent natural key).
+    repo.upsert(&mk(
+        datetime!(2025-06-01 00:00 UTC),
+        None,
+        "11YWC-------BK-C",
+    ))
+    .await
+    .expect("re-upsert B");
+    let hist = repo.history(tenant, malo).await.unwrap();
+    assert_eq!(hist.len(), 2, "still two rows after same-key re-upsert");
+    assert_eq!(hist[0].bilanzkreis.as_deref(), Some("11YWC-------BK-C"));
+    assert_eq!(
+        hist[1].bilanzierungsende,
+        Some(datetime!(2025-06-01 00:00 UTC))
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+async fn bilanzierung_write_derives_the_malo_fallgruppe_column() {
+    use mako_markt::repository::{BilanzierungRecord, BilanzierungRepository as _};
+    use marktd::pg::PgBilanzierungRepository;
+    use time::macros::datetime;
+
+    let Some(pool) = test_pool("biz_derive").await else {
+        return;
+    };
+    let tenant = "9900000000002";
+    let malo = "51238696780";
+
+    // The MaLo (Marktlokation) must exist for the derive to land.
+    sqlx::query("INSERT INTO malo (malo_id, sparte, data) VALUES ($1, 'GAS', '{}'::jsonb)")
+        .bind(malo)
+        .execute(&pool)
+        .await
+        .expect("seed malo");
+
+    let repo = PgBilanzierungRepository::new(pool.clone());
+    // A currently-effective Bilanzierung carrying the GaBi Fallgruppe.
+    repo.upsert(&BilanzierungRecord {
+        malo_id: malo.to_owned(),
+        bilanzierungsbeginn: datetime!(2024-01-01 00:00 UTC),
+        bilanzierungsende: None,
+        bilanzkreis: Some("11YWBK-------X".to_owned()),
+        aggregationsverantwortung: Some("NB".to_owned()),
+        prognosegrundlage: Some("SLP".to_owned()),
+        fallgruppenzuordnung: Some("GABI_RLM_MIT_TAGESBAND".to_owned()),
+        data: serde_json::json!({"_typ": "BILANZIERUNG", "marktlokationsId": malo}),
+        bo4e_version: "v202607.0.0".to_owned(),
+        tenant: tenant.to_owned(),
+        updated_at: time::OffsetDateTime::now_utc(),
+    })
+    .await
+    .expect("upsert");
+
+    // The authoritative Bilanzierung derived the denormalised malo column.
+    let fg: Option<String> = sqlx::query_scalar("SELECT fallgruppe FROM malo WHERE malo_id = $1")
+        .bind(malo)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        fg.as_deref(),
+        Some("GABI_RLM_MIT_TAGESBAND"),
+        "writing a currently-effective Bilanzierung derives malo.fallgruppe"
+    );
+
+    // A NOT-yet-effective (future) Bilanzierung must NOT overwrite the current value.
+    repo.upsert(&BilanzierungRecord {
+        malo_id: malo.to_owned(),
+        bilanzierungsbeginn: datetime!(2099-01-01 00:00 UTC),
+        bilanzierungsende: None,
+        bilanzkreis: None,
+        aggregationsverantwortung: None,
+        prognosegrundlage: None,
+        fallgruppenzuordnung: Some("GABI_RLM_OHNE_TAGESBAND".to_owned()),
+        data: serde_json::json!({"_typ": "BILANZIERUNG"}),
+        bo4e_version: "v202607.0.0".to_owned(),
+        tenant: tenant.to_owned(),
+        updated_at: time::OffsetDateTime::now_utc(),
+    })
+    .await
+    .expect("upsert future");
+    let fg2: Option<String> = sqlx::query_scalar("SELECT fallgruppe FROM malo WHERE malo_id = $1")
+        .bind(malo)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        fg2.as_deref(),
+        Some("GABI_RLM_MIT_TAGESBAND"),
+        "a future-dated Bilanzierung does not touch the current derived value"
+    );
+}

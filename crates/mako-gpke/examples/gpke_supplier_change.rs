@@ -195,6 +195,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             bilanzierungsgebiet: None,
             bilanzierungsmethode: None,
             transaktionsgrund: None,
+            ist_erzeugende_marktlokation: false,
             fallgruppe: None,
         })
         .await?;
@@ -380,6 +381,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             bilanzierungsgebiet: None,
             bilanzierungsmethode: None,
             transaktionsgrund: None,
+            ist_erzeugende_marktlokation: false,
             fallgruppe: None,
         })
         .await

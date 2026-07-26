@@ -3,12 +3,28 @@
 //! Uses a recursive CTE for graph traversal (`find_graph`), enabling a single
 //! query to return the full MaLo → MeLo → NeLo → SR/TR location graph.
 
+use std::str::FromStr;
+
 use mako_markt::{
     error::MdmError,
     repository::{LokationszuordnungEdge, LokationszuordnungRepository},
 };
+use rubo4e::current::Lokationstyp;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
+
+/// Decode a `Lokationstyp` from its canonical BO4E code stored in a TEXT column.
+///
+/// rubo4e's `sqlx` feature is not enabled workspace-wide, so the graph bridges
+/// the enum at the SQL boundary via its strum `FromStr`/`IntoStaticStr` impls.
+fn typ_from_str(s: String) -> Result<Lokationstyp, sqlx::Error> {
+    Lokationstyp::from_str(&s).map_err(|e| sqlx::Error::ColumnDecode {
+        index: "typ".into(),
+        source: Box::new(std::io::Error::other(format!(
+            "invalid Lokationstyp {s:?}: {e}"
+        ))),
+    })
+}
 
 /// PostgreSQL-backed [`LokationszuordnungRepository`].
 #[derive(Clone, Debug)]
@@ -38,9 +54,9 @@ fn map_edge(
         id,
         tenant: row.try_get("tenant")?,
         von_id: row.try_get("von_id")?,
-        von_typ: row.try_get("von_typ")?,
+        von_typ: typ_from_str(row.try_get("von_typ")?)?,
         nach_id: row.try_get("nach_id")?,
-        nach_typ: row.try_get("nach_typ")?,
+        nach_typ: typ_from_str(row.try_get("nach_typ")?)?,
         valid_from: row.try_get("valid_from").unwrap_or(None),
         valid_to: row.try_get("valid_to").unwrap_or(None),
         lokationsbuendelcode: row.try_get("lokationsbuendelcode").unwrap_or(None),
@@ -55,13 +71,16 @@ impl LokationszuordnungRepository for PgLokationszuordnungRepository {
         &self,
         tenant: &str,
         von_id: &str,
-        von_typ: &str,
+        von_typ: Lokationstyp,
         nach_id: &str,
-        nach_typ: &str,
+        nach_typ: Lokationstyp,
         valid_from: Option<time::Date>,
         valid_to: Option<time::Date>,
         data: serde_json::Value,
     ) -> Result<Uuid, MdmError> {
+        // Bridge the typed enum to its canonical BO4E code for the TEXT column.
+        let von_typ: &'static str = von_typ.into();
+        let nach_typ: &'static str = nach_typ.into();
         // Use two separate upsert paths matching the two partial unique indexes:
         // - open-ended edges (valid_from IS NULL): ON CONFLICT (tenant, von_id, nach_id) WHERE valid_from IS NULL
         // - dated edges: ON CONFLICT (tenant, von_id, nach_id, valid_from) WHERE valid_from IS NOT NULL

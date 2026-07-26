@@ -967,8 +967,8 @@ fn dynamic_strom_two_intervals_produce_positive_brutto() {
         },
     ];
     let mut prices = HashMap::new();
-    prices.insert((2026i32, 1u8, 1u8, 14u8), dec!(25)); // CET hour 14
-    prices.insert((2026i32, 1u8, 1u8, 15u8), dec!(30)); // CET hour 15
+    prices.insert(time::macros::datetime!(2026-01-01 13:00 UTC), dec!(25)); // 14:00 CET MTU
+    prices.insert(time::macros::datetime!(2026-01-01 14:00 UTC), dec!(30)); // 15:00 CET MTU
     let r = bill(
         &tariff,
         Quantities {
@@ -989,6 +989,101 @@ fn dynamic_strom_two_intervals_produce_positive_brutto() {
         .iter()
         .any(|p| p.description.contains("EPEX") || p.description.contains("41a"));
     assert!(has_epex, "EPEX position must appear in dynamic billing");
+}
+
+/// §41a 15-min MTU: two quarter-hours **within the same hour** must be billed
+/// at their own distinct spot prices — the pre-2025-10 hourly truncation would
+/// have collapsed both to one price.
+#[test]
+fn dynamic_strom_quarter_hour_prices_are_distinct_within_an_hour() {
+    use std::collections::HashMap;
+    let tariff = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0}"#);
+    // Four quarter-hours of the 13:00–14:00 UTC hour, 1 kWh each.
+    let intervals: Vec<DynamicInterval> = [0i64, 15, 30, 45]
+        .iter()
+        .map(|m| DynamicInterval {
+            timestamp_utc: time::macros::datetime!(2026-01-01 13:00 UTC)
+                + time::Duration::minutes(*m),
+            kwh: dec!(1),
+        })
+        .collect();
+    // Distinct price per quarter-hour: 10, 20, 30, 40 ct/kWh (avg 25).
+    let mut prices = HashMap::new();
+    prices.insert(time::macros::datetime!(2026-01-01 13:00 UTC), dec!(10));
+    prices.insert(time::macros::datetime!(2026-01-01 13:15 UTC), dec!(20));
+    prices.insert(time::macros::datetime!(2026-01-01 13:30 UTC), dec!(30));
+    prices.insert(time::macros::datetime!(2026-01-01 13:45 UTC), dec!(40));
+    let r = bill(
+        &tariff,
+        Quantities {
+            dynamic_intervals: intervals,
+            dynamic_epex_prices: prices,
+            ..Default::default()
+        },
+    );
+    // Weighted average = (10+20+30+40)/4 = 25 ct/kWh over 4 kWh = 1.00 EUR net
+    // energy. The Arbeitspreis position label carries the ∅ ct/kWh.
+    let epex = r
+        .positions
+        .iter()
+        .find(|p| p.description.contains("Arbeitspreis EPEX"))
+        .expect("EPEX Arbeitspreis position");
+    assert!(
+        epex.description.contains("25.0000"),
+        "quarter-hour average must be 25 ct/kWh, got: {}",
+        epex.description
+    );
+}
+
+/// §41a: the customer price is the (floored) spot price **plus** the supplier's
+/// Arbeitspreis-Aufschlag — `auf_abschlag_ct_per_kwh` must be applied.
+#[test]
+fn dynamic_strom_applies_arbeitspreis_aufschlag() {
+    use std::collections::HashMap;
+    let intervals = [DynamicInterval {
+        timestamp_utc: time::macros::datetime!(2026-01-01 12:00 UTC),
+        kwh: dec!(1),
+    }];
+    let mut prices = HashMap::new();
+    prices.insert(time::macros::datetime!(2026-01-01 12:00 UTC), dec!(20)); // spot 20 ct
+
+    let plain = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0}"#);
+    let with_aufschlag = j(
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0,"auf_abschlag_ct_per_kwh":5}"#,
+    );
+    let r_plain = bill(
+        &plain,
+        Quantities {
+            dynamic_intervals: intervals.to_vec(),
+            dynamic_epex_prices: prices.clone(),
+            ..Default::default()
+        },
+    );
+    let r_auf = bill(
+        &with_aufschlag,
+        Quantities {
+            dynamic_intervals: intervals.to_vec(),
+            dynamic_epex_prices: prices.clone(),
+            ..Default::default()
+        },
+    );
+    // 5 ct/kWh Aufschlag on 1 kWh = 0.05 EUR net; brutto rises by 0.05 × 1.19.
+    assert!(
+        r_auf.brutto_eur > r_plain.brutto_eur,
+        "Aufschlag must raise the dynamic invoice: {} vs {}",
+        r_auf.brutto_eur,
+        r_plain.brutto_eur
+    );
+    let auf_epex = r_auf
+        .positions
+        .iter()
+        .find(|p| p.description.contains("Arbeitspreis EPEX"))
+        .expect("EPEX Arbeitspreis position");
+    assert!(
+        auf_epex.description.contains("25.0000"),
+        "spot 20 + Aufschlag 5 = 25 ct/kWh, got: {}",
+        auf_epex.description
+    );
 }
 
 #[test]
@@ -1610,9 +1705,9 @@ fn dynamic_strom_negative_epex_reduces_brutto() {
         kwh: dec!(1),
     }];
     let mut prices_positive = HashMap::new();
-    prices_positive.insert((2026i32, 1u8, 1u8, 13u8), dec!(20)); // +20 ct/kWh
+    prices_positive.insert(time::macros::datetime!(2026-01-01 12:00 UTC), dec!(20)); // +20 ct/kWh
     let mut prices_negative = HashMap::new();
-    prices_negative.insert((2026i32, 1u8, 1u8, 13u8), dec!(-30)); // -30 ct/kWh (negative EPEX)
+    prices_negative.insert(time::macros::datetime!(2026-01-01 12:00 UTC), dec!(-30)); // -30 ct/kWh (negative EPEX)
 
     let r_pos = bill(
         &tariff,
@@ -1843,7 +1938,7 @@ fn dynamic_strom_floor_prevents_negative_billing() {
         kwh: dec!(10),
     }];
     let mut prices = HashMap::new();
-    prices.insert((2026i32, 1u8, 1u8, 13u8), dec!(-50)); // -50 ct/kWh
+    prices.insert(time::macros::datetime!(2026-01-01 12:00 UTC), dec!(-50)); // -50 ct/kWh
 
     let r_floor = bill(
         &tariff_with_floor,

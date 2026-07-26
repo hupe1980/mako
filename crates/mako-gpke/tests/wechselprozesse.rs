@@ -168,6 +168,7 @@ async fn end_to_end_lieferbeginn_strom_pipeline() {
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
         transaktionsgrund: None,
+        ist_erzeugende_marktlokation: false,
         fallgruppe: None,
     };
 
@@ -280,6 +281,7 @@ async fn wrong_pid_returns_workflow_error() {
             bilanzierungsgebiet: None,
             bilanzierungsmethode: None,
             transaktionsgrund: None,
+            ist_erzeugende_marktlokation: false,
             fallgruppe: None,
         })
         .await;

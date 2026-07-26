@@ -102,6 +102,15 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                         .find(|s| s.category.as_deref() == Some("7"))
                         .and_then(|s| s.status_code.clone())
                 }),
+                // SG4 STS Transaktionsgrundergänzung 9013=ZW3 („Erzeugende
+                // Marktlokation") — an EEG-/KWKG-Einspeise-MaLo. Drives the §10c
+                // EEG Monatserster date rule in the netz-checker.
+                ist_erzeugende_marktlokation: u.transactions().first().is_some_and(|t| {
+                    t.sts.iter().any(|s| {
+                        s.category.as_deref() == Some("7")
+                            && s.status_code.as_deref() == Some("ZW3")
+                    })
+                }),
                 message_ref: MessageRef::new(msg.message_ref()),
                 received_at: time::OffsetDateTime::now_utc(),
                 validation_passed,
@@ -638,6 +647,84 @@ pub fn gpke_lf_abmeldung_registry() -> AdapterRegistry<GpkeLfAbmeldungWorkflow> 
             }
 
             Ok(LfAbmeldungCommand::ReceiveAnkuendigung {
+                pid,
+                sender: MarktpartnerCode::new(
+                    u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                receiver: MarktpartnerCode::new(
+                    u.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                location_id: MaLo::new(
+                    u.transactions()
+                        .first()
+                        .and_then(|t| t.ide.object_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                document_date: u
+                    .dtm()
+                    .iter()
+                    .find(|d| d.is_document_date())
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                process_date: u
+                    .transactions()
+                    .first()
+                    .and_then(|t| t.dtm.iter().find(|d| d.qualifier == "92"))
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+/// Build an [`AdapterRegistry`] for [`GpkeBeendigungZuordnungWorkflow`].
+///
+/// Adapts inbound UTILMD PID 55010 (Anfrage zur Beendigung der Zuordnung,
+/// NB → LFA) to a [`BeendigungZuordnungCommand::ReceiveAnfrage`]. The 55010 AHB
+/// rulepack is authored, so `validate()` is a real MIG/AHB check.
+#[must_use]
+pub fn gpke_beendigung_zuordnung_registry() -> AdapterRegistry<GpkeBeendigungZuordnungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Beendigung-Zuordnung adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Beendigung-Zuordnung adapter: expected UTILMD message".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Beendigung-Zuordnung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+
+            Ok(BeendigungZuordnungCommand::ReceiveAnfrage {
                 pid,
                 sender: MarktpartnerCode::new(
                     u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
@@ -1486,12 +1573,12 @@ pub fn gpke_allokationsliste_mscons_registry() -> AdapterRegistry<GpkeAllokation
 /// - **PIDs 55014/55015** (Bestätigung / Ablehnung, LF → NB) to
 ///   [`mako_gpke::EogCommand::ReceiveAntwort`] — resumes the NB initiator.
 ///
-/// The Transaktionsgrund is read from the first `SG4 STS` with category `7`.
-/// Note: 55013–55015 have no compiled AHB rulepack yet (import gap, tracked
-/// in ROADMAP) — like the Gas twin 44013, structural (MIG) validation applies
-/// and vacuous AHB validation is accepted with a warning; the Versorgungsart
-/// CCI of the Bestätigung is not yet extracted (the ERP `gpke.eog.*` command
-/// path carries it typed).
+/// The Transaktionsgrund is read from the first `SG4 STS` with category `7`,
+/// the Haushaltskunde flag from SG10 `CCI` Z15/Z18, and the response
+/// Versorgungsart from SG10 `CCI+Z36` (ZC9/ZD0/ZE3/ZZD). When the compiled AHB
+/// rulepack for 55013–55015 is present the message is validated against it;
+/// otherwise structural (MIG) validation applies and the vacuous AHB pass is
+/// accepted with a warning (like the Gas twin 44013).
 #[must_use]
 pub fn gpke_eog_registry() -> AdapterRegistry<mako_gpke::GpkeEogWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -1541,15 +1628,9 @@ pub fn gpke_eog_registry() -> AdapterRegistry<mako_gpke::GpkeEogWorkflow> {
                         .as_ref()
                         .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
                         .unwrap_or_default();
-                    // 55013 has no compiled AHB rulepack (import gap) — accept the
-                    // vacuous pass like the Gas twin 44013, but leave a trace.
-                    if validation_passed {
-                        tracing::debug!(
-                            pid = pid.as_u32(),
-                            "GPKE EoG adapter: no AHB rulepack for 55013 — \
-                             structural validation only (import gap, see ROADMAP)"
-                        );
-                    }
+                    // 55013 now has an authored AHB rulepack (UTILMD AHB Strom 2.2
+                    // Kap. 2 — BGM+E01, SG4 IDE 7495=24, STS 9013=E06
+                    // Ersatzbelieferung), so `validate()` is a real MIG/AHB check.
                     let transaktionsgrund = first_tx
                         .and_then(|t| {
                             t.sts
@@ -1581,7 +1662,8 @@ pub fn gpke_eog_registry() -> AdapterRegistry<mako_gpke::GpkeEogWorkflow> {
                             .to_owned(),
                         message_ref: MessageRef::new(msg.message_ref()),
                         transaktionsgrund,
-                        haushaltskunde: None,
+                        // SG10 CCI Z15/Z18 household indicator (best-effort).
+                        haushaltskunde: super::extract_haushaltskunde(u.segments()),
                         validation_passed,
                         validation_errors,
                         received_at: time::OffsetDateTime::now_utc(),
@@ -1590,10 +1672,14 @@ pub fn gpke_eog_registry() -> AdapterRegistry<mako_gpke::GpkeEogWorkflow> {
                 55014 | 55015 => Ok(mako_gpke::EogCommand::ReceiveAntwort {
                     response_pid: pid,
                     accepted: pid.as_u32() == 55014,
-                    // CCI Versorgungsart extraction pending the AHB profile
-                    // import — marktd defaults to Ersatzversorgung (§38 ipso
-                    // iure) when absent.
-                    versorgungsart: None,
+                    // SG10 CCI+Z36 Versorgungsart (ZC9/ZD0/ZE3/ZZD). When absent
+                    // marktd defaults to Ersatzversorgung (§38 ipso iure).
+                    versorgungsart: super::extract_versorgungsart(u.segments())
+                        .and_then(|c| mako_gpke::Versorgungsart::from_code(&c)),
+                    // The E/G's Bilanzkreis is resolved from the deposited
+                    // default-BK (GrundversorgerRecord) on the marktd side, not
+                    // parsed here — the 55014 BK segment placement is AHB-version
+                    // dependent.
                     bilanzkreis: None,
                     reason: None,
                 }),
@@ -1601,6 +1687,162 @@ pub fn gpke_eog_registry() -> AdapterRegistry<mako_gpke::GpkeEogWorkflow> {
                     "GPKE EoG adapter: unexpected PID {other} (expected 55013–55015)"
                 ))),
             }
+        },
+    ));
+    registry
+}
+
+/// Build an [`AdapterRegistry`] for [`mako_gpke::GpkeStammdatenaenderungWorkflow`].
+///
+/// Adapts inbound UTILMD GPKE Teil 4 Stammdatenänderung:
+/// - an **Änderung** PID → [`mako_gpke::StammdatenCommand::ReceiveAenderung`]
+///   (the Berechtigter applies MaLo attribute changes and answers).
+/// - a **Rückmeldung** PID → [`mako_gpke::StammdatenCommand::ReceiveRueckmeldung`]
+///   (resumes a change we initiated).
+///
+/// No AHB rulepack exists for these PIDs (like EoG) — structural validation
+/// only. The MaLo attribute patch is built from the `TM` segments the extract
+/// helpers already read (`bilanzierungsmethode`, `fallgruppe`); netzebene /
+/// energierichtung / regelzone extraction awaits the AHB-profile import
+/// (roadmap).
+#[must_use]
+pub fn gpke_stammdaten_registry() -> AdapterRegistry<mako_gpke::GpkeStammdatenaenderungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Stammdaten adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Stammdaten adapter: expected UTILMD message".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Stammdaten adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+
+            let sender =
+                MarktpartnerCode::new(u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""));
+            let receiver = MarktpartnerCode::new(
+                u.receiver()
+                    .and_then(|n| n.party_id.as_deref())
+                    .unwrap_or(""),
+            );
+            let first_tx = u.transactions().first();
+            let location_id = MaLo::new(
+                first_tx
+                    .and_then(|t| t.ide.object_id.as_deref())
+                    .unwrap_or(""),
+            );
+            let aenderungsdatum = first_tx
+                .and_then(|t| t.dtm.iter().find(|d| d.is_period_start()))
+                .and_then(|d| d.value_str())
+                .unwrap_or("")
+                .to_owned();
+
+            let pid_u32 = pid.as_u32();
+            if mako_gpke::is_rueckmeldung_pid(pid_u32) {
+                // Resume our initiated change — the Rückmeldung reports A01/A02.
+                let qualitaet = if u
+                    .transactions()
+                    .first()
+                    .and_then(|t| {
+                        t.sts
+                            .iter()
+                            .find(|s| s.category.as_deref() == Some("E01"))
+                            .and_then(|s| s.status_code.clone())
+                    })
+                    .as_deref()
+                    == Some("A02")
+                {
+                    mako_gpke::Qualitaet::UebernommenMitKorrektur
+                } else {
+                    mako_gpke::Qualitaet::Uebernommen
+                };
+                return Ok(mako_gpke::StammdatenCommand::ReceiveRueckmeldung {
+                    response_pid: pid,
+                    qualitaet,
+                });
+            }
+
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+
+            // Build the MaLo attribute patch. `TM`-carried attributes
+            // (Bilanzierungsmethode, Fallgruppe) plus the SG8 `SEQ`/SG10
+            // `CCI`/`CAV`-carried attributes (Netzebene, Energierichtung,
+            // Regelzone, Bilanzierungsgebiet). Each extractor is best-effort —
+            // absent segments simply leave that column untouched (COALESCE).
+            let segs = u.segments();
+            let mut patch = serde_json::Map::new();
+            if let Some(b) = extract_bilanzierungsmethode(segs) {
+                patch.insert("bilanzierungsmethode".into(), b.into());
+            }
+            if let Some(f) = extract_fallgruppe(segs) {
+                patch.insert("fallgruppe".into(), f.into());
+            }
+            if let Some(n) = super::extract_netzebene(segs) {
+                patch.insert("netzebene".into(), n.into());
+            }
+            if let Some(e) = super::extract_energierichtung(segs) {
+                patch.insert("energierichtung".into(), e.into());
+            }
+            if let Some(r) = super::extract_regelzone(segs) {
+                patch.insert("regelzone".into(), r.into());
+            }
+            if let Some(bg) = super::extract_bilanzierungsgebiet(segs) {
+                patch.insert("bilanzierungsgebiet".into(), bg.into());
+            }
+            if let Some(fs) = super::extract_fernsteuerbarkeit(segs) {
+                patch.insert("fernsteuerbar".into(), fs.into());
+            }
+            if let Some(sk) = super::extract_steuerkanal(segs) {
+                patch.insert("steuerkanal".into(), sk.into());
+            }
+            if let Some(fsb) = super::extract_ist_fernschaltbar(segs) {
+                patch.insert("ist_fernschaltbar".into(), fsb.into());
+            }
+            if let Some(n) = super::extract_tr_nutzung(segs) {
+                patch.insert("nutzung".into(), n.into());
+            }
+            if let Some(v) = super::extract_tr_verbrauchsart(segs) {
+                patch.insert("verbrauchsart".into(), v.into());
+            }
+            if let Some(kp) = super::extract_sr_konfigurationsprodukte(segs) {
+                patch.insert("konfigurationsprodukte".into(), kp);
+            }
+            if let Some(msb) = super::extract_zugeordneter_msb(segs) {
+                patch.insert("zugeordneter_msb".into(), msb.into());
+            }
+
+            Ok(mako_gpke::StammdatenCommand::ReceiveAenderung {
+                pid,
+                sender,
+                receiver,
+                location_id,
+                aenderungsdatum,
+                patch: serde_json::Value::Object(patch),
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+                received_at: time::OffsetDateTime::now_utc(),
+            })
         },
     ));
     registry

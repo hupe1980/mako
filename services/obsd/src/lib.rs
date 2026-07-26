@@ -46,3 +46,4 @@ pub mod handler;
 pub mod mcp_server;
 pub mod pg;
 pub mod server;
+pub mod worker;

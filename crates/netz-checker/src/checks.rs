@@ -32,6 +32,18 @@
 //! Strom assignment is the NB-initiated Ersatz-/Grundversorgung
 //! (PID 55013, `mako-gpke::eog`) — not this check's scope.
 //!
+//! **Strom EEG-/KWKG-MaLo Zuordnung (§10c EEG):** when the Anmeldung carries the
+//! `ZW3` „Erzeugende Marktlokation" Transaktionsgrundergänzung (surfaced as
+//! [`AnmeldungAnfrage::ist_erzeugende_marktlokation`](crate::AnmeldungAnfrage))
+//! the Zuordnung of an Einspeise-MaLo to a Bilanzkreis is a monatsscharfer
+//! Prozess: the
+//! Zuordnungsbeginn must be a **Monatserster** and lie at least one whole month
+//! ahead (configurable). Violation → **A07**.
+//!
+//! **Werktag arithmetic** uses the BDEW-MaKo holiday calendar
+//! (`mako-engine::fristen`, injected via [`NetzCheckConfig::holiday_calendar`]),
+//! not a bare Mon–Fri approximation.
+//!
 //! **Gas (AWH GeLi Gas 2.0 V1.2 Kap. 2.2, in force since 01.04.2026):**
 //! - Lieferantenwechsel (**E03**): future-only, Anmeldung ≥ **10 WT** before
 //!   the Lieferbeginn. Violation → **E17** „Ablehnung wg. Fristüberschreitung".
@@ -54,12 +66,14 @@
 //! result code, deleted in EBD 4.x), and `A99` „Sonstiges" ends 01.10.2026 —
 //! neither is used here.
 
-use time::{Date, OffsetDateTime, Weekday};
+use time::{Date, Duration, OffsetDateTime};
 use time_tz::{OffsetDateTimeExt, timezones};
 
+use mako_engine::fristen::{self, HolidayCalendar};
 use mako_markt::domain::Sparte;
 use mako_markt::repository::{LieferStatus, VersorgungsStatusRecord};
 
+use crate::config::NetzCheckConfig;
 use crate::types::{AnmeldungAnfrage, MaloGridRecord, Messtyp, NetzCheckResult, RejectReason};
 
 // ── Regulatory constants ──────────────────────────────────────────────────────
@@ -73,10 +87,27 @@ pub const GAS_WECHSEL_VORLAUF_WT: u32 = 10;
 /// Bearbeitungsfrist nach An- oder Abmeldedatum").
 pub const GAS_RUECKWIRKUNG_WOCHEN: i64 = 6;
 
-/// Gas Bearbeitungsfrist added to the 6-week window. The AWH quantifies it
-/// only for the Ersatz-/Grundversorgung (3 WT); the same default is applied
-/// to An-/Abmeldungen (flagged ambiguity — see crate README).
-pub const GAS_BEARBEITUNGSFRIST_WT: u32 = 3;
+/// Default Gas Bearbeitungsfrist (in Werktage) added to the 6-week window.
+/// The AWH quantifies it only for the Ersatz-/Grundversorgung (3 WT); the same
+/// default is applied to An-/Abmeldungen. Operators may override it via
+/// [`NetzCheckConfig::gas_bearbeitungsfrist_wt`].
+pub const GAS_BEARBEITUNGSFRIST_WT_DEFAULT: u32 = 3;
+
+/// Default EEG-MaLo Zuordnungs-Vorlauf, in whole months (§10c EEG). Override
+/// via [`NetzCheckConfig::eeg_zuordnung_vorlauf_monate`].
+pub const EEG_ZUORDNUNG_VORLAUF_MONATE_DEFAULT: u32 = 1;
+
+/// The UTILMD SG4 STS Transaktionsgrundergänzung (DE9013) that marks an
+/// **Erzeugende Marktlokation** (EEG-/KWKG-Einspeise-MaLo), verified against
+/// `UTILMD_AHB_Strom_2.2` Kap. 3 (Codeliste DE9013).
+///
+/// **Correction (2026-07):** the previous `["A27".."A32"]` were placeholders
+/// that do not exist in the UTILMD AHB — DE9013 uses `E`/`Z`-codes only, so the
+/// EEG Monatserster rule never fired. The real signal is `ZW3`; it arrives as a
+/// *second* STS+7 (Transaktionsgrundergänzung) alongside the main Anmeldegrund
+/// (`E01`/`E03`), which the `makod` adapter surfaces as
+/// [`AnmeldungAnfrage::ist_erzeugende_marktlokation`](crate::AnmeldungAnfrage).
+pub const EEG_ERZEUGENDE_MARKTLOKATION_CODE: &str = "ZW3";
 
 // ── Berlin timezone helper ────────────────────────────────────────────────────
 
@@ -92,54 +123,47 @@ fn today_berlin(now: OffsetDateTime) -> Date {
 
 // ── Werktag helpers ───────────────────────────────────────────────────────────
 //
-// Mon–Fri approximation: BDEW holidays are NOT considered here (this crate is
-// pure and calendar-free by design). Holiday-blindness errs toward *accepting*
-// a date the exact calendar would push out — an operational risk, never a
-// discriminatory auto-reject (§20 EnWG). The BDEW-MaKo holiday calendar lives
-// in `mako-engine::fristen` for services that need exactness.
-
-/// `true` when `d` is a Werktag under the Mon–Fri approximation.
-fn is_werktag(d: Date) -> bool {
-    !matches!(d.weekday(), Weekday::Saturday | Weekday::Sunday)
-}
+// The crate stays pure and clock-free, but Werktag arithmetic now delegates to
+// the real BDEW-MaKo holiday calendar in `mako-engine::fristen` (injected via
+// `NetzCheckConfig::holiday_calendar`). The former Mon–Fri approximation
+// silently accepted dates the exact calendar would push past a Feiertag; using
+// the BDEW calendar closes that gap while keeping the §20 EnWG guarantee that a
+// widening of the window can never turn an Accept into an auto-reject.
 
 /// `true` when at least one Werktag lies **strictly between** `a` and `b`.
 ///
 /// This is the operational form of the LFW24 rule „spätester ÜT ist der Tag
 /// vor dem letzten WT vor dem Zuordnungsbeginn": an Anmeldung received on
 /// day `a` may carry Zuordnungsbeginn `b` iff a full Werktag separates them.
-fn has_werktag_strictly_between(a: Date, b: Date) -> bool {
-    let mut d = a.next_day();
-    while let Some(cur) = d {
-        if cur >= b {
-            return false;
-        }
-        if is_werktag(cur) {
-            return true;
-        }
-        d = cur.next_day();
-    }
-    false
+fn has_werktag_strictly_between(a: Date, b: Date, cal: HolidayCalendar) -> bool {
+    // The first Werktag strictly after `a` is the first Werktag on-or-after the
+    // day following `a`. A Werktag lies strictly between iff it precedes `b`.
+    let Some(day_after) = a.next_day() else {
+        return false;
+    };
+    fristen::next_werktag(day_after, cal) < b
 }
 
-/// The date `n` Werktage after `d` (Mon–Fri approximation).
-fn add_werktage(d: Date, n: u32) -> Date {
-    let mut cur = d;
-    let mut remaining = n;
-    while remaining > 0 {
-        cur = cur.next_day().unwrap_or(cur);
-        if is_werktag(cur) {
-            remaining -= 1;
-        }
-    }
-    cur
+/// The date `n` Werktage after `d` under the given holiday calendar.
+fn add_werktage(d: Date, n: u32, cal: HolidayCalendar) -> Date {
+    fristen::add_werktage(d, n, cal)
 }
 
 // ── Date plausibility (check 4) ───────────────────────────────────────────────
 
-/// Strom LFW24 date rule — see module docs. `None` = valid.
-fn check_date_strom(anfrage: &AnmeldungAnfrage, today: Date) -> Option<NetzCheckResult> {
-    if has_werktag_strictly_between(today, anfrage.process_date) {
+/// Strom date rule. Dispatches to the EEG-MaLo Monatserster rule when the
+/// Transaktionsgrund marks an EEG-/KWKG-Zuordnung, otherwise applies the LFW24
+/// Vorlauffrist rule. `None` = valid. See module docs.
+fn check_date_strom(
+    anfrage: &AnmeldungAnfrage,
+    today: Date,
+    config: NetzCheckConfig,
+) -> Option<NetzCheckResult> {
+    if anfrage.ist_erzeugende_marktlokation {
+        return check_date_eeg(anfrage, today, config);
+    }
+
+    if has_werktag_strictly_between(today, anfrage.process_date, config.holiday_calendar) {
         return None;
     }
     Some(NetzCheckResult::Reject(RejectReason {
@@ -157,13 +181,82 @@ fn check_date_strom(anfrage: &AnmeldungAnfrage, today: Date) -> Option<NetzCheck
     }))
 }
 
+/// First day of the month `months` whole months after `d`'s month.
+fn first_of_month_after(d: Date, months: u32) -> Date {
+    let mut year = d.year();
+    let mut month = d.month();
+    for _ in 0..months {
+        month = month.next();
+        if month == time::Month::January {
+            year += 1;
+        }
+    }
+    Date::from_calendar_date(year, month, 1).expect("day 1 is always valid")
+}
+
+/// EEG-/KWKG-MaLo Zuordnung date rule (§10c EEG): the Zuordnungsbeginn must be
+/// the **first of a month** and lie at least `eeg_zuordnung_vorlauf_monate`
+/// whole months ahead of receipt. `None` = valid.
+///
+/// The assignment of an EEG-Einspeise-MaLo to a Bilanzkreis is a
+/// monatsscharfer Prozess: mid-month starts are impossible and the NB needs a
+/// full month of lead to arrange the bilanzielle Zuordnung. A violation is a
+/// Vorlauffrist/Fristverletzung → **A07** (the same Fristcode the GPKE date
+/// tree uses; the detail names the EEG specifics for the operator audit log).
+fn check_date_eeg(
+    anfrage: &AnmeldungAnfrage,
+    today: Date,
+    config: NetzCheckConfig,
+) -> Option<NetzCheckResult> {
+    let d = anfrage.process_date;
+    let grund = anfrage.transaktionsgrund.as_deref().unwrap_or("");
+
+    // Rule 1: must be a Monatserster.
+    if d.day() != 1 {
+        return Some(NetzCheckResult::Reject(RejectReason {
+            erc_code: "A07".to_owned(),
+            detail: format!(
+                "EEG-MaLo Zuordnung (Transaktionsgrund {grund}) requested for {d}, \
+                 which is not a Monatserster. The bilanzielle Zuordnung einer \
+                 EEG-/KWKG-Marktlokation is only possible zum Monatsersten \
+                 (§10c EEG; UTILMD AHB Strom).",
+            ),
+            check_number: 4,
+        }));
+    }
+
+    // Rule 2: at least N whole months of lead — earliest valid start is the
+    // first of the month N months after the receipt month.
+    let earliest = first_of_month_after(today, config.eeg_zuordnung_vorlauf_monate);
+    if d >= earliest {
+        None
+    } else {
+        Some(NetzCheckResult::Reject(RejectReason {
+            erc_code: "A07".to_owned(),
+            detail: format!(
+                "Vorlauffrist not met: EEG-MaLo Zuordnung (Transaktionsgrund \
+                 {grund}) requested for {d}, but the earliest admissible \
+                 Monatserster is {earliest} — at least {} month(s) lead is \
+                 required (§10c EEG; UTILMD AHB Strom). Receipt {today}.",
+                config.eeg_zuordnung_vorlauf_monate
+            ),
+            check_number: 4,
+        }))
+    }
+}
+
 /// Gas date rule (Transaktionsgrund-aware) — see module docs. `None` = valid.
-fn check_date_gas(anfrage: &AnmeldungAnfrage, today: Date) -> Option<NetzCheckResult> {
+fn check_date_gas(
+    anfrage: &AnmeldungAnfrage,
+    today: Date,
+    config: NetzCheckConfig,
+) -> Option<NetzCheckResult> {
+    let cal = config.holiday_calendar;
     let d = anfrage.process_date;
     match anfrage.transaktionsgrund.as_deref() {
         // Lieferantenwechsel: future-only, ≥ 10 WT lead.
         Some("E03") => {
-            let earliest = add_werktage(today, GAS_WECHSEL_VORLAUF_WT);
+            let earliest = add_werktage(today, GAS_WECHSEL_VORLAUF_WT, cal);
             if d >= earliest {
                 None
             } else {
@@ -187,9 +280,11 @@ fn check_date_gas(anfrage: &AnmeldungAnfrage, today: Date) -> Option<NetzCheckRe
             }
             match anfrage.messtyp {
                 Messtyp::Slp => {
+                    let bearbeitungsfrist = config.gas_bearbeitungsfrist_wt;
                     let window_end = add_werktage(
-                        d.saturating_add(time::Duration::weeks(GAS_RUECKWIRKUNG_WOCHEN)),
-                        GAS_BEARBEITUNGSFRIST_WT,
+                        d.saturating_add(Duration::weeks(GAS_RUECKWIRKUNG_WOCHEN)),
+                        bearbeitungsfrist,
+                        cal,
                     );
                     if today <= window_end {
                         None // lawful retroactive move-in/move-out
@@ -198,7 +293,7 @@ fn check_date_gas(anfrage: &AnmeldungAnfrage, today: Date) -> Option<NetzCheckRe
                             erc_code: "E17".to_owned(),
                             detail: format!(
                                 "Fristüberschreitung: retroactive Gas Anmeldung {d} is \
-                                 outside the 6-week window (+{GAS_BEARBEITUNGSFRIST_WT} WT \
+                                 outside the 6-week window (+{bearbeitungsfrist} WT \
                                  Bearbeitungsfrist, ends {window_end}; receipt {today}). \
                                  Lieferbeginn kann nur noch für die Zukunft realisiert \
                                  werden (AWH GeLi Gas 2.0 Kap. 2.2 Grundregel 3b).",
@@ -255,6 +350,8 @@ fn check_date_gas(anfrage: &AnmeldungAnfrage, today: Date) -> Option<NetzCheckRe
 /// - `partner_known` — `true` if the requesting LF GLN is in the operator's
 ///   partner directory (`GET /api/v1/partners/{mp_id}` returned 200).
 /// - `now` — current UTC instant (injected by caller for testability).
+/// - `config` — tunables (holiday calendar, Gas Bearbeitungsfrist, EEG lead).
+///   Use [`NetzCheckConfig::default`] for the regulatory defaults.
 ///
 /// # Returns
 ///
@@ -276,6 +373,7 @@ pub fn evaluate(
     grid: Option<&MaloGridRecord>,
     partner_known: bool,
     now: OffsetDateTime,
+    config: &NetzCheckConfig,
 ) -> NetzCheckResult {
     // ── Check 1: Grid record present ─────────────────────────────────────────
     let Some(grid) = grid else {
@@ -350,8 +448,8 @@ pub fn evaluate(
     {
         let today = today_berlin(now);
         let violation = match anfrage.sparte {
-            Sparte::Strom => check_date_strom(anfrage, today),
-            Sparte::Gas => check_date_gas(anfrage, today),
+            Sparte::Strom => check_date_strom(anfrage, today, *config),
+            Sparte::Gas => check_date_gas(anfrage, today, *config),
         };
         if let Some(result) = violation {
             return result;
@@ -439,6 +537,7 @@ mod tests {
             sparte: Sparte::Strom,
             messtyp: Messtyp::Slp,
             transaktionsgrund: Some("E03".to_owned()),
+            ist_erzeugende_marktlokation: false,
         }
     }
 
@@ -485,6 +584,12 @@ mod tests {
         Date::from_calendar_date(y, m, day).unwrap()
     }
 
+    fn cfg() -> NetzCheckConfig {
+        NetzCheckConfig::default()
+    }
+
+    const CAL: HolidayCalendar = HolidayCalendar::BdewMaKo;
+
     // 2026-07-08 10:00 UTC → today_berlin = Wed 2026-07-08.
     const NOW: OffsetDateTime = datetime!(2026-07-08 10:00 UTC);
     // Friday receipt for weekend-crossing cases.
@@ -497,7 +602,7 @@ mod tests {
         // ÜT Wed 07-08 → D Fri 07-10: Thu 07-09 lies between. Accept.
         let anfrage = make_anfrage(55001, d(2026, Month::July, 10));
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW);
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert!(result.is_accept(), "expected Accept, got {result:?}");
     }
 
@@ -506,7 +611,7 @@ mod tests {
         // ÜT Wed → D Thu: no Werktag strictly between → A07.
         let anfrage = make_anfrage(55001, d(2026, Month::July, 9));
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW);
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert_eq!(result.erc_code(), Some("A07"), "got {result:?}");
     }
 
@@ -517,7 +622,7 @@ mod tests {
         let mut anfrage = make_anfrage(55001, d(2026, Month::July, 7));
         anfrage.transaktionsgrund = Some("E01".to_owned());
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW);
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert_eq!(result.erc_code(), Some("A07"), "got {result:?}");
     }
 
@@ -525,7 +630,7 @@ mod tests {
     fn strom_reject_today() {
         let anfrage = make_anfrage(55001, d(2026, Month::July, 8));
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW);
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert_eq!(result.erc_code(), Some("A07"), "got {result:?}");
     }
 
@@ -534,12 +639,26 @@ mod tests {
         // ÜT Fri 07-10 → D Mon 07-13: only Sat/Sun between → A07.
         let anfrage = make_anfrage(55001, d(2026, Month::July, 13));
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW_FRIDAY);
+        let result = evaluate(
+            &anfrage,
+            Some(&vs),
+            Some(&make_grid()),
+            true,
+            NOW_FRIDAY,
+            &cfg(),
+        );
         assert_eq!(result.erc_code(), Some("A07"), "got {result:?}");
 
         // D Tue 07-14: Mon 07-13 lies between → Accept.
         let anfrage = make_anfrage(55001, d(2026, Month::July, 14));
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW_FRIDAY);
+        let result = evaluate(
+            &anfrage,
+            Some(&vs),
+            Some(&make_grid()),
+            true,
+            NOW_FRIDAY,
+            &cfg(),
+        );
         assert!(result.is_accept(), "expected Accept, got {result:?}");
     }
 
@@ -549,7 +668,7 @@ mod tests {
         let mut anfrage = make_anfrage(55001, d(2026, Month::July, 10));
         anfrage.messtyp = Messtyp::Rlm;
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW);
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert!(result.is_accept(), "expected Accept, got {result:?}");
     }
 
@@ -560,10 +679,10 @@ mod tests {
         // 10 WT after Wed 07-08 is Wed 07-22.
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
         let ok = make_gas_anfrage(Some("E03"), d(2026, Month::July, 22));
-        assert!(evaluate(&ok, Some(&vs), Some(&make_grid()), true, NOW).is_accept());
+        assert!(evaluate(&ok, Some(&vs), Some(&make_grid()), true, NOW, &cfg()).is_accept());
         let short = make_gas_anfrage(Some("E03"), d(2026, Month::July, 21));
         assert_eq!(
-            evaluate(&short, Some(&vs), Some(&make_grid()), true, NOW).erc_code(),
+            evaluate(&short, Some(&vs), Some(&make_grid()), true, NOW, &cfg()).erc_code(),
             Some("E17")
         );
     }
@@ -574,7 +693,7 @@ mod tests {
         // 06-01 + 6 weeks = 07-13, + 3 WT = 07-16 ≥ today 07-08.
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
         let anfrage = make_gas_anfrage(Some("E01"), d(2026, Month::June, 1));
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW);
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert!(result.is_accept(), "expected Accept, got {result:?}");
     }
 
@@ -583,7 +702,7 @@ mod tests {
         // D 2026-05-20: window ends 05-20 + 6w = 07-01, +3 WT = 07-06 < today.
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
         let anfrage = make_gas_anfrage(Some("E01"), d(2026, Month::May, 20));
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW);
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert_eq!(result.erc_code(), Some("E17"), "got {result:?}");
     }
 
@@ -591,7 +710,7 @@ mod tests {
     fn gas_einzug_neuanlage_e02_retroactive_accepted() {
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
         let anfrage = make_gas_anfrage(Some("E02"), d(2026, Month::July, 1));
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW);
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert!(result.is_accept(), "expected Accept, got {result:?}");
     }
 
@@ -600,7 +719,7 @@ mod tests {
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
         let mut anfrage = make_gas_anfrage(Some("E01"), d(2026, Month::July, 1));
         anfrage.messtyp = Messtyp::Rlm;
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW);
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert_eq!(result.erc_code(), Some("E17"), "got {result:?}");
     }
 
@@ -609,7 +728,7 @@ mod tests {
         // §20 EnWG: never auto-reject a potentially lawful move-in.
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
         let anfrage = make_gas_anfrage(None, d(2026, Month::July, 1));
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW);
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert!(result.is_escalate(), "expected Escalate, got {result:?}");
     }
 
@@ -617,8 +736,93 @@ mod tests {
     fn gas_future_without_transaktionsgrund_accepted() {
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
         let anfrage = make_gas_anfrage(None, d(2026, Month::August, 1));
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW);
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert!(result.is_accept(), "expected Accept, got {result:?}");
+    }
+
+    // ── EEG-MaLo Zuordnung date rule (check 4, A07) ──────────────────────────
+
+    #[test]
+    fn eeg_zuordnung_monatserster_with_lead_accepted() {
+        // Receipt Wed 2026-07-08, requested 2026-09-01 (Monatserster, >1 month
+        // ahead) → Accept.
+        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let mut anfrage = make_anfrage(55016, d(2026, Month::September, 1));
+        anfrage.ist_erzeugende_marktlokation = true;
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
+        assert!(result.is_accept(), "expected Accept, got {result:?}");
+    }
+
+    #[test]
+    fn eeg_zuordnung_non_monatserster_rejected() {
+        // 2026-09-15 is not a Monatserster → A07.
+        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let mut anfrage = make_anfrage(55016, d(2026, Month::September, 15));
+        anfrage.ist_erzeugende_marktlokation = true;
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
+        assert_eq!(result.erc_code(), Some("A07"), "got {result:?}");
+    }
+
+    #[test]
+    fn eeg_zuordnung_insufficient_lead_rejected() {
+        // Receipt 2026-07-08; 2026-08-01 is only < 1 whole month ahead of the
+        // receipt month (July → earliest admissible is 2026-08-01)… actually the
+        // first-of-month one month after July is August, so 08-01 is the
+        // earliest. 2026-07-01 (same month, past) must be rejected.
+        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let mut anfrage = make_anfrage(55016, d(2026, Month::July, 1));
+        anfrage.ist_erzeugende_marktlokation = true;
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
+        assert_eq!(result.erc_code(), Some("A07"), "got {result:?}");
+    }
+
+    #[test]
+    fn eeg_zuordnung_earliest_monatserster_accepted() {
+        // Earliest admissible Monatserster for a July receipt with 1-month lead
+        // is 2026-08-01 → Accept.
+        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let mut anfrage = make_anfrage(55016, d(2026, Month::August, 1));
+        anfrage.ist_erzeugende_marktlokation = true;
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
+        assert!(result.is_accept(), "expected Accept, got {result:?}");
+    }
+
+    // ── Configurable Gas Bearbeitungsfrist ───────────────────────────────────
+
+    #[test]
+    fn gas_bearbeitungsfrist_is_configurable() {
+        // D 2026-05-20: window base = 05-20 + 6w = 07-01. With the default 3 WT
+        // it ends 07-06 < today (07-08) → E17. Widening the Bearbeitungsfrist to
+        // 5 WT pushes window_end to 07-08 = today → Accept.
+        let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
+        let anfrage = make_gas_anfrage(Some("E01"), d(2026, Month::May, 20));
+
+        assert_eq!(
+            evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg()).erc_code(),
+            Some("E17"),
+        );
+
+        let wide = NetzCheckConfig {
+            gas_bearbeitungsfrist_wt: 5,
+            ..NetzCheckConfig::default()
+        };
+        assert!(
+            evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &wide).is_accept(),
+            "widened Bearbeitungsfrist should admit the retroactive Anmeldung",
+        );
+    }
+
+    // ── BDEW holiday calendar (Werktag math) ─────────────────────────────────
+
+    #[test]
+    fn add_werktage_observes_bdew_holidays() {
+        // 2026-05-01 (Tag der Arbeit, bundesweiter Feiertag) is a Friday. One
+        // Werktag after Thu 2026-04-30 must skip both the holiday and the
+        // weekend, landing on Mon 2026-05-04 — never Fri 05-01.
+        assert_eq!(
+            add_werktage(d(2026, Month::April, 30), 1, CAL),
+            d(2026, Month::May, 4),
+        );
     }
 
     // ── Check 2: MaLo participates in MaKo (A02) ─────────────────────────────
@@ -627,7 +831,7 @@ mod tests {
     fn stillgelegt_malo_rejected_a02() {
         let anfrage = make_anfrage(55001, d(2026, Month::July, 10));
         let vs = make_versorgung(LieferStatus::Stillgelegt, None, None);
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW);
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert_eq!(result.erc_code(), Some("A02"), "got {result:?}");
     }
 
@@ -635,7 +839,7 @@ mod tests {
     fn ruhende_malo_rejected_a02() {
         let anfrage = make_anfrage(55001, d(2026, Month::July, 10));
         let vs = make_versorgung(LieferStatus::Ruhend, None, None);
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW);
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert_eq!(result.erc_code(), Some("A02"), "got {result:?}");
     }
 
@@ -645,7 +849,7 @@ mod tests {
     fn escalate_missing_grid() {
         let anfrage = make_anfrage(55001, d(2026, Month::July, 10));
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
-        let result = evaluate(&anfrage, Some(&vs), None, true, NOW);
+        let result = evaluate(&anfrage, Some(&vs), None, true, NOW, &cfg());
         assert!(result.is_escalate(), "expected Escalate, got {result:?}");
     }
 
@@ -657,7 +861,7 @@ mod tests {
             None,
             Some("9900999000001".to_owned()),
         );
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW);
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert_eq!(result.erc_code(), Some("A06"), "got {result:?}");
     }
 
@@ -669,7 +873,7 @@ mod tests {
             Some("9900357000004".to_owned()),
             None,
         );
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW);
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert_eq!(result.erc_code(), Some("A06"), "got {result:?}");
     }
 
@@ -679,7 +883,7 @@ mod tests {
         let mut grid = make_grid();
         grid.bilanzierungsgebiet = Some("11YB-AMPRION----W".to_owned());
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
-        let result = evaluate(&anfrage, Some(&vs), Some(&grid), true, NOW);
+        let result = evaluate(&anfrage, Some(&vs), Some(&grid), true, NOW, &cfg());
         assert_eq!(result.erc_code(), Some("A05"), "got {result:?}");
     }
 
@@ -687,14 +891,14 @@ mod tests {
     fn reject_unknown_lf_a05() {
         let anfrage = make_anfrage(55001, d(2026, Month::July, 10));
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
-        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), false, NOW);
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), false, NOW, &cfg());
         assert_eq!(result.erc_code(), Some("A05"), "got {result:?}");
     }
 
     #[test]
     fn no_versorgung_record_still_passes() {
         let anfrage = make_anfrage(55001, d(2026, Month::July, 10));
-        let result = evaluate(&anfrage, None, Some(&make_grid()), true, NOW);
+        let result = evaluate(&anfrage, None, Some(&make_grid()), true, NOW, &cfg());
         assert!(result.is_accept(), "expected Accept, got {result:?}");
     }
 
@@ -704,21 +908,41 @@ mod tests {
     fn werktag_between_examples_from_gpke() {
         // ÜT Montag → frühester Lieferbeginn Mittwoch (GPKE example).
         let mon = d(2026, Month::July, 6);
-        assert!(!has_werktag_strictly_between(mon, d(2026, Month::July, 7)));
-        assert!(has_werktag_strictly_between(mon, d(2026, Month::July, 8)));
+        assert!(!has_werktag_strictly_between(
+            mon,
+            d(2026, Month::July, 7),
+            CAL
+        ));
+        assert!(has_werktag_strictly_between(
+            mon,
+            d(2026, Month::July, 8),
+            CAL
+        ));
         // ÜT Freitag → frühester Lieferbeginn Dienstag.
         let fri = d(2026, Month::July, 10);
-        assert!(!has_werktag_strictly_between(fri, d(2026, Month::July, 13)));
-        assert!(has_werktag_strictly_between(fri, d(2026, Month::July, 14)));
+        assert!(!has_werktag_strictly_between(
+            fri,
+            d(2026, Month::July, 13),
+            CAL
+        ));
+        assert!(has_werktag_strictly_between(
+            fri,
+            d(2026, Month::July, 14),
+            CAL
+        ));
         // Past dates never validate.
-        assert!(!has_werktag_strictly_between(mon, d(2026, Month::July, 3)));
+        assert!(!has_werktag_strictly_between(
+            mon,
+            d(2026, Month::July, 3),
+            CAL
+        ));
     }
 
     #[test]
     fn add_werktage_skips_weekends() {
         // Wed 07-08 + 10 WT = Wed 07-22.
         assert_eq!(
-            add_werktage(d(2026, Month::July, 8), 10),
+            add_werktage(d(2026, Month::July, 8), 10, CAL),
             d(2026, Month::July, 22)
         );
     }

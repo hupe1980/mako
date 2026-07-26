@@ -321,8 +321,9 @@ kubectl set image deployment/makod makod=registry.example/makod:FV2026-10-01-fin
 kubectl rollout status deployment/makod
 ```
 
-New inbound messages now exclusively use the new FV. Old-FV streams have been
-migrated; new events for those processes are written under the new `workflow_id`.
+Inbound messages for a process are parsed and validated against the format
+version active for that process; new events are written under the corresponding
+`workflow_id`.
 
 ---
 

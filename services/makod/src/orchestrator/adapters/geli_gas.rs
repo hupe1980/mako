@@ -744,3 +744,140 @@ pub fn geli_gas_mscons_registry() -> AdapterRegistry<GeliGasMsconsWorkflow> {
     ));
     registry
 }
+
+/// Build an [`AdapterRegistry`] for [`mako_geli_gas::GeliGasStammdatenaenderungWorkflow`].
+///
+/// Adapts inbound UTILMD G GeLi Gas Stammdatenänderung: an **Änderung** PID →
+/// [`mako_geli_gas::GasStammdatenCommand::ReceiveAenderung`] (apply on
+/// Zustimmung, respecting the Monatserster rule for bila.rel. changes); an
+/// **Antwort** PID → [`mako_geli_gas::GasStammdatenCommand::ReceiveAntwort`].
+/// Structural validation only (no AHB rulepack).
+#[must_use]
+pub fn geli_gas_stammdaten_registry()
+-> AdapterRegistry<mako_geli_gas::GeliGasStammdatenaenderungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GeLi Gas Stammdaten adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GeLi Gas Stammdaten adapter: expected UTILMD message".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GeLi Gas Stammdaten adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+
+            let sender =
+                MarktpartnerCode::new(u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""));
+            let receiver = MarktpartnerCode::new(
+                u.receiver()
+                    .and_then(|n| n.party_id.as_deref())
+                    .unwrap_or(""),
+            );
+            let first_tx = u.transactions().first();
+            let location_id = MaLo::new(
+                first_tx
+                    .and_then(|t| t.ide.object_id.as_deref())
+                    .unwrap_or(""),
+            );
+            let aenderungsdatum = first_tx
+                .and_then(|t| t.dtm.iter().find(|d| d.is_period_start()))
+                .and_then(|d| d.value_str())
+                .unwrap_or("")
+                .to_owned();
+
+            let pid_u32 = pid.as_u32();
+            if mako_geli_gas::stammdatenaenderung::is_antwort_pid(pid_u32)
+                && !mako_geli_gas::stammdatenaenderung::is_aenderung_pid(pid_u32)
+            {
+                let antwort = match u
+                    .transactions()
+                    .first()
+                    .and_then(|t| {
+                        t.sts
+                            .iter()
+                            .find(|s| s.category.as_deref() == Some("E01"))
+                            .and_then(|s| s.status_code.clone())
+                    })
+                    .as_deref()
+                {
+                    Some("E13") => mako_geli_gas::GasAntwort::AblehnungBilanzierung,
+                    Some("E17") => mako_geli_gas::GasAntwort::AblehnungFrist,
+                    _ => mako_geli_gas::GasAntwort::Zustimmung,
+                };
+                return Ok(mako_geli_gas::GasStammdatenCommand::ReceiveAntwort {
+                    response_pid: pid,
+                    antwort,
+                });
+            }
+
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+
+            // Stammdatenanfrage (G8–G10): we are the data owner — answer with the
+            // requested master data (auto data-return).
+            if mako_geli_gas::stammdatenaenderung::is_anfrage_request_pid(pid_u32) {
+                return Ok(mako_geli_gas::GasStammdatenCommand::ReceiveAnfrage {
+                    pid,
+                    sender,
+                    receiver,
+                    location_id,
+                    message_ref: MessageRef::new(msg.message_ref()),
+                    validation_passed,
+                    validation_errors,
+                    received_at: time::OffsetDateTime::now_utc(),
+                });
+            }
+
+            let segs = u.segments();
+            let mut patch = serde_json::Map::new();
+            if let Some(b) = extract_bilanzierungsmethode(segs) {
+                patch.insert("bilanzierungsmethode".into(), b.into());
+            }
+            if let Some(q) = extract_gasqualitaet(segs) {
+                patch.insert("gasqualitaet".into(), q.into());
+            }
+            if let Some(n) = super::extract_netzebene(segs) {
+                patch.insert("netzebene".into(), n.into());
+            }
+            if let Some(r) = super::extract_regelzone(segs) {
+                patch.insert("regelzone".into(), r.into());
+            }
+            if let Some(bg) = super::extract_bilanzierungsgebiet(segs) {
+                patch.insert("bilanzierungsgebiet".into(), bg.into());
+            }
+
+            Ok(mako_geli_gas::GasStammdatenCommand::ReceiveAenderung {
+                pid,
+                sender,
+                receiver,
+                location_id,
+                aenderungsdatum,
+                patch: serde_json::Value::Object(patch),
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+                received_at: time::OffsetDateTime::now_utc(),
+            })
+        },
+    ));
+    registry
+}

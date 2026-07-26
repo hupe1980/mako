@@ -99,9 +99,16 @@
 //! (statutory fallback supply, §36/§38 EnWG) and the Grundversorger
 //! responds. See [`eog`] for the full model.
 //!
-//! **Note on AHB coverage:** PIDs 55010–55012 ("Anfrage zur Beendigung der
-//! Zuordnung", the NB Abmeldeanfrage toward the LFA) are present in UTILMD
-//! AHB Strom 2.1 but not yet implemented (see ROADMAP).
+//! ### Beendigung der Zuordnung — routed to `gpke-beendigung-zuordnung`
+//!
+//! | PID   | Process name (AHB)                          | Direction | Status |
+//! |-------|---------------------------------------------|-----------|--------|
+//! | 55010 | Anfrage zur Beendigung der Zuordnung        | NB → LFA  | ✅ Implemented |
+//!
+//! PID 55010 is the NB Abmeldeanfrage toward the LFA (BGM+E02 Abmeldungen,
+//! UTILMD AHB Strom 2.1). The responses PIDs 55011 (Bestätigung) and 55012
+//! (Ablehnung) are derived by [`GpkeBeendigungZuordnungWorkflow`]. See
+//! [`beendigung_zuordnung`] for the full model.
 //!
 //! The 3 inbound ANFRAGE PIDs share [`GpkeSupplierChangeWorkflow`] (workflow name:
 //! `"gpke-supplier-change"`). The `pruefidentifikator` stored in
@@ -184,6 +191,7 @@ pub mod abrechnung;
 pub mod allokationsliste;
 pub mod anfrage_bestellung;
 pub mod ankuendigung_zuordnung_lf;
+pub mod beendigung_zuordnung;
 pub mod comdis;
 pub mod datenabruf;
 pub mod eog;
@@ -197,6 +205,7 @@ pub mod partin;
 pub mod post_acceptance;
 pub mod sperrung;
 pub mod sperrung_lf;
+pub mod stammdatenaenderung;
 pub mod stornierung;
 pub mod utilts;
 pub mod wechselprozesse;
@@ -223,6 +232,12 @@ pub use ankuendigung_zuordnung_lf::{
     AnkuendigungZuordnungLfCommand, AnkuendigungZuordnungLfData, AnkuendigungZuordnungLfEvent,
     AnkuendigungZuordnungLfState, GpkeAnkuendigungZuordnungLfWorkflow,
     WORKFLOW_NAME as ANKUENDIGUNG_ZUORDNUNG_LF_WORKFLOW_NAME,
+};
+pub use beendigung_zuordnung::{
+    BEENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL, BEENDIGUNG_ZUORDNUNG_PIDS,
+    BeendigungZuordnungCommand, BeendigungZuordnungData, BeendigungZuordnungEvent,
+    BeendigungZuordnungState, GpkeBeendigungZuordnungWorkflow,
+    WORKFLOW_NAME as BEENDIGUNG_ZUORDNUNG_WORKFLOW_NAME,
 };
 pub use comdis::{
     COMDIS_APERAK_WINDOW_LABEL, COMDIS_PIDS, ComdisOutcome, GpkeComdisCommand, GpkeComdisData,
@@ -284,6 +299,13 @@ pub use sperrung_lf::{
     SPERRUNG_ANFRAGE_PIDS as SPERRUNG_LF_ANFRAGE_PIDS, SperrungAuftragData, SperrungLfCommand,
     SperrungLfEvent, SperrungLfState, WORKFLOW_NAME as SPERRUNG_LF_WORKFLOW_NAME,
 };
+pub use stammdatenaenderung::{
+    GpkeStammdatenaenderungWorkflow, Qualitaet,
+    RUECKMELDUNG_WINDOW_LABEL as STAMMDATEN_WINDOW_LABEL, STAMMDATEN_PAIRS, StammdatenCommand,
+    StammdatenData, StammdatenEvent, StammdatenObjekt, StammdatenState,
+    WORKFLOW_NAME as STAMMDATEN_WORKFLOW_NAME, is_aenderung_pid, is_rueckmeldung_pid, objekt_of,
+    rueckmeldung_pid_for,
+};
 pub use stornierung::{
     GpkeStornierungCommand, GpkeStornierungData, GpkeStornierungEvent, GpkeStornierungState,
     GpkeStornierungWorkflow,
@@ -340,7 +362,8 @@ pub use wechselprozesse::{
 ///
 /// PIDs 55007–55009 (NB-seitiges Lieferende) are handled by `GpkeLfAbmeldungWorkflow`.
 /// PIDs 55013–55015 (Ersatz-/Grundversorgung) are handled by `GpkeEogWorkflow`.
-/// PIDs 55010–55012 (Anfrage zur Beendigung der Zuordnung) are not yet implemented.
+/// PIDs 55010–55012 (Anfrage zur Beendigung der Zuordnung — NB Abmeldeanfrage an
+/// den LFA) are handled by `GpkeBeendigungZuordnungWorkflow`.
 ///
 /// [`DeploymentRoles`]: mako_engine::marktrolle::DeploymentRoles
 /// [`Marktrolle::Nb`]: mako_engine::marktrolle::Marktrolle::Nb
@@ -369,6 +392,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         &[
             "gpke-supplier-change",
             eog::WORKFLOW_NAME,
+            stammdatenaenderung::WORKFLOW_NAME,
             lf_anmeldung::WORKFLOW_NAME,
             sperrung::WORKFLOW_NAME,
             sperrung_lf::WORKFLOW_NAME,
@@ -411,11 +435,27 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             router.register(pid, "gpke-lf-abmeldung");
         }
 
+        // PID 55010 (Anfrage zur Beendigung der Zuordnung, NB→LFA) — GPKE Teil 2.
+        // LFA-role makod receives 55010 and responds with 55011/55012.
+        for &pid in beendigung_zuordnung::BEENDIGUNG_ZUORDNUNG_PIDS {
+            router.register(pid, beendigung_zuordnung::WORKFLOW_NAME);
+        }
+
         // PIDs 55013–55015 (Ersatz-/Grundversorgung, §36/§38 EnWG) — gpke-eog.
         // 55013 spawns the LF/GV responder role; 55014/55015 resume the
         // NB initiator role (correlated by MaLo).
         for &pid in EOG_PIDS {
             router.register(pid, eog::WORKFLOW_NAME);
+        }
+
+        // GPKE Teil 4 Stammdatenänderung (55615–55694, 55109/55110). Both the
+        // Änderung PIDs (inbound change → apply + Rückmeldung) and the
+        // Rückmeldung PIDs (resume a change we initiated) route here.
+        // 55557/55559 (MSB-Abr.-Daten) stay on gpke-supplier-change; 21047
+        // (Bearbeitungsstand) stays on the IFTSTA route.
+        for &(aenderung_pid, rueckmeldung_pid, _) in stammdatenaenderung::STAMMDATEN_PAIRS {
+            router.register(aenderung_pid, stammdatenaenderung::WORKFLOW_NAME);
+            router.register(rueckmeldung_pid, stammdatenaenderung::WORKFLOW_NAME);
         }
 
         // PID 55607 (Ankündigung Zuordnung LF, NB→LFN) — GPKE Teil 2 §2.2, BK6-24-174.
@@ -611,8 +651,9 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // in wechselprozesse::IFTSTA_PIDS and registered above under gpke-supplier-change.
         // IFTSTA Konfigurationsbestellungsantworten (21043, 21044) are registered above
         // under gpke-konfiguration-aenderung.
-        // PID 21042 (Bestellung WiM, WiM Strom Teil 2) has no GPKE crate assignment
-        // per docs/pid-reference.md and is correctly dead-lettered.
+        // PID 21042 (WiM / Umsetzungsstatus, "Bestellung (WiM)", MSB → ESA;
+        // IFTSTA AHB 2.0g Kap. 6.10) is a WiM Strom Teil 2 message routed by
+        // mako-wim (esa-wertebestellung), not GPKE.
     }
 
     fn profile_requirements(&self) -> &'static [mako_engine::profile::ProfileRequirement] {
@@ -689,6 +730,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             ("wechselprozesse::IFTSTA_PIDS", wechselprozesse::IFTSTA_PIDS),
             ("NEUANLAGE_PIDS", NEUANLAGE_PIDS),
             ("LF_ABMELDUNG_PIDS", LF_ABMELDUNG_PIDS),
+            ("BEENDIGUNG_ZUORDNUNG_PIDS", BEENDIGUNG_ZUORDNUNG_PIDS),
             (
                 "stornierung::STORNIERUNG_PIDS",
                 stornierung::STORNIERUNG_PIDS,

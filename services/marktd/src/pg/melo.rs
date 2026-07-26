@@ -149,8 +149,8 @@ impl MeloRepository for PgMeloRepository {
               SET valid_to = $3, updated_at = now()
               WHERE tenant = $1
                 AND von_id = $2
-                AND von_typ = 'melo'
-                AND nach_typ = 'malo'
+                AND von_typ = 'MELO'
+                AND nach_typ = 'MALO'
                 AND valid_to IS NULL
                 AND nach_id IS DISTINCT FROM $4",
         )
@@ -171,8 +171,8 @@ impl MeloRepository for PgMeloRepository {
                       WHERE tenant = $1
                         AND von_id = $2
                         AND nach_id = $3
-                        AND von_typ = 'melo'
-                        AND nach_typ = 'malo'
+                        AND von_typ = 'MELO'
+                        AND nach_typ = 'MALO'
                         AND valid_to IS NULL
                   )",
             )
@@ -189,7 +189,7 @@ impl MeloRepository for PgMeloRepository {
                 sqlx::query(
                     r"INSERT INTO lokationszuordnungen
                           (tenant, von_id, von_typ, nach_id, nach_typ, valid_from, valid_to, data, updated_at)
-                      VALUES ($1, $2, 'melo', $3, 'malo', $4, NULL, '{}'::jsonb, now())
+                      VALUES ($1, $2, 'MELO', $3, 'MALO', $4, NULL, '{}'::jsonb, now())
                       ON CONFLICT (tenant, von_id, nach_id, valid_from) WHERE valid_from IS NOT NULL
                       DO UPDATE SET valid_to = NULL, updated_at = now()",
                 )
@@ -233,5 +233,33 @@ impl MeloRepository for PgMeloRepository {
                 .try_get("bo4e_version")
                 .unwrap_or_else(|_| "v202607.0.0".to_owned()),
         }))
+    }
+
+    async fn patch_stammdaten(
+        &self,
+        melo_id: &MeloId,
+        patch: &mako_markt::repository::MeloStammdatenPatch,
+    ) -> Result<bool, MdmError> {
+        if patch.is_empty() {
+            return Ok(false);
+        }
+        // COALESCE per column — a NULL argument leaves the existing value
+        // unchanged. The JSONB payload (data, standorteigenschaften) and the
+        // version are intentionally untouched.
+        let affected = sqlx::query(
+            r#"UPDATE melo
+               SET netzebene_messung = COALESCE($2, netzebene_messung),
+                   regelzone         = COALESCE($3, regelzone),
+                   updated_at        = now()
+               WHERE melo_id = $1"#,
+        )
+        .bind(melo_id.as_ref())
+        .bind(&patch.netzebene_messung)
+        .bind(&patch.regelzone)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?
+        .rows_affected();
+        Ok(affected > 0)
     }
 }

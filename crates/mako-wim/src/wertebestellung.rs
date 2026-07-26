@@ -102,6 +102,21 @@ pub const STORNO_ABLEHNUNG_PID: Pruefidentifikator = Pruefidentifikator::const_n
 /// the ESA deployment's separate Typ-2 store (`esa_typ2_reads`).
 pub const WERTE_UEBERMITTLUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(13027);
 
+/// IFTSTA — "WiM / Umsetzungsstatus (Bestellung WiM)" (MSB → ESA), UC 4.4 Nr. 1.
+///
+/// The MSB-initiated Beendigung of a running value delivery (§60 MsbG). The
+/// termination status travels in SG15 `STS 4405 = 105` ("beendet"). This is the
+/// **only** IFTSTA Prüfidentifikator in the ESA Wertebestellung process — every
+/// other step is REQOTE/QUOTES/ORDERS/ORDCHG/ORDRSP.
+///
+/// Authoritative meaning per **IFTSTA AHB 2.0g** (Kap. 6.10 „Bestellung (WiM)",
+/// Kommunikation von MSB an ESA). Note: earlier profile metadata mislabelled
+/// 21042 as an EnFG Privilegierungsinformation — corrected against the AHB.
+pub const BEENDIGUNG_MSB_PID: Pruefidentifikator = Pruefidentifikator::const_new(21042);
+
+/// SG15 `STS 4405` status value carried by [`BEENDIGUNG_MSB_PID`]: „beendet".
+pub const STS_BEENDET: &str = "105";
+
 /// Every PID this workflow accepts inbound (ESA → MSB).
 pub const INBOUND_PIDS: &[Pruefidentifikator] = &[
     ANFRAGE_PID,
@@ -120,6 +135,8 @@ pub const ESA_INBOUND_PIDS: &[Pruefidentifikator] = &[
     ABLEHNUNG_PID,
     STORNO_BESTAETIGUNG_PID,
     STORNO_ABLEHNUNG_PID,
+    // UC 4.4: the MSB-initiated Beendigung (IFTSTA 21042) arrives at the ESA.
+    BEENDIGUNG_MSB_PID,
 ];
 
 /// Every PID this workflow emits outbound (MSB → ESA).
@@ -129,6 +146,8 @@ pub const OUTBOUND_PIDS: &[Pruefidentifikator] = &[
     ABLEHNUNG_PID,
     STORNO_BESTAETIGUNG_PID,
     STORNO_ABLEHNUNG_PID,
+    // UC 4.4: the MSB emits the Beendigung (IFTSTA 21042) toward the ESA.
+    BEENDIGUNG_MSB_PID,
 ];
 
 // ── Fristen ───────────────────────────────────────────────────────────────────
@@ -1202,12 +1221,34 @@ impl Workflow for WimWertebestellungWorkflow {
                         state.label(),
                     ));
                 }
-                Ok(vec![E::BeendetDurchMsb {
-                    message_ref,
-                    beendigung_zum,
-                    reason,
-                }]
-                .into())
+                // UC 4.4: notify the ESA on the wire via IFTSTA 21042
+                // (WiM Umsetzungsstatus, STS 4405 = 105 „beendet").
+                let data = state
+                    .data()
+                    .expect("lieferung_erlaubt() implies process data is present");
+                let outbox = PendingOutbox::new(
+                    "IFTSTA",
+                    data.esa.as_str(),
+                    serde_json::json!({
+                        "pid": BEENDIGUNG_MSB_PID,
+                        "sender": data.msb.as_str(),
+                        "receiver": data.esa.as_str(),
+                        "message_ref": message_ref.as_str(),
+                        "location": data.lokations_id,
+                        "sts_code": STS_BEENDET,
+                        "order_reference": data.inbound_order_ref,
+                        "beendigung_zum": beendigung_zum,
+                        "reason": reason,
+                    }),
+                );
+                Ok(WorkflowOutput::with_outbox(
+                    vec![E::BeendetDurchMsb {
+                        message_ref,
+                        beendigung_zum,
+                        reason,
+                    }],
+                    vec![outbox],
+                ))
             }
 
             C::TimeoutExpired { label, .. } => {

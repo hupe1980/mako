@@ -52,23 +52,39 @@ pub trait SpotPriceSource: Send + Sync {
     fn source_name(&self) -> &str;
 }
 
+/// Market Time Unit (MTU) length for the EPEX day-ahead auction, in minutes.
+///
+/// Since 2025-10-01 the SDAC day-ahead auction settles on **15-minute**
+/// products (96 quarter-hours per delivery day; 92/100 on the DST days) —
+/// EPEX SPOT go-live 01.10.2025. All spot pricing is keyed on this MTU.
+pub const MTU_MINUTES: i64 = 15;
+
+/// Floor a UTC instant to the start of its EPEX market time unit (quarter-hour).
+///
+/// CET/CEST are whole-hour offsets, so a local quarter-hour boundary is always
+/// a UTC quarter-hour boundary — flooring in UTC is therefore DST-safe and
+/// needs no timezone conversion. This is the canonical spot-price map key.
+#[must_use]
+pub fn mtu_start(timestamp_utc: time::OffsetDateTime) -> time::OffsetDateTime {
+    let step = MTU_MINUTES * 60;
+    let secs = timestamp_utc.unix_timestamp();
+    let floored = secs - secs.rem_euclid(step);
+    time::OffsetDateTime::from_unix_timestamp(floored).unwrap_or(timestamp_utc)
+}
+
 /// EPEX Spot Day-Ahead price lookup map.
 ///
-/// Key: `(year, month, day, hour_CET)` — local German time (CET/CEST).
-/// Value: spot price in ct/kWh.
+/// Key: the UTC start instant of the 15-minute market time unit ([`mtu_start`]).
+/// Value: spot price in ct/kWh. DST-safe and resolution-agnostic — a lookup
+/// floors any timestamp to its quarter-hour before matching.
 pub struct EpexSpotSource {
-    /// Maps `(year, month, day, hour_CET)` → ct/kWh.
-    pub prices: std::collections::HashMap<(i32, u8, u8, u8), rust_decimal::Decimal>,
+    /// Maps the quarter-hour MTU start (UTC) → ct/kWh.
+    pub prices: std::collections::HashMap<time::OffsetDateTime, rust_decimal::Decimal>,
 }
 
 impl SpotPriceSource for EpexSpotSource {
     fn price_ct_kwh(&self, timestamp_utc: time::OffsetDateTime) -> Option<rust_decimal::Decimal> {
-        // Convert UTC → German local time for the map key
-        use time_tz::{OffsetDateTimeExt, timezones};
-        let berlin = timezones::db::europe::BERLIN;
-        let local = timestamp_utc.to_timezone(berlin);
-        let key = (local.year(), local.month() as u8, local.day(), local.hour());
-        self.prices.get(&key).copied()
+        self.prices.get(&mtu_start(timestamp_utc)).copied()
     }
 
     fn source_name(&self) -> &str {

@@ -1006,12 +1006,23 @@ pub struct UpsertTrRequest {
     pub malo_id: Option<String>,
     /// Associated MeLo-ID (`vorgelagerte_messlokation_id`), if known.
     pub melo_id: Option<String>,
-    /// Classification: `"EMobilitaet"` | `"Erzeugung"` | `"Speicher"`.
-    pub tr_typ: Option<String>,
+    /// BO4E `TechnischeRessourceNutzung`: `"STROMVERBRAUCHSART"` |
+    /// `"STROMERZEUGUNGSART"` | `"SPEICHER"`. Falls back to `data`'s
+    /// `technischeRessourceNutzung` when omitted.
+    pub nutzung: Option<String>,
+    /// BO4E `TechnischeRessourceVerbrauchsart` (only for `STROMVERBRAUCHSART`):
+    /// `"KRAFT_LICHT"` | `"WAERME"` | `"E_MOBILITAET"` | `"STRASSENBELEUCHTUNG"`.
+    pub verbrauchsart: Option<String>,
     /// Whether the resource can be remote-controlled (Redispatch 2.0).
     pub ist_fernschaltbar: Option<bool>,
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
+}
+
+/// Serialize a BO4E enum to its canonical wire string (e.g. `SPEICHER`).
+fn bo4e_wire<T: serde::Serialize>(x: Option<&T>) -> Option<String> {
+    x.and_then(|v| serde_json::to_value(v).ok())
+        .and_then(|v| v.as_str().map(str::to_owned))
 }
 
 /// `PUT /api/v1/technische-ressourcen/{tr_id}`
@@ -1040,20 +1051,35 @@ pub async fn put_technische_ressource(
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    // Validate tr_typ against the BO4E TechnischeRessource classification enum.
-    const VALID_TR_TYPEN: &[&str] = &["EMobilitaet", "Erzeugung", "Speicher"];
-    if let Some(t) = req.tr_typ.as_deref()
-        && !VALID_TR_TYPEN.contains(&t)
+    // Validate nutzung / verbrauchsart against the BO4E TechnischeRessource enums.
+    const VALID_NUTZUNG: &[&str] = &["STROMVERBRAUCHSART", "STROMERZEUGUNGSART", "SPEICHER"];
+    const VALID_VERBRAUCHSART: &[&str] = &[
+        "KRAFT_LICHT",
+        "WAERME",
+        "E_MOBILITAET",
+        "STRASSENBELEUCHTUNG",
+    ];
+    if let Some(n) = req.nutzung.as_deref()
+        && !VALID_NUTZUNG.contains(&n)
     {
         return (
             StatusCode::BAD_REQUEST,
-            format!("invalid tr_typ '{t}': must be one of EMobilitaet, Erzeugung, Speicher"),
+            format!("invalid nutzung '{n}': must be one of {VALID_NUTZUNG:?}"),
+        )
+            .into_response();
+    }
+    if let Some(v) = req.verbrauchsart.as_deref()
+        && !VALID_VERBRAUCHSART.contains(&v)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("invalid verbrauchsart '{v}': must be one of {VALID_VERBRAUCHSART:?}"),
         )
             .into_response();
     }
 
     // Validate data against rubo4e::current::TechnischeRessource (N1).
-    // Also derive ist_fernschaltbar from the typed payload when not set in the request.
+    // Also derive typed fields from the payload when not set in the request.
     let typed_tr = match serde_json::from_value::<TechnischeRessource>(req.data.clone()) {
         Ok(v) => v,
         Err(e) => {
@@ -1064,8 +1090,16 @@ pub async fn put_technische_ressource(
                 .into_response();
         }
     };
-    // Prefer the explicit request field; fall back to what the BO4E payload declares.
+    // Prefer the explicit request fields; fall back to what the BO4E payload declares.
     let ist_fernschaltbar = req.ist_fernschaltbar.or(typed_tr.ist_fernschaltbar);
+    let nutzung = req
+        .nutzung
+        .clone()
+        .or_else(|| bo4e_wire(typed_tr.technische_ressource_nutzung.as_ref()));
+    let verbrauchsart = req
+        .verbrauchsart
+        .clone()
+        .or_else(|| bo4e_wire(typed_tr.technische_ressource_verbrauchsart.as_ref()));
 
     let mut data = req.data;
     inject_bo4e_typ(&mut data, "TECHNISCHERESSOURCE");
@@ -1076,7 +1110,8 @@ pub async fn put_technische_ressource(
             &tenant_gln,
             req.malo_id.as_deref(),
             req.melo_id.as_deref(),
-            req.tr_typ.as_deref(),
+            nutzung.as_deref(),
+            verbrauchsart.as_deref(),
             ist_fernschaltbar,
             data,
             &req.bo4e_version,

@@ -261,12 +261,12 @@ pub(crate) async fn resolve_zaehlernummer(
     let edges = marktd.get_lokationen(malo_id, "malo", None).await.ok()?;
     let melo_id = edges
         .iter()
-        .find(|e| e.nach_typ == "melo")
+        .find(|e| e.nach_typ == rubo4e::current::Lokationstyp::Melo)
         .map(|e| e.nach_id.clone())
         .or_else(|| {
             edges
                 .iter()
-                .find(|e| e.von_typ == "melo")
+                .find(|e| e.von_typ == rubo4e::current::Lokationstyp::Melo)
                 .map(|e| e.von_id.clone())
         })?;
     marktd

@@ -311,6 +311,14 @@ pub struct RunConfig {
     pub webhook_url: String,
     pub webhook_secret: Option<SecretString>,
     pub inbound_secret: Option<SecretString>,
+    /// Event types obsd asks `marktd` to fan out to it.
+    pub subscription_event_types: Vec<String>,
+    /// Outbound target for the `de.obs.*` events obsd produces (marktd
+    /// event-ingest in production). `None` disables the sweep producers.
+    pub outbound_url: Option<String>,
+    pub outbound_secret: Option<SecretString>,
+    /// Background sweep-worker tuning.
+    pub worker: crate::config::WorkerConfig,
     pub db_pool_size: u32,
     /// Tenant identifier — used as Cedar resource_tenant.
     pub tenant: String,
@@ -352,6 +360,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         ),
     });
 
+    let worker_pool = pool.clone();
     let repo = PgProcessProjectionRepository::new(pool);
 
     // §20 EnWG: build the affiliate-detection set from configured own_mp_ids.
@@ -362,6 +371,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         cfg.own_mp_ids.into_iter().collect()
     };
 
+    let tenant = cfg.tenant.clone();
     let state = HandlerState {
         repo,
         inbound_secret: Arc::new(cfg.inbound_secret),
@@ -377,6 +387,14 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
             cfg.marktd_api_key.clone(),
             default_client(),
         );
+        // Subscribe to the full configured event set — obsd needs
+        // `process.initiated` (to create the projection + register the
+        // deadline the sweep worker watches), not only `process.completed`.
+        let event_types: Vec<&str> = cfg
+            .subscription_event_types
+            .iter()
+            .map(String::as_str)
+            .collect();
         marktd
             .put_subscription(
                 &cfg.subscriber_id,
@@ -387,12 +405,40 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
                         let secret: &str = s.expose_secret();
                         secret
                     }),
-                    event_types: &[mako_events::mako::PROCESS_COMPLETED],
+                    event_types: &event_types,
                     makopid_filter: &[],
                     active: true,
                 },
             )
             .await;
+    }
+
+    // ── Background: de.obs.* producers (only when an outbound target is set) ──
+    if let Some(outbound_url) = cfg.outbound_url {
+        use mako_service::http::default_client;
+        let rt = crate::worker::WorkerRuntime {
+            pool: worker_pool,
+            client: Arc::new(default_client()),
+            outbound_url: Arc::new(outbound_url),
+            outbound_secret: cfg.outbound_secret.map(|s| {
+                use secrecy::ExposeSecret;
+                Arc::new(s.expose_secret().to_owned())
+            }),
+            tenant: tenant.clone(),
+            deadline_sweep_secs: cfg.worker.deadline_sweep_secs,
+            deadline_warn_hours: cfg.worker.deadline_warn_hours,
+            parity_sweep_secs: cfg.worker.parity_sweep_secs,
+            parity_threshold_pp: cfg.worker.parity_threshold_pp,
+            parity_window_days: cfg.worker.parity_window_days,
+        };
+        crate::worker::spawn_deadline_sweep(rt.clone(), cfg.shutdown.clone());
+        crate::worker::spawn_parity_sweep(rt, cfg.shutdown.clone());
+        tracing::info!("obsd: de.obs.* sweep producers started");
+    } else {
+        tracing::warn!(
+            "obsd: webhook.outbound_url not set — de.obs.deadline.approaching and \
+             de.obs.stp.parity.alert producers are disabled"
+        );
     }
 
     let app = router(state)

@@ -105,6 +105,15 @@ pub(super) fn cmd_geli_gas_datenabruf_anfragen<'a>(
     Box::pin(dispatch_geli_gas_datenabruf_anfragen(s, p))
 }
 
+pub(super) fn cmd_geli_eog_anmelden<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_geli_eog_anmelden(s, p))
+}
+
 /// Dispatch `geli.gas.datenabruf.anfragen` — LF requests Gas quality data from NB.
 ///
 /// Spawns a new [`GeliGasDatanabrufWorkflow`] and sends ORDERS 17103 outbound
@@ -184,6 +193,135 @@ pub(super) async fn dispatch_geli_gas_datenabruf_anfragen(
         .as_process_registry()
         .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
         .await;
+
+    Ok(DispatchOutcome::Spawned { process_id })
+}
+
+/// Dispatch `geli.eog.anmelden` — GNB registers a Gas MaLo into Ersatz-/
+/// Grundversorgung by sending UTILMD G **44013** (EoG Anmeldung) to the E/G
+/// Lieferant. This is the Gas twin of `gpke.eog.anmelden` (Strom 55013).
+///
+/// Spawns a [`GeliGasSupplierChangeWorkflow`] in its GNB-initiator role
+/// ([`GasSupplierChangeCommand::InitiateGnbProcess`]) and registers the
+/// 10-Werktage response window (BK7-24-01-009) atomically.
+///
+/// ## Required payload fields
+///
+/// | Field          | Type   | Notes |
+/// |----------------|--------|-------|
+/// | `malo_id`      | string | Gas Marktlokations-ID |
+/// | `gv_mp_id`     | string | MP-ID of the E/G Lieferant (message receiver) |
+/// | `process_date` | string | Zuordnungsbeginn, ISO-8601 or `YYYYMMDD` |
+pub(super) async fn dispatch_geli_eog_anmelden(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    const EOG_GAS_PID: u32 = 44013;
+
+    let malo_id = extract_malo_id(payload)?;
+    let gv_mp_id = payload
+        .get("gv_mp_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"gv_mp_id\" (MP-ID of the E/G Lieferant)".into(),
+            )
+        })?
+        .to_owned();
+    let process_date = payload
+        .get("process_date")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"process_date\" (Zuordnungsbeginn, ISO-8601)".into(),
+            )
+        })?
+        .to_owned();
+
+    let today = time::OffsetDateTime::now_utc().date();
+    let document_date = format!(
+        "{:04}{:02}{:02}",
+        today.year(),
+        u8::from(today.month()),
+        today.day()
+    );
+
+    let pid = Pruefidentifikator::new(EOG_GAS_PID).map_err(DispatchError::InvalidPayload)?;
+    let message_ref = MessageRef::new(format!("EOG-GAS-{}", uuid::Uuid::new_v4()));
+    let domain_cmd = GasSupplierChangeCommand::InitiateGnbProcess {
+        pid,
+        sender: MarktpartnerCode::new(state.sender_party_id.clone()),
+        receiver: MarktpartnerCode::new(gv_mp_id),
+        malo_id: malo_id.clone(),
+        document_date,
+        process_date,
+        message_ref,
+    };
+
+    // Idempotency guard: one active supplier-change process per Gas-MaLo.
+    let existing = state
+        .store
+        .as_process_registry()
+        .lookup_correlated(state.tenant_id, malo_id.as_str())
+        .await
+        .map_err(DispatchError::Engine)?;
+    if let Some(dup) = existing
+        .into_iter()
+        .find(|id| id.workflow_id.name.as_ref() == mako_geli_gas::WORKFLOW_NAME)
+    {
+        tracing::warn!(
+            malo_id    = %malo_id,
+            process_id = %dup.process_id,
+            "geli.eog.anmelden refused: supplier-change process already registered for this Gas-MaLo",
+        );
+        return Err(DispatchError::DuplicateProcess {
+            process_id: dup.process_id,
+            malo_id: malo_id.into(),
+        });
+    }
+
+    let workflow_id = WorkflowId::new(mako_geli_gas::WORKFLOW_NAME, latest_format_version());
+    let process = mako_engine::process::Process::<
+        GeliGasSupplierChangeWorkflow,
+        Arc<mako_engine::store_slatedb::SlateDbStore>,
+    >::new(
+        Arc::clone(&state.store),
+        state.tenant_id,
+        workflow_id.clone(),
+    );
+    let process_id = process.process_id();
+
+    let due_at = mako_engine::fristen::deadline_at_werktage(
+        time::OffsetDateTime::now_utc(),
+        10,
+        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+    );
+    let deadline = Deadline::new(
+        process.stream_id().clone(),
+        process_id,
+        state.tenant_id,
+        workflow_id,
+        mako_geli_gas::LIEFERBEGINN_RESPONSE_WINDOW_LABEL,
+        due_at,
+    );
+    process
+        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
+        .await?;
+
+    let identity = process.identity();
+    if let Err(e) = state
+        .store
+        .as_process_registry()
+        .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
+        .await
+    {
+        tracing::warn!(
+            process_id = %process_id,
+            malo_id    = %malo_id,
+            error      = %e,
+            "geli.eog.anmelden: business-key registration failed (non-fatal)",
+        );
+    }
 
     Ok(DispatchOutcome::Spawned { process_id })
 }

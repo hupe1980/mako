@@ -51,6 +51,9 @@ pub struct PutGrundversorgerBody {
     pub gv_mp_id: String,
     /// Date of the §36 Abs. 2 Feststellung (ISO date).
     pub festgestellt_am: Option<String>,
+    /// Pre-deposited default Bilanzkreis for EoG-ohne-Antwort (GPKE Teil 4).
+    #[serde(default)]
+    pub default_bilanzkreis: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -169,6 +172,7 @@ pub async fn put_grundversorger(
         sparte,
         gv_mp_id: body.gv_mp_id,
         festgestellt_am,
+        default_bilanzkreis: body.default_bilanzkreis,
         updated_at: OffsetDateTime::now_utc(),
         tenant,
     };

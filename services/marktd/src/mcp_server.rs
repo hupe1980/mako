@@ -970,7 +970,7 @@ Returns the version_id that was queued. Actual dispatch is asynchronous. \
         Parameters(p): Parameters<GetTechnischeRessourceParams>,
     ) -> Result<CallToolResult, McpError> {
         let row = sqlx::query(
-            r"SELECT tr_id, malo_id, melo_id, tr_typ, ist_fernschaltbar, data, version, updated_at
+            r"SELECT tr_id, malo_id, melo_id, nutzung, verbrauchsart, ist_fernschaltbar, data, version, updated_at
               FROM technische_ressourcen
               WHERE tr_id = $1 AND tenant = $2",
         )
@@ -986,7 +986,8 @@ Returns the version_id that was queued. Actual dispatch is asynchronous. \
                 "tr_id": r.try_get::<String,_>("tr_id").ok(),
                 "malo_id": r.try_get::<Option<String>,_>("malo_id").ok().flatten(),
                 "melo_id": r.try_get::<Option<String>,_>("melo_id").ok().flatten(),
-                "tr_typ": r.try_get::<Option<String>,_>("tr_typ").ok().flatten(),
+                "nutzung": r.try_get::<Option<String>,_>("nutzung").ok().flatten(),
+                "verbrauchsart": r.try_get::<Option<String>,_>("verbrauchsart").ok().flatten(),
                 "ist_fernschaltbar": r.try_get::<Option<bool>,_>("ist_fernschaltbar").ok().flatten(),
                 "version": r.try_get::<i64,_>("version").ok(),
                 "updated_at": r.try_get::<time::OffsetDateTime,_>("updated_at").ok().map(|t| t.to_string()),

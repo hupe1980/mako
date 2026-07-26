@@ -297,7 +297,7 @@ when {
 
 ### Custom policies
 
-Replace `policies/marktd.cedar` and restart `marktd`. Hot-reload is not yet implemented.
+Replace `policies/marktd.cedar` and restart `marktd`; policies are loaded at startup.
 
 ---
 
@@ -336,7 +336,7 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/api/v1/versorgung/{malo_id}/history` | `read-versorgungsstatus` | Full supply-state change history (newest first, paged) |
 | `PUT` | `/api/v1/versorgung/{malo_id}` | `write-versorgungsstatus` | Upsert VersorgungsStatus (ERP-driven override) |
 | `GET` | `/api/v1/grundversorger/{nb_mp_id}` | `read-grundversorger` | Grundversorger Feststellung (§36 Abs. 2 EnWG); `?sparte=STROM\|GAS` |
-| `PUT` | `/api/v1/grundversorger/{nb_mp_id}` | `write-grundversorger` | Upsert the Feststellung (NB role) — read by the processd EoG gap closure |
+| `PUT` | `/api/v1/grundversorger/{nb_mp_id}` | `write-grundversorger` | Upsert the Feststellung (NB role) — read by the processd EoG gap closure. Optional `default_bilanzkreis` deposits the GPKE-Teil-4 default BK applied when an EoG completes without the E/G supplying its own (EoG ohne Antwort). |
 | `POST` | `/api/v1/esa/einwilligungen` | — | Grant an ESA consent (§49 Abs. 2 Nr. 9 MsbG). Emits `de.markt.einwilligung.erteilt`. Evidence-agnostic |
 | `GET` | `/api/v1/esa/einwilligungen` | — | List active consents (`?esa_mp_id=`) |
 | `GET` | `/api/v1/esa/einwilligungen/{id}` | — | Get a consent |
@@ -353,6 +353,9 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/api/v1/nelo` | `read-nelo` | List NeLos (`?nb_mp_id=` filters by Netzbetreiber) |
 | `GET` | `/api/v1/nelo/{id}` | `read-nelo` | Get a NeLo by EIC / BDEW Codenummer |
 | `PUT` | `/api/v1/nelo/{id}` | `write-nelo` (NB role) | Insert or update a NeLo |
+| `GET` | `/api/v1/tranche` | `read-tranche` | List Tranchen (`?malo_id=` filters by parent MaLo) |
+| `GET` | `/api/v1/tranche/{id}` | `read-tranche` | Get a Tranche |
+| `PUT` | `/api/v1/tranche/{id}` | `write-tranche` (NB role) | Insert or update a Tranche (GPKE Teil 4 „Daten der Tranche") |
 | `GET` | `/api/v1/malo/{malo_id}/grid` | `read-malo` | MaLo grid topology (Netzgebiet, Bilanzierungsgebiet) |
 | `PUT` | `/api/v1/malo/{malo_id}/grid` | `write-malo` (NB role) | Upsert grid record from NIS/GIS |
 | `GET` | `/api/v1/preisblaetter-messung/{msb_mp_id}` | `read-preisblatt` | `PreisblattMessung` valid on date (MSB metering tariffs); includes `auf_abschlaege` |
@@ -364,10 +367,17 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `PUT` | `/api/v1/technische-ressourcen/{tr_id}` | `write-device` | Upsert a `TechnischeRessource` (E-mobility, generation, storage) |
 | `GET` | `/api/v1/malos/{malo_id}/technische-ressourcen` | `read-device` | List `TechnischeRessource` for a `MaLo` |
 | `GET` | `/api/v1/malo/{id}/lokationen` | `read-malo` | Recursive `Lokationszuordnung` graph from a MaLo (`?at=YYYY-MM-DD`) |
+| `GET` | `/api/v1/malos/{id}/buendel` | `read-malo` | First-class **Lokationsbündel** rooted at a MaLo — the bundle projected from the typed graph plus its structural-integrity status (`valid` + `validation_error`; ≥1 MeLo required) |
 | `GET` | `/api/v1/melos/{id}/lokationen` | `read-melo` | Recursive `Lokationszuordnung` graph from a MeLo |
 | `PUT` | `/api/v1/lokationszuordnungen` | `write-malo` | Upsert a directed location graph edge (`lokationsbuendelcode` extracted into a typed column). Note the single-write-path invariant: a MeLo `PUT` reconciles the `melo→malo` graph edge in the same transaction (previous edges closed with `valid_to`, never deleted), so the `melo.malo_id` FK and the graph cannot drift |
 | `DELETE` | `/api/v1/lokationszuordnungen/{von_id}/{nach_id}` | `write-malo` | Hard-delete an edge pair (all temporal variants) |
 | `GET` | `/api/v1/melos/{melo_id}/zaehler` | `read-device` | List `Zaehler` for a MeLo (typed `Vec<ZaehlerResponse>` with `data: rubo4e::current::Zaehler`) |
+| `GET` | `/api/v1/melos/{melo_id}/msb` | `read-melo-msb` | The MSB responsible for the MeLo on `?at=YYYY-MM-DD` (default today) — WiM Teil 2 UC 4.1.1 historical Werteanfrage routing |
+| `PUT` | `/api/v1/melos/{melo_id}/msb` | `write-melo-msb` | Record a dated MSB assignment (`{ msb_mp_id, valid_from }`); closes the previously-open assignment atomically |
+| `GET` | `/api/v1/melos/{melo_id}/msb/history` | `read-melo-msb` | Full dated MSB timeline for the MeLo (newest first) |
+| `PUT` | `/api/v1/malo/{malo_id}/bilanzierung` | `write-bilanzierung` | Upsert a **BO4E `Bilanzierung`** (BO #3) — type-validated, keyed on `(malo, bilanzierungsbeginn)`; typed columns (Bilanzkreis/Aggregationsverantwortung/Prognosegrundlage/Fallgruppe) extracted, full BO stored as JSONB |
+| `GET` | `/api/v1/malo/{malo_id}/bilanzierung` | `read-bilanzierung` | The Bilanzierung effective at `?at=<RFC3339\|YYYY-MM-DD>` (default now) — point-in-time by validity window |
+| `GET` | `/api/v1/malo/{malo_id}/bilanzierung/history` | `read-bilanzierung` | Full Bilanzierung history for the MaLo (newest validity-start first) |
 | `GET` | `/api/v1/melos/{melo_id}/sharing-eligibility` | `read-sharing-eligibility` | §42c EnWG metering **capability** — qualifies via Zählerstandsgangmessung (§2 Satz 1 Nr. 27 MsbG) **or** viertelstündliche RLM. Returns `capability`, `basis`, `required_action`, `reasons`, `bilanzierungsgebiet`, and the master-data `evidence` it decided from. |
 | `GET` | `/api/v1/zaehler/{zaehler_id}/zaehlwerke` | `read-device` | List `Zaehlwerk` registers for a Zaehler (typed `Vec<Zaehlwerk>` from JSONB) |
 | `PUT` | `/api/v1/zaehler/{zaehler_id}` | `write-device` | Upsert a `Zaehler`; validates `_typ = ZAEHLER` and schema (422 on violation) |
@@ -451,7 +461,7 @@ Every price sheet row carries a `source` field:
 | Source | Set by | Semantics |
 |---|---|---|
 | `api` | REST `PUT /api/v1/preisblaetter/{nb_mp_id}` | Operator-supplied via REST API or ERP export |
-| `mako` | Future: PRICAT 27003 ingest path in invoicd/makod | Received as EDIFACT from the NB |
+| `mako` | PRICAT ingest path (invoicd/makod) | Received as EDIFACT from the NB |
 
 **Operator-override rule:** an `api` entry always supersedes a `mako` entry for
 the same NB GLN and validity period. A price sheet uploaded via the REST API
@@ -594,7 +604,9 @@ Migrations run automatically at startup via `sqlx migrate run`.
 |---|---|
 | `malo` | Marktlokationen — JSONB payload, `bo4e_version`, GIN index |
 | `rollenzuordnungen` | Temporal NB/LF/MSB role assignments per MaLo |
-| `lokationszuordnungen` | Location graph edges — `(tenant, von_id, von_typ, nach_id, nach_typ, valid_from, valid_to)`; recursive-CTE BFS traversal |
+| `melo_msb_zuordnungen` | Per-MeLo **dated MSB timeline** — `(tenant, melo_id, msb_mp_id, valid_from, valid_to)`; point-in-time MSB resolution for WiM Teil 2 UC 4.1.1 (a MaLo can bundle MeLos with divergent MSB history) |
+| `bilanzierungen` | **BO4E `Bilanzierung`** (BO #3) — first-class temporal balancing resource per MaLo: `bilanzierungsbeginn/ende` validity, typed `bilanzkreis`/`aggregationsverantwortung`/`prognosegrundlage`/`fallgruppenzuordnung`, full BO in `data JSONB`. Authoritative home for the `Bilanzierung`-model fields. Writing a currently-effective Bilanzierung **derives** `malo.fallgruppe`. Note: `malo.bilanzierungsmethode`/`bilanzierungsgebiet` are **`Marktlokation`** fields (BO #12), correctly on `malo` — not `Bilanzierung` |
+| `lokationszuordnungen` | Location graph edges — `(tenant, von_id, von_typ, nach_id, nach_typ, valid_from, valid_to)`; `von_typ`/`nach_typ` are the canonical BO4E `Lokationstyp` codes (`MALO`/`MELO`/`NELO`/`SR`/`TR`); recursive-CTE BFS traversal |
 | `melo` | Messlokationen — JSONB payload, `bo4e_version` |
 | `contracts` | Energy contracts — JSONB payload, `bo4e_version`, **`valid_from DATE`**, **`valid_to DATE`** |
 | `partners` | Trading partners (GLN → channels) — JSONB |
@@ -609,9 +621,10 @@ Migrations run automatically at startup via `sqlx migrate run`.
 | `pricat_versions` | Versioned PRICAT snapshots — `(nb_mp_id, tenant, valid_from)` unique, dispatch state |
 | `pricat_dispatch_log` | Dispatch audit log — one row per NB × LF dispatch attempt |
 | `nelo` | Netz-Element-Lokationen (Redispatch 2.0) — EIC or BDEW Codenummer, owner NB GLN, JSONB data |
+| `tranche` | Tranchen der Marktlokation (GPKE Teil 4 „Daten der Tranche") — keyed by `(tranche_id, tenant)`, parent `malo_id`; `bilanzierungsgebiet`/`netzebene`/`energierichtung` typed columns + BO4E `Tranche` JSONB |
 | `malo_grid` | MaLo grid topology — Netzgebiet, Bilanzierungsgebiet, sourced from NIS/GIS |
 | `steuerbare_ressourcen` | WiM iMS controllable resources — keyed by SR-ID (`C[A-Z0-9]{9}[0-9]`), linked to MaLo; `konfigurationsprodukte JSONB` for contracted iMS control products  |
-| `technische_ressourcen` | E-mobility, generation, storage resources — keyed by TrId; `tr_typ`, `ist_fernschaltbar` typed columns; linked to MaLo/MeLo |
+| `technische_ressourcen` | E-mobility, generation, storage resources — keyed by TrId; BO4E-aligned `nutzung` (`TechnischeRessourceNutzung`) + `verbrauchsart` (`TechnischeRessourceVerbrauchsart`) + `ist_fernschaltbar` typed columns; linked to MaLo/MeLo |
 | `zaehler` | Meter registry — linked to MeLo; `zaehler_typ` (CHECK-constrained to BO4E `Zaehlertyp`), `eichung_bis` typed columns; BO4E payload with `zaehlwerke` array |
 | `geraete` | Device registry — linked to Zaehler, stores `geraet_typ`, BO4E payload, and `geraet_konfigurationen JSONB` (typed `GeraetKonfiguration[]` per MsbG §23; GIN-indexed for cert-expiry queries) |
 | `event_log` | Durable CloudEvent replay log — keyed by `event_id` (unique); indexed by `ce_type` + `received_at` |
@@ -630,6 +643,7 @@ There are no incremental migration files — the initial schema is the authorita
 | `bilanzierungsmethode` | `TEXT` | `RLM` \| `SLP` \| `IMS` \| `TLP_*`; drives `netzbilanzd` Leistungspreis routing |
 | `regelzone` | `TEXT` | Regelzone EIC code — maps to ÜNB for Redispatch 2.0 + MABIS |
 | `fallgruppe` | `TEXT` | GaBi Gas RLM category (e.g. `LNF`, `LF`, `TK`) |
+| `fernsteuerbar` | `BOOLEAN` | §14a EnWG „Status der Fernsteuerbarkeit" — `true` = technisch fernsteuerbar, `false` = nicht (UTILMD `CCI+7037` `Z97`/`Z96`) |
 
 ### Key typed columns on `melo`
 
@@ -894,6 +908,8 @@ the raw `data` JSONB for backward compatibility:
 | Source | Event type | Trigger |
 |---|---|---|
 | marktd master data | `de.markt.malo.updated` | `PUT /api/v1/malo/{malo_id}` |
+| marktd master data | `de.markt.malo.stammdaten-geaendert` | UTILMD Stammdatenänderung applied to a MaLo (GPKE Teil 4 / GeLi Gas) — carries the applied `patch` |
+| marktd master data | `de.markt.stammdaten.geaendert` | UTILMD Stammdatenänderung applied to a non-MaLo object (MeLo/NeLo/Tranche) — carries `objekt` + the applied `patch` |
 | marktd master data | `de.markt.partner.updated` | `PUT /api/v1/partners/{mp_id}` |
 | marktd NB contract | `de.markt.nb-contract.updated` | `PUT /api/v1/nb-contracts/{id}` — carries `vertragsart`, `version`, `tenant` in `data` |
 | marktd PRICAT | `de.markt.pricat.published` | `PUT /api/v1/preisblaetter/{nb_mp_id}` |
@@ -1164,7 +1180,8 @@ A Lieferantenwechsel spans three distinct phases, each triggering a targeted par
 | **Announce** | `process.initiated` | 55001 / 44001 | `announce_lf_next` | Sets `lf_mp_id_next` (WHO) + `lf_next_lieferbeginn` (WHEN). Does **not** change `lieferstatus`. |
 | **Confirm** | `process.completed` | 55003 / 44003 | `confirm_supply` | Atomic SQL: `lf_mp_id ← lf_mp_id_next`, `lieferbeginn ← lf_next_lieferbeginn`, `lieferstatus = Beliefert`, clears `lf_mp_id_next`. |
 | **End** | `process.completed` | 55005 / 44005 | `end_supply` | `lieferstatus = Unbeliefert`, clears `lf_mp_id`/`lieferbeginn`/`eog_seit` — preserves `lf_mp_id_next` if another transition is already announced. No successor → emits `de.markt.versorgung.gap-detected`. |
-| **EoG** | `process.completed` | 55013 / 44013 | `begin_eog_supply` | `lieferstatus = Ersatzversorgung`/`Grundversorgung` (per `data.eog_art`), `lf_mp_id = E/G`, `eog_seit = Zuordnungsbeginn` (may be retroactive — anchors §38 Abs. 4). Emits `de.markt.versorgung.eog-begonnen`. |
+| **EoG** | `process.completed` | 55013 / 44013 | `begin_eog_supply` | `lieferstatus = Ersatzversorgung`/`Grundversorgung` (per `data.eog_art`), `lf_mp_id = E/G`, `eog_seit = Zuordnungsbeginn` (may be retroactive — anchors §38 Abs. 4). Resolves the Bilanzkreis from the completion payload, else the NB's deposited `default_bilanzkreis` (EoG ohne Antwort). Emits `de.markt.versorgung.eog-begonnen` (incl. `bilanzkreis`). |
+| **Stammdatenänderung** | `process.completed` | GPKE Teil 4 / GeLi Gas Änderung PIDs | `patch_stammdaten` | **Object-generic apply.** Dispatches by the `data.objekt` marker to the matching typed-column patch — `MARKTLOKATION`→`malo` (incl. §14a `fernsteuerbar`), `MESSLOKATION`→`melo` + the **MSB-Zuordnung** (zugeordneter MSB `CAV+7111=Z91`) recorded on the dated `melo_msb_zuordnungen` timeline via `assign_msb` effective the Änderungsdatum, `NETZLOKATION`→`nelo` (incl. §14a `steuerkanal`), `TECHNISCHE_RESSOURCE`→`technische_ressourcen` (`nutzung` `CCI+7059` Z17/Z50/Z56, `verbrauchsart` `CAV+7111` Z64/Z65/ZE5/ZA8, `ist_fernschaltbar`), `STEUERBARE_RESSOURCE`→`steuerbare_ressourcen` (**Konfigurationsprodukte** — each SG8 `SEQ+Z79` product group → a BO4E `Konfigurationsprodukt` with `produktcode` `PIA+5` DE7140, zugeordneter Marktpartner `CAV+Z91`/`ZF0`, and `leistungskurvendefinition` from `CCI+Z66`; the full contracted array is **replaced**, not merged), `TRANCHE`→`tranche`. Each `Some` field overwrites its column via `COALESCE`; JSONB payload and `version` untouched; no-op when the object is unknown locally. Emits `de.markt.malo.stammdaten-geaendert` (MaLo) / `de.markt.stammdaten.geaendert` (other objects). Deep MeLo `standorteigenschaften` are acknowledged without a typed apply (structural-MIG level). |
 | **Clear** | any | 55004 / 44004 | `clear_lf_next` | Lieferbeginn cancelled/rejected: resets `lf_mp_id_next` + `lf_next_lieferbeginn` so no consumer acts on a switch that will not happen. Idempotent — a no-op when nothing is announced. |
 
 All three operations are idempotent under at-least-once EventBus delivery.
@@ -2008,8 +2025,10 @@ are extracted into typed SQL columns at write time for efficient Redispatch 2.0 
 ## Location Graph — `Lokationszuordnung`
 
 The `lokationszuordnungen` table stores the full MaKo location graph as directed edges with
-temporal validity (`valid_from`, `valid_to`). Each edge connects two location nodes by type:
-`malo`, `melo`, `nelo`, `sr` (SteuerbareRessource), or `tr` (TechnischeRessource).
+temporal validity (`valid_from`, `valid_to`). Each edge connects two location nodes typed by the
+BO4E `Lokationstyp` — `MALO`, `MELO`, `NELO`, `SR` (SteuerbareRessource), or `TR`
+(TechnischeRessource). Node types are the typed `rubo4e::current::Lokationstyp` end to end
+(request body, storage, and traversal results), not free strings.
 
 ```mermaid
 graph LR
@@ -2043,15 +2062,39 @@ Response: `Vec<LokationszuordnungEdge>` ordered by `depth` (0 = direct edges fro
     "id": "550e8400-e29b-41d4-a716-446655440000",
     "tenant": "9900357000004",
     "von_id": "51238696780",
-    "von_typ": "malo",
+    "von_typ": "MALO",
     "nach_id": "DE-MEL-001",
-    "nach_typ": "melo",
+    "nach_typ": "MELO",
     "valid_from": null,
     "valid_to": null,
     "data": {},
     "depth": 0
   }
 ]
+```
+
+### Lokationsbündel
+
+`GET /api/v1/malos/{id}/buendel` returns the **Lokationsbündel** (UTILMD
+Lokationsbündelstruktur) as a first-class aggregate — the set of MeLos, NeLos,
+SRs, and TRs bundled under a MaLo, projected from the typed graph — together
+with its structural-integrity status. The aggregate (`mako_markt::repository::Lokationsbuendel`)
+enforces the bundle invariants at the domain boundary: a consuming MaLo must
+carry at least one MeLo, and all MeLos of the bundle must share one MSB
+(`validate` / `validate_msb_consistency`). A bundle can be transiently
+incomplete mid-Einzug, so the endpoint reports `valid: false` with a
+`validation_error` rather than failing the request.
+
+```json
+{
+  "malo_id": "51238696780",
+  "lokationsbuendelcode": "1S",
+  "messlokationen": ["DE-MEL-001"],
+  "netzlokationen": [],
+  "steuerbare_ressourcen": [],
+  "technische_ressourcen": [],
+  "valid": true
+}
 ```
 
 ### Upsert and delete
@@ -2063,9 +2106,9 @@ Content-Type: application/json
 
 {
   "von_id":    "51238696780",
-  "von_typ":   "malo",
+  "von_typ":   "MALO",
   "nach_id":   "DE-MEL-001",
-  "nach_typ":  "melo",
+  "nach_typ":  "MELO",
   "valid_from": null,
   "valid_to":   null,
   "data":       {}
@@ -2105,14 +2148,19 @@ GET  /api/v1/malos/{malo_id}/technische-ressourcen
   "data":              { "_typ": "TechnischeRessource", ... },
   "malo_id":           "51238696780",
   "melo_id":           "DE-MEL-001",
-  "tr_typ":            "EMobilitaet",
+  "nutzung":           "STROMVERBRAUCHSART",
+  "verbrauchsart":     "E_MOBILITAET",
   "ist_fernschaltbar": true,
   "bo4e_version":      "v202607.0.0"
 }
 ```
 
-`tr_typ` values: `"EMobilitaet"` | `"Erzeugung"` | `"Speicher"` (or omit for unknown).
-Invalid values are **rejected with `400 Bad Request`**.
+BO4E-aligned classification (both fall back to the typed `data` payload when
+omitted; invalid values are **rejected with `400 Bad Request`**):
+`nutzung` = `TechnischeRessourceNutzung`
+(`"STROMVERBRAUCHSART"` | `"STROMERZEUGUNGSART"` | `"SPEICHER"`);
+`verbrauchsart` = `TechnischeRessourceVerbrauchsart`, only for `STROMVERBRAUCHSART`
+(`"KRAFT_LICHT"` | `"WAERME"` | `"E_MOBILITAET"` | `"STRASSENBELEUCHTUNG"`).
 `ist_fernschaltbar: true` marks the resource as remotely controllable for Redispatch 2.0.
 
 ---
@@ -2144,6 +2192,7 @@ domain events. Each event carries the `markt*` extension attributes listed below
 | `type` | `subject` | Trigger | Consumers |
 |---|---|---|---|
 | `de.markt.malo.updated` | `malo_id` | MaLo PUT | `edmd`, `processd`, ERP |
+| `de.markt.malo.stammdaten-geaendert` | `malo_id` | UTILMD Stammdatenänderung applied | ERP audit |
 | `de.markt.melo.updated` | `melo_id` | MeLo PUT | `edmd`, `processd`, ERP |
 | `de.markt.pricat.published` | `nb_mp_id` | PRICAT 27003 dispatch | `netzbilanzd`, `invoicd`, ERP |
 | `de.markt.nb-contract.updated` | `contract_id` | NB contract PUT | ERP |

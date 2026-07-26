@@ -8,6 +8,7 @@
 //! All methods are `async` (AFIT, stable since Rust 1.75).
 //! All methods return `Result<_, MdmError>` annotated `#[must_use]`.
 
+use rubo4e::current::Lokationstyp;
 use serde::{Deserialize, Serialize};
 use time::Date;
 use uuid::Uuid;
@@ -152,7 +153,12 @@ pub struct MaloRecord {
     /// - MABIS IFTSTA 21000 routing (Bilanzkreisabrechnung Strom, BKV↔ÜNB)
     /// - Redispatch 2.0 `Stammdaten` forwarding (VNB → ÜNB)
     pub regelzone: Option<String>,
-    /// Gas GaBi RLM Fallgruppe, extracted from `data["fallgruppenzuordnung"]`.
+    /// Gas GaBi RLM Fallgruppe — **denormalised current-value derived from the
+    /// BO4E [`BilanzierungRecord`] resource** (`fallgruppenzuordnung`), which is
+    /// the authoritative, temporal home. Unlike `bilanzierungsmethode`/
+    /// `bilanzierungsgebiet` (genuine `Marktlokation` fields, BO #12), the GaBi
+    /// Fallgruppe is a `Bilanzierung` field (BO #3, absent from `Marktlokation`);
+    /// writing a Bilanzierung syncs this column.
     ///
     /// Values: `"GABI_RLM_MIT_TAGESBAND"` | `"GABI_RLM_OHNE_TAGESBAND"` |
     /// `"GABI_RLM_IM_NOMINIERUNGSERSATZVERFAHREN"`.
@@ -165,6 +171,14 @@ pub struct MaloRecord {
     /// are bundled for market communication (UTILMD Lokationsbündelstruktur).
     #[serde(default)]
     pub lokationsbuendel_objektcode: Option<String>,
+    /// §14a EnWG „Status der Fernsteuerbarkeit" of the Marktlokation.
+    ///
+    /// Extracted from UTILMD SG10 `CCI+7037`: `Z97` (technisch fernsteuerbar) →
+    /// `true`, `Z96` (technisch nicht fernsteuerbar) → `false`. `None` when the
+    /// message did not carry the characteristic. Relevant for the §14a EnWG
+    /// netzorientierte Steuerung of controllable consumption devices.
+    #[serde(default)]
+    pub fernsteuerbar: Option<bool>,
     pub version: i64,
     pub data: MaloPayload,
     /// Role assignments valid at the requested reference date.
@@ -415,6 +429,49 @@ pub struct MaloTypedFields {
     pub regelzone: Option<String>,
 }
 
+/// A UTILMD Stammdatenänderung applied to the typed MaLo columns.
+///
+/// Each `Some` field is a new authoritative value from a GPKE Teil 4 / GeLi Gas
+/// "Änderung Daten der MaLo" message; each `None` leaves the column untouched.
+/// Populated by the `makod` adapter from the UTILMD SG8 `SEQ`/SG10 `CCI`/`CAV`
+/// and `TM` segments and carried into the `de.mako.process.completed` payload
+/// that `marktd` applies via [`MaloRepository::patch_stammdaten`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MaloStammdatenPatch {
+    /// `netzebene` (e.g. `NSP7`).
+    pub netzebene: Option<String>,
+    /// `bilanzierungsgebiet` EIC.
+    pub bilanzierungsgebiet: Option<String>,
+    /// Gas quality (`HGAS`/`LGAS`).
+    pub gasqualitaet: Option<String>,
+    /// `energierichtung` (`AUSSP`/`EINSP`).
+    pub energierichtung: Option<String>,
+    /// Bilanzierungsmethode (`RLM`/`SLP`/`IMS`/`TLP_*`).
+    pub bilanzierungsmethode: Option<String>,
+    /// Regelzone EIC (ÜNB assignment).
+    pub regelzone: Option<String>,
+    /// GaBi RLM Fallgruppe.
+    pub fallgruppe: Option<String>,
+    /// §14a EnWG „Status der Fernsteuerbarkeit" (`CCI+7037` `Z97`→`true` /
+    /// `Z96`→`false`).
+    pub fernsteuerbar: Option<bool>,
+}
+
+impl MaloStammdatenPatch {
+    /// `true` when no column would change.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.netzebene.is_none()
+            && self.bilanzierungsgebiet.is_none()
+            && self.gasqualitaet.is_none()
+            && self.energierichtung.is_none()
+            && self.bilanzierungsmethode.is_none()
+            && self.regelzone.is_none()
+            && self.fallgruppe.is_none()
+            && self.fernsteuerbar.is_none()
+    }
+}
+
 /// Read/write access to `MARKTLOKATION` records.
 #[allow(async_fn_in_trait)]
 pub trait MaloRepository: Send + Sync {
@@ -451,6 +508,23 @@ pub trait MaloRepository: Send + Sync {
         fallgruppe: Option<&str>,
     ) -> Result<(), MdmError>;
 
+    /// Apply a UTILMD Stammdatenänderung (GPKE Teil 4 / GeLi Gas) to the typed
+    /// MaLo columns — the granular counterpart of
+    /// [`patch_typenmerkmal`](Self::patch_typenmerkmal) over the full
+    /// changeable attribute set.
+    ///
+    /// Each `Some` field overwrites its column; each `None` leaves it unchanged
+    /// (`COALESCE`). The JSONB payload and the optimistic `version` are **not**
+    /// touched — a Stammdatenänderung is authoritative master data arriving over
+    /// EDIFACT, not an operator edit. Returns `true` when a row was updated and
+    /// `false` when the MaLo is not yet known locally (the change is then a
+    /// no-op; the row is created by the next `PUT /api/v1/malo`).
+    async fn patch_stammdaten(
+        &self,
+        malo_id: &MaloId,
+        patch: &MaloStammdatenPatch,
+    ) -> Result<bool, MdmError>;
+
     /// Return the `MARKTLOKATION` with `rollenzuordnung` valid at `at`.
     ///
     /// `at` defaults to today (German local date).
@@ -460,6 +534,42 @@ pub trait MaloRepository: Send + Sync {
     ///
     /// `at` is the reference date for `rollenzuordnung` validity.
     async fn list(&self, filter: MaloFilter, at: Date) -> Result<PageResult<MaloRecord>, MdmError>;
+}
+
+/// A GPKE Teil 4 / GeLi Gas Stammdatenänderung applied to the typed
+/// `MESSLOKATION` columns (`LOC+Z17`, „Änderung Daten der MeLo").
+///
+/// The `makod` adapter builds one object-agnostic attribute map from the SG8
+/// `SEQ`/SG10 `CCI`/`CAV` groups; each object's patch struct picks the subset
+/// its table can hold via `serde(rename)`. For the MeLo that is (defensively)
+/// the metering point's Netzebene (`netzebene` → `netzebene_messung`) and the
+/// Regelzone.
+///
+/// **Verified against UTILMD AHB Strom 2.2 Kap. 9.1.5 (2026-07):** the MeLo
+/// Änderungsmeldung (`STS 9013=ZX7`) does **not** carry Netzebene/Regelzone
+/// characteristics — its actual payload is the **MSB-Zuordnung** (SG10
+/// `CCI 7037=ZB3` Zugeordneter Marktpartner, `CAV 7111=Z91` MSB / `Z39`
+/// grundzuständig / `ZF0` gMSB + MP-ID) plus NNE-Abrechnung info. That belongs
+/// on the dated `melo_msb_zuordnungen` timeline, not a typed-column `COALESCE`
+/// patch, and its GPKE-vs-WiM-MSB-Wechsel semantics make auto-applying it a
+/// deliberate follow-up (roadmap). These fields are retained for robustness /
+/// forward-compatibility but rarely fire in practice.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MeloStammdatenPatch {
+    /// Netzebene at the metering point (generic `netzebene` attribute →
+    /// `melo.netzebene_messung`).
+    #[serde(rename = "netzebene")]
+    pub netzebene_messung: Option<String>,
+    /// Regelzone EIC (ÜNB assignment).
+    pub regelzone: Option<String>,
+}
+
+impl MeloStammdatenPatch {
+    /// `true` when no column would change.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.netzebene_messung.is_none() && self.regelzone.is_none()
+    }
 }
 
 /// Read/write access to `MESSLOKATION` records.
@@ -479,6 +589,19 @@ pub trait MeloRepository: Send + Sync {
 
     /// Return the `MESSLOKATION` record.
     async fn find(&self, melo_id: &MeloId) -> Result<Option<MeloRecord>, MdmError>;
+
+    /// Apply a UTILMD Stammdatenänderung (`LOC+Z17`) to the typed MeLo columns —
+    /// the MeLo counterpart of [`MaloRepository::patch_stammdaten`].
+    ///
+    /// Each `Some` field overwrites its column via `COALESCE`; each `None` leaves
+    /// it unchanged. The JSONB payload (`data`, `standorteigenschaften`) and the
+    /// optimistic `version` are **not** touched. Returns `true` when a row was
+    /// updated and `false` when the MeLo is not yet known locally (no-op).
+    async fn patch_stammdaten(
+        &self,
+        melo_id: &MeloId,
+        patch: &MeloStammdatenPatch,
+    ) -> Result<bool, MdmError>;
 }
 
 /// Read/write access to contract (`VERTRAG`) records.
@@ -1473,6 +1596,13 @@ pub struct GrundversorgerRecord {
     /// Date of the §36 Abs. 2 Feststellung (three-year cycle).
     #[serde(default, with = "date_iso::opt")]
     pub festgestellt_am: Option<Date>,
+    /// Pre-deposited default Bilanzkreis for the E/G Zuordnung (GPKE Teil 4
+    /// „Übermittlung von Informationen"). When an EoG completes without the
+    /// E/G supplying its own Bilanzkreis in time (`ZugeordnetOhneAntwort`),
+    /// this BK is the one the NB balances the MaLo against. `None` if the E/G
+    /// has not deposited one.
+    #[serde(default)]
+    pub default_bilanzkreis: Option<String>,
     /// Last time this record was updated (RFC 3339).
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
@@ -1494,6 +1624,128 @@ pub trait GrundversorgerRepository: Send + Sync {
 
     /// Insert or update the Grundversorger entry.
     async fn upsert(&self, record: &GrundversorgerRecord) -> Result<(), MdmError>;
+}
+
+// ── MSB-Zuordnung je Messlokation (dated timeline) ────────────────────────────
+
+/// One dated MSB assignment for a Messlokation.
+///
+/// The per-MeLo MSB timeline is the authoritative source for point-in-time MSB
+/// resolution — a WiM Teil 2 historical Werteanfrage (UC 4.1.1) must address the
+/// MSB that served the MeLo **at the target period**, which MaLo-level MSB data
+/// cannot answer when a MaLo bundles MeLos with divergent MSB history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeloMsbZuordnung {
+    /// Messlokations-ID.
+    pub melo_id: String,
+    /// GLN of the Messstellenbetreiber.
+    pub msb_mp_id: String,
+    /// Assignment start (inclusive).
+    #[serde(with = "date_iso")]
+    pub valid_from: Date,
+    /// Assignment end (exclusive); `None` = currently valid.
+    #[serde(default, with = "date_iso::opt")]
+    pub valid_to: Option<Date>,
+    /// Tenant identifier (not serialized in API responses).
+    #[serde(skip_serializing, default)]
+    pub tenant: String,
+}
+
+/// Repository for the per-Messlokation dated MSB timeline (WiM Teil 2 UC 4.1.1).
+#[allow(async_fn_in_trait)]
+pub trait MeloMsbRepository: Send + Sync {
+    /// Record a new MSB assignment effective `valid_from`, closing the
+    /// previously-open assignment (`valid_to = valid_from`) atomically. A
+    /// re-assignment on an existing `valid_from` overwrites that row.
+    async fn assign_msb(
+        &self,
+        tenant: &str,
+        melo_id: &str,
+        msb_mp_id: &str,
+        valid_from: Date,
+    ) -> Result<(), MdmError>;
+
+    /// The MSB responsible for `melo_id` on `at` (point-in-time). `None` when no
+    /// assignment covers the date.
+    async fn find_msb_at(
+        &self,
+        tenant: &str,
+        melo_id: &str,
+        at: Date,
+    ) -> Result<Option<String>, MdmError>;
+
+    /// Full assignment history for a MeLo, newest first.
+    async fn history(&self, tenant: &str, melo_id: &str)
+    -> Result<Vec<MeloMsbZuordnung>, MdmError>;
+}
+
+// ── Bilanzierung (BO4E BO #3) ──────────────────────────────────────────────────
+
+/// A BO4E `Bilanzierung` — the balancing-relevant data of a Marktlokation, as a
+/// first-class resource with **identity and temporal validity**.
+///
+/// This subsumes the concept previously smeared across `MaloRecord` columns
+/// (`bilanzierungsmethode`, `fallgruppe`, `bilanzierungsgebiet` — kept as
+/// denormalised current-values), the dead `mako-edm::BilanzzuordnungRecord`, and
+/// `metering::LoadProfile` (Prognosegrundlage). The full BO4E object lives in
+/// [`Self::data`]; the typed fields are extracted for indexing and query.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BilanzierungRecord {
+    /// Marktlokations-ID this Bilanzierung belongs to (BO4E `marktlokationsId`).
+    pub malo_id: String,
+    /// Validity start (BO4E `bilanzierungsbeginn`).
+    #[serde(with = "time::serde::rfc3339")]
+    pub bilanzierungsbeginn: time::OffsetDateTime,
+    /// Validity end, exclusive (BO4E `bilanzierungsende`). `None` = open-ended.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub bilanzierungsende: Option<time::OffsetDateTime>,
+    /// Bilanzkreis EIC (BO4E `bilanzkreis`).
+    #[serde(default)]
+    pub bilanzkreis: Option<String>,
+    /// Aggregationsverantwortung (`NB` / `ÜNB`).
+    #[serde(default)]
+    pub aggregationsverantwortung: Option<String>,
+    /// Prognosegrundlage (`SLP` / `Prognose` / …).
+    #[serde(default)]
+    pub prognosegrundlage: Option<String>,
+    /// GaBi Fallgruppenzuordnung.
+    #[serde(default)]
+    pub fallgruppenzuordnung: Option<String>,
+    /// Full BO4E `Bilanzierung` object (round-trip-preserving).
+    pub data: serde_json::Value,
+    /// BO4E schema version the `data` was written against.
+    #[serde(default = "default_bo4e_version")]
+    pub bo4e_version: String,
+    /// Tenant identifier (not serialized in API responses).
+    #[serde(skip_serializing, default)]
+    pub tenant: String,
+    /// Last update (RFC 3339).
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// Repository for the first-class temporal BO4E `Bilanzierung` resource.
+#[allow(async_fn_in_trait)]
+pub trait BilanzierungRepository: Send + Sync {
+    /// Insert or update the Bilanzierung effective `bilanzierungsbeginn`; the
+    /// natural key is `(tenant, malo_id, bilanzierungsbeginn)`.
+    async fn upsert(&self, record: &BilanzierungRecord) -> Result<(), MdmError>;
+
+    /// The Bilanzierung effective for `malo_id` at instant `at` (point-in-time):
+    /// the newest one whose validity window contains `at`. `None` when none.
+    async fn find_at(
+        &self,
+        tenant: &str,
+        malo_id: &str,
+        at: time::OffsetDateTime,
+    ) -> Result<Option<BilanzierungRecord>, MdmError>;
+
+    /// Full Bilanzierung history for a MaLo, newest validity-start first.
+    async fn history(
+        &self,
+        tenant: &str,
+        malo_id: &str,
+    ) -> Result<Vec<BilanzierungRecord>, MdmError>;
 }
 
 // ── Netz-Element-Lokation (NeLo) ──────────────────────────────────────────────
@@ -1534,6 +1786,25 @@ pub struct NeLoRecord {
     pub updated_at: time::OffsetDateTime,
 }
 
+/// A GPKE Teil 4 Stammdatenänderung applied to the typed `NETZLOKATION`
+/// columns (`LOC+Z18`, „Änderung Daten der NeLo", §14a/Redispatch).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct NeloStammdatenPatch {
+    /// Voltage / pressure level (`netzebene` → `nelo.netzebene`).
+    pub netzebene: Option<String>,
+    /// §14a EnWG Steuerkanal presence (`nelo.steuerkanal`), from UTILMD
+    /// `CCI+7059=Z49` / `CCI+7037` `ZF3` (vorhanden → `true`) / `ZF2` (kein → `false`).
+    pub steuerkanal: Option<bool>,
+}
+
+impl NeloStammdatenPatch {
+    /// `true` when no column would change.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.netzebene.is_none() && self.steuerkanal.is_none()
+    }
+}
+
 /// Read/write access to `NeLo` records.
 ///
 /// One row per `(nelo_id, tenant)`.
@@ -1550,6 +1821,17 @@ pub trait NeLoRepository: Send + Sync {
     /// Return a NeLo by `nelo_id`, or `None` if not found.
     #[must_use]
     async fn find(&self, nelo_id: &str, tenant: &str) -> Result<Option<NeLoRecord>, MdmError>;
+
+    /// Apply a UTILMD Stammdatenänderung (`LOC+Z18`) to the typed NeLo columns.
+    ///
+    /// `COALESCE` per column; the JSONB payload and `version` are untouched.
+    /// Returns `true` when a row was updated, `false` when the NeLo is unknown.
+    async fn patch_stammdaten(
+        &self,
+        nelo_id: &str,
+        tenant: &str,
+        patch: &NeloStammdatenPatch,
+    ) -> Result<bool, MdmError>;
 
     /// Return all NeLos owned by a Netzbetreiber GLN.
     #[must_use]
@@ -1569,6 +1851,90 @@ pub trait NeLoRepository: Send + Sync {
         page: u32,
         size: u32,
     ) -> Result<PageResult<NeLoRecord>, MdmError>;
+}
+
+// ── Tranche ──────────────────────────────────────────────────────────────────
+
+/// Stored Tranche record.
+///
+/// A **Tranche** is a share of a Marktlokation's energy assigned to a distinct
+/// balancing responsibility (BO4E `Tranche`; GPKE Teil 4 „Daten der Tranche",
+/// PIDs 55619/55642/55652/55662/55686). One row per `(tranche_id, tenant)`; the
+/// parent MaLo is recorded for `list_by_malo` grouping.
+///
+/// Source: GPKE Teil 4 (BK6-24-174) §1.4; BO4E `Tranche`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrancheRecord {
+    /// Tranche identifier (e.g. `<MaLo>-T01`).
+    pub tranche_id: String,
+    pub tenant: String,
+    /// Parent Marktlokation this Tranche belongs to.
+    pub malo_id: Option<String>,
+    /// Bilanzierungsgebiet EIC (`LOC+237`).
+    pub bilanzierungsgebiet: Option<String>,
+    /// Netzebene (`netzebene`).
+    pub netzebene: Option<String>,
+    /// Energierichtung (`EINSPEISUNG` / `ENTNAHME`).
+    pub energierichtung: Option<String>,
+    /// Full BO4E `Tranche` payload (open-ended JSONB).
+    pub data: serde_json::Value,
+    pub version: i64,
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// A GPKE Teil 4 Stammdatenänderung applied to the typed `TRANCHE` columns
+/// (`LOC+Z21`, „Änderung Daten der Tranche").
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TrancheStammdatenPatch {
+    /// Bilanzierungsgebiet EIC.
+    pub bilanzierungsgebiet: Option<String>,
+    /// Netzebene.
+    pub netzebene: Option<String>,
+    /// Energierichtung.
+    pub energierichtung: Option<String>,
+}
+
+impl TrancheStammdatenPatch {
+    /// `true` when no column would change.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bilanzierungsgebiet.is_none()
+            && self.netzebene.is_none()
+            && self.energierichtung.is_none()
+    }
+}
+
+/// Read/write access to `Tranche` records.
+///
+/// One row per `(tranche_id, tenant)`.
+#[allow(async_fn_in_trait)]
+pub trait TrancheRepository: Send + Sync {
+    /// Insert or update a Tranche record. `if_match` = `None` for unconditional
+    /// upsert. Returns the new version number.
+    async fn upsert(&self, rec: TrancheRecord, if_match: Option<i64>) -> Result<i64, MdmError>;
+
+    /// Return a Tranche by `tranche_id`, or `None` if not found.
+    async fn find(&self, tranche_id: &str, tenant: &str)
+    -> Result<Option<TrancheRecord>, MdmError>;
+
+    /// Return all Tranchen of a Marktlokation (paged).
+    async fn list_by_malo(
+        &self,
+        malo_id: &str,
+        tenant: &str,
+        page: u32,
+        size: u32,
+    ) -> Result<PageResult<TrancheRecord>, MdmError>;
+
+    /// Apply a UTILMD Stammdatenänderung (`LOC+Z21`) to the typed Tranche
+    /// columns. `COALESCE` per column; JSONB and `version` untouched. Returns
+    /// `true` when a row was updated, `false` when the Tranche is unknown.
+    async fn patch_stammdaten(
+        &self,
+        tranche_id: &str,
+        tenant: &str,
+        patch: &TrancheStammdatenPatch,
+    ) -> Result<bool, MdmError>;
 }
 
 /// Convenience bundle of all repositories, passed to handlers via `Arc<AppState<...>>`.
@@ -1722,6 +2088,29 @@ pub struct SteuerbareRessourceRecord {
     pub updated_at: time::OffsetDateTime,
 }
 
+/// A GPKE Teil 4 Stammdatenänderung applied to the typed `STEUERBARE_RESSOURCE`
+/// columns (`LOC+Z19`, „Änderung Daten der SR", §14a).
+///
+/// The grounded attribute is the contracted **Konfigurationsprodukte** — the SG8
+/// `SEQ+Z79` product groups (produktcode `PIA+5` DE7140, zugeordneter Marktpartner
+/// `CAV+Z91`/`ZF0`, Produkteigenschaft `CCI+Z66`), extracted as a BO4E
+/// `Vec<Konfigurationsprodukt>` JSONB array. Applied by **replacing** the whole
+/// array (the AHB carries the full contracted set per change), not merging.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SteuerbareRessourceStammdatenPatch {
+    /// Full contracted `Konfigurationsprodukte` array (BO4E), or `None` to leave
+    /// the column untouched.
+    pub konfigurationsprodukte: Option<serde_json::Value>,
+}
+
+impl SteuerbareRessourceStammdatenPatch {
+    /// `true` when no column would change.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.konfigurationsprodukte.is_none()
+    }
+}
+
 /// Persistent store for `SteuerbareRessource` registrations.
 ///
 /// Populated by the WiM iMS Steuerungsauftrag process (PID 55168)
@@ -1783,8 +2172,12 @@ pub struct TechnischeRessourceRecord {
     pub malo_id: Option<String>,
     /// Linked `MeLo` (`vorgelagerte_messlokation_id`).
     pub melo_id: Option<String>,
-    /// Classification: `"EMobilitaet"` | `"Erzeugung"` | `"Speicher"`.
-    pub tr_typ: Option<String>,
+    /// BO4E `TechnischeRessourceNutzung`: `"STROMVERBRAUCHSART"` |
+    /// `"STROMERZEUGUNGSART"` | `"SPEICHER"`.
+    pub nutzung: Option<String>,
+    /// BO4E `TechnischeRessourceVerbrauchsart` (only for `STROMVERBRAUCHSART`):
+    /// `"KRAFT_LICHT"` | `"WAERME"` | `"E_MOBILITAET"` | `"STRASSENBELEUCHTUNG"`.
+    pub verbrauchsart: Option<String>,
     /// Whether the resource can be remote-controlled (Redispatch 2.0 `ist_fernschaltbar`).
     pub ist_fernschaltbar: Option<bool>,
     /// Full BO4E `TechnischeRessource` payload.
@@ -1793,6 +2186,36 @@ pub struct TechnischeRessourceRecord {
     pub bo4e_version: String,
     pub version: i64,
     pub updated_at: time::OffsetDateTime,
+}
+
+/// A GPKE Teil 4 Stammdatenänderung applied to the typed `TECHNISCHE_RESSOURCE`
+/// columns (`LOC+Z20`, „Änderung Daten der TR", §14a/Redispatch).
+///
+/// The grounded attributes are:
+/// - **Fernschaltbarkeit** — UTILMD `CAV+7111=Z58` (Fernschaltung) / `CAV+7110`
+///   `Z06` (vorhanden → `true`) / `Z07` (nicht vorhanden → `false`).
+/// - **Art und Nutzung der Technischen Ressource** — the BO4E `nutzung`
+///   (`CCI+7059` `Z17` Stromverbrauchsart / `Z50` Stromerzeugungsart / `Z56`
+///   Speicher) and, for Stromverbrauchsart, the `verbrauchsart` (`CAV+7111`
+///   `Z64` Kraft/Licht / `Z65` Wärme / `ZE5` E-Mobilität / `ZA8`
+///   Straßenbeleuchtung). Note: this is the TR object's own classification, not
+///   the MaLo `CCI+7059=Z69` „technische Einrichtung" Verbrauchsart.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TechnischeRessourceStammdatenPatch {
+    /// BO4E `TechnischeRessourceNutzung` (`tr.nutzung`).
+    pub nutzung: Option<String>,
+    /// BO4E `TechnischeRessourceVerbrauchsart` (`tr.verbrauchsart`).
+    pub verbrauchsart: Option<String>,
+    /// Fernschaltbarkeit (`tr.ist_fernschaltbar`).
+    pub ist_fernschaltbar: Option<bool>,
+}
+
+impl TechnischeRessourceStammdatenPatch {
+    /// `true` when no column would change.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.nutzung.is_none() && self.verbrauchsart.is_none() && self.ist_fernschaltbar.is_none()
+    }
 }
 
 /// Persistent store for `TechnischeRessource` registrations.
@@ -1809,7 +2232,8 @@ pub trait TechnischeRessourceRepository: Send + Sync {
         tenant: &str,
         malo_id: Option<&str>,
         melo_id: Option<&str>,
-        tr_typ: Option<&str>,
+        nutzung: Option<&str>,
+        verbrauchsart: Option<&str>,
         ist_fernschaltbar: Option<bool>,
         data: serde_json::Value,
         bo4e_version: &str,
@@ -1834,6 +2258,17 @@ pub trait TechnischeRessourceRepository: Send + Sync {
         melo_id: &str,
         tenant: &str,
     ) -> Result<Vec<TechnischeRessourceRecord>, MdmError>;
+
+    /// Apply a UTILMD Stammdatenänderung (`LOC+Z20`) to the typed TR columns.
+    ///
+    /// `COALESCE` per column; the JSONB payload and `version` are untouched.
+    /// Returns `true` when a row was updated, `false` when the TR is unknown.
+    async fn patch_stammdaten(
+        &self,
+        tr_id: &str,
+        tenant: &str,
+        patch: &TechnischeRessourceStammdatenPatch,
+    ) -> Result<bool, MdmError>;
 }
 
 // ── Lokationszuordnung graph (B5) ────────────────────────────────────────────
@@ -1850,12 +2285,12 @@ pub struct LokationszuordnungEdge {
     pub tenant: String,
     /// Source node ID (e.g. MaLo-ID, MeLo-ID).
     pub von_id: String,
-    /// Source node type: `"malo"` | `"melo"` | `"nelo"` | `"sr"` | `"tr"`.
-    pub von_typ: String,
+    /// Source node type — the BO4E [`Lokationstyp`] (`MALO`/`MELO`/`NELO`/`SR`/`TR`).
+    pub von_typ: Lokationstyp,
     /// Target node ID.
     pub nach_id: String,
-    /// Target node type.
-    pub nach_typ: String,
+    /// Target node type — the BO4E [`Lokationstyp`].
+    pub nach_typ: Lokationstyp,
     pub valid_from: Option<time::Date>,
     /// `None` = open-ended (currently active).
     pub valid_to: Option<time::Date>,
@@ -1897,9 +2332,9 @@ pub trait LokationszuordnungRepository: Send + Sync {
         &self,
         tenant: &str,
         von_id: &str,
-        von_typ: &str,
+        von_typ: Lokationstyp,
         nach_id: &str,
-        nach_typ: &str,
+        nach_typ: Lokationstyp,
         valid_from: Option<time::Date>,
         valid_to: Option<time::Date>,
         data: serde_json::Value,
@@ -1937,6 +2372,147 @@ pub trait LokationszuordnungRepository: Send + Sync {
         von_id: &str,
         nach_id: &str,
     ) -> Result<bool, MdmError>;
+
+    /// Load the [`Lokationsbuendel`] rooted at `malo_id`, projected from the
+    /// typed edge graph (validity-filtered by `at_date`).
+    ///
+    /// Provided method — implementations get it for free on top of
+    /// [`find_graph`](Self::find_graph).
+    async fn load_buendel(
+        &self,
+        tenant: &str,
+        malo_id: &str,
+        at_date: Option<time::Date>,
+    ) -> Result<Lokationsbuendel, MdmError> {
+        let edges = self.find_graph(tenant, malo_id, at_date).await?;
+        Ok(Lokationsbuendel::from_graph(malo_id, &edges))
+    }
+}
+
+/// Error raised when a [`Lokationsbuendel`] violates a structural integrity rule.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum BuendelError {
+    /// A consuming Marktlokation bundles no Messlokation.
+    #[error(
+        "Lokationsbündel for MaLo {malo_id} has no Messlokation \
+         (a consuming MaLo must bundle at least one MeLo)"
+    )]
+    NoMesslokation { malo_id: String },
+    /// The bundle's Messlokationen are operated by more than one MSB.
+    #[error(
+        "Lokationsbündel for MaLo {malo_id} spans divergent MSB assignments {msbs:?} \
+         (all MeLos of a MaLo must share one Messstellenbetreiber)"
+    )]
+    DivergentMsb { malo_id: String, msbs: Vec<String> },
+}
+
+/// First-class **Lokationsbündel** (UTILMD Lokationsbündelstruktur) — the set of
+/// locations bundled under one Marktlokation, projected from the typed
+/// [`LokationszuordnungEdge`] graph. Its BO4E carrier is
+/// `rubo4e::current::Lokationszuordnung`.
+///
+/// Modeling the bundle as an aggregate makes its integrity invariants
+/// ([`validate`](Self::validate),
+/// [`validate_msb_consistency`](Self::validate_msb_consistency)) enforceable at
+/// the domain boundary rather than upheld only by the single-write-path
+/// convention on `melo.malo_id`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Lokationsbuendel {
+    /// Root Marktlokation the bundle hangs off.
+    pub malo_id: String,
+    /// Codeliste der Lokationsbündelstrukturen (edi-energy id=38), when carried.
+    pub lokationsbuendelcode: Option<String>,
+    /// Referenced Messlokationen (≥ 1 for a valid consuming bundle).
+    pub messlokationen: Vec<String>,
+    /// Referenced Netzlokationen.
+    pub netzlokationen: Vec<String>,
+    /// Referenced steuerbare Ressourcen (§14a control).
+    pub steuerbare_ressourcen: Vec<String>,
+    /// Referenced technische Ressourcen.
+    pub technische_ressourcen: Vec<String>,
+}
+
+impl Lokationsbuendel {
+    /// Project the bundle rooted at `malo_id` from a set of graph edges
+    /// (typically the output of [`LokationszuordnungRepository::find_graph`]).
+    ///
+    /// Nodes are collected by [`Lokationstyp`] across every edge in `edges`; the
+    /// root MaLo itself is excluded from the lists, and ids are de-duplicated.
+    #[must_use]
+    pub fn from_graph(malo_id: &str, edges: &[LokationszuordnungEdge]) -> Self {
+        use std::collections::BTreeSet;
+        let (mut melo, mut nelo, mut sr, mut tr) = (
+            BTreeSet::new(),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            BTreeSet::new(),
+        );
+        let mut lokationsbuendelcode: Option<String> = None;
+        for e in edges {
+            if lokationsbuendelcode.is_none() {
+                lokationsbuendelcode.clone_from(&e.lokationsbuendelcode);
+            }
+            for (id, typ) in [(&e.von_id, e.von_typ), (&e.nach_id, e.nach_typ)] {
+                if id == malo_id {
+                    continue;
+                }
+                match typ {
+                    Lokationstyp::Melo => melo.insert(id.clone()),
+                    Lokationstyp::Nelo => nelo.insert(id.clone()),
+                    Lokationstyp::Sr => sr.insert(id.clone()),
+                    Lokationstyp::Tr => tr.insert(id.clone()),
+                    _ => false,
+                };
+            }
+        }
+        Self {
+            malo_id: malo_id.to_owned(),
+            lokationsbuendelcode,
+            messlokationen: melo.into_iter().collect(),
+            netzlokationen: nelo.into_iter().collect(),
+            steuerbare_ressourcen: sr.into_iter().collect(),
+            technische_ressourcen: tr.into_iter().collect(),
+        }
+    }
+
+    /// Structural integrity: a consuming Marktlokation must bundle at least one
+    /// Messlokation.
+    ///
+    /// # Errors
+    /// [`BuendelError::NoMesslokation`] when the bundle carries no MeLo.
+    pub fn validate(&self) -> Result<(), BuendelError> {
+        if self.messlokationen.is_empty() {
+            return Err(BuendelError::NoMesslokation {
+                malo_id: self.malo_id.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    /// MSB-consistency invariant: all Messlokationen of the bundle must be
+    /// operated by the same Messstellenbetreiber. `msb_by_melo` maps each MeLo-ID
+    /// to its current MSB MP-ID (`None` = no MSB assigned yet, which is ignored).
+    ///
+    /// # Errors
+    /// [`BuendelError::DivergentMsb`] when the MeLos resolve to more than one MSB.
+    pub fn validate_msb_consistency(
+        &self,
+        msb_by_melo: &std::collections::HashMap<String, Option<String>>,
+    ) -> Result<(), BuendelError> {
+        use std::collections::BTreeSet;
+        let msbs: BTreeSet<String> = self
+            .messlokationen
+            .iter()
+            .filter_map(|m| msb_by_melo.get(m).and_then(Clone::clone))
+            .collect();
+        if msbs.len() > 1 {
+            return Err(BuendelError::DivergentMsb {
+                malo_id: self.malo_id.clone(),
+                msbs: msbs.into_iter().collect(),
+            });
+        }
+        Ok(())
+    }
 }
 
 // ── Device registry: Zaehler + Geraete (B3) ──────────────────────────────────
@@ -2836,5 +3412,110 @@ mod partner_record_tests {
         let mt = bare.to_marktteilnehmer();
         assert_eq!(mt.makoadresse, None);
         assert!(mt.geschaeftspartner.is_none());
+    }
+}
+
+#[cfg(test)]
+mod lokationsbuendel_tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    fn edge(
+        von: &str,
+        von_typ: Lokationstyp,
+        nach: &str,
+        nach_typ: Lokationstyp,
+    ) -> LokationszuordnungEdge {
+        LokationszuordnungEdge {
+            id: uuid::Uuid::nil(),
+            tenant: "t".to_owned(),
+            von_id: von.to_owned(),
+            von_typ,
+            nach_id: nach.to_owned(),
+            nach_typ,
+            valid_from: None,
+            valid_to: None,
+            lokationsbuendelcode: Some("9992000000125".to_owned()),
+            data: serde_json::json!({}),
+            depth: 0,
+        }
+    }
+
+    /// `von_typ`/`nach_typ` are the BO4E `Lokationstyp` and stay wire-compatible
+    /// with the canonical uppercase codes the TEXT column and API rely on.
+    #[test]
+    fn edge_typ_is_bo4e_lokationstyp() {
+        let e = edge("MALO1", Lokationstyp::Malo, "MELO1", Lokationstyp::Melo);
+        let json = serde_json::to_value(&e).expect("serialise");
+        assert_eq!(json["von_typ"], "MALO");
+        assert_eq!(json["nach_typ"], "MELO");
+        assert_eq!(<&'static str>::from(Lokationstyp::Nelo), "NELO");
+        assert_eq!("SR".parse(), Ok(Lokationstyp::Sr));
+    }
+
+    /// A bundle projects every non-root node by type and de-duplicates.
+    #[test]
+    fn from_graph_projects_nodes_by_type() {
+        let edges = vec![
+            edge("MALO1", Lokationstyp::Malo, "MELO1", Lokationstyp::Melo),
+            edge("MALO1", Lokationstyp::Malo, "MELO2", Lokationstyp::Melo),
+            edge("MELO1", Lokationstyp::Melo, "NELO1", Lokationstyp::Nelo),
+            edge("MELO1", Lokationstyp::Melo, "SR1", Lokationstyp::Sr),
+            edge("SR1", Lokationstyp::Sr, "TR1", Lokationstyp::Tr),
+            // duplicate edge must not double-count
+            edge("MALO1", Lokationstyp::Malo, "MELO1", Lokationstyp::Melo),
+        ];
+        let b = Lokationsbuendel::from_graph("MALO1", &edges);
+        assert_eq!(b.malo_id, "MALO1");
+        assert_eq!(b.lokationsbuendelcode.as_deref(), Some("9992000000125"));
+        assert_eq!(b.messlokationen, vec!["MELO1", "MELO2"]);
+        assert_eq!(b.netzlokationen, vec!["NELO1"]);
+        assert_eq!(b.steuerbare_ressourcen, vec!["SR1"]);
+        assert_eq!(b.technische_ressourcen, vec!["TR1"]);
+        b.validate().expect("bundle with a MeLo is valid");
+    }
+
+    /// A consuming MaLo with no MeLo violates the structural invariant.
+    #[test]
+    fn validate_requires_at_least_one_melo() {
+        let edges = vec![edge(
+            "MALO1",
+            Lokationstyp::Malo,
+            "NELO1",
+            Lokationstyp::Nelo,
+        )];
+        let b = Lokationsbuendel::from_graph("MALO1", &edges);
+        assert!(b.messlokationen.is_empty());
+        assert!(matches!(
+            b.validate(),
+            Err(BuendelError::NoMesslokation { .. })
+        ));
+    }
+
+    /// All MeLos of one MaLo must share a single MSB.
+    #[test]
+    fn validate_msb_consistency_flags_divergent_msb() {
+        let edges = vec![
+            edge("MALO1", Lokationstyp::Malo, "MELO1", Lokationstyp::Melo),
+            edge("MALO1", Lokationstyp::Malo, "MELO2", Lokationstyp::Melo),
+        ];
+        let b = Lokationsbuendel::from_graph("MALO1", &edges);
+
+        // Same MSB → ok (unassigned MeLos are ignored).
+        let mut consistent = HashMap::new();
+        consistent.insert("MELO1".to_owned(), Some("MSB_A".to_owned()));
+        consistent.insert("MELO2".to_owned(), None);
+        b.validate_msb_consistency(&consistent)
+            .expect("single MSB is consistent");
+
+        // Two distinct MSBs → error.
+        let mut divergent = HashMap::new();
+        divergent.insert("MELO1".to_owned(), Some("MSB_A".to_owned()));
+        divergent.insert("MELO2".to_owned(), Some("MSB_B".to_owned()));
+        assert!(matches!(
+            b.validate_msb_consistency(&divergent),
+            Err(BuendelError::DivergentMsb { .. })
+        ));
     }
 }

@@ -381,6 +381,19 @@ the `esa-wertebestellung` workflow, driven by these commands:
 | `esa.stornierung.beauftragen` | ORDCHG 39002 Stornierung | — (before delivery) |
 | `esa.abbestellung.beauftragen` | ORDERS 17008 Abbestellung | **none** — the stop action |
 
+**Werteanfrage MSB resolution.** `esa.werteanfrage.stellen` addresses the MSB
+responsible for the Messlokation. `msb_mp_id` in the payload is now **optional**:
+supply it to address an MSB directly, or omit it and let makod resolve the
+responsible MSB from marktd's per-MeLo dated MSB timeline
+(`GET /melos/{id}/msb?at=`). This is the WiM Teil 2 UC 4.1.1 **historical**
+Werteanfrage case — a request for a past interval must reach the MSB that
+operated the MeLo *then*, not today's MSB. When resolving, the payload provides
+`melo_id` (or a Messlokation as the location) and the period start `zeitraum_von`
+(alias `von`, `YYYY-MM-DD`); an optional `zeitraum_bis` (`bis`) guards against a
+period that spans an MSB change — the dispatch is refused (`422`) with an
+instruction to split the request per MSB period rather than silently
+mis-addressing part of it.
+
 The MSB's answers come back inbound and resume the process. The QUOTES 15003
 Angebot still carries a `LOC`, so it correlates by MaLo. The ORDRSP
 19011/19012/19013/19014 answers carry **no** `LOC` in their MIG-conformant form,
@@ -476,7 +489,7 @@ irrelevant for a particular operator — reducing binary size and attack surface
 
 | Feature flag | Compiled modules |
 |---|---|
-| `role-lf-strom` | `mako-gpke` (LF side): `gpke-lf-anmeldung`, `gpke-lf-abmeldung`, `gpke-ankuendigung-zuordnung-lf`, `gpke-abrechnung`, `gpke-messwerte`, `gpke-allokationsliste`, `gpke-datenabruf`, `gpke-anfrage-bestellung`, `gpke-utilts` |
+| `role-lf-strom` | `mako-gpke` (LF side): `gpke-lf-anmeldung`, `gpke-lf-abmeldung`, `gpke-beendigung-zuordnung`, `gpke-ankuendigung-zuordnung-lf`, `gpke-abrechnung`, `gpke-messwerte`, `gpke-allokationsliste`, `gpke-datenabruf`, `gpke-anfrage-bestellung`, `gpke-utilts` |
 | `role-lf-gas` | `mako-geli-gas` (LF side): `geli-gas-stornierung-lf`, `geli-gas-sperrung-lf`, `geli-gas-mscons` |
 | `role-nb-strom` | `mako-gpke` (NB side): `gpke-supplier-change`, `gpke-sperrung`, `gpke-konfiguration`, `gpke-konfiguration-aenderung`, `gpke-neuanlage`, `gpke-partin`, `mako-wim` (NB side), **`mako-redispatch`** (Redispatch 2.0 is gated to NB Strom / ÜNB — LF and MSB deployments are out of scope per BK6-20-059/060/061) |
 | `role-nb-gas` | `mako-geli-gas` (GNB side): `geli-gas-supplier-change`, `geli-gas-sperrung-nb`, `geli-gas-stornierung`, `geli-gas-datenabruf`, `geli-gas-partin`, `geli-gas-sperrprozesse-invoic` |
@@ -1253,6 +1266,7 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `gpke.lieferende.bestaetigen` | `NB` | GPKE | 55005/55006 | DSO accepts/rejects supply end |
 | `gpke.kuendigung.anmelden` | `LF` | GPKE | 55017 | LF cancels a Lieferbeginn Anmeldung |
 | `gpke.eog.anmelden` | `NB` | GPKE | 55013 | NB assigns a contractless MaLo to the Grundversorger (§36/§38 EnWG gap closure) |
+| `geli.eog.anmelden` | `GNB` | GeLi Gas | 44013 | Gas twin of `gpke.eog.anmelden` — GNB registers a contractless Gas-MaLo into E/G |
 | `gpke.eog.bestaetigen` | `LF` | GPKE | 55014 | E/G confirms the EoG Zuordnung (Versorgungsart + Bilanzkreis) |
 | `gpke.eog.ablehnen` | `LF` | GPKE | 55015 | E/G rejects the EoG Zuordnung (EBD E_0615: A02/A04/A05) |
 | `gpke.sperrung.beauftragen` | `LF` | GPKE | 17115 | LF orders a disconnection from the NB |
@@ -1297,6 +1311,7 @@ GLNs resolved by the engine (sender, receiver) are intentionally absent.
 |---------|-----------------------------|
 | `gpke.lieferbeginn.anmelden` | `malo_id`, `lieferbeginn_datum`, `transaktionsgrund`¹ |
 | `gpke.eog.anmelden` | `malo_id`, `gv_mp_id`, `process_date`, `transaktionsgrund`, `haushaltskunde`¹ |
+| `geli.eog.anmelden` | `malo_id`, `gv_mp_id`, `process_date` |
 | `gpke.eog.bestaetigen` | `malo_id`, `versorgungsart` (ZC9/ZD0/ZE3/ZZD), `bilanzkreis`¹ |
 | `gpke.eog.ablehnen` | `malo_id`, `reason` |
 | `gpke.lieferende.anmelden` | `malo_id`, `lieferende_datum` |
@@ -1463,11 +1478,18 @@ flowchart LR
     cmd["POST /api/v1/commands"] --> wf["Workflow"]
     wf --> ob[("Outbox")]
     ob --> r["edifact_renderer"]
-    r -->|"message_type"| mt{"UTILMD · APERAK · CONTRL<br/>ORDERS · INVOIC · REMADV<br/>MSCONS · …"}
+    r -->|"message_type"| mt{"UTILMD · APERAK · CONTRL<br/>ORDERS · ORDCHG · ORDRSP · REQOTE · QUOTES<br/>INVOIC · REMADV · MSCONS · IFTSTA · …"}
     mt -->|"MSCONS"| pid{"Prüfidentifikator"}
     pid --> b["edi-energy builder"]
     b --> as4["AS4 / ebMS3"]
 ```
+
+**IFTSTA** carries WiM Strom Teil 2 UC 4.4 „Beendigung durch MSB" as an
+MSB → ESA status message. The renderer drives PID **21042**
+(Umsetzungsstatus „Bestellung WiM") with `BGM+Z09`, the SG14 `CNI` Vorgangsnummer,
+the SG15 `STS` 9015=Z21 / 4405=105 („beendet"), the SG15 `RFF+Z13`
+Prüfidentifikator, the SG15 `RFF+AGI` back-reference to the Bestellung and the
+SG15 `DTM+93` Vertragsende.
 
 ### MSCONS use cases
 

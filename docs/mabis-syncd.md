@@ -107,7 +107,7 @@ MaBiS settles per territory, so `aggregate()` returns **one Summenzeitreihe per
 Bilanzierungsgebiet**, not one per run.
 
 Each MaLo's territory comes from `marktd` (`GET /api/v1/malo/{id}` →
-`bilanzierungsgebiet`). `identity.bilanzierungsgebiet_id` is now only a
+`bilanzierungsgebiet`). `identity.bilanzierungsgebiet_id` is only a
 **fallback** for MaLos whose master data names none, and those MaLos are logged
 rather than silently folded into the fallback zone — energy filed against the
 wrong territory is a settlement error the BIKO cannot detect.

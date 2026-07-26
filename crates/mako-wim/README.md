@@ -137,7 +137,7 @@ that authorises value delivery and the one that stops it.
 | 4.1 Nr. 6 Antwort | MSB → ESA | ORDRSP | 19013 / 19014 | **2 WT** nach ÜT der Stornierung |
 | 4.3 Nr. 1 Abbestellung | ESA → MSB | ORDERS | 17007 | unverzüglich |
 | 4.3 Nr. 2 Antwort | MSB → ESA | ORDRSP | 19011 / 19012 | **2 WT** nach ÜT der Abbestellung |
-| 4.4 Nr. 1 Beendigung durch MSB | MSB → ESA | — | — | unverzüglich |
+| 4.4 Nr. 1 Beendigung durch MSB | MSB → ESA | IFTSTA | 21042 (STS 4405 = 105 „beendet") | unverzüglich |
 
 **Bestellung and Abbestellung share PID 17007** ("Bestellung und Abbestellung von
 Werten ESA"), and 19011/19012 answer both. They are separate commands because

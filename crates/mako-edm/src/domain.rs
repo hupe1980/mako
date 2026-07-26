@@ -751,27 +751,13 @@ impl std::fmt::Display for BilanzkreisId {
     }
 }
 
-/// The balance-group assignment of one Marktlokation.
-///
-/// Stored in `marktd` as part of the MaLo record. Queried by `mabis-syncd`
-/// (when built) to aggregate per-MaLo Lastgänge into Summenzeitreihen.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BilanzzuordnungRecord {
-    /// The Marktlokation being assigned.
-    pub malo_id: String,
-    /// Settlement zone the MaLo belongs to.
-    pub bilanzierungsgebiet_id: BilanzierungsgebietId,
-    /// Balance group the MaLo belongs to (None = not yet assigned).
-    pub bilanzkreis_id: Option<BilanzkreisId>,
-    /// MP-ID of the BKV responsible for the Bilanzkreis.
-    pub bkv_mp_id: Option<String>,
-    /// Effective from (inclusive, UTC date).
-    pub valid_from: Date,
-    /// Effective until (exclusive). `None` = open-ended (currently active).
-    pub valid_to: Option<Date>,
-    /// Data-isolation key — operator's BDEW/DVGW Codenummer or GLN.
-    pub tenant: String,
-}
+// The per-MaLo balance-group assignment (Bilanzierungsgebiet + Bilanzkreis +
+// BKV, with temporal validity) is now a first-class BO4E-backed marktd resource
+// — `mako_markt::repository::BilanzierungRecord` and the `bilanzierungen` table
+// (`GET|PUT /api/v1/malo/{id}/bilanzierung`). The former bespoke
+// `BilanzzuordnungRecord` here was dead code that duplicated that concept
+// off-BO4E; it has been removed. `BilanzierungsgebietId`/`BilanzkreisId` remain
+// because MABIS Summenzeitreihen key on them.
 
 #[cfg(test)]
 mod mscons_pid_tests {

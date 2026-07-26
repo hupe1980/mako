@@ -208,7 +208,7 @@ impl Default for SubscriptionConfig {
 
 // ── NB module ─────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NbConfig {
     /// When `true`, `processd` dispatches `bestaetigen` automatically on `Accept`.
@@ -219,6 +219,26 @@ pub struct NbConfig {
     /// record and partner coverage (STP target ≥ 95 %).
     #[serde(default)]
     pub auto_accept: bool,
+
+    /// Gas Bearbeitungsfrist (Werktage) added to the 6-week retroactive
+    /// Anmeldung window (AWH GeLi Gas 2.0 Kap. 2.2). The AWH quantifies it only
+    /// for the Ersatz-/Grundversorgung (3 WT); the same value is the default
+    /// here. Override when the operator's AWH reading differs. Defaults to `3`.
+    #[serde(default = "default_gas_bearbeitungsfrist_wt")]
+    pub gas_bearbeitungsfrist_wt: u32,
+}
+
+fn default_gas_bearbeitungsfrist_wt() -> u32 {
+    netz_checker::checks::GAS_BEARBEITUNGSFRIST_WT_DEFAULT
+}
+
+impl Default for NbConfig {
+    fn default() -> Self {
+        Self {
+            auto_accept: false,
+            gas_bearbeitungsfrist_wt: default_gas_bearbeitungsfrist_wt(),
+        }
+    }
 }
 
 // ── EoG module (§36/§38 EnWG gap closure) ─────────────────────────────────────

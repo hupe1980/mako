@@ -49,6 +49,8 @@ pub struct Config {
     #[serde(default)]
     pub subscription: SubscriptionConfig,
     #[serde(default)]
+    pub worker: WorkerConfig,
+    #[serde(default)]
     pub oidc: Option<OidcConfig>,
     #[serde(default)]
     pub otel: OtelConfig,
@@ -116,6 +118,67 @@ pub struct WebhookConfig {
     /// HMAC-SHA256 secret for verifying inbound webhooks from `marktd`.
     /// Use `"env:OBSD_INBOUND_SECRET"`.
     pub inbound_secret: Option<String>,
+    /// Outbound CloudEvent target for the `de.obs.*` events obsd produces
+    /// (deadline.approaching, stp.parity.alert). In production this is the
+    /// `marktd` event-ingest endpoint (`…/api/v1/mako/events`), whose fan-out
+    /// delivers to the `agentd` subscribers. When `None` the sweep workers do
+    /// not run. Use `"env:OBSD_OUTBOUND_URL"`.
+    pub outbound_url: Option<String>,
+    /// HMAC-SHA256 secret for signing outbound `de.obs.*` CloudEvents
+    /// (`X-Mako-Signature: sha256=…`). Must match the target's inbound secret.
+    /// Use `"env:OBSD_OUTBOUND_SECRET"`.
+    pub outbound_secret: Option<String>,
+}
+
+/// Background sweep-worker tuning for the `de.obs.*` producers.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerConfig {
+    /// Interval between deadline sweeps, seconds. Default 900 (15 min).
+    #[serde(default = "default_deadline_sweep_secs")]
+    pub deadline_sweep_secs: u64,
+    /// A process is "approaching" its deadline when `deadline_at` is within this
+    /// many hours of now. Default 24 (the Amber window).
+    #[serde(default = "default_deadline_warn_hours")]
+    pub deadline_warn_hours: i64,
+    /// Interval between §20 EnWG parity sweeps, seconds. Default 86400 (daily).
+    #[serde(default = "default_parity_sweep_secs")]
+    pub parity_sweep_secs: u64,
+    /// Parity-gap threshold in percentage points above which
+    /// `de.obs.stp.parity.alert` fires. Default 5.0 (BNetzA scrutiny threshold).
+    #[serde(default = "default_parity_threshold_pp")]
+    pub parity_threshold_pp: f64,
+    /// Look-back window for the parity computation, days. Default 90.
+    #[serde(default = "default_parity_window_days")]
+    pub parity_window_days: i32,
+}
+
+fn default_deadline_sweep_secs() -> u64 {
+    900
+}
+fn default_deadline_warn_hours() -> i64 {
+    24
+}
+fn default_parity_sweep_secs() -> u64 {
+    86_400
+}
+fn default_parity_threshold_pp() -> f64 {
+    5.0
+}
+fn default_parity_window_days() -> i32 {
+    90
+}
+
+impl Default for WorkerConfig {
+    fn default() -> Self {
+        Self {
+            deadline_sweep_secs: default_deadline_sweep_secs(),
+            deadline_warn_hours: default_deadline_warn_hours(),
+            parity_sweep_secs: default_parity_sweep_secs(),
+            parity_threshold_pp: default_parity_threshold_pp(),
+            parity_window_days: default_parity_window_days(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

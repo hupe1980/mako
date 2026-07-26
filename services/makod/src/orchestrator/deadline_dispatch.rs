@@ -54,7 +54,7 @@ use mako_gpke::{
     AbrechnungCommand, AllokationslisteCommand, AnfrageBestellungCommand,
     AnkuendigungZuordnungLfCommand, DatanabrufCommand, GpkeAbrechnungWorkflow,
     GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
-    GpkeAnkuendigungZuordnungLfWorkflow, GpkeDatanabrufWorkflow,
+    GpkeAnkuendigungZuordnungLfWorkflow, GpkeBeendigungZuordnungWorkflow, GpkeDatanabrufWorkflow,
     GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
     GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow,
     GpkeStornierungCommand, GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow,
@@ -465,6 +465,20 @@ pub async fn dispatch_deadline(
                 .await
                 .map(|_| ())
         }
+        "gpke-beendigung-zuordnung" => {
+            let p = Process::<GpkeBeendigungZuordnungWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                mako_gpke::BeendigungZuordnungCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
         "gpke-eog" => {
             let p = Process::<mako_gpke::GpkeEogWorkflow, _>::from_identity(
                 Arc::clone(&event_store),
@@ -472,6 +486,34 @@ pub async fn dispatch_deadline(
             );
             p.execute_and_enqueue_with_retry(
                 mako_gpke::EogCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        "gpke-stammdatenaenderung" => {
+            let p = Process::<mako_gpke::GpkeStammdatenaenderungWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                mako_gpke::StammdatenCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
+        "geli-gas-stammdatenaenderung" => {
+            let p = Process::<mako_geli_gas::GeliGasStammdatenaenderungWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                mako_geli_gas::GasStammdatenCommand::TimeoutExpired { deadline_id, label },
                 3,
             )
             .await?;
@@ -997,7 +1039,10 @@ pub const DISPATCH_TABLE: &[&str] = &[
     "gpke-konfiguration",
     "gpke-neuanlage",
     "gpke-lf-abmeldung",
+    "gpke-beendigung-zuordnung",
     "gpke-eog",
+    "gpke-stammdatenaenderung",
+    "geli-gas-stammdatenaenderung",
     ANKUENDIGUNG_ZUORDNUNG_LF_WORKFLOW,
     ANFRAGE_BESTELLUNG_WORKFLOW,
     "wim-device-change",

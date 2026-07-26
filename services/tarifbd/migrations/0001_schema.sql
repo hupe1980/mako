@@ -144,22 +144,29 @@ CREATE INDEX cp_active  ON customer_products (malo_id, lf_mp_id)
     WHERE assigned_to IS NULL;
 
 -- ── EPEX Spot day-ahead prices ────────────────────────────────────────────────
--- §41a EnWG: hourly day-ahead auction prices (EPEX SPOT DE-LU).
--- Import daily via PUT /api/v1/epex-prices/{date} (24-entry array).
+-- §41a EnWG: day-ahead auction prices (EPEX SPOT DE-LU).
+--
+-- The SDAC day-ahead auction settled on 15-minute Market Time Units (MTU) since
+-- 2025-10-01 (96 quarter-hours per delivery day; 92/100 on DST days). Prices are
+-- keyed on the UTC start instant of the MTU — DST-safe, resolution-agnostic.
+-- Legacy 60-minute source data is stored as 60-min rows and expanded to
+-- quarter-hours on fetch. Import via PUT /api/v1/epex-prices/{date}.
 
 CREATE TABLE epex_prices (
-    price_date      DATE        NOT NULL,
-    hour            SMALLINT    NOT NULL CHECK (hour BETWEEN 0 AND 23),
+    mtu_start       TIMESTAMPTZ NOT NULL,   -- UTC start of the market time unit
+    price_date      DATE        NOT NULL,   -- local (Europe/Berlin) delivery date
+    mtu_minutes     SMALLINT    NOT NULL DEFAULT 15 CHECK (mtu_minutes IN (15, 60)),
     -- ct/kWh (positive = delivery price; negative = surplus grid feed-in)
     avg_ct_kwh      NUMERIC(10, 4) NOT NULL,
     source          TEXT        NOT NULL DEFAULT 'manual',
     imported_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (price_date, hour)
+    PRIMARY KEY (mtu_start)
 );
 
 COMMENT ON TABLE epex_prices IS
-    '§41a EnWG: hourly EPEX Spot day-ahead prices for dynamic tariff calculation. '
-    'Import via PUT /api/v1/epex-prices/{date} (24-hour array).';
+    '§41a EnWG: EPEX Spot day-ahead prices for dynamic tariff calculation, keyed '
+    'on the 15-minute Market Time Unit start (UTC; SDAC 15-min go-live 2025-10-01). '
+    'Import via PUT /api/v1/epex-prices/{date}.';
 
 CREATE INDEX epex_date ON epex_prices (price_date DESC);
 

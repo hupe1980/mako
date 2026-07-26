@@ -82,6 +82,15 @@ pub struct AnmeldungAnfrage {
     /// backdating window, but not for a regular Wechsel. `None` (legacy
     /// messages or extraction failure) is treated conservatively.
     pub transaktionsgrund: Option<String>,
+    /// `true` when the Anmeldung is for an **Erzeugende Marktlokation**
+    /// (EEG-/KWKG-Einspeise-MaLo) — signalled by the UTILMD SG4 STS
+    /// Transaktionsgrundergänzung `9013=ZW3`. Switches Check 4 to the §10c EEG
+    /// Monatserster date rule. Kept separate from [`transaktionsgrund`] (the main
+    /// Anmeldegrund) because a message carries both codes as distinct STS.
+    ///
+    /// [`transaktionsgrund`]: Self::transaktionsgrund
+    #[serde(default)]
+    pub ist_erzeugende_marktlokation: bool,
 }
 
 // ── MaloGridRecord ────────────────────────────────────────────────────────────
@@ -137,7 +146,7 @@ pub enum NetzCheckResult {
 /// explanation for the BNetzA audit log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RejectReason {
-    /// BDEW ERC code (e.g. `"A02"`, `"A05"`, `"A06"`, `"A97"`, `"A99"`).
+    /// BDEW ERC code (e.g. `"A02"`, `"A05"`, `"A06"`, `"A07"`, `"E17"`).
     ///
     /// Source: GPKE AHB / GeLi Gas AHB ERC decision trees.
     pub erc_code: String,

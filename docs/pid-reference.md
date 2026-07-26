@@ -115,19 +115,28 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 55007 | Abmeldung / Beendigung der Zuordnung | GPKE Teil 2 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-abmeldung` |
 | 55008 | Bestätigung Abmeldung | GPKE Teil 2 | LF → NB | — | ✅ | — | ✅ | ✅ | — |
 | 55009 | Ablehnung Abmeldung | GPKE Teil 2 | LF → NB | — | ✅ | — | ✅ | ✅ | — |
-| 55010 | Anfrage zur Beendigung der Zuordnung | GPKE Teil 2 | NB → LFA | — | ✅ | — | ✅ | ✅ | — |
-| 55011 | Bestätigung Beendigung der Zuordnung | GPKE Teil 2 | LFA → NB | 55010 | ✅ | — | ✅ | ✅ | — |
-| 55012 | Ablehnung Beendigung der Zuordnung | GPKE Teil 2 | LFA → NB | 55010 | ✅ | — | ✅ | ✅ | — |
+| 55010 | Anfrage zur Beendigung der Zuordnung | GPKE Teil 2 | NB → LFA | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-beendigung-zuordnung` |
+| 55011 | Bestätigung Beendigung der Zuordnung | GPKE Teil 2 | LFA → NB | 55010 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-beendigung-zuordnung` |
+| 55012 | Ablehnung Beendigung der Zuordnung | GPKE Teil 2 | LFA → NB | 55010 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-beendigung-zuordnung` |
 | 55013 | Anmeldung / Zuordnung EOG | GPKE Teil 2 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-eog` |
 | 55014 | Bestätigung EOG Anmeldung | GPKE Teil 2 | LF → NB | 55013 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-eog` |
 | 55015 | Ablehnung EOG Anmeldung | GPKE Teil 2 | LF → NB | 55013 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-eog` |
+
+> **Stammdatenänderung family (GPKE Teil 4).** The full band **55615–55694,
+> 55109/55110** (Änderung + Rückmeldung per master-data object × direction, one
+> abstract use-case) routes to `gpke-stammdatenaenderung`. Strom is quality
+> feedback (A01 übernommen / A02 mit Korrektur), never a hard reject; the
+> receiver applies the change regardless and a missing Rückmeldung is tacit
+> acceptance (Frist: 2. Werktag). The rows above are the highest-volume MaLo
+> examples; 55557/55559 (MSB-Abr.-Daten) stay on `gpke-supplier-change` and
+> 21047 (Bearbeitungsstand) on the IFTSTA route.
 | 55016 | Kündigung | GPKE Teil 2 | LFN → LFA | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
 | 55017 | Bestätigung Kündigung | GPKE Teil 2 | LFA → LFN | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-anmeldung` |
 | 55018 | Ablehnung Kündigung | GPKE Teil 2 | LFA → LFN | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-anmeldung` |
 | 55022 | Anfrage nach Stornierung | GPKE Teil 4 | orig. → orig. | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stornierung` |
 | 55023 | Bestätigung Anfrage Stornierung | GPKE Teil 4 | Empf. → Sender | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stornierung` |
 | 55024 | Ablehnung Anfrage Stornierung | GPKE Teil 4 | Empf. → Sender | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-stornierung` |
-| 55035 | Antwort auf GDA verb. MaLo | GPKE Teil 4 | NB → LF | — | ✅ | — | ✅ | ✅ | — |
+| 55035 | Antwort auf GDA verb. MaLo | GPKE Teil 4 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55036 | Existierende Zuordnung | GPKE Teil 2 | NB → LFN | — | ✅ | — | ✅ | ✅ | — |
 | 55037 | Beendigung der Zuordnung | GPKE Teil 2 | NB → LFA | — | ✅ | — | ✅ | ✅ | — |
 | 55038 | Aufhebung einer zuk. Zuordnung | GPKE Teil 2 | NB → LFZ | — | ✅ | — | ✅ | ✅ | — |
@@ -140,7 +149,7 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 55051 | Ende MSB | WiM Strom Teil 1 | MSBA → NB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 55052 | Bestätigung Ende MSB | WiM Strom Teil 1 | NB → MSBA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 55053 | Ablehnung Ende MSB | WiM Strom Teil 1 | NB → MSBA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
-| 55060 | Antwort auf GDA | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | — |
+| 55060 | Antwort auf GDA | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55062 | Aktivierung von ZP | MaBiS / AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → NB · NB → BIKO · NB → LF · ÜNB → LF · ÜNB → BIKO · BIKO → NB · BIKO → BKV · BIKO → ÜNB · ÜNB → NB · ÜNB → BKV · NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
 | 55063 | Deaktivierung von ZP | MaBiS / AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → NB · NB → BIKO · NB → LF · ÜNB → LF · ÜNB → BIKO · BIKO → NB · BIKO → BKV · BIKO → ÜNB · ÜNB → NB · ÜNB → BKV · NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
 | 55064 | Antwort | MaBiS | NB → NB · BIKO → NB · BIKO → ÜNB | — | ✅ | — | ✅ | ✅ | — |
@@ -158,21 +167,21 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 55077 | Anmeldung erz. MaLo | GPKE Teil 2 | LFN → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
 | 55078 | Bestätigung Anmeldung erz. MaLo | GPKE Teil 2 | NB → LFN | 55077 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-anmeldung` |
 | 55080 | Ablehnung Anmeldung erz. MaLo | GPKE Teil 2 | NB → LFN | 55077 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-lf-anmeldung` |
-| 55095 | Antwort auf GDA erz. MaLo | GPKE Teil 4 | NB → LF | — | ✅ | — | ✅ | ✅ | — |
-| 55109 | Änderung Daten der MaLo | GPKE Teil 4 | LF → NB | — | ✅ | — | ✅ | ✅ | — |
-| 55110 | Änderung Daten der MaLo | GPKE Teil 4 | LF → MSB | — | ✅ | — | ✅ | ✅ | — |
+| 55095 | Antwort auf GDA erz. MaLo | GPKE Teil 4 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55109 | Änderung Daten der MaLo | GPKE Teil 4 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55110 | Änderung Daten der MaLo | GPKE Teil 4 | LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55126 | Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | — |
-| 55136 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | MSB → LF | — | ✅ | — | ✅ | ✅ | — |
-| 55137 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | NB → LF | 55109 | ✅ | — | ✅ | ✅ | — |
+| 55136 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55137 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | NB → LF | 55109 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55156 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2 | LF → NB | 55126 | ✅ | — | ✅ | ✅ | — |
 | 55168 | Verpflichtungsanfrage / Aufforderung | WiM Strom Teil 1 | NB → gMSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 55169 | Bestätigung Verpflichtungsanfrage | WiM Strom Teil 1 | gMSB → NB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 55170 | Ablehnung Verpflichtungsanfrage | WiM Strom Teil 1 | gMSB → NB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
-| 55173 | Änderung der Lokationsbündelstruktur | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | — |
-| 55175 | Änderung der Lokationsbündelstruktur | GPKE Teil 4 | NB → LF | — | ✅ | — | ✅ | ✅ | — |
-| 55177 | Rückmeldung/Anfrage Lokationsbündelstruktur | GPKE Teil 4 | MSB → NB | 55173 | ✅ | — | ✅ | ✅ | — |
-| 55180 | Rückmeldung/Anfrage Lokationsbündelstruktur | GPKE Teil 4 | LF → NB | 55175 | ✅ | — | ✅ | ✅ | — |
-| 55194 | Antowrt auf GDA (Strom an Gas) | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | — |
+| 55173 | Änderung der Lokationsbündelstruktur | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55175 | Änderung der Lokationsbündelstruktur | GPKE Teil 4 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55177 | Rückmeldung/Anfrage Lokationsbündelstruktur | GPKE Teil 4 | MSB → NB | 55173 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55180 | Rückmeldung/Anfrage Lokationsbündelstruktur | GPKE Teil 4 | LF → NB | 55175 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55194 | Antowrt auf GDA (Strom an Gas) | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55195 | Bilanzierungsgebietsclearingliste | MaBiS | ÜNB → NB | — | ✅ | — | ✅ | ✅ | — |
 | 55196 | Antwort auf Bilanzierungsgebietsclearingliste | MaBiS | NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
 | 55197 | Aktivierung ZP tägliche AAÜZ | MaBiS | ANB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
@@ -197,10 +206,10 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 55220 | Rückmeldung/Anfrage Abr.-Daten NNA | GPKE Teil 2 | LF → NB | 55218 | ✅ | — | ✅ | ✅ | — |
 | 55223 | DZÜ-Liste | MaBiS | ÜNB → NB | — | ✅ | — | ✅ | ✅ | — |
 | 55224 | Antwort auf DZÜ-Liste | MaBiS | NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 55225 | Änderung Blindabr.-Daten der NeLo | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | — |
-| 55227 | Rückmeldung/Anfrage Blindabr.-Daten der NeLo | GPKE Teil 4 | LF → NB | 55225 | ✅ | — | ✅ | ✅ | — |
-| 55230 | Änderung Blindabr.-Daten der NeLo | GPKE Teil 4 | LF → NB | — | ✅ | — | ✅ | ✅ | — |
-| 55232 | Rückmeldung/Anfrage Blindabr.-Daten der NeLo | GPKE Teil 4 | NB → LF | 55230 | ✅ | — | ✅ | ✅ | — |
+| 55225 | Änderung Blindabr.-Daten der NeLo | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55227 | Rückmeldung/Anfrage Blindabr.-Daten der NeLo | GPKE Teil 4 | LF → NB | 55225 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55230 | Änderung Blindabr.-Daten der NeLo | GPKE Teil 4 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55232 | Rückmeldung/Anfrage Blindabr.-Daten der NeLo | GPKE Teil 4 | NB → LF | 55230 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55235 | Zuordnung ZP der NGZ zur NZR | AWH MaBiS-Ergänzung | NB → NB · NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
 | 55236 | Beendigung Zuordnung ZP der NGZ zur NZR | AWH MaBiS-Ergänzung | NB → NB · NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
 | 55237 | Antwort | AWH MaBiS-Ergänzung | NB → NB | — | ✅ | — | ✅ | ✅ | — |
@@ -210,10 +219,10 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 55241 | Antwort auf Beendigung | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | LF → VNB | — | ✅ | — | ✅ | ✅ | — |
 | 55242 | Abmeldung aus dem Modell 2 | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → VNB | — | ✅ | — | ✅ | ✅ | — |
 | 55243 | Antwort auf Abmeldung | AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | VNB → NB | — | ✅ | — | ✅ | ✅ | — |
-| 55553 | Daten auf individuelle Bestellung | GPKE Teil 4 | MSB → NB · MSB → LF · MSB → MSB | — | ✅ | — | ✅ | ✅ | — |
+| 55553 | Daten auf individuelle Bestellung | GPKE Teil 4 | MSB → NB · MSB → LF · MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55555 | Anfrage Daten der individuellen Bestellung | GPKE Teil 4 | NB → MSB · LF → MSB · MSB → MSB | 55553 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-anfrage-bestellung` |
 | 55557 | Änderung MSB-Abr.-Daten der MaLo | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
-| 55559 | Rückmeldung/Anfrage MSB-Abr.-Daten der MaLo | GPKE Teil 4 | NB → MSB | 55557 | ✅ | — | ✅ | ✅ | — |
+| 55559 | Rückmeldung/Anfrage MSB-Abr.-Daten der MaLo | GPKE Teil 4 | NB → MSB | 55557 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55600 | Anmeldung neuer verb. MaLo | GPKE Teil 2 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-neuanlage` |
 | 55601 | Anmeldung neuer erz. MaLo | GPKE Teil 2 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-neuanlage` |
 | 55602 | Bestätigung Anmeldung neuer verb. MaLo | GPKE Teil 2 | NB → LF | 55600 | ✅ | — | ✅ | ✅ | — |
@@ -226,75 +235,75 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 55611 | Beendigung der Zuordnung | GPKE Teil 2 | NB → MSB · NB → MSBZ | — | ✅ | — | ✅ | ✅ | — |
 | 55613 | Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2 | NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
 | 55614 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2 | ÜNB → NB | 55613 | ✅ | — | ✅ | ✅ | — |
-| 55615 | Änderung Daten der NeLo | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | — |
-| 55616 | Änderung Daten der MaLo | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | — |
-| 55617 | Änderung Daten der TR | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | — |
-| 55618 | Änderung Daten der SR | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | — |
-| 55619 | Änderung Daten der Tranche | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | — |
-| 55620 | Änderung Daten der MeLo | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | — |
-| 55621 | Rückmeldung/Anfrage Daten zur NeLo | GPKE Teil 4 | LF → NB | 55615 | ✅ | — | ✅ | ✅ | — |
-| 55622 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | LF → NB | 55616 | ✅ | — | ✅ | ✅ | — |
-| 55623 | Rückmeldung/Anfrage Daten der TR | GPKE Teil 4 | LF → NB | 55617 | ✅ | — | ✅ | ✅ | — |
-| 55624 | Rückmeldung/Anfrage Daten der SR | GPKE Teil 4 | LF → NB | 55618 | ✅ | — | ✅ | ✅ | — |
-| 55625 | Rückmeldung/Anfrage Daten der Tranche | GPKE Teil 4 | LF → NB | 55619 | ✅ | — | ✅ | ✅ | — |
-| 55626 | Rückmeldung/Anfrage Daten der MeLo | GPKE Teil 4 | LF → NB | 55620 | ✅ | — | ✅ | ✅ | — |
-| 55627 | Änderung Daten der NeLo | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | — |
-| 55628 | Änderung Daten der MaLo | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | — |
-| 55629 | Änderung Daten der TR | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | — |
-| 55630 | Änderung Daten der SR | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | — |
-| 55632 | Änderung Daten der MeLo | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | — |
-| 55633 | Rückmeldung/Anfrage Daten zur NeLo | GPKE Teil 4 | MSB → NB | 55627 | ✅ | — | ✅ | ✅ | — |
-| 55634 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | MSB → NB | 55628 | ✅ | — | ✅ | ✅ | — |
-| 55635 | Rückmeldung/Anfrage Daten der TR | GPKE Teil 4 | MSB → NB | 55629 | ✅ | — | ✅ | ✅ | — |
-| 55636 | Rückmeldung/Anfrage Daten der SR | GPKE Teil 4 | MSB → NB | 55630 | ✅ | — | ✅ | ✅ | — |
-| 55638 | Rückmeldung/Anfrage Daten der MeLo | GPKE Teil 4 | MSB → NB | 55632 | ✅ | — | ✅ | ✅ | — |
-| 55639 | Änderung Daten der NeLo | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | — |
-| 55640 | Änderung Daten der MaLo | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | — |
-| 55641 | Änderung Daten der SR | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | — |
-| 55642 | Änderung Daten der Tranche | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | — |
-| 55643 | Änderung Daten der MeLo | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | — |
-| 55644 | Rückmeldung/Anfrage Daten der NeLo | GPKE Teil 4 | NB → MSB | 55639 | ✅ | — | ✅ | ✅ | — |
-| 55645 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | NB → MSB | 55640 | ✅ | — | ✅ | ✅ | — |
-| 55646 | Rückmeldung/Anfrage Daten der SR | GPKE Teil 4 | NB → MSB | 55641 | ✅ | — | ✅ | ✅ | — |
-| 55647 | Rückmeldung/Anfrage Daten der Tranche | GPKE Teil 4 | NB → MSB | 55642 | ✅ | — | ✅ | ✅ | — |
-| 55648 | Rückmeldung/Anfrage Daten der MeLo | GPKE Teil 4 | NB → MSB | 55643 | ✅ | — | ✅ | ✅ | — |
-| 55649 | Änderung Daten der NeLo | GPKE Teil 4 | MSB → LF | — | ✅ | — | ✅ | ✅ | — |
-| 55650 | Änderung Daten der MaLo | GPKE Teil 4 | MSB → LF | — | ✅ | — | ✅ | ✅ | — |
-| 55651 | Änderung Daten der SR | GPKE Teil 4 | MSB → LF | — | ✅ | — | ✅ | ✅ | — |
-| 55652 | Änderung Daten der Tranche | GPKE Teil 4 | MSB → LF | — | ✅ | — | ✅ | ✅ | — |
-| 55653 | Änderung Daten der MeLo | GPKE Teil 4 | MSB → LF | — | ✅ | — | ✅ | ✅ | — |
-| 55654 | Rückmeldung/Anfrage Daten der NeLo | GPKE Teil 4 | LF → MSB | 55649 | ✅ | — | ✅ | ✅ | — |
-| 55655 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | LF → MSB | 55650 | ✅ | — | ✅ | ✅ | — |
-| 55656 | Rückmeldung/Anfrage Daten der SR | GPKE Teil 4 | LF → MSB | 55651 | ✅ | — | ✅ | ✅ | — |
-| 55657 | Rückmeldung/Anfrage Daten der Tranche | GPKE Teil 4 | LF → MSB | 55652 | ✅ | — | ✅ | ✅ | — |
-| 55658 | Rückmeldung/Anfrage Daten der MeLo | GPKE Teil 4 | LF → MSB | 55653 | ✅ | — | ✅ | ✅ | — |
-| 55659 | Änderung Daten der NeLo | GPKE Teil 4 | MSB → MSB | — | ✅ | — | ✅ | ✅ | — |
-| 55660 | Änderung Daten der MaLo | GPKE Teil 4 | MSB → MSB | — | ✅ | — | ✅ | ✅ | — |
-| 55661 | Änderung Daten der SR | GPKE Teil 4 | MSB → MSB | — | ✅ | — | ✅ | ✅ | — |
-| 55662 | Änderung Daten der Tranche | GPKE Teil 4 | MSB → MSB | — | ✅ | — | ✅ | ✅ | — |
-| 55663 | Änderung Daten der MeLo | GPKE Teil 4 | MSB → MSB | — | ✅ | — | ✅ | ✅ | — |
-| 55664 | Rückmeldung/Anfrage Daten der NeLo | GPKE Teil 4 | MSB → MSB | 55659 | ✅ | — | ✅ | ✅ | — |
-| 55665 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | MSB → MSB | 55660 | ✅ | — | ✅ | ✅ | — |
-| 55666 | Rückmeldung/Anfrage Daten der SR | GPKE Teil 4 | MSB → MSB | 55661 | ✅ | — | ✅ | ✅ | — |
-| 55667 | Rückmeldung/Anfrage Daten der Tranche | GPKE Teil 4 | MSB → MSB | 55662 | ✅ | — | ✅ | ✅ | — |
-| 55669 | Rückmeldung/Anfrage Daten der MeLo | GPKE Teil 4 | MSB → MSB | 55663 | ✅ | — | ✅ | ✅ | — |
-| 55670 | Stammdaten BK-Treue | GPKE Teil 4 | NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 55671 | Rückmeldung auf Stammdaten BK-Treue | GPKE Teil 4 | ÜNB → NB | 55670 | ✅ | — | ✅ | ✅ | — |
+| 55615 | Änderung Daten der NeLo | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55616 | Änderung Daten der MaLo | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55617 | Änderung Daten der TR | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55618 | Änderung Daten der SR | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55619 | Änderung Daten der Tranche | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55620 | Änderung Daten der MeLo | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55621 | Rückmeldung/Anfrage Daten zur NeLo | GPKE Teil 4 | LF → NB | 55615 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55622 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | LF → NB | 55616 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55623 | Rückmeldung/Anfrage Daten der TR | GPKE Teil 4 | LF → NB | 55617 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55624 | Rückmeldung/Anfrage Daten der SR | GPKE Teil 4 | LF → NB | 55618 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55625 | Rückmeldung/Anfrage Daten der Tranche | GPKE Teil 4 | LF → NB | 55619 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55626 | Rückmeldung/Anfrage Daten der MeLo | GPKE Teil 4 | LF → NB | 55620 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55627 | Änderung Daten der NeLo | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55628 | Änderung Daten der MaLo | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55629 | Änderung Daten der TR | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55630 | Änderung Daten der SR | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55632 | Änderung Daten der MeLo | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55633 | Rückmeldung/Anfrage Daten zur NeLo | GPKE Teil 4 | MSB → NB | 55627 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55634 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | MSB → NB | 55628 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55635 | Rückmeldung/Anfrage Daten der TR | GPKE Teil 4 | MSB → NB | 55629 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55636 | Rückmeldung/Anfrage Daten der SR | GPKE Teil 4 | MSB → NB | 55630 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55638 | Rückmeldung/Anfrage Daten der MeLo | GPKE Teil 4 | MSB → NB | 55632 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55639 | Änderung Daten der NeLo | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55640 | Änderung Daten der MaLo | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55641 | Änderung Daten der SR | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55642 | Änderung Daten der Tranche | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55643 | Änderung Daten der MeLo | GPKE Teil 4 | MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55644 | Rückmeldung/Anfrage Daten der NeLo | GPKE Teil 4 | NB → MSB | 55639 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55645 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | NB → MSB | 55640 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55646 | Rückmeldung/Anfrage Daten der SR | GPKE Teil 4 | NB → MSB | 55641 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55647 | Rückmeldung/Anfrage Daten der Tranche | GPKE Teil 4 | NB → MSB | 55642 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55648 | Rückmeldung/Anfrage Daten der MeLo | GPKE Teil 4 | NB → MSB | 55643 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55649 | Änderung Daten der NeLo | GPKE Teil 4 | MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55650 | Änderung Daten der MaLo | GPKE Teil 4 | MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55651 | Änderung Daten der SR | GPKE Teil 4 | MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55652 | Änderung Daten der Tranche | GPKE Teil 4 | MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55653 | Änderung Daten der MeLo | GPKE Teil 4 | MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55654 | Rückmeldung/Anfrage Daten der NeLo | GPKE Teil 4 | LF → MSB | 55649 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55655 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | LF → MSB | 55650 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55656 | Rückmeldung/Anfrage Daten der SR | GPKE Teil 4 | LF → MSB | 55651 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55657 | Rückmeldung/Anfrage Daten der Tranche | GPKE Teil 4 | LF → MSB | 55652 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55658 | Rückmeldung/Anfrage Daten der MeLo | GPKE Teil 4 | LF → MSB | 55653 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55659 | Änderung Daten der NeLo | GPKE Teil 4 | MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55660 | Änderung Daten der MaLo | GPKE Teil 4 | MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55661 | Änderung Daten der SR | GPKE Teil 4 | MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55662 | Änderung Daten der Tranche | GPKE Teil 4 | MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55663 | Änderung Daten der MeLo | GPKE Teil 4 | MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55664 | Rückmeldung/Anfrage Daten der NeLo | GPKE Teil 4 | MSB → MSB | 55659 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55665 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | MSB → MSB | 55660 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55666 | Rückmeldung/Anfrage Daten der SR | GPKE Teil 4 | MSB → MSB | 55661 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55667 | Rückmeldung/Anfrage Daten der Tranche | GPKE Teil 4 | MSB → MSB | 55662 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55669 | Rückmeldung/Anfrage Daten der MeLo | GPKE Teil 4 | MSB → MSB | 55663 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55670 | Stammdaten BK-Treue | GPKE Teil 4 | NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55671 | Rückmeldung auf Stammdaten BK-Treue | GPKE Teil 4 | ÜNB → NB | 55670 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55672 | Abr.-Daten BK-Abr. erz. Malo | GPKE Teil 2 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | — |
 | 55673 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. erz. Malo | GPKE Teil 2 | LF → NB | 55672 | ✅ | — | ✅ | ✅ | — |
 | 55674 | Abr.-Daten BK-Abr. erz. Malo | GPKE Teil 2 | NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
 | 55675 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. erz. Malo | GPKE Teil 2 | ÜNB → NB | 55674 | ✅ | — | ✅ | ✅ | — |
-| 55684 | Änderung Daten der MaLo | GPKE Teil 4 | MSB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 55685 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | ÜNB → MSB | 55684 | ✅ | — | ✅ | ✅ | — |
-| 55686 | Änderung Daten der Tranche | GPKE Teil 4 | MSB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 55687 | Rückmeldung/Anfrage Daten der Tranche | GPKE Teil 4 | ÜNB → MSB | 55686 | ✅ | — | ✅ | ✅ | — |
-| 55688 | Änderung Daten der MaLo | GPKE Teil 4 | NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 55689 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | ÜNB → NB | — | ✅ | — | ✅ | ✅ | — |
+| 55684 | Änderung Daten der MaLo | GPKE Teil 4 | MSB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55685 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | ÜNB → MSB | 55684 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55686 | Änderung Daten der Tranche | GPKE Teil 4 | MSB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55687 | Rückmeldung/Anfrage Daten der Tranche | GPKE Teil 4 | ÜNB → MSB | 55686 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55688 | Änderung Daten der MaLo | GPKE Teil 4 | NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55689 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | ÜNB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55690 | Lokationsbündelstruktur und DB | AWH NBW | NBA → NBN | — | — | — | ✅ | ✅ | — |
-| 55691 | Änderung Paket-ID der MaLo | GPKE Teil 4 / AWH NBW | NB → LF · NB → MSB · NB → ÜNB · NBA → NBN | — | ✅ | — | ✅ | ✅ | — |
-| 55692 | Rückmeldung/Anfrage Paket-ID der MaLo | GPKE Teil 4 | LF → NB · MSB → NB · ÜNB → NB | 55691 | ✅ | — | ✅ | ✅ | — |
-| 55693 | Änderung Daten der TR | GPKE Teil 4 | LF → NB | — | — | ✅ | ⚠️ | ✅ | — |
-| 55694 | Rückmeldung/ Anfrage Daten der TR | GPKE Teil 4 | NB → LF | 55693 | — | ✅ | ⚠️ | ✅ | — |
+| 55691 | Änderung Paket-ID der MaLo | GPKE Teil 4 / AWH NBW | NB → LF · NB → MSB · NB → ÜNB · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55692 | Rückmeldung/Anfrage Paket-ID der MaLo | GPKE Teil 4 | LF → NB · MSB → NB · ÜNB → NB | 55691 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55693 | Änderung Daten der TR | GPKE Teil 4 | LF → NB | — | — | ✅ | ⚠️ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
+| 55694 | Rückmeldung/ Anfrage Daten der TR | GPKE Teil 4 | NB → LF | 55693 | — | ✅ | ⚠️ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 
 ## UTILMD AHB Gas
 
@@ -343,51 +352,51 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 44103 | Stammdaten zur verbrauchenden Marktlokation | NBW Leitfaden | NBN → LF | — | — | ✅ | ✅ | ✅ | — |
 | 44104 | Aktualisierte Stammdaten zur verbrauchenden Marktlokation | NBW Leitfaden | NBN → LF | — | — | ✅ | ✅ | ✅ | — |
 | 44105 | Ablehnung auf Stammdaten zur verbrauchenden Marktlokation | NBW Leitfaden | LF → NBN | — | — | ✅ | ✅ | ✅ | — |
-| 44109 | Nicht bila.rel Änderung vom LF | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | — |
-| 44111 | Antwort auf Änderung vom LF | GeLi Gas 2.0 | NB → LF | 44109 | — | ✅ | ✅ | ✅ | — |
-| 44112 | Nicht bila.rel. Änderung vom NB | Marktraumumstellung / WiM Gas / GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | — |
-| 44113 | Nicht bila.rel. Änderung vom NB | Marktraumumstellung / GeLi Gas 2.0 | NB → MSB | — | — | ✅ | ✅ | ✅ | — |
-| 44115 | Antwort auf Änderung vom NB | Marktraumumstellung / GeLi Gas 2.0 | MSB → NB · LF → NB | 44112, 44113 | — | ✅ | ✅ | ✅ | — |
-| 44116 | Änderung vom MSB mit Abhängigkeiten | GeLi Gas 2.0 | MSB → NB | — | — | ✅ | ✅ | ✅ | — |
-| 44117 | Änderung vom MSB mit Abhängigkeiten | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | — |
-| 44119 | Antwort auf Änderung vom MSB | GeLi Gas 2.0 | NB → MSB · LF → NB | 44116, 44117 | — | ✅ | ✅ | ✅ | — |
-| 44120 | Bila.rel. Änderung vom LF | Marktraumumstellung / GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | — |
-| 44121 | Antwort auf Änderung vom LF | Marktraumumstellung / GeLi Gas 2.0 | NB → LF | 44120 | — | ✅ | ✅ | ✅ | — |
-| 44123 | Bila.rel. Änderung vom NB mit Abhängigkeiten | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | — |
-| 44124 | Antwort auf Änderung vom NB | GeLi Gas 2.0 | LF → NB | 44123 | — | ✅ | ✅ | ✅ | — |
-| 44137 | Nicht bila. rel. Anfrage an LF | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | — |
-| 44138 | Antwort auf Anfrage | GeLi Gas 2.0 | LF → NB | 44137 | — | ✅ | ✅ | ✅ | — |
-| 44139 | Nicht bila.rel. Anfrage an NB | Marktraumumstellung / GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | — |
-| 44140 | Nicht bila.rel. Anfrage an NB | Marktraumumstellung / GeLi Gas 2.0 | MSB → NB | — | — | ✅ | ✅ | ✅ | — |
-| 44142 | Antwort auf Anfrage | Marktraumumstellung / GeLi Gas 2.0 | NB → LF · NB → MSB | 44139, 44140 | — | ✅ | ✅ | ✅ | — |
-| 44143 | Anfrage an MSB mit Abhängigkeiten | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | — |
-| 44145 | Antwort auf Anfrage | GeLi Gas 2.0 | NB → LF | 44143 | — | ✅ | ✅ | ✅ | — |
-| 44146 | Ablehnung der Anfrage | GeLi Gas 2.0 | NB → LF | 44143 | — | ✅ | ✅ | ✅ | — |
-| 44147 | Anfrage an MSB mit Abhängigkeiten | GeLi Gas 2.0 | NB → MSB | — | — | ✅ | ✅ | ✅ | — |
-| 44148 | Anfrage an MSB mit Abhängigkeiten | GeLi Gas 2.0 | NB → MSB | — | — | ✅ | ✅ | ✅ | — |
-| 44149 | Antwort auf Anfrage | GeLi Gas 2.0 | MSB → NB | 44147, 44148 | — | ✅ | ✅ | ✅ | — |
-| 44150 | Bila. rel. Anfrage an LF | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | — |
-| 44151 | Antwort auf Anfrage | GeLi Gas 2.0 | LF → NB | 44150 | — | ✅ | ✅ | ✅ | — |
-| 44152 | Ablehnung der Anfrage | GeLi Gas 2.0 | LF → NB | 44150 | — | ✅ | ✅ | ✅ | — |
-| 44156 | Bila.rel. Anfrage an NB mit Abhängigkeiten | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | — |
-| 44157 | Antwort auf Anfrage | GeLi Gas 2.0 | NB → LF | 44156 | — | ✅ | ✅ | ✅ | — |
-| 44159 | Änderung vom MSB ohne Abhängigkeiten | GeLi Gas 2.0 | MSB → NB | — | — | ✅ | ✅ | ✅ | — |
-| 44160 | Änderung vom MSB ohne Abhängigkeiten | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | — |
-| 44161 | Antwort auf Änderung | GeLi Gas 2.0 | NB → MSB · LF → NB | 44159, 44160 | — | ✅ | ✅ | ✅ | — |
-| 44162 | Anfrage an MSB ohne Abhängigkeiten | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | — |
-| 44163 | Antwort auf Anfrage | GeLi Gas 2.0 | NB → LF | 44162 | — | ✅ | ✅ | ✅ | — |
-| 44164 | Ablehnung Anfrage | GeLi Gas 2.0 | NB → LF | 44162 | — | ✅ | ✅ | ✅ | — |
-| 44165 | Nicht bila. rel Anfrage an MSB ohne Abhängigkeiten | GeLi Gas 2.0 | NB → MSB | — | — | ✅ | ✅ | ✅ | — |
-| 44166 | Nicht bila. rel Anfrage an MSB ohne Abhängigkeiten | GeLi Gas 2.0 | NB → MSB | — | — | ✅ | ✅ | ✅ | — |
-| 44167 | Antwort auf Anfrage | GeLi Gas 2.0 | MSB → NB | 44165, 44166 | — | ✅ | ✅ | ✅ | — |
+| 44109 | Nicht bila.rel Änderung vom LF | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44111 | Antwort auf Änderung vom LF | GeLi Gas 2.0 | NB → LF | 44109 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44112 | Nicht bila.rel. Änderung vom NB | Marktraumumstellung / WiM Gas / GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44113 | Nicht bila.rel. Änderung vom NB | Marktraumumstellung / GeLi Gas 2.0 | NB → MSB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44115 | Antwort auf Änderung vom NB | Marktraumumstellung / GeLi Gas 2.0 | MSB → NB · LF → NB | 44112, 44113 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44116 | Änderung vom MSB mit Abhängigkeiten | GeLi Gas 2.0 | MSB → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44117 | Änderung vom MSB mit Abhängigkeiten | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44119 | Antwort auf Änderung vom MSB | GeLi Gas 2.0 | NB → MSB · LF → NB | 44116, 44117 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44120 | Bila.rel. Änderung vom LF | Marktraumumstellung / GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44121 | Antwort auf Änderung vom LF | Marktraumumstellung / GeLi Gas 2.0 | NB → LF | 44120 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44123 | Bila.rel. Änderung vom NB mit Abhängigkeiten | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44124 | Antwort auf Änderung vom NB | GeLi Gas 2.0 | LF → NB | 44123 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44137 | Nicht bila. rel. Anfrage an LF | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44138 | Antwort auf Anfrage | GeLi Gas 2.0 | LF → NB | 44137 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44139 | Nicht bila.rel. Anfrage an NB | Marktraumumstellung / GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44140 | Nicht bila.rel. Anfrage an NB | Marktraumumstellung / GeLi Gas 2.0 | MSB → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44142 | Antwort auf Anfrage | Marktraumumstellung / GeLi Gas 2.0 | NB → LF · NB → MSB | 44139, 44140 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44143 | Anfrage an MSB mit Abhängigkeiten | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44145 | Antwort auf Anfrage | GeLi Gas 2.0 | NB → LF | 44143 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44146 | Ablehnung der Anfrage | GeLi Gas 2.0 | NB → LF | 44143 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44147 | Anfrage an MSB mit Abhängigkeiten | GeLi Gas 2.0 | NB → MSB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44148 | Anfrage an MSB mit Abhängigkeiten | GeLi Gas 2.0 | NB → MSB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44149 | Antwort auf Anfrage | GeLi Gas 2.0 | MSB → NB | 44147, 44148 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44150 | Bila. rel. Anfrage an LF | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44151 | Antwort auf Anfrage | GeLi Gas 2.0 | LF → NB | 44150 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44152 | Ablehnung der Anfrage | GeLi Gas 2.0 | LF → NB | 44150 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44156 | Bila.rel. Anfrage an NB mit Abhängigkeiten | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44157 | Antwort auf Anfrage | GeLi Gas 2.0 | NB → LF | 44156 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44159 | Änderung vom MSB ohne Abhängigkeiten | GeLi Gas 2.0 | MSB → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44160 | Änderung vom MSB ohne Abhängigkeiten | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44161 | Antwort auf Änderung | GeLi Gas 2.0 | NB → MSB · LF → NB | 44159, 44160 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44162 | Anfrage an MSB ohne Abhängigkeiten | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44163 | Antwort auf Anfrage | GeLi Gas 2.0 | NB → LF | 44162 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44164 | Ablehnung Anfrage | GeLi Gas 2.0 | NB → LF | 44162 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44165 | Nicht bila. rel Anfrage an MSB ohne Abhängigkeiten | GeLi Gas 2.0 | NB → MSB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44166 | Nicht bila. rel Anfrage an MSB ohne Abhängigkeiten | GeLi Gas 2.0 | NB → MSB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44167 | Antwort auf Anfrage | GeLi Gas 2.0 | MSB → NB | 44165, 44166 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
 | 44168 | Verpflichtungsanfrage / Aufforderung | WiM Gas | NB → gMSB | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-verpflichtungsanfrage` |
 | 44169 | Bestätigung Verpflichtungsanfrage | WiM Gas | gMSB → NB | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-verpflichtungsanfrage` |
 | 44170 | Ablehnung Verpflichtungsanfrage | WiM Gas | gMSB → NB | — | — | ✅ | ✅ | ⚠️ | `mako-wim-gas` `wim-gas-verpflichtungsanfrage` |
-| 44175 | Änderung der Marktlokationsstruktur | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | — |
-| 44176 | Antwort auf Änderung der Marktlokationsstruktur | GeLi Gas 2.0 | LF → NB | 44175 | — | ✅ | ✅ | ✅ | — |
-| 44180 | Anfrage der Marktlokationsstruktur | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | — |
-| 44181 | Antwort auf Anfrage der Marktlokationsstruktur | GeLi Gas 2.0 | NB → LF | 44108 | — | ✅ | ✅ | ✅ | — |
-| 44182 | Ablehnung der Anfrage der Marktlokationsstruktur | GeLi Gas 2.0 | NB → LF | 44180 | — | ✅ | ✅ | ✅ | — |
+| 44175 | Änderung der Marktlokationsstruktur | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44176 | Antwort auf Änderung der Marktlokationsstruktur | GeLi Gas 2.0 | LF → NB | 44175 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44180 | Anfrage der Marktlokationsstruktur | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44181 | Antwort auf Anfrage der Marktlokationsstruktur | GeLi Gas 2.0 | NB → LF | 44108 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
+| 44182 | Ablehnung der Anfrage der Marktlokationsstruktur | GeLi Gas 2.0 | NB → LF | 44180 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
 | 44183 | Ende MSB von NB | AWH WiM Gas 2.0 | NB → MSB | — | — | — | ⚠️ | ✅ | — |
 
 ## ORDERS AHB
@@ -527,7 +536,7 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 21038 | Ansicht BTR | Redispatch 2.0 | BTR → NB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
 | 21039 | Auftragsstatus (Sperren) | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → LF · NB → MSB · NB → ÜNB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung-lf` |
 | 21040 | Info Entsperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → MSB | — | ✅ | ✅ | ✅ | ✅ | — |
-| 21042 | Bestellung (WiM) | WiM Strom Teil 2 | MSB → ESA | — | ✅ | — | ✅ | ✅ | — |
+| 21042 | Umsetzungsstatus (Bestellung WiM) — UC 4.4 Beendigung durch MSB | WiM Strom Teil 2 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `esa-wertebestellung` |
 | 21043 | Bestellungsantwort / -mitteilung | GPKE Teil 3 | NB → LF · MSB → MSB · MSB → NB · MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 21044 | Bestellungsbeendigung | GPKE Teil 3 | MSB → NB · MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 21045 | EnFG Informationen | GPKE Teil 4 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |

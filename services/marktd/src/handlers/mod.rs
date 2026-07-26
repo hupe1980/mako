@@ -6,6 +6,7 @@
 //! - `parse_if_match` — `If-Match` header → `Option<i64>`
 //! - `etag` — `i64` version → ETag header value
 
+pub mod bilanzierung;
 pub mod contract;
 pub mod correlation;
 pub mod device;
@@ -19,6 +20,7 @@ pub mod lokationszuordnung;
 pub mod malo;
 pub mod malo_grid;
 pub mod melo;
+pub mod melo_msb;
 pub mod metrics;
 pub mod mmma_preise;
 pub mod msb_rahmenvertrag_gas;
@@ -30,6 +32,7 @@ pub mod partner;
 pub mod preisblatt;
 pub mod pricat;
 pub mod subscription;
+pub mod tranche;
 pub mod versorgung;
 
 use axum::{

@@ -148,6 +148,10 @@ pub struct MaloResponse {
     /// UTILMD Lokationsbündelstruktur).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lokationsbuendel_objektcode: Option<String>,
+    /// §14a EnWG „Status der Fernsteuerbarkeit" (`true` = technisch fernsteuerbar,
+    /// `false` = nicht fernsteuerbar). Populated from UTILMD `CCI+7037` Z97/Z96.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fernsteuerbar: Option<bool>,
     #[schema(value_type = Vec<Object>)]
     pub rollenzuordnung: Vec<Rollenzuordnung>,
 }
@@ -412,6 +416,7 @@ where
                 regelzone: r.regelzone,
                 fallgruppe: r.fallgruppe,
                 lokationsbuendel_objektcode: r.lokationsbuendel_objektcode,
+                fernsteuerbar: r.fernsteuerbar,
                 rollenzuordnung: r.rollenzuordnung,
             };
             (
@@ -497,6 +502,7 @@ where
                         regelzone: r.regelzone,
                         fallgruppe: r.fallgruppe,
                         lokationsbuendel_objektcode: r.lokationsbuendel_objektcode,
+                        fernsteuerbar: r.fernsteuerbar,
                         rollenzuordnung: r.rollenzuordnung,
                     })
                 })

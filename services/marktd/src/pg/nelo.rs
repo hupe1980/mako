@@ -161,6 +161,34 @@ impl NeLoRepository for PgNeLoRepository {
             .map_err(|e| MdmError::Internal(e.to_string()))
     }
 
+    async fn patch_stammdaten(
+        &self,
+        nelo_id: &str,
+        tenant: &str,
+        patch: &mako_markt::repository::NeloStammdatenPatch,
+    ) -> Result<bool, MdmError> {
+        if patch.is_empty() {
+            return Ok(false);
+        }
+        // COALESCE per column; JSONB payload and version are untouched.
+        let affected = sqlx::query(
+            r"UPDATE nelo
+               SET netzebene   = COALESCE($3, netzebene),
+                   steuerkanal = COALESCE($4, steuerkanal),
+                   updated_at  = now()
+               WHERE nelo_id = $1 AND tenant = $2",
+        )
+        .bind(nelo_id)
+        .bind(tenant)
+        .bind(&patch.netzebene)
+        .bind(patch.steuerkanal)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?
+        .rows_affected();
+        Ok(affected > 0)
+    }
+
     async fn list_by_nb(
         &self,
         nb_mp_id: &str,

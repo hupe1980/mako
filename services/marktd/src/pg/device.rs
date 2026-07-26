@@ -137,21 +137,21 @@ impl SteuerbareRessourceRepository for PgSteuerbareRessourceRepository {
         tenant: &str,
         konfigurationsprodukte: serde_json::Value,
     ) -> Result<bool, MdmError> {
-        let updated = sqlx::query_scalar::<_, i64>(
+        let affected = sqlx::query(
             r"UPDATE steuerbare_ressourcen
               SET konfigurationsprodukte = $3,
                   version                = version + 1,
                   updated_at             = now()
-              WHERE sr_id = $1 AND tenant = $2
-              RETURNING 1",
+              WHERE sr_id = $1 AND tenant = $2",
         )
         .bind(sr_id)
         .bind(tenant)
         .bind(&konfigurationsprodukte)
-        .fetch_optional(&self.pool)
+        .execute(&self.pool)
         .await
-        .map_err(|e| MdmError::Internal(e.to_string()))?;
-        Ok(updated.is_some())
+        .map_err(|e| MdmError::Internal(e.to_string()))?
+        .rows_affected();
+        Ok(affected > 0)
     }
 }
 
@@ -421,20 +421,22 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
         tenant: &str,
         malo_id: Option<&str>,
         melo_id: Option<&str>,
-        tr_typ: Option<&str>,
+        nutzung: Option<&str>,
+        verbrauchsart: Option<&str>,
         ist_fernschaltbar: Option<bool>,
         data: serde_json::Value,
         bo4e_version: &str,
     ) -> Result<(), MdmError> {
         sqlx::query(
             r"INSERT INTO technische_ressourcen
-                  (tr_id, tenant, malo_id, melo_id, tr_typ, ist_fernschaltbar,
+                  (tr_id, tenant, malo_id, melo_id, nutzung, verbrauchsart, ist_fernschaltbar,
                    data, bo4e_version, version, updated_at)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, now())
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, now())
               ON CONFLICT (tr_id, tenant) DO UPDATE
               SET malo_id           = COALESCE(EXCLUDED.malo_id, technische_ressourcen.malo_id),
                   melo_id           = COALESCE(EXCLUDED.melo_id, technische_ressourcen.melo_id),
-                  tr_typ            = COALESCE(EXCLUDED.tr_typ, technische_ressourcen.tr_typ),
+                  nutzung           = COALESCE(EXCLUDED.nutzung, technische_ressourcen.nutzung),
+                  verbrauchsart     = COALESCE(EXCLUDED.verbrauchsart, technische_ressourcen.verbrauchsart),
                   ist_fernschaltbar = COALESCE(EXCLUDED.ist_fernschaltbar, technische_ressourcen.ist_fernschaltbar),
                   data              = EXCLUDED.data,
                   bo4e_version      = EXCLUDED.bo4e_version,
@@ -445,7 +447,8 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
         .bind(tenant)
         .bind(malo_id)
         .bind(melo_id)
-        .bind(tr_typ)
+        .bind(nutzung)
+        .bind(verbrauchsart)
         .bind(ist_fernschaltbar)
         .bind(&data)
         .bind(bo4e_version)
@@ -461,7 +464,7 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
         tenant: &str,
     ) -> Result<Option<TechnischeRessourceRecord>, MdmError> {
         let row = sqlx::query(
-            r"SELECT tr_id, tenant, malo_id, melo_id, tr_typ, ist_fernschaltbar,
+            r"SELECT tr_id, tenant, malo_id, melo_id, nutzung, verbrauchsart, ist_fernschaltbar,
                      data, bo4e_version, version, updated_at
               FROM technische_ressourcen
               WHERE tr_id = $1 AND tenant = $2",
@@ -477,7 +480,8 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
             tenant: r.get("tenant"),
             malo_id: r.try_get("malo_id").unwrap_or(None),
             melo_id: r.try_get("melo_id").unwrap_or(None),
-            tr_typ: r.try_get("tr_typ").unwrap_or(None),
+            nutzung: r.try_get("nutzung").unwrap_or(None),
+            verbrauchsart: r.try_get("verbrauchsart").unwrap_or(None),
             ist_fernschaltbar: r.try_get("ist_fernschaltbar").unwrap_or(None),
             data: r.get("data"),
             bo4e_version: r
@@ -494,7 +498,7 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
         tenant: &str,
     ) -> Result<Vec<TechnischeRessourceRecord>, MdmError> {
         let rows = sqlx::query(
-            r"SELECT tr_id, tenant, malo_id, melo_id, tr_typ, ist_fernschaltbar,
+            r"SELECT tr_id, tenant, malo_id, melo_id, nutzung, verbrauchsart, ist_fernschaltbar,
                      data, bo4e_version, version, updated_at
               FROM technische_ressourcen
               WHERE tenant = $1 AND malo_id = $2",
@@ -512,7 +516,8 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
                 tenant: r.get("tenant"),
                 malo_id: r.try_get("malo_id").unwrap_or(None),
                 melo_id: r.try_get("melo_id").unwrap_or(None),
-                tr_typ: r.try_get("tr_typ").unwrap_or(None),
+                nutzung: r.try_get("nutzung").unwrap_or(None),
+                verbrauchsart: r.try_get("verbrauchsart").unwrap_or(None),
                 ist_fernschaltbar: r.try_get("ist_fernschaltbar").unwrap_or(None),
                 data: r.get("data"),
                 bo4e_version: r
@@ -530,7 +535,7 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
         tenant: &str,
     ) -> Result<Vec<TechnischeRessourceRecord>, MdmError> {
         let rows = sqlx::query(
-            r"SELECT tr_id, tenant, malo_id, melo_id, tr_typ, ist_fernschaltbar,
+            r"SELECT tr_id, tenant, malo_id, melo_id, nutzung, verbrauchsart, ist_fernschaltbar,
                      data, bo4e_version, version, updated_at
               FROM technische_ressourcen
               WHERE tenant = $1 AND melo_id = $2",
@@ -548,7 +553,8 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
                 tenant: r.get("tenant"),
                 malo_id: r.try_get("malo_id").unwrap_or(None),
                 melo_id: r.try_get("melo_id").unwrap_or(None),
-                tr_typ: r.try_get("tr_typ").unwrap_or(None),
+                nutzung: r.try_get("nutzung").unwrap_or(None),
+                verbrauchsart: r.try_get("verbrauchsart").unwrap_or(None),
                 ist_fernschaltbar: r.try_get("ist_fernschaltbar").unwrap_or(None),
                 data: r.get("data"),
                 bo4e_version: r
@@ -558,5 +564,35 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
                 updated_at: r.get("updated_at"),
             })
             .collect())
+    }
+
+    async fn patch_stammdaten(
+        &self,
+        tr_id: &str,
+        tenant: &str,
+        patch: &mako_markt::repository::TechnischeRessourceStammdatenPatch,
+    ) -> Result<bool, MdmError> {
+        if patch.is_empty() {
+            return Ok(false);
+        }
+        // COALESCE per column; JSONB payload and version are untouched.
+        let affected = sqlx::query(
+            r"UPDATE technische_ressourcen
+               SET nutzung           = COALESCE($3, nutzung),
+                   verbrauchsart     = COALESCE($4, verbrauchsart),
+                   ist_fernschaltbar = COALESCE($5, ist_fernschaltbar),
+                   updated_at        = now()
+               WHERE tr_id = $1 AND tenant = $2",
+        )
+        .bind(tr_id)
+        .bind(tenant)
+        .bind(patch.nutzung.as_deref())
+        .bind(patch.verbrauchsart.as_deref())
+        .bind(patch.ist_fernschaltbar)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?
+        .rows_affected();
+        Ok(affected > 0)
     }
 }

@@ -78,9 +78,9 @@ use mako_geli_gas::{
 };
 use mako_gpke::{
     AbrechnungCommand, AllokationslisteCommand, AnfrageBestellungCommand,
-    AnkuendigungZuordnungLfCommand, DatanabrufCommand, GpkeAbrechnungWorkflow,
-    GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
-    GpkeAnkuendigungZuordnungLfWorkflow, GpkeDatanabrufWorkflow,
+    AnkuendigungZuordnungLfCommand, BeendigungZuordnungCommand, DatanabrufCommand,
+    GpkeAbrechnungWorkflow, GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
+    GpkeAnkuendigungZuordnungLfWorkflow, GpkeBeendigungZuordnungWorkflow, GpkeDatanabrufWorkflow,
     GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
     GpkeLfAnmeldungWorkflow, GpkeMesswerteLieferungWorkflow, GpkeNeuanlageWorkflow,
     GpkePartinWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungCommand,
@@ -626,6 +626,321 @@ pub fn extract_bilanzierungsmethode(segs: &[OwnedSegment]) -> Option<String> {
         })
 }
 
+/// Extract the EoG **Versorgungsart** from a UTILMD segment list.
+///
+/// The Versorgungsart travels in a SG10 `CCI+Z36` segment, DE7037 =
+/// `ZC9` (Ersatzversorgung) / `ZD0` (Grundversorgung) / `ZE3`
+/// (Ersatzbelieferung) / `ZZD` (Übergangsversorgung). These four codes are
+/// distinctive, so the extractor scans the CCI segment elements rather than
+/// hard-coding a component index that varies between AHB revisions.
+///
+/// Returns the raw AHB code (e.g. `"ZD0"`); the caller maps it to
+/// `mako_gpke::Versorgungsart` via `from_code`.
+pub fn extract_versorgungsart(segs: &[OwnedSegment]) -> Option<String> {
+    segs.iter().filter(|s| s.tag == "CCI").find_map(|s| {
+        (0..4)
+            .filter_map(|i| s.element_str(i))
+            .find(|v| matches!(*v, "ZC9" | "ZD0" | "ZE3" | "ZZD"))
+            .map(str::to_owned)
+    })
+}
+
+/// Extract the **Haushaltskunde** flag from a UTILMD segment list.
+///
+/// The household indicator travels in a SG10 `CCI` segment, DE7037 =
+/// `Z15` (Haushaltskunde → `true`) / `Z18` (Nicht-Haushaltskunde → `false`).
+/// `None` when neither code is present. The Z15/Z18 direction is
+/// operator-verifiable against the current UTILMD AHB Strom.
+pub fn extract_haushaltskunde(segs: &[OwnedSegment]) -> Option<bool> {
+    segs.iter().filter(|s| s.tag == "CCI").find_map(|s| {
+        (0..4)
+            .filter_map(|i| s.element_str(i))
+            .find_map(|v| match v {
+                "Z15" => Some(true),
+                "Z18" => Some(false),
+                _ => None,
+            })
+    })
+}
+
+/// Extract the **Netzebene** from a UTILMD segment list (Stammdatenänderung).
+///
+/// The Netzebene (voltage/pressure level) travels in a SG8 `SEQ+Z27` group's
+/// `CCI`/`CAV` characteristic in newer AHBs. The codes (`E03`..`E06` Strom,
+/// gas pressure levels) are read from the CAV value following a Netzebene CCI.
+/// Returns the raw code when present. Best-effort: `None` when absent.
+pub fn extract_netzebene(segs: &[OwnedSegment]) -> Option<String> {
+    extract_cav_after_cci(segs, "Z27")
+}
+
+/// Extract the **Energierichtung** (Einspeisung / Entnahme) from a UTILMD
+/// segment list. Travels in a SG10 `CCI` characteristic; `Z50`/`Z51` (or the
+/// `CAV` value under the Energierichtung CCI). Best-effort.
+pub fn extract_energierichtung(segs: &[OwnedSegment]) -> Option<String> {
+    segs.iter().filter(|s| s.tag == "CCI").find_map(|s| {
+        (0..4)
+            .filter_map(|i| s.element_str(i))
+            .find_map(|v| match v {
+                "Z50" => Some("EINSPEISUNG".to_owned()),
+                "Z51" => Some("ENTNAHME".to_owned()),
+                _ => None,
+            })
+    })
+}
+
+/// Extract the **Regelzone** (EIC) from a UTILMD segment list. Travels in a
+/// SG10 `CAV` value under the Regelzone `CCI` class, or a `LOC+Z28`. Reads the
+/// CAV value that follows a Regelzone CCI. Best-effort.
+pub fn extract_regelzone(segs: &[OwnedSegment]) -> Option<String> {
+    extract_cav_after_cci(segs, "Z28")
+}
+
+/// Extract the §14a EnWG **Status der Fernsteuerbarkeit** of the Marktlokation.
+///
+/// Travels in a SG10 `CCI` characteristic (class `7059 = Z24`) whose `7037`
+/// value is `Z97` (technisch fernsteuerbar → `true`) or `Z96` (technisch nicht
+/// fernsteuerbar → `false`), per UTILMD AHB Strom 2.2 Kap. 9 (Änderung Daten
+/// der MaLo). `None` when the characteristic is absent. The Z96/Z97 codes are
+/// operator-verifiable against the current UTILMD AHB Strom.
+pub fn extract_fernsteuerbarkeit(segs: &[OwnedSegment]) -> Option<bool> {
+    segs.iter().filter(|s| s.tag == "CCI").find_map(|s| {
+        (0..4)
+            .filter_map(|i| s.element_str(i))
+            .find_map(|v| match v {
+                "Z97" => Some(true),
+                "Z96" => Some(false),
+                _ => None,
+            })
+    })
+}
+
+/// Extract the §14a EnWG **Steuerkanal** presence (NeLo, Redispatch 2.0).
+///
+/// Travels in a SG10 `CCI` characteristic (class `7059 = Z49`, Steuerkanal)
+/// whose `7037` value is `ZF3` (Steuerkanal vorhanden → `true`) or `ZF2` (Kein
+/// Steuerkanal vorhanden → `false`), per UTILMD AHB Strom 2.2 Kap. 9.
+/// Operator-verifiable against the current UTILMD AHB Strom.
+pub fn extract_steuerkanal(segs: &[OwnedSegment]) -> Option<bool> {
+    segs.iter().filter(|s| s.tag == "CCI").find_map(|s| {
+        (0..4)
+            .filter_map(|i| s.element_str(i))
+            .find_map(|v| match v {
+                "ZF3" => Some(true),
+                "ZF2" => Some(false),
+                _ => None,
+            })
+    })
+}
+
+/// Extract the **zugeordneter Messstellenbetreiber** (serving MSB) of a
+/// Messlokation from a UTILMD MeLo Stammdatenänderung.
+///
+/// Travels in the SG10 `CCI 7037=ZB3` (Zugeordneter Marktpartner) group as a
+/// `CAV` whose `7111` qualifier is `Z91` (MSB), per UTILMD AHB Strom 2.2
+/// Kap. 9.1.5. The MSB's MP-ID (13-digit BDEW Codenummer) is the 13-digit
+/// numeric component of that `CAV` — the other components are Z-coded qualifiers
+/// (`Z91`, and the `Z39` grundzuständig / `Z19` vertraglich eigenschaft), so the
+/// 13-digit-numeric test identifies the MP-ID unambiguously without depending on
+/// the exact C889 component index. Returns the `ZF0` gMSB entry only if no `Z91`
+/// serving MSB is present. `None` when absent.
+pub fn extract_zugeordneter_msb(segs: &[OwnedSegment]) -> Option<String> {
+    let mp_id_of = |s: &OwnedSegment| -> Option<String> {
+        (0..5)
+            .filter_map(|c| s.component_str(0, c))
+            .find(|v| v.len() == 13 && v.bytes().all(|b| b.is_ascii_digit()))
+            .map(str::to_owned)
+    };
+    // Prefer the Z91 serving MSB; fall back to the ZF0 gMSB.
+    segs.iter()
+        .filter(|s| s.tag == "CAV")
+        .find(|s| s.component_str(0, 0) == Some("Z91"))
+        .and_then(mp_id_of)
+        .or_else(|| {
+            segs.iter()
+                .filter(|s| s.tag == "CAV")
+                .find(|s| s.component_str(0, 0) == Some("ZF0"))
+                .and_then(mp_id_of)
+        })
+}
+
+/// Extract the **Fernschaltbarkeit** of a Technische Ressource (Redispatch 2.0).
+///
+/// Travels in a SG10 `CAV` carrying the Fernschaltung class (`7111 = Z58`) plus
+/// the value (`7110`): `Z06` (vorhanden → `true`) / `Z07` (nicht vorhanden →
+/// `false`), per UTILMD AHB Strom 2.2 Kap. 9. Conservative: only fires when the
+/// `Z58` class marker co-occurs with a `Z06`/`Z07` value in the same `CAV`, so a
+/// generic `Z06`/`Z07` elsewhere is not misread.
+pub fn extract_ist_fernschaltbar(segs: &[OwnedSegment]) -> Option<bool> {
+    segs.iter().filter(|s| s.tag == "CAV").find_map(|s| {
+        let vals: Vec<&str> = (0..6).filter_map(|i| s.element_str(i)).collect();
+        if !vals.contains(&"Z58") {
+            return None;
+        }
+        if vals.contains(&"Z06") {
+            Some(true)
+        } else if vals.contains(&"Z07") {
+            Some(false)
+        } else {
+            None
+        }
+    })
+}
+
+/// Extract the **Art und Nutzung der Technischen Ressource** — the TR object's
+/// own classification, as the BO4E `TechnischeRessourceNutzung` wire code.
+///
+/// Travels in a SG10 `CCI` characteristic (class `7059`): `Z17`
+/// (Stromverbrauchsart), `Z50` (Stromerzeugungsart), or `Z56` (Speicher), per
+/// UTILMD AHB Strom 2.2 Kap. 9 (Daten der technischen Ressource — PIDs
+/// 55617/55623/55629/55635). `None` when absent.
+///
+/// **Not** the MaLo `CCI+7059=Z69` „Art und Nutzung der technischen Einrichtung"
+/// (a MaLo Verbrauchsart, `CAV+7111=Z64` Kraft/Licht) — a different object; the
+/// TR nutzung uses the disjoint `Z17`/`Z50`/`Z56` class codes, so the two never
+/// collide.
+pub fn extract_tr_nutzung(segs: &[OwnedSegment]) -> Option<&'static str> {
+    segs.iter().filter(|s| s.tag == "CCI").find_map(|s| {
+        (0..4)
+            .filter_map(|i| s.element_str(i))
+            .find_map(|v| match v {
+                "Z17" => Some("STROMVERBRAUCHSART"),
+                "Z50" => Some("STROMERZEUGUNGSART"),
+                "Z56" => Some("SPEICHER"),
+                _ => None,
+            })
+    })
+}
+
+/// Extract the TR **Verbrauchsart** (BO4E `TechnischeRessourceVerbrauchsart`),
+/// present when the Nutzung is Stromverbrauchsart.
+///
+/// Travels in a SG10 `CAV` (class `7111`): `Z64` (Kraft/Licht), `Z65`
+/// (Wärme/Kälte), `ZE5` (E-Mobilität), or `ZA8` (Straßenbeleuchtung), per UTILMD
+/// AHB Strom 2.2 Kap. 9. Returns the BO4E wire code. `None` when absent.
+pub fn extract_tr_verbrauchsart(segs: &[OwnedSegment]) -> Option<&'static str> {
+    segs.iter().filter(|s| s.tag == "CAV").find_map(|s| {
+        (0..4)
+            .filter_map(|i| s.element_str(i))
+            .find_map(|v| match v {
+                "Z64" => Some("KRAFT_LICHT"),
+                "Z65" => Some("WAERME"),
+                "ZE5" => Some("E_MOBILITAET"),
+                "ZA8" => Some("STRASSENBELEUCHTUNG"),
+                _ => None,
+            })
+    })
+}
+
+/// Extract the SteuerbareRessource **Konfigurationsprodukte** as a BO4E
+/// `Vec<Konfigurationsprodukt>` (serialised to a JSONB array).
+///
+/// Each contracted product is one SG8 `SEQ+Z79` („Bestandteil eines
+/// Produktpakets") group; within it, per UTILMD AHB Strom 2.2 Kap. 9 (SR):
+/// - `produktcode` — SG8 `PIA+5`, DE7140 (Produkt-Code);
+/// - `marktpartner` — the zugeordneter Marktpartner in a SG10 `CAV` whose
+///   `7111` qualifier is `Z91` (MSB) or `ZF0` (gMSB), keyed by its 13-digit
+///   BDEW Codenummer;
+/// - `leistungskurvendefinition` — the Produkteigenschaft value (SG10
+///   `CCI+7059=Z66` → `CAV+7111=ZH9`/`ZV4`), best-effort.
+///
+/// A produktcode-only projection would drop the produktcode↔MSB pairing, so this
+/// walks each group and preserves all three BO4E fields. Returns `None` when the
+/// message carries no `SEQ+Z79` product group.
+pub fn extract_sr_konfigurationsprodukte(segs: &[OwnedSegment]) -> Option<serde_json::Value> {
+    let mut produkte = Vec::new();
+    let mut i = 0;
+    while i < segs.len() {
+        if segs[i].tag == "SEQ" && segs[i].element_str(0) == Some("Z79") {
+            let start = i + 1;
+            let mut end = start;
+            while end < segs.len() && segs[end].tag != "SEQ" {
+                end += 1;
+            }
+            if let Some(kp) = konfigurationsprodukt_from_group(&segs[start..end]) {
+                produkte.push(kp);
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    (!produkte.is_empty()).then(|| serde_json::Value::Array(produkte))
+}
+
+/// Build one BO4E `Konfigurationsprodukt` JSON object from a `SEQ+Z79` group.
+fn konfigurationsprodukt_from_group(group: &[OwnedSegment]) -> Option<serde_json::Value> {
+    // produktcode: SG8 PIA+5 (4347=5, Produktidentifikation), DE7140 in element 1.
+    let produktcode = group
+        .iter()
+        .find(|s| s.tag == "PIA" && s.element_str(0) == Some("5"))
+        .and_then(|s| s.component_str(1, 0))
+        .map(str::to_owned)?;
+    let mut kp = serde_json::Map::new();
+    kp.insert("_typ".into(), "KONFIGURATIONSPRODUKT".into());
+    kp.insert("produktcode".into(), produktcode.into());
+    // zugeordneter Marktpartner: reuse the Z91/ZF0 13-digit resolver on the group.
+    if let Some(mp) = extract_zugeordneter_msb(group) {
+        kp.insert(
+            "marktpartner".into(),
+            serde_json::json!({ "_typ": "MARKTTEILNEHMER", "rollencodenummer": mp }),
+        );
+    }
+    // Leistungskurvendefinition: the Produkteigenschaft value carried in a
+    // CAV+ZH9 (Code der Produkteigenschaft) or CAV+ZV4 (Wertedetails).
+    if let Some(lk) = group
+        .iter()
+        .filter(|s| s.tag == "CAV")
+        .filter(|s| matches!(s.component_str(0, 0), Some("ZH9") | Some("ZV4")))
+        .find_map(|s| {
+            (1..6)
+                .filter_map(|c| s.component_str(0, c))
+                .find(|v| !v.is_empty())
+        })
+    {
+        kp.insert("leistungskurvendefinition".into(), lk.into());
+    }
+    Some(serde_json::Value::Object(kp))
+}
+
+/// Extract the **Bilanzierungsgebiet** EIC from a UTILMD segment list.
+///
+/// The Bilanzierungsgebiet travels in `LOC+237` (DE3227 = `237`, DE3225 =
+/// the EIC). Best-effort: `None` when the segment is absent.
+pub fn extract_bilanzierungsgebiet(segs: &[OwnedSegment]) -> Option<String> {
+    segs.iter()
+        .find(|s| s.tag == "LOC" && s.element_str(0).is_some_and(|q| q == "237"))
+        .and_then(|s| s.element_str(1))
+        .map(str::to_owned)
+}
+
+/// Read the first `CAV` value that immediately follows a `CCI` segment whose
+/// class code (any element) equals `cci_class`.
+///
+/// UTILMD SG8/SG10 characteristic groups are ordered `CCI` then one or more
+/// `CAV`; this pairs them positionally, which is robust across AHB revisions
+/// that shuffle the CCI component layout.
+fn extract_cav_after_cci(segs: &[OwnedSegment], cci_class: &str) -> Option<String> {
+    let mut it = segs.iter().peekable();
+    while let Some(s) = it.next() {
+        let is_target_cci = s.tag == "CCI"
+            && (0..4)
+                .filter_map(|i| s.element_str(i))
+                .any(|v| v == cci_class);
+        if is_target_cci {
+            while let Some(next) = it.peek() {
+                if next.tag == "CAV" {
+                    return next.element_str(0).map(str::to_owned);
+                }
+                if next.tag == "CCI" {
+                    break; // next characteristic group — no CAV for this CCI
+                }
+                it.next();
+            }
+        }
+    }
+    None
+}
+
 /// Extract Gas GaBi `Fallgruppe` from a UTILMD segment list.
 ///
 /// The `TM+Z10` segment in Gas UTILMD encodes the GaBi RLM Fallgruppe,
@@ -708,4 +1023,176 @@ fn parse_dvgw_gas_day(raw: Option<&str>) -> mako_gabi_gas::GasDay {
         "adapters: could not parse DVGW gas day — using today as fallback"
     );
     fallback()
+}
+
+#[cfg(test)]
+mod fernsteuerbarkeit_tests {
+    use super::*;
+    use edifact_rs::{OwnedElement, Span};
+
+    fn seg(tag: &str, elements: Vec<Vec<&str>>) -> OwnedSegment {
+        OwnedSegment {
+            tag: tag.to_owned(),
+            span: Span::new(0, 0),
+            tag_span: Span::new(0, 0),
+            elements: elements
+                .into_iter()
+                .map(|comps| OwnedElement {
+                    span: Span::new(0, 0),
+                    components: comps
+                        .into_iter()
+                        .map(|c| (c.to_owned(), Span::new(0, 0)))
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn extracts_the_14a_fernsteuerbarkeit_status() {
+        // SG10 CCI+7059=Z24 (Status der Fernsteuerbarkeit) with 7037=Z97/Z96.
+        let fernsteuerbar = vec![seg("CCI", vec![vec!["Z24"], vec!["Z97"]])];
+        assert_eq!(extract_fernsteuerbarkeit(&fernsteuerbar), Some(true));
+
+        let nicht = vec![seg("CCI", vec![vec!["Z24"], vec!["Z96"]])];
+        assert_eq!(extract_fernsteuerbarkeit(&nicht), Some(false));
+
+        // Absent characteristic → None (COALESCE leaves the column unchanged).
+        let other = vec![seg("CCI", vec![vec!["Z50"]])];
+        assert_eq!(extract_fernsteuerbarkeit(&other), None);
+    }
+
+    #[test]
+    fn extracts_the_14a_steuerkanal() {
+        // SG10 CCI+7059=Z49 (Steuerkanal) with 7037=ZF3/ZF2.
+        assert_eq!(
+            extract_steuerkanal(&[seg("CCI", vec![vec!["Z49"], vec!["ZF3"]])]),
+            Some(true)
+        );
+        assert_eq!(
+            extract_steuerkanal(&[seg("CCI", vec![vec!["Z49"], vec!["ZF2"]])]),
+            Some(false)
+        );
+        assert_eq!(extract_steuerkanal(&[seg("CCI", vec![vec!["Z18"]])]), None);
+    }
+
+    #[test]
+    fn extracts_the_tr_fernschaltbarkeit() {
+        // SG10 CAV carrying the Z58 Fernschaltung class + Z06/Z07 value.
+        assert_eq!(
+            extract_ist_fernschaltbar(&[seg("CAV", vec![vec!["Z06"], vec!["Z58"]])]),
+            Some(true)
+        );
+        assert_eq!(
+            extract_ist_fernschaltbar(&[seg("CAV", vec![vec!["Z07"], vec!["Z58"]])]),
+            Some(false)
+        );
+        // A generic Z06 without the Z58 Fernschaltung class is not misread.
+        assert_eq!(
+            extract_ist_fernschaltbar(&[seg("CAV", vec![vec!["Z06"], vec!["ZXX"]])]),
+            None
+        );
+    }
+
+    #[test]
+    fn extracts_the_tr_nutzung() {
+        // SG10 CCI+7059 = Z17/Z50/Z56 → BO4E TechnischeRessourceNutzung.
+        assert_eq!(
+            extract_tr_nutzung(&[seg("CCI", vec![vec!["Z17"]])]),
+            Some("STROMVERBRAUCHSART")
+        );
+        assert_eq!(
+            extract_tr_nutzung(&[seg("CCI", vec![vec!["Z50"]])]),
+            Some("STROMERZEUGUNGSART")
+        );
+        assert_eq!(
+            extract_tr_nutzung(&[seg("CCI", vec![vec!["Z56"]])]),
+            Some("SPEICHER")
+        );
+        // The MaLo „technische Einrichtung" Z69 is NOT a TR nutzung code.
+        assert_eq!(extract_tr_nutzung(&[seg("CCI", vec![vec!["Z69"]])]), None);
+    }
+
+    #[test]
+    fn extracts_the_tr_verbrauchsart() {
+        // SG10 CAV+7111 = Z64/Z65/ZE5/ZA8 → BO4E TechnischeRessourceVerbrauchsart.
+        assert_eq!(
+            extract_tr_verbrauchsart(&[seg("CAV", vec![vec!["Z64"]])]),
+            Some("KRAFT_LICHT")
+        );
+        assert_eq!(
+            extract_tr_verbrauchsart(&[seg("CAV", vec![vec!["ZE5"]])]),
+            Some("E_MOBILITAET")
+        );
+        assert_eq!(
+            extract_tr_verbrauchsart(&[seg("CAV", vec![vec!["ZA8"]])]),
+            Some("STRASSENBELEUCHTUNG")
+        );
+        assert_eq!(
+            extract_tr_verbrauchsart(&[seg("CAV", vec![vec!["ZXX"]])]),
+            None
+        );
+    }
+
+    #[test]
+    fn extracts_sr_konfigurationsprodukte_per_product() {
+        let segs = vec![
+            // Product A — SEQ+Z79 group.
+            seg("SEQ", vec![vec!["Z79"]]),
+            seg("PIA", vec![vec!["5"], vec!["PRODUKT_A"]]),
+            seg("CCI", vec![vec!["Z66"]]),
+            seg("CAV", vec![vec!["ZH9", "LK001"]]),
+            seg("CAV", vec![vec!["Z91", "9900123456789"]]),
+            // Product B — SEQ+Z79 group with a gMSB (ZF0).
+            seg("SEQ", vec![vec!["Z79"]]),
+            seg("PIA", vec![vec!["5"], vec!["PRODUKT_B"]]),
+            seg("CAV", vec![vec!["ZF0", "9988776655443"]]),
+            // A non-Z79 SEQ group is not a konfigurationsprodukt.
+            seg("SEQ", vec![vec!["Z01"]]),
+            seg("PIA", vec![vec!["5"], vec!["IGNORE_ME"]]),
+        ];
+        let kp = extract_sr_konfigurationsprodukte(&segs).expect("products");
+        let arr = kp.as_array().unwrap();
+        assert_eq!(arr.len(), 2, "only the two SEQ+Z79 groups are products");
+        assert_eq!(arr[0]["produktcode"], "PRODUKT_A");
+        assert_eq!(arr[0]["marktpartner"]["rollencodenummer"], "9900123456789");
+        assert_eq!(arr[0]["leistungskurvendefinition"], "LK001");
+        assert_eq!(arr[1]["produktcode"], "PRODUKT_B");
+        assert_eq!(arr[1]["marktpartner"]["rollencodenummer"], "9988776655443");
+        // No SEQ+Z79 group → None (COALESCE leaves the column unchanged).
+        assert!(extract_sr_konfigurationsprodukte(&[seg("SEQ", vec![vec!["Z01"]])]).is_none());
+    }
+
+    #[test]
+    fn extracts_the_zugeordneter_msb() {
+        // SG10 CAV C889: comp0=Z91 (MSB), comp1=MP-ID (13-digit), comp3=Z39.
+        let serving = vec![seg("CAV", vec![vec!["Z91", "9900123456789", "", "Z39"]])];
+        assert_eq!(
+            extract_zugeordneter_msb(&serving).as_deref(),
+            Some("9900123456789")
+        );
+
+        // Falls back to the ZF0 gMSB when no Z91 serving MSB is present.
+        let gmsb = vec![seg("CAV", vec![vec!["ZF0", "9988776655443"]])];
+        assert_eq!(
+            extract_zugeordneter_msb(&gmsb).as_deref(),
+            Some("9988776655443")
+        );
+
+        // Z91 is preferred over ZF0 when both are present.
+        let both = vec![
+            seg("CAV", vec![vec!["ZF0", "9988776655443"]]),
+            seg("CAV", vec![vec!["Z91", "9900123456789", "", "Z19"]]),
+        ];
+        assert_eq!(
+            extract_zugeordneter_msb(&both).as_deref(),
+            Some("9900123456789")
+        );
+
+        // No MSB CAV → None.
+        assert_eq!(
+            extract_zugeordneter_msb(&[seg("CAV", vec![vec!["Z28"]])]),
+            None
+        );
+    }
 }

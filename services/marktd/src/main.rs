@@ -24,6 +24,7 @@ use marktd::{
     fanout::{FanoutConfig, spawn as spawn_fanout},
     handlers::{
         TenantGln,
+        bilanzierung::{get_bilanzierung_at, get_bilanzierung_history, put_bilanzierung},
         contract::{get_contract, put_contract},
         correlation::{get_correlation, list_correlations},
         device::{
@@ -45,12 +46,13 @@ use marktd::{
         grundversorger::{get_grundversorger, put_grundversorger},
         health::{health, health_ready},
         lokationszuordnung::{
-            delete_lokationszuordnung, get_malo_lokationen, get_melo_lokationen,
+            delete_lokationszuordnung, get_malo_buendel, get_malo_lokationen, get_melo_lokationen,
             put_lokationszuordnung,
         },
         malo::{get_malo, get_malo_lastprofil, list_malo, put_malo},
         malo_grid::{get_malo_grid, put_malo_grid},
         melo::{get_melo, get_melo_standorteigenschaften, put_melo},
+        melo_msb::{get_melo_msb_at, get_melo_msb_history, put_melo_msb},
         metrics::metrics_handler,
         mmma_preise,
         msb_rahmenvertrag_gas::{get_msb_rv_gas, list_msb_rv_gas, upsert_msb_rv_gas},
@@ -69,19 +71,20 @@ use marktd::{
         },
         pricat::{get_dispatch_log, get_pricat_history, post_pricat_dispatch},
         subscription::{get_subscription, list_subscriptions, put_subscription, test_subscription},
+        tranche::{get_tranche, list_tranchen, put_tranche},
         versorgung::{get_versorgungsstatus, get_versorgungsstatus_history, put_versorgungsstatus},
     },
     openapi::swagger_ui,
     pg::{
-        PgContractRepository, PgCorrelationIndex, PgDeviceRepository, PgEinwilligungRepository,
-        PgGrundversorgerRepository, PgLokationszuordnungRepository, PgMaloGridRepository,
-        PgMaloRepository, PgMeloRepository, PgMmmPreisStromRepository, PgMmmaPreisGasRepository,
-        PgMsbRahmenvertragGasRepository, PgNbContractRepository, PgNeLoRepository,
-        PgNetzzugangRepository, PgPartnerRepository, PgPreisblattDienstleistungRepository,
-        PgPreisblattHardwareRepository, PgPreisblattKaRepository, PgPreisblattMessungRepository,
-        PgPreisblattRepository, PgPriCatRepository, PgSteuerbareRessourceRepository,
-        PgSubscriptionRepository, PgTechnischeRessourceRepository, PgVersorgungsStatusRepository,
-        PgZaehlzeitRepository,
+        PgBilanzierungRepository, PgContractRepository, PgCorrelationIndex, PgDeviceRepository,
+        PgEinwilligungRepository, PgGrundversorgerRepository, PgLokationszuordnungRepository,
+        PgMaloGridRepository, PgMaloRepository, PgMeloMsbRepository, PgMeloRepository,
+        PgMmmPreisStromRepository, PgMmmaPreisGasRepository, PgMsbRahmenvertragGasRepository,
+        PgNbContractRepository, PgNeLoRepository, PgNetzzugangRepository, PgPartnerRepository,
+        PgPreisblattDienstleistungRepository, PgPreisblattHardwareRepository,
+        PgPreisblattKaRepository, PgPreisblattMessungRepository, PgPreisblattRepository,
+        PgPriCatRepository, PgSteuerbareRessourceRepository, PgSubscriptionRepository,
+        PgTechnischeRessourceRepository, PgVersorgungsStatusRepository, PgZaehlzeitRepository,
     },
 };
 
@@ -208,8 +211,11 @@ async fn main() -> anyhow::Result<()> {
     let vs_repo = std::sync::Arc::new(PgVersorgungsStatusRepository::new(pool.clone()));
     let pricat_repo = std::sync::Arc::new(PgPriCatRepository::new(pool.clone()));
     let nelo_repo = std::sync::Arc::new(PgNeLoRepository::new(pool.clone()));
+    let tranche_repo = std::sync::Arc::new(marktd::pg::PgTrancheRepository::new(pool.clone()));
     let malo_grid_repo = Arc::new(PgMaloGridRepository::new(pool.clone()));
     let grundversorger_repo = Arc::new(PgGrundversorgerRepository::new(pool.clone()));
+    let melo_msb_repo = Arc::new(PgMeloMsbRepository::new(pool.clone()));
+    let bilanzierung_repo = Arc::new(PgBilanzierungRepository::new(pool.clone()));
     let mmma_gas_repo = std::sync::Arc::new(PgMmmaPreisGasRepository::new(pool.clone()));
     let mmm_strom_repo = std::sync::Arc::new(PgMmmPreisStromRepository::new(pool.clone()));
 
@@ -606,6 +612,8 @@ async fn main() -> anyhow::Result<()> {
             // Netz-Element-Lokationen (Redispatch 2.0, Phase 3)
             .route("/api/v1/nelo", get(list_nelos))
             .route("/api/v1/nelo/{id}", get(get_nelo).put(put_nelo))
+            .route("/api/v1/tranche", get(list_tranchen))
+            .route("/api/v1/tranche/{id}", get(get_tranche).put(put_tranche))
             // MaLo grid topology (NB STP, N7)
             .route(
                 "/api/v1/malo/{id}/grid",
@@ -615,6 +623,24 @@ async fn main() -> anyhow::Result<()> {
             .route(
                 "/api/v1/grundversorger/{nb_mp_id}",
                 get(get_grundversorger).put(put_grundversorger),
+            )
+            // Per-MeLo dated MSB timeline (WiM Teil 2 UC 4.1.1)
+            .route(
+                "/api/v1/melos/{melo_id}/msb",
+                get(get_melo_msb_at).put(put_melo_msb),
+            )
+            .route(
+                "/api/v1/melos/{melo_id}/msb/history",
+                get(get_melo_msb_history),
+            )
+            // BO4E Bilanzierung (BO #3) — first-class temporal balancing resource
+            .route(
+                "/api/v1/malo/{malo_id}/bilanzierung",
+                get(get_bilanzierung_at).put(put_bilanzierung),
+            )
+            .route(
+                "/api/v1/malo/{malo_id}/bilanzierung/history",
+                get(get_bilanzierung_history),
             )
             // SteuerbareRessource registry (B4b — WiM iMS Steuerungsauftrag)
             .route(
@@ -651,6 +677,7 @@ async fn main() -> anyhow::Result<()> {
                 axum::routing::delete(delete_lokationszuordnung),
             )
             .route("/api/v1/malos/{id}/lokationen", get(get_malo_lokationen))
+            .route("/api/v1/malos/{id}/buendel", get(get_malo_buendel))
             .route("/api/v1/melos/{id}/lokationen", get(get_melo_lokationen))
             // Device registry: Zähler + Geräte (B3 — WiM MSB/NB device handover)
             .route("/api/v1/melos/{melo_id}/zaehler", get(list_zaehler))
@@ -736,10 +763,16 @@ async fn main() -> anyhow::Result<()> {
             .layer(Extension(vs_repo))
             // NeLo repository extension (Phase 3)
             .layer(Extension(nelo_repo))
+            // Tranche repository extension (Stammdatenänderung object-generic apply)
+            .layer(Extension(tranche_repo))
             // MaLo grid topology extension (N7)
             .layer(Extension(malo_grid_repo))
             // Grundversorger Feststellung extension (§36 EnWG EoG)
             .layer(Extension(grundversorger_repo))
+            // Per-MeLo dated MSB timeline extension (WiM Teil 2 UC 4.1.1)
+            .layer(Extension(melo_msb_repo))
+            // BO4E Bilanzierung temporal resource extension (BO #3)
+            .layer(Extension(bilanzierung_repo))
             // SteuerbareRessource registry extension (B4b)
             .layer(Extension(sr_repo))
             // TechnischeRessource registry extension (B9)

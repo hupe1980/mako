@@ -16,7 +16,8 @@ categories       = ["data-structures"]
 testing = []
 
 [dependencies]
-mako-markt = { workspace = true }
+mako-markt  = { workspace = true }
+mako-engine = { workspace = true }
 
 serde        = { workspace = true }
 serde_json   = { workspace = true }

@@ -224,7 +224,7 @@ Each is independently testable and suitable for crates.io publication.
 | `mako-markt` | Market data domain types + repo traits | `MaloId`, `MeloId`, `MarktpartnerId`, `VersorgungsStatus` |
 | `grid-billing` | NNE/KA/MMM/MSB grid **settlement** engine | `calculate_nne_invoice`, `GridSettlement` (+ `CalculationTrace`, `LegalReference`); `Sparte` drives Gas/Strom refs; `calculate_reversal()`; no rubo4e dep; `into_rechnung()` in service layer |
 | `energy-billing` | Pure multi-product retail energy billing (LF) | `Product` typed enum (13 categories, serde-tagged); `BillingEngine`/`BillingProvider` pipeline; `ControllableLoadProvider` (§14a); `validate()` + `bill_batch()`; `Invoice.warnings` + `§41b` guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label; HT/NT (`billing::TimeOfUsePricing`); block tariffs (`billing::TariffSchedule`); **RLM demand charge** (`leistungspreis_strom_ct_per_kw_month`); **gas §54 exemption**; **historic levy rates**; §41a EPEX; `Invoice::merge()`, `Invoice::allocate_proportionally()`; `eeg` optional feature; no `rubo4e` dep; **191 tests**; zero I/O |
-| `eeg-billing` | Pure EEG/KWKG feed-in settlement (NB) | `calculate_settlement`, 9 settlement schemes, §51/§52 rules, `InbetriebnahmeTyp`, proptest invariants, **339 tests** |
+| `eeg-billing` | Pure EEG/KWKG feed-in settlement (NB) | `calculate_settlement`, 10 settlement schemes, §51/§52 rules, `InbetriebnahmeTyp`, proptest invariants, **339 tests** |
 | `metering` | German energy metering domain | `MeterInterval`, `aggregate`, `fill_gaps` / `fill_gaps_with_config` (§ 60 Abs. 2 MsbG — `FillGapsConfig` supports `PriorPeriodAverage`), `gas_m3_to_kwh_hs`, `score_intervals` (Hampel A/B/C/F) |
 | `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
 | `netz-checker` | NB Anmeldung 6-check validation | `check_anmeldung`, ERC A02/A05/A06/A07/E17 |
@@ -239,9 +239,9 @@ graph TD
     subgraph pure ["Pure calculation crates (zero I/O)"]
         billing["billing 0.7 (crates.io)\nTariffSchedule · TimeOfUsePricing\nDynamicPricing · prorate\nVAT breakdown · AdvancePayment"]
         metering["metering\nMeterInterval · fill_gaps (§17)\nHampel quality · gas_m3_to_kwh_hs"]
-        eeg["eeg-billing\n9 EEG/KWKG schemes\n§51/§52/§36k · 339 tests"]
+        eeg["eeg-billing\n10 EEG/KWKG schemes\n§51/§52/§36k · 339 tests"]
         grid["grid-billing\nNNE · KA · MMM · MSB\nGridSettlement + CalculationTrace\nno rubo4e dep"]
-        energy["energy-billing\nProduct (12 typed variants)\nBillingEngine · validate/bill/batch\nControllableLoadProvider (§14a)\n§41b iMSys guard\nInvoice.warnings + PositionTrace\n191 tests · zero I/O · no rubo4e"]
+        energy["energy-billing\nProduct (13 typed variants)\nBillingEngine · validate/bill/batch\nControllableLoadProvider (§14a)\n§41b iMSys guard\nInvoice.warnings + PositionTrace\n191 tests · zero I/O · no rubo4e"]
     end
 
     subgraph daemons ["Production daemons"]
@@ -273,6 +273,7 @@ Product::Waermepumpe(ControllableLoadProduct) → ControllableLoadProvider (§14
 Product::Wallbox(ControllableLoadProduct)     → ControllableLoadProvider (§14a)
 Product::Gas(GasProduct)                      → GasProvider
 Product::Waerme(HeatProduct)                  → HeatProvider
+Product::Wasser(WaterProduct)                 → WaterProvider (Trinkwasser + Abwasser)
 Product::Solar(SolarProduct)                  → SolarProvider
 Product::Eeg(EegProduct)                      → EegProvider
 Product::Einspeisung(EinspeisungProduct)       → EinspeisungProvider
@@ -326,7 +327,7 @@ All **seventeen** daemons share a common operational model:
 | `nis-syncd` | `:9680` | NIS/GIS grid topology import (NB role, stateless) — pushes `malo_grid` to `marktd`; STP ~80%→≥95% | `nis-syncd.toml` |
 | `edmd` | `:8380` | Energy data management — MSCONS meter readings, BO4E `Energiemenge` deliveries, `Lastgang` + `Zeitreihe` time-series, `MeterBillingPeriod`; **§14a SMGW compliance** (MsbG §21c): `smgw_sessions` + `cls_compliance_log` tables, daily `check_session_compliance()` sweep, `de.messwert.cls.compliance_issue` CloudEvents | `edmd.toml` |
 | `obsd` | `:8480` | Process observability — KPI reports, deadline-risk alerts, §20 EnWG parity | `obsd.toml` |
-| `einsd` | `:9180` | Einspeiser Registry + EEG/KWKG Settlement (NB/LF role) — **9 settlement schemes** (Vergütung, Mieterstrom §21 Abs. 3 EEG, Direktvermarktung, Ausschreibung, Post-EEG Spot, Eigenverbrauch, KWKG-Zuschlag §7 KWKG 2023, Flexibilitätsprämie §50 EEG, Flexibilitätszuschlag §50b EEG); Repowering §22 EEG; KWKG Förderdauer; built-in rate table EEG 2000–2023 + KWKG 2023; CloudEvents `de.eeg.verguetung.berechnet` + `de.eeg.marktpraemie.berechnet` + `de.eeg.anlage.foerderung_auslaufend` | `einsd.toml` |
+| `einsd` | `:9180` | Einspeiser Registry + EEG/KWKG Settlement (NB/LF role) — **10 settlement schemes** (Vergütung, Mieterstrom §21 Abs. 3 EEG, Direktvermarktung MarketPremium, sonstige Direktvermarktung, Ausschreibung, Post-EEG Spot, Eigenverbrauch, KWKG-Zuschlag §7 KWKG 2023, Flexibilitätsprämie §50 EEG, Flexibilitätszuschlag §50b EEG); Repowering §22 EEG; KWKG Förderdauer; built-in rate table EEG 2000–2023 + KWKG 2023; CloudEvents `de.eeg.verguetung.berechnet` + `de.eeg.marktpraemie.berechnet` + `de.eeg.anlage.foerderung_auslaufend` | `einsd.toml` |
 | `tarifbd` | `:9080` | Product & Tariff Catalog (LF role) — user-defined energy products (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE); all prices in `Tarifpreisblatt` JSONB; version history; MaLo→product assignment; EPEX Spot for §41a | `tarifbd.toml` |
 | `billingd` | `:9280` | Energy Billing Engine (LF role) — all prices user-defined in `tarifbd`; 13 categories (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/VPP); §41a dynamic; VPP auto-billing webhook (`de.vpp.dispatch.confirmed` → `Rechnung`); `/preview` dry-run; XRechnung 3.0 / ZUGFeRD 2.3; `de.billing.rechnung.erstellt` | `billingd.toml` |
 | `accountingd` | `:9380` | Customer Account Ledger (LF role) — running Kundenkonto ledger; idempotent CE ingest (billing/EEG credits); **FIFO open-item management** (`/open-items`); camt.054 XML + JSON import; SEPA pain.008 XML (multi-group single message, hard `creditor_iban`/`creditor_id` validation); pain.001 SCT credit-transfer; **auto-dunning rule engine** (Mahnstufe 1–3, background worker); **balance reconciliation** (`/reconcile`); **GDPR Art. 17 pseudonymization** (`/anonymize`); Mahnwesen Mahnstufe 1–3; 6 DB migrations | `accountingd.toml` |
@@ -836,7 +837,7 @@ test files that `use {service_name}::*` without any database or HTTP infrastruct
 
 | Layer | Test type | Tooling |
 |---|---|---|
-| EDIFACT parse/validate | Unit + property | `edi-energy` tests, `cargo-fuzz` (1 100+ corpus entries) |
+| EDIFACT parse/validate | Unit + property | `edi-energy` tests, `cargo-fuzz` (1 373+ corpus entries) |
 | Workflow logic | Unit (sync) | `InMemoryEventStore`, `InMemoryOutboxStore`, `NoopErpAdapter` |
 | End-to-end process flows | Async integration | `mako-engine` integration tests; `makod` e2e AHB conformance test |
 | Deadline arithmetic | Unit | `fristen` crate with Germany public holiday fixtures |

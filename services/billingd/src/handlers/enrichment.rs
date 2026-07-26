@@ -319,12 +319,11 @@ pub(crate) async fn fetch_epex_prices(
     period_from: time::Date,
     period_to: time::Date,
     tarifbd: &Arc<TarifbdClient>,
-) -> std::collections::HashMap<(i32, u8, u8, u8), rust_decimal::Decimal> {
-    // tarifbd owns the imported EPEX day-ahead series. This was a stub returning
-    // an empty map, which made every §41a dynamic calculate run price all
-    // intervals at nothing — the client function existed the whole time and was
-    // dead code.
-    match tarifbd.get_hourly_epex_prices(period_from, period_to).await {
+) -> std::collections::HashMap<time::OffsetDateTime, rust_decimal::Decimal> {
+    // tarifbd owns the imported EPEX day-ahead series (15-min MTU). The map is
+    // keyed on each MTU's UTC start instant, matching how `energy-billing`
+    // floors a consumption interval to its quarter-hour.
+    match tarifbd.get_epex_prices(period_from, period_to).await {
         Ok(map) => map,
         Err(e) => {
             tracing::warn!(error = %e, "billingd: EPEX price fetch failed; dynamic intervals will lack prices");

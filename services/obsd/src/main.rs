@@ -92,6 +92,20 @@ async fn main() -> anyhow::Result<()> {
         .transpose()
         .context("webhook.inbound_secret")?;
     let webhook_secret = inbound_secret.clone();
+    let outbound_secret = cfg
+        .webhook
+        .outbound_secret
+        .as_deref()
+        .map(config::resolve_env_secret)
+        .transpose()
+        .context("webhook.outbound_secret")?;
+    let outbound_url = cfg
+        .webhook
+        .outbound_url
+        .as_deref()
+        .map(config::resolve_env)
+        .transpose()
+        .context("webhook.outbound_url")?;
 
     obsd::server::run(obsd::server::RunConfig {
         listen,
@@ -102,6 +116,10 @@ async fn main() -> anyhow::Result<()> {
         webhook_url: cfg.subscription.webhook_url,
         webhook_secret,
         inbound_secret,
+        subscription_event_types: cfg.subscription.event_types,
+        outbound_url,
+        outbound_secret,
+        worker: cfg.worker,
         db_pool_size: cfg.database.pool_size,
         tenant: cfg.identity.tenant,
         // §20 EnWG: if own_mp_ids is empty the server falls back to [tenant].

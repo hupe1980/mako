@@ -589,14 +589,18 @@ pub struct Quantities {
     pub service: Option<ServiceMeterInput>,
     /// §41a dynamic tariff intervals (15-min Lastgang from edmd).
     pub dynamic_intervals: Vec<DynamicInterval>,
-    /// EPEX Spot price map for §41a billing: `(year, month, day, hour_CET)` → ct/kWh.
+    /// EPEX Spot price map for §41a billing: quarter-hour MTU start (UTC) → ct/kWh.
     ///
-    /// Set by the service layer (billingd) after fetching from `marktd GET /api/v1/epex-preise`.
+    /// Keyed on the 15-minute market time unit start instant
+    /// ([`crate::provider::mtu_start`]) — DST-safe and aligned with the EPEX
+    /// SPOT 15-min day-ahead products (live since 2025-10-01).
+    ///
+    /// Set by the service layer (billingd) after fetching from `tarifbd`.
     /// `DynamicElectricityProvider` reads this map as a fallback when its internal
     /// `SpotPriceSource` has no data for an interval. This is the standard production path:
     /// `build_engine()` creates the provider with an empty source, and prices flow in here
     /// at `bill()` time.
-    pub dynamic_epex_prices: HashMap<(i32, u8, u8, u8), Decimal>,
+    pub dynamic_epex_prices: HashMap<OffsetDateTime, Decimal>,
     /// EEG Gutschrift credit passed through to electricity billing (e.g. from einsd).
     pub eeg_gutschrift_eur: Option<Decimal>,
     /// Prosumer meter data (PV self-consumption + grid draw).

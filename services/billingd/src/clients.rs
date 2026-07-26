@@ -81,40 +81,63 @@ impl TarifbdClient {
             .and_then(|s| s.parse::<Decimal>().ok()))
     }
 
-    pub async fn get_hourly_epex_prices(
+    /// Fetch §41a EPEX spot prices for `[period_from, period_to]`, keyed on the
+    /// UTC start instant of each 15-minute market time unit (the DST-safe key
+    /// used by `energy-billing`). tarifbd returns 15-min points (legacy hourly
+    /// data is expanded server-side).
+    pub async fn get_epex_prices(
         &self,
         period_from: time::Date,
         period_to: time::Date,
-    ) -> Result<HashMap<(i32, u8, u8, u8), Decimal>> {
+    ) -> Result<HashMap<time::OffsetDateTime, Decimal>> {
+        use time::format_description::well_known::Rfc3339;
         let mut map = HashMap::new();
         let mut day = period_from;
         while day <= period_to {
-            let url = format!("{}/api/v1/epex-prices/{}/hourly", self.base_url, day,);
+            let url = format!(
+                "{}/api/v1/epex-prices/{}/quarter-hourly",
+                self.base_url, day,
+            );
             let resp = self
                 .client
                 .get(&url)
                 .send()
                 .await
-                .context("tarifbd GET epex-prices hourly")?;
+                .context("tarifbd GET epex-prices quarter-hourly")?;
 
             if resp.status() == reqwest::StatusCode::NOT_FOUND {
-                tracing::warn!(date = %day, "billingd: EPEX hourly prices not found for date");
+                tracing::warn!(date = %day, "billingd: EPEX prices not found for date");
                 day = day.next_day().unwrap_or(day);
                 continue;
             }
             resp.error_for_status_ref()
                 .map_err(|e| anyhow::anyhow!("tarifbd epex {e}"))?;
 
-            let prices: Vec<serde_json::Value> = resp.json().await.context("parse epex hourly")?;
+            let body: serde_json::Value = resp.json().await.context("parse epex prices")?;
+            let entries = body
+                .get("prices")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
 
-            for entry in &prices {
-                let hour = entry.get("hour").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+            for entry in &entries {
+                let Some(mtu_start) = entry
+                    .get("mtu_start")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| time::OffsetDateTime::parse(s, &Rfc3339).ok())
+                else {
+                    continue;
+                };
                 let price_ct = entry
                     .get("price_ct_kwh")
-                    .and_then(|v| v.as_str())
+                    .and_then(|v| {
+                        v.as_str()
+                            .map(str::to_owned)
+                            .or_else(|| v.as_f64().map(|f| f.to_string()))
+                    })
                     .and_then(|s| s.parse::<Decimal>().ok())
                     .unwrap_or(Decimal::ZERO);
-                map.insert((day.year(), day.month() as u8, day.day(), hour), price_ct);
+                map.insert(mtu_start, price_ct);
             }
             day = day.next_day().unwrap_or(day);
         }

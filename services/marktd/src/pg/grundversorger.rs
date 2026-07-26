@@ -32,6 +32,7 @@ fn map_row(row: &PgRow) -> Result<GrundversorgerRecord, sqlx::Error> {
         sparte,
         gv_mp_id: row.try_get("gv_mp_id")?,
         festgestellt_am: row.try_get("festgestellt_am")?,
+        default_bilanzkreis: row.try_get("default_bilanzkreis")?,
         updated_at: row.try_get("updated_at")?,
         tenant: row.try_get("tenant")?,
     })
@@ -45,7 +46,8 @@ impl GrundversorgerRepository for PgGrundversorgerRepository {
         sparte: Sparte,
     ) -> Result<Option<GrundversorgerRecord>, MdmError> {
         let row = sqlx::query(
-            r"SELECT tenant, nb_mp_id, sparte, gv_mp_id, festgestellt_am, updated_at
+            r"SELECT tenant, nb_mp_id, sparte, gv_mp_id, festgestellt_am,
+                     default_bilanzkreis, updated_at
               FROM grundversorger
               WHERE tenant = $1 AND nb_mp_id = $2 AND sparte = $3",
         )
@@ -65,19 +67,22 @@ impl GrundversorgerRepository for PgGrundversorgerRepository {
     async fn upsert(&self, rec: &GrundversorgerRecord) -> Result<(), MdmError> {
         sqlx::query(
             r"INSERT INTO grundversorger
-                  (tenant, nb_mp_id, sparte, gv_mp_id, festgestellt_am, updated_at)
-              VALUES ($1, $2, $3, $4, $5, now())
+                  (tenant, nb_mp_id, sparte, gv_mp_id, festgestellt_am,
+                   default_bilanzkreis, updated_at)
+              VALUES ($1, $2, $3, $4, $5, $6, now())
               ON CONFLICT (tenant, nb_mp_id, sparte)
               DO UPDATE SET
-                  gv_mp_id        = EXCLUDED.gv_mp_id,
-                  festgestellt_am = EXCLUDED.festgestellt_am,
-                  updated_at      = now()",
+                  gv_mp_id            = EXCLUDED.gv_mp_id,
+                  festgestellt_am     = EXCLUDED.festgestellt_am,
+                  default_bilanzkreis = EXCLUDED.default_bilanzkreis,
+                  updated_at          = now()",
         )
         .bind(&rec.tenant)
         .bind(&rec.nb_mp_id)
         .bind(rec.sparte.to_string())
         .bind(&rec.gv_mp_id)
         .bind(rec.festgestellt_am)
+        .bind(&rec.default_bilanzkreis)
         .execute(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;

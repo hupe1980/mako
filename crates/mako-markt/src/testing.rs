@@ -98,6 +98,9 @@ impl MaloRepository for InMemoryMaloRepository {
                     .get("lokationsbuendelObjektcode")
                     .and_then(|v| v.as_str())
                     .map(ToOwned::to_owned),
+                fernsteuerbar: data
+                    .get("fernsteuerbar")
+                    .and_then(serde_json::Value::as_bool),
                 version,
                 data,
                 rollenzuordnung: vec![],
@@ -148,6 +151,42 @@ impl MaloRepository for InMemoryMaloRepository {
             }
         }
         Ok(())
+    }
+
+    async fn patch_stammdaten(
+        &self,
+        malo_id: &MaloId,
+        patch: &crate::repository::MaloStammdatenPatch,
+    ) -> Result<bool, MdmError> {
+        let mut store = self.store.write().await;
+        let Some(rec) = store.get_mut(malo_id.as_ref()) else {
+            return Ok(false);
+        };
+        if let Some(v) = &patch.netzebene {
+            rec.netzebene = Some(v.clone());
+        }
+        if let Some(v) = &patch.bilanzierungsgebiet {
+            rec.bilanzierungsgebiet = Some(v.clone());
+        }
+        if let Some(v) = &patch.gasqualitaet {
+            rec.gasqualitaet = Some(v.clone());
+        }
+        if let Some(v) = &patch.energierichtung {
+            rec.energierichtung = Some(v.clone());
+        }
+        if let Some(v) = &patch.bilanzierungsmethode {
+            rec.bilanzierungsmethode = Some(v.clone());
+        }
+        if let Some(v) = &patch.regelzone {
+            rec.regelzone = Some(v.clone());
+        }
+        if let Some(v) = &patch.fallgruppe {
+            rec.fallgruppe = Some(v.clone());
+        }
+        if let Some(v) = patch.fernsteuerbar {
+            rec.fernsteuerbar = Some(v);
+        }
+        Ok(true)
     }
 }
 
@@ -218,6 +257,28 @@ impl MeloRepository for InMemoryMeloRepository {
     async fn find(&self, melo_id: &MeloId) -> Result<Option<MeloRecord>, MdmError> {
         let store = self.store.read().await;
         Ok(store.get(melo_id.as_ref()).cloned())
+    }
+
+    async fn patch_stammdaten(
+        &self,
+        melo_id: &MeloId,
+        patch: &crate::repository::MeloStammdatenPatch,
+    ) -> Result<bool, MdmError> {
+        if patch.is_empty() {
+            return Ok(false);
+        }
+        let mut store = self.store.write().await;
+        let Some(rec) = store.get_mut(melo_id.as_ref()) else {
+            return Ok(false);
+        };
+        if let Some(v) = &patch.netzebene_messung {
+            rec.netzebene_messung = Some(v.clone());
+        }
+        if let Some(v) = &patch.regelzone {
+            rec.regelzone = Some(v.clone());
+        }
+        rec.updated_at = time::OffsetDateTime::now_utc();
+        Ok(true)
     }
 }
 
@@ -956,6 +1017,29 @@ impl NeLoRepository for InMemoryNeLoRepository {
         Ok(store.get(&(nelo_id.to_owned(), tenant.to_owned())).cloned())
     }
 
+    async fn patch_stammdaten(
+        &self,
+        nelo_id: &str,
+        tenant: &str,
+        patch: &crate::repository::NeloStammdatenPatch,
+    ) -> Result<bool, MdmError> {
+        if patch.is_empty() {
+            return Ok(false);
+        }
+        let mut store = self.store.write().await;
+        let Some(rec) = store.get_mut(&(nelo_id.to_owned(), tenant.to_owned())) else {
+            return Ok(false);
+        };
+        if let Some(v) = &patch.netzebene {
+            rec.netzebene = Some(v.clone());
+        }
+        if let Some(v) = patch.steuerkanal {
+            rec.steuerkanal = Some(v);
+        }
+        rec.updated_at = time::OffsetDateTime::now_utc();
+        Ok(true)
+    }
+
     async fn list_by_nb(
         &self,
         nb_mp_id: &str,
@@ -1001,6 +1085,102 @@ impl NeLoRepository for InMemoryNeLoRepository {
             page,
             size,
         })
+    }
+}
+
+// ── InMemoryTrancheRepository ─────────────────────────────────────────────────
+
+/// In-memory `TrancheRepository` for unit tests.
+#[derive(Clone, Default)]
+pub struct InMemoryTrancheRepository {
+    store: Arc<RwLock<HashMap<(String, String), crate::repository::TrancheRecord>>>,
+}
+
+impl crate::repository::TrancheRepository for InMemoryTrancheRepository {
+    async fn upsert(
+        &self,
+        rec: crate::repository::TrancheRecord,
+        if_match: Option<i64>,
+    ) -> Result<i64, MdmError> {
+        let key = (rec.tranche_id.clone(), rec.tenant.clone());
+        let mut store = self.store.write().await;
+        let existing = store.get(&key);
+        if let Some(expected) = if_match {
+            let actual = existing.map_or(0, |e| e.version);
+            if actual != expected {
+                return Err(MdmError::VersionConflict {
+                    expected: expected.to_string(),
+                    actual: actual.to_string(),
+                });
+            }
+        }
+        let new_version = existing.map_or(1, |e| e.version + 1);
+        let mut rec = rec;
+        rec.version = new_version;
+        rec.updated_at = time::OffsetDateTime::now_utc();
+        store.insert(key, rec);
+        Ok(new_version)
+    }
+
+    async fn find(
+        &self,
+        tranche_id: &str,
+        tenant: &str,
+    ) -> Result<Option<crate::repository::TrancheRecord>, MdmError> {
+        let store = self.store.read().await;
+        Ok(store
+            .get(&(tranche_id.to_owned(), tenant.to_owned()))
+            .cloned())
+    }
+
+    async fn list_by_malo(
+        &self,
+        malo_id: &str,
+        tenant: &str,
+        page: u32,
+        size: u32,
+    ) -> Result<PageResult<crate::repository::TrancheRecord>, MdmError> {
+        let store = self.store.read().await;
+        let all: Vec<_> = store
+            .values()
+            .filter(|r| r.tenant == tenant && r.malo_id.as_deref() == Some(malo_id))
+            .cloned()
+            .collect();
+        let total = all.len() as u64;
+        let start = (page * size) as usize;
+        let items = all.into_iter().skip(start).take(size as usize).collect();
+        Ok(PageResult {
+            items,
+            total,
+            page,
+            size,
+        })
+    }
+
+    async fn patch_stammdaten(
+        &self,
+        tranche_id: &str,
+        tenant: &str,
+        patch: &crate::repository::TrancheStammdatenPatch,
+    ) -> Result<bool, MdmError> {
+        if patch.is_empty() {
+            return Ok(false);
+        }
+        let mut store = self.store.write().await;
+        let Some(rec) = store.get_mut(&(tranche_id.to_owned(), tenant.to_owned())) else {
+            return Ok(false);
+        };
+        if let Some(v) = &patch.bilanzierungsgebiet {
+            rec.bilanzierungsgebiet = Some(v.clone());
+        }
+        if let Some(v) = &patch.netzebene {
+            rec.netzebene = Some(v.clone());
+        }
+        if let Some(v) = &patch.energierichtung {
+            rec.energierichtung = Some(v.clone());
+        }
+        rec.updated_at = time::OffsetDateTime::now_utc();
+        Ok(true)
     }
 }
 
@@ -1352,7 +1532,8 @@ impl TechnischeRessourceRepository for InMemoryTechnischeRessourceRepository {
         tenant: &str,
         malo_id: Option<&str>,
         melo_id: Option<&str>,
-        tr_typ: Option<&str>,
+        nutzung: Option<&str>,
+        verbrauchsart: Option<&str>,
         ist_fernschaltbar: Option<bool>,
         data: serde_json::Value,
         bo4e_version: &str,
@@ -1369,7 +1550,8 @@ impl TechnischeRessourceRepository for InMemoryTechnischeRessourceRepository {
                 tenant: tenant.to_owned(),
                 malo_id: malo_id.map(std::borrow::ToOwned::to_owned),
                 melo_id: melo_id.map(std::borrow::ToOwned::to_owned),
-                tr_typ: tr_typ.map(std::borrow::ToOwned::to_owned),
+                nutzung: nutzung.map(std::borrow::ToOwned::to_owned),
+                verbrauchsart: verbrauchsart.map(std::borrow::ToOwned::to_owned),
                 ist_fernschaltbar,
                 data,
                 bo4e_version: bo4e_version.to_owned(),
@@ -1418,6 +1600,32 @@ impl TechnischeRessourceRepository for InMemoryTechnischeRessourceRepository {
             .cloned()
             .collect())
     }
+
+    async fn patch_stammdaten(
+        &self,
+        tr_id: &str,
+        tenant: &str,
+        patch: &crate::repository::TechnischeRessourceStammdatenPatch,
+    ) -> Result<bool, MdmError> {
+        if patch.is_empty() {
+            return Ok(false);
+        }
+        let mut store = self.store.write().await;
+        let Some(rec) = store.get_mut(&(tr_id.to_owned(), tenant.to_owned())) else {
+            return Ok(false);
+        };
+        if let Some(v) = &patch.nutzung {
+            rec.nutzung = Some(v.clone());
+        }
+        if let Some(v) = &patch.verbrauchsart {
+            rec.verbrauchsart = Some(v.clone());
+        }
+        if let Some(v) = patch.ist_fernschaltbar {
+            rec.ist_fernschaltbar = Some(v);
+        }
+        rec.updated_at = time::OffsetDateTime::now_utc();
+        Ok(true)
+    }
 }
 
 // ── InMemoryLokationszuordnungRepository (B5) ────────────────────────────────
@@ -1434,9 +1642,9 @@ impl crate::repository::LokationszuordnungRepository for InMemoryLokationszuordn
         &self,
         tenant: &str,
         von_id: &str,
-        von_typ: &str,
+        von_typ: rubo4e::current::Lokationstyp,
         nach_id: &str,
-        nach_typ: &str,
+        nach_typ: rubo4e::current::Lokationstyp,
         valid_from: Option<time::Date>,
         valid_to: Option<time::Date>,
         data: serde_json::Value,
@@ -1454,9 +1662,9 @@ impl crate::repository::LokationszuordnungRepository for InMemoryLokationszuordn
             id,
             tenant: tenant.to_owned(),
             von_id: von_id.to_owned(),
-            von_typ: von_typ.to_owned(),
+            von_typ,
             nach_id: nach_id.to_owned(),
-            nach_typ: nach_typ.to_owned(),
+            nach_typ,
             valid_from,
             valid_to,
             lokationsbuendelcode: data

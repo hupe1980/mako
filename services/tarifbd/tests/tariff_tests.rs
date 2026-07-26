@@ -171,36 +171,45 @@ mod epex_tests {
     use rust_decimal::Decimal;
     use std::str::FromStr;
 
-    /// §41a EnWG: exactly 24 hourly prices per day (00–23 UTC).
+    /// §41a EnWG: the expected number of 15-minute MTUs per delivery day is
+    /// derived from the **local** day length — 96 normally, 92 on the
+    /// spring-forward day, 100 on the fall-back day. This mirrors the count
+    /// `upsert_epex_day` validates against (never a hard-coded 24/96).
     #[test]
-    fn epex_import_requires_exactly_24_entries() {
-        fn validate_epex_entries(entries: &[Decimal]) -> Result<(), String> {
-            if entries.len() != 24 {
-                return Err(format!(
-                    "EPEX Day-Ahead must have exactly 24 hourly entries, got {}",
-                    entries.len()
-                ));
-            }
-            Ok(())
-        }
+    fn epex_mtu_count_matches_local_day_length() {
+        use time::{Date, Duration, Month};
+        use time_tz::PrimitiveDateTimeExt;
+        let berlin = time_tz::timezones::db::europe::BERLIN;
 
-        let ok_24: Vec<Decimal> = (0..24)
-            .map(|_| Decimal::from_str("25.50").unwrap())
-            .collect();
-        assert!(validate_epex_entries(&ok_24).is_ok());
+        let midnight_utc = |d: Date| {
+            d.midnight()
+                .assume_timezone(berlin)
+                .take_first()
+                .expect("midnight unambiguous")
+        };
+        let quarter_hours = |d: Date| {
+            let next = d.next_day().unwrap();
+            (midnight_utc(next) - midnight_utc(d)).whole_minutes() / 15
+        };
 
-        let too_few: Vec<Decimal> = (0..23)
-            .map(|_| Decimal::from_str("25.50").unwrap())
-            .collect();
-        assert!(validate_epex_entries(&too_few).is_err());
+        // Normal winter day → 96 quarter-hours.
+        assert_eq!(
+            quarter_hours(Date::from_calendar_date(2026, Month::January, 15).unwrap()),
+            96
+        );
+        // Spring-forward (last Sunday of March 2026 = 29.03) → 23 h → 92.
+        assert_eq!(
+            quarter_hours(Date::from_calendar_date(2026, Month::March, 29).unwrap()),
+            92
+        );
+        // Fall-back (last Sunday of October 2026 = 25.10) → 25 h → 100.
+        assert_eq!(
+            quarter_hours(Date::from_calendar_date(2026, Month::October, 25).unwrap()),
+            100
+        );
 
-        let too_many: Vec<Decimal> = (0..25)
-            .map(|_| Decimal::from_str("25.50").unwrap())
-            .collect();
-        assert!(validate_epex_entries(&too_many).is_err());
-
-        let empty: Vec<Decimal> = vec![];
-        assert!(validate_epex_entries(&empty).is_err());
+        let _ = Duration::minutes(15);
+        let _ = Decimal::from_str("25.50").unwrap();
     }
 
     /// Negative EPEX prices are legal (§51 EEG negative-price rule).

@@ -126,8 +126,8 @@ async fn main() -> anyhow::Result<()> {
         // ── EPEX Spot prices ──────────────────────────────────────────────────
         .route("/api/v1/epex-prices/:date", put(handlers::put_epex_prices))
         .route(
-            "/api/v1/epex-prices/:date/hourly",
-            get(handlers::get_epex_prices_hourly),
+            "/api/v1/epex-prices/:date/quarter-hourly",
+            get(handlers::get_epex_prices_quarter_hourly),
         )
         .route(
             "/api/v1/epex-prices/:year/:month/average",

@@ -85,6 +85,7 @@ async fn spawn_supplier_change(
             document_date: "20260701".into(),
             process_date: "20261001".into(),
             transaktionsgrund: None,
+            ist_erzeugende_marktlokation: false,
             message_ref: mako_engine::types::MessageRef::new("MSG-001"),
             received_at: time::OffsetDateTime::now_utc(),
             bilanzierungsgebiet: None,

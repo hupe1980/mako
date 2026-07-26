@@ -848,8 +848,8 @@ pub fn wim_wertebestellung_registry() -> AdapterRegistry<WimWertebestellungWorkf
 #[must_use]
 pub fn esa_wertebestellung_registry() -> AdapterRegistry<EsaWertebestellungWorkflow> {
     use mako_wim::esa_wertebestellung::{
-        ABLEHNUNG_PID, ANGEBOT_PID, BESTAETIGUNG_PID, EsaWertebestellungCommand,
-        STORNO_ABLEHNUNG_PID, STORNO_BESTAETIGUNG_PID,
+        ABLEHNUNG_PID, ANGEBOT_PID, BEENDIGUNG_MSB_PID, BESTAETIGUNG_PID,
+        EsaWertebestellungCommand, STORNO_ABLEHNUNG_PID, STORNO_BESTAETIGUNG_PID,
     };
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
@@ -924,9 +924,26 @@ pub fn esa_wertebestellung_registry() -> AdapterRegistry<EsaWertebestellungWorkf
                         },
                     })
                 }
+                BEENDIGUNG_MSB_PID => {
+                    // IFTSTA 21042 (WiM Umsetzungsstatus, MSB → ESA, UC 4.4). The
+                    // Beendigung date is the status DTM; STS 4405 = 105 „beendet"
+                    // is asserted by the profile validator.
+                    let beendigung_zum = msg
+                        .segments()
+                        .iter()
+                        .find(|s| s.tag == "DTM")
+                        .and_then(|s| s.component_str(0, 1))
+                        .and_then(parse_ccyymmdd)
+                        .unwrap_or_else(time::OffsetDateTime::now_utc);
+                    Ok(EsaWertebestellungCommand::ReceiveBeendigungDurchMsb {
+                        message_ref,
+                        beendigung_zum,
+                        reason,
+                    })
+                }
                 other => Err(EngineError::Deserialization(format!(
                     "ESA Wertebestellung adapter: PID {other} is not an ESA inbound response \
-                     (expected 15003, 19011, 19012, 19013 or 19014)"
+                     (expected 15003, 19011, 19012, 19013, 19014 or 21042)"
                 ))),
             }
         },
