@@ -7973,8 +7973,9 @@ dependencies = [
 [[package]]
 name = "metering"
 version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "037b722020085e8a2970ca1206c7d9b86b68855286b5e17274de2a9127e13a26"
 dependencies = [
- "proptest",
  "rust_decimal",
  "serde",
  "thiserror 2.0.19",

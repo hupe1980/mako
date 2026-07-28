@@ -55,9 +55,10 @@ use std::collections::HashSet;
 pub enum Marktrolle {
     /// Netzbetreiber (NB) — distribution/transmission network operator.
     ///
-    /// Receives GPKE ANFRAGE messages (55001/55002/55017), issues ANTWORT
-    /// messages (55003–55006), runs GPKE Konfiguration (17134/17135 outbound
-    /// ORDERS, 19001/19002 inbound ORDRSP).
+    /// Receives the GPKE Anmeldung ANFRAGE (55001 Lieferbeginn / 55002 Lieferende),
+    /// issues ANTWORT messages (55003–55006), runs GPKE Konfiguration (17134/17135
+    /// outbound ORDERS, 19001/19002 inbound ORDRSP). The Kündigung (55016/55017)
+    /// is an LFN↔LFA exchange, not an NB ANFRAGE.
     Nb,
 
     /// Lieferant (LF) — energy supplier.
@@ -69,21 +70,24 @@ pub enum Marktrolle {
 
     /// grundzuständiger Messstellenbetreiber (gMSB) — incumbent meter operator.
     ///
-    /// Receives WiM UTILMD device-change messages (11001–11003). Often the same
-    /// legal entity as the NB (§41 MsbG).
+    /// In the WiM MSB-Wechsel (BK6-24-174) receives the Verpflichtungsanfrage/
+    /// Aufforderung (55168, NB→gMSB); also handles WiM Zählerstand/Konfiguration
+    /// (11001–11003, MSCONS/UTILTS). Often the same legal entity as the NB (§41 MsbG).
     Msb,
 
     /// nicht-grundzuständiger Messstellenbetreiber (nMSB) — challenger meter operator.
     ///
-    /// Sends WiM UTILMD device-change requests (11001) and WiM Geräteübernahme
-    /// ORDERS (17001, 17009). Receives inbound ORDRSP responses 19001/19002
-    /// (Bestellbestätigung/Ablehnung) and 19015/19016 (Gerätewechselabsicht).
+    /// Sends the WiM MSB-Wechsel Anmeldung (55042, MSBN→NB) and Kündigung MSB
+    /// (55039, MSBN→MSBA), plus WiM Geräteübernahme ORDERS (17001, 17009).
+    /// Receives inbound ORDRSP responses 19001/19002 (Bestellbestätigung/Ablehnung)
+    /// and 19015/19016 (Gerätewechselabsicht).
     Nmsb,
 
     /// abgebender Messstellenbetreiber (aMSB) — outgoing meter operator.
     ///
-    /// Receives WiM Abmeldung/Kündigung UTILMD (11002). This role is often
-    /// held by the gMSB after a successful nMSB takeover.
+    /// Receives the Kündigung MSB (55039, from the nMSB) and sends Ende MSB /
+    /// Abmeldung (55051, MSBA→NB). This role is often held by the gMSB after a
+    /// successful nMSB takeover.
     Amsb,
 
     /// Bilanzkreisverantwortlicher (BKV) — balance responsible party.

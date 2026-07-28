@@ -72,7 +72,7 @@ doc = false
 bench = false
 
 [dependencies.metering]
-path = "../crates/metering"
+version = "0.14"
 
 [[bin]]
 name = "fuzz_obis_code"

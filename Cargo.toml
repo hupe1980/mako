@@ -26,7 +26,6 @@ members = [
     "crates/grid-billing",
     "crates/eeg-billing",
     "crates/energy-billing",
-    "crates/metering",
     "services/invoicd",
     "services/makod",
     "services/marktd",
@@ -103,7 +102,7 @@ invoic-checker   = { path = "crates/invoic-checker",   version = "0.14" }
 netz-checker     = { path = "crates/netz-checker",     version = "0.14" }
 energy-billing   = { path = "crates/energy-billing",   version = "0.14" }
 dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.14" }
-metering         = { path = "crates/metering",          version = "0.14" }
+metering         = { version = "0.14" }
 sepa             = { version = "0.5.0" }
 
 # Kafka client: pure Rust, MSRV 1.88, zero-unsafe, exactly-once semantics.

@@ -26,7 +26,7 @@ mako-edm         = { workspace = true }
 mako-engine      = { workspace = true }
 mako-mabis       = { path = "../../crates/mako-mabis" }
 mako-service     = { workspace = true, features = ["otel", "oidc", "cedar"] }
-metering         = { path = "../../crates/metering", features = ["serde"] }
+metering         = { workspace = true, features = ["serde"] }
 reqwest          = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rust_decimal     = { workspace = true }
 serde            = { workspace = true }

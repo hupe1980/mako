@@ -20,7 +20,7 @@ path = "src/lib.rs"
 [dependencies]
 mako-events = { workspace = true }
 mako-markt = { path = "../../crates/mako-markt", features = ["makod-client"] }
-metering   = { path = "../../crates/metering", features = ["serde"] }
+metering   = { workspace = true, features = ["serde"] }
 rubo4e    = { workspace = true, features = ["sqlx"] }
 
 anyhow             = { workspace = true }
