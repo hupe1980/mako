@@ -30,21 +30,18 @@ use time::OffsetDateTime;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
+use crate::domain::{
+    BillingPeriodQuery, IngestionSource, MeterRead, QualityFlag, Sparte as EdmSparte,
+    TimeSeriesQuery,
+    repository::{TimeSeriesRepository, Typ2Repository},
+};
 use crate::{
     handler::{HandlerState, handle_webhook},
-    iceberg::query::OlapEngine,
-    pg::{PgTimeSeriesRepository, PgTyp2Repository},
     smgw::{
         get_smgw_compliance, get_smgw_session, list_smgw_sessions, post_smgw_compliance_scan,
         put_smgw_session,
     },
-};
-use mako_edm::{
-    domain::{
-        BillingPeriodQuery, IngestionSource, MeterRead, QualityFlag, Sparte as EdmSparte,
-        TimeSeriesQuery,
-    },
-    repository::{TimeSeriesRepository, Typ2Repository},
+    store::{MeterStoreTimeSeriesRepository, MeterStoreTyp2Repository, build_stores},
 };
 
 mod archive;
@@ -126,14 +123,6 @@ pub fn router(state: HandlerState) -> Router {
         .route(
             "/api/v1/compliance/jahresablesung/{year}",
             get(jahresablesung_compliance),
-        )
-        .route(
-            "/api/v1/gdpr/erasure/{malo_id}/archive-plan",
-            post(plan_gdpr_archive_erasure),
-        )
-        .route(
-            "/api/v1/gdpr/erasure/{malo_id}/archive-complete",
-            post(complete_gdpr_archive_erasure),
         )
         // iMSys / SMGW direct push — bypasses EDIFACT for RLM/iMSys customers.
         // §41a EnWG dynamic tariffs require sub-hourly resolution;
@@ -217,26 +206,10 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/gdpr/erasure/{malo_id}",
             axum::routing::delete(post_gdpr_erasure),
         )
-        // P2: Iceberg REST catalog — enables DuckDB/Snowflake/Databricks to query
-        // the cold Iceberg archive directly without going through edmd REST.
-        // DuckDB: ATTACH 'rest+http://edmd:8380' AS mako (TYPE ICEBERG);
-        // Spec: Apache Iceberg REST Catalog specification (ICEBERG-89).
-        .route("/api/v1/iceberg/v1/config", get(iceberg_rest_config))
-        .route(
-            "/api/v1/iceberg/v1/namespaces",
-            get(iceberg_list_namespaces),
-        )
-        .route(
-            "/api/v1/iceberg/v1/namespaces/{namespace}/tables",
-            get(iceberg_list_tables),
-        )
-        .route(
-            "/api/v1/iceberg/v1/namespaces/{namespace}/tables/{table}",
-            get(iceberg_load_table),
-        )
-        // P2: DataFusion SQL endpoint — runs analytical SQL over both hot
-        // (PostgreSQL via custom UDF) and cold (Iceberg/Parquet via DataFusion)
-        // tier. Returns results as Arrow IPC or JSON.
+        // Analytical SQL — runs read-only SQL across both tiers in meterstore's
+        // DataFusion session, returning JSON rows or an Arrow IPC stream. External
+        // Iceberg clients (DuckDB/Spark/Trino) connect to meterstore's own catalog
+        // facade, not an edmd-hosted one.
         .route("/api/v1/query/sql", post(post_sql_query))
         // ── §14a SMGW session registry (MsbG §21c / BSI TR-03109) ────────────
         // `compliance` is a static segment and takes priority over {malo_id} in Axum 0.8.
@@ -276,10 +249,10 @@ async fn metrics(State(state): State<HandlerState>) -> impl IntoResponse {
     let mut out = String::with_capacity(512);
     let pool = state.repo.pool();
 
-    let meter_reads: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meter_reads")
-        .fetch_one(state.repo.pool())
-        .await
-        .unwrap_or(0);
+    // The readings count is meterstore's concern (the hot table is
+    // `meter_reads_versions`, the resolved `meter_reads` is a DataFusion-only
+    // relation) — there is no `meter_reads` table in edmd's Postgres to count, so
+    // this gauge is dropped rather than left querying a non-existent relation.
     let billing_periods: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM meter_billing_periods")
         .fetch_one(state.repo.pool())
         .await
@@ -287,9 +260,6 @@ async fn metrics(State(state): State<HandlerState>) -> impl IntoResponse {
     let pool_size = pool.size();
     let pool_idle = pool.num_idle();
 
-    out.push_str("# HELP edmd_meter_reads_total Total meter read entries stored.\n");
-    out.push_str("# TYPE edmd_meter_reads_total gauge\n");
-    out.push_str(&format!("edmd_meter_reads_total {meter_reads}\n"));
     out.push_str("# HELP edmd_billing_periods_total Pre-aggregated MeterBillingPeriod records.\n");
     out.push_str("# TYPE edmd_billing_periods_total gauge\n");
     out.push_str(&format!("edmd_billing_periods_total {billing_periods}\n"));
@@ -328,7 +298,8 @@ pub struct RunConfig {
     pub webhook_url: String,
     pub webhook_secret: Option<SecretString>,
     pub inbound_secret: Option<SecretString>,
-    pub db_pool_size: u32,
+    /// PostgreSQL pool tuning (size, timeouts, connection lifetime).
+    pub db: crate::config::DatabaseConfig,
     /// Tenant identifier — used as Cedar resource_tenant.
     pub tenant: String,
     /// OIDC verifier.  Use [`OidcVerifier::disabled`] in dev/test.
@@ -343,6 +314,8 @@ pub struct RunConfig {
     pub archive: Option<crate::config::ArchiveConfig>,
     /// ERP webhook URL for outbound CloudEvents (direct push + quality warnings).
     pub erp_webhook_url: Option<String>,
+    /// Optional HMAC secret signing every outbound CloudEvent (`x-mako-signature`).
+    pub erp_webhook_secret: Option<String>,
     /// Request rate limits. Ingest endpoints accept unbounded batches, so an
     /// unthrottled client can saturate the write path for every other tenant.
     pub rate_limit: mako_service::RateLimitConfig,
@@ -352,14 +325,45 @@ pub struct RunConfig {
     pub confirmation: crate::config::ConfirmationConfig,
 }
 
+/// Cedar gate for the nested meterstore Iceberg REST catalog.
+///
+/// The facade exposes table locations and schemas for the tenant's archived meter
+/// data, so it is gated by the same `read-archive-olap` action as the archive
+/// queries it describes — authenticated by the shared OIDC `Claims` extractor and
+/// authorised by Cedar — rather than left open to anything that can reach the
+/// port. meterstore's router deliberately carries no auth of its own so the host
+/// can wrap exactly this policy around it.
+async fn iceberg_catalog_guard(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if let Err(e) = enforcer.check(
+        &claims.principal(),
+        "read-archive-olap",
+        state.tenant.as_str(),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
 /// Connect to the database, run migrations, register subscription, and serve.
 pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
-    let pool = PgPool::connect_with(
-        cfg.database_url
-            .expose_secret()
-            .parse::<sqlx::postgres::PgConnectOptions>()?,
-    )
-    .await?;
+    // Build the pool through the shared builder so the configured `pool_size` and
+    // connection lifetimes actually take effect (a bare `PgPool::connect` ignores
+    // them) and every connection is tagged `edmd` in `pg_stat_activity`. This pool
+    // also backs meterstore's hot tier, so its sizing bounds both.
+    let pool = cfg
+        .db
+        .connect(cfg.database_url.expose_secret(), "edmd")
+        .await?;
 
     // Run database migrations at startup.
     sqlx::migrate!("./migrations")
@@ -367,66 +371,87 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("run edmd migrations: {e}"))?;
 
-    // ── Iceberg/S3 archive setup ───────────────────────────────────────────────
-    let olap_engine: Option<Arc<OlapEngine>> = if let Some(ref archive_cfg) = cfg.archive {
-        if archive_cfg.enabled && !archive_cfg.storage_uri.is_empty() {
-            // Build FileIO (iceberg's opendal-backed storage abstraction).
-            match crate::iceberg::build_file_io(archive_cfg) {
-                Ok(file_io) => {
-                    // Spawn archival worker: loads/creates the table via SqlCatalog,
-                    // writes Parquet batches to S3, marks rows archived in PostgreSQL.
-                    let worker = crate::iceberg::worker::ArchiveWorker::new(
-                        pool.clone(),
-                        archive_cfg.clone(),
-                        file_io,
-                        cfg.database_url.expose_secret().to_owned(),
-                    );
-                    worker.spawn(cfg.shutdown.clone());
+    // ── meterstore-backed storage tier ─────────────────────────────────────────
+    // The hot PostgreSQL window and the cold Iceberg history are owned by
+    // `meterstore`: `build_stores` constructs one `SqlCatalog` over this same
+    // Postgres and an OpenDAL S3 warehouse, then builds both tables over it as a
+    // shared `MeterCatalog`. `meter_reads` is the authoritative store (with a GDPR
+    // subject registry); `esa_typ2_reads` is a second, non-authoritative table for
+    // the ESA "Werte nach Typ 2" stream. The warehouse URI comes from
+    // `[archive].storage_uri` when configured.
+    let database_url = cfg.database_url.expose_secret().to_owned();
+    let warehouse_uri = cfg
+        .archive
+        .as_ref()
+        .map(|a| a.storage_uri.clone())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "memory://".to_string());
 
-                    // Build OLAP engine: loads the table from the SQL catalog and
-                    // registers it with DataFusion as an IcebergTableProvider.
-                    match crate::iceberg::worker::load_table_for_olap(
-                        archive_cfg,
-                        cfg.database_url.expose_secret(),
-                        pool.clone(),
-                        cfg.tenant.clone(),
-                    )
-                    .await
-                    {
-                        Ok(engine) => {
-                            tracing::info!(
-                                storage_uri = %archive_cfg.storage_uri,
-                                catalog_schema = %archive_cfg.iceberg_catalog_schema,
-                                "edmd: Iceberg OLAP engine ready"
-                            );
-                            Some(Arc::new(engine))
-                        }
-                        Err(e) => {
-                            // Table may not exist on first run — that's fine.
-                            // The worker will create it on next archive cycle.
-                            tracing::info!(
-                                error = %e,
-                                "edmd: Iceberg OLAP engine not yet available \
-                                 (table will be created on first archive run)"
-                            );
-                            None
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "edmd: cannot build FileIO — archive disabled");
-                    None
-                }
-            }
-        } else {
-            None
-        }
+    // meterstore runs in-process, so every tiering knob it needs comes from edmd's
+    // `[archive]` config (whole days → `Duration`); an absent section falls back
+    // to meterstore's defaults.
+    let tiering = cfg
+        .archive
+        .as_ref()
+        .map(|a| crate::store::TieringConfig {
+            settlement_lag: time::Duration::days(i64::from(a.settlement_lag_days)),
+            partition_step: time::Duration::days(i64::from(a.partition_step_days)),
+            archival_step: time::Duration::days(i64::from(a.archival_step_days)),
+            cold_file_target_bytes: a.cold_file_target_mib as usize * 1024 * 1024,
+        })
+        .unwrap_or_default();
+
+    // Object-store credentials for an `s3://` warehouse (empty for file/memory, or
+    // when the deployment relies on an instance-role credential chain).
+    let warehouse_auth = cfg
+        .archive
+        .as_ref()
+        .map(|a| crate::store::WarehouseAuth {
+            region: a.region.clone(),
+            endpoint: a.endpoint_url.clone(),
+            access_key_id: a.access_key_id.clone(),
+            secret_access_key: a.secret_access_key.clone(),
+        })
+        .unwrap_or_default();
+
+    // Both tables share one Iceberg catalog and one DataFusion session (§15.3):
+    // `meter_reads` (authoritative, with the GDPR subject registry) and
+    // `esa_typ2_reads` (non-authoritative ESA stream).
+    let (reads_store, typ2_store, reads_cold) = build_stores(
+        pool.clone(),
+        &database_url,
+        &warehouse_uri,
+        tiering,
+        &warehouse_auth,
+    )
+    .await?;
+    tracing::info!(warehouse = %warehouse_uri, "edmd: meterstore tiers ready");
+
+    // Start meterstore's tiering maintenance loop for each store. Without it,
+    // settled intervals never move from the hot PostgreSQL tier into the cold
+    // Iceberg tier — the watermark advances only when a cycle archives the windows
+    // it covers. Each handle **owns** its loop (dropping it stops the loop), so
+    // they are held for the whole process lifetime. Gated on `enabled`: a hot-only
+    // dev store (in-memory warehouse) has nowhere to tier to.
+    let _maintenance = if cfg.archive.as_ref().is_some_and(|a| a.enabled) {
+        let period = time::Duration::seconds(i64::from(
+            cfg.archive
+                .as_ref()
+                .map_or(3_600, |a| a.maintenance_interval_secs),
+        ));
+        vec![
+            reads_store.maintenance().interval(period).spawn(),
+            typ2_store.maintenance().interval(period).spawn(),
+        ]
     } else {
-        None
+        Vec::new()
     };
+
+    let repo = MeterStoreTimeSeriesRepository::new(reads_store, pool.clone());
 
     let mcp_state = Arc::new(crate::mcp_server::EdmdMcpState {
         pool: pool.clone(),
+        repo: repo.clone(),
         tenant: cfg.tenant.clone(),
         marktd_url: cfg.marktd_url.clone(),
         marktd_api_key: cfg.marktd_api_key.clone(),
@@ -438,10 +463,10 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         ),
     });
 
-    let repo = PgTimeSeriesRepository::new(pool.clone());
-    let typ2_repo = PgTyp2Repository::new(pool.clone());
-    // Clone the webhook URL and tenant before they are moved into HandlerState.
+    let typ2_repo = MeterStoreTyp2Repository::new(typ2_store);
+    // Clone the webhook URL/secret and tenant before they are moved into HandlerState.
     let smgw_webhook_url = cfg.erp_webhook_url.clone();
+    let smgw_webhook_secret = cfg.erp_webhook_secret.clone();
     let smgw_tenant = cfg.tenant.clone();
     let state = HandlerState {
         repo,
@@ -450,8 +475,11 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         tenant: cfg.tenant,
         marktd_url: cfg.marktd_url.clone(),
         marktd_api_key: cfg.marktd_api_key.clone(),
-        olap_engine,
         erp_webhook_url: cfg.erp_webhook_url,
+        erp_webhook_secret: cfg
+            .erp_webhook_secret
+            .clone()
+            .map(secrecy::SecretString::from),
     };
     // ── Kafka ingest consumer (optional) ─────────────────────────────────────
     // High-throughput intake for head-end systems that stream reading batches
@@ -491,7 +519,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
                         mako_events::mako::PROCESS_COMPLETED,
                         mako_events::mako::PROCESS_INITIATED,
                     ],
-                    makopid_filter: mako_edm::domain::MSCONS_PIDS,
+                    makopid_filter: crate::domain::MSCONS_PIDS,
                     active: true,
                 },
             )
@@ -502,9 +530,25 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
 
     // Both limiters apply: the keyed one bounds any single caller, the global
     // one bounds their sum.
+    // meterstore's read-only Iceberg REST catalog, mounted so external engines
+    // (DuckDB / Spark / Trino / PyIceberg) can read the cold tier directly from
+    // object storage — edmd stays in the metadata path only, never the data path.
+    // Gated by the same Cedar `read-archive-olap` action as the archive queries it
+    // describes; the outer OIDC/Cedar Extension layers below reach it because they
+    // wrap the nested routes too.
+    let iceberg_facade =
+        reads_cold
+            .catalog_facade()
+            .router()
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                iceberg_catalog_guard,
+            ));
+
     let app = mako_service::ServiceBuilder::new()
         .merge(
             router(state)
+                .nest("/api/v1/iceberg", iceberg_facade)
                 .layer(Extension(cfg.cedar))
                 .layer(Extension(cfg.oidc))
                 .layer(Extension(pool_arc.clone()))
@@ -532,6 +576,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
             pool_arc.clone(),
             smgw_tenant.clone(),
             smgw_webhook_url.clone(),
+            smgw_webhook_secret.clone(),
             30,     // cert_warning_days — warn 30 days before expiry (BSI TR-03109-4 §6.3)
             2,      // comm_fault_threshold_hours — § 60 Abs. 2 MsbG: substitute after 2h silence
             86_400, // interval_secs — sweep daily
@@ -549,6 +594,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
             pool_arc.clone(),
             smgw_tenant.clone(),
             smgw_webhook_url.clone(),
+            smgw_webhook_secret.clone(),
             86_400, // interval_secs — sweep daily
             cfg.shutdown.clone(),
         );
@@ -561,6 +607,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
             pool_arc,
             smgw_tenant,
             smgw_webhook_url,
+            smgw_webhook_secret,
             cfg.confirmation.deadline_weeks,
             86_400, // daily
             cfg.shutdown.clone(),

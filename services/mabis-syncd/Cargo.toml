@@ -22,7 +22,6 @@ path = "src/main.rs"
 [dependencies]
 anyhow           = { workspace = true }
 axum             = { version = "0.8" }
-mako-edm         = { workspace = true }
 mako-engine      = { workspace = true }
 mako-mabis       = { path = "../../crates/mako-mabis" }
 mako-service     = { workspace = true, features = ["otel", "oidc", "cedar"] }

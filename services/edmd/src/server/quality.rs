@@ -78,7 +78,9 @@ pub(crate) async fn list_quality_assessments(
     }
 }
 
-/// Quality report returned in the direct-push response and stored in `meter_reads.quality_warnings`.
+/// Quality report returned in the direct-push response and recorded per batch in
+/// `quality_assessments` (meterstore owns the readings and has no per-interval
+/// `quality_warnings` column).
 ///
 /// Outlier detection uses the **Hampel filter** (sliding-window median/MAD)
 /// rather than a global 3-sigma rule: the median and MAD are robust to the
@@ -280,9 +282,11 @@ pub struct QualityRescoreQuery {
 /// - The quality algorithm was upgraded (e.g. from 3-sigma to Hampel)
 /// - A billing dispute requires re-verification of read quality
 ///
-/// The handler re-runs `compute_quality()` per logical day (96 × 15-min
-/// intervals) against the DB values, updates `meter_reads.quality_warnings`,
+/// The handler re-runs `compute_quality()` over the window's version-resolved
+/// reads, records the verdict in `quality_assessments` (source `BATCH_RESCORE`),
 /// and emits `de.messwert.reading.quality.warning` for any newly-found warnings.
+/// meterstore owns the readings and carries no per-interval `quality_warnings`
+/// column, so the audit trail is the `quality_assessments` row, not a read update.
 ///
 /// ## Response
 ///
@@ -327,25 +331,21 @@ pub async fn post_quality_rescore(
         .and_then(|s| OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok())
         .unwrap_or(now);
 
-    // Load raw meter_reads rows for this malo_id × date window.
-    use sqlx::Row as _;
-    let rows = sqlx::query(
-        r#"SELECT dtm_from, dtm_to, quantity_kwh
-           FROM meter_reads
-           WHERE malo_id = $1
-             AND dtm_from >= $2
-             AND dtm_from < $3
-             AND tenant = $4
-           ORDER BY dtm_from"#,
-    )
-    .bind(&malo_id)
-    .bind(from_dt)
-    .bind(to_dt)
-    .bind(&state.tenant)
-    .fetch_all(state.repo.pool())
-    .await;
-
-    let rows = match rows {
+    // Load the window through the repository (version-resolved, tenant-scoped).
+    // `repo.query` does not filter quality, so the rescore sees every stored
+    // interval (including Faulty/Unknown) — matching the previous behaviour, which
+    // scored the whole window rather than only the billable subset.
+    let reads = match state
+        .repo
+        .query(&TimeSeriesQuery {
+            malo_id: malo_id.clone(),
+            from: from_dt,
+            to: to_dt,
+            sparte: None,
+            tenant: state.tenant.clone(),
+        })
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             return (
@@ -356,7 +356,7 @@ pub async fn post_quality_rescore(
         }
     };
 
-    if rows.is_empty() {
+    if reads.is_empty() {
         return (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -370,21 +370,15 @@ pub async fn post_quality_rescore(
     }
 
     // Re-score using Hampel filter applied to the full loaded window.
-    // We convert DB rows to DirectInterval for reuse of compute_quality().
-    let pseudo_intervals: Vec<DirectInterval> = rows
+    // Convert the typed reads to DirectInterval for reuse of compute_quality().
+    let pseudo_intervals: Vec<DirectInterval> = reads
         .iter()
-        .map(|r| {
-            let dtm_from: OffsetDateTime = r.get("dtm_from");
-            let dtm_to: OffsetDateTime = r.get("dtm_to");
-            // 0010: quantity_kwh is NUMERIC(18,5) — read as Decimal directly.
-            let v: Decimal = r.try_get("quantity_kwh").unwrap_or(Decimal::ZERO);
-            DirectInterval {
-                from: dtm_from,
-                to: dtm_to,
-                value: v,
-                unit: "kWh".to_owned(),
-                quality: None,
-            }
+        .map(|r| DirectInterval {
+            from: r.dtm_from,
+            to: r.dtm_to,
+            value: r.quantity_kwh,
+            unit: "kWh".to_owned(),
+            quality: None,
         })
         .collect();
 
@@ -412,71 +406,42 @@ pub async fn post_quality_rescore(
     *grades.entry(grade).or_insert(0u32) += 1;
 
     let warnings_found = if quality.has_warnings { 1usize } else { 0usize };
-    let rows_rescored = rows.len();
+    let rows_rescored = reads.len();
 
-    // Bulk-update quality_warnings for all rows in window.
-    if !rows.is_empty() {
-        let quality_json = serde_json::json!({
-            "gaps_detected": quality.gaps_detected,
-            "zero_run_length": quality.zero_run_length,
-            "outlier_intervals": quality.outlier_intervals,
-            "spike_intervals": quality.spike_intervals,
-            "intervals_consistent": quality.intervals_consistent,
-            "has_warnings": quality.has_warnings,
-            "coverage_pct": quality.coverage_pct,
-            "grade": quality.grade,
-            "algorithm": "hampel_k3_t3",
-            "rescored_at": now.to_string(),
+    // The rescore verdict is persisted to `quality_assessments` via
+    // `record_quality_assessment` above — meterstore owns the readings and has no
+    // per-interval `quality_warnings` column, so there is no `meter_reads` row to
+    // update. The audit history lives in `quality_assessments` (source
+    // `BATCH_RESCORE`), which is what a billing dispute reads.
+    //
+    // Emit a quality warning CloudEvent if warranted.
+    if quality.has_warnings
+        && let Some(ref url) = state.erp_webhook_url
+    {
+        let event_id = uuid::Uuid::new_v4().to_string();
+        let ce = serde_json::json!({
+            "specversion": "1.0",
+            "type": mako_events::messwert::READING_QUALITY_WARNING,
+            "source": "/edmd/quality-rescore",
+            "id": event_id,
+            "time": now.to_string(),
+            "subject": malo_id,
+            "tenantid": state.tenant,
+            "datacontenttype": "application/json",
+            "data": {
+                "malo_id": malo_id,
+                "grade": quality.grade,
+                "gaps_detected": quality.gaps_detected,
+                "outlier_count": quality.outlier_intervals.len() + quality.spike_intervals.len(),
+                "coverage_pct": quality.coverage_pct,
+                "window_from": from_dt.to_string(),
+                "window_to": to_dt.to_string(),
+                "algorithm": "hampel_k3_t3",
+                "trigger": "retroactive_rescore",
+            }
         });
-
-        let _ = sqlx::query(
-            r#"UPDATE meter_reads
-               SET quality_warnings = $1
-             WHERE malo_id = $2
-               AND tenant  = $5
-               AND dtm_from >= $3
-               AND dtm_from < $4"#,
-        )
-        .bind(&quality_json)
-        .bind(&malo_id)
-        .bind(from_dt)
-        .bind(to_dt)
-        .bind(&state.tenant)
-        .execute(state.repo.pool())
-        .await;
-
-        // Emit quality warning CloudEvent if warranted.
-        if quality.has_warnings
-            && let Some(ref url) = state.erp_webhook_url
-        {
-            let event_id = uuid::Uuid::new_v4().to_string();
-            let ce = serde_json::json!({
-                "specversion": "1.0",
-                "type": mako_events::messwert::READING_QUALITY_WARNING,
-                "source": "/edmd/quality-rescore",
-                "id": event_id,
-                "time": now.to_string(),
-                "datacontenttype": "application/json",
-                "data": {
-                    "malo_id": malo_id,
-                    "grade": quality.grade,
-                    "gaps_detected": quality.gaps_detected,
-                    "outlier_count": quality.outlier_intervals.len() + quality.spike_intervals.len(),
-                    "coverage_pct": quality.coverage_pct,
-                    "window_from": from_dt.to_string(),
-                    "window_to": to_dt.to_string(),
-                    "algorithm": "hampel_k3_t3",
-                    "trigger": "retroactive_rescore",
-                }
-            });
-            let client = mako_service::http::default_client();
-            let _ = client
-                .post(url)
-                .header("Content-Type", "application/cloudevents+json")
-                .json(&ce)
-                .send()
-                .await;
-        }
+        let client = mako_service::http::default_client();
+        crate::server::post_ce_with_retry(&client, url, &ce, state.webhook_secret_bytes()).await;
     }
 
     (

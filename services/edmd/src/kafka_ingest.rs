@@ -37,9 +37,9 @@
 
 use std::time::Duration;
 
+use crate::domain::repository::TimeSeriesRepository;
+use crate::domain::{IngestionSource, MeterRead, QualityFlag, Sparte};
 use krafka::consumer::Consumer;
-use mako_edm::domain::{IngestionSource, MeterRead, QualityFlag, Sparte};
-use mako_edm::repository::TimeSeriesRepository;
 use rust_decimal::Decimal;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -47,7 +47,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::config::KafkaIngestConfig;
-use crate::pg::PgTimeSeriesRepository;
+use crate::store::MeterStoreTimeSeriesRepository;
 
 /// One interval inside a Kafka batch document.
 #[derive(Debug, serde::Deserialize)]
@@ -79,7 +79,7 @@ struct WireBatch {
 /// Spawn the Kafka ingest consumer. Runs until `shutdown` is cancelled.
 pub fn spawn(
     cfg: KafkaIngestConfig,
-    repo: PgTimeSeriesRepository,
+    repo: MeterStoreTimeSeriesRepository,
     tenant: String,
     shutdown: CancellationToken,
 ) {
@@ -105,7 +105,7 @@ pub fn spawn(
 
 async fn run_consumer(
     cfg: &KafkaIngestConfig,
-    repo: &PgTimeSeriesRepository,
+    repo: &MeterStoreTimeSeriesRepository,
     tenant: &str,
     shutdown: &CancellationToken,
 ) -> anyhow::Result<()> {
@@ -230,7 +230,7 @@ async fn run_consumer(
 
 /// Convert one wire batch into `MeterRead`s, run V01–V10, and store.
 async fn store_batch(
-    repo: &PgTimeSeriesRepository,
+    repo: &MeterStoreTimeSeriesRepository,
     tenant: &str,
     batch: WireBatch,
 ) -> anyhow::Result<usize> {

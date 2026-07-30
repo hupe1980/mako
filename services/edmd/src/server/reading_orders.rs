@@ -355,7 +355,7 @@ pub(crate) async fn fail_reading_order(
             "id": uuid::Uuid::new_v4().to_string(),
             "time": OffsetDateTime::now_utc().to_string(),
             "subject": malo_id,
-            "tenant": state.tenant,
+            "tenantid": state.tenant,
             "datacontenttype": "application/json",
             "data": {
                 "order_id":          id.to_string(),
@@ -369,7 +369,7 @@ pub(crate) async fn fail_reading_order(
                     "Re-dispatch the reading, or estimate under §40a EnWG and document the basis",
             }
         });
-        post_ce_with_retry(&client, webhook_url, &ce).await;
+        post_ce_with_retry(&client, webhook_url, &ce, state.webhook_secret_bytes()).await;
     }
 
     (

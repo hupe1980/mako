@@ -51,6 +51,7 @@ pub fn spawn_confirmation_worker(
     pool: Arc<PgPool>,
     tenant: String,
     erp_webhook_url: Option<String>,
+    erp_webhook_secret: Option<String>,
     deadline_weeks: i64,
     interval_secs: u64,
     shutdown_token: tokio_util::sync::CancellationToken,
@@ -101,6 +102,7 @@ pub fn spawn_confirmation_worker(
                     .format(&time::format_description::well_known::Rfc3339)
                     .unwrap_or_default(),
                 "datacontenttype": "application/json",
+                "tenantid": tenant,
                 "data": {
                     "tenant": tenant,
                     "newly_overdue": newly_overdue,
@@ -109,21 +111,14 @@ pub fn spawn_confirmation_worker(
                     "hinweis": "GET /api/v1/confirmations?status=UEBERFAELLIG listet die offenen Intervalle",
                 }
             });
-            let client = reqwest::Client::new();
-            match client.post(webhook_url).json(&payload).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    tracing::info!(
-                        newly_overdue,
-                        "edmd: confirmation-worker: overdue notice delivered"
-                    );
-                }
-                Ok(resp) => {
-                    tracing::warn!(status = %resp.status(), "edmd: confirmation-worker: webhook failed");
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "edmd: confirmation-worker: webhook error");
-                }
-            }
+            let client = mako_service::http::default_client();
+            crate::server::post_ce_with_retry(
+                &client,
+                webhook_url,
+                &payload,
+                erp_webhook_secret.as_deref().map(str::as_bytes),
+            )
+            .await;
         }
     });
 }

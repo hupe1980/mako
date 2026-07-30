@@ -197,8 +197,10 @@ pub fn check_session_compliance(
 
     // ── 2. Communication fault ────────────────────────────────────────────────
 
-    if session.is_communication_fault(comm_fault_threshold_hours) {
-        let hours = session.hours_since_last_contact();
+    // metering 0.16 threads the evaluation instant explicitly (determinism).
+    let now = time::OffsetDateTime::now_utc();
+    if session.is_communication_fault(now, comm_fault_threshold_hours) {
+        let hours = session.hours_since_last_contact(now);
         issues.push(ComplianceIssue {
             malo_id: session.malo_id.clone(),
             device_id: session.device_id.clone(),
@@ -368,6 +370,7 @@ pub async fn run_cls_compliance_sweep(
     pool: &PgPool,
     tenant: &str,
     erp_webhook_url: Option<&str>,
+    erp_webhook_secret: Option<&str>,
     cert_warning_days: i32,
     comm_fault_threshold_hours: i64,
 ) -> ComplianceReport {
@@ -463,7 +466,7 @@ pub async fn run_cls_compliance_sweep(
                     "subject": issue.malo_id,
                     "time": scanned_at.to_string(),
                     "datacontenttype": "application/json",
-                    "tenant": tenant,
+                    "tenantid": tenant,
                     "data": {
                         "malo_id":       issue.malo_id,
                         "device_id":     issue.device_id,
@@ -480,7 +483,13 @@ pub async fn run_cls_compliance_sweep(
                 // A lost cert-expiry warning silently runs a gateway into
                 // an expired certificate (MsbG §29 remote-readout obligation),
                 // so this retries like every other edmd compliance event.
-                crate::server::post_ce_with_retry(&client, url, &ce).await;
+                crate::server::post_ce_with_retry(
+                    &client,
+                    url,
+                    &ce,
+                    erp_webhook_secret.map(str::as_bytes),
+                )
+                .await;
             }
         }
 
@@ -524,10 +533,12 @@ pub async fn run_cls_compliance_sweep(
 ///
 /// Runs at startup and then every `interval_secs` seconds (default: 86400 for daily).
 /// Gracefully stops on `shutdown_token` cancellation.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_cls_compliance_worker(
     pool: Arc<PgPool>,
     tenant: String,
     erp_webhook_url: Option<String>,
+    erp_webhook_secret: Option<String>,
     cert_warning_days: i32,
     comm_fault_threshold_hours: i64,
     interval_secs: u64,
@@ -559,6 +570,7 @@ pub fn spawn_cls_compliance_worker(
                 &pool,
                 &tenant,
                 erp_webhook_url.as_deref(),
+                erp_webhook_secret.as_deref(),
                 cert_warning_days,
                 comm_fault_threshold_hours,
             )
@@ -628,6 +640,7 @@ pub async fn run_smgw_cert_expiry_sweep(
     pool: &PgPool,
     tenant: &str,
     erp_webhook_url: Option<&str>,
+    erp_webhook_secret: Option<&str>,
 ) -> CertExpirySweepReport {
     let scanned_at = OffsetDateTime::now_utc();
     let today = scanned_at.date();
@@ -737,7 +750,7 @@ pub async fn run_smgw_cert_expiry_sweep(
                     "subject": malo_id,
                     "time": scanned_at.to_string(),
                     "datacontenttype": "application/json",
-                    "tenant": tenant,
+                    "tenantid": tenant,
                     "data": {
                         "malo_id":        malo_id,
                         "device_id":      session.device_id,
@@ -753,7 +766,13 @@ pub async fn run_smgw_cert_expiry_sweep(
                 // A lost warning silently runs a gateway into an expired certificate
                 // (§14a Fernsteuerbarkeit + MsbG §29 remote-readout), so retry like
                 // every other edmd compliance event.
-                crate::server::post_ce_with_retry(&client, url, &ce).await;
+                crate::server::post_ce_with_retry(
+                    &client,
+                    url,
+                    &ce,
+                    erp_webhook_secret.map(str::as_bytes),
+                )
+                .await;
             }
             warnings_emitted += 1;
         }
@@ -790,6 +809,7 @@ pub fn spawn_smgw_cert_expiry_worker(
     pool: Arc<PgPool>,
     tenant: String,
     erp_webhook_url: Option<String>,
+    erp_webhook_secret: Option<String>,
     interval_secs: u64,
     shutdown_token: tokio_util::sync::CancellationToken,
 ) {
@@ -808,7 +828,13 @@ pub fn spawn_smgw_cert_expiry_worker(
                     break;
                 }
             }
-            run_smgw_cert_expiry_sweep(&pool, &tenant, erp_webhook_url.as_deref()).await;
+            run_smgw_cert_expiry_sweep(
+                &pool,
+                &tenant,
+                erp_webhook_url.as_deref(),
+                erp_webhook_secret.as_deref(),
+            )
+            .await;
         }
     });
 }
@@ -943,7 +969,7 @@ pub async fn put_smgw_session(
                 "subject": issue.malo_id,
                 "time": OffsetDateTime::now_utc().to_string(),
                 "datacontenttype": "application/json",
-                "tenant": tenant,
+                "tenantid": tenant,
                 "data": {
                     "malo_id":        issue.malo_id,
                     "device_id":      issue.device_id,
@@ -957,7 +983,8 @@ pub async fn put_smgw_session(
                 }
             });
             let client = mako_service::http::default_client();
-            crate::server::post_ce_with_retry(&client, url, &ce).await;
+            crate::server::post_ce_with_retry(&client, url, &ce, state.webhook_secret_bytes())
+                .await;
         }
     }
 
@@ -1256,6 +1283,10 @@ pub async fn post_smgw_compliance_scan(
         pool.as_ref(),
         tenant,
         state.erp_webhook_url.as_deref(),
+        state.erp_webhook_secret.as_ref().map(|s| {
+            use secrecy::ExposeSecret;
+            s.expose_secret()
+        }),
         30,
         2,
     )

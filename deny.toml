@@ -435,18 +435,53 @@ reason  = "slatedb 0.13 requires object_store 0.12; iceberg 0.9.1 requires 0.14.
 
 [[bans.skip]]
 name    = "quick-xml"
-version = "=0.37"
-reason  = "roxmltree/testcontainers require older quick-xml alongside workspace 0.40/0.41."
+version = "=0.26"
+reason  = "roxmltree/testcontainers require an older quick-xml alongside workspace 0.40/0.41."
 
 [[bans.skip]]
 name    = "quick-xml"
-version = "=0.38"
-reason  = "some ecosystem crates require quick-xml 0.38."
+version = "=0.39"
+reason  = "opendal 0.57 (iceberg-storage-opendal, edmd/meterstore cold tier) pins quick-xml 0.39; asx-rs uses 0.41."
 
 [[bans.skip]]
 name    = "aes"
 version = "=0.8"
 reason  = "older crypto crates in the iceberg/tls ecosystem use aes 0.8; workspace now uses 0.9."
+
+# ── iceberg 0.10 vs asx-rs AES-GCM stack split ──────────────────────────────────
+# The cold tier (iceberg 0.10, via edmd/meterstore) pulls the aes-gcm 0.10 AEAD
+# stack; asx-rs (AS4 message security, via makod) pulls the 0.11 stack. Both are
+# transitive and cannot be unified without upstream releases. Skip the older
+# (iceberg-side) halves. Resolve when iceberg updates its aes-gcm dependency.
+[[bans.skip]]
+name    = "aes-gcm"
+version = "=0.10"
+reason  = "iceberg 0.10 (edmd/meterstore cold tier) pins aes-gcm 0.10; asx-rs (AS4) uses 0.11."
+
+[[bans.skip]]
+name    = "aead"
+version = "=0.5"
+reason  = "companion of aes-gcm 0.10 (iceberg cold tier); asx-rs (AS4) uses the aead 0.6 stack."
+
+[[bans.skip]]
+name    = "ctr"
+version = "=0.9"
+reason  = "companion of aes-gcm 0.10 (iceberg cold tier); asx-rs (AS4) uses ctr 0.10."
+
+[[bans.skip]]
+name    = "ghash"
+version = "=0.5"
+reason  = "companion of aes-gcm 0.10 (iceberg cold tier); asx-rs (AS4) uses ghash 0.6."
+
+[[bans.skip]]
+name    = "polyval"
+version = "=0.6"
+reason  = "companion of aes-gcm 0.10 (iceberg cold tier); asx-rs (AS4) uses polyval 0.7."
+
+[[bans.skip]]
+name    = "universal-hash"
+version = "=0.5"
+reason  = "companion of aes-gcm 0.10 (iceberg cold tier); asx-rs (AS4) uses universal-hash 0.6."
 
 [[bans.skip]]
 name    = "cipher"

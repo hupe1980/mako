@@ -250,9 +250,13 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       GGV community-solar metering.
     </p>
     <p>
-      An Apache Iceberg V2 cold tier archives to S3/GCS/Azure with a built-in REST catalog —
-      DuckDB, Snowflake, and Databricks <code>ATTACH</code> directly, no ETL — and Arrow IPC
-      bulk export streams batch reads. GDPR Art. 17 erasure with cold-tier read-time exclusion.
+      The <code>meterstore</code> engine — a standalone crates.io crate edmd links in-process —
+      keeps a recent PostgreSQL window and a settled
+      Apache Iceberg V2 history behind one tiering watermark — reads are version-resolved and
+      <code>as_of</code> reproduces any past settlement. A built-in read-only Iceberg REST catalog
+      lets DuckDB, Spark and Trino <code>ATTACH</code> and read the cold tier directly, no ETL, and
+      Arrow IPC streams bulk reads. GDPR Art. 17 is pseudonymisation: erasing the subject mapping
+      leaves the append-only history unattributable in both tiers.
     </p>
     <a href="{{ '/edmd' | relative_url }}">edmd guide →</a>
   </div>
@@ -458,7 +462,7 @@ mako consists of 17 independently deployable services. 16 of them ship a built-i
   <a href="{{ '/edmd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">edmd</span>
     <span class="mako-service-card__port">:8380</span>
-    <span class="mako-service-card__desc">MSCONS meter readings (PIDs 13005–13027). iMSys direct push (§41a). Hampel quality scoring (A/B/C/F, AVX2/NEON). Virtual meters (§42b GGV Solarpaket I). § 60 Abs. 2 MsbG forecasting &amp; substitution. Ablesesteuerung. Iceberg/S3 OLAP archive with Parquet Bloom filters. Arrow IPC bulk export. Iceberg REST catalog (DuckDB/Snowflake/Databricks). GDPR Art. 17 erasure.</span>
+    <span class="mako-service-card__desc">MSCONS meter readings (PIDs 13005–13027). iMSys direct push (§41a). Hampel quality scoring (A/B/C/F, AVX2/NEON). Virtual meters (§42b GGV Solarpaket I). § 60 Abs. 2 MsbG forecasting &amp; substitution. Ablesesteuerung. `meterstore` hot/cold tiering (PostgreSQL + Apache Iceberg, version-resolved, `as_of` snapshots). Cross-tier OLAP + JSON/Arrow-IPC export. Read-only Iceberg REST catalog (DuckDB/Spark/Trino attach). GDPR Art. 17 pseudonymisation. Tenant-scoped.</span>
   </a>
   <a href="{{ '/mabis-syncd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">mabis-syncd</span>
@@ -497,7 +501,7 @@ mako consists of 17 independently deployable services. 16 of them ship a built-i
   <a href="{{ '/accountingd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">accountingd</span>
     <span class="mako-service-card__port">:9380</span>
-    <span class="mako-service-card__desc">Massenkontokorrent ledger — immutable, in-tx double-entry (SKR 03/04). FIFO open items. Aging. Verzugszinsen §288 BGB. Zahlungsvereinbarung. pain.008 multi-group single message + mandatory Gläubiger-ID. camt.054 XML + JSON dedup import. Idempotent CE ingest. OIDC auth + inbound HMAC. GDPR Art. 17. 87 tests.</span>
+    <span class="mako-service-card__desc">Massenkontokorrent ledger — immutable, in-tx double-entry (SKR 03/04). FIFO open items. Aging. Verzugszinsen §288 BGB. Zahlungsvereinbarung. pain.008 multi-group single message + mandatory Gläubiger-ID. camt.054 XML + JSON dedup import. Idempotent CE ingest. OIDC auth + inbound HMAC. GDPR Art. 17. 97 tests.</span>
   </a>
 </div>
 
@@ -650,8 +654,8 @@ Beyond the production services, mako exposes reusable Rust libraries:
 |---|---|---|
 | [`edi-energy`](https://crates.io/crates/edi-energy) | ✅ crates.io | Parse · validate · build all 17 EDI@Energy EDIFACT types |
 | [`mako-engine`](https://crates.io/crates/mako-engine) | ✅ crates.io | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines |
-| `metering` | workspace | German metering domain — `MeterInterval`, validation V01–V10, substitution (§ 60 Abs. 2 MsbG), Hampel scoring, resampling, virtual meters, SMGW/CLS (§14a), 177 tests |
-| `mako-edm` | workspace | Energy Data Management types — `MeterRead`, `QualityFlag` (8 variants), `BilanzzuordnungRecord`, `GasQualityData` (PID 13007), correction records (§ 147 AO / GoBD) |
+| [`metering`](https://crates.io/crates/metering) | ✅ crates.io | German metering domain — `MeterInterval`, `MeasurementSeries`, `ObisCode`, `Sparte`, validation V01–V10, substitution (§ 60 Abs. 2 MsbG), Hampel scoring, resampling, virtual meters, SMGW/CLS (§14a), DST-correct calendar |
+| [`meterstore`](https://crates.io/crates/meterstore) | ✅ crates.io | Hot/cold tiered metering store — recent PostgreSQL window + settled Apache Iceberg V2 history behind one tiering watermark; version-resolved + transaction-time (`as_of`) reads across both tiers, coded-column CHECKs, GDPR-Art.-17 pseudonymisation, read-only Iceberg REST catalog + Arrow Flight SQL. Backs edmd's `meter_reads` + `esa_typ2_reads` |
 | `eeg-billing` | workspace | Pure EEG/KWKG settlement — 10 schemes, §51 Negativpreisregel, §52 Pflichtzahlungen, §36k Wind Korrekturfaktor, `InbetriebnahmeTyp` lifecycle, proptest invariants; opt-in `bo4e` feature → **§14 UStG Gutschrift** (BO4E `Rechnung` + per-rate USt breakdown) |
 | `energy-billing` | workspace | Retail energy billing engine — 13 categories (incl. municipal WASSER), HT/NT ToU, RLM demand charge, §54 EnergieStG exemption, historic levy rates (`stromsteuer_for_year`, `energiesteuer_gas_for_year`), §14a Modul 1/3, XRechnung 3.0 |
 | `grid-billing` | workspace | Role-neutral grid **settlement** engine — `SettlementResult` (+ `CalculationTrace`, `LegalReference`, `TariffSource` per position), `Sparte` (Gas/Strom), `KaKundengruppe` (KAV tier), `calculate_reversal()`, `validate_*_input()`, §13a EnWG `redispatch_verguetung`; zero BO4E dep, no float money |

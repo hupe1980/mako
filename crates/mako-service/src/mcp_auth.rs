@@ -496,6 +496,62 @@ impl McpAuth {
         }
     }
 
+    /// Authorize a specific Cedar `action` for the caller identified by the
+    /// request's bearer token, **without** running the request.
+    ///
+    /// The [`authenticate`](Self::authenticate) middleware applies one blanket
+    /// gate (`use-mcp`) to the whole MCP surface, which cannot distinguish a
+    /// read tool from a destructive one. A server that exposes destructive tools
+    /// (Ersatzwert generation, campaign dispatch) calls this from its own
+    /// middleware for exactly those tools, so the MCP path enforces the same role
+    /// its REST twin does rather than accepting any `use-mcp` caller.
+    ///
+    /// Returns `Ok(())` when allowed — including dev mode, when no Cedar enforcer
+    /// is configured, and for the API-key path (named service keys are a
+    /// deployment-trusted boundary; roles live on JWTs). Otherwise returns the
+    /// `401`/`403` response to short-circuit with.
+    // The `Err` is a fully-formed HTTP response the caller returns as-is; boxing
+    // it would add an allocation on every auth failure for no benefit.
+    #[allow(clippy::result_large_err)]
+    pub fn authorize(
+        &self,
+        headers: &axum::http::HeaderMap,
+        action: &str,
+    ) -> Result<(), axum::response::Response> {
+        // Same posture as `authenticate`: nothing to enforce without Cedar, and
+        // dev mode (OIDC disabled) is open by construction.
+        let Some(cedar) = self.cedar.as_ref() else {
+            return Ok(());
+        };
+        if self.oidc.is_disabled() {
+            return Ok(());
+        }
+        let token = headers
+            .get("Authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "))
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| {
+                (
+                    StatusCode::UNAUTHORIZED,
+                    "Authorization: Bearer <token> required",
+                )
+                    .into_response()
+            })?;
+        // Roles are carried on JWTs; the API-key path is gated by `use-mcp` and
+        // the named-key trust boundary, so defer to that rather than fail closed.
+        if !OidcVerifier::looks_like_jwt(&token) {
+            return Ok(());
+        }
+        let claims = self.oidc.verify(&token).map_err(|_| {
+            (StatusCode::UNAUTHORIZED, "401 Unauthorized: invalid token").into_response()
+        })?;
+        let principal = crate::oidc::Claims(claims).principal();
+        cedar
+            .check(&principal, action, &self.tenant)
+            .map_err(|e| (StatusCode::FORBIDDEN, format!("403 Forbidden: {e}")).into_response())
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     /// Check `token` against all registered API keys.

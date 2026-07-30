@@ -113,7 +113,6 @@ async fn main() -> anyhow::Result<()> {
     let subscriber_id = cfg.subscription.subscriber_id.clone();
     let webhook_url = cfg.subscription.webhook_url.clone();
     let tenant = cfg.identity.tenant.clone();
-    let db_max_connections = cfg.database.pool_size;
 
     invoicd::server::run(invoicd::server::RunConfig {
         listen,
@@ -128,7 +127,7 @@ async fn main() -> anyhow::Result<()> {
         check_config,
         auto_dispute_threshold_eur_cents,
         database_url,
-        db_max_connections,
+        db: cfg.database,
         tenant,
         erp_webhook_url: cfg.erp.webhook_url.clone(),
         erp_hmac_secret: cfg

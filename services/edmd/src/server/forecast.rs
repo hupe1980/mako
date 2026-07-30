@@ -79,7 +79,7 @@ pub(crate) async fn get_annual_forecast(
             to: r.dtm_to,
             value_kwh: r.quantity_kwh,
             quality: r.quality,
-            obis_code: r.obis_code.clone(),
+            obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
         })
         .collect();
 
@@ -102,7 +102,7 @@ pub(crate) async fn get_annual_forecast(
                 to: r.dtm_to,
                 value_kwh: r.quantity_kwh,
                 quality: r.quality,
-                obis_code: r.obis_code.clone(),
+                obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
             })
             .collect(),
         Err(e) => {
@@ -178,33 +178,54 @@ pub(crate) async fn get_netzverlust(
         .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
         .unwrap_or_else(OffsetDateTime::now_utc);
 
-    // OBIS measurement group C decides the direction: C=1 forward active
-    // energy (offtake from grid), C=2 reverse active energy (infeed).
-    // `obis_code_norm` is `medium-channel:C.D.E`, so match on `:1.`/`:2.`.
-    let row = sqlx::query(
-        r"SELECT
-              COALESCE(SUM(quantity_kwh) FILTER (WHERE obis_code_norm LIKE '%:2.%'), 0)
+    // Netzverlust is a tenant-wide aggregate across every Strom MaLo, so it is a
+    // cross-MaLo query over meterstore's version-resolved relation rather than a
+    // per-MaLo `repo.query`. The value column is `value` and the interval bounds
+    // are `from`/`to` (reserved words, hence quoted); the tenant and time bounds
+    // travel as bound parameters so no value reaches the SQL text.
+    //
+    // OBIS measurement group C decides the direction: C=1 forward active energy
+    // (offtake from grid), C=2 reverse active energy (infeed). meterstore stores
+    // the full `obis_code` (`medium-channel:C.D.E`), so match on `:1.`/`:2.`.
+    let store = state.repo.store();
+    let sql = format!(
+        r#"SELECT
+              COALESCE(SUM(CASE WHEN "obis_code" LIKE '%:2.%' THEN "value" ELSE 0 END), 0)
                   AS einspeisung_kwh,
-              COALESCE(SUM(quantity_kwh) FILTER (WHERE obis_code_norm LIKE '%:1.%'), 0)
+              COALESCE(SUM(CASE WHEN "obis_code" LIKE '%:1.%' THEN "value" ELSE 0 END), 0)
                   AS entnahme_kwh
-          FROM meter_reads
-          WHERE tenant = $1
-            AND dtm_from >= $2 AND dtm_to <= $3
-            AND sparte = 'STROM'
-            AND quality NOT IN ('FAULTY', 'UNKNOWN')",
-    )
-    .bind(&state.tenant)
-    .bind(from)
-    .bind(to)
-    .fetch_one(state.repo.pool())
-    .await;
+           FROM "{table}"
+          WHERE "tenant" = $1
+            AND "from" >= $2 AND "to" <= $3
+            AND "sparte" = 'STROM'
+            AND "quality" NOT IN ('FAULTY', 'UNKNOWN')"#,
+        table = store.resolved_table(),
+    );
+    let result = store
+        .query_with_params(
+            &sql,
+            vec![
+                datafusion::scalar::ScalarValue::Utf8(Some(state.tenant.clone())),
+                ts_param(from),
+                ts_param(to),
+            ],
+        )
+        .await;
 
-    match row {
-        Ok(r) => {
-            use sqlx::Row as _;
-            let einspeisung: rust_decimal::Decimal =
-                r.try_get("einspeisung_kwh").unwrap_or_default();
-            let entnahme: rust_decimal::Decimal = r.try_get("entnahme_kwh").unwrap_or_default();
+    match result.and_then(|r| r.to_json()) {
+        Ok(rows) => {
+            // The aggregate is exactly one row. Decimal sums render as JSON number
+            // literals; parse them back through their text to keep full precision
+            // for this indicative figure.
+            let dec = |key: &str| -> rust_decimal::Decimal {
+                rows.first()
+                    .and_then(|row| row.get(key))
+                    .map(std::string::ToString::to_string)
+                    .and_then(|s| s.trim_matches('"').parse().ok())
+                    .unwrap_or_default()
+            };
+            let einspeisung = dec("einspeisung_kwh");
+            let entnahme = dec("entnahme_kwh");
             let losses = metering::network_losses(einspeisung, entnahme);
             Json(serde_json::json!({
                 "from": from.format(&Rfc3339).unwrap_or_default(),

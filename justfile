@@ -32,20 +32,11 @@ test-crate crate:
 test-integration name:
     cargo test --test {{ name }} --all-features
 
-# Run the edmd database-backed tests against a throwaway PostgreSQL
+# Storage integration tests for edmd (meterstore hot/cold over a throwaway
+# PostgreSQL + filesystem Iceberg warehouse). testcontainers manages the
+# container itself, so only a running Docker daemon is required.
 test-edmd-db:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    docker rm -f edmd-test >/dev/null 2>&1 || true
-    docker run -d --name edmd-test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=edmd \
-        -p 55432:5432 postgres:17-alpine >/dev/null
-    trap 'docker rm -f edmd-test >/dev/null 2>&1 || true' EXIT
-    for _ in $(seq 1 30); do
-        docker exec edmd-test pg_isready -U postgres >/dev/null 2>&1 && break
-        sleep 1
-    done
-    EDMD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55432/edmd" \
-        cargo test -p edmd --test ingest_integration --test iceberg_archive --test kafka_ingest_e2e -- --include-ignored --test-threads=1
+    cargo test -p edmd --test meterstore_integration -- --include-ignored --test-threads=1
 
 # Integration tests for einsd against a throwaway PostgreSQL.
 test-einsd-db:

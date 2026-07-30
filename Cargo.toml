@@ -16,7 +16,6 @@ members = [
     "crates/mako-wim-gas",
     "crates/mako-nbw",
     "crates/mako-markt",
-    "crates/mako-edm",
     "crates/mako-events",
     "crates/mako-obs",
     "crates/mako-service",
@@ -91,7 +90,6 @@ schemars                  = { version = "1.2.1" }
 edi-energy       = { path = "crates/edi-energy",  version = "0.14" }
 mako-engine      = { path = "crates/mako-engine",      version = "0.14" }
 mako-markt       = { path = "crates/mako-markt",       version = "0.14" }
-mako-edm         = { path = "crates/mako-edm",         version = "0.14" }
 mako-events      = { path = "crates/mako-events",      version = "0.14" }
 grid-billing     = { path = "crates/grid-billing",     version = "0.14" }
 eeg-billing      = { path = "crates/eeg-billing",      version = "0.14" }
@@ -102,7 +100,7 @@ invoic-checker   = { path = "crates/invoic-checker",   version = "0.14" }
 netz-checker     = { path = "crates/netz-checker",     version = "0.14" }
 energy-billing   = { path = "crates/energy-billing",   version = "0.14" }
 dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.14" }
-metering         = { version = "0.14" }
+metering         = { version = "0.16" }
 sepa             = { version = "0.5.0" }
 
 # Kafka client: pure Rust, MSRV 1.88, zero-unsafe, exactly-once semantics.
@@ -111,24 +109,16 @@ sepa             = { version = "0.5.0" }
 # Default features include: compression (gzip/snappy/lz4), ring (rustls crypto).
 krafka           = { version = "0.13" }
 
-# ── Apache Iceberg OLAP tier (edmd) ─────────────────────────────────────────
-# Exact versions shipped in the iceberg 0.9.1 release (verified from crate source):
-#   iceberg + iceberg-storage-opendal + iceberg-catalog-sql → arrow 57, parquet 57
-#   iceberg-datafusion 0.9.1                               → datafusion 52
-# MSRV 1.94 required by iceberg.
-iceberg                 = { version = "0.9.1" }
-iceberg-storage-opendal = { version = "0.9.1" }
-iceberg-datafusion      = { version = "0.9.1" }
-iceberg-catalog-sql     = { version = "0.9.1" }
-arrow                   = { version = "57", default-features = false }
-# lancedb requires arrow 58 — declared directly in agentd/Cargo.toml (not here)
-# because iceberg in edmd pins arrow 57; both can coexist since semver treats
-# arrow 57 and 58 as distinct crate versions.
+# ── Arrow (edmd meterstore tier) ────────────────────────────────────────────
+# `edmd` stores metering time series through the `meterstore` crate, which
+# sources Arrow via DataFusion 53 (arrow 58). The workspace `arrow` pin must
+# match that major so edmd's Lastgang Arrow-IPC serialisation stays type-
+# compatible with the `RecordBatch`es meterstore hands back. The Iceberg /
+# DataFusion / Parquet / OpenDAL stack that edmd used to embed directly is gone:
+# meterstore owns the cold tier now, and edmd declares the handful of Iceberg
+# catalog crates it still needs to *construct* a meterstore directly.
+arrow                   = { version = "58", default-features = false }
 lancedb                 = { version = "0.31" }   # compatible with the workspace `time` pin via rubo4e
-parquet                 = { version = "57", default-features = false }
-datafusion              = { version = "52", default-features = false }
-# opendal 0.55 is exactly what iceberg 0.9.1 requires — do not upgrade.
-opendal                 = { version = "0.55", default-features = false }
 
 # ── Testing utilities ───────────────────────────────────────────────────────
 # testcontainers: spin up Docker containers in Rust integration tests.

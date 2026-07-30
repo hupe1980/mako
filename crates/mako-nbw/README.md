@@ -25,52 +25,43 @@ This is fundamentally different from all other MaKo processes:
 | Counterparties | LF ↔ NB | **alter NB ↔ neuer NB + suppliers** |
 | EDIFACT format | UTILMD, INVOIC, ORDERS | **PARTIN** |
 
-## PID Inventory
+## PID inventory — dual use of 37000–37014
 
-All PIDs 37000–37014 are defined in the BDEW PARTIN AHB and covered by the
-`edi-energy` crate's PARTIN profile. The PARTIN AHB defines these as
-**Kommunikationsdaten** (party communication data) messages.
+PIDs 37000–37014 are defined in the BDEW PARTIN AHB as **Kommunikationsdaten**
+(party communication data) messages and covered by the `edi-energy` PARTIN
+profile. The same PID numbers serve two distinct purposes that share the message
+format but differ in context:
 
-> **Dual use of PID numbers:** PIDs 37000–37014 serve two distinct purposes
-> that share the same message format but differ in context:
->
-> 1. **Day-to-day Kommunikationsdaten** — routine partner master data updates
->    (GLN, AS4 endpoint, email) sent between market participants during normal
->    operations. These are registered as simple-receipt workflows:
->    PIDs 37000–37006 in `mako-gpke` (`gpke-partin`) and
->    PIDs 37008–37014 in `mako-geli-gas` (`geli-gas-partin`).
->
-> 2. **Netzbetreiberwechsel bulk handover** — the same PARTIN PID numbers are
->    used during a grid concession change (§ 46 EnWG) to transfer thousands of
->    market-location registrations. This is the scope of `mako-nbw` (planned).
->
-> Both use cases co-exist. The NBW bulk context is distinguished from day-to-day
-> updates by the presence of a bulk transfer header (`BGM` document code) and a
-> large MaLo count. `mako-nbw` will handle the NBW-context PARTIN alongside the
-> existing Kommunikationsdaten workflows.
+1. **Day-to-day Kommunikationsdaten** — routine partner master-data updates
+   (GLN, AS4 endpoint, email) exchanged during normal operations. These run
+   today as simple-receipt workflows: PIDs 37000–37006 in `mako-gpke`
+   (`gpke-partin`) and 37008–37014 in `mako-geli-gas` (`geli-gas-partin`).
+2. **Netzbetreiberwechsel bulk handover** — the same PARTIN PIDs carried during
+   a grid-concession change (§ 46 EnWG) to transfer thousands of market-location
+   registrations at once. This is the domain `mako-nbw` reserves. The bulk
+   context is distinguished by a bulk-transfer header (`BGM` document code) and a
+   large MaLo count.
 
-Both **Strom** and **Gas** roles are covered within the same PID block.
-There is no separate `mako-nbw-gas` crate — Gas NBW (see AWH V1.0 below)
-uses the same PARTIN format and PIDs; Gas-specific roles are served by
-PIDs 37008–37014.
+Both **Strom** and **Gas** roles share the one PID block — there is no separate
+`mako-nbw-gas` crate; Gas-specific roles use PIDs 37008–37014.
 
-| PID | Description (PARTIN AHB) | Sparte | Status |
+| PID | Description (PARTIN AHB) | Sparte | Day-to-day home |
 |---|---|---|---|
-| 37000 | Kommunikationsdaten des LF Strom | Strom | ⏳ Planned |
-| 37001 | Kommunikationsdaten des NB Strom | Strom | ⏳ Planned |
-| 37002 | Kommunikationsdaten des MSB Strom | Strom | ⏳ Planned |
-| 37003 | Kommunikationsdaten des BKV Strom | Strom | ⏳ Planned |
-| 37004 | Kommunikationsdaten des BIKO Strom | Strom | ⏳ Planned |
-| 37005 | Kommunikationsdaten des ÜNB Strom | Strom | ⏳ Planned |
-| 37006 | Kommunikationsdaten des ESA Strom | Strom | ⏳ Planned |
+| 37000 | Kommunikationsdaten des LF Strom | Strom | `mako-gpke` |
+| 37001 | Kommunikationsdaten des NB Strom | Strom | `mako-gpke` |
+| 37002 | Kommunikationsdaten des MSB Strom | Strom | `mako-gpke` |
+| 37003 | Kommunikationsdaten des BKV Strom | Strom | `mako-gpke` |
+| 37004 | Kommunikationsdaten des BIKO Strom | Strom | `mako-gpke` |
+| 37005 | Kommunikationsdaten des ÜNB Strom | Strom | `mako-gpke` |
+| 37006 | Kommunikationsdaten des ESA Strom | Strom | `mako-gpke` |
 | 37007 | — (absent from all known AHB versions) | — | — |
-| 37008 | Kommunikationsdaten des LF Gas | Gas | ✅ Day-to-day: `mako-geli-gas` · NBW bulk: planned |
-| 37009 | Kommunikationsdaten des NB Gas | Gas | ✅ Day-to-day: `mako-geli-gas` · NBW bulk: planned |
-| 37010 | Kommunikationsdaten des MSB Gas | Gas | ✅ Day-to-day: `mako-geli-gas` · NBW bulk: planned |
-| 37011 | Kommunikationsdaten des MGV Gas | Gas | ✅ Day-to-day: `mako-geli-gas` · NBW bulk: planned |
-| 37012 | Spartenübergreifende Kommunikationsdaten (NB an andere) | Both | ✅ Day-to-day: `mako-geli-gas` · NBW bulk: planned |
-| 37013 | Spartenübergreifende Kommunikationsdaten (MSB Gas an andere) | Both | ✅ Day-to-day: `mako-geli-gas` · NBW bulk: planned |
-| 37014 | Spartenübergreifende Kommunikationsdaten (MSB Strom an andere) | Both | ✅ Day-to-day: `mako-geli-gas` · NBW bulk: planned |
+| 37008 | Kommunikationsdaten des LF Gas | Gas | `mako-geli-gas` |
+| 37009 | Kommunikationsdaten des NB Gas | Gas | `mako-geli-gas` |
+| 37010 | Kommunikationsdaten des MSB Gas | Gas | `mako-geli-gas` |
+| 37011 | Kommunikationsdaten des MGV Gas | Gas | `mako-geli-gas` |
+| 37012 | Spartenübergreifende Kommunikationsdaten (NB an andere) | Both | `mako-geli-gas` |
+| 37013 | Spartenübergreifende Kommunikationsdaten (MSB Gas an andere) | Both | `mako-geli-gas` |
+| 37014 | Spartenübergreifende Kommunikationsdaten (MSB Strom an andere) | Both | `mako-geli-gas` |
 
 ## Market roles
 
@@ -81,16 +72,13 @@ PIDs 37008–37014.
 | Lieferant | LF | Affected supplier (notified of location transfer) |
 | Bundesnetzagentur | BNetzA | Regulatory authority |
 
-## Architecture (planned)
+## Architecture
 
-Because NBW deals with bulk data rather than individual messages, the planned
-implementation will differ from other domain crates:
-
-- A single `NbwWorkflow` per concession area (not per MaLo)
-- Batch ingestion: the `ReceivePartin` command carries the full list of
-  transferred MaLo IDs from a parsed PARTIN message
-- Long-running: the workflow may span months with many intermediate state
-  transitions before `Settled`
+NBW handles bulk data rather than individual messages, so its shape differs from
+the other domain crates: one `NbwWorkflow` per concession area (not per MaLo),
+batch ingestion (a single command carrying the full transferred-MaLo list from a
+parsed PARTIN message), and a long-running lifecycle that may span months of
+intermediate state transitions before settlement.
 
 ## Regulatory references
 

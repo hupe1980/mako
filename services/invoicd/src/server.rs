@@ -924,7 +924,15 @@ async fn post_selbstausstellen(
         use secrecy::ExposeSecret as _;
         req = req.bearer_auth(api_key.expose_secret());
     }
-    let billing_period: mako_edm::domain::MeterBillingPeriod = match req.send().await {
+    // Local deserialize DTO for edmd's `MeterBillingPeriod` response — only the
+    // fields selbstausstellen consumes.
+    #[derive(serde::Deserialize)]
+    struct MeterBillingPeriod {
+        arbeitsmenge_kwh: rust_decimal::Decimal,
+        #[serde(default)]
+        spitzenleistung_kw: Option<rust_decimal::Decimal>,
+    }
+    let billing_period: MeterBillingPeriod = match req.send().await {
         Ok(resp) if resp.status().is_success() => match resp.json().await {
             Ok(bp) => bp,
             Err(e) => {
@@ -1316,8 +1324,8 @@ pub struct RunConfig {
     pub auto_dispute_threshold_eur_cents: i64,
     /// PostgreSQL URL — `None` = development mode (receipts not persisted).
     pub database_url: Option<String>,
-    /// Max PostgreSQL pool connections.
-    pub db_max_connections: u32,
+    /// Database pool tuning (pool size, timeouts, `application_name`).
+    pub db: crate::config::DatabaseConfig,
     /// Tenant identifier written to every receipt row.
     pub tenant: String,
     /// Optional ERP webhook URL for `de.invoic.receipt.*` CloudEvents.
@@ -1353,10 +1361,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
 
     // ── PostgreSQL pool (§ 147 AO / GoBD compliance) ───────────────────────────────
     let pool = if let Some(ref url) = cfg.database_url {
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(cfg.db_max_connections)
-            .connect(url)
-            .await?;
+        let pool = cfg.db.connect(url, "invoicd").await?;
         sqlx::migrate!("./migrations")
             .run(&pool)
             .await

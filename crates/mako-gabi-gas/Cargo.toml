@@ -13,7 +13,6 @@ categories   = ["data-structures"]
 [dependencies]
 mako-events  = { workspace = true }
 dvgw-edi     = { workspace = true }
-mako-edm     = { workspace = true }
 mako-engine  = { workspace = true }
 metering     = { workspace = true, features = ["serde"] }
 rust_decimal = { workspace = true }

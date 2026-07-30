@@ -203,7 +203,7 @@ pub fn run(
     // ── Cross-crate PID consistency: Redispatch MSCONS PIDs ───────────────────
     //
     // `mako-redispatch::aktivierung::MSCONS_PIDS` and
-    // `mako-edm::domain::REDISPATCH_MSCONS_PIDS` must define the same set.
+    // `edmd::domain::REDISPATCH_MSCONS_PIDS` must define the same set.
     // They are intentionally duplicated (different architectural layers —
     // workflow vs. data-tier), but must agree.  We enforce agreement here by
     // parsing the source files with a simple regex rather than adding a
@@ -447,7 +447,7 @@ fn collect_orphaned_in_dir(
 // ── Cross-crate PID agreement check ──────────────────────────────────────────
 
 /// Verify that `mako-redispatch::aktivierung::MSCONS_PIDS` and
-/// `mako-edm::domain::REDISPATCH_MSCONS_PIDS` define the same set.
+/// `edmd::domain::REDISPATCH_MSCONS_PIDS` define the same set.
 ///
 /// Both constants are intentionally duplicated across architectural layers
 /// (workflow vs. data-tier), but they MUST agree.  This check prevents silent
@@ -458,7 +458,7 @@ fn collect_orphaned_in_dir(
 /// compiled, so it runs without building either crate.
 fn check_redispatch_pid_agreement(workspace_root: &str) -> bool {
     let redispatch_file = format!("{workspace_root}/crates/mako-redispatch/src/aktivierung.rs");
-    let edm_file = format!("{workspace_root}/crates/mako-edm/src/domain.rs");
+    let edm_file = format!("{workspace_root}/services/edmd/src/domain/model.rs");
 
     let extract_pids = |path: &str, const_name: &str| -> Option<std::collections::BTreeSet<u32>> {
         let content = std::fs::read_to_string(path).ok()?;
@@ -513,7 +513,7 @@ fn check_redispatch_pid_agreement(workspace_root: &str) -> bool {
         eprintln!(
             "validate-pruefids: FAIL — Redispatch MSCONS PID mismatch!\n  \
              mako-redispatch::aktivierung::MSCONS_PIDS    = {:?}\n  \
-             mako-edm::domain::REDISPATCH_MSCONS_PIDS     = {:?}\n  \
+             edmd::domain::REDISPATCH_MSCONS_PIDS     = {:?}\n  \
              Fix: update both to match, then re-run `cargo xtask validate-pruefids`.",
             redispatch_pids, edm_pids
         );

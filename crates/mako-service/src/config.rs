@@ -89,14 +89,79 @@ pub struct DatabaseConfig {
     /// avoids storing secrets in TOML files checked into version control.
     pub url: String,
 
-    /// Maximum number of connections in the pool.  Default: 10.
+    /// Maximum number of connections in the pool. Default: 10.
     #[serde(default = "DatabaseConfig::default_pool_size")]
     pub pool_size: u32,
+
+    /// Connections kept open even when idle, to absorb a burst without paying
+    /// connect latency on the first request. Default: 0 (lazy).
+    #[serde(default)]
+    pub min_connections: u32,
+
+    /// How long to wait for a free connection before failing a request, rather
+    /// than queueing unboundedly. Default: 30 s.
+    #[serde(default = "DatabaseConfig::default_acquire_timeout_secs")]
+    pub acquire_timeout_secs: u64,
+
+    /// Close a connection after it has been idle this long, releasing it back to
+    /// PostgreSQL. Default: 600 s (10 min).
+    #[serde(default = "DatabaseConfig::default_idle_timeout_secs")]
+    pub idle_timeout_secs: u64,
+
+    /// Recycle a connection after this long regardless of use, so a pool never
+    /// pins a connection across a PostgreSQL failover or a proxy's own timeout.
+    /// Default: 1800 s (30 min).
+    #[serde(default = "DatabaseConfig::default_max_lifetime_secs")]
+    pub max_lifetime_secs: u64,
 }
 
 impl DatabaseConfig {
     fn default_pool_size() -> u32 {
         10
+    }
+    fn default_acquire_timeout_secs() -> u64 {
+        30
+    }
+    fn default_idle_timeout_secs() -> u64 {
+        600
+    }
+    fn default_max_lifetime_secs() -> u64 {
+        1_800
+    }
+
+    /// `PgPoolOptions` with every tuning knob applied — the single place pool
+    /// sizing and lifetimes are decided for the whole platform.
+    #[must_use]
+    pub fn pool_options(&self) -> sqlx::postgres::PgPoolOptions {
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(self.pool_size)
+            .min_connections(self.min_connections)
+            .acquire_timeout(std::time::Duration::from_secs(self.acquire_timeout_secs))
+            .idle_timeout(std::time::Duration::from_secs(self.idle_timeout_secs))
+            .max_lifetime(std::time::Duration::from_secs(self.max_lifetime_secs))
+    }
+
+    /// Build the connection pool for a service, tagging every connection with
+    /// `application_name` so it is attributable in `pg_stat_activity`.
+    ///
+    /// `url` is the already-resolved connection string (resolve any `env:` ref
+    /// with [`resolve_env_secret`] first, so the secret never lands in a struct
+    /// that could be logged). This is the one path a daemon should use — it
+    /// guarantees the configured `pool_size` and lifetimes actually take effect,
+    /// which a bare `PgPool::connect` silently ignores.
+    ///
+    /// # Errors
+    /// Returns a [`sqlx::Error`] if the URL is malformed or the initial
+    /// connection cannot be established within `acquire_timeout_secs`.
+    pub async fn connect(
+        &self,
+        url: &str,
+        application_name: &str,
+    ) -> Result<sqlx::PgPool, sqlx::Error> {
+        let options: sqlx::postgres::PgConnectOptions = url.parse()?;
+        self.pool_options()
+            .connect_with(options.application_name(application_name))
+            .await
     }
 }
 

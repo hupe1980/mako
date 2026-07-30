@@ -154,24 +154,45 @@ pub async fn post_direct_reads_gas(
     post_direct_reads_inner(&state, &malo_id, req, "GAS", "DIRECT_GAS").await
 }
 
-/// Deliver a CloudEvent to the ERP webhook with 3 retries (exponential backoff 200ms→400ms).
+/// Deliver a CloudEvent to an ERP webhook, with 3 retries (exponential backoff
+/// 200ms→400ms) and — when `secret` is set — an `x-mako-signature: sha256=<hex>`
+/// HMAC over the exact body sent.
 ///
-/// Designed for fire-and-retry rather than fire-and-forget: a lost quality warning
-/// CloudEvent (`de.messwert.reading.quality.warning`) constitutes a compliance gap under
+/// Fire-and-retry rather than fire-and-forget: a lost quality warning
+/// (`de.messwert.reading.quality.warning`) is a compliance gap under
 /// § 60 Abs. 6 MsbG — the responsible party must be informed of quality issues.
+///
+/// This is the one outbound emitter: every edmd-originated CloudEvent (request
+/// path and background workers) goes through it, so the ERP receiver can
+/// authenticate all of them the same way edmd authenticates its *inbound*
+/// webhook. Without the secret the body is unsigned, and the topic/transport is
+/// the trust boundary (documented).
 pub(crate) async fn post_ce_with_retry(
     client: &reqwest::Client,
     url: &str,
     ce: &serde_json::Value,
+    secret: Option<&[u8]>,
 ) {
+    // Sign the exact bytes that are sent, so a body serialised twice cannot
+    // diverge from its signature.
+    let body = match serde_json::to_vec(ce) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::error!(error = %e, "edmd: CloudEvent serialisation failed — event lost");
+            return;
+        }
+    };
+    let signature = secret.map(|s| format!("sha256={}", mako_service::webhook::hmac_hex(s, &body)));
+
     for attempt in 0u32..3 {
-        match client
+        let mut req = client
             .post(url)
             .header("Content-Type", "application/cloudevents+json")
-            .json(ce)
-            .send()
-            .await
-        {
+            .body(body.clone());
+        if let Some(ref sig) = signature {
+            req = req.header("x-mako-signature", sig);
+        }
+        match req.send().await {
             Ok(r) if r.status().is_success() => return,
             Ok(r) => tracing::warn!(attempt, status = %r.status(), "edmd: CE webhook non-2xx"),
             Err(e) => tracing::warn!(attempt, error = %e, "edmd: CE webhook error"),
@@ -252,7 +273,7 @@ pub(crate) fn validate_and_annotate(
             // V09 (non-billable quality) unfireable on every ingest path: a
             // batch arriving as FAULTY/UNKNOWN validated as if it were clean.
             quality: r.quality,
-            obis_code: r.obis_code.clone(),
+            obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
         })
         .collect();
 
@@ -329,6 +350,20 @@ pub(crate) async fn post_direct_reads_inner(
     source_default: &str,
 ) -> axum::response::Response {
     use rust_decimal::Decimal;
+
+    // Bound the batch like the bulk path (`MAX_BATCH` below): an unbounded
+    // direct-push batch is write amplification the request-rate limiter cannot
+    // see — one request can carry millions of intervals and saturate the write
+    // path for every other tenant.
+    const MAX_BATCH: usize = 50_000;
+    if req.intervals.len() > MAX_BATCH {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!("batch too large: {} > {MAX_BATCH}", req.intervals.len()),
+        )
+            .into_response();
+    }
+
     let pool = state.repo.pool();
     let source = if req.source.is_empty() {
         source_default.to_owned()
@@ -614,68 +649,18 @@ pub(crate) async fn post_direct_reads_inner(
     .await;
 
     // \u2500\u2500 Recompute billing period aggregates \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-    // After a direct push, the meter_billing_periods aggregate for the affected
-    // period must be refreshed so billingd picks up the new data.
-    // We recompute the affected date range using a sum over meter_reads.
+    // After a direct push, the cached meter_billing_periods aggregate for the
+    // affected period is refreshed by `store_reads` (cache invalidation) plus the
+    // read-through `billing_period()` path, so billingd picks up the new data.
     let period_from_date = period_start.date();
     let period_to_date = period_end.date();
 
-    let recompute_result = sqlx::query(
-        r"INSERT INTO meter_billing_periods
-              (malo_id, period_from, period_to, messtyp, sparte,
-               arbeitsmenge_kwh, spitzenleistung_kw, quality, computed_at, tenant)
-          SELECT
-              $1 AS malo_id,
-              $2::date AS period_from,
-              $3::date AS period_to,
-              'RLM' AS messtyp,
-              $4 AS sparte,
-              COALESCE(SUM(quantity_kwh), 0) AS arbeitsmenge_kwh,
-              -- Spitzenleistung: peak 15-min slot converted to kW (×4)
-              MAX(quantity_kwh) * 4 AS spitzenleistung_kw,
-              -- Worst quality across contributing reads (same ranking as
-              -- metering::QualityFlag). The previous literal 'VALID' is not
-              -- in the quality vocabulary and read back as UNKNOWN.
-              COALESCE(CASE MAX(CASE quality
-                          WHEN 'MEASURED'    THEN 0
-                          WHEN 'ESTIMATED'   THEN 1
-                          WHEN 'SUBSTITUTED' THEN 2
-                          WHEN 'CALCULATED'  THEN 3
-                          WHEN 'CORRECTED'   THEN 4
-                          ELSE 5 END)
-                  WHEN 0 THEN 'MEASURED'
-                  WHEN 1 THEN 'ESTIMATED'
-                  WHEN 2 THEN 'SUBSTITUTED'
-                  WHEN 3 THEN 'CALCULATED'
-                  WHEN 4 THEN 'CORRECTED'
-                  ELSE 'PRELIMINARY' END, 'UNKNOWN') AS quality,
-              now() AS computed_at,
-              $5 AS tenant
-          FROM meter_reads
-          WHERE malo_id = $1
-            AND dtm_from >= $2::date::timestamptz
-            AND dtm_to   <= ($3::date + INTERVAL '1 day')::timestamptz
-            AND sparte   = $4
-            AND tenant   = $5
-            AND quality NOT IN ('FAULTY', 'UNKNOWN')
-          ON CONFLICT ON CONSTRAINT mbp_tenant_period_unique
-          DO UPDATE
-              SET arbeitsmenge_kwh  = EXCLUDED.arbeitsmenge_kwh,
-                  spitzenleistung_kw = EXCLUDED.spitzenleistung_kw,
-                  quality           = EXCLUDED.quality,
-                  computed_at       = EXCLUDED.computed_at",
-    )
-    .bind(malo_id)
-    .bind(period_from_date)
-    .bind(period_to_date)
-    .bind(sparte_str)
-    .bind(&state.tenant)
-    .execute(state.repo.pool())
-    .await;
-
-    if let Err(e) = recompute_result {
-        tracing::warn!(malo_id, error = %e, "edmd: billing period recompute after direct push failed (non-fatal)");
-    }
+    // No manual recompute here: `store_reads` above already invalidated the
+    // cached `meter_billing_periods` aggregate for the affected window, and
+    // `billing_period()` is read-through — it recomputes from the version-resolved
+    // series on the next read and re-caches. The former raw `SELECT ... FROM
+    // meter_reads` recompute was both broken (that relation is DataFusion-only,
+    // not a Postgres table) and redundant against the read-through model.
 
     // \u2500\u2500 CloudEvent notifications \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     if let Some(ref webhook_url) = state.erp_webhook_url {
@@ -690,7 +675,7 @@ pub(crate) async fn post_direct_reads_inner(
             "id": uuid::Uuid::new_v4().to_string(),
             "time": OffsetDateTime::now_utc().to_string(),
             "subject": malo_id,
-            "tenant": state.tenant,
+            "tenantid": state.tenant,
             "correlationid": correlation_id,
             "causationid": session_id,
             "datacontenttype": "application/json",
@@ -705,7 +690,13 @@ pub(crate) async fn post_direct_reads_inner(
                 "source": source,
             }
         });
-        post_ce_with_retry(&client, webhook_url, &stored_ce).await;
+        post_ce_with_retry(
+            &client,
+            webhook_url,
+            &stored_ce,
+            state.webhook_secret_bytes(),
+        )
+        .await;
 
         // If quality warnings detected, emit de.messwert.reading.quality.warning.
         if quality.has_warnings {
@@ -716,7 +707,7 @@ pub(crate) async fn post_direct_reads_inner(
                 "id": uuid::Uuid::new_v4().to_string(),
                 "time": OffsetDateTime::now_utc().to_string(),
                 "subject": malo_id,
-                "tenant": state.tenant,
+                "tenantid": state.tenant,
                 "correlationid": correlation_id,
                 "causationid": session_id,
                 "datacontenttype": "application/json",
@@ -730,7 +721,7 @@ pub(crate) async fn post_direct_reads_inner(
                     "recommended_action": "Investigate with agentd billing-anomaly-agent or edmd MCP get_lastgang tool",
                 }
             });
-            post_ce_with_retry(&client, webhook_url, &warn_ce).await;
+            post_ce_with_retry(&client, webhook_url, &warn_ce, state.webhook_secret_bytes()).await;
         }
     }
 
@@ -757,11 +748,14 @@ pub(crate) async fn post_direct_reads_inner(
                 "billing_block_count": validation.billing_block_count,
                 "rules":               validation.rules,
             },
-            "billing_period_recomputed": true,
+            // The cached billing-period aggregate for this window was invalidated
+            // on store; it is recomputed lazily on the next read (read-through),
+            // not eagerly here.
+            "billing_period_cache_invalidated": true,
             "note": if quality.has_warnings || !validation.is_clean() {
                 "de.messwert.reading.quality.warning emitted — investigate before billing run"
             } else {
-                "de.messwert.reading.direct.stored emitted — billing period recomputed"
+                "de.messwert.reading.direct.stored emitted — billing period cache invalidated (read-through recompute)"
             },
         })),
     )
@@ -792,7 +786,7 @@ mod ingest_contract_tests {
             let parsed = quality_flag_from_wire(value)
                 .unwrap_or_else(|| panic!("`{value}` is in the column CHECK but is not accepted"));
             assert_eq!(
-                crate::pg::timeseries::quality_to_str(parsed),
+                parsed.as_str(),
                 value,
                 "`{value}` must round-trip to the same spelling the column stores"
             );
@@ -887,7 +881,7 @@ pub async fn post_corrections(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Path(malo_id): Path<String>,
-    Json(req): Json<mako_edm::domain::CorrectionRequest>,
+    Json(req): Json<crate::domain::CorrectionRequest>,
 ) -> impl IntoResponse {
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "write-timeseries", resource_tenant) {
@@ -963,7 +957,7 @@ pub async fn post_corrections(
             );
             (
                 axum::http::StatusCode::OK,
-                Json(mako_edm::domain::CorrectionResponse {
+                Json(crate::domain::CorrectionResponse {
                     corrected_count: count,
                     correction_ids,
                 }),

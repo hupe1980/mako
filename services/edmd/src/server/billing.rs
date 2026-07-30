@@ -104,7 +104,7 @@ pub(crate) async fn get_imbalance(
         .await
     {
         Ok(report) => Json(serde_json::to_value(report).unwrap_or_default()).into_response(),
-        Err(mako_edm::error::EdmError::NoData { .. }) => {
+        Err(crate::domain::error::EdmError::NoData { .. }) => {
             (StatusCode::NOT_FOUND, "no data for this MaLo / period").into_response()
         }
         Err(err) => {
@@ -236,6 +236,10 @@ pub(crate) struct BillingPeriodsParams {
     to: Option<String>,
     /// Optional tenant filter — overrides the instance tenant when set.
     tenant: Option<String>,
+    /// Max rows to return (default 1000, hard cap 5000). The collection is a
+    /// discovery surface, so it is always bounded — an unbounded scan of a
+    /// tenant's whole billing-period cache is never returned.
+    limit: Option<i64>,
 }
 
 pub(crate) async fn list_billing_periods(
@@ -283,6 +287,7 @@ pub(crate) async fn list_billing_periods(
         .and_then(|s| time::Date::parse(s, fmt).ok())
         .unwrap_or(time::Date::MAX);
 
+    let limit = params.limit.unwrap_or(1000).clamp(1, 5000);
     let pool = state.repo.pool();
     let rows = sqlx::query(
         r"SELECT malo_id, messtyp, sparte, period_from, period_to
@@ -290,11 +295,13 @@ pub(crate) async fn list_billing_periods(
           WHERE period_from >= $1
             AND period_to   <= $2
             AND tenant       = $3
-          ORDER BY malo_id, period_from",
+          ORDER BY malo_id, period_from
+          LIMIT $4",
     )
     .bind(from_date)
     .bind(to_date)
     .bind(&tenant)
+    .bind(limit)
     .fetch_all(pool)
     .await;
 

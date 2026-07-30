@@ -43,8 +43,9 @@ pub struct SubstituteRequest {
 ///
 /// The two vocabularies were never reconciled: `ForecastMethod` describes *how*
 /// a value was derived, the CHECK list describes § 60 Abs. 2 MsbG substitution
-/// categories. Methods with no §17 category map to `LinearInterpolation`, the
-/// closest admissible description, rather than failing the write.
+/// categories. Methods with no § 60 Abs. 2 MsbG category map to
+/// `LinearInterpolation`, the closest admissible description, rather than failing
+/// the write.
 pub(crate) fn forecast_method_to_db(method: metering::ForecastMethod) -> &'static str {
     use metering::ForecastMethod as F;
     match method {
@@ -84,7 +85,7 @@ pub async fn post_substitute_values(
             .into_response();
     }
 
-    run_substitute_values(state.repo.pool(), &state.tenant, &malo_id, &req).await
+    run_substitute_values(&state.repo, &state.tenant, &malo_id, &req).await
 }
 
 /// Core of the § 60 Abs. 2 MsbG substitute flow.
@@ -93,11 +94,13 @@ pub async fn post_substitute_values(
 /// so both write substitutes under identical guards: never over a billable
 /// reading, always with a `substitute_value_log` audit row, atomically.
 pub(crate) async fn run_substitute_values(
-    pool: &sqlx::PgPool,
+    repo: &crate::store::MeterStoreTimeSeriesRepository,
     tenant: &str,
     malo_id: &str,
     req: &SubstituteRequest,
 ) -> axum::response::Response {
+    use crate::domain::repository::TimeSeriesRepository as _;
+    use crate::domain::{IngestionSource, MeterRead, TimeSeriesQuery};
     use metering::{MeterInterval, QualityFlag, SubstituteMethod};
     use time::format_description::well_known::Rfc3339;
 
@@ -156,68 +159,57 @@ pub(crate) async fn run_substitute_values(
         }
     };
 
-    // Fetch prior-period reference data
+    // Read the MaLo's existing intervals across the reference + gap + trailing
+    // window through the repository. meterstore owns the readings; `query` is
+    // version-resolved and tenant-scoped and returns only billable qualities, so a
+    // Faulty/Unknown slot reads as a gap — exactly what a § 60 Abs. 2 Ersatzwert
+    // may fill.
     let prior_from = gap_from - time::Duration::days(prior_days);
-    let prior_reads = sqlx::query(
-        r"SELECT dtm_from, dtm_to, quantity_kwh, quality
-          FROM meter_reads
-          WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3
-            AND quality IN ('MEASURED','ESTIMATED','CALCULATED')
-            AND tenant = $4
-          ORDER BY dtm_from ASC LIMIT 10000",
-    )
-    .bind(malo_id)
-    .bind(prior_from)
-    .bind(gap_from)
-    .bind(tenant)
-    .fetch_all(pool)
-    .await;
-
-    let prior_intervals: Vec<MeterInterval> = match prior_reads {
-        Ok(rows) => {
-            use sqlx::Row;
-            rows.iter()
-                .filter_map(|r| {
-                    // 0010: quantity_kwh is NUMERIC(18,5) — read as Decimal directly.
-                    let qty: rust_decimal::Decimal = r.try_get("quantity_kwh").ok()?;
-                    let quality_str: &str = r.try_get("quality").ok()?;
-                    let quality = match quality_str {
-                        "MEASURED" => QualityFlag::Measured,
-                        "ESTIMATED" => QualityFlag::Estimated,
-                        _ => QualityFlag::Calculated,
-                    };
-                    Some(MeterInterval {
-                        from: r.try_get("dtm_from").ok()?,
-                        to: r.try_get("dtm_to").ok()?,
-                        value_kwh: qty,
-                        quality,
-                        obis_code: None,
-                    })
-                })
-                .collect()
-        }
+    let existing = match repo
+        .query(&TimeSeriesQuery {
+            malo_id: malo_id.to_string(),
+            from: prior_from,
+            to: gap_to + time::Duration::days(prior_days),
+            sparte: None,
+            tenant: tenant.to_string(),
+        })
+        .await
+    {
+        Ok(reads) => reads,
         Err(e) => {
-            tracing::warn!(error = %e, malo_id, "edmd: substitute prior-period fetch failed");
+            tracing::warn!(error = %e, malo_id, "edmd: substitute reference read failed");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
 
-    // Values bracketing the gap. Linear interpolation needs both ends to have a
-    // slope to follow; the other strategies use only the leading value.
+    // Prior-period reference: billable reads strictly before the gap.
+    let prior_intervals: Vec<MeterInterval> = existing
+        .iter()
+        .filter(|r| r.dtm_from >= prior_from && r.dtm_to <= gap_from)
+        .map(|r| MeterInterval {
+            from: r.dtm_from,
+            to: r.dtm_to,
+            value_kwh: r.quantity_kwh,
+            quality: r.quality,
+            obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
+        })
+        .collect();
+
+    // Slots inside the gap window that already carry a billable reading: a
+    // substitute must never overwrite a real measurement (§ 60 Abs. 2 MsbG).
+    let billable_slots: std::collections::HashSet<OffsetDateTime> = existing
+        .iter()
+        .filter(|r| r.dtm_from >= gap_from && r.dtm_from < gap_to)
+        .map(|r| r.dtm_from)
+        .collect();
+
+    // Values bracketing the gap; interpolation needs a leading and a trailing one.
     let last_known = prior_intervals.last().map(|iv| iv.value_kwh);
-    let next_known: Option<rust_decimal::Decimal> = sqlx::query_scalar(
-        r"SELECT quantity_kwh FROM meter_reads
-          WHERE malo_id = $1 AND tenant = $2 AND dtm_from >= $3
-            AND quality IN ('MEASURED','ESTIMATED','CALCULATED')
-          ORDER BY dtm_from ASC LIMIT 1",
-    )
-    .bind(malo_id)
-    .bind(tenant)
-    .bind(gap_to)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+    let next_known: Option<rust_decimal::Decimal> = existing
+        .iter()
+        .filter(|r| r.dtm_from >= gap_to)
+        .min_by_key(|r| r.dtm_from)
+        .map(|r| r.quantity_kwh);
 
     // Generate substitute values
     let substitute_entries = metering::substitute_values(
@@ -254,32 +246,24 @@ pub(crate) async fn run_substitute_values(
         _ => metering::interval::Sparte::Strom,
     };
 
+    let reason_str = req
+        .reason
+        .as_deref()
+        .unwrap_or("NoMeasurementAvailable")
+        .to_owned();
     let mut stored = 0usize;
     let mut log_entries: Vec<serde_json::Value> = Vec::new();
     // Intervals left alone because they already carry a billable reading.
     let mut skipped: Vec<String> = Vec::new();
-
-    // Every interval's reading and its § 60 Abs. 6 MsbG audit row commit together. As
-    // two independent statements, a failure part-way left billable SUBSTITUTED
-    // values in `meter_reads` with no record of who substituted them or why.
-    let mut tx = match pool.begin().await {
-        Ok(tx) => tx,
-        Err(e) => {
-            tracing::error!(malo_id = %malo_id, error = %e, "edmd: substitute transaction failed to begin");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
-
-    // Normalised once, the same way `store_reads` does it, so the substitute
-    // lands on the register it stands in for rather than on the empty key.
-    let obis_norm: String = req.obis_code.as_deref().map_or_else(String::new, |c| {
-        c.parse::<metering::obis::ObisCode>()
-            .map_or_else(|_| c.to_owned(), |p| p.to_string())
-    });
+    // The substitute readings to append, and their per-interval audit tuples
+    // (from, to, method, substitute_kwh).
+    let mut substitute_reads: Vec<MeterRead> = Vec::new();
+    let mut audit: Vec<(
+        OffsetDateTime,
+        OffsetDateTime,
+        &'static str,
+        rust_decimal::Decimal,
+    )> = Vec::new();
 
     // The same V01–V10 pass every ingest path runs: engine-generated values
     // are still stored values, and an Ersatzwert derived from anomalous prior
@@ -327,95 +311,100 @@ pub(crate) async fn run_substitute_values(
 
     for (entry_idx, entry) in substitute_entries.iter().enumerate() {
         let iv = &entry.interval;
-        // `entry.method` is a `ForecastMethod`, whose Debug names (e.g.
-        // `PriorPeriodSameSlot`) are not the vocabulary the
-        // `substitute_value_log.method` CHECK accepts. Writing the Debug form
-        // failed the CHECK on the default code path, so the audit INSERT errored
-        // *after* the billable substitute had already been committed to
-        // `meter_reads` — a §17 Ersatzwert with no §22 audit record.
+        // A § 60 Abs. 2 MsbG Ersatzwert fills a gap; it never overwrites a real
+        // measurement. A slot already carrying a billable reading is left untouched
+        // and reported as skipped.
+        if billable_slots.contains(&iv.from) {
+            skipped.push(iv.from.format(&Rfc3339).unwrap_or_default());
+            continue;
+        }
+        // `entry.method` is a `ForecastMethod`; `forecast_method_to_db` maps it to
+        // the vocabulary the `substitute_value_log.method` CHECK accepts.
         let method_str = forecast_method_to_db(entry.method);
-        let reason_str = req.reason.as_deref().unwrap_or("NoMeasurementAvailable");
+        substitute_reads.push(MeterRead {
+            malo_id: malo_id.to_string(),
+            melo_id: None,
+            dtm_from: iv.from,
+            dtm_to: iv.to,
+            quantity_kwh: iv.value_kwh,
+            quality: QualityFlag::Substituted,
+            pid: 0,
+            sparte,
+            obis_code: req.obis_code.clone(),
+            tenant: tenant.to_string(),
+            source: IngestionSource::AutoSubstitute,
+            push_session: None,
+            quality_warnings: substitute_warnings.get(&entry_idx).cloned(),
+            sender_mp_id: None,
+            allocation_version: "INITIAL".to_owned(),
+            valid_from_tx: None,
+        });
+        audit.push((iv.from, iv.to, method_str, iv.value_kwh));
+        stored += 1;
+        log_entries.push(serde_json::json!({
+            "from": iv.from,
+            "to": iv.to,
+            "value_kwh": iv.value_kwh.to_string(),
+            "method": method_str,
+            "reference_count": entry.reference_count,
+            "confidence_note": entry.confidence_note,
+        }));
+    }
 
-        // Upsert into meter_reads.
-        //
-        // The `WHERE` on the conflict action is what keeps a substitution from
-        // destroying a real reading: § 60 Abs. 2 MsbG authorises an Ersatzwert where
-        // no usable measurement exists, not in place of one. A window that
-        // overlaps billable data leaves that data untouched and reports the
-        // interval as skipped.
-        // The CTE snapshots the value being replaced before the upsert runs, so
-        // `substitute_value_log.original_kwh` records what was actually there.
-        // Without it the § 60 Abs. 6 MsbG trail says a substitute was written but not
-        // what it displaced.
-        let upserted = sqlx::query(
-            r"WITH prior AS (
-                  SELECT quantity_kwh
-                  FROM meter_reads
-                  WHERE tenant = $7 AND malo_id = $1
-                    AND dtm_from = $2 AND obis_code_norm = $9
-              )
-              INSERT INTO meter_reads
-                (malo_id, dtm_from, dtm_to, quantity_kwh, quality, pid, sparte, unit,
-                 obis_code, obis_code_norm, source, tenant, quality_warnings)
-              VALUES ($1, $2, $3, $4, 'SUBSTITUTED', 0, $5, $6, $8, $9, 'AUTO_SUBSTITUTE', $7, $10)
-              ON CONFLICT (tenant, malo_id, dtm_from, obis_code_norm) DO UPDATE
-                SET quantity_kwh = EXCLUDED.quantity_kwh,
-                    quality = EXCLUDED.quality,
-                    source = EXCLUDED.source,
-                    quality_warnings = EXCLUDED.quality_warnings,
-                    archived = false
-                WHERE meter_reads.quality IN ('FAULTY', 'UNKNOWN')
-              RETURNING (SELECT quantity_kwh FROM prior) AS original_kwh",
+    if substitute_reads.is_empty() {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "malo_id": malo_id,
+                "generated_count": 0,
+                "skipped_measured": skipped,
+                "message": "every interval in the window already carries a billable reading",
+            })),
         )
-        .bind(malo_id)
-        .bind(iv.from)
-        .bind(iv.to)
-        .bind(iv.value_kwh)
-        .bind(sparte.as_str())
-        .bind(sparte.billing_unit().as_str())
-        .bind(tenant)
-        .bind(req.obis_code.as_deref())
-        .bind(&obis_norm)
-        .bind(substitute_warnings.get(&entry_idx))
-        .fetch_optional(&mut *tx)
-        .await;
+            .into_response();
+    }
 
-        let original_kwh: Option<rust_decimal::Decimal> = match upserted {
-            Err(e) => {
-                tracing::error!(malo_id = %malo_id, error = %e, "edmd: substitute upsert failed");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({ "error": e.to_string() })),
-                )
-                    .into_response();
-            }
-            // No row returned: the conflict action declined because a billable
-            // reading already covers this interval.
-            Ok(None) => {
-                skipped.push(iv.from.format(&Rfc3339).unwrap_or_default());
-                continue;
-            }
-            Ok(Some(row)) => {
-                use sqlx::Row as _;
-                row.try_get("original_kwh").ok().flatten()
-            }
-        };
+    // Persist through the repository. meterstore's `append` routes each interval to
+    // the tier that owns it, opens the § 60 Abs. 2 MsbG confirmation obligation
+    // (so an operator is later nudged to replace the estimate with a real value),
+    // and writes the § 60 Abs. 6 MsbG displacement audit — none of which the old
+    // raw upsert did.
+    if let Err(e) = repo.store_reads(&substitute_reads).await {
+        tracing::error!(malo_id = %malo_id, error = %e, "edmd: substitute store failed");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
 
-        // § 60 Abs. 6 MsbG audit trail: which value was replaced, by what method, on
-        // whose authority.
+    // The per-interval method/reason audit row. `original_kwh` is NULL: a
+    // substitute is written only where no billable reading existed, so there was no
+    // usable prior value to record.
+    let mut tx = match repo.pool().begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            tracing::error!(malo_id = %malo_id, error = %e, "edmd: substitute audit tx failed to begin");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+    for (from, to, method_str, kwh) in &audit {
         if let Err(e) = sqlx::query(
             r"INSERT INTO substitute_value_log
                 (malo_id, dtm_from, dtm_to, method, reason, substitute_kwh,
                  original_kwh, created_by, tenant)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+              VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8)",
         )
         .bind(malo_id)
-        .bind(iv.from)
-        .bind(iv.to)
+        .bind(from)
+        .bind(to)
         .bind(method_str)
-        .bind(reason_str)
-        .bind(iv.value_kwh)
-        .bind(original_kwh)
+        .bind(&reason_str)
+        .bind(kwh)
         .bind(operator_id)
         .bind(tenant)
         .execute(&mut *tx)
@@ -428,16 +417,6 @@ pub(crate) async fn run_substitute_values(
             )
                 .into_response();
         }
-
-        stored += 1;
-        log_entries.push(serde_json::json!({
-            "from": iv.from,
-            "to": iv.to,
-            "value_kwh": iv.value_kwh.to_string(),
-            "method": method_str,
-            "reference_count": entry.reference_count,
-            "confidence_note": entry.confidence_note,
-        }));
     }
 
     if let Err(e) = tx.commit().await {
@@ -474,7 +453,7 @@ pub(crate) async fn run_substitute_values(
             // Intervals already covered by a billable reading; § 60 Abs. 2 MsbG
             // authorises a substitute only where no measurement exists.
             "skipped_measured": skipped,
-            "legal_basis": "§ 60 Abs. 2 MsbG Abs. 2 Ersatzwertbildung",
+            "legal_basis": "§ 60 Abs. 2 MsbG Ersatzwertbildung",
             "intervals": log_entries,
         })),
     )

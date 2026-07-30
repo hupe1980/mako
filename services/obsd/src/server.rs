@@ -14,7 +14,6 @@ use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::{Claims, OidcVerifier};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
-use sqlx::PgPool;
 use time::OffsetDateTime;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
@@ -319,7 +318,8 @@ pub struct RunConfig {
     pub outbound_secret: Option<SecretString>,
     /// Background sweep-worker tuning.
     pub worker: crate::config::WorkerConfig,
-    pub db_pool_size: u32,
+    /// Database pool tuning (pool size, timeouts, `application_name`).
+    pub db: crate::config::DatabaseConfig,
     /// Tenant identifier — used as Cedar resource_tenant.
     pub tenant: String,
     /// All operator MP-IDs for §20 EnWG `initiator_is_affiliate` detection.
@@ -337,12 +337,10 @@ pub struct RunConfig {
 }
 
 pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
-    let pool = PgPool::connect_with(
-        cfg.database_url
-            .expose_secret()
-            .parse::<sqlx::postgres::PgConnectOptions>()?,
-    )
-    .await?;
+    let pool = cfg
+        .db
+        .connect(cfg.database_url.expose_secret(), "obsd")
+        .await?;
 
     sqlx::migrate!("./migrations")
         .run(&pool)

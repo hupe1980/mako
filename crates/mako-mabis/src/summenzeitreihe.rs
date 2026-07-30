@@ -49,9 +49,9 @@ use time::{Duration, OffsetDateTime};
 /// The quarter-hourly slot length MaBiS settles electricity on.
 pub const MABIS_SLOT: Duration = Duration::minutes(15);
 
-// Re-export canonical topology ID types from mako-edm (single source of truth)
-pub use mako_edm::BilanzierungsgebietId;
-pub use mako_edm::BilanzkreisId;
+// Re-export the topology ID types (defined in `crate::ids`).
+pub use crate::ids::BilanzierungsgebietId;
+pub use crate::ids::BilanzkreisId;
 
 // ── Interval aggregation ──────────────────────────────────────────────────────
 

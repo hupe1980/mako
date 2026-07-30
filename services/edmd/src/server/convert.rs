@@ -1,20 +1,8 @@
-//! Type conversions between `metering`, `mako-edm` and BO4E representations.
+//! Conversions from `edmd`'s domain types (`MeterRead`, `Sparte`, `QualityFlag`)
+//! to their BO4E representations for API responses and Zeitreihen export.
 
 #[allow(unused_imports)]
 use super::*;
-
-/// Map the `metering` Sparte onto the `mako-edm` domain Sparte.
-///
-/// The two enums carry the same variants; they are separate types because
-/// `metering` is I/O-free and `mako-edm` is the persistence-facing model.
-pub(crate) const fn edm_sparte_from_metering(s: metering::interval::Sparte) -> EdmSparte {
-    match s {
-        metering::interval::Sparte::Strom => EdmSparte::Strom,
-        metering::interval::Sparte::Gas => EdmSparte::Gas,
-        metering::interval::Sparte::Waerme => EdmSparte::Waerme,
-        metering::interval::Sparte::Wasser => EdmSparte::Wasser,
-    }
-}
 
 /// Convert an `edm::Sparte` to the BO4E `Sparte` enum.
 pub(crate) fn edm_sparte_to_bo4e(s: EdmSparte) -> Bo4eSparte {
@@ -64,7 +52,7 @@ pub(crate) fn quality_to_messwertstatus(q: QualityFlag) -> Messwertstatus {
 /// communicates per register per interval.
 ///
 /// All timestamps are UTC (`startuhrzeit`/`enduhrzeit` format `HH:MM:SS+00:00`).
-pub(crate) fn read_to_energiemenge(r: &mako_edm::domain::MeterRead) -> Energiemenge {
+pub(crate) fn read_to_energiemenge(r: &crate::domain::MeterRead) -> Energiemenge {
     fn fmt_uhrzeit(dt: OffsetDateTime) -> String {
         format!(
             "{:02}:{:02}:{:02}+00:00",
@@ -95,7 +83,7 @@ pub(crate) fn read_to_energiemenge(r: &mako_edm::domain::MeterRead) -> Energieme
 ///
 /// Timestamps are in UTC; `startuhrzeit`/`enduhrzeit` are formatted as
 /// `HH:MM:SS+00:00` per Allgemeine Festlegungen V6.1d §3.
-pub(crate) fn read_to_zeitreihenwert(r: &mako_edm::domain::MeterRead) -> Zeitreihenwert {
+pub(crate) fn read_to_zeitreihenwert(r: &crate::domain::MeterRead) -> Zeitreihenwert {
     fn fmt_uhrzeit(dt: OffsetDateTime) -> String {
         format!(
             "{:02}:{:02}:{:02}+00:00",

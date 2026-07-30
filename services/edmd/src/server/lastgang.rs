@@ -69,13 +69,28 @@ pub(crate) async fn get_lastgang(
         .unwrap_or_else(OffsetDateTime::now_utc);
 
     // ── Bitemporal query: ?as_of= (§ 60 Abs. 6 MsbG point-in-time reconstruction) ──
-    // When `as_of` is set, undo any corrections applied AFTER that timestamp.
-    // This allows invoice auditors to reconstruct the exact billing basis at
-    // any historical point in time.
-    let as_of_ts = params
-        .as_of
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok());
+    // When `as_of` is set, the read is served through meterstore's transaction-time
+    // axis (`as_known_at`): version resolution runs under a `recorded_at` ceiling,
+    // so the value returned is the one that was in force at that instant — a
+    // correction delivered later, and an interval first stored later, are both
+    // invisible. A malformed timestamp is rejected rather than silently returning
+    // current values, which for a settlement auditor would be a wrong answer
+    // dressed as the right one.
+    let as_of_ts = match params.as_of.as_deref() {
+        None => None,
+        Some(s) => match OffsetDateTime::parse(s, &Rfc3339) {
+            Ok(ts) => Some(ts),
+            Err(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("invalid as_of timestamp {s:?}; expected RFC 3339")
+                    })),
+                )
+                    .into_response();
+            }
+        },
+    };
 
     let q = TimeSeriesQuery {
         malo_id: malo_id.clone(),
@@ -85,81 +100,17 @@ pub(crate) async fn get_lastgang(
         tenant: state.tenant.clone(),
     };
 
-    let mut reads = match state.repo.query(&q).await {
+    let read_result = match as_of_ts {
+        Some(as_of) => state.repo.query_as_of(&q, as_of).await,
+        None => state.repo.query(&q).await,
+    };
+    let reads = match read_result {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, malo_id, "edmd: get_lastgang query failed");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
-
-    // Apply bitemporal overlay: for any read that was corrected AFTER `as_of`,
-    // restore the original pre-correction value from `meter_read_corrections`.
-    #[allow(clippy::collapsible_if)]
-    if let Some(as_of) = as_of_ts {
-        if let Ok(corrections) = sqlx::query(
-            // Keyed on the register as well as the timestamp: a MaLo may carry
-            // several OBIS codes at one instant, and restoring by timestamp
-            // alone would apply one register's prior value to all of them.
-            r"SELECT DISTINCT ON (malo_id, dtm_from, obis_code_norm)
-                  malo_id, dtm_from, dtm_to, obis_code_norm,
-                  original_kwh, original_quality
-              FROM meter_read_corrections
-              WHERE malo_id = $1
-                AND dtm_from >= $2
-                AND dtm_to   <= $3
-                AND corrected_at > $4
-                AND tenant   = $5
-              ORDER BY malo_id, dtm_from, obis_code_norm, corrected_at ASC",
-        )
-        .bind(&malo_id)
-        .bind(from)
-        .bind(to)
-        .bind(as_of)
-        .bind(&state.tenant)
-        .fetch_all(state.repo.pool())
-        .await
-        {
-            use sqlx::Row;
-            for corr in &corrections {
-                let dtm_from: OffsetDateTime = corr
-                    .try_get("dtm_from")
-                    .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-                let dtm_to: OffsetDateTime =
-                    corr.try_get("dtm_to").unwrap_or(OffsetDateTime::UNIX_EPOCH);
-                // `original_kwh` is NUMERIC(18,5), so it reads as `Decimal`.
-                let orig_kwh: Option<rust_decimal::Decimal> = corr.try_get("original_kwh").ok();
-                let corr_obis: String = corr.try_get("obis_code_norm").unwrap_or_default();
-                let orig_quality: &str = corr.try_get("original_quality").unwrap_or("MEASURED");
-
-                // Restore original values in the reads slice
-                for read in reads.iter_mut() {
-                    let read_obis = read.obis_code.clone().unwrap_or_default();
-                    if read.dtm_from == dtm_from && read.dtm_to == dtm_to && read_obis == corr_obis
-                    {
-                        if let Some(kwh) = orig_kwh {
-                            read.quantity_kwh = kwh;
-                        }
-                        read.quality = match orig_quality {
-                            "MEASURED" => mako_edm::domain::QualityFlag::Measured,
-                            "ESTIMATED" => mako_edm::domain::QualityFlag::Estimated,
-                            "SUBSTITUTED" => mako_edm::domain::QualityFlag::Substituted,
-                            "CALCULATED" => mako_edm::domain::QualityFlag::Calculated,
-                            "CORRECTED" => mako_edm::domain::QualityFlag::Corrected,
-                            "PRELIMINARY" => mako_edm::domain::QualityFlag::Preliminary,
-                            "FAULTY" => mako_edm::domain::QualityFlag::Faulty,
-                            _ => mako_edm::domain::QualityFlag::Unknown,
-                        };
-                    }
-                }
-            }
-            tracing::debug!(
-                malo_id, as_of = %as_of,
-                corrections_applied = corrections.len(),
-                "edmd: bitemporal overlay applied for as_of query"
-            );
-        }
-    }
 
     if reads.is_empty() {
         return (
@@ -262,7 +213,7 @@ pub(crate) fn request_wants_arrow(headers: &axum::http::HeaderMap) -> bool {
 ///
 /// Callers that receive `Content-Type: application/vnd.apache.arrow.stream`
 /// can read the result with any Arrow library (DuckDB, Polars, PyArrow, etc.).
-pub(crate) fn reads_to_arrow_ipc(reads: &[mako_edm::domain::MeterRead]) -> anyhow::Result<Vec<u8>> {
+pub(crate) fn reads_to_arrow_ipc(reads: &[crate::domain::MeterRead]) -> anyhow::Result<Vec<u8>> {
     use arrow::array::{
         Float64Array, Int32Array, StringArray, StringBuilder, TimestampMicrosecondArray,
     };
@@ -470,6 +421,24 @@ pub(crate) async fn get_zeitreihe(
         .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
         .unwrap_or_else(OffsetDateTime::now_utc);
 
+    // Same transaction-time semantics as `get_lastgang`: an `?as_of=` reads
+    // through meterstore's `recorded_at` ceiling, a malformed one is rejected.
+    let as_of_ts = match params.as_of.as_deref() {
+        None => None,
+        Some(s) => match OffsetDateTime::parse(s, &Rfc3339) {
+            Ok(ts) => Some(ts),
+            Err(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("invalid as_of timestamp {s:?}; expected RFC 3339")
+                    })),
+                )
+                    .into_response();
+            }
+        },
+    };
+
     let q = TimeSeriesQuery {
         malo_id: malo_id.clone(),
         from,
@@ -478,7 +447,11 @@ pub(crate) async fn get_zeitreihe(
         tenant: state.tenant.clone(),
     };
 
-    let reads = match state.repo.query(&q).await {
+    let read_result = match as_of_ts {
+        Some(as_of) => state.repo.query_as_of(&q, as_of).await,
+        None => state.repo.query(&q).await,
+    };
+    let reads = match read_result {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(error = %e, malo_id, "edmd: get_zeitreihe query failed");
@@ -652,8 +625,8 @@ pub(crate) async fn get_lastgang_resampled(
             .into_response();
     }
 
-    // Convert MeterRead → MeterInterval (metering crate)
-    // QualityFlag is now the same type — mako-edm re-exports metering::QualityFlag.
+    // Convert MeterRead → MeterInterval (metering crate). `QualityFlag` is the
+    // same type on both sides — `edmd::domain` re-exports `metering::QualityFlag`.
     let intervals: Vec<metering::MeterInterval> = reads
         .iter()
         .map(|r| metering::MeterInterval {
@@ -661,7 +634,7 @@ pub(crate) async fn get_lastgang_resampled(
             to: r.dtm_to,
             value_kwh: r.quantity_kwh,
             quality: r.quality,
-            obis_code: r.obis_code.clone(),
+            obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
         })
         .collect();
 
@@ -761,7 +734,7 @@ pub(crate) async fn get_summenzeitreihe(
             to: r.dtm_to,
             value_kwh: r.quantity_kwh,
             quality: r.quality,
-            obis_code: r.obis_code.clone(),
+            obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
         })
         .collect();
 

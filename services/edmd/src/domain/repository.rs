@@ -3,19 +3,20 @@
 use rust_decimal::Decimal;
 use time::Date;
 
-use crate::{
-    domain::{
-        BillingPeriodQuery, ImbalanceReport, MeterBillingPeriod, MeterDataReceipt, MeterRead,
-        TimeSeriesQuery, Typ2Read,
-    },
-    error::EdmError,
+use crate::domain::{
+    BillingPeriodQuery, ImbalanceReport, MeterBillingPeriod, MeterDataReceipt, MeterRead,
+    TimeSeriesQuery, Typ2Read, error::EdmError,
 };
 
 /// Persistent store for MSCONS meter data receipts and typed reads.
 ///
-/// **Production backend**: PostgreSQL, natively RANGE-partitioned by month on
-/// `dtm_from` (see `services/edmd/migrations/0001_schema.sql`).
-/// **Test backend**: [`crate::testing::InMemoryTimeSeriesRepository`].
+/// **Backend**: [`MeterStoreTimeSeriesRepository`], a `meterstore` hot/cold tier
+/// (PostgreSQL for the recent window, Apache Iceberg for the settled history) for
+/// the readings, plus edmd's own `PgPool` for the business tables. Tests exercise
+/// the same backend against real PostgreSQL and a filesystem Iceberg warehouse via
+/// testcontainers (see `services/edmd/tests/meterstore_integration.rs`).
+///
+/// [`MeterStoreTimeSeriesRepository`]: crate::store::MeterStoreTimeSeriesRepository
 pub trait TimeSeriesRepository: Send + Sync + 'static {
     /// Record that MSCONS data was received for a MaLo.
     ///

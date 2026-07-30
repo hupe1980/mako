@@ -87,6 +87,7 @@
 
 pub mod bilanzkreisabrechnung;
 pub mod clearingliste;
+pub mod ids;
 pub mod summenzeitreihe;
 
 pub use bilanzkreisabrechnung::{
@@ -99,8 +100,8 @@ pub use clearingliste::{
     ClearinglisteKind, ClearinglisteState, MabisClearinglisteWorkflow,
     WORKFLOW_NAME as CLEARINGLISTE_WORKFLOW_NAME,
 };
-// Re-export canonical topology IDs from mako-edm (single source of truth).
-pub use mako_edm::{BilanzierungsgebietId, BilanzkreisId};
+// Canonical balance-group topology IDs (defined in `ids`).
+pub use ids::{BilanzierungsgebietId, BilanzkreisId};
 pub use summenzeitreihe::{
     MABIS_SLOT, SlotResolutionError, SumInterval, Summenzeitreihe, SummenzeitreiheBuilder,
 };

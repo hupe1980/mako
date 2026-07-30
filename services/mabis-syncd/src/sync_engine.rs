@@ -8,8 +8,8 @@
 //! 5. Persist run status to PostgreSQL
 
 use anyhow::{Context, Result};
-use mako_edm::BilanzierungsgebietId;
 use mako_engine::types::Pruefidentifikator;
+use mako_mabis::BilanzierungsgebietId;
 use mako_mabis::{Summenzeitreihe, SummenzeitreiheBuilder};
 use rust_decimal::Decimal;
 use time::{Date, Duration, OffsetDateTime};
@@ -283,7 +283,7 @@ impl SyncEngine {
             "mabis-syncd: discovered MaLos for aggregation"
         );
 
-        let by_gebiet = self.resolve_bilanzierungsgebiete(&malo_ids).await;
+        let (by_gebiet, missing_gebiet) = self.resolve_bilanzierungsgebiete(&malo_ids).await;
         info!(
             gebiet_count = by_gebiet.len(),
             "mabis-syncd: MaLos grouped by Bilanzierungsgebiet"
@@ -292,7 +292,10 @@ impl SyncEngine {
         // MaLos excluded from the aggregate, by reason. A Summenzeitreihe missing
         // a MaLo's energy is indistinguishable from a correct one once the BIKO
         // has acked it, so the run fails rather than filing a short submission.
-        let mut excluded: Vec<String> = Vec::new();
+        let mut excluded: Vec<String> = missing_gebiet
+            .into_iter()
+            .map(|m| format!("{m}: no Bilanzierungsgebiet in marktd master data"))
+            .collect();
 
         let mut series: Vec<Summenzeitreihe> = Vec::with_capacity(by_gebiet.len());
         for (gebiet, gebiet_malos) in &by_gebiet {
@@ -390,13 +393,17 @@ impl SyncEngine {
     /// territory is reported rather than silently folded into the configured
     /// fallback — misfiling energy into the wrong zone is a settlement error the
     /// BIKO cannot detect.
+    /// Returns the per-Bilanzierungsgebiet grouping plus the MaLos whose master
+    /// data names **no** territory — those must be excluded and the run failed,
+    /// never folded into a fallback zone (misfiling energy the BIKO cannot detect).
     async fn resolve_bilanzierungsgebiete(
         &self,
         malo_ids: &[String],
-    ) -> std::collections::BTreeMap<String, Vec<String>> {
+    ) -> (std::collections::BTreeMap<String, Vec<String>>, Vec<String>) {
         use std::collections::BTreeMap;
         let cfg = &self.cfg;
         let mut by_gebiet: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut missing_gebiet: Vec<String> = Vec::new();
 
         for malo_id in malo_ids {
             let url = format!("{}/api/v1/malo/{malo_id}", cfg.marktd.url);
@@ -425,17 +432,19 @@ impl SyncEngine {
                 }
             };
 
-            let key = gebiet.unwrap_or_else(|| {
-                warn!(
-                    malo_id,
-                    fallback = %cfg.identity.bilanzierungsgebiet_id,
-                    "mabis-syncd: MaLo has no Bilanzierungsgebiet in marktd — using configured fallback"
-                );
-                cfg.identity.bilanzierungsgebiet_id.clone()
-            });
-            by_gebiet.entry(key).or_default().push(malo_id.clone());
+            match gebiet {
+                Some(key) => by_gebiet.entry(key).or_default().push(malo_id.clone()),
+                None => {
+                    warn!(
+                        malo_id,
+                        "mabis-syncd: MaLo has no Bilanzierungsgebiet in marktd — excluded from \
+                         the run rather than misfiled into a fallback zone"
+                    );
+                    missing_gebiet.push(malo_id.clone());
+                }
+            }
         }
-        by_gebiet
+        (by_gebiet, missing_gebiet)
     }
 
     /// Discover MaLo IDs from edmd billing periods for the given time window.
@@ -596,7 +605,10 @@ impl SyncEngine {
 
         let mut intervals: Vec<metering::MeterInterval> = Vec::new();
         for lastgang in lastgaenge {
-            let obis = lastgang["obisKennzahl"].as_str().map(str::to_owned);
+            // metering 0.16 types OBIS as `ObisCode`; parse and drop an unparseable code.
+            let obis = lastgang["obisKennzahl"]
+                .as_str()
+                .and_then(|s| metering::ObisCode::parse(s).ok());
             for wert in lastgang["werte"].as_array().into_iter().flatten() {
                 let zeitraum = &wert["zeitraum"];
                 let from =
@@ -613,7 +625,7 @@ impl SyncEngine {
                     to,
                     value_kwh,
                     quality: Self::messwertstatus_to_quality(wert["status"].as_str()),
-                    obis_code: obis.clone(),
+                    obis_code: obis,
                 });
             }
         }

@@ -121,18 +121,20 @@ async fn main() -> anyhow::Result<()> {
         webhook_url: cfg.subscription.webhook_url,
         webhook_secret,
         inbound_secret,
-        db_pool_size: cfg.database.pool_size,
+        db: cfg.database,
         tenant: cfg.identity.tenant,
         oidc,
         cedar,
         mcp: cfg.mcp,
         shutdown,
         erp_webhook_url: cfg.webhook.erp_webhook_url,
+        erp_webhook_secret: cfg.webhook.erp_webhook_secret,
         rate_limit: cfg.rate_limit,
         kafka_ingest: cfg.kafka_ingest,
         confirmation: cfg.confirmation,
         archive: if cfg.archive.enabled {
-            // Resolve env references in archive credentials.
+            // Resolve `env:` references in S3 credentials before they reach the
+            // warehouse builder.
             let mut archive = cfg.archive;
             if let Some(key) = archive.access_key_id.as_deref() {
                 archive.access_key_id = config::resolve_env(key).ok();

@@ -133,54 +133,32 @@ pub const fn mscons_pid_description(pid: u32) -> &'static str {
 /// Source: MSCONS AHB Gas 1.x; Allgemeine Festlegungen V6.1d §6.
 pub const GAS_QUALITY_PIDS: &[u32] = &[13007];
 
-/// MSCONS PIDs that carry Gas Allokation (Mehr-/Mindermengen) data.
-///
-/// PID 13013 = Marktlokationsscharfe Allokationsliste Gas (MMMA, NB → LF).
-/// Used by `mako-gabi-gas` `gabi-gas-mmma` for balance group accounting.
-///
-/// Source: BK7-24-01-008 GaBi Gas 2.1; MSCONS AHB Gas 1.x.
-pub const GAS_MMMA_PIDS: &[u32] = &[13013];
-
 /// Metering / balancing classification of a Marktlokation.
 ///
-/// Determines the applicable Mindestvorlauffrist and billing-period aggregation
-/// rules.
-///
-/// | Variant | Description | Vorlauffrist |
-/// |---------|-------------|--------------|
-/// | `Slp` | Standard load profile — synthetic, grid-area-based | Next Arbeitstag (15:00 cutoff) |
-/// | `Rlm` | Registrierte Lastgangmessung — interval meter | 2 Werktage minimum |
-/// | `Imsys` | Intelligentes Messsystem — smart meter | Treated as SLP for Vorlauffrist |
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum Messtyp {
-    /// Standardlastprofil metering.
-    Slp,
-    /// Registrierende Lastgangmessung (interval metering, typically 15-min).
-    Rlm,
-    /// Intelligentes Messsystem (smart meter).
-    Imsys,
-}
+/// Re-exported from `metering` (`Slp` / `Rlm` / `IMsys`) — the single source of
+/// truth for the Messtyp. `metering::Messtyp` has no `Display`/`FromStr` (the
+/// orphan rule would forbid us adding them here anyway), so the DB-string
+/// conversions live as the free helpers [`messtyp_as_str`] / [`messtyp_from_str`].
+pub use metering::Messtyp;
 
-impl std::fmt::Display for Messtyp {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Slp => write!(f, "SLP"),
-            Self::Rlm => write!(f, "RLM"),
-            Self::Imsys => write!(f, "IMSYS"),
-        }
+/// The DB / wire string for a [`Messtyp`] (`SLP` / `RLM` / `IMSYS`).
+#[must_use]
+pub fn messtyp_as_str(m: Messtyp) -> &'static str {
+    match m {
+        Messtyp::Slp => "SLP",
+        Messtyp::Rlm => "RLM",
+        Messtyp::IMsys => "IMSYS",
     }
 }
 
-impl std::str::FromStr for Messtyp {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_ascii_uppercase().as_str() {
-            "SLP" => Ok(Self::Slp),
-            "RLM" => Ok(Self::Rlm),
-            "IMSYS" => Ok(Self::Imsys),
-            other => Err(format!("unknown Messtyp: {other:?}")),
-        }
+/// Parse a [`Messtyp`] from its DB / wire string; unknown values fall back to
+/// `Slp` (the conservative Vorlauffrist / aggregation default).
+#[must_use]
+pub fn messtyp_from_str(s: &str) -> Messtyp {
+    match s.to_ascii_uppercase().as_str() {
+        "RLM" => Messtyp::Rlm,
+        "IMSYS" | "IMS" => Messtyp::IMsys,
+        _ => Messtyp::Slp,
     }
 }
 
@@ -244,8 +222,11 @@ pub enum IngestionSource {
 }
 
 impl IngestionSource {
-    /// Every variant — the single source of truth `schema_code_guard` pins the
-    /// `meter_reads.source` CHECK constraint against.
+    /// Every variant. The ingestion source rides as a `meterstore` **attribute
+    /// column** on the reading (`source`), not a column in edmd's own schema —
+    /// `meter_reads` is a `meterstore` table, so there is no edmd-side
+    /// `meter_reads.source` CHECK to pin this against. `quality_assessments.source`
+    /// is a *different*, narrower "ingest family" vocabulary (see the CHECK there).
     pub const ALL: [Self; 9] = [
         Self::Mscons,
         Self::DirectPush,
@@ -447,13 +428,16 @@ pub struct MeterRead {
     #[serde(default = "default_allocation_version")]
     pub allocation_version: String,
 
-    /// Transaction time: when this row was last written (database clock).
+    /// Transaction time: when this row was written (database clock).
     ///
-    /// Bumped on every upsert/correction — it is the row's write version, not
-    /// its creation time. Every value-changing overwrite also leaves an
-    /// immutable `meter_read_corrections` row, so "what did we know at time
-    /// T?" is answered by the current row minus all corrections with
-    /// `corrected_at > T` (the `as_of` overlay).
+    /// It becomes the meterstore row's `recorded_at`, which is also the source of
+    /// its `version` — so a correction is a new version at a later `recorded_at`,
+    /// not an overwrite. "What did we know at time T?" is therefore answered
+    /// directly by a transaction-time read (`repo.query_as_of` →
+    /// `store.as_known_at(T)`): resolution under a `recorded_at ≤ T` ceiling
+    /// returns the version in force then, and excludes intervals first stored
+    /// after T. The `meter_read_corrections` table remains the human-readable
+    /// audit log (who/when/why), not the reconstruction mechanism.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub valid_from_tx: Option<OffsetDateTime>,
 }
@@ -652,50 +636,6 @@ pub struct CorrectionRecord {
     pub tenant: String,
 }
 
-/// Gas quality data received via MSCONS PID 13007 (Gasbeschaffenheitsdaten).
-///
-/// Contains the Abrechnungsbrennwert and Zustandszahl required to convert gas
-/// volume (m³) to energy (kWh_Hs) per §25 Nr. 4 MessEV and DVGW G 685.
-///
-/// ## Formula
-///
-/// ```text
-/// kWh_Hs = m³ × brennwert_kwh_per_m3 × zustandszahl
-/// ```
-///
-/// Source: MSCONS AHB Gas 1.x; Allgemeine Festlegungen V6.1d §6.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GasQualityData {
-    /// 11-digit MaLo-ID.
-    pub malo_id: String,
-    /// Billing period start (inclusive).
-    pub period_from: time::Date,
-    /// Billing period end (inclusive).
-    pub period_to: time::Date,
-    /// Abrechnungsbrennwert in kWh/m³ (MSCONS QTY+Z08).
-    ///
-    /// Typically 9.5–11.5 kWh/m³ for natural gas in Germany.
-    pub brennwert_kwh_per_m3: Decimal,
-    /// Zustandszahl (dimensionless, MSCONS QTY+Z10).
-    ///
-    /// Compressibility and temperature correction factor. Typically 0.95–1.05.
-    pub zustandszahl: Decimal,
-    /// Source PID (always 13007 for Gasbeschaffenheitsdaten).
-    pub pid: u32,
-    /// Tenant data-isolation key.
-    pub tenant: String,
-}
-
-impl GasQualityData {
-    /// Convert gas volume (m³) to energy (kWh_Hs).
-    ///
-    /// Applies Brennwert and Zustandszahl per §25 Nr. 4 MessEV.
-    #[must_use]
-    pub fn to_kwh(&self, volume_m3: Decimal) -> Decimal {
-        volume_m3 * self.brennwert_kwh_per_m3 * self.zustandszahl
-    }
-}
-
 /// A request to correct one or more meter read intervals.
 ///
 /// Used by `POST /api/v1/corrections/{malo_id}`.
@@ -713,51 +653,6 @@ pub struct CorrectionResponse {
     /// UUIDs of the created correction records.
     pub correction_ids: Vec<Uuid>,
 }
-
-// ── Bilanzierungsgebiet / Bilanzkreis topology ────────────────────────────────
-//
-// These types model the balance-group topology from BK6-22-024 (MaBiS) and
-// allow `marktd` to store which MaLos belong to which Bilanzierungsgebiet and
-// Bilanzkreis. `edmd` does not own this data — it lives in `marktd` — but the
-// types are defined here so both crates share the same domain vocabulary.
-
-/// A Bilanzierungsgebiet (settlement zone) within the German electricity grid.
-///
-/// Each ÜNB / NB operates one or more Bilanzierungsgebiete. All MaLos within
-/// a Bilanzierungsgebiet belong to the same settlement pool for MaBiS.
-///
-/// ## Source
-///
-/// BK6-22-024 (MaBiS) — Bilanzierungsgebiet definitions; BDEW code list.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct BilanzierungsgebietId(pub String);
-
-impl std::fmt::Display for BilanzierungsgebietId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-/// A Bilanzkreis (balance group) within a Bilanzierungsgebiet.
-///
-/// A BKV (Bilanzkreisverantwortlicher) holds one or more Bilanzkreise.
-/// Each MaLo is assigned to exactly one Bilanzkreis within its Bilanzierungsgebiet.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct BilanzkreisId(pub String);
-
-impl std::fmt::Display for BilanzkreisId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-// The per-MaLo balance-group assignment (Bilanzierungsgebiet + Bilanzkreis +
-// BKV, with temporal validity) is now a first-class BO4E-backed marktd resource
-// — `mako_markt::repository::BilanzierungRecord` and the `bilanzierungen` table
-// (`GET|PUT /api/v1/malo/{id}/bilanzierung`). The former bespoke
-// `BilanzzuordnungRecord` here was dead code that duplicated that concept
-// off-BO4E; it has been removed. `BilanzierungsgebietId`/`BilanzkreisId` remain
-// because MABIS Summenzeitreihen key on them.
 
 #[cfg(test)]
 mod mscons_pid_tests {

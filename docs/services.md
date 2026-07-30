@@ -22,6 +22,8 @@ mako consists of **17 independently deployable services**, each built as a self-
 
 All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)** — the shared SDK that provides `shutdown::token/serve` (SIGINT+SIGTERM graceful drain), `OidcConfig::build_verifier`, `McpAuth`+`McpAuthConfig`, `init_tracing_from_env`, `DatabaseConfig`, `HttpConfig`, `CedarEnforcer`, `EventBus`, and more. This means zero copy-pasted infrastructure code across the 17 daemons.
 
+`DatabaseConfig::connect(url, service_name)` is the single PostgreSQL pool builder every daemon uses: it applies the configured `pool_size` plus `acquire_timeout_secs` / `idle_timeout_secs` / `max_lifetime_secs` (so a pool never queues unboundedly or pins a connection across a failover) and tags each connection with the service name in `pg_stat_activity`. Tuning lives in one place rather than being re-derived per service.
+
 ---
 
 ## Service Map
@@ -96,7 +98,7 @@ graph TB
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [edmd](./edmd) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest, Hampel quality scoring, V01–V10 validation, virtual meters (§42b GGV), § 60 Abs. 2 MsbG Jahresprognose forecasting, Resampling, Ablesesteuerung (INSRPT auto-order), Iceberg/S3 OLAP; Cedar write actions role-gated (MSB/NB/admin); 15-tool MCP server |
+| [edmd](./edmd) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest, Hampel quality scoring, V01–V10 validation, virtual meters (§42b GGV), § 60 Abs. 2 MsbG Jahresprognose forecasting, Resampling, Ablesesteuerung (INSRPT auto-order), meterstore hot/cold tiering (PostgreSQL + Apache Iceberg) with cross-tier OLAP + a read-only Iceberg REST catalog; Cedar write actions role-gated (MSB/NB/admin); 15-tool MCP server |
 | [mabis-syncd](./mabis-syncd) | `:8880` | ÜNB/NB | MaBiS synchronisation — aggregates quarter-hourly Lastgang per Bilanzierungsgebiet via `SummenzeitreiheBuilder`, files with the BIKO as MSCONS 13003 on the 10. Werktag; records the BIKO-assigned Datenstatus and open Korrekturbedarf |
 | [einsd](./einsd) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes; issues the **§14 UStG Gutschrift** (Gutschriftverfahren) per billable settlement as a BO4E `Rechnung` with per-rate USt breakdown; 18-tool MCP server |
 | [obsd](./obsd) | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, automated deadline computation (GPKE 24h/WiM 5WT/GeLi Gas 10WT), `completed_at` cycle-time tracking, `GET /api/v1/audit/bnetza-report`, 6-tool MCP server |

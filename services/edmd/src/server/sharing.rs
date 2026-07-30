@@ -125,43 +125,43 @@ pub(crate) async fn get_sharing_allocation(
     }
 
     // Fetch the aggregation rule and compute via metering::compute_virtual_meter.
-    use metering::{MeterInterval, QualityFlag as MQualityFlag};
+    use metering::MeterInterval;
     use rust_decimal::Decimal;
 
-    // Load production intervals from all source MaLos.
+    // Load production intervals from all source MaLos through the meterstore
+    // repository (version-resolved, tenant-scoped). `repo.query` returns the
+    // NUMERIC quantity as a typed `Decimal`, so the previous
+    // String-decode-then-parse (which silently allocated ZERO on the NUMERIC
+    // column) is gone. `query` does not filter quality, so Faulty/Unknown are
+    // dropped here via the §60 Abs. 2 billable rule (`QualityFlag::is_billable`).
+    // A failed read must error, not silently under-allocate the §42c settlement,
+    // so the former `unwrap_or_default()` is removed.
     let mut all_production: Vec<MeterInterval> = Vec::new();
     for malo_id in &source_malo_ids {
-        let rows = sqlx::query(
-            r"SELECT dtm_from, dtm_to, quantity_kwh, quality
-              FROM meter_reads
-              WHERE malo_id = $1
-                AND dtm_from >= $2
-                AND dtm_to   <= $3
-                AND tenant    = $4
-                AND quality NOT IN ('FAULTY','UNKNOWN')
-              ORDER BY dtm_from",
-        )
-        .bind(malo_id)
-        .bind(from)
-        .bind(to)
-        .bind(resource_tenant)
-        .fetch_all(state.repo.pool())
-        .await
-        .unwrap_or_default();
-
-        use sqlx::Row as _;
-        for r in &rows {
-            let qty: Decimal = r
-                .try_get::<String, _>("quantity_kwh")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(Decimal::ZERO);
+        let reads = match state
+            .repo
+            .query(&TimeSeriesQuery {
+                malo_id: malo_id.clone(),
+                from,
+                to,
+                sparte: None,
+                tenant: resource_tenant.to_owned(),
+            })
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(error = %e, malo_id, "edmd: sharing allocation read failed");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        };
+        for r in reads.iter().filter(|r| r.quality.is_billable()) {
             all_production.push(MeterInterval {
-                from: r.try_get("dtm_from").unwrap_or(from),
-                to: r.try_get("dtm_to").unwrap_or(to),
-                value_kwh: qty,
-                quality: MQualityFlag::Measured,
-                obis_code: None,
+                from: r.dtm_from,
+                to: r.dtm_to,
+                value_kwh: r.quantity_kwh,
+                quality: r.quality,
+                obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
             });
         }
     }
@@ -270,7 +270,7 @@ pub(crate) async fn get_sharing_readiness(
     Query(params): Query<SharingReadinessParams>,
 ) -> impl IntoResponse {
     use metering::classification::{classify_messtyp, detect_interval_length};
-    use metering::interval::{MeterInterval, QualityFlag};
+    use metering::interval::MeterInterval;
     use metering::sharing::{
         DEFAULT_COVERAGE_THRESHOLD_PCT, Delivery, DeliveryEvidenceInput, assess_delivery,
     };
@@ -321,30 +321,40 @@ pub(crate) async fn get_sharing_readiness(
             .collect()
     });
 
-    let pool = state.repo.pool();
-
     // Resolve the candidate set: explicit list, or every MaLo with readings.
+    // The "all MaLos with readings" scan is cross-MaLo, so it runs over
+    // meterstore's version-resolved relation (Pattern B) rather than edmd's pool.
     let malo_ids: Vec<String> = match explicit {
         Some(ids) => ids,
         None => {
-            let rows = sqlx::query(
-                r"SELECT DISTINCT malo_id
-                    FROM meter_reads
-                   WHERE tenant = $1 AND dtm_from >= $2 AND dtm_to <= $3
-                   ORDER BY malo_id",
-            )
-            .bind(resource_tenant)
-            .bind(from)
-            .bind(to)
-            .fetch_all(pool)
-            .await;
-            match rows {
-                Ok(rows) => {
-                    use sqlx::Row as _;
-                    rows.iter()
-                        .filter_map(|r| r.try_get::<String, _>("malo_id").ok())
-                        .collect()
-                }
+            let store = state.repo.store();
+            let sql = format!(
+                r#"SELECT DISTINCT "malo_id"
+                     FROM "{table}"
+                    WHERE "tenant" = $1 AND "from" >= $2 AND "to" <= $3
+                    ORDER BY "malo_id""#,
+                table = store.resolved_table(),
+            );
+            match store
+                .query_with_params(
+                    &sql,
+                    vec![
+                        datafusion::scalar::ScalarValue::Utf8(Some(resource_tenant.to_owned())),
+                        ts_param(from),
+                        ts_param(to),
+                    ],
+                )
+                .await
+                .and_then(|r| r.to_json())
+            {
+                Ok(rows) => rows
+                    .iter()
+                    .filter_map(|row| {
+                        row.get("malo_id")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned)
+                    })
+                    .collect(),
                 Err(e) => {
                     tracing::warn!(error = %e, "sharing readiness: candidate scan failed");
                     return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
@@ -356,24 +366,20 @@ pub(crate) async fn get_sharing_readiness(
     let mut items = Vec::with_capacity(malo_ids.len());
 
     for malo_id in &malo_ids {
-        let rows = sqlx::query(
-            r"SELECT dtm_from, dtm_to, quantity_kwh, source
-                FROM meter_reads
-               WHERE malo_id = $1 AND tenant = $2
-                 AND dtm_from >= $3 AND dtm_to <= $4
-                 AND quality NOT IN ('FAULTY', 'UNKNOWN')
-               ORDER BY dtm_from",
-        )
-        .bind(malo_id)
-        .bind(resource_tenant)
-        .bind(from)
-        .bind(to)
-        .fetch_all(pool)
-        .await;
-
-        // A failed per-point query must not abort the fleet report; surface it
-        // as an explicit reason instead of silently dropping the point.
-        let rows = match rows {
+        // Per-MaLo read through the repository (version-resolved, tenant-scoped,
+        // billable-only). A failed read must not abort the fleet report; surface
+        // it as an explicit reason instead of silently dropping the point.
+        let reads = match state
+            .repo
+            .query(&TimeSeriesQuery {
+                malo_id: malo_id.clone(),
+                from,
+                to,
+                sparte: None,
+                tenant: resource_tenant.to_owned(),
+            })
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(malo_id = %malo_id, error = %e, "sharing readiness: read query failed");
@@ -391,21 +397,19 @@ pub(crate) async fn get_sharing_readiness(
             }
         };
 
-        use sqlx::Row as _;
-        let mut source_hint: Option<String> = None;
-        let intervals: Vec<MeterInterval> = rows
+        // `query` does not filter quality; keep only billable qualities
+        // (`QualityFlag::is_billable`) — a faulty read is not a delivered
+        // quarter-hour value.
+        let source_hint: Option<String> = reads.first().map(|r| r.source.as_str().to_owned());
+        let intervals: Vec<MeterInterval> = reads
             .iter()
-            .filter_map(|r| {
-                if source_hint.is_none() {
-                    source_hint = r.try_get::<String, _>("source").ok();
-                }
-                Some(MeterInterval {
-                    from: r.try_get("dtm_from").ok()?,
-                    to: r.try_get("dtm_to").ok()?,
-                    value_kwh: r.try_get("quantity_kwh").ok()?,
-                    quality: QualityFlag::Measured,
-                    obis_code: None,
-                })
+            .filter(|r| r.quality.is_billable())
+            .map(|r| MeterInterval {
+                from: r.dtm_from,
+                to: r.dtm_to,
+                value_kwh: r.quantity_kwh,
+                quality: r.quality,
+                obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
             })
             .collect();
 
@@ -422,7 +426,7 @@ pub(crate) async fn get_sharing_readiness(
         };
 
         let evidence = DeliveryEvidenceInput {
-            interval_class,
+            resolution: interval_class,
             messtyp,
             coverage_pct,
             reading_count: intervals.len() as u64,
@@ -444,9 +448,7 @@ pub(crate) async fn get_sharing_readiness(
                 Delivery::Absent => "ABSENT",
             }
             .to_owned(),
-            interval_seconds: interval_class
-                .as_ref()
-                .map(metering::classification::IntervalLengthClass::seconds),
+            interval_seconds: interval_class.map(|r| i64::from(r.nominal_seconds())),
             messtyp: messtyp.map(|m| format!("{m:?}").to_uppercase()),
             coverage_pct,
             reading_count: intervals.len() as u64,

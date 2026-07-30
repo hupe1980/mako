@@ -73,7 +73,8 @@ pub struct ProcessdState {
 pub struct RunConfig {
     pub listen: SocketAddr,
     pub database_url: String,
-    pub db_pool_size: u32,
+    /// Database pool tuning (pool size, timeouts, `application_name`).
+    pub db: crate::config::DatabaseConfig,
     pub inbound_secret: Option<SecretString>,
     pub makod_url: String,
     pub makod_api_key: SecretString,
@@ -144,9 +145,9 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         }
     }
 
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(cfg.db_pool_size)
-        .connect(&cfg.database_url)
+    let pool = cfg
+        .db
+        .connect(&cfg.database_url, "processd")
         .await
         .map_err(|e| anyhow::anyhow!("processd: failed to connect to PostgreSQL: {e}"))?;
 

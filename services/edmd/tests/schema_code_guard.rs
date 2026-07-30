@@ -199,65 +199,25 @@ fn check_list(ddl: &str, column: &str) -> Vec<String> {
         .collect()
 }
 
-/// `meter_reads.source` must accept exactly the `IngestionSource` wire strings.
-///
-/// The schema comment promises this guard; a variant added to the enum but not
-/// the CHECK makes every ingest carrying it fail at the database, and a CHECK
-/// value without an enum variant is an unreadable row.
+// NOTE: `meter_reads` and `esa_typ2_reads` are no longer declared in this
+// migration — they (and their `source` / `quality` / `sparte` /
+// `allocation_version` / `delivery_path` CHECK constraints) are created and
+// owned by the `meterstore` crate. The corresponding enum⇄CHECK guards live
+// with meterstore's own hot-table DDL. edmd keeps only the routing invariant:
+// 13027 is *received* but *forked* to the separate Typ-2 store.
+
+/// 13027 must be subscribed (so edmd receives it) *and* flagged as a Typ-2 PID
+/// (so the ingest handler forks it away from the authoritative store into the
+/// separate `esa_typ2_reads` meterstore table).
 #[test]
-fn meter_reads_source_check_matches_ingestion_source_enum() {
-    use mako_edm::domain::IngestionSource;
-
-    let ddl = ddl_of(&migration(), "meter_reads");
-    let listed = check_list(&ddl, "source");
-
-    let variants: Vec<&str> = IngestionSource::ALL.iter().map(|s| s.as_str()).collect();
-    let listed_set: std::collections::BTreeSet<&str> = listed.iter().map(String::as_str).collect();
-    let variant_set: std::collections::BTreeSet<&str> = variants.iter().copied().collect();
-
-    assert_eq!(
-        listed_set, variant_set,
-        "meter_reads.source CHECK and IngestionSource disagree"
-    );
-}
-
-/// `esa_typ2_reads.delivery_path` must accept exactly the `Typ2DeliveryPath`
-/// wire strings — the Typ-2 store's CHECK is pinned to the enum the same way.
-#[test]
-fn esa_typ2_reads_delivery_path_check_matches_enum() {
-    use mako_edm::domain::Typ2DeliveryPath;
-
-    let ddl = ddl_of(&migration(), "esa_typ2_reads");
-    let listed: std::collections::BTreeSet<String> =
-        check_list(&ddl, "delivery_path").into_iter().collect();
-    let expected: std::collections::BTreeSet<String> = Typ2DeliveryPath::ALL
-        .iter()
-        .map(|p| p.as_str().to_owned())
-        .collect();
-    assert_eq!(
-        listed, expected,
-        "esa_typ2_reads.delivery_path CHECK and Typ2DeliveryPath disagree"
-    );
-}
-
-/// The Typ-2 store must exist as a table separate from `meter_reads`, and 13027
-/// must be flagged as a Typ-2 PID so the ingest handler forks it away from the
-/// billing store. This guard fails if either half of the separation is removed.
-#[test]
-fn esa_typ2_reads_is_a_separate_table_and_13027_is_forked() {
-    let sql = migration();
+fn typ2_pid_13027_is_received_and_forked() {
     assert!(
-        sql.contains("CREATE TABLE esa_typ2_reads"),
-        "the ESA Typ-2 store table is missing — Typ-2 values would fall back to meter_reads"
-    );
-    // 13027 is subscribed/received (in MSCONS_PIDS) but forked to the Typ-2 store.
-    assert!(
-        mako_edm::domain::MSCONS_PIDS.contains(&13027),
+        edmd::domain::MSCONS_PIDS.contains(&13027),
         "edmd must still subscribe to 13027 to receive Typ-2 values"
     );
     assert!(
-        mako_edm::domain::ESA_TYP2_PIDS.contains(&13027),
-        "PID 13027 must be in ESA_TYP2_PIDS so the ingest handler routes it to esa_typ2_reads"
+        edmd::domain::ESA_TYP2_PIDS.contains(&13027),
+        "PID 13027 must be in ESA_TYP2_PIDS so the ingest handler routes it to the Typ-2 store"
     );
 }
 
@@ -277,58 +237,6 @@ fn ablese_auftraege_auftraggeber_rolle_admits_esa() {
     }
 }
 
-/// `meter_reads.quality` must accept exactly the `QualityFlag` wire strings.
-#[test]
-fn meter_reads_quality_check_matches_quality_flag() {
-    let ddl = ddl_of(&migration(), "meter_reads");
-    let listed: std::collections::BTreeSet<String> =
-        check_list(&ddl, "quality").into_iter().collect();
-    let expected: std::collections::BTreeSet<String> = [
-        "MEASURED",
-        "ESTIMATED",
-        "SUBSTITUTED",
-        "CALCULATED",
-        "CORRECTED",
-        "PRELIMINARY",
-        "FAULTY",
-        "UNKNOWN",
-    ]
-    .into_iter()
-    .map(str::to_owned)
-    .collect();
-    assert_eq!(
-        listed, expected,
-        "meter_reads.quality CHECK and QualityFlag disagree"
-    );
-}
-
-/// `meter_reads.sparte` and `allocation_version` CHECK lists.
-#[test]
-fn meter_reads_sparte_and_allocation_version_checks() {
-    let ddl = ddl_of(&migration(), "meter_reads");
-    let sparte: std::collections::BTreeSet<String> =
-        check_list(&ddl, "sparte").into_iter().collect();
-    assert_eq!(
-        sparte,
-        ["STROM", "GAS", "WAERME", "WASSER"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect::<std::collections::BTreeSet<_>>(),
-        "meter_reads.sparte CHECK and metering::Sparte disagree"
-    );
-
-    let av: std::collections::BTreeSet<String> =
-        check_list(&ddl, "allocation_version").into_iter().collect();
-    assert_eq!(
-        av,
-        ["INITIAL", "CORRECTION", "FINAL"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect::<std::collections::BTreeSet<_>>(),
-        "meter_reads.allocation_version CHECK drifted"
-    );
-}
-
 /// A round-trip proving the variant names are the real serde tags, so the
 /// hardcoded list above cannot quietly go stale.
 #[test]
@@ -343,4 +251,26 @@ fn aggregation_rule_variant_names_are_the_serde_tags() {
         json.get("Sum").is_some(),
         "expected externally-tagged `Sum`, got {json}"
     );
+}
+
+/// Every TEXT `quality` column enforces the full 8-value `QualityFlag` vocabulary
+/// at the DB layer, and that CHECK list is pinned to `metering::QualityFlag::CODES`
+/// — so adding a flag to the enum without updating the schema fails here, not
+/// silently at runtime when a new value is read back as UNKNOWN.
+#[test]
+fn quality_checks_match_the_quality_flag_codes() {
+    let sql = migration();
+    for (table, col) in [
+        ("meter_billing_periods", "quality"),
+        ("meter_read_corrections", "original_quality"),
+        ("meter_read_corrections", "corrected_quality"),
+    ] {
+        let ddl = ddl_of(&sql, table);
+        for code in metering::QualityFlag::CODES {
+            assert!(
+                ddl.contains(&format!("'{code}'")),
+                "{table}.{col}: QualityFlag code {code} missing from its CHECK list"
+            );
+        }
+    }
 }

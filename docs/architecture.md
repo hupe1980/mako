@@ -81,7 +81,8 @@ graph TB
     end
 
     subgraph edmd ["edmd :8380 — Energy data"]
-        EDM_DB["PostgreSQL\nmeter_reads · billing_periods"]
+        EDM_STORE["meterstore hot+cold\nmeter_reads · esa_typ2_reads\n(PostgreSQL window + Iceberg history)"]
+        EDM_DB["PostgreSQL\nbusiness tables · billing-period cache"]
     end
 
     subgraph obsd ["obsd :8480 — Observability"]
@@ -448,7 +449,7 @@ calculations and billing plausibility.
 
 Key facts:
 - Subscribes to `de.mako.process.completed` events from `marktd` where `makopid`
-  is in the MSCONS PID set (`mako_edm::domain::MSCONS_PIDS`).
+  is in the MSCONS PID set (`edmd::domain::MSCONS_PIDS`).
 - Stores typed kWh interval reads with `(malo_id, dtm_from, dtm_to)` primary key.
 - `GET /api/v1/deliveries/{malo_id}` returns **BO4E `Energiemenge` objects** —
   each read mapped to `{ obisKennzahl, menge: { wert, einheit: KWH }, zeitraum }`,
@@ -595,7 +596,7 @@ the same layers across single-purpose daemons around one metered-data spine
 | EDM reference layer | Home | Notes |
 |---|---|---|
 | Data acquisition | `edmd` — MSCONS via marktd webhook, direct iMSys/RLM/Gas push, IoT push, bulk, optional Kafka consumer | All paths converge on the same V01–V10 validation; SMGW registry handles compliance, not transport |
-| Time-series database | `edmd` — PostgreSQL hot tier (monthly partitions, overlap-excluded, bitemporal corrections) + Apache Iceberg/S3 cold tier with DataFusion OLAP and Iceberg REST catalog | `?as_of=` reconstruction; `allocation_version` INITIAL/CORRECTION/FINAL |
+| Time-series database | `edmd` over a `meterstore` hot/cold tier — PostgreSQL recent window + Apache Iceberg/S3 settled history, version-resolved reads, `as_of` reproducible settlement snapshots | `?as_of=` reconstruction; `allocation_version` INITIAL/CORRECTION/FINAL |
 | Validation engine (VEE) | `metering::validation` (pure V01–V10) invoked on every ingest path | Annotate-only by design: suspect readings are stored with `quality_warnings`, never discarded — billing blockage is a separate decision |
 | Substitute values (§ 60 Abs. 2 MsbG) | `metering::substitute` + `edmd` REST/MCP — linear interpolation, prior-period average, carry-forward, zero-fill; full `substitute_value_log` audit | Manual values enter via the §22 corrections endpoint |
 | Calculation engine | `metering` (pure): aggregation, HT/NT, Spitzenleistung, G685 gas conversion, virtual meters, § 13 StromNZV imbalance, §22 EnWG Netzverlust indicator | Fixed typed rules instead of a free-form formula editor — deterministic by construction |
@@ -604,7 +605,7 @@ the same layers across single-purpose daemons around one metered-data spine
 | Market communication | `makod` — 17 EDIFACT message types incl. MSCONS/UTILMD/APERAK/INVOIC/CONTRL, deadline scheduler, CONTRL/APERAK auto-acknowledgement | Protocol processor by design; business state lives in the daemons |
 | Billing interface | `billingd` (LF retail, §40–§42 EnWG) and `invoicd` (INVOIC plausibility via `invoic-checker`) consume edmd's `MeterBillingPeriod` and Lastgang | edmd stays billing-free: it answers "what flowed", never "what it costs" |
 | Reporting & analytics | `obsd` (BNetzA KPI, §20 EnWG parity report), edmd OLAP (`/archive/*`, `/query/sql`, Arrow IPC), `portald` (customer dashboard), `agentd` (LLM analytics over MCP) | Headless: cockpit rendering is a frontend concern |
-| Workflow automation | Config-gated workers per daemon: edmd Iceberg archival + CLS/SMGW compliance, billingd §40b billing runs, accountingd Abschlag/SEPA/dunning, mabis-syncd submission windows | mmma-worker pattern: hourly tick, gated, idempotent via SQL claim |
+| Workflow automation | Config-gated workers per daemon: edmd meterstore archival (via the meterstore maintenance loop) + CLS/SMGW compliance, billingd §40b billing runs, accountingd Abschlag/SEPA/dunning, mabis-syncd submission windows | mmma-worker pattern: hourly tick, gated, idempotent via SQL claim |
 
 **Deliberate non-goals** (differences to the monolithic reference, by design):
 

@@ -482,5 +482,5 @@ if !series.is_complete() {
 let monthly = series.monthly_totals();
 ```
 
-`BilanzierungsgebietId` and `BilanzkreisId` are canonical types from `mako-edm`
+`BilanzierungsgebietId` and `BilanzkreisId` are canonical types from `mako-mabis`
 (single source of truth — `mako-mabis` re-exports them, not duplicates).

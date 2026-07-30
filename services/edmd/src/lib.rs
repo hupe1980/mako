@@ -45,10 +45,10 @@
 
 pub mod config;
 pub mod confirmation;
+pub mod domain;
 pub mod handler;
-pub mod iceberg;
 pub mod kafka_ingest;
 pub mod mcp_server;
-pub mod pg;
 pub mod server;
 pub mod smgw;
+pub mod store;

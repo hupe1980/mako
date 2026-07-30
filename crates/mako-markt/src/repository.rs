@@ -1684,11 +1684,11 @@ pub trait MeloMsbRepository: Send + Sync {
 /// A BO4E `Bilanzierung` — the balancing-relevant data of a Marktlokation, as a
 /// first-class resource with **identity and temporal validity**.
 ///
-/// This subsumes the concept previously smeared across `MaloRecord` columns
-/// (`bilanzierungsmethode`, `fallgruppe`, `bilanzierungsgebiet` — kept as
-/// denormalised current-values), the dead `mako-edm::BilanzzuordnungRecord`, and
-/// `metering::LoadProfile` (Prognosegrundlage). The full BO4E object lives in
-/// [`Self::data`]; the typed fields are extracted for indexing and query.
+/// This subsumes the balancing concept otherwise smeared across `MaloRecord`
+/// columns (`bilanzierungsmethode`, `fallgruppe`, `bilanzierungsgebiet` — kept as
+/// denormalised current-values) together with the load profile (Prognosegrundlage).
+/// The full BO4E object lives in [`Self::data`]; the typed fields are extracted
+/// for indexing and query.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BilanzierungRecord {
     /// Marktlokations-ID this Bilanzierung belongs to (BO4E `marktlokationsId`).

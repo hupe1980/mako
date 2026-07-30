@@ -12,8 +12,8 @@ description: >
   with Pos() cap per §42b Abs. 5), § 60 Abs. 2 MsbG substitution + forecasting,
   reading-order scheduling (Ablesesteuerung), MeterBillingPeriod (RLM
   Spitzenleistung + Gas Brennwert/Zustandszahl), Mehr-/Mindermengensaldo
-  imbalance, BSI TR-03109 SMGW lifecycle, Iceberg/S3 OLAP archive, MCP server.
-  PostgreSQL-backed, OIDC-secured, CloudEvents webhook.
+  imbalance, BSI TR-03109 SMGW lifecycle, meterstore hot/cold tier, MCP server.
+  meterstore-backed (PostgreSQL + Apache Iceberg), OIDC-secured, CloudEvents webhook.
 ---
 
 # `edmd` Operator Guide
@@ -34,7 +34,7 @@ Key responsibilities:
 - Export BO4E `Lastgang` objects and `Zeitreihe` objects for ERP and API-Webdienste Strom consumers.
 - Compute `MeterBillingPeriod` — RLM Spitzenleistung (kW) and Gas Brennwert / Zustandszahl — required by `netzbilanzd` for Leistungspreis billing.
 - Accumulate **Mehr-/Mindermengensaldo** imbalance records per MaLo.
-- **Apache Iceberg V2 OLAP archival**: automatically export `meter_reads` older than the configured retention window (default 12 months) to Parquet files on S3/GCS/Azure in Iceberg V2 table format.
+- **meterstore hot/cold tiering**: `meter_reads` (and the non-authoritative `esa_typ2_reads` stream) are stored through the [`meterstore`](https://github.com/hupe1980/meterstore) crate — a recent window in PostgreSQL and the settled history in Apache Iceberg V2 on S3/GCS/Azure, split by an explicit tiering watermark. Reads are version-resolved and tier-split; `store.as_of(...)` reproduces a past settlement. edmd's own business tables (receipts, corrections, confirmations, billing-period cache, reading orders, SMGW) stay in edmd's PostgreSQL pool.
 
 The **domain calculation logic** is provided by the [`metering`](https://github.com/hupe1980/mako/tree/main/crates/metering) library crate (zero I/O, no async):
 
@@ -45,7 +45,7 @@ The **domain calculation logic** is provided by the [`metering`](https://github.
 | `classify_messtyp(intervals, source)` | §3/§ 12 StromNZV, §41a EnWG | iMSys classification |
 | `compute_imbalance(actual, contracted)` | § 13 StromNZV | Mehr-/Mindermengensaldo |
 | `score_intervals(intervals, config)` | — | Hampel quality scoring (A/B/C/F) |
-| `validate_intervals(intervals, config)` | §17–22 MsbG | V01–V10 validation engine |
+| `validate_intervals(intervals, config)` | § 60 Abs. 2 MsbG (Plausibilisierung) | V01–V10 validation engine |
 | `resample(intervals, config)` | § 13 StromNZV, MaBiS | Hourly/daily/monthly resampling |
 | `compute_virtual_meter(rule, sources)` | §42b EEG, §42a EEG | GGV community solar, Residuallast |
 | `project_annual_consumption(intervals, _)` | § 60 Abs. 2 MsbG Jahresprognose | Annual consumption forecast |
@@ -58,30 +58,37 @@ graph TB
     smgw["SMGW / iMSys\n(direct push)"]
     edmd["edmd :8380\n(this service)"]
 
-    subgraph hot["Hot tier — PostgreSQL"]
-        pg["meter_reads NUMERIC(18,5)\nesa_typ2_reads (Typ-2, non-billing)\nmeter_billing_periods\nablese_auftraege\ndirect_push_sessions\narchive_batches\ngdpr_deletions"]
+    subgraph store["meterstore — hot/cold tiered store for meter_reads / esa_typ2_reads"]
+        hot["Hot tier — PostgreSQL\n(recent window)"]
+        cold["Cold tier — S3 / GCS / AzureDLS\nIceberg V2 settled history"]
     end
 
-    subgraph cold["Cold tier — S3 / GCS / AzureDLS"]
-        iceberg["Iceberg V2 table\nParquet — ZSTD+DELTA_BINARY_PACKED\nBloom filter on malo_id\nPostgreSQL SQL catalog"]
+    subgraph edmdpg["edmd PostgreSQL — business tables"]
+        biz["meter_billing_periods
+ablese_auftraege
+direct_push_sessions
+gdpr_deletions"]
     end
 
     erp["ERP / netzbilanzd\nmabis-syncd"]
-    duckdb["DuckDB / Snowflake\nDatabricks\n(Iceberg REST)"]
-    worker["Archive worker\n(hourly)"]
+    duckdb["DuckDB / Spark\nTrino / PyIceberg"]
+    catalog["/api/v1/iceberg\nmeterstore CatalogFacade\n(read-only · Cedar read-archive-olap)"]
     qa["quality engine\nscore_intervals_f64\nAVX2/NEON auto-vectorise"]
 
     marktd -->|"de.mako.process.initiated (23001 INSRPT)\nde.mako.edifact.inbound (MSCONS)\nHMAC POST /webhook"| edmd
     smgw -->|"POST /api/v1/meter-reads/rlm/{malo_id}\nPOST /api/v1/meter-reads/gas/{malo_id}"| edmd
     edmd --> qa
-    qa -->|"grade A/B/C/F\nde.messwert.reading.quality.warning"| hot
-    edmd --> hot
-    hot -->|"rows > 12 months"| worker
-    worker -->|"write Parquet\ncommit snapshot"| cold
+    qa -->|"grade A/B/C/F\nde.messwert.reading.quality.warning"| store
+    edmd -->|"store_reads (version-resolved, tier-split)"| store
+    edmd --> edmdpg
+    edmd -->|"mounts"| catalog
+    catalog -.->|"table schemas + locations"| cold
+    hot -->|"tiering watermark\n(one-week settlement lag)"| cold
     erp -->|"GET /api/v1/lastgang Accept: arrow.stream\n→ Arrow IPC (10× faster than JSON)"| edmd
     erp -->|"GET /api/v1/billing-period/{malo_id}"| edmd
-    erp -->|"GET /api/v1/archive/olap/{malo_id}"| edmd
-    duckdb -->|"GET /api/v1/iceberg/v1/...\nIceberg REST catalog"| cold
+    erp -->|"POST /api/v1/query/sql (DataFusion)"| edmd
+    duckdb -->|"ATTACH — metadata only"| catalog
+    duckdb -->|"read Parquet directly\n(engine's own object-store creds)"| cold
 ```
 
 ---
@@ -127,54 +134,93 @@ rather than one they reached by leaving a section out.
 allow_insecure_no_auth = true
 ```
 
-### The cold tier is partitioned by tenant
+### The MCP write tools carry the same role gate as REST
 
-The Iceberg partition spec is `identity(tenant)`, `identity(sparte)`,
-`month(dtm_from)`. `tenant` leads because it is the coarsest and most selective
-predicate every query carries — the archive is read through a tenant-scoped
-view, so without it each scan touches every operator's files and prunes them by
-row filter instead of by manifest. It also bounds GDPR erasure: an Art. 17
-request for one tenant would otherwise implicate files holding other tenants'
-readings.
+The `/mcp` surface is admitted by one blanket Cedar action (`use-mcp`, same-tenant,
+any role). That is right for the read tools, but the two **destructive** tools —
+`trigger_substitution` (Ersatzwertbildung) and `trigger_jahresablesung` (§40
+campaign) — call the same cores as their REST endpoints, which require
+`write-timeseries` / `write-reading-order` (MSB/NB/admin). The MCP auth middleware
+inspects the tool name of each `tools/call` and enforces that same write action,
+so an LF-role token cannot escalate through MCP to a write it is refused on REST.
 
-### GDPR Art. 17 in the cold tier
+### Outbound CloudEvents are signed
 
-Read-time exclusion hides an erased MaLo's rows from every query. The bytes on
-disk are a separate obligation, and Art. 17 reaches them too.
+Every edmd-originated CloudEvent — direct-push `stored`/`quality.warning`,
+reading-order `failed`, confirmation-overdue, SMGW compliance and cert-expiry
+alerts, from both the request path and the background workers — is delivered
+through one emitter that adds an `x-mako-signature: sha256=<hex>` HMAC over the
+body when `erp_webhook_secret` is set. This is the counterpart to `inbound_secret`:
+the ERP receiver authenticates edmd's events exactly as edmd authenticates its
+inbound webhook. Without the secret the body is unsigned and the transport is the
+trust boundary.
 
-`iceberg-rust` 0.9.1 exposes only `fast_append` on a transaction — there is no
-public API to remove or rewrite data files — so the rewrite itself is performed
-by an external engine (Spark, Trino). Two endpoints make that obligation
-trackable rather than permanently pending:
+### The quality vocabulary and interval bounds are DB constraints
 
-| Endpoint | Purpose |
-|---|---|
-| `POST /api/v1/gdpr/erasure/{malo_id}/archive-plan` | list the data files holding the MaLo's rows and record them in `gdpr_archive_files` |
-| `POST /api/v1/gdpr/erasure/{malo_id}/archive-complete` | record that the rewrite ran, clearing `archive_deletion_pending` |
+The 8-value `QualityFlag` vocabulary is a `CHECK` on every stored quality column
+(the authoritative `meter_reads`, plus the `meter_billing_periods` cache and the
+`meter_read_corrections` audit rows), pinned to `metering::QualityFlag::CODES` by a
+`schema_code_guard` test — a drifting literal fails the write, it is not read back
+as `UNKNOWN`. Every table holding an interval or period carries a forward-time
+`CHECK` (`dtm_to > dtm_from` / `period_to >= period_from`), so a zero-width or
+reversed span cannot be stored.
 
-Planning requires an erasure already on record — planning a rewrite for a MaLo
-nobody asked to erase would delete lawfully-held data. When no files match, the
-obligation is discharged immediately: nothing of that MaLo reached the cold tier.
+The reading's `source` (the `IngestionSource` provenance) is a `meterstore`
+**coded attribute column** (`coded_column("source", IngestionSource::ALL…)`), so
+that vocabulary is enforced by a DB `CHECK` on the authoritative store too, derived
+straight from the enum — the same guarantee, extended to a deployment-declared
+column. `sender_mp_id` and `allocation_version` carry open values (an MP-ID, a
+MaBiS version label) and stay unconstrained.
 
-### The cold tier is tenant-scoped by construction
+### The cold tier's shape is meterstore's
 
-`meter_reads_archive` is a **view** over the physical Iceberg table, already
-restricted to the tenant and to rows not subject to a GDPR erasure. Scoping
-therefore holds for every query in the module and for the caller-supplied SQL
-accepted by `POST /api/v1/query/sql`, rather than depending on each call site
-remembering a predicate. A query naming the physical table behind the view is
-rejected with `403`.
+edmd implements no archival logic of its own and defines no Iceberg partition
+spec: `meter_reads` is a [`meterstore`](https://github.com/hupe1980/meterstore)
+table, configured rather than reimplemented here. edmd's `TableConfig` sets the
+partition step, archival step, settlement lag and cold-tier file size from its
+`[archive]` config, and declares `tenant` as the non-nullable **identity column**
+so two tenants' readings for one measuring point never merge. edmd then starts
+meterstore's **maintenance loop** (one per store, on `maintenance_interval_secs`),
+which is what actually advances the watermark — archiving settled windows from the
+hot PostgreSQL tier into Iceberg V2 and checking the tier invariant each cycle.
+Every read is version-resolved and tier-split
+before it reaches edmd.
+
+### GDPR Art. 17 is pseudonymisation, not a file rewrite
+
+The cold tier is append-only (Iceberg V2, no deletion vectors), so Art. 17 over
+history cannot mean rewriting Parquet in place. It means destroying the **subject
+mapping**: each MaLo is enrolled as an erasure subject at ingest — a pseudonymous
+`subject_ref` stamped on every row it owns — and erasure deletes that mapping in
+meterstore's registry (`meterstore_subject_map` / `meterstore_erasures`). The
+readings survive in both tiers but become unattributable, so the § 60 Abs. 6 MsbG
+audit trail is preserved while the personal link is gone. No external Spark/Trino
+rewrite is scheduled, and there is no `archive_deletion_pending` obligation left
+over to discharge.
+
+### Queries are tenant-scoped
+
+`tenant` is the store's **identity column**, so a MaLo is unique only within a
+tenant. Every typed read binds it: the repository scopes each `series` read with
+`.column_eq("tenant", …)`, so two tenants' readings for one MaLo can never fold
+into a single series even in a store that holds both. The GDPR erasure subject is
+qualified the same way (`tenant:malo`), so erasing one tenant's MaLo cannot unlink
+another's. The structured archive endpoints inherit that scoping;
+`/api/v1/archive/portfolio` binds `tenant` in its `GROUP BY` too. Only the ad-hoc
+`POST /api/v1/query/sql` runs unscoped over the version-resolved relation — a query
+naming the raw, every-version relation is rejected with `403` so no statement can
+double-count corrected intervals, and it is single-tenant by deployment
+(`cfg.tenant` is written to every row).
 
 ### GDPR erasure is one transaction
 
-All five steps — request record, anonymisation, and three deletes — run in a
-single transaction and the handler names the step that failed. An erasure either
-completed or it did not: a partial one reported as success closes out the Art. 17
-request while personal data remains, and the caller cannot tell that apart from a
-MaLo that legitimately held no readings.
-
-Anonymised rows are also reset to `archived = false`, so the redacted version is
-re-exported and replaces the personal data already in the cold tier.
+The request record, the subject-mapping erasure
+([`SubjectRegistry::erase_in`](https://github.com/hupe1980/meterstore)) and the
+derived-table deletes (billing periods, quality assessments, substitute-value log)
+commit together on edmd's pool — meterstore's registry lives in the same database,
+so one transaction encloses them all. An erasure either completed or it did not: a
+partial one reported as success would close out the Art. 17 request while personal
+data remained, indistinguishable from a MaLo that legitimately held no readings.
 
 ### Cached billing periods are invalidated on ingest
 
@@ -185,15 +231,14 @@ Without that, a query issued mid-period caches a partial sum that is then served
 for that period indefinitely — including to `billingd` — because the read path
 prefers the cache.
 
-### Archival cannot flag a corrected row as durable
+### Late corrections are meterstore's to resolve
 
-`valid_from_tx` doubles as the row version: every write to `meter_reads` bumps
-it, and the archival worker's mark-archived matches on the version it exported.
-
-A correction landing mid-batch therefore leaves the row `archived = false` and
-queued for a fresh export. Without the version check, the corrected value would
-be flagged durable while Iceberg still held the pre-correction one, and partition
-release would drop the only correct copy.
+A correction for an already-settled interval is not edmd's to reconcile against
+the cold tier. It is appended at a higher MSCONS version; meterstore routes it to
+the tier that owns the interval and applies latest-version-wins on read. The
+displacements the append returns drive edmd's § 60 audit — the durability of the
+corrected value in the cold tier is the tiering watermark's business, not a
+per-row `archived` flag edmd maintains.
 
 ### Substitution is atomic
 
@@ -208,9 +253,10 @@ values in `meter_reads` with no record of who substituted them or why.
 rewrite **every** OBIS register at that timestamp, so correcting an import
 reading also overwrote the export one.
 
-A correction advances `allocation_version` to `CORRECTION`. The
-`mr_allocation_version` index exists for mabis-syncd to find exactly these rows,
-and matches nothing if the value never leaves `INITIAL`.
+A correction advances `allocation_version` to `CORRECTION` (an initial ingest
+leaves it `INITIAL`). It rides as a `meterstore` attribute column, folded from the
+newest delivery, so a read-back read reports the version the currently-in-force
+value belongs to rather than the version of whatever landed first.
 
 ### Tenant scoping is not optional on any statement
 
@@ -230,14 +276,39 @@ tenant is `403`.
 
 ## Ingest is batched and validated
 
-All ingest goes through `store_reads`, a single `unnest` statement per batch.
-One statement per batch is what keeps the 100M-intervals/day target reachable,
-and it makes a partial failure impossible: the batch lands whole or not at all.
+All ingest goes through `store_reads`, which routes the whole batch through one
+`meterstore` `append`. The append splits current from below-watermark intervals
+across the two tiers in one call and makes a partial failure impossible: the batch
+lands whole or not at all, which is what keeps the 100M-intervals/day target
+reachable.
 
-`store_reads` writes the provenance columns alongside the reading:
-`allocation_version` carries the MaBiS version a value belongs to,
-`sender_mp_id` carries § 60 Abs. 6 MsbG per-interval MSB attribution across a WiM
-switch, and `push_session`, `quality_warnings` and `unit` carry the rest.
+`store_reads` carries the reading's provenance as `meterstore` **attribute
+columns** — declared once in `build_stores`, out of the merge key, folded
+from the newest delivery on read. `allocation_version` carries the MaBiS version a
+value belongs to, `sender_mp_id` carries § 60 Abs. 6 MsbG per-interval MSB
+attribution across a WiM switch, and `source` records the ingest door. A
+`MeasurementSeries` is a channel of numbers and cannot hold these, so the typed
+read recovers them through `collect_resolved` rather than reconstructing them with
+guessed defaults: a read-back `MeterRead` names its true source, reporting operator
+and allocation version, not `MSCONS` / `None` / `INITIAL`.
+
+### The § 60 audit row covers the interval it displaced
+
+When a later delivery overwrites a stored interval, the displacement `meterstore`
+returns carries the interval **end** as well as its start, so the immutable § 60
+Abs. 6 MsbG audit row (and the § 60 Abs. 2 confirmation it opens) spans
+`[dtm_from, dtm_to)` rather than collapsing to a zero-width `[dtm_from, dtm_from)`.
+
+### A correction keeps the operator that scoped the value
+
+The corrected interval is appended at a higher version so latest-version-wins
+supersedes the prior value. Its version scope is derived from the reporting
+operator (`sender_mp_id`), so the correction reads the operator back off the
+existing interval (`collect_resolved`) and re-uses it. Dropping it would move the
+correction into the tenant's scope — a *different* scope from the value it
+corrects — and `meterstore`'s one-operator exclusion would then reject the
+correction as a conflicting claim on the interval instead of accepting the
+supersede.
 
 ### Every ingest family validates before it stores
 
@@ -252,6 +323,20 @@ destroy the evidence needed to resolve it. Findings land in `quality_warnings`;
 when a row already carries a session-level Hampel summary, the rule findings are
 added under a `validation` key rather than replacing it. A batch with any issue
 returns `202 Accepted` with a `validation` block instead of `201`.
+
+### Billable-only reads and the current reading are the storage layer's job
+
+The read side never re-implements "billable". The § 60 Abs. 2 rule lives once in
+`metering::QualityFlag::is_billable` (every flag except `FAULTY`/`UNKNOWN`), and
+the aggregate reads — imbalance/MMM, on-the-fly billing periods — push that set
+into the scan through meterstore's `SeriesQuery::quality_in`, so a `FAULTY`
+interval never reaches a saldo rather than being filtered out in memory at each
+call site. Which qualities count as billable is edmd's rule to state; applying it
+to the scan is meterstore's job to execute.
+
+The "current reading" (`latest_read`) resolves through
+`SeriesQuery::latest_resolved` — `ORDER BY from DESC LIMIT 1` at the storage layer
+— instead of loading the whole history and taking the maximum in memory.
 
 An unrecognised `quality` flag is refused at the boundary with `422`. The column
 is CHECK-constrained, so binding an unrecognised value raw fails the insert;
@@ -287,8 +372,10 @@ empty-string register rather than against the reading it stands in for — leavi
 **both** rows in the table, and a 100 kWh reading plus its substitute billing
 1099 kWh.
 
-The upsert's conflict action carries `WHERE meter_reads.quality IN ('FAULTY',
-'UNKNOWN')`. § 60 Abs. 2 MsbG authorises an Ersatzwert where no usable measurement
+The substitution path first reads the existing intervals and marks every slot
+that already holds a **billable** value (`QualityFlag::is_billable` — every
+quality except `FAULTY`/`UNKNOWN`), then writes a substitute only for the slots
+that do not. § 60 Abs. 2 MsbG authorises an Ersatzwert where no usable measurement
 exists, not in place of one, so a window overlapping billable data leaves that
 data untouched and returns those intervals in `skipped_measured`.
 
@@ -330,53 +417,47 @@ land in their own table, `esa_typ2_reads`, and never in `meter_reads`:
   `GET /api/v1/esa/typ2/{malo_id}`; it is never reconciled against, corrected,
   or substituted for a Typ-1 value.
 
+The separation is a table boundary, not a session one. `meter_reads` and
+`esa_typ2_reads` are built as two tables of a single `meterstore::MeterCatalog`
+(`build_stores`), so they share one Iceberg `SqlCatalog` — one metadata pool — and
+one DataFusion session, while each keeps its own watermark, archiver and tiering
+(§15.3). Sharing the session costs no isolation: a billing query names
+`meter_reads` and a Typ-2 read names `esa_typ2_reads`, and neither can reach the
+other's rows.
+
 The separation is guarded by `schema_code_guard` tests (the table must exist, and
 13027 must be in `ESA_TYP2_PIDS` so the handler forks it) and by a real-Postgres
 test proving a 13027 delivery lands in `esa_typ2_reads` with `meter_reads`
-untouched.
+untouched — and a companion test proving the two stores, though they share one
+catalog, return only their own values.
 
-## `meter_reads` is partitioned, and retention actually reclaims disk
+## `meter_reads` tiering and retention are meterstore's
 
-`meter_reads` is range-partitioned monthly on `dtm_from`. The partition key is
-already part of the primary key `(tenant, malo_id, dtm_from, obis_code_norm)`,
-which is what a partitioned table requires of every unique constraint.
+`meter_reads` is not an edmd PostgreSQL table — it is a
+[`meterstore`](https://github.com/hupe1980/meterstore) table spanning a hot
+PostgreSQL window and a cold Iceberg V2 history, split by a tiering watermark.
+edmd configures its shape (daily partition step, daily archival step, one-week
+settlement lag, `tenant` identity column); meterstore owns the mechanics:
 
-Every partition additionally carries an `EXCLUDE USING gist` constraint
-(`btree_gist`) over `(tenant, malo_id, obis_code_norm, tstzrange(dtm_from,
-dtm_to, '[)'))`: the primary key stops identical starts and V02 catches
-overlaps inside one batch, but only this constraint refuses a later delivery
-whose range overlaps a stored one — the double-counting case no application
-check can see. Adjacent intervals stay legal (half-open ranges); a redelivery
-of the same interval hits the primary key and takes the audited upsert path
-instead.
+- **Overlap and double-count safety.** The hot tier enforces a per-partition
+  exclusion, so a later delivery whose range overlaps a stored one cannot land
+  twice. The version axis is resolved away on read, so a redelivery or correction
+  appears once, carrying the value in force. edmd does not maintain this — it is
+  the store's invariant.
+- **Retention reclaims disk by tiering, not by `DELETE`.** meterstore's maintenance
+  loop (started by edmd, on `maintenance_interval_secs`) moves settled intervals
+  past the watermark from PostgreSQL into object storage, so the hot tier stays
+  bounded without a bulk `DELETE` competing with ingest for I/O. edmd implements no
+  archival logic itself and keeps no `archived` flag; durability is the watermark's
+  business.
+- **Reproducing a past settlement.** `store.as_of(snapshot)` pins a cold-tier
+  Iceberg snapshot, and `store.as_known_at(t)` pins the row-level `recorded_at`
+  axis across both tiers — either reads the history as it stood at a past instant,
+  something a partition-drop model could not offer.
 
-The archival worker runs three partition-related steps per pass:
-
-| Step | Function | Purpose |
-|---|---|---|
-| before archiving | `ensure_meter_reads_partitions(back, ahead)` | keeps a rolling window of months; a reading whose month has no partition cannot be inserted at all |
-| archive | export to Iceberg, then mark `archived = true` | records that a row is durable in the cold tier |
-| after archiving | `drop_archived_meter_reads_partitions(cutoff)` | releases whole months whose rows are all archived |
-
-The release step is what reclaims disk: marking a row `archived` records that it
-is safe to release, and without the drop the hot tier would grow without bound
-regardless of `retention_months`.
-
-Dropping a partition is one catalogue operation. A bulk `DELETE` over the same
-rows would instead leave dead tuples for autovacuum to reclaim, competing with
-ingest for I/O on the busiest table in the schema.
-
-A partition is only released when **no row in it still has `archived = false`**.
-A stalled or failed archival run therefore delays reclamation instead of
-destroying unexported readings.
-
-`meter_reads` carries 8 secondary indexes. Most are partial, so they cover only
-the rows a query actually looks for — negative quantities, rows with warnings,
-corrections, and rows still owed an export — rather than the whole table.
-
-TimescaleDB is not used: `create_hypertable` is not applicable to an
-already-partitioned table, and native partitioning keeps the schema installable
-on any PostgreSQL 15+ instance without an extension.
+edmd keeps only its *business* tables in its own PostgreSQL pool (receipts,
+corrections audit, confirmations, billing-period cache, reading orders, SMGW);
+those are ordinary tables under edmd's control.
 
 ## Rate limiting
 
@@ -473,16 +554,18 @@ duplicate order. Two partial unique indexes back it:
 │  ── Quality scoring ──────────────────────────────────────────────────── │
 │  POST /api/v1/quality-score/{malo_id}       ← retroactive Hampel rescore  │
 │                                                                            │
-│  ── Iceberg / S3 OLAP archival ─────────────────────────────────────────  │
-│  GET  /api/v1/archive/status                ← archival stats + batches   │
+│  ── Analytical / OLAP (over meterstore's resolved relation) ───────────  │
+│  GET  /api/v1/archive/status                ← tiering / store stats      │
 │  GET  /api/v1/archive/olap/{malo_id}        ← MMM aggregation (OLAP)     │
 │  GET  /api/v1/archive/portfolio             ← portfolio-level OLAP        │
 │  GET  /api/v1/archive/timeseries/{malo_id}  ← historical time-series      │
 │  POST /api/v1/query/sql                     ← arbitrary DataFusion SQL    │
 │                                                                            │
-│  ── Iceberg REST catalog (DuckDB / Snowflake / Databricks) ──────────── │
-│  GET  /api/v1/iceberg/v1/config                                           │
+│  ── Iceberg REST catalog · read-only · meterstore CatalogFacade ───────  │
+│  GET  /api/v1/iceberg/v1/config             ← Cedar read-archive-olap    │
 │  GET  /api/v1/iceberg/v1/namespaces[/{ns}/tables[/{table}]]              │
+│    (DuckDB / Spark / Trino / PyIceberg attach for schema; mutating       │
+│     routes → 405; engines read Parquet with their own object-store creds) │
 │                                                                            │
 │  ── § 60 Abs. 2 MsbG + §22 EnWG ──────────────────────────────────────── │
 │  GET  /api/v1/confirmations                 ← Schätzwert-Bestätigungen    │
@@ -779,11 +862,11 @@ failures abort without committing and the batch is redelivered. A fresh
 consumer group starts at the **earliest** offset — readings produced before
 the group's first commit are a backlog to drain, not a feed to tail.
 
-The path is covered end-to-end by `tests/kafka_ingest_e2e.rs`: a real
-producer and the real consumer talk to krafka's in-process `FakeBroker`
-(`test-broker` feature) over an actual TCP socket — produce → group join →
-fetch → V01–V10 → audited store → offset commit, poison pill included, with
-no Kafka container.
+The path runs the full pipeline against krafka's in-process `FakeBroker`
+(`test-broker` feature) over an actual TCP socket — produce → group join → fetch
+→ V01–V10 → audited store → offset commit, poison pill included, with no Kafka
+container. A dedicated end-to-end suite for it is follow-up work (the previous one
+was removed with the embedded-Iceberg storage layer it depended on).
 
 ## Hampel-filter quality scoring
 
@@ -1090,6 +1173,21 @@ Response shape (one element per OBIS register):
 **Interval detection.** The `zeitIntervallLaenge` is inferred from the first
 consecutive read pair (15 min → `VIERTELSTUNDE`, 60 min → `MINUTE(60)`, 1440
 min → `TAG`). RLM reads are typically 15-minute intervals.
+
+**Point-in-time reconstruction — `?as_of=RFC3339`.** § 60 Abs. 6 MsbG lets an
+auditor reconstruct the exact billing basis as it stood at a past instant. Adding
+`&as_of=2026-02-05T00:00:00Z` reads the series through meterstore's
+**transaction-time axis** (`store.as_known_at`): version resolution runs under a
+`recorded_at` ceiling, so a correction delivered after that instant — **and an
+interval first stored after it** — are both invisible, and the values returned are
+the ones that were in force then. This is a true bitemporal read, not a value
+overlay: it reconstructs the *set* of readings, so a later-inserted interval no
+longer leaks into a historical view. It works across both tiers, so recent
+settlements reconstruct as faithfully as archived ones. A malformed `as_of` is a
+`400`, never a silent fall-back to current values. `GET /api/v1/zeitreihe/...`
+honours `?as_of=` identically; the non-authoritative ESA Typ-2 stream does not
+(it is never corrected). The correction *log* itself — who changed what, when and
+why — remains queryable via `GET /api/v1/corrections/{malo_id}`.
 
 **OBIS codes.** Each `MeterRead` carries an optional `obis_code` field
 populated from the MSCONS PIA segment. Common values:
@@ -1429,8 +1527,12 @@ edmd --config /etc/edmd/edmd.toml
 addr = "0.0.0.0:8380"          # default
 
 [database]
-url       = "env:DATABASE_URL"  # required; use env: for secrets
-pool_size = 10                  # default
+url                  = "env:DATABASE_URL"  # required; use env: for secrets
+pool_size            = 20     # max connections (default 10)
+min_connections      = 0      # kept-warm minimum (default 0)
+acquire_timeout_secs = 30     # fail a request rather than queue forever (default 30)
+idle_timeout_secs    = 600    # reap idle connections (default 600)
+max_lifetime_secs    = 1800   # recycle connections, e.g. across a failover (default 1800)
 
 [identity]
 tenant = "9900357000004"        # required — MP-ID of the operator
@@ -1460,6 +1562,15 @@ event_types   = [
 # [otel]          # omit to disable tracing
 # endpoint = "http://otel-collector:4317"
 ```
+
+**Connection budget.** edmd opens more PostgreSQL pools than most services, so size
+`pool_size` and the server's `max_connections` with all of them in mind: the main
+pool (`pool_size`, which also backs meterstore's hot tier), plus the single shared
+Iceberg catalog metadata pool — `meter_reads` and `esa_typ2_reads` are two tables of
+one `MeterCatalog`, so they share one `SqlCatalog` (one metadata pool, bounded to 4
+connections), not one pool each. The pool is built through the shared
+`DatabaseConfig::connect` builder, so the configured size and lifetimes actually
+take effect and every connection is tagged `edmd` in `pg_stat_activity`.
 
 ---
 
@@ -1508,104 +1619,105 @@ curl -s "http://edmd:8380/api/v1/zeitreihe/10001234567?from=2026-01-01T00:00:00Z
 
 ---
 
-## Apache Iceberg / S3 OLAP archival
+## Cold-tier OLAP over the meterstore Iceberg history
 
-`edmd` can automatically offload `meter_reads` older than the configured
-retention window to **Apache Iceberg V2 tables** on S3, GCS, or Azure Data Lake.
-A **PostgreSQL-backed SQL catalog** (`iceberg-catalog-sql`) stores all table
-metadata (schema, partition spec, snapshots, manifests) in the same database that
-`edmd` already manages — no Nessie, Apache Polaris, or AWS Glue required.
-[Apache DataFusion](https://arrow.apache.org/datafusion/) executes SQL queries
-over the Parquet files with Iceberg partition pruning for ≥ 10× faster MMM
-aggregation versus full PostgreSQL scans.
+`meter_reads` is a [`meterstore`](https://github.com/hupe1980/meterstore) table:
+a recent window in PostgreSQL and the settled history in **Apache Iceberg V2** on
+S3, GCS, or Azure Data Lake, split by a tiering watermark. meterstore owns the
+Iceberg format, the partitioning, the object-store layout and the cold-tier
+catalog; edmd configures only the daily partition/archival steps, the one-week
+settlement lag, and the `tenant` identity column. Every read is version-resolved
+(latest-version-wins) and tier-split before it reaches edmd, so a query never
+sees a superseded value or has to know which tier an interval lives in.
+[Apache DataFusion](https://arrow.apache.org/datafusion/) runs the analytical
+endpoints over that resolved relation with Iceberg partition pruning, for MMM
+aggregation that spans years without a full PostgreSQL scan.
 
-### Why Iceberg?
+### Why a tiered store?
 
 | Challenge | Solution |
 |---|---|
-| 35 000 rows/RLM MaLo/year — PG scan degrades after year 2 | Parquet columnar format on object storage |
+| 35 000 rows/RLM MaLo/year — PG scan degrades after year 2 | Settled intervals roll past the watermark into columnar Parquet on object storage |
 | MMM aggregation spans 3+ years | DataFusion pushes predicates to Iceberg partitions + Parquet row-group statistics |
-| Multi-engine access (Spark, Trino, DuckDB) | Iceberg V2 table format via `iceberg = "0.9.1"` |
-| No external catalog service | `iceberg-catalog-sql` stores metadata in existing PostgreSQL |
+| Multi-engine access (Spark, Trino, DuckDB) | Read-only Iceberg REST catalog (meterstore's `CatalogFacade`, mounted by edmd under `/api/v1/iceberg`) |
+| Reproduce a past settlement | `store.as_of(snapshot)` (cold-tier snapshot) or `store.as_known_at(t)` (`recorded_at` ceiling, both tiers) reads history as it stood then |
 
-### File layout
+### Layout and partitioning
 
-The partition spec is `identity(tenant)`, `identity(sparte)`, `month(dtm_from)` —
-`tenant` leads, and `month` subsumes year (Iceberg 0.9.1 forbids two time-based
-transforms on the same source field, so there is no separate year level):
-
-```
-{storage_uri}/
-  data/
-    tenant=9900357000004/            ← identity(tenant) — leading partition
-      sparte=STROM/                  ← identity(sparte)
-        dtm_from_month=2024-01/      ← month(dtm_from); year is subsumed
-          edmd-archive-{uuid}.parquet
-      sparte=GAS/
-        dtm_from_month=2024-01/
-          ...
-  metadata/
-    v1.metadata.json                 ← Iceberg V2 table metadata
-```
+The Iceberg V2 format, the partition spec and the object-store directory layout
+are meterstore's, driven by edmd's `TableConfig`: a partition step, an archival
+step and a settlement lag (all configurable, see below), plus `tenant` as the
+non-nullable identity column so two tenants' readings for one measuring point
+never merge. Files land under the configured `storage_uri` warehouse. edmd defines
+no partition spec of its own and implements no archival logic — it starts
+meterstore's maintenance loop, which drives the tiering.
 
 ### Configuration
 
+meterstore is a library edmd links in-process (the published `meterstore` crate),
+so it reads no config of its own — its tiering knobs come from edmd's `[archive]`
+section:
+
 ```toml
 [archive]
-enabled                = true
-storage_uri            = "s3://my-bucket/edmd/meter_reads"
-access_key_id          = "env:AWS_ACCESS_KEY_ID"
-secret_access_key      = "env:AWS_SECRET_ACCESS_KEY"
-region                 = "eu-central-1"
-# Optional — for MinIO, Ceph RGW, LocalStack:
-# endpoint_url         = "http://minio:9000"
-retention_months       = 12      # keep in PostgreSQL for this many months
-batch_size             = 100000  # rows per archive run
-interval_secs          = 3600    # run every hour
-# Iceberg catalog in the same PostgreSQL — no extra service:
-iceberg_catalog_schema = "iceberg_catalog"   # schema created automatically
-iceberg_catalog_name   = "edmd"
+enabled              = true
+storage_uri          = "s3://my-bucket/edmd/warehouse"   # scheme picks the backend
+region               = "eu-central-1"
+# access_key_id / secret_access_key optional — omit to use the instance-role chain.
+# endpoint_url       = "http://minio:9000"   # S3-compatible (MinIO/Ceph/R2 → path-style)
+settlement_lag_days  = 7    # age at which an interval settles hot → cold
+partition_step_days  = 1    # cold-tier partition granularity
+archival_step_days   = 1    # watermark advance per archival sweep
+cold_file_target_mib = 512  # target Parquet file size
+maintenance_interval_secs = 3600  # how often the tiering loop runs a cycle
 ```
+
+`enabled` turns the cold tier on; the `storage_uri` **scheme** selects the
+warehouse backend — `file://`, `memory://` (dev), `s3://` (and S3-compatible
+`minio://` / `r2://`), `gs://`, `abfss://`. For S3, `region` plus the optional
+`access_key_id`/`secret_access_key` (prefer `"env:…"` refs) configure access;
+**omit the keys** to let the EC2/IRSA instance-role chain supply them — the
+recommended production path. GCS and Azure use their platform credential chains
+(ADC / managed identity). Retention is not a window to set — meterstore reclaims
+the hot tier through the tiering watermark, and `settlement_lag_days` is simply how
+long a reading stays correctable before it settles. `maintenance_interval_secs`
+sets how often meterstore's in-process maintenance loop archives due windows: without it the
+cold tier never fills, since the watermark only advances when a cycle runs.
 
 ### Archive OLAP endpoints
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/v1/archive/status` | Archival statistics (total batches, rows archived, bytes written) + 20 most recent batches |
-| `GET /api/v1/archive/olap/{malo_id}?from=&to=` | **MMM aggregation**: total kWh, read count, period bounds for one MaLo from the cold tier |
-| `GET /api/v1/archive/portfolio?from=&to=&limit=N` | Portfolio-level aggregation: top-N MaLo by consumption across the full archive |
-| `GET /api/v1/archive/timeseries/{malo_id}?from=&to=` | Historical time-series export from Parquet (up to 50 000 rows) |
+| `GET /api/v1/archive/status` | Store / tiering statistics (rows per tier, watermark position) |
+| `GET /api/v1/archive/olap/{malo_id}?from=&to=` | **MMM aggregation**: total kWh, read count, period bounds for one MaLo over the resolved relation |
+| `GET /api/v1/archive/portfolio?from=&to=&limit=N` | Portfolio-level aggregation: top-N MaLo by consumption, tenant-scoped, ordered by consumption descending |
+| `GET /api/v1/archive/timeseries/{malo_id}?from=&to=` | Historical time-series export (up to 50 000 rows) |
 
-**Typical `mmm_aggregate` query** (executes via DataFusion over S3 Parquet):
+**Typical MMM aggregation** (runs over the version-resolved, tier-split series):
 
 ```bash
 curl "http://edmd:8380/api/v1/archive/olap/10001234567?from=2023-01-01T00:00:00Z&to=2025-12-31T23:59:59Z" \
-  -H "Authorization: Bearer <token>" | jq '{total_kwh, read_count, period_from, period_to}'
+  -H "Authorization: Bearer <token>" | jq '{total_kwh, read_count, from, to}'
 ```
 
 Response:
 
 ```json
 {
-  "malo_id":     "10001234567",
-  "total_kwh":   123456.789,
-  "read_count":  105120,
-  "period_from": "2023-01-01T00:00:00Z",
-  "period_to":   "2025-12-31T23:45:00Z",
-  "source":      "iceberg-archive"
+  "malo_id":    "10001234567",
+  "total_kwh":  "123456.78900",
+  "read_count": 105120,
+  "from":       "2023-01-01 00:00:00 +00:00:00",
+  "to":         "2025-12-31 23:59:59 +00:00:00"
 }
 ```
 
 ### Dependencies
 
-| Crate | Version | Purpose |
-|---|---|---|
-| `iceberg` | 0.9.1 | Apache Iceberg core — FileIO, table spec, writer |
-| `iceberg-storage-opendal` | 0.9.1 | S3/GCS/AzureDLS storage via opendal 0.55 |
-| `iceberg-datafusion` | 0.9.1 | `IcebergTableProvider` for DataFusion SQL |
-| `iceberg-catalog-sql` | 0.9.1 | PostgreSQL-backed Iceberg catalog |
-| `datafusion` | 52 | SQL query engine + partition pruning |
-| MSRV | **1.94** | Required by iceberg 0.9.1 |
+The Iceberg core, the object-store FileIO, the Iceberg catalog and the
+DataFusion query engine are meterstore's dependencies, not edmd's: edmd links
+`meterstore` and hands it a `TableConfig`. edmd carries no `iceberg` crate and
+defines no Iceberg tables of its own.
 
 ---
 
@@ -1666,19 +1778,31 @@ with open('reads.arrows', 'rb') as f:
 ## DataFusion SQL endpoint
 
 `POST /api/v1/query/sql` executes an arbitrary SQL query via **Apache DataFusion**
-over the Iceberg cold tier. This is the power-user interface for ad-hoc OLAP
-analysis — the Iceberg REST catalog endpoints enable tool-native access, while
-this endpoint allows programmatic SQL without a database client.
+in meterstore's own session, over the version-resolved relation meterstore
+registers under the name `meter_reads` (`store.resolved_table()`). This is the
+power-user interface for ad-hoc OLAP analysis, programmatic SQL without a
+database client.
+
+The resolved relation exposes these columns: `malo_id`, `"from"` (interval start —
+a SQL reserved word, so it must be quoted), `to`, `value` (the kWh value),
+`sparte`, `obis_code`, `quality`, `unit`, `tenant`, `subject_ref`, and the
+provenance attribute columns `source`, `sender_mp_id` and `allocation_version`.
 
 ```bash
-# Aggregate annual consumption per MaLo from the cold archive
+# Aggregate annual consumption per MaLo over the resolved relation
 curl -s -X POST http://edmd:8380/api/v1/query/sql \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" -d '{
-    "sql": "SELECT malo_id, CAST(SUM(quantity_kwh) AS DOUBLE) AS kwh_total FROM meter_reads_archive WHERE dtm_from >= TIMESTAMP '\'2025-01-01T00:00:00Z\'' GROUP BY malo_id ORDER BY kwh_total DESC LIMIT 20",
+    "sql": "SELECT malo_id, CAST(SUM(\"value\") AS DOUBLE) AS kwh_total FROM meter_reads WHERE \"from\" >= TIMESTAMP '\'2025-01-01T00:00:00Z\'' GROUP BY malo_id ORDER BY kwh_total DESC LIMIT 20",
     "limit": 20
   }' | jq .
 ```
+
+Results come back as JSON rows by default, or as an Arrow IPC stream when the
+body carries `"format": "arrow_ipc"`. Every result carries the tier-provenance
+fields `spans_tiers` and `touched_hot_tier`, so a caller can tell whether a
+query crossed the watermark into the settled cold tier or was served entirely
+from the recent hot window.
 
 **Access control:** requires Cedar action `read-archive-olap`.
 Only `SELECT` and `WITH` statements are accepted; `INSERT`/`UPDATE`/`DROP` are rejected.
@@ -1687,36 +1811,47 @@ Only `SELECT` and `WITH` statements are accepted; `INSERT`/`UPDATE`/`DROP` are r
 
 ## Iceberg REST catalog — external OLAP
 
-`edmd` exposes the Iceberg REST catalog protocol (ICEBERG-89 spec) so that
-**DuckDB**, **Snowflake**, and **Databricks** can attach directly to the cold archive
-without any ETL pipeline.
+edmd mounts **meterstore's** `CatalogFacade` (meterstore's `catalog-facade`
+feature) under `/api/v1/iceberg`, exposing the standard Iceberg REST catalog
+protocol so **DuckDB**, **Spark**, **Trino**, and **PyIceberg** can attach to the
+cold Iceberg tier without any ETL pipeline. It is a live, correct catalog over
+the actual settled history — `GET /api/v1/iceberg/v1/config`,
+`…/v1/namespaces`, `…/v1/namespaces/{ns}`, `…/v1/namespaces/{ns}/tables` and
+`…/v1/namespaces/{ns}/tables/{table}` all return the real schema and table
+locations.
+
+**Read-only by design.** PostgreSQL holds the rows at or above the tiering
+watermark and Iceberg holds those below it, so an external writer coming through
+this endpoint would break that split — mutating routes answer `405`. edmd and
+meterstore stay in the **metadata path only**, never the data path: the catalog
+returns table locations but carries no storage credentials, and each engine
+reads the Parquet directly from object storage with **its own** credentials.
+
+**Cedar-gated.** An axum middleware runs the shared OIDC `Claims` extractor and
+`CedarEnforcer.check("read-archive-olap", tenant)` in front of the nested
+router, so the catalog is authenticated and authorised exactly like the other
+archive endpoints. Unauthenticated requests receive `403 Forbidden`.
 
 ```sql
--- DuckDB: attach edmd's Iceberg catalog and query the cold archive directly
-ATTACH 'http://edmd:8380/api/v1/iceberg/v1'
-    AS mako (TYPE ICEBERG, ENDPOINT_TYPE REST);
+-- DuckDB: attach edmd's Iceberg REST catalog (metadata), then read Parquet
+-- directly from object storage with DuckDB's own S3 credentials.
+ATTACH 'rest+http://edmd:8380/api/v1/iceberg' AS mako (TYPE ICEBERG);
 
--- Annual energy by MaLo — full partition pruning + Bloom filter
+-- Annual energy by MaLo over the real relation
 SELECT
     malo_id,
-    DATE_TRUNC('month', dtm_from) AS month,
-    SUM(quantity_kwh)              AS arbeitsmenge_kwh
-FROM mako.edmd.meter_reads_archive
-WHERE dtm_from BETWEEN TIMESTAMP '2025-01-01' AND TIMESTAMP '2025-12-31'
+    DATE_TRUNC('month', "from") AS month,
+    SUM("value")                AS arbeitsmenge_kwh
+FROM mako.meter_reads
+WHERE "from" BETWEEN TIMESTAMP '2025-01-01' AND TIMESTAMP '2025-12-31'
   AND quality NOT IN ('FAULTY', 'UNKNOWN')
 GROUP BY 1, 2
 ORDER BY 1, 2;
 ```
 
-DuckDB executes this with full four-level pruning:
-1. Iceberg month-partition pruning
-2. Manifest `lower_bound`/`upper_bound` (TimeIndex)
-3. Parquet row-group min/max statistics (ZoneMap)
-4. Parquet Bloom filter on `malo_id` (1 % FPR, eliminates ~99 % of files for single-MaLo queries)
-
-**Authorization.** All catalog endpoint responses are gated by OIDC/Cedar.
-Snowflake or Databricks must present a valid bearer token in the `CATALOG INTEGRATION`
-config. Unauthenticated requests receive `403 Forbidden`.
+The relation is `meter_reads`, with meterstore's resolved columns — `"from"` (the
+interval start, quoted because it is a SQL reserved word) and `"value"` (the kWh
+value).
 
 ---
 
@@ -1886,30 +2021,45 @@ sequenceDiagram
 
 `DELETE /api/v1/gdpr/erasure/{malo_id}` implements the
 [GDPR right to erasure](https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX%3A32016R0679#d1e2606-1-1)
-for meter data. This endpoint:
+for meter data. Because `meter_reads` lives in meterstore's append-only tiered
+store, erasure is **pseudonymisation**, not a Parquet rewrite: every MaLo is
+enrolled as an erasure subject at ingest — a `subject_ref` stamped on each of its
+rows — and Art. 17 destroys that subject mapping. In one transaction on edmd's
+pool the endpoint:
 
-1. Deletes all rows for the MaLo from `meter_reads` (hot tier) and related tables.
-2. Logs the erasure in `gdpr_deletions` (audit trail with `authorized_by`, timestamp).
-3. All subsequent cold-tier (Iceberg) queries automatically exclude the erased MaLo
-   via a `AND malo_id NOT IN (...)` filter injected at DataFusion query time.
+1. Records the erasure request in `gdpr_deletions` (idempotent on `malo_id + tenant`).
+2. Destroys the MaLo's subject mapping in meterstore's registry
+   ([`SubjectRegistry::erase_in`](https://github.com/hupe1980/meterstore)) — the
+   readings survive in both tiers but become unattributable everywhere at once.
+3. Deletes the derived edmd tables (`meter_billing_periods`,
+   `quality_assessments`, `substitute_value_log`), tenant-scoped.
+
+meterstore's registry tables (`meterstore_subject_map` / `meterstore_erasures`)
+live in the same database, so all of the above commits or rolls back together.
 
 ```bash
 curl -X DELETE "http://edmd:8380/api/v1/gdpr/erasure/10001234567" \
   -H "Authorization: Bearer <token>" \
-  -H "X-Authorized-By: gdpr-officer@example.com" \
-  -H "X-Erasure-Reason: Customer right-to-erasure request #2026-42"
+  -H "Content-Type: application/json" -d '{
+    "reason":        "Customer right-to-erasure request #2026-42",
+    "authorized_by": "gdpr-officer@example.com"
+  }'
 ```
 
 Response `200 OK`:
 ```json
-{ "malo_id": "10001234567", "rows_deleted": 35040, "archived_pending": true }
+{
+  "malo_id":          "10001234567",
+  "status":           "erased",
+  "subject_unlinked": true,
+  "mechanism":        "meterstore subject-registry pseudonymisation (append-only tiers)",
+  "legal_basis":      "DSGVO Art. 17 right to erasure"
+}
 ```
 
-> **Note:** Physical deletion of Parquet data files from S3 requires an
-> asynchronous compaction job (Iceberg copy-on-write). Until the job runs,
-> the data is excluded from all query results but physically still present in
-> object storage. The `archived_pending: true` field signals that the
-> Parquet-level rewrite is outstanding.
+The readings remain for § 60 Abs. 6 MsbG reconciliation but no longer identify
+the MaLo. `subject_unlinked` is `false` when the MaLo had no mapping — never
+stored or already erased — which is recorded, not treated as an error.
 
 ---
 
@@ -1925,7 +2075,7 @@ everything but write nothing.
 |---|---|---|
 | Reads | `read-timeseries`, `read-imbalance`, `read-billing-period`, `read-corrections`, `read-archive-olap`, `read-archive-status`, `read-reading-order`, `use-mcp` | any (tenant match only) |
 | Reading ingest | `write-meter-reads` (direct push, gas, IoT, SMGW registry) | `MSB` or `admin` |
-| Series mutation | `write-timeseries`, `write-corrections`, `write-quality-rescore` (bulk import, §22 corrections, §17 substitutes, virtual meters, rescore) | `MSB`, `NB`, or `admin` |
+| Series mutation | `write-timeseries`, `write-corrections`, `write-quality-rescore` (bulk import, § 60 Abs. 6 MsbG corrections, § 60 Abs. 2 MsbG substitutes, virtual meters, rescore) | `MSB`, `NB`, or `admin` |
 | Field dispatch | `write-reading-order` (orders + §40 EnWG campaign) | `NB`, `MSB`, or `admin` |
 | Erasure | `write-gdpr-erasure` (Art. 17 DSGVO) | `NB`, `MSB`, or `admin` |
 
@@ -1954,5 +2104,5 @@ permit(
 |--------|--------|
 | Webhook `de.mako.edifact.inbound` success rate | > 99 % |
 | DB pool utilisation | < 80 % |
-| `meter_reads` rows with `archived = false` and `dtm_from < now() - retention_months` | Should decrease each hour when archival is enabled |
+| meterstore tiering-watermark lag (age of the oldest hot-tier interval) | Bounded — settled intervals should roll to the cold tier within the one-week settlement lag |
 

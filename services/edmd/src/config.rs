@@ -17,24 +17,21 @@
 //! api_key = "env:EDMD_MARKTD_API_KEY"
 //!
 //! [webhook]
-//! inbound_secret = "env:EDMD_INBOUND_SECRET"
+//! inbound_secret     = "env:EDMD_INBOUND_SECRET"
+//! erp_webhook_url    = "http://erp:9000/hooks/edmd"
+//! erp_webhook_secret = "env:EDMD_ERP_WEBHOOK_SECRET"  # signs outbound events
 //!
 //! [subscription]
 //! webhook_url   = "http://edmd:8380/webhook"
 //! subscriber_id = "edmd"
 //!
-//! # Iceberg/S3 archival — offloads meter_reads > retention_months to Parquet
+//! # Cold tier. The `storage_uri` scheme picks the warehouse backend (file /
+//! # memory / s3 / gs / abfss); meterstore owns tiering through its watermark.
 //! # [archive]
-//! # enabled           = true
-//! # storage_uri       = "s3://my-bucket/edmd/meter_reads"
-//! # access_key_id     = "env:AWS_ACCESS_KEY_ID"
-//! # secret_access_key = "env:AWS_SECRET_ACCESS_KEY"
-//! # region            = "eu-central-1"
-//! # retention_months  = 12
-//! # batch_size        = 100000
-//! # interval_secs     = 3600
-//! # # Optional: register with Nessie/Polaris/AWS Glue REST catalog
-//! # iceberg_catalog_url = "http://nessie:19120/iceberg/v1"
+//! # enabled     = true
+//! # storage_uri = "s3://my-bucket/edmd/warehouse"
+//! # region      = "eu-central-1"
+//! # # access_key_id / secret_access_key optional — omit to use an instance role.
 //!
 //! # [oidc]
 //! # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
@@ -46,75 +43,92 @@
 use serde::Deserialize;
 use std::path::Path;
 
-// ── Archive config (formerly in mako-edm::archive) ───────────────────────────
+// ── meterstore / cold-tier config ───────────────────────────────────────────
 
-/// Iceberg/S3 archival configuration.
+/// In-process meterstore configuration.
 ///
-/// Set via the `[archive]` section of `edmd.toml`.
+/// meterstore runs **in-process** inside edmd and reads no config of its own —
+/// every knob it needs is supplied here, through the `[archive]` section of
+/// `edmd.toml`. meterstore owns tiering and retention through its watermark (there
+/// is no edmd archival worker); this section says *where* the cold tier lives and
+/// *when/how* intervals settle into it.
 ///
 /// ```toml
 /// [archive]
-/// enabled                = true
-/// storage_uri            = "s3://my-bucket/edmd/meter_reads"
-/// access_key_id          = "env:AWS_ACCESS_KEY_ID"
-/// secret_access_key      = "env:AWS_SECRET_ACCESS_KEY"
-/// region                 = "eu-central-1"
-/// retention_months       = 12
-/// batch_size             = 100000
-/// interval_secs          = 3600
+/// enabled             = true
+/// storage_uri         = "s3://my-bucket/edmd/warehouse"
+/// region              = "eu-central-1"
+/// settlement_lag_days = 7
+/// # access_key_id / secret_access_key optional — omit to use an instance role.
 /// ```
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArchiveConfig {
-    /// Enable archival worker.  Default: `false`.
+    /// Enable the cold tier. When `false`, meterstore runs hot-only against an
+    /// in-memory warehouse. Default: `false`.
     #[serde(default)]
     pub enabled: bool,
-    /// Root URI for Parquet/Iceberg data files.
-    /// Supported schemes: `s3://`, `gs://`, `abfss://`, `file://`.
+    /// Warehouse root URI meterstore writes Iceberg data files under. The scheme
+    /// selects the object-store backend:
+    ///
+    /// - `file://` — local filesystem
+    /// - `memory://` — in-process (dev / hot-only)
+    /// - `s3://` (and S3-compatible `minio://` / `r2://`) — credentials below or
+    ///   the instance-role chain
+    /// - `gs://` — Google Cloud Storage (ADC credentials)
+    /// - `abfss://` — Azure Data Lake (managed identity)
+    #[serde(default)]
     pub storage_uri: String,
-    /// Months of hot-tier retention.  Reads older than this are archived.
-    #[serde(default = "archive_default_retention_months")]
-    pub retention_months: u32,
-    /// Maximum rows per archival batch.
-    #[serde(default = "archive_default_batch_size")]
-    pub batch_size: u32,
-    /// Archival worker interval in seconds.
-    #[serde(default = "archive_default_interval_secs")]
-    pub interval_secs: u64,
-    /// PostgreSQL schema for the Iceberg SQL-catalog tables.
-    #[serde(default = "archive_default_catalog_schema")]
-    pub iceberg_catalog_schema: String,
-    /// Logical catalog name registered in the SQL catalog.
-    #[serde(default = "archive_default_catalog_name")]
-    pub iceberg_catalog_name: String,
-    /// AWS access key ID.  Use `"env:AWS_ACCESS_KEY_ID"`.
-    pub access_key_id: Option<String>,
-    /// AWS secret access key.  Use `"env:AWS_SECRET_ACCESS_KEY"`.
-    pub secret_access_key: Option<String>,
-    /// AWS region.
-    #[serde(default = "archive_default_aws_region")]
-    pub region: String,
-    /// S3-compatible endpoint override (MinIO, LocalStack, Ceph RGW).
+    /// Days after an interval occurs before it is **settled** — eligible to move
+    /// from the mutable hot PostgreSQL tier into the append-only cold Iceberg
+    /// tier. Below this age a reading can still be corrected in place. Default: 7.
+    #[serde(default = "archive_default_settlement_lag_days")]
+    pub settlement_lag_days: u32,
+    /// Cold-tier partition granularity, in days. Default: 1.
+    #[serde(default = "archive_default_step_days")]
+    pub partition_step_days: u32,
+    /// How far each archival sweep advances the tiering watermark, in days.
+    /// Default: 1.
+    #[serde(default = "archive_default_step_days")]
+    pub archival_step_days: u32,
+    /// Target Parquet file size in the cold tier, in MiB. Default: 512.
+    #[serde(default = "archive_default_cold_file_mib")]
+    pub cold_file_target_mib: u32,
+    /// How often meterstore's in-process maintenance loop runs a tiering cycle
+    /// (archives settled windows hot → cold, checks the tier invariant), in
+    /// seconds. Without it settled intervals never leave the hot tier. Default:
+    /// 3600 (hourly).
+    #[serde(default = "archive_default_maintenance_interval_secs")]
+    pub maintenance_interval_secs: u32,
+    /// Object-store region for an `s3://` warehouse (or `AWS_REGION`).
+    #[serde(default)]
+    pub region: Option<String>,
+    /// S3-compatible endpoint override (MinIO, Ceph, R2, LocalStack). Its presence
+    /// switches on path-style addressing.
+    #[serde(default)]
     pub endpoint_url: Option<String>,
+    /// S3 access key ID. Prefer `"env:AWS_ACCESS_KEY_ID"`; **omit entirely** to use
+    /// the instance-role / IRSA credential chain — the recommended production path.
+    #[serde(default)]
+    pub access_key_id: Option<String>,
+    /// S3 secret access key. Prefer `"env:AWS_SECRET_ACCESS_KEY"`; omit to use the
+    /// credential chain. GCS (`gs://`) and Azure (`abfss://`) use their platform
+    /// chains (ADC / managed identity) and need no keys here.
+    #[serde(default)]
+    pub secret_access_key: Option<String>,
 }
 
-fn archive_default_retention_months() -> u32 {
-    12
+fn archive_default_settlement_lag_days() -> u32 {
+    7
 }
-fn archive_default_batch_size() -> u32 {
-    100_000
+fn archive_default_step_days() -> u32 {
+    1
 }
-fn archive_default_interval_secs() -> u64 {
+fn archive_default_cold_file_mib() -> u32 {
+    512
+}
+fn archive_default_maintenance_interval_secs() -> u32 {
     3_600
-}
-fn archive_default_catalog_schema() -> String {
-    "iceberg_catalog".to_owned()
-}
-fn archive_default_catalog_name() -> String {
-    "edmd".to_owned()
-}
-fn archive_default_aws_region() -> String {
-    "eu-central-1".to_owned()
 }
 
 impl Default for ArchiveConfig {
@@ -122,15 +136,15 @@ impl Default for ArchiveConfig {
         Self {
             enabled: false,
             storage_uri: String::new(),
-            retention_months: archive_default_retention_months(),
-            batch_size: archive_default_batch_size(),
-            interval_secs: archive_default_interval_secs(),
-            iceberg_catalog_schema: archive_default_catalog_schema(),
-            iceberg_catalog_name: archive_default_catalog_name(),
+            settlement_lag_days: archive_default_settlement_lag_days(),
+            partition_step_days: archive_default_step_days(),
+            archival_step_days: archive_default_step_days(),
+            cold_file_target_mib: archive_default_cold_file_mib(),
+            maintenance_interval_secs: archive_default_maintenance_interval_secs(),
+            region: None,
+            endpoint_url: None,
             access_key_id: None,
             secret_access_key: None,
-            region: archive_default_aws_region(),
-            endpoint_url: None,
         }
     }
 }
@@ -154,7 +168,7 @@ pub struct Config {
     /// See `[mcp]` in TOML — e.g. `api_key = "env:EDMD_MCP_API_KEY"`.
     #[serde(default)]
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
-    /// Iceberg/S3 archival configuration.  Disabled by default.
+    /// Cold-tier warehouse for meterstore's Iceberg history. Disabled by default.
     #[serde(default)]
     pub archive: ArchiveConfig,
     /// Request rate limits, global and per tenant. See `[rate_limit]` in TOML.
@@ -272,6 +286,11 @@ pub struct WebhookConfig {
     /// ERP webhook URL for outbound CloudEvents (`de.messwert.reading.direct.stored`,
     /// `de.messwert.reading.quality.warning`). Omit to disable outbound notifications.
     pub erp_webhook_url: Option<String>,
+    /// Shared secret for signing **outbound** CloudEvents with an
+    /// `x-mako-signature: sha256=<hex>` HMAC over the body, so the ERP receiver
+    /// can authenticate every edmd-originated event (the counterpart to
+    /// `inbound_secret`). Omit to send unsigned, trusting the transport.
+    pub erp_webhook_secret: Option<String>,
 }
 
 /// `[confirmation]` — § 60 Abs. 2 MsbG estimated-reading confirmation loop.

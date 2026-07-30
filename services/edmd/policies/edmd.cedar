@@ -11,7 +11,7 @@
 //   "read-billing-period" — GET /api/v1/billing-period/:malo_id (M15)
 //   "write-meter-reads"   — POST /api/v1/meter-reads/rlm/:malo_id (direct push)
 //   "read-corrections"    — GET /api/v1/corrections/:malo_id
-//   "write-corrections"   — POST /api/v1/corrections/:malo_id (§22 MessZV)
+//   "write-corrections"   — POST /api/v1/corrections/:malo_id (§ 60 Abs. 6 MsbG)
 //   "write-gdpr-erasure"  — DELETE /api/v1/gdpr/erasure/:malo_id (GDPR Art. 17)
 //   "use-mcp"             — /mcp (Streamable HTTP MCP server)
 
@@ -46,8 +46,8 @@ permit(
      context.principal_roles.contains("admin"))
 };
 
-// Stored-series mutation: bulk import, §22 MessZV corrections, §17 MessZV
-// substitute values, virtual-meter configuration, quality rescore. Operated
+// Stored-series mutation: bulk import, § 60 Abs. 6 MsbG corrections, § 60 Abs. 2
+// MsbG substitute values, virtual-meter configuration, quality rescore. Operated
 // by the metering-side roles (MSB field data, NB grid operations) or an
 // operator account.
 permit(

@@ -136,7 +136,7 @@ async fn main() -> anyhow::Result<()> {
     processd::server::run(processd::server::RunConfig {
         listen,
         database_url,
-        db_pool_size: cfg.database.pool_size,
+        db: cfg.database,
         inbound_secret,
         makod_url: cfg.makod.url,
         makod_api_key,

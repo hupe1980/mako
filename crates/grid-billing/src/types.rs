@@ -1179,7 +1179,7 @@ impl SettlementResult {
 /// For Gas:
 /// - The `arbeitsmenge_kwh` should already be converted from m³ using
 ///   `brennwert × zustandszahl` before being supplied here.
-///   (`mako-edm` `MeterBillingPeriod.arbeitsmenge_kwh` carries this converted value.)
+///   (edmd's `MeterBillingPeriod.arbeitsmenge_kwh` carries this converted value.)
 #[derive(Debug, Clone)]
 pub struct NneInput {
     /// 11-digit Marktlokations-ID.

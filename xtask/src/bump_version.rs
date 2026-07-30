@@ -58,10 +58,8 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         "edi-energy",
         "mako-engine",
         "mako-markt",
-        "mako-edm",
         "grid-billing",
         "eeg-billing",
-        "metering",
         "mako-obs",
         "mako-service",
         "mako-plugin",
@@ -192,7 +190,6 @@ authors     = [\"hupe1980\"]
 edi-energy       = { path = \"crates/edi-energy\", version = \"0.9\" }
 mako-engine      = { path = \"crates/mako-engine\", version = \"0.9\" }
 mako-markt       = { path = \"crates/mako-markt\", version = \"0.9\" }
-mako-edm         = { path = \"crates/mako-edm\", version = \"0.9\" }
 grid-billing     = { path = \"crates/grid-billing\", version = \"0.9\" }
 eeg-billing      = { path = \"crates/eeg-billing\", version = \"0.9\" }
 mako-obs         = { path = \"crates/mako-obs\", version = \"0.9\" }

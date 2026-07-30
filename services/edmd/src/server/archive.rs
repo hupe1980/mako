@@ -1,4 +1,7 @@
-//! Iceberg/S3 cold-tier archive: status/OLAP endpoints, REST catalog, DataFusion SQL.
+//! Cold-tier archive surface: status, single-MaLo and portfolio MMM aggregation,
+//! raw time-series export, and read-only analytical SQL — all evaluated by
+//! meterstore across the hot + cold tiers. External Iceberg clients use
+//! meterstore's own catalog facade, not an edmd-hosted REST catalog.
 
 #[allow(unused_imports)]
 use super::*;
@@ -23,27 +26,19 @@ pub(crate) async fn get_archive_status(
             .into_response();
     }
 
-    let (stats, batches) = tokio::join!(
-        crate::iceberg::worker::archive_stats(&pool),
-        crate::iceberg::worker::recent_batches(&pool, 20),
-    );
-
-    let stats = stats.unwrap_or(mako_edm::archive::ArchiveStats {
-        total_batches: 0,
-        committed_batches: 0,
-        total_rows_archived: 0,
-        total_bytes_written: 0,
-        oldest_cutoff: None,
-        newest_cutoff: None,
-    });
-    let batches = batches.unwrap_or_default();
-
-    let enabled = state.olap_engine.is_some();
-
+    let _ = &pool;
+    // Archival is owned by meterstore now (hot Postgres + cold Iceberg). Report
+    // the tier it manages rather than the former per-batch export bookkeeping.
+    let store = state.repo.store();
     Json(serde_json::json!({
-        "enabled": enabled,
-        "stats": stats,
-        "recent_batches": batches,
+        "enabled": true,
+        "backend": "meterstore",
+        "tables": {
+            "resolved": store.resolved_table(),
+            "raw": store.raw_table(),
+        },
+        "note": "Cold-tier archival is managed by meterstore; per-batch archive \
+                 statistics are no longer tracked.",
     }))
     .into_response()
 }
@@ -83,13 +78,6 @@ pub(crate) async fn get_archive_olap(
             .into_response();
     }
 
-    let Some(engine) = &state.olap_engine else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "Iceberg archival is not enabled — set [archive].enabled = true in edmd.toml" })),
-        ).into_response();
-    };
-
     let from = params
         .from
         .as_deref()
@@ -101,11 +89,34 @@ pub(crate) async fn get_archive_olap(
         .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
         .unwrap_or_else(OffsetDateTime::now_utc);
 
-    match engine.mmm_aggregate(&malo_id, from, to).await {
-        Ok(Some(result)) => Json(result).into_response(),
+    // MMM aggregation now runs against the version-resolved, tier-split series
+    // meterstore hands back — the same numbers a settlement would reconcile.
+    match state
+        .repo
+        .store()
+        .series(malo_id.clone())
+        .column_eq(
+            "tenant",
+            datafusion::scalar::ScalarValue::Utf8(Some(state.tenant.clone())),
+        )
+        .range(from, to)
+        .collect()
+        .await
+    {
+        Ok(Some(series)) => {
+            let total: rust_decimal::Decimal = series.intervals.iter().map(|i| i.value_kwh).sum();
+            Json(serde_json::json!({
+                "malo_id": malo_id,
+                "total_kwh": total.to_string(),
+                "read_count": series.intervals.len(),
+                "from": from.to_string(),
+                "to": to.to_string(),
+            }))
+            .into_response()
+        }
         Ok(None) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "no archived data for this MaLo / period" })),
+            Json(serde_json::json!({ "error": "no data for this MaLo / period" })),
         )
             .into_response(),
         Err(e) => {
@@ -128,16 +139,15 @@ pub(crate) fn default_portfolio_limit() -> usize {
 
 /// `GET /api/v1/archive/portfolio?from=RFC3339&to=RFC3339&limit=N`
 ///
-/// Portfolio-level MMM aggregation over the Iceberg cold tier.
-/// Returns total kWh per MaLo ordered by consumption descending.
+/// Portfolio-level MMM aggregation across both tiers, evaluated in one
+/// version-resolved plan by meterstore. Returns total kWh and read count per
+/// MaLo, ordered by consumption descending, capped at `limit`.
 pub(crate) async fn get_archive_portfolio(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Query(params): Query<PortfolioParams>,
 ) -> impl IntoResponse {
-    use time::format_description::well_known::Rfc3339;
-
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-archive-olap", resource_tenant) {
         return (
@@ -147,13 +157,7 @@ pub(crate) async fn get_archive_portfolio(
             .into_response();
     }
 
-    let Some(engine) = &state.olap_engine else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "archival not enabled" })),
-        )
-            .into_response();
-    };
+    use time::format_description::well_known::Rfc3339;
 
     let from = params
         .from
@@ -165,17 +169,90 @@ pub(crate) async fn get_archive_portfolio(
         .as_deref()
         .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
         .unwrap_or_else(OffsetDateTime::now_utc);
+    // A hostile `limit` would otherwise reach the SQL text; clamp it to a sane
+    // ceiling and render it as a plain integer so it cannot carry an injection.
+    let limit = params.limit.clamp(1, 10_000);
 
-    match engine
-        .portfolio_aggregate(from, to, params.limit.min(10_000))
+    // Portfolio-wide MMM is a cross-MaLo GROUP BY over the version-resolved
+    // relation, which meterstore evaluates across both tiers in one plan. `from`
+    // is a SQL reserved word, hence quoted; the bounds and the tenant travel as
+    // bound parameters so no value reaches the SQL text. The tenant predicate is
+    // defence in depth — a deployment writes only its own tenant — but it keeps
+    // the aggregate correct even if a store is ever shared across tenants.
+    let store = state.repo.store();
+    let sql = format!(
+        r#"SELECT "malo_id", SUM("value") AS total_kwh, COUNT(*) AS read_count
+             FROM "{table}"
+            WHERE "from" >= $1 AND "from" < $2 AND "tenant" = $3
+            GROUP BY "malo_id"
+            ORDER BY total_kwh DESC
+            LIMIT {limit}"#,
+        table = store.resolved_table(),
+    );
+    match store
+        .query_with_params(
+            &sql,
+            vec![
+                ts_param(from),
+                ts_param(to),
+                datafusion::scalar::ScalarValue::Utf8(Some(state.tenant.clone())),
+            ],
+        )
         .await
     {
-        Ok(results) => Json(results).into_response(),
+        Ok(result) => match result.to_json() {
+            Ok(rows) => Json(serde_json::json!({
+                "from": from.to_string(),
+                "to": to.to_string(),
+                "malo_count": rows.len(),
+                "spans_tiers": result.spans_tiers(),
+                "portfolio": rows,
+            }))
+            .into_response(),
+            Err(e) => {
+                tracing::warn!(error = %e, "edmd: portfolio JSON serialisation failed");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        },
         Err(e) => {
-            tracing::warn!(error = %e, "edmd: archive portfolio query failed");
+            tracing::warn!(error = %e, "edmd: portfolio aggregation query failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+/// A UTC instant as the `TimestampMicrosecond` literal the storage schema binds
+/// its interval bounds as (`col::FROM` / `col::TO`).
+pub(crate) fn ts_param(t: OffsetDateTime) -> datafusion::scalar::ScalarValue {
+    datafusion::scalar::ScalarValue::TimestampMicrosecond(
+        Some((t.unix_timestamp_nanos() / 1_000) as i64),
+        Some("UTC".into()),
+    )
+}
+
+/// `"true"` / `"false"` for a boolean header value.
+fn bool_str(b: bool) -> &'static str {
+    if b { "true" } else { "false" }
+}
+
+/// Serialise meterstore's own `RecordBatch`es to an Arrow IPC stream.
+///
+/// The schema is passed explicitly so a zero-row result still yields a valid,
+/// self-describing stream (schema message + no batches) rather than empty bytes.
+/// meterstore's Arrow is the workspace Arrow (one unified 58.x), so its batches
+/// write through edmd's `StreamWriter` without a copy.
+fn batches_to_arrow_ipc(
+    schema: &arrow::datatypes::SchemaRef,
+    batches: &[arrow::record_batch::RecordBatch],
+) -> anyhow::Result<Vec<u8>> {
+    use arrow::ipc::writer::StreamWriter;
+    let mut buf = Vec::new();
+    let mut writer = StreamWriter::try_new(&mut buf, schema)?;
+    for batch in batches {
+        writer.write(batch)?;
+    }
+    writer.finish()?;
+    Ok(buf)
 }
 
 /// `GET /api/v1/archive/timeseries/{malo_id}?from=RFC3339&to=RFC3339&limit=N`
@@ -200,14 +277,6 @@ pub(crate) async fn get_archive_timeseries(
             .into_response();
     }
 
-    let Some(engine) = &state.olap_engine else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "archival not enabled" })),
-        )
-            .into_response();
-    };
-
     let from = params
         .from
         .as_deref()
@@ -219,13 +288,39 @@ pub(crate) async fn get_archive_timeseries(
         .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
         .unwrap_or_else(OffsetDateTime::now_utc);
 
-    match engine.time_series(&malo_id, from, to, 50_000).await {
-        Ok(rows) if rows.is_empty() => (
+    match state
+        .repo
+        .store()
+        .series(malo_id.clone())
+        .column_eq(
+            "tenant",
+            datafusion::scalar::ScalarValue::Utf8(Some(state.tenant.clone())),
+        )
+        .range(from, to)
+        .collect()
+        .await
+    {
+        Ok(Some(series)) if !series.intervals.is_empty() => {
+            let rows: Vec<serde_json::Value> = series
+                .intervals
+                .iter()
+                .map(|i| {
+                    serde_json::json!({
+                        "dtm_from": i.from.to_string(),
+                        "dtm_to": i.to.to_string(),
+                        "quantity_kwh": i.value_kwh.to_string(),
+                        "quality": i.quality.as_str(),
+                        "obis_code": i.obis_code.map(|o| o.to_string()),
+                    })
+                })
+                .collect();
+            Json(serde_json::json!({ "malo_id": malo_id, "rows": rows })).into_response()
+        }
+        Ok(_) => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "no archived data for this MaLo / period" })),
+            Json(serde_json::json!({ "error": "no data for this MaLo / period" })),
         )
             .into_response(),
-        Ok(rows) => Json(rows).into_response(),
         Err(e) => {
             tracing::warn!(error = %e, malo_id, "edmd: archive timeseries query failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -233,281 +328,26 @@ pub(crate) async fn get_archive_timeseries(
     }
 }
 
-// ── P2: Iceberg REST Catalog (ICEBERG-89 spec) ────────────────────────────────
+// ── Analytical SQL endpoint ─────────────────────────────────────────────────────
 //
-// Implements the subset of the Apache Iceberg REST Catalog specification
-// required for DuckDB ATTACH, Spark, and Snowflake External Table access.
+// Runs read-only SQL across both tiers in meterstore's DataFusion session over
+// the version-resolved relation (`store.resolved_table()`). Results come back as
+// JSON rows (default) or an Arrow IPC stream (`format: "arrow_ipc"`), and carry
+// the tier provenance meterstore computed the answer against.
 //
-// DuckDB: ATTACH 'rest+http://edmd:8380/api/v1/iceberg' AS mako (TYPE ICEBERG);
-// Snowflake: CREATE EXTERNAL TABLE ... WITH (ICEBERG_CATALOG_TYPE='rest', ...);
+// Scope: an edmd deployment writes exactly one tenant (`cfg.tenant`) to every
+// row, so its store holds that tenant alone and the result is tenant-scoped by
+// construction. A caller that wants an explicit guard adds `WHERE "tenant" = …`;
+// the endpoint does not inject one, because it cannot rewrite arbitrary SQL
+// safely, and refuses the raw versioned relation so no query can double-count
+// corrected intervals.
 //
-// Spec: https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml
-
-/// `GET /api/v1/iceberg/v1/config`
-///
-/// Returns the REST catalog configuration.
-/// Required first call by all Iceberg REST clients.
-pub(crate) async fn iceberg_rest_config(
-    claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    State(state): State<HandlerState>,
-) -> impl IntoResponse {
-    let tenant = state.tenant.as_str();
-    // The catalog exposes table locations and schemas for the tenant's archived
-    // meter data, so it is gated by the same action as the archive queries it
-    // describes rather than left open to any caller that can reach the port.
-    if let Err(e) = enforcer.check(&claims.principal(), "read-archive-olap", tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
-    Json(serde_json::json!({
-        "defaults": {},
-        "overrides": {
-            "prefix": format!("/api/v1/iceberg/v1"),
-        },
-        "_edmd_version": "0.11.0",
-        "_edmd_tenant": state.tenant,
-    }))
-    .into_response()
-}
-
-/// `GET /api/v1/iceberg/v1/namespaces`
-///
-/// Lists namespaces. edmd uses one namespace per Sparte (STROM/GAS).
-pub(crate) async fn iceberg_list_namespaces(
-    claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    State(state): State<HandlerState>,
-) -> impl IntoResponse {
-    let tenant = state.tenant.as_str();
-    // The catalog exposes table locations and schemas for the tenant's archived
-    // meter data, so it is gated by the same action as the archive queries it
-    // describes rather than left open to any caller that can reach the port.
-    if let Err(e) = enforcer.check(&claims.principal(), "read-archive-olap", tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
-
-    // Each Sparte maps to an Iceberg namespace.
-    Json(serde_json::json!({
-        "namespaces": [
-            ["strom"],
-            ["gas"],
-        ],
-        "_catalog": "edmd",
-        "_tenant": state.tenant,
-    }))
-    .into_response()
-}
-
-/// `GET /api/v1/iceberg/v1/namespaces/{namespace}/tables`
-///
-/// Lists tables in a namespace. edmd exposes `meter_reads` as the primary table.
-pub(crate) async fn iceberg_list_tables(
-    claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    State(state): State<HandlerState>,
-    Path(namespace): Path<String>,
-    Extension(pool): Extension<Arc<sqlx::PgPool>>,
-) -> impl IntoResponse {
-    // The catalog exposes table locations and schemas for the tenant's archived
-    // meter data, so it is gated by the same action as the archive queries it
-    // describes rather than left open to any caller that can reach the port.
-    if let Err(e) = enforcer.check(
-        &claims.principal(),
-        "read-archive-olap",
-        state.tenant.as_str(),
-    ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
-
-    use sqlx::Row as _;
-    // Fetch registered catalog entries for this tenant + namespace.
-    let rows = sqlx::query(
-        r"SELECT table_name FROM iceberg_catalog_entries
-          WHERE namespace = $1 AND tenant = $2
-          ORDER BY table_name",
-    )
-    .bind(&namespace)
-    .bind(&state.tenant)
-    .fetch_all(pool.as_ref())
-    .await
-    .unwrap_or_default();
-
-    let mut identifiers: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|r| {
-            let name: String = r.try_get("table_name").unwrap_or_default();
-            serde_json::json!({ "namespace": [namespace], "name": name })
-        })
-        .collect();
-
-    // Always expose the primary `meter_reads` table.
-    if !identifiers
-        .iter()
-        .any(|i| i.get("name").and_then(|v| v.as_str()) == Some("meter_reads"))
-    {
-        identifiers.push(serde_json::json!({
-            "namespace": [namespace],
-            "name": "meter_reads",
-        }));
-    }
-
-    Json(serde_json::json!({ "identifiers": identifiers })).into_response()
-}
-
-/// `GET /api/v1/iceberg/v1/namespaces/{namespace}/tables/{table}`
-///
-/// Returns the Iceberg table metadata for a named table.
-/// This is the primary endpoint DuckDB/Spark use to discover schema and files.
-pub(crate) async fn iceberg_load_table(
-    claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    State(state): State<HandlerState>,
-    Path((namespace, table)): Path<(String, String)>,
-    Extension(pool): Extension<Arc<sqlx::PgPool>>,
-) -> impl IntoResponse {
-    // The catalog exposes table locations and schemas for the tenant's archived
-    // meter data, so it is gated by the same action as the archive queries it
-    // describes rather than left open to any caller that can reach the port.
-    if let Err(e) = enforcer.check(
-        &claims.principal(),
-        "read-archive-olap",
-        state.tenant.as_str(),
-    ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
-
-    use sqlx::Row as _;
-
-    // Look up the catalog entry from the iceberg_catalog_entries table.
-    let entry = sqlx::query(
-        r"SELECT location_uri, schema_json, partition_spec, properties, current_snapshot_id
-          FROM iceberg_catalog_entries
-          WHERE namespace = $1 AND table_name = $2 AND tenant = $3
-          LIMIT 1",
-    )
-    .bind(&namespace)
-    .bind(&table)
-    .bind(&state.tenant)
-    .fetch_optional(pool.as_ref())
-    .await;
-
-    match entry {
-        Ok(Some(row)) => {
-            let location: String = row.try_get("location_uri").unwrap_or_default();
-            let schema_json: serde_json::Value = row.try_get("schema_json").unwrap_or_default();
-            let snapshot_id: Option<i64> = row.try_get("current_snapshot_id").unwrap_or(None);
-
-            // Build minimal Iceberg REST table response per spec.
-            let response = serde_json::json!({
-                "metadata-location": format!("{}/metadata/v1.metadata.json", location),
-                "metadata": {
-                    "format-version": 2,
-                    "table-uuid": uuid::Uuid::new_v4().to_string(),
-                    "location": location,
-                    "last-sequence-number": 1,
-                    "last-updated-ms": time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000i128,
-                    "last-column-id": 10,
-                    "current-schema-id": 0,
-                    "schemas": [schema_json],
-                    "default-spec-id": 0,
-                    "partition-specs": [{"spec-id": 0, "fields": []}],
-                    "sort-orders": [{"order-id": 0, "fields": []}],
-                    "properties": {"write.format.default": "parquet"},
-                    "current-snapshot-id": snapshot_id,
-                    "snapshots": [],
-                },
-                "config": {
-                    "s3.region": "eu-central-1",
-                }
-            });
-
-            (StatusCode::OK, Json(response)).into_response()
-        }
-        Ok(None) => {
-            // Return a synthetic schema for the built-in meter_reads table.
-            // This allows DuckDB to query the cold tier even before the catalog
-            // entry is explicitly registered.
-            if table == "meter_reads" {
-                let schema = serde_json::json!({
-                    "type": "struct",
-                    "schema-id": 0,
-                    "fields": [
-                        {"id": 1, "name": "malo_id",     "type": "string",  "required": true},
-                        {"id": 2, "name": "dtm_from",    "type": "timestamptz", "required": true},
-                        {"id": 3, "name": "dtm_to",      "type": "timestamptz", "required": true},
-                        {"id": 4, "name": "quantity_kwh","type": "decimal(18,5)", "required": true},
-                        {"id": 5, "name": "quality",     "type": "string",  "required": true},
-                        {"id": 6, "name": "sparte",      "type": "string",  "required": true},
-                        {"id": 7, "name": "obis_code",   "type": "string",  "required": false},
-                        {"id": 8, "name": "tenant",      "type": "string",  "required": true},
-                        {"id": 9, "name": "sender_mp_id","type": "string",  "required": false},
-                        {"id": 10, "name": "allocation_version", "type": "string", "required": false},
-                    ]
-                });
-                let response = serde_json::json!({
-                    "metadata-location": "not-yet-archived",
-                    "metadata": {
-                        "format-version": 2,
-                        "table-uuid": uuid::Uuid::new_v4().to_string(),
-                        "location": format!("s3://edmd-archive/{}/{}", &state.tenant, namespace),
-                        "current-schema-id": 0,
-                        "schemas": [schema],
-                        "partition-specs": [{"spec-id": 0, "fields": [
-                            {"source-id": 1, "field-id": 1000, "name": "malo_id", "transform": "identity"},
-                        ]}],
-                        "sort-orders": [{"order-id": 0, "fields": []}],
-                        "properties": {"write.format.default": "parquet", "write.parquet.compression-codec": "zstd"},
-                        "current-snapshot-id": serde_json::Value::Null,
-                        "snapshots": [],
-                    },
-                    "_note": "No archived data yet — run archival worker first or push data via MSCONS ingest"
-                });
-                (StatusCode::OK, Json(response)).into_response()
-            } else {
-                (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({
-                        "error": {"message": format!("Table {}.{} not found", namespace, table),
-                                  "type": "NoSuchTableException",
-                                  "code": 404}
-                    })),
-                )
-                    .into_response()
-            }
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "edmd: iceberg_load_table DB error");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
-}
-
-// ── P2: DataFusion SQL endpoint ────────────────────────────────────────────────
-//
-// Runs analytical SQL over the Iceberg cold archive using the embedded
-// DataFusion engine. Results are returned as JSON arrays.
-//
-// Example queries that DuckDB users would run (but via DataFusion instead):
+// The value column is `value` and the interval start is `from` (a reserved word,
+// so quote it). Example:
 //   POST /api/v1/query/sql
-//   {"sql": "SELECT malo_id, SUM(quantity_kwh) AS total_kwh
-//            FROM edmd.meter_reads
-//            WHERE dtm_from >= '2026-01-01' AND dtm_from < '2026-02-01'
+//   {"sql": "SELECT malo_id, SUM(\"value\") AS total_kwh
+//            FROM meter_reads
+//            WHERE \"from\" >= '2026-01-01' AND \"from\" < '2026-02-01'
 //            GROUP BY malo_id ORDER BY total_kwh DESC LIMIT 10"}
 
 #[derive(serde::Deserialize)]
@@ -518,7 +358,6 @@ pub(crate) struct SqlQueryRequest {
     limit: usize,
     /// Output format: "json" (default) or "arrow_ipc".
     #[serde(default)]
-    #[allow(dead_code)]
     format: SqlOutputFormat,
 }
 
@@ -567,53 +406,78 @@ pub(crate) async fn post_sql_query(
             .into_response();
     }
 
-    // Tenant scoping is carried by the `meter_reads_archive` view. Naming the
-    // physical table behind it would read every tenant's rows, so a query that
-    // mentions it at all is refused.
-    if sql_upper.contains(&crate::iceberg::query::ARCHIVE_PHYSICAL_TABLE.to_uppercase()) {
+    // Naming the raw, every-version relation would double-count corrected
+    // intervals, so a query that mentions it is refused — callers use the
+    // resolved `meter_reads` relation.
+    let store = state.repo.store();
+    if sql_upper.contains(&store.raw_table().to_uppercase()) {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({
-                "error": "query references an internal table; use `meter_reads_archive`"
+                "error": "query references the raw versioned relation; use the resolved `meter_reads`"
             })),
         )
             .into_response();
     }
 
-    // Execute via DataFusion on the Iceberg cold archive.
-    if let Some(ref olap) = state.olap_engine {
-        match olap.query_to_json(&req.sql, req.limit).await {
-            Ok(rows) => {
-                return Json(serde_json::json!({
-                    "rows": rows,
-                    "row_count": rows.len(),
-                    "sql": req.sql,
-                    "source": "iceberg_cold_archive",
-                }))
-                .into_response();
+    // Run the statement across both tiers in meterstore's own DataFusion session
+    // (the resolved relation is registered as `store.resolved_table()`), then take
+    // the provenance the result carries. `spans_tiers` / `touched_hot_tier` tell a
+    // reporting caller whether the figure is reproducible or read the mutable hot
+    // tier — the one fact a bare row set cannot state about itself.
+    let limit = req.limit.min(default_sql_limit());
+    match store.query(&req.sql).await {
+        Ok(result) => {
+            let touched_hot = result.touched_hot_tier();
+            let spans = result.spans_tiers();
+            let total = result.num_rows();
+
+            // Analytical clients ask for the columnar stream directly; the tier
+            // provenance rides in headers since the body is now binary.
+            if req.format == SqlOutputFormat::ArrowIpc {
+                return match batches_to_arrow_ipc(&result.schema(), result.batches()) {
+                    Ok(bytes) => (
+                        StatusCode::OK,
+                        [
+                            ("content-type", "application/vnd.apache.arrow.stream"),
+                            ("x-meterstore-spans-tiers", bool_str(spans)),
+                            ("x-meterstore-touched-hot-tier", bool_str(touched_hot)),
+                        ],
+                        bytes,
+                    )
+                        .into_response(),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "edmd: SQL result Arrow-IPC serialisation failed");
+                        StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                    }
+                };
             }
-            Err(e) => {
-                tracing::warn!(error = %e, sql = %req.sql, "edmd: DataFusion SQL query failed");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
+
+            match result.to_json() {
+                Ok(mut rows) => {
+                    let truncated = rows.len() > limit;
+                    rows.truncate(limit);
                     Json(serde_json::json!({
-                        "error": e.to_string(),
-                        "sql": req.sql,
-                        "hint": "Cold archive may be empty — ensure archival worker has run"
-                    })),
-                )
-                    .into_response();
+                        "row_count": rows.len(),
+                        "total_rows": total,
+                        "truncated": truncated,
+                        "spans_tiers": spans,
+                        "touched_hot_tier": touched_hot,
+                        "rows": rows,
+                    }))
+                    .into_response()
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "edmd: SQL result JSON serialisation failed");
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
             }
         }
+        Err(e) => (
+            // A planning/type error is the caller's SQL, not an edmd fault.
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e.to_string(), "sql": req.sql })),
+        )
+            .into_response(),
     }
-
-    // No OLAP engine configured — return helpful error.
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(serde_json::json!({
-            "error": "OLAP engine not configured",
-            "hint": "Set [archive] enabled=true and storage_uri in edmd.toml to enable DataFusion SQL"
-        })),
-    )
-        .into_response()
 }

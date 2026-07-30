@@ -28,18 +28,16 @@
 
 use std::sync::Arc;
 
+use crate::domain::{
+    ALL_MSCONS_PIDS, ESA_TYP2_PIDS, GAS_QUALITY_PIDS, IngestionSource, MeterDataReceipt, MeterRead,
+    QualityFlag, Sparte as EdmSparte, Typ2DeliveryPath, Typ2Read,
+    repository::{TimeSeriesRepository, Typ2Repository},
+};
 use axum::{
     body::Bytes,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
-};
-use mako_edm::{
-    domain::{
-        ALL_MSCONS_PIDS, ESA_TYP2_PIDS, GAS_QUALITY_PIDS, IngestionSource, MeterDataReceipt,
-        MeterRead, QualityFlag, Sparte as EdmSparte, Typ2DeliveryPath, Typ2Read,
-    },
-    repository::{TimeSeriesRepository, Typ2Repository},
 };
 use mako_markt::cloudevents::verify_signature;
 use secrecy::{ExposeSecret, SecretString};
@@ -64,27 +62,38 @@ fn quality_from_mscons(status: Option<&str>) -> QualityFlag {
     }
 }
 
-use crate::iceberg::query::OlapEngine;
-use crate::pg::{PgTimeSeriesRepository, PgTyp2Repository};
+use crate::store::{MeterStoreTimeSeriesRepository, MeterStoreTyp2Repository};
 
 /// Shared application state for the webhook handler.
 #[derive(Clone)]
 pub struct HandlerState {
-    pub repo: PgTimeSeriesRepository,
+    /// Authoritative meter-data store (hot Postgres + cold Iceberg via meterstore),
+    /// plus the edmd business-table pool it exposes through `repo.pool()`.
+    pub repo: MeterStoreTimeSeriesRepository,
     /// Separate store for ESA "Werte nach Typ 2" (non-authoritative; never billing).
-    pub typ2_repo: PgTyp2Repository,
+    pub typ2_repo: MeterStoreTyp2Repository,
     pub inbound_secret: Arc<Option<SecretString>>,
     /// Tenant identifier — used as Cedar resource_tenant for REST queries.
     pub tenant: String,
-    /// DataFusion OLAP engine for Iceberg/S3 queries.
-    /// `None` when archival is disabled.
-    pub olap_engine: Option<Arc<OlapEngine>>,
     /// `marktd` base URL — used by the Jahresablesung campaign to enumerate SLP MaLos.
     pub marktd_url: String,
     /// `marktd` bearer token.
     pub marktd_api_key: secrecy::SecretString,
     /// ERP webhook URL for outbound CloudEvents from direct push and quality warnings.
     pub erp_webhook_url: Option<String>,
+    /// Optional HMAC secret signing outbound CloudEvents (`x-mako-signature`).
+    pub erp_webhook_secret: Option<secrecy::SecretString>,
+}
+
+impl HandlerState {
+    /// The outbound-webhook HMAC secret as bytes, if one is configured. Passed to
+    /// `post_ce_with_retry` so every emitted CloudEvent is signed the same way.
+    pub(crate) fn webhook_secret_bytes(&self) -> Option<&[u8]> {
+        use secrecy::ExposeSecret;
+        self.erp_webhook_secret
+            .as_ref()
+            .map(|s| s.expose_secret().as_bytes())
+    }
 }
 
 /// `POST /webhook` — receive a `MarktEvent` from `marktd`.
@@ -93,15 +102,32 @@ pub async fn handle_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    // 1. Verify signature if configured.
-    if let Some(secret) = (*state.inbound_secret).as_ref() {
-        let provided = headers
-            .get("x-mako-signature")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if !verify_signature(secret.expose_secret().as_bytes(), &body, provided) {
-            warn!("edmd: webhook signature mismatch");
-            return (StatusCode::UNAUTHORIZED, "signature mismatch").into_response();
+    // 1. Verify the HMAC signature — fail closed. This webhook stores meter
+    //    readings and auto-creates reading orders, so accepting it without a
+    //    configured secret would let anything that can reach the port inject data.
+    //    An unconfigured secret is rejected, mirroring edmd's fail-closed OIDC
+    //    posture, rather than waved through.
+    match (*state.inbound_secret).as_ref() {
+        Some(secret) => {
+            let provided = headers
+                .get("x-mako-signature")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if !verify_signature(secret.expose_secret().as_bytes(), &body, provided) {
+                warn!("edmd: webhook signature mismatch");
+                return (StatusCode::UNAUTHORIZED, "signature mismatch").into_response();
+            }
+        }
+        None => {
+            warn!(
+                "edmd: /webhook rejected — no [webhook].inbound_secret configured; refusing \
+                 unauthenticated reading ingestion"
+            );
+            return (
+                StatusCode::UNAUTHORIZED,
+                "webhook authentication not configured",
+            )
+                .into_response();
         }
     }
 
@@ -560,8 +586,11 @@ pub async fn handle_webhook(
                         "type": mako_events::messwert::READING_QUALITY_WARNING,
                         "source": format!("urn:edmd:tenant:{}:{}", state.tenant, malo_id),
                         "id": uuid::Uuid::new_v4().to_string(),
+                        "time": time::OffsetDateTime::now_utc()
+                            .format(&time::format_description::well_known::Rfc3339)
+                            .unwrap_or_default(),
                         "subject": malo_id,
-                        "tenant": state.tenant,
+                        "tenantid": state.tenant,
                         "datacontenttype": "application/json",
                         // The MSCONS process that carried the anomalous batch —
                         // same tracing contract as the direct-push events.
@@ -575,28 +604,15 @@ pub async fn handle_webhook(
                             "rules": validation.rules,
                         }
                     });
-                    // Retry up to 3 times with exponential backoff.
+                    // One signed, retrying emitter for every edmd CloudEvent.
                     let client = mako_service::http::default_client();
-                    for attempt in 0u32..3 {
-                        match client.post(webhook_url).json(&payload).send().await {
-                            Ok(r) if r.status().is_success() => break,
-                            Ok(r) => {
-                                tracing::warn!(
-                                    attempt, status = %r.status(),
-                                    "edmd: quality warning webhook non-success"
-                                );
-                            }
-                            Err(e) => {
-                                tracing::warn!(attempt, error = %e, "edmd: quality warning webhook failed");
-                            }
-                        }
-                        if attempt < 2 {
-                            tokio::time::sleep(std::time::Duration::from_millis(
-                                200 * (1 << attempt),
-                            ))
-                            .await;
-                        }
-                    }
+                    crate::server::post_ce_with_retry(
+                        &client,
+                        webhook_url,
+                        &payload,
+                        state.webhook_secret_bytes(),
+                    )
+                    .await;
                 }
             }
         }

@@ -51,7 +51,11 @@ async fn async_main() -> anyhow::Result<()> {
     );
 
     // Database
-    let pool = sqlx::PgPool::connect(&cfg.database.url)
+    let database_url = mako_service::config::resolve_env(&cfg.database.url)
+        .map_err(|e| anyhow::anyhow!("database.url: {e}"))?;
+    let pool = cfg
+        .database
+        .connect(&database_url, "mabis-syncd")
         .await
         .map_err(|e| anyhow::anyhow!("database connection failed: {e}"))?;
     sqlx::migrate!("src/migrations").run(&pool).await?;

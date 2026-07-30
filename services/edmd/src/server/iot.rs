@@ -361,7 +361,7 @@ pub(crate) async fn post_iot_reads(
                 QualityFlag::Measured
             },
             pid: 0,
-            sparte: edm_sparte_from_metering(sparte),
+            sparte,
             obis_code: req.obis_code.clone(),
             tenant: resource_tenant.to_owned(),
             source: IngestionSource::IotPush,

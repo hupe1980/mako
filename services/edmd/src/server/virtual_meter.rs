@@ -102,7 +102,7 @@ pub(crate) async fn get_virtual_lastgang(
                         to: r.dtm_to,
                         value_kwh: r.quantity_kwh,
                         quality: r.quality,
-                        obis_code: r.obis_code.clone(),
+                        obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
                     })
                     .collect();
                 sources.insert(malo_id.to_owned(), intervals);

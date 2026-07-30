@@ -93,15 +93,15 @@ pub const IFTSTA_PIDS: &[u32] = &[21_037, 21_038];
 ///
 /// ## Design note — intentional duplication
 ///
-/// These five PID numbers are also defined in `mako-edm::REDISPATCH_MSCONS_PIDS`
+/// These five PID numbers are also defined in `edmd::domain::REDISPATCH_MSCONS_PIDS`
 /// so that the `edmd` ingest filter can accept them without depending on
 /// `mako-redispatch`. The two definitions must always agree; they are validated
 /// together by `cargo xtask validate-pruefids`.
 ///
-/// A cross-crate dependency between this process-engine crate and the data-tier
-/// `mako-edm` crate would be the wrong direction architecturally:
+/// A cross-crate dependency between this process-engine crate and `edmd`'s
+/// data-tier domain would be the wrong direction architecturally:
 ///   - `mako-redispatch` = process/workflow layer (stateful, event-sourced)
-///   - `mako-edm` = data/repository layer (storage types, receipts, OLAP)
+///   - `edmd::domain` = data/repository layer (storage types, receipts, OLAP)
 ///
 /// Coupling the workflow layer to the data layer just for 5 constants would be
 /// over-engineering. Stable regulatory constants with cross-crate `xtask`

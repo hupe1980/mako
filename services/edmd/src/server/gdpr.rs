@@ -1,213 +1,51 @@
-//! GDPR Art. 17 erasure — hot-tier marking and cold-tier archive erasure.
+//! GDPR Art. 17 right to erasure.
+//!
+//! `meter_reads` lives in meterstore's append-only tiered store (hot PostgreSQL +
+//! cold Iceberg), which cannot rewrite settled history in place. Erasure therefore
+//! works by destroying the **subject mapping** (pseudonymisation, § 12.4 of the
+//! meterstore model): each MaLo is enrolled as an erasure subject at ingest, and
+//! Art. 17 deletes that mapping — the readings survive in both tiers but their link
+//! to the erased MaLo is gone, so they are unattributable everywhere at once, with
+//! no external Parquet-rewrite step to schedule.
+//!
+//! edmd's own derived tables (billing-period cache, quality assessments,
+//! substitute-value log) carry no audit obligation and are deleted outright — in
+//! the **same transaction** as the mapping erasure, so an Art. 17 request either
+//! completes whole or not at all. A partial erasure reported as success would close
+//! the request while personal data survived, indistinguishable from a MaLo that
+//! legitimately held nothing.
 
 #[allow(unused_imports)]
 use super::*;
 
-// ── GDPR Art. 17 — cold-tier erasure ──────────────────────────────────────────
-
-/// `POST /api/v1/gdpr/erasure/{malo_id}/archive-plan`
-///
-/// Plan the physical deletion of an erased MaLo's rows from the Iceberg cold
-/// tier, and record the affected data files.
-///
-/// Read-time exclusion already hides these rows from every query. This is about
-/// the bytes still on disk, which Art. 17 also reaches.
-///
-/// iceberg-rust 0.9.1 exposes only `fast_append` on a transaction — no public
-/// API removes or rewrites data files — so the rewrite itself is run by an
-/// external engine (Spark, Trino) against the returned list. Recording it turns
-/// `archive_deletion_pending` from a flag that is never cleared into an
-/// obligation with a defined discharge.
-///
-/// **Cedar action**: `write-gdpr-erasure`
-pub(crate) async fn plan_gdpr_archive_erasure(
-    claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    State(state): State<HandlerState>,
-    Path(malo_id): Path<String>,
-) -> impl IntoResponse {
-    let resource_tenant = state.tenant.as_str();
-    if let Err(e) = enforcer.check(&claims.principal(), "write-gdpr-erasure", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
-
-    let Some(ref olap) = state.olap_engine else {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "archival is not enabled; there is no cold tier to erase from",
-            })),
-        )
-            .into_response();
-    };
-
-    // The erasure must already be on record: planning a rewrite for a MaLo
-    // nobody asked to erase would delete lawfully-held data.
-    let deletion_id: Option<uuid::Uuid> =
-        sqlx::query_scalar("SELECT id FROM gdpr_deletions WHERE malo_id = $1 AND tenant = $2")
-            .bind(&malo_id)
-            .bind(resource_tenant)
-            .fetch_optional(state.repo.pool())
-            .await
-            .ok()
-            .flatten();
-
-    let Some(deletion_id) = deletion_id else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "error": "no erasure request on record for this MaLo",
-                "hint": "DELETE /api/v1/gdpr/erasure/{malo_id} first",
-            })),
-        )
-            .into_response();
-    };
-
-    let files = match olap.plan_erasure_files(&malo_id).await {
-        Ok(f) => f,
-        Err(e) => {
-            tracing::error!(malo_id = %malo_id, error = %e, "edmd: erasure planning failed");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
-
-    for f in &files {
-        let _ = sqlx::query(
-            r"INSERT INTO gdpr_archive_files
-                  (deletion_id, file_path, record_count, file_size_bytes, tenant)
-              VALUES ($1,$2,$3,$4,$5)
-              ON CONFLICT (deletion_id, file_path) DO NOTHING",
-        )
-        .bind(deletion_id)
-        .bind(&f.file_path)
-        .bind(f.record_count.map(|c| i64::try_from(c).unwrap_or(i64::MAX)))
-        .bind(i64::try_from(f.file_size_bytes).unwrap_or(i64::MAX))
-        .bind(resource_tenant)
-        .execute(state.repo.pool())
-        .await;
-    }
-
-    // No files means nothing of this MaLo reached the cold tier, so the
-    // obligation is already discharged there.
-    if files.is_empty() {
-        let _ = sqlx::query(
-            "UPDATE gdpr_deletions
-                SET archive_deletion_pending = false, archive_deletion_completed_at = now()
-              WHERE id = $1",
-        )
-        .bind(deletion_id)
-        .execute(state.repo.pool())
-        .await;
-    }
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "malo_id":      malo_id,
-            "deletion_id":  deletion_id.to_string(),
-            "files":        files,
-            "file_count":   files.len(),
-            "pending":      !files.is_empty(),
-            "next_step": if files.is_empty() {
-                "nothing of this MaLo is in the cold tier — the obligation is discharged"
-            } else {
-                "run the rewrite with an external engine, then POST .../archive-complete"
-            },
-            "legal_basis":  "DSGVO Art. 17",
-        })),
-    )
-        .into_response()
-}
-
-/// `POST /api/v1/gdpr/erasure/{malo_id}/archive-complete`
-///
-/// Record that the cold-tier rewrite has been carried out, discharging the
-/// Art. 17 obligation for the archive.
-///
-/// **Cedar action**: `write-gdpr-erasure`
-pub(crate) async fn complete_gdpr_archive_erasure(
-    claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    State(state): State<HandlerState>,
-    Path(malo_id): Path<String>,
-) -> impl IntoResponse {
-    let resource_tenant = state.tenant.as_str();
-    if let Err(e) = enforcer.check(&claims.principal(), "write-gdpr-erasure", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
-
-    let res = sqlx::query(
-        r"WITH d AS (
-              UPDATE gdpr_deletions
-                 SET archive_deletion_pending = false,
-                     archive_deletion_completed_at = now()
-               WHERE malo_id = $1 AND tenant = $2
-               RETURNING id
-          )
-          UPDATE gdpr_archive_files f
-             SET rewritten_at = now()
-            FROM d
-           WHERE f.deletion_id = d.id AND f.rewritten_at IS NULL",
-    )
-    .bind(&malo_id)
-    .bind(resource_tenant)
-    .execute(state.repo.pool())
-    .await;
-
-    match res {
-        Ok(r) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "malo_id":        malo_id,
-                "files_marked":   r.rows_affected(),
-                "archive_pending": false,
-            })),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
-// ── F-17: GDPR §17 DSGVO right to erasure ────────────────────────────────────
-
 /// `DELETE /api/v1/gdpr/erasure/{malo_id}`
 ///
-/// Initiates GDPR Art. 17 right-to-erasure for a MaLo.
+/// Executes GDPR Art. 17 right-to-erasure for a MaLo.
 ///
-/// ## What this does
+/// ## What this does (one transaction)
 ///
-/// 1. Inserts a row in `gdpr_deletions` (idempotent on `malo_id + tenant`).
-/// 2. **Soft-deletes** all `meter_reads` rows for this MaLo by marking them
-///    `quality = 'FAULTY'` and replacing `quantity_kwh` with `'0'`
-///    (§ 60 Abs. 6 MsbG: audit trail must be preserved — rows are not physically deleted).
-/// 3. Deletes `meter_billing_periods` rows (no audit trail obligation).
-/// 4. Deletes `quality_assessments` rows.
-/// 5. Hard deletion of Iceberg Parquet data must be done by the operator
-///    via the archive rewrite pipeline (out-of-band; noted in `gdpr_deletions`).
+/// 1. Records the erasure request in `gdpr_deletions` (idempotent on
+///    `malo_id + tenant`).
+/// 2. Destroys the MaLo's subject mapping in meterstore's registry
+///    ([`SubjectRegistry::erase_in`]) — the readings in both tiers become
+///    unattributable. Skipped when the MaLo has no mapping (never stored, or
+///    already erased), which is recorded rather than treated as an error.
+/// 3. Deletes the derived `meter_billing_periods`, `quality_assessments` and
+///    `substitute_value_log` rows for the MaLo, tenant-scoped.
 ///
 /// ## Regulatory basis
 ///
-/// DSGVO Art. 17 right to erasure. § 60 Abs. 6 MsbG (3-year audit trail) applies
-/// to *billing-relevant* data — once anonymized, the obligation is satisfied.
+/// DSGVO Art. 17. § 60 Abs. 6 MsbG (3-year audit trail) binds *billing-relevant*
+/// readings; pseudonymisation satisfies it — the values remain for reconciliation
+/// but no longer identify anyone.
+///
+/// **Cedar action**: `write-gdpr-erasure` — erasure is irreversible, so it is
+/// gated by its own action rather than the general write permission.
+///
+/// [`SubjectRegistry::erase_in`]: meterstore::SubjectRegistry::erase_in
 #[derive(serde::Deserialize)]
 pub(crate) struct GdprErasureRequest {
-    /// Human-readable reason for erasure (required for audit trail).
+    /// Human-readable reason for erasure (required for the audit trail).
     reason: String,
     /// Operator identity who authorized the erasure.
     authorized_by: String,
@@ -221,9 +59,6 @@ pub(crate) async fn post_gdpr_erasure(
     Json(req): Json<GdprErasureRequest>,
 ) -> impl IntoResponse {
     let resource_tenant = state.tenant.as_str();
-    // Erasure is irreversible and destroys billing history, so it is gated by
-    // its own action rather than by the general write permission every ingest
-    // client already holds.
     if let Err(e) = enforcer.check(&claims.principal(), "write-gdpr-erasure", resource_tenant) {
         return (
             StatusCode::FORBIDDEN,
@@ -232,12 +67,40 @@ pub(crate) async fn post_gdpr_erasure(
             .into_response();
     }
 
+    if req.reason.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(
+                serde_json::json!({ "error": "an erasure reason is required for the audit trail" }),
+            ),
+        )
+            .into_response();
+    }
+
+    let store = state.repo.store();
     let pool = state.repo.pool();
 
-    // Every step runs in one transaction. An Art. 17 erasure either completed
-    // or it did not: a partial erasure reported as success closes out the
-    // request while personal data remains, and the caller has no way to tell
-    // that apart from a MaLo that legitimately held no readings.
+    // Resolve the subject mapping first (a plain read). `None` means the MaLo was
+    // never stored or was already erased — there is nothing to unlink, but the
+    // request is still recorded so a repeat stays auditable.
+    let natural_id = crate::store::subject_natural_id(resource_tenant, &malo_id);
+    let subject = match store.subject_registry() {
+        Some(reg) => match reg.lookup(&natural_id).await {
+            Ok(subject) => subject,
+            Err(e) => {
+                tracing::error!(malo_id = %malo_id, error = %e, "edmd: GDPR subject lookup failed");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": e.to_string() })),
+                )
+                    .into_response();
+            }
+        },
+        None => None,
+    };
+
+    // Every step runs in one transaction: the mapping erasure and the derived-row
+    // deletes must commit together or roll back together.
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
         Err(e) => {
@@ -250,7 +113,7 @@ pub(crate) async fn post_gdpr_erasure(
         }
     };
 
-    /// Abort the erasure, reporting which step failed.
+    /// Abort the erasure, naming the step that failed.
     macro_rules! erasure_step {
         ($step:literal, $expr:expr) => {
             match $expr {
@@ -278,14 +141,12 @@ pub(crate) async fn post_gdpr_erasure(
     erasure_step!(
         "record_request",
         sqlx::query(
-            r"INSERT INTO gdpr_deletions
-                  (malo_id, tenant, reason, authorized_by, requested_at, archive_deletion_pending)
-              VALUES ($1, $2, $3, $4, now(), true)
+            r"INSERT INTO gdpr_deletions (malo_id, tenant, reason, authorized_by, requested_at)
+              VALUES ($1, $2, $3, $4, now())
               ON CONFLICT (malo_id, tenant) DO UPDATE
-                  SET reason                  = EXCLUDED.reason,
-                      authorized_by           = EXCLUDED.authorized_by,
-                      requested_at            = now(),
-                      archive_deletion_pending = true",
+                  SET reason        = EXCLUDED.reason,
+                      authorized_by = EXCLUDED.authorized_by,
+                      requested_at  = now()",
         )
         .bind(&malo_id)
         .bind(resource_tenant)
@@ -295,32 +156,29 @@ pub(crate) async fn post_gdpr_erasure(
         .await
     );
 
-    // 2. Anonymize meter_reads: zero the value, mark Faulty, preserve row for audit.
-    // `archived = false` requeues the row for re-export, so the anonymised
-    // version replaces the personal data already sitting in the cold tier.
-    let anonymized = erasure_step!(
-        "anonymize_reads",
-        sqlx::query(
-            r"UPDATE meter_reads
-              SET quantity_kwh = '0',
-                  quality      = 'FAULTY',
-                  source       = 'GDPR_ERASURE',
-                  push_session = NULL,
-                  quality_warnings = NULL,
-                  sender_mp_id = NULL,
-                  archived     = false
-              WHERE malo_id = $1 AND tenant = $2",
-        )
-        .bind(&malo_id)
-        .bind(resource_tenant)
-        .execute(&mut *tx)
-        .await
-    );
-    let anonymized_count = anonymized.rows_affected();
+    // 2. Destroy the subject linkage in the same transaction (pseudonymisation).
+    //    `FOR UPDATE` inside `erase_in` holds the mapping row so a concurrent
+    //    re-registration cannot interleave.
+    let subject_unlinked = if let (Some(reg), Some(subject)) = (store.subject_registry(), &subject)
+    {
+        erasure_step!(
+            "erase_subject",
+            reg.erase_in(
+                &mut tx,
+                subject,
+                &req.reason,
+                &req.authorized_by,
+                OffsetDateTime::now_utc(),
+            )
+            .await
+        );
+        true
+    } else {
+        false
+    };
 
-    // 3. Delete billing period aggregates (no audit trail required).
-    // A MaLo-ID is not unique across tenants, so an erasure request scoped to
-    // one tenant must not reach another tenant's aggregates for the same ID.
+    // 3. Delete derived aggregates (no audit obligation). A MaLo-ID is not unique
+    //    across tenants, so every delete is tenant-scoped.
     erasure_step!(
         "delete_billing_periods",
         sqlx::query("DELETE FROM meter_billing_periods WHERE malo_id = $1 AND tenant = $2")
@@ -340,7 +198,7 @@ pub(crate) async fn post_gdpr_erasure(
             .await
     );
 
-    // 5. Delete substitute value log.
+    // 5. Delete the substitute-value log.
     erasure_step!(
         "delete_substitute_log",
         sqlx::query("DELETE FROM substitute_value_log WHERE malo_id = $1 AND tenant = $2")
@@ -354,22 +212,22 @@ pub(crate) async fn post_gdpr_erasure(
 
     tracing::info!(
         malo_id,
-        anonymized_count,
+        subject_unlinked,
         authorized_by = %req.authorized_by,
-        "edmd: GDPR Art. 17 erasure completed for MaLo (hot storage anonymized)"
+        "edmd: GDPR Art. 17 erasure completed"
     );
 
     (
         StatusCode::OK,
         Json(serde_json::json!({
-            "malo_id":           malo_id,
-            "status":            "anonymized",
-            "anonymized_reads":  anonymized_count,
-            "archive_pending":   true,
-            "legal_basis":       "DSGVO Art. 17 right to erasure",
-            "audit_note": "meter_reads rows anonymized (quantity=0, quality=FAULTY) — \
-                           § 60 Abs. 6 MsbG audit trail row structure preserved. \
-                           Iceberg Parquet deletion is scheduled via archive rewrite pipeline.",
+            "malo_id":          malo_id,
+            "status":           "erased",
+            "subject_unlinked": subject_unlinked,
+            "mechanism":        "meterstore subject-registry pseudonymisation (append-only tiers)",
+            "legal_basis":      "DSGVO Art. 17 right to erasure",
+            "audit_note": "Subject mapping destroyed — readings survive in both tiers for \
+                           § 60 Abs. 6 MsbG reconciliation but no longer identify the MaLo. \
+                           Derived aggregates deleted.",
         })),
     )
         .into_response()

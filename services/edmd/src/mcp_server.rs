@@ -37,7 +37,9 @@ use std::sync::Arc;
 
 use axum::{
     Router,
+    http::StatusCode,
     middleware::{self, Next},
+    response::IntoResponse,
 };
 use rmcp::{
     ErrorData as McpError, ServerHandler,
@@ -56,11 +58,21 @@ use serde::Deserialize;
 use sqlx::{PgPool, Row};
 use tokio_util::sync::CancellationToken;
 
+use crate::domain::TimeSeriesQuery;
+// Brings the `query`/`store_reads` methods on `MeterStoreTimeSeriesRepository`
+// into scope for the tools that read the version-resolved series.
+use crate::domain::repository::TimeSeriesRepository;
+
 // ── Shared state ──────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 pub struct EdmdMcpState {
     pub pool: PgPool,
+    /// meterstore-backed time-series repository. The readings live in meterstore
+    /// (the resolved `meter_reads` relation is DataFusion-only, not a Postgres
+    /// table), so every time-series read goes through this repo, never raw SQL
+    /// against `pool`.
+    pub repo: crate::store::MeterStoreTimeSeriesRepository,
     pub tenant: String,
     pub auth: mako_service::mcp_auth::McpAuth,
     /// `marktd` base URL — the Jahresablesung campaign enumerates SLP MaLos
@@ -293,42 +305,28 @@ impl EdmdMcpHandler {
         let to = time::OffsetDateTime::parse(&p.to, &Rfc3339)
             .map_err(|_| McpError::invalid_params("to is not a valid ISO 8601 timestamp", None))?;
 
-        let rows = sqlx::query_as::<
-            _,
-            (
-                time::OffsetDateTime,
-                time::OffsetDateTime,
-                rust_decimal::Decimal,
-                String,
-                Option<String>,
-            ),
-        >(
-            r"SELECT dtm_from, dtm_to, quantity_kwh, quality, obis_code
-                  FROM meter_reads
-                  WHERE malo_id = $1
-                    AND dtm_from >= $2
-                    AND dtm_to   <= $3
-                    AND tenant    = $4
-                  ORDER BY dtm_from
-                  LIMIT 5000",
-        )
-        .bind(&p.malo_id)
-        .bind(from)
-        .bind(to)
-        .bind(&self.state.tenant)
-        .fetch_all(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let reads = self
+            .state
+            .repo
+            .query(&TimeSeriesQuery {
+                malo_id: p.malo_id.clone(),
+                from,
+                to,
+                sparte: None,
+                tenant: self.state.tenant.clone(),
+            })
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let readings: Vec<serde_json::Value> = rows
-            .into_iter()
-            .map(|(dtm_from, dtm_to, quantity_kwh, quality, obis_code)| {
+        let readings: Vec<serde_json::Value> = reads
+            .iter()
+            .map(|r| {
                 serde_json::json!({
-                    "dtm_from": dtm_from,
-                    "dtm_to": dtm_to,
-                    "quantity_kwh": quantity_kwh.to_string(),
-                    "quality": quality,
-                    "obis_code": obis_code,
+                    "dtm_from": r.dtm_from,
+                    "dtm_to": r.dtm_to,
+                    "quantity_kwh": r.quantity_kwh.to_string(),
+                    "quality": r.quality.as_str(),
+                    "obis_code": r.obis_code,
                 })
             })
             .collect();
@@ -378,46 +376,45 @@ impl EdmdMcpHandler {
         let from_ts = time::OffsetDateTime::new_utc(from, time::Time::MIDNIGHT);
         let to_ts = time::OffsetDateTime::new_utc(to, time::Time::MIDNIGHT);
 
-        let row = sqlx::query_as::<
-            _,
-            (
-                Option<rust_decimal::Decimal>,
-                Option<rust_decimal::Decimal>,
-                i64,
-            ),
-        >(
-            r"SELECT
-                SUM(CASE WHEN quantity_kwh > 0 THEN quantity_kwh ELSE 0 END),
-                SUM(CASE WHEN quantity_kwh < 0 THEN ABS(quantity_kwh) ELSE 0 END),
-                COUNT(*)
-              FROM meter_reads
-              WHERE malo_id = $1
-                AND dtm_from >= $2
-                AND dtm_to   <= $3
-                AND tenant    = $4",
-        )
-        .bind(&p.malo_id)
-        .bind(from_ts)
-        .bind(to_ts)
-        .bind(&self.state.tenant)
-        .fetch_one(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let reads = self
+            .state
+            .repo
+            .query(&TimeSeriesQuery {
+                malo_id: p.malo_id.clone(),
+                from: from_ts,
+                to: to_ts,
+                sparte: None,
+                tenant: self.state.tenant.clone(),
+            })
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let (mehr, minder, count) = row;
-        if count == 0 {
+        if reads.is_empty() {
             return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "no_data: No meter reads for MaLo '{}' in {}-{:02}.",
                 p.malo_id, p.year, p.month
             ))]));
         }
 
+        // Mehr = positive intervals, Minder = |negative intervals|. The former SQL
+        // did not filter quality, so this does not either.
+        let mut mehr = rust_decimal::Decimal::ZERO;
+        let mut minder = rust_decimal::Decimal::ZERO;
+        for r in &reads {
+            if r.quantity_kwh.is_sign_positive() && !r.quantity_kwh.is_zero() {
+                mehr += r.quantity_kwh;
+            } else if r.quantity_kwh.is_sign_negative() {
+                minder += r.quantity_kwh.abs();
+            }
+        }
+        let count = reads.len();
+
         ContentBlock::json(serde_json::json!({
             "malo_id": p.malo_id,
             "year": p.year,
             "month": p.month,
-            "mehrmengen_kwh": mehr.map(|d| d.to_string()).unwrap_or_else(|| "0".to_owned()),
-            "mindermengen_kwh": minder.map(|d| d.to_string()).unwrap_or_else(|| "0".to_owned()),
+            "mehrmengen_kwh": mehr.to_string(),
+            "mindermengen_kwh": minder.to_string(),
             "reading_count": count,
         }))
         .map(|b| CallToolResult::success(vec![b]))
@@ -502,35 +499,25 @@ impl EdmdMcpHandler {
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None))
         } else {
-            // On-the-fly aggregation from meter_reads.
-            let row = sqlx::query_as::<
-                _,
-                (
-                    Option<rust_decimal::Decimal>,
-                    Option<rust_decimal::Decimal>,
-                    i64,
-                ),
-            >(
-                r"SELECT
-                    SUM(quantity_kwh),
-                    MAX(CASE WHEN EXTRACT(EPOCH FROM (dtm_to - dtm_from)) = 900
-                              THEN quantity_kwh * 4 END),
-                    COUNT(*)
-                FROM meter_reads
-                WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3
-                  AND quality NOT IN ('FAULTY','UNKNOWN')
-                  AND tenant = $4",
-            )
-            .bind(&p.malo_id)
-            .bind(from_ts)
-            .bind(to_ts)
-            .bind(&self.state.tenant)
-            .fetch_one(&self.state.pool)
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+            // On-the-fly aggregation from the version-resolved series. `query`
+            // does not filter quality, so non-billable values (§60 Abs. 2:
+            // `QualityFlag::is_billable`) are dropped here.
+            let reads = self
+                .state
+                .repo
+                .query(&TimeSeriesQuery {
+                    malo_id: p.malo_id.clone(),
+                    from: from_ts,
+                    to: to_ts,
+                    sparte: None,
+                    tenant: self.state.tenant.clone(),
+                })
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-            let (total_kwh, spitzenleistung_kw, count) = row;
-            if count == 0 {
+            let billable: Vec<_> = reads.iter().filter(|r| r.quality.is_billable()).collect();
+
+            if billable.is_empty() {
                 return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "no_data: No meter reads for MaLo '{}' in {}/{} — {}.",
                     p.malo_id,
@@ -540,11 +527,20 @@ impl EdmdMcpHandler {
                 ))]));
             }
 
+            let total_kwh: rust_decimal::Decimal = billable.iter().map(|r| r.quantity_kwh).sum();
+            // Spitzenleistung: peak 15-min slot converted to kW (×4).
+            let spitzenleistung_kw: Option<rust_decimal::Decimal> = billable
+                .iter()
+                .filter(|r| (r.dtm_to - r.dtm_from).whole_seconds() == 900)
+                .map(|r| r.quantity_kwh * rust_decimal::Decimal::from(4))
+                .max();
+            let count = billable.len();
+
             ContentBlock::json(serde_json::json!({
                 "malo_id": p.malo_id,
                 "period_from": period_from.to_string(),
                 "period_to": period_to.to_string(),
-                "arbeitsmenge_kwh": total_kwh.map(|d| d.to_string()),
+                "arbeitsmenge_kwh": Some(total_kwh.to_string()),
                 "spitzenleistung_kw": spitzenleistung_kw.map(|d| d.to_string()),
                 "read_count": count,
                 "source": "on_the_fly",
@@ -578,8 +574,10 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
         let since = time::OffsetDateTime::now_utc() - time::Duration::days(days);
 
         // ── Reading orders ────────────────────────────────────────────────
+        // The failure note column is `fehlschlag_notiz` (there is no `notiz`
+        // column). A failed query surfaces as an error rather than an empty doc.
         let orders = sqlx::query(
-            r"SELECT id, anlass, geplant_am, ausfuehrt_bis, status, notiz
+            r"SELECT id, anlass, geplant_am, ausfuehrt_bis, status, fehlschlag_notiz
               FROM ablese_auftraege
               WHERE malo_id = $1 AND geplant_am >= $2::timestamptz
                 AND tenant = $3
@@ -591,7 +589,7 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
         .bind(&self.state.tenant)
         .fetch_all(&self.state.pool)
         .await
-        .unwrap_or_default();
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         // ── Quality warnings from direct push ────────────────────────────
         let push_sessions = sqlx::query(
@@ -608,17 +606,22 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
         .bind(&self.state.tenant)
         .fetch_all(&self.state.pool)
         .await
-        .unwrap_or_default();
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        // ── Reads with quality warnings ───────────────────────────────────
-        let warn_reads = sqlx::query(
-            r"SELECT dtm_from, dtm_to, quantity_kwh, quality, quality_warnings
-              FROM meter_reads
+        // ── Quality scores ────────────────────────────────────────────────
+        // Per-interval `quality_warnings` no longer exists (meterstore owns the
+        // readings and has no such column); the per-batch verdicts live in
+        // `quality_assessments`. Surface the non-clean assessments (grade ≠ A) as
+        // the "quality warnings" section, sourced from that table on the pool.
+        let quality_scores = sqlx::query(
+            r"SELECT assessed_at, period_from, period_to, grade, gaps_detected,
+                     coverage_pct, source
+              FROM quality_assessments
               WHERE malo_id = $1
-                AND dtm_from >= $2
+                AND assessed_at >= $2
                 AND tenant = $3
-                AND quality_warnings IS NOT NULL
-              ORDER BY dtm_from DESC
+                AND grade <> 'A'
+              ORDER BY assessed_at DESC
               LIMIT 20",
         )
         .bind(&p.malo_id)
@@ -626,7 +629,7 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
         .bind(&self.state.tenant)
         .fetch_all(&self.state.pool)
         .await
-        .unwrap_or_default();
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         // ── Format as rich text for RAG indexing ─────────────────────────
         let mut doc = format!(
@@ -643,9 +646,9 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
             for r in &orders {
                 let anlass: String = r.try_get("anlass").unwrap_or_default();
                 let status: String = r.try_get("status").unwrap_or_default();
-                let geplant: Option<time::OffsetDateTime> = r.try_get("geplant_am").ok();
-                let notiz: Option<String> = r.try_get("notiz").ok().flatten();
-                let geplant_str = geplant.map(|t| t.date().to_string()).unwrap_or_default();
+                let geplant: Option<time::Date> = r.try_get("geplant_am").ok();
+                let notiz: Option<String> = r.try_get("fehlschlag_notiz").ok().flatten();
+                let geplant_str = geplant.map(|d| d.to_string()).unwrap_or_default();
                 doc.push_str(&format!("- **{status}** {anlass} — planned: {geplant_str}",));
                 if let Some(n) = notiz.filter(|s| !s.is_empty()) {
                     doc.push_str(&format!(" — note: {n}"));
@@ -709,32 +712,25 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
             doc.push('\n');
         }
 
-        // Quality warnings section
-        if warn_reads.is_empty() {
+        // Quality scores section (per-batch assessments, grade ≠ A)
+        if quality_scores.is_empty() {
             doc.push_str("## Meter Data Quality Warnings\nNo quality warnings in this period.\n\n");
         } else {
             doc.push_str("## Meter Data Quality Warnings\n\n");
-            for r in &warn_reads {
-                let dtm_from: Option<time::OffsetDateTime> = r.try_get("dtm_from").ok();
-                let qty: rust_decimal::Decimal = r.try_get("quantity_kwh").unwrap_or_default();
-                let quality: String = r.try_get("quality").unwrap_or_default();
-                let warnings: Option<serde_json::Value> =
-                    r.try_get("quality_warnings").ok().flatten();
+            for r in &quality_scores {
+                let assessed: Option<time::OffsetDateTime> = r.try_get("assessed_at").ok();
+                let grade: String = r.try_get("grade").unwrap_or_default();
+                let gaps: i32 = r.try_get("gaps_detected").unwrap_or(0);
+                let coverage: Option<rust_decimal::Decimal> =
+                    r.try_get("coverage_pct").ok().flatten();
+                let source: String = r.try_get("source").unwrap_or_default();
 
-                let ts = dtm_from.map(|t| t.date().to_string()).unwrap_or_default();
-                let warn_str = if let Some(w) = &warnings {
-                    let gaps = w.get("gaps_detected").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let zero_run = w
-                        .get("zero_run_length")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0);
-                    format!("gaps={gaps} zero_run={zero_run}")
-                } else {
-                    "unknown issue".to_owned()
-                };
-
+                let ts = assessed.map(|t| t.date().to_string()).unwrap_or_default();
+                let cov_str = coverage
+                    .map(|c| format!(", coverage={c}%"))
+                    .unwrap_or_default();
                 doc.push_str(&format!(
-                    "- {ts}: {qty} kWh, quality={quality}, warnings: {warn_str}\n",
+                    "- {ts}: grade={grade} [{source}], gaps={gaps}{cov_str}\n",
                 ));
             }
             doc.push('\n');
@@ -747,7 +743,7 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
             malo_id = p.malo_id,
             ro = orders.len(),
             ps = push_sessions.len(),
-            qw = warn_reads.len(),
+            qw = quality_scores.len(),
         ));
 
         ContentBlock::json(serde_json::json!({
@@ -757,7 +753,7 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
             "rag_source": format!("msb-{}", p.malo_id),
             "reading_orders_count": orders.len(),
             "push_sessions_count": push_sessions.len(),
-            "quality_warnings_count": warn_reads.len(),
+            "quality_warnings_count": quality_scores.len(),
             "ingest_hint": "POST this document_text to agentd POST /api/v1/rag/ingest",
         }))
         .map(|b| CallToolResult::success(vec![b]))
@@ -778,7 +774,7 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
         &self,
         Parameters(p): Parameters<GetQualityWarningsParams>,
     ) -> Result<CallToolResult, McpError> {
-        use sqlx::Row as _;
+        use metering::MeterInterval;
         use time::format_description::well_known::Rfc3339;
         let now = time::OffsetDateTime::now_utc();
         let from_dt = p
@@ -791,66 +787,51 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
                 .and_then(|s| time::OffsetDateTime::parse(s, &Rfc3339).ok())
                 .unwrap_or(now);
 
-        let rows = sqlx::query(
-            r#"SELECT dtm_from, dtm_to, quality_warnings
-               FROM meter_reads
-               WHERE malo_id = $1
-                 AND dtm_from >= $2
-                 AND dtm_from < $3
-                 AND tenant = $4
-                 AND quality_warnings IS NOT NULL
-                 AND (quality_warnings->>'has_warnings')::boolean = true
-               ORDER BY dtm_from
-               LIMIT 500"#,
-        )
-        .bind(&p.malo_id)
-        .bind(from_dt)
-        .bind(to_dt)
-        .bind(&self.state.tenant)
-        .fetch_all(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        // Per-interval `quality_warnings` no longer exists as a stored column
+        // (meterstore owns the readings). Recompute the Hampel/gap verdict on the
+        // fly from the version-resolved series — the same scorer the ingest and
+        // rescore paths use — so the tool reports a fresh grade for the window.
+        let reads = self
+            .state
+            .repo
+            .query(&TimeSeriesQuery {
+                malo_id: p.malo_id.clone(),
+                from: from_dt,
+                to: to_dt,
+                sparte: None,
+                tenant: self.state.tenant.clone(),
+            })
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let warnings: Vec<serde_json::Value> = rows
+        let intervals: Vec<MeterInterval> = reads
             .iter()
-            .map(|r| {
-                let dtm_from: time::OffsetDateTime = r.get("dtm_from");
-                let dtm_to: time::OffsetDateTime = r.get("dtm_to");
-                let mut w: serde_json::Value = r
-                    .try_get("quality_warnings")
-                    .unwrap_or(serde_json::json!({}));
-                w["from_ts"] = serde_json::Value::String(dtm_from.to_string());
-                w["to_ts"] = serde_json::Value::String(dtm_to.to_string());
-                w
+            .map(|r| MeterInterval {
+                from: r.dtm_from,
+                to: r.dtm_to,
+                value_kwh: r.quantity_kwh,
+                quality: r.quality,
+                obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
             })
             .collect();
 
-        let total = warnings.len();
-        let grade_counts = {
-            let mut a = 0u32;
-            let mut b = 0u32;
-            let mut c = 0u32;
-            let mut f = 0u32;
-            for w in &warnings {
-                match w.get("grade").and_then(|g| g.as_str()).unwrap_or("F") {
-                    "A" => a += 1,
-                    "B" => b += 1,
-                    "C" => c += 1,
-                    _ => f += 1,
-                }
-            }
-            serde_json::json!({ "A": a, "B": b, "C": c, "F": f })
-        };
+        let report = metering::score_intervals(&intervals, metering::QualityConfig::default());
 
         ContentBlock::json(serde_json::json!({
             "malo_id": p.malo_id,
             "window_from": from_dt.to_string(),
             "window_to": to_dt.to_string(),
-            "total_warning_reads": total,
-            "grade_counts": grade_counts,
+            "interval_count": intervals.len(),
+            "grade": report.grade.as_str(),
+            "has_warnings": report.has_warnings,
+            "gaps_detected": report.gaps_detected,
+            "zero_run_length": report.max_zero_run,
+            "coverage_pct": report.coverage_pct,
+            "intervals_consistent": report.intervals_consistent,
+            "outlier_intervals": report.outlier_intervals,
+            "spike_intervals": report.spike_intervals,
             "algorithm": "hampel_k3_t3",
-            "warnings": warnings,
-            "hint": "Use POST /api/v1/quality-score/{malo_id} to retroactively rescore this MaLo.",
+            "hint": "Use POST /api/v1/quality-score/{malo_id} to persist this rescore to quality_assessments.",
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
@@ -1111,7 +1092,7 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
         };
 
         let resp = crate::server::run_substitute_values(
-            &self.state.pool,
+            &self.state.repo,
             &self.state.tenant,
             &p.malo_id,
             &req,
@@ -1430,7 +1411,7 @@ impl EdmdMcpHandler {
         &self,
         Parameters(p): Parameters<ValidateTimeseriesParams>,
     ) -> Result<CallToolResult, McpError> {
-        use metering::{MeterInterval, QualityFlag, ValidationConfig, validate_intervals};
+        use metering::{MeterInterval, ValidationConfig, validate_intervals};
         use time::format_description::well_known::Rfc3339;
 
         let from_ts = time::OffsetDateTime::parse(&p.from, &Rfc3339)
@@ -1439,45 +1420,30 @@ impl EdmdMcpHandler {
             .map_err(|e| McpError::invalid_params(format!("invalid to: {e}"), None))?;
         let malo_id = p.malo_id;
 
-        // Fetch reads from DB
-        let pool = &self.state.pool;
-        let rows = sqlx::query(
-            r"SELECT dtm_from, dtm_to, quantity_kwh, quality, obis_code
-              FROM meter_reads
-              WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3
-                AND tenant = $4
-              ORDER BY dtm_from ASC",
-        )
-        .bind(&malo_id)
-        .bind(from_ts)
-        .bind(to_ts)
-        .bind(&self.state.tenant)
-        .fetch_all(pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        // Fetch reads through the repository. `query` does NOT filter quality, so
+        // the validation engine sees Faulty/Unknown intervals too — which V09
+        // (non-billable quality) needs to fire.
+        let reads = self
+            .state
+            .repo
+            .query(&TimeSeriesQuery {
+                malo_id: malo_id.clone(),
+                from: from_ts,
+                to: to_ts,
+                sparte: None,
+                tenant: self.state.tenant.clone(),
+            })
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let intervals: Vec<MeterInterval> = rows
+        let intervals: Vec<MeterInterval> = reads
             .iter()
-            .filter_map(|r| {
-                let qty: rust_decimal::Decimal = r.try_get("quantity_kwh").ok()?;
-                let quality_str: &str = r.try_get("quality").ok()?;
-                let quality = match quality_str {
-                    "MEASURED" => QualityFlag::Measured,
-                    "ESTIMATED" => QualityFlag::Estimated,
-                    "SUBSTITUTED" => QualityFlag::Substituted,
-                    "CALCULATED" => QualityFlag::Calculated,
-                    "CORRECTED" => QualityFlag::Corrected,
-                    "PRELIMINARY" => QualityFlag::Preliminary,
-                    "FAULTY" => QualityFlag::Faulty,
-                    _ => QualityFlag::Unknown,
-                };
-                Some(MeterInterval {
-                    from: r.try_get("dtm_from").ok()?,
-                    to: r.try_get("dtm_to").ok()?,
-                    value_kwh: qty,
-                    quality,
-                    obis_code: r.try_get("obis_code").ok().flatten(),
-                })
+            .map(|r| MeterInterval {
+                from: r.dtm_from,
+                to: r.dtm_to,
+                value_kwh: r.quantity_kwh,
+                quality: r.quality,
+                obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
             })
             .collect();
 
@@ -1620,45 +1586,56 @@ impl EdmdMcpHandler {
                 .map_err(|e| McpError::invalid_params(format!("invalid to: {e}"), None))?
                 .unwrap_or_else(time::OffsetDateTime::now_utc);
 
-        // Use DATE_TRUNC to aggregate per calendar month — quantity_kwh is NUMERIC(18,5)
-        let rows = sqlx::query(
-            r"SELECT DATE_TRUNC('month', dtm_from) AS month_start,
-                     SUM(quantity_kwh) AS total_kwh,
-                     COUNT(*) AS interval_count,
-                     MIN(quality) AS worst_quality
-              FROM meter_reads
-              WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3
-                AND tenant = $4
-              GROUP BY month_start
-              ORDER BY month_start ASC",
-        )
-        .bind(&p.malo_id)
-        .bind(from)
-        .bind(to)
-        .bind(&self.state.tenant)
-        .fetch_all(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        use sqlx::Row;
-        let months: Vec<serde_json::Value> = rows.iter().map(|r| {
-            let kwh: Option<rust_decimal::Decimal> = r.try_get("total_kwh").unwrap_or(None);
-            serde_json::json!({
-                "month": r.try_get::<time::OffsetDateTime, _>("month_start").ok().map(|t| t.date().to_string()),
-                "total_kwh": kwh.map(|d| d.to_string()).unwrap_or_default(),
-                "interval_count": r.try_get::<i64, _>("interval_count").unwrap_or(0),
-                "worst_quality": r.try_get::<String, _>("worst_quality").unwrap_or_default(),
+        // Aggregate per calendar month in Rust over the version-resolved series.
+        // `query` does not filter quality (matching the former SQL, which summed
+        // every read); `worst_quality` is the highest-severity flag in the month
+        // by `metering::QualityFlag` ordering, which is a stricter "worst" than the
+        // former `MIN(quality)` (alphabetical, not severity-ordered).
+        let reads = self
+            .state
+            .repo
+            .query(&TimeSeriesQuery {
+                malo_id: p.malo_id.clone(),
+                from,
+                to,
+                sparte: None,
+                tenant: self.state.tenant.clone(),
             })
-        }).collect();
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let total_kwh: rust_decimal::Decimal = rows
+        // Bucket through the shared `metering::resample`, exactly as the REST
+        // `GET /api/v1/summenzeitreihe/{malo_id}` handler does — a MaBiS figure
+        // must not depend on which surface asked for it. Hand-rolling a UTC
+        // month-start here diverged from resample's DST-aware Berlin months at
+        // every month boundary.
+        let intervals: Vec<metering::MeterInterval> = reads
             .iter()
-            .filter_map(|r| {
-                r.try_get::<Option<rust_decimal::Decimal>, _>("total_kwh")
-                    .ok()
-                    .flatten()
+            .map(|r| metering::MeterInterval {
+                from: r.dtm_from,
+                to: r.dtm_to,
+                value_kwh: r.quantity_kwh,
+                quality: r.quality,
+                obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
             })
-            .sum();
+            .collect();
+        let buckets = metering::resample(&intervals, &metering::ResampleConfig::to_monthly());
+        let total_kwh: rust_decimal::Decimal = buckets.iter().map(|b| b.total_kwh).sum();
+
+        let months: Vec<serde_json::Value> = buckets
+            .iter()
+            .map(|b| {
+                serde_json::json!({
+                    "from": b.from,
+                    "to": b.to,
+                    "total_kwh": b.total_kwh.to_string(),
+                    "peak_kw": b.peak_kw,
+                    "coverage_pct": b.coverage_pct(),
+                    "has_missing_data": b.has_missing_data,
+                    "quality": format!("{:?}", b.quality),
+                })
+            })
+            .collect();
 
         serde_json::to_string_pretty(&serde_json::json!({
             "malo_id": p.malo_id,
@@ -1702,80 +1679,57 @@ impl EdmdMcpHandler {
                 .map_err(|e| McpError::invalid_params(format!("invalid to: {e}"), None))?
                 .unwrap_or_else(time::OffsetDateTime::now_utc);
 
-        let rows = sqlx::query(
-            r"SELECT dtm_from, dtm_to, quantity_kwh, quality
-              FROM meter_reads
-              WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3
-                AND tenant = $4
-                AND quality NOT IN ('FAULTY', 'UNKNOWN')
-              ORDER BY dtm_from ASC LIMIT 200000",
-        )
-        .bind(&p.malo_id)
-        .bind(from)
-        .bind(to)
-        .bind(&self.state.tenant)
-        .fetch_all(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        use metering::{MeterInterval, QualityFlag};
-        use sqlx::Row;
-        let intervals: Vec<MeterInterval> = rows
+        // Mirror the (now-fixed) REST `get_annual_forecast`: read the window via
+        // the repository, no quality filter — `project_annual_consumption` weighs
+        // each interval's quality itself.
+        use metering::MeterInterval;
+        let reads = self
+            .state
+            .repo
+            .query(&TimeSeriesQuery {
+                malo_id: p.malo_id.clone(),
+                from,
+                to,
+                sparte: None,
+                tenant: self.state.tenant.clone(),
+            })
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let intervals: Vec<MeterInterval> = reads
             .iter()
-            .filter_map(|r| {
-                let qty: rust_decimal::Decimal = r.try_get("quantity_kwh").ok()?;
-                let quality_str: &str = r.try_get("quality").ok()?;
-                let quality = match quality_str {
-                    "MEASURED" => QualityFlag::Measured,
-                    "ESTIMATED" => QualityFlag::Estimated,
-                    "SUBSTITUTED" => QualityFlag::Substituted,
-                    _ => QualityFlag::Unknown,
-                };
-                Some(MeterInterval {
-                    from: r.try_get("dtm_from").ok()?,
-                    to: r.try_get("dtm_to").ok()?,
-                    value_kwh: qty,
-                    quality,
-                    obis_code: None,
-                })
+            .map(|r| MeterInterval {
+                from: r.dtm_from,
+                to: r.dtm_to,
+                value_kwh: r.quantity_kwh,
+                quality: r.quality,
+                obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
             })
             .collect();
 
-        // Prior-year window enables the seasonal correction branch — without
-        // it every forecast is the naive daily × 365 projection.
-        let prior_rows = sqlx::query(
-            r"SELECT dtm_from, dtm_to, quantity_kwh, quality
-              FROM meter_reads
-              WHERE malo_id = $1 AND dtm_from >= $2 AND dtm_to <= $3
-                AND tenant = $4
-                AND quality NOT IN ('FAULTY', 'UNKNOWN')
-              ORDER BY dtm_from ASC LIMIT 200000",
-        )
-        .bind(&p.malo_id)
-        .bind(from - time::Duration::days(365))
-        .bind(to - time::Duration::days(365))
-        .bind(&self.state.tenant)
-        .fetch_all(&self.state.pool)
-        .await
-        .unwrap_or_default();
-        let prior_intervals: Vec<MeterInterval> = prior_rows
+        // Prior-year window enables the seasonal correction branch — without it
+        // every forecast is the naive daily × 365 projection. A missing prior-year
+        // window is not an error (seasonal correction is optional), so its read
+        // degrades to empty rather than failing the forecast.
+        let prior_reads = self
+            .state
+            .repo
+            .query(&TimeSeriesQuery {
+                malo_id: p.malo_id.clone(),
+                from: from - time::Duration::days(365),
+                to: to - time::Duration::days(365),
+                sparte: None,
+                tenant: self.state.tenant.clone(),
+            })
+            .await
+            .unwrap_or_default();
+        let prior_intervals: Vec<MeterInterval> = prior_reads
             .iter()
-            .filter_map(|r| {
-                let qty: rust_decimal::Decimal = r.try_get("quantity_kwh").ok()?;
-                let quality_str: &str = r.try_get("quality").ok()?;
-                let quality = match quality_str {
-                    "MEASURED" => QualityFlag::Measured,
-                    "ESTIMATED" => QualityFlag::Estimated,
-                    "SUBSTITUTED" => QualityFlag::Substituted,
-                    _ => QualityFlag::Unknown,
-                };
-                Some(MeterInterval {
-                    from: r.try_get("dtm_from").ok()?,
-                    to: r.try_get("dtm_to").ok()?,
-                    value_kwh: qty,
-                    quality,
-                    obis_code: None,
-                })
+            .map(|r| MeterInterval {
+                from: r.dtm_from,
+                to: r.dtm_to,
+                value_kwh: r.quantity_kwh,
+                quality: r.quality,
+                obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
             })
             .collect();
         let prior = (!prior_intervals.is_empty()).then_some(prior_intervals.as_slice());
@@ -1905,11 +1859,47 @@ impl ServerHandler for EdmdMcpHandler {
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
 
+/// The Cedar action a destructive MCP tool requires, or `None` for a read tool.
+///
+/// The blanket `use-mcp` gate the auth middleware applies allows any role of the
+/// tenant. The two mutating tools call the same cores as their REST endpoints —
+/// which require `write-timeseries` / `write-reading-order` (MSB/NB/admin) — so
+/// they must be gated with the same action, or an LF-role token escalates to
+/// Ersatzwert generation and §40 campaign dispatch through MCP.
+fn destructive_tool_action(body: &[u8]) -> Option<&'static str> {
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    if v.get("method")?.as_str()? != "tools/call" {
+        return None;
+    }
+    match v.get("params")?.get("name")?.as_str()? {
+        "trigger_substitution" => Some("write-timeseries"),
+        "trigger_jahresablesung" => Some("write-reading-order"),
+        _ => None,
+    }
+}
+
 async fn mcp_auth_middleware(
     axum::extract::State(state): axum::extract::State<Arc<EdmdMcpState>>,
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
+    // A `tools/call` for a destructive tool must clear the same Cedar write
+    // action its REST twin enforces, not just `use-mcp`. Buffer the body to read
+    // the tool name, authorize, then reconstruct the request for `authenticate`.
+    const MAX_MCP_BODY: usize = 1024 * 1024;
+    let (parts, body) = request.into_parts();
+    let bytes = match axum::body::to_bytes(body, MAX_MCP_BODY).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (StatusCode::PAYLOAD_TOO_LARGE, "MCP request body too large").into_response();
+        }
+    };
+    if let Some(action) = destructive_tool_action(&bytes)
+        && let Err(resp) = state.auth.authorize(&parts.headers, action)
+    {
+        return resp;
+    }
+    let request = axum::extract::Request::from_parts(parts, axum::body::Body::from(bytes));
     state.auth.authenticate(request, next).await
 }
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -1935,4 +1925,41 @@ pub fn router(state: Arc<EdmdMcpState>, shutdown: CancellationToken) -> Router {
             state.clone(),
             mcp_auth_middleware,
         ))
+}
+
+#[cfg(test)]
+mod auth_gate_tests {
+    use super::destructive_tool_action;
+
+    fn call(name: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": name, "arguments": {} }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn destructive_tools_map_to_their_rest_write_action() {
+        assert_eq!(
+            destructive_tool_action(&call("trigger_substitution")),
+            Some("write-timeseries")
+        );
+        assert_eq!(
+            destructive_tool_action(&call("trigger_jahresablesung")),
+            Some("write-reading-order")
+        );
+    }
+
+    #[test]
+    fn read_tools_and_non_tool_calls_need_no_extra_action() {
+        assert_eq!(destructive_tool_action(&call("get_timeseries")), None);
+        assert_eq!(
+            destructive_tool_action(
+                &serde_json::to_vec(&serde_json::json!({"method": "tools/list"})).unwrap()
+            ),
+            None
+        );
+        assert_eq!(destructive_tool_action(b"not json"), None);
+    }
 }

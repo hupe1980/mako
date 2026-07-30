@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-/// Error type for [`crate::repository::TimeSeriesRepository`] operations.
+/// Error type for [`crate::domain::repository::TimeSeriesRepository`] operations.
 #[derive(Debug, Error)]
 pub enum EdmError {
     /// Underlying database / storage error.
