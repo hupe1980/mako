@@ -107,7 +107,6 @@ Mieterstrom, Tarifwechsel merge, proportional allocation, batch billing, and pre
 
 ```toml
 # billingd.toml
-database_url  = "postgresql://billingd:secret@db:5432/billingd"
 port          = 9280
 tenant        = "9900357000004"
 
@@ -115,6 +114,10 @@ tarifbd_url     = "http://tarifbd:9080"
 edmd_url        = "http://edmd:8380"
 marktd_url      = "http://marktd:8180"
 vertragd_url    = "http://vertragd:9780"
+
+[database]
+url = "postgresql://billingd:secret@db:5432/billingd"
+# pool_size = 10   # optional pool tuning (min_connections, acquire/idle/max_lifetime)
 
 [rates]
 stromsteuer_ct_per_kwh        = 2.05   # §3 StromStG
@@ -139,7 +142,10 @@ issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 audience = "api://mako-billingd"
 
 # Outbound ERP CloudEvents. `erp_hmac_secret` signs them (X-Mako-Signature,
-# HMAC-SHA256) so the receiver can verify the origin.
+# HMAC-SHA256) so the receiver can verify the origin. Delivery is durable:
+# each event is written to the `event_outbox` table in the same transaction as
+# the business change (persist-before-dispatch) and drained by a background
+# worker with retry + dead-letter — a crash never drops an event.
 erp_webhook_url = "http://erp:8000/events"
 erp_hmac_secret = "env:BILLINGD_ERP_HMAC_SECRET"
 ```

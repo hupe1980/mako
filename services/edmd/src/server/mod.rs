@@ -554,8 +554,8 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
                 .layer(Extension(pool_arc.clone()))
                 .merge(crate::mcp_server::router(mcp_state, cfg.shutdown.clone())),
         )
-        .with_tenant_rate_limit(cfg.rate_limit.clone())
-        .with_rate_limit(cfg.rate_limit)
+        .with_tenant_rate_limit(&cfg.rate_limit)
+        .with_rate_limit(&cfg.rate_limit)
         .build();
 
     let listener = TcpListener::bind(cfg.listen).await?;

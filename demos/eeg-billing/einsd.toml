@@ -11,7 +11,6 @@
 # settlement that obliges the operator to pay the Anlagenbetreiber.
 allow_insecure_no_auth = true
 
-database_url = "postgres://demo:demo-secret@postgres/einsd"
 port         = 9180
 tenant       = "9900357000004"
 
@@ -24,3 +23,6 @@ erp_webhook_url = "http://webhook:8000/events"
 
 # Alert worker: checks for plants whose foerderendedatum is within 180 days (6h interval)
 alert_interval_secs = 21600
+
+[database]
+url = "postgres://demo:demo-secret@postgres/einsd"

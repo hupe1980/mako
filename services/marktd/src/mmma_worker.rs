@@ -210,7 +210,7 @@ pub async fn run_import_cycle(
     gas_repo: &PgMmmaPreisGasRepository,
     strom_repo: &PgMmmPreisStromRepository,
     tenant: &str,
-    event_tx: &tokio::sync::mpsc::UnboundedSender<serde_json::Value>,
+    event_tx: &EventSink<'_>,
 ) -> Vec<ImportResult> {
     let mut results = Vec::new();
 
@@ -228,7 +228,8 @@ pub async fn run_import_cycle(
                         "year": year, "month": month,
                         "error": e,
                     }),
-                );
+                )
+                .await;
                 results.push(ImportResult {
                     commodity: "gas",
                     year,
@@ -249,7 +250,8 @@ pub async fn run_import_cycle(
                             "year": year, "month": month,
                             "error": e,
                         }),
-                    );
+                    )
+                    .await;
                     results.push(ImportResult {
                         commodity: "gas",
                         year,
@@ -292,7 +294,8 @@ pub async fn run_import_cycle(
                                 "count": prices.len(),
                                 "source": "the-api",
                             }),
-                        );
+                        )
+                        .await;
                         results.push(ImportResult {
                             commodity: "gas",
                             year,
@@ -328,7 +331,8 @@ pub async fn run_import_cycle(
                         "year": year, "month": month,
                         "error": e,
                     }),
-                );
+                )
+                .await;
                 results.push(ImportResult {
                     commodity: "strom",
                     year,
@@ -349,7 +353,8 @@ pub async fn run_import_cycle(
                             "year": year, "month": month,
                             "error": e,
                         }),
-                    );
+                    )
+                    .await;
                     results.push(ImportResult {
                         commodity: "strom",
                         year,
@@ -392,7 +397,8 @@ pub async fn run_import_cycle(
                                 "count": prices.len(),
                                 "source": "uenb-api",
                             }),
-                        );
+                        )
+                        .await;
                         results.push(ImportResult {
                             commodity: "strom",
                             year,
@@ -417,16 +423,21 @@ pub async fn run_import_cycle(
     results
 }
 
-fn emit_event(
-    event_tx: &tokio::sync::mpsc::UnboundedSender<serde_json::Value>,
-    tenant: &str,
-    event_type: &str,
-    data: serde_json::Value,
-) {
+async fn emit_event(sink: &EventSink<'_>, tenant: &str, event_type: &str, data: serde_json::Value) {
     let evt = MarktEvent::new(tenant, event_type, "marktd/mmma-worker".to_owned(), data);
-    if let Ok(payload) = serde_json::to_value(&evt) {
-        let _ = event_tx.send(payload);
+    // Background worker: no HTTP request to fail, so an enqueue failure is
+    // logged at error level (the event is not silently dropped). Correctness of
+    // the fan-out still holds — nothing is fanned out unless it is durable.
+    if let Err(e) = crate::outbox::enqueue(sink.pool, &evt, sink.notify).await {
+        tracing::error!(error = %e, event_type, "mmma-worker: durable enqueue failed");
     }
+}
+
+/// Bundles the durable-outbox handles (`event_log` pool + fan-out wake-up hint)
+/// so the import cycle can persist events without an in-memory channel.
+pub struct EventSink<'a> {
+    pub pool: &'a sqlx::PgPool,
+    pub notify: &'a tokio::sync::Notify,
 }
 
 /// Spawn the MMMA background import worker.
@@ -439,7 +450,8 @@ pub fn spawn_mmma_worker(
     gas_repo: Arc<PgMmmaPreisGasRepository>,
     strom_repo: Arc<PgMmmPreisStromRepository>,
     tenant: String,
-    event_tx: tokio::sync::mpsc::UnboundedSender<serde_json::Value>,
+    pool: sqlx::PgPool,
+    notify: Arc<tokio::sync::Notify>,
     shutdown: CancellationToken,
 ) {
     if !cfg.enabled {
@@ -500,7 +512,10 @@ pub fn spawn_mmma_worker(
                 &gas_repo,
                 &strom_repo,
                 &tenant,
-                &event_tx,
+                &EventSink {
+                    pool: &pool,
+                    notify: &notify,
+                },
             )
             .await;
         }

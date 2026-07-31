@@ -21,7 +21,6 @@ use rubo4e::current::{
     LastvariablePreisposition, PreisblattMessung, PreisblattNetznutzung, ZeitvariablePreisposition,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::UnboundedSender;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::pg::{
@@ -213,7 +212,8 @@ pub async fn put_preisblatt(
     Extension(pricat_repo): Extension<PriCatRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
-    Extension(event_tx): Extension<UnboundedSender<serde_json::Value>>,
+    Extension(pool): Extension<sqlx::PgPool>,
+    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     claims: Claims,
     Path(nb_mp_id): Path<String>,
     Json(req): Json<PreisblattUpsertRequest>,
@@ -337,6 +337,8 @@ pub async fn put_preisblatt(
             let tenant2 = tenant_gln.clone();
             let data2 = data.clone();
             let bo4e2 = bo4e_version.clone();
+            let pool2 = pool.clone();
+            let notify2 = notify.clone();
             tokio::spawn(async move {
                 // Extract validity dates from the BO4E payload.
                 let valid_from = data2
@@ -397,8 +399,8 @@ pub async fn put_preisblatt(
                                 "valid_from": valid_from.to_string(),
                             }),
                         );
-                        if let Ok(payload) = serde_json::to_value(&evt) {
-                            let _ = event_tx.send(payload);
+                        if let Err(e) = crate::outbox::enqueue(&pool2, &evt, &notify2).await {
+                            tracing::error!(error = %e, "put_preisblatt: pricat.published enqueue failed");
                         }
                     }
                     Err(e) => {

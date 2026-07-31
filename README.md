@@ -117,7 +117,7 @@ flowchart LR
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| `makod` | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 55+ GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas workflows, AS4/REST/iMS, Cedar ABAC, OIDC/JWT, MCP server |
+| `makod` | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 67+ GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas workflows, AS4/REST/iMS, Cedar ABAC, OIDC/JWT, MCP server |
 | `marktd` | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus incl. Ersatz-/Grundversorgung, Grundversorger registry (§36 Abs. 2), typed BO4E API, EventBus fan-out, MMMA monthly import worker |
 | `processd` | `:8580` | NB+LF+MSB | Process Decision Engine — Anmeldung STP ≥ 95%, EoG gap closure + §38 timer, LF E_0624 45-min auto-response, MSB REQOTE auto-response, §14a Steuerungsauftrag |
 | `invoicd` | `:8280` | LF | INVOIC plausibility-check — 6 checks, auto-settle/dispute, § 147 AO / GoBD receipts |

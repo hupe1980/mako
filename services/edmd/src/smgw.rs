@@ -458,16 +458,11 @@ pub async fn run_cls_compliance_sweep(
 
             // ── 3. Emit de.messwert.cls.compliance_issue CloudEvent ───────────────
             if let Some(url) = erp_webhook_url {
-                let ce = serde_json::json!({
-                    "specversion": "1.0",
-                    "id": event_id,
-                    "type": mako_events::messwert::CLS_COMPLIANCE_ISSUE,
-                    "source": format!("urn:edmd:tenant:{}:cls-compliance-worker", tenant),
-                    "subject": issue.malo_id,
-                    "time": scanned_at.to_string(),
-                    "datacontenttype": "application/json",
-                    "tenantid": tenant,
-                    "data": {
+                let ce = mako_service::CloudEvent::new(
+                    mako_service::source("edmd", tenant),
+                    mako_events::messwert::CLS_COMPLIANCE_ISSUE,
+                    issue.malo_id.clone(),
+                    serde_json::json!({
                         "malo_id":       issue.malo_id,
                         "device_id":     issue.device_id,
                         "issue_type":    issue.issue_type.db_str(),
@@ -477,19 +472,28 @@ pub async fn run_cls_compliance_sweep(
                         "days_to_expiry": issue.days_to_expiry,
                         "channel_id":    issue.channel_id,
                         "description":   issue.description,
-                    }
-                });
+                    }),
+                )
+                .with_id(event_id)
+                .extension("tenantid", tenant)
+                // CLS_COMPLIANCE_ISSUE is also emitted by the SMGW upsert path;
+                // `worker` disambiguates the emitting worker (type/subject alone
+                // do not identify it).
+                .extension("worker", "cls-compliance-worker");
 
                 // A lost cert-expiry warning silently runs a gateway into
                 // an expired certificate (MsbG §29 remote-readout obligation),
                 // so this retries like every other edmd compliance event.
-                crate::server::post_ce_with_retry(
+                if let Err(e) = mako_service::post_ce_with_retry(
                     &client,
                     url,
                     &ce,
                     erp_webhook_secret.map(str::as_bytes),
                 )
-                .await;
+                .await
+                {
+                    tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
+                }
             }
         }
 
@@ -742,16 +746,11 @@ pub async fn run_smgw_cert_expiry_sweep(
             );
 
             if let Some(url) = erp_webhook_url {
-                let ce = serde_json::json!({
-                    "specversion": "1.0",
-                    "id": event_id,
-                    "type": mako_events::messwert::SMGW_CERT_EXPIRY_WARNING,
-                    "source": format!("urn:edmd:tenant:{tenant}:smgw-cert-expiry-worker"),
-                    "subject": malo_id,
-                    "time": scanned_at.to_string(),
-                    "datacontenttype": "application/json",
-                    "tenantid": tenant,
-                    "data": {
+                let ce = mako_service::CloudEvent::new(
+                    mako_service::source("edmd", tenant),
+                    mako_events::messwert::SMGW_CERT_EXPIRY_WARNING,
+                    malo_id.clone(),
+                    serde_json::json!({
                         "malo_id":        malo_id,
                         "device_id":      session.device_id,
                         "msb_mp_id":      session.msb_mp_id,
@@ -761,18 +760,24 @@ pub async fn run_smgw_cert_expiry_sweep(
                         "days_to_expiry": days,
                         "threshold_days": tier,
                         "severity":       severity,
-                    }
-                });
+                    }),
+                )
+                .with_id(event_id)
+                .extension("tenantid", tenant)
+                .extension("worker", "smgw-cert-expiry-worker");
                 // A lost warning silently runs a gateway into an expired certificate
                 // (§14a Fernsteuerbarkeit + MsbG §29 remote-readout), so retry like
                 // every other edmd compliance event.
-                crate::server::post_ce_with_retry(
+                if let Err(e) = mako_service::post_ce_with_retry(
                     &client,
                     url,
                     &ce,
                     erp_webhook_secret.map(str::as_bytes),
                 )
-                .await;
+                .await
+                {
+                    tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
+                }
             }
             warnings_emitted += 1;
         }
@@ -961,16 +966,11 @@ pub async fn put_smgw_session(
         .await;
 
         if let Some(url) = &state.erp_webhook_url {
-            let ce = serde_json::json!({
-                "specversion": "1.0",
-                "id": event_id,
-                "type": mako_events::messwert::CLS_COMPLIANCE_ISSUE,
-                "source": format!("urn:edmd:tenant:{}:smgw-upsert", tenant),
-                "subject": issue.malo_id,
-                "time": OffsetDateTime::now_utc().to_string(),
-                "datacontenttype": "application/json",
-                "tenantid": tenant,
-                "data": {
+            let ce = mako_service::CloudEvent::new(
+                mako_service::source("edmd", tenant),
+                mako_events::messwert::CLS_COMPLIANCE_ISSUE,
+                issue.malo_id.clone(),
+                serde_json::json!({
                     "malo_id":        issue.malo_id,
                     "device_id":      issue.device_id,
                     "issue_type":     issue.issue_type.db_str(),
@@ -980,11 +980,20 @@ pub async fn put_smgw_session(
                     "days_to_expiry": issue.days_to_expiry,
                     "channel_id":     issue.channel_id,
                     "description":    issue.description,
-                }
-            });
+                }),
+            )
+            .with_id(event_id)
+            .extension("tenantid", tenant)
+            // CLS_COMPLIANCE_ISSUE is also emitted by the compliance sweep worker;
+            // `worker` disambiguates the emitting path (type/subject alone do not).
+            .extension("worker", "smgw-upsert");
             let client = mako_service::http::default_client();
-            crate::server::post_ce_with_retry(&client, url, &ce, state.webhook_secret_bytes())
-                .await;
+            if let Err(e) =
+                mako_service::post_ce_with_retry(&client, url, &ce, state.webhook_secret_bytes())
+                    .await
+            {
+                tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
+            }
         }
     }
 

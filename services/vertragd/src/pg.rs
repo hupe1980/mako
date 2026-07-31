@@ -816,7 +816,7 @@ pub async fn list_aktive_malo_ids(
 }
 
 pub async fn update_vertrag_status(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     id: Uuid,
     tenant: &str,
     status: &str,
@@ -829,7 +829,7 @@ pub async fn update_vertrag_status(
     .bind(status)
     .bind(id)
     .bind(tenant)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }
@@ -944,14 +944,14 @@ pub async fn update_kunde(
 }
 
 pub async fn update_komponente_product(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     komp_id: Uuid,
     new_product_code: &str,
 ) -> Result<()> {
     sqlx::query("UPDATE vertragskomponenten SET product_code=$1, updated_at=now() WHERE id=$2")
         .bind(new_product_code)
         .bind(komp_id)
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
@@ -1059,7 +1059,7 @@ pub struct PendingTarifwechselRow {
 /// Called when `wirksamkeit > today`.  The background worker applies the change
 /// on the `wirksamkeit` date and emits the 6-week advance notification.
 pub async fn store_pending_tarifwechsel(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     komp_id: Uuid,
     new_product_code: &str,
     wirksamkeit: Date,
@@ -1075,7 +1075,7 @@ pub async fn store_pending_tarifwechsel(
     .bind(new_product_code)
     .bind(wirksamkeit)
     .bind(komp_id)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }
@@ -1192,7 +1192,7 @@ pub async fn find_tarifwechsel_needing_notif(
 /// Also updates the `preisgarantie_bis` date column (used by the `tarifwechsel`
 /// guard to reject price-lock violations without loading the full JSONB).
 pub async fn upsert_preisgarantie(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     vertrag_id: Uuid,
     tenant: &str,
     preisgarantie: serde_json::Value,
@@ -1207,7 +1207,7 @@ pub async fn upsert_preisgarantie(
     .bind(tenant)
     .bind(&preisgarantie)
     .bind(bis)
-    .execute(pool)
+    .execute(executor)
     .await?;
     Ok(())
 }
@@ -1566,13 +1566,17 @@ pub async fn count_active_identitaeten(
 ///
 /// Sets all BEENDET components back to AKTIV. Callers must separately cancel
 /// the in-flight Lieferende UTILMD via processd.
-pub async fn widerruf_kuendigung(pool: &PgPool, id: Uuid, tenant: &str) -> Result<()> {
+pub async fn widerruf_kuendigung(
+    conn: &mut sqlx::PgConnection,
+    id: Uuid,
+    tenant: &str,
+) -> Result<()> {
     // Verify contract is in GEKÜNDIGT state
     let vertrag: Option<(String,)> =
         sqlx::query_as("SELECT status FROM versorgungsvertraege WHERE id = $1 AND tenant = $2")
             .bind(id)
             .bind(tenant)
-            .fetch_optional(pool)
+            .fetch_optional(&mut *conn)
             .await?;
 
     let status = vertrag
@@ -1591,7 +1595,7 @@ pub async fn widerruf_kuendigung(pool: &PgPool, id: Uuid, tenant: &str) -> Resul
          WHERE vertrag_id = $1 AND status = 'BEENDET'",
     )
     .bind(id)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     // Revert contract status to AKTIV
@@ -1602,7 +1606,7 @@ pub async fn widerruf_kuendigung(pool: &PgPool, id: Uuid, tenant: &str) -> Resul
     )
     .bind(id)
     .bind(tenant)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     Ok(())

@@ -29,7 +29,7 @@ infrastructure library they build on.
 | **Atomic dual-write** | Events and outbox entries are written in a single `WriteBatch` via `AtomicAppend::append_with_outbox`. There is no two-phase commit, no compensation path for a lost APERAK. |
 | **Event sourcing** | State is rebuilt by replaying the append-only event log. Audit trails, bug reproductions, and format-version migrations are a consequence of the model, not bolt-ons. |
 | **Format-version coexistence** | `FV2025-10-01` and `FV2026-10-01` coexist in the same running instance. A process started under the old format version continues under those rules until it completes. |
-| **Persist before dispatch** | `invoicd` writes each INVOIC receipt to PostgreSQL before issuing the settlement command to `makod`. A crash between check and dispatch is recoverable; a crash between persist and dispatch is not a data-loss event. |
+| **Persist before dispatch** | Every event-emitting service writes the outbound CloudEvent in the **same transaction** as the business row that produced it, then a background worker delivers it (at-least-once, retried, dead-lettered). `makod` does this with a SlateDB `WriteBatch`; the PostgreSQL services (`billingd`, `einsd`, `accountingd`, `netzbilanzd`, `vertragd`, `invoicd`) share one implementation — `mako_service::outbox` (`enqueue(&mut tx, &ce)` + `OutboxWorker`). A crash between persist and dispatch is therefore never a data-loss event; the receiver dedups the duplicates on the CloudEvent `id`. |
 | **One deployment, one operator** | A mako deployment serves a single market operator; isolation between operators is per-deployment (separate processes, databases, and AS4 identities), not row-level SaaS tenancy. Where a `tenant` column or `TenantId` appears (`mako-engine` streams, `edmd`, `tarifbd`), it carries the operator's own MP-ID — it scopes data to the configured party (e.g. multiple LF brands sharing one `tarifbd`), it does not implement cross-operator multi-tenancy. Provisioning for managed hosting is a control-plane concern of the hosted offering. |
 
 ---
@@ -319,7 +319,7 @@ All **seventeen** daemons share a common operational model:
 
 | Daemon | Port | Role | Config file |
 |--------|------|------|-------------|
-| `makod` | `:8080` / `:4080` / `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 55+ workflows, AS4 ingest, deadlines | `makod.toml` |
+| `makod` | `:8080` / `:4080` / `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 67+ workflows, AS4 ingest, deadlines | `makod.toml` |
 | `marktd` | `:8180` | Market Data Hub — MaLo/MeLo/NeLo/TR/SR, Lokationszuordnung graph, preisblaetter, VersorgungsStatus, `event_log` replay, EventBus fan-out; **Geraet** typed konfigurationen sub-resource (16-variant `Konfigurationsparameter` enum, GIN-indexed); **Zaehlzeitdefinition** typed endpoint; ZaehlzeitRegister auto-population from WiM Stammdaten | `marktd.toml` |
 | `processd` | `:8580` | Process decision engine — NB STP (`netz-checker`) + LF E_0624 auto-response | `processd.toml` |
 | `invoicd` | `:8280` | INVOIC plausibility — REMADV, selbstausstellen, overdue-REMADV, § 147 AO / GoBD audit | `invoicd.toml` |
@@ -374,8 +374,13 @@ and the full **`Lokationszuordnung` location graph** (temporal `valid_from`/`val
 recursive-CTE BFS traversal via `GET /api/v1/malo/{id}/lokationen`).
 
 `makod` pushes `de.mako.process.*` CloudEvents to `marktd`'s ingest endpoint.
-Every inbound event is appended to the **durable `event_log` table** before fan-out,
-enabling full replay via `GET /admin/events?from=&to=&type=&limit=`.
+Fan-out is **persist-before-fan-out**: every produced event is written to the
+durable `event_log` outbox (the full envelope) in the same step that accepts it,
+and a two-phase worker drains it — Phase 1 snapshots the matching subscriber set
+into an `event_delivery` ledger, Phase 2 delivers each row (claim-with-lease,
+`FOR UPDATE SKIP LOCKED`). A crash at any point is recoverable from those tables;
+the old in-memory relay channel is gone. `event_log` also backs full replay via
+`GET /admin/events?from=&to=&type=&limit=`.
 W3C Trace Context (`traceparent`, `tracestate`) from the originating `makod` event is
 forwarded unchanged in every outbound webhook, enabling end-to-end distributed traces.
 
@@ -385,11 +390,12 @@ The `VersorgungsStatus` is derived automatically on `de.mako.process.completed`
 to `versorgungsstatus_history`, enabling both full audit logs and bitemporal
 "as-of" queries by date.
 
-Fan-out deliveries are retried with exponential back-off. Events that exhaust
-all retry attempts are written to `fanout_dlq` rather than silently dropped.
-This durable failure path ensures § 147 AO / GoBD compliance — a silent drop of a
-`de.mako.process.initiated` event to `invoicd` would prevent the INVOIC
-plausibility check from running. Operators inspect and retry via
+Per-subscriber deliveries are retried with exponential back-off and, after
+exhausting all attempts, marked `dead_lettered_at` in `event_delivery` (a
+status-column DLQ) rather than silently dropped. This durable path ensures § 147
+AO / GoBD compliance — a silent drop of a `de.mako.process.initiated` event to
+`invoicd` would prevent the INVOIC plausibility check from running. Operators
+inspect and retry via
 `GET|POST|DELETE /admin/fanout/dlq`.
 
 `marktd` is a **pure data hub** — it stores market entity state and fans out

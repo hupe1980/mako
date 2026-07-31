@@ -140,12 +140,13 @@ fn event_without_type_returns_none() {
 #[test]
 fn build_cloud_event_produces_valid_structure() {
     let id = Uuid::new_v4();
-    let ce = build_cloud_event(
+    let ce = serde_json::to_value(build_cloud_event(
         mako_events::vertrag::AKTIV,
         id,
         "9900012345678",
         serde_json::json!({ "status": "AKTIV" }),
-    );
+    ))
+    .unwrap();
     assert_eq!(ce["specversion"], "1.0");
     assert_eq!(ce["type"], mako_events::vertrag::AKTIV);
     assert!(ce["source"].as_str().unwrap().contains("9900012345678"));
@@ -558,7 +559,7 @@ fn default_max_identitaeten_is_50() {
     use vertragd::config::VertragdConfig;
     // Create config via serde with no max_identitaeten_per_kunde (uses default)
     let cfg: VertragdConfig = serde_json::from_value(serde_json::json!({
-        "database_url": "postgres://x",
+        "database": { "url": "postgres://x" },
         "tenant": "test",
         "lf_mp_id": "test",
         "processd_url": "http://processd",
@@ -578,7 +579,7 @@ fn default_max_identitaeten_is_50() {
 fn custom_max_identitaeten_is_respected() {
     use vertragd::config::VertragdConfig;
     let cfg: VertragdConfig = serde_json::from_value(serde_json::json!({
-        "database_url": "postgres://x",
+        "database": { "url": "postgres://x" },
         "tenant": "test",
         "lf_mp_id": "test",
         "processd_url": "http://processd",

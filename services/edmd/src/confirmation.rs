@@ -93,32 +93,32 @@ pub fn spawn_confirmation_worker(
                 continue;
             };
             // One aggregate event per sweep — the endpoint lists the details.
-            let payload = serde_json::json!({
-                "specversion": "1.0",
-                "type": mako_events::messwert::READING_CONFIRMATION_OVERDUE,
-                "source": format!("urn:edmd:{tenant}"),
-                "id": uuid::Uuid::new_v4().to_string(),
-                "time": time::OffsetDateTime::now_utc()
-                    .format(&time::format_description::well_known::Rfc3339)
-                    .unwrap_or_default(),
-                "datacontenttype": "application/json",
-                "tenantid": tenant,
-                "data": {
+            // Tenant-wide aggregate: no per-object business subject.
+            let event = mako_service::CloudEvent::new(
+                mako_service::source("edmd", &tenant),
+                mako_events::messwert::READING_CONFIRMATION_OVERDUE,
+                String::new(),
+                serde_json::json!({
                     "tenant": tenant,
                     "newly_overdue": newly_overdue,
                     "deadline_weeks": deadline_weeks,
                     "rechtsgrundlage": "§ 60 Abs. 2 MsbG (Ersatzwertbildung/Plausibilisierung)",
                     "hinweis": "GET /api/v1/confirmations?status=UEBERFAELLIG listet die offenen Intervalle",
-                }
-            });
+                }),
+            )
+            .without_subject()
+            .extension("tenantid", tenant.clone());
             let client = mako_service::http::default_client();
-            crate::server::post_ce_with_retry(
+            if let Err(e) = mako_service::post_ce_with_retry(
                 &client,
                 webhook_url,
-                &payload,
+                &event,
                 erp_webhook_secret.as_deref().map(str::as_bytes),
             )
-            .await;
+            .await
+            {
+                tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
+            }
         }
     });
 }

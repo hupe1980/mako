@@ -450,11 +450,6 @@ fn ce_type_to_entry_type_mapping() {
     let expected = [
         (mako_events::billing::RECHNUNG_ERSTELLT, "RECHNUNG", false),
         (mako_events::billing::RECHNUNG_ERSTELLT, "STORNO", true), // is_correction=true
-        (
-            mako_events::billing::GUTSCHRIFT_ERSTELLT,
-            "GUTSCHRIFT",
-            false,
-        ),
         (mako_events::invoic::RECEIPT_SETTLED, "ZAHLUNG", false),
         (
             mako_events::eeg::VERGUETUNG_BERECHNET,

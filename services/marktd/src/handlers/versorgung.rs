@@ -314,9 +314,11 @@ where
 
 /// PUT /api/v1/versorgung/:malo_id
 #[expect(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 pub async fn put_versorgungsstatus<Ma, Me, Co, Su, Ci, Pa, Vs>(
     State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<sqlx::PgPool>,
     claims: Claims,
     Path(malo_id): Path<String>,
     Extension(vs_repo): Extension<Arc<Vs>>,
@@ -430,8 +432,9 @@ where
                 marktmaloid: Some(malo_id_str.clone()),
                 ..Default::default()
             });
-            if let Ok(payload) = serde_json::to_value(&evt) {
-                let _ = state.event_tx.send(payload);
+            if let Err(e) = crate::outbox::enqueue(&pool, &evt, &state.notify).await {
+                tracing::error!(error = %e, "versorgung: durable enqueue failed");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
 
             let mut resp_headers = HeaderMap::new();

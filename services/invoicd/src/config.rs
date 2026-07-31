@@ -45,7 +45,6 @@
 
 use invoic_checker::CheckConfig;
 use serde::Deserialize;
-use std::path::Path;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -95,6 +94,15 @@ impl Config {
     #[must_use]
     pub fn auto_dispute_threshold_eur_cents(&self) -> i64 {
         (self.check.auto_dispute_threshold_eur * 100.0_f64).round() as i64
+    }
+}
+
+impl mako_service::ServiceConfig for Config {
+    fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
+        Some(&self.database)
+    }
+    fn bind_addr(&self) -> String {
+        self.http.addr.clone()
     }
 }
 
@@ -277,13 +285,6 @@ pub struct ErpConfig {
     /// Optional HMAC-SHA256 secret for `X-Mako-Signature` on outbound requests.
     /// Use `"env:INVOICD_ERP_HMAC_SECRET"` to load from environment.
     pub hmac_secret: Option<String>,
-}
-
-pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| anyhow::anyhow!("cannot read config file {}: {e}", path.display()))?;
-    toml::from_str(&text)
-        .map_err(|e| anyhow::anyhow!("config parse error in {}: {e}", path.display()))
 }
 
 pub fn resolve_env(value: &str) -> anyhow::Result<String> {

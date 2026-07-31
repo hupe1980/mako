@@ -1,23 +1,51 @@
 //! Shared service infrastructure for mako daemons.
 //!
-//! Provides:
-//! - [`load_config`] — TOML config loading with `env:VAR_NAME` resolution
-//! - [`ServiceBuilder`] — composable Axum router builder
+//! The one entry point most services need is [`run`] — it owns the whole daemon
+//! lifecycle (tracing, tuned pool, migrations, real readiness, graceful serve),
+//! so a `main` is just `run::<MyDaemon>().await`. See [`service`].
+//!
+//! The rest are composable pieces:
+//! - [`service`] — the [`Daemon`] trait + [`run`] lifecycle owner
+//! - [`config`] — layered TOML/env config ([`load_config`], [`DatabaseConfig`])
+//! - [`error`] — shared [`ApiError`] / [`ApiResult`] with `IntoResponse`
+//! - [`cloudevent`] — canonical `CloudEvent` envelope + signed publisher
+//! - [`outbox`] — transactional outbox (persist-before-dispatch) + drain worker
+//! - [`event_bus`] — pluggable event fan-out (`WebhookBus` / `KafkaBus`)
+//! - [`webhook`] — the one HMAC-SHA256 signer/verifier
+//! - [`ServiceBuilder`] — composable Axum router builder (infra routes)
 //! - [`health`] — `/health/live` and `/health/ready` route helpers
-//! - [`webhook`] — HMAC-SHA256 signature verification helpers
 //! - [`telemetry`] — structured logging + optional OpenTelemetry OTLP export
 //! - [`cedar`] — Cedar ABAC policy enforcement (feature-gated: `cedar`)
 //! - [`oidc`] — OIDC/JWT verification + `Claims` Axum extractor (feature-gated: `oidc`)
-//! - [`metrics`] — Prometheus `/metrics` handler + recording middleware (feature-gated: `metrics`)
+//! - [`metrics`] — Prometheus `/metrics` handler + middleware (feature-gated: `metrics`)
 //! - [`rate_limit`] — Tower rate-limiter config (feature-gated: `rate-limit`)
 
 #![deny(unsafe_code)]
+#![warn(clippy::pedantic)]
+// Curated allows: these categories are pervasive across the pre-existing auth /
+// cedar / oidc modules or are subjective; pedantic stays on to catch everything
+// else in new code.
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    clippy::needless_pass_by_value,
+    clippy::large_futures,
+    clippy::manual_let_else,
+    clippy::items_after_statements,
+    clippy::module_name_repetitions,
+    clippy::must_use_candidate,
+    clippy::doc_markdown
+)]
 
 pub mod builder;
+pub mod cloudevent;
 pub mod config;
+pub mod error;
 pub mod event_bus;
 pub mod health;
 pub mod http;
+pub mod outbox;
+pub mod service;
 pub mod shutdown;
 pub mod telemetry;
 pub mod webhook;
@@ -44,12 +72,15 @@ pub mod metrics;
 #[cfg(feature = "rate-limit")]
 pub mod rate_limit;
 
-/// Compile-time catalog of every CloudEvents `type` in the workspace.
+/// Compile-time catalog of every `CloudEvents` `type` in the workspace.
 pub use mako_events as cloud_events;
 pub use mako_plugin::{PluginContext, PluginError, PluginManifest, PluginRegistry};
 
 pub use builder::ServiceBuilder;
+pub use cloudevent::{CloudEvent, PublishError, post_ce_with_retry, source};
 pub use config::{ConfigError, DatabaseConfig, HttpConfig, load_config};
+pub use error::{ApiError, ApiResult};
+pub use service::{Daemon, ServiceConfig, ServiceContext, run};
 pub use telemetry::{OtelConfig, OtelGuard, init_tracing, init_tracing_from_env};
 
 #[cfg(feature = "metrics")]

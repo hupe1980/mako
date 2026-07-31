@@ -80,11 +80,13 @@ fn days_in_month(year: i16, month: i16) -> u8 {
 
 // ── CloudEvent emission ───────────────────────────────────────────────────────
 
-/// Emit a settlement CloudEvent to `erp_webhook_url`.
+/// Build a settlement CloudEvent for the transactional outbox.
 ///
-/// Returns the CloudEvent UUID on success; `None` on failure or when webhook
-/// is not configured.  Failures are logged as warnings — they do not roll back
-/// the settlement calculation, which is already persisted.
+/// Returns `Some(CloudEvent)` when the ERP webhook is configured (the event must
+/// then be `enqueue`d **inside the same transaction as the settlement write**, so
+/// it commits atomically and a background [`mako_service::outbox::OutboxWorker`]
+/// delivers it at-least-once). Returns `None` when no webhook is configured, so
+/// the caller skips the enqueue entirely.
 ///
 /// CE types emitted:
 /// - `de.eeg.verguetung.berechnet` — VERGUETUNG, MIETERSTROM, POST_EEG_SPOT,
@@ -94,9 +96,9 @@ fn days_in_month(year: i16, month: i16) -> u8 {
 /// `bank_iban` and `bank_bic` are included when present so `accountingd` can
 /// generate a SEPA Credit Transfer pain.001 without a secondary DB lookup.
 #[allow(clippy::too_many_arguments)]
-pub async fn emit_settlement_ce(
+#[must_use]
+pub fn build_settlement_ce(
     cfg: &EinsdConfig,
-    client: &reqwest::Client,
     ce_type: &str,
     tr_id: &str,
     malo_id: &str,
@@ -106,20 +108,16 @@ pub async fn emit_settlement_ce(
     bank_iban: Option<&str>,
     bank_bic: Option<&str>,
     zahlungsempfaenger: Option<&str>,
-) -> Option<uuid::Uuid> {
-    let webhook_url = cfg.erp_webhook_url.as_deref()?;
+) -> Option<mako_service::CloudEvent> {
+    // Gate on webhook configuration — no ERP endpoint means nothing to enqueue.
+    cfg.erp_webhook_url.as_deref()?;
     let ce_id = uuid::Uuid::new_v4();
-    let now = time::OffsetDateTime::now_utc();
 
-    let payload = serde_json::json!({
-        "specversion": "1.0",
-        "type": ce_type,
-        "source": format!("urn:einsd:tenant:{}", cfg.tenant),
-        "id": ce_id.to_string(),
-        "time": now.to_string(),
-        "subject": tr_id,
-        "datacontenttype": "application/json",
-        "data": {
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("einsd", &cfg.tenant),
+        ce_type,
+        tr_id,
+        serde_json::json!({
             "tr_id": tr_id,
             "malo_id": malo_id,
             "billing_year": year,
@@ -139,35 +137,11 @@ pub async fn emit_settlement_ce(
             "bank_iban": bank_iban,
             "bank_bic": bank_bic,
             "zahlungsempfaenger": zahlungsempfaenger,
-        }
-    });
+        }),
+    )
+    .with_id(ce_id.to_string());
 
-    let body = serde_json::to_string(&payload).unwrap_or_default();
-    let mut req = client
-        .post(webhook_url)
-        .header("Content-Type", "application/cloudevents+json")
-        .body(body.clone());
-
-    // HMAC-SHA256 signing when secret is configured.
-    if let Some(secret) = cfg.erp_hmac_secret.as_deref() {
-        let sig = mako_service::webhook::hmac_hex(secret.as_bytes(), body.as_bytes());
-        req = req.header("X-Mako-Signature", format!("sha256={sig}"));
-    }
-
-    match req.send().await {
-        Ok(resp) if resp.status().is_success() => Some(ce_id),
-        Ok(resp) => {
-            tracing::warn!(
-                ce_type, tr_id, status = %resp.status(),
-                "einsd: ERP webhook delivery failed"
-            );
-            None
-        }
-        Err(e) => {
-            tracing::warn!(ce_type, tr_id, error = %e, "einsd: ERP webhook error");
-            None
-        }
-    }
+    Some(ce)
 }
 
 /// Emit `de.eeg.anlage.foerderung_auslaufend` for a plant about to expire.
@@ -183,29 +157,22 @@ pub async fn emit_foerderung_alert_ce(
         return;
     };
 
-    let ce_id = uuid::Uuid::new_v4();
-    let payload = serde_json::json!({
-        "specversion": "1.0",
-        "type": mako_events::eeg::ANLAGE_FOERDERUNG_AUSLAUFEND,
-        "source": format!("urn:einsd:tenant:{}", cfg.tenant),
-        "id": ce_id.to_string(),
-        "time": time::OffsetDateTime::now_utc().to_string(),
-        "subject": tr_id,
-        "datacontenttype": "application/json",
-        "data": {
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("einsd", &cfg.tenant),
+        mako_events::eeg::ANLAGE_FOERDERUNG_AUSLAUFEND,
+        tr_id,
+        serde_json::json!({
             "tr_id": tr_id,
             "malo_id": malo_id,
             "foerderendedatum": foerderendedatum.to_string(),
             "days_remaining": days_remaining,
-        }
-    });
+        }),
+    );
 
-    let _ = client
-        .post(webhook_url)
-        .header("Content-Type", "application/cloudevents+json")
-        .json(&payload)
-        .send()
-        .await;
+    let secret = cfg.erp_hmac_secret.as_deref().map(str::as_bytes);
+    if let Err(e) = mako_service::post_ce_with_retry(client, webhook_url, &ce, secret).await {
+        tracing::warn!(tr_id, error = %e, "einsd: förderung alert delivery failed");
+    }
 }
 
 // ── EEG Anlage CRUD ───────────────────────────────────────────────────────────
@@ -455,51 +422,47 @@ pub async fn post_settle(
         },
     );
 
-    match run_settlement(&pool, input).await {
-        Ok(result) => {
-            // ── Emit CloudEvent to ERP webhook ───────────────────────────────
-            // de.eeg.verguetung.berechnet   — VERGUETUNG, MIETERSTROM, POST_EEG_SPOT, EIGENVERBRAUCH, KWKG_ZUSCHLAG, FLEXIBILITAET
-            // de.eeg.marktpraemie.berechnet — DIREKTVERMARKTUNG, AUSSCHREIBUNG
-            if result.status == "calculated" {
-                let ce_type = match anlage.settlement_model.as_str() {
-                    "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" => {
-                        mako_events::eeg::MARKTPRAEMIE_BERECHNET
-                    }
-                    _ => mako_events::eeg::VERGUETUNG_BERECHNET,
-                };
-                let ce_id = emit_settlement_ce(
-                    &cfg,
-                    &http_client,
-                    ce_type,
-                    &tr_id,
-                    &anlage.malo_id,
-                    &result,
-                    year,
-                    month,
-                    anlage.bank_iban.as_deref(),
-                    anlage.bank_bic.as_deref(),
-                    anlage.zahlungsempfaenger.as_deref(),
-                )
-                .await;
-                // Update ce_id in DB (best-effort — failure doesn't affect settlement result).
-                if let Some(ce_id) = ce_id {
-                    let _ = sqlx::query(
-                        "UPDATE settlement_receipts SET ce_id = $1 \
-                         WHERE tr_id = $2 AND tenant = $3 AND billing_year = $4 AND billing_month = $5",
-                    )
-                    .bind(ce_id)
-                    .bind(&tr_id)
-                    .bind(&cfg.tenant)
-                    .bind(year)
-                    .bind(month)
-                    .execute(&pool)
-                    .await;
-                }
-            }
-            (StatusCode::OK, Json(result)).into_response()
+    // ── Transactional outbox: settlement write + CloudEvent enqueue commit as one ─
+    // The settlement is money-critical, so the domain write and the ERP CloudEvent
+    // must be atomic. run_settlement runs its writes on the tx; the CE is enqueued
+    // into event_outbox in the same tx and drained by the OutboxWorker.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let result = match run_settlement(&mut tx, input).await {
+        Ok(r) => r,
+        // tx dropped here → rollback; nothing was persisted.
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    // ── Enqueue CloudEvent for ERP webhook ───────────────────────────────────
+    // de.eeg.verguetung.berechnet   — VERGUETUNG, MIETERSTROM, POST_EEG_SPOT, EIGENVERBRAUCH, KWKG_ZUSCHLAG, FLEXIBILITAET
+    // de.eeg.marktpraemie.berechnet — DIREKTVERMARKTUNG, AUSSCHREIBUNG
+    if result.status == "calculated" {
+        let ce_type = match anlage.settlement_model.as_str() {
+            "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" => mako_events::eeg::MARKTPRAEMIE_BERECHNET,
+            _ => mako_events::eeg::VERGUETUNG_BERECHNET,
+        };
+        if let Some(ce) = build_settlement_ce(
+            &cfg,
+            ce_type,
+            &tr_id,
+            &anlage.malo_id,
+            &result,
+            year,
+            month,
+            anlage.bank_iban.as_deref(),
+            anlage.bank_bic.as_deref(),
+            anlage.zahlungsempfaenger.as_deref(),
+        ) && let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await
+        {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+    (StatusCode::OK, Json(result)).into_response()
 }
 
 /// `GET /api/v1/anlagen/{tr_id}/settlements`
@@ -878,25 +841,24 @@ pub async fn post_mastr_registrierung(
         Ok(r) if r.rows_affected() == 0 => StatusCode::NOT_FOUND.into_response(),
         Ok(_) => {
             // Emit CloudEvent to ERP webhook
-            let ce_body = serde_json::json!({
-                "tr_id": tr_id,
-                "mastr_nummer": req.mastr_nummer,
-                "mastr_datum": mastr_datum.to_string(),
-            });
             if let Some(webhook_url) = cfg.erp_webhook_url.as_deref() {
-                let ce_id = uuid::Uuid::new_v4();
-                let now = time::OffsetDateTime::now_utc();
-                let _ = reqwest::Client::new()
-                    .post(webhook_url)
-                    .header("ce-id", ce_id.to_string())
-                    .header("ce-type", mako_events::eeg::ANLAGE_MASTR_REGISTRIERT)
-                    .header("ce-source", format!("/einsd/anlagen/{tr_id}"))
-                    .header("ce-specversion", "1.0")
-                    .header("ce-time", now.to_string())
-                    .header("content-type", "application/json")
-                    .json(&ce_body)
-                    .send()
-                    .await;
+                let ce = mako_service::CloudEvent::new(
+                    mako_service::source("einsd", &cfg.tenant),
+                    mako_events::eeg::ANLAGE_MASTR_REGISTRIERT,
+                    tr_id.clone(),
+                    serde_json::json!({
+                        "tr_id": tr_id,
+                        "mastr_nummer": req.mastr_nummer,
+                        "mastr_datum": mastr_datum.to_string(),
+                    }),
+                );
+                let secret = cfg.erp_hmac_secret.as_deref().map(str::as_bytes);
+                let client = mako_service::http::default_client();
+                if let Err(e) =
+                    mako_service::post_ce_with_retry(&client, webhook_url, &ce, secret).await
+                {
+                    tracing::warn!(tr_id, error = %e, "einsd: MaStR registriert CE delivery failed");
+                }
             }
             StatusCode::NO_CONTENT.into_response()
         }
@@ -1065,24 +1027,38 @@ pub async fn post_batch_settle(
                         jahresmarktwert_ct_kwh: None,
                     },
                 );
-                let res = run_settlement(&pool, input).await;
-                // Best-effort CE emission for calculated results
-                if let Ok(ref result) = res
-                    && result.status == "calculated"
-                {
-                    let ce_type = match settlement_model.as_str() {
-                        "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" | "MARKET_PREMIUM" => {
-                            mako_events::eeg::MARKTPRAEMIE_BERECHNET
+                // Transactional outbox: each plant's settlement write + its CE enqueue
+                // commit atomically on their own transaction.
+                let mut tx = match pool.begin().await {
+                    Ok(tx) => tx,
+                    Err(e) => return (tr_id, settlement_model, Err(e.into())),
+                };
+                let res = run_settlement(&mut tx, input).await;
+                match res {
+                    Ok(result) => {
+                        if result.status == "calculated" {
+                            let ce_type = match settlement_model.as_str() {
+                                "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" | "MARKET_PREMIUM" => {
+                                    mako_events::eeg::MARKTPRAEMIE_BERECHNET
+                                }
+                                _ => mako_events::eeg::VERGUETUNG_BERECHNET,
+                            };
+                            if let Some(ce) = build_settlement_ce(
+                                &cfg, ce_type, &tr_id, &malo_id, &result, year, month, None, None,
+                                None,
+                            ) && let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await
+                            {
+                                return (tr_id, settlement_model, Err(e.into()));
+                            }
                         }
-                        _ => mako_events::eeg::VERGUETUNG_BERECHNET,
-                    };
-                    emit_settlement_ce(
-                        &cfg, &client, ce_type, &tr_id, &malo_id, result, year, month, None, None,
-                        None,
-                    )
-                    .await;
+                        if let Err(e) = tx.commit().await {
+                            return (tr_id, settlement_model, Err(e.into()));
+                        }
+                        (tr_id, settlement_model, Ok(result))
+                    }
+                    // tx dropped → rollback.
+                    Err(e) => (tr_id, settlement_model, Err(e)),
                 }
-                (tr_id, settlement_model, res)
             });
         }
 
@@ -1243,7 +1219,6 @@ pub async fn post_switch_veraeusserungsform(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
-    Extension(http_client): Extension<Arc<reqwest::Client>>,
     Path(tr_id): Path<String>,
     Json(req): Json<VeraeusserungsformWechselRequest>,
 ) -> impl IntoResponse {
@@ -1322,7 +1297,13 @@ pub async fn post_switch_veraeusserungsform(
         }
     };
 
-    match sqlx::query(
+    // ── Transactional outbox: the Veräußerungsform switch (eeg_anlagen UPDATE) and
+    // its §21c notification CloudEvent commit atomically. ─────────────────────────
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let updated = sqlx::query(
         r"UPDATE eeg_anlagen
           SET settlement_model               = $3,
               direktverm_mp_id               = $4,
@@ -1337,33 +1318,36 @@ pub async fn post_switch_veraeusserungsform(
     .bind(&req.direktvermarkter_mp_id)
     .bind(req.direktverm_aw_ct)
     .bind(effective_date)
-    .execute(&pool)
-    .await
-    {
+    .execute(&mut *tx)
+    .await;
+
+    match updated {
         Ok(r) if r.rows_affected() > 0 => {
-            // ── §21c EEG 2023: emit notification CloudEvent to NB ─────────────
-            // §21c: operator must notify the NB of the switch by end of the calendar month.
-            // We emit de.eeg.veraeusserungsform.gewechselt to the ERP webhook which is
-            // expected to forward it to the GPKE process handler (makod PID 55022/55023).
-            let ce_id = emit_veraeusserungsform_ce(
-                &cfg,
-                &http_client,
-                &tr_id,
-                new_model,
-                &req.effective_date,
-            )
-            .await;
-            // Record the notification timestamp (best-effort — failure does not block the switch).
-            if ce_id.is_some() {
-                let _ = sqlx::query(
+            // ── §21c EEG 2023: notify the NB of the switch by end of the calendar
+            // month. de.eeg.veraeusserungsform.gewechselt is enqueued in this tx and
+            // the OutboxWorker forwards it to the GPKE handler (makod PID 55022/55023).
+            let ce = build_veraeusserungsform_ce(&cfg, &tr_id, new_model, &req.effective_date);
+            let notification_sent = ce.is_some();
+            if let Some(ce) = &ce {
+                if let Err(e) = mako_service::outbox::enqueue(&mut tx, ce).await {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                }
+                // Record the notification timestamp in the same tx.
+                if let Err(e) = sqlx::query(
                     "UPDATE eeg_anlagen
                      SET veraeusserungsform_notification_sent_at = now()
                      WHERE tr_id = $1 AND tenant = $2",
                 )
                 .bind(&tr_id)
                 .bind(&cfg.tenant)
-                .execute(&pool)
-                .await;
+                .execute(&mut *tx)
+                .await
+                {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                }
+            }
+            if let Err(e) = tx.commit().await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
             }
             (
                 StatusCode::OK,
@@ -1371,72 +1355,54 @@ pub async fn post_switch_veraeusserungsform(
                     "tr_id": tr_id,
                     "new_model": new_model,
                     "effective_date": req.effective_date,
-                    "notification_sent": ce_id.is_some(),
+                    "notification_sent": notification_sent,
                     "note": format!(
                         "§21b EEG 2023 Veräußerungsform Wechsel to {} recorded. \
                          §21c notification {}.",
                         new_model,
-                        if ce_id.is_some() { "dispatched" } else { "pending — configure erp_webhook_url" }
+                        if notification_sent { "enqueued for delivery" } else { "pending — configure erp_webhook_url" }
                     )
                 })),
             )
                 .into_response()
         }
+        // rows_affected == 0 → plant not found; tx dropped (nothing changed).
         Ok(_) => (StatusCode::NOT_FOUND, format!("plant {tr_id} not found")).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
-/// Emit `de.eeg.veraeusserungsform.gewechselt` CloudEvent for §21c EEG 2023.
+/// Build the `de.eeg.veraeusserungsform.gewechselt` CloudEvent for §21c EEG 2023.
 ///
-/// The ERP webhook is expected to forward this to the GPKE process handler
-/// (makod, PID 55022 Wechsel Marktrollen / PID 55023 Wechselbestätigung).
-async fn emit_veraeusserungsform_ce(
+/// Returns `Some(CloudEvent)` when the ERP webhook is configured — the caller must
+/// `enqueue` it in the same transaction as the `eeg_anlagen` update, so the switch
+/// and its §21c notification commit atomically. The ERP webhook is expected to
+/// forward this to the GPKE process handler (makod, PID 55022 Wechsel Marktrollen /
+/// PID 55023 Wechselbestätigung).
+#[must_use]
+fn build_veraeusserungsform_ce(
     cfg: &EinsdConfig,
-    client: &reqwest::Client,
     tr_id: &str,
     new_model: &str,
     effective_date: &str,
-) -> Option<uuid::Uuid> {
-    let webhook_url = cfg.erp_webhook_url.as_deref()?;
+) -> Option<mako_service::CloudEvent> {
+    cfg.erp_webhook_url.as_deref()?;
     let ce_id = uuid::Uuid::new_v4();
-    let now = time::OffsetDateTime::now_utc();
-    let payload = serde_json::json!({
-        "specversion": "1.0",
-        "type": mako_events::eeg::VERAEUSSERUNGSFORM_GEWECHSELT,
-        "source": format!("urn:einsd:tenant:{}", cfg.tenant),
-        "id": ce_id.to_string(),
-        "time": now.to_string(),
-        "subject": tr_id,
-        "datacontenttype": "application/json",
-        "data": {
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("einsd", &cfg.tenant),
+        mako_events::eeg::VERAEUSSERUNGSFORM_GEWECHSELT,
+        tr_id,
+        serde_json::json!({
             "tr_id": tr_id,
             "new_model": new_model,
             "effective_date": effective_date,
             "legal_basis": "§21c EEG 2023",
             "deadline": "End of calendar month of effective_date"
-        }
-    });
-    let body = serde_json::to_string(&payload).unwrap_or_default();
-    let mut req = client
-        .post(webhook_url)
-        .header("Content-Type", "application/cloudevents+json")
-        .body(body.clone());
-    if let Some(secret) = cfg.erp_hmac_secret.as_deref() {
-        let sig = mako_service::webhook::hmac_hex(secret.as_bytes(), body.as_bytes());
-        req = req.header("X-Mako-Signature", format!("sha256={sig}"));
-    }
-    match req.send().await {
-        Ok(resp) if resp.status().is_success() => Some(ce_id),
-        Ok(resp) => {
-            tracing::warn!(tr_id, status = %resp.status(), "§21c CE delivery failed");
-            None
-        }
-        Err(e) => {
-            tracing::warn!(tr_id, error = %e, "§21c CE error");
-            None
-        }
-    }
+        }),
+    )
+    .with_id(ce_id.to_string());
+
+    Some(ce)
 }
 
 // ── § 147 AO / GoBD — Correction Settlement ───────────────────────────────────────
@@ -1543,23 +1509,35 @@ pub async fn post_correction_settle(
         },
     );
 
-    match run_settlement(&pool, input).await {
-        Ok(result) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "id": result.id,
-                "original_id": original_id_str,
-                "correction_reason": format!("{:?}", req.reason),
-                "reason_detail": req.reason_detail,
-                "billing_year": year,
-                "billing_month": month,
-                "settlement_eur": result.settlement_eur,
-                "status": result.status,
-                "note": "§ 147 AO / GoBD correction receipt created. Original receipt preserved for audit trail.",
-            })),
-        ).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    // Correction settlement runs its writes on a transaction that commits as one.
+    // No CloudEvent is emitted for corrections, so there is nothing to enqueue.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let result = match run_settlement(&mut tx, input).await {
+        Ok(r) => r,
+        // tx dropped → rollback.
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "id": result.id,
+            "original_id": original_id_str,
+            "correction_reason": format!("{:?}", req.reason),
+            "reason_detail": req.reason_detail,
+            "billing_year": year,
+            "billing_month": month,
+            "settlement_eur": result.settlement_eur,
+            "status": result.status,
+            "note": "§ 147 AO / GoBD correction receipt created. Original receipt preserved for audit trail.",
+        })),
+    )
+        .into_response()
 }
 
 /// `POST /api/v1/anlagen/{tr_id}/jahresabrechnung/{year}`

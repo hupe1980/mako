@@ -68,7 +68,9 @@ pub struct EegConfig {
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct AccountingdConfig {
-    pub database_url: String,
+    /// `[database]` block — connection URL plus pool tuning. The daemon runner
+    /// connects a tuned pool (with `application_name = "accountingd"`) from this.
+    pub database: mako_service::config::DatabaseConfig,
 
     /// HTTP listen port.  Defaults to `9380`.
     pub port: Option<u16>,
@@ -165,4 +167,13 @@ pub struct AccountingdConfig {
     /// OIDC configuration for authenticating financial write endpoints.
     /// When absent: dev mode (all requests accepted, WARN emitted at startup).
     pub oidc: Option<mako_service::oidc::OidcConfig>,
+}
+
+impl mako_service::ServiceConfig for AccountingdConfig {
+    fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
+        Some(&self.database)
+    }
+    fn bind_addr(&self) -> String {
+        format!("0.0.0.0:{}", self.port.unwrap_or(9380))
+    }
 }

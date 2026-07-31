@@ -20,30 +20,57 @@ The projection is a CQRS read-model: it holds no authoritative data and is fully
 ## Quick Start
 
 ```bash
-obsd \
-  --database-url postgres://obsd:secret@localhost/obsd \
-  --webhook-url  http://obsd:8480/webhook \
-  --marktd-url     http://marktd:8180
+OBSD_CONFIG=obsd.toml obsd        # obsd --check is the container HEALTHCHECK probe
 ```
 
-Migrations run automatically at startup.
+`obsd` runs on the `mako-service` daemon runner (`mako_service::run::<Obsd>()`), which owns
+tracing, the tuned connection pool (`application_name = "obsd"`), migrations, graceful shutdown,
+and a real `/health/ready` (bounded `SELECT 1`). Config is TOML with `env:` substitution; the file
+path comes from `OBSD_CONFIG`. Log level is `RUST_LOG`; OTLP export is the `[otel]` block.
 
 ---
 
 ## Configuration
 
-| Flag | Env var | Default | Description |
-|---|---|---|---|
-| `--listen` | `OBSD_LISTEN` | `0.0.0.0:8480` | Bind address |
-| `--database-url` | `OBSD_DATABASE_URL` | required | PostgreSQL connection string |
-| `--marktd-url` | `OBSD_MARKTD_URL` | `http://localhost:8180` | marktd base URL for subscription registration |
-| `--subscriber-id` | `OBSD_SUBSCRIBER_ID` | `obsd` | CloudEvents subscriber ID registered with marktd |
-| `--webhook-url` | `OBSD_WEBHOOK_URL` | required | Public URL that marktd will POST events to |
-| `--webhook-secret` | `OBSD_WEBHOOK_SECRET` | optional | HMAC-SHA256 secret for outbound webhook signatures |
-| `--inbound-secret` | `OBSD_INBOUND_SECRET` | optional | HMAC secret for verifying inbound `X-Mako-Signature` headers (falls back to `--webhook-secret`) |
-| `--db-pool-size` | `OBSD_DB_POOL_SIZE` | `10` | Max PostgreSQL connections |
-| `--log-level` | `OBSD_LOG_LEVEL` | `info` | Log level — overridden by `RUST_LOG` |
-| `--otel-endpoint` | `OBSD_OTEL_ENDPOINT` | optional | OTLP gRPC endpoint (e.g. `http://otel-collector:4317`) |
+```toml
+[http]
+addr = "0.0.0.0:8480"
+
+[database]
+url       = "env:OBSD_DATABASE_URL"   # postgresql://obsd:secret@db:5432/obsd
+pool_size = 10
+
+[identity]
+tenant     = "9900357000004"
+# All operator MP-IDs for §20 EnWG affiliate detection — include both
+# Strom (BDEW 99…) and Gas (DVGW 98…) codes for an integrated NB+GNB deployment.
+own_mp_ids = ["9900357000004", "9800357000004"]
+
+[marktd]
+url     = "http://marktd:8180"
+api_key = "env:OBSD_MARKTD_API_KEY"
+
+[webhook]
+# Verifies inbound events from marktd (X-Mako-Signature: sha256=…).
+inbound_secret = "env:OBSD_INBOUND_SECRET"
+# Target + secret for the de.obs.* CloudEvents obsd emits (deadline.approaching,
+# stp.parity.alert). When outbound_url is unset the sweep workers do not run.
+outbound_url    = "env:OBSD_OUTBOUND_URL"
+outbound_secret = "env:OBSD_OUTBOUND_SECRET"
+
+[subscription]
+webhook_url   = "http://obsd:8480/webhook"
+subscriber_id = "obsd"
+
+# [oidc]                                  # omit for dev mode
+# issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+# audience = "api://mako-obsd"
+# [otel]
+# endpoint = "http://otel-collector:4317"
+```
+
+The `[worker]` block tunes the background sweeps (`deadline_sweep_secs` 900, `deadline_warn_hours`
+24, `parity_sweep_secs` 86400, `parity_threshold_pp` 5.0, `parity_window_days` 90).
 
 ---
 

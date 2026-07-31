@@ -5,8 +5,8 @@ use serde::Deserialize;
 /// Top-level configuration loaded from `netzbilanzd.toml` / env vars.
 #[derive(Debug, Deserialize)]
 pub struct NetzbilanzConfig {
-    /// PostgreSQL connection URL.
-    pub database_url: String,
+    /// PostgreSQL connection + pool tuning (`[database]` block).
+    pub database: mako_service::config::DatabaseConfig,
     /// HTTP port (default 8680).
     pub port: Option<u16>,
     /// Tenant identifier for multi-tenant deployments. Defaults to `"default"`.
@@ -31,6 +31,16 @@ pub struct NetzbilanzConfig {
     /// Optional ERP webhook URL — receives CloudEvents
     /// `de.netzbilanz.invoic.drafted` and `de.netzbilanz.invoic.dispatched`.
     pub erp_webhook_url: Option<String>,
+    /// HMAC-SHA256 secret for signing the outbound ERP webhook CloudEvents
+    /// (`X-Mako-Signature: sha256=<hex>`). Use `env:VAR_NAME`. Leave unset only
+    /// in dev — a receiver verifying the signature rejects unsigned events.
+    pub erp_webhook_secret: Option<String>,
+    /// HMAC-SHA256 secret for verifying INBOUND REMADV CloudEvents on
+    /// `POST /webhooks/remadv`. When unset the endpoint accepts unsigned bodies
+    /// (dev mode); set it in production so a forged REMADV cannot mark a
+    /// Bilanzkreis INVOIC paid/disputed.
+    #[serde(default)]
+    pub inbound_secret: Option<String>,
     /// VNB MP-ID used to auto-fetch this operator's published Strom MMM
     /// (Mehr-/Mindermengen) settlement prices from `marktd` when not explicitly
     /// supplied in a billing run request.
@@ -49,4 +59,13 @@ pub struct NetzbilanzConfig {
 
 fn default_tenant() -> String {
     "default".to_owned()
+}
+
+impl mako_service::ServiceConfig for NetzbilanzConfig {
+    fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
+        Some(&self.database)
+    }
+    fn bind_addr(&self) -> String {
+        format!("0.0.0.0:{}", self.port.unwrap_or(8680))
+    }
 }

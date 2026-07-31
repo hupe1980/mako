@@ -1973,7 +1973,7 @@ curl -s -X POST "http://edmd:8380/api/v1/smgw/compliance/scan" \
   "specversion": "1.0",
   "id":          "a1b2c3d4-...",
   "type":        "de.messwert.cls.compliance_issue",
-  "source":      "urn:edmd:tenant:9900000000003:cls-compliance-worker",
+  "source":      "urn:mako:edmd:tenant:9900000000003",
   "subject":     "10001234567",
   "time":        "2026-07-18T05:00:00Z",
   "data": {

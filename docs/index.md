@@ -74,7 +74,7 @@ mermaid: true
     <span class="mako-kpi__label">EDIFACT message types</span>
   </div>
   <div class="mako-kpi">
-    <span class="mako-kpi__value">55+</span>
+    <span class="mako-kpi__value">67+</span>
     <span class="mako-kpi__label">event-sourced workflows</span>
   </div>
   <div class="mako-kpi">
@@ -158,7 +158,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">⚙️</div>
     <h3>Event-Sourced Process Runtime</h3>
     <p>
-      55+ durable, replayable MaKo workflows built on <code>mako-engine</code> —
+      67+ durable, replayable MaKo workflows built on <code>mako-engine</code> —
       GPKE &amp; GeLi&nbsp;Gas supplier switch, WiM Messstellenbetrieb (incl. the
       <strong>WiM&nbsp;Teil&nbsp;2 ESA Wertebestellung</strong>, §34 MsbG: one correlated
       REQOTE→QUOTES→ORDERS→ORDRSP→ORDCHG subscription lifecycle),
@@ -283,9 +283,19 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <h3>Service SDK</h3>
     <p>
       <code>mako-service</code> is the shared infrastructure all 17 daemons build on.
-      SIGINT/SIGTERM graceful drain, OIDC verifier, MCP auth, Cedar ABAC, OpenTelemetry,
-      EventBus (WebhookBus / KafkaBus), webhook HMAC verification, and rate limiting —
-      all wired with one call per service.
+      A daemon's <code>main</code> is <strong>one line</strong> —
+      <code>mako_service::run::&lt;D&gt;()</code> owns the whole lifecycle: structured tracing,
+      the tuned connection pool (with per-service <code>application_name</code>), migrations,
+      a real <code>/health/ready</code> that pings the database, infra routes, SIGINT/SIGTERM
+      graceful drain, and a <code>--check</code> container health probe.
+    </p>
+    <p>
+      Event-emitting services get a <strong>transactional outbox</strong>: each outbound
+      CloudEvent is written to <code>event_outbox</code> <em>in the same transaction</em> as the
+      business change and drained by a background worker with retry and a dead-letter queue —
+      persist-before-dispatch, so a crash never drops an event. One canonical CloudEvent builder
+      and HMAC signer (<code>sha256=</code>), a typed <code>ApiError</code> for
+      RFC-problem HTTP responses, OIDC, MCP auth, Cedar ABAC, and OpenTelemetry round it out.
     </p>
     <a href="{{ '/services' | relative_url }}">Service SDK guide →</a>
   </div>
@@ -327,7 +337,7 @@ graph TB
     BDEW["BDEW counterparty (NB · MSB · LF)"]
 
     subgraph core ["Protocol & Market Data"]
-        makod["makod — EDIFACT + Redispatch XML · 55+ workflows"]
+        makod["makod — EDIFACT + Redispatch XML · 67+ workflows"]
         marktd["marktd — MaLo/MeLo master data hub"]
     end
 
@@ -415,7 +425,7 @@ MARKTD_URL=http://localhost:8180 WEBHOOK_URL=http://localhost:8000 bash smoke.sh
 
 ## Services
 
-mako consists of 17 independently deployable services. 16 of them ship a built-in MCP server at `/mcp` for LLM tool integration (mabis-syncd is a pure batch worker).
+mako consists of 17 independently deployable services. 15 of them ship a built-in MCP server at `/mcp` for LLM tool integration (agentd is an MCP *client* that orchestrates the others; mabis-syncd is a pure batch worker).
 
 </div>
 
@@ -424,7 +434,7 @@ mako consists of 17 independently deployable services. 16 of them ship a built-i
   <a href="{{ '/makod' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">makod</span>
     <span class="mako-service-card__port">:8080 · :4080 · :8090</span>
-    <span class="mako-service-card__desc">55+ GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas/Redispatch workflows. AS4 sign+encrypt (asx-rs v0.11, BrainpoolP256r1) carrying EDIFACT + Redispatch XML. REST, iMS. SlateDB event store. 12 AS4 security tests.</span>
+    <span class="mako-service-card__desc">67+ GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas/Redispatch workflows. AS4 sign+encrypt (asx-rs v0.11, BrainpoolP256r1) carrying EDIFACT + Redispatch XML. REST, iMS. SlateDB event store. 12 AS4 security tests.</span>
   </a>
   <a href="{{ '/marktd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">marktd</span>
@@ -587,7 +597,7 @@ sequenceDiagram
   </div>
   <div class="mako-principle">
     <strong>MCP server in (nearly) every service</strong>
-    16 daemons expose tools and guided prompts at <code>/mcp</code> (Streamable HTTP 2025-11-25).
+    15 daemons expose tools and guided prompts at <code>/mcp</code> (Streamable HTTP 2025-11-25).
     Plug any MCP-capable LLM client directly into your energy market operations.
   </div>
 </div>

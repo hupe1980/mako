@@ -481,7 +481,9 @@ Content-Type: application/json
 
 ```toml
 # tarifbd.toml
-database_url = "postgresql://tarifbd:secret@db:5432/tarifbd"
-port         = 9080
-tenant       = "9910000000002"   # operator LF BDEW-Codenummer
+port   = 9080
+tenant = "9910000000002"   # operator LF BDEW-Codenummer
+
+[database]
+url = "postgresql://tarifbd:secret@db:5432/tarifbd"
 ```

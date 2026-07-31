@@ -1,133 +1,39 @@
 #![deny(unsafe_code)]
 
-use std::net::SocketAddr;
+//! `obsd` — Business-process observability daemon.
+//!
+//! `mako_service::run` owns the lifecycle (tracing, tuned pool, real DB-ping
+//! readiness, graceful shutdown); this only supplies the migrations and the
+//! domain router (process projection, BNetzA KPI reports, `de.obs.*` sweep
+//! producers, MCP server) via [`obsd::server::build_router`].
+
 use std::sync::Arc;
 
-use anyhow::Context;
-use clap::Parser;
-use tokio_util::sync::CancellationToken;
+use anyhow::Context as _;
+use axum::Router;
+use mako_service::{Daemon, ServiceContext};
+use obsd::{config, server};
 
-use obsd::config::{self, Config};
+struct Obsd;
 
-#[derive(Debug, Parser)]
-#[command(name = "obsd", about = "Business-process observability daemon")]
-struct Cli {
-    #[arg(short = 'c', long, default_value = "obsd.toml", env = "OBSD_CONFIG")]
-    config: std::path::PathBuf,
-    #[arg(long, default_value = "info", env = "RUST_LOG")]
-    log_level: String,
-    /// Validate configuration and database connectivity, then exit 0.
-    #[arg(long, env = "OBSD_CHECK", default_value_t = false)]
-    check: bool,
+impl Daemon for Obsd {
+    type Config = config::Config;
+    const NAME: &'static str = "obsd";
+
+    async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+        sqlx::migrate!("./migrations")
+            .run(pool)
+            .await
+            .context("run obsd migrations")?;
+        Ok(())
+    }
+
+    async fn build(cfg: Arc<config::Config>, ctx: ServiceContext) -> anyhow::Result<Router> {
+        server::build_router(cfg, ctx).await
+    }
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-
-    let cfg: Config = config::load_from_file(&cli.config)
-        .with_context(|| format!("loading config from {}", cli.config.display()))?;
-
-    let _otel_guard = mako_service::init_tracing(
-        "obsd",
-        &cli.log_level,
-        if cfg.otel.is_enabled() {
-            Some(&cfg.otel)
-        } else {
-            None
-        },
-    );
-
-    let shutdown = CancellationToken::new();
-    {
-        let shutdown = shutdown.clone();
-        tokio::spawn(async move {
-            let _ = tokio::signal::ctrl_c().await;
-            tracing::info!("obsd: shutdown signal received");
-            shutdown.cancel();
-        });
-    }
-
-    let http = mako_service::http::default_client();
-    let oidc = mako_service::oidc::OidcConfig::build_verifier(
-        cfg.oidc.as_ref(),
-        &http,
-        &cfg.identity.tenant,
-        shutdown.clone(),
-    )
-    .await?;
-
-    let cedar = Arc::new(
-        mako_service::cedar::CedarEnforcer::from_policy_str(include_str!("../policies/obsd.cedar"))
-            .map_err(|e| anyhow::anyhow!("Cedar policy error: {e}"))?,
-    );
-
-    let listen: SocketAddr = cfg
-        .http
-        .addr
-        .parse()
-        .with_context(|| format!("invalid http.addr '{}'", cfg.http.addr))?;
-
-    let database_url = config::resolve_env_secret(&cfg.database.url).context("database.url")?;
-
-    // ── --check mode early exit ────────────────────────────────────────────────
-    if cli.check {
-        use secrecy::ExposeSecret as _;
-        sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .connect(database_url.expose_secret())
-            .await
-            .context("obsd --check: connecting to PostgreSQL")?;
-        tracing::info!("obsd: check mode — config and database connectivity verified");
-        return Ok(());
-    }
-
-    let marktd_api_key =
-        config::resolve_env_secret(&cfg.marktd.api_key).context("marktd.api_key")?;
-    let inbound_secret = cfg
-        .webhook
-        .inbound_secret
-        .as_deref()
-        .map(config::resolve_env_secret)
-        .transpose()
-        .context("webhook.inbound_secret")?;
-    let webhook_secret = inbound_secret.clone();
-    let outbound_secret = cfg
-        .webhook
-        .outbound_secret
-        .as_deref()
-        .map(config::resolve_env_secret)
-        .transpose()
-        .context("webhook.outbound_secret")?;
-    let outbound_url = cfg
-        .webhook
-        .outbound_url
-        .as_deref()
-        .map(config::resolve_env)
-        .transpose()
-        .context("webhook.outbound_url")?;
-
-    obsd::server::run(obsd::server::RunConfig {
-        listen,
-        database_url,
-        marktd_url: cfg.marktd.url,
-        marktd_api_key,
-        subscriber_id: cfg.subscription.subscriber_id,
-        webhook_url: cfg.subscription.webhook_url,
-        webhook_secret,
-        inbound_secret,
-        subscription_event_types: cfg.subscription.event_types,
-        outbound_url,
-        outbound_secret,
-        worker: cfg.worker,
-        db: cfg.database,
-        tenant: cfg.identity.tenant,
-        // §20 EnWG: if own_mp_ids is empty the server falls back to [tenant].
-        own_mp_ids: cfg.identity.own_mp_ids,
-        oidc,
-        cedar,
-        mcp: cfg.mcp,
-        shutdown,
-    })
-    .await
+    mako_service::run::<Obsd>().await
 }

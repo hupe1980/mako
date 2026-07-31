@@ -10,7 +10,7 @@ pub struct Tenant(pub String);
 
 #[derive(Debug, Deserialize)]
 pub struct SperrdConfig {
-    pub database_url: String,
+    pub database: mako_service::config::DatabaseConfig,
     pub port: Option<u16>,
     /// Tenant identifier — data-isolation key written to every database row.
     /// Typically the operator’s BDEW- or DVGW-Codenummer, but any stable unique string is valid.
@@ -22,4 +22,13 @@ pub struct SperrdConfig {
     /// See `[mcp]` section in TOML — e.g. `api_key = "env:SPERRD_MCP_API_KEY"`.
     #[serde(default)]
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
+}
+
+impl mako_service::ServiceConfig for SperrdConfig {
+    fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
+        Some(&self.database)
+    }
+    fn bind_addr(&self) -> String {
+        format!("0.0.0.0:{}", self.port.unwrap_or(8780))
+    }
 }

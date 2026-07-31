@@ -176,9 +176,14 @@ pub async fn post_vpp_billing(
     let total_netto = invoice.netto_eur;
     let total_brutto = invoice.brutto_eur;
 
-    // Persist billing record.
+    // VPP settlement row + its `de.vpp.settlement.berechnet` outbox event commit
+    // atomically, so a settled dispatch can never be persisted without its event.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
     let record_id = match insert_billing_record(
-        &pool,
+        &mut *tx,
         &cfg.tenant,
         &req.malo_id,
         &req.lf_mp_id,
@@ -195,19 +200,12 @@ pub async fn post_vpp_billing(
         Ok(id) => id,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
-
-    // Emit de.vpp.settlement.berechnet CloudEvent.
-    if let Some(ref webhook_url) = cfg.erp_webhook_url {
-        let ce_id = uuid::Uuid::new_v4();
-        let ce = serde_json::json!({
-            "specversion": "1.0",
-            "type": mako_events::vpp::SETTLEMENT_BERECHNET,
-            "source": format!("urn:billingd:vpp:{vpp_id}"),
-            "id": ce_id.to_string(),
-            "time": time::OffsetDateTime::now_utc().to_string(),
-            "subject": vpp_id,
-            "datacontenttype": "application/json",
-            "data": {
+    if cfg.erp_webhook_url.is_some() {
+        let ce = mako_service::CloudEvent::new(
+            mako_service::source("billingd", &cfg.tenant),
+            mako_events::vpp::SETTLEMENT_BERECHNET,
+            vpp_id.clone(),
+            serde_json::json!({
                 "record_id": record_id.to_string(),
                 "vpp_id": vpp_id,
                 "malo_id": req.malo_id,
@@ -217,19 +215,14 @@ pub async fn post_vpp_billing(
                 "total_brutto_eur": total_brutto.to_string(),
                 "dispatch_count": req.dispatch_events.len(),
                 "rechnung": rechnung_json,
-            }
-        });
-        let client = reqwest::Client::new();
-        if let Ok(resp) = client
-            .post(webhook_url)
-            .header("Content-Type", "application/cloudevents+json")
-            .json(&ce)
-            .send()
-            .await
-            && resp.status().is_success()
-        {
-            let _ = mark_dispatched(&pool, record_id, ce_id).await;
+            }),
+        );
+        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
+    }
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
     (
@@ -350,8 +343,7 @@ pub async fn post_vpp_webhook(
             .and_then(|v| v.to_str().ok())
             .map(|v| v.strip_prefix("sha256=").unwrap_or(v));
         match sig {
-            Some(hex)
-                if mako_markt::cloudevents::verify_signature(secret.as_bytes(), &body, hex) => {}
+            Some(hex) if mako_service::webhook::verify_hmac(secret.as_bytes(), &body, hex) => {}
             Some(_) => {
                 tracing::warn!("billingd: vpp-dispatch webhook — invalid HMAC signature");
                 return StatusCode::UNAUTHORIZED.into_response();
@@ -567,8 +559,21 @@ pub async fn post_vpp_webhook(
     let position_netto = invoice.netto_eur;
     let total_brutto = invoice.brutto_eur;
 
+    // Auto-billing is atomic across three writes that must never diverge: the
+    // settlement row, the `vpp_dispatch_ledger` idempotency record, and the
+    // `de.vpp.settlement.berechnet` outbox event. One transaction guarantees a
+    // dispatch is billed exactly once and its event is never lost — and if the
+    // commit fails the top-of-handler idempotency guard lets the sender's retry
+    // reprocess cleanly (nothing was committed).
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            tracing::error!(tx_id, error = %e, "billingd: vpp auto-billing tx begin failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
     let record_id = match insert_billing_record(
-        &pool,
+        &mut *tx,
         &cfg.tenant,
         &contract.malo_id,
         &contract.lf_mp_id,
@@ -589,31 +594,24 @@ pub async fn post_vpp_webhook(
         }
     };
 
-    // Record for idempotency.
-    let _ = crate::pg::record_vpp_dispatch(&pool, &tx_id, &cfg.tenant, Some(record_id)).await;
+    // Idempotency ledger — inside the tx, so a re-delivered dispatch cannot be
+    // billed twice and a ledger failure fails the whole settlement closed.
+    if let Err(e) =
+        crate::pg::record_vpp_dispatch(&mut *tx, &tx_id, &cfg.tenant, Some(record_id)).await
+    {
+        tracing::error!(tx_id, error = %e, "billingd: vpp_dispatch_ledger write failed");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
 
-    tracing::info!(
-        tx_id,
-        %record_id,
-        vpp_id = %contract.vpp_id,
-        malo_id = %contract.malo_id,
-        flexibility_kwh = %flexibility_kwh,
-        total_brutto = %total_brutto,
-        "billingd: VPP dispatch auto-billed"
-    );
-
-    // ── 9. Emit de.vpp.settlement.berechnet ───────────────────────────────────
-    if let Some(ref webhook_url) = cfg.erp_webhook_url {
-        let ce_id = Uuid::new_v4();
-        let ce = serde_json::json!({
-            "specversion": "1.0",
-            "type": mako_events::vpp::SETTLEMENT_BERECHNET,
-            "source": format!("urn:billingd:vpp:{}", contract.vpp_id),
-            "id": ce_id.to_string(),
-            "time": time::OffsetDateTime::now_utc().to_string(),
-            "subject": contract.vpp_id,
-            "datacontenttype": "application/json",
-            "data": {
+    // ── 9. Enqueue de.vpp.settlement.berechnet ────────────────────────────────
+    // The VPP dispatch subscriber keys on `de.vpp.settlement.berechnet`, so the
+    // event carries that type directly (never the Rechnung helper's type).
+    if cfg.erp_webhook_url.is_some() {
+        let ce = mako_service::CloudEvent::new(
+            mako_service::source("billingd", &cfg.tenant),
+            mako_events::vpp::SETTLEMENT_BERECHNET,
+            &contract.vpp_id,
+            serde_json::json!({
                 "record_id":          record_id.to_string(),
                 "vpp_id":             contract.vpp_id,
                 "malo_id":            contract.malo_id,
@@ -625,20 +623,27 @@ pub async fn post_vpp_webhook(
                 "total_brutto_eur":   total_brutto.to_string(),
                 "trigger":            "auto",
                 "rechnung":           rechnung_json,
-            }
-        });
-        emit_cloud_event(
-            webhook_url,
-            cfg.erp_hmac_secret.as_deref(),
-            &pool,
-            record_id,
-            &contract.malo_id,
-            &contract.lf_mp_id,
-            &ce["data"],
-        )
-        .await;
-        let _ = mark_dispatched(&pool, record_id, ce_id).await;
+            }),
+        );
+        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+            tracing::error!(tx_id, error = %e, "billingd: vpp settlement enqueue failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     }
+    if let Err(e) = tx.commit().await {
+        tracing::error!(tx_id, error = %e, "billingd: vpp auto-billing commit failed");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    tracing::info!(
+        tx_id,
+        %record_id,
+        vpp_id = %contract.vpp_id,
+        malo_id = %contract.malo_id,
+        flexibility_kwh = %flexibility_kwh,
+        total_brutto = %total_brutto,
+        "billingd: VPP dispatch auto-billed"
+    );
 
     StatusCode::ACCEPTED.into_response()
 }

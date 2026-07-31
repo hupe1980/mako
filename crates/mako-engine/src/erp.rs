@@ -28,7 +28,7 @@
 //! {
 //!   "specversion": "1.0",
 //!   "id": "<idempotency_key>",
-//!   "source": "urn:mako:tenant:<tenant_id>",
+//!   "source": "urn:mako:makod:tenant:<tenant_id>",
 //!   "type": "de.mako.aperak.accepted",
 //!   "time": "2026-10-01T10:15:00+02:00",
 //!   "subject": "<process_id>",

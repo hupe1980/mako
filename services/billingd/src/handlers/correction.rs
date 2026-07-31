@@ -93,8 +93,15 @@ pub async fn post_correction(
     let netto = -original.total_netto_eur.unwrap_or_default();
     let brutto = -original.total_brutto_eur.unwrap_or_default();
 
+    // Korrekturrechnung row + its `de.billing.rechnung.erstellt`
+    // (`is_correction: true`) event commit atomically, so accountingd's CREDIT
+    // ledger entry can never be lost after the correction is persisted.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
     let correction_id = match insert_correction_record(
-        &pool,
+        &mut *tx,
         &cfg.tenant,
         &original.malo_id,
         &original.lf_mp_id,
@@ -114,18 +121,20 @@ pub async fn post_correction(
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
-    if let Some(ref webhook_url) = cfg.erp_webhook_url {
-        emit_cloud_event_inner(
-            webhook_url,
-            cfg.erp_hmac_secret.as_deref(),
-            &pool,
+    if cfg.erp_webhook_url.is_some() {
+        let ce = rechnung_erstellt_ce(
             correction_id,
             &original.malo_id,
             &original.lf_mp_id,
             &corrected_json,
             true,
-        )
-        .await;
+        );
+        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    }
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
     (

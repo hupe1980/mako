@@ -15,7 +15,7 @@ use axum::{
     response::IntoResponse,
 };
 use mako_markt::{
-    cloudevents::{MarktEvent, compute_signature},
+    cloudevents::MarktEvent,
     repository::{
         AppState, ContractRepository, CorrelationIndex, MaloRepository, MeloRepository,
         PartnerRepository, Subscription, SubscriptionRepository,
@@ -195,7 +195,7 @@ where
         .body(body.clone());
 
     if let Some(secret) = sub.webhook_secret.as_deref() {
-        let sig = compute_signature(secret.as_bytes(), &body);
+        let sig = mako_service::webhook::sign(secret.as_bytes(), &body);
         req = req.header("X-Mako-Signature", sig);
     }
 

@@ -17,7 +17,7 @@ impl TarifbdClient {
     pub fn new(base_url: &str) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_owned(),
-            client: reqwest::Client::new(),
+            client: mako_service::http::default_client(),
         }
     }
 
@@ -394,7 +394,7 @@ impl EdmdClient {
         Self {
             base_url: base_url.trim_end_matches('/').to_owned(),
             api_key,
-            client: reqwest::Client::new(),
+            client: mako_service::http::default_client(),
         }
     }
 
@@ -704,7 +704,7 @@ impl VertragdClient {
     pub fn new(base_url: &str) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_owned(),
-            client: reqwest::Client::new(),
+            client: mako_service::http::default_client(),
         }
     }
 

@@ -250,8 +250,6 @@ CREATE TABLE settlement_receipts (
     status                      TEXT        NOT NULL DEFAULT 'calculated',
     -- Active | Reduced | Suspended | PostEeg | Ended (at time of settlement)
     settlement_state            TEXT,
-    -- CloudEvent ID (de.eeg.verguetung.berechnet or de.eeg.marktpraemie.berechnet)
-    ce_id                       UUID,
     error_detail                TEXT,
 
     -- Correction chain support (§ 147 AO / GoBD)
@@ -279,8 +277,6 @@ COMMENT ON INDEX sr_unique_initial IS
     'Named index supports ON CONFLICT ON CONSTRAINT sr_unique_initial in upsert code.';
 
 CREATE INDEX sr_tr_period       ON settlement_receipts (tr_id, tenant, billing_year DESC, billing_month DESC);
-CREATE INDEX sr_ce_pending      ON settlement_receipts (tenant, settled_at DESC)
-    WHERE ce_id IS NULL AND status = 'calculated';
 CREATE INDEX sr_faelligkeitsdatum ON settlement_receipts (tenant, faelligkeitsdatum)
     WHERE faelligkeitsdatum IS NOT NULL;
 CREATE INDEX sr_correction      ON settlement_receipts (correction_of)

@@ -21,74 +21,71 @@
 //! | `GET`   | `/health` | Liveness check |
 //! | `GET`   | `/health/ready` | Readiness check |
 
+use std::sync::Arc;
+
 use anyhow::Context as _;
 use axum::{Extension, Router, routing::get};
 use mako_markt::makod_client::MakodClient;
-use mako_service::{health::health_routes, load_config};
+use mako_service::{Daemon, ServiceContext};
 use secrecy::SecretString;
 use sperrd::{config, handlers, mcp_server};
-use sqlx::PgPool;
-use std::sync::Arc;
-use tracing::info;
+
+/// The `sperrd` daemon. `mako_service::run` owns the lifecycle (tracing, tuned
+/// pool, real DB-ping readiness, graceful shutdown); this only supplies the
+/// migrations and the domain router + MCP server.
+struct Sperrd;
+
+impl Daemon for Sperrd {
+    type Config = config::SperrdConfig;
+    const NAME: &'static str = "sperrd";
+
+    async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+        sqlx::migrate!("./migrations")
+            .run(pool)
+            .await
+            .context("run sperrd migrations")?;
+        Ok(())
+    }
+
+    async fn build(cfg: Arc<config::SperrdConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
+        let makod = Arc::new(MakodClient::new(
+            &cfg.makod_url,
+            SecretString::from(cfg.makod_api_key.clone()),
+        ));
+
+        let app = Router::new()
+            .route("/api/v1/sperr-orders/stats", get(handlers::get_stats))
+            .route(
+                "/api/v1/sperr-orders",
+                get(handlers::list_orders).post(handlers::create_order),
+            )
+            .route("/api/v1/sperr-orders/{id}", get(handlers::get_order))
+            .route(
+                "/api/v1/sperr-orders/{id}/execute",
+                axum::routing::put(handlers::execute_order),
+            )
+            .route(
+                "/api/v1/sperr-orders/{id}/fail",
+                axum::routing::put(handlers::fail_order),
+            )
+            .route(
+                "/api/v1/sperr-orders/{id}/cancel",
+                axum::routing::put(handlers::cancel_order),
+            )
+            .layer(Extension(makod))
+            .layer(Extension(config::Tenant(cfg.tenant.clone())))
+            .layer(Extension(ctx.pool().clone()));
+
+        let mcp_state = Arc::new(mcp_server::SperrdMcpState {
+            pool: ctx.pool().clone(),
+            tenant: cfg.tenant.clone(),
+            auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
+        });
+        Ok(app.merge(mcp_server::router(mcp_state, ctx.shutdown.clone())))
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _guard = mako_service::init_tracing_from_env("sperrd");
-
-    let cfg: config::SperrdConfig = load_config("sperrd").context("load config")?;
-
-    let pool = PgPool::connect(&cfg.database_url)
-        .await
-        .context("connect PostgreSQL")?;
-
-    let makod = Arc::new(MakodClient::new(
-        &cfg.makod_url,
-        SecretString::from(cfg.makod_api_key.clone()),
-    ));
-
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .map_err(|e| anyhow::anyhow!("run sperrd migrations: {e}"))?;
-
-    let app = Router::new()
-        .merge(health_routes(|| async { true }))
-        .route("/api/v1/sperr-orders/stats", get(handlers::get_stats))
-        .route(
-            "/api/v1/sperr-orders",
-            get(handlers::list_orders).post(handlers::create_order),
-        )
-        .route("/api/v1/sperr-orders/{id}", get(handlers::get_order))
-        .route(
-            "/api/v1/sperr-orders/{id}/execute",
-            axum::routing::put(handlers::execute_order),
-        )
-        .route(
-            "/api/v1/sperr-orders/{id}/fail",
-            axum::routing::put(handlers::fail_order),
-        )
-        .route(
-            "/api/v1/sperr-orders/{id}/cancel",
-            axum::routing::put(handlers::cancel_order),
-        )
-        .layer(Extension(makod))
-        .layer(Extension(config::Tenant(cfg.tenant.clone())))
-        .layer(Extension(pool.clone()));
-
-    // ── MCP server ────────────────────────────────────────────────────────────
-    let mcp_state = std::sync::Arc::new(mcp_server::SperrdMcpState {
-        pool: pool.clone(),
-        tenant: cfg.tenant.clone(),
-        auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
-    });
-    let ct = mako_service::shutdown::token();
-    let app = app.merge(mcp_server::router(mcp_state, ct.clone()));
-
-    let addr = format!("0.0.0.0:{}", cfg.port.unwrap_or(8780));
-    info!(%addr, "sperrd starting");
-
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .context("bind TCP")?;
-    mako_service::shutdown::serve(listener, app, ct).await
+    mako_service::run::<Sperrd>().await
 }

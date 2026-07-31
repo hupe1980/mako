@@ -44,6 +44,9 @@ hmac               = { version = "0.12", features = ["std"] }
 sha2               = "0.10"
 jiff               = "0.2"
 reqwest            = { workspace = true }
+# Bounded-concurrent fan-out delivery (`for_each_concurrent`) so one slow
+# subscriber cannot stall a whole batch on the single-threaded worker.
+futures            = { version = "0.3", default-features = false, features = ["std"] }
 rust_decimal       = { workspace = true }
 utoipa             = { version = "5", features = ["axum_extras", "uuid", "time"] }
 utoipa-axum        = "0.2"

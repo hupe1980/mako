@@ -186,6 +186,28 @@ pub async fn record_erp_failure(
     Ok(())
 }
 
+/// Force-dead-letter a receipt after a **permanent** ERP rejection (a 4xx — a
+/// mis-addressed or malformed webhook that no retry can fix). Sets `erp_attempts`
+/// to the terminal 5 in one statement, so the outbox worker never re-queries it
+/// (its SELECT caps at `erp_attempts < 5`) and it surfaces as dead-lettered
+/// (`erp_attempts >= 5 AND erp_notified_at IS NULL`).
+///
+/// # Errors
+///
+/// Returns `sqlx::Error` on database failure.
+pub async fn dead_letter_erp(pool: &PgPool, process_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"UPDATE invoic_receipts
+           SET erp_attempts = 5,
+               erp_next_attempt_at = NULL
+           WHERE process_id = $1"#,
+    )
+    .bind(process_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// A row returned by the background ERP outbox worker query.
 #[derive(Debug)]
 pub struct ErpPendingRow {

@@ -35,14 +35,14 @@ use axum::{
 };
 use mako_markt::repository::DeviceRepository;
 use mako_markt::{
-    cloudevents::{EventExtensions, InboundMakoEvent, MarktEvent, verify_signature},
+    cloudevents::{EventExtensions, InboundMakoEvent, MarktEvent},
     repository::{
         AppState, ContractRepository, CorrelationIndex, MaloRepository, MeloRepository,
         PartnerRepository, SubscriptionRepository, VersorgungsStatusRepository,
     },
 };
 use sqlx::PgPool;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 
 /// Newtype wrapper for the inbound webhook secret so it can be used as an axum
 /// Extension.  `None` means signature verification is disabled.
@@ -85,7 +85,7 @@ where
             .map(|v| v.strip_prefix("sha256=").unwrap_or(v));
 
         match sig {
-            Some(hex) if verify_signature(secret_str.as_bytes(), &body, hex) => {}
+            Some(hex) if mako_service::webhook::verify_hmac(secret_str.as_bytes(), &body, hex) => {}
             Some(_) => {
                 warn!("event_ingest: invalid HMAC signature");
                 return StatusCode::UNAUTHORIZED.into_response();
@@ -127,28 +127,6 @@ where
         return StatusCode::ACCEPTED.into_response();
     }
 
-    // 4a. Append to durable event replay log (B11).
-    //
-    // Fire-and-forget — a log write failure must never block event processing.
-    // The `ON CONFLICT DO NOTHING` guard makes this idempotent in case of
-    // delayed retries after a partial failure.
-    let log_result = sqlx::query(
-        r"INSERT INTO event_log (event_id, ce_type, ce_source, subject, data)
-          VALUES ($1, $2, $3, $4, $5)
-          ON CONFLICT (event_id) DO NOTHING",
-    )
-    .bind(&event.id)
-    .bind(&event.ce_type)
-    .bind(&state.tenant_gln)
-    .bind(event.subject.as_deref())
-    .bind(&event.data)
-    .execute(&pool)
-    .await;
-
-    if let Err(ref e) = log_result {
-        warn!(event_id = %event.id, error = %e, "event_ingest: event_log write failed (non-fatal)");
-    }
-
     // 4. Re-emit as MarktEvent enriched with the tenant GLN as source.
     //
     // Phase 1 — capture values needed for VersorgungsStatus derivation before
@@ -177,8 +155,17 @@ where
         ..Default::default()
     });
 
-    if let Ok(payload) = serde_json::to_value(&markt_event) {
-        let _ = state.event_tx.send(payload);
+    // Durable, persist-before-fan-out: the enqueue INSERT is FATAL. If it fails
+    // we roll back the idempotency marker so a client retry re-processes the
+    // event (otherwise the duplicate guard at step 3 would swallow it and the
+    // event would be lost).
+    if let Err(e) = crate::outbox::enqueue(&pool, &markt_event, &state.notify).await {
+        error!(event_id = %event_id_for_vs, error = %e, "event_ingest: durable enqueue failed; rolling back idempotency marker");
+        let _ = sqlx::query("DELETE FROM processed_events WHERE event_id = $1")
+            .bind(&event_id_for_vs)
+            .execute(&pool)
+            .await;
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
     // 5. Derive VersorgungsStatus from supply-state-changing CloudEvents.
@@ -232,6 +219,7 @@ where
                         data_for_vs.get("aenderungsdatum").and_then(|v| v.as_str());
                     apply_object_stammdaten(
                         &state,
+                        &pool,
                         nelo_repo.as_ref(),
                         tranche_repo.as_ref(),
                         tr_repo.as_ref(),
@@ -372,8 +360,10 @@ where
                                         makopid: Some(pid),
                                         ..Default::default()
                                     });
-                                    if let Ok(payload) = serde_json::to_value(&gap_evt) {
-                                        let _ = state.event_tx.send(payload);
+                                    if let Err(e) =
+                                        crate::outbox::enqueue(&pool, &gap_evt, &state.notify).await
+                                    {
+                                        error!(error = %e, "event_ingest: gap-detected enqueue failed");
                                     }
                                 }
                                 Ok(_) => {}
@@ -478,8 +468,10 @@ where
                                     makopid: Some(pid),
                                     ..Default::default()
                                 });
-                                if let Ok(payload) = serde_json::to_value(&eog_evt) {
-                                    let _ = state.event_tx.send(payload);
+                                if let Err(e) =
+                                    crate::outbox::enqueue(&pool, &eog_evt, &state.notify).await
+                                {
+                                    error!(error = %e, "event_ingest: eog-begonnen enqueue failed");
                                 }
                             }
                         } else {
@@ -801,6 +793,7 @@ pub(crate) fn marktrole_from_workflow(workflow_name: Option<&str>) -> Option<Str
 #[allow(clippy::too_many_arguments)]
 async fn apply_object_stammdaten<Ma, Me, Co, Su, Ci, Pa>(
     state: &AppState<Ma, Me, Co, Su, Ci, Pa>,
+    pool: &sqlx::PgPool,
     nelo_repo: &PgNeLoRepository,
     tranche_repo: &PgTrancheRepository,
     tr_repo: &PgTechnischeRessourceRepository,
@@ -826,7 +819,10 @@ async fn apply_object_stammdaten<Ma, Me, Co, Su, Ci, Pa>(
         TrancheStammdatenPatch,
     };
 
-    // Emit a stammdaten-changed CloudEvent after a successful typed patch.
+    // Emit a stammdaten-changed CloudEvent after a successful typed patch —
+    // durable enqueue to the outbox (best-effort logging: these are secondary
+    // events derived from an already-persisted primary ingest).
+    let notify: &tokio::sync::Notify = &state.notify;
     let emit = |ce_type: &'static str, is_malo: bool| {
         let evt = MarktEvent::new(
             &state.tenant_gln,
@@ -848,8 +844,10 @@ async fn apply_object_stammdaten<Ma, Me, Co, Su, Ci, Pa>(
             makopid: Some(pid),
             ..Default::default()
         });
-        if let Ok(payload) = serde_json::to_value(&evt) {
-            let _ = state.event_tx.send(payload);
+        async move {
+            if let Err(e) = crate::outbox::enqueue(pool, &evt, notify).await {
+                error!(error = %e, ce_type, "event_ingest: stammdaten enqueue failed");
+            }
         }
     };
 
@@ -869,7 +867,7 @@ async fn apply_object_stammdaten<Ma, Me, Co, Su, Ci, Pa>(
                 return;
             }
             match state.malo_repo.patch_stammdaten(&malo_id, &patch).await {
-                Ok(true) => emit(mako_events::markt::MALO_STAMMDATEN_GEAENDERT, true),
+                Ok(true) => emit(mako_events::markt::MALO_STAMMDATEN_GEAENDERT, true).await,
                 Ok(false) => {
                     debug!(
                         object_id,
@@ -899,7 +897,7 @@ async fn apply_object_stammdaten<Ma, Me, Co, Su, Ci, Pa>(
                     .assign_msb(&state.tenant_gln, object_id, msb, valid_from)
                     .await
                 {
-                    Ok(()) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false),
+                    Ok(()) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false).await,
                     Err(e) => {
                         warn!(object_id, pid, error = %e, "event_ingest: MeLo assign_msb failed (non-fatal)")
                     }
@@ -913,7 +911,7 @@ async fn apply_object_stammdaten<Ma, Me, Co, Su, Ci, Pa>(
                 return;
             }
             match state.melo_repo.patch_stammdaten(&melo_id, &patch).await {
-                Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false),
+                Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false).await,
                 Ok(false) => {
                     debug!(
                         object_id,
@@ -935,7 +933,7 @@ async fn apply_object_stammdaten<Ma, Me, Co, Su, Ci, Pa>(
                 .patch_stammdaten(object_id, &state.tenant_gln, &patch)
                 .await
             {
-                Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false),
+                Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false).await,
                 Ok(false) => {
                     debug!(
                         object_id,
@@ -957,7 +955,7 @@ async fn apply_object_stammdaten<Ma, Me, Co, Su, Ci, Pa>(
                 .patch_stammdaten(object_id, &state.tenant_gln, &patch)
                 .await
             {
-                Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false),
+                Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false).await,
                 Ok(false) => {
                     debug!(
                         object_id,
@@ -979,7 +977,7 @@ async fn apply_object_stammdaten<Ma, Me, Co, Su, Ci, Pa>(
                 .patch_stammdaten(object_id, &state.tenant_gln, &patch)
                 .await
             {
-                Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false),
+                Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false).await,
                 Ok(false) => {
                     debug!(
                         object_id,
@@ -1001,7 +999,7 @@ async fn apply_object_stammdaten<Ma, Me, Co, Su, Ci, Pa>(
                 .replace_sr_konfigurationsprodukte(object_id, &state.tenant_gln, kp)
                 .await
             {
-                Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false),
+                Ok(true) => emit(mako_events::markt::STAMMDATEN_GEAENDERT, false).await,
                 Ok(false) => {
                     debug!(
                         object_id,

@@ -109,7 +109,6 @@ CREATE TABLE ledger_entries (
         'RECHNUNG',         -- debit:  invoice from billingd / netzbilanzd
         'STORNO',           -- debit:  Stornorechnung / billing reversal
         'ZAHLUNG',          -- credit: incoming payment (CAMT.054, ERP confirm, SEPA)
-        'GUTSCHRIFT',       -- credit: credit note (de.billing.gutschrift.erstellt)
         'EEG_GUTSCHRIFT',   -- credit: EEG Einspeisevergütung (de.eeg.verguetung.berechnet)
         'EEG_MARKTPRAEMIE', -- credit: EEG Direktvermarktung Marktprämie
         'BANKRUECKLAST',    -- debit:  returned SEPA direct debit (R-transaction)

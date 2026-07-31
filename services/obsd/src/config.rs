@@ -37,8 +37,12 @@
 use serde::Deserialize;
 use std::path::Path;
 
+// NOTE: no `deny_unknown_fields` on the top-level struct — `mako_service::run`
+// loads config via `load_config`, whose env layer (`OBSD_*`) also surfaces the
+// `OBSD_CONFIG` path variable as a stray `config` key. Rejecting unknown fields
+// here would make every deployment that points at its config via that variable
+// fail to start. Nested blocks keep `deny_unknown_fields`.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Config {
     pub http: HttpConfig,
     pub database: DatabaseConfig,
@@ -58,6 +62,15 @@ pub struct Config {
     /// See `[mcp]` in TOML — e.g. `api_key = "env:OBSD_MCP_API_KEY"`.
     #[serde(default)]
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
+}
+
+impl mako_service::ServiceConfig for Config {
+    fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
+        Some(&self.database)
+    }
+    fn bind_addr(&self) -> String {
+        self.http.addr.clone()
+    }
 }
 
 #[derive(Debug, Deserialize)]

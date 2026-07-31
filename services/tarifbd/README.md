@@ -24,9 +24,11 @@
 
 ```toml
 # tarifbd.toml
-database_url = "postgresql://tarifbd:secret@db:5432/tarifbd"
-port         = 9080
-tenant       = "9900357000004"
+port   = 9080
+tenant = "9900357000004"
+
+[database]
+url = "postgresql://tarifbd:secret@db:5432/tarifbd"
 
 # Optional — outbound ERP CloudEvents. `erp_hmac_secret` signs them
 # (X-Mako-Signature, HMAC-SHA256), so a receiver can verify the origin.

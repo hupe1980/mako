@@ -11,14 +11,15 @@ use sqlx::PgPool;
 pub async fn metrics_handler(Extension(pool): Extension<PgPool>) -> impl IntoResponse {
     let mut out = String::with_capacity(1024);
 
-    // ── fanout_dlq depth ──────────────────────────────────────────────────────
-    let dlq_depth: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM fanout_dlq WHERE resolved_at IS NULL")
-            .fetch_one(&pool)
-            .await
-            .unwrap_or(0);
+    // ── fanout dead-letter depth ──────────────────────────────────────────────
+    let dlq_depth: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM event_delivery WHERE dead_lettered_at IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap_or(0);
 
-    out.push_str("# HELP marktd_fanout_dlq_depth Unresolved fanout dead-letter queue entries.\n");
+    out.push_str("# HELP marktd_fanout_dlq_depth Dead-lettered fan-out deliveries.\n");
     out.push_str("# TYPE marktd_fanout_dlq_depth gauge\n");
     out.push_str(&format!("marktd_fanout_dlq_depth {dlq_depth}\n"));
 

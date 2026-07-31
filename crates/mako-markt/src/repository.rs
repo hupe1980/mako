@@ -1966,15 +1966,13 @@ where
     pub partner_repo: Pa,
     #[cfg(feature = "makod-client")]
     pub makod_client: std::sync::Arc<crate::makod_client::MakodClient>,
-    /// Channel for internal domain events routed to the fan-out worker.
+    /// Low-latency wake-up hint for the durable fan-out worker.
     ///
-    /// Uses an unbounded MPSC sender (single consumer: the fan-out worker).
-    /// Unlike `broadcast`, this never silently drops events on lag.
-    ///
-    /// Payload is a serialised CloudEvent envelope (`serde_json::Value`).
-    /// Callers serialise typed `MarktEvent` structs before sending so the
-    /// fan-out worker and the `EventBus` abstraction share the same channel.
-    pub event_tx: tokio::sync::mpsc::UnboundedSender<serde_json::Value>,
+    /// Producers persist events to the `event_log` outbox (via
+    /// `marktd::outbox::enqueue`) and then `notify_one()` this handle so the
+    /// worker drains immediately instead of waiting for its next poll. It is a
+    /// hint only — correctness rests on the outbox table, never on this signal.
+    pub notify: std::sync::Arc<tokio::sync::Notify>,
     /// Operator primary GLN (matches `makod.toml` `[[party]] primary = true`).
     pub tenant_gln: String,
 }

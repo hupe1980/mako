@@ -97,17 +97,15 @@ impl ServiceBuilder {
     /// [`Self::with_tenant_rate_limit`] on a multi-tenant deployment.
     #[must_use]
     #[cfg(feature = "rate-limit")]
-    pub fn with_rate_limit(self, config: crate::rate_limit::RateLimitConfig) -> Self {
+    pub fn with_rate_limit(self, config: &crate::rate_limit::RateLimitConfig) -> Self {
         use axum::{extract::Request, middleware::Next};
-        use governor::{Quota, RateLimiter};
-        use std::{num::NonZeroU32, sync::Arc};
+        use governor::RateLimiter;
+        use std::sync::Arc;
 
-        let rps = NonZeroU32::new(config.requests_per_second).unwrap_or(NonZeroU32::MIN);
-        let burst = NonZeroU32::new(config.burst.max(config.requests_per_second))
-            .unwrap_or(NonZeroU32::MIN);
-        let limiter = Arc::new(RateLimiter::direct(
-            Quota::per_second(rps).allow_burst(burst),
-        ));
+        let limiter = Arc::new(RateLimiter::direct(quota(
+            config.requests_per_second,
+            config.burst,
+        )));
         Self {
             router: self.router.layer(axum::middleware::from_fn(
                 move |req: Request, next: Next| {
@@ -116,9 +114,7 @@ impl ServiceBuilder {
                         match limiter.check() {
                             Ok(()) => next.run(req).await,
                             Err(not_until) => crate::rate_limit::too_many_requests(
-                                not_until.wait_time_from(governor::clock::Clock::now(
-                                    &governor::clock::DefaultClock::default(),
-                                )),
+                                wait_time(not_until),
                                 "service",
                             ),
                         }
@@ -139,18 +135,14 @@ impl ServiceBuilder {
     /// overload.
     #[must_use]
     #[cfg(feature = "rate-limit")]
-    pub fn with_tenant_rate_limit(self, config: crate::rate_limit::RateLimitConfig) -> Self {
+    pub fn with_tenant_rate_limit(self, config: &crate::rate_limit::RateLimitConfig) -> Self {
         use axum::{extract::Request, middleware::Next};
-        use governor::{Quota, RateLimiter};
-        use std::{num::NonZeroU32, sync::Arc};
+        use governor::RateLimiter;
+        use std::sync::Arc;
 
-        let rps = NonZeroU32::new(config.per_tenant_requests_per_second).unwrap_or(NonZeroU32::MIN);
-        let burst = NonZeroU32::new(config.burst.max(config.per_tenant_requests_per_second))
-            .unwrap_or(NonZeroU32::MIN);
-        let limiter: Arc<governor::DefaultKeyedRateLimiter<String>> = Arc::new(RateLimiter::keyed(
-            Quota::per_second(rps).allow_burst(burst),
-        ));
-
+        let quota = quota(config.per_tenant_requests_per_second, config.burst);
+        let limiter: Arc<governor::DefaultKeyedRateLimiter<String>> =
+            Arc::new(RateLimiter::keyed(quota));
         Self {
             router: self.router.layer(axum::middleware::from_fn(
                 move |req: Request, next: Next| {
@@ -159,12 +151,9 @@ impl ServiceBuilder {
                         let key = crate::rate_limit::caller_key(&req);
                         match limiter.check_key(&key) {
                             Ok(()) => next.run(req).await,
-                            Err(not_until) => crate::rate_limit::too_many_requests(
-                                not_until.wait_time_from(governor::clock::Clock::now(
-                                    &governor::clock::DefaultClock::default(),
-                                )),
-                                &key,
-                            ),
+                            Err(not_until) => {
+                                crate::rate_limit::too_many_requests(wait_time(not_until), &key)
+                            }
                         }
                     }
                 },
@@ -190,6 +179,23 @@ impl Default for ServiceBuilder {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// A per-second GCRA quota with a burst allowance (never below the steady rate).
+/// Shared by both rate-limiter builders.
+#[cfg(feature = "rate-limit")]
+fn quota(per_second: u32, burst: u32) -> governor::Quota {
+    use std::num::NonZeroU32;
+    let rps = NonZeroU32::new(per_second).unwrap_or(NonZeroU32::MIN);
+    let burst = NonZeroU32::new(burst.max(per_second)).unwrap_or(NonZeroU32::MIN);
+    governor::Quota::per_second(rps).allow_burst(burst)
+}
+
+/// The back-off implied by a GCRA rejection, for the `Retry-After` header.
+#[cfg(feature = "rate-limit")]
+fn wait_time(not_until: governor::NotUntil<governor::clock::QuantaInstant>) -> std::time::Duration {
+    use governor::clock::Clock as _;
+    not_until.wait_time_from(governor::clock::DefaultClock::default().now())
 }
 
 #[cfg(not(feature = "metrics"))]

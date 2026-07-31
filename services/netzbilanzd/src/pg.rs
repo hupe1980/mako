@@ -60,8 +60,11 @@ pub async fn dispatch_batch(
 ) -> anyhow::Result<(usize, Vec<(Uuid, String)>)> {
     let mut succeeded = 0usize;
     let mut failures: Vec<(Uuid, String)> = Vec::new();
+    // Batch dispatch does not emit CloudEvents, so no outbox transaction is
+    // needed — each draft dispatches independently on its own connection.
+    let mut conn = pool.acquire().await.context("acquire connection")?;
     for &id in ids {
-        match approve_and_dispatch(pool, makod, id).await {
+        match approve_and_dispatch(&mut conn, makod, id).await {
             Ok(_) => succeeded += 1,
             Err(e) => failures.push((id, e.to_string())),
         }
@@ -141,7 +144,7 @@ pub async fn list_undispatched_stale(
 /// `id_no_double_billing` in migration 0003).
 #[allow(clippy::too_many_arguments)]
 pub async fn upsert_draft(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     tenant: &str,
     malo_id: &str,
     nb_mp_id: &str,
@@ -188,7 +191,7 @@ pub async fn upsert_draft(
     .bind(total_i64)
     .bind(outcome_str)
     .bind(tenant)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await
     .context("insert invoice_draft")?;
 
@@ -273,7 +276,7 @@ pub async fn fetch_draft(pool: &PgPool, id: Uuid) -> anyhow::Result<Option<Draft
 /// Blocked when `check_outcome == 'Dispute'` — an NB must never send an INVOIC
 /// that fails its own plausibility checks.
 pub async fn approve_and_dispatch(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     makod: &Arc<mako_markt::makod_client::MakodClient>,
     id: Uuid,
 ) -> anyhow::Result<String> {
@@ -283,7 +286,7 @@ pub async fn approve_and_dispatch(
          FROM invoice_drafts WHERE id = $1",
     )
     .bind(id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await
     .context("fetch for dispatch")?;
 
@@ -348,7 +351,7 @@ pub async fn approve_and_dispatch(
     )
     .bind(&dispatch_ref)
     .bind(id)
-    .execute(pool)
+    .execute(&mut *conn)
     .await
     .context("update dispatch")?;
 
@@ -428,7 +431,7 @@ pub struct UpsertKostenblattRequest {
 }
 
 pub async fn upsert_kostenblatt(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     tenant: &str,
     activation_id: &str,
     req: &UpsertKostenblattRequest,
@@ -464,7 +467,7 @@ pub async fn upsert_kostenblatt(
     .bind(req.activation_start_utc)
     .bind(req.activation_end_utc)
     .bind(&req.dispatch_source)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await
     .context("upsert_kostenblatt")?;
 
@@ -849,7 +852,11 @@ pub async fn insert_correction_draft(
 ///
 /// Returns `Ok(true)` when the update succeeded (draft was in `dispatched` status).
 /// Returns `Ok(false)` when the draft does not exist or is not in `dispatched` status.
-pub async fn mark_draft_paid(pool: &PgPool, id: Uuid, remadv_ref: &str) -> anyhow::Result<bool> {
+pub async fn mark_draft_paid(
+    executor: impl sqlx::PgExecutor<'_>,
+    id: Uuid,
+    remadv_ref: &str,
+) -> anyhow::Result<bool> {
     let rows = sqlx::query(
         "UPDATE invoice_drafts
          SET status = 'paid',
@@ -859,7 +866,7 @@ pub async fn mark_draft_paid(pool: &PgPool, id: Uuid, remadv_ref: &str) -> anyho
     )
     .bind(id)
     .bind(remadv_ref)
-    .execute(pool)
+    .execute(executor)
     .await
     .context("mark_draft_paid")?
     .rows_affected();
@@ -873,7 +880,7 @@ pub async fn mark_draft_paid(pool: &PgPool, id: Uuid, remadv_ref: &str) -> anyho
 ///
 /// Returns `Ok(true)` on success, `Ok(false)` if draft not found or wrong status.
 pub async fn mark_draft_disputed(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     id: Uuid,
     erc_code: &str,
     reason: &str,
@@ -889,7 +896,7 @@ pub async fn mark_draft_disputed(
     )
     .bind(id)
     .bind(&combined_reason)
-    .execute(pool)
+    .execute(executor)
     .await
     .context("mark_draft_disputed")?
     .rows_affected();

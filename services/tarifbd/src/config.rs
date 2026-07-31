@@ -5,7 +5,8 @@ use serde::Deserialize;
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct TarifbdConfig {
-    pub database_url: String,
+    /// PostgreSQL connection + pool tuning (`[database]` block).
+    pub database: mako_service::config::DatabaseConfig,
 
     /// HTTP listen port.  Defaults to `9080`.
     pub port: Option<u16>,
@@ -33,4 +34,13 @@ pub struct TarifbdConfig {
     /// See `[mcp]` section in TOML — e.g. `api_key = "env:TARIFBD_MCP_API_KEY"`.
     #[serde(default)]
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
+}
+
+impl mako_service::ServiceConfig for TarifbdConfig {
+    fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
+        Some(&self.database)
+    }
+    fn bind_addr(&self) -> String {
+        format!("0.0.0.0:{}", self.port.unwrap_or(9080))
+    }
 }

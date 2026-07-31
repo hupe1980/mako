@@ -25,34 +25,30 @@ use crate::pg::{
 
 // ── CloudEvent helper ─────────────────────────────────────────────────────────
 
-/// Fire-and-forget CloudEvent POST to the configured ERP webhook URL.
-/// Errors are logged but never propagated — the billing pipeline must succeed
-/// regardless of ERP webhook availability.
-fn emit_cloud_event(
-    client: Arc<reqwest::Client>,
-    webhook_url: String,
+/// Enqueue a business CloudEvent into the transactional outbox **within the
+/// caller's transaction**.
+///
+/// The event and the domain write it represents commit together (or not at all).
+/// The [`mako_service::outbox::OutboxWorker`] drains the outbox and delivers the
+/// event to the configured ERP webhook with at-least-once semantics + signing +
+/// dead-lettering — so a webhook outage can no longer lose a domain event.
+///
+/// Pass the open transaction (`&mut *tx`); gate the call on
+/// `cfg.erp_webhook_url.is_some()` at each site (no worker runs without a URL).
+async fn emit_cloud_event(
+    conn: &mut sqlx::PgConnection,
+    tenant: &str,
     ce_type: &'static str,
     payload: serde_json::Value,
-) {
-    let ce_type = ce_type.to_owned();
-    tokio::spawn(async move {
-        let body = serde_json::json!({
-            "specversion": "1.0",
-            "type":        ce_type,
-            "source":      "netzbilanzd",
-            "id":          uuid::Uuid::new_v4().to_string(),
-            "time":        time::OffsetDateTime::now_utc()
-                               .format(&time::format_description::well_known::Rfc3339)
-                               .unwrap_or_default(),
-            "data":        payload,
-        });
-        let _ = client
-            .post(&webhook_url)
-            .header("Content-Type", "application/cloudevents+json")
-            .json(&body)
-            .send()
-            .await;
-    });
+) -> Result<(), sqlx::Error> {
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("netzbilanzd", tenant),
+        ce_type,
+        String::new(),
+        payload,
+    )
+    .without_subject();
+    mako_service::outbox::enqueue(conn, &ce).await
 }
 
 // ── POST /api/v1/billing/run ──────────────────────────────────────────────────
@@ -66,30 +62,45 @@ pub async fn run_billing(
     Extension(pool): Extension<PgPool>,
     Extension(marktd): Extension<Arc<MarktdClient>>,
     Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
-    Extension(http_client): Extension<Arc<reqwest::Client>>,
     Json(req): Json<BillingRunRequest>,
 ) -> impl IntoResponse {
-    match run_billing_internal(&pool, &marktd, &cfg.tenant, cfg.vnb_mp_id.as_deref(), req).await {
-        Ok(ids) => {
-            // Emit CloudEvent for each drafted invoice (fire-and-forget).
-            if let Some(ref url) = cfg.erp_webhook_url {
-                for id in &ids {
-                    emit_cloud_event(
-                        Arc::clone(&http_client),
-                        url.clone(),
-                        mako_events::netzbilanz::INVOIC_DRAFTED,
-                        serde_json::json!({ "draft_id": id, "tenant": cfg.tenant }),
-                    );
-                }
-            }
-            (
-                StatusCode::CREATED,
-                Json(serde_json::json!({ "draft_ids": ids })),
+    // The invoice INSERTs and the `invoic.drafted` outbox rows commit together:
+    // a webhook outage can no longer lose a drafted event, and a rolled-back run
+    // leaves no orphan events. `upsert_draft` is idempotent, so a retried run is
+    // safe.
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let ids =
+        match run_billing_internal(&mut tx, &marktd, &cfg.tenant, cfg.vnb_mp_id.as_deref(), req)
+            .await
+        {
+            Ok(ids) => ids,
+            Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        };
+    if cfg.erp_webhook_url.is_some() {
+        for id in &ids {
+            if let Err(e) = emit_cloud_event(
+                &mut tx,
+                &cfg.tenant,
+                mako_events::netzbilanz::INVOIC_DRAFTED,
+                serde_json::json!({ "draft_id": id, "tenant": cfg.tenant }),
             )
-                .into_response()
+            .await
+            {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            }
         }
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
     }
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "draft_ids": ids })),
+    )
+        .into_response()
 }
 
 // ── GET /api/v1/billing/drafts ────────────────────────────────────────────────
@@ -145,18 +156,30 @@ pub async fn dispatch_draft(
     Extension(pool): Extension<PgPool>,
     Extension(makod): Extension<Arc<MakodClient>>,
     Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
-    Extension(http_client): Extension<Arc<reqwest::Client>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    match approve_and_dispatch(&pool, &makod, id).await {
+    // The status→dispatched UPDATE and the `invoic.dispatched` outbox row commit
+    // atomically. If enqueue/commit fails the dispatch is rolled back (status
+    // stays 'draft'); makod's own idempotency key dedups a re-dispatch.
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    match approve_and_dispatch(&mut tx, &makod, id).await {
         Ok(ref_id) => {
-            if let Some(ref url) = cfg.erp_webhook_url {
-                emit_cloud_event(
-                    Arc::clone(&http_client),
-                    url.clone(),
+            if cfg.erp_webhook_url.is_some()
+                && let Err(e) = emit_cloud_event(
+                    &mut tx,
+                    &cfg.tenant,
                     mako_events::netzbilanz::INVOIC_DISPATCHED,
                     serde_json::json!({ "draft_id": id, "dispatch_ref": ref_id, "tenant": cfg.tenant }),
-                );
+                )
+                .await
+            {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            }
+            if let Err(e) = tx.commit().await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
             }
             (
                 StatusCode::OK,
@@ -352,8 +375,15 @@ pub async fn post_mmm_auto_run(
         }],
     };
 
+    // MMM auto-run does not emit a CloudEvent, so no outbox transaction is
+    // needed — run the billing on a plain pooled connection (each draft INSERT
+    // autocommits, as before).
+    let mut conn = match pool.acquire().await {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
     match run_billing_internal(
-        &pool,
+        &mut conn,
         &marktd,
         &cfg.tenant,
         cfg.vnb_mp_id.as_deref(),
@@ -787,19 +817,25 @@ pub async fn post_kostenblatt_compute(
         dispatch_source: Some(dispatch_source.to_owned()),
     };
 
-    let record_id = match upsert_kostenblatt(&pool, &cfg.tenant, &activation_id, &upsert_req).await
-    {
-        Ok(id) => id,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
+    // ── Step 3+4: Upsert + emit atomically via the transactional outbox ───────
+    // The Kostenblatt row and the `kostenblatt.computed` outbox row commit
+    // together (idempotent upsert, so a retried compute is safe).
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
+    let record_id =
+        match upsert_kostenblatt(&mut *tx, &cfg.tenant, &activation_id, &upsert_req).await {
+            Ok(id) => id,
+            Err(e) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            }
+        };
 
-    // ── Step 4: Emit CloudEvent ───────────────────────────────────────────────
-    if let Some(ref webhook_url) = cfg.erp_webhook_url {
-        emit_cloud_event(
-            Arc::clone(&http_client),
-            webhook_url.clone(),
+    if cfg.erp_webhook_url.is_some()
+        && let Err(e) = emit_cloud_event(
+            &mut tx,
+            &cfg.tenant,
             mako_events::netzbilanz::KOSTENBLATT_COMPUTED,
             serde_json::json!({
                 "record_id":              record_id,
@@ -815,7 +851,14 @@ pub async fn post_kostenblatt_compute(
                 "activation_start_utc":   req.activation_start_utc,
                 "activation_end_utc":     req.activation_end_utc,
             }),
-        );
+        )
+        .await
+    {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
     (
@@ -1130,6 +1173,13 @@ pub async fn post_ggv_nne(
     let mut all_draft_ids: Vec<String> = Vec::new();
     let mut attribution: Vec<serde_json::Value> = Vec::new();
 
+    // GGV NNE billing does not emit CloudEvents, so no outbox transaction is
+    // needed — run each tenant's billing on a plain pooled connection.
+    let mut conn = match pool.acquire().await {
+        Ok(c) => c,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
     for (i, tenant_malo) in tenant_malos.iter().enumerate() {
         // Proportional or equal-split consumption.
         let kwh_tenant = if let Some(ref consumption_map) = req.tenant_consumption {
@@ -1190,7 +1240,7 @@ pub async fn post_ggv_nne(
         };
 
         match run_billing_internal(
-            &pool,
+            &mut conn,
             &marktd,
             &cfg.tenant,
             cfg.vnb_mp_id.as_deref(),
@@ -1486,23 +1536,33 @@ pub struct MarkPaidRequest {
 pub async fn mark_paid(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
-    Extension(http_client): Extension<Arc<reqwest::Client>>,
     Path(id): Path<Uuid>,
     Json(req): Json<MarkPaidRequest>,
 ) -> impl IntoResponse {
-    match mark_draft_paid(&pool, id, &req.remadv_ref).await {
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    match mark_draft_paid(&mut *tx, id, &req.remadv_ref).await {
         Ok(true) => {
-            if let Some(ref url) = cfg.erp_webhook_url {
-                emit_cloud_event(
-                    Arc::clone(&http_client),
-                    url.clone(),
+            // status→paid and the `invoic.paid` outbox row commit together.
+            if cfg.erp_webhook_url.is_some()
+                && let Err(e) = emit_cloud_event(
+                    &mut tx,
+                    &cfg.tenant,
                     mako_events::netzbilanz::INVOIC_PAID,
                     serde_json::json!({
                         "draft_id": id,
                         "remadv_ref": req.remadv_ref,
                         "tenant": cfg.tenant,
                     }),
-                );
+                )
+                .await
+            {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            }
+            if let Err(e) = tx.commit().await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
             }
             (
                 StatusCode::OK,
@@ -1541,16 +1601,20 @@ pub struct MarkDisputedRequest {
 pub async fn mark_disputed(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
-    Extension(http_client): Extension<Arc<reqwest::Client>>,
     Path(id): Path<Uuid>,
     Json(req): Json<MarkDisputedRequest>,
 ) -> impl IntoResponse {
-    match mark_draft_disputed(&pool, id, &req.erc_code, &req.reason).await {
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    match mark_draft_disputed(&mut *tx, id, &req.erc_code, &req.reason).await {
         Ok(true) => {
-            if let Some(ref url) = cfg.erp_webhook_url {
-                emit_cloud_event(
-                    Arc::clone(&http_client),
-                    url.clone(),
+            // Dispute mark and the `invoic.disputed` outbox row commit together.
+            if cfg.erp_webhook_url.is_some()
+                && let Err(e) = emit_cloud_event(
+                    &mut tx,
+                    &cfg.tenant,
                     mako_events::netzbilanz::INVOIC_DISPUTED,
                     serde_json::json!({
                         "draft_id": id,
@@ -1558,7 +1622,13 @@ pub async fn mark_disputed(
                         "reason": req.reason,
                         "tenant": cfg.tenant,
                     }),
-                );
+                )
+                .await
+            {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            }
+            if let Err(e) = tx.commit().await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
             }
             (
                 StatusCode::OK,
@@ -1695,9 +1765,27 @@ pub struct RemadvWebhookBody {
 pub async fn post_remadv_webhook(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
-    Extension(http_client): Extension<Arc<reqwest::Client>>,
-    Json(body): Json<RemadvWebhookBody>,
+    headers: axum::http::HeaderMap,
+    raw: axum::body::Bytes,
 ) -> impl IntoResponse {
+    // Inbound HMAC: a forged REMADV would mark a Bilanzkreis INVOIC paid/disputed.
+    if let Some(secret) = &cfg.inbound_secret {
+        let provided = headers
+            .get("x-mako-signature")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if !mako_service::webhook::verify_hmac(secret.as_bytes(), &raw, provided) {
+            tracing::warn!("netzbilanzd: inbound REMADV signature mismatch — rejected");
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+    }
+    let body: RemadvWebhookBody = match serde_json::from_slice(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "netzbilanzd: malformed inbound REMADV body");
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+    };
     let id_str = body
         .data
         .get("draft_id")
@@ -1711,6 +1799,11 @@ pub async fn post_remadv_webhook(
             .into_response();
     };
 
+    // The status update and the downstream outbox row commit together.
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
     let result = match body.ce_type.as_str() {
         mako_events::invoic::RECEIPT_SETTLED | mako_events::netzbilanz::INVOIC_PAID => {
             let remadv_ref = body
@@ -1718,7 +1811,7 @@ pub async fn post_remadv_webhook(
                 .get("remadv_ref")
                 .and_then(|v| v.as_str())
                 .unwrap_or("webhook");
-            mark_draft_paid(&pool, id, remadv_ref).await
+            mark_draft_paid(&mut *tx, id, remadv_ref).await
         }
         mako_events::invoic::RECEIPT_DISPUTED | mako_events::netzbilanz::INVOIC_DISPUTED => {
             let erc = body
@@ -1731,7 +1824,7 @@ pub async fn post_remadv_webhook(
                 .get("reason")
                 .and_then(|v| v.as_str())
                 .unwrap_or("REMADV dispute");
-            mark_draft_disputed(&pool, id, erc, reason).await
+            mark_draft_disputed(&mut *tx, id, erc, reason).await
         }
         other => {
             tracing::debug!(
@@ -1750,13 +1843,19 @@ pub async fn post_remadv_webhook(
             } else {
                 mako_events::netzbilanz::INVOIC_DISPUTED
             };
-            if let Some(ref url) = cfg.erp_webhook_url {
-                emit_cloud_event(
-                    Arc::clone(&http_client),
-                    url.clone(),
+            if cfg.erp_webhook_url.is_some()
+                && let Err(e) = emit_cloud_event(
+                    &mut tx,
+                    &cfg.tenant,
                     ce_type,
                     serde_json::json!({ "draft_id": id, "tenant": cfg.tenant }),
-                );
+                )
+                .await
+            {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            }
+            if let Err(e) = tx.commit().await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
             }
             StatusCode::NO_CONTENT.into_response()
         }

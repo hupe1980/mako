@@ -69,7 +69,7 @@ pub type ConfigError = figment::Error;
 
 // ── Shared config structs ─────────────────────────────────────────────────────
 
-/// Standard PostgreSQL database configuration block.
+/// Standard `PostgreSQL` database configuration block.
 ///
 /// All mako services that use a database embed this under `[database]`:
 ///
@@ -83,7 +83,7 @@ pub type ConfigError = figment::Error;
 /// rather than defining an identical struct.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct DatabaseConfig {
-    /// PostgreSQL connection URL.
+    /// `PostgreSQL` connection URL.
     ///
     /// Use `"env:DATABASE_URL"` to defer to the environment at runtime — this
     /// avoids storing secrets in TOML files checked into version control.
@@ -104,12 +104,12 @@ pub struct DatabaseConfig {
     pub acquire_timeout_secs: u64,
 
     /// Close a connection after it has been idle this long, releasing it back to
-    /// PostgreSQL. Default: 600 s (10 min).
+    /// `PostgreSQL`. Default: 600 s (10 min).
     #[serde(default = "DatabaseConfig::default_idle_timeout_secs")]
     pub idle_timeout_secs: u64,
 
     /// Recycle a connection after this long regardless of use, so a pool never
-    /// pins a connection across a PostgreSQL failover or a proxy's own timeout.
+    /// pins a connection across a `PostgreSQL` failover or a proxy's own timeout.
     /// Default: 1800 s (30 min).
     #[serde(default = "DatabaseConfig::default_max_lifetime_secs")]
     pub max_lifetime_secs: u64,
@@ -199,7 +199,12 @@ pub fn load_config<C: DeserializeOwned>(name: &str) -> Result<C, ConfigError> {
     let prefix = format!("{}_", name.to_uppercase().replace('-', "_"));
     Figment::new()
         .merge(FileAdapter::wrap(Toml::file(path)))
-        .merge(FileAdapter::wrap(Env::prefixed(&prefix).split("__")))
+        // `<PREFIX>_CONFIG` names the config-file path (read by `config_path`), not
+        // a config key — ignore it so a struct with `#[serde(deny_unknown_fields)]`
+        // does not fail startup on a stray `config` field.
+        .merge(FileAdapter::wrap(
+            Env::prefixed(&prefix).split("__").ignore(&["CONFIG"]),
+        ))
         .extract()
 }
 

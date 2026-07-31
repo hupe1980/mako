@@ -93,7 +93,6 @@ fresh install, no incremental migration state. Tables: `kunden`,
 
 ```toml
 # vertragd.toml
-database_url   = "postgresql://vertragd:secret@db:5432/vertragd"
 port           = 9780
 tenant         = "9900357000004"   # data-isolation key (operator tenant; value = BDEW-Codenummer in this example)
 lf_mp_id       = "9900357000004"
@@ -103,9 +102,15 @@ accountingd_url = "http://accountingd:9380"
 edmd_url       = "http://edmd:8380"
 
 # Outbound ERP CloudEvents. `erp_hmac_secret` puts an HMAC-SHA256
-# X-Mako-Signature on every event.
+# X-Mako-Signature on every event. Delivery is durable: each event is written
+# to `event_outbox` in the same transaction as the contract change
+# (persist-before-dispatch) and drained by a background worker with retry +
+# dead-letter — a crash never drops an event.
 erp_webhook_url = "http://erp:8000/events"
 erp_hmac_secret = "env:VERTRAGD_ERP_HMAC_SECRET"
+
+[database]
+url = "postgresql://vertragd:secret@db:5432/vertragd"
 ```
 
 ## §40b EnWG billing cadence

@@ -243,7 +243,7 @@ mod tests {
         CedarPrincipal {
             sub: "user-alice".to_owned(),
             tenant: tenant.to_owned(),
-            roles: roles.iter().map(|r| r.to_string()).collect(),
+            roles: roles.iter().map(ToString::to_string).collect(),
         }
     }
 

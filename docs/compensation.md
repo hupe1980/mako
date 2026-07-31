@@ -118,7 +118,7 @@ The ERP webhook receives a **CloudEvents 1.0** message with:
 {
   "specversion": "1.0",
   "type": "de.mako.aperak.timeout",
-  "source": "urn:mako:tenant:9900357000004",
+  "source": "urn:mako:makod:tenant:9900357000004",
   "id": "...",
   "time": "...",
   "makopid": 55001,

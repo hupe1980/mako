@@ -283,8 +283,20 @@ async fn bill_one(
     .await
     .map_err(|(_, msg)| anyhow::anyhow!("dispatch: {msg}"))?;
 
+    // Same deterministic risk gate as the on-demand endpoint — scored read-only
+    // before the outbox tx, because a HELD band withholds the dispatch enqueue.
+    let assessment =
+        handlers::assess_risk(pool, cfg, &cand.malo_id, &invoice, &rates, from, to).await;
+    let held = assessment
+        .as_ref()
+        .is_some_and(|a| cfg.risk.hold_dispatch && a.band == crate::risk::RiskBand::Held);
+
+    // Invoice row + its `de.billing.rechnung.erstellt` outbox event commit
+    // atomically — a scheduled billing run can never leave a billed period
+    // without its ERP event.
+    let mut tx = pool.begin().await?;
     let record_id = pg::insert_billing_record(
-        pool,
+        &mut *tx,
         &cfg.tenant,
         &cand.malo_id,
         &cand.lf_mp_id,
@@ -297,41 +309,27 @@ async fn bill_one(
         invoice.brutto_eur,
     )
     .await?;
-
-    // Same deterministic risk gate as the on-demand endpoint.
-    let assessment = handlers::assess_and_persist_risk(
-        pool,
-        cfg,
-        record_id,
-        &cand.malo_id,
-        &invoice,
-        &rates,
-        from,
-        to,
-    )
-    .await;
-    let held = assessment
-        .as_ref()
-        .is_some_and(|a| cfg.risk.hold_dispatch && a.band == crate::risk::RiskBand::Held);
-
     if held {
         tracing::warn!(
             malo_id = %cand.malo_id, %record_id,
             score = assessment.as_ref().map(|a| a.score),
             "billing-run: invoice HELD by risk gate"
         );
-    } else if let Some(ref webhook_url) = cfg.erp_webhook_url {
-        handlers::emit_cloud_event(
-            webhook_url,
-            cfg.erp_hmac_secret.as_deref(),
-            pool,
+    } else if cfg.erp_webhook_url.is_some() {
+        let ce = handlers::rechnung_erstellt_ce(
             record_id,
             &cand.malo_id,
             &cand.lf_mp_id,
             &invoice.to_rechnung_json(),
-        )
-        .await;
+            false,
+        );
+        mako_service::outbox::enqueue(&mut tx, &ce).await?;
     }
+    tx.commit().await?;
+
+    // Persist the risk findings on the now-committed record (best effort).
+    handlers::persist_risk(pool, record_id, assessment.as_ref()).await;
+
     tracing::info!(malo_id = %cand.malo_id, %from, %to, %record_id, "billing-run: invoice created");
     Ok(())
 }
@@ -424,15 +422,11 @@ async fn deliver_abrechnungsinfo(
     let Some(ref webhook_url) = cfg.erp_webhook_url else {
         return;
     };
-    let ce = serde_json::json!({
-        "specversion": "1.0",
-        "type": mako_events::billing::ABRECHNUNGSINFORMATION_MONATLICH,
-        "source": format!("urn:billingd:lf:{}", cand.lf_mp_id),
-        "id": uuid::Uuid::new_v4().to_string(),
-        "time": time::OffsetDateTime::now_utc().to_string(),
-        "subject": cand.malo_id,
-        "datacontenttype": "application/json",
-        "data": {
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("billingd", &cand.lf_mp_id),
+        mako_events::billing::ABRECHNUNGSINFORMATION_MONATLICH,
+        cand.malo_id.clone(),
+        serde_json::json!({
             "malo_id": cand.malo_id,
             "lf_mp_id": cand.lf_mp_id,
             "period_from": from.to_string(),
@@ -441,27 +435,22 @@ async fn deliver_abrechnungsinfo(
             "netto_eur": invoice.netto_eur,
             "rechtsgrundlage": "§40b Abs. 2 EnWG",
             "hinweis": "Monatliche Abrechnungsinformation — keine Rechnung",
-        }
-    });
-    let body = serde_json::to_vec(&ce).unwrap_or_default();
-    let client = reqwest::Client::new();
-    let mut http_req = client
-        .post(webhook_url)
-        .header("Content-Type", "application/cloudevents+json")
-        .body(body.clone());
-    if let Some(secret) = cfg.erp_hmac_secret.as_deref() {
-        let sig = mako_markt::cloudevents::compute_signature(secret.as_bytes(), &body);
-        http_req = http_req.header("X-Mako-Signature", sig);
-    }
-    match http_req.send().await {
-        Ok(resp) if resp.status().is_success() => {
+        }),
+    );
+    let client = mako_service::http::default_client();
+    match mako_service::post_ce_with_retry(
+        &client,
+        webhook_url,
+        &ce,
+        cfg.erp_hmac_secret.as_deref().map(str::as_bytes),
+    )
+    .await
+    {
+        Ok(()) => {
             tracing::info!(malo_id = %cand.malo_id, %from, %to, "abrechnungsinfo: delivered");
         }
-        Ok(resp) => {
-            tracing::warn!(malo_id = %cand.malo_id, status = %resp.status(), "abrechnungsinfo: webhook failed");
-        }
         Err(e) => {
-            tracing::warn!(malo_id = %cand.malo_id, error = %e, "abrechnungsinfo: webhook error");
+            tracing::warn!(malo_id = %cand.malo_id, error = %e, "abrechnungsinfo: webhook delivery failed");
         }
     }
 }

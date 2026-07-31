@@ -1,8 +1,8 @@
 //! Axum router and startup logic for `obsd`.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use axum::{
     Extension, Json, Router,
     extract::{Path, Query, State},
@@ -10,15 +10,15 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
+use mako_service::ServiceContext;
 use mako_service::cedar::CedarEnforcer;
-use mako_service::oidc::{Claims, OidcVerifier};
-use secrecy::{ExposeSecret, SecretString};
+use mako_service::oidc::Claims;
+use secrecy::ExposeSecret;
 use serde::Deserialize;
 use time::OffsetDateTime;
-use tokio::net::TcpListener;
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::config::Config;
 use crate::{
     handler::{HandlerState, handle_webhook},
     pg::PgProcessProjectionRepository,
@@ -35,27 +35,16 @@ pub fn router(state: HandlerState) -> Router {
         .route("/obs/kpis", get(get_kpis))
         .route("/obs/overdue", get(get_overdue))
         .route("/api/v1/audit/bnetza-report", get(get_bnetza_report))
-        .route("/metrics", get(metrics))
-        .route("/health/live", get(|| async { StatusCode::OK }))
-        .route("/health/ready", get(health_ready))
+        .route("/obs/metrics", get(metrics))
         .with_state(state)
 }
 
 // ── REST handlers ─────────────────────────────────────────────────────────────
 
-/// `GET /health/ready` — confirms the database connection is alive.
-/// Returns 503 when the pool cannot reach PostgreSQL.
-async fn health_ready(State(state): State<HandlerState>) -> impl IntoResponse {
-    match sqlx::query("SELECT 1").execute(state.repo.pool()).await {
-        Ok(_) => StatusCode::OK,
-        Err(e) => {
-            tracing::warn!(error = %e, "obsd: readiness probe: DB unreachable");
-            StatusCode::SERVICE_UNAVAILABLE
-        }
-    }
-}
-
-/// `GET /metrics` — Prometheus-compatible operational metrics.
+/// `GET /obs/metrics` — Prometheus-compatible operational metrics.
+///
+/// obsd-specific business gauges (process counts + pool stats); the runner's
+/// generic `/metrics` (request counters) is mounted separately by `run`.
 /// No authentication required; restrict network access at the ingress layer.
 async fn metrics(State(state): State<HandlerState>) -> impl IntoResponse {
     let mut out = String::with_capacity(512);
@@ -299,62 +288,63 @@ async fn get_overdue(
     }
 }
 
-// ── RunConfig + startup ───────────────────────────────────────────────────────
+// ── Domain router assembly ────────────────────────────────────────────────────
 
-pub struct RunConfig {
-    pub listen: SocketAddr,
-    pub database_url: SecretString,
-    pub marktd_url: String,
-    pub marktd_api_key: secrecy::SecretString,
-    pub subscriber_id: String,
-    pub webhook_url: String,
-    pub webhook_secret: Option<SecretString>,
-    pub inbound_secret: Option<SecretString>,
-    /// Event types obsd asks `marktd` to fan out to it.
-    pub subscription_event_types: Vec<String>,
-    /// Outbound target for the `de.obs.*` events obsd produces (marktd
-    /// event-ingest in production). `None` disables the sweep producers.
-    pub outbound_url: Option<String>,
-    pub outbound_secret: Option<SecretString>,
-    /// Background sweep-worker tuning.
-    pub worker: crate::config::WorkerConfig,
-    /// Database pool tuning (pool size, timeouts, `application_name`).
-    pub db: crate::config::DatabaseConfig,
-    /// Tenant identifier — used as Cedar resource_tenant.
-    pub tenant: String,
-    /// All operator MP-IDs for §20 EnWG `initiator_is_affiliate` detection.
-    /// Includes Strom (BDEW 99…) and Gas (DVGW 98…) codes.
-    /// Falls back to `[tenant]` when empty.
-    pub own_mp_ids: Vec<String>,
-    /// OIDC verifier.
-    pub oidc: OidcVerifier,
-    /// Cedar ABAC enforcer.
-    pub cedar: Arc<CedarEnforcer>,
-    /// MCP server auth config (API-key fallback + optional per-named-key identity).
-    pub mcp: mako_service::mcp_auth::McpAuthConfig,
-    /// Graceful-shutdown token.
-    pub shutdown: CancellationToken,
-}
+/// Build obsd's domain [`Router`]: resolve config secrets, build the OIDC
+/// verifier + Cedar enforcer, register the `marktd` subscription, spawn the
+/// `de.obs.*` sweep producers on `ctx.shutdown`, and wire the MCP server.
+///
+/// The runner ([`mako_service::run`]) owns the pool, migrations, the health /
+/// metrics infra routes, bind and graceful serve — none of those live here.
+pub async fn build_router(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Router> {
+    let oidc = mako_service::oidc::OidcConfig::build_verifier(
+        cfg.oidc.as_ref(),
+        &ctx.http,
+        &cfg.identity.tenant,
+        ctx.shutdown.clone(),
+    )
+    .await?;
+    let cedar = Arc::new(
+        CedarEnforcer::from_policy_str(include_str!("../policies/obsd.cedar"))
+            .map_err(|e| anyhow::anyhow!("Cedar policy error: {e}"))?,
+    );
 
-pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
-    let pool = cfg
-        .db
-        .connect(cfg.database_url.expose_secret(), "obsd")
-        .await?;
+    let marktd_api_key =
+        crate::config::resolve_env_secret(&cfg.marktd.api_key).context("marktd.api_key")?;
+    let inbound_secret = cfg
+        .webhook
+        .inbound_secret
+        .as_deref()
+        .map(crate::config::resolve_env_secret)
+        .transpose()
+        .context("webhook.inbound_secret")?;
+    let webhook_secret = inbound_secret.clone();
+    let outbound_secret = cfg
+        .webhook
+        .outbound_secret
+        .as_deref()
+        .map(crate::config::resolve_env_secret)
+        .transpose()
+        .context("webhook.outbound_secret")?;
+    let outbound_url = cfg
+        .webhook
+        .outbound_url
+        .as_deref()
+        .map(crate::config::resolve_env)
+        .transpose()
+        .context("webhook.outbound_url")?;
 
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .map_err(|e| anyhow::anyhow!("run obsd migrations: {e}"))?;
+    let tenant = cfg.identity.tenant.clone();
+    let pool = ctx.pool().clone();
 
     let mcp_state = Arc::new(crate::mcp_server::ObsdMcpState {
         pool: pool.clone(),
-        tenant: cfg.tenant.clone(),
+        tenant: tenant.clone(),
         auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
             &cfg.mcp,
-            cfg.oidc.clone(),
-            Some(cfg.cedar.clone()),
-            &cfg.tenant,
+            oidc.clone(),
+            Some(cedar.clone()),
+            &tenant,
         ),
     });
 
@@ -363,43 +353,37 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
 
     // §20 EnWG: build the affiliate-detection set from configured own_mp_ids.
     // Fall back to tenant alone for single-MP-ID deployments.
-    let own_mp_ids: std::collections::HashSet<String> = if cfg.own_mp_ids.is_empty() {
-        std::iter::once(cfg.tenant.clone()).collect()
+    let own_mp_ids: std::collections::HashSet<String> = if cfg.identity.own_mp_ids.is_empty() {
+        std::iter::once(tenant.clone()).collect()
     } else {
-        cfg.own_mp_ids.into_iter().collect()
+        cfg.identity.own_mp_ids.iter().cloned().collect()
     };
 
-    let tenant = cfg.tenant.clone();
     let state = HandlerState {
         repo,
-        inbound_secret: Arc::new(cfg.inbound_secret),
-        tenant: cfg.tenant,
+        inbound_secret: Arc::new(inbound_secret),
+        tenant: tenant.clone(),
         own_mp_ids: Arc::new(own_mp_ids),
     };
 
     {
         use mako_markt::marktd_client::{MarktdClient, SubscriptionRequest};
-        use mako_service::http::default_client;
-        let marktd = MarktdClient::new(
-            &cfg.marktd_url,
-            cfg.marktd_api_key.clone(),
-            default_client(),
-        );
+        let marktd = MarktdClient::new(&cfg.marktd.url, marktd_api_key, ctx.http.clone());
         // Subscribe to the full configured event set — obsd needs
         // `process.initiated` (to create the projection + register the
         // deadline the sweep worker watches), not only `process.completed`.
         let event_types: Vec<&str> = cfg
-            .subscription_event_types
+            .subscription
+            .event_types
             .iter()
             .map(String::as_str)
             .collect();
         marktd
             .put_subscription(
-                &cfg.subscriber_id,
+                &cfg.subscription.subscriber_id,
                 &SubscriptionRequest {
-                    webhook_url: &cfg.webhook_url,
-                    webhook_secret: cfg.webhook_secret.as_ref().map(|s| {
-                        use secrecy::ExposeSecret;
+                    webhook_url: &cfg.subscription.webhook_url,
+                    webhook_secret: webhook_secret.as_ref().map(|s| {
                         let secret: &str = s.expose_secret();
                         secret
                     }),
@@ -412,16 +396,12 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
     }
 
     // ── Background: de.obs.* producers (only when an outbound target is set) ──
-    if let Some(outbound_url) = cfg.outbound_url {
-        use mako_service::http::default_client;
+    if let Some(outbound_url) = outbound_url {
         let rt = crate::worker::WorkerRuntime {
             pool: worker_pool,
-            client: Arc::new(default_client()),
+            client: Arc::new(ctx.http.clone()),
             outbound_url: Arc::new(outbound_url),
-            outbound_secret: cfg.outbound_secret.map(|s| {
-                use secrecy::ExposeSecret;
-                Arc::new(s.expose_secret().to_owned())
-            }),
+            outbound_secret: outbound_secret.map(|s| Arc::new(s.expose_secret().to_owned())),
             tenant: tenant.clone(),
             deadline_sweep_secs: cfg.worker.deadline_sweep_secs,
             deadline_warn_hours: cfg.worker.deadline_warn_hours,
@@ -429,8 +409,8 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
             parity_threshold_pp: cfg.worker.parity_threshold_pp,
             parity_window_days: cfg.worker.parity_window_days,
         };
-        crate::worker::spawn_deadline_sweep(rt.clone(), cfg.shutdown.clone());
-        crate::worker::spawn_parity_sweep(rt, cfg.shutdown.clone());
+        crate::worker::spawn_deadline_sweep(rt.clone(), ctx.shutdown.clone());
+        crate::worker::spawn_parity_sweep(rt, ctx.shutdown.clone());
         tracing::info!("obsd: de.obs.* sweep producers started");
     } else {
         tracing::warn!(
@@ -439,22 +419,10 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         );
     }
 
-    let app = router(state)
-        .layer(Extension(cfg.cedar))
-        .layer(Extension(cfg.oidc))
-        .merge(crate::mcp_server::router(mcp_state, cfg.shutdown.clone()));
-    let listener = TcpListener::bind(cfg.listen).await?;
-
-    tracing::info!(
-        listen = %cfg.listen,
-        marktd_url = %cfg.marktd_url,
-        "obsd: listening"
-    );
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move { cfg.shutdown.cancelled().await })
-        .await?;
-    Ok(())
+    Ok(router(state)
+        .layer(Extension(cedar))
+        .layer(Extension(oidc))
+        .merge(crate::mcp_server::router(mcp_state, ctx.shutdown.clone())))
 }
 
 // ── BNetzA §20 Diskriminierungsbericht ───────────────────────────────────────

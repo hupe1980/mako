@@ -21,7 +21,7 @@
 //! {
 //!   "specversion": "1.0",
 //!   "id": "<idempotency_key>",
-//!   "source": "urn:mako:tenant:<tenant_id>",
+//!   "source": "urn:mako:makod:tenant:<tenant_id>",
 //!   "type": "de.mako.aperak.accepted",
 //!   "time": "2026-10-01T10:15:00+02:00",
 //!   "subject": "<process_id>",
@@ -109,7 +109,7 @@ impl<'a> CloudEventEnvelope<'a> {
         Self {
             specversion: "1.0",
             id: &event.idempotency_key,
-            source: format!("urn:mako:tenant:{}", event.tenant_id),
+            source: format!("urn:mako:makod:tenant:{}", event.tenant_id),
             ce_type: event.event_type.cloud_event_type(),
             time: event.occurred_at,
             subject: event.process_id.to_string(),
@@ -144,7 +144,7 @@ impl<'a> CloudEventEnvelope<'a> {
 /// {
 ///   "specversion": "1.0",
 ///   "id": "<idempotency_key>",
-///   "source": "urn:mako:tenant:<tenant_id>",
+///   "source": "urn:mako:makod:tenant:<tenant_id>",
 ///   "type": "de.mako.aperak.accepted",
 ///   "time": "2026-10-01T10:15:00+02:00",
 ///   "subject": "<process_id>",
@@ -245,7 +245,10 @@ impl ErpAdapter for WebhookErpAdapter {
         }
 
         if let Some(secret) = &self.shared_secret {
-            let sig = hmac_sha256(secret.expose_secret().as_bytes(), &body);
+            // The one canonical signer — `sha256=<hex>`. The ERP (and marktd's
+            // ingest, which tolerantly strips the prefix) authenticate every mako
+            // CloudEvent the same way, regardless of emitter.
+            let sig = mako_service::webhook::sign(secret.expose_secret().as_bytes(), &body);
             builder = builder.header("X-Mako-Signature", sig);
         }
 
@@ -294,31 +297,6 @@ impl ErpAdapter for WebhookErpAdapter {
             self.erp_url
         )))
     }
-}
-
-/// Compute HMAC-SHA256 of `data` using `key` and return the lower-hex digest.
-///
-/// Compute HMAC-SHA256 over `data` with `key` and return a 64-char lowercase
-/// hex string.
-///
-/// Uses the audited [`hmac`] + [`sha2`] crates. The output is constant-time
-/// w.r.t. the key via the underlying `hmac` implementation.
-///
-/// `pub(crate)` so other outbound webhook paths (e.g. the §20b
-/// [`crate::netzzugang::NetzzugangSender`] fallback) sign with the exact same
-/// construction and header semantics.
-pub(crate) fn hmac_sha256(key: &[u8], data: &[u8]) -> String {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
-
-    let mut mac = <Hmac<Sha256>>::new_from_slice(key).expect("HMAC-SHA256 accepts any key length");
-    mac.update(data);
-    let result = mac.finalize().into_bytes();
-    result.iter().fold(String::with_capacity(64), |mut s, b| {
-        use std::fmt::Write as _;
-        let _ = write!(s, "{b:02x}");
-        s
-    })
 }
 
 // ── OutboxErpWorker ───────────────────────────────────────────────────────────
@@ -617,15 +595,6 @@ fn extract_pid(payload: &serde_json::Value) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn hmac_sha256_produces_64_char_hex() {
-        let sig = hmac_sha256(b"secret", b"hello");
-        assert_eq!(sig.len(), 64);
-        assert!(sig.chars().all(|c| c.is_ascii_hexdigit()));
-    }
-
     #[test]
     fn sha256_known_vector() {
         // SHA-256("abc") — NIST FIPS 180-4 Example 1.

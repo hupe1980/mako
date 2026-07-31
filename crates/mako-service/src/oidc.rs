@@ -226,7 +226,7 @@ impl OidcVerifier {
             .get(&discovery_url)
             .send()
             .await
-            .and_then(|r| r.error_for_status())
+            .and_then(reqwest::Response::error_for_status)
             .map_err(|e| OidcError::Discovery {
                 url: discovery_url.clone(),
                 reason: e.to_string(),
@@ -291,7 +291,11 @@ impl OidcVerifier {
         let kid = header.kid.ok_or(OidcError::MissingKid)?;
 
         let decoding_key = {
-            let cache = self.inner.cache.read().unwrap_or_else(|p| p.into_inner());
+            let cache = self
+                .inner
+                .cache
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let jwk = cache
                 .find(&kid)
                 .ok_or_else(|| OidcError::UnknownKid(kid.clone()))?;
@@ -327,7 +331,11 @@ impl OidcVerifier {
     /// Refresh the JWKS cache.
     pub async fn refresh(&self, http: &Client) -> Result<(), OidcError> {
         let jwks = Self::fetch_jwks_from(http, &self.inner.jwks_uri).await?;
-        *self.inner.cache.write().unwrap_or_else(|p| p.into_inner()) = jwks;
+        *self
+            .inner
+            .cache
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = jwks;
         tracing::debug!(jwks_uri = %self.inner.jwks_uri, "OIDC: JWKS cache refreshed");
         Ok(())
     }
@@ -337,6 +345,7 @@ impl OidcVerifier {
     /// The task exits cleanly when `shutdown` is cancelled.  The returned
     /// [`tokio::task::JoinHandle`] can be awaited after cancellation to confirm
     /// the task has stopped; dropping it detaches the task.
+    #[must_use]
     pub fn spawn_refresh_task(
         &self,
         http: Client,
@@ -354,7 +363,7 @@ impl OidcVerifier {
                             tracing::warn!(error = %e, "OIDC: JWKS refresh failed (will retry)");
                         }
                     }
-                    _ = shutdown.cancelled() => {
+                    () = shutdown.cancelled() => {
                         tracing::debug!("OIDC: JWKS refresh task shutting down");
                         return;
                     }
@@ -368,7 +377,7 @@ impl OidcVerifier {
             .get(url)
             .send()
             .await
-            .and_then(|r| r.error_for_status())
+            .and_then(reqwest::Response::error_for_status)
             .map_err(|e| OidcError::JwksFetch {
                 url: url.to_owned(),
                 reason: e.to_string(),

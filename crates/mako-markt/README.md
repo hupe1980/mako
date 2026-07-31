@@ -213,7 +213,7 @@ let sig    = compute_signature(secret.as_bytes(), &body);
 // send with `X-Markt-Signature: {sig}` header
 ```
 
-**Event source:** `urn:markt:tenant:{tenant_gln}`
+**Event source:** `urn:mako:marktd:tenant:{tenant}`
 
 ---
 
@@ -336,7 +336,8 @@ operator's NB GLN is automatically re-queued for dispatch to the new partner.
 │  services/marktd  (binary)                        │
 │  axum 0.8+ · sqlx 0.8+ · utoipa 5 · jiff 0.2     │
 │  Pg*Repository  ←─── implements traits ─────┐  │
-│  fanout worker  ←─── mpsc events channel    │  │
+│  fan-out worker ←─── event_log outbox +     │  │
+│                      event_delivery ledger  │  │
 │  OIDC/JWT auth  ←─── Cedar not used here    │  │
 └───────────────────────────┬─────────────────┘  │
                             │ uses               │

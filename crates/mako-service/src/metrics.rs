@@ -7,8 +7,8 @@
 //!
 //! | Name | Type | Labels |
 //! |---|---|---|
-//! | `mako_http_requests_total` | CounterVec | `method`, `path`, `status` |
-//! | `mako_http_request_duration_seconds` | HistogramVec | `method`, `path` |
+//! | `mako_http_requests_total` | `CounterVec` | `method`, `path`, `status` |
+//! | `mako_http_request_duration_seconds` | `HistogramVec` | `method`, `path` |
 //!
 //! ## Usage
 //!

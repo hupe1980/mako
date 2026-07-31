@@ -183,9 +183,12 @@ stateDiagram-v2
 
 ```toml
 # sperrd.toml
-database_url   = "env:DATABASE_URL"
 port           = 8780
 tenant         = "9900357000004"   # data-isolation key (BDEW-/DVGW-Codenummer)
+
+[database]
+url       = "env:DATABASE_URL"
+pool_size = 10                     # optional — the tuned pool is applied by mako-service
 
 makod_url      = "http://makod:8080"
 makod_api_key  = "env:MAKOD_API_KEY"

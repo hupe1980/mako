@@ -5,7 +5,8 @@ use serde::Deserialize;
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct VertragdConfig {
-    pub database_url: String,
+    /// PostgreSQL connection + pool tuning (`[database]` block).
+    pub database: mako_service::config::DatabaseConfig,
     pub port: Option<u16>,
     /// Tenant identifier — data-isolation key written to every database row.
     /// Typically the operator’s BDEW- or DVGW-Codenummer, but any stable unique string is valid.
@@ -26,6 +27,11 @@ pub struct VertragdConfig {
     /// ERP webhook — receives `de.vertrag.*` CloudEvents.
     pub erp_webhook_url: Option<String>,
     pub erp_hmac_secret: Option<String>,
+    /// HMAC-SHA256 secret for verifying INBOUND CloudEvents (from `makod`/`processd`)
+    /// on `POST /api/v1/events` and `POST /api/v1/angebote/webhook`. When unset the
+    /// endpoints accept unsigned bodies (dev mode); set it in production.
+    #[serde(default)]
+    pub inbound_secret: Option<String>,
     /// MCP server authentication. Supports API-key, OIDC, or dev mode.
     /// See `[mcp]` section in TOML — e.g. `api_key = "env:VERTRAGD_MCP_API_KEY"`.
     #[serde(default)]
@@ -55,5 +61,14 @@ pub struct VertragdConfig {
 impl VertragdConfig {
     fn default_max_identitaeten() -> u32 {
         50
+    }
+}
+
+impl mako_service::ServiceConfig for VertragdConfig {
+    fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
+        Some(&self.database)
+    }
+    fn bind_addr(&self) -> String {
+        format!("0.0.0.0:{}", self.port.unwrap_or(9780))
     }
 }

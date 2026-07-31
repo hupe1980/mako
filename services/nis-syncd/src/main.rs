@@ -37,64 +37,70 @@
 //! | `GET`  | `/health/live` | Liveness probe |
 //! | `GET`  | `/health/ready` | Readiness probe |
 
-use anyhow::Context as _;
+use std::sync::Arc;
+
 use axum::{Extension, Router};
-use mako_service::{health::health_routes, load_config};
+use mako_service::{Daemon, ServiceContext};
 use nis_syncd::{config, handlers, mcp_server, sync};
-use tracing::info;
+
+/// The stateless `nis-syncd` daemon — no database (`ServiceConfig::database` is
+/// `None`), so `mako_service::run` connects no pool and readiness is just process
+/// liveness. It only relays NIS exports to `marktd`.
+struct NisSyncd;
+
+impl Daemon for NisSyncd {
+    type Config = config::NisSyncdConfig;
+    const NAME: &'static str = "nis-syncd";
+
+    async fn build(
+        cfg: Arc<config::NisSyncdConfig>,
+        ctx: ServiceContext,
+    ) -> anyhow::Result<Router> {
+        let marktd = Arc::new(mako_markt::marktd_client::MarktdClient::new(
+            &cfg.marktd_url,
+            secrecy::SecretString::from(cfg.marktd_api_key.clone()),
+            ctx.http.clone(),
+        ));
+
+        // Shared cache of the most recent sync report (HTTP handler + MCP).
+        let last_report: sync::LastSyncReport = Arc::new(tokio::sync::RwLock::new(None));
+
+        let mcp_state = Arc::new(mcp_server::NisSyncdMcpState {
+            auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.nb_mp_id),
+            nb_mp_id: cfg.nb_mp_id.clone(),
+            service_base_url: format!("http://0.0.0.0:{}", cfg.port.unwrap_or(9680)),
+            http_client: ctx.http.clone(),
+            marktd_api_key: cfg.marktd_api_key.clone(),
+            marktd: Arc::clone(&marktd),
+            last_report: Arc::clone(&last_report),
+        });
+
+        let hcfg = handlers::HandlerConfig {
+            sync_concurrency: cfg.sync_concurrency,
+            max_batch_size: cfg.max_batch_size,
+        };
+
+        Ok(Router::new()
+            .merge(mcp_server::router(
+                Arc::clone(&mcp_state),
+                ctx.shutdown.clone(),
+            ))
+            .route(
+                "/api/v1/grid/sync",
+                axum::routing::post(handlers::sync_grid),
+            )
+            .layer(Extension(marktd))
+            .layer(Extension(cfg.nb_mp_id.clone()))
+            .layer(Extension(handlers::DriftWebhook {
+                url: cfg.drift_webhook_url.clone(),
+                secret: cfg.drift_webhook_secret.clone(),
+            }))
+            .layer(Extension(hcfg))
+            .layer(Extension(last_report)))
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _guard = mako_service::init_tracing_from_env("nis-syncd");
-
-    let cfg: config::NisSyncdConfig = load_config("nis-syncd").context("load config")?;
-
-    let marktd = std::sync::Arc::new(mako_markt::marktd_client::MarktdClient::new(
-        &cfg.marktd_url,
-        secrecy::SecretString::from(cfg.marktd_api_key.clone()),
-        mako_service::http::default_client(),
-    ));
-
-    // Shared cache of the most recent sync report (HTTP handler + MCP).
-    let last_report: sync::LastSyncReport = std::sync::Arc::new(tokio::sync::RwLock::new(None));
-
-    let shutdown = mako_service::shutdown::token();
-    let mcp_state = std::sync::Arc::new(mcp_server::NisSyncdMcpState {
-        auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.nb_mp_id),
-        nb_mp_id: cfg.nb_mp_id.clone(),
-        service_base_url: format!("http://0.0.0.0:{}", cfg.port.unwrap_or(9680)),
-        http_client: mako_service::http::default_client(),
-        marktd_api_key: cfg.marktd_api_key.clone(),
-        marktd: std::sync::Arc::clone(&marktd),
-        last_report: std::sync::Arc::clone(&last_report),
-    });
-
-    let hcfg = handlers::HandlerConfig {
-        sync_concurrency: cfg.sync_concurrency,
-        max_batch_size: cfg.max_batch_size,
-    };
-
-    let app = Router::new()
-        .merge(mcp_server::router(
-            std::sync::Arc::clone(&mcp_state),
-            shutdown.clone(),
-        ))
-        .merge(health_routes(|| async { true }))
-        .route(
-            "/api/v1/grid/sync",
-            axum::routing::post(handlers::sync_grid),
-        )
-        .layer(Extension(marktd))
-        .layer(Extension(cfg.nb_mp_id.clone()))
-        .layer(Extension(cfg.drift_webhook_url.clone()))
-        .layer(Extension(hcfg))
-        .layer(Extension(last_report));
-
-    let addr = format!("0.0.0.0:{}", cfg.port.unwrap_or(9680));
-    info!(%addr, "nis-syncd starting");
-
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .context("bind TCP")?;
-    mako_service::shutdown::serve(listener, app, shutdown).await
+    mako_service::run::<NisSyncd>().await
 }

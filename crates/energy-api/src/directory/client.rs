@@ -45,7 +45,13 @@ impl DirectoryServiceClient {
     /// # Errors
     /// Returns [`Error::Transport`] if the reqwest client cannot be built.
     pub fn new_insecure(base_url: Url) -> Result<Self, Error> {
+        // Conservative timeouts + no redirects even on this test helper: a bare
+        // `Client::builder().build()` has no connect timeout (a SYN to a dead host
+        // blocks for minutes) and follows redirects (an SSRF vector).
         let client = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| Error::Transport(e.to_string()))?;
         Ok(Self::new(base_url, client))

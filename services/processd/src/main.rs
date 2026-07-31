@@ -1,165 +1,105 @@
 #![deny(unsafe_code)]
 
-use std::net::SocketAddr;
+//! `processd` — Process decision engine for the German energy market
+//! (LF E_0624 auto-response + NB Anmeldung STP + MSB REQOTE + EoG gap closure).
+//!
+//! `mako_service::run` owns the lifecycle (tracing, tuned pool with
+//! `application_name`, real DB-ping readiness, graceful shutdown, `--check`);
+//! this only supplies the migrations and the domain router + background workers
+//! via [`processd::server::build_router`].
+
 use std::sync::Arc;
 
-use anyhow::Context;
-use clap::Parser;
-use tokio_util::sync::CancellationToken;
+use anyhow::Context as _;
+use mako_service::{Daemon, ServiceContext};
 
 use processd::config::{self, Config};
 
-// ── CLI ───────────────────────────────────────────────────────────────────────
+/// The `processd` daemon.
+struct Processd;
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "processd",
-    about = "Process decision engine for German energy market (LF E_0624 auto-response + NB Anmeldung STP)"
-)]
-struct Cli {
-    /// Path to the `processd.toml` configuration file.
-    #[arg(
-        short = 'c',
-        long,
-        default_value = "processd.toml",
-        env = "PROCESSD_CONFIG"
-    )]
-    config: std::path::PathBuf,
+impl Daemon for Processd {
+    type Config = Config;
+    const NAME: &'static str = "processd";
 
-    /// Log level override (RUST_LOG syntax: `info`, `debug`, `processd=trace`).
-    #[arg(long, default_value = "info", env = "RUST_LOG")]
-    log_level: String,
+    async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+        sqlx::migrate!("./migrations")
+            .run(pool)
+            .await
+            .context("run processd migrations")?;
+        Ok(())
+    }
 
-    /// Validate configuration and database connectivity, then exit 0.
-    ///
-    /// Parses the TOML file, resolves all `env:` secrets, connects to
-    /// PostgreSQL, runs migrations, and exits 0 on success, non-zero on
-    /// any failure. No HTTP server or background workers are started.
-    /// Suitable for Dockerfile HEALTHCHECK and Kubernetes init containers.
-    #[arg(long, env = "PROCESSD_CHECK", default_value_t = false)]
-    check: bool,
+    async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<axum::Router> {
+        // ── Resolve env-var references ────────────────────────────────────────
+        let makod_api_key =
+            config::resolve_env_secret(&cfg.makod.api_key).context("makod.api_key")?;
+        let marktd_api_key =
+            config::resolve_env_secret(&cfg.marktd.api_key).context("marktd.api_key")?;
+        let inbound_secret = cfg
+            .webhook
+            .inbound_secret
+            .as_deref()
+            .map(config::resolve_env_secret)
+            .transpose()
+            .context("webhook.inbound_secret")?;
+
+        let tenant = if cfg.identity.tenant.is_empty() {
+            cfg.identity.own_mp_id.clone()
+        } else {
+            cfg.identity.tenant.clone()
+        };
+
+        // ── OIDC ──────────────────────────────────────────────────────────────
+        let oidc = mako_service::oidc::OidcConfig::build_verifier(
+            cfg.oidc.as_ref(),
+            &ctx.http,
+            &tenant,
+            ctx.shutdown.clone(),
+        )
+        .await?;
+
+        // ── Cedar ABAC ────────────────────────────────────────────────────────
+        let cedar = Arc::new(
+            mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
+                "../policies/processd.cedar"
+            ))
+            .map_err(|e| anyhow::anyhow!("Cedar policy error: {e}"))?,
+        );
+
+        processd::server::build_router(
+            processd::server::RunConfig {
+                inbound_secret,
+                makod_url: cfg.makod.url.clone(),
+                makod_api_key,
+                marktd_url: cfg.marktd.url.clone(),
+                marktd_api_key,
+                own_mp_id: cfg.identity.own_mp_id.clone(),
+                tenant,
+                nb_auto_accept: cfg.nb.auto_accept,
+                nb_gas_bearbeitungsfrist_wt: cfg.nb.gas_bearbeitungsfrist_wt,
+                lf_auto_respond: cfg.lf.auto_respond,
+                lf_queue_ttl_secs: cfg.lf.queue_ttl_secs,
+                msb_auto_preisanfrage: cfg.msb.auto_preisanfrage,
+                eog_auto_activate: cfg.eog.auto_activate,
+                eog_default_transaktionsgrund: cfg.eog.default_transaktionsgrund.clone(),
+                eog_warn_days_before_expiry: cfg.eog.warn_days_before_expiry,
+                eog_notify_webhook_url: cfg.eog.notify_webhook_url.clone(),
+                eog_notify_webhook_secret: cfg.eog.notify_webhook_secret.clone(),
+                self_register_webhook_url: cfg.subscription.webhook_url.clone(),
+                subscriber_id: cfg.subscription.subscriber_id.clone(),
+                subscriber_event_types: cfg.subscription.event_types.clone(),
+                oidc,
+                cedar,
+                mcp: cfg.mcp.clone(),
+            },
+            ctx,
+        )
+        .await
+    }
 }
-
-// ── Main ──────────────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-
-    // ── Config ────────────────────────────────────────────────────────────────
-    let cfg: Config = config::load_from_file(&cli.config)
-        .with_context(|| format!("loading config from {}", cli.config.display()))?;
-
-    // ── Logging + OpenTelemetry ───────────────────────────────────────────────
-    let _otel_guard = mako_service::init_tracing(
-        "processd",
-        &cli.log_level,
-        if cfg.otel.is_enabled() {
-            Some(&cfg.otel)
-        } else {
-            None
-        },
-    );
-
-    // ── Graceful shutdown ─────────────────────────────────────────────────────
-    let shutdown = CancellationToken::new();
-    {
-        let shutdown = shutdown.clone();
-        tokio::spawn(async move {
-            let _ = tokio::signal::ctrl_c().await;
-            tracing::info!("processd: shutdown signal received");
-            shutdown.cancel();
-        });
-    }
-
-    // ── Resolve env-var references ───────────────────────────────────────────
-    let database_url = config::resolve_env(&cfg.database.url).context("database.url")?;
-    let makod_api_key = config::resolve_env_secret(&cfg.makod.api_key).context("makod.api_key")?;
-    let marktd_api_key =
-        config::resolve_env_secret(&cfg.marktd.api_key).context("marktd.api_key")?;
-    let inbound_secret = cfg
-        .webhook
-        .inbound_secret
-        .as_deref()
-        .map(config::resolve_env_secret)
-        .transpose()
-        .context("webhook.inbound_secret")?;
-
-    // ── OIDC ─────────────────────────────────────────────────────────────────
-    let http = mako_service::http::default_client();
-    let oidc = mako_service::oidc::OidcConfig::build_verifier(
-        cfg.oidc.as_ref(),
-        &http,
-        if cfg.identity.tenant.is_empty() {
-            &cfg.identity.own_mp_id
-        } else {
-            &cfg.identity.tenant
-        },
-        shutdown.clone(),
-    )
-    .await?;
-
-    // ── Cedar ABAC ───────────────────────────────────────────────────────────
-    let cedar = Arc::new(
-        mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
-            "../policies/processd.cedar"
-        ))
-        .map_err(|e| anyhow::anyhow!("Cedar policy error: {e}"))?,
-    );
-
-    let listen: SocketAddr = cfg
-        .http
-        .addr
-        .parse()
-        .with_context(|| format!("invalid http.addr '{}'", cfg.http.addr))?;
-
-    // ── --check mode: validate config + DB, then exit ─────────────────────────
-    if cli.check {
-        // Connect and ping PostgreSQL to verify credentials and reachability.
-        let _pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(2)
-            .connect(&database_url)
-            .await
-            .context("processd --check: connecting to PostgreSQL")?;
-        tracing::info!(
-            "processd: check mode — config, secrets, and database connectivity verified"
-        );
-        return Ok(());
-    }
-
-    let tenant = if cfg.identity.tenant.is_empty() {
-        cfg.identity.own_mp_id.clone()
-    } else {
-        cfg.identity.tenant.clone()
-    };
-
-    processd::server::run(processd::server::RunConfig {
-        listen,
-        database_url,
-        db: cfg.database,
-        inbound_secret,
-        makod_url: cfg.makod.url,
-        makod_api_key,
-        marktd_url: cfg.marktd.url,
-        marktd_api_key,
-        own_mp_id: cfg.identity.own_mp_id,
-        tenant,
-        nb_auto_accept: cfg.nb.auto_accept,
-        nb_gas_bearbeitungsfrist_wt: cfg.nb.gas_bearbeitungsfrist_wt,
-        lf_auto_respond: cfg.lf.auto_respond,
-        lf_queue_ttl_secs: cfg.lf.queue_ttl_secs,
-        msb_auto_preisanfrage: cfg.msb.auto_preisanfrage,
-        eog_auto_activate: cfg.eog.auto_activate,
-        eog_default_transaktionsgrund: cfg.eog.default_transaktionsgrund,
-        eog_warn_days_before_expiry: cfg.eog.warn_days_before_expiry,
-        eog_notify_webhook_url: cfg.eog.notify_webhook_url,
-        self_register_webhook_url: cfg.subscription.webhook_url,
-        subscriber_id: cfg.subscription.subscriber_id,
-        subscriber_event_types: cfg.subscription.event_types,
-        oidc,
-        cedar,
-        mcp: cfg.mcp,
-        shutdown,
-    })
-    .await
+    mako_service::run::<Processd>().await
 }

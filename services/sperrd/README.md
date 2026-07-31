@@ -44,10 +44,18 @@ Prompts: `execute-sperrung`, `compliance-sweep`.
 
 ```toml
 # sperrd.toml
-database_url   = "postgresql://sperrd:secret@db:5432/sperrd"
 port           = 8780
 tenant         = "9900357000004"
 
 makod_url      = "http://makod:8080"
 makod_api_key  = "env:SPERRD_MAKOD_API_KEY"
+
+[database]
+url       = "env:SPERRD_DATABASE_URL"   # postgresql://sperrd:secret@db:5432/sperrd
+pool_size = 10
 ```
+
+The service runs on the `mako-service` daemon runner (`mako_service::run::<Sperrd>()`), which
+owns tracing, the tuned connection pool (`application_name = "sperrd"`), migrations, graceful
+shutdown, and a real `/health/ready` (bounded `SELECT 1`). Start it with `sperrd`
+(config path via `SPERRD_CONFIG`); `sperrd --check` is the container HEALTHCHECK probe.

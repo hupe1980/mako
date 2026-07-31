@@ -1,6 +1,5 @@
 //! Axum router and startup logic for `processd`.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,11 +9,9 @@ use axum::{
 };
 use mako_markt::makod_client::MakodClient;
 use secrecy::SecretString;
-use tokio::net::TcpListener;
-use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use mako_service::{cedar::CedarEnforcer, oidc::OidcVerifier};
+use mako_service::{ServiceContext, cedar::CedarEnforcer, oidc::OidcVerifier};
 
 #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
 use crate::pg::PgAnmeldungRepository;
@@ -71,10 +68,6 @@ pub struct ProcessdState {
 // ── RunConfig ─────────────────────────────────────────────────────────────────
 
 pub struct RunConfig {
-    pub listen: SocketAddr,
-    pub database_url: String,
-    /// Database pool tuning (pool size, timeouts, `application_name`).
-    pub db: crate::config::DatabaseConfig,
     pub inbound_secret: Option<SecretString>,
     pub makod_url: String,
     pub makod_api_key: SecretString,
@@ -93,6 +86,7 @@ pub struct RunConfig {
     pub eog_default_transaktionsgrund: String,
     pub eog_warn_days_before_expiry: u32,
     pub eog_notify_webhook_url: Option<String>,
+    pub eog_notify_webhook_secret: Option<String>,
     /// Webhook URL to register with `marktd` on startup (self-registration).
     /// `None` → skip self-registration (useful in tests / standalone mode).
     pub self_register_webhook_url: Option<String>,
@@ -104,12 +98,17 @@ pub struct RunConfig {
     pub cedar: Arc<CedarEnforcer>,
     /// MCP server auth config (API-key fallback + optional per-named-key identity).
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
-    pub shutdown: CancellationToken,
 }
 
-// ── Entry point ───────────────────────────────────────────────────────────────
+// ── Router assembly ─────────────────────────────────────────────────────────────
 
-pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
+/// Build the `processd` domain router and spawn its background workers.
+///
+/// The [`mako_service::run`] lifecycle owns the pool, migrations, infra routes
+/// (health / metrics / trace), bind and graceful serve; this only assembles the
+/// domain [`Router`], self-registers with `marktd`, and spawns the approval-queue
+/// expiry + §38 EnWG Ersatzversorgung timer workers on `ctx.shutdown`.
+pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result<Router> {
     // ── Startup validation ────────────────────────────────────────────────────
     // §20 EnWG parity: validate own_mp_id prefix matches the expected coding authority.
     // BDEW-Codenummern start with "99" (NAD DE3055 = 293), DVGW with "98" (332).
@@ -145,25 +144,11 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         }
     }
 
-    let pool = cfg
-        .db
-        .connect(&cfg.database_url, "processd")
-        .await
-        .map_err(|e| anyhow::anyhow!("processd: failed to connect to PostgreSQL: {e}"))?;
-
-    // Apply schema migrations.
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .map_err(|e| anyhow::anyhow!("processd: running database migrations: {e}"))?;
+    let pool = ctx.pool().clone();
 
     info!("processd: running");
 
-    let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .user_agent("processd/0.1")
-        .build()
-        .map_err(|e| anyhow::anyhow!("processd: failed to build HTTP client: {e}"))?;
+    let http = ctx.http.clone();
 
     // ── Self-register subscription with marktd ────────────────────────────────
     // Driven entirely by config (env var / Helm values.yaml). No imperative
@@ -285,7 +270,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
     #[cfg(any(feature = "role-lf-strom", feature = "role-lf-gas"))]
     {
         let expiry_pool = pool.clone();
-        let expiry_shutdown = cfg.shutdown.clone();
+        let expiry_shutdown = ctx.shutdown.clone();
         tokio::spawn(async move {
             let queue = PgApprovalQueue::new(expiry_pool);
             let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -340,6 +325,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
             default_transaktionsgrund: cfg.eog_default_transaktionsgrund.clone(),
             warn_days_before_expiry: cfg.eog_warn_days_before_expiry,
             notify_webhook_url: cfg.eog_notify_webhook_url.clone(),
+            notify_webhook_secret: cfg.eog_notify_webhook_secret.clone(),
         }),
     };
 
@@ -352,11 +338,12 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
             default_transaktionsgrund: cfg.eog_default_transaktionsgrund.clone(),
             warn_days_before_expiry: cfg.eog_warn_days_before_expiry,
             notify_webhook_url: cfg.eog_notify_webhook_url.clone(),
+            notify_webhook_secret: cfg.eog_notify_webhook_secret.clone(),
         };
         let timer_tenant = cfg.tenant.clone();
-        let timer_shutdown = cfg.shutdown.clone();
+        let timer_shutdown = ctx.shutdown.clone();
         tokio::spawn(async move {
-            let client = reqwest::Client::new();
+            let client = mako_service::http::default_client();
             // First sweep shortly after startup, then daily.
             let mut interval = tokio::time::interval(Duration::from_secs(86_400));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -398,13 +385,12 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
     });
 
     // ── Router ─────────────────────────────────────────────────────────────
+    // Infra routes (`/health/live`, `/health/ready`, `/metrics`, trace) are
+    // owned by `mako_service::run`; the domain Prometheus endpoint therefore
+    // lives at `/processd/metrics` to avoid colliding with the generic
+    // request-counter `/metrics` the runner mounts.
     let app = Router::new()
         .route("/webhook", post(handle_webhook))
-        .route("/health/live", get(|| async { axum::http::StatusCode::OK }))
-        .route(
-            "/health/ready",
-            get(|| async { axum::http::StatusCode::OK }),
-        )
         .route("/api/v1/decisions", get(rest::list_decisions))
         .route("/api/v1/queue", get(rest::list_queue))
         .route(
@@ -417,27 +403,15 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         .route("/api/v1/end-supply", post(rest::end_supply))
         .route("/api/v1/end-supply-gas", post(rest::end_supply_gas))
         .route("/api/v1/eog", get(rest::list_eog_cases))
-        .route("/metrics", get(rest::metrics))
+        .route("/processd/metrics", get(rest::metrics))
         .with_state(state)
         .layer(axum::Extension(cfg.oidc.clone()))
         .layer(axum::Extension(cfg.cedar.clone()))
         .layer(axum::Extension(pool.clone()))
         .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
-        .merge(crate::mcp_server::router(mcp_state, cfg.shutdown.clone()));
+        .merge(crate::mcp_server::router(mcp_state, ctx.shutdown.clone()));
 
-    let listener = TcpListener::bind(cfg.listen)
-        .await
-        .map_err(|e| anyhow::anyhow!("processd: bind error: {e}"))?;
-
-    info!(addr = %cfg.listen, "processd: listening");
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move { cfg.shutdown.cancelled().await })
-        .await
-        .map_err(|e| anyhow::anyhow!("processd: serve error: {e}"))?;
-
-    info!("processd: shutdown complete");
-    Ok(())
+    Ok(app)
 }
 
 // ── REST handlers ──────────────────────────────────────────────────────────────

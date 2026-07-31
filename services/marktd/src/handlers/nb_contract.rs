@@ -223,12 +223,14 @@ fn parse_req(
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// `PUT /api/v1/nb-contracts/:id`
+#[allow(clippy::too_many_arguments)]
 pub async fn put_nb_contract(
     Extension(repo): Extension<NbContractRepoExt>,
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(tenant_gln): Extension<TenantGln>,
-    Extension(event_tx): Extension<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>,
+    Extension(pool): Extension<sqlx::PgPool>,
+    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Path(id): Path<String>,
     Json(req): Json<NbContractUpsertRequest>,
 ) -> impl IntoResponse {
@@ -262,8 +264,13 @@ pub async fn put_nb_contract(
                     "tenant": tenant,
                 }),
             );
-            if let Ok(payload) = serde_json::to_value(&evt) {
-                let _ = event_tx.send(payload);
+            if let Err(e) = crate::outbox::enqueue(&pool, &evt, &notify).await {
+                tracing::error!(error = %e, "nb_contract: durable enqueue failed");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "event enqueue failed"})),
+                )
+                    .into_response();
             }
             Json(serde_json::json!({ "version": version })).into_response()
         }

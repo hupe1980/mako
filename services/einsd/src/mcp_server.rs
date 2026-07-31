@@ -375,30 +375,42 @@ impl EinsdMcpHandler {
             },
         );
 
-        match run_settlement(&self.state.pool, input).await {
-            Ok(result) => {
-                // Same obligation as the REST path, so the same notification.
-                crate::handlers::emit_settlement_ce(
-                    &self.state.cfg,
-                    &self.state.http_client,
-                    mako_events::eeg::SETTLEMENT_BERECHNET,
-                    &result.tr_id,
-                    &anlage.malo_id,
-                    &result,
-                    params.billing_year,
-                    params.billing_month,
-                    anlage.bank_iban.as_deref(),
-                    anlage.bank_bic.as_deref(),
-                    anlage.zahlungsempfaenger.as_deref(),
-                )
-                .await;
-
-                ContentBlock::json(serde_json::to_value(&result).unwrap_or_default())
-                    .map(|b| CallToolResult::success(vec![b]))
-                    .map_err(|e| McpError::internal_error(e.message, None))
-            }
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        // Transactional outbox: settlement write + CE enqueue commit as one tx.
+        let mut tx = self
+            .state
+            .pool
+            .begin()
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let result = match run_settlement(&mut tx, input).await {
+            Ok(r) => r,
+            // tx dropped → rollback.
+            Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
+        };
+        // Same obligation as the REST path, so the same notification.
+        if let Some(ce) = crate::handlers::build_settlement_ce(
+            &self.state.cfg,
+            mako_events::eeg::SETTLEMENT_BERECHNET,
+            &result.tr_id,
+            &anlage.malo_id,
+            &result,
+            params.billing_year,
+            params.billing_month,
+            anlage.bank_iban.as_deref(),
+            anlage.bank_bic.as_deref(),
+            anlage.zahlungsempfaenger.as_deref(),
+        ) {
+            mako_service::outbox::enqueue(&mut tx, &ce)
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         }
+        tx.commit()
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        ContentBlock::json(serde_json::to_value(&result).unwrap_or_default())
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None))
     }
 
     #[tool(

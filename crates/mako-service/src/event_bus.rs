@@ -8,12 +8,12 @@
 //! | Feature | Backend | When to use |
 //! |---|---|---|
 //! | *(default)* | `WebhookBus` | HTTP POST + HMAC-SHA256 + 72 h retry |
-//! | `kafka` | `KafkaBus` | `krafka` producer; use when webhook fan-out is a measured bottleneck (>500 MaLo, >20 subscribers) |
+//! | `kafka` | `KafkaBus` | `krafka` producer; use when webhook fan-out is a measured bottleneck (>500 `MaLo`, >20 subscribers) |
 //!
 //! ## Kafka activation threshold
 //!
 //! The `KafkaBus` should only be enabled when the `WebhookBus` is a measured
-//! bottleneck.  The documented threshold is **>500 MaLo or >20 active webhook
+//! bottleneck.  The documented threshold is **>500 `MaLo` or >20 active webhook
 //! subscribers** — both are confirmed in `crates/mako-service/src/event_bus.rs`.
 //!
 //! When that threshold is reached, add the `kafka` feature to the `marktd`
@@ -55,7 +55,7 @@ use serde_json::Value;
 pub trait EventBus: Send + Sync + 'static {
     /// Publish an event.
     ///
-    /// - `ce_type` — CloudEvents `type` (e.g. `"de.mako.process.initiated"`)
+    /// - `ce_type` — `CloudEvents` `type` (e.g. `"de.mako.process.initiated"`)
     /// - `payload` — JSON payload (typically a serialised `MarktEvent`)
     ///
     /// Implementations must be idempotent with respect to the event `id` field
@@ -119,7 +119,7 @@ impl Default for WebhookBusConfig {
 /// enqueues delivery to all registered subscribers via HMAC-signed HTTP POST.
 ///
 /// This is the default backend.  Activate Kafka only when webhook fan-out is a
-/// measured bottleneck (>500 MaLo, >20 subscribers).
+/// measured bottleneck (>500 `MaLo`, >20 subscribers).
 #[derive(Clone)]
 pub struct WebhookBus {
     config: WebhookBusConfig,
@@ -135,6 +135,7 @@ impl WebhookBus {
     /// Create a new `WebhookBus` with default configuration (no fanout worker).
     ///
     /// Wire up the fanout sender via [`WebhookBus::with_sender`] in production.
+    #[must_use]
     pub fn new(config: WebhookBusConfig) -> Self {
         Self {
             config,
@@ -145,12 +146,14 @@ impl WebhookBus {
 
     ///
     /// The sender delivers events to the `marktd::fanout::spawn` worker task.
+    #[must_use]
     pub fn with_sender(mut self, sender: tokio::sync::mpsc::UnboundedSender<Value>) -> Self {
         self.sender = Some(Arc::new(sender));
         self
     }
 
     /// Fanout configuration.
+    #[must_use]
     pub fn config(&self) -> &WebhookBusConfig {
         &self.config
     }
@@ -166,11 +169,15 @@ impl WebhookBus {
         if let Some(ref reg) = self.plugins
             && !reg.is_empty()
         {
+            // The canonical `source` is `urn:mako:{service}:tenant:{tenant}`;
+            // hand the plugin the tenant, not the whole URN. Falls back to the
+            // raw source for any non-conforming value.
+            let source = payload.get("source").and_then(|v| v.as_str());
             let ctx = mako_plugin::PluginContext {
-                tenant: payload
-                    .get("source")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
+                tenant: source
+                    .map_or("unknown", |s| {
+                        s.split_once(":tenant:").map_or(s, |(_, t)| t)
+                    })
                     .to_owned(),
                 config: serde_json::Value::Null,
             };
@@ -193,6 +200,7 @@ impl WebhookBus {
     /// let bus = WebhookBus::new(WebhookBusConfig::default())
     ///     .with_plugins(plugins);
     /// ```
+    #[must_use]
     pub fn with_plugins(mut self, registry: std::sync::Arc<mako_plugin::PluginRegistry>) -> Self {
         self.plugins = Some(registry);
         self
@@ -263,14 +271,14 @@ impl EventBus for NoopBus {
 
 /// Kafka event bus using [`krafka`] (pure Rust, MSRV 1.88, zero-unsafe).
 ///
-/// Activate with `features = ["kafka"]`.  One topic per CloudEvents `type`, e.g.
+/// Activate with `features = ["kafka"]`.  One topic per `CloudEvents` `type`, e.g.
 /// `de.mako.process.initiated` → Kafka topic `de.mako.process.initiated`.
 ///
 /// Uses `krafka`\'s high-throughput producer with LZ4 compression, built-in
 /// exponential-backoff retry on leader changes, and idempotent delivery.
 ///
 /// **When to use:** only when webhook fan-out is a measured bottleneck
-/// (>500 MaLo, >20 active subscribers).
+/// (>500 `MaLo`, >20 active subscribers).
 ///
 /// **Kafka version requirement:** Kafka 3.9+.
 ///
@@ -373,7 +381,7 @@ pub mod kafka {
 
     /// Kafka-backed event bus using [`krafka`].
     ///
-    /// Serialises each CloudEvent as JSON and produces it to the Kafka topic
+    /// Serialises each `CloudEvent` as JSON and produces it to the Kafka topic
     /// matching the CE `type`.  Uses `krafka`\'s built-in:
     ///
     /// - **LZ4 batched compression** (pure Rust, 5 ms linger)

@@ -1,60 +1,101 @@
-//! Fan-out worker — delivers `MarktEvent`s to matching webhook subscribers.
+//! Durable two-phase fan-out worker.
 //!
-//! For each event received from the MPSC channel:
-//! 1. Query the subscription repository (in the worker task)
-//! 2. Collect the matching subscriber URLs and secrets
-//! 3. For each subscriber, spawn a separate `Send` delivery task using reqwest
-//! 4. On final retry failure, write the event to the `fanout_dlq` table — no
-//!    events are silently dropped (§ 147 AO / GoBD compliance)
+//! marktd persists every produced event to the `event_log` outbox *before*
+//! fan-out (see [`crate::outbox`]). This worker is the sole consumer and is
+//! crash-safe end to end:
 //!
-//! The channel carries `serde_json::Value` (CloudEvent envelopes) so the
-//! worker is decoupled from the typed `MarktEvent` struct.  This also means
-//! [`mako_service::event_bus::WebhookBus`] can enqueue events directly without
-//! deserialising back to `MarktEvent`.
+//! **Phase 1 — fan-out.** Claim undelivered `event_log` rows
+//! (`WHERE fanned_out_at IS NULL … FOR UPDATE SKIP LOCKED`). For each, resolve
+//! the matching subscribers ([`SubscriptionRepository::list_matching`]) and, in
+//! one transaction, insert an `event_delivery` row per subscriber
+//! (`ON CONFLICT DO NOTHING`) and stamp `event_log.fanned_out_at = now()`. This
+//! snapshots the subscriber set atomically and is idempotent under crash: a
+//! crash before commit leaves the row still pending, so it is re-claimed.
+//!
+//! **Phase 2 — deliver.** Claim-with-lease due `event_delivery` rows (the same
+//! `FOR UPDATE SKIP LOCKED` + push-`next_attempt_at`-forward pattern as
+//! [`mako_service::outbox`]). Load the envelope, HMAC-sign per subscriber
+//! secret, POST `application/cloudevents+json`. On 2xx mark `delivered_at`; on
+//! failure back off, and after `max_attempts` set `dead_lettered_at` (the
+//! status-column DLQ — § 147 AO / GoBD: events are never silently dropped).
+//!
+//! The [`SubscriptionRepository`] futures are `!Send` (AFIT), so the loop runs
+//! on a dedicated thread with a current-thread runtime + `LocalSet`. Delivery
+//! POSTs are awaited inline within a batch; concurrency across replicas/rows is
+//! provided by `SKIP LOCKED`, not by spawning `Send` tasks.
 
 use std::{sync::Arc, time::Duration};
 
-use mako_markt::{
-    cloudevents::compute_signature,
-    repository::{Subscription, SubscriptionRepository},
-};
+use mako_markt::repository::SubscriptionRepository;
+use mako_service::webhook::sign;
 use serde_json::Value;
 use sqlx::PgPool;
-use tokio::sync::mpsc;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 /// Fan-out configuration.
 #[derive(Debug, Clone)]
 pub struct FanoutConfig {
+    /// HTTP request timeout per delivery attempt.
     pub delivery_timeout: Duration,
-    pub max_retry_attempts: u32,
+    /// Delivery attempts before dead-lettering.
+    pub max_attempts: i16,
+    /// How often the worker polls (in addition to `notify` wake-ups).
+    pub poll_interval: Duration,
+    /// Max `event_log` rows fanned out per Phase-1 batch.
+    pub fanout_batch: i64,
+    /// Max `event_delivery` rows delivered per Phase-2 batch.
+    pub deliver_batch: i64,
+    /// How many deliveries run concurrently within a batch, so one slow/hung
+    /// subscriber cannot stall the others (the futures are polled concurrently
+    /// on the single worker thread — I/O-bound, so this is real concurrency).
+    pub deliver_concurrency: usize,
+    /// Back-off per prior attempt; the last entry repeats.
+    pub backoff: Vec<Duration>,
+    /// Claim lease: a claimed delivery's `next_attempt_at` is pushed this far
+    /// ahead so a crash mid-delivery makes it due again after the lease.
+    pub lease: Duration,
 }
 
-/// Spawn the fan-out background task.
+impl Default for FanoutConfig {
+    fn default() -> Self {
+        Self {
+            delivery_timeout: Duration::from_secs(10),
+            max_attempts: 5,
+            poll_interval: Duration::from_secs(30),
+            fanout_batch: 100,
+            deliver_batch: 50,
+            deliver_concurrency: 16,
+            backoff: vec![
+                Duration::from_secs(30),
+                Duration::from_secs(300),
+                Duration::from_secs(1800),
+                Duration::from_secs(7200),
+            ],
+            lease: Duration::from_secs(120),
+        }
+    }
+}
+
+/// Spawn the durable fan-out worker on its own thread.
 ///
-/// Uses `mpsc::UnboundedReceiver` — unlike `broadcast`, this never silently
-/// drops events when the receiver falls behind.
-///
-/// `dlq_pool`: PostgreSQL pool used to persist events that exhaust all retry
-/// attempts into the `fanout_dlq` table.  On a DLQ write failure the entry
-/// is still logged at `error` level so it can be recovered from application
-/// logs, but the operational guarantee is best-effort for the DLQ write itself.
+/// No receiver: the worker is driven entirely by the `event_log` /
+/// `event_delivery` tables. `notify` is a low-latency wake-up hint from
+/// [`crate::outbox::enqueue`]; the worker also polls every
+/// [`FanoutConfig::poll_interval`], so a missed notification only delays work.
 pub fn spawn<S>(
-    mut rx: mpsc::UnboundedReceiver<Value>,
+    pool: PgPool,
     sub_repo: S,
     http: reqwest::Client,
     config: FanoutConfig,
-    dlq_pool: PgPool,
+    notify: Arc<Notify>,
     shutdown: CancellationToken,
 ) where
     S: SubscriptionRepository + Clone + Send + Sync + 'static,
 {
-    // The worker loop is NOT spawned with tokio::spawn because AFIT futures
-    // are not Send.  Instead it runs as a local task in the tokio current-thread
-    // context.  We use tokio::task::spawn_local inside a LocalSet-based runner.
-    // Since main.rs uses tokio::main (multi-thread), we drive this loop via a
-    // dedicated blocking thread with its own single-thread runtime.
+    // AFIT SubscriptionRepository futures are !Send, so drive the loop on a
+    // dedicated blocking thread with its own current-thread runtime + LocalSet.
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -63,169 +104,297 @@ pub fn spawn<S>(
 
         let local = tokio::task::LocalSet::new();
         local.block_on(&rt, async move {
+            let worker = Worker {
+                pool,
+                sub_repo,
+                http,
+                config,
+            };
+            let mut interval = tokio::time::interval(worker.config.poll_interval);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            info!("fanout: durable worker started");
             loop {
                 tokio::select! {
-                    recv = rx.recv() => {
-                        match recv {
-                            Some(event) => {
-                                let subs = collect_subscribers(&sub_repo, &event).await;
-                                let body = match serde_json::to_vec(&event) {
-                                    Ok(b) => Arc::new(b),
-                                    Err(e) => {
-                                        warn!(error = %e, "fanout: serialize failed");
-                                        continue;
-                                    }
-                                };
-                                let event_type = event
-                                    .get("type")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("unknown")
-                                    .to_owned();
-                                for sub in subs {
-                                    deliver(
-                                        sub,
-                                        Arc::clone(&body),
-                                        event.clone(),
-                                        event_type.clone(),
-                                        http.clone(),
-                                        config.clone(),
-                                        dlq_pool.clone(),
-                                    );
-                                }
-                            }
-                            None => {
-                                debug!("fanout: channel closed, exiting");
-                                break;
-                            }
-                        }
-                    }
-                    _ = shutdown.cancelled() => {
+                    () = shutdown.cancelled() => {
                         debug!("fanout: shutdown signal received");
                         break;
                     }
+                    _ = interval.tick() => worker.drain().await,
+                    () = notify.notified() => worker.drain().await,
                 }
             }
         });
     });
 }
 
-/// Query subscriptions matching the event.  Non-Send (AFIT) — runs in LocalSet.
-async fn collect_subscribers<S>(sub_repo: &S, event: &Value) -> Vec<Subscription>
+struct Worker<S> {
+    pool: PgPool,
+    sub_repo: S,
+    http: reqwest::Client,
+    config: FanoutConfig,
+}
+
+impl<S> Worker<S>
 where
     S: SubscriptionRepository,
 {
-    let role = event
-        .get("marktrole")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let event_type = event
-        .get("type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
-
-    match sub_repo.list_matching(event_type, role, None).await {
-        Ok(subs) => subs,
-        Err(e) => {
-            warn!(error = %e, "fanout: list_matching failed");
-            vec![]
+    /// Run Phase 1 then Phase 2 repeatedly until neither makes progress, so a
+    /// backlog is drained promptly on a single wake-up.
+    async fn drain(&self) {
+        loop {
+            let fanned = match self.fanout_phase().await {
+                Ok(n) => n,
+                Err(e) => {
+                    warn!(error = %e, "fanout: phase-1 (fan-out) cycle failed");
+                    0
+                }
+            };
+            let delivered = match self.deliver_phase().await {
+                Ok(n) => n,
+                Err(e) => {
+                    warn!(error = %e, "fanout: phase-2 (deliver) cycle failed");
+                    0
+                }
+            };
+            if fanned == 0 && delivered == 0 {
+                break;
+            }
         }
     }
-}
 
-/// Spawn a `Send + 'static` delivery task.  Only reqwest is used here — no repo calls.
-///
-/// On final retry exhaustion the event is written to `fanout_dlq` via `dlq_pool`
-/// so no events are silently dropped (§ 147 AO / GoBD compliance).
-fn deliver(
-    sub: Subscription,
-    body: Arc<Vec<u8>>,
-    event: Value,
-    event_type: String,
-    http: reqwest::Client,
-    config: FanoutConfig,
-    dlq_pool: PgPool,
-) {
-    tokio::task::spawn_local(async move {
-        let sig = sub
-            .webhook_secret
-            .as_deref()
-            .map(|s| compute_signature(s.as_bytes(), &body));
+    // ── Phase 1: fan-out ──────────────────────────────────────────────────────
 
-        let mut attempt = 0u32;
-        loop {
-            let mut req = http
-                .post(&sub.webhook_url)
-                .header("Content-Type", "application/cloudevents+json")
-                .timeout(config.delivery_timeout)
-                .body((*body).clone());
+    /// Claim pending `event_log` rows, snapshot their subscriber sets into
+    /// `event_delivery`, and stamp `fanned_out_at`. Returns rows fanned out.
+    async fn fanout_phase(&self) -> Result<usize, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
 
-            if let Some(sig) = &sig {
-                req = req.header("X-Mako-Signature", sig);
-            }
+        let rows: Vec<PendingEvent> = sqlx::query_as(
+            "SELECT event_id, ce_type, marktrole, sparte
+               FROM event_log
+              WHERE fanned_out_at IS NULL
+              ORDER BY received_at
+              LIMIT $1
+              FOR UPDATE SKIP LOCKED",
+        )
+        .bind(self.config.fanout_batch)
+        .fetch_all(&mut *tx)
+        .await?;
 
-            // `last_error` is the failure description for this attempt.
-            // The success arm returns, so the `!` type coerces to String.
-            let last_error: String = match req.send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    debug!(subscriber_id = %sub.subscriber_id, attempt, "fanout: delivered");
-                    return;
-                }
-                Ok(resp) => {
-                    warn!(subscriber_id = %sub.subscriber_id, status = resp.status().as_u16(), attempt, "fanout: non-2xx");
-                    format!("HTTP {}", resp.status().as_u16())
-                }
+        let n = rows.len();
+        for row in &rows {
+            let role = row.marktrole.as_deref().unwrap_or("");
+            let subs = match self
+                .sub_repo
+                .list_matching(&row.ce_type, role, row.sparte.as_deref())
+                .await
+            {
+                Ok(s) => s,
                 Err(e) => {
-                    warn!(subscriber_id = %sub.subscriber_id, error = %e, attempt, "fanout: error");
-                    e.to_string()
+                    // Leave the row pending (do NOT stamp fanned_out_at) so it is
+                    // retried on the next cycle rather than fanned out to nobody.
+                    warn!(event_id = %row.event_id, error = %e, "fanout: list_matching failed; leaving pending");
+                    continue;
                 }
             };
 
-            attempt += 1;
-            if attempt >= config.max_retry_attempts {
-                // Write to DLQ instead of silently dropping — § 147 AO / GoBD compliance.
-                error!(
-                    subscriber_id = %sub.subscriber_id,
-                    webhook_url   = %sub.webhook_url,
-                    event_type    = %event_type,
-                    attempts      = attempt,
-                    last_error    = %last_error,
-                    "fanout: max retries exhausted — writing to fanout_dlq",
-                );
-                let event_json = serde_json::to_value(&event).unwrap_or(event.clone());
-                if let Err(e) = sqlx::query(
-                    r#"INSERT INTO fanout_dlq
-                       (subscriber_id, webhook_url, event_type, event_body, attempts, last_error)
-                       VALUES ($1, $2, $3, $4, $5, $6)"#,
+            for sub in subs {
+                sqlx::query(
+                    "INSERT INTO event_delivery (event_id, subscriber_id, webhook_url)
+                     VALUES ($1, $2, $3)
+                     ON CONFLICT (event_id, subscriber_id) DO NOTHING",
                 )
+                .bind(&row.event_id)
                 .bind(&sub.subscriber_id)
                 .bind(&sub.webhook_url)
-                .bind(&event_type)
-                .bind(&event_json)
-                .bind(attempt as i32)
-                .bind(&last_error)
-                .execute(&dlq_pool)
-                .await
-                {
-                    // DLQ write failed — log at error level so it can be
-                    // recovered from application logs / log-aggregation.
-                    error!(
-                        subscriber_id = %sub.subscriber_id,
-                        event_type    = %event_type,
-                        dlq_error     = %e,
-                        "fanout: DLQ write failed — event data follows for manual recovery",
-                    );
-                    error!(
-                        subscriber_id = %sub.subscriber_id,
-                        event_body    = ?event,
-                        "fanout: undelivered event body",
-                    );
-                }
-                return;
+                .execute(&mut *tx)
+                .await?;
             }
 
-            let delay = Duration::from_secs(1 << attempt.min(6));
-            info!(subscriber_id = %sub.subscriber_id, delay_secs = delay.as_secs(), "fanout: retrying");
-            tokio::time::sleep(delay).await;
+            sqlx::query("UPDATE event_log SET fanned_out_at = now() WHERE event_id = $1")
+                .bind(&row.event_id)
+                .execute(&mut *tx)
+                .await?;
         }
-    });
+
+        tx.commit().await?;
+        Ok(n)
+    }
+
+    // ── Phase 2: deliver ──────────────────────────────────────────────────────
+
+    /// Claim-with-lease due deliveries and POST them. Returns rows processed.
+    async fn deliver_phase(&self) -> Result<usize, sqlx::Error> {
+        let lease_secs = i64::try_from(self.config.lease.as_secs()).unwrap_or(i64::MAX);
+        let claimed: Vec<ClaimedDelivery> = sqlx::query_as(
+            "UPDATE event_delivery
+                SET next_attempt_at = now() + ($1 * INTERVAL '1 second')
+              WHERE (event_id, subscriber_id) IN (
+                  SELECT event_id, subscriber_id FROM event_delivery
+                   WHERE delivered_at IS NULL AND dead_lettered_at IS NULL
+                     AND next_attempt_at <= now()
+                   ORDER BY next_attempt_at
+                   LIMIT $2
+                   FOR UPDATE SKIP LOCKED
+              )
+              RETURNING event_id, subscriber_id, webhook_url, attempts",
+        )
+        .bind(lease_secs)
+        .bind(self.config.deliver_batch)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let n = claimed.len();
+        // Deliver concurrently (bounded) so a hung subscriber cannot stall the
+        // batch. The futures borrow `&self` and are polled concurrently within
+        // this one task — no spawning, so the `!Send` repository stays fine.
+        use futures::StreamExt as _;
+        futures::stream::iter(claimed)
+            .for_each_concurrent(self.config.deliver_concurrency, |d| self.deliver_one(d))
+            .await;
+        Ok(n)
+    }
+
+    async fn deliver_one(&self, d: ClaimedDelivery) {
+        // Load the full envelope from the durable outbox.
+        let envelope: Option<Value> =
+            match sqlx::query_scalar("SELECT envelope FROM event_log WHERE event_id = $1")
+                .bind(&d.event_id)
+                .fetch_optional(&self.pool)
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(event_id = %d.event_id, error = %e, "fanout: envelope load failed");
+                    return;
+                }
+            };
+        let Some(envelope) = envelope else {
+            // event_log row gone (should not happen — FK CASCADE) — dead-letter.
+            let _ = self.record_failure(&d, "event_log envelope missing").await;
+            return;
+        };
+
+        let body = match serde_json::to_vec(&envelope) {
+            Ok(b) => b,
+            Err(e) => {
+                let _ = self
+                    .record_failure(&d, &format!("serialize envelope: {e}"))
+                    .await;
+                return;
+            }
+        };
+
+        // Per-subscriber HMAC signing — look up the current secret.
+        let secret = self
+            .sub_repo
+            .find(&d.subscriber_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|s| s.webhook_secret);
+        let sig = secret.as_deref().map(|s| sign(s.as_bytes(), &body));
+
+        let mut req = self
+            .http
+            .post(&d.webhook_url)
+            .header("Content-Type", "application/cloudevents+json")
+            .timeout(self.config.delivery_timeout)
+            .body(body);
+        if let Some(sig) = &sig {
+            req = req.header("X-Mako-Signature", sig);
+        }
+
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => {
+                debug!(event_id = %d.event_id, subscriber_id = %d.subscriber_id, "fanout: delivered");
+                let _ = self.mark_delivered(&d).await;
+            }
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                warn!(event_id = %d.event_id, subscriber_id = %d.subscriber_id, status, "fanout: non-2xx");
+                let _ = self.record_failure(&d, &format!("HTTP {status}")).await;
+            }
+            Err(e) => {
+                warn!(event_id = %d.event_id, subscriber_id = %d.subscriber_id, error = %e, "fanout: transport error");
+                let _ = self.record_failure(&d, &e.to_string()).await;
+            }
+        }
+    }
+
+    async fn mark_delivered(&self, d: &ClaimedDelivery) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE event_delivery SET delivered_at = now(), last_error = NULL
+              WHERE event_id = $1 AND subscriber_id = $2",
+        )
+        .bind(&d.event_id)
+        .bind(&d.subscriber_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Record a failed attempt: back off, or dead-letter once `max_attempts` is
+    /// reached (status-column DLQ).
+    async fn record_failure(&self, d: &ClaimedDelivery, err: &str) -> Result<(), sqlx::Error> {
+        let new_attempts = d.attempts + 1;
+        if new_attempts >= self.config.max_attempts {
+            error!(
+                event_id = %d.event_id,
+                subscriber_id = %d.subscriber_id,
+                webhook_url = %d.webhook_url,
+                attempts = new_attempts,
+                last_error = %err,
+                "fanout: max attempts exhausted — dead-lettering (§147 AO / GoBD)",
+            );
+            sqlx::query(
+                "UPDATE event_delivery
+                    SET attempts = $3, dead_lettered_at = now(), last_error = $4
+                  WHERE event_id = $1 AND subscriber_id = $2",
+            )
+            .bind(&d.event_id)
+            .bind(&d.subscriber_id)
+            .bind(new_attempts)
+            .bind(err)
+            .execute(&self.pool)
+            .await?;
+            return Ok(());
+        }
+
+        let idx = usize::try_from(d.attempts)
+            .unwrap_or(0)
+            .min(self.config.backoff.len() - 1);
+        let delay = i64::try_from(self.config.backoff[idx].as_secs()).unwrap_or(i64::MAX);
+        sqlx::query(
+            "UPDATE event_delivery
+                SET attempts = $3,
+                    next_attempt_at = now() + ($4 * INTERVAL '1 second'),
+                    last_error = $5
+              WHERE event_id = $1 AND subscriber_id = $2",
+        )
+        .bind(&d.event_id)
+        .bind(&d.subscriber_id)
+        .bind(new_attempts)
+        .bind(delay)
+        .bind(err)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct PendingEvent {
+    event_id: String,
+    ce_type: String,
+    marktrole: Option<String>,
+    sparte: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct ClaimedDelivery {
+    event_id: String,
+    subscriber_id: String,
+    webhook_url: String,
+    attempts: i16,
 }

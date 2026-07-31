@@ -91,6 +91,7 @@ pub async fn put_partner<Ma, Me, Co, Su, Ci, Pa>(
     State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pricat_repo): Extension<PriCatRepoExt>,
+    Extension(pool): Extension<sqlx::PgPool>,
     claims: Claims,
     Path(gln_str): Path<String>,
     Json(mut record): Json<PartnerRecord>,
@@ -176,8 +177,13 @@ where
             .with_extensions(EventExtensions {
                 ..Default::default()
             });
-            if let Ok(payload) = serde_json::to_value(&evt) {
-                let _ = state.event_tx.send(payload);
+            if let Err(e) = crate::outbox::enqueue(&pool, &evt, &state.notify).await {
+                tracing::error!(error = %e, "partner: durable enqueue failed");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "event enqueue failed"})),
+                )
+                    .into_response();
             }
 
             // Phase 2: when a new LF partner is registered, auto-dispatch the

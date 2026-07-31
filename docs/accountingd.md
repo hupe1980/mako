@@ -50,8 +50,7 @@ graph TB
     portald["portald :9480"]
     bank["Bank adapter\n(pain.001 SCT/Inst)"]
 
-    billingd -->|"de.billing.rechnung.erstellt → RECHNUNG debit\n(is_correction=true → STORNO)"| accountingd
-    billingd -->|"de.billing.gutschrift.erstellt → GUTSCHRIFT credit"| accountingd
+    billingd -->|"de.billing.rechnung.erstellt → RECHNUNG debit\n(is_correction=true → STORNO credit; a Gutschrift is a negated Rechnung)"| accountingd
     einsd -->|"de.eeg.verguetung.berechnet (carries the §14 UStG Gutschrift: number, net, USt, brutto)\n→ EEG_GUTSCHRIFT credit + pain.001 SCT Inst auto-payout (§25 EEG 2023)"| accountingd
     einsd -->|"de.eeg.marktpraemie.berechnet → EEG_MARKTPRAEMIE credit"| accountingd
     invoicd -->|"de.invoic.receipt.settled → ZAHLUNG credit"| accountingd
@@ -71,9 +70,8 @@ graph TB
 | `entry_type` | Sign | Trigger |
 |---|---|---|
 | `RECHNUNG` | +debit | `de.billing.rechnung.erstellt` (`is_correction=false`) |
-| `STORNO` | ±signed | `de.billing.rechnung.erstellt` (`is_correction=true`) — billing reversal |
+| `STORNO` | ±signed | `de.billing.rechnung.erstellt` (`is_correction=true`) — billing reversal / Gutschrift (a Gutschrift is a negated Rechnung, not a separate event) |
 | `ZAHLUNG` | -credit | CAMT.054 import or `de.invoic.receipt.settled` |
-| `GUTSCHRIFT` | -credit | `de.billing.gutschrift.erstellt` — credit note |
 | `EEG_GUTSCHRIFT` | -credit | `de.eeg.verguetung.berechnet` — §21 EEG Einspeisevergütung |
 | `EEG_MARKTPRAEMIE` | -credit | `de.eeg.marktpraemie.berechnet` — §20 EEG Direktvermarktung |
 | `BANKRUECKLAST` | +debit | Returned SEPA direct debit |
@@ -871,7 +869,6 @@ log lines, or config dumps.
 ## Configuration
 
 ```toml
-database_url          = "postgresql://accountingd:secret@db:5432/accountingd"
 port                  = 9380
 tenant                = "9910000000002"
 erp_webhook_url       = "http://erp:8000/webhooks/accounting"
@@ -922,6 +919,11 @@ auto_payout     = true                           # generate pain.001 on every se
 debtor_iban     = "env:LF_BANK_IBAN"
 bank_submit_url = "https://banking-adapter.internal/api/v1/pain001"
 bank_api_key    = "env:BANK_API_KEY"
+
+# PostgreSQL connection + pool tuning (application_name is set to "accountingd")
+[database]
+url = "postgresql://accountingd:secret@db:5432/accountingd"
+# pool_size = 10   # optional (min_connections, acquire/idle/max_lifetime also available)
 ```
 
 > **`creditor_iban` is required.** Missing or invalid `creditor_iban` causes `POST /sepa/run`

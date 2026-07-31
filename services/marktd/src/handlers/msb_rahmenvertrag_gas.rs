@@ -26,18 +26,20 @@ use super::{Claims, IntoMdmResponse as _, TenantGln};
 
 /// Injected `Arc<PgMsbRahmenvertragGasRepository>`.
 pub type MsbRvGasRepoExt = Arc<crate::pg::PgMsbRahmenvertragGasRepository>;
-type EventTx = tokio::sync::mpsc::UnboundedSender<serde_json::Value>;
-
-fn emit(event_tx: &EventTx, tenant: &str, subject: String, data: serde_json::Value) {
+async fn emit(
+    pool: &sqlx::PgPool,
+    notify: &tokio::sync::Notify,
+    tenant: &str,
+    subject: String,
+    data: serde_json::Value,
+) -> Result<(), sqlx::Error> {
     let evt = MarktEvent::new(
         tenant,
         mako_events::markt::MSB_RAHMENVERTRAG_GAS_UPDATED,
         subject,
         data,
     );
-    if let Ok(payload) = serde_json::to_value(&evt) {
-        let _ = event_tx.send(payload);
-    }
+    crate::outbox::enqueue(pool, &evt, notify).await
 }
 
 /// `PUT /api/v1/msb-rahmenvertraege-gas` — upsert a conclusion record.
@@ -64,7 +66,8 @@ pub async fn upsert_msb_rv_gas(
     Extension(repo): Extension<MsbRvGasRepoExt>,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(TenantGln(tenant)): Extension<TenantGln>,
-    Extension(event_tx): Extension<EventTx>,
+    Extension(pool): Extension<sqlx::PgPool>,
+    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Json(mut rec): Json<MsbRahmenvertragGas>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-msb-rv-gas", &tenant) {
@@ -94,8 +97,9 @@ pub async fn upsert_msb_rv_gas(
     }
     match repo.upsert(&rec).await {
         Ok((id, version)) => {
-            emit(
-                &event_tx,
+            if let Err(e) = emit(
+                &pool,
+                &notify,
                 &tenant,
                 id.to_string(),
                 serde_json::json!({
@@ -111,7 +115,12 @@ pub async fn upsert_msb_rv_gas(
                         t.format(&time::format_description::well_known::Rfc3339).ok()
                     }),
                 }),
-            );
+            )
+            .await
+            {
+                tracing::error!(error = %e, "msb_rv_gas: durable enqueue failed");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
             (
                 StatusCode::OK,
                 Json(serde_json::json!({ "id": id, "version": version })),

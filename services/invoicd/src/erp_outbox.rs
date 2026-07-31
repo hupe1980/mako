@@ -60,7 +60,7 @@ async fn run(
     shutdown: CancellationToken,
 ) {
     info!("invoicd: ERP outbox worker started (poll interval 30 s)");
-    let http = reqwest::Client::new();
+    let http = mako_service::http::default_client();
     let interval = tokio::time::interval(std::time::Duration::from_secs(30));
     tokio::pin!(interval);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -111,17 +111,11 @@ async fn flush(
                 .unwrap_or_default()
         });
 
-        let event = serde_json::json!({
-            "specversion": "1.0",
-            "id":          uuid::Uuid::new_v4().to_string(),
-            "source":      format!("urn:invoicd:tenant:{tenant}"),
-            "type":        ce_type,
-            "time":        time::OffsetDateTime::now_utc()
-                               .format(&time::format_description::well_known::Rfc3339)
-                               .unwrap_or_default(),
-            "subject":     row.process_id.to_string(),
-            "datacontenttype": "application/json",
-            "data": {
+        let ce = mako_service::CloudEvent::new(
+            mako_service::source("invoicd", tenant),
+            ce_type,
+            row.process_id.to_string(),
+            serde_json::json!({
                 "process_id":     row.process_id.to_string(),
                 "pid":            row.pid,
                 "direction":      row.direction,
@@ -129,88 +123,43 @@ async fn flush(
                 "outcome":        row.outcome,
                 "pay_by":         pay_by_str,
                 "findings_count": row.findings_count,
-            },
-        });
+            }),
+        );
 
-        let body = match serde_json::to_vec(&event) {
-            Ok(b) => b,
-            Err(e) => {
-                warn!(error = %e, process_id = %row.process_id, "invoicd: outbox serialize error — skipping");
-                continue;
+        let secret = hmac_secret.map(|s| s.expose_secret().as_bytes());
+        match mako_service::post_ce_with_retry(http, url, &ce, secret).await {
+            Ok(()) => {
+                debug!(
+                    process_id = %row.process_id, ce_type,
+                    attempt = row.erp_attempts + 1,
+                    "invoicd: ERP outbox delivery succeeded"
+                );
+                let _ = crate::pg::receipts::mark_erp_notified(
+                    pool,
+                    row.process_id,
+                    time::OffsetDateTime::now_utc(),
+                )
+                .await;
             }
-        };
-
-        let sig = hmac_secret.map(|s| {
-            format!(
-                "sha256={}",
-                mako_service::webhook::hmac_hex(s.expose_secret().as_bytes(), &body)
-            )
-        });
-
-        let mut req = http
-            .post(url)
-            .header("Content-Type", "application/cloudevents+json")
-            .body(body);
-        if let Some(sig) = sig {
-            req = req.header("X-Mako-Signature", sig);
-        }
-
-        match req.send().await {
+            Err(e) if e.is_permanent() => {
+                // A 4xx — the ERP rejected these exact bytes (mis-addressed URL,
+                // schema mismatch). Retrying wastes the full 2.5 h backoff window,
+                // so dead-letter immediately with a diagnostic instead.
+                warn!(
+                    error = %e, process_id = %row.process_id,
+                    "invoicd: ERP outbox permanent failure — dead-lettering (check ERP webhook config)"
+                );
+                let _ = crate::pg::receipts::dead_letter_erp(pool, row.process_id).await;
+            }
             Err(e) => {
                 warn!(
                     error = %e, process_id = %row.process_id,
                     attempt = row.erp_attempts + 1,
-                    "invoicd: ERP outbox delivery transport error — will retry"
+                    "invoicd: ERP outbox delivery failed — will retry"
                 );
                 let _ =
                     crate::pg::receipts::record_erp_failure(pool, row.process_id, row.erp_attempts)
                         .await;
-            }
-            Ok(resp) => {
-                let status = resp.status();
-                if status.is_success() {
-                    debug!(
-                        process_id = %row.process_id, ce_type, %status,
-                        attempt = row.erp_attempts + 1,
-                        "invoicd: ERP outbox delivery succeeded"
-                    );
-                    let _ = crate::pg::receipts::mark_erp_notified(
-                        pool,
-                        row.process_id,
-                        time::OffsetDateTime::now_utc(),
-                    )
-                    .await;
-                } else if status.is_client_error() {
-                    let preview = resp
-                        .text()
-                        .await
-                        .unwrap_or_default()
-                        .chars()
-                        .take(256)
-                        .collect::<String>();
-                    warn!(
-                        process_id = %row.process_id, ce_type, %status,
-                        response_body = %preview,
-                        "invoicd: ERP outbox 4xx — dead-lettering (check ERP webhook config)"
-                    );
-                    // Set erp_attempts = 5 to prevent further retries.
-                    for _ in 0..5 {
-                        let _ =
-                            crate::pg::receipts::record_erp_failure(pool, row.process_id, 5).await;
-                    }
-                } else {
-                    warn!(
-                        process_id = %row.process_id, ce_type, %status,
-                        attempt = row.erp_attempts + 1,
-                        "invoicd: ERP outbox 5xx — will retry"
-                    );
-                    let _ = crate::pg::receipts::record_erp_failure(
-                        pool,
-                        row.process_id,
-                        row.erp_attempts,
-                    )
-                    .await;
-                }
             }
         }
     }

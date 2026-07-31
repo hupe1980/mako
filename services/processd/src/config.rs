@@ -85,6 +85,15 @@ pub struct Config {
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
 }
 
+impl mako_service::ServiceConfig for Config {
+    fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
+        Some(&self.database)
+    }
+    fn bind_addr(&self) -> String {
+        self.http.addr.clone()
+    }
+}
+
 // ── HTTP ──────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -260,6 +269,12 @@ pub struct EogConfig {
     /// Webhook for `de.markt.versorgung.ersatz-auslaufend` CloudEvents.
     #[serde(default)]
     pub notify_webhook_url: Option<String>,
+    /// HMAC-SHA256 secret for signing the outbound `notify_webhook_url`
+    /// CloudEvents (`X-Mako-Signature: sha256=<hex>`). Use `"env:VAR_NAME"`.
+    /// Leave unset only in dev — a receiver verifying the signature rejects
+    /// unsigned events.
+    #[serde(default)]
+    pub notify_webhook_secret: Option<String>,
 }
 
 fn default_eog_transaktionsgrund() -> String {
@@ -276,6 +291,7 @@ impl Default for EogConfig {
             default_transaktionsgrund: default_eog_transaktionsgrund(),
             warn_days_before_expiry: default_eog_warn_days(),
             notify_webhook_url: None,
+            notify_webhook_secret: None,
         }
     }
 }

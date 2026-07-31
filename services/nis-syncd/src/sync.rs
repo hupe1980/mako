@@ -4,12 +4,9 @@ use std::sync::Arc;
 
 use mako_markt::{domain::Sparte, marktd_client::MarktdClient};
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 use tokio::sync::{RwLock, Semaphore};
 use tokio::task::JoinSet;
 use tracing::warn;
-use uuid::Uuid;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -113,6 +110,7 @@ pub async fn run_sync(
     entries: &[NisEntry],
     dry_run: bool,
     drift_webhook_url: Option<&str>,
+    drift_webhook_secret: Option<&str>,
     concurrency: usize,
 ) -> SyncReport {
     if entries.is_empty() {
@@ -159,7 +157,7 @@ pub async fn run_sync(
         && !dry_run
         && let Some(url) = drift_webhook_url
     {
-        emit_drift_event(url, nb_mp_id, &report).await;
+        emit_drift_event(url, drift_webhook_secret, nb_mp_id, &report).await;
     }
 
     report
@@ -224,31 +222,33 @@ async fn sync_entry(
 ///
 /// Fire-and-forget — a delivery failure is logged as a warning but does
 /// not affect the sync result or HTTP response.
-async fn emit_drift_event(webhook_url: &str, nb_mp_id: &str, report: &SyncReport) {
-    let event = serde_json::json!({
-        "specversion":     "1.0",
-        "id":              Uuid::new_v4().to_string(),
-        "source":          format!("urn:nis-syncd:nb:{nb_mp_id}"),
-        "type":            mako_events::markt::GRID_DRIFT_DETECTED,
-        "time":            OffsetDateTime::now_utc()
-                               .format(&Rfc3339)
-                               .unwrap_or_default(),
-        "datacontenttype": "application/json",
-        "data": {
+async fn emit_drift_event(
+    webhook_url: &str,
+    webhook_secret: Option<&str>,
+    nb_mp_id: &str,
+    report: &SyncReport,
+) {
+    let event = mako_service::CloudEvent::new(
+        mako_service::source("nis-syncd", nb_mp_id),
+        mako_events::markt::GRID_DRIFT_DETECTED,
+        String::new(),
+        serde_json::json!({
             "nb_mp_id":    nb_mp_id,
             "drift_count": report.drift_count,
             "updated":     report.updated,
             "error_count": report.errors.len(),
-        }
-    });
+        }),
+    )
+    .without_subject();
 
     let client = mako_service::http::default_client();
-    if let Err(e) = client
-        .post(webhook_url)
-        .header("Content-Type", "application/cloudevents+json")
-        .json(&event)
-        .send()
-        .await
+    if let Err(e) = mako_service::post_ce_with_retry(
+        &client,
+        webhook_url,
+        &event,
+        webhook_secret.map(str::as_bytes),
+    )
+    .await
     {
         warn!(
             webhook_url,

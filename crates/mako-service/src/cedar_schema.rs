@@ -234,7 +234,7 @@ impl SchemaPolicySet {
         if !validation.validation_passed() {
             let errors: String = validation
                 .validation_errors()
-                .map(|e| e.to_string())
+                .map(std::string::ToString::to_string)
                 .collect::<Vec<_>>()
                 .join("; ");
             return Err(AuthzBuildError::PolicyParse(errors));

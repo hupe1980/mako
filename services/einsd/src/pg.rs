@@ -685,7 +685,7 @@ pub struct SettleResult {
 /// Returns `None` when the cap does not apply to this plant.
 /// Returns `Some(eligible_kwh)` = max(0, annual_quota − ytd_before_this_period).
 async fn compute_biogas_sect44b_eligible(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     input: &SettleInput,
 ) -> anyhow::Result<Option<Decimal>> {
     use rust_decimal::dec;
@@ -712,7 +712,7 @@ async fn compute_biogas_sect44b_eligible(
         .bind(&input.tr_id)
         .bind(&input.tenant)
         .bind(input.billing_year)
-        .execute(pool)
+        .execute(&mut *conn)
         .await
         .context("reset biogas §44b YTD counter")?;
         Decimal::ZERO
@@ -727,7 +727,7 @@ async fn compute_biogas_sect44b_eligible(
 
 /// Update the Biogas §44b year-to-date counter after a successful settlement.
 async fn update_biogas_quota_ytd(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     tr_id: &str,
     tenant: &str,
     billing_year: i16,
@@ -743,7 +743,7 @@ async fn update_biogas_quota_ytd(
     .bind(tenant)
     .bind(billing_year)
     .bind(kwh_settled)
-    .execute(pool)
+    .execute(&mut *conn)
     .await
     .context("update biogas §44b YTD counter")?;
     Ok(())
@@ -821,7 +821,7 @@ fn derive_biomasse(anlage: &AnlageRow) -> Option<eeg_billing::biomasse::BiomassS
 /// 3. Generic EPEX monthly average from `epex_monthly_prices`
 /// 4. `None` (PriceMissing)
 pub async fn fetch_marktwert(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     billing_year: i16,
     billing_month: i16,
     erzeugungsart: &str,
@@ -838,7 +838,7 @@ pub async fn fetch_marktwert(
     .bind(billing_year)
     .bind(billing_month)
     .bind(erzeugungsart)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await
     .context("fetch Jahresmarktwert")?;
 
@@ -1049,7 +1049,10 @@ fn build_gutschrift(
     }
 }
 
-pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result<SettleResult> {
+pub async fn run_settlement(
+    conn: &mut sqlx::PgConnection,
+    input: SettleInput,
+) -> anyhow::Result<SettleResult> {
     use eeg_billing::{
         AusschreibungMetadata, SettleInput as EegInput, SettlementScheme, SettlementStatus,
         TariffSource, calculate_settlement,
@@ -1154,7 +1157,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
         .bind(input.einspeisemenge_kwh)
         .bind(rust_decimal::Decimal::ZERO)
         .bind("foerderung_beendet")
-        .execute(pool)
+        .execute(&mut *conn)
         .await
         .context("persist expired-award receipt")?;
         return Ok(SettleResult {
@@ -1193,7 +1196,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
         .bind(&input.tr_id)
         .bind(&input.tenant)
         .bind(bd)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await
         .ok()
         .flatten()
@@ -1319,7 +1322,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
             .bind(&input.tenant)
             .bind(ga)
             .bind(bd)
-            .fetch_optional(pool)
+            .fetch_optional(&mut *conn)
             .await
             .ok()
             .flatten()
@@ -1333,7 +1336,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
     let biogas_sect44b_eligible_kwh = if input.biogas_sect44b_eligible_kwh.is_some() {
         input.biogas_sect44b_eligible_kwh // caller-provided explicit override
     } else {
-        compute_biogas_sect44b_eligible(pool, &input)
+        compute_biogas_sect44b_eligible(&mut *conn, &input)
             .await
             .context("compute §44b Biogas quota")?
     };
@@ -1349,7 +1352,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
         "MARKET_PREMIUM" | "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG"
     ) {
         fetch_marktwert(
-            pool,
+            &mut *conn,
             input.billing_year,
             input.billing_month,
             &input.erzeugungsart,
@@ -1475,7 +1478,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
     .bind(&input.tenant)
     .bind(input.billing_year)
     .bind(input.billing_month)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await
     .context("check existing initial receipt")?;
 
@@ -1494,7 +1497,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
               ON CONFLICT DO NOTHING",
         )
         .bind(original_id)
-        .execute(pool)
+        .execute(&mut *conn)
         .await
         .context("snapshot receipt before overwrite")?;
     }
@@ -1545,7 +1548,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
     .bind(input.correction_reason.as_deref())
     .bind(rechnung_json.clone())
     .bind(gutschrift_nummer.clone())
-    .execute(pool)
+    .execute(&mut *conn)
     .await
     .context("persist settlement")?;
 
@@ -1559,7 +1562,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
         let kwh_to_add = effective_kwh.unwrap_or(rust_decimal::Decimal::ZERO);
         if kwh_to_add > rust_decimal::Decimal::ZERO {
             update_biogas_quota_ytd(
-                pool,
+                &mut *conn,
                 &input.tr_id,
                 &input.tenant,
                 input.billing_year,
@@ -1582,7 +1585,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
         .bind(&input.tr_id)
         .bind(&input.tenant)
         .bind(verlaengerungsanspruch_qh)
-        .execute(pool)
+        .execute(&mut *conn)
         .await
         .context("update verlaengerungsanspruch")?;
     }
@@ -1607,7 +1610,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
         .bind(&input.tenant)
         .bind(kwh_this_period)
         .bind(new_status)
-        .execute(pool)
+        .execute(&mut *conn)
         .await
         .context("update kwk_strom_kwh_gesamt")?;
     }
@@ -1641,7 +1644,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
         .bind(&input.tr_id)
         .bind(&input.tenant)
         .bind(new_settlement_state.to_db_str())
-        .fetch_optional(pool)
+        .fetch_optional(&mut *conn)
         .await
         .context("update settlement_state")?
         .flatten();
@@ -1665,7 +1668,7 @@ pub async fn run_settlement(pool: &PgPool, input: SettleInput) -> anyhow::Result
                 "abgeleitet bei Abrechnung {:04}-{:02}",
                 input.billing_year, input.billing_month
             ))
-            .execute(pool)
+            .execute(&mut *conn)
             .await
             .context("record settlement_state transition")?;
         }

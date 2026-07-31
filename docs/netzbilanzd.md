@@ -442,7 +442,7 @@ Content-Type: application/cloudevents+json
 {
   "specversion": "1.0",
   "type": "de.invoic.receipt.settled",
-  "source": "makod",
+  "source": "urn:mako:makod:tenant:9900357000004",
   "data": {
     "draft_id": "550e8400-...",
     "remadv_ref": "33001-REF-001"
@@ -614,9 +614,6 @@ are allowed (dev mode).
 ```toml
 # netzbilanzd.toml
 
-# PostgreSQL connection string
-database_url = "env:NETZBILANZD_DATABASE_URL"
-
 # HTTP port (default 8680)
 port = 8680
 
@@ -656,6 +653,11 @@ mcp_api_key = "env:NETZBILANZD_MCP_API_KEY"
 # Background worker intervals (seconds, 0 = disable)
 dispatch_alert_interval_secs    = 3600   # hourly undispatched-draft alert
 kostenblatt_alert_interval_secs = 86400  # daily Kostenblatt 15th deadline
+
+# PostgreSQL connection + pool tuning (table section — keep last)
+[database]
+url       = "env:NETZBILANZD_DATABASE_URL"
+pool_size = 10   # optional; default 10
 ```
 
 ### Environment variable overrides

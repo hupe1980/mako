@@ -348,16 +348,11 @@ pub(crate) async fn fail_reading_order(
     // announced rather than just recorded.
     if let Some(ref webhook_url) = state.erp_webhook_url {
         let client = mako_service::http::default_client();
-        let ce = serde_json::json!({
-            "specversion": "1.0",
-            "type": mako_events::messwert::READING_ORDER_FAILED,
-            "source": format!("urn:edmd:tenant:{}:{}", state.tenant, malo_id),
-            "id": uuid::Uuid::new_v4().to_string(),
-            "time": OffsetDateTime::now_utc().to_string(),
-            "subject": malo_id,
-            "tenantid": state.tenant,
-            "datacontenttype": "application/json",
-            "data": {
+        let ce = mako_service::CloudEvent::new(
+            mako_service::source("edmd", &state.tenant),
+            mako_events::messwert::READING_ORDER_FAILED,
+            malo_id.clone(),
+            serde_json::json!({
                 "order_id":          id.to_string(),
                 "malo_id":           malo_id,
                 "anlass":            anlass,
@@ -367,9 +362,19 @@ pub(crate) async fn fail_reading_order(
                 "ausfuehrender_msb": ausfuehrender_msb,
                 "recommended_action":
                     "Re-dispatch the reading, or estimate under §40a EnWG and document the basis",
-            }
-        });
-        post_ce_with_retry(&client, webhook_url, &ce, state.webhook_secret_bytes()).await;
+            }),
+        )
+        .extension("tenantid", state.tenant.clone());
+        if let Err(e) = mako_service::post_ce_with_retry(
+            &client,
+            webhook_url,
+            &ce,
+            state.webhook_secret_bytes(),
+        )
+        .await
+        {
+            tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
+        }
     }
 
     (

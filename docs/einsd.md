@@ -886,7 +886,7 @@ See [BNetzA Einspeisevergütungen](https://www.bundesnetzagentur.de/DE/Fachtheme
 
 | Key | Required | Default | Description |
 |---|---|---|---|
-| `database_url` | yes | — | PostgreSQL connection string |
+| `database.url` | yes | — | PostgreSQL connection string (`env:…` supported) |
 | `port` | no | `9180` | HTTP listen port |
 | `tenant` | yes | — | Tenant identifier — data-isolation key (any stable string; typically the operator’s BDEW- or DVGW-Codenummer) |
 | `erp_webhook_url` | no | — | ERP webhook for CloudEvents |
@@ -899,10 +899,12 @@ See [BNetzA Einspeisevergütungen](https://www.bundesnetzagentur.de/DE/Fachtheme
 
 ```toml
 # Minimal einsd.toml
-database_url = "postgresql://einsd:secret@db:5432/einsd"
-port         = 9180
-tenant       = "9910000000002"
-edmd_url     = "http://edmd:8380"
+port     = 9180
+tenant   = "9910000000002"
+edmd_url = "http://edmd:8380"
+
+[database]
+url = "postgresql://einsd:secret@db:5432/einsd"  # or "env:DATABASE_URL"
 ```
 
 ---
@@ -1029,7 +1031,7 @@ the credit against an actual document, not just an amount. Non-billable statuses
 {
   "specversion": "1.0",
   "type":        "de.eeg.verguetung.berechnet",
-  "source":      "urn:einsd:tenant:9910000000002",
+  "source":      "urn:mako:einsd:tenant:9910000000002",
   "id":          "a1b2c3d4-...",
   "subject":     "TR-SOLAR-001",
   "data": {

@@ -32,7 +32,9 @@ pub struct RatesConfig {
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct BillingdConfig {
-    pub database_url: String,
+    /// `[database]` block — connection URL plus pool tuning. The daemon runner
+    /// connects a tuned pool (with `application_name = "billingd"`) from this.
+    pub database: mako_service::config::DatabaseConfig,
 
     /// HTTP listen port.  Defaults to `9280`.
     pub port: Option<u16>,
@@ -136,6 +138,16 @@ pub struct BillingdConfig {
     #[serde(default)]
     pub vpp_auto_billing: bool,
 }
+
+impl mako_service::ServiceConfig for BillingdConfig {
+    fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
+        Some(&self.database)
+    }
+    fn bind_addr(&self) -> String {
+        format!("0.0.0.0:{}", self.port.unwrap_or(9280))
+    }
+}
+
 /// §40b EnWG billing-run worker configuration (`[billing_runs]`).
 ///
 /// The worker sweeps once per day after `run_hour_utc`: it pulls the active

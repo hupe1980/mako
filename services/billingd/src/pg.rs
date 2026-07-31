@@ -49,7 +49,7 @@ pub struct BillingRecordRow {
 }
 
 pub async fn insert_billing_record(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     tenant: &str,
     malo_id: &str,
     lf_mp_id: &str,
@@ -95,7 +95,7 @@ pub async fn insert_billing_record(
     .bind(rechnung_json)
     .bind(total_netto_eur)
     .bind(total_brutto_eur)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .context("insert_billing_record")?;
 
@@ -166,7 +166,7 @@ pub async fn mark_dispatched(pool: &PgPool, id: Uuid, ce_id: Uuid) -> anyhow::Re
 /// The `rechnung_json` must already have `istOriginal: false` and
 /// `originalRechnungsnummer` set by the caller; monetary amounts must already be negated.
 pub async fn insert_correction_record(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     tenant: &str,
     malo_id: &str,
     lf_mp_id: &str,
@@ -200,7 +200,7 @@ pub async fn insert_correction_record(
     .bind(total_brutto_eur)
     .bind(original_record_id)
     .bind(correction_reason)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await
     .context("insert_correction_record")?;
 
@@ -211,7 +211,7 @@ pub async fn insert_correction_record(
 ///
 /// Individual per-MaLo records are linked back via `sammelrechnung_id`.
 pub async fn insert_sammelrechnung_record(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     tenant: &str,
     rahmenvertrag_id: &str,
     lf_mp_id: &str,
@@ -237,7 +237,7 @@ pub async fn insert_sammelrechnung_record(
     .bind(rechnung_json)
     .bind(total_netto_eur)
     .bind(total_brutto_eur)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await
     .context("insert_sammelrechnung_record")?;
 
@@ -503,7 +503,7 @@ pub async fn is_vpp_dispatch_processed(
 
 /// Record a processed VPP dispatch for idempotency.
 pub async fn record_vpp_dispatch(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     tx_id: &str,
     tenant: &str,
     record_id: Option<Uuid>,
@@ -516,7 +516,7 @@ pub async fn record_vpp_dispatch(
     .bind(tx_id)
     .bind(tenant)
     .bind(record_id)
-    .execute(pool)
+    .execute(executor)
     .await
     .context("record_vpp_dispatch")?;
     Ok(())
@@ -713,7 +713,7 @@ pub async fn set_risk(
 /// Analyst release of a HELD record: stamps the release and returns the row
 /// for dispatch. `None` when the record is not currently HELD.
 pub async fn release_held_record(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     tenant: &str,
     record_id: Uuid,
     released_by: &str,
@@ -727,7 +727,7 @@ pub async fn release_held_record(
     .bind(record_id)
     .bind(tenant)
     .bind(released_by)
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .context("release_held_record")?;
     Ok(row)

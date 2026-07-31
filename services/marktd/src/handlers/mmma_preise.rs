@@ -363,7 +363,8 @@ pub async fn post_import_trigger(
     Extension(import_cfg): Extension<MmmaImportCfgExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
-    Extension(event_tx): Extension<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>,
+    Extension(pool): Extension<sqlx::PgPool>,
+    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     claims: Claims,
     Query(q): Query<ImportTriggerQuery>,
 ) -> impl IntoResponse {
@@ -386,7 +387,10 @@ pub async fn post_import_trigger(
         &gas_repo,
         &strom_repo,
         &tenant_gln,
-        &event_tx,
+        &crate::mmma_worker::EventSink {
+            pool: &pool,
+            notify: &notify,
+        },
     )
     .await;
 

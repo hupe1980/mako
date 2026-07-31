@@ -511,7 +511,10 @@ the loop.
 ## CloudEvents emitted
 
 All events are delivered as CloudEvents 1.0 JSON to `erp.webhook_url` with an
-`X-Mako-Signature: <HMAC-SHA256-hex>` header when `erp.hmac_secret` is configured.
+`X-Mako-Signature: sha256=<hex>` header when `erp.hmac_secret` is configured.
+Delivery is durable — each event is persisted to the `event_outbox` table in the
+same transaction as the contract change and drained by a background worker with
+retry and a dead-letter queue.
 
 | Event type | When |
 |---|---|
@@ -538,7 +541,6 @@ than silently skipped.
 
 ```toml
 # vertragd.toml
-database_url  = "postgresql://..."
 port          = 9780
 tenant        = "9900357000004"   # data-isolation key (operator tenant; value = BDEW-Codenummer in this example)
 lf_mp_id      = "9900357000004"
@@ -549,6 +551,10 @@ processd_url    = "http://processd:8580"
 tarifbd_url     = "http://tarifbd:9080"
 accountingd_url = "http://accountingd:9380"
 edmd_url        = "http://edmd:8380"
+
+# PostgreSQL connection + pool tuning
+[database]
+url = "postgresql://..."
 
 # OIDC/JWT — required in production; omit for dev mode (all write endpoints open)
 [oidc]

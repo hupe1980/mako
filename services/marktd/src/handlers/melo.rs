@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use axum::{
-    Json,
+    Extension, Json,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
@@ -146,6 +146,7 @@ pub struct MeloResponse {
 )]
 pub async fn put_melo<Ma, Me, Co, Su, Ci, Pa>(
     State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+    Extension(pool): Extension<sqlx::PgPool>,
     headers: HeaderMap,
     _claims: Claims,
     Path(id): Path<String>,
@@ -227,8 +228,13 @@ where
                 marktmaloid: req.malo_id.clone(),
                 ..Default::default()
             });
-            if let Ok(payload) = serde_json::to_value(&evt) {
-                let _ = state.event_tx.send(payload);
+            if let Err(e) = crate::outbox::enqueue(&pool, &evt, &state.notify).await {
+                tracing::error!(error = %e, "melo: durable enqueue failed");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "event enqueue failed"})),
+                )
+                    .into_response();
             }
 
             let status = if exists {

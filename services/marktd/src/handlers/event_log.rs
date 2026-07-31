@@ -63,7 +63,7 @@ pub async fn list_event_log(
     });
 
     let result = sqlx::query_as::<_, EventLogRow>(
-        r"SELECT id::TEXT, event_id, ce_type, ce_source, subject, data, received_at
+        r"SELECT event_id, ce_type, marktrole, sparte, envelope, fanned_out_at, received_at
           FROM event_log
           WHERE ($1::TIMESTAMPTZ IS NULL OR received_at >= $1)
             AND ($2::TIMESTAMPTZ IS NULL OR received_at <= $2)
@@ -89,11 +89,14 @@ pub async fn list_event_log(
 
 #[derive(Debug, serde::Serialize, sqlx::FromRow)]
 pub struct EventLogRow {
-    pub id: String,
     pub event_id: String,
     pub ce_type: String,
-    pub ce_source: Option<String>,
-    pub subject: Option<String>,
-    pub data: Option<serde_json::Value>,
+    pub marktrole: Option<String>,
+    pub sparte: Option<String>,
+    /// The full serialized `MarktEvent` envelope, for exact replay.
+    pub envelope: serde_json::Value,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub fanned_out_at: Option<time::OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339")]
     pub received_at: time::OffsetDateTime,
 }

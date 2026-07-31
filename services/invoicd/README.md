@@ -280,16 +280,18 @@ event store. `invoicd` only persists what it has personally checked (the
 
 ## Configuration
 
-`invoicd` is configured from a single TOML file. The binary accepts only three
-CLI arguments:
+`invoicd` is configured from a single TOML file, discovered by
+`mako_service::run` at startup:
 
-| Flag             | Env var          | Default        | Purpose                                              |
-|------------------|------------------|----------------|------------------------------------------------------|
-| `--config`, `-c` | `INVOICD_CONFIG` | `invoicd.toml` | Path to the TOML configuration file.                 |
-| `--log-level`    | `RUST_LOG`       | `info`         | Tracing filter.                                       |
-| `--check`        | `INVOICD_CHECK`  | `false`        | Validate config + DB connectivity, then exit `0`.    |
+| Setting          | Source                      | Default        | Purpose                                              |
+|------------------|-----------------------------|----------------|------------------------------------------------------|
+| Config file path | `INVOICD_CONFIG` env         | `invoicd.toml` | Path to the TOML configuration file.                 |
+| Tracing filter   | `LOG_LEVEL` / `RUST_LOG` env | `info`         | Log level filter.                                     |
+| `--check` flag   | container HEALTHCHECK        | —              | Probe the running instance's `/health/ready`, exit `0`/non-zero. |
 
-All other settings live in the TOML file. Any value may be written as
+Any TOML key may also be overridden by an `INVOICD_`-prefixed environment
+variable (`__` separates nested sections, e.g. `INVOICD_DATABASE__URL`). Any
+value may be written as
 `"env:VAR_NAME"` — at load time `invoicd` substitutes the value of the
 environment variable `VAR_NAME`. Only `env:`-prefixed strings are expanded; a
 plain string is used verbatim. This is how secrets (API keys, HMAC secrets,
@@ -358,9 +360,8 @@ max_zahlungsziel_days = 30
 # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 # audience = "api://mako-invoicd"
 
-# Optional OpenTelemetry export.
-# [otel]
-# endpoint = "http://otel-collector:4317"
+# Optional OpenTelemetry export — enabled via the OTEL_EXPORTER_OTLP_ENDPOINT
+# environment variable (OTEL_SERVICE_NAME overrides the service name).
 ```
 
 The `[database]` section is required: without it `invoicd` will not start.
@@ -383,7 +384,6 @@ the environment variables that the file references with `env:`.
 ```yaml
 invoicd:
   image: ghcr.io/hupe1980/invoicd:latest
-  command: ["--config", "/etc/invoicd/invoicd.toml"]
   environment:
     INVOICD_CONFIG:            /etc/invoicd/invoicd.toml
     DATABASE_URL:              postgres://invoicd:secret@postgres/invoicd

@@ -112,7 +112,8 @@ pub struct MarktEvent {
     pub specversion: String,
     /// Unique idempotency key for this event (UUID v4).
     pub id: String,
-    /// CloudEvents source — `"urn:markt:tenant:{tenant}"`.
+    /// CloudEvents source — `"urn:mako:marktd:tenant:{tenant}"` (the workspace
+    /// convention, matching `mako_service::source("marktd", tenant)`).
     pub source: String,
     /// CloudEvents type, e.g. `"de.markt.malo.updated"`.
     #[serde(rename = "type")]
@@ -190,7 +191,7 @@ impl MarktEvent {
         Self {
             specversion: "1.0".into(),
             id: Uuid::new_v4().to_string(),
-            source: format!("urn:markt:tenant:{tenant}"),
+            source: format!("urn:mako:marktd:tenant:{tenant}"),
             ce_type: ce_type.into(),
             time: OffsetDateTime::now_utc(),
             subject: subject.into(),
@@ -253,70 +254,20 @@ pub struct EventExtensions {
     pub tracestate: Option<String>,
 }
 
-// ── HMAC signature ────────────────────────────────────────────────────────────
-
-/// Compute `X-Mako-Signature: <hex>` for an outbound webhook delivery.
-///
-/// Uses HMAC-SHA256 over the raw JSON body bytes.
-///
-/// # Panics
-///
-/// Never panics in practice — HMAC accepts any key length.
-#[must_use]
-pub fn compute_signature(secret: &[u8], body: &[u8]) -> String {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
-
-    let mut mac = <Hmac<Sha256>>::new_from_slice(secret).expect("HMAC accepts any key length");
-    mac.update(body);
-    let result = mac.finalize().into_bytes();
-    hex::bytes_to_hex_str(&result)
-}
-
-/// Verify an `X-Mako-Signature` header in constant time.
-///
-/// Returns `true` if the signature matches.
-#[must_use]
-pub fn verify_signature(secret: &[u8], body: &[u8], provided_hex: &str) -> bool {
-    use subtle::ConstantTimeEq;
-    let expected = compute_signature(secret, body);
-    expected.as_bytes().ct_eq(provided_hex.as_bytes()).into()
-}
-
-// ── hex helpers ───────────────────────────────────────────────────────────────
-
-mod hex {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-
-    pub(super) fn bytes_to_hex_str(bytes: &[u8]) -> String {
-        let mut s = String::with_capacity(bytes.len() * 2);
-        for &b in bytes {
-            s.push(HEX[(b >> 4) as usize] as char);
-            s.push(HEX[(b & 0xf) as usize] as char);
-        }
-        s
-    }
-}
+// CloudEvent webhook signing/verification lives in `mako_service::webhook`
+// (`sign` / `verify_hmac`) — the one canonical HMAC-SHA256 implementation shared
+// by every emitter and verifier. `mako-markt` no longer carries its own copy.
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn hmac_roundtrip() {
-        let secret = b"test-secret";
-        let body = b"{\"type\":\"de.mako.process.completed\"}";
-        let sig = compute_signature(secret, body);
-        assert!(verify_signature(secret, body, &sig));
-        assert!(!verify_signature(secret, body, "deadbeef"));
-    }
-
-    #[test]
     fn makoworkflow_deserializes_from_cloudevent_json() {
         let json = r#"{
             "specversion": "1.0",
             "id": "evt-001",
-            "source": "urn:mako:tenant:9900000000001",
+            "source": "urn:mako:makod:tenant:9900000000001",
             "type": "de.mako.gpke.lieferbeginn.completed",
             "time": "2025-10-01T10:00:00Z",
             "makopid": 55003,
@@ -334,7 +285,7 @@ mod tests {
         let json = r#"{
             "specversion": "1.0",
             "id": "evt-002",
-            "source": "urn:mako:tenant:9900000000001",
+            "source": "urn:mako:makod:tenant:9900000000001",
             "type": "de.mako.gpke.lieferbeginn.completed",
             "time": "2025-10-01T10:00:00Z",
             "data": {}
@@ -351,7 +302,7 @@ mod tests {
             "DE000000000001",
             serde_json::json!({}),
         );
-        assert!(event.source.starts_with("urn:markt:tenant:"));
+        assert!(event.source.starts_with("urn:mako:marktd:tenant:"));
     }
 
     #[test]

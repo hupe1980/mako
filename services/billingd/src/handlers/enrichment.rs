@@ -587,7 +587,7 @@ mod nehs_overlay_tests {
     /// Minimal config; `rates` is spliced in as-is (`null` = no `[rates]`).
     fn cfg(rates: serde_json::Value) -> BillingdConfig {
         serde_json::from_value(serde_json::json!({
-            "database_url": "postgres://unused",
+            "database": { "url": "postgres://unused" },
             "tenant": "9900000000001",
             "tarifbd_url": "http://127.0.0.1:1",
             "edmd_url": "http://127.0.0.1:1",

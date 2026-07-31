@@ -428,30 +428,22 @@ async fn emit_tarifbd_event(
     let Some(webhook_url) = cfg.erp_webhook_url.as_deref() else {
         return;
     };
-    let ce = serde_json::json!({
-        "specversion": "1.0",
-        "type": event_type,
-        "source": format!("urn:tarifbd:lf:{}", cfg.tenant),
-        "id": uuid::Uuid::new_v4().to_string(),
-        "time": time::OffsetDateTime::now_utc().to_string(),
-        "subject": subject,
-        "tenantid": cfg.tenant,
-        "datacontenttype": "application/json",
-        "data": data,
-    });
-    let body = serde_json::to_string(&ce).unwrap_or_default();
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("tarifbd", &cfg.tenant),
+        event_type,
+        subject,
+        data,
+    )
+    .extension("tenantid", cfg.tenant.clone());
     let client = mako_service::http::default_client();
-    let mut builder = client
-        .post(webhook_url)
-        .header("Content-Type", "application/cloudevents+json");
-    if let Some(ref secret) = cfg.erp_hmac_secret {
-        let sig = format!(
-            "sha256={}",
-            mako_service::webhook::hmac_hex(secret.as_bytes(), body.as_bytes())
-        );
-        builder = builder.header("X-Mako-Signature", sig);
-    }
-    if let Err(e) = builder.body(body).send().await {
+    if let Err(e) = mako_service::post_ce_with_retry(
+        &client,
+        webhook_url,
+        &ce,
+        cfg.erp_hmac_secret.as_deref().map(str::as_bytes),
+    )
+    .await
+    {
         tracing::warn!(error = %e, event_type, "tarifbd: ERP webhook error");
     }
 }
@@ -1633,15 +1625,11 @@ pub async fn post_angebot_annehmen(
 
     // Emit de.tarif.angebot.angenommen CloudEvent.
     if let Some(ref webhook_url) = cfg.erp_webhook_url {
-        let ce = serde_json::json!({
-            "specversion": "1.0",
-            "type": mako_events::tarif::ANGEBOT_ANGENOMMEN,
-            "source": format!("urn:tarifbd:lf:{}", cfg.tenant),
-            "id": uuid::Uuid::new_v4().to_string(),
-            "time": time::OffsetDateTime::now_utc().to_string(),
-            "subject": angebot.id.to_string(),
-            "datacontenttype": "application/json",
-            "data": {
+        let ce = mako_service::CloudEvent::new(
+            mako_service::source("tarifbd", &cfg.tenant),
+            mako_events::tarif::ANGEBOT_ANGENOMMEN,
+            angebot.id.to_string(),
+            serde_json::json!({
                 "angebot_id": angebot.id,
                 "angebotsnummer": angebot.angebotsnummer,
                 "kunden_id": angebot.kunden_id,
@@ -1658,24 +1646,24 @@ pub async fn post_angebot_annehmen(
                 "varianten": angebot.varianten,
                 "jahreskosten_netto_eur": angebot.jahreskosten_netto_eur,
                 "jahreskosten_brutto_eur": angebot.jahreskosten_brutto_eur,
-            }
-        });
+            }),
+        );
         let client = mako_service::http::default_client();
-        let body_str = serde_json::to_string(&ce).unwrap_or_default();
-        // Only add X-Mako-Signature when a secret is configured.
-        // Sending an empty-string signature is worse than omitting the header:
-        // subscribers that verify signatures would accept a trivially forged payload.
+        // This emit consumes the webhook response to link the created
+        // Rahmenvertrag back to the Angebot, so it POSTs directly rather than
+        // via the fire-and-forget `post_ce_with_retry`. Envelope construction
+        // and the `sha256=<hex>` signature still come from `mako_service`.
+        let body_bytes = ce.to_bytes().unwrap_or_default();
         let mut builder = client
             .post(webhook_url)
             .header("Content-Type", "application/cloudevents+json");
         if let Some(ref secret) = cfg.erp_hmac_secret {
-            let sig = format!(
-                "sha256={}",
-                mako_service::webhook::hmac_hex(secret.as_bytes(), body_str.as_bytes())
+            builder = builder.header(
+                "x-mako-signature",
+                mako_service::webhook::sign(secret.as_bytes(), &body_bytes),
             );
-            builder = builder.header("X-Mako-Signature", sig);
         }
-        if let Ok(resp) = builder.json(&ce).send().await
+        if let Ok(resp) = builder.body(body_bytes).send().await
             && resp.status().is_success()
             && let Ok(body) = resp.json::<serde_json::Value>().await
             && let Some(rid) = body

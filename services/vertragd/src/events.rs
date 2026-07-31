@@ -12,19 +12,20 @@ use uuid::Uuid;
 /// `tenantid` (data-isolation scope) and `correlationid` (the Vertrag the
 /// event belongs to — same value as `subject`, so consumers correlate all
 /// lifecycle events of one contract without parsing `data`).
-pub fn build_cloud_event(event_type: &str, vertrag_id: Uuid, tenant: &str, data: Value) -> Value {
-    serde_json::json!({
-        "specversion": "1.0",
-        "type": event_type,
-        "source": format!("urn:vertragd:lf:{tenant}"),
-        "id": Uuid::new_v4().to_string(),
-        "time": time::OffsetDateTime::now_utc().to_string(),
-        "subject": vertrag_id.to_string(),
-        "tenantid": tenant,
-        "correlationid": vertrag_id.to_string(),
-        "datacontenttype": "application/json",
-        "data": data,
-    })
+pub fn build_cloud_event(
+    event_type: &str,
+    vertrag_id: Uuid,
+    tenant: &str,
+    data: Value,
+) -> mako_service::CloudEvent {
+    mako_service::CloudEvent::new(
+        mako_service::source("vertragd", tenant),
+        event_type,
+        vertrag_id.to_string(),
+        data,
+    )
+    .extension("tenantid", tenant)
+    .extension("correlationid", vertrag_id.to_string())
 }
 
 /// CloudEvent types emitted by `vertragd` (every emission goes through

@@ -11,9 +11,9 @@ code focuses on domain logic instead of plumbing.
              ┌──────────────────────────────────────────────────────────────┐
              │                     mako-service SDK                          │
              │                                                              │
-             │  config   shutdown  oidc      mcp_auth  telemetry            │
-             │  health   http      cedar     metrics   event_bus            │
-             │  webhook  builder   rate_limit           mako-plugin          │
+             │  config   shutdown  oidc       mcp_auth   telemetry           │
+             │  health   http      cedar      metrics    event_bus           │
+             │  webhook  builder   rate_limit cloudevent mako-plugin         │
              └──────────────────────────────────────────────────────────────┘
                   ↑            ↑             ↑           ↑
                makod        marktd        invoicd     processd  … (all 17)
@@ -25,6 +25,8 @@ code focuses on domain logic instead of plumbing.
 
 | Module | Key exports | Purpose |
 |---|---|---|
+| `service` | `run`, `Daemon`, `ServiceConfig`, `ServiceContext` | **The daemon lifecycle owner** — `main` = `run::<D>().await` |
+| `error` | `ApiError`, `ApiResult` | Shared HTTP error → JSON problem body (`?`-friendly) |
 | `config` | `load_config`, `DatabaseConfig`, `HttpConfig` | Layered TOML + env-var config loading |
 | `shutdown` | `token()`, `serve()` | Graceful shutdown — SIGINT **and** SIGTERM |
 | `oidc` | `OidcConfig`, `OidcVerifier`, `Claims` | OIDC/JWT verification + `build_verifier()` factory |
@@ -33,7 +35,9 @@ code focuses on domain logic instead of plumbing.
 | `cedar` | `CedarEnforcer` | Cedar ABAC policy enforcement |
 | `health` | `health_routes` | `/health/live` + `/health/ready` endpoints |
 | `http` | `default_client` | `reqwest::Client` with connect + request timeouts |
-| `webhook` | `verify_hmac` | Constant-time HMAC-SHA256 webhook verification |
+| `webhook` | `sign`, `verify_hmac`, `hmac_hex` | The one canonical HMAC-SHA256 signer/verifier (`sha256=<hex>`) |
+| `cloudevent` | `CloudEvent`, `source`, `post_ce_with_retry` | Canonical CloudEvents 1.0 envelope + signed, retried publisher |
+| `outbox` | `enqueue`, `OutboxWorker`, `ensure_schema` | Transactional outbox — persist-before-dispatch + drain worker + DLQ |
 | `builder` | `ServiceBuilder` | Composable Axum router with health, metrics, rate-limit |
 | `event_bus` | `EventBus`, `WebhookBus` | CloudEvent fan-out (webhook + optional Kafka) |
 | `metrics` | Prometheus handler | Real `GET /metrics` when feature `metrics` is enabled |
@@ -41,23 +45,45 @@ code focuses on domain logic instead of plumbing.
 
 ---
 
-## Quick-start: `main` skeleton
+## Quick-start: `main` is one line
 
-Every mako service `main` follows this pattern — no boilerplate, no copy-paste:
+`run::<D>()` owns the whole lifecycle — tracing, the **tuned** pool (with
+`application_name`), migrations, a **real** `/health/ready` (a `SELECT 1` DB
+ping, not `|| true`), the infra routes (health / metrics / tracing), bind, and
+graceful SIGINT/SIGTERM shutdown. A service supplies only its config type,
+migrations, and domain router + workers:
 
 ```rust,no_run
-use mako_service::{load_config, init_tracing_from_env, shutdown};
+use std::sync::Arc;
+use axum::Router;
+use mako_service::{Daemon, ServiceContext, ServiceConfig, config::DatabaseConfig};
+
+#[derive(serde::Deserialize)]
+struct MyConfig { database: DatabaseConfig, port: Option<u16> }
+impl ServiceConfig for MyConfig {
+    fn database(&self) -> &DatabaseConfig { &self.database }
+    fn bind_addr(&self) -> String { format!("0.0.0.0:{}", self.port.unwrap_or(8080)) }
+}
+
+struct MyService;
+impl Daemon for MyService {
+    type Config = MyConfig;
+    const NAME: &'static str = "my-service";
+
+    async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+        sqlx::migrate!("./migrations").run(pool).await?;
+        Ok(())
+    }
+
+    async fn build(cfg: Arc<MyConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
+        // spawn workers on ctx.shutdown; build the domain router with ctx.pool …
+        Ok(Router::new())
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _guard = init_tracing_from_env("my-service");   // structured JSON + OTel
-    let cfg: MyConfig = load_config("my-service")?;
-    let ct = shutdown::token();                          // SIGINT + SIGTERM → cancel
-
-    // … build pool, assemble Axum router …
-
-    let listener = tokio::net::TcpListener::bind(&cfg.http.addr).await?;
-    shutdown::serve(listener, app, ct).await             // graceful drain on signal
+    mako_service::run::<MyService>().await
 }
 ```
 
@@ -211,6 +237,27 @@ let _guard = mako_service::init_tracing("my-service", "debug", Some(&cfg.otel));
 
 ## Other utilities
 
+### Error handling
+
+Return `ApiResult<T>` from handlers and use `?` — every error renders as the same
+JSON problem body with the right status, and internal errors are logged, never
+leaked:
+
+```rust,no_run
+use mako_service::{ApiError, ApiResult};
+use axum::Json;
+
+async fn get_order(id: String, pool: sqlx::PgPool) -> ApiResult<Json<String>> {
+    if id.is_empty() {
+        return Err(ApiError::bad_request("id required"));   // → 400
+    }
+    // `?` maps sqlx RowNotFound → 404, any other DB error → 500 (logged)
+    let row: (String,) = sqlx::query_as("SELECT name FROM orders WHERE id = $1")
+        .bind(&id).fetch_one(&pool).await?;
+    Ok(Json(row.0))
+}
+```
+
 ### Health endpoints
 
 ```rust,no_run
@@ -230,14 +277,80 @@ let http = mako_service::http::default_client();
 // 5 s connect timeout · 30 s request timeout · pool_max_idle_per_host = 4
 ```
 
-### Webhook verification
+---
+
+## CloudEvents transport
+
+`mako-service` owns the whole CloudEvents *transport* layer — the envelope, the
+outbound publisher, and the one HMAC signer/verifier — so every daemon puts the
+same bytes on the wire. The event *type* names (and the glob matcher) live in the
+zero-dependency [`mako-events`](../mako-events/) catalog; everything about how an
+event is built, signed, and delivered lives here.
+
+### Emit an event
 
 ```rust,no_run
-use mako_service::webhook::verify_hmac;
+use mako_service::{CloudEvent, source, post_ce_with_retry, http::default_client};
 
-let ok = verify_hmac(secret, &body, provided_signature);
-// Accepts "sha256=…" and bare hex; constant-time comparison
+let ce = CloudEvent::new(
+    source("billingd", &tenant),                 // urn:mako:billingd:tenant:<tenant>
+    mako_service::cloud_events::billing::RECHNUNG_ERSTELLT, // type from the catalog
+    &malo_id,                                     // subject
+    serde_json::json!({ "betrag": "42.00" }),     // data
+);
+// Signs (X-Mako-Signature: sha256=<hex>) when the secret is Some, sends
+// Content-Type: application/cloudevents+json, retries transient failures 3×,
+// and returns immediately on a permanent 4xx.
+post_ce_with_retry(&default_client(), &webhook_url, &ce, secret.map(str::as_bytes)).await?;
 ```
+
+`CloudEvent::new` fixes the whole envelope by construction: `specversion = "1.0"`,
+`id` = UUID v4 (override with `.with_id` to carry an idempotency key), `time` =
+now in **RFC3339**, `datacontenttype = "application/json"`. Extension attributes
+(`makopid`, `traceparent`, …) chain via `.extension(k, v)` / `.extension_opt`.
+
+### Sign / verify
+
+```rust,no_run
+use mako_service::webhook::{sign, verify_hmac};
+
+let header = sign(secret, &body);               // "sha256=<hex>" — the canonical form
+let ok = verify_hmac(secret, &body, provided);  // constant-time; tolerates bare hex too
+```
+
+There is exactly **one** signer and **one** verifier in the workspace. `sign`
+always emits the `sha256=` prefix; `verify_hmac` accepts it or a bare hex digest,
+so producer and consumer can never disagree on the format.
+
+### Never lose an event: the transactional outbox
+
+An emitter must never drop a domain event because the HTTP POST failed *after*
+the business row committed. `outbox` is the fix — *persist-before-dispatch*:
+write the event to a table **in the same transaction as the business write**,
+then a background worker delivers it (at-least-once, retried, dead-lettered).
+
+```rust,no_run
+# async fn ex(pool: sqlx::PgPool, ce: mako_service::CloudEvent, ct: tokio_util::sync::CancellationToken) -> Result<(), sqlx::Error> {
+// One-time, at startup:
+mako_service::outbox::ensure_schema(&pool).await?;
+tokio::spawn(mako_service::outbox::OutboxWorker::new(pool.clone(), "https://erp/events", None).run(ct));
+
+// In a handler — event and domain write commit together, or not at all:
+let mut tx = pool.begin().await?;
+// … the business INSERT/UPDATE on &mut *tx …
+mako_service::outbox::enqueue(&mut tx, &ce).await?;
+tx.commit().await?;
+# Ok(()) }
+```
+
+Delivery reuses `post_ce_with_retry` (signing, `X-Idempotency-Key`,
+permanent-vs-transient), so a receiver dedups the at-least-once duplicates on the
+CloudEvent `id`. The worker claims batches with a lease (`FOR UPDATE SKIP LOCKED`
++ a forward-pushed `next_attempt_at`), so it holds no long locks and recovers
+in-flight events after a crash. Dead-letters are a status column on the same row —
+inspect and requeue with `outbox::list_dead_letters` / `outbox::requeue`.
+Delivered rows are pruned hourly past `OutboxConfig::retention` (default 30 days),
+so the table stays small.
 
 ---
 

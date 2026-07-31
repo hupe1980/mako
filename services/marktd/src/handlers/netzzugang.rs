@@ -33,18 +33,20 @@ use super::{Claims, IntoMdmResponse as _, TenantGln};
 
 /// Injected `Arc<PgNetzzugangRepository>`.
 pub type NetzzugangRepoExt = Arc<crate::pg::PgNetzzugangRepository>;
-type EventTx = tokio::sync::mpsc::UnboundedSender<serde_json::Value>;
-
-fn emit(event_tx: &EventTx, tenant: &str, subject: String, data: serde_json::Value) {
+async fn emit(
+    pool: &sqlx::PgPool,
+    notify: &tokio::sync::Notify,
+    tenant: &str,
+    subject: String,
+    data: serde_json::Value,
+) -> Result<(), sqlx::Error> {
     let evt = MarktEvent::new(
         tenant,
         mako_events::markt::NETZZUGANG_ANTRAG_UPDATED,
         subject,
         data,
     );
-    if let Ok(payload) = serde_json::to_value(&evt) {
-        let _ = event_tx.send(payload);
-    }
+    crate::outbox::enqueue(pool, &evt, notify).await
 }
 
 fn antrag_event(rec: &NetzzugangAntrag, version: i64) -> serde_json::Value {
@@ -77,7 +79,8 @@ pub async fn upsert_antrag(
     Extension(repo): Extension<NetzzugangRepoExt>,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(TenantGln(tenant)): Extension<TenantGln>,
-    Extension(event_tx): Extension<EventTx>,
+    Extension(pool): Extension<sqlx::PgPool>,
+    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Json(mut rec): Json<NetzzugangAntrag>,
 ) -> impl IntoResponse {
     if let Err(e) = cedar.check(&claims.principal(), "write-netzzugang", &tenant) {
@@ -97,12 +100,18 @@ pub async fn upsert_antrag(
     match repo.upsert(&rec).await {
         Ok((id, version)) => {
             rec.id = id;
-            emit(
-                &event_tx,
+            if let Err(e) = emit(
+                &pool,
+                &notify,
                 &tenant,
                 id.to_string(),
                 antrag_event(&rec, version),
-            );
+            )
+            .await
+            {
+                tracing::error!(error = %e, "netzzugang: durable enqueue failed");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
             (
                 StatusCode::OK,
                 Json(serde_json::json!({ "id": id, "version": version })),
@@ -217,12 +226,14 @@ pub struct StatusBody {
         (status = 412, description = "expected_version does not match the stored version"),
     )
 )]
+#[allow(clippy::too_many_arguments)]
 pub async fn set_antrag_status(
     claims: Claims,
     Extension(repo): Extension<NetzzugangRepoExt>,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(TenantGln(tenant)): Extension<TenantGln>,
-    Extension(event_tx): Extension<EventTx>,
+    Extension(pool): Extension<sqlx::PgPool>,
+    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Path(id): Path<Uuid>,
     Json(body): Json<StatusBody>,
 ) -> impl IntoResponse {
@@ -241,12 +252,18 @@ pub async fn set_antrag_status(
         .await
     {
         Ok(Some(rec)) => {
-            emit(
-                &event_tx,
+            if let Err(e) = emit(
+                &pool,
+                &notify,
                 &tenant,
                 id.to_string(),
                 antrag_event(&rec.antrag, rec.version),
-            );
+            )
+            .await
+            {
+                tracing::error!(error = %e, "netzzugang: durable enqueue failed");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
             (StatusCode::OK, Json(serde_json::json!({ "data": rec }))).into_response()
         }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),

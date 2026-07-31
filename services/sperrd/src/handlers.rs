@@ -4,9 +4,10 @@ use axum::{
     Extension, Json,
     extract::{Path, Query},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
 };
 use mako_markt::makod_client::MakodClient;
+use mako_service::{ApiError, ApiResult};
 use serde::Deserialize;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -38,11 +39,11 @@ pub async fn create_order(
     Extension(pool): Extension<PgPool>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Json(req): Json<CreateOrderRequest>,
-) -> impl IntoResponse {
-    match create_order_pg(&pool, &tenant, req).await {
-        Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
-    }
+) -> ApiResult<Response> {
+    let id = create_order_pg(&pool, &tenant, req)
+        .await
+        .map_err(|e| ApiError::unprocessable(e.to_string()))?;
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response())
 }
 
 /// `GET /api/v1/sperr-orders`
@@ -50,8 +51,8 @@ pub async fn list_orders(
     Extension(pool): Extension<PgPool>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Query(q): Query<OrdersQuery>,
-) -> impl IntoResponse {
-    match list_orders_pg(
+) -> ApiResult<Response> {
+    let rows = list_orders_pg(
         &pool,
         &tenant,
         q.status.as_deref(),
@@ -59,23 +60,17 @@ pub async fn list_orders(
         q.older_than_hours,
         q.limit.unwrap_or(100).min(1000),
     )
-    .await
-    {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+    .await?;
+    Ok(Json(rows).into_response())
 }
 
 /// `GET /api/v1/sperr-orders/{id}`
 pub async fn get_order(
     Extension(pool): Extension<PgPool>,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
-    match fetch_order_pg(&pool, id).await {
-        Ok(Some(row)) => Json(row).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+) -> ApiResult<Response> {
+    let row = fetch_order_pg(&pool, id).await?.ok_or(ApiError::NotFound)?;
+    Ok(Json(row).into_response())
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,8 +90,8 @@ pub async fn execute_order(
     Extension(makod): Extension<Arc<MakodClient>>,
     Path(id): Path<Uuid>,
     Json(req): Json<ExecuteRequest>,
-) -> impl IntoResponse {
-    match execute_order_pg(
+) -> ApiResult<StatusCode> {
+    let done = execute_order_pg(
         &pool,
         &makod,
         id,
@@ -104,10 +99,11 @@ pub async fn execute_order(
         req.executed_at.as_deref(),
     )
     .await
-    {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+    .map_err(|e| ApiError::unprocessable(e.to_string()))?;
+    if done {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::NotFound)
     }
 }
 
@@ -128,11 +124,14 @@ pub async fn fail_order(
     Extension(makod): Extension<Arc<MakodClient>>,
     Path(id): Path<Uuid>,
     Json(req): Json<FailRequest>,
-) -> impl IntoResponse {
-    match fail_order_pg(&pool, &makod, id, &req.reason).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+) -> ApiResult<StatusCode> {
+    let done = fail_order_pg(&pool, &makod, id, &req.reason)
+        .await
+        .map_err(|e| ApiError::unprocessable(e.to_string()))?;
+    if done {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::NotFound)
     }
 }
 
@@ -146,11 +145,14 @@ pub async fn fail_order(
 pub async fn cancel_order(
     Extension(pool): Extension<PgPool>,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
-    match cancel_order_pg(&pool, id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+) -> ApiResult<StatusCode> {
+    let done = cancel_order_pg(&pool, id)
+        .await
+        .map_err(|e| ApiError::unprocessable(e.to_string()))?;
+    if done {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::NotFound)
     }
 }
 
@@ -163,9 +165,6 @@ pub async fn cancel_order(
 pub async fn get_stats(
     Extension(pool): Extension<PgPool>,
     Extension(Tenant(tenant)): Extension<Tenant>,
-) -> impl IntoResponse {
-    match stats_pg(&pool, &tenant).await {
-        Ok(stats) => Json(stats).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+) -> ApiResult<Response> {
+    Ok(Json(stats_pg(&pool, &tenant).await?).into_response())
 }

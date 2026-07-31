@@ -924,7 +924,6 @@ forms — Endrechnung by deduction, or Restrechnung by residual.
 
 ```toml
 # billingd.toml
-database_url  = "postgresql://billingd:secret@db:5432/billingd"
 port          = 9280
 tenant        = "9910000000002"
 tarifbd_url   = "http://tarifbd:9080"
@@ -945,4 +944,8 @@ erp_webhook_url = "http://erp:8000/webhooks/billing"
 # Set vpp_auto_billing = true and register vpp_contracts for each SR-ID.
 vpp_auto_billing       = false          # flip to true to enable auto-billing
 inbound_webhook_secret = "env:BILLINGD_INBOUND_HMAC_SECRET"  # HMAC for POST /webhooks/vpp-dispatch
+
+[database]
+url = "postgresql://billingd:secret@db:5432/billingd"
+# pool_size = 10   # optional pool tuning (min_connections, acquire/idle/max_lifetime)
 ```

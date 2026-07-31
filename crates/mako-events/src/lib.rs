@@ -133,10 +133,11 @@ pub mod markt {
 
 /// Billing events (`de.billing.*`), emitted by `billingd`.
 pub mod billing {
-    /// Invoice (Rechnung) created.
+    /// Invoice (Rechnung) created. A credit note / Stornorechnung is the same
+    /// event with `data.is_correction = true` and a negated amount — there is
+    /// deliberately no separate `gutschrift` type (one signed document stream is
+    /// cleaner for the double-entry ledger, and avoids a double-booking hazard).
     pub const RECHNUNG_ERSTELLT: &str = "de.billing.rechnung.erstellt";
-    /// Credit note (Gutschrift) created.
-    pub const GUTSCHRIFT_ERSTELLT: &str = "de.billing.gutschrift.erstellt";
     /// Monthly Abrechnungsinformation (§40 EnWG) generated.
     pub const ABRECHNUNGSINFORMATION_MONATLICH: &str =
         "de.billing.abrechnungsinformation.monatlich";
@@ -402,7 +403,6 @@ pub fn all() -> &'static [&'static str] {
         markt::GRID_DRIFT_DETECTED,
         // de.billing.*
         billing::RECHNUNG_ERSTELLT,
-        billing::GUTSCHRIFT_ERSTELLT,
         billing::ABRECHNUNGSINFORMATION_MONATLICH,
         billing::XRECHNUNG_B2G_READY,
         // de.invoic.*

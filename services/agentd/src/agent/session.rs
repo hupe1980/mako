@@ -26,17 +26,15 @@ pub struct AgentDecision {
 }
 
 impl AgentDecision {
-    pub fn to_cloud_event(&self, tenant: &str) -> Value {
-        serde_json::json!({
-            "specversion": "1.0",
-            "type": mako_events::agent::DECISION_MADE,
-            "source": format!("agentd/{tenant}/{}", self.agent_name),
-            "id": uuid::Uuid::new_v4().to_string(),
-            "time": time::OffsetDateTime::now_utc()
-                .format(&time::format_description::well_known::Rfc3339)
-                .unwrap_or_default(),
-            "data": self,
-        })
+    pub fn to_cloud_event(&self, tenant: &str) -> mako_service::CloudEvent {
+        // The agent name previously lived in the `source` URI; the canonical
+        // `source` is `urn:mako:agentd:tenant:{tenant}`, so it moves to `subject`.
+        mako_service::CloudEvent::new(
+            mako_service::source("agentd", tenant),
+            mako_events::agent::DECISION_MADE,
+            &self.agent_name,
+            serde_json::json!(self),
+        )
     }
 }
 
@@ -265,23 +263,26 @@ mod tests {
     fn to_cloud_event_required_fields() {
         let d = make_decision("mako-agent", "completed");
         let ce = d.to_cloud_event("9910000000002");
-        assert_eq!(ce["specversion"], "1.0");
-        assert_eq!(ce["type"], mako_events::agent::DECISION_MADE);
-        assert!(ce["id"].as_str().is_some_and(|s| !s.is_empty()));
-        assert!(ce["time"].as_str().is_some_and(|s| s.contains('T')));
-        let src = ce["source"].as_str().unwrap();
-        assert!(src.contains("9910000000002"), "source must contain tenant");
-        assert!(src.contains("mako-agent"), "source must contain agent name");
+        assert_eq!(ce.specversion, "1.0");
+        assert_eq!(ce.ce_type, mako_events::agent::DECISION_MADE);
+        assert!(!ce.id.is_empty());
+        assert!(ce.time.contains('T'));
+        assert!(
+            ce.source.contains("9910000000002"),
+            "source must contain tenant"
+        );
+        // The agent name now lives in `subject`, not `source`.
+        assert_eq!(ce.subject.as_deref(), Some("mako-agent"));
     }
 
     #[test]
     fn to_cloud_event_data_contains_outcome() {
         let d = make_decision("eeg-agent", "handoff:billing-agent");
         let ce = d.to_cloud_event("tenant-x");
-        assert_eq!(ce["data"]["agent_name"], "eeg-agent");
-        assert_eq!(ce["data"]["outcome"], "handoff:billing-agent");
-        assert_eq!(ce["data"]["tool_calls"], 3);
-        assert_eq!(ce["data"]["turns"], 2);
+        assert_eq!(ce.data["agent_name"], "eeg-agent");
+        assert_eq!(ce.data["outcome"], "handoff:billing-agent");
+        assert_eq!(ce.data["tool_calls"], 3);
+        assert_eq!(ce.data["turns"], 2);
     }
 
     #[test]

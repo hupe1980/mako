@@ -18,7 +18,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use mako_service::cedar::CedarEnforcer;
-use mako_service::event_bus::{WebhookBus, WebhookBusConfig};
 use marktd::{
     config::{self, Config},
     fanout::{FanoutConfig, spawn as spawn_fanout},
@@ -160,13 +159,19 @@ async fn main() -> anyhow::Result<()> {
 
     // ── PostgreSQL ────────────────────────────────────────────────────────────
     info!("marktd: connecting to PostgreSQL");
+    // Tag every connection `marktd` in `pg_stat_activity` for attribution (a bare
+    // `.connect(url)` leaves it as the generic driver default).
+    let connect_options = db_url
+        .parse::<sqlx::postgres::PgConnectOptions>()
+        .context("parsing DATABASE_URL")?
+        .application_name("marktd");
     let pool = PgPoolOptions::new()
         .max_connections(cfg.storage.postgres.max_connections)
         .min_connections(cfg.storage.postgres.min_connections)
         .acquire_timeout(Duration::from_secs(
             cfg.storage.postgres.acquire_timeout_secs,
         ))
-        .connect(&db_url)
+        .connect_with(connect_options)
         .await
         .context("connecting to PostgreSQL")?;
 
@@ -274,26 +279,13 @@ async fn main() -> anyhow::Result<()> {
     // the 17008 Abbestellung at makod.
     let makod_client_ext = Arc::clone(&makod_client);
 
-    // ── MPSC event channel ─────────────────────────────────────────────────
-    // Unlike broadcast, unbounded MPSC never drops events when the receiver
-    // lags.  There is exactly one consumer (the fan-out worker).
-    //
-    // `Value`-typed so the fan-out worker and the `EventBus` abstraction
-    // share the same channel without a typed `MarktEvent` dep in mako-service.
-    let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
-    // Clone for background workers that need to emit CloudEvents.
-    let event_tx_for_workers = event_tx.clone();
-
-    // ── EventBus abstraction ─────────────────────────────────────────────────
-    // Wraps the fan-out MPSC channel behind `Arc<dyn EventBus>`.
-    // Swap in `KafkaBus` here (feature "kafka") without touching any handler.
-    let _event_bus: Arc<dyn mako_service::event_bus::EventBus> = Arc::new(
-        WebhookBus::new(WebhookBusConfig {
-            delivery_timeout: Duration::from_secs(cfg.webhook.delivery_timeout_secs),
-            max_retry_attempts: cfg.webhook.max_retry_attempts,
-        })
-        .with_sender(event_tx.clone()),
-    );
+    // ── Durable fan-out wake-up hint ───────────────────────────────────────────
+    // No in-memory event channel anymore: producers persist every event to the
+    // `event_log` outbox (marktd::outbox::enqueue) BEFORE any fan-out, and the
+    // durable fan-out worker is the sole consumer of `event_log`/`event_delivery`.
+    // `notify` is only a low-latency wake-up hint — correctness rests on the
+    // tables, so a missed notification only delays, never drops, delivery.
+    let notify = Arc::new(tokio::sync::Notify::new());
 
     // ── AppState ──────────────────────────────────────────────────────────────
     let state = Arc::new(AppState {
@@ -304,19 +296,20 @@ async fn main() -> anyhow::Result<()> {
         correlation_index: ci,
         partner_repo,
         makod_client,
-        event_tx,
+        notify: notify.clone(),
         tenant_gln: cfg.makod.tenant.clone(),
     });
 
     spawn_fanout(
-        event_rx,
+        pool.clone(),
         sub_repo,
         http.clone(),
         FanoutConfig {
             delivery_timeout: Duration::from_secs(cfg.webhook.delivery_timeout_secs),
-            max_retry_attempts: cfg.webhook.max_retry_attempts,
+            max_attempts: i16::try_from(cfg.webhook.max_retry_attempts).unwrap_or(5),
+            ..Default::default()
         },
-        pool.clone(), // DLQ writes on delivery failure — § 147 AO / GoBD compliance
+        notify.clone(),
         shutdown.clone(),
     );
 
@@ -380,7 +373,8 @@ async fn main() -> anyhow::Result<()> {
             mmma_gas_repo,
             mmma_strom_repo,
             cfg.makod.tenant.clone(),
-            event_tx_for_workers.clone(),
+            pool.clone(),
+            notify.clone(),
             shutdown.clone(),
         );
     }
@@ -727,8 +721,14 @@ async fn main() -> anyhow::Result<()> {
             .route(&inbound_path, post(ingest_event::<_, _, _, _, _, _>))
             // Dead-letter queue admin (F-003 — § 147 AO / GoBD compliance)
             .route("/admin/fanout/dlq", get(list_dlq))
-            .route("/admin/fanout/dlq/{id}", delete(delete_dlq_entry))
-            .route("/admin/fanout/dlq/{id}/retry", post(retry_dlq_entry))
+            .route(
+                "/admin/fanout/dlq/{event_id}/{subscriber_id}",
+                delete(delete_dlq_entry),
+            )
+            .route(
+                "/admin/fanout/dlq/{event_id}/{subscriber_id}/retry",
+                post(retry_dlq_entry),
+            )
             // CloudEvent replay log admin (B11)
             .route("/admin/events", get(list_event_log))
             // Prometheus-compatible metrics (F-006)
@@ -788,8 +788,10 @@ async fn main() -> anyhow::Result<()> {
             .layer(Extension(makod_client_ext))
             // ZaehlzeitRegister + ZaehlzeitSaison (iMSys TOU)
             .layer(Extension(zaehzeit_repo))
-            // event_tx extension for handlers that emit CloudEvents without AppState
-            .layer(Extension(state.event_tx.clone()))
+            // Fan-out wake-up hint for handlers that emit CloudEvents without AppState.
+            // Paired with the global Extension(pool) layer above, handlers call
+            // marktd::outbox::enqueue(&pool, &evt, &notify).
+            .layer(Extension(notify.clone()))
             // Cedar ABAC enforcer
             .layer(Extension(cedar))
             // Tenant GLN for handlers without AppState access (e.g. preisblatt)

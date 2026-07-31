@@ -52,8 +52,9 @@ graph TB
 │  GET  /obs/kpis                 ← BNetzA KPI report (per PID)   │
 │  GET  /obs/overdue              ← processes past deadline        │
 │  GET  /api/v1/audit/bnetza-report ← §20 Abs.1 EnWG annual audit │
-│  GET  /metrics                  ← Prometheus metrics            │
-│  GET  /health/live  /health/ready                               │
+│  GET  /obs/metrics              ← obsd business gauges (Prom)   │
+│  GET  /metrics                  ← request metrics (SDK)         │
+│  GET  /health/live  /health/ready ← liveness + real DB-ping    │
 │  POST|GET /mcp                  ← MCP Streamable HTTP           │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -215,17 +216,13 @@ set.
 `obsd` reads its configuration from a **TOML file** (default: `obsd.toml`),
 with secrets deferred to environment variables via `"env:VAR_NAME"` values.
 
-### CLI flags
-
-| Flag | Env var | Default | Description |
-|------|---------|---------|-------------|
-| `--config` / `-c` | `OBSD_CONFIG` | `obsd.toml` | Path to `obsd.toml` |
-| `--log-level` | `RUST_LOG` | `info` | Log level |
-| `--check` | `OBSD_CHECK` | `false` | Validate config + DB connectivity, then exit 0. Used by Dockerfile HEALTHCHECK. |
+The config file is located via `OBSD_CONFIG` (an absolute or relative path), or
+`./obsd.toml` in the working directory when that variable is unset. Individual
+keys may be overridden by `OBSD_`-prefixed environment variables (`__` separates
+nested sections, e.g. `OBSD_DATABASE__URL`); `RUST_LOG` sets the log level.
 
 ```bash
-obsd --config /etc/obsd/obsd.toml
-# or: OBSD_CONFIG=/etc/obsd/obsd.toml obsd
+OBSD_CONFIG=/etc/obsd/obsd.toml obsd
 ```
 
 ### Full `obsd.toml` reference

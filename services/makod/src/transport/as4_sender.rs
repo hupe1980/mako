@@ -82,7 +82,7 @@ use crate::party_registry::MpIdRegistry;
 /// {
 ///   "specversion": "1.0",
 ///   "type": "de.mako.edifact.outbound",
-///   "source": "urn:mako:tenant:<tenant_id>",
+///   "source": "urn:mako:makod:tenant:<tenant_id>",
 ///   "id": "<message_id>",
 ///   "subject": "<process_id>",
 ///   "makomessagetype": "UTILMD",
@@ -196,31 +196,29 @@ impl As4Sender for WebhookEdifactSender {
                     }
                 };
 
-            let body = serde_json::json!({
-                "specversion":     "1.0",
-                "type":            mako_events::mako::EDIFACT_OUTBOUND,
-                "source":          format!("urn:mako:tenant:{}", mp_id_registry.primary_mp_id()),
-                "id":              msg_owned.message_id.to_string(),
-                "subject":         msg_owned.process_id.to_string(),
-                "time":            time::OffsetDateTime::now_utc()
-                    .format(&time::format_description::well_known::Rfc3339)
-                    .unwrap_or_default(),
-                "datacontenttype": "application/json",
-                "makoconvid":      msg_owned.conversation_id.to_string(),
-                "makomessagetype": msg_owned.message_type.as_ref(),
-                "makorecipient":   msg_owned.recipient.as_ref(),
-                "data": {
+            let ce = mako_service::CloudEvent::new(
+                mako_service::source("makod", mp_id_registry.primary_mp_id()),
+                mako_events::mako::EDIFACT_OUTBOUND,
+                msg_owned.process_id.to_string(),
+                serde_json::json!({
                     "message_type": msg_owned.message_type.as_ref(),
                     "recipient":    msg_owned.recipient.as_ref(),
                     "edifact":      edifact_str,
-                },
-            });
+                }),
+            )
+            .with_id(msg_owned.message_id.to_string())
+            .extension("makoconvid", msg_owned.conversation_id.to_string())
+            .extension("makomessagetype", msg_owned.message_type.as_ref())
+            .extension("makorecipient", msg_owned.recipient.as_ref());
+            let body = ce.to_bytes().map_err(|e| {
+                EngineError::Serialization(format!("EDIFACT_OUTBOUND CloudEvent: {e}"))
+            })?;
 
             let resp = http_client
                 .post(webhook_url.as_ref())
                 .header("Content-Type", "application/cloudevents+json")
                 .header("X-Idempotency-Key", msg_owned.message_id.to_string())
-                .json(&body)
+                .body(body)
                 .send()
                 .await
                 .map_err(|e| EngineError::Transport {

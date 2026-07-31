@@ -38,13 +38,16 @@ use super::{Claims, IntoMdmResponse as _, TenantGln};
 
 /// Injected `Arc<PgEinwilligungRepository>`.
 pub type EinwilligungRepoExt = Arc<crate::pg::PgEinwilligungRepository>;
-type EventTx = tokio::sync::mpsc::UnboundedSender<serde_json::Value>;
-
-fn emit(event_tx: &EventTx, tenant: &str, ce_type: &str, subject: String, data: serde_json::Value) {
+async fn emit(
+    pool: &sqlx::PgPool,
+    notify: &tokio::sync::Notify,
+    tenant: &str,
+    ce_type: &str,
+    subject: String,
+    data: serde_json::Value,
+) -> Result<(), sqlx::Error> {
     let evt = MarktEvent::new(tenant, ce_type, subject, data);
-    if let Ok(payload) = serde_json::to_value(&evt) {
-        let _ = event_tx.send(payload);
-    }
+    crate::outbox::enqueue(pool, &evt, notify).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,7 +73,8 @@ pub async fn grant_einwilligung(
     _claims: Claims,
     Extension(repo): Extension<EinwilligungRepoExt>,
     Extension(TenantGln(tenant)): Extension<TenantGln>,
-    Extension(event_tx): Extension<EventTx>,
+    Extension(pool): Extension<sqlx::PgPool>,
+    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Json(body): Json<GrantBody>,
 ) -> impl IntoResponse {
     if body.location_ids.is_empty() {
@@ -98,8 +102,9 @@ pub async fn grant_einwilligung(
     };
     match repo.grant(rec).await {
         Ok(id) => {
-            emit(
-                &event_tx,
+            if let Err(e) = emit(
+                &pool,
+                &notify,
                 &tenant,
                 mako_events::markt::EINWILLIGUNG_ERTEILT,
                 id.to_string(),
@@ -109,7 +114,12 @@ pub async fn grant_einwilligung(
                     "anschlussnutzer_ref": body.anschlussnutzer_ref,
                     "location_ids": body.location_ids,
                 }),
-            );
+            )
+            .await
+            {
+                tracing::error!(error = %e, "einwilligung: durable enqueue failed");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
             (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
         }
         Err(e) => e.into_response(),
@@ -161,7 +171,8 @@ pub async fn revoke_einwilligung(
     _claims: Claims,
     Extension(repo): Extension<EinwilligungRepoExt>,
     Extension(TenantGln(tenant)): Extension<TenantGln>,
-    Extension(event_tx): Extension<EventTx>,
+    Extension(pool): Extension<sqlx::PgPool>,
+    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Extension(makod): Extension<Arc<MakodClient>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
@@ -171,8 +182,9 @@ pub async fn revoke_einwilligung(
         Err(e) => return e.into_response(),
     };
 
-    emit(
-        &event_tx,
+    if let Err(e) = emit(
+        &pool,
+        &notify,
         &tenant,
         mako_events::markt::EINWILLIGUNG_WIDERRUFEN,
         id.to_string(),
@@ -182,7 +194,12 @@ pub async fn revoke_einwilligung(
             "anschlussnutzer_ref": revoked.anschlussnutzer_ref,
             "location_ids": revoked.location_ids,
         }),
-    );
+    )
+    .await
+    {
+        tracing::error!(error = %e, "einwilligung: widerrufen durable enqueue failed");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
 
     // GDPR Art. 7(3): stopping value delivery requires an Abbestellung (17008,
     // NBA 1) per covered location. Fire it at makod — best-effort so a makod

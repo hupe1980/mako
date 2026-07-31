@@ -179,8 +179,16 @@ pub async fn post_sammelrechnung(
     };
     let (total_netto, total_brutto) = (sammel_invoice.netto_eur, sammel_invoice.brutto_eur);
 
+    // The Sammelrechnung row is the representing write for the emitted event:
+    // it and its `de.billing.rechnung.erstellt` outbox row commit in one
+    // transaction. The per-MaLo detail records above and the link below are
+    // separate bookkeeping writes, kept outside this atomic pair.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
     let sammel_id = match insert_sammelrechnung_record(
-        &pool,
+        &mut *tx,
         &cfg.tenant,
         &rahmenvertrag_id,
         &req.lf_mp_id,
@@ -195,22 +203,24 @@ pub async fn post_sammelrechnung(
         Ok(id) => id,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
-
-    // Link per-MaLo records to this Sammelrechnung.
-    let _ = link_to_sammelrechnung(&pool, &per_malo_ids, sammel_id).await;
-
-    if let Some(ref webhook_url) = cfg.erp_webhook_url {
-        emit_cloud_event(
-            webhook_url,
-            cfg.erp_hmac_secret.as_deref(),
-            &pool,
+    if cfg.erp_webhook_url.is_some() {
+        let ce = rechnung_erstellt_ce(
             sammel_id,
             &rahmenvertrag_id,
             &req.lf_mp_id,
             &sammel_json,
-        )
-        .await;
+            false,
+        );
+        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
     }
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+
+    // Link per-MaLo records to this Sammelrechnung.
+    let _ = link_to_sammelrechnung(&pool, &per_malo_ids, sammel_id).await;
 
     (
         StatusCode::CREATED,
@@ -297,15 +307,11 @@ pub async fn post_submit_b2g(
 
     // Notify ERP via CloudEvent — the ERP's PEPPOL AS4 gateway transmits the XML.
     if let Some(ref webhook_url) = cfg.erp_webhook_url {
-        let ce = serde_json::json!({
-            "specversion": "1.0",
-            "type": mako_events::billing::XRECHNUNG_B2G_READY,
-            "source": format!("urn:billingd:lf:{}", cfg.tenant),
-            "id": uuid::Uuid::new_v4().to_string(),
-            "time": time::OffsetDateTime::now_utc().to_string(),
-            "subject": id.to_string(),
-            "datacontenttype": "application/json",
-            "data": {
+        let ce = mako_service::CloudEvent::new(
+            mako_service::source("billingd", &cfg.tenant),
+            mako_events::billing::XRECHNUNG_B2G_READY,
+            id.to_string(),
+            serde_json::json!({
                 "billing_record_id": id,
                 "malo_id": row.malo_id,
                 "lf_mp_id": row.lf_mp_id,
@@ -314,16 +320,17 @@ pub async fn post_submit_b2g(
                 "xrechnung_xml": xml,
                 "standard": "XRechnung 3.0 / ZUGFeRD 2.3 (EN 16931)",
                 "regulatory": "§27 EGovG B2G e-invoicing mandatory from 01.01.2027",
-            }
-        });
-        let client = reqwest::Client::new();
-        let result = client
-            .post(webhook_url)
-            .header("Content-Type", "application/cloudevents+json")
-            .json(&ce)
-            .send()
-            .await;
-        if let Err(e) = result {
+            }),
+        );
+        let client = mako_service::http::default_client();
+        if let Err(e) = mako_service::post_ce_with_retry(
+            &client,
+            webhook_url,
+            &ce,
+            cfg.erp_hmac_secret.as_deref().map(str::as_bytes),
+        )
+        .await
+        {
             tracing::warn!(record_id = %id, error = %e, "billingd: B2G submission webhook failed");
         }
     } else {

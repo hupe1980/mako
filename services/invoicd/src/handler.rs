@@ -27,10 +27,7 @@ use axum::{
     response::IntoResponse,
 };
 use invoic_checker::{CheckConfig, CheckOutcome, InvoicCheckEngine};
-use mako_markt::{
-    cloudevents::verify_signature,
-    makod_client::{ForwardCommand, MakodClient},
-};
+use mako_markt::makod_client::{ForwardCommand, MakodClient};
 use rubo4e::current::Rechnung;
 use secrecy::{ExposeSecret, SecretString};
 use time::OffsetDateTime;
@@ -111,15 +108,14 @@ pub async fn handle_webhook(
     body: Bytes,
 ) -> impl IntoResponse {
     // ── 1. Verify signature if configured ────────────────────────────────────
-    if let Some(secret) = (*state.inbound_secret).as_ref() {
-        let provided = headers
-            .get("x-mako-signature")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if !verify_signature(secret.expose_secret().as_bytes(), &body, provided) {
-            warn!("invoicd: webhook signature mismatch");
-            return (StatusCode::UNAUTHORIZED, "signature mismatch").into_response();
-        }
+    let inbound_secret = (*state.inbound_secret)
+        .as_ref()
+        .map(|s| s.expose_secret().as_bytes().to_vec());
+    if let Err(code) =
+        mako_service::webhook::verify_request(inbound_secret.as_deref(), &headers, &body)
+    {
+        warn!("invoicd: webhook signature mismatch");
+        return code.into_response();
     }
 
     // ── 2. Parse JSON body ────────────────────────────────────────────────────
@@ -1212,104 +1208,55 @@ pub async fn emit_payment_event(state: &HandlerState, ctx: PaymentEventCtx<'_>) 
         _ => mako_events::invoic::RECEIPT_SETTLED,
     };
 
-    let payload = serde_json::json!({
-        "specversion": "1.0",
-        "id":          uuid::Uuid::new_v4().to_string(),
-        "source":      format!("urn:invoicd:tenant:{}", state.tenant),
-        "type":        ce_type,
-        "time":        time::OffsetDateTime::now_utc()
-                            .format(&time::format_description::well_known::Rfc3339)
-                            .unwrap_or_default(),
-        "subject":     ctx.process_id.to_string(),
-        "datacontenttype": "application/json",
-        "data": {
-            "process_id":     ctx.process_id.to_string(),
+    let process_id = ctx.process_id;
+    let pid = ctx.pid;
+
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("invoicd", &state.tenant),
+        ce_type,
+        process_id.to_string(),
+        serde_json::json!({
+            "process_id":     process_id.to_string(),
             "pid":            ctx.pid,
             "direction":      ctx.direction,
             "sender_mp_id":   ctx.sender_mp_id,
             "outcome":        ctx.outcome,
             "pay_by":         ctx.pay_by.map(|d| d.to_string()),
             "findings_count": ctx.findings_count,
-        },
-    });
+        }),
+    );
 
-    let body = match serde_json::to_vec(&payload) {
-        Ok(b) => b,
-        Err(e) => {
-            warn!(%e, process_id = %ctx.process_id, "invoicd: failed to serialize ERP payment event");
-            return;
-        }
-    };
-
-    let process_id = ctx.process_id;
-    let pid = ctx.pid;
-
-    // Sign the request body if an HMAC secret is configured.
-    let signature = state.erp_hmac_secret.as_ref().map(|s| {
-        format!(
-            "sha256={}",
-            mako_service::webhook::hmac_hex(s.expose_secret().as_bytes(), &body)
-        )
-    });
-
-    let mut req = state
-        .http_client
-        .post(url)
-        .header("Content-Type", "application/cloudevents+json");
-    if let Some(sig) = signature {
-        req = req.header("X-Mako-Signature", sig);
-    }
-
-    match req.body(body).send().await {
-        Err(e) => {
-            // Transport-level failure (DNS, connection refused, timeout, etc.)
-            warn!(
-                %process_id, pid, ce_type, erp_url = %url, error = %e,
-                "invoicd: ERP payment webhook transport error — background worker will retry"
-            );
+    let secret = state
+        .erp_hmac_secret
+        .as_ref()
+        .map(|s| s.expose_secret().as_bytes());
+    match mako_service::post_ce_with_retry(&state.http_client, url, &ce, secret).await {
+        Ok(()) => {
+            debug!(%process_id, pid, ce_type, "invoicd: ERP payment event delivered");
             if let Some(pool) = &state.pool {
-                let _ = crate::pg::receipts::record_erp_failure(pool, process_id, 0).await;
+                let _ = crate::pg::receipts::mark_erp_notified(
+                    pool,
+                    process_id,
+                    time::OffsetDateTime::now_utc(),
+                )
+                .await;
             }
         }
-        Ok(resp) => {
-            let status = resp.status();
-            if status.is_success() {
-                debug!(%process_id, pid, ce_type, %status, "invoicd: ERP payment event delivered");
-                if let Some(pool) = &state.pool {
-                    let _ = crate::pg::receipts::mark_erp_notified(
-                        pool,
-                        process_id,
-                        time::OffsetDateTime::now_utc(),
-                    )
-                    .await;
-                }
-            } else if status.is_client_error() {
-                // 4xx: permanent failure — retrying will not help.
-                let body_preview = resp
-                    .text()
-                    .await
-                    .unwrap_or_default()
-                    .chars()
-                    .take(256)
-                    .collect::<String>();
-                warn!(
-                    %process_id, pid, ce_type, %status, erp_url = %url,
-                    response_body = %body_preview,
-                    "invoicd: ERP payment webhook rejected (4xx) — dead-lettered; check ERP webhook config"
-                );
-                // Record as permanently failed (erp_attempts >= 5 prevents background retry)
-                if let Some(pool) = &state.pool {
-                    for _ in 0..5i16 {
-                        let _ = crate::pg::receipts::record_erp_failure(pool, process_id, 5).await;
-                    }
-                }
-            } else {
-                // 5xx: transient server error — background worker will retry.
-                warn!(
-                    %process_id, pid, ce_type, %status, erp_url = %url,
-                    "invoicd: ERP payment webhook 5xx — background worker will retry"
-                );
-                if let Some(pool) = &state.pool {
+        Err(e) => {
+            if let Some(pool) = &state.pool {
+                if e.is_permanent() {
+                    // 4xx — dead-letter immediately; the background worker retrying
+                    // it would only burn the full backoff window on a bad endpoint.
+                    warn!(
+                        %process_id, pid, ce_type, erp_url = %url, error = %e,
+                        "invoicd: ERP payment webhook permanent failure — dead-lettering (check ERP webhook config)"
+                    );
+                    let _ = crate::pg::receipts::dead_letter_erp(pool, process_id).await;
+                } else {
+                    warn!(
+                        %process_id, pid, ce_type, erp_url = %url, error = %e,
+                        "invoicd: ERP payment webhook delivery failed — background worker will retry"
+                    );
                     let _ = crate::pg::receipts::record_erp_failure(pool, process_id, 0).await;
                 }
             }

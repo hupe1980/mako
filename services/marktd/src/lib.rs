@@ -6,4 +6,5 @@ pub mod handlers;
 pub mod mcp_server;
 pub mod mmma_worker;
 pub mod openapi;
+pub mod outbox;
 pub mod pg;

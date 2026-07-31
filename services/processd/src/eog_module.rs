@@ -49,6 +49,8 @@ pub struct EogModuleConfig {
     /// Optional webhook for `de.markt.versorgung.ersatz-auslaufend`
     /// CloudEvents (ERP / operator alerting).
     pub notify_webhook_url: Option<String>,
+    /// HMAC-SHA256 secret for signing the `notify_webhook_url` CloudEvents.
+    pub notify_webhook_secret: Option<String>,
 }
 
 impl Default for EogModuleConfig {
@@ -58,6 +60,7 @@ impl Default for EogModuleConfig {
             default_transaktionsgrund: "ZT6".to_owned(),
             warn_days_before_expiry: 14,
             notify_webhook_url: None,
+            notify_webhook_secret: None,
         }
     }
 }
@@ -360,16 +363,11 @@ async fn notify_ersatz_auslaufend(
     let Some(url) = cfg.notify_webhook_url.as_deref() else {
         return;
     };
-    let body = serde_json::json!({
-        "specversion": "1.0",
-        "type": mako_events::markt::VERSORGUNG_ERSATZ_AUSLAUFEND,
-        "source": "processd",
-        "id": uuid::Uuid::new_v4().to_string(),
-        "subject": hit.malo_id,
-        "time": time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)
-            .unwrap_or_default(),
-        "data": {
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("processd", tenant),
+        mako_events::markt::VERSORGUNG_ERSATZ_AUSLAUFEND,
+        &hit.malo_id,
+        serde_json::json!({
             "tenant":         tenant,
             "malo_id":        hit.malo_id,
             "gv_mp_id":       hit.gv_mp_id,
@@ -377,14 +375,15 @@ async fn notify_ersatz_auslaufend(
             "haushaltskunde": hit.haushaltskunde,
             "phase":          phase,
             "legal_basis":    "§38 Abs. 4 S. 1 EnWG",
-        },
-    });
-    if let Err(e) = client
-        .post(url)
-        .header("content-type", "application/cloudevents+json")
-        .json(&body)
-        .send()
-        .await
+        }),
+    );
+    if let Err(e) = mako_service::post_ce_with_retry(
+        client,
+        url,
+        &ce,
+        cfg.notify_webhook_secret.as_deref().map(str::as_bytes),
+    )
+    .await
     {
         warn!(error = %e, malo_id = %hit.malo_id, "processd EoG: ersatz-auslaufend webhook failed");
     }

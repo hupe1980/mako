@@ -45,35 +45,35 @@ const PARITY_MIN_SAMPLE: i64 = 10;
 const DEADLINE_ALERT_LIMIT: i64 = 200;
 
 /// Emit one `de.obs.*` CloudEvent, fire-and-forget, HMAC-signed when configured.
-fn emit_obs_event(rt: &WorkerRuntime, ce_type: &'static str, data: serde_json::Value) {
+///
+/// `subject` is the business subject the event concerns (a process id for the
+/// per-process deadline alert); `None` for the tenant-level parity alert, which
+/// has no single subject.
+fn emit_obs_event(
+    rt: &WorkerRuntime,
+    ce_type: &'static str,
+    subject: Option<String>,
+    data: serde_json::Value,
+) {
     let client = Arc::clone(&rt.client);
     let url = Arc::clone(&rt.outbound_url);
     let secret = rt.outbound_secret.clone();
+    let tenant = rt.tenant.clone();
     tokio::spawn(async move {
-        let body = serde_json::json!({
-            "specversion": "1.0",
-            "type":        ce_type,
-            "source":      "obsd",
-            "id":          Uuid::new_v4().to_string(),
-            "time":        OffsetDateTime::now_utc().format(&Rfc3339).unwrap_or_default(),
-            "data":        data,
-        });
-        let bytes = match serde_json::to_vec(&body) {
-            Ok(b) => b,
-            Err(e) => {
-                warn!(%e, ce_type, "obsd: failed to serialize CloudEvent");
-                return;
-            }
+        let source = mako_service::source("obsd", &tenant);
+        let ce = match subject {
+            Some(s) => mako_service::CloudEvent::new(source, ce_type, s, data),
+            None => mako_service::CloudEvent::new(source, ce_type, String::new(), data)
+                .without_subject(),
         };
-        let mut req = client
-            .post(url.as_str())
-            .header("Content-Type", "application/cloudevents+json")
-            .body(bytes.clone());
-        if let Some(sec) = secret.as_deref() {
-            let sig = mako_markt::cloudevents::compute_signature(sec.as_bytes(), &bytes);
-            req = req.header("X-Mako-Signature", format!("sha256={sig}"));
-        }
-        if let Err(e) = req.send().await {
+        if let Err(e) = mako_service::post_ce_with_retry(
+            &client,
+            url.as_str(),
+            &ce,
+            secret.as_deref().map(|s| s.as_bytes()),
+        )
+        .await
+        {
             warn!(%e, ce_type, "obsd: outbound CloudEvent emit failed");
         }
     });
@@ -146,7 +146,12 @@ pub async fn sweep_deadlines(rt: &WorkerRuntime) -> Result<usize, sqlx::Error> {
             "deadline_risk":  row.try_get::<String, _>("deadline_risk").ok(),
             "tenant":         row.try_get::<String, _>("tenant").ok(),
         });
-        emit_obs_event(rt, mako_events::obs::DEADLINE_APPROACHING, data);
+        emit_obs_event(
+            rt,
+            mako_events::obs::DEADLINE_APPROACHING,
+            Some(process_id.to_string()),
+            data,
+        );
         alerted.push(process_id);
     }
 
@@ -221,6 +226,7 @@ pub async fn sweep_parity(rt: &WorkerRuntime) -> Result<bool, sqlx::Error> {
     emit_obs_event(
         rt,
         mako_events::obs::STP_PARITY_ALERT,
+        None,
         serde_json::json!({
             "tenant":        rt.tenant,
             "window_days":   rt.parity_window_days,

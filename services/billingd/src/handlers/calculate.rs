@@ -134,8 +134,34 @@ pub async fn post_calculate(
         Err(e) => return e.into_response(),
     };
 
-    let record_id = match insert_billing_record(
+    // Deterministic risk gate: scored read-only *before* the outbox tx, because
+    // a HELD band withholds the dispatch enqueue. The record it scores does not
+    // exist yet — `assess_risk` reads only strictly-earlier periods, so the
+    // result is unchanged.
+    let assessment = assess_risk(
         &pool,
+        &cfg,
+        &malo_id,
+        &result,
+        &rates,
+        period_from,
+        period_to,
+    )
+    .await;
+    let held = assessment
+        .as_ref()
+        .is_some_and(|a| cfg.risk.hold_dispatch && a.band == crate::risk::RiskBand::Held);
+
+    // Business write + dispatch event commit atomically: the invoice row and its
+    // `de.billing.rechnung.erstellt` outbox row live in one transaction, so a
+    // crash can never leave a billed period without its ERP event. A HELD invoice
+    // commits without the event (dispatch waits for POST …/release).
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let record_id = match insert_billing_record(
+        &mut *tx,
         &cfg.tenant,
         &malo_id,
         &req.lf_mp_id,
@@ -152,42 +178,30 @@ pub async fn post_calculate(
         Ok(id) => id,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
-
-    // Deterministic risk gate: score, persist the findings, and hold
-    // dispatch when the band demands an analyst.
-    let assessment = assess_and_persist_risk(
-        &pool,
-        &cfg,
-        record_id,
-        &malo_id,
-        &result,
-        &rates,
-        period_from,
-        period_to,
-    )
-    .await;
-    let held = assessment
-        .as_ref()
-        .is_some_and(|a| cfg.risk.hold_dispatch && a.band == crate::risk::RiskBand::Held);
-
     if held {
         tracing::warn!(
             %record_id, %malo_id,
             score = assessment.as_ref().map(|a| a.score),
             "billingd: invoice HELD by risk gate — dispatch requires POST …/release"
         );
-    } else if let Some(ref webhook_url) = cfg.erp_webhook_url {
-        emit_cloud_event(
-            webhook_url,
-            cfg.erp_hmac_secret.as_deref(),
-            &pool,
+    } else if cfg.erp_webhook_url.is_some() {
+        let ce = rechnung_erstellt_ce(
             record_id,
             &malo_id,
             &req.lf_mp_id,
             &result.to_rechnung_json(),
-        )
-        .await;
+            false,
+        );
+        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
     }
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+
+    // Persist the risk findings on the now-committed record (best effort).
+    persist_risk(&pool, record_id, assessment.as_ref()).await;
 
     (
         StatusCode::CREATED,
@@ -207,16 +221,20 @@ pub async fn post_calculate(
         .into_response()
 }
 
-/// Score a freshly calculated invoice, persist the assessment, and return it.
+/// Score a freshly calculated invoice against its history (read-only).
 ///
-/// Failures degrade to `None` (unscored) rather than failing the billing run —
-/// a broken history query must not block invoice creation; the record simply
-/// stays without a band and dispatches as before.
+/// Pure of any write: the caller needs the band *before* opening the outbox
+/// transaction (a HELD band withholds the dispatch enqueue), and the record it
+/// scores does not exist yet when this runs. `risk_context` queries strictly
+/// earlier periods (`period_from < …`), so the result is identical whether the
+/// current record is inserted or not. Failures degrade to `None` (unscored)
+/// rather than failing the billing run — a broken history query must not block
+/// invoice creation. Persist the returned assessment with
+/// [`persist_risk`] after the business transaction commits.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn assess_and_persist_risk(
+pub(crate) async fn assess_risk(
     pool: &PgPool,
     cfg: &BillingdConfig,
-    record_id: Uuid,
     malo_id: &str,
     invoice: &Invoice,
     rates: &RegulatoryRates,
@@ -233,18 +251,32 @@ pub(crate) async fn assess_and_persist_risk(
             return None;
         }
     };
-    let assessment = crate::risk::assess(
+    Some(crate::risk::assess(
         &cfg.risk,
         invoice,
         rates.mwst_rate,
         period_from,
         period_to,
         &ctx,
-    );
-    if let Err(e) = crate::pg::set_risk(pool, record_id, &assessment).await {
+    ))
+}
+
+/// Best-effort persistence of a risk assessment on its committed record.
+///
+/// Runs *after* the outbox transaction: a persistence failure leaves the record
+/// unscored but never rolls back the invoice or its already-enqueued dispatch
+/// event — exactly the pre-outbox degradation.
+pub(crate) async fn persist_risk(
+    pool: &PgPool,
+    record_id: Uuid,
+    assessment: Option<&crate::risk::RiskAssessment>,
+) {
+    let Some(a) = assessment else {
+        return;
+    };
+    if let Err(e) = crate::pg::set_risk(pool, record_id, a).await {
         tracing::warn!(%record_id, error = %e, "billingd: risk persistence failed");
     }
-    Some(assessment)
 }
 
 /// `GET /api/v1/billing/review-queue?band=&limit=`
@@ -289,34 +321,46 @@ pub async fn post_release(
     Extension(cfg): Extension<Arc<BillingdConfig>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    match crate::pg::release_held_record(&pool, &cfg.tenant, id, claims.sub()).await {
-        Ok(Some(row)) => {
-            if let Some(ref webhook_url) = cfg.erp_webhook_url {
-                emit_cloud_event(
-                    webhook_url,
-                    cfg.erp_hmac_secret.as_deref(),
-                    &pool,
-                    row.id,
-                    &row.malo_id,
-                    &row.lf_mp_id,
-                    &row.rechnung_json,
-                )
-                .await;
-            }
-            Json(serde_json::json!({
-                "id": row.id,
-                "released_by": claims.sub(),
-                "dispatched": cfg.erp_webhook_url.is_some(),
-            }))
-            .into_response()
+    // Release stamp + withheld dispatch event commit atomically: the record is
+    // marked released and its `de.billing.rechnung.erstellt` outbox row is
+    // written in one transaction, so a crash cannot release a record without
+    // (eventually) dispatching the invoice the risk gate had held back.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let row = match crate::pg::release_held_record(&mut *tx, &cfg.tenant, id, claims.sub()).await {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            return (
+                StatusCode::CONFLICT,
+                "record is not HELD (already released, dispatched, or unscored)",
+            )
+                .into_response();
         }
-        Ok(None) => (
-            StatusCode::CONFLICT,
-            "record is not HELD (already released, dispatched, or unscored)",
-        )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    if cfg.erp_webhook_url.is_some() {
+        let ce = rechnung_erstellt_ce(
+            row.id,
+            &row.malo_id,
+            &row.lf_mp_id,
+            &row.rechnung_json,
+            false,
+        );
+        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
     }
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+    Json(serde_json::json!({
+        "id": row.id,
+        "released_by": claims.sub(),
+        "dispatched": cfg.erp_webhook_url.is_some(),
+    }))
+    .into_response()
 }
 
 /// `POST /api/v1/billing/{malo_id}/preview` — dry-run, no persist, no CloudEvent.

@@ -113,12 +113,12 @@ services:
     volumes:
       - ./processd.toml:/etc/processd/processd.toml:ro
     environment:
+      # The runner reads PROCESSD_CONFIG for the config-file path.
+      PROCESSD_CONFIG:                /etc/processd/processd.toml
       # Secrets are read via `env:` references in processd.toml.
       PROCESSD_DATABASE__URL:         postgres://demo:demo-secret@postgres/processd
       PROCESSD_MAKOD__API_KEY:        demo-secret-change-me
       PROCESSD_MARKTD__API_KEY:       demo-processd-key
-    command:
-      - "--config=/etc/processd/processd.toml"
     # distroless has no shell — use service_started dependency instead of healthcheck
     healthcheck:
       disable: true

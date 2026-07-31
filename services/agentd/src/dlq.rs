@@ -303,29 +303,32 @@ pub async fn run_retry_pass(state: &std::sync::Arc<crate::handlers::AppState>) {
                     "DLQ entry exhausted — emitting alert"
                 );
                 // Emit exhaustion alert CloudEvent to audit webhook
-                let alert_ce = serde_json::json!({
-                    "specversion": "1.0",
-                    "type": mako_events::agent::SESSION_DLQ_EXHAUSTED,
-                    "source": format!("agentd/{}", state.cfg.tenant),
-                    "id": uuid::Uuid::new_v4().to_string(),
-                    "time": time::OffsetDateTime::now_utc()
-                        .format(&time::format_description::well_known::Rfc3339)
-                        .unwrap_or_default(),
-                    "data": {
+                let alert_ce = mako_service::CloudEvent::new(
+                    mako_service::source("agentd", &state.cfg.tenant),
+                    mako_events::agent::SESSION_DLQ_EXHAUSTED,
+                    "",
+                    serde_json::json!({
                         "dlq_id": id,
                         "event_type": exhausted.event_type,
                         "event_id": exhausted.event_id,
                         "attempts": exhausted.attempts,
                         "last_error": exhausted.last_error,
-                    }
-                });
+                    }),
+                )
+                .without_subject();
                 if let Some(ref url) = state.cfg.audit_webhook_url {
-                    let _ = mako_service::http::default_client()
-                        .post(url)
-                        .header("Content-Type", "application/cloudevents+json")
-                        .json(&alert_ce)
-                        .send()
-                        .await;
+                    use secrecy::ExposeSecret;
+                    let secret = state
+                        .cfg
+                        .audit_hmac_secret
+                        .as_ref()
+                        .map(|s| s.expose_secret().as_bytes());
+                    let client = mako_service::http::default_client();
+                    if let Err(e) =
+                        mako_service::post_ce_with_retry(&client, url, &alert_ce, secret).await
+                    {
+                        tracing::warn!(error = %e, "DLQ: exhaustion alert webhook failed");
+                    }
                 }
             }
         } else {

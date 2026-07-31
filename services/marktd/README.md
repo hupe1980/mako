@@ -46,7 +46,7 @@ and any historical state can be retrieved by date via `?at=YYYY-MM-DD`.
 | **Konfigurationsprodukte** | Typed sub-resource on `SteuerbareRessource`: `GET/PUT/DELETE /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte`. `produktcode` is mandatory (BK6-24-174 §4.3). Emits `de.markt.sr.konfigurationsprodukt.updated`. |
 | **MMMA import worker** | Background worker auto-imports monthly Ausgleichsenergie prices (Gas + Strom) on the 1st of each month. Configurable `gas_url` / `strom_url` — supports `https://` and `file:///` sources. POST `/api/v1/mmma-preise/import-trigger` for on-demand. |
 | **ZeitvariablePreisposition** | `PUT /api/v1/preisblaetter-messung/{mp_id}` validates each `zeitvariablePreispositionen` element: `bandNummer` rejected with 422, `zaehlzeitregister` mandatory. Deserialized as typed `Vec<ZeitvariablePreisposition>` on `GET`. |
-| **Event source** | `urn:markt:tenant:{tenant_gln}` |
+| **Event source** | `urn:mako:marktd:tenant:{tenant}` |
 | **CE extensions** | `marktrole`, `marktmaloid`, `marktmeloid`, `marktcontractid`, `markterpref` |
 | **Idempotency** | Inbound `POST /api/v1/events` uses `INSERT … ON CONFLICT DO NOTHING` |
 | **Body limit** | 2 MiB per request |
@@ -238,14 +238,16 @@ curl -s -X POST http://localhost:8180/api/v1/subscriptions \
 ```
 
 The webhook is delivered as `application/cloudevents+json`. When `secret` is set, an
-`X-Mako-Signature: <hmac-sha256-hex>` header is included for verification:
+`X-Mako-Signature: sha256=<hmac-sha256-hex>` header is included for verification
+(the `sha256=` prefix is the workspace-wide convention emitted by `mako_service::webhook::sign`):
 
 ```python
 import hmac, hashlib
 
 def verify(secret: str, body: bytes, signature: str) -> bool:
+    received = signature.removeprefix("sha256=")          # strip the algorithm prefix
     expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature)
+    return hmac.compare_digest(expected, received)
 ```
 
 #### Webhook secret at rest
@@ -255,9 +257,7 @@ The per-subscription `webhook_secret` is stored **in plaintext** in the
 signing key. It is an integrity secret (it lets a subscriber verify a delivery
 originated from this hub), not a confidentiality key over customer data.
 Protect it with database-level controls: least-privilege grants on the
-`subscriptions` table and PostgreSQL storage/volume encryption. Application-layer
-envelope encryption (AES-256-GCM keyed from config/KMS, decrypted at the three
-signing sites) is a planned enhancement — the schema does **not** encrypt today.
+`subscriptions` table and PostgreSQL storage/volume encryption.
 
 ### Inbound events (pull from makod)
 

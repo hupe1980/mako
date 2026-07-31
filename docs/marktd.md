@@ -91,16 +91,17 @@ The clean separation of concerns:
 │   ├─ Fan-out to all EventBus subscribers                       │
 │   └─ Derive VersorgungsStatus (55003/55005/55013 + Gas twins) │
 │                                                                 │
-│  GET  /admin/fanout/dlq             ← DLQ inspection           │
-│  POST /admin/fanout/dlq/{id}/retry  ← re-deliver entry         │
-│  DEL  /admin/fanout/dlq/{id}        ← discard entry            │
-│  GET  /metrics                      ← Prometheus metrics       │
+│  GET  /admin/fanout/dlq                       ← DLQ inspection │
+│  POST /admin/fanout/dlq/{event}/{sub}/retry   ← re-deliver     │
+│  DEL  /admin/fanout/dlq/{event}/{sub}         ← discard entry  │
+│  GET  /metrics                                ← Prometheus     │
 │                                                                 │
 │  Note: Automated STP decisions live in processd :8580          │
 │  marktd is a pure data hub — no domain policy.                  │
 │                                                                 │
-│  GET /health  — liveness (no DB check)                         │
-│  GET /ready   — readiness (PostgreSQL ping)                     │
+│  GET /health        — liveness (no DB check)                   │
+│  GET /health/live   — liveness (no DB check)                   │
+│  GET /health/ready  — readiness (PostgreSQL ping)              │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -312,7 +313,8 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | Method | Path | Cedar action | Description |
 |---|---|---|---|
 | `GET` | `/health` | — | Health check (no auth) |
-| `GET` | `/ready` | — | Readiness check (DB ping, no auth) |
+| `GET` | `/health/live` | — | Liveness check (no DB, no auth) |
+| `GET` | `/health/ready` | — | Readiness check (DB ping, no auth) |
 | `PUT` | `/api/v1/malo/{malo_id}` | `write-malo` | Upsert Marktlokation; validates `_typ = MARKTLOKATION` and **strictly** rejects any out-of-schema enum value anywhere in the BO (`Bo4eStrict::ensure_known_enums`, 422 with the offending JSON-path); pushes to makod MaLo cache |
 | `GET` | `/api/v1/malo/{malo_id}` | `read-malo` | Get Marktlokation as typed `rubo4e::current::Marktlokation` (canonical BO4E camelCase) |
 | `GET` | `/api/v1/malo` | `read-malo` | List Marktlokationen (schema-drift records silently filtered) |
@@ -394,8 +396,8 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/api/v1/nb-contracts` | `read-nb-contract` | List NB contracts (`?nb_mp_id=...` required) |
 | `POST` | `/api/v1/events` | — | Inbound CloudEvent from `makod` (HMAC-verified); appended to `event_log` before fan-out |
 | `GET` | `/admin/fanout/dlq` | `manage-fanout` | List unresolved DLQ entries |
-| `POST` | `/admin/fanout/dlq/{id}/retry` | `manage-fanout` | Re-deliver a DLQ entry |
-| `DELETE` | `/admin/fanout/dlq/{id}` | `manage-fanout` | Discard a DLQ entry |
+| `POST` | `/admin/fanout/dlq/{event_id}/{subscriber_id}/retry` | `manage-fanout` | Re-deliver a dead-lettered delivery |
+| `DELETE` | `/admin/fanout/dlq/{event_id}/{subscriber_id}` | `manage-fanout` | Discard a dead-lettered delivery |
 | `GET` | `/admin/events` | `manage-fanout` | CloudEvent replay log — `?from=RFC3339&to=RFC3339&type=&limit=` |
 | `GET` | `/metrics` | — | Prometheus metrics (no auth, internal only) |
 
@@ -954,14 +956,14 @@ empty list subscribes to everything.
 ```
 POST https://erp.example.com/mdm/events
 Content-Type: application/cloudevents+json
-X-Mako-Signature: <hmac-sha256-hex>
+X-Mako-Signature: sha256=<hmac-sha256-hex>
 ```
 
 ```json
 {
   "specversion":     "1.0",
   "id":              "01932a4f-7b3e-4c5d-8f6a-9e0b1c2d3e4f",
-  "source":          "urn:markt:tenant:9900357000004",
+  "source":          "urn:mako:marktd:tenant:9900357000004",
   "type":            "de.mako.process.completed",
   "time":            "2025-10-01T08:15:00+02:00",
   "subject":         "018f3a2b-7c4e-7d5f-8a9b-0c1d2e3f4a5b",
@@ -976,8 +978,9 @@ X-Mako-Signature: <hmac-sha256-hex>
 
 ### Signature verification
 
-`X-Mako-Signature` is an HMAC-SHA256 hex digest over the raw request body
-computed with the `secret` registered in the subscription.
+`X-Mako-Signature` carries an HMAC-SHA256 hex digest over the raw request body,
+prefixed with `sha256=`, computed with the `secret` registered in the subscription
+(the workspace-wide format emitted by `mako_service::webhook::sign`).
 
 The subscription secret is an **integrity** key stored in plaintext in
 `subscriptions.webhook_secret` — protect it with least-privilege database
@@ -988,50 +991,59 @@ customer data.
 import hmac, hashlib
 
 def verify(body: bytes, secret: str, header: str) -> bool:
+    received = header.removeprefix("sha256=")          # strip the algorithm prefix
     expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, header)
+    return hmac.compare_digest(expected, received)
 ```
 
 Return `200 OK` for duplicates — fan-out retries on non-2xx.
 
-### Retry behaviour
+### Durability & retry behaviour
 
-The fan-out worker retries failed deliveries with exponential back-off
-(1 s → 2 s → 4 s → … → 64 s, capped). After exhausting all attempts the event
-is written to the `fanout_dlq` table rather than silently dropped.
+Fan-out is **persist-before-fan-out**. Every produced event is written to the
+durable `event_log` outbox (the full CloudEvent envelope) *before* any delivery
+is attempted, so a marktd crash never loses an in-flight event. A two-phase
+worker drains it:
 
-This durable failure path is required by **§ 147 AO / GoBD / §41 EnWG**: a silent
-drop of a `de.mako.process.initiated` event to `invoicd` would mean the INVOIC
-plausibility check never runs, and the 3-year receipt retention obligation
-cannot be satisfied.
+1. **Fan-out** — claims pending `event_log` rows, resolves the matching
+   subscribers, and snapshots one `event_delivery` row per subscriber (in one
+   transaction with stamping `fanned_out_at`).
+2. **Deliver** — claims due `event_delivery` rows with a lease
+   (`FOR UPDATE SKIP LOCKED`), signs + POSTs each, and on failure backs off
+   (30 s → 5 m → 30 m → 2 h) or, after the attempt cap, marks `dead_lettered_at`.
+
+A crash at any boundary is recoverable from the two tables; subscribers receive
+at-least-once and dedup on the CloudEvent `id`. This durability is required by
+**§ 147 AO / GoBD / §41 EnWG**: a silent drop of a `de.mako.process.initiated`
+event to `invoicd` would mean the INVOIC plausibility check never runs.
 
 ### Dead-letter queue (DLQ)
 
-Events that exhaust all retry attempts land in `fanout_dlq`. Operators inspect
-and remediate via the admin endpoints:
+A delivery that exhausts its attempts is flagged `dead_lettered_at` on its
+`event_delivery` row (a status-column DLQ — no separate table). Operators inspect
+and remediate via the admin endpoints, keyed by `(event_id, subscriber_id)`:
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/admin/fanout/dlq` | List unresolved DLQ entries (newest first, paged; `?include_resolved=true` for history) |
-| `POST` | `/admin/fanout/dlq/{id}/retry` | Re-deliver and mark resolved on HTTP 2xx |
-| `DELETE` | `/admin/fanout/dlq/{id}` | Discard without retry (marks resolved) |
+| `GET` | `/admin/fanout/dlq` | List dead-lettered deliveries (newest first, paged) |
+| `POST` | `/admin/fanout/dlq/{event_id}/{subscriber_id}/retry` | Requeue for immediate redelivery |
+| `DELETE` | `/admin/fanout/dlq/{event_id}/{subscriber_id}` | Discard without retry |
 
 ```bash
-# Inspect failures
+# Inspect dead-lettered deliveries
 curl http://localhost:8180/admin/fanout/dlq \
-  -H "Authorization: Bearer $TOKEN" | jq '.[] | {id, subscriber_id, event_type, attempts, last_error}'
+  -H "Authorization: Bearer $TOKEN" | jq '.[] | {event_id, subscriber_id, attempts, last_error}'
 
-# Re-deliver a specific entry
-curl -X POST http://localhost:8180/admin/fanout/dlq/$ENTRY_ID/retry \
+# Requeue a specific (event, subscriber) delivery
+curl -X POST http://localhost:8180/admin/fanout/dlq/$EVENT_ID/$SUBSCRIBER_ID/retry \
   -H "Authorization: Bearer $TOKEN" | jq .
 
 # Discard after manual ERP re-import
-curl -X DELETE http://localhost:8180/admin/fanout/dlq/$ENTRY_ID \
+curl -X DELETE http://localhost:8180/admin/fanout/dlq/$EVENT_ID/$SUBSCRIBER_ID \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-The DLQ uses the current webhook secret at retry time — if the subscription secret
-was rotated, re-register the subscription before retrying.
+Requeuing redelivers with the subscriber's current webhook secret.
 
 ### Prometheus metrics (`/metrics`)
 
@@ -1039,7 +1051,7 @@ was rotated, re-register the subscription before retrying.
 
 | Metric | Description |
 |--------|-------------|
-| `marktd_fanout_dlq_depth` | Unresolved entries in `fanout_dlq` |
+| `marktd_fanout_dlq_depth` | Dead-lettered deliveries in `event_delivery` |
 | `marktd_active_subscriptions` | Registered EventBus subscribers |
 | `marktd_processed_events_total` | Events ingested from `makod` (all time) |
 | `marktd_db_pool_size` | Current PostgreSQL connection pool size |
@@ -1094,8 +1106,8 @@ docker run -d \
 
 | Endpoint | DB check | Use for |
 |---|---|---|
-| `GET /health` | no | Kubernetes `livenessProbe` |
-| `GET /ready` | yes (ping) | Kubernetes `readinessProbe` |
+| `GET /health/live` | no | Kubernetes `livenessProbe` |
+| `GET /health/ready` | yes (ping) | Kubernetes `readinessProbe` |
 
 ---
 
@@ -2211,7 +2223,7 @@ domain events. Each event carries the `markt*` extension attributes listed below
 {
   "specversion": "1.0",
   "type":        "de.markt.geraet.konfiguration.updated",
-  "source":      "urn:markt:tenant:9900000000003",
+  "source":      "urn:mako:marktd:tenant:9900000000003",
   "subject":     "SMGW-2026-001",
   "id":          "a1b2c3d4-...",
   "time":        "2026-07-18T08:01:00Z",
@@ -2254,7 +2266,7 @@ alphanumeric only):
 | starts with `mabis-` | `BIKO` |
 | everything else | `NB` |
 
-**Event source:** `"urn:markt:tenant:{tenant_gln}"`
+**Event source:** `"urn:mako:marktd:tenant:{tenant}"`
 
 ---
 

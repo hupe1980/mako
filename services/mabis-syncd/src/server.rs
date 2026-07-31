@@ -75,9 +75,6 @@ pub fn router(state: ServerState) -> Router {
         .route("/api/v1/datenstatus", post(post_datenstatus))
         .route("/api/v1/pruefmitteilung", post(post_pruefmitteilung))
         .route("/api/v1/korrekturbedarf", get(list_korrekturbedarf))
-        .route("/health/live", get(|| async { StatusCode::OK }))
-        .route("/health/ready", get(health_ready))
-        .route("/metrics", get(|| async { "# mabis-syncd metrics\n" }))
         .with_state(state)
 }
 
@@ -317,13 +314,6 @@ async fn retry_run(
         })),
     )
         .into_response()
-}
-
-async fn health_ready(State(state): State<ServerState>) -> impl IntoResponse {
-    match sqlx::query("SELECT 1").fetch_one(&state.pool).await {
-        Ok(_) => StatusCode::OK,
-        Err(_) => StatusCode::SERVICE_UNAVAILABLE,
-    }
 }
 
 // ── Inbound BIKO responses ────────────────────────────────────────────────────

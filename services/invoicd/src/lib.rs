@@ -31,23 +31,11 @@
 //!
 //! ## Configuration
 //!
-//! All settings can be provided as CLI flags or environment variables
-//! (env takes precedence, as per `clap`'s `env` attribute):
-//!
-//! | Flag                       | Env var                        | Default                    |
-//! |----------------------------|--------------------------------|----------------------------|
-//! | `--listen`                 | `INVOICD_LISTEN`               | `0.0.0.0:8280`             |
-//! | `--makod-url`              | `INVOICD_MAKOD_URL`            | `http://localhost:8180`    |
-//! | `--marktd-url`              | `INVOICD_MARKTD_URL`             | `http://localhost:9180`    |
-//! | `--subscriber-id`          | `INVOICD_SUBSCRIBER_ID`        | `invoicd`                  |
-//! | `--webhook-url`            | `INVOICD_WEBHOOK_URL`          | *(required)*               |
-//! | `--webhook-secret`         | `INVOICD_WEBHOOK_SECRET`       | *(optional)*               |
-//! | `--inbound-secret`         | `INVOICD_INBOUND_SECRET`       | *(optional)*               |
-//! | `--arithmetic-tolerance`   | `INVOICD_ARITHMETIC_TOLERANCE` | `0.01`                     |
-//! | `--total-tolerance`        | `INVOICD_TOTAL_TOLERANCE`      | `0.01`                     |
-//! | `--tariff-tolerance`       | `INVOICD_TARIFF_TOLERANCE`     | `0.03`                     |
-//! | `--require-tariff`         | `INVOICD_REQUIRE_TARIFF`       | `false`                    |
-//! | `--auto-dispute-threshold` | `INVOICD_AUTO_DISPUTE_THRESHOLD`| `0.0` (always approve Warn)|
+//! Loaded via `mako_service::load_config("invoicd")`: `invoicd.toml` (path
+//! overridable with `INVOICD_CONFIG`) as the base layer, with any TOML key
+//! overridable by an `INVOICD_`-prefixed environment variable (`__` separates
+//! nested sections, e.g. `INVOICD_DATABASE__URL`). See [`config`] for the full
+//! shape; the `[database]` block carries the pool tuning + `application_name`.
 //!
 //! ## Subscription registration
 //!

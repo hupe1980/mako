@@ -178,7 +178,7 @@ async fn run_consumer(
                     .and_then(|(_, v)| v.as_ref())
                     .and_then(|v| std::str::from_utf8(v).ok());
                 let ok = provided.is_some_and(|sig| {
-                    mako_markt::cloudevents::verify_signature(secret.as_bytes(), value, sig)
+                    mako_service::webhook::verify_hmac(secret.as_bytes(), value, sig)
                 });
                 if !ok {
                     warn!(

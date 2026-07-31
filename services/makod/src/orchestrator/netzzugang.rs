@@ -50,8 +50,6 @@ use mako_markt::repository::{NetzzugangAntrag, NetzzugangStatus};
 use reqwest::Client;
 use secrecy::{ExposeSecret as _, SecretString};
 
-use crate::erp_adapter::hmac_sha256;
-
 /// Outbox `message_type` for §20b requests.
 pub const NETZZUGANG_MESSAGE_TYPE: &str = "NetzzugangAntrag";
 
@@ -204,7 +202,8 @@ impl NetzzugangSender {
                 .post(webhook.as_ref())
                 .header("Content-Type", "application/json");
             if let Some(secret) = &self.webhook_secret {
-                let sig = hmac_sha256(secret.expose_secret().as_bytes(), &body_bytes);
+                let sig =
+                    mako_service::webhook::sign(secret.expose_secret().as_bytes(), &body_bytes);
                 builder = builder.header("X-Mako-Signature", sig);
             }
             let resp = builder
@@ -353,8 +352,8 @@ mod tests {
         let sig = sig.expect("X-Mako-Signature header present");
         assert_eq!(
             sig,
-            hmac_sha256(b"test-secret", &body),
-            "signature must be HMAC-SHA256(secret, raw body)",
+            mako_service::webhook::sign(b"test-secret", &body),
+            "signature must be the canonical sha256=<hex> of the raw body",
         );
         // Sanity: the signed body is the expected CloudEvent.
         let ce: serde_json::Value = serde_json::from_slice(&body).expect("CloudEvent JSON");

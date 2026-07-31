@@ -247,8 +247,13 @@ pub async fn post_tarifwechsel(
         req.old_tariff.category_str(),
         req.new_tariff.category_str()
     );
+    // Combined Tarifwechsel invoice + its dispatch event commit atomically.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
     let record_id = match insert_billing_record(
-        &pool,
+        &mut *tx,
         &cfg.tenant,
         &malo_id,
         &req.lf_mp_id,
@@ -265,19 +270,14 @@ pub async fn post_tarifwechsel(
         Ok(id) => id,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
-
-    if let Some(ref webhook_url) = cfg.erp_webhook_url {
-        emit_cloud_event_inner(
-            webhook_url,
-            cfg.erp_hmac_secret.as_deref(),
-            &pool,
-            record_id,
-            &malo_id,
-            &req.lf_mp_id,
-            &rechnung_json,
-            false,
-        )
-        .await;
+    if cfg.erp_webhook_url.is_some() {
+        let ce = rechnung_erstellt_ce(record_id, &malo_id, &req.lf_mp_id, &rechnung_json, false);
+        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    }
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
     (
@@ -540,8 +540,14 @@ pub async fn post_ggv_billing(
     };
     let (sammel_netto, sammel_brutto) = (sammel_invoice.netto_eur, sammel_invoice.brutto_eur);
 
+    // Consolidated GGV Sammelrechnung + its dispatch event commit atomically;
+    // the per-tenant detail records above are separate bookkeeping writes.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
     let sammel_id = match insert_sammelrechnung_record(
-        &pool,
+        &mut *tx,
         &cfg.tenant,
         &ggv_id,
         &req.lf_mp_id,
@@ -556,18 +562,14 @@ pub async fn post_ggv_billing(
         Ok(id) => id,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
-
-    if let Some(ref webhook_url) = cfg.erp_webhook_url {
-        emit_cloud_event(
-            webhook_url,
-            cfg.erp_hmac_secret.as_deref(),
-            &pool,
-            sammel_id,
-            &ggv_id,
-            &req.lf_mp_id,
-            &sammel_rechnung,
-        )
-        .await;
+    if cfg.erp_webhook_url.is_some() {
+        let ce = rechnung_erstellt_ce(sammel_id, &ggv_id, &req.lf_mp_id, &sammel_rechnung, false);
+        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    }
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
     (

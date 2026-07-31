@@ -47,45 +47,6 @@ pub fn format_ct_as_eur(ct: i64) -> String {
     format!("{sign}{}.{:02}", abs / 100, abs % 100)
 }
 
-/// Constant-time byte comparison (timing-safe) for HMAC verification.
-///
-/// Avoids early-exit that would leak timing information about the HMAC prefix.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter()
-        .zip(b.iter())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
-}
-
-/// POST an outbound CloudEvent to the ERP, HMAC-signing the body with
-/// `erp_hmac_secret` (`X-Mako-Signature: sha256=…`) so the receiver can verify
-/// authenticity. Best-effort: delivery failures are logged, not fatal.
-async fn post_signed_ce(cfg: &AccountingdConfig, url: &str, ce: &serde_json::Value) {
-    let body = match serde_json::to_vec(ce) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::error!(error = %e, "accountingd: failed to serialise outbound CE");
-            return;
-        }
-    };
-    let client = mako_service::http::default_client();
-    let mut req = client
-        .post(url)
-        .header("Content-Type", "application/cloudevents+json")
-        .body(body.clone());
-    if let Some(secret) = &cfg.erp_hmac_secret {
-        use secrecy::ExposeSecret;
-        let sig = mako_service::webhook::hmac_hex(secret.expose_secret().as_bytes(), &body);
-        req = req.header("X-Mako-Signature", format!("sha256={sig}"));
-    }
-    if let Err(e) = req.send().await {
-        tracing::warn!(error = %e, url, "accountingd: outbound CE dispatch failed");
-    }
-}
-
 // ── Account endpoints ─────────────────────────────────────────────────────────
 
 /// `GET /api/v1/accounts/{malo_id}`
@@ -254,24 +215,16 @@ pub async fn ingest_webhook(
 ) -> impl IntoResponse {
     // ── P0-2: Inbound HMAC verification ─────────────────────────────────────
     if let Some(ref secret) = cfg.erp_hmac_secret {
-        let expected = format!(
-            "sha256={}",
-            mako_service::webhook::hmac_hex(
-                {
-                    use secrecy::ExposeSecret;
-                    secret.expose_secret().as_bytes()
-                },
-                &body
-            )
-        );
+        use secrecy::ExposeSecret;
         let provided = headers
             .get("x-mako-signature")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        // Constant-time comparison to prevent timing attacks
-        if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+        // Canonical verify — constant-time, and tolerant of the `sha256=` prefix
+        // (so a bare-hex or prefixed sender both authenticate identically).
+        if !mako_service::webhook::verify_hmac(secret.expose_secret().as_bytes(), &body, provided) {
             tracing::warn!("accountingd: inbound webhook HMAC mismatch — rejected");
-            return StatusCode::FORBIDDEN.into_response();
+            return StatusCode::UNAUTHORIZED.into_response();
         }
     } else {
         tracing::warn!(
@@ -354,63 +307,6 @@ pub async fn ingest_webhook(
                     ce_id.as_deref(),
                     today,
                     Some(description),
-                )
-                .await
-                {
-                    tracing::error!(
-                        error = %e,
-                        "accountingd: ledger write FAILED — returning 500 so the sender redelivers"
-                    );
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-                }
-            }
-            StatusCode::OK.into_response()
-        }
-
-        // ── Credit note (billingd) ─────────────────────────────────────────────
-        // de.billing.gutschrift.erstellt: credit note, negative amount (credit to customer).
-        mako_events::billing::GUTSCHRIFT_ERSTELLT => {
-            let malo_id = data
-                .and_then(|d| d.get("malo_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let lf_mp_id = data
-                .and_then(|d| d.get("lf_mp_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or(&cfg.tenant);
-            let gutschrift_ct: i64 = data
-                .and_then(|d| d.get("betrag_eur"))
-                .and_then(|v| v.as_str())
-                .and_then(|s| {
-                    use rust_decimal::Decimal;
-                    use std::str::FromStr;
-                    Decimal::from_str(s).ok().map(|d| {
-                        -(d * Decimal::from(100))
-                            .round()
-                            .to_string()
-                            .parse::<i64>()
-                            .unwrap_or(0)
-                    })
-                })
-                .unwrap_or(0);
-            let account_id = upsert_account(&pool, malo_id, lf_mp_id, &cfg.tenant)
-                .await
-                .unwrap_or(Uuid::nil());
-            if account_id != Uuid::nil() && gutschrift_ct != 0 {
-                let record_id = data
-                    .and_then(|d| d.get("record_id"))
-                    .and_then(|v| v.as_str());
-                if let Err(e) = write_entry(
-                    &pool,
-                    account_id,
-                    &cfg.tenant,
-                    "GUTSCHRIFT",
-                    gutschrift_ct,
-                    record_id,
-                    Some(ce_type),
-                    ce_id.as_deref(),
-                    today,
-                    Some("Gutschrift / Rechnungskorrektur"),
                 )
                 .await
                 {
@@ -1983,9 +1879,18 @@ pub async fn post_jahresabschluss(
         }
     }
 
+    // Steps 3–5 commit atomically: the Jahresabschluss idempotency row, the
+    // Abschlag update, and the refund CloudEvent (persist-before-dispatch) all
+    // land in ONE transaction, so a delivery failure can never orphan the event
+    // from the state it represents.
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
     // Record the run so a re-call is a no-op (audit + idempotency guard).
     if let Err(e) = record_jahresabschluss(
-        &pool,
+        &mut *tx,
         &cfg.tenant,
         &malo_id,
         billing_year_i16,
@@ -1997,12 +1902,13 @@ pub async fn post_jahresabschluss(
     .await
     {
         tracing::error!(malo_id, error = %e, "accountingd: record_jahresabschluss failed");
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
     // 4. Update monthly Abschlag (§40 Abs. 1 EnWG: Abschlag must match actual consumption).
     if new_abschlag_ct != acct.abschlag_ct
         && let Err(e) = update_account_tenanted(
-            &pool,
+            &mut *tx,
             &malo_id,
             lf_mp_id,
             &cfg.tenant,
@@ -2019,30 +1925,38 @@ pub async fn post_jahresabschluss(
             malo_id,
             new_abschlag_ct,
             error = %e,
-            "accountingd: Jahresabschluss committed but Abschlag update failed"
+            "accountingd: Jahresabschluss Abschlag update failed"
         );
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
-    // 5. Dispatch the refund to the ERP/bank for execution (signed CE).
+    // 5. Enqueue the refund CloudEvent for the ERP/bank (persist-before-dispatch);
+    //    the outbox worker signs and delivers it after commit.
     if let Some(ref xml) = refund_pain001
-        && let Some(url) = cfg.erp_webhook_url.as_deref()
+        && cfg.erp_webhook_url.is_some()
     {
         let refund_ct = -settlement_ct;
-        let ce = serde_json::json!({
-            "specversion": "1.0",
-            "type": mako_events::accounting::ERSTATTUNG_FAELLIG,
-            "source": format!("urn:accountingd:{}", cfg.tenant),
-            "id": format!("{ce_id}:refund"),
-            "time": OffsetDateTime::now_utc().to_string(),
-            "datacontenttype": "application/json",
-            "data": {
+        let ce = mako_service::CloudEvent::new(
+            mako_service::source("accountingd", &cfg.tenant),
+            mako_events::accounting::ERSTATTUNG_FAELLIG,
+            "",
+            serde_json::json!({
                 "malo_id": malo_id,
                 "year": year,
                 "refund_ct": refund_ct,
                 "pain001_xml": xml,
-            }
-        });
-        post_signed_ce(&cfg, url, &ce).await;
+            }),
+        )
+        .with_id(format!("{ce_id}:refund"))
+        .without_subject();
+        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+            tracing::error!(malo_id, error = %e, "accountingd: outbox enqueue (erstattung) failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    }
+
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
     Json(serde_json::json!({
@@ -2861,6 +2775,14 @@ pub async fn put_eeg_payout_status(
         None
     };
 
+    // The status write and the RJCT/CANC CloudEvent commit atomically: the CE is
+    // enqueued in the SAME transaction as the eeg_payout_orders update
+    // (persist-before-dispatch), then delivered by the outbox worker.
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
     let updated = match sqlx::query(
         r"UPDATE eeg_payout_orders
           SET pain002_status = $1,
@@ -2874,7 +2796,7 @@ pub async fn put_eeg_payout_status(
     .bind(settled_at)
     .bind(payout_id)
     .bind(&cfg.tenant)
-    .fetch_optional(&pool)
+    .fetch_optional(&mut *tx)
     .await
     {
         Ok(Some(r)) => r,
@@ -2888,19 +2810,13 @@ pub async fn put_eeg_payout_status(
     let amount_ct: i64 = updated.get("amount_ct");
     let payment_type: String = updated.get("payment_type");
 
-    // Emit CloudEvent for RJCT / CANC so ERP can alert the operator.
-    if req.status != "ACCP"
-        && let Some(ref webhook_url) = cfg.erp_webhook_url
-    {
-        let ce = serde_json::json!({
-            "specversion": "1.0",
-            "type": mako_events::accounting::EEG_PAYOUT_REJECTED,
-            "source": format!("urn:accountingd:tenant:{}", cfg.tenant),
-            "id": uuid::Uuid::new_v4().to_string(),
-            "time": time::OffsetDateTime::now_utc().to_string(),
-            "subject": malo_id,
-            "datacontenttype": "application/json",
-            "data": {
+    // Enqueue CloudEvent for RJCT / CANC so ERP can alert the operator.
+    if req.status != "ACCP" && cfg.erp_webhook_url.is_some() {
+        let ce = mako_service::CloudEvent::new(
+            mako_service::source("accountingd", &cfg.tenant),
+            mako_events::accounting::EEG_PAYOUT_REJECTED,
+            &malo_id,
+            serde_json::json!({
                 "payout_id":     payout_id.to_string(),
                 "malo_id":       malo_id,
                 "end_to_end_ref": e2e_ref,
@@ -2908,15 +2824,16 @@ pub async fn put_eeg_payout_status(
                 "payment_type":  payment_type,
                 "pain002_status": req.status,
                 "pain002_reason": req.reason_code,
-            }
-        });
-        let client = mako_service::http::default_client();
-        let _ = client
-            .post(webhook_url)
-            .header("Content-Type", "application/cloudevents+json")
-            .json(&ce)
-            .send()
-            .await;
+            }),
+        );
+        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+            tracing::error!(malo_id, error = %e, "accountingd: outbox enqueue (eeg_payout_rejected) failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    }
+
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
     StatusCode::NO_CONTENT.into_response()

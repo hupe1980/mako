@@ -747,7 +747,6 @@ pub async fn tarifwechsel_vertrag(
     claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
-    Extension(http_client): Extension<Arc<reqwest::Client>>,
     Path(vertrag_id): Path<Uuid>,
     Json(input): Json<TarifwechselInput>,
 ) -> impl IntoResponse {
@@ -831,11 +830,25 @@ pub async fn tarifwechsel_vertrag(
 
     let is_future = input.wirksamkeit > today;
 
+    // CloudEvent type: tarifwechsel for immediate, tarifwechsel_geplant for future.
+    let ce_type = if is_future {
+        mako_events::vertrag::TARIFWECHSEL_GEPLANT
+    } else {
+        mako_events::vertrag::TARIFWECHSEL
+    };
+
+    // Persist-before-dispatch: the representing product-code write and its
+    // CloudEvent commit in ONE tx. The tarifbd PUT (an HTTP call) stays OUTSIDE
+    // the tx and runs only after the commit succeeds.
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
     if is_future {
         // Store as pending — background worker will apply on wirksamkeit
         // and emit 6-week advance notification per §41 Abs. 3 EnWG.
         if let Err(e) = store_pending_tarifwechsel(
-            &pool,
+            &mut *tx,
             input.komp_id,
             &input.new_product_code,
             input.wirksamkeit,
@@ -847,57 +860,50 @@ pub async fn tarifwechsel_vertrag(
     } else {
         // Apply immediately (urgent / retroactive correction).
         if let Err(e) =
-            update_komponente_product(&pool, input.komp_id, &input.new_product_code).await
+            update_komponente_product(&mut *tx, input.komp_id, &input.new_product_code).await
         {
             return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
-
-        // Update tarifbd product assignment
-        if let Some(ref malo_id) = komp.malo_id {
-            let url = format!(
-                "{}/api/v1/customer/{}/product",
-                cfg.tarifbd_url.trim_end_matches('/'),
-                malo_id
-            );
-            let body = serde_json::json!({
-                "product_code": input.new_product_code,
-                "lf_mp_id": cfg.lf_mp_id,
-                "assigned_from": input.wirksamkeit.to_string(),
-            });
-            let client = reqwest::Client::new();
-            let mut req = client.put(&url);
-            if let Some(ref k) = cfg.tarifbd_api_key {
-                req = req.bearer_auth(k);
-            }
-            let _ = req.json(&body).send().await;
+    }
+    if cfg.erp_webhook_url.is_some() {
+        let ce = build_cloud_event(
+            ce_type,
+            vertrag_id,
+            &cfg.tenant,
+            serde_json::json!({
+                "vertrag_id": vertrag_id,
+                "komp_id": input.komp_id,
+                "new_product_code": input.new_product_code,
+                "wirksamkeit": input.wirksamkeit.to_string(),
+                "geplant": is_future,
+            }),
+        );
+        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
     }
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
 
-    // Emit CloudEvent (tarifwechsel for immediate, tarifwechsel_geplant for future)
-    let ce_type = if is_future {
-        mako_events::vertrag::TARIFWECHSEL_GEPLANT
-    } else {
-        mako_events::vertrag::TARIFWECHSEL
-    };
-    if let Some(ref url) = cfg.erp_webhook_url {
-        emit_event(
-            &http_client,
-            url,
-            cfg.erp_hmac_secret.as_deref(),
-            build_cloud_event(
-                ce_type,
-                vertrag_id,
-                &cfg.tenant,
-                serde_json::json!({
-                    "vertrag_id": vertrag_id,
-                    "komp_id": input.komp_id,
-                    "new_product_code": input.new_product_code,
-                    "wirksamkeit": input.wirksamkeit.to_string(),
-                    "geplant": is_future,
-                }),
-            ),
-        )
-        .await;
+    // Update tarifbd product assignment — HTTP, OUTSIDE the tx (immediate branch only).
+    if !is_future && let Some(ref malo_id) = komp.malo_id {
+        let url = format!(
+            "{}/api/v1/customer/{}/product",
+            cfg.tarifbd_url.trim_end_matches('/'),
+            malo_id
+        );
+        let body = serde_json::json!({
+            "product_code": input.new_product_code,
+            "lf_mp_id": cfg.lf_mp_id,
+            "assigned_from": input.wirksamkeit.to_string(),
+        });
+        let client = mako_service::http::default_client();
+        let mut req = client.put(&url);
+        if let Some(ref k) = cfg.tarifbd_api_key {
+            req = req.bearer_auth(k);
+        }
+        let _ = req.json(&body).send().await;
     }
 
     (
@@ -920,9 +926,27 @@ pub async fn tarifwechsel_vertrag(
 pub async fn post_cloud_event(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
-    Extension(http_client): Extension<Arc<reqwest::Client>>,
-    Json(ce): Json<serde_json::Value>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
 ) -> impl IntoResponse {
+    // Inbound HMAC: reject a forged CloudEvent before it mutates contract state.
+    if let Some(secret) = &cfg.inbound_secret {
+        let provided = headers
+            .get("x-mako-signature")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if !mako_service::webhook::verify_hmac(secret.as_bytes(), &body, provided) {
+            tracing::warn!("vertragd: inbound CloudEvent signature mismatch — rejected");
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+    }
+    let ce: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "vertragd: malformed inbound CloudEvent");
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+    };
     let ce_id = ce.get("id").and_then(|v| v.as_str()).unwrap_or("");
     let ce_type = ce.get("type").and_then(|v| v.as_str()).unwrap_or("");
     let is_new = match idempotent_event(&pool, ce_id, ce_type, &ce).await {
@@ -982,32 +1006,52 @@ pub async fn post_cloud_event(
                 // Recompute Versorgungsvertrag status
                 if let Ok(all_komp) = list_komponenten(&pool, k.vertrag_id).await {
                     let new_vv_status = derive_vertrag_status(&all_komp);
-                    let _ = update_vertrag_status(&pool, k.vertrag_id, &cfg.tenant, new_vv_status)
-                        .await;
-                    // Emit de.vertrag.aktiv when all components confirmed
-                    if new_vv_status == "AKTIV"
-                        && let Some(ref url) = cfg.erp_webhook_url
-                    {
-                        emit_event(
-                            &http_client,
-                            url,
-                            cfg.erp_hmac_secret.as_deref(),
-                            build_cloud_event(
-                                mako_events::vertrag::AKTIV,
+                    // Persist the status transition and, on reaching AKTIV, the
+                    // de.vertrag.aktiv CloudEvent in ONE tx so an ERP-webhook
+                    // outage can never lose the activation notice — the outbox
+                    // worker delivers it (retried, dead-lettered) later.
+                    match pool.begin().await {
+                        Ok(mut tx) => {
+                            if let Err(e) = update_vertrag_status(
+                                &mut *tx,
                                 k.vertrag_id,
                                 &cfg.tenant,
-                                serde_json::json!({"vertrag_id": k.vertrag_id}),
-                            ),
-                        )
-                        .await;
-                        // Provision accountingd billing account
-                        if let Some(ref malo_id) = outcome.malo_id {
-                            tokio::spawn(provision_billing_account(
-                                Arc::clone(&cfg),
-                                pool.clone(),
-                                malo_id.clone(),
-                            ));
+                                new_vv_status,
+                            )
+                            .await
+                            {
+                                tracing::error!(error=%e, vertrag_id=%k.vertrag_id, "vertragd: update_vertrag_status failed");
+                            }
+                            // Emit de.vertrag.aktiv when all components confirmed.
+                            if new_vv_status == "AKTIV" && cfg.erp_webhook_url.is_some() {
+                                let ce = build_cloud_event(
+                                    mako_events::vertrag::AKTIV,
+                                    k.vertrag_id,
+                                    &cfg.tenant,
+                                    serde_json::json!({"vertrag_id": k.vertrag_id}),
+                                );
+                                if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+                                    tracing::error!(error=%e, "vertragd: outbox enqueue failed");
+                                }
+                            }
+                            if let Err(e) = tx.commit().await {
+                                tracing::error!(error=%e, "vertragd: commit failed for status transition");
+                            }
                         }
+                        Err(e) => {
+                            tracing::error!(error=%e, "vertragd: begin tx failed for status transition");
+                        }
+                    }
+                    // Provision accountingd billing account once the contract is AKTIV.
+                    if new_vv_status == "AKTIV"
+                        && cfg.erp_webhook_url.is_some()
+                        && let Some(ref malo_id) = outcome.malo_id
+                    {
+                        tokio::spawn(provision_billing_account(
+                            Arc::clone(&cfg),
+                            pool.clone(),
+                            malo_id.clone(),
+                        ));
                     }
                 }
             }
@@ -1108,7 +1152,7 @@ async fn dispatch_lieferbeginn(
     // After all retries the component stays in ANGELEGT and is flagged by
     // `find_stuck_komponents` (§20 EnWG parity monitor) after 5 WT.
     for attempt in 1u32..=3 {
-        let client = reqwest::Client::new();
+        let client = mako_service::http::default_client();
         let mut req = client.post(&url);
         if let Some(ref k) = cfg.processd_api_key {
             req = req.bearer_auth(k);
@@ -1193,7 +1237,7 @@ async fn dispatch_lieferende(
     // a single-attempt fire-and-forget silently loses the Lieferende
     // initiation on any transient processd downtime.
     for attempt in 1u32..=3 {
-        let client = reqwest::Client::new();
+        let client = mako_service::http::default_client();
         let mut req = client.post(&url);
         if let Some(ref k) = cfg.processd_api_key {
             req = req.bearer_auth(k);
@@ -1236,7 +1280,7 @@ async fn post_bestaetigt_actions(
         malo_id
     );
     let body = serde_json::json!({ "product_code": product_code, "lf_mp_id": cfg.lf_mp_id, "assigned_from": lieferbeginn.to_string() });
-    let client = reqwest::Client::new();
+    let client = mako_service::http::default_client();
     let mut req = client.put(&url);
     if let Some(ref k) = cfg.tarifbd_api_key {
         req = req.bearer_auth(k);
@@ -1253,7 +1297,7 @@ async fn provision_billing_account(cfg: Arc<VertragdConfig>, _pool: PgPool, malo
         cfg.accountingd_url.trim_end_matches('/')
     );
     let body = serde_json::json!({ "malo_id": malo_id, "lf_mp_id": cfg.lf_mp_id });
-    let client = reqwest::Client::new();
+    let client = mako_service::http::default_client();
     let mut req = client.post(&url);
     if let Some(ref k) = cfg.accountingd_api_key {
         req = req.bearer_auth(k);
@@ -1275,7 +1319,7 @@ async fn trigger_ablesesteuerung(
         cfg.edmd_url.trim_end_matches('/')
     );
     let body = serde_json::json!({ "malo_id": malo_id, "anlass": anlass, "auftraggeber_rolle": "LF", "geplant_am": geplant_am.to_string(), "auftrag_position_id": komp_id });
-    let client = reqwest::Client::new();
+    let client = mako_service::http::default_client();
     let mut req = client.post(&url);
     if let Some(ref k) = cfg.edmd_api_key {
         req = req.bearer_auth(k);
@@ -1296,34 +1340,14 @@ pub async fn emit_event(
     client: &reqwest::Client,
     webhook_url: &str,
     hmac_secret: Option<&str>,
-    ce: serde_json::Value,
+    ce: mako_service::CloudEvent,
 ) -> bool {
-    let body = match serde_json::to_vec(&ce) {
-        Ok(b) => b,
+    match mako_service::post_ce_with_retry(client, webhook_url, &ce, hmac_secret.map(str::as_bytes))
+        .await
+    {
+        Ok(()) => true,
         Err(e) => {
-            tracing::warn!(error=%e, "vertragd: CloudEvent serialization failed");
-            return false;
-        }
-    };
-    let mut req = client
-        .post(webhook_url)
-        .header("Content-Type", "application/cloudevents+json");
-    // HMAC-SHA256 webhook signature using workspace-standard sha256= prefix.
-    if let Some(secret) = hmac_secret {
-        let sig = format!(
-            "sha256={}",
-            mako_service::webhook::hmac_hex(secret.as_bytes(), &body)
-        );
-        req = req.header("X-Mako-Signature", sig);
-    }
-    match req.body(body).send().await {
-        Ok(resp) if resp.status().is_success() => true,
-        Ok(resp) => {
-            tracing::warn!(status = %resp.status(), "vertragd: ERP webhook non-2xx");
-            false
-        }
-        Err(e) => {
-            tracing::warn!(error=%e, "vertragd: ERP webhook error");
+            tracing::warn!(error = %e, "vertragd: ERP webhook delivery failed");
             false
         }
     }
@@ -1490,28 +1514,29 @@ pub async fn put_preisgarantie(
             }
         });
 
-    match upsert_preisgarantie(&pool, vertrag_id, &cfg.tenant, canonical, bis).await {
-        Ok(()) => {
-            // Emit CloudEvent to ERP.
-            if let Some(ref url) = cfg.erp_webhook_url {
-                let ce = build_cloud_event(
-                    mako_events::vertrag::PREISGARANTIE_UPDATED,
-                    vertrag_id,
-                    &cfg.tenant,
-                    serde_json::json!({ "vertrag_id": vertrag_id }),
-                );
-                // Signed like every other event — an ERP verifying the HMAC
-                // must not silently reject the price-guarantee notice.
-                emit_event(
-                    &reqwest::Client::new(),
-                    url,
-                    cfg.erp_hmac_secret.as_deref(),
-                    ce,
-                )
-                .await;
-            }
-            StatusCode::NO_CONTENT.into_response()
+    // Persist-before-dispatch: the price-guarantee update and its CloudEvent
+    // commit in ONE transaction, so an ERP-webhook failure can never lose the
+    // notice — the outbox worker delivers it (retried, dead-lettered) later.
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    if let Err(e) = upsert_preisgarantie(&mut *tx, vertrag_id, &cfg.tenant, canonical, bis).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+    if cfg.erp_webhook_url.is_some() {
+        let ce = build_cloud_event(
+            mako_events::vertrag::PREISGARANTIE_UPDATED,
+            vertrag_id,
+            &cfg.tenant,
+            serde_json::json!({ "vertrag_id": vertrag_id }),
+        );
+        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
+    }
+    match tx.commit().await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -1946,25 +1971,31 @@ pub async fn widerruf_kuendigung_handler(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
-    Extension(http_client): Extension<Arc<reqwest::Client>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    match widerruf_kuendigung(&pool, id, &cfg.tenant).await {
+    // Persist-before-dispatch: the Widerruf writes (component + contract status
+    // reverts) and the de.vertrag.kuendigung_widerrufen CloudEvent commit in ONE
+    // tx so an ERP-webhook outage can never lose the notice.
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    match widerruf_kuendigung(&mut tx, id, &cfg.tenant).await {
         Ok(()) => {
-            // Emit CloudEvent so ERP/portald can update their state.
-            if let Some(ref url) = cfg.erp_webhook_url {
-                emit_event(
-                    &http_client,
-                    url,
-                    cfg.erp_hmac_secret.as_deref(),
-                    build_cloud_event(
-                        mako_events::vertrag::KUENDIGUNG_WIDERRUFEN,
-                        id,
-                        &cfg.tenant,
-                        serde_json::json!({ "vertrag_id": id }),
-                    ),
-                )
-                .await;
+            // Enqueue CloudEvent so ERP/portald can update their state.
+            if cfg.erp_webhook_url.is_some() {
+                let ce = build_cloud_event(
+                    mako_events::vertrag::KUENDIGUNG_WIDERRUFEN,
+                    id,
+                    &cfg.tenant,
+                    serde_json::json!({ "vertrag_id": id }),
+                );
+                if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                }
+            }
+            if let Err(e) = tx.commit().await {
+                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
             }
             (
                 StatusCode::OK,
@@ -1998,7 +2029,6 @@ pub async fn kuendige_rahmenvertrag_handler(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
-    Extension(http_client): Extension<Arc<reqwest::Client>>,
     Path(rahmenvertrag_id): Path<Uuid>,
     Json(input): Json<KuendigungInput>,
 ) -> impl IntoResponse {
@@ -2078,26 +2108,38 @@ pub async fn kuendige_rahmenvertrag_handler(
                     update_komponente_status(&pool, k.id, "BEENDET", None, None, None, None).await;
             }
         }
-        let _ = update_vertrag_status(&pool, v.id, &cfg.tenant, "GEKÜNDIGT").await;
-
-        // Emit de.vertrag.gekuendigt per contract
-        if let Some(ref url) = cfg.erp_webhook_url {
-            emit_event(
-                &http_client,
-                url,
-                cfg.erp_hmac_secret.as_deref(),
-                build_cloud_event(
-                    mako_events::vertrag::GEKUENDIGT,
-                    v.id,
-                    &cfg.tenant,
-                    serde_json::json!({
-                        "vertrag_id": v.id,
-                        "rahmenvertrag_id": rahmenvertrag_id,
-                        "lieferende": input.lieferende.to_string(),
-                    }),
-                ),
-            )
-            .await;
+        // Persist GEKÜNDIGT + de.vertrag.gekuendigt CloudEvent in ONE tx so an
+        // ERP-webhook outage can never lose the termination notice.
+        match pool.begin().await {
+            Ok(mut tx) => {
+                if let Err(e) =
+                    update_vertrag_status(&mut *tx, v.id, &cfg.tenant, "GEKÜNDIGT").await
+                {
+                    tracing::error!(error=%e, vertrag_id=%v.id, "vertragd: update_vertrag_status failed");
+                }
+                // Emit de.vertrag.gekuendigt per contract.
+                if cfg.erp_webhook_url.is_some() {
+                    let ce = build_cloud_event(
+                        mako_events::vertrag::GEKUENDIGT,
+                        v.id,
+                        &cfg.tenant,
+                        serde_json::json!({
+                            "vertrag_id": v.id,
+                            "rahmenvertrag_id": rahmenvertrag_id,
+                            "lieferende": input.lieferende.to_string(),
+                        }),
+                    );
+                    if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+                        tracing::error!(error=%e, "vertragd: outbox enqueue failed");
+                    }
+                }
+                if let Err(e) = tx.commit().await {
+                    tracing::error!(error=%e, "vertragd: commit failed for GEKÜNDIGT transition");
+                }
+            }
+            Err(e) => {
+                tracing::error!(error=%e, "vertragd: begin tx failed for GEKÜNDIGT transition");
+            }
         }
     }
 
@@ -2139,8 +2181,27 @@ pub async fn post_angebot_webhook(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
     Extension(_http_client): Extension<Arc<reqwest::Client>>,
-    Json(ce): Json<serde_json::Value>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
 ) -> impl IntoResponse {
+    // Inbound HMAC: a forged Angebot-angenommen would auto-create a Rahmenvertrag.
+    if let Some(secret) = &cfg.inbound_secret {
+        let provided = headers
+            .get("x-mako-signature")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if !mako_service::webhook::verify_hmac(secret.as_bytes(), &body, provided) {
+            tracing::warn!("vertragd: inbound Angebot webhook signature mismatch — rejected");
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
+    }
+    let ce: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "vertragd: malformed inbound Angebot CloudEvent");
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+    };
     // Validate CE type
     if ce.get("type").and_then(|v| v.as_str()) != Some(mako_events::tarif::ANGEBOT_ANGENOMMEN) {
         return (

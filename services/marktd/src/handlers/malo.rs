@@ -217,6 +217,7 @@ fn default_size() -> u32 {
 pub async fn put_malo<Ma, Me, Co, Su, Ci, Pa>(
     State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<sqlx::PgPool>,
     headers: HeaderMap,
     claims: Claims,
     Path(id): Path<String>,
@@ -341,8 +342,13 @@ where
                 marktmaloid: Some(malo_id.to_string()),
                 ..Default::default()
             });
-            if let Ok(payload) = serde_json::to_value(&evt) {
-                let _ = state.event_tx.send(payload);
+            if let Err(e) = crate::outbox::enqueue(&pool, &evt, &state.notify).await {
+                tracing::error!(error = %e, "malo: durable enqueue failed");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "event enqueue failed"})),
+                )
+                    .into_response();
             }
 
             let status = if exists {

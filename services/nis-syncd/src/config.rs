@@ -26,6 +26,11 @@ pub struct NisSyncdConfig {
     /// to this URL after each sync pass so downstream consumers (e.g. `obsd`
     /// alerting, ERP systems) can react to topology changes.
     pub drift_webhook_url: Option<String>,
+    /// HMAC-SHA256 secret for signing the outbound `de.markt.grid.drift.detected`
+    /// CloudEvents (`X-Mako-Signature: sha256=<hex>`). Use `env:VAR_NAME`.
+    /// Leave unset only in dev — a receiver verifying the signature rejects
+    /// unsigned events.
+    pub drift_webhook_secret: Option<String>,
     /// Maximum concurrent marktd PUT requests per sync pass.
     ///
     /// Defaults to 20. Increase for large NIS exports; reduce if marktd rate-limits.
@@ -43,4 +48,14 @@ fn default_sync_concurrency() -> usize {
 }
 fn default_max_batch_size() -> usize {
     50_000
+}
+
+impl mako_service::ServiceConfig for NisSyncdConfig {
+    /// Stateless — no database.
+    fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
+        None
+    }
+    fn bind_addr(&self) -> String {
+        format!("0.0.0.0:{}", self.port.unwrap_or(9680))
+    }
 }

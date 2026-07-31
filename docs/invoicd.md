@@ -54,8 +54,8 @@ graph TB
 │  GET  /api/v1/overdue-remadv        ← receipts near pay_by      │
 │  GET  /api/v1/zahlungsstatus/{malo_id}  ← payment status per MaLo│
 │  POST /api/v1/selbstausstellen/{malo_id} ← LF selbstausgestellt │
-│  GET  /metrics                      ← Prometheus metrics        │
-│  GET  /health/live  /health/ready                               │
+│  GET  /invoicd/metrics              ← invoicd Prometheus gauges │
+│  GET  /metrics  /health/live  /health/ready  ← runner infra     │
 │  POST|GET /mcp      ← MCP Streamable HTTP (LLM tooling)         │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -124,7 +124,7 @@ INVOIC when `[erp] webhook_url` is configured.
 {
   "specversion": "1.0",
   "type": "de.invoic.receipt.settled",
-  "source": "urn:invoicd:tenant:9900357000004",
+  "source": "urn:mako:invoicd:tenant:9900357000004",
   "subject": "<process_id>",
   "data": {
     "process_id": "...",
@@ -144,7 +144,7 @@ INVOIC when `[erp] webhook_url` is configured.
 {
   "specversion": "1.0",
   "type": "de.invoic.payment.overdue",
-  "source": "urn:invoicd:tenant:9900357000004",
+  "source": "urn:mako:invoicd:tenant:9900357000004",
   "subject": "<receipt_id>",
   "data": {
     "receipt_id": "550e8400-...",
@@ -295,17 +295,22 @@ stateDiagram-v2
 `invoicd` reads its configuration from a **TOML file** (default: `invoicd.toml`),
 with secrets deferred to environment variables via `"env:VAR_NAME"` values.
 
-### CLI flags
+### Startup inputs
 
-| Flag | Env var | Default | Description |
-|------|---------|---------|-------------|
-| `--config` / `-c` | `INVOICD_CONFIG` | `invoicd.toml` | Path to `invoicd.toml` |
-| `--log-level` | `RUST_LOG` | `info` | Log level |
-| `--check` | `INVOICD_CHECK` | `false` | Validate config + DB connectivity, then exit 0. Used by Dockerfile HEALTHCHECK. |
+The lifecycle is owned by `mako_service::run`; the binary takes no config CLI
+flags. It discovers everything from the environment:
+
+| Setting | Source | Default | Description |
+|---------|--------|---------|-------------|
+| Config file path | `INVOICD_CONFIG` env | `invoicd.toml` | Path to `invoicd.toml` |
+| Tracing filter | `LOG_LEVEL` / `RUST_LOG` env | `info` | Log level |
+| `--check` | container HEALTHCHECK | — | Probe the running instance's `/health/ready` and exit `0`/non-zero. Used by the Dockerfile HEALTHCHECK. |
+
+Any TOML key may be overridden by an `INVOICD_`-prefixed environment variable
+(`__` separates nested sections, e.g. `INVOICD_DATABASE__URL`).
 
 ```bash
-invoicd --config /etc/invoicd/invoicd.toml
-# or: INVOICD_CONFIG=/etc/invoicd/invoicd.toml invoicd
+INVOICD_CONFIG=/etc/invoicd/invoicd.toml invoicd
 ```
 
 ### Full `invoicd.toml` reference
@@ -465,7 +470,10 @@ The `invoice-reconciliation-agent` in `agentd` subscribes to `de.invoic.payment.
 Alert when receipts approach `pay_by` without a `dispatched_at` — the NB may
 not have received the REMADV and will begin a dispute window.
 
-### Prometheus metrics (`/metrics`)
+### Prometheus metrics (`/invoicd/metrics`)
+
+These invoicd-specific gauges live at `/invoicd/metrics`; the runner mounts the
+generic request-counter `/metrics` separately.
 
 | Metric | Description |
 |--------|-------------|

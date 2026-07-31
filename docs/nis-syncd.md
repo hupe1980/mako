@@ -200,7 +200,7 @@ When `drift_detected = true` **and** `drift_webhook_url` is configured,
 {
   "specversion": "1.0",
   "id":          "550e8400-e29b-41d4-a716-446655440000",
-  "source":      "urn:nis-syncd:nb:9900357000004",
+  "source":      "urn:mako:nis-syncd:tenant:9900357000004",
   "type":        "de.markt.grid.drift.detected",
   "time":        "2026-07-11T08:15:00Z",
   "data": {

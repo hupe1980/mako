@@ -39,7 +39,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use mako_markt::cloudevents::verify_signature;
+use mako_service::webhook::verify_hmac;
 use secrecy::{ExposeSecret, SecretString};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -113,7 +113,7 @@ pub async fn handle_webhook(
                 .get("x-mako-signature")
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
-            if !verify_signature(secret.expose_secret().as_bytes(), &body, provided) {
+            if !verify_hmac(secret.expose_secret().as_bytes(), &body, provided) {
                 warn!("edmd: webhook signature mismatch");
                 return (StatusCode::UNAUTHORIZED, "signature mismatch").into_response();
             }
@@ -581,38 +581,35 @@ pub async fn handle_webhook(
                 );
 
                 if let Some(ref webhook_url) = state.erp_webhook_url {
-                    let payload = serde_json::json!({
-                        "specversion": "1.0",
-                        "type": mako_events::messwert::READING_QUALITY_WARNING,
-                        "source": format!("urn:edmd:tenant:{}:{}", state.tenant, malo_id),
-                        "id": uuid::Uuid::new_v4().to_string(),
-                        "time": time::OffsetDateTime::now_utc()
-                            .format(&time::format_description::well_known::Rfc3339)
-                            .unwrap_or_default(),
-                        "subject": malo_id,
-                        "tenantid": state.tenant,
-                        "datacontenttype": "application/json",
-                        // The MSCONS process that carried the anomalous batch —
-                        // same tracing contract as the direct-push events.
-                        "correlationid": process_id.to_string(),
-                        "causationid": process_id.to_string(),
-                        "data": {
+                    let event = mako_service::CloudEvent::new(
+                        mako_service::source("edmd", &state.tenant),
+                        mako_events::messwert::READING_QUALITY_WARNING,
+                        malo_id.clone(),
+                        serde_json::json!({
                             "malo_id": malo_id, "pid": pid,
                             "process_id": process_id.to_string(),
                             "issue_count": validation.issue_count,
                             "billing_block_count": validation.billing_block_count,
                             "rules": validation.rules,
-                        }
-                    });
+                        }),
+                    )
+                    .extension("tenantid", state.tenant.clone())
+                    // The MSCONS process that carried the anomalous batch —
+                    // same tracing contract as the direct-push events.
+                    .extension("correlationid", process_id.to_string())
+                    .extension("causationid", process_id.to_string());
                     // One signed, retrying emitter for every edmd CloudEvent.
                     let client = mako_service::http::default_client();
-                    crate::server::post_ce_with_retry(
+                    if let Err(e) = mako_service::post_ce_with_retry(
                         &client,
                         webhook_url,
-                        &payload,
+                        &event,
                         state.webhook_secret_bytes(),
                     )
-                    .await;
+                    .await
+                    {
+                        tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
+                    }
                 }
             }
         }

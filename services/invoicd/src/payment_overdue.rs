@@ -54,7 +54,7 @@ async fn run(
     erp_hmac_secret: Option<secrecy::SecretString>,
     shutdown: CancellationToken,
 ) {
-    let client = reqwest::Client::new();
+    let client = mako_service::http::default_client();
 
     loop {
         tokio::select! {
@@ -113,49 +113,25 @@ async fn check_and_emit(
         let sender_mp_id: String = row.try_get("sender_mp_id")?;
         let pay_by: time::OffsetDateTime = row.try_get("pay_by")?;
 
-        let event = serde_json::json!({
-            "specversion": "1.0",
-            "type":        mako_events::invoic::PAYMENT_OVERDUE,
-            "source":      format!("urn:invoicd:tenant:{tenant}"),
-            "subject":     process_id,
-            "id":          uuid::Uuid::new_v4().to_string(),
-            "time":        time::OffsetDateTime::now_utc()
-                               .format(&Rfc3339)
-                               .unwrap_or_default(),
-            "data": {
+        let ce = mako_service::CloudEvent::new(
+            mako_service::source("invoicd", tenant),
+            mako_events::invoic::PAYMENT_OVERDUE,
+            process_id,
+            serde_json::json!({
                 "receipt_id":   id,
                 "pid":          pid,
                 "sender_mp_id": sender_mp_id,
                 "pay_by":       pay_by.format(&Rfc3339).unwrap_or_default(),
                 "tenant":       tenant,
-            }
-        });
+            }),
+        );
 
-        let body = serde_json::to_string(&event)?;
-
-        let mut req = client
-            .post(erp_webhook_url)
-            .header("Content-Type", "application/cloudevents+json")
-            .body(body.clone());
-
-        if let Some(secret) = erp_hmac_secret {
-            let sig = format!(
-                "sha256={}",
-                mako_service::webhook::hmac_hex(secret.expose_secret().as_bytes(), body.as_bytes())
-            );
-            req = req.header("X-Mako-Signature", sig);
-        }
-
-        match req.send().await {
-            Ok(resp) if resp.status().is_success() => {
+        let secret = erp_hmac_secret
+            .as_ref()
+            .map(|s| s.expose_secret().as_bytes());
+        match mako_service::post_ce_with_retry(client, erp_webhook_url, &ce, secret).await {
+            Ok(()) => {
                 emitted += 1;
-            }
-            Ok(resp) => {
-                warn!(
-                    receipt_id = %id,
-                    status = %resp.status(),
-                    "invoicd: payment.overdue delivery failed (non-2xx)"
-                );
             }
             Err(e) => {
                 warn!(receipt_id = %id, error = %e, "invoicd: payment.overdue delivery error");

@@ -345,11 +345,13 @@ pub async fn get_konfigurationsprodukte(
 /// on every successful write so ERP subscribers and `processd` see the change.
 ///
 /// Returns `204 No Content` on success.
+#[allow(clippy::too_many_arguments)]
 pub async fn put_konfigurationsprodukte(
     Extension(repo): Extension<SrRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
-    Extension(event_tx): Extension<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>,
+    Extension(pool): Extension<sqlx::PgPool>,
+    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     claims: Claims,
     Path(sr_id): Path<String>,
     Json(body): Json<serde_json::Value>,
@@ -431,8 +433,9 @@ pub async fn put_konfigurationsprodukte(
                     "count": canonical.as_array().map(|a| a.len()).unwrap_or(0),
                 }),
             );
-            if let Ok(payload) = serde_json::to_value(&evt) {
-                let _ = event_tx.send(payload);
+            if let Err(e) = crate::outbox::enqueue(&pool, &evt, &notify).await {
+                tracing::error!(error = %e, "device: durable enqueue failed");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
             StatusCode::NO_CONTENT.into_response()
         }
@@ -460,7 +463,8 @@ pub async fn delete_konfigurationsprodukt(
     Extension(repo): Extension<SrRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
-    Extension(event_tx): Extension<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>,
+    Extension(pool): Extension<sqlx::PgPool>,
+    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     claims: Claims,
     Path((sr_id, produktcode)): Path<(String, String)>,
 ) -> impl IntoResponse {
@@ -517,8 +521,9 @@ pub async fn delete_konfigurationsprodukt(
                     "count": new_list.as_array().map(|a| a.len()).unwrap_or(0),
                 }),
             );
-            if let Ok(payload) = serde_json::to_value(&evt) {
-                let _ = event_tx.send(payload);
+            if let Err(e) = crate::outbox::enqueue(&pool, &evt, &notify).await {
+                tracing::error!(error = %e, "device: durable enqueue failed");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
             StatusCode::NO_CONTENT.into_response()
         }
@@ -920,11 +925,13 @@ pub async fn get_geraet_konfigurationen(
 /// before expiry (BSI TR-03109-4 §6.3), once per tier per certificate — an expired
 /// cert silently ends §14a Fernsteuerbarkeit. The `agentd` `smgw-diagnostics-agent`
 /// consumes the warning and escalates renewal to the MSB.
+#[allow(clippy::too_many_arguments)]
 pub async fn put_geraet_konfigurationen(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
-    Extension(event_tx): Extension<tokio::sync::mpsc::UnboundedSender<serde_json::Value>>,
+    Extension(pool): Extension<sqlx::PgPool>,
+    Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     claims: Claims,
     Path((zaehler_id, geraet_id)): Path<(String, String)>,
     Json(req): Json<PutKonfigurationenRequest>,
@@ -981,8 +988,9 @@ pub async fn put_geraet_konfigurationen(
                     "count":      count,
                 }),
             );
-            if let Ok(payload) = serde_json::to_value(&evt) {
-                let _ = event_tx.send(payload);
+            if let Err(e) = crate::outbox::enqueue(&pool, &evt, &notify).await {
+                tracing::error!(error = %e, "device: durable enqueue failed");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
             StatusCode::NO_CONTENT.into_response()
         }

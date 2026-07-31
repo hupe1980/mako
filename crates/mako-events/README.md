@@ -14,6 +14,21 @@ use mako_events::markt;
 assert_eq!(markt::VERSORGUNG_GAP_DETECTED, "de.markt.versorgung.gap-detected");
 ```
 
+## Scope: type names only (a zero-dependency leaf)
+
+This crate is deliberately a **single-purpose leaf with no dependencies**: it owns
+the event *identity* layer — the `type` constants and the glob `matches()` — and
+nothing else. It is safe for any crate to depend on because it pulls in nothing
+and rebuilds nothing.
+
+Everything about the CloudEvent *envelope* and its *transport* — building the
+structured-mode body, the `source` URI convention, HMAC signing/verification, and
+the retrying publisher — lives in [`mako-service`](../mako-service/)
+(`CloudEvent`, `source`, `post_ce_with_retry`, `webhook::{sign, verify_hmac}`),
+which already carries the serde/uuid/time/reqwest/hmac stack those need. Keeping
+that out of `mako-events` is what preserves the leaf property. Emitters pass a
+constant from this catalog as the `type`; the two layers meet there.
+
 ## Conventions
 
 - Lowercase reverse-DNS: `de.<context>.<noun>.<participle>`

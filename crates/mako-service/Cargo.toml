@@ -28,7 +28,7 @@ cedar = ["dep:cedar-policy"]
 ## Enables OIDC/JWT verification via `OidcVerifier`.
 ## Wire in via `OidcVerifier::new(...)` and `Extension<OidcVerifier>`.
 ## Provides the `Claims` Axum extractor for use in handlers.
-oidc = ["dep:jsonwebtoken", "dep:reqwest", "dep:tokio-util"]
+oidc = ["dep:jsonwebtoken"]
 
 ## Enables the Kafka-backed EventBus via `krafka` (pure Rust, MSRV 1.88, zero-unsafe).
 ## Use only when webhook fan-out is a measured bottleneck (>500 MaLo, >20 subscribers).
@@ -63,17 +63,27 @@ tracing-subscriber = { workspace = true }
 tower-http = { workspace = true }
 axum       = { version = "0.8" }
 tokio      = { version = "1", features = ["rt", "net", "signal", "macros"] }
+# Always-on: `shutdown` (CancellationToken) and `http`/`cloudevent` (reqwest
+# outbound client + signed CloudEvent publisher) are compiled unconditionally, so
+# these are core deps, not feature-gated. (Previously mis-declared optional under
+# `oidc`, which only ever resolved because every consumer enables `oidc`.)
+tokio-util = { workspace = true }
+reqwest    = { workspace = true }
 subtle     = "2"
 secrecy    = "0.10"
 # Shared PostgreSQL pool builder (`DatabaseConfig::connect`). Every daemon speaks
 # to Postgres through sqlx; centralising the pool tuning here keeps it consistent.
-sqlx       = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres"] }
+sqlx       = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json", "macros"] }
 figment    = { workspace = true }
 figment-file-provider-adapter = { workspace = true }
 toml       = "0.8"
 hmac       = { version = "0.12", default-features = false }
 sha2       = { version = "0.10", default-features = false }
 hex        = { version = "0.4" }
+# CloudEvents envelope: RFC3339 `time` and UUID `id`. Cheap, always-on — the
+# envelope builder is core to every emitting service.
+uuid       = { workspace = true }
+time       = { workspace = true }
 
 # Optional OTel deps — only compiled when feature=otel is enabled
 opentelemetry             = { workspace = true, optional = true }
@@ -85,10 +95,8 @@ tracing-opentelemetry     = { workspace = true, optional = true }
 # Optional Cedar dep — only compiled when feature=cedar is enabled
 cedar-policy              = { workspace = true, optional = true }
 
-# Optional OIDC deps — only compiled when feature=oidc is enabled
+# Optional OIDC dep — only compiled when feature=oidc is enabled
 jsonwebtoken              = { workspace = true, optional = true }
-reqwest                   = { workspace = true, optional = true }
-tokio-util                = { workspace = true, optional = true }
 
 # Optional Kafka dep — only compiled when feature=kafka is enabled
 krafka                    = { workspace = true, optional = true }
@@ -106,3 +114,6 @@ governor                  = { version = "0.6", optional = true }
 [dev-dependencies]
 tower         = { version = "0.5", features = ["util"] }
 tokio         = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "net"] }
+# Real-PostgreSQL integration tests for the transactional outbox.
+testcontainers         = { workspace = true }
+testcontainers-modules = { workspace = true }

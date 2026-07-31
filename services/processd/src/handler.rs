@@ -19,7 +19,6 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use mako_markt::cloudevents::verify_signature;
 use secrecy::ExposeSecret;
 use tracing::{debug, warn};
 
@@ -32,15 +31,14 @@ pub async fn handle_webhook(
     body: Bytes,
 ) -> impl IntoResponse {
     // ── 1. Verify HMAC signature ──────────────────────────────────────────
-    if let Some(secret) = state.inbound_secret.as_ref() {
-        let provided = headers
-            .get("x-mako-signature")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if !verify_signature(secret.expose_secret().as_bytes(), &body, provided) {
-            warn!("processd: webhook HMAC signature mismatch");
-            return (StatusCode::UNAUTHORIZED, "signature mismatch").into_response();
-        }
+    let inbound_secret = (*state.inbound_secret)
+        .as_ref()
+        .map(|s| s.expose_secret().as_bytes().to_vec());
+    if let Err(code) =
+        mako_service::webhook::verify_request(inbound_secret.as_deref(), &headers, &body)
+    {
+        warn!("processd: webhook HMAC signature mismatch");
+        return code.into_response();
     }
 
     // ── 2. Parse JSON body ────────────────────────────────────────────────

@@ -3,8 +3,12 @@
 use serde::Deserialize;
 use std::path::Path;
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+// NOTE: no `deny_unknown_fields` on the top-level struct — `mako_service::run`
+// loads config via `load_config`, whose env layer (`MABIS_SYNCD_*`) also surfaces
+// the `MABIS_SYNCD_CONFIG` path variable as a stray `config` key. Rejecting
+// unknown fields here would make every deployment that points at its config via
+// that variable fail to start. Nested blocks keep `deny_unknown_fields`.
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub http: HttpConfig,
     pub database: DatabaseConfig,
@@ -32,7 +36,16 @@ pub struct Config {
     pub allow_insecure_no_auth: bool,
 }
 
-#[derive(Debug, Deserialize)]
+impl mako_service::ServiceConfig for Config {
+    fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
+        Some(&self.database)
+    }
+    fn bind_addr(&self) -> String {
+        self.http.addr.clone()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HttpConfig {
     #[serde(default = "default_addr")]
@@ -53,7 +66,7 @@ impl Default for HttpConfig {
 
 pub use mako_service::config::DatabaseConfig;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IdentityConfig {
     /// Tenant identifier (BDEW Codenummer of ÜNB / NB).
@@ -71,7 +84,7 @@ pub struct IdentityConfig {
     pub bilanzierungsgebiet_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EdmdConfig {
     /// `edmd` base URL (e.g. `http://edmd:8380`).
@@ -86,7 +99,7 @@ pub struct EdmdConfig {
 /// single config value put every MaLo of a tenant into one Summenzeitreihe
 /// regardless of where it actually sits, which misfiles the whole submission for
 /// any tenant spanning more than one zone.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MarktdConfig {
     /// `marktd` base URL (e.g. `http://marktd:8180`).
@@ -95,7 +108,7 @@ pub struct MarktdConfig {
     pub api_key: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MakodConfig {
     /// `makod` base URL (e.g. `http://makod:8080`).
@@ -104,7 +117,7 @@ pub struct MakodConfig {
     pub api_key: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ScheduleConfig {
     /// Werktag after the Bilanzierungsmonat on which to submit.

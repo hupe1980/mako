@@ -81,7 +81,7 @@ Your ERP must accept `POST` requests at the configured URL:
 POST /mako/events
 Content-Type: application/cloudevents+json
 X-Idempotency-Key: 01932a4f-7b3e-4c5d-8f6a-9e0b1c2d3e4f
-X-Mako-Signature: <hmac-sha256-hex>
+X-Mako-Signature: sha256=<hmac-sha256-hex>
 ```
 
 Body (CloudEvents 1.0 structured-mode JSON):
@@ -90,7 +90,7 @@ Body (CloudEvents 1.0 structured-mode JSON):
 {
   "specversion": "1.0",
   "id": "01932a4f-7b3e-4c5d-8f6a-9e0b1c2d3e4f",
-  "source": "urn:mako:tenant:9900357000004",
+  "source": "urn:mako:makod:tenant:9900357000004",
   "type": "de.mako.aperak.accepted",
   "time": "2026-10-01T10:15:00+02:00",
   "subject": "018f3a2b-...",
@@ -114,22 +114,25 @@ Body (CloudEvents 1.0 structured-mode JSON):
 **Step 4 — Verify the signature**
 
 Compute HMAC-SHA256 over the raw request body using your shared secret and
-compare with the `X-Mako-Signature` header (64-char lowercase hex):
+compare with the `X-Mako-Signature` header. The header is `sha256=<hex>`; strip
+the `sha256=` prefix before comparing (the digest is 64-char lowercase hex):
 
 ```python
 import hmac, hashlib
 
 def verify_mako_signature(body: bytes, secret: str, header: str) -> bool:
+    provided = header.removeprefix("sha256=")
     expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, header)
+    return hmac.compare_digest(expected, provided)
 ```
 
 ```typescript
 import { createHmac, timingSafeEqual } from "crypto";
 
 function verifyMakoSignature(body: Buffer, secret: string, header: string): boolean {
+  const provided = header.replace(/^sha256=/, "");
   const expected = createHmac("sha256", secret).update(body).digest("hex");
-  return timingSafeEqual(Buffer.from(expected), Buffer.from(header));
+  return timingSafeEqual(Buffer.from(expected), Buffer.from(provided));
 }
 ```
 
@@ -198,9 +201,11 @@ graph TB
     ERP -.->|"GET /obs/kpis\nGET /obs/overdue"| obsd
 ```
 
-Every `de.mako.*` event from `makod` flows through `marktd`'s EventBus fan-out.
-The satellite daemons subscribe independently; fan-out failures are durably
-queued in `fanout_dlq` so no regulatory notification is silently dropped.
+Every `de.mako.*` event from `makod` flows through `marktd`'s EventBus fan-out,
+which is persist-before-fan-out: the event lands in the durable `event_log`
+outbox before any delivery, and each per-subscriber delivery is tracked (retried,
+then dead-lettered) in `event_delivery` so no regulatory notification is lost —
+even across a crash.
 
 ### Delivery pipeline
 
@@ -256,7 +261,7 @@ These events enable **accounts-payable automation** without polling the REST API
 | `de.invoic.receipt.disputed` | REMADV 33002 dispatched | Flag for manual review |
 | `de.invoic.receipt.dispatched` | Outbound 31006 sent | Track self-issued invoice |
 
-Payment events use `source: "urn:invoicd:tenant:{tenant}"` and `subject: "{process_id}"`.
+Payment events use `source: "urn:mako:invoicd:tenant:{tenant}"` and `subject: "{process_id}"`.
 
 **Delivery guarantee — durable at-least-once:**
 The initial attempt runs inline after REMADV dispatch.  On any failure (transport
@@ -275,7 +280,7 @@ Track delivery via `invoic_receipts.erp_notified_at`; dead-lettered rows have
 POST <erp_webhook_url>
 Content-Type: application/cloudevents+json
 X-Idempotency-Key: <event.id>
-X-Mako-Signature: <hmac-sha256-hex>   ← only when --erp-webhook-secret is set
+X-Mako-Signature: sha256=<hmac-sha256-hex>   ← only when --erp-webhook-secret is set
 ```
 
 Body is a **CloudEvents 1.0 structured-mode JSON** object (see below).
@@ -291,7 +296,7 @@ structured-mode JSON** with `Content-Type: application/cloudevents+json`.
 |---|---|---|
 | `specversion` | `"1.0"` | Always |
 | `id` | `<idempotency_key>` | Stable dedup key — persist in ERP |
-| `source` | `"urn:mako:tenant:<tenant_id>"` | Operator GLN |
+| `source` | `"urn:mako:makod:tenant:<tenant_id>"` | Operator GLN |
 | `type` | `"de.mako.<domain>.<action>"` | See event type table below |
 | `time` | RFC 3339 with timezone offset | Wall-clock time of domain event |
 | `subject` | `<process_id>` UUID | The mako process that fired the event |
@@ -337,7 +342,7 @@ BO4E-typed JSON object. Deserialise using the ERP's own BO4E library.
 {
   "specversion": "1.0",
   "id": "01932a4f-7b3e-4c5d-8f6a-9e0b1c2d3e4f",
-  "source": "urn:mako:tenant:9900357000004",
+  "source": "urn:mako:makod:tenant:9900357000004",
   "type": "de.mako.aperak.accepted",
   "time": "2026-10-01T10:15:00+02:00",
   "subject": "018f3a2b-...",
@@ -386,12 +391,12 @@ HTTP response codes:
 When `--erp-webhook-secret` is set, every POST includes:
 
 ```
-X-Mako-Signature: <lowercase-hex HMAC-SHA256 of raw request body>
+X-Mako-Signature: sha256=<lowercase-hex HMAC-SHA256 of raw request body>
 ```
 
-The key is the UTF-8 encoding of the shared secret. **Always use a
-constant-time comparison** (e.g. `hmac.compare_digest` in Python,
-`crypto.timingSafeEqual` in Node.js) to prevent timing attacks.
+Strip the `sha256=` prefix before comparing. The key is the UTF-8 encoding of the
+shared secret. **Always use a constant-time comparison** (e.g. `hmac.compare_digest`
+in Python, `crypto.timingSafeEqual` in Node.js) to prevent timing attacks.
 
 ### No-secret mode
 
@@ -594,7 +599,7 @@ async def receive(request: Request):
     body = await request.body()
 
     # 1. Verify signature (constant-time compare)
-    sig = request.headers.get("X-Mako-Signature", "")
+    sig = request.headers.get("X-Mako-Signature", "").removeprefix("sha256=")
     expected = hmac.new(SECRET, body, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, expected):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
@@ -641,7 +646,7 @@ app.post(
   express.raw({ type: "application/cloudevents+json" }),
   async (req: Request, res: Response) => {
     // 1. Verify signature
-    const sig      = req.headers["x-mako-signature"] as string ?? "";
+    const sig      = ((req.headers["x-mako-signature"] as string) ?? "").replace(/^sha256=/, "");
     const expected = createHmac("sha256", SECRET).update(req.body).digest("hex");
     if (!timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
       return res.status(401).end();

@@ -9,7 +9,6 @@ use invoic_checker::{InvoicCheckEngine, check::CheckConfig, tariff::InMemoryPrei
 use mako_markt::marktd_client::MarktdClient;
 use rust_decimal::Decimal;
 use serde::Deserialize;
-use sqlx::PgPool;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -129,7 +128,7 @@ fn parse_date(s: &str) -> anyhow::Result<time::Date> {
 ///
 /// Returns the list of generated draft UUIDs.
 pub async fn run_billing_internal(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     marktd: &Arc<MarktdClient>,
     tenant: &str,
     vnb_mp_id: Option<&str>,
@@ -441,7 +440,7 @@ pub async fn run_billing_internal(
             .unwrap_or(&req.lf_mp_id);
 
         let draft_id = upsert_draft(
-            pool,
+            &mut *conn,
             tenant,
             &pos.malo_id,
             &req.nb_mp_id,

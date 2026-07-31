@@ -40,7 +40,6 @@ Closes the payment lifecycle on REMADV receipt. Zero `f64` in the billing path.
 
 ```toml
 # netzbilanzd.toml
-database_url    = "postgres://nb:secret@db:5432/netzbilanzd"
 port            = 8680
 tenant          = "9900357000004"   # NB MP-ID / logical tenant name
 
@@ -56,8 +55,14 @@ edmd_api_key    = "env:NETZBILANZD_EDMD_API_KEY"
 # ÜNB MP-ID for Strom MMM price auto-fetch (set to your Regelzone's ÜNB)
 vnb_mp_id       = "9907324000007"   # 50Hertz / TenneT / Amprion / TransnetBW
 
-# ERP webhook receives all de.netzbilanz.* CloudEvents
+# ERP webhook receives all de.netzbilanz.* CloudEvents. Delivery is durable:
+# each event is written to `event_outbox` in the same transaction as the draft
+# change (persist-before-dispatch) and drained by a background worker with
+# retry + dead-letter — a crash never drops an event.
 erp_webhook_url = "http://erp:9000/webhooks/mako"
+
+[database]
+url = "postgres://nb:secret@db:5432/netzbilanzd"
 
 [mcp]
 api_key = "env:NETZBILANZD_MCP_API_KEY"

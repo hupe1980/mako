@@ -60,7 +60,6 @@ Unknown values fail at startup rather than on a rejected batch.
 
 ```toml
 # accountingd.toml
-database_url          = "postgresql://accountingd:secret@db:5432/accountingd"
 port                  = 9380
 tenant                = "9900357000004"
 creditor_iban         = "DE89370400440532013000"
@@ -68,10 +67,18 @@ creditor_id           = "DE74ZZZ09999999999"   # SEPA Gläubiger-ID (EPC AT-02)
 creditor_name         = "Muster Energie GmbH"
 # pain008_schema      = "pain.008.001.02"       # optional; default pain.008.001.08
 # pain001_schema      = "pain.001.001.03"       # optional; default pain.001.001.09
+# Outbound de.accounting.* CloudEvents. Delivery is durable: each event is
+# written to `event_outbox` in the same transaction as the ledger change
+# (persist-before-dispatch) and drained by a background worker with retry +
+# dead-letter — a crash never drops an event.
 erp_webhook_url       = "http://erp:8000/events"
 erp_hmac_secret       = "env:ACCOUNTINGD_INBOUND_HMAC_SECRET"
 dunning_auto_enabled  = true
 dunning_grace_days    = 30
+
+[database]
+url = "postgresql://accountingd:secret@db:5432/accountingd"
+# pool_size = 10   # optional pool tuning (min_connections, acquire/idle/max_lifetime)
 
 [oidc]
 issuer   = "https://keycloak:8080/realms/mako"

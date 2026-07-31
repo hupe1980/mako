@@ -81,7 +81,14 @@ const TENANT: &str = "9900357000004";
 
 fn test_config() -> einsd::config::EinsdConfig {
     einsd::config::EinsdConfig {
-        database_url: String::new(),
+        database: mako_service::config::DatabaseConfig {
+            url: String::new(),
+            pool_size: 10,
+            min_connections: 0,
+            acquire_timeout_secs: 30,
+            idle_timeout_secs: 600,
+            max_lifetime_secs: 1_800,
+        },
         port: None,
         tenant: TENANT.to_owned(),
         erp_webhook_url: None,

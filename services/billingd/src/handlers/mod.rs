@@ -21,7 +21,6 @@ use crate::{
     pg::{
         fetch_billing_record, insert_billing_record, insert_correction_record,
         insert_sammelrechnung_record, link_to_sammelrechnung, list_billing_records,
-        mark_dispatched,
     },
     xrechnung::{build_zugferd_cii_xml, info_from_rechnung_json},
 };
@@ -244,75 +243,33 @@ pub(crate) async fn resolve_tariff(
     }
 }
 
-pub(crate) async fn emit_cloud_event(
-    webhook_url: &str,
-    hmac_secret: Option<&str>,
-    pool: &PgPool,
-    record_id: Uuid,
-    malo_id: &str,
-    lf_mp_id: &str,
-    rechnung: &serde_json::Value,
-) {
-    emit_cloud_event_inner(
-        webhook_url,
-        hmac_secret,
-        pool,
-        record_id,
-        malo_id,
-        lf_mp_id,
-        rechnung,
-        false,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn emit_cloud_event_inner(
-    webhook_url: &str,
-    hmac_secret: Option<&str>,
-    pool: &PgPool,
+/// Build the `de.billing.rechnung.erstellt` CloudEvent for a persisted record.
+///
+/// Pure constructor — no I/O. The caller enqueues the returned event into the
+/// transactional outbox **inside the same transaction as the representing
+/// business write** (`insert_billing_record` / `insert_correction_record` /
+/// `insert_sammelrechnung_record`), so the event and the row commit atomically;
+/// the `OutboxWorker` then delivers it (signed, retried, dead-lettered). The CE
+/// `id` is a fresh UUID — enqueue is idempotent on it, so a retried request
+/// cannot double-enqueue within its transaction.
+pub(crate) fn rechnung_erstellt_ce(
     record_id: Uuid,
     malo_id: &str,
     lf_mp_id: &str,
     rechnung: &serde_json::Value,
     is_correction: bool,
-) {
-    let ce_id = Uuid::new_v4();
-    let ce = serde_json::json!({
-        "specversion": "1.0",
-        "type": mako_events::billing::RECHNUNG_ERSTELLT,
-        "source": format!("urn:billingd:lf:{lf_mp_id}"),
-        "id": ce_id.to_string(),
-        "time": time::OffsetDateTime::now_utc().to_string(),
-        "subject": malo_id,
-        "datacontenttype": "application/json",
-        "data": {
+) -> mako_service::CloudEvent {
+    mako_service::CloudEvent::new(
+        mako_service::source("billingd", lf_mp_id),
+        mako_events::billing::RECHNUNG_ERSTELLT,
+        malo_id,
+        serde_json::json!({
             "record_id": record_id.to_string(),
             "malo_id": malo_id,
             "lf_mp_id": lf_mp_id,
             "is_correction": is_correction,
             "rechnung": rechnung
-        }
-    });
-    let body = serde_json::to_vec(&ce).unwrap_or_default();
-    let client = reqwest::Client::new();
-    let mut req = client
-        .post(webhook_url)
-        .header("Content-Type", "application/cloudevents+json")
-        .body(body.clone());
-    // The config documents `erp_hmac_secret` as signing outbound events —
-    // an unsigned emit would be the recurring divergent-worker-event defect.
-    if let Some(secret) = hmac_secret {
-        let sig = mako_markt::cloudevents::compute_signature(secret.as_bytes(), &body);
-        req = req.header("X-Mako-Signature", sig);
-    }
-    match req.send().await {
-        Ok(resp) if resp.status().is_success() => {
-            let _ = mark_dispatched(pool, record_id, ce_id).await;
-        }
-        Ok(resp) => {
-            tracing::warn!(record_id = %record_id, status = %resp.status(), "billingd: ERP webhook failed")
-        }
-        Err(e) => tracing::warn!(record_id = %record_id, error = %e, "billingd: ERP webhook error"),
-    }
+        }),
+    )
+    .with_id(Uuid::new_v4().to_string())
 }

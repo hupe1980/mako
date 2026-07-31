@@ -140,17 +140,21 @@ cross-tenant access needs no forbid rule.
 
 ```toml
 # einsd.toml
-database_url   = "postgresql://einsd:secret@db:5432/einsd"
 port           = 9180
 tenant         = "9900357000004"
+edmd_url       = "http://edmd:8380"
+
+# Outbound ERP CloudEvents, signed with HMAC-SHA256 (X-Mako-Signature).
+# Delivery is durable: each event is written to `event_outbox` in the same
+# transaction as the settlement (persist-before-dispatch) and drained by a
+# background worker with retry + dead-letter — a crash never drops an event.
+erp_webhook_url = "http://erp:8000/events"
+erp_hmac_secret = "env:EINSD_ERP_HMAC_SECRET"
+
+[database]
+url = "postgresql://einsd:secret@db:5432/einsd"  # or "env:DATABASE_URL"
 
 [oidc]                      # required unless allow_insecure_no_auth = true
 issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 audience = "api://mako-einsd"
-
-edmd_url       = "http://edmd:8380"
-
-# Outbound ERP CloudEvents, signed with HMAC-SHA256 (X-Mako-Signature).
-erp_webhook_url = "http://erp:8000/events"
-erp_hmac_secret = "env:EINSD_ERP_HMAC_SECRET"
 ```

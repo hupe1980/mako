@@ -6,7 +6,8 @@ use serde::Deserialize;
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct EinsdConfig {
-    pub database_url: String,
+    /// PostgreSQL connection + pool tuning (`application_name` = `einsd`).
+    pub database: mako_service::config::DatabaseConfig,
 
     /// HTTP port.  Defaults to `9180` (billing extension range).
     pub port: Option<u16>,
@@ -79,4 +80,13 @@ pub struct EinsdConfig {
     /// reachable by any caller that can open a socket.
     #[serde(default)]
     pub allow_insecure_no_auth: bool,
+}
+
+impl mako_service::ServiceConfig for EinsdConfig {
+    fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
+        Some(&self.database)
+    }
+    fn bind_addr(&self) -> String {
+        format!("0.0.0.0:{}", self.port.unwrap_or(9180))
+    }
 }

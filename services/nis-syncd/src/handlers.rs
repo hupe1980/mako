@@ -11,8 +11,15 @@ use crate::sync::{LastSyncReport, NisEntry, run_sync};
 /// Extension alias for the NB MP-ID injected at startup.
 pub type NbMpId = String;
 
-/// Optional drift webhook URL — `None` when not configured.
-pub type DriftWebhookUrl = Option<String>;
+/// Drift webhook target injected at startup: URL plus optional HMAC signing
+/// secret. Both `None` when no webhook is configured.
+#[derive(Clone, Default)]
+pub struct DriftWebhook {
+    /// Where `de.markt.grid.drift.detected` CloudEvents are POSTed.
+    pub url: Option<String>,
+    /// HMAC-SHA256 secret signing those events (`X-Mako-Signature: sha256=<hex>`).
+    pub secret: Option<String>,
+}
 
 /// Handler-level configuration injected as an Axum `Extension`.
 ///
@@ -64,7 +71,7 @@ pub struct SyncRequest {
 pub async fn sync_grid(
     Extension(client): Extension<Arc<MarktdClient>>,
     Extension(nb_mp_id): Extension<NbMpId>,
-    Extension(drift_webhook_url): Extension<DriftWebhookUrl>,
+    Extension(drift_webhook): Extension<DriftWebhook>,
     Extension(hcfg): Extension<HandlerConfig>,
     Extension(last_report): Extension<LastSyncReport>,
     Query(q): Query<SyncQuery>,
@@ -108,7 +115,8 @@ pub async fn sync_grid(
         &nb_mp_id,
         &req.entries,
         q.dry_run,
-        drift_webhook_url.as_deref(),
+        drift_webhook.url.as_deref(),
+        drift_webhook.secret.as_deref(),
         hcfg.sync_concurrency,
     )
     .await;

@@ -726,29 +726,9 @@ CREATE INDEX malo_grid_big
     ON malo_grid (bilanzierungsgebiet, tenant)
     WHERE bilanzierungsgebiet IS NOT NULL;
 
--- ── Fanout dead-letter queue ─────────────────────────────────────────────────
--- When the fan-out worker exhausts all retry attempts for a subscriber,
--- the failed event is persisted here instead of being silently dropped.
--- Operators inspect via GET /admin/fanout/dlq; retry via POST /admin/fanout/dlq/{id}/retry;
--- discard via DELETE /admin/fanout/dlq/{id}.
---
--- § 147 AO / GoBD: silent drop of an `de.mako.process.initiated` event to invoicd
--- would cause the INVOIC plausibility check never to run, violating the
--- 3-year receipt retention obligation. This table provides the recovery path.
-CREATE TABLE fanout_dlq (
-    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    subscriber_id  TEXT        NOT NULL,
-    webhook_url    TEXT        NOT NULL,
-    event_type     TEXT        NOT NULL,    -- CloudEvents `type` for quick filtering
-    event_body     JSONB       NOT NULL,
-    attempts       INT         NOT NULL DEFAULT 0,
-    last_error     TEXT,
-    failed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    resolved_at    TIMESTAMPTZ             -- set when retried successfully or discarded
-);
-
-CREATE INDEX fanout_dlq_subscriber ON fanout_dlq (subscriber_id, failed_at DESC);
-CREATE INDEX fanout_dlq_unresolved  ON fanout_dlq (failed_at DESC) WHERE resolved_at IS NULL;
+-- The fan-out dead-letter queue is no longer a standalone table: dead-lettering
+-- is a status column (dead_lettered_at) on event_delivery, defined alongside the
+-- durable event_log outbox below.
 
 -- ── SteuerbareRessource (B4b) ─────────────────────────────────────────────────
 --
@@ -888,28 +868,54 @@ CREATE INDEX tr_malo    ON technische_ressourcen (tenant, malo_id)  WHERE malo_i
 CREATE INDEX tr_melo    ON technische_ressourcen (tenant, melo_id)  WHERE melo_id IS NOT NULL;
 CREATE INDEX tr_nutzung ON technische_ressourcen (tenant, nutzung) WHERE nutzung IS NOT NULL;
 
--- ── CloudEvent replay log (B11) ───────────────────────────────────────────────
+-- ── Durable event outbox / fan-out log (B11) ──────────────────────────────────
 --
--- Durable append-only log of every inbound CloudEvent received by marktd.
--- Populated by POST /api/v1/events before fan-out.
--- Enables full replay: after a subscriber bug-fix or new service onboarding,
--- replay events from a point in time without data loss.
+-- The full CloudEvent envelope, written BEFORE fan-out (persist-before-dispatch).
+-- This is the crash-safe source of truth for the marktd fan-out: a producer's
+-- enqueue INSERT here is fatal, so no event is fanned out unless it is durable.
 --
--- Read via GET /admin/events?from=&to=&type=&limit=
+-- The fan-out worker (Phase 1) claims rows WHERE fanned_out_at IS NULL, snapshots
+-- the matching subscriber set into event_delivery, then stamps fanned_out_at.
+--
+-- Read via GET /admin/events?from=&to=&type=&limit= (full-envelope replay).
 -- Retention: operator-managed; can be partitioned or archived by received_at.
 
 CREATE TABLE event_log (
-    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    event_id    TEXT        NOT NULL UNIQUE,    -- CloudEvents "id" field
-    ce_type     TEXT        NOT NULL,
-    ce_source   TEXT,
-    subject     TEXT,
-    data        JSONB,
-    received_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    event_id      TEXT        PRIMARY KEY,
+    ce_type       TEXT        NOT NULL,
+    marktrole     TEXT,
+    sparte        TEXT,
+    envelope      JSONB       NOT NULL,        -- the ENTIRE serialized MarktEvent
+    fanned_out_at TIMESTAMPTZ,
+    received_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
+CREATE INDEX event_log_pending   ON event_log (received_at) WHERE fanned_out_at IS NULL;
 CREATE INDEX event_log_type_time ON event_log (ce_type, received_at DESC);
-CREATE INDEX event_log_time      ON event_log (received_at DESC);
+
+-- ── Per-subscriber delivery ledger ────────────────────────────────────────────
+--
+-- One row per (event, subscriber) snapshotted at fan-out time. At-least-once
+-- delivery with claim-with-lease (FOR UPDATE SKIP LOCKED) and a status-column
+-- DLQ: dead_lettered_at IS NOT NULL is the dead-letter queue. Inspect / requeue
+-- via /admin/fanout/dlq.
+--
+-- § 147 AO / GoBD: silent drop of a de.mako.process.initiated event to invoicd
+-- would violate the 3-year receipt retention obligation; dead-lettering (never
+-- dropping) provides the recovery path.
+CREATE TABLE event_delivery (
+    event_id         TEXT        NOT NULL REFERENCES event_log(event_id) ON DELETE CASCADE,
+    subscriber_id    TEXT        NOT NULL,
+    webhook_url      TEXT        NOT NULL,
+    attempts         SMALLINT    NOT NULL DEFAULT 0,
+    next_attempt_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    delivered_at     TIMESTAMPTZ,
+    dead_lettered_at TIMESTAMPTZ,
+    last_error       TEXT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (event_id, subscriber_id)
+);
+CREATE INDEX event_delivery_due  ON event_delivery (next_attempt_at) WHERE delivered_at IS NULL AND dead_lettered_at IS NULL;
+CREATE INDEX event_delivery_dead ON event_delivery (dead_lettered_at) WHERE dead_lettered_at IS NOT NULL;
 
 -- Migration 0002: MMMA / MMM settlement price store
 --

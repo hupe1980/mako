@@ -135,17 +135,13 @@ pub async fn webhook(
 ) -> impl IntoResponse {
     // ── Inbound HMAC verification ────────────────────────────────────────
     if let Some(ref secret) = state.cfg.inbound_hmac_secret {
-        let expected = format!(
-            "sha256={}",
-            mako_service::webhook::hmac_hex(secret.expose_secret().as_bytes(), &body)
-        );
         let provided = headers
             .get("x-mako-signature")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        if !constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+        if !mako_service::webhook::verify_hmac(secret.expose_secret().as_bytes(), &body, provided) {
             tracing::warn!("agentd: inbound webhook HMAC mismatch — rejected");
-            return StatusCode::FORBIDDEN.into_response();
+            return StatusCode::UNAUTHORIZED.into_response();
         }
     } else {
         tracing::warn!("agentd: inbound_hmac_secret not set — accepting all webhooks (dev mode)");
@@ -258,17 +254,6 @@ pub async fn webhook(
     StatusCode::ACCEPTED.into_response()
 }
 
-/// Constant-time comparison (timing-safe).
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter()
-        .zip(b.iter())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
-}
-
 pub async fn manual_run(
     State(state): State<Arc<AppState>>,
     _claims: Claims,
@@ -360,26 +345,13 @@ async fn emit_audit(state: &AppState, decision: &crate::agent::AgentDecision) {
         return;
     };
     let ce = decision.to_cloud_event(&state.cfg.tenant);
-    let body = match serde_json::to_vec(&ce) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::warn!(error = %e, "audit webhook: failed to serialise CloudEvent");
-            return;
-        }
-    };
-    let mut req_builder = mako_service::http::default_client()
-        .post(url)
-        .header("Content-Type", "application/cloudevents+json")
-        .body(body.clone());
-    if let Some(ref secret) = state.cfg.audit_hmac_secret {
-        // sha256= prefix per workspace standard (not bearer_auth)
-        let sig = format!(
-            "sha256={}",
-            mako_service::webhook::hmac_hex(secret.expose_secret().as_bytes(), &body)
-        );
-        req_builder = req_builder.header("X-Mako-Signature", sig);
-    }
-    if let Err(e) = req_builder.send().await {
+    let secret = state
+        .cfg
+        .audit_hmac_secret
+        .as_ref()
+        .map(|s| s.expose_secret().as_bytes());
+    let client = mako_service::http::default_client();
+    if let Err(e) = mako_service::post_ce_with_retry(&client, url, &ce, secret).await {
         tracing::warn!(error = %e, "audit webhook failed");
     }
 }

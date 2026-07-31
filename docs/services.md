@@ -33,7 +33,7 @@ graph TB
     ext["BDEW Counterparty<br/>(NB · LF · MSB · BKV)"]
 
     subgraph protocol ["Protocol & Market Data"]
-        makod[":8080 makod\nEDIFACT runtime · 55+ workflows\nAS4 · SlateDB · MCP"]
+        makod[":8080 makod\nEDIFACT runtime · 67+ workflows\nAS4 · SlateDB · MCP"]
         marktd[":8180 marktd\nMaLo/MeLo/NeLo · contracts\nVersorgungsStatus · EventBus"]
         processd[":8580 processd\nAnmeldung STP ≥95%\nLF E_0624 auto · §14a"]
     end
@@ -82,7 +82,7 @@ graph TB
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [makod](./makod) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 55+ GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas workflows, AS4/REST/iMS |
+| [makod](./makod) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 67+ GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas workflows, AS4/REST/iMS |
 | [marktd](./marktd) | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus, typed BO4E API, EventBus fan-out, MMMA monthly import worker |
 | [processd](./processd) | `:8580` | NB + LF + MSB | Process Decision Engine — Anmeldung STP ≥95%, LF E_0624 45-min auto-response, MSB REQOTE auto-response, §14a Steuerungsauftrag produktcode check |
 
@@ -119,6 +119,64 @@ graph TB
 | [vertragd](./vertragd) | `:9780` | LF | Contract & Customer Management — Kunden (B2C+B2B), Rahmenverträge, Versorgungsverträge, kunden_identitaeten (N portal users per company), Tarifwechsel, Kündigung, OIDC→MaLo auth gateway for portald |
 | [portald](./portald) | `:9480` | LF | Customer Portal gateway — aggregates all LF services, REST + SSE, §41 EnWG self-service write API (Tarifwechsel, Kündigung, SEPA, GDPR Art. 16), 8-tool MCP server |
 | [agentd](./agentd) | `:9580` | All | Multi-agent LLM orchestration — **29 built-in specialists compiled into binary**, activated via `[bundled_agents]`; `sequential`/`parallel`/`race` dispatch; OIDC auth on `/api/v1/run`; inbound HMAC; DLQ with exponential-backoff retry; LanceDB RAG (tenant-isolated, cosine distance score filtering); A2A agent cards; MCP tools across all 17 services |
+
+---
+
+## Shared foundation — the `mako-service` SDK
+
+Every daemon is built on the [`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)
+crate, so the operational surface — health, config, auth, tracing, shutdown, event delivery — is
+identical across all 17. A service's `main` is a single line:
+
+```rust
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    mako_service::run::<Billingd>().await   // Billingd: Daemon impl
+}
+```
+
+`run::<D>()` owns the whole lifecycle. A `Daemon` implementation supplies only what is
+service-specific — the config type, the migrations, and a `build()` that assembles the domain
+router and spawns background workers:
+
+```mermaid
+flowchart TD
+    start(["main → run::&lt;D&gt;"]) --> check{"--check?"}
+    check -->|yes| probe["GET /health/ready<br/>exit 0/1"] --> done([exit])
+    check -->|no| trace["init tracing"]
+    trace --> cfg["load config<br/>TOML + env + _FILE"]
+    cfg --> pool["connect tuned pool<br/>DatabaseConfig::connect(url, NAME)<br/>sets application_name"]
+    pool --> migrate["D::migrate<br/>sqlx::migrate! + outbox::ensure_schema"]
+    migrate --> build["D::build(cfg, ctx)<br/>domain Router + spawn workers on ctx.shutdown"]
+    build --> infra["mount infra routes<br/>/health/live · /health/ready · /metrics"]
+    infra --> serve["serve with graceful drain<br/>SIGINT / SIGTERM"]
+    serve -.->|readiness| ready["/health/ready = bounded SELECT 1 + D::ready"]
+```
+
+What every service gets for free from the runner:
+
+| Concern | Provided by `run::<D>()` |
+|---|---|
+| **Tracing** | Structured logs + optional OTLP export (`RUST_LOG`, `[otel]`) |
+| **Config** | `[database]` + service blocks, `env:`/`_FILE` substitution, `<SVC>_CONFIG` path |
+| **Pool** | Tuned sizing with a per-service `application_name` for `pg_stat_activity` |
+| **Migrations** | Applied at startup before the first request |
+| **Readiness** | Real `/health/ready` — a bounded `SELECT 1` DB ping, not a static `true` |
+| **Shutdown** | SIGINT/SIGTERM graceful drain; workers observe `ctx.shutdown` |
+| **Health probe** | `--check` in-container HEALTHCHECK (no shell, no curl) |
+
+Event-emitting services (billingd, einsd, accountingd, netzbilanzd, vertragd, invoicd) add a
+**transactional outbox**: each outbound CloudEvent is written to `event_outbox` *in the same
+transaction* as the business change and drained by a background `OutboxWorker` with retry and a
+status-column dead-letter queue. Because the event is committed atomically with the data that
+justifies it, a crash between "commit" and "deliver" can never drop or duplicate it —
+persist-before-dispatch. Emission always goes through one builder and one signer
+(`CloudEvent::new` + `post_ce_with_retry`; `X-Mako-Signature: sha256=<hex>`).
+
+> `makod`, `marktd`, `agentd`, and `portald` keep bespoke `main`s — `makod`/`marktd` for their
+> non-standard runtimes (SlateDB event store, `marktd`'s durable fan-out worker), `agentd`/`portald`
+> because they hold no database. All four still use the same SDK building blocks (config, auth,
+> tracing, shutdown, HMAC).
 
 ---
 

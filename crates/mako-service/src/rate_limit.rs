@@ -32,7 +32,7 @@
 //!
 //! let app = ServiceBuilder::new()
 //!     .with_health(|| async { true })
-//!     .with_rate_limit(RateLimitConfig::default())
+//!     .with_rate_limit(&RateLimitConfig::default())
 //!     .build();
 //! ```
 
@@ -45,7 +45,7 @@ pub struct RateLimitConfig {
     pub requests_per_second: u32,
     /// Requests admitted in a burst before the sustained rate applies.
     ///
-    /// Metered ingest is bursty by nature — an MSCONS batch or an IoT gateway
+    /// Metered ingest is bursty by nature — an MSCONS batch or an `IoT` gateway
     /// flushing a backlog arrives all at once — so a burst allowance below the
     /// sustained rate would reject legitimate traffic that fits comfortably
     /// within the hourly budget.

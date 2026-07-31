@@ -13,9 +13,9 @@
 //! - `GET  /health/live`                              — liveness probe (always 200)
 //! - `GET  /health/ready`                             — readiness probe (200 OK)
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use axum::{
     Extension, Json, Router,
     extract::{Path, Query, State},
@@ -23,16 +23,15 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use invoic_checker::CheckConfig;
+use mako_service::ServiceContext;
 use mako_service::cedar::CedarEnforcer;
-use mako_service::oidc::{Claims, OidcVerifier};
+use mako_service::oidc::Claims;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use tokio::net::TcpListener;
-use tokio_util::sync::CancellationToken;
 
 use crate::{
+    config::Config,
     handler::{HandlerState, handle_webhook},
     pg,
 };
@@ -69,17 +68,16 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/selbstausstellen/{malo_id}",
             post(post_selbstausstellen),
         )
-        .route("/metrics", get(metrics))
-        .route("/health/live", get(|| async { StatusCode::OK }))
-        .route("/health/ready", get(health_ready))
+        .route("/invoicd/metrics", get(metrics))
         .with_state(state)
 }
 
-async fn health_ready(State(_state): State<HandlerState>) -> impl IntoResponse {
-    StatusCode::OK
-}
-
-/// `GET /metrics` — Prometheus-compatible operational metrics.
+/// `GET /invoicd/metrics` — invoicd-specific Prometheus gauges (receipt counts,
+/// disputes, overdue REMADV, per-PID breakdowns).
+///
+/// The runner's generic `/metrics` (request counters) is mounted separately by
+/// `mako_service::run`; the `/health/live` + `/health/ready` probes are owned by
+/// the runner too (real DB ping), so they no longer live in this router.
 /// No authentication required; restrict network access at the ingress layer.
 async fn metrics(State(state): State<HandlerState>) -> impl IntoResponse {
     let mut out = String::with_capacity(512);
@@ -1307,133 +1305,127 @@ async fn fetch_receipt_by_id(
     ))
 }
 
-// ── RunConfig ─────────────────────────────────────────────────────────────────
+// ── Domain router assembly ─────────────────────────────────────────────────────
 
-/// Configuration for [`run`].
-pub struct RunConfig {
-    pub listen: SocketAddr,
-    pub makod_url: String,
-    pub makod_api_key: Option<SecretString>,
-    pub marktd_url: String,
-    pub marktd_api_key: SecretString,
-    pub subscriber_id: String,
-    pub webhook_url: String,
-    pub webhook_secret: Option<SecretString>,
-    pub inbound_secret: Option<SecretString>,
-    pub check_config: CheckConfig,
-    pub auto_dispute_threshold_eur_cents: i64,
-    /// PostgreSQL URL — `None` = development mode (receipts not persisted).
-    pub database_url: Option<String>,
-    /// Database pool tuning (pool size, timeouts, `application_name`).
-    pub db: crate::config::DatabaseConfig,
-    /// Tenant identifier written to every receipt row.
-    pub tenant: String,
-    /// Optional ERP webhook URL for `de.invoic.receipt.*` CloudEvents.
-    pub erp_webhook_url: Option<String>,
-    /// Optional HMAC-SHA256 secret for signing outbound ERP webhook requests.
-    pub erp_hmac_secret: Option<SecretString>,
-    /// `edmd` base URL for `MeterBillingPeriod` lookup in selbstausstellen.
-    /// When `None`, `POST /api/v1/selbstausstellen` returns 503.
-    pub edmd_url: Option<String>,
-    /// `edmd` Bearer token.
-    pub edmd_api_key: Option<SecretString>,
-    /// OIDC verifier.  Use [`OidcVerifier::disabled`] in dev/test.
-    pub oidc: OidcVerifier,
-    /// Cedar ABAC enforcer loaded from `policies/invoicd.cedar`.
-    pub cedar: Arc<CedarEnforcer>,
-    /// MCP server auth config (API-key fallback + optional per-named-key identity).
-    pub mcp: mako_service::mcp_auth::McpAuthConfig,
-    /// Graceful-shutdown token.
-    pub shutdown: CancellationToken,
-}
-
-/// Bind, register subscription with `marktd`, and serve forever.
-pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
-    let preisblatt_client = MarktdClient::new(
-        &cfg.marktd_url,
-        cfg.marktd_api_key.clone(),
-        mako_service::http::default_client(),
+/// Build invoicd's domain [`Router`]: resolve config secrets, build the OIDC
+/// verifier + Cedar enforcer, wire the `HandlerState` + MCP server, spawn the ERP
+/// outbox and payment-overdue workers on `ctx.shutdown`, and register the
+/// `marktd` subscription.
+///
+/// The runner ([`mako_service::run`]) owns the tuned pool, migrations, the
+/// health / metrics infra routes, bind and graceful serve — none of those live
+/// here. The receipt store is § 147 AO / GoBD-critical, so the pool is always
+/// present (the runner connects it before this is called).
+pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Router> {
+    let oidc = mako_service::oidc::OidcConfig::build_verifier(
+        cfg.oidc.as_ref(),
+        &ctx.http,
+        &cfg.identity.tenant,
+        ctx.shutdown.clone(),
+    )
+    .await?;
+    let cedar = Arc::new(
+        CedarEnforcer::from_policy_str(include_str!("../policies/invoicd.cedar"))
+            .map_err(|e| anyhow::anyhow!("Cedar policy error: {e}"))?,
     );
-    let api_key = cfg
-        .makod_api_key
-        .unwrap_or_else(|| secrecy::SecretString::new(String::new().into()));
-    let makod = MakodClient::new(&cfg.makod_url, api_key);
 
-    // ── PostgreSQL pool (§ 147 AO / GoBD compliance) ───────────────────────────────
-    let pool = if let Some(ref url) = cfg.database_url {
-        let pool = cfg.db.connect(url, "invoicd").await?;
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .map_err(|e| anyhow::anyhow!("run invoicd migrations: {e}"))?;
-        tracing::info!("invoicd: database connected");
-        Some(pool)
-    } else {
-        tracing::warn!(
-            "invoicd: no --database-url configured — INVOIC receipts will NOT be persisted (§ 147 AO / GoBD violation in production)"
-        );
-        None
-    };
+    // Resolve `env:`-referenced secrets (previously done in `main`).
+    let makod_api_key = cfg
+        .makod
+        .api_key
+        .as_deref()
+        .map(crate::config::resolve_env_secret)
+        .transpose()
+        .context("makod.api_key")?;
+    let marktd_api_key =
+        crate::config::resolve_env_secret(&cfg.marktd.api_key).context("marktd.api_key")?;
+    let inbound_secret = cfg
+        .webhook
+        .inbound_secret
+        .as_deref()
+        .map(crate::config::resolve_env_secret)
+        .transpose()
+        .context("webhook.inbound_secret")?;
+    let webhook_secret = inbound_secret.clone();
+    let erp_hmac_secret = cfg
+        .erp
+        .hmac_secret
+        .as_deref()
+        .map(crate::config::resolve_env_secret)
+        .transpose()
+        .context("erp.hmac_secret")?;
+    let edmd_api_key = cfg
+        .edmd
+        .api_key
+        .as_deref()
+        .map(crate::config::resolve_env_secret)
+        .transpose()
+        .context("edmd.api_key")?;
+
+    let tenant = cfg.identity.tenant.clone();
+    let pool = ctx.pool().clone();
+
+    let preisblatt_client = MarktdClient::new(&cfg.marktd.url, marktd_api_key, ctx.http.clone());
+    let api_key = makod_api_key.unwrap_or_else(|| SecretString::new(String::new().into()));
+    let makod = MakodClient::new(&cfg.makod.url, api_key);
 
     let state = HandlerState {
         preisblatt_client: preisblatt_client.clone(),
         makod,
-        check_config: Arc::new(cfg.check_config),
-        inbound_secret: Arc::new(cfg.inbound_secret),
-        auto_dispute_threshold_eur_cents: cfg.auto_dispute_threshold_eur_cents,
-        pool: pool.clone(),
-        tenant: cfg.tenant.clone(),
-        erp_webhook_url: cfg.erp_webhook_url.clone(),
-        erp_hmac_secret: cfg.erp_hmac_secret.clone(),
-        http_client: mako_service::http::default_client(),
-        edmd_url: cfg.edmd_url.clone(),
-        edmd_api_key: cfg.edmd_api_key.clone(),
+        check_config: Arc::new(cfg.check_config()),
+        inbound_secret: Arc::new(inbound_secret),
+        auto_dispute_threshold_eur_cents: cfg.auto_dispute_threshold_eur_cents(),
+        pool: Some(pool.clone()),
+        tenant: tenant.clone(),
+        erp_webhook_url: cfg.erp.webhook_url.clone(),
+        erp_hmac_secret: erp_hmac_secret.clone(),
+        http_client: ctx.http.clone(),
+        edmd_url: cfg.edmd.url.clone(),
+        edmd_api_key: edmd_api_key.clone(),
     };
 
     // ── MCP state ─────────────────────────────────────────────────────────────
-    let mcp_state = pool.as_ref().map(|p| {
-        Arc::new(crate::mcp_server::InvoicdMcpState {
-            pool: p.clone(),
-            tenant: cfg.tenant.clone(),
-            auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
-                &cfg.mcp,
-                cfg.oidc.clone(),
-                Some(cfg.cedar.clone()),
-                &cfg.tenant,
-            ),
-        })
+    let mcp_state = Arc::new(crate::mcp_server::InvoicdMcpState {
+        pool: pool.clone(),
+        tenant: tenant.clone(),
+        auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
+            &cfg.mcp,
+            oidc.clone(),
+            Some(cedar.clone()),
+            &tenant,
+        ),
     });
 
-    // Spawn the ERP outbox worker when both pool and erp_webhook_url are configured.
-    // The worker retries failed ERP notifications with exponential backoff.
-    if let (Some(db_pool), Some(erp_url)) = (&pool, &cfg.erp_webhook_url) {
+    // Spawn the ERP outbox + payment-overdue workers when an ERP webhook is configured.
+    if let Some(erp_url) = cfg.erp.webhook_url.clone() {
+        // The ERP outbox worker retries failed ERP notifications with backoff.
         crate::erp_outbox::spawn(
-            db_pool.clone(),
-            cfg.tenant.clone(),
+            pool.clone(),
+            tenant.clone(),
             erp_url.clone(),
-            cfg.erp_hmac_secret.clone(),
-            cfg.shutdown.clone(),
+            erp_hmac_secret.clone(),
+            ctx.shutdown.clone(),
         );
 
-        // Spawn the payment-overdue worker (polls every 6 h).
-        // Emits `de.invoic.payment.overdue` when `pay_by` has passed
-        // without `payment_confirmed_at` being set — closes § 147 AO / GoBD dunning gap.
+        // The payment-overdue worker polls every 6 h and emits
+        // `de.invoic.payment.overdue` when `pay_by` has passed without
+        // `payment_confirmed_at` — closes the § 147 AO / GoBD dunning gap.
         crate::payment_overdue::spawn(
-            db_pool.clone(),
-            cfg.tenant.clone(),
-            erp_url.clone(),
-            cfg.erp_hmac_secret.clone(),
-            cfg.shutdown.clone(),
+            pool.clone(),
+            tenant.clone(),
+            erp_url,
+            erp_hmac_secret.clone(),
+            ctx.shutdown.clone(),
         );
     }
 
     // Register subscription with marktd using the shared MarktdClient.
     preisblatt_client
         .put_subscription(
-            &cfg.subscriber_id,
+            &cfg.subscription.subscriber_id,
             &mako_markt::marktd_client::SubscriptionRequest {
-                webhook_url: &cfg.webhook_url,
-                webhook_secret: cfg.webhook_secret.as_ref().map(|s| {
+                webhook_url: &cfg.subscription.webhook_url,
+                webhook_secret: webhook_secret.as_ref().map(|s| {
                     use secrecy::ExposeSecret;
                     let secret: &str = s.expose_secret();
                     secret
@@ -1445,25 +1437,8 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         )
         .await;
 
-    let mut app = router(state)
-        .layer(Extension(cfg.cedar))
-        .layer(Extension(cfg.oidc));
-
-    if let Some(mcp) = mcp_state {
-        app = app.merge(crate::mcp_server::router(mcp, cfg.shutdown.clone()));
-    }
-
-    let listener = TcpListener::bind(cfg.listen).await?;
-
-    tracing::info!(
-        listen = %cfg.listen,
-        makod_url = %cfg.makod_url,
-        marktd_url = %cfg.marktd_url,
-        "invoicd: listening"
-    );
-
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move { cfg.shutdown.cancelled().await })
-        .await?;
-    Ok(())
+    Ok(router(state)
+        .layer(Extension(cedar))
+        .layer(Extension(oidc))
+        .merge(crate::mcp_server::router(mcp_state, ctx.shutdown.clone())))
 }

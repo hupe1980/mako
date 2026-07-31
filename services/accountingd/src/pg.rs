@@ -178,7 +178,7 @@ pub async fn update_account(
 /// Tenant-scoped variant of `update_account` — P0-5 fix.
 /// Always filter by tenant to prevent cross-tenant data modification.
 pub async fn update_account_tenanted(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     malo_id: &str,
     lf_mp_id: &str,
     tenant: &str,
@@ -200,7 +200,7 @@ pub async fn update_account_tenanted(
     .bind(req.mandatsref)
     .bind(req.abschlag_ct)
     .bind(req.billing_day)
-    .execute(pool)
+    .execute(executor)
     .await
     .context("update_account_tenanted")?
     .rows_affected();
@@ -283,7 +283,7 @@ pub async fn jahresabschluss_already_settled(
 /// Record a completed Jahresabschluss for idempotency.
 #[allow(clippy::too_many_arguments)]
 pub async fn record_jahresabschluss(
-    pool: &PgPool,
+    executor: impl sqlx::PgExecutor<'_>,
     tenant: &str,
     malo_id: &str,
     billing_year: i16,
@@ -305,7 +305,7 @@ pub async fn record_jahresabschluss(
     .bind(sum_abschlage_ct)
     .bind(zahlbetrag_ct)
     .bind(ledger_entry_id)
-    .execute(pool)
+    .execute(executor)
     .await
     .context("record_jahresabschluss")?;
     Ok(())
@@ -349,14 +349,17 @@ pub async fn persist_sepa_collection(
 /// Returns `true` only for the caller that flips the run from a non-dispatched
 /// state to `DISPATCHED`; a second replica or a same-day restart gets `false`
 /// and must NOT re-POST the pain.008 (which would double-collect at the bank).
-pub async fn mark_sepa_collection_dispatched(pool: &PgPool, run_id: Uuid) -> anyhow::Result<bool> {
+pub async fn mark_sepa_collection_dispatched(
+    executor: impl sqlx::PgExecutor<'_>,
+    run_id: Uuid,
+) -> anyhow::Result<bool> {
     let r = sqlx::query(
         "UPDATE sepa_collection_runs
          SET dispatch_status = 'DISPATCHED', dispatched_at = now()
          WHERE run_id = $1 AND dispatch_status != 'DISPATCHED'",
     )
     .bind(run_id)
-    .execute(pool)
+    .execute(executor)
     .await
     .context("mark_sepa_collection_dispatched")?;
     Ok(r.rows_affected() > 0)

@@ -215,7 +215,12 @@ impl BillingdMcpHandler {
             "period_from": params.period_from,
             "period_to": params.period_to,
         });
-        match reqwest::Client::new().post(&url).json(&body).send().await {
+        match mako_service::http::default_client()
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+        {
             Ok(resp) if resp.status().is_success() => {
                 let json: serde_json::Value = resp
                     .json()
@@ -449,7 +454,12 @@ Use preview_billing first to verify the result without side effects.",
             "period_from": params.period_from,
             "period_to": params.period_to,
         });
-        match reqwest::Client::new().post(&url).json(&body).send().await {
+        match mako_service::http::default_client()
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+        {
             Ok(resp) if resp.status().is_success() => {
                 let json: serde_json::Value = resp
                     .json()
@@ -896,8 +906,8 @@ impl BillingdMcpHandler {
                 2. GET einsd /api/v1/settlements → check if einsd already settled this month\n\
                 3. GET edmd /api/v1/deliveries/{malo_id} → verify Einspeisung kWh available\n\
                 4. POST /api/v1/billing/{malo_id}/preview with eeg_meter override\n\
-                5. POST /api/v1/billing/{malo_id}/calculate → creates GUTSCHRIFT\n\
-                6. accountingd auto-posts EEG_GUTSCHRIFT credit via de.billing.gutschrift.erstellt\n\n\
+                5. POST /api/v1/billing/{malo_id}/calculate → creates a credit Rechnung (negative)\n\
+                6. accountingd books the credit from de.billing.rechnung.erstellt (is_correction)\n\n\
                 ⚠ **Double-booking risk**: If einsd already emitted de.eeg.verguetung.berechnet\n\
                 for this period, do NOT also run EEG billing in billingd — that would double-credit\n\
                 the plant owner. Choose one path: einsd settlement OR billingd EEG billing, not both.",

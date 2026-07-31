@@ -61,7 +61,7 @@ impl OtelConfig {
     }
 }
 
-/// Drop guard that flushes and shuts down the OTel tracer provider on drop.
+/// Drop guard that flushes and shuts down the `OTel` tracer provider on drop.
 ///
 /// Hold this value for the lifetime of the process:
 ///
@@ -113,7 +113,7 @@ pub fn init_tracing(service_name: &str, log_level: &str, otel: Option<&OtelConfi
 
     #[cfg(feature = "otel")]
     {
-        let otel_active = otel.is_some_and(|c| c.is_enabled());
+        let otel_active = otel.is_some_and(OtelConfig::is_enabled);
         if otel_active {
             let cfg = otel.expect("checked above");
             match build_otel_provider(cfg, service_name) {

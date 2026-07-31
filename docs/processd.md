@@ -366,8 +366,8 @@ GROUP BY initiator_is_affiliate;
 with secrets deferred to environment variables via `"env:VAR_NAME"` values.
 
 ```bash
-processd --config /etc/processd/processd.toml
-# or: PROCESSD_CONFIG=/etc/processd/processd.toml processd
+# The config-file path defaults to ./processd.toml; override with PROCESSD_CONFIG.
+PROCESSD_CONFIG=/etc/processd/processd.toml processd
 ```
 
 ### Full `processd.toml` reference
@@ -420,17 +420,24 @@ warn_days_before_expiry   = 14            # §38 Abs. 4 3-month warning lead
 # audience = "api://mako-processd"
 # jwks_refresh_secs = 300
 
-# [otel]               # omit to disable tracing
-# endpoint = "http://otel-collector:4317"
+# Tracing/OTel is configured from the environment (see the table below), not
+# from a [otel] block.
 ```
 
-### CLI flags
+### CLI flags & environment
 
-| Flag | Env var | Default | Description |
-|------|---------|---------|-------------|
-| `--config` / `-c` | `PROCESSD_CONFIG` | `processd.toml` | Path to `processd.toml` |
-| `--log-level` | `RUST_LOG` | `info` | Log level (`info`, `debug`, `processd=trace`) |
-| `--check` | `PROCESSD_CHECK` | `false` | Validate config + DB connectivity, then exit 0 |
+The daemon lifecycle is owned by the shared `mako_service` runner. There is a
+single CLI flag; everything else is environment-driven.
+
+| Flag / Env var | Default | Description |
+|----------------|---------|-------------|
+| `--check` | — | Probe the running instance's `/health/ready` on loopback and exit 0/non-zero (container HEALTHCHECK) |
+| `PROCESSD_CONFIG` | `processd.toml` | Path to the config file |
+| `RUST_LOG` / `LOG_LEVEL` | `info` | Log level (`info`, `debug`, `processd=trace`) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | OTLP endpoint; unset disables tracing export |
+
+Any config key may also be overridden via a `PROCESSD_<SECTION>__<KEY>` env var
+(e.g. `PROCESSD_DATABASE__URL`).
 
 ---
 
@@ -466,7 +473,9 @@ For Helm charts, map `[subscription]` to `values.yaml` under `processd.subscript
 
 ## Monitoring
 
-`GET /metrics` returns Prometheus-compatible metrics sourced from PostgreSQL:
+`GET /processd/metrics` returns Prometheus-compatible domain metrics sourced
+from PostgreSQL (the generic request-counter `/metrics` is mounted separately by
+the shared runner):
 
 | Metric | Type | Description |
 |--------|------|-------------|

@@ -40,8 +40,22 @@
 /// platform.
 #[must_use]
 pub fn default_client() -> reqwest::Client {
+    default_client_with(std::time::Duration::from_secs(30))
+}
+
+/// Like [`default_client`] but with a caller-chosen **request** timeout — for the
+/// occasional call that legitimately needs longer (a slow bulk export) or
+/// shorter than the 30 s default. Keeps the 5 s connect timeout and the
+/// no-redirect SSRF guard, so callers never re-specify (and mis-specify) those.
+///
+/// # Panics
+///
+/// Panics only if the TLS stack fails to initialise, which cannot happen with
+/// the default `reqwest` feature set on any supported platform.
+#[must_use]
+pub fn default_client_with(request_timeout: std::time::Duration) -> reqwest::Client {
     reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(request_timeout)
         .connect_timeout(std::time::Duration::from_secs(5))
         .pool_max_idle_per_host(4)
         .redirect(reqwest::redirect::Policy::none())

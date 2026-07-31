@@ -10,7 +10,6 @@ use axum::{
     Extension, Router,
     routing::{get, post, put},
 };
-use mako_service::health::health_routes;
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 
@@ -29,7 +28,6 @@ pub fn build_router(
 ) -> Router {
     Router::new()
         .merge(crate::mcp_server::router(mcp_state, shutdown))
-        .merge(health_routes(|| async { true }))
         // ── Anlage CRUD ────────────────────────────────────────────────────────
         .route(
             "/api/v1/anlagen",

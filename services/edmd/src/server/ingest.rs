@@ -154,56 +154,6 @@ pub async fn post_direct_reads_gas(
     post_direct_reads_inner(&state, &malo_id, req, "GAS", "DIRECT_GAS").await
 }
 
-/// Deliver a CloudEvent to an ERP webhook, with 3 retries (exponential backoff
-/// 200ms→400ms) and — when `secret` is set — an `x-mako-signature: sha256=<hex>`
-/// HMAC over the exact body sent.
-///
-/// Fire-and-retry rather than fire-and-forget: a lost quality warning
-/// (`de.messwert.reading.quality.warning`) is a compliance gap under
-/// § 60 Abs. 6 MsbG — the responsible party must be informed of quality issues.
-///
-/// This is the one outbound emitter: every edmd-originated CloudEvent (request
-/// path and background workers) goes through it, so the ERP receiver can
-/// authenticate all of them the same way edmd authenticates its *inbound*
-/// webhook. Without the secret the body is unsigned, and the topic/transport is
-/// the trust boundary (documented).
-pub(crate) async fn post_ce_with_retry(
-    client: &reqwest::Client,
-    url: &str,
-    ce: &serde_json::Value,
-    secret: Option<&[u8]>,
-) {
-    // Sign the exact bytes that are sent, so a body serialised twice cannot
-    // diverge from its signature.
-    let body = match serde_json::to_vec(ce) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::error!(error = %e, "edmd: CloudEvent serialisation failed — event lost");
-            return;
-        }
-    };
-    let signature = secret.map(|s| format!("sha256={}", mako_service::webhook::hmac_hex(s, &body)));
-
-    for attempt in 0u32..3 {
-        let mut req = client
-            .post(url)
-            .header("Content-Type", "application/cloudevents+json")
-            .body(body.clone());
-        if let Some(ref sig) = signature {
-            req = req.header("x-mako-signature", sig);
-        }
-        match req.send().await {
-            Ok(r) if r.status().is_success() => return,
-            Ok(r) => tracing::warn!(attempt, status = %r.status(), "edmd: CE webhook non-2xx"),
-            Err(e) => tracing::warn!(attempt, error = %e, "edmd: CE webhook error"),
-        }
-        if attempt < 2 {
-            tokio::time::sleep(std::time::Duration::from_millis(200 * (1 << attempt))).await;
-        }
-    }
-    tracing::error!("edmd: CloudEvent delivery failed after 3 retries — event lost");
-}
-
 /// Internal implementation shared by Strom and Gas direct-push handlers.
 #[allow(clippy::too_many_lines)]
 /// Parse a caller-supplied quality flag from its wire spelling.
@@ -668,18 +618,11 @@ pub(crate) async fn post_direct_reads_inner(
         let correlation_id = uuid::Uuid::new_v4().to_string();
 
         // Always emit de.messwert.reading.direct.stored so billingd knows to recompute.
-        let stored_ce = serde_json::json!({
-            "specversion": "1.0",
-            "type": mako_events::messwert::READING_DIRECT_STORED,
-            "source": format!("urn:edmd:tenant:{}:{}", state.tenant, malo_id),
-            "id": uuid::Uuid::new_v4().to_string(),
-            "time": OffsetDateTime::now_utc().to_string(),
-            "subject": malo_id,
-            "tenantid": state.tenant,
-            "correlationid": correlation_id,
-            "causationid": session_id,
-            "datacontenttype": "application/json",
-            "data": {
+        let stored_ce = mako_service::CloudEvent::new(
+            mako_service::source("edmd", &state.tenant),
+            mako_events::messwert::READING_DIRECT_STORED,
+            malo_id,
+            serde_json::json!({
                 "malo_id": malo_id,
                 "session_id": session_id,
                 "sparte": sparte_str,
@@ -688,30 +631,29 @@ pub(crate) async fn post_direct_reads_inner(
                 "period_to": period_to_date.to_string(),
                 "intervals_stored": accepted.len(),
                 "source": source,
-            }
-        });
-        post_ce_with_retry(
+            }),
+        )
+        .extension("tenantid", state.tenant.clone())
+        .extension("correlationid", correlation_id.clone())
+        .extension("causationid", session_id.clone());
+        if let Err(e) = mako_service::post_ce_with_retry(
             &client,
             webhook_url,
             &stored_ce,
             state.webhook_secret_bytes(),
         )
-        .await;
+        .await
+        {
+            tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
+        }
 
         // If quality warnings detected, emit de.messwert.reading.quality.warning.
         if quality.has_warnings {
-            let warn_ce = serde_json::json!({
-                "specversion": "1.0",
-                "type": mako_events::messwert::READING_QUALITY_WARNING,
-                "source": format!("urn:edmd:tenant:{}:{}", state.tenant, malo_id),
-                "id": uuid::Uuid::new_v4().to_string(),
-                "time": OffsetDateTime::now_utc().to_string(),
-                "subject": malo_id,
-                "tenantid": state.tenant,
-                "correlationid": correlation_id,
-                "causationid": session_id,
-                "datacontenttype": "application/json",
-                "data": {
+            let warn_ce = mako_service::CloudEvent::new(
+                mako_service::source("edmd", &state.tenant),
+                mako_events::messwert::READING_QUALITY_WARNING,
+                malo_id,
+                serde_json::json!({
                     "malo_id": malo_id,
                     "session_id": session_id,
                     "sparte": sparte_str,
@@ -719,9 +661,21 @@ pub(crate) async fn post_direct_reads_inner(
                     "period_to": period_to_date.to_string(),
                     "quality": quality_json,
                     "recommended_action": "Investigate with agentd billing-anomaly-agent or edmd MCP get_lastgang tool",
-                }
-            });
-            post_ce_with_retry(&client, webhook_url, &warn_ce, state.webhook_secret_bytes()).await;
+                }),
+            )
+            .extension("tenantid", state.tenant.clone())
+            .extension("correlationid", correlation_id)
+            .extension("causationid", session_id.clone());
+            if let Err(e) = mako_service::post_ce_with_retry(
+                &client,
+                webhook_url,
+                &warn_ce,
+                state.webhook_secret_bytes(),
+            )
+            .await
+            {
+                tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
+            }
         }
     }
 
