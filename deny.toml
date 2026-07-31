@@ -429,11 +429,6 @@ version = "=0.14"
 reason  = "transitional: iceberg/slatedb ecosystem requires 0.14 alongside 0.15."
 
 [[bans.skip]]
-name    = "object_store"
-version = "=0.12"
-reason  = "slatedb 0.13 requires object_store 0.12; iceberg 0.9.1 requires 0.14."
-
-[[bans.skip]]
 name    = "quick-xml"
 version = "=0.26"
 reason  = "roxmltree/testcontainers require an older quick-xml alongside workspace 0.40/0.41."
@@ -526,7 +521,7 @@ reason  = "companion of petgraph 0.6 on the extism/wasmtime chain; petgraph 0.8 
 [[bans.skip]]
 name    = "syn"
 version = "2.0"
-reason  = "async-trait 0.1.91 (datafusion 52/53 via edmd, lance via agentd) uses syn 3; the rest of the proc-macro graph is still on syn 2."
+reason  = "async-trait 0.1.91 (datafusion 53 via edmd, lance via agentd) uses syn 3; the rest of the proc-macro graph is still on syn 2."
 
 [[bans.skip]]
 name    = "phf"
@@ -544,246 +539,14 @@ version = "=0.9"
 reason  = "ring 0.17 (mako-as4) uses spin 0.9; newer deps use spin 0.10."
 
 [[bans.skip]]
+name    = "sha1"
+version = "0.10"
+reason  = "tungstenite 0.29 (energy-api/makod) uses sha1 0.10; reqsign/opendal (meterstore/edmd) use 0.11."
+
+[[bans.skip]]
 name    = "webpki-roots"
 version = "=0.26"
 reason  = "older rustls consumers use webpki-roots 0.26; newer use 1.0."
-
-# ── arrow 57 / datafusion 52 split (lancedb vs iceberg-datafusion) ────────────────
-# `agentd` uses `lancedb` which pins the arrow 57 / datafusion 52 release series.
-# `edmd` uses `iceberg-datafusion` which requires arrow 58 / datafusion 53.
-# Both versions coexist because neither upstream has released a version that allows
-# upgrading both consumers simultaneously.  Resolve when lancedb updates to arrow 58.
-
-[[bans.skip]]
-name    = "arrow"
-version = "57"
-reason  = "lancedb (agentd) pins arrow 57; iceberg-datafusion (edmd) requires arrow 58. Resolve when lancedb updates."
-
-[[bans.skip]]
-name    = "arrow-arith"
-version = "57"
-reason  = "paired with arrow 57 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "arrow-array"
-version = "57"
-reason  = "paired with arrow 57 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "arrow-buffer"
-version = "57"
-reason  = "paired with arrow 57 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "arrow-cast"
-version = "57"
-reason  = "paired with arrow 57 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "arrow-csv"
-version = "57"
-reason  = "paired with arrow 57 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "arrow-data"
-version = "57"
-reason  = "paired with arrow 57 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "arrow-ipc"
-version = "57"
-reason  = "paired with arrow 57 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "arrow-json"
-version = "57"
-reason  = "paired with arrow 57 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "arrow-ord"
-version = "57"
-reason  = "paired with arrow 57 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "arrow-row"
-version = "57"
-reason  = "paired with arrow 57 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "arrow-schema"
-version = "57"
-reason  = "paired with arrow 57 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "arrow-select"
-version = "57"
-reason  = "paired with arrow 57 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "arrow-string"
-version = "57"
-reason  = "paired with arrow 57 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion"
-version = "52"
-reason  = "lancedb (agentd) pins datafusion 52; iceberg-datafusion (edmd) requires 53. Resolve when lancedb updates."
-
-[[bans.skip]]
-name    = "datafusion-catalog"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-catalog-listing"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-common"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-common-runtime"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-datasource"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-datasource-arrow"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-datasource-csv"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-datasource-json"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-doc"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-execution"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-expr"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-expr-common"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-functions"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-functions-aggregate"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-functions-aggregate-common"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-functions-nested"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-functions-table"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-functions-window"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-functions-window-common"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-macros"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-optimizer"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-physical-expr"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-physical-expr-adapter"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-physical-expr-common"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-physical-optimizer"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-physical-plan"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-pruning"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-session"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-[[bans.skip]]
-name    = "datafusion-sql"
-version = "52"
-reason  = "paired with datafusion 52 (lancedb/iceberg split)."
-
-# ── sqlparser split (datafusion 52 uses 0.59; datafusion 53 uses 0.61) ───────────
-[[bans.skip]]
-name    = "sqlparser"
-version = "0.59"
-reason  = "datafusion 52 (lancedb) requires sqlparser 0.59; datafusion 53 (iceberg) requires 0.61."
-
-[[bans.skip]]
-name    = "sqlparser_derive"
-version = "0.3"
-reason  = "proc-macro companion of sqlparser 0.59 (uses own version scheme 0.3.x); sqlparser 0.61 uses sqlparser_derive 0.5."
 
 # ── strum three-way split (0.26 / 0.27 / 0.28) ───────────────────────────────────
 [[bans.skip]]
@@ -812,17 +575,12 @@ name    = "bitflags"
 version = "1"
 reason  = "Some ecosystem crates still depend on bitflags 1.x; workspace uses 2.x."
 
-# ── lz4_flex three-way split (0.11 / 0.12 / 0.13) ─────────────────────────────
-# krafka 0.12 pins lz4_flex 0.11; arrow 57 (lancedb/datafusion 52) pins 0.12; 0.13 is current.
-[[bans.skip]]
-name    = "lz4_flex"
-version = "0.12"
-reason  = "lz4_flex 0.12 pulled by arrow 57 / datafusion 52 (lancedb chain); 0.13 is current."
-
+# ── lz4_flex 0.11 vs 0.13 ─────────────────────────────────────────────────────
+# krafka 0.12 pins lz4_flex 0.11; 0.13 is current.
 [[bans.skip]]
 name    = "lz4_flex"
 version = "0.11"
-reason  = "krafka 0.12 pins lz4_flex 0.11 (third leg of the split; visible in the all-features graph)."
+reason  = "krafka 0.12 pins lz4_flex 0.11 (visible in the all-features graph); 0.13 is current."
 
 # ── nix 0.26 vs 0.31 ─────────────────────────────────────────────────────────────
 [[bans.skip]]
@@ -846,7 +604,7 @@ reason  = "proc-macro companion of snafu 0.8."
 [[bans.skip]]
 name    = "object_store"
 version = "=0.13"
-reason  = "object_store three-way split after cargo update: 0.12 (slatedb), 0.13 (mid), 0.14 (iceberg). Resolve when all consumers align on 0.14."
+reason  = "object_store split: datafusion 53 / lance pin 0.13; makod + slatedb use 0.14. Resolve when lance updates to 0.14."
 
 # ── toml ecosystem split (extism/mako-plugin/wasmtime build-dep chain) ────────────
 # extism 1.30 (mako-plugin WASM sandbox) + wasmtime 43 pull a newer toml/toml_edit

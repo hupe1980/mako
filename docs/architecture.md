@@ -238,9 +238,9 @@ Each is independently testable and suitable for crates.io publication.
 ```mermaid
 graph TD
     subgraph pure ["Pure calculation crates (zero I/O)"]
-        billing["billing 0.8 (crates.io)\nScalarTariff · TariffSchedule · TimeOfUsePricing\nVAT breakdown (EN 16931 BG-23) · AmountScale\nAdvancePayment · integer-cent money"]
+        billing["billing 0.10 (crates.io)\nScalarTariff · TariffSchedule · TimeOfUsePricing\nEN 16931 line items — BG-23 VAT breakdown · BG-27/28 line\nallowances · BG-29 price detail · BT-130 unit code\nAmountScale · AdvancePayment · integer-cent money"]
         metering["metering\nMeterInterval · fill_gaps (§17)\nHampel quality · gas_m3_to_kwh_hs"]
-        eeg["eeg-billing\n10 EEG/KWKG schemes · §51/§52/§36k\n§14 UStG Gutschrift → BO4E Rechnung (bo4e)"]
+        eeg["eeg-billing\n10 EEG/KWKG schemes · §51/§52/§36h\n§14 UStG Gutschrift → BO4E Rechnung (bo4e)"]
         grid["grid-billing\nNNE · KA · MMM · MSB · §13a\nCalculationTrace · into_rechnung (bo4e)"]
         energy["energy-billing\nProduct (13 typed variants)\nBillingEngine · §41b guard · Invoice.warnings\nto_rechnung (bo4e)"]
     end

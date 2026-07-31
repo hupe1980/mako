@@ -50,7 +50,9 @@ use axum::{
 };
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, jwk::JwkSet};
 use reqwest::Client;
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
+use subtle::ConstantTimeEq as _;
 use tokio_util::sync::CancellationToken;
 
 use crate::cedar::CedarPrincipal;
@@ -136,6 +138,68 @@ pub enum OidcError {
 #[derive(Clone)]
 pub struct OidcVerifier {
     inner: Arc<Inner>,
+    /// Opt-in service-to-service keys. Empty unless configured. A non-JWT Bearer
+    /// that matches one authenticates as a synthetic **service** principal —
+    /// the mechanism internal callers (einsd→edmd, billingd→edmd, …) use, since
+    /// no service mints real OIDC JWTs. Mirrors [`crate::mcp_auth`]'s key branch.
+    service_keys: Arc<Vec<ServiceKey>>,
+}
+
+/// A shared machine-to-machine key mapping to a fixed service principal.
+///
+/// Comparison is constant-time. The principal carries a `sub`, the deployment
+/// `tenant` (so Cedar's `principal_tenant == resource_tenant` holds) and the
+/// market roles the calling service needs.
+pub struct ServiceKey {
+    secret: SecretString,
+    sub: String,
+    tenant: String,
+    roles: Vec<String>,
+    sparte: Vec<String>,
+}
+
+impl ServiceKey {
+    /// Build a service key. `roles`/`sparte` default to all when empty.
+    #[must_use]
+    pub fn new(
+        secret: SecretString,
+        sub: impl Into<String>,
+        tenant: impl Into<String>,
+        roles: Vec<String>,
+        sparte: Vec<String>,
+    ) -> Self {
+        Self {
+            secret,
+            sub: sub.into(),
+            tenant: tenant.into(),
+            roles: if roles.is_empty() {
+                vec!["NB".to_owned(), "LF".to_owned(), "MSB".to_owned()]
+            } else {
+                roles
+            },
+            sparte: if sparte.is_empty() {
+                vec!["STROM".to_owned(), "GAS".to_owned()]
+            } else {
+                sparte
+            },
+        }
+    }
+
+    fn matches(&self, token: &str) -> bool {
+        token
+            .as_bytes()
+            .ct_eq(self.secret.expose_secret().as_bytes())
+            .into()
+    }
+
+    fn claims(&self) -> JwtClaims {
+        JwtClaims {
+            sub: self.sub.clone(),
+            mako_tenant: Some(self.tenant.clone()),
+            mako_roles: self.roles.clone(),
+            mako_sparte: self.sparte.clone(),
+        }
+    }
 }
 
 struct Inner {
@@ -172,7 +236,29 @@ impl OidcVerifier {
                 disabled: true,
                 disabled_tenant: tenant_id,
             }),
+            service_keys: Arc::new(Vec::new()),
         }
+    }
+
+    /// Attach service-to-service keys (constant-time matched, opt-in).
+    ///
+    /// A non-JWT Bearer that matches one authenticates as that key's service
+    /// principal. Empty by default; populated by [`OidcConfig::build_verifier`]
+    /// from the `[[oidc.service_keys]]` config.
+    #[must_use]
+    pub fn with_service_keys(mut self, keys: Vec<ServiceKey>) -> Self {
+        self.service_keys = Arc::new(keys);
+        self
+    }
+
+    /// Authenticate an opaque (non-JWT) Bearer against the configured service
+    /// keys, returning the matched service principal's claims.
+    #[must_use]
+    pub fn service_claims(&self, token: &str) -> Option<JwtClaims> {
+        self.service_keys
+            .iter()
+            .find(|k| k.matches(token))
+            .map(ServiceKey::claims)
     }
 
     /// Returns `true` when this verifier was created with [`OidcVerifier::disabled`].
@@ -258,6 +344,7 @@ impl OidcVerifier {
                 disabled: false,
                 disabled_tenant: String::new(),
             }),
+            service_keys: Arc::new(Vec::new()),
         })
     }
 
@@ -277,6 +364,7 @@ impl OidcVerifier {
                 disabled: false,
                 disabled_tenant: String::new(),
             }),
+            service_keys: Arc::new(Vec::new()),
         }
     }
 
@@ -490,6 +578,14 @@ where
 
         let token = bearer.ok_or(AuthError(OidcError::MissingKid))?;
 
+        // Opaque (non-JWT) Bearer → service-to-service key. A service principal
+        // always carries a tenant, so it satisfies the invariant below directly.
+        if !OidcVerifier::looks_like_jwt(token) {
+            return verifier.service_claims(token).map(Claims).ok_or(AuthError(
+                OidcError::TokenInvalid(jsonwebtoken::errors::ErrorKind::InvalidToken.into()),
+            ));
+        }
+
         let claims = verifier.verify(token).map_err(AuthError)?;
         // Enforce the tenant invariant at extraction time: every `Claims`
         // handed to a handler carries `mako_tenant` (data-isolation boundary).
@@ -535,6 +631,28 @@ pub struct OidcConfig {
     /// JWKS background refresh interval in seconds.  Default: 300 (5 min).
     #[serde(default = "OidcConfig::default_jwks_refresh_secs")]
     pub jwks_refresh_secs: u64,
+    /// Shared service-to-service keys accepted alongside OIDC JWTs.
+    ///
+    /// Each entry lets an internal caller authenticate with an opaque Bearer key
+    /// (not a JWT) — the mechanism edmd/marktd use for calls from
+    /// einsd/billingd/vertragd/portald, none of which mint real OIDC tokens.
+    #[serde(default)]
+    pub service_keys: Vec<ServiceKeyConfig>,
+}
+
+/// One `[[oidc.service_keys]]` entry — a shared key → service principal.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ServiceKeyConfig {
+    /// Principal `sub` for the calling service (e.g. `"einsd"`).
+    pub name: String,
+    /// The shared secret. Supports `env:VAR` indirection.
+    pub key: String,
+    /// Market roles granted to the service (defaults to NB/LF/MSB).
+    #[serde(default)]
+    pub roles: Vec<String>,
+    /// Sparten granted (defaults to STROM/GAS).
+    #[serde(default)]
+    pub sparte: Vec<String>,
 }
 
 impl OidcConfig {
@@ -578,7 +696,23 @@ impl OidcConfig {
                 .await
                 .context("OIDC discovery")?;
             let _refresh = v.spawn_refresh_task(http.clone(), c.jwks_refresh_secs, shutdown);
-            Ok(v)
+            // Resolve any configured service-to-service keys (env: indirection).
+            let mut keys = Vec::with_capacity(c.service_keys.len());
+            for sk in &c.service_keys {
+                let secret = crate::config::resolve_env_secret(&sk.key)
+                    .with_context(|| format!("service_key {:?}", sk.name))?;
+                keys.push(ServiceKey::new(
+                    secret,
+                    sk.name.clone(),
+                    tenant_id,
+                    sk.roles.clone(),
+                    sk.sparte.clone(),
+                ));
+            }
+            if !keys.is_empty() {
+                tracing::info!(count = keys.len(), "OIDC: service-to-service keys enabled");
+            }
+            Ok(v.with_service_keys(keys))
         } else {
             tracing::warn!(
                 "OIDC disabled — all requests accepted without authentication. \
@@ -790,6 +924,30 @@ mod tests {
             verifier().verify(&token),
             Err(OidcError::TokenInvalid(_))
         ));
+    }
+
+    // ── service-to-service keys ──────────────────────────────────────────────
+
+    #[test]
+    fn service_key_authenticates_an_opaque_bearer() {
+        let v = verifier().with_service_keys(vec![ServiceKey::new(
+            SecretString::from("s3cr3t-einsd-key"),
+            "einsd",
+            "9900357000004",
+            vec![],
+            vec![],
+        )]);
+        // A matching opaque key yields the service principal with the tenant.
+        let claims = v.service_claims("s3cr3t-einsd-key").expect("key matches");
+        assert_eq!(claims.sub, "einsd");
+        assert_eq!(claims.mako_tenant.as_deref(), Some("9900357000004"));
+        assert!(claims.has_role("MSB"));
+        // A wrong key does not.
+        assert!(v.service_claims("wrong-key").is_none());
+        // An opaque token is not mistaken for a JWT.
+        assert!(!OidcVerifier::looks_like_jwt("s3cr3t-einsd-key"));
+        // With no keys configured, nothing authenticates by key.
+        assert!(verifier().service_claims("s3cr3t-einsd-key").is_none());
     }
 
     // ── verify — future nbf rejected ─────────────────────────────────────────

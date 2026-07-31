@@ -196,6 +196,8 @@ pub struct AnlageRow {
     pub solar_bauform: Option<String>,
     pub wind_guetegrad: Option<Decimal>,
     pub wind_korrekturfaktor: Option<Decimal>,
+    // §36h Abs. 2: JSONB Vec<GuetefaktorReeval> (year 6/11/16 re-evaluations)
+    pub wind_guetefaktor_reevaluations: Option<serde_json::Value>,
     pub fernsteuerbarkeit_datum: Option<Date>,
     pub direktvermarktung_pflicht: Option<bool>,
     pub metering_mode: Option<String>,
@@ -220,8 +222,8 @@ pub struct AnlageRow {
     pub fernsteuerbarkeit_violation_start: Option<Date>,
     // §21b Veräußerungsform switch guard (migration 0006)
     pub last_veraeusserungsform_switch: Option<Date>,
-    // §51a cumulative Verlängerungsanspruch (migration 0006)
-    pub verlaengerungsanspruch_qh_gesamt: i64,
+    // §51a cumulative RAW negative-price quarter-hours (drives effektives_foerderende)
+    pub negative_price_qh_gesamt: i64,
     // §24 Erweiterung capacity blocks (migration 0003, JSONB)
     pub capacity_blocks: Option<serde_json::Value>,
     // §53b grid area for regional reduction lookups (migration 0007)
@@ -585,7 +587,7 @@ pub struct SettleInput {
     /// - `false` + EEG 2023  → Pflichtzahlung €10/kW/month (§52 Abs. 1 Nr. 11 EEG 2023)
     /// - `false` + EEG ≤2021 → `sanktion = Some(VerguetungAufNull)` (Vergütung = 0, old §47/§52 via §100)
     pub mastr_registriert: bool,
-    /// §36k EEG — certified wind onshore Korrekturfaktor from the plant DB record.
+    /// §36h EEG — certified wind onshore Korrekturfaktor from the plant DB record.
     /// Forwarded directly to `eeg-billing` for MarketPremium wind plants.
     pub wind_korrekturfaktor: Option<Decimal>,
     /// §9 EEG — date Fernsteuerbarkeit was installed, if any.
@@ -613,11 +615,10 @@ pub struct SettleInput {
     pub capacity_blocks_json: Option<serde_json::Value>,
     /// §53b grid area identifier for regional reduction lookup (migration 0007).
     pub grid_area: Option<String>,
-    /// §19 EEG 2023 — kWh curtailed by NB; NB must compensate at AW rate.
+    /// §13a EnWG (Redispatch 2.0) — kWh curtailed by NB; NB must compensate at AW rate.
     pub einspeisemanagement_kwh: Option<Decimal>,
     /// §51a EEG 2023 — quarter-hours during negative-price periods for Verlängerungsanspruch.
     pub negative_price_quarter_hours: Option<u64>,
-    // fernsteuerbarkeit_datum is declared above alongside other plant fields
     /// § 147 AO / GoBD — UUID of the original receipt this corrects (None for initial settlements).
     ///
     /// When Some, `run_settlement` will:
@@ -856,8 +857,15 @@ pub struct SettleOverrides {
     pub epex_avg_ct_kwh: Option<Decimal>,
     /// §20 Abs. 3 Managementprämie override ct/kWh.
     pub managementpraemie_ct_override: Option<Decimal>,
-    /// §19 EEG curtailed kWh for this billing period.
+    /// §13a EnWG curtailed kWh for this billing period.
     pub einspeisemanagement_kwh: Option<Decimal>,
+    /// §51 EEG — kWh fed in during negative-spot-price intervals this period.
+    ///
+    /// Drives the Negativpreisregel: the anzulegender Wert for these kWh is
+    /// reduced to null (§51 Abs. 1 EEG 2023), version- and threshold-aware via
+    /// the engine. `None` (not `Some(0)`) means "no negative-price data supplied"
+    /// and leaves the settlement unreduced.
+    pub kwh_during_negative_epex: Option<Decimal>,
     /// §51a quarter-hours during negative EPEX for this period.
     pub negative_price_quarter_hours: Option<u64>,
     /// § 147 AO / GoBD correction: UUID of original receipt this corrects.
@@ -911,6 +919,38 @@ pub fn build_settle_input(
     )
     .ok();
 
+    // §51a EEG 2023: move the Förderende forward by the accrued negative-price
+    // extension so the plant keeps being paid past its statutory 20-year end.
+    // Computed from the RAW cumulative QH (rounded once), technology-aware.
+    let is_solar = eeg_billing::ErzeugungsArt::from_db_str(&anlage.erzeugungsart)
+        .map(eeg_billing::ErzeugungsArt::is_solar)
+        .unwrap_or(false);
+    let effektives_foerderende = eeg_billing::foerderdauer::effektives_foerderende(
+        anlage.foerderendedatum,
+        u64::try_from(anlage.negative_price_qh_gesamt).unwrap_or(0),
+        is_solar,
+    )
+    .unwrap_or(anlage.foerderendedatum);
+
+    // §36h Abs. 2 EEG 2023: the Korrekturfaktor in effect for this billing period.
+    // A Standortgüte re-evaluation at year 6/11/16 supersedes the initial factor.
+    let wind_korrekturfaktor = match (anlage.wind_korrekturfaktor, billing_date) {
+        (Some(initial), Some(bd)) => {
+            let reevals: Vec<eeg_billing::wind::GuetefaktorReeval> = anlage
+                .wind_guetefaktor_reevaluations
+                .as_ref()
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            Some(eeg_billing::wind::korrekturfaktor_fuer_periode(
+                anlage.inbetriebnahme,
+                bd,
+                initial,
+                &reevals,
+            ))
+        }
+        _ => anlage.wind_korrekturfaktor,
+    };
+
     SettleInput {
         tr_id: anlage.tr_id.clone(),
         tenant: tenant.to_owned(),
@@ -935,14 +975,14 @@ pub fn build_settle_input(
             .map(|h| Decimal::from(h) * anlage.leistung_kwp),
         sanktion: None, // derived from mastr_registriert in run_settlement
         mastr_registriert: anlage.mastr_registriert,
-        kwh_during_negative_epex: None,
+        kwh_during_negative_epex: overrides.kwh_during_negative_epex,
         inbetriebnahme: Some(anlage.inbetriebnahme),
         leistung_kwp: Some(anlage.leistung_kwp),
-        foerderendedatum: Some(anlage.foerderendedatum),
+        foerderendedatum: Some(effektives_foerderende),
         billing_date,
         eeg_gesetz: anlage.eeg_gesetz,
         erzeugungsart: anlage.erzeugungsart.clone(),
-        wind_korrekturfaktor: anlage.wind_korrekturfaktor,
+        wind_korrekturfaktor,
         fernsteuerbarkeit_datum: anlage.fernsteuerbarkeit_datum,
         is_biogas_sect51b: anlage.is_biogas_sect51b,
         mastr_violation_start: anlage.mastr_violation_start,
@@ -1036,7 +1076,9 @@ fn build_gutschrift(
         Ok((rechnung, doc)) => (
             serde_json::to_value(&rechnung).ok(),
             Some(nummer),
-            Some(doc.tax_total().into_decimal()),
+            // BT-110 VAT total (not `tax_total()`, which would also fold in any
+            // non-VAT levy layer). A validated single-layer Gutschrift never errs.
+            doc.vat_total().ok().map(|a| a.into_decimal()),
             Some(doc.gross_total().into_decimal()),
         ),
         Err(e) => {
@@ -1384,11 +1426,13 @@ pub async fn run_settlement(
         billing_date: input.billing_date,
         // §24 Abs. 1 EEG 2023: pass deserialized capacity blocks
         capacity_blocks,
-        messkonzept: None,
         pflichtverstoss,
         eeg_gesetz: eeg_gesetz_enum,
+        // einsd's eeg_verguetungssaetze stores NET rates (§53 already deducted),
+        // so the engine must not deduct §53 again.
+        aw_is_gross: false,
         erzeugungsart: eeg_billing::ErzeugungsArt::from_db_str(&input.erzeugungsart).ok(),
-        // §19 EEG 2023: curtailment compensation (NB must pay for suppressed kWh)
+        // §13a EnWG (Redispatch 2.0): curtailment compensation (NB must pay for suppressed kWh)
         einspeisemanagement_kwh: input.einspeisemanagement_kwh,
         billing_days_fraction: None, // auto-computed by eeg-billing from billing_date + dates
         // §53b: regional reduction from BNetzA-certified grid area
@@ -1573,21 +1617,28 @@ pub async fn run_settlement(
         }
     }
 
-    // ── §51a: update cumulative Verlängerungsanspruch on the plant record ─────
-    if verlaengerungsanspruch_qh > 0 {
+    // ── §51a: accrue the RAW negative-price quarter-hours on the plant ────────
+    // The extension rounds up to a full calendar day (or the solar
+    // Volllastviertelstunden contingent) **once over the 20-year total**, so the
+    // cumulative column stores the raw lost QH — `build_settle_input` converts it
+    // to the effective Förderende via `effektives_foerderende`. Accruing the
+    // per-month rounded value would over-extend (each partial day rounding up).
+    let raw_negative_qh =
+        i64::try_from(input.negative_price_quarter_hours.unwrap_or(0)).unwrap_or(i64::MAX);
+    if raw_negative_qh > 0 {
         sqlx::query(
             r"UPDATE eeg_anlagen
-              SET verlaengerungsanspruch_qh_gesamt =
-                      COALESCE(verlaengerungsanspruch_qh_gesamt, 0) + $3,
+              SET negative_price_qh_gesamt =
+                      COALESCE(negative_price_qh_gesamt, 0) + $3,
                   updated_at = now()
               WHERE tr_id = $1 AND tenant = $2",
         )
         .bind(&input.tr_id)
         .bind(&input.tenant)
-        .bind(verlaengerungsanspruch_qh)
+        .bind(raw_negative_qh)
         .execute(&mut *conn)
         .await
-        .context("update verlaengerungsanspruch")?;
+        .context("accrue negative_price_qh_gesamt")?;
     }
 
     // ── KWKG: update accumulated kWh + auto-expire when limit reached ────────
@@ -1964,6 +2015,158 @@ pub async fn fetch_epex_price(
     .await
     .context("fetch_epex_price")?;
     Ok(row.and_then(|r| r.try_get::<Decimal, _>("avg_ct_kwh").ok()))
+}
+
+// ── EPEX Spot per-interval prices (§51 Negativpreisregel) ────────────────────
+
+/// One EPEX day-ahead spot price interval.
+#[derive(Debug, Clone)]
+pub struct SpotPrice {
+    pub delivery_start: time::OffsetDateTime,
+    pub resolution_min: i16,
+    pub price_ct_kwh: Decimal,
+}
+
+/// Bulk-upsert spot prices (one billing month is ~2 976 quarter-hours).
+///
+/// # Errors
+/// Propagates the batched insert error.
+pub async fn upsert_spot_prices(
+    pool: &PgPool,
+    prices: &[SpotPrice],
+    source: &str,
+) -> anyhow::Result<u64> {
+    if prices.is_empty() {
+        return Ok(0);
+    }
+    let starts: Vec<time::OffsetDateTime> = prices.iter().map(|p| p.delivery_start).collect();
+    let res: Vec<i16> = prices.iter().map(|p| p.resolution_min).collect();
+    let cts: Vec<Decimal> = prices.iter().map(|p| p.price_ct_kwh).collect();
+    let n = sqlx::query(
+        r"INSERT INTO epex_spot_prices (delivery_start, resolution_min, price_ct_kwh, source)
+          SELECT * FROM UNNEST($1::timestamptz[], $2::smallint[], $3::numeric[]) AS t(s, r, c),
+                       LATERAL (SELECT $4::text) AS src(source)
+          ON CONFLICT (delivery_start) DO UPDATE
+          SET resolution_min = EXCLUDED.resolution_min,
+              price_ct_kwh   = EXCLUDED.price_ct_kwh,
+              source         = EXCLUDED.source,
+              imported_at    = now()",
+    )
+    .bind(&starts)
+    .bind(&res)
+    .bind(&cts)
+    .bind(source)
+    .execute(pool)
+    .await
+    .context("upsert_spot_prices")?
+    .rows_affected();
+    Ok(n)
+}
+
+/// Fetch the spot prices whose delivery start falls in `[from, to)`, ascending.
+///
+/// # Errors
+/// Propagates the query error.
+pub async fn fetch_spot_prices(
+    pool: &PgPool,
+    from: time::OffsetDateTime,
+    to: time::OffsetDateTime,
+) -> anyhow::Result<Vec<(time::OffsetDateTime, Decimal)>> {
+    let rows = sqlx::query(
+        r"SELECT delivery_start, price_ct_kwh FROM epex_spot_prices
+          WHERE delivery_start >= $1 AND delivery_start < $2
+          ORDER BY delivery_start",
+    )
+    .bind(from)
+    .bind(to)
+    .fetch_all(pool)
+    .await
+    .context("fetch_spot_prices")?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|r| {
+            Some((
+                r.try_get::<time::OffsetDateTime, _>("delivery_start")
+                    .ok()?,
+                r.try_get::<Decimal, _>("price_ct_kwh").ok()?,
+            ))
+        })
+        .collect())
+}
+
+// ── §36h Abs. 2 EEG 2023 — Wind Standortgüte re-evaluation ───────────────────
+
+/// Record a §36h Abs. 2 Standortgüte re-evaluation (year 6/11/16) on a wind plant.
+///
+/// Upserts the re-evaluation into `wind_guetefaktor_reevaluations` (replacing any
+/// entry for the same effective year) and reports whether it triggers a
+/// reconciliation of the reviewed five-year period (§36h Abs. 2 Satz 2: the
+/// recomputed Gütefaktor deviates > 2 pp from the previous one). The effective
+/// Korrekturfaktor per billing period is then derived by `build_settle_input`.
+///
+/// Returns `None` when the plant does not exist, else
+/// `Some((reconciliation_required, previous_guetefaktor))`.
+///
+/// # Errors
+/// Propagates query/serialisation errors.
+pub async fn record_wind_reevaluation(
+    pool: &PgPool,
+    tenant: &str,
+    tr_id: &str,
+    wirksam_ab_jahr: i16,
+    guetefaktor: Decimal,
+) -> anyhow::Result<Option<(bool, Option<Decimal>)>> {
+    let Some(row) = sqlx::query(
+        "SELECT wind_guetegrad, wind_guetefaktor_reevaluations
+           FROM eeg_anlagen WHERE tr_id = $1 AND tenant = $2",
+    )
+    .bind(tr_id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await
+    .context("load wind re-evaluation state")?
+    else {
+        return Ok(None);
+    };
+
+    let guetegrad: Option<Decimal> = row.try_get("wind_guetegrad").ok();
+    let existing: serde_json::Value = row
+        .try_get("wind_guetefaktor_reevaluations")
+        .unwrap_or_else(|_| serde_json::json!([]));
+    let mut reevals: Vec<eeg_billing::wind::GuetefaktorReeval> =
+        serde_json::from_value(existing).unwrap_or_default();
+
+    // The previous Gütefaktor is the latest prior re-evaluation, else the initial
+    // Standortgütegrad measured at commissioning.
+    let previous_gf = reevals
+        .iter()
+        .max_by_key(|r| r.wirksam_ab_jahr)
+        .map(|r| r.guetefaktor)
+        .or(guetegrad);
+    let reconciliation = previous_gf
+        .is_some_and(|p| eeg_billing::wind::reevaluation_requires_reconciliation(p, guetefaktor));
+
+    // Upsert: one entry per effective year.
+    let jahr = u8::try_from(wirksam_ab_jahr).unwrap_or(0);
+    reevals.retain(|r| r.wirksam_ab_jahr != jahr);
+    reevals.push(eeg_billing::wind::GuetefaktorReeval {
+        wirksam_ab_jahr: jahr,
+        guetefaktor,
+    });
+    let json = serde_json::to_value(&reevals).context("serialise re-evaluations")?;
+
+    sqlx::query(
+        "UPDATE eeg_anlagen SET wind_guetefaktor_reevaluations = $3, updated_at = now()
+           WHERE tr_id = $1 AND tenant = $2",
+    )
+    .bind(tr_id)
+    .bind(tenant)
+    .bind(json)
+    .execute(pool)
+    .await
+    .context("update wind re-evaluations")?;
+
+    Ok(Some((reconciliation, previous_gf)))
 }
 
 // ── Jahresabrechnung ─────────────────────────────────────────────────────────

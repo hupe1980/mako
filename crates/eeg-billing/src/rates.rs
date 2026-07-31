@@ -478,17 +478,47 @@ pub fn lookup_rate(
     leistung_kwp: rust_decimal::Decimal,
     eeg_year: i16,
 ) -> Result<Amount<5>, BillingError> {
-    let table = match erzeugungsart {
-        "SOLAR_AUFDACH" | "SOLAR_FREIFLAECHE" | "SOLAR_BALKON" | "SOLAR" => {
-            solar_pv_lookup(eeg_year)
+    let art = crate::ErzeugungsArt::from_db_str(erzeugungsart).map_err(|_| {
+        BillingError::InvalidInput {
+            reason: format!("unknown erzeugungsart {erzeugungsart:?}"),
         }
-        "WIND_ONSHORE" => wind_onshore_lookup(eeg_year),
-        "BIOMASSE" | "BIOGAS" | "BIOMETHANE" => biomasse_lookup(eeg_year),
-        "KWKG" => kwkg_zuschlag_lookup(),
-        "WASSERKRAFT" => wasserkraft_lookup(eeg_year),
-        "GEOTHERMIE" | "GEZEITEN" => geothermie_lookup(eeg_year),
-        "KLAEGAS" | "GRUBENGAS" | "DEPONIEGAS" => gasart_lookup(eeg_year),
-        _ => None,
+    })?;
+    lookup_rate_for(art, leistung_kwp, eeg_year)
+}
+
+/// Statutory rate lookup keyed on the typed [`crate::ErzeugungsArt`].
+///
+/// The routing is an **exhaustive** match on the enum, so a new technology
+/// variant forces a routing decision at compile time — the string-keyed
+/// [`lookup_rate`] cannot silently misroute a plant whose DB spelling drifts
+/// from the rate table's. Variants without a static statutory table (offshore
+/// wind, tendered plants) return [`BillingError::InvalidInput`] — the caller
+/// resolves those from the `eeg_verguetungssaetze` DB table instead.
+///
+/// # Errors
+/// [`BillingError::InvalidInput`] when no static table covers the technology or
+/// EEG year.
+pub fn lookup_rate_for(
+    art: crate::ErzeugungsArt,
+    leistung_kwp: rust_decimal::Decimal,
+    eeg_year: i16,
+) -> Result<Amount<5>, BillingError> {
+    use crate::ErzeugungsArt as E;
+    let table = match art {
+        E::Solar
+        | E::SolarAufdach
+        | E::SolarFreiflaeche
+        | E::SolarAgriPv
+        | E::SolarMieterstrom
+        | E::SolarStecker => solar_pv_lookup(eeg_year),
+        E::WindOnshore => wind_onshore_lookup(eeg_year),
+        // Offshore wind (§§70 ff.) is tender-only — no static statutory table.
+        E::WindOffshore => None,
+        E::Biomasse | E::BiomassHolz | E::Biogas | E::Biomethan => biomasse_lookup(eeg_year),
+        E::Kwk => kwkg_zuschlag_lookup(),
+        E::Wasserkraft => wasserkraft_lookup(eeg_year),
+        E::Geothermie | E::Gezeiten => geothermie_lookup(eeg_year),
+        E::Klaegas | E::Grubengas | E::Deponiegas => gasart_lookup(eeg_year),
     }
     .ok_or(BillingError::InvalidInput {
         reason:

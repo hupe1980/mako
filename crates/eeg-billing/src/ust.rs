@@ -309,9 +309,9 @@ pub fn qualifies_for_12_abs3(
 /// ```
 #[must_use]
 pub fn ust_tax_layers(status: VatStatus) -> Vec<Box<dyn TaxLayer>> {
-    // billing 0.8: `zero_rated` / `exempt` validate the category/reason pairing up
-    // front (EN 16931 zero-tax families) instead of at breakdown time, and
-    // `.boxed()` replaces `Box::new(_) as Box<dyn TaxLayer>`.
+    // `zero_rated` / `exempt` validate the category/reason pairing up front
+    // (EN 16931 zero-tax families) instead of at breakdown time; `.boxed()`
+    // is the trait-object shorthand for `Box::new(_) as Box<dyn TaxLayer>`.
     let layer = match status {
         VatStatus::Regelbesteuerung => FixedRateTax::new("Umsatzsteuer 19\u{202f}%", dec!(0.19))
             .expect("19 % is a valid rate")

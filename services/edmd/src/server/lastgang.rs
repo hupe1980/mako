@@ -196,6 +196,110 @@ pub(crate) async fn get_lastgang(
     Json(lastgaenge).into_response()
 }
 
+/// `GET /api/v1/feed-in/{malo_id}?from=RFC3339&to=RFC3339`
+///
+/// Purpose-built quarter-hour **Einspeisung** (feed-in) feed for the §51
+/// Negativpreisregel derivation in `einsd`: plain JSON, one entry per ¼h, with a
+/// billability flag (§60 Abs. 2 MsbG) and period coverage — so the settlement
+/// side does not have to re-parse BO4E or re-derive the export-OBIS filter.
+///
+/// ```json
+/// { "malo_id": "…", "resolution_min": 15, "coverage_pct": 98.5, "billable_pct": 100.0,
+///   "intervals": [ { "start": "2026-07-01T12:00:00Z", "kwh": "3.2", "billable": true }, … ] }
+/// ```
+pub(crate) async fn get_feed_in(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(malo_id): Path<String>,
+    Query(params): Query<LastgangParams>,
+) -> impl IntoResponse {
+    use time::format_description::well_known::Rfc3339;
+
+    let resource_tenant = state.tenant.as_str();
+    if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let from = params
+        .from
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    let to = params
+        .to
+        .as_deref()
+        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+        .unwrap_or_else(OffsetDateTime::now_utc);
+
+    let q = TimeSeriesQuery {
+        malo_id: malo_id.clone(),
+        from,
+        to,
+        sparte: None,
+        tenant: state.tenant.clone(),
+    };
+    let reads = match state.repo.query(&q).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, malo_id, "edmd: get_feed_in query failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let mut intervals = Vec::new();
+    let mut billable = 0usize;
+    for r in &reads {
+        // Only Einspeisung (export) registers feed the §51 reduction.
+        let is_einspeisung = r
+            .obis_code
+            .as_deref()
+            .and_then(|s| metering::obis::ObisCode::parse(s).ok())
+            .is_some_and(|c| c.is_einspeisung());
+        if !is_einspeisung {
+            continue;
+        }
+        let b = r.quality.is_billable();
+        if b {
+            billable += 1;
+        }
+        intervals.push(serde_json::json!({
+            "start": r.dtm_from.format(&Rfc3339).unwrap_or_default(),
+            "kwh": r.quantity_kwh.to_string(),
+            "billable": b,
+        }));
+    }
+
+    let count = intervals.len();
+    #[allow(clippy::cast_precision_loss)]
+    let billable_pct = if count == 0 {
+        0.0
+    } else {
+        billable as f64 / count as f64 * 100.0
+    };
+    // Expected ¼h slots over [from, to) — coverage for the §60 quality gate.
+    let expected = ((to - from).whole_minutes() / 15).max(0) as usize;
+    #[allow(clippy::cast_precision_loss)]
+    let coverage_pct = if expected == 0 {
+        0.0
+    } else {
+        (count as f64 / expected as f64 * 100.0).min(100.0)
+    };
+
+    Json(serde_json::json!({
+        "malo_id": malo_id,
+        "resolution_min": 15,
+        "coverage_pct": coverage_pct,
+        "billable_pct": billable_pct,
+        "intervals": intervals,
+    }))
+    .into_response()
+}
+
 /// `true` when the request `Accept` header requests Arrow IPC stream format.
 pub(crate) fn request_wants_arrow(headers: &axum::http::HeaderMap) -> bool {
     headers

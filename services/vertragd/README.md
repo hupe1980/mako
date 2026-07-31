@@ -100,6 +100,7 @@ processd_url   = "http://processd:8580"
 tarifbd_url    = "http://tarifbd:9080"
 accountingd_url = "http://accountingd:9380"
 edmd_url       = "http://edmd:8380"
+edmd_api_key   = "env:VERTRAGD_EDMD_SERVICE_KEY"  # opaque Bearer; register in edmd [[oidc.service_keys]]
 
 # Outbound ERP CloudEvents. `erp_hmac_secret` puts an HMAC-SHA256
 # X-Mako-Signature on every event. Delivery is durable: each event is written

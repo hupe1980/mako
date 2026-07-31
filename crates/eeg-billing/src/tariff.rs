@@ -1,7 +1,7 @@
 //! [`billing::ScalarTariff`] implementation bridge for EEG/KWKG settlement.
 //!
 //! [`EegSettleTariff`] wraps a pre-computed [`SettleOutput`] and exposes it
-//! via the [`billing::ScalarTariff`] trait (billing 0.8 — no `Usage`, no ignored
+//! via the [`billing::ScalarTariff`] trait (no `Usage`, no ignored
 //! argument), enabling EEG settlement results to be used in
 //! `billing::BillingDocument` generation alongside other tariffs.
 //!
@@ -10,7 +10,7 @@
 //! 1. Call [`crate::calculate_settlement`] to compute the settlement output.
 //! 2. Handle non-billable status variants (`NoData`, `PriceMissing`).
 //! 3. Wrap the output in [`EegSettleTariff`].
-//! 4. Call `.settle(meta)` (billing 0.8 [`billing::ScalarTariff`]) to produce a `BillingDocument`.
+//! 4. Call `.settle(meta)` ([`billing::ScalarTariff`]) to produce a `BillingDocument`.
 //!
 //! ## Tax layers
 //!
@@ -98,8 +98,8 @@ impl billing::ScalarTariff for EegSettleTariff<'_> {
     /// two-state billing reason and is what callers already inspect.
     type NotBillable = std::convert::Infallible;
 
-    /// `ScalarTariff` (billing 0.8): the positions are already computed in
-    /// `SettleOutput`, so there is no `Usage` and no ignored `_usage` argument.
+    /// `ScalarTariff`: the positions are already computed in `SettleOutput`,
+    /// so there is no `Usage` and no ignored `_usage` argument.
     fn positions(&self) -> Result<billing::Positions<std::convert::Infallible>, BillingError> {
         // NoData/PriceMissing → empty, Sanctioned → EUR 0 audit line, etc.
         Ok(crate::bridge::settlement_to_line_items(self.output).into())
@@ -170,7 +170,7 @@ impl billing::ScalarTariff for EegSettleTariffRegelbesteuerung<'_> {
     }
 
     fn tax_layers(&self) -> Vec<Box<dyn TaxLayer>> {
-        // billing 0.8: `.boxed()` replaces `Box::new(_) as Box<dyn TaxLayer>`.
+        // `.boxed()` is the trait-object shorthand for `Box::new(_) as Box<dyn TaxLayer>`.
         vec![self.ust.clone().boxed()]
     }
 }

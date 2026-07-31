@@ -119,10 +119,10 @@ pub enum SanktionsTyp {
     /// Use `sanktion: Some(SanktionAlt::VerguetungAufNull)` for old plants (EEG ≤2021, §100 Übergangsregelung).
     MastrNichtRegistriert,
 
-    /// §52 Abs. 1 Nr. 9a — Post-commissioning violation of §37a Abs. 1a or §48 Abs. 6.
+    /// §52 Abs. 1 Nr. 9a — Post-commissioning violation of §37 Abs. 1a or §48 Abs. 6.
     ///
     /// Plant violates the obligations that arise after commissioning under those paragraphs
-    /// (§37a Abs. 1a: iMSys Nachrüstung after commissioning; §48 Abs. 6: solar Segment obligations).
+    /// (§37 Abs. 1a: iMSys Nachrüstung after commissioning; §48 Abs. 6: solar Segment obligations).
     ///
     /// **Rate: always €2/kW/month** (§52 Abs. 3 Nr. 2 EEG 2023).
     /// This is a permanently lower rate — NOT reduced from €10; starts at €2 for this type.
@@ -145,14 +145,15 @@ pub enum SanktionsTyp {
     VolleinspeisungspflichtVerletzt,
 
     // ── §52 Abs. 1 Nr. 5–12 — additional violations ──────────────────────────────
-    /// §52 Abs. 1 Nr. 5 — Ausfallvergütung Höchstdauer exceeded (§21 Abs. 1 Nr. 3).
+    /// §52 Abs. 1 Nr. 5 — Ausfallvergütung Höchstdauer exceeded
+    /// (§21 Abs. 1 Satz 1 Nr. 3).
     ///
-    /// Plant in Ausfallvergütung exceeds the statutory 3-month / 6-month maximum.
+    /// Plant in Ausfallvergütung exceeds the statutory 3-month maximum.
     ///
-    /// ## §52 Abs. 4 Nr. 1: +3 extra months
-    ///
-    /// Payment is also owed for the **3 calendar months following** the violation period.
-    /// Callers should add these 3 months to `monate_des_verstosses`.
+    /// The §10/kW Pflichtzahlung is owed for the months of the violation only —
+    /// §52 Abs. 4 grants *additional* months solely to Nr. 7 (+3), Nr. 9 (+1),
+    /// Nr. 10 (full calendar year) and Nr. 12 (+6). Nr. 5 is **not** listed there,
+    /// so no extra months are added (adding +3 here over-charged the operator).
     AusfallverguetungHoechstdauerUeberschritten,
 
     /// §52 Abs. 1 Nr. 6 — Unzulässige Inanspruchnahme von Einspeisevergütung (§21 Abs. 2).
@@ -263,36 +264,6 @@ pub struct Pflichtverstoss {
     ///
     /// When `true`: effective months = `max(0, monate_des_verstosses - 2)` for eligible types.
     pub technischer_defekt: bool,
-}
-
-/// The metering concept (§2 Nr. 20 EEG 2023 / § 2 MsbG).
-///
-/// Documents how Einspeisemenge is measured. Affects which tariff rules apply
-/// and which MaLo/MeLo combination is used for billing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
-pub enum Messkonzept {
-    /// **Volleinspeisung** — 100 % of generation is fed into the grid.
-    ///
-    /// Einspeisemenge = Erzeugungsmenge. No self-consumption occurs.
-    /// Higher EEG tariff typically applies for Volleinspeisung
-    /// (e.g. solar PV ≤10 kWp: 8.51 ct/kWh Volleinspeisung vs. 8.11 ct/kWh Überschuss, EEG 2023 initial).
-    Volleinspeisung,
-
-    /// **Überschusseinspeisung** — surplus after self-consumption is fed in.
-    ///
-    /// Einspeisemenge < Erzeugungsmenge.
-    /// The Einspeisemenge measured by the bidirectional meter is what is billed.
-    /// Slightly lower EEG tariff applies in some EEG versions.
-    Ueberschusseinspeisung,
-
-    /// **Direktlieferung** — direct delivery to a local customer (§42a EEG).
-    ///
-    /// Power goes directly to a nearby buyer without flowing through the grid.
-    /// Used for Gemeinschaftliche Gebäudeversorgung and Mieterstrom models.
-    Direktlieferung,
 }
 
 // ── CapacityBlock ─────────────────────────────────────────────────────────────
@@ -484,7 +455,7 @@ pub struct SettleInput {
     /// Solar PV: `ceil(qh / 2)` · Others: 1:1 factor.
     pub negative_price_quarter_hours: Option<u64>,
 
-    /// §19 EEG — kWh curtailed by the NB (Einspeisemanagement compensation).
+    /// §13a EnWG (Redispatch 2.0) — kWh curtailed by the NB (Einspeisemanagement compensation).
     ///
     /// §51 Negativpreisregel does NOT apply to these kWh (§19 Abs. 2 EEG 2023).
     pub einspeisemanagement_kwh: Option<Decimal>,
@@ -505,15 +476,6 @@ pub struct SettleInput {
     /// composition data.  `None` = plant is not biomass/biogas (cap not enforced).
     pub biomasse: Option<crate::biomasse::BiomassSettlementData>,
 
-    // wind_korrekturfaktor and wind_standort moved to SettlementScheme::MarketPremium { .. }
-    // post_eeg_price_floor moved to SettlementScheme::PostEeg { price_floor }
-    // verguetungssatz_ct moved to scheme variants (FeedInTariff, TenantElectricity, etc.)
-    // direktverm_aw_ct moved to SettlementScheme::MarketPremium { direktverm_aw_ct }
-    // managementpraemie_ct moved to SettlementScheme::MarketPremium { managementpraemie_ct }
-    // mieter_zuschlag_ct moved to SettlementScheme::TenantElectricity { mieter_zuschlag_ct }
-    // flex_praemie_ct_kwh moved to SettlementScheme::FlexibilityPremium { flex_praemie_ct_kwh }
-    // kwk_strom_kwh_gesamt moved to SettlementScheme::KwkSurcharge { kwh_paid_gesamt }
-    // kwk_max_kwh moved to SettlementScheme::KwkSurcharge { max_kwh }
     /// **§25 Abs. 1 Satz 3 EEG** — Fraction of the billing month with entitlement.
     ///
     /// When `None`, the library auto-computes from `billing_date`, `inbetriebnahme`,
@@ -615,14 +577,6 @@ pub struct SettleInput {
     /// Leave empty for single-block plants (the vast majority).
     pub capacity_blocks: Vec<CapacityBlock>,
 
-    // ── Metering concept ─────────────────────────────────────────────────────
-    /// Metering concept (§2 Nr. 20 EEG 2023) — for audit trail and validation.
-    ///
-    /// Does not affect the settlement formula itself: the engine always uses
-    /// the measured `einspeisemenge_kwh` as input. The `messkonzept` is
-    /// recorded in position metadata for regulatory audit transparency.
-    pub messkonzept: Option<Messkonzept>,
-
     /// EEG law year applicable to this plant (Gesetz-Jahr des anzuwendenden EEG).
     ///
     /// Determines which version-specific rules the engine applies:
@@ -650,6 +604,18 @@ pub struct SettleInput {
     ///
     /// `None` is treated as non-wind (conservative: 500 kW exemption under EEG 2017).
     pub erzeugungsart: Option<ErzeugungsArt>,
+
+    /// §53 Abs. 1 EEG 2023 — whether the Einspeisevergütung rate supplied in the
+    /// scheme is the **gross** anzulegender Wert (as published in §48/BNetzA
+    /// bulletins) rather than the net Vergütungssatz.
+    ///
+    /// When `true`, the engine subtracts the §53 Abs. 1 deduction
+    /// (0.4 ct/kWh Solar/Wind, 0.2 ct/kWh Wasserkraft/Biomasse/Geothermie/Gas)
+    /// keyed on `erzeugungsart` for [`SettlementScheme::FeedInTariff`]. Default
+    /// `false`: the rate is already net (einsd's `eeg_verguetungssaetze` stores
+    /// net rates), so nothing is deducted — this prevents a double deduction.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub aw_is_gross: bool,
 
     /// **§44b Abs. 1 EEG 2023** — Biogas >100 kW: annual 45% Bemessungsleistung cap.
     ///
@@ -694,7 +660,6 @@ pub struct SettleInput {
     /// The library uses `marktwert_ct_kwh` directly — this field is informational only
     /// (validation aid and audit label).
     pub marktwert_kategorie: Option<crate::scheme::MarktpreisKategorie>,
-    // jahresmarktwert_ct_kwh was merged into marktwert_ct_kwh (see above).
 }
 
 impl SettleInput {
@@ -900,15 +865,18 @@ impl SettlePosition {
         use billing::{LineItem, Quantity, RoundingStrategy, UnitPrice};
 
         let rate_eur = self.rate_ct_kwh / rust_decimal::Decimal::from(100);
-        // Typed `Quantity`/`UnitPrice` (billing 0.8) replace the seven-argument
+        // Typed `Quantity`/`UnitPrice` replace the old seven-argument
         // `for_usage_rounded` — the two unit labels can no longer be transposed.
+        // `.with_code("KWH")` stamps EN 16931 BT-130 (UN/ECE Rec 20), so the
+        // `billing::BillingDocument` is a complete EN-16931 source rather than
+        // leaving a downstream mapper to guess the unit code from "kWh".
         // `UnitPrice::rounded(6, …)` prevents silent precision drift when
         // rate_ct_kwh is derived from integer arithmetic (ct/100); BO4E Preis.wert
         // is 6 decimal places, keeping the stored unit_price consistent with the
         // rendered output.
         let mut builder = LineItem::for_usage(
             &self.description,
-            Quantity::new(self.kwh, "kWh"),
+            Quantity::new(self.kwh, "kWh").with_code("KWH"),
             UnitPrice::new(rate_eur, "EUR/kWh").rounded(6, RoundingStrategy::MidpointAwayFromZero),
         )
         .meta("legal_basis", self.legal_basis.as_str());

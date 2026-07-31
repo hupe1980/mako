@@ -18,7 +18,7 @@
 /// |---|---|
 /// | `Solar` | `"SOLAR"` |
 /// | `SolarAufdach` | `"SOLAR_AUFDACH"` |
-/// | `SolarFreiflaeche` | `"SOLAR_FREFLAECHE"` |
+/// | `SolarFreiflaeche` | `"SOLAR_FREIFLAECHE"` |
 /// | `SolarAgriPv` | `"SOLAR_AGRIPV"` |
 /// | `SolarMieterstrom` | `"SOLAR_MIETERSTROM"` |
 /// | `SolarStecker` | `"SOLAR_STECKER"` |
@@ -47,7 +47,7 @@ pub enum ErzeugungsArt {
     SolarAufdach,
     /// Ground-mounted PV (Freiflächenanlage) — lower rates, tender-based >1 MWp.
     SolarFreiflaeche,
-    /// Agri-PV (§51a bonus, dual land use).
+    /// Agri-PV (§48 Abs. 3 bonus, dual land use).
     SolarAgriPv,
     /// Mieterstrom building solar (§21 Abs. 3 EEG).
     SolarMieterstrom,
@@ -82,6 +82,32 @@ pub enum ErzeugungsArt {
 }
 
 impl ErzeugungsArt {
+    /// Every variant, in declaration order. Lets callers (and the einsd
+    /// schema↔enum guard test) enumerate the canonical `to_db_str` vocabulary
+    /// exhaustively — adding a variant updates this array via the compiler's
+    /// exhaustiveness check on the mapping functions.
+    pub const ALL: [Self; 19] = [
+        Self::Solar,
+        Self::SolarAufdach,
+        Self::SolarFreiflaeche,
+        Self::SolarAgriPv,
+        Self::SolarMieterstrom,
+        Self::SolarStecker,
+        Self::WindOnshore,
+        Self::WindOffshore,
+        Self::Biomasse,
+        Self::BiomassHolz,
+        Self::Biogas,
+        Self::Biomethan,
+        Self::Klaegas,
+        Self::Grubengas,
+        Self::Deponiegas,
+        Self::Wasserkraft,
+        Self::Geothermie,
+        Self::Gezeiten,
+        Self::Kwk,
+    ];
+
     /// Returns `true` for wind turbines (onshore or offshore).
     ///
     /// Used for §51 Abs. 3 Nr. 1 EEG 2017: wind turbines <3 MW are exempt
@@ -125,7 +151,7 @@ impl ErzeugungsArt {
         match s {
             "SOLAR" => Ok(Self::Solar),
             "SOLAR_AUFDACH" => Ok(Self::SolarAufdach),
-            "SOLAR_FREFLAECHE" => Ok(Self::SolarFreiflaeche),
+            "SOLAR_FREIFLAECHE" => Ok(Self::SolarFreiflaeche),
             "SOLAR_AGRIPV" => Ok(Self::SolarAgriPv),
             "SOLAR_MIETERSTROM" => Ok(Self::SolarMieterstrom),
             "SOLAR_STECKER" => Ok(Self::SolarStecker),
@@ -151,7 +177,7 @@ impl ErzeugungsArt {
         match self {
             Self::Solar => "SOLAR",
             Self::SolarAufdach => "SOLAR_AUFDACH",
-            Self::SolarFreiflaeche => "SOLAR_FREFLAECHE",
+            Self::SolarFreiflaeche => "SOLAR_FREIFLAECHE",
             Self::SolarAgriPv => "SOLAR_AGRIPV",
             Self::SolarMieterstrom => "SOLAR_MIETERSTROM",
             Self::SolarStecker => "SOLAR_STECKER",

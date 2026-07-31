@@ -82,7 +82,7 @@ mermaid: true
     <span class="mako-kpi__label">production services</span>
   </div>
   <div class="mako-kpi">
-    <span class="mako-kpi__value">160+</span>
+    <span class="mako-kpi__value">150+</span>
     <span class="mako-kpi__label">MCP tools (AI-ready)</span>
   </div>
   <div class="mako-kpi">
@@ -187,7 +187,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       <strong>10 settlement schemes</strong> from §21 FeedInTariff to §50a/50b FlexibilitätsPrämien,
       including Direktvermarktung MarketPremium, KWKG Zuschlag, and Post-EEG Spot.
       Version-aware <strong>§51 Negativpreisregel</strong> (EEG 2017/2021/2023 + Bestandsschutz),
-      §52 Pflichtzahlungen (cumulative from violation start), §100 auto-override, §36k Korrekturfaktor.
+      §52 Pflichtzahlungen (cumulative from violation start), §100 auto-override, §36h Korrekturfaktor.
       Every billable settlement issues the <strong>§14 UStG Gutschrift</strong>
       (Gutschriftverfahren — the NB issues the document) as a BO4E <code>Rechnung</code> with the
       per-rate USt breakdown, VAT status derived per plant (Regelbesteuerung 19 % / §12 Abs. 3
@@ -425,7 +425,7 @@ MARKTD_URL=http://localhost:8180 WEBHOOK_URL=http://localhost:8000 bash smoke.sh
 
 ## Services
 
-mako consists of 17 independently deployable services. 15 of them ship a built-in MCP server at `/mcp` for LLM tool integration (agentd is an MCP *client* that orchestrates the others; mabis-syncd is a pure batch worker).
+mako consists of 17 independently deployable services. 14 of them ship a built-in MCP server at `/mcp` for LLM tool integration (agentd is an MCP *client* that orchestrates the others; makod routes protocol traffic and mabis-syncd is a pure batch worker).
 
 </div>
 
@@ -482,7 +482,7 @@ mako consists of 17 independently deployable services. 15 of them ship a built-i
   <a href="{{ '/einsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">einsd</span>
     <span class="mako-service-card__port">:9180</span>
-    <span class="mako-service-card__desc">Einspeiser registry and EEG/KWKG settlement. 10 settlement schemes with the version-aware §51 Negativpreisregel, §52 Pflichtzahlungen, §36k Korrekturfaktor and §22 Repowering. Every billable settlement issues the <strong>§14 UStG Gutschrift</strong> as a BO4E <code>Rechnung</code> with the per-rate USt breakdown, and § 147 AO / GoBD correction receipts keep the audit chain. 18-tool MCP server.</span>
+    <span class="mako-service-card__desc">Einspeiser registry and EEG/KWKG settlement. 10 settlement schemes with the version-aware §51 Negativpreisregel, §52 Pflichtzahlungen, §36h Korrekturfaktor and §22 Repowering. Every billable settlement issues the <strong>§14 UStG Gutschrift</strong> as a BO4E <code>Rechnung</code> with the per-rate USt breakdown, and § 147 AO / GoBD correction receipts keep the audit chain. 18-tool MCP server.</span>
   </a>
   <a href="{{ '/obsd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">obsd</span>
@@ -597,7 +597,7 @@ sequenceDiagram
   </div>
   <div class="mako-principle">
     <strong>MCP server in (nearly) every service</strong>
-    15 daemons expose tools and guided prompts at <code>/mcp</code> (Streamable HTTP 2025-11-25).
+    14 daemons expose tools and guided prompts at <code>/mcp</code> (Streamable HTTP 2025-11-25).
     Plug any MCP-capable LLM client directly into your energy market operations.
   </div>
 </div>
@@ -666,7 +666,7 @@ Beyond the production services, mako exposes reusable Rust libraries:
 | [`mako-engine`](https://crates.io/crates/mako-engine) | ✅ crates.io | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines |
 | [`metering`](https://crates.io/crates/metering) | ✅ crates.io | German metering domain — `MeterInterval`, `MeasurementSeries`, `ObisCode`, `Sparte`, validation V01–V10, substitution (§ 60 Abs. 2 MsbG), Hampel scoring, resampling, virtual meters, SMGW/CLS (§14a), DST-correct calendar |
 | [`meterstore`](https://crates.io/crates/meterstore) | ✅ crates.io | Hot/cold tiered metering store — recent PostgreSQL window + settled Apache Iceberg V2 history behind one tiering watermark; version-resolved + transaction-time (`as_of`) reads across both tiers, coded-column CHECKs, GDPR-Art.-17 pseudonymisation, read-only Iceberg REST catalog + Arrow Flight SQL. Backs edmd's `meter_reads` + `esa_typ2_reads` |
-| `eeg-billing` | workspace | Pure EEG/KWKG settlement — 10 schemes, §51 Negativpreisregel, §52 Pflichtzahlungen, §36k Wind Korrekturfaktor, `InbetriebnahmeTyp` lifecycle, proptest invariants; opt-in `bo4e` feature → **§14 UStG Gutschrift** (BO4E `Rechnung` + per-rate USt breakdown) |
+| `eeg-billing` | workspace | Pure EEG/KWKG settlement — 10 schemes, §51 Negativpreisregel, §52 Pflichtzahlungen, §36h Wind Korrekturfaktor, `InbetriebnahmeTyp` lifecycle, proptest invariants; opt-in `bo4e` feature → **§14 UStG Gutschrift** (BO4E `Rechnung` + per-rate USt breakdown) |
 | `energy-billing` | workspace | Retail energy billing engine — 13 categories (incl. municipal WASSER), HT/NT ToU, RLM demand charge, §54 EnergieStG exemption, historic levy rates (`stromsteuer_for_year`, `energiesteuer_gas_for_year`), §14a Modul 1/3, XRechnung 3.0 |
 | `grid-billing` | workspace | Role-neutral grid **settlement** engine — `SettlementResult` (+ `CalculationTrace`, `LegalReference`, `TariffSource` per position), `Sparte` (Gas/Strom), `KaKundengruppe` (KAV tier), `calculate_reversal()`, `validate_*_input()`, §13a EnWG `redispatch_verguetung`; zero BO4E dep, no float money |
 | `invoic-checker` | workspace | INVOIC plausibility — 6 checks, ToU-aware tariff match |

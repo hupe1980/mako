@@ -7,8 +7,8 @@
 //! # `ScalarTariff`, not `Tariff`
 //!
 //! EEG settlement is a **scalar calculation** — the positions are already computed
-//! by [`crate::calculate_settlement`], with no usage input. Since billing 0.8 that
-//! is exactly [`billing::ScalarTariff`] (`fn positions(&self)`, no `Usage` and no
+//! by [`crate::calculate_settlement`], with no usage input. That maps exactly onto
+//! [`billing::ScalarTariff`] (`fn positions(&self)`, no `Usage` and no
 //! ignored argument); [`crate::tariff::EegSettleTariff`] implements it and a
 //! blanket impl still supplies `Tariff` for composition. The domain not-billable
 //! reasons (`NoData` / `PriceMissing` / `Sanctioned` / `FoerderungBeendet`) live on
@@ -33,7 +33,7 @@
 //! assert!(items[0].description.contains("EEG"));
 //! ```
 
-use billing::{Amount, LineItem};
+use billing::{LineItem, Quantity, UnitPrice};
 use rust_decimal::Decimal;
 
 use crate::model::{SettleOutput, SettlementStatus};
@@ -52,16 +52,20 @@ pub fn settlement_to_line_items(output: &SettleOutput) -> Vec<LineItem> {
         // Nothing to bill — no document positions issued
         SettlementStatus::NoData | SettlementStatus::PriceMissing => vec![],
 
-        // §25 EEG: payment suspended. Emit a EUR 0 audit line.
+        // §25 EEG: payment suspended. Emit a EUR 0 audit line stating the
+        // eligible quantity at a zero rate. `credit_for_usage` (quantity × price)
+        // gives the line BT-129/BT-130/BT-146 (BR-22/BR-23/BR-26), so the €0 stub
+        // is a valid EN 16931 invoice line — `credit_fixed` states an amount only
+        // and would be rejected if the Gutschrift is rendered to XRechnung.
         SettlementStatus::Sanctioned => {
             let kwh = output.eligible_kwh.unwrap_or(Decimal::ZERO);
             vec![
-                LineItem::credit_fixed(
+                LineItem::credit_for_usage(
                     "Einspeisevergütung gesperrt – ausstehende MaStR-Registrierung §25 EEG 2023",
-                    Amount::<5>::ZERO,
+                    Quantity::new(kwh, "kWh").with_code("KWH"),
+                    UnitPrice::new(Decimal::ZERO, "EUR/kWh"),
                 )
                 .meta("legal_basis", "§25 EEG 2023")
-                .meta("kwh", kwh.to_string())
                 .tag("§25-sanctioned")
                 .tag("eeg")
                 .build()

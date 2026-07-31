@@ -57,6 +57,11 @@ pub fn build_router(
             "/api/v1/anlagen/{tr_id}/repowering",
             post(crate::handlers::post_repowering),
         )
+        // ── §36h Abs. 2 Wind Standortgüte re-evaluation (year 6/11/16) ─────────
+        .route(
+            "/api/v1/anlagen/{tr_id}/wind-reevaluation",
+            post(crate::handlers::post_wind_reevaluation),
+        )
         // ── MaStR registration confirmation ────────────────────────────────────
         .route(
             "/api/v1/anlagen/{tr_id}/mastr-registrierung",
@@ -92,6 +97,8 @@ pub fn build_router(
             "/api/v1/epex-monthly/{year}/{month}",
             put(crate::handlers::put_epex_price).get(crate::handlers::get_epex_price),
         )
+        // ── EPEX spot per-interval prices (§51 Negativpreisregel) ──────────────
+        .route("/api/v1/epex-spot", put(crate::handlers::put_epex_spot))
         // ── §20 Abs. 2 Jahresmarktwert prices (ÜNB-published) ─────────────────
         .route(
             "/api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}",

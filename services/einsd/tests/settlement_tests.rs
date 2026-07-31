@@ -885,10 +885,10 @@ fn verguetungszeitraum_verlaengerung_solar_50_pct() {
 }
 
 #[test]
-fn verguetungszeitraum_verlaengerung_wind_1_to_1() {
+fn verguetungszeitraum_verlaengerung_wind_rounds_to_full_day() {
     use eeg_billing::verguetungszeitraum_verlaengerung_qh;
-    // Wind: 1:1 extension (no factor)
-    assert_eq!(verguetungszeitraum_verlaengerung_qh(100, false), 100);
+    // Wind/non-solar: §51a Abs. 1 Satz 2 rounds lost QH up to a full calendar day.
+    assert_eq!(verguetungszeitraum_verlaengerung_qh(100, false), 192); // 2 days
     assert_eq!(verguetungszeitraum_verlaengerung_qh(0, false), 0);
 }
 

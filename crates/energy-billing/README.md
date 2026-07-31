@@ -528,7 +528,7 @@ energy-billing = { path = "…", features = ["full"] }  # all optional features
 
 | Feature | Enables |
 |---|---|
-| `eeg` | `EegProvider` delegates to `eeg_billing::calculate_settlement()` for §51/§52/§36k |
+| `eeg` | `EegProvider` delegates to `eeg_billing::calculate_settlement()` for §51/§52/§36h |
 
 > **Note:** `energy-billing` carries no `bo4e` / `rubo4e` dependency.
 > `Invoice::to_rechnung_json()` produces BO4E-compatible JSON without one.

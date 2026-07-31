@@ -368,6 +368,7 @@ impl EinsdMcpHandler {
                 epex_avg_ct_kwh,
                 managementpraemie_ct_override: None,
                 einspeisemanagement_kwh: None,
+                kwh_during_negative_epex: None,
                 negative_price_quarter_hours: None,
                 correction_of: None,
                 correction_reason: None,
@@ -387,23 +388,19 @@ impl EinsdMcpHandler {
             // tx dropped → rollback.
             Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
         };
-        // Same obligation as the REST path, so the same notification.
-        if let Some(ce) = crate::handlers::build_settlement_ce(
+        // Identical obligation to the REST path — single-sourced so the CE type
+        // (which accountingd dispatches on exactly) and the status gate cannot
+        // drift between the two entry points.
+        crate::handlers::enqueue_settlement_ce(
+            &mut tx,
             &self.state.cfg,
-            mako_events::eeg::SETTLEMENT_BERECHNET,
-            &result.tr_id,
-            &anlage.malo_id,
+            &anlage,
             &result,
             params.billing_year,
             params.billing_month,
-            anlage.bank_iban.as_deref(),
-            anlage.bank_bic.as_deref(),
-            anlage.zahlungsempfaenger.as_deref(),
-        ) {
-            mako_service::outbox::enqueue(&mut tx, &ce)
-                .await
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        }
+        )
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         tx.commit()
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -534,51 +531,40 @@ impl EinsdMcpHandler {
             .map(|s| s.to_uppercase() == "VOLLEINSPEISUNG")
             .unwrap_or(false);
 
-        let result = match params.erzeugungsart.to_uppercase().as_str() {
-            "SOLAR_AUFDACH" | "SOLAR_FREIFLAECHE" | "SOLAR_BALKON" | "SOLAR" => {
-                if volleinspeisung {
-                    rates::solar_pv_volleinspeisung_lookup(params.eeg_year)
-                        .ok_or_else(|| McpError::invalid_params(
-                            format!("no Volleinspeisung rates for EEG year {}; use einsd DB lookup_verguetungssatz", params.eeg_year),
-                            None,
-                        ))?
-                        .rate_for(kwp)
-                } else {
-                    rates::solar_pv_ueberschuss_lookup(params.eeg_year)
-                        .ok_or_else(|| McpError::invalid_params(
-                            format!("no Überschusseinspeisung rates for EEG year {}; use einsd DB lookup_verguetungssatz", params.eeg_year),
-                            None,
-                        ))?
-                        .rate_for(kwp)
-                }
-            }
-            "WIND_ONSHORE" => rates::wind_onshore_lookup(params.eeg_year)
-                .ok_or_else(|| {
-                    McpError::invalid_params(
-                        format!("no wind onshore rates for EEG year {}", params.eeg_year),
-                        None,
-                    )
-                })?
-                .rate_for(kwp),
-            "BIOMASSE" | "BIOGAS" | "BIOMETHANE" => rates::biomasse_lookup(params.eeg_year)
-                .ok_or_else(|| {
-                    McpError::invalid_params(
-                        format!("no biomasse rates for EEG year {}", params.eeg_year),
-                        None,
-                    )
-                })?
-                .rate_for(kwp),
-            "KWKG" => rates::kwkg_zuschlag_lookup()
-                .ok_or_else(|| McpError::invalid_params("no KWKG rates", None))?
-                .rate_for(kwp),
-            other => {
-                return Err(McpError::invalid_params(
+        // Parse to the typed enum so the routing shares one canonical vocabulary
+        // with `eeg_billing::rates::lookup_rate_for` — no divergent string match.
+        let art = eeg_billing::ErzeugungsArt::from_db_str(&params.erzeugungsart.to_uppercase())
+            .map_err(|_| {
+                McpError::invalid_params(
                     format!(
-                        "unknown erzeugungsart: {other}. Use SOLAR_AUFDACH, WIND_ONSHORE, BIOMASSE, or KWKG"
+                        "unknown erzeugungsart: {}. Use e.g. SOLAR_AUFDACH, WIND_ONSHORE, BIOMASSE, KWKG",
+                        params.erzeugungsart
                     ),
                     None,
-                ));
-            }
+                )
+            })?;
+
+        let result = if art.is_solar() {
+            // Solar splits by Messkonzept (Überschuss vs Volleinspeisung + bonus).
+            let table = if volleinspeisung {
+                rates::solar_pv_volleinspeisung_lookup(params.eeg_year).ok_or_else(|| {
+                    McpError::invalid_params(
+                        format!("no Volleinspeisung rates for EEG year {}; use einsd DB lookup_verguetungssatz", params.eeg_year),
+                        None,
+                    )
+                })?
+            } else {
+                rates::solar_pv_ueberschuss_lookup(params.eeg_year).ok_or_else(|| {
+                    McpError::invalid_params(
+                        format!("no Überschusseinspeisung rates for EEG year {}; use einsd DB lookup_verguetungssatz", params.eeg_year),
+                        None,
+                    )
+                })?
+            };
+            table.rate_for(kwp)
+        } else {
+            // Non-solar technologies share the exhaustive enum-keyed router.
+            rates::lookup_rate_for(art, kwp, params.eeg_year)
         };
 
         match result {
@@ -1161,7 +1147,7 @@ impl EinsdMcpHandler {
                 "## EEG/KWKG Plant Registration\n\n\
                  POST /api/v1/anlagen with:\n\
                  - tr_id (TechnischeRessource ID from marktd), malo_id, melo_id\n\
-                 - erzeugungsart: SOLAR_AUFDACH | SOLAR_FREFLAECHE | SOLAR_AGRIPV | SOLAR_MIETERSTROM |\n\
+                 - erzeugungsart: SOLAR_AUFDACH | SOLAR_FREIFLAECHE | SOLAR_AGRIPV | SOLAR_MIETERSTROM |\n\
                    WIND_ONSHORE | WIND_OFFSHORE | BIOMASSE | BIOGAS | KLAEGAS | GRUBENGAS | WASSERKRAFT | KWKG\n\
                  - inbetriebnahme (YYYY-MM-DD), leistung_kwp, eeg_gesetz (year, or 0 for KWKG)\n\
                  - settlement_model: VERGUETUNG | DIREKTVERMARKTUNG | AUSSCHREIBUNG |\n\
@@ -1382,8 +1368,8 @@ impl ServerHandler for EinsdMcpHandler {
              §51 EEG 2023 Negativpreisregel: any negative-price period reduces Vergütung to 0.\n\
              §51a: Vergütungszeitraum extended by lost quarter-hours (solar: ×0.5 factor).\n\
              §52 EEG 2023: MaStR non-registration → €10/kW/month (not Vergütung=0).\n\
-             §19 EEG: EinsMan curtailment compensation (separate position, same rate).\n\
-             §36k EEG: Wind onshore Korrekturfaktor for below-reference-yield sites.\n\
+             §13a EnWG (Redispatch 2.0): EinsMan curtailment compensation (separate position, same rate).\n\
+             §36h EEG: Wind onshore Korrekturfaktor for below-reference-yield sites.\n\
              §24 Anlagenerweiterung: use CapacityBlock for multi-block proportional settlement.",
         )
     }

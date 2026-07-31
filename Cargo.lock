@@ -963,9 +963,9 @@ dependencies = [
 
 [[package]]
 name = "billing"
-version = "0.8.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28364b102cec95d19d21e4c18c63fe806740bfb1a76f3ef46cdd41aaa7e812ac"
+checksum = "90bfe72b47c0f5b0e07722e33fbb97af4a26d29a69512ea4e2423c1aebb37b6d"
 dependencies = [
  "rust_decimal",
  "serde",

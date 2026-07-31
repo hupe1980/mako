@@ -152,3 +152,98 @@ fn settlement_state_changes_are_recorded_as_transitions() {
          from_state cannot race another settlement"
     );
 }
+
+/// Extract the single-quoted values of a `CHECK (<col> IN ( … ))` list.
+fn check_in_values(schema: &str, col: &str) -> Vec<String> {
+    let needle = format!("CHECK ({col} IN (");
+    let start = schema
+        .find(&needle)
+        .unwrap_or_else(|| panic!("no CHECK (…) IN list for column {col}"))
+        + needle.len();
+    let end = start
+        + schema[start..]
+            .find("))")
+            .expect("CHECK IN list must close with `))`");
+    let list = &schema[start..end];
+    let mut out = Vec::new();
+    let mut rest = list;
+    while let Some(q1) = rest.find('\'') {
+        let after = &rest[q1 + 1..];
+        let Some(q2) = after.find('\'') else { break };
+        out.push(after[..q2].to_owned());
+        rest = &after[q2 + 1..];
+    }
+    out
+}
+
+/// `eeg_anlagen.erzeugungsart` CHECK must equal `ErzeugungsArt`'s canonical
+/// `to_db_str` vocabulary — in **both** directions.
+///
+/// The two drifted: the enum emitted `BIOMETHAN` / `SOLAR_FREIFLAECHE` while the
+/// CHECK allowed `BIOMETHANE` / `SOLAR_FREFLAECHE` and an orphan `SONSTIGE` with
+/// no variant. Because `pg.rs` binds the raw caller string and reads back via
+/// `from_db_str(...).ok()`, a biomethane plant was either rejected by the CHECK
+/// or silently decoded to `erzeugungsart = None`. This pins the two lists equal
+/// so any future rename fails a DB-free test instead of losing data at runtime.
+#[test]
+fn erzeugungsart_check_list_equals_the_enum_vocabulary() {
+    use eeg_billing::ErzeugungsArt;
+    use std::collections::BTreeSet;
+
+    let schema = code_only(SCHEMA);
+    let check: BTreeSet<String> = check_in_values(&schema, "erzeugungsart")
+        .into_iter()
+        .collect();
+    let enum_vocab: BTreeSet<String> = ErzeugungsArt::ALL
+        .iter()
+        .map(|a| a.to_db_str().to_owned())
+        .collect();
+
+    assert_eq!(
+        check,
+        enum_vocab,
+        "erzeugungsart CHECK list and ErzeugungsArt::to_db_str have diverged.\n\
+         in CHECK but not enum: {:?}\n\
+         in enum but not CHECK: {:?}",
+        check.difference(&enum_vocab).collect::<Vec<_>>(),
+        enum_vocab.difference(&check).collect::<Vec<_>>(),
+    );
+
+    // Every allowed value must round-trip through the enum.
+    for v in &check {
+        let parsed = ErzeugungsArt::from_db_str(v)
+            .unwrap_or_else(|_| panic!("CHECK value {v:?} does not parse via from_db_str"));
+        assert_eq!(
+            parsed.to_db_str(),
+            v,
+            "from_db_str/to_db_str do not round-trip for {v:?}"
+        );
+    }
+}
+
+/// `eeg_gesetz` CHECK must equal the `EegGesetz` year set.
+///
+/// A settlement stored under a year the enum cannot decode would settle under
+/// the wrong EEG regime; this pins the SQL list to the Rust source of truth.
+#[test]
+fn eeg_gesetz_check_list_equals_the_enum_years() {
+    use eeg_billing::EegGesetz;
+    use std::collections::BTreeSet;
+
+    let schema = code_only(SCHEMA);
+    let needle = "CHECK (eeg_gesetz IN (";
+    let start = schema.find(needle).expect("eeg_gesetz CHECK must exist") + needle.len();
+    let end = start + schema[start..].find(')').expect("closes");
+    let check: BTreeSet<i16> = schema[start..end]
+        .split(',')
+        .filter_map(|t| t.trim().parse::<i16>().ok())
+        .collect();
+
+    // Every CHECK year must decode to a concrete regime (0 = KWKG sentinel).
+    for &y in &check {
+        assert!(
+            EegGesetz::from_db_year(y).is_ok(),
+            "eeg_gesetz CHECK allows {y}, which EegGesetz::from_db_year rejects"
+        );
+    }
+}

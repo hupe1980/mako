@@ -57,7 +57,7 @@ pub fn settlement_to_gutschrift_with_document(
 ) -> Result<(bo::Rechnung, BillingDocument), BillingError> {
     let positions = EegSettleTariff::new(output).positions()?.into_inner();
     let doc = BillingDocument::from_positions(meta, positions, ust_tax_layers(vat), vec![])?;
-    let rechnung = document_to_rechnung(&doc);
+    let rechnung = document_to_rechnung(&doc)?;
     Ok((rechnung, doc))
 }
 
@@ -67,7 +67,7 @@ pub fn settlement_to_gutschrift_with_document(
 /// Artikelnummer, one unit. The per-position `legal_basis` (`§21 EEG 2023`, …) and
 /// the party MP-IDs ride as round-trip-preserved extension data BO4E has no field
 /// for.
-fn document_to_rechnung(doc: &BillingDocument) -> bo::Rechnung {
+fn document_to_rechnung(doc: &BillingDocument) -> Result<bo::Rechnung, BillingError> {
     let meta = &doc.meta;
 
     let rechnungspositionen: Vec<bo::Rechnungsposition> = doc
@@ -106,8 +106,13 @@ fn document_to_rechnung(doc: &BillingDocument) -> bo::Rechnung {
             enddatum: parse_iso_date(&per.to),
             ..Default::default()
         }),
-        gesamtnetto: Some(betrag(doc.net_total().into_decimal())),
-        gesamtsteuer: Some(betrag(doc.tax_total().into_decimal())),
+        // BO4E gesamtnetto/-steuer are EN 16931 BT-109 (taxable base) and BT-110
+        // (VAT total). `taxable_total()`/`vat_total()` are the BT-accurate
+        // accessors — unlike `net_total()` (BT-106−BT-107) and `tax_total()` (all
+        // tax layers incl. non-VAT levies), they stay correct if the Gutschrift
+        // ever gains a document charge or a second, non-VAT tax layer.
+        gesamtnetto: Some(betrag(doc.taxable_total()?.into_decimal())),
+        gesamtsteuer: Some(betrag(doc.vat_total()?.into_decimal())),
         gesamtbrutto: Some(betrag(doc.gross_total().into_decimal())),
         steuerbetraege: (!steuerbetraege.is_empty()).then_some(steuerbetraege),
         rechnungspositionen: Some(rechnungspositionen),
@@ -127,7 +132,7 @@ fn document_to_rechnung(doc: &BillingDocument) -> bo::Rechnung {
             ._additional
             .try_insert("rechnungsempfaengerId".into(), id.as_str().into());
     }
-    rechnung
+    Ok(rechnung)
 }
 
 fn position_to_bo4e(number: usize, p: &LineItem) -> bo::Rechnungsposition {

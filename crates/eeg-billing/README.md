@@ -7,7 +7,7 @@ the Einspeiser Registry daemon. It covers the full EEG legal framework from EEG 
 EEG 2023 (Solarpaket I) and KWKG 2023, with all version-specific rule variants enforced
 automatically based on the plant's `EegGesetz` year.
 
-**341 tests** · zero I/O · zero async · zero `unsafe` · no float money (`rust_decimal`) ·
+**328 tests** · zero I/O · zero async · zero `unsafe` · no float money (`rust_decimal`) ·
 MSRV 1.94
 
 ---
@@ -21,7 +21,7 @@ MSRV 1.94
 | **No float money** | Amounts are computed in `rust_decimal::Decimal`; every EUR result is rounded and range-checked through `billing::EuroAmount` (i64 × 10⁻⁵ EUR). |
 | **Deterministic** | Same inputs always produce the same output. Pure functions. |
 | **EEG-version-aware** | `EegGesetz` enum drives all version-specific rule dispatch. |
-| **Domain-rich** | Multiple domain modules covering settlement, metering, degression, sanctions, repowering. |
+| **Domain-rich** | Multiple domain modules covering settlement, degression, sanctions, repowering. |
 
 ---
 
@@ -116,12 +116,12 @@ eeg-billing/src/
 │
 ├── degression.rs        §23a quarterly solar PV degression — Quarter, DegressionTier
 ├── direktverm.rs        §§20–22 — mandatory threshold, Ausschreibungspflicht, period model
-├── metering.rs          Multi-meter Messkonzept — §42b GGV, §14a HT/NT
+├── negativpreis.rs      §51 per-interval negative-price derivation (version-aware runs)
 ├── reductions.rs        §§52–54 reduction pipeline — §52 Abs. 6 netting, §53c, §54
 ├── settlement_state.rs  Monthly lifecycle state machine — Active/Reduced/Suspended/PostEeg
 │
 ├── solar.rs             §48 PV subtypes, §12 Abs. 3 UStG, Agri-PV bonus
-├── wind.rs              §36k Korrekturfaktor, WindStandort, Gütegrad/Standortklasse
+├── wind.rs              §36h Korrekturfaktor, WindStandort, Gütegrad/Standortklasse
 ├── biomasse.rs          §43/§44 fuel classes, Güllekleinanlage (≤75 kW, ≥80% Gülle)
 │
 ├── tariff.rs            billing::ScalarTariff adapter — EegSettleTariff, VAT variants
@@ -356,7 +356,7 @@ assert!(requires_ausschreibung(dec!(1500), ErzeugungsArt::SolarAufdach)); // >1 
 | `SolarAgriPv` | Agri-PV | §51a factor 0.5 |
 | `SolarMieterstrom` | §21 Abs. 3 building solar | — |
 | `SolarStecker` | Balkonkraftwerk ≤800 W | Simplified registration |
-| `WindOnshore` | Wind onshore | §36k Korrekturfaktor required |
+| `WindOnshore` | Wind onshore | §36h Korrekturfaktor required |
 | `WindOffshore` | Wind offshore | Always Ausschreibungspflicht |
 | `Biomasse` | Solid biomass | §43 |
 | `BiomassHolz` | Wood biomass | §42a restricted |
@@ -460,12 +460,15 @@ breakdown entry.
 - §21 Abs. 3 Mieterstrom, §50a/b Flexibilitätsprämie, §7 KWKG
 - §51/§51a/§51b Negativpreisregel, §52 sanctions, §53/§53b/§54 reductions
 - §19 EInsMan curtailment compensation (separate position, §51 exempt)
-- §23a quarterly degression, §36k wind Korrekturfaktor
+- §23a quarterly degression, §36h wind Korrekturfaktor
 - §24 multi-block **Anlagenzusammenfassung**: proportional allocation for pre-aggregated plant groups
   > The library computes settlement **after** §24 aggregation has been determined by the caller.
   > The legal aggregation analysis itself (operator identity, location, commissioning window,
   > technology criteria) is **not** performed here — that is the caller's responsibility.
-- §42b GGV / §21 Abs. 3 multi-meter Messkonzept
+- §42b GGV / §21 Abs. 3 multi-meter split is **not** modelled here — the metering topology,
+  Eigenverbrauch/Überschuss split and GGV tenant allocation live in the external `metering`
+  crate (`AggregationRule`, `compute_virtual_meter`) + edmd; this crate settles the resulting
+  Einspeisemenge
 - SettlementType: Initial, Correction (with `original_id`), Reversal
 - §25 billing_days_fraction (partial billing periods per §25 Abs. 1 Satz 3)
 - §26 Abs. 1 Fälligkeitsdatum (15th of following month, auto-computed)
@@ -525,7 +528,7 @@ Source: EEG 2023 Clearingstelle EEG|KWKG working text (23.12.2025). Cite as: *Cl
 
 ```bash
 cargo test -p eeg-billing --all-features
-# 91 lib + 12 integration + 173 regulatory showcase + 65 doctests = 341 total
+# 86 lib + 12 integration + 169 regulatory showcase + 61 doctests = 328 total
 ```
 
 The regulatory showcase (`tests/regulatory_showcase.rs`) is executable documentation

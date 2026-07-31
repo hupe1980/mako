@@ -16,12 +16,12 @@
 | Reading orders | `POST/GET /api/v1/reading-orders` — Ablesesteuerung for LF/MSB/NB/ESA (an ESA may order value delivery, §60 Abs. 1 MsbG); `/complete`, `/cancel`, `/fail` (Ablesehindernis); auto-creates `INSRPT_STOERUNG` on INSRPT PID 23001 (WiM Störungsmeldung) |
 | § 60 MsbG confirmations | Every stored ESTIMATED/SUBSTITUTED interval opens an obligation in `estimated_read_confirmations`; auto-discharged when a MEASURED/CORRECTED value for the slot arrives (ingest or correction path). Daily worker (`[confirmation]`, default on, `deadline_weeks = 8` — aligned with the MaBiS BKA correction window, no statute fixes a number) escalates stale ones to UEBERFAELLIG and emits `de.messwert.reading.confirmation.overdue`; `GET /api/v1/confirmations?status=` lists them |
 | §40 compliance | `GET /api/v1/compliance/jahresablesung/{year}` — only `AUSGEFUEHRT` discharges the annual-reading obligation |
-| REST API | `GET /api/v1/deliveries/{malo_id}` → `Vec<Energiemenge>` · `GET /api/v1/lastgang/{malo_id}` · `GET /api/v1/zeitreihe/{malo_id}` · `GET /api/v1/billing-period/{malo_id}` · `GET /api/v1/imbalance/{malo_id}/{year}/{month}` · `GET /api/v1/netzverlust?from=&to=` (§22 EnWG indicative grid-loss balance) · `GET /api/v1/esa/typ2/{malo_id}` (ESA Typ-2 store — never billing) |
+| REST API | `GET /api/v1/deliveries/{malo_id}` → `Vec<Energiemenge>` · `GET /api/v1/lastgang/{malo_id}` · `GET /api/v1/feed-in/{malo_id}` (¼h Einspeisung + billable flag + coverage, for the einsd §51 Negativpreisregel) · `GET /api/v1/zeitreihe/{malo_id}` · `GET /api/v1/billing-period/{malo_id}` · `GET /api/v1/imbalance/{malo_id}/{year}/{month}` · `GET /api/v1/netzverlust?from=&to=` (§22 EnWG indicative grid-loss balance) · `GET /api/v1/esa/typ2/{malo_id}` (ESA Typ-2 store — never billing) |
 | Arrow IPC | `Accept: application/vnd.apache.arrow.stream` on `GET /api/v1/lastgang` + `GET /api/v1/zeitreihe` — 10–50× throughput vs JSON for bulk reads |
 | Archive OLAP | `GET /api/v1/archive/status` · `GET /api/v1/archive/olap/{malo_id}` · `GET /api/v1/archive/portfolio` · `GET /api/v1/archive/timeseries/{malo_id}` · `POST /api/v1/query/sql` (DataFusion, JSON or Arrow IPC, over meterstore's resolved relation) |
 | Iceberg REST | `GET /api/v1/iceberg/v1/...` — read-only Iceberg REST catalog (meterstore's `CatalogFacade`, mounted by edmd, Cedar-gated by `read-archive-olap`; mutating routes → 405). DuckDB / Spark / Trino / PyIceberg attach for schema + table locations, then read Parquet from object storage with their own credentials |
 | GDPR | `DELETE /api/v1/gdpr/erasure/{malo_id}` — Art. 17 pseudonymisation: destroys the MaLo's subject mapping in meterstore's registry and deletes the derived edmd tables, in one transaction. Readings survive in both tiers but become unattributable |
-| Auth | OIDC/JWT + Cedar ABAC — reads tenant-scoped, **writes role-gated** (`write-meter-reads` → MSB/admin; series mutation, reading orders, GDPR erasure → MSB/NB/admin; LF-role tokens are read-only; gates pinned by the `cedar_policy` test suite); webhook HMAC-SHA256 (`X-Mako-Signature`). Refuses to start without `[oidc]` unless `allow_insecure_no_auth = true` |
+| Auth | OIDC/JWT + Cedar ABAC — reads tenant-scoped, **writes role-gated** (`write-meter-reads` → MSB/admin; series mutation, reading orders, GDPR erasure → MSB/NB/admin; LF-role tokens are read-only; gates pinned by the `cedar_policy` test suite); **service-to-service keys** via `[[oidc.service_keys]]` for internal callers (einsd/billingd/vertragd/portald send an opaque Bearer key, not a JWT); webhook HMAC-SHA256 (`X-Mako-Signature`). Refuses to start without `[oidc]` unless `allow_insecure_no_auth = true` |
 | Rate limiting | Per-tenant and global GCRA buckets; `429` carries `Retry-After` |
 | Health | `GET /health/live`, `GET /health/ready` (PostgreSQL ping) |
 | MCP | `POST\|GET /mcp` — 15 tools + 5 prompts, including `get_timeseries`, `validate_timeseries`, `trigger_substitution` (§ 60 Abs. 2 MsbG Ersatzwerte), `trigger_jahresablesung`, `get_correction_history` |
@@ -89,6 +89,15 @@ erp_webhook_url  = "http://erp:9000/events"    # outbound CloudEvents
 [oidc]
 issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 audience = "api://mako-edmd"
+
+# Service-to-service keys accepted alongside OIDC JWTs. Internal callers
+# (einsd/billingd/vertragd/portald) send an opaque Bearer key, not a JWT — a
+# match authenticates as that service principal (this deployment's tenant, the
+# listed roles). Without this, those callers get 401 against a secured edmd.
+[[oidc.service_keys]]
+name  = "einsd"                       # → principal sub
+key   = "env:EDMD_SERVICE_KEY_EINSD"  # must equal the caller's edmd_api_key
+roles = ["NB", "MSB"]
 
 [rate_limit]
 requests_per_second            = 500    # global sustained

@@ -1419,8 +1419,8 @@ You are the monthly EEG batch settlement and compliance sweep specialist.
 ## STEP-BY-STEP PROCEDURE
 
 ### Monthly settlement batch (run by 1st of month)
-1. Call einsd `list_active_plants` — get all plants in status AKTIV.
-2. For each plant that has NOT been settled this month:
+1. Call einsd `list_unsettled_plants` — plants not yet settled for the billing month.
+2. For each returned plant:
    a. Fetch edmd `get_billing_period` for prior month meter data.
    b. Call einsd `POST /settlements/batch` — triggers auto-settle pipeline.
    c. Verify `settlement_state` transitioned to SETTLED or NEEDS_REVIEW.

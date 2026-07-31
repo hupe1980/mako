@@ -4,7 +4,7 @@
 //!
 //! - **§48 Abs. 1** — four legal *Bauformen* with different tariff thresholds
 //! - **§48 Abs. 2 vs. Abs. 2a** — Überschusseinspeisung vs. Volleinspeisung rates
-//! - **§48a EEG 2023** — Direktlieferung (community solar, Gemeinschaftliche Gebäudeversorgung)
+//! - **§48a EEG 2023** — Mieterstromzuschlag bei solarer Strahlungsenergie (the §21 Abs. 3 rate)
 //! - **§48 Abs. 5** — Freiflächenanlage restrictions (location, ecological rules)
 //! - **§22 EEG 2023** — auction obligation for large plants (> 1 MWp)
 //! - **§12 Abs. 3 UStG** — zero VAT for PV ≤ 30 kWp since 01.01.2023
@@ -300,8 +300,8 @@ pub fn ustg_12_3_applies(
 /// assert_eq!(verguetungszeitraum_verlaengerung_qh(100, true), 50); // ceil(100/2)
 /// // 101 lost quarter-hours:
 /// assert_eq!(verguetungszeitraum_verlaengerung_qh(101, true), 51); // ceil(101/2)
-/// // Same plant if it were wind (1:1):
-/// assert_eq!(verguetungszeitraum_verlaengerung_qh(100, false), 100);
+/// // Same plant if it were wind — §51a Abs. 1 Satz 2 rounds up to a full day (96 QH):
+/// assert_eq!(verguetungszeitraum_verlaengerung_qh(100, false), 192);
 /// ```
 pub const SECT51A_SOLAR_FACTOR_DENOMINATOR: u64 = 2;
 
@@ -419,10 +419,11 @@ mod tests {
     }
 
     #[test]
-    fn sect51a_wind_uses_full_factor() {
+    fn sect51a_wind_rounds_up_to_full_calendar_day() {
+        // §51a Abs. 1 Satz 2: 200 QH = 2.08 days → 3 full days = 288 QH.
         assert_eq!(
             crate::foerderdauer::verguetungszeitraum_verlaengerung_qh(200, false),
-            200 // 1:1 for non-solar
+            288
         );
     }
 }

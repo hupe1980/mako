@@ -17,7 +17,10 @@ through Förderdauer expiry.
 | **Zusammenlegung** | `parent_tr_id` links merged plants (§24 EEG 2023) |
 | **KWKG Förderdauer** | `kwk_foerderdauer_h` (>2 MW, 30,000 h) or `kwk_foerderdauer_years` (≤2 MW) |
 | **Förderdauer alerts** | Background worker emits `de.eeg.anlage.foerderung_auslaufend` 180 days before expiry |
-| **edmd auto-fetch** | Automatically fetches `arbeitsmenge_kwh` from `edmd` when not supplied |
+| **§51 auto-derivation** | `PUT /api/v1/epex-spot` loads EPEX day-ahead prices; every settle without explicit values fetches the plant's ¼h feed-in from edmd (`GET /feed-in`), overlays the spot store, and derives the negative-price quarter-hours via `eeg-billing::negativpreis` (version-aware run logic). A **§60 Abs. 2 MsbG gate** skips the reduction when edmd coverage <95 % or any interval is non-billable |
+| **§51a Förderende-Verlängerung** | Raw lost quarter-hours accrue in `negative_price_qh_gesamt`; `effektives_foerderende` derives the extended end at settle time (solar: Volllastviertelstunden contingent; others: rounded up to whole calendar days) — the stored statutory `foerderendedatum` is left untouched |
+| **§36h Abs. 2 Standortgüte re-eval** | `POST /api/v1/anlagen/{tr_id}/wind-reevaluation` records the Gütefaktor re-evaluated from operating year 6/11/16 (`wind_guetefaktor_reevaluations`); settlement selects the effective Korrekturfaktor per period and flags `reconciliation_required` on a >2 pp deviation (§147 AO correction) |
+| **edmd auto-fetch** | Automatically fetches `arbeitsmenge_kwh` and the §51 ¼h feed-in from `edmd` when not supplied (authenticated with `edmd_api_key`, registered in edmd `[[oidc.service_keys]]`) |
 | **Health** | `GET /health/live`, `GET /health/ready` |
 
 ## Settlement formulas
@@ -143,6 +146,7 @@ cross-tenant access needs no forbid rule.
 port           = 9180
 tenant         = "9900357000004"
 edmd_url       = "http://edmd:8380"
+edmd_api_key   = "env:EINSD_EDMD_SERVICE_KEY"  # opaque Bearer; register in edmd [[oidc.service_keys]]
 
 # Outbound ERP CloudEvents, signed with HMAC-SHA256 (X-Mako-Signature).
 # Delivery is durable: each event is written to `event_outbox` in the same

@@ -89,8 +89,8 @@ pub mod foerderungsende;
 mod formula;
 #[cfg(feature = "bo4e")]
 pub mod gutschrift;
-pub mod metering;
 mod model;
+pub mod negativpreis;
 pub mod rates;
 pub mod reductions;
 pub mod scheme;
@@ -114,8 +114,8 @@ pub use foerderdauer::{
 };
 pub use formula::calculate_settlement;
 pub use model::{
-    CapacityBlock, Messkonzept, Pflichtverstoss, SanktionAlt, SanktionsTyp, SettleInput,
-    SettleOutput, SettlePosition, SettlementStatus,
+    CapacityBlock, Pflichtverstoss, SanktionAlt, SanktionsTyp, SettleInput, SettleOutput,
+    SettlePosition, SettlementStatus,
 };
 pub use scheme::{
     AusschreibungMetadata, CorrectionReason, MarktpreisKategorie, Paragraph100Rule,
@@ -130,11 +130,12 @@ pub use version::{EegGesetz, InvalidEegGesetz};
 // Domain module guide:
 // degression: §23a quarterly solar PV tariff degression — Quarter, DegressionTier, apply_degression
 // direktverm: §§20–22 Direktvermarktung — mandatory threshold, Ausschreibungspflicht, period model
-// metering:   Multi-meter Messkonzept — MeterConfiguration, compute_einspeisemenge, §42b GGV, §14a
+// (Metering topology, Eigenverbrauch/Überschuss split and §42b GGV allocation live in the
+//  external `metering` crate — AggregationRule, compute_virtual_meter, MeasurementPoint, Messtyp.)
 // reductions: §§52–54 reduction pipeline — Sect52Netting, Sect53c, Sect54, ReductionPipeline
 // settlement_state: Monthly lifecycle state machine — SettlementPeriodState, derive_settlement_state
 // solar: §48 EEG PV subtypes, Volleinspeisung/Überschuss, §12 Abs. 3 UStG, Agri-PV
-// wind:  §36k Korrekturfaktor, Standortklasse, reference yield model
+// wind:  §36h Korrekturfaktor, Standortklasse, reference yield model
 // biomasse: §43/§44 fuel classes, Güllekleinanlage (≤75 kW, ≥80% Gülle)
 // foerderungsende: FoerderendeGrund enum, SanktionStatus lifecycle
 // scheme: SettlementScheme, TariffSource, Paragraph100Rule, SettlementType

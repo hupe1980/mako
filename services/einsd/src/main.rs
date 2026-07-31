@@ -209,6 +209,15 @@ impl Daemon for Einsd {
                         unsettled = plants.len(),
                         "auto-settle worker: settling unsettled plants"
                     );
+                    // Signal the batch to agentd's einsd-batch-agent (§52 sweep / review).
+                    handlers::emit_batch_due_ce(
+                        &auto_cfg,
+                        &auto_client,
+                        prev_month_year as i16,
+                        prev_month,
+                        plants.len(),
+                    )
+                    .await;
                     for anlage in &plants {
                         let kwh = handlers::fetch_einspeisemenge_from_edmd(
                             &auto_cfg,
@@ -218,6 +227,22 @@ impl Daemon for Einsd {
                             prev_month,
                         )
                         .await;
+                        // §51/§51a auto-derivation from edmd ¼h feed-in × the EPEX
+                        // spot store (§60-gated). None when data is absent/incomplete.
+                        let (neg_kwh, neg_qh) = match handlers::derive_negativpreis_from_edmd(
+                            &auto_cfg,
+                            &auto_client,
+                            &auto_pool,
+                            &anlage.malo_id,
+                            anlage.eeg_gesetz,
+                            prev_month_year as i16,
+                            prev_month,
+                        )
+                        .await
+                        {
+                            Some((k, q)) => (Some(k), Some(q)),
+                            None => (None, None),
+                        };
                         let input = einsd::pg::build_settle_input(
                             &auto_cfg.tenant,
                             anlage,
@@ -228,7 +253,8 @@ impl Daemon for Einsd {
                                 epex_avg_ct_kwh: epex,
                                 managementpraemie_ct_override: None,
                                 einspeisemanagement_kwh: None,
-                                negative_price_quarter_hours: None,
+                                kwh_during_negative_epex: neg_kwh,
+                                negative_price_quarter_hours: neg_qh,
                                 correction_of: None,
                                 correction_reason: None,
                                 jahresmarktwert_ct_kwh: None,
@@ -244,32 +270,22 @@ impl Daemon for Einsd {
                         };
                         match pg::run_settlement(&mut tx, input).await {
                             Ok(result) => {
-                                if result.status == "calculated"
-                                    || result.status == "foerderung_beendet"
+                                // Single-sourced with the REST/batch/MCP paths: one
+                                // CE-type map + status gate (a `calculated` payment
+                                // only; `foerderung_beendet` is a zero post-Förderende
+                                // month and no longer emits a zero-value payout CE).
+                                if let Err(e) = handlers::enqueue_settlement_ce(
+                                    &mut tx,
+                                    &auto_cfg,
+                                    anlage,
+                                    &result,
+                                    prev_month_year as i16,
+                                    prev_month,
+                                )
+                                .await
                                 {
-                                    let ce_type = match anlage.settlement_model.as_str() {
-                                        "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" => {
-                                            mako_events::eeg::MARKTPRAEMIE_BERECHNET
-                                        }
-                                        _ => mako_events::eeg::VERGUETUNG_BERECHNET,
-                                    };
-                                    if let Some(ce) = handlers::build_settlement_ce(
-                                        &auto_cfg,
-                                        ce_type,
-                                        &anlage.tr_id,
-                                        &anlage.malo_id,
-                                        &result,
-                                        prev_month_year as i16,
-                                        prev_month,
-                                        anlage.bank_iban.as_deref(),
-                                        anlage.bank_bic.as_deref(),
-                                        anlage.zahlungsempfaenger.as_deref(),
-                                    ) && let Err(e) =
-                                        mako_service::outbox::enqueue(&mut tx, &ce).await
-                                    {
-                                        tracing::warn!(tr_id = %anlage.tr_id, error = %e, "auto-settle: enqueue failed");
-                                        continue; // tx dropped → rollback
-                                    }
+                                    tracing::warn!(tr_id = %anlage.tr_id, error = %e, "auto-settle: enqueue failed");
+                                    continue; // tx dropped → rollback
                                 }
                                 if let Err(e) = tx.commit().await {
                                     tracing::warn!(tr_id = %anlage.tr_id, error = %e, "auto-settle: commit failed");

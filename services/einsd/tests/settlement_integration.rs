@@ -744,3 +744,96 @@ async fn rerunning_replaces_the_stored_statement() {
             .expect("count");
     assert_eq!(count, 1);
 }
+
+/// §51: the epex_spot_prices store round-trips ¼h prices (incl. negatives) and
+/// the range fetch returns them ordered — the input to the negativpreis overlay.
+#[tokio::test]
+#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+async fn spot_prices_upsert_and_range_fetch() {
+    use rust_decimal::dec;
+    use time::macros::datetime;
+    let Some(pool) = test_pool("spot_prices").await else {
+        return;
+    };
+    let base = datetime!(2026-06-01 00:00 UTC);
+    let prices: Vec<einsd::pg::SpotPrice> = (0..8)
+        .map(|n| einsd::pg::SpotPrice {
+            delivery_start: base + time::Duration::minutes(15 * n),
+            resolution_min: 15,
+            // QH 2..5 are negative.
+            price_ct_kwh: if (2..6).contains(&n) {
+                dec!(-1.5)
+            } else {
+                dec!(4.0)
+            },
+        })
+        .collect();
+
+    let upserted = einsd::pg::upsert_spot_prices(&pool, &prices, "test")
+        .await
+        .expect("bulk upsert");
+    assert_eq!(upserted, 8);
+
+    // Idempotent: re-upsert updates, does not duplicate (PK on delivery_start).
+    einsd::pg::upsert_spot_prices(&pool, &prices, "test")
+        .await
+        .expect("re-upsert");
+    let total: i64 = sqlx::query_scalar("SELECT count(*) FROM epex_spot_prices")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(total, 8);
+
+    let fetched = einsd::pg::fetch_spot_prices(&pool, base, base + time::Duration::hours(2))
+        .await
+        .expect("range fetch");
+    assert_eq!(fetched.len(), 8);
+    let negatives = fetched.iter().filter(|(_, p)| p.is_sign_negative()).count();
+    assert_eq!(negatives, 4);
+    // Ordered ascending.
+    assert!(fetched.windows(2).all(|w| w[0].0 <= w[1].0));
+}
+
+/// §36h Abs. 2: recording a Standortgüte re-evaluation persists it and flags
+/// reconciliation when the Gütefaktor moves more than 2 percentage points.
+#[tokio::test]
+#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+async fn wind_reevaluation_records_and_flags_reconciliation() {
+    use rust_decimal::dec;
+    let Some(pool) = test_pool("wind_reeval").await else {
+        return;
+    };
+    seed_plant(
+        &pool,
+        "W1",
+        TENANT,
+        ", wind_guetegrad, wind_korrekturfaktor",
+        ", 0.90, 1.06",
+    )
+    .await;
+
+    // Year-6 re-evaluation: 0.90 → 0.95 is a 5 pp move (> 2 pp) → reconcile.
+    let (recon1, prev1) = einsd::pg::record_wind_reevaluation(&pool, TENANT, "W1", 6, dec!(0.95))
+        .await
+        .expect("record")
+        .expect("plant exists");
+    assert!(recon1);
+    assert_eq!(prev1, Some(dec!(0.90)));
+
+    // Year-11 re-evaluation vs the year-6 value: 0.95 → 0.96 is 1 pp → no reconcile.
+    let (recon2, prev2) = einsd::pg::record_wind_reevaluation(&pool, TENANT, "W1", 11, dec!(0.96))
+        .await
+        .expect("record")
+        .expect("plant exists");
+    assert!(!recon2);
+    assert_eq!(prev2, Some(dec!(0.95)));
+
+    // Both re-evaluations persisted (one per effective year).
+    let json: serde_json::Value = sqlx::query_scalar(
+        "SELECT wind_guetefaktor_reevaluations FROM eeg_anlagen WHERE tr_id='W1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("fetch reevals");
+    assert_eq!(json.as_array().map(Vec::len), Some(2));
+}

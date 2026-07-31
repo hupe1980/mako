@@ -50,6 +50,7 @@ tenant         = "9900357000004"
 
 vertragd_url   = "http://vertragd:9780"
 edmd_url       = "http://edmd:8380"
+edmd_api_key   = "env:PORTALD_EDMD_SERVICE_KEY"  # opaque Bearer; register in edmd [[oidc.service_keys]]
 billingd_url   = "http://billingd:9280"
 accountingd_url = "http://accountingd:9380"
 einsd_url      = "http://einsd:9180"

@@ -89,7 +89,7 @@ graph TB
         LANCE["LanceDB\nS3 / GCS / local\nANN vector search"]
     end
 
-    subgraph tools ["MCP Tools — all 17 services (160+ tools)"]
+    subgraph tools ["MCP Tools — 14 MCP services (150+ tools)"]
         T1["makod · marktd · billingd"]
         T2["edmd · accountingd · obsd"]
         T3["einsd · netzbilanzd · sperrd · ..."]

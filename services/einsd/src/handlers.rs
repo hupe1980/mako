@@ -62,6 +62,114 @@ pub async fn fetch_einspeisemenge_from_edmd(
         })
 }
 
+#[derive(serde::Deserialize)]
+struct FeedInResponse {
+    coverage_pct: f64,
+    billable_pct: f64,
+    intervals: Vec<FeedInInterval>,
+}
+
+#[derive(serde::Deserialize)]
+struct FeedInInterval {
+    start: String,
+    kwh: String,
+}
+
+/// §51 auto-derivation: fetch ¼h feed-in from edmd, overlay the stored EPEX spot
+/// prices, and derive `(kwh_during_negative_epex, negative_price_quarter_hours)`
+/// via the version-aware `eeg-billing::negativpreis` engine.
+///
+/// Returns `None` — leaving the two figures caller-supplied — when edmd is not
+/// configured, there is no feed-in or spot data, or the metering coverage /
+/// quality is below the §60 Abs. 2 MsbG threshold. Deriving on an incomplete or
+/// partly-faulty month would find too few negative-price kWh and thus *overpay*,
+/// so a gap is surfaced (logged) rather than silently under-reduced.
+pub async fn derive_negativpreis_from_edmd(
+    cfg: &EinsdConfig,
+    client: &reqwest::Client,
+    pool: &PgPool,
+    malo_id: &str,
+    eeg_gesetz: i16,
+    year: i16,
+    month: i16,
+) -> Option<(Decimal, u64)> {
+    use time::format_description::well_known::Rfc3339;
+
+    let edmd_url = cfg.edmd_url.as_deref()?;
+    let version = eeg_billing::EegGesetz::from_db_year(eeg_gesetz).ok()?;
+    let month_m = time::Month::try_from(month as u8).ok()?;
+    let last_day = days_in_month(year, month);
+    let range_from = time::Date::from_calendar_date(i32::from(year), month_m, 1)
+        .ok()?
+        .with_hms(0, 0, 0)
+        .ok()?
+        .assume_utc();
+    let range_to = time::Date::from_calendar_date(i32::from(year), month_m, last_day)
+        .ok()?
+        .with_hms(23, 59, 59)
+        .ok()?
+        .assume_utc();
+
+    let url = format!(
+        "{edmd_url}/api/v1/feed-in/{malo_id}?from={}&to={}",
+        range_from.format(&Rfc3339).ok()?,
+        range_to.format(&Rfc3339).ok()?,
+    );
+    let mut req = client.get(&url);
+    if let Some(key) = cfg.edmd_api_key.as_deref() {
+        req = req.bearer_auth(key);
+    }
+    let resp = req.send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let feed: FeedInResponse = resp.json().await.ok()?;
+
+    // §60 Abs. 2 gate: auto-derive only on near-complete, fully-billable data.
+    if feed.coverage_pct < 95.0 || feed.billable_pct < 100.0 {
+        tracing::warn!(
+            malo_id,
+            coverage = feed.coverage_pct,
+            billable = feed.billable_pct,
+            "§51 auto-derivation skipped — metering coverage/quality below threshold; \
+             supply kwh_during_negative_epex manually or backfill substitute values"
+        );
+        return None;
+    }
+
+    let spot = crate::pg::fetch_spot_prices(pool, range_from, range_to)
+        .await
+        .ok()?;
+    if spot.is_empty() {
+        return None;
+    }
+    let negative_starts: std::collections::HashSet<time::OffsetDateTime> = spot
+        .iter()
+        .filter(|(_, p)| p.is_sign_negative())
+        .map(|(t, _)| *t)
+        .collect();
+
+    let intervals: Vec<eeg_billing::negativpreis::NegativpreisInterval> = feed
+        .intervals
+        .iter()
+        .filter_map(|iv| {
+            let start = time::OffsetDateTime::parse(&iv.start, &Rfc3339).ok()?;
+            let feed_in_kwh = iv.kwh.parse::<Decimal>().ok()?;
+            Some(eeg_billing::negativpreis::NegativpreisInterval {
+                start,
+                feed_in_kwh,
+                price_negative: negative_starts.contains(&start),
+            })
+        })
+        .collect();
+
+    let r = eeg_billing::negativpreis::derive_negativpreis(&intervals, version);
+    if r.negative_quarter_hours == 0 {
+        return None;
+    }
+    Some((r.kwh_during_negative, r.negative_quarter_hours))
+}
+
 fn days_in_month(year: i16, month: i16) -> u8 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
@@ -144,6 +252,56 @@ pub fn build_settlement_ce(
     Some(ce)
 }
 
+/// Enqueue the settlement ERP CloudEvent into the transactional outbox — the one
+/// place that decides the event **type** and the emission **gate**.
+///
+/// accountingd dispatches on the exact CE type, crediting the Massenkontokorrent
+/// and issuing the pain.001 payout only for `de.eeg.verguetung.berechnet` and
+/// `de.eeg.marktpraemie.berechnet`. The REST and MCP settle paths both call this
+/// so neither can drift to a type accountingd ignores (a dead-letter payout) or
+/// emit a payout event for a non-`calculated` run.
+///
+/// # Errors
+/// Propagates the outbox insert error so the caller can roll back the settlement.
+pub async fn enqueue_settlement_ce(
+    tx: &mut sqlx::PgConnection,
+    cfg: &EinsdConfig,
+    anlage: &crate::pg::AnlageRow,
+    result: &crate::pg::SettleResult,
+    year: i16,
+    month: i16,
+) -> Result<(), sqlx::Error> {
+    // Only a completed calculation credits a ledger / triggers a payout.
+    if result.status != "calculated" {
+        return Ok(());
+    }
+    // de.eeg.marktpraemie.berechnet — the gleitende/feste Marktprämie models
+    // de.eeg.verguetung.berechnet   — everything else (FiT, Mieterstrom, Post-EEG, Flex, KWKG)
+    // `MARKET_PREMIUM` is a Direktvermarktung model (see `build_settle_input`), so
+    // it belongs on the Marktprämie event — it must not fall through to Vergütung.
+    let ce_type = match anlage.settlement_model.as_str() {
+        "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" | "MARKET_PREMIUM" => {
+            mako_events::eeg::MARKTPRAEMIE_BERECHNET
+        }
+        _ => mako_events::eeg::VERGUETUNG_BERECHNET,
+    };
+    if let Some(ce) = build_settlement_ce(
+        cfg,
+        ce_type,
+        &result.tr_id,
+        &anlage.malo_id,
+        result,
+        year,
+        month,
+        anlage.bank_iban.as_deref(),
+        anlage.bank_bic.as_deref(),
+        anlage.zahlungsempfaenger.as_deref(),
+    ) {
+        mako_service::outbox::enqueue(tx, &ce).await?;
+    }
+    Ok(())
+}
+
 /// Emit `de.eeg.anlage.foerderung_auslaufend` for a plant about to expire.
 pub async fn emit_foerderung_alert_ce(
     cfg: &EinsdConfig,
@@ -172,6 +330,37 @@ pub async fn emit_foerderung_alert_ce(
     let secret = cfg.erp_hmac_secret.as_deref().map(str::as_bytes);
     if let Err(e) = mako_service::post_ce_with_retry(client, webhook_url, &ce, secret).await {
         tracing::warn!(tr_id, error = %e, "einsd: förderung alert delivery failed");
+    }
+}
+
+/// Emit `de.eeg.settlement.batch_due` when a monthly settlement batch is due.
+///
+/// The auto-settle worker fires this at the start of its monthly run so the
+/// `einsd-batch-agent` in `agentd` can run its §52 sweep / review over the same
+/// batch. Best-effort (an orchestration signal, not a payout).
+pub async fn emit_batch_due_ce(
+    cfg: &EinsdConfig,
+    client: &reqwest::Client,
+    billing_year: i16,
+    billing_month: i16,
+    unsettled_count: usize,
+) {
+    let Some(webhook_url) = cfg.erp_webhook_url.as_deref() else {
+        return;
+    };
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("einsd", &cfg.tenant),
+        mako_events::eeg::SETTLEMENT_BATCH_DUE,
+        format!("{billing_year:04}-{billing_month:02}"),
+        serde_json::json!({
+            "billing_year": billing_year,
+            "billing_month": billing_month,
+            "unsettled_plants": unsettled_count,
+        }),
+    );
+    let secret = cfg.erp_hmac_secret.as_deref().map(str::as_bytes);
+    if let Err(e) = mako_service::post_ce_with_retry(client, webhook_url, &ce, secret).await {
+        tracing::warn!(error = %e, "einsd: batch-due signal delivery failed");
     }
 }
 
@@ -341,13 +530,24 @@ pub struct SettleTriggerRequest {
     /// Defaults to 0.4 ct/kWh (0.2 ct/kWh for plants >100 MW).
     /// Only applies to DIREKTVERMARKTUNG and AUSSCHREIBUNG settlement models.
     pub managementpraemie_ct_override: Option<Decimal>,
-    /// §19 EEG 2023 — kWh curtailed by NB this billing month.
+    /// §13a EnWG (Redispatch 2.0) — kWh curtailed by NB this billing month.
     ///
     /// The NB must compensate the operator at the AW rate for these kWh
     /// (§19 Abs. 2 EEG 2023: §51 Negativpreisregel does NOT apply to EInsMan kWh).
     /// Pass the total curtailed kWh from MSCONS IFTSTA messages in this period.
     #[serde(default)]
     pub einspeisemanagement_kwh: Option<Decimal>,
+    /// §51 EEG 2023 — kWh fed in during negative-spot-price intervals.
+    ///
+    /// The anzulegender Wert for these kWh is reduced to null (Negativpreisregel),
+    /// version- and threshold-aware in the engine (EEG 2017 ≥6 h / EEG 2021 ≥4 h /
+    /// EEG 2023 any interval; kW-exemptions applied). Pass the feed-in quantity
+    /// that fell in negative-price intervals for the billing month; omit (or the
+    /// §51 exemption applies) to leave the settlement unreduced. Consistent with
+    /// `negative_price_quarter_hours` (§51a), which extends the Förderzeitraum for
+    /// the same intervals.
+    #[serde(default)]
+    pub kwh_during_negative_epex: Option<Decimal>,
     /// §51a EEG 2023 — quarter-hours during which the EPEX price was negative
     /// AND the plant's §51 threshold was met.
     ///
@@ -405,6 +605,32 @@ pub async fn post_settle(
         },
     };
 
+    // §51/§51a auto-derivation: when the caller supplied neither figure, derive
+    // both from edmd's ¼h feed-in overlaid on the stored EPEX spot prices
+    // (version-aware, §60-gated). Explicit request values always win.
+    let (kwh_during_negative_epex, negative_price_quarter_hours) =
+        if req.kwh_during_negative_epex.is_none() && req.negative_price_quarter_hours.is_none() {
+            match derive_negativpreis_from_edmd(
+                &cfg,
+                &http_client,
+                &pool,
+                &anlage.malo_id,
+                anlage.eeg_gesetz,
+                year,
+                month,
+            )
+            .await
+            {
+                Some((kwh, qh)) => (Some(kwh), Some(qh)),
+                None => (None, None),
+            }
+        } else {
+            (
+                req.kwh_during_negative_epex,
+                req.negative_price_quarter_hours,
+            )
+        };
+
     let input = build_settle_input(
         &cfg.tenant,
         &anlage,
@@ -415,7 +641,8 @@ pub async fn post_settle(
             epex_avg_ct_kwh,
             managementpraemie_ct_override: req.managementpraemie_ct_override,
             einspeisemanagement_kwh: req.einspeisemanagement_kwh,
-            negative_price_quarter_hours: req.negative_price_quarter_hours,
+            kwh_during_negative_epex,
+            negative_price_quarter_hours,
             correction_of: None,
             correction_reason: None,
             jahresmarktwert_ct_kwh: None, // auto-fetched by run_settlement
@@ -435,29 +662,9 @@ pub async fn post_settle(
         // tx dropped here → rollback; nothing was persisted.
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
-    // ── Enqueue CloudEvent for ERP webhook ───────────────────────────────────
-    // de.eeg.verguetung.berechnet   — VERGUETUNG, MIETERSTROM, POST_EEG_SPOT, EIGENVERBRAUCH, KWKG_ZUSCHLAG, FLEXIBILITAET
-    // de.eeg.marktpraemie.berechnet — DIREKTVERMARKTUNG, AUSSCHREIBUNG
-    if result.status == "calculated" {
-        let ce_type = match anlage.settlement_model.as_str() {
-            "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" => mako_events::eeg::MARKTPRAEMIE_BERECHNET,
-            _ => mako_events::eeg::VERGUETUNG_BERECHNET,
-        };
-        if let Some(ce) = build_settlement_ce(
-            &cfg,
-            ce_type,
-            &tr_id,
-            &anlage.malo_id,
-            &result,
-            year,
-            month,
-            anlage.bank_iban.as_deref(),
-            anlage.bank_bic.as_deref(),
-            anlage.zahlungsempfaenger.as_deref(),
-        ) && let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await
-        {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
+    // ── Enqueue CloudEvent for ERP webhook (shared with the MCP settle path) ──
+    if let Err(e) = enqueue_settlement_ce(&mut tx, &cfg, &anlage, &result, year, month).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
     if let Err(e) = tx.commit().await {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
@@ -601,6 +808,74 @@ pub async fn put_epex_price(
     }
 }
 
+/// One EPEX spot interval in the bulk-load request body.
+#[derive(Debug, Deserialize)]
+pub struct SpotPriceEntry {
+    /// Interval start, RFC 3339 (UTC).
+    pub delivery_start: String,
+    /// 15 or 60. Defaults to 15.
+    #[serde(default = "default_spot_resolution")]
+    pub resolution_min: i16,
+    /// Price ct/kWh (may be negative).
+    pub price_ct_kwh: Decimal,
+}
+
+fn default_spot_resolution() -> i16 {
+    15
+}
+
+/// `PUT /api/v1/epex-spot` — bulk-load EPEX day-ahead spot prices (§51 input).
+///
+/// Body: `{ "source": "epex-day-ahead", "prices": [ {delivery_start, resolution_min, price_ct_kwh}, … ] }`.
+/// einsd overlays a plant's ¼h feed-in against these to derive the §51
+/// Negativpreisregel reduction.
+pub async fn put_epex_spot(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Extension(pool): Extension<PgPool>,
+    Json(body): Json<SpotPriceLoadBody>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "write-marktdaten", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    let mut prices = Vec::with_capacity(body.prices.len());
+    for e in &body.prices {
+        let Ok(start) = time::OffsetDateTime::parse(
+            &e.delivery_start,
+            &time::format_description::well_known::Rfc3339,
+        ) else {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("invalid delivery_start (RFC 3339): {}", e.delivery_start),
+            )
+                .into_response();
+        };
+        prices.push(crate::pg::SpotPrice {
+            delivery_start: start,
+            resolution_min: e.resolution_min,
+            price_ct_kwh: e.price_ct_kwh,
+        });
+    }
+    let source = body.source.as_deref().unwrap_or("manual");
+    match crate::pg::upsert_spot_prices(&pool, &prices, source).await {
+        Ok(n) => (StatusCode::OK, Json(serde_json::json!({ "upserted": n }))).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+    }
+}
+
+/// Bulk spot-price load request body.
+#[derive(Debug, Deserialize)]
+pub struct SpotPriceLoadBody {
+    #[serde(default)]
+    pub source: Option<String>,
+    pub prices: Vec<SpotPriceEntry>,
+}
+
 /// `GET /api/v1/epex-monthly/{year}/{month}`
 pub async fn get_epex_price(
     claims: Claims,
@@ -644,6 +919,71 @@ pub struct RepoweringRequest {
     pub verguetungssatz_ct_neu: Option<Decimal>,
 }
 
+/// Request body for `POST /api/v1/anlagen/{tr_id}/wind-reevaluation`.
+#[derive(Debug, Deserialize)]
+pub struct WindReevaluationRequest {
+    /// Year after commissioning from which the adjusted AW takes effect: 6, 11 or 16.
+    pub wirksam_ab_jahr: i16,
+    /// Gütefaktor recomputed from the measured 5-year Standortertrag.
+    pub guetefaktor: Decimal,
+}
+
+/// `POST /api/v1/anlagen/{tr_id}/wind-reevaluation`
+///
+/// Record a §36h Abs. 2 EEG 2023 Standortgüte re-evaluation for a wind plant. The
+/// anzulegender Wert re-adjusts from the start of the 6th/11th/16th operating year
+/// based on the measured Standortertrag; `build_settle_input` then applies the
+/// re-evaluated Korrekturfaktor to every settlement from that year on. The
+/// response flags whether the reviewed five-year period must be reconciled
+/// (§36h Abs. 2 Satz 2: recomputed Gütefaktor deviates > 2 pp) — run that as a
+/// `§147 AO` correction settlement (interest EURIBOR-12M + 1 pp).
+pub async fn post_wind_reevaluation(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Path(tr_id): Path<String>,
+    Json(req): Json<WindReevaluationRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    if !matches!(req.wirksam_ab_jahr, 6 | 11 | 16) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "wirksam_ab_jahr must be 6, 11, or 16 (§36h Abs. 2 Satz 1)".to_owned(),
+        )
+            .into_response();
+    }
+    match crate::pg::record_wind_reevaluation(
+        &pool,
+        &cfg.tenant,
+        &tr_id,
+        req.wirksam_ab_jahr,
+        req.guetefaktor,
+    )
+    .await
+    {
+        Ok(Some((reconciliation_required, previous))) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "recorded": true,
+                "wirksam_ab_jahr": req.wirksam_ab_jahr,
+                "new_guetefaktor": req.guetefaktor,
+                "previous_guetefaktor": previous,
+                "reconciliation_required": reconciliation_required,
+            })),
+        )
+            .into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 /// `POST /api/v1/anlagen/{tr_id}/repowering`
 ///
 /// Trigger a repowering event for an existing plant.  Per §22 EEG 2023:
@@ -682,7 +1022,6 @@ pub async fn post_repowering(
         }
     };
 
-    // Load existing plant.
     let anlage = match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
@@ -1021,6 +1360,7 @@ pub async fn post_batch_settle(
                         epex_avg_ct_kwh,
                         managementpraemie_ct_override: None,
                         einspeisemanagement_kwh: None,
+                        kwh_during_negative_epex: None,
                         negative_price_quarter_hours: None,
                         correction_of: None,
                         correction_reason: None,
@@ -1036,20 +1376,14 @@ pub async fn post_batch_settle(
                 let res = run_settlement(&mut tx, input).await;
                 match res {
                     Ok(result) => {
-                        if result.status == "calculated" {
-                            let ce_type = match settlement_model.as_str() {
-                                "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" | "MARKET_PREMIUM" => {
-                                    mako_events::eeg::MARKTPRAEMIE_BERECHNET
-                                }
-                                _ => mako_events::eeg::VERGUETUNG_BERECHNET,
-                            };
-                            if let Some(ce) = build_settlement_ce(
-                                &cfg, ce_type, &tr_id, &malo_id, &result, year, month, None, None,
-                                None,
-                            ) && let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await
-                            {
-                                return (tr_id, settlement_model, Err(e.into()));
-                            }
+                        // Single-sourced CE type + gate + bank details, shared with
+                        // the REST/MCP/worker settle paths (Marktprämie payouts carry
+                        // IBAN/BIC/payee so accountingd has the bank data pain.001 needs).
+                        if let Err(e) =
+                            enqueue_settlement_ce(&mut tx, &cfg, &anlage, &result, year, month)
+                                .await
+                        {
+                            return (tr_id, settlement_model, Err(e.into()));
                         }
                         if let Err(e) = tx.commit().await {
                             return (tr_id, settlement_model, Err(e.into()));
@@ -1496,6 +1830,7 @@ pub async fn post_correction_settle(
             epex_avg_ct_kwh,
             managementpraemie_ct_override: None,
             einspeisemanagement_kwh: None,
+            kwh_during_negative_epex: None,
             negative_price_quarter_hours: None,
             // § 147 AO / GoBD: correction receipt linked to original
             correction_of: original_id

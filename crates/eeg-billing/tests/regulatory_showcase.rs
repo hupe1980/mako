@@ -274,6 +274,67 @@ fn s22a_ausschreibung_10mwp_august() {
     );
 }
 
+/// §39n EEG 2023 (i.V.m. §3 InnAusV) — Innovationsausschreibung feste Marktprämie.
+///
+/// The fixed premium is the Zuschlagswert per kWh and does NOT shrink as the
+/// Monatsmarktwert rises — the defining difference from the gleitende Marktprämie.
+#[test]
+fn s39n_innovationsausschreibung_feste_marktpraemie_is_fixed() {
+    let innovation = TariffSource::Auction(eeg_billing::AusschreibungMetadata {
+        innovation_auction: true,
+        ..Default::default()
+    });
+    let make = |marktwert: &str| {
+        calculate_settlement(&SettleInput {
+            scheme: SettlementScheme::MarketPremium {
+                direktverm_aw_ct: d("5.82"),
+                managementpraemie_ct: Some(d("0.4")),
+                wind_korrekturfaktor: None,
+                wind_standort: None,
+            },
+            tariff_source: innovation.clone(),
+            einspeisemenge_kwh: Some(d("2500000")),
+            marktwert_ct_kwh: Some(d(marktwert)),
+            ..SettleInput::default()
+        })
+    };
+    // feste Marktprämie = 5.82 ct × 2,500,000 kWh = 145,500 EUR, independent of Marktwert.
+    let low = make("4.1");
+    let high = make("6.0"); // Marktwert ABOVE the AW → gleitende would pay 0.
+    assert_eq!(low.settlement_eur, Some(d("145500.00")));
+    assert_eq!(high.settlement_eur, Some(d("145500.00")));
+    assert!(
+        low.positions.iter().any(|p| p.legal_basis.contains("39n")),
+        "expected a §39n feste-Marktprämie position"
+    );
+}
+
+/// §53 Abs. 1 EEG 2023 — the flat AW deduction is applied only when the caller
+/// flags the rate as gross; a net rate (einsd's stored default) is untouched.
+#[test]
+fn s53_abs1_deduction_only_on_gross_aw() {
+    use eeg_billing::ErzeugungsArt;
+    let base = |gross: bool| SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("8.11"),
+        },
+        einspeisemenge_kwh: Some(d("100000")),
+        erzeugungsart: Some(ErzeugungsArt::SolarAufdach),
+        aw_is_gross: gross,
+        ..SettleInput::default()
+    };
+    // Net (default): 8.11 ct × 100,000 = 8,110 EUR, no deduction.
+    assert_eq!(
+        calculate_settlement(&base(false)).settlement_eur,
+        Some(d("8110.00"))
+    );
+    // Gross: solar −0.4 ct → 7.71 ct × 100,000 = 7,710 EUR.
+    assert_eq!(
+        calculate_settlement(&base(true)).settlement_eur,
+        Some(d("7710.00"))
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // §21 Abs. 3 EEG 2023 — Mieterstrom
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1739,10 +1800,10 @@ fn s50a_independent_of_kwh_produced() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §19 EEG — Einspeisemanagement (curtailment) compensation
+// §13a EnWG — Einspeisemanagement (curtailment) compensation
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §19 EEG 2023 — NB curtails plant: compensation for lost generation.
+/// §13a EnWG — NB curtails plant: compensation for lost generation.
 /// Plant produces 1,000 kWh but 150 kWh were curtailed by NB.
 /// Einspeisemenge = 850 kWh. EinsMan compensation = 150 × 8.11 / 100 = 12.165 EUR.
 /// Total = 850 × 8.11 / 100 + 150 × 8.11 / 100 = 81.10 EUR (as if 1,000 kWh).
@@ -1765,19 +1826,19 @@ fn s19_einspeisemanagement_compensation() {
     assert_eq!(out.eligible_kwh, Some(d("1000")));
     // Separate §19 position
     assert!(
-        out.positions.iter().any(|p| p.legal_basis.contains("§19")),
+        out.positions.iter().any(|p| p.legal_basis.contains("§13a")),
         "§19 EinsMan position expected"
     );
     let einsman_pos = out
         .positions
         .iter()
-        .find(|p| p.legal_basis.contains("§19"))
+        .find(|p| p.legal_basis.contains("§13a"))
         .unwrap();
     assert_eq!(einsman_pos.kwh, d("150"));
     assert_eq!(einsman_pos.eur, d("12.165"));
 }
 
-/// §19 EEG — EinsMan also applies to Direktvermarktung plants (uses AW as rate).
+/// §13a EnWG — EinsMan also applies to Direktvermarktung plants (uses AW as rate).
 #[test]
 fn s19_einspeisemanagement_direktvermarktung_uses_aw_rate() {
     let out = calculate_settlement(&SettleInput {
@@ -1799,13 +1860,13 @@ fn s19_einspeisemanagement_direktvermarktung_uses_aw_rate() {
     let einsman = out
         .positions
         .iter()
-        .find(|p| p.legal_basis.contains("§19"))
+        .find(|p| p.legal_basis.contains("§13a"))
         .unwrap();
     assert_eq!(einsman.rate_ct_kwh, d("6.0")); // AW used as rate
     assert_eq!(einsman.eur, d("300.00"));
 }
 
-/// §19 EEG — No curtailment in billing period → no §19 position.
+/// §13a EnWG — No curtailment in billing period → no §19 position.
 #[test]
 fn s19_no_curtailment_no_einsman_position() {
     let out = calculate_settlement(&SettleInput {
@@ -1817,21 +1878,23 @@ fn s19_no_curtailment_no_einsman_position() {
         ..SettleInput::default()
     });
     assert!(
-        out.positions.iter().all(|p| !p.legal_basis.contains("§19")),
+        out.positions
+            .iter()
+            .all(|p| !p.legal_basis.contains("§13a")),
         "no §19 position when einspeisemanagement_kwh is None"
     );
     assert_eq!(out.settlement_eur, Some(d("81.10")));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §36k EEG — Wind Korrekturfaktor (location correction)
+// §36h EEG — Wind Korrekturfaktor (location correction)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §36k EEG 2023 — Low-wind site: Korrekturfaktor > 1.0 → higher effective AW.
+/// §36h EEG 2023 — Low-wind site: Korrekturfaktor > 1.0 → higher effective AW.
 /// Base AW = 6.5 ct/kWh. Korrekturfaktor = 1.12 (poor wind site, Gütegrad ~85%).
 /// Effective AW = 6.5 × 1.12 = 7.28 ct/kWh.
 #[test]
-fn s36k_korrekturfaktor_increases_aw_for_low_wind_site() {
+fn s36h_korrekturfaktor_increases_aw_for_low_wind_site() {
     use eeg_billing::wind_onshore_korrekturfaktor_corrected_aw;
 
     let corrected_aw = wind_onshore_korrekturfaktor_corrected_aw(d("6.5"), d("1.12"));
@@ -1857,11 +1920,11 @@ fn s36k_korrekturfaktor_increases_aw_for_low_wind_site() {
     assert_eq!(out.settlement_eur, Some(d("6360.00")));
 }
 
-/// §36k EEG 2023 — High-wind site: Korrekturfaktor < 1.0 → lower effective AW.
+/// §36h EEG 2023 — High-wind site: Korrekturfaktor < 1.0 → lower effective AW.
 /// Base AW = 6.5 ct/kWh. Korrekturfaktor = 0.78 (high-wind site, Gütegrad ~130%).
 /// Effective AW = 6.5 × 0.78 = 5.07 ct/kWh.
 #[test]
-fn s36k_korrekturfaktor_decreases_aw_for_high_wind_site() {
+fn s36h_korrekturfaktor_decreases_aw_for_high_wind_site() {
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::MarketPremium {
             direktverm_aw_ct: d("6.5"),
@@ -1881,9 +1944,9 @@ fn s36k_korrekturfaktor_decreases_aw_for_high_wind_site() {
     assert_eq!(out.settlement_eur, Some(d("2910.00")));
 }
 
-/// §36k — Korrekturfaktor 1.0 = no change (reference yield site).
+/// §36h — Korrekturfaktor 1.0 = no change (reference yield site).
 #[test]
-fn s36k_korrekturfaktor_1_0_no_change() {
+fn s36h_korrekturfaktor_1_0_no_change() {
     let with_k = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::MarketPremium {
             direktverm_aw_ct: d("6.0"),
@@ -1909,13 +1972,13 @@ fn s36k_korrekturfaktor_1_0_no_change() {
     assert_eq!(with_k.settlement_eur, without_k.settlement_eur);
 }
 
-/// §36k — Pre-2016 plants: Korrekturfaktor not applicable (Bestandsschutz §100).
+/// §36h — Pre-2016 plants: Korrekturfaktor not applicable (Bestandsschutz §100).
 /// Setting wind_korrekturfaktor = None for old EEG2012 plants is mandatory.
 /// This test verifies no correction is applied when None.
 #[test]
-fn s36k_bestandsschutz_no_correction_for_pre_2016() {
+fn s36h_bestandsschutz_no_correction_for_pre_2016() {
     use eeg_billing::EegGesetz;
-    // EEG 2012 wind plant: §36k Bestandsschutz → no Korrekturfaktor
+    // EEG 2012 wind plant: §36h Bestandsschutz → no Korrekturfaktor
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FeedInTariff {
             verguetungssatz_ct: d("8.9"),
@@ -2146,13 +2209,13 @@ fn s52_empty_vec_no_pflichtzahlung() {
 /// §51a Abs. 1 EEG 2023 — Wind plant: 1:1 extension.
 /// 240 quarter-hours with negative prices → Förderdauer extended by 240 QH.
 #[test]
-fn s51a_wind_one_to_one_extension() {
+fn s51a_wind_extension_rounds_up_to_full_calendar_day() {
     use eeg_billing::foerderdauer::verguetungszeitraum_verlaengerung_qh;
     use eeg_billing::{EegGesetz, ErzeugungsArt};
 
-    // Verify the helper function
-    assert_eq!(verguetungszeitraum_verlaengerung_qh(240, false), 240);
-    assert_eq!(verguetungszeitraum_verlaengerung_qh(100, false), 100);
+    // §51a Abs. 1 Satz 2: lost QH round UP to the next full calendar day (96 QH).
+    assert_eq!(verguetungszeitraum_verlaengerung_qh(240, false), 288); // 2.5 d → 3 d
+    assert_eq!(verguetungszeitraum_verlaengerung_qh(100, false), 192); // 1.04 d → 2 d
 
     // Settlement with §51 applied + QH tracking
     let out = calculate_settlement(&SettleInput {
@@ -2167,8 +2230,8 @@ fn s51a_wind_one_to_one_extension() {
         erzeugungsart: Some(ErzeugungsArt::WindOnshore),
         ..SettleInput::default()
     });
-    // §51a wind: 1:1 extension → 240 QH
-    assert_eq!(out.verlaengerungsanspruch_qh, 240);
+    // §51a Abs. 1 Satz 2 wind: 240 QH = 2.5 days → rounds up to 3 days = 288 QH.
+    assert_eq!(out.verlaengerungsanspruch_qh, 288);
     // §51 applied: eligible = 50000 - 2000 = 48000 kWh
     assert_eq!(out.eligible_kwh, Some(d("48000")));
 }
@@ -2558,12 +2621,12 @@ fn sect21_voluntary_switch_once_per_month() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// §36k EEG 2023 — Wind Standort (structured site model)
+// §36h EEG 2023 — Wind Standort (structured site model)
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// §36k — WindStandort struct directly wired into SettleInput via wind_standort field.
+/// §36h — WindStandort struct directly wired into SettleInput via wind_standort field.
 #[test]
-fn sect36k_wind_standort_auto_derives_korrekturfaktor() {
+fn sect36h_wind_standort_auto_derives_korrekturfaktor() {
     use eeg_billing::wind::{WindStandort, WindStandortklasse};
     use eeg_billing::{SettleInput, SettlementScheme, SettlementStatus};
 
@@ -2596,9 +2659,9 @@ fn sect36k_wind_standort_auto_derives_korrekturfaktor() {
     assert!(eur > d("27.00") && eur < d("29.00"), "unexpected: {eur}");
 }
 
-/// §36k — Explicit wind_korrekturfaktor takes precedence over wind_standort.
+/// §36h — Explicit wind_korrekturfaktor takes precedence over wind_standort.
 #[test]
-fn sect36k_explicit_korrekturfaktor_wins_over_standort() {
+fn sect36h_explicit_korrekturfaktor_wins_over_standort() {
     use eeg_billing::wind::{WindStandort, WindStandortklasse};
     use eeg_billing::{SettleInput, SettlementScheme};
 
@@ -2935,114 +2998,9 @@ fn sect51a_non_solar_full_factor() {
         ..SettleInput::default()
     });
 
-    // Biomasse (not solar): Verlängerungsanspruch = 24 QH (1:1 factor)
-    assert_eq!(out.verlaengerungsanspruch_qh, 24);
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Multi-Messkonzept — metering module
-// ══════════════════════════════════════════════════════════════════════════════
-
-/// Bidirectional meter: Überschusseinspeisung billing uses direct injection measurement.
-#[test]
-fn messkonzept_ueberschuss_bidirectional_meter() {
-    use eeg_billing::Messkonzept;
-    use eeg_billing::metering::{EinspeisemengeInput, compute_einspeisemenge};
-
-    // 400 kWh generated, 150 kWh self-consumed, 250 kWh fed into grid
-    let input = EinspeisemengeInput {
-        einspeisemessung_kwh: Some(d("250")), // what the grid meter measured
-        erzeugungsmessung_kwh: Some(d("400")), // inverter meter
-        bezugsmessung_kwh: None,
-        teilnehmer_kwh: vec![],
-    };
-    // Überschuss: billing basis = Einspeisemessung (250 kWh), NOT Erzeugungsmessung
-    let kwh = compute_einspeisemenge(&input, Messkonzept::Ueberschusseinspeisung).unwrap();
-    assert_eq!(kwh, d("250"));
-}
-
-/// Volleinspeisung: billing uses generation meter (all output), not feed-in meter.
-#[test]
-fn messkonzept_volleinspeisung_uses_generation_meter() {
-    use eeg_billing::Messkonzept;
-    use eeg_billing::metering::{EinspeisemengeInput, compute_einspeisemenge};
-
-    // 400 kWh generated, all goes into grid (Volleinspeisung)
-    let input = EinspeisemengeInput {
-        einspeisemessung_kwh: Some(d("398")), // slight measurement difference from loss
-        erzeugungsmessung_kwh: Some(d("400")), // generation meter = billing basis
-        bezugsmessung_kwh: None,
-        teilnehmer_kwh: vec![],
-    };
-    let kwh = compute_einspeisemenge(&input, Messkonzept::Volleinspeisung).unwrap();
-    assert_eq!(kwh, d("400")); // generation meter wins
-}
-
-/// §42b GGV: generation covers all tenant consumption — excess goes to grid.
-#[test]
-fn messkonzept_ggv_full_coverage_surplus_to_grid() {
-    use eeg_billing::metering::{EinspeisemengeInput, compute_tenant_allocation};
-
-    // Building PV generates 1000 kWh; tenants consume 600 kWh total
-    let input = EinspeisemengeInput {
-        einspeisemessung_kwh: None,
-        erzeugungsmessung_kwh: Some(d("1000")),
-        bezugsmessung_kwh: None,
-        teilnehmer_kwh: vec![d("250"), d("200"), d("150")], // 3 tenants, 600 kWh total
-    };
-    let (allocs, feed_in) = compute_tenant_allocation(&input).unwrap();
-    assert_eq!(allocs.len(), 3);
-    // Each tenant gets their full consumption (generation > consumption)
-    assert_eq!(allocs[0].1, d("250"));
-    assert_eq!(allocs[1].1, d("200"));
-    assert_eq!(allocs[2].1, d("150"));
-    // Grid feed-in = 1000 - 600 = 400 kWh
-    assert_eq!(feed_in, d("400"));
-}
-
-/// §42b GGV: generation < total tenant consumption — proportional allocation.
-#[test]
-fn messkonzept_ggv_shortage_proportional_allocation() {
-    use eeg_billing::metering::{EinspeisemengeInput, compute_tenant_allocation};
-
-    // Building generates only 300 kWh for 500 kWh demand → 60% coverage
-    let input = EinspeisemengeInput {
-        einspeisemessung_kwh: None,
-        erzeugungsmessung_kwh: Some(d("300")),
-        bezugsmessung_kwh: None,
-        teilnehmer_kwh: vec![d("300"), d("200")], // 500 kWh total demand
-    };
-    let (allocs, feed_in) = compute_tenant_allocation(&input).unwrap();
-    // Tenant A: 300 × 300/500 = 180 kWh
-    assert_eq!(allocs[0].1, d("180"));
-    // Tenant B: 300 × 200/500 = 120 kWh
-    assert_eq!(allocs[1].1, d("120"));
-    assert_eq!(feed_in, d("0"));
-}
-
-/// Eigenverbrauch computed from generation and feed-in meters.
-#[test]
-fn eigenverbrauch_from_generation_minus_einspeisung() {
-    use eeg_billing::metering::compute_eigenverbrauch;
-
-    // 500 kWh generated, 320 kWh fed in → 180 kWh self-consumed
-    let ev = compute_eigenverbrauch(Some(d("500")), Some(d("320")));
-    assert_eq!(ev, Some(d("180")));
-}
-
-/// §14a Modul 2: HT/NT split for demand flexibility reporting.
-#[test]
-fn sect14a_ht_nt_split_measurement() {
-    use eeg_billing::metering::Sect14aModul2Measurement;
-
-    let m = Sect14aModul2Measurement {
-        eigenverbrauch_ht_kwh: d("150"),
-        eigenverbrauch_nt_kwh: d("350"),
-        steuerungsmassnahme_kwh: Some(d("30")),
-    };
-    assert_eq!(m.total_kwh(), d("500"));
-    // HT ratio: 150/500 = 0.30
-    assert_eq!(m.ht_ratio(), Some(d("0.3000")));
+    // Biomasse (not solar): §51a Abs. 1 Satz 2 rounds 24 QH (0.25 d) up to one
+    // full calendar day = 96 QH.
+    assert_eq!(out.verlaengerungsanspruch_qh, 96);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -3844,14 +3802,15 @@ fn s41_wasserkraft_modernisierung_settlement_path() {
 ///
 /// A solar plant serves multiple building tenants. The plant operator receives
 /// payment for the total Einspeisemenge at the §48 Abs. 2 rate — the multi-tenant
-/// allocation is handled by the metering layer (`metering::MeterConfiguration::GGV`).
+/// allocation is handled by the metering layer (the external `metering` crate's
+/// `AggregationRule::GgvProportionalAllocation` in edmd).
 /// The NB-to-plant-operator settlement uses `FeedInTariff` with the §48a Zuschlag
 /// incorporated into the rate by the plant registry.
 ///
 /// Regulatory basis: §48a EEG 2023 i.d.F. Solarpaket I (2024).
 #[test]
 fn sect48a_ggv_settlement_uses_feed_in_tariff_scheme() {
-    use eeg_billing::{ErzeugungsArt, Messkonzept};
+    use eeg_billing::ErzeugungsArt;
     // GGV building plant: 25 kWp on a 5-party building, total feed-in = 350 kWh
     // Rate: §48 Abs. 2a EEG 2023 (GGV Volleinspeisung) = 8.51 ct/kWh
     let out = calculate_settlement(&SettleInput {
@@ -3859,7 +3818,6 @@ fn sect48a_ggv_settlement_uses_feed_in_tariff_scheme() {
             verguetungssatz_ct: d("8.51"),
         },
         erzeugungsart: Some(ErzeugungsArt::SolarAufdach),
-        messkonzept: Some(Messkonzept::Volleinspeisung),
         einspeisemenge_kwh: Some(d("350")),
         ..SettleInput::default()
     });
@@ -3926,22 +3884,24 @@ fn sect52_abs4_doppelvermarktung_6_extra_months() {
     assert_eq!(penalty, d("18000"));
 }
 
-/// §52 Abs. 4 Nr. 1: AusfallverguetungHoechstdauer → +3 extra months.
+/// §52 Abs. 4: the Ausfallvergütung-Höchstdauer violation (Nr. 5) gets **no**
+/// extra months — Abs. 4 lists only Nr. 7 (+3), Nr. 9 (+1), Nr. 10 (full year)
+/// and Nr. 12 (+6). The Pflichtzahlung is €10/kW for the violation months alone.
 #[test]
-fn sect52_abs4_ausfallverguetung_3_extra_months() {
+fn sect52_ausfallverguetung_has_no_extra_months() {
     use eeg_billing::foerderdauer::calculate_pflichtzahlung;
     use eeg_billing::{Pflichtverstoss, SanktionsTyp};
-    // 6-month violation + 3 extra = 9 months; 100 kW plant
+    // 3-month violation (the §21 Abs. 1 Satz 1 Nr. 3 maximum); 100 kW plant.
     let violation = Pflichtverstoss {
         typ: SanktionsTyp::AusfallverguetungHoechstdauerUeberschritten,
         leistung_kw: d("100"),
-        monate_des_verstosses: 9, // caller adds 3 extra months per §52 Abs. 4 Nr. 1
+        monate_des_verstosses: 3,
         nachtraeglich_erfuellt: false,
         technischer_defekt: false,
     };
     let penalty = calculate_pflichtzahlung(&violation);
-    // 100 kW × EUR 10 × 9 months = EUR 9 000
-    assert_eq!(penalty, d("9000"));
+    // 100 kW × EUR 10 × 3 months = EUR 3 000 (no Abs. 4 extension for Nr. 5).
+    assert_eq!(penalty, d("3000"));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4243,7 +4203,7 @@ fn wind_offshore_market_premium_settlement() {
         scheme: SettlementScheme::MarketPremium {
             direktverm_aw_ct: d("8.40"), // BNetzA tender-awarded AW
             managementpraemie_ct: None,  // auto-computed
-            wind_korrekturfaktor: None,  // offshore uses no §36k correction
+            wind_korrekturfaktor: None,  // offshore uses no §36h correction
             wind_standort: None,
         },
         tariff_source: TariffSource::Auction(AusschreibungMetadata {

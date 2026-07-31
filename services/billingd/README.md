@@ -112,6 +112,7 @@ tenant        = "9900357000004"
 
 tarifbd_url     = "http://tarifbd:9080"
 edmd_url        = "http://edmd:8380"
+edmd_api_key    = "env:BILLINGD_EDMD_SERVICE_KEY"  # opaque Bearer; register in edmd [[oidc.service_keys]]
 marktd_url      = "http://marktd:8180"
 vertragd_url    = "http://vertragd:9780"
 

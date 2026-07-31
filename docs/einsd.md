@@ -8,7 +8,7 @@ description: >
   einsd operator guide — Einspeiser Registry + EEG/KWKG Settlement daemon.
   10 settlement schemes (SettlementScheme + TariffSource), EEG version-aware Bestandsschutz,
   §20 Abs. 3 Managementprämie (see implementation notes), §23a quarterly degression,
-  §36k Wind Korrekturfaktor, §42b GGV multi-meter Messkonzept,
+  §36h Wind Korrekturfaktor, §42b GGV multi-meter Messkonzept,
   §51 Negativpreisregel, §52 Pflichtzahlungen + §52 Abs. 6 Netting,
   SettlementPeriodState lifecycle, Repowering §22, Zusammenlegung §24,
   KWKG Förderdauer, §14 UStG Gutschrift, 18 MCP tools, eeg-agent.
@@ -30,10 +30,10 @@ technology type, respecting Bestandsschutz for old plants commissioned before 20
 ```mermaid
 graph TB
     Operator["NB Operator / ERP"]
-    edmd["edmd :8380\nMSCONS Einspeisemenge\nauto-fetch"]
+    edmd["edmd :8380\n¼h Einspeisung feed-in\n(GET /feed-in) + kWh"]
     einsd["einsd :9180"]
-    eeg_billing["eeg-billing crate\n10 settlement schemes\n§20 Abs.3 Managementprämie\n§23a degression · §36k wind\n§51b biogas Ausschreibung\n§42b GGV Messkonzept\n§52 Abs.6 netting\nSettlementPeriodState · InbetriebnahmeTyp\n341 tests · no I/O"]
-    db[("PostgreSQL\neeg_anlagen · settlement_receipts\nsettlement_receipt_history\nsettlement_state_transitions\nsect53b_reductions · sect54_reductions\nepex_monthly_prices · eeg_verguetungssaetze")]
+    eeg_billing["eeg-billing crate\n10 settlement schemes\n§20 Abs.3 Managementprämie\n§23a degression · §36h Abs.1/2 wind\n§51 Negativpreis · §51a Förderende\n§51b biogas Ausschreibung\n§39n feste Marktprämie\n§52 Abs.6 netting\nSettlementPeriodState · InbetriebnahmeTyp\n328 tests · no I/O"]
+    db[("PostgreSQL\neeg_anlagen · settlement_receipts\nsettlement_receipt_history\nsettlement_state_transitions\nsect53b_reductions · sect54_reductions\nepex_monthly_prices · epex_spot_prices\nwind_guetefaktor_reevaluations · eeg_verguetungssaetze")]
     erp["ERP webhook\nCloudEvents 1.0"]
     agentd["agentd :9580\neeg-agent\n(all de.eeg.* events)"]
 
@@ -42,10 +42,12 @@ graph TB
     Operator -->|"POST /repowering"| einsd
     Operator -->|"POST /zusammenlegen"| einsd
     Operator -->|"POST /switch-veraeusserungsform"| einsd
+    Operator -->|"PUT /api/v1/epex-spot"| einsd
+    Operator -->|"POST /anlagen/{tr}/wind-reevaluation"| einsd
     Operator -->|"POST /settle/{year}/{month}"| einsd
     Operator -->|"POST /settlements/{y}/{m}/correction"| einsd
     einsd --> eeg_billing
-    einsd <-->|"auto-fetch kWh"| edmd
+    einsd <-->|"¼h feed-in × EPEX spot (§51)"| edmd
     einsd -->|"persist receipts\nsettlement state"| db
     einsd -->|"de.eeg.verguetung.berechnet\nde.eeg.marktpraemie.berechnet\nde.eeg.anlage.mastr_registriert\nde.eeg.anlage.settlement_state_changed"| erp
     einsd -->|"de.eeg.anlage.foerderung_auslaufend\nde.eeg.anlage.created"| agentd
@@ -163,7 +165,7 @@ All EEG versions (2017, 2021, 2023) deduct a flat amount from the gross `anzuleg
 | Value | Technology | Legal basis |
 |---|---|---|
 | `SOLAR` / `SOLAR_AUFDACH` | Rooftop PV | §21 + §48 EEG 2023 |
-| `SOLAR_FREFLAECHE` | Ground-mounted PV | §28 EEG 2023 |
+| `SOLAR_FREIFLAECHE` | Ground-mounted PV | §28 EEG 2023 |
 | `SOLAR_AGRIPV` | Agri-PV | §51a EEG 2023 |
 | `SOLAR_MIETERSTROM` | Building community solar | §21 Abs. 3 EEG 2023 |
 | `SOLAR_STECKER` | Balkonkraftwerk <800 W | §9 EEG 2023 |
@@ -377,30 +379,78 @@ graph LR
     end
 ```
 
-The **caller pre-checks** whether the hour threshold is met (e.g. from hourly EPEX data).
-The formula enforces only the kW exemption:
+The reduction is driven by two inputs on the settle request — the feed-in that fell in
+negative-price intervals (`kwh_during_negative_epex`, §51) and the count of those
+quarter-hours (`negative_price_quarter_hours`, §51a):
 
 ```http
 POST /api/v1/anlagen/{tr_id}/settle/2026/7
 Content-Type: application/json
 
-{ "einspeisemenge_kwh": 1000, "kwh_during_negative_epex": 80 }
+{ "einspeisemenge_kwh": 1000, "kwh_during_negative_epex": 80, "negative_price_quarter_hours": 16 }
 ```
 
-Result: `effective_kwh = 920; settlement_eur = 920 × rate / 100`
+Result: `effective_kwh = 920; settlement_eur = 920 × rate / 100`.
+
+**Or omit both and let `einsd` derive them.** Load the EPEX day-ahead spot prices once, and
+every settle (single and the monthly auto-settle) that does **not** carry explicit values
+fetches the plant's ¼h feed-in from edmd (`GET /api/v1/feed-in/{malo_id}`), overlays it against
+the stored prices, and derives them via the version-aware run logic (EEG 2017 ≥6 h, EEG 2021
+≥4 h consecutive, EEG 2023 any interval) in `eeg-billing::negativpreis`:
+
+```http
+PUT /api/v1/epex-spot
+Content-Type: application/json
+
+{ "source": "epex-day-ahead",
+  "prices": [ { "delivery_start": "2026-07-01T12:00:00Z", "resolution_min": 15, "price_ct_kwh": -1.5 }, … ] }
+```
+
+A **§60 Abs. 2 MsbG gate** guards the auto-derivation: when edmd reports the month's feed-in
+coverage below 95 % or any non-billable interval, `einsd` **skips** the automatic reduction and
+logs it (deriving on incomplete data would find too few negative kWh and overpay) — supply
+`kwh_during_negative_epex` manually or backfill substitute values in edmd instead. The engine
+then applies the kW / iMSys exemptions on top of the derived kWh. Explicit request values always
+win. The edmd fetch authenticates with `edmd_api_key`, which must be registered in edmd's
+`[[oidc.service_keys]]` (see below).
 
 Applies to: `FEED_IN_TARIFF`, `TENANT_ELECTRICITY`, `FLEXIBILITY_PREMIUM`.
 Not to: `MARKET_PREMIUM`, `POST_EEG`, `KWK_SURCHARGE`, `EIGENVERBRAUCH`.
 
-### §51a — Verlängerungsanspruch
+### §51a — Verlängerung des Vergütungszeitraums
 
-For each period where §51 reduced Vergütung to zero, the Förderdauer is extended:
-- **Solar PV**: `ceil(lost_qh / 2)` quarter-hours (§51a Abs. 2: factor 0.5)
-- **All others**: `lost_qh` quarter-hours (1:1 factor)
+For the quarter-hours where §51 reduced the AW to null, the Förderdauer is extended
+(§51a Abs. 1 Satz 2 / Abs. 2). `einsd` accrues the **raw** lost quarter-hours per plant
+(`negative_price_qh_gesamt`), and the rounding is applied **once over the 20-year total**
+when settling — never per month — so the extension never over-counts:
+- **Solar PV**: the `ceil(qh / 2)` Volllastviertelstunden contingent, drawn down month by
+  month at the statutory rate (Abs. 2 monthly table).
+- **All others**: rounded up to whole calendar days (96 QH/day, Abs. 1 Satz 2).
 
-Pass `negative_price_quarter_hours` in the settle request. `einsd` accumulates the result
-in `verlaengerungsanspruch_qh_gesamt` per plant. When non-zero, the plant's
-`foerderendedatum` is extended accordingly.
+The plant's stored `foerderendedatum` stays the statutory one; `effektives_foerderende`
+derives the extended end at settlement time, so a plant keeps being paid through the
+extension.
+
+### §36h Abs. 2 — Wind Standortgüte re-evaluation
+
+An onshore wind plant's anzulegender Wert is location-corrected by a Korrekturfaktor derived
+from its Gütefaktor (§36h Abs. 1, Anlage 2). Under **§36h Abs. 2**, that Gütefaktor is
+**re-evaluated with effect from the start of the 6th, 11th and 16th operating year** against
+the measured Standortertrag of the preceding five years. Record each one:
+
+```http
+POST /api/v1/anlagen/{tr_id}/wind-reevaluation
+Content-Type: application/json
+
+{ "wirksam_ab_jahr": 6, "guetefaktor": 0.95 }
+```
+
+`einsd` stores the re-evaluations in `wind_guetefaktor_reevaluations` and, at settle time,
+`build_settle_input` selects the Korrekturfaktor whose effective year has been reached —
+so a plant automatically steps to the re-evaluated rate from year 6/11/16. The response flags
+`reconciliation_required` when the recomputed Gütefaktor deviates **more than 2 percentage
+points** (§36h Abs. 2 Satz 2): settle the reviewed five-year period's over-/under-payment as a
+`§147 AO` correction (repayment interest EURIBOR-12M + 1 pp, Satz 3).
 
 ### §51b — Biogas Ausschreibung at slightly-positive prices
 
@@ -488,8 +538,15 @@ ist_freiwillig, anzulegender_wert_ct }`. Sorted by `beginn_datum` ascending.
 
 ## Multi-Meter Messkonzept
 
-German EEG plants can have multiple measurement points. The `metering_mode` column and
-optional `meter_config` JSONB describe the topology:
+German EEG plants can have multiple measurement points. `einsd` stores only the metering
+**classification** on the plant (`metering_mode` = `SLP` / `RLM` / `IMSYS`); the metering
+**topology and computation** — the Eigenverbrauch/Überschuss split and the §42b GGV tenant
+allocation — belong to the metering domain, owned by `edmd` and the external
+[`metering`](https://github.com/hupe1980/metering) crate (`AggregationRule` with
+`PvSelfConsumption`, `GgvConstantAllocation`, `GgvProportionalAllocation`;
+`compute_virtual_meter`; `MeasurementPoint`). `einsd` settles on the **already-aggregated
+Einspeisemenge** edmd returns (`arbeitsmenge_kwh`, or the ¼h `/feed-in` series for §51), so
+the settlement engine never re-derives the metering split:
 
 ```mermaid
 graph TB
@@ -509,16 +566,9 @@ graph TB
     end
 ```
 
-| `MesslokationTyp` | OBIS | Used for |
-|---|---|---|
-| `Einspeisemessung` | `1-0:2.8.0` | Primary billing (Überschuss, bidirectional) |
-| `Erzeugungsmessung` | `1-0:2.8.0` at inverter | Volleinspeisung, §14a |
-| `Bezugsmessung` | `1-0:1.8.0` | Eigenverbrauch calculation, §14a |
-| `TeilnehmerMessung` | `1-0:1.8.0` | §42b GGV tenant allocation |
-
-For §42b Gemeinschaftliche Gebäudeversorgung: when total tenant consumption ≤ generation,
-each tenant receives their actual consumption; surplus goes to grid. When consumption >
-generation, allocation is proportional (`eeg-billing::metering::compute_tenant_allocation`).
+For §42b Gemeinschaftliche Gebäudeversorgung, the tenant-vs-grid split (constant
+`CCI+ZG6` or proportional `Z74` allocation) is computed in edmd via
+`metering::AggregationRule`; einsd receives the resulting feed-in quantity and settles it.
 
 ---
 
@@ -562,9 +612,9 @@ Old plants use the three-tier `SanktionAlt` model (Vergütung reduction, not pen
 
 ---
 
-## §19 EEG 2023 — Einspeisemanagement Compensation
+## §13a EnWG — Einspeisemanagement Compensation
 
-When the NB curtails a plant's output (Einspeisemanagement), §19 Abs. 2 EEG 2023 requires compensation at the AW rate. The §51 Negativpreisregel does NOT apply to these kWh.
+When the NB curtails a plant's output (Einspeisemanagement / Redispatch 2.0), §13a EnWG requires compensation for the entgangene Einnahmen — modelled here at the AW rate. The §51 Negativpreisregel does not touch these kWh (they were never fed in).
 
 ```http
 POST /api/v1/anlagen/{tr_id}/settle/2024/6
@@ -573,12 +623,12 @@ Content-Type: application/json
 { "einspeisemenge_kwh": 850, "einspeisemanagement_kwh": 150 }
 ```
 
-`einsd` adds a separate §19 EEG position to the settlement:
+`einsd` adds a separate §13a EnWG position to the settlement:
 - Regular kWh: 850 × rate / 100
 - EInsMan compensation: 150 × AW / 100 (separate billing position)
 - Total: as if 1,000 kWh were fed in
 
-Source: §19 Abs. 2 EEG 2023; §51 Abs. 1 EEG 2023 (explicitly excluded).
+Source: §13a EnWG (Redispatch 2.0, historically §15 EEG Härtefallregelung); §51 Abs. 1 EEG 2023 (curtailed kWh explicitly excluded).
 
 ---
 
@@ -637,7 +687,9 @@ VALUES ('DE_TR_...', 'your-tenant', 0.50, 'BNetzA-54-2026-WIND-001', '2026-01-01
 
 ## §51a EEG 2023 — Verlängerungsanspruch (Förderzeitraum extension)
 
-Pass `negative_price_quarter_hours` when settling to accrue extension entitlement:
+Every §51 reduction accrues an extension entitlement. Pass
+`negative_price_quarter_hours` explicitly, or let the auto-derivation (see
+[§51 Negativpreisregel](#51-negativpreisregel)) supply it from the ¼h feed-in:
 
 ```http
 POST /api/v1/anlagen/{tr_id}/settle/2024/6
@@ -650,10 +702,15 @@ Content-Type: application/json
 }
 ```
 
-`einsd` accumulates `verlaengerungsanspruch_qh` in each receipt and sums it into `verlaengerungsanspruch_qh_gesamt` on the plant record. When non-zero, the plant's `foerderendedatum` must be extended accordingly.
+`einsd` accrues the **raw** lost quarter-hours per plant in
+`negative_price_qh_gesamt`. The rounding is applied **once over the 20-year total** at
+settle time (never per month, which would over-count), and `effektives_foerderende`
+derives the extended end — the stored statutory `foerderendedatum` is left untouched:
 
-- **Solar PV**: `ceil(lost_qh / 2)` quarter-hours per §51a Abs. 2 EEG 2023
-- **All others**: `lost_qh` quarter-hours (1:1 factor)
+- **Solar PV**: the `ceil(qh / 2)` Volllastviertelstunden contingent, drawn down month
+  by month at the statutory monthly-table rate (§51a Abs. 2 EEG 2023).
+- **All others**: the lost quarter-hours rounded **up to whole calendar days**
+  (96 QH/day, §51a Abs. 1 Satz 2).
 
 ---
 
@@ -869,12 +926,14 @@ See [BNetzA Einspeisevergütungen](https://www.bundesnetzagentur.de/DE/Fachtheme
 | `POST` | `/api/v1/anlagen/{tr_id}/repowering` | **Repowering** §22 EEG |
 | `POST` | `/api/v1/anlagen/{tr_id}/zusammenlegen` | **Zusammenlegung** §24 EEG |
 | `POST` | `/api/v1/anlagen/{tr_id}/switch-veraeusserungsform` | **§21b** monthly Veräußerungsform switch |
+| `POST` | `/api/v1/anlagen/{tr_id}/wind-reevaluation` | **§36h Abs. 2** Standortgüte re-evaluation (year 6/11/16) |
 | `GET` | `/api/v1/anlagen/foerderung-auslaufend` | Expiring within N days |
-| `POST` | `/api/v1/anlagen/{tr_id}/settle/{year}/{month}` | Monthly settlement (§19 EInsMan + §51a QH supported) |
+| `POST` | `/api/v1/anlagen/{tr_id}/settle/{year}/{month}` | Monthly settlement (§13a EnWG EInsMan + §51a QH supported) |
 | `POST` | `/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction` | **§ 147 AO / GoBD** correction receipt (original preserved in history) |
 | `POST` | `/api/v1/settle/{year}/{month}` | Batch settle all active plants |
 | `GET` | `/api/v1/anlagen/{tr_id}/settlements` | Settlement history |
 | `PUT/GET` | `/api/v1/epex-monthly/{year}/{month}` | EPEX monthly average |
+| `PUT` | `/api/v1/epex-spot` | Bulk-load EPEX day-ahead spot prices (§51 auto-derivation) |
 | `POST` | `/api/v1/verguetungssatz-lookup` | Tariff rate lookup |
 | `GET/POST` | `/mcp` | MCP server (Streamable HTTP 2025-11-25) |
 | `GET` | `/health` | Liveness |
@@ -937,13 +996,14 @@ One row per Technische Ressource. PK: `(tr_id, tenant)`.
 | `status` | TEXT | `angemeldet`, `aktiv`, `foerderung_beendet`, `repowered`, `abgemeldet` |
 | `inbetriebnahme_typ` | TEXT? | `ERSTINBETRIEBNAHME`, `REPOWERING`, `ERWEITERUNG`, … |
 | `solar_bauform` | TEXT? | `GEBAEUDE`, `FREIFLAECHE`, `AGRI_PV`, `STECKER_PV`, … |
-| `wind_guetegrad` | NUMERIC? | §36k Gütegrad (e.g. `0.85` = 85% of reference yield) |
-| `wind_korrekturfaktor` | NUMERIC? | §36k certified Korrekturfaktor |
+| `wind_guetegrad` | NUMERIC? | §36h Gütegrad (e.g. `0.85` = 85% of reference yield) |
+| `wind_korrekturfaktor` | NUMERIC? | §36h initial certified Korrekturfaktor |
+| `wind_guetefaktor_reevaluations` | JSONB | §36h Abs. 2 re-evaluations (year 6/11/16) — the effective Korrekturfaktor per billing period is derived from these |
 | `fernsteuerbarkeit_datum` | DATE? | §9 EEG Fernsteuerbarkeit installation date |
 | `direktvermarktung_pflicht` | BOOL | `true` for plants > 100 kW (auto-set on creation) |
 | `direktvermarktung_perioden` | JSONB? | History of Direktvermarktung engagements |
 | `capacity_blocks` | JSONB? | §24 Erweiterung blocks |
-| `meter_config` | JSONB? | `MeterConfiguration` (mode, meter points, OBIS codes) |
+| `metering_mode` | TEXT? | `SLP` / `RLM` / `IMSYS` metering classification |
 | `metering_mode` | TEXT? | `SLP`, `RLM`, `IMSYS` |
 | `sect52_netting_enabled` | BOOL | §52 Abs. 6 netting (default true) |
 | `settlement_state` | TEXT | `active`, `reduced`, `suspended`, `interrupted`, `post_eeg`, `ended` |
@@ -1079,14 +1139,14 @@ At `/mcp` (Streamable HTTP 2025-11-25). Auth: `Authorization: Bearer <mcp_api_ke
 `register-eeg-plant` · `settle-monthly` · `check-foerderung-expiry` ·
 `ausschreibung-workflow` · `post-eeg-transition` · `anlagenerweiterung`
 
-The `eeg-agent` specialist in `agentd` handles `de.eeg.*` CloudEvents **and** `de.messwert.reading.direct.stored` (for iMSys rollout detection — lifts the <100 kW §51 Negativpreisregel exemption on first iMSys push).
+The `eeg-agent` specialist in `agentd` handles `de.eeg.*` CloudEvents **and** `de.messwert.reading.direct.stored` (for iMSys rollout detection — lifts the <100 kW §51 Negativpreisregel exemption on first iMSys push). Two more agentd specialists cover einsd: `eeg-compliance-agent` runs the §52/§44b/§20 compliance checks (get_compliance_status, check_sect44b_quota, check_direktvermarktung_compliance); `einsd-batch-agent` drives the monthly settlement batch + §52 Pflichtzahlungen sweep (list_unsettled_plants + POST /settlements/batch, triggered on de.eeg.anlage.foerderung_auslaufend or manual/cron).
 See [agentd operator guide](./agentd.md) for the full trigger→action mapping.
 
 ---
 
 ## Testing
 
-**341 tests** (eeg-billing) across four suites:
+**328 tests** (eeg-billing) across four suites:
 
 ```bash
 cargo test -p eeg-billing -p einsd --all-features
@@ -1094,10 +1154,10 @@ cargo test -p eeg-billing -p einsd --all-features
 
 | Suite | Count | Coverage |
 |---|---|---|
-| `eeg-billing` lib tests | 91 | Settlement formulas, §52 cap, positions-sum invariant |
+| `eeg-billing` lib tests | 86 | Settlement formulas, §52 cap, positions-sum invariant |
 | `prop_tests` (proptest) | 12 | INV-1–INV-10: FeedInTariff exactness, MarketPremium non-negativity, §51 bounds, API contract, PostEeg floor |
-| `regulatory_showcase` | 173 | §51/§51a/§51b, §52, §53b, §100 rules, all schemes, Bestandsschutz, `InbetriebnahmeTyp` lifecycle, §40–41 Wasserkraft, §37a Stecker-PV |
-| `eeg-billing` doctests | 65 | `EegGesetz::from_db_year`, rate helpers, foerderendedatum |
+| `regulatory_showcase` | 169 | §51/§51a/§51b, §52, §53b, §100 rules, all schemes, Bestandsschutz, `InbetriebnahmeTyp` lifecycle, §40–41 Wasserkraft, §37a Stecker-PV |
+| `eeg-billing` doctests | 61 | `EegGesetz::from_db_year`, rate helpers, foerderendedatum |
 
 ```bash
 cargo test -p eeg-billing -p einsd --all-features

@@ -57,12 +57,12 @@ pub enum SettlementScheme {
         verguetungssatz_ct: Decimal,
     },
 
-    /// §21 Abs. 1 Nr. 2 EEG — **Ausfallvergütung** (temporary feed-in tariff).
+    /// §21 Abs. 1 Satz 1 Nr. 3 EEG — **Ausfallvergütung** (temporary feed-in tariff).
     ///
-    /// Same formula as `FeedInTariff` but at the statutory reduced rate (typically
-    /// 80 % of the normal Vergütungssatz). Caller must supply the already-reduced rate.
+    /// Same formula as `FeedInTariff` but at the statutory reduced rate: −20 %
+    /// per §53 Abs. 3 EEG 2023. Caller must supply the already-reduced rate.
     TemporaryFeedInTariff {
-        /// Reduced rate ct/kWh per §21 Abs. 1 Nr. 2 EEG 2023.
+        /// Reduced rate ct/kWh (§21 Abs. 1 Satz 1 Nr. 3, reduced per §53 Abs. 3 EEG 2023).
         verguetungssatz_ct: Decimal,
     },
 
@@ -84,12 +84,12 @@ pub enum SettlementScheme {
         /// (0.4 ct/kWh for ≤100 MW, 0.2 ct/kWh for >100 MW).
         managementpraemie_ct: Option<Decimal>,
 
-        /// §36k EEG — certified wind-onshore Korrekturfaktor.
+        /// §36h EEG — certified wind-onshore Korrekturfaktor.
         /// Multiplied into `direktverm_aw_ct` before computing the spread.
         /// Takes precedence over `wind_standort` when both are set.
         wind_korrekturfaktor: Option<Decimal>,
 
-        /// §36k EEG — wind site quality model for auto-deriving `korrekturfaktor`.
+        /// §36h EEG — wind site quality model for auto-deriving `korrekturfaktor`.
         /// Ignored when `wind_korrekturfaktor` is explicitly set.
         wind_standort: Option<crate::wind::WindStandort>,
     },
@@ -303,6 +303,17 @@ impl TariffSource {
     #[must_use]
     pub fn is_biogas_sect51b(&self) -> bool {
         matches!(self, Self::Auction(m) if m.is_biogas_sect51b)
+    }
+
+    /// Returns `true` for §39n Innovationsausschreibung awards.
+    ///
+    /// These plants receive a **fixed** market premium (feste Marktprämie =
+    /// the Zuschlagswert per kWh, §3 InnAusV) rather than the *gleitende*
+    /// Marktprämie `max(0, AW − Marktwert)` — so the payout does not shrink as
+    /// the Monatsmarktwert rises.
+    #[must_use]
+    pub fn is_innovation_auction(&self) -> bool {
+        matches!(self, Self::Auction(m) if m.innovation_auction)
     }
 }
 

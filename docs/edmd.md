@@ -36,7 +36,7 @@ Key responsibilities:
 - Accumulate **Mehr-/Mindermengensaldo** imbalance records per MaLo.
 - **meterstore hot/cold tiering**: `meter_reads` (and the non-authoritative `esa_typ2_reads` stream) are stored through the [`meterstore`](https://github.com/hupe1980/meterstore) crate — a recent window in PostgreSQL and the settled history in Apache Iceberg V2 on S3/GCS/Azure, split by an explicit tiering watermark. Reads are version-resolved and tier-split; `store.as_of(...)` reproduces a past settlement. edmd's own business tables (receipts, corrections, confirmations, billing-period cache, reading orders, SMGW) stay in edmd's PostgreSQL pool.
 
-The **domain calculation logic** is provided by the [`metering`](https://github.com/hupe1980/mako/tree/main/crates/metering) library crate (zero I/O, no async):
+The **domain calculation logic** is provided by the external [`metering`](https://github.com/hupe1980/metering) library crate (zero I/O, no async):
 
 | Function / Type | §-basis | Used in |
 |---|---|---|
@@ -133,6 +133,27 @@ rather than one they reached by leaving a section out.
 # Development only. Every request is admitted as dev-admin with all roles.
 allow_insecure_no_auth = true
 ```
+
+### Internal services authenticate with a service key, not a JWT
+
+Sibling services — `einsd` (fetching ¼h feed-in for §51), `billingd`, `vertragd`,
+`portald` — call edmd machine-to-machine, where minting a per-request OIDC JWT would
+be ceremony without a user behind it. edmd accepts a **service key**: a caller sends a
+static opaque (non-JWT) `Authorization: Bearer <key>`, and edmd matches it — in constant
+time — against a registered key, admitting the request as a synthetic service principal
+scoped to the deployment tenant with the roles the key declares.
+
+```toml
+[[oidc.service_keys]]
+name  = "einsd"
+key   = "env:EDMD_EINSD_SERVICE_KEY"
+roles = ["nb"]          # what this caller may do (same Cedar roles as a JWT)
+# sparte = "strom"      # optional Sparte scope
+```
+
+A JWT Bearer still takes the OIDC path unchanged — the branch is chosen by whether the
+token *looks like* a JWT — and with no `[[oidc.service_keys]]` entries edmd behaves
+exactly as before. The caller stores the same value as its `edmd_api_key`.
 
 ### The MCP write tools carry the same role gate as REST
 
@@ -338,6 +359,14 @@ The "current reading" (`latest_read`) resolves through
 `SeriesQuery::latest_resolved` — `ORDER BY from DESC LIMIT 1` at the storage layer
 — instead of loading the whole history and taking the maximum in memory.
 
+`GET /api/v1/feed-in/{malo_id}?from=&to=` serves the same billable set to einsd's
+§51 Negativpreisregel: it returns the ¼h **Einspeisung** intervals (export-OBIS,
+`ObisCode::is_einspeisung`), each carrying its own `billable` flag, alongside a
+`coverage_pct` and `billable_pct` for the window. einsd overlays those intervals on
+its EPEX spot store to find the negative-price quarter-hours — and its §60 Abs. 2 gate
+reads exactly these two percentages, skipping the automatic reduction when the month's
+data is incomplete rather than under-reducing on gaps.
+
 An unrecognised `quality` flag is refused at the boundary with `422`. The column
 is CHECK-constrained, so binding an unrecognised value raw fails the insert;
 coercing it to `UNKNOWN` instead would silently strip the row from every billing
@@ -521,6 +550,7 @@ duplicate order. Two partial unique indexes back it:
 │  GET  /api/v1/billing-periods               ← collection (mabis-syncd)    │
 │  GET  /api/v1/imbalance/{malo_id}/{y}/{m}   ← Mehr-/Mindermengen          │
 │  GET  /api/v1/lastgang/{malo_id}            ← BO4E Lastgang               │
+│  GET  /api/v1/feed-in/{malo_id}             ← ¼h Einspeisung (§51 einsd)  │
 │  GET  /api/v1/zeitreihe/{malo_id}           ← BO4E Zeitreihe              │
 │  GET  /api/v1/lastgang/{malo_id}/resampled  ← hourly/daily/monthly        │
 │  GET  /api/v1/summenzeitreihe/{malo_id}     ← MaBiS monthly aggregate     │

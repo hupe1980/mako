@@ -35,7 +35,7 @@ CREATE TABLE eeg_anlagen (
         -- Solar PV
         'SOLAR',            -- generic / backward compat
         'SOLAR_AUFDACH',    -- roof-mounted (§48 Abs. 1 EEG 2023)
-        'SOLAR_FREFLAECHE', -- ground-mounted (tendering >1 MWp)
+        'SOLAR_FREIFLAECHE', -- ground-mounted (tendering >1 MWp)
         'SOLAR_AGRIPV',     -- §51a Agri-PV (+0.5 ct/kWh premium)
         'SOLAR_MIETERSTROM',-- §21 Abs. 3 building community solar
         'SOLAR_STECKER',    -- Balkonkraftwerk <800 W (simplified)
@@ -46,7 +46,7 @@ CREATE TABLE eeg_anlagen (
         'BIOMASSE',         -- generic solid biomass
         'BIOMASSE_HOLZ',    -- wood biomass (§42a EEG restricted)
         'BIOGAS',           -- fermentation biogas
-        'BIOMETHANE',       -- upgraded biogas (grid injection)
+        'BIOMETHAN',        -- upgraded biogas (grid injection)
         'KLAEGAS',          -- sewage gas (§41 EEG)
         'GRUBENGAS',        -- mine gas (§41 EEG)
         'DEPONIEGAS',       -- landfill gas (§41 EEG)
@@ -55,8 +55,7 @@ CREATE TABLE eeg_anlagen (
         'GEOTHERMIE',       -- geothermal (§45 EEG)
         'GEZEITEN',         -- tidal / wave
         -- CHP
-        'KWKG',             -- combined heat & power (KWKG)
-        'SONSTIGE'
+        'KWKG'              -- combined heat & power (KWKG)
     )),
 
     -- Feed-in tariff fixed at inbetriebnahme for the full Förderungsdauer (§20 EEG)
@@ -134,10 +133,14 @@ CREATE TABLE eeg_anlagen (
     -- ── Plant attributes (migration 0003) ────────────────────────────────────
     -- 'Neubau' | 'Repowering' | 'Modernisierung'
     inbetriebnahme_typ         TEXT,
-    -- §36k EEG 2023: Wind Standortgütegrad for Korrekturfaktor computation
+    -- §36h EEG 2023: Wind Standortgütegrad for Korrekturfaktor computation
     wind_guetegrad             NUMERIC(5, 3),
     wind_korrekturfaktor       NUMERIC(6, 5),
     wind_standortklasse        TEXT,
+    -- §36h Abs. 2 EEG 2023: Standortgüte re-evaluations (year 6/11/16).
+    -- JSONB Vec<{wirksam_ab_jahr: 6|11|16, guetefaktor}> — the effective
+    -- Korrekturfaktor per billing period is derived (korrekturfaktor_fuer_periode).
+    wind_guetefaktor_reevaluations JSONB NOT NULL DEFAULT '[]',
     -- §48 EEG: Bauform for solar PV tariff lookup (Freifläche | Aufdach | BIPV)
     solar_bauform              TEXT,
     -- §9 EEG / §29 MsbG: date Fernsteuerbarkeit (remote control) was installed
@@ -167,8 +170,11 @@ CREATE TABLE eeg_anlagen (
     fernsteuerbarkeit_violation_start DATE,
     -- §21b guard: date of last Veräußerungsform switch (monthly lock)
     last_veraeusserungsform_switch DATE,
-    -- §51a: cumulative quarter-hours for Förderzeitraum extension
-    verlaengerungsanspruch_qh_gesamt BIGINT NOT NULL DEFAULT 0,
+    -- §51a: cumulative RAW negative-price quarter-hours (§51 lost intervals).
+    -- The Förderende extension rounds this to whole days / the solar
+    -- Volllastviertelstunden contingent ONCE over the 20-year total, so the
+    -- effective Förderende is derived (via effektives_foerderende), not stored.
+    negative_price_qh_gesamt BIGINT NOT NULL DEFAULT 0,
 
     -- ── §53b regional reduction ───────────────────────────────────────────────
     grid_area                  TEXT,
@@ -418,6 +424,27 @@ COMMENT ON TABLE epex_monthly_prices IS
     'Generic monthly EPEX Spot reference. '
     'Used when no technology-specific Jahresmarktwert is available. '
     'Import via PUT /api/v1/epex-monthly/{year}/{month}.';
+
+-- ── EPEX Spot per-interval prices (§51 Negativpreisregel) ────────────────────
+-- Quarter-hour (or hourly) day-ahead spot prices. einsd overlays a plant's ¼h
+-- feed-in Lastgang (from edmd) against these to derive kwh_during_negative_epex
+-- (§51 reduction) and negative_price_quarter_hours (§51a extension) — the
+-- version-aware consecutive-hour run logic lives in eeg-billing::negativpreis.
+CREATE TABLE epex_spot_prices (
+    delivery_start   TIMESTAMPTZ  NOT NULL,      -- interval start, UTC
+    resolution_min   SMALLINT     NOT NULL DEFAULT 15 CHECK (resolution_min IN (15, 60)),
+    price_ct_kwh     NUMERIC(9, 4) NOT NULL,     -- may be negative
+    source           TEXT         NOT NULL DEFAULT 'manual',
+    imported_at      TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    PRIMARY KEY (delivery_start)
+);
+
+-- Range scans over a billing month are the only query pattern.
+CREATE INDEX esp_delivery ON epex_spot_prices (delivery_start);
+
+COMMENT ON TABLE epex_spot_prices IS
+    'EPEX day-ahead spot prices per ¼h/h interval for §51 Negativpreisregel. '
+    'Import via PUT /api/v1/epex-spot (bulk). Negative price → AW reduced to null.';
 
 -- ── §20 Abs. 2 + Anlage 1 EEG 2023: technology-specific Jahresmarktwert ──────
 

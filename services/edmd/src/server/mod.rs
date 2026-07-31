@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 // Quality scoring and Gas conversion are provided by the `metering` crate.
 // The inline `compute_quality` has been replaced with a call to `metering::score_intervals`.
-// Tests for the Hampel filter logic live in crates/metering/src/quality.rs.
+// Tests for the Hampel filter logic live in the external `metering` crate.
 
 use axum::{
     Extension, Json, Router,
@@ -95,6 +95,7 @@ pub fn router(state: HandlerState) -> Router {
         // mabis-syncd calls: GET /api/v1/billing-periods?from=YYYY-MM-DD&to=YYYY-MM-DD&tenant=...
         .route("/api/v1/billing-periods", get(list_billing_periods))
         .route("/api/v1/lastgang/{malo_id}", get(get_lastgang))
+        .route("/api/v1/feed-in/{malo_id}", get(lastgang::get_feed_in))
         .route("/api/v1/zeitreihe/{malo_id}", get(get_zeitreihe))
         // ESA "Werte nach Typ 2" — a deliberately separate read path from the
         // billing endpoints above. It reads `esa_typ2_reads` only, never

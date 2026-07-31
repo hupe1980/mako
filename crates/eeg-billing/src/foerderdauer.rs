@@ -96,12 +96,14 @@ pub fn foerderendedatum_eeg_ausschreibung(inbetriebnahme: Date) -> Result<Date, 
     inbetriebnahme.replace_year(inbetriebnahme.year() + 20)
 }
 
-/// Compute the `foerderendedatum` after a §22 EEG 2023 repowering event.
+/// Compute the `foerderendedatum` after a repowering event.
 ///
 /// # Legal basis
-/// §22 EEG 2023: replacing components with higher-capacity ones resets the
-/// 20-year Förderdauer clock.  The new `foerderendedatum` =
-/// `repowering_datum + 20 years` (statutory: extends to Dec 31).
+/// A repowered generator is a fresh **Inbetriebnahme** (§3 Nr. 30 EEG 2023 — the
+/// first commissioning of the *generator* after its establishment or renewal), so
+/// its 20-year Förderdauer under §25 restarts. The new `foerderendedatum` =
+/// `repowering_datum + 20 years` (statutory: extends to Dec 31). (§22 EEG 2023
+/// governs the Ausschreibungs-Anspruchsvoraussetzungen, not the Förderdauer reset.)
 ///
 /// **Important**: This function is only correct for **Vollrepowering**
 /// (complete replacement of the turbine unit, `RepoweringScope::Full` or
@@ -358,16 +360,25 @@ pub fn negativpreis_rule_applies(consecutive_negative_hours: u32) -> bool {
 /// assert_eq!(verguetungszeitraum_verlaengerung_qh(40, true), 20);
 /// // 41 quarter-hours; solar → ceiling(41×0.5) = 21
 /// assert_eq!(verguetungszeitraum_verlaengerung_qh(41, true), 21);
-/// // Wind or non-solar: 1:1 extension
-/// assert_eq!(verguetungszeitraum_verlaengerung_qh(40, false), 40);
+/// // Wind/biomass/other: §51a Abs. 1 Satz 2 rounds the lost QH UP to the next
+/// // full calendar day (96 QH) — 40 QH → 96 QH (one day), 100 QH → 192 QH (two).
+/// assert_eq!(verguetungszeitraum_verlaengerung_qh(40, false), 96);
+/// assert_eq!(verguetungszeitraum_verlaengerung_qh(100, false), 192);
+/// assert_eq!(verguetungszeitraum_verlaengerung_qh(0, false), 0);
 /// ```
 pub fn verguetungszeitraum_verlaengerung_qh(lost_quarter_hours: u64, is_solar: bool) -> u64 {
     if is_solar {
         // §51a Abs. 2 EEG 2023: multiply by 0.5, round up to next full quarter-hour
+        // (Volllastviertelstunden). The month-by-month draw-down is applied by the
+        // caller via `volllastviertelstunden_im_monat` / `solar_verlaengerung_ende`.
         lost_quarter_hours.div_ceil(2)
     } else {
-        // §51a Abs. 1 EEG 2023: 1:1 extension
-        lost_quarter_hours
+        // §51a Abs. 1 Satz 2 EEG 2023: "Die nach Satz 1 ermittelte Anzahl an
+        // Viertelstunden wird aufgerundet auf den nächsten vollen Kalendertag."
+        // A calendar day is 96 quarter-hours, so the extension is a whole number
+        // of days — returning the raw QH under-extended wind/biomass Förderenden.
+        const QH_PER_DAY: u64 = 96;
+        lost_quarter_hours.div_ceil(QH_PER_DAY) * QH_PER_DAY
     }
 }
 
@@ -465,6 +476,44 @@ fn letzter_tag_des_monats(jahr: i32, monat: time::Month) -> Result<Date, Compone
     Date::from_calendar_date(jahr, monat, time::util::days_in_month(monat, jahr))
 }
 
+/// §51a EEG 2023 — the plant's **effective** Förderende after the accrued
+/// negative-price extension is applied.
+///
+/// `negative_qh_gesamt` is the TOTAL raw quarter-hours in which the anzulegender
+/// Wert was reduced to null under §51 across the commissioning year and the
+/// following 19 calendar years (§51a Abs. 1 Satz 1) — summed over every monthly
+/// settlement. Rounding is applied **once over the total**, so accruing raw QH
+/// (not the per-month rounded extension) is essential: `ceil(40/96)+ceil(40/96)`
+/// would extend by two days where the single 80-QH total extends by one.
+///
+/// - **Solar** (Abs. 2): the contingent `ceil(qh/2)` Volllastviertelstunden is
+///   drawn down month by month via [`solar_verlaengerung_ende`].
+/// - **Others** (Abs. 1 Satz 2): the total rounds up to whole calendar days
+///   (96 QH per day) added to the original Förderende.
+///
+/// Returns `original_ende` unchanged when nothing accrued.
+///
+/// # Errors
+/// [`ComponentRange`] if the extended date leaves the representable range.
+pub fn effektives_foerderende(
+    original_ende: Date,
+    negative_qh_gesamt: u64,
+    is_solar: bool,
+) -> Result<Date, ComponentRange> {
+    if negative_qh_gesamt == 0 {
+        return Ok(original_ende);
+    }
+    if is_solar {
+        // ×0.5 → Volllastviertelstunden contingent, drawn down per the monthly table.
+        let kontingent = verguetungszeitraum_verlaengerung_qh(negative_qh_gesamt, true);
+        solar_verlaengerung_ende(original_ende, kontingent)
+    } else {
+        // Abs. 1 Satz 2: whole calendar days (96 QH/day), rounded up once.
+        let full_days = i32::try_from(negative_qh_gesamt.div_ceil(96)).unwrap_or(i32::MAX);
+        Date::from_julian_day(original_ende.to_julian_day() + full_days)
+    }
+}
+
 /// §24 Abs. 1 Nr. 4 EEG 2023 — Check whether two plants fall within the
 /// 12-consecutive-calendar-months commissioning window for Zusammenlegung.
 ///
@@ -559,7 +608,7 @@ pub fn zusammenlegung_within_12_months(ibn_a: Date, ibn_b: Date) -> bool {
 /// | Rule | Violation types | Rate |
 /// |---|---|---|
 /// | Abs. 3 Nr. 1: retroactive on fulfillment | Nr. 1 (Fernsteuerbarkeit), Nr. 3 (iMSys), Nr. 4 (Direktverm.), Nr. 11 (MaStR) | €10 → **€2** retroactively |
-/// | Abs. 3 Nr. 2: always €2 | Nr. 9a (§37a/§48 post-commissioning), Nr. 10 (Volleinspeisung) | **€2** always |
+/// | Abs. 3 Nr. 2: always €2 | Nr. 9a (§37 Abs. 1a/§48 post-commissioning), Nr. 10 (Volleinspeisung) | **€2** always |
 /// | All other types | Nr. 2, 5, 6, 7, 8, 9, 12 | **€10** (not reducible) |
 ///
 /// ## §52 Abs. 3 Satz 2 — Defect grace (from 01.01.2024)
@@ -622,7 +671,7 @@ pub fn calculate_pflichtzahlung(violation: &crate::model::Pflichtverstoss) -> De
     use rust_decimal::dec;
 
     // §52 Abs. 3 Nr. 2 — these types are ALWAYS €2/kW/month, not €10
-    // (§37a Abs. 1a / §48 Abs. 6 post-commissioning; Volleinspeisung not maintained)
+    // (§37 Abs. 1a / §48 Abs. 6 post-commissioning; Volleinspeisung not maintained)
     let always_two_eur = matches!(
         violation.typ,
         SanktionsTyp::InbetriebnahmeVorgabeVerletzt | SanktionsTyp::VolleinspeisungspflichtVerletzt
@@ -669,13 +718,13 @@ pub fn calculate_pflichtzahlung(violation: &crate::model::Pflichtverstoss) -> De
     rate * violation.leistung_kw * Decimal::from(effective_months)
 }
 
-/// §36k EEG 2023 — Corrected Anzulegender Wert for wind onshore plants.
+/// §36h EEG 2023 — Corrected Anzulegender Wert for wind onshore plants.
 ///
 /// Multiplies the statutory base AW by the certified Korrekturfaktor to obtain
 /// the effective AW for the current settlement period.
 ///
 /// ## Legal basis
-/// §36k EEG 2023: the AW for wind onshore is adjusted by a location-specific
+/// §36h EEG 2023: the AW for wind onshore is adjusted by a location-specific
 /// Korrekturfaktor that reflects the ratio of local to reference yield.
 /// Factors are certified by a BNetzA-accredited Gutachter.
 ///
@@ -697,7 +746,7 @@ pub fn calculate_pflichtzahlung(violation: &crate::model::Pflichtverstoss) -> De
 /// to pre-compute the corrected AW for the `direktverm_aw_ct` column.
 ///
 /// ## Pre-2017 Bestandsschutz
-/// §36k does not apply to EEG ≤2012 plants (§100 Abs. 1 EEG 2023). Do not
+/// §36h does not apply to EEG ≤2012 plants (§100 Abs. 1 EEG 2023). Do not
 /// supply a Korrekturfaktor for these plants.
 ///
 /// # Example
@@ -858,6 +907,47 @@ pub fn compute_billing_days_fraction(
     }
 
     None
+}
+
+#[cfg(test)]
+mod effektives_foerderende_tests {
+    use super::*;
+    use time::macros::date;
+
+    #[test]
+    fn zero_qh_leaves_foerderende_unchanged() {
+        let ende = date!(2043 - 12 - 31);
+        assert_eq!(effektives_foerderende(ende, 0, false).unwrap(), ende);
+        assert_eq!(effektives_foerderende(ende, 0, true).unwrap(), ende);
+    }
+
+    #[test]
+    fn non_solar_rounds_total_to_full_days_once() {
+        let ende = date!(2043 - 12 - 31);
+        // 96 QH = exactly 1 day.
+        assert_eq!(
+            effektives_foerderende(ende, 96, false).unwrap(),
+            date!(2044 - 01 - 01)
+        );
+        // 100 QH (1.04 d) rounds up to 2 days — proving the round-once semantics:
+        // two 50-QH months accrue 100 raw QH → 2 days, not 2×1 day from per-month rounding.
+        assert_eq!(
+            effektives_foerderende(ende, 100, false).unwrap(),
+            date!(2044 - 01 - 02)
+        );
+    }
+
+    #[test]
+    fn solar_draws_down_the_volllastviertelstunden_contingent() {
+        // 100 raw QH → ceil(100/2)=50 Volllastviertelstunden contingent. Ending in
+        // December (73 VLVh/month) it spills across months, unlike the day model.
+        let ende = date!(2043 - 12 - 31);
+        let solar = effektives_foerderende(ende, 100, true).unwrap();
+        let non_solar = effektives_foerderende(ende, 100, false).unwrap();
+        assert!(solar > ende);
+        // Solar's monthly draw-down extends further than the flat day rounding.
+        assert!(solar >= non_solar);
+    }
 }
 
 #[cfg(test)]

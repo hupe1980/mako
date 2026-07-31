@@ -19,11 +19,11 @@ use crate::scheme::SettlementScheme;
 /// settlement can reach this range; reaching it means the input data is
 /// corrupt, and a silently altered amount would be worse than the panic.
 fn validated_eur(d: Decimal) -> Decimal {
-    // billing 0.8 made `checked_from_decimal` exact (it errors on excess
-    // precision rather than rounding). This helper's job is to *round* the
-    // high-precision settlement product down to the 5-dp money resolution, so it
-    // uses the explicit `from_decimal_rounded`; the remaining error arm is a true
-    // range overflow, which no physical EEG settlement can reach.
+    // `checked_from_decimal` is exact — it errors on excess precision rather than
+    // rounding. This helper's job is to *round* the high-precision settlement
+    // product down to the 5-dp money resolution, so it uses the explicit
+    // `from_decimal_rounded`; the remaining error arm is a true range overflow,
+    // which no physical EEG settlement can reach.
     EuroAmount::from_decimal_rounded(d, billing::RoundingStrategy::MidpointAwayFromZero)
         .map(billing::EuroAmount::into_decimal)
         .unwrap_or_else(|_| panic!("settlement amount {d} EUR exceeds the EuroAmount range"))
@@ -89,7 +89,7 @@ fn apply_negativpreis(kwh: Decimal, negative_kwh: Decimal) -> Decimal {
     (kwh - negative_kwh).max(Decimal::ZERO)
 }
 
-/// Resolve the effective §36k wind onshore Korrekturfaktor.
+/// Resolve the effective §36h wind onshore Korrekturfaktor.
 ///
 /// Priority:
 /// 1. explicit `wind_korrekturfaktor` override (always wins)
@@ -434,8 +434,11 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
         }
     }
 
-    // ── §19 EEG — Einspeisemanagement (curtailment) compensation ─────────────
-    // §19 Abs. 2 EEG 2023: §51 Negativpreisregel does NOT apply to EInsMan kWh.
+    // ── §13a EnWG — Einspeisemanagement (curtailment) compensation ───────────
+    // Curtailment of EEG plants is Redispatch 2.0: the entschädigungspflichtige
+    // Abregelung under §13a EnWG (historically §15 EEG Härtefallregelung). §51
+    // Negativpreisregel does not touch these kWh because they were never fed in
+    // (not by virtue of §19 EEG).
     if let Some(einsman_kwh) = input.einspeisemanagement_kwh.filter(|k| *k > Decimal::ZERO)
         && !matches!(
             result.status,
@@ -466,8 +469,8 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
         };
         let comp_eur = validated_eur(einsman_kwh * comp_rate_ct / Decimal::from(100));
         result.positions.push(crate::model::SettlePosition {
-            description: format!("Einspeisemanagement-Ausfall §19 EEG ({einsman_kwh} kWh)"),
-            legal_basis: "§19 EEG 2023".to_owned(),
+            description: format!("Einspeisemanagement-Ausfall §13a EnWG ({einsman_kwh} kWh)"),
+            legal_basis: "§13a EnWG (Redispatch 2.0)".to_owned(),
             kwh: einsman_kwh,
             rate_ct_kwh: comp_rate_ct,
             eur: comp_eur,
@@ -827,7 +830,7 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
     // 2. FoerderungBeendet detection (billing_date > foerderendedatum)
     // 3. Scheme dispatch → gross settlement positions
     // 4. §51a verlängerungsanspruch (output field, informational)
-    // 5. §19 EInsMan compensation (separate position)
+    // 5. §13a EnWG EInsMan compensation (separate position)
     // 6. §53b regional reduction (separate position)
     // Output: SettleOutput with all positions summed
     match &input.scheme {
@@ -871,25 +874,32 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
         },
 
         // ── §21 EEG — Feste Einspeisevergütung ───────────────────────────────
-        // §21 Abs. 1 Nr. 2 EEG — Ausfallvergütung uses same formula as FeedInTariff
-        // but at 80% of the statutory rate. Caller must supply the reduced rate.
+        // Ausfallvergütung (§21 Abs. 1 Satz 1 Nr. 3) uses the same formula as
+        // FeedInTariff but at the −20 % rate of §53 Abs. 3 — the caller supplies
+        // the already-reduced rate, and §53 Abs. 1 is NOT stacked on top of it.
         SettlementScheme::TemporaryFeedInTariff { verguetungssatz_ct }
         | SettlementScheme::FeedInTariff { verguetungssatz_ct } => {
             let effective = match neg_kwh {
                 Some(n) => apply_negativpreis(kwh, n),
                 None => kwh,
             };
+            // §53 Abs. 1 EEG 2023: subtract the flat AW deduction only when the
+            // supplied rate is the GROSS AW and this is the pure Einspeisevergütung
+            // (not the already-reduced Ausfallvergütung). Default net → no change.
+            let rate_ct = if input.aw_is_gross
+                && matches!(input.scheme, SettlementScheme::FeedInTariff { .. })
+                && let Some(art) = input.erzeugungsart
+            {
+                (*verguetungssatz_ct - crate::rates::sect53_deduction(art)).max(Decimal::ZERO)
+            } else {
+                *verguetungssatz_ct
+            };
             let desc = if neg_kwh.is_some() {
                 "Einspeiseverg\u{00fc}tung \u{00a7}21 EEG (\u{00a7}51 Negativpreisregel angewendet)"
             } else {
                 "Einspeiseverg\u{00fc}tung \u{00a7}21 EEG"
             };
-            let positions = vec![pos(
-                desc,
-                "\u{00a7}21 EEG 2023",
-                effective,
-                *verguetungssatz_ct,
-            )];
+            let positions = vec![pos(desc, "\u{00a7}21 EEG 2023", effective, rate_ct)];
             SettleOutput {
                 settlement_eur: total(&positions),
                 eligible_kwh: Some(effective),
@@ -1004,10 +1014,10 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 };
             }
 
-            // ── §36k EEG — Wind onshore Korrekturfaktor ───────────────────────
+            // ── §36h EEG — Wind onshore Korrekturfaktor ───────────────────────
             // When supplied (via wind_korrekturfaktor or wind_standort), multiply
             // the base AW by the location correction factor.
-            // Applies only to wind onshore plants; §36k Abs. 4: no correction for ≤EEG2012.
+            // Applies only to wind onshore plants; §36h Abs. 4: no correction for ≤EEG2012.
             let aw_ct = if let Some(k) =
                 resolve_wind_korrekturfaktor(*wind_korrekturfaktor, wind_standort.as_ref())
             {
@@ -1015,6 +1025,35 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             } else {
                 raw_aw_ct
             };
+            // ── §39n EEG 2023 — Innovationsausschreibung: feste Marktprämie ───
+            // Innovation-auction awards pay a FIXED premium (the Zuschlagswert per
+            // kWh, §3 InnAusV) on top of the market sale — it is not reduced by the
+            // Monatsmarktwert like the gleitende Marktprämie. §39n Abs. 3 delegates
+            // the mechanism to the Innovationsausschreibungsverordnung (§88d); the
+            // fixed-premium rule is the defining InnAusV feature. §51 still zeroes
+            // the AW for negative-price intervals (applied upstream via the reduced
+            // eligible kWh), so no separate handling is needed here.
+            if input.tariff_source.is_innovation_auction() {
+                let feste_praemie_eur = validated_eur(kwh * aw_ct / Decimal::from(100));
+                return SettleOutput {
+                    settlement_eur: Some(feste_praemie_eur),
+                    eligible_kwh: Some(kwh),
+                    positions: vec![pos(
+                        "Feste Marktpr\u{00e4}mie \u{00a7}39n EEG 2023 (Innovationsausschreibung, \u{00a7}3 InnAusV)",
+                        "\u{00a7}39n EEG 2023 i.V.m. \u{00a7}3 InnAusV",
+                        kwh,
+                        aw_ct,
+                    )],
+                    status: SettlementStatus::Calculated,
+                    pflichtzahlung_eur: None,
+                    pflichtzahlung_faelligkeitsdatum: None,
+                    verlaengerungsanspruch_qh: 0,
+                    dezentrale_einspeisung_anspruch_verloren: false,
+                    billing_days_fraction_applied: None,
+                    faelligkeitsdatum: None,
+                };
+            }
+
             let mgmt_ct = resolve_managementpraemie(*managementpraemie_ct, input.leistung_kwp);
 
             // ── §20 Abs. 3 EEG 2023 — Managementprämie ────────────────────────
