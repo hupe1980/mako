@@ -610,13 +610,13 @@ if invoice.has_errors() {
 cargo test -p energy-billing --all-features
 ```
 
-**204 tests** across six suites:
+Coverage spans six suites:
 
-| Suite | Tests | Coverage |
-|---|---|---|
-| Unit tests (lib) | 42 | `RegulatoryRates`, levy lookups, `prorate_days`, `InvoiceType`, `Product` enum roundtrip, `StromsteuerBefreiung`, tariff deserialization |
-| `calculator_tests` | 127 | All 13 categories (incl. WASSER), §14a/§41a/§41a Abs. 1, GGV, seasonal, indexed, prosumer, block tariffs, RLM demand charge, multi-rate MwSt, cancellation, BO4E JSON, pro-rata, Tarifwechsel, `bill_batch`, `validate` |
-| `golden_scenarios` | 11 | Golden master: SLP electricity; gas + levies; EEG Gutschrift; RLM demand charge; §54 KWK exemption; historic rates 2022 (heating gas constant 0.55, 7 % gas-USt window); §41a Abs. 1 rejection; §40 ct/kWh; §40 mandatory fields; §42c sharing; §9 exemption |
-| `proptest_invoice` | 8 | Property-based: `brutto == netto + mwst`, cancellation sign, 0% MwSt, gas arithmetic, demand charge non-negative, StromStG year table |
-| `en16931_conformance` | 1 | `Invoice::to_en16931` passes the real EN 16931 rule engine (per-line VAT + BG-23 reconcile) |
-| Doc tests | 15 | Inline usage examples |
+| Suite | Coverage |
+|---|---|
+| Unit tests (lib) | `RegulatoryRates`, levy lookups, `prorate_days`, `InvoiceType`, `Product` enum roundtrip, `StromsteuerBefreiung`, tariff deserialization |
+| `calculator_tests` | All 13 categories (incl. WASSER), §14a/§41a/§41a Abs. 1, GGV, seasonal, indexed, prosumer, block tariffs, RLM demand charge, multi-rate MwSt, cancellation, BO4E JSON, pro-rata, Tarifwechsel, `bill_batch`, `validate` |
+| `golden_scenarios` | Golden master: SLP electricity; gas + levies; EEG Gutschrift; RLM demand charge; §54 KWK exemption; historic rates 2022 (heating gas constant 0.55, 7 % gas-USt window); §41a Abs. 1 rejection; §40 ct/kWh; §40 mandatory fields; §42c sharing; §9 exemption |
+| `proptest_invoice` | Property-based: `brutto == netto + mwst`, cancellation sign, 0% MwSt, gas arithmetic, demand charge non-negative, StromStG year table |
+| `en16931_conformance` | `Invoice::to_en16931` passes the real EN 16931 rule engine (per-line VAT + BG-23 reconcile) |
+| Doc tests | Inline usage examples |

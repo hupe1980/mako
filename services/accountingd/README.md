@@ -7,10 +7,10 @@ no SEPA collection.
 | Feature | Detail |
 |---|---|
 | **HTTP port** | `:9380` |
-| **Database** | PostgreSQL (sqlx 0.8, 18 tables) |
+| **Database** | PostgreSQL (sqlx 0.8) — customer/SEPA satellites in `public`, the ledger in the `doubleentry` schema of the same database |
 | **Auth** | OIDC/JWT on write endpoints + inbound webhook HMAC-SHA256 |
-| **Ledger** | Immutable `ledger_entries`; `amount_ct != 0` CHECK; idempotent via **UNIQUE (tenant, ce_id)** claimed inside the write transaction |
-| **Double-entry** | `journal_lines` posted **in the same transaction** as every ledger entry; a **deferred DB trigger** enforces Soll = Haben (SKR 03/04, §238 HGB) |
+| **Ledger** | The [`doubleentry`](../../../doubleentry) crate: an **immutable, tamper-evident double-entry engine** — balanced by construction, an append-only Merkle log with inclusion/consistency proofs, period seals (GoBD/§ 146 AO), open-item clearing, and store-level idempotency. accountingd owns the chart of accounts (`ledger::Chart`) and the `entry_type → postings` mapping; every money movement flows through `pg::post_entry` → `ledger.post`. |
+| **Double-entry** | Each Buchungsart is one balanced entry: the per-MaLo **Kontokorrent** (SKR 1400 subledger, an Asset leaf whose signed net *is* the balance) against a GL contra leaf (Bank 1200 / Erlöse 4000 / Mahnerlöse 4003 / EEG-Aufwand / Erstattungen). Soll = Haben is enforced in-engine **and** by a deferred DB trigger; §238 HGB. `accounts.balance_ct` is a ledger-derived read cache (set absolutely from the ledger net — never incremented, so it cannot drift) backing the portfolio SUM queries. |
 | **Vorauszahlung** | `PUT/GET /api/v1/accounts/{malo_id}/vorauszahlung` — typed `rubo4e::current::Vorauszahlung` (§40 Abs. 1 EnWG) |
 | **Aging analysis** | `GET /api/v1/aging` — receivables by 0–30d / 31–60d / 61–90d / >90d |
 | **Verzugszinsen** | `GET/POST /api/v1/accounts/{malo_id}/interest-charges` — §288 BGB B2C/B2B |
@@ -20,7 +20,7 @@ no SEPA collection.
 | **SEPA Gläubiger-ID** | `creditor_id` config field (EPC AT-02); validated via `sepa::validate_creditor_id`; included as `<CdtrSchmeId>` |
 | **FRST→RCUR transition** | Auto-transitions FRST mandate to RCUR after first successful collection |
 | **CAMT.054 import** | `POST /api/v1/payments/import` — deduplicated by `bank_transaction_id` (prevents re-import) |
-| **IBAN encryption ready** | `iban_hash` generated column (pgcrypto SHA-256); `iban_encrypted` flag; CAMT.054 matching uses hash |
+| **IBAN encryption ready** | `iban_hash` is an app-computed **keyed BLAKE3** lookup key (no pgcrypto); `iban_encrypted` flag; CAMT.054 matching uses the hash even when the IBAN is ciphertext |
 | **Abschlag model** | ABSCHLAG booked as advance-payment **credit** (negative); full-cost Jahresrechnung as debit — the balance nets to the Nachzahlung/Erstattung |
 | **Mahnwesen** | Mahnstufe 1→2→3; auto-dunning worker (advisory-locked, opt-in) |
 | **Sperrung handoff** | Mahnstufe-3 arrears ≥ `sperrung_threshold_ct` (§19 Abs. 2 StromGVV, default 100 EUR) → `POST sperrd /api/v1/sperr-orders` (idempotent) |
@@ -29,8 +29,12 @@ no SEPA collection.
 | **Metrics** | `GET /metrics` — Prometheus gauges (open receivables, credit balances, dunning by Mahnstufe, pending SEPA runs) |
 | **Worker safety** | Abschlag/dunning workers hold a PostgreSQL advisory lock; all money workers are idempotent (per-run guards) |
 | **Jahresabschluss** | Annual settlement (§40 EnWG); idempotent per year via `jahresabschluss_runs`; recalibrates the monthly Abschlag |
+| **Festschreibung** | `POST /api/v1/periods/{id}/seal` closes + seals a period (GoBD / § 146 AO / § 239 HGB) — after which a backdated booking into it is refused; `GET /api/v1/periods/seals` lists the chained seals and verifies the chain |
+| **Audit proofs** | `GET /api/v1/entries/{id}/proof` returns an `O(log n)` Merkle inclusion proof (content hash + tree head) — an auditor can verify an entry is committed without this service |
+| **Offene-Posten (OP-Verwaltung)** | Authoritative open items via recorded **FIFO Zahlungszuordnung** (doubleentry clearing) — every post matches open credits against the oldest open debits, so `GET .../open-items` shows real residuals (§ 252 HGB). `POST .../clear` re-runs matching; `POST /api/v1/clearings/{id}/reset` releases a mis-assignment |
+| **Summen- und Saldenliste** | `GET /api/v1/trial-balance` — GL trial balance (§ 238 HGB): gross Soll/Haben turnover + Saldo per account, Σ debits = Σ credits (Kontokorrent leaves aggregated into one Debitoren line) |
 | **MCP** | 12 tools at `/mcp` |
-| **Tests** | 89 pure tests (71 unit + 18 integration) + 4 DB-backed scenario tests (`tests/db_scenarios.rs`, run with `DATABASE_URL` + `--ignored`) |
+| **Tests** | pure unit + integration tests + DB-backed scenario tests (`tests/db_scenarios.rs`, `just test-accountingd-db` — idempotency, netting, reconcile, **period seal + backdate rejection**, **Merkle inclusion proof against Postgres**) |
 | **Health** | `GET /health/live`, `GET /health/ready` |
 
 ## Security
@@ -43,7 +47,7 @@ no SEPA collection.
 
 Every SEPA mandate PUT validates the IBAN via the ISO 13616 mod-97 checksum algorithm.
 Malformed IBANs are rejected at the API boundary with HTTP 422.
-The validation logic is covered by **21 unit tests** without a database.
+The validation logic is covered by unit tests (DE/GB/NL/AT/CH checksums) without a database.
 
 ## SEPA pain.008
 

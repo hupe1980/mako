@@ -79,7 +79,7 @@ impl Daemon for Accountingd {
         let pool = ctx.pool().clone();
         let ct = ctx.shutdown.clone();
 
-        // ── OIDC verifier (P0-1: auth on financial REST endpoints) ──────────────
+        // ── OIDC verifier (auth on financial REST endpoints) ──────────────
         let oidc =
             OidcConfig::build_verifier(cfg.oidc.as_ref(), &ctx.http, &cfg.tenant, ct.clone())
                 .await
@@ -87,6 +87,25 @@ impl Daemon for Accountingd {
         if oidc.is_disabled() {
             tracing::warn!(
                 "[WARN] OIDC disabled -- financial write endpoints accept all requests (dev mode)"
+            );
+        }
+
+        // ── doubleentry ledger — accountingd's accounting/storage base ──────────
+        // One ledger per deployment, in its own `doubleentry` PG schema sharing
+        // this database. Constructing it applies the ledger schema and restores the
+        // account registry (see `ledger.rs`).
+        let ledger = Arc::new(
+            accountingd::ledger::PgLedger::connect(&cfg.database.url, &cfg.tenant)
+                .await
+                .context("connect doubleentry ledger")?,
+        );
+        let iban_hash_key = cfg
+            .iban_hash_secret
+            .as_ref()
+            .map(|s| accountingd::ledger::iban_hash_key(secrecy::ExposeSecret::expose_secret(s)));
+        if iban_hash_key.is_none() {
+            tracing::warn!(
+                "[WARN] iban_hash_secret unset -- IBAN lookup hash is unkeyed (dev mode)"
             );
         }
 
@@ -188,21 +207,21 @@ impl Daemon for Accountingd {
                 "/api/v1/jahresabschluss/{malo_id}",
                 post(handlers::post_jahresabschluss),
             )
-            // ── Balance reconciliation (P1-1) ──────────────────────────────────────
+            // ── Balance reconciliation ──────────────────────────────────────
             // POST /api/v1/accounts/{malo_id}/reconcile?repair=true
             // Detects and optionally corrects balance_ct cache drift.
             .route(
                 "/api/v1/accounts/{malo_id}/reconcile",
                 post(handlers::post_reconcile),
             )
-            // ── P1-3: Open-item management ─────────────────────────────────────────
+            // ── Open-item management ─────────────────────────────────────────
             // GET /api/v1/accounts/{malo_id}/open-items
             // FIFO-cleared list of unpaid/partially-paid invoice debits.
             .route(
                 "/api/v1/accounts/{malo_id}/open-items",
                 get(handlers::get_open_items),
             )
-            // ── P1-4: GDPR Art. 17 anonymization ──────────────────────────────────
+            // ── GDPR Art. 17 anonymization ──────────────────────────────────
             // POST /api/v1/accounts/{malo_id}/anonymize
             // Pseudonymizes PII while preserving ledger records (§238 HGB).
             .route(
@@ -211,6 +230,26 @@ impl Daemon for Accountingd {
             ) // ── Aging analysis ─────────────────────────────────────────────────
             // GET /api/v1/aging — overdue receivables grouped by age bucket (0-30d/31-60d/61-90d/>90d)
             .route("/api/v1/aging", get(handlers::get_aging))
+            // ── Festschreibung (period seals) + audit proofs — GoBD / § 146 AO ──
+            .route(
+                "/api/v1/periods/{period_id}/seal",
+                post(handlers::post_seal_period),
+            )
+            .route("/api/v1/periods/seals", get(handlers::get_seals))
+            .route(
+                "/api/v1/entries/{entry_id}/proof",
+                get(handlers::get_entry_proof),
+            )
+            // ── Summen- und Saldenliste + Zahlungszuordnung (open-item clearing) ──
+            .route("/api/v1/trial-balance", get(handlers::get_trial_balance))
+            .route(
+                "/api/v1/accounts/{malo_id}/clear",
+                post(handlers::post_clear),
+            )
+            .route(
+                "/api/v1/clearings/{clearing_id}/reset",
+                post(handlers::post_reset_clearing),
+            )
             // ── Verzugszinsen §288 BGB ─────────────────────────────────────────
             // GET  /api/v1/accounts/{malo_id}/interest-charges
             // POST /api/v1/accounts/{malo_id}/interest-charges
@@ -233,12 +272,15 @@ impl Daemon for Accountingd {
             )
             .layer(Extension(Arc::clone(&cfg)))
             .layer(Extension(pool.clone()))
-            // P0-1: OIDC verifier extension — enables Claims extractor on write endpoints
+            .layer(Extension(Arc::clone(&ledger)))
+            .layer(Extension(iban_hash_key))
+            // OIDC verifier extension — enables Claims extractor on write endpoints
             .layer(Extension(oidc));
 
         // ── MCP server ────────────────────────────────────────────────────────────
         let mcp_state = std::sync::Arc::new(mcp_server::AccountingdMcpState {
             pool: pool.clone(),
+            ledger: Arc::clone(&ledger),
             tenant: cfg.tenant.clone(),
             auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
             creditor_iban: cfg.creditor_iban.clone(),
@@ -253,6 +295,7 @@ impl Daemon for Accountingd {
         // billing_day = today. For each: posts an ABSCHLAG ledger entry.
         {
             let pool_bg = pool.clone();
+            let ledger_bg = Arc::clone(&ledger);
             let tenant_bg = cfg.tenant.clone();
             tokio::spawn(async move {
                 // Initial delay to let the service start up cleanly.
@@ -287,20 +330,25 @@ impl Daemon for Accountingd {
                                     today.year(),
                                     today.month() as u8
                                 );
-                                if let Err(e) = accountingd::pg::write_entry(
+                                if let Err(e) = accountingd::pg::post_entry(
+                                    &ledger_bg,
                                     &pool_bg,
-                                    acct.account_id,
                                     &tenant_bg,
+                                    &acct.malo_id,
+                                    &acct.lf_mp_id,
                                     "ABSCHLAG",
                                     // Advance payment = CREDIT (negative): reduces the
                                     // customer's balance. The full annual Rechnung is
                                     // booked as a debit; balance nets to the Nachzahlung.
                                     -acct.abschlag_ct,
+                                    // deterministic key → idempotent per (malo, month)
+                                    &ref_id,
+                                    None,
                                     Some(&ref_id),
-                                    Some(mako_events::accounting::ABSCHLAG_POSTED),
-                                    Some(&ref_id), // deterministic ce_id → idempotent per (malo, month)
+                                    today,
                                     today,
                                     Some(&format!("Monatlicher Abschlag Tag {day_of_month}")),
+                                    None,
                                 )
                                 .await
                                 {
@@ -370,7 +418,7 @@ impl Daemon for Accountingd {
 
                             // Build one pain.008 message — one PmtInf group per
                             // SequenceType (SEPA Rulebook §3.8), one audit row.
-                            // P1-2: hard error if creditor_iban is missing/invalid — skip run with error log.
+                            // hard error if creditor_iban is missing/invalid — skip run with error log.
                             let entries: Vec<(&accountingd::pg::SepaMandateRow, i64)> =
                                 pairs.iter().map(|(m, a)| (m, a.abschlag_ct)).collect();
                             let creditor_iban = match cfg_sepa
@@ -545,7 +593,7 @@ impl Daemon for Accountingd {
             });
         }
 
-        // ── P1-5: Auto-dunning background worker ────────────────────────────────
+        // ── Auto-dunning background worker ────────────────────────────────
         // Runs daily when `dunning_auto_enabled = true` in config.
         // Creates Mahnstufe 1 for newly overdue accounts and escalates 1→2→3
         // when prior Mahnungen remain unresolved past their due dates.
@@ -554,6 +602,7 @@ impl Daemon for Accountingd {
         // to prevent double-execution on crash+restart within the same calendar day.
         if cfg.dunning_auto_enabled {
             let pool_dun = pool.clone();
+            let ledger_dun = Arc::clone(&ledger);
             let cfg_dun = Arc::clone(&cfg);
             tokio::spawn(async move {
                 // Stagger start relative to other workers.
@@ -575,6 +624,7 @@ impl Daemon for Accountingd {
                     let fee3 = cfg_dun.dunning_fee_stufe3_ct.unwrap_or(1000); // 10.00 EUR default
 
                     match accountingd::pg::run_auto_dunning(
+                        &ledger_dun,
                         &pool_dun,
                         &cfg_dun.tenant,
                         grace_days,

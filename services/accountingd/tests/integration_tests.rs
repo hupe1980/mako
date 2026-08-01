@@ -12,7 +12,6 @@
 //! (idempotency, Abschlag netting, double-entry balance) live in
 //! `tests/db_scenarios.rs` and run against a live PostgreSQL.
 
-use accountingd::pg::journal_mapping;
 use accountingd::sepa::calculate_interest_ct;
 use rust_decimal::dec;
 
@@ -99,68 +98,9 @@ fn test_interest_proportional_to_principal() {
     );
 }
 
-// ── Double-entry SKR 03 journal mapping ───────────────────────────────────────
-
-#[test]
-fn test_journal_mapping_rechnung_debit() {
-    let m = journal_mapping("RECHNUNG", 1000);
-    assert_eq!(m.debit_skr, "1400", "RECHNUNG debit → Forderungen aus L+L");
-    assert_eq!(m.credit_skr, "4000", "RECHNUNG credit → Energieerlöse");
-}
-
-#[test]
-fn test_journal_mapping_zahlung_credit() {
-    let m = journal_mapping("ZAHLUNG", -1000); // negative = credit
-    assert_eq!(
-        m.debit_skr, "1200",
-        "ZAHLUNG debit → Bankguthaben (cash received)"
-    );
-    assert_eq!(m.credit_skr, "1400", "ZAHLUNG credit → Forderungen aus L+L");
-}
-
-#[test]
-fn test_journal_mapping_bankruecklast() {
-    let m = journal_mapping("BANKRUECKLAST", 1000);
-    assert_eq!(
-        m.debit_skr, "1400",
-        "BANKRUECKLAST debit → Forderungen (re-open)"
-    );
-    assert_eq!(
-        m.credit_skr, "1200",
-        "BANKRUECKLAST credit → Bankguthaben (reversed)"
-    );
-}
-
-#[test]
-fn test_journal_mapping_eeg_gutschrift() {
-    let m = journal_mapping("EEG_GUTSCHRIFT", -500);
-    assert_eq!(m.debit_skr, "3000", "EEG credit → LF Verbindlichkeit");
-    assert_eq!(
-        m.credit_skr, "4001",
-        "EEG credit → EEG Einspeisevergütung Erlöse"
-    );
-}
-
-#[test]
-fn test_journal_mapping_storno_reversal() {
-    // STORNO with negative amount = credit (reversing a RECHNUNG)
-    let m = journal_mapping("STORNO", -1000);
-    assert_eq!(m.debit_skr, "4000", "STORNO credit → reverse Erlöse debit");
-    assert_eq!(
-        m.credit_skr, "1400",
-        "STORNO credit → reverse Forderungen credit"
-    );
-}
-
-#[test]
-fn test_journal_mapping_mahngebuehr() {
-    let m = journal_mapping("MAHNGEBUEHR", 500);
-    assert_eq!(m.debit_skr, "1400", "Mahngebühr debit → Forderungen");
-    assert_eq!(
-        m.credit_skr, "4003",
-        "Mahngebühr credit → Mahngebühren Erlöse"
-    );
-}
+// The SKR double-entry mapping moved into the doubleentry ledger: accountingd's
+// `ledger::Chart` maps each Buchungsart to a balanced (customer Kontokorrent, GL
+// contra) pair, unit-tested in `ledger.rs` (`all_entry_types_balance` et al.).
 
 // ── SEPA pain.008 batch splitting ─────────────────────────────────────────────
 

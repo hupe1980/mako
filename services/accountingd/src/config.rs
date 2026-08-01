@@ -83,8 +83,14 @@ pub struct AccountingdConfig {
     /// `de.accounting.sperrauftrag`, `de.accounting.bankruecklast`.
     pub erp_webhook_url: Option<String>,
 
-    /// HMAC-SHA256 signing secret for outbound webhooks (never logged — P2-1 fix).
+    /// HMAC-SHA256 signing secret for outbound webhooks (never logged).
     pub erp_hmac_secret: Option<SecretString>,
+
+    /// Secret keying the IBAN lookup hash (`accounts.iban_hash`). The hash indexes
+    /// CAMT.054 matching without exposing plaintext; keying it stops the small IBAN
+    /// keyspace being enumerated offline from a stored hash. Absent → an unkeyed
+    /// hash with a startup warning (dev only). Use `"env:VAR_NAME"` for injection.
+    pub iban_hash_secret: Option<SecretString>,
 
     /// `sperrd` base URL — triggered when a Mahnstufe-3 dunning case is raised.
     /// When set, a Mahnstufe-3 case ≥ `sperrung_threshold_ct` posts a Sperrauftrag
@@ -134,7 +140,7 @@ pub struct AccountingdConfig {
     /// Absent → the crate default. An unknown value is a hard error at startup.
     pub pain001_schema: Option<String>,
 
-    /// Enable automatic Mahnwesen escalation (P1-5).
+    /// Enable automatic Mahnwesen escalation.
     ///
     /// When `true`, the background dunning worker runs daily and automatically:
     /// - Creates Mahnstufe 1 for accounts overdue by > `dunning_grace_days`

@@ -28,8 +28,13 @@ ERP ← de.eeg.verguetung.berechnet CloudEvent     Settlement result + Gutschrif
 
 The settlement *amount* alone is not a legal document. Under the **Gutschriftverfahren**
 (§14 Abs. 2 Satz 2 UStG) the Netzbetreiber issues the Gutschrift to the plant operator, so
-`einsd` renders it as a BO4E `Rechnung` with the per-rate USt breakdown and carries the
-document facts on the CloudEvent for `accountingd` to book against.
+`einsd` renders it as a BO4E `Rechnung` and carries the document facts on the CloudEvent for
+`accountingd` to book against.
+
+The Gutschrift VAT follows the operator's **declared `ust_status`** — masterdata, not a
+function of plant size. This fixture sets `"ust_status": "KLEINUNTERNEHMER"` (§19 UStG), the
+typical case for a 9.8 kWp rooftop plant, so the Gutschrift carries **0 % USt** (net = brutto).
+An operator on `REGELBESTEUERUNG` would instead see the full 19 % USt breakdown.
 
 ## Settlement logic
 

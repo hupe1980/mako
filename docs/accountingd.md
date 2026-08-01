@@ -6,13 +6,13 @@ parent: Services
 mermaid: true
 description: >
   accountingd operator guide — Massenkontokorrent / Customer Account Ledger (LF role).
-  11 entry types, double-entry journal (SKR 03/04), FIFO open-item management,
+  Tamper-evident double-entry ledger (the doubleentry crate — Merkle proofs, period seals),
+  per-Marktlokation Kontokorrent + GL contra chart (SKR 03/04-aligned), FIFO open-item management,
   camt.054 XML + JSON dedup import, SEPA pain.008 (multi-group single message, mandatory Gläubiger-ID) + pain.001 XML,
   Verzugszinsen §288 BGB, payment plans (Zahlungsvereinbarung), aging analysis,
   Mahnwesen automatic rule engine (Mahnstufe 1–3), OIDC/JWT auth,
   inbound HMAC verification, GDPR Art. 17 pseudonymization,
-  balance reconciliation, EEG Gutschrift + Marktprämie ingest, Jahresabschluss §40 EnWG,
-  97 tests.
+  balance reconciliation, EEG Gutschrift + Marktprämie ingest, Jahresabschluss §40 EnWG.
 ---
 
 # `accountingd` — Massenkontokorrent / Customer Account Ledger
@@ -33,7 +33,8 @@ as a standalone microservice with CloudEvents integration.
 
 **The ledger is event-driven and idempotent.** CloudEvents from `billingd`, `einsd`,
 and `invoicd` drive entries atomically — re-delivering the same CloudEvent produces
-no duplicate entry (idempotency via `processed_events` table + DB lock).
+no duplicate entry, because every post carries the CloudEvent id as the doubleentry
+ledger's idempotency key (an identical replay is a store-level no-op).
 
 ---
 
@@ -80,7 +81,7 @@ graph TB
 | `JAHRESABSCHLUSS` | ±signed | Annual Mehr-/Mindermengenabrechnung (§40 EnWG) |
 | `KORREKTUR` | ±signed | Manual operator correction via `POST /buchen` |
 
-**Balance** = `SUM(amount_ct)` — negative = credit balance (customer overpaid); positive = outstanding debt.
+**Balance** = the signed net of the customer's Kontokorrent leg in the ledger — negative = credit balance (customer overpaid); positive = outstanding debt. (`accounts.balance_ct` mirrors this net as a derived read cache.)
 
 **No f64 money.** All amounts use `i64` cents (1 ct = 0.01 EUR). The pain.008 XML
 generator uses integer arithmetic — no floating-point rounding errors.
@@ -104,8 +105,7 @@ graph LR
     end
 
     subgraph manual ["Manual operator path"]
-        m1["POST /dunning/{id}/escalate\
-stufe=1|2|3"]
+        m1["POST /dunning/{id}/escalate<br/>stufe=1|2|3"]
     end
 
     resolved["POST /dunning/{id}/resolve"]
@@ -133,7 +133,10 @@ for operator override (e.g. grace extensions, special B2B arrangements).
 | `GET` | `/api/v1/accounts/{malo_id}/balance` | Current balance in ct; status: overdue/credit/settled |
 | `GET` | `/api/v1/accounts/{malo_id}/ledger` | Paged ledger entries |
 | `GET` | `/api/v1/accounts/{malo_id}/kontoauszug` | Account statement (portald-consumable) |
-| `GET` | `/api/v1/accounts/{malo_id}/open-items` | **FIFO open-item list** — individual unpaid/partial invoices |
+| `GET` | `/api/v1/accounts/{malo_id}/open-items` | **Offene Posten** — authoritative unpaid/partial invoices (after recorded clearings) |
+| `POST` | `/api/v1/accounts/{malo_id}/clear` | Record a FIFO Zahlungszuordnung (open credits → oldest open debits) |
+| `POST` | `/api/v1/clearings/{clearing_id}/reset` | Release a mis-assigned Zahlungszuordnung |
+| `GET` | `/api/v1/trial-balance` | **Summen- und Saldenliste** (§ 238 HGB) — Soll/Haben/Saldo per account, Σ debits = Σ credits |
 | `PUT` | `/api/v1/accounts/{malo_id}/abschlag` | Update monthly advance payment |
 | `GET/PUT` | `/api/v1/accounts/{malo_id}/vorauszahlung` | Typed `rubo4e::current::Vorauszahlung` (§40 EnWG) |
 | `GET/PUT` | `/api/v1/accounts/{malo_id}/zahlungsinformation` | Typed `rubo4e::current::Zahlungsinformation` |
@@ -143,6 +146,9 @@ for operator override (e.g. grace extensions, special B2B arrangements).
 | `GET/POST` | `/api/v1/accounts/{malo_id}/interest-charges` | Verzugszinsen §288 BGB — list/book default interest |
 | `GET/POST` | `/api/v1/accounts/{malo_id}/payment-plans` | Zahlungsvereinbarung — list/create payment plans |
 | `GET` | `/api/v1/aging` | **Aging analysis** — receivables by 0–30d / 31–60d / 61–90d / >90d buckets |
+| `POST` | `/api/v1/periods/{period_id}/seal` | **Festschreibung** (GoBD / § 146 AO) — close + seal a period; body `{ "start", "end" }` |
+| `GET` | `/api/v1/periods/seals` | Seal history + chain verification (`chain_valid`) |
+| `GET` | `/api/v1/entries/{entry_id}/proof` | **Merkle inclusion proof** an entry is committed (content hash + tree head) |
 | `POST` | `/api/v1/payments/import` | Ingest CAMT.054 bank statement (JSON array, deduplicated by `bank_transaction_id`) |
 | `GET` | `/api/v1/offene-posten` | Overdue accounts |
 | `GET` | `/api/v1/dunning` | Open dunning cases |
@@ -294,40 +300,57 @@ from `abschlag_ct` when no typed value has been stored.
 
 Every SEPA mandate PUT validates the IBAN using **ISO 13616 mod-97** via the
 [`sepa`](https://crates.io/crates/sepa) crate (`sepa::validate_iban`).
-Covered by **17 IBAN tests** (of the 71 in `unit_tests.rs`) (DE, GB, NL, AT, CH, checksum failures, length, lowercase).
+Covered by dedicated IBAN unit tests (DE, GB, NL, AT, CH, checksum failures, length, lowercase).
 
 ---
 
-## Open-item management (FIFO clearing)
+## Offene-Posten-Verwaltung (authoritative clearing)
 
-`GET /api/v1/accounts/{malo_id}/open-items` returns individual unpaid or partially-paid
-invoice debits using **FIFO clearing** against available credits:
+Open items are **authoritative**, not a computed view: every post records a FIFO
+**Zahlungszuordnung** in the doubleentry clearing register — open credits (payments,
+Abschläge, Gutschriften) are matched against the oldest open debits (invoices, fees).
+`GET /api/v1/accounts/{malo_id}/open-items` then returns the debits' real residuals
+after everything that has actually been paid (§ 252 HGB Abs. 1 Nr. 4 —
+Einzelbewertung of receivables, SAP-FI-CA "oldest-first"):
 
 ```json
 {
   "malo_id": "51238696780",
-  "balance_ct": 15000,
-  "open_item_count": 2,
   "open_items": [
-    { "entry_type": "RECHNUNG", "amount_ct": 8000, "outstanding_ct": 0,
-      "reference_id": "R2026-05", "booking_date": "2026-05-15" },
-    { "entry_type": "RECHNUNG", "amount_ct": 12000, "outstanding_ct": 15000,
-      "reference_id": "R2026-06", "booking_date": "2026-06-15" }
+    { "entry_id": "…", "entry_type": "RECHNUNG", "amount_ct": 8000,
+      "outstanding_ct": 0, "booking_date": "2026-05-15" },
+    { "entry_id": "…", "entry_type": "RECHNUNG", "amount_ct": 12000,
+      "outstanding_ct": 15000, "booking_date": "2026-06-15" }
   ]
 }
 ```
 
-The oldest debits are cleared first. This matches SAP FI-CA “oldest-first” default and
-§252 HGB Abs. 1 Nr. 4 (Vorsichtsprinzip — individual receivables must be tracked separately).
+- `POST /api/v1/accounts/{malo_id}/clear` re-runs the match (idempotent — assigns
+  nothing when everything is already cleared).
+- `POST /api/v1/clearings/{clearing_id}/reset` releases a mis-assigned clearing; the
+  applied amounts return to the postings' residuals and the original record stays
+  (an assignment made and withdrawn is part of the trail).
 
-`balance_ct` remains the authoritative balance; open-items add invoice-level transparency.
+Unlike a running balance, this tracks *which* payment settled *which* invoice —
+recorded in the ledger, provable, and reversible.
+
+## Summen- und Saldenliste (`GET /api/v1/trial-balance`)
+
+The GL trial balance (§ 238 HGB): gross Soll/Haben turnover and the Saldo per
+account, with the per-Marktlokation Kontokorrent leaves aggregated into one
+Debitoren line. `Σ debits = Σ credits` by construction (`balanced: true`), so it
+doubles as an integrity check and a DATEV/SAP-FI export basis.
+
+The authoritative balance is the doubleentry Kontokorrent net; `balance_ct` is the
+read cache of it, and open-items add invoice-level transparency.
 
 ---
 
 ## Balance integrity (`POST /reconcile`)
 
-`balance_ct` is a cached sum updated atomically with every ledger write (`SELECT FOR UPDATE`).
-A crash between the INSERT and the UPDATE could leave it inconsistent:
+The doubleentry Kontokorrent net is authoritative; `accounts.balance_ct` is a cache
+refreshed from it after every post. Reconcile compares the two and re-derives the
+cache from the ledger:
 
 ```bash
 # Check only
@@ -347,8 +370,42 @@ Response:
 }
 ```
 
-When `drift_ct != 0`, the `repair=true` flag atomically resets `balance_ct` to `SUM(amount_ct)`.
-Schedule this as a weekly health check in your monitoring pipeline.
+When `drift_ct != 0`, the `repair=true` flag resets `balance_ct` to the authoritative
+ledger net. Because the cache is set absolutely (not incremented) on every post, drift
+is not expected — this is a defence-in-depth health check for the weekly pipeline.
+
+---
+
+## Festschreibung + audit proofs (GoBD / § 146 AO / § 239 HGB)
+
+Closing a period **seals** it: the doubleentry ledger commits to which entries the
+period contains and what they add up to, as chained BLAKE3 Merkle roots. A sealed
+period is terminal — a backdated booking into it is refused, and a correction books
+into a later open period carrying its original date (§ 146 Abs. 4 AO).
+
+```bash
+# Seal January 2026 (Festschreibung)
+curl -X POST "http://accountingd:9380/api/v1/periods/2026-01/seal" \
+  -H 'content-type: application/json' \
+  -d '{"start":"2026-01-01","end":"2026-01-31"}'
+# → { "period":"2026-01", "seal_hash":"…", "tree_root":"…",
+#     "trial_balance_root":"…", "entry_count": 41234, "prev_seal":"…" }
+
+# The seal history, with chain verification
+curl "http://accountingd:9380/api/v1/periods/seals"        # → { count, chain_valid, seals:[…] }
+```
+
+Seals **chain**, so removing or reordering a sealed period breaks every seal after
+it — `chain_valid` catches that. Any single entry is independently provable:
+
+```bash
+curl "http://accountingd:9380/api/v1/entries/{entry_id}/proof"
+# → { content_hash, tree_size, tree_root, verified: true, proof: {…} }
+```
+
+The `O(log n)` inclusion proof lets an auditor confirm the entry is committed to by
+the current head **without access to this service** — the tamper-evidence the old
+single-row ledger could not give.
 
 ---
 
@@ -362,8 +419,10 @@ curl -X POST "http://accountingd:9380/api/v1/accounts/51238696780/anonymize" \
 
 **What is anonymized**: `accounts.iban` → `ANONYMIZED`, `mandatsref`/`zahlungsinformation`/`vorauszahlung` → `NULL`; `sepa_mandates.iban` → `ANONYMIZED`, `kontoinhaber` → `ANONYMIZED`, `bic` → `NULL`.
 
-**What is preserved**: All `ledger_entries` (amounts, dates, types, references) — exempt from
-GDPR Art. 17 under Art. 17(3)(b) and §238 HGB / §147 AO retention requirements (10 years).
+**What is preserved**: The entire double-entry ledger (amounts, dates, kinds, references) is
+untouched — it is immutable and append-only, and exempt from GDPR Art. 17 under Art. 17(3)(b)
+and §238 HGB / §147 AO retention requirements (10 years). Only the personal-data columns on the
+account and mandate rows are pseudonymized; no posting is ever altered or removed.
 
 **Audit trail**: An immutable record is written to `anonymization_log` (GDPR Art. 5(2)).
 
@@ -395,8 +454,12 @@ scoped by `tenant`.
 
 ### IBAN lookup (encrypted-IBAN compatible)
 
-CAMT.054 matching uses `iban_hash` (SHA-256 of normalised IBAN, stored as a generated column in PostgreSQL via `pgcrypto`).
-This lookup works correctly even when `iban_encrypted = true` — the hash is computed at write time and persisted alongside the encrypted value.
+CAMT.054 matching uses `iban_hash` — a **keyed BLAKE3** hash of the normalised IBAN, computed
+in the application and keyed by the `iban_hash_secret`. Keying matters: the IBAN keyspace is
+small enough to enumerate offline, so an unkeyed digest would leak the plaintext from a stolen
+hash column; the secret makes that attack infeasible. The hash is written alongside the row, so
+lookup works even when `iban_encrypted = true` (the plaintext is encrypted, the keyed hash is the
+index). Absent secret → an unkeyed hash with a startup warning (dev only).
 
 Amount parsing uses `sepa::ct_from_eur_str` — integer arithmetic only, **no f64**.
 
@@ -512,26 +575,40 @@ graph LR
 
 ---
 
-## Double-entry accounting (SKR 03/04)
+## Double-entry accounting — the `doubleentry` ledger
 
-`accountingd` maintains a **double-entry journal shadow** alongside the primary
-single-entry ledger. Every `ledger_entry` produces two balanced `journal_lines`
-rows (Soll/Haben), following the German chart of accounts SKR 03/04.
+The ledger is the [`doubleentry`](https://github.com/hupe1980/doubleentry) crate: an
+immutable, tamper-evident double-entry engine (balanced by construction, an
+append-only BLAKE3 Merkle log with `O(log n)` inclusion/consistency proofs, period
+seals for GoBD/§ 146 AO Unveränderbarkeit, open-item clearing, and store-level
+idempotency). It runs in the `doubleentry` PostgreSQL schema of accountingd's own
+database. **accountingd owns the chart of accounts and the mapping; doubleentry owns
+the invariants** — the §15/§20 boundary of the crate's design.
 
-| `entry_type` | Soll (Debit) | Haben (Credit) |
+Each Buchungsart maps to **one balanced entry** with two legs: the per-Marktlokation
+**Kontokorrent** (`Kontokorrent:<lf_mp>:<malo>`, an Asset leaf — the SKR 1400
+Debitoren subledger, whose signed net *is* the customer balance) against a GL contra
+leaf. The customer leg's direction follows the sign of the amount, so the Kontokorrent
+net reproduces the old `balance_ct` exactly, and the GL leaves roll up to the SKR trial
+balance ([`ledger::Chart`](../services/accountingd/src/ledger.rs)):
+
+| `entry_type` | Customer leg (Kontokorrent) | GL contra |
 |---|---|---|
-| `RECHNUNG` | 1400 Forderungen aus L+L | 4000 Energieerlöse |
-| `ABSCHLAG` | 1200 Bankguthaben | 1400 Forderungen aus L+L |
-| `ZAHLUNG` | 1200 Bankguthaben | 1400 Forderungen aus L+L |
-| `GUTSCHRIFT` | 4000 Energieerlöse | 1400 Forderungen aus L+L |
-| `BANKRUECKLAST` | 1400 Forderungen aus L+L | 1200 Bankguthaben |
-| `MAHNGEBUEHR` | 1400 Forderungen aus L+L | 4003 Mahngebühren / Verzugszinsen |
-| `EEG_GUTSCHRIFT`, `EEG_MARKTPRAEMIE` | 3000 Verbindlichkeiten EEG | 4001 EEG Einspeisevergütung |
-| `STORNO` (reversal) | 4000 Energieerlöse | 1400 Forderungen aus L+L |
+| `RECHNUNG` | Debit | Erlöse (SKR 4000) |
+| `ABSCHLAG`, `ZAHLUNG` | Credit | Bank (SKR 1200) |
+| `BANKRUECKLAST` | Debit | Bank (SKR 1200) |
+| `GUTSCHRIFT` | Credit | Erlöse (SKR 4000) |
+| `MAHNGEBUEHR` | Debit | Mahnerlöse (SKR 4003) |
+| `EEG_GUTSCHRIFT`, `EEG_MARKTPRAEMIE` | Credit | EEG-Aufwand (Expense) |
+| `JAHRESABSCHLUSS` (Erstattung) | Debit | Erstattungen (Liability) |
+| `STORNO`, `KORREKTUR` | by sign | Erlöse (SKR 4000) |
 
-The invariant `SUM(D) = SUM(C)` per `ledger_entry_id` is enforced by `insert_journal_lines()`.
-This table supports HGB §238 Buchführungspflicht and enables export to DATEV, SAP FI, or
-any other double-entry general ledger via `GET /api/v1/accounts/{malo_id}/ledger` + journal join.
+Soll = Haben is enforced in-engine **and** by a deferred DB constraint trigger in the
+`doubleentry` schema (§238 HGB). The `entry_type` rides along as the entry's
+doubleentry `kind` label (persisted, hashed, and surfaced on every statement line), and
+provenance records the source system, the CloudEvent id, and the operator. Every entry
+is provable to an auditor via a Merkle inclusion proof — a guarantee a plain mutable
+ledger table cannot give.
 
 ---
 
@@ -634,7 +711,7 @@ sequenceDiagram
     participant Bank as Bank adapter
 
     einsd->>accountingd: de.eeg.verguetung.berechnet<br/>{malo_id, settlement_eur, bank_iban, bank_bic, zahlungsempfaenger}
-    accountingd->>DB: INSERT ledger_entries EEG_GUTSCHRIFT
+    accountingd->>DB: ledger.post EEG_GUTSCHRIFT (doubleentry)
     accountingd->>accountingd: build_pain_001(instant=cfg.eeg.sepa_instant)
     accountingd->>DB: INSERT eeg_payout_orders<br/>(SCT_INST, end_to_end_ref, pain001_xml)
     alt bank_submit_url configured
@@ -742,9 +819,12 @@ When `auto_payout = false` (default), operators trigger payouts manually via
 
 ## Idempotency
 
-Every CloudEvent `ce_id` is written to `processed_events` atomically with the ledger entry.
-Re-delivering produces no duplicate. The `/buchen` endpoint has no idempotency guard —
-supply `reference_id` for audit trails.
+Every money movement carries an idempotency key into the doubleentry ledger — a
+CloudEvent id, a bank transaction id, or a deterministic string
+(`ABSCHLAG-{malo}-{YYYY}-{MM}`, `mahngebuehr:{malo}:{stufe}:{date}`, `bank:{txn}`).
+An identical replay is a store-level no-op returning the original entry; the same
+key with different content is refused. The `/buchen` endpoint is idempotent when a
+`reference_id` is supplied (a fresh random key otherwise).
 
 ---
 
@@ -756,11 +836,11 @@ supply `reference_id` for audit trails.
 |--------|-------|
 | `account_id` | UUID primary key |
 | `malo_id`, `lf_mp_id` | Customer + LF identity |
-| `balance_ct` | Cached balance (i64 ct) — updated atomically on every write |
+| `balance_ct` | Ledger-**derived** balance cache (i64 ct) — set absolutely from the doubleentry Kontokorrent net after each post (never incremented → cannot drift); backs the portfolio SUM queries. NOT the system of record. |
 | `abschlag_ct` | Monthly advance payment in ct |
 | `billing_day` | Day of month for advance payment (1–28) |
-| `iban` | SEPA mandate IBAN; when `iban_encrypted = true` stores `pgp_sym_encrypt(...)` ciphertext |
-| `iban_hash` | SHA-256 hash of normalised IBAN (generated column via pgcrypto) — used for CAMT.054 matching even when IBAN is encrypted |
+| `iban` | SEPA mandate IBAN; when `iban_encrypted = true` stores ciphertext |
+| `iban_hash` | App-computed **keyed BLAKE3** hash of the normalised IBAN — used for CAMT.054 matching even when the IBAN is encrypted (no pgcrypto) |
 | `iban_encrypted` | `false` (default) or `true` when column stores encrypted ciphertext |
 | `mandatsref` | Active SEPA mandate link (fast lookup) |
 | `vorauszahlung` | `rubo4e::current::Vorauszahlung` JSONB |
@@ -769,17 +849,15 @@ supply `reference_id` for audit trails.
 
 **Tenant isolation**: `(malo_id, lf_mp_id, tenant)` UNIQUE constraint.
 
-### `ledger_entries` (immutable, INSERT-only)
+### The ledger — `doubleentry` schema
 
-`amount_ct != 0` enforced by `CHECK` constraint (zero-amount entries are invalid).
-`amount_ct > 0` = debit; `amount_ct < 0` = credit. Balance = `SUM(amount_ct)`.
-Includes `booking_date` (Buchungsdatum) and `value_date` (Wertstellung) — may differ
-for backdated corrections (§238 HGB).
-
-### `journal_lines` (immutable, INSERT-only)
-
-Double-entry shadow: two rows per `ledger_entry_id` (Soll/Haben). `SUM(D) = SUM(C)` per entry.
-SKR 03/04 account codes. Required per §238 HGB Buchführungspflicht.
+The journal, per-account balances, the append-only Merkle log, period seals, and
+open-item clearing live in the `doubleentry` schema (the crate's own tables:
+`entries`, `postings`, `accounts`, `log_subtrees`, `seals`, `clearings`, …), applied
+by `PgLedger::connect` at startup. There is no `ledger_entries`/`journal_lines`
+table in accountingd's `public` schema any more — `booking_date`/`value_date`
+(§238 HGB Buchungsdatum vs. Wertstellung), immutability, and the balance invariant
+are all properties of the doubleentry engine.
 
 ### `sepa_mandates`
 
@@ -818,15 +896,15 @@ Zahlungsvereinbarung lifecycle (ACTIVE/COMPLETED/CANCELLED/DEFAULTED).
 CAMT.054 deduplication log. `UNIQUE (tenant, bank_transaction_id)`. Prevents duplicate
 `ZAHLUNG`/`BANKRUECKLAST` entries on re-import of the same bank file.
 
-### `dunning_cases`, `processed_events`, `anonymization_log`, `auto_dunning_runs`
+### `dunning_cases`, `anonymization_log`, `auto_dunning_runs`
 
 Standard schema — see `migrations/0001_schema.sql`.
 
-### `abschlag_runs` + `jahresabschluss_runs`
+### `jahresabschluss_runs`
 
-Idempotency guards for the Abschlagslauf scheduler and `POST /jahresabschluss`.
-`abschlag_runs`: one row per `(tenant, malo_id, period_month)` — prevents duplicate ABSCHLAG postings on restart.
-`jahresabschluss_runs`: one row per `(tenant, malo_id, billing_year)` — prevents double annual settlement.
+Idempotency guard for `POST /jahresabschluss`: one row per `(tenant, malo_id, billing_year)`
+prevents double annual settlement. (Ledger-level idempotency — duplicate ABSCHLAG or event
+replays — is handled by the doubleentry idempotency key, so no separate run table is needed.)
 
 ### `account_audit_log` (INSERT-only)
 
@@ -957,32 +1035,29 @@ matching (powercloud-equivalent >98% match rate).
 
 ## Testing
 
-**97 tests** (`cargo test -p accountingd`):
-
-**Unit tests** (71 in `unit_tests.rs`, no database required):
-- IBAN validation (17 tests): DE/GB/NL/AT/CH, checksum, length, lowercase
-- Entry type coverage: all 11 types, sign conventions, STORNO vs KORREKTUR semantics
-- Jahresabschluss: Nachzahlung/Erstattung/Ausgeglichen, STORNO inclusion in annual sum
-- Decimal precision: `f64` vs `Decimal` rounding correctness (`1.99 EUR = 199 ct`, not 198 ct)
-- Open-item FIFO: formula verification for FIFO clearing across 4 scenarios
-- GDPR anonymization: field list completeness, required-field validation
-- Auto-dunning rules: grace period logic, default fee schedule
-- pain.008 formatting: integer arithmetic, no f64, CtrlSum validation
-- SEPA sequence types (FRST/RCUR/FNAL/OOFF), mandate revocation
-
-**Integration tests** (18 in `integration_tests.rs`, pure logic, no database required):
-- §288 BGB Verzugszinsen: B2C (+5pp) and B2B (+9pp) interest rates, formula correctness
-- SKR 03/04 journal mapping: correct account codes for all key entry types
-- SEPA pain.008 FRST/RCUR separation: 1 FRST + 2 RCUR → one message with two `PmtInf` groups
-- `creditor_id` (Gläubiger-ID) validation and inclusion in XML
-- CAMT.054 deduplication hash: stable / deterministic for same input
-- pain.008 `creditor_name` bug regression: IBAN string no longer passed as creditor name
-
-**Inline unit tests** (4 in `handlers.rs`): IBAN mod-97 validation (DE/GB).
-
-**DB scenario tests** (4 in `db_scenarios.rs`, `#[ignore]` — require a live `DATABASE_URL`):
-- duplicate-CE idempotency, ABSCHLAG netting against RECHNUNG, balanced double-entry journal, unbalanced-pair rejection
-
 ```bash
-cargo test -p accountingd --all-features
+cargo test -p accountingd --all-features        # unit + pure-logic integration tests
+just test-accountingd-db                          # DB scenarios against a throwaway Postgres
 ```
+
+**Unit and pure-logic tests** (`unit_tests.rs`, `integration_tests.rs`, inline `#[cfg(test)]`)
+run without a database and cover:
+
+- IBAN validation (DE/GB/NL/AT/CH — checksum, length, lowercase, mod-97)
+- Entry-type sign conventions and STORNO vs KORREKTUR semantics
+- Jahresabschluss §40 EnWG: Nachzahlung / Erstattung / Ausgeglichen, STORNO inclusion
+- FIFO open-item clearing (oldest-first, partial payment, reset)
+- §288 BGB Verzugszinsen: B2C (+5pp) and B2B (+9pp) rates
+- pain.008 / pain.001 formatting: integer-only arithmetic, `CtrlSum`, FRST/RCUR separation,
+  Gläubiger-ID inclusion, `creditor_name` regression guard
+- GDPR anonymization field-list completeness
+
+**DB scenario tests** (`db_scenarios.rs`, `#[ignore]` — require a live `DATABASE_URL`) exercise
+the doubleentry-backed ledger end-to-end against real PostgreSQL:
+
+- CloudEvent replay books exactly once (idempotency key)
+- ABSCHLAG credit nets against RECHNUNG in the account balance
+- A conflicting idempotency key is refused
+- A payment clears its invoice and the trial balance still balances to zero
+- Sealing a period freezes it (Festschreibung / §146 AO)
+- Every entry is provable via a Merkle inclusion proof

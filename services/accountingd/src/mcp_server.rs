@@ -34,6 +34,8 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone)]
 pub struct AccountingdMcpState {
     pub pool: PgPool,
+    /// The doubleentry ledger — authoritative balances, statements, open items.
+    pub ledger: Arc<crate::ledger::PgLedger>,
     pub tenant: String,
     pub auth: mako_service::mcp_auth::McpAuth,
     /// SEPA creditor identity from config — pain.008 needs all three.
@@ -207,7 +209,14 @@ impl AccountingdMcpHandler {
             }
             Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
         };
-        match list_ledger(&self.state.pool, acct.account_id, p.limit.unwrap_or(50)).await {
+        match list_ledger(
+            &self.state.ledger,
+            &acct.lf_mp_id,
+            &acct.malo_id,
+            p.limit.unwrap_or(50),
+        )
+        .await
+        {
             Ok(entries) => ContentBlock::json(serde_json::to_value(entries).unwrap_or_default())
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None)),
@@ -333,7 +342,7 @@ Returns count of matched and unmatched entries.",
                 .and_then(|v| v.as_str())
                 .unwrap_or("CAMT.054 import");
             if let (Some(malo), Some(amt)) = (malo_id, amount_ct) {
-                use crate::pg::{fetch_account, write_entry};
+                use crate::pg::{fetch_account, post_entry};
                 if let Ok(Some(acct)) = fetch_account(
                     &self.state.pool,
                     malo,
@@ -343,17 +352,21 @@ Returns count of matched and unmatched entries.",
                 .await
                 {
                     let today = time::OffsetDateTime::now_utc().date();
-                    let _ = write_entry(
+                    let _ = post_entry(
+                        &self.state.ledger,
                         &self.state.pool,
-                        acct.account_id,
                         &self.state.tenant,
+                        &acct.malo_id,
+                        &acct.lf_mp_id,
                         "ZAHLUNG",
                         -amt,
-                        Some(reference),
-                        Some(mako_events::accounting::PAYMENT_IMPORTED),
+                        &format!("mcp-camt:{reference}"),
                         None,
+                        Some(reference),
+                        today,
                         today,
                         Some("CAMT.054 Zahlungseingang"),
+                        None,
                     )
                     .await;
                     matched += 1;
@@ -476,21 +489,22 @@ Regulatory: §40 Abs. 1 EnWG — Abschlag must reflect actual estimated consumpt
             }
             Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
         };
-        let entries = match list_ledger(&self.state.pool, acct.account_id, 500).await {
-            Ok(e) => e,
-            Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
-        };
-        // Sum monthly Abschläge (credits, negative) and Rechnungen (debits, positive)
-        // LedgerRow: entry_type: String, amount_ct: i64
+        let entries =
+            match list_ledger(&self.state.ledger, &acct.lf_mp_id, &acct.malo_id, 500).await {
+                Ok(e) => e,
+                Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
+            };
+        // Sum monthly Abschläge (credits, negative) and Rechnungen (debits, positive).
+        // `signed_ct` is the signed Kontokorrent contribution (debit +, credit −).
         let abschlag_sum: i64 = entries
             .iter()
-            .filter(|e| e.entry_type == "ABSCHLAG")
-            .map(|e| e.amount_ct)
+            .filter(|e| e.entry_type.as_deref() == Some("ABSCHLAG"))
+            .map(|e| e.signed_ct)
             .sum();
         let rechnung_sum: i64 = entries
             .iter()
-            .filter(|e| e.entry_type == "RECHNUNG")
-            .map(|e| e.amount_ct)
+            .filter(|e| e.entry_type.as_deref() == Some("RECHNUNG"))
+            .map(|e| e.signed_ct)
             .sum();
         let settlement_ct = rechnung_sum + abschlag_sum;
         let recommended_abschlag = (rechnung_sum.abs() / 12).max(0);
@@ -531,7 +545,7 @@ SEPA pre-notification failures. \
         &self,
         Parameters(p): Parameters<AbschlagCycleParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::{find_accounts_due, write_entry};
+        use crate::pg::{find_accounts_due, post_entry};
         let dry_run = p.dry_run.unwrap_or(false);
         // Determine billing day (today or explicit)
         let today = time::OffsetDateTime::now_utc().date();
@@ -550,17 +564,21 @@ SEPA pre-notification failures. \
                     today.year(),
                     today.month() as u8
                 );
-                match write_entry(
+                match post_entry(
+                    &self.state.ledger,
                     &self.state.pool,
-                    acct.account_id,
                     &self.state.tenant,
+                    &acct.malo_id,
+                    &acct.lf_mp_id,
                     "ABSCHLAG",
                     -acct.abschlag_ct, // advance payment = credit (reduces balance)
+                    &ref_id,           // deterministic key → idempotent per (malo, month)
+                    None,
                     Some(&ref_id),
-                    Some(mako_events::accounting::ABSCHLAG_POSTED),
-                    Some(&ref_id), // deterministic ce_id → idempotent per (malo, month)
+                    today,
                     today,
                     Some(&format!("Monatlicher Abschlag Tag {day}")),
+                    None,
                 )
                 .await
                 {
@@ -667,28 +685,14 @@ Use import_payments to confirm the match.",
 
         // Find accounts whose open balance is within tolerance of the payment.
         // We also return accounts where the most recent RECHNUNG amount is within range.
+        // Candidate matching is on the balance cache (the authoritative balance is
+        // the doubleentry ledger; this cache is refreshed from it on every post).
         let rows = sqlx::query(
-            r"SELECT DISTINCT ON (a.account_id)
-                     a.account_id,
-                     a.malo_id,
-                     a.lf_mp_id,
-                     a.balance_ct,
-                     le.id          AS latest_rechnung_id,
-                     le.amount_ct   AS latest_rechnung_ct,
-                     le.reference_id,
-                     le.description
+            r"SELECT a.account_id, a.malo_id, a.lf_mp_id, a.balance_ct
               FROM accounts a
-              LEFT JOIN LATERAL (
-                  SELECT id, amount_ct, reference_id, description
-                  FROM ledger_entries
-                  WHERE account_id = a.account_id
-                    AND entry_type = 'RECHNUNG'
-                  ORDER BY booking_date DESC
-                  LIMIT 1
-              ) le ON TRUE
               WHERE a.tenant = $1
                 AND a.balance_ct BETWEEN $2 AND $3
-              ORDER BY a.account_id, ABS(a.balance_ct - $4) ASC
+              ORDER BY ABS(a.balance_ct - $4) ASC
               LIMIT 10",
         )
         .bind(&self.state.tenant)
@@ -707,9 +711,9 @@ Use import_payments to confirm the match.",
                 let malo_id: String = r.try_get("malo_id").unwrap_or_default();
                 let lf_mp_id: String = r.try_get("lf_mp_id").unwrap_or_default();
                 let balance_ct: i64 = r.try_get("balance_ct").unwrap_or_default();
-                let rechnung_ct: Option<i64> = r.try_get("latest_rechnung_ct").ok();
-                let ref_id: Option<String> = r.try_get("reference_id").ok().flatten();
-                let desc: Option<String> = r.try_get("description").ok().flatten();
+                let rechnung_ct: Option<i64> = None;
+                let ref_id: Option<String> = None;
+                let desc: Option<String> = None;
 
                 // Compute a naive similarity score based on:
                 //   - amount proximity (0–50 pts)
@@ -793,10 +797,10 @@ amount_ct: positive = debit (increases balance); negative = credit (reduces bala
         &self,
         Parameters(p): Parameters<ManualBuchungParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::{upsert_account, write_entry_with_value_date};
+        use crate::pg::{post_entry, upsert_account};
         use time::OffsetDateTime;
 
-        let account_id = upsert_account(
+        upsert_account(
             &self.state.pool,
             &p.malo_id,
             &self.state.tenant,
@@ -806,18 +810,26 @@ amount_ct: positive = debit (increases balance); negative = credit (reduces bala
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         let today = OffsetDateTime::now_utc().date();
-        let entry_id = write_entry_with_value_date(
+        // reference_id (when given) makes the post idempotent; else a fresh key.
+        let idempotency = p
+            .reference_id
+            .clone()
+            .unwrap_or_else(|| format!("mcp-manual:{}", uuid::Uuid::new_v4()));
+        let entry_id = post_entry(
+            &self.state.ledger,
             &self.state.pool,
-            account_id,
+            &self.state.tenant,
+            &p.malo_id,
             &self.state.tenant,
             &p.entry_type,
             p.amount_ct,
+            &idempotency,
+            None,
             p.reference_id.as_deref(),
-            None,
-            None,
             today,
             today,
             p.description.as_deref(),
+            None,
         )
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -829,7 +841,7 @@ amount_ct: positive = debit (increases balance); negative = credit (reduces bala
             "amount_ct": p.amount_ct,
             "amount_eur": crate::handlers::format_ct_as_eur(p.amount_ct),
             "booking_date": today.to_string(),
-            "committed": entry_id != uuid::Uuid::nil(),
+            "committed": true,
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))

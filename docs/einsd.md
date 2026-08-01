@@ -32,7 +32,7 @@ graph TB
     Operator["NB Operator / ERP"]
     edmd["edmd :8380\n¼h Einspeisung feed-in\n(GET /feed-in) + kWh"]
     einsd["einsd :9180"]
-    eeg_billing["eeg-billing crate\n10 settlement schemes\n§20 Abs.3 Managementprämie\n§23a degression · §36h Abs.1/2 wind\n§51 Negativpreis · §51a Förderende\n§51b biogas Ausschreibung\n§39n feste Marktprämie\n§52 Abs.6 netting\nSettlementPeriodState · InbetriebnahmeTyp\n328 tests · no I/O"]
+    eeg_billing["eeg-billing crate\n10 settlement schemes\n§20 Abs.3 Managementprämie\n§23a degression · §36h Abs.1/2 wind\n§51 Negativpreis · §51a Förderende\n§51b biogas Ausschreibung\n§39n feste Marktprämie\n§52 Abs.6 netting\nSettlementPeriodState · InbetriebnahmeTyp\nno I/O"]
     db[("PostgreSQL\neeg_anlagen · settlement_receipts\nsettlement_receipt_history\nsettlement_state_transitions\nsect53b_reductions · sect54_reductions\nepex_monthly_prices · epex_spot_prices\nwind_guetefaktor_reevaluations · eeg_verguetungssaetze")]
     erp["ERP webhook\nCloudEvents 1.0"]
     agentd["agentd :9580\neeg-agent\n(all de.eeg.* events)"]
@@ -1157,18 +1157,14 @@ See [agentd operator guide](./agentd.md) for the full trigger→action mapping.
 
 ## Testing
 
-**328 tests** (eeg-billing) across four suites:
+The `eeg-billing` engine is covered across four suites:
 
-```bash
-cargo test -p eeg-billing -p einsd --all-features
-```
-
-| Suite | Count | Coverage |
-|---|---|---|
-| `eeg-billing` lib tests | 86 | Settlement formulas, §52 cap, positions-sum invariant |
-| `prop_tests` (proptest) | 12 | INV-1–INV-10: FeedInTariff exactness, MarketPremium non-negativity, §51 bounds, API contract, PostEeg floor |
-| `regulatory_showcase` | 169 | §51/§51a/§51b, §52, §53b, §100 rules, all schemes, Bestandsschutz, `InbetriebnahmeTyp` lifecycle, §40–41 Wasserkraft, §37a Stecker-PV |
-| `eeg-billing` doctests | 61 | `EegGesetz::from_db_year`, rate helpers, foerderendedatum |
+| Suite | Coverage |
+|---|---|
+| `eeg-billing` lib tests | Settlement formulas, §52 cap, positions-sum invariant |
+| `prop_tests` (proptest) | INV-1–INV-10: FeedInTariff exactness, MarketPremium non-negativity, §51 bounds, API contract, PostEeg floor |
+| `regulatory_showcase` | §51/§51a/§51b, §52, §53b, §100 rules, all schemes, Bestandsschutz, `InbetriebnahmeTyp` lifecycle, §40–41 Wasserkraft, §37a Stecker-PV |
+| `eeg-billing` doctests | `EegGesetz::from_db_year`, rate helpers, foerderendedatum |
 
 ```bash
 cargo test -p eeg-billing -p einsd --all-features

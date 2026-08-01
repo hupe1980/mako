@@ -173,7 +173,7 @@ println!("Encryption key (PEM): {}", pki.encryption.key_pem_str());
 
 ## Security test coverage in makod
 
-`services/makod/tests/as4_security.rs` ships 12 tests that verify BDEW AS4 compliance:
+`services/makod/tests/as4_security.rs` verifies BDEW AS4 compliance:
 
 | Test | Verifies |
 |---|---|

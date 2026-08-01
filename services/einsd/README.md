@@ -36,7 +36,7 @@ through Förderdauer expiry.
 | FLEXIBILITAET | `kwh × (rate_ct + flex_praemie_ct) / 100` |
 
 All arithmetic uses `rust_decimal::Decimal` — never `f64`. Settlement formulas are covered
-by **102 unit tests** without a database:
+by unit tests without a database:
 
 ```bash
 cargo test -p einsd --test settlement_tests
@@ -68,9 +68,9 @@ unless they explicitly trigger a side effect (e.g. `trigger_settle`).
 
 | Suite | Needs a database | Covers |
 |---|---|---|
-| `eeg-billing` unit tests (102) | no | settlement arithmetic, every §-rule |
-| `tests/schema_code_guard.rs` (5) | no | the service's SQL against its own schema |
-| `tests/settlement_integration.rs` (16) | yes | the real router, real SQL, real policy |
+| `eeg-billing` unit tests | no | settlement arithmetic, every §-rule |
+| `tests/schema_code_guard.rs` | no | the service's SQL against its own schema |
+| `tests/settlement_integration.rs` | yes | the real router, real SQL, real policy |
 
 ```bash
 just test-einsd-db      # throwaway PostgreSQL, runs the #[ignore]d suite

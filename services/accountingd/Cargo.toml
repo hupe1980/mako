@@ -33,6 +33,10 @@ rust_decimal = { workspace = true }
 rubo4e       = { workspace = true }
 reqwest      = { workspace = true }
 sepa         = { workspace = true, features = ["json", "time"] }
+# Tamper-evident double-entry ledger kernel — accountingd's accounting/storage base.
+doubleentry  = { workspace = true, features = ["postgres", "serde"] }
+# Keyed hashing for the IBAN lookup key (app-layer, replaces pgcrypto digest()).
+blake3       = "1"
 tracing      = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tower-http   = { version = "0.6" }

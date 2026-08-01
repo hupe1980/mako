@@ -72,7 +72,7 @@ serde_json   = "1"
 thiserror    = "2"
 time         = { version = "0.3", features = ["std", "macros", "serde-well-known", "parsing", "formatting"] }
 time-tz      = { version = "2", features = ["db"] }
-uuid         = { version = "1", features = ["v4", "v5", "serde"] }
+uuid         = { version = "1", features = ["v4", "v5", "v7", "serde"] }
 tower-http   = { version = "0.6", features = ["trace", "request-id", "propagate-header"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # OpenTelemetry — used by mako-service (feature=otel) and services
@@ -107,6 +107,10 @@ energy-billing   = { path = "crates/energy-billing",   version = "0.14" }
 dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.14" }
 metering         = { version = "0.16" }
 sepa             = { version = "0.5.0" }
+# Immutable, tamper-evident double-entry ledger kernel (sibling repo). accountingd's
+# storage/accounting base. Domain-neutral by design — the BillingDocument→Entry and
+# SKR mapping live in accountingd, never in the crate.
+doubleentry      = { path = "../doubleentry", version = "0.1" }
 
 # Kafka client: pure Rust, MSRV 1.88, zero-unsafe, exactly-once semantics.
 # Required by mako-service feature "kafka" (EventBus scale-out backend).

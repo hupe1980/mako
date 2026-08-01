@@ -28,9 +28,9 @@ use crate::{
     pg::{
         CreateMandateRequest, UpdateAccountRequest, create_dunning_case, create_mandate,
         fetch_account, fetch_account_by_id, fetch_mandate, fetch_vorauszahlung,
-        jahresabschluss_already_settled, list_active_mandates, list_ledger, list_ledger_year,
-        list_open_dunning, list_overdue_accounts, record_jahresabschluss, resolve_dunning_case,
-        update_account_tenanted, upsert_account, upsert_vorauszahlung, write_entry,
+        jahresabschluss_already_settled, list_active_mandates, list_ledger, list_open_dunning,
+        list_overdue_accounts, record_jahresabschluss, resolve_dunning_case,
+        update_account_tenanted, upsert_account, upsert_vorauszahlung,
     },
     sepa::build_pain_008,
 };
@@ -105,17 +105,23 @@ pub async fn get_balance(
 /// `GET /api/v1/accounts/{malo_id}/ledger`  — paged ledger entries
 pub async fn get_ledger(
     Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<LedgerQuery>,
 ) -> impl IntoResponse {
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
-    let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
-        Ok(Some(a)) => a,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    match list_ledger(&pool, account.account_id, q.limit.unwrap_or(100).min(1000)).await {
+    if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    match list_ledger(
+        &ledger,
+        lf_mp_id,
+        &malo_id,
+        q.limit.unwrap_or(100).min(1000),
+    )
+    .await
+    {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
@@ -124,6 +130,7 @@ pub async fn get_ledger(
 /// `GET /api/v1/accounts/{malo_id}/kontoauszug`  — account statement (portald-consumable)
 pub async fn get_kontoauszug(
     Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<AccountQuery>,
@@ -134,7 +141,7 @@ pub async fn get_kontoauszug(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
-    let entries = match list_ledger(&pool, account.account_id, 500).await {
+    let entries = match list_ledger(&ledger, lf_mp_id, &malo_id, 500).await {
         Ok(e) => e,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
@@ -200,7 +207,7 @@ pub struct LedgerQuery {
 ///
 /// When `erp_hmac_secret` is configured, the `X-Mako-Signature: sha256=...` header
 /// is verified before any processing. Requests without a valid signature are rejected
-/// with HTTP 403 to prevent fake invoice injection (P0-2 fix).
+/// with HTTP 403 to prevent fake invoice injection.
 ///
 /// Supported event types:
 /// - `de.billing.rechnung.erstellt` → debit entry
@@ -209,11 +216,12 @@ pub struct LedgerQuery {
 /// - `de.eeg.verguetung.berechnet`  → credit entry (EEG settlement)
 pub async fn ingest_webhook(
     Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    // ── P0-2: Inbound HMAC verification ─────────────────────────────────────
+    // ── Inbound HMAC verification ─────────────────────────────────────
     if let Some(ref secret) = cfg.erp_hmac_secret {
         use secrecy::ExposeSecret;
         let provided = headers
@@ -242,7 +250,12 @@ pub async fn ingest_webhook(
     };
 
     let ce_type = ce.get("type").and_then(|v| v.as_str()).unwrap_or("");
-    let ce_id = ce.get("id").and_then(|v| v.as_str()).map(str::to_owned);
+    // A CloudEvent id is mandatory (CE spec) and is the ledger idempotency key —
+    // without it a redelivery could not be deduplicated, so reject it outright.
+    let Some(ce_id) = ce.get("id").and_then(|v| v.as_str()).map(str::to_owned) else {
+        tracing::warn!("accountingd: CloudEvent without an id — cannot deduplicate, rejected");
+        return StatusCode::BAD_REQUEST.into_response();
+    };
     let data = ce.get("data");
     let today = OffsetDateTime::now_utc().date();
 
@@ -282,10 +295,10 @@ pub async fn ingest_webhook(
                     })
                 })
                 .unwrap_or(0);
-            let account_id = upsert_account(&pool, malo_id, lf_mp_id, &cfg.tenant)
+            let account_ok = upsert_account(&pool, malo_id, lf_mp_id, &cfg.tenant)
                 .await
-                .unwrap_or(Uuid::nil());
-            if account_id != Uuid::nil() && amount_ct != 0 {
+                .is_ok();
+            if account_ok && amount_ct != 0 {
                 let record_id = data
                     .and_then(|d| d.get("record_id"))
                     .and_then(|v| v.as_str());
@@ -296,17 +309,21 @@ pub async fn ingest_webhook(
                 } else {
                     ("RECHNUNG", "Kundenrechnung")
                 };
-                if let Err(e) = write_entry(
+                if let Err(e) = crate::pg::post_entry(
+                    &ledger,
                     &pool,
-                    account_id,
                     &cfg.tenant,
+                    malo_id,
+                    lf_mp_id,
                     entry_type,
                     amount_ct,
+                    &ce_id,
+                    Some(&ce_id),
                     record_id,
-                    Some(ce_type),
-                    ce_id.as_deref(),
+                    today,
                     today,
                     Some(description),
+                    None,
                 )
                 .await
                 {
@@ -350,22 +367,26 @@ pub async fn ingest_webhook(
                 .unwrap_or(0);
             if !malo_id.is_empty()
                 && settlement_ct != 0
-                && let Ok(account_id) =
-                    upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant).await
-                && account_id != Uuid::nil()
+                && upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant)
+                    .await
+                    .is_ok()
             {
                 #[allow(clippy::collapsible_if)]
-                if let Err(e) = write_entry(
+                if let Err(e) = crate::pg::post_entry(
+                    &ledger,
                     &pool,
-                    account_id,
+                    &cfg.tenant,
+                    malo_id,
                     &cfg.tenant,
                     "ZAHLUNG",
                     settlement_ct,
-                    ce_id.as_deref(),
-                    Some(ce_type),
-                    ce_id.as_deref(),
+                    &ce_id,
+                    Some(&ce_id),
+                    None,
+                    today,
                     today,
                     Some("NNE-Zahlung bestätigt (INVOIC settled)"),
+                    None,
                 )
                 .await
                 {
@@ -432,18 +453,21 @@ pub async fn ingest_webhook(
                 .await
                 .unwrap_or(Uuid::nil());
             if account_id != Uuid::nil() && amount_ct != 0 {
-                #[allow(clippy::collapsible_if)]
-                if let Err(e) = write_entry(
+                if let Err(e) = crate::pg::post_entry(
+                    &ledger,
                     &pool,
-                    account_id,
+                    &cfg.tenant,
+                    malo_id,
                     &cfg.tenant,
                     "EEG_GUTSCHRIFT",
                     amount_ct,
-                    ce_id.as_deref(),
-                    Some(ce_type),
-                    ce_id.as_deref(),
+                    &ce_id,
+                    Some(&ce_id),
+                    tr_id.as_deref(),
+                    today,
                     today,
                     Some("EEG Einspeisevergütung §21 EEG"),
+                    None,
                 )
                 .await
                 {
@@ -455,60 +479,30 @@ pub async fn ingest_webhook(
                 }
 
                 // ── SCT Inst / SCT CORE auto-payout ─────────────────────────────
-                // If [eeg].auto_payout = true: generate pain.001 immediately.
-                // Creditor IBAN from CE (bank_iban forwarded by einsd) takes
-                // priority; falls back to account zahlungsinformation.iban.
+                // #10 fix: created INLINE (not a detached task). The old spawn ACKed
+                // the CE 200 and then swallowed any payout failure, so a booked
+                // credit could exist with no payout order and no redelivery. Inline,
+                // the order creation is part of the request; both the credit and the
+                // order are idempotent (by CE id / EndToEndId), so a failure is
+                // logged and safely retried on redelivery or via POST /eeg/payouts/run.
                 if cfg.eeg.auto_payout {
-                    // Try CE-supplied bank_iban first; fall back to zahlungsinformation
-                    let creditor_iban_opt = bank_iban.clone();
-
-                    if let Some(creditor_iban) = creditor_iban_opt {
-                        let creditor_name = zahlungsempfaenger
-                            .as_deref()
-                            .unwrap_or("EEG Einspeiser")
-                            .to_owned();
-                        // Spawn detached so we don't hold the webhook response while
-                        // the bank adapter call happens.
-                        let cfg_clone = Arc::clone(&cfg);
-                        let pool_clone = pool.clone();
-                        let malo_owned = malo_id.to_owned();
-                        let ce_id_owned = ce_id.clone();
-                        let tr_id_owned = tr_id.clone();
-                        tokio::spawn(async move {
-                            create_eeg_payout_order(
-                                &cfg_clone,
-                                &pool_clone,
-                                EegPayoutParams {
-                                    malo_id: &malo_owned,
-                                    account_id,
-                                    amount_ct: amount_ct.unsigned_abs() as i64,
-                                    creditor_iban: &creditor_iban,
-                                    creditor_name: &creditor_name,
-                                    tr_id: tr_id_owned.as_deref(),
-                                    billing_year,
-                                    billing_month,
-                                    source_ce_id: ce_id_owned.as_deref(),
-                                },
-                            )
-                            .await;
-                        });
-                    } else {
-                        // No IBAN in CE — look up from zahlungsinformation (async).
-                        let cfg_clone = Arc::clone(&cfg);
-                        let pool_clone = pool.clone();
-                        let malo_owned = malo_id.to_owned();
-                        let ce_id_owned = ce_id.clone();
-                        let tr_id_owned = tr_id.clone();
-                        let bic_owned = bank_bic.clone();
-                        tokio::spawn(async move {
-                            // Fetch zahlungsinformation IBAN from DB
+                    // Creditor IBAN: CE-supplied bank_iban first, else the account's
+                    // stored zahlungsinformation.
+                    let creditor = match bank_iban.clone() {
+                        Some(iban) => Some((
+                            iban,
+                            zahlungsempfaenger
+                                .clone()
+                                .unwrap_or_else(|| "EEG Einspeiser".to_owned()),
+                        )),
+                        None => {
                             let zi: Option<serde_json::Value> = sqlx::query(
                                 "SELECT zahlungsinformation FROM accounts \
                                  WHERE malo_id = $1 AND tenant = $2",
                             )
-                            .bind(&malo_owned)
-                            .bind(&cfg_clone.tenant)
-                            .fetch_optional(&pool_clone)
+                            .bind(malo_id)
+                            .bind(&cfg.tenant)
+                            .fetch_optional(&pool)
                             .await
                             .ok()
                             .flatten()
@@ -516,45 +510,47 @@ pub async fn ingest_webhook(
                                 use sqlx::Row;
                                 r.try_get("zahlungsinformation").unwrap_or(None)
                             });
-
-                            let fallback_iban = zi
-                                .as_ref()
+                            zi.as_ref()
                                 .and_then(|z| z.get("bankverbindung"))
                                 .and_then(|b| b.get("iban"))
                                 .and_then(|v| v.as_str())
-                                .map(str::to_owned);
-                            let fallback_name = zi
-                                .as_ref()
-                                .and_then(|z| z.get("kontoinhaber"))
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("EEG Einspeiser")
-                                .to_owned();
-                            let _ = bic_owned; // included in pain.001 only if bank_bic in CE
-                            if let Some(iban) = fallback_iban {
-                                create_eeg_payout_order(
-                                    &cfg_clone,
-                                    &pool_clone,
-                                    EegPayoutParams {
-                                        malo_id: &malo_owned,
-                                        account_id,
-                                        amount_ct: amount_ct.unsigned_abs() as i64,
-                                        creditor_iban: &iban,
-                                        creditor_name: &fallback_name,
-                                        tr_id: tr_id_owned.as_deref(),
-                                        billing_year,
-                                        billing_month,
-                                        source_ce_id: ce_id_owned.as_deref(),
-                                    },
-                                )
-                                .await;
-                            } else {
-                                tracing::info!(
-                                    malo_id = %malo_owned,
-                                    "accountingd: auto_payout=true but no creditor IBAN available — \
-                                     set bank_iban in EEG plant record or PUT zahlungsinformation"
-                                );
-                            }
-                        });
+                                .map(str::to_owned)
+                                .map(|iban| {
+                                    let name = zi
+                                        .as_ref()
+                                        .and_then(|z| z.get("kontoinhaber"))
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("EEG Einspeiser")
+                                        .to_owned();
+                                    (iban, name)
+                                })
+                        }
+                    };
+                    let _ = bank_bic; // carried in pain.001 only when present in the CE
+
+                    if let Some((creditor_iban, creditor_name)) = creditor {
+                        create_eeg_payout_order(
+                            &cfg,
+                            &pool,
+                            EegPayoutParams {
+                                malo_id,
+                                account_id,
+                                amount_ct: amount_ct.unsigned_abs() as i64,
+                                creditor_iban: &creditor_iban,
+                                creditor_name: &creditor_name,
+                                tr_id: tr_id.as_deref(),
+                                billing_year,
+                                billing_month,
+                                source_ce_id: Some(&ce_id),
+                            },
+                        )
+                        .await;
+                    } else {
+                        tracing::info!(
+                            malo_id,
+                            "accountingd: auto_payout=true but no creditor IBAN available — \
+                             set bank_iban in the EEG plant record or PUT zahlungsinformation"
+                        );
                     }
                 }
             }
@@ -581,22 +577,28 @@ pub async fn ingest_webhook(
                     })
                 })
                 .unwrap_or(0);
-            let account_id = upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant)
-                .await
-                .unwrap_or(Uuid::nil());
-            if account_id != Uuid::nil() && amount_ct != 0 {
+            if !malo_id.is_empty()
+                && amount_ct != 0
+                && upsert_account(&pool, malo_id, &cfg.tenant, &cfg.tenant)
+                    .await
+                    .is_ok()
+            {
                 #[allow(clippy::collapsible_if)]
-                if let Err(e) = write_entry(
+                if let Err(e) = crate::pg::post_entry(
+                    &ledger,
                     &pool,
-                    account_id,
+                    &cfg.tenant,
+                    malo_id,
                     &cfg.tenant,
                     "EEG_MARKTPRAEMIE",
                     amount_ct,
-                    ce_id.as_deref(),
-                    Some(ce_type),
-                    ce_id.as_deref(),
+                    &ce_id,
+                    Some(&ce_id),
+                    None,
+                    today,
                     today,
                     Some("EEG Direktvermarktung Marktprämie §20 EEG"),
+                    None,
                 )
                 .await
                 {
@@ -635,6 +637,8 @@ pub async fn ingest_webhook(
 pub async fn import_payments(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Extension(iban_key): Extension<Option<[u8; 32]>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Json(entries): Json<Vec<serde_json::Value>>,
 ) -> impl IntoResponse {
@@ -704,38 +708,50 @@ pub async fn import_payments(
             Ok(false) => {}
         }
 
-        let account_row =
-            sqlx::query("SELECT account_id FROM accounts WHERE iban_hash = encode(digest(upper(replace($1,' ','')), 'sha256'), 'hex') AND tenant = $2 LIMIT 1")
-                .bind(&entry.iban)
-                .bind(&cfg.tenant)
-                .fetch_optional(&pool)
-                .await;
+        // Resolve the customer by the app-computed IBAN lookup hash (keyed BLAKE3;
+        // replaces the pgcrypto digest()). Fetch malo/lf_mp for the Kontokorrent.
+        let iban_h = crate::ledger::iban_hash(iban_key.as_ref(), &entry.iban);
+        let account_row = sqlx::query(
+            "SELECT malo_id, lf_mp_id FROM accounts WHERE iban_hash = $1 AND tenant = $2 LIMIT 1",
+        )
+        .bind(&iban_h)
+        .bind(&cfg.tenant)
+        .fetch_optional(&pool)
+        .await;
 
         if let Ok(Some(row)) = account_row {
-            let account_id: Uuid = row.try_get("account_id").unwrap_or(Uuid::nil());
-            if account_id != Uuid::nil() {
+            let malo_id: String = row.try_get("malo_id").unwrap_or_default();
+            let lf_mp_id: String = row.try_get("lf_mp_id").unwrap_or_default();
+            if !malo_id.is_empty() {
                 let entry_type = if entry.is_return() {
                     "BANKRUECKLAST"
                 } else {
                     "ZAHLUNG"
                 };
-                let ledger_result = write_entry(
+                // Idempotency keyed on the bank transaction id — a re-import of the
+                // same CAMT.054 entry replays as a ledger no-op rather than
+                // double-booking (fixes the old non-transactional dedup race).
+                let ledger_result = crate::pg::post_entry(
+                    &ledger,
                     &pool,
-                    account_id,
                     &cfg.tenant,
+                    &malo_id,
+                    &lf_mp_id,
                     entry_type,
                     entry.to_ledger_ct(),
+                    &format!("bank:{bank_txn_id}"),
+                    None,
                     Some(entry.reference.as_str()),
-                    None,
-                    None,
+                    date,
                     date,
                     Some(entry.description().as_str()),
+                    None,
                 )
                 .await;
 
                 match ledger_result {
                     Ok(ledger_id) => {
-                        // Record in dedup log to prevent re-import
+                        // Secondary audit log (the ledger key is the real dedup now).
                         if let Err(e) = crate::pg::record_bank_import(
                             &pool,
                             &cfg.tenant,
@@ -743,7 +759,7 @@ pub async fn import_payments(
                             entry.to_ledger_ct().abs(),
                             Some(&entry.iban),
                             date,
-                            ledger_id,
+                            Some(ledger_id),
                         )
                         .await
                         {
@@ -786,6 +802,8 @@ pub async fn import_payments(
 pub async fn import_payments_camt054(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Extension(iban_key): Extension<Option<[u8; 32]>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     body: String,
 ) -> impl IntoResponse {
@@ -887,10 +905,11 @@ pub async fn import_payments_camt054(
                     Ok(false) => {}
                 }
 
+                let iban_h = crate::ledger::iban_hash(iban_key.as_ref(), counterparty_iban);
                 let account_row = sqlx::query(
-                    "SELECT account_id FROM accounts WHERE iban_hash = encode(digest(upper(replace($1,' ','')), 'sha256'), 'hex') AND tenant = $2 LIMIT 1",
+                    "SELECT malo_id, lf_mp_id FROM accounts WHERE iban_hash = $1 AND tenant = $2 LIMIT 1",
                 )
-                .bind(counterparty_iban)
+                .bind(&iban_h)
                 .bind(&cfg.tenant)
                 .fetch_optional(&pool)
                 .await;
@@ -899,8 +918,9 @@ pub async fn import_payments_camt054(
                     skipped += 1;
                     continue;
                 };
-                let account_id: Uuid = row.try_get("account_id").unwrap_or(Uuid::nil());
-                if account_id == Uuid::nil() {
+                let malo_id: String = row.try_get("malo_id").unwrap_or_default();
+                let lf_mp_id: String = row.try_get("lf_mp_id").unwrap_or_default();
+                if malo_id.is_empty() {
                     skipped += 1;
                     continue;
                 }
@@ -925,17 +945,21 @@ pub async fn import_payments_camt054(
                     None => "camt.054 Zahlungseingang".to_owned(),
                 };
 
-                match write_entry(
+                match crate::pg::post_entry(
+                    &ledger,
                     &pool,
-                    account_id,
                     &cfg.tenant,
+                    &malo_id,
+                    &lf_mp_id,
                     entry_type,
                     ledger_ct,
+                    &format!("bank:{bank_txn_id}"),
+                    None,
                     Some(reference),
-                    None,
-                    None,
+                    date,
                     date,
                     Some(&description),
+                    None,
                 )
                 .await
                 {
@@ -947,7 +971,7 @@ pub async fn import_payments_camt054(
                             signed_ct.abs(),
                             Some(counterparty_iban),
                             date,
-                            ledger_id,
+                            Some(ledger_id),
                         )
                         .await
                         {
@@ -1108,7 +1132,7 @@ pub async fn get_offene_posten(
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Query(q): Query<OffenePostenQuery>,
 ) -> impl IntoResponse {
-    // P0-1 fix: parse min_balance_eur as a decimal string to avoid f64 rounding errors.
+    // parse min_balance_eur as a decimal string to avoid f64 rounding errors.
     // e.g. "1.99" must produce 199 ct, not 198 ct from (1.99 * 100.0) as i64.
     let min_ct: i64 = q
         .min_balance_eur
@@ -1320,7 +1344,7 @@ pub async fn run_sepa(
         }
     }
 
-    // P1-2 fix: validate creditor_iban before generating pain.008.
+    // validate creditor_iban before generating pain.008.
     // A missing or invalid creditor IBAN causes hard rejection at the bank with return fees.
     let creditor_iban = match cfg.creditor_iban.as_deref().filter(|s| !s.is_empty()) {
         Some(iban) => iban,
@@ -1552,18 +1576,20 @@ pub struct BuchenRequest {
 /// - GUTSCHRIFT for one-off credits (e.g. goodwill, §40 EnWG compensation)
 ///
 /// ## Idempotency
-/// Supply `reference_id` — re-posting with the same `reference_id` will create
-/// a new entry (no idempotency guard on this endpoint; use with care).
+/// Supply `reference_id` to make the post idempotent — re-posting with the same
+/// `reference_id` replays as a ledger no-op. Omit it and each call books a new
+/// entry (a fresh random key), matching the old unguarded behaviour.
 pub async fn post_buchen(
-    _claims: Claims,
+    claims: Claims,
     Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Json(req): Json<BuchenRequest>,
 ) -> impl IntoResponse {
     use time::format_description::well_known::Iso8601;
 
-    // Validate entry_type against the allowed set (DB constraint mirrors this).
+    // Validate entry_type against the allowed set.
     const ALLOWED: &[&str] = &[
         "RECHNUNG",
         "ZAHLUNG",
@@ -1597,10 +1623,9 @@ pub async fn post_buchen(
     }
 
     let lf_mp_id = req.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
-    let account_id = match upsert_account(&pool, &malo_id, &lf_mp_id, &cfg.tenant).await {
-        Ok(id) => id,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
+    if let Err(e) = upsert_account(&pool, &malo_id, &lf_mp_id, &cfg.tenant).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
 
     let today = OffsetDateTime::now_utc().date();
     let booking_date = req
@@ -1614,18 +1639,28 @@ pub async fn post_buchen(
         .and_then(|s| time::Date::parse(s, &Iso8601::DEFAULT).ok())
         .unwrap_or(booking_date);
 
-    match crate::pg::write_entry_with_value_date(
+    // Idempotency: the operator's reference_id when given (repost = no-op), else a
+    // fresh key so each call books a new entry.
+    let idempotency = req
+        .reference_id
+        .clone()
+        .unwrap_or_else(|| format!("manual:{}", Uuid::new_v4()));
+
+    match crate::pg::post_entry(
+        &ledger,
         &pool,
-        account_id,
         &cfg.tenant,
+        &malo_id,
+        &lf_mp_id,
         &req.entry_type,
         req.amount_ct,
+        &idempotency,
+        None,
         req.reference_id.as_deref(),
-        None,
-        None,
         booking_date,
         value_date,
         req.description.as_deref(),
+        Some(claims.sub()),
     )
     .await
     {
@@ -1683,6 +1718,7 @@ pub struct JahresabschlussQuery {
 pub async fn post_jahresabschluss(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<JahresabschlussQuery>,
@@ -1704,28 +1740,20 @@ pub async fn post_jahresabschluss(
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
-    // 2. Sum all entries for the year.
-    let entries = match list_ledger_year(&pool, acct.account_id, year).await {
-        Ok(e) => e,
+    // 2. Sum the year's movements by kind from the doubleentry ledger.
+    // Values are signed Kontokorrent contributions (debit +, credit −).
+    let sums = match ledger.year_kind_sums(lf_mp_id, &malo_id, year).await {
+        Ok(s) => s,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
+    let kind = |k: &str| sums.get(k).copied().unwrap_or(0);
 
-    let abschlag_sum: i64 = entries
-        .iter()
-        .filter(|e| e.entry_type == "ABSCHLAG")
-        .map(|e| e.amount_ct)
-        .sum(); // negative — Abschläge are credits
+    // Abschläge are credits (negative).
+    let abschlag_sum: i64 = kind("ABSCHLAG");
 
-    // Sum ALL debit entries for the year (§40 Abs. 1 EnWG: Jahresabrechnung must
-    // reflect actual billed amounts, including corrections/stornos).
-    // RECHNUNG   = regular invoices (positive/debit)
-    // STORNO     = billing reversals (may be negative/credit)
-    // MAHNGEBUEHR = dunning fees (positive/debit)
-    let rechnung_sum: i64 = entries
-        .iter()
-        .filter(|e| matches!(e.entry_type.as_str(), "RECHNUNG" | "STORNO" | "MAHNGEBUEHR"))
-        .map(|e| e.amount_ct)
-        .sum();
+    // All billed debits for the year (§40 Abs. 1 EnWG: the Jahresabrechnung must
+    // reflect actual billed amounts, including corrections/stornos and fees).
+    let rechnung_sum: i64 = kind("RECHNUNG") + kind("STORNO") + kind("MAHNGEBUEHR");
 
     // settlement_ct > 0  → Nachzahlung (customer still owes)
     // settlement_ct < 0  → Erstattung (customer overpaid → refund)
@@ -1785,8 +1813,8 @@ pub async fn post_jahresabschluss(
     }
 
     let today = OffsetDateTime::now_utc().date();
-    // Deterministic idempotency key — the write_entry gate (processed_events +
-    // UNIQUE(tenant, ce_id)) makes a redelivery a no-op even under a race.
+    // Deterministic idempotency key — the ledger post is keyed by it, so a
+    // redelivery replays as a no-op returning the original settlement entry.
     let ce_id = format!("jahresabschluss:{malo_id}:{year}");
 
     // 3. Realise the settlement.
@@ -1848,22 +1876,28 @@ pub async fn post_jahresabschluss(
                     }
                 }
                 // Clearing debit: zeroes the credit balance the refund pays out.
+                // Idempotent by `ce_id` — if the satellite tx below fails, an
+                // operator retry replays this as a no-op and completes the run.
                 let desc = format!("Erstattung Jahresabschluss {year} (Auszahlung an Kunde)");
-                match write_entry(
+                match crate::pg::post_entry(
+                    &ledger,
                     &pool,
-                    acct.account_id,
                     &cfg.tenant,
+                    &malo_id,
+                    lf_mp_id,
                     "JAHRESABSCHLUSS",
                     refund_ct,
-                    None,
-                    Some(mako_events::accounting::ERSTATTUNG_FAELLIG),
+                    &ce_id,
                     Some(&ce_id),
+                    None,
+                    today,
                     today,
                     Some(&desc),
+                    None,
                 )
                 .await
                 {
-                    Ok(id) => settlement_entry_id = id,
+                    Ok(id) => settlement_entry_id = Some(id),
                     Err(e) => {
                         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
                     }
@@ -2140,7 +2174,7 @@ mod iban_tests {
     }
 }
 
-// ── P1-3: Open-item management ────────────────────────────────────────────────
+// ── Open-item management ────────────────────────────────────────────────
 
 /// `GET /api/v1/accounts/{malo_id}/open-items`
 ///
@@ -2175,6 +2209,7 @@ mod iban_tests {
 /// ```
 pub async fn get_open_items(
     Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<AccountQuery>,
@@ -2185,7 +2220,7 @@ pub async fn get_open_items(
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
-    match crate::pg::list_open_items(&pool, account.account_id, &cfg.tenant).await {
+    match crate::pg::list_open_items(&ledger, lf_mp_id, &malo_id).await {
         Ok(items) => Json(serde_json::json!({
             "malo_id": malo_id,
             "balance_ct": account.balance_ct,
@@ -2198,7 +2233,7 @@ pub async fn get_open_items(
     }
 }
 
-// ── P1-4: GDPR Art. 17 anonymization ─────────────────────────────────────────
+// ── GDPR Art. 17 anonymization ─────────────────────────────────────────
 
 #[derive(Debug, serde::Deserialize)]
 pub struct AnonymizeRequest {
@@ -2317,20 +2352,195 @@ pub struct ReconcileQuery {
 pub async fn post_reconcile(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<ReconcileQuery>,
 ) -> impl IntoResponse {
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
-    let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
-        Ok(Some(a)) => a,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
+    if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let repair = q.repair.unwrap_or(false);
-    match crate::pg::reconcile_balance(&pool, account.account_id, &cfg.tenant, repair).await {
+    match crate::pg::reconcile_balance(&ledger, &pool, &malo_id, lf_mp_id, &cfg.tenant, repair)
+        .await
+    {
         Ok(result) => Json(result).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ── Festschreibung (period seals) + audit proofs — GoBD / § 146 AO / § 239 HGB ──
+
+/// Body for `POST /api/v1/periods/{period_id}/seal`.
+#[derive(Debug, serde::Deserialize)]
+pub struct SealPeriodRequest {
+    /// First day of the period (inclusive, ISO 8601).
+    pub start: String,
+    /// Last day of the period (inclusive, ISO 8601).
+    pub end: String,
+}
+
+fn seal_json(seal: &doubleentry::Seal) -> serde_json::Value {
+    serde_json::json!({
+        "period": seal.period.as_str(),
+        "seal_hash": seal.seal_hash.to_string(),
+        "tree_root": seal.tree_head.root.to_string(),
+        "tree_size": seal.tree_head.size,
+        "trial_balance_root": seal.trial_balance_root.to_string(),
+        "entry_count": seal.entry_count,
+        "first_index": seal.first_index,
+        "last_index": seal.last_index,
+        "prev_seal": seal.prev_seal.map(|h| h.to_string()),
+    })
+}
+
+/// `POST /api/v1/periods/{period_id}/seal` — Festschreibung.
+///
+/// Closes and seals a period, committing to its entries and closing balances as
+/// chained Merkle roots. After sealing, a backdated booking into the period is
+/// rejected — corrections book into a later open period (§ 146 Abs. 4 AO).
+pub async fn post_seal_period(
+    _claims: Claims,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Path(period_id): Path<String>,
+    Json(req): Json<SealPeriodRequest>,
+) -> impl IntoResponse {
+    use time::format_description::well_known::Iso8601;
+    let (Ok(start), Ok(end)) = (
+        time::Date::parse(&req.start, &Iso8601::DEFAULT),
+        time::Date::parse(&req.end, &Iso8601::DEFAULT),
+    ) else {
+        return (StatusCode::BAD_REQUEST, "invalid start/end date (ISO 8601)").into_response();
+    };
+    match ledger.seal_period(&period_id, start, end).await {
+        Ok(seal) => (StatusCode::CREATED, Json(seal_json(&seal))).into_response(),
+        Err(e) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/v1/periods/seals` — the Festschreibung history, with chain verification.
+pub async fn get_seals(
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+) -> impl IntoResponse {
+    let seals = match ledger.seals().await {
+        Ok(s) => s,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let verified = ledger.verify_seals().await;
+    Json(serde_json::json!({
+        "count": seals.len(),
+        "chain_valid": verified.is_ok(),
+        "verify_error": verified.err().map(|e| e.to_string()),
+        "seals": seals.iter().map(seal_json).collect::<Vec<_>>(),
+    }))
+    .into_response()
+}
+
+/// `GET /api/v1/entries/{entry_id}/proof` — a Merkle inclusion proof that the
+/// entry is committed to by the current head (tamper-evidence for an auditor).
+pub async fn get_entry_proof(
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Path(entry_id): Path<String>,
+) -> impl IntoResponse {
+    let Ok(uuid) = Uuid::parse_str(&entry_id) else {
+        return (StatusCode::BAD_REQUEST, "invalid entry_id").into_response();
+    };
+    match ledger
+        .prove_entry(doubleentry::EntryId::from_uuid(uuid))
+        .await
+    {
+        Ok((content_hash, proof, head)) => {
+            let verified = proof.verify(&content_hash, &head.root);
+            Json(serde_json::json!({
+                "entry_id": entry_id,
+                "content_hash": content_hash.to_string(),
+                "tree_size": head.size,
+                "tree_root": head.root.to_string(),
+                "verified": verified,
+                "proof": serde_json::to_value(&proof).unwrap_or(serde_json::Value::Null),
+            }))
+            .into_response()
+        }
+        Err(e) => (StatusCode::NOT_FOUND, e.to_string()).into_response(),
+    }
+}
+
+// ── Trial balance + open-item clearing (Zahlungszuordnung) ────────────────────
+
+/// `GET /api/v1/trial-balance` — Summen- und Saldenliste (§ 238 HGB): gross debit
+/// and credit turnover and the balance per GL account. Debits must equal credits.
+pub async fn get_trial_balance(
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+) -> impl IntoResponse {
+    match ledger.trial_balance().await {
+        Ok(lines) => {
+            let total_debits: i64 = lines.iter().map(|l| l.debits_ct).sum();
+            let total_credits: i64 = lines.iter().map(|l| l.credits_ct).sum();
+            Json(serde_json::json!({
+                "lines": lines,
+                "total_debits_ct": total_debits,
+                "total_credits_ct": total_credits,
+                "balanced": total_debits == total_credits,
+            }))
+            .into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `POST /api/v1/accounts/{malo_id}/clear` — record a FIFO **Zahlungszuordnung**
+/// (open credits matched against the oldest open debits). Idempotent: matches
+/// nothing when everything is already assigned.
+pub async fn post_clear(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(malo_id): Path<String>,
+    Query(q): Query<AccountQuery>,
+) -> impl IntoResponse {
+    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
+    if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let today = OffsetDateTime::now_utc().date();
+    match ledger.apply_fifo_clearing(lf_mp_id, &malo_id, today).await {
+        Ok(Some(id)) => Json(serde_json::json!({
+            "cleared": true,
+            "clearing_id": id.to_string(),
+        }))
+        .into_response(),
+        Ok(None) => Json(serde_json::json!({
+            "cleared": false,
+            "message": "nothing left to match",
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `POST /api/v1/clearings/{clearing_id}/reset` — release a Zahlungszuordnung; the
+/// applied amounts return to the postings' residuals (the original record stays).
+pub async fn post_reset_clearing(
+    _claims: Claims,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Path(clearing_id): Path<String>,
+) -> impl IntoResponse {
+    let Ok(uuid) = Uuid::parse_str(&clearing_id) else {
+        return (StatusCode::BAD_REQUEST, "invalid clearing_id").into_response();
+    };
+    let today = OffsetDateTime::now_utc().date();
+    match ledger
+        .reset_clearing(doubleentry::clearing::ClearingId::from_uuid(uuid), today)
+        .await
+    {
+        Ok(()) => Json(serde_json::json!({ "reset": true })).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
     }
 }
 
@@ -2531,6 +2741,7 @@ pub struct RunEegPayoutsRequest {
 pub async fn post_run_eeg_payouts(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Json(req): Json<RunEegPayoutsRequest>,
 ) -> impl IntoResponse {
@@ -2554,51 +2765,14 @@ pub async fn post_run_eeg_payouts(
     let year = req.billing_year.unwrap_or(today.year() as i16);
     let month = req.billing_month.unwrap_or(today.month() as i16);
 
-    // Fetch all EEG_GUTSCHRIFT ledger entries for the given period that do not
-    // yet have a payout order.
-    let ungrouped_sql = if req.malo_id.is_some() {
-        r"SELECT le.id, le.account_id, le.amount_ct, le.reference_id, le.description, le.ce_id,
-                 a.malo_id, a.zahlungsinformation
-          FROM ledger_entries le
-          JOIN accounts a ON a.account_id = le.account_id
-          WHERE le.entry_type = 'EEG_GUTSCHRIFT'
-            AND a.tenant = $1
-            AND a.malo_id = $2
-            AND EXTRACT(YEAR  FROM le.booking_date) = $3
-            AND EXTRACT(MONTH FROM le.booking_date) = $4
-            AND le.id NOT IN (SELECT source_ce_id FROM eeg_payout_orders WHERE tenant = $1)"
-    } else {
-        r"SELECT le.id, le.account_id, le.amount_ct, le.reference_id, le.description, le.ce_id,
-                 a.malo_id, a.zahlungsinformation
-          FROM ledger_entries le
-          JOIN accounts a ON a.account_id = le.account_id
-          WHERE le.entry_type = 'EEG_GUTSCHRIFT'
-            AND a.tenant = $1
-            AND EXTRACT(YEAR  FROM le.booking_date) = $3
-            AND EXTRACT(MONTH FROM le.booking_date) = $4
-            AND le.id::text NOT IN (SELECT source_ce_id FROM eeg_payout_orders WHERE tenant = $1)"
-    };
-
-    let rows = if let Some(ref malo) = req.malo_id {
-        sqlx::query(ungrouped_sql)
-            .bind(&cfg.tenant)
-            .bind(malo)
-            .bind(year as f64)
-            .bind(month as f64)
-            .fetch_all(&pool)
-            .await
-    } else {
-        sqlx::query(ungrouped_sql)
-            .bind(&cfg.tenant)
-            .bind(&cfg.tenant) // placeholder for $2 slot not used in this branch
-            .bind(year as f64)
-            .bind(month as f64)
-            .fetch_all(&pool)
-            .await
-    };
-
-    let rows = match rows {
-        Ok(r) => r,
+    // EEG_GUTSCHRIFT entries booked in the period, from the ledger. Re-runs are
+    // idempotent via ON CONFLICT (end_to_end_ref) below, so no exclusion query is
+    // needed — an already-paid entry simply produces no new order.
+    let candidates = match ledger
+        .entries_of_kind_in_month("EEG_GUTSCHRIFT", year as i32, month as u8)
+        .await
+    {
+        Ok(c) => c,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
@@ -2606,14 +2780,32 @@ pub async fn post_run_eeg_payouts(
     let mut skipped_no_iban = 0usize;
     let mut errors = 0usize;
 
-    for row in &rows {
-        use sqlx::Row;
-        let malo_id: String = row.get("malo_id");
-        let account_id: uuid::Uuid = row.get("account_id");
-        let amount_ct: i64 = row.get::<i64, _>("amount_ct").abs();
-        let ce_id: Option<String> = row.try_get("ce_id").unwrap_or(None);
+    for cand in &candidates {
+        let malo_id = cand.malo_id.clone();
+        if let Some(ref only) = req.malo_id
+            && *only != malo_id
+        {
+            continue;
+        }
+        let amount_ct = cand.amount_ct.abs();
+        let ce_id = cand.correlation.clone();
+
+        // Fetch the operator account (account_id for the order row + payout IBAN).
+        let account = match fetch_account(&pool, &malo_id, &cand.lf_mp_id, &cfg.tenant).await {
+            Ok(Some(a)) => a,
+            Ok(None) => {
+                errors += 1;
+                continue;
+            }
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+        let account_id = account.account_id;
         let zahlungsinformation: Option<serde_json::Value> =
-            row.try_get("zahlungsinformation").unwrap_or(None);
+            sqlx::query_scalar("SELECT zahlungsinformation FROM accounts WHERE account_id = $1")
+                .bind(account_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap_or(None);
 
         // Extract creditor IBAN from account's zahlungsinformation.
         let creditor_iban = zahlungsinformation
@@ -3087,6 +3279,7 @@ pub struct CreateInterestChargeRequest {
 /// the charge in `interest_charges` for audit.
 pub async fn post_interest_charge(
     Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     _claims: Claims,
     Path(malo_id): Path<String>,
@@ -3114,9 +3307,12 @@ pub async fn post_interest_charge(
     }
 
     match crate::pg::create_interest_charge(
+        &ledger,
         &pool,
         account.account_id,
         &cfg.tenant,
+        &malo_id,
+        lf_mp_id,
         req.invoice_reference.as_deref(),
         req.principal_ct,
         req.is_b2b.unwrap_or(false),

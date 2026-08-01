@@ -1,32 +1,35 @@
--- ── accountingd schema — Massenkontokorrent / Customer Account Ledger ─────────
+-- ── accountingd schema — customer master data + payments satellites ──────────
+--
+-- The double-entry ledger itself — the journal, per-account balances, the
+-- append-only Merkle log, period seals, and open-item clearing — lives in the
+-- `doubleentry` crate's own schema (see `ledger.rs`), NOT here. This file holds
+-- only the domain state around it: customer master data and the SEPA / dunning /
+-- audit machinery.
 --
 -- Tables:
---   accounts             — one row per (malo_id, lf_mp_id, tenant) — the Kundenkonto
---   ledger_entries       — immutable debit/credit log (positive = debit, negative = credit)
---   journal_lines        — double-entry shadow: balanced debit/credit pairs per SKR 03/04
+--   accounts             — one row per (malo_id, lf_mp_id, tenant) — Kundenstammdaten
 --   sepa_mandates        — SEPA direct-debit mandate registry
 --   dunning_cases        — Mahnwesen escalation (Mahnstufe 1–3)
 --   interest_charges     — Verzugszinsen §288 BGB (default interest on overdue invoices)
+--   ecb_base_rates       — Basiszinssatz history (§247 BGB)
 --   payment_plans        — Zahlungsvereinbarung (structured installment agreements)
 --   payment_plan_installments — individual installments per plan
 --   bank_import_log      — CAMT.054 deduplication (bank transaction IDs already imported)
---   processed_events     — idempotency guard for CloudEvent ingest
 --   anonymization_log    — GDPR Art. 17 erasure audit trail (INSERT-only)
 --   auto_dunning_runs    — daily auto-dunning idempotency + audit
 --   eeg_payout_orders    — EEG SCT/SCT Inst payout pipeline
 --   sepa_collection_runs — pain.008 XML archive for audit + replay
---   abschlag_runs        — monthly Abschlag idempotency
 --   jahresabschluss_runs — annual settlement idempotency
 --   account_audit_log    — §238 HGB master-data change trail
---   processed_events     — CloudEvent idempotency
 --
 -- Regulatory: §40 EnWG (Abschlag), §238 HGB (Buchführungspflicht 10y),
 --             §288 BGB (Verzugszinsen), GDPR Art. 15/17/20, SEPA Regulation 260/2012.
+--
+-- No pgcrypto: the IBAN lookup hash is computed in the application (keyed BLAKE3),
+-- so pgcrypto's digest() is no longer needed. gen_random_uuid() is core PostgreSQL
+-- (>= 13), not an extension, so surrogate keys keep their server-side default.
 
--- pgcrypto: for IBAN SHA-256 hash (lookup key for encrypted IBAN columns)
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
--- ── Kundenkonto ───────────────────────────────────────────────────────────────
+-- ── Kundenstammdaten ─────────────────────────────────────────────────────────
 
 CREATE TABLE accounts (
     account_id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -39,18 +42,16 @@ CREATE TABLE accounts (
     -- FI-CA-style contract-account aggregation (cross-MaLo balance & dunning).
     kunden_nr           TEXT,
 
-    -- SEPA mandate IBAN (denormalized for fast payment-matching lookup)
-    -- Stored as plaintext; for encrypted deployments set iban_encrypted=true
-    -- and store pgp_sym_encrypt(iban, key) here instead.
+    -- SEPA mandate IBAN (denormalized for fast payment-matching lookup).
+    -- Stored as plaintext; for encrypted deployments set iban_encrypted=true and
+    -- store ciphertext here — the lookup still works via iban_hash.
     iban                TEXT,
-    -- SHA-256 hash of normalised IBAN (uppercase, no spaces).
-    -- Used as an indexed lookup key in CAMT.054 matching even when IBAN is encrypted.
-    iban_hash           TEXT GENERATED ALWAYS AS (
-                            CASE WHEN iban IS NOT NULL
-                            THEN encode(digest(upper(replace(iban,' ','')), 'sha256'), 'hex')
-                            ELSE NULL END
-                        ) STORED,
-    -- Set to true when `iban` column stores pgp_sym_encrypt(...) ciphertext.
+    -- Keyed BLAKE3 hash of the normalised IBAN (uppercase, no spaces), computed in
+    -- the application (see ledger/iban_hash). Used as an indexed lookup key in
+    -- CAMT.054 matching even when the IBAN is encrypted. A keyed hash — not plain
+    -- SHA-256 — so the small IBAN keyspace cannot be enumerated offline from it.
+    iban_hash           TEXT,
+    -- Set to true when `iban` column stores ciphertext.
     iban_encrypted      BOOLEAN     NOT NULL DEFAULT false,
     mandatsref          TEXT,
 
@@ -60,8 +61,14 @@ CREATE TABLE accounts (
     -- Day of month for automated Abschlag booking (1–28)
     billing_day         SMALLINT    NOT NULL DEFAULT 1,
 
-    -- Cached cumulative balance (negative = credit, positive = outstanding debt)
-    -- Updated atomically on every ledger write
+    -- Ledger-DERIVED balance projection (negative = credit, positive = debt),
+    -- in EUR-cent. NOT the system of record: the authoritative balance is the
+    -- signed net of this customer's Kontokorrent in the doubleentry ledger. This
+    -- column is a materialized cache for portfolio queries (open receivables,
+    -- aging, dunning candidate selection) that need set-based SUMs over all
+    -- accounts. It is set ABSOLUTELY from the ledger net after every post — not
+    -- incremented — so it cannot drift by arithmetic, and `reconcile_balance`
+    -- re-derives it from the ledger.
     balance_ct          BIGINT      NOT NULL DEFAULT 0,
 
     -- BO4E Vorauszahlung COM: typed advance-payment schedule (§40 EnWG)
@@ -79,13 +86,10 @@ CREATE TABLE accounts (
 );
 
 COMMENT ON TABLE accounts IS
-    'Customer account ledger (Massenkontokorrent). '
-    'One row per (MaLo, Lieferant, tenant). Balance is a cached aggregate from ledger_entries. '
-    'Regulatory: §40 EnWG, §238 HGB (10y retention), GDPR Art. 17.';
-
-COMMENT ON COLUMN accounts.balance_ct IS
-    'Cached SUM(amount_ct) from ledger_entries. '
-    'Negative = credit balance (customer overpaid). Positive = outstanding debt.';
+    'Customer master data (Kundenstammdaten). One row per (MaLo, Lieferant, tenant). '
+    'balance_ct is a ledger-derived read cache, NOT the system of record — the '
+    'authoritative balance is the signed net of this customer''s Kontokorrent in '
+    'the doubleentry ledger. Regulatory: §40 EnWG, §238 HGB (10y retention), GDPR Art. 17.';
 
 COMMENT ON COLUMN accounts.anonymized_at IS
     'GDPR Art. 17: set when PII (IBAN, mandatsref, zahlungsinformation) was '
@@ -93,65 +97,19 @@ COMMENT ON COLUMN accounts.anonymized_at IS
 
 CREATE INDEX acct_tenant       ON accounts (tenant, lf_mp_id);
 CREATE INDEX acct_malo_tenant  ON accounts (malo_id, tenant);
-CREATE INDEX acct_overdue      ON accounts (tenant)
-CREATE INDEX acct_bp ON accounts (tenant, kunden_nr) WHERE kunden_nr IS NOT NULL;
-    WHERE balance_ct > 0;
+CREATE INDEX acct_bp           ON accounts (tenant, kunden_nr) WHERE kunden_nr IS NOT NULL;
+-- Supports the portfolio open-receivables / dunning-candidate scans.
+CREATE INDEX acct_overdue      ON accounts (tenant) WHERE balance_ct > 0;
 
--- ── Ledger entries (immutable) ────────────────────────────────────────────────
-
-CREATE TABLE ledger_entries (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    account_id      UUID        NOT NULL REFERENCES accounts (account_id) ON DELETE CASCADE,
-    tenant          TEXT        NOT NULL,
-
-    -- Buchungsart (§238 HGB: every entry must have a clear type)
-    entry_type      TEXT        NOT NULL CHECK (entry_type IN (
-        'RECHNUNG',         -- debit:  invoice from billingd / netzbilanzd
-        'STORNO',           -- debit:  Stornorechnung / billing reversal
-        'ZAHLUNG',          -- credit: incoming payment (CAMT.054, ERP confirm, SEPA)
-        'EEG_GUTSCHRIFT',   -- credit: EEG Einspeisevergütung (de.eeg.verguetung.berechnet)
-        'EEG_MARKTPRAEMIE', -- credit: EEG Direktvermarktung Marktprämie
-        'BANKRUECKLAST',    -- debit:  returned SEPA direct debit (R-transaction)
-        'MAHNGEBUEHR',      -- debit:  dunning fee (Mahnstufe escalation)
-        'ABSCHLAG',         -- credit: monthly advance payment (§40 Abs. 1 EnWG)
-        'JAHRESABSCHLUSS',  -- signed: annual Mehr-/Mindermengenabrechnung settlement
-        'KORREKTUR'         -- signed: manual operator correction (audit-trailed)
-    )),
-
-    -- Amount in EUR-cent. Positive = Debit (Forderung). Negative = Credit (Gutschrift).
-    amount_ct       BIGINT      NOT NULL,
-
-    -- Reference to the originating record (invoice_id, payment_ref, CE id, …)
-    reference_id    TEXT,
-    -- CloudEvent type and id for audit trail
-    ce_type         TEXT,
-    ce_id           TEXT,
-
-    booking_date    DATE        NOT NULL,
-    value_date      DATE        NOT NULL,
-    description     TEXT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-    -- No updated_at — ledger entries are immutable (INSERT-only)
-);
-
-COMMENT ON TABLE ledger_entries IS
-    'Immutable debit/credit ledger. INSERT-only — no UPDATE or DELETE. '
-    '§238 HGB: Buchführungspflicht. Positive amount_ct = Debit; negative = Credit. '
-    'amount_ct != 0 is enforced: zero-amount entries are semantically invalid.';
-
--- P2-6: zero-amount entries are invalid and indicate bugs.
-ALTER TABLE ledger_entries ADD CONSTRAINT le_amount_nonzero CHECK (amount_ct != 0);
-
-COMMENT ON COLUMN ledger_entries.entry_type IS
-    'STORNO replaces the former KORREKTURRECHNUNG type (billing system reversal). '
-    'EEG_MARKTPRAEMIE is for Direktvermarktung Marktprämie payments from einsd.';
-
-CREATE INDEX le_account_date ON ledger_entries (account_id, booking_date DESC);
-CREATE INDEX le_tenant_date  ON ledger_entries (tenant, booking_date DESC);
--- UNIQUE so a concurrent redelivery of the same CloudEvent cannot double-book
--- (the ledger insert itself is the idempotency gate, not a prior SELECT).
-CREATE UNIQUE INDEX le_ce_id ON ledger_entries (tenant, ce_id) WHERE ce_id IS NOT NULL;
-CREATE INDEX le_reference_id ON ledger_entries (reference_id) WHERE reference_id IS NOT NULL;
+-- ── The double-entry ledger lives in the `doubleentry` schema ─────────────────
+--
+-- The former `ledger_entries` (immutable debit/credit log) and `journal_lines`
+-- (SKR 03/04 double-entry shadow) tables are gone. Both are now one authoritative
+-- structure owned by the `doubleentry` crate: an append-only journal with an
+-- immutable Merkle log, per-account balances (no cached `balance_ct` to drift),
+-- period seals, and open-item clearing — see `ledger.rs`. accountingd maps each
+-- Buchungsart (RECHNUNG, ZAHLUNG, EEG_GUTSCHRIFT, …) to a balanced entry there.
+-- doubleentry's tables live in their own PostgreSQL schema in this same database.
 
 -- ── SEPA direct-debit mandates ────────────────────────────────────────────────
 
@@ -164,20 +122,20 @@ CREATE TABLE sepa_mandates (
     kontoinhaber    TEXT,
     -- Unique creditor-assigned Mandatsreferenz (SEPA SDD AT-01, ISO 20022
     -- Max35Text — also reused as the pain.008 EndToEndId).
-    -- P1-1 fix: UNIQUE per tenant (not globally) to avoid cross-tenant namespace collisions.
+    -- UNIQUE per tenant (not globally) to avoid cross-tenant namespace collisions.
     mandatsref      TEXT        NOT NULL CHECK (char_length(mandatsref) BETWEEN 1 AND 35),
     -- FRST = first collection; RCUR = recurring; FNAL = final; OOFF = one-off
     sequence_type   TEXT        NOT NULL CHECK (sequence_type IN ('FRST', 'RCUR', 'FNAL', 'OOFF')),
     signed_at       DATE        NOT NULL,
     revoked_at      DATE,
-    -- P2-14: track mandate creation date for SEPA audit trail
+    -- track mandate creation date for SEPA audit trail
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    -- P1-4: track when the first successful collection occurred for FRST→RCUR auto-transition
+    -- track when the first successful collection occurred for FRST→RCUR auto-transition
     first_collected_at TIMESTAMPTZ
 );
 
--- P1-1 fix: mandatsref unique per tenant, not globally
+-- mandatsref unique per tenant, not globally
 CREATE UNIQUE INDEX sm_mandatsref_tenant ON sepa_mandates (tenant, mandatsref);
 CREATE INDEX sm_account ON sepa_mandates (account_id);
 CREATE INDEX sm_active  ON sepa_mandates (account_id)
@@ -206,14 +164,9 @@ CREATE INDEX dc_account ON dunning_cases (account_id, stufe);
 CREATE INDEX dc_overdue ON dunning_cases (tenant, due_date)
     WHERE resolved_at IS NULL;
 
--- ── Processed events (idempotency guard) ─────────────────────────────────────
-
-CREATE TABLE processed_events (
-    tenant          TEXT        NOT NULL,
-    ce_id           TEXT        NOT NULL,
-    processed_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (tenant, ce_id)
-);
+-- CloudEvent idempotency no longer needs a table here: the ledger post is keyed
+-- by the CloudEvent id, so a redelivery replays as a store-level no-op. There is
+-- no separate `processed_events` guard to keep in sync.
 
 -- ── GDPR Art. 17 anonymization log (INSERT-only) ──────────────────────────────
 
@@ -326,7 +279,7 @@ CREATE INDEX eeg_payout_malo      ON eeg_payout_orders (malo_id, billing_year, b
 CREATE INDEX eeg_payout_pending   ON eeg_payout_orders (tenant, created_at)
     WHERE pain002_status IS NULL OR pain002_status = 'PDNG';
 
--- ── SEPA pain.008 collection runs (P1-6: persist for audit + replay) ─────────
+-- ── SEPA pain.008 collection runs (persist for audit + replay) ─────────
 --
 -- Every pain.008 batch is stored here.  Provides full audit trail per SEPA
 -- Rulebook DS-01 requirements and allows replay if the ERP webhook fails.
@@ -360,28 +313,12 @@ COMMENT ON TABLE sepa_collection_runs IS
 CREATE UNIQUE INDEX scr_tenant_date ON sepa_collection_runs (tenant, collection_date);
 CREATE INDEX scr_tenant_status ON sepa_collection_runs (tenant, dispatch_status, created_at);
 
--- ── Abschlag run idempotency (P1-2: prevent duplicate ABSCHLAG on restart) ───
+-- Monthly Abschlag idempotency needs no table of its own: each Abschlag posts
+-- through the ledger with a deterministic idempotency key
+-- (`ABSCHLAG-{malo}-{YYYY}-{MM}`), so a scheduler restart mid-day replays as a
+-- no-op in the store rather than double-booking.
 
-CREATE TABLE abschlag_runs (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant          TEXT        NOT NULL,
-    malo_id         TEXT        NOT NULL,
-    -- Month this Abschlag covers (YYYY-MM-01 first-of-month for consistent key)
-    period_month    DATE        NOT NULL,
-    amount_ct       BIGINT      NOT NULL,
-    ledger_entry_id UUID,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    -- One Abschlag per (tenant, malo_id, period_month) — prevents duplicate postings
-    UNIQUE (tenant, malo_id, period_month)
-);
-
-COMMENT ON TABLE abschlag_runs IS
-    'Idempotency guard for monthly Abschlag (advance payment) bookings. '
-    'Prevents duplicate ABSCHLAG ledger entries when the scheduler restarts mid-day.';
-
-CREATE INDEX ar_tenant_period ON abschlag_runs (tenant, period_month);
-
--- ── Jahresabschluss idempotency (P1-10) ──────────────────────────────────────
+-- ── Jahresabschluss idempotency ──────────────────────────────────────
 
 CREATE TABLE jahresabschluss_runs (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -401,7 +338,7 @@ COMMENT ON TABLE jahresabschluss_runs IS
     'Idempotency guard for annual settlement (Jahresabschluss / Schlussabrechnung §40 EnWG). '
     'Prevents double-posting when POST /jahresabschluss is called more than once per year.';
 
--- ── Account master-data audit log (P2-5: §238 HGB traceability) ──────────────
+-- ── Account master-data audit log (§238 HGB traceability) ──────────────
 --
 -- Records every change to account master data (IBAN, billing_day, abschlag_ct, etc.)
 -- Required per §238 HGB: "wer, wann, was gebucht hat" for financial records.
@@ -432,89 +369,15 @@ CREATE INDEX aal_account   ON account_audit_log (account_id, changed_at DESC);
 CREATE INDEX aal_tenant    ON account_audit_log (tenant, changed_at DESC);
 CREATE INDEX aal_operator  ON account_audit_log (operator_sub) WHERE operator_sub IS NOT NULL;
 
--- ── processed_events retention index (P1-9) ──────────────────────────────────
--- Add index to support periodic cleanup of old idempotency records.
--- Cleanup job: DELETE FROM processed_events WHERE processed_at < now() - INTERVAL '10 years'
-CREATE INDEX pe_processed_at ON processed_events (processed_at);
-
 -- ── IBAN hash index (fast lookup even when IBAN is encrypted) ─────────────────
 CREATE INDEX acct_iban_hash ON accounts (iban_hash, tenant) WHERE iban_hash IS NOT NULL;
 
--- ── Double-entry journal shadow (§238 HGB Buchführungspflicht) ───────────────
---
--- Each ledger_entry produces exactly two journal_lines: one debit and one credit.
--- Account codes follow the German chart of accounts (SKR 03 / SKR 04):
---
---   SKR 03  |  SKR 04  |  Description
---   1200    |  1800    |  Bank (cash received / paid)
---   1400    |  1400    |  Forderungen aus Lieferungen und Leistungen (AR)
---   4000    |  8000    |  Erlöse (Revenue / Einspeisung)
---   4003    |  8003    |  Mahngebühren / Verzugszinsen
---   3000    |  1500    |  Verbindlichkeiten (Liabilities — overpaid by customer)
---
--- The mapping per entry_type:
---   RECHNUNG      → Debit 1400  / Credit 4000
---   STORNO        → Debit 4000  / Credit 1400  (reversal)
---   ZAHLUNG       → Debit 1200  / Credit 1400
---   GUTSCHRIFT    → Debit 4000  / Credit 1400
---   EEG_GUTSCHRIFT→ Debit 3000  / Credit 4000  (LF owes to plant operator)
---   EEG_MARKTPRAEMIE → same as EEG_GUTSCHRIFT
---   BANKRUECKLAST → Debit 1400  / Credit 1200
---   MAHNGEBUEHR   → Debit 1400  / Credit 4003
---   ABSCHLAG      → Debit 1400  / Credit 4000  (prepayment receivable)
---   JAHRESABSCHLUSS → signed: same as RECHNUNG if positive, GUTSCHRIFT if negative
---   KORREKTUR     → operator-defined (same mapping as RECHNUNG/GUTSCHRIFT by sign)
---
--- This table is INSERT-only (immutable).  One pair per ledger_entry_id.
-
-CREATE TABLE journal_lines (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    ledger_entry_id UUID        NOT NULL REFERENCES ledger_entries (id) ON DELETE CASCADE,
-    account_id      UUID        NOT NULL REFERENCES accounts (account_id) ON DELETE CASCADE,
-    tenant          TEXT        NOT NULL,
-    -- 'D' = Debit (Soll), 'C' = Credit (Haben)
-    side            CHAR(1)     NOT NULL CHECK (side IN ('D', 'C')),
-    -- SKR 03 or SKR 04 account code (text, e.g. '1400', '4000')
-    skr_account     TEXT        NOT NULL,
-    -- Human-readable account description (e.g. 'Forderungen aus L+L', 'Erlöse')
-    skr_description TEXT        NOT NULL,
-    -- Amount in ct (always positive — the sign is conveyed by `side`)
-    amount_ct       BIGINT      NOT NULL CHECK (amount_ct > 0),
-    booking_date    DATE        NOT NULL,
-    description     TEXT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-    -- INSERT-only — never UPDATE or DELETE
-);
-
-COMMENT ON TABLE journal_lines IS
-    'Double-entry journal shadow (SKR 03/04). '
-    'Two rows per ledger_entry: one Soll (D) and one Haben (C). '
-    'SUM(amount_ct WHERE side=D) = SUM(amount_ct WHERE side=C) per ledger_entry. '
-    'Regulatory: §238 HGB Buchführungspflicht.';
-
-CREATE INDEX jl_entry      ON journal_lines (ledger_entry_id);
-
--- Double-entry invariant, enforced at COMMIT: for every ledger_entry the Soll
--- sum must equal the Haben sum. DEFERRED so the two rows can be inserted in
--- either order within one transaction. §238 HGB Buchführungspflicht.
-CREATE OR REPLACE FUNCTION journal_lines_balanced() RETURNS trigger AS $$
-BEGIN
-    IF (SELECT COALESCE(SUM(CASE WHEN side = 'D' THEN amount_ct ELSE -amount_ct END), 0)
-        FROM journal_lines WHERE ledger_entry_id = NEW.ledger_entry_id) <> 0 THEN
-        RAISE EXCEPTION 'journal_lines unbalanced (Soll != Haben) for ledger_entry %',
-            NEW.ledger_entry_id;
-    END IF;
-    RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE CONSTRAINT TRIGGER journal_lines_balance_check
-    AFTER INSERT ON journal_lines
-    DEFERRABLE INITIALLY DEFERRED
-    FOR EACH ROW EXECUTE FUNCTION journal_lines_balanced();
-CREATE INDEX jl_account    ON journal_lines (account_id, booking_date DESC);
-CREATE INDEX jl_skr        ON journal_lines (skr_account, tenant, booking_date DESC);
-CREATE INDEX jl_tenant     ON journal_lines (tenant, booking_date DESC);
+-- The SKR 03/04 double-entry journal is no longer a shadow table here: it is the
+-- doubleentry ledger itself. accountingd's `ledger.rs` posts each Buchungsart as a
+-- balanced two-leg entry — the customer Kontokorrent (SKR 1400 subledger) against
+-- a GL contra account (SKR 1200 Bank / 4000 Erlöse / 4003 Mahnerlöse / EEG-Aufwand).
+-- doubleentry enforces the Soll=Haben invariant in-engine AND in its own schema
+-- (a deferred constraint trigger), and additionally makes it tamper-evident.
 
 -- ── Verzugszinsen §288 BGB (default interest on overdue invoices) ─────────────
 --
@@ -547,8 +410,8 @@ CREATE TABLE interest_charges (
     period_to       DATE        NOT NULL,
     -- Legal basis
     legal_basis     TEXT        NOT NULL DEFAULT '§288 Abs. 1 BGB',
-    -- Linked ledger entry (MAHNGEBUEHR type, created when interest is booked)
-    ledger_entry_id UUID        REFERENCES ledger_entries (id),
+    -- doubleentry EntryId of the MAHNGEBUEHR entry (in the ledger schema; no FK).
+    ledger_entry_id UUID,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -608,7 +471,7 @@ CREATE TABLE payment_plans (
     plan_id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id      UUID        NOT NULL REFERENCES accounts (account_id) ON DELETE CASCADE,
     tenant          TEXT        NOT NULL,
-    -- Total amount covered by this plan (usually = balance_ct at plan creation)
+    -- Total amount covered by this plan (usually = the Kontokorrent balance at plan creation)
     total_ct        BIGINT      NOT NULL CHECK (total_ct > 0),
     -- Amount per scheduled installment
     installment_ct  BIGINT      NOT NULL CHECK (installment_ct > 0),
@@ -644,8 +507,8 @@ CREATE TABLE payment_plan_installments (
     amount_ct       BIGINT      NOT NULL CHECK (amount_ct > 0),
     status          TEXT        NOT NULL DEFAULT 'PENDING'
                     CHECK (status IN ('PENDING', 'PAID', 'OVERDUE', 'WAIVED')),
-    -- Linked to the ZAHLUNG ledger entry when paid
-    ledger_entry_id UUID        REFERENCES ledger_entries (id),
+    -- doubleentry EntryId of the ZAHLUNG entry when paid (ledger schema; no FK).
+    ledger_entry_id UUID,
     paid_at         TIMESTAMPTZ,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- One installment per (plan, number)
@@ -683,8 +546,8 @@ CREATE TABLE bank_import_log (
     iban                TEXT,
     -- Value date of the transaction
     value_date          DATE        NOT NULL,
-    -- Linked ledger entry (ZAHLUNG or BANKRUECKLAST)
-    ledger_entry_id     UUID        REFERENCES ledger_entries (id),
+    -- doubleentry EntryId of the ZAHLUNG/BANKRUECKLAST entry (ledger schema; no FK).
+    ledger_entry_id     UUID,
     imported_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- One import per (tenant, bank_transaction_id)
     UNIQUE (tenant, bank_transaction_id)

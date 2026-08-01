@@ -6,6 +6,94 @@ use sqlx::{PgPool, Row};
 use time::{Date, OffsetDateTime};
 use uuid::Uuid;
 
+use crate::ledger::{PgLedger, PostEntry};
+
+/// Post a money movement through the doubleentry ledger, then refresh the
+/// `accounts.balance_ct` read cache to the authoritative ledger net.
+///
+/// This is the single money choke point (replacing the old `write_entry` +
+/// `journal_lines` machinery). doubleentry is the authoritative, tamper-evident
+/// system of record; `balance_ct` is a cache set **absolutely** from the ledger
+/// net (never incremented, so it cannot drift by arithmetic).
+///
+/// Idempotent by `idempotency` — a CloudEvent id, a bank transaction id, or a
+/// deterministic key (`ABSCHLAG-{malo}-{YYYY}-{MM}`, `mahngebuehr:{malo}:{stufe}:{date}`).
+/// A replay is a no-op returning the original entry id. Returns the doubleentry
+/// `EntryId` as a `Uuid` (for linking satellites like interest_charges).
+#[allow(clippy::too_many_arguments)]
+pub async fn post_entry(
+    ledger: &PgLedger,
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+    lf_mp_id: &str,
+    entry_type: &str,
+    amount_ct: i64,
+    idempotency: &str,
+    correlation: Option<&str>,
+    reference: Option<&str>,
+    booking_date: Date,
+    value_date: Date,
+    description: Option<&str>,
+    actor: Option<&str>,
+) -> anyhow::Result<Uuid> {
+    let mut req = PostEntry::new(
+        malo_id,
+        lf_mp_id,
+        entry_type,
+        amount_ct,
+        idempotency,
+        booking_date,
+    )
+    .with_value_date(value_date);
+    if let Some(desc) = description {
+        req = req.with_description(desc);
+    }
+    if let Some(corr) = correlation {
+        req = req.with_correlation(corr);
+    }
+    if let Some(reference) = reference {
+        req = req.with_document(reference);
+    }
+    if let Some(actor) = actor {
+        req = req.with_actor(actor);
+    }
+    let posted = ledger.post(req).await?;
+
+    // Refresh the read cache to the authoritative ledger net. Absolute, not
+    // incremental — idempotent under replay and immune to arithmetic drift.
+    let net = ledger.balance_ct(lf_mp_id, malo_id).await?;
+    let updated = sqlx::query(
+        "UPDATE accounts SET balance_ct = $1, updated_at = now() \
+         WHERE malo_id = $2 AND lf_mp_id = $3 AND tenant = $4",
+    )
+    .bind(net)
+    .bind(malo_id)
+    .bind(lf_mp_id)
+    .bind(tenant)
+    .execute(pool)
+    .await
+    .context("refresh balance cache")?;
+    if updated.rows_affected() == 0 {
+        tracing::warn!(
+            malo = %malo_id,
+            "post_entry: no accounts row for balance-cache refresh (ledger remains authoritative)"
+        );
+    }
+
+    // Keep the Offene-Posten assignments current: match open credits against open
+    // debits FIFO (§ 252 HGB per-receivable tracking). Best-effort — a clearing
+    // failure must never fail the money post; the balance stays authoritative.
+    if let Err(e) = ledger
+        .apply_fifo_clearing(lf_mp_id, malo_id, booking_date)
+        .await
+    {
+        tracing::warn!(malo = %malo_id, error = %e, "post_entry: FIFO clearing skipped");
+    }
+
+    Ok(*posted.id.as_uuid())
+}
+
 // ── Account ───────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -31,7 +119,7 @@ pub async fn upsert_account(
     tenant: &str,
 ) -> anyhow::Result<Uuid> {
     let row = sqlx::query(
-        // P0-3 fix: ON CONFLICT must match the UNIQUE (malo_id, lf_mp_id, tenant) constraint exactly.
+        // ON CONFLICT must match the UNIQUE (malo_id, lf_mp_id, tenant) constraint exactly.
         // Using (malo_id, lf_mp_id) without tenant caused "no unique constraint matching" errors.
         r"INSERT INTO accounts (malo_id, lf_mp_id, tenant)
           VALUES ($1, $2, $3)
@@ -154,7 +242,7 @@ pub async fn update_account(
     req: UpdateAccountRequest,
 ) -> anyhow::Result<()> {
     sqlx::query(
-        // P0-5 fix: add tenant parameter — previously missing, allowing cross-tenant modification.
+        // add tenant parameter — previously missing, allowing cross-tenant modification.
         r"UPDATE accounts SET
               iban        = COALESCE($3, iban),
               mandatsref  = COALESCE($4, mandatsref),
@@ -175,7 +263,7 @@ pub async fn update_account(
     Ok(())
 }
 
-/// Tenant-scoped variant of `update_account` — P0-5 fix.
+/// Tenant-scoped variant of `update_account` —
 /// Always filter by tenant to prevent cross-tenant data modification.
 pub async fn update_account_tenanted(
     executor: impl sqlx::PgExecutor<'_>,
@@ -311,7 +399,7 @@ pub async fn record_jahresabschluss(
     Ok(())
 }
 
-/// Persist a SEPA pain.008 batch XML for audit and replay (P1-6).
+/// Persist a SEPA pain.008 batch XML for audit and replay.
 ///
 /// Inserts into `sepa_collection_runs`. If a run already exists for the same
 /// `(tenant, collection_date)`, returns that run's ID (idempotent).
@@ -496,173 +584,71 @@ pub struct LedgerEntryRow {
     pub created_at: OffsetDateTime,
 }
 
-/// Write one ledger entry and update the account balance atomically.
-///
-/// Uses `SELECT ... FOR UPDATE` to prevent concurrent balance updates.
-/// The `ce_id` idempotency key is inserted into `processed_events` atomically —
-/// duplicate CloudEvents are silently ignored.
-#[allow(clippy::too_many_arguments)]
-pub async fn write_entry(
-    pool: &PgPool,
-    account_id: Uuid,
-    tenant: &str,
-    entry_type: &str,
-    amount_ct: i64,
-    reference_id: Option<&str>,
-    ce_type: Option<&str>,
-    ce_id: Option<&str>,
-    booking_date: Date,
-    description: Option<&str>,
-) -> anyhow::Result<Option<Uuid>> {
-    write_entry_with_value_date(
-        pool,
-        account_id,
-        tenant,
-        entry_type,
-        amount_ct,
-        reference_id,
-        ce_type,
-        ce_id,
-        booking_date,
-        booking_date,
-        description,
-    )
-    .await
-    .map(Some)
+// The old `write_entry` / `write_entry_with_value_date` (which INSERTed into
+// `ledger_entries`, incremented the `balance_ct` cache, and posted the
+// `journal_lines` SKR shadow) are gone. Every money movement now flows through
+// `post_entry` above → the doubleentry ledger, which is balanced, immutable,
+// provable, and idempotent, with the balance cache set absolutely from the ledger.
+
+/// One movement on a customer's Kontokorrent, for display — derived from the
+/// doubleentry statement (the authoritative log), newest first.
+#[derive(Debug, Serialize)]
+pub struct LedgerLine {
+    /// The doubleentry entry id.
+    pub entry_id: Uuid,
+    /// The Buchungsart (doubleentry `kind`), e.g. `RECHNUNG`, `ZAHLUNG`.
+    pub entry_type: Option<String>,
+    /// `"D"` (debit — increases the receivable) or `"C"` (credit).
+    pub side: &'static str,
+    /// The movement in minor units (always positive; `side` carries the sign).
+    pub amount_ct: i64,
+    /// Signed contribution to the balance (debit +, credit −).
+    pub signed_ct: i64,
+    /// The running balance (signed net) after this movement, in minor units.
+    pub running_ct: i64,
+    pub booking_date: Date,
 }
 
-/// Write a ledger entry with explicit booking and value dates.
-///
-/// Value date may differ from booking date for backdated corrections or
-/// manual bookings posted after the fact (§238 HGB Buchungsdatum vs. Wertstellung).
-#[allow(clippy::too_many_arguments)]
-pub async fn write_entry_with_value_date(
-    pool: &PgPool,
-    account_id: Uuid,
-    tenant: &str,
-    entry_type: &str,
-    amount_ct: i64,
-    reference_id: Option<&str>,
-    ce_type: Option<&str>,
-    ce_id: Option<&str>,
-    booking_date: Date,
-    value_date: Date,
-    description: Option<&str>,
-) -> anyhow::Result<Uuid> {
-    let mut tx = pool.begin().await.context("begin tx")?;
-
-    // Idempotency gate INSIDE the transaction: claim the CloudEvent before doing
-    // any work. ON CONFLICT DO NOTHING means a concurrent redelivery that already
-    // claimed the (tenant, ce_id) gets zero rows here and returns a no-op — no
-    // TOCTOU window, no double-booking. (The UNIQUE index on
-    // ledger_entries (tenant, ce_id) is the backstop.)
-    if let Some(ce) = ce_id {
-        let claimed = sqlx::query(
-            "INSERT INTO processed_events (tenant, ce_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-        )
-        .bind(tenant)
-        .bind(ce)
-        .execute(&mut *tx)
-        .await
-        .context("claim idempotency key")?;
-        if claimed.rows_affected() == 0 {
-            return Ok(Uuid::nil()); // already processed — idempotent no-op
+/// The customer's recent Kontokorrent movements (newest first), from the ledger.
+pub async fn list_ledger(
+    ledger: &PgLedger,
+    lf_mp_id: &str,
+    malo_id: &str,
+    limit: i64,
+) -> anyhow::Result<Vec<LedgerLine>> {
+    use doubleentry::Direction;
+    use doubleentry::storage::Cursor;
+    let cap = usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
+    let mut window: std::collections::VecDeque<LedgerLine> = std::collections::VecDeque::new();
+    let mut cursor = Cursor::start();
+    loop {
+        let page = ledger.statement(lf_mp_id, malo_id, cursor).await?;
+        for line in &page.lines {
+            let (side, signed): (&'static str, i64) = match line.direction {
+                Direction::Debit => ("D", line.amount.to_minor()),
+                Direction::Credit => ("C", -line.amount.to_minor()),
+            };
+            window.push_back(LedgerLine {
+                entry_id: *line.posting.entry.as_uuid(),
+                entry_type: line.kind.as_ref().map(|k| k.as_str().to_owned()),
+                side,
+                amount_ct: line.amount.to_minor(),
+                signed_ct: signed,
+                running_ct: line.running.signed_net().map(|a| a.to_minor()).unwrap_or(0),
+                booking_date: line.booking_date,
+            });
+            if window.len() > cap {
+                window.pop_front();
+            }
+        }
+        match page.next {
+            Some(next) => cursor = next,
+            None => break,
         }
     }
-
-    // Lock account row for serializable balance update.
-    sqlx::query("SELECT account_id FROM accounts WHERE account_id = $1 FOR UPDATE")
-        .bind(account_id)
-        .execute(&mut *tx)
-        .await
-        .context("lock account")?;
-
-    // Insert ledger entry with explicit value_date.
-    let id: Uuid = sqlx::query_scalar(
-        r"INSERT INTO ledger_entries
-              (account_id, tenant, entry_type, amount_ct, reference_id, ce_type, ce_id,
-               booking_date, value_date, description)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-          RETURNING id",
-    )
-    .bind(account_id)
-    .bind(tenant)
-    .bind(entry_type)
-    .bind(amount_ct)
-    .bind(reference_id)
-    .bind(ce_type)
-    .bind(ce_id)
-    .bind(booking_date)
-    .bind(value_date)
-    .bind(description)
-    .fetch_one(&mut *tx)
-    .await
-    .context("insert ledger entry")?;
-
-    // Update cached balance.
-    sqlx::query(
-        "UPDATE accounts SET balance_ct = balance_ct + $1, updated_at = now()
-         WHERE account_id = $2",
-    )
-    .bind(amount_ct)
-    .bind(account_id)
-    .execute(&mut *tx)
-    .await
-    .context("update balance")?;
-
-    // Double-entry journal shadow (SKR 03/04): two balanced lines posted in the
-    // SAME transaction as the ledger entry — never a partial post. §238 HGB.
-    insert_journal_lines(
-        &mut tx,
-        id,
-        account_id,
-        tenant,
-        entry_type,
-        amount_ct,
-        booking_date,
-        description,
-    )
-    .await?;
-
-    tx.commit().await.context("commit")?;
-    Ok(id)
-}
-
-pub async fn list_ledger(
-    pool: &PgPool,
-    account_id: Uuid,
-    limit: i64,
-) -> anyhow::Result<Vec<LedgerEntryRow>> {
-    sqlx::query_as::<_, LedgerEntryRow>(
-        "SELECT * FROM ledger_entries WHERE account_id = $1 ORDER BY booking_date DESC, created_at DESC LIMIT $2",
-    )
-    .bind(account_id)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-    .context("list_ledger")
-}
-
-/// Fetch all ledger entries for a given account in a specific calendar year.
-///
-/// Used by `POST /api/v1/jahresabschluss/{malo_id}` to compute the annual
-/// settlement (actual Rechnungen vs. Σ Abschläge collected).
-pub async fn list_ledger_year(
-    pool: &PgPool,
-    account_id: Uuid,
-    year: i32,
-) -> anyhow::Result<Vec<LedgerEntryRow>> {
-    sqlx::query_as::<_, LedgerEntryRow>(
-        "SELECT * FROM ledger_entries \
-         WHERE account_id = $1 \
-           AND EXTRACT(YEAR FROM booking_date)::int = $2 \
-         ORDER BY booking_date ASC, created_at ASC",
-    )
-    .bind(account_id)
-    .bind(year)
-    .fetch_all(pool)
-    .await
-    .context("list_ledger_year")
+    let mut lines: Vec<LedgerLine> = window.into_iter().collect();
+    lines.reverse(); // newest first
+    Ok(lines)
 }
 
 // ── SEPA mandates ─────────────────────────────────────────────────────────────
@@ -707,7 +693,7 @@ pub async fn create_mandate(
     let account_id = upsert_account(pool, &req.malo_id, &req.lf_mp_id, tenant).await?;
 
     let row = sqlx::query(
-        // P1-1 fix: ON CONFLICT uses (tenant, mandatsref) per the schema unique index,
+        // ON CONFLICT uses (tenant, mandatsref) per the schema unique index,
         // not the old global UNIQUE (mandatsref). This prevents cross-tenant collisions.
         r"INSERT INTO sepa_mandates
               (account_id, tenant, iban, bic, kontoinhaber, mandatsref, sequence_type, signed_at)
@@ -1093,7 +1079,7 @@ pub struct BalanceReconcileResult {
 
 /// Check whether `accounts.balance_ct` matches `SUM(ledger_entries.amount_ct)`.
 ///
-/// This function is the P1-1 fix for balance cache drift detection.
+/// This function is the  for balance cache drift detection.
 ///
 /// ## Why the cache can drift
 ///
@@ -1110,27 +1096,22 @@ pub struct BalanceReconcileResult {
 /// Returns the drift_ct. When `repair = true`, resets `balance_ct` to the
 /// recomputed value inside a transaction (safe for production).
 pub async fn reconcile_balance(
+    ledger: &PgLedger,
     pool: &PgPool,
-    account_id: Uuid,
+    malo_id: &str,
+    lf_mp_id: &str,
     tenant: &str,
     repair: bool,
 ) -> anyhow::Result<BalanceReconcileResult> {
-    // Recompute from ledger (authoritative).
-    let recomputed: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(amount_ct), 0) FROM ledger_entries \
-         WHERE account_id = $1 AND tenant = $2",
-    )
-    .bind(account_id)
-    .bind(tenant)
-    .fetch_one(pool)
-    .await
-    .context("reconcile: sum ledger")?;
+    // The authoritative balance is the doubleentry Kontokorrent net.
+    let recomputed = ledger.balance_ct(lf_mp_id, malo_id).await?;
 
     let acct = sqlx::query(
-        "SELECT account_id, malo_id, balance_ct FROM accounts \
-         WHERE account_id = $1 AND tenant = $2",
+        "SELECT account_id, balance_ct FROM accounts \
+         WHERE malo_id = $1 AND lf_mp_id = $2 AND tenant = $3",
     )
-    .bind(account_id)
+    .bind(malo_id)
+    .bind(lf_mp_id)
     .bind(tenant)
     .fetch_optional(pool)
     .await
@@ -1139,18 +1120,18 @@ pub async fn reconcile_balance(
     let Some(row) = acct else {
         anyhow::bail!("account not found for reconciliation");
     };
+    let account_id: Uuid = row.try_get("account_id")?;
     let cached: i64 = row.try_get("balance_ct")?;
-    let malo_id: String = row.try_get("malo_id")?;
     let drift = cached - recomputed;
 
     if drift != 0 {
         tracing::warn!(
             account_id = %account_id,
-            malo_id = %malo_id,
+            malo_id,
             cached_ct = cached,
             recomputed_ct = recomputed,
             drift_ct = drift,
-            "accountingd: balance cache drift detected"
+            "accountingd: balance cache drift vs. doubleentry ledger detected"
         );
 
         if repair {
@@ -1164,13 +1145,13 @@ pub async fn reconcile_balance(
             .execute(pool)
             .await
             .context("reconcile: repair balance")?;
-            tracing::info!(account_id = %account_id, "accountingd: balance repaired");
+            tracing::info!(account_id = %account_id, "accountingd: balance cache repaired from ledger");
         }
     }
 
     Ok(BalanceReconcileResult {
         account_id,
-        malo_id,
+        malo_id: malo_id.to_owned(),
         cached_balance_ct: cached,
         recomputed_balance_ct: recomputed,
         is_consistent: drift == 0,
@@ -1178,123 +1159,21 @@ pub async fn reconcile_balance(
     })
 }
 
-// ── P1-3: Open-item management ────────────────────────────────────────────────
+// ── Open-item management ────────────────────────────────────────────────
 
-/// One open item — an unpaid or partially-paid invoice debit.
-///
-/// Computed via FIFO clearing: the oldest debits are cleared first by available credits.
-/// The `outstanding_ct` is the portion of this debit not yet covered by any payment.
-#[derive(Debug, Serialize)]
-pub struct OpenItem {
-    /// Ledger entry UUID.
-    pub id: Uuid,
-    /// Entry type (`RECHNUNG`, `STORNO`, `MAHNGEBUEHR`, `ABSCHLAG`).
-    pub entry_type: String,
-    /// Original billed amount in ct (always positive for debits).
-    pub amount_ct: i64,
-    /// Outstanding (unpaid) portion in ct — always ≤ `amount_ct`.
-    pub outstanding_ct: i64,
-    /// External reference (invoice number, etc.).
-    pub reference_id: Option<String>,
-    /// Booking date of the original debit.
-    pub booking_date: Date,
-    /// Description.
-    pub description: Option<String>,
-}
-
-/// Compute open items using **FIFO clearing**.
-///
-/// Each RECHNUNG/STORNO/MAHNGEBUEHR/ABSCHLAG debit that has not been fully
-/// covered by ZAHLUNG/GUTSCHRIFT credits is returned with its `outstanding_ct`.
-///
-/// ## Algorithm
-///
-/// All credits (negative entries) are pooled. Debits are sorted by booking date
-/// ascending. The credit pool is consumed against the oldest debits first:
-///
-/// ```text
-/// RECHNUNG  100 ct  (Jan 1)  → outstanding = 0   (fully covered)
-/// RECHNUNG  200 ct  (Jan 15) → outstanding = 150  (50 ct cleared)
-/// ─────────────────────────────────────────────────────
-/// Total credits: 150 ct  →  net outstanding = 150 ct = balance_ct  ✓
-/// ```
-///
-/// ## Regulatory basis
-///
-/// §252 HGB Abs. 1 Nr. 4: Vorsichtsprinzip — individual receivables must be
-/// tracked and assessed, not just as a net balance.
+/// The customer's authoritative **Offene Posten** — open debit items (invoices,
+/// fees) with a positive residual after recorded FIFO clearings (§ 252 HGB
+/// per-receivable tracking). Clearings are recorded on every post, so this
+/// reflects what has actually been paid, not a gross list.
 pub async fn list_open_items(
-    pool: &PgPool,
-    account_id: Uuid,
-    tenant: &str,
-) -> anyhow::Result<Vec<OpenItem>> {
-    // Single-pass FIFO clearing via window functions.
-    //
-    // outstanding_ct = max(0,
-    //     debit.amount - max(0, total_credits - cumulative_debits_before_this_one)
-    // )
-    //
-    // Where:
-    //   total_credits = abs(sum of all negative ledger entries)
-    //   cumulative_debits_before = sum of all positive entries up to but not including this one
-    let rows = sqlx::query(
-        r"WITH credit_pool AS (
-              SELECT COALESCE(-SUM(amount_ct), 0) AS total_available_ct
-              FROM ledger_entries
-              WHERE account_id = $1 AND tenant = $2 AND amount_ct < 0
-          ),
-          debit_cumsum AS (
-              SELECT
-                  id, entry_type, amount_ct, reference_id, booking_date, description,
-                  SUM(amount_ct) OVER (
-                      ORDER BY booking_date ASC, created_at ASC
-                      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                  ) - amount_ct AS cumulative_debits_before
-              FROM ledger_entries
-              WHERE account_id = $1 AND tenant = $2
-                AND amount_ct > 0
-                AND entry_type IN ('RECHNUNG', 'STORNO', 'MAHNGEBUEHR', 'ABSCHLAG')
-          )
-          SELECT
-              d.id, d.entry_type, d.amount_ct, d.reference_id, d.booking_date, d.description,
-              GREATEST(0,
-                  d.amount_ct - GREATEST(0,
-                      c.total_available_ct - d.cumulative_debits_before
-                  )
-              )::BIGINT AS outstanding_ct
-          FROM debit_cumsum d CROSS JOIN credit_pool c
-          WHERE GREATEST(0,
-              d.amount_ct - GREATEST(0,
-                  c.total_available_ct - d.cumulative_debits_before
-              )
-          ) > 0
-          ORDER BY d.booking_date ASC",
-    )
-    .bind(account_id)
-    .bind(tenant)
-    .fetch_all(pool)
-    .await
-    .context("list_open_items")?;
-
-    let items = rows
-        .iter()
-        .map(|r| {
-            Ok(OpenItem {
-                id: r.try_get("id")?,
-                entry_type: r.try_get("entry_type")?,
-                amount_ct: r.try_get("amount_ct")?,
-                outstanding_ct: r.try_get("outstanding_ct")?,
-                reference_id: r.try_get("reference_id")?,
-                booking_date: r.try_get("booking_date")?,
-                description: r.try_get("description")?,
-            })
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?;
-
-    Ok(items)
+    ledger: &PgLedger,
+    lf_mp_id: &str,
+    malo_id: &str,
+) -> anyhow::Result<Vec<crate::ledger::OpenReceivable>> {
+    ledger.open_receivables(lf_mp_id, malo_id).await
 }
 
-// ── P1-4: GDPR Art. 17 anonymization ─────────────────────────────────────────
+// ── GDPR Art. 17 anonymization ─────────────────────────────────────────
 
 /// Result of a GDPR anonymization operation.
 #[derive(Debug, Serialize)]
@@ -1452,7 +1331,7 @@ pub async fn anonymize_account(
     })
 }
 
-// ── P1-5: Automatic Mahnwesen (dunning rule engine) ──────────────────────────
+// ── Automatic Mahnwesen (dunning rule engine) ──────────────────────────
 
 /// Result of one automatic dunning run.
 #[derive(Debug, Serialize)]
@@ -1467,7 +1346,7 @@ pub struct AutoDunningResult {
 
 /// Run the automatic Mahnwesen escalation engine for one tenant.
 ///
-/// This is the **dunning rule engine** (P1-5). It evaluates every active account
+/// This is the **dunning rule engine**. It evaluates every active account
 /// and creates / escalates dunning cases according to the following rules:
 ///
 /// ## Rules
@@ -1619,6 +1498,7 @@ pub async fn mark_sperrauftrag_dispatched(
 }
 
 pub async fn run_auto_dunning(
+    ledger: &PgLedger,
     pool: &PgPool,
     tenant: &str,
     grace_days: i64,
@@ -1659,8 +1539,11 @@ pub async fn run_auto_dunning(
     //   - No active (unresolved) Mahnstufe 1 dunning case
     //   - Oldest RECHNUNG debit is older than grace_days (billing date ≤ cutoff)
     //   - Not anonymized
-    let candidates: Vec<(Uuid, Uuid, i64)> = sqlx::query(
-        r"SELECT a.account_id, a.account_id AS aid, a.balance_ct
+    // Pre-filter cheaply in SQL on the balance cache + no-open-case; the "debt
+    // aged past grace" signal comes from the ledger (a charge booked on/before
+    // cutoff), checked per candidate below.
+    let prefiltered: Vec<(Uuid, String, String, i64)> = sqlx::query(
+        r"SELECT a.account_id, a.malo_id, a.lf_mp_id, a.balance_ct
           FROM accounts a
           WHERE a.tenant = $1
             AND a.balance_ct > 0
@@ -1669,49 +1552,61 @@ pub async fn run_auto_dunning(
                 SELECT 1 FROM dunning_cases dc
                 WHERE dc.account_id = a.account_id
                   AND dc.resolved_at IS NULL
-            )
-            AND EXISTS (
-                SELECT 1 FROM ledger_entries le
-                WHERE le.account_id = a.account_id
-                  AND le.amount_ct > 0
-                  AND le.entry_type = 'RECHNUNG'
-                  AND le.booking_date <= $2
             )",
     )
     .bind(tenant)
-    .bind(cutoff)
     .fetch_all(pool)
     .await
     .context("auto_dunning: find Mahnstufe1 candidates")?
     .into_iter()
     .map(|r| {
-        let account_id: Uuid = r.try_get("account_id").unwrap_or(Uuid::nil());
-        let balance_ct: i64 = r.try_get("balance_ct").unwrap_or(0);
-        (account_id, account_id, balance_ct)
+        (
+            r.try_get::<Uuid, _>("account_id").unwrap_or(Uuid::nil()),
+            r.try_get::<String, _>("malo_id").unwrap_or_default(),
+            r.try_get::<String, _>("lf_mp_id").unwrap_or_default(),
+            r.try_get::<i64, _>("balance_ct").unwrap_or(0),
+        )
     })
     .collect();
 
+    let mut candidates: Vec<(Uuid, String, String, i64)> = Vec::new();
+    for cand in prefiltered {
+        if ledger
+            .has_debit_on_or_before(&cand.2, &cand.1, cutoff)
+            .await
+            .unwrap_or(false)
+        {
+            candidates.push(cand);
+        }
+    }
+
     let stufe1_due_date = today + time::Duration::days(14); // 14-day payment deadline
 
-    for (account_id, _, balance_ct) in &candidates {
+    for (account_id, malo_id, lf_mp_id, balance_ct) in &candidates {
         let case_id =
             create_dunning_case(pool, *account_id, tenant, 1, *balance_ct, stufe1_due_date)
                 .await
                 .context("auto_dunning: create Mahnstufe1")?;
 
-        // Post Mahngebühr if configured > 0.
+        // Post Mahngebühr if configured > 0. Deterministic idempotency key per
+        // (malo, Mahnstufe, run-date) — a same-day re-run replays as a no-op
+        // instead of double-charging the fee (fixes the old un-idempotent write).
         if fee_stufe1_ct > 0 {
-            let _ = write_entry(
+            let _ = post_entry(
+                ledger,
                 pool,
-                *account_id,
                 tenant,
+                malo_id,
+                lf_mp_id,
                 "MAHNGEBUEHR",
                 fee_stufe1_ct,
-                Some(&case_id.to_string()),
+                &format!("mahngebuehr:{malo_id}:1:{today}"),
                 Some(mako_events::accounting::MAHNUNG_ISSUED),
-                None,
+                Some(&case_id.to_string()),
+                today,
                 today,
                 Some("Mahngebühr Mahnstufe 1"),
+                None,
             )
             .await;
         }
@@ -1725,9 +1620,10 @@ pub async fn run_auto_dunning(
     }
 
     // ── Step 2: Escalate Mahnstufe 1 → 2 ─────────────────────────────────────
-    let overdue_stufe1: Vec<(Uuid, Uuid, i64)> = sqlx::query(
-        r"SELECT dc.id, dc.account_id, dc.amount_due_ct
+    let overdue_stufe1: Vec<(Uuid, Uuid, String, String, i64)> = sqlx::query(
+        r"SELECT dc.id, dc.account_id, a.malo_id, a.lf_mp_id, dc.amount_due_ct
           FROM dunning_cases dc
+          JOIN accounts a ON a.account_id = dc.account_id
           WHERE dc.tenant = $1
             AND dc.stufe = 1
             AND dc.resolved_at IS NULL
@@ -1743,6 +1639,8 @@ pub async fn run_auto_dunning(
         (
             r.try_get::<Uuid, _>("id").unwrap_or(Uuid::nil()),
             r.try_get::<Uuid, _>("account_id").unwrap_or(Uuid::nil()),
+            r.try_get::<String, _>("malo_id").unwrap_or_default(),
+            r.try_get::<String, _>("lf_mp_id").unwrap_or_default(),
             r.try_get::<i64, _>("amount_due_ct").unwrap_or(0),
         )
     })
@@ -1750,7 +1648,7 @@ pub async fn run_auto_dunning(
 
     let stufe2_due_date = today + time::Duration::days(14);
 
-    for (old_case_id, account_id, amount_due_ct) in &overdue_stufe1 {
+    for (old_case_id, account_id, malo_id, lf_mp_id, amount_due_ct) in &overdue_stufe1 {
         // Resolve the old Mahnstufe 1 case.
         resolve_dunning_case(pool, *old_case_id, tenant)
             .await
@@ -1768,17 +1666,21 @@ pub async fn run_auto_dunning(
         .context("auto_dunning: create Mahnstufe2")?;
 
         if fee_stufe2_ct > 0 {
-            let _ = write_entry(
+            let _ = post_entry(
+                ledger,
                 pool,
-                *account_id,
                 tenant,
+                malo_id,
+                lf_mp_id,
                 "MAHNGEBUEHR",
                 fee_stufe2_ct,
-                Some(&case_id.to_string()),
+                &format!("mahngebuehr:{malo_id}:2:{today}"),
                 Some(mako_events::accounting::MAHNUNG_ISSUED),
-                None,
+                Some(&case_id.to_string()),
+                today,
                 today,
                 Some("Mahngebühr Mahnstufe 2"),
+                None,
             )
             .await;
         }
@@ -1788,9 +1690,10 @@ pub async fn run_auto_dunning(
     }
 
     // ── Step 3: Escalate Mahnstufe 2 → 3 + Sperrauftrag ─────────────────────
-    let overdue_stufe2: Vec<(Uuid, Uuid, i64)> = sqlx::query(
-        r"SELECT dc.id, dc.account_id, dc.amount_due_ct
+    let overdue_stufe2: Vec<(Uuid, Uuid, String, String, i64)> = sqlx::query(
+        r"SELECT dc.id, dc.account_id, a.malo_id, a.lf_mp_id, dc.amount_due_ct
           FROM dunning_cases dc
+          JOIN accounts a ON a.account_id = dc.account_id
           WHERE dc.tenant = $1
             AND dc.stufe = 2
             AND dc.resolved_at IS NULL
@@ -1806,6 +1709,8 @@ pub async fn run_auto_dunning(
         (
             r.try_get::<Uuid, _>("id").unwrap_or(Uuid::nil()),
             r.try_get::<Uuid, _>("account_id").unwrap_or(Uuid::nil()),
+            r.try_get::<String, _>("malo_id").unwrap_or_default(),
+            r.try_get::<String, _>("lf_mp_id").unwrap_or_default(),
             r.try_get::<i64, _>("amount_due_ct").unwrap_or(0),
         )
     })
@@ -1813,7 +1718,7 @@ pub async fn run_auto_dunning(
 
     let stufe3_due_date = today + time::Duration::days(7); // shorter final deadline
 
-    for (old_case_id, account_id, amount_due_ct) in &overdue_stufe2 {
+    for (old_case_id, account_id, malo_id, lf_mp_id, amount_due_ct) in &overdue_stufe2 {
         resolve_dunning_case(pool, *old_case_id, tenant)
             .await
             .context("auto_dunning: resolve Mahnstufe2")?;
@@ -1830,17 +1735,21 @@ pub async fn run_auto_dunning(
         .context("auto_dunning: create Mahnstufe3")?;
 
         if fee_stufe3_ct > 0 {
-            let _ = write_entry(
+            let _ = post_entry(
+                ledger,
                 pool,
-                *account_id,
                 tenant,
+                malo_id,
+                lf_mp_id,
                 "MAHNGEBUEHR",
                 fee_stufe3_ct,
-                Some(&_case_id.to_string()),
+                &format!("mahngebuehr:{malo_id}:3:{today}"),
                 Some(mako_events::accounting::MAHNUNG_ISSUED),
-                None,
+                Some(&_case_id.to_string()),
+                today,
                 today,
                 Some("Mahngebühr Mahnstufe 3"),
+                None,
             )
             .await;
         }
@@ -1873,155 +1782,12 @@ pub async fn run_auto_dunning(
     })
 }
 
-// ── Double-entry journal lines ────────────────────────────────────────────────
-
-/// SKR account mapping for double-entry journal lines.
-///
-/// Maps an `entry_type` and amount sign to (debit_account, credit_account) pairs
-/// using German SKR 03 / SKR 04 chart of accounts.
-pub struct JournalMapping {
-    pub debit_skr: &'static str,
-    pub debit_desc: &'static str,
-    pub credit_skr: &'static str,
-    pub credit_desc: &'static str,
-}
-
-/// Determine the SKR 03 journal mapping for a given ledger entry type and amount sign.
-pub fn journal_mapping(entry_type: &str, amount_ct: i64) -> JournalMapping {
-    // Use positive = debit (charge), negative = credit (refund) convention
-    let is_debit = amount_ct > 0;
-
-    match entry_type {
-        "RECHNUNG" => JournalMapping {
-            debit_skr: "1400",
-            debit_desc: "Forderungen aus L+L",
-            credit_skr: "4000",
-            credit_desc: "Energieerlöse",
-        },
-        // Abschlag = Abschlagszahlung (advance payment received): Bank in,
-        // customer receivable reduced — a payment, not revenue.
-        "ABSCHLAG" => JournalMapping {
-            debit_skr: "1200",
-            debit_desc: "Bankguthaben",
-            credit_skr: "1400",
-            credit_desc: "Forderungen aus L+L (Abschlag)",
-        },
-        "STORNO" if is_debit => JournalMapping {
-            debit_skr: "1400",
-            debit_desc: "Forderungen aus L+L",
-            credit_skr: "4000",
-            credit_desc: "Energieerlöse (Storno)",
-        },
-        "STORNO" => JournalMapping {
-            debit_skr: "4000",
-            debit_desc: "Energieerlöse (Storno)",
-            credit_skr: "1400",
-            credit_desc: "Forderungen aus L+L",
-        },
-        "ZAHLUNG" => JournalMapping {
-            debit_skr: "1200",
-            debit_desc: "Bankguthaben",
-            credit_skr: "1400",
-            credit_desc: "Forderungen aus L+L",
-        },
-        "GUTSCHRIFT" => JournalMapping {
-            debit_skr: "4000",
-            debit_desc: "Energieerlöse",
-            credit_skr: "1400",
-            credit_desc: "Forderungen aus L+L",
-        },
-        "EEG_GUTSCHRIFT" | "EEG_MARKTPRAEMIE" => JournalMapping {
-            debit_skr: "3000",
-            debit_desc: "Verbindlichkeiten EEG",
-            credit_skr: "4001",
-            credit_desc: "EEG Einspeisevergütung",
-        },
-        "BANKRUECKLAST" => JournalMapping {
-            debit_skr: "1400",
-            debit_desc: "Forderungen aus L+L",
-            credit_skr: "1200",
-            credit_desc: "Bankguthaben",
-        },
-        "MAHNGEBUEHR" => JournalMapping {
-            debit_skr: "1400",
-            debit_desc: "Forderungen aus L+L",
-            credit_skr: "4003",
-            credit_desc: "Mahngebühren / Verzugszinsen",
-        },
-        "JAHRESABSCHLUSS" if is_debit => JournalMapping {
-            debit_skr: "1400",
-            debit_desc: "Forderungen aus L+L",
-            credit_skr: "4000",
-            credit_desc: "Energieerlöse Jahresabschluss",
-        },
-        "JAHRESABSCHLUSS" => JournalMapping {
-            debit_skr: "4000",
-            debit_desc: "Energieerlöse Jahresabschluss",
-            credit_skr: "3001",
-            credit_desc: "Verbindlichkeiten Erstattung",
-        },
-        "KORREKTUR" if is_debit => JournalMapping {
-            debit_skr: "1400",
-            debit_desc: "Forderungen aus L+L",
-            credit_skr: "4000",
-            credit_desc: "Energieerlöse (Korrektur)",
-        },
-        _ => JournalMapping {
-            // KORREKTUR credit or unknown
-            debit_skr: "4000",
-            debit_desc: "Energieerlöse (Korrektur)",
-            credit_skr: "1400",
-            credit_desc: "Forderungen aus L+L",
-        },
-    }
-}
-
-/// Insert two balanced journal lines for a ledger entry (double-entry shadow).
-///
-/// Each call produces exactly one debit (D) and one credit (C) line.
-/// The amount is always positive — the `side` column conveys the sign.
-/// Constraint: `debit.amount_ct == credit.amount_ct` — enforced by this function.
-#[allow(clippy::too_many_arguments)]
-pub async fn insert_journal_lines(
-    conn: &mut sqlx::PgConnection,
-    ledger_entry_id: Uuid,
-    account_id: Uuid,
-    tenant: &str,
-    entry_type: &str,
-    amount_ct: i64,
-    booking_date: time::Date,
-    description: Option<&str>,
-) -> anyhow::Result<()> {
-    let abs_ct = i64::try_from(amount_ct.unsigned_abs()).unwrap_or(i64::MAX);
-    if abs_ct == 0 {
-        return Ok(());
-    }
-    let m = journal_mapping(entry_type, amount_ct);
-
-    sqlx::query(
-        r"INSERT INTO journal_lines
-              (ledger_entry_id, account_id, tenant, side, skr_account, skr_description,
-               amount_ct, booking_date, description)
-          VALUES
-              ($1, $2, $3, 'D', $4, $5, $6, $7, $8),
-              ($1, $2, $3, 'C', $9, $10, $6, $7, $8)",
-    )
-    .bind(ledger_entry_id)
-    .bind(account_id)
-    .bind(tenant)
-    .bind(m.debit_skr)
-    .bind(m.debit_desc)
-    .bind(abs_ct)
-    .bind(booking_date)
-    .bind(description)
-    .bind(m.credit_skr)
-    .bind(m.credit_desc)
-    .execute(&mut *conn)
-    .await
-    .context("insert_journal_lines")?;
-
-    Ok(())
-}
+// ── SKR double-entry mapping now lives in the doubleentry ledger ──────────────
+//
+// The SKR 03/04 journal mapping (JournalMapping / journal_mapping) and the
+// `journal_lines` shadow inserter are gone. accountingd's chart of accounts and
+// the entry_type→postings mapping live in `ledger.rs` (Chart::contra); doubleentry
+// posts the balanced entry and enforces Soll=Haben in-engine and in its schema.
 
 // ── Aging analysis ────────────────────────────────────────────────────────────
 
@@ -2155,9 +1921,12 @@ pub async fn fetch_ecb_base_rate(
 /// Create a Verzugszinsen (default interest) charge and the linked MAHNGEBUEHR ledger entry.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_interest_charge(
+    ledger: &PgLedger,
     pool: &PgPool,
     account_id: Uuid,
     tenant: &str,
+    malo_id: &str,
+    lf_mp_id: &str,
     invoice_reference: Option<&str>,
     principal_ct: i64,
     is_b2b: bool,
@@ -2182,18 +1951,23 @@ pub async fn create_interest_charge(
     };
     let customer_type = if is_b2b { "B2B" } else { "B2C" };
 
-    // Create linked MAHNGEBUEHR ledger entry
-    let ledger_id = write_entry(
+    // Create linked MAHNGEBUEHR ledger entry (deterministic idempotency key per
+    // malo + interest period — a re-post is a no-op, not a double charge).
+    let ledger_id = post_entry(
+        ledger,
         pool,
-        account_id,
         tenant,
+        malo_id,
+        lf_mp_id,
         "MAHNGEBUEHR",
         interest_ct,
-        invoice_reference,
-        Some(mako_events::accounting::INTEREST_CHARGED),
+        &format!("interest:{malo_id}:{period_from}:{period_to}"),
         None,
+        invoice_reference,
+        period_to,
         period_to,
         Some(legal_basis),
+        None,
     )
     .await
     .context("create_interest_charge: ledger entry")?;
@@ -2216,7 +1990,7 @@ pub async fn create_interest_charge(
     .bind(period_from)
     .bind(period_to)
     .bind(legal_basis)
-    .bind(ledger_id.unwrap_or(Uuid::nil()))
+    .bind(ledger_id)
     .fetch_one(pool)
     .await
     .context("create_interest_charge: insert")?;

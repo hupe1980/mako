@@ -7,7 +7,7 @@ the Einspeiser Registry daemon. It covers the full EEG legal framework from EEG 
 EEG 2023 (Solarpaket I) and KWKG 2023, with all version-specific rule variants enforced
 automatically based on the plant's `EegGesetz` year.
 
-**328 tests** · zero I/O · zero async · zero `unsafe` · no float money (`rust_decimal`) ·
+zero I/O · zero async · zero `unsafe` · no float money (`rust_decimal`) ·
 MSRV 1.94
 
 ---
@@ -534,7 +534,7 @@ Source: EEG 2023 Clearingstelle EEG|KWKG working text (23.12.2025). Cite as: *Cl
 
 ```bash
 cargo test -p eeg-billing --all-features
-# 86 lib + 12 integration + 169 regulatory showcase + 61 doctests = 328 total
+# lib tests + proptest integration + regulatory showcase + doctests
 ```
 
 The regulatory showcase (`tests/regulatory_showcase.rs`) is executable documentation

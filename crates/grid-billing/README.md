@@ -9,10 +9,10 @@
 
 ### KAV §2 — Konzessionsabgabe
 
-The Höchstbeträge are checked on every settlement, and the position now cites the
+The Höchstbeträge are checked on every settlement, and each position cites the
 paragraph its group is actually capped under: **§2 Abs. 2** for Tarifkunden and
 Schwachlast, **Abs. 3** for Sondervertragskunden, **Abs. 7** where the customer is
-freigestellt. Every position previously cited Abs. 2 regardless.
+freigestellt.
 
 The rates themselves are undated because the statute has not changed them since
 the Euro conversion — the annual reductions people remember were the §3
@@ -33,9 +33,7 @@ transitional phase-down, which completed long ago.
 
 The charge is **annualised before comparison** — billing a year in monthly
 instalments does not raise the cap. A charge above the ceiling raises
-`MSB_ABOVE_MSBG_POG`. This was previously unchecked: the MSB settlement validated
-only that the fee was non-negative, while the analogous KAV ceiling *was*
-checked.
+`MSB_ABOVE_MSBG_POG`.
 
 ### §17 StromNEV — Netzebene and Benutzungsstundenzahl
 
@@ -145,19 +143,16 @@ assigns 1-based numbers at rendering time; the engine carries no counter.
 ## No BO4E inside the engine
 
 `SpotPriceFormula` states the pricing formula behind a §14a Modul 3 rate as a
-value — reference, unit, method, steps. It used to be a `serde_json::Value`
-holding a hand-built BO4E `LastvariablePreisposition`, which kept the *type*
-dependency out while moving BO4E *schema knowledge* in, untyped and unvalidated.
-An adapter that needs the COM builds it from the value object. The crate has no
+typed value — reference, unit, method, steps — never a `serde_json::Value` carrying
+a hand-built BO4E COM. That keeps BO4E *schema knowledge* out of the engine: an
+adapter that needs the COM builds it from the value object, and the crate has no
 `serde_json` dependency at all.
 
 ## SettlementPeriod
 
-A validated pair, not two loose dates. Every input struct used to carry
-`period_from` and `period_to` independently and every calculation re-checked
-their ordering — five copies of one guard, each able to be forgotten.
-Constructing `SettlementPeriod` *is* the check, so an inverted period is
-unrepresentable rather than rejected five times over.
+A validated pair, not two loose `period_from` / `period_to` dates each calculation
+would have to re-check for ordering. Constructing `SettlementPeriod` *is* the check,
+so an inverted period is unrepresentable rather than rejected at every call site.
 
 ## Regulatory regime
 

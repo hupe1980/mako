@@ -9,6 +9,7 @@
   "verguetungssatz_ct": 8.11,
   "foerderendedatum": "2044-03-31",
   "settlement_model": "FEED_IN_TARIFF",
+  "ust_status": "KLEINUNTERNEHMER",
   "status": "aktiv",
   "mastr_registriert": true,
   "mastr_nummer": "SEE912345678901",

@@ -400,7 +400,7 @@ async fn test_as4_full_round_trip() {
 ```
 
 For a complete, runnable example with SOAP envelope verification, see
-`services/makod/tests/as4_security.rs` — 12 tests covering the full BDEW AS4 security
+`services/makod/tests/as4_security.rs` — covers the full BDEW AS4 security
 envelope including tampered-signature rejection and `require_encrypted_inbound` enforcement.
 
 ### Generating test certificates manually with OpenSSL
