@@ -9,14 +9,22 @@ use obsd::worker::{WorkerRuntime, sweep_deadlines, sweep_parity};
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
-async fn pg_pool() -> Option<sqlx::PgPool> {
+/// Container guard the test holds until it ends — dropping it removes the
+/// container (no leak, no external reaper).
+type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
+
+async fn pg_pool() -> Option<(sqlx::PgPool, PgContainer)> {
+    use testcontainers::ImageExt;
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;
 
-    let container = Postgres::default().start().await.ok()?;
+    let container = Postgres::default()
+        .with_tag("17-alpine")
+        .start()
+        .await
+        .ok()?;
     let port = container.get_host_port_ipv4(5432).await.ok()?;
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    Box::leak(Box::new(container));
 
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(4)
@@ -27,7 +35,7 @@ async fn pg_pool() -> Option<sqlx::PgPool> {
         .run(&pool)
         .await
         .expect("apply obsd schema");
-    Some(pool)
+    Some((pool, container))
 }
 
 fn runtime(pool: sqlx::PgPool, tenant: &str) -> WorkerRuntime {
@@ -78,7 +86,7 @@ async fn insert_projection(
 
 #[tokio::test]
 async fn deadline_sweep_alerts_once_for_approaching_open_processes() {
-    let Some(pool) = pg_pool().await else {
+    let Some((pool, _pg)) = pg_pool().await else {
         return;
     };
     let tenant = "9900000000002";
@@ -147,7 +155,7 @@ async fn deadline_sweep_alerts_once_for_approaching_open_processes() {
 
 #[tokio::test]
 async fn parity_sweep_alerts_when_affiliate_is_favoured_beyond_threshold() {
-    let Some(pool) = pg_pool().await else {
+    let Some((pool, _pg)) = pg_pool().await else {
         return;
     };
     let tenant = "9900000000002";

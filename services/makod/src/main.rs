@@ -87,7 +87,7 @@
 //!         │                   [role-msb-strom OR role-nb-strom OR no role flags]
 //!         ├── GeliGasModule — PIDs 44001–44021 (GeLi Gas; 44022–44024 registered by WimGasModule) + PID 31011 (AWH Rechnung)
 //!         │                   [role-lf-gas OR role-nb-gas OR no role flags]
-//!         ├── WimGasModule      — PIDs 44022–44024, 44039–44053, 44168–44170, 31003, 31004 (WiM Gas MSB-Wechsel + INVOIC billing)
+//!         ├── WimGasModule      — PIDs 44022–44024, 44039–44053, 44168–44170, 31003 + 31004 (WiM Gas MSB-Wechsel; the shared INVOIC workflow also hosts the Sparte-neutral universal Storno 31004)
 //!         │                       [role-msb-gas OR role-nb-gas OR no role flags]
 //!         ├── GaBiGasModule     — PIDs 31010/31007/31008 (INVOIC billing, BK7-24-01-008)
 //!         │                   + PID 33001 (REMADV Zahlungsavis) + PID 29001 (COMDIS Ablehnung)

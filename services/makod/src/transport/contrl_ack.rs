@@ -332,13 +332,18 @@ fn message_is_gas(msg: &AnyMessage) -> bool {
 /// | 44001–44053  | Gas    | UTILMD G (GeLi Gas, WiM Gas)             |
 /// | 44168–44170  | Gas    | UTILMD G (WiM Gas extensions)            |
 /// | 23005, 23009 | Gas    | INSRPT Gas-only variants                 |
-/// | 31003, 31004 | Gas    | INVOIC WiM Gas                           |
+/// | 31003        | Gas    | INVOIC WiM Gas Rechnung                  |
 /// | 31007, 31008 | Gas    | INVOIC GaBi Gas Aggreg. MMM-Rechnung (NB → MGV) |
 /// | 31010, 31011 | Gas    | INVOIC GaBi Gas / GeLi Gas AWH           |
+///
+/// **Not 31004:** the Stornorechnung is a Sparte-neutral universal Storno (INVOIC
+/// AHB §3.1.2) — the same PID is used for Strom *and* Gas across GPKE/MMM/WiM/
+/// Kapazität/AWH/GeLi. Like the other Sparte-agnostic INVOIC PIDs it is resolved by
+/// recipient MP-ID in [`emit_for_interchange`], never forced to Gas here.
 fn is_unambiguous_gas_pid(pid: u32) -> bool {
     matches!(
         pid,
-        44001..=44053 | 44168..=44170 | 23005 | 23009 | 31003 | 31004 | 31007 | 31008 | 31010 | 31011
+        44001..=44053 | 44168..=44170 | 23005 | 23009 | 31003 | 31007 | 31008 | 31010 | 31011
     )
 }
 
@@ -403,7 +408,8 @@ mod tests {
         assert!(is_unambiguous_gas_pid(23005));
         assert!(is_unambiguous_gas_pid(23009));
         assert!(is_unambiguous_gas_pid(31003));
-        assert!(is_unambiguous_gas_pid(31004));
+        // 31004 (Stornorechnung) is Sparte-neutral — NOT unambiguously Gas.
+        assert!(!is_unambiguous_gas_pid(31004));
         assert!(is_unambiguous_gas_pid(31007));
         assert!(is_unambiguous_gas_pid(31008));
         assert!(is_unambiguous_gas_pid(31010));

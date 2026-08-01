@@ -53,7 +53,7 @@ fn convert_pid(p: edi_energy::Pruefidentifikator) -> Result<Pruefidentifikator, 
 }
 
 /// Parse a `CCYYMMDD` DTM value (format 102) into a UTC datetime at midnight.
-fn parse_ccyymmdd(v: &str) -> Option<time::OffsetDateTime> {
+pub(crate) fn parse_ccyymmdd(v: &str) -> Option<time::OffsetDateTime> {
     if v.len() != 8 || !v.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }

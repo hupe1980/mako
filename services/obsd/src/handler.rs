@@ -235,7 +235,8 @@ fn derive_family(workflow_name: &str, pid: u32) -> String {
         // ── WiM Gas — Messstellenbetrieb Gas (BK7-24-01-009) ──────────────────
         44039..=44053 | 44168..=44170 => "wim-gas",
         23005 | 23009 => "wim-gas", // INSRPT Gas-only variants
-        31003 | 31004 => "wim-gas", // INVOIC WiM Gas Rechnung / Stornorechnung
+        31003 => "wim-gas",         // INVOIC WiM Gas Rechnung
+        31004 => "invoic-storno", // INVOIC Stornorechnung — Sparte-neutral, cross-process (AHB §3.1.2)
         // ── GaBi Gas — Bilanzierung Gas (BK7-24-01-008) ──────────────────────────
         31007 | 31008 | 31010 => "gabi-gas", // INVOIC MMM-Rechnung / Kapazitätsrechnung
         13013 => "gabi-gas",                 // MSCONS Allokationsliste Gas (MMMA)

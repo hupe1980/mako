@@ -182,8 +182,10 @@ impl mako_engine::builder::EngineModule for WimGasModule {
         // IFTSTA PIDs 21009/21010/21011/21012/21013/21015/21018 carry informational
         // WiM Gas MSB-Wechsel status messages. Per WiM Gas AWH V2.0, there is no
         // APERAK obligation for these messages; they are not routed to any workflow.
-        // PIDs 31003 (WiM-Rechnung) and 31004 (Stornorechnung) — WiM Gas INVOIC
-        // billing.  Routes to the stub workflow until full settlement is implemented.
+        // PID 31003 = WiM Gas WiM-Rechnung. PID 31004 = the Sparte-neutral universal
+        // Stornorechnung (INVOIC AHB §3.1.2) — its receive→settle/dispute machine is
+        // commodity-agnostic, so this generic INVOIC workflow hosts it for both
+        // Sparten (invoicd runs the Sparte-neutral `check_storno`).
         for &pid in invoic::WIM_GAS_INVOIC_PIDS {
             router.register(pid, "wim-gas-invoic");
         }

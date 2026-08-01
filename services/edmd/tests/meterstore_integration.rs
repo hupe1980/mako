@@ -37,30 +37,33 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::postgres::Postgres;
 use time::{Duration, OffsetDateTime};
 
-/// PostgreSQL + edmd migrations + a throwaway filesystem warehouse, returning
-/// `(pool, database_url, warehouse_uri)`.
+/// Container guard the test holds until it ends — dropping it removes the
+/// container (no leak, no external reaper).
+type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
+
+/// PostgreSQL + edmd migrations + a throwaway filesystem warehouse.
 ///
-/// The container and the warehouse directory are leaked so they outlive the
-/// individual test (each test provisions its own, matching the repo's other
-/// testcontainer suites).
-async fn boot() -> (sqlx::PgPool, String, String) {
-    let container = Postgres::default().start().await.expect("start postgres");
+/// Returns `(pool, database_url, warehouse_uri, container_guard, warehouse_guard)`
+/// — the caller **must** hold the last two: dropping them removes the container
+/// and the temp warehouse (no leak).
+async fn boot() -> (sqlx::PgPool, String, String, PgContainer, tempfile::TempDir) {
+    use testcontainers::ImageExt;
+    let container = Postgres::default()
+        .with_tag("17-alpine")
+        .start()
+        .await
+        .expect("start postgres");
     let port = container
         .get_host_port_ipv4(5432)
         .await
         .expect("postgres port");
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-    Box::leak(Box::new(container));
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
         .connect(&url)
         .await
         .expect("connect");
-    sqlx::query("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-        .execute(&pool)
-        .await
-        .expect("pgcrypto");
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await
@@ -68,13 +71,17 @@ async fn boot() -> (sqlx::PgPool, String, String) {
 
     let warehouse = tempfile::tempdir().expect("warehouse tempdir");
     let warehouse_uri = format!("file://{}", warehouse.path().display());
-    Box::leak(Box::new(warehouse));
 
-    (pool, url, warehouse_uri)
+    (pool, url, warehouse_uri, container, warehouse)
 }
 
-async fn setup() -> (MeterStoreTimeSeriesRepository, sqlx::PgPool) {
-    let (pool, url, warehouse_uri) = boot().await;
+async fn setup() -> (
+    MeterStoreTimeSeriesRepository,
+    sqlx::PgPool,
+    PgContainer,
+    tempfile::TempDir,
+) {
+    let (pool, url, warehouse_uri, container, warehouse) = boot().await;
     // Builds both tables (reads + Typ-2) over one shared catalog/session; this
     // helper exercises the authoritative reads store.
     let (reads_store, _typ2_store, _cold) = build_stores(
@@ -90,6 +97,8 @@ async fn setup() -> (MeterStoreTimeSeriesRepository, sqlx::PgPool) {
     (
         MeterStoreTimeSeriesRepository::new(reads_store, pool.clone()),
         pool,
+        container,
+        warehouse,
     )
 }
 
@@ -134,7 +143,7 @@ fn window(malo: &str, around: OffsetDateTime) -> TimeSeriesQuery {
 async fn schema_check_constraints_reject_bad_data() {
     // Proves the DB-layer CHECKs (quality vocabulary + forward interval/period)
     // are applied by the migration and actually enforced, not just valid syntax.
-    let (pool, _url, _wh) = boot().await;
+    let (pool, _url, _wh_uri, _pg, _wh) = boot().await;
 
     // Off-vocabulary quality → rejected by the quality CHECK.
     let bad_quality = sqlx::query(
@@ -195,7 +204,7 @@ async fn reads_and_typ2_share_a_catalog_but_stay_isolated() {
     // built as two tables over ONE shared Iceberg catalog and DataFusion session.
     // The point of two tables is isolation: an ESA Typ-2 value must never surface
     // in a billing read, and vice versa.
-    let (pool, url, warehouse_uri) = boot().await;
+    let (pool, url, warehouse_uri, _pg, _wh) = boot().await;
     let (reads_store, typ2_store, _cold) = build_stores(
         pool.clone(),
         &url,
@@ -255,7 +264,7 @@ async fn reads_and_typ2_share_a_catalog_but_stay_isolated() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn ingest_roundtrip_preserves_gas_sparte() {
-    let (repo, _pool) = setup().await;
+    let (repo, _pool, _pg, _wh) = setup().await;
     let t = OffsetDateTime::now_utc() - Duration::days(1);
 
     repo.store_reads(&[read("51238696780", t, "3.5", Sparte::Gas, "7-1:3.0.0")])
@@ -280,7 +289,7 @@ async fn ingest_roundtrip_preserves_provenance() {
     // (MSCONS / None / INITIAL) on read-back. They are now declared attribute
     // columns, folded from the newest delivery, so a read-back MeterRead names its
     // true provenance rather than a guess.
-    let (repo, _pool) = setup().await;
+    let (repo, _pool, _pg, _wh) = setup().await;
     let t = OffsetDateTime::now_utc() - Duration::days(1);
 
     let mut r = read("51238696780", t, "7.0", Sparte::Strom, "1-0:1.8.0");
@@ -313,7 +322,7 @@ async fn billable_filter_excludes_faulty_from_aggregates() {
     // The §60 Abs. 2 billable filter is pushed into the scan (`quality_in`), so a
     // FAULTY interval never reaches the MMM saldo — it is dropped at the storage
     // layer, not re-filtered in memory at each call site.
-    let (repo, _pool) = setup().await;
+    let (repo, _pool, _pg, _wh) = setup().await;
     let t = OffsetDateTime::now_utc() - Duration::days(1);
 
     let good = read("51238696780", t, "3.5", Sparte::Strom, "1-0:1.8.0");
@@ -345,7 +354,7 @@ async fn query_as_of_reconstructs_the_value_in_force() {
     // § 60 Abs. 6 MsbG point-in-time reconstruction through meterstore's
     // transaction-time axis: a correction delivered after the as-of instant is
     // invisible, so the value returned is the one that was in force then.
-    let (repo, _pool) = setup().await;
+    let (repo, _pool, _pg, _wh) = setup().await;
     let interval = OffsetDateTime::now_utc() - Duration::days(1);
 
     // Original delivered 3h ago.
@@ -392,7 +401,7 @@ async fn query_as_of_hides_an_interval_first_stored_later() {
     // The set-membership property the old audit-table overlay could not give:
     // an interval first stored after the as-of instant is absent, not merely
     // unchanged.
-    let (repo, _pool) = setup().await;
+    let (repo, _pool, _pg, _wh) = setup().await;
     let interval = OffsetDateTime::now_utc() - Duration::days(1);
 
     let mut early = read("51238696780", interval, "3.5", Sparte::Strom, "1-0:1.8.0");
@@ -429,7 +438,7 @@ async fn query_as_of_hides_an_interval_first_stored_later() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn latest_read_returns_the_newest_interval() {
-    let (repo, _pool) = setup().await;
+    let (repo, _pool, _pg, _wh) = setup().await;
     let base = OffsetDateTime::now_utc() - Duration::days(1);
     let earlier = base;
     let later = base + Duration::minutes(15);
@@ -453,7 +462,7 @@ async fn latest_read_returns_the_newest_interval() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn correction_supersedes_value_and_writes_audit_row() {
-    let (repo, pool) = setup().await;
+    let (repo, pool, _pg, _wh) = setup().await;
     let t = OffsetDateTime::now_utc() - Duration::days(1);
 
     // Store the original two hours "ago" (transaction time) so the correction,
@@ -509,7 +518,7 @@ async fn ingest_overwrite_audit_row_covers_the_full_interval() {
     // row driven by the store's displacement report. The displacement carries the
     // interval end, so the audit row spans `[dtm_from, dtm_to)` rather than
     // collapsing to a zero-width `[dtm_from, dtm_from)`.
-    let (repo, pool) = setup().await;
+    let (repo, pool, _pg, _wh) = setup().await;
     let t = OffsetDateTime::now_utc() - Duration::days(1);
 
     let mut first = read("51238696780", t, "3.5", Sparte::Strom, "1-0:1.8.0");
@@ -539,7 +548,7 @@ async fn ingest_overwrite_audit_row_covers_the_full_interval() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn gdpr_erasure_unlinks_the_ingest_registered_subject() {
-    let (repo, _pool) = setup().await;
+    let (repo, _pool, _pg, _wh) = setup().await;
     let t = OffsetDateTime::now_utc() - Duration::days(1);
 
     repo.store_reads(&[read("51238696780", t, "3.5", Sparte::Strom, "1-0:1.8.0")])
@@ -586,7 +595,7 @@ async fn gdpr_erasure_unlinks_the_ingest_registered_subject() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn reads_are_scoped_to_their_tenant() {
-    let (repo, _pool) = setup().await;
+    let (repo, _pool, _pg, _wh) = setup().await;
     let t = OffsetDateTime::now_utc() - Duration::days(1);
 
     // The SAME MaLo under two tenants, one interval each.

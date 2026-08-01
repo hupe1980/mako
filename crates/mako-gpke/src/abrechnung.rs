@@ -47,7 +47,9 @@ use rubo4e::current::Rechnung;
 ///
 /// These are the GPKE-domain PIDs from INVOIC AHB (FV2025-10-01 / FV2026-04-01).
 /// PID 31003 (WiM-Rechnung) belongs to WiM Gas (`mako-wim-gas`).
-/// PID 31004 (Stornorechnung WiM Gas) belongs to `mako-wim-gas` per `docs/pid-reference.md`.
+/// PID 31004 (Stornorechnung) is a Sparte-neutral, cross-process universal Storno
+/// (INVOIC AHB §3.1.2) — not GPKE-specific; `invoicd` checks it Sparte-neutrally
+/// via `InvoicCheckEngine::check_storno`.
 /// PID 31009 (MSB-Rechnung, multi-domain: GPKE Teil 3 / WiM Strom Teil 1) belongs to
 /// `mako-wim` to avoid double-registration; see `crates/mako-wim/src/rechnung.rs`.
 /// PIDs 31007/31008 (Aggreg. MMM-Rechnung NB → MGV, Gas-only) belong to
@@ -392,7 +394,8 @@ impl CommandPayload for AbrechnungCommand {}
 ///
 /// Covers Netznutzungsabrechnung (31001/31002) and Mehr-/Mindermengen
 /// (31005/31006). These are the GPKE-domain billing PIDs in INVOIC
-/// AHB 2.8e / 1.0. PID 31004 belongs to `mako-wim-gas`; 31009 to `mako-wim`.
+/// AHB 2.8e / 1.0. PID 31004 (Stornorechnung) is the Sparte-neutral universal
+/// Storno (handled generically by `invoicd`); 31009 (MSB-Rechnung) → `mako-wim`.
 ///
 /// Spawn via [`mako_engine::process::Process`]:
 /// ```rust,ignore

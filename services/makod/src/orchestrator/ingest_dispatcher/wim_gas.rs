@@ -112,19 +112,35 @@ impl EdifactIngestDispatcher {
                     reason: "pid_not_in_dispatch_table",
                 }),
             },
-            // ── WiM Gas INVOIC billing — PIDs 31003/31004 ────────────────────
-            // PID 31003: WiM-Rechnung Gas (gMSB → NB) — spawn.
-            // PID 31004: Stornorechnung WiM Gas (gMSB → NB) — spawn.
+            // ── INVOIC billing hosted by the generic invoic workflow ─────────
+            // PID 31003: WiM-Rechnung Gas (gMSB → NB).
+            // PID 31004: Stornorechnung — the Sparte-neutral universal Storno
+            //   (INVOIC AHB §3.1.2), co-hosted here because its receive→settle/
+            //   dispute machine is commodity-agnostic.
             "wim-gas-invoic" => match pid {
                 31003 | 31004 => {
                     let cmd = adapters::wim_gas_invoic_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_invoic(msg);
-                    // Settlement deadline: 10 Werktage (BK7-24-01-009).
-                    let due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
-                        10,
-                        HolidayCalendar::BdewMaKo,
-                    );
+                    // Settlement-response deadline.
+                    //
+                    // - PID 31004 (Storno): the invoice's Fälligkeitsdatum / Zahlungsziel
+                    //   (DTM+265). The receiver must answer "zum Zahlungsziel" — the one
+                    //   rule that holds for Strom *and* Gas (the Gas 10-Werktage is only a
+                    //   sender-side floor already baked into that date). Fall back to
+                    //   +10 Werktage only when the invoice omits it.
+                    // - PID 31003 (WiM Gas Rechnung): 10 Werktage floor (BK7-24-01-009).
+                    let due_at = if pid == 31004 {
+                        faelligkeitsdatum_from_invoic(msg)
+                    } else {
+                        None
+                    }
+                    .unwrap_or_else(|| {
+                        fristen::deadline_at_werktage(
+                            OffsetDateTime::now_utc(),
+                            10,
+                            HolidayCalendar::BdewMaKo,
+                        )
+                    });
                     self.spawn_or_resume::<WimGasInvoicWorkflow>(
                         malo_id.as_str(),
                         "wim-gas-invoic",

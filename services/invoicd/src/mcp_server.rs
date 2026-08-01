@@ -697,7 +697,8 @@ impl ServerHandler for InvoicdMcpHandler {
              \n\
              Validates INVOIC billing from NB/MSB against NNE/MSB price sheets (§ 147 AO / GoBD).\n\
              Covers all German energy billing PIDs: Strom (31001/31002/31005/31006), \
-             WiM Gas (31003/31004), GaBi Gas (31007/31008), WiM MSB (31009), GeLi Gas (31011).\n\
+             WiM Gas (31003), GaBi Gas (31007/31008), WiM MSB (31009), GeLi Gas (31011), \
+             and the Sparte-neutral universal Stornorechnung (31004).\n\
              \n\
              ## Tools\n\
              - `get_receipt`             — read a receipt by UUID (outcome, timestamps)\n\
@@ -719,7 +720,7 @@ impl ServerHandler for InvoicdMcpHandler {
              - `Warn`            — checks passed with warnings; auto-approved\n\
              - `Dispute`         — plausibility failure; REMADV 33002; requires review\n\
              - `Resolved`        — dispute closed by operator (POST /resolve-dispute)\n\
-             - `AcceptedPartial` — Stornorechnung (PID 31004) arithmetic-only check passed\n\
+             - `AcceptedPartial` — Stornorechnung (PID 31004, any Sparte) arithmetic-only check passed\n\
              - `Dispatched`      — outbound 31006 selbstausgestellt sent; awaiting NB REMADV\n\
              - `Paid`            — outbound 31006 settled by NB",
         )

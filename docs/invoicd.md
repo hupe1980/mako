@@ -69,7 +69,7 @@ graph TB
 | 31001 | Abschlagsrechnung Netznutzung (NB → LF) | Inbound | Strom | ✅ |
 | 31002 | Netznutzungsabrechnung (NB → LF) | Inbound | Strom | ✅ |
 | 31003 | WiM Gas Rechnung (NB → LF) | Inbound | Gas | ✅ |
-| 31004 | WiM Gas Stornorechnung (NB → LF) | Inbound | Gas | ✅ auto-accept |
+| 31004 | Stornorechnung — universal Storno (GPKE/MMM/WiM/Kapazität/AWH/GeLi) | Inbound | **Strom + Gas** | ✅ arithmetic-only (`check_storno`) |
 | 31005 | MMM-Rechnung Mehr-/Mindermengensaldo | Inbound | Strom | ✅ |
 | 31006 | MMM-Rechnung selbst ausgestellt (LF → NB) | Inbound + Outbound | Strom | ✅ |
 | 31007 | GaBi Gas Aggreg. MMM-Rechnung (NB → MGV) | Inbound | Gas | ✅ + MMM check 6 |
@@ -79,7 +79,9 @@ graph TB
 
 **PID 31009 (WiM MSB-Rechnung):** Handled by `Wim31009Ingestor`. Uses `PreisblattMessung` (MSB metering service tariff) for checks 4/5. Fallback to `GET /api/v1/invoic/{process_id}/rechnung` on `makod` when Rechnung is not embedded in `ProcessInitiated`.
 
-**Gas PIDs 31003/31004/31011:** Use the standard 5-check pipeline with `PreisblattNetznutzung` Gas tariff. PID 31004 (Stornorechnung) skips the tariff check (checks 4/5) and always resolves as `AcceptedPartial` unless arithmetic fails.
+**Gas PIDs 31003/31011:** Use the standard 5-check pipeline with `PreisblattNetznutzung` Gas tariff.
+
+**PID 31004 (Stornorechnung), any Sparte:** A single universal, **Sparte-neutral** Storno (INVOIC AHB §3.1.2) that cancels an original invoice from any process — GPKE, MMM Strom+Gas, WiM Strom+Gas, Kapazitätsabrechnung, AWH, GeLi Gas. The Sparte is read from `Rechnung.sparte` (resolved from the market-partner IDs), not assumed. `handle_stornorechnung` runs the arithmetic-only `InvoicCheckEngine::check_storno` (Storno reference + period + totals; tariff checks skipped), resolves `AcceptedPartial` unless a check fails, and dispatches the Sparte-neutral `invoic.stornorechnung.{annehmen,ablehnen}` command — a Strom storno is no longer forced onto the Gas `wim.gas.*` namespace.
 
 **GaBi Gas PIDs 31007/31008:** Standard 5 checks + MMM Gas check 6 against Trading Hub Europe (THE) MMMA prices from `marktd`. These are Gas MGV billing PIDs (`mako-gabi-gas`).
 

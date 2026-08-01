@@ -2,10 +2,10 @@
 //! preisblatt read path — the invariants billingd and invoicd trust.
 //!
 //! ```bash
-//! docker run -d --name marktd-test -e POSTGRES_PASSWORD=test \
-//!     -e POSTGRES_DB=marktd -p 55438:5432 postgres:17-alpine
-//! export MARKTD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55438/marktd"
-//! cargo test -p marktd --test versorgung_integration -- --include-ignored
+//! PostgreSQL is self-managed via testcontainers (only a Docker daemon is
+//! required); tests skip gracefully when Docker is unavailable:
+//!
+//! just test-marktd-db
 //! ```
 
 use mako_markt::domain::MaloId;
@@ -17,41 +17,14 @@ const SCHEMA: &str = include_str!("../migrations/0001_initial.sql");
 const TENANT: &str = "9900357000004";
 const MALO: &str = "51238696780"; // valid checksum
 
-async fn test_pool(test_name: &str) -> Option<PgPool> {
-    let base = std::env::var("MARKTD_TEST_DATABASE_URL").ok()?;
-    let admin = PgPool::connect(&base).await.ok()?;
-    let schema = format!("t_{test_name}");
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(&admin)
+async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
+    let (url, container) = pg_container().await?;
+    let pool = PgPool::connect(&url).await.ok()?;
+    sqlx::raw_sql(SCHEMA)
+        .execute(&pool)
         .await
-        .expect("drop schema");
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
-        .execute(&admin)
-        .await
-        .expect("create schema");
-    admin.close().await;
-    let opts: sqlx::postgres::PgConnectOptions = base.parse().expect("parse url");
-    let pool = PgPool::connect_with(opts.options([("search_path", schema.as_str())]))
-        .await
-        .expect("connect schema");
-    // Strip `--` comments from the WHOLE file first — a `;` inside a comment
-    // would otherwise split a statement mid-body — then split on `;`.
-    let stripped: String = SCHEMA
-        .lines()
-        .map(|l| l.split_once("--").map_or(l, |(code, _)| code))
-        .collect::<Vec<_>>()
-        .join("\n");
-    for stmt in stripped.split(';') {
-        let s = stmt.trim();
-        if s.is_empty() {
-            continue;
-        }
-        sqlx::query(s)
-            .execute(&pool)
-            .await
-            .unwrap_or_else(|e| panic!("schema stmt failed: {e}\n{s}"));
-    }
-    Some(pool)
+        .expect("apply schema");
+    Some((pool, container))
 }
 
 fn malo() -> MaloId {
@@ -61,9 +34,9 @@ fn malo() -> MaloId {
 // ── The 55004/44004 gap: a cancelled Lieferbeginn clears lf_mp_id_next ─────────
 
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn cancelled_lieferbeginn_clears_the_announced_future_supplier() {
-    let Some(pool) = test_pool("clear_lf_next").await else {
+    let Some((pool, _pg)) = test_pool("clear_lf_next").await else {
         return;
     };
     let vs = PgVersorgungsStatusRepository::new(pool.clone());
@@ -113,9 +86,9 @@ async fn cancelled_lieferbeginn_clears_the_announced_future_supplier() {
 // ── The core supply lifecycle ─────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn announce_confirm_end_walks_the_lieferstatus_and_records_history() {
-    let Some(pool) = test_pool("lifecycle").await else {
+    let Some((pool, _pg)) = test_pool("lifecycle").await else {
         return;
     };
     let vs = PgVersorgungsStatusRepository::new(pool.clone());
@@ -209,9 +182,9 @@ async fn announce_confirm_end_walks_the_lieferstatus_and_records_history() {
 // ── The preisblatt read path (no `tenant` column — matches the fixed query) ────
 
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn preisblatt_is_read_by_nb_mp_id_without_a_tenant_column() {
-    let Some(pool) = test_pool("preisblatt").await else {
+    let Some((pool, _pg)) = test_pool("preisblatt").await else {
         return;
     };
     sqlx::query(
@@ -240,13 +213,13 @@ async fn preisblatt_is_read_by_nb_mp_id_without_a_tenant_column() {
 // ── Per-MeLo dated MSB timeline (WiM Teil 2 UC 4.1.1) ─────────────────────────
 
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn melo_msb_timeline_resolves_the_responsible_msb_at_a_past_date() {
     use mako_markt::repository::MeloMsbRepository as _;
     use marktd::pg::PgMeloMsbRepository;
     use time::macros::date;
 
-    let Some(pool) = test_pool("melo_msb").await else {
+    let Some((pool, _pg)) = test_pool("melo_msb").await else {
         return;
     };
     let tenant = "9900000000002";
@@ -317,13 +290,13 @@ async fn melo_msb_timeline_resolves_the_responsible_msb_at_a_past_date() {
 // ── BO4E Bilanzierung — first-class temporal resource (BO #3) ─────────────────
 
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn bilanzierung_temporal_resource_resolves_by_point_in_time() {
     use mako_markt::repository::{BilanzierungRecord, BilanzierungRepository as _};
     use marktd::pg::PgBilanzierungRepository;
     use time::macros::datetime;
 
-    let Some(pool) = test_pool("bilanzierung").await else {
+    let Some((pool, _pg)) = test_pool("bilanzierung").await else {
         return;
     };
     let tenant = "9900000000002";
@@ -420,13 +393,13 @@ async fn bilanzierung_temporal_resource_resolves_by_point_in_time() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn bilanzierung_write_derives_the_malo_fallgruppe_column() {
     use mako_markt::repository::{BilanzierungRecord, BilanzierungRepository as _};
     use marktd::pg::PgBilanzierungRepository;
     use time::macros::datetime;
 
-    let Some(pool) = test_pool("biz_derive").await else {
+    let Some((pool, _pg)) = test_pool("biz_derive").await else {
         return;
     };
     let tenant = "9900000000002";
@@ -495,4 +468,23 @@ async fn bilanzierung_write_derives_the_malo_fallgruppe_column() {
         Some("GABI_RLM_MIT_TAGESBAND"),
         "a future-dated Bilanzierung does not touch the current derived value"
     );
+}
+/// The Postgres container guard a test holds until it ends — dropping it removes
+/// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
+type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
+
+/// Start a fresh throwaway `postgres:17-alpine` and return its URL plus the
+/// container guard. `None` when Docker is unavailable (tests skip gracefully).
+async fn pg_container() -> Option<(String, PgContainer)> {
+    use testcontainers::ImageExt;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
+    let container = Postgres::default()
+        .with_tag("17-alpine")
+        .start()
+        .await
+        .ok()?;
+    let port = container.get_host_port_ipv4(5432).await.ok()?;
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    Some((url, container))
 }

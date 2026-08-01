@@ -39,3 +39,7 @@ anyhow       = "1"
 secrecy      = { version = "0.10" }
 reqwest      = { workspace = true }
 tokio-util   = { workspace = true }
+
+[dev-dependencies]
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }

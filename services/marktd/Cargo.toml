@@ -54,6 +54,8 @@ utoipa-swagger-ui  = { version = "9", features = ["axum"] }
 sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json", "rust_decimal"] }
 
 [dev-dependencies]
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
 mako-markt  = { path = "../../crates/mako-markt", features = ["testing"] }
 tokio      = { version = "1", features = ["full"] }
 serde_json = { workspace = true }

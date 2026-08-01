@@ -7,10 +7,10 @@
 //! never contradict.
 //!
 //! ```bash
-//! docker run -d --name marktd-test -e POSTGRES_PASSWORD=test \
-//!     -e POSTGRES_DB=marktd -p 55438:5432 postgres:17-alpine
-//! export MARKTD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55438/marktd"
-//! cargo test -p marktd --test melo_graph_integration -- --include-ignored
+//! PostgreSQL is self-managed via testcontainers (only a Docker daemon is
+//! required); tests skip gracefully when Docker is unavailable:
+//!
+//! just test-marktd-db
 //! ```
 
 use mako_markt::{
@@ -34,39 +34,14 @@ const MALO_A: &str = "51238696780";
 const MALO_B: &str = "10001234567";
 const MELO: &str = "DE0001234567890123456789012345678";
 
-async fn test_pool(test_name: &str) -> Option<PgPool> {
-    let base = std::env::var("MARKTD_TEST_DATABASE_URL").ok()?;
-    let admin = PgPool::connect(&base).await.ok()?;
-    let schema = format!("melo_graph_{test_name}");
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(&admin)
+async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
+    let (url, container) = pg_container().await?;
+    let pool = PgPool::connect(&url).await.ok()?;
+    sqlx::raw_sql(SCHEMA)
+        .execute(&pool)
         .await
-        .expect("drop schema");
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
-        .execute(&admin)
-        .await
-        .expect("create schema");
-    admin.close().await;
-    let opts: sqlx::postgres::PgConnectOptions = base.parse().expect("parse url");
-    let pool = PgPool::connect_with(opts.options([("search_path", schema.as_str())]))
-        .await
-        .expect("connect schema");
-    let stripped: String = SCHEMA
-        .lines()
-        .map(|l| l.split_once("--").map_or(l, |(code, _)| code))
-        .collect::<Vec<_>>()
-        .join("\n");
-    for stmt in stripped.split(';') {
-        let s = stmt.trim();
-        if s.is_empty() {
-            continue;
-        }
-        sqlx::query(s)
-            .execute(&pool)
-            .await
-            .unwrap_or_else(|e| panic!("schema stmt failed: {e}\n{s}"));
-    }
-    Some(pool)
+        .expect("apply schema");
+    Some((pool, container))
 }
 
 fn malo_id(s: &str) -> MaloId {
@@ -115,9 +90,9 @@ async fn open_parent_edges(
 /// after every write, the previous edge is closed on reparenting, and repeated
 /// PUTs with the same parent do not duplicate edges.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn melo_put_keeps_fk_and_graph_in_agreement() {
-    let Some(pool) = test_pool("fk_graph").await else {
+    let Some((pool, _pg)) = test_pool("fk_graph").await else {
         return;
     };
     seed_malos(&pool).await;
@@ -241,9 +216,9 @@ async fn melo_put_keeps_fk_and_graph_in_agreement() {
 /// The graph write path respects a pre-existing open-ended edge written via the
 /// graph API for the same pair — the MeLo PUT does not create a duplicate.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn melo_put_respects_existing_open_ended_edge() {
-    let Some(pool) = test_pool("open_ended").await else {
+    let Some((pool, _pg)) = test_pool("open_ended").await else {
         return;
     };
     seed_malos(&pool).await;
@@ -292,9 +267,9 @@ async fn melo_put_respects_existing_open_ended_edge() {
 /// its typed column and returned by the graph API; the MaLo/MeLo
 /// `lokationsbuendelObjektcode` payload fields land in their typed columns.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn lokationsbuendel_codes_are_extracted_into_typed_columns() {
-    let Some(pool) = test_pool("buendel").await else {
+    let Some((pool, _pg)) = test_pool("buendel").await else {
         return;
     };
     let malo_repo = PgMaloRepository::new(pool.clone());
@@ -395,11 +370,11 @@ async fn lokationsbuendel_codes_are_extracted_into_typed_columns() {
 /// MaLo columns, leaving the BO4E JSONB payload and the `version` untouched,
 /// and no-ops when the MaLo is not yet known.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn patch_stammdaten_updates_typed_columns_only() {
     use mako_markt::repository::MaloStammdatenPatch;
 
-    let Some(pool) = test_pool("patch_stammdaten").await else {
+    let Some((pool, _pg)) = test_pool("patch_stammdaten").await else {
         return;
     };
     let repo = PgMaloRepository::new(pool.clone());
@@ -479,9 +454,9 @@ async fn patch_stammdaten_updates_typed_columns_only() {
 /// (`netzebene_messung`, `regelzone`) via `MeloRepository::patch_stammdaten`,
 /// leaving the JSONB payload and version untouched, and no-ops when unknown.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn melo_patch_stammdaten_updates_typed_columns_only() {
-    let Some(pool) = test_pool("melo_patch").await else {
+    let Some((pool, _pg)) = test_pool("melo_patch").await else {
         return;
     };
     let repo = PgMeloRepository::new(pool.clone(), TENANT);
@@ -532,9 +507,9 @@ async fn melo_patch_stammdaten_updates_typed_columns_only() {
 /// A `LOC+Z18` Stammdatenänderung patches the typed NeLo Netzebene via
 /// `NeLoRepository::patch_stammdaten`.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn nelo_patch_stammdaten_updates_netzebene() {
-    let Some(pool) = test_pool("nelo_patch").await else {
+    let Some((pool, _pg)) = test_pool("nelo_patch").await else {
         return;
     };
     let repo = PgNeLoRepository::new(pool.clone());
@@ -600,12 +575,12 @@ async fn nelo_patch_stammdaten_updates_netzebene() {
 /// `melo_msb_zuordnungen` timeline via `MeloMsbRepository::assign_msb` — the path
 /// the `MESSLOKATION` apply writes to. A later assignment closes the earlier one.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn melo_msb_zuordnung_from_stammdatenaenderung() {
     use mako_markt::repository::MeloMsbRepository as _;
     use marktd::pg::PgMeloMsbRepository;
 
-    let Some(pool) = test_pool("melo_msb").await else {
+    let Some((pool, _pg)) = test_pool("melo_msb").await else {
         return;
     };
     // The melo_msb_zuordnungen FK requires the MeLo row to exist (the apply
@@ -663,14 +638,14 @@ async fn melo_msb_zuordnung_from_stammdatenaenderung() {
 /// A `LOC+Z20` Stammdatenänderung patches the TR Fernschaltbarkeit via
 /// `TechnischeRessourceRepository::patch_stammdaten` (UTILMD CAV Z58 + Z06/Z07).
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn tr_patch_stammdaten_updates_fernschaltbarkeit() {
     use mako_markt::repository::{
         TechnischeRessourceRepository as _, TechnischeRessourceStammdatenPatch,
     };
     use marktd::pg::PgTechnischeRessourceRepository;
 
-    let Some(pool) = test_pool("tr_patch").await else {
+    let Some((pool, _pg)) = test_pool("tr_patch").await else {
         return;
     };
     let repo = PgTechnischeRessourceRepository::new(pool.clone());
@@ -754,12 +729,12 @@ async fn tr_patch_stammdaten_updates_fernschaltbarkeit() {
 /// `konfigurationsprodukte` (BO4E `Vec<Konfigurationsprodukt>`) via
 /// `SteuerbareRessourceRepository::replace_sr_konfigurationsprodukte`.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn sr_konfigurationsprodukte_replace() {
     use mako_markt::repository::SteuerbareRessourceRepository as _;
     use marktd::pg::PgSteuerbareRessourceRepository;
 
-    let Some(pool) = test_pool("sr_konfig").await else {
+    let Some((pool, _pg)) = test_pool("sr_konfig").await else {
         return;
     };
     let repo = PgSteuerbareRessourceRepository::new(pool.clone());
@@ -813,9 +788,9 @@ async fn sr_konfigurationsprodukte_replace() {
 /// A `LOC+Z21` Stammdatenänderung patches the typed Tranche columns via
 /// `TrancheRepository::patch_stammdaten`; the greenfield table round-trips.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn tranche_patch_stammdaten_updates_typed_columns() {
-    let Some(pool) = test_pool("tranche_patch").await else {
+    let Some((pool, _pg)) = test_pool("tranche_patch").await else {
         return;
     };
     let repo = PgTrancheRepository::new(pool.clone());
@@ -878,4 +853,23 @@ async fn tranche_patch_stammdaten_updates_typed_columns() {
     let listed = repo.list_by_malo(MALO_A, TENANT, 0, 10).await.unwrap();
     assert_eq!(listed.total, 1);
     assert_eq!(before.version, 1);
+}
+/// The Postgres container guard a test holds until it ends — dropping it removes
+/// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
+type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
+
+/// Start a fresh throwaway `postgres:17-alpine` and return its URL plus the
+/// container guard. `None` when Docker is unavailable (tests skip gracefully).
+async fn pg_container() -> Option<(String, PgContainer)> {
+    use testcontainers::ImageExt;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
+    let container = Postgres::default()
+        .with_tag("17-alpine")
+        .start()
+        .await
+        .ok()?;
+    let port = container.get_host_port_ipv4(5432).await.ok()?;
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    Some((url, container))
 }

@@ -45,4 +45,6 @@ en16931         = { workspace = true }
 en16931-formats = { workspace = true }
 
 [dev-dependencies]
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
 time = { workspace = true }

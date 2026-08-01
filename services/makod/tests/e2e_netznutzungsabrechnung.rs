@@ -6,8 +6,9 @@
 //! processes an outbound INVOIC addressed to the supplier (LF) and tracks
 //! whether the billing was settled, disputed, or timed out.
 //!
-//! **Note**: PID 31004 ("Stornorechnung") belongs to WiM Gas per
-//! `docs/pid-reference.md`. It is NOT a GPKE PID.
+//! **Note**: PID 31004 ("Stornorechnung") is a Sparte-neutral, cross-process
+//! universal Storno (INVOIC AHB §3.1.2) — not a GPKE-specific billing PID. It is
+//! checked generically by `invoicd`, so it is not registered by this workflow.
 //! **Note**: PID 31009 ("MSB-Rechnung") is registered by `mako-wim`'s
 //! `wim-rechnung` workflow, not here — see `crates/mako-wim/src/rechnung.rs`.
 //!
@@ -18,7 +19,7 @@
 //! - **PIDs 31001/31002** — Abschlagsrechnung / NN-Rechnung (Netznutzungsabrechnung)
 //! - **PIDs 31005–31008** — Mehr-/Mindermengen billing variants
 //! - **PID 31009** — MSB-Rechnung (GPKE Teil 3, NB/MSB settlement)
-//! - **PID 31004** — Stornorechnung (WiM Gas — NOT GPKE)
+//! - **PID 31004** — Stornorechnung (Sparte-neutral universal Storno — not GPKE-specific)
 //!
 //! # Lifecycle trace (settle — happy path)
 //!
@@ -217,7 +218,8 @@ async fn e2e_gpke_abrechnung_31005_mmm_settle() {
 ///
 /// Validates that `INVOIC_PIDS` = {31001, 31002, 31005, 31006, 31007,
 /// 31008, 31009} all produce `ValidationPassed` (no PID-guard rejections).
-/// PID 31004 was removed — it belongs to WiM Gas per `docs/pid-reference.md`.
+/// PID 31004 is excluded here — it is the Sparte-neutral universal Storno
+/// (INVOIC AHB §3.1.2), checked generically by `invoicd`, not a GPKE billing PID.
 #[tokio::test]
 async fn e2e_gpke_abrechnung_all_pids_accepted() {
     for &pid in INVOIC_PIDS {

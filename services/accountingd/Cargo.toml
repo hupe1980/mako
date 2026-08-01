@@ -51,6 +51,7 @@ secrecy      = { version = "0.10", features = ["serde"] }
 integration-tests = []
 
 [dev-dependencies]
-# Required by sqlx::test macro for per-test database provisioning
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "rust_decimal", "migrate", "macros"] }
 tokio = { version = "1", features = ["full", "test-util"] }

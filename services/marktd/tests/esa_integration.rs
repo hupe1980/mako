@@ -1,10 +1,10 @@
 //! Real-PostgreSQL guards for the ESA consent registry (§49 Abs. 2 Nr. 9 MsbG).
 //!
 //! ```bash
-//! docker run -d --name marktd-test -e POSTGRES_PASSWORD=test \
-//!     -e POSTGRES_DB=marktd -p 55438:5432 postgres:17-alpine
-//! export MARKTD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55438/marktd"
-//! cargo test -p marktd --test esa_integration -- --include-ignored
+//! PostgreSQL is self-managed via testcontainers (only a Docker daemon is
+//! required); tests skip gracefully when Docker is unavailable:
+//!
+//! just test-marktd-db
 //! ```
 
 use mako_markt::repository::{
@@ -21,39 +21,14 @@ const SCHEMA: &str = include_str!("../migrations/0001_initial.sql");
 const TENANT: &str = "9900357000004";
 const ESA: &str = "9905550000005";
 
-async fn test_pool(test_name: &str) -> Option<PgPool> {
-    let base = std::env::var("MARKTD_TEST_DATABASE_URL").ok()?;
-    let admin = PgPool::connect(&base).await.ok()?;
-    let schema = format!("esa_{test_name}");
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(&admin)
+async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
+    let (url, container) = pg_container().await?;
+    let pool = PgPool::connect(&url).await.ok()?;
+    sqlx::raw_sql(SCHEMA)
+        .execute(&pool)
         .await
-        .expect("drop schema");
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
-        .execute(&admin)
-        .await
-        .expect("create schema");
-    admin.close().await;
-    let opts: sqlx::postgres::PgConnectOptions = base.parse().expect("parse url");
-    let pool = PgPool::connect_with(opts.options([("search_path", schema.as_str())]))
-        .await
-        .expect("connect schema");
-    let stripped: String = SCHEMA
-        .lines()
-        .map(|l| l.split_once("--").map_or(l, |(code, _)| code))
-        .collect::<Vec<_>>()
-        .join("\n");
-    for stmt in stripped.split(';') {
-        let s = stmt.trim();
-        if s.is_empty() {
-            continue;
-        }
-        sqlx::query(s)
-            .execute(&pool)
-            .await
-            .unwrap_or_else(|e| panic!("schema stmt failed: {e}\n{s}"));
-    }
-    Some(pool)
+        .expect("apply schema");
+    Some((pool, container))
 }
 
 fn consent(an_ref: &str, locations: &[&str]) -> EinwilligungRecord {
@@ -75,9 +50,9 @@ fn consent(an_ref: &str, locations: &[&str]) -> EinwilligungRecord {
 
 /// Grant → list → revoke returns the record → revoke again is a no-op.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn consent_lifecycle() {
-    let Some(pool) = test_pool("lifecycle").await else {
+    let Some((pool, _pg)) = test_pool("lifecycle").await else {
         return;
     };
     let repo = PgEinwilligungRepository::new(pool);
@@ -101,9 +76,9 @@ async fn consent_lifecycle() {
 
 /// A new grant supersedes the active consent for the same Anschlussnutzer.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn new_grant_supersedes_active_consent() {
-    let Some(pool) = test_pool("supersede").await else {
+    let Some((pool, _pg)) = test_pool("supersede").await else {
         return;
     };
     let repo = PgEinwilligungRepository::new(pool);
@@ -125,9 +100,9 @@ async fn new_grant_supersedes_active_consent() {
 /// grant re-allows, an absent record is self-assertion, and an unestablished
 /// framework agreement blocks regardless of consent.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn consent_check_gates_inbound_messages() {
-    let Some(pool) = test_pool("check").await else {
+    let Some((pool, _pg)) = test_pool("check").await else {
         return;
     };
     let repo = PgEinwilligungRepository::new(pool);
@@ -208,9 +183,9 @@ async fn consent_check_gates_inbound_messages() {
 
 /// Tenant isolation: another tenant cannot read or revoke a consent.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn consent_is_tenant_scoped() {
-    let Some(pool) = test_pool("tenant").await else {
+    let Some((pool, _pg)) = test_pool("tenant").await else {
         return;
     };
     let repo = PgEinwilligungRepository::new(pool);
@@ -219,4 +194,23 @@ async fn consent_is_tenant_scoped() {
     assert!(repo.get("9900000000000", id).await.unwrap().is_none());
     assert!(repo.revoke("9900000000000", id).await.unwrap().is_none());
     assert!(repo.get(TENANT, id).await.unwrap().is_some());
+}
+/// The Postgres container guard a test holds until it ends — dropping it removes
+/// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
+type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
+
+/// Start a fresh throwaway `postgres:17-alpine` and return its URL plus the
+/// container guard. `None` when Docker is unavailable (tests skip gracefully).
+async fn pg_container() -> Option<(String, PgContainer)> {
+    use testcontainers::ImageExt;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
+    let container = Postgres::default()
+        .with_tag("17-alpine")
+        .start()
+        .await
+        .ok()?;
+    let port = container.get_host_port_ipv4(5432).await.ok()?;
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    Some((url, container))
 }

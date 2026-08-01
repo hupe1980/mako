@@ -393,14 +393,14 @@ just ci
 # Build only marktd:
 cargo build -p marktd --release
 
-# Run tests (requires PostgreSQL on localhost):
+# Unit + pure-logic tests (no database):
 cargo test -p marktd --all-features
 ```
 
-Requires a running PostgreSQL instance for integration tests. Set `DATABASE_URL` before
-running tests:
+The database integration tests self-manage PostgreSQL via **testcontainers** — the
+only requirement is a running Docker daemon (no manual `docker run`, no
+`DATABASE_URL`). They are `#[ignore]`d by default and skip gracefully without Docker:
 
 ```bash
-export DATABASE_URL=postgres://marktd:secret@localhost/marktd
-cargo test -p marktd
+just test-marktd-db
 ```

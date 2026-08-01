@@ -610,7 +610,7 @@ Partners are managed at runtime via the REST admin API — see
 | `mako-gpke` | GPKE — Lieferbeginn/-ende Strom, NB-Abmeldeanfrage (Beendigung der Zuordnung), Ersatz-/Grundversorgung, ORDERS Sperrung (NB role), INVOIC billing, Konfiguration | 55001–55002, 55010 (55011/55012 out), 55013–55015, 55016–55018, 55555, 17115–17117 (NB inbound), 31001–31008, 17134/17135, 19001/19002 | **24 wall-clock hours** |
 | `mako-wim` | WiM Strom — Messstellenwechsel, INSRPT Strom, WiM-Rechnung | 55039, 55042, 55051, 55168, 19001/19002, 23001/23003/23004/23008 | **5 Werktage** |
 | `mako-geli-gas` | GeLi Gas — Lieferbeginn/-ende Gas, Gas Sperrung (LF role), Gas Datenabruf, INVOIC 31011 (AWH Sperrprozesse Gas) | 44001–44021, 17103, 17104, 19103, 19104, 19116, 19117, 19128, 19129, 31011 | **10 Werktage** |
-| `mako-wim-gas` | WiM Gas — Messstellenwechsel Gas, INSRPT Gas, WiM-Rechnung Gas | 44039–44053, 44168–44170, 23005, 23009, 31003, 31004 | **10 Werktage** |
+| `mako-wim-gas` | WiM Gas — Messstellenwechsel Gas, INSRPT Gas, WiM-Rechnung Gas (31003); co-hosts the Sparte-neutral universal Stornorechnung (31004) | 44039–44053, 44168–44170, 23005, 23009, 31003, 31004 | **10 Werktage** (31004 Storno: the invoice's **Zahlungsziel**, DTM+265) |
 | `mako-mabis` | MABIS — Bilanzkreisabrechnung | 13003 (MSCONS Summenzeitreihe, IFTSTA 21000–21005) | n/a (batch, not saga) |
 | `mako-gabi-gas` | GaBi Gas 2.1 — allocation, nomination, schedules, imbalance, transport (ALOCAT/NOMINT/NOMRES/SCHEDL/IMBNOT/TRANOT/DELORD/DELRES) + Kapazitäts-/Mehr-Mindermengen-INVOIC | INVOIC 31007/31008/31010, ORDERS 17110, ORDRSP 19110, MSCONS 13013, synthetic 90001–90062 | KoV deadlines (GasDay D-1 14:00 etc.) |
 

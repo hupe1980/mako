@@ -2,11 +2,11 @@
 //! SQL, not in Rust: idempotent supply-contract creation (no duplicate
 //! Lieferbeginn), the Stornierung state guard, and tenant-scoped mutation.
 //!
+//! PostgreSQL is self-managed via testcontainers (a Docker daemon is the only
+//! requirement); the tests skip gracefully when Docker is unavailable:
+//!
 //! ```bash
-//! docker run -d --name vertragd-test -e POSTGRES_PASSWORD=test \
-//!     -e POSTGRES_DB=vertragd -p 55436:5432 postgres:17-alpine
-//! export VERTRAGD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55436/vertragd"
-//! cargo test -p vertragd --test dispatch_integration -- --include-ignored
+//! just test-vertragd-db
 //! ```
 
 use sqlx::PgPool;
@@ -15,52 +15,14 @@ use vertragd::pg;
 
 const SCHEMA: &str = include_str!("../migrations/0001_schema.sql");
 
-async fn test_pool(test_name: &str) -> Option<PgPool> {
-    let base = std::env::var("VERTRAGD_TEST_DATABASE_URL").ok()?;
-    let admin = PgPool::connect(&base).await.ok()?;
-    let schema = format!("t_{test_name}");
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(&admin)
+async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
+    let (url, container) = pg_container().await?;
+    let pool = PgPool::connect(&url).await.ok()?;
+    sqlx::raw_sql(SCHEMA)
+        .execute(&pool)
         .await
-        .expect("drop schema");
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
-        .execute(&admin)
-        .await
-        .expect("create schema");
-    admin.close().await;
-
-    let opts: sqlx::postgres::PgConnectOptions = base.parse().expect("parse url");
-    let pool = PgPool::connect_with(opts.options([("search_path", schema.as_str())]))
-        .await
-        .expect("connect schema");
-    for stmt in split_statements(SCHEMA) {
-        sqlx::query(&stmt)
-            .execute(&pool)
-            .await
-            .unwrap_or_else(|e| panic!("schema stmt failed: {e}\n{stmt}"));
-    }
-    Some(pool)
-}
-
-fn split_statements(sql: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut in_dollar = false;
-    for line in sql.lines() {
-        if line.matches("$$").count() % 2 == 1 {
-            in_dollar = !in_dollar;
-        }
-        cur.push_str(line);
-        cur.push('\n');
-        if !in_dollar && line.trim_end().ends_with(';') {
-            let s = cur.trim().to_owned();
-            if !s.is_empty() && !s.lines().all(|l| l.trim().starts_with("--")) {
-                out.push(s);
-            }
-            cur.clear();
-        }
-    }
-    out
+        .expect("apply schema");
+    Some((pool, container))
 }
 
 async fn make_kunde(pool: &PgPool, tenant: &str) -> Uuid {
@@ -104,9 +66,9 @@ fn vertrag_input(erp_id: &str) -> pg::CreateVersorgungsvertragInput {
 // ── D3 — idempotent creation prevents a duplicate Lieferbeginn ────────────────
 
 #[tokio::test]
-#[ignore = "requires VERTRAGD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn reposting_same_erp_contract_id_dispatches_no_second_lieferbeginn() {
-    let Some(pool) = test_pool("idempotent_create").await else {
+    let Some((pool, _pg)) = test_pool("idempotent_create").await else {
         return;
     };
     let tenant = "9800000000002";
@@ -147,9 +109,9 @@ async fn reposting_same_erp_contract_id_dispatches_no_second_lieferbeginn() {
 // ── D2 — Stornierung state guard ──────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "requires VERTRAGD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn stornierung_is_refused_on_an_active_contract() {
-    let Some(pool) = test_pool("storniere_guard").await else {
+    let Some((pool, _pg)) = test_pool("storniere_guard").await else {
         return;
     };
     let tenant = "9800000000002";
@@ -198,9 +160,9 @@ async fn stornierung_is_refused_on_an_active_contract() {
 // ── D18 — tenant-scoped mutation ──────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "requires VERTRAGD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn update_vertrag_status_is_tenant_scoped() {
-    let Some(pool) = test_pool("tenant_scope").await else {
+    let Some((pool, _pg)) = test_pool("tenant_scope").await else {
         return;
     };
     let tenant = "9800000000002";
@@ -234,4 +196,23 @@ async fn update_vertrag_status_is_tenant_scoped() {
             .await
             .unwrap();
     assert_eq!(status, "GEKÜNDIGT");
+}
+/// The Postgres container guard a test holds until it ends — dropping it removes
+/// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
+type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
+
+/// Start a fresh throwaway `postgres:17-alpine` and return its URL plus the
+/// container guard. `None` when Docker is unavailable (tests skip gracefully).
+async fn pg_container() -> Option<(String, PgContainer)> {
+    use testcontainers::ImageExt;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
+    let container = Postgres::default()
+        .with_tag("17-alpine")
+        .start()
+        .await
+        .ok()?;
+    let port = container.get_host_port_ipv4(5432).await.ok()?;
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    Some((url, container))
 }

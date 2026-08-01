@@ -688,6 +688,27 @@ pub fn extract_malo_from_invoic(msg: &AnyMessage) -> String {
     }
 }
 
+/// Extract the **Fälligkeitsdatum** (Zahlungsziel) from an INVOIC — `SG8 DTM+265`
+/// per INVOIC AHB 1.0b. Returns the latest such date when several are present.
+///
+/// This is the regulatory settlement-response deadline for an INVOIC: the receiver
+/// must answer *"zum Zahlungsziel"* (MMM / GeLi Gas / WiM AWH process tables). It is
+/// **Sparte-neutral** — the Gas "10 Werktage" is only a sender-side *floor* on the
+/// Zahlungsziel that is already reflected in this date — so it is the correct
+/// deadline for a universal Stornorechnung (PID 31004) regardless of commodity.
+/// Returns `None` when the invoice omits DTM+265 (callers fall back to +10 Werktage).
+pub(crate) fn faelligkeitsdatum_from_invoic(msg: &AnyMessage) -> Option<time::OffsetDateTime> {
+    let AnyMessage::Invoic(m) = msg else {
+        return None;
+    };
+    m.segments()
+        .iter()
+        .filter(|s| s.tag == "DTM" && s.component_str(0, 0) == Some("265"))
+        .filter_map(|s| s.component_str(0, 1))
+        .filter_map(crate::orchestrator::adapters::parse_ccyymmdd)
+        .max()
+}
+
 /// Extract the Marktlokations-ID from the first LOC segment (component 1, index 0).
 ///
 /// BDEW convention: `LOC+<qualifier>+<malo_id>::<code_list>:Z13`.
@@ -1049,3 +1070,42 @@ mod mabis;
 mod redispatch;
 mod wim;
 mod wim_gas;
+
+#[cfg(test)]
+mod faelligkeitsdatum_tests {
+    use super::faelligkeitsdatum_from_invoic;
+
+    fn parse_invoic(dtm_segments: &str) -> edi_energy::AnyMessage {
+        let raw = format!(
+            "UNB+UNOC:3+4012345000023:14+9900357000004:14+260101:0000+1'\
+             UNH+1+INVOIC:D:06A:UN:2.8e'\
+             BGM+457+00031004'\
+             DTM+137:20260101:102'{dtm_segments}\
+             NAD+MS+4012345000023::293'\
+             NAD+MR+9900357000004::293'\
+             UNT+7+1'UNZ+1+1'"
+        );
+        edi_energy::parse(raw.as_bytes()).expect("valid INVOIC parses")
+    }
+
+    #[test]
+    fn extracts_faelligkeitsdatum_from_dtm_265() {
+        let msg = parse_invoic("DTM+265:20260215:102'");
+        let due = faelligkeitsdatum_from_invoic(&msg).expect("DTM+265 present");
+        assert_eq!(due.date(), time::macros::date!(2026 - 02 - 15));
+    }
+
+    #[test]
+    fn no_dtm_265_yields_none_so_caller_falls_back() {
+        // Only the invoice date (DTM+137) is present — no Zahlungsziel.
+        let msg = parse_invoic("");
+        assert!(faelligkeitsdatum_from_invoic(&msg).is_none());
+    }
+
+    #[test]
+    fn multiple_dtm_265_takes_the_latest() {
+        let msg = parse_invoic("DTM+265:20260215:102'DTM+265:20260320:102'");
+        let due = faelligkeitsdatum_from_invoic(&msg).expect("DTM+265 present");
+        assert_eq!(due.date(), time::macros::date!(2026 - 03 - 20));
+    }
+}

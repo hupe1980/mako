@@ -36,180 +36,64 @@ infrastructure library they build on.
 
 ## Service topology
 
+Every inbound message enters through **makod** (the protocol edge), which turns it
+into a CloudEvent. **marktd** is the data-and-event backbone: it owns the market
+master data and fans those events out to the consuming services. Commands flow back
+to makod, which renders and dispatches the outbound EDIFACT. Each service is detailed
+in its own section below.
+
 ```mermaid
-graph TB
-    NB["BDEW counterparty<br/>(NB / MSB / LF)"]
-    AS4["AS4/ebMS3<br/>:4080"]
-    REST["HTTP REST<br/>:8080"]
-    API["API-Webdienste Strom<br/>:8090 (iMS)"]
+graph LR
+    EXT["BDEW counterparty<br/>NB · MSB · LF"]
+    ERP["ERP<br/>SAP · Catena-X · custom"]
 
-    subgraph makod ["makod — Protocol daemon"]
-        EDI["edi-energy<br/>Parse · Validate"]
-        ENG["mako-engine<br/>Process Runtime"]
-        SLATE["SlateDB<br/>events / outbox / deadlines"]
-        EDI --> ENG --> SLATE
+    subgraph edge ["Protocol edge"]
+        MAKOD["makod<br/>AS4 · REST · iMS<br/>parse · validate · process runtime"]
     end
 
-    subgraph marktd ["marktd :8180 — Market Data Hub (pure data hub)"]
-        MDM_DB["PostgreSQL\nMaLo · MeLo · contracts\nVersorgungsStatus + history · NeLo\nNbContracts · partners · preisblaetter\nmalo_grid (NB STP)"]
-        FANOUT["EventBus fan-out\n→ ERP + processd + invoicd + edmd + obsd\n(WebhookBus default · KafkaBus via krafka feature)"]
+    subgraph backbone ["Data &amp; event backbone"]
+        MARKTD["marktd<br/>market-data hub<br/>+ CloudEvents fan-out"]
     end
 
-    subgraph processd ["processd :8580 — Process Decision Engine"]
-        NB_MOD["NB module\nnetz-checker (6 checks)\nAnmeldung STP ≥ 95%"]
-        LF_MOD["LF module\nE_0624 auto-response\napproval_queue"]
-        PROC_DB["PostgreSQL\nanmeldung_decisions\napproval_queue"]
-        NB_MOD & LF_MOD --> PROC_DB
+    subgraph consumers ["Consuming services"]
+        PROC["processd<br/>process decisions · STP"]
+        SETTLE["Billing &amp; settlement<br/>invoicd · netzbilanzd<br/>einsd · accountingd"]
+        RETAIL["Retail — LF<br/>vertragd · tarifbd · billingd"]
+        EDMD["edmd<br/>metering data · hot + cold"]
+        OBSD["obsd<br/>KPIs · deadlines · §20 parity"]
     end
 
-    subgraph invoicd ["invoicd :8280 — INVOIC settlement (LF)"]
-        CHK["invoic-checker\n5+1 plausibility checks\n(check 6 = MMM settlement prices)\n+ selbstausstellen 31006"]
-        INV_DB["PostgreSQL\ninvoic_receipts (§ 147 AO / GoBD)"]
-        CHK --> INV_DB
-    end
+    AGENTD["agentd<br/>AI orchestration · MCP · RAG"]
 
-    subgraph netzbilanzd ["netzbilanzd :8680 — NNE billing (NB)"]
-        NNE["grid-billing\nNNE/KA/MMM/MSB calculation\nGridSettlement (+ CalculationTrace)\ninto_rechnung() in service layer"]
-        DRAFT_DB["PostgreSQL\ninvoice_drafts"]
-        NNE --> DRAFT_DB
-    end
-
-    subgraph sperrd ["sperrd :8780 — Sperrung tracker (NB)"]
-        SPR["Sperrung lifecycle\nIFTSTA 21039 auto-dispatch"]
-        SPR_DB["PostgreSQL\nsperr_orders"]
-        SPR --> SPR_DB
-    end
-
-    subgraph edmd ["edmd :8380 — Energy data"]
-        EDM_STORE["meterstore hot+cold\nmeter_reads · esa_typ2_reads\n(PostgreSQL window + Iceberg history)"]
-        EDM_DB["PostgreSQL\nbusiness tables · billing-period cache"]
-    end
-
-    subgraph obsd ["obsd :8480 — Observability"]
-        PROJ["process_projections<br/>KPI · overdue · §20 parity"]
-    end
-
-    ERP["ERP system<br/>(SAP · CATENA-X · custom)"]
-    OPS["Alertmanager · Grafana<br/>BNetzA KPI reports"]
-    NIS["nis-syncd :9680<br/>grid topology import (stateless)"]
-    EEG["einsd :9180<br/>EEG settlement (NB)"]
-    TARIFBD["tarifbd :9080<br/>product catalog"]
-    ACCTD["accountingd :9380<br/>customer ledger"]
-    subgraph o2c ["Contract + Customer (LF)"]
-        AUF["vertragd :9780<br/>Kunden B2C+B2B<br/>Rahmenvertraege<br/>Versorgungsvertraege"]
-    end
-    subgraph ai ["AI layer"]
-        AGT["agentd :9580<br/>29 built-in specialists<br/>Orchestrator + Specialist Mesh<br/>LanceDB RAG · MCP"]
-    end
-
-    NB <-->|AS4/SOAP+MTOM| AS4
-    NB <-->|HTTP REST| REST
-    NB <-->|iMS REST/WS| API
-    AS4 & REST & API --> EDI
-
-    SLATE -->|"CloudEvents 1.0 HMAC POST"| marktd
-    FANOUT -->|de.mako.process.initiated| processd
-    FANOUT -->|de.mako.process.initiated| invoicd
-    FANOUT -->|de.mako.*| edmd
-    FANOUT -->|de.mako.*| obsd
-    FANOUT -->|"CloudEvents 1.0 HMAC"| ERP
-
-    NB_MOD -->|"GET /versorgung, /malo/id/grid"| marktd
-    LF_MOD -->|GET /versorgung| marktd
-    NB_MOD -->|POST /api/v1/commands| makod
-    LF_MOD -->|POST /api/v1/commands| makod
-
-    CHK -->|GET /api/v1/preisblaetter| marktd
-    CHK -->|GET /api/v1/billing-period| edmd
-    CHK -->|POST /api/v1/commands| makod
-
-    NNE -->|POST /api/v1/commands| makod
-    SPR -->|"POST /commands IFTSTA 21039"| makod
-    NIS -->|PUT /api/v1/malo/id/grid| marktd
-    EEG -->|"GET /api/v1/billing-period"| edmd
-
-    PROJ --> OPS
-    AUF -->|POST start-supply| processd
-    AUF -->|POST reading-orders| edmd
-    AUF -->|PUT customer product| TARIFBD
-    AUF -->|POST accounts| ACCTD
-    processd -->|"de.mako.*.bestaetigt"| AUF
-    AGT -->|"MCP tools (all services)"| makod
-    AGT -->|MCP tools| marktd
+    EXT <-->|"AS4 · REST · iMS"| MAKOD
+    MAKOD -->|"CloudEvents 1.0"| MARKTD
+    MARKTD --> PROC & SETTLE & EDMD & OBSD & RETAIL
+    MARKTD -->|"CloudEvents · HMAC"| ERP
+    PROC & SETTLE & RETAIL -->|"POST /commands"| MAKOD
+    AGENTD -.->|"MCP tools"| MAKOD
+    AGENTD -.->|"MCP tools"| MARKTD
 ```
 
----
+### Inbound message pipeline
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Transport                                                           │
-│  ┌──────────┐  ┌─────────────┐  ┌──────────────────────────────┐   │
-│  │ AS4/SOAP │  │ HTTP REST   │  │ BDEW API-Webdienste Strom     │   │
-│  │ :4080    │  │ :8080       │  │ :8090                         │   │
-│  └────┬─────┘  └──────┬──────┘  └──────────────┬───────────────┘   │
-└───────┼───────────────┼──────────────────────────┼──────────────────┘
-        │               │                          │
-┌───────▼───────────────▼──────────────────────────▼──────────────────┐
-│  edi-energy — Parse · Validate · Build                              │
-│  Profile registry (MIG + AHB rules) · 17 message types             │
-└───────────────────────────┬─────────────────────────────────────────┘
-                            │ typed Command
-┌───────────────────────────▼─────────────────────────────────────────┐
-│  mako-engine — Process Runtime                                      │
-│  PidRouter · EngineContext · Process · Workflow (handle / apply)    │
-│  DeadlineStore · OutboxStore · EventStore · SnapshotStore           │
-└───────┬──────────────────────────────────────────────────────────┬──┘
-        │                                                          │
-        ▼  events + outbox (single WriteBatch)                     ▼  HTTP POST (CloudEvents 1.0)
-┌───────────────────────────────┐         ┌────────────────────────────────────┐
-│  SlateDB (object store)       │         ┌────────────────────────────────────┐
-│  e/ events                    │         │  marktd :8180                        │
-│  om/ outbox messages          │  POST   │  MaLo / MeLo / contracts           │
-│  dl/ deadlines                │ ──────► │  partners / preisblaetter          │
-│  pr/ process registry         │CloudEv. │  PostgreSQL · OIDC/JWT             │
-│  pt/ partner directory        │         │  Cedar ABAC · fan-out to ERP       │
-│  ib/ inbox dedup              │         └────────────┬───────────┬───────────┘
-│  sv/ stream versions          │                      │           │
-└───────────────────────────────┘           CloudEv.   │           │ CloudEv. 1.0 + HMAC
-                                           ┌────────────▼──────┐  ┌▼───────────────────┐
-                                           │  invoicd :8280    │  │  ERP system         │
-                                           │  invoic-checker   │  │  BO4E JSON          │
-                                           │  PostgreSQL audit │  │  HMAC-SHA256 signed │
-                                           └────────┬──────────┘  └────────────────────┘
-                                                    │ POST /api/v1/commands
-                                           ┌────────▼──────────┐
-                                           │  makod :8080      │
-                                           │  annehmen/ablehnen│
-                                           │  → REMADV/COMDIS  │
-                                           └───────────────────┘
+How a single AS4 EDIFACT interchange becomes committed process state inside makod:
+
+```mermaid
+graph TD
+    A["BDEW counterparty"] -->|"AS4/ebMS3 push · SOAP+MTOM / HTTPS"| B
+    B["makod · as4_ingest<br/>WSS-verify signature · extract MIME attachment"] -->|"raw EDIFACT bytes"| C
+    C["InboxStore::accept<br/>72-hour dedup (no double-processing)"] --> D
+    D["Platform::parse_interchange · edi-energy<br/>structured messages · PID per message"] --> E
+    E["PidRouter::route<br/>domain module by Prüfidentifikator"] --> F
+    F["EdifactIngestDispatcher::dispatch<br/>spawn/resume process by MaLo · typed Command"] --> G
+    G["Process::execute_and_enqueue…retry"]
+    G --> H1["replay EventStore → State<br/>Workflow::apply (pure)"]
+    G --> H2["Workflow::handle → events + outbox<br/>(pure)"]
+    G --> H3["AtomicAppend::append_with_outbox<br/>single WriteBatch → EventStore + OutboxStore"]
 ```
 
-```
-BDEW counterparty
-    │  AS4/ebMS3 push (SOAP+MTOM over HTTPS)
-    ▼
-makod/as4_ingest
-    │  WSS-verify signature · extract MIME attachment
-    ▼
-InboxStore::accept     ← 72-hour dedup (prevents double-processing)
-    │  raw EDIFACT bytes
-    ▼
-Platform::parse_interchange (edi-energy)
-    │  structured messages, detected PID per message
-    ▼
-PidRouter::route       ← selects domain module by Prüfidentifikator
-    │  workflow_name + PID
-    ▼
-EdifactIngestDispatcher::dispatch   ← spawns or resumes process by MaLo business key
-    │  typed Command (via AdapterRegistry → MessageAdapter)
-    ▼
-Process::execute_and_enqueue_with_snapshot_and_retry
-    ├── replay EventStore → rebuild State   (Workflow::apply — pure)
-    ├── Workflow::handle(state, command)     (pure, returns events + outbox)
-    └── AtomicAppend::append_with_outbox    (single WriteBatch)
-         ├── EventStore  (e/<tenant>/<stream_id>/seq)
-         └── OutboxStore (om/<tenant>/<id>)
-```
+The parse → route → dispatch → append chain is deterministic and idempotent: the
+same interchange, redelivered, dedups at the inbox and no-ops at the event store.
 
 ---
 

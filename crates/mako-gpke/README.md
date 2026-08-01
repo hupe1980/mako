@@ -66,7 +66,7 @@ COMDIS from the NB are handled via `ReceiveRemadv` and `ReceiveComdis` commands.
 
 > PIDs 31007/31008 (Aggreg. MMM-Rechnung Gas, NB → MGV) belong to `mako-gabi-gas` (BK7-24-01-008).
 > PIDs 31003 (WiM-Rechnung) and 31009 (MSB-Rechnung) belong to the WiM domain.
-> PID 31004 (Stornorechnung WiM Gas) belongs to `mako-wim-gas` (BK7-24-01-009).
+> PID 31004 (Stornorechnung) is a Sparte-neutral, cross-process universal Storno (INVOIC AHB §3.1.2) — `invoicd` checks it Sparte-neutrally via `check_storno`, not a GPKE billing PID.
 
 ### ORDERS Sperrung Strom (GPKE Teil 4, BK6-22-024)
 

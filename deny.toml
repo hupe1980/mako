@@ -75,14 +75,14 @@ deny = [
 # Review and tighten on every annual dependency update pass.
 
 [[bans.skip]]
+name    = "base64"
+version = "0.23"
+reason  = "rmcp 3.1 (the MCP server SDK) pins base64 0.23; the mainline workspace (arrow, agentd, …) uses base64 0.22 (canonical). Resolve when rmcp bumps base64 or the mainline reaches 0.23."
+
+[[bans.skip]]
 name    = "wasm-encoder"
 version = "0.245"
 reason  = "wasmtime 43 internals pin wasm-encoder 0.245 while wast 254 (via wat/wasm-compose in the same extism/mako-plugin chain) uses 0.254. Resolve when extism bumps wasmtime."
-
-[[bans.skip]]
-name    = "wasmparser"
-version = "0.245"
-reason  = "same wasmtime-43-vs-wast-254 split as wasm-encoder; one side vanishes when extism bumps wasmtime."
 
 [[bans.skip]]
 name    = "wast"
@@ -386,6 +386,17 @@ ignore = [
     # a private key; this usage only verifies signatures (public-key operation).
     # Resolve when asx-rs updates to a mitigated rsa version.
     { id = "RUSTSEC-2023-0071", reason = "rsa Marvin timing attack; only used for signature verification (public-key operation) via asx-rs WS-Security — not for key decryption" },
+    # RUSTSEC-2026-0222: wasmtime 43 "Stores can mix up type indices between engines".
+    # wasmtime 43 is pulled ONLY by extism (the WASM plugin sandbox in mako-plugin),
+    # behind the OPT-IN `wasm-plugins` feature that NO service enables and no default
+    # turns on — so wasmtime never ships in a production binary; it appears only in the
+    # `--all-features` graph that cargo-deny and clippy scan. The bug also requires
+    # sharing/mixing type indices across *multiple* wasmtime engines; extism uses one
+    # engine per plugin and mako exposes only host-function-gated plugins, so the
+    # cross-engine confusion is not reachable in our usage. There is no fix in the 43.x
+    # line (patched: 46.0.2+/47.0.3+) and extism 1.30 (latest) pins wasmtime ^43.
+    # Resolution: drop this ignore the moment extism bumps to a patched wasmtime line.
+    { id = "RUSTSEC-2026-0222", reason = "wasmtime 43 type-index confusion; reachable only via the opt-in wasm-plugins feature (enabled by no service → not in any shipped binary), single-engine extism usage, and no fix exists in wasmtime 43.x (extism 1.30 pins ^43)" },
 ]
 
 # ── Bans: duplicate-version skip entries ──────────────────────────────────────
@@ -692,7 +703,12 @@ reason  = "companion to addr2line 0.25 (backtrace chain); wasmtime 43 uses gimli
 [[bans.skip]]
 name    = "object"
 version = "0.37"
-reason  = "ar_archive_writer/backtrace chain uses object 0.37; wasmtime 43 uses object 0.38."
+reason  = "backtrace 0.3.76 (miette/cedar chain) pins object 0.37; the newer cedar → ar_archive_writer chain uses object 0.39 (canonical). Resolve when backtrace bumps object."
+
+[[bans.skip]]
+name    = "object"
+version = "0.38"
+reason  = "wasmtime 43 (extism/mako-plugin WASM sandbox, all-features graph) pins object 0.38. Vanishes when extism bumps wasmtime."
 
 [[bans.skip]]
 name    = "rand_xoshiro"

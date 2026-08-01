@@ -3,11 +3,11 @@
 //! tenant-scoped, that a Tarifwechsel is atomic, and that `erp_angebot_id`
 //! makes Angebot creation idempotent.
 //!
+//! PostgreSQL is self-managed via testcontainers (a Docker daemon is the only
+//! requirement); the tests skip gracefully when Docker is unavailable:
+//!
 //! ```bash
-//! docker run -d --name tarifbd-test -e POSTGRES_PASSWORD=test \
-//!     -e POSTGRES_DB=tarifbd -p 55437:5432 postgres:17-alpine
-//! export TARIFBD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55437/tarifbd"
-//! cargo test -p tarifbd --test catalog_integration -- --include-ignored
+//! just test-tarifbd-db
 //! ```
 
 use sqlx::PgPool;
@@ -15,51 +15,14 @@ use tarifbd::pg;
 
 const SCHEMA: &str = include_str!("../migrations/0001_schema.sql");
 
-async fn test_pool(test_name: &str) -> Option<PgPool> {
-    let base = std::env::var("TARIFBD_TEST_DATABASE_URL").ok()?;
-    let admin = PgPool::connect(&base).await.ok()?;
-    let schema = format!("t_{test_name}");
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(&admin)
+async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
+    let (url, container) = pg_container().await?;
+    let pool = PgPool::connect(&url).await.ok()?;
+    sqlx::raw_sql(SCHEMA)
+        .execute(&pool)
         .await
-        .expect("drop schema");
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
-        .execute(&admin)
-        .await
-        .expect("create schema");
-    admin.close().await;
-    let opts: sqlx::postgres::PgConnectOptions = base.parse().expect("parse url");
-    let pool = PgPool::connect_with(opts.options([("search_path", schema.as_str())]))
-        .await
-        .expect("connect schema");
-    for stmt in split_statements(SCHEMA) {
-        sqlx::query(&stmt)
-            .execute(&pool)
-            .await
-            .unwrap_or_else(|e| panic!("schema stmt failed: {e}\n{stmt}"));
-    }
-    Some(pool)
-}
-
-fn split_statements(sql: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut in_dollar = false;
-    for line in sql.lines() {
-        if line.matches("$$").count() % 2 == 1 {
-            in_dollar = !in_dollar;
-        }
-        cur.push_str(line);
-        cur.push('\n');
-        if !in_dollar && line.trim_end().ends_with(';') {
-            let s = cur.trim().to_owned();
-            if !s.is_empty() && !s.lines().all(|l| l.trim().starts_with("--")) {
-                out.push(s);
-            }
-            cur.clear();
-        }
-    }
-    out
+        .expect("apply schema");
+    Some((pool, container))
 }
 
 fn strom_product(code: &str) -> pg::ProductUpsertRequest {
@@ -83,9 +46,9 @@ fn strom_product(code: &str) -> pg::ProductUpsertRequest {
 // ── C1 — the product write path actually writes tenant ────────────────────────
 
 #[tokio::test]
-#[ignore = "requires TARIFBD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn upsert_product_writes_tenant_and_reads_are_tenant_scoped() {
-    let Some(pool) = test_pool("tenant_scope").await else {
+    let Some((pool, _pg)) = test_pool("tenant_scope").await else {
         return;
     };
     let tenant_a = "9900000000001";
@@ -121,9 +84,9 @@ async fn upsert_product_writes_tenant_and_reads_are_tenant_scoped() {
 // ── H4 — Tarifwechsel assignment is atomic and tenant-scoped ──────────────────
 
 #[tokio::test]
-#[ignore = "requires TARIFBD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn product_assignment_and_tarifwechsel_preserve_one_active_row() {
-    let Some(pool) = test_pool("assign").await else {
+    let Some((pool, _pg)) = test_pool("assign").await else {
         return;
     };
     let tenant = "9900000000001";
@@ -191,9 +154,9 @@ async fn product_assignment_and_tarifwechsel_preserve_one_active_row() {
 // ── H7 — erp_angebot_id idempotency ───────────────────────────────────────────
 
 #[tokio::test]
-#[ignore = "requires TARIFBD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn erp_angebot_id_lookup_finds_existing_quotation() {
-    let Some(pool) = test_pool("angebot_idem").await else {
+    let Some((pool, _pg)) = test_pool("angebot_idem").await else {
         return;
     };
     let tenant = "9900000000001";
@@ -245,12 +208,12 @@ async fn erp_angebot_id_lookup_finds_existing_quotation() {
 // ── nEHS price series — upsert, latest-at-or-before, source discipline ────────
 
 #[tokio::test]
-#[ignore = "requires TARIFBD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn nehs_price_upsert_latest_and_source_check() {
     use rust_decimal::dec;
     use time::macros::date;
 
-    let Some(pool) = test_pool("nehs").await else {
+    let Some((pool, _pg)) = test_pool("nehs").await else {
         return;
     };
 
@@ -341,12 +304,12 @@ async fn nehs_price_upsert_latest_and_source_check() {
 /// keyed on distinct UTC MTU starts; a legacy 60-min import is stored as 24
 /// rows but fetched as 96 quarter-hours (expanded).
 #[tokio::test]
-#[ignore = "requires TARIFBD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn epex_15min_and_hourly_roundtrip_to_quarter_hours() {
     use rust_decimal::{Decimal, dec};
     use time::macros::date;
 
-    let Some(pool) = test_pool("epex_mtu").await else {
+    let Some((pool, _pg)) = test_pool("epex_mtu").await else {
         return;
     };
 
@@ -414,4 +377,23 @@ async fn epex_15min_and_hourly_roundtrip_to_quarter_hours() {
     assert_eq!(hpoints[0].avg_ct_kwh, dec!(0));
     assert_eq!(hpoints[3].avg_ct_kwh, dec!(0)); // 4th quarter of hour 0
     assert_eq!(hpoints[4].avg_ct_kwh, dec!(1)); // 1st quarter of hour 1
+}
+/// The Postgres container guard a test holds until it ends — dropping it removes
+/// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
+type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
+
+/// Start a fresh throwaway `postgres:17-alpine` and return its URL plus the
+/// container guard. `None` when Docker is unavailable (tests skip gracefully).
+async fn pg_container() -> Option<(String, PgContainer)> {
+    use testcontainers::ImageExt;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
+    let container = Postgres::default()
+        .with_tag("17-alpine")
+        .start()
+        .await
+        .ok()?;
+    let port = container.get_host_port_ipv4(5432).await.ok()?;
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    Some((url, container))
 }

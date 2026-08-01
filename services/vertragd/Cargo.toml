@@ -43,3 +43,5 @@ hmac          = { version = "0.12", features = ["std"] }
 sha2          = "0.10"
 
 [dev-dependencies]
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }

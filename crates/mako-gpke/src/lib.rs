@@ -128,8 +128,9 @@
 //! All 4 PIDs use [`GpkeAbrechnungWorkflow`] (workflow name:
 //! `"gpke-abrechnung"`). The `pruefidentifikator` stored in
 //! [`abrechnung::AbrechnungData`] lets read-models distinguish variants.
-//! PID 31003 (WiM-Rechnung) belongs to `mako-wim`. PID 31004 (Stornorechnung
-//! WiM Gas) belongs to `mako-wim-gas` (BK7-24-01-009) — not registered here.
+//! PID 31003 (WiM-Rechnung) belongs to `mako-wim`. PID 31004 (Stornorechnung)
+//! is the Sparte-neutral universal Storno (INVOIC AHB §3.1.2) — checked
+//! generically by `invoicd`, not registered as a GPKE billing PID here.
 //! PIDs 31007/31008 (Aggreg. MMM-Rechnung NB → MGV, Gas-only) belong to
 //! `mako-gabi-gas` `gabi-gas-invoic` — MGV is a Gas-only market role.
 //! PID 31009 (MSB-Rechnung, multi-domain: GPKE Teil 3 / WiM Strom Teil 1) is
@@ -336,7 +337,7 @@ pub use wechselprozesse::{
 /// - PIDs 17115/17116/17117 (Sperrung/Entsperrung, ORDERS) → `"gpke-sperrung"`
 /// - **PID 55555** (Anfrage Daten der individuellen Bestellung, UTILMD) → `"gpke-anfrage-bestellung"`
 /// - PIDs 31001, 31002, 31005, 31006 (billing, INVOIC) → `"gpke-abrechnung"`
-///   _(31003 → `mako-wim`; 31004 → `mako-wim-gas`)_
+///   _(31003 → `mako-wim`; 31004 = Sparte-neutral universal Storno, checked by `invoicd`)_
 /// - PIDs 19001, 19002 (inbound ORDRSP, NB role only) → `"gpke-konfiguration"`
 ///
 /// **Role-conditional PIDs (ORDRSP 19001/19002):**

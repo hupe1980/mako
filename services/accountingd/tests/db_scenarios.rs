@@ -3,11 +3,11 @@
 //! Every money movement now flows through the `doubleentry` ledger; these tests
 //! run against a live PostgreSQL (accountingd satellites in `public`, the ledger
 //! in the `doubleentry` schema of the same database). They are `#[ignore]` by
-//! default; run with:
+//! default and self-manage PostgreSQL via testcontainers (only a Docker daemon is
+//! required); they skip gracefully when Docker is unavailable:
 //!
 //! ```bash
-//! export DATABASE_URL="postgres://a:s@localhost:5432/accountingd_test"
-//! cargo test -p accountingd --test db_scenarios -- --ignored
+//! just test-accountingd-db
 //! ```
 //!
 //! Each test uses a unique tenant, so the shared `public` satellites are isolated;
@@ -22,12 +22,12 @@ use uuid::Uuid;
 const TENANT: &str = "accountingd-db-test";
 
 /// Connects the satellite pool (migrated) and the doubleentry ledger.
-async fn setup() -> Option<(PgPool, PgLedger)> {
-    let url = std::env::var("DATABASE_URL").ok()?;
+async fn setup() -> Option<(PgPool, PgLedger, PgContainer)> {
+    let (url, container) = pg_container().await?;
     let pool = PgPool::connect(&url).await.ok()?;
     sqlx::migrate!("./migrations").run(&pool).await.ok()?;
     let ledger = PgLedger::connect(&url, TENANT).await.ok()?;
-    Some((pool, ledger))
+    Some((pool, ledger, container))
 }
 
 fn uniq(prefix: &str) -> String {
@@ -37,9 +37,9 @@ fn uniq(prefix: &str) -> String {
 /// Duplicate CloudEvent delivery must book the receivable exactly once — the
 /// doubleentry idempotency key makes the redelivery a no-op returning the original.
 #[tokio::test]
-#[ignore = "requires DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn duplicate_ce_books_once() {
-    let Some((pool, ledger)) = setup().await else {
+    let Some((pool, ledger, _pg)) = setup().await else {
         return;
     };
     let malo = uniq("MALO");
@@ -103,9 +103,9 @@ async fn duplicate_ce_books_once() {
 /// ABSCHLAG advance-payment credits net against the full-cost Rechnung debit, and
 /// the balance cache stays consistent with the authoritative ledger.
 #[tokio::test]
-#[ignore = "requires DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn abschlag_credit_nets_against_rechnung() {
-    let Some((pool, ledger)) = setup().await else {
+    let Some((pool, ledger, _pg)) = setup().await else {
         return;
     };
     let malo = uniq("MALO");
@@ -175,9 +175,9 @@ async fn abschlag_credit_nets_against_rechnung() {
 /// A conflicting reuse of an idempotency key (same key, different amount) is
 /// refused — never a silent overwrite, never a second entry.
 #[tokio::test]
-#[ignore = "requires DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn conflicting_idempotency_key_is_refused() {
-    let Some((pool, ledger)) = setup().await else {
+    let Some((pool, ledger, _pg)) = setup().await else {
         return;
     };
     let malo = uniq("MALO");
@@ -206,9 +206,9 @@ async fn conflicting_idempotency_key_is_refused() {
 /// Auto-clearing: paying an invoice in full removes it from the open-item list
 /// (a recorded Zahlungszuordnung), and the Summen- und Saldenliste balances.
 #[tokio::test]
-#[ignore = "requires DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn payment_clears_invoice_and_trial_balance_balances() {
-    let Some((pool, ledger)) = setup().await else {
+    let Some((pool, ledger, _pg)) = setup().await else {
         return;
     };
     let malo = uniq("MALO");
@@ -278,9 +278,9 @@ async fn payment_clears_invoice_and_trial_balance_balances() {
 /// Festschreibung (GoBD / § 146 AO): a period can be sealed, the seal chain
 /// verifies, and a backdated booking into the sealed period is then refused.
 #[tokio::test]
-#[ignore = "requires DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn sealing_a_period_freezes_it() {
-    let Some((pool, ledger)) = setup().await else {
+    let Some((pool, ledger, _pg)) = setup().await else {
         return;
     };
     let malo = uniq("MALO");
@@ -349,10 +349,10 @@ async fn sealing_a_period_freezes_it() {
 /// Tamper-evidence: a recorded entry is provably included under the current head,
 /// and the balance is the authoritative ledger net (GoBD Unveränderbarkeit).
 #[tokio::test]
-#[ignore = "requires DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn ledger_entry_is_provable() {
     use doubleentry::storage::LedgerStore;
-    let Some((pool, ledger)) = setup().await else {
+    let Some((pool, ledger, _pg)) = setup().await else {
         return;
     };
     let malo = uniq("MALO");
@@ -394,4 +394,23 @@ async fn ledger_entry_is_provable() {
         proof.verify(&stored.content_hash, &head.root),
         "the entry is committed to by the current Merkle head"
     );
+}
+/// The Postgres container guard a test holds until it ends — dropping it removes
+/// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
+type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
+
+/// Start a fresh throwaway `postgres:17-alpine` and return its URL plus the
+/// container guard. `None` when Docker is unavailable (tests skip gracefully).
+async fn pg_container() -> Option<(String, PgContainer)> {
+    use testcontainers::ImageExt;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
+    let container = Postgres::default()
+        .with_tag("17-alpine")
+        .start()
+        .await
+        .ok()?;
+    let port = container.get_host_port_ipv4(5432).await.ok()?;
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    Some((url, container))
 }

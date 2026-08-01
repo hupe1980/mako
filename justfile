@@ -32,104 +32,50 @@ test-crate crate:
 test-integration name:
     cargo test --test {{ name }} --all-features
 
-# Storage integration tests for edmd (meterstore hot/cold over a throwaway
-# PostgreSQL + filesystem Iceberg warehouse). testcontainers manages the
-# container itself, so only a running Docker daemon is required.
+# ── Database integration tests ───────────────────────────────────────────────
+# Every suite below self-manages its PostgreSQL via testcontainers: a throwaway
+# container is started in-process (once per test binary) and torn down by the
+# testcontainers reaper afterwards. The only requirement is a running Docker
+# daemon — no manual `docker run`, no fixed host ports, no `*_DATABASE_URL` env
+# vars. Without Docker the `#[ignore]`d tests skip gracefully.
+
+# All database integration suites in one go.
+test-db: test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-vertragd-db test-tarifbd-db test-marktd-db
+
+# Storage integration tests for edmd (meterstore hot/cold over PostgreSQL + a
+# filesystem Iceberg warehouse).
 test-edmd-db:
     cargo test -p edmd --test meterstore_integration -- --include-ignored --test-threads=1
 
-# Integration tests for einsd against a throwaway PostgreSQL.
+# Handler + SQL integration tests for einsd (EEG settlement).
 test-einsd-db:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    docker rm -f einsd-test >/dev/null 2>&1 || true
-    docker run -d --name einsd-test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=einsd \
-        -p 55434:5432 postgres:17-alpine >/dev/null
-    trap 'docker rm -f einsd-test >/dev/null 2>&1 || true' EXIT
-    for _ in $(seq 1 30); do
-        docker exec einsd-test pg_isready -U postgres >/dev/null 2>&1 && break
-        sleep 1
-    done
-    EINSD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55434/einsd" \
-        cargo test -p einsd --test settlement_integration -- --include-ignored --test-threads=1
+    cargo test -p einsd --test settlement_integration -- --include-ignored --test-threads=1
 
-# Integration tests for accountingd against a throwaway PostgreSQL.
-# Exercises the doubleentry-backed ledger (idempotency, netting, reconcile,
-# Merkle inclusion proof) end-to-end. The ledger lives in the `doubleentry`
-# schema of the same database.
+# Ledger integration tests for accountingd — the doubleentry-backed
+# Massenkontokorrent (idempotency, netting, reconcile, period seal, Merkle
+# inclusion proof) against real PostgreSQL.
 test-accountingd-db:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    docker rm -f accountingd-test >/dev/null 2>&1 || true
-    docker run -d --name accountingd-test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=accountingd \
-        -p 55435:5432 postgres:17-alpine >/dev/null
-    trap 'docker rm -f accountingd-test >/dev/null 2>&1 || true' EXIT
-    for _ in $(seq 1 30); do
-        docker exec accountingd-test pg_isready -U postgres >/dev/null 2>&1 && break
-        sleep 1
-    done
-    DATABASE_URL="postgres://postgres:test@localhost:55435/accountingd" \
-        cargo test -p accountingd --test db_scenarios -- --include-ignored --test-threads=1
+    cargo test -p accountingd --test db_scenarios -- --include-ignored --test-threads=1
 
-# Integration tests for billingd against a throwaway PostgreSQL.
+# Records integration tests for billingd.
 test-billingd-db:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    docker rm -f billingd-test >/dev/null 2>&1 || true
-    docker run -d --name billingd-test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=billingd \
-        -p 55435:5432 postgres:17-alpine >/dev/null
-    trap 'docker rm -f billingd-test >/dev/null 2>&1 || true' EXIT
-    for _ in $(seq 1 30); do
-        docker exec billingd-test pg_isready -U postgres >/dev/null 2>&1 && break
-        sleep 1
-    done
-    BILLINGD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55435/billingd" \
-        cargo test -p billingd --test records_integration -- --include-ignored --test-threads=1
+    cargo test -p billingd --test records_integration -- --include-ignored --test-threads=1
 
-# Integration tests for vertragd against a throwaway PostgreSQL.
+# Dispatch integration tests for vertragd.
 test-vertragd-db:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    docker rm -f vertragd-test >/dev/null 2>&1 || true
-    docker run -d --name vertragd-test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=vertragd \
-        -p 55436:5432 postgres:17-alpine >/dev/null
-    trap 'docker rm -f vertragd-test >/dev/null 2>&1 || true' EXIT
-    for _ in $(seq 1 30); do
-        docker exec vertragd-test pg_isready -U postgres >/dev/null 2>&1 && break
-        sleep 1
-    done
-    VERTRAGD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55436/vertragd" \
-        cargo test -p vertragd --test dispatch_integration -- --include-ignored --test-threads=1
+    cargo test -p vertragd --test dispatch_integration -- --include-ignored --test-threads=1
 
-# Integration tests for tarifbd against a throwaway PostgreSQL.
+# Catalog integration tests for tarifbd.
 test-tarifbd-db:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    docker rm -f tarifbd-test >/dev/null 2>&1 || true
-    docker run -d --name tarifbd-test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=tarifbd \
-        -p 55437:5432 postgres:17-alpine >/dev/null
-    trap 'docker rm -f tarifbd-test >/dev/null 2>&1 || true' EXIT
-    for _ in $(seq 1 30); do
-        docker exec tarifbd-test pg_isready -U postgres >/dev/null 2>&1 && break
-        sleep 1
-    done
-    TARIFBD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55437/tarifbd" \
-        cargo test -p tarifbd --test catalog_integration -- --include-ignored --test-threads=1
+    cargo test -p tarifbd --test catalog_integration -- --include-ignored --test-threads=1
 
-# Integration tests for marktd against a throwaway PostgreSQL.
+# All marktd integration suites (VersorgungsStatus, MeLo graph, ESA, registries,
+# durable fan-out).
 test-marktd-db:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    docker rm -f marktd-test >/dev/null 2>&1 || true
-    docker run -d --name marktd-test -e POSTGRES_PASSWORD=test -e POSTGRES_DB=marktd \
-        -p 55438:5432 postgres:17-alpine >/dev/null
-    trap 'docker rm -f marktd-test >/dev/null 2>&1 || true' EXIT
-    for _ in $(seq 1 30); do
-        docker exec marktd-test pg_isready -U postgres >/dev/null 2>&1 && break
-        sleep 1
-    done
-    MARKTD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55438/marktd" \
-        cargo test -p marktd --test versorgung_integration -- --include-ignored --test-threads=1
+    cargo test -p marktd \
+        --test versorgung_integration --test melo_graph_integration \
+        --test esa_integration --test registries_integration \
+        --test fanout_durable_integration -- --include-ignored --test-threads=1
 
 # Lint with warnings as errors
 clippy:

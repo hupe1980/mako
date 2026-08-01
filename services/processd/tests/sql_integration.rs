@@ -33,13 +33,19 @@ use uuid::Uuid;
 
 // ── Container lifecycle helper ────────────────────────────────────────────────
 
-async fn pg_pool() -> sqlx::PgPool {
-    let container = Postgres::default().start().await.expect("start postgres");
+/// Container guard the test holds until it ends — dropping it removes the
+/// container (no leak, no external reaper).
+type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
+
+async fn pg_pool() -> (sqlx::PgPool, PgContainer) {
+    use testcontainers::ImageExt;
+    let container = Postgres::default()
+        .with_tag("17-alpine")
+        .start()
+        .await
+        .expect("start postgres");
     let port = container.get_host_port_ipv4(5432).await.expect("get port");
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
-
-    // Leak the container so it lives for the duration of the test process.
-    Box::leak(Box::new(container));
 
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(2)
@@ -47,24 +53,19 @@ async fn pg_pool() -> sqlx::PgPool {
         .await
         .expect("connect");
 
-    sqlx::query("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-        .execute(&pool)
-        .await
-        .expect("enable pgcrypto for gen_random_uuid()");
-
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await
         .expect("migrate");
 
-    pool
+    (pool, container)
 }
 
 // ── Approval queue ────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn approval_queue_enqueue_list_approve() {
-    let pool = pg_pool().await;
+    let (pool, _pg) = pg_pool().await;
     let queue = processd::pg::PgApprovalQueue::new(pool.clone());
 
     let id = Uuid::new_v4();
@@ -132,7 +133,7 @@ async fn approval_queue_enqueue_list_approve() {
 
 #[tokio::test]
 async fn anmeldung_decisions_insert_and_list() {
-    let pool = pg_pool().await;
+    let (pool, _pg) = pg_pool().await;
     let repo = processd::pg::PgAnmeldungRepository::new(pool.clone());
 
     use processd::pg::anmeldung::{AnmeldungDecision, AnmeldungDecisionRecord};

@@ -82,10 +82,14 @@ opentelemetry-otlp        = { version = "0.32", features = ["grpc-tonic"] }
 opentelemetry-semantic-conventions = "0.32"
 cedar-policy              = { version = "4.11", default-features = false }
 tracing-opentelemetry     = "0.33"
-jsonwebtoken              = "9"
+# jsonwebtoken 11 made crypto pluggable: exactly one backend must be selected or
+# every sign/verify panics ("Could not determine the CryptoProvider"). We pick the
+# pure-Rust RustCrypto backend (no extra C dependency, unlike aws-lc-rs). `use_pem`
+# (default) stays on for the `from_rsa_pem` key loading in mako-service::oidc.
+jsonwebtoken              = { version = "11", features = ["rust_crypto"] }
 reqwest                   = { version = "0.13", default-features = false, features = ["json", "rustls", "query"] }
 tokio-util                = { version = "0.7", features = ["rt"] }
-rmcp                      = { version = "2.2.0", features = ["transport-io", "transport-streamable-http-server"] }
+rmcp                      = { version = "3", features = ["transport-io", "transport-streamable-http-server"] }
 figment                    = { version = "0.10",  features = ["toml", "env"] }
 extism                     = { version = "1" }
 figment-file-provider-adapter = { version = "0.1", package = "figment_file_provider_adapter" }
@@ -116,7 +120,7 @@ doubleentry      = { version = "0.2" }
 # Required by mako-service feature "kafka" (EventBus scale-out backend).
 # Activate at >500 MaLo or >20 webhook subscribers — see event_bus.rs.
 # Default features include: compression (gzip/snappy/lz4), ring (rustls crypto).
-krafka           = { version = "0.13" }
+krafka           = { version = "0.14" }
 
 # ── Arrow (edmd meterstore tier) ────────────────────────────────────────────
 # `edmd` stores metering time series through the `meterstore` crate, which

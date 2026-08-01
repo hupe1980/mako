@@ -470,15 +470,49 @@ table {
   font-size: 0.9rem;
 }
 
-// ── Mermaid diagram wrapper ───────────────────────────────────────────────────
-.mermaid {
-  text-align: center;
-  margin: 1.5rem 0;
-  padding: 1.5rem;
-  background: var(--color-btn-secondary-bg);
-  border: 1px solid var(--color-border);
-  border-radius: var(--mako-radius);
-  overflow-x: auto;
+// ── Mermaid diagrams ──────────────────────────────────────────────────────────
+// Just the Docs renders ```mermaid fences into `.language-mermaid`, which also
+// carries `highlighter-rouge` — so without this it would inherit the amber-bordered
+// code-block styling and the rouge background. Reset that and present the diagram
+// as a legible white card (dark text on white in BOTH page themes), rendered at
+// full size (mermaid `useMaxWidth:false`) and scrollable when it is wider or taller
+// than the viewport — so large diagrams stay readable instead of being shrunk.
+.language-mermaid {
+  // Undo the inherited code-block styling (amber left border + rouge background).
+  border-left: none !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: var(--mako-radius) !important;
+  margin: 1.5rem 0 !important;
+  padding: 1.25rem !important;
+  // Render at natural size and scroll when larger than the viewport.
+  overflow: auto;
+  max-height: 82vh;
+  // White card in BOTH page themes (so diagram text is always dark-on-light),
+  // plus a horizontal scroll-shadow affordance on the edges.
+  background:
+    linear-gradient(to right, #fff 30%, rgba(255, 255, 255, 0)) left / 40px 100% no-repeat,
+    linear-gradient(to left, #fff 30%, rgba(255, 255, 255, 0)) right / 40px 100% no-repeat,
+    radial-gradient(farthest-side at 0 50%, rgba(15, 23, 42, 0.12), rgba(0, 0, 0, 0)) left / 14px 100% no-repeat,
+    radial-gradient(farthest-side at 100% 50%, rgba(15, 23, 42, 0.12), rgba(0, 0, 0, 0)) right / 14px 100% no-repeat,
+    #fff !important;
+  background-attachment: local, local, scroll, scroll !important;
+
+  // The pre/code that briefly holds the source before mermaid renders the SVG.
+  > .highlight,
+  pre.highlight,
+  code {
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  // The rendered SVG: centre it, full size, never clipped.
+  svg {
+    display: block;
+    margin: 0 auto;
+    max-width: none !important;
+    height: auto;
+  }
 }
 
 // ── Utility ───────────────────────────────────────────────────────────────────

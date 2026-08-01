@@ -2,10 +2,10 @@
 //! the Gas MSB-Rahmenvertrag registry (GeLi Gas 3.0).
 //!
 //! ```bash
-//! docker run -d --name marktd-test -e POSTGRES_PASSWORD=test \
-//!     -e POSTGRES_DB=marktd -p 55438:5432 postgres:17-alpine
-//! export MARKTD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55438/marktd"
-//! cargo test -p marktd --test registries_integration -- --include-ignored
+//! PostgreSQL is self-managed via testcontainers (only a Docker daemon is
+//! required); tests skip gracefully when Docker is unavailable:
+//!
+//! just test-marktd-db
 //! ```
 
 use mako_markt::{
@@ -26,39 +26,14 @@ const GNB: &str = "9870112700007";
 const MSB: &str = "9900357000004";
 const NB: &str = "9900987654321";
 
-async fn test_pool(test_name: &str) -> Option<PgPool> {
-    let base = std::env::var("MARKTD_TEST_DATABASE_URL").ok()?;
-    let admin = PgPool::connect(&base).await.ok()?;
-    let schema = format!("reg_{test_name}");
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(&admin)
+async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
+    let (url, container) = pg_container().await?;
+    let pool = PgPool::connect(&url).await.ok()?;
+    sqlx::raw_sql(SCHEMA)
+        .execute(&pool)
         .await
-        .expect("drop schema");
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
-        .execute(&admin)
-        .await
-        .expect("create schema");
-    admin.close().await;
-    let opts: sqlx::postgres::PgConnectOptions = base.parse().expect("parse url");
-    let pool = PgPool::connect_with(opts.options([("search_path", schema.as_str())]))
-        .await
-        .expect("connect schema");
-    let stripped: String = SCHEMA
-        .lines()
-        .map(|l| l.split_once("--").map_or(l, |(code, _)| code))
-        .collect::<Vec<_>>()
-        .join("\n");
-    for stmt in stripped.split(';') {
-        let s = stmt.trim();
-        if s.is_empty() {
-            continue;
-        }
-        sqlx::query(s)
-            .execute(&pool)
-            .await
-            .unwrap_or_else(|e| panic!("schema stmt failed: {e}\n{s}"));
-    }
-    Some(pool)
+        .expect("apply schema");
+    Some((pool, container))
 }
 
 // ── Authorization scopes ──────────────────────────────────────────────────────
@@ -121,9 +96,9 @@ fn rv(status: MsbRvGasStatus) -> MsbRahmenvertragGas {
 /// is an idempotent update: the id stays stable, the version increments, and
 /// a `signed_at` on record survives an update that omits it.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn msb_rv_gas_upsert_is_idempotent_on_natural_key() {
-    let Some(pool) = test_pool("rv_idempotent").await else {
+    let Some((pool, _pg)) = test_pool("rv_idempotent").await else {
         return;
     };
     let repo = PgMsbRahmenvertragGasRepository::new(pool);
@@ -161,9 +136,9 @@ async fn msb_rv_gas_upsert_is_idempotent_on_natural_key() {
 /// A stale caller-supplied version is rejected with `VersionConflict`;
 /// the matching version proceeds.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn msb_rv_gas_stale_version_is_rejected() {
-    let Some(pool) = test_pool("rv_conflict").await else {
+    let Some((pool, _pg)) = test_pool("rv_conflict").await else {
         return;
     };
     let repo = PgMsbRahmenvertragGasRepository::new(pool);
@@ -193,9 +168,9 @@ async fn msb_rv_gas_stale_version_is_rejected() {
 /// A different `valid_from` is a different conclusion — a second row, not an
 /// update of the first.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn msb_rv_gas_valid_from_is_part_of_the_key() {
-    let Some(pool) = test_pool("rv_key").await else {
+    let Some((pool, _pg)) = test_pool("rv_key").await else {
         return;
     };
     let repo = PgMsbRahmenvertragGasRepository::new(pool);
@@ -231,9 +206,9 @@ fn antrag() -> NetzzugangAntrag {
 /// The caller-supplied `created_at` is persisted; the serde epoch default
 /// falls back to `now()` instead of writing 1970.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn netzzugang_created_at_is_persisted() {
-    let Some(pool) = test_pool("nz_created_at").await else {
+    let Some((pool, _pg)) = test_pool("nz_created_at").await else {
         return;
     };
     let repo = PgNetzzugangRepository::new(pool);
@@ -260,9 +235,9 @@ async fn netzzugang_created_at_is_persisted() {
 
 /// Upserting the same id again is an update and increments the version.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn netzzugang_upsert_by_id_increments_version() {
-    let Some(pool) = test_pool("nz_upsert").await else {
+    let Some((pool, _pg)) = test_pool("nz_upsert").await else {
         return;
     };
     let repo = PgNetzzugangRepository::new(pool);
@@ -285,9 +260,9 @@ async fn netzzugang_upsert_by_id_increments_version() {
 /// The status PATCH honours the optional expected version: stale → 412
 /// `VersionConflict`, matching → increment, absent → unconditional.
 #[tokio::test]
-#[ignore = "requires MARKTD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn netzzugang_set_status_guards_the_version() {
-    let Some(pool) = test_pool("nz_status").await else {
+    let Some((pool, _pg)) = test_pool("nz_status").await else {
         return;
     };
     let repo = PgNetzzugangRepository::new(pool);
@@ -350,4 +325,23 @@ async fn netzzugang_set_status_guards_the_version() {
             .unwrap()
             .is_none()
     );
+}
+/// The Postgres container guard a test holds until it ends — dropping it removes
+/// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
+type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
+
+/// Start a fresh throwaway `postgres:17-alpine` and return its URL plus the
+/// container guard. `None` when Docker is unavailable (tests skip gracefully).
+async fn pg_container() -> Option<(String, PgContainer)> {
+    use testcontainers::ImageExt;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
+    let container = Postgres::default()
+        .with_tag("17-alpine")
+        .start()
+        .await
+        .ok()?;
+    let port = container.get_host_port_ipv4(5432).await.ok()?;
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    Some((url, container))
 }

@@ -579,7 +579,7 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 31001 | Abschlagsrechnung | GPKE Teil 2 / GeLi Gas 2.0 | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
 | 31002 | NN-Rechnung | GPKE Teil 2 / GeLi Gas 2.0 | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
 | 31003 | WiM-Rechnung | WiM Gas / WiM Strom Teil 1 | MSBA → NB · MSBA → MSBN · MSBA → MSBN/gMSB | — | ✅ | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-invoic` |
-| 31004 | Stornorechnung | WiM Gas / Kapazitätsabrechnung / MMM Strom/Gas / AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | MSBA → NB · MSBA → MSBN · NB → TK/KN · NB → LF · NB → MGV · MSB → NB · MSB → LF · MSBA → MSBN/gMSB · MSB → ESA | — | ✅ | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-invoic` |
+| 31004 | Stornorechnung (**Sparte-neutral, universal**) | WiM Gas / Kapazitätsabrechnung / MMM Strom/Gas / AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | MSBA → NB · MSBA → MSBN · NB → TK/KN · NB → LF · NB → MGV · MSB → NB · MSB → LF · MSBA → MSBN/gMSB · MSB → ESA | — | ✅ | ✅ | ✅ | ✅ | `invoic-checker` `check_storno` (hosted by `wim-gas-invoic`) |
 | 31005 | MMM-Rechnung | MMM Strom/Gas | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
 | 31006 | MMM-selbst ausgest. Rechnung | MMM Strom/Gas | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
 | 31007 | Aggreg. MMM-Rechnung | MMM Strom/Gas | NB → MGV | — | — | ✅ | ✅ | ✅ | `mako-gabi-gas` `gabi-gas-invoic` |

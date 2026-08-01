@@ -706,9 +706,14 @@ just            # list all recipes
 just check      # cargo check, all targets & features
 just test       # full test suite
 just ci         # the complete CI gate (check + test + clippy + fmt + deny + codegen/profile/PID validation)
-just test-edmd-db      # real-PostgreSQL integration suite (throwaway postgres:17 container)
-just test-billingd-db  # … same pattern exists for einsd, vertragd, tarifbd, marktd
+just test-db           # every real-PostgreSQL integration suite (testcontainers)
+just test-accountingd-db  # …or one at a time: edmd, einsd, accountingd, billingd, vertragd, tarifbd, marktd
 ```
+
+The `test-*-db` suites self-manage PostgreSQL via **testcontainers** — a throwaway
+`postgres:17-alpine` container is started in-process and reaped afterwards, so the only
+requirement is a running Docker daemon (no manual `docker run`, no `DATABASE_URL`). They
+are `#[ignore]`d by default and skip gracefully when Docker is absent.
 
 Raw cargo equivalents:
 

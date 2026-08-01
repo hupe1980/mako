@@ -8,11 +8,11 @@
 //! caller and then dropped. Each of those shipped and was invisible until the
 //! query actually ran.
 //!
+//! PostgreSQL is self-managed via testcontainers (only a Docker daemon is
+//! required); the tests skip gracefully when Docker is unavailable:
+//!
 //! ```bash
-//! docker run -d --name einsd-test -e POSTGRES_PASSWORD=test \
-//!     -e POSTGRES_DB=einsd -p 55434:5432 postgres:17-alpine
-//! export EINSD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55434/einsd"
-//! cargo test -p einsd --test settlement_integration -- --include-ignored
+//! just test-einsd-db
 //! ```
 //!
 //! Every test provisions its own schema, so they leave nothing behind.
@@ -24,57 +24,17 @@ use tower::ServiceExt as _;
 
 const SCHEMA: &str = include_str!("../migrations/0001_schema.sql");
 
-/// Connect and provision a fresh schema, or skip when no database is configured.
-async fn test_pool(test_name: &str) -> Option<PgPool> {
-    let base = std::env::var("EINSD_TEST_DATABASE_URL").ok()?;
-    let admin = PgPool::connect(&base).await.ok()?;
-
-    let schema = format!("t_{test_name}");
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(&admin)
+/// A fresh throwaway PostgreSQL with the schema applied, or `None` when Docker is
+/// unavailable. The returned container guard **must** be held by the test — it
+/// removes the container on drop (no leak).
+async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
+    let (url, container) = pg_container().await?;
+    let pool = PgPool::connect(&url).await.ok()?;
+    sqlx::raw_sql(SCHEMA)
+        .execute(&pool)
         .await
-        .expect("drop schema");
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
-        .execute(&admin)
-        .await
-        .expect("create schema");
-    admin.close().await;
-
-    let opts: sqlx::postgres::PgConnectOptions = base.parse().expect("parse url");
-    let pool = PgPool::connect_with(opts.options([("search_path", schema.as_str())]))
-        .await
-        .expect("connect to test schema");
-
-    for stmt in split_statements(SCHEMA) {
-        sqlx::query(&stmt)
-            .execute(&pool)
-            .await
-            .unwrap_or_else(|e| panic!("schema statement failed: {e}\n{stmt}"));
-    }
-    Some(pool)
-}
-
-/// Split the DDL on `;` at statement level, keeping `$$`-quoted bodies intact.
-fn split_statements(sql: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut current = String::new();
-    let mut in_dollar = false;
-    for line in sql.lines() {
-        let dollars = line.matches("$$").count();
-        if dollars % 2 == 1 {
-            in_dollar = !in_dollar;
-        }
-        current.push_str(line);
-        current.push('\n');
-        if !in_dollar && line.trim_end().ends_with(';') {
-            let stmt = current.trim().to_owned();
-            if !stmt.is_empty() && !stmt.lines().all(|l| l.trim().starts_with("--")) {
-                out.push(stmt);
-            }
-            current.clear();
-        }
-    }
-    out
+        .expect("apply schema");
+    Some((pool, container))
 }
 
 const TENANT: &str = "9900357000004";
@@ -201,9 +161,9 @@ async fn seed_plant(pool: &PgPool, tr_id: &str, tenant: &str, extra_cols: &str, 
 /// (`kwk_foerderdauer_h × leistung_kwp`) and has never been a column. The tool
 /// failed for every plant, and nothing caught it because no test ran the query.
 #[tokio::test]
-#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn compliance_status_query_names_only_real_columns() {
-    let Some(pool) = test_pool("compliance_cols").await else {
+    let Some((pool, _pg)) = test_pool("compliance_cols").await else {
         return;
     };
     seed_plant(&pool, "P1", TENANT, ", kwk_foerderdauer_h", ", 30000").await;
@@ -232,9 +192,9 @@ async fn compliance_status_query_names_only_real_columns() {
 /// constraint matching the ON CONFLICT specification" — which is what the
 /// award-expired settlement path did on every call.
 #[tokio::test]
-#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn receipt_upsert_matches_the_partial_unique_index() {
-    let Some(pool) = test_pool("upsert_partial").await else {
+    let Some((pool, _pg)) = test_pool("upsert_partial").await else {
         return;
     };
     seed_plant(&pool, "P1", TENANT, "", "").await;
@@ -268,9 +228,9 @@ async fn receipt_upsert_matches_the_partial_unique_index() {
 
 /// A correction and its original coexist — the index only constrains originals.
 #[tokio::test]
-#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_correction_may_coexist_with_the_receipt_it_corrects() {
-    let Some(pool) = test_pool("correction_coexist").await else {
+    let Some((pool, _pg)) = test_pool("correction_coexist").await else {
         return;
     };
     seed_plant(&pool, "P1", TENANT, "", "").await;
@@ -322,9 +282,9 @@ async fn a_correction_may_coexist_with_the_receipt_it_corrects() {
 /// prior state was unrecoverable and `get_settlement_state_history` always
 /// returned empty. The CTE below is the one the service now issues.
 #[tokio::test]
-#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_state_change_records_the_transition_it_came_from() {
-    let Some(pool) = test_pool("state_transition").await else {
+    let Some((pool, _pg)) = test_pool("state_transition").await else {
         return;
     };
     seed_plant(&pool, "P1", TENANT, ", settlement_state", ", 'aktiv'").await;
@@ -369,9 +329,9 @@ async fn a_state_change_records_the_transition_it_came_from() {
 
 /// Registering and reading a plant through the real router.
 #[tokio::test]
-#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_registered_plant_is_readable_over_http() {
-    let Some(pool) = test_pool("http_roundtrip").await else {
+    let Some((pool, _pg)) = test_pool("http_roundtrip").await else {
         return;
     };
     let app = test_router(pool);
@@ -397,9 +357,9 @@ async fn a_registered_plant_is_readable_over_http() {
 
 /// §25 EEG 2023: the Förderende is derived at registration, not left to the caller.
 #[tokio::test]
-#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn registration_derives_the_foerderende_from_the_commissioning_date() {
-    let Some(pool) = test_pool("foerderende").await else {
+    let Some((pool, _pg)) = test_pool("foerderende").await else {
         return;
     };
     let app = test_router(pool.clone());
@@ -425,9 +385,9 @@ async fn registration_derives_the_foerderende_from_the_commissioning_date() {
 /// seeded as §19 Kleinunternehmer (0 % USt, category E); an operator who declares
 /// REGELBESTEUERUNG bills 19 %. §12 Abs. 3 UStG (hardware supply) never applies.
 #[tokio::test]
-#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn ust_status_masterdata_drives_the_gutschrift_vat() {
-    let Some(pool) = test_pool("ust_status").await else {
+    let Some((pool, _pg)) = test_pool("ust_status").await else {
         return;
     };
     let app = test_router(pool.clone());
@@ -495,9 +455,9 @@ async fn ust_status_masterdata_drives_the_gutschrift_vat() {
 
 /// A settlement for an unknown plant is a 404, not a 500.
 #[tokio::test]
-#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn settling_an_unknown_plant_is_not_found() {
-    let Some(pool) = test_pool("settle_404").await else {
+    let Some((pool, _pg)) = test_pool("settle_404").await else {
         return;
     };
     let app = test_router(pool);
@@ -595,9 +555,9 @@ fn the_policy_denies_cross_tenant_access() {
 
 /// Two tenants may register the same `tr_id` without colliding.
 #[tokio::test]
-#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_same_plant_id_in_two_tenants_is_two_plants() {
-    let Some(pool) = test_pool("tenant_isolation").await else {
+    let Some((pool, _pg)) = test_pool("tenant_isolation").await else {
         return;
     };
     for tenant in ["T1", "T2"] {
@@ -614,9 +574,9 @@ async fn the_same_plant_id_in_two_tenants_is_two_plants() {
 /// The tariff reference table ships seeded — a lookup against an empty table
 /// would silently return no rate rather than the statutory one.
 #[tokio::test]
-#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_statutory_rate_table_is_seeded_by_the_schema() {
-    let Some(pool) = test_pool("rates_seeded").await else {
+    let Some((pool, _pg)) = test_pool("rates_seeded").await else {
         return;
     };
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM eeg_verguetungssaetze")
@@ -635,9 +595,9 @@ async fn the_statutory_rate_table_is_seeded_by_the_schema() {
 /// were always `None`/`false` no matter what was registered — §22b
 /// Bürgerenergie and §39n Innovationsausschreibung were unreachable.
 #[tokio::test]
-#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn auction_metadata_survives_registration() {
-    let Some(pool) = test_pool("auction_meta").await else {
+    let Some((pool, _pg)) = test_pool("auction_meta").await else {
         return;
     };
     let app = test_router(pool.clone());
@@ -680,9 +640,9 @@ async fn auction_metadata_survives_registration() {
 /// Summing eleven months and presenting the result as the year is the failure
 /// mode worth guarding: the total looks plausible and nothing marks it short.
 #[tokio::test]
-#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn an_incomplete_year_is_provisional_and_names_the_gaps() {
-    let Some(pool) = test_pool("ja_incomplete").await else {
+    let Some((pool, _pg)) = test_pool("ja_incomplete").await else {
         return;
     };
     seed_plant(&pool, "P1", TENANT, "", "").await;
@@ -720,9 +680,9 @@ async fn an_incomplete_year_is_provisional_and_names_the_gaps() {
 
 /// A full year is final and lists no gaps.
 #[tokio::test]
-#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_complete_year_is_final() {
-    let Some(pool) = test_pool("ja_complete").await else {
+    let Some((pool, _pg)) = test_pool("ja_complete").await else {
         return;
     };
     seed_plant(&pool, "P1", TENANT, "", "").await;
@@ -758,9 +718,9 @@ async fn a_complete_year_is_final() {
 /// The partial unique index means the corrected month keeps one non-correction
 /// receipt; counting the correction as well would double the month.
 #[tokio::test]
-#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_correction_does_not_double_count_its_month() {
-    let Some(pool) = test_pool("ja_correction").await else {
+    let Some((pool, _pg)) = test_pool("ja_correction").await else {
         return;
     };
     seed_plant(&pool, "P1", TENANT, "", "").await;
@@ -797,9 +757,9 @@ async fn a_correction_does_not_double_count_its_month() {
 
 /// Re-running replaces the stored statement rather than accumulating rows.
 #[tokio::test]
-#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn rerunning_replaces_the_stored_statement() {
-    let Some(pool) = test_pool("ja_rerun").await else {
+    let Some((pool, _pg)) = test_pool("ja_rerun").await else {
         return;
     };
     seed_plant(&pool, "P1", TENANT, "", "").await;
@@ -821,11 +781,11 @@ async fn rerunning_replaces_the_stored_statement() {
 /// §51: the epex_spot_prices store round-trips ¼h prices (incl. negatives) and
 /// the range fetch returns them ordered — the input to the negativpreis overlay.
 #[tokio::test]
-#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn spot_prices_upsert_and_range_fetch() {
     use rust_decimal::dec;
     use time::macros::datetime;
-    let Some(pool) = test_pool("spot_prices").await else {
+    let Some((pool, _pg)) = test_pool("spot_prices").await else {
         return;
     };
     let base = datetime!(2026-06-01 00:00 UTC);
@@ -870,10 +830,10 @@ async fn spot_prices_upsert_and_range_fetch() {
 /// §36h Abs. 2: recording a Standortgüte re-evaluation persists it and flags
 /// reconciliation when the Gütefaktor moves more than 2 percentage points.
 #[tokio::test]
-#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn wind_reevaluation_records_and_flags_reconciliation() {
     use rust_decimal::dec;
-    let Some(pool) = test_pool("wind_reeval").await else {
+    let Some((pool, _pg)) = test_pool("wind_reeval").await else {
         return;
     };
     seed_plant(
@@ -909,4 +869,24 @@ async fn wind_reevaluation_records_and_flags_reconciliation() {
     .await
     .expect("fetch reevals");
     assert_eq!(json.as_array().map(Vec::len), Some(2));
+}
+/// The Postgres container guard a test holds until it ends — dropping it removes
+/// the container (testcontainers cleans up on `Drop`; there is no leak and no
+/// reliance on an external reaper).
+type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
+
+/// Start a fresh throwaway `postgres:17-alpine` and return its URL plus the
+/// container guard. `None` when Docker is unavailable (tests skip gracefully).
+async fn pg_container() -> Option<(String, PgContainer)> {
+    use testcontainers::ImageExt;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
+    let container = Postgres::default()
+        .with_tag("17-alpine")
+        .start()
+        .await
+        .ok()?;
+    let port = container.get_host_port_ipv4(5432).await.ok()?;
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    Some((url, container))
 }

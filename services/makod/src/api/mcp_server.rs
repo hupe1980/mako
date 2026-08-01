@@ -310,7 +310,7 @@ impl MakodMcpHandler {
         rmcp::handler::server::tool::Extension(parts): rmcp::handler::server::tool::Extension<
             axum::http::request::Parts,
         >,
-        meta: Meta,
+        meta: RequestMetaObject,
         client: Peer<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let progress_token = meta.get_progress_token();
@@ -1175,7 +1175,7 @@ impl ServerHandler for MakodMcpHandler {
         Ok(ListResourcesResult {
             resources: vec![],
             next_cursor: None,
-            meta: None,
+            ..Default::default()
         })
     }
 
@@ -1202,7 +1202,7 @@ impl ServerHandler for MakodMcpHandler {
                     .with_mime_type("application/json"),
             ],
             next_cursor: None,
-            meta: None,
+            ..Default::default()
         })
     }
 
@@ -1210,7 +1210,7 @@ impl ServerHandler for MakodMcpHandler {
         &self,
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
+    ) -> Result<ReadResourceResponse, McpError> {
         let uri = request.uri.as_str();
 
         if let Some(malo_id) = uri.strip_prefix("malo://") {
@@ -1220,7 +1220,8 @@ impl ServerHandler for MakodMcpHandler {
                         serde_json::to_string_pretty(&record).unwrap_or_else(|_| "{}".to_owned());
                     Ok(ReadResourceResult::new(vec![
                         ResourceContents::text(json, uri).with_mime_type("application/json"),
-                    ]))
+                    ])
+                    .into())
                 }
                 Ok(None) => Err(McpError::resource_not_found(
                     format!("MaLo '{malo_id}' not in cache"),
@@ -1246,7 +1247,8 @@ impl ServerHandler for MakodMcpHandler {
                         serde_json::to_string_pretty(&record).unwrap_or_else(|_| "{}".to_owned());
                     Ok(ReadResourceResult::new(vec![
                         ResourceContents::text(json, uri).with_mime_type("application/json"),
-                    ]))
+                    ])
+                    .into())
                 }
                 Ok(None) => Err(McpError::resource_not_found(
                     format!("Partner '{mp_id_str}' not registered"),

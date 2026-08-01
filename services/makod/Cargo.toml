@@ -71,7 +71,7 @@ sha2               = "0.10"
 utoipa             = { version = "5", features = ["axum_extras", "uuid", "time"] }
 utoipa-axum        = "0.2"
 utoipa-swagger-ui  = { version = "9", features = ["axum"] }
-rmcp = { version = "2.0.0", features = ["transport-io", "transport-streamable-http-server"] }
+rmcp = { workspace = true }
 schemars = { version = "1.2.1", features = ["chrono04"] }
 governor = "0.6"
 

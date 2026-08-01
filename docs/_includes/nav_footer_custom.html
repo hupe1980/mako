@@ -10,16 +10,27 @@
   (function () {
     function apply(theme) {
       document.documentElement.setAttribute('data-theme', theme);
+      // Swap the Just the Docs colour-scheme stylesheet directly. This does NOT
+      // depend on window.jtd (which loads late and, across theme versions, may be
+      // absent) — it rewrites the `just-the-docs-{scheme}.css` href in place, which
+      // is exactly what jtd.setTheme does but reliably and version-independently.
+      var links = document.querySelectorAll('link[rel="stylesheet"]');
+      for (var i = 0; i < links.length; i++) {
+        var href = links[i].getAttribute('href') || '';
+        var m = href.match(/(.*just-the-docs-)(default|light|dark)(\.css.*)$/);
+        if (m) { links[i].setAttribute('href', m[1] + theme + m[3]); break; }
+      }
       if (window.jtd && typeof window.jtd.setTheme === 'function') {
         window.jtd.setTheme(theme);
       }
     }
     function preferred() {
+      // Light is the default: the docs and their diagrams are tuned for light,
+      // and a first visit should never open in an unreadable dark diagram. Dark
+      // remains available via the toggle and is remembered per browser.
       var stored = null;
       try { stored = localStorage.getItem('mako-theme'); } catch (e) { /* private mode */ }
-      if (stored === 'light' || stored === 'dark') { return stored; }
-      return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
-        ? 'dark' : 'light';
+      return stored === 'dark' ? 'dark' : 'light';
     }
     function init() {
       apply(preferred());

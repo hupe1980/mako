@@ -14,7 +14,7 @@
 //! | 31001, 31002 | mako-gpke | PreisblattNetznutzung (Abschlag / NN-Rechnung) | gpke.abrechnung.annehmen / ablehnen |
 //! | 31005, 31006 | mako-gpke | MMMA Strom prices (MMM-Rechnung) | gpke.abrechnung.annehmen / ablehnen |
 //! | 31003, 31011 | mako-wim-gas / mako-geli-gas | PreisblattNetznutzung Gas | wim.gas.rechnung.annehmen / wim.geli.gas.rechnung.annehmen |
-//! | 31004 | mako-wim-gas (Stornorechnung) | — (auto-accept) | wim.gas.stornorechnung.annehmen |
+//! | 31004 | **any Sparte** — universal Storno (GPKE/MMM/WiM/Kapazität/AWH/GeLi) | — (arithmetic-only) | invoic.stornorechnung.annehmen / ablehnen |
 //! | 31007, 31008 | mako-gabi-gas | PreisblattNetznutzung Gas + MMM check | gabi.gas.mmm.rechnung.annehmen / ablehnen |
 //! | 31009 | mako-wim | PreisblattMessung (MSB) | wim.rechnung.annehmen / ablehnen |
 
@@ -54,8 +54,9 @@ const INVOIC_PIDS: &[u32] = &[31001, 31002, 31005, 31006];
 /// | 31008 | GaBi Gas selbst ausgest. MMM-Rechnung      | mako-gabi-gas   |
 /// | 31011 | GeLi Gas Rechnung sonstige Leistung (AWH)  | mako-geli-gas   |
 ///
-/// PID 31004 (WiM Gas Stornorechnung) is handled separately because it
-/// auto-approves without a tariff check.
+/// PID 31004 (Stornorechnung) is handled separately by [`handle_stornorechnung`]
+/// — it is Sparte-neutral (any commodity) and runs an arithmetic-only check, so it
+/// belongs in neither this Gas set nor the Strom `INVOIC_PIDS`.
 const GAS_INVOIC_PIDS: &[u32] = &[31003, 31007, 31008, 31011];
 
 /// GaBi Gas MMM PIDs — these need the additional MMM settlement price check
@@ -143,9 +144,12 @@ pub async fn handle_webhook(
         let subject = event["subject"].as_str().unwrap_or("").to_owned();
         handle_gas_invoic_initiated(state, subject, pid, data.clone()).await;
     } else if ce_type == mako_events::mako::PROCESS_INITIATED && pid == 31004 {
-        // WiM Gas Stornorechnung: auto-accept without tariff check.
+        // Stornorechnung (PID 31004): a Sparte-neutral, cross-process cancellation
+        // invoice (INVOIC AHB §3.1.2 — one universal Anwendungsfall spanning GPKE,
+        // MMM, WiM Strom+Gas, Kapazitätsabrechnung, AWH, GeLi Gas). Arithmetic-only
+        // check; the Sparte is read from the invoice, not assumed.
         let subject = event["subject"].as_str().unwrap_or("").to_owned();
-        handle_gas_stornorechnung(state, subject, data.clone()).await;
+        handle_stornorechnung(state, subject, data.clone()).await;
     } else if ce_type == mako_events::mako::PROCESS_INITIATED && pid == 31009 {
         // WiM MSB-Rechnung (PID 31009): uses PreisblattMessung, not NNE.
         let subject = event["subject"].as_str().unwrap_or("").to_owned();
@@ -760,7 +764,7 @@ async fn handle_gas_invoic_initiated(
         Ok(r) => r,
         Err(err) => {
             warn!(%err, pid, "invoicd: Gas invoice could not deserialize Rechnung — writing DLQ");
-            write_gas_dlq(&state, &data, process_id, pid).await;
+            write_invoic_dlq(&state, &data, process_id, pid).await;
             return;
         }
     };
@@ -995,19 +999,27 @@ fn gas_billing_commands(pid: u32) -> (&'static str, &'static str) {
     }
 }
 
-/// Handle PID 31004 — WiM Gas Stornorechnung (cancellation invoice).
+/// Handle PID 31004 — Stornorechnung (cancellation invoice), any Sparte.
 ///
-/// A Stornorechnung cancels a previously issued PID 31003 invoice.  It carries a
-/// negative `gesamtbrutto`.  Arithmetic and period checks still run; tariff checks
-/// are skipped (cancellations don't carry tariff positions).  The outcome is always
-/// `AcceptedPartial` unless arithmetic fails.
-async fn handle_gas_stornorechnung(state: HandlerState, subject: String, data: serde_json::Value) {
+/// PID 31004 is a single, universal, **Sparte-neutral** Storno Anwendungsfall
+/// (BDEW INVOIC AHB 1.0b §3.1.2): the same Prüfidentifikator cancels an original
+/// invoice from *any* process — GPKE Teil 2/3, MMM Strom+Gas, WiM Strom+Gas,
+/// Kapazitätsabrechnung, AWH Sperren/Technik, GeLi Gas. The originating invoice
+/// type rides in `IMD+7081` and the reference to the original in `RFF+OI`
+/// (`original_rechnungsnummer`); the Sparte is a property of the market partners,
+/// carried on the BO4E `Rechnung.sparte` — never assumed to be Gas.
+///
+/// A Stornorechnung carries negated amounts from the original invoice, so tariff
+/// checks are skipped: only the Storno reference, period, and arithmetic are
+/// validated ([`InvoicCheckEngine::check_storno`]). The outcome is
+/// `AcceptedPartial` unless a check fails.
+async fn handle_stornorechnung(state: HandlerState, subject: String, data: serde_json::Value) {
     let process_id = match subject.parse::<Uuid>() {
         Ok(id) => id,
         Err(_) => {
             warn!(
                 subject,
-                "invoicd: WiM Gas 31004 event has no parseable UUID subject"
+                "invoicd: 31004 Stornorechnung event has no parseable UUID subject"
             );
             return;
         }
@@ -1024,11 +1036,19 @@ async fn handle_gas_stornorechnung(state: HandlerState, subject: String, data: s
     let rechnung: Rechnung = match serde_json::from_value(rechnung_value.clone()) {
         Ok(r) => r,
         Err(err) => {
-            warn!(%err, "invoicd: WiM Gas 31004 Stornorechnung deserialization failed — writing DLQ");
-            write_gas_dlq(&state, &data, process_id, 31004).await;
+            warn!(%err, "invoicd: 31004 Stornorechnung deserialization failed — writing DLQ");
+            write_invoic_dlq(&state, &data, process_id, 31004).await;
             return;
         }
     };
+
+    // Sparte is carried on the invoice (BO4E `sparte`, resolved from the market
+    // partner IDs per AHB conditions [492]/[493]); it drives labelling/audit, not
+    // the arithmetic. Absent → "UNBEKANNT" (still processed — the check is neutral).
+    let sparte = rechnung
+        .sparte
+        .as_ref()
+        .map_or("UNBEKANNT", rubo4e::current::Sparte::as_wire);
 
     let received_at = OffsetDateTime::now_utc();
     let malo_id: Option<String> = rechnung
@@ -1037,21 +1057,13 @@ async fn handle_gas_stornorechnung(state: HandlerState, subject: String, data: s
         .and_then(|ml| ml.marktlokations_id.as_ref())
         .map(|id| id.to_string());
 
-    // Stornorechnung: run arithmetic + period checks only (no tariff check).
+    // Stornorechnung: arithmetic-only check (Storno reference + period + totals),
+    // Sparte-neutral — no tariff/Preisblatt lookup.
     let storno_config = invoic_checker::CheckConfig {
         require_tariff: false,
         ..(*state.check_config).clone()
     };
-    let report = {
-        let empty_store = invoic_checker::tariff::InMemoryPreisblattStore::new();
-        InvoicCheckEngine::check(
-            31004,
-            &sender_mp_id,
-            &rechnung,
-            &empty_store,
-            &storno_config,
-        )
-    };
+    let report = InvoicCheckEngine::check_storno(31004, &rechnung, &storno_config);
 
     let checked_at = OffsetDateTime::now_utc();
     let should_dispute = matches!(report.outcome, invoic_checker::CheckOutcome::Dispute);
@@ -1061,8 +1073,8 @@ async fn handle_gas_stornorechnung(state: HandlerState, subject: String, data: s
         "AcceptedPartial"
     };
 
-    info!(process_id = %process_id, pid = 31004, outcome = outcome_str,
-        "invoicd: WiM Gas Stornorechnung check complete");
+    info!(process_id = %process_id, pid = 31004, sparte, outcome = outcome_str,
+        "invoicd: Stornorechnung check complete");
 
     if let Some(pool) = &state.pool {
         let findings_json =
@@ -1088,20 +1100,23 @@ async fn handle_gas_stornorechnung(state: HandlerState, subject: String, data: s
             tenant: state.tenant.clone(),
         };
         if let Err(err) = pg::upsert_receipt(pool, &row).await {
-            warn!(%err, process_id = %process_id, "invoicd: Gas 31004 persist failed — § 147 AO / GoBD gap");
+            warn!(%err, process_id = %process_id, "invoicd: 31004 Storno persist failed — § 147 AO / GoBD gap");
         }
     }
 
+    // Sparte-neutral storno command — a Strom storno is no longer forced onto the
+    // Gas `wim.gas.*` namespace. makod settles/disputes the referenced invoice's
+    // process regardless of Sparte.
     let cmd_name = if should_dispute {
-        "wim.gas.stornorechnung.ablehnen"
+        "invoic.stornorechnung.ablehnen"
     } else {
-        "wim.gas.stornorechnung.annehmen"
+        "invoic.stornorechnung.annehmen"
     };
-    let idem = Uuid::new_v5(&process_id, b"gas31004").to_string();
+    let idem = Uuid::new_v5(&process_id, b"invoic-storno").to_string();
     let payload = if should_dispute {
-        serde_json::json!({ "invoice_ref": invoice_ref, "ablehnungsgrund": dispute_reason(&report.findings) })
+        serde_json::json!({ "invoice_ref": invoice_ref, "sparte": sparte, "ablehnungsgrund": dispute_reason(&report.findings) })
     } else {
-        serde_json::json!({ "invoice_ref": invoice_ref })
+        serde_json::json!({ "invoice_ref": invoice_ref, "sparte": sparte })
     };
     let cmd = mako_markt::makod_client::ForwardCommand {
         marktrolle: None,
@@ -1117,12 +1132,17 @@ async fn handle_gas_stornorechnung(state: HandlerState, subject: String, data: s
                     .await;
             }
         }
-        Err(e) => warn!(%e, process_id = %process_id, "invoicd: Gas 31004 dispatch failed"),
+        Err(e) => warn!(%e, process_id = %process_id, "invoicd: 31004 Storno dispatch failed"),
     }
 }
 
-/// Write a DLQ entry for a Gas invoice that could not be processed.
-async fn write_gas_dlq(state: &HandlerState, data: &serde_json::Value, process_id: Uuid, pid: u32) {
+/// Write a DLQ entry for an INVOIC that could not be processed (any Sparte).
+async fn write_invoic_dlq(
+    state: &HandlerState,
+    data: &serde_json::Value,
+    process_id: Uuid,
+    pid: u32,
+) {
     if let Some(pool) = &state.pool {
         let reason = format!(
             "PID {pid}: rechnung unavailable or unparseable — manual reconciliation required"

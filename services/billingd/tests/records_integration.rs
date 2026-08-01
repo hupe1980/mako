@@ -7,11 +7,11 @@
 //! zero tests over `pg.rs` — the same gap that let three runtime defects ship
 //! in einsd before its suite existed.
 //!
+//! PostgreSQL is self-managed via testcontainers (a Docker daemon is the only
+//! requirement); the tests skip gracefully when Docker is unavailable:
+//!
 //! ```bash
-//! docker run -d --name billingd-test -e POSTGRES_PASSWORD=test \
-//!     -e POSTGRES_DB=billingd -p 55435:5432 postgres:17-alpine
-//! export BILLINGD_TEST_DATABASE_URL="postgres://postgres:test@localhost:55435/billingd"
-//! cargo test -p billingd --test records_integration -- --include-ignored
+//! just test-billingd-db
 //! ```
 //!
 //! Every test provisions its own schema, so they leave nothing behind.
@@ -25,55 +25,14 @@ use uuid::Uuid;
 const SCHEMA: &str = include_str!("../migrations/0001_schema.sql");
 
 /// Connect and provision a fresh schema, or skip when no database is configured.
-async fn test_pool(test_name: &str) -> Option<PgPool> {
-    let base = std::env::var("BILLINGD_TEST_DATABASE_URL").ok()?;
-    let admin = PgPool::connect(&base).await.ok()?;
-
-    let schema = format!("t_{test_name}");
-    sqlx::query(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE"))
-        .execute(&admin)
+async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
+    let (url, container) = pg_container().await?;
+    let pool = PgPool::connect(&url).await.ok()?;
+    sqlx::raw_sql(SCHEMA)
+        .execute(&pool)
         .await
-        .expect("drop schema");
-    sqlx::query(&format!("CREATE SCHEMA {schema}"))
-        .execute(&admin)
-        .await
-        .expect("create schema");
-    admin.close().await;
-
-    let opts: sqlx::postgres::PgConnectOptions = base.parse().expect("parse url");
-    let pool = PgPool::connect_with(opts.options([("search_path", schema.as_str())]))
-        .await
-        .expect("connect to test schema");
-
-    for stmt in split_statements(SCHEMA) {
-        sqlx::query(&stmt)
-            .execute(&pool)
-            .await
-            .unwrap_or_else(|e| panic!("schema statement failed: {e}\n{stmt}"));
-    }
-    Some(pool)
-}
-
-/// Split the DDL on `;` at statement level, keeping `$$`-quoted bodies intact.
-fn split_statements(sql: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut current = String::new();
-    let mut in_dollar = false;
-    for line in sql.lines() {
-        if line.matches("$$").count() % 2 == 1 {
-            in_dollar = !in_dollar;
-        }
-        current.push_str(line);
-        current.push('\n');
-        if !in_dollar && line.trim_end().ends_with(';') {
-            let stmt = current.trim().to_owned();
-            if !stmt.is_empty() && !stmt.lines().all(|l| l.trim().starts_with("--")) {
-                out.push(stmt);
-            }
-            current.clear();
-        }
-    }
-    out
+        .expect("apply schema");
+    Some((pool, container))
 }
 
 async fn insert_draft(pool: &PgPool, netto: rust_decimal::Decimal) -> Uuid {
@@ -96,9 +55,9 @@ async fn insert_draft(pool: &PgPool, netto: rust_decimal::Decimal) -> Uuid {
 
 /// A re-run may replace a draft — same period, same product, new numbers.
 #[tokio::test]
-#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_rerun_replaces_a_draft() {
-    let Some(pool) = test_pool("rerun_draft").await else {
+    let Some((pool, _pg)) = test_pool("rerun_draft").await else {
         return;
     };
     let first = insert_draft(&pool, dec!(100)).await;
@@ -117,9 +76,9 @@ async fn a_rerun_replaces_a_draft() {
 /// A dispatched record is never overwritten — the stored Rechnung is what the
 /// counterparty received, and a re-run must be told to use the correction path.
 #[tokio::test]
-#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_dispatched_record_refuses_the_overwrite() {
-    let Some(pool) = test_pool("dispatched_guard").await else {
+    let Some((pool, _pg)) = test_pool("dispatched_guard").await else {
         return;
     };
     let id = insert_draft(&pool, dec!(100)).await;
@@ -160,9 +119,9 @@ async fn a_dispatched_record_refuses_the_overwrite() {
 /// A correction is a new row referencing its original; the original survives
 /// untouched, and the stated reason is persisted.
 #[tokio::test]
-#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_correction_references_its_untouched_original() {
-    let Some(pool) = test_pool("correction_chain").await else {
+    let Some((pool, _pg)) = test_pool("correction_chain").await else {
         return;
     };
     let original = insert_draft(&pool, dec!(100)).await;
@@ -223,9 +182,9 @@ async fn a_correction_references_its_untouched_original() {
 /// original via `count(*) WHERE original_record_id = $1` — this proves that
 /// exact detection query sees the first correction.
 #[tokio::test]
-#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_second_correction_of_the_same_original_is_detected() {
-    let Some(pool) = test_pool("second_correction").await else {
+    let Some((pool, _pg)) = test_pool("second_correction").await else {
         return;
     };
     let original = insert_draft(&pool, dec!(100)).await;
@@ -279,9 +238,9 @@ async fn a_second_correction_of_the_same_original_is_detected() {
 /// §40b: the month's `billing_run_log` row accumulates daily sweeps, and a
 /// single failed sweep marks the whole month for operator attention.
 #[tokio::test]
-#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_monthly_run_log_accumulates_daily_sweeps() {
-    let Some(pool) = test_pool("run_log").await else {
+    let Some((pool, _pg)) = test_pool("run_log").await else {
         return;
     };
     pg::record_billing_run(&pool, "9910000000002", "9910000000002", 2026, 7, 5, 0)
@@ -321,9 +280,9 @@ async fn the_monthly_run_log_accumulates_daily_sweeps() {
 /// §40b Abs. 2: the monthly Abrechnungsinformation is claimed exactly once
 /// per MaLo and month — the second daily sweep must not re-send it.
 #[tokio::test]
-#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_monthly_abrechnungsinfo_is_claimed_exactly_once() {
-    let Some(pool) = test_pool("abrechnungsinfo").await else {
+    let Some((pool, _pg)) = test_pool("abrechnungsinfo").await else {
         return;
     };
     let first = pg::claim_abrechnungsinfo(&pool, "9910000000002", "51238696781", 2026, 6)
@@ -370,9 +329,9 @@ async fn insert_period(
 /// previous period end (gap/overlap detection) and the consecutive-estimate
 /// count — all from real SQL.
 #[tokio::test]
-#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn risk_context_reads_baseline_continuity_and_estimates() {
-    let Some(pool) = test_pool("risk_context").await else {
+    let Some((pool, _pg)) = test_pool("risk_context").await else {
         return;
     };
     let a = insert_period(
@@ -429,9 +388,9 @@ async fn risk_context_reads_baseline_continuity_and_estimates() {
 /// `billing_records` CHECK list. Before the fix `POST …/tarifwechsel` inserted
 /// `'TARIFWECHSEL'`, which the CHECK rejected (23514) → 500 on every call.
 #[tokio::test]
-#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_tarifwechsel_record_is_a_valid_category() {
-    let Some(pool) = test_pool("tarifwechsel_category").await else {
+    let Some((pool, _pg)) = test_pool("tarifwechsel_category").await else {
         return;
     };
     let id = pg::insert_billing_record(
@@ -463,9 +422,9 @@ async fn a_tarifwechsel_record_is_a_valid_category() {
 /// same period is then refused instead of silently replacing an invoice already
 /// on its way to the ERP. It is idempotent and scoped to still-generated rows.
 #[tokio::test]
-#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn dispatch_stamp_locks_the_record_against_a_silent_rerun() {
-    let Some(pool) = test_pool("dispatch_stamp").await else {
+    let Some((pool, _pg)) = test_pool("dispatch_stamp").await else {
         return;
     };
     let id = insert_draft(&pool, dec!(100)).await;
@@ -509,9 +468,9 @@ async fn dispatch_stamp_locks_the_record_against_a_silent_rerun() {
 /// and anomaly history all filter on it. Guards the cross-tenant disclosure the
 /// unscoped `SELECT … WHERE id = $1` allowed.
 #[tokio::test]
-#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn reads_are_tenant_scoped() {
-    let Some(pool) = test_pool("tenant_isolation").await else {
+    let Some((pool, _pg)) = test_pool("tenant_isolation").await else {
         return;
     };
     const OWNER: &str = "9910000000002";
@@ -571,9 +530,9 @@ async fn reads_are_tenant_scoped() {
 /// The EN 16931 semantic model is attached to the record and round-trips — the
 /// XRechnung/CII/UBL renderers read it back, never re-parsing BO4E.
 #[tokio::test]
-#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_en16931_model_is_attached_and_round_trips() {
-    let Some(pool) = test_pool("en16931_attach").await else {
+    let Some((pool, _pg)) = test_pool("en16931_attach").await else {
         return;
     };
     let id = insert_draft(&pool, dec!(100)).await;
@@ -601,9 +560,9 @@ async fn the_en16931_model_is_attached_and_round_trips() {
 
 /// HELD records enter the review queue and can be released exactly once.
 #[tokio::test]
-#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_held_record_is_queued_and_released_exactly_once() {
-    let Some(pool) = test_pool("risk_release").await else {
+    let Some((pool, _pg)) = test_pool("risk_release").await else {
         return;
     };
     let id = insert_period(
@@ -644,4 +603,23 @@ async fn a_held_record_is_queued_and_released_exactly_once() {
         .await
         .expect("second release");
     assert!(again.is_none(), "a record releases exactly once");
+}
+/// The Postgres container guard a test holds until it ends — dropping it removes
+/// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
+type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
+
+/// Start a fresh throwaway `postgres:17-alpine` and return its URL plus the
+/// container guard. `None` when Docker is unavailable (tests skip gracefully).
+async fn pg_container() -> Option<(String, PgContainer)> {
+    use testcontainers::ImageExt;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
+    let container = Postgres::default()
+        .with_tag("17-alpine")
+        .start()
+        .await
+        .ok()?;
+    let port = container.get_host_port_ipv4(5432).await.ok()?;
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
+    Some((url, container))
 }

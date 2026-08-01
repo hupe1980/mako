@@ -8,7 +8,14 @@
 //! | PID   | Process                           | Direction  |
 //! |-------|-----------------------------------|------------|
 //! | 31003 | WiM-Rechnung (MSB-Gerätewechsel)  | gMSB → NB  |
-//! | 31004 | Stornorechnung WiM Gas            | gMSB → NB  |
+//! | 31004 | Stornorechnung (universal Storno) | ReErst → ReEmpf |
+//!
+//! PID 31004 is the **Sparte-neutral, cross-process universal Storno** (INVOIC AHB
+//! §3.1.2): the same Prüfidentifikator cancels an original invoice from any process
+//! (GPKE, MMM, WiM Strom+Gas, Kapazität, AWH, GeLi). Its receive → validate →
+//! settle/dispute state machine is commodity-agnostic, so this generic INVOIC
+//! workflow hosts it for both Sparten; `invoicd` runs the Sparte-neutral
+//! `check_storno` plausibility check and dispatches `invoic.stornorechnung.*`.
 //!
 //! # State machine
 //!
@@ -24,8 +31,13 @@
 //!
 //! - **BK7-24-01-009** — WiM Gas process framework (Beschluss 12.09.2025)
 //! - **INVOIC AHB 1.0** — EDI@Energy invoice message format (valid FV2025-10-01)
-//! - **CONTRL deadline** — 10 Werktage per BK7-24-01-009 §5
-//! - **APERAK deadline** — 10 Werktage per BK7-24-01-009 §5
+//! - **Settlement-response (REMADV) window** — *"zum Zahlungsziel"* (the invoice's
+//!   Fälligkeitsdatum, DTM+265). For the WiM Gas Rechnung this is floored at 10
+//!   Werktage; for the Sparte-neutral Storno (31004) the deadline is derived from
+//!   the Fälligkeitsdatum directly (Strom has no 10-Werktage floor). The deadline
+//!   is computed per-message by the ingest dispatcher, not a fixed constant here.
+//! - **Processability (CONTRL/APERAK) window** — next Werktag 12:00 (APERAK AHB
+//!   §2.3.1/§2.4.1); this is a message-level ack, distinct from the settlement window.
 
 use std::collections::HashMap;
 
@@ -49,17 +61,22 @@ use mako_engine::{
 /// | 31004 | Stornorechnung WiM Gas (gMSB → NB)        |
 pub const WIM_GAS_INVOIC_PIDS: &[u32] = &[
     31003, // WiM-Rechnung (gMSB → NB)
-    31004, // Stornorechnung WiM Gas (gMSB → NB)
+    31004, // Stornorechnung — Sparte-neutral universal Storno hosted here (AHB §3.1.2)
 ];
 
 /// Workflow key used for PID router registration.
 pub const WORKFLOW_NAME: &str = "wim-gas-invoic";
 
-/// Deadline label for the WiM Gas INVOIC settlement response window.
+/// Deadline label for the INVOIC settlement-response window.
 ///
-/// Per BK7-24-01-009 §5, the NB must settle or dispute an inbound INVOIC within
-/// **10 Werktage** of receipt. Register a [`mako_engine::deadline::Deadline`]
-/// with this label immediately after the `ValidationPassed` event.
+/// The *due date* under this label is computed per-message by the ingest
+/// dispatcher, not fixed here (see [`crate::invoic`] module docs):
+/// - **WiM Gas Rechnung (31003):** 10 Werktage (BK7-24-01-009 floor).
+/// - **Stornorechnung (31004):** the invoice's Fälligkeitsdatum (Zahlungsziel,
+///   DTM+265) — Sparte-neutral; falls back to +10 Werktage when the invoice omits it.
+///
+/// Register a [`mako_engine::deadline::Deadline`] with this label immediately after
+/// the `ValidationPassed` event.
 pub const SETTLEMENT_WINDOW_LABEL: &str = "wim-gas-invoic-settlement-deadline";
 
 /// REMADV PIDs for WiM Gas billing (inbound Zahlungsavis, gMSB invoicer role).

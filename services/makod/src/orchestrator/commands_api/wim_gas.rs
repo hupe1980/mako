@@ -182,7 +182,7 @@ pub(super) async fn dispatch_wim_gas_invoic(
     let reason = payload
         .get("ablehnungsgrund")
         .and_then(|v| v.as_str())
-        .unwrap_or("Automatisch ermittelte Abweichung — WiM Gas 31003/31004")
+        .unwrap_or("Automatisch ermittelte Abweichung — INVOIC (31003 / 31004 Storno)")
         .to_owned();
     dispatch_to_process::<WimGasInvoicWorkflow, _>(
         state,
@@ -219,7 +219,13 @@ pub(super) fn cmd_wim_gas_rechnung_ablehnen<'a>(
     Box::pin(dispatch_wim_gas_invoic(s, p, false))
 }
 
-pub(super) fn cmd_wim_gas_stornorechnung_annehmen<'a>(
+/// Settle a PID 31004 Stornorechnung (any Sparte).
+///
+/// Sparte-neutral: the storno cancels an original invoice from any process, and
+/// the settle/dispute transition on the referenced process is identical for Strom
+/// and Gas. Reuses [`dispatch_wim_gas_invoic`] — the underlying INVOIC settle/
+/// dispute state machine is commodity-agnostic (keyed on `invoice_ref`).
+pub(super) fn cmd_invoic_stornorechnung_annehmen<'a>(
     s: &'a CommandsApiState,
     p: &'a serde_json::Value,
 ) -> std::pin::Pin<
@@ -228,7 +234,9 @@ pub(super) fn cmd_wim_gas_stornorechnung_annehmen<'a>(
     Box::pin(dispatch_wim_gas_invoic(s, p, true))
 }
 
-pub(super) fn cmd_wim_gas_stornorechnung_ablehnen<'a>(
+/// Dispute a PID 31004 Stornorechnung (any Sparte). See
+/// [`cmd_invoic_stornorechnung_annehmen`].
+pub(super) fn cmd_invoic_stornorechnung_ablehnen<'a>(
     s: &'a CommandsApiState,
     p: &'a serde_json::Value,
 ) -> std::pin::Pin<

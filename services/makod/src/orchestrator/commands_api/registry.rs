@@ -527,19 +527,42 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(31003),
         dispatch: cmd_wim_gas_rechnung_ablehnen,
     },
-    // PID 31004 Stornorechnung: invoicd auto-accepts (arithmetic-only check, AcceptedPartial)
-    // but still dispatches the settle/dispute command for completeness.
+    // PID 31004 Stornorechnung: a single **Sparte-neutral, cross-process** universal
+    // Storno (INVOIC AHB §3.1.2 — GPKE/MMM/WiM Strom+Gas/Kapazität/AWH/GeLi). invoicd
+    // runs the arithmetic-only check (AcceptedPartial) and dispatches settle/dispute.
+    // The receiver can hold any of the storno-facing roles, so permitted_roles spans
+    // both Sparten (NB/GNB, LF variants, MSB, BKV, ESA for WiM Strom Teil 2).
     CommandDescriptor {
-        name: "wim.gas.stornorechnung.annehmen",
-        permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
+        name: "invoic.stornorechnung.annehmen",
+        permitted_roles: &[
+            Marktrolle::Nb,
+            Marktrolle::Gnb,
+            Marktrolle::Lf,
+            Marktrolle::Lfg,
+            Marktrolle::Lfn,
+            Marktrolle::Lfa,
+            Marktrolle::Msb,
+            Marktrolle::Bkv,
+            Marktrolle::Esa,
+        ],
         primary_pid: pid(31004),
-        dispatch: cmd_wim_gas_stornorechnung_annehmen,
+        dispatch: cmd_invoic_stornorechnung_annehmen,
     },
     CommandDescriptor {
-        name: "wim.gas.stornorechnung.ablehnen",
-        permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
+        name: "invoic.stornorechnung.ablehnen",
+        permitted_roles: &[
+            Marktrolle::Nb,
+            Marktrolle::Gnb,
+            Marktrolle::Lf,
+            Marktrolle::Lfg,
+            Marktrolle::Lfn,
+            Marktrolle::Lfa,
+            Marktrolle::Msb,
+            Marktrolle::Bkv,
+            Marktrolle::Esa,
+        ],
         primary_pid: pid(31004),
-        dispatch: cmd_wim_gas_stornorechnung_ablehnen,
+        dispatch: cmd_invoic_stornorechnung_ablehnen,
     },
     // GeLi Gas AWH Sperrprozesse INVOIC (PID 31011): VNB bills LFN/LFA for services
     // rendered during the gas disconnection/reconnection process.
@@ -730,5 +753,36 @@ mod tests {
         for d in COMMAND_REGISTRY {
             assert!(seen.insert(d.name), "duplicate registry entry {:?}", d.name);
         }
+    }
+
+    /// PID 31004 Stornorechnung is dispatched under the **Sparte-neutral**
+    /// `invoic.stornorechnung.*` names (not the retired Gas-only
+    /// `wim.gas.stornorechnung.*`), bound to PID 31004, and reachable by both
+    /// Strom (NB) and Gas (GNB) receivers — so a Strom storno is no longer
+    /// mislabelled Gas. Regression guard for INVOIC AHB §3.1.2.
+    #[test]
+    fn storno_command_is_sparte_neutral() {
+        for name in [
+            "invoic.stornorechnung.annehmen",
+            "invoic.stornorechnung.ablehnen",
+        ] {
+            let d = COMMAND_REGISTRY
+                .iter()
+                .find(|d| d.name == name)
+                .unwrap_or_else(|| panic!("{name} must be registered"));
+            assert_eq!(d.primary_pid, pid(31004), "{name} must bind PID 31004");
+            assert!(
+                d.permitted_roles.contains(&Marktrolle::Nb)
+                    && d.permitted_roles.contains(&Marktrolle::Gnb),
+                "{name} must permit both Strom (Nb) and Gas (Gnb) receivers"
+            );
+        }
+        // The Gas-only names are gone (hard cut — no backward compatibility).
+        assert!(
+            !COMMAND_REGISTRY
+                .iter()
+                .any(|d| d.name.starts_with("wim.gas.stornorechnung")),
+            "retired Gas-only storno command names must not linger"
+        );
     }
 }
