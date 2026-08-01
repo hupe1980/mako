@@ -468,7 +468,7 @@ impl ServerHandler for PortaldMcpHandler {
              - `billing-dispute` — investigate a disputed invoice\n\
              - `eeg-foerderung-check` — EEG Förderungsende options workflow\n\n\
              **Informatorisches Unbundling (§9 EnWG):**\n\
-             portald is an LF-role service. Unbundled NB services (netzbilanzd, sperrd, nis-syncd)\n\
+             portald is an LF-role service. Unbundled NB services (netzbilanzd, sperrd)\n\
              are NOT accessible here. For full O2C cycle: use `billingd` MCP `order-to-cash` prompt.",
         )
     }

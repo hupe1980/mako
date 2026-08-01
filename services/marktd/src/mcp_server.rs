@@ -1087,7 +1087,7 @@ Returns the version_id that was queued. Actual dispatch is asynchronous. \
     /// Gas billing zone routing (`StandorteigenschaftenGas`: druckstufe).
     ///
     /// Returns 404-style error when the MeLo is unknown or has no Standorteigenschaften
-    /// yet (populated by `nis-syncd` or a WiM Stammdaten PUT).
+    /// yet (populated by a WiM Stammdaten PUT or a manual PUT).
     #[tool(
         description = "Read BO4E Standorteigenschaften for a MeLo (needed for Redispatch 2.0 and Gas zone routing)",
         annotations(read_only_hint = true, open_world_hint = false)

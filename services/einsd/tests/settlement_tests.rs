@@ -765,12 +765,18 @@ fn managementpraemie_large_plant_reduced() {
 
 #[test]
 fn negativpreis_threshold_at_boundary() {
-    use eeg_billing::negativpreis_rule_applies;
+    use eeg_billing::{EegGesetz, negativpreis_rule_applies_for_version};
     // EEG 2023 §51: any negative-price period applies (1h threshold, removed old 6h rule)
-    assert!(!negativpreis_rule_applies(0));
-    assert!(negativpreis_rule_applies(1));
-    assert!(negativpreis_rule_applies(6));
-    assert!(negativpreis_rule_applies(24));
+    assert!(!negativpreis_rule_applies_for_version(
+        0,
+        EegGesetz::Eeg2023
+    ));
+    assert!(negativpreis_rule_applies_for_version(1, EegGesetz::Eeg2023));
+    assert!(negativpreis_rule_applies_for_version(6, EegGesetz::Eeg2023));
+    assert!(negativpreis_rule_applies_for_version(
+        24,
+        EegGesetz::Eeg2023
+    ));
 }
 
 // ── §50a EEG 2023 — Flexibilitätszuschlag (neue Anlagen) ─────────────────────

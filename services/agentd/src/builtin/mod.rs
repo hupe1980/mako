@@ -23,7 +23,7 @@
 //!
 //! ```toml
 //! [bundled_agents]
-//! enable_all = true        # activate all 29 built-in specialists
+//! enable_all = true        # activate all 28 built-in specialists
 //! default_provider = "openai"
 //! default_model = "gpt-4o-mini"
 //!
@@ -78,7 +78,6 @@ static BUILTIN_AGENTS: &[BuiltinAgentDef] = &[
     TARIFBD_AGENT,
     PROCESSD_AGENT,
     SPERRD_AGENT,
-    NIS_SYNCD_AGENT,
     PORTALD_AGENT,
     REGULATORY_REPORTING_AGENT,
     REPLACEMENT_VALUE_AGENT,
@@ -706,35 +705,34 @@ RECOMMENDED_SUBSTITUTION: [method per § 60 Abs. 2 MsbG]
 
 const GRID_ANOMALY_AGENT: BuiltinAgentDef = BuiltinAgentDef {
     name: "grid-anomaly-agent",
-    specialty: "NB contract and grid topology anomaly detection. Detects drift between nis-syncd grid data and marktd malo_grid table, flags NB contract gaps that would block NB STP auto-decisions.",
+    specialty: "NB grid-assignment and contract gap detection. Flags MaLos whose marktd malo_grid record is missing or lacks a valid NB contract (Vertrag), which would block NB STP auto-decisions (processd check 5).",
     system_prompt: "\
-You are the grid topology anomaly and NB contract specialist.
+You are the NB grid-assignment and contract specialist.
 
 ## TRIGGERED BY
-- `de.markt.grid.drift.detected` — nis-syncd detected NIS/GIS drift
 - `de.markt.nb-contract.updated` — NB contract changed
+- `de.markt.malo.updated` — MaLo master data changed
 
 ## PROCEDURE
 
 1. Extract `malo_id` from event payload.
-2. Call marktd `get_malo_grid` for current NB assignment.
-3. Call nis-syncd `check_malo_grid` to verify NIS/GIS data matches marktd.
-4. If drift: identify the discrepancy (NB-ID mismatch, missing grid record, etc.).
-5. Check if marktd has a valid NB contract (Vertrag) for the NB MP-ID.
-6. Without valid NB contract: NB STP processd `check_anmeldung` would fail check 5.
+2. Call marktd `get_malo_grid` for the current NB assignment (nb_mp_id, Bilanzierungsgebiet).
+3. If no malo_grid record: MISSING — the NB-role grid PUT has not been provisioned for this MaLo.
+4. Check if marktd has a valid NB contract (Vertrag) for the NB MP-ID.
+5. Without a valid NB contract: NB STP processd `check_anmeldung` would fail check 5.
 
 ## OUTPUT FORMAT
 ```
-GRID_STATUS: [CONSISTENT|DRIFT|MISSING]
+GRID_STATUS: [OK|MISSING]
 NB_MP_ID: [id or MISSING]
-DRIFT_DESCRIPTION: [or NONE]
+CONTRACT_STATUS: [VALID|MISSING|EXPIRED]
 STP_IMPACT: [NONE|BLOCKING — processd check 5 would fail]
 CORRECTION: [specific action]
 ```",
     default_mcp_servers: &["marktd", "obsd"],
     default_trigger_patterns: &[
-        mako_events::markt::GRID_DRIFT_DETECTED,
         mako_events::markt::NB_CONTRACT_UPDATED,
+        mako_events::markt::MALO_UPDATED,
     ],
     default_max_turns: 10,
     default_use_rag: false,
@@ -936,7 +934,7 @@ Check 6: No active Sperrauftrag blocking delivery
 
 1. Call processd to get the decision detail (which checks passed/failed).
 2. For each failed check: identify the specific data gap in marktd.
-3. Recommend correction (e.g. `nis-syncd` re-run, NB contract update).
+3. Recommend correction (e.g. malo_grid PUT provisioning, NB contract update).
 
 ## OUTPUT FORMAT
 ```
@@ -989,41 +987,6 @@ ACTION: [NONE|ESCALATE_OPERATOR|TRIGGER_IFTSTA]
         mako_events::accounting::SPERRAUFTRAG,
         "de.sperr.*",
         mako_events::mako::PROCESS_COMPLETED,
-    ],
-    default_max_turns: 10,
-    default_use_rag: false,
-};
-
-const NIS_SYNCD_AGENT: BuiltinAgentDef = BuiltinAgentDef {
-    name: "nis-syncd-agent",
-    specialty: "Grid topology drift root-cause analysis. Detects nis-syncd import failures, identifies MaLo records with stale NB assignments, and traces why NB STP processd check 5 fails after grid changes.",
-    system_prompt: "\
-You are the NIS/GIS grid topology import specialist.
-
-## TRIGGERED BY
-- `de.markt.grid.drift.detected` — nis-syncd detected drift
-- `de.markt.malo.updated` — MaLo master data changed
-
-## PROCEDURE
-
-1. Call nis-syncd `get_last_sync_report` for import status.
-2. Identify failed records (e.g. unknown NB-ID, missing MaLo).
-3. Call marktd `get_malo_grid` for affected MaLo records.
-4. Compare nis-syncd NIS data against marktd malo_grid table.
-5. If discrepancy: determine if it would block processd check 5.
-
-## OUTPUT FORMAT
-```
-SYNC_STATUS: [SUCCESS|PARTIAL|FAILED]
-DRIFT_COUNT: [number of drifted records]
-BLOCKING_STP: [YES|NO — would processd check 5 fail?]
-AFFECTED_MALO_IDS: [list or NONE]
-CORRECTION: [rerun sync or manual fix]
-```",
-    default_mcp_servers: &["nis-syncd", "processd", "marktd", "obsd"],
-    default_trigger_patterns: &[
-        mako_events::markt::GRID_DRIFT_DETECTED,
-        mako_events::markt::MALO_UPDATED,
     ],
     default_max_turns: 10,
     default_use_rag: false,

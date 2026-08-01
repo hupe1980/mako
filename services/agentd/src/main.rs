@@ -167,7 +167,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/dlq", get(handlers::get_dlq))
         // Agent discovery — list active agents
         .route("/api/v1/agents", get(handlers::list_agents))
-        // Agent catalog — all 29 built-in definitions (even if not enabled)
+        // Agent catalog — all 28 built-in definitions (even if not enabled)
         .route("/api/v1/agents/catalog", get(handlers::agents_catalog))
         // A2A Agent Cards for each specialist
         .route("/.well-known/agents/:name", get(handlers::agent_card))

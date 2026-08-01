@@ -251,9 +251,9 @@ pub async fn evaluate_and_decide(
 
     // ── 4. Evaluate ───────────────────────────────────────────────────────
     // Build a grid record for netz-checker from the best available source:
-    //  1. `malo_grid` side table (populated by nis-syncd) — most authoritative
-    //  2. `malo.bilanzierungsgebiet` (B1 typed extraction) — fallback when
-    //     nis-syncd has not yet run; raises STP from ~60% to ~80% for SLP MaLos
+    //  1. `malo_grid` side table (NB-role PUT provisioning) — most authoritative
+    //  2. `malo.bilanzierungsgebiet` (B1 typed extraction) — fallback when the
+    //     malo_grid record is absent; raises STP from ~60% to ~80% for SLP MaLos
     let vs_ref = versorgung.as_ref();
     let grid_nc: Option<netz_checker::MaloGridRecord> = if grid.is_some() {
         grid.as_ref().map(Into::into)

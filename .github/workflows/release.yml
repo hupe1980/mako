@@ -443,7 +443,7 @@ jobs:
           platform_safe="${platform_safe//\//-}"
           mkdir -p /tmp/digests
           for service in makod marktd processd invoicd edmd obsd \
-                        netzbilanzd sperrd nis-syncd einsd \
+                        netzbilanzd sperrd einsd \
                         tarifbd billingd accountingd vertragd \
                         portald agentd mabis-syncd; do
             digest=$(echo '${{ steps.bake.outputs.metadata }}' | jq -r --arg svc "$service" '.[$svc]["containerimage.digest"]')
@@ -487,8 +487,6 @@ jobs:
             description: "NNE/KA/MMM/MSB/AWH billing daemon — NB role, GridSettlement, CalculationTrace"
           - service: sperrd
             description: "Sperrung execution tracking daemon — NB role, IFTSTA 21039 auto-dispatch"
-          - service: nis-syncd
-            description: "NIS/GIS grid topology import adapter — NB role, stateless, lifts STP to ≥95%"
           - service: einsd
             description: "Einspeiser Registry + EEG/KWKG Settlement daemon — 10 settlement schemes, EEG/KWKG Gutschrift"
           - service: tarifbd
@@ -502,7 +500,7 @@ jobs:
           - service: portald
             description: "Customer Portal gateway — LF role, REST+SSE, §41 EnWG self-service"
           - service: agentd
-            description: "Multi-agent LLM orchestration daemon — 29 specialists, LanceDB RAG, MCP tools"
+            description: "Multi-agent LLM orchestration daemon — 28 specialists, LanceDB RAG, MCP tools"
           - service: mabis-syncd
             description: "MaBiS UTILTS synchronisation daemon — ÜNB/NB role, Summenzeitreihe day-3/day-8"
     steps:

@@ -41,7 +41,6 @@ flowchart LR
         MAKOD["makod<br/>AS4 sign+encrypt · UNB…UNZ<br/>signed receipts · PID router"]
         PROCESSD["processd<br/>STP decisions"]
         MARKTD["marktd<br/>Market Data Hub"]
-        NIS["nis-syncd<br/>NIS/GIS topology"]
         SPERRD["sperrd<br/>Sperrung tracking"]
     end
 
@@ -60,13 +59,12 @@ flowchart LR
         ACCOUNTINGD["accountingd<br/>FI-CA ledger"]
         PORTALD["portald<br/>customer portal"]
         OBSD["obsd<br/>BNetzA KPIs"]
-        AGENTD["agentd<br/>29 LLM specialists"]
+        AGENTD["agentd<br/>28 LLM specialists"]
         ERP["ERP / operator systems"]
     end
 
     MP <-->|"AS4/ebMS3 · EDIFACT"| MAKOD
     MAKOD --> PROCESSD --> MARKTD
-    NIS --> MARKTD
     MARKTD --> EDMD --> NETZB & EINSD & BILLINGD & MABIS
     MAKOD --> INVOICD
     TARIFBD --> BILLINGD
@@ -113,7 +111,7 @@ flowchart LR
 | `invoic-checker` | INVOIC plausibility — 6 checks (period validity, position arithmetic, document total, tariff match ToU-aware, tariff found, MMM settlement price check) |
 | `netz-checker` | NB Anmeldung validation — 6 deterministic checks, ERC A02/A05/A06/A07/E17 (EBD E_0622 / G_0011); no I/O |
 
-### Production Services (17 daemons)
+### Production Services (16 daemons)
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
@@ -127,13 +125,12 @@ flowchart LR
 | `mabis-syncd` | `:8880` | ÜNB/NB | MaBiS Summenzeitreihen (MSCONS 13003) — aggregates per-MaLo Lastgang from edmd; submits to BIKO on the 10. Werktag; Erstaufschlag 1.–10. WT / Clearing 11.–30. WT / KBKA windows per BK6-24-174 Anlage 3 §3.10 |
 | `einsd` | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes, §52 sanctions, §51 neg-price, 18 MCP tools + 6 prompts |
 | `obsd` | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, automated deadline computation, `GET /api/v1/audit/bnetza-report` |
-| `nis-syncd` | `:9680` | NB | NIS/GIS grid topology import — concurrent sync, drift detection, `check_malo_grid` MCP tool |
 | `tarifbd` | `:9080` | LF | Product & Tariff Catalog — **14 categories** (STROM/GAS/WAERME/WASSER/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/SHARING §42c); OIDC/JWT auth; `product_status` DRAFT/PUBLISHED workflow; §42d comparison portal feed (ETag-cached, BO4E `Tarifinfo`); EPEX Spot for §41a; B2B Angebote ANGELEGT→ANGENOMMEN; **14-tool MCP server + 3 prompts** |
 | `billingd` | `:9280` | LF | Energy Billing Engine — **all commercial prices user-defined in `tarifbd`**; pure calculation via `energy-billing` crate; `STROM` (SLP/RLM Eintarif/HT/NT; `leistungspreis_strom_ct_per_kw_month` demand charge; §14a Modul 1/3 via `ControllableLoadProvider`; §41a Abs. 1 iMSys guard); `GAS` (§25 Nr. 4 MessEV Brennwertkorrektur, Energiesteuer, **§54 KWK exemption**, BEHG CO₂, RLM Leistungspreis, indexed TTF/NCG); `WAERME`; `SOLAR` §42b/§42a; `EEG`/`EINSPEISUNG`; §41a EPEX dynamic; **§41a Abs. 1 iMSys enforcement**; `StromsteuerBefreiung` typed enum (§9 Nr. 1-5); `EnergieQuellen` CO₂ label; `Invoice.warnings`; **historic levy lookups** (`stromsteuer_for_year`, `energiesteuer_gas_for_year`; commodity-aware VAT history incl. the 7 % gas/Fernwärme window 10/2022–03/2024); **VPP auto-billing** (`de.vpp.dispatch.confirmed` → `Rechnung`, RED III Art. 17); **EN 16931 e-invoicing** (semantic model in `en16931_json`, XRechnung 3.0 CII + PEPPOL UBL via `en16931-formats`, B2G profile-validated); **deterministic risk gate** (banded 0–100 scoring, HELD dispatch block + analyst release); **§40b billing-run worker** (cadence from vertragd, monthly iMSys Abrechnungsinformation); **12 MCP tools** |
 | `accountingd` | `:9380` | LF | Massenkontokorrent / Customer Account Ledger — **tamper-evident double-entry ledger** on the `doubleentry` crate (append-only BLAKE3 Merkle log, `O(log n)` inclusion proofs, period seals for GoBD/§146 AO **Festschreibung**, store-level idempotent CE ingest); per-MaLo Kontokorrent + GL contras; ABSCHLAG advance-payment credits; **FIFO open-item clearing**; **Summen- und Saldenliste** §238 HGB; aging analysis; Verzugszinsen §288 BGB; Zahlungsvereinbarung (payment plans); pain.008 single-message multi-group (mandatory Gläubiger-ID EPC AT-02); camt.054 XML + JSON dedup import; keyed-BLAKE3 IBAN hash; OIDC/JWT + inbound HMAC; auto-Mahnwesen |
 | `portald` | `:9480` | LF | Customer Portal read-model gateway — aggregates Lastgang/invoices/balance/VersorgungsStatus/EEG into single REST + SSE API; OIDC auth |
 | `vertragd` | `:9780` | LF | Contract & Customer Management — Kunden (B2C + B2B), Rahmenverträge (cascade Kündigung, `angebot_id` CPQ traceability), Versorgungsverträge; OIDC/JWT auth; Preisgarantie guard (§41 EnWG); `widerruf-kuendigung`; dispatch retry (3×); proactive expiry notifications; GDPR Art. 15/17/20; OIDC→MaLo authorization gateway; **16-tool MCP server + 4 prompts** |
-| `agentd` | `:9580` | All | Multi-agent LLM orchestration — **29 built-in specialists compiled into container image**, activated via `[bundled_agents]`; 3 dispatch modes (`sequential`/`parallel`/`race`); A2A agent cards; OpenAI, Anthropic, AWS Bedrock; LanceDB RAG |
+| `agentd` | `:9580` | All | Multi-agent LLM orchestration — **28 built-in specialists compiled into container image**, activated via `[bundled_agents]`; 3 dispatch modes (`sequential`/`parallel`/`race`); A2A agent cards; OpenAI, Anthropic, AWS Bedrock; LanceDB RAG |
 
 
 
@@ -421,7 +418,6 @@ let repo = InMemoryMaloRepository::default();
 | [invoicd Operator Guide](./docs/invoicd.md) | INVOIC plausibility-check daemon: § 147 AO / GoBD receipts, 6-check pipeline (incl. MMM settlement-price check 6) |
 | [netzbilanzd Operator Guide](./docs/netzbilanzd.md) | NNE/KA/MMM billing daemon: invoice generation, draft lifecycle, dispatch to `makod` |
 | [sperrd Operator Guide](./docs/sperrd.md) | Sperrung execution tracker: order lifecycle, IFTSTA 21039 auto-dispatch, GPKE compliance |
-| [nis-syncd Operator Guide](./docs/nis-syncd.md) | NIS/GIS grid topology import: sync, dry-run, drift detection, STP impact |
 | [edmd Operator Guide](./docs/edmd.md) | Energy Data Management: MSCONS storage, BO4E `Energiemenge` deliveries, `Lastgang`/`Zeitreihe`, `MeterBillingPeriod` |
 | [obsd Operator Guide](./docs/obsd.md) | Observability: process projections, KPI reports, §20 EnWG parity |
 | [einsd Operator Guide](./docs/einsd.md) | EEG/KWKG Settlement: 10 settlement schemes, §20 Abs. 3 Managementprämie, §23a degression, §36h Abs. 1/2 wind, §51 auto-derivation (edmd ¼h feed-in × EPEX spot), §51a Förderende-Verlängerung, Repowering §22, KWKG Förderdauer, 18 MCP tools, eeg-agent |

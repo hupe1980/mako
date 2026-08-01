@@ -64,8 +64,9 @@ pub async fn handle_webhook(
 
     let ce_type = event["type"].as_str().unwrap_or("").to_owned();
 
-    // 3. Only project de.mako.* events.
-    if !ce_type.starts_with("de.mako.") {
+    // 3. Only project de.mako.* events — via the canonical catalog matcher so a
+    //    `de.mako.*` namespace change stays single-sourced in `mako-events`.
+    if !mako_events::matches("de.mako.*", &ce_type) {
         debug!(ce_type, "obsd: non-mako event ignored");
         return StatusCode::NO_CONTENT.into_response();
     }

@@ -194,7 +194,7 @@ Escalate = data gap (grid record missing) or affiliate initiator \
                             "erc_code": erc_str,
                             "count": count,
                             "remediation": match erc.as_deref() {
-                                Some("A02") => "PUT /api/v1/malo/{malo_id}/grid in marktd, or run nis-syncd",
+                                Some("A02") => "PUT /api/v1/malo/{malo_id}/grid in marktd (NB-role grid provisioning)",
                                 Some("A05") => "PUT /api/v1/preisblaetter/{nb_mp_id} in marktd with current tariff",
                                 Some("A06") => "LF submitted a date outside the valid Vorlauffrist window",
                                 Some("A99") => "Internal error — check processd logs for details",
@@ -463,9 +463,8 @@ impl ProcessdMcpHandler {
                  2. Call `get_stp_breakdown_by_erc(days=7)` to identify the dominant ERC code.\n\n\
                  ## By ERC code:\n\n\
                  **A02 (MaLo not found / grid data missing)**\n\
-                 → Run `nis-syncd POST /api/v1/grid/sync` to import the latest NIS/GIS grid records.\n\
-                 → Verify `GET /api/v1/malo/{malo_id}/grid` returns netzebene + bilanzierungsgebiet.\n\
-                 → If no NIS/GIS system: manually PUT /api/v1/malo/{malo_id}/grid in marktd.\n\n\
+                 → Provision the grid record: PUT `/api/v1/malo/{malo_id}/grid` in marktd (NB role).\n\
+                 → Verify `GET /api/v1/malo/{malo_id}/grid` returns netzebene + bilanzierungsgebiet.\n\n\
                  **A05 (Preisblatt / NB not registered)**\n\
                  → Check `GET /api/v1/partners/{nb_mp_id}` in marktd — partner must exist.\n\
                  → Check `GET /api/v1/preisblaetter/{nb_mp_id}` — must have active Preisblatt.\n\

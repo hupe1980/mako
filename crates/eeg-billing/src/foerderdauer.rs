@@ -311,23 +311,6 @@ pub fn negativpreis_kw_exemption(
     eeg_gesetz.negativpreis_kw_grenze(&art)
 }
 
-/// Return `true` when the §51 EEG 2023 Negativpreisregel applies.
-///
-/// **Deprecated**: Use [`negativpreis_rule_applies_for_version`] with a typed
-/// [`EegGesetz`][crate::EegGesetz] for version-specific behavior.
-/// This function always assumes EEG 2023 rules (any negative period).
-///
-/// # Example
-///
-/// ```rust
-/// use eeg_billing::foerderdauer::negativpreis_rule_applies;
-/// assert!(!negativpreis_rule_applies(0));
-/// assert!( negativpreis_rule_applies(1));
-/// ```
-pub fn negativpreis_rule_applies(consecutive_negative_hours: u32) -> bool {
-    consecutive_negative_hours >= 1
-}
-
 /// §51a EEG 2021/2023 — Vergütungszeitraum-Verlängerung (extension for lost periods).
 ///
 /// When §51 reduces the Vergütung to zero, the Förderdauer is extended to compensate.

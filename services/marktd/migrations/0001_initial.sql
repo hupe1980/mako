@@ -717,7 +717,7 @@ CREATE TABLE malo_grid (
     PRIMARY KEY (malo_id, tenant)
 );
 
--- Index by NB MP-ID for bulk export (nis-syncd uses this)
+-- Index by NB MP-ID for bulk export
 CREATE INDEX malo_grid_nb_gln
     ON malo_grid (nb_mp_id, tenant);
 

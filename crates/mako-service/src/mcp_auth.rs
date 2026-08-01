@@ -311,7 +311,7 @@ impl McpAuth {
     /// - both absent → dev mode (allow all; **never use in production**)
     ///
     /// This is the standard construction for `tarifbd`, `einsd`, `netzbilanzd`,
-    /// `vertragd`, `sperrd`, `billingd`, `accountingd`, `portald`, `nis-syncd`.
+    /// `vertragd`, `sperrd`, `billingd`, `accountingd`, `portald`.
     ///
     /// # Example
     ///

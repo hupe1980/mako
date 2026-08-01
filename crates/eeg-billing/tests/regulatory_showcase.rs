@@ -19,7 +19,7 @@ use eeg_billing::{
     CapacityBlock, EegGesetz, SettleInput, SettlementScheme, SettlementStatus, TariffSource,
     calculate_settlement, foerderendedatum_eeg, foerderendedatum_kwkg_years,
     foerderendedatum_repowering, kwk_foerderend_calendar, kwk_max_kwh, managementpraemie_ct,
-    negativpreis_rule_applies,
+    negativpreis_rule_applies_for_version,
 };
 use rust_decimal::Decimal;
 use rust_decimal::dec;
@@ -509,13 +509,22 @@ fn s25_after_registration_normal_settlement() {
 /// (EEG 2023 removed the 6-consecutive-hours threshold that existed in EEG 2017/2021.)
 #[test]
 fn s51_negativpreis_threshold_applies_any_duration() {
-    assert!(!negativpreis_rule_applies(0), "0h: no negative period");
     assert!(
-        negativpreis_rule_applies(1),
+        !negativpreis_rule_applies_for_version(0, EegGesetz::Eeg2023),
+        "0h: no negative period"
+    );
+    assert!(
+        negativpreis_rule_applies_for_version(1, EegGesetz::Eeg2023),
         "1h: EEG 2023 activates at any negative period"
     );
-    assert!(negativpreis_rule_applies(6), "6h: still applies");
-    assert!(negativpreis_rule_applies(24), "full day");
+    assert!(
+        negativpreis_rule_applies_for_version(6, EegGesetz::Eeg2023),
+        "6h: still applies"
+    );
+    assert!(
+        negativpreis_rule_applies_for_version(24, EegGesetz::Eeg2023),
+        "full day"
+    );
 }
 
 /// §51 EEG 2023 — kWh during negative-price hours are excluded from Vergütung.

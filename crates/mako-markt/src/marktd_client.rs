@@ -474,7 +474,7 @@ impl MarktdClient {
 
     /// `PUT /api/v1/malo/{malo_id}/grid` — upsert the NB grid topology record for a `MaLo`.
     ///
-    /// Called by `nis-syncd` to push NIS/GIS data into `marktd`.  Idempotent.
+    /// NB-role provisioning of NIS/GIS grid data (manual or ERP integration).  Idempotent.
     ///
     /// # Errors
     ///

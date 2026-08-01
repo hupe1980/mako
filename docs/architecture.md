@@ -6,7 +6,7 @@ has_children: true
 description: >-
   mako system architecture: event-sourced process runtime, AS4/REST transport,
   ERP integration via CloudEvents 1.0, API-Webdienste Strom, and all seventeen
-  companion daemons (makod, marktd, processd, invoicd, netzbilanzd, sperrd, edmd, obsd, nis-syncd, einsd, tarifbd, billingd, accountingd, portald, vertragd, agentd, mabis-syncd).
+  companion daemons (makod, marktd, processd, invoicd, netzbilanzd, sperrd, edmd, obsd, einsd, tarifbd, billingd, accountingd, portald, vertragd, agentd, mabis-syncd).
 mermaid: true
 ---
 
@@ -114,7 +114,7 @@ Each is independently testable and suitable for crates.io publication.
 | `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
 | `netz-checker` | NB Anmeldung 6-check validation | `check_anmeldung`, ERC A02/A05/A06/A07/E17 |
 | `mako-obs` | Process observability types | `ProcessProjection`, `KpiReport`, `DeadlineRisk` |
-| `mako-service` | **Service SDK** — cross-cutting infrastructure for all 17 daemons | `load_config`, `DatabaseConfig`, `HttpConfig`, `shutdown::token/serve`, `OidcConfig::build_verifier`, `McpAuth`, `McpAuthConfig`, `init_tracing_from_env`, `CedarEnforcer`, `EventBus`, `ServiceBuilder` |
+| `mako-service` | **Service SDK** — cross-cutting infrastructure for all 16 daemons | `load_config`, `DatabaseConfig`, `HttpConfig`, `shutdown::token/serve`, `OidcConfig::build_verifier`, `McpAuth`, `McpAuthConfig`, `init_tracing_from_env`, `CedarEnforcer`, `EventBus`, `ServiceBuilder` |
 | `mako-plugin` | WASM plugin extension system | `PluginRegistry`, 5 extension-point traits, Extism sandbox |
 
 ### Billing crate hierarchy
@@ -209,7 +209,6 @@ All **seventeen** daemons share a common operational model:
 | `invoicd` | `:8280` | INVOIC plausibility — REMADV, selbstausstellen, overdue-REMADV, § 147 AO / GoBD audit | `invoicd.toml` |
 | `netzbilanzd` | `:8680` | NNE/KA/MMM billing daemon (NB role) — generates INVOIC 31002 (NN-Rechnung) / 31005 (MMM) / 31009 (MSB) / 31011 (AWH), invoice draft lifecycle | `netzbilanzd.toml` |
 | `sperrd` | `:8780` | Sperrung execution tracker (NB role) — `sperr_orders` lifecycle, IFTSTA 21039 auto-dispatch | `sperrd.toml` |
-| `nis-syncd` | `:9680` | NIS/GIS grid topology import (NB role, stateless) — pushes `malo_grid` to `marktd`; STP ~80%→≥95% | `nis-syncd.toml` |
 | `edmd` | `:8380` | Energy data management — MSCONS meter readings, BO4E `Energiemenge` deliveries, `Lastgang` + `Zeitreihe` time-series, `MeterBillingPeriod`; **§14a SMGW compliance** (MsbG §21c): `smgw_sessions` + `cls_compliance_log` tables, daily `check_session_compliance()` sweep, `de.messwert.cls.compliance_issue` CloudEvents | `edmd.toml` |
 | `obsd` | `:8480` | Process observability — KPI reports, deadline-risk alerts, §20 EnWG parity | `obsd.toml` |
 | `einsd` | `:9180` | Einspeiser Registry + EEG/KWKG Settlement (NB/LF role) — **10 settlement schemes** (Vergütung, Mieterstrom §21 Abs. 3 EEG, Direktvermarktung MarketPremium, sonstige Direktvermarktung, Ausschreibung, Post-EEG Spot, Eigenverbrauch, KWKG-Zuschlag §7 KWKG 2023, Flexibilitätsprämie §50 EEG, Flexibilitätszuschlag §50b EEG); Repowering §22 EEG; KWKG Förderdauer; built-in rate table EEG 2000–2023 + KWKG 2023; **§14 UStG Gutschrift** issued per billable settlement (Gutschriftverfahren — NB issues the document; BO4E `Rechnung` in `rechnung_json`, VAT breakdown per plant tax status); CloudEvents `de.eeg.verguetung.berechnet` (net + USt + brutto) + `de.eeg.marktpraemie.berechnet` + `de.eeg.anlage.foerderung_auslaufend` | `einsd.toml` |
@@ -219,7 +218,7 @@ All **seventeen** daemons share a common operational model:
 | `portald` | `:9480` | Customer Portal read-model gateway (LF role, stateless) — aggregates Lastgang, invoices, account balance, VersorgungsStatus, EEG settlement; `/dashboard` parallel aggregation; `/events` SSE stream; OIDC-gated | `portald.toml` |
 | `vertragd` | `:9780` | Contract & Customer Management (LF role) — `Kunden` (B2C + B2B) with `kunden_identitaeten` (N OIDC logins per company, rolle=VOLLZUGRIFF/ADMIN/FINANZEN/TECHNIK/READONLY, optional `standort_filter` for site-scoped B2B access); `Rahmenverträge` (B2B portfolio: Sammelrechnung, indexation, volume discount, `angebot_id` CPQ); `Versorgungsverträge` per site/commodity (ANGELEGT→IN_BEARBEITUNG→TEILERFUELLUNG→AKTIV→GEKÜNDIGT→ABGELAUFEN); triggers GPKE/GeLi Gas Lieferbeginn/-ende via `processd`; Tarifwechsel + Preisgarantie guard (§41 EnWG); Kündigung with coordinated Schlussablesung; auto-renewal worker; Preisanpassungsbenachrichtigung worker (§41 Abs. 3 EnWG); OIDC sub → MaLo authorization gateway (`GET /kunden/authenticate`) for `portald`; **GDPR Art. 15 export** (`/export`); **GDPR Art. 17 pseudonymization** (`/anonymize`) with immutable audit log; `Zahlungsinformation` typed IBAN/SEPA; 3 DB migrations; 16-tool MCP server | `vertragd.toml` |
 | `mabis-syncd` | `:8880` | MaBiS synchronisation daemon (ÜNB/NB role) — aggregates per-MaLo quarter-hourly Lastgang from `edmd` via `mako-mabis::SummenzeitreiheBuilder`, submits Summenzeitreihen to the BIKO as MSCONS PID 13003 through `makod`; ascending version per (Bilanzierungsgebiet, Bilanzierungsmonat) and BIKO-assigned Datenstatus per BK6-24-174 Anlage 3; submits on the 10. Werktag (Erstaufschlag); `submission_runs`, `submission_malo_log` and `pruefmitteilung` tables | `mabis-syncd.toml` |
-| `agentd` | `:9580` | Multi-agent LLM orchestration daemon — Orchestrator + Specialist Mesh; OpenAI / Anthropic / AWS Bedrock SigV4; ReAct loop with MCP tool calls across all 17 services; LanceDB RAG (persistent ANN, S3/GCS/local); TOML-defined custom agents + compiled-in specialist catalog; **29 bundled specialists** incl. `billing-regulatory-guard-agent` (§41/§41a compliance), `jahresabrechnung-agent` (annual settlement), `replacement-value-agent` (§ 60 Abs. 2 MsbG), `mabis-syncd-agent` (UTILTS deadlines), `smgw-diagnostics-agent` (BSI TR-03109 + §14a CLS) | [agentd guide](agentd) |
+| `agentd` | `:9580` | Multi-agent LLM orchestration daemon — Orchestrator + Specialist Mesh; OpenAI / Anthropic / AWS Bedrock SigV4; ReAct loop with MCP tool calls across all 16 services; LanceDB RAG (persistent ANN, S3/GCS/local); TOML-defined custom agents + compiled-in specialist catalog; **28 bundled specialists** incl. `billing-regulatory-guard-agent` (§41/§41a compliance), `jahresabrechnung-agent` (annual settlement), `replacement-value-agent` (§ 60 Abs. 2 MsbG), `mabis-syncd-agent` (UTILTS deadlines), `smgw-diagnostics-agent` (BSI TR-03109 + §14a CLS) | [agentd guide](agentd) |
 
 ### `marktd` — Market Data Hub (`:8180`)
 
@@ -232,7 +231,7 @@ and **typed `rubo4e::current::Messlokation`** responses,
 contracts, trading partners, network contracts (`NbContractRecord`),
 price sheets (NNE, Messung, KA, Dienstleistung, Hardware),
 **VersorgungsStatus per MaLo** (with full history and `?at=YYYY-MM-DD` point-in-time queries),
-**MaLo grid topology** (`malo_grid`, sourced from the NB's NIS/GIS),
+**MaLo grid topology** (`malo_grid`, provisioned via the NB-role `PUT /api/v1/malo/{malo_id}/grid` endpoint),
 **Netz-Element-Lokationen (NeLo)** with typed Redispatch 2.0 columns
 (`steuerkanal`, `eigenschaft_msb_lokation`, `grundzustaendiger_msb_codenr`),
 **TechnischeRessource** (E-mobility, generation, storage for iMS and Redispatch 2.0),
@@ -298,7 +297,7 @@ makes automated decisions within regulatory deadlines.
 - Fetches `VersorgungsStatus` + `MaloGridRecord` from `marktd`
 - Evaluates 6 objective checks via the pure `netz-checker` library
 - Dispatches `bestaetigen`/`ablehnen` to `makod` with §20 EnWG parity logging
-- STP target ≥ 95 % (requires NIS/GIS grid records via `nis-syncd` or manual provisioning)
+- STP improves when the `malo_grid` record is present (provisioned via marktd's NB-role `PUT /api/v1/malo/{malo_id}/grid` endpoint — manual/ERP provisioning)
 
 **LF module** (`--features lf-only` or `integrated`):
 - Handles LFA E_0624 (PID 55008) within the 45-minute LFW24 window
@@ -413,24 +412,6 @@ Key facts:
   when a Sperrung workflow reaches the execution milestone in `makod`.
 
 See [`sperrd` Operator Guide](./sperrd.md).
-
-### `nis-syncd` — Grid Topology Import (`:9680`, stateless)
-
-`nis-syncd` bridges the NB's NIS/GIS system to `marktd`'s `malo_grid` table,
-which is the prerequisite for `processd` achieving its ≥ 95 % STP target.
-
-Key facts:
-- **Stateless** — no PostgreSQL; every request is a read-from-NIS + push-to-`marktd`
-  cycle. Safe to restart at any time.
-- **`POST /api/v1/grid/sync`** — accepts a list of `MaloGridRecord` objects from the NIS/GIS
-  adapter and upserts them into `marktd` via `PUT /api/v1/malo/{id}/grid`.
-- **Dry-run mode** — `?dry_run=true` returns a diff of what would change without writing.
-- **Per-entry drift detection** — each record is compared to the current `marktd` value
-  and emits a `de.nis.grid.drift` CloudEvent on change.
-- **STP impact** — without grid records, `processd` `netz-checker` check 1 always
-  escalates (unknown MaLo). With full grid records, acceptance rate rises from ~80 % to ≥ 95 %.
-
-See [`nis-syncd` Operator Guide](./nis-syncd.md).
 
 ### `mako-service` — Service SDK (library)
 
@@ -760,7 +741,6 @@ cargo test -p energy-billing --all-features  # all categories, §41a guard, §54
 | `invoicd` operator guide | [invoicd.md](invoicd.md) |
 | `netzbilanzd` operator guide | [netzbilanzd.md](netzbilanzd.md) |
 | `sperrd` operator guide | [sperrd.md](sperrd.md) |
-| `nis-syncd` operator guide | [nis-syncd.md](nis-syncd.md) |
 | `edmd` operator guide | [edmd.md](edmd.md) |
 | `obsd` operator guide | [obsd.md](obsd.md) |
 | ERP integration | [erp-integration.md](erp-integration.md) |

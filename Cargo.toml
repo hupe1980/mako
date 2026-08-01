@@ -33,7 +33,6 @@ members = [
     "services/processd",
     "services/netzbilanzd",
     "services/sperrd",
-    "services/nis-syncd",
     "services/einsd",
     "services/tarifbd",
     "services/agentd",

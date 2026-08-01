@@ -230,9 +230,9 @@ mod tests {
 
     #[test]
     fn config_path_hyphen_service() {
-        // "nis-syncd" -> NIS_SYNCD_CONFIG (hyphens become underscores in env key).
-        let p = config_path("nis-syncd");
-        assert_eq!(p, PathBuf::from("nis-syncd.toml"));
+        // "mabis-syncd" -> MABIS_SYNCD_CONFIG (hyphens become underscores in env key).
+        let p = config_path("mabis-syncd");
+        assert_eq!(p, PathBuf::from("mabis-syncd.toml"));
     }
 }
 

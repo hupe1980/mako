@@ -1157,6 +1157,15 @@ pub async fn post_mastr_registrierung(
         time::OffsetDateTime::now_utc().date()
     };
 
+    // Transactional outbox: the `eeg_anlagen` state change (mastr_registriert +
+    // status angemeldet→aktiv) and its ERP CloudEvent commit as one unit, so the
+    // registration-release signal cannot be lost on a webhook 5xx/crash. A
+    // background OutboxWorker drains `event_outbox` (persist-before-dispatch).
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
     let rows = sqlx::query(
         "UPDATE eeg_anlagen SET \
             mastr_registriert    = true, \
@@ -1172,36 +1181,38 @@ pub async fn post_mastr_registrierung(
     .bind(&cfg.tenant)
     .bind(&req.mastr_nummer)
     .bind(mastr_datum)
-    .execute(&pool)
+    .execute(&mut *tx)
     .await;
 
     match rows {
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        Ok(r) if r.rows_affected() == 0 => StatusCode::NOT_FOUND.into_response(),
-        Ok(_) => {
-            // Emit CloudEvent to ERP webhook
-            if let Some(webhook_url) = cfg.erp_webhook_url.as_deref() {
-                let ce = mako_service::CloudEvent::new(
-                    mako_service::source("einsd", &cfg.tenant),
-                    mako_events::eeg::ANLAGE_MASTR_REGISTRIERT,
-                    tr_id.clone(),
-                    serde_json::json!({
-                        "tr_id": tr_id,
-                        "mastr_nummer": req.mastr_nummer,
-                        "mastr_datum": mastr_datum.to_string(),
-                    }),
-                );
-                let secret = cfg.erp_hmac_secret.as_deref().map(str::as_bytes);
-                let client = mako_service::http::default_client();
-                if let Err(e) =
-                    mako_service::post_ce_with_retry(&client, webhook_url, &ce, secret).await
-                {
-                    tracing::warn!(tr_id, error = %e, "einsd: MaStR registriert CE delivery failed");
-                }
-            }
-            StatusCode::NO_CONTENT.into_response()
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(r) if r.rows_affected() == 0 => return StatusCode::NOT_FOUND.into_response(),
+        Ok(_) => {}
+    }
+
+    // Enqueue the release signal in the same transaction (skipped when no ERP
+    // endpoint is configured — nothing to deliver).
+    if cfg.erp_webhook_url.is_some() {
+        let ce = mako_service::CloudEvent::new(
+            mako_service::source("einsd", &cfg.tenant),
+            mako_events::eeg::ANLAGE_MASTR_REGISTRIERT,
+            tr_id.clone(),
+            serde_json::json!({
+                "tr_id": tr_id,
+                "mastr_nummer": req.mastr_nummer,
+                "mastr_datum": mastr_datum.to_string(),
+            }),
+        );
+        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+            tracing::error!(tr_id, error = %e, "einsd: MaStR registriert outbox enqueue failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
     }
+
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 
 /// `POST /api/v1/verguetungssatz-lookup`

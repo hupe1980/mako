@@ -124,7 +124,7 @@ pub struct MaloResponse {
     #[schema(value_type = Object)]
     pub data: Marktlokation,
     /// Voltage/pressure level extracted from `data.netzebene` (e.g. `"NS"`, `"MS"`, `"HöS"`).
-    /// Available immediately on write; no `nis-syncd` needed.
+    /// Available immediately on write; no separate grid provisioning needed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub netzebene: Option<String>,
     /// Bilanzierungsgebiet EIC code extracted from `data.bilanzierungsgebiet`.

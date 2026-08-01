@@ -16,7 +16,7 @@ code focuses on domain logic instead of plumbing.
              │  webhook  builder   rate_limit cloudevent mako-plugin         │
              └──────────────────────────────────────────────────────────────┘
                   ↑            ↑             ↑           ↑
-               makod        marktd        invoicd     processd  … (all 17)
+               makod        marktd        invoicd     processd  … (all 16)
 ```
 
 ---

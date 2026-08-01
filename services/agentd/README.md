@@ -1,22 +1,22 @@
 # agentd — Multi-Agent LLM Orchestration
 
-`agentd` connects large language models to all 17 mako production services via MCP,
+`agentd` connects large language models to all 16 mako production services via MCP,
 enabling automated analysis, compliance checking, and workflow orchestration.
 
 | Feature | Detail |
 |---|---|
 | **HTTP port** | `:9580` |
-| **Built-in agents** | 29 specialists compiled into binary — ship in container image |
+| **Built-in agents** | 28 specialists compiled into binary — ship in container image |
 | **Custom agents** | `[[agents]]` in `agentd.toml` — fully customizable |
 | **LLM providers** | OpenAI · Anthropic Claude · AWS Bedrock SigV4 |
 | **Dispatch modes** | `sequential` · `parallel` (fan-out) · `race` (first wins) |
 | **RAG** | LanceDB vector store (S3/GCS/Azure Blob/local) |
 | **A2A cards** | `GET /.well-known/agents/{name}` for each specialist |
-| **Catalog** | `GET /api/v1/agents/catalog` — all 29 built-in definitions |
+| **Catalog** | `GET /api/v1/agents/catalog` — all 28 built-in definitions |
 
 ## Built-in specialists (shipped in container)
 
-All 29 specialists are compiled into the binary. Activate them via `[bundled_agents]`:
+All 28 specialists are compiled into the binary. Activate them via `[bundled_agents]`:
 
 ```toml
 [bundled_agents]
@@ -43,14 +43,13 @@ model = "gpt-4o"
 | `compliance-agent` | `de.obs.stp.parity.alert` | obsd, processd |
 | `msb-history-agent` | `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.completed` | edmd, makod, marktd |
 | `meter-data-agent` | `de.messwert.reading.quality.warning` | edmd, marktd |
-| `grid-anomaly-agent` | `de.markt.grid.drift.detected` | marktd, obsd |
+| `grid-anomaly-agent` | `de.markt.nb-contract.updated`, `de.markt.malo.updated` | marktd, obsd |
 | `tariff-optimization-agent` | `de.billing.rechnung.erstellt` | billingd, tarifbd, edmd |
 | `replacement-value-agent` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd, obsd |
 | `mabis-syncd-agent` | `de.messwert.reading.quality.warning` | edmd, obsd, marktd |
 | `smgw-diagnostics-agent` | `de.messwert.reading.direct.stored` | edmd, marktd, processd |
 | `invoice-reconciliation-agent` | `de.invoic.receipt.*` | invoicd, billingd |
 | `netzbilanz-agent` | `de.netzbilanz.invoic.*` | netzbilanzd, marktd |
-| `nis-syncd-agent` | `de.markt.grid.drift.detected` | marktd, processd |
 | `portald-agent` | `de.vertrag.*` | portald, vertragd, billingd |
 | `processd-agent` | `de.mako.process.failed` | processd, obsd, marktd |
 | `regulatory-reporting-agent` | manual | obsd, marktd, processd |

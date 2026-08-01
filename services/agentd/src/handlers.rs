@@ -551,7 +551,7 @@ pub async fn agent_card(
 
 // ── GET /api/v1/agents/catalog ────────────────────────────────────────────────
 
-/// `GET /api/v1/agents/catalog` — list all 29 built-in agent definitions.
+/// `GET /api/v1/agents/catalog` — list all 28 built-in agent definitions.
 ///
 /// Returns the full catalog of built-in agents regardless of whether they are
 /// currently enabled. Useful for operators exploring available specialists before

@@ -6,14 +6,14 @@ parent: Services
 mermaid: true
 description: >
   agentd operator guide: Multi-agent LLM orchestration daemon.
-  29 built-in specialists ship in container image. Orchestrator + Specialist Mesh,
+  28 built-in specialists ship in container image. Orchestrator + Specialist Mesh,
   LanceDB RAG, parallel dispatch, A2A agent cards, OpenAI / Anthropic / AWS Bedrock.
 ---
 
 # `agentd` — Multi-Agent LLM Orchestration
 
 `agentd` is the **AI automation layer** for the mako platform. It connects large
-language models to all 17 production services via MCP, enabling automated analysis,
+language models to all 16 production services via MCP, enabling automated analysis,
 decision support, and workflow orchestration.
 
 Port: **`:9580`**
@@ -25,7 +25,7 @@ Port: **`:9580`**
 | `GET /api/v1/sessions` | Last 100 agent decisions (in-memory ring buffer) |
 | `GET /api/v1/dlq` | Dead-letter queue: pending retries + recent exhausted entries |
 | `GET /api/v1/agents` | List all active agents (built-in + custom) |
-| `GET /api/v1/agents/catalog` | Full catalog of all 29 built-in definitions |
+| `GET /api/v1/agents/catalog` | Full catalog of all 28 built-in definitions |
 | `GET /.well-known/agents/{name}` | A2A Agent Card for a specialist |
 | `POST /api/v1/rag/ingest` | Index a live text document into LanceDB |
 | `POST /api/v1/rag/search` | Query the RAG knowledge base directly |
@@ -35,10 +35,10 @@ Port: **`:9580`**
 
 ## Key design decisions
 
-### 29 built-in specialists ship in the container image
+### 28 built-in specialists ship in the container image
 
 The most important architectural change from the naive "put prompts in demo config" approach:
-all 29 specialist system prompts are **compiled into the agentd binary** and ship in the
+all 28 specialist system prompts are **compiled into the agentd binary** and ship in the
 container image. Operators activate them via `[bundled_agents]` in `agentd.toml` without
 copying hundreds of lines of system prompts.
 
@@ -74,7 +74,7 @@ graph TB
         MODE["DispatchMode:\nsequential | parallel | race"]
     end
 
-    subgraph builtin ["29 Built-in Specialists (compiled into binary)"]
+    subgraph builtin ["28 Built-in Specialists (compiled into binary)"]
         direction LR
         MAKO["mako-agent\nEDIFACT · UTILMD · deadlines"]
         BILLING["billing-agent\nbillingd · invoicd · O2C"]
@@ -82,7 +82,7 @@ graph TB
         JAHRB["jahresabrechnung-agent\nAnnual settlement orchestrator"]
         ANOMALY["billing-anomaly-agent\n20% deviation check"]
         EEG["eeg-agent + eeg-compliance-agent\neinsd · §52 · §44b · §20 EEG"]
-        MORE["... 20 more specialists"]
+        MORE["... 19 more specialists"]
     end
 
     subgraph rag ["RAG Knowledge Base"]
@@ -198,13 +198,12 @@ prompt, default trigger patterns, and default MCP server requirements.
 | `compliance-agent` | `de.obs.stp.parity.alert` | obsd, processd, marktd, invoicd |
 | `msb-history-agent` | `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored` | edmd, makod, marktd |
 | `meter-data-agent` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd |
-| `grid-anomaly-agent` | `de.markt.grid.drift.detected`, `de.markt.nb-contract.updated` | marktd, obsd |
+| `grid-anomaly-agent` | `de.markt.nb-contract.updated`, `de.markt.malo.updated` | marktd, obsd |
 | `tariff-optimization-agent` | `de.billing.rechnung.erstellt`, `de.mako.process.completed` | billingd, tarifbd, edmd, marktd |
 | `vertragd-agent` | `de.vertrag.*`, `de.mako.aperak.rejected`, `de.mako.process.failed`, `de.vertrag.ablauf.ankuendigung`, `de.vertrag.preisaenderung.ankuendigung` | vertragd, processd, marktd |
 | `tarifbd-agent` | `de.tarif.product.updated`, `de.tarif.angebot.abgelaufen`, `de.tarif.epex.missing` | tarifbd, marktd |
 | `processd-agent` | `de.mako.process.initiated`, `de.mako.process.rejected` | processd, marktd, obsd |
 | `sperrd-agent` | `de.sperr.*`, `de.mako.process.completed` | sperrd, makod, marktd |
-| `nis-syncd-agent` | `de.markt.grid.drift.detected`, `de.markt.malo.updated` | nis-syncd, processd, marktd, obsd |
 | `portald-agent` | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung_auslaufend`, `de.accounting.mahnung.issued` | portald, billingd, einsd, accountingd |
 | `regulatory-reporting-agent` | manual / scheduled | obsd, processd, invoicd, marktd |
 | `replacement-value-agent` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd, obsd |
@@ -214,7 +213,7 @@ prompt, default trigger patterns, and default MCP server requirements.
 | `gabi-gas-agent` | `de.gabi.imbalance.*`, `de.gabi.alocat.missing`, `de.gabi.nomination.*`, `de.netzbilanz.invoic.drafted` | makod, netzbilanzd, marktd, obsd |
 | `einsd-batch-agent` | `de.eeg.settlement.batch_due`, `de.eeg.compliance.*`, `de.eeg.anlage.foerderung_auslaufend` | einsd, edmd, tarifbd, obsd |
 
-All **29 specialist definitions** are compiled into the `agentd` binary. Activate them via
+All **28 specialist definitions** are compiled into the `agentd` binary. Activate them via
 `[bundled_agents]` in `agentd.toml` — no system prompt copy-paste required.
 See the [Configuration](#configuration) section below for a full example.
 
@@ -337,7 +336,7 @@ dispatch_mode = "sequential"  # sequential | parallel | race
 
 # ── Enable built-in specialists ───────────────────────────────────────────────
 [bundled_agents]
-enable_all       = true          # activate all 29 built-in specialists
+enable_all       = true          # activate all 28 built-in specialists
 default_provider = "openai"
 default_model    = "gpt-4o-mini"
 
@@ -355,7 +354,7 @@ marktd   = "http://marktd:8180/mcp"
 billingd = "http://billingd:9280/mcp"
 edmd     = "http://edmd:8380/mcp"
 obsd     = "http://obsd:8480/mcp"
-# ... every MCP-exposing service (16 — mabis-syncd has no MCP server)
+# ... every MCP-exposing service (15 — mabis-syncd has no MCP server)
 mcp_api_key = "env:AGENTD_MCP_API_KEY"
 
 trigger_event_types = [
@@ -476,7 +475,7 @@ audit_hmac_secret = "env:AGENTD_AUDIT_HMAC"  # X-Mako-Signature (HMAC-SHA256)
 | `POST` | `/api/v1/run` | Manual agent invocation |
 | `GET`  | `/api/v1/sessions` | Last 100 agent decisions (in-memory ring buffer) |
 | `GET`  | `/api/v1/agents` | List all active agents (built-in + custom) with capabilities |
-| `GET`  | `/api/v1/agents/catalog` | Full catalog of all 29 built-in definitions (even if not enabled) |
+| `GET`  | `/api/v1/agents/catalog` | Full catalog of all 28 built-in definitions (even if not enabled) |
 | `GET`  | `/.well-known/agents/{name}` | A2A Agent Card for a named specialist |
 | `POST` | `/api/v1/rag/ingest` | Index a live text document into LanceDB |
 | `POST` | `/api/v1/rag/search` | Query the RAG knowledge base directly |

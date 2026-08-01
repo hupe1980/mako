@@ -5,14 +5,14 @@ nav_order: 5
 has_children: true
 mermaid: true
 description: >-
-  Operator guides for all 17 mako production services — makod, marktd, processd,
-  invoicd, netzbilanzd, sperrd, edmd, mabis-syncd, einsd, obsd, nis-syncd, tarifbd, billingd,
+  Operator guides for all 16 mako production services — makod, marktd, processd,
+  invoicd, netzbilanzd, sperrd, edmd, mabis-syncd, einsd, obsd, tarifbd, billingd,
   accountingd, vertragd, portald, and agentd.
 ---
 
 # Services
 
-mako consists of **17 independently deployable services**, each built as a self-contained Docker image with:
+mako consists of **16 independently deployable services**, each built as a self-contained Docker image with:
 - TOML configuration with `_FILE` suffix for Kubernetes secrets
 - Cedar ABAC authorization
 - OIDC/JWT + API-key authentication  
@@ -20,7 +20,7 @@ mako consists of **17 independently deployable services**, each built as a self-
 - Built-in MCP server at `/mcp` (Streamable HTTP 2025-11-25)
 - Structured health endpoints (`/health`, `/health/ready`)
 
-All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)** — the shared SDK that provides `shutdown::token/serve` (SIGINT+SIGTERM graceful drain), `OidcConfig::build_verifier`, `McpAuth`+`McpAuthConfig`, `init_tracing_from_env`, `DatabaseConfig`, `HttpConfig`, `CedarEnforcer`, `EventBus`, and more. This means zero copy-pasted infrastructure code across the 17 daemons.
+All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)** — the shared SDK that provides `shutdown::token/serve` (SIGINT+SIGTERM graceful drain), `OidcConfig::build_verifier`, `McpAuth`+`McpAuthConfig`, `init_tracing_from_env`, `DatabaseConfig`, `HttpConfig`, `CedarEnforcer`, `EventBus`, and more. This means zero copy-pasted infrastructure code across the 16 daemons.
 
 `DatabaseConfig::connect(url, service_name)` is the single PostgreSQL pool builder every daemon uses: it applies the configured `pool_size` plus `acquire_timeout_secs` / `idle_timeout_secs` / `max_lifetime_secs` (so a pool never queues unboundedly or pins a connection across a failover) and tags each connection with the service name in `pg_stat_activity`. Tuning lives in one place rather than being re-derived per service.
 
@@ -47,7 +47,6 @@ graph TB
     subgraph data ["Energy Data & Observability"]
         edmd[":8380 edmd\nMSCONS · iMSys direct push\nHampel · V01–V10 · virtual meters"]
         obsd[":8480 obsd\nprocess projections · KPI\n§20 EnWG parity report"]
-        nis[":9680 nis-syncd\nNIS/GIS grid topology sync\nstateless · lifts STP to ≥95%"]
         mabis[":8880 mabis-syncd\nMaBiS Summenzeitreihe\nMSCONS 13003 · 10. Werktag"]
         einsd[":9180 einsd\nEEG/KWKG settlement\n10 schemes · §14 UStG Gutschrift"]
     end
@@ -63,13 +62,12 @@ graph TB
         portald[":9480 portald\ncustomer portal read-model\nSSE · §41 self-service"]
     end
 
-    agentd[":9580 agentd\n29 built-in specialists (binary)\nsequential|parallel|race dispatch\nLanceDB RAG (tenant-isolated) · A2A cards\nOIDC · HMAC · DLQ · OpenAI/Anthropic/Bedrock"]
+    agentd[":9580 agentd\n28 built-in specialists (binary)\nsequential|parallel|race dispatch\nLanceDB RAG (tenant-isolated) · A2A cards\nOIDC · HMAC · DLQ · OpenAI/Anthropic/Bedrock"]
 
     ext -->|AS4 / REST| makod
     makod <-->|CloudEvents| marktd
     marktd -->|webhook fan-out| processd & invoicd & edmd & obsd & agentd
     makod -->|commands| netzbilanzd & invoicd
-    nis -->|PUT malo_grid| marktd
     mabis -->|UTILTS cmd| makod
     billingd -->|de.billing.rechnung.erstellt| accountingd
     vertragd -->|start-supply| processd
@@ -102,7 +100,6 @@ graph TB
 | [mabis-syncd](./mabis-syncd) | `:8880` | ÜNB/NB | MaBiS synchronisation — aggregates quarter-hourly Lastgang per Bilanzierungsgebiet via `SummenzeitreiheBuilder`, files with the BIKO as MSCONS 13003 on the 10. Werktag; records the BIKO-assigned Datenstatus and open Korrekturbedarf |
 | [einsd](./einsd) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes; issues the **§14 UStG Gutschrift** (Gutschriftverfahren) per billable settlement as a BO4E `Rechnung` with per-rate USt breakdown; 18-tool MCP server |
 | [obsd](./obsd) | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, automated deadline computation (GPKE 24h/WiM 5WT/GeLi Gas 10WT), `completed_at` cycle-time tracking, `GET /api/v1/audit/bnetza-report`, 6-tool MCP server |
-| [nis-syncd](./nis-syncd) | `:9680` | NB | NIS/GIS grid topology import — concurrent `tokio::task::JoinSet` sync, drift CloudEvents, `check_malo_grid` MCP tool, lifts Anmeldung STP ~80% → ≥95% (stateless) |
 
 ## Retail Billing (LF)
 
@@ -118,7 +115,7 @@ graph TB
 |---|---|---|---|
 | [vertragd](./vertragd) | `:9780` | LF | Contract & Customer Management — Kunden (B2C+B2B), Rahmenverträge, Versorgungsverträge, kunden_identitaeten (N portal users per company), Tarifwechsel, Kündigung, OIDC→MaLo auth gateway for portald |
 | [portald](./portald) | `:9480` | LF | Customer Portal gateway — aggregates all LF services, REST + SSE, §41 EnWG self-service write API (Tarifwechsel, Kündigung, SEPA, GDPR Art. 16), 8-tool MCP server |
-| [agentd](./agentd) | `:9580` | All | Multi-agent LLM orchestration — **29 built-in specialists compiled into binary**, activated via `[bundled_agents]`; `sequential`/`parallel`/`race` dispatch; OIDC auth on `/api/v1/run`; inbound HMAC; DLQ with exponential-backoff retry; LanceDB RAG (tenant-isolated, cosine distance score filtering); A2A agent cards; MCP tools across all 17 services |
+| [agentd](./agentd) | `:9580` | All | Multi-agent LLM orchestration — **28 built-in specialists compiled into binary**, activated via `[bundled_agents]`; `sequential`/`parallel`/`race` dispatch; OIDC auth on `/api/v1/run`; inbound HMAC; DLQ with exponential-backoff retry; LanceDB RAG (tenant-isolated, cosine distance score filtering); A2A agent cards; MCP tools across all 16 services |
 
 ---
 
@@ -126,7 +123,7 @@ graph TB
 
 Every daemon is built on the [`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)
 crate, so the operational surface — health, config, auth, tracing, shutdown, event delivery — is
-identical across all 17. A service's `main` is a single line:
+identical across all 16. A service's `main` is a single line:
 
 ```rust
 #[tokio::main]

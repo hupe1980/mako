@@ -29,11 +29,11 @@ variable "OCI_CREATED" {
   default = "unknown"
 }
 
-# Build all 17 images
+# Build all 16 images
 group "default" {
   targets = [
     "makod", "marktd", "processd", "invoicd", "edmd", "obsd",
-    "netzbilanzd", "sperrd", "nis-syncd", "einsd",
+    "netzbilanzd", "sperrd", "einsd",
     "tarifbd", "billingd", "accountingd", "vertragd",
     "portald", "agentd", "mabis-syncd",
   ]
@@ -103,12 +103,6 @@ target "sperrd" {
   inherits = ["_base"]
   target   = "sperrd-runtime"
   tags     = ["${REGISTRY}/sperrd"]
-}
-
-target "nis-syncd" {
-  inherits = ["_base"]
-  target   = "nis-syncd-runtime"
-  tags     = ["${REGISTRY}/nis-syncd"]
 }
 
 target "einsd" {

@@ -124,11 +124,6 @@ pub mod markt {
     pub const MMMA_IMPORT_FAILED: &str = "de.markt.mmma.import.failed";
     /// Subscription self-test event (`POST /subscriptions/{id}/test`).
     pub const SUBSCRIPTION_TEST: &str = "de.markt.subscription.test";
-    /// Grid topology drift between NIS/GIS and marktd detected.
-    ///
-    /// Kept under `de.markt` even though `nis-syncd` (not `marktd`) emits
-    /// it — the subject is marktd master data drifting from the NIS.
-    pub const GRID_DRIFT_DETECTED: &str = "de.markt.grid.drift.detected";
 }
 
 /// Billing events (`de.billing.*`), emitted by `billingd`.
@@ -170,8 +165,8 @@ pub mod eeg {
     pub const MARKTPRAEMIE_BERECHNET: &str = "de.eeg.marktpraemie.berechnet";
     /// Generic settlement computed (MCP `trigger_settle`).
     pub const SETTLEMENT_BERECHNET: &str = "de.eeg.settlement.berechnet";
-    /// ⚠ phantom: subscribed by agentd (`einsd-batch-agent`), no emitter
-    /// yet (tracked in ROADMAP). Monthly auto-settle batch trigger.
+    /// Monthly auto-settle batch trigger. Emitted by einsd's auto-settle worker
+    /// (`emit_batch_due_ce`); subscribed by agentd's `einsd-batch-agent`.
     pub const SETTLEMENT_BATCH_DUE: &str = "de.eeg.settlement.batch_due";
     /// EEG-Anlage Förderung ends within the warning window.
     pub const ANLAGE_FOERDERUNG_AUSLAUFEND: &str = "de.eeg.anlage.foerderung_auslaufend";
@@ -400,7 +395,6 @@ pub fn all() -> &'static [&'static str] {
         markt::MMMA_IMPORT_SUCCESS,
         markt::MMMA_IMPORT_FAILED,
         markt::SUBSCRIPTION_TEST,
-        markt::GRID_DRIFT_DETECTED,
         // de.billing.*
         billing::RECHNUNG_ERSTELLT,
         billing::ABRECHNUNGSINFORMATION_MONATLICH,

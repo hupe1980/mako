@@ -329,7 +329,7 @@ where
 ///
 /// Returns 404 when the MeLo has no `standorteigenschaften` column populated yet.
 /// Use `PUT /api/v1/melo/{id}` with a `data.standorteigenschaften` field to populate it,
-/// or wait for `nis-syncd` / WiM Stammdaten auto-population (Roadmap N3).
+/// or wait for WiM Stammdaten auto-population (Roadmap N3).
 #[utoipa::path(
     get,
     path = "/api/v1/melos/{id}/standorteigenschaften",

@@ -95,7 +95,7 @@ pub struct AgentdConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BundledAgentsConfig {
-    /// Enable ALL 29 built-in specialist agents at once.
+    /// Enable ALL 28 built-in specialist agents at once.
     ///
     /// When `true`, `enable` list is ignored.
     #[serde(default)]

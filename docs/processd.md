@@ -119,13 +119,12 @@ de.mako.process.initiated (PID 55001/55016/44001)
 
 ### STP rate targets
 
-| Condition | STP |
-|-----------|-----|
-| Grid records not imported (cold NIS cache) | ~60 % |
-| NIS data imported via `nis-syncd` or manual provisioning | ≥ 95 % |
+`processd` targets ≥ 95 % straight-through processing on NB Anmeldung. The `malo_grid`
+record is a prerequisite: `netz-checker` check 1 (grid record exists) can only pass when
+the record is present, so NB Anmeldung STP improves markedly once the record is provisioned.
 
-Grid records are sourced from the NB’s own NIS/GIS system — **not** from MaStR.
-See [nis-syncd](nis-syncd) for import options.
+Grid records are the NB’s own grid topology — **not** from MaStR. Provision them via
+marktd’s NB-role `PUT /api/v1/malo/{malo_id}/grid` endpoint (manual / ERP provisioning).
 
 Monitor via `GET /api/v1/decisions` or the `get_stp_rate` MCP tool.
 
@@ -493,7 +492,7 @@ the shared runner):
 | `processd_decisions_total{decision="Escalate"}` / total | < 5 % (grid coverage indicator) |
 
 Alert when:
-- STP rate drops below 90 % (grid record coverage degraded — run `nis-syncd`)
+- STP rate drops below 90 % (grid record coverage degraded — provision missing `malo_grid` records via marktd’s NB-role `PUT /api/v1/malo/{malo_id}/grid` endpoint)
 - `processd_approval_queue_depth` > 0 entries near TTL (LF deadline risk)
 - Decision latency > 10 s (marktd connectivity issue)
 

@@ -1993,8 +1993,9 @@ where
 ///
 /// # STP impact
 ///
-/// With `nis-syncd` active (N7), STP ≥ 95 % is achievable.
-/// Without it, ~40 % of Anmeldungen will escalate (missing grid records → cold cache).
+/// STP improves markedly when this record is present — provision it via the
+/// NB-role `PUT /api/v1/malo/{malo_id}/grid` endpoint (manual / ERP integration).
+/// Without a grid record, ~40 % of Anmeldungen escalate (missing grid records → cold cache).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaloGridRecord {
     /// 11-digit Marktlokations-ID (Strom) or Gas-MaLo-ID.

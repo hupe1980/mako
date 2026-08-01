@@ -109,7 +109,7 @@ RUN cargo chef prepare --recipe-path recipe.json
 # Skips agentd (LanceDB ~800 extra crates), einsd (iceberg), and 7 LF services.
 # Expected build time: ~6-8 min cold (3 services, no iceberg/LanceDB).
 # Demo runtime targets (makod, marktd, processd, invoicd, obsd,
-# netzbilanzd, nis-syncd) all use --from=demo-builder.
+# netzbilanzd) all use --from=demo-builder.
 FROM chef AS demo-builder
 ARG PROFILE=release
 
@@ -133,7 +133,7 @@ RUN --mount=type=cache,id=cargo-registry-demo,sharing=locked,target=/usr/local/c
     && install -d -o 65532 -g 65532 -m 0700 /var/lib/makod
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 3b — builder  (all 17 services — production / CI release pipeline)
+# ║ Stage 3b — builder  (all 16 services — production / CI release pipeline)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM chef AS builder
 ARG PROFILE=release
@@ -151,7 +151,7 @@ RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/
     --mount=type=cache,id=cargo-target-full,sharing=locked,target=/build/target \
     cargo chef cook --profile ${PROFILE} \
                     -p makod -p marktd -p processd -p invoicd -p edmd -p obsd \
-                    -p netzbilanzd -p sperrd -p nis-syncd -p einsd \
+                    -p netzbilanzd -p sperrd -p einsd \
                     -p tarifbd -p billingd -p accountingd -p vertragd \
                     -p portald -p agentd -p mabis-syncd \
                     --recipe-path recipe.json
@@ -161,7 +161,7 @@ COPY . .
 RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,id=cargo-target-full,sharing=locked,target=/build/target \
     CARGO_INCREMENTAL=1 mold -run cargo build --profile ${PROFILE} -p makod -p marktd -p invoicd -p edmd -p obsd \
-                                     -p netzbilanzd -p sperrd -p nis-syncd -p einsd \
+                                     -p netzbilanzd -p sperrd -p einsd \
                                      -p tarifbd -p billingd -p accountingd \
                                      -p vertragd -p portald -p agentd -p mabis-syncd \
     && CARGO_INCREMENTAL=1 mold -run cargo build --profile ${PROFILE} -p processd --features integrated \
@@ -174,7 +174,6 @@ RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/
     && cp "${BIN_DIR}/obsd"        /usr/local/bin/obsd        && strip /usr/local/bin/obsd \
     && cp "${BIN_DIR}/netzbilanzd" /usr/local/bin/netzbilanzd && strip /usr/local/bin/netzbilanzd \
     && cp "${BIN_DIR}/sperrd"      /usr/local/bin/sperrd      && strip /usr/local/bin/sperrd \
-    && cp "${BIN_DIR}/nis-syncd"   /usr/local/bin/nis-syncd   && strip /usr/local/bin/nis-syncd \
     && cp "${BIN_DIR}/einsd"       /usr/local/bin/einsd       && strip /usr/local/bin/einsd \
     && cp "${BIN_DIR}/tarifbd"     /usr/local/bin/tarifbd     && strip /usr/local/bin/tarifbd \
     && cp "${BIN_DIR}/billingd"    /usr/local/bin/billingd    && strip /usr/local/bin/billingd \
@@ -498,35 +497,6 @@ LABEL org.opencontainers.image.title="sperrd" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 12 — nis-syncd-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS nis-syncd-runtime
-
-COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
-COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
-COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
-                    /usr/share/zoneinfo/leap-seconds.list
-COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
-ENV TZ=Europe/Berlin
-COPY --from=builder --chown=root:root /usr/local/bin/nis-syncd /usr/local/bin/nis-syncd
-EXPOSE 9680
-ENV NIS_SYNCD_LOG_FORMAT=json \
-    NIS_SYNCD_LOG_LEVEL=info
-HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=5 \
-    CMD ["/usr/local/bin/nis-syncd", "--check"]
-ENTRYPOINT ["/usr/local/bin/nis-syncd"]
-ARG OCI_VERSION=0.11.0
-ARG OCI_REVISION=unknown
-ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="nis-syncd" \
-      org.opencontainers.image.description="NIS/GIS grid topology import adapter — NB role, stateless, lifts Anmeldung STP to ≥95% (MaKo)" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.created="${OCI_CREATED}" \
-      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
-      org.opencontainers.image.licenses="MIT OR Apache-2.0"
-
-# ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 13 — einsd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM gcr.io/distroless/cc-debian12:nonroot AS einsd-runtime
@@ -722,7 +692,7 @@ ARG OCI_VERSION=0.11.0
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="agentd" \
-      org.opencontainers.image.description="Multi-agent LLM orchestration daemon — 24 specialists, LanceDB RAG, MCP tools (MaKo)" \
+      org.opencontainers.image.description="Multi-agent LLM orchestration daemon — 28 specialists, LanceDB RAG, MCP tools (MaKo)" \
       org.opencontainers.image.version="${OCI_VERSION}" \
       org.opencontainers.image.revision="${OCI_REVISION}" \
       org.opencontainers.image.created="${OCI_CREATED}" \

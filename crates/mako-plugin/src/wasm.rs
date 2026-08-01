@@ -71,8 +71,6 @@ use crate::{
 pub struct WasmPlugin {
     name: String,
     capabilities: Vec<PluginCapability>,
-    #[allow(dead_code)]
-    ctx: PluginContext,
     inner: Mutex<ExtismPlugin>,
 }
 
@@ -108,10 +106,6 @@ impl WasmPlugin {
         Ok(Self {
             name: manifest.name.clone(),
             capabilities: manifest.capabilities.clone(),
-            ctx: PluginContext {
-                tenant: String::new(), // filled in at call time
-                config: manifest.config.clone(),
-            },
             inner: Mutex::new(plugin),
         })
     }

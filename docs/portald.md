@@ -257,4 +257,4 @@ All tools are **read-only** (`readOnlyHint = true`) — write operations go thro
 
 `portald` is an **LF-role service**. It accesses `marktd` only for VersorgungsStatus
 (the LF's own supply records) — not for NB grid topology or NB billing data.
-Unbundled NB services (`netzbilanzd`, `sperrd`, `nis-syncd`) are never accessible via `portald`.
+Unbundled NB services (`netzbilanzd`, `sperrd`) are never accessible via `portald`.

@@ -5,7 +5,7 @@ nav_order: 1
 description: >-
   Full-stack German energy market communication (BDEW MaKo / EDI@Energy) in Rust.
   EDIFACT parsing, AHB/MIG validation, event-sourced process runtime, AS4 transport,
-  automated APERAK deadline enforcement, 17 production microservices, BO4E ERP webhooks,
+  automated APERAK deadline enforcement, 16 production microservices, BO4E ERP webhooks,
   and LanceDB-powered AI orchestration.
 permalink: /
 mermaid: true
@@ -29,7 +29,7 @@ mermaid: true
     </a>
     <img src="https://img.shields.io/badge/BDEW-FV2026--10--01-green" alt="BDEW format version FV2026-10-01">
     <img src="https://img.shields.io/badge/unsafe__code-denied-green?logo=rust" alt="unsafe_code denied workspace-wide">
-    <img src="https://img.shields.io/badge/mako--service-service_sdk-f59e0b?logo=rust" alt="mako-service shared SDK for all 17 daemons">
+    <img src="https://img.shields.io/badge/mako--service-service_sdk-f59e0b?logo=rust" alt="mako-service shared SDK for all 16 daemons">
   </div>
 
   <h1 class="mako-hero__title">mako ⚡</h1>
@@ -42,7 +42,7 @@ mermaid: true
     A Rust workspace covering the full BDEW MaKo stack: EDIFACT parsing, AHB/MIG validation,
     event-sourced process runtime, AS4 transport, automated regulatory deadline enforcement,
     energy billing, EEG settlement, and LLM-powered AI orchestration.
-    17 independently deployable services. Zero hardcoded EDIFACT parsers required.
+    16 independently deployable services. Zero hardcoded EDIFACT parsers required.
   </p>
 
   <div class="mako-hero__cta">
@@ -78,7 +78,7 @@ mermaid: true
     <span class="mako-kpi__label">event-sourced workflows</span>
   </div>
   <div class="mako-kpi">
-    <span class="mako-kpi__value">17</span>
+    <span class="mako-kpi__value">16</span>
     <span class="mako-kpi__label">production services</span>
   </div>
   <div class="mako-kpi">
@@ -105,7 +105,7 @@ the only platform in this market whose source you can read, verify, and extend.
 It solves two hard problems at once:
 
 - **Protocol correctness** — All 346 Prüfidentifikatoren across 17 EDIFACT message types are validated at AHB/MIG layer, not just schema layer. APERAK 45-minute deadline enforcement is built into the event-sourced runtime, not bolted on.
-- **Operational scale** — 17 independently deployable microservices cover the full lifecycle: supplier-switch processes, NNE billing, EEG settlement, B2C/B2B contract management with multi-user portal access, customer account ledger, and AI-powered automation.
+- **Operational scale** — 16 independently deployable microservices cover the full lifecycle: supplier-switch processes, NNE billing, EEG settlement, B2C/B2B contract management with multi-user portal access, customer account ledger, and AI-powered automation.
 
 Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type safety needed to represent complex regulatory invariants at compile time — not runtime.
 
@@ -287,7 +287,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <div class="mako-feature__icon">🛠️</div>
     <h3>Service SDK</h3>
     <p>
-      <code>mako-service</code> is the shared infrastructure all 17 daemons build on.
+      <code>mako-service</code> is the shared infrastructure all 16 daemons build on.
       A daemon's <code>main</code> is <strong>one line</strong> —
       <code>mako_service::run::&lt;D&gt;()</code> owns the whole lifecycle: structured tracing,
       the tuned connection pool (with per-service <code>application_name</code>), migrations,
@@ -310,7 +310,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
     <h3>AI / LLM Integration</h3>
     <p>
       Every service exposes tools and prompts at <code>/mcp</code> (Streamable HTTP 2025-11-25).
-    `agentd` ships <strong>29 built-in specialists compiled into the container image</strong>
+    `agentd` ships <strong>28 built-in specialists compiled into the container image</strong>
       — operators activate them via <code>[bundled_agents]</code> without copying system prompts.
       Supports <strong>sequential / parallel / race dispatch</strong> modes;
       A2A agent cards at <code>/.well-known/agents/{name}</code>;
@@ -332,7 +332,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
 
 ## Architecture
 
-The system organizes 17 independently deployable services across five functional layers,
+The system organizes 16 independently deployable services across five functional layers,
 connected by CloudEvents 1.0 webhooks and a shared `mako-service` infrastructure SDK.
 
 </div>
@@ -351,7 +351,7 @@ graph TB
     end
 
     subgraph data ["Energy Data & Observability"]
-        edm["edmd · einsd · mabis-syncd · nis-syncd · obsd"]
+        edm["edmd · einsd · mabis-syncd · obsd"]
     end
 
     subgraph retail ["Retail Billing (LF)"]
@@ -373,7 +373,7 @@ graph TB
 
 Every arrow is a CloudEvents 1.0 webhook (HMAC-signed) or typed REST call —
 no shared database between services.
-→ **[Full architecture diagram with all 17 services, ports, and event flows]({{ '/architecture' | relative_url }})**
+→ **[Full architecture diagram with all 16 services, ports, and event flows]({{ '/architecture' | relative_url }})**
 
 </div>
 
@@ -430,7 +430,7 @@ MARKTD_URL=http://localhost:8180 WEBHOOK_URL=http://localhost:8000 bash smoke.sh
 
 ## Services
 
-mako consists of 17 independently deployable services. 14 of them ship a built-in MCP server at `/mcp` for LLM tool integration (agentd is an MCP *client* that orchestrates the others; makod routes protocol traffic and mabis-syncd is a pure batch worker).
+mako consists of 16 independently deployable services. 13 of them ship a built-in MCP server at `/mcp` for LLM tool integration (agentd is an MCP *client* that orchestrates the others; makod routes protocol traffic and mabis-syncd is a pure batch worker).
 
 </div>
 
@@ -494,11 +494,6 @@ mako consists of 17 independently deployable services. 14 of them ship a built-i
     <span class="mako-service-card__port">:8480</span>
     <span class="mako-service-card__desc">Process projections, BNetzA KPI reports, §20 EnWG parity monitoring. Alertmanager bridge.</span>
   </a>
-  <a href="{{ '/nis-syncd' | relative_url }}" class="mako-service-card">
-    <span class="mako-service-card__name">nis-syncd</span>
-    <span class="mako-service-card__port">:9680</span>
-    <span class="mako-service-card__desc">Stateless NIS/GIS grid topology import. Lifts NB Anmeldung STP ~80 % → ≥ 95 %.</span>
-  </a>
 </div>
 
 <div class="mako-group-label">Retail Billing &amp; Finance (LF)</div>
@@ -535,7 +530,7 @@ mako consists of 17 independently deployable services. 14 of them ship a built-i
   <a href="{{ '/agentd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">agentd</span>
     <span class="mako-service-card__port">:9580</span>
-    <span class="mako-service-card__desc">Multi-agent LLM orchestration. 29 specialists compiled into container image. Activated via [bundled_agents] config. Sequential/parallel/race dispatch. A2A agent cards. LanceDB RAG. Billing regulatory guard (§41/§41a/§42). Annual settlement. Billing anomaly AI. § 60 Abs. 2 MsbG substitute-value agent. BSI TR-03109 SMGW diagnostics. VPP dispatch settlement audit (RED III Art. 17). MaBiS deadline monitoring. Compliance (§20 EnWG). OpenAI/Anthropic/Bedrock.</span>
+    <span class="mako-service-card__desc">Multi-agent LLM orchestration. 28 specialists compiled into container image. Activated via [bundled_agents] config. Sequential/parallel/race dispatch. A2A agent cards. LanceDB RAG. Billing regulatory guard (§41/§41a/§42). Annual settlement. Billing anomaly AI. § 60 Abs. 2 MsbG substitute-value agent. BSI TR-03109 SMGW diagnostics. VPP dispatch settlement audit (RED III Art. 17). MaBiS deadline monitoring. Compliance (§20 EnWG). OpenAI/Anthropic/Bedrock.</span>
   </a>
 </div>
 

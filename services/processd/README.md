@@ -27,7 +27,7 @@ without ERP involvement for the common cases.
 | **Database** | PostgreSQL (SQLx, dynamic queries — no compile-time DATABASE_URL) |
 | **Auth** | OIDC/JWT (RS256/ES256/PS256), JWKS background refresh |
 | **Authorization** | Cedar ABAC (`policies/processd.cedar`) |
-| **NB STP rate target** | ≥ 95 % (requires NIS grid records via `nis-syncd` or manual provisioning) |
+| **NB STP rate target** | ≥ 95 % (requires `malo_grid` records provisioned via the marktd NB-role PUT endpoint) |
 | **LF E_0624 window** | 45 min (2700 s) regulatory deadline; entries expire 5 min before |
 | **REQOTE auto-response** | Auto-dispatches QUOTES from `PreisblattMessung`; eliminates the REQOTE answer-deadline risk. Disable: `[msb] auto_preisanfrage = false` |
 | **§14a Steuerungsauftrag** | Auto-confirms iMS ORDERS when `istFernschaltbar=true` AND `produktcode` is in `konfigurationsprodukte` (BK6-24-174 §4.3) |
@@ -83,8 +83,8 @@ de.mako.process.initiated (PID 55001/55016/44001)
 
 | Condition | Expected STP |
 |-----------|-------------|
-| Without NIS import (`nis-syncd` N7) | ~60 % (missing grid records → Escalate) |
-| With NIS data imported | ≥ 95 % |
+| Without `malo_grid` records | ~60 % (missing grid records → Escalate) |
+| With `malo_grid` provisioned (NB-role PUT) | ≥ 95 % |
 
 ---
 

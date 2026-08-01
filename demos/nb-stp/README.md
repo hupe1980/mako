@@ -15,7 +15,7 @@ Bestätigung is delivered to the ERP webhook within seconds.
 | `processd` | `:8580` | NB STP auto-responder — netz-checker (6 checks), LF E_0624 (45 min) |
 | `makod` | `:8080` | EDIFACT process engine — GPKE/WiM/GeLi Gas, in-memory |
 
-The full platform has [17 production services](../../docs/services.md) — `invoicd`,
+The full platform has [16 production services](../../docs/services.md) — `invoicd`,
 `netzbilanzd`, `edmd`, `einsd`, `billingd`, `accountingd`, `vertragd`, `portald`,
 `agentd`, and more. Run them individually as needed following their operator guides.
 
