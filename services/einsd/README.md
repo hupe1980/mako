@@ -8,7 +8,7 @@ through Förderdauer expiry.
 |---|---|
 | **HTTP port** | `:9180` |
 | **Database** | PostgreSQL (eeg_anlagen, settlement_receipts incl. `rechnung_json` + `gutschrift_nummer`, eeg_verguetungssaetze) |
-| **§14 UStG Gutschrift** | Every billable settlement issues the Gutschrift (Gutschriftverfahren — the NB issues the document) as a BO4E `Rechnung` in `settlement_receipts.rechnung_json`, VAT status derived per plant (Regelbesteuerung 19 % / §12 Abs. 3 zero-rated / §19 exempt) |
+| **§14 UStG Gutschrift** | Every billable settlement issues the Gutschrift (Gutschriftverfahren — the NB issues the document) as a BO4E `Rechnung` in `settlement_receipts.rechnung_json`, VAT from the operator's declared `eeg_anlagen.ust_status` (Regelbesteuerung 19 % category `S` / §19 Kleinunternehmer 0 % category `E`) |
 | **Auth** | OIDC/JWT + Cedar ABAC + HMAC-signed CloudEvents |
 | **Plant types** | 19 `erzeugungsart` values: SOLAR variants, WIND_ONSHORE/OFFSHORE, BIOMASSE/BIOGAS/BIOMETHANE, KLAEGAS/GRUBENGAS/DEPONIEGAS, WASSERKRAFT, GEOTHERMIE, GEZEITEN, KWKG |
 | **Settlement models** | 9: VERGUETUNG, MIETERSTROM (§21 Abs. 3), DIREKTVERMARKTUNG (§20 Gleitende Marktprämie), AUSSCHREIBUNG, POST_EEG_SPOT, EIGENVERBRAUCH, KWKG_ZUSCHLAG (§7 KWKG 2023), FLEXIBILITAET (§50), GGV (§42b Solarpaket I) |

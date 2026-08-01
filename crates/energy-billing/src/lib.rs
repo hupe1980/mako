@@ -67,6 +67,9 @@
 // ── Modules ───────────────────────────────────────────────────────────────────
 
 pub mod context;
+/// EN 16931 semantic-model bridge (`Invoice::to_en16931`), behind `en16931`.
+#[cfg(feature = "en16931")]
+pub mod en16931_map;
 pub mod engine;
 pub mod error;
 pub mod invoice;

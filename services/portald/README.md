@@ -17,7 +17,7 @@ It never decodes JWTs or maintains its own MaLo maps — all authorization flows
 | **VersorgungsStatus** | `GET /api/v1/portal/{malo_id}/versorgung` — supply status from `marktd` |
 | **Vorauszahlung** | `GET /api/v1/portal/{malo_id}/vorauszahlung` — advance-payment schedule (§40 Abs. 1 EnWG) |
 | **Contract view** | `GET /api/v1/portal/{malo_id}/vertrag` — active contract (prerequisite for Tarifwechsel/Kündigung UI) |
-| **Invoice download** | `GET /api/v1/portal/{malo_id}/invoices/{record_id}/download` — ZUGFeRD 2.3 / XRechnung 3.0 CII XML |
+| **Invoice download** | `GET /api/v1/portal/{malo_id}/invoices/{record_id}/download` — XRechnung 3.0 CII XML (EN 16931) |
 | **SSE stream** | `GET /api/v1/portal/{malo_id}/events` — live event stream |
 | **Self-service writes** | `POST /api/v1/portal/{malo_id}/tarifwechsel`, `POST /api/v1/portal/{malo_id}/kuendigen`, `PUT /api/v1/portal/{malo_id}/kontakt`, `PUT /api/v1/portal/{malo_id}/sepa` |
 | **MCP** | `/mcp` — 8 read tools + 3 guided prompts (see below) |

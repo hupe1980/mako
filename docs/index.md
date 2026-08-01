@@ -190,8 +190,9 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       §52 Pflichtzahlungen (cumulative from violation start), §100 auto-override, §36h Korrekturfaktor.
       Every billable settlement issues the <strong>§14 UStG Gutschrift</strong>
       (Gutschriftverfahren — the NB issues the document) as a BO4E <code>Rechnung</code> with the
-      per-rate USt breakdown, VAT status derived per plant (Regelbesteuerung 19 % / §12 Abs. 3
-      zero-rated / §19 exempt). Pure <code>eeg-billing</code> crate, zero I/O.
+      per-rate USt breakdown, VAT from the operator's declared <code>ust_status</code>
+      (Regelbesteuerung 19 % category <code>S</code> / §19 Kleinunternehmer 0 % category
+      <code>E</code>). Pure <code>eeg-billing</code> crate, zero I/O.
     </p>
     <a href="{{ '/einsd' | relative_url }}">einsd guide →</a>
   </div>
@@ -203,8 +204,12 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       A typed <code>Product</code> enum across <strong>13 categories</strong> — Strom (SLP/HT/NT/RLM),
       Gas, Wärme, Wasser, Solar, EEG/Einspeisung, §14a Wärmepumpe/Wallbox, HEMS, E-Mobility and §42c Sharing —
       each with its own struct rather than one god-struct of optional fields.
-      Dynamic §41a EPEX tariffs, the §41b iMSys guard, historic levy tables, and
-      XRechnung 3.0 / ZUGFeRD 2.3 (EN16931) are built in.
+      Dynamic §41a EPEX tariffs (with floor/cap), the §41a iMSys guard, commodity-aware VAT history
+      and historic levy tables are built in.
+      Invoices map to a real <strong>EN 16931 semantic model</strong> (<code>en16931</code> +
+      <code>en16931-formats</code>) that renders <strong>XRechnung 3.0 CII and PEPPOL UBL</strong> with a
+      correct <strong>per-line VAT</strong> that reconciles to the BG-23 breakdown — B2G submissions are
+      validated against the full XRechnung profile before dispatch.
       In <code>billingd</code> a deterministic <strong>risk gate</strong> HOLDs anomalous invoices for
       operator release, and <strong>§40b EnWG billing runs</strong> drive monthly/quarterly cycles.
       Pure <code>energy-billing</code> crate — zero I/O, integer-cent money.
@@ -310,7 +315,7 @@ Rust provides zero-cost abstractions, `async`/`await` concurrency, and the type 
       Supports <strong>sequential / parallel / race dispatch</strong> modes;
       A2A agent cards at <code>/.well-known/agents/{name}</code>;
       OpenAI / Anthropic / AWS Bedrock SigV4; LanceDB RAG (tenant-isolated, cosine distance score filtering).
-      Specialists cover billing anomaly detection, §41b/§42 compliance guard,
+      Specialists cover billing anomaly detection, §41a/§42 compliance guard,
       annual settlement orchestration, §20 EnWG parity, SMGW BSI TR-03109 diagnostics,
       VPP dispatch settlement audit (RED III Art. 17), MaBiS Summenzeitreihe monitoring,
       GaBi Gas 2.1 ALOCAT/IMBNOT balance monitoring, EEG batch settlement + §52 sweep, and more.
@@ -506,7 +511,7 @@ mako consists of 17 independently deployable services. 14 of them ship a built-i
   <a href="{{ '/billingd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">billingd</span>
     <span class="mako-service-card__port">:9280</span>
-    <span class="mako-service-card__desc">Energy billing engine. §41a dynamic EPEX. §40b monthly/quarterly billing runs + iMSys Abrechnungsinformation. Deterministic risk gate (score → HOLD → operator release). Gas Brennwertkorrektur + H2-blend audit. §14a Modul 1/3. §42a GGV community solar. VPP auto-billing (de.vpp.dispatch.confirmed → Rechnung, RED III Art. 17). XRechnung 3.0 / ZUGFeRD 2.3.</span>
+    <span class="mako-service-card__desc">Energy billing engine. §41a dynamic EPEX. §40b monthly/quarterly billing runs + iMSys Abrechnungsinformation. Deterministic risk gate (score → HOLD → operator release). Gas Brennwertkorrektur + H2-blend audit. §14a Modul 1/3. §42a GGV community solar. VPP auto-billing (de.vpp.dispatch.confirmed → Rechnung, RED III Art. 17). EN 16931 e-invoicing — XRechnung 3.0 CII + PEPPOL UBL, B2G profile-validated.</span>
   </a>
   <a href="{{ '/accountingd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">accountingd</span>
@@ -530,7 +535,7 @@ mako consists of 17 independently deployable services. 14 of them ship a built-i
   <a href="{{ '/agentd' | relative_url }}" class="mako-service-card">
     <span class="mako-service-card__name">agentd</span>
     <span class="mako-service-card__port">:9580</span>
-    <span class="mako-service-card__desc">Multi-agent LLM orchestration. 29 specialists compiled into container image. Activated via [bundled_agents] config. Sequential/parallel/race dispatch. A2A agent cards. LanceDB RAG. Billing regulatory guard (§41/§41b/§42). Annual settlement. Billing anomaly AI. § 60 Abs. 2 MsbG substitute-value agent. BSI TR-03109 SMGW diagnostics. VPP dispatch settlement audit (RED III Art. 17). MaBiS deadline monitoring. Compliance (§20 EnWG). OpenAI/Anthropic/Bedrock.</span>
+    <span class="mako-service-card__desc">Multi-agent LLM orchestration. 29 specialists compiled into container image. Activated via [bundled_agents] config. Sequential/parallel/race dispatch. A2A agent cards. LanceDB RAG. Billing regulatory guard (§41/§41a/§42). Annual settlement. Billing anomaly AI. § 60 Abs. 2 MsbG substitute-value agent. BSI TR-03109 SMGW diagnostics. VPP dispatch settlement audit (RED III Art. 17). MaBiS deadline monitoring. Compliance (§20 EnWG). OpenAI/Anthropic/Bedrock.</span>
   </a>
 </div>
 
@@ -667,7 +672,7 @@ Beyond the production services, mako exposes reusable Rust libraries:
 | [`metering`](https://crates.io/crates/metering) | ✅ crates.io | German metering domain — `MeterInterval`, `MeasurementSeries`, `ObisCode`, `Sparte`, validation V01–V10, substitution (§ 60 Abs. 2 MsbG), Hampel scoring, resampling, virtual meters, SMGW/CLS (§14a), DST-correct calendar |
 | [`meterstore`](https://crates.io/crates/meterstore) | ✅ crates.io | Hot/cold tiered metering store — recent PostgreSQL window + settled Apache Iceberg V2 history behind one tiering watermark; version-resolved + transaction-time (`as_of`) reads across both tiers, coded-column CHECKs, GDPR-Art.-17 pseudonymisation, read-only Iceberg REST catalog + Arrow Flight SQL. Backs edmd's `meter_reads` + `esa_typ2_reads` |
 | `eeg-billing` | workspace | Pure EEG/KWKG settlement — 10 schemes, §51 Negativpreisregel, §52 Pflichtzahlungen, §36h Wind Korrekturfaktor, `InbetriebnahmeTyp` lifecycle, proptest invariants; opt-in `bo4e` feature → **§14 UStG Gutschrift** (BO4E `Rechnung` + per-rate USt breakdown) |
-| `energy-billing` | workspace | Retail energy billing engine — 13 categories (incl. municipal WASSER), HT/NT ToU, RLM demand charge, §54 EnergieStG exemption, historic levy rates (`stromsteuer_for_year`, `energiesteuer_gas_for_year`), §14a Modul 1/3, XRechnung 3.0 |
+| `energy-billing` | workspace | Retail energy billing engine — 13 categories (incl. municipal WASSER), HT/NT ToU, RLM demand charge, §54 EnergieStG exemption, historic levy rates (`stromsteuer_for_year`, `energiesteuer_gas_for_year`), §14a Modul 1/3, §17 UStG Boni; opt-in `en16931` feature → `Invoice::to_en16931` EN 16931 semantic model (XRechnung/CII + PEPPOL UBL via `en16931-formats`, per-line VAT) |
 | `grid-billing` | workspace | Role-neutral grid **settlement** engine — `SettlementResult` (+ `CalculationTrace`, `LegalReference`, `TariffSource` per position), `Sparte` (Gas/Strom), `KaKundengruppe` (KAV tier), `calculate_reversal()`, `validate_*_input()`, §13a EnWG `redispatch_verguetung`; zero BO4E dep, no float money |
 | `invoic-checker` | workspace | INVOIC plausibility — 6 checks, ToU-aware tariff match |
 | `netz-checker` | workspace | NB Anmeldung validation — 6 deterministic checks, ERC A02/A05/A06/A07/E17 |

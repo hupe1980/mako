@@ -425,6 +425,180 @@ async fn risk_context_reads_baseline_continuity_and_estimates() {
     assert_eq!(ctx.recent_estimated_count, 2, "both priors were estimates");
 }
 
+/// A `TARIFWECHSEL` combined invoice persists — the category must be in the
+/// `billing_records` CHECK list. Before the fix `POST …/tarifwechsel` inserted
+/// `'TARIFWECHSEL'`, which the CHECK rejected (23514) → 500 on every call.
+#[tokio::test]
+#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+async fn a_tarifwechsel_record_is_a_valid_category() {
+    let Some(pool) = test_pool("tarifwechsel_category").await else {
+        return;
+    };
+    let id = pg::insert_billing_record(
+        &pool,
+        "9910000000002",
+        "51238696781",
+        "9910000000002",
+        "STROM-GAS",
+        "TARIFWECHSEL",
+        date!(2026 - 01 - 01),
+        date!(2026 - 01 - 31),
+        &serde_json::json!({ "_typ": "RECHNUNG" }),
+        dec!(100),
+        dec!(119),
+    )
+    .await
+    .expect("TARIFWECHSEL must satisfy the category CHECK");
+
+    let category: String = sqlx::query_scalar("SELECT category FROM billing_records WHERE id = $1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .expect("read back");
+    assert_eq!(category, "TARIFWECHSEL");
+}
+
+/// `mark_dispatched_tx` (called in-tx right after the CE is enqueued) advances a
+/// record past `generated`, which activates the overwrite guard — a re-run of the
+/// same period is then refused instead of silently replacing an invoice already
+/// on its way to the ERP. It is idempotent and scoped to still-generated rows.
+#[tokio::test]
+#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+async fn dispatch_stamp_locks_the_record_against_a_silent_rerun() {
+    let Some(pool) = test_pool("dispatch_stamp").await else {
+        return;
+    };
+    let id = insert_draft(&pool, dec!(100)).await;
+
+    // Stamp dispatched inside a transaction, as the handlers do after enqueue.
+    let mut tx = pool.begin().await.expect("begin");
+    pg::mark_dispatched_tx(&mut *tx, id).await.expect("stamp");
+    pg::mark_dispatched_tx(&mut *tx, id)
+        .await
+        .expect("idempotent re-stamp");
+    tx.commit().await.expect("commit");
+
+    let outcome: String = sqlx::query_scalar("SELECT outcome FROM billing_records WHERE id = $1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .expect("read outcome");
+    assert_eq!(outcome, "dispatched");
+
+    // A re-run for the same period is now refused (correction path), not replaced.
+    let err = pg::insert_billing_record(
+        &pool,
+        "9910000000002",
+        "51238696781",
+        "9910000000002",
+        "STROM-BASIS",
+        "STROM",
+        date!(2026 - 01 - 01),
+        date!(2026 - 01 - 31),
+        &serde_json::json!({ "_typ": "RECHNUNG" }),
+        dec!(999),
+        dec!(999),
+    )
+    .await
+    .expect_err("dispatched record must refuse the overwrite");
+    assert!(err.to_string().contains("correction"), "{err}");
+}
+
+/// Tenant is part of a record's identity: a record written under one tenant is
+/// invisible to every read issued under another tenant — fetch by UUID, list,
+/// and anomaly history all filter on it. Guards the cross-tenant disclosure the
+/// unscoped `SELECT … WHERE id = $1` allowed.
+#[tokio::test]
+#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+async fn reads_are_tenant_scoped() {
+    let Some(pool) = test_pool("tenant_isolation").await else {
+        return;
+    };
+    const OWNER: &str = "9910000000002";
+    const OTHER: &str = "9908888888888";
+
+    let id = pg::insert_billing_record(
+        &pool,
+        OWNER,
+        "51238696781",
+        OWNER,
+        "STROM-BASIS",
+        "STROM",
+        date!(2026 - 02 - 01),
+        date!(2026 - 02 - 28),
+        &serde_json::json!({ "_typ": "RECHNUNG" }),
+        dec!(200),
+        dec!(238),
+    )
+    .await
+    .expect("insert owner record");
+
+    // Fetch by UUID: owner sees it, another tenant does not.
+    assert!(
+        pg::fetch_billing_record(&pool, OWNER, id)
+            .await
+            .expect("owner fetch")
+            .is_some()
+    );
+    assert!(
+        pg::fetch_billing_record(&pool, OTHER, id)
+            .await
+            .expect("other fetch")
+            .is_none(),
+        "a UUID known to the owner must not resolve under another tenant"
+    );
+
+    // List: scoped to the calling tenant.
+    let owner_rows = pg::list_billing_records(&pool, OWNER, None, None, None, 100)
+        .await
+        .expect("owner list");
+    assert_eq!(owner_rows.len(), 1);
+    let other_rows = pg::list_billing_records(&pool, OTHER, None, None, None, 100)
+        .await
+        .expect("other list");
+    assert!(other_rows.is_empty(), "list must not leak across tenants");
+
+    // Anomaly history: the other tenant sees no baseline for the same MaLo.
+    let other_report = pg::check_billing_anomaly(&pool, OTHER, "51238696781", OWNER, None)
+        .await
+        .expect("other anomaly");
+    assert!(
+        !other_report.is_anomaly && other_report.deviation_pct.is_none(),
+        "anomaly baseline must be tenant-scoped"
+    );
+}
+
+/// The EN 16931 semantic model is attached to the record and round-trips — the
+/// XRechnung/CII/UBL renderers read it back, never re-parsing BO4E.
+#[tokio::test]
+#[ignore = "requires BILLINGD_TEST_DATABASE_URL"]
+async fn the_en16931_model_is_attached_and_round_trips() {
+    let Some(pool) = test_pool("en16931_attach").await else {
+        return;
+    };
+    let id = insert_draft(&pool, dec!(100)).await;
+
+    // Freshly inserted: no model yet.
+    let before = pg::fetch_billing_record(&pool, "9910000000002", id)
+        .await
+        .expect("fetch")
+        .expect("row");
+    assert!(before.en16931_json.is_none());
+
+    let model = serde_json::json!({ "number": "R-EN-1", "currency": "EUR" });
+    let mut tx = pool.begin().await.expect("begin");
+    pg::attach_en16931(&mut *tx, id, &model)
+        .await
+        .expect("attach");
+    tx.commit().await.expect("commit");
+
+    let after = pg::fetch_billing_record(&pool, "9910000000002", id)
+        .await
+        .expect("fetch")
+        .expect("row");
+    assert_eq!(after.en16931_json.as_ref(), Some(&model));
+}
+
 /// HELD records enter the review queue and can be released exactly once.
 #[tokio::test]
 #[ignore = "requires BILLINGD_TEST_DATABASE_URL"]

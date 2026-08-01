@@ -142,6 +142,11 @@ pub async fn post_sammelrechnung(
         )
         .await
         {
+            if let Err(e) =
+                crate::einvoice::store(&pool, record_id, &result, &cfg, &entry.malo_id).await
+            {
+                tracing::warn!(%record_id, error = %e, "billingd: attach en16931 model failed");
+            }
             per_malo_ids.push(record_id);
         }
         parts.push((entry.malo_id.clone(), result));
@@ -214,6 +219,20 @@ pub async fn post_sammelrechnung(
         if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
             return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
+        if let Err(e) = mark_dispatched_tx(&mut *tx, sammel_id).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    }
+    if let Err(e) = crate::einvoice::store(
+        &mut *tx,
+        sammel_id,
+        &sammel_invoice,
+        &cfg,
+        &rahmenvertrag_id,
+    )
+    .await
+    {
+        tracing::warn!(%sammel_id, error = %e, "billingd: attach en16931 model failed");
     }
     if let Err(e) = tx.commit().await {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
@@ -247,8 +266,15 @@ pub struct SubmitB2gRequest {
     /// Target portal identifier: `"ZRE"` (Zentraler Rechnungseingang) or `"OZG-RE"`.
     /// Defaults to `"ZRE"`.
     pub portal: Option<String>,
-    /// Operator reference (e.g. purchase order number or B2G contract number).
+    /// BT-10 Leitweg-ID of the receiving public authority. Required for a ZRE/
+    /// OZG-RE submission (`BR-DE-15`), so `reference` is what the portal routes on.
     pub reference: Option<String>,
+    /// BG-7 buyer (the public authority) — supplied per submission because the
+    /// recipient and its Rechnungsadresse are known to the caller, not the billing
+    /// engine. Completes the model's placeholder buyer so the document is
+    /// XRechnung-conformant.
+    #[serde(default)]
+    pub buyer: Option<crate::einvoice::B2gBuyer>,
 }
 
 /// `POST /api/v1/billing/{id}/submit-b2g`
@@ -278,30 +304,54 @@ pub async fn post_submit_b2g(
     Path(id): Path<Uuid>,
     Json(req): Json<SubmitB2gRequest>,
 ) -> impl IntoResponse {
-    let row = match fetch_billing_record(&pool, id).await {
+    let row = match fetch_billing_record(&pool, &cfg.tenant, id).await {
         Ok(Some(r)) => r,
         Ok(None) => return (StatusCode::NOT_FOUND, "billing record not found").into_response(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
-    let rates = cfg.regulatory_rates_for_period(&row.category, row.period_from, row.period_to);
-    let netto = row.total_netto_eur.unwrap_or_default();
-    let brutto = row.total_brutto_eur.unwrap_or_default();
-    let mwst = brutto - netto;
-    let info = crate::xrechnung::info_from_rechnung_json(
-        &row.rechnung_json,
-        &row.malo_id,
-        &row.lf_mp_id,
-        &cfg.tenant,
-        cfg.seller_vat_id.clone(),
-        netto,
-        mwst,
-        brutto,
-        row.period_from,
-        row.period_to,
-        rates.mwst_rate * rust_decimal::dec!(100),
-    );
-    let xml = crate::xrechnung::build_zugferd_cii_xml(&info);
+    // Render from the stored EN 16931 model and refuse to submit a document that
+    // violates the rules — a B2G portal would reject it anyway.
+    let Some(model) = row
+        .en16931_json
+        .as_ref()
+        .and_then(|v| serde_json::from_value::<en16931::Invoice>(v.clone()).ok())
+    else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "record has no EN 16931 model — re-run the billing calculation",
+        )
+            .into_response();
+    };
+    // Complete the buyer (the receiving authority, known to the caller) and stamp
+    // its Leitweg-ID (BT-10).
+    let model = match &req.buyer {
+        Some(b) => crate::einvoice::apply_b2g_buyer(model, b),
+        None => model,
+    };
+    let model = match req.reference.as_deref() {
+        Some(leitweg) => crate::einvoice::with_buyer_reference(model, leitweg),
+        None => model,
+    };
+    // Validate against the XRechnung 3.0 profile and render in one step — a B2G
+    // submission must be profile-valid or the ZRE/OZG-RE portal rejects it. On
+    // failure, report exactly what is missing (usually the buyer BG-7 terms).
+    let xml = match crate::einvoice::render_xrechnung_cii(&model) {
+        Ok(xml) => xml,
+        Err(rules) => {
+            let gaps = crate::einvoice::buyer_gaps(&model);
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "XRechnung 3.0 conformance failed — not submitting",
+                    "violated_rules": rules,
+                    "buyer_gaps": gaps,
+                    "hint": "supply the recipient in `buyer` (name, address, contact) and `reference` (Leitweg-ID)",
+                })),
+            )
+                .into_response();
+        }
+    };
 
     let portal = req.portal.as_deref().unwrap_or("ZRE");
 
@@ -346,6 +396,7 @@ pub async fn post_submit_b2g(
             "message": "de.billing.xrechnung.b2g.ready CloudEvent dispatched to ERP webhook",
             "note": "ERP PEPPOL AS4 gateway is responsible for actual transmission to ZRE/OZG-RE",
             "regulatory": "§27 EGovG: B2G e-invoicing mandatory from 01.01.2027",
+            "conformance": "XRechnung 3.0 (validated before dispatch)",
         })),
     )
         .into_response()
@@ -366,13 +417,25 @@ pub async fn get_ubl(
     Extension(cfg): Extension<Arc<BillingdConfig>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let row = match fetch_billing_record(&pool, id).await {
+    let row = match fetch_billing_record(&pool, &cfg.tenant, id).await {
         Ok(Some(r)) => r,
         Ok(None) => return (StatusCode::NOT_FOUND, "billing record not found").into_response(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
-    let ubl = build_ubl_invoice(&row, &cfg);
+    // PEPPOL BIS 3.0 UBL from the stored EN 16931 model.
+    let Some(model) = row
+        .en16931_json
+        .as_ref()
+        .and_then(|v| serde_json::from_value::<en16931::Invoice>(v.clone()).ok())
+    else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "record has no EN 16931 model — re-run the billing calculation",
+        )
+            .into_response();
+    };
+    let ubl = crate::einvoice::render_ubl(&model);
 
     (
         StatusCode::OK,
@@ -386,139 +449,4 @@ pub async fn get_ubl(
         ubl,
     )
         .into_response()
-}
-
-/// Build a minimal but conformant PEPPOL BIS Billing 3.0 UBL 2.1 XML.
-///
-/// Covers the mandatory EN 16931 elements: Invoice, Supplier, Customer, Lines,
-/// TaxTotal, LegalMonetaryTotal.  The XML is suitable for PEPPOL AS4 transport
-/// and passes the OpenPEPPOL Schematron rules for `peppol-bis-billing-3`.
-pub(crate) fn build_ubl_invoice(row: &crate::pg::BillingRecordRow, cfg: &BillingdConfig) -> String {
-    let invoice_id = row
-        .rechnung_json
-        .get("rechnungsnummer")
-        .and_then(|v| v.as_str())
-        .unwrap_or("UNKNOWN");
-    let issue_date = row.period_to.to_string();
-    // §40c EnWG: payment due at the earliest two weeks after receipt of the
-    // payment request — use the engine-stamped BO4E faelligkeitsdatum
-    // (issue + 14 d).
-    let due_date = row
-        .rechnung_json
-        .get("faelligkeitsdatum")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned)
-        .unwrap_or_else(|| (row.period_to + time::Duration::days(14)).to_string());
-    let netto = row.total_netto_eur.unwrap_or_default();
-    let brutto = row.total_brutto_eur.unwrap_or_default();
-    let tax_amount = brutto - netto;
-    let tax_pct = if netto > rust_decimal::Decimal::ZERO {
-        (tax_amount / netto * rust_decimal::dec!(100)).round_kfm(2)
-    } else {
-        rust_decimal::dec!(19)
-    };
-    let seller_name = cfg.tenant.clone();
-    let buyer_id = row.malo_id.clone();
-
-    // Build line items from Rechnung positions.
-    let lines: Vec<String> = row
-        .rechnung_json
-        .get("rechnungspositionen")
-        .and_then(|v| v.as_array())
-        .map(|positions| {
-            positions
-                .iter()
-                .enumerate()
-                .filter_map(|(i, pos)| {
-                    let desc = pos
-                        .get("positionstext")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("Position");
-                    let net: rust_decimal::Decimal = pos
-                        .get("gesamtpreis")
-                        .or_else(|| pos.get("betragNetto"))
-                        .and_then(|b| b.get("wert"))
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or_default();
-                    if net == rust_decimal::Decimal::ZERO {
-                        return None;
-                    }
-                    Some(format!(
-                        r#"    <cac:InvoiceLine>
-      <cbc:ID>{line}</cbc:ID>
-      <cbc:InvoicedQuantity unitCode="C62">1</cbc:InvoicedQuantity>
-      <cbc:LineExtensionAmount currencyID="EUR">{net}</cbc:LineExtensionAmount>
-      <cac:Item>
-        <cbc:Description>{desc}</cbc:Description>
-        <cbc:Name>{desc}</cbc:Name>
-        <cac:ClassifiedTaxCategory>
-          <cbc:ID>S</cbc:ID>
-          <cbc:Percent>{tax_pct}</cbc:Percent>
-          <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
-        </cac:ClassifiedTaxCategory>
-      </cac:Item>
-      <cac:Price>
-        <cbc:PriceAmount currencyID="EUR">{net}</cbc:PriceAmount>
-      </cac:Price>
-    </cac:InvoiceLine>"#,
-                        line = i + 1,
-                        desc = desc
-                            .replace('&', "&amp;")
-                            .replace('<', "&lt;")
-                            .replace('>', "&gt;"),
-                    ))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<ubl:Invoice xmlns:ubl="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
-             xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
-             xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
-  <!-- PEPPOL BIS Billing 3.0 (EN 16931) — generated by billingd -->
-  <!-- EU Directive 2014/55/EU: mandatory for B2G from 01.01.2028 -->
-  <cbc:CustomizationID>urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0</cbc:CustomizationID>
-  <cbc:ProfileID>urn:fdc:peppol.eu:2017:poacc:billing:01:1.0</cbc:ProfileID>
-  <cbc:ID>{invoice_id}</cbc:ID>
-  <cbc:IssueDate>{issue_date}</cbc:IssueDate>
-  <cbc:DueDate>{due_date}</cbc:DueDate>
-  <cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>
-  <cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>
-  <cac:AccountingSupplierParty>
-    <cac:Party>
-      <cbc:EndpointID schemeID="0088">{seller_name}</cbc:EndpointID>
-      <cac:PartyName><cbc:Name>{seller_name}</cbc:Name></cac:PartyName>
-    </cac:Party>
-  </cac:AccountingSupplierParty>
-  <cac:AccountingCustomerParty>
-    <cac:Party>
-      <cbc:EndpointID schemeID="0088">{buyer_id}</cbc:EndpointID>
-      <cac:PartyName><cbc:Name>{buyer_id}</cbc:Name></cac:PartyName>
-    </cac:Party>
-  </cac:AccountingCustomerParty>
-  <cac:TaxTotal>
-    <cbc:TaxAmount currencyID="EUR">{tax_amount}</cbc:TaxAmount>
-    <cac:TaxSubtotal>
-      <cbc:TaxableAmount currencyID="EUR">{netto}</cbc:TaxableAmount>
-      <cbc:TaxAmount currencyID="EUR">{tax_amount}</cbc:TaxAmount>
-      <cac:TaxCategory>
-        <cbc:ID>S</cbc:ID>
-        <cbc:Percent>{tax_pct}</cbc:Percent>
-        <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
-      </cac:TaxCategory>
-    </cac:TaxSubtotal>
-  </cac:TaxTotal>
-  <cac:LegalMonetaryTotal>
-    <cbc:LineExtensionAmount currencyID="EUR">{netto}</cbc:LineExtensionAmount>
-    <cbc:TaxExclusiveAmount currencyID="EUR">{netto}</cbc:TaxExclusiveAmount>
-    <cbc:TaxInclusiveAmount currencyID="EUR">{brutto}</cbc:TaxInclusiveAmount>
-    <cbc:PayableAmount currencyID="EUR">{brutto}</cbc:PayableAmount>
-  </cac:LegalMonetaryTotal>
-{lines}
-</ubl:Invoice>"#,
-        lines = lines.join("\n"),
-    )
 }

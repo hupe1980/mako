@@ -120,6 +120,19 @@ impl BillingProvider for ElectricityProvider {
                 });
             }
         }
+
+        // Electricity was 16 % in H2/2020 (§28 Abs. 1 UStG a.F.), 19 % otherwise.
+        // A period straddling that boundary has no single correct rate — split at
+        // the Stichtag and merge, the same discipline the gas/heat providers apply.
+        if crate::rates::mwst_rate_for_period(ctx.period_from(), ctx.period_to()).is_none() {
+            w.push(BillingWarning {
+                code: "MWST_STICHTAG_IM_ZEITRAUM",
+                severity: WarningSeverity::Warning,
+                message: "Abrechnungszeitraum überschreitet eine USt-Satzgrenze für Strom \
+                          (§28 UStG) — am Stichtag splitten und Teilrechnungen zusammenführen"
+                    .to_owned(),
+            });
+        }
         w
     }
 
@@ -478,6 +491,45 @@ impl BillingProvider for ElectricityProvider {
             });
         }
 
+        // ── Boni (Neukunden-/Sofort-/Treuebonus) ───────────────────────────────
+        // A contractual bonus is a Preisnachlass (§17 UStG Entgeltminderung): it
+        // rides as a negative Bonus position that reduces the taxable base, so the
+        // MwSt is computed on the net after the bonus (not a gross gift on top).
+        if let Some(bonus) = product.sofortbonus_eur.filter(|v| *v > Decimal::ZERO) {
+            positions.push(
+                BillingPosition::debit(
+                    "Sofortbonus / Neukundenbonus",
+                    Decimal::ONE,
+                    "Bonus",
+                    -bonus,
+                    PositionCategory::Bonus,
+                )
+                .with_legal_basis("Vertraglich (§17 UStG Entgeltminderung)")
+                .with_tag("bonus")
+                .with_tag("sofortbonus"),
+            );
+        }
+        if let Some(treue) = product
+            .treuebonus_eur_per_year
+            .filter(|v| *v > Decimal::ZERO)
+        {
+            // Pro-rate the annual loyalty bonus to the billed days.
+            let year_days = Decimal::from(time::util::days_in_year(ctx.period_from().year()));
+            let frac = (Decimal::from(days) / year_days).round_kfm(4);
+            positions.push(
+                BillingPosition::debit(
+                    "Treuebonus (anteilig)",
+                    frac,
+                    "Jahr",
+                    -treue,
+                    PositionCategory::Bonus,
+                )
+                .with_legal_basis("Vertraglich (§17 UStG Entgeltminderung)")
+                .with_tag("bonus")
+                .with_tag("treuebonus"),
+            );
+        }
+
         // ── MSB Grundgebühr ────────────────────────────────────────────────────
         // Messstellenbetreiber fee bundled into the retail invoice (MsbG 2016).
         // Itemised separately per §41 EnWG.
@@ -498,7 +550,7 @@ impl BillingProvider for ElectricityProvider {
             );
         }
 
-        // ── Zählerstand info positions (§41 EnWG) ──────────────────────────────
+        // ── Zählerstand info positions (§40 Abs. 2 Nr. 6 EnWG) ─────────────────
         if meter.zaehlerstand_von.is_some() || meter.zaehlerstand_bis.is_some() {
             let label = format!(
                 "Zählerstand: {} – {}",
@@ -518,7 +570,7 @@ impl BillingProvider for ElectricityProvider {
                 .unwrap_or("-");
             positions.push(BillingPosition {
                 description: label,
-                legal_basis: Some("§41 EnWG".to_owned()),
+                legal_basis: Some("§40 Abs. 2 Nr. 6 EnWG".to_owned()),
                 quantity: Decimal::ZERO,
                 unit: "kWh".to_owned(),
                 unit_price_eur: Decimal::ZERO,
@@ -530,7 +582,7 @@ impl BillingProvider for ElectricityProvider {
             });
         }
 
-        // ── §41 EnWG Abs. 1 Nr. 3 — Verbrauchshistorie (consumption comparison) ──
+        // ── §40 Abs. 2 EnWG — Verbrauchshistorie (consumption comparison) ──
         // Mandatory invoice display requirement: show prior-year and average.
         // These are informational positions (EUR 0) — they appear in the invoice
         // printout but do not affect the calculation.
@@ -538,7 +590,7 @@ impl BillingProvider for ElectricityProvider {
             if let Some(vj_kwh) = vh.vorjahr_kwh {
                 positions.push(BillingPosition {
                     description: format!("Verbrauch Vorjahreszeitraum: {vj_kwh:.0} kWh"),
-                    legal_basis: Some("§41 Abs. 1 Nr. 3a EnWG".to_owned()),
+                    legal_basis: Some("§40 Abs. 2 Nr. 7 EnWG".to_owned()),
                     quantity: vj_kwh,
                     unit: "kWh".to_owned(),
                     unit_price_eur: Decimal::ZERO,
@@ -553,7 +605,7 @@ impl BillingProvider for ElectricityProvider {
                 let kundengruppe = vh.kundengruppe.as_deref().unwrap_or("Vergleichsgruppe");
                 positions.push(BillingPosition {
                     description: format!("Bundesdurchschnitt {kundengruppe}: {avg_kwh:.0} kWh"),
-                    legal_basis: Some("§41 Abs. 1 Nr. 3b EnWG".to_owned()),
+                    legal_basis: Some("§40 Abs. 2 Nr. 8 EnWG".to_owned()),
                     quantity: avg_kwh,
                     unit: "kWh".to_owned(),
                     unit_price_eur: Decimal::ZERO,
@@ -570,7 +622,7 @@ impl BillingProvider for ElectricityProvider {
         }
 
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
@@ -596,7 +648,7 @@ impl BillingProvider for ElectricityProvider {
                 unit_price_eur: Decimal::ZERO,
                 net_eur: Decimal::ZERO,
                 category: PositionCategory::Info,
-                tags: vec!["schatzwert".to_owned(), "messZV".to_owned()],
+                tags: vec!["schatzwert".to_owned(), "ersatzwert".to_owned()],
                 applicable_tax_rate: None,
                 trace: crate::position::PositionTrace::default(),
             });
@@ -606,7 +658,7 @@ impl BillingProvider for ElectricityProvider {
         if meter.zaehler_replaced {
             positions.push(BillingPosition {
                 description: "Zählerwechsel innerhalb des Abrechnungszeitraums".to_owned(),
-                legal_basis: Some("§41 EnWG".to_owned()),
+                legal_basis: Some("§40 Abs. 2 Nr. 6 EnWG".to_owned()),
                 quantity: Decimal::ZERO,
                 unit: String::new(),
                 unit_price_eur: Decimal::ZERO,
@@ -1022,6 +1074,22 @@ impl BillingProvider for GasProvider {
                     .to_owned(),
             });
         }
+        // The BEHG CO₂ price (§10 BEHG) steps at each calendar-year boundary. A
+        // period spanning a year-end where the rate changes has no single correct
+        // levy — split at 31.12./01.01. and bill each portion at its year's rate.
+        if ctx.period_from().year() != ctx.period_to().year()
+            && crate::rates::behg_ct_per_kwh_for_year(ctx.period_from().year())
+                != crate::rates::behg_ct_per_kwh_for_year(ctx.period_to().year())
+        {
+            w.push(BillingWarning {
+                code: "BEHG_JAHRESGRENZE_IM_ZEITRAUM",
+                severity: WarningSeverity::Warning,
+                message: "Abrechnungszeitraum überschreitet eine BEHG-Jahresgrenze \
+                          (§10 BEHG, CO₂-Preis steigt zum Jahreswechsel) — am 31.12. \
+                          splitten und je Teilzeitraum den Jahressatz anwenden"
+                    .to_owned(),
+            });
+        }
         w
     }
 
@@ -1114,14 +1182,11 @@ impl BillingProvider for GasProvider {
         // ── Arbeitspreis ───────────────────────────────────────────────────────
         if kwh_hs > Decimal::ZERO {
             // Resolve effective gas price: gas_indexed_price > seasonal > direct.
-            // gas_indexed_price (gas-specific TTF/NCG index) takes priority.
-            // Falls back to legacy indexed_price for backward compat.
-            let active_indexed = product
-                .gas_indexed_price
-                .as_ref()
-                .or(product.gas_indexed_price.as_ref());
+            // The legacy `indexed_price` field folds into `gas_indexed_price` via
+            // `#[serde(alias = "indexed_price")]`, so there is one source to read.
+            let active_indexed = product.gas_indexed_price.as_ref();
             let gas_ap_ct = if let Some(idx) = active_indexed {
-                // Gas indexed price (TTF/NCG-linked, §41 Abs. 3 EnWG)
+                // Gas indexed price (TTF/NCG-linked, §41 EnWG Sonderkundenvertrag)
                 idx.effective_ct_per_kwh()
                     .or(seasonal_gas_ap)
                     .or(product.gas_arbeitspreis_ct_per_kwh_hs)
@@ -1399,14 +1464,14 @@ impl BillingProvider for GasProvider {
                 unit_price_eur: Decimal::ZERO,
                 net_eur: Decimal::ZERO,
                 category: PositionCategory::Info,
-                tags: vec!["schatzwert".to_owned(), "messZV".to_owned()],
+                tags: vec!["schatzwert".to_owned(), "ersatzwert".to_owned()],
                 applicable_tax_rate: None,
                 trace: crate::position::PositionTrace::default(),
             });
         }
 
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
@@ -1519,7 +1584,17 @@ impl BillingProvider for HeatProvider {
                 .with_tag("waerme"),
             );
         }
-        if let Some(ap_ct) = product.waerme_arbeitspreis_ct_per_kwh
+        // AVBFernwärmeV §24 Abs. 4 Preisänderungsklausel: an index-linked
+        // Arbeitspreis resolves the effective ct/kWh and overrides the static one.
+        let (waerme_ap_ct, ap_basis) = match product
+            .waerme_indexed_price
+            .as_ref()
+            .and_then(|idx| idx.effective_ct_per_kwh())
+        {
+            Some(idx_ct) => (Some(idx_ct), "AVBFernwärmeV §24 Abs. 4"),
+            None => (product.waerme_arbeitspreis_ct_per_kwh, "§41 EnWG"),
+        };
+        if let Some(ap_ct) = waerme_ap_ct
             && meter.kwh_waerme > Decimal::ZERO
         {
             positions.push(
@@ -1528,23 +1603,19 @@ impl BillingProvider for HeatProvider {
                     meter.kwh_waerme,
                     ap_ct,
                     "kWh_th",
-                    "§41 EnWG",
+                    ap_basis,
                     &["waerme"],
                 )
                 .with_tag("waerme"),
             );
         }
-        // ── Auto-7% MwSt for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG) ──────
-        // waerme_is_renewable = true → automatic 7% tax rate on heat positions.
-        // mwst_rate_override still wins if explicitly set (for edge-case overrides).
-        let heat_tax_rate = if product.mwst_rate_override.is_some() {
-            product.mwst_rate_override
-        } else if product.waerme_is_renewable {
-            Some(dec!(0.07))
-        } else {
-            None
-        };
-        if let Some(rate) = heat_tax_rate {
+        // District heating is standard-rated. There is NO permanent reduced rate
+        // (§12 Abs. 2 Nr. 1 UStG covers Anlage-2 goods, not heat); the 7 % on
+        // gas/Fernwärme was the temporary §28 Abs. 5/6 UStG window and is expressed
+        // via `mwst_rate_override`. When an override is set, stamp it on the heat
+        // positions so a bundled multi-commodity invoice yields a separate tax
+        // bucket; otherwise leave them for the engine's period-aware default rate.
+        if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
                 if pos.applicable_tax_rate.is_none()
                     && !matches!(
@@ -1954,7 +2025,7 @@ impl BillingProvider for SolarProvider {
             );
         }
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
@@ -2099,7 +2170,7 @@ impl BillingProvider for EegProvider {
             );
         }
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
@@ -2202,7 +2273,7 @@ impl BillingProvider for EinspeisungProvider {
             );
         }
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
@@ -2294,7 +2365,7 @@ impl BillingProvider for HemsProvider {
             );
         }
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
@@ -2401,7 +2472,7 @@ impl BillingProvider for EmobilityProvider {
             );
         }
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
@@ -2473,7 +2544,7 @@ impl BillingProvider for ServiceProvider {
             );
         }
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {
@@ -2537,7 +2608,7 @@ impl BillingProvider for DynamicElectricityProvider {
         _ctx: &BillingContext,
         quantities: &Quantities,
     ) -> Vec<BillingWarning> {
-        // §41b Abs. 2 EnWG — dynamic tariffs require iMSys (Smart Meter Gateway).
+        // §41a Abs. 1 EnWG — dynamic tariffs require iMSys (Smart Meter Gateway).
         // If the metering mode is explicitly set to SLP or RLM, this is a definite
         // regulatory violation that must block the billing run.
         let is_non_imsys = quantities
@@ -2546,9 +2617,9 @@ impl BillingProvider for DynamicElectricityProvider {
             .is_some_and(|m| m.metering_mode != crate::quantities::MeteringMode::Imsys);
         if is_non_imsys {
             return vec![BillingWarning {
-                code: "SECT41B_IMSYS_REQUIRED",
+                code: "SECT41A_IMSYS_REQUIRED",
                 severity: WarningSeverity::Error,
-                message: "§41b Abs. 2 EnWG: dynamic tariffs (§41a) require an intelligent \
+                message: "§41a Abs. 1 EnWG: dynamic tariffs require an intelligent \
                      metering system (iMSys / Smart Meter Gateway). The meter point \
                      has MeteringMode::Slp or MeteringMode::Rlm. Update metering mode \
                      to MeteringMode::Imsys or switch the customer to a fixed-price product."
@@ -2569,10 +2640,12 @@ impl BillingProvider for DynamicElectricityProvider {
         let rates = &ctx.regulatory_rates;
         let days = ctx.days();
         let floor_ct = product.dynamic_epex_floor_ct_kwh;
+        let cap_ct = product.dynamic_epex_cap_ct_kwh;
         // §41a EnWG: the customer's per-kWh price is the market spot price plus
         // the Lieferant's fixed Arbeitspreis-Aufschlag (margin). The floor caps
-        // the spot component (protecting the Lieferant against negative prices);
-        // the Aufschlag is then added on top.
+        // the spot component from below (protecting the Lieferant against negative
+        // prices); an optional cap limits it from above (consumer protection); the
+        // Aufschlag is then added on top.
         let aufschlag_ct = product.auf_abschlag_ct_per_kwh.unwrap_or(Decimal::ZERO);
         let source_name = self.spot_price_source.source_name().to_owned();
         let mut positions: Vec<BillingPosition> = Vec::new();
@@ -2630,12 +2703,14 @@ impl BillingProvider for DynamicElectricityProvider {
                 continue;
             };
 
-            let spot_ct = if let Some(floor) = floor_ct {
-                price_ct.max(floor)
-            } else {
-                price_ct
-            };
-            // §41a: market (floored) spot + fixed Arbeitspreis-Aufschlag.
+            let mut spot_ct = price_ct;
+            if let Some(floor) = floor_ct {
+                spot_ct = spot_ct.max(floor);
+            }
+            if let Some(cap) = cap_ct {
+                spot_ct = spot_ct.min(cap);
+            }
+            // §41a: market spot clamped into [floor, cap] + fixed Arbeitspreis-Aufschlag.
             let effective_ct = spot_ct + aufschlag_ct;
 
             // ct/kWh → EUR/kWh as Amount<5>.  round_dp(5) first ensures the
@@ -2654,7 +2729,7 @@ impl BillingProvider for DynamicElectricityProvider {
         // EPEX price cannot be billed at all — dropping it would silently
         // under-bill and produce an unverifiable invoice. Any missing-price
         // interval that carries consumption hard-blocks the run, exactly like
-        // the §41b iMSys guard, rather than degrading to a partial bill.
+        // the §41a iMSys guard, rather than degrading to a partial bill.
         if missing_price_kwh > Decimal::ZERO {
             return Err(EngineError::ValidationBlocked {
                 warnings: vec![BillingWarning {
@@ -2785,7 +2860,7 @@ impl BillingProvider for DynamicElectricityProvider {
         }
 
         // ── Wire per-position applicable_tax_rate from product.mwst_rate_override ──
-        // Enables multi-rate MwSt: 7% for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
+        // Enables multi-rate MwSt: e.g. 7% Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
         // 0% for solar PV ≤30 kWp (§12 Abs. 3 UStG), etc.
         if let Some(rate) = product.mwst_rate_override {
             for pos in &mut positions {

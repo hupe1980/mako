@@ -150,7 +150,7 @@ impl PositionTrace {
 /// the operator should review before dispatch. Examples:
 /// - Estimated meter reading (§ 60 Abs. 2 MsbG) — labeled on invoice
 /// - Preisgarantie expiring in ≤ 30 days — §41 Abs. 1 Nr. 4 EnWG notice
-/// - §41a dynamic tariff offered but meter is not iMSys — §41b EnWG risk
+/// - §41a dynamic tariff offered but meter is not iMSys — §41a Abs. 1 EnWG risk
 /// - Consumption deviates > 50% from Vorjahresverbrauch — review reading
 ///
 /// The service layer (`billingd`) should surface `Error`-severity warnings
@@ -304,7 +304,7 @@ pub struct BillingPosition {
     /// When `Some`, the `MwStProvider` uses this rate for this position instead of the
     /// engine-wide default. Enables multi-rate VAT on a single invoice:
     /// - Standard electricity/gas: `None` (uses engine default, typically `0.19`)
-    /// - Renewable Fernwärme: `Some(dec!(0.07))` (§12 Abs. 2 Nr. 1 UStG)
+    /// - Trinkwasser: `Some(dec!(0.07))` (§12 Abs. 2 Nr. 1 UStG, Anlage 2)
     /// - Solar PV ≤30 kWp since 01.01.2023: `Some(dec!(0.0))` (§12 Abs. 3 UStG Solarpaket I)
     ///
     /// Positions with category `Tax`, `Abschlag`, or `Info` are excluded from MwSt computation.
@@ -391,7 +391,7 @@ impl BillingPosition {
     /// Set the MwSt rate for this position (§ UStG).
     ///
     /// Override the engine-wide default for this specific position.
-    /// Use `dec!(0.07)` for renewable Fernwärme (§12 Abs. 2 Nr. 1 UStG),
+    /// Use `dec!(0.07)` for Trinkwasser (§12 Abs. 2 Nr. 1 UStG, Anlage 2),
     /// `dec!(0.0)` for solar PV ≤30 kWp (§12 Abs. 3 UStG),
     /// or omit to use the engine default (19%).
     #[must_use]

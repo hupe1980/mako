@@ -263,16 +263,30 @@ pub struct ElectricityProduct {
     pub indexed_price: Option<IndexedPriceConfig>,
     #[serde(default)]
     pub seasonal_prices: Option<Vec<SeasonalPriceOverride>>,
-    /// true → §41a EPEX Spot per-interval billing. Requires iMSys (§41b EnWG).
+    /// true → §41a EPEX Spot per-interval billing. Requires iMSys (§41a Abs. 1 EnWG).
     #[serde(default)]
     pub dynamic_epex: bool,
     /// Price floor for §41a (ct/kWh). None = full market exposure.
     #[serde(default)]
     pub dynamic_epex_floor_ct_kwh: Option<Decimal>,
+    /// Price ceiling for §41a (ct/kWh) — a contractual consumer-protection cap on
+    /// the spot component. None = uncapped. Applied after the floor, so a plant
+    /// with both bills the spot price clamped into `[floor, cap]`.
+    #[serde(default)]
+    pub dynamic_epex_cap_ct_kwh: Option<Decimal>,
     #[serde(default)]
     pub auf_abschlag_ct_per_kwh: Option<Decimal>,
     #[serde(default)]
     pub auf_abschlag_eur_per_month: Option<Decimal>,
+    /// One-time Neukunden-/Sofortbonus (EUR, gross of the customer's credit).
+    /// Credited on the invoice whose product carries it (usually the first or the
+    /// Jahresabrechnung) as a Preisnachlass (§17 UStG Entgeltminderung).
+    #[serde(default)]
+    pub sofortbonus_eur: Option<Decimal>,
+    /// Annual Treuebonus (EUR/year), pro-rated to the billed days and credited as
+    /// a Preisnachlass (§17 UStG Entgeltminderung).
+    #[serde(default)]
+    pub treuebonus_eur_per_year: Option<Decimal>,
     /// MSB Grundgebühr bundled on retail invoice (ct/day). §41 EnWG.
     #[serde(default)]
     pub msb_gebuehr_ct_per_day: Option<Decimal>,
@@ -291,7 +305,10 @@ pub struct ElectricityProduct {
     pub preisgarantie_bis: Option<time::Date>,
     #[serde(default)]
     pub minimum_invoice_eur_brutto: Option<Decimal>,
-    /// Plant capacity (kWp) for §12 Abs. 3 UStG 0% MwSt auto-application.
+    /// Plant capacity (kWp) — informational (prosumer plant size / MaStR). Does
+    /// not affect the consumption VAT rate: a retail supply is standard-rated
+    /// even where the customer runs their own PV (§12 Abs. 3 UStG covers the PV
+    /// system supply, not the electricity).
     #[serde(default)]
     pub anlage_kwp: Option<Decimal>,
     /// §42 EnWG typed energy source mix (CO₂ label).
@@ -397,10 +414,17 @@ pub struct HeatProduct {
     pub waerme_leistungspreis_eur_per_kw_month: Option<Decimal>,
     #[serde(default)]
     pub waerme_arbeitspreis_ct_per_kwh: Option<Decimal>,
-    /// true → §12 Abs. 2 Nr. 1 UStG 7% MwSt auto-applied (renewable Fernwärme).
+    /// AVBFernwärmeV §24 Abs. 4 Preisänderungsklausel — the Arbeitspreis is
+    /// index-linked (fuel/wage/market indices). When set it resolves the effective
+    /// Arbeitspreis and takes precedence over the static `waerme_arbeitspreis_ct_per_kwh`.
     #[serde(default)]
-    pub waerme_is_renewable: bool,
+    pub waerme_indexed_price: Option<IndexedPriceConfig>,
     /// Wärmeplanungsgesetz §14 renewable share (0.0–1.0). Mandatory disclosure.
+    ///
+    /// Disclosure only — it does **not** change the VAT rate. District heating is
+    /// standard-rated (19 %); the 7 % on gas/Fernwärme was the temporary §28 Abs. 5/6
+    /// UStG crisis measure (01.10.2022–31.03.2024), resolved period-aware by
+    /// [`crate::rates::mwst_rate_for_gas_waerme_period`], not by renewable share.
     #[serde(default)]
     pub waerme_erneuerbar_anteil_pct: Option<Decimal>,
     #[serde(default)]
@@ -487,9 +511,13 @@ pub struct SolarProduct {
     /// true when Stromsteuer applies (normally exempt §9a Nr. 1 StromStG).
     #[serde(default)]
     pub solar_include_stromsteuer: bool,
-    /// Plant capacity (kWp) for §12 Abs. 3 UStG 0% MwSt.
+    /// Plant capacity (kWp) — informational (MaStR / §48 EEG size class).
     #[serde(default)]
     pub anlage_kwp: Option<Decimal>,
+    /// Operator has elected the Kleinunternehmerregelung (§19 UStG) → the feed-in
+    /// Gutschrift carries 0 % USt. An election, not a function of plant size.
+    #[serde(default)]
+    pub kleinunternehmer_19_ustg: bool,
     #[serde(default)]
     pub mwst_rate_override: Option<Decimal>,
     #[serde(default)]
@@ -509,8 +537,13 @@ pub struct EegProduct {
     pub eeg_managementpraemie_ct_per_kwh: Option<Decimal>,
     #[serde(default)]
     pub kwkg_zuschlag_ct_per_kwh: Option<Decimal>,
+    /// Plant capacity (kWp) — informational (MaStR / §48 EEG size class).
     #[serde(default)]
     pub anlage_kwp: Option<Decimal>,
+    /// Operator has elected the Kleinunternehmerregelung (§19 UStG) → 0 % USt on
+    /// the feed-in Gutschrift. An election, not a function of plant size.
+    #[serde(default)]
+    pub kleinunternehmer_19_ustg: bool,
     #[serde(default)]
     pub mwst_rate_override: Option<Decimal>,
 }
@@ -524,6 +557,10 @@ pub struct EinspeisungProduct {
     pub marktwert_ct_per_kwh: Option<Decimal>,
     #[serde(default)]
     pub vermarktungsgebuehr_ct_per_kwh: Option<Decimal>,
+    /// Operator has elected the Kleinunternehmerregelung (§19 UStG) → 0 % USt on
+    /// the feed-in Gutschrift. An election, not a function of plant size.
+    #[serde(default)]
+    pub kleinunternehmer_19_ustg: bool,
     #[serde(default)]
     pub mwst_rate_override: Option<Decimal>,
 }
@@ -749,13 +786,13 @@ impl Product {
                     .add(MwStProvider::new(mwst))
             }
             Self::Waerme(p) => {
-                let mwst = if let Some(r) = p.mwst_rate_override {
-                    r
-                } else if p.waerme_is_renewable {
-                    rust_decimal::dec!(0.07)
-                } else {
-                    rates.mwst_rate
-                };
+                // District heating is standard-rated. The 7 % on gas/Fernwärme was
+                // the temporary §28 Abs. 5/6 UStG window (01.10.2022–31.03.2024) —
+                // `rates.mwst_rate` is already period-aware (billingd sets it via
+                // `mwst_rate_for_gas_waerme_period`); there is NO permanent reduced
+                // rate for renewable heat (§12 Abs. 2 Nr. 1 UStG covers Anlage-2
+                // goods, not district heating).
+                let mwst = p.mwst_rate_override.unwrap_or(rates.mwst_rate);
                 BillingEngine::new()
                     .add(HeatProvider::new(p.clone()))
                     .add(MwStProvider::new(mwst))
@@ -782,7 +819,14 @@ impl Product {
                     .add(MwStProvider::new(mwst))
             }
             Self::Einspeisung(p) => {
-                let mwst = p.mwst_rate_override.unwrap_or(rates.mwst_rate);
+                // §19 UStG Kleinunternehmer → 0 % on the feed-in Gutschrift.
+                let mwst = if let Some(r) = p.mwst_rate_override {
+                    r
+                } else if p.kleinunternehmer_19_ustg {
+                    rust_decimal::Decimal::ZERO
+                } else {
+                    rates.mwst_rate
+                };
                 BillingEngine::new()
                     .add(EinspeisungProvider::new(p.clone()))
                     .add(MwStProvider::new(mwst))

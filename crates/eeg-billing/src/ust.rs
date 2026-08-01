@@ -1,44 +1,52 @@
 //! German VAT (Umsatzsteuer) rules for EEG/KWKG feed-in settlements.
 //!
 //! The EEG itself does **not** regulate VAT — those rules come from the
-//! Umsatzsteuergesetz (UStG) and BMF circulars. This module provides
-//! helpers for the three distinct situations an EEG plant operator can be in.
+//! Umsatzsteuergesetz (UStG) and BMF circulars. This module models the VAT
+//! treatment of the **feed-in Gutschrift** (the payout the Netzbetreiber issues
+//! to the Anlagenbetreiber).
 //!
 //! ## Terminology
 //!
 //! "Umsatzsteuer" (USt) is the legal term; "Mehrwertsteuer" (MwSt) is the
 //! colloquial name. This library uses "Umsatzsteuer" throughout.
 //!
-//! ## Three VAT situations
+//! ## The feed-in has exactly two VAT treatments
 //!
-//! | Status | Legal basis | USt on Vergütung | Vorsteuerabzug |
+//! | Status | Legal basis | EN 16931 category | USt on Vergütung |
 //! |---|---|---|---|
-//! | `BefreitNach12Abs3` | §12 Abs. 3 UStG (JStG 2022) | **None** | Not applicable |
-//! | `Kleinunternehmer` | §19 UStG | **None** | Not applicable |
-//! | `Regelbesteuerung` | Standard | **19 %** | Applicable (e.g. installation costs) |
+//! | `Kleinunternehmer` | §19 UStG | `E` (Exempt) | **None** — tax not levied |
+//! | `Regelbesteuerung` | §12 Abs. 1 UStG | `S` (Standard) | **19 %** |
 //!
-//! ## §12 Abs. 3 UStG — photovoltaic exemption (since 01.01.2023)
+//! This is a **declared property of the operator**, not something the plant's
+//! size decides — carry it in masterdata (see `einsd`'s `eeg_anlagen.ust_status`).
+//! [`VatStatus::default_for_plant`] only *suggests* the value an operator would
+//! usually declare when seeding a new plant record; the stored value wins.
 //!
-//! Plants ≤ **30 kWp** commissioned on or after **01.01.2023** are exempt from
-//! all VAT obligations related to the operation of the PV system (Liebhaberei-Erlass
-//! replaced by statutory exemption through JStG 2022).
+//! ## Why not §12 Abs. 3 UStG?
 //!
-//! - The Netzbetreiber pays the Vergütungssatz WITHOUT adding USt.
-//! - The operator does NOT issue a VAT invoice and does NOT register for USt solely
-//!   because of the PV plant.
-//! - No input-tax deduction on installation costs.
+//! §12 Abs. 3 UStG (the 0 % Nullsteuersatz since 01.01.2023) taxes the **supply
+//! and installation of the PV system itself** — the hardware transaction between
+//! the installer and the operator. It does **not** apply to the operator's
+//! ongoing feed-in of electricity, which is what an EEG settlement bills. Its
+//! practical effect on this module is indirect: because a ≤30 kWp operator buys
+//! the plant at 0 %, there is no input tax to reclaim, so almost all of them stay
+//! **Kleinunternehmer (§19)** rather than opting into Regelbesteuerung. That is
+//! why [`VatStatus::default_for_plant`] suggests `Kleinunternehmer` for a small
+//! post-2023 solar plant — the 0 % on the feed-in comes from §19, never §12 Abs. 3.
 //!
 //! ## §19 UStG Kleinunternehmer
 //!
-//! Operators whose total annual turnover does not exceed **€ 25 000** (from 01.01.2025;
-//! previously € 22 000) are treated as Kleinunternehmer and charge no USt on any
-//! business income, including EEG feed-in.
+//! Operators whose total annual turnover does not exceed **€ 25 000** (from
+//! 01.01.2025; previously € 22 000) are treated as Kleinunternehmer and charge no
+//! USt on any business income, including EEG feed-in. The Gutschrift shows the
+//! §19 exemption reason (EN 16931 BT-120) and no USt.
 //!
 //! ## Regelbesteuerung
 //!
-//! All other operators (large plants, commercial operators, opted-in operators)
-//! apply standard USt at **19 %** on the Einspeisevergütung / Marktprämie.
-//! The Netzbetreiber pays the gross amount (Netto + USt) and deducts the input tax.
+//! All other operators (large plants exceeding the §19 turnover limit, commercial
+//! operators, operators who opted into regular taxation) apply standard USt at
+//! **19 %** on the Einspeisevergütung / Marktprämie. The Netzbetreiber pays the
+//! gross amount (Netto + USt) and deducts the input tax.
 //!
 //! ## Usage in billing documents
 //!
@@ -58,16 +66,16 @@
 //!     ..SettleInput::default()
 //! });
 //!
-//! // Determine VAT status automatically
-//! let vat = VatStatus::from_plant(true, dec!(9.5), Some(date!(2024-06-01)));
-//! assert_eq!(vat, VatStatus::BefreitNach12Abs3);
+//! // A small post-2023 solar operator is, by default, a Kleinunternehmer (§19).
+//! let vat = VatStatus::default_for_plant(true, dec!(9.5), Some(date!(2024-06-01)));
+//! assert_eq!(vat, VatStatus::Kleinunternehmer);
 //! assert!(vat.is_exempt());
 //!
 //! // EegSettleTariff itself adds no tax layer — VAT is the caller's to apply.
 //! let tariff = EegSettleTariff::new(&output);
 //! assert!(tariff.tax_layers().is_empty());
 //!
-//! // §12 Abs. 3 charges nothing, but still contributes a zero-rated entry to the
+//! // §19 charges nothing, but still contributes an exempt entry to the
 //! // EN 16931 BG-23 breakdown, so the layer is present rather than omitted.
 //! let layers = ust_tax_layers(vat);
 //! assert_eq!(layers.len(), 1);
@@ -92,56 +100,53 @@ use time::macros::date;
 
 // ── VatStatus ─────────────────────────────────────────────────────────────────
 
-/// The operator's German VAT (Umsatzsteuer) status for EEG settlement purposes.
+/// The operator's German VAT (Umsatzsteuer) status for EEG feed-in settlement.
 ///
-/// Determines whether USt appears on the feed-in billing document
-/// and at what rate.
+/// Determines whether USt appears on the feed-in Gutschrift and at what rate. A
+/// feed-in has exactly two treatments — [`Kleinunternehmer`](Self::Kleinunternehmer)
+/// (§19, 0 %) and [`Regelbesteuerung`](Self::Regelbesteuerung) (19 %).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum VatStatus {
-    /// **§12 Abs. 3 UStG** — photovoltaic Liebhaberei exemption.
-    ///
-    /// Applies to solar PV plants with ≤ 30 kWp installed capacity that were
-    /// commissioned on or after **01.01.2023** (JStG 2022, BGBl 2022 I S. 2294).
-    ///
-    /// No USt on Einspeisevergütung; no Vorsteuerabzug on installation costs.
-    BefreitNach12Abs3,
-
     /// **§19 UStG** — Kleinunternehmer (small business exemption).
     ///
     /// Applies when total annual turnover does not exceed:
     /// - **€ 22 000** in 2023/2024
     /// - **€ 25 000** from 01.01.2025 (raised by Jahressteuergesetz 2024)
     ///
-    /// No USt charged on EEG income; no Vorsteuerabzug on installation costs.
+    /// The overwhelming default for a ≤30 kWp post-2023 solar operator: the plant
+    /// was supplied at 0 % under §12 Abs. 3 UStG, so there is no input tax to
+    /// reclaim and no reason to opt into Regelbesteuerung. No USt on EEG income;
+    /// the Gutschrift carries the §19 exemption reason (BT-120).
     Kleinunternehmer,
 
-    /// **Regelbesteuerung** — standard German VAT at 19 %.
+    /// **Regelbesteuerung** — standard German VAT at 19 % (§12 Abs. 1 UStG).
     ///
     /// Applies to:
-    /// - Plants > 30 kWp
-    /// - Plants commissioned before 01.01.2023
+    /// - Operators whose turnover exceeds the §19 Kleinunternehmer limit
     /// - Operators who opted into Regelbesteuerung
     /// - Commercial operators (automatically)
     ///
     /// The Netzbetreiber pays the gross amount (Vergütung + 19 % USt) and
-    /// deducts the input tax. The operator issues a VAT invoice.
+    /// deducts the input tax. The operator issues (receives, in the
+    /// Gutschriftverfahren) a VAT invoice.
     Regelbesteuerung,
 }
 
 impl VatStatus {
-    /// Determine the most likely VAT status from plant characteristics.
+    /// Suggest the VAT status an operator would **usually declare** for a plant.
     ///
-    /// This is a **heuristic** — the operator's actual tax status may differ.
-    /// Always confirm with the Anlagenbetreiber or their Steuerberater.
+    /// This is a **seeding heuristic**, not the authoritative value — the operator's
+    /// actual tax status is a declared property that belongs in masterdata
+    /// (`einsd`'s `eeg_anlagen.ust_status`). Use this only to pre-fill a new plant
+    /// record when no status was supplied; a stored value always wins.
     ///
     /// ## Logic
     ///
-    /// 1. Solar PV ≤ 30 kWp AND commissioned after 01.01.2023 → `BefreitNach12Abs3`
-    /// 2. Otherwise → `Regelbesteuerung` (conservative; operator may be Kleinunternehmer)
-    ///
-    /// If the operator is a Kleinunternehmer (§19 UStG), set `VatStatus::Kleinunternehmer`
-    /// explicitly — this cannot be determined from plant characteristics alone.
+    /// 1. Solar PV ≤ 30 kWp commissioned on/after 01.01.2023 → `Kleinunternehmer`
+    ///    (the post-§12-Abs.-3 norm — see the module docs).
+    /// 2. Otherwise → `Regelbesteuerung` (larger/commercial plants exceed the §19
+    ///    turnover limit; the operator can still declare Kleinunternehmer).
     ///
     /// # Example
     ///
@@ -150,41 +155,63 @@ impl VatStatus {
     /// use rust_decimal::dec;
     /// use time::macros::date;
     ///
-    /// // 9.5 kWp solar, commissioned 2024 → §12 Abs. 3 exempt
+    /// // 9.5 kWp solar, commissioned 2024 → Kleinunternehmer (§19)
     /// assert_eq!(
-    ///     VatStatus::from_plant(true, dec!(9.5), Some(date!(2024-06-01))),
-    ///     VatStatus::BefreitNach12Abs3
+    ///     VatStatus::default_for_plant(true, dec!(9.5), Some(date!(2024-06-01))),
+    ///     VatStatus::Kleinunternehmer
     /// );
     ///
-    /// // 50 kWp solar → too large, Regelbesteuerung
+    /// // 50 kWp solar → exceeds the §19 limit, Regelbesteuerung
     /// assert_eq!(
-    ///     VatStatus::from_plant(true, dec!(50), Some(date!(2024-01-01))),
+    ///     VatStatus::default_for_plant(true, dec!(50), Some(date!(2024-01-01))),
     ///     VatStatus::Regelbesteuerung
     /// );
     ///
-    /// // Wind plant → always Regelbesteuerung (§12 Abs. 3 is solar-only)
+    /// // Wind plant → Regelbesteuerung (the small-PV default is solar-only)
     /// assert_eq!(
-    ///     VatStatus::from_plant(false, dec!(5), Some(date!(2024-01-01))),
+    ///     VatStatus::default_for_plant(false, dec!(5), Some(date!(2024-01-01))),
     ///     VatStatus::Regelbesteuerung
     /// );
     /// ```
     #[must_use]
-    pub fn from_plant(
+    pub fn default_for_plant(
         is_solar_pv: bool,
         leistung_kwp: Decimal,
         inbetriebnahme: Option<Date>,
     ) -> Self {
-        if qualifies_for_12_abs3(is_solar_pv, leistung_kwp, inbetriebnahme) {
-            Self::BefreitNach12Abs3
+        let small_post_2023_solar = is_solar_pv
+            && leistung_kwp <= dec!(30)
+            && inbetriebnahme.is_some_and(|d| d >= date!(2023 - 01 - 01));
+        if small_post_2023_solar {
+            Self::Kleinunternehmer
         } else {
             Self::Regelbesteuerung
+        }
+    }
+
+    /// The canonical database / API token for this status.
+    #[must_use]
+    pub fn as_db_str(self) -> &'static str {
+        match self {
+            Self::Kleinunternehmer => "KLEINUNTERNEHMER",
+            Self::Regelbesteuerung => "REGELBESTEUERUNG",
+        }
+    }
+
+    /// Parse the database / API token; `None` for an unrecognised value.
+    #[must_use]
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "KLEINUNTERNEHMER" => Some(Self::Kleinunternehmer),
+            "REGELBESTEUERUNG" => Some(Self::Regelbesteuerung),
+            _ => None,
         }
     }
 
     /// Return `true` when no USt is charged on EEG feed-in income.
     #[must_use]
     pub fn is_exempt(self) -> bool {
-        matches!(self, Self::BefreitNach12Abs3 | Self::Kleinunternehmer)
+        matches!(self, Self::Kleinunternehmer)
     }
 
     /// Return the applicable USt rate (0.00 or 0.19).
@@ -200,7 +227,7 @@ impl VatStatus {
     pub fn ust_rate(self) -> Decimal {
         match self {
             Self::Regelbesteuerung => dec!(0.19),
-            _ => Decimal::ZERO,
+            Self::Kleinunternehmer => Decimal::ZERO,
         }
     }
 
@@ -208,10 +235,6 @@ impl VatStatus {
     #[must_use]
     pub fn invoice_note(self) -> &'static str {
         match self {
-            Self::BefreitNach12Abs3 => {
-                "Steuerbefreiung gem\u{00e4}\u{00df} \u{00a7}\u{202f}12 Abs.\u{202f}3 UStG \
-                 (Photovoltaik \u{2264}30\u{202f}kWp, ab 01.01.2023)"
-            }
             Self::Kleinunternehmer => {
                 "Kein Umsatzsteuerausweis gem\u{00e4}\u{00df} \u{00a7}\u{202f}19 UStG \
                  (Kleinunternehmerregelung)"
@@ -221,73 +244,23 @@ impl VatStatus {
     }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Return `true` when a solar PV plant qualifies for the **§12 Abs. 3 UStG** exemption.
-///
-/// All three conditions must hold:
-/// 1. Solar PV (not wind, biomass, KWKG, or other technology)
-/// 2. Installed capacity **≤ 30 kWp** at this location
-/// 3. Commissioned **on or after 01.01.2023**
-///
-/// When `inbetriebnahme` is absent, returns `false` (conservative/safe).
-///
-/// # Legal basis
-///
-/// §12 Abs. 3 UStG, introduced by JStG 2022 (BGBl I 2022 S. 2294), effective
-/// 01.01.2023.
-///
-/// # Note
-///
-/// The 30 kWp threshold refers to the **total installed capacity** at one location
-/// (§12 Abs. 3 Satz 3 UStG). For plants with multiple locations/properties,
-/// each location is assessed separately.
-///
-/// # Example
-///
-/// ```rust
-/// use eeg_billing::ust::qualifies_for_12_abs3;
-/// use rust_decimal::dec;
-/// use time::macros::date;
-///
-/// assert!( qualifies_for_12_abs3(true,  dec!(9),  Some(date!(2024-01-01)))); // ≤30 kWp, post-2023
-/// assert!(!qualifies_for_12_abs3(true,  dec!(31), Some(date!(2024-01-01)))); // >30 kWp
-/// assert!(!qualifies_for_12_abs3(true,  dec!(9),  Some(date!(2022-06-01)))); // pre-2023
-/// assert!(!qualifies_for_12_abs3(false, dec!(9),  Some(date!(2024-01-01)))); // not solar
-/// assert!(!qualifies_for_12_abs3(true,  dec!(9),  None));                    // unknown date
-/// ```
-#[must_use]
-pub fn qualifies_for_12_abs3(
-    is_solar_pv: bool,
-    leistung_kwp: Decimal,
-    inbetriebnahme: Option<Date>,
-) -> bool {
-    if !is_solar_pv {
-        return false;
-    }
-    if leistung_kwp > dec!(30) {
-        return false;
-    }
-    inbetriebnahme.is_some_and(|d| d >= date!(2023 - 01 - 01))
-}
+// ── Tax layers ────────────────────────────────────────────────────────────────
 
 /// Return the `billing::TaxLayer` list for a given VAT status.
 ///
-/// Every status yields exactly one layer, including the two that charge nothing.
-/// A supply taxed at 0 % is still a taxable supply: EN 16931 BG-23 requires it to
-/// appear in the VAT breakdown under its UNTDID 5305 category with a zero tax
-/// amount. Omitting the layer would drop the turnover from the breakdown
-/// altogether, which understates the taxable base on the invoice.
+/// Every status yields exactly one layer, including the exempt one. A supply
+/// taxed at 0 % is still a taxable supply: EN 16931 BG-23 requires it to appear
+/// in the VAT breakdown under its UNTDID 5305 category. Omitting the layer would
+/// drop the turnover from the breakdown altogether, which understates the taxable
+/// base on the invoice.
 ///
 /// | Status | Rate | Category | Basis |
 /// |---|---|---|---|
 /// | `Regelbesteuerung` | 19 % | `S` (Standard) | §12 Abs. 1 UStG |
-/// | `BefreitNach12Abs3` | 0 % | `Z` (`ZeroRated`) | §12 Abs. 3 UStG — Nullsteuersatz |
 /// | `Kleinunternehmer` | 0 % | `E` (Exempt) | §19 UStG — tax not levied |
 ///
-/// §12 Abs. 3 UStG is a zero *rate*, not an exemption, so it maps to `Z`; §19 UStG
-/// does not levy the tax at all and maps to `E`, which EN 16931 requires to carry
-/// an exemption reason (BT-120).
+/// §19 UStG does not levy the tax at all and maps to `E`, which EN 16931 requires
+/// to carry an exemption reason (BT-120).
 ///
 /// Add the returned layers to a `BillingDocument` via `from_positions(…, tax_layers, …)`.
 ///
@@ -303,23 +276,19 @@ pub fn qualifies_for_12_abs3(
 /// ```rust
 /// use eeg_billing::ust::{VatStatus, ust_tax_layers};
 ///
-/// // Every status yields one layer — the zero-rated ones included.
-/// assert_eq!(ust_tax_layers(VatStatus::BefreitNach12Abs3).len(), 1);
+/// // Every status yields one layer — the exempt one included.
+/// assert_eq!(ust_tax_layers(VatStatus::Kleinunternehmer).len(), 1);
 /// assert_eq!(ust_tax_layers(VatStatus::Regelbesteuerung).len(), 1);
 /// ```
 #[must_use]
 pub fn ust_tax_layers(status: VatStatus) -> Vec<Box<dyn TaxLayer>> {
-    // `zero_rated` / `exempt` validate the category/reason pairing up front
-    // (EN 16931 zero-tax families) instead of at breakdown time; `.boxed()`
-    // is the trait-object shorthand for `Box::new(_) as Box<dyn TaxLayer>`.
+    // `exempt` validates the category/reason pairing up front (EN 16931 zero-tax
+    // families) instead of at breakdown time; `.boxed()` is the trait-object
+    // shorthand for `Box::new(_) as Box<dyn TaxLayer>`.
     let layer = match status {
         VatStatus::Regelbesteuerung => FixedRateTax::new("Umsatzsteuer 19\u{202f}%", dec!(0.19))
             .expect("19 % is a valid rate")
             .with_category(TaxCategory::Standard),
-        // §12 Abs. 3 UStG is a zero *rate* (category Z) — no exemption reason.
-        VatStatus::BefreitNach12Abs3 => {
-            FixedRateTax::zero_rated("Umsatzsteuer 0\u{202f}% (§12 Abs. 3 UStG)")
-        }
         // §19 UStG is a genuine exemption (category E) requiring a reason (BT-120).
         VatStatus::Kleinunternehmer => FixedRateTax::exempt(
             "Umsatzsteuer (§19 UStG)",

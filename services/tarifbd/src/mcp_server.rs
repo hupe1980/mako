@@ -573,7 +573,7 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
                        formula, which billing engine method it invokes, the BO4E Rechnungsposition \
                        type it produces, and the applicable regulatory basis (e.g. §3 StromStG). \
                        For EPEX-linked products (dyn_source=epex-spot-day-ahead) shows which \
-                       15-min EPEX prices are required and how §41b iMSys guard applies.",
+                       15-min EPEX prices are required and how §41a iMSys guard applies.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn explain_invoice_position(
@@ -613,7 +613,7 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
                  Formula: ct_kwh × kwh_total / 100 = EUR\n\
                  billingd: ElectricityProvider::bill_arbeitspreis()\n\
                  BO4E: Rechnungsposition { preistyp: ArbeitspreisEintarif }\n\
-                 §41b guard: If dyn_source=epex-spot-day-ahead, customer MaLo MUST have iMSys=true or BillingError.".to_owned(),
+                 §41a guard: If dyn_source=epex-spot-day-ahead, customer MaLo MUST have iMSys=true or BillingError.".to_owned(),
             "ARBEITSPREIS_HT" | "ARBEITSPREIS_NT" => format!(
                 "{preistyp}: Dual-rate (HT/NT) consumption charge.\n\
                  Formula: ct_kwh × kwh_ht_or_nt / 100 = EUR\n\
@@ -632,7 +632,7 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
                 "{pt} on dynamic tariff (dyn_source=epex-spot-day-ahead):\n\
                  Formula: EPEX_Spot[q] × kwh[q] / 100 for each 15-min MTU q\n\
                  Requires: tarifbd epex_prices for each day in billing period\n\
-                 §41b guard: Customer MaLo must have iMSys=true (billingd enforces)\n\
+                 §41a guard: Customer MaLo must have iMSys=true (billingd enforces)\n\
                  Missing EPEX prices → BillingError (billingd does NOT fall back silently)"
             ),
             pt => format!(

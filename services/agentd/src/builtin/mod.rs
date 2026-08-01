@@ -357,7 +357,7 @@ RECOMMENDED_ACTION: [specific step or NONE]
 
 const BILLING_REGULATORY_GUARD_AGENT: BuiltinAgentDef = BuiltinAgentDef {
     name: "billing-regulatory-guard-agent",
-    specialty: "Post-billing §40/§41/§41b/§42 EnWG compliance guard. Validates every dispatched invoice for mandatory fields, §41b iMSys requirement, CO₂ label, arithmetic invariants, and MwSt validity.",
+    specialty: "Post-billing §40/§41/§41a Abs. 1/§42 EnWG compliance guard. Validates every dispatched invoice for mandatory fields, §41a Abs. 1 iMSys requirement, CO₂ label, arithmetic invariants, and MwSt validity.",
     system_prompt: "\
 You are the regulatory compliance guard for retail energy billing under German EnWG.
 
@@ -379,9 +379,9 @@ If missing: WARNING SECT40A_MISSING.
 ### §41 Abs. 5 EnWG — Preisgarantie
 Positions repricing a period covered by an active Preisgarantie (vertragd `preisgarantie_bis` >= period end) must not raise guaranteed price components. Violation: ERROR SECT41_PREISGARANTIE_VIOLATION.
 
-### §41b EnWG — iMSys guard for §41a dynamic tariffs
+### §41a Abs. 1 EnWG — iMSys guard for §41a dynamic tariffs
 If any position has tag `\"sect41a\"`: verify `metering_mode=IMSYS`.
-SLP/RLM + dynamic tariff → ERROR SECT41B_IMSYS_VIOLATION.
+SLP/RLM + dynamic tariff → ERROR SECT41A_IMSYS_REQUIRED.
 
 ### §42 EnWG — Energiemix + CO₂ label
 For STROM: `zusatzAttribute[name=\"energiemix\"]` or `zusatzAttribute[name=\"co2_g_per_kwh\"]` must exist.
@@ -758,7 +758,7 @@ You are the tariff optimization specialist.
 4. Compare expected §41a cost vs current fixed tariff using billing `preview`.
 5. Check tarifbd for available dynamic EPEX product.
 
-## UPGRADE CONDITIONS (§41b EnWG)
+## UPGRADE CONDITIONS (§41a Abs. 1 EnWG)
 - MeteringMode=iMSys (BSI TR-03109 SMGW active) REQUIRED
 - EPEX price data available in tarifbd for billing period
 

@@ -220,6 +220,13 @@ pub async fn post_vpp_billing(
         if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
             return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
+        if let Err(e) = mark_dispatched_tx(&mut *tx, record_id).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    }
+    if let Err(e) = crate::einvoice::store(&mut *tx, record_id, &invoice, &cfg, &req.malo_id).await
+    {
+        tracing::warn!(%record_id, error = %e, "billingd: attach en16931 model failed");
     }
     if let Err(e) = tx.commit().await {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
@@ -629,6 +636,15 @@ pub async fn post_vpp_webhook(
             tracing::error!(tx_id, error = %e, "billingd: vpp settlement enqueue failed");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
+        if let Err(e) = mark_dispatched_tx(&mut *tx, record_id).await {
+            tracing::error!(error = %e, "billingd: mark_dispatched failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+    if let Err(e) =
+        crate::einvoice::store(&mut *tx, record_id, &invoice, &cfg, &contract.malo_id).await
+    {
+        tracing::warn!(%record_id, error = %e, "billingd: attach en16931 model failed");
     }
     if let Err(e) = tx.commit().await {
         tracing::error!(tx_id, error = %e, "billingd: vpp auto-billing commit failed");

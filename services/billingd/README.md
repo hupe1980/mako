@@ -12,7 +12,7 @@ no customer management. It pulls product definitions from `tarifbd`, consumption
 | **Product API** | `Product` typed enum — `#[serde(tag="category")]` deserialization from tarifbd JSONB |
 | **Categories** | 13: STROM, GAS, WAERME, WASSER, SOLAR, EEG, EINSPEISUNG, WAERMEPUMPE, WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, SHARING |
 | **§41a EPEX dynamic** | 15-min Lastgang × hourly EPEX day-ahead → `STROM` dynamic category |
-| **§41b iMSys guard** | Hard error when `dynamic_epex=true` and `MeteringMode != Imsys` |
+| **§41a iMSys guard** | Hard error when `dynamic_epex=true` and `MeteringMode != Imsys` |
 | **§14a discount** | `ControllableLoadProvider` Modul 1 (capacity reduction) + Modul 3 (load-shedding) |
 | **§42a GGV** | `POST /api/v1/billing/ggv/{ggv_id}` — multi-tenant PV community solar, per-tenant share billing |
 | **§42c Sharing** | `Product::Sharing(SharingProduct)` — community energy allocation credit via `EnergyShareProvider` |
@@ -20,10 +20,10 @@ no customer management. It pulls product definitions from `tarifbd`, consumption
 | **Gas RLM Leistungspreis** | `gas_leistungspreis_ct_per_kw_month` in `GasProduct` — demand charge for large gas customers |
 | **Korrekturrechnung** | `POST /api/v1/billing/{id}/correction` — `rechnungstyp=KORREKTURRECHNUNG` with `originalRechnungsnummer` |
 | **Sammelrechnung** | `POST /api/v1/billing/sammelrechnung/{rv_id}` — B2B consolidated invoice for Rahmenvertrag |
-| **XRechnung 3.0** | `GET /api/v1/billing/{id}/xrechnung` — CII XML (EN16931) |
-| **ZUGFeRD 2.3** | Embedded in PDF-A/3 |
+| **EN 16931 rendering** | `en16931` + `en16931-formats` render XRechnung/CII and PEPPOL UBL from the stored `en16931_json` semantic model — mapped at bill time (`energy_billing::Invoice::to_en16931`) with **per-line VAT** (BT-151/152), not re-parsed from BO4E |
+| **XRechnung 3.0** | `GET /api/v1/billing/{id}/xrechnung` — CII XML via `en16931-formats` |
 | **PEPPOL BIS 3.0** | `GET /api/v1/billing/{id}/ubl` — UBL 2.1 XML (EU Directive 2014/55/EU) |
-| **XRechnung B2G** | `POST /api/v1/billing/{id}/submit-b2g` — emits `de.billing.xrechnung.b2g.ready` CloudEvent (§27 EGovG from 01.01.2027) |
+| **XRechnung B2G** | `POST /api/v1/billing/{id}/submit-b2g` — validates the model against EN 16931 (`fatal` rules block submission), then emits `de.billing.xrechnung.b2g.ready` (§27 EGovG from 01.01.2027) |
 | **MCP** | 12 tools at `/mcp`: list/get/preview/calculate, `validate_tariff_config`, `explain_invoice_position` |
 | **Health** | `GET /health/live`, `GET /health/ready` |
 
@@ -40,6 +40,35 @@ refused with a pointer at the correction path.
 
 `tests/schema_code_guard.rs` pins these rules textually on every `cargo test`;
 `just test-billingd-db` proves them against a real PostgreSQL.
+
+## E-invoicing is EN 16931, not BO4E
+
+XRechnung/CII and PEPPOL UBL *are* EN 16931 — so the render source is the
+**EN 16931 semantic model**, not a re-parse of the BO4E `Rechnung`. At bill time
+`energy_billing::Invoice::to_en16931` maps the invoice — at the layer that still
+has each position's own amount, VAT category and rate — into an `en16931::Invoice`
+and stores it in `billing_records.en16931_json`. `en16931-formats` renders that to
+XRechnung/CII (`/xrechnung`, `/submit-b2g`) and PEPPOL UBL (`/ubl`); the B2G path
+runs the `en16931` rule engine first and refuses to submit a rejectable document.
+BG-23 and the BG-22 totals are derived from the rounded line amounts, so a
+mixed-rate invoice (gas 19 % + Fernwärme 7 % + PV 0 %) carries a correct **per-line**
+VAT that reconciles (BR-CO-10/13, BR-S-08) — the defect the hand-rolled CII builder
+had. **Every** invoice-producing path (calculate, correction credit-note, VPP, GGV,
+Sammelrechnung) stores the model, so the hand-rolled `xrechnung.rs`/UBL builders are
+**gone** — the renderers require the stored model and answer 422 if it is missing.
+BO4E stays the accounting representation on the `de.billing.rechnung.erstellt` event.
+
+The mapping builds the BG-25 lines and `en16931::reconcile` derives the BG-23
+breakdown and BG-22 totals from them (crate-owned, so BR-CO/BR-S reconcile by
+construction). The seller party is filled from `[seller]` config (split address,
+contact, IBAN); BT-23 business process and the BG-16 SEPA payment instruction are
+stamped on every document. The **B2G** path (`/submit-b2g`) takes the recipient in
+the request `buyer` (name/address/contact) plus the `reference` Leitweg-ID (BT-10),
+completes the buyer, and renders through `en16931-formats::cii::to_string_for(&…, &XRECHNUNG)`
+— which **validates against the full XRechnung 3.0 profile before writing**, so a
+rejectable document is never emitted; on failure it returns the violated rules and
+the precise `buyer_gaps` (via `Party::missing_for`). (`en16931`/`en16931-formats` are
+**v0.2.0** — pinned exactly; cross-check against KoSIT/Mustang before production B2G.)
 
 ## Every document through the engine
 
@@ -93,13 +122,13 @@ nothing while the working client function sat as dead code.
 ## Billing arithmetic
 
 All monetary amounts use `billing::Amount<5>` (`EuroAmount` — `i64 × 10⁻⁵` EUR). Never `f64`.
-The billing calculator is in the **pure `energy-billing` crate** — **185 tests** with no I/O:
+The billing calculator is in the **pure `energy-billing` crate** — **204 tests** with no I/O:
 
 ```bash
 cargo test -p energy-billing --all-features
 ```
 
-Tests cover all 13 product categories (incl. §42c SHARING and municipal WASSER), §41b iMSys guard, §9 StromStG typed exemptions,
+Tests cover all 13 product categories (incl. §42c SHARING and municipal WASSER), §41a iMSys guard, §9 StromStG typed exemptions,
 `EnergieQuellen` CO₂ label, MwSt override, EEG Gutschrift, HT/NT ToU, gas Brennwert,
 Mieterstrom, Tarifwechsel merge, proportional allocation, batch billing, and pre-flight validation.
 
@@ -134,6 +163,8 @@ seller_name    = "Stadtwerke Musterstadt GmbH"
 seller_vat_id  = "DE123456789"
 seller_address = "Musterstraße 1, 12345 Musterstadt"
 seller_contact = "Tel. 0800 1234567, service@stadtwerke-musterstadt.de"
+seller_iban    = "DE89370400440532013000"   # BT-84, XRechnung BG-16 SEPA credit transfer
+seller_bic     = "COBADEFFXXX"                # BT-86 (optional)
 
 # OIDC token verification for the HTTP API. billingd refuses to start
 # without it unless `allow_insecure_no_auth = true` (dev only) — an open
@@ -157,7 +188,7 @@ The platform implements the state-of-the-art layered model — deterministic
 where regulation demands auditability, ML-ready where statistics end:
 
 1. **Rule engine (blocking)** — `energy-billing`'s validation pass: an
-   Error-severity violation (§41b iMSys, missing EPEX prices, §14a
+   Error-severity violation (§41a iMSys, missing EPEX prices, §14a
    double-billing, Ersatzversorgung > 3 months) means the invoice **never
    exists** (`VALIDATION_BLOCKED`); `assert_valid` pins the arithmetic
    invariants; the DB uniqueness guard prevents double-billing a period; and
@@ -265,7 +296,8 @@ annual amount, instead of drifting up to 6 ct/year from naïve
 - **Zählerstände + Zählernummer (§40 Abs. 2 Nr. 6):** start/end register
   readings and the aggregate quality flag come from edmd's billing-period
   response (`zaehlerstand_anfang/ende`, `quality`, `messtyp`); estimated or
-  substituted values render the §40a estimation notice and an
+  substituted values render the §40a EnWG / §60 Abs. 2 MsbG (Ersatzwert)
+  estimation notice and an
   `ESTIMATED_READING` warning. The Zählernummer is resolved from the marktd
   device registry (MaLo → Lokationszuordnung → MeLo → Zähler).
 - **Vorjahresvergleich + Vergleichsgruppe (§40 Abs. 2 Nr. 7/8):** the

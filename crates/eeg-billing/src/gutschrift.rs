@@ -3,8 +3,8 @@
 //! Under the **Gutschriftverfahren (§14 Abs. 2 Satz 2 UStG)** the Netzbetreiber
 //! *issues* the settlement document to the Anlagenbetreiber (the recipient of the
 //! supply issues the invoice, not the supplier). For a Regelbesteuerung operator
-//! that document must show 19 % USt; for §12 Abs. 3 (0 %) and §19 Kleinunternehmer
-//! it shows none — but the document, with its VAT breakdown (EN 16931 BG-23), is
+//! that document must show 19 % USt; for a §19 Kleinunternehmer it shows none
+//! (category `E`) — but the document, with its VAT breakdown (EN 16931 BG-23), is
 //! required in every case. The settlement *amount* alone was never a legal document.
 //!
 //! The [`settlement_to_gutschrift`] function assembles a [`billing::BillingDocument`]
@@ -25,8 +25,8 @@ use crate::ust::{VatStatus, ust_tax_layers};
 
 /// Render an EEG settlement as a §14 UStG Gutschrift (`rubo4e::current::Rechnung`).
 ///
-/// `vat` selects the tax layers (Regelbesteuerung 19 % / §12 Abs. 3 zero-rated /
-/// §19 exempt); `meta` carries the document facts (Gutschrift number, period, dates,
+/// `vat` selects the tax layers (Regelbesteuerung 19 % `S` / §19 Kleinunternehmer
+/// exempt `E`); `meta` carries the document facts (Gutschrift number, period, dates,
 /// NB = `issuer_id`, Anlagenbetreiber = `recipient_id`). For a settlement with no
 /// billable positions (NoData / PriceMissing) the Rechnung has no positions — the
 /// caller decides whether to issue it.
@@ -235,13 +235,13 @@ mod tests {
     }
 
     #[test]
-    fn par12abs3_gutschrift_is_zero_rated_not_missing() {
-        let r = settlement_to_gutschrift(&feed_in_output(), VatStatus::BefreitNach12Abs3, meta())
+    fn kleinunternehmer_gutschrift_is_exempt_not_missing() {
+        let r = settlement_to_gutschrift(&feed_in_output(), VatStatus::Kleinunternehmer, meta())
             .unwrap();
         assert_eq!(r.gesamtbrutto.unwrap().wert, r.gesamtnetto.unwrap().wert);
         let steuer = r
             .steuerbetraege
-            .expect("zero-rated still carries a breakdown");
+            .expect("§19 exempt still carries a breakdown");
         assert!(steuer[0].steuerwert.unwrap().is_zero());
     }
 }

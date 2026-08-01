@@ -23,7 +23,7 @@ CREATE TABLE billing_records (
                             'STROM', 'GAS', 'WAERME', 'SOLAR', 'EEG', 'EINSPEISUNG',
                             'WAERMEPUMPE', 'WALLBOX', 'HEMS', 'EMOBILITY',
                             'ENERGIEDIENSTLEISTUNG', 'BUNDLE', 'SAMMEL',
-                            'SHARING', 'VPP', 'WASSER'
+                            'SHARING', 'VPP', 'WASSER', 'TARIFWECHSEL'
                         )),
     period_from         DATE        NOT NULL,
     period_to           DATE        NOT NULL,
@@ -31,6 +31,9 @@ CREATE TABLE billing_records (
     -- Full rubo4e::current::Rechnung JSONB (§ 147 AO / GoBD 3-year retention)
     rechnung_json       JSONB       NOT NULL,
     bo4e_version        TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    -- EN 16931 semantic invoice model (serde JSON) — the source for XRechnung /
+    -- CII / PEPPOL-UBL rendering, mapped at bill time with full per-line VAT.
+    en16931_json        JSONB,
 
     -- Monetary summary for fast reporting (avoids JSONB parse)
     total_netto_eur     NUMERIC(16, 5),

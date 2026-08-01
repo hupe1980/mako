@@ -277,37 +277,46 @@ impl RegulatoryRates {
 
     /// Effective MwSt for an [`ElectricityProduct`](crate::ElectricityProduct).
     ///
-    /// Priority: `mwst_rate_override` → kWp 0% rule (§12 Abs. 3 UStG) → default.
+    /// A retail electricity **supply** is standard-rated regardless of whether
+    /// the customer operates their own PV plant: §12 Abs. 3 UStG zero-rates the
+    /// *supply of the PV system* (modules, storage, installation) — not the
+    /// electricity delivered over the grid. Only an explicit `mwst_rate_override`
+    /// departs from the default (e.g. an intra-community reverse-charge B2B case
+    /// the caller has already assessed).
     #[must_use]
     pub fn effective_mwst_electricity(&self, p: &crate::tariff::ElectricityProduct) -> Decimal {
-        if let Some(r) = p.mwst_rate_override {
-            return r;
-        }
-        if p.anlage_kwp.is_some_and(|kwp| kwp <= dec!(30)) {
-            return Decimal::ZERO;
-        }
-        self.mwst_rate
+        p.mwst_rate_override.unwrap_or(self.mwst_rate)
     }
 
-    /// Effective MwSt for a [`SolarProduct`](crate::SolarProduct).
+    /// Effective MwSt for a [`SolarProduct`](crate::SolarProduct) feed-in Gutschrift.
+    ///
+    /// A feed-in operator who has opted for the **Kleinunternehmerregelung
+    /// (§19 UStG)** — the common case for small rooftop plants since the
+    /// §12 Abs. 3 UStG Nullsteuersatz removed the input-tax incentive to choose
+    /// Regelbesteuerung — issues no USt, so the Gutschrift is 0 %. It is the
+    /// operator's *election*, not a function of plant size, so it is carried as
+    /// an explicit flag rather than derived from `anlage_kwp`.
     #[must_use]
     pub fn effective_mwst_solar(&self, p: &crate::tariff::SolarProduct) -> Decimal {
         if let Some(r) = p.mwst_rate_override {
             return r;
         }
-        if p.anlage_kwp.is_some_and(|kwp| kwp <= dec!(30)) {
+        if p.kleinunternehmer_19_ustg {
             return Decimal::ZERO;
         }
         self.mwst_rate
     }
 
-    /// Effective MwSt for an [`EegProduct`](crate::EegProduct).
+    /// Effective MwSt for an [`EegProduct`](crate::EegProduct) feed-in Gutschrift.
+    ///
+    /// 0 % when the operator has elected the Kleinunternehmerregelung
+    /// (§19 UStG); otherwise the standard rate. See [`Self::effective_mwst_solar`].
     #[must_use]
     pub fn effective_mwst_eeg(&self, p: &crate::tariff::EegProduct) -> Decimal {
         if let Some(r) = p.mwst_rate_override {
             return r;
         }
-        if p.anlage_kwp.is_some_and(|kwp| kwp <= dec!(30)) {
+        if p.kleinunternehmer_19_ustg {
             return Decimal::ZERO;
         }
         self.mwst_rate
@@ -357,7 +366,8 @@ impl RegulatoryRates {
 
     /// Effective Energiesteuer Gas for a specific billing year (retroactive corrections).
     ///
-    /// Handles the 2022 emergency 0-rate (Energiesteuersenkungsgesetz).
+    /// Heating gas has been 0.55 ct/kWh throughout (§2 Abs. 3 Nr. 4 EnergieStG) —
+    /// the 2022 Energiesteuersenkungsgesetz cut motor fuels only, never heating gas.
     #[must_use]
     pub fn effective_energiesteuer_gas_for_year(
         &self,
@@ -368,24 +378,6 @@ impl RegulatoryRates {
             return o;
         }
         energiesteuer_gas_for_year(year).unwrap_or(self.energiesteuer_gas_ct_per_kwh)
-    }
-
-    /// Effective MwSt from a raw override value and optional kWp.
-    ///
-    /// Used by providers that need the MwSt rate outside of `Product::build_engine`.
-    #[must_use]
-    pub fn effective_mwst_with_override(
-        &self,
-        override_rate: Option<Decimal>,
-        anlage_kwp: Option<Decimal>,
-    ) -> Decimal {
-        if let Some(r) = override_rate {
-            return r;
-        }
-        if anlage_kwp.is_some_and(|kwp| kwp <= dec!(30)) {
-            return Decimal::ZERO;
-        }
-        self.mwst_rate
     }
 }
 

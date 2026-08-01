@@ -7,7 +7,6 @@
 //! - **§48a EEG 2023** — Mieterstromzuschlag bei solarer Strahlungsenergie (the §21 Abs. 3 rate)
 //! - **§48 Abs. 5** — Freiflächenanlage restrictions (location, ecological rules)
 //! - **§22 EEG 2023** — auction obligation for large plants (> 1 MWp)
-//! - **§12 Abs. 3 UStG** — zero VAT for PV ≤ 30 kWp since 01.01.2023
 //! - **§51a EEG 2023** — Verlängerungsanspruch uses a 0.5 factor for solar
 //!   (§51a Abs. 2: only 50% of lost kWh extend the period, not 100%)
 //! - **Solarpaket I (BGBl I 2024 Nr. 107)** — increased rates from 01.05.2024,
@@ -160,16 +159,6 @@ pub struct SolarAnlageData {
     /// Feed-in mode — determines whether §48 Abs. 2 or Abs. 2a rate applies.
     pub einspeisungs_modus: EinspeisungsModus,
 
-    /// Whether the plant qualifies for the §12 Abs. 3 UStG zero-VAT regime.
-    ///
-    /// Applies automatically for PV ≤ 30 kWp installed on or at a building,
-    /// commissioned on or after 01.01.2023 (§12 Abs. 3 Nr. 1 UStG, as amended
-    /// by JStG 2022).
-    ///
-    /// When `true`, no VAT (Umsatzsteuer) is charged on EEG feed-in receipts.
-    /// Use [`ustg_12_3_applies`] to compute this automatically from capacity and date.
-    pub ustg_12_3_zero_vat: bool,
-
     /// Whether the plant has a certified **MaStR registration** (required since §25 EEG).
     ///
     /// `false` → §52 penalty applies until registration confirmed.
@@ -226,58 +215,6 @@ pub fn requires_ausschreibung(leistung_kwp: Decimal, bauform: SolarBauform) -> b
     leistung_kwp > bauform.auction_threshold_kwp()
 }
 
-// ── §12 Abs. 3 UStG zero-VAT ──────────────────────────────────────────────────
-
-/// Returns `true` when §12 Abs. 3 Nr. 1 UStG applies (zero VAT on PV supply).
-///
-/// ## Legal basis — §12 Abs. 3 UStG (as amended by JStG 2022, BGBl I 2022 Nr. 58)
-///
-/// Since **01.01.2023**, supply and installation of solar PV systems, including
-/// storage systems, are subject to **zero percent VAT** when ALL of the
-/// following conditions are met:
-///
-/// 1. Installation on or at a **residential building** or a building used for
-///    activities serving the public interest (Wohngebäude / gemeinnützige Gebäude)
-/// 2. Installed capacity ≤ **30 kWp** per plant / property
-/// 3. Commissioned on or after **01.01.2023** (earlier plants: normal VAT regime)
-///
-/// ## Impact on EEG billing
-///
-/// When this applies:
-/// - EEG Einspeisevergütung receipts are issued **without Umsatzsteuer** (0%)
-/// - The operator does NOT need to register for Umsatzsteuer under §14 UStG
-/// - Use `billing::TaxLayer` with rate 0 in `EegSettleTariff`
-///
-/// ## Bestandsschutz
-/// Plants commissioned before 01.01.2023 fall under the previous regime
-/// (19% USt for Regelbesteuerung, or Kleinunternehmer §19 UStG exemption).
-/// This function returns `false` for pre-2023 plants.
-///
-/// # Example
-/// ```rust
-/// use eeg_billing::solar::ustg_12_3_applies;
-/// use time::macros::date;
-/// use rust_decimal::dec;
-///
-/// // 10 kWp on residential house, commissioned Jan 2024 → zero VAT
-/// assert!(ustg_12_3_applies(dec!(10), true, date!(2024-03-01)));
-/// // Same plant but commissioned Dec 2022 → NO zero VAT (Bestandsschutz)
-/// assert!(!ustg_12_3_applies(dec!(10), true, date!(2022-12-31)));
-/// // 35 kWp: exceeds 30 kWp limit → NO zero VAT
-/// assert!(!ustg_12_3_applies(dec!(35), true, date!(2024-03-01)));
-/// ```
-#[must_use]
-pub fn ustg_12_3_applies(
-    leistung_kwp: Decimal,
-    on_residential_or_public_building: bool,
-    inbetriebnahme: time::Date,
-) -> bool {
-    use time::macros::date;
-    inbetriebnahme >= date!(2023 - 01 - 01)
-        && on_residential_or_public_building
-        && leistung_kwp <= dec!(30)
-}
-
 // ── §51a Abs. 2 — solar PV factor ────────────────────────────────────────────
 
 /// §51a Abs. 2 EEG 2023 — solar-specific Verlängerungsanspruch factor.
@@ -310,7 +247,6 @@ pub const SECT51A_SOLAR_FACTOR_DENOMINATOR: u64 = 2;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use time::macros::date;
 
     // ── SolarBauform ──────────────────────────────────────────────────────────
 
@@ -354,29 +290,6 @@ mod tests {
         assert!(!requires_ausschreibung(dec!(2), SolarBauform::SteckerPv));
     }
 
-    // ── ustg_12_3_applies ─────────────────────────────────────────────────────
-
-    #[test]
-    fn zero_vat_applies_post_2023_residential_leq30kwp() {
-        assert!(ustg_12_3_applies(dec!(10), true, date!(2024 - 03 - 15)));
-        assert!(ustg_12_3_applies(dec!(30), true, date!(2023 - 01 - 01))); // boundary: exact
-    }
-
-    #[test]
-    fn zero_vat_does_not_apply_pre_2023() {
-        assert!(!ustg_12_3_applies(dec!(10), true, date!(2022 - 12 - 31)));
-    }
-
-    #[test]
-    fn zero_vat_does_not_apply_above_30kwp() {
-        assert!(!ustg_12_3_applies(dec!(31), true, date!(2024 - 01 - 01)));
-    }
-
-    #[test]
-    fn zero_vat_does_not_apply_non_residential() {
-        assert!(!ustg_12_3_applies(dec!(10), false, date!(2024 - 01 - 01)));
-    }
-
     // ── EinspeisungsModus ─────────────────────────────────────────────────────
 
     #[test]
@@ -384,7 +297,6 @@ mod tests {
         let anlage = SolarAnlageData {
             bauform: SolarBauform::Gebaeude,
             einspeisungs_modus: EinspeisungsModus::Volleinspeisung,
-            ustg_12_3_zero_vat: true,
             mastr_registriert: true,
             agripv_zertifiziert: false,
         };
@@ -396,7 +308,6 @@ mod tests {
         let anlage = SolarAnlageData {
             bauform: SolarBauform::Gebaeude,
             einspeisungs_modus: EinspeisungsModus::Ueberschusseinspeisung,
-            ustg_12_3_zero_vat: false,
             mastr_registriert: true,
             agripv_zertifiziert: false,
         };

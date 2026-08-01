@@ -112,6 +112,33 @@ fn due_period(zyklus: &str, today: Date, vertragsbeginn: Date) -> Option<(Date, 
     }
 }
 
+/// The most-recently-completed billing periods for a cadence, newest first,
+/// up to `max_back`.
+///
+/// `due_period(zyklus, period_start, …)` returns the period ending the day
+/// before `period_start`, so stepping the cursor back walks the history. The
+/// daily sweep bills every returned period still missing a record — a worker
+/// that was down for one or more full cycles catches up the periods it slept
+/// through instead of skipping them forever (§40c EnWG deadline). The bound
+/// caps catch-up work; `JAEHRLICH` self-limits at `vertragsbeginn`.
+fn due_periods(
+    zyklus: &str,
+    today: Date,
+    vertragsbeginn: Date,
+    max_back: usize,
+) -> Vec<(Date, Date)> {
+    let mut out = Vec::new();
+    let mut cursor = today;
+    for _ in 0..max_back {
+        let Some((from, to)) = due_period(zyklus, cursor, vertragsbeginn) else {
+            break;
+        };
+        out.push((from, to));
+        cursor = from; // the next-older period ends the day before `from`
+    }
+    out
+}
+
 /// Clip a period to the component's supply window. `None` = nothing billable.
 fn clip(
     (from, to): (Date, Date),
@@ -189,32 +216,37 @@ async fn sweep(
     for cand in &candidates {
         lf_for_log.get_or_insert_with(|| cand.lf_mp_id.clone());
 
-        let Some(period) = due_period(&cand.abrechnungszyklus, today, cand.vertragsbeginn) else {
-            continue;
-        };
-        let Some((from, to)) = clip(period, cand.lieferbeginn, cand.lieferende) else {
-            continue;
-        };
-        match pg::billing_record_exists_for_period(pool, &cfg.tenant, &cand.malo_id, from, to).await
-        {
-            Ok(true) => continue,
-            Ok(false) => {}
-            Err(e) => {
-                tracing::warn!(malo_id = %cand.malo_id, error = %e, "billing-run: idempotency check failed — skipping");
-                errors += 1;
+        // Bill every completed period still missing a record — oldest first, so
+        // invoices are created in chronological order and a worker that missed a
+        // cycle catches up rather than skipping periods (§40c). `MONATLICH` looks
+        // back 13 months; the bound also caps quarterly/half-yearly catch-up.
+        let periods = due_periods(&cand.abrechnungszyklus, today, cand.vertragsbeginn, 13);
+        for period in periods.into_iter().rev() {
+            let Some((from, to)) = clip(period, cand.lieferbeginn, cand.lieferende) else {
                 continue;
+            };
+            match pg::billing_record_exists_for_period(pool, &cfg.tenant, &cand.malo_id, from, to)
+                .await
+            {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::warn!(malo_id = %cand.malo_id, error = %e, "billing-run: idempotency check failed — skipping");
+                    errors += 1;
+                    continue;
+                }
             }
-        }
-        match bill_one(cfg, pool, tarifbd, edmd, marktd, vertragd, cand, from, to).await {
-            Ok(()) => billed += 1,
-            Err(e) => {
-                tracing::warn!(malo_id = %cand.malo_id, %from, %to, error = %e, "billing-run: billing failed");
-                errors += 1;
+            match bill_one(cfg, pool, tarifbd, edmd, marktd, vertragd, cand, from, to).await {
+                Ok(()) => billed += 1,
+                Err(e) => {
+                    tracing::warn!(malo_id = %cand.malo_id, %from, %to, error = %e, "billing-run: billing failed");
+                    errors += 1;
+                }
             }
         }
 
-        // §40b Abs. 2: monthly Abrechnungsinformation for iMSys MaLos —
-        // independent of the invoice cadence.
+        // §40b Abs. 2: monthly Abrechnungsinformation for iMSys MaLos — once per
+        // candidate per sweep, independent of the invoice cadence.
         if cfg.billing_runs.abrechnungsinformation {
             deliver_abrechnungsinfo(cfg, pool, tarifbd, edmd, marktd, vertragd, cand, today).await;
         }
@@ -324,6 +356,7 @@ async fn bill_one(
             false,
         );
         mako_service::outbox::enqueue(&mut tx, &ce).await?;
+        pg::mark_dispatched_tx(&mut *tx, record_id).await?;
     }
     tx.commit().await?;
 
@@ -507,6 +540,42 @@ mod tests {
     fn jaehrlich_first_year_is_not_yet_billable() {
         // Contract began 2026-03-01; first anniversary 2027-03-01 not reached.
         assert!(due_period("JAEHRLICH", date!(2026 - 07 - 19), date!(2026 - 03 - 01)).is_none());
+    }
+
+    #[test]
+    fn monatlich_catch_up_walks_back_missed_months() {
+        // A worker down for three months still sees June, May and April, newest
+        // first — the sweep bills every one still missing a record.
+        let ps = due_periods(
+            "MONATLICH",
+            date!(2026 - 07 - 19),
+            date!(2024 - 03 - 15),
+            13,
+        );
+        assert_eq!(ps.len(), 13);
+        assert_eq!(ps[0], (date!(2026 - 06 - 01), date!(2026 - 06 - 30)));
+        assert_eq!(ps[1], (date!(2026 - 05 - 01), date!(2026 - 05 - 31)));
+        assert_eq!(ps[2], (date!(2026 - 04 - 01), date!(2026 - 04 - 30)));
+        // Contiguous, no gaps or overlaps across the year boundary.
+        for w in ps.windows(2) {
+            assert_eq!(w[1].1.next_day().unwrap(), w[0].0, "periods are contiguous");
+        }
+    }
+
+    #[test]
+    fn jaehrlich_catch_up_self_limits_at_vertragsbeginn() {
+        // Contract began 2024-03-15, today 2026-07-19 → two anniversaries passed,
+        // so both completed years are billable; catch-up stops at the contract
+        // start rather than inventing history before it.
+        let ps = due_periods(
+            "JAEHRLICH",
+            date!(2026 - 07 - 19),
+            date!(2024 - 03 - 15),
+            13,
+        );
+        assert_eq!(ps.len(), 2, "two full anniversary years have completed");
+        assert_eq!(ps[0], (date!(2025 - 03 - 15), date!(2026 - 03 - 14)));
+        assert_eq!(ps[1], (date!(2024 - 03 - 15), date!(2025 - 03 - 14)));
     }
 
     #[test]

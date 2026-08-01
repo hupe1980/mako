@@ -153,7 +153,7 @@ pub trait BillingProvider: Send + Sync {
     ///
     /// Default implementation returns no warnings. Override in providers that must
     /// enforce regulatory preconditions (e.g. `DynamicElectricityProvider` enforces
-    /// §41b iMSys requirement).
+    /// §41a iMSys requirement).
     ///
     /// Warnings with `WarningSeverity::Error` cause `BillingEngine::bill()` to return
     /// [`EngineError::ValidationBlocked`] before any positions are generated.

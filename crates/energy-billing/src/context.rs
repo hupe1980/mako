@@ -10,7 +10,7 @@ use crate::rates::RegulatoryRates;
 
 // ── Verbrauchshistorie ───────────────────────────────────────────────────────────
 
-/// §41 EnWG Abs. 1 Nr. 3 — Verbrauchshistorie (consumption history for invoice display).
+/// §40 Abs. 2 EnWG — Verbrauchshistorie (consumption history for invoice display).
 ///
 /// German energy invoices must compare the billed period consumption against
 /// the same period in the prior year and the national average for comparable
@@ -18,16 +18,16 @@ use crate::rates::RegulatoryRates;
 ///
 /// ## Legal basis
 ///
-/// §41 Abs. 1 Nr. 3 EnWG: “der tatsächliche Energieverbrauch sowie — soweit technisch möglich
+/// §40 Abs. 2 EnWG: “der tatsächliche Energieverbrauch sowie — soweit technisch möglich
 /// und sinnvoll — ein Vergleich des aktuellen Energieverbrauchs des Letztverbrauchers mit
 /// seinem Verbrauch im gleichen Zeitraum des Vorjahres … und dem Verbrauch einer
 /// Vergleichsgruppe von Letztverbrauchern.”
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Verbrauchshistorie {
-    /// Consumption in the same period of the prior year (kWh). §41 Abs. 1 Nr. 3a EnWG.
+    /// Consumption in the same period of the prior year (kWh). §40 Abs. 2 Nr. 7 EnWG.
     #[serde(default)]
     pub vorjahr_kwh: Option<Decimal>,
-    /// National average consumption for comparable customers (kWh). §41 Abs. 1 Nr. 3b EnWG.
+    /// National average consumption for comparable customers (kWh). §40 Abs. 2 Nr. 8 EnWG.
     #[serde(default)]
     pub bundesdurchschnitt_kwh: Option<Decimal>,
     /// Description of the comparable customer group (e.g. `"2-Personen-Haushalt"`).
@@ -303,7 +303,7 @@ pub enum CustomerKategorie {
     /// Household customer (Haushaltskunde, §2 Nr. 25 EnWG).
     ///
     /// B2C. StromGVV / GasGVV apply. §40 EnWG Kilowattstundenpreis mandatory.
-    /// Invoice must include Verbrauchshistorie (§41 Abs. 1 Nr. 3 EnWG).
+    /// Invoice must include Verbrauchshistorie (§40 Abs. 2 EnWG).
     #[default]
     Haushalt,
 
@@ -339,7 +339,7 @@ impl CustomerKategorie {
         matches!(self, Self::Haushalt | Self::Gewerbe)
     }
 
-    /// Whether the annual Verbrauchshistorie (§41 Abs. 1 Nr. 3 EnWG) applies.
+    /// Whether the annual Verbrauchshistorie (§40 Abs. 2 EnWG) applies.
     ///
     /// Mandatory for household customers (B2C). Recommended for Gewerbe.
     /// Not required for industrial / RLM customers.
@@ -348,7 +348,7 @@ impl CustomerKategorie {
         matches!(self, Self::Haushalt)
     }
 
-    /// Whether the §40a EnWG Kilowattstundenpreis must appear on the invoice.
+    /// Whether the §40 EnWG Kilowattstundenpreis must appear on the invoice.
     ///
     /// Mandatory for all non-RLM electricity customers.
     #[must_use]
@@ -740,7 +740,7 @@ pub struct BillingContext {
     #[serde(default)]
     pub abschlage: Vec<AbschlagDeduction>,
 
-    /// §41 EnWG Abs. 1 Nr. 3 — Verbrauchshistorie for invoice display.
+    /// §40 Abs. 2 EnWG — Verbrauchshistorie for invoice display.
     ///
     /// When set, appears as informational ZusatzAttribute in the Rechnung JSON
     /// showing the customer's consumption history vs. prior year and average.
@@ -810,7 +810,7 @@ pub struct BillingContext {
 
     /// Customer category — drives regulatory exemptions and invoice disclosure.
     ///
-    /// | Category | SLP | Verbrauchshistorie | §40a kWh-Preis |
+    /// | Category | SLP | Verbrauchshistorie | §40 kWh-Preis |
     /// |---|---|---|---|
     /// | `Haushalt` | ✅ | Mandatory | Mandatory |
     /// | `Gewerbe` | ✅ | Recommended | Mandatory |

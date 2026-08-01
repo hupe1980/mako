@@ -89,6 +89,12 @@ pub struct BillingdConfig {
     /// as shown on invoices.
     pub seller_contact: Option<String>,
 
+    /// Seller payment account IBAN (BT-84) for the XRechnung BG-16 SEPA credit
+    /// transfer. Required for a `BR-DE-1`-conformant B2G document.
+    pub seller_iban: Option<String>,
+    /// Seller bank BIC (BT-86), optional.
+    pub seller_bic: Option<String>,
+
     /// Statutory rate defaults.  Override here instead of per-product.
     pub rates: Option<RatesConfig>,
 

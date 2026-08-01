@@ -977,61 +977,58 @@ fn solar_pv_volleinspeisung_2024_five_brackets() {
     );
 }
 
-// ── Umsatzsteuer (VAT) — §12 Abs. 3 UStG + §19 UStG + Regelbesteuerung ──────
+// ── Umsatzsteuer (VAT) — §19 UStG Kleinunternehmer + Regelbesteuerung ───────
+//
+// A feed-in Gutschrift has exactly two VAT treatments. The operator's status is
+// declared masterdata (`eeg_anlagen.ust_status`); `default_for_plant` only seeds
+// a sensible default. §12 Abs. 3 UStG is a hardware-supply rate and never a
+// feed-in category.
 
 #[test]
-fn ust_par12_abs3_exempt_solar_pv_le30kwp_post_2023() {
-    use eeg_billing::ust::{VatStatus, qualifies_for_12_abs3};
-    // 9.5 kWp solar, commissioned 2024: ≤30 kWp AND post-01.01.2023 → exempt
-    assert!(qualifies_for_12_abs3(
-        true,
-        dec!(9.5),
-        Some(date!(2024 - 06 - 01))
-    ));
-    let vat = VatStatus::from_plant(true, dec!(9.5), Some(date!(2024 - 06 - 01)));
-    assert_eq!(vat, VatStatus::BefreitNach12Abs3);
+fn ust_default_small_post_2023_solar_is_kleinunternehmer() {
+    use eeg_billing::ust::VatStatus;
+    // 9.5 kWp solar, commissioned 2024: the §12-Abs.-3 hardware 0 % removed the
+    // incentive to opt in, so the operator is, by default, a §19 Kleinunternehmer.
+    let vat = VatStatus::default_for_plant(true, dec!(9.5), Some(date!(2024 - 06 - 01)));
+    assert_eq!(vat, VatStatus::Kleinunternehmer);
     assert!(vat.is_exempt());
     assert_eq!(vat.ust_rate(), Decimal::ZERO);
 }
 
 #[test]
-fn ust_large_solar_pv_not_par12_abs3_exempt() {
-    use eeg_billing::ust::{VatStatus, qualifies_for_12_abs3};
-    // 50 kWp: exceeds 30 kWp threshold → Regelbesteuerung
-    assert!(!qualifies_for_12_abs3(
-        true,
-        dec!(50),
-        Some(date!(2024 - 01 - 01))
-    ));
-    let vat = VatStatus::from_plant(true, dec!(50), Some(date!(2024 - 01 - 01)));
+fn ust_default_large_solar_is_regelbesteuerung() {
+    use eeg_billing::ust::VatStatus;
+    // 50 kWp: exceeds the §19 turnover reality → Regelbesteuerung
+    let vat = VatStatus::default_for_plant(true, dec!(50), Some(date!(2024 - 01 - 01)));
     assert_eq!(vat, VatStatus::Regelbesteuerung);
     assert!(!vat.is_exempt());
 }
 
 #[test]
-fn ust_pre_2023_solar_not_par12_abs3_exempt() {
-    use eeg_billing::ust::{VatStatus, qualifies_for_12_abs3};
-    // 9 kWp but commissioned Dec 2022: before cutoff → not exempt
-    assert!(!qualifies_for_12_abs3(
-        true,
-        dec!(9),
-        Some(date!(2022 - 12 - 01))
-    ));
-    let vat = VatStatus::from_plant(true, dec!(9), Some(date!(2022 - 12 - 01)));
+fn ust_default_pre_2023_solar_is_regelbesteuerung() {
+    use eeg_billing::ust::VatStatus;
+    // 9 kWp but commissioned Dec 2022: the small-PV default is post-2023 only.
+    let vat = VatStatus::default_for_plant(true, dec!(9), Some(date!(2022 - 12 - 01)));
     assert_eq!(vat, VatStatus::Regelbesteuerung);
 }
 
 #[test]
-fn ust_wind_never_par12_abs3_exempt() {
-    use eeg_billing::ust::{VatStatus, qualifies_for_12_abs3};
-    // Wind plant: §12 Abs. 3 is solar PV only
-    assert!(!qualifies_for_12_abs3(
-        false,
-        dec!(5),
-        Some(date!(2024 - 01 - 01))
-    ));
-    let vat = VatStatus::from_plant(false, dec!(5000), Some(date!(2024 - 01 - 01)));
+fn ust_default_wind_is_regelbesteuerung() {
+    use eeg_billing::ust::VatStatus;
+    // Wind plant: the small-PV Kleinunternehmer default is solar-only.
+    let vat = VatStatus::default_for_plant(false, dec!(5000), Some(date!(2024 - 01 - 01)));
     assert_eq!(vat, VatStatus::Regelbesteuerung);
+}
+
+#[test]
+fn ust_db_round_trip() {
+    use eeg_billing::ust::VatStatus;
+    for status in [VatStatus::Kleinunternehmer, VatStatus::Regelbesteuerung] {
+        assert_eq!(VatStatus::from_db_str(status.as_db_str()), Some(status));
+    }
+    assert_eq!(VatStatus::Kleinunternehmer.as_db_str(), "KLEINUNTERNEHMER");
+    assert_eq!(VatStatus::Regelbesteuerung.as_db_str(), "REGELBESTEUERUNG");
+    assert_eq!(VatStatus::from_db_str("BEFREIT_12_ABS_3"), None);
 }
 
 #[test]
@@ -1051,36 +1048,24 @@ fn ust_regelbesteuerung_19_pct() {
 }
 
 #[test]
-fn ust_tax_layers_zero_rate_for_exempt() {
+fn ust_tax_layers_one_layer_per_status() {
     use eeg_billing::ust::{VatStatus, ust_tax_layers};
-    // A 0 % supply is still a taxable supply: EN 16931 BG-23 requires it in the
+    // An exempt supply is still a taxable supply: EN 16931 BG-23 requires it in the
     // VAT breakdown under its own category, so the layer is present and charges
     // nothing rather than being omitted.
-    for status in [VatStatus::BefreitNach12Abs3, VatStatus::Kleinunternehmer] {
-        let layers = ust_tax_layers(status);
+    for status in [VatStatus::Kleinunternehmer, VatStatus::Regelbesteuerung] {
         assert_eq!(
-            layers.len(),
+            ust_tax_layers(status).len(),
             1,
-            "{status:?} must contribute a breakdown entry"
+            "{status:?} must contribute exactly one breakdown entry"
         );
     }
 }
 
 #[test]
-fn ust_tax_layers_one_layer_for_regelbesteuerung() {
-    use eeg_billing::ust::{VatStatus, ust_tax_layers};
-    let layers = ust_tax_layers(VatStatus::Regelbesteuerung);
-    assert_eq!(
-        layers.len(),
-        1,
-        "Regelbesteuerung: exactly one 19% USt layer"
-    );
-}
-
-#[test]
-fn ust_par12_abs3_billing_document_no_vat() {
+fn ust_kleinunternehmer_billing_document_is_exempt() {
     use billing::{BillingDocument, DocumentMeta, ScalarTariff as _};
-    use eeg_billing::tariff::EegSettleTariff12Abs3;
+    use eeg_billing::tariff::EegSettleTariffKleinunternehmer;
     use eeg_billing::ust::{VatStatus, ust_tax_layers};
 
     let output = calculate_settlement(&SettleInput {
@@ -1093,10 +1078,8 @@ fn ust_par12_abs3_billing_document_no_vat() {
         ..SettleInput::default()
     });
 
-    let vat = VatStatus::from_plant(true, dec!(9.5), Some(date!(2024 - 06 - 01)));
-    assert_eq!(vat, VatStatus::BefreitNach12Abs3);
-
-    let tariff = EegSettleTariff12Abs3::new(&output);
+    let vat = VatStatus::Kleinunternehmer;
+    let tariff = EegSettleTariffKleinunternehmer::new(&output);
     let doc = BillingDocument::from_positions(
         DocumentMeta::default(),
         tariff.positions().unwrap().into_inner(),
@@ -1105,19 +1088,19 @@ fn ust_par12_abs3_billing_document_no_vat() {
     )
     .unwrap();
 
-    // 500 kWh × 8.51 ct = 42.55 EUR; no USt → gross = net
+    // 500 kWh × 8.51 ct = 42.55 EUR; §19 → no USt → gross = net
     assert_eq!(doc.net_total(), billing::Amount::parse("42.55000").unwrap());
     assert_eq!(
         doc.gross_total(),
         doc.net_total(),
-        "§12 Abs. 3 exempt: no USt"
+        "§19 Kleinunternehmer: no USt"
     );
 
-    // The turnover still appears in the EN 16931 BG-23 breakdown, zero-rated:
-    // charging no tax is not the same as having no taxable base.
+    // The turnover still appears in the EN 16931 BG-23 breakdown as an exempt
+    // supply (category E): charging no tax is not the same as no taxable base.
     let breakdown = doc.tax_breakdown();
     assert_eq!(breakdown.len(), 1);
-    assert_eq!(breakdown[0].category, billing::TaxCategory::ZeroRated);
+    assert_eq!(breakdown[0].category, billing::TaxCategory::Exempt);
     assert!(breakdown[0].rate.is_zero());
     assert_eq!(breakdown[0].taxable_base, doc.net_total());
     assert!(breakdown[0].tax_amount.is_zero());

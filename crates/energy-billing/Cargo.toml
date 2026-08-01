@@ -12,6 +12,8 @@ rust-version.workspace = true
 # BO4E bridge (feature `bo4e`): typed Rechnung/Steuerbetrag construction.
 rubo4e = { workspace = true, optional = true }
 billing             = { workspace = true }
+# EN 16931 semantic model bridge (feature `en16931`): `Invoice::to_en16931()`.
+en16931             = { workspace = true, optional = true }
 eeg-billing         = { workspace = true, features = ["serde"], optional = true }
 rust_decimal        = { workspace = true }
 serde               = { workspace = true, features = ["derive"] }
@@ -29,8 +31,12 @@ eeg = ["dep:eeg-billing"]
 ## `TaxSubtotal::to_bo4e()`, `InvoiceType::rechnungstyp()`. Off by default so
 ## the core billing engine stays rubo4e-free (billing-crate policy).
 bo4e = ["dep:rubo4e"]
+## EN 16931 bridge: `Invoice::to_en16931(seller, buyer)` → `en16931::Invoice`,
+## the semantic model that `en16931-formats` renders to XRechnung/CII/UBL/ZUGFeRD.
+## The mapping is at this layer (full per-position fidelity) rather than via BO4E.
+en16931 = ["dep:en16931"]
 ## Enable all optional features.
-full = ["eeg", "bo4e"]
+full = ["eeg", "bo4e", "en16931"]
 
 [dev-dependencies]
 time = { workspace = true, features = ["macros"] }
@@ -50,3 +56,8 @@ path = "tests/proptest_invoice.rs"
 name = "golden_scenarios"
 path = "tests/golden_scenarios.rs"
 required-features = ["bo4e"]
+
+[[test]]
+name = "en16931_conformance"
+path = "tests/en16931_conformance.rs"
+required-features = ["en16931"]

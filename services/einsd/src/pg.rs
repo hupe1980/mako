@@ -99,6 +99,12 @@ pub struct AnlageUpsertRequest {
     pub bank_bic: Option<String>,
     /// Full name of payment recipient (Zahlungsempfänger).
     pub zahlungsempfaenger: Option<String>,
+    /// Operator's declared VAT status — `"KLEINUNTERNEHMER"` (§19 UStG, 0 %) or
+    /// `"REGELBESTEUERUNG"` (§12 Abs. 1 UStG, 19 %). This is a property of the
+    /// operator, not of the plant. When omitted, it is seeded from
+    /// [`eeg_billing::ust::VatStatus::default_for_plant`] (a small post-2023 solar
+    /// plant defaults to Kleinunternehmer, everything else to Regelbesteuerung).
+    pub ust_status: Option<String>,
     pub notes: Option<String>,
     /// §51b EEG 2023 — Biogas Ausschreibungsanlage with slightly-positive price rule.
     ///
@@ -190,6 +196,8 @@ pub struct AnlageRow {
     pub bank_iban: Option<String>,
     pub bank_bic: Option<String>,
     pub zahlungsempfaenger: Option<String>,
+    /// Operator's declared VAT status (`KLEINUNTERNEHMER` | `REGELBESTEUERUNG`).
+    pub ust_status: String,
     pub notes: Option<String>,
     // Plant attributes (migration 0003)
     pub inbetriebnahme_typ: Option<String>,
@@ -320,6 +328,22 @@ pub async fn upsert_anlage(
         &req.settlement_model
     };
 
+    // Operator VAT status is masterdata. When the caller does not declare it, seed
+    // a sensible default from the plant (small post-2023 solar → §19 Kleinunternehmer,
+    // otherwise Regelbesteuerung). The CHECK constraint rejects any other token.
+    let ust_status = req.ust_status.clone().unwrap_or_else(|| {
+        let is_solar = eeg_billing::ErzeugungsArt::from_db_str(&req.erzeugungsart)
+            .map(|a| a.is_solar())
+            .unwrap_or(false);
+        eeg_billing::ust::VatStatus::default_for_plant(
+            is_solar,
+            req.leistung_kwp,
+            Some(inbetriebnahme),
+        )
+        .as_db_str()
+        .to_owned()
+    });
+
     sqlx::query(
         r"INSERT INTO eeg_anlagen (
                tr_id, tenant, malo_id, melo_id, eeg_gesetz, inbetriebnahme,
@@ -331,7 +355,7 @@ pub async fn upsert_anlage(
                kwk_foerderdauer_h, kwk_foerderdauer_years,
                flex_leistung_kw, flex_praemie_ct_kwh,
                mastr_registriert, mastr_nummer, mastr_datum,
-               bank_iban, bank_bic, zahlungsempfaenger,
+               bank_iban, bank_bic, zahlungsempfaenger, ust_status,
                notes, is_biogas_sect51b, grid_area,
                biomasse_hauptbrennstoff, biomasse_guelle_anteil, biomasse_energiepflanzen_anteil,
                zuschlagswert_ct, zuschlag_datum,
@@ -346,7 +370,7 @@ pub async fn upsert_anlage(
                $21, $22,
                $23, $24,
                $25, $26, $27,
-               $28, $29, $30,
+               $28, $29, $30, $41,
                $31, $32, $33, $34, $35, $36,
                $37, $38, $39, $40, now()
            )
@@ -383,6 +407,7 @@ pub async fn upsert_anlage(
                bank_iban                 = COALESCE(EXCLUDED.bank_iban, eeg_anlagen.bank_iban),
                bank_bic                  = COALESCE(EXCLUDED.bank_bic, eeg_anlagen.bank_bic),
                zahlungsempfaenger        = COALESCE(EXCLUDED.zahlungsempfaenger, eeg_anlagen.zahlungsempfaenger),
+               ust_status                = EXCLUDED.ust_status,
                notes                     = EXCLUDED.notes,
                is_biogas_sect51b         = EXCLUDED.is_biogas_sect51b,
                grid_area                 = EXCLUDED.grid_area,
@@ -431,6 +456,7 @@ pub async fn upsert_anlage(
     .bind(zuschlag_datum)
     .bind(req.ist_innovationsausschreibung.unwrap_or(false))
     .bind(req.ist_buergerenergie.unwrap_or(false))
+    .bind(&ust_status) // $41
     .execute(pool)
     .await
     .context("upsert eeg_anlage")?;
@@ -582,6 +608,10 @@ pub struct SettleInput {
     pub eeg_gesetz: i16,
     /// Plant technology type for §51 EEG 2017 kW exemption dispatch.
     pub erzeugungsart: String,
+    /// Operator's declared VAT status — decides the feed-in Gutschrift USt
+    /// (§19 Kleinunternehmer `E`/0 % vs. Regelbesteuerung `S`/19 %). Sourced from
+    /// `eeg_anlagen.ust_status` masterdata, not inferred from plant size.
+    pub vat_status: eeg_billing::ust::VatStatus,
     /// Whether the plant is registered in MaStR (Marktstammdatenregister).
     ///
     /// - `false` + EEG 2023  → Pflichtzahlung €10/kW/month (§52 Abs. 1 Nr. 11 EEG 2023)
@@ -982,6 +1012,17 @@ pub fn build_settle_input(
         billing_date,
         eeg_gesetz: anlage.eeg_gesetz,
         erzeugungsart: anlage.erzeugungsart.clone(),
+        // Declared masterdata status; fall back to the plant-seeded default if a
+        // legacy row carries an unrecognised token.
+        vat_status: eeg_billing::ust::VatStatus::from_db_str(&anlage.ust_status).unwrap_or_else(
+            || {
+                eeg_billing::ust::VatStatus::default_for_plant(
+                    is_solar,
+                    anlage.leistung_kwp,
+                    Some(anlage.inbetriebnahme),
+                )
+            },
+        ),
         wind_korrekturfaktor,
         fernsteuerbarkeit_datum: anlage.fernsteuerbarkeit_datum,
         is_biogas_sect51b: anlage.is_biogas_sect51b,
@@ -1041,16 +1082,13 @@ fn build_gutschrift(
 ) {
     use billing::{Currency, DocumentMeta, Period};
     use eeg_billing::gutschrift::settlement_to_gutschrift_with_document;
-    use eeg_billing::ust::VatStatus;
 
     let (year, month) = (input.billing_year, input.billing_month);
-    // §12 Abs. 3 UStG (0 %) only applies to solar PV; `from_plant` decides the rest.
-    let is_solar = input.erzeugungsart.to_uppercase().starts_with("SOLAR");
-    let vat = VatStatus::from_plant(
-        is_solar,
-        input.leistung_kwp.unwrap_or(Decimal::ZERO),
-        input.inbetriebnahme,
-    );
+    // The feed-in Gutschrift VAT is the operator's declared status (§19
+    // Kleinunternehmer `E`/0 % or Regelbesteuerung `S`/19 %) — masterdata, not a
+    // guess from plant size. §12 Abs. 3 UStG is a hardware-supply rate and never
+    // applies to the feed-in.
+    let vat = input.vat_status;
 
     let nummer = format!("GS-EEG-{}-{year:04}-{month:02}", input.tr_id);
     let m = time::Month::try_from(month as u8).unwrap_or(time::Month::January);

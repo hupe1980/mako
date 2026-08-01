@@ -39,12 +39,13 @@
 //! # Umsatzsteuer (not Mehrwertsteuer)
 //!
 //! "Umsatzsteuer" (USt) is the legal term; "Mehrwertsteuer" (MwSt) is colloquial.
-//! Three distinct situations — see [`ust`]:
-//! - **§12 Abs. 3 UStG**: Solar PV ≤30 kWp, after 01.01.2023 → **no USt**
-//! - **§19 UStG Kleinunternehmer**: turnover ≤€25 000/yr → **no USt**
-//! - **Regelbesteuerung**: all others → **19 % USt**
+//! A feed-in Gutschrift has two VAT treatments — see [`ust`]:
+//! - **§19 UStG Kleinunternehmer**: turnover ≤€25 000/yr → **no USt** (category `E`)
+//! - **Regelbesteuerung**: all others → **19 % USt** (category `S`)
 //!
-//! Use [`ust::ust_tax_layers`] to get the right `billing::TaxLayer` for a document.
+//! The status is a declared property of the operator (masterdata), not something
+//! the plant size decides. Use [`ust::ust_tax_layers`] to get the right
+//! `billing::TaxLayer` for a document.
 //!
 //! # Multi-EEG-version support
 //!
@@ -134,7 +135,7 @@ pub use version::{EegGesetz, InvalidEegGesetz};
 //  external `metering` crate — AggregationRule, compute_virtual_meter, MeasurementPoint, Messtyp.)
 // reductions: §§52–54 reduction pipeline — Sect52Netting, Sect53c, Sect54, ReductionPipeline
 // settlement_state: Monthly lifecycle state machine — SettlementPeriodState, derive_settlement_state
-// solar: §48 EEG PV subtypes, Volleinspeisung/Überschuss, §12 Abs. 3 UStG, Agri-PV
+// solar: §48 EEG PV subtypes, Volleinspeisung/Überschuss, Agri-PV
 // wind:  §36h Korrekturfaktor, Standortklasse, reference yield model
 // biomasse: §43/§44 fuel classes, Güllekleinanlage (≤75 kW, ≥80% Gülle)
 // foerderungsende: FoerderendeGrund enum, SanktionStatus lifecycle

@@ -78,7 +78,7 @@ graph TB
         direction LR
         MAKO["mako-agent\nEDIFACT · UTILMD · deadlines"]
         BILLING["billing-agent\nbillingd · invoicd · O2C"]
-        BILREG["billing-regulatory-guard-agent\n§40/§41/§41b/§42 compliance"]
+        BILREG["billing-regulatory-guard-agent\n§40/§41/§41a/§42 compliance"]
         JAHRB["jahresabrechnung-agent\nAnnual settlement orchestrator"]
         ANOMALY["billing-anomaly-agent\n20% deviation check"]
         EEG["eeg-agent + eeg-compliance-agent\neinsd · §52 · §44b · §20 EEG"]
@@ -413,7 +413,7 @@ parallel_limit = 4  # max concurrent specialists
 
 # billing.rechnung.erstellt triggers BOTH:
 # - billing-anomaly-agent    (deviation check)
-# - billing-regulatory-guard-agent  (§40/§41/§41b compliance)
+# - billing-regulatory-guard-agent  (§40/§41/§41a compliance)
 # simultaneously, returning aggregated results
 ```
 

@@ -21,8 +21,8 @@ use crate::{
     pg::{
         fetch_billing_record, insert_billing_record, insert_correction_record,
         insert_sammelrechnung_record, link_to_sammelrechnung, list_billing_records,
+        mark_dispatched_tx,
     },
-    xrechnung::{build_zugferd_cii_xml, info_from_rechnung_json},
 };
 use energy_billing::{
     BillingContext, BillingPeriod, BillingPosition, BillingProvider as _, DynamicInterval,

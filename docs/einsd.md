@@ -331,9 +331,18 @@ Content-Type: application/json
   "mastr_registriert":  true,
   "mastr_nummer":       "SEE900000012345",
   "bank_iban":          "DE89370400440532013000",
-  "zahlungsempfaenger": "Max Mustermann"
+  "zahlungsempfaenger": "Max Mustermann",
+  "ust_status":         "KLEINUNTERNEHMER"
 }
 ```
+
+`ust_status` is the operator's declared VAT status — `KLEINUNTERNEHMER` (§19 UStG,
+0 %, EN 16931 category `E`) or `REGELBESTEUERUNG` (§12 Abs. 1 UStG, 19 %, category
+`S`) — and drives the feed-in Gutschrift VAT. It is a property of the operator, not
+the plant, so it cannot be inferred from capacity; when omitted, `einsd` seeds a
+sensible default (a ≤30 kWp post-2023 solar plant → `KLEINUNTERNEHMER`, everything
+else → `REGELBESTEUERUNG`). §12 Abs. 3 UStG (the 0 % on PV *hardware* supply) is not
+a feed-in category and never appears here.
 
 `verguetungssatz_ct` = **net rate** (gross AW − §53 deduction). For solar: 8.51 ct gross
 AW (Solarpaket I) − 0.4 ct = **8.11 ct net**. Use `POST /api/v1/verguetungssatz-lookup`
@@ -993,6 +1002,7 @@ One row per Technische Ressource. PK: `(tr_id, tenant)`.
 | `mastr_registriert` | BOOL | MaStR confirmed; `false` → §52 penalty |
 | `mastr_nummer` | TEXT? | MaStR Registrierungsnummer (`SEE900000012345`) |
 | `bank_iban` | TEXT? | IBAN for EEG Vergütung payment (SEPA CT, NB→Betreiber) |
+| `ust_status` | TEXT | Operator's declared VAT status — `KLEINUNTERNEHMER` (§19, `E`/0 %) or `REGELBESTEUERUNG` (§12 Abs. 1, `S`/19 %); drives the Gutschrift USt |
 | `status` | TEXT | `angemeldet`, `aktiv`, `foerderung_beendet`, `repowered`, `abgemeldet` |
 | `inbetriebnahme_typ` | TEXT? | `ERSTINBETRIEBNAHME`, `REPOWERING`, `ERWEITERUNG`, … |
 | `solar_bauform` | TEXT? | `GEBAEUDE`, `FREIFLAECHE`, `AGRI_PV`, `STECKER_PV`, … |
@@ -1079,8 +1089,9 @@ EEG feed-in is settled under the **Gutschriftverfahren** (§14 Abs. 2 Satz 2 USt
 Netzbetreiber *issues* the settlement document to the Anlagenbetreiber. The settlement
 amount alone is not that document — VAT law requires a Gutschrift with the per-rate USt
 breakdown (EN 16931 BG-23). For every **billable** settlement `run_settlement` therefore
-builds one (`eeg-billing`'s `settlement_to_gutschrift`, VAT status derived per plant:
-Regelbesteuerung 19 % / §12 Abs. 3 zero-rated / §19 exempt) and persists it as a BO4E
+builds one (`eeg-billing`'s `settlement_to_gutschrift`, VAT from the operator's declared
+`eeg_anlagen.ust_status`: Regelbesteuerung 19 % category `S` / §19 Kleinunternehmer 0 %
+category `E`) and persists it as a BO4E
 `rubo4e::current::Rechnung` in `settlement_receipts.rechnung_json`, with the
 `gutschrift_nummer` (`GS-EEG-<tr>-<year>-<month>`) for lookup. The event carries the net
 (`settlement_eur`), the USt (`gutschrift_steuer_eur`) and the brutto so `accountingd` books

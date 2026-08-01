@@ -472,7 +472,7 @@ Content-Type: application/json
 | `get_comparison_feed` | Retrieve the §42d comparison portal feed (proxies the REST endpoint) |
 
 **Prompts:**
-- `configure-41a-tariff` — Step-by-step: configure a §41a EPEX dynamic tariff product (iMSys requirement, §41b guard)
+- `configure-41a-tariff` — Step-by-step: configure a §41a EPEX dynamic tariff product (iMSys requirement, §41a guard)
 - `assign-product` — Step-by-step: assign a tariff to a MaLo and verify the assignment
 - `create-b2b-quotation` — Step-by-step: create a formal B2B Angebot for a C&I customer
 

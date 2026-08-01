@@ -15,12 +15,13 @@
 //! ## Tax layers
 //!
 //! `EegSettleTariff::tax_layers()` intentionally returns an **empty** list.
-//! The VAT treatment for EEG feed-in depends on the operator's tax status:
-//! - **Regelbesteuerung (19% MwSt)**: add `FixedRateTax::new("MwSt", dec!(0.19))`
-//! - **Kleinunternehmer (§19 UStG)**: no VAT (common for residential rooftop PV)
-//! - **§12 Abs. 3 UStG** (Photovoltaik ≤30 kWp after 01.01.2023): no VAT registration
+//! The VAT treatment for EEG feed-in depends on the operator's declared tax status:
+//! - **Regelbesteuerung (§12 Abs. 1 UStG, 19 %)**: standard-rated (category `S`)
+//! - **Kleinunternehmer (§19 UStG)**: no VAT — category `E` (common for residential
+//!   rooftop PV, the default since the §12 Abs. 3 UStG 0 % hardware supply)
 //!
-//! The caller adds the appropriate tax layer before calling `.settle()`.
+//! The caller adds the appropriate tax layer (via [`crate::ust::ust_tax_layers`])
+//! before calling `.settle()`.
 //!
 //! ## Example
 //!
@@ -118,8 +119,8 @@ impl billing::ScalarTariff for EegSettleTariff<'_> {
 /// - Operators who opted into Regelbesteuerung
 /// - Plants > 30 kWp or commissioned before 01.01.2023
 ///
-/// NOT for Kleinunternehmer (§19 UStG) or §12 Abs. 3 exempt plants (PV ≤30 kWp, post-2023).
-/// Use [`EegSettleTariff12Abs3`] or [`EegSettleTariff`] for those.
+/// NOT for Kleinunternehmer (§19 UStG) operators — use
+/// [`EegSettleTariffKleinunternehmer`] or [`EegSettleTariff`] for those.
 pub struct EegSettleTariffRegelbesteuerung<'a> {
     inner: EegSettleTariff<'a>,
     ust: FixedRateTax,
@@ -177,14 +178,11 @@ impl billing::ScalarTariff for EegSettleTariffRegelbesteuerung<'_> {
 
 // ── Status check helpers ──────────────────────────────────────────────────────
 
-/// Convenience alias: `EegSettleTariff` for plants exempt under **§12 Abs. 3 UStG**
-/// (Solar PV ≤ 30 kWp, commissioned after 01.01.2023).
-///
-/// Produces the same document as `EegSettleTariff` (empty tax layers),
-/// but the name makes the VAT reasoning explicit in calling code.
-pub type EegSettleTariff12Abs3<'a> = EegSettleTariff<'a>;
-
 /// Convenience alias: `EegSettleTariff` for Kleinunternehmer operators (§19 UStG).
+///
+/// Produces the same document as `EegSettleTariff` (empty tax layers), but the
+/// name makes the VAT reasoning explicit in calling code. The §19 exemption note
+/// (category `E`, BT-120) is added by [`crate::ust::ust_tax_layers`].
 pub type EegSettleTariffKleinunternehmer<'a> = EegSettleTariff<'a>;
 
 /// Return `true` when the settlement output can be turned into a billing document.

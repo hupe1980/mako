@@ -41,7 +41,7 @@ pub async fn post_correction(
     Path(id): Path<Uuid>,
     Json(req): Json<CorrectionRequest>,
 ) -> impl IntoResponse {
-    let original = match fetch_billing_record(&pool, id).await {
+    let original = match fetch_billing_record(&pool, &cfg.tenant, id).await {
         Ok(Some(r)) => r,
         Ok(None) => return (StatusCode::NOT_FOUND, "billing record not found").into_response(),
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -59,9 +59,10 @@ pub async fn post_correction(
     // second correction of the same original would duplicate the number and
     // double-negate the amounts in accounting.
     match sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM billing_records WHERE original_record_id = $1",
+        "SELECT count(*) FROM billing_records WHERE original_record_id = $1 AND tenant = $2",
     )
     .bind(id)
+    .bind(&cfg.tenant)
     .fetch_one(&pool)
     .await
     {
@@ -131,6 +132,22 @@ pub async fn post_correction(
         );
         if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
             return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+        if let Err(e) = mark_dispatched_tx(&mut *tx, correction_id).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    }
+    // The correction credits the original: reuse its EN 16931 model as a credit
+    // note (positive amounts, document type 381) so the render endpoints serve a
+    // conformant Stornorechnung without re-billing.
+    if let Some(model) = original
+        .en16931_json
+        .as_ref()
+        .and_then(|v| serde_json::from_value::<en16931::Invoice>(v.clone()).ok())
+    {
+        let credit = crate::einvoice::to_credit_note(model, &new_nr);
+        if let Err(e) = crate::einvoice::store_model(&mut *tx, correction_id, &credit).await {
+            tracing::warn!(%correction_id, error = %e, "billingd: attach en16931 correction model failed");
         }
     }
     if let Err(e) = tx.commit().await {

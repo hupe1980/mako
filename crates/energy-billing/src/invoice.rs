@@ -19,7 +19,7 @@ use crate::position::{BillingPosition, BillingWarning, PositionCategory};
 /// - `brutto_eur == netto_eur + mwst_eur` (within 0.001 EUR rounding tolerance)
 /// - `zahlbetrag_eur == brutto_eur - abschlag_total_eur`
 ///
-/// ## §40a EnWG — Kilowattstundenpreis
+/// ## §40 EnWG — Kilowattstundenpreis
 ///
 /// For electricity billing, call `kilowattstundenpreis_brutto_ct(kwh)` to obtain
 /// the all-inclusive price per kWh required on every invoice.
@@ -36,7 +36,7 @@ use crate::position::{BillingPosition, BillingWarning, PositionCategory};
 /// `warnings` contains all non-fatal compliance notes produced during billing.
 /// Check for `WarningSeverity::Error` warnings before dispatching the invoice.
 /// Error-severity warnings indicate definite regulatory issues that the operator
-/// must resolve (e.g. §41b iMSys mismatch, §41 disclosure fields missing).
+/// must resolve (e.g. §41a iMSys mismatch, §41 disclosure fields missing).
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub struct Invoice {
@@ -100,7 +100,7 @@ pub struct Invoice {
     ///
     /// Check for [`WarningSeverity::Error`](crate::WarningSeverity) warnings
     /// before dispatching the invoice. Error-severity warnings indicate definite
-    /// regulatory issues (e.g. §41b iMSys mismatch). Informational warnings are
+    /// regulatory issues (e.g. §41a iMSys mismatch). Informational warnings are
     /// advisory only.
     ///
     /// These warnings are also emitted by [`BillingEngine::validate()`](crate::BillingEngine::validate)
@@ -278,9 +278,9 @@ impl Invoice {
         );
     }
 
-    /// §40a EnWG — all-inclusive Kilowattstundenpreis (ct/kWh) for display on invoice.
+    /// §40 EnWG — all-inclusive Kilowattstundenpreis (ct/kWh) for display on invoice.
     ///
-    /// §40a Abs. 1 EnWG requires that every electricity invoice shows the total
+    /// §40 EnWG requires that every electricity invoice shows the total
     /// all-inclusive price per kilowatt-hour (Gesamtbetrag je Kilowattstunde),
     /// inclusive of all energy charges, grid charges, levies, and taxes.
     ///
@@ -325,7 +325,7 @@ impl Invoice {
     /// Everything with a BO4E-canonical field uses it (`rechnungstyp`,
     /// `originalRechnungsnummer`, `marktlokation`, `zaehler`, `netzbetreiber`,
     /// `vertrag`, `faelligkeitsdatum`, `zuZahlen`, …). Facts BO4E does not model
-    /// ride as `zusatzAttribute` (§40a Kilowattstundenpreis, §40b
+    /// ride as `zusatzAttribute` (§40 Kilowattstundenpreis, §40b
     /// Preisvergleichsdaten, §40 Abs. 2 Verbraucherinformationen, §42
     /// Stromkennzeichnung, contract facts, audit ids). Per-position facts with
     /// no BO4E home (`rechtlicheGrundlage`, `positionstyp`, `kategorie`) ride
@@ -481,7 +481,7 @@ impl Invoice {
             zusatz_attribute.push(zusatz_attribut("stromkennzeichnung", wert));
         }
 
-        // §41 EnWG Abs. 1 Nr. 3 — Verbrauchshistorie summary as ZusatzAttribut
+        // §40 Abs. 2 EnWG — Verbrauchshistorie summary as ZusatzAttribut
         if let Some(vh) = &ctx.verbrauchshistorie {
             if let Some(vj) = vh.vorjahr_kwh {
                 zusatz_attribute.push(zusatz_attribut(
@@ -530,7 +530,7 @@ impl Invoice {
             ));
         }
 
-        // §40a EnWG Abs. 1 — Kilowattstundenpreis (all-inclusive total price per kWh).
+        // §40 EnWG — Kilowattstundenpreis (all-inclusive total price per kWh).
         // Compute from brutto_eur / billable kWh. Use total eligible kWh from positions.
         let total_kwh_positions: Decimal = self
             .positions
@@ -549,7 +549,7 @@ impl Invoice {
             None
         };
 
-        // §40a EnWG Abs. 1 Satz 2 — Gesamtbetrag je Kilowattstunde (all-inclusive
+        // §40 EnWG — Gesamtbetrag je Kilowattstunde (all-inclusive
         // ct/kWh). Not a lawful BO4E Preis (its Einheit is ct/kWh, not a
         // Waehrungseinheit), so it rides as a structured ZusatzAttribut.
         // Only set when consumption positions exist (electricity commodity kWh known).
@@ -560,7 +560,7 @@ impl Invoice {
                     "wert": ct.to_string(),
                     "einheit": "ct/kWh",
                     "bezugswert": "KWH",
-                    "rechtlicheGrundlage": "§40a EnWG"
+                    "rechtlicheGrundlage": "§40 EnWG"
                 }),
             ));
         }
@@ -822,7 +822,7 @@ impl Invoice {
     /// Returns `true` when any warning has `WarningSeverity::Error`.
     ///
     /// Operators should block invoice dispatch when `has_errors()` returns `true`.
-    /// Typical causes: §41b iMSys mismatch, missing mandatory tariff fields.
+    /// Typical causes: §41a iMSys mismatch, missing mandatory tariff fields.
     #[must_use]
     pub fn has_errors(&self) -> bool {
         use crate::position::WarningSeverity;
@@ -1375,8 +1375,8 @@ mod rechnung_json_tests {
     /// (§41 Abs. 1 Nr. 5 → `netzbetreiber.rollencodenummer`), Abrechnungszeitraum
     /// (§40 Abs. 1 → `rechnungsperiode`), Fälligkeit (§40c → `faelligkeitsdatum`).
     /// ZusatzAttribute: contract facts (§40 Abs. 1), Verbraucherinformationen
-    /// (§40 Abs. 2), Kilowattstundenpreis (§40a), Preisvergleichsdaten (§40b),
-    /// Verbrauchshistorie (§41 Abs. 1 Nr. 3), Stromkennzeichnung (§42), plus
+    /// (§40 Abs. 2), Kilowattstundenpreis (§40), Preisvergleichsdaten (§40b),
+    /// Verbrauchshistorie (§40 Abs. 2), Stromkennzeichnung (§42), plus
     /// the mako audit facts (billingRunId, kundenkategorie, vertragsart).
     #[test]
     fn every_sect40_pflichtangabe_survives_the_typed_migration() {
@@ -1485,10 +1485,10 @@ mod rechnung_json_tests {
             "naechstmoeglicher_kuendigungstermin", // §40 Abs. 1
             "naechster_abrechnungstermin",         // §40 Abs. 1
             "verbraucherinformationen",            // §40 Abs. 2 Nr. 1/9/10/11/12
-            "kilowattstundenpreisGesamt",          // §40a
+            "kilowattstundenpreisGesamt",          // §40
             "preisvergleichsdaten",                // §40b
-            "verbrauchVorjahr",                    // §41 Abs. 1 Nr. 3a
-            "verbrauchBundesdurchschnitt",         // §41 Abs. 1 Nr. 3b
+            "verbrauchVorjahr",                    // §40 Abs. 2 Nr. 7
+            "verbrauchBundesdurchschnitt",         // §40 Abs. 2 Nr. 8
             "stromkennzeichnung",                  // §42
             "billingRunId",                        // audit trail
             "kundenkategorie",                     // ERP routing

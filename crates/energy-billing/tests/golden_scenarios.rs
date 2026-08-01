@@ -13,8 +13,8 @@
 //! 4. **RLM demand charge** — large commercial electricity with Leistungspreis
 //! 5. **Gas Energiesteuer exemption** — CHP (KWK) §54 EnergieStG
 //! 6. **Historic rates 2022** — heating gas stayed 0.55; the relief was 7 % USt
-//! 7. **§41b enforcement** — dynamic tariff rejects non-iMSys metering mode
-//! 8. **§40a Kilowattstundenpreis** — mandatory all-inclusive price per kWh
+//! 7. **§41a enforcement** — dynamic tariff rejects non-iMSys metering mode
+//! 8. **§40 Kilowattstundenpreis** — mandatory all-inclusive price per kWh
 //! 9. **§41 mandatory fields** — rechnung_json contains all §41 EnWG fields
 //! 10. **§42c Energy Sharing** — sharing credit reduces effective customer cost
 //! 11. **Industrie §9 StromStG** — typed StromsteuerBefreiung enum
@@ -32,17 +32,17 @@ use energy_billing::{
 use rust_decimal::dec;
 use time::macros::date;
 
-// ── Scenario 7 (here ordered first as a regression guard): §41b enforcement ──
+// ── Scenario 7 (here ordered first as a regression guard): §41a enforcement ──
 
-/// **Golden: §41b EnWG — dynamic tariff must be rejected for non-iMSys meter**
+/// **Golden: §41a Abs. 1 EnWG — dynamic tariff must be rejected for non-iMSys meter**
 ///
-/// §41b Abs. 2 EnWG prohibits offering §41a dynamic tariffs to customers who
+/// §41a Abs. 1 EnWG prohibits offering §41a dynamic tariffs to customers who
 /// do not have an intelligent metering system (iMSys / Smart Meter Gateway).
 ///
 /// When `dynamic_epex = true` AND `electricity.metering_mode = Slp`, the engine
 /// must return `Err(BillingError::InvalidInput)` — not produce a partial invoice.
 #[test]
-fn sect41b_dynamic_tariff_rejects_non_imsys_metering_mode() {
+fn sect41a_dynamic_tariff_rejects_non_imsys_metering_mode() {
     use energy_billing::*;
     use rust_decimal::dec;
     use time::macros::date;
@@ -63,7 +63,7 @@ fn sect41b_dynamic_tariff_rejects_non_imsys_metering_mode() {
     )
     .unwrap();
 
-    // SLP metering mode — §41b violation
+    // SLP metering mode — §41a violation
     let quantities_slp = Quantities {
         electricity: Some(MeterInput {
             arbeitsmenge_kwh: dec!(300),
@@ -79,12 +79,12 @@ fn sect41b_dynamic_tariff_rejects_non_imsys_metering_mode() {
 
     assert!(
         result.is_err(),
-        "§41b: dynamic_epex + Slp must return Err, got Ok(invoice)"
+        "§41a: dynamic_epex + Slp must return Err, got Ok(invoice)"
     );
     let err_msg = result.unwrap_err().to_string();
     assert!(
-        err_msg.contains("41b") || err_msg.contains("iMSys") || err_msg.contains("IMSYS"),
-        "§41b error message must reference §41b or iMSys, got: {err_msg}"
+        err_msg.contains("41a") || err_msg.contains("iMSys") || err_msg.contains("IMSYS"),
+        "§41a error message must reference §41a or iMSys, got: {err_msg}"
     );
 
     // Validate also returns the error
@@ -93,14 +93,14 @@ fn sect41b_dynamic_tariff_rejects_non_imsys_metering_mode() {
         .validate(&ctx, &quantities_slp);
     assert!(
         !warnings.is_empty(),
-        "§41b: validate() must return at least one warning for SLP + dynamic_epex"
+        "§41a: validate() must return at least one warning for SLP + dynamic_epex"
     );
     let has_error = warnings
         .iter()
         .any(|w| w.severity == WarningSeverity::Error);
     assert!(
         has_error,
-        "§41b: at least one Error-severity warning expected"
+        "§41a: at least one Error-severity warning expected"
     );
 
     // iMSys mode — must succeed
@@ -117,12 +117,12 @@ fn sect41b_dynamic_tariff_rejects_non_imsys_metering_mode() {
         .bill(ctx, &quantities_imsys);
     assert!(
         result_imsys.is_ok(),
-        "§41b: dynamic_epex + Imsys must succeed, got: {:?}",
+        "§41a: dynamic_epex + Imsys must succeed, got: {:?}",
         result_imsys.err()
     );
     assert!(
         result_imsys.unwrap().warnings.is_empty(),
-        "§41b: no warnings for valid iMSys + dynamic_epex combination"
+        "§41a: no warnings for valid iMSys + dynamic_epex combination"
     );
 }
 
@@ -342,15 +342,17 @@ fn golden_gas_with_levies_jan_2026() {
 
 // ── Scenario 3: EEG Gutschrift ────────────────────────────────────────────────
 
-/// **Golden: EEG feed-in Gutschrift (credit note), small PV plant, January 2026**
+/// **Golden: EEG feed-in Gutschrift (credit note), Kleinunternehmer, January 2026**
 ///
 /// ## Context
-/// LF issues a monthly Gutschrift to a PV plant operator (10 kWp, EEG 2023,
-/// Einspeisevergütung). MwSt: 0% per §12 Abs. 3 UStG (≤ 30 kWp).
+/// LF issues a monthly Gutschrift to a PV plant operator who has elected the
+/// Kleinunternehmerregelung (§19 UStG), so the Gutschrift carries 0 % USt. The
+/// 0 % follows the operator's tax election — not the plant size (§12 Abs. 3 UStG
+/// zero-rates the PV *system* supply, not the feed-in remuneration).
 ///
 /// ## Tariff
 /// - Einspeisevergütung: 8.20 ct/kWh (EEG 2023, ≤10 kWp)
-/// - anlage_kwp: 10 → auto 0% MwSt (§12 Abs. 3 UStG)
+/// - kleinunternehmer_19_ustg: true → 0 % MwSt (§19 UStG)
 ///
 /// ## Feed-in quantity
 /// - 280 kWh (Jan 2026)
@@ -362,14 +364,14 @@ fn golden_gas_with_levies_jan_2026() {
 /// Brutto:    22.96 EUR
 /// ```
 #[test]
-fn golden_eeg_gutschrift_10kwp_jan_2026() {
+fn golden_eeg_gutschrift_kleinunternehmer_jan_2026() {
     use energy_billing::EegMeterInput;
 
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "EEG",
         "eeg_verguetungssatz_ct_per_kwh": 8.20,
-        "anlage_kwp": 10.0
+        "kleinunternehmer_19_ustg": true
     }"#,
     )
     .unwrap();
@@ -405,7 +407,7 @@ fn golden_eeg_gutschrift_10kwp_jan_2026() {
     let verguetung = invoice.total_by_tag("eeg_verguetung");
     assert_eq!(verguetung.round_dp(2), dec!(22.96), "EEG Vergütung golden");
 
-    // §12 Abs. 3 UStG auto-0% for 10 kWp
+    // §19 UStG Kleinunternehmer → 0% on the feed-in Gutschrift
     assert_eq!(invoice.mwst_eur, dec!(0), "EEG ≤30 kWp: MwSt must be 0");
 
     // Brutto equals netto for 0% MwSt
@@ -679,9 +681,9 @@ fn golden_2022_heating_gas_energiesteuer_stays_055() {
     }
 }
 
-// ── §40a EnWG — Kilowattstundenpreis completeness ─────────────────────────────
+// ── §40 EnWG — Kilowattstundenpreis completeness ─────────────────────────────
 
-/// §40a EnWG Abs. 1: electricity invoices must show the all-inclusive price per kWh.
+/// §40 EnWG: electricity invoices must show the all-inclusive price per kWh.
 /// Verified: kilowattstundenpreis_brutto_ct returns a sensible value covering all charges.
 #[test]
 fn sect40a_kilowattstundenpreis_brutto_includes_all_charges() {
@@ -724,28 +726,28 @@ fn sect40a_kilowattstundenpreis_brutto_includes_all_charges() {
 
     invoice.assert_valid();
 
-    // §40a: kilowattstundenpreis must be computable
+    // §40: kilowattstundenpreis must be computable
     let kwh_preis = invoice
         .kilowattstundenpreis_brutto_ct(dec!(500))
-        .expect("§40a kilowattstundenpreis must be Some for non-zero kWh");
+        .expect("§40 kilowattstundenpreis must be Some for non-zero kWh");
 
     // With 30ct Arbeit + Stromsteuer + MwSt the all-in price must be > 30 ct
     assert!(
         kwh_preis > dec!(30.0),
-        "§40a kilowattstundenpreis must include all charges, got {kwh_preis:.4} ct/kWh"
+        "§40 kilowattstundenpreis must include all charges, got {kwh_preis:.4} ct/kWh"
     );
     // And below 50 ct as a sanity bound
     assert!(
         kwh_preis < dec!(50.0),
-        "§40a kilowattstundenpreis seems too high: {kwh_preis:.4} ct/kWh"
+        "§40 kilowattstundenpreis seems too high: {kwh_preis:.4} ct/kWh"
     );
 
-    // §40a Abs. 1 — must return None for zero kWh (avoid division by zero)
+    // §40 — must return None for zero kWh (avoid division by zero)
     assert!(
         invoice
             .kilowattstundenpreis_brutto_ct(Decimal::ZERO)
             .is_none(),
-        "§40a: kilowattstundenpreis must be None when kWh = 0"
+        "§40: kilowattstundenpreis must be None when kWh = 0"
     );
 }
 

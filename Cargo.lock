@@ -979,6 +979,8 @@ dependencies = [
  "anyhow",
  "axum",
  "billing",
+ "en16931",
+ "en16931-formats",
  "energy-billing",
  "mako-events",
  "mako-markt",
@@ -3569,6 +3571,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
 
 [[package]]
+name = "en16931"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f9f40c3bf43774c6eb7c78021fe4b34e491ce63ac736a7c54826b2851a6862b"
+dependencies = [
+ "billing",
+ "rust_decimal",
+ "serde",
+ "thiserror 2.0.19",
+ "time",
+]
+
+[[package]]
+name = "en16931-formats"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "480bfb8a4606d9a7cc6472895504ffe0d0929134485b0675e0c344ea7a51e874"
+dependencies = [
+ "en16931",
+ "roxmltree",
+ "rust_decimal",
+ "serde",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "ena"
 version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3625,6 +3653,7 @@ version = "0.14.0"
 dependencies = [
  "billing",
  "eeg-billing",
+ "en16931",
  "proptest",
  "rubo4e",
  "rust_decimal",

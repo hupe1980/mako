@@ -195,6 +195,14 @@ pub async fn post_calculate(
         if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
             return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
+        if let Err(e) = mark_dispatched_tx(&mut *tx, record_id).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    }
+    // Attach the EN 16931 semantic model (the XRechnung/CII/UBL render source),
+    // mapped from the invoice with full per-line VAT — not from BO4E.
+    if let Err(e) = crate::einvoice::store(&mut *tx, record_id, &result, &cfg, &malo_id).await {
+        tracing::warn!(%record_id, error = %e, "billingd: attach en16931 model failed");
     }
     if let Err(e) = tx.commit().await {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
@@ -349,6 +357,9 @@ pub async fn post_release(
             false,
         );
         if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+        if let Err(e) = mark_dispatched_tx(&mut *tx, row.id).await {
             return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
     }

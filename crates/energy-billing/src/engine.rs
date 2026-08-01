@@ -78,7 +78,7 @@ impl BillingEngine {
     /// Run all registered providers and collect regulatory compliance warnings.
     ///
     /// Does NOT generate positions or produce an invoice. Call this before `bill()`
-    /// to check regulatory preconditions (e.g. §41b iMSys guard, missing tariff
+    /// to check regulatory preconditions (e.g. §41a iMSys guard, missing tariff
     /// fields) without committing to billing.
     ///
     /// An `Error`-severity warning indicates a definite regulatory violation.
@@ -156,7 +156,7 @@ impl BillingEngine {
         }
 
         // ── Pass 3: Abschlag deductions (Final invoices only) ──────────────────
-        // §41 EnWG: Jahresabrechnung must itemise each advance payment.
+        // §40 EnWG: the Jahresabrechnung must itemise each advance payment.
         // These positions do NOT affect netto_eur / mwst_eur — they reduce
         // zahlbetrag_eur only (already paid by customer, now being reconciled).
         for abschlag in &ctx.abschlage {
@@ -172,7 +172,7 @@ impl BillingEngine {
                     -abschlag.betrag_eur, // negative unit_price → deduction
                     crate::position::PositionCategory::Abschlag,
                 )
-                .with_legal_basis("§41 EnWG"),
+                .with_legal_basis("§40 EnWG"),
             );
         }
 

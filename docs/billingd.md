@@ -9,7 +9,7 @@ description: >
   Energy billing engine — user-defined product prices from tarifbd;
   13 categories (STROM/GAS/WAERME/WASSER/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/SHARING);
   §41a EPEX dynamic; §25 Nr. 4 MessEV Brennwertkorrektur; §14a Modul 1/3;
-  XRechnung 3.0 / ZUGFeRD 2.3 (EN16931, B2G mandate 01.01.2027).
+  EN 16931 e-invoicing (XRechnung 3.0 CII + PEPPOL UBL, B2G mandate 01.01.2027).
 ---
 
 # `billingd` — Multi-Product Billing Engine
@@ -29,7 +29,7 @@ tariff), the output is always the same `Rechnung`. This means:
 
 - BNetzA § 147 AO / GoBD compliance: auditors can re-run the calculation from stored inputs
 - No hidden state: all inputs are either stored in `tarifbd`, `edmd`, or `marktd`
-- Testable: `energy-billing` has **191 tests** (property-based, golden master, integration) — zero I/O, zero async, all pure Rust
+- Testable: `energy-billing` has **204 tests** (property-based, golden master, integration) — zero I/O, zero async, all pure Rust
 
 ---
 
@@ -40,7 +40,7 @@ This follows the same pattern as `eeg-billing` for `einsd`:
 
 ```
 billingd (HTTP service)
-    │   config · persistence · CloudEvents · XRechnung
+    │   config · persistence · CloudEvents · EN 16931 e-invoicing
     │   HTTP endpoints · tarifbd/edmd/marktd clients
     │
     └── energy-billing (pure crate, crates.io)
@@ -52,7 +52,7 @@ billingd (HTTP service)
             ├── ElectricityProvider      §41a EPEX; HT/NT; block tariffs; RLM demand
             ├── ControllableLoadProvider §14a Modul 1/3 (WAERMEPUMPE, WALLBOX)
             ├── GasProvider              §25 Nr. 4 MessEV Brennwertkorrektur; BEHG CO₂
-            ├── HeatProvider             Fernwärme; auto-7% MwSt (renewable)
+            ├── HeatProvider             Fernwärme (standard-rated; 7% only in the §28 window)
             ├── WaterProvider            Trinkwasser 7% USt; Abwasser gesplittet; Absetzungen
             ├── SolarProvider            §42b Mieterstrom; §42a GGV
             ├── EegProvider              LF-side Gutschrift; contractual §51
@@ -60,7 +60,7 @@ billingd (HTTP service)
             ├── HemsProvider             Platform subscription + events
             ├── EmobilityProvider        CPO/EMSP
             ├── ServiceProvider          Energiedienstleistung
-            ├── DynamicElectricityProvider  §41a per-interval EPEX (§41b iMSys guard)
+            ├── DynamicElectricityProvider  §41a per-interval EPEX (§41a iMSys guard)
             ├── EnergyShareProvider      §42c Energiegemeinschaft credit
             └── MwStProvider             Multi-rate MwSt (7% / 19% / 0% per position)
 ```
@@ -273,8 +273,11 @@ Net result is typically negative brutto (the LF pays the producer).
 > supply `eeg_meter.kwh_during_negative_epex` to suspend Vergütung/Marktprämie for those kWh.
 > KWKG Zuschlag is always exempt (different law).
 >
-> `§12 Abs. 3 UStG` (0% MwSt for PV ≤30 kWp, from 01.01.2023): set
-> `mwst_rate_override: 0` in the product definition in `tarifbd`.
+> **Kleinunternehmer (§19 UStG)**: a small feed-in operator who has elected the
+> Kleinunternehmerregelung issues the Gutschrift at 0 % USt — set
+> `kleinunternehmer_19_ustg: true` in the product definition in `tarifbd`. This
+> is the operator's tax election, not a function of plant size (§12 Abs. 3 UStG
+> zero-rates the PV *system* supply, which this engine does not bill).
 
 ### EINSPEISUNG — Direktvermarktung Settlement
 
@@ -335,7 +338,7 @@ let invoice = engine.bill(ctx, &quantities)?;
 
 | Addition | Law |
 |---|---|
-| `anlage_kwp` on product → auto-0% MwSt | §12 Abs. 3 UStG (Solarpaket I 2023) |
+| `kleinunternehmer_19_ustg` → 0% USt on feed-in Gutschrift | §19 UStG |
 | `industrie_stromsteuer_befreiung` → exemption notice | §9 Abs. 1 Nr. 4 StromStG |
 | `preisgarantie_bis` → disclosure on invoice | §41 Abs. 1 Nr. 4 EnWG |
 | `MeteringMode` (SLP/RLM/iMSys) on MeterInput | §3/§ 12 StromNZV, §31 MsbG |
@@ -509,7 +512,7 @@ at the correction path.
 | `POST` | `/api/v1/billing/{malo_id}/preview` | Dry-run calculation (no persist, no CloudEvent) |
 | `GET` | `/api/v1/billing` | List records (`?malo_id=&lf_mp_id=&outcome=`) |
 | `GET` | `/api/v1/billing/{id}` | Fetch single record with full `Rechnung` JSONB |
-| `GET` | `/api/v1/billing/{id}/xrechnung` | XRechnung 3.0 / ZUGFeRD 2.3 CII XML |
+| `GET` | `/api/v1/billing/{id}/xrechnung` | XRechnung 3.0 CII XML (via `en16931-formats`) |
 | `GET` | `/api/v1/billing/{id}/ubl` | PEPPOL BIS Billing 3.0 UBL 2.1 (EN16931) |
 | `POST` | `/api/v1/billing/{id}/correction` | Korrekturrechnung / Stornorechnung (§ 147 AO / GoBD) |
 | `POST` | `/api/v1/billing/{malo_id}/tarifwechsel` | Combined invoice for mid-period price change (§41 EnWG) |
@@ -532,13 +535,13 @@ and six prompts are available to LLM agents:
 | `get_billing_record` | Full BO4E `Rechnung` JSONB for a specific record UUID |
 | `preview_billing` | Dry-run preview (calls `/preview` internally — no side effects) |
 | `calculate_billing` | Trigger a real billing run (calls `/calculate`) |
-| `get_xrechnung` | Fetch XRechnung 3.0 / ZUGFeRD 2.3 CII XML for B2G submission |
+| `get_xrechnung` | Fetch XRechnung 3.0 CII XML (from the stored EN 16931 model) |
 | `check_billing_anomaly` | Rolling 3-month deviation check — flags invoices outside threshold |
 | `list_vpp_settlements` | List VPP aggregation settlement records |
 | `list_corrections` | List Korrekturrechnung / Stornorechnung records (§ 147 AO / GoBD) |
 | `list_product_categories` | Describe all 13 billing categories and their required product fields |
 | `get_billing_summary` | Aggregate stats per MaLo: total billed, avg monthly, by category |
-| `validate_tariff_config` | Pre-flight: §41b iMSys guard, KAV plausibility, missing fields |
+| `validate_tariff_config` | Pre-flight: §41a iMSys guard, KAV plausibility, missing fields |
 | `explain_invoice_position` | Full `PositionTrace` audit for a given position (formula, §-refs) |
 
 | Prompt | Description |
@@ -602,38 +605,73 @@ Generates two positions: `ServiceFee` (monthly Grundgebühr) and `EventFee` (per
 
 ---
 
-## XRechnung / ZUGFeRD 2.3
+## E-invoicing — EN 16931, not BO4E
 
-`GET /api/v1/billing/{id}/xrechnung` returns structured invoice XML for any stored billing record.
+XRechnung/CII and PEPPOL UBL **are** EN 16931, so the render source is the EN 16931
+**semantic model**, never a re-parse of the BO4E `Rechnung`. At bill time
+`energy_billing::Invoice::to_en16931(spec, seller, buyer)` maps the invoice — at the
+layer that still has each position's own amount, VAT category and rate — into an
+`en16931::Invoice`, and billingd stores it in `billing_records.en16931_json`. The
+external [`en16931`](https://docs.rs/en16931) crate derives the BG-23 VAT breakdown
+and BG-22 totals from the lines via `reconcile` (so BR-CO/BR-S hold by construction),
+and [`en16931-formats`](https://docs.rs/en16931-formats) writes the syntaxes. The
+hand-rolled CII/UBL builders that once walked the BO4E `steuerbetraege` are gone;
+every render path reads the stored model and answers **422** if it is missing.
 
-**Standard:** ZUGFeRD 2.3 Extended / XRechnung 3.0 CIUS — profile identifier:
-`urn:cen.eu:en16931:2017#compliant#urn:xoev-de:kosit:standard:xrechnung_3.0`
+```mermaid
+graph LR
+    calc["POST /calculate\n(+ correction · VPP · GGV · Sammelrechnung)"]
+    eng["energy-billing\nInvoice"]
+    map["Invoice::to_en16931\n(seller/buyer party,\nper-line BT-151/152)"]
+    rec["en16931::reconcile\nBG-23 + BG-22\nfrom the lines"]
+    db[("billing_records\nrechnung_json (BO4E)\nen16931_json (model)")]
+    fmt["en16931-formats"]
+    xr["GET /xrechnung\nCII (XRechnung 3.0)"]
+    ubl["GET /ubl\nPEPPOL BIS 3.0 UBL"]
+    b2g["POST /submit-b2g\nto_string_for(XRECHNUNG)\nvalidate → dispatch"]
 
-**Format:** CII (Cross Industry Invoice, CII D16B) — the German FERD/ZUGFeRD standard.
-
-**Legal mandate:**
-- **B2G invoices:** mandatory from 01.01.2027 (§§27 EGovG, 4 E-Rechnungsverordnung; EU Directive 2014/55/EU transposed)
-- **B2B invoices:** mandatory from 01.01.2028 (§14 UStG n.F. — E-Rechnungspflicht)
-
-EEG plant operators who are municipalities or public-law entities require XRechnung for all
-incoming service invoices today.
-
-**Response headers:**
+    calc --> eng --> map --> rec --> db
+    eng -->|to_rechnung| db
+    db --> fmt --> xr & ubl & b2g
 ```
-Content-Type: application/xml; charset=UTF-8
-Content-Disposition: attachment; filename="xrechnung-{id}.xml"
-```
 
-**Due date (BT-9):** rendered from the Rechnung's `faelligkeitsdatum` (issue + 14
-days) — §40c EnWG lets payment become due at the earliest two weeks after
-receipt of the payment request. The UBL endpoint and the MCP `get_xrechnung`
-tool use the same value; all three render the stored per-rate `steuerbetraege`
-as the EN16931 BG-23 breakdown, so 19 % / 7 % / 0 % mixed invoices reconcile.
+**Per-line VAT is correct.** A mixed-rate invoice (gas 19 % + Fernwärme 7 % + PV 0 %)
+carries a distinct BT-151/BT-152 per line that reconciles with the BG-23 breakdown —
+the single-blended-rate defect of the old renderer is gone.
 
-**Configuration for XRechnung:**
+**`GET /api/v1/billing/{id}/xrechnung`** → XRechnung 3.0 CII (`en16931-formats::cii`).
+Profile identifier `urn:cen.eu:en16931:2017#compliant#urn:xoev-de:kosit:standard:xrechnung_3.0`.
+**`GET /api/v1/billing/{id}/ubl`** → PEPPOL BIS Billing 3.0 UBL 2.1 from the same model.
+The MCP `get_xrechnung` tool renders CII the same way.
+
+**`POST /api/v1/billing/{id}/submit-b2g`** — the B2G path is stricter: the caller
+supplies the receiving authority in the request `buyer` (name, address, contact) plus
+the `reference` Leitweg-ID (BT-10), because the recipient is known to the sender, not
+the billing engine. billingd completes the buyer party, stamps BT-10, and renders via
+`cii::to_string_for(&model, &XRECHNUNG)` — which **validates against the full XRechnung
+3.0 profile before writing**, so a rejectable document is never emitted. On a violation
+it answers 422 with `violated_rules` and the precise `buyer_gaps` (from
+`Party::missing_for`). On success it emits `de.billing.xrechnung.b2g.ready` for the
+ERP's PEPPOL AS4 gateway.
+
+**Every document is complete for the profile:** BT-23 business process and the BG-16
+SEPA payment instruction (means code 58 + the seller IBAN) are stamped from config; the
+seller party is filled from `[seller]` with a split address and contact (BR-DE-2..7);
+the due date (BT-9) is issue + 14 days (§40c EnWG).
+
+**Legal mandate:** B2G invoices mandatory from 01.01.2027 (§27 EGovG; EU Directive
+2014/55/EU); B2B e-invoices from 01.01.2028 (§14 UStG n.F.).
+
+**Configuration:**
 ```toml
-seller_vat_id = "DE123456789"   # BT-31 Seller VAT registration number
+seller_vat_id = "DE123456789"           # BT-31 Seller VAT registration number
+seller_iban   = "DE89370400440532013000" # BT-84 — XRechnung BG-16 SEPA credit transfer
+seller_bic    = "COBADEFFXXX"            # BT-86 (optional)
 ```
+
+> **Version note:** `en16931`/`en16931-formats` are pinned exactly; cross-check
+> generated XML against the KoSIT/Mustang validators before relying on B2G in production.
+> ZUGFeRD PDF/A-3 (the `en16931-formats` `zugferd` feature) is not enabled — CII/UBL XML only.
 
 ---
 
@@ -727,7 +765,8 @@ Useful for:
 | `malo_id`, `lf_mp_id` | MaLo + LF identity |
 | `product_code`, `category` | Product reference (`VPP` for dispatch settlements) |
 | `period_from`, `period_to` | Billing period |
-| `rechnung_json` | Full BO4E `Rechnung` JSONB (§ 147 AO / GoBD) |
+| `rechnung_json` | Full BO4E `Rechnung` JSONB (§ 147 AO / GoBD) — the accounting representation |
+| `en16931_json` | EN 16931 semantic invoice model (serde JSONB) — the source every XRechnung/CII/UBL render reads |
 | `total_netto_eur`, `total_brutto_eur` | Cached totals for fast reporting |
 | `outcome` | `generated` → `dispatched` → `paid`/`disputed` |
 | `ce_id` | CloudEvent ID of emitted `de.billing.rechnung.erstellt` |
@@ -867,18 +906,20 @@ EN16931 requires **one VAT breakdown entry per category and rate**, each with it
 own taxable base (BT-116) and tax amount (BT-117). A single aggregate `mwst_eur`
 cannot express that.
 
-`energy_billing::invoice::tax_subtotals_of` groups the positions by effective
-rate — a position's own `applicable_tax_rate` when set, otherwise the engine
-default — and the XRechnung/ZUGFeRD generator emits one `ApplicableTradeTax`
-block per subtotal.
+The breakdown is produced **twice**, from the same per-position rates, for the two
+representations: `energy_billing::invoice::tax_subtotals_of` groups the positions by
+effective rate (a position's own `applicable_tax_rate` when set, otherwise the engine
+default) for the **BO4E** `steuerbetraege`; and `en16931::reconcile` derives the
+**EN 16931 BG-23** from the semantic-model's per-line BT-151/BT-152 when the e-invoice
+is built. Both key on the same (category, rate) pairs, so the two agree.
 
 This matters because multi-rate invoices are already reachable:
 
 | Rate | Case |
 |---|---|
 | 19 % | standard supply |
-| 7 % | Fernwärme, §12 Abs. 2 Nr. 1 UStG |
-| 0 % | Solar ≤ 30 kWp, §12 Abs. 3 UStG (Solarpaket I) |
+| 7 % | Trinkwasser (§12 Abs. 2 Nr. 1 UStG); gas/Fernwärme only 01.10.2022–31.03.2024 (§28 Abs. 5/6 UStG) |
+| 0 % | Kleinunternehmer feed-in Gutschrift, §19 UStG |
 
 **Zero-rated bases are included** (category `Z`). Omitting them would leave the
 sum of the taxable bases short of the invoice net, which is precisely what the
@@ -892,10 +933,10 @@ Each subtotal projects to BO4E via `TaxSubtotal::to_bo4e()` →
 (as a percentage, matching BT-119) and `steuerart` (`Ust`, or `Rcv` for §13b
 reverse charge).
 
-The breakdown is **derived, never stored**: a persisted copy could disagree with
-the positions it summarises. It is emitted on the BO4E Rechnung as
-`steuerbetraege`, whose entries must sum to `gesamtsteuer`, and carried into the
-XRechnung/ZUGFeRD CII as BG-23.
+The BO4E breakdown is **derived, never stored**: a persisted copy could disagree
+with the positions it summarises. It is emitted on the BO4E Rechnung as
+`steuerbetraege`, whose entries must sum to `gesamtsteuer`. The e-invoice BG-23 is
+`reconcile`-derived from the stored `en16931_json` model's lines at render time.
 
 ## Advance payments on the invoice
 
@@ -934,8 +975,10 @@ marktd_url    = "http://marktd:8180"
 stromsteuer_ct_per_kwh = "2.05"
 mwst_rate              = "0.19"
 
-# Seller VAT ID for XRechnung / ZUGFeRD (B2G mandate 01.01.2027)
-seller_vat_id = "DE123456789"
+# Seller identity for XRechnung (B2G mandate 01.01.2027)
+seller_vat_id = "DE123456789"           # BT-31
+seller_iban   = "DE89370400440532013000" # BT-84 — XRechnung BG-16 SEPA credit transfer
+seller_bic    = "COBADEFFXXX"            # BT-86 (optional)
 
 # Optional: ERP webhook
 erp_webhook_url = "http://erp:8000/webhooks/billing"

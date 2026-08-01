@@ -21,6 +21,9 @@ pub struct BillingRecordRow {
     pub period_to: Date,
     pub rechnung_json: serde_json::Value,
     pub bo4e_version: String,
+    /// EN 16931 semantic invoice model (serde), rendered to XRechnung/CII/UBL.
+    /// `None` for records written before the model was attached.
+    pub en16931_json: Option<serde_json::Value>,
     pub total_netto_eur: Option<Decimal>,
     pub total_brutto_eur: Option<Decimal>,
     pub outcome: String,
@@ -111,17 +114,24 @@ pub async fn insert_billing_record(
 
 pub async fn fetch_billing_record(
     pool: &PgPool,
+    tenant: &str,
     id: Uuid,
 ) -> anyhow::Result<Option<BillingRecordRow>> {
-    sqlx::query_as::<_, BillingRecordRow>("SELECT * FROM billing_records WHERE id = $1")
-        .bind(id)
-        .fetch_optional(pool)
-        .await
-        .context("fetch_billing_record")
+    // Tenant is part of a record's identity — a UUID known to one tenant must
+    // never resolve another tenant's invoice (cross-tenant disclosure).
+    sqlx::query_as::<_, BillingRecordRow>(
+        "SELECT * FROM billing_records WHERE id = $1 AND tenant = $2",
+    )
+    .bind(id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await
+    .context("fetch_billing_record")
 }
 
 pub async fn list_billing_records(
     pool: &PgPool,
+    tenant: &str,
     malo_id: Option<&str>,
     lf_mp_id: Option<&str>,
     outcome: Option<&str>,
@@ -129,7 +139,8 @@ pub async fn list_billing_records(
 ) -> anyhow::Result<Vec<BillingRecordRow>> {
     sqlx::query_as::<_, BillingRecordRow>(
         r"SELECT * FROM billing_records
-          WHERE ($1::text IS NULL OR malo_id = $1)
+          WHERE tenant = $5
+            AND ($1::text IS NULL OR malo_id = $1)
             AND ($2::text IS NULL OR lf_mp_id = $2)
             AND ($3::text IS NULL OR outcome = $3)
           ORDER BY created_at DESC
@@ -139,9 +150,54 @@ pub async fn list_billing_records(
     .bind(lf_mp_id)
     .bind(outcome)
     .bind(limit)
+    .bind(tenant)
     .fetch_all(pool)
     .await
     .context("list_billing_records")
+}
+
+/// Advance a record to `dispatched` inside the caller's transaction, right after
+/// its CloudEvent is enqueued.
+///
+/// Persist-before-dispatch guarantees the enqueued CE will reach the ERP (retry +
+/// DLQ), so once it is on its way the invoice is final: advancing `outcome` past
+/// `'generated'` activates the `insert_billing_record` overwrite guard (a re-run
+/// of the same period is refused → correction path) and clears the record from the
+/// `br_ce_pending` partial index. Idempotent — re-stamping a dispatched row is a
+/// no-op UPDATE.
+pub async fn mark_dispatched_tx(
+    executor: impl sqlx::PgExecutor<'_>,
+    id: Uuid,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r"UPDATE billing_records
+          SET outcome = 'dispatched', dispatched_at = now(), updated_at = now()
+          WHERE id = $1 AND outcome = 'generated'",
+    )
+    .bind(id)
+    .execute(executor)
+    .await
+    .context("mark_dispatched_tx")?;
+    Ok(())
+}
+
+/// Attach the EN 16931 semantic model to a record in the caller's transaction.
+///
+/// Written alongside the BO4E `rechnung_json` at bill time; it is the source the
+/// XRechnung/CII/UBL renderers read, so the e-invoicing syntaxes never round-trip
+/// through BO4E.
+pub async fn attach_en16931(
+    executor: impl sqlx::PgExecutor<'_>,
+    id: Uuid,
+    model: &serde_json::Value,
+) -> anyhow::Result<()> {
+    sqlx::query("UPDATE billing_records SET en16931_json = $2, updated_at = now() WHERE id = $1")
+        .bind(id)
+        .bind(model)
+        .execute(executor)
+        .await
+        .context("attach_en16931")?;
+    Ok(())
 }
 
 pub async fn mark_dispatched(pool: &PgPool, id: Uuid, ce_id: Uuid) -> anyhow::Result<()> {
@@ -299,6 +355,7 @@ pub struct BillingAnomalyReport {
 #[allow(dead_code)]
 pub async fn check_billing_anomaly(
     pool: &PgPool,
+    tenant: &str,
     malo_id: &str,
     lf_mp_id: &str,
     threshold_pct: Option<Decimal>,
@@ -309,7 +366,8 @@ pub async fn check_billing_anomaly(
     let rows = sqlx::query(
         r"SELECT id, total_brutto_eur
           FROM billing_records
-          WHERE malo_id = $1
+          WHERE tenant = $3
+            AND malo_id = $1
             AND lf_mp_id = $2
             AND is_correction = FALSE
             AND total_brutto_eur IS NOT NULL
@@ -319,6 +377,7 @@ pub async fn check_billing_anomaly(
     )
     .bind(malo_id)
     .bind(lf_mp_id)
+    .bind(tenant)
     .fetch_all(pool)
     .await
     .context("check_billing_anomaly")?;
@@ -743,7 +802,7 @@ pub async fn list_review_queue(
     let rows: Vec<BillingRecordRow> = sqlx::query_as(
         r"SELECT * FROM billing_records
           WHERE tenant = $1
-            AND ($2::text IS NULL AND risk_band IN ('REVIEW','HELD') OR risk_band = $2)
+            AND (($2::text IS NULL AND risk_band IN ('REVIEW','HELD')) OR risk_band = $2)
           ORDER BY risk_score DESC NULLS LAST, created_at DESC
           LIMIT $3",
     )

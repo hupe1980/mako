@@ -793,7 +793,7 @@ pub async fn put_portal_kontakt(
 
 /// `GET /api/v1/portal/{malo_id}/invoices/{record_id}/download`
 ///
-/// Download a billing document as ZUGFeRD 2.3 / XRechnung 3.0 CII XML.
+/// Download a billing document as XRechnung 3.0 CII XML (EN 16931).
 ///
 /// Authenticates the customer and verifies they own `malo_id` before
 /// proxying to `billingd GET /api/v1/billing/{record_id}/xrechnung`.

@@ -21,7 +21,7 @@ path = "src/main.rs"
 mako-events = { workspace = true }
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
 billing      = { workspace = true }
-energy-billing = { workspace = true, features = ["eeg", "bo4e"] }
+energy-billing = { workspace = true, features = ["eeg", "bo4e", "en16931"] }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }
 mako-markt   = { workspace = true, features = ["marktd-client"] }
@@ -41,6 +41,8 @@ tower-http   = { version = "0.6" }
 anyhow       = "1"
 secrecy      = { version = "0.10" }
 tokio-util   = { workspace = true }
+en16931         = { workspace = true }
+en16931-formats = { workspace = true }
 
 [dev-dependencies]
 time = { workspace = true }

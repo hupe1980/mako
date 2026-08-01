@@ -120,14 +120,14 @@ eeg-billing/src/
 ├── reductions.rs        §§52–54 reduction pipeline — §52 Abs. 6 netting, §53c, §54
 ├── settlement_state.rs  Monthly lifecycle state machine — Active/Reduced/Suspended/PostEeg
 │
-├── solar.rs             §48 PV subtypes, §12 Abs. 3 UStG, Agri-PV bonus
+├── solar.rs             §48 PV subtypes, Agri-PV bonus
 ├── wind.rs              §36h Korrekturfaktor, WindStandort, Gütegrad/Standortklasse
 ├── biomasse.rs          §43/§44 fuel classes, Güllekleinanlage (≤75 kW, ≥80% Gülle)
 │
 ├── tariff.rs            billing::ScalarTariff adapter — EegSettleTariff, VAT variants
 ├── bridge.rs            settlement_to_line_items() → billing::LineItem
 ├── gutschrift.rs        §14 UStG Gutschrift → rubo4e::current::Rechnung (feature `bo4e`)
-└── ust.rs               §12 Abs. 3 UStG, §19 UStG Kleinunternehmer
+└── ust.rs               §19 UStG Kleinunternehmer (E) / Regelbesteuerung (S)
 ```
 
 ### §14 UStG Gutschrift (feature `bo4e`)
@@ -139,8 +139,9 @@ the per-rate breakdown (EN 16931 BG-23).
 
 `gutschrift::settlement_to_gutschrift(output, vat, meta)` produces it as a BO4E
 `rubo4e::current::Rechnung`: it assembles a `billing::BillingDocument` (positions +
-the VAT layers for the operator's tax status — Regelbesteuerung 19 % / §12 Abs. 3
-zero-rated / §19 exempt) and renders it. The `billing` crate does the money and VAT
+the VAT layers for the operator's declared tax status — Regelbesteuerung 19 %
+category `S` / §19 Kleinunternehmer 0 % category `E`) and renders it. The `billing`
+crate does the money and VAT
 (shared with `energy-billing`/`grid-billing`); the BO4E rendering lives here — the
 same per-crate `bo4e` pattern those crates follow, with **no shared bridge crate**.
 
@@ -429,21 +430,26 @@ The typical pipeline for a single billing period:
 ```
 
 VAT is applied by the caller via `EegSettleTariff` + `ust::ust_tax_layers()` — not
-inside `calculate_settlement`. Every status yields exactly one tax layer, including
-the two that charge nothing:
+inside `calculate_settlement`. A feed-in Gutschrift has exactly two treatments, and
+each yields exactly one tax layer (the exempt one included):
 
 | `VatStatus` | Rate | EN 16931 category | Basis |
 |---|---|---|---|
 | `Regelbesteuerung` | 19 % | `S` — Standard | §12 Abs. 1 UStG |
-| `BefreitNach12Abs3` | 0 % | `Z` — Zero rated | §12 Abs. 3 UStG (Nullsteuersatz) |
 | `Kleinunternehmer` | 0 % | `E` — Exempt | §19 UStG (tax not levied) |
 
-A supply taxed at 0 % is still a taxable supply, so it belongs in the EN 16931
-BG-23 VAT breakdown under its own UNTDID 5305 category with a zero tax amount.
-Omitting the layer would drop that turnover from the breakdown entirely and
-understate the taxable base. §12 Abs. 3 UStG sets a zero *rate* and maps to `Z`;
-§19 UStG does not levy the tax at all and maps to `E`, which carries the
-exemption reason EN 16931 requires (BT-120).
+The status is a **declared property of the operator** (masterdata), not something
+plant size decides — `VatStatus::default_for_plant` only *suggests* the value a
+new plant would usually carry. **§12 Abs. 3 UStG is deliberately absent**: its 0 %
+Nullsteuersatz taxes the *supply of the PV hardware*, not the feed-in of
+electricity. Its only bearing here is indirect — because a ≤30 kWp operator buys
+the plant at 0 %, they have no input tax to reclaim and stay §19 Kleinunternehmer.
+
+An exempt supply is still a taxable supply, so it belongs in the EN 16931 BG-23 VAT
+breakdown under its own UNTDID 5305 category with a zero tax amount. Omitting the
+layer would drop that turnover from the breakdown entirely and understate the
+taxable base. §19 UStG does not levy the tax at all and maps to `E`, which carries
+the exemption reason EN 16931 requires (BT-120).
 
 A document mixing treatments — a 0 % PV feed-in credit beside 19 % NNE grid
 charges — cannot use a single status. Build the layers directly and scope each to

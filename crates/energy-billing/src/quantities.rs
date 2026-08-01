@@ -768,7 +768,7 @@ impl GgvSolarInput {
 
     /// Fraction of this tenant’s consumption covered by community PV (0.0–1.0).
     ///
-    /// Useful for §40a kilowattstundenpreis reporting and sustainability KPIs.
+    /// Useful for §40 kilowattstundenpreis reporting and sustainability KPIs.
     #[must_use]
     pub fn pv_coverage_ratio(&self) -> Decimal {
         if self.actual_consumption_kwh <= Decimal::ZERO {

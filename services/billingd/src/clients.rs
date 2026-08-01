@@ -335,7 +335,6 @@ fn extract_tariff_from_product_data(
         "waerme_arbeitspreis_ct_per_kwh": waerme_arbeitspreis_ct_per_kwh,
         "waerme_leistungspreis_eur_per_kw_month": waerme_leistungspreis_eur_per_kw_month,
         "waerme_leistungspreis_eur_per_kw_year": get_decimal("waerme_leistungspreis_eur_per_kw_year"),
-        "waerme_is_renewable": product.and_then(|p| p.get("waerme_is_renewable")).and_then(|v| v.as_bool()).unwrap_or(false),
         "waerme_erneuerbar_anteil_pct": get_decimal("waerme_erneuerbar_anteil_pct"),
         "solar_arbeitspreis_ct_per_kwh": solar_arbeitspreis_ct_per_kwh,
         "mieterstrom_aufschlag_ct_per_kwh": mieterstrom_aufschlag_ct_per_kwh,

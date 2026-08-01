@@ -14,7 +14,7 @@
 //! | `calculate_billing` | Trigger a billing calculation run for a MaLo |
 //! | `list_product_categories` | Describe all 13 billing categories and their required fields |
 //! | `get_billing_summary` | Aggregate billing stats per MaLo (total billed, avg monthly) |
-//! | `validate_tariff_config` | Pre-flight validation: §41b iMSys guard, KAV plausibility, missing fields |
+//! | `validate_tariff_config` | Pre-flight validation: §41a iMSys guard, KAV plausibility, missing fields |
 //! | `explain_invoice_position` | Explain how a billing position was calculated (PositionTrace audit) |
 //!
 //! ## Prompts (6)
@@ -28,7 +28,6 @@
 //! | `eeg-billing` | Configure EEG/EINSPEISUNG billing for feed-in plants |
 //! | `gas-billing` | Configure Gas billing — Brennwertkorrektur, BEHG CO₂, H2-blend |
 
-use energy_billing::RoundMoney;
 use std::sync::Arc;
 
 use axum::{
@@ -112,7 +111,7 @@ pub struct PreviewParams {
 pub struct ValidateTariffParams {
     /// TariffInput JSON string to validate (same format as tarifbd product JSONB).
     pub tariff_json: String,
-    /// Metering mode to test against (SLP, RLM, IMSYS). Relevant for §41b check.
+    /// Metering mode to test against (SLP, RLM, IMSYS). Relevant for §41a check.
     pub metering_mode: Option<String>,
     /// Optional MaLo-ID for context (informational only).
     pub malo_id: Option<String>,
@@ -158,6 +157,7 @@ impl BillingdMcpHandler {
         use crate::pg::list_billing_records;
         match list_billing_records(
             &self.state.pool,
+            &self.state.tenant,
             params.malo_id.as_deref(),
             params.lf_mp_id.as_deref(),
             params.outcome.as_deref(),
@@ -184,7 +184,7 @@ impl BillingdMcpHandler {
         let Ok(id) = params.id.parse::<Uuid>() else {
             return Err(McpError::invalid_params("id must be a valid UUID", None));
         };
-        match fetch_billing_record(&self.state.pool, id).await {
+        match fetch_billing_record(&self.state.pool, &self.state.tenant, id).await {
             Ok(Some(row)) => ContentBlock::json(serde_json::to_value(row).unwrap_or_default())
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None)),
@@ -255,38 +255,25 @@ The XML is BASE64-free — returns the raw XML string.",
             return Err(McpError::invalid_params("id must be a valid UUID", None));
         };
         use crate::pg::fetch_billing_record;
-        match fetch_billing_record(&self.state.pool, id).await {
+        match fetch_billing_record(&self.state.pool, &self.state.tenant, id).await {
             Ok(Some(row)) => {
-                use crate::xrechnung::{build_zugferd_cii_xml, info_from_rechnung_json};
-                // Single source with the HTTP endpoint: positions, tax
-                // breakdown, prepaid advances and zahlungsziel all come from
-                // the stored rechnung_json — no hardcoded 19 % / 0-prepaid.
-                let netto = row.total_netto_eur.unwrap_or_default();
-                let brutto = row.total_brutto_eur.unwrap_or_default();
-                let mwst = brutto - netto;
-                let vat_rate_pct = if netto > rust_decimal::Decimal::ZERO {
-                    (mwst / netto * rust_decimal::dec!(100)).round_kfm(2)
-                } else {
-                    rust_decimal::dec!(19)
+                // Render CII from the stored EN 16931 model (per-line VAT intact)
+                // via `en16931-formats` — the same source the HTTP endpoint uses.
+                let Some(model) = row
+                    .en16931_json
+                    .as_ref()
+                    .and_then(|v| serde_json::from_value::<en16931::Invoice>(v.clone()).ok())
+                else {
+                    return Err(McpError::invalid_params(
+                        format!("record {id} has no EN 16931 model — re-run the calculation"),
+                        None,
+                    ));
                 };
-                let info = info_from_rechnung_json(
-                    &row.rechnung_json,
-                    &row.malo_id,
-                    &row.lf_mp_id,
-                    &self.state.seller_name,
-                    self.state.seller_vat_id.clone(),
-                    netto,
-                    mwst,
-                    brutto,
-                    row.period_from,
-                    row.period_to,
-                    vat_rate_pct,
-                );
-                let xml = build_zugferd_cii_xml(&info);
+                let xml = crate::einvoice::render_cii(&model);
                 ContentBlock::json(serde_json::json!({
                     "billing_record_id": id,
                     "xrechnung_xml": xml,
-                    "standard": "ZUGFeRD 2.3 / XRechnung 3.0 (EN 16931)",
+                    "standard": "XRechnung 3.0 / CII (EN 16931)",
                     "note": "Submit to ZRE (Zentraler Rechnungseingang) for B2G invoices."
                 }))
                 .map(|b| CallToolResult::success(vec![b]))
@@ -324,7 +311,15 @@ agentd billing-anomaly-agent calls this on every de.billing.rechnung.erstellt ev
         let threshold = p
             .threshold_pct
             .and_then(|f| Decimal::from_str(&f.to_string()).ok());
-        match check_billing_anomaly(&self.state.pool, &p.malo_id, &p.lf_mp_id, threshold).await {
+        match check_billing_anomaly(
+            &self.state.pool,
+            &self.state.tenant,
+            &p.malo_id,
+            &p.lf_mp_id,
+            threshold,
+        )
+        .await
+        {
             Ok(report) => {
                 let anomaly_msg = if report.is_anomaly {
                     format!(
@@ -375,7 +370,16 @@ CloudEvent de.vpp.settlement.berechnet is emitted per settlement. RED III Articl
             .min(100);
         // VPP records use category=VPP stored under the vpp_id as malo_id.
         let vpp_malo = p.get("vpp_id").and_then(|v| v.as_str());
-        match list_billing_records(&self.state.pool, vpp_malo, lf_mp_id, None, limit).await {
+        match list_billing_records(
+            &self.state.pool,
+            &self.state.tenant,
+            vpp_malo,
+            lf_mp_id,
+            None,
+            limit,
+        )
+        .await
+        {
             Ok(rows) => {
                 let vpp_rows: Vec<_> = rows
                     .iter()
@@ -408,6 +412,7 @@ Each record includes original_record_id, correction_reason, and whether it negat
         // a separate pg function (corrections are rare — no perf concern).
         match list_billing_records(
             &self.state.pool,
+            &self.state.tenant,
             params.malo_id.as_deref(),
             params.lf_mp_id.as_deref(),
             None, // outcome filter not applied — show all corrections
@@ -495,7 +500,7 @@ WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM
         let categories = serde_json::json!([
             { "category": "STROM", "description": "Standard electricity — Eintarif/Zweitarif/Mehrtarif", "required": ["arbeitspreis_ct_per_kwh"], "optional": ["grundpreis_ct_per_day", "arbeitspreis_ht_ct_per_kwh", "arbeitspreis_nt_ct_per_kwh", "dynamic_epex", "dynamic_epex_floor_ct_kwh"], "regulatory": "§41a EnWG for dynamic; §3 StromStG levy included" },
             { "category": "GAS", "description": "Natural gas with Brennwertkorrektur and CO₂ levies", "required": ["gas_arbeitspreis_ct_per_kwh_hs"], "optional": ["gas_grundpreis_ct_per_day", "energiesteuer_gas_ct_per_kwh_override", "behg_gas_ct_per_kwh_override"], "regulatory": "§25 Nr. 4 MessEV (Brennwertkorrektur), §2 EnergieStG, BEHG" },
-            { "category": "WAERME", "description": "Fernwärme — Grundpreis, Arbeitspreis, Leistungspreis", "required": ["waerme_arbeitspreis_ct_per_kwh"], "optional": ["waerme_grundpreis_eur_per_month", "waerme_leistungspreis_eur_per_kw_month", "mwst_rate_override: 0.07 for renewable Fernwärme"], "regulatory": "§12 Abs.2 Nr.1 UStG: 7% MwSt for renewable heat (set mwst_rate_override: 0.07)" },
+            { "category": "WAERME", "description": "Fernwärme — Grundpreis, Arbeitspreis, Leistungspreis", "required": ["waerme_arbeitspreis_ct_per_kwh"], "optional": ["waerme_grundpreis_eur_per_month", "waerme_leistungspreis_eur_per_kw_month", "mwst_rate_override"], "regulatory": "District heating is standard-rated (19%); the 7% gas/Fernwärme window was §28 Abs. 5/6 UStG (2022–31.03.2024, expired) — set mwst_rate_override for a period inside it" },
             { "category": "SOLAR", "description": "Solar self-consumption, Mieterstrom §21 Abs. 3 EEG, §42a GGV community solar", "required": ["solar_arbeitspreis_ct_per_kwh"], "optional": ["mieterstrom_aufschlag_ct_per_kwh", "gemeinschaft_rabatt_ct_per_kwh", "solar_include_stromsteuer", "mwst_rate_override: 0 for PV ≤30kWp from 2023"], "regulatory": "§12 Abs.3 UStG: 0% MwSt for PV ≤30kWp since 01.01.2023 (set mwst_rate_override: 0)" },
             { "category": "EEG", "description": "EEG feed-in Vergütung — credit note to plant operator (LF role, contractual)", "required": ["eeg_verguetungssatz_ct_per_kwh"], "optional": ["eeg_marktpraemie_ct_per_kwh", "eeg_managementpraemie_ct_per_kwh", "kwkg_zuschlag_ct_per_kwh"], "meter": "eeg_meter.einspeisung_kwh, eeg_meter.kwh_during_negative_epex (§51 contractual suspension)", "regulatory": "§21 EEG Vergütung; §20 EEG Marktprämie; §51 EEG Negativpreisregel (contractual for LF)" },
             { "category": "EINSPEISUNG", "description": "Direktvermarktung settlement — Marktwert minus Vermarktungsgebühr", "required": ["marktwert_ct_per_kwh"], "optional": ["vermarktungsgebuehr_ct_per_kwh"], "regulatory": "§20 EEG Direktvermarktung; Direktvermarkter bears negative-price risk (§51 does NOT apply)" },
@@ -512,7 +517,7 @@ WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM
     }
 
     #[tool(
-        description = "Validate a TariffInput configuration for regulatory compliance before billing. Checks: §41b iMSys requirement for dynamic tariffs, missing mandatory fields, KAV rate plausibility, StromsteuerBefreiung certificate reminders. Returns warnings and errors without triggering a calculation.",
+        description = "Validate a TariffInput configuration for regulatory compliance before billing. Checks: §41a iMSys requirement for dynamic tariffs, missing mandatory fields, KAV rate plausibility, StromsteuerBefreiung certificate reminders. Returns warnings and errors without triggering a calculation.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn validate_tariff_config(
@@ -534,7 +539,7 @@ WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM
         // Build engine for validation — use a synthetic one-month context.
         let engine = tariff.build_engine(&grid, &rates);
 
-        // Build a context with the requested metering mode for §41b checks.
+        // Build a context with the requested metering mode for §41a checks.
         let metering_mode = params
             .metering_mode
             .as_deref()
@@ -573,15 +578,15 @@ WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM
         // Additional static checks independent of engine.validate():
         let mut extra_checks: Vec<serde_json::Value> = Vec::new();
 
-        // Check §41b: dynamic_epex requires iMSys
+        // Check §41a Abs. 1: dynamic_epex requires iMSys
         let is_dynamic = matches!(&tariff, Product::Strom(e) if e.dynamic_epex)
             || matches!(&tariff, Product::Waermepumpe(c) if c.base.dynamic_epex)
             || matches!(&tariff, Product::Wallbox(c) if c.base.dynamic_epex);
         if is_dynamic && metering_mode != MeteringMode::Imsys {
             extra_checks.push(serde_json::json!({
-                "code": "SECT41B_IMSYS_REQUIRED",
+                "code": "SECT41A_IMSYS_REQUIRED",
                 "severity": "Error",
-                "message": "§41b Abs. 2 EnWG: dynamic_epex=true requires MeteringMode::Imsys. Set metering_mode to IMSYS or switch to a fixed-price tariff."
+                "message": "§41a Abs. 1 EnWG: dynamic_epex=true requires MeteringMode::Imsys. Set metering_mode to IMSYS or switch to a fixed-price tariff."
             }));
         }
 
@@ -655,7 +660,7 @@ WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM
             ));
         };
 
-        let record = fetch_billing_record(&self.state.pool, record_id)
+        let record = fetch_billing_record(&self.state.pool, &self.state.tenant, record_id)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?
             .ok_or_else(|| {
@@ -741,7 +746,16 @@ WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM
         use rust_decimal::Decimal;
         let malo_id = params.malo_id.as_deref();
         let lf_mp_id = params.lf_mp_id.as_deref();
-        match list_billing_records(&self.state.pool, malo_id, lf_mp_id, None, 100).await {
+        match list_billing_records(
+            &self.state.pool,
+            &self.state.tenant,
+            malo_id,
+            lf_mp_id,
+            None,
+            100,
+        )
+        .await
+        {
             Ok(rows) => {
                 let mut total_brutto = Decimal::ZERO;
                 let mut count = 0usize;

@@ -109,7 +109,7 @@ graph TB
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [tarifbd](./tarifbd) | `:9080` | LF | Product & Tariff Catalog — user-defined energy products, EPEX Spot for §41a, B2B Angebote/quotations |
-| [billingd](./billingd) | `:9280` | LF | Energy Billing Engine — 13 categories, §41a dynamic, §42a GGV community solar, XRechnung 3.0 / ZUGFeRD 2.3 |
+| [billingd](./billingd) | `:9280` | LF | Energy Billing Engine — 13 categories, §41a dynamic, §42a GGV community solar, EN 16931 e-invoicing (XRechnung 3.0 CII / PEPPOL UBL) |
 | [accountingd](./accountingd) | `:9380` | LF | Customer Account Ledger — double-entry SKR 03/04; aging analysis; Verzugszinsen §288 BGB; Zahlungsvereinbarung; SEPA pain.008 (FRST/RCUR separated, Gläubiger-ID EPC AT-02); CAMT.054 dedup; IBAN hash (pgcrypto); OIDC/JWT + inbound HMAC; auto-dunning; GDPR Art. 17; **97 tests** |
 
 ## B2C & AI

@@ -141,7 +141,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/portal/:malo_id/kontakt",
             put(handlers::put_portal_kontakt),
         )
-        // Document download — ZUGFeRD 2.3 / XRechnung 3.0 CII XML
+        // Document download — XRechnung 3.0 CII XML (EN 16931)
         .route(
             "/api/v1/portal/:malo_id/invoices/:record_id/download",
             get(handlers::get_portal_invoice_download),

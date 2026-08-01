@@ -74,17 +74,6 @@ pub struct NutzungsplanInput {
     pub fraction: rust_decimal::Decimal,
 }
 
-/// `POST /api/v1/billing/ggv/{ggv_id}` — §42b EEG 2023 community solar billing.
-///
-/// ## Algorithm (§42a EEG 2023 proportional allocation)
-///
-/// 1. Validate all tenant inputs; reject if `tenants` is empty or total kWh = 0.
-/// ## §42b EEG 2023 (Solarpaket I) compliance
-///
-/// The handler supports two billing models:
-///
-/// **Model A — Nutzungsplan-based (recommended)**: Supply `pv_generation_kwh` +
-/// `nutzungsplan`. Each tenant is allocated a proportional share of plant generation.
 /// Request body for `POST /api/v1/billing/{malo_id}/tarifwechsel`.
 ///
 /// Calculates a combined invoice when a price change occurs within the billing
@@ -275,6 +264,9 @@ pub async fn post_tarifwechsel(
         if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
             return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
+        if let Err(e) = mark_dispatched_tx(&mut *tx, record_id).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
     }
     if let Err(e) = tx.commit().await {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
@@ -297,15 +289,25 @@ pub async fn post_tarifwechsel(
         .into_response()
 }
 
-/// Per-tenant invoices show both the PV portion (at GGV rate) and the residual grid
-/// electricity (at standard rate). This correctly implements §42b Abs. 2 EEG 2023.
+/// `POST /api/v1/billing/ggv/{ggv_id}` — §42b EEG 2023 community solar (GGV) billing.
 ///
-/// **Model B — Direct consumption (legacy)**: Omit `pv_generation_kwh`. Each
-/// tenant's full `consumption_kwh` is billed as solar eigenverbrauch. Only valid
-/// when consumption ≤ plant output for all tenants.
+/// Allocates plant generation across tenants (§42a EEG 2023 proportional
+/// allocation) and emits one invoice per tenant. Rejects an empty `tenants` list
+/// or a zero total-kWh input.
 ///
-/// The GGV Rabatt (§42b Abs. 3 EEG 2023) must reflect the savings from reduced
-/// network charges for locally consumed PV electricity.
+/// ## §42b EEG 2023 (Solarpaket I) — two billing models
+///
+/// **Model A — Nutzungsplan-based (recommended)**: supply `pv_generation_kwh` +
+/// `nutzungsplan`. Each tenant is allocated a proportional share of plant
+/// generation. Per-tenant invoices show both the PV portion (at the GGV rate) and
+/// the residual grid electricity (at the standard rate) — §42b Abs. 2 EEG 2023.
+///
+/// **Model B — Direct consumption (legacy)**: omit `pv_generation_kwh`. Each
+/// tenant's full `consumption_kwh` is billed as solar Eigenverbrauch. Only valid
+/// when consumption ≤ plant output for every tenant.
+///
+/// The GGV Rabatt (§42b Abs. 3 EEG 2023) reflects the savings from reduced network
+/// charges for locally consumed PV electricity.
 #[allow(clippy::too_many_arguments)]
 pub async fn post_ggv_billing(
     _claims: Claims,
@@ -365,6 +367,7 @@ pub async fn post_ggv_billing(
     let rates = cfg.regulatory_rates_for_period("SOLAR", period_from, period_to);
     let mut tenant_results: Vec<serde_json::Value> = Vec::with_capacity(req.tenants.len());
     let mut parts: Vec<(String, Invoice)> = Vec::with_capacity(req.tenants.len());
+    let mut tenant_record_ids: Vec<Uuid> = Vec::with_capacity(req.tenants.len());
 
     for tenant in &req.tenants {
         // Build Product — prefer request overrides, fall back to tarifbd lookup.
@@ -503,6 +506,11 @@ pub async fn post_ggv_billing(
             Ok(id) => id,
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         };
+        if let Err(e) =
+            crate::einvoice::store(&pool, record_id, &result, &cfg, &tenant.malo_id).await
+        {
+            tracing::warn!(%record_id, error = %e, "billingd: attach en16931 model failed");
+        }
 
         tenant_results.push(serde_json::json!({
             "record_id": record_id,
@@ -511,6 +519,7 @@ pub async fn post_ggv_billing(
             "netto_eur": result.netto_eur,
             "brutto_eur": result.brutto_eur,
         }));
+        tenant_record_ids.push(record_id);
         parts.push((tenant.malo_id.clone(), result));
     }
 
@@ -567,9 +576,24 @@ pub async fn post_ggv_billing(
         if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
             return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
+        if let Err(e) = mark_dispatched_tx(&mut *tx, sammel_id).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    }
+    if let Err(e) =
+        crate::einvoice::store(&mut *tx, sammel_id, &sammel_invoice, &cfg, &ggv_id).await
+    {
+        tracing::warn!(%sammel_id, error = %e, "billingd: attach en16931 model failed");
     }
     if let Err(e) = tx.commit().await {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+
+    // Link the per-tenant detail records to the committed Sammelrechnung so the
+    // risk baseline and record listings treat them as its children, not as
+    // standalone invoices double-counted alongside the SAMMEL.
+    if let Err(e) = link_to_sammelrechnung(&pool, &tenant_record_ids, sammel_id).await {
+        tracing::warn!(error = %e, %sammel_id, "GGV: linking per-tenant records to Sammelrechnung failed");
     }
 
     (

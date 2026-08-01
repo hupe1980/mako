@@ -130,6 +130,14 @@ CREATE TABLE eeg_anlagen (
     bank_bic                   TEXT,
     zahlungsempfaenger         TEXT,
 
+    -- Operator's declared VAT (Umsatzsteuer) status — decides the feed-in
+    -- Gutschrift VAT: KLEINUNTERNEHMER → §19 UStG (category E, 0 %),
+    -- REGELBESTEUERUNG → §12 Abs. 1 UStG (category S, 19 %). This is a declared
+    -- property of the operator, not inferable from plant size; seeded from
+    -- VatStatus::default_for_plant at upsert when the operator does not state it.
+    ust_status                 TEXT        NOT NULL DEFAULT 'REGELBESTEUERUNG'
+                               CHECK (ust_status IN ('KLEINUNTERNEHMER', 'REGELBESTEUERUNG')),
+
     -- ── Plant attributes (migration 0003) ────────────────────────────────────
     -- 'Neubau' | 'Repowering' | 'Modernisierung'
     inbetriebnahme_typ         TEXT,

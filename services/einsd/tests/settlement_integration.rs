@@ -420,6 +420,79 @@ async fn registration_derives_the_foerderende_from_the_commissioning_date() {
     );
 }
 
+/// The feed-in Gutschrift VAT follows the operator's declared masterdata status,
+/// not the plant size. A small post-2023 solar plant with no declared status is
+/// seeded as §19 Kleinunternehmer (0 % USt, category E); an operator who declares
+/// REGELBESTEUERUNG bills 19 %. §12 Abs. 3 UStG (hardware supply) never applies.
+#[tokio::test]
+#[ignore = "requires EINSD_TEST_DATABASE_URL"]
+async fn ust_status_masterdata_drives_the_gutschrift_vat() {
+    let Some(pool) = test_pool("ust_status").await else {
+        return;
+    };
+    let app = test_router(pool.clone());
+
+    // (1) Small post-2023 solar, no declared status → seeded KLEINUNTERNEHMER.
+    let (status, body) = post_json(&app, "/api/v1/anlagen", anlage_json("P-KU")).await;
+    assert!(status.is_success(), "register KU: {status} {body}");
+    let seeded: String =
+        sqlx::query_scalar("SELECT ust_status FROM eeg_anlagen WHERE tr_id = 'P-KU'")
+            .fetch_one(&pool)
+            .await
+            .expect("read ust_status");
+    assert_eq!(
+        seeded, "KLEINUNTERNEHMER",
+        "a small post-2023 solar plant defaults to §19 Kleinunternehmer"
+    );
+
+    let (status, body) = post_json(
+        &app,
+        "/api/v1/anlagen/P-KU/settle/2026/7",
+        serde_json::json!({ "einspeisemenge_kwh": "500" }),
+    )
+    .await;
+    assert!(status.is_success(), "settle KU: {status} {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let steuer: rust_decimal::Decimal =
+        serde_json::from_value(v["gutschrift_steuer_eur"].clone()).expect("KU steuer present");
+    assert!(
+        steuer.is_zero(),
+        "§19 Kleinunternehmer → no USt, got {steuer}"
+    );
+
+    // (2) An operator who declares Regelbesteuerung bills 19 %.
+    let mut regel = anlage_json("P-REGEL");
+    regel["ust_status"] = serde_json::json!("REGELBESTEUERUNG");
+    let (status, body) = post_json(&app, "/api/v1/anlagen", regel).await;
+    assert!(status.is_success(), "register REGEL: {status} {body}");
+    let stored: String =
+        sqlx::query_scalar("SELECT ust_status FROM eeg_anlagen WHERE tr_id = 'P-REGEL'")
+            .fetch_one(&pool)
+            .await
+            .expect("read ust_status");
+    assert_eq!(
+        stored, "REGELBESTEUERUNG",
+        "declared status is stored verbatim"
+    );
+
+    let (status, body) = post_json(
+        &app,
+        "/api/v1/anlagen/P-REGEL/settle/2026/7",
+        serde_json::json!({ "einspeisemenge_kwh": "500" }),
+    )
+    .await;
+    assert!(status.is_success(), "settle REGEL: {status} {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let steuer: rust_decimal::Decimal =
+        serde_json::from_value(v["gutschrift_steuer_eur"].clone()).expect("REGEL steuer present");
+    // 500 kWh × 8.11 ct = 40.55 EUR net × 19 % = 7.70 EUR (kaufmännisch gerundet).
+    assert_eq!(
+        steuer.round_dp(2),
+        rust_decimal::Decimal::new(770, 2),
+        "Regelbesteuerung → 19 % USt on the feed-in"
+    );
+}
+
 /// A settlement for an unknown plant is a 404, not a 500.
 #[tokio::test]
 #[ignore = "requires EINSD_TEST_DATABASE_URL"]

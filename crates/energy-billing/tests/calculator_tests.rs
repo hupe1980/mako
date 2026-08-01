@@ -509,6 +509,74 @@ fn waerme_leistungspreis_adds_to_brutto() {
     );
 }
 
+/// AVBFernwärmeV §24 Abs. 4: an index-linked Arbeitspreis resolves the effective
+/// ct/kWh and overrides the static one, and the position states that legal basis.
+#[test]
+fn waerme_preisgleitklausel_resolves_and_overrides_static_arbeitspreis() {
+    // base 8 + spread 4 = 12 ct/kWh effective, overriding the static 6.
+    let t = j(r#"{"category":"WAERME","waerme_grundpreis_eur_per_month":0,
+            "waerme_arbeitspreis_ct_per_kwh":6,
+            "waerme_indexed_price":{"base_ct_per_kwh":8,"spread_ct_per_kwh":4,
+                "index_name":"Fernwärme-Index","index_value":1,"factor_ct_per_unit":0}}"#);
+    let m = WaermeMeterInput {
+        kwh_waerme: dec!(100),
+        spitzenleistung_kw: None,
+        months: Some(dec!(1)),
+    };
+    let r = bill(
+        &t,
+        Quantities {
+            heat: Some(m),
+            ..Default::default()
+        },
+    );
+    let ap = r
+        .positions
+        .iter()
+        .find(|p| p.description.contains("Arbeitspreis Fernwärme"))
+        .expect("Fernwärme Arbeitspreis position");
+    // 100 kWh × 12 ct = 12.00 EUR net (not 6.00 from the static price).
+    assert_eq!(ap.net_eur.round_dp(2), dec!(12.00), "indexed price wins");
+    assert!(
+        ap.trace
+            .regulatory_basis
+            .iter()
+            .any(|b| b.contains("AVBFernwärmeV")),
+        "position must cite the Preisänderungsklausel, got: {:?}",
+        ap.trace.regulatory_basis
+    );
+}
+
+/// A contractual Sofortbonus is a Preisnachlass (§17 UStG Entgeltminderung): it is
+/// credited as a negative Bonus position that lowers the net and thus the MwSt.
+#[test]
+fn sofortbonus_reduces_net_and_vat_as_entgeltminderung() {
+    let plain =
+        j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0,"grundpreis_ct_per_day":0}"#);
+    let with_bonus = j(
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0,"grundpreis_ct_per_day":0,"sofortbonus_eur":50}"#,
+    );
+    let r_plain = bill(&plain, elec(dec!(500)));
+    let r_bonus = bill(&with_bonus, elec(dec!(500)));
+
+    let bonus_pos = r_bonus
+        .positions
+        .iter()
+        .find(|p| p.category == energy_billing::PositionCategory::Bonus)
+        .expect("a Bonus position must be emitted");
+    assert_eq!(bonus_pos.net_eur, dec!(-50), "bonus is a EUR 50 credit");
+    // Entgeltminderung: netto drops by exactly 50, and the VAT drops with it.
+    assert_eq!(
+        (r_plain.netto_eur - r_bonus.netto_eur).round_dp(2),
+        dec!(50.00),
+        "bonus reduces the net base"
+    );
+    assert!(
+        r_bonus.mwst_eur < r_plain.mwst_eur,
+        "VAT is computed on the reduced base"
+    );
+}
+
 // ── EEG ───────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -1087,6 +1155,40 @@ fn dynamic_strom_applies_arbeitspreis_aufschlag() {
 }
 
 #[test]
+fn dynamic_strom_cap_clamps_the_spot_component() {
+    use std::collections::HashMap;
+    let intervals = [DynamicInterval {
+        timestamp_utc: time::macros::datetime!(2026-01-01 12:00 UTC),
+        kwh: dec!(1),
+    }];
+    let mut prices = HashMap::new();
+    prices.insert(time::macros::datetime!(2026-01-01 12:00 UTC), dec!(20)); // spot 20 ct
+
+    // Consumer-protection ceiling at 10 ct/kWh on the spot component.
+    let capped = j(
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0,"dynamic_epex_cap_ct_kwh":10}"#,
+    );
+    let r = bill(
+        &capped,
+        Quantities {
+            dynamic_intervals: intervals.to_vec(),
+            dynamic_epex_prices: prices,
+            ..Default::default()
+        },
+    );
+    let epex = r
+        .positions
+        .iter()
+        .find(|p| p.description.contains("Arbeitspreis EPEX"))
+        .expect("EPEX Arbeitspreis position");
+    assert!(
+        epex.description.contains("10.0000"),
+        "spot 20 capped at 10 ct/kWh, got: {}",
+        epex.description
+    );
+}
+
+#[test]
 fn dynamic_strom_missing_price_hard_blocks_the_run() {
     use energy_billing::EngineError;
     let tariff = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0}"#);
@@ -1105,7 +1207,7 @@ fn dynamic_strom_missing_price_hard_blocks_the_run() {
         ..Default::default()
     };
     let q = Quantities {
-        // iMSys so the §41b guard passes and we reach the price check.
+        // iMSys so the §41a guard passes and we reach the price check.
         electricity: Some(energy_billing::MeterInput {
             metering_mode: energy_billing::MeteringMode::Imsys,
             ..Default::default()
@@ -2080,18 +2182,18 @@ fn zero_rated_abschlag_contains_no_tax() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §40a EnWG — Kilowattstundenpreis
+// §40 EnWG — Kilowattstundenpreis
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §40a Abs. 1 EnWG: invoice must display total all-inclusive ct/kWh.
+/// §40 EnWG: invoice must display total all-inclusive ct/kWh.
 #[test]
-fn sect40a_kilowattstundenpreis_computed_correctly() {
+fn sect40_kilowattstundenpreis_computed_correctly() {
     let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
     let kwh = dec!(500);
     let invoice = bill(&tariff, elec(kwh));
     invoice.assert_valid();
 
-    // §40a: all-inclusive price = brutto_eur / kwh × 100
+    // §40: all-inclusive price = brutto_eur / kwh × 100
     let ct = invoice
         .kilowattstundenpreis_brutto_ct(kwh)
         .expect("kwh > 0");
@@ -2510,18 +2612,18 @@ fn strom_verbrauchshistorie_produces_info_positions() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §40a EnWG — Kilowattstundenpreis in Rechnung JSON
+// §40 EnWG — Kilowattstundenpreis in Rechnung JSON
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §40a EnWG: Rechnung JSON must include `kilowattstundenpreisGesamt`.
+/// §40 EnWG: Rechnung JSON must include `kilowattstundenpreisGesamt`.
 #[test]
-fn strom_rechnung_json_includes_sect40a_kilowattstundenpreis() {
+fn strom_rechnung_json_includes_sect40_kilowattstundenpreis() {
     let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
     let invoice = bill(&tariff, elec(dec!(500)));
     invoice.assert_valid();
 
     let json = invoice.to_rechnung_json();
-    // §40a data has no BO4E field; it rides as a structured ZusatzAttribut.
+    // §40 data has no BO4E field; it rides as a structured ZusatzAttribut.
     let kw_preis = zusatz_wert(&json, "kilowattstundenpreisGesamt");
     assert!(
         !kw_preis.is_null(),
@@ -2534,7 +2636,7 @@ fn strom_rechnung_json_includes_sect40a_kilowattstundenpreis() {
         ct > dec!(30.0),
         "all-inclusive ct/kWh must exceed raw commodity rate (includes Stromsteuer + MwSt)"
     );
-    assert_eq!(kw_preis["rechtlicheGrundlage"].as_str(), Some("§40a EnWG"));
+    assert_eq!(kw_preis["rechtlicheGrundlage"].as_str(), Some("§40 EnWG"));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2863,8 +2965,8 @@ fn solar_provider_simple_path_unchanged_without_ggv() {
 // Multi-rate MwSt (§12 UStG)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §12 Abs. 3 UStG (Solarpaket I) — 0% MwSt for solar PV ≤30 kWp.
-/// Position tagged with applicable_tax_rate=0 should produce no Tax position.
+/// A 0 % feed-in Gutschrift (§19 UStG Kleinunternehmer, here via an explicit
+/// override) produces no Tax position. brutto must equal netto.
 #[test]
 fn solar_zero_mwst_produces_no_tax_position() {
     use energy_billing::PositionCategory;
@@ -2937,7 +3039,7 @@ fn waerme_reduced_mwst_7pct_produces_correct_tax() {
     );
 }
 
-/// Multi-rate: electricity (19%) + renewable heat (7%) on same invoice.
+/// Multi-rate: electricity (19%) + FernwÃ¤rme in the 7% window on same invoice.
 /// MwStProvider must generate two separate Tax positions.
 #[test]
 fn multi_rate_mwst_electricity_and_heat_on_same_invoice() {
@@ -3113,11 +3215,11 @@ fn minimum_invoice_no_topup_when_already_above_minimum() {
 // Multi-rate MwSt — bundled invoice (critical correctness test)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// A SINGLE billing engine with electricity (default 19%) AND renewable Fernwärme
-/// (7% via mwst_rate_override) must produce TWO separate Tax positions.
+/// A SINGLE billing engine with electricity (default 19%) AND Fernwärme at 7 %
+/// (the temporary §28 Abs. 5/6 UStG window via mwst_rate_override) must produce TWO separate Tax positions.
 /// This is the critical correctness test for the multi-rate MwSt architecture.
 #[test]
-fn bundled_invoice_electricity_19pct_and_renewable_heat_7pct_two_tax_positions() {
+fn bundled_invoice_electricity_19pct_and_heat_7pct_window_two_tax_positions() {
     use energy_billing::{
         BillingEngine, ElectricityProvider, HeatProvider, MwStProvider, PositionCategory,
         WaermeMeterInput,
@@ -3131,7 +3233,7 @@ fn bundled_invoice_electricity_19pct_and_renewable_heat_7pct_two_tax_positions()
     }))
     .unwrap();
 
-    // Renewable heat tariff — 7% VAT (§12 Abs. 2 Nr. 1 UStG)
+    // Heat tariff inside the temporary 7 % window (§28 Abs. 5/6 UStG)
     let heat_tariff: Product = serde_json::from_value(json!({
         "category": "WAERME",
         "waerme_arbeitspreis_ct_per_kwh": 10.0,
@@ -3214,7 +3316,8 @@ fn bundled_invoice_electricity_19pct_and_renewable_heat_7pct_two_tax_positions()
     );
 }
 
-/// Heat positions carry applicable_tax_rate=0.07 when mwst_rate_override is set.
+/// Heat positions carry applicable_tax_rate from an explicit mwst_rate_override
+/// (e.g. the temporary §28 Abs. 5/6 UStG 7 % window) so bundled invoices split correctly.
 #[test]
 fn heat_positions_carry_7pct_applicable_tax_rate() {
     use energy_billing::{
@@ -3440,20 +3543,22 @@ fn electricity_indexed_price_phelix_computes_correctly() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §12 Abs. 2 Nr. 1 UStG — Auto 7% VAT for renewable Fernwärme
+// District heating VAT — standard-rated (no permanent reduced rate)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// waerme_is_renewable = true → 7% VAT applied automatically without mwst_rate_override.
+/// District heating is **standard-rated (19 %)** by default. There is no
+/// permanent reduced VAT for Fernwärme: §12 Abs. 2 Nr. 1 UStG covers Anlage-2
+/// goods, not heat, and the 7 % on gas/Fernwärme was the temporary §28 Abs. 5/6
+/// UStG window (01.10.2022–31.03.2024). Renewable content does not change the rate.
 #[test]
-fn renewable_fernwaerme_auto_7pct_vat_without_explicit_override() {
+fn fernwaerme_is_standard_rated_by_default() {
     use energy_billing::PositionCategory;
     use serde_json::json;
 
     let tariff: Product = serde_json::from_value(json!({
         "category": "WAERME",
         "waerme_arbeitspreis_ct_per_kwh": 12.0,
-        "waerme_is_renewable": true   // ← triggers auto 7%
-        // No mwst_rate_override needed!
+        "waerme_erneuerbar_anteil_pct": 0.8   // disclosure only — must NOT reduce VAT
     }))
     .unwrap();
 
@@ -3470,53 +3575,33 @@ fn renewable_fernwaerme_auto_7pct_vat_without_explicit_override() {
     );
     invoice.assert_valid();
 
-    // Heat positions must carry applicable_tax_rate = 0.07
-    let heat_pos: Vec<_> = invoice
-        .positions
-        .iter()
-        .filter(|p| p.has_tag("waerme") && p.category == PositionCategory::Commodity)
-        .collect();
-    assert!(!heat_pos.is_empty(), "Heat position must exist");
+    // Brutto = 300 × 12ct / 100 × 1.19 = 42.84 EUR (standard rate).
     assert_eq!(
-        heat_pos[0].applicable_tax_rate,
-        Some(dec!(0.07)),
-        "Auto-7% must be applied to heat position: {:?}",
-        heat_pos[0].applicable_tax_rate
+        invoice.brutto_eur,
+        dec!(300) * dec!(12) / dec!(100) * dec!(1.19),
+        "renewable district heating is still standard-rated"
     );
-
-    // Tax position at 7%
     let tax: Vec<_> = invoice
         .positions
         .iter()
         .filter(|p| p.category == PositionCategory::Tax)
         .collect();
     assert_eq!(tax.len(), 1);
-    assert!(
-        tax[0].description.contains("7"),
-        "Tax must be 7%: {}",
-        tax[0].description
-    );
-
-    // Brutto = 300 × 12ct / 100 × 1.07 = 38.52 EUR
-    assert_eq!(
-        invoice.brutto_eur,
-        dec!(300) * dec!(12) / dec!(100) * dec!(1.07),
-        "brutto must reflect 7% VAT"
-    );
+    assert!(tax[0].description.contains("19"), "{}", tax[0].description);
 }
 
-/// mwst_rate_override wins over waerme_is_renewable for edge cases.
+/// The historical §28 Abs. 5/6 UStG 7 % window is expressed via
+/// `mwst_rate_override` (billingd derives it period-aware) — a Wärme bill for a
+/// period inside the window bills 7 %.
 #[test]
-fn mwst_rate_override_wins_over_waerme_is_renewable() {
+fn fernwaerme_temporary_7pct_window_via_override() {
     use energy_billing::PositionCategory;
     use serde_json::json;
 
-    // Operator sets 19% explicitly — this overrides the auto-7%
     let tariff: Product = serde_json::from_value(json!({
         "category": "WAERME",
         "waerme_arbeitspreis_ct_per_kwh": 10.0,
-        "waerme_is_renewable": true,
-        "mwst_rate_override": 0.19   // explicit override wins
+        "mwst_rate_override": 0.07   // period inside 01.10.2022–31.03.2024
     }))
     .unwrap();
 
@@ -3538,10 +3623,10 @@ fn mwst_rate_override_wins_over_waerme_is_renewable() {
         .filter(|p| p.category == PositionCategory::Tax)
         .collect();
     assert_eq!(tax.len(), 1);
-    assert!(
-        tax[0].description.contains("19"),
-        "Override must win: {}",
-        tax[0].description
+    assert!(tax[0].description.contains('7'), "{}", tax[0].description);
+    assert_eq!(
+        invoice.brutto_eur,
+        dec!(100) * dec!(10) / dec!(100) * dec!(1.07)
     );
 }
 
@@ -4201,13 +4286,14 @@ fn multi_product_electricity_and_gas_on_one_invoice() {
 // ── New feature tests ─────────────────────────────────────────────────────────
 
 #[test]
-fn anlage_kwp_le30_auto_zero_pct_mwst() {
-    // §12 Abs. 3 UStG (Solarpaket I 2023): solar PV ≤ 30 kWp → 0% MwSt automatically.
-    // anlage_kwp set to 10 kWp — no mwst_rate_override needed.
+fn eeg_kleinunternehmer_zero_pct_mwst() {
+    // §19 UStG: a feed-in operator who has elected the Kleinunternehmerregelung
+    // issues the Gutschrift at 0 % USt. The election is explicit — not derived
+    // from plant size (§12 Abs. 3 UStG zero-rates the PV *system*, not the feed-in).
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "EEG",
-        "anlage_kwp": 10.0,
+        "kleinunternehmer_19_ustg": true,
         "eeg_verguetungssatz_ct_per_kwh": 8.2
     }"#,
     )
@@ -4241,7 +4327,7 @@ fn anlage_kwp_le30_auto_zero_pct_mwst() {
     assert_eq!(
         invoice.mwst_eur,
         Decimal::ZERO,
-        "§12 Abs. 3 UStG: mwst must be 0 for ≤30 kWp"
+        "§19 UStG Kleinunternehmer: mwst must be 0 on the feed-in Gutschrift"
     );
     // EEG Gutschrift: netto_eur > 0 (LF pays the generator — amount is positive on the Gutschrift)
     assert!(
@@ -4251,8 +4337,9 @@ fn anlage_kwp_le30_auto_zero_pct_mwst() {
 }
 
 #[test]
-fn anlage_kwp_above30_normal_mwst() {
-    // Plants > 30 kWp get standard 19% MwSt.
+fn eeg_regelbesteuerung_normal_mwst() {
+    // Without the Kleinunternehmer election the feed-in Gutschrift is
+    // standard-rated (Regelbesteuerung), regardless of plant size.
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "EEG",
@@ -4286,10 +4373,10 @@ fn anlage_kwp_above30_normal_mwst() {
         .unwrap();
     invoice.assert_valid();
 
-    // >30 kWp → 19% MwSt applies (mwst_eur non-zero)
+    // No Kleinunternehmer election → standard 19% MwSt (mwst_eur non-zero)
     assert!(
         invoice.mwst_eur != Decimal::ZERO,
-        "Plants >30 kWp must have standard 19% MwSt"
+        "Regelbesteuerung feed-in must have standard 19% MwSt"
     );
 }
 
@@ -4578,39 +4665,31 @@ fn metering_mode_default_is_slp() {
 }
 
 #[test]
-fn behg_effective_mwst_anlage_kwp_30_boundary() {
-    // Exactly 30 kWp → 0% MwSt (§12 Abs. 3 UStG boundary).
+fn electricity_consumption_is_standard_rated_regardless_of_own_pv() {
+    // A retail electricity supply is 19 % even where the customer runs their own
+    // PV: §12 Abs. 3 UStG zero-rates the PV *system* supply, not the electricity.
+    // `anlage_kwp` is informational and must not change the consumption rate.
     let rates = RegulatoryRates::default();
-    let tariff_30: Product =
-        serde_json::from_str(r#"{"category":"STROM","anlage_kwp": 30.0}"#).unwrap();
-    let tariff_31: Product =
-        serde_json::from_str(r#"{"category":"STROM","anlage_kwp": 31.0}"#).unwrap();
-    let tariff_none: Product = Product::Strom(Default::default());
-
-    assert_eq!(
-        match &tariff_30 {
-            Product::Strom(p) => rates.effective_mwst_electricity(p),
-            _ => rates.mwst_rate,
-        },
-        Decimal::ZERO,
-        "30 kWp → 0%"
-    );
-    assert_eq!(
-        match &tariff_31 {
-            Product::Strom(p) => rates.effective_mwst_electricity(p),
-            _ => rates.mwst_rate,
-        },
-        dec!(0.19),
-        "31 kWp → 19%"
-    );
-    assert_eq!(
-        match &tariff_none {
-            Product::Strom(p) => rates.effective_mwst_electricity(p),
-            _ => rates.mwst_rate,
-        },
-        dec!(0.19),
-        "no kWp → 19%"
-    );
+    for kwp in ["10.0", "30.0", "31.0"] {
+        let tariff: Product =
+            serde_json::from_str(&format!(r#"{{"category":"STROM","anlage_kwp": {kwp}}}"#))
+                .unwrap();
+        let Product::Strom(p) = &tariff else {
+            unreachable!()
+        };
+        assert_eq!(
+            rates.effective_mwst_electricity(p),
+            dec!(0.19),
+            "consumption with {kwp} kWp own PV is still standard-rated"
+        );
+    }
+    // An explicit override still wins (e.g. a caller-assessed reverse-charge case).
+    let overridden: Product =
+        serde_json::from_str(r#"{"category":"STROM","mwst_rate_override": 0.0}"#).unwrap();
+    let Product::Strom(p) = &overridden else {
+        unreachable!()
+    };
+    assert_eq!(rates.effective_mwst_electricity(p), Decimal::ZERO);
 }
 
 // ── billing crate capability map: new features ────────────────────────────────
