@@ -33,7 +33,7 @@
 //!
 //! ## Manual steps after scaffolding
 //!
-//! 1. Place the new BDEW AHB / MIG PDFs in `docs/pdfs/`.
+//! 1. Place the new BDEW AHB / MIG PDFs in `regulatories/`.
 //! 2. `cargo xtask extract-pdf --message-type <TYPE>` for each updated type.
 //! 3. Review the extracted draft files for completeness.
 //! 4. `cargo xtask codegen --message-type <TYPE>` to regenerate Rust profiles.
@@ -151,7 +151,7 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         println!();
         println!("next steps:");
         println!("  1. cargo xtask add-release --fv {fv_str}   (without --dry-run)");
-        println!("  2. place new BDEW PDFs in docs/pdfs/");
+        println!("  2. place new BDEW PDFs in regulatories/");
         println!("  3. cargo xtask extract-pdf --message-type <TYPE>  for each updated type");
         println!("  4. cargo xtask codegen");
         println!("  5. cargo xtask validate-profiles");
@@ -160,7 +160,7 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
         if created_count > 0 {
             println!();
             println!("next steps:");
-            println!("  1. place new BDEW PDFs in docs/pdfs/");
+            println!("  1. place new BDEW PDFs in regulatories/");
             println!("  2. cargo xtask extract-pdf --message-type <TYPE>  for each updated type");
             println!("  3. cargo xtask codegen");
             println!("  4. cargo xtask validate-profiles");

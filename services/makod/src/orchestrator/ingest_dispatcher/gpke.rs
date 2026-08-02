@@ -46,7 +46,10 @@ impl EdifactIngestDispatcher {
                     // Sunday 12:00 Berlin if received on Saturday.
                     let process_due_at = fristen::add_hours(OffsetDateTime::now_utc(), 24);
                     let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
-                    self.spawn_or_resume::<GpkeSperrungWorkflow>(
+                    // Also index the process under this Sperrauftrag's Belegnummer so
+                    // a later ORDCHG 39000 Stornierung (which carries no LOC) can
+                    // resume it by the RFF+ON order reference.
+                    self.spawn_or_resume_keyed::<GpkeSperrungWorkflow>(
                         malo_id.as_str(),
                         "gpke-sperrung",
                         cmd,
@@ -55,6 +58,7 @@ impl EdifactIngestDispatcher {
                             (mako_gpke::SPERRUNG_WINDOW_LABEL, process_due_at),
                             (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
                         ],
+                        &[msg.message_ref()],
                     )
                     .await
                 }
@@ -68,6 +72,15 @@ impl EdifactIngestDispatcher {
                     )
                     .await
                 }
+                // ORDCHG 39000 (LF → NB Stornierung) and 39001 (NB → MSB
+                // Weiterleitung der Stornierung) — both LOC-less; resume by the
+                // original order reference echoed in RFF+ON.
+                39000 | 39001 => {
+                    let cmd = adapters::gpke_sperrung_stornierung_registry().dispatch(raw, &fv)?;
+                    let order_ref = extract_order_ref_from_msg(msg);
+                    self.resume_by_malo::<GpkeSperrungWorkflow>(&order_ref, "gpke-sperrung", cmd)
+                        .await
+                }
                 _ => Ok(IngestOutcome::Skipped {
                     workflow_name: "gpke-sperrung",
                     reason: "pid_not_in_dispatch_table",
@@ -76,7 +89,11 @@ impl EdifactIngestDispatcher {
             // ── GPKE Sperrung — LF side ───────────────────────────────────────
             // PIDs 19116/19117: Bestätigung/Ablehnung Sperrauftrag (NB → LF) — resume.
             "gpke-sperrung-lf" => match pid {
-                19116 | 19117 => {
+                // 19116/19117 answer the Sperrauftrag (ORDERS 17115);
+                // 19128/19129 answer the Stornierung (ORDCHG 39000);
+                // 21039 is the IFTSTA Auftragsstatus after execution.
+                // All resume the LF-side process by MaLo (ORDRSP/IFTSTA carry it in LOC).
+                19116 | 19117 | 19128 | 19129 | 21039 => {
                     let cmd = adapters::gpke_sperrung_lf_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_malo::<GpkeSperrungLfWorkflow>(
@@ -111,6 +128,20 @@ impl EdifactIngestDispatcher {
                             (mako_gpke::GPKE_PROCESS_RESPONSE_LABEL, process_due_at),
                             (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
                         ],
+                    )
+                    .await
+                }
+                // IFTSTA Vollzugs-/Statusmeldung (21024–21028, 21033, 21035, 21045,
+                // 21047) — the NB reports the supplier change's completion status.
+                // Informational; resume the process by MaLo (IFTSTA carries it in
+                // the single LOC per the AHB profile) and record it for audit.
+                p if mako_gpke::IFTSTA_VOLLZUGS_PIDS.contains(&p) => {
+                    let cmd = adapters::gpke_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    self.resume_by_malo::<GpkeSupplierChangeWorkflow>(
+                        malo_id.as_str(),
+                        "gpke-supplier-change",
+                        cmd,
                     )
                     .await
                 }
@@ -611,7 +642,11 @@ impl EdifactIngestDispatcher {
             // ── GPKE Konfigurationsänderung ORDRSP ────────────────────────────
             // LF sends ORDERS (PIDs 19120–19133); NB/MSB responds with ORDRSP.
             "gpke-konfiguration-aenderung" => {
-                if mako_gpke::konfiguration_aenderung::ORDRSP_PIDS.contains(&pid) {
+                // ORDRSP responses (17102/17113) and IFTSTA Bestellungsantwort/
+                // -beendigung (21043/21044) both resume the process by MaLo.
+                if mako_gpke::konfiguration_aenderung::ORDRSP_PIDS.contains(&pid)
+                    || mako_gpke::konfiguration_aenderung::IFTSTA_PIDS.contains(&pid)
+                {
                     let cmd =
                         adapters::gpke_konfiguration_aenderung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);

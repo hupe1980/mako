@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% import "macros.html" as macros %}
+
+{% block content %}
+<div class="docs-layout">
+  {{ macros::sidebar(current=page.permalink) }}
+
+  <article class="doc">
+    <div class="doc-breadcrumb">
+      <a href="{{ get_url(path='@/docs/_index.md') | safe }}">Docs</a>
+      {%- if page.ancestors | length > 1 -%}
+        {% set parent = get_section(path=page.ancestors | last) %}
+        <span>/</span><a href="{{ parent.permalink | safe }}">{{ parent.title }}</a>
+      {%- endif -%}
+    </div>
+    <h1>{{ page.title }}</h1>
+    {% if page.description %}<p class="doc-lead">{{ page.description }}</p>{% endif %}
+
+    {% if page.toc | length > 1 %}
+    <details class="doc-toc">
+      <summary>On this page</summary>
+      <ul>
+        {% for h in page.toc %}
+          <li><a href="{{ h.permalink | safe }}">{{ h.title }}</a></li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+
+    <div class="doc-body">
+      {{ page.content | safe }}
+    </div>
+
+    <nav class="doc-pager" aria-label="Page navigation">
+      {% if page.lower %}<a class="prev" href="{{ page.lower.permalink | safe }}">← {{ page.lower.title }}</a>{% endif %}
+      {% if page.higher %}<a class="next" href="{{ page.higher.permalink | safe }}">{{ page.higher.title }} →</a>{% endif %}
+    </nav>
+
+    <p class="doc-edit">
+      <a href="{{ config.extra.repo }}/edit/main/site/content/{{ page.relative_path }}" rel="noopener">Edit this page ↗</a>
+    </p>
+  </article>
+</div>
+{% endblock content %}
+
+{% block scripts %}
+<script type="module">
+  if (document.querySelector('code.language-mermaid')) {
+    import("{{ get_url(path='js/mermaid-init.js') | safe }}");
+  }
+</script>
+{% endblock scripts %}

@@ -212,7 +212,9 @@ pub fn check_release_coverage() {
         }
         eprintln!();
         eprintln!("Run `cargo xtask extract-pdf` + `cargo xtask codegen` to add missing profiles.");
-        eprintln!("Check docs/annual-release-workflow.md for the standard remediation procedure.");
+        eprintln!(
+            "Check site/content/docs/compliance/annual-release-workflow.md for the standard remediation procedure."
+        );
         std::process::exit(1);
     } else {
         println!("All message types are covered for {check_date}. ✓");

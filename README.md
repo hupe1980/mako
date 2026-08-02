@@ -87,10 +87,10 @@ flowchart LR
 | `edi-energy` | Parse · validate · build all 17 EDI@Energy EDIFACT message types |
 | `mako-engine` | Event-sourced runtime: `Workflow`, `Process`, `EventStore`, outbox, deadlines |
 | `mako-gpke` | GPKE workflows — UTILMD Strom supplier-switch (55001–55018) + **Ersatz-/Grundversorgung** (55013–55015, §36/§38 EnWG, both roles) + **Stammdatenänderung** (GPKE Teil 4: 55615–55694, 55109/55110 — apply MaLo change + Rückmeldung A01/A02) + Anfrage Daten (55555, GPKE Teil 4) + Sperrung ORDERS (17115–17117) + INVOIC (31001–31002, 31005–31006) + ORDERS/ORDRSP Konfiguration (17134/17135, 19001/19002) + PARTIN Strom (37000–37006) |
-| `mako-wim` | WiM Strom workflows — MSB-Wechsel UTILMD (55039, 55042, 55051, 55168) + Geräteübernahme ORDERS (17001–17011) + Stammdaten + Preisanfrage REQOTE/QUOTES (35001–35005 / 15001–15005) + Preisliste PRICAT (27001–27003) + Technik-Änderung (17011/17118/17121 → 19003–19007) + INSRPT (23001/23003/23004/23008) + iMS Steuerungsauftrag + MSB-Rechnung INVOIC (31009). **WiM Teil 2 ESA Wertebestellung** (§34 MsbG) — one `wim-wertebestellung`/`esa-wertebestellung` process spans REQOTE 35002 → QUOTES 15003 → ORDERS 17007/17008 → ORDRSP 19011/19012 → ORDCHG 39002 Storno → ORDRSP 19013/19014, plus MSCONS 13027 Werte-nach-Typ-2 delivery |
+| `mako-wim` | WiM Strom workflows — MSB-Wechsel UTILMD (55039, 55042, 55051, 55168) + Geräteübernahme ORDERS (17001/17002/17009 → ORDRSP 19001/19002) + Stammdaten + Preisanfrage REQOTE/QUOTES (35001–35005 / 15001–15005) + Preisliste PRICAT (27001–27003) + Technik-Änderung (17011/17118/17121 → 19003–19007) + INSRPT (23001/23003/23004/23008) + iMS Steuerungsauftrag + MSB-Rechnung INVOIC (31009). **WiM Teil 2 ESA Wertebestellung** (§34 MsbG) — one `wim-wertebestellung`/`esa-wertebestellung` process spans REQOTE 35002 → QUOTES 15003 → ORDERS 17007/17008 → ORDRSP 19011/19012 → ORDCHG 39002 Storno → ORDRSP 19013/19014, plus MSCONS 13027 Werte-nach-Typ-2 delivery |
 | `mako-geli-gas` | GeLi Gas 3.0 workflows — UTILMD G supplier-switch Gas (44001–44021) + **Stammdatenänderung** (44109–44182 — change families: Zustimmung/Ablehnung E15/E13/E17, Monatserster rule for bilanzierungsrelevante changes; Anfrage families G8–G10 auto-answer with a data-return of the requested MaLo master data) + INVOIC 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) |
 | `mako-mabis` | MABIS workflows — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB) + PIDs 55065/55069/55070 (Clearingliste) |
-| `mako-wim-gas` | WiM Gas workflows — UTILMD G MSB-change (44022–44024, 44039–44053, 44168–44170) + INSRPT Gas (23005, 23009) + WiM-Rechnung INVOIC (31003, 31004) |
+| `mako-wim-gas` | WiM Gas workflows — UTILMD G MSB-change (44022–44024, 44039–44053, 44168–44170) + Geräteübernahme ORDERS (17001/17002/17009 → QUOTES 15001 / ORDRSP 19001/19002, `Sparte::Gas`-routed) + INSRPT Gas (23005, 23009) + WiM-Rechnung INVOIC (31003, 31004) |
 | `mako-gabi-gas` | GaBi Gas 2.1 (BK7-24-01-008) — INVOIC 31010/31007/31008 + MSCONS 13013 MMMA + DVGW ALOCAT/NOMINT/NOMRES/SCHEDL/IMBNOT/TRANOT/DELORD/DELRES (8 workflows); typed domain: `GasDay` (DST-aware 06:00 CET), `GasQuantity` (Decimal kWh_Hs), `GasBeschaffenheit` (Hs + Zustandszahl, DVGW G 685), `AllocationVersion` (Initial/Correction/Final), `GasMarketRole`, `GasPortfolioBalance` |
 | `mako-nbw` | Netzbetreiberwechsel — PARTIN bulk DSO concession handover (PIDs 37000–37014) — placeholder |
 | `mako-as4` | BDEW AS4-Profil v1.2 — `BdewAs4Profile`, `bdew_pmode()` (sign+encrypt, X509PKIPathv1, BrainpoolP256r1), `bdew_push_policy()` (require_encrypted_inbound), `BdewTestPki` + `MockAs4Endpoint::builder().with_decryption_key_pem(key)` (full encrypt round-trip, testing feature), per-partner encryption cert registry; asx-rs **v0.11** — synchronous receipt verification (`verify_sync_response` / `send_and_verify`: signature-bound, NRI-digest-verified Non-Repudiation of Receipt), `regulated_with_decryption_key()`, `with_signing_material()`, `As4HttpTransport::new_for_localhost_testing()`, partial `As4SendCredentials` fallback |
@@ -401,36 +401,18 @@ let repo = InMemoryMaloRepository::default();
 
 ## 📖 Documentation
 
-| Document | Description |
+Full documentation lives at **[hupe1980.github.io/mako](https://hupe1980.github.io/mako/)** —
+a searchable site (source under [`site/`](./site), built with [Zola](https://www.getzola.org/)).
+
+| Section | What's inside |
 |---|---|
-| [Getting Started](./docs/getting-started.md) | Installation, first parse, first workflow |
-| [Architecture](./docs/architecture.md) | System layers, data flows, SlateDB key schema, testing strategy |
-| [Process Engine Guide](./docs/engine.md) | `mako-engine` concepts, stores, deadlines, outbox |
-| [ERP Integration](./docs/erp-integration.md) | CloudEvents 1.0 webhooks, Command API, HMAC signing, receiver examples |
-| [Parsing Guide](./docs/parsing.md) | Single message, interchange, streaming |
-| [Validation Guide](./docs/validation.md) | Layers, reports, Pruefidentifikator |
-| [Builder Guide](./docs/builders.md) | Constructing messages programmatically |
-| [Platform Guide](./docs/platform.md) | Multi-tenant, test isolation, custom profiles |
-| [API-Webdienste Strom](./docs/api-webdienste.md) | REST/JSON channel for iMS processes (`energy-api`) |
-| [makod Operator Guide](./docs/makod.md) | Production daemon: persistence, ports, auth, MCP, Kubernetes |
-| [marktd Operator Guide](./docs/marktd.md) | Market Data Hub: MaLo/MeLo, subscriptions, VersorgungsStatus, OIDC, Docker |
-| [processd Operator Guide](./docs/processd.md) | NB Anmeldung STP (netz-checker, ≥ 95 %) + LF E_0624 auto-response + MSB-Wechsel STP; §7 EnWG role features |
-| [invoicd Operator Guide](./docs/invoicd.md) | INVOIC plausibility-check daemon: § 147 AO / GoBD receipts, 6-check pipeline (incl. MMM settlement-price check 6) |
-| [netzbilanzd Operator Guide](./docs/netzbilanzd.md) | NNE/KA/MMM billing daemon: invoice generation, draft lifecycle, dispatch to `makod` |
-| [sperrd Operator Guide](./docs/sperrd.md) | Sperrung execution tracker: order lifecycle, IFTSTA 21039 auto-dispatch, GPKE compliance |
-| [edmd Operator Guide](./docs/edmd.md) | Energy Data Management: MSCONS storage, BO4E `Energiemenge` deliveries, `Lastgang`/`Zeitreihe`, `MeterBillingPeriod` |
-| [obsd Operator Guide](./docs/obsd.md) | Observability: process projections, KPI reports, §20 EnWG parity |
-| [einsd Operator Guide](./docs/einsd.md) | EEG/KWKG Settlement: 10 settlement schemes, §20 Abs. 3 Managementprämie, §23a degression, §36h Abs. 1/2 wind, §51 auto-derivation (edmd ¼h feed-in × EPEX spot), §51a Förderende-Verlängerung, Repowering §22, KWKG Förderdauer, 18 MCP tools, eeg-agent |
-| [tarifbd Operator Guide](./docs/tarifbd.md) | Product & Tariff Catalog: STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE, EPEX Spot prices for §41a |
-| [billingd Operator Guide](./docs/billingd.md) | Energy Billing Engine: STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY; §41a dynamic; EN 16931 XRechnung/CII + PEPPOL UBL |
-| [accountingd Operator Guide](./docs/accountingd.md) | Massenkontokorrent: tamper-evident double-entry ledger (doubleentry crate — Merkle proofs, period seals/Festschreibung), FIFO open items, Summen- und Saldenliste §238 HGB, aging, Verzugszinsen §288 BGB, Zahlungsvereinbarung, SEPA pain.008 (multi-group single message, mandatory Gläubiger-ID), camt.054 XML import, OIDC auth, GDPR Art. 17 |
-| [portald Operator Guide](./docs/portald.md) | Customer Portal gateway: REST + SSE dashboard aggregating all LF services |
-| [Release Lifecycle](./docs/release-lifecycle.md) | Annual BDEW profile updates, codegen pipeline |
-| [Schema Versioning](./docs/schema-versioning.md) | Profile JSON schema evolution and archive lifecycle |
-| [PID Reference](./docs/pid-reference.md) | Prüfidentifikatoren — authoritative crate ownership table |
-| [DVGW EDI Guide](./docs/dvgw.md) | ALOCAT/NOMINT/NOMRES/SCHEDL parsing, synthetic PIDs 90001–90062, GaBi Gas 2.1 routing |
-| [Redispatch 2.0 Guide](./docs/redispatch.md) | XML document types, 8 workflows, UTC deadline semantics, IFTSTA integration |
-| [API Reference](https://docs.rs/edi-energy) | Full rustdoc |
+| [Guide](https://hupe1980.github.io/mako/docs/guide/) | Install, parse your first interchange, run a workflow |
+| [Architecture](https://hupe1980.github.io/mako/docs/architecture/) | Event-sourced engine, domain model, deadlines, ERP/API integration |
+| [Reference](https://hupe1980.github.io/mako/docs/reference/) | Parsing, validation, builders, the platform API, the full process catalog, AS4, DVGW, Redispatch |
+| [Services](https://hupe1980.github.io/mako/docs/services/) | Operator guides for all 16 daemons — ports, config, APIs, deployment |
+| [Regulatory](https://hupe1980.github.io/mako/docs/regulatory/) | BNetzA determinations and the authoritative Prüfidentifikator catalog |
+| [Release & Compliance](https://hupe1980.github.io/mako/docs/compliance/) | Annual EDI@Energy release lifecycle, schema versioning, license governance |
+| [API Reference (docs.rs)](https://docs.rs/edi-energy) | Full rustdoc for the published crates |
 
 ---
 
@@ -782,8 +764,8 @@ Contributions are welcome. Open an issue before large changes.
 
 - Run `cargo check --all-targets --all-features` and `cargo test --all-features` before submitting a PR.
 - Generated files under `crates/edi-energy/src/generated/` are machine-produced — edit the profile JSON and run `cargo xtask codegen` instead.
-- See [docs/release-lifecycle.md](./docs/release-lifecycle.md) for the annual BDEW profile update procedure.
-- See [docs/engine.md](./docs/engine.md) for the process engine architecture and conventions.
+- See the [Release Lifecycle guide](https://hupe1980.github.io/mako/docs/compliance/release-lifecycle/) for the annual BDEW profile update procedure.
+- See the [Process Engine guide](https://hupe1980.github.io/mako/docs/architecture/engine/) for the engine architecture and conventions.
 
 ---
 

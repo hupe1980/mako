@@ -411,31 +411,35 @@ ISC, Unicode-3.0, Zlib, CDLA-Permissive-2.0, MIT-0.
 
 ## Key Documentation
 
-| Topic | File |
+Docs are authored under `site/content/docs/**` (Zola) and published at
+<https://hupe1980.github.io/mako/>. Links below point to the source `.md` files.
+
+| Topic | Source |
 |---|---|
-| Architecture overview | [docs/architecture.md](../docs/architecture.md) |
-| Process engine guide | [docs/engine.md](../docs/engine.md) |
-| `makod` operator guide | [docs/makod.md](../docs/makod.md) |
-| `marktd` operator guide | [docs/marktd.md](../docs/marktd.md) |
-| `processd` operator guide | [docs/processd.md](../docs/processd.md) |
-| `invoicd` operator guide | [docs/invoicd.md](../docs/invoicd.md) |
-| `netzbilanzd` operator guide | [docs/netzbilanzd.md](../docs/netzbilanzd.md) |
-| `sperrd` operator guide | [docs/sperrd.md](../docs/sperrd.md) |
-| `einsd` operator guide | [docs/einsd.md](../docs/einsd.md) |
-| `tarifbd` operator guide | [docs/tarifbd.md](../docs/tarifbd.md) |
-| `billingd` operator guide | [docs/billingd.md](../docs/billingd.md) |
-| `accountingd` operator guide | [docs/accountingd.md](../docs/accountingd.md) |
-| `edmd` operator guide | [docs/edmd.md](../docs/edmd.md) |
-| `obsd` operator guide | [docs/obsd.md](../docs/obsd.md) |
-| MCP server (LLM tooling) | [services/makod/src/api/mcp_server.rs](../services/makod/src/api/mcp_server.rs) · [docs/makod.md#mcp-server](../docs/makod.md) |
-| ERP integration (CloudEvents 1.0 webhooks, Command API) | [docs/erp-integration.md](../docs/erp-integration.md) |
-| Parsing guide | [docs/parsing.md](../docs/parsing.md) |
-| Validation guide | [docs/validation.md](../docs/validation.md) |
-| Builder patterns | [docs/builders.md](../docs/builders.md) |
-| Annual release workflow | [docs/annual-release-workflow.md](../docs/annual-release-workflow.md) |
-| Schema versioning | [docs/schema-versioning.md](../docs/schema-versioning.md) |
-| API-Webdienste Strom | [docs/api-webdienste.md](../docs/api-webdienste.md) |
-| Release lifecycle | [docs/release-lifecycle.md](../docs/release-lifecycle.md) |
-| BNetzA regulatory reference | [docs/bnetza.md](../docs/bnetza.md) |
-| PID reference | [docs/pid-reference.md](../docs/pid-reference.md) |
-| Compensation / APERAK timeout flows | [docs/compensation.md](../docs/compensation.md) |
+| Architecture overview | [architecture](../site/content/docs/architecture/_index.md) |
+| Domain model | [domain-model](../site/content/docs/architecture/domain-model.md) |
+| Process engine guide | [engine](../site/content/docs/architecture/engine.md) |
+| `makod` operator guide | [makod](../site/content/docs/services/makod.md) |
+| `marktd` operator guide | [marktd](../site/content/docs/services/marktd.md) |
+| `processd` operator guide | [processd](../site/content/docs/services/processd.md) |
+| `invoicd` operator guide | [invoicd](../site/content/docs/services/invoicd.md) |
+| `netzbilanzd` operator guide | [netzbilanzd](../site/content/docs/services/netzbilanzd.md) |
+| `sperrd` operator guide | [sperrd](../site/content/docs/services/sperrd.md) |
+| `einsd` operator guide | [einsd](../site/content/docs/services/einsd.md) |
+| `tarifbd` operator guide | [tarifbd](../site/content/docs/services/tarifbd.md) |
+| `billingd` operator guide | [billingd](../site/content/docs/services/billingd.md) |
+| `accountingd` operator guide | [accountingd](../site/content/docs/services/accountingd.md) |
+| `edmd` operator guide | [edmd](../site/content/docs/services/edmd.md) |
+| `obsd` operator guide | [obsd](../site/content/docs/services/obsd.md) |
+| MCP server (LLM tooling) | [mcp_server.rs](../services/makod/src/api/mcp_server.rs) · [makod guide](../site/content/docs/services/makod.md) |
+| ERP integration (CloudEvents 1.0 webhooks, Command API) | [erp-integration](../site/content/docs/architecture/erp-integration.md) |
+| Parsing guide | [parsing](../site/content/docs/reference/parsing.md) |
+| Validation guide | [validation](../site/content/docs/reference/validation.md) |
+| Builder patterns | [builders](../site/content/docs/reference/builders.md) |
+| Annual release workflow | [annual-release-workflow](../site/content/docs/compliance/annual-release-workflow.md) |
+| Schema versioning | [schema-versioning](../site/content/docs/compliance/schema-versioning.md) |
+| API-Webdienste Strom | [api-webdienste](../site/content/docs/architecture/api-webdienste.md) |
+| Release lifecycle | [release-lifecycle](../site/content/docs/compliance/release-lifecycle.md) |
+| BNetzA regulatory reference | [bnetza](../site/content/docs/regulatory/bnetza.md) |
+| PID reference | [pid-reference](../site/content/docs/regulatory/pid-reference.md) |
+| Compensation / APERAK timeout flows | [compensation](../site/content/docs/architecture/compensation.md) |

@@ -2,6 +2,11 @@
 //!
 //! Handles INVOIC-based billing processes in the WiM Gas market domain where the
 //! new metering service provider (gMSB) submits invoices to the grid operator (NB).
+//! The workflow hosts **both** sides — the deployment's role selects the commands:
+//! the gMSB records its outbound INVOIC via [`WimGasInvoicCommand::SendInvoic`]
+//! then awaits the NB's REMADV; the NB ingests via `ReceiveInvoic` then settles or
+//! disputes. This mirrors the Strom twin (`mako-wim::rechnung`), **duplicated per
+//! Sparte** for a clean crate boundary — the two crates share no workflow code.
 //!
 //! # Covered Prüfidentifikatoren (INVOIC AHB / FV2025-10-01, BK7-24-01-009)
 //!
@@ -127,6 +132,8 @@ pub enum WimGasInvoicState {
     InvoicReceived(WimGasInvoicData),
     /// INVOIC passed AHB validation; awaiting NB settlement or dispute.
     ValidationPassed(WimGasInvoicData),
+    /// Outbound INVOIC recorded (gMSB invoicer role); awaiting the NB's REMADV.
+    InvoicSent(WimGasInvoicData),
     /// Invoice settled — positive CONTRL dispatched to gMSB.
     Settled(WimGasInvoicData),
     /// Invoice disputed — negative CONTRL or APERAK dispatched to gMSB.
@@ -164,6 +171,7 @@ impl WimGasInvoicState {
             Self::New => "New",
             Self::InvoicReceived(_) => "InvoicReceived",
             Self::ValidationPassed(_) => "ValidationPassed",
+            Self::InvoicSent(_) => "InvoicSent",
             Self::Settled(_) => "Settled",
             Self::Disputed { .. } => "Disputed",
             Self::Rejected { .. } => "Rejected",
@@ -202,6 +210,22 @@ pub enum WimGasInvoicEvent {
     /// be registered immediately after this event is persisted.
     ValidationPassed {
         /// Reference of the validated INVOIC message.
+        invoice_ref: MessageRef,
+    },
+    /// Outbound INVOIC recorded (gMSB invoicer role — the gMSB sent 31003/31004 to
+    /// the NB payer and now awaits a REMADV). State-only; the billed EDIFACT with
+    /// amounts is rendered by the billing module. Duplicated per Sparte from the
+    /// Strom twin (`mako-wim::rechnung`) — no shared workflow.
+    InvoicSent {
+        /// BDEW Prüfidentifikator of the outbound INVOIC (31003 or 31004).
+        pruefidentifikator: Pruefidentifikator,
+        /// GLN of the sender (gMSB invoicer).
+        sender: MarktpartnerCode,
+        /// GLN of the recipient (NB payer).
+        recipient: MarktpartnerCode,
+        /// EDIFACT document date (YYYYMMDD).
+        document_date: String,
+        /// EDIFACT message reference of the outbound INVOIC (REMADV correlation key).
         invoice_ref: MessageRef,
     },
     /// Invoice settled — positive CONTRL dispatched to gMSB.
@@ -253,6 +277,7 @@ impl EventPayload for WimGasInvoicEvent {
         match self {
             Self::InvoicReceived { .. } => "WimGasInvoicReceived",
             Self::ValidationPassed { .. } => "WimGasInvoicValidationPassed",
+            Self::InvoicSent { .. } => "WimGasInvoicSent",
             Self::InvoiceSettled => "WimGasInvoicSettled",
             Self::InvoiceDisputed { .. } => "WimGasInvoicDisputed",
             Self::Rejected { .. } => "WimGasInvoicRejected",
@@ -290,6 +315,24 @@ pub enum WimGasInvoicCommand {
         validation_passed: bool,
         /// Human-readable validation issue strings (empty when `validation_passed`).
         validation_errors: Vec<String>,
+    },
+    /// gMSB invoicer role: record an outbound INVOIC (31003/31004) sent to the NB.
+    ///
+    /// The billing module renders and dispatches the billed EDIFACT with amounts;
+    /// this command records the process so an inbound REMADV (33001/33002) from the
+    /// NB correlates back to it. Duplicated per Sparte from the Strom twin
+    /// (`mako-wim::rechnung::WimRechnungCommand::SendInvoic`) — no shared workflow.
+    SendInvoic {
+        /// BDEW Prüfidentifikator of the outbound INVOIC (31003 or 31004).
+        pid: Pruefidentifikator,
+        /// GLN of the sender (gMSB invoicer).
+        sender: MarktpartnerCode,
+        /// GLN of the recipient (NB payer).
+        recipient: MarktpartnerCode,
+        /// EDIFACT document date (YYYYMMDD).
+        document_date: String,
+        /// EDIFACT message reference of the outbound INVOIC (REMADV correlation key).
+        invoice_ref: MessageRef,
     },
     /// Settle the invoice — dispatch a positive CONTRL acknowledgement to gMSB.
     ///
@@ -402,6 +445,20 @@ impl Workflow for WimGasInvoicWorkflow {
                 other => other,
             },
 
+            WimGasInvoicEvent::InvoicSent {
+                pruefidentifikator,
+                sender,
+                recipient,
+                document_date,
+                invoice_ref,
+            } => WimGasInvoicState::InvoicSent(WimGasInvoicData {
+                pruefidentifikator: *pruefidentifikator,
+                sender: sender.clone(),
+                recipient: recipient.clone(),
+                document_date: document_date.clone(),
+                invoice_ref: invoice_ref.clone(),
+            }),
+
             WimGasInvoicEvent::InvoiceSettled => match state {
                 WimGasInvoicState::ValidationPassed(data) => WimGasInvoicState::Settled(data),
                 other => other,
@@ -435,7 +492,9 @@ impl Workflow for WimGasInvoicWorkflow {
             WimGasInvoicEvent::RemadvReceived {
                 pid, is_confirmed, ..
             } => match state {
-                WimGasInvoicState::Settled(data) | WimGasInvoicState::ValidationPassed(data) => {
+                WimGasInvoicState::Settled(data)
+                | WimGasInvoicState::ValidationPassed(data)
+                | WimGasInvoicState::InvoicSent(data) => {
                     if *is_confirmed {
                         WimGasInvoicState::PaymentConfirmed(data)
                     } else {
@@ -498,6 +557,31 @@ impl Workflow for WimGasInvoicWorkflow {
                 Ok(events.into())
             }
 
+            WimGasInvoicCommand::SendInvoic {
+                pid,
+                sender,
+                recipient,
+                document_date,
+                invoice_ref,
+            } => {
+                if !matches!(state, WimGasInvoicState::New) {
+                    return Err(WorkflowError::invalid_state("New", state.label()));
+                }
+                if !WIM_GAS_INVOIC_PIDS.contains(&pid.as_u32()) {
+                    return Err(WorkflowError::rejected(format!(
+                        "expected a WiM Gas INVOIC PID (31003 or 31004), got {pid}",
+                    )));
+                }
+                Ok(vec![WimGasInvoicEvent::InvoicSent {
+                    pruefidentifikator: pid,
+                    sender,
+                    recipient,
+                    document_date,
+                    invoice_ref,
+                }]
+                .into())
+            }
+
             WimGasInvoicCommand::SettleInvoice => {
                 if !matches!(state, WimGasInvoicState::ValidationPassed(_)) {
                     return Err(WorkflowError::invalid_state(
@@ -542,10 +626,12 @@ impl Workflow for WimGasInvoicWorkflow {
             } => {
                 if !matches!(
                     state,
-                    WimGasInvoicState::Settled(_) | WimGasInvoicState::ValidationPassed(_)
+                    WimGasInvoicState::Settled(_)
+                        | WimGasInvoicState::ValidationPassed(_)
+                        | WimGasInvoicState::InvoicSent(_)
                 ) {
                     return Err(WorkflowError::invalid_state(
-                        "Settled|ValidationPassed",
+                        "Settled|ValidationPassed|InvoicSent",
                         state.label(),
                     ));
                 }
@@ -642,6 +728,9 @@ impl Projection for WimGasInvoicProjection {
             }
             WimGasInvoicEvent::ValidationPassed { .. } => {
                 record.status = "ValidationPassed";
+            }
+            WimGasInvoicEvent::InvoicSent { .. } => {
+                record.status = "InvoicSent";
             }
             WimGasInvoicEvent::InvoiceSettled => {
                 record.status = "Settled";
@@ -770,6 +859,70 @@ mod tests {
         let err = WimGasInvoicWorkflow::handle(&state, receive_cmd(31001, true))
             .expect_err("GPKE PID 31001 must not be accepted by WiM Gas workflow");
         assert!(format!("{err}").contains("31001"));
+    }
+
+    // ── SendInvoic (gMSB invoicer side) ────────────────────────────────────────
+
+    fn send_cmd(p: u32) -> WimGasInvoicCommand {
+        WimGasInvoicCommand::SendInvoic {
+            pid: pid(p),
+            sender: MarktpartnerCode::new("9900123456789"), // gMSB (invoicer)
+            recipient: MarktpartnerCode::new("9900987654321"), // NB (payer)
+            document_date: "20260731".into(),
+            invoice_ref: MessageRef::new("GMSB-RE-001"),
+        }
+    }
+
+    #[test]
+    fn send_31003_from_new_emits_invoice_sent() {
+        let out = WimGasInvoicWorkflow::handle(&WimGasInvoicState::New, send_cmd(31003))
+            .expect("valid 31003 send must succeed");
+        assert_eq!(out.events.len(), 1);
+        assert!(matches!(
+            out.events[0],
+            WimGasInvoicEvent::InvoicSent { .. }
+        ));
+        let state = WimGasInvoicWorkflow::apply(WimGasInvoicState::New, &out.events[0]);
+        assert!(matches!(state, WimGasInvoicState::InvoicSent(_)));
+    }
+
+    #[test]
+    fn send_31004_storno_from_new_emits_invoice_sent() {
+        let out = WimGasInvoicWorkflow::handle(&WimGasInvoicState::New, send_cmd(31004))
+            .expect("valid 31004 Storno send must succeed");
+        assert!(matches!(
+            out.events[0],
+            WimGasInvoicEvent::InvoicSent { .. }
+        ));
+    }
+
+    #[test]
+    fn send_rejects_non_wim_gas_pid() {
+        let err = WimGasInvoicWorkflow::handle(&WimGasInvoicState::New, send_cmd(31009))
+            .expect_err("31009 is the Strom twin (mako-wim), not a WiM Gas INVOIC PID");
+        assert!(format!("{err}").contains("31009"));
+    }
+
+    #[test]
+    fn remadv_confirms_payment_after_send() {
+        let sent = WimGasInvoicState::InvoicSent(WimGasInvoicData {
+            pruefidentifikator: pid(31003),
+            sender: MarktpartnerCode::new("9900123456789"),
+            recipient: MarktpartnerCode::new("9900987654321"),
+            document_date: "20260731".into(),
+            invoice_ref: MessageRef::new("GMSB-RE-001"),
+        });
+        let out = WimGasInvoicWorkflow::handle(
+            &sent,
+            WimGasInvoicCommand::ReceiveRemadv {
+                pid: pid(33001),
+                remadv_ref: MessageRef::new("REMADV-001"),
+                sender: MarktpartnerCode::new("9900987654321"),
+            },
+        )
+        .expect("33001 REMADV must be accepted after send");
+        let new_state = WimGasInvoicWorkflow::apply(sent, &out.events[0]);
+        assert!(matches!(new_state, WimGasInvoicState::PaymentConfirmed(_)));
     }
 
     // ── SettleInvoice ──────────────────────────────────────────────────────────

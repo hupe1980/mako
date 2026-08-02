@@ -192,8 +192,15 @@ pub mod accounting {
     pub const INTEREST_CHARGED: &str = "de.accounting.interest.charged";
     /// EEG payout rejected (e.g. missing bank data).
     pub const EEG_PAYOUT_REJECTED: &str = "de.accounting.eeg.payout.rejected";
-    /// ⚠ phantom: subscribed by agentd (`sperr-agent`), no emitter yet
-    /// (tracked in ROADMAP). Disconnection order after exhausted dunning.
+    /// §41f Abs. 1 EnWG — Sperrandrohung: disconnection threatened after an
+    /// unresolved Mahnstufe-3 dunning case, opening the 4-Wochen-Frist.
+    pub const SPERRANDROHUNG: &str = "de.accounting.sperrandrohung";
+    /// §41f Abs. 5 EnWG — Sperrankündigung: the concrete disconnection date is
+    /// announced 8 Werktage in advance (after the 4-Wochen Androhung Frist).
+    pub const SPERRANKUENDIGUNG: &str = "de.accounting.sperrankuendigung";
+    /// §41f Abs. 1 / §41g EnWG — Sperrauftrag handed to `sperrd` once the
+    /// Androhung (4 Wochen) and Ankündigung (8 Werktage) Fristen have elapsed and
+    /// no Abwendungsvereinbarung / Unverhältnismäßigkeit halted the sequence.
     pub const SPERRAUFTRAG: &str = "de.accounting.sperrauftrag";
     /// ⚠ phantom: subscribed by agentd (`payment-agent`), no emitter yet
     /// (tracked in ROADMAP). SEPA direct-debit return (Bankrücklastschrift).
@@ -420,6 +427,8 @@ pub fn all() -> &'static [&'static str] {
         accounting::ERSTATTUNG_FAELLIG,
         accounting::INTEREST_CHARGED,
         accounting::EEG_PAYOUT_REJECTED,
+        accounting::SPERRANDROHUNG,
+        accounting::SPERRANKUENDIGUNG,
         accounting::SPERRAUFTRAG,
         accounting::BANKRUECKLAST,
         // de.netzbilanz.*

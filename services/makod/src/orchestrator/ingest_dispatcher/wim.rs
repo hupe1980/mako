@@ -71,6 +71,19 @@ impl EdifactIngestDispatcher {
                     )
                     .await
                 }
+                // IFTSTA status/Vollzugsmeldung (21007, 21009–21018, 21029–21032) —
+                // informational device-change status; resume by the MeLo carried in
+                // the IFTSTA's single LOC (per the AHB profile). Never spawns.
+                p if mako_wim::geraetewechsel::IFTSTA_PIDS.contains(&p) => {
+                    let cmd = adapters::wim_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_malo_from_msg(msg);
+                    self.resume_by_malo::<WimDeviceChangeWorkflow>(
+                        melo_id.as_str(),
+                        "wim-device-change",
+                        cmd,
+                    )
+                    .await
+                }
                 _ => Ok(IngestOutcome::Skipped {
                     workflow_name: "wim-device-change",
                     reason: "pid_not_in_dispatch_table",
@@ -148,6 +161,24 @@ impl EdifactIngestDispatcher {
                         &[(mako_wim::WIM_RECHNUNG_WINDOW_LABEL, due_at)],
                     )
                     .await
+                }
+                // REMADV 33001–33004 (payer → MSB invoicer: payment confirmation
+                // or itemized rejection) resume the billing process by the original
+                // 31009 invoice reference (RFF+Z13). 33003/33004 are the Strom
+                // itemized Abweisungen owned by mako-wim.
+                33001..=33004 => {
+                    let cmd = adapters::wim_rechnung_remadv_registry().dispatch(raw, &fv)?;
+                    let invoice_ref = extract_invoice_ref_from_remadv(msg);
+                    self.resume_by_malo::<WimRechnungWorkflow>(&invoice_ref, "wim-rechnung", cmd)
+                        .await
+                }
+                // COMDIS 29001 (MSB invoicer rejects the payer's REMADV) resumes
+                // the same process by the invoice reference.
+                29001 => {
+                    let cmd = adapters::wim_rechnung_comdis_registry().dispatch(raw, &fv)?;
+                    let invoice_ref = extract_invoice_ref_from_comdis(msg);
+                    self.resume_by_malo::<WimRechnungWorkflow>(&invoice_ref, "wim-rechnung", cmd)
+                        .await
                 }
                 _ => Ok(IngestOutcome::Skipped {
                     workflow_name: "wim-rechnung",
@@ -376,6 +407,17 @@ impl EdifactIngestDispatcher {
                         cmd,
                         &fv,
                         &[(mako_wim::preisanfrage::PREISANFRAGE_DEADLINE_LABEL, due_at)],
+                    )
+                    .await
+                } else if mako_wim::preisanfrage::QUOTES_PIDS.contains(&pid) {
+                    // QUOTES 15001–15005: the MSB's Angebot answering our REQOTE —
+                    // resume the process by MaLo (QUOTES carries it in LOC).
+                    let cmd = adapters::wim_preisanfrage_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    self.resume_by_malo::<WimPreisanfrageWorkflow>(
+                        malo_id.as_str(),
+                        "wim-preisanfrage",
+                        cmd,
                     )
                     .await
                 } else {

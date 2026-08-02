@@ -481,7 +481,9 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                                 .ok()
                                 .and_then(|p| mako_engine::ids::Pid::from_u32(p.as_u32()));
                             let workflow = pid
-                                .and_then(|p| self.ingest.pid_router.route(p.as_u32()))
+                                .and_then(|p| {
+                                    self.ingest.resolve_workflow(p.as_u32(), &recipient_mp_id)
+                                })
                                 .map(str::to_owned);
 
                             let status = match (pid, workflow.as_deref()) {

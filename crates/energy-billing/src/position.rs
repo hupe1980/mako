@@ -320,6 +320,14 @@ pub struct BillingPosition {
     pub trace: PositionTrace,
 }
 
+/// Tag marking a position as a §13b UStG reverse-charge supply
+/// (Steuerschuldnerschaft des Leistungsempfängers). Set by
+/// [`BillingPosition::with_reverse_charge`]; read by the VAT-subtotal grouping in
+/// [`crate::invoice::tax_subtotals_of`], which then categorises the position as
+/// `ReverseCharge` (EN 16931 `AE` / BO4E `Rcv`) rather than zero-rated — the
+/// supplier's invoice shows no VAT, and the recipient owes it.
+pub const REVERSE_CHARGE_TAG: &str = "reverse-charge";
+
 impl BillingPosition {
     /// Construct a debit position (customer owes the amount).
     ///
@@ -398,6 +406,29 @@ impl BillingPosition {
     pub fn with_tax_rate(mut self, rate: Decimal) -> Self {
         self.applicable_tax_rate = Some(rate);
         self
+    }
+
+    /// Mark this position as a §13b UStG reverse-charge supply.
+    ///
+    /// Forces the applicable rate to 0 % (no VAT on the supplier's invoice) and
+    /// categorises the position as `ReverseCharge` (EN 16931 `AE`, BO4E `Rcv`)
+    /// rather than zero-rated, so [`tax_subtotals_of`](crate::invoice::tax_subtotals_of)
+    /// emits a distinct AE subtotal. Applies to electricity/gas supplied to a
+    /// Stromwiederverkäufer (§13b Abs. 2 Nr. 5 lit. b UStG) — the recipient,
+    /// not the supplier, owes the Umsatzsteuer.
+    #[must_use]
+    pub fn with_reverse_charge(mut self) -> Self {
+        if !self.has_tag(REVERSE_CHARGE_TAG) {
+            self.tags.push(REVERSE_CHARGE_TAG.to_owned());
+        }
+        self.applicable_tax_rate = Some(Decimal::ZERO);
+        self
+    }
+
+    /// `true` when this position is a §13b UStG reverse-charge supply.
+    #[must_use]
+    pub fn is_reverse_charge(&self) -> bool {
+        self.has_tag(REVERSE_CHARGE_TAG)
     }
 
     /// `true` when this position carries the given tag.

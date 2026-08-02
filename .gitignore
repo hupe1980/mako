@@ -27,8 +27,11 @@ CONCEPT.md
 FINDINGS.md
 REVIEW.md
 TODO.md
-docs/pdfs
+regulatories
 concepts/
 .DS_Store
 .github/skills
 .claude
+
+# Zola build output
+/site/public

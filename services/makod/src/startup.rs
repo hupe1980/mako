@@ -72,7 +72,7 @@ use mako_wim::{
     WORKFLOW_NAME as WIM_DEVICE_CHANGE_WORKFLOW_NAME,
 };
 use mako_wim_gas::{
-    ANMELDUNG_WORKFLOW_NAME as WIM_GAS_ANMELDUNG_WORKFLOW_NAME,
+    ANMELDUNG_WORKFLOW_NAME as WIM_GAS_ANMELDUNG_WORKFLOW_NAME, GAS_GERAETEUBERNAHME_WORKFLOW_NAME,
     INSRPT_GAS_WORKFLOW_NAME as WIM_GAS_INSRPT_WORKFLOW_NAME,
     INVOIC_WORKFLOW_NAME as WIM_GAS_INVOIC_WORKFLOW_NAME,
     KUENDIGUNG_WORKFLOW_NAME as WIM_GAS_KUENDIGUNG_WORKFLOW_NAME,
@@ -217,6 +217,10 @@ pub(crate) fn validate_adapter_coverage() {
         (
             WIM_GAS_INSRPT_WORKFLOW_NAME,
             adapters::wim_gas_insrpt_registry().validate_policy(fc, &known),
+        ),
+        (
+            GAS_GERAETEUBERNAHME_WORKFLOW_NAME,
+            adapters::wim_gas_geraeteubernahme_registry().validate_policy(fc, &known),
         ),
         (
             INVOIC_WORKFLOW_NAME,
@@ -710,7 +714,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
         // against the BDEW/SM-PKI CA trust anchor, not against <eb:From>, so this is
         // accepted in practice.  Full per-mp_id cert isolation would require separate
         // SessionContexts keyed by sender mp_id — tracked as a future enhancement.
-        // See docs/as4-bdew.md §"Signing cert and <eb:From>" for guidance.
+        // See site/content/docs/reference/as4-bdew.md §"Signing cert and <eb:From>" for guidance.
 
         let outbound_session = {
             let session_id = format!("makod-outbound-{}", uuid::Uuid::new_v4());
@@ -738,6 +742,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
             Some(Arc::new(crate::edifact_api::EdifactApiState {
                 platform: Arc::clone(&cfg.platform),
                 pid_router: cfg.ctx.pid_router().clone(),
+                mp_id_registry: Arc::clone(&cfg.mp_id_registry),
                 cedar: Arc::new(
                     crate::cedar_authz::CedarAuthorizer::unauthenticated()
                         .expect("CedarAuthorizer::unauthenticated is infallible"),

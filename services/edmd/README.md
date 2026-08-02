@@ -306,7 +306,7 @@ configures.
 
 ## See Also
 
-- [edmd operator guide](../../docs/edmd.md)
+- [edmd operator guide](https://hupe1980.github.io/mako/docs/services/edmd/)
 - `edmd::domain` (in-crate) — `MeterDataReceipt`, `TimeSeriesRepository`/`Typ2Repository`, MSCONS PID set
 - [meterstore](https://crates.io/crates/meterstore) — hot/cold tiered store (PostgreSQL + Apache Iceberg) backing `meter_reads` / `esa_typ2_reads`
 - [marktd](../marktd/README.md) — event source

@@ -130,7 +130,7 @@ pub use version::{EegGesetz, InvalidEegGesetz};
 // Domain module guide:
 // degression: §23a quarterly solar PV tariff degression — Quarter, DegressionTier, apply_degression
 // direktverm: §§20–22 Direktvermarktung — mandatory threshold, Ausschreibungspflicht, period model
-// (Metering topology, Eigenverbrauch/Überschuss split and §42b GGV allocation live in the
+// (Metering topology, Eigenverbrauch/Überschuss split and §42b EnWG GGV allocation live in the
 //  external `metering` crate — AggregationRule, compute_virtual_meter, MeasurementPoint, Messtyp.)
 // reductions: §§52–54 reduction pipeline — Sect52Netting, Sect53c, Sect54, ReductionPipeline
 // settlement_state: Monthly lifecycle state machine — SettlementPeriodState, derive_settlement_state

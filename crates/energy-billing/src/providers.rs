@@ -1823,7 +1823,7 @@ impl BillingProvider for WaterProvider {
 
 // ── SolarProvider ─────────────────────────────────────────────────────────────
 
-/// SOLAR (Eigenverbrauch / Mieterstrom §21 Abs. 3 / §42a GGV) billing provider.
+/// SOLAR (Eigenverbrauch / Mieterstrom §21 Abs. 3 / §42b EnWG GGV) billing provider.
 pub struct SolarProvider {
     product: SolarProduct,
 }
@@ -1844,7 +1844,7 @@ impl BillingProvider for SolarProvider {
         let product = &self.product;
         let mut positions: Vec<BillingPosition> = Vec::new();
 
-        // ── §42b EEG 2023 (Solarpaket I) GGV hybrid billing ──────────────────
+        // ── §42b EnWG (Solarpaket I) GGV hybrid billing ──────────────────
         // When GgvSolarInput is present, billing is split into two portions:
         // 1. PV portion: min(consumption, allocated_pv) at community solar rate
         // 2. Grid portion: max(0, consumption − allocated_pv) at electricity rate
@@ -1861,7 +1861,7 @@ impl BillingProvider for SolarProvider {
                             pv_kwh,
                             ap_ct,
                             "kWh",
-                            "\u{a7}42b EEG 2023",
+                            "\u{a7}42b EnWG",
                             &["solar", "ggv_pv"],
                         )
                         .with_tag("solar")
@@ -1872,13 +1872,13 @@ impl BillingProvider for SolarProvider {
                 if let Some(rabatt_ct) = product.gemeinschaft_rabatt_ct_per_kwh {
                     positions.push(
                         BillingPosition::credit(
-                            "GGV-Rabatt Solarstrom (\u{a7}42b EEG 2023)",
+                            "GGV-Rabatt Solarstrom (\u{a7}42b EnWG)",
                             pv_kwh,
                             "kWh",
                             rabatt_ct / dec!(100),
                             PositionCategory::Discount,
                         )
-                        .with_legal_basis("\u{a7}42b EEG 2023 Abs.\u{202f}3")
+                        .with_legal_basis("\u{a7}42b EnWG Abs.\u{202f}3")
                         .with_tag("gemeinschaft_rabatt")
                         .with_tag("solar")
                         .with_tag("ggv_pv"),
@@ -1951,7 +1951,7 @@ impl BillingProvider for SolarProvider {
                     "GGV Solarstromanteil: {ratio_pct}\u{202f}% ({pv_kwh:.3}\u{202f}kWh von {:.3}\u{202f}kWh)",
                     ggv.actual_consumption_kwh
                 ),
-                legal_basis: Some("\u{a7}42b EEG 2023 (Solarpaket I)".to_owned()),
+                legal_basis: Some("\u{a7}42b EnWG (Solarpaket I)".to_owned()),
                 quantity: ggv.pv_coverage_ratio(),
                 unit: "%".to_owned(),
                 unit_price_eur: Decimal::ZERO,
@@ -1991,7 +1991,7 @@ impl BillingProvider for SolarProvider {
                     kwh,
                     ap_ct,
                     "kWh",
-                    "\u{a7}42b EEG 2023",
+                    "\u{a7}42b EnWG",
                     &["solar"],
                 )
                 .with_tag("solar"),
@@ -2013,13 +2013,13 @@ impl BillingProvider for SolarProvider {
         if let Some(rabatt_ct) = product.gemeinschaft_rabatt_ct_per_kwh {
             positions.push(
                 BillingPosition::credit(
-                    "Rabatt Gemeinschaftliche Geb\u{e4}udeversorgung (\u{a7}42b EEG)",
+                    "Rabatt Gemeinschaftliche Geb\u{e4}udeversorgung (\u{a7}42b EnWG)",
                     kwh,
                     "kWh",
                     rabatt_ct / dec!(100),
                     PositionCategory::Discount,
                 )
-                .with_legal_basis("\u{a7}42b EEG 2023")
+                .with_legal_basis("\u{a7}42b EnWG")
                 .with_tag("gemeinschaft_rabatt")
                 .with_tag("solar"),
             );

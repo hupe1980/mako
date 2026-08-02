@@ -219,7 +219,7 @@ Two prompts (`audit-kpi`, `investigate-aperak-violation`) guide agents through K
 
 ## See Also
 
-- [Architecture overview](../../docs/architecture.md)
+- [Architecture overview](https://hupe1980.github.io/mako/docs/architecture/)
 - [mako-obs library](../../crates/mako-obs/) — `ProcessProjection`, `KpiReport`, `DeadlineRisk`, `ProcessProjectionRepository`
 - [marktd](../marktd/README.md) — event source
-- [BNetzA regulatory reference](../../docs/bnetza.md)
+- [BNetzA regulatory reference](https://hupe1980.github.io/mako/docs/regulatory/bnetza/)

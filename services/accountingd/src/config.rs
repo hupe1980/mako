@@ -92,14 +92,32 @@ pub struct AccountingdConfig {
     /// hash with a startup warning (dev only). Use `"env:VAR_NAME"` for injection.
     pub iban_hash_secret: Option<SecretString>,
 
-    /// `sperrd` base URL — triggered when a Mahnstufe-3 dunning case is raised.
-    /// When set, a Mahnstufe-3 case ≥ `sperrung_threshold_ct` posts a Sperrauftrag
-    /// to `sperrd` (`POST /api/v1/sperr-orders`).
+    /// `sperrd` base URL — the endpoint of the §§41f/41g EnWG disconnection
+    /// sequence. A Mahnstufe-3 case ≥ `sperrung_threshold_ct` runs Sperrandrohung
+    /// (4 Wochen) → Sperrankündigung (8 Werktage) → Sperrauftrag; only the final
+    /// step posts to `sperrd` (`POST /api/v1/sperr-orders`).
     pub sperrd_url: Option<String>,
 
-    /// Minimum undisputed arrears to request a Sperrung (§19 Abs. 2 StromGVV:
-    /// ≥ 100 EUR). Default: 10_000 ct.
+    /// Minimum undisputed arrears to open the disconnection sequence (§41f Abs. 3
+    /// **Satz 2** EnWG: the Zahlungsverzug must be ≥ 100 EUR). Default: 10_000 ct.
+    ///
+    /// This is the absolute floor. The §41f Abs. 3 **Satz 1** consumption-relative
+    /// gate (arrears ≥ 2× the agreed monthly Abschlag `accounts.abschlag_ct`; or,
+    /// when no Abschlag is agreed, ≥ ⅙ of the most recent expected annual bill
+    /// `jahresabschluss_runs.annual_bill_ct`) is enforced directly in the candidate
+    /// query and is **not** configurable. A case must clear *both* gates; with no
+    /// consumption basis on record it is conservatively excluded.
     pub sperrung_threshold_ct: Option<i64>,
+
+    /// Sperrandrohung → Sperrankündigung Frist (§41f Abs. 1 EnWG: **4 Wochen**).
+    /// Calendar days between the Androhung and the earliest Ankündigung. Default: 28.
+    pub sperrandrohung_frist_days: Option<i64>,
+
+    /// Sperrankündigung → Sperrauftrag Frist (§41f Abs. 5 EnWG: **8 Werktage**,
+    /// briefliche Mitteilung). Werktage between the Ankündigung and the earliest
+    /// disconnection order. Default: 8. (The repealed §19 Abs. 3 StromGVV value of
+    /// 3 Werktage no longer applies since 23.12.2025.)
+    pub sperrankuendigung_frist_werktage: Option<i64>,
 
     /// Dunning fee in ct (× 10⁻² EUR) per Mahnstufe level.
     /// Default: Stufe 1 = 0, Stufe 2 = 500 (= 5.00 EUR), Stufe 3 = 1000 (= 10.00 EUR)

@@ -471,7 +471,7 @@ breakdown entry.
   > The library computes settlement **after** §24 aggregation has been determined by the caller.
   > The legal aggregation analysis itself (operator identity, location, commissioning window,
   > technology criteria) is **not** performed here — that is the caller's responsibility.
-- §42b GGV / §21 Abs. 3 multi-meter split is **not** modelled here — the metering topology,
+- §42b EnWG GGV / §21 Abs. 3 multi-meter split is **not** modelled here — the metering topology,
   Eigenverbrauch/Überschuss split and GGV tenant allocation live in the external `metering`
   crate (`AggregationRule`, `compute_virtual_meter`) + edmd; this crate settles the resulting
   Einspeisemenge

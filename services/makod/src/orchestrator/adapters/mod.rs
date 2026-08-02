@@ -101,7 +101,8 @@ use mako_wim::{
     insrpt::StorungsmeldungCommand, wertebestellung::WimWertebestellungWorkflow,
 };
 use mako_wim_gas::{
-    WimGasAnmeldungCommand, WimGasAnmeldungWorkflow, WimGasInsrptWorkflow, WimGasInvoicCommand,
+    GasGeraeteubernahmeCommand, WimGasAnmeldungCommand, WimGasAnmeldungWorkflow,
+    WimGasGeraeteubernahmeWorkflow, WimGasInsrptWorkflow, WimGasInvoicCommand,
     WimGasInvoicWorkflow, WimGasKuendigungCommand, WimGasKuendigungWorkflow,
     WimGasStornierungCommand, WimGasStornierungWorkflow, WimGasVerpflichtungsanfrageCommand,
     WimGasVerpflichtungsanfrageWorkflow, insrpt::GasStorungsmeldungCommand,

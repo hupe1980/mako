@@ -670,11 +670,11 @@ impl NetzbilanzMcpHandler {
         }
     }
 
-    /// List all paid invoices for a period (REMADV 33001/33003/33004 confirmed).
+    /// List all paid invoices for a period (REMADV 33001 confirmed).
     ///
     /// Used for ERP accounts-receivable confirmation and BNetzA § 147 AO / GoBD audit.
     #[tool(
-        description = "List all paid invoice drafts (REMADV 33001/33003 confirmed). For ERP AR reconciliation and § 147 AO / GoBD audit.",
+        description = "List all paid invoice drafts (REMADV 33001 confirmed). For ERP AR reconciliation and § 147 AO / GoBD audit.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_paid_invoices(
@@ -720,7 +720,7 @@ impl NetzbilanzMcpHandler {
             PromptMessage::new_text(
                 Role::Assistant,
                 "1. POST /api/v1/billing/run with malo_id, nb_mp_id, lf_mp_id, period_from, period_to.\n\
-                 2. For §42a GGV tenants: POST /api/v1/billing/ggv-nne/{ggv_malo_id} instead.\n\
+                 2. For §42b EnWG GGV tenants: POST /api/v1/billing/ggv-nne/{ggv_malo_id} instead.\n\
                  3. The draft is validated by invoic-checker before dispatch.\n\
                  4. GET /api/v1/billing/drafts to review the draft Rechnung BO4E.\n\
                  5. PUT /api/v1/billing/drafts/{id}/dispatch → sends INVOIC 31002 (NN-Rechnung) to makod.\n\
@@ -824,18 +824,18 @@ impl NetzbilanzMcpHandler {
 
     #[prompt(
         name = "ggv-nne-billing",
-        description = "Step-by-step: §42a GGV community solar multi-tenant NNE billing (NB side)"
+        description = "Step-by-step: §42b EnWG GGV community solar multi-tenant NNE billing (NB side)"
     )]
     async fn ggv_nne_billing_prompt(&self) -> Vec<PromptMessage> {
         vec![
             PromptMessage::new_text(
                 Role::User,
-                "How do I bill NNE for a §42a GGV community solar MaLo?",
+                "How do I bill NNE for a §42b EnWG GGV community solar MaLo?",
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "**§42a GGV Netzentgelt NB-side billing (INVOIC 31001)**\n\n\
-                 Mandatory since 01.01.2024 (§42a EEG 2023, BNetzA BK6-22-300):\n\
+                "**§42b EnWG GGV Netzentgelt NB-side billing (INVOIC 31001)**\n\n\
+                 Mandatory since 01.01.2024 (§42b EnWG, BNetzA BK6-22-300):\n\
                  each GGV tenant Marktlokation is billed individually for its NNE share.\n\n\
                  **Prerequisites:**\n\
                  - GGV MaLo provisioned in marktd with Lokationszuordnung edges (beziehungstyp=GGV_MIETER)\n\
@@ -859,7 +859,7 @@ impl NetzbilanzMcpHandler {
                  NB auto-discovers tenant MaLos from marktd Lokationszuordnung.\n\n\
                  **Result:** N × INVOIC 31001 drafts, one per tenant MaLo.\n\
                  Review with `list_nne_drafts`, dispatch with `dispatch-batch`.\n\n\
-                 **Regulatory basis:** §42a EEG 2023; BK6-22-300 (§14a integration).",
+                 **Regulatory basis:** §42b EnWG; BK6-22-300 (§14a integration).",
             ),
         ]
     }
@@ -880,7 +880,7 @@ impl NetzbilanzMcpHandler {
                  | PID | Process | Direction | Deadline | `billing_type` |\n\
                  |---|---|---|---|---|\n\
                  | 31002 | NNE Strom (Netznutzungsentgelt, NN-Rechnung) | NB → LF | per NbContract.billing_schedule | `nne_strom` |\n\
-                 | 31002 | GGV NNE (§42a tenant split) | NB → LF | per NbContract.billing_schedule | `nne_strom` via `/ggv-nne` |\n\
+                 | 31002 | GGV NNE (§42b EnWG tenant split) | NB → LF | per NbContract.billing_schedule | `nne_strom` via `/ggv-nne` |\n\
                  | 31005 | MMM Strom (Mehr-/Mindermenge) | NB → LF | annual settlement GPKE (BK6-24-174) Teil 1 Kap. 8.4 | `mmm_strom` |\n\
                  | 31002 | NNE Gas (Netznutzung Gas, NN-Rechnung) | GNB → LFG | per NbContract | `nne_gas` |\n\
                  | 31009 | MSB-Rechnung (metering service) | NB → MSB | per MSB contract | `msb_31009` |\n\
@@ -926,7 +926,7 @@ impl ServerHandler for NetzbilanzMcpHandler {
              - `trigger_mmm_auto_run` — prepare MMM auto-run request body for a MaLo\n\
              - `list_corrections` — list Stornorechnung/Korrekturrechnung (§ 147 AO / GoBD audit)\n\
              - `get_payment_stats` — payment totals by PID × status (Zahlungsverzug detection)\n\
-             - `list_paid_invoices` — REMADV 33001/33003/33004 confirmed paid invoices\n\n\
+             - `list_paid_invoices` — REMADV 33001 confirmed paid invoices\n\n\
              ## Billing types\n\
              - nne_strom / nne_gas → INVOIC 31002 (NN-Rechnung; Sparte in message content)\n\
              - mmm_strom → INVOIC 31005 (Strom MMM, auto-fetches prices when vnb_mp_id configured)\n\

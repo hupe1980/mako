@@ -81,6 +81,11 @@ use crate::cedar_authz::{CedarAuthorizer, IngestResource};
 pub struct EdifactApiState {
     pub platform: Arc<Platform>,
     pub pid_router: PidRouter,
+    /// Our own MP-IDs → Sparte, for commodity-aware routing of Sparte-split
+    /// shared PIDs (INSRPT 23001, and the WiM Gas device processes that reuse the
+    /// Strom ORDERS/ORDRSP PIDs). The UNB DE0010 recipient MP-ID is the
+    /// authoritative Sparte signal — identical to `ContrlAckService`.
+    pub mp_id_registry: Arc<crate::core::party_registry::MpIdRegistry>,
     /// Cedar-based authorization engine for all protected endpoints.
     pub cedar: Arc<CedarAuthorizer>,
     /// Maximum allowed request body size in bytes.
@@ -118,6 +123,45 @@ pub struct EdifactApiState {
     /// `None` disables CONTRL emission (e.g. in read-only / test contexts without
     /// an outbox store).
     pub contrl_ack: Option<Arc<crate::contrl_ack::ContrlAckService>>,
+}
+
+impl EdifactApiState {
+    /// Resolve the workflow name for `pid`, preferring the commodity-specific
+    /// route when the interchange recipient's Sparte is known. See the free
+    /// [`resolve_workflow`] function for the routing rules.
+    #[must_use]
+    pub fn resolve_workflow(&self, pid: u32, recipient_mp_id: &str) -> Option<&str> {
+        resolve_workflow(&self.pid_router, &self.mp_id_registry, pid, recipient_mp_id)
+    }
+}
+
+/// Resolve the workflow name for `pid`, preferring the commodity-specific route
+/// when the interchange recipient's Sparte is known.
+///
+/// The recipient MP-ID (UNB DE0010) is one of our own parties, and every
+/// `[[party]]` covers exactly one Sparte (BDEW §2.13) — the authoritative Sparte
+/// signal (identical to [`ContrlAckService`](crate::contrl_ack::ContrlAckService)).
+/// PIDs split by commodity via [`PidRouter::register_with_sparte`] (INSRPT 23001,
+/// and the WiM Gas Gerätewechsel/Geräteübernahme processes that reuse the Strom
+/// ORDERS/ORDRSP PIDs) then resolve to the correct per-Sparte workflow. For a
+/// `Both` (Sparte-neutral own party) or unknown recipient, the unambiguous
+/// [`PidRouter::route`] table is used. `route_with_sparte` itself falls back to
+/// that same table when a PID has no commodity-specific entry, so this is safe
+/// for the overwhelming majority of PIDs that are not Sparte-split.
+#[must_use]
+pub fn resolve_workflow<'a>(
+    router: &'a PidRouter,
+    registry: &crate::core::party_registry::MpIdRegistry,
+    pid: u32,
+    recipient_mp_id: &str,
+) -> Option<&'a str> {
+    use crate::core::party_registry::RoleSparte;
+    use mako_engine::types::Sparte;
+    match registry.sparte_of(recipient_mp_id) {
+        Some(RoleSparte::Strom) => router.route_with_sparte(pid, Sparte::Strom),
+        Some(RoleSparte::Gas) => router.route_with_sparte(pid, Sparte::Gas),
+        Some(RoleSparte::Both) | None => router.route(pid),
+    }
 }
 
 // ── Response types ────────────────────────────────────────────────────────────
@@ -462,6 +506,9 @@ pub(crate) async fn ingest_edifact(
         );
     }
 
+    // The UNB DE0010 recipient MP-ID drives commodity-aware routing of
+    // Sparte-split shared PIDs (INSRPT, WiM Gas device processes).
+    let recipient_mp_id = pi.header.receiver_id.to_string();
     for env in pi.messages {
         // Partial move: `env.header` remains accessible for AuditContext
         // after `env.message` is moved into `msg`.
@@ -473,7 +520,7 @@ pub(crate) async fn ingest_edifact(
             .ok()
             .and_then(|p| mako_engine::ids::Pid::from_u32(p.as_u32()));
         let workflow = pid
-            .and_then(|p| state.pid_router.route(p.as_u32()))
+            .and_then(|p| state.resolve_workflow(p.as_u32(), &recipient_mp_id))
             .map(str::to_owned);
 
         let status = match (pid, workflow.as_deref()) {

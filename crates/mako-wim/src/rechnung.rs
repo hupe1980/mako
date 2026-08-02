@@ -1,19 +1,26 @@
-//! WiM Rechnung — INVOIC-based billing processes for WiM market participants.
+//! WiM Rechnung — INVOIC-based billing processes for WiM Strom (BK6-24-174).
 //!
-//! Covers WiM-domain INVOIC processes where the new Messstellenbetreiber (nMSB)
-//! or old Messstellenbetreiber (aMSB) sends a billing invoice to the Netzbetreiber
-//! or vice versa.
+//! Covers the WiM-Strom **MSB-Rechnung (PID 31009)**: the Messstellenbetreiber
+//! (MSB) invoices the Netzbetreiber, Lieferant or Einspeise-Abrechnung (ESA) for
+//! metering-point operation. The workflow hosts **both** sides of the exchange —
+//! the deployment's market role selects which commands it issues:
+//!
+//! - **MSB (invoicer / sender):** [`WimRechnungCommand::SendInvoic`] records the
+//!   outbound 31009, then awaits the payer's REMADV (33001–33004) / may reject it
+//!   with a COMDIS.
+//! - **NB/LF/ESA (payer / recipient):** [`WimRechnungCommand::ReceiveInvoic`]
+//!   ingests the inbound 31009, then `Settle`/`Dispute` and returns a REMADV.
 //!
 //! # Covered Prüfidentifikatoren (INVOIC AHB 1.0 / FV2025-10-01)
 //!
-//! | PID   | Process variant                                   | Party direction    |
-//! |-------|---------------------------------------------------|--------------------|
-//! | 31003 | WiM-Rechnung (MSB → NB für Gerätewechsel)         | nMSB/aMSB → NB     |
-//! | 31009 | MSB-Rechnung (NB-initiated settlement)            | NB ↔ MSB           |
+//! | PID   | Process variant       | Party direction     |
+//! |-------|-----------------------|---------------------|
+//! | 31009 | MSB-Rechnung          | **MSB → NB/LF/ESA** |
 //!
-//! **These PIDs belong exclusively to the WiM domain.** They must not be registered
-//! by `mako-gpke`. See `crates/mako-gpke/src/abrechnung.rs` `INVOIC_PIDS` for the
-//! explicit exclusion.
+//! **PID 31009 belongs exclusively to the WiM domain.** It must not be registered
+//! by `mako-gpke` (see `crates/mako-gpke/src/abrechnung.rs` `GPKE_INVOIC_PIDS` for the
+//! explicit exclusion). The Gas twin — WiM-Rechnung 31003 (gMSB → NB) — lives in
+//! `mako-wim-gas` (`crates/mako-wim-gas/src/invoic.rs`), duplicated per Sparte.
 //!
 //! # Regulatory basis
 //!
@@ -25,11 +32,12 @@
 //!
 //! This module implements the full billing workflow state machine:
 //!
-//! 1. Registers PIDs 31003 and 31009 in the PID router (preventing dead-letter routing).
-//! 2. Accepts inbound INVOIC via `ReceiveInvoic` command.
-//! 3. Transitions to `PendingSettlement` and registers a 5-Werktage deadline.
+//! 1. Registers PID 31009 in the PID router (preventing dead-letter routing).
+//! 2. Sends the outbound INVOIC (`SendInvoic`, MSB role) or accepts an inbound one
+//!    (`ReceiveInvoic`, payer role).
+//! 3. Transitions to `PendingSettlement`/`InvoicSent` and registers a 5-Werktage deadline.
 //! 4. Accepts `Settle` or `Dispute` commands to close the invoice lifecycle.
-//! 5. Accepts inbound REMADV (`ReceiveRemadv`) and COMDIS (`ReceiveComdis`).
+//! 5. Accepts inbound REMADV (`ReceiveRemadv`, 33001–33004) and COMDIS (`ReceiveComdis`).
 //! 6. Transitions to terminal states: `Settled`, `Disputed`, `PaymentConfirmed`,
 //!    `PaymentDisputed`, or `ComdisRejected`.
 //!
@@ -54,19 +62,33 @@ use mako_engine::{
 ///
 /// | PID   | Name                                          |
 /// |-------|-----------------------------------------------|
-/// | 31009 | MSB-Rechnung (NB-MSB settlement)              |
+/// | 31009 | MSB-Rechnung (MSB → NB/LF/ESA)                |
 ///
-/// **PID 31003** (WiM-Rechnung) belongs to `mako-wim-gas` per
-/// `docs/pid-reference.md`. It must not be registered here.
+/// **PID 31003** (WiM-Rechnung Gas) belongs to `mako-wim-gas` per
+/// `site/content/docs/regulatory/pid-reference.md`. It must not be registered here.
 pub const WIM_INVOIC_PIDS: &[u32] = &[31009];
 
-/// REMADV PIDs for WiM billing (inbound payment advice, invoicer role).
+/// REMADV PIDs for WiM Strom billing (inbound payment advice, MSB invoicer role).
 ///
-/// WiM billing uses the same REMADV format as GPKE. Only 33001 (Bestätigung)
-/// and 33002 (Ablehnung) are relevant for WiM MSB-Rechnung 31009.
+/// WiM Strom billing uses the same REMADV format as GPKE, including the
+/// **itemized (positionsscharf) Strom rejections** — a WiM Strom MSB-Rechnung
+/// (31009) can be rejected header+total (33003) or per line item (33004), not
+/// only non-itemized (33002). Settlement is „ganz oder gar nicht" (no
+/// Teilzahlung), so 33002/33003/33004 are all Abweisungen.
 ///
-/// Source: REMADV AHB 1.0, WiM Strom Teil 1, BK6-24-174.
-pub const WIM_REMADV_PIDS: &[u32] = &[33001, 33002];
+/// | PID   | Name                                                        |
+/// |-------|-------------------------------------------------------------|
+/// | 33001 | Bestätigung (payment confirmed)                             |
+/// | 33002 | Abweisung (non-itemized)                                     |
+/// | 33003 | Strom Abweisung Kopf und Summe (itemized header+total)       |
+/// | 33004 | Strom Abweisung Position (itemized line item)                |
+///
+/// 33003/33004 are **Strom-only**; the Gas twin (`mako-wim-gas`) keeps 33001/33002.
+/// Inbound REMADV routing is by correlation (RFF+Z13 → original 31009 message
+/// reference), so this set governs which PIDs the workflow *accepts*, not routing.
+///
+/// Source: REMADV AHB 1.0a §3, WiM Strom Teil 1, BK6-24-174.
+pub const WIM_REMADV_PIDS: &[u32] = &[33001, 33002, 33003, 33004];
 
 /// COMDIS PID for inbound Ablehnung REMADV in WiM (payer role).
 ///
@@ -109,6 +131,22 @@ pub enum WimRechnungEvent {
         /// re-fetching the original EDIFACT interchange.
         rechnung: serde_json::Value,
     },
+    /// Outbound INVOIC recorded (MSB invoicer role — the MSB sent the 31009 to the
+    /// NB/LF/ESA payer and now awaits a REMADV). State-only, mirroring the GPKE
+    /// invoicer side: the billed EDIFACT with amounts is rendered by the billing
+    /// module (`netzbilanzd`); this event tracks the process for REMADV correlation.
+    InvoicSent {
+        /// BDEW Prüfidentifikator of the outbound INVOIC (31009).
+        pruefidentifikator: Pruefidentifikator,
+        /// GLN of the sender (MSB invoicer).
+        sender: MarktpartnerCode,
+        /// GLN of the recipient (NB/LF/ESA payer).
+        recipient: MarktpartnerCode,
+        /// EDIFACT document date (YYYYMMDD).
+        document_date: String,
+        /// EDIFACT message reference of the outbound INVOIC (REMADV correlation key).
+        invoice_ref: MessageRef,
+    },
     /// INVOIC rejected immediately due to AHB validation failure.
     ///
     /// A CONTRL with error code is enqueued. No further processing occurs.
@@ -130,17 +168,18 @@ pub enum WimRechnungEvent {
         /// Human-readable dispute reason.
         reason: String,
     },
-    /// Inbound REMADV received (invoicer role — payer confirms or disputes).
+    /// Inbound REMADV received (MSB invoicer role — payer confirms or disputes).
     ///
-    /// PID 33001 = full payment confirmed; 33002 = disputed.
+    /// 33001 = full payment confirmed; 33002 = non-itemized Abweisung;
+    /// 33003 = itemized Kopf+Summe Abweisung; 33004 = itemized Position Abweisung.
     RemadvReceived {
-        /// REMADV Prüfidentifikator (33001 or 33002).
+        /// REMADV Prüfidentifikator (33001–33004).
         pid: Pruefidentifikator,
         /// EDIFACT message reference of the REMADV.
         remadv_ref: MessageRef,
         /// GLN of the REMADV sender (payer).
         sender: MarktpartnerCode,
-        /// `true` for 33001 (full payment confirmed).
+        /// `true` only for 33001 (full payment confirmed); 33002/33003/33004 dispute.
         is_confirmed: bool,
     },
     /// Inbound COMDIS 29001 received (payer role — invoicer rejects our REMADV).
@@ -154,6 +193,7 @@ impl EventPayload for WimRechnungEvent {
     fn event_type(&self) -> &'static str {
         match self {
             Self::InvoicReceived { .. } => "WimRechnungInvoicReceived",
+            Self::InvoicSent { .. } => "WimRechnungInvoicSent",
             Self::Rejected { .. } => "WimRechnungRejected",
             Self::DeadlineExpired { .. } => "WimRechnungDeadlineExpired",
             Self::Settled => "WimRechnungSettled",
@@ -202,6 +242,25 @@ pub enum WimRechnungCommand {
         /// makod API round-trip.
         rechnung: serde_json::Value,
     },
+    /// MSB invoicer role: record an outbound INVOIC (31009) sent to the payer.
+    ///
+    /// The billing module (`netzbilanzd`) renders and dispatches the billed
+    /// EDIFACT with amounts; this command records the process so an inbound
+    /// REMADV (33001–33004) from the payer correlates back to it. Mirrors the
+    /// GPKE invoicer side, duplicated into the WiM crate for a clean Sparte/domain
+    /// boundary (no reuse of `GpkeAbrechnungWorkflow`).
+    SendInvoic {
+        /// BDEW Prüfidentifikator of the outbound INVOIC (must be 31009).
+        pid: Pruefidentifikator,
+        /// GLN of the sender (MSB invoicer).
+        sender: MarktpartnerCode,
+        /// GLN of the recipient (NB/LF/ESA payer).
+        recipient: MarktpartnerCode,
+        /// EDIFACT document date (YYYYMMDD).
+        document_date: String,
+        /// EDIFACT message reference of the outbound INVOIC (REMADV correlation key).
+        invoice_ref: MessageRef,
+    },
     /// Settle the invoice — a positive CONTRL will be dispatched.
     Settle,
     /// Dispute the invoice — a negative CONTRL / APERAK will be dispatched.
@@ -220,11 +279,12 @@ pub enum WimRechnungCommand {
         /// Label of the expired deadline.
         label: Box<str>,
     },
-    /// Invoicer role: inbound REMADV received from the payer.
+    /// MSB invoicer role: inbound REMADV received from the payer.
     ///
-    /// PIDs 33001–33002 (REMADV AHB 1.0, WiM Strom Teil 1, BK6-24-174).
+    /// PIDs 33001–33004 (REMADV AHB 1.0a §3, WiM Strom Teil 1, BK6-24-174);
+    /// 33003/33004 are the itemized Strom Abweisungen.
     ReceiveRemadv {
-        /// REMADV Prüfidentifikator (33001 or 33002).
+        /// REMADV Prüfidentifikator (33001–33004).
         pid: Pruefidentifikator,
         /// EDIFACT message reference of the REMADV.
         remadv_ref: MessageRef,
@@ -254,11 +314,18 @@ pub enum WimRechnungState {
     PendingSettlement {
         /// Invoice reference for correlation.
         invoice_ref: MessageRef,
-        /// BDEW Prüfidentifikator (31003 or 31009).
+        /// BDEW Prüfidentifikator (31009).
         pruefidentifikator: Pruefidentifikator,
         /// BO4E `Rechnung` object — retained in state so it survives replay
         /// and is accessible to `GET /api/v1/invoic/{process_id}/rechnung`.
         rechnung: serde_json::Value,
+    },
+    /// Outbound INVOIC recorded (MSB invoicer role); awaiting the payer's REMADV.
+    InvoicSent {
+        /// Invoice reference for REMADV correlation.
+        invoice_ref: MessageRef,
+        /// BDEW Prüfidentifikator (31009).
+        pruefidentifikator: Pruefidentifikator,
     },
     /// Invoice was accepted and settled.
     Settled,
@@ -285,7 +352,7 @@ pub enum WimRechnungState {
 
 // ── Workflow implementation ───────────────────────────────────────────────────
 
-/// WiM billing workflow for INVOIC PIDs 31003 and 31009.
+/// WiM Strom billing workflow for INVOIC PID 31009 (MSB-Rechnung).
 pub struct WimRechnungWorkflow;
 
 impl Workflow for WimRechnungWorkflow {
@@ -304,6 +371,14 @@ impl Workflow for WimRechnungWorkflow {
                 invoice_ref: invoice_ref.clone(),
                 pruefidentifikator: *pruefidentifikator,
                 rechnung: rechnung.clone(),
+            },
+            WimRechnungEvent::InvoicSent {
+                invoice_ref,
+                pruefidentifikator,
+                ..
+            } => WimRechnungState::InvoicSent {
+                invoice_ref: invoice_ref.clone(),
+                pruefidentifikator: *pruefidentifikator,
             },
             WimRechnungEvent::Rejected { reason } => WimRechnungState::Rejected {
                 reason: reason.clone(),
@@ -357,7 +432,7 @@ impl Workflow for WimRechnungWorkflow {
                 }
                 if !WIM_INVOIC_PIDS.contains(&pruefidentifikator.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected a WiM INVOIC PID (31003 or 31009), got {pruefidentifikator}"
+                        "expected a WiM INVOIC PID (31009), got {pruefidentifikator}"
                     )));
                 }
                 if validation_passed {
@@ -398,6 +473,30 @@ impl Workflow for WimRechnungWorkflow {
                         reason: validation_errors.join("; "),
                     }]))
                 }
+            }
+
+            WimRechnungCommand::SendInvoic {
+                pid,
+                sender,
+                recipient,
+                document_date,
+                invoice_ref,
+            } => {
+                if !matches!(state, WimRechnungState::New) {
+                    return Err(WorkflowError::invalid_state("New", format!("{state:?}")));
+                }
+                if !WIM_INVOIC_PIDS.contains(&pid.as_u32()) {
+                    return Err(WorkflowError::rejected(format!(
+                        "expected a WiM INVOIC PID (31009), got {pid}"
+                    )));
+                }
+                Ok(WorkflowOutput::events(vec![WimRechnungEvent::InvoicSent {
+                    pruefidentifikator: pid,
+                    sender,
+                    recipient,
+                    document_date,
+                    invoice_ref,
+                }]))
             }
 
             WimRechnungCommand::Settle => {
@@ -480,16 +579,18 @@ impl Workflow for WimRechnungWorkflow {
             } => {
                 if !matches!(
                     state,
-                    WimRechnungState::Settled | WimRechnungState::PendingSettlement { .. }
+                    WimRechnungState::Settled
+                        | WimRechnungState::PendingSettlement { .. }
+                        | WimRechnungState::InvoicSent { .. }
                 ) {
                     return Err(WorkflowError::invalid_state(
-                        "Settled|PendingSettlement",
+                        "Settled|PendingSettlement|InvoicSent",
                         format!("{state:?}"),
                     ));
                 }
                 if !WIM_REMADV_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected a WiM REMADV PID (33001 or 33002), got {pid}",
+                        "expected a WiM REMADV PID (33001–33004), got {pid}",
                     )));
                 }
                 let is_confirmed = pid.as_u32() == 33001;
@@ -520,5 +621,131 @@ impl Workflow for WimRechnungWorkflow {
                 ]))
             }
         }
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pid(n: u32) -> Pruefidentifikator {
+        Pruefidentifikator::new(n).expect("valid PID")
+    }
+
+    fn mp(s: &str) -> MarktpartnerCode {
+        MarktpartnerCode::new(s)
+    }
+
+    fn send_cmd(p: u32) -> WimRechnungCommand {
+        WimRechnungCommand::SendInvoic {
+            pid: pid(p),
+            sender: mp("9900123456789"),    // MSB (invoicer)
+            recipient: mp("9900987654321"), // NB/LF/ESA (payer)
+            document_date: "20260731".into(),
+            invoice_ref: MessageRef::new("MSB-RE-001"),
+        }
+    }
+
+    fn remadv_cmd(p: u32) -> WimRechnungCommand {
+        WimRechnungCommand::ReceiveRemadv {
+            pid: pid(p),
+            remadv_ref: MessageRef::new("REMADV-001"),
+            sender: mp("9900987654321"),
+        }
+    }
+
+    // ── SendInvoic (MSB invoicer side) ──────────────────────────────────────────
+
+    #[test]
+    fn send_invoic_31009_from_new_emits_invoic_sent() {
+        let out = WimRechnungWorkflow::handle(&WimRechnungState::New, send_cmd(31009))
+            .expect("valid 31009 send must succeed");
+        assert_eq!(out.events.len(), 1);
+        assert!(matches!(out.events[0], WimRechnungEvent::InvoicSent { .. }));
+        // State transitions to InvoicSent (awaiting REMADV).
+        let state = WimRechnungWorkflow::apply(WimRechnungState::New, &out.events[0]);
+        assert!(matches!(state, WimRechnungState::InvoicSent { .. }));
+    }
+
+    #[test]
+    fn send_invoic_rejects_non_31009_pid() {
+        // 31003 is the Gas twin (mako-wim-gas), not a Strom WiM INVOIC PID.
+        let err = WimRechnungWorkflow::handle(&WimRechnungState::New, send_cmd(31003))
+            .expect_err("31003 must be rejected by the Strom WiM workflow");
+        assert!(format!("{err}").contains("31009"));
+    }
+
+    #[test]
+    fn send_invoic_from_wrong_state_errors() {
+        let state = WimRechnungState::Settled;
+        let err = WimRechnungWorkflow::handle(&state, send_cmd(31009))
+            .expect_err("send from a non-New state must be rejected");
+        assert!(format!("{err}").contains("New"));
+    }
+
+    // ── REMADV after send (itemized Strom rejections 33003/33004) ───────────────
+
+    #[test]
+    fn remadv_33001_confirms_payment_after_send() {
+        let state = WimRechnungState::InvoicSent {
+            invoice_ref: MessageRef::new("MSB-RE-001"),
+            pruefidentifikator: pid(31009),
+        };
+        let out = WimRechnungWorkflow::handle(&state, remadv_cmd(33001))
+            .expect("33001 REMADV must be accepted after send");
+        let new_state = WimRechnungWorkflow::apply(state, &out.events[0]);
+        assert!(matches!(new_state, WimRechnungState::PaymentConfirmed));
+    }
+
+    #[test]
+    fn remadv_33003_itemized_kopf_summe_rejection_after_send() {
+        let state = WimRechnungState::InvoicSent {
+            invoice_ref: MessageRef::new("MSB-RE-001"),
+            pruefidentifikator: pid(31009),
+        };
+        let out = WimRechnungWorkflow::handle(&state, remadv_cmd(33003))
+            .expect("33003 itemized rejection must be accepted");
+        assert!(matches!(
+            out.events[0],
+            WimRechnungEvent::RemadvReceived {
+                is_confirmed: false,
+                ..
+            }
+        ));
+        let new_state = WimRechnungWorkflow::apply(state, &out.events[0]);
+        match new_state {
+            WimRechnungState::PaymentDisputed { remadv_pid } => {
+                assert_eq!(remadv_pid.as_u32(), 33003);
+            }
+            other => panic!("expected PaymentDisputed(33003), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn remadv_33004_itemized_position_rejection_after_send() {
+        let state = WimRechnungState::InvoicSent {
+            invoice_ref: MessageRef::new("MSB-RE-001"),
+            pruefidentifikator: pid(31009),
+        };
+        let out = WimRechnungWorkflow::handle(&state, remadv_cmd(33004))
+            .expect("33004 itemized rejection must be accepted");
+        let new_state = WimRechnungWorkflow::apply(state, &out.events[0]);
+        assert!(matches!(
+            new_state,
+            WimRechnungState::PaymentDisputed { remadv_pid } if remadv_pid.as_u32() == 33004
+        ));
+    }
+
+    #[test]
+    fn remadv_unknown_pid_is_rejected() {
+        let state = WimRechnungState::InvoicSent {
+            invoice_ref: MessageRef::new("MSB-RE-001"),
+            pruefidentifikator: pid(31009),
+        };
+        let err = WimRechnungWorkflow::handle(&state, remadv_cmd(33099))
+            .expect_err("an out-of-range REMADV PID must be rejected");
+        assert!(format!("{err}").contains("33001"));
     }
 }

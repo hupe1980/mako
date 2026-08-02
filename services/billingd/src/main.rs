@@ -19,7 +19,7 @@
 //! | `STROM` | `calculate_strom` | §41a EnWG (dynamic), §14a Modul 1/3 |
 //! | `GAS` | `calculate_gas` | §25 Nr. 4 MessEV (Brennwertkorrektur), §2 EnergieStG, BEHG |
 //! | `WAERME` | `calculate_waerme` | EnWG Fernwärme |
-//! | `SOLAR` | `calculate_solar` | §42b EEG (Mieterstrom), §42a EEG (GGV) |
+//! | `SOLAR` | `calculate_solar` | §21 Abs. 3 EEG (Mieterstrom), §42b EnWG (GGV) |
 //! | `EEG` | `calculate_eeg` | §21 EEG (Vergütung), §38 EEG (Marktprämie), §53 EEG |
 //! | `EINSPEISUNG` | `calculate_einspeisung` | Direktvermarktung, Marktwert |
 //! | `WAERMEPUMPE` | `calculate_strom` + §14a | §14a EnWG Modul 1/3 |
@@ -39,7 +39,7 @@
 //! | `POST` | `/api/v1/billing/{malo_id}/preview` | Dry-run (no persist) |
 //! | `POST` | `/api/v1/billing/{id}/correction` | Korrekturrechnung / Stornorechnung (\u00a722 Me\u00dfZV) |
 //! | `POST` | `/api/v1/billing/sammelrechnung/{rv_id}` | B2B consolidated Sammelrechnung |
-//! | `POST` | `/api/v1/billing/ggv/{ggv_id}` | \u00a742a GGV multi-tenant community solar billing |
+//! | `POST` | `/api/v1/billing/ggv/{ggv_id}` | \u00a742b EnWG GGV multi-tenant community solar billing |
 //! | `POST` | `/api/v1/billing/vpp/{vpp_id}` | VPP aggregation settlement (RED III Art. 17) |
 //! | `POST` | `/api/v1/billing/{id}/submit-b2g` | XRechnung B2G submission (\u00a727 EGovG 01.01.2027) |
 //! | `GET` | `/api/v1/billing` | List records (`?malo_id=&lf_mp_id=&outcome=`) |
@@ -208,7 +208,7 @@ impl Daemon for Billingd {
                 "/api/v1/billing/sammelrechnung/:rahmenvertrag_id",
                 post(handlers::post_sammelrechnung),
             )
-            // B1: §42a GGV community solar multi-tenant proportional billing
+            // B1: §42b EnWG GGV community solar multi-tenant proportional billing
             .route(
                 "/api/v1/billing/ggv/:ggv_id",
                 post(handlers::post_ggv_billing),

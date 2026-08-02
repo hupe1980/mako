@@ -165,7 +165,7 @@
       "profile_dir": "contrl/fv20251001",
       "profile_release": "2.0b",
       "release_match": true,
-      "note": "CONTRL AHB 1.0 + MIG 2.0b. Extraordinary publication Stand 11.12.2025 (CONTRL_AHB_1.0_ausserordentliche_Veroeffentlichung) is in docs/pdfs/bdew-mako/. The extraordinary MIG 2.0b Stand 11.12.2025 corrects typos/cross-references only; no new segments, qualifiers, or rule-code changes affecting profile validation. Confirmed: generated profile fv20251001 satisfies both the base AHB 1.0 and the extraordinary correction. Profile release 2.0b matches wire code. Open-ended validity.",
+      "note": "CONTRL AHB 1.0 + MIG 2.0b. Extraordinary publication Stand 11.12.2025 (CONTRL_AHB_1.0_ausserordentliche_Veroeffentlichung) is in regulatories/bdew-mako/. The extraordinary MIG 2.0b Stand 11.12.2025 corrects typos/cross-references only; no new segments, qualifiers, or rule-code changes affecting profile validation. Confirmed: generated profile fv20251001 satisfies both the base AHB 1.0 and the extraordinary correction. Profile release 2.0b matches wire code. Open-ended validity.",
       "extraordinary_publication": {
         "ahb": "CONTRL_AHB_1.0_-_ausserordentliche_Veroeffentlichung_Stand_11.12.2025.pdf",
         "mig": "CONTRL_MIG_2.0b_-_ausserordentliche_Veroeffentlichung_Stand_11.12.2025.pdf",

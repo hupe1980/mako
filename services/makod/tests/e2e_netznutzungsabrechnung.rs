@@ -53,8 +53,8 @@ use mako_engine::{
     version::WorkflowId,
 };
 use mako_gpke::{
-    ABRECHNUNG_WINDOW_LABEL, AbrechnungCommand, AbrechnungState, GpkeAbrechnungWorkflow,
-    INVOIC_PIDS,
+    ABRECHNUNG_WINDOW_LABEL, AbrechnungCommand, AbrechnungState, GPKE_INVOIC_PIDS,
+    GpkeAbrechnungWorkflow,
 };
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -216,13 +216,13 @@ async fn e2e_gpke_abrechnung_31005_mmm_settle() {
 
 /// GPKE Abrechnung — all active INVOIC PIDs are accepted by the workflow.
 ///
-/// Validates that `INVOIC_PIDS` = {31001, 31002, 31005, 31006, 31007,
+/// Validates that `GPKE_INVOIC_PIDS` = {31001, 31002, 31005, 31006, 31007,
 /// 31008, 31009} all produce `ValidationPassed` (no PID-guard rejections).
 /// PID 31004 is excluded here — it is the Sparte-neutral universal Storno
 /// (INVOIC AHB §3.1.2), checked generically by `invoicd`, not a GPKE billing PID.
 #[tokio::test]
 async fn e2e_gpke_abrechnung_all_pids_accepted() {
-    for &pid in INVOIC_PIDS {
+    for &pid in GPKE_INVOIC_PIDS {
         let nb = MockNb::new();
         nb.receive_invoic(pid, &format!("INVOIC-{pid}-2025"), true)
             .await;

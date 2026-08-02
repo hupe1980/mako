@@ -486,14 +486,14 @@ pub struct WaterProduct {
     pub mwst_rate_override: Option<Decimal>,
 }
 
-/// Solar PV / Eigenverbrauch / §42b GGV / §21 Abs. 3 Mieterstrom product — SOLAR.
+/// Solar PV / Eigenverbrauch / §42b EnWG GGV / §21 Abs. 3 EEG Mieterstrom product — SOLAR.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SolarProduct {
     #[serde(default)]
     pub product_code: Option<String>,
     #[serde(default)]
     pub solar_arbeitspreis_ct_per_kwh: Option<Decimal>,
-    /// Grid remainder rate for §42b GGV hybrid billing (ct/kWh).
+    /// Grid remainder rate for §42b EnWG GGV hybrid billing (ct/kWh).
     ///
     /// In GGV (Gemeinschaftliche Gebäudeversorgung) billing, some consumption
     /// comes from the building's PV plant (charged at `solar_arbeitspreis_ct_per_kwh`)
@@ -505,7 +505,7 @@ pub struct SolarProduct {
     /// §21 Abs. 3 EEG Mieterstrom-Zuschlag (ct/kWh).
     #[serde(default)]
     pub mieterstrom_aufschlag_ct_per_kwh: Option<Decimal>,
-    /// §42a EEG GGV community energy discount (ct/kWh).
+    /// §42b EnWG GGV community energy discount (ct/kWh).
     #[serde(default)]
     pub gemeinschaft_rabatt_ct_per_kwh: Option<Decimal>,
     /// true when Stromsteuer applies (normally exempt §9a Nr. 1 StromStG).

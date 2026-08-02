@@ -113,7 +113,7 @@ pub const ORDRSP_PIDS: &[u32] = &[
 /// | 21043 | Bestellungsantwort / -mitteilung (GPKE Teil 3) | NB → LF · MSB → LF |
 /// | 21044 | Bestellungsbeendigung (GPKE Teil 3) | MSB → NB · MSB → LF |
 ///
-/// Source: `docs/pid-reference.md` (generated from BDEW xlsx PID 3.3 + PID 4.0).
+/// Source: `site/content/docs/regulatory/pid-reference.md` (generated from BDEW xlsx PID 3.3 + PID 4.0).
 /// PID 21042 (WiM / Umsetzungsstatus, „Bestellung (WiM)", MSB → ESA; IFTSTA AHB
 /// 2.0g Kap. 6.10) is a WiM Strom Teil 2 message handled by `mako-wim`
 /// (`esa-wertebestellung`), not GPKE — it is not registered here.
@@ -157,6 +157,13 @@ pub enum KonfigurationAenderungEvent {
         /// Message reference of the inbound ORDRSP.
         message_ref: MessageRef,
     },
+    /// IFTSTA Bestellungsantwort/-beendigung (21043/21044) recorded for audit.
+    IftstaErhalten {
+        /// IFTSTA Prüfidentifikator (21043/21044).
+        pid: Pruefidentifikator,
+        /// Message reference of the inbound IFTSTA.
+        message_ref: MessageRef,
+    },
     /// A registered deadline expired before the ORDRSP arrived.
     DeadlineExpired {
         /// Unique ID of the expired deadline.
@@ -170,6 +177,7 @@ impl EventPayload for KonfigurationAenderungEvent {
     fn event_type(&self) -> &'static str {
         match self {
             Self::AnfrageGesendet { .. } => "KonfigAenderungAnfrageGesendet",
+            Self::IftstaErhalten { .. } => "KonfigAenderungIftstaErhalten",
             Self::AntwortErhalten { .. } => "KonfigAenderungAntwortErhalten",
             Self::ZwischenstandErhalten { .. } => "KonfigAenderungZwischenstandErhalten",
             Self::DeadlineExpired { .. } => "KonfigAenderungDeadlineExpired",
@@ -277,6 +285,16 @@ pub enum KonfigurationAenderungCommand {
         /// Message reference of the inbound ORDRSP.
         message_ref: MessageRef,
     },
+    /// Inbound IFTSTA Bestellungsantwort/-beendigung (PIDs 21043/21044) from the
+    /// NB or MSB. Informational status on the configuration order; recorded for
+    /// audit without changing the lifecycle outcome.
+    ReceiveIftsta {
+        /// IFTSTA Prüfidentifikator (21043 = Bestellungsantwort/-mitteilung,
+        /// 21044 = Bestellungsbeendigung).
+        pid: Pruefidentifikator,
+        /// Message reference of the inbound IFTSTA.
+        message_ref: MessageRef,
+    },
     /// A registered deadline fired.
     TimeoutExpired {
         /// Unique ID of the expired deadline.
@@ -334,6 +352,7 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
                 message_ref: message_ref.clone(),
             }),
             KonfigurationAenderungEvent::ZwischenstandErhalten { .. } => state, // no-op, informational
+            KonfigurationAenderungEvent::IftstaErhalten { .. } => state, // no-op, informational
             KonfigurationAenderungEvent::AntwortErhalten {
                 ordrsp_pid,
                 accepted,
@@ -394,6 +413,12 @@ impl Workflow for GpkeKonfigurationAenderungWorkflow {
                     }),
                 )];
                 Ok(WorkflowOutput::with_outbox(vec![event], outbox))
+            }
+
+            KonfigurationAenderungCommand::ReceiveIftsta { pid, message_ref } => {
+                // IFTSTA Bestellungsantwort/-beendigung (21043/21044) is
+                // informational — accept in any state and record for audit.
+                Ok(vec![KonfigurationAenderungEvent::IftstaErhalten { pid, message_ref }].into())
             }
 
             KonfigurationAenderungCommand::ReceiveOrdrsp {

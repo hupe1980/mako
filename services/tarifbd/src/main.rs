@@ -12,7 +12,7 @@
 //! | `GAS` | Natural gas SLP/RLM with Brennwertkorrektur | `calculate_gas` |
 //! | `WAERME` | District heat / Fernwärme | `calculate_waerme` |
 //! | `WASSER` | Drinking water + gesplittete Abwassergebühr (municipal) | `calculate_wasser` |
-//! | `SOLAR` | Mieterstrom §42b, §42a Gemeinschaftliche Gebäudeversorgung | `calculate_solar` |
+//! | `SOLAR` | Mieterstrom §21 Abs. 3 EEG, §42b EnWG Gemeinschaftliche Gebäudeversorgung | `calculate_solar` |
 //! | `EEG` | Feed-in settlement: Vergütung, Marktprämie, Managementprämie | `calculate_eeg` |
 //! | `EINSPEISUNG` | Non-EEG Direktvermarktung settlement | `calculate_einspeisung` |
 //! | `WAERMEPUMPE` | Heat pump electricity supply with §14a Modul 1/3 | `calculate_strom` |

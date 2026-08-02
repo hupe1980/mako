@@ -53,6 +53,12 @@ pub struct CalculateRequest {
     /// the paid `abschlaege` against the consumption bill.
     #[serde(default)]
     pub schlussrechnung: bool,
+    /// §13b UStG reverse charge — set `true` when the customer is a
+    /// Stromwiederverkäufer (electricity/gas reseller, §13b Abs. 2 Nr. 5 lit. b
+    /// UStG). The whole supply is then invoiced net (no VAT); the recipient owes
+    /// the Umsatzsteuer, and the EN 16931 tax breakdown carries an `AE` subtotal.
+    #[serde(default)]
+    pub reverse_charge: bool,
     /// Paid advance payments to settle on this invoice (§40c Abs. 2 EnWG:
     /// credits are offset with the next Abschlag or refunded within two
     /// weeks). Each entry carries the VAT rate it was invoiced at.

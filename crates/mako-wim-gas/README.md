@@ -42,6 +42,10 @@ Both live under BK7-24-01-009 but cover entirely different processes:
 | 44168–44170 | Verpflichtungsanfrage (NB → gMSB) | ✅ Implemented (`WimGasVerpflichtungsanfrageWorkflow`) |
 | 23005 | Ablehnung Störungsmeldung Gas-Variante — **Gas-only** | ✅ Implemented (`WimGasInsrptWorkflow`) |
 | 23009 | Ergebnisbericht Störungsmeldung Gas-Variante — **Gas-only** | ✅ Implemented (`WimGasInsrptWorkflow`) |
+| 31003 | WiM-Rechnung Gas (gMSB → NB) — INVOIC | ✅ Implemented (`WimGasInvoicWorkflow`, send + receive) |
+| 31004 | Stornorechnung — Sparte-neutral universal Storno (hosted here) | ✅ Implemented (`WimGasInvoicWorkflow`) |
+| 33001, 33002 | REMADV Zahlungsavis / Abweisung (NB → gMSB) | ✅ Implemented (33003/34 are Strom-only, in `mako-wim`) |
+| 29001 | COMDIS Ablehnung REMADV (gMSB → NB) | ✅ Implemented |
 
 ### INSRPT Störungsmeldungen — Gas-only PIDs
 

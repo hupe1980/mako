@@ -23,7 +23,7 @@ no SEPA collection.
 | **IBAN encryption ready** | `iban_hash` is an app-computed **keyed BLAKE3** lookup key (no pgcrypto); `iban_encrypted` flag; CAMT.054 matching uses the hash even when the IBAN is ciphertext |
 | **Abschlag model** | ABSCHLAG booked as advance-payment **credit** (negative); full-cost Jahresrechnung as debit — the balance nets to the Nachzahlung/Erstattung |
 | **Mahnwesen** | Mahnstufe 1→2→3; auto-dunning worker (advisory-locked, opt-in) |
-| **Sperrung handoff** | Mahnstufe-3 arrears ≥ `sperrung_threshold_ct` (§19 Abs. 2 StromGVV, default 100 EUR) → `POST sperrd /api/v1/sperr-orders` (idempotent) |
+| **Sperr-Sequenz (§§41f/41g EnWG)** | Mahnstufe-3 arrears ≥ `sperrung_threshold_ct` (default 100 EUR) run the three-step disconnection sequence: **Sperrandrohung** (4 Wochen) → **Sperrankündigung** (8 Werktage im Voraus) → **Sperrauftrag** → `POST sperrd /api/v1/sperr-orders`. Each step is idempotent; the first two emit signed CloudEvents via the outbox (persist-before-dispatch). Halted by an accepted **Abwendungsvereinbarung** (§41g) or an **Unverhältnismäßigkeit/Schutzbedürftigkeit** flag (§41f Abs. 1/2). |
 | **Business partner** | `kunden_nr` links accounts to `vertragd.kunden`; `GET /api/v1/business-partners/{kunden_nr}/{accounts,balance}` aggregate cross-MaLo |
 | **Refund payout** | Jahresabschluss Erstattung → **pain.001** to the customer IBAN (credit balance carried forward when no IBAN) |
 | **Metrics** | `GET /metrics` — Prometheus gauges (open receivables, credit balances, dunning by Mahnstufe, pending SEPA runs) |

@@ -23,12 +23,12 @@
 //!
 //! ```text
 //! cargo xtask extract-docx \
-//!   --file    docs/pdfs/MSCONS_MIG_2.5.docx \
+//!   --file    regulatories/MSCONS_MIG_2.5.docx \
 //!   --message-type mscons \
 //!   --release 2.5
 //!
 //! cargo xtask extract-docx \
-//!   --file    docs/pdfs/UTILMD_AHB_Strom_S2.2.docx \
+//!   --file    regulatories/UTILMD_AHB_Strom_S2.2.docx \
 //!   --message-type utilmd \
 //!   --release S2.2 \
 //!   --mode ahb
@@ -918,11 +918,11 @@ mod tests {
     #[test]
     fn version_inference_docx() {
         assert_eq!(
-            infer_release_from_path("docs/pdfs/MSCONS_MIG_2.5.docx"),
+            infer_release_from_path("regulatories/MSCONS_MIG_2.5.docx"),
             "2.5"
         );
         assert_eq!(
-            infer_release_from_path("docs/pdfs/UTILMD_AHB_Strom_S2.2.docx"),
+            infer_release_from_path("regulatories/UTILMD_AHB_Strom_S2.2.docx"),
             "S2.2"
         );
     }

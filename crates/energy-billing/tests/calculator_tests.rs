@@ -2731,7 +2731,7 @@ fn abschlagsplan_monthly_uniform_correct() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §42b EEG 2023 (Solarpaket I) — Gemeinschaftliche Gebäudeversorgung (GGV)
+// §42b EnWG (Solarpaket I) — Gemeinschaftliche Gebäudeversorgung (GGV)
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// GGV hybrid billing: PV allocation < consumption → split into PV + grid portions.
@@ -2825,10 +2825,7 @@ fn ggv_hybrid_billing_splits_pv_and_grid_portions() {
     let has_42b = pv_pos
         .iter()
         .any(|p| p.legal_basis.as_deref().unwrap_or("").contains("42b"));
-    assert!(
-        has_42b,
-        "§42b EEG 2023 must be legal basis for PV positions"
-    );
+    assert!(has_42b, "§42b EnWG must be legal basis for PV positions");
 
     // GGV coverage info position must exist
     let has_coverage = invoice.positions.iter().any(|p| p.has_tag("ggv_coverage"));
@@ -2944,7 +2941,7 @@ fn solar_provider_simple_path_unchanged_without_ggv() {
         .unwrap_or("");
     assert!(
         legal_basis.contains("42b"),
-        "Solar arbeitspreis must reference §42b EEG 2023 (not §42a), got: {legal_basis}"
+        "Solar arbeitspreis must reference §42b EnWG (not §42a), got: {legal_basis}"
     );
 
     // GGV Rabatt must also reference §42b
@@ -2957,7 +2954,7 @@ fn solar_provider_simple_path_unchanged_without_ggv() {
         .unwrap_or("");
     assert!(
         rabatt_basis.contains("42b"),
-        "GGV Rabatt must reference §42b EEG 2023, got: {rabatt_basis}"
+        "GGV Rabatt must reference §42b EnWG, got: {rabatt_basis}"
     );
 }
 

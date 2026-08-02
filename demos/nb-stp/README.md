@@ -15,7 +15,7 @@ Bestätigung is delivered to the ERP webhook within seconds.
 | `processd` | `:8580` | NB STP auto-responder — netz-checker (6 checks), LF E_0624 (45 min) |
 | `makod` | `:8080` | EDIFACT process engine — GPKE/WiM/GeLi Gas, in-memory |
 
-The full platform has [16 production services](../../docs/services.md) — `invoicd`,
+The full platform has [16 production services](https://hupe1980.github.io/mako/docs/services/) — `invoicd`,
 `netzbilanzd`, `edmd`, `einsd`, `billingd`, `accountingd`, `vertragd`, `portald`,
 `agentd`, and more. Run them individually as needed following their operator guides.
 
@@ -244,5 +244,5 @@ docker compose down -v    # wipe all data (full reset)
 ```
 
 Authentication is disabled in this demo — suitable for local development only.
-See the [production guide](../../docs/getting-started.md) for OIDC setup, and
-[services.md](../../docs/services.md) for the full 17-service platform.
+See the [production guide](https://hupe1980.github.io/mako/docs/guide/getting-started/) for OIDC setup, and
+[the services guide](https://hupe1980.github.io/mako/docs/services/) for the full 16-service platform.

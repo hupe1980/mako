@@ -152,13 +152,28 @@ CREATE TABLE dunning_cases (
     issued_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     due_date        DATE        NOT NULL,
     resolved_at     TIMESTAMPTZ,
-    -- CloudEvent ID of the de.accounting.sperrauftrag emitted at Mahnstufe 3
+    -- ── §§41f/41g EnWG Versorgungsunterbrechung sequence (Mahnstufe 3 only) ──
+    -- The disconnection sequence is a 3-phase state machine on a Stufe-3 case:
+    --   Sperrandrohung (§41f Abs. 1, 4-Wochen-Frist)
+    --     → Sperrankündigung (§41f Abs. 5, 8-Werktage-Frist)
+    --       → Sperrauftrag to sperrd.
+    -- Any of `abwendung_vereinbart_at` (§41g Abs. 1 S. 10 — acceptance BARS
+    -- disconnection) or `unverhaeltnismaessig_seit` (§41f Abs. 1 S. 2 / Abs. 2 —
+    -- proportionality / Schutzbedürftigkeit) HALTS the sequence.
+    sperrandrohung_at       TIMESTAMPTZ,
+    sperrankuendigung_at    TIMESTAMPTZ,
+    geplantes_sperrdatum    DATE,
+    abwendung_vereinbart_at TIMESTAMPTZ,
+    unverhaeltnismaessig_seit TIMESTAMPTZ,
+    -- Reference of the Sperrauftrag handed to sperrd (idempotency: won't re-post).
     sperrauftrag_ce_id TEXT
 );
 
 COMMENT ON TABLE dunning_cases IS
-    'Mahnwesen escalation (Mahnstufe 1–3). '
-    'Mahnstufe 3 triggers de.accounting.sperrauftrag CloudEvent → sperrd.';
+    'Mahnwesen escalation (Mahnstufe 1–3). At Mahnstufe 3 a §§41f/41g EnWG '
+    'disconnection sequence runs: Sperrandrohung (4 Wochen) → Sperrankündigung '
+    '(8 Werktage) → Sperrauftrag to sperrd, halted by Abwendungsvereinbarung '
+    '(§41g Abs. 1) or Unverhältnismäßigkeit/Schutzbedürftigkeit (§41f Abs. 1/2).';
 
 CREATE INDEX dc_account ON dunning_cases (account_id, stufe);
 CREATE INDEX dc_overdue ON dunning_cases (tenant, due_date)

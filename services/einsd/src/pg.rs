@@ -245,7 +245,7 @@ pub struct AnlageRow {
     pub biogas_quota_ytd_year: Option<i16>,
     // §51 Abs. 2 iMSys rollout datum (migration 0009)
     pub imesys_rollout_datum: Option<Date>,
-    // §42b GGV Nutzungsplan (migration 0009)
+    // §42b EnWG GGV Nutzungsplan (migration 0009)
     pub ggv_nutzungsplan: Option<serde_json::Value>,
     // §21c notification tracking (migration 0009)
     pub veraeusserungsform_notification_sent_at: Option<OffsetDateTime>,
@@ -1363,7 +1363,7 @@ pub async fn run_settlement(
             },
             TariffSource::Statutory,
         ),
-        // ── §42b EEG 2023 Gemeinschaftliche Gebäudeversorgung ─────────────────
+        // ── §42b EnWG Gemeinschaftliche Gebäudeversorgung ─────────────────
         // GGV plants receive EEG Einspeisevergütung from the NB like any other
         // solar plant. The settlement is against the Einspeisemessung (grid
         // feed-in) at the GGV MaLo, not per-tenant. TenantElectricity is the

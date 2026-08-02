@@ -87,7 +87,8 @@ use mako_wim::{
     WimTechnikAenderungWorkflow,
 };
 use mako_wim_gas::{
-    WimGasAnmeldungCommand, WimGasAnmeldungWorkflow, WimGasInsrptWorkflow, WimGasInvoicCommand,
+    GasGeraeteubernahmeCommand, WimGasAnmeldungCommand, WimGasAnmeldungWorkflow,
+    WimGasGeraeteubernahmeWorkflow, WimGasInsrptWorkflow, WimGasInvoicCommand,
     WimGasInvoicWorkflow, WimGasKuendigungCommand, WimGasKuendigungWorkflow,
     WimGasStornierungCommand, WimGasStornierungWorkflow, WimGasVerpflichtungsanfrageCommand,
     WimGasVerpflichtungsanfrageWorkflow, insrpt::GasStorungsmeldungCommand,
@@ -591,6 +592,20 @@ pub async fn dispatch_deadline(
                 .await
                 .map(|_| ())
         }
+        "wim-gas-geraeteubernahme" => {
+            let p = Process::<WimGasGeraeteubernahmeWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                GasGeraeteubernahmeCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
         "wim-gas-anmeldung" => {
             let p = Process::<WimGasAnmeldungWorkflow, _>::from_identity(
                 Arc::clone(&event_store),
@@ -1077,6 +1092,7 @@ pub const DISPATCH_TABLE: &[&str] = &[
     "mabis-billing",
     "mabis-clearingliste",
     "wim-gas-anmeldung",
+    "wim-gas-geraeteubernahme",
     "wim-gas-kuendigung",
     "wim-gas-verpflichtungsanfrage",
     "wim-gas-invoic",

@@ -213,8 +213,9 @@ pub mod wechselprozesse;
 
 pub use abrechnung::{
     ABRECHNUNG_WINDOW_LABEL, AbrechnungCommand, AbrechnungData, AbrechnungEvent,
-    AbrechnungProjection, AbrechnungRecord, AbrechnungState, COMDIS_ABLEHNUNG_REMADV_PID,
-    GpkeAbrechnungWorkflow, INVOIC_PIDS, REMADV_PIDS, WORKFLOW_NAME as ABRECHNUNG_WORKFLOW_NAME,
+    AbrechnungProjection, AbrechnungRecord, AbrechnungState, GPKE_COMDIS_ABLEHNUNG_PID,
+    GPKE_INVOIC_PIDS, GPKE_REMADV_PIDS, GpkeAbrechnungWorkflow,
+    WORKFLOW_NAME as ABRECHNUNG_WORKFLOW_NAME,
 };
 pub use allokationsliste::{
     AllokationslisteCommand, AllokationslisteEvent, AllokationslisteState, AnforderungData,
@@ -500,7 +501,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         router.register(IFTSTA_SPERRUNG_PID.as_u32(), sperrung_lf::WORKFLOW_NAME);
 
         // INVOIC-based: all 6 billing PIDs use `GpkeAbrechnungWorkflow`.
-        for &pid in INVOIC_PIDS {
+        for &pid in GPKE_INVOIC_PIDS {
             router.register(pid, "gpke-abrechnung");
         }
 
@@ -516,7 +517,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // breaking the billing cycle entirely.
         //
         // Source: REMADV AHB 1.0, GPKE Teil 2/Teil 3, BK6-24-174.
-        for &pid in REMADV_PIDS {
+        for &pid in GPKE_REMADV_PIDS {
             router.register(pid, "gpke-abrechnung");
         }
 
@@ -528,7 +529,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // inbound from the invoicer and belongs to the billing cycle.
         //
         // Source: COMDIS AHB 1.0, GPKE Teil 2/Teil 3, BK6-24-174.
-        router.register(COMDIS_ABLEHNUNG_REMADV_PID.as_u32(), "gpke-abrechnung");
+        router.register(GPKE_COMDIS_ABLEHNUNG_PID.as_u32(), "gpke-abrechnung");
 
         // ORDRSP inbound PIDs for Konfigurationseinrichtung (19001/19002).
         //
@@ -559,7 +560,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // PIDs 21024–21028 are "GPKE / Vollzugsmeldung" per the IFTSTA AHB.
         // PID 21033 is "GPKE / Statusmeldung Kündigung" (Ablehnung GPKE Teil 3).
         // Previously, 21024–21028 were incorrectly attributed to WiM Gas in
-        // docs/pid-reference.md; the AHB profile is authoritative.
+        // site/content/docs/regulatory/pid-reference.md; the AHB profile is authoritative.
         // PID 21039 (Auftragsstatus Sperren) is registered to `gpke-sperrung-lf` above.
         for &pid in wechselprozesse::IFTSTA_PIDS {
             router.register(pid, "gpke-supplier-change");
@@ -724,8 +725,8 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             ("ORDRSP_SPERRUNG_PIDS", ORDRSP_SPERRUNG_PIDS),
             ("ORDRSP_STORNO_PIDS", ORDRSP_STORNO_PIDS),
             ("MSB_ANTWORT_PIDS", MSB_ANTWORT_PIDS),
-            ("INVOIC_PIDS", INVOIC_PIDS),
-            ("REMADV_PIDS", REMADV_PIDS),
+            ("GPKE_INVOIC_PIDS", GPKE_INVOIC_PIDS),
+            ("GPKE_REMADV_PIDS", GPKE_REMADV_PIDS),
             ("ORDRSP_PIDS", ORDRSP_PIDS),
             ("ANTWORT_PIDS_LF", ANTWORT_PIDS_LF),
             ("wechselprozesse::IFTSTA_PIDS", wechselprozesse::IFTSTA_PIDS),

@@ -1079,12 +1079,7 @@ pub fn gpke_konfiguration_aenderung_registry() -> AdapterRegistry<GpkeKonfigurat
                     "expected AnyMessage for GPKE Konfigurationsänderung adapter".into(),
                 )
             })?;
-            let AnyMessage::Ordrsp(o) = msg else {
-                return Err(EngineError::Deserialization(
-                    "GPKE Konfigurationsänderung adapter: expected ORDRSP message (PIDs 17102, 17113)".into(),
-                ));
-            };
-            let ordrsp_pid = msg
+            let pid = msg
                 .detect_pruefidentifikator()
                 .map_err(|e| {
                     EngineError::Deserialization(format!(
@@ -1092,6 +1087,23 @@ pub fn gpke_konfiguration_aenderung_registry() -> AdapterRegistry<GpkeKonfigurat
                     ))
                 })
                 .and_then(convert_pid)?;
+
+            // IFTSTA 21043/21044 (Bestellungsantwort/-beendigung) — informational.
+            if let AnyMessage::Iftsta(_) = msg {
+                return Ok(KonfigurationAenderungCommand::ReceiveIftsta {
+                    pid,
+                    message_ref: MessageRef::new(msg.message_ref()),
+                });
+            }
+
+            let AnyMessage::Ordrsp(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Konfigurationsänderung adapter: expected ORDRSP (17102/17113) or \
+                     IFTSTA (21043/21044) message"
+                        .into(),
+                ));
+            };
+            let ordrsp_pid = pid;
             // BGM response code 27 = accepted without amendment; anything else = rejection.
             let (accepted, reason) = {
                 let code = o
@@ -1416,6 +1428,51 @@ pub fn gpke_sperrung_msb_response_registry() -> AdapterRegistry<GpkeSperrungWork
     registry
 }
 
+// ── GPKE Sperrung NB — LF Stornierung (ORDCHG 39000) ─────────────────────────
+
+/// Build an [`AdapterRegistry`] for ORDCHG 39000 routed to [`GpkeSperrungWorkflow`]
+/// (NB side).
+///
+/// The LF cancels a pending Sperrauftrag with ORDCHG 39000 (Stornierung); `makod`
+/// resumes the NB-side process with [`SperrungCommand::ReceiveStornierung`]. ORDCHG
+/// carries no LOC — the process is correlated by the original order reference
+/// (RFF+ON, the Belegnummer the 17115 spawn indexed the process under).
+#[must_use]
+pub fn gpke_sperrung_stornierung_registry() -> AdapterRegistry<GpkeSperrungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Sperrung Stornierung adapter".into(),
+                )
+            })?;
+            let AnyMessage::Ordchg(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Sperrung Stornierung adapter: expected ORDCHG message (PID 39000)".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Sperrung Stornierung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            Ok(SperrungCommand::ReceiveStornierung {
+                pid,
+                sender: MarktpartnerCode::new(
+                    o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                message_ref: MessageRef::new(msg.message_ref()),
+            })
+        },
+    ));
+    registry
+}
+
 // ── GPKE Sperrung LF side (ORDRSP 19116/19117 — NB → LF) ────────────────────
 
 /// Build an [`AdapterRegistry`] for [`GpkeSperrungLfWorkflow`].
@@ -1441,12 +1498,6 @@ pub fn gpke_sperrung_lf_registry() -> AdapterRegistry<GpkeSperrungLfWorkflow> {
                 )
             })?;
 
-            let AnyMessage::Ordrsp(o) = msg else {
-                return Err(EngineError::Deserialization(
-                    "GPKE Sperrung LF adapter: expected ORDRSP message (PIDs 19116/19117)".into(),
-                ));
-            };
-
             let pid = msg
                 .detect_pruefidentifikator()
                 .map_err(|e| {
@@ -1455,20 +1506,49 @@ pub fn gpke_sperrung_lf_registry() -> AdapterRegistry<GpkeSperrungLfWorkflow> {
                     ))
                 })
                 .and_then(convert_pid)?;
+            let message_ref = MessageRef::new(msg.message_ref());
 
-            // 19116 = Bestätigung (NB will execute the Sperrung).
-            // 19117 = Ablehnung  (NB rejects the Sperrauftrag).
-            let is_confirmed = pid.as_u32() == 19116;
-
-            Ok(SperrungLfCommand::ReceiveOrdrsp {
-                pid,
-                is_confirmed,
-                message_ref: MessageRef::new(msg.message_ref()),
-                sender: MarktpartnerCode::new(
-                    o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
-                ),
-                reason: None,
-            })
+            match msg {
+                AnyMessage::Ordrsp(o) => {
+                    let sender = MarktpartnerCode::new(
+                        o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                    );
+                    match pid.as_u32() {
+                        // Bestätigung/Ablehnung of the LF's Sperrauftrag (ORDERS 17115).
+                        19116 | 19117 => Ok(SperrungLfCommand::ReceiveOrdrsp {
+                            pid,
+                            is_confirmed: pid.as_u32() == 19116,
+                            message_ref,
+                            sender,
+                            reason: None,
+                        }),
+                        // Bestätigung/Ablehnung of the LF's Stornierung (ORDCHG 39000).
+                        19128 | 19129 => Ok(SperrungLfCommand::ReceiveStornoOrdrsp {
+                            pid,
+                            is_confirmed: pid.as_u32() == 19128,
+                            message_ref,
+                            sender,
+                        }),
+                        other => Err(EngineError::Deserialization(format!(
+                            "GPKE Sperrung LF adapter: unexpected ORDRSP PID {other} \
+                             (expected 19116/19117/19128/19129)"
+                        ))),
+                    }
+                }
+                // IFTSTA 21039: Auftragsstatus after Sperrung execution (NB → LF).
+                AnyMessage::Iftsta(i) => Ok(SperrungLfCommand::ReceiveIftsta {
+                    pid,
+                    message_ref,
+                    sender: MarktpartnerCode::new(
+                        i.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                    ),
+                }),
+                _ => Err(EngineError::Deserialization(
+                    "GPKE Sperrung LF adapter: expected ORDRSP (19116/19117/19128/19129) or \
+                     IFTSTA (21039)"
+                        .into(),
+                )),
+            }
         },
     ));
     registry

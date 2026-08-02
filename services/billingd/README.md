@@ -14,7 +14,7 @@ no customer management. It pulls product definitions from `tarifbd`, consumption
 | **§41a EPEX dynamic** | 15-min Lastgang × hourly EPEX day-ahead → `STROM` dynamic category |
 | **§41a iMSys guard** | Hard error when `dynamic_epex=true` and `MeteringMode != Imsys` |
 | **§14a discount** | `ControllableLoadProvider` Modul 1 (capacity reduction) + Modul 3 (load-shedding) |
-| **§42a GGV** | `POST /api/v1/billing/ggv/{ggv_id}` — multi-tenant PV community solar, per-tenant share billing |
+| **§42b EnWG GGV** | `POST /api/v1/billing/ggv/{ggv_id}` — multi-tenant PV community solar, per-tenant share billing |
 | **§42c Sharing** | `Product::Sharing(SharingProduct)` — community energy allocation credit via `EnergyShareProvider` |
 | **Gas H2-blend** | `gasqualitaet` field on `GasMeterInput` — annotates Rechnung as `ZusatzAttribut` (per DVGW G 260, measured Brennwert already reflects blend) |
 | **Gas RLM Leistungspreis** | `gas_leistungspreis_ct_per_kw_month` in `GasProduct` — demand charge for large gas customers |

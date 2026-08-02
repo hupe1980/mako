@@ -230,7 +230,7 @@ pub struct SolarMeterInput {
 
 // ── GGV Nutzungsplan ──────────────────────────────────────────────────────────
 
-/// §42b EEG 2023 — One entry in the GGV Nutzungsplan (tenant allocation table).
+/// §42b EnWG — One entry in the GGV Nutzungsplan (tenant allocation table).
 ///
 /// The Nutzungsplan distributes the plant's PV generation among participating
 /// building occupants (Teilnehmer). Each entry maps one Marktlokation (tenant
@@ -272,7 +272,7 @@ pub struct GgvNutzungsplanEntry {
     pub fraction: Decimal,
 }
 
-/// §42b EEG 2023 — GGV Nutzungsplan (complete tenant allocation table).
+/// §42b EnWG — GGV Nutzungsplan (complete tenant allocation table).
 ///
 /// Wraps the list of entries and provides validation and allocation computation.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -474,11 +474,11 @@ pub struct GridInput {
 ///
 /// Populated by `billingd` from the participant's virtual meter (Summenzeitreihe)
 /// computed by `edmd` using the community's `AggregationRule::GgvConstantAllocation`
-/// or `GgvProportionalAllocation` (same infrastructure as §42b GGV).
+/// or `GgvProportionalAllocation` (same infrastructure as §42b EnWG GGV).
 ///
-/// ## §42c EnWG vs §42b GGV
+/// ## §42c EnWG vs §42b EnWG GGV
 ///
-/// | | §42b GGV (Solarpaket I) | §42c Energiegemeinschaft |
+/// | | §42b EnWG GGV (Solarpaket I) | §42c Energiegemeinschaft |
 /// |---|---|---|
 /// | Scope | Building community | Grid area (0.4 kV) |
 /// | Participants | Tenants in same building | Up to 100 members |
@@ -559,7 +559,7 @@ pub struct Quantities {
     pub wasser: Option<WasserMeterInput>,
     /// Solar self-consumption / Mieterstrom / GGV (SOLAR) — simple single-rate path.
     pub solar: Option<SolarMeterInput>,
-    /// §42b EEG 2023 (Solarpaket I) — GGV community solar hybrid billing.
+    /// §42b EnWG (Solarpaket I) — GGV community solar hybrid billing.
     ///
     /// Use instead of (or in addition to) `solar` when the plant’s generation must be
     /// proportionally allocated among tenants. The `SolarProvider` will then generate
@@ -627,7 +627,7 @@ pub struct Quantities {
     ///
     /// Populated by `billingd` after querying the sharing community's allocation
     /// data from `edmd` (virtual meter with `GgvConstantAllocation` or
-    /// `GgvProportionalAllocation` rule — same infrastructure as §42b GGV).
+    /// `GgvProportionalAllocation` rule — same infrastructure as §42b EnWG GGV).
     pub energy_share: Option<EnergyShareMeterInput>,
 }
 
@@ -708,7 +708,7 @@ impl ProsumerMeterInput {
     }
 }
 
-/// §42b EEG 2023 (Solarpaket I, BGBl I 2024 Nr. 107) — GGV allocation for one tenant.
+/// §42b EnWG (Solarpaket I, BGBl I 2024 Nr. 107) — GGV allocation for one tenant.
 ///
 /// Use this for **Gemeinschaftliche Gebäudeversorgung** billing where the plant’s
 /// generation is proportionally distributed among building participants.

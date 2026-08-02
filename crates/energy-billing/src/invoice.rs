@@ -1136,9 +1136,11 @@ impl TaxSubtotal {
 pub fn tax_subtotals_of(positions: &[BillingPosition], default_rate: Decimal) -> Vec<TaxSubtotal> {
     use std::collections::BTreeMap;
 
-    // Keyed on the rate's string form so ordering is stable and 0.190 groups
-    // with 0.19.
-    let mut buckets: BTreeMap<String, (Decimal, Decimal)> = BTreeMap::new();
+    // Keyed on `(is_reverse_charge, rate-string)` so ordering is stable, 0.190
+    // groups with 0.19, and §13b reverse-charge supplies form their own subtotal:
+    // they carry rate 0 like a genuine zero-rated supply but are legally distinct
+    // (EN 16931 `AE` vs `Z`), so they must never be merged.
+    let mut buckets: BTreeMap<(bool, String), (Decimal, Decimal, bool)> = BTreeMap::new();
     for p in positions {
         if matches!(
             p.category,
@@ -1147,19 +1149,24 @@ pub fn tax_subtotals_of(positions: &[BillingPosition], default_rate: Decimal) ->
             continue;
         }
         let rate = p.applicable_tax_rate.unwrap_or(default_rate).normalize();
+        let rc = p.is_reverse_charge();
         let entry = buckets
-            .entry(rate.to_string())
-            .or_insert((rate, Decimal::ZERO));
+            .entry((rc, rate.to_string()))
+            .or_insert((rate, Decimal::ZERO, rc));
         entry.1 += p.net_eur;
     }
 
     buckets
         .into_values()
-        .map(|(rate, base)| {
+        .map(|(rate, base, reverse_charge)| {
             let pct = (rate * Decimal::ONE_HUNDRED).normalize();
             let tax = (base * rate).round_kfm(2);
             TaxSubtotal {
-                category: if rate.is_zero() {
+                // §13b reverse charge: the recipient owes the VAT, so the
+                // supplier's invoice shows no tax but the category is `AE`, not `Z`.
+                category: if reverse_charge {
+                    VatCategory::ReverseCharge
+                } else if rate.is_zero() {
                     VatCategory::ZeroRated
                 } else {
                     VatCategory::Standard
@@ -1227,6 +1234,46 @@ mod tax_subtotal_tests {
         // The bases must reconcile with the invoice net.
         let base_sum: Decimal = subs.iter().map(|s| s.taxable_base_eur).sum();
         assert_eq!(base_sum, dec!(1250));
+    }
+
+    /// §13b UStG reverse charge: a supply to a Stromwiederverkäufer carries 0 %
+    /// VAT on the supplier's invoice, but must be categorised `AE` (ReverseCharge),
+    /// NOT `Z` (ZeroRated) — the two must not merge even though both have rate 0.
+    #[test]
+    fn reverse_charge_is_a_distinct_ae_subtotal() {
+        let positions = vec![
+            pos(dec!(1000), None, PositionCategory::Commodity),
+            // §12 Abs. 3 UStG — genuine zero-rated (Solar ≤ 30 kWp).
+            pos(dec!(250), Some(Decimal::ZERO), PositionCategory::Commodity),
+            // §13b Abs. 2 Nr. 5 lit. b UStG — electricity to a reseller.
+            BillingPosition::debit(
+                "Reststrom Wiederverkäufer",
+                dec!(5000),
+                "kWh",
+                dec!(1),
+                PositionCategory::Commodity,
+            )
+            .with_reverse_charge(),
+        ];
+        let subs = tax_subtotals_of(&positions, dec!(0.19));
+
+        let ae = subs
+            .iter()
+            .find(|s| s.category == VatCategory::ReverseCharge)
+            .expect("a reverse-charge (AE) subtotal must be present");
+        assert_eq!(ae.taxable_base_eur, dec!(5000));
+        assert_eq!(ae.tax_amount_eur, Decimal::ZERO, "supplier charges no VAT");
+        assert!(ae.rate_percent.is_zero());
+
+        // The genuine zero-rated supply stays a separate `Z` subtotal.
+        let zero = subs
+            .iter()
+            .find(|s| s.category == VatCategory::ZeroRated)
+            .expect("zero-rated (Z) subtotal must remain distinct from AE");
+        assert_eq!(zero.taxable_base_eur, dec!(250));
+
+        // Three legally-distinct categories → three subtotals (S, Z, AE).
+        assert_eq!(subs.len(), 3, "S/Z/AE must not merge: {subs:?}");
     }
 
     /// Tax, Abschlag and Info positions are not supplies and must stay out of

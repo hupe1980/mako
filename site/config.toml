@@ -1,0 +1,61 @@
+# Zola configuration — mako documentation & landing site.
+# https://www.getzola.org/documentation/getting-started/configuration/
+
+base_url = "https://hupe1980.github.io/mako"
+title = "mako — German Energy Market Platform in Rust"
+description = """
+Open-source, full-stack German energy-market operations platform in Rust: BDEW \
+MaKo / EDI@Energy market communication (all 346 Prüfidentifikatoren), an \
+event-sourced process runtime, NNE/EEG settlement, retail billing, AS4 transport \
+and BO4E integration — every regulated process as a correct, auditable workflow."""
+
+# Pretty URLs (/page/ → /page/index.html); no trailing-slash 404s on GitHub Pages.
+compile_sass = true
+build_search_index = true
+generate_feeds = true
+feed_filenames = ["atom.xml"]
+
+taxonomies = []
+
+[markdown]
+render_emoji = true
+external_links_target_blank = true
+external_links_no_follow = false
+smart_punctuation = false
+bottom_footnotes = true
+github_alerts = true              # > [!NOTE] / [!WARNING] callouts
+
+[markdown.highlighting]
+theme = "nord"
+
+[link_checker]
+# Internal links use Zola's `@/…` resolution and are validated at build time —
+# a broken doc link or dead `#anchor` fails the build. External links stay at
+# warn (network-dependent; not worth flaking CI over).
+internal_level = "error"
+external_level = "warn"
+
+[search]
+index_format = "elasticlunr_json"
+include_title = true
+include_description = true
+include_path = true
+include_content = true
+
+[extra]
+# ── Branding ──────────────────────────────────────────────────────────────────
+tagline = "German energy-market operations, from raw EDIFACT to production microservices — in Rust."
+repo = "https://github.com/hupe1980/mako"
+repo_name = "hupe1980/mako"
+edi_energy_url = "https://www.edi-energy.de/"
+crates = [
+  { name = "edi-energy", url = "https://crates.io/crates/edi-energy" },
+  { name = "mako-engine", url = "https://crates.io/crates/mako-engine" },
+]
+# Latest supported BDEW EDI@Energy format versions (shown in the footer).
+format_versions = "FV2025-10-01 · FV2026-10-01"
+# Mermaid diagram rendering (pinned major, loaded only on pages that need it).
+mermaid_version = "11"
+# SEO / social card
+author = "hupe1980"
+image = "/mako/img/mako-logo.svg"

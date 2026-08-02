@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="hero">
+  <div class="hero-inner">
+    <p class="hero-eyebrow">Open source · Rust · BDEW EDI@Energy {{ config.extra.format_versions }}</p>
+    <h1 class="hero-title">German energy-market operations,<br>from raw EDIFACT to production — in Rust.</h1>
+    <p class="hero-sub">{{ config.description | striptags }}</p>
+    <div class="hero-cta">
+      <a class="btn btn-primary" href="{{ get_url(path='@/docs/guide/getting-started.md') | safe }}">Get started</a>
+      <a class="btn btn-ghost" href="{{ get_url(path='@/docs/_index.md') | safe }}">Read the docs</a>
+      <a class="btn btn-ghost" href="{{ config.extra.repo }}" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</section>
+
+<section class="stats">
+  <div class="stats-inner">
+    <div><strong>346</strong><span>Prüfidentifikatoren</span></div>
+    <div><strong>17</strong><span>EDIFACT message types</span></div>
+    <div><strong>67+</strong><span>MaKo workflows</span></div>
+    <div><strong>16</strong><span>production services</span></div>
+    <div><strong>4</strong><span>market roles (NB·LF·MSB·ESA)</span></div>
+  </div>
+</section>
+
+<section class="features section-pad">
+  <div class="wrap">
+    <h2>One platform, four layers</h2>
+    <div class="card-grid">
+      <div class="card">
+        <h3>Protocol &amp; process</h3>
+        <p>Parse, validate and build all 17 EDI@Energy EDIFACT types; run every MaKo process as an event-sourced, replayable workflow over AS4/ebMS3 (BDEW AS4-Profil, sign+encrypt, signed receipts).</p>
+      </div>
+      <div class="card">
+        <h3>Market data</h3>
+        <p>A typed BO4E market-data hub — MaLo/MeLo, contracts, supply status, grid-operator registry — with a CloudEvents fan-out and OIDC/JWT security.</p>
+      </div>
+      <div class="card">
+        <h3>Settlement &amp; billing</h3>
+        <p>Role-neutral grid settlement (NNE/MMM/MSB), EEG/KWKG feed-in, and retail billing with EN 16931 e-invoicing — each position carrying a legal-reference calculation trace.</p>
+      </div>
+      <div class="card">
+        <h3>Customer &amp; operations</h3>
+        <p>A tamper-evident FI-CA ledger, contracts &amp; tariff catalog, a customer portal, BNetzA KPI observability, and optional AI orchestration.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="why section-pad alt">
+  <div class="wrap why-grid">
+    <div>
+      <h2>Built for the regulatory pace</h2>
+      <p>German market communication moves fast — LFW24, §14a, §41a dynamic tariffs, §42b/c energy sharing, the EDIFACT→API transition, the MaBiS-Hub cutover. mako’s domain layer is deliberately split from transport and format, so when the market moves, the platform moves with a codegen run — not a rewrite.</p>
+      <ul class="check">
+        <li>Correct &amp; auditable: event-sourced processes, replayable state, GoBD/§146 AO period seals.</li>
+        <li>Every regulated process modeled — for every market role.</li>
+        <li>Readable, verifiable, extensible: source you can audit and run.</li>
+      </ul>
+    </div>
+    <div>
+      <h2>Start in minutes</h2>
+      <pre><code># Parse &amp; validate an EDIFACT interchange
+cargo add edi-energy
+
+# Run the protocol daemon
+docker run --rm -p 8080:8080 \
+  ghcr.io/hupe1980/makod:latest</code></pre>
+      <p><a href="{{ get_url(path='@/docs/guide/getting-started.md') | safe }}">Full getting-started guide →</a></p>
+    </div>
+  </div>
+</section>
+
+{% if section.content %}
+<section class="section-pad"><div class="wrap doc-body">{{ section.content | safe }}</div></section>
+{% endif %}
+{% endblock content %}

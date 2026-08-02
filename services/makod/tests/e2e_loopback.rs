@@ -74,6 +74,7 @@ async fn loopback_round_trip_spawns_process() {
     let loopback = Arc::new(makod::edifact_api::EdifactApiState {
         platform: Arc::clone(&platform),
         pid_router,
+        mp_id_registry: Arc::clone(&registry),
         cedar: Arc::new(
             makod::cedar_authz::CedarAuthorizer::unauthenticated().expect("infallible"),
         ),

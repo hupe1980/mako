@@ -1441,31 +1441,11 @@ pub async fn financial_metrics(pool: &PgPool, tenant: &str) -> anyhow::Result<Fi
     })
 }
 
-/// Mahnstufe-3 dunning cases that qualify for a Sperrung request:
-/// unresolved, at Stufe 3, arrears ≥ threshold, not yet handed to sperrd.
-/// Returns `(case_id, malo_id, lf_mp_id, amount_due_ct)`.
-pub async fn list_sperrung_candidates(
-    pool: &PgPool,
-    tenant: &str,
-    threshold_ct: i64,
-) -> anyhow::Result<Vec<(Uuid, String, String, i64)>> {
-    let rows = sqlx::query(
-        r"SELECT dc.id, a.malo_id, a.lf_mp_id, dc.amount_due_ct
-          FROM dunning_cases dc
-          JOIN accounts a ON a.account_id = dc.account_id
-          WHERE dc.tenant = $1
-            AND dc.stufe = 3
-            AND dc.resolved_at IS NULL
-            AND dc.sperrauftrag_ce_id IS NULL
-            AND dc.amount_due_ct >= $2",
-    )
-    .bind(tenant)
-    .bind(threshold_ct)
-    .fetch_all(pool)
-    .await
-    .context("list_sperrung_candidates")?;
-    Ok(rows
-        .into_iter()
+/// Rows returned by every §§41f/41g phase query: `(case_id, malo_id, lf_mp_id, amount_ct)`.
+type SperrCandidate = (Uuid, String, String, i64);
+
+fn to_sperr_candidates(rows: Vec<sqlx::postgres::PgRow>) -> Vec<SperrCandidate> {
+    rows.into_iter()
         .map(|r| {
             (
                 r.get::<Uuid, _>("id"),
@@ -1474,7 +1454,216 @@ pub async fn list_sperrung_candidates(
                 r.get::<i64, _>("amount_due_ct"),
             )
         })
-        .collect())
+        .collect()
+}
+
+/// **Phase 1 (§41f Abs. 1 EnWG) — Sperrandrohung candidates.**
+///
+/// Mahnstufe-3, unresolved, not yet threatened, not halted by an
+/// Abwendungsvereinbarung (§41g Abs. 1) or an Unverhältnismäßigkeit/
+/// Schutzbedürftigkeit flag (§41f Abs. 1 Satz 2 / Abs. 2), and past **both**
+/// §41f Abs. 3 thresholds:
+///
+/// - **Satz 2** — an absolute floor of `threshold_ct` (≥ 100 EUR).
+/// - **Satz 1** — a consumption-relative gate: arrears ≥ **2×** the agreed
+///   monthly Abschlag (`accounts.abschlag_ct`); *wenn keine Abschläge vereinbart
+///   sind* (i.e. `abschlag_ct = 0`), ≥ **⅙** of the most recent expected annual
+///   bill (`jahresabschluss_runs.annual_bill_ct`).
+///
+/// When neither an Abschlag nor a prior Jahresrechnung is on record the Satz-1
+/// gate cannot be established, the `CASE` yields `NULL`, and the case is
+/// **conservatively excluded** — mako never disconnects without a provable
+/// consumption basis. Populate `abschlag_ct` (or run a Jahresabschluss) to arm
+/// the sequence for such an account.
+pub async fn list_androhung_candidates(
+    pool: &PgPool,
+    tenant: &str,
+    threshold_ct: i64,
+) -> anyhow::Result<Vec<SperrCandidate>> {
+    let rows = sqlx::query(
+        r"SELECT dc.id, a.malo_id, a.lf_mp_id, dc.amount_due_ct
+          FROM dunning_cases dc
+          JOIN accounts a ON a.account_id = dc.account_id
+          WHERE dc.tenant = $1
+            AND dc.stufe = 3
+            AND dc.resolved_at IS NULL
+            AND dc.sperrandrohung_at IS NULL
+            AND dc.abwendung_vereinbart_at IS NULL
+            AND dc.unverhaeltnismaessig_seit IS NULL
+            AND dc.amount_due_ct >= $2                       -- §41f Abs. 3 S. 2: ≥ 100 EUR floor
+            AND dc.amount_due_ct >= (                        -- §41f Abs. 3 S. 1: consumption gate
+                  CASE
+                    WHEN a.abschlag_ct > 0 THEN 2 * a.abschlag_ct
+                    ELSE (SELECT jr.annual_bill_ct / 6
+                          FROM jahresabschluss_runs jr
+                          WHERE jr.tenant = dc.tenant AND jr.malo_id = a.malo_id
+                          ORDER BY jr.billing_year DESC
+                          LIMIT 1)
+                  END)",
+    )
+    .bind(tenant)
+    .bind(threshold_ct)
+    .fetch_all(pool)
+    .await
+    .context("list_androhung_candidates")?;
+    Ok(to_sperr_candidates(rows))
+}
+
+/// Record that the Sperrandrohung was issued (opens the 4-Wochen-Frist).
+///
+/// Takes an executor so the caller can commit it in the **same transaction** as
+/// the `de.accounting.sperrandrohung` outbox row — the Androhung is a legal act
+/// (a letter the ERP must send), so state and dispatch must be atomic.
+pub async fn mark_sperrandrohung(
+    exec: impl sqlx::PgExecutor<'_>,
+    case_id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE dunning_cases SET sperrandrohung_at = now() \
+         WHERE id = $1 AND tenant = $2 AND sperrandrohung_at IS NULL",
+    )
+    .bind(case_id)
+    .bind(tenant)
+    .execute(exec)
+    .await
+    .context("mark_sperrandrohung")?;
+    Ok(())
+}
+
+/// **Phase 2 (§41f Abs. 5 EnWG) — Sperrankündigung candidates.**
+///
+/// The 4-Wochen Androhung Frist (`androhung_frist_days`) has elapsed, the case is
+/// still unresolved and un-halted, and no Ankündigung has been sent yet.
+pub async fn list_ankuendigung_candidates(
+    pool: &PgPool,
+    tenant: &str,
+    androhung_frist_days: i64,
+) -> anyhow::Result<Vec<SperrCandidate>> {
+    let rows = sqlx::query(
+        r"SELECT dc.id, a.malo_id, a.lf_mp_id, dc.amount_due_ct
+          FROM dunning_cases dc
+          JOIN accounts a ON a.account_id = dc.account_id
+          WHERE dc.tenant = $1
+            AND dc.stufe = 3
+            AND dc.resolved_at IS NULL
+            AND dc.abwendung_vereinbart_at IS NULL
+            AND dc.unverhaeltnismaessig_seit IS NULL
+            AND dc.sperrandrohung_at IS NOT NULL
+            AND dc.sperrankuendigung_at IS NULL
+            AND dc.sperrandrohung_at + make_interval(days => $2::int) <= now()",
+    )
+    .bind(tenant)
+    .bind(androhung_frist_days)
+    .fetch_all(pool)
+    .await
+    .context("list_ankuendigung_candidates")?;
+    Ok(to_sperr_candidates(rows))
+}
+
+/// Record the Sperrankündigung and the concrete planned disconnection date
+/// (`geplantes_sperrdatum` = today + 8 Werktage, computed by the caller).
+///
+/// Takes an executor so the caller can commit it in the **same transaction** as
+/// the `de.accounting.sperrankuendigung` outbox row (persist-before-dispatch).
+pub async fn mark_sperrankuendigung(
+    exec: impl sqlx::PgExecutor<'_>,
+    case_id: Uuid,
+    tenant: &str,
+    geplantes_sperrdatum: time::Date,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE dunning_cases SET sperrankuendigung_at = now(), geplantes_sperrdatum = $3 \
+         WHERE id = $1 AND tenant = $2 AND sperrankuendigung_at IS NULL",
+    )
+    .bind(case_id)
+    .bind(tenant)
+    .bind(geplantes_sperrdatum)
+    .execute(exec)
+    .await
+    .context("mark_sperrankuendigung")?;
+    Ok(())
+}
+
+/// **Phase 3 — Sperrauftrag candidates.**
+///
+/// The announced disconnection date (`geplantes_sperrdatum`, = Ankündigung +
+/// 8 Werktage per §41f Abs. 5) has arrived, the case is still unresolved and
+/// un-halted, and no Sperrauftrag has been handed to sperrd yet.
+pub async fn list_sperrauftrag_candidates(
+    pool: &PgPool,
+    tenant: &str,
+) -> anyhow::Result<Vec<SperrCandidate>> {
+    let rows = sqlx::query(
+        r"SELECT dc.id, a.malo_id, a.lf_mp_id, dc.amount_due_ct
+          FROM dunning_cases dc
+          JOIN accounts a ON a.account_id = dc.account_id
+          WHERE dc.tenant = $1
+            AND dc.stufe = 3
+            AND dc.resolved_at IS NULL
+            AND dc.abwendung_vereinbart_at IS NULL
+            AND dc.unverhaeltnismaessig_seit IS NULL
+            AND dc.sperrankuendigung_at IS NOT NULL
+            AND dc.sperrauftrag_ce_id IS NULL
+            AND dc.geplantes_sperrdatum IS NOT NULL
+            AND dc.geplantes_sperrdatum <= CURRENT_DATE",
+    )
+    .bind(tenant)
+    .fetch_all(pool)
+    .await
+    .context("list_sperrauftrag_candidates")?;
+    Ok(to_sperr_candidates(rows))
+}
+
+/// §41g Abs. 1 Satz 10 EnWG — the customer accepted an Abwendungsvereinbarung
+/// (payment agreement) in Textform: disconnection **must not** proceed.
+///
+/// The agreement covers the arrears of the **supply point**, and disconnection is
+/// per supply point, so this halts **every** open dunning case of the account that
+/// owns `case_id` — not just that one case (auto-dunning creates a fresh case per
+/// Mahnstufe, so an account can carry more than one open case). Returns the number
+/// of cases halted (0 → the case id was not found). See [`markiere_unverhaeltnismaessig`].
+pub async fn vereinbare_abwendung(
+    pool: &PgPool,
+    case_id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<u64> {
+    let r = sqlx::query(
+        "UPDATE dunning_cases SET abwendung_vereinbart_at = now() \
+         WHERE tenant = $2 AND resolved_at IS NULL \
+           AND account_id = (SELECT account_id FROM dunning_cases WHERE id = $1 AND tenant = $2)",
+    )
+    .bind(case_id)
+    .bind(tenant)
+    .execute(pool)
+    .await
+    .context("vereinbare_abwendung")?;
+    Ok(r.rows_affected())
+}
+
+/// §41f Abs. 1 Satz 2 / Abs. 2 EnWG — the disconnection is disproportionate
+/// (the customer showed a payment prospect, or besondere Schutzbedürftigkeit /
+/// konkrete Gefahr für Leib oder Leben).
+///
+/// Like [`vereinbare_abwendung`], the Schutzbedürftigkeit attaches to the supply
+/// point, so this halts **every** open dunning case of the account owning
+/// `case_id`. Returns the number of cases halted (0 → the case id was not found).
+pub async fn markiere_unverhaeltnismaessig(
+    pool: &PgPool,
+    case_id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<u64> {
+    let r = sqlx::query(
+        "UPDATE dunning_cases SET unverhaeltnismaessig_seit = now() \
+         WHERE tenant = $2 AND resolved_at IS NULL \
+           AND account_id = (SELECT account_id FROM dunning_cases WHERE id = $1 AND tenant = $2)",
+    )
+    .bind(case_id)
+    .bind(tenant)
+    .execute(pool)
+    .await
+    .context("markiere_unverhaeltnismaessig")?;
+    Ok(r.rows_affected())
 }
 
 /// Record that a Sperrauftrag was handed to sperrd (idempotency: won't re-post).

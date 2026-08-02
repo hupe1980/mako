@@ -845,7 +845,8 @@ pub async fn insert_correction_draft(
 
 // ── REMADV payment lifecycle ──────────────────────────────────────────────────
 
-/// Mark a dispatched invoice draft as paid (REMADV 33001/33003/33004).
+/// Mark a dispatched invoice draft as paid (REMADV 33001 only — the sole
+/// Bestätigung; 33002/33003/33004 are Abweisungen and route to `mark_draft_disputed`).
 ///
 /// `remadv_ref` is the EDIFACT reference from the REMADV message
 /// (stored for BNetzA § 147 AO / GoBD 3-year audit trail).

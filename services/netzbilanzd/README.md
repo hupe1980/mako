@@ -16,7 +16,7 @@ Closes the payment lifecycle on REMADV receipt. Zero `f64` in the billing path.
 | **Draft lifecycle** | `draft` → `dispatched` → `paid` / `dispatched` ← `Dispute`; `rejected` unblocks re-billing |
 | **REMADV handling** | 33001/33003/33004 → `paid`; 33002 → `Dispute` + `de.netzbilanz.invoic.disputed` CE |
 | **§14a Modul 2** | HT/NT ToU split → 2 separate Arbeit positions (mandatory for controllable loads since 01.01.2024) |
-| **§42a GGV** | Proportional or equal-split NNE for community solar tenant MaLos |
+| **§42b EnWG GGV** | Proportional or equal-split NNE for community solar tenant MaLos |
 | **Redispatch 2.0** | `kostenblatt_records` + auto-compute from edmd; 15th-of-month alert worker |
 | **BilAReM (BK6-23-241)** | Stateless Kap.-3 Ausfallarbeit compute endpoints (`POST /api/v1/redispatch/ausfallarbeit/compute` + `/ueberbauung`) over `mako_redispatch::ausfallarbeit` |
 | **Background workers** | Hourly dispatch-overdue alert; daily Kostenblatt deadline alert |
@@ -114,6 +114,6 @@ Useful prompts: `nb-invoic-overview`, `mmm-monthly-run`, `investigate-dispute`,
 
 ## See also
 
-- [Operator guide](../../docs/netzbilanzd.md) — full API reference, configuration, diagrams
+- [Operator guide](https://hupe1980.github.io/mako/docs/services/netzbilanzd/) — full API reference, configuration, diagrams
 - [`grid-billing`](../../crates/grid-billing/README.md) — pure billing calculation library
 - [`invoic-checker`](../../crates/invoic-checker/README.md) — pre-dispatch plausibility gate

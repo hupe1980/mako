@@ -18,7 +18,7 @@
 //! | Preisanfrage (REQOTE/QUOTES) | 35001–35005 (REQOTE in), 15001–15005 (QUOTES in) | REQOTE, QUOTES | `preisanfrage` | ✅ Implemented |
 //! | Preisliste (PRICAT) | 27001–27003 | PRICAT | `preisliste` | ✅ Implemented |
 //! | ESA Wertebestellung (Anfrage/Angebot/Bestellung/Storno) | 35002, 15003, 17007/17008, 39002, 19011–19014 | REQOTE/QUOTES/ORDERS/ORDCHG/ORDRSP | `wertebestellung`, `esa_wertebestellung` | ✅ Implemented |
-//! | WiM-Rechnung / MSB-Rechnung (INVOIC) | 31003, 31009 | INVOIC | `rechnung` | ✅ Implemented (auto-REMADV pending in deadline_dispatch) |
+//! | MSB-Rechnung (INVOIC) | 31009 | INVOIC | `rechnung` | ✅ Implemented (send + receive; auto-REMADV pending in deadline_dispatch) |
 //!
 //! ## Architecture
 //!
@@ -254,13 +254,24 @@ impl mako_engine::builder::EngineModule for WimModule {
             router.register(antwort_pid, "wim-device-change");
         }
 
-        // ORDERS 17001–17011 — Geräteübernahme (Anfrage, Bestellung, Stornierung).
+        // ORDERS 17001/17002/17009 — Geräteübernahme (Anfrage, Bestellung, Stornierung).
+        //
+        // Shared with WiM Gas (`wim-gas-geraeteubernahme`). Registered with
+        // `Sparte::Strom` so `route_with_sparte(pid, Sparte::Strom)` resolves here
+        // even when a combined deployment's `WimGasModule` wins the unambiguous
+        // fallback table (last-write-wins). The unambiguous `register` entry is the
+        // Strom-standalone fallback.
         for &pid in geraeteubernahme::ANFRAGE_PIDS
             .iter()
             .chain(geraeteubernahme::BESTELLUNG_PIDS)
             .chain(geraeteubernahme::STORNIERUNG_PIDS)
         {
             router.register(pid, "wim-geraeteubernahme");
+            router.register_with_sparte(
+                pid,
+                mako_engine::types::Sparte::Strom,
+                "wim-geraeteubernahme",
+            );
         }
 
         // nMSB role: inbound ORDRSP responses from NB to nMSB ORDERS.
@@ -330,7 +341,7 @@ impl mako_engine::builder::EngineModule for WimModule {
         //   17131 (gpke-konfiguration-aenderung, Stornierung Konfigurationsbestellung LF→MSB)
         //   17133 (gpke-konfiguration-aenderung, Bestellung Konfiguration Reklamation)
         //
-        // Source: docs/pid-reference.md (generated from BDEW xlsx PID 3.3 + PID 4.0).
+        // Source: site/content/docs/regulatory/pid-reference.md (generated from BDEW xlsx PID 3.3 + PID 4.0).
         #[rustfmt::skip]
         const GPKE_OWNED_IN_RANGE: &[u32] = &[
             17102, 17113,                        // gpke-datenabruf
@@ -408,9 +419,10 @@ impl mako_engine::builder::EngineModule for WimModule {
             }
         }
 
-        // INVOIC 31003 (WiM-Rechnung) and 31009 (MSB-Rechnung).
+        // INVOIC 31009 (MSB-Rechnung, MSB → NB/LF/ESA). The Gas WiM-Rechnung 31003
+        // lives in mako-wim-gas — duplicated per Sparte, not registered here.
         //
-        // These PIDs are explicitly excluded from mako-gpke's INVOIC_PIDS array.
+        // These PIDs are explicitly excluded from mako-gpke's GPKE_INVOIC_PIDS array.
         // Without registration here, all inbound WiM-domain INVOIC messages would
         // be silently dead-lettered and no CONTRL acknowledgement would be sent,
         // violating the AS4 acknowledgement obligation (BDEW AS4-Profile §5).
@@ -428,12 +440,16 @@ impl mako_engine::builder::EngineModule for WimModule {
         // back a REMADV (33001 = Bestätigung, 33002 = Ablehnung). Without this
         // registration, all REMADV messages for WiM billing are silently dropped.
         //
-        // GPKE billing also registers 33003/33004 (Mehr-/Mindermenge REMADV);
-        // WiM Strom only needs 33001/33002 — the others belong to GPKE Teil 2/3.
-        // Both registrations coexist: the makod router checks the workflow context
-        // (conversation ID) when routing to the correct process stream instance.
+        // GPKE billing registers 33003/33004 (Strom Abweisung Kopf und Summe /
+        // Position — itemized rejections). Per REMADV AHB 1.0a, WiM Strom billing
+        // (incl. ESA→MSB) ALSO rejects with the itemized 33003/33004; today mako-wim
+        // registers only 33001/33002 and leans on GPKE's 33003/34 registration, so a
+        // WiM itemized rejection is not yet routed to `wim-rechnung` — see ROADMAP
+        // "REMADV itemized rejections in WiM scope". The registrations coexist because
+        // the makod router disambiguates shared REMADV PIDs by conversation ID
+        // (invoice correlation), not by PID alone.
         //
-        // Source: REMADV AHB 1.0, WiM Strom Teil 1, BK6-24-174.
+        // Source: REMADV AHB 1.0a §3, WiM Strom Teil 1, BK6-24-174.
         for &pid in rechnung::WIM_REMADV_PIDS {
             router.register(pid, "wim-rechnung");
         }
@@ -539,7 +555,7 @@ impl mako_engine::builder::EngineModule for WimModule {
             },
             ProfileRequirement {
                 message_type: "INVOIC",
-                label: "INVOIC WiM-Rechnung/MSB-Rechnung (31003, 31009)",
+                label: "INVOIC MSB-Rechnung (31009)",
             },
             ProfileRequirement {
                 message_type: "REMADV",

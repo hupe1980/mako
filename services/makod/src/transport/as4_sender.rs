@@ -426,6 +426,13 @@ impl As4Sender for BdewAs4Sender {
                         }
                     };
 
+                    // Recipient MP-ID (UNB DE0010) → commodity-aware routing of
+                    // Sparte-split shared PIDs (INSRPT, WiM Gas device processes).
+                    let loopback_recipient = loopback_state
+                        .platform
+                        .parse_interchange_full(&payload_bytes[..])
+                        .map(|pi| pi.header.receiver_id.to_string())
+                        .unwrap_or_default();
                     let mut any_dispatched = false;
                     for parse_result in loopback_state
                         .platform
@@ -438,7 +445,8 @@ impl As4Sender for BdewAs4Sender {
                             .detect_pruefidentifikator()
                             .ok()
                             .map(|p| p.as_u32());
-                        let workflow_opt = pid_opt.and_then(|p| loopback_state.pid_router.route(p));
+                        let workflow_opt = pid_opt
+                            .and_then(|p| loopback_state.resolve_workflow(p, &loopback_recipient));
 
                         match (pid_opt, workflow_opt, loopback_state.dispatcher.as_deref()) {
                             (Some(pid_val), Some(wf_name), Some(dispatcher)) => {
@@ -506,7 +514,7 @@ impl As4Sender for BdewAs4Sender {
                     "BdewAs4Sender: outbox message addressed to own GLN \
                      (combined-role deployment — NB+MSB or GNB+gMSB sharing one GLN). \
                      No loopback handle configured. \
-                     See docs/makod.md §Integrated operators for details.",
+                     See site/content/docs/services/makod.md §Integrated operators for details.",
                 );
                 return Err(EngineError::PartnerUnknown { recipient });
             }

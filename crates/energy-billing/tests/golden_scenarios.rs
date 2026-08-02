@@ -221,6 +221,77 @@ fn golden_strom_slp_eintarif_jan_2026() {
     );
 }
 
+/// **Golden: §13b reverse charge — supply to a Stromwiederverkäufer**
+///
+/// Same tariff and quantities as `golden_strom_slp_eintarif_jan_2026`, but the
+/// customer is an electricity reseller (`reverse_charge = true`, §13b Abs. 2 Nr. 5
+/// lit. b UStG). The net base is identical (100.24 EUR), but the supplier charges
+/// **no** VAT — the recipient owes it — so `mwst_eur == 0`, `brutto == netto`, and
+/// the supply positions carry the reverse-charge marker (EN 16931 `AE`).
+#[test]
+fn golden_strom_reverse_charge_13b_charges_no_vat() {
+    let tariff: Product = serde_json::from_str(
+        r#"{
+        "category": "STROM",
+        "arbeitspreis_ct_per_kwh": 28.50,
+        "grundpreis_ct_per_day": 8.00
+    }"#,
+    )
+    .unwrap();
+
+    let rates = RegulatoryRates {
+        stromsteuer_ct_per_kwh: dec!(2.05),
+        energiesteuer_gas_ct_per_kwh: dec!(0.55),
+        behg_gas_ct_per_kwh: dec!(1.3104),
+        mwst_rate: dec!(0.19),
+    };
+
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        lf_mp_id: "9900000000001".to_owned(),
+        rechnungsnummer: "GOLDEN-STROM-13B-001".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates.clone(),
+        reverse_charge: true, // §13b Abs. 2 Nr. 5 lit. b UStG — Stromwiederverkäufer
+        ..Default::default()
+    };
+
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(320),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let invoice = tariff
+        .build_engine(&GridInput::default(), &rates)
+        .bill(ctx, &quantities)
+        .unwrap();
+
+    invoice.assert_valid();
+
+    // Net base is unchanged from the standard-rated golden (91.20 + 2.48 + 6.56).
+    assert_eq!(
+        invoice.netto_eur.round_dp(2),
+        dec!(100.24),
+        "Netto unchanged"
+    );
+    // But the supplier charges no VAT under §13b — the recipient owes it.
+    assert_eq!(invoice.mwst_eur, dec!(0), "§13b: supplier charges no VAT");
+    assert_eq!(
+        invoice.brutto_eur.round_dp(2),
+        dec!(100.24),
+        "§13b: brutto == netto (no VAT added)"
+    );
+    // The supply positions carry the reverse-charge marker (EN 16931 `AE`).
+    assert!(
+        invoice.positions.iter().any(|p| p.is_reverse_charge()),
+        "at least one supply position must be reverse-charge"
+    );
+}
+
 // ── Scenario 2: Gas with levies ───────────────────────────────────────────────
 
 /// **Golden: Gas invoice with Brennwert, Energiesteuer, BEHG CO₂, January 2026**

@@ -50,6 +50,36 @@ impl EdifactIngestDispatcher {
                     reason: "pid_not_in_dispatch_table",
                 }),
             },
+            // ── WiM Gas Geräteübernahme — ORDERS 17001/17002/17009 ───────────
+            // 17001/17002: Anfrage Geräteübernahmeangebot (MSBN → MSBA) — spawn.
+            // 17009: Ankündigung Gerätewechselabsicht — Stornierung. WiM Gas AWH V2.0 §4.2.
+            "wim-gas-geraeteubernahme" => match pid {
+                17001 | 17002 | 17009 => {
+                    let cmd = adapters::wim_gas_geraeteubernahme_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_orders(msg);
+                    // ORDRSP response window: 2 Werktage (WiM Gas AWH V2.0 §4.2 Nr. 4).
+                    let process_due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        2,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<WimGasGeraeteubernahmeWorkflow>(
+                        &melo_id,
+                        "wim-gas-geraeteubernahme",
+                        cmd,
+                        &fv,
+                        &[(
+                            mako_wim_gas::GAS_GERAETEUBERNAHME_ORDRSP_DEADLINE_LABEL,
+                            process_due_at,
+                        )],
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "wim-gas-geraeteubernahme",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
             // ── WiM Gas Kündigung — PIDs 44039/44040/44041 ───────────────────
             // PID 44039: Kündigung MSB Gas Anfrage (MSBA → NB) — spawn.
             // PIDs 44040/44041: Bestätigung/Ablehnung (NB → MSBA) — spawn (NB-initiating path).
@@ -149,6 +179,22 @@ impl EdifactIngestDispatcher {
                         &[(mako_wim_gas::invoic::SETTLEMENT_WINDOW_LABEL, due_at)],
                     )
                     .await
+                }
+                // REMADV 33001/33002 (NB payer → gMSB invoicer) resume the billing
+                // process by the original 31003/31004 invoice reference (RFF+Z13).
+                // Gas has no itemized Abweisungen (33003/34 are Strom-only).
+                33001 | 33002 => {
+                    let cmd = adapters::wim_gas_invoic_remadv_registry().dispatch(raw, &fv)?;
+                    let invoice_ref = extract_invoice_ref_from_remadv(msg);
+                    self.resume_by_malo::<WimGasInvoicWorkflow>(&invoice_ref, "wim-gas-invoic", cmd)
+                        .await
+                }
+                // COMDIS 29001 (gMSB invoicer rejects the NB's REMADV).
+                29001 => {
+                    let cmd = adapters::wim_gas_invoic_comdis_registry().dispatch(raw, &fv)?;
+                    let invoice_ref = extract_invoice_ref_from_comdis(msg);
+                    self.resume_by_malo::<WimGasInvoicWorkflow>(&invoice_ref, "wim-gas-invoic", cmd)
+                        .await
                 }
                 _ => Ok(IngestOutcome::Skipped {
                     workflow_name: "wim-gas-invoic",

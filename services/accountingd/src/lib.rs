@@ -18,3 +18,4 @@ pub mod ledger;
 pub mod mcp_server;
 pub mod pg;
 pub mod sepa;
+pub mod sperr;

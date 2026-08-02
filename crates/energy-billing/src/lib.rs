@@ -53,7 +53,7 @@
 //! | `GAS` | `GasProvider` | §41 EnWG |
 //! | `WAERME` | `HeatProvider` | §41 EnWG |
 //! | `WASSER` | `WaterProvider` | AVBWasserV; §12 Abs. 2 Nr. 1 UStG (7 %); gesplittete Abwassergebühr |
-//! | `SOLAR` | `SolarProvider` | §21 Abs. 3/§42a EEG 2023 |
+//! | `SOLAR` | `SolarProvider` | §21 Abs. 3 EEG (Mieterstrom) / §42b EnWG (GGV) |
 //! | `EEG` | `EegProvider` (→ eeg-billing) | §§20–21 EEG 2023 |
 //! | `EINSPEISUNG` | `EinspeisungProvider` | §20 EEG 2023 |
 //! | `HEMS` | `HemsProvider` | — |

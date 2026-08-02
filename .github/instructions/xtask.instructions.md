@@ -46,7 +46,7 @@ span, reporting any coverage gaps.
 ## Import Tasks
 
 ```bash
-cargo xtask import-codelists    # imports BDEW code lists (CSV/XLSX from docs/pdfs/)
+cargo xtask import-codelists    # imports BDEW code lists (CSV/XLSX from regulatories/)
 cargo xtask import-xml-ahb      # imports AHB rules from BDEW XML exports
 cargo xtask extract-pdf         # extracts tables from BDEW PDFs
 ```

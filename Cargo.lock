@@ -10,6 +10,7 @@ dependencies = [
  "axum",
  "blake3",
  "doubleentry",
+ "mako-engine",
  "mako-events",
  "mako-service",
  "reqwest 0.13.4",

@@ -2,7 +2,7 @@
 
 `makod` is the production daemon that assembles the full `mako` process engine stack into a deployable binary. It wires together all domain modules (GPKE, WiM, GeLi Gas, WiM Gas, MaBiS, GaBi Gas, Redispatch 2.0), connects them to a durable [SlateDB](https://github.com/slatedb/slatedb) event store, and exposes three independent server ports.
 
-For the complete operator reference — including persistence configuration, AS4 transport setup, Kubernetes deployment, and all CLI flags — see the **[`makod` Operator Guide](../../docs/makod.md)**.
+For the complete operator reference — including persistence configuration, AS4 transport setup, Kubernetes deployment, and all CLI flags — see the **[`makod` Operator Guide](https://hupe1980.github.io/mako/docs/services/makod/)**.
 
 ---
 
@@ -220,7 +220,7 @@ enabling gradual migration from API keys to OIDC without downtime.
 
 For the full configuration reference, Cedar policy examples, and provider-specific
 setup (Azure Managed Identity, Kubernetes workload identity), see the
-[Operator Guide authorization section](../../docs/makod.md#authorization).
+[Operator Guide authorization section](https://hupe1980.github.io/mako/docs/services/makod/#authorization).
 
 ---
 
@@ -265,11 +265,11 @@ it to inspect process state and submit commands without writing integration code
 The server returns dynamic instructions at connection time, including a filtered command
 list for this instance's Marktrollen and the applicable regulatory deadlines.
 
-See the [MCP section of the operator guide](../../docs/makod.md#mcp-server) for full details.
+See the [MCP section of the operator guide](https://hupe1980.github.io/mako/docs/services/makod/#mcp-server) for full details.
 
 Authentication is enforced — every request to `/mcp` must carry a valid Bearer
 token (same Cedar ABAC layer as the REST API). See the
-[Operator Guide MCP section](../../docs/makod.md#mcp-server) for full details.
+[Operator Guide MCP section](https://hupe1980.github.io/mako/docs/services/makod/#mcp-server) for full details.
 
 ---
 

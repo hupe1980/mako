@@ -80,6 +80,82 @@ pub fn wim_gas_invoic_registry() -> AdapterRegistry<WimGasInvoicWorkflow> {
     registry
 }
 
+// ── WiM Gas billing — REMADV payment advice (PIDs 33001/33002) ────────────────
+
+/// Build an [`AdapterRegistry`] for REMADV 33001/33002 routed to
+/// [`WimGasInvoicWorkflow`] (gMSB invoicer role).
+///
+/// After the gMSB sends INVOIC 31003/31004, the NB (payer) returns a REMADV;
+/// `makod` resumes the billing process with [`WimGasInvoicCommand::ReceiveRemadv`].
+/// Gas has no itemized Abweisungen (33003/34 are Strom-only), so the set is
+/// 33001/33002. Mirrors `wim_rechnung_remadv_registry`, duplicated per Sparte.
+#[must_use]
+pub fn wim_gas_invoic_remadv_registry() -> AdapterRegistry<WimGasInvoicWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for WiM Gas REMADV adapter".into(),
+                )
+            })?;
+            let AnyMessage::Remadv(r) = msg else {
+                return Err(EngineError::Deserialization(
+                    "WiM Gas REMADV adapter: expected REMADV message (PIDs 33001/33002)".into(),
+                ));
+            };
+            let pid = r
+                .bgm()
+                .and_then(|b| b.pruefidentifikator())
+                .ok_or_else(|| {
+                    EngineError::Deserialization(
+                        "WiM Gas REMADV adapter: PID not found in REMADV BGM".into(),
+                    )
+                })
+                .and_then(convert_pid)?;
+            Ok(WimGasInvoicCommand::ReceiveRemadv {
+                pid,
+                remadv_ref: MessageRef::new(msg.message_ref()),
+                sender: MarktpartnerCode::new(
+                    r.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+            })
+        },
+    ));
+    registry
+}
+
+// ── WiM Gas billing — COMDIS payment rejection (PID 29001) ────────────────────
+
+/// Build an [`AdapterRegistry`] for COMDIS 29001 routed to [`WimGasInvoicWorkflow`].
+///
+/// After the NB sends a REMADV, the gMSB (invoicer) may reject it via COMDIS 29001;
+/// `makod` resumes with [`WimGasInvoicCommand::ReceiveComdis`].
+#[must_use]
+pub fn wim_gas_invoic_comdis_registry() -> AdapterRegistry<WimGasInvoicWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for WiM Gas COMDIS adapter".into(),
+                )
+            })?;
+            let AnyMessage::Comdis(_) = msg else {
+                return Err(EngineError::Deserialization(
+                    "WiM Gas COMDIS adapter: expected COMDIS message (PID 29001)".into(),
+                ));
+            };
+            Ok(WimGasInvoicCommand::ReceiveComdis {
+                comdis_ref: MessageRef::new(msg.message_ref()),
+            })
+        },
+    ));
+    registry
+}
+
 // ── WiM Gas Stornierung — GNB side (PID 44022) ───────────────────────────────
 
 /// Build an [`AdapterRegistry`] for [`WimGasStornierungWorkflow`].
@@ -501,6 +577,108 @@ pub fn wim_gas_insrpt_registry() -> AdapterRegistry<WimGasInsrptWorkflow> {
                 response_ref: message_ref,
                 reason: None,
             })
+        },
+    ));
+    registry
+}
+
+// ── WiM Gas Geräteübernahme (ORDERS 17001/17002/17009) ───────────────────────
+
+/// Build an [`AdapterRegistry`] for [`WimGasGeraeteubernahmeWorkflow`].
+///
+/// Maps inbound ORDERS by PID (WiM Gas AWH V2.0 §4.2):
+/// - `17001`/`17002` (Anfrage) → [`GasGeraeteubernahmeCommand::ReceiveAnfrage`]
+/// - `17009` (Ankündigung Gerätewechselabsicht) →
+///   [`GasGeraeteubernahmeCommand::ReceiveStornierung`]
+///
+/// MeLo from the `IDE` segment (element 1, component 0); the Anfrage `DeviceId`
+/// from the first `RFF` reference (element 0, component 1). Gas twin of
+/// [`super::wim_geraeteubernahme_registry`]; `msg.validate()` resolves the Gas
+/// ORDERS AHB profile automatically.
+#[must_use]
+pub fn wim_gas_geraeteubernahme_registry() -> AdapterRegistry<WimGasGeraeteubernahmeWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for WiM Gas Geräteübernahme adapter".into(),
+                )
+            })?;
+
+            let AnyMessage::Orders(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "WiM Gas Geräteübernahme adapter: expected ORDERS message".into(),
+                ));
+            };
+
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "WiM Gas Geräteübernahme adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+
+            let sender =
+                MarktpartnerCode::new(o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""));
+            let receiver = MarktpartnerCode::new(
+                o.receiver()
+                    .and_then(|n| n.party_id.as_deref())
+                    .unwrap_or(""),
+            );
+            let document_date = o
+                .dtm()
+                .iter()
+                .find(|d| d.is_document_date())
+                .and_then(|d| d.value_str())
+                .unwrap_or("")
+                .to_owned();
+            let message_ref = MessageRef::new(msg.message_ref());
+
+            let melo_id = MeLo::new(
+                o.segments()
+                    .iter()
+                    .find(|s| s.tag == "IDE")
+                    .and_then(|s| s.component_str(1, 0))
+                    .unwrap_or(""),
+            );
+
+            if matches!(pid.as_u32(), 17001 | 17002) {
+                let device_id = DeviceId::new(
+                    o.segments()
+                        .iter()
+                        .find(|s| s.tag == "RFF")
+                        .and_then(|s| s.component_str(0, 1))
+                        .unwrap_or(""),
+                );
+                Ok(GasGeraeteubernahmeCommand::ReceiveAnfrage {
+                    pid,
+                    sender,
+                    receiver,
+                    melo_id,
+                    device_id,
+                    document_date,
+                    message_ref,
+                    validation_passed,
+                    validation_errors,
+                })
+            } else {
+                // 17009 — Ankündigung Gerätewechselabsicht.
+                Ok(GasGeraeteubernahmeCommand::ReceiveStornierung { pid, message_ref })
+            }
         },
     ));
     registry

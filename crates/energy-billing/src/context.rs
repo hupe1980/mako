@@ -821,6 +821,17 @@ pub struct BillingContext {
     /// Defaults to `Haushalt` — always set explicitly for B2B customers.
     #[serde(default)]
     pub kundenkategorie: CustomerKategorie,
+
+    /// §13b UStG reverse charge (Steuerschuldnerschaft des Leistungsempfängers).
+    ///
+    /// Set `true` when the customer is a **Stromwiederverkäufer** (electricity/gas
+    /// reseller, §13b Abs. 2 Nr. 5 lit. b UStG): the whole supply is invoiced net
+    /// and the recipient owes the VAT. The engine then marks every supply position
+    /// reverse-charge before the MwSt pass, so the `MwStProvider` charges no VAT and
+    /// the EN 16931 tax breakdown carries an `AE` subtotal instead of `S`/`Z`.
+    /// Defaults to `false` (normal Steuerschuldnerschaft des Leistenden).
+    #[serde(default)]
+    pub reverse_charge: bool,
 }
 
 impl BillingContext {

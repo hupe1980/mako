@@ -18,7 +18,7 @@
 //! | `PUT`  | `/api/v1/billing/drafts/{id}/mark-paid` | REMADV 33001: payment confirmed |
 //! | `PUT`  | `/api/v1/billing/drafts/{id}/mark-disputed` | REMADV 33002: dispute received |
 //! | `POST` | `/api/v1/billing/mmm-run/{malo_id}` | MMM auto-run (edmd auto-fetch) |
-//! | `POST` | `/api/v1/billing/ggv-nne/{ggv_malo_id}` | §42a GGV NNE NB-side billing |
+//! | `POST` | `/api/v1/billing/ggv-nne/{ggv_malo_id}` | §42b EnWG GGV NNE NB-side billing |
 //! | `POST` | `/api/v1/billing/drafts/dispatch-batch` | Batch dispatch |
 //! | `POST` | `/api/v1/billing/drafts/{id}/correction` | Stornorechnung / Korrekturrechnung |
 //! | `GET`  | `/api/v1/billing/malo/{malo_id}` | Billing history per MaLo (lightweight) |
@@ -240,7 +240,7 @@ fn billing_routes() -> Router {
         .route("/run", post(handlers::run_billing))
         // N6: MMM auto-run — auto-fetches profil_kwh from edmd (GPKE (BK6-24-174) Teil 1 Kap. 8.4)
         .route("/mmm-run/:malo_id", post(handlers::post_mmm_auto_run))
-        // N8: §42a GGV NNE NB-side billing — N × NNE per tenant from Lokationszuordnung
+        // N8: §42b EnWG GGV NNE NB-side billing — N × NNE per tenant from Lokationszuordnung
         .route("/ggv-nne/:ggv_malo_id", post(handlers::post_ggv_nne))
         .route("/drafts", get(handlers::list_drafts))
         .route("/drafts/:id", get(handlers::get_draft))

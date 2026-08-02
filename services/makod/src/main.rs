@@ -1096,7 +1096,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
          mp_id   = \"<13-digit-GLN>\"\n\
          roles = [\"NB\", \"LF\", \"MSB\"]  # adjust to operator's Marktrollen\n\
          \n\
-         See docs/makod.md for the full configuration reference."
+         See site/content/docs/services/makod.md for the full configuration reference."
     );
 
     let mp_id_registry: Arc<MpIdRegistry> =
@@ -1638,6 +1638,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         let api_state = Arc::new(edifact_api::EdifactApiState {
             platform: Arc::clone(&platform),
             pid_router: ctx.pid_router().clone(),
+            mp_id_registry: Arc::clone(&mp_id_registry),
             cedar: Arc::clone(&cedar),
             max_body_bytes: cli.http_max_body_bytes,
             partner_store: Some(Arc::new(store.as_partner_store())),
@@ -1855,6 +1856,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         let ingest_state = Arc::new(edifact_api::EdifactApiState {
             platform: Arc::clone(&platform),
             pid_router: ctx.pid_router().clone(),
+            mp_id_registry: Arc::clone(&mp_id_registry),
             cedar: Arc::new(
                 cedar_authz::CedarAuthorizer::unauthenticated()
                     .expect("CedarAuthorizer::unauthenticated is infallible"),

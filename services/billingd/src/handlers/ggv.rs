@@ -1,9 +1,9 @@
-//! §42b EEG 2023 (Solarpaket I) GGV community solar billing and Tarifwechsel.
+//! §42b EnWG (Solarpaket I) GGV community solar billing and Tarifwechsel.
 
 #[allow(unused_imports)]
 use super::*;
 
-// ── §42b EEG 2023 (Solarpaket I) GGV Community Solar Multi-Tenant Billing ─────
+// ── §42b EnWG (Solarpaket I) GGV Community Solar Multi-Tenant Billing ─────
 
 /// Per-tenant input for the GGV proportional billing endpoint.
 ///
@@ -289,13 +289,13 @@ pub async fn post_tarifwechsel(
         .into_response()
 }
 
-/// `POST /api/v1/billing/ggv/{ggv_id}` — §42b EEG 2023 community solar (GGV) billing.
+/// `POST /api/v1/billing/ggv/{ggv_id}` — §42b EnWG community solar (GGV) billing.
 ///
-/// Allocates plant generation across tenants (§42a EEG 2023 proportional
+/// Allocates plant generation across tenants (§42b EnWG proportional
 /// allocation) and emits one invoice per tenant. Rejects an empty `tenants` list
 /// or a zero total-kWh input.
 ///
-/// ## §42b EEG 2023 (Solarpaket I) — two billing models
+/// ## §42b EnWG (Solarpaket I) — two billing models
 ///
 /// **Model A — Nutzungsplan-based (recommended)**: supply `pv_generation_kwh` +
 /// `nutzungsplan`. Each tenant is allocated a proportional share of plant

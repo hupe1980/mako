@@ -118,7 +118,7 @@ let bytes = UtilmdBuilder::new(release)
 println!("{}", String::from_utf8_lossy(&bytes));
 ```
 
-See [`docs/builders.md`] for the full builder API and all message types.
+See the [builder guide][builders] for the full builder API and all message types.
 
 ## Active Format Versions
 
@@ -164,8 +164,8 @@ let msg = platform.parse(&bytes)?;
 let report = msg.validate()?;
 ```
 
-Platforms are cheap to clone (profile data is `Arc`-shared). See [`docs/platform.md`]
-for custom profile subsets, DoS limits, and hot-reload patterns.
+Platforms are cheap to clone (profile data is `Arc`-shared). See the [platform
+guide][platform] for custom profile subsets, DoS limits, and hot-reload patterns.
 
 ## Built-In Examples
 
@@ -182,15 +182,17 @@ Run with `cargo run --example <name> --all-features`:
 
 ## Documentation
 
+Full documentation: <https://hupe1980.github.io/mako/>
+
 | Topic | Link |
 |---|---|
-| Getting started (full engine) | [`docs/getting-started.md`] |
-| Parsing guide | [`docs/parsing.md`] |
-| Validation guide | [`docs/validation.md`] |
-| Builder guide | [`docs/builders.md`] |
-| Platform (multi-tenant / test isolation) | [`docs/platform.md`] |
-| Profile format versions | [`docs/release-lifecycle.md`] |
-| PID reference | [`docs/pid-reference.md`] |
+| Getting started (full engine) | [Guide][getting-started] |
+| Parsing guide | [Parsing][parsing] |
+| Validation guide | [Validation][validation] |
+| Builder guide | [Builders][builders] |
+| Platform (multi-tenant / test isolation) | [Platform][platform] |
+| Profile format versions | [Release lifecycle][release-lifecycle] |
+| PID reference | [PID reference][pid-reference] |
 
 ## Regulatory Standards
 
@@ -202,10 +204,10 @@ Run with `cargo run --example <name> --all-features`:
 - BNetzA rulings BK6-24-174, BK6-22-024, BK7-24-01-009 (process scope)
 
 [`makod`]: ../../services/makod
-[`docs/builders.md`]: ../../docs/builders.md
-[`docs/getting-started.md`]: ../../docs/getting-started.md
-[`docs/parsing.md`]: ../../docs/parsing.md
-[`docs/validation.md`]: ../../docs/validation.md
-[`docs/platform.md`]: ../../docs/platform.md
-[`docs/release-lifecycle.md`]: ../../docs/release-lifecycle.md
-[`docs/pid-reference.md`]: ../../docs/pid-reference.md
+[getting-started]: https://hupe1980.github.io/mako/docs/guide/getting-started/
+[parsing]: https://hupe1980.github.io/mako/docs/reference/parsing/
+[validation]: https://hupe1980.github.io/mako/docs/reference/validation/
+[builders]: https://hupe1980.github.io/mako/docs/reference/builders/
+[platform]: https://hupe1980.github.io/mako/docs/reference/platform/
+[release-lifecycle]: https://hupe1980.github.io/mako/docs/compliance/release-lifecycle/
+[pid-reference]: https://hupe1980.github.io/mako/docs/regulatory/pid-reference/

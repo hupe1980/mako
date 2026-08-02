@@ -1037,5 +1037,5 @@ Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6, Section 3.2 (valid 01
 - [`invoic-checker`](../invoic-checker/README.md) — validates the generated `Rechnung` in the service layer
 - [`netzbilanzd`](../../services/netzbilanzd/README.md) — NB billing service that calls `grid-billing`
 - [`invoicd`](../../services/invoicd/README.md) — LF service using `grid-billing` for selbstausstellen
-- [Operator guide → netzbilanzd](../../docs/netzbilanzd.md)
+- [Operator guide → netzbilanzd](https://hupe1980.github.io/mako/docs/services/netzbilanzd/)
 

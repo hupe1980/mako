@@ -85,6 +85,98 @@ pub fn geli_gas_sperrung_nb_registry() -> AdapterRegistry<GeliGasSperrungNbWorkf
     registry
 }
 
+// ── GeLi Gas Sperrung NB — gMSB response (ORDRSP 19118/19119) ─────────────────
+
+/// Build an [`AdapterRegistry`] for ORDRSP 19118/19119 routed to
+/// [`GeliGasSperrungNbWorkflow`] (GNB side).
+///
+/// After the GNB forwards the Anfrage Sperrung to the gMSB, the gMSB answers with
+/// ORDRSP 19118 (Bestätigung) or 19119 (Ablehnung); `makod` resumes the process
+/// with [`GasSperrungNbCommand::ReceiveMsbAntwort`]. Per-Sparte duplicate of
+/// `gpke_sperrung_msb_response_registry`.
+#[must_use]
+pub fn geli_gas_sperrung_nb_response_registry() -> AdapterRegistry<GeliGasSperrungNbWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GeLi Gas Sperrung NB response adapter".into(),
+                )
+            })?;
+            let AnyMessage::Ordrsp(_) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GeLi Gas Sperrung NB response adapter: expected ORDRSP message \
+                     (PIDs 19118/19119)"
+                        .into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GeLi Gas Sperrung NB response adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            // 19118 = Bestätigung (gMSB confirms meter access), 19119 = Ablehnung.
+            Ok(GasSperrungNbCommand::ReceiveMsbAntwort {
+                pid,
+                is_confirmed: pid.as_u32() == 19118,
+                message_ref: MessageRef::new(msg.message_ref()),
+            })
+        },
+    ));
+    registry
+}
+
+// ── GeLi Gas Sperrung NB — LF Stornierung (ORDCHG 39000) ─────────────────────
+
+/// Build an [`AdapterRegistry`] for ORDCHG 39000 routed to
+/// [`GeliGasSperrungNbWorkflow`] (GNB side).
+///
+/// The LFG cancels a pending Gas-Sperrauftrag with ORDCHG 39000; `makod` resumes
+/// the GNB-side process with [`GasSperrungNbCommand::ReceiveStornierung`]. ORDCHG
+/// carries no LOC — correlated by the original order reference (RFF+ON). Per-Sparte
+/// duplicate of `gpke_sperrung_stornierung_registry`.
+#[must_use]
+pub fn geli_gas_sperrung_nb_stornierung_registry() -> AdapterRegistry<GeliGasSperrungNbWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GeLi Gas Sperrung Stornierung adapter".into(),
+                )
+            })?;
+            let AnyMessage::Ordchg(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GeLi Gas Sperrung Stornierung adapter: expected ORDCHG message (PID 39000)"
+                        .into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GeLi Gas Sperrung Stornierung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            Ok(GasSperrungNbCommand::ReceiveStornierung {
+                pid,
+                sender: MarktpartnerCode::new(
+                    o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                message_ref: MessageRef::new(msg.message_ref()),
+            })
+        },
+    ));
+    registry
+}
+
 // ── GeLi Gas Lieferantenwechsel (PIDs 44001–44006, 44017–44018) ──────────────
 
 /// Build an [`AdapterRegistry`] for [`GeliGasSupplierChangeWorkflow`].
@@ -645,7 +737,8 @@ pub fn geli_gas_sperrung_lf_registry() -> AdapterRegistry<GeliGasSperrungLfWorkf
 
             let AnyMessage::Ordrsp(o) = msg else {
                 return Err(EngineError::Deserialization(
-                    "GeLi Gas Sperrung LF adapter: expected ORDRSP message (PIDs 19116/19117)"
+                    "GeLi Gas Sperrung LF adapter: expected ORDRSP message \
+                     (PIDs 19116/19117/19128/19129)"
                         .into(),
                 ));
             };
@@ -659,19 +752,31 @@ pub fn geli_gas_sperrung_lf_registry() -> AdapterRegistry<GeliGasSperrungLfWorkf
                 })
                 .and_then(convert_pid)?;
 
-            // 19116 = Bestätigung (GNB accepts and will execute the Gas-Sperrung).
-            // 19117 = Ablehnung  (GNB rejects the Gas-Sperrauftrag).
-            let is_confirmed = pid.as_u32() == 19116;
+            let sender =
+                MarktpartnerCode::new(o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""));
+            let message_ref = MessageRef::new(msg.message_ref());
 
-            Ok(GasSperrungLfCommand::ReceiveOrdrsp {
-                pid,
-                is_confirmed,
-                message_ref: MessageRef::new(msg.message_ref()),
-                sender: MarktpartnerCode::new(
-                    o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
-                ),
-                reason: None,
-            })
+            match pid.as_u32() {
+                // Bestätigung/Ablehnung of the LFG's Gas-Sperrauftrag (ORDERS 17115).
+                19116 | 19117 => Ok(GasSperrungLfCommand::ReceiveOrdrsp {
+                    pid,
+                    is_confirmed: pid.as_u32() == 19116,
+                    message_ref,
+                    sender,
+                    reason: None,
+                }),
+                // Bestätigung/Ablehnung of the LFG's Stornierung (ORDCHG 39000).
+                19128 | 19129 => Ok(GasSperrungLfCommand::ReceiveStornoOrdrsp {
+                    pid,
+                    is_confirmed: pid.as_u32() == 19128,
+                    message_ref,
+                    sender,
+                }),
+                other => Err(EngineError::Deserialization(format!(
+                    "GeLi Gas Sperrung LF adapter: unexpected ORDRSP PID {other} \
+                     (expected 19116/19117/19128/19129)"
+                ))),
+            }
         },
     ));
     registry

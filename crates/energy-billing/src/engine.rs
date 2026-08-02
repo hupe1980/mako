@@ -148,6 +148,29 @@ impl BillingEngine {
             positions.extend(new);
         }
 
+        // ── §13b reverse charge (before the MwSt pass) ────────────────────────
+        // Steuerschuldnerschaft des Leistungsempfängers (§13b Abs. 2 Nr. 5 lit. b
+        // UStG): when the customer is a Stromwiederverkäufer the whole supply is
+        // reverse-charged — the supplier invoices net, the recipient owes the VAT.
+        // Mark every supply position (not Tax/Abschlag/Info) reverse-charge so the
+        // MwStProvider computes 0 and `tax_subtotals_of` emits an `AE` subtotal.
+        if ctx.reverse_charge {
+            use crate::position::PositionCategory;
+            positions = positions
+                .into_iter()
+                .map(|p| {
+                    if matches!(
+                        p.category,
+                        PositionCategory::Tax | PositionCategory::Abschlag | PositionCategory::Info
+                    ) {
+                        p
+                    } else {
+                        p.with_reverse_charge()
+                    }
+                })
+                .collect();
+        }
+
         // ── Pass 2: taxes (MwSt sees the full commodity/levy base) ─────────────
         let pre_tax_snap: Vec<BillingPosition> = positions.clone();
         for provider in self.providers.iter().filter(|p| p.is_tax_pass()) {

@@ -1028,12 +1028,12 @@ pub async fn get_kostenblatt_gaps(
     }
 }
 
-// ── §42a GGV NNE NB side (N8: Gemeinschaftliche Gebäudeversorgung) ────────────
+// ── §42b EnWG GGV NNE NB side (N8: Gemeinschaftliche Gebäudeversorgung) ────────────
 
 /// Request body for `POST /api/v1/billing/ggv-nne/{ggv_malo_id}`.
 ///
 /// The NB bills each GGV tenant MaLo for its proportional NNE share.
-/// §42a EEG 2023 requires the NB to treat each tenant as an individual
+/// §42b EnWG requires the NB to treat each tenant as an individual
 /// Marktlokation for NNE purposes.
 #[derive(Debug, serde::Deserialize)]
 pub struct GgvNneRequest {
@@ -1067,9 +1067,9 @@ pub struct GgvNneRequest {
 
 /// `POST /api/v1/billing/ggv-nne/{ggv_malo_id}`
 ///
-/// **N8 — §42a GGV Netzentgelt NB-side billing.**
+/// **N8 — §42b EnWG GGV Netzentgelt NB-side billing.**
 ///
-/// §42a EEG 2023 (mandatory from 01.01.2024): The NB must bill each GGV
+/// §42b EnWG (mandatory from 01.01.2024): The NB must bill each GGV
 /// tenant Marktlokation for its individual NNE share.  Attribution is
 /// proportional to measured consumption (`tenant_consumption`) or equal
 /// split when consumption data is absent.
@@ -1293,7 +1293,7 @@ pub async fn post_ggv_nne(
             "period_from": req.period_from,
             "period_to": req.period_to,
             "attribution": attribution,
-            "source": "§42a_ggv_nne_nb",
+            "source": "§42b_ggv_nne_nb",
         })),
     )
         .into_response()
@@ -1520,16 +1520,17 @@ pub async fn get_malo_billing_history(
 /// Request body for `PUT /api/v1/billing/drafts/{id}/mark-paid`.
 #[derive(Debug, Deserialize)]
 pub struct MarkPaidRequest {
-    /// EDIFACT reference from the REMADV 33001/33003/33004 message.
+    /// EDIFACT reference from the REMADV 33001 (Bestätigung) message.
     pub remadv_ref: String,
 }
 
 /// `PUT /api/v1/billing/drafts/{id}/mark-paid`
 ///
-/// **REMADV 33001/33003/33004 — Zahlungsbestätigung.**
+/// **REMADV 33001 — Zahlungsbestätigung** (the only Bestätigung PID; 33002/33003/
+/// 33004 are Abweisungen and go to `mark-disputed`).
 ///
 /// Updates `invoice_drafts.status` → `'paid'`.  Called by ERP or `makod` outbox
-/// when a REMADV indicating payment is received from the LF.
+/// when a REMADV 33001 payment confirmation is received from the LF.
 ///
 /// Regulatory basis: INVOIC AHB 1.0 §3 — NB must track payment status for
 /// § 147 AO / GoBD 3-year retention and BNetzA audit readiness.

@@ -39,7 +39,9 @@ impl EdifactIngestDispatcher {
                         10,
                         HolidayCalendar::BdewMaKo,
                     );
-                    self.spawn_or_resume::<GeliGasSperrungNbWorkflow>(
+                    // Index under the Sperrauftrag's Belegnummer so a later ORDCHG
+                    // 39000 Stornierung (LOC-less) resumes it by RFF+ON order ref.
+                    self.spawn_or_resume_keyed::<GeliGasSperrungNbWorkflow>(
                         malo_id.as_str(),
                         "geli-gas-sperrung-nb",
                         cmd,
@@ -48,6 +50,33 @@ impl EdifactIngestDispatcher {
                             mako_geli_gas::GELI_GAS_SPERRUNG_NB_ANTWORT_WINDOW_LABEL,
                             due_at,
                         )],
+                        &[msg.message_ref()],
+                    )
+                    .await
+                }
+                // ORDRSP 19118/19119: the gMSB's Bestätigung/Ablehnung of the
+                // Anfrage Sperrung the GNB forwarded — resume by MaLo.
+                19118 | 19119 => {
+                    let cmd =
+                        adapters::geli_gas_sperrung_nb_response_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    self.resume_by_malo::<GeliGasSperrungNbWorkflow>(
+                        malo_id.as_str(),
+                        "geli-gas-sperrung-nb",
+                        cmd,
+                    )
+                    .await
+                }
+                // ORDCHG 39000 (LFG → GNB Stornierung) and 39001 (GNB → gMSB
+                // Weiterleitung) — both LOC-less; resume by the RFF+ON order ref.
+                39000 | 39001 => {
+                    let cmd =
+                        adapters::geli_gas_sperrung_nb_stornierung_registry().dispatch(raw, &fv)?;
+                    let order_ref = extract_order_ref_from_msg(msg);
+                    self.resume_by_malo::<GeliGasSperrungNbWorkflow>(
+                        &order_ref,
+                        "geli-gas-sperrung-nb",
+                        cmd,
                     )
                     .await
                 }
@@ -59,7 +88,9 @@ impl EdifactIngestDispatcher {
             // ── GeLi Gas Sperrung — LF side ───────────────────────────────────
             // PIDs 19116/19117: Gas-Bestätigung/Ablehnung (GNB → LFG) — resume.
             "geli-gas-sperrung-lf" => match pid {
-                19116 | 19117 => {
+                // 19116/19117 answer the Gas-Sperrauftrag (ORDERS 17115);
+                // 19128/19129 answer the Stornierung (ORDCHG 39000).
+                19116 | 19117 | 19128 | 19129 => {
                     let cmd = adapters::geli_gas_sperrung_lf_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_malo::<GeliGasSperrungLfWorkflow>(

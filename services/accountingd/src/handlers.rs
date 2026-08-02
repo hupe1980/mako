@@ -29,8 +29,9 @@ use crate::{
         CreateMandateRequest, UpdateAccountRequest, create_dunning_case, create_mandate,
         fetch_account, fetch_account_by_id, fetch_mandate, fetch_vorauszahlung,
         jahresabschluss_already_settled, list_active_mandates, list_ledger, list_open_dunning,
-        list_overdue_accounts, record_jahresabschluss, resolve_dunning_case,
-        update_account_tenanted, upsert_account, upsert_vorauszahlung,
+        list_overdue_accounts, markiere_unverhaeltnismaessig, record_jahresabschluss,
+        resolve_dunning_case, update_account_tenanted, upsert_account, upsert_vorauszahlung,
+        vereinbare_abwendung,
     },
     sepa::build_pain_008,
 };
@@ -1219,6 +1220,43 @@ pub async fn resolve_dunning(
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     match resolve_dunning_case(&pool, id, &cfg.tenant).await {
+        Ok(0) => StatusCode::NOT_FOUND.into_response(),
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `POST /api/v1/dunning/{id}/abwendung` — record an accepted
+/// **Abwendungsvereinbarung** (§ 41g Abs. 1 S. 10 EnWG). Once the customer has
+/// accepted a payment agreement in Textform before the disconnection is carried
+/// out, the Grundversorgung **must not** be disconnected — this halts the
+/// §§41f/41g sequence for **every open dunning case of the supply point** (the
+/// account owning `{id}`), not just that one case.
+pub async fn abwendung_dunning(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match vereinbare_abwendung(&pool, id, &cfg.tenant).await {
+        Ok(0) => StatusCode::NOT_FOUND.into_response(),
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `POST /api/v1/dunning/{id}/unverhaeltnismaessig` — flag the supply point as
+/// **unverhältnismäßig / schutzbedürftig** (§ 41f Abs. 1 S. 2 / Abs. 2 EnWG): the
+/// customer showed *hinreichende Aussicht* to pay, or there is a *konkrete Gefahr
+/// für Leib oder Leben* (health/age). Halts the §§41f/41g sequence for every open
+/// dunning case of the account owning `{id}`.
+pub async fn unverhaeltnismaessig_dunning(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match markiere_unverhaeltnismaessig(&pool, id, &cfg.tenant).await {
         Ok(0) => StatusCode::NOT_FOUND.into_response(),
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),

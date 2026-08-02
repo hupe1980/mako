@@ -235,7 +235,7 @@ Each category has its own struct with only the relevant fields — no silent fie
 | `Gas(GasProduct)` | `GAS` | `GasProvider` | Brennwertkorrektur; Energiesteuer; BEHG CO₂ |
 | `Waerme(HeatProduct)` | `WAERME` | `HeatProvider` | Fernwärme; standard-rated (19 %); AVBFernwärmeV §24 Preisgleitklausel |
 | `Wasser(WaterProduct)` | `WASSER` | `WaterProvider` | Trinkwasser 7 % USt; gesplittete Abwassergebühr (Schmutzwasser − Absetzungen, Niederschlagswasser m²); public-law fee outside USt |
-| `Solar(SolarProduct)` | `SOLAR` | `SolarProvider` | §42b GGV; §42a Mieterstrom; 0% USt if Kleinunternehmer (§19 UStG) |
+| `Solar(SolarProduct)` | `SOLAR` | `SolarProvider` | §42b EnWG GGV; §21 Abs. 3 EEG Mieterstrom; 0% USt if Kleinunternehmer (§19 UStG) |
 | `Eeg(EegProduct)` | `EEG` | `EegProvider` | LF-side Gutschrift; `eeg` feature for §51/§52 |
 | `Einspeisung(EinspeisungProduct)` | `EINSPEISUNG` | `EinspeisungProvider` | Direktvermarktung Marktwert − Gebühr |
 | `Hems(HemsProduct)` | `HEMS` | `HemsProvider` | Platform subscription + events |
@@ -598,7 +598,7 @@ if invoice.has_errors() {
 | §40 Abs. 2 Nr. 7/8 EnWG | Verbrauchshistorie (prior-year + national average) |
 | §41a / §41a Abs. 1 EnWG | §41a EPEX per-interval; §41a iMSys guard enforced as hard error |
 | §42 Abs. 2 Nr. 2 EnWG | CO₂ emissions label via typed `EnergieQuellen.co2_g_per_kwh` |
-| §42b / §42a EEG 2023 | Mieterstrom / Gemeinschaftliche Gebäudeversorgung |
+| §21 Abs. 3 EEG / §42b EnWG | Mieterstrom / Gemeinschaftliche Gebäudeversorgung|§21 Abs. 3 EEG / §42b EnWG | Mieterstrom / Gemeinschaftliche Gebäudeversorgung |
 | §42c EnWG | Energiegemeinschaft sharing credit via `SharingProduct` |
 | §51 EEG 2023 | Negativpreisregel (contractual LF feature via `eeg` feature) |
 

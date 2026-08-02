@@ -3,13 +3,14 @@
 //! Split out of the flat `adapters` module; shared helpers live in `super`.
 
 use super::*;
-// ── WiM INVOIC billing (PIDs 31003, 31009) ───────────────────────────────────
+// ── WiM INVOIC billing (PID 31009 MSB-Rechnung) ───────────────────────────────
 
 /// Build an [`AdapterRegistry`] for [`WimRechnungWorkflow`].
 ///
 /// Extracts INVOIC fields to construct a [`WimRechnungCommand::ReceiveInvoic`]
-/// for WiM-domain billing PIDs 31003 (WiM-Rechnung) and 31009 (MSB-Rechnung).
-/// These PIDs are explicitly excluded from `mako-gpke`'s INVOIC_PIDS.
+/// for the WiM Strom MSB-Rechnung (PID 31009). This PID is explicitly excluded
+/// from `mako-gpke`'s GPKE_INVOIC_PIDS. (The Gas WiM-Rechnung 31003 lives in
+/// `mako-wim-gas`, duplicated per Sparte.)
 #[must_use]
 pub fn wim_rechnung_registry() -> AdapterRegistry<WimRechnungWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -73,6 +74,79 @@ pub fn wim_rechnung_registry() -> AdapterRegistry<WimRechnungWorkflow> {
                 validation_errors,
                 rechnung: serde_json::to_value(build_rechnung(inv.segments()))
                     .unwrap_or(serde_json::Value::Null),
+            })
+        },
+    ));
+    registry
+}
+
+// ── WiM billing — REMADV payment advice (PIDs 33001–33004) ────────────────────
+
+/// Build an [`AdapterRegistry`] for REMADV 33001–33004 routed to
+/// [`WimRechnungWorkflow`] (MSB invoicer role).
+///
+/// After the MSB sends INVOIC 31009, the payer (NB/LF/ESA) returns a REMADV:
+/// 33001 confirms payment; 33002 non-itemized Abweisung; 33003/33004 the itemized
+/// Strom Abweisungen (Kopf+Summe / Position). `makod` resumes the billing process
+/// with [`WimRechnungCommand::ReceiveRemadv`]. Mirrors `gpke_abrechnung_remadv_registry`.
+#[must_use]
+pub fn wim_rechnung_remadv_registry() -> AdapterRegistry<WimRechnungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization("expected AnyMessage for WiM REMADV adapter".into())
+            })?;
+            let AnyMessage::Remadv(r) = msg else {
+                return Err(EngineError::Deserialization(
+                    "WiM REMADV adapter: expected REMADV message (PIDs 33001–33004)".into(),
+                ));
+            };
+            let pid = r
+                .bgm()
+                .and_then(|b| b.pruefidentifikator())
+                .ok_or_else(|| {
+                    EngineError::Deserialization(
+                        "WiM REMADV adapter: PID not found in REMADV BGM".into(),
+                    )
+                })
+                .and_then(convert_pid)?;
+            Ok(WimRechnungCommand::ReceiveRemadv {
+                pid,
+                remadv_ref: MessageRef::new(msg.message_ref()),
+                sender: MarktpartnerCode::new(
+                    r.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+            })
+        },
+    ));
+    registry
+}
+
+// ── WiM billing — COMDIS payment rejection (PID 29001) ────────────────────────
+
+/// Build an [`AdapterRegistry`] for COMDIS 29001 routed to [`WimRechnungWorkflow`].
+///
+/// After the payer sends a REMADV, the MSB (invoicer) may reject it via COMDIS
+/// 29001 (Ablehnung der Zahlung); `makod` resumes with
+/// [`WimRechnungCommand::ReceiveComdis`]. Mirrors `gpke_abrechnung_comdis_registry`.
+#[must_use]
+pub fn wim_rechnung_comdis_registry() -> AdapterRegistry<WimRechnungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization("expected AnyMessage for WiM COMDIS adapter".into())
+            })?;
+            let AnyMessage::Comdis(_) = msg else {
+                return Err(EngineError::Deserialization(
+                    "WiM COMDIS adapter: expected COMDIS message (PID 29001)".into(),
+                ));
+            };
+            Ok(WimRechnungCommand::ReceiveComdis {
+                comdis_ref: MessageRef::new(msg.message_ref()),
             })
         },
     ));
@@ -648,8 +722,11 @@ pub fn wim_stammdaten_registry() -> AdapterRegistry<WimStammdatenWorkflow> {
 
 /// Build an [`AdapterRegistry`] for [`WimPreisanfrageWorkflow`].
 ///
-/// Handles inbound REQOTE price-inquiry messages from nMSB to MSB.
-/// Produces [`PreisanfrageCommand::ReceiveReqote`].
+/// Handles **both** legs of the WiM Preisanfrage exchange:
+/// - inbound **REQOTE** 35001–35005 (nMSB → MSB) → [`PreisanfrageCommand::ReceiveReqote`];
+/// - inbound **QUOTES** 15001–15005 (MSB → nMSB, the Angebot answering our REQOTE)
+///   → [`PreisanfrageCommand::ReceiveAngebot`], which resumes the process the
+///   REQOTE opened.
 #[must_use]
 pub fn wim_preisanfrage_registry() -> AdapterRegistry<WimPreisanfrageWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -661,11 +738,6 @@ pub fn wim_preisanfrage_registry() -> AdapterRegistry<WimPreisanfrageWorkflow> {
                     "expected AnyMessage for WiM Preisanfrage adapter".into(),
                 )
             })?;
-            let AnyMessage::Reqote(r) = msg else {
-                return Err(EngineError::Deserialization(
-                    "WiM Preisanfrage adapter: expected REQOTE message (PIDs 35001–35005)".into(),
-                ));
-            };
             let pid = msg
                 .detect_pruefidentifikator()
                 .map_err(|e| {
@@ -674,29 +746,43 @@ pub fn wim_preisanfrage_registry() -> AdapterRegistry<WimPreisanfrageWorkflow> {
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
-            Ok(PreisanfrageCommand::ReceiveReqote {
-                pid,
-                sender: MarktpartnerCode::new(
-                    r.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
-                ),
-                receiver: MarktpartnerCode::new(
-                    r.receiver()
-                        .and_then(|n| n.party_id.as_deref())
-                        .unwrap_or(""),
-                ),
-                message_ref: MessageRef::new(msg.message_ref()),
-                validation_passed,
-                validation_errors,
-            })
+            match msg {
+                AnyMessage::Reqote(r) => {
+                    let validation_result = msg.validate().ok();
+                    let validation_passed = validation_result
+                        .as_ref()
+                        .map(|r| r.is_valid())
+                        .unwrap_or(false);
+                    let validation_errors: Vec<String> = validation_result
+                        .as_ref()
+                        .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                        .unwrap_or_default();
+                    Ok(PreisanfrageCommand::ReceiveReqote {
+                        pid,
+                        sender: MarktpartnerCode::new(
+                            r.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                        ),
+                        receiver: MarktpartnerCode::new(
+                            r.receiver()
+                                .and_then(|n| n.party_id.as_deref())
+                                .unwrap_or(""),
+                        ),
+                        message_ref: MessageRef::new(msg.message_ref()),
+                        validation_passed,
+                        validation_errors,
+                    })
+                }
+                // QUOTES 15001–15005: the MSB's Angebot answering our REQOTE.
+                AnyMessage::Quotes(_) => Ok(PreisanfrageCommand::ReceiveAngebot {
+                    pid,
+                    message_ref: MessageRef::new(msg.message_ref()),
+                }),
+                _ => Err(EngineError::Deserialization(
+                    "WiM Preisanfrage adapter: expected REQOTE (35001–35005) or QUOTES \
+                     (15001–15005) message"
+                        .into(),
+                )),
+            }
         },
     ));
     registry

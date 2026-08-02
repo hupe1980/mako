@@ -61,22 +61,25 @@ use rubo4e::current::Rechnung;
 /// | 31002 | NN-Rechnung (Netznutzungsabrechnung)          |
 /// | 31005 | MMM-Rechnung (Mehr-/Mindermengensaldo)        |
 /// | 31006 | MMM-Rechnung (selbst ausgestellt)            |
-pub const INVOIC_PIDS: &[u32] = &[31001, 31002, 31005, 31006];
+pub const GPKE_INVOIC_PIDS: &[u32] = &[31001, 31002, 31005, 31006];
 
 /// REMADV Prüfidentifikatoren handled by this workflow (inbound payment advice).
 ///
 /// These are received by the **invoicer** (NB/MSB) after sending an INVOIC.
-/// The PAYER (LF/NB) sends one of these as payment confirmation or partial rejection.
+/// The PAYER (LF/NB) sends exactly one — either a full payment confirmation
+/// (33001) or a rejection. Per REMADV AHB settlement is „ganz oder gar nicht":
+/// there are **no Teilzahlungen**, so 33002/33003/33004 are all Abweisungen.
 ///
 /// | PID   | Name                                                                |
 /// |-------|---------------------------------------------------------------------|
-/// | 33001 | Zahlungsavis (Bestätigung vollständige Zahlung)                     |
-/// | 33002 | Zahlungsavis (Ablehnung Zahlung)                                    |
-/// | 33003 | Zahlungsavis (Bestätigung Teilzahlung Netznutzungsentgelt)          |
-/// | 33004 | Zahlungsavis (Bestätigung Teilzahlung Mehr-/Mindermengen)           |
+/// | 33001 | Bestätigung (Zahlungsavis — vollständige Zahlung bestätigt)         |
+/// | 33002 | Abweisung (Ablehnung, nicht positionsscharf)                        |
+/// | 33003 | Strom Abweisung Kopf und Summe (positionsscharfe Ablehnung)         |
+/// | 33004 | Strom Abweisung Position (positionsscharfe Ablehnung)               |
 ///
-/// Source: REMADV AHB 1.0, GPKE Teil 2/Teil 3, BK6-24-174.
-pub const REMADV_PIDS: &[u32] = &[33001, 33002, 33003, 33004];
+/// Only 33001 confirms payment (`is_confirmed`); 33002/33003/33004 → Dispute.
+/// Source: REMADV AHB 1.0a §3, GPKE Teil 2/Teil 3, BK6-24-174.
+pub const GPKE_REMADV_PIDS: &[u32] = &[33001, 33002, 33003, 33004];
 
 /// COMDIS Prüfidentifikator for inbound Ablehnung REMADV (payer side).
 ///
@@ -85,7 +88,7 @@ pub const REMADV_PIDS: &[u32] = &[33001, 33002, 33003, 33004];
 /// outbound; the payer receives it inbound.
 ///
 /// Source: COMDIS AHB 1.0, GPKE Teil 2/Teil 3, BK6-24-174.
-pub const COMDIS_ABLEHNUNG_REMADV_PID: Pruefidentifikator = Pruefidentifikator::const_new(29001);
+pub const GPKE_COMDIS_ABLEHNUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(29001);
 
 /// Deadline label for the INVOIC settlement response window.
 ///
@@ -542,7 +545,7 @@ impl Workflow for GpkeAbrechnungWorkflow {
                 if !matches!(state, AbrechnungState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
                 }
-                if !INVOIC_PIDS.contains(&pid.as_u32()) {
+                if !GPKE_INVOIC_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
                         "expected a GPKE INVOIC PID (31001/31002/31005/31006), got {pid}",
                     )));
@@ -673,7 +676,7 @@ impl Workflow for GpkeAbrechnungWorkflow {
                 if !matches!(state, AbrechnungState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
                 }
-                if !INVOIC_PIDS.contains(&pid.as_u32()) {
+                if !GPKE_INVOIC_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
                         "expected a GPKE INVOIC PID (31001/31002/31005/31006), got {pid}",
                     )));
@@ -696,7 +699,7 @@ impl Workflow for GpkeAbrechnungWorkflow {
                 if !matches!(state, AbrechnungState::InvoicSent(_)) {
                     return Err(WorkflowError::invalid_state("InvoicSent", state.label()));
                 }
-                if !REMADV_PIDS.contains(&pid.as_u32()) {
+                if !GPKE_REMADV_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
                         "expected a GPKE REMADV PID (33001–33004), got {pid}",
                     )));

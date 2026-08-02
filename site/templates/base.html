@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  {%- set page_title = title | default(value=config.title) -%}
+  {%- if page.title -%}{%- set page_title = page.title ~ " · mako" -%}{%- elif section.title and section.title != "mako" -%}{%- set page_title = section.title ~ " · mako" -%}{%- endif -%}
+  {%- set page_desc = config.description -%}
+  {%- if page.description -%}{%- set page_desc = page.description -%}{%- elif section.description -%}{%- set page_desc = section.description -%}{%- endif -%}
+  {%- set page_url = config.base_url -%}
+  {%- if page.permalink -%}{%- set page_url = page.permalink -%}{%- elif section.permalink -%}{%- set page_url = section.permalink -%}{%- endif -%}
+
+  <title>{{ page_title }}</title>
+  <meta name="description" content="{{ page_desc | striptags | truncate(length=300) }}">
+  <meta name="author" content="{{ config.extra.author }}">
+  <link rel="canonical" href="{{ page_url | safe }}">
+  <link rel="icon" href="{{ get_url(path='img/mako-logo.svg') | safe }}" type="image/svg+xml">
+
+  <!-- Open Graph / Twitter -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="mako">
+  <meta property="og:title" content="{{ page_title }}">
+  <meta property="og:description" content="{{ page_desc | striptags | truncate(length=300) }}">
+  <meta property="og:url" content="{{ page_url | safe }}">
+  <meta property="og:image" content="{{ get_url(path='img/og-card.png') | safe }}">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="{{ page_title }}">
+  <meta name="twitter:description" content="{{ page_desc | striptags | truncate(length=200) }}">
+
+  <!-- Structured data (SEO) -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "mako",
+    "description": {{ config.description | striptags | json_encode | safe }},
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Linux, macOS",
+    "programmingLanguage": "Rust",
+    "license": "https://spdx.org/licenses/MIT.html",
+    "codeRepository": "{{ config.extra.repo }}",
+    "url": "{{ config.base_url }}"
+  }
+  </script>
+
+  <link rel="stylesheet" href="{{ get_url(path='style.css') | safe }}">
+  {%- if config.generate_feeds %}
+  <link rel="alternate" type="application/atom+xml" title="{{ config.title }}" href="{{ get_url(path='atom.xml', trailing_slash=false) | safe }}">
+  {%- endif %}
+  <script>
+    // Apply persisted theme before paint to avoid a flash.
+    (function () {
+      var t = localStorage.getItem("theme");
+      if (t) document.documentElement.setAttribute("data-theme", t);
+    })();
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="{{ config.base_url }}">
+        <img src="{{ get_url(path='img/mako-logo.svg') | safe }}" alt="" width="28" height="28">
+        <span>mako<span class="brand-spark">⚡</span></span>
+      </a>
+      <nav class="site-nav" aria-label="Primary">
+        <a href="{{ get_url(path='@/docs/_index.md') | safe }}">Docs</a>
+        <a href="{{ get_url(path='@/docs/guide/getting-started.md') | safe }}">Get started</a>
+        <a href="{{ get_url(path='@/docs/services/_index.md') | safe }}">Services</a>
+        <a href="{{ config.extra.repo }}" rel="noopener">GitHub ↗</a>
+      </nav>
+      <div class="header-actions">
+        <input type="search" id="search" class="search-box" placeholder="Search docs…" aria-label="Search documentation" autocomplete="off">
+        <div id="search-results" class="search-results" hidden></div>
+        <button id="theme-toggle" class="theme-toggle" aria-label="Toggle color theme" title="Toggle theme">◑</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    {% block content %}{% endblock content %}
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <p>
+        <strong>mako</strong> — German energy-market operations in Rust.
+        · <a href="{{ config.extra.repo }}/blob/main/LICENSE-MIT">MIT</a>
+        or <a href="{{ config.extra.repo }}/blob/main/LICENSE-APACHE">Apache&nbsp;2.0</a>
+        · Conforms to <a href="{{ config.extra.edi_energy_url }}">BDEW EDI@Energy</a> {{ config.extra.format_versions }}
+      </p>
+    </div>
+  </footer>
+
+  <script defer src="{{ get_url(path='js/search.js') | safe }}"></script>
+  <script>
+    document.getElementById("theme-toggle").addEventListener("click", function () {
+      var cur = document.documentElement.getAttribute("data-theme");
+      var next = cur === "dark" ? "light" : "dark";
+      document.documentElement.setAttribute("data-theme", next);
+      localStorage.setItem("theme", next);
+    });
+  </script>
+  {% block scripts %}{% endblock scripts %}
+</body>
+</html>

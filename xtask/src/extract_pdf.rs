@@ -15,7 +15,7 @@
 //!
 //! ```text
 //! cargo xtask extract-pdf \
-//!   --file    docs/pdfs/MSCONS_MIG_2.4c.pdf \
+//!   --file    regulatories/MSCONS_MIG_2.4c.pdf \
 //!   --message-type mscons \
 //!   --release 2.4c
 //! ```
@@ -723,7 +723,7 @@ Quality gates:
   --compare-dir / --max-drop-pct: relative change guard — fail when count dropped vs. prior release.
   Example combining both:
     cargo xtask extract-pdf \\
-      --file docs/pdfs/UTILMD_AHB_S2.x_FV2026-10-01.pdf \\
+      --file regulatories/UTILMD_AHB_S2.x_FV2026-10-01.pdf \\
       --message-type utilmd \\
       --release FV2026-10-01 \\
       --compare-dir crates/edi-energy/profiles/utilmd/fv20251001 \\
@@ -832,9 +832,12 @@ mod tests {
 
     #[test]
     fn version_inference() {
-        assert_eq!(infer_release("docs/pdfs/MSCONS_MIG_2.4c.pdf"), "2.4c");
-        assert_eq!(infer_release("docs/pdfs/UTILMD_MIG_Strom_S2.1.pdf"), "S2.1");
-        assert_eq!(infer_release("docs/pdfs/CONTRL_MIG_2.0b.pdf"), "2.0b");
+        assert_eq!(infer_release("regulatories/MSCONS_MIG_2.4c.pdf"), "2.4c");
+        assert_eq!(
+            infer_release("regulatories/UTILMD_MIG_Strom_S2.1.pdf"),
+            "S2.1"
+        );
+        assert_eq!(infer_release("regulatories/CONTRL_MIG_2.0b.pdf"), "2.0b");
     }
 
     /// `parse_segment_table` must assign a `parent_group` to segment rows that

@@ -296,7 +296,7 @@ mod tests {
         // Only PIDs 21037 (Ansicht NB/VNB) and 21038 (Ansicht BTR) belong to
         // Redispatch 2.0. PIDs 21035 (GPKE Rückmeldung Lieferstelle → gpke-supplier-change),
         // 21036 (WiM Strom Teil 1, unassigned), and 21040 (AWH Sperrprozesse Gas, unassigned)
-        // are not Redispatch PIDs — see docs/pid-reference.md.
+        // are not Redispatch PIDs — see site/content/docs/regulatory/pid-reference.md.
         assert_eq!(aktivierung::IFTSTA_PIDS, &[21_037, 21_038]);
     }
 

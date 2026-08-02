@@ -395,6 +395,349 @@ async fn ledger_entry_is_provable() {
         "the entry is committed to by the current Merkle head"
     );
 }
+
+// ── §§41f/41g EnWG disconnection sequence ─────────────────────────────────────
+
+/// Seed an unresolved **Mahnstufe-3** case for a fresh account and return its id.
+///
+/// Also arms the §41f Abs. 3 S. 1 consumption gate by setting the monthly
+/// Abschlag to ⅓ of the arrears (so `2× Abschlag = ⅔ arrears ≤ arrears` clears
+/// the gate). Tests that exercise the gate itself override `abschlag_ct` /
+/// `jahresabschluss_runs` afterwards via [`set_abschlag`] / [`set_annual_bill`].
+async fn seed_stufe3(pool: &PgPool, malo: &str, amount_ct: i64) -> Uuid {
+    let account_id = pg::upsert_account(pool, malo, "LF1", TENANT).await.unwrap();
+    set_abschlag(pool, malo, amount_ct / 3).await;
+    pg::create_dunning_case(
+        pool,
+        account_id,
+        TENANT,
+        3,
+        amount_ct,
+        date!(2026 - 01 - 01),
+    )
+    .await
+    .unwrap()
+}
+
+/// Set the agreed monthly Abschlag (`accounts.abschlag_ct`) for the account.
+async fn set_abschlag(pool: &PgPool, malo: &str, abschlag_ct: i64) {
+    sqlx::query("UPDATE accounts SET abschlag_ct = $1 WHERE malo_id = $2 AND tenant = $3")
+        .bind(abschlag_ct)
+        .bind(malo)
+        .bind(TENANT)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// Record an expected annual bill (`jahresabschluss_runs.annual_bill_ct`) for a
+/// given billing year, so the §41f Abs. 3 S. 1 fallback (⅙ Jahresrechnung, when
+/// no Abschlag is agreed) fires. The candidate query picks the most recent year.
+async fn set_annual_bill(pool: &PgPool, malo: &str, billing_year: i16, annual_bill_ct: i64) {
+    sqlx::query(
+        "INSERT INTO jahresabschluss_runs \
+         (tenant, malo_id, billing_year, annual_bill_ct, sum_abschlage_ct, zahlbetrag_ct) \
+         VALUES ($1, $2, $3, $4, 0, 0)",
+    )
+    .bind(TENANT)
+    .bind(malo)
+    .bind(billing_year)
+    .bind(annual_bill_ct)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+fn contains(cands: &[(Uuid, String, String, i64)], case: Uuid) -> bool {
+    cands.iter().any(|(id, ..)| *id == case)
+}
+
+/// The full sequence steps forward one phase at a time, each phase query excludes
+/// the case once it has advanced (idempotent), and the Fristen gate correctly.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn sperr_sequence_progresses_through_all_phases() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let case = seed_stufe3(&pool, &malo, 15_000).await;
+    let threshold = 10_000;
+
+    // ── Phase 1: Sperrandrohung (§41f Abs. 1) ──
+    let c = pg::list_androhung_candidates(&pool, TENANT, threshold)
+        .await
+        .unwrap();
+    assert!(
+        contains(&c, case),
+        "Stufe-3 arrears ≥ threshold is an Androhung candidate"
+    );
+    pg::mark_sperrandrohung(&pool, case, TENANT).await.unwrap();
+    let c = pg::list_androhung_candidates(&pool, TENANT, threshold)
+        .await
+        .unwrap();
+    assert!(
+        !contains(&c, case),
+        "an already-threatened case is no longer an Androhung candidate (idempotent)"
+    );
+
+    // ── Phase 2: Sperrankündigung (§41f Abs. 5), gated by the 4-Wochen Frist ──
+    let not_yet = pg::list_ankuendigung_candidates(&pool, TENANT, 28)
+        .await
+        .unwrap();
+    assert!(
+        !contains(&not_yet, case),
+        "Ankündigung waits out the 4-Wochen Androhungsfrist"
+    );
+    let due = pg::list_ankuendigung_candidates(&pool, TENANT, 0)
+        .await
+        .unwrap();
+    assert!(
+        contains(&due, case),
+        "once the Androhungsfrist has elapsed the case is an Ankündigung candidate"
+    );
+    // Announce with a past planned date so Phase 3 is immediately eligible.
+    pg::mark_sperrankuendigung(&pool, case, TENANT, date!(2026 - 01 - 08))
+        .await
+        .unwrap();
+    let after = pg::list_ankuendigung_candidates(&pool, TENANT, 0)
+        .await
+        .unwrap();
+    assert!(
+        !contains(&after, case),
+        "an already-announced case is no longer an Ankündigung candidate (idempotent)"
+    );
+
+    // ── Phase 3: Sperrauftrag (announced date reached) ──
+    let sa = pg::list_sperrauftrag_candidates(&pool, TENANT)
+        .await
+        .unwrap();
+    assert!(
+        contains(&sa, case),
+        "the announced disconnection date has arrived → Sperrauftrag candidate"
+    );
+    pg::mark_sperrauftrag_dispatched(&pool, case, TENANT, "sperrd:test")
+        .await
+        .unwrap();
+    let sa = pg::list_sperrauftrag_candidates(&pool, TENANT)
+        .await
+        .unwrap();
+    assert!(
+        !contains(&sa, case),
+        "a dispatched Sperrauftrag is not re-posted (idempotent)"
+    );
+}
+
+/// The Sperrauftrag must not fire before the announced disconnection date
+/// (§41f Abs. 5 — 8 Werktage im Voraus).
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn sperrauftrag_waits_for_the_announced_date() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let case = seed_stufe3(&pool, &malo, 15_000).await;
+    pg::mark_sperrandrohung(&pool, case, TENANT).await.unwrap();
+    // Announce a date far in the future.
+    pg::mark_sperrankuendigung(&pool, case, TENANT, date!(2099 - 01 - 01))
+        .await
+        .unwrap();
+    let sa = pg::list_sperrauftrag_candidates(&pool, TENANT)
+        .await
+        .unwrap();
+    assert!(
+        !contains(&sa, case),
+        "a case whose announced date is still in the future is not a Sperrauftrag candidate"
+    );
+}
+
+/// An accepted Abwendungsvereinbarung (§41g Abs. 1 S. 10) bars disconnection —
+/// the case drops out of every phase query.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn abwendungsvereinbarung_halts_the_sequence() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let case = seed_stufe3(&pool, &malo, 15_000).await;
+    // A second open Stufe-3 case on the SAME account (auto-dunning creates a fresh
+    // case per Mahnstufe, so this is realistic). The agreement covers the supply
+    // point, so accepting it must halt both.
+    let account_id = pg::fetch_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap()
+        .unwrap()
+        .account_id;
+    let case2 =
+        pg::create_dunning_case(&pool, account_id, TENANT, 3, 15_000, date!(2026 - 02 - 01))
+            .await
+            .unwrap();
+
+    let n = pg::vereinbare_abwendung(&pool, case, TENANT).await.unwrap();
+    assert_eq!(n, 2, "the agreement halts every open case of the account");
+    for c in [case, case2] {
+        assert!(
+            !contains(
+                &pg::list_androhung_candidates(&pool, TENANT, 10_000)
+                    .await
+                    .unwrap(),
+                c
+            ),
+            "an Abwendungsvereinbarung removes the account's cases from Phase 1"
+        );
+    }
+    assert!(
+        !contains(
+            &pg::list_ankuendigung_candidates(&pool, TENANT, 0)
+                .await
+                .unwrap(),
+            case
+        ),
+        "…and from Phase 2"
+    );
+}
+
+/// An Unverhältnismäßigkeit/Schutzbedürftigkeit flag (§41f Abs. 1 S. 2 / Abs. 2)
+/// halts the sequence.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn unverhaeltnismaessigkeit_halts_the_sequence() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let case = seed_stufe3(&pool, &malo, 15_000).await;
+    let n = pg::markiere_unverhaeltnismaessig(&pool, case, TENANT)
+        .await
+        .unwrap();
+    assert_eq!(n, 1, "the open case is flagged");
+    assert!(
+        !contains(
+            &pg::list_androhung_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "an Unverhältnismäßigkeit flag removes the case from the sequence"
+    );
+}
+
+/// Below the §41f Abs. 3 S. 2 threshold (arrears < 100 €) the case is not a
+/// disconnection candidate.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn below_threshold_is_not_a_candidate() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let case = seed_stufe3(&pool, &malo, 5_000).await; // 50 € < 100 € threshold
+    assert!(
+        !contains(
+            &pg::list_androhung_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "arrears below the threshold never open the disconnection sequence"
+    );
+}
+
+/// §41f Abs. 3 S. 1 — arrears above the 100 € floor but **below 2× the monthly
+/// Abschlag** do not qualify (the consumption-relative gate is not met).
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn below_consumption_gate_is_not_a_candidate() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let case = seed_stufe3(&pool, &malo, 15_000).await; // 150 € > 100 € floor
+    // Override the Abschlag to 200 €/month → 2× = 400 € > 150 € arrears.
+    set_abschlag(&pool, &malo, 20_000).await;
+    assert!(
+        !contains(
+            &pg::list_androhung_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "arrears below 2× the monthly Abschlag do not meet §41f Abs. 3 S. 1"
+    );
+    // Lower the Abschlag to 50 €/month → 2× = 100 € ≤ 150 € arrears → qualifies.
+    set_abschlag(&pool, &malo, 5_000).await;
+    assert!(
+        contains(
+            &pg::list_androhung_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "arrears ≥ 2× the monthly Abschlag meet the consumption gate"
+    );
+}
+
+/// §41f Abs. 3 S. 1 fallback — *wenn keine Abschläge vereinbart sind* the gate is
+/// ⅙ of the expected annual bill (`jahresabschluss_runs.annual_bill_ct`).
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn annual_bill_fallback_when_no_abschlag() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let case = seed_stufe3(&pool, &malo, 15_000).await; // 150 € > 100 € floor
+    set_abschlag(&pool, &malo, 0).await; // no Abschlag agreed → fall back to annual bill
+    // Annual bill 1200 € → ⅙ = 200 € > 150 € arrears → excluded.
+    set_annual_bill(&pool, &malo, 2024, 120_000).await;
+    assert!(
+        !contains(
+            &pg::list_androhung_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "arrears below ⅙ of the expected annual bill do not qualify"
+    );
+    // A more recent (2025), lower annual bill 600 € → ⅙ = 100 € ≤ 150 € → qualifies.
+    // This also proves the query picks the latest billing_year, not the largest bill.
+    set_annual_bill(&pool, &malo, 2025, 60_000).await;
+    assert!(
+        contains(
+            &pg::list_androhung_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "arrears ≥ ⅙ of the most recent expected annual bill qualify"
+    );
+}
+
+/// With neither an Abschlag nor a prior Jahresrechnung on record the §41f Abs. 3
+/// S. 1 gate cannot be established — the case is conservatively excluded even
+/// with high arrears (mako never disconnects without a provable consumption basis).
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn no_consumption_basis_is_conservatively_excluded() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let case = seed_stufe3(&pool, &malo, 500_000).await; // 5000 € arrears
+    set_abschlag(&pool, &malo, 0).await; // no Abschlag, no Jahresabschluss
+    assert!(
+        !contains(
+            &pg::list_androhung_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "no consumption basis → not a candidate, regardless of the arrears size"
+    );
+}
+
 /// The Postgres container guard a test holds until it ends — dropping it removes
 /// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
 type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;

@@ -1,0 +1,25 @@
+{# Docs sidebar: the docs landing link, then every subsection (weight-ordered)
+   with its pages. `current` is the permalink of the active page/section. #}
+{% macro sidebar(current) %}
+  {% set docs = get_section(path="docs/_index.md") %}
+  <nav class="sidebar" aria-label="Documentation">
+    <a class="sidebar-home {% if current == docs.permalink %}active{% endif %}" href="{{ docs.permalink | safe }}">
+      {{ docs.title }}
+    </a>
+    {% for sub_path in docs.subsections %}
+      {% set sub = get_section(path=sub_path) %}
+      <details class="sidebar-group" {% if current is starting_with(sub.permalink) %}open{% endif %}>
+        <summary>{{ sub.title }}</summary>
+        <ul>
+          {% for p in sub.pages %}
+            <li>
+              <a href="{{ p.permalink | safe }}" {% if current == p.permalink %}class="active" aria-current="page"{% endif %}>
+                {{ p.title }}
+              </a>
+            </li>
+          {% endfor %}
+        </ul>
+      </details>
+    {% endfor %}
+  </nav>
+{% endmacro sidebar %}

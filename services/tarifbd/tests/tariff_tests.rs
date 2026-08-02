@@ -693,7 +693,7 @@ mod eeg_kwkg_product_tests {
         assert_eq!(pt, "MIETERSTROM_AUFSCHLAG");
     }
 
-    /// §42a EnWG Gemeinschaftliche Gebäudeversorgung uses GEMEINSCHAFT_RABATT.
+    /// §42b EnWG Gemeinschaftliche Gebäudeversorgung uses GEMEINSCHAFT_RABATT.
     #[test]
     fn gemeinschaft_rabatt_for_paragraph_42a() {
         let pt = "GEMEINSCHAFT_RABATT";

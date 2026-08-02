@@ -178,6 +178,14 @@ impl Daemon for Accountingd {
                 "/api/v1/dunning/{id}/resolve",
                 post(handlers::resolve_dunning),
             )
+            .route(
+                "/api/v1/dunning/{id}/abwendung",
+                post(handlers::abwendung_dunning),
+            )
+            .route(
+                "/api/v1/dunning/{id}/unverhaeltnismaessig",
+                post(handlers::unverhaeltnismaessig_dunning),
+            )
             // ── SEPA ───────────────────────────────────────────────────────────────
             .route("/api/v1/sepa/mandates", post(handlers::post_mandate))
             .route(
@@ -642,78 +650,35 @@ impl Daemon for Accountingd {
                                     sperrauftrag = result.sperrauftrag_triggered,
                                     "accountingd: auto-dunning run completed"
                                 );
-                                // §19 StromGVV handoff: for each qualifying Mahnstufe-3
-                                // case (arrears ≥ threshold), create a Sperrauftrag in
-                                // sperrd. Idempotent via dunning_cases.sperrauftrag_ce_id.
-                                if let Some(ref sperrd_url) = cfg_dun.sperrd_url {
-                                    let threshold = cfg_dun.sperrung_threshold_ct.unwrap_or(10_000);
-                                    match accountingd::pg::list_sperrung_candidates(
-                                        &pool_dun,
-                                        &cfg_dun.tenant,
-                                        threshold,
-                                    )
-                                    .await
-                                    {
-                                        Ok(candidates) => {
-                                            let client = mako_service::http::default_client();
-                                            for (case_id, malo_id, lf_mp_id, amount_ct) in
-                                                candidates
-                                            {
-                                                let body = serde_json::json!({
-                                                    "malo_id": malo_id,
-                                                    "lf_mp_id": lf_mp_id,
-                                                    "order_type": "sperrung",
-                                                });
-                                                let url =
-                                                    format!("{sperrd_url}/api/v1/sperr-orders");
-                                                match client.post(&url).json(&body).send().await {
-                                                    Ok(resp) if resp.status().is_success() => {
-                                                        let reference = resp
-                                                            .json::<serde_json::Value>()
-                                                            .await
-                                                            .ok()
-                                                            .and_then(|v| {
-                                                                v.get("id")
-                                                                    .and_then(|i| i.as_str())
-                                                                    .map(str::to_owned)
-                                                            })
-                                                            .unwrap_or_else(|| {
-                                                                format!("sperrd:{malo_id}")
-                                                            });
-                                                        if let Err(e) =
-                                                        accountingd::pg::mark_sperrauftrag_dispatched(
-                                                            &pool_dun, case_id, &cfg_dun.tenant,
-                                                            &reference,
-                                                        )
-                                                        .await
-                                                    {
-                                                        tracing::warn!(error = %e, "accountingd: mark_sperrauftrag_dispatched failed");
-                                                    } else {
-                                                        tracing::info!(malo_id, amount_ct, "accountingd: Sperrauftrag created in sperrd (§19 StromGVV)");
-                                                    }
-                                                    }
-                                                    Ok(resp) => {
-                                                        tracing::warn!(status = %resp.status(), malo_id, "accountingd: sperrd rejected Sperrauftrag")
-                                                    }
-                                                    Err(e) => {
-                                                        tracing::warn!(error = %e, malo_id, "accountingd: sperrd POST failed")
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            tracing::error!(error = %e, "accountingd: list_sperrung_candidates failed")
-                                        }
-                                    }
-                                }
                             } else {
                                 tracing::debug!(
-                                    "accountingd: auto-dunning — no actions needed today"
+                                    "accountingd: auto-dunning — no new Mahnungen today"
                                 );
                             }
                         }
                         Err(e) => {
                             tracing::error!(error = %e, "accountingd: auto-dunning worker error");
+                        }
+                    }
+
+                    // §§41f/41g EnWG disconnection sequence — runs **every** cycle,
+                    // independently of whether new Mahnungen were created today: a
+                    // Stufe-3 case escalated on a previous day still needs its
+                    // Androhung → Ankündigung → Sperrauftrag advanced on schedule.
+                    // Idempotent (each phase query excludes already-advanced/halted
+                    // cases); a no-op when `sperrd_url` is unset.
+                    match accountingd::sperr::run_sperr_sequence(&pool_dun, &cfg_dun).await {
+                        Ok(s) if s.androhungen + s.ankuendigungen + s.sperrauftraege > 0 => {
+                            tracing::info!(
+                                androhungen = s.androhungen,
+                                ankuendigungen = s.ankuendigungen,
+                                sperrauftraege = s.sperrauftraege,
+                                "accountingd: §§41f/41g disconnection sequence advanced"
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::error!(error = %e, "accountingd: §§41f/41g sequence error");
                         }
                     }
 

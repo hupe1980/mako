@@ -75,6 +75,7 @@ pub async fn post_sammelrechnung(
     for entry in &malos {
         let dummy_req = CalculateRequest {
             schlussrechnung: false,
+            reverse_charge: false,
             abschlaege: Vec::new(),
             lf_mp_id: req.lf_mp_id.clone(),
             nb_mp_id: None,

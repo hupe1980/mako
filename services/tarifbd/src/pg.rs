@@ -1098,10 +1098,21 @@ pub async fn list_angebote(
     .context("list_angebote")
 }
 
+/// Returns `true` when a quotation's BO4E `Angebot` has been priced.
+///
+/// `angebote.bo4e` is stored as `{}` (empty object) until
+/// `GET /api/v1/angebote/{id}/comparison` prices it; an empty object, JSON
+/// `null`, or any non-object value all count as unpriced.
+#[must_use]
+pub fn angebot_is_priced(bo4e: &serde_json::Value) -> bool {
+    bo4e.as_object().is_some_and(|m| !m.is_empty())
+}
+
 /// Transition Angebot to ANGENOMMEN.
 ///
-/// Validates that `gueltig_bis >= today` before accepting.
-/// Returns Err if the Angebot is already in a terminal state or has expired.
+/// Validates that `gueltig_bis >= today` **and** that the quotation has been
+/// priced (`bo4e` populated) before accepting. Returns Err if the Angebot is in
+/// a terminal state, has expired, or has not been priced.
 pub async fn accept_angebot(
     pool: &PgPool,
     id: Uuid,
@@ -1128,6 +1139,16 @@ pub async fn accept_angebot(
         anyhow::bail!(
             "Angebot {id} is in status '{}' — only ANGELEGT or VERSANDT can be accepted",
             angebot.status
+        );
+    }
+
+    // A quotation must be priced before it can be accepted — otherwise
+    // `de.tarif.angebot.angenommen` would carry an empty BO4E `Angebot` and the
+    // downstream Rahmenvertrag build has nothing to derive the contract from.
+    if !angebot_is_priced(&angebot.bo4e) {
+        anyhow::bail!(
+            "Angebot {id} is not priced yet — call GET /api/v1/angebote/{id}/comparison \
+             before accepting"
         );
     }
 
@@ -1498,6 +1519,35 @@ pub async fn fetch_comparison_feed(
         rows.truncate(fetch_limit as usize);
         rows
     })
+}
+
+#[cfg(test)]
+mod angebot_pricing_tests {
+    use super::angebot_is_priced;
+    use serde_json::json;
+
+    #[test]
+    fn empty_object_is_unpriced() {
+        assert!(!angebot_is_priced(&json!({})));
+    }
+
+    #[test]
+    fn null_is_unpriced() {
+        assert!(!angebot_is_priced(&serde_json::Value::Null));
+    }
+
+    #[test]
+    fn non_object_is_unpriced() {
+        assert!(!angebot_is_priced(&json!("not-an-object")));
+        assert!(!angebot_is_priced(&json!([1, 2, 3])));
+    }
+
+    #[test]
+    fn populated_bo4e_object_is_priced() {
+        assert!(angebot_is_priced(
+            &json!({ "_typ": "ANGEBOT", "angebotsnummer": "A-1" })
+        ));
+    }
 }
 
 #[cfg(test)]

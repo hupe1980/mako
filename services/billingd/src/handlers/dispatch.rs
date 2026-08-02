@@ -168,6 +168,9 @@ pub(crate) async fn dispatch_invoice(
             InvoiceType::Initial
         },
         abschlage: req.abschlaege.clone(),
+        // §13b Abs. 2 Nr. 5 lit. b UStG — supply to a Stromwiederverkäufer:
+        // invoice net, recipient owes the VAT (EN 16931 `AE` tax breakdown).
+        reverse_charge: req.reverse_charge,
         regulatory_rates: rates.clone(),
         contract_id: vertrag.as_ref().map(|v| {
             v.vertrag

@@ -66,8 +66,9 @@ use mako_wim::{
     WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimRechnungWorkflow, WimStammdatenWorkflow,
 };
 use mako_wim_gas::{
-    WimGasAnmeldungWorkflow, WimGasInsrptWorkflow, WimGasInvoicWorkflow, WimGasKuendigungWorkflow,
-    WimGasStornierungWorkflow, WimGasVerpflichtungsanfrageWorkflow,
+    WimGasAnmeldungWorkflow, WimGasGeraeteubernahmeWorkflow, WimGasInsrptWorkflow,
+    WimGasInvoicWorkflow, WimGasKuendigungWorkflow, WimGasStornierungWorkflow,
+    WimGasVerpflichtungsanfrageWorkflow,
 };
 use time::OffsetDateTime;
 
@@ -181,6 +182,7 @@ impl EdifactIngestDispatcher {
         "redispatch-aktivierung",
         "wim-device-change",
         "wim-gas-anmeldung",
+        "wim-gas-geraeteubernahme",
         "wim-gas-insrpt",
         "wim-gas-invoic",
         "wim-gas-kuendigung",
@@ -294,14 +296,77 @@ impl EdifactIngestDispatcher {
         workflow_name: &str,
         pid: u32,
     ) -> Result<IngestOutcome, EngineError> {
-        let outcome = self.dispatch_inner(msg, workflow_name, pid).await;
+        // Correlation-routing override (conversation-ID routing). A REMADV/COMDIS
+        // reply PID (33001–33004 / 29001–29002) is legitimately claimed by several
+        // *same-Sparte* billing families — GPKE and WiM both register them for Strom
+        // — so `resolve_workflow`'s MP-ID→Sparte narrowing cannot separate them and
+        // the static PID router falls back to a last-write-wins guess. Re-resolve to
+        // the family that actually holds an open process for the referenced invoice
+        // (RFF+Z13 → original INVOIC message-ref, the same key the family's
+        // `resume_by_malo` uses downstream). If none is found, the static route
+        // stands — behaviour is unchanged for correctly-routed and orphan messages.
+        let corrected = self.correlation_route(msg, workflow_name).await;
+        let effective_name = corrected.as_deref().unwrap_or(workflow_name);
+        let outcome = self.dispatch_inner(msg, effective_name, pid).await;
         let result = match &outcome {
             Ok(IngestOutcome::Spawned { .. } | IngestOutcome::Dispatched { .. }) => "dispatched",
             Ok(IngestOutcome::Skipped { .. }) => "skipped",
             Err(_) => "error",
         };
         mako_engine::metrics::EngineMetrics::global().inbound_received(pid, result);
+        // A `pid_not_in_*` skip means a PID reached its workflow (it is registered
+        // in the router) but the ingest `match pid` arm has no branch for it — the
+        // message is silently dropped. That is always a coverage bug, so make it
+        // LOUD (distinct from expected orphans like `process_not_found` /
+        // `no_malo_id`, which stay quiet). This is the runtime safety net for the
+        // registered-but-not-dispatched class; see the PID-coverage guard in ROADMAP.
+        if let Ok(IngestOutcome::Skipped {
+            workflow_name,
+            reason,
+        }) = &outcome
+            && reason.starts_with("pid_not_in_")
+        {
+            tracing::warn!(
+                pid,
+                workflow = %workflow_name,
+                reason,
+                "ingest: PID is registered to this workflow but has no dispatch arm — \
+                 inbound message dropped (coverage bug)"
+            );
+        }
         outcome
+    }
+
+    /// Conversation-ID routing for reply messages whose PID is shared across
+    /// same-Sparte billing families (REMADV / COMDIS).
+    ///
+    /// Returns the workflow name of the open process registered under the reply's
+    /// referenced invoice (RFF+Z13), when that differs from the statically resolved
+    /// `static_name`. Returns `None` — leaving the static route in force — when the
+    /// message is not a correlation-routed reply, carries no reference, or has no
+    /// correlated open process (an orphan reply is still `Skipped` downstream, as
+    /// before). This never mis-books: it only redirects a reply to the family that
+    /// already owns the invoice it answers.
+    async fn correlation_route(&self, msg: &AnyMessage, static_name: &str) -> Option<String> {
+        let key = match msg {
+            AnyMessage::Remadv(_) => extract_invoice_ref_from_remadv(msg),
+            AnyMessage::Comdis(_) => extract_invoice_ref_from_comdis(msg),
+            // Not a shared reply PID — the static route is authoritative.
+            _ => return None,
+        };
+        if key.is_empty() {
+            return None;
+        }
+        let registry = self.store.as_process_registry();
+        let identities = registry
+            .lookup_correlated(self.tenant_id, &key)
+            .await
+            .ok()?;
+        // The invoice ref keys exactly one billing process (the invoicer that sent
+        // it); route the reply to that family.
+        let owner = identities.first()?;
+        let name = owner.workflow_id.name.as_ref();
+        (name != static_name).then(|| name.to_owned())
     }
 
     /// Family router — pure routing by workflow-family name prefix.
@@ -767,6 +832,11 @@ pub fn extract_malo_from_msg(msg: &AnyMessage) -> MaLo {
         // Wertebestellung handshake correlates on it.
         AnyMessage::Reqote(r) => r.segments(),
         AnyMessage::Quotes(q) => q.segments(),
+        // IFTSTA status/Vollzugsmeldung carries the single addressed location in
+        // LOC (MaLo for GPKE Sperrung/SupplierChange, MeLo for WiM device-change) —
+        // per the IFTSTA AHB profile, which has one LOC segment. The status reply
+        // resumes the process that was opened for that location.
+        AnyMessage::Iftsta(i) => i.segments(),
         _ => return MaLo::new(""),
     };
     // The location travels in LOC where the profile has one; the GPKE/GeLi

@@ -73,7 +73,7 @@ CREATE TABLE eeg_anlagen (
         'KWK_SURCHARGE', 'FLEXIBILITY_PREMIUM', 'FLEXIBILITY_SURCHARGE',
         'TEMPORARY_FEED_IN_TARIFF',
         -- Solarpaket I + §21a
-        'GGV',                      -- §42b EEG 2023 Gemeinschaftliche Gebäudeversorgung
+        'GGV',                      -- §42b EnWG Gemeinschaftliche Gebäudeversorgung
         'SONSTIGE_DIREKTVERMARKTUNG' -- §21a direct third-party sale
     )),
 
@@ -194,7 +194,7 @@ CREATE TABLE eeg_anlagen (
     -- ── §51 Abs. 2 Nr. 1 EEG 2023: iMSys rollout ────────────────────────────
     imesys_rollout_datum       DATE,
 
-    -- ── §42b EEG 2023: GGV Nutzungsplan ──────────────────────────────────────
+    -- ── §42b EnWG: GGV Nutzungsplan ──────────────────────────────────────
     ggv_nutzungsplan           JSONB,
 
     -- ── §21c notification tracking ───────────────────────────────────────────

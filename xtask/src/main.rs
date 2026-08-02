@@ -288,7 +288,7 @@ fn check_bo4e_coverage() {
             eprintln!(
                 "ERROR: found {found} types but README.md claims {claimed} (delta={delta} > 2)."
             );
-            eprintln!("Update the count in README.md and docs/index.md.");
+            eprintln!("Update the count in README.md and site/content/_index.md.");
             std::process::exit(1);
         } else {
             println!("✓ Count {found} matches README.md claim {claimed} (delta={delta} ≤ 2).");

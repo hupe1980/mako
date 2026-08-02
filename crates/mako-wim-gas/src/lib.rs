@@ -48,7 +48,7 @@
 //! - **BNetzA BK7-24-01-009** — GeLi Gas 3.0 / WiM Gas ruling,
 //!   Beschluss 12.09.2025, abgeschlossen 24.09.2025
 //! - **BDEW/VKU/GEODE/FNBGas AWH WiM Gas V2.0** (2025-08-04) —
-//!   `docs/pdfs/bdew-mako/BDEW_VKU_GEODE_FNBGas_AWH_WiMGas_V2_0_20250804.pdf`
+//!   `regulatories/bdew-mako/BDEW_VKU_GEODE_FNBGas_AWH_WiMGas_V2_0_20250804.pdf`
 //! - **UTILMD AHB Gas 1.1 / 1.2** — message specification
 
 #![deny(unsafe_code)]
@@ -66,6 +66,14 @@
 
 /// WiM Gas Anmeldung / Abmeldung workflows (PIDs 44042–44053).
 pub mod anmeldung;
+/// WiM Gas Geräteübernahme workflow (WiM Gas AWH V2.0 §4.2).
+///
+/// Handles ORDERS 17001/17002/17009 (shared with WiM Strom), answered with
+/// QUOTES 15001 / ORDRSP 19001·19002. Registered with `Sparte::Gas` via
+/// `PidRouter::register_with_sparte` so `route_with_sparte(pid, Sparte::Gas)`
+/// resolves to `"wim-gas-geraeteubernahme"` while the Strom twin
+/// (`WimModule`, `Sparte::Strom`) keeps `"wim-geraeteubernahme"`.
+pub mod geraeteubernahme;
 /// WiM Gas INSRPT Störungsmeldung workflow (PIDs 23005/23009 Gas-only;
 /// 23001/23003/23004/23008 shared with WiM Strom).
 ///
@@ -95,6 +103,13 @@ pub use anmeldung::{
     WORKFLOW_NAME as ANMELDUNG_WORKFLOW_NAME, WimGasAnmeldungCommand, WimGasAnmeldungData,
     WimGasAnmeldungEvent, WimGasAnmeldungProjection, WimGasAnmeldungRecord,
     WimGasAnmeldungRecordData, WimGasAnmeldungState, WimGasAnmeldungWorkflow,
+};
+pub use geraeteubernahme::{
+    GERAETEUBERNAHME_PIDS as GAS_GERAETEUBERNAHME_PIDS, GasGeraeteubernahmeCommand,
+    GasGeraeteubernahmeData, GasGeraeteubernahmeEvent, GasGeraeteubernahmeProjection,
+    GasGeraeteubernahmeRecord, GasGeraeteubernahmeState,
+    ORDRSP_DEADLINE_LABEL as GAS_GERAETEUBERNAHME_ORDRSP_DEADLINE_LABEL,
+    WORKFLOW_NAME as GAS_GERAETEUBERNAHME_WORKFLOW_NAME, WimGasGeraeteubernahmeWorkflow,
 };
 pub use insrpt::{
     ANTWORT_WINDOW_LABEL as INSRPT_GAS_ANTWORT_WINDOW_LABEL, GasStorungsmeldungCommand,
@@ -164,6 +179,7 @@ impl mako_engine::builder::EngineModule for WimGasModule {
             "wim-gas-invoic",
             "wim-gas-stornierung",
             insrpt::WORKFLOW_NAME,
+            geraeteubernahme::WORKFLOW_NAME,
         ]
     }
 
@@ -176,6 +192,22 @@ impl mako_engine::builder::EngineModule for WimGasModule {
         }
         for &pid in verpflichtungsanfrage::VERPFLICHTUNGSANFRAGE_PIDS {
             router.register(pid, "wim-gas-verpflichtungsanfrage");
+        }
+
+        // Geräteübernahme (WiM Gas AWH V2.0 §4.2) — ORDERS 17001/17002/17009,
+        // shared with WiM Strom. Registered with `Sparte::Gas` so
+        // `route_with_sparte(pid, Sparte::Gas)` resolves to
+        // "wim-gas-geraeteubernahme"; the unambiguous entry is the Gas-standalone
+        // fallback (overwritten by WimModule in combined deployments, but the
+        // commodity entry always wins for Gas-recipient interchanges). The Strom
+        // twin registers the same PIDs with `Sparte::Strom` → "wim-geraeteubernahme".
+        for &pid in geraeteubernahme::GERAETEUBERNAHME_PIDS {
+            router.register(pid, geraeteubernahme::WORKFLOW_NAME);
+            router.register_with_sparte(
+                pid,
+                mako_engine::types::Sparte::Gas,
+                geraeteubernahme::WORKFLOW_NAME,
+            );
         }
         // PIDs 44022–44024: role-conditional — NOT registered here.
         // See register_pids_with_roles() for the gMSB-role guard.

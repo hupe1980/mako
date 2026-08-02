@@ -20,7 +20,7 @@
 //! confirmation is a regulatory failure.
 //!
 //! The `makod` deadline scheduler for Redispatch must poll at ≤ 30 second
-//! intervals (see `docs/redis.md §9.4`).
+//! intervals (see `site/content/docs/reference/redispatch.md`).
 //!
 //! In addition, each party must send an `AcknowledgementDocument` (transport
 //! ACK) within **6 wall-clock hours** of receiving the ACO (BK6-20-059 §4.3).
@@ -45,7 +45,7 @@
 //! PIDs 21035 (GPKE Rückmeldung Lieferstelle → `gpke-supplier-change`),
 //! 21036 (`WiM` Strom Teil 1, unassigned) and 21040 (`AWH` Sperrprozesse Gas,
 //! unassigned) are **not** Redispatch PIDs and must not be registered here.
-//! See `docs/pid-reference.md` for the authoritative PID ownership table.
+//! See `site/content/docs/regulatory/pid-reference.md` for the authoritative PID ownership table.
 //!
 //! # Regulatory basis
 //!
@@ -73,7 +73,7 @@ pub const WORKFLOW_NAME: &str = "redispatch-aktivierung";
 ///
 /// Only these two PIDs belong to Redispatch 2.0.  PIDs 21035, 21036, and
 /// 21040 are NOT Redispatch PIDs — they belong to GPKE and AWH Sperrprozesse
-/// respectively (see `docs/pid-reference.md`).
+/// respectively (see `site/content/docs/regulatory/pid-reference.md`).
 pub const IFTSTA_PIDS: &[u32] = &[21_037, 21_038];
 
 /// Redispatch MSCONS PIDs — time-series data delivery for Ausfallarbeit and EEG.

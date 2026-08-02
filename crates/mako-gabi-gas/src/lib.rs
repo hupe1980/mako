@@ -138,7 +138,7 @@ pub use imbnot::{
 };
 pub use invoic::{
     COMDIS_RESUME_PATH as INVOIC_COMDIS_RESUME_PATH, GABI_GAS_COMDIS_ABLEHNUNG_PID,
-    GABI_GAS_INVOIC_PIDS, GABI_GAS_REMADV_PID, GaBiGasInvoicCommand, GaBiGasInvoicData,
+    GABI_GAS_INVOIC_PIDS, GABI_GAS_REMADV_PIDS, GaBiGasInvoicCommand, GaBiGasInvoicData,
     GaBiGasInvoicEvent, GaBiGasInvoicProjection, GaBiGasInvoicRecord, GaBiGasInvoicState,
     GaBiGasInvoicWorkflow, REMADV_RESUME_PATH as INVOIC_REMADV_RESUME_PATH,
     SETTLEMENT_WINDOW_LABEL as INVOIC_SETTLEMENT_WINDOW_LABEL,
@@ -239,7 +239,9 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
         // payment. Without this registration, REMADV is silently dropped.
         //
         // Source: REMADV AHB 1.0, GaBi Gas, BK7.
-        router.register(invoic::GABI_GAS_REMADV_PID.as_u32(), "gabi-gas-invoic");
+        for &pid in invoic::GABI_GAS_REMADV_PIDS {
+            router.register(pid, "gabi-gas-invoic");
+        }
 
         // COMDIS 29001 — inbound Ablehnung REMADV (payer role).
         //

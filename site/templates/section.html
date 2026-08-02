@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% import "macros.html" as macros %}
+
+{% block content %}
+<div class="docs-layout">
+  {{ macros::sidebar(current=section.permalink) }}
+
+  <article class="doc">
+    <h1>{{ section.title }}</h1>
+    {% if section.description %}<p class="doc-lead">{{ section.description }}</p>{% endif %}
+
+    <div class="doc-body">
+      {{ section.content | safe }}
+    </div>
+
+    {# Landing cards: subsections (on the docs root) or pages (within a subsection) #}
+    {% if section.subsections %}
+    <div class="card-grid">
+      {% for sub_path in section.subsections %}
+        {% set sub = get_section(path=sub_path) %}
+        <a class="card" href="{{ sub.permalink | safe }}">
+          <h3>{{ sub.title }}</h3>
+          {% if sub.description %}<p>{{ sub.description }}</p>{% endif %}
+          <span class="card-count">{{ sub.pages | length }} page{{ sub.pages | length | pluralize }}</span>
+        </a>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if section.pages %}
+    <div class="card-grid">
+      {% for p in section.pages %}
+        <a class="card" href="{{ p.permalink | safe }}">
+          <h3>{{ p.title }}</h3>
+          {% if p.description %}<p>{{ p.description | truncate(length=140) }}</p>{% endif %}
+        </a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </article>
+</div>
+{% endblock content %}
