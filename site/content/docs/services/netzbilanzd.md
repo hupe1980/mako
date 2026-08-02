@@ -77,12 +77,12 @@ graph LR
     marktd[(marktd :8180)]
     edmd[(edmd :8380)]
     makod[makod :8080]
-    netzbilanz-agent[netzbilanz-agent\nagentd :9580]
+    netzbilanz-agent[netzbilanz-agent<br/>agentd :9580]
 
-    ERP -->|POST /billing/run\nPUT /dispatch\nPUT /mark-paid| nd
-    nd -->|tariffs\nMMM prices\nLokationszuordnung| marktd
-    nd -->|imbalance\nbilling-period| edmd
-    nd -->|INVOIC 31001/31002\n31005/31009/31011| makod
+    ERP -->|POST /billing/run<br/>PUT /dispatch<br/>PUT /mark-paid| nd
+    nd -->|tariffs<br/>MMM prices<br/>Lokationszuordnung| marktd
+    nd -->|imbalance<br/>billing-period| edmd
+    nd -->|INVOIC 31001/31002<br/>31005/31009/31011| makod
     nd -.->|CloudEvents| ERP
     nd -.->|CloudEvents| netzbilanz-agent
 ```
@@ -304,11 +304,11 @@ so it survives serialization.
 
 ```mermaid
 flowchart LR
-    input["NneInput\n(sparte, tariff_sheet_id,\nka_klasse, ...)"]
-    calc["grid_billing::\nsettle_nne()"]
-    gs["SettlementResult\ncounterparty_mp_id\npositions[n].trace\n  .explanation\n  .legal_refs\n  .tariff_source"]
-    rechnung["rubo4e::Rechnung\nrechnungspositionen"]
-    db[("invoice_drafts\n.rechnung_json")]
+    input["NneInput<br/>(sparte, tariff_sheet_id,<br/>ka_klasse, ...)"]
+    calc["grid_billing::<br/>settle_nne()"]
+    gs["SettlementResult<br/>counterparty_mp_id<br/>positions[n].trace<br/>  .explanation<br/>  .legal_refs<br/>  .tariff_source"]
+    rechnung["rubo4e::Rechnung<br/>rechnungspositionen"]
+    db[("invoice_drafts<br/>.rechnung_json")]
 
     input --> calc --> gs --> rechnung --> db
 ```
@@ -486,15 +486,15 @@ stateDiagram-v2
     direction LR
     [*] --> draft : POST /billing/run
 
-    draft --> dispatched  : PUT /dispatch\n(check_outcome ≠ Dispute)
+    draft --> dispatched  : PUT /dispatch<br/>(check_outcome ≠ Dispute)
     draft --> rejected    : PUT /reject
-    draft --> draft       : PUT /dispatch blocked\n(check_outcome = Dispute)
+    draft --> draft       : PUT /dispatch blocked<br/>(check_outcome = Dispute)
 
-    dispatched --> paid      : PUT /mark-paid\n(REMADV 33001/33003/33004)
-    dispatched --> dispatched: PUT /mark-disputed\n(REMADV 33002 → check_outcome=Dispute)
+    dispatched --> paid      : PUT /mark-paid<br/>(REMADV 33001/33003/33004)
+    dispatched --> dispatched: PUT /mark-disputed<br/>(REMADV 33002 → check_outcome=Dispute)
 
     paid     --> [*]
-    rejected --> draft : new billing run\n(UNIQUE index allows retry)
+    rejected --> draft : new billing run<br/>(UNIQUE index allows retry)
 ```
 
 ---

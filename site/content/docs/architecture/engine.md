@@ -22,41 +22,41 @@ graph TD
     subgraph Inbound["Inbound path"]
         AS4["AS4/ebMS3"]
         REST["HTTP REST"]
-        AS4 & REST --> IB["InboxStore\n(dedup sentinel)"]
-        IB --> PARSE["edi-energy\nparse + validate"]
-        PARSE --> ROUTER["PidRouter\n(PID → handler)"]
+        AS4 & REST --> IB["InboxStore<br/>(dedup sentinel)"]
+        IB --> PARSE["edi-energy<br/>parse + validate"]
+        PARSE --> ROUTER["PidRouter<br/>(PID → handler)"]
     end
 
     subgraph Core["Process core (per workflow instance)"]
-        ROUTER --> CMD["Command construction\n(at transport boundary)"]
-        CMD --> PROC["Process&lt;W, S&gt;\nexecute / execute_and_enqueue"]
-        PROC --> WH["Workflow::handle\n(pure)"]
-        WH --> WA["Workflow::apply\n(pure)"]
+        ROUTER --> CMD["Command construction<br/>(at transport boundary)"]
+        CMD --> PROC["Process&lt;W, S&gt;<br/>execute / execute_and_enqueue"]
+        PROC --> WH["Workflow::handle<br/>(pure)"]
+        WH --> WA["Workflow::apply<br/>(pure)"]
         WA -->|"fold events"| STATE["State"]
     end
 
     subgraph Atomic["Atomic write (single WriteBatch)"]
-        PROC -->|"append_with_outbox"| ES["EventStore\ne/ + sv/ + si/"]
-        PROC -->|"append_with_outbox"| OMS["OutboxStore\nom/"]
+        PROC -->|"append_with_outbox"| ES["EventStore<br/>e/ + sv/ + si/"]
+        PROC -->|"append_with_outbox"| OMS["OutboxStore<br/>om/"]
     end
 
     subgraph Background["Background workers"]
-        OW["OutboxWorker\n(continuous)"]
-        DS["DeadlineScheduler\n(every 30 s)"]
+        OW["OutboxWorker<br/>(continuous)"]
+        DS["DeadlineScheduler<br/>(every 30 s)"]
         OMS -->|"pending"| OW
         OW -->|"AS4 SOAP"| PARTNER["Trading Partner MSH"]
-        DS -->|"due_now"| DL["DeadlineStore\ndl/ + dt/"]
+        DS -->|"due_now"| DL["DeadlineStore<br/>dl/ + dt/"]
         DL -->|"TimeoutExpired"| PROC
     end
 
     subgraph Registry["Process Registry"]
-        PR["ProcessRegistry\npr/ (routing)"]
-        CI["ProcessRegistry\nci/ (correlated)"]
+        PR["ProcessRegistry<br/>pr/ (routing)"]
+        CI["ProcessRegistry<br/>ci/ (correlated)"]
         PROC --> PR & CI
     end
 
     subgraph Partners["Partner Store"]
-        PT["PartnerStore\npt/ — GLN → AS4 endpoint"]
+        PT["PartnerStore<br/>pt/ — GLN → AS4 endpoint"]
         OW --> PT
     end
 ```

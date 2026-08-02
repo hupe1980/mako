@@ -15,8 +15,8 @@
 #   6.   makod processes UTILMD 55001 → pushes process.initiated to marktd
 #   6b.  marktd fans out to processd (webhook subscription)
 #   6c.  processd validates (MaLo ✓, preisblatt ✓) → dispatches bestaetigen
-#   7.   makod dispatches UTILMD 55003 (Bestätigung Lieferbeginn)
-#   8.   webhook receives UTILMD 55003 ✓
+#   7.   makod dispatches UTILMD 55002 (Bestätigung Lieferbeginn)
+#   8.   webhook receives UTILMD 55002 ✓
 #   m1-m5. marktd smoke tests (health, MaLo, preisblatt, correlations)
 #   n1-n6. netzbilanzd smoke tests (health, NNE draft, list, summary, audit, MCP)
 #         — enabled when NETZBILANZD_URL is set
@@ -318,7 +318,7 @@ pass "GET /admin/partners → $COUNT partner(s) registered"
 # marktd's ingest endpoint and the Wechselprozess auto-responder fires:
 #   • Rules 0–6 all pass (MaLo present, NB matches, no active LF, preisblatt valid)
 #   • auto_accept=true → dispatches gpke.lieferbeginn.bestaetigen automatically
-#   • makod receives bestaetigen → enqueues UTILMD 55003 (Bestätigung Lieferbeginn)
+#   • makod receives bestaetigen → enqueues UTILMD 55002 (Bestätigung Lieferbeginn)
 
 info "[5/9] POST UTILMD 55001 (Lieferbeginn Strom — LFN→NB Anmeldung)"
 # Patch fixture with per-run unique identifiers to avoid deduplication on re-runs.
@@ -410,7 +410,7 @@ else
     # 6c. Check if processd (the NB STP auto-responder) has already dispatched
     #     bestaetigen. processd subscribes to marktd and validates against master data.
     #     marktd itself does NOT dispatch decisions — it is a pure data hub.
-    #     Poll for UTILMD 55003 — if it arrives here, processd already fired.
+    #     Poll for UTILMD 55002 — if it arrives here, processd already fired.
     #     If not, step 7 dispatches bestaetigen manually (or processd is not running).
     if [[ -n "${MARKTD_URL:-}" ]]; then
         echo "      Checking if processd NB auto-responder dispatched bestaetigen …"
@@ -424,13 +424,13 @@ else
             [[ "$AUTO_COUNT" -gt 0 ]] && break
         done
         if [[ "$AUTO_COUNT" -gt 0 ]]; then
-            pass "processd NB auto-responder dispatched bestaetigen → UTILMD 55003 already arrived:"
+            pass "processd NB auto-responder dispatched bestaetigen → UTILMD 55002 already arrived:"
             echo
             printf '%s' "$AUTO_UTILMD" | jq '.[] | .body | {type, makomessagetype, makorecipient, edifact: .data.edifact}'
             echo "      Step 7 will confirm duplicate-command rejection (process already accepted — expect 409/422)."
             echo
         else
-            echo -e "${YELLOW}▶${NC}  UTILMD 55003 not yet visible — auto-responder may still be processing."
+            echo -e "${YELLOW}▶${NC}  UTILMD 55002 not yet visible — auto-responder may still be processing."
             echo "      Step 7 will dispatch bestaetigen manually as fallback."
         fi
     fi
@@ -466,17 +466,17 @@ else
     fail "POST /api/v1/commands returned $code: $BODY"
 fi
 
-# ── 8. Outbound EDIFACT — verify UTILMD 55003 Bestätigung was delivered ───────
+# ── 8. Outbound EDIFACT — verify UTILMD 55002 Bestätigung was delivered ───────
 #
-# If UTILMD 55003 already arrived in step 6c (auto-responder), the webhook log
+# If UTILMD 55002 already arrived in step 6c (auto-responder), the webhook log
 # was cleared after step 6.  We poll again for a fresh delivery or confirm via
 # the event count from before the clear.
 
-info "[8/9] Outbound EDIFACT — UTILMD 55003 Bestätigung (→ LFN)"
+info "[8/9] Outbound EDIFACT — UTILMD 55002 Bestätigung (→ LFN)"
 if [[ -z "${WEBHOOK_URL:-}" ]]; then
     echo "      Skipped — WEBHOOK_URL not set."
 else
-    echo "      Polling webhook for UTILMD 55003 (up to 12 s) …"
+    echo "      Polling webhook for UTILMD 55002 (up to 12 s) …"
     UTILMD_EVENTS='[]'
     UCOUNT=0
     for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do
@@ -488,7 +488,7 @@ else
         [[ "$UCOUNT" -gt 0 ]] && break
     done
     if [[ "$UCOUNT" -gt 0 ]]; then
-        pass "UTILMD 55003 Bestätigung Lieferbeginn delivered to LFN:"
+        pass "UTILMD 55002 Bestätigung Lieferbeginn delivered to LFN:"
         echo
         printf '%s' "$UTILMD_EVENTS" | jq '.[] | .body | {type, subject, makomessagetype, makorecipient, edifact: .data.edifact}'
         echo
@@ -496,9 +496,9 @@ else
         # It may have already been captured and cleared in step 6c.
         # Accept if auto_count was positive earlier.
         if [[ -n "${MARKTD_URL:-}" && "$AUTO_COUNT" -gt 0 ]]; then
-            pass "UTILMD 55003 was already verified in step 6c (auto-responder path)"
+            pass "UTILMD 55002 was already verified in step 6c (auto-responder path)"
         else
-            fail "No UTILMD 55003 after 12 s — expected Bestätigung Lieferbeginn"
+            fail "No UTILMD 55002 after 12 s — expected Bestätigung Lieferbeginn"
         fi
     fi
 fi
@@ -673,7 +673,7 @@ echo "  makod MCP server  : $BASE_URL/mcp"
 [[ -n "${MARKTD_URL:-}" ]] && echo "  marktd  REST API    : $MARKTD_URL/api/v1/docs/"
 [[ -n "${MARKTD_URL:-}" ]] && echo
 [[ -n "${MARKTD_URL:-}" ]] && echo "  Wechselprozess auto-responder: ENABLED"
-[[ -n "${MARKTD_URL:-}" ]] && echo "  Flow: UTILMD 55001 → makod → marktd ingest → validate → bestaetigen → UTILMD 55003"
+[[ -n "${MARKTD_URL:-}" ]] && echo "  Flow: UTILMD 55001 → makod → marktd ingest → validate → bestaetigen → UTILMD 55002"
 [[ -n "${NETZBILANZD_URL:-}" ]] && echo "  netzbilanzd NB billing: ENABLED"
 echo "================================================="
 echo

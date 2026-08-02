@@ -20,17 +20,17 @@ Key responsibilities:
 
 ```mermaid
 graph TB
-    marktd["marktd :8180\nEventBus"]
-    obsd["obsd :8480\n(this service)"]
-    pg["PostgreSQL\nprocess_projections"]
-    alert["Alertmanager /\nGrafana"]
+    marktd["marktd :8180<br/>EventBus"]
+    obsd["obsd :8480<br/>(this service)"]
+    pg["PostgreSQL<br/>process_projections"]
+    alert["Alertmanager /<br/>Grafana"]
     erp["ERP / BNetzA report"]
 
-    marktd -->|"de.mako.process.*\nde.mako.aperak.*\nHMAC POST /webhook"| obsd
+    marktd -->|"de.mako.process.*<br/>de.mako.aperak.*<br/>HMAC POST /webhook"| obsd
     obsd --> pg
-    obsd -->|"de.obs.deadline.approaching\nde.obs.stp.parity.alert\n(HMAC POST → marktd fan-out → agentd)"| marktd
-    obsd -->|"deadline_risk\nalerts"| alert
-    erp -->|"GET /obs/processes\nGET /obs/kpis\nGET /obs/overdue"| obsd
+    obsd -->|"de.obs.deadline.approaching<br/>de.obs.stp.parity.alert<br/>(HMAC POST → marktd fan-out → agentd)"| marktd
+    obsd -->|"deadline_risk<br/>alerts"| alert
+    erp -->|"GET /obs/processes<br/>GET /obs/kpis<br/>GET /obs/overdue"| obsd
 ```
 
 ---

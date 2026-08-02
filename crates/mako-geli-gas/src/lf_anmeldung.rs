@@ -8,10 +8,12 @@
 //!
 //! | PID   | Direction    | Description                                     |
 //! |-------|--------------|-------------------------------------------------|
-//! | 44001 | LFN → GNB    | Lieferbeginn Gas (outbound, spawns this process)|
-//! | 44002 | LFN → GNB    | Lieferende Gas                                  |
+//! | 44001 | LFN → GNB    | Anmeldung NN / Lieferbeginn (spawns this process)|
+//! | 44004 | LFN → GNB    | Abmeldung NN / Lieferende (spawns this process) |
 //! | 44002 | GNB → LFN    | Bestätigung Anmeldung NN (inbound response)     |
-//! | 44004 | GNB → LFN    | Ablehnung Lieferbeginn (inbound response)       |
+//! | 44003 | GNB → LFN    | Ablehnung Anmeldung NN (inbound response)       |
+//! | 44005 | GNB → LFN    | Bestätigung Abmeldung NN (inbound response)     |
+//! | 44006 | GNB → LFN    | Ablehnung Abmeldung NN (inbound response)       |
 //!
 //! ## Regulatory basis
 //!
@@ -55,8 +57,8 @@ pub const WORKFLOW_NAME: &str = "geli-gas-lf-anmeldung";
 ///
 /// | PID   | Process variant                          |
 /// |-------|------------------------------------------|
-/// | 44001 | Lieferbeginn Gas (supply start)          |
-/// | 44002 | Lieferende Gas (supply end)              |
+/// | 44001 | Anmeldung NN — Lieferbeginn (supply start)|
+/// | 44004 | Abmeldung NN — Lieferende (supply end)   |
 pub const ANFRAGE_PIDS_LF: &[u32] = &[44001, 44004];
 
 /// Inbound GNB response PIDs that resume this workflow.
@@ -64,9 +66,9 @@ pub const ANFRAGE_PIDS_LF: &[u32] = &[44001, 44004];
 /// | PID   | Meaning                          |
 /// |-------|----------------------------------|
 /// | 44002 | Bestätigung Anmeldung NN (✓)     |
-/// | 44004 | Ablehnung Lieferbeginn (✗)       |
-/// | 44005 | Bestätigung Lieferende (✓)       |
-/// | 44006 | Ablehnung Lieferende (✗)         |
+/// | 44003 | Ablehnung Anmeldung NN (✗)       |
+/// | 44005 | Bestätigung Abmeldung NN (✓)     |
+/// | 44006 | Ablehnung Abmeldung NN (✗)       |
 pub const ANTWORT_PIDS_LF: &[u32] = &[44002, 44003, 44005, 44006];
 
 /// Deadline label for the 10-Werktage GNB response window (BK7-24-01-009).

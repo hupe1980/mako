@@ -76,22 +76,22 @@ or `67` (Ersatzwert), so a substitute is never reported as a measurement.
 
 ```mermaid
 flowchart LR
-    edmd["edmd :8380\nper-MaLo Lastgang\n(¼-h BO4E Lastgang API)"]
-    syncd["mabis-syncd :8880\n(this service)"]
-    makod["makod :8080\nMSCONS command API"]
-    biko["BIKO\n(Bilanzkoordinator)"]
+    edmd["edmd :8380<br/>per-MaLo Lastgang<br/>(¼-h BO4E Lastgang API)"]
+    syncd["mabis-syncd :8880<br/>(this service)"]
+    makod["makod :8080<br/>MSCONS command API"]
+    biko["BIKO<br/>(Bilanzkoordinator)"]
 
     subgraph pg["PostgreSQL"]
-        runs["submission_runs\nsubmission_malo_log"]
+        runs["submission_runs<br/>submission_malo_log"]
     end
 
     edmd -->|"GET /api/v1/lastgang/{malo_id}"| syncd
-    syncd -->|"SummenzeitreiheBuilder\n(mako-mabis crate)"| syncd
-    syncd -->|"POST /api/v1/commands\nmabis.summenzeitreihe.uebermitteln"| makod
+    syncd -->|"SummenzeitreiheBuilder<br/>(mako-mabis crate)"| syncd
+    syncd -->|"POST /api/v1/commands<br/>mabis.summenzeitreihe.uebermitteln"| makod
     makod -->|"MSCONS 13003 via AS4"| biko
     syncd --> pg
 
-    sched["Scheduler\n(10. Werktag\nat 05:00 UTC)"] -->|triggers| syncd
+    sched["Scheduler<br/>(10. Werktag<br/>at 05:00 UTC)"] -->|triggers| syncd
     operator["Operator / agentd"] -->|"POST /api/v1/sync"| syncd
 ```
 
@@ -208,7 +208,7 @@ sequenceDiagram
     end
 
     syncd->>mabis: builder.build() → Summenzeitreihe
-    syncd->>makod: POST /api/v1/commands\n{ mabis.summenzeitreihe.uebermitteln }
+    syncd->>makod: POST /api/v1/commands<br/>{ mabis.summenzeitreihe.uebermitteln }
     makod->>biko: MSCONS 13003 via AS4
     biko-->>makod: CONTRL / APERAK
     makod-->>syncd: { message_ref, process_id }

@@ -80,14 +80,14 @@ from `billingd.toml` — zero hardcoded values in the crate.
 
 ```mermaid
 graph TB
-    ERP["ERP\nPOST /api/v1/billing/{malo_id}/calculate"]
-    tarifbd["tarifbd :9080\nProductDefinition\n(Tarifpreisblatt JSONB)"]
-    edmd["edmd :8380\nMeterBillingPeriod\n(arbeitsmenge, spitzenleistung)"]
-    marktd["marktd :8180\nPreisblattNetznutzung\nPreisblattKonzessionsabgabe"]
-    calculator["energy-billing crate\nProduct → BillingEngine → Invoice"]
-    pg[("PostgreSQL\nbilling_records\n§ 147 AO / GoBD")]
-    erp_hook["ERP webhook\nde.billing.rechnung.erstellt"]
-    accountingd["accountingd :9380\n→ debit entry"]
+    ERP["ERP<br/>POST /api/v1/billing/{malo_id}/calculate"]
+    tarifbd["tarifbd :9080<br/>ProductDefinition<br/>(Tarifpreisblatt JSONB)"]
+    edmd["edmd :8380<br/>MeterBillingPeriod<br/>(arbeitsmenge, spitzenleistung)"]
+    marktd["marktd :8180<br/>PreisblattNetznutzung<br/>PreisblattKonzessionsabgabe"]
+    calculator["energy-billing crate<br/>Product → BillingEngine → Invoice"]
+    pg[("PostgreSQL<br/>billing_records<br/>§ 147 AO / GoBD")]
+    erp_hook["ERP webhook<br/>de.billing.rechnung.erstellt"]
+    accountingd["accountingd :9380<br/>→ debit entry"]
 
     ERP --> tarifbd
     ERP --> edmd
@@ -613,15 +613,15 @@ every render path reads the stored model and answers **422** if it is missing.
 
 ```mermaid
 graph LR
-    calc["POST /calculate\n(+ correction · VPP · GGV · Sammelrechnung)"]
-    eng["energy-billing\nInvoice"]
-    map["Invoice::to_en16931\n(seller/buyer party,\nper-line BT-151/152)"]
-    rec["en16931::reconcile\nBG-23 + BG-22\nfrom the lines"]
-    db[("billing_records\nrechnung_json (BO4E)\nen16931_json (model)")]
+    calc["POST /calculate<br/>(+ correction · VPP · GGV · Sammelrechnung)"]
+    eng["energy-billing<br/>Invoice"]
+    map["Invoice::to_en16931<br/>(seller/buyer party,<br/>per-line BT-151/152)"]
+    rec["en16931::reconcile<br/>BG-23 + BG-22<br/>from the lines"]
+    db[("billing_records<br/>rechnung_json (BO4E)<br/>en16931_json (model)")]
     fmt["en16931-formats"]
-    xr["GET /xrechnung\nCII (XRechnung 3.0)"]
-    ubl["GET /ubl\nPEPPOL BIS 3.0 UBL"]
-    b2g["POST /submit-b2g\nto_string_for(XRECHNUNG)\nvalidate → dispatch"]
+    xr["GET /xrechnung<br/>CII (XRechnung 3.0)"]
+    ubl["GET /ubl<br/>PEPPOL BIS 3.0 UBL"]
+    b2g["POST /submit-b2g<br/>to_string_for(XRECHNUNG)<br/>validate → dispatch"]
 
     calc --> eng --> map --> rec --> db
     eng -->|to_rechnung| db

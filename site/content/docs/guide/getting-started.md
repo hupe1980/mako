@@ -1,6 +1,6 @@
 +++
 title = "Getting Started"
-description = "Run the full mako NB STP demo stack — makod, marktd, processd, and a webhook receiver — in under 5 minutes. Submit a UTILMD 55001, watch processd auto-accept via netz-checker, and receive the UTILMD 55003 confirmation. Version 0.14.0, BDEW FV2026-10-01 compliant."
+description = "Run the full mako NB STP demo stack — makod, marktd, processd, and a webhook receiver — in under 5 minutes. Submit a UTILMD 55001, watch processd auto-accept via netz-checker, and receive the UTILMD 55002 confirmation. Version 0.14.0, BDEW FV2026-10-01 compliant."
 weight = 2
 [extra]
 mermaid = true
@@ -8,7 +8,7 @@ mermaid = true
 # Getting Started
 
 This guide runs the full NB STP demo stack locally and walks through the
-complete end-to-end flow: UTILMD 55001 → automatic NB decision → UTILMD 55003.
+complete end-to-end flow: UTILMD 55001 → automatic NB decision → UTILMD 55002.
 
 ## What you're running
 
@@ -38,7 +38,7 @@ sequenceDiagram
     processd->>marktd: GET /api/v1/partners/{lf_mp_id}
     Note over processd: netz-checker: 6 checks → Accept
     processd->>makod: gpke.lieferbeginn.bestaetigen
-    makod-->>webhook: UTILMD 55003 Bestätigung
+    makod-->>webhook: UTILMD 55002 Bestätigung
 ```
 
 Total time: **~5 minutes**.
@@ -237,12 +237,12 @@ MARKTD_URL=http://localhost:8180 WEBHOOK_URL=http://localhost:8000 bash smoke.sh
 Output ends with:
 
 ```
-✓ processd NB auto-responder dispatched bestaetigen → UTILMD 55003 already arrived
+✓ processd NB auto-responder dispatched bestaetigen → UTILMD 55002 already arrived
 ✓ POST /api/v1/commands → HTTP 409 (duplicate bestaetigen correctly rejected — AntwortGesendet guard confirmed)
-✓ UTILMD 55003 was already verified in step 6c (auto-responder path)
+✓ UTILMD 55002 was already verified in step 6c (auto-responder path)
 All smoke tests passed.
   Wechselprozess auto-responder: ENABLED
-  Flow: UTILMD 55001 → makod → marktd ingest → validate → bestaetigen → UTILMD 55003
+  Flow: UTILMD 55001 → makod → marktd ingest → validate → bestaetigen → UTILMD 55002
 ```
 
 The `HTTP 409` confirms the **workflow state guard** — `processd` already advanced

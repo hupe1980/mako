@@ -168,26 +168,26 @@ Unternehmen GmbH (Kunde)
 ```mermaid
 flowchart TD
     ERP["ERP / CRM"] --> create_kunde
-    create_kunde["POST /api/v1/kunden\nCreate or upsert customer"] --> create_vtrag
-    create_vtrag["POST /api/v1/kunden/{id}/vertraege\nCreate Versorgungsvertrag + Komponenten"]
+    create_kunde["POST /api/v1/kunden<br/>Create or upsert customer"] --> create_vtrag
+    create_vtrag["POST /api/v1/kunden/{id}/vertraege<br/>Create Versorgungsvertrag + Komponenten"]
 
-    create_vtrag --> strom["processd POST /start-supply\n→ UTILMD 55001 via makod"]
-    create_vtrag --> gas["processd POST /start-supply-gas\n→ UTILMD 44001 via makod"]
-    create_vtrag --> hems["HEMS/EMOBILITY: direct\n(no MaKo)"]
+    create_vtrag --> strom["processd POST /start-supply<br/>→ UTILMD 55001 via makod"]
+    create_vtrag --> gas["processd POST /start-supply-gas<br/>→ UTILMD 44001 via makod"]
+    create_vtrag --> hems["HEMS/EMOBILITY: direct<br/>(no MaKo)"]
 
-    strom & gas --> angemeldet["Vertragskomponente: ANGEMELDET\nVertrag: IN_BEARBEITUNG"]
+    strom & gas --> angemeldet["Vertragskomponente: ANGEMELDET<br/>Vertrag: IN_BEARBEITUNG"]
     hems --> angemeldet
 
-    angemeldet --> nb_ok["NB confirms\nde.mako.gpke.lieferbeginn.bestaetigt"]
-    nb_ok --> ablese["POST edmd /reading-orders\n(LIEFERBEGINN Ablesesteuerung)"]
+    angemeldet --> nb_ok["NB confirms<br/>de.mako.gpke.lieferbeginn.bestaetigt"]
+    nb_ok --> ablese["POST edmd /reading-orders<br/>(LIEFERBEGINN Ablesesteuerung)"]
     nb_ok --> tarifbd["PUT tarifbd /customer/{malo}/product"]
     ablese & tarifbd --> aktiv["Vertrag: AKTIV"]
-    aktiv --> acct["POST accountingd /accounts\n(provision billing account)"]
-    acct --> billing["billingd: monthly Rechnung\nde.billing.rechnung.erstellt"]
+    aktiv --> acct["POST accountingd /accounts<br/>(provision billing account)"]
+    acct --> billing["billingd: monthly Rechnung<br/>de.billing.rechnung.erstellt"]
 
-    aktiv --> kuendigen["POST /vertraege/{id}/kuendigen\n{ lieferende: '2026-12-31' }"]
-    kuendigen --> end_supply["processd /end-supply per commodity\n+ edmd LIEFERENDE Ablesesteuerung"]
-    end_supply --> beendet["Vertrag: ABGELAUFEN\nSchlussrechnung basis → billingd"]
+    aktiv --> kuendigen["POST /vertraege/{id}/kuendigen<br/>{ lieferende: '2026-12-31' }"]
+    kuendigen --> end_supply["processd /end-supply per commodity<br/>+ edmd LIEFERENDE Ablesesteuerung"]
+    end_supply --> beendet["Vertrag: ABGELAUFEN<br/>Schlussrechnung basis → billingd"]
 
     style aktiv fill:#22c55e,color:#fff
     style beendet fill:#94a3b8,color:#fff
@@ -209,7 +209,7 @@ stateDiagram-v2
     ANGELEGT --> STORNIERT: cancelled before MaKo
     IN_BEARBEITUNG --> STORNIERT: all positions ABGELEHNT
 
-    note right of AKTIV: billingd bills monthly\nper Vertragskomponente
+    note right of AKTIV: billingd bills monthly<br/>per Vertragskomponente
     note right of ABGELAUFEN: Schlussrechnung basis (billingd)
 ```
 

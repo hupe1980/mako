@@ -18,8 +18,8 @@
 #   marktd    → fan-out process.initiated to processd     (subscription)
 #   processd  → validates against marktd master data      (MaLo + preisblatt + contracts)
 #   processd  → POST gpke.lieferbeginn.bestaetigen to makod  (NB auto-accept)
-#   makod     → enqueues UTILMD 55003 in outbox           (Bestätigung Lieferbeginn)
-#   outbox    → delivers UTILMD 55003 to webhook          (ERP receives confirmation)
+#   makod     → enqueues UTILMD 55002 in outbox           (Bestätigung Lieferbeginn)
+#   outbox    → delivers UTILMD 55002 to webhook          (ERP receives confirmation)
 #
 # Build images first:
 #   docker build --target runtime             -t makod:dev       .

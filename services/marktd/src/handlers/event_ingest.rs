@@ -16,7 +16,7 @@
 //! 1. Verifies the HMAC signature
 //! 2. Deduplicates via `processed_events`
 //! 3. Enriches the event with `marktrole` and emits to all subscribers
-//! 4. Derives `VersorgungsStatus` for PIDs 55001/44001 (announce), 55003/44003 (confirm), 55005/44005 (end + gap detection), 55013/44013 (begin Ersatz-/Grundversorgung)
+//! 4. Derives `VersorgungsStatus` for PIDs 55001/44001 (announce), 55002/44002 (confirm), 55003/44003 (clear on Ablehnung), 55005/44005 (end + gap detection), 55013/44013 (begin Ersatz-/Grundversorgung)
 //!
 //! Idempotency: duplicate event IDs return `202 Accepted` without re-processing.
 
@@ -175,8 +175,11 @@ where
     //     → announce_lf_next: set lf_mp_id_next + lf_next_lieferbeginn
     //       (NB side: new_supplier + process_date from ProcessInitiated payload)
     //
-    //   process.completed  + PID 55003/44003
+    //   process.completed  + PID 55002/44002 (Bestätigung Anmeldung)
     //     → confirm_supply: promote lf_mp_id_next → lf_mp_id (atomic SQL)
+    //
+    //   process.completed  + PID 55003/44003 (Ablehnung Anmeldung)
+    //     → clear_lf_next: drop the announced future Lieferant
     //
     //   process.completed  + PID 55005/44005 (Bestätigung Lieferende)
     //     → end_supply: lieferstatus = Unbeliefert, clear lf_mp_id
@@ -312,8 +315,9 @@ where
                                 );
                             }
                         }
-                    } else if is_completed && matches!(pid, 55003 | 44003) {
-                        // NB confirmed Lieferbeginn — promote announced LF to active.
+                    } else if is_completed && matches!(pid, 55002 | 44002) {
+                        // NB confirmed Lieferbeginn (Bestätigung Anmeldung) —
+                        // promote the announced LF to active.
                         if let Err(e) = vs
                             .confirm_supply(&malo_id, &state.tenant_gln, process_id)
                             .await
@@ -480,12 +484,12 @@ where
                                 "event_ingest: EoG completion without new_supplier — skipped"
                             );
                         }
-                    } else if matches!(pid, 55004 | 44004) {
-                        // Lieferbeginn cancelled/rejected (GPKE 55004 / GeLi Gas
-                        // 44004): reset the announced future Lieferant so no
-                        // consumer acts on a supplier switch that will not
-                        // happen. The schema documents this clearing; without it
-                        // `lf_mp_id_next` was stale forever.
+                    } else if is_completed && matches!(pid, 55003 | 44003) {
+                        // Lieferbeginn rejected (Ablehnung Anmeldung — GPKE
+                        // 55003 / GeLi Gas 44003): reset the announced future
+                        // Lieferant so no consumer acts on a supplier switch
+                        // that will not happen. Without it `lf_mp_id_next` was
+                        // stale forever.
                         if let Err(e) = vs
                             .clear_lf_next(&malo_id, &state.tenant_gln, process_id)
                             .await

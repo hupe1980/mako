@@ -2,7 +2,7 @@
 
 End-to-end smoke test for the **NB STP auto-responder** — the core flow of German
 energy market communication: a UTILMD 55001 Anmeldung arrives at `makod`,
-`processd` evaluates it automatically via netz-checker, and a UTILMD 55003
+`processd` evaluates it automatically via netz-checker, and a UTILMD 55002
 Bestätigung is delivered to the ERP webhook within seconds.
 
 ## What runs in this demo
@@ -29,7 +29,7 @@ marktd     → fans out to processd via subscription
 processd   → GET /versorgung, GET /malo/grid, GET /partners  (netz-checker data fetch)
 processd   → 6 netz-checker checks → Accept
 processd   → gpke.lieferbeginn.bestaetigen to makod
-makod      → UTILMD 55003 Bestätigung to webhook        (ERP confirmation)
+makod      → UTILMD 55002 Bestätigung to webhook        (ERP confirmation)
 ```
 
 ```mermaid
@@ -134,13 +134,13 @@ Expected output:
 ✓ POST /edifact → HTTP 200  accepted=1  rejected=0  status=routed  pid=55001
 ✓ APERAK BGM+312 (Anerkennungsmeldung) delivered to LFN — automatic (no ERP action)
 ✓ ProcessInitiated delivered via marktd fan-out (source: urn:markt:tenant:9900357000004)
-✓ processd NB auto-responder dispatched bestaetigen → UTILMD 55003 already arrived
+✓ processd NB auto-responder dispatched bestaetigen → UTILMD 55002 already arrived
 ✓ POST /api/v1/commands → HTTP 409 (auto-responder already accepted — idempotency confirmed)
 ✓ UTILMD 55002 Bestätigung Anmeldung delivered to LFN
 ✓ Operator-override protection confirmed (source=api; api > mako enforced by SQL)
 All smoke tests passed.
   Wechselprozess auto-responder: ENABLED
-  Flow: UTILMD 55001 → makod → marktd ingest → validate → bestaetigen → UTILMD 55003
+  Flow: UTILMD 55001 → makod → marktd ingest → validate → bestaetigen → UTILMD 55002
 ```
 
 The `HTTP 409` at the manual dispatch step is the **idempotency proof**: `processd`

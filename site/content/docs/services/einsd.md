@@ -21,12 +21,12 @@ technology type, respecting Bestandsschutz for old plants commissioned before 20
 ```mermaid
 graph TB
     Operator["NB Operator / ERP"]
-    edmd["edmd :8380\n¼h Einspeisung feed-in\n(GET /feed-in) + kWh"]
+    edmd["edmd :8380<br/>¼h Einspeisung feed-in<br/>(GET /feed-in) + kWh"]
     einsd["einsd :9180"]
-    eeg_billing["eeg-billing crate\n10 settlement schemes\n§20 Abs.3 Managementprämie\n§23a degression · §36h Abs.1/2 wind\n§51 Negativpreis · §51a Förderende\n§51b biogas Ausschreibung\n§39n feste Marktprämie\n§52 Abs.6 netting\nSettlementPeriodState · InbetriebnahmeTyp\nno I/O"]
-    db[("PostgreSQL\neeg_anlagen · settlement_receipts\nsettlement_receipt_history\nsettlement_state_transitions\nsect53b_reductions · sect54_reductions\nepex_monthly_prices · epex_spot_prices\nwind_guetefaktor_reevaluations · eeg_verguetungssaetze")]
-    erp["ERP webhook\nCloudEvents 1.0"]
-    agentd["agentd :9580\neeg-agent\n(all de.eeg.* events)"]
+    eeg_billing["eeg-billing crate<br/>10 settlement schemes<br/>§20 Abs.3 Managementprämie<br/>§23a degression · §36h Abs.1/2 wind<br/>§51 Negativpreis · §51a Förderende<br/>§51b biogas Ausschreibung<br/>§39n feste Marktprämie<br/>§52 Abs.6 netting<br/>SettlementPeriodState · InbetriebnahmeTyp<br/>no I/O"]
+    db[("PostgreSQL<br/>eeg_anlagen · settlement_receipts<br/>settlement_receipt_history<br/>settlement_state_transitions<br/>sect53b_reductions · sect54_reductions<br/>epex_monthly_prices · epex_spot_prices<br/>wind_guetefaktor_reevaluations · eeg_verguetungssaetze")]
+    erp["ERP webhook<br/>CloudEvents 1.0"]
+    agentd["agentd :9580<br/>eeg-agent<br/>(all de.eeg.* events)"]
 
     Operator -->|"POST /anlagen"| einsd
     Operator -->|"POST /mastr-registrierung"| einsd
@@ -39,9 +39,9 @@ graph TB
     Operator -->|"POST /settlements/{y}/{m}/correction"| einsd
     einsd --> eeg_billing
     einsd <-->|"¼h feed-in × EPEX spot (§51)"| edmd
-    einsd -->|"persist receipts\nsettlement state"| db
-    einsd -->|"de.eeg.verguetung.berechnet\nde.eeg.marktpraemie.berechnet\nde.eeg.anlage.mastr-registriert\nde.eeg.anlage.settlement_state_changed"| erp
-    einsd -->|"de.eeg.anlage.foerderung-auslaufend\nde.eeg.anlage.created"| agentd
+    einsd -->|"persist receipts<br/>settlement state"| db
+    einsd -->|"de.eeg.verguetung.berechnet<br/>de.eeg.marktpraemie.berechnet<br/>de.eeg.anlage.mastr-registriert<br/>de.eeg.anlage.settlement_state_changed"| erp
+    einsd -->|"de.eeg.anlage.foerderung-auslaufend<br/>de.eeg.anlage.created"| agentd
 ```
 
 Port: **`:9180`**
@@ -118,9 +118,9 @@ For old plants with a specific `§100` transition provision, supply
 ```mermaid
 graph LR
     TR["TariffSource::Transitional(rule)"]
-    TR -->|"Pre2016Bestandsschutz"| E12["Eeg2012\n§51 never applies\n(§100 Abs. 1 Satz 4 EEG 2017)"]
-    TR -->|"Eeg2017Negativpreis6h\nBiomassOldFuelClassContinuation\nSmallBiomassBelow150kw"| E17["Eeg2017\n≥6h threshold\n3MW/500kW exemption"]
-    TR -->|"OldPlantBeforeEeg2023"| E21["Eeg2021\n≥4h threshold\n500kW exemption (all types)"]
+    TR -->|"Pre2016Bestandsschutz"| E12["Eeg2012<br/>§51 never applies<br/>(§100 Abs. 1 Satz 4 EEG 2017)"]
+    TR -->|"Eeg2017Negativpreis6h<br/>BiomassOldFuelClassContinuation<br/>SmallBiomassBelow150kw"| E17["Eeg2017<br/>≥6h threshold<br/>3MW/500kW exemption"]
+    TR -->|"OldPlantBeforeEeg2023"| E21["Eeg2021<br/>≥4h threshold<br/>500kW exemption (all types)"]
     TR -->|"other rules"| EC["caller's eeg_gesetz"]
 ```
 
@@ -247,11 +247,11 @@ Auto-calculated from `leistung_kwp` when `managementpraemie_ct` is null:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> angemeldet : POST /anlagen\n(mastr_registriert=false)
-    [*] --> aktiv : POST /anlagen\n(mastr_registriert=true)
-    angemeldet --> aktiv : POST /mastr-registrierung\n§52 penalty accrues until then
+    [*] --> angemeldet : POST /anlagen<br/>(mastr_registriert=false)
+    [*] --> aktiv : POST /anlagen<br/>(mastr_registriert=true)
+    angemeldet --> aktiv : POST /mastr-registrierung<br/>§52 penalty accrues until then
     aktiv --> repowered : POST /repowering (§22 EEG)
-    aktiv --> foerderung_beendet : billing_date > foerderendedatum\nor KWKG hour limit
+    aktiv --> foerderung_beendet : billing_date > foerderendedatum<br/>or KWKG hour limit
     aktiv --> abgemeldet : DELETE /anlagen
     angemeldet --> abgemeldet : DELETE /anlagen
 ```
@@ -264,9 +264,9 @@ reflects its current billing lifecycle:
 ```mermaid
 stateDiagram-v2
     [*] --> active : all compliance OK
-    active --> reduced : §52 EEG 2023 penalty active\n(Vergütung still flows)
+    active --> reduced : §52 EEG 2023 penalty active<br/>(Vergütung still flows)
     reduced --> active : violation resolved
-    active --> suspended : §52 EEG ≤2021 VerguetungAufNull\n(MaStR missing, old EEG)
+    active --> suspended : §52 EEG ≤2021 VerguetungAufNull<br/>(MaStR missing, old EEG)
     suspended --> active : MaStR / compliance restored
     active --> post_eeg : billing_date > foerderendedatum
     active --> ended : plant decommissioned
@@ -366,16 +366,16 @@ EEG version** — Bestandsschutz protects old plants commissioned before 2016-01
 ```mermaid
 graph LR
     subgraph Bestandsschutz
-        A["before 2016-01-01\nEEG ≤2012\n§51 does NOT apply\n(§100 Abs. 1 Satz 4 EEG 2017)"]
+        A["before 2016-01-01<br/>EEG ≤2012<br/>§51 does NOT apply<br/>(§100 Abs. 1 Satz 4 EEG 2017)"]
     end
     subgraph EEG2017["EEG 2017 (2016–2020)"]
-        B["≥6 consecutive hours\nWind: < 3 MW exempt\nOther: < 500 kW exempt"]
+        B["≥6 consecutive hours<br/>Wind: < 3 MW exempt<br/>Other: < 500 kW exempt"]
     end
     subgraph EEG2021["EEG 2021 (2021–2022)"]
-        C["≥4 consecutive hours\nAll plants < 500 kW exempt\n(wind exception removed)"]
+        C["≥4 consecutive hours<br/>All plants < 500 kW exempt<br/>(wind exception removed)"]
     end
     subgraph EEG2023["EEG 2023 (2023+)"]
-        D["Any negative period\n< 100 kW exempt until iMSys\n(§51 Abs. 2 Nr. 1)"]
+        D["Any negative period<br/>< 100 kW exempt until iMSys<br/>(§51 Abs. 2 Nr. 1)"]
     end
 ```
 
@@ -463,9 +463,9 @@ whose Anzulegender Wert was set by BNetzA tender. The rule is triggered by a
 
 ```mermaid
 graph LR
-    EPEX["EPEX avg\nct/kWh"]
-    EPEX -->|"<= 2 ct/kWh"| ZERO["AW = 0\nPayment = EUR 0\n§51/§51a do NOT apply"]
-    EPEX -->|"> 2 ct/kWh"| NORMAL["Normal MarketPremium formula\neff_AW = AW + Managementprämie\nPrämie = max(0, eff_AW - EPEX) x kwh"]
+    EPEX["EPEX avg<br/>ct/kWh"]
+    EPEX -->|"<= 2 ct/kWh"| ZERO["AW = 0<br/>Payment = EUR 0<br/>§51/§51a do NOT apply"]
+    EPEX -->|"> 2 ct/kWh"| NORMAL["Normal MarketPremium formula<br/>eff_AW = AW + Managementprämie<br/>Prämie = max(0, eff_AW - EPEX) x kwh"]
 ```
 
 Register biogas Ausschreibungsanlagen with `is_biogas_sect51b: true`.
@@ -551,10 +551,10 @@ the settlement engine never re-derives the metering split:
 ```mermaid
 graph TB
     subgraph Simple["Simple (most common)"]
-        BM["Bidirectional meter\nOBIS 1-0:2.8.0 (Einspeisung)\nOBIS 1-0:1.8.0 (Bezug)"]
+        BM["Bidirectional meter<br/>OBIS 1-0:2.8.0 (Einspeisung)<br/>OBIS 1-0:1.8.0 (Bezug)"]
     end
     subgraph VE["Volleinspeisung (2 meters)"]
-        EM["Erzeugungsmessung\n(billing basis)"]
+        EM["Erzeugungsmessung<br/>(billing basis)"]
         BZ["Bezugsmessung"]
     end
     subgraph GGV["§42b EnWG GGV (multi-tenant)"]
@@ -820,11 +820,11 @@ with entitlement count. `einsd` computes
 
 ```mermaid
 graph LR
-    IBN["Commissioning date\nin current billing month?"]
-    IBN -->|"Yes, day > 1"| COMM["fraction = \n(days_in_month - day + 1) / days_in_month"]
-    IBN -->|"No"| FED["Förderendedatum\nin current billing month?"]
+    IBN["Commissioning date<br/>in current billing month?"]
+    IBN -->|"Yes, day > 1"| COMM["fraction = <br/>(days_in_month - day + 1) / days_in_month"]
+    IBN -->|"No"| FED["Förderendedatum<br/>in current billing month?"]
     FED -->|"Yes, day < last"| DECOM["fraction = day / days_in_month"]
-    FED -->|"No"| FULL["fraction = None\n(full month)"]
+    FED -->|"No"| FULL["fraction = None<br/>(full month)"]
 ```
 
 | Case | Example | `billing_days_fraction` |

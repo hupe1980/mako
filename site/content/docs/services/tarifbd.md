@@ -31,15 +31,15 @@ queried only by billing engines and portals.
 
 ```mermaid
 graph LR
-    STROM["STROM\nSLP/RLM\nEintarif/Zweitarif\n§41a EPEX dynamic"]
-    GAS["GAS\n§10 Brennwertkorrektur\nEnergiesteuer + BEHG"]
-    WASSER["WASSER\nTrinkwasser 7 % USt\ngesplittete Abwassergebühr"]
-    WAERME["WAERME / SOLAR\nFernwärme · Mieterstrom\n§42b EnWG GGV / §21 Abs. 3 EEG"]
-    EEG["EEG / EINSPEISUNG\nFeed-in Vergütung\nMarktprämie / KWKG"]
-    SMART["WAERMEPUMPE / WALLBOX\n§14a Modul 1/3\n(like STROM)"]
-    SERV["HEMS / EMOBILITY\nENERGIEDIENSTLEISTUNG\nplatform + event fees"]
-    BUNDLE["BUNDLE\nComponent references\nper-position billing"]
-    SHARING["SHARING\n§42c EnWG Energy Sharing\ncommunity allocation"]
+    STROM["STROM<br/>SLP/RLM<br/>Eintarif/Zweitarif<br/>§41a EPEX dynamic"]
+    GAS["GAS<br/>§10 Brennwertkorrektur<br/>Energiesteuer + BEHG"]
+    WASSER["WASSER<br/>Trinkwasser 7 % USt<br/>gesplittete Abwassergebühr"]
+    WAERME["WAERME / SOLAR<br/>Fernwärme · Mieterstrom<br/>§42b EnWG GGV / §21 Abs. 3 EEG"]
+    EEG["EEG / EINSPEISUNG<br/>Feed-in Vergütung<br/>Marktprämie / KWKG"]
+    SMART["WAERMEPUMPE / WALLBOX<br/>§14a Modul 1/3<br/>(like STROM)"]
+    SERV["HEMS / EMOBILITY<br/>ENERGIEDIENSTLEISTUNG<br/>platform + event fees"]
+    BUNDLE["BUNDLE<br/>Component references<br/>per-position billing"]
+    SHARING["SHARING<br/>§42c EnWG Energy Sharing<br/>community allocation"]
     tarifbd["tarifbd :9080"]
     STROM & GAS & WASSER & WAERME & EEG --> tarifbd
     SMART & SERV & BUNDLE & SHARING --> tarifbd

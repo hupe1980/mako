@@ -169,31 +169,31 @@ message is dead-lettered.
 
 ```mermaid
 graph TB
-    ERP["ERP System\n(SAP / Powercloud / custom)"]
-    makod["makod :8080 / :4080\nEDIFACT ↔ AS4 · SlateDB\nGPKE / WiM / GeLi Gas / MABIS"]
-    marktd["marktd :8180 · PostgreSQL\nMaLo/MeLo/contracts · Vertrag\ntyped rubo4e::current API\nEventBus fan-out"]
-    invoicd["invoicd :8280 · PostgreSQL\nINVOIC plausibility · REMADV\n§ 147 AO / GoBD receipts"]
-    edmd["edmd :8380 · PostgreSQL\nVec<Energiemenge> deliveries\nLastgang · MeterBillingPeriod"]
-    obsd["obsd :8480 · PostgreSQL\nprocess projections\nBNetzA §20 KPI reports"]
-    processd["processd :8580\nNB STP netz-checker\nLF E_0624 auto-response"]
+    ERP["ERP System<br/>(SAP / Powercloud / custom)"]
+    makod["makod :8080 / :4080<br/>EDIFACT ↔ AS4 · SlateDB<br/>GPKE / WiM / GeLi Gas / MABIS"]
+    marktd["marktd :8180 · PostgreSQL<br/>MaLo/MeLo/contracts · Vertrag<br/>typed rubo4e::current API<br/>EventBus fan-out"]
+    invoicd["invoicd :8280 · PostgreSQL<br/>INVOIC plausibility · REMADV<br/>§ 147 AO / GoBD receipts"]
+    edmd["edmd :8380 · PostgreSQL<br/>Vec<Energiemenge> deliveries<br/>Lastgang · MeterBillingPeriod"]
+    obsd["obsd :8480 · PostgreSQL<br/>process projections<br/>BNetzA §20 KPI reports"]
+    processd["processd :8580<br/>NB STP netz-checker<br/>LF E_0624 auto-response"]
 
-    ERP -->|"PUT /api/v1/malo/{id}\nPUT /api/v1/nb-contracts/{id}\n(typed BO4E payload)"| marktd
-    ERP -->|"POST /api/v1/commands\n(initiate Lieferbeginn, …)"| makod
+    ERP -->|"PUT /api/v1/malo/{id}<br/>PUT /api/v1/nb-contracts/{id}<br/>(typed BO4E payload)"| marktd
+    ERP -->|"POST /api/v1/commands<br/>(initiate Lieferbeginn, …)"| makod
     ERP -->|"POST /receipts/{id}/confirm-payment"| invoicd
 
-    makod -->|"de.mako.process.*\nHMAC-signed CloudEvents"| marktd
-    marktd -->|"fan-out\nde.mako.* + de.markt.*"| ERP
+    makod -->|"de.mako.process.*<br/>HMAC-signed CloudEvents"| marktd
+    marktd -->|"fan-out<br/>de.mako.* + de.markt.*"| ERP
     marktd -->|"de.mako.process.initiated"| invoicd
     marktd -->|"de.mako.process.initiated"| processd
     marktd -->|"de.mako.*"| edmd
     marktd -->|"de.mako.*"| obsd
 
-    invoicd -->|"de.invoic.receipt.settled/disputed\nde.invoic.payment.overdue"| ERP
+    invoicd -->|"de.invoic.receipt.settled/disputed<br/>de.invoic.payment.overdue"| ERP
     invoicd -->|"gpke.abrechnung.annehmen/.ablehnen"| makod
-    processd -->|"gpke.lieferbeginn.bestaetigen/.ablehnen\ngeli.lieferbeginn.anmelden"| makod
+    processd -->|"gpke.lieferbeginn.bestaetigen/.ablehnen<br/>geli.lieferbeginn.anmelden"| makod
 
-    ERP -->|"GET /api/v1/deliveries/{malo_id}\n(Vec<Energiemenge>)\nGET /obs/kpis"| edmd
-    ERP -.->|"GET /obs/kpis\nGET /obs/overdue"| obsd
+    ERP -->|"GET /api/v1/deliveries/{malo_id}<br/>(Vec<Energiemenge>)<br/>GET /obs/kpis"| edmd
+    ERP -.->|"GET /obs/kpis<br/>GET /obs/overdue"| obsd
 ```
 
 Every `de.mako.*` event from `makod` flows through `marktd`'s EventBus fan-out,

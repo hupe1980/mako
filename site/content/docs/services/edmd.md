@@ -43,13 +43,13 @@ The **domain calculation logic** is provided by the external [`metering`](https:
 
 ```mermaid
 graph TB
-    marktd["marktd :8180\nEventBus"]
-    smgw["SMGW / iMSys\n(direct push)"]
-    edmd["edmd :8380\n(this service)"]
+    marktd["marktd :8180<br/>EventBus"]
+    smgw["SMGW / iMSys<br/>(direct push)"]
+    edmd["edmd :8380<br/>(this service)"]
 
     subgraph store["meterstore — hot/cold tiered store for meter_reads / esa_typ2_reads"]
-        hot["Hot tier — PostgreSQL\n(recent window)"]
-        cold["Cold tier — S3 / GCS / AzureDLS\nIceberg V2 settled history"]
+        hot["Hot tier — PostgreSQL<br/>(recent window)"]
+        cold["Cold tier — S3 / GCS / AzureDLS<br/>Iceberg V2 settled history"]
     end
 
     subgraph edmdpg["edmd PostgreSQL — business tables"]
@@ -59,25 +59,25 @@ direct_push_sessions
 gdpr_deletions"]
     end
 
-    erp["ERP / netzbilanzd\nmabis-syncd"]
-    duckdb["DuckDB / Spark\nTrino / PyIceberg"]
-    catalog["/api/v1/iceberg\nmeterstore CatalogFacade\n(read-only · Cedar read-archive-olap)"]
-    qa["quality engine\nscore_intervals_f64\nAVX2/NEON auto-vectorise"]
+    erp["ERP / netzbilanzd<br/>mabis-syncd"]
+    duckdb["DuckDB / Spark<br/>Trino / PyIceberg"]
+    catalog["/api/v1/iceberg<br/>meterstore CatalogFacade<br/>(read-only · Cedar read-archive-olap)"]
+    qa["quality engine<br/>score_intervals_f64<br/>AVX2/NEON auto-vectorise"]
 
-    marktd -->|"de.mako.process.initiated (23001 INSRPT)\nde.mako.edifact.inbound (MSCONS)\nHMAC POST /webhook"| edmd
-    smgw -->|"POST /api/v1/meter-reads/rlm/{malo_id}\nPOST /api/v1/meter-reads/gas/{malo_id}"| edmd
+    marktd -->|"de.mako.process.initiated (23001 INSRPT)<br/>de.mako.edifact.inbound (MSCONS)<br/>HMAC POST /webhook"| edmd
+    smgw -->|"POST /api/v1/meter-reads/rlm/{malo_id}<br/>POST /api/v1/meter-reads/gas/{malo_id}"| edmd
     edmd --> qa
-    qa -->|"grade A/B/C/F\nde.messwert.reading.quality.warning"| store
+    qa -->|"grade A/B/C/F<br/>de.messwert.reading.quality.warning"| store
     edmd -->|"store_reads (version-resolved, tier-split)"| store
     edmd --> edmdpg
     edmd -->|"mounts"| catalog
     catalog -.->|"table schemas + locations"| cold
-    hot -->|"tiering watermark\n(one-week settlement lag)"| cold
-    erp -->|"GET /api/v1/lastgang Accept: arrow.stream\n→ Arrow IPC (10× faster than JSON)"| edmd
+    hot -->|"tiering watermark<br/>(one-week settlement lag)"| cold
+    erp -->|"GET /api/v1/lastgang Accept: arrow.stream<br/>→ Arrow IPC (10× faster than JSON)"| edmd
     erp -->|"GET /api/v1/billing-period/{malo_id}"| edmd
     erp -->|"POST /api/v1/query/sql (DataFusion)"| edmd
     duckdb -->|"ATTACH — metadata only"| catalog
-    duckdb -->|"read Parquet directly\n(engine's own object-store creds)"| cold
+    duckdb -->|"read Parquet directly<br/>(engine's own object-store creds)"| cold
 ```
 
 ---
@@ -1399,23 +1399,23 @@ $$\text{net\_grid\_draw}_i[t] = \max\!\bigl(0,\ c_i[t] - r_i[t] \times g[t]\bigr
 
 ```mermaid
 graph LR
-    PLANT["MELO1 Erzeugung\n(plant generation g)"]
-    MELO2["MELO2 Verbrauch\n(tenant 2 consumption c₂)"]
-    MELO3["MELO3 Verbrauch\n(tenant 3 consumption c₃)"]
+    PLANT["MELO1 Erzeugung<br/>(plant generation g)"]
+    MELO2["MELO2 Verbrauch<br/>(tenant 2 consumption c₂)"]
+    MELO3["MELO3 Verbrauch<br/>(tenant 3 consumption c₃)"]
 
     subgraph GgvConstant["GgvConstantAllocation (Beispiel 1, CCI+ZG6)"]
         direction TB
         F2["fraction₂ = 10 %"]
         F3["fraction₃ = 90 %"]
-        NET2_C["Malo2 net draw\n= max(0, c₂ − 0.1×g)"]
-        NET3_C["Malo3 net draw\n= max(0, c₃ − 0.9×g)"]
+        NET2_C["Malo2 net draw<br/>= max(0, c₂ − 0.1×g)"]
+        NET3_C["Malo3 net draw<br/>= max(0, c₃ − 0.9×g)"]
     end
 
     subgraph GgvProportional["GgvProportionalAllocation (Beispiel 3, variable)"]
         direction TB
-        RATIO["r₂ = c₂/(c₂+c₃)\nr₃ = c₃/(c₂+c₃)"]
-        NET2_P["Malo2 net draw\n= max(0, c₂ − r₂×g)"]
-        NET3_P["Malo3 net draw\n= max(0, c₃ − r₃×g)"]
+        RATIO["r₂ = c₂/(c₂+c₃)<br/>r₃ = c₃/(c₂+c₃)"]
+        NET2_P["Malo2 net draw<br/>= max(0, c₂ − r₂×g)"]
+        NET3_P["Malo3 net draw<br/>= max(0, c₃ − r₃×g)"]
     end
 
     PLANT --> F2 & F3

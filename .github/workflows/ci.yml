@@ -207,36 +207,43 @@ jobs:
         with:
           python-version: "3.11"   # the abi3 floor — the wheel must work here
 
-      # `maturin develop` installs into a virtualenv and refuses to run without
-      # one — `setup-python` does not create one. Build the venv explicitly and
-      # address it by path rather than relying on activation surviving between
-      # `run:` blocks.
-      - name: Create the build virtualenv
-        working-directory: makotest
-        run: |
-          python -m venv .venv
-          .venv/bin/pip install --upgrade pip 'maturin>=1.9,<2.0' pytest
+      # Use the action rather than `pip install maturin`: this workflow sets
+      # RUSTFLAGS="-D warnings" globally, and pip builds maturin from source,
+      # so maturin's own lint warnings become hard errors. The action downloads
+      # a prebuilt binary and sidesteps that entirely.
+      #
+      # `maturin build` (not `develop`) also avoids needing a virtualenv, while
+      # still enabling pyo3/extension-module via `[tool.maturin] features` —
+      # plain `cargo test --workspace` deliberately does not, so both paths are
+      # exercised.
+      - name: Build the extension wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --manifest-path makotest/Cargo.toml --out dist
 
-      # `maturin develop` enables pyo3/extension-module (see pyproject.toml);
-      # plain `cargo test --workspace` deliberately does not, so both paths
-      # need exercising.
-      - name: Build extension and run the Python suite
-        working-directory: makotest
+      - name: Install the wheel and run the Python suite
         run: |
-          .venv/bin/maturin develop
-          .venv/bin/pytest -q
-
-      - name: Build a release wheel
-        working-directory: makotest
-        run: .venv/bin/maturin build --release
+          pip install pytest dist/*.whl
+          cd makotest && pytest -q
 
       # The sdist is only exercised at release time otherwise, and it is the
       # artifact pip falls back to when no wheel matches. It must build
       # standalone: makotest depends on workspace crates by `path`, so maturin
       # has to vendor them into the tarball. Verify that here, not on the tag.
+      - name: Build the sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --manifest-path makotest/Cargo.toml --out sdist-out
+
       - name: Verify the sdist builds standalone
+        # RUSTFLAGS is cleared for this step only: the sdist build compiles our
+        # crates from scratch under pip, and a warning in a transitive build
+        # script must not fail the check.
+        env:
+          RUSTFLAGS: ""
         run: |
-          makotest/.venv/bin/maturin sdist --manifest-path makotest/Cargo.toml --out sdist-out
           python -m venv /tmp/sdist-venv
           /tmp/sdist-venv/bin/pip install --no-binary :all: sdist-out/*.tar.gz
           /tmp/sdist-venv/bin/python -c "

@@ -90,7 +90,7 @@ Quick reference across all process families. Each row is a top-level domain.
 | **MaBiS Bilanzkreisabrechnung** | ⚡ | `mako-mabis` `mabis-billing` | MSCONS 13003; IFTSTA 21000–21005 | 1 WT (§13.8) | BK6-24-174 |
 | **MaBiS Clearingliste** | ⚡ | `mako-mabis` `mabis-clearingliste` | UTILMD 55065/55069/55070 | — | BK6-24-174 |
 | **GeLi Gas Lieferantenwechsel** | 🔥 | `mako-geli-gas` `geli-gas-supplier-change` | UTILMD G 44001–44021 | 10 WT | BK7-24-01-009 |
-| **GeLi Gas Lieferbeginn (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-lf-anmeldung` | UTILMD G 44001 (out) · 44003/44004 (in) | 10 WT | BK7-24-01-009 |
+| **GeLi Gas Lieferbeginn (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-lf-anmeldung` | UTILMD G 44001 (out) · 44002/44003 (in) | 10 WT | BK7-24-01-009 |
 | **GeLi Gas Stornierung (GNB-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-stornierung` | UTILMD G 44022 (Nb-only inbound) | 10 WT | BK7-24-01-009 |
 | **GeLi Gas Stornierung (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-stornierung-lf` | UTILMD G 44023/44024 (Lf-only inbound) | 10 WT | BK7-24-01-009 |
 | **GeLi Gas Sperrung (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-sperrung-lf` | ORDERS 17115/17117 · ORDCHG 39000 | 10 WT | BK7-24-01-009 |
@@ -965,7 +965,7 @@ with APERAK within **10 Werktage** (BK7-24-01-009).
 | GPKE Process (Strom) | GeLi Gas Equivalent | Notes |
 |---|---|---|
 | Lieferantenwechsel (NB-Sicht) — UTILMD 55001–55018 | Lieferantenwechsel (GNB-Sicht) — UTILMD G 44001–44021 | ✅ Direct equivalent. Gas has no fast-switch option (10 WT only) |
-| Lieferantenwechsel (LF-Sicht) — `gpke-lf-anmeldung` | Lieferbeginn (LF-Sicht) — `geli-gas-lf-anmeldung` (44001 out, 44003/44004 in) | ✅ Direct equivalent |
+| Lieferantenwechsel (LF-Sicht) — `gpke-lf-anmeldung` | Lieferbeginn (LF-Sicht) — `geli-gas-lf-anmeldung` (44001 out, 44002/44003 in) | ✅ Direct equivalent |
 | Abmeldung NB-initiiert — UTILMD 55007–55009 | Abmeldung NN (GNB → LFN) — UTILMD G 44007–44009 | ✅ Direct equivalent |
 | Stornierung — UTILMD 55022–55024 | Stornierung — UTILMD G 44022–44024 | ✅ Direct equivalent (role-conditional routing) |
 | Sperrung/Entsperrung — ORDERS 17115–17117 | Sperrung/Entsperrung — ORDERS 17115–17117 | ✅ **Same PIDs**, different market; routed by commodity |

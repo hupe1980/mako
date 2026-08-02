@@ -84,20 +84,20 @@ contains at least one of `Marktrolle::Nb`, `Marktrolle::Unb`, or
 ```mermaid
 graph LR
     subgraph "Transport boundary"
-        AS4["AS4/ebMS3\n(SOAP/MTOM)\nXML sniff: first byte &lt;"]
+        AS4["AS4/ebMS3<br/>(SOAP/MTOM)<br/>XML sniff: first byte &lt;"]
     end
 
     subgraph "redispatch-xml"
-        PARSE["parse_and_validate(bytes)\n→ Document enum"]
+        PARSE["parse_and_validate(bytes)<br/>→ Document enum"]
     end
 
     subgraph "edi-energy"
-        IFTSTA["parse IFTSTA\nPID 21037 / 21038"]
+        IFTSTA["parse IFTSTA<br/>PID 21037 / 21038"]
     end
 
     subgraph "mako-redispatch"
-        ROUTER["RedispatchRouter\n(XML document-type routing)"]
-        PIDR["PidRouter\n(IFTSTA 21037/21038)"]
+        ROUTER["RedispatchRouter<br/>(XML document-type routing)"]
+        PIDR["PidRouter<br/>(IFTSTA 21037/21038)"]
         WF1["redispatch-stammdaten"]
         WF2["redispatch-aktivierung"]
         WF3["redispatch-verfuegbarkeit"]

@@ -332,7 +332,7 @@ End-to-end tests covering all process families live in `tests/`:
 
 | Test | What it covers |
 |---|---|
-| `e2e_lieferbeginn.rs` | GPKE LF-Anmeldung bilateral (LFN ↔ NB, PIDs 55001/55003/55004) |
+| `e2e_lieferbeginn.rs` | GPKE LF-Anmeldung bilateral (LFN ↔ NB, PIDs 55001/55002/55003) |
 | `e2e_lieferende.rs` | GPKE Lieferende bilateral (PIDs 55002/55005/55006) |
 | `e2e_lieferantenwechsel.rs` | Full supplier-switch saga with APERAK timeout |
 | `e2e_gpke_lf_abmeldung.rs` | GPKE Abmeldung/Beendigung der Zuordnung (NB→LF, PIDs 55007/55008/55009) |
@@ -344,7 +344,7 @@ End-to-end tests covering all process families live in `tests/`:
 | `e2e_loopback.rs` | VIU self-addressed loopback + FV coexistence |
 | `e2e_wim_*.rs` | WiM Strom MSB-Wechsel, Gerätewechsel, Geräteübernahme, Stammdaten, Steuerungsauftrag, Stornierung |
 | `e2e_wim_gas_anmeldung.rs` | WiM Gas Anmeldung (PIDs 44039–44053) |
-| `e2e_lieferbeginn_gas.rs` | GeLi Gas bilateral (PIDs 44001/44003/44004) |
+| `e2e_lieferbeginn_gas.rs` | GeLi Gas bilateral (PIDs 44001/44002/44003) |
 | `e2e_lieferende_gas.rs` | GeLi Gas Lieferende bilateral |
 | `e2e_mabis.rs` | MaBiS Bilanzkreisabrechnung (PID 13003) |
 | `e2e_ahb_conformance.rs` | Cross-PID AHB rule enforcement |

@@ -12,16 +12,16 @@ services into a single customer-facing REST + Server-Sent Events API.
 
 ```mermaid
 graph LR
-    customer["Customer App\n(mobile / web)"]
-    portald["portald :9480\n(this service)"]
+    customer["Customer App<br/>(mobile / web)"]
+    portald["portald :9480<br/>(this service)"]
 
-    edmd["edmd :8380\nLastgang · MeterBillingPeriod"]
-    billingd["billingd :9280\nbilling_records"]
-    accountingd["accountingd :9380\nledger · balance"]
-    marktd["marktd :8180\nVersorgungsStatus"]
-    einsd["einsd :9180\neeg_anlagen · settlements"]
+    edmd["edmd :8380<br/>Lastgang · MeterBillingPeriod"]
+    billingd["billingd :9280<br/>billing_records"]
+    accountingd["accountingd :9380<br/>ledger · balance"]
+    marktd["marktd :8180<br/>VersorgungsStatus"]
+    einsd["einsd :9180<br/>eeg_anlagen · settlements"]
 
-    customer -->|"GET /portal/{malo_id}/…\nBearer JWT"| portald
+    customer -->|"GET /portal/{malo_id}/…<br/>Bearer JWT"| portald
     portald -->|"GET /api/v1/lastgang/{malo_id}"| edmd
     portald -->|"GET /api/v1/billing?malo_id=…"| billingd
     portald -->|"GET /api/v1/accounts/{malo_id}/…"| accountingd

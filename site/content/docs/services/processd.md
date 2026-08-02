@@ -12,30 +12,30 @@ regulatory decisions within mandatory deadlines.
 
 ```mermaid
 graph TB
-    marktd["marktd :8180\nEventBus"]
-    processd["processd :8580\n(this service)"]
+    marktd["marktd :8180<br/>EventBus"]
+    processd["processd :8580<br/>(this service)"]
     makod["makod :8080"]
-    pg["PostgreSQL\nanmeldung_decisions\napproval_queue"]
+    pg["PostgreSQL<br/>anmeldung_decisions<br/>approval_queue"]
 
-    marktd -->|"de.mako.process.initiated\nde.markt.versorgung.gap-detected\nHMAC POST /webhook"| processd
+    marktd -->|"de.mako.process.initiated<br/>de.markt.versorgung.gap-detected<br/>HMAC POST /webhook"| processd
 
     subgraph NB ["NB module (--features nb-only)"]
-        NC["netz-checker\n6 deterministic checks\nSTP target ≥ 95%"]
-        EOG["EoG gap closure\n§36/§38 EnWG · §38 timer"]
+        NC["netz-checker<br/>6 deterministic checks<br/>STP target ≥ 95%"]
+        EOG["EoG gap closure<br/>§36/§38 EnWG · §38 timer"]
         NC --> pg
         EOG --> pg
     end
 
     subgraph LF ["LF module (--features lf-only)"]
-        LFA["E_0624 auto-response\n45 min window"]
+        LFA["E_0624 auto-response<br/>45 min window"]
         LFA --> pg
     end
 
     processd --> NB
     processd --> LF
-    NB -->|"gpke.lieferbeginn.bestaetigen/ablehnen\ngpke.eog.anmelden\nPOST /api/v1/commands"| makod
-    LF -->|"gpke.nb-lieferende.bestaetigen/ablehnen\ngeli.lieferbeginn.anmelden\nPOST /api/v1/commands"| makod
-    NB & LF -->|"GET /api/v1/versorgung\nGET /api/v1/malo/{id}/grid"| marktd
+    NB -->|"gpke.lieferbeginn.bestaetigen/ablehnen<br/>gpke.eog.anmelden<br/>POST /api/v1/commands"| makod
+    LF -->|"gpke.nb-lieferende.bestaetigen/ablehnen<br/>geli.lieferbeginn.anmelden<br/>POST /api/v1/commands"| makod
+    NB & LF -->|"GET /api/v1/versorgung<br/>GET /api/v1/malo/{id}/grid"| marktd
 ```
 
 ---
@@ -303,7 +303,7 @@ curl -X POST http://processd:8580/api/v1/start-supply-gas \
 | `zaehlpunkt` | ✓ | Zählpunktbezeichnung (RFF+Z13) |
 | `process_date` | ✓ | Lieferbeginn date (YYYYMMDD, CET/CEST) |
 
-The GNB responds with PID 44003 (confirmation) or 44004 (rejection). The LF
+The GNB responds with PID 44002 (Bestätigung) or 44003 (Ablehnung). The LF
 process (`geli-gas-lf-anmeldung`) tracks the 10-Werktage response deadline
 automatically.
 

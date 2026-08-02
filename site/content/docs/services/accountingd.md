@@ -39,10 +39,10 @@ graph TB
     erp["ERP webhook"]
     sperrd["sperrd :8780"]
     portald["portald :9480"]
-    bank["Bank adapter\n(pain.001 SCT/Inst)"]
+    bank["Bank adapter<br/>(pain.001 SCT/Inst)"]
 
-    billingd -->|"de.billing.rechnung.erstellt → RECHNUNG debit\n(is_correction=true → STORNO credit; a Gutschrift is a negated Rechnung)"| accountingd
-    einsd -->|"de.eeg.verguetung.berechnet (carries the §14 UStG Gutschrift: number, net, USt, brutto)\n→ EEG_GUTSCHRIFT credit + pain.001 SCT Inst auto-payout (§25 EEG 2023)"| accountingd
+    billingd -->|"de.billing.rechnung.erstellt → RECHNUNG debit<br/>(is_correction=true → STORNO credit; a Gutschrift is a negated Rechnung)"| accountingd
+    einsd -->|"de.eeg.verguetung.berechnet (carries the §14 UStG Gutschrift: number, net, USt, brutto)<br/>→ EEG_GUTSCHRIFT credit + pain.001 SCT Inst auto-payout (§25 EEG 2023)"| accountingd
     einsd -->|"de.eeg.marktpraemie.berechnet → EEG_MARKTPRAEMIE credit"| accountingd
     invoicd -->|"de.invoic.receipt.settled → ZAHLUNG credit"| accountingd
 
@@ -86,10 +86,10 @@ The dunning engine operates in two modes: **automatic** (background worker) and 
 ```mermaid
 graph LR
     subgraph auto ["Auto-dunning worker (daily, dunning_auto_enabled=true)"]
-        trigger["balance_ct > 0\n+ oldest RECHNUNG > grace_days\n+ no active dunning case"]
-        a1["Auto: Mahnstufe 1\ncreated + fee1 (\u20ac0)"]
-        a2["Auto: Mahnstufe 2\n+ fee2 (\u20ac5.00)"]
-        a3["Auto: Mahnstufe 3\n+ fee3 (\u20ac10.00)\n\u2192 opens \u00a741f Sperr-Sequenz"]
+        trigger["balance_ct > 0<br/>+ oldest RECHNUNG > grace_days<br/>+ no active dunning case"]
+        a1["Auto: Mahnstufe 1<br/>created + fee1 (\u20ac0)"]
+        a2["Auto: Mahnstufe 2<br/>+ fee2 (\u20ac5.00)"]
+        a3["Auto: Mahnstufe 3<br/>+ fee3 (\u20ac10.00)<br/>\u2192 opens \u00a741f Sperr-Sequenz"]
         trigger -->|"grade_days elapsed"| a1
         a1 -->|"due_date passed"| a2
         a2 -->|"due_date passed"| a3
@@ -675,15 +675,15 @@ before serialisation (`build()` returns a located `Err` — `PmtInf[1]/Tx[…]: 
 ```mermaid
 graph LR
     subgraph out ["Outgoing payments"]
-        pain008["pain.008 SDD\nDirect Debit\n(N-5 scheduler + /sepa/run)"]
-        pain001["pain.001 SCT / SCT Inst\nEEG Verg\u00fctung + Erstattungen\n(/eeg/payouts/run, auto_payout)"]
+        pain008["pain.008 SDD<br/>Direct Debit<br/>(N-5 scheduler + /sepa/run)"]
+        pain001["pain.001 SCT / SCT Inst<br/>EEG Verg\u00fctung + Erstattungen<br/>(/eeg/payouts/run, auto_payout)"]
     end
     subgraph in ["Bank responses"]
-        pain002["pain.002 parser\nPayment Status Report\n(PUT /eeg/payouts/{id}/status)"]
-        camt053["camt.053 parser\nEnd-of-day statement\n(reconciliation)"]
-        camt054["camt.054 parser\nDebit/Credit notification\n(/payments/import/camt054)"]
+        pain002["pain.002 parser<br/>Payment Status Report<br/>(PUT /eeg/payouts/{id}/status)"]
+        camt053["camt.053 parser<br/>End-of-day statement<br/>(reconciliation)"]
+        camt054["camt.054 parser<br/>Debit/Credit notification<br/>(/payments/import/camt054)"]
     end
-    creditor["Creditor Identifier\n(EPC AT-02)"]
+    creditor["Creditor Identifier<br/>(EPC AT-02)"]
     creditor --> pain008
     creditor --> pain001
 ```

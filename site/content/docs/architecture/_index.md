@@ -120,18 +120,18 @@ Each is independently testable and suitable for crates.io publication.
 ```mermaid
 graph TD
     subgraph pure ["Pure calculation crates (zero I/O)"]
-        billing["billing 0.10 (crates.io)\nScalarTariff · TariffSchedule · TimeOfUsePricing\nEN 16931 line items — BG-23 VAT breakdown · BG-27/28 line\nallowances · BG-29 price detail · BT-130 unit code\nAmountScale · AdvancePayment · integer-cent money"]
-        metering["metering\nMeterInterval · fill_gaps (§17)\nHampel quality · gas_m3_to_kwh_hs"]
-        eeg["eeg-billing\n10 EEG/KWKG schemes · §51/§52/§36h\n§14 UStG Gutschrift → BO4E Rechnung (bo4e)"]
-        grid["grid-billing\nNNE · KA · MMM · MSB · §13a\nCalculationTrace · into_rechnung (bo4e)"]
-        energy["energy-billing\nProduct (13 typed variants)\nBillingEngine · §41a guard · Invoice.warnings\nto_rechnung (bo4e)"]
+        billing["billing 0.10 (crates.io)<br/>ScalarTariff · TariffSchedule · TimeOfUsePricing<br/>EN 16931 line items — BG-23 VAT breakdown · BG-27/28 line<br/>allowances · BG-29 price detail · BT-130 unit code<br/>AmountScale · AdvancePayment · integer-cent money"]
+        metering["metering<br/>MeterInterval · fill_gaps (§17)<br/>Hampel quality · gas_m3_to_kwh_hs"]
+        eeg["eeg-billing<br/>10 EEG/KWKG schemes · §51/§52/§36h<br/>§14 UStG Gutschrift → BO4E Rechnung (bo4e)"]
+        grid["grid-billing<br/>NNE · KA · MMM · MSB · §13a<br/>CalculationTrace · into_rechnung (bo4e)"]
+        energy["energy-billing<br/>Product (13 typed variants)<br/>BillingEngine · §41a guard · Invoice.warnings<br/>to_rechnung (bo4e)"]
     end
 
     subgraph daemons ["Production daemons"]
-        netzbilanzd["netzbilanzd :8680\nNB billing"]
-        einsd["einsd :9180\nEEG settlement"]
-        billingd["billingd :9280\nLF retail billing\nVPP auto-billing webhook\nEN 16931 — XRechnung 3.0 CII / PEPPOL UBL\n12 MCP tools"]
-        invoicd["invoicd :8280\nINVOIC plausibility"]
+        netzbilanzd["netzbilanzd :8680<br/>NB billing"]
+        einsd["einsd :9180<br/>EEG settlement"]
+        billingd["billingd :9280<br/>LF retail billing<br/>VPP auto-billing webhook<br/>EN 16931 — XRechnung 3.0 CII / PEPPOL UBL<br/>12 MCP tools"]
+        invoicd["invoicd :8280<br/>INVOIC plausibility"]
     end
 
     billing --> eeg
@@ -423,14 +423,14 @@ graph TD
 
     subgraph sdk ["mako-service SDK"]
         direction LR
-        CFG["config\nload_config\nDatabaseConfig\nHttpConfig"]
-        SD["shutdown\ntoken()\nserve()"]
-        AUTH["oidc + cedar\nOidcConfig\nCedarEnforcer"]
-        MCP["mcp_auth\nMcpAuth\nMcpAuthConfig\nMcpApiKey"]
-        TEL["telemetry\ninit_tracing_from_env\nOtelConfig"]
-        WEB["webhook\nverify_signature"]
-        HTTP["http\ndefault_client()"]
-        EB["event_bus\nEventBus\nWebhookBus"]
+        CFG["config<br/>load_config<br/>DatabaseConfig<br/>HttpConfig"]
+        SD["shutdown<br/>token()<br/>serve()"]
+        AUTH["oidc + cedar<br/>OidcConfig<br/>CedarEnforcer"]
+        MCP["mcp_auth<br/>McpAuth<br/>McpAuthConfig<br/>McpApiKey"]
+        TEL["telemetry<br/>init_tracing_from_env<br/>OtelConfig"]
+        WEB["webhook<br/>verify_signature"]
+        HTTP["http<br/>default_client()"]
+        EB["event_bus<br/>EventBus<br/>WebhookBus"]
     end
 
     A & B & C & D & E & F & G & H --> sdk

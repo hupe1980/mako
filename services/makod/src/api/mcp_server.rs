@@ -907,7 +907,7 @@ impl MakodMcpHandler {
                     - payload: {{\"malo_id\": \"{malo_id}\", \"lieferbeginn_datum\": \"{date}\"}}\n\
                  3. Report the process_id and status.\n\
                  4. Explain next steps: the NB has 24 wall-clock hours to respond \
-                    with a Bestätigung (PID 55003/55004) per BK6-22-024."
+                    with a Bestätigung (PID 55002) or Ablehnung (PID 55003) per BK6-22-024."
             ),
         )]
     }

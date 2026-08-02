@@ -844,13 +844,13 @@ verify BDEW AS4-Profil v1.2 compliance without WIRK certificates:
 
 ```mermaid
 graph LR
-    A[BdewTestPki\nBrainpoolP256r1] -->|generate| B[sender PKI]
+    A[BdewTestPki<br/>BrainpoolP256r1] -->|generate| B[sender PKI]
     A -->|generate| C[receiver PKI]
     B -->|with_signing_material| D[SessionContext]
-    D -->|send_async| E[SOAP envelope\nsigned + encrypted]
+    D -->|send_async| E[SOAP envelope<br/>signed + encrypted]
     C -->|with_decryption_key_pem| F[MockAs4Endpoint]
     E -->|send_to_localhost| F
-    F -->|next_received| G[plaintext payload\ndecrypted ✓]
+    F -->|next_received| G[plaintext payload<br/>decrypted ✓]
 ```
 
 | Test | What it proves | BDEW spec |
@@ -1267,7 +1267,7 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | Command | Marktrolle | Domain | PIDs | Notes |
 |---------|-----------|--------|------|---------|
 | `gpke.lieferbeginn.anmelden` | `LF` | GPKE | 55001 | New supplier registers supply start |
-| `gpke.lieferbeginn.bestaetigen` | `NB` | GPKE | 55003/55004 | DSO accepts/rejects supply start |
+| `gpke.lieferbeginn.bestaetigen` | `NB` | GPKE | 55002/55003 | DSO accepts/rejects supply start |
 | `gpke.lieferende.anmelden` | `LF` | GPKE | 55002 | Old supplier registers supply end |
 | `gpke.lieferende.bestaetigen` | `NB` | GPKE | 55005/55006 | DSO accepts/rejects supply end |
 | `gpke.kuendigung.anmelden` | `LF` | GPKE | 55017 | LF cancels a Lieferbeginn Anmeldung |
@@ -1283,7 +1283,7 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `gpke.abrechnung.annehmen` | `NB` | GPKE | 31001/31002 | DSO settles a Netznutzungsabrechnung |
 | `gpke.abrechnung.ablehnen` | `NB` | GPKE | 31001/31002 | DSO disputes a Netznutzungsabrechnung |
 | `geli.lieferbeginn.anmelden` | `LFG` | GeLi Gas | 44001 | Gas supplier registers supply start |
-| `geli.lieferbeginn.bestaetigen` | `GNB` | GeLi Gas | 44003/44004 | Gas DSO accepts/rejects supply start |
+| `geli.lieferbeginn.bestaetigen` | `GNB` | GeLi Gas | 44002/44003 | Gas DSO accepts/rejects supply start |
 | `geli.lieferende.anmelden` | `LFG` | GeLi Gas | 44002 | Gas supplier registers supply end |
 | `geli.lieferende.bestaetigen` | `GNB` | GeLi Gas | 44005/44006 | Gas DSO accepts/rejects supply end |
 | `wim.geraetewechsel.beauftragen` | `NB` or `MSB` | WiM | 55039/55042/55051/55168 | Commission a meter-device change |
@@ -1718,7 +1718,7 @@ delivery and deadline firing — are:
 ```mermaid
 graph LR
     OS[OutboxStore] -->|pending messages| OW[OutboxWorker]
-    OW -->|EDIFACT SOAP| AS4[AS4 sender\nasx-rs]
+    OW -->|EDIFACT SOAP| AS4[AS4 sender<br/>asx-rs]
     OW -->|MaLo callbacks| MS[MaloIdentSender]
 
     DS[DeadlineStore] -->|due_now every 30s| DSch[DeadlineScheduler]

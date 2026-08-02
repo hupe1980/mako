@@ -18,16 +18,16 @@ It subscribes to `marktd`'s EventBus, receives inbound INVOIC events, and:
 
 ```mermaid
 graph TB
-    marktd["marktd :8180\nEventBus"]
-    invoicd["invoicd :8280\n(this service)"]
+    marktd["marktd :8180<br/>EventBus"]
+    invoicd["invoicd :8280<br/>(this service)"]
     makod["makod :8080"]
-    pg["PostgreSQL\ninvoic_receipts\n(§ 147 AO / GoBD, 3y)"]
+    pg["PostgreSQL<br/>invoic_receipts<br/>(§ 147 AO / GoBD, 3y)"]
 
-    marktd -->|"de.mako.process.initiated\n(PID 31001/02/05/06/09)\nHMAC POST /webhook"| invoicd
+    marktd -->|"de.mako.process.initiated<br/>(PID 31001/02/05/06/09)<br/>HMAC POST /webhook"| invoicd
     invoicd -->|"GET /api/v1/preisblaetter/{nb_mp_id}"| marktd
-    invoicd -->|"Persist receipt BEFORE dispatch\n(§ 147 AO / GoBD atomic)"| pg
-    invoicd -->|"REMADV 33001/33002\nwim.rechnung.annehmen/.ablehnen"| makod
-    invoicd -->|"de.invoic.receipt.settled/disputed\ndurable at-least-once\n(inline + outbox worker retry)"| erp["ERP webhook"]
+    invoicd -->|"Persist receipt BEFORE dispatch<br/>(§ 147 AO / GoBD atomic)"| pg
+    invoicd -->|"REMADV 33001/33002<br/>wim.rechnung.annehmen/.ablehnen"| makod
+    invoicd -->|"de.invoic.receipt.settled/disputed<br/>durable at-least-once<br/>(inline + outbox worker retry)"| erp["ERP webhook"]
 ```
 
 ---

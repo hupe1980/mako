@@ -412,13 +412,37 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                         "expected an LF Antwort PID (55002/55003, 55005/55006, 55017, 55018, 55078, 55080), got {response_pid}",
                     )));
                 }
-                Ok(vec![LfAnmeldungEvent::AntwortReceived {
-                    response_pid,
-                    accepted,
-                    reason,
-                    response_ref,
-                }]
-                .into())
+
+                // Carry malo_id so marktd's event_ingest can derive
+                // VersorgungsStatus without relying on the CE subject (a process
+                // UUID). Mirrors the GeLi Gas LFN workflow — without this outbox
+                // entry no `de.mako.process.completed` is ever emitted for a
+                // Strom supplier change, so `lf_mp_id_next` stays announced and
+                // never gets promoted to the active Lieferant.
+                let malo_id_str = match state {
+                    LfAnmeldungState::Pending(data) => data.location_id.as_str().to_owned(),
+                    _ => String::new(),
+                };
+                let outbox = vec![PendingOutbox::new(
+                    "ProcessCompleted",
+                    "",
+                    serde_json::json!({
+                        "pid":      response_pid.as_u32(),
+                        "malo_id":  malo_id_str,
+                        "accepted": accepted,
+                        "outcome":  if accepted { "accepted" } else { "rejected" },
+                    }),
+                )];
+
+                Ok(WorkflowOutput::with_outbox(
+                    vec![LfAnmeldungEvent::AntwortReceived {
+                        response_pid,
+                        accepted,
+                        reason,
+                        response_ref,
+                    }],
+                    outbox,
+                ))
             }
 
             LfAnmeldungCommand::Activate => {
@@ -504,7 +528,7 @@ mod tests {
         let state = GpkeLfAnmeldungWorkflow::apply(LfAnmeldungState::New, &initiated_event);
 
         let cmd = LfAnmeldungCommand::HandleAntwort {
-            response_pid: Pruefidentifikator::new(55003).unwrap(),
+            response_pid: Pruefidentifikator::new(55002).unwrap(), // Bestätigung Anmeldung
             accepted: true,
             reason: None,
             response_ref: MessageRef::new("NB-RESP-001"),
@@ -513,6 +537,56 @@ mod tests {
         assert_eq!(out.events.len(), 1);
         let final_state = GpkeLfAnmeldungWorkflow::apply(state, &out.events[0]);
         assert!(matches!(final_state, LfAnmeldungState::Active(_)));
+    }
+
+    /// `HandleAntwort` must enqueue the `ProcessCompleted` outbox entry that
+    /// drives marktd's `VersorgungsStatus` transition.
+    ///
+    /// Without it no `de.mako.process.completed` is emitted for a Strom
+    /// supplier change, so `lf_mp_id_next` is announced and never promoted —
+    /// the MaLo stays `Unbeliefert` forever. The Gas twin
+    /// (`geli-gas-lf-anmeldung`) always emitted this; GPKE did not.
+    ///
+    /// marktd keys on the PID: 55002 confirms, 55003 clears the announcement.
+    #[test]
+    fn handle_antwort_emits_process_completed_for_marktd() {
+        let initiated_event = LfAnmeldungEvent::Initiated {
+            pruefidentifikator: Pruefidentifikator::new(55001).unwrap(),
+            location_id: MaLo::new("10001234567"),
+            sender: MarktpartnerCode::new("4012345000009"),
+            receiver: MarktpartnerCode::new("9900123456789"),
+            process_date: "2026-10-01".to_owned(),
+        };
+        let state = GpkeLfAnmeldungWorkflow::apply(LfAnmeldungState::New, &initiated_event);
+
+        for (response_pid, accepted, outcome) in
+            [(55002u32, true, "accepted"), (55003, false, "rejected")]
+        {
+            let out = GpkeLfAnmeldungWorkflow::handle(
+                &state,
+                LfAnmeldungCommand::HandleAntwort {
+                    response_pid: Pruefidentifikator::new(response_pid).unwrap(),
+                    accepted,
+                    reason: None,
+                    response_ref: MessageRef::new("NB-RESP-001"),
+                },
+            )
+            .unwrap();
+
+            assert_eq!(out.outbox.len(), 1, "{response_pid}: one outbox entry");
+            let entry = &out.outbox[0];
+            assert_eq!(entry.message_type.as_ref(), "ProcessCompleted");
+            assert_eq!(
+                entry.payload["pid"].as_u64().unwrap(),
+                u64::from(response_pid)
+            );
+            assert_eq!(
+                entry.payload["malo_id"].as_str().unwrap(),
+                "10001234567",
+                "{response_pid}: marktd resolves the MaLo from the payload, not the CE subject",
+            );
+            assert_eq!(entry.payload["outcome"].as_str().unwrap(), outcome);
+        }
     }
 
     #[test]

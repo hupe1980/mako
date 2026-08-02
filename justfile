@@ -107,8 +107,27 @@ no-version-alias:
 doc-check:
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 
+# `just test` only runs --all-features, which cannot catch a module whose
+# `#[cfg(feature = ...)]` gate is missing or misplaced — that only shows up when
+# the feature is off. Mirrors the `test` matrix in .github/workflows/ci.yml.
+#
+# Test every edi-energy feature combination CI builds
+test-features:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for f in "--no-default-features" "--all-features" \
+             "--features utilmd" "--features mscons" "--features aperak" \
+             "--features contrl" "--features invoic" "--features orders" \
+             "--features partin" "--features remadv" "--features reqote" \
+             "--features iftsta" "--features insrpt" "--features ordchg" \
+             "--features ordrsp" "--features comdis" "--features pricat" \
+             "--features utilts" "--features quotes" "--features diagnostics"; do
+        echo "==> cargo test -p edi-energy $f"
+        cargo test -p edi-energy $f
+    done
+
 # Full CI suite (minimum gate + tests + quality + release-lifecycle checks)
-ci: check test clippy fmt-check deny no-version-alias doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
+ci: check test test-features clippy fmt-check deny no-version-alias doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
 
 # ── makotest (Python toolkit) ─────────────────────────────────────────────────
 

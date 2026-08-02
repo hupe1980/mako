@@ -366,7 +366,7 @@ async fn cross_fv_rejection_also_terminates_cleanly() {
     let lfn_final = lfn.state().await.expect("LFN final state after rejection");
     assert!(
         matches!(lfn_final, LfAnmeldungState::Rejected { .. }),
-        "LFN must be Rejected after a 55004 response; got {lfn_final:?}",
+        "LFN must be Rejected after a 55003 response; got {lfn_final:?}",
     );
 }
 

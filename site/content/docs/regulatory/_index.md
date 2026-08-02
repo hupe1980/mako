@@ -27,43 +27,43 @@ Prüfidentifikator (PID) reference covering all 17 EDI@Energy message types.
 
 ```mermaid
 graph LR
-    BNetzA["BNetzA\nRulings"]
+    BNetzA["BNetzA<br/>Rulings"]
 
     subgraph strom ["Strom frameworks"]
-        BK6_24["BK6-24-174\nGPKE + WiM + MaBiS"]
-        BK6_22["BK6-22-024\nLFW24 · GPKE Teil 2+4"]
-        BK6_20["BK6-20-059/060/061\nRedispatch 2.0"]
+        BK6_24["BK6-24-174<br/>GPKE + WiM + MaBiS"]
+        BK6_22["BK6-22-024<br/>LFW24 · GPKE Teil 2+4"]
+        BK6_20["BK6-20-059/060/061<br/>Redispatch 2.0"]
     end
 
     subgraph gas ["Gas frameworks"]
-        BK7_24["BK7-24-01-009\nGeLi Gas 3.0"]
-        BK7_14["BK7-24-01-008\nGaBi Gas 2.1 (DVGW)"]
+        BK7_24["BK7-24-01-009<br/>GeLi Gas 3.0"]
+        BK7_14["BK7-24-01-008<br/>GaBi Gas 2.1 (DVGW)"]
     end
 
     subgraph retail ["Retail / LF"]
-        ENW41["§41 EnWG\nPreisgarantie · Kündigung"]
-        EEG["EEG 2000–2023\nKWKG · 10 schemes"]
-        SOLA["§42b EnWG\nGGV Solarpaket I"]
+        ENW41["§41 EnWG<br/>Preisgarantie · Kündigung"]
+        EEG["EEG 2000–2023<br/>KWKG · 10 schemes"]
+        SOLA["§42b EnWG<br/>GGV Solarpaket I"]
     end
 
     subgraph transport ["Transport & Metering"]
-        AS4["AS4-Profil v1.2\nBrainpoolP256r1"]
-        BSI["BSI TR-03109\niMSys · §14a CLS"]
-        MsbG["§ 60 Abs. 2 MsbG\nErsatzwert · Jahresprognose"]
-        NNNEV["StromNEV/GasNEV/KAV\nGrid charges"]
+        AS4["AS4-Profil v1.2<br/>BrainpoolP256r1"]
+        BSI["BSI TR-03109<br/>iMSys · §14a CLS"]
+        MsbG["§ 60 Abs. 2 MsbG<br/>Ersatzwert · Jahresprognose"]
+        NNNEV["StromNEV/GasNEV/KAV<br/>Grid charges"]
     end
 
     BNetzA --> strom
     BNetzA --> gas
 
-    BK6_24 -->|"mako-gpke\nmako-wim\nmako-mabis"| GPKE_impl["346 PIDs covered\n(100%)"]
-    BK7_24 -->|"mako-geli-gas\nmako-wim-gas"| GAS_impl["GeLi Gas 3.0\nWiM Gas"]
-    BK7_14 -->|"mako-gabi-gas\ndvgw-edi"| DVGW_impl["8 DVGW messages\nGaBi Gas 2.1"]
-    ENW41 -->|"vertragd"| LF_impl["B2C/B2B contracts\nGDPR Art. 15/17/20"]
-    EEG -->|"eeg-billing\neinsd"| EEG_impl["10 settlement schemes\n§14 UStG Gutschrift"]
-    BSI -->|"metering\nedmd"| IOT_impl["SmgwSession\nClsChannel"]
-    MsbG -->|"metering\nedmd"| SUB_impl["V01-V10 validation\nFill gaps · Forecast"]
-    NNNEV -->|"grid-billing\nnetzbilanzd"| NNE_impl["NNE/KA/MMM\n§14a Modul 1/2/3"]
+    BK6_24 -->|"mako-gpke<br/>mako-wim<br/>mako-mabis"| GPKE_impl["346 PIDs covered<br/>(100%)"]
+    BK7_24 -->|"mako-geli-gas<br/>mako-wim-gas"| GAS_impl["GeLi Gas 3.0<br/>WiM Gas"]
+    BK7_14 -->|"mako-gabi-gas<br/>dvgw-edi"| DVGW_impl["8 DVGW messages<br/>GaBi Gas 2.1"]
+    ENW41 -->|"vertragd"| LF_impl["B2C/B2B contracts<br/>GDPR Art. 15/17/20"]
+    EEG -->|"eeg-billing<br/>einsd"| EEG_impl["10 settlement schemes<br/>§14 UStG Gutschrift"]
+    BSI -->|"metering<br/>edmd"| IOT_impl["SmgwSession<br/>ClsChannel"]
+    MsbG -->|"metering<br/>edmd"| SUB_impl["V01-V10 validation<br/>Fill gaps · Forecast"]
+    NNNEV -->|"grid-billing<br/>netzbilanzd"| NNE_impl["NNE/KA/MMM<br/>§14a Modul 1/2/3"]
 ```
 
 ---

@@ -21,8 +21,8 @@ graph LR
     subgraph EDIFACT["EDIFACT / AS4 channel"]
         direction TB
         MSH["Trading Partner MSH"]
-        makod["makod\n(AS4 :4080)"]
-        engine["mako-engine\n+ domain crates"]
+        makod["makod<br/>(AS4 :4080)"]
+        engine["mako-engine<br/>+ domain crates"]
         MSH -->|"AS4/SOAP EDIFACT"| makod
         makod --> engine
         engine -->|"AS4/SOAP EDIFACT"| MSH
@@ -30,9 +30,9 @@ graph LR
 
     subgraph REST["REST / JSON channel (iMS)"]
         direction TB
-        NB["Netzbetreiber\n(MSB initiates)"]
-        webdienste["makod\n(Webdienste :8090)"]
-        energy_api["energy-api\nserver/client"]
+        NB["Netzbetreiber<br/>(MSB initiates)"]
+        webdienste["makod<br/>(Webdienste :8090)"]
+        energy_api["energy-api<br/>server/client"]
         NB -->|"HTTPS JSON"| webdienste
         webdienste --> energy_api
         energy_api -->|"HTTPS JSON"| NB

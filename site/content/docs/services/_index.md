@@ -31,36 +31,36 @@ graph TB
     ext["BDEW Counterparty<br/>(NB · LF · MSB · BKV)"]
 
     subgraph protocol ["Protocol & Market Data"]
-        makod[":8080 makod\nEDIFACT runtime · 67+ workflows\nAS4 · SlateDB · MCP"]
-        marktd[":8180 marktd\nMaLo/MeLo/NeLo · contracts\nVersorgungsStatus · EventBus"]
-        processd[":8580 processd\nAnmeldung STP ≥95%\nLF E_0624 auto · §14a"]
+        makod[":8080 makod<br/>EDIFACT runtime · 67+ workflows<br/>AS4 · SlateDB · MCP"]
+        marktd[":8180 marktd<br/>MaLo/MeLo/NeLo · contracts<br/>VersorgungsStatus · EventBus"]
+        processd[":8580 processd<br/>Anmeldung STP ≥95%<br/>LF E_0624 auto · §14a"]
     end
 
     subgraph nb_billing ["Invoice & Grid Billing (NB)"]
-        invoicd[":8280 invoicd\nINVOIC 6-check plausibility\nauto-settle/dispute"]
-        netzbilanzd[":8680 netzbilanzd\nNNE/KA/MMM/MSB billing\nGridSettlement · CalculationTrace"]
-        sperrd[":8780 sperrd\nSperrung execution\nIFTSTA 21039 auto-dispatch"]
+        invoicd[":8280 invoicd<br/>INVOIC 6-check plausibility<br/>auto-settle/dispute"]
+        netzbilanzd[":8680 netzbilanzd<br/>NNE/KA/MMM/MSB billing<br/>GridSettlement · CalculationTrace"]
+        sperrd[":8780 sperrd<br/>Sperrung execution<br/>IFTSTA 21039 auto-dispatch"]
     end
 
     subgraph data ["Energy Data & Observability"]
-        edmd[":8380 edmd\nMSCONS · iMSys direct push\nHampel · V01–V10 · virtual meters"]
-        obsd[":8480 obsd\nprocess projections · KPI\n§20 EnWG parity report"]
-        mabis[":8880 mabis-syncd\nMaBiS Summenzeitreihe\nMSCONS 13003 · 10. Werktag"]
-        einsd[":9180 einsd\nEEG/KWKG settlement\n10 schemes · §14 UStG Gutschrift"]
+        edmd[":8380 edmd<br/>MSCONS · iMSys direct push<br/>Hampel · V01–V10 · virtual meters"]
+        obsd[":8480 obsd<br/>process projections · KPI<br/>§20 EnWG parity report"]
+        mabis[":8880 mabis-syncd<br/>MaBiS Summenzeitreihe<br/>MSCONS 13003 · 10. Werktag"]
+        einsd[":9180 einsd<br/>EEG/KWKG settlement<br/>10 schemes · §14 UStG Gutschrift"]
     end
 
     subgraph lf_billing ["Retail Billing (LF)"]
-        tarifbd[":9080 tarifbd\n14 categories · §42d feed\nEPEX §41a · B2B Angebote"]
-        billingd[":9280 billingd\n13 categories · XRechnung 3.0\nRLM demand · §54 exemption"]
-        accountingd[":9380 accountingd\nMassenkontokorrent\nSEPA FRST/RCUR · GLN ID · Aging · §288 BGB"]
+        tarifbd[":9080 tarifbd<br/>14 categories · §42d feed<br/>EPEX §41a · B2B Angebote"]
+        billingd[":9280 billingd<br/>13 categories · XRechnung 3.0<br/>RLM demand · §54 exemption"]
+        accountingd[":9380 accountingd<br/>Massenkontokorrent<br/>SEPA FRST/RCUR · GLN ID · Aging · §288 BGB"]
     end
 
     subgraph b2c ["Contract & Customer (LF)"]
-        vertragd[":9780 vertragd\nKunden B2C+B2B · Rahmenverträge\nOIDC→MaLo · 16 MCP tools"]
-        portald[":9480 portald\ncustomer portal read-model\nSSE · §41 self-service"]
+        vertragd[":9780 vertragd<br/>Kunden B2C+B2B · Rahmenverträge<br/>OIDC→MaLo · 16 MCP tools"]
+        portald[":9480 portald<br/>customer portal read-model<br/>SSE · §41 self-service"]
     end
 
-    agentd[":9580 agentd\n28 built-in specialists (binary)\nsequential|parallel|race dispatch\nLanceDB RAG (tenant-isolated) · A2A cards\nOIDC · HMAC · DLQ · OpenAI/Anthropic/Bedrock"]
+    agentd[":9580 agentd<br/>28 built-in specialists (binary)<br/>sequential|parallel|race dispatch<br/>LanceDB RAG (tenant-isolated) · A2A cards<br/>OIDC · HMAC · DLQ · OpenAI/Anthropic/Bedrock"]
 
     ext -->|AS4 / REST| makod
     makod <-->|CloudEvents| marktd

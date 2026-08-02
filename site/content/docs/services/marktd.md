@@ -23,7 +23,7 @@ Beyond data storage, `marktd` includes:
 
 - **EventBus fan-out** — enriches inbound `de.mako.*` events with `marktrole` and fans out
   to all registered subscribers (ERP, `processd`, `invoicd`, `obsd`) via HMAC-signed webhooks.
-- **VersorgungsStatus derivation** — five-phase lifecycle: `announce_lf_next` (55001/44001 `process.initiated`), `confirm_supply` (55003/44003 `process.completed`), `end_supply` (55005/44005 `process.completed` — Bestätigung Lieferende; without an announced successor it emits `de.markt.versorgung.gap-detected`, the §38 EnWG gap-closure trigger), `begin_eog_supply` (55013/44013 `process.completed` — Anmeldung/Zuordnung EOG: the Grundversorger becomes the supplier of record, `eog_seit` anchors the §38 Abs. 4 3-month maximum), `clear_lf_next` (55004/44004 — a cancelled/rejected Lieferbeginn resets the announced future supplier). Tracks `lf_mp_id_next` + `lf_next_lieferbeginn` (pending transition), appends every change to `versorgungsstatus_history`, and supports `?at=YYYY-MM-DD` point-in-time queries.
+- **VersorgungsStatus derivation** — five-phase lifecycle: `announce_lf_next` (55001/44001 `process.initiated`), `confirm_supply` (55002/44002 `process.completed` — Bestätigung Anmeldung), `end_supply` (55005/44005 `process.completed` — Bestätigung Lieferende; without an announced successor it emits `de.markt.versorgung.gap-detected`, the §38 EnWG gap-closure trigger), `begin_eog_supply` (55013/44013 `process.completed` — Anmeldung/Zuordnung EOG: the Grundversorger becomes the supplier of record, `eog_seit` anchors the §38 Abs. 4 3-month maximum), `clear_lf_next` (55003/44003 `process.completed` — Ablehnung Anmeldung resets the announced future supplier). Tracks `lf_mp_id_next` + `lf_next_lieferbeginn` (pending transition), appends every change to `versorgungsstatus_history`, and supports `?at=YYYY-MM-DD` point-in-time queries.
 
 `marktd` is a **pure data hub**. Automated Anmeldung STP decisions are the
 responsibility of `processd`'s NB module, which subscribes to `marktd`'s EventBus
@@ -33,26 +33,26 @@ scalable and testable.
 
 ```mermaid
 graph TB
-    makod["makod :8080\nEDIFACT ↔ BO4E"]
-    marktd["marktd :8180\nMarket Data Hub\n(this service)"]
-    processd["processd :8580\nProcess decisions\n(NB STP + LF E_0624)"]
-    erp["ERP\n(Powercloud / SAP IS-U)"]
-    invoicd["invoicd :8280\nBilling"]
-    edmd["edmd :8380\nEnergy Data"]
-    obsd["obsd :8480\nObservability"]
+    makod["makod :8080<br/>EDIFACT ↔ BO4E"]
+    marktd["marktd :8180<br/>Market Data Hub<br/>(this service)"]
+    processd["processd :8580<br/>Process decisions<br/>(NB STP + LF E_0624)"]
+    erp["ERP<br/>(Powercloud / SAP IS-U)"]
+    invoicd["invoicd :8280<br/>Billing"]
+    edmd["edmd :8380<br/>Energy Data"]
+    obsd["obsd :8480<br/>Observability"]
     pg["PostgreSQL"]
 
-    makod -->|"de.mako.process.*\nHMAC-signed POST"| marktd
-    marktd -->|"VersorgungsStatus\nderivation"| pg
-    marktd -->|"de.mako.* + de.markt.*\nHMAC webhooks"| erp
+    makod -->|"de.mako.process.*<br/>HMAC-signed POST"| marktd
+    marktd -->|"VersorgungsStatus<br/>derivation"| pg
+    marktd -->|"de.mako.* + de.markt.*<br/>HMAC webhooks"| erp
     marktd -->|"de.mako.process.initiated"| processd
     marktd -->|"de.mako.process.initiated"| invoicd
     marktd -->|"de.mako.*"| edmd
     marktd -->|"de.mako.*"| obsd
     marktd --- pg
-    erp -->|"PUT /api/v1/malo\nPUT /api/v1/partners"| marktd
-    invoicd -->|"GET /api/v1/preisblaetter\nGET /api/v1/nb-contracts"| marktd
-    processd -->|"GET /api/v1/versorgung\nGET /api/v1/malo/{id}/grid\nGET /api/v1/partners"| marktd
+    erp -->|"PUT /api/v1/malo<br/>PUT /api/v1/partners"| marktd
+    invoicd -->|"GET /api/v1/preisblaetter<br/>GET /api/v1/nb-contracts"| marktd
+    processd -->|"GET /api/v1/versorgung<br/>GET /api/v1/malo/{id}/grid<br/>GET /api/v1/partners"| marktd
     processd -->|"POST /api/v1/commands"| makod
 ```
 
@@ -830,7 +830,7 @@ the raw `data` JSONB for backward compatibility:
 | marktd master data | `de.markt.partner.updated` | `PUT /api/v1/partners/{mp_id}` |
 | marktd NB contract | `de.markt.nb-contract.updated` | `PUT /api/v1/nb-contracts/{id}` — carries `vertragsart`, `version`, `tenant` in `data` |
 | marktd PRICAT | `de.markt.pricat.published` | `PUT /api/v1/preisblaetter/{nb_mp_id}` |
-| marktd supply | `de.markt.versorgung.changed` | any VersorgungsStatus transition (announce/confirm/end/clear), incl. PIDs 55003/44003 |
+| marktd supply | `de.markt.versorgung.changed` | any VersorgungsStatus transition (announce/confirm/end/clear), incl. PIDs 55002/44002 |
 | marktd supply | `de.markt.versorgung.gap-detected` | 55005/44005 completed with no announced successor — §38 EnWG gap-closure trigger (consumer: `processd`) |
 | marktd supply | `de.markt.versorgung.eog-begonnen` | 55013/44013 completed → `begin_eog_supply` (Ersatz-/Grundversorgung active; consumer: `processd`) |
 | makod process relay | `de.mako.process.initiated` | forwarded from `makod` ingest |
@@ -1105,11 +1105,11 @@ A Lieferantenwechsel spans three distinct phases, each triggering a targeted par
 | Phase | CloudEvent | PID | Operation | Effect |
 |---|---|---|---|---|
 | **Announce** | `process.initiated` | 55001 / 44001 | `announce_lf_next` | Sets `lf_mp_id_next` (WHO) + `lf_next_lieferbeginn` (WHEN). Does **not** change `lieferstatus`. |
-| **Confirm** | `process.completed` | 55003 / 44003 | `confirm_supply` | Atomic SQL: `lf_mp_id ← lf_mp_id_next`, `lieferbeginn ← lf_next_lieferbeginn`, `lieferstatus = Beliefert`, clears `lf_mp_id_next`. |
+| **Confirm** | `process.completed` | 55002 / 44002 | `confirm_supply` | Atomic SQL: `lf_mp_id ← lf_mp_id_next`, `lieferbeginn ← lf_next_lieferbeginn`, `lieferstatus = Beliefert`, clears `lf_mp_id_next`. |
 | **End** | `process.completed` | 55005 / 44005 | `end_supply` | `lieferstatus = Unbeliefert`, clears `lf_mp_id`/`lieferbeginn`/`eog_seit` — preserves `lf_mp_id_next` if another transition is already announced. No successor → emits `de.markt.versorgung.gap-detected`. |
 | **EoG** | `process.completed` | 55013 / 44013 | `begin_eog_supply` | `lieferstatus = Ersatzversorgung`/`Grundversorgung` (per `data.eog_art`), `lf_mp_id = E/G`, `eog_seit = Zuordnungsbeginn` (may be retroactive — anchors §38 Abs. 4). Resolves the Bilanzkreis from the completion payload, else the NB's deposited `default_bilanzkreis` (EoG ohne Antwort). Emits `de.markt.versorgung.eog-begonnen` (incl. `bilanzkreis`). |
 | **Stammdatenänderung** | `process.completed` | GPKE Teil 4 / GeLi Gas Änderung PIDs | `patch_stammdaten` | **Object-generic apply.** Dispatches by the `data.objekt` marker to the matching typed-column patch — `MARKTLOKATION`→`malo` (incl. §14a `fernsteuerbar`), `MESSLOKATION`→`melo` + the **MSB-Zuordnung** (zugeordneter MSB `CAV+7111=Z91`) recorded on the dated `melo_msb_zuordnungen` timeline via `assign_msb` effective the Änderungsdatum, `NETZLOKATION`→`nelo` (incl. §14a `steuerkanal`), `TECHNISCHE_RESSOURCE`→`technische_ressourcen` (`nutzung` `CCI+7059` Z17/Z50/Z56, `verbrauchsart` `CAV+7111` Z64/Z65/ZE5/ZA8, `ist_fernschaltbar`), `STEUERBARE_RESSOURCE`→`steuerbare_ressourcen` (**Konfigurationsprodukte** — each SG8 `SEQ+Z79` product group → a BO4E `Konfigurationsprodukt` with `produktcode` `PIA+5` DE7140, zugeordneter Marktpartner `CAV+Z91`/`ZF0`, and `leistungskurvendefinition` from `CCI+Z66`; the full contracted array is **replaced**, not merged), `TRANCHE`→`tranche`. Each `Some` field overwrites its column via `COALESCE`; JSONB payload and `version` untouched; no-op when the object is unknown locally. Emits `de.markt.malo.stammdaten-geaendert` (MaLo) / `de.markt.stammdaten.geaendert` (other objects). Deep MeLo `standorteigenschaften` are acknowledged without a typed apply (structural-MIG level). |
-| **Clear** | any | 55004 / 44004 | `clear_lf_next` | Lieferbeginn cancelled/rejected: resets `lf_mp_id_next` + `lf_next_lieferbeginn` so no consumer acts on a switch that will not happen. Idempotent — a no-op when nothing is announced. |
+| **Clear** | `process.completed` | 55003 / 44003 | `clear_lf_next` | Lieferbeginn rejected (Ablehnung Anmeldung): resets `lf_mp_id_next` + `lf_next_lieferbeginn` so no consumer acts on a switch that will not happen. Idempotent — a no-op when nothing is announced. |
 
 All three operations are idempotent under at-least-once EventBus delivery.
 
@@ -1137,17 +1137,17 @@ VersorgungsStatusRecord
 stateDiagram-v2
     [*] --> Unbeliefert : MaLo registered
 
-    Unbeliefert --> Unbeliefert : 55001/44001 process.initiated\n→ lf_mp_id_next + lf_next_lieferbeginn set
-    Unbeliefert --> Beliefert   : 55003/44003 process.completed\n→ confirm_supply (lf_mp_id_next → lf_mp_id)
+    Unbeliefert --> Unbeliefert : 55001/44001 process.initiated<br/>→ lf_mp_id_next + lf_next_lieferbeginn set
+    Unbeliefert --> Beliefert   : 55003/44003 process.completed<br/>→ confirm_supply (lf_mp_id_next → lf_mp_id)
 
-    Beliefert --> Beliefert     : 55001/44001 process.initiated\n→ next LF announced; current LF still active
-    Beliefert --> Unbeliefert   : 55005/44005 process.completed\n→ end_supply (lf_mp_id_next preserved if set)
+    Beliefert --> Beliefert     : 55001/44001 process.initiated<br/>→ next LF announced; current LF still active
+    Beliefert --> Unbeliefert   : 55005/44005 process.completed<br/>→ end_supply (lf_mp_id_next preserved if set)
 
-    Unbeliefert --> Ersatzversorgung : 55013/44013 process.completed\n→ begin_eog_supply (§38 EnWG, eog_seit set)
-    Unbeliefert --> Grundversorgung  : 55013/44013 process.completed\n→ begin_eog_supply (§36 EnWG, Haushaltskunde)
-    Ersatzversorgung --> Grundversorgung : 3 Monate um, Haushaltskunde\n(automatic by law, no market message)
-    Ersatzversorgung --> Beliefert   : new supply confirmed\n→ confirm_supply (clears eog_seit)
-    Grundversorgung --> Beliefert    : new supply confirmed\n→ confirm_supply
+    Unbeliefert --> Ersatzversorgung : 55013/44013 process.completed<br/>→ begin_eog_supply (§38 EnWG, eog_seit set)
+    Unbeliefert --> Grundversorgung  : 55013/44013 process.completed<br/>→ begin_eog_supply (§36 EnWG, Haushaltskunde)
+    Ersatzversorgung --> Grundversorgung : 3 Monate um, Haushaltskunde<br/>(automatic by law, no market message)
+    Ersatzversorgung --> Beliefert   : new supply confirmed<br/>→ confirm_supply (clears eog_seit)
+    Grundversorgung --> Beliefert    : new supply confirmed<br/>→ confirm_supply
 
     Beliefert --> Ruhend    : MaKo suspended
     Ruhend --> Beliefert    : Reactivated
@@ -1213,7 +1213,7 @@ sequenceDiagram
     participant PostgreSQL
 
     ERP->>marktd: GET /api/v1/versorgung/51238696780?at=2025-07-01
-    marktd->>PostgreSQL: SELECT * FROM versorgungsstatus_history\nWHERE malo_id=$1 AND tenant=$2\nAND (valid_from AT TIME ZONE 'Europe/Berlin')::date <= '2025-07-01'\nORDER BY valid_from DESC LIMIT 1
+    marktd->>PostgreSQL: SELECT * FROM versorgungsstatus_history<br/>WHERE malo_id=$1 AND tenant=$2<br/>AND (valid_from AT TIME ZONE 'Europe/Berlin')::date <= '2025-07-01'<br/>ORDER BY valid_from DESC LIMIT 1
     PostgreSQL-->>marktd: snapshot (LieferStatus, LF, NB, …)
     marktd-->>ERP: 200 OK + VersorgungsStatusResponse
 ```

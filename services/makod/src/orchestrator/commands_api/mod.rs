@@ -188,7 +188,7 @@
 //! | Command | Marktrolle | Process | PIDs |
 //! |---------|-----------|---------|------|
 //! | `gpke.lieferbeginn.anmelden` | `LF` | GPKE Lieferbeginn Strom | 55001 |
-//! | `gpke.lieferbeginn.bestaetigen` | `NB` | GPKE NB bestätigt Lieferbeginn | 55003/55004 |
+//! | `gpke.lieferbeginn.bestaetigen` | `NB` | GPKE NB bestätigt Lieferbeginn | 55002/55003 |
 //! | `gpke.lieferende.anmelden` | `LF` | GPKE Lieferende Strom | 55002 |
 //! | `gpke.lieferende.bestaetigen` | `NB` | GPKE NB bestätigt Lieferende | 55005/55006 |
 //! | `gpke.kuendigung.anmelden` | `LF` | GPKE Kündigung Lieferbeginn | 55016 |
@@ -200,7 +200,7 @@
 //! | `gpke.abrechnung.annehmen` | `NB` | GPKE Netznutzungsabrechnung | 31002 |
 //! | `gpke.abrechnung.ablehnen` | `NB` | GPKE Abrechnungsstreit | 31001/31002 |
 //! | `geli.lieferbeginn.anmelden` | `LFG` | GeLi Gas Lieferbeginn | 44001 |
-//! | `geli.lieferbeginn.bestaetigen` | `GNB` | GeLi Gas NB bestätigt | 44003/44004 |
+//! | `geli.lieferbeginn.bestaetigen` | `GNB` | GeLi Gas NB bestätigt | 44002/44003 |
 //! | `geli.lieferende.anmelden` | `LFG` | GeLi Gas Lieferende | 44002 |
 //! | `geli.lieferende.bestaetigen` | `GNB` | GeLi Gas NB bestätigt | 44005/44006 |
 //! | `wim.geraetewechsel.beauftragen` | `NB`/`MSB` | WiM Messstellenbetrieb | 55039, 55042, 55051, 55168 |

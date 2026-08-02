@@ -242,7 +242,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Step 4: SendAntwort ──────────────────────────────────────────────
     println!();
-    println!("[4/6] Sending positive UTILMD Antwort (55003 — Bestätigung Lieferbeginn)...");
+    println!("[4/6] Sending positive UTILMD Antwort (55002 — Bestätigung Anmeldung)...");
 
     let antwort_ctx = CommandContext::new(
         envs[0].tenant_id,

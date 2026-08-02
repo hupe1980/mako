@@ -1,6 +1,6 @@
 //! GPKE Konfigurationseinrichtung — ORDERS 17134/17135 workflow (GPKE Teil 4).
 //!
-//! After a successful Lieferbeginn (UTILMD 55001 → UTILMD 55003 accepted), the
+//! After a successful Lieferbeginn (UTILMD 55001 → UTILMD 55002 accepted), the
 //! Netzbetreiber (NB) is required by BDEW GPKE Teil 4 to notify the
 //! Messstellenbetreiber (MSB) to set up the metering configuration for the new
 //! supplier assignment. This is done via ORDERS 17134.

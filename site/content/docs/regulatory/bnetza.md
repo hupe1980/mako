@@ -41,9 +41,10 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 | Anlage 1d, GPKE Teil 4 | Fokus Stammdatenprozesse (via BK6-22-024) |
 
 **Scope — electricity market only:**
-- Lieferantenwechsel Strom (UTILMD E, PIDs 55001–55006, 55017–55018)
-  — 55001/55002 Anfrage Lieferbeginn/Lieferende; 55003–55006 Bestätigung/Ablehnung;
-    55017 Kündigung Lieferbeginn; 55018 Bestätigung Kündigung
+- Lieferantenwechsel Strom (UTILMD E, PIDs 55001–55006, 55016–55018)
+  — 55001 Anmeldung / 55004 Abmeldung (Anfragen des LF); 55002/55003 Bestätigung/Ablehnung
+    Anmeldung; 55005/55006 Bestätigung/Ablehnung Abmeldung; 55016 Kündigung Lieferbeginn
+    (LFN → LFA); 55017/55018 Bestätigung/Ablehnung Kündigung
 - Neuanlage MaLo (UTILMD E, PIDs 55600–55605)
 - Sperrauftrag / Entsperrauftrag Strom (ORDERS, PIDs 17115–17117)
 - Anfrage Daten der individuellen Bestellung (UTILMD, PID 55555) — GPKE Teil 4 data request
@@ -223,9 +224,10 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 | BK7-06-067 | Festlegung einheitlicher Geschäftsprozesse und Datenformate „GeLi Gas" (Ursprungsfestlegung) | 20.08.2007 |
 
 **Scope — gas supplier switching only:**
-- Lieferbeginn Gas / Lieferende Gas (UTILMD G, PIDs 44001–44006, 44017–44018)
-  — 44001–44002 Anmeldung/Abmeldung (LFN → GNB); 44003–44006 Bestätigung/Ablehnung;
-    44017–44018 Kündigung Lieferbeginn (LFN ↔ LFA); PIDs 44007–44016 do not exist
+- Lieferbeginn Gas / Lieferende Gas (UTILMD G, PIDs 44001–44018)
+  — 44001 Anmeldung NN / 44004 Abmeldung NN (LFN → GNB); 44002/44003 Bestätigung/Ablehnung
+    Anmeldung; 44005/44006 Bestätigung/Ablehnung Abmeldung; 44007–44012 Abmeldung durch den
+    GNB; 44013–44015 Anmeldung/Zuordnung EoG; 44016–44018 Kündigung Lieferbeginn (LFN ↔ LFA)
 - Sperr-/Entsperrprozess Gas (ORDERS, PIDs 17115–17117) — same PID numbers as
   Strom Sperrung; implemented in `mako-geli-gas` as `geli-gas-sperrung-lf` (LF role)
   and `geli-gas-sperrung-nb` (GNB role) under BK7-24-01-009

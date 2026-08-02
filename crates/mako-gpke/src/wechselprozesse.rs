@@ -169,7 +169,7 @@ pub enum SupplierChangeEvent {
         /// Reference of the validated message.
         message_ref: MessageRef,
     },
-    /// Outbound UTILMD business response (55003/55004/55005/55006/55017/55018) was sent
+    /// Outbound UTILMD business response (55002/55003/55005/55006/55017/55018/55078/55080) was sent
     /// to the counterparty. The response PID is derived from the anfrage PID and
     /// the `accepted` flag by `response_pid_for`.
     AntwortGesendet {
@@ -187,7 +187,7 @@ pub enum SupplierChangeEvent {
     /// Emitted when the NB cannot process the inbound UTILMD for technical
     /// reasons (e.g., duplicate MsgId, system error, inconsistent state).
     /// This is distinct from a business rejection (`AntwortGesendet { accepted: false }`):
-    /// the APERAK replaces the UTILMD 55003/55004 response channel entirely.
+    /// the APERAK replaces the UTILMD 55002/55003 response channel entirely.
     ///
     /// BDEW GPKE / BK6-22-024: Must be dispatched within **24 wall-clock hours**.
     AperakFehlerDispatched {
@@ -457,7 +457,7 @@ pub enum SupplierChangeCommand {
     ///
     /// Use this when the NB system cannot process the inbound UTILMD for
     /// technical reasons (duplicate MsgId, system error, inconsistent state).
-    /// The APERAK replaces the UTILMD 55003/55004 response channel.
+    /// The APERAK replaces the UTILMD 55002/55003 response channel.
     ///
     /// May be sent from `Initiated` or `ValidationPassed` state. Transitions
     /// the process to `Rejected`.
@@ -872,7 +872,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 }];
 
                 // Always enqueue the UTILMD response back to the new supplier
-                // (55003/55004/55005/55006/55017/55018).
+                // (55002/55003/55005/55006/55017/55018/55078/55080).
                 let mut outbox: Vec<PendingOutbox> = vec![];
                 if let Some(rpid) = response_pid {
                     outbox.push(PendingOutbox::new(

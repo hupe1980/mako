@@ -1235,7 +1235,7 @@ impl MdmdMcpHandler {
                  4. `get_rollenzuordnung` — verify NB/MSB/LF role assignments are current.\n\
                  5. Status Unbeliefert means no active Liefervertrag — check:\n\
                     - Was UTILMD 55001 (Lieferbeginn) sent and APERAK received?\n\
-                    - Was 55003 (NB-Bestätigung) received from NB?\n\
+                    - Was 55002 (NB-Bestätigung Anmeldung) received from NB?\n\
                     - Did processd update VersorgungsStatus on process.completed?\n\
                  6. Fix: re-trigger via processd POST /api/v1/start-supply.",
             ),
@@ -1258,12 +1258,12 @@ impl MdmdMcpHandler {
                  1. `get_malo` — confirm malo_id, sparte=STROM, bilanzierungsgebiet (needed for UTILMD)\n\
                  2. `get_versorgungsstatus` — check lf_mp_id_next and lf_next_lieferbeginn\n\
                     - lf_mp_id_next set = Anmeldung in flight (55001 received by NB)\n\
-                    - lf_mp_id set = Beliefert (55003 confirmation received)\n\
+                    - lf_mp_id set = Beliefert (55002 Bestätigung received)\n\
                  3. `get_correlation` by process_id — see workflow_name=gpke-supplier-change, status=RUNNING/COMPLETED\n\
                  4. `get_versorgungsstatus_history` — review full transition timeline\n\
                  5. `get_rollenzuordnung` — verify new LF role assignment valid_from matches Lieferbeginn\n\
                  6. `get_nb_contract` — confirm NB contract valid_from ≤ Lieferbeginn\n\n\
-                 GPKE deadlines: NB must respond within 24h (APERAK) and 10 Werktage (55002/55003/55004).\n\
+                 GPKE deadlines: NB must respond within 24h (APERAK) and 10 Werktage (55002/55003).\n\
                  APERAK 45-min deadline is enforced by makod automatically.",
             ),
         ]

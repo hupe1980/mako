@@ -30,27 +30,27 @@ Gas-only roles (MGV, KN) are omitted for clarity — see the party role table be
 
 ```mermaid
 graph LR
-    LF["LF\nLieferant"]
-    NB["NB\nNetzbetreiber"]
-    MSB["MSB\nMessstellenbetreiber"]
-    BKV["BKV\nBilanzkreisverantwortlicher"]
-    UNB["ÜNB\nÜbertragungsnetzbetreiber"]
-    BIKO["BIKO\nBilanzkoordinator"]
-    EIV["EIV\nEinsatzverantwortlicher"]
+    LF["LF<br/>Lieferant"]
+    NB["NB<br/>Netzbetreiber"]
+    MSB["MSB<br/>Messstellenbetreiber"]
+    BKV["BKV<br/>Bilanzkreisverantwortlicher"]
+    UNB["ÜNB<br/>Übertragungsnetzbetreiber"]
+    BIKO["BIKO<br/>Bilanzkoordinator"]
+    EIV["EIV<br/>Einsatzverantwortlicher"]
 
-    LF -->|"GPKE: Lieferbeginn / Lieferende\nUTILMD 55001–55018"| NB
-    NB -->|"GPKE: Bestätigung / Ablehnung\nUTILMD 55003/55004"| LF
-    LF -->|"GeLi Gas: Anmeldung\nUTILMD 44001–44021"| NB
-    NB -->|"WiM: MSB-Wechsel\nUTILMD 55039/55042"| MSB
-    MSB -->|"WiM: Stammdaten\nUTILMD 55168"| NB
-    MSB -->|"INSRPT: Ablesesteuerung\nINSRPT 23001/23003"| NB
-    NB -->|"MSCONS: Messwerte\n(MSCONS 13xxx)"| BKV
-    NB -->|"INVOIC: NNE/MMM\n31001/31002/31005"| LF
-    LF -->|"INVOIC: Sperrung AWH Gas\n31011"| NB
-    NB -->|"MaBiS: Summenzeitreihe\nMSCONS 13003"| BIKO
+    LF -->|"GPKE: Lieferbeginn / Lieferende<br/>UTILMD 55001–55018"| NB
+    NB -->|"GPKE: Bestätigung / Ablehnung<br/>UTILMD 55002/55003"| LF
+    LF -->|"GeLi Gas: Anmeldung<br/>UTILMD 44001–44021"| NB
+    NB -->|"WiM: MSB-Wechsel<br/>UTILMD 55039/55042"| MSB
+    MSB -->|"WiM: Stammdaten<br/>UTILMD 55168"| NB
+    MSB -->|"INSRPT: Ablesesteuerung<br/>INSRPT 23001/23003"| NB
+    NB -->|"MSCONS: Messwerte<br/>(MSCONS 13xxx)"| BKV
+    NB -->|"INVOIC: NNE/MMM<br/>31001/31002/31005"| LF
+    LF -->|"INVOIC: Sperrung AWH Gas<br/>31011"| NB
+    NB -->|"MaBiS: Summenzeitreihe<br/>MSCONS 13003"| BIKO
     BIKO -->|"MABIS: Abrechnungsdaten"| BKV
     BIKO ---|"settlement"| UNB
-    EIV -->|"Redispatch 2.0\nORDERS/ORDRSP"| NB
+    EIV -->|"Redispatch 2.0<br/>ORDERS/ORDRSP"| NB
 ```
 
 ---

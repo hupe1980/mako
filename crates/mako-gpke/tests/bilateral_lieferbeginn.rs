@@ -447,7 +447,7 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
     let final_lfn: LfAnmeldungState = lfn.state().await.unwrap();
     assert!(
         matches!(final_lfn, LfAnmeldungState::Active(_)),
-        "LFN must be Active after 55003 acceptance; got: {final_lfn:?}",
+        "LFN must be Active after 55002 acceptance; got: {final_lfn:?}",
     );
     if let LfAnmeldungState::Active(data) = &final_lfn {
         assert_eq!(data.location_id, MaLo::new(MALO_ID));
@@ -468,7 +468,7 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
 
 // ── Rejection path ────────────────────────────────────────────────────────────
 
-/// NB rejects the 55001 Anfrage (Ablehnung, PID 55004).
+/// NB rejects the 55001 Anfrage (Ablehnung, PID 55003).
 /// Both sides must reach `Rejected` state and no MSCONS/ORDERS are enqueued.
 #[tokio::test]
 async fn bilateral_lieferbeginn_rejection_path() {
@@ -519,7 +519,7 @@ async fn bilateral_lieferbeginn_rejection_path() {
         obligations: vec![],
     };
 
-    // Rejection enqueues UTILMD 55004 (Ablehnung) but no MSCONS/ORDERS.
+    // Rejection enqueues UTILMD 55003 (Ablehnung) but no MSCONS/ORDERS.
     let nb_out = GpkeSupplierChangeWorkflow::handle(&nb_state, reject_cmd.clone())
         .expect("NB SendAntwort(rejected) must succeed");
     assert_eq!(

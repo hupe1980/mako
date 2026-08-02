@@ -62,26 +62,26 @@ The orchestrator supports three dispatch modes:
 
 ```mermaid
 graph TB
-    TRIGGER["Trigger\nCloudEvent webhook\nor POST /api/v1/run"]
+    TRIGGER["Trigger<br/>CloudEvent webhook<br/>or POST /api/v1/run"]
 
     subgraph orchestrator ["Orchestrator Agent"]
-        ORCH["1. Direct match (trigger_patterns)\n2. LLM triage (tool call)\n3. Fallback: orchestrator handles directly"]
-        MODE["DispatchMode:\nsequential | parallel | race"]
+        ORCH["1. Direct match (trigger_patterns)<br/>2. LLM triage (tool call)<br/>3. Fallback: orchestrator handles directly"]
+        MODE["DispatchMode:<br/>sequential | parallel | race"]
     end
 
     subgraph builtin ["28 Built-in Specialists (compiled into binary)"]
         direction LR
-        MAKO["mako-agent\nEDIFACT · UTILMD · deadlines"]
-        BILLING["billing-agent\nbillingd · invoicd · O2C"]
-        BILREG["billing-regulatory-guard-agent\n§40/§41/§41a/§42 compliance"]
-        JAHRB["jahresabrechnung-agent\nAnnual settlement orchestrator"]
-        ANOMALY["billing-anomaly-agent\n20% deviation check"]
-        EEG["eeg-agent + eeg-compliance-agent\neinsd · §52 · §44b · §20 EEG"]
+        MAKO["mako-agent<br/>EDIFACT · UTILMD · deadlines"]
+        BILLING["billing-agent<br/>billingd · invoicd · O2C"]
+        BILREG["billing-regulatory-guard-agent<br/>§40/§41/§41a/§42 compliance"]
+        JAHRB["jahresabrechnung-agent<br/>Annual settlement orchestrator"]
+        ANOMALY["billing-anomaly-agent<br/>20% deviation check"]
+        EEG["eeg-agent + eeg-compliance-agent<br/>einsd · §52 · §44b · §20 EEG"]
         MORE["... 19 more specialists"]
     end
 
     subgraph rag ["RAG Knowledge Base"]
-        LANCE["LanceDB\nS3 / GCS / local\nANN vector search"]
+        LANCE["LanceDB<br/>S3 / GCS / local<br/>ANN vector search"]
     end
 
     subgraph tools ["MCP Tools — 14 MCP services (150+ tools)"]
@@ -231,12 +231,12 @@ that stores embeddings on object storage (S3/GCS/Azure Blob) or locally.
 
 ```mermaid
 flowchart LR
-    SRC["Knowledge sources\n(AHB PDFs, runbooks,\nBNetzA decisions)"]
-    CHUNK["Paragraph-boundary\nchunking (512 tokens)"]
-    EMBED["Embedding provider\n(OpenAI text-embedding-3-small)"]
-    LANCE[("LanceDB\nS3 / GCS / local\nIVF_PQ ANN index")]
-    QUERY["Query vector\n(question embedding)"]
-    RESULT["Top-k chunks\n→ system prompt context"]
+    SRC["Knowledge sources<br/>(AHB PDFs, runbooks,<br/>BNetzA decisions)"]
+    CHUNK["Paragraph-boundary<br/>chunking (512 tokens)"]
+    EMBED["Embedding provider<br/>(OpenAI text-embedding-3-small)"]
+    LANCE[("LanceDB<br/>S3 / GCS / local<br/>IVF_PQ ANN index")]
+    QUERY["Query vector<br/>(question embedding)"]
+    RESULT["Top-k chunks<br/>→ system prompt context"]
 
     SRC --> CHUNK --> EMBED --> LANCE
     QUERY --> LANCE --> RESULT

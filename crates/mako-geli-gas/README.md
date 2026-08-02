@@ -33,7 +33,7 @@ families. Saturdays, Sundays and public holidays are not Werktage.
 | PID     | Process name                                        | EDIFACT       | Status                            |
 |---------|-----------------------------------------------------|---------------|-----------------------------------|
 | 44001   | Lieferbeginn Gas — Anfrage LFN → NB                 | UTILMD G1/G2  | ✅ Implemented                    |
-| 44002   | Lieferende Gas — Anfrage LFN → NB                   | UTILMD G1/G2  | ⚠️ Registered — partial handling |
+| 44004   | Abmeldung NN / Lieferende Gas — Anfrage LFN → NB     | UTILMD G1/G2  | ⚠️ Registered — partial handling |
 | 44002   | Bestätigung Anmeldung NN — NB → LF                  | UTILMD G1/G2  | ⚠️ Registered — partial handling |
 | 44003   | Ablehnung Anmeldung NN — NB → LF                    | UTILMD G1/G2  | ⚠️ Registered — partial handling |
 | 44005   | Bestätigung Abmeldung NN — NB → LF                  | UTILMD G1/G2  | ⚠️ Registered — partial handling |

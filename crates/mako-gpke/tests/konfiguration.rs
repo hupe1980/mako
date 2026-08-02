@@ -8,7 +8,7 @@
 //! - `TimeoutExpired` in terminal state → no-op
 //! - `SendAntwort { accepted:true, pid:55001, obligations }` → MSCONS 13015 outbox
 //! - `SendAntwort { accepted:true, pid:55001, msb obligations }` → +ORDERS 17134 outbox
-//! - `SendAntwort { accepted:true, pid:55004 }` → no cross-domain outbox (Abmeldung, not Anmeldung)
+//! - `SendAntwort { accepted:true, pid:55004 }` → no cross-domain outbox (Abmeldung 55004, not Anmeldung 55001)
 //!
 //! obligations are now computed by `post_acceptance::lieferbeginn_obligations`
 //! and passed to `SendAntwort`; the workflow itself carries no cross-domain PID knowledge.

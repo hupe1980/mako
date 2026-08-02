@@ -10,11 +10,11 @@
 //! | Process | PID | Status |
 //! |---|---|---|
 //! | Lieferbeginn Gas (Anfrage LFN → NB) | 44001 | ✅ Registered |
-//! | Lieferende Gas (Anfrage LFN → NB) | 44002 | ✅ Registered |
-//! | Bestätigung Lieferbeginn Gas | 44003 | ✅ Registered |
-//! | Ablehnung Lieferbeginn Gas | 44004 | ✅ Registered |
-//! | Bestätigung Lieferende Gas | 44005 | ✅ Registered |
-//! | Ablehnung Lieferende Gas | 44006 | ✅ Registered |
+//! | Abmeldung NN / Lieferende Gas (Anfrage LFN → NB) | 44004 | ✅ Registered |
+//! | Bestätigung Anmeldung NN | 44002 | ✅ Registered |
+//! | Ablehnung Anmeldung NN | 44003 | ✅ Registered |
+//! | Bestätigung Abmeldung NN | 44005 | ✅ Registered |
+//! | Ablehnung Abmeldung NN | 44006 | ✅ Registered |
 //! | Abmeldung NN vom NB | 44007–44009 | ✅ Registered |
 //! | Abmeldungsanfrage des NB | 44010–44012 | ✅ Registered |
 //! | Anmeldung/Abmeldung EoG | 44013–44015 | ✅ Registered |
@@ -391,7 +391,7 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
             && !roles.contains(Marktrolle::Msb)
             && !roles.contains(Marktrolle::Nmsb);
         // LF role (lf-only OR integrated): register LFN-side response PIDs.
-        // On integrated deployments, the LF *receives* 44003/44004 from GNB;
+        // On integrated deployments, the LF *receives* 44002/44003 and 44005/44006 from GNB;
         // the NB only ever *sends* them, so routing to lf-anmeldung is correct.
         let has_lf_role = roles.contains(Marktrolle::Lf) || roles.is_all();
         // LF stornierung: lf-only only (not all()), to avoid conflict with WimGas.
@@ -410,8 +410,9 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
             );
         }
         if has_lf_role {
-            // LF (or integrated): 44003/44004 are inbound GNB confirmations/rejections
-            // to an outbound 44001/44002 the LF previously sent. Route to the LFN-side
+            // LF (or integrated): 44002/44003 and 44005/44006 are inbound GNB
+            // confirmations/rejections to an outbound 44001/44004 the LF previously
+            // sent. Route to the LFN-side
             // workflow, overriding the unconditional geli-gas-supplier-change registration.
             for &pid in lf_anmeldung::ANTWORT_PIDS_LF {
                 // Use register() (silently replaces) — the GNB-side workflow never
