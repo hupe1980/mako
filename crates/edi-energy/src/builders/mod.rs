@@ -222,10 +222,12 @@ macro_rules! emit_comp {
 
 // ── Sub-modules ───────────────────────────────────────────────────────────────
 
-#[cfg(feature = "utilmd")]
+// The UNB/UNZ envelope is message-type agnostic — every message type needs it,
+// so it carries no feature gate.
 mod interchange;
 pub use interchange::{InterchangeBuilder, unb_qualifier};
 
+#[cfg(feature = "utilmd")]
 mod utilmd;
 #[cfg(feature = "utilmd")]
 pub use utilmd::{UtilmdBuilder, UtilmdTransactionBuilder};

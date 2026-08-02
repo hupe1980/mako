@@ -207,8 +207,15 @@ jobs:
         with:
           python-version: "3.11"   # the abi3 floor — the wheel must work here
 
-      - name: Install maturin
-        run: pip install 'maturin>=1.9,<2.0' pytest
+      # `maturin develop` installs into a virtualenv and refuses to run without
+      # one — `setup-python` does not create one. Build the venv explicitly and
+      # address it by path rather than relying on activation surviving between
+      # `run:` blocks.
+      - name: Create the build virtualenv
+        working-directory: makotest
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip 'maturin>=1.9,<2.0' pytest
 
       # `maturin develop` enables pyo3/extension-module (see pyproject.toml);
       # plain `cargo test --workspace` deliberately does not, so both paths
@@ -216,12 +223,12 @@ jobs:
       - name: Build extension and run the Python suite
         working-directory: makotest
         run: |
-          maturin develop
-          pytest -q
+          .venv/bin/maturin develop
+          .venv/bin/pytest -q
 
       - name: Build a release wheel
         working-directory: makotest
-        run: maturin build --release
+        run: .venv/bin/maturin build --release
 
       # The sdist is only exercised at release time otherwise, and it is the
       # artifact pip falls back to when no wheel matches. It must build
@@ -229,7 +236,7 @@ jobs:
       # has to vendor them into the tarball. Verify that here, not on the tag.
       - name: Verify the sdist builds standalone
         run: |
-          maturin sdist --manifest-path makotest/Cargo.toml --out sdist-out
+          makotest/.venv/bin/maturin sdist --manifest-path makotest/Cargo.toml --out sdist-out
           python -m venv /tmp/sdist-venv
           /tmp/sdist-venv/bin/pip install --no-binary :all: sdist-out/*.tar.gz
           /tmp/sdist-venv/bin/python -c "

@@ -112,14 +112,19 @@ ci: check test clippy fmt-check deny no-version-alias doc-check codegen-check va
 
 # ── makotest (Python toolkit) ─────────────────────────────────────────────────
 
-# Build the PyO3 extension into the active virtualenv and run the Python suite.
-# Requires `maturin` and an activated venv (`python -m venv .venv && . .venv/bin/activate`).
+# Build the PyO3 extension and run the Python suite.
+#
+# Creates `makotest/.venv` on first run and addresses it by path — `maturin
+# develop` refuses to run without a virtualenv, and finds `.venv` on its own, so
+# no activation is needed.
 test-makotest:
-    cd makotest && maturin develop --extras dev && pytest -q
+    cd makotest && test -d .venv || python3 -m venv .venv
+    cd makotest && .venv/bin/pip install -q --upgrade pip 'maturin>=1.9,<2.0' pytest
+    cd makotest && .venv/bin/maturin develop && .venv/bin/pytest -q
 
 # Build a release wheel (abi3, one wheel for Python ≥ 3.11).
 build-makotest:
-    cd makotest && maturin build --release
+    cd makotest && .venv/bin/maturin build --release
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 
