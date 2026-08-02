@@ -18,13 +18,13 @@ use crate::{
     domain::{MaloId, MarktpartnerId, MeloId, ProcessStatus, Sparte},
     error::MdmError,
     repository::{
-        ContractRecord, ContractRepository, CorrelationEntry, CorrelationFilter, CorrelationIndex,
-        GrundversorgerRecord, GrundversorgerRepository, LieferStatus, MaloFilter, MaloGridRecord,
-        MaloGridRepository, MaloRecord, MaloRepository, MeloRecord, MeloRepository, NeLoRecord,
-        NeLoRepository, PageResult, PartnerRecord, PartnerRepository, PreisblattSource,
-        PriCatDispatchEntry, PriCatDispatchState, PriCatRepository, PriCatVersion, Rollenzuordnung,
-        Subscription, SubscriptionRepository, VersorgungsStatusHistoryRecord,
-        VersorgungsStatusRecord, VersorgungsStatusRepository,
+        CorrelationEntry, CorrelationFilter, CorrelationIndex, GrundversorgerRecord,
+        GrundversorgerRepository, LieferStatus, MaloFilter, MaloGridRecord, MaloGridRepository,
+        MaloRecord, MaloRepository, MeloRecord, MeloRepository, NeLoRecord, NeLoRepository,
+        PageResult, PartnerRecord, PartnerRepository, PreisblattSource, PriCatDispatchEntry,
+        PriCatDispatchState, PriCatRepository, PriCatVersion, Rollenzuordnung, Subscription,
+        SubscriptionRepository, VersorgungsStatusHistoryRecord, VersorgungsStatusRecord,
+        VersorgungsStatusRepository,
     },
 };
 
@@ -279,86 +279,6 @@ impl MeloRepository for InMemoryMeloRepository {
         }
         rec.updated_at = time::OffsetDateTime::now_utc();
         Ok(true)
-    }
-}
-
-// ── InMemoryContractRepository ────────────────────────────────────────────────
-
-/// In-memory `ContractRepository` for unit tests.
-#[derive(Clone, Default)]
-pub struct InMemoryContractRepository {
-    store: Arc<RwLock<HashMap<String, ContractRecord>>>,
-}
-
-impl ContractRepository for InMemoryContractRepository {
-    #[allow(clippy::too_many_arguments)]
-    async fn upsert(
-        &self,
-        contract_id: &str,
-        malo_id: Option<&MaloId>,
-        sparte: Sparte,
-        vertragsart: &str,
-        data: serde_json::Value,
-        valid_from: Option<Date>,
-        valid_to: Option<Date>,
-        if_match: Option<i64>,
-        bo4e_version: &str,
-    ) -> Result<i64, MdmError> {
-        let mut store = self.store.write().await;
-        let version = if let Some(existing) = store.get(contract_id) {
-            if let Some(expected) = if_match {
-                if existing.version != expected {
-                    return Err(MdmError::VersionConflict {
-                        expected: expected.to_string(),
-                        actual: existing.version.to_string(),
-                    });
-                }
-            }
-            existing.version + 1
-        } else {
-            1
-        };
-        store.insert(
-            contract_id.to_owned(),
-            ContractRecord {
-                contract_id: contract_id.to_owned(),
-                malo_id: malo_id.cloned(),
-                sparte,
-                vertragsart: vertragsart.to_owned(),
-                version,
-                data,
-                valid_from,
-                valid_to,
-                created_at: time::OffsetDateTime::now_utc(),
-                updated_at: time::OffsetDateTime::now_utc(),
-                bo4e_version: bo4e_version.to_owned(),
-            },
-        );
-        Ok(version)
-    }
-
-    async fn find(&self, contract_id: &str) -> Result<Option<ContractRecord>, MdmError> {
-        let store = self.store.read().await;
-        Ok(store.get(contract_id).cloned())
-    }
-
-    async fn find_active_by_malo(
-        &self,
-        malo_id: &MaloId,
-        at: Date,
-    ) -> Result<Vec<ContractRecord>, MdmError> {
-        let store = self.store.read().await;
-        let mut results: Vec<ContractRecord> = store
-            .values()
-            .filter(|r| {
-                r.malo_id.as_ref() == Some(malo_id)
-                    && r.valid_from.is_none_or(|f| f <= at)
-                    && r.valid_to.is_none_or(|t| t >= at)
-            })
-            .cloned()
-            .collect();
-        results.sort_by(|a, b| b.valid_from.cmp(&a.valid_from));
-        Ok(results)
     }
 }
 

@@ -193,24 +193,6 @@ pub struct RenderedInterchange {
     pub dar: Box<str>,
 }
 
-/// UNB DE0007 Teilnehmerbezeichnung-Qualifier for an MP-ID.
-///
-/// Allgemeine Festlegungen 6.1d, UNB segment table: `14` = GS1,
-/// `500` = DE, BDEW, `502` = DE, DVGW Service & Consult GmbH.
-/// BDEW-issued 13-digit MP-IDs start with `99`, DVGW-issued with `98`;
-/// 16-character EIC codes are issued by BDEW as the German issuing office.
-fn unb_qualifier(mp_id: &str) -> &'static str {
-    if mp_id.len() == 13 && mp_id.starts_with("99") {
-        "500"
-    } else if mp_id.len() == 13 && mp_id.starts_with("98") {
-        "502"
-    } else if mp_id.len() == 13 {
-        "14"
-    } else {
-        "500"
-    }
-}
-
 /// The UNB DE0020 / UNZ DE0036 Datenaustauschreferenz for an outbox message.
 ///
 /// First 14 uppercase hex chars of the outbox message UUID: unique per
@@ -249,28 +231,11 @@ fn finish_interchange(
     );
     let hhmm = format!("{:02}{:02}", now.hour(), now.minute());
 
-    let mut w = edifact_rs::Writer::new(Vec::with_capacity(message.len() + 96));
-    w.write_composites(
-        "UNB",
-        &[
-            &["UNOC", "3"],
-            &[sender, unb_qualifier(sender)],
-            &[receiver, unb_qualifier(receiver)],
-            &[&date, &hhmm],
-            &[&dar],
-        ],
-    )
-    .map_err(|e| RenderError::BuilderError(format!("UNB envelope: {e}")))?;
-    let mut bytes = w
-        .finish()
-        .map_err(|e| RenderError::BuilderError(format!("UNB envelope: {e}")))?;
-    bytes.extend_from_slice(&message);
-    let mut w = edifact_rs::Writer::new(bytes);
-    w.write_composites("UNZ", &[&["1"], &[&dar]])
-        .map_err(|e| RenderError::BuilderError(format!("UNZ envelope: {e}")))?;
-    let bytes = w
-        .finish()
-        .map_err(|e| RenderError::BuilderError(format!("UNZ envelope: {e}")))?;
+    let bytes = edi_energy::builders::InterchangeBuilder::new(sender, receiver, &dar)
+        .transmission(&date, &hhmm)
+        .message(message)
+        .build()
+        .map_err(|e| RenderError::BuilderError(e.to_string()))?;
 
     Ok(RenderedInterchange {
         bytes,
@@ -1130,16 +1095,6 @@ mod envelope_tests {
         edi_energy::Platform::with_all_profiles()
             .parse(&rendered.bytes)
             .expect("envelope must be parseable");
-    }
-
-    /// DE0007 qualifier derivation per AF 6.1d UNB segment table:
-    /// 14 = GS1, 500 = DE BDEW, 502 = DE DVGW.
-    #[test]
-    fn unb_qualifier_per_af61d() {
-        assert_eq!(unb_qualifier("9900123456789"), "500");
-        assert_eq!(unb_qualifier("9870123456789"), "502");
-        assert_eq!(unb_qualifier("4012345000023"), "14");
-        assert_eq!(unb_qualifier("10XDE-EON-NETZ-I"), "500");
     }
 
     // ── ESA outbound leg — the MSB's answers on the wire ──────────────────────

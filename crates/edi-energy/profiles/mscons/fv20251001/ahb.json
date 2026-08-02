@@ -2,7 +2,7 @@
   "schema_version": 1,
   "message_type": "MSCONS",
   "release": "2.4c",
-  "source_document": "MSCONS AHB 2.4c vom 01.10.2025",
+  "source_document": "MSCONS AHB, wire release 2.4c (Stand 01.10.2025)",
   "pruefidentifikatoren": [
     {
       "code": 13002,

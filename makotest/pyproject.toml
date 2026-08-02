@@ -1,0 +1,50 @@
+[build-system]
+requires      = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name            = "makotest"
+# Version comes from Cargo.toml, which inherits `workspace.package.version`,
+# so the wheel and the crates it binds can never disagree.
+dynamic         = ["version"]
+description     = "Test & simulation toolkit for German market-communication (MaKo) platforms"
+readme          = "README.md"
+requires-python = ">=3.11"
+license         = { text = "MIT OR Apache-2.0" }
+keywords        = ["energy", "edifact", "bdew", "mako", "testing", "pytest", "bo4e"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Pytest",
+    "Intended Audience :: Developers",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = []
+
+[project.optional-dependencies]
+# Data generation (EPEX curves, Lastgänge). Kept optional so a consumer that
+# only needs identifiers/Fristen/EDIFACT does not pull numpy.
+data    = ["numpy>=1.26", "pandas>=2.0"]
+# BO4E business objects on the boundary. Pinned to the generation mako's
+# `rubo4e` targets — see `bo4e_generation()`.
+bo4e    = ["bo4e>=202607,<202608"]
+# Property-based strategies over the domain types.
+hypothesis = ["hypothesis>=6.100"]
+dev     = ["pytest>=8.0", "makotest[data,bo4e,hypothesis]"]
+
+[project.urls]
+Repository = "https://github.com/hupe1980/mako"
+
+# Discovered by pytest through the standard plugin entry point. The core stays
+# importable without pytest — demos and notebooks use the same objects.
+[project.entry-points.pytest11]
+makotest = "makotest.plugin"
+
+[tool.maturin]
+python-source = "python"
+module-name   = "makotest._native"
+# Enabled only here: declaring `extension-module` as a Cargo feature would make
+# `cargo test --workspace --all-features` link the test harness against it and
+# fail on undefined Python symbols.
+features      = ["pyo3/extension-module"]

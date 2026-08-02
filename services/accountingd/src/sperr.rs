@@ -20,8 +20,8 @@
 //! or an **Unverhältnismäßigkeit/Schutzbedürftigkeit** flag (§ 41f Abs. 1 S. 2 /
 //! Abs. 2) — those flags are filtered out by every phase query.
 //!
-//! See `regulatories/gesetze/EnWG_41f_41g_Versorgungsunterbrechung_Nichtzahlung_2025-12-23.md`
-//! for the citable spec.
+//! The governing text is §§ 41f–41g EnWG in the consolidated version of
+//! 23.12.2025 (BGBl. 2025 I Nr. 347).
 
 use mako_engine::fristen::{self, HolidayCalendar};
 use sqlx::PgPool;

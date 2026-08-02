@@ -41,12 +41,11 @@
 //! 6. Transitions to terminal states: `Settled`, `Disputed`, `PaymentConfirmed`,
 //!    `PaymentDisputed`, or `ComdisRejected`.
 //!
-//! **Pending in application layer (`deadline_dispatch.rs`):**
-//! Automatic outbound REMADV generation (based on business rules when the 5-Werktage
-//! deadline fires without an explicit `Settle`/`Dispute` command) is tracked in
-//! TODO.md §WiM-Rechnung. The current implementation satisfies the AS4 acknowledgement
-//! obligation (BDEW AS4-Profile §5) and enables full traceability, but does not
-//! yet auto-emit REMADV in response to `DeadlineExpired`.
+//! **Not implemented in the application layer (`deadline_dispatch.rs`):**
+//! automatic outbound REMADV generation when the 5-Werktage deadline fires without
+//! an explicit `Settle`/`Dispute` command. The workflow satisfies the AS4
+//! acknowledgement obligation (BDEW AS4-Profile §5) and records the deadline, but
+//! `DeadlineExpired` does not itself emit a REMADV.
 
 use mako_engine::{
     error::WorkflowError,

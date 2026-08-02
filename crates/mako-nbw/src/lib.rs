@@ -49,9 +49,8 @@
 //!
 //! # Gas NBW coverage
 //!
-//! The BDEW AWH **Marktprozesse Netzbetreiberwechsel Sparte Gas V1.0**
-//! (published 2026-06-26, `regulatories/bdew-mako/BDEW_VKU_GEODE_AWH_Marktprozesse
-//! Netzbetreiberwechsel Sparte Gas_V1_0_20260626.pdf`) defines Gas NBW process
+//! The BDEW/VKU/GEODE AWH **Marktprozesse Netzbetreiberwechsel Sparte Gas V1.0**
+//! (published 2026-06-26) defines Gas NBW process
 //! flows. Gas NBW uses the same PARTIN message format and the same PID block
 //! (37000–37014) as Strom NBW — the Gas-specific roles are covered by PIDs
 //! 37008–37014. There is no separate `mako-nbw-gas` crate; when this crate is

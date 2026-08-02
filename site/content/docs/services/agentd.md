@@ -187,7 +187,7 @@ prompt, default trigger patterns, and default MCP server requirements.
 | `billing-anomaly-agent` | `de.billing.rechnung.erstellt` | billingd, edmd |
 | `billing-regulatory-guard-agent` | `de.billing.rechnung.erstellt` | billingd, marktd |
 | `jahresabrechnung-agent` | manual trigger | billingd, edmd, marktd |
-| `eeg-agent` | `de.eeg.anlage.foerderung_auslaufend`, `de.messwert.reading.direct.stored` | einsd, edmd, marktd |
+| `eeg-agent` | `de.eeg.anlage.foerderung-auslaufend`, `de.messwert.reading.direct.stored` | einsd, edmd, marktd |
 | `eeg-compliance-agent` | `de.eeg.anlage.*`, `de.eeg.verguetung.*`, `de.eeg.marktpraemie.*` | einsd, obsd |
 | `payment-reconciliation-agent` | `de.accounting.payment.due`, `de.accounting.bankruecklast` | accountingd |
 | `compliance-agent` | `de.obs.stp.parity.alert` | obsd, processd, marktd, invoicd |
@@ -199,14 +199,14 @@ prompt, default trigger patterns, and default MCP server requirements.
 | `tarifbd-agent` | `de.tarif.product.updated`, `de.tarif.angebot.abgelaufen`, `de.tarif.epex.missing` | tarifbd, marktd |
 | `processd-agent` | `de.mako.process.initiated`, `de.mako.process.rejected` | processd, marktd, obsd |
 | `sperrd-agent` | `de.sperr.*`, `de.mako.process.completed` | sperrd, makod, marktd |
-| `portald-agent` | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung_auslaufend`, `de.accounting.mahnung.issued` | portald, billingd, einsd, accountingd |
+| `portald-agent` | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung-auslaufend`, `de.accounting.mahnung.issued` | portald, billingd, einsd, accountingd |
 | `regulatory-reporting-agent` | manual / scheduled | obsd, processd, invoicd, marktd |
 | `replacement-value-agent` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd, obsd |
 | `mabis-syncd-agent` | `de.messwert.reading.quality.warning` | edmd, obsd, marktd |
-| `smgw-diagnostics-agent` | `de.messwert.cls.compliance_issue`, `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.initiated`, `de.markt.geraet.konfiguration.updated` | edmd, marktd, obsd, processd |
+| `smgw-diagnostics-agent` | `de.messwert.cls.compliance-issue`, `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.initiated`, `de.markt.geraet.konfiguration.updated` | edmd, marktd, obsd, processd |
 | `vpp-billing-agent` | `de.vpp.dispatch.confirmed`, `de.vpp.settlement.berechnet` | billingd, marktd, obsd |
 | `gabi-gas-agent` | `de.gabi.imbalance.*`, `de.gabi.alocat.missing`, `de.gabi.nomination.*`, `de.netzbilanz.invoic.drafted` | makod, netzbilanzd, marktd, obsd |
-| `einsd-batch-agent` | `de.eeg.settlement.batch_due`, `de.eeg.compliance.*`, `de.eeg.anlage.foerderung_auslaufend` | einsd, edmd, tarifbd, obsd |
+| `einsd-batch-agent` | `de.eeg.settlement.batch-due`, `de.eeg.compliance.*`, `de.eeg.anlage.foerderung-auslaufend` | einsd, edmd, tarifbd, obsd |
 
 All **28 specialist definitions** are compiled into the `agentd` binary. Activate them via
 `[bundled_agents]` in `agentd.toml` — no system prompt copy-paste required.
@@ -425,7 +425,7 @@ curl -X POST http://agentd:9580/webhook \
     "type": "de.billing.rechnung.disputed",
     "source": "urn:mako:billingd:tenant:9900357000004",
     "id": "123e4567-e89b-12d3-a456-426614174000",
-    "input": { "malo_id": "51238696781", "record_id": "...", "reason": "check 4 failed" }
+    "input": { "malo_id": "51238696780", "record_id": "...", "reason": "check 4 failed" }
   }'
 ```
 
@@ -436,7 +436,7 @@ curl -X POST http://agentd:9580/api/v1/run \
   -H "Content-Type: application/json" \
   -d '{
     "event_type": "manual.billing.dispute-analysis",
-    "input": { "malo_id": "51238696781", "context": "Invoice R2026-001 disputed" }
+    "input": { "malo_id": "51238696780", "context": "Invoice R2026-001 disputed" }
   }'
 ```
 

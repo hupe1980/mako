@@ -31,8 +31,8 @@
 //!                                            receive_utilmd(wire)
 //!                                              → asserts UNH ref ≠ "1"
 //!                                            send_antwort(accepted=true)
-//!                                              → asserts UTILMD 55003 + MSCONS 13015
-//!                        ◄── UTILMD 55003 ───
+//!                                              → asserts UTILMD 55002 + MSCONS 13015
+//!                        ◄── UTILMD 55002 ───
 //!
 //!   [lfa_leg] submit_kuendigung(55016)
 //!     → asserts outbox payload invariants
@@ -46,7 +46,7 @@
 //!                                                          → asserts no MSCONS
 //!                                                        ◄── UTILMD 55017 ───
 //!
-//!   [nb_leg]  receive_antwort_von_nb(wire_55003)
+//!   [nb_leg]  receive_antwort_von_nb(wire_55002)
 //!   [lfa_leg] receive_antwort_von_lfa(wire_55017)
 //!   ──────────────────────────────────────────────────────────────────────────────
 //!   final:  nb_leg  = Active           AntwortGesendet         AntwortGesendet
@@ -108,7 +108,7 @@ const FV: &str = "FV2025-10-01";
 /// Each leg is an entirely independent event-sourced process backed by its own
 /// `InMemoryEventStore`.  They share no state and no event log.
 struct MockLfn {
-    /// LFN → NB leg: Anfrage Lieferbeginn Strom (55001 → 55003/55004).
+    /// LFN → NB leg: Anmeldung verb. MaLo (55001 → 55002 accept / 55003 reject).
     nb_leg: Process<GpkeLfAnmeldungWorkflow, InMemoryEventStore>,
     /// LFN → LFA leg: Kündigung Lieferbeginn (55016 → 55017 accepted).
     lfa_leg: Process<GpkeLfAnmeldungWorkflow, InMemoryEventStore>,
@@ -246,7 +246,7 @@ impl MockLfn {
             .bytes
     }
 
-    /// ERP notification: receive NB's UTILMD response (55003/55004) and execute on `nb_leg`.
+    /// ERP notification: receive NB's UTILMD response (55002/55003) and execute on `nb_leg`.
     async fn receive_antwort_von_nb(&self, wire: &[u8]) {
         let raw = self
             .platform
@@ -372,8 +372,8 @@ impl MockNb {
     /// ERP action: send Bestätigung (`accepted = true`) or Ablehnung
     /// (`accepted = false`).
     ///
-    /// - `accepted = true`  → asserts UTILMD 55003 + MSCONS 13015 in outbox.
-    /// - `accepted = false` → asserts UTILMD 55004 only (no MSCONS).
+    /// - `accepted = true`  → asserts UTILMD 55002 + MSCONS 13015 in outbox.
+    /// - `accepted = false` → asserts UTILMD 55003 only (no MSCONS).
     ///
     /// Returns the rendered UTILMD wire bytes for transport to the LFN.
     async fn send_antwort(&self, accepted: bool, reason: Option<&str>) -> Vec<u8> {
@@ -394,7 +394,8 @@ impl MockNb {
             .await
             .expect("NB: execute SendAntwort");
 
-        let expected_pid: u64 = if accepted { 55003 } else { 55004 };
+        // AHB triple 55001|55002|55003 = (Anmeldung, Bestätigung, Ablehnung).
+        let expected_pid: u64 = if accepted { 55002 } else { 55003 };
         let utilmd = outbox
             .iter()
             .find(|e| e.message_type.as_ref() == "UTILMD")
@@ -596,14 +597,14 @@ impl MockLfa {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-/// Lieferantenwechsel Strom — happy path (55001→55003, 55016→55017).
+/// Lieferantenwechsel Strom — happy path (55001→55002, 55016→55017).
 ///
 /// Both GPKE legs complete successfully:
-/// - NB accepts the Lieferbeginn Anfrage  → UTILMD 55003 + MSCONS 13015
+/// - NB accepts the Anmeldung             → UTILMD 55002 + MSCONS 13015
 /// - LFA accepts the Kündigung (mandatory) → UTILMD 55017
 ///
 /// Final state:
-/// - LFN `nb_leg`  → `Active`           (received 55003 Bestätigung from NB)
+/// - LFN `nb_leg`  → `Active`           (received 55002 Bestätigung from NB)
 /// - LFN `lfa_leg` → `Active`           (received 55017 Bestätigung from LFA)
 /// - NB             → `AntwortGesendet`
 /// - LFA            → `AntwortGesendet`
@@ -625,13 +626,13 @@ async fn e2e_lieferantenwechsel_strom_happy_path() {
         "lfa_leg must be Pending after InitiateAnmeldung (55016)"
     );
 
-    // ── NB: receive UTILMD 55001, validate, send 55003 + MSCONS 13015 ─────────
+    // ── NB: receive UTILMD 55001, validate, send 55002 + MSCONS 13015 ─────────
     nb.receive_utilmd(&wire_55001).await;
     assert!(
         matches!(nb.state().await, SupplierChangeState::ValidationPassed(_)),
         "NB must be ValidationPassed after receiving UTILMD 55001"
     );
-    let wire_55003 = nb.send_antwort(true, None).await;
+    let wire_55002 = nb.send_antwort(true, None).await;
     assert!(
         matches!(
             nb.state().await,
@@ -656,7 +657,7 @@ async fn e2e_lieferantenwechsel_strom_happy_path() {
     );
 
     // ── LFN: receive both responses ───────────────────────────────────────────
-    lfn.receive_antwort_von_nb(&wire_55003).await;
+    lfn.receive_antwort_von_nb(&wire_55002).await;
     lfn.receive_antwort_von_lfa(&wire_55017).await;
 
     // ── Final state — assert all business data fields ─────────────────────────
@@ -695,7 +696,7 @@ async fn e2e_lieferantenwechsel_strom_happy_path() {
 /// does not affect the other.
 ///
 /// Final state:
-/// - LFN `nb_leg`  → `Rejected`         (received 55004 Ablehnung from NB)
+/// - LFN `nb_leg`  → `Rejected`         (received 55003 Ablehnung from NB)
 /// - LFN `lfa_leg` → `Active`           (received 55017 Bestätigung from LFA)
 /// - NB             → `Rejected`
 /// - LFA            → `AntwortGesendet`
@@ -711,7 +712,7 @@ async fn e2e_lieferantenwechsel_strom_nb_rejects() {
 
     // ── NB: reject the Anfrage Lieferbeginn ───────────────────────────────────
     nb.receive_utilmd(&wire_55001).await;
-    let wire_55004 = nb
+    let wire_55003 = nb
         .send_antwort(false, Some("Stammdaten nicht bekannt"))
         .await;
     // NB state: applying AntwortGesendet { accepted: false } transitions to Rejected.
@@ -732,14 +733,14 @@ async fn e2e_lieferantenwechsel_strom_nb_rejects() {
     );
 
     // ── LFN: receive both responses ───────────────────────────────────────────
-    lfn.receive_antwort_von_nb(&wire_55004).await;
+    lfn.receive_antwort_von_nb(&wire_55003).await;
     lfn.receive_antwort_von_lfa(&wire_55017).await;
 
     // ── Final state assertions ────────────────────────────────────────────────
     let nb_leg_final = lfn.nb_leg_state().await;
     assert!(
         matches!(nb_leg_final, LfAnmeldungState::Rejected { .. }),
-        "LFN nb_leg must be Rejected after receiving 55004 Ablehnung; got: {nb_leg_final:?}"
+        "LFN nb_leg must be Rejected after receiving 55003 Ablehnung; got: {nb_leg_final:?}"
     );
 
     let lfa_leg_final = lfn.lfa_leg_state().await;

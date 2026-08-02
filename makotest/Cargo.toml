@@ -1,0 +1,33 @@
+[package]
+name        = "makotest-native"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+description = "PyO3 bindings backing the `makotest` Python toolkit: BDEW identifier check digits, Werktag/Fristen arithmetic, and AHB-validated EDIFACT."
+publish     = false
+
+[lib]
+# `cdylib` is what maturin packages; `rlib` keeps the Rust logic unit-testable
+# with plain `cargo test`.
+name       = "makotest_native"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+edi-energy   = { path = "../crates/edi-energy", features = [
+    "utilmd", "mscons", "aperak", "contrl", "invoic", "remadv", "orders",
+    "iftsta", "insrpt", "reqote", "partin", "ordchg", "ordrsp", "quotes",
+    "comdis", "pricat", "utilts",
+] }
+mako-engine  = { path = "../crates/mako-engine" }
+rubo4e       = { workspace = true }
+time         = { workspace = true }
+
+# NOTE: `pyo3/extension-module` is deliberately NOT declared as a feature of this
+# package. `maturin` turns it on at build time (see `[tool.maturin] features` in
+# pyproject.toml). Declaring it here would make `cargo test --workspace
+# --all-features` enable it too, and the test harness would then fail to link
+# against libpython.
+pyo3 = { version = "0.29", features = ["abi3-py311"] }

@@ -109,7 +109,7 @@ let bytes = UtilmdBuilder::new(release)
     .receiver("9900357000004")
     .document_date("20251001")
     .document_code("E01")
-    .transaction(ObjectType::Marktlokation, "51238696782")
+    .transaction(ObjectType::Marktlokation, "51238696799")
     .process_date("163", "20251001") // Lieferbeginn
     .done()
     .build()?

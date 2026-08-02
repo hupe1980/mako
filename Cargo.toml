@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/edi-energy",
+    "makotest",
     "crates/energy-api",
     "crates/mako-engine",
     "crates/mako-gpke",
@@ -46,7 +47,7 @@ members = [
 exclude = ["fuzz"]
 
 [workspace.package]
-version     = "0.14.0"
+version     = "0.15.0"
 authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
@@ -95,19 +96,19 @@ figment-file-provider-adapter = { version = "0.1", package = "figment_file_provi
 schemars                  = { version = "1.2.1" }
 
 # ── Internal workspace crates (path + version so domain crates can be published) ─
-edi-energy       = { path = "crates/edi-energy",  version = "0.14" }
-mako-engine      = { path = "crates/mako-engine",      version = "0.14" }
-mako-markt       = { path = "crates/mako-markt",       version = "0.14" }
-mako-events      = { path = "crates/mako-events",      version = "0.14" }
-grid-billing     = { path = "crates/grid-billing",     version = "0.14" }
-eeg-billing      = { path = "crates/eeg-billing",      version = "0.14" }
-mako-obs         = { path = "crates/mako-obs",         version = "0.14" }
-mako-service     = { path = "crates/mako-service",     version = "0.14" }
-mako-plugin      = { path = "crates/mako-plugin",      version = "0.14" }
-invoic-checker   = { path = "crates/invoic-checker",   version = "0.14" }
-netz-checker     = { path = "crates/netz-checker",     version = "0.14" }
-energy-billing   = { path = "crates/energy-billing",   version = "0.14" }
-dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.14" }
+edi-energy       = { path = "crates/edi-energy",  version = "0.15" }
+mako-engine      = { path = "crates/mako-engine",      version = "0.15" }
+mako-markt       = { path = "crates/mako-markt",       version = "0.15" }
+mako-events      = { path = "crates/mako-events",      version = "0.15" }
+grid-billing     = { path = "crates/grid-billing",     version = "0.15" }
+eeg-billing      = { path = "crates/eeg-billing",      version = "0.15" }
+mako-obs         = { path = "crates/mako-obs",         version = "0.15" }
+mako-service     = { path = "crates/mako-service",     version = "0.15" }
+mako-plugin      = { path = "crates/mako-plugin",      version = "0.15" }
+invoic-checker   = { path = "crates/invoic-checker",   version = "0.15" }
+netz-checker     = { path = "crates/netz-checker",     version = "0.15" }
+energy-billing   = { path = "crates/energy-billing",   version = "0.15" }
+dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.15" }
 metering         = { version = "0.16" }
 sepa             = { version = "0.5.0" }
 # Immutable, tamper-evident double-entry ledger kernel (sibling repo). accountingd's

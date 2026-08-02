@@ -2,7 +2,7 @@
   "schema_version": 1,
   "message_type": "ORDERS",
   "release": "1.4c",
-  "source_document": "ORDERS AHB 1.4c vom 01.04.2026",
+  "source_document": "ORDERS AHB, wire release 1.4c (Stand 01.04.2026)",
   "pruefidentifikatoren": [
     {
       "code": 17001,
@@ -424,6 +424,69 @@
           "tag": "QTY",
           "requirement": "O",
           "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17007)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17008,
+      "name": "Abbestellung von Werten",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "O"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
         }
       ],
       "group_rules": []
@@ -1017,7 +1080,7 @@
         },
         {
           "tag": "IMD",
-          "requirement": "M"
+          "requirement": "O"
         },
         {
           "tag": "LIN",
@@ -1059,6 +1122,132 @@
           "tag": "QTY",
           "requirement": "O",
           "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17115)"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17116,
+      "name": "Anfrage Sperrung",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "O"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        }
+      ],
+      "group_rules": []
+    },
+    {
+      "code": 17117,
+      "name": "Entsperrauftrag",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CAV",
+          "requirement": "O"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O"
+        },
+        {
+          "tag": "COM",
+          "requirement": "M"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "M"
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "M"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "O"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
         }
       ],
       "group_rules": []

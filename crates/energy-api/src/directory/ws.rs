@@ -56,7 +56,7 @@ impl SubscriptionSender {
 ///     id: "req-1".into(),
 ///     requested: Some(vec![SubscriptionItem {
 ///         record_ref: ApiRecordRef {
-///             provider_id: "1234567890123".into(),
+///             provider_id: "1234567890723".into(),
 ///             api_id: "controlMeasuresV1".into(),
 ///             major_version: 1,
 ///         },

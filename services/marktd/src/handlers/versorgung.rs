@@ -18,8 +18,8 @@ use mako_markt::{
     domain::MaloId,
     error::MdmError,
     repository::{
-        AppState, ContractRepository, CorrelationIndex, LieferStatus, MaloRepository,
-        MeloRepository, PartnerRepository, SubscriptionRepository, VersorgungsStatusHistoryRecord,
+        AppState, CorrelationIndex, LieferStatus, MaloRepository, MeloRepository,
+        PartnerRepository, SubscriptionRepository, VersorgungsStatusHistoryRecord,
         VersorgungsStatusRecord, VersorgungsStatusRepository,
     },
 };
@@ -163,8 +163,8 @@ fn default_history_size() -> u32 {
 /// Returns the current supply state.  Add `?at=YYYY-MM-DD` to query the state
 /// as of a specific calendar date (German local time, CET/CEST).
 #[expect(clippy::type_complexity)]
-pub async fn get_versorgungsstatus<Ma, Me, Co, Su, Ci, Pa, Vs>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn get_versorgungsstatus<Ma, Me, Su, Ci, Pa, Vs>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(malo_id): Path<String>,
@@ -174,7 +174,6 @@ pub async fn get_versorgungsstatus<Ma, Me, Co, Su, Ci, Pa, Vs>(
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
@@ -257,8 +256,8 @@ where
 /// Returns the full supply-state change history for a MaLo, newest first.
 /// Backed by the `versorgungsstatus_history` table.
 #[expect(clippy::type_complexity)]
-pub async fn get_versorgungsstatus_history<Ma, Me, Co, Su, Ci, Pa, Vs>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn get_versorgungsstatus_history<Ma, Me, Su, Ci, Pa, Vs>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(malo_id): Path<String>,
@@ -268,7 +267,6 @@ pub async fn get_versorgungsstatus_history<Ma, Me, Co, Su, Ci, Pa, Vs>(
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
@@ -315,8 +313,8 @@ where
 /// PUT /api/v1/versorgung/:malo_id
 #[expect(clippy::type_complexity)]
 #[allow(clippy::too_many_arguments)]
-pub async fn put_versorgungsstatus<Ma, Me, Co, Su, Ci, Pa, Vs>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn put_versorgungsstatus<Ma, Me, Su, Ci, Pa, Vs>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<sqlx::PgPool>,
     claims: Claims,
@@ -328,7 +326,6 @@ pub async fn put_versorgungsstatus<Ma, Me, Co, Su, Ci, Pa, Vs>(
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,

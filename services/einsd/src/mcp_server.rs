@@ -1207,7 +1207,7 @@ impl EinsdMcpHandler {
             PromptMessage::new_text(
                 Role::Assistant,
                 "list_expiring (days=365) for 12-month pipeline, (days=180) for urgent.\n\
-                 Background worker emits de.eeg.anlage.foerderung_auslaufend every 6h.\n\n\
+                 Background worker emits de.eeg.anlage.foerderung-auslaufend every 6h.\n\n\
                  Legal: sect. 21 Abs. 1 EEG 2023 — notify Anlagenbetreiber >= 12 months in advance.\n\n\
                  Transition options:\n\
                  1. POST_EEG_SPOT: spot market feed-in. PUT /api/v1/anlagen/{tr_id} settlement_model=POST_EEG_SPOT\n\
@@ -1267,7 +1267,7 @@ impl EinsdMcpHandler {
                 "## Post-EEG Transition Planning\n\n\
                  1. Identify pipeline: list_expiring (days=365)\n\
                  2. Legal notice: sect. 21 Abs. 1 EEG — notify Anlagenbetreiber >= 12 months in advance\n\
-                    Background CE de.eeg.anlage.foerderung_auslaufend triggers this workflow.\n\n\
+                    Background CE de.eeg.anlage.foerderung-auslaufend triggers this workflow.\n\n\
                  Options:\n\
                  A. POST_EEG_SPOT — feed-in at EPEX spot avg. No paperwork.\n\
                     PUT /api/v1/anlagen/{tr_id} settlement_model=POST_EEG_SPOT\n\n\

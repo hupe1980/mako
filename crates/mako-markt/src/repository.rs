@@ -81,8 +81,6 @@ mod date_iso {
 pub type MaloPayload = serde_json::Value;
 /// Full BO4E `MESSLOKATION` payload.
 pub type MeloPayload = serde_json::Value;
-/// Full BO4E `VERTRAG` payload with `_mdm_billing` extension.
-pub type ContractPayload = serde_json::Value;
 
 /// Default BO4E schema version used by `#[serde(default = ...)]` on record
 /// structs. Returns `"v202607.0.0"` so that records written before M5
@@ -217,34 +215,6 @@ pub struct MeloRecord {
     pub lokationsbuendel_objektcode: Option<String>,
     pub version: i64,
     pub data: MeloPayload,
-    pub updated_at: time::OffsetDateTime,
-    /// BO4E schema version of the `data` payload.
-    #[serde(default = "default_bo4e_version")]
-    pub bo4e_version: String,
-}
-
-/// Stored contract record.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContractRecord {
-    pub contract_id: String,
-    pub malo_id: Option<MaloId>,
-    pub sparte: Sparte,
-    pub vertragsart: String,
-    pub version: i64,
-    pub data: ContractPayload,
-    /// Start date of the contract validity period.
-    ///
-    /// `None` for records created before this field was added (pre-migration).
-    /// Used by [`ContractRepository::find_active_by_malo`] to detect overlapping
-    /// active contracts when validating Wechselprozess requests.
-    #[serde(default, with = "date_iso::opt")]
-    pub valid_from: Option<Date>,
-    /// End date of the contract validity period.
-    ///
-    /// `None` means the contract is open-ended (currently active with no known end).
-    #[serde(default, with = "date_iso::opt")]
-    pub valid_to: Option<Date>,
-    pub created_at: time::OffsetDateTime,
     pub updated_at: time::OffsetDateTime,
     /// BO4E schema version of the `data` payload.
     #[serde(default = "default_bo4e_version")]
@@ -602,50 +572,6 @@ pub trait MeloRepository: Send + Sync {
         melo_id: &MeloId,
         patch: &MeloStammdatenPatch,
     ) -> Result<bool, MdmError>;
-}
-
-/// Read/write access to contract (`VERTRAG`) records.
-#[allow(async_fn_in_trait)]
-pub trait ContractRepository: Send + Sync {
-    /// Insert or update a contract.
-    ///
-    /// `valid_from` / `valid_to` define the contract validity period used by
-    /// [`find_active_by_malo`](ContractRepository::find_active_by_malo) to
-    /// detect overlapping active contracts during Wechselprozess validation.
-    ///
-    /// Returns the new version number.
-    #[allow(clippy::too_many_arguments)]
-    async fn upsert(
-        &self,
-        contract_id: &str,
-        malo_id: Option<&MaloId>,
-        sparte: Sparte,
-        vertragsart: &str,
-        data: ContractPayload,
-        valid_from: Option<Date>,
-        valid_to: Option<Date>,
-        if_match: Option<i64>,
-        bo4e_version: &str,
-    ) -> Result<i64, MdmError>;
-
-    /// Return a contract by its MDM ID.
-    async fn find(&self, contract_id: &str) -> Result<Option<ContractRecord>, MdmError>;
-
-    /// Return all contracts for `malo_id` that are active at date `at`.
-    ///
-    /// A contract is considered active when:
-    /// - `valid_from IS NULL OR valid_from <= at`, AND
-    /// - `valid_to IS NULL OR valid_to >= at`
-    ///
-    /// Contracts without `valid_from` / `valid_to` (pre-migration) are always
-    /// returned so callers can apply their own filtering logic.
-    ///
-    /// Results are ordered by `valid_from DESC NULLS LAST`.
-    async fn find_active_by_malo(
-        &self,
-        malo_id: &MaloId,
-        at: Date,
-    ) -> Result<Vec<ContractRecord>, MdmError>;
 }
 
 /// Read/write access to ERP webhook subscriptions.
@@ -1944,23 +1870,21 @@ pub trait TrancheRepository: Send + Sync {
 ///
 /// `services/marktd` instantiates this with the Postgres implementations:
 /// ```text
-/// AppState<PgMaloRepo, PgMeloRepo, PgContractRepo, PgSubscriptionRepo, PgCorrelationIndex, PgPartnerRepo>
+/// AppState<PgMaloRepo, PgMeloRepo, PgSubscriptionRepo, PgCorrelationIndex, PgPartnerRepo>
 /// ```
 ///
 /// `testing` feature instantiates it with InMemory implementations.
 #[derive(Clone)]
-pub struct AppState<Ma, Me, Co, Su, Ci, Pa>
+pub struct AppState<Ma, Me, Su, Ci, Pa>
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
 {
     pub malo_repo: Ma,
     pub melo_repo: Me,
-    pub contract_repo: Co,
     pub subscription_repo: Su,
     pub correlation_index: Ci,
     pub partner_repo: Pa,
@@ -2571,7 +2495,7 @@ pub enum Konfigurationsparameter {
     /// BSI TR-03109-3 SMGW TLS certificate SHA-256 fingerprint (64 lowercase hex chars).
     ///
     /// Used by the `edmd` certificate-expiry background worker to emit
-    /// `de.messwert.cls.compliance_issue` before expiry.
+    /// `de.messwert.cls.compliance-issue` before expiry.
     SmgwTlsCertFingerprint,
     /// SMGW TLS certificate expiry date (`YYYY-MM-DD`).
     ///

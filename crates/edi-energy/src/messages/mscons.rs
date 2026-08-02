@@ -489,8 +489,8 @@ fn parse_sg10_quantities(
 /// Build the MSCONS semantic rule pack (Layer 5).
 ///
 /// Rules:
-/// - [`rule_sem_melo_format`]: `LOC+172` metering-point IDs must be exactly 11
-///   upper-case alphanumeric characters ([A-Z0-9]{11}).
+/// - [`rule_sem_location_format`]: the `LOC+172` Meldepunkt must carry either an
+///   11-character Marktlokations-ID or a 33-character Messlokations-ID.
 /// - [`rule_sem_period_order`]: when both a start-of-period (`DTM 163`) and an
 ///   end-of-period (`DTM 164`) are present, the start must not be after the end.
 /// - [`rule_sem_unit_unknown`]: the unit-of-measure code in `QTY C186` component 2
@@ -498,20 +498,29 @@ fn parse_sg10_quantities(
 fn mscons_semantic_pack() -> ProfileRulePack {
     ProfileRulePack::new("MSCONS-SEM")
         .for_message_type("MSCONS")
-        .with_stateless_rule_fn(rule_sem_melo_format)
+        .with_stateless_rule_fn(rule_sem_location_format)
         .with_stateless_rule_fn(rule_sem_period_order)
         .with_stateless_rule_fn(rule_sem_unit_unknown)
 }
 
-/// `SEM-MSCONS-MELO-FORMAT` — Metering-point IDs in `LOC+172` must be exactly
-/// 11 upper-case alphanumeric characters ([A-Z0-9]{11}).
-fn rule_sem_melo_format(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
+/// `SEM-MSCONS-LOCATION-FORMAT` — the Meldepunkt in `LOC+172` must carry either
+/// a Marktlokations-ID (`[A-Z0-9]{11}`) or a Messlokations-ID (33 characters).
+///
+/// `LOC+172` is the *Meldepunkt*, not a MaLo-only field: the MSCONS AHB
+/// describes SG6 LOC as "ID der Messlokation oder ID der Marktlokation oder ID
+/// des Netzkopplungspunktes", so the qualifier fixes the role of the point while
+/// the value may follow either ID scheme.
+fn rule_sem_location_format(
+    segments: &[edifact_rs::Segment<'_>],
+    issues: &mut Vec<ValidationIssue>,
+) {
     for seg in segments.iter().filter(|s| s.tag == "LOC") {
         // LOC: element[0] = 3227 (location qualifier), element[1] = C517 composite.
-        // C517 component[0] = 3225 (location id code / metering point ID).
+        // C517 component[0] = 3225 (location id code).
         let qualifier = seg.element_str(0).unwrap_or("");
         if qualifier != "172" {
-            continue; // Only check Marktlokation (172) identifiers.
+            // 237 carries a Bilanzkreis EIC code, not a location ID.
+            continue;
         }
         let id = seg
             .get_element(1)
@@ -524,16 +533,17 @@ fn rule_sem_melo_format(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<V
             issues.push(
                 ValidationIssue::new(
                     ValidationSeverity::Error,
-                    "LOC+172 element 3225 (C517 component 0): value does not match the \
-                     Messlokations-ID format [A-Z0-9]{11}"
+                    "LOC+172 element 3225 (C517 component 0): value is neither a \
+                     Marktlokations-ID ([A-Z0-9]{11}) nor a Messlokations-ID (33 characters)"
                         .to_owned(),
                 )
                 .with_span(seg.span)
-                .with_rule_id("SEM-MSCONS-MELO-FORMAT")
+                .with_rule_id("SEM-MSCONS-LOCATION-FORMAT")
                 .with_segment("LOC")
                 .with_suggestion(
-                    "Messlokations-IDs in LOC+172 must be exactly 11 upper-case \
-                     alphanumeric characters matching [A-Z0-9]{11}",
+                    "The Meldepunkt in LOC+172 must be either an 11-character \
+                     Marktlokations-ID matching [A-Z0-9]{11} or a 33-character \
+                     Messlokations-ID starting with an ISO 3166-1 country code",
                 ),
             );
         }

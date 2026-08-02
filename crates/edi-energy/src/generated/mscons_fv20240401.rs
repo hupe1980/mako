@@ -1891,7 +1891,7 @@ impl Profile for MsconsFv20240401Profile {
     }
     fn source_document(&self) -> Option<&'static str> {
         Some(
-            "MSCONS AHB 2.4c, Stand 01.04.2024 — archived. CCI/COM/CTA are optional with no AHB constraint in release 2.4; <75% AHB segment coverage is structurally expected for this version.",
+            "MSCONS MIG 2.4c, Stand 01.04.2024 — archived. CCI/COM/CTA are optional with no AHB constraint in release 2.4; <75% AHB segment coverage is structurally expected for this version.",
         )
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {

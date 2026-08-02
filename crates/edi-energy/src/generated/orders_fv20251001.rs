@@ -2031,16 +2031,6 @@ static AHB_17115_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17115-IMD-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "IMD",
-                    "AHB-17115-IMD-M",
-                    "mandatory segment IMD is missing for Pruefidentifikator 17115",
-                    "17115",
-                    issues,
-                );
-            })
             .with_named_stateless_rule_fn("AHB-17115-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -2263,6 +2253,16 @@ static AHB_17117_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     "RFF",
                     "AHB-17117-RFF-M",
                     "mandatory segment RFF is missing for Pruefidentifikator 17117",
+                    "17117",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17117-IMD-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "IMD",
+                    "AHB-17117-IMD-M",
+                    "mandatory segment IMD is missing for Pruefidentifikator 17117",
                     "17117",
                     issues,
                 );
@@ -3917,7 +3917,7 @@ impl Profile for OrdersFv20251001Profile {
         Some("1.4b")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("ORDERS AHB 1.4b, Stand 01.10.2025")
+        Some("ORDERS MIG 1.4b, Stand 01.10.2025")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

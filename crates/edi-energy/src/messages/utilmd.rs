@@ -354,9 +354,9 @@ fn utilmd_semantic_pack() -> ProfileRulePack {
 /// segments.
 ///
 /// Every `IDE` segment that carries a non-empty `C206.7402` identifier must
-/// have exactly 11 upper-case alphanumeric characters (`[A-Z0-9]{11}`).  This
-/// matches the BDEW format for both Marktlokations-IDs (11-digit numbers) and
-/// Messlokations-IDs (11 alphanumeric chars).
+/// hold either a Marktlokations-ID (11 upper-case alphanumerics, `[A-Z0-9]{11}`)
+/// or a Messlokations-ID (33 characters opening with an ISO 3166-1 country
+/// code) — the two BDEW location-ID schemes.
 fn rule_sem_malo_format(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
     for seg in segments.iter().filter(|s| s.tag == "IDE") {
         // IDE: element[0] = 7495 (type qualifier), element[1] = C206 composite.
@@ -372,16 +372,17 @@ fn rule_sem_malo_format(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<V
             issues.push(
                 ValidationIssue::new(
                     ValidationSeverity::Error,
-                    "IDE element 7402 (C206 component 0): value does not match the \
-                     Markt-/Messlokations-ID format [A-Z0-9]{11}"
+                    "IDE element 7402 (C206 component 0): value is neither a \
+                     Marktlokations-ID ([A-Z0-9]{11}) nor a Messlokations-ID (33 characters)"
                         .to_owned(),
                 )
                 .with_span(seg.span)
                 .with_rule_id("SEM-UTILMD-MALO-FORMAT")
                 .with_segment("IDE")
                 .with_suggestion(
-                    "Markt-/Messlokations-IDs in IDE C206 must be exactly 11 upper-case \
-                     alphanumeric characters matching [A-Z0-9]{11}",
+                    "IDE C206 must carry either an 11-character Marktlokations-ID matching \
+                     [A-Z0-9]{11} or a 33-character Messlokations-ID starting with an \
+                     ISO 3166-1 country code",
                 ),
             );
         }

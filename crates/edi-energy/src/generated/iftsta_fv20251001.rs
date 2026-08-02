@@ -3870,7 +3870,7 @@ impl Profile for IftstaFv20251001Profile {
         Some("2.0h")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("IFTSTA AHB 2.0h, konsolidierte Lesefassung mit Fehlerkorrekturen Stand 23.06.2025")
+        Some("IFTSTA MIG 2.0h, konsolidierte Lesefassung mit Fehlerkorrekturen Stand 23.06.2025")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

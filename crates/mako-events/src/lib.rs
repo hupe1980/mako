@@ -10,9 +10,10 @@
 //!
 //! - Every type starts with `de.` and is entirely lowercase
 //!   (CloudEvents §3.1 recommends lowercase reverse-DNS types).
-//! - Segments are separated by `.`; German domain nouns keep their
-//!   established spelling (participles like `beliefert`, hyphenated nouns
-//!   like `nb-contract` stay as-is).
+//! - Segments are separated by `.`, and a multi-word segment joins its words
+//!   with `-` — never `_`. German domain nouns keep their established spelling
+//!   (participles like `beliefert`, compound nouns like `nb-contract`).
+//!   `segments_use_hyphen_not_underscore` enforces this.
 //! - Statuses worth grepping for are flagged in doc comments:
 //!   - `⚠ phantom:` — subscribed (usually by `agentd`), but no emitter
 //!     exists yet; the emitter is tracked in the roadmap.
@@ -167,11 +168,11 @@ pub mod eeg {
     pub const SETTLEMENT_BERECHNET: &str = "de.eeg.settlement.berechnet";
     /// Monthly auto-settle batch trigger. Emitted by einsd's auto-settle worker
     /// (`emit_batch_due_ce`); subscribed by agentd's `einsd-batch-agent`.
-    pub const SETTLEMENT_BATCH_DUE: &str = "de.eeg.settlement.batch_due";
+    pub const SETTLEMENT_BATCH_DUE: &str = "de.eeg.settlement.batch-due";
     /// EEG-Anlage Förderung ends within the warning window.
-    pub const ANLAGE_FOERDERUNG_AUSLAUFEND: &str = "de.eeg.anlage.foerderung_auslaufend";
+    pub const ANLAGE_FOERDERUNG_AUSLAUFEND: &str = "de.eeg.anlage.foerderung-auslaufend";
     /// EEG-Anlage MaStR registration confirmed.
-    pub const ANLAGE_MASTR_REGISTRIERT: &str = "de.eeg.anlage.mastr_registriert";
+    pub const ANLAGE_MASTR_REGISTRIERT: &str = "de.eeg.anlage.mastr-registriert";
     /// §21b Veräußerungsform switched.
     pub const VERAEUSSERUNGSFORM_GEWECHSELT: &str = "de.eeg.veraeusserungsform.gewechselt";
 }
@@ -215,7 +216,7 @@ pub mod netzbilanz {
     /// Bilanzkreis INVOIC dispatched.
     pub const INVOIC_DISPATCHED: &str = "de.netzbilanz.invoic.dispatched";
     /// Bilanzkreis INVOIC not dispatched before its deadline.
-    pub const INVOIC_DISPATCH_OVERDUE: &str = "de.netzbilanz.invoic.dispatch_overdue";
+    pub const INVOIC_DISPATCH_OVERDUE: &str = "de.netzbilanz.invoic.dispatch-overdue";
     /// Bilanzkreis INVOIC paid (REMADV settled).
     pub const INVOIC_PAID: &str = "de.netzbilanz.invoic.paid";
     /// Bilanzkreis INVOIC disputed.
@@ -224,7 +225,7 @@ pub mod netzbilanz {
     pub const KOSTENBLATT_COMPUTED: &str = "de.netzbilanz.kostenblatt.computed";
     /// Kostenblatt submission deadline approaching.
     pub const KOSTENBLATT_DEADLINE_APPROACHING: &str =
-        "de.netzbilanz.kostenblatt.deadline_approaching";
+        "de.netzbilanz.kostenblatt.deadline-approaching";
 }
 
 /// Meter-reading / energy-data events (`de.messwert.*`), emitted by `edmd`.
@@ -241,12 +242,12 @@ pub mod messwert {
     /// Expected reading confirmation overdue.
     pub const READING_CONFIRMATION_OVERDUE: &str = "de.messwert.reading.confirmation.overdue";
     /// §14a SMGW/CLS compliance issue detected (MsbG §21c sweep).
-    pub const CLS_COMPLIANCE_ISSUE: &str = "de.messwert.cls.compliance_issue";
+    pub const CLS_COMPLIANCE_ISSUE: &str = "de.messwert.cls.compliance-issue";
     /// SMGW certificate approaching expiry — tiered advance warning at 90 / 30 / 7
     /// days (BSI TR-03109-4 §6.3). An expired cert silently ends §14a
     /// Fernsteuerbarkeit and the MsbG §29 remote-readout obligation, so each tier
     /// fires once per certificate as it ages.
-    pub const SMGW_CERT_EXPIRY_WARNING: &str = "de.messwert.smgw.cert.expiry_warning";
+    pub const SMGW_CERT_EXPIRY_WARNING: &str = "de.messwert.smgw.cert.expiry-warning";
 }
 
 /// Product & tariff catalog events (`de.tarif.*`), emitted by `tarifbd`.
@@ -280,13 +281,13 @@ pub mod vertrag {
     /// today (the cancel path emits [`GEKUENDIGT`]).
     pub const KUENDIGUNG: &str = "de.vertrag.kuendigung";
     /// Kündigung withdrawn before Lieferende.
-    pub const KUENDIGUNG_WIDERRUFEN: &str = "de.vertrag.kuendigung_widerrufen";
+    pub const KUENDIGUNG_WIDERRUFEN: &str = "de.vertrag.kuendigung-widerrufen";
     /// Product change applied immediately.
     pub const TARIFWECHSEL: &str = "de.vertrag.tarifwechsel";
     /// Future-dated product change stored.
-    pub const TARIFWECHSEL_GEPLANT: &str = "de.vertrag.tarifwechsel_geplant";
+    pub const TARIFWECHSEL_GEPLANT: &str = "de.vertrag.tarifwechsel-geplant";
     /// Price guarantee stored/replaced.
-    pub const PREISGARANTIE_UPDATED: &str = "de.vertrag.preisgarantie_updated";
+    pub const PREISGARANTIE_UPDATED: &str = "de.vertrag.preisgarantie-updated";
     /// §41 Abs. 5 EnWG price-change notice (≤ 42 days before Wirksamkeit).
     pub const PREISAENDERUNG_ANKUENDIGUNG: &str = "de.vertrag.preisaenderung.ankuendigung";
     /// 30 days before auto-renewal.
@@ -593,6 +594,49 @@ mod tests {
     fn every_type_starts_with_de_prefix() {
         for ty in all() {
             assert!(ty.starts_with("de."), "{ty} must start with `de.`");
+        }
+    }
+
+    /// Segments are dot-separated; multi-word segments join with `-`, never `_`.
+    ///
+    /// The catalog is a published contract, so a drifting separator means two
+    /// spellings of the same concept reach subscribers. Ten types used `_`
+    /// before this rule was enforced; hyphen is now the single convention.
+    #[test]
+    fn segments_use_hyphen_not_underscore() {
+        for ty in all() {
+            assert!(
+                !ty.contains('_'),
+                "{ty} must join multi-word segments with `-`, not `_`"
+            );
+            for segment in ty.split('.') {
+                assert!(
+                    !segment.is_empty(),
+                    "{ty} must not contain an empty segment"
+                );
+                assert!(
+                    !segment.starts_with('-') && !segment.ends_with('-'),
+                    "{ty}: segment {segment:?} must not start or end with `-`"
+                );
+                assert!(
+                    segment
+                        .bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
+                    "{ty}: segment {segment:?} must match [a-z0-9-]+"
+                );
+            }
+        }
+    }
+
+    /// No two catalog entries may differ only by separator or case.
+    #[test]
+    fn no_two_types_normalise_to_the_same_name() {
+        let mut seen: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
+        for ty in all() {
+            let key = ty.replace(['-', '_'], "").to_lowercase();
+            if let Some(prev) = seen.insert(key, ty) {
+                assert_eq!(prev, *ty, "{prev} and {ty} collide after normalisation");
+            }
         }
     }
 

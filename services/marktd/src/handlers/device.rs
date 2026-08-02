@@ -921,7 +921,7 @@ pub async fn get_geraet_konfigurationen(
 ///
 /// `SmgwCertAblaufdatum` (`SMGW_CERT_ABLAUFDATUM`) is the certificate expiry date.
 /// `edmd`'s daily certificate-expiry worker sweeps every gateway certificate and
-/// emits a tiered `de.messwert.smgw.cert.expiry_warning` at **90 / 30 / 7 days**
+/// emits a tiered `de.messwert.smgw.cert.expiry-warning` at **90 / 30 / 7 days**
 /// before expiry (BSI TR-03109-4 §6.3), once per tier per certificate — an expired
 /// cert silently ends §14a Fernsteuerbarkeit. The `agentd` `smgw-diagnostics-agent`
 /// consumes the warning and escalates renewal to the MSB.

@@ -1212,7 +1212,7 @@ impl Profile for QuotesFv20250401Profile {
         Some("1.3b")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("QUOTES AHB 1.3b, Stand 01.04.2025")
+        Some("QUOTES MIG 1.3b, Stand 01.04.2025")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

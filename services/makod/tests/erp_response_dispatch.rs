@@ -231,7 +231,7 @@ async fn handle_antwort_accepted_transitions_to_active() {
     // Dispatch NB acceptance.
     process
         .execute(mako_gpke::LfAnmeldungCommand::HandleAntwort {
-            response_pid: Pruefidentifikator::new(55003).unwrap(),
+            response_pid: Pruefidentifikator::new(55002).unwrap(), // Bestätigung Anmeldung
             accepted: true,
             reason: None,
             response_ref: mako_engine::types::MessageRef::new("REF-001"),
@@ -274,7 +274,7 @@ async fn handle_antwort_rejected_transitions_to_rejected() {
 
     process
         .execute(mako_gpke::LfAnmeldungCommand::HandleAntwort {
-            response_pid: Pruefidentifikator::new(55004).unwrap(),
+            response_pid: Pruefidentifikator::new(55003).unwrap(), // Ablehnung Anmeldung
             accepted: false,
             reason: Some("Ablehnungsgrund: ungültige Marktlokation".into()),
             response_ref: mako_engine::types::MessageRef::new("REF-002"),
@@ -423,14 +423,14 @@ async fn nb_lieferbeginn_ablehnen_dispatches_to_supplier_change_workflow() {
     );
 }
 
-/// `gpke.lieferende.bestaetigen` must reach `GpkeSupplierChangeWorkflow` (PID 55002).
+/// `gpke.lieferende.bestaetigen` must reach `GpkeSupplierChangeWorkflow` (PID 55004).
 #[tokio::test]
 async fn nb_lieferende_bestaetigen_dispatches_to_supplier_change_workflow() {
     let state = make_state(&["NB"]).await;
     let tenant_id = state.tenant_id;
     let malo_id = "51238696977";
 
-    let process_id = spawn_supplier_change(&state.store, tenant_id, malo_id, 55002).await;
+    let process_id = spawn_supplier_change(&state.store, tenant_id, malo_id, 55004).await;
 
     let payload = serde_json::json!({ "malo_id": malo_id });
     let outcome =
@@ -449,14 +449,14 @@ async fn nb_lieferende_bestaetigen_dispatches_to_supplier_change_workflow() {
     let _ = process_id; // consumed in the assert pattern above
 }
 
-/// `gpke.lieferende.ablehnen` must reach `GpkeSupplierChangeWorkflow` (PID 55002).
+/// `gpke.lieferende.ablehnen` must reach `GpkeSupplierChangeWorkflow` (PID 55004).
 #[tokio::test]
 async fn nb_lieferende_ablehnen_dispatches_to_supplier_change_workflow() {
     let state = make_state(&["NB"]).await;
     let tenant_id = state.tenant_id;
     let malo_id = "51238697878";
 
-    spawn_supplier_change(&state.store, tenant_id, malo_id, 55002).await;
+    spawn_supplier_change(&state.store, tenant_id, malo_id, 55004).await;
 
     let payload = serde_json::json!({ "malo_id": malo_id, "reason": "Keine Umzugsmeldung" });
     let outcome =

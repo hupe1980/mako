@@ -2,7 +2,7 @@
   "schema_version": 1,
   "message_type": "IFTSTA",
   "release": "2.1",
-  "source_document": "IFTSTA AHB 2.1 vom 01.10.2026",
+  "source_document": "IFTSTA AHB, wire release 2.1 (Stand 01.10.2026)",
   "pruefidentifikatoren": [
     {
       "code": 21000,

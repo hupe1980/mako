@@ -11,7 +11,7 @@ use super::*;
 /// Extracts UTILMD S2.x fields to construct a
 /// [`SupplierChangeCommand::ReceiveUtilmd`] for the 3 inbound ANFRAGE PIDs:
 /// 55001–55002 (Lieferbeginn/Lieferende) and 55016 (Kündigung).
-/// Outbound ANTWORT PIDs (55003–55006, 55017, 55018) are handled separately.
+/// Outbound ANTWORT PIDs (55002/55003, 55005/55006, 55017, 55018) are handled separately.
 /// ORDERS Sperrung (PIDs 17115/17116/17117) uses [`gpke_sperrung_registry`].
 #[must_use]
 pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
@@ -420,19 +420,22 @@ pub fn gpke_konfiguration_registry() -> AdapterRegistry<GpkeKonfigurationWorkflo
     registry
 }
 
-// ── GPKE UTILMD Antwort (PIDs 55003–55006, 55017, 55018) — LF role ──────────────
+// ── GPKE UTILMD Antwort (PIDs 55002/55003, 55005/55006, 55017, 55018) — LF role ──
 
 /// Build an [`AdapterRegistry`] for [`GpkeLfAnmeldungWorkflow`].
 ///
-/// Handles inbound NB/LFA response PIDs (55003–55006, 55017, 55018) when `makod`
-/// acts as the **Lieferant** — i.e. we previously sent the ANFRAGE outbound
-/// and are now receiving the NB/LFA acknowledgement.
+/// Handles inbound NB/LFA response PIDs (55002/55003, 55005/55006, 55017/55018,
+/// 55078/55080) when `makod` acts as the **Lieferant** — i.e. we previously sent
+/// the ANFRAGE outbound and are now receiving the NB/LFA acknowledgement.
 ///
-/// `accepted` is derived from the PID:
-/// - 55003 (Bestätigung Lieferbeginn), 55005 (Bestätigung Lieferende),
-///   55017 (Bestätigung Kündigung) → `accepted = true`
-/// - 55004 (Ablehnung Lieferbeginn), 55006 (Ablehnung Lieferende),
-///   55018 (Ablehnung Kündigung) → `accepted = false`
+/// The AHB lays each Anwendungsfall out as the triple
+/// `(Anfrage, Bestätigung, Ablehnung)`, so `accepted` is derived from the PID:
+/// - 55002 (Bestätigung Anmeldung), 55005 (Bestätigung Abmeldung),
+///   55017 (Bestätigung Kündigung), 55078 (Bestätigung Anmeldung erz. MaLo)
+///   → `accepted = true`
+/// - 55003 (Ablehnung Anmeldung), 55006 (Ablehnung Abmeldung),
+///   55018 (Ablehnung Kündigung), 55080 (Ablehnung erz. MaLo)
+///   → `accepted = false`
 ///
 /// An optional rejection reason is extracted from the first `STS` segment's
 /// free-text description when present.
@@ -464,7 +467,7 @@ pub fn gpke_lf_anmeldung_registry() -> AdapterRegistry<GpkeLfAnmeldungWorkflow> 
                 .and_then(convert_pid)?;
 
             // Acceptance is determined by the PID alone per BDEW GPKE AHB.
-            let accepted = matches!(pid.as_u32(), 55003 | 55005 | 55017);
+            let accepted = matches!(pid.as_u32(), 55002 | 55005 | 55017 | 55078);
 
             // Extract the rejection reason from the first transaction's FTX
             // segment (typically qualifier AAI or ZZZ in 55004/55006).

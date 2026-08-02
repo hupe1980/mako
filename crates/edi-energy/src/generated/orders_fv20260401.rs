@@ -1032,6 +1032,69 @@ fn ahb_17007_pack() -> Arc<ProfileRulePack> {
     Arc::clone(&AHB_17007_PACK)
 }
 
+static AHB_17008_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(
+        ProfileRulePack::new("ORDERS-AHB-1.4c-17008")
+            .for_message_type("ORDERS")
+            .for_release("1.4c")
+            .with_named_stateless_rule_fn("AHB-17008-BGM-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "BGM",
+                    "AHB-17008-BGM-M",
+                    "mandatory segment BGM is missing for Pruefidentifikator 17008",
+                    "17008",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17008-DTM-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "DTM",
+                    "AHB-17008-DTM-M",
+                    "mandatory segment DTM is missing for Pruefidentifikator 17008",
+                    "17008",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17008-IMD-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "IMD",
+                    "AHB-17008-IMD-M",
+                    "mandatory segment IMD is missing for Pruefidentifikator 17008",
+                    "17008",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17008-NAD-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "NAD",
+                    "AHB-17008-NAD-M",
+                    "mandatory segment NAD is missing for Pruefidentifikator 17008",
+                    "17008",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17008-RFF-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "RFF",
+                    "AHB-17008-RFF-M",
+                    "mandatory segment RFF is missing for Pruefidentifikator 17008",
+                    "17008",
+                    issues,
+                );
+            })
+            .with_max_issues_per_rule(50),
+    )
+});
+
+fn ahb_17008_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_17008_PACK)
+}
+
 static AHB_17009_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
         ProfileRulePack::new("ORDERS-AHB-1.4c-17009")
@@ -1772,16 +1835,6 @@ static AHB_17115_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-17115-IMD-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "IMD",
-                    "AHB-17115-IMD-M",
-                    "mandatory segment IMD is missing for Pruefidentifikator 17115",
-                    "17115",
-                    issues,
-                );
-            })
             .with_named_stateless_rule_fn("AHB-17115-LIN-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1828,6 +1881,202 @@ static AHB_17115_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
 
 fn ahb_17115_pack() -> Arc<ProfileRulePack> {
     Arc::clone(&AHB_17115_PACK)
+}
+
+static AHB_17116_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(
+        ProfileRulePack::new("ORDERS-AHB-1.4c-17116")
+            .for_message_type("ORDERS")
+            .for_release("1.4c")
+            .with_named_stateless_rule_fn("AHB-17116-BGM-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "BGM",
+                    "AHB-17116-BGM-M",
+                    "mandatory segment BGM is missing for Pruefidentifikator 17116",
+                    "17116",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17116-COM-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "COM",
+                    "AHB-17116-COM-M",
+                    "mandatory segment COM is missing for Pruefidentifikator 17116",
+                    "17116",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17116-CTA-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "CTA",
+                    "AHB-17116-CTA-M",
+                    "mandatory segment CTA is missing for Pruefidentifikator 17116",
+                    "17116",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17116-DTM-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "DTM",
+                    "AHB-17116-DTM-M",
+                    "mandatory segment DTM is missing for Pruefidentifikator 17116",
+                    "17116",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17116-LIN-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "LIN",
+                    "AHB-17116-LIN-M",
+                    "mandatory segment LIN is missing for Pruefidentifikator 17116",
+                    "17116",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17116-LOC-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "LOC",
+                    "AHB-17116-LOC-M",
+                    "mandatory segment LOC is missing for Pruefidentifikator 17116",
+                    "17116",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17116-NAD-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "NAD",
+                    "AHB-17116-NAD-M",
+                    "mandatory segment NAD is missing for Pruefidentifikator 17116",
+                    "17116",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17116-RFF-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "RFF",
+                    "AHB-17116-RFF-M",
+                    "mandatory segment RFF is missing for Pruefidentifikator 17116",
+                    "17116",
+                    issues,
+                );
+            })
+            .with_max_issues_per_rule(50),
+    )
+});
+
+fn ahb_17116_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_17116_PACK)
+}
+
+static AHB_17117_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    Arc::new(
+        ProfileRulePack::new("ORDERS-AHB-1.4c-17117")
+            .for_message_type("ORDERS")
+            .for_release("1.4c")
+            .with_named_stateless_rule_fn("AHB-17117-BGM-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "BGM",
+                    "AHB-17117-BGM-M",
+                    "mandatory segment BGM is missing for Pruefidentifikator 17117",
+                    "17117",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17117-COM-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "COM",
+                    "AHB-17117-COM-M",
+                    "mandatory segment COM is missing for Pruefidentifikator 17117",
+                    "17117",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17117-CTA-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "CTA",
+                    "AHB-17117-CTA-M",
+                    "mandatory segment CTA is missing for Pruefidentifikator 17117",
+                    "17117",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17117-DTM-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "DTM",
+                    "AHB-17117-DTM-M",
+                    "mandatory segment DTM is missing for Pruefidentifikator 17117",
+                    "17117",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17117-IMD-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "IMD",
+                    "AHB-17117-IMD-M",
+                    "mandatory segment IMD is missing for Pruefidentifikator 17117",
+                    "17117",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17117-LIN-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "LIN",
+                    "AHB-17117-LIN-M",
+                    "mandatory segment LIN is missing for Pruefidentifikator 17117",
+                    "17117",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17117-LOC-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "LOC",
+                    "AHB-17117-LOC-M",
+                    "mandatory segment LOC is missing for Pruefidentifikator 17117",
+                    "17117",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17117-NAD-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "NAD",
+                    "AHB-17117-NAD-M",
+                    "mandatory segment NAD is missing for Pruefidentifikator 17117",
+                    "17117",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17117-RFF-M", |segs, issues| {
+                ahb_check_mandatory(
+                    segs,
+                    "RFF",
+                    "AHB-17117-RFF-M",
+                    "mandatory segment RFF is missing for Pruefidentifikator 17117",
+                    "17117",
+                    issues,
+                );
+            })
+            .with_max_issues_per_rule(50),
+    )
+});
+
+fn ahb_17117_pack() -> Arc<ProfileRulePack> {
+    Arc::clone(&AHB_17117_PACK)
 }
 
 static AHB_17118_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
@@ -3305,6 +3554,9 @@ static AHB_ALL_PACK_ORDERS_1_4C: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(
         .merge_with_override(ahb_17007_pack().as_ref().clone())
         .expect("AHB union pack merge_with_override failed");
     let pack = pack
+        .merge_with_override(ahb_17008_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
         .merge_with_override(ahb_17009_pack().as_ref().clone())
         .expect("AHB union pack merge_with_override failed");
     let pack = pack
@@ -3330,6 +3582,12 @@ static AHB_ALL_PACK_ORDERS_1_4C: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(
         .expect("AHB union pack merge_with_override failed");
     let pack = pack
         .merge_with_override(ahb_17115_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_17116_pack().as_ref().clone())
+        .expect("AHB union pack merge_with_override failed");
+    let pack = pack
+        .merge_with_override(ahb_17117_pack().as_ref().clone())
         .expect("AHB union pack merge_with_override failed");
     let pack = pack
         .merge_with_override(ahb_17118_pack().as_ref().clone())
@@ -3393,6 +3651,7 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
             Some(17005) => ahb_17005_pack(),
             Some(17006) => ahb_17006_pack(),
             Some(17007) => ahb_17007_pack(),
+            Some(17008) => ahb_17008_pack(),
             Some(17009) => ahb_17009_pack(),
             Some(17011) => ahb_17011_pack(),
             Some(17101) => ahb_17101_pack(),
@@ -3402,6 +3661,8 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
             Some(17110) => ahb_17110_pack(),
             Some(17113) => ahb_17113_pack(),
             Some(17115) => ahb_17115_pack(),
+            Some(17116) => ahb_17116_pack(),
+            Some(17117) => ahb_17117_pack(),
             Some(17118) => ahb_17118_pack(),
             Some(17120) => ahb_17120_pack(),
             Some(17121) => ahb_17121_pack(),
@@ -3452,7 +3713,7 @@ impl Profile for OrdersFv20260401Profile {
         Some("1.4c")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("ORDERS AHB 1.4c, Stand 01.04.2026")
+        Some("ORDERS MIG 1.4c, Stand 01.04.2026")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

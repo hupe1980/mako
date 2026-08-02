@@ -97,7 +97,7 @@ Body (CloudEvents 1.0 structured-mode JSON):
   "data": {
     "_typ": "MARKTLOKATION",
     "_version": "202501",
-    "marktlokationsId": "51238696782",
+    "marktlokationsId": "51238696799",
     "sparte": "STROM",
     "bilanzierungsmethode": "SLP",
     "energierichtung": "VERBRAUCH",
@@ -349,7 +349,7 @@ BO4E-typed JSON object. Deserialise using the ERP's own BO4E library.
   "data": {
     "_typ": "MARKTLOKATION",
     "_version": "202501",
-    "marktlokationsId": "51238696782",
+    "marktlokationsId": "51238696799",
     "sparte": "STROM",
     "bilanzierungsmethode": "SLP",
     "energierichtung": "VERBRAUCH",
@@ -449,7 +449,7 @@ Authorization: Bearer <token>
   "vertragsteile": [
     {
       "_typ": "VERTRAGSTEIL",
-      "lokation": "51238696782",
+      "lokation": "51238696799",
       "vertragsteilbeginn": "2026-10-01T00:00:00+02:00"
     }
   ]
@@ -507,12 +507,12 @@ local cache. The ERP is the authoritative master — keep the cache current.
 ### Upsert a MaLo
 
 ```http
-PUT /admin/malo/51238696782
+PUT /admin/malo/51238696799
 Authorization: Bearer <token>
 Content-Type: application/json
 
 {
-  "malo_id": "51238696782",
+  "malo_id": "51238696799",
   "metering_point_operator": "9904357000003",
   "grid_operator": "9900357000004",
   "network_area": "DE-NET-001",
@@ -531,7 +531,7 @@ common source of APERAK rejections.
 
 ```http
 GET    /admin/malo/stats            ← record count + last-upsert timestamp per tenant
-DELETE /admin/malo/51238696782      ← remove on contract end
+DELETE /admin/malo/51238696799      ← remove on contract end
 ```
 
 ---

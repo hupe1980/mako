@@ -70,6 +70,14 @@ pub enum Error {
     #[error("EDIFACT parse error: {0}")]
     Parse(#[from] edifact_rs::EdifactError),
 
+    /// Writing an EDIFACT structure failed (envelope or segment serialization).
+    ///
+    /// Distinct from [`Parse`](Self::Parse): the input was accepted, but the
+    /// output could not be rendered — e.g. a value outside the UNOC character
+    /// set or beyond a data element's length bound.
+    #[error("EDIFACT serialization error: {0}")]
+    Serialize(String),
+
     /// The message type is known but the corresponding Cargo feature is not compiled in.
     ///
     /// Enable the `feature` Cargo feature for this crate to parse `message_type` messages.
@@ -297,6 +305,7 @@ impl miette::Diagnostic for Error {
     fn code<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
         let code = match self {
             Error::Parse(_) => "edi-energy::parse",
+            Error::Serialize(_) => "edi-energy::serialize",
             Error::FeatureNotEnabled { .. } => "edi-energy::feature-not-enabled",
             Error::UnknownMessageType { .. } => "edi-energy::unknown-message-type",
             Error::MissingSegment(_) => "edi-energy::missing-segment",

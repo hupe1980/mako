@@ -17,8 +17,7 @@
 //!
 //! | PID | Process | AHB release | Fixture |
 //! |---|---|---|---|
-//! | 55001 | GPKE Lieferbeginn (LFN → NB) | S2.2 / FV2026-10-01 | `beispiel_55001_lieferbeginn.edi` |
-//! | 55002 | GPKE Lieferende (LFN → NB) | S2.2 / FV2026-10-01 | `beispiel_55002_lieferende.edi` |
+//! | 55001 | GPKE Anmeldung verb. MaLo (LF → NB) | S2.2 / FV2026-10-01 | `beispiel_55001_lieferbeginn.edi` |
 //! | 44001 | GeLi Gas Lieferbeginn (nLFN → GNB) | G1.1 / FV2025-10-01 | `beispiel_44001_lieferbeginn_gas.edi` |
 //! | 44022 | GeLi Gas Stornierung Anfrage (LFN → GNB) | G1.1 / FV2025-10-01 | `beispiel_44022_stornierung_gas.edi` |
 //! | 44039 | WiM Gas Kündigung MSB Gas (MSBA → NB) | G1.1 / FV2025-10-01 | `beispiel_44039_kuendigung_msb_gas.edi` |
@@ -33,6 +32,7 @@
 //!
 //! | PID | Process | AHB release | Fixture |
 //! |---|---|---|---|
+//! | 55002 | GPKE Bestätigung Anmeldung verb. MaLo (NB → LF) | S2.2 / FV2026-10-01 | `beispiel_55002_lieferende.edi` |
 //! | 44023 | GeLi Gas Stornierung Bestätigung | G1.1 / FV2025-10-01 | `beispiel_44023_bestaetigung_stornierung_gas.edi` |
 //! | 44024 | GeLi Gas Stornierung Ablehnung | G1.1 / FV2025-10-01 | `beispiel_44024_ablehnung_stornierung_gas.edi` |
 //! | 44040 | WiM Gas Kündigung Bestätigung | G1.1 / FV2025-10-01 | `beispiel_44040_bestaetigung_kuendigung_msb_gas.edi` |
@@ -45,10 +45,12 @@
 //! | 44169 | Verpflichtungsanfrage Bestätigung | G1.1 / FV2025-10-01 | `beispiel_44169_bestaetigung_verpflichtungsanfrage.edi` |
 //! | 44170 | Verpflichtungsanfrage Ablehnung | G1.1 / FV2025-10-01 | `beispiel_44170_ablehnung_verpflichtungsanfrage.edi` |
 //!
-//! # Gap note
+//! # AHB profile coverage
 //!
-//! WiM Strom (11001–11003) and MABIS (13003) AHB profiles are absent — blocked
-//! by data availability (BDEW XML subscription required). See FINDINGS.md F-004.
+//! Every message type carries an AHB profile for each shipped release, and
+//! `cargo xtask validate-profiles` reports zero errors and zero warnings: no
+//! Prüfidentifikator reaches an empty rule pack. PID continuity across releases
+//! is enforced there, so a PID silently lost on import fails the build.
 
 use std::any::Any;
 
@@ -118,7 +120,7 @@ const GAS_VALIDATION_DATE: time::Date = date!(2025 - 10 - 01);
 
 // ── Fixture bytes (loaded from test fixtures at compile time) ─────────────────
 
-/// AHB-conformant UTILMD S2.2 PID 55001 (Lieferbeginn Anfrage, LFN → NB).
+/// AHB-conformant UTILMD S2.2 PID 55001 (Anmeldung verb. MaLo, LF → NB).
 ///
 /// Source: `crates/edi-energy/tests/fixtures/utilmd/valid/beispiel_55001_lieferbeginn.edi`
 /// Release: S2.2 (BDEW UTILMD AHB S2.2, FV2026-10-01)
@@ -126,7 +128,11 @@ const UTILMD_55001_VALID: &[u8] = include_bytes!(
     "../../../crates/edi-energy/tests/fixtures/utilmd/valid/beispiel_55001_lieferbeginn.edi"
 );
 
-/// AHB-conformant UTILMD S2.2 PID 55002 (Lieferende Anfrage, LFN → NB).
+/// AHB-conformant UTILMD S2.2 PID 55002 (Bestätigung Anmeldung verb. MaLo, NB → LF).
+///
+/// Despite the fixture filename, 55002 is the NB's **acceptance** of an
+/// Anmeldung — not an Anfrage. The AHB triples are `55001|55002|55003`
+/// (Anmeldung) and `55004|55005|55006` (Abmeldung).
 ///
 /// Source: `crates/edi-energy/tests/fixtures/utilmd/valid/beispiel_55002_lieferende.edi`
 /// Release: S2.2 (BDEW UTILMD AHB S2.2, FV2026-10-01)
@@ -291,78 +297,25 @@ async fn ahb_55001_lieferbeginn_validates_and_dispatches() {
     );
 }
 
-// ── Test: GPKE 55002 Lieferende — real AHB validation passes ──────────────────
+// ── Test: GPKE 55002 Bestätigung Anmeldung — real AHB validation passes ──────
 
-#[tokio::test]
-async fn ahb_55002_lieferende_validates_and_dispatches() {
-    // Step 1: Parse and assert AHB valid — no bypass!
-    let (msg, report) = parse_and_assert_ahb_valid(UTILMD_55002_VALID, VALIDATION_DATE);
+/// PID 55002 is the **Bestätigung Anmeldung verb. MaLo** (NB an LF), not an
+/// inbound Anfrage: the UTILMD AHB Strom lays each Anwendungsfall out as the
+/// triple `(Anfrage, Bestätigung, Ablehnung)` — `55001|55002|55003` for
+/// Anmeldung and `55004|55005|55006` for Abmeldung.
+///
+/// So this is a validation-only test. Driving 55002 into the NB-side
+/// `GpkeSupplierChangeWorkflow` would be wrong — that workflow spawns on the
+/// Anfrage PIDs (55001 / 55004), and `response_pid_for` derives 55002 as its
+/// *outbound* acceptance.
+#[test]
+fn ahb_55002_bestaetigung_anmeldung_validates() {
+    let (msg, _report) = parse_and_assert_ahb_valid(UTILMD_55002_VALID, VALIDATION_DATE);
 
     let pid = msg
         .detect_pruefidentifikator()
         .expect("PID must be detectable");
     assert_eq!(pid.as_u32(), 55002, "fixture must encode PID 55002");
-
-    // Step 2: Adapt to extract fields.
-    let fv = FormatVersion::new(FV_2026);
-    let adapter_cmd = gpke_registry()
-        .dispatch(&msg as &dyn Any, &fv)
-        .expect("gpke_registry must adapt PID 55002 UTILMD to SupplierChangeCommand");
-
-    let SupplierChangeCommand::ReceiveUtilmd {
-        pid: cmd_pid,
-        sender: cmd_sender,
-        receiver: cmd_receiver,
-        location_id: cmd_location,
-        document_date: cmd_doc_date,
-        message_ref: cmd_ref,
-        ..
-    } = adapter_cmd
-    else {
-        panic!("expected SupplierChangeCommand::ReceiveUtilmd");
-    };
-
-    assert_eq!(cmd_pid.as_u32(), 55002);
-
-    // Step 3: Build execute command with authoritative AHB result.
-    let exec_cmd = SupplierChangeCommand::ReceiveUtilmd {
-        pid: cmd_pid,
-        sender: cmd_sender,
-        receiver: cmd_receiver,
-        location_id: cmd_location,
-        document_date: cmd_doc_date,
-        process_date: String::new(),
-        transaktionsgrund: None,
-        ist_erzeugende_marktlokation: false,
-        message_ref: cmd_ref,
-        received_at: time::OffsetDateTime::now_utc(),
-        bilanzierungsgebiet: None,
-        bilanzierungsmethode: None,
-        fallgruppe: None,
-        validation_passed: report.is_valid(), // ← authoritative AHB result, no bypass
-        validation_errors: report.errors().iter().map(|e| format!("{e}")).collect(),
-    };
-
-    let nb_process: Process<GpkeSupplierChangeWorkflow, InMemoryEventStore> = Process::new(
-        InMemoryEventStore::new(),
-        TenantId::from_party_id(NB_ID),
-        WorkflowId::new("gpke-supplier-change", FV_2026),
-    );
-
-    nb_process
-        .execute(exec_cmd)
-        .await
-        .expect("NB process must accept AHB-validated 55002 without error");
-
-    let state: mako_gpke::SupplierChangeState = nb_process
-        .state()
-        .await
-        .expect("must be able to load state");
-
-    assert!(
-        matches!(state, mako_gpke::SupplierChangeState::ValidationPassed(_)),
-        "after AHB-validated 55002 ReceiveUtilmd, state must be ValidationPassed; got: {state:?}",
-    );
 }
 
 // ── Test: AHB-invalid message is correctly rejected ───────────────────────────

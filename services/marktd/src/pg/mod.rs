@@ -4,7 +4,6 @@
 //! and can be passed to axum `State<Arc<AppState<...>>>` without extra `Arc` wrapping.
 
 pub mod bilanzierung;
-pub mod contract;
 pub mod correlation;
 pub mod device;
 pub mod einwilligung;
@@ -28,7 +27,6 @@ pub mod versorgung;
 pub mod zaehler_register;
 
 pub use bilanzierung::PgBilanzierungRepository;
-pub use contract::PgContractRepository;
 pub use correlation::PgCorrelationIndex;
 pub use device::PgDeviceRepository;
 pub use device::PgSteuerbareRessourceRepository;

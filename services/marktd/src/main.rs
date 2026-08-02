@@ -24,7 +24,6 @@ use marktd::{
     handlers::{
         TenantGln,
         bilanzierung::{get_bilanzierung_at, get_bilanzierung_history, put_bilanzierung},
-        contract::{get_contract, put_contract},
         correlation::{get_correlation, list_correlations},
         device::{
             delete_konfigurationsprodukt, get_geraet, get_geraet_konfigurationen,
@@ -75,11 +74,11 @@ use marktd::{
     },
     openapi::swagger_ui,
     pg::{
-        PgBilanzierungRepository, PgContractRepository, PgCorrelationIndex, PgDeviceRepository,
-        PgEinwilligungRepository, PgGrundversorgerRepository, PgLokationszuordnungRepository,
-        PgMaloGridRepository, PgMaloRepository, PgMeloMsbRepository, PgMeloRepository,
-        PgMmmPreisStromRepository, PgMmmaPreisGasRepository, PgMsbRahmenvertragGasRepository,
-        PgNbContractRepository, PgNeLoRepository, PgNetzzugangRepository, PgPartnerRepository,
+        PgBilanzierungRepository, PgCorrelationIndex, PgDeviceRepository, PgEinwilligungRepository,
+        PgGrundversorgerRepository, PgLokationszuordnungRepository, PgMaloGridRepository,
+        PgMaloRepository, PgMeloMsbRepository, PgMeloRepository, PgMmmPreisStromRepository,
+        PgMmmaPreisGasRepository, PgMsbRahmenvertragGasRepository, PgNbContractRepository,
+        PgNeLoRepository, PgNetzzugangRepository, PgPartnerRepository,
         PgPreisblattDienstleistungRepository, PgPreisblattHardwareRepository,
         PgPreisblattKaRepository, PgPreisblattMessungRepository, PgPreisblattRepository,
         PgPriCatRepository, PgSteuerbareRessourceRepository, PgSubscriptionRepository,
@@ -193,7 +192,6 @@ async fn main() -> anyhow::Result<()> {
     // ── Repositories ──────────────────────────────────────────────────────────
     let malo_repo = PgMaloRepository::new(pool.clone());
     let melo_repo = PgMeloRepository::new(pool.clone(), cfg.makod.tenant.clone());
-    let contract_repo = PgContractRepository::new(pool.clone());
     let sub_repo = PgSubscriptionRepository::new(pool.clone());
     let ci = PgCorrelationIndex::new(pool.clone());
     let partner_repo = PgPartnerRepository::new(pool.clone());
@@ -291,7 +289,6 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         malo_repo,
         melo_repo,
-        contract_repo,
         subscription_repo: sub_repo.clone(),
         correlation_index: ci,
         partner_repo,
@@ -397,55 +394,46 @@ async fn main() -> anyhow::Result<()> {
             .route("/health/live", get(health))
             .route("/health/ready", get(health_ready))
             // MaLo
-            .route("/api/v1/malo", get(list_malo::<_, _, _, _, _, _>))
-            .route("/api/v1/malo/{id}", put(put_malo::<_, _, _, _, _, _>))
-            .route("/api/v1/malo/{id}", get(get_malo::<_, _, _, _, _, _>))
+            .route("/api/v1/malo", get(list_malo::<_, _, _, _, _>))
+            .route("/api/v1/malo/{id}", put(put_malo::<_, _, _, _, _>))
+            .route("/api/v1/malo/{id}", get(get_malo::<_, _, _, _, _>))
             // Lastprofil derivation — SLP profile for NNE tariff zone + billingd (L7)
             .route(
                 "/api/v1/malo/{id}/lastprofil",
-                get(get_malo_lastprofil::<_, _, _, _, _, _>),
+                get(get_malo_lastprofil::<_, _, _, _, _>),
             )
             // MeLo
-            .route("/api/v1/melo/{id}", put(put_melo::<_, _, _, _, _, _>))
-            .route("/api/v1/melo/{id}", get(get_melo::<_, _, _, _, _, _>))
+            .route("/api/v1/melo/{id}", put(put_melo::<_, _, _, _, _>))
+            .route("/api/v1/melo/{id}", get(get_melo::<_, _, _, _, _>))
             .route(
                 "/api/v1/melos/{id}/standorteigenschaften",
-                get(get_melo_standorteigenschaften::<_, _, _, _, _, _>),
-            )
-            // Contracts
-            .route(
-                "/api/v1/contracts/{id}",
-                put(put_contract::<_, _, _, _, _, _>),
-            )
-            .route(
-                "/api/v1/contracts/{id}",
-                get(get_contract::<_, _, _, _, _, _>),
+                get(get_melo_standorteigenschaften::<_, _, _, _, _>),
             )
             // Subscriptions
             .route(
                 "/api/v1/subscriptions",
-                get(list_subscriptions::<_, _, _, _, _, _>),
+                get(list_subscriptions::<_, _, _, _, _>),
             )
             .route(
                 "/api/v1/subscriptions/{id}",
-                put(put_subscription::<_, _, _, _, _, _>),
+                put(put_subscription::<_, _, _, _, _>),
             )
             .route(
                 "/api/v1/subscriptions/{id}",
-                get(get_subscription::<_, _, _, _, _, _>),
+                get(get_subscription::<_, _, _, _, _>),
             )
             .route(
                 "/api/v1/subscriptions/{id}/test",
-                post(test_subscription::<_, _, _, _, _, _>),
+                post(test_subscription::<_, _, _, _, _>),
             )
             // Correlations
             .route(
                 "/api/v1/correlations",
-                get(list_correlations::<_, _, _, _, _, _>),
+                get(list_correlations::<_, _, _, _, _>),
             )
             .route(
                 "/api/v1/correlations/{id}",
-                get(get_correlation::<_, _, _, _, _, _>),
+                get(get_correlation::<_, _, _, _, _>),
             )
             // Partners
             // ESA consent registry (§49 Abs. 2 Nr. 9 MsbG)
@@ -480,14 +468,14 @@ async fn main() -> anyhow::Result<()> {
             // Inbound-message gate: revoked consent / unestablished framework
             // → allowed:false (the Ablehnung clearing case).
             .route("/api/v1/esa/consent-check", get(consent_check))
-            .route("/api/v1/partners", get(list_partners::<_, _, _, _, _, _>))
+            .route("/api/v1/partners", get(list_partners::<_, _, _, _, _>))
             .route(
                 "/api/v1/partners/{mp_id}",
-                put(put_partner::<_, _, _, _, _, _>),
+                put(put_partner::<_, _, _, _, _>),
             )
             .route(
                 "/api/v1/partners/{mp_id}",
-                get(get_partner::<_, _, _, _, _, _>),
+                get(get_partner::<_, _, _, _, _>),
             )
             // Price sheets (PreisblattNetznutzung)
             .route(
@@ -534,12 +522,12 @@ async fn main() -> anyhow::Result<()> {
             // B2: AS4 address lookup (Marktteilnehmer.makoadresse)
             .route(
                 "/api/v1/partners/{mp_id}/as4-address",
-                get(get_as4_address::<_, _, _, _, _, _>),
+                get(get_as4_address::<_, _, _, _, _>),
             )
             // Typed BO4E Marktteilnehmer view of a stored partner
             .route(
                 "/api/v1/partners/{mp_id}/marktteilnehmer",
-                get(get_partner_marktteilnehmer::<_, _, _, _, _, _>),
+                get(get_partner_marktteilnehmer::<_, _, _, _, _>),
             )
             // PRICAT version history + manual dispatch (Phase 2)
             .route("/api/v1/pricat/{nb_mp_id}/history", get(get_pricat_history))
@@ -566,12 +554,10 @@ async fn main() -> anyhow::Result<()> {
                     _,
                     _,
                     _,
-                    _,
                     marktd::pg::PgVersorgungsStatusRepository,
                 >)
                 .put(
                     put_versorgungsstatus::<
-                        _,
                         _,
                         _,
                         _,
@@ -584,7 +570,6 @@ async fn main() -> anyhow::Result<()> {
             .route(
                 "/api/v1/versorgung/{malo_id}/history",
                 get(get_versorgungsstatus_history::<
-                    _,
                     _,
                     _,
                     _,
@@ -718,7 +703,7 @@ async fn main() -> anyhow::Result<()> {
                 get(get_tariff_zone),
             )
             // Inbound makod events
-            .route(&inbound_path, post(ingest_event::<_, _, _, _, _, _>))
+            .route(&inbound_path, post(ingest_event::<_, _, _, _, _>))
             // Dead-letter queue admin (F-003 — § 147 AO / GoBD compliance)
             .route("/admin/fanout/dlq", get(list_dlq))
             .route(

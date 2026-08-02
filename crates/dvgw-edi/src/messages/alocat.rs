@@ -47,9 +47,9 @@ impl AlocatQuantity {
     /// Returns `None` when the string is empty or not a valid decimal number.
     /// EDIFACT decimal notation uses `.` as the decimal mark.
     ///
-    /// **Always prefer this over `quantity_f64` for gas energy calculations.**
-    /// DVGW G 685 §7 requires ≥ 3 decimal place precision; `f64` cannot
-    /// represent all relevant gas quantities exactly.
+    /// Gas quantities are settled to at least three decimal places (DVGW G 685
+    /// §7), and binary floating point cannot represent those decimal fractions
+    /// exactly, so `Decimal` is the only accessor offered.
     #[cfg(feature = "decimal")]
     #[must_use]
     pub fn quantity_decimal(&self) -> Option<rust_decimal::Decimal> {
@@ -58,22 +58,6 @@ impl AlocatQuantity {
             None
         } else {
             rust_decimal::Decimal::from_str(&self.quantity).ok()
-        }
-    }
-
-    /// Parse the `quantity` string as a 64-bit float.
-    ///
-    /// **Deprecated for gas billing use.** Use [`quantity_decimal`] instead to
-    /// avoid floating-point rounding errors on gas energy quantities.
-    /// This method is retained for legacy/debugging purposes only.
-    ///
-    /// [`quantity_decimal`]: Self::quantity_decimal
-    #[must_use]
-    pub fn quantity_f64(&self) -> Option<f64> {
-        if self.quantity.is_empty() {
-            None
-        } else {
-            self.quantity.parse().ok()
         }
     }
 }

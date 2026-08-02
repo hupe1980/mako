@@ -114,11 +114,11 @@ fn utilmd_lowercase_malo_id_triggers_sem_rule() {
     assert_has_rule(&report, "SEM-UTILMD-MALO-FORMAT");
 }
 
-// ── MSCONS: SEM-MSCONS-MELO-FORMAT ───────────────────────────────────────────
+// ── MSCONS: SEM-MSCONS-LOCATION-FORMAT ───────────────────────────────────────
 
-/// Minimal MSCONS interchange with a valid 11-char metering-point ID.
+/// Minimal MSCONS interchange with a valid 11-character Marktlokations-ID.
 #[cfg(feature = "mscons")]
-const MSCONS_VALID_MELO: &[u8] = b"\
+const MSCONS_VALID_MALO: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
 UNH+1+MSCONS:D:04B:UN:2.4c'\
 BGM+7:::+00013003::+9'\
@@ -131,9 +131,9 @@ QTY+220:100:KWH'\
 UNT+9+1'\
 UNZ+1+1'";
 
-/// MSCONS interchange with a too-short metering-point ID in LOC+172.
+/// MSCONS interchange with a Meldepunkt matching neither location-ID scheme.
 #[cfg(feature = "mscons")]
-const MSCONS_BAD_MELO_SHORT: &[u8] = b"\
+const MSCONS_BAD_LOCATION_ID: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
 UNH+1+MSCONS:D:04B:UN:2.4c'\
 BGM+7:::+00013003::+9'\
@@ -148,9 +148,9 @@ UNZ+1+1'";
 
 #[cfg(feature = "mscons")]
 #[test]
-fn mscons_valid_melo_id_passes() {
+fn mscons_valid_malo_id_passes() {
     let msg = Platform::with_all_profiles()
-        .parse(MSCONS_VALID_MELO)
+        .parse(MSCONS_VALID_MALO)
         .unwrap();
     let report = msg.validate().unwrap();
     assert_valid(&report);
@@ -158,12 +158,40 @@ fn mscons_valid_melo_id_passes() {
 
 #[cfg(feature = "mscons")]
 #[test]
-fn mscons_short_melo_id_triggers_sem_rule() {
+fn mscons_bad_location_id_triggers_sem_rule() {
     let msg = Platform::with_all_profiles()
-        .parse(MSCONS_BAD_MELO_SHORT)
+        .parse(MSCONS_BAD_LOCATION_ID)
         .unwrap();
     let report = msg.validate().unwrap();
-    assert_has_rule(&report, "SEM-MSCONS-MELO-FORMAT");
+    assert_has_rule(&report, "SEM-MSCONS-LOCATION-FORMAT");
+}
+
+/// MSCONS carrying a 33-character **Messlokations-ID** in `LOC+172`.
+///
+/// `LOC+172` is the Meldepunkt: per the MSCONS AHB (SG6 LOC, "ID der
+/// Messlokation oder ID der Marktlokation") it may carry a MaLo (11 digits) *or*
+/// a MeLo (33 chars). This value is the MSCONS MIG 2.5's own worked example for
+/// the segment, so it must validate.
+#[cfg(feature = "mscons")]
+const MSCONS_MELO_33: &[u8] = b"\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
+UNH+1+MSCONS:D:04B:UN:2.4c'\
+BGM+7:::+00013003::+9'\
+DTM+137:20230101:102'\
+RFF+ACE:REF001'\
+NAD+MS+4012345000023::293'\
+UNS+D'\
+LOC+172+DE00014559929E00856996N5139699L01'\
+QTY+220:100:KWH'\
+UNT+9+1'\
+UNZ+1+1'";
+
+#[cfg(feature = "mscons")]
+#[test]
+fn mscons_33char_melo_in_loc172_is_accepted() {
+    let msg = Platform::with_all_profiles().parse(MSCONS_MELO_33).unwrap();
+    let report = msg.validate().unwrap();
+    assert_valid(&report);
 }
 
 // ── MSCONS: SEM-MSCONS-PERIOD-ORDER ──────────────────────────────────────────
@@ -253,7 +281,7 @@ fn mscons_unknown_unit_triggers_sem_rule() {
 #[test]
 fn mscons_valid_unit_kwh_passes() {
     let msg = Platform::with_all_profiles()
-        .parse(MSCONS_VALID_MELO)
+        .parse(MSCONS_VALID_MALO)
         .unwrap();
     let report = msg.validate().unwrap();
     // KWH is in the approved list — no unit error expected.
@@ -650,7 +678,7 @@ fn validate_with_context_accepts_valid_release() {
     // MSCONS 2.4c is valid from 2025-10-01, valid_until 2026-09-30.
     // On 2026-01-15 (mid-cycle) it must be accepted.
     let msg = Platform::with_all_profiles()
-        .parse(MSCONS_VALID_MELO)
+        .parse(MSCONS_VALID_MALO)
         .unwrap();
     let ctx = ProcessContext::for_date(date!(2026 - 01 - 15));
     let report = msg
@@ -674,7 +702,7 @@ fn validate_with_context_rejects_expired_release() {
     // MSCONS 2.4c valid_until = 2026-09-30; grace ends 2026-10-07.
     // On 2026-10-08, the release "2.4c" must be rejected.
     let msg = Platform::with_all_profiles()
-        .parse(MSCONS_VALID_MELO)
+        .parse(MSCONS_VALID_MALO)
         .unwrap();
     let ctx = ProcessContext::for_date(date!(2026 - 10 - 08));
     let err = msg

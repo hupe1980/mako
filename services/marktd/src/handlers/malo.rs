@@ -18,8 +18,8 @@ use mako_markt::{
     domain::{MaloId, Sparte},
     error::MdmError,
     repository::{
-        AppState, ContractRepository, CorrelationIndex, MaloFilter, MaloRepository, MeloRepository,
-        PageResult, PartnerRepository, Rollenzuordnung, SubscriptionRepository,
+        AppState, CorrelationIndex, MaloFilter, MaloRepository, MeloRepository, PageResult,
+        PartnerRepository, Rollenzuordnung, SubscriptionRepository,
     },
 };
 use mako_service::cedar::CedarEnforcer;
@@ -214,8 +214,8 @@ fn default_size() -> u32 {
         (status = 422, description = "Validation error"),
     )
 )]
-pub async fn put_malo<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn put_malo<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<sqlx::PgPool>,
     headers: HeaderMap,
@@ -226,7 +226,6 @@ pub async fn put_malo<Ma, Me, Co, Su, Ci, Pa>(
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
@@ -378,8 +377,8 @@ where
         (status = 404, description = "Not found"),
     )
 )]
-pub async fn get_malo<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn get_malo<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(id): Path<String>,
@@ -387,7 +386,6 @@ pub async fn get_malo<Ma, Me, Co, Su, Ci, Pa>(
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
@@ -460,8 +458,8 @@ where
         (status = 200, description = "List of Marktlokationen", body = Vec<MaloResponse>),
     )
 )]
-pub async fn list_malo<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn list_malo<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Query(q): Query<ListQuery>,
@@ -469,7 +467,6 @@ pub async fn list_malo<Ma, Me, Co, Su, Ci, Pa>(
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
@@ -590,8 +587,8 @@ pub(crate) fn today_berlin() -> Date {
         (status = 404, description = "MaLo not found or RLM/IMS meter (no SLP profile)"),
     )
 )]
-pub async fn get_malo_lastprofil<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn get_malo_lastprofil<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(id): Path<String>,
@@ -599,7 +596,6 @@ pub async fn get_malo_lastprofil<Ma, Me, Co, Su, Ci, Pa>(
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,

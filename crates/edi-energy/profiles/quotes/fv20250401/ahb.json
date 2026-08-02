@@ -2,7 +2,7 @@
   "schema_version": 1,
   "message_type": "QUOTES",
   "release": "1.3b",
-  "source_document": "QUOTES AHB 1.3b vom 01.04.2025",
+  "source_document": "QUOTES AHB, wire release 1.3b (Stand 01.04.2025)",
   "pruefidentifikatoren": [
     {
       "code": 15001,

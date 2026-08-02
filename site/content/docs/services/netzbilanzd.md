@@ -540,8 +540,8 @@ Both workers are activated only when `erp_webhook_url` is configured.
 
 | Worker | Interval | CloudEvent emitted | Condition |
 |---|---|---|---|
-| Undispatched draft alert | 1 hour (configurable) | `de.netzbilanz.invoic.dispatch_overdue` | Drafts in `status=draft` older than 48 h |
-| Kostenblatt deadline | 1 day (configurable) | `de.netzbilanz.kostenblatt.deadline_approaching` | Day 10–14 of month + pending records exist |
+| Undispatched draft alert | 1 hour (configurable) | `de.netzbilanz.invoic.dispatch-overdue` | Drafts in `status=draft` older than 48 h |
+| Kostenblatt deadline | 1 day (configurable) | `de.netzbilanz.kostenblatt.deadline-approaching` | Day 10–14 of month + pending records exist |
 
 The dispatch-overdue event includes the list of `draft_ids` so the ERP can trigger
 a `dispatch-batch` call automatically. The `netzbilanz-agent` in `agentd` subscribes
@@ -559,9 +559,9 @@ All events are CloudEvents 1.0 (`application/cloudevents+json`) POSTed to `erp_w
 | `de.netzbilanz.invoic.dispatched` | `PUT /drafts/{id}/dispatch` | `draft_id`, `dispatch_ref`, `tenant` |
 | `de.netzbilanz.invoic.paid` | `PUT /mark-paid` or REMADV webhook | `draft_id`, `remadv_ref`, `tenant` |
 | `de.netzbilanz.invoic.disputed` | `PUT /mark-disputed` or REMADV webhook | `draft_id`, `erc_code`, `reason`, `tenant` |
-| `de.netzbilanz.invoic.dispatch_overdue` | Background worker (hourly) | `draft_ids[]`, `undispatched_count` |
+| `de.netzbilanz.invoic.dispatch-overdue` | Background worker (hourly) | `draft_ids[]`, `undispatched_count` |
 | `de.netzbilanz.kostenblatt.computed` | `POST /redispatch/kostenblatt/{id}/compute` | `record_id`, `activation_id`, `einsatzkosten_eur`, `dispatch_source` |
-| `de.netzbilanz.kostenblatt.deadline_approaching` | Background worker (daily) | `period_year`, `period_month`, `pending_count`, `days_until_deadline` |
+| `de.netzbilanz.kostenblatt.deadline-approaching` | Background worker (daily) | `period_year`, `period_month`, `pending_count`, `days_until_deadline` |
 
 ---
 

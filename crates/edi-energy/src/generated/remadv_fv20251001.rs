@@ -1131,7 +1131,7 @@ impl Profile for RemadvFv20251001Profile {
         Some("2.9e")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("REMADV AHB 2.9e, Stand 01.10.2025")
+        Some("REMADV MIG 2.9e, Stand 01.10.2025")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

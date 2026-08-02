@@ -392,7 +392,7 @@ This links each database record to the exact calculation output for § 147 AO / 
 ## Triggering a billing run
 
 ```http
-POST /api/v1/billing/51238696781/calculate
+POST /api/v1/billing/51238696780/calculate
 Content-Type: application/json
 
 {
@@ -405,8 +405,8 @@ Content-Type: application/json
 ```
 
 `billingd` automatically fetches:
-1. Product from `tarifbd GET /api/v1/customer/51238696781/product`
-2. Meter data from `edmd GET /api/v1/billing-period/51238696781?from=...&to=...`
+1. Product from `tarifbd GET /api/v1/customer/51238696780/product`
+2. Meter data from `edmd GET /api/v1/billing-period/51238696780?from=...&to=...`
 3. NNE tariff from `marktd GET /api/v1/preisblaetter/{nb_mp_id}`
 4. KA tariff from `marktd GET /api/v1/preisblaetter-ka/{nb_mp_id}`
 
@@ -414,7 +414,7 @@ Content-Type: application/json
 or when the upstream service is temporarily unavailable:
 
 ```http
-POST /api/v1/billing/51238696781/calculate
+POST /api/v1/billing/51238696780/calculate
 Content-Type: application/json
 
 {
@@ -467,7 +467,7 @@ how low the EPEX price can go. Common configurations:
 from `edmd`'s `billing-period` endpoint with the static `arbeitspreis_ct_per_kwh`.
 
 ```http
-POST /api/v1/billing/51238696781/calculate
+POST /api/v1/billing/51238696780/calculate
 Content-Type: application/json
 
 {
@@ -728,7 +728,7 @@ Abrechnungsinformation (§40b Abs. 2 EnWG) as
 persisting a record or emitting a CloudEvent.
 
 ```http
-POST /api/v1/billing/51238696781/preview
+POST /api/v1/billing/51238696780/preview
 Content-Type: application/json
 
 {
@@ -764,20 +764,6 @@ Useful for:
 | `outcome` | `generated` → `dispatched` → `paid`/`disputed` |
 | `ce_id` | CloudEvent ID of emitted `de.billing.rechnung.erstellt` |
 
-### `vpp_contracts`
-
-Maps a `SteuerbareRessource`-ID (SR-ID) to the billing parameters needed for automatic
-VPP settlement via `POST /api/v1/webhooks/vpp-dispatch`.
-
-| Column | Notes |
-|--------|-------|
-| `sr_id` | SteuerbareRessource-ID (`C…`) or NeLo-ID (`10Y…` / `E…`) |
-| `vpp_id` | Operator-assigned VPP portfolio identifier (used as path on `/billing/vpp/{vpp_id}`) |
-| `malo_id`, `lf_mp_id` | Aggregation point + invoice issuer |
-| `capacity_price_eur_per_kwh` | Agreed Einsatzkosten per kWh — from TSO/DSO bilateral contract |
-| `valid_from`, `valid_to` | Contract validity window; `valid_to NULL` = currently active |
-| `mwst_rate_override` | Override MwSt rate (defaults to `billingd.toml` global) |
-
 ### `vpp_dispatch_ledger`
 
 Idempotency table for `de.vpp.dispatch.confirmed` webhook delivery. Each `tx_id` is
@@ -792,7 +778,7 @@ re-billing.
 
 ---
 
-## VPP Aggregation Billing (RED III Article 17)
+## VPP Aggregation Billing (§ 41e EnWG / Art. 17 RL (EU) 2019/944)
 
 `billingd` supports fully automatic VPP (Virtual Power Plant) dispatch-to-billing,
 closing the loop from ORDRSP confirmation to BO4E `Rechnung` without operator intervention.
@@ -816,29 +802,32 @@ sequenceDiagram
     billingd--)accountingd: de.vpp.settlement.berechnet
     makod--)agentd: de.vpp.dispatch.confirmed (monitoring trigger)
     agentd->>billingd: verify settlement record created + arithmetic
-    agentd->>agentd: RED III Article 17 audit field check
+    agentd->>agentd: Art. 17 RL (EU) 2019/944 audit field check
 ```
 
 ### Setup
 
-**1. Register a VPP contract** for each controllable resource:
+**1. Register the §41e Aggregatorvertrag** in `vertragd` (Contract context —
+`billingd` reads it over HTTP and keeps no copy):
 
 ```bash
-curl -s -X PUT "http://billingd:9280/api/v1/billing/vpp-contracts/C0001234567890" \
+curl -s -X PUT "http://vertragd:9780/api/v1/aggregatorvertraege/C0001234567890" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "id": "00000000-0000-0000-0000-000000000000",
     "vpp_id": "VPP-PORTFOLIO-001",
-    "malo_id": "51238696781",
-    "lf_mp_id": "9910000000002",
+    "malo_id": "51238696780",
+    "aggregator_mp_id": "9910000000002",
     "capacity_price_eur_per_kwh": "0.12",
-    "valid_from": "2026-01-01",
-    "mwst_rate_override": null,
-    "tenant": "9910000000002",
-    "updated_at": "2026-01-01T00:00:00Z"
+    "vertragsbeginn": "2026-01-01",
+    "vertragsende": null,
+    "mwst_rate_override": null
   }'
 ```
+
+An overlapping validity window for the same SR is refused with `409 Conflict`
+(`agg_no_overlap`): a SteuerbareRessource has at most one Aggregatorvertrag in
+force at any instant.
 
 **2. Enable auto-billing** in `billingd.toml`:
 
@@ -873,7 +862,7 @@ When `execution_time_until` is absent, `billingd` falls back to **15 minutes**
 Each auto-billed dispatch generates a `Rechnung` with:
 - `category = "VPP"`, `product_code = "VPP_{vpp_id}"`  
 - One `Rechnungsposition` with `positionstyp = "vpp_dispatch"` and a `zeitraum` covering the exact dispatch window
-- `zusatzAttribute`: `regulatory_basis = "RED III Article 17"`, `tx_id`, `sr_id`, `flexibility_kwh`
+- `zusatzAttribute`: `regulatory_basis = "§ 41e EnWG, Art. 17 RL (EU) 2019/944, VPP-Vertrag"`, `tx_id`, `sr_id`, `flexibility_kwh`
 - The `tx_id` cross-references the originating `WimSteuerungsauftrag` process in `makod`
 
 ### Manual fallback
@@ -888,8 +877,8 @@ The built-in `vpp-billing-agent` in `agentd` monitors the pipeline for completen
 
 - **Settlement completeness**: verifies every `de.vpp.dispatch.confirmed` produced a matching settlement within the SLA window
 - **Arithmetic validation**: `flexibility_kwh = max_power_kw × duration_h`; flags deviations
-- **RED III Article 17 audit**: confirms all required `zusatzAttribute` fields are present
-- **Missing contract escalation**: alerts operator if no `vpp_contracts` row exists for the SR-ID
+- **Art. 17 RL (EU) 2019/944 audit**: confirms all required `zusatzAttribute` fields are present
+- **Missing contract escalation**: alerts operator if no Aggregatorvertrag is in force for the SR-ID
 
 ---
 
@@ -976,8 +965,8 @@ seller_bic    = "COBADEFFXXX"            # BT-86 (optional)
 # Optional: ERP webhook
 erp_webhook_url = "http://erp:8000/webhooks/billing"
 
-# VPP dispatch-to-billing automation (RED III Article 17)
-# Set vpp_auto_billing = true and register vpp_contracts for each SR-ID.
+# VPP dispatch-to-billing automation (§ 41e EnWG / Art. 17 RL (EU) 2019/944)
+# Set vpp_auto_billing = true and register an Aggregatorvertrag in vertragd per SR-ID.
 vpp_auto_billing       = false          # flip to true to enable auto-billing
 inbound_webhook_secret = "env:BILLINGD_INBOUND_HMAC_SECRET"  # HMAC for POST /webhooks/vpp-dispatch
 

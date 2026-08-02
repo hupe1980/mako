@@ -302,7 +302,7 @@ pub async fn enqueue_settlement_ce(
     Ok(())
 }
 
-/// Emit `de.eeg.anlage.foerderung_auslaufend` for a plant about to expire.
+/// Emit `de.eeg.anlage.foerderung-auslaufend` for a plant about to expire.
 pub async fn emit_foerderung_alert_ce(
     cfg: &EinsdConfig,
     client: &reqwest::Client,
@@ -333,7 +333,7 @@ pub async fn emit_foerderung_alert_ce(
     }
 }
 
-/// Emit `de.eeg.settlement.batch_due` when a monthly settlement batch is due.
+/// Emit `de.eeg.settlement.batch-due` when a monthly settlement batch is due.
 ///
 /// The auto-settle worker fires this at the start of its monthly run so the
 /// `einsd-batch-agent` in `agentd` can run its §52 sweep / review over the same
@@ -1127,7 +1127,7 @@ pub struct MastrRegistrierungRequest {
 ///
 /// ## CloudEvent emitted
 ///
-/// `de.eeg.anlage.mastr_registriert` — signals ERP to release pending Vergütung.
+/// `de.eeg.anlage.mastr-registriert` — signals ERP to release pending Vergütung.
 pub async fn post_mastr_registrierung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

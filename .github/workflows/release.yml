@@ -330,6 +330,97 @@ jobs:
   # Wall-clock time target: ~25–30 min total (vs. 2+ h before).
   # Net job reduction:  20 jobs → 9 jobs  (2 builder + 2 bake + 6 manifest - 1 manifest)
 
+  # ── makotest (Python wheels -> PyPI) ────────────────────────────────────────
+  #
+  # abi3-py311: one wheel per platform serves every Python >= 3.11, so the
+  # matrix is over target platforms only — not over interpreter versions.
+  #
+  # Publication uses PyPI Trusted Publishing (OIDC): no API token is stored.
+  # The `id-token: write` permission below is what mints the short-lived
+  # credential, and PyPI is configured to trust
+  # `hupe1980/mako` + workflow `release.yml`.
+  makotest-wheels:
+    name: makotest wheel (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+          - runner: macos-13
+            target: x86_64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"   # the abi3 floor
+
+      # `manylinux: auto` builds Linux wheels inside a manylinux container so
+      # the resulting wheel is installable on distros older than the runner.
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --manifest-path makotest/Cargo.toml --out dist
+          manylinux: auto
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: makotest-wheel-${{ matrix.target }}
+          path: dist/*.whl
+
+  makotest-sdist:
+    name: makotest sdist
+    runs-on: ubuntu-latest
+    needs: preflight
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --manifest-path makotest/Cargo.toml --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: makotest-sdist
+          path: dist/*.tar.gz
+
+  makotest-publish:
+    name: Publish makotest to PyPI
+    runs-on: ubuntu-latest
+    needs: [makotest-wheels, makotest-sdist]
+    environment: pypi
+    permissions:
+      # Required for PyPI Trusted Publishing — mints the OIDC token in place
+      # of a long-lived API token. Nothing else in this job needs write access.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: makotest-*
+          merge-multiple: true
+          path: dist
+
+      - name: List artifacts
+        run: ls -l dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          # The tag may be re-run after a partial failure; skipping files that
+          # already exist makes the job idempotent instead of hard-failing.
+          skip-existing: true
+
   docker-builder:
     name: Docker — builder (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}

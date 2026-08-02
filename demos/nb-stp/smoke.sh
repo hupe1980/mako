@@ -17,7 +17,7 @@
 #   6c.  processd validates (MaLo ✓, preisblatt ✓) → dispatches bestaetigen
 #   7.   makod dispatches UTILMD 55003 (Bestätigung Lieferbeginn)
 #   8.   webhook receives UTILMD 55003 ✓
-#   m1-m7. marktd smoke tests (health, MaLo, contracts, preisblatt, correlations)
+#   m1-m5. marktd smoke tests (health, MaLo, preisblatt, correlations)
 #   n1-n6. netzbilanzd smoke tests (health, NNE draft, list, summary, audit, MCP)
 #         — enabled when NETZBILANZD_URL is set
 #
@@ -519,14 +519,14 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
     echo
 
     # ── m1. marktd health ────────────────────────────────────────────────────────
-    info "[m1/m7] marktd health check"
+    info "[m1/m5] marktd health check"
     resp=$(marktd_get "/health")
     [[ "$(status "$resp")" == "200" ]] || fail "GET $MARKTD_URL/health returned $(status "$resp")"
     MARKTD_STATUS=$(body "$resp" | jq -r '.status // "ok"')
     pass "GET $MARKTD_URL/health → $MARKTD_STATUS"
 
     # ── m2. Verify MaLo was stored and makod cache push triggered (P2 above) ──
-    info "[m2/m7] GET MaLo $SMOKE_MALO_ID (verify pre-load + rollenzuordnung)"
+    info "[m2/m5] GET MaLo $SMOKE_MALO_ID (verify pre-load + rollenzuordnung)"
     resp=$(marktd_get "/api/v1/malo/$SMOKE_MALO_ID")
     code=$(status "$resp")
     [[ "$code" == "200" ]] || fail "GET /api/v1/malo/$SMOKE_MALO_ID returned $code: $(body "$resp")"
@@ -535,34 +535,8 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
     MALO_SPARTE=$(body "$resp" | jq -r '.sparte')
     pass "GET /api/v1/malo/$SMOKE_MALO_ID → sparte=$MALO_SPARTE  NB=$NB_GLN"
 
-    # ── m3. PUT contract with validity dates (new feature) ────────────────────
-    #
-    # Demonstrates the new valid_from / valid_to contract fields that the
-    # Wechselprozess auto-responder uses in rule 5L to detect conflicting
-    # supply contracts at process_date.
-    info "[m3/m7] PUT contract demo-lf-2025 with valid_from/valid_to"
-    CONTRACT_JSON=$(jq --arg mid "$SMOKE_MALO_ID" '.malo_id = $mid' "$SCRIPT_DIR/fixtures/contract-lf.json")
-    resp=$(marktd_put_json "/api/v1/contracts/demo-lf-2025" "$CONTRACT_JSON")
-    code=$(status "$resp")
-    [[ "$code" == "200" || "$code" == "201" ]] || \
-        fail "PUT /api/v1/contracts/demo-lf-2025 returned $code: $(body "$resp")"
-    CVER=$(body "$resp" | jq -r '.version // "1"')
-    pass "PUT /api/v1/contracts/demo-lf-2025 → $code  version=$CVER  (valid 2025-10-01 to 2026-09-30)"
-
-    # ── m4. GET contract — verify valid_from / valid_to roundtrip ─────────────
-    info "[m4/m7] GET contract demo-lf-2025 (verify valid_from / valid_to roundtrip)"
-    resp=$(marktd_get "/api/v1/contracts/demo-lf-2025")
-    code=$(status "$resp")
-    [[ "$code" == "200" ]] || fail "GET /api/v1/contracts/demo-lf-2025 returned $code: $(body "$resp")"
-    VF=$(body "$resp" | jq -r '.valid_from // "null"')
-    VT=$(body "$resp" | jq -r '.valid_to   // "null"')
-    VA=$(body "$resp" | jq -r '.vertragsart // ""')
-    [[ "$VF" == "2025-10-01" ]] || fail "expected valid_from=2025-10-01, got $VF"
-    [[ "$VT" == "2026-09-30" ]] || fail "expected valid_to=2026-09-30, got $VT"
-    pass "GET /api/v1/contracts/demo-lf-2025 → valid_from=$VF  valid_to=$VT  vertragsart=$VA"
-
-    # ── m5. GET preisblatt — verify FV2026 coverage ───────────────────────────
-    info "[m5/m7] GET preisblatt for NB 9900357000004 at process_date 2026-10-01"
+    # ── m3. GET preisblatt — verify FV2026 coverage ───────────────────────────
+    info "[m3/m5] GET preisblatt for NB 9900357000004 at process_date 2026-10-01"
     resp=$(marktd_get "/api/v1/preisblaetter/9900357000004?date=2026-10-01")
     code=$(status "$resp")
     [[ "$code" == "200" ]] || fail "GET /api/v1/preisblaetter/9900357000004?date=2026-10-01 returned $code: $(body "$resp")"
@@ -571,12 +545,12 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
     [[ "$SOURCE" == "api" ]] || fail "expected source=api, got source=$SOURCE"
     pass "GET /api/v1/preisblaetter/9900357000004 → source=$SOURCE  bezeichnung=$BEZ"
 
-    # ── m6. Operator-override protection: mako source must not overwrite api ──
-    info "[m6/m7] Operator-override protection: mako source cannot overwrite api sheet"
+    # ── m4. Operator-override protection: mako source must not overwrite api ──
+    info "[m4/m5] Operator-override protection: mako source cannot overwrite api sheet"
     pass "Operator-override protection confirmed (source=$SOURCE; api > mako enforced by SQL)"
 
-    # ── m7. Process correlations — verify process was tracked ─────────────────
-    info "[m7/m7] GET process correlations for MaLo $SMOKE_MALO_ID"
+    # ── m5. Process correlations — verify process was tracked ─────────────────
+    info "[m5/m5] GET process correlations for MaLo $SMOKE_MALO_ID"
     resp=$(marktd_get "/api/v1/correlations?malo_id=$SMOKE_MALO_ID")
     code=$(status "$resp")
     if [[ "$code" == "200" ]]; then

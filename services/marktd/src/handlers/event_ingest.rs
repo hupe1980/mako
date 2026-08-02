@@ -37,8 +37,8 @@ use mako_markt::repository::DeviceRepository;
 use mako_markt::{
     cloudevents::{EventExtensions, InboundMakoEvent, MarktEvent},
     repository::{
-        AppState, ContractRepository, CorrelationIndex, MaloRepository, MeloRepository,
-        PartnerRepository, SubscriptionRepository, VersorgungsStatusRepository,
+        AppState, CorrelationIndex, MaloRepository, MeloRepository, PartnerRepository,
+        SubscriptionRepository, VersorgungsStatusRepository,
     },
 };
 use sqlx::PgPool;
@@ -54,8 +54,8 @@ pub struct InboundWebhookSecret(pub Option<String>);
 /// Request body: CloudEvents 1.0 JSON (`application/cloudevents+json`).
 /// Signature header: `X-Mako-Signature: sha256=<hex>`.
 #[allow(clippy::too_many_arguments)]
-pub async fn ingest_event<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn ingest_event<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(secret): Extension<InboundWebhookSecret>,
     Extension(pool): Extension<PgPool>,
     Extension(vs_repo): Extension<Arc<crate::pg::PgVersorgungsStatusRepository>>,
@@ -72,7 +72,6 @@ pub async fn ingest_event<Ma, Me, Co, Su, Ci, Pa>(
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
@@ -791,8 +790,8 @@ pub(crate) fn marktrole_from_workflow(workflow_name: Option<&str>) -> Option<Str
 /// Non-fatal by contract: the CloudEvent is already acknowledged, so every
 /// failure or unknown object is logged, never propagated.
 #[allow(clippy::too_many_arguments)]
-async fn apply_object_stammdaten<Ma, Me, Co, Su, Ci, Pa>(
-    state: &AppState<Ma, Me, Co, Su, Ci, Pa>,
+async fn apply_object_stammdaten<Ma, Me, Su, Ci, Pa>(
+    state: &AppState<Ma, Me, Su, Ci, Pa>,
     pool: &sqlx::PgPool,
     nelo_repo: &PgNeLoRepository,
     tranche_repo: &PgTrancheRepository,
@@ -807,7 +806,6 @@ async fn apply_object_stammdaten<Ma, Me, Co, Su, Ci, Pa>(
 ) where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,

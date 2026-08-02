@@ -1132,7 +1132,7 @@ impl Profile for ReqoteFv20260401Profile {
         Some("1.3c")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("REQOTE AHB 1.3c, Stand 01.04.2026")
+        Some("REQOTE MIG 1.3c, Stand 01.04.2026")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

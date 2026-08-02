@@ -156,21 +156,27 @@ fn detect_pid_unknown_returns_none() {
     assert!(result.is_err());
 }
 
-// ── quantity_f64 ──────────────────────────────────────────────────────────────
+// ── quantity_decimal ──────────────────────────────────────────────────────────
 
-#[cfg(feature = "alocat")]
+#[cfg(all(feature = "alocat", feature = "decimal"))]
 #[test]
-fn quantity_f64_parses_correctly() {
+fn quantity_decimal_parses_exactly() {
+    use std::str::FromStr;
+
     let input = wrap(
         "ALOCAT:5:11a",
-        "BGM+7+QTYREF'DTM+137:202401011200:203'LOC+Z01+DE_QTY::ZZZ'QTY+136:12345.6:KWH'",
+        "BGM+7+QTYREF'DTM+137:202401011200:203'LOC+Z01+DE_QTY::ZZZ'QTY+136:12345.678:KWH'",
     );
     let msg = DvgwPlatform::default().parse(&input).unwrap();
     if let AnyDvgwMessage::Alocat(m) = msg {
         let qty = &m.quantities[0];
-        assert_eq!(qty.quantity, "12345.6");
-        let f = qty.quantity_f64().expect("should parse as f64");
-        assert!((f - 12_345.6_f64).abs() < 0.001);
+        assert_eq!(qty.quantity, "12345.678");
+        // Exact equality — the point of Decimal over f64 for DVGW G 685 §7
+        // three-decimal gas quantities.
+        assert_eq!(
+            qty.quantity_decimal().expect("should parse as Decimal"),
+            rust_decimal::Decimal::from_str("12345.678").unwrap()
+        );
     } else {
         panic!("expected Alocat");
     }

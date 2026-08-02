@@ -718,7 +718,7 @@ impl Profile for ComdisFv20251001Profile {
         Some("1.0g")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("COMDIS AHB 1.0g, Stand 01.10.2025")
+        Some("COMDIS MIG 1.0g, Stand 01.10.2025")
     }
     fn pid_source(&self) -> crate::registry::PidSource {
         crate::registry::PidSource::RffZ13

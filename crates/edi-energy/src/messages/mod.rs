@@ -242,16 +242,42 @@ pub mod utilts;
     feature = "remadv",
 ))]
 pub(super) mod common {
-    /// Returns `true` when `id` is exactly 11 ASCII upper-case letters or digits.
+    /// Returns `true` when `id` has the BDEW **Marktlokations-ID** shape:
+    /// exactly 11 ASCII upper-case letters or digits.
     ///
-    /// Used by MSCONS `SEM-MSCONS-MELO-FORMAT` and UTILMD `SEM-UTILMD-MALO-FORMAT`
-    /// to validate Marktlokations-IDs and Messlokations-IDs.
+    /// A real MaLo-ID is 11 *digits* carrying a BDEW check digit in the 11th
+    /// position. This check is deliberately looser — it is a wire-format screen,
+    /// not a checksum test, so that a transposed digit still parses and can be
+    /// rejected by the domain layer with a precise error.
     #[inline]
-    pub(super) fn is_valid_location_id(id: &str) -> bool {
+    pub(super) fn is_valid_malo_id(id: &str) -> bool {
         id.len() == 11
             && id
                 .bytes()
                 .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+    }
+
+    /// Returns `true` when `id` has the BDEW **Messlokations-ID** shape:
+    /// 33 characters, opening with a two-letter ISO 3166-1 country code and
+    /// continuing with ASCII alphanumerics.
+    #[inline]
+    pub(super) fn is_valid_melo_id(id: &str) -> bool {
+        id.len() == 33
+            && id.bytes().take(2).all(|b| b.is_ascii_uppercase())
+            && id.bytes().skip(2).all(|b| b.is_ascii_alphanumeric())
+    }
+
+    /// Returns `true` when `id` is acceptable in a **Meldepunkt** field
+    /// (`LOC+172`, UTILMD `IDE` C206).
+    ///
+    /// Per the MSCONS AHB (SG6 LOC — "ID der Messlokation oder ID der
+    /// Marktlokation oder ID des Netzkopplungspunktes") such a field is
+    /// polymorphic: the qualifier fixes the *role* of the point, not the ID
+    /// scheme, so both the 11-character `MaLo` and the 33-character `MeLo` form
+    /// are legal and must be accepted.
+    #[inline]
+    pub(super) fn is_valid_location_id(id: &str) -> bool {
+        is_valid_malo_id(id) || is_valid_melo_id(id)
     }
 
     /// Emit a period-order error when DTM+163 (start) is lexicographically after

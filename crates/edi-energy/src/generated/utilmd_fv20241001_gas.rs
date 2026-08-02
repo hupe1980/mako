@@ -1224,7 +1224,7 @@ impl Profile for UtilmdFv20241001GasProfile {
         Some("G1.1")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("UTILMD AHB G1.1, Stand 01.10.2024")
+        Some("UTILMD MIG G1.1, Stand 01.10.2024")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

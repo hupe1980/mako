@@ -1019,7 +1019,7 @@ impl Profile for InsrptFv20211001Profile {
         Some("1.1a")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("INSRPT AHB 1.1a, Stand 01.10.2021")
+        Some("INSRPT MIG 1.1a, Stand 01.10.2021")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

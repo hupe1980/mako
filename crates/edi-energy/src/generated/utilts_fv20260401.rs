@@ -1258,7 +1258,7 @@ impl Profile for UtiltsFv20260401Profile {
         Some("1.1e")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("UTILTS AHB 1.1e, Stand 01.04.2026")
+        Some("UTILTS MIG 1.1e, Stand 01.04.2026")
     }
     fn pid_source(&self) -> crate::registry::PidSource {
         crate::registry::PidSource::RffZ13

@@ -201,7 +201,7 @@ mod tests {
             action in [
                 Action::"read-malo",
                 Action::"read-melo",
-                Action::"read-contract",
+                Action::"read-nb-contract",
                 Action::"read-partner",
                 Action::"read-preisblatt"
             ],
@@ -216,7 +216,7 @@ mod tests {
             action in [
                 Action::"write-malo",
                 Action::"write-melo",
-                Action::"write-contract",
+                Action::"write-nb-contract",
                 Action::"write-partner"
             ],
             resource
@@ -253,7 +253,7 @@ mod tests {
         let p = principal("9900357000004", &["LF"]);
         assert!(e.check(&p, "read-malo", "9900357000004").is_ok());
         assert!(e.check(&p, "read-melo", "9900357000004").is_ok());
-        assert!(e.check(&p, "read-contract", "9900357000004").is_ok());
+        assert!(e.check(&p, "read-nb-contract", "9900357000004").is_ok());
         assert!(e.check(&p, "read-partner", "9900357000004").is_ok());
         assert!(e.check(&p, "read-preisblatt", "9900357000004").is_ok());
     }

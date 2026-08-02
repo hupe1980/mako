@@ -59,7 +59,7 @@ let bytes = UtilmdBuilder::new(releases::utilmd_fv20261001().clone())
     .document_code("E01")
     .document_date("20261001")
     // One SG4 transaction per metering-point / supply-point process
-    .transaction(ObjectType::Messlokation, "51238696781")
+    .transaction(ObjectType::Messlokation, "51238696780")
         .process_date("163", "20261001")      // delivery start
         .reference("Z13", "55001")            // per-transaction PID ref
         .done()
@@ -198,6 +198,34 @@ let bytes: Vec<u8> = msg.serialize()?;
 let parsed = edi_energy::parse(&bytes)?;
 parsed.validate()?.into_error_result()?;
 ```
+
+### From message to interchange
+
+`serialize()` produces a **message** (`UNH`…`UNT`). That is not the wire unit: a
+market partner receives an **interchange**, which wraps one or more messages in
+a `UNB` header and `UNZ` trailer. Use `InterchangeBuilder`:
+
+```rust
+use edi_energy::builders::InterchangeBuilder;
+
+let wire = InterchangeBuilder::new("9900123456789", "9900987654321", "REF001")
+    .transmission("260802", "0915")     // UNB DE0017/DE0019 — YYMMDD / HHMM
+    .message(msg.serialize()?)
+    .build()?;
+```
+
+The `UNZ` message count is derived from the messages actually added, so it
+cannot disagree with the payload. The transmission timestamp is a parameter
+rather than a clock read, keeping interchange construction deterministic for
+golden-file tests.
+
+The UNB DE 0007 party qualifier is derived by `unb_qualifier` per Allgemeine
+Festlegungen 6.1d: `14` = GS1 GLN, `500` = DE BDEW (13-digit IDs starting `99`,
+and 16-character EIC codes), `502` = DE DVGW (starting `98`).
+
+`makod`'s outbound renderer and the `makotest` Python toolkit both build
+interchanges through this type — the envelope is a format concern and has one
+implementation.
 
 ### Separator safety
 

@@ -8,7 +8,7 @@
 //! - `TimeoutExpired` in terminal state → no-op
 //! - `SendAntwort { accepted:true, pid:55001, obligations }` → MSCONS 13015 outbox
 //! - `SendAntwort { accepted:true, pid:55001, msb obligations }` → +ORDERS 17134 outbox
-//! - `SendAntwort { accepted:true, pid:55002 }` → no cross-domain outbox (Lieferende, not Lieferbeginn)
+//! - `SendAntwort { accepted:true, pid:55004 }` → no cross-domain outbox (Abmeldung, not Anmeldung)
 //!
 //! obligations are now computed by `post_acceptance::lieferbeginn_obligations`
 //! and passed to `SendAntwort`; the workflow itself carries no cross-domain PID knowledge.
@@ -345,11 +345,11 @@ fn send_antwort_lieferbeginn_with_msb_emits_orders_17134_outbox() {
     assert_eq!(orders.recipient.as_ref(), "9904357000003"); // MSB GLN
 }
 
-/// For PID 55002 (Lieferende) accepted, `lieferbeginn_obligations` returns an
+/// For PID 55004 (Abmeldung) accepted, `lieferbeginn_obligations` returns an
 /// empty slice (MSCONS 13015 applies only to Lieferbeginn/PID 55001) and the
 /// workflow emits only UTILMD 55005 — no MSCONS or ORDERS entries.
 #[test]
-fn send_antwort_lieferende_accepted_no_cross_domain_outbox() {
+fn send_antwort_abmeldung_accepted_no_cross_domain_outbox() {
     use mako_gpke::{
         GpkeSupplierChangeWorkflow, SupplierChangeCommand, SupplierChangeState, post_acceptance,
         wechselprozesse::InitiatedData,
@@ -364,11 +364,11 @@ fn send_antwort_lieferende_accepted_no_cross_domain_outbox() {
         grid_operator: MarktpartnerCode::new("9900357000004"),
         document_date: "20250115".to_owned(),
         process_date: "20261001".to_owned(),
-        pruefidentifikator: Pruefidentifikator::new(55002).unwrap(), // Lieferende
+        pruefidentifikator: Pruefidentifikator::new(55004).unwrap(), // Abmeldung
     };
     let state = SupplierChangeState::ValidationPassed(data);
     // lieferbeginn_obligations returns empty vec for non-55001 PIDs.
-    let obligations = post_acceptance::lieferbeginn_obligations(55002, &malo, &new_supplier, None);
+    let obligations = post_acceptance::lieferbeginn_obligations(55004, &malo, &new_supplier, None);
     assert!(
         obligations.is_empty(),
         "non-55001 PID must produce no obligations"
@@ -382,12 +382,12 @@ fn send_antwort_lieferende_accepted_no_cross_domain_outbox() {
             obligations,
         },
     )
-    .expect("SendAntwort must succeed for Lieferende");
+    .expect("SendAntwort must succeed for Abmeldung");
 
     assert_eq!(
         output.outbox.len(),
         1,
-        "PID 55002 accepted must enqueue only UTILMD 55005 (no MSCONS/ORDERS)"
+        "PID 55004 accepted must enqueue only UTILMD 55005 (no MSCONS/ORDERS)"
     );
     assert_eq!(output.outbox[0].message_type.as_ref(), "UTILMD");
     assert_eq!(output.outbox[0].payload["pid"].as_u64().unwrap(), 55005);

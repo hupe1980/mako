@@ -107,7 +107,7 @@ Content-Type: application/json
 ## Assigning a product to a MaLo (Tarifwechsel)
 
 ```http
-PUT /api/v1/customer/51238696781/product
+PUT /api/v1/customer/51238696780/product
 Content-Type: application/json
 
 { "product_code": "STROM-H0-2026", "assigned_from": "2026-07-01" }

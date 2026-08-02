@@ -1,9 +1,9 @@
-//! VPP aggregation billing, contract registry and auto-billing webhook (B12 — RED III Art. 17).
+//! VPP aggregation billing, contract registry and auto-billing webhook (B12 — Art. 17 RL (EU) 2019/944).
 
 #[allow(unused_imports)]
 use super::*;
 
-// ── VPP Aggregation Billing (B12 — RED III Article 17) ───────────────────────
+// ── VPP Aggregation Billing (B12 — Art. 17 RL (EU) 2019/944) ───────────────────────
 
 /// One confirmed dispatch event for VPP settlement billing.
 ///
@@ -47,7 +47,7 @@ pub struct VppBillingRequest {
 
 /// `POST /api/v1/billing/vpp/{vpp_id}`
 ///
-/// **B12 — VPP Aggregation Settlement (RED III Article 17).**
+/// **B12 — VPP Aggregation Settlement (Art. 17 RL (EU) 2019/944).**
 ///
 /// Generates a settlement `Rechnung` for a Virtual Power Plant aggregator.
 /// Each dispatch event becomes one `Rechnungsposition`.
@@ -67,7 +67,9 @@ pub struct VppBillingRequest {
 ///
 /// ## Regulatory basis
 ///
-/// RED III Article 17 (§ 41b EnWG transposition, expected 2026):
+/// § 41e EnWG (Verträge zwischen Aggregatoren und Betreibern einer Erzeugungsanlage
+/// oder Letztverbrauchern), transposing Art. 17 RL (EU) 2019/944 (Demand response
+/// through aggregation):
 /// Aggregators must provide transparent settlement invoices per dispatch event.
 pub async fn post_vpp_billing(
     _claims: Claims,
@@ -113,13 +115,13 @@ pub async fn post_vpp_billing(
             req.capacity_price_eur_per_kwh,
             PositionCategory::Fee,
         )
-        .with_legal_basis("RED III Art. 17, VPP-Vertrag")
+        .with_legal_basis("§ 41e EnWG, Art. 17 RL (EU) 2019/944, VPP-Vertrag")
         .with_tag("vpp_dispatch");
         pos.trace = energy_billing::PositionTrace::commodity(
             ev.flexibility_kwh,
             "kWh",
             req.capacity_price_eur_per_kwh,
-            "RED III Art. 17, VPP-Vertrag",
+            "§ 41e EnWG, Art. 17 RL (EU) 2019/944, VPP-Vertrag",
         );
         positions.push(pos);
     }
@@ -251,49 +253,7 @@ pub async fn post_vpp_billing(
         .into_response()
 }
 
-// ── VPP Contract Registry (B12) ──────────────────────────────────────────────
-
-/// `PUT /api/v1/billing/vpp-contracts/{sr_id}`
-///
-/// Upsert a VPP contract for a `SteuerbareRessource`.
-///
-/// Idempotent on `(sr_id, tenant, valid_from)`.
-/// Used to configure the capacity price and billing identifiers that `billingd`
-/// needs when auto-settling a `de.vpp.dispatch.confirmed` dispatch event.
-pub async fn put_vpp_contract(
-    _claims: Claims,
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<BillingdConfig>>,
-    Path(sr_id): Path<String>,
-    Json(mut row): Json<crate::pg::VppContractRow>,
-) -> impl IntoResponse {
-    row.sr_id = sr_id;
-    row.tenant = cfg.tenant.clone();
-    row.updated_at = time::OffsetDateTime::now_utc();
-    if row.id.is_nil() {
-        row.id = Uuid::new_v4();
-    }
-    match crate::pg::upsert_vpp_contract(&pool, &row).await {
-        Ok(id) => (StatusCode::OK, Json(serde_json::json!({ "id": id }))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-/// `GET /api/v1/billing/vpp-contracts`
-///
-/// List all VPP contracts for this tenant.
-pub async fn list_vpp_contracts(
-    _claims: Claims,
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<BillingdConfig>>,
-) -> impl IntoResponse {
-    match crate::pg::list_vpp_contracts(&pool, &cfg.tenant).await {
-        Ok(rows) => (StatusCode::OK, Json(rows)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-// ── VPP Auto-Billing Webhook (B12 — RED III Article 17) ──────────────────────
+// ── VPP Auto-Billing Webhook (B12 — Art. 17 RL (EU) 2019/944) ────────────────
 
 /// `POST /api/v1/webhooks/vpp-dispatch`
 ///
@@ -340,6 +300,7 @@ pub async fn list_vpp_contracts(
 pub async fn post_vpp_webhook(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
+    Extension(vertragd): Extension<Arc<crate::clients::VertragdClient>>,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
@@ -448,25 +409,28 @@ pub async fn post_vpp_webhook(
     // than the one in force when the flexibility was actually delivered.
     let dispatch_date = parse_dispatch_date(&execution_time_from)
         .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
-    let contract =
-        match crate::pg::find_active_vpp_contract(&pool, &location_id, &cfg.tenant, dispatch_date)
-            .await
-        {
-            Ok(Some(c)) => c,
-            Ok(None) => {
-                tracing::warn!(
-                    tx_id,
-                    sr_id = %location_id,
-                    "billingd: vpp-dispatch — no active VPP contract found; cannot auto-bill"
-                );
-                let _ = crate::pg::record_vpp_dispatch(&pool, &tx_id, &cfg.tenant, None).await;
-                return StatusCode::ACCEPTED.into_response();
-            }
-            Err(e) => {
-                tracing::error!(tx_id, error = %e, "billingd: vpp_contract lookup failed");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-        };
+    let contract = match vertragd
+        .get_aggregatorvertrag(&location_id, dispatch_date)
+        .await
+    {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            tracing::warn!(
+                tx_id,
+                sr_id = %location_id,
+                "billingd: vpp-dispatch — no Aggregatorvertrag in force; cannot auto-bill"
+            );
+            let _ = crate::pg::record_vpp_dispatch(&pool, &tx_id, &cfg.tenant, None).await;
+            return StatusCode::ACCEPTED.into_response();
+        }
+        Err(e) => {
+            // vertragd unreachable: do NOT record the tx_id, so the outbox
+            // retry can settle it once vertragd is back. Recording here would
+            // consume the idempotency key and silently drop the dispatch.
+            tracing::error!(tx_id, error = %e, "billingd: Aggregatorvertrag lookup failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
 
     // ── 6. Check vpp_auto_billing flag ────────────────────────────────────────
     if !cfg.vpp_auto_billing {
@@ -529,13 +493,13 @@ pub async fn post_vpp_webhook(
         contract.capacity_price_eur_per_kwh,
         PositionCategory::Fee,
     )
-    .with_legal_basis("RED III Art. 17, VPP-Vertrag")
+    .with_legal_basis("§ 41e EnWG, Art. 17 RL (EU) 2019/944, VPP-Vertrag")
     .with_tag("vpp_dispatch");
     pos.trace = energy_billing::PositionTrace::commodity(
         flexibility_kwh,
         "kWh",
         contract.capacity_price_eur_per_kwh,
-        "RED III Art. 17, VPP-Vertrag",
+        "§ 41e EnWG, Art. 17 RL (EU) 2019/944, VPP-Vertrag",
     );
 
     let attrs = vec![
@@ -549,7 +513,7 @@ pub async fn post_vpp_webhook(
     ];
     let (invoice, rechnung_json) = match build_vpp_invoice(
         &contract.malo_id,
-        &contract.lf_mp_id,
+        &contract.aggregator_mp_id,
         rechnungsnummer,
         period_from,
         period_to,
@@ -583,7 +547,7 @@ pub async fn post_vpp_webhook(
         &mut *tx,
         &cfg.tenant,
         &contract.malo_id,
-        &contract.lf_mp_id,
+        &contract.aggregator_mp_id,
         &format!("VPP_{}", contract.vpp_id),
         "VPP",
         period_from,
@@ -622,7 +586,7 @@ pub async fn post_vpp_webhook(
                 "record_id":          record_id.to_string(),
                 "vpp_id":             contract.vpp_id,
                 "malo_id":            contract.malo_id,
-                "lf_mp_id":           contract.lf_mp_id,
+                "aggregator_mp_id":   contract.aggregator_mp_id,
                 "tx_id":              tx_id,
                 "sr_id":              location_id,
                 "flexibility_kwh":    flexibility_kwh.to_string(),

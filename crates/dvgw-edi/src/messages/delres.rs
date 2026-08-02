@@ -84,13 +84,22 @@ pub struct DeliveryResponseLine {
 }
 
 impl DeliveryResponseLine {
-    /// Parse `quantity` as f64. Returns `None` for empty or non-numeric values.
+    /// Parse the `quantity` string as a `Decimal`.
+    ///
+    /// Returns `None` when the string is empty or not a valid decimal number.
+    /// EDIFACT decimal notation uses `.` as the decimal mark.
+    ///
+    /// Gas quantities are settled to at least three decimal places (DVGW G 685
+    /// §7), and binary floating point cannot represent those decimal fractions
+    /// exactly, so `Decimal` is the only accessor offered.
+    #[cfg(feature = "decimal")]
     #[must_use]
-    pub fn quantity_f64(&self) -> Option<f64> {
+    pub fn quantity_decimal(&self) -> Option<rust_decimal::Decimal> {
+        use std::str::FromStr;
         if self.quantity.is_empty() {
             None
         } else {
-            self.quantity.parse().ok()
+            rust_decimal::Decimal::from_str(&self.quantity).ok()
         }
     }
 }

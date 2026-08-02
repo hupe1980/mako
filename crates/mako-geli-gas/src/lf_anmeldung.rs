@@ -2,7 +2,7 @@
 //!
 //! Handles the Lieferant's perspective of initiating a GeLi Gas supplier-change:
 //! the LFN sends UTILMD G 44001 outbound to the GNB and tracks the GNB's
-//! response (44003 Bestätigung / 44004 Ablehnung).
+//! response (44002 Bestätigung / 44003 Ablehnung).
 //!
 //! ## Covered Prüfidentifikatoren
 //!
@@ -10,7 +10,7 @@
 //! |-------|--------------|-------------------------------------------------|
 //! | 44001 | LFN → GNB    | Lieferbeginn Gas (outbound, spawns this process)|
 //! | 44002 | LFN → GNB    | Lieferende Gas                                  |
-//! | 44003 | GNB → LFN    | Bestätigung Lieferbeginn (inbound response)     |
+//! | 44002 | GNB → LFN    | Bestätigung Anmeldung NN (inbound response)     |
 //! | 44004 | GNB → LFN    | Ablehnung Lieferbeginn (inbound response)       |
 //!
 //! ## Regulatory basis
@@ -30,7 +30,7 @@
 //! | Aspect              | GPKE (`gpke-lf-anmeldung`)     | GeLi Gas (`geli-gas-lf-anmeldung`)    |
 //! |---------------------|--------------------------------|----------------------------------------|
 //! | Request PID         | 55001                          | 44001                                  |
-//! | Response PIDs       | 55003 (✓) / 55004 (✗)          | 44003 (✓) / 44004 (✗)                 |
+//! | Response PIDs       | 55002 (✓) / 55003 (✗)          | 44002 (✓) / 44003 (✗)                 |
 //! | Deadline            | 24 h wall-clock (BK6-22-024)   | 10 Werktage (BK7-24-01-009)            |
 //! | MaLo source         | API-Webdienste Strom optional  | ERP must supply `malo_id` + `zaehlpunkt` |
 //! | Activation step     | explicit `Activate` command    | explicit `Activate` command            |
@@ -57,17 +57,17 @@ pub const WORKFLOW_NAME: &str = "geli-gas-lf-anmeldung";
 /// |-------|------------------------------------------|
 /// | 44001 | Lieferbeginn Gas (supply start)          |
 /// | 44002 | Lieferende Gas (supply end)              |
-pub const ANFRAGE_PIDS_LF: &[u32] = &[44001, 44002];
+pub const ANFRAGE_PIDS_LF: &[u32] = &[44001, 44004];
 
 /// Inbound GNB response PIDs that resume this workflow.
 ///
 /// | PID   | Meaning                          |
 /// |-------|----------------------------------|
-/// | 44003 | Bestätigung Lieferbeginn (✓)     |
+/// | 44002 | Bestätigung Anmeldung NN (✓)     |
 /// | 44004 | Ablehnung Lieferbeginn (✗)       |
 /// | 44005 | Bestätigung Lieferende (✓)       |
 /// | 44006 | Ablehnung Lieferende (✗)         |
-pub const ANTWORT_PIDS_LF: &[u32] = &[44003, 44004, 44005, 44006];
+pub const ANTWORT_PIDS_LF: &[u32] = &[44002, 44003, 44005, 44006];
 
 /// Deadline label for the 10-Werktage GNB response window (BK7-24-01-009).
 pub const GNB_RESPONSE_WINDOW_LABEL: &str = "geli-gas-lf-anmeldung-response-10-werktage";
@@ -95,7 +95,7 @@ pub enum GeliGasLfAnmeldungEvent {
     },
     /// GNB responded — accepted or rejected.
     AntwortReceived {
-        /// PID of the inbound response (44003–44006).
+        /// PID of the inbound response (44002/44003, 44005/44006).
         response_pid: Pruefidentifikator,
         /// `true` = Bestätigung (accepted), `false` = Ablehnung (rejected).
         accepted: bool,
@@ -215,7 +215,7 @@ pub enum GeliGasLfAnmeldungCommand {
         /// UTC wall-clock time when the ERP command was received.
         received_at: OffsetDateTime,
     },
-    /// Inbound GNB response (44003–44006) received via AS4.
+    /// Inbound GNB response (44002/44003, 44005/44006) received via AS4.
     HandleAntwort {
         /// PID of the inbound response.
         response_pid: Pruefidentifikator,
@@ -244,7 +244,7 @@ impl CommandPayload for GeliGasLfAnmeldungCommand {}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
-/// GeLi Gas LFN-side Anmeldung workflow (PIDs 44001/44002 outbound, 44003–44006 inbound).
+/// GeLi Gas LFN-side Anmeldung workflow (44001/44004 outbound, 44002/44003 + 44005/44006 inbound).
 ///
 /// **Initiation:** ERP calls `geli.lieferbeginn.anmelden` via `POST /api/v1/commands`.
 /// **Completion:** `Activate` command after ERP confirms supply is live.
@@ -399,7 +399,7 @@ impl Workflow for GeliGasLfAnmeldungWorkflow {
                 }
                 if !ANTWORT_PIDS_LF.contains(&response_pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected a GNB response PID (44003–44006), got {response_pid}",
+                        "expected a GNB response PID (44002/44003, 44005/44006), got {response_pid}",
                     )));
                 }
 
@@ -503,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn gnb_bestaetigung_44003() {
+    fn gnb_bestaetigung_44002() {
         let data = GeliGasLfAnmeldungData {
             pruefidentifikator: pid(44001),
             malo_id: MaLo::new("DE0001234567890"),
@@ -514,7 +514,7 @@ mod tests {
         };
         let state = GeliGasLfAnmeldungState::Pending(data);
         let cmd = GeliGasLfAnmeldungCommand::HandleAntwort {
-            response_pid: pid(44003),
+            response_pid: pid(44002),
             accepted: true,
             reason: None,
             response_ref: mref("BESTMSG001"),
@@ -534,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn gnb_ablehnung_44004() {
+    fn gnb_ablehnung_44003() {
         let data = GeliGasLfAnmeldungData {
             pruefidentifikator: pid(44001),
             malo_id: MaLo::new("DE0001234567890"),
@@ -545,7 +545,7 @@ mod tests {
         };
         let state = GeliGasLfAnmeldungState::Pending(data);
         let cmd = GeliGasLfAnmeldungCommand::HandleAntwort {
-            response_pid: pid(44004),
+            response_pid: pid(44003),
             accepted: false,
             reason: Some("Z29".to_owned()),
             response_ref: mref("ABLMSG001"),

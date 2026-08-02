@@ -40,8 +40,8 @@ graph TB
     einsd --> eeg_billing
     einsd <-->|"¼h feed-in × EPEX spot (§51)"| edmd
     einsd -->|"persist receipts\nsettlement state"| db
-    einsd -->|"de.eeg.verguetung.berechnet\nde.eeg.marktpraemie.berechnet\nde.eeg.anlage.mastr_registriert\nde.eeg.anlage.settlement_state_changed"| erp
-    einsd -->|"de.eeg.anlage.foerderung_auslaufend\nde.eeg.anlage.created"| agentd
+    einsd -->|"de.eeg.verguetung.berechnet\nde.eeg.marktpraemie.berechnet\nde.eeg.anlage.mastr-registriert\nde.eeg.anlage.settlement_state_changed"| erp
+    einsd -->|"de.eeg.anlage.foerderung-auslaufend\nde.eeg.anlage.created"| agentd
 ```
 
 Port: **`:9180`**
@@ -312,7 +312,7 @@ Content-Type: application/json
 
 {
   "tr_id":              "DE0123456789012345678901234567890",
-  "malo_id":            "51238696781",
+  "malo_id":            "51238696780",
   "eeg_gesetz":         2023,
   "inbetriebnahme":     "2024-06-01",
   "leistung_kwp":       9.8,
@@ -354,7 +354,7 @@ Content-Type: application/json
 { "mastr_nummer": "SEE900000012345", "mastr_datum": "2024-06-15" }
 ```
 
-Transitions `angemeldet` → `aktiv`. Emits `de.eeg.anlage.mastr_registriert`.
+Transitions `angemeldet` → `aktiv`. Emits `de.eeg.anlage.mastr-registriert`.
 
 ---
 
@@ -896,7 +896,7 @@ Content-Type: application/json
 GET /api/v1/anlagen/foerderung-auslaufend?days=180
 ```
 
-Background worker runs every 6h; emits `de.eeg.anlage.foerderung_auslaufend` per plant.
+Background worker runs every 6h; emits `de.eeg.anlage.foerderung-auslaufend` per plant.
 
 ---
 
@@ -1066,8 +1066,8 @@ EPEX Spot monthly averages. Required for `MARKET_PREMIUM` and `POST_EEG`.
 |---|---|---|
 | `de.eeg.verguetung.berechnet` | FEED\_IN\_TARIFF / POST\_EEG settled | `tr_id`, `billing_year`, `billing_month`, `settlement_eur` (net), `pflichtzahlung_eur`, **`gutschrift_nummer`**, **`gutschrift_steuer_eur`**, **`gutschrift_brutto_eur`**, **`bank_iban`**, **`bank_bic`**, **`zahlungsempfaenger`** |
 | `de.eeg.marktpraemie.berechnet` | MARKET\_PREMIUM settled | + `epex_avg_ct_kwh`, `aw_ct`, `effective_aw_ct` |
-| `de.eeg.anlage.mastr_registriert` | MaStR confirmed | `tr_id`, `mastr_nummer` |
-| `de.eeg.anlage.foerderung_auslaufend` | Förderung ending ≤180 days | `tr_id`, `foerderendedatum`, `days_remaining` |
+| `de.eeg.anlage.mastr-registriert` | MaStR confirmed | `tr_id`, `mastr_nummer` |
+| `de.eeg.anlage.foerderung-auslaufend` | Förderung ending ≤180 days | `tr_id`, `foerderendedatum`, `days_remaining` |
 | `de.eeg.anlage.settlement_state_changed` | State machine transition | `tr_id`, `from_state`, `to_state`, `reason` |
 
 `bank_iban`, `bank_bic`, and `zahlungsempfaenger` are forwarded from the `eeg_anlagen` record
@@ -1141,7 +1141,7 @@ At `/mcp` (Streamable HTTP 2025-11-25). Auth: `Authorization: Bearer <mcp_api_ke
 `register-eeg-plant` · `settle-monthly` · `check-foerderung-expiry` ·
 `ausschreibung-workflow` · `post-eeg-transition` · `anlagenerweiterung`
 
-The `eeg-agent` specialist in `agentd` handles `de.eeg.*` CloudEvents **and** `de.messwert.reading.direct.stored` (for iMSys rollout detection — lifts the <100 kW §51 Negativpreisregel exemption on first iMSys push). Two more agentd specialists cover einsd: `eeg-compliance-agent` runs the §52/§44b/§20 compliance checks (get_compliance_status, check_sect44b_quota, check_direktvermarktung_compliance); `einsd-batch-agent` drives the monthly settlement batch + §52 Pflichtzahlungen sweep (list_unsettled_plants + POST /settlements/batch, triggered on de.eeg.anlage.foerderung_auslaufend or manual/cron).
+The `eeg-agent` specialist in `agentd` handles `de.eeg.*` CloudEvents **and** `de.messwert.reading.direct.stored` (for iMSys rollout detection — lifts the <100 kW §51 Negativpreisregel exemption on first iMSys push). Two more agentd specialists cover einsd: `eeg-compliance-agent` runs the §52/§44b/§20 compliance checks (get_compliance_status, check_sect44b_quota, check_direktvermarktung_compliance); `einsd-batch-agent` drives the monthly settlement batch + §52 Pflichtzahlungen sweep (list_unsettled_plants + POST /settlements/batch, triggered on de.eeg.anlage.foerderung-auslaufend or manual/cron).
 See [agentd operator guide](@/docs/services/agentd.md) for the full trigger→action mapping.
 
 ---

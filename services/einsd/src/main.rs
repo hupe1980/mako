@@ -14,7 +14,7 @@
 //! Emits CloudEvents:
 //! - `de.eeg.verguetung.berechnet` — VERGUETUNG/POST_EEG_SPOT/EIGENVERBRAUCH settled
 //! - `de.eeg.marktpraemie.berechnet` — DIREKTVERMARKTUNG settled
-//! - `de.eeg.anlage.foerderung_auslaufend` — `foerderendedatum` within 180 days
+//! - `de.eeg.anlage.foerderung-auslaufend` — `foerderendedatum` within 180 days
 //!
 //! Port: `:9180`
 //!
@@ -122,7 +122,7 @@ impl Daemon for Einsd {
             tokio::spawn(worker.run(ct.clone()));
         }
 
-        // Background worker: emit de.eeg.anlage.foerderung_auslaufend every 6 h.
+        // Background worker: emit de.eeg.anlage.foerderung-auslaufend every 6 h.
         let alert_pool = pool.clone();
         let alert_cfg = Arc::clone(&cfg);
         let alert_client = Arc::clone(&http_client);

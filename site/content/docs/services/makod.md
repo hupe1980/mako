@@ -1407,7 +1407,7 @@ curl -X POST http://localhost:8080/api/v1/commands \
   -d '{
     "command": "gpke.sperrung.bestaetigen",
     "marktrolle": "NB",
-    "malo_id": "51238696781",
+    "malo_id": "51238696780",
     "payload": { "note": "Zähler gesperrt, Plombe gesetzt" }
   }'
 
@@ -1419,7 +1419,7 @@ curl -X POST http://localhost:8080/api/v1/commands \
   -d '{
     "command": "gpke.sperrung.fehlgeschlagen",
     "marktrolle": "NB",
-    "malo_id": "51238696781",
+    "malo_id": "51238696780",
     "payload": { "reason": "Zutritt verweigert" }
   }'
 ```
@@ -1978,11 +1978,11 @@ automatically generates a VPP settlement `Rechnung`:
 
 ```
 flexibility_kwh = max_power_kw × (execution_time_until − execution_time_from) / 3600
-netto_eur       = flexibility_kwh × capacity_price_eur_per_kwh   (from vpp_contracts)
+netto_eur       = flexibility_kwh × capacity_price_eur_per_kwh   (from vertragd.aggregatorvertraege)
 ```
 
 The `vpp-billing-agent` in `agentd` monitors settlement completeness and performs
-RED III Article 17 audit-field checks.
+Art. 17 RL (EU) 2019/944 audit-field checks.
 
 > **`InitialZustand` resets** (command_type = "InitialZustand") do **not** emit a
 > `DispatchConfirmed` event — only load-reduction Konfiguration commands generate billing.

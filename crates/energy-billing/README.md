@@ -185,7 +185,7 @@ let product: Product = serde_json::from_str(r#"{
 }"#)?;
 
 let ctx = BillingContext {
-    malo_id:          "51238696781".to_owned(),
+    malo_id:          "51238696780".to_owned(),
     lf_mp_id:         "9910000000002".to_owned(),
     rechnungsnummer:  "R2026-06-001".to_owned(),
     period:           BillingPeriod::new(date!(2026-06-01), date!(2026-06-30))?,

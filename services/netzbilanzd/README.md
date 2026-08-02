@@ -20,7 +20,7 @@ Closes the payment lifecycle on REMADV receipt. Zero `f64` in the billing path.
 | **Redispatch 2.0** | `kostenblatt_records` + auto-compute from edmd; 15th-of-month alert worker |
 | **BilAReM (BK6-23-241)** | Stateless Kap.-3 Ausfallarbeit compute endpoints (`POST /api/v1/redispatch/ausfallarbeit/compute` + `/ueberbauung`) over `mako_redispatch::ausfallarbeit` |
 | **Background workers** | Hourly dispatch-overdue alert; daily Kostenblatt deadline alert |
-| **CloudEvents emitted** | `de.netzbilanz.invoic.{drafted,dispatched,paid,disputed,dispatch_overdue}` · `de.netzbilanz.kostenblatt.deadline_approaching` |
+| **CloudEvents emitted** | `de.netzbilanz.invoic.{drafted,dispatched,paid,disputed,dispatch_overdue}` · `de.netzbilanz.kostenblatt.deadline-approaching` |
 | **MCP server** | 13 tools · 6 prompts at `/mcp` (Streamable HTTP 2025-11-25) |
 | **Retention** | § 147 AO / GoBD 3-year; `GET /api/v1/billing/audit` for BNetzA export (up to 50k rows) |
 | **Health** | `GET /health/live` · `GET /health/ready` |

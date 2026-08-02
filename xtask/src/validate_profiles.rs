@@ -10,6 +10,9 @@
 //! - PID codes in `ahb.json` being valid 5-digit integers (10000–99999)
 //! - Segment tags in `ahb.json` `segment_rules` being a subset of those in `mig.json`
 //! - `element_index` in `ahb.json` `field_rules` not exceeding the segment's element count
+//! - PID continuity across consecutive releases of the same track (see
+//!   [`check_pid_continuity`]) — a PID that disappears without an entry in
+//!   [`RETIRED_PIDS`] is an import regression, not a BDEW retirement
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -112,7 +115,7 @@ struct AhbProfile {
     /// Human reviewer of this profile before promotion to production.
     ///
     /// Required for `fv2026*` and later profiles to ensure no draft-extracted
-    /// profile is shipped without human validation (F-013).
+    /// profile is shipped without human validation.
     #[serde(default)]
     reviewed_by: Option<String>,
     /// ISO 8601 date when this profile was reviewed and promoted.
@@ -357,6 +360,8 @@ pub fn run(workspace_root: &str) -> bool {
         }
     }
 
+    check_pid_continuity(&profiles_dir, &mut errors, &mut warnings);
+
     // Print results
     for w in &warnings {
         eprintln!("WARNING  {w}");
@@ -374,6 +379,156 @@ pub fn run(workspace_root: &str) -> bool {
     );
 
     ok
+}
+
+// ── PID continuity across releases ────────────────────────────────────────────
+
+/// PIDs that BDEW genuinely retired, keyed by `(message_type, track, pid)`.
+///
+/// A retired PID keeps its rule table in the release that still carries it and
+/// loses it in the successor.  Each entry records the AHB version that dropped
+/// it, verified against the published document: the retired PID survives only as
+/// a cross-reference in the Bedingungen appendix, with no rule table of its own.
+const RETIRED_PIDS: &[(&str, &str, u32, &str)] = &[
+    (
+        "ORDERS",
+        "",
+        17003,
+        "retired in ORDERS AHB 1.1b (01.04.2026) — Beauftragung zur Änderung der Technik (Messlokationsänderung Gas)",
+    ),
+    (
+        "ORDERS",
+        "",
+        17114,
+        "retired in ORDERS AHB 1.1b (01.04.2026) — Anforderung der bilanzierten Menge",
+    ),
+    (
+        "UTILMD",
+        "_gas",
+        44170,
+        "retired in UTILMD AHB G1.2 (01.10.2026) — Ablehnung Verpflichtungsanfrage",
+    ),
+];
+
+/// PIDs missing from a release **despite still being published** in the
+/// corresponding AHB — i.e. import regressions, not retirements.
+///
+/// These are reported as loud warnings rather than hard errors so the gap stays
+/// visible on every CI run without blocking unrelated work.  Each needs a
+/// re-import from the BDEW AHB XML (`cargo xtask import-xml-ahb`) to clear.
+///
+/// Until then AHB validation for these PIDs is **vacuous**: `ahb_rule_pack`
+/// returns a warning-only `unknown-pid` pack for an unknown PID — `is_valid()`
+/// stays `true` — so inbound messages carrying them
+/// pass the AHB layer unchecked (the MIG layer still applies).
+const KNOWN_IMPORT_GAPS: &[(&str, &str, u32, &str)] = &[
+    // Empty: ORDERS 17008/17116/17117 were recovered from ORDERS AHB 1.1b by the
+    // PDF table parser (`cargo xtask extract-pdf`) in 2026-08. Add an entry here
+    // only for a PID that is still published but missing from a profile, and
+    // clear it as soon as the profile is re-imported.
+];
+
+/// One release of a track: `(fv date digits, folder name, declared PIDs)`.
+type ReleasePids = (String, String, BTreeSet<u32>);
+
+/// Split an `fv<YYYYMMDD>[_<track>]` folder name into its date and track parts.
+///
+/// `fv20261001_gas` → `("20261001", "_gas")`; `fv20261001` → `("20261001", "")`.
+fn split_release_track(folder: &str) -> Option<(&str, &str)> {
+    let after_fv = folder.strip_prefix("fv")?;
+    let digits = after_fv.get(..8)?;
+    if !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((digits, &after_fv[8..]))
+}
+
+/// Verify that no PID silently disappears between consecutive releases of a track.
+///
+/// A PID present in release N but absent from release N+1 means messages carrying
+/// it validate against an empty AHB rule pack from N+1's `valid_from` onward.
+/// That is almost always an import regression — the BDEW XML importer emits one
+/// `<AWF>` per PID, but a PID that shares an AHB rule table with siblings can be
+/// dropped when only the table's first column is captured.
+///
+/// Genuine retirements belong in [`RETIRED_PIDS`]; acknowledged regressions
+/// awaiting re-import belong in [`KNOWN_IMPORT_GAPS`].
+fn check_pid_continuity(profiles_dir: &Path, errors: &mut Vec<String>, warnings: &mut Vec<String>) {
+    // (message_type, track) → sorted [(date, folder, pids)]
+    let mut tracks: BTreeMap<(String, String), Vec<ReleasePids>> = BTreeMap::new();
+
+    for msg_type_dir in read_subdirs(profiles_dir) {
+        let msg_type = msg_type_dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_uppercase();
+        if msg_type == "SCHEMAS" {
+            continue;
+        }
+
+        for release_dir in read_subdirs(&msg_type_dir) {
+            let folder = release_dir
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            let Some((date, track)) = split_release_track(&folder) else {
+                continue;
+            };
+
+            // Archived profiles are intentionally retired and may have gaps.
+            if let Ok(mig) = load_json::<MigProfile>(&release_dir.join("mig.json"))
+                && mig.archived
+            {
+                continue;
+            }
+
+            let Ok(ahb) = load_json::<AhbProfile>(&release_dir.join("ahb.json")) else {
+                continue;
+            };
+            let pids: BTreeSet<u32> = ahb.pruefidentifikatoren.iter().map(|p| p.code).collect();
+
+            tracks
+                .entry((msg_type.clone(), track.to_string()))
+                .or_default()
+                .push((date.to_string(), folder, pids));
+        }
+    }
+
+    for ((msg_type, track), mut releases) in tracks {
+        releases.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for pair in releases.windows(2) {
+            let (_, prev_folder, prev_pids) = &pair[0];
+            let (_, curr_folder, curr_pids) = &pair[1];
+
+            for pid in prev_pids.difference(curr_pids) {
+                let matches =
+                    |t: &&(&str, &str, u32, &str)| t.0 == msg_type && t.1 == track && t.2 == *pid;
+
+                if let Some(entry) = RETIRED_PIDS.iter().find(matches) {
+                    let _ = entry; // documented retirement — expected, nothing to report
+                } else if let Some(entry) = KNOWN_IMPORT_GAPS.iter().find(matches) {
+                    warnings.push(format!(
+                        "{}/{curr_folder}  PID {pid} lost vs {prev_folder} — {} \
+                         (acknowledged import gap: AHB validation is vacuous for this PID; \
+                         re-import via `cargo xtask import-xml-ahb` to clear)",
+                        msg_type.to_lowercase(),
+                        entry.3,
+                    ));
+                } else {
+                    errors.push(format!(
+                        "{}/{curr_folder}  PID {pid} present in {prev_folder} but missing here — \
+                         AHB validation would be vacuous for it. If BDEW retired the PID, add it to \
+                         RETIRED_PIDS in xtask/src/validate_profiles.rs with the AHB version that \
+                         dropped it; otherwise re-import the profile.",
+                        msg_type.to_lowercase(),
+                    ));
+                }
+            }
+        }
+    }
 }
 
 /// Convert an `fv<YYYYMMDD>[_<suffix>]` directory name to an ISO 8601 date string.
@@ -518,8 +673,9 @@ fn check_profile(
                 "{rel_prefix}/ahb.json  missing `reviewed_by` field — \
                  FV2026+ profiles must be reviewed before production use. \
                  Add {{\"reviewed_by\": \"<reviewer>\", \"reviewed_at\": \"<ISO-date>\"}} \
-                 to confirm a human validated this profile against the BDEW AHB PDF. \
-                 See FINDINGS.md F-013."
+                 to confirm a human validated this profile against the BDEW AHB PDF \
+                 (note: the AHB and MIG carry independent version numbers — check the \
+                 AHB document, not the MIG revision cited in `release`)."
             ));
         }
     }

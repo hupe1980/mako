@@ -26,7 +26,6 @@ permit(
     action in [
         Action::"read-malo",
         Action::"read-melo",
-        Action::"read-contract",
         Action::"read-nb-contract",
         Action::"read-partner",
         Action::"read-preisblatt",
@@ -55,7 +54,6 @@ permit(
     action in [
         Action::"write-malo",
         Action::"write-melo",
-        Action::"write-contract",
         Action::"write-nb-contract",
         Action::"write-partner",
         Action::"write-versorgungsstatus",

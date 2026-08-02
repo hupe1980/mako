@@ -717,7 +717,7 @@ and, separately, Satz 3 for information that is "nicht oder nicht **vollständig
 supplied. Missing an ingest path here is a direct revenue deduction.
 
 ```http
-POST /api/v1/meter-reads/iot/62345678901
+POST /api/v1/meter-reads/iot/62345678906
 Content-Type: application/json
 
 {
@@ -856,7 +856,7 @@ endpoint accepts:
 
 ```json
 {
-  "malo_id": "51238696781",
+  "malo_id": "51238696780",
   "sparte": "STROM",
   "source": "IOT_PUSH",
   "intervals": [
@@ -1452,7 +1452,7 @@ Routes: `POST /api/v1/virtual` · `GET /api/v1/virtual` ·
 curl -X POST http://edmd:8380/api/v1/virtual \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" -d '{
-    "virtual_malo_id": "10001234002",
+    "virtual_malo_id": "10001234004",
     "display_name":    "GGV MaLo2 — Wohnung 2",
     "sparte":          "STROM",
     "legal_basis":     "§42b EnWG Solarpaket I",
@@ -1470,7 +1470,7 @@ curl -X POST http://edmd:8380/api/v1/virtual \
 curl -X POST http://edmd:8380/api/v1/virtual \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" -d '{
-    "virtual_malo_id": "10001234002",
+    "virtual_malo_id": "10001234004",
     "display_name":    "GGV MaLo2 — proportional",
     "sparte":          "STROM",
     "legal_basis":     "§42b EnWG Solarpaket I",
@@ -1489,9 +1489,9 @@ curl -X POST http://edmd:8380/api/v1/virtual \
 
 ```bash
 # Net grid draw for tenant MaLo2 — computed live from plant + tenant consumption MeLos
-curl -s "http://edmd:8380/api/v1/virtual/10001234002/lastgang?from=2026-07-01T00:00:00Z&to=2026-07-02T00:00:00Z" \
+curl -s "http://edmd:8380/api/v1/virtual/10001234004/lastgang?from=2026-07-01T00:00:00Z&to=2026-07-02T00:00:00Z" \
   -H "Authorization: Bearer <token>" | jq '{
-    virtual_malo_id: "10001234002",
+    virtual_malo_id: "10001234004",
     first_interval: .[0].werte[0]
   }'
 ```
@@ -1885,7 +1885,7 @@ compliance sweep per **MsbG §21c** and **BSI TR-03109-4 §6.3**.
 scheduling. SMGW connectivity is a metering-domain concern: when a gateway's TLS cert
 expires or a CLS channel loses its §14a Konfigurationsprodukt, meter data stops flowing
 and substitute values (§ 60 Abs. 2 MsbG) become mandatory. `edmd` detects both conditions and
-emits `de.messwert.cls.compliance_issue` CloudEvents so `agentd`'s `smgw-diagnostics-agent`
+emits `de.messwert.cls.compliance-issue` CloudEvents so `agentd`'s `smgw-diagnostics-agent`
 can escalate to the MSB and ERP system automatically.
 
 ### Data model
@@ -1924,7 +1924,7 @@ and graceful shutdown via `CancellationToken`. On each sweep:
 
 1. Query all `smgw_sessions` for the tenant.
 2. For each session, run `check_session_compliance()` (pure — no I/O).
-3. For each issue found: insert into `cls_compliance_log` + emit `de.messwert.cls.compliance_issue`.
+3. For each issue found: insert into `cls_compliance_log` + emit `de.messwert.cls.compliance-issue`.
 4. Tracing logs the sweep result (sessions scanned, issue count, `has_critical`).
 
 ### SMGW session API
@@ -1985,13 +1985,13 @@ curl -s -X POST "http://edmd:8380/api/v1/smgw/compliance/scan" \
   -H "Authorization: Bearer <token>" | jq '{sessions_scanned, sessions_with_issues}'
 ```
 
-### `de.messwert.cls.compliance_issue` CloudEvent
+### `de.messwert.cls.compliance-issue` CloudEvent
 
 ```json
 {
   "specversion": "1.0",
   "id":          "a1b2c3d4-...",
-  "type":        "de.messwert.cls.compliance_issue",
+  "type":        "de.messwert.cls.compliance-issue",
   "source":      "urn:mako:edmd:tenant:9900000000003",
   "subject":     "10001234567",
   "time":        "2026-07-18T05:00:00Z",
@@ -2009,7 +2009,7 @@ curl -s -X POST "http://edmd:8380/api/v1/smgw/compliance/scan" \
 }
 ```
 
-`agentd`'s `smgw-diagnostics-agent` subscribes to `de.messwert.cls.compliance_issue` and
+`agentd`'s `smgw-diagnostics-agent` subscribes to `de.messwert.cls.compliance-issue` and
 automatically escalates to the MSB team, suggests remediation steps, and checks whether
 the same device has open § 60 Abs. 2 MsbG substitute-value orders.
 
@@ -2028,7 +2028,7 @@ sequenceDiagram
         Worker->>Worker: check_session_compliance()<br/>(pure — no I/O)
         alt has issues
             Worker->>Log: INSERT cls_compliance_log
-            Worker->>ERP: POST de.messwert.cls.compliance_issue<br/>(CloudEvent per issue)
+            Worker->>ERP: POST de.messwert.cls.compliance-issue<br/>(CloudEvent per issue)
         end
     end
     Worker->>Worker: tracing::info!(sessions_scanned, compliance_pct)

@@ -13,7 +13,7 @@
 //!
 //! ```json
 //! {
-//!   "malo_id": "51238696781",
+//!   "malo_id": "51238696780",
 //!   "sparte": "STROM",
 //!   "source": "IOT_PUSH",
 //!   "intervals": [

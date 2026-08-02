@@ -14,7 +14,7 @@
 //!       ↓ emits Initiated + UTILMD outbox entry
 //! AS4 sender → UTILMD 55001 to NB
 //!       ↓
-//! AS4 inbound ← UTILMD 55003/55004 from NB
+//! AS4 inbound ← UTILMD 55002/55003 from NB
 //!       ↓
 //!   [HandleAntwort]
 //!       ↓ emits AntwortReceived
@@ -26,10 +26,10 @@
 //!
 //! | Outbound (LF → NB)               | PID   | Inbound response (NB → LF) | PID   |
 //! |----------------------------------|-------|-------------------------------|-------|
-//! | Anfrage Lieferbeginn verb. MaLo  | 55001 | Bestätigung Lieferbeginn      | 55003 |
-//! |                                  |       | Ablehnung Lieferbeginn        | 55004 |
-//! | Anfrage Lieferende verb. MaLo    | 55002 | Bestätigung Lieferende        | 55005 |
-//! |                                  |       | Ablehnung Lieferende          | 55006 |
+//! | Anmeldung verb. MaLo             | 55001 | Bestätigung Anmeldung         | 55002 |
+//! |                                  |       | Ablehnung Anmeldung           | 55003 |
+//! | Abmeldung                        | 55004 | Bestätigung Abmeldung         | 55005 |
+//! |                                  |       | Ablehnung Abmeldung           | 55006 |
 //! | Kündigung Lieferbeginn           | 55016 | Bestätigung Kündigung        | 55017 |
 //! |                                  |       | Ablehnung Kündigung          | 55018 |
 //! | Anmeldung Lieferbeginn erz. MaLo | 55077 | Bestätigung erz. MaLo         | 55078 |
@@ -67,8 +67,8 @@ pub const WORKFLOW_NAME: &str = "gpke-lf-anmeldung";
 /// These are LF→NB/LFA direction only; the corresponding NB→LF response PIDs
 /// ([`ANTWORT_PIDS_LF`]) complete the conversation.
 pub const ANFRAGE_PIDS_LF: &[u32] = &[
-    55001, // Anfrage Lieferbeginn verb. MaLo (LF → NB)
-    55002, // Anfrage Lieferende verb. MaLo  (LF → NB)
+    55001, // Anmeldung verb. MaLo (LF → NB)
+    55004, // Abmeldung            (LF → NB)
     55016, // Kündigung Lieferbeginn (LFN → LFA)
     55077, // Anmeldung Lieferbeginn erz. MaLo (LFN → NB, BK6-24-174)
 ];
@@ -79,10 +79,10 @@ pub const ANFRAGE_PIDS_LF: &[u32] = &[
 /// route them by conversation ID to the correct `GpkeLfAnmeldungWorkflow`
 /// instance.
 pub const ANTWORT_PIDS_LF: &[u32] = &[
-    55003, // Bestätigung Lieferbeginn verb. MaLo (NB → LF)
-    55004, // Ablehnung Lieferbeginn verb. MaLo   (NB → LF)
-    55005, // Bestätigung Lieferende verb. MaLo   (NB → LF)
-    55006, // Ablehnung Lieferende verb. MaLo      (NB → LF)
+    55002, // Bestätigung Anmeldung verb. MaLo (NB → LF)
+    55003, // Ablehnung Anmeldung verb. MaLo   (NB → LF)
+    55005, // Bestätigung Abmeldung            (NB → LF)
+    55006, // Ablehnung Abmeldung              (NB → LF)
     55017, // Bestätigung Kündigung                (LFA → LFN)
     55018, // Ablehnung Kündigung                  (LFA → LFN)
     55078, // Bestätigung Anmeldung erz. MaLo       (NB → LFN)
@@ -111,7 +111,7 @@ pub const NB_RESPONSE_WINDOW_LABEL: &str = "nb-response-window";
 pub enum LfAnmeldungEvent {
     /// LF-side Anmeldung initiated — outbound UTILMD queued for AS4 delivery.
     Initiated {
-        /// PID of the outbound Anfrage (55001, 55002, 55016, or 55077).
+        /// PID of the outbound Anfrage (55001, 55004, 55016, or 55077).
         pruefidentifikator: Pruefidentifikator,
         /// MaLo / supply point identifier.
         location_id: MaLo,
@@ -124,7 +124,7 @@ pub enum LfAnmeldungEvent {
     },
     /// Counterparty (NB or LFA) responded — accepted or rejected.
     AntwortReceived {
-        /// PID of the inbound response (55003–55006, 55017, 55018, 55078, 55080).
+        /// PID of the inbound response (55002/55003, 55005/55006, 55017, 55018, 55078, 55080).
         response_pid: Pruefidentifikator,
         /// `true` if the request was accepted.
         accepted: bool,
@@ -161,7 +161,7 @@ impl EventPayload for LfAnmeldungEvent {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LfAnmeldungData {
-    /// PID of the outbound Anfrage (55001, 55002, 55016, or 55077).
+    /// PID of the outbound Anfrage (55001, 55004, 55016, or 55077).
     pub pruefidentifikator: Pruefidentifikator,
     /// MaLo / supply point identifier.
     pub location_id: MaLo,
@@ -215,7 +215,7 @@ pub enum LfAnmeldungCommand {
     ///    the structured domain payload. The AS4 sender serialises this to
     ///    wire-format EDIFACT and delivers it to the NB via AS4.
     InitiateAnmeldung {
-        /// Outbound request PID (55001, 55002, 55016, or 55077).
+        /// Outbound request PID (55001, 55004, 55016, or 55077).
         pid: Pruefidentifikator,
         /// Our own market-partner ID (the Lieferant, from `--tenant-id`).
         sender: MarktpartnerCode,
@@ -229,7 +229,7 @@ pub enum LfAnmeldungCommand {
         /// `E03` Wechsel. Rendered as the outbound STS segment.
         transaktionsgrund: Option<String>,
     },
-    /// Inbound NB/LFA response (55003–55006, 55017, 55018, 55078, 55080) received via AS4.
+    /// Inbound NB/LFA response (55002/55003, 55005/55006, 55017, 55018, 55078, 55080) received via AS4.
     ///
     /// Dispatched by the AS4 inbound layer after extracting the domain fields
     /// from the UTILMD response message.
@@ -359,7 +359,7 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                 }
                 if !ANFRAGE_PIDS_LF.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected an LF Anfrage PID (55001, 55002, 55016, 55077), got {pid}",
+                        "expected an LF Anfrage PID (55001, 55004, 55016, 55077), got {pid}",
                     )));
                 }
 
@@ -409,7 +409,7 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
                 }
                 if !ANTWORT_PIDS_LF.contains(&response_pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected an LF Antwort PID (55003–55006, 55017, 55018, 55078, 55080), got {response_pid}",
+                        "expected an LF Antwort PID (55002/55003, 55005/55006, 55017, 55018, 55078, 55080), got {response_pid}",
                     )));
                 }
                 Ok(vec![LfAnmeldungEvent::AntwortReceived {
@@ -477,9 +477,9 @@ mod tests {
     }
 
     #[test]
-    fn initiate_lieferende_transitions_to_pending() {
+    fn initiate_abmeldung_transitions_to_pending() {
         let state = LfAnmeldungState::New;
-        let out = GpkeLfAnmeldungWorkflow::handle(&state, make_initiate(55002)).unwrap();
+        let out = GpkeLfAnmeldungWorkflow::handle(&state, make_initiate(55004)).unwrap();
         let new_state = GpkeLfAnmeldungWorkflow::apply(state, &out.events[0]);
         assert!(matches!(new_state, LfAnmeldungState::Pending(_)));
     }
@@ -527,7 +527,7 @@ mod tests {
         let state = GpkeLfAnmeldungWorkflow::apply(LfAnmeldungState::New, &initiated_event);
 
         let cmd = LfAnmeldungCommand::HandleAntwort {
-            response_pid: Pruefidentifikator::new(55004).unwrap(),
+            response_pid: Pruefidentifikator::new(55003).unwrap(), // Ablehnung Anmeldung
             accepted: false,
             reason: Some("MaLo nicht in Netzgebiet".to_owned()),
             response_ref: MessageRef::new("NB-RESP-002"),

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "message_type": "REQOTE",
   "release": "1.3c",
-  "source_document": "REQOTE AHB 1.3c vom 01.04.2025",
+  "source_document": "REQOTE AHB, wire release 1.3c (Stand 01.04.2025)",
   "pruefidentifikatoren": [
     {
       "code": 35001,

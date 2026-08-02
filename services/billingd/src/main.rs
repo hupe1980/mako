@@ -40,7 +40,7 @@
 //! | `POST` | `/api/v1/billing/{id}/correction` | Korrekturrechnung / Stornorechnung (\u00a722 Me\u00dfZV) |
 //! | `POST` | `/api/v1/billing/sammelrechnung/{rv_id}` | B2B consolidated Sammelrechnung |
 //! | `POST` | `/api/v1/billing/ggv/{ggv_id}` | \u00a742b EnWG GGV multi-tenant community solar billing |
-//! | `POST` | `/api/v1/billing/vpp/{vpp_id}` | VPP aggregation settlement (RED III Art. 17) |
+//! | `POST` | `/api/v1/billing/vpp/{vpp_id}` | VPP aggregation settlement (Art. 17 RL (EU) 2019/944) |
 //! | `POST` | `/api/v1/billing/{id}/submit-b2g` | XRechnung B2G submission (\u00a727 EGovG 01.01.2027) |
 //! | `GET` | `/api/v1/billing` | List records (`?malo_id=&lf_mp_id=&outcome=`) |
 //! | `GET` | `/api/v1/billing/{id}` | Fetch single record |
@@ -213,19 +213,10 @@ impl Daemon for Billingd {
                 "/api/v1/billing/ggv/:ggv_id",
                 post(handlers::post_ggv_billing),
             )
-            // B12: VPP aggregation billing (RED III Article 17) — de.vpp.settlement.berechnet
+            // B12: VPP aggregation billing (Art. 17 RL (EU) 2019/944) — de.vpp.settlement.berechnet
             .route(
                 "/api/v1/billing/vpp/:vpp_id",
                 post(handlers::post_vpp_billing),
-            )
-            // B12: VPP contract registry — capacity price per SR-ID
-            .route(
-                "/api/v1/billing/vpp-contracts",
-                axum::routing::get(handlers::list_vpp_contracts),
-            )
-            .route(
-                "/api/v1/billing/vpp-contracts/:sr_id",
-                axum::routing::put(handlers::put_vpp_contract),
             )
             // B12: VPP dispatch-confirmed auto-billing webhook (de.vpp.dispatch.confirmed)
             .route(

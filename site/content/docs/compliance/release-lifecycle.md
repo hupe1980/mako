@@ -70,6 +70,31 @@ cargo xtask extract-pdf --file <working-dir>/UTILMD_AHB_S3.1.pdf \
     --message-type utilmd --release fv20271001
 ```
 
+> **`pdftotext` is required for AHB extraction.** The AHB rule tables are column
+> layouts — a row's `Muss`/`Kann` belongs to whichever Prüfidentifikator column
+> it sits under — so the parser needs column-preserved text. `extract-pdf` shells
+> out to poppler's `pdftotext -layout` when available and warns when it is not.
+> Without it the MIG scan still works, but no Prüfidentifikatoren are found.
+
+The AHB parser reads one requirement per PID column:
+
+| AHB mark | Profile requirement |
+|---|---|
+| `Muss` | `M` |
+| `Kann` | `O` |
+| `Soll` | `O` — a recommendation, never promoted |
+
+Two rules are easy to get wrong and are covered by tests:
+
+- **Segment-group nesting does not propagate.** A `Muss` segment inside a `Kann`
+  group stays `M`.
+- **Optional segments are absent from the AHB table.** The AHB marks what is
+  *required*; `mig.json` lists what is *available*. Complete each draft with
+  every remaining MIG segment as `O`.
+
+A conditional `Muss [n]` (e.g. "Wenn BGM+7 vorhanden") is reported as `M`; the
+XML encodes those as `C` with a `conditional_rules` entry. Review those by hand.
+
 The output directory is derived from `--message-type` and `--release`
 (`crates/edi-energy/profiles/utilmd/fv20271001/`). Each run writes
 `mig.draft.json` and `ahb.draft.json`. Review the drafts against the PDF, remove
@@ -98,13 +123,27 @@ In `mig.json`:
 
 Update the *previous* release's `valid_until` to `"2027-09-30"` as well.
 
+> **The AHB and the MIG carry independent version numbers.** For most message
+> types they differ — ORDERS ships MIG 1.4c alongside AHB 1.1b, MSCONS ships MIG
+> 2.5 alongside AHB 3.2. The `release` field holds the BDEW **wire release code**,
+> which tracks the MIG. Name the correct document in each file's
+> `source_document`: `mig.json` cites the MIG version, `ahb.json` cites the AHB.
+> Only UTILMD numbers the two alike (`S2.2`, `G1.2`).
+
 ### 5. Validate the profiles
 
 ```bash
 cargo xtask validate-profiles
 ```
 
-This runs the JSON Schema checker against all profile files. Fix any reported errors before proceeding.
+This runs the JSON Schema checker against all profile files, and verifies **PID
+continuity**: a Prüfidentifikator present in one release but missing from its
+successor is reported as an error, because messages carrying it would validate
+against an empty AHB rule pack. When BDEW genuinely retires a PID, record it in
+`RETIRED_PIDS` (in `xtask/src/validate_profiles.rs`) with the AHB version that
+dropped it; a PID still published but lost during import belongs in
+`KNOWN_IMPORT_GAPS` until a re-import clears it. Fix any reported errors before
+proceeding.
 
 ### 6. Regenerate source code
 
@@ -155,6 +194,31 @@ When all profile and code changes are merged and `just ci` is green:
    - Builds and pushes multi-arch Docker images (`linux/amd64`, `linux/arm64`)
      for each service daemon to `ghcr.io/hupe1980/<service>` (e.g.
      `ghcr.io/hupe1980/makod`) with tags `X.Y.Z`, `X.Y`, and `latest`.
+   - Builds and publishes the [`makotest`](@/docs/reference/makotest.md) Python
+     package to [PyPI](https://pypi.org/project/makotest/).
+
+### The `makotest` Python package
+
+`makotest` inherits `workspace.package.version` (its `pyproject.toml` declares
+`dynamic = ["version"]`), so the same tag releases the crates, the images, and
+the wheel at one version — they cannot drift.
+
+Wheels are **abi3-py311**: one wheel per platform serves every Python ≥ 3.11, so
+the release matrix is over target platforms (linux x86_64/aarch64, macOS
+x86_64/aarch64, Windows x86_64) rather than interpreter versions. Linux wheels
+build inside a `manylinux` container so they install on distros older than the
+runner.
+
+Publication uses **PyPI Trusted Publishing** (OIDC) — no API token is stored.
+PyPI is configured to trust `hupe1980/mako` with workflow `release.yml`; the
+`makotest-publish` job requests `id-token: write` to mint the short-lived
+credential. The upload sets `skip-existing`, so re-running a partially failed
+tag is idempotent rather than a hard failure.
+
+An **sdist** is published alongside the wheels. Because `makotest` depends on
+workspace crates by `path`, maturin vendors those crates into the tarball;
+CI builds the sdist and installs it into a clean virtualenv on every run, so a
+tarball that cannot build standalone fails before a tag is ever cut.
 
 The Docker images are built from the workspace `Dockerfile` (cargo-chef +
 distroless) via `docker buildx bake`. See the

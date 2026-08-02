@@ -2127,7 +2127,7 @@ impl Profile for PartinFv20260401Profile {
         Some("1.1")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("PARTIN AHB 1.1, Stand 01.04.2026")
+        Some("PARTIN MIG 1.1, Stand 01.04.2026")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

@@ -2661,7 +2661,7 @@ impl Profile for InvoicFv20260401Profile {
         Some("2.8e")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("INVOIC AHB 2.8e, Stand 01.04.2026")
+        Some("INVOIC MIG 2.8e, Stand 01.04.2026")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

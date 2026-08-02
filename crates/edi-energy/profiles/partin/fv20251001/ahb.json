@@ -2,7 +2,7 @@
   "schema_version": 1,
   "message_type": "PARTIN",
   "release": "1.0f",
-  "source_document": "PARTIN AHB 1.0f vom 01.10.2025",
+  "source_document": "PARTIN AHB, wire release 1.0f (Stand 01.10.2025)",
   "pruefidentifikatoren": [
     {
       "code": 37000,

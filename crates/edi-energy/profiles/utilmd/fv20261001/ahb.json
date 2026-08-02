@@ -2,11 +2,11 @@
   "schema_version": 1,
   "message_type": "UTILMD",
   "release": "S2.2",
-  "source_document": "UTILMD AHB S2.2 vom 01.10.2026",
+  "source_document": "UTILMD AHB, wire release S2.2 (Stand 01.10.2026)",
   "pruefidentifikatoren": [
     {
       "code": 55001,
-      "name": "Lieferbeginn Strom (Anfrage LFN an NB)",
+      "name": "Anmeldung verb. MaLo",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -181,7 +181,7 @@
     },
     {
       "code": 55002,
-      "name": "Lieferende Strom (Anfrage LFN an NB)",
+      "name": "Bestätigung Anmeldung verb. MaLo",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -351,7 +351,7 @@
     },
     {
       "code": 55003,
-      "name": "Bestätigung Lieferbeginn (NB an LFN)",
+      "name": "Ablehnung Anmeldung verb. MaLo",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -521,7 +521,7 @@
     },
     {
       "code": 55004,
-      "name": "Ablehnung Lieferbeginn (NB an LFN)",
+      "name": "Abmeldung",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -711,7 +711,7 @@
     },
     {
       "code": 55005,
-      "name": "Bestätigung Lieferende (NB an LFN)",
+      "name": "Bestätigung Abmeldung",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -901,7 +901,7 @@
     },
     {
       "code": 55006,
-      "name": "Ablehnung Lieferende (NB an LFN)",
+      "name": "Ablehnung Abmeldung",
       "segment_rules": [
         {
           "tag": "BGM",

@@ -17,8 +17,8 @@ use mako_markt::{
     domain::{MaloId, MeloId},
     error::MdmError,
     repository::{
-        AppState, ContractRepository, CorrelationIndex, MaloRepository, MeloRepository,
-        PartnerRepository, SubscriptionRepository,
+        AppState, CorrelationIndex, MaloRepository, MeloRepository, PartnerRepository,
+        SubscriptionRepository,
     },
 };
 use rubo4e::current::{Messlokation, Standorteigenschaften};
@@ -144,8 +144,8 @@ pub struct MeloResponse {
         (status = 409, description = "Version conflict"),
     )
 )]
-pub async fn put_melo<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn put_melo<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(pool): Extension<sqlx::PgPool>,
     headers: HeaderMap,
     _claims: Claims,
@@ -155,7 +155,6 @@ pub async fn put_melo<Ma, Me, Co, Su, Ci, Pa>(
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
@@ -264,15 +263,14 @@ where
         (status = 404, description = "Not found"),
     )
 )]
-pub async fn get_melo<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn get_melo<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     _claims: Claims,
     Path(id): Path<String>,
 ) -> impl IntoResponse
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
@@ -340,15 +338,14 @@ where
         (status = 404, description = "MeLo not found or no Standorteigenschaften"),
     )
 )]
-pub async fn get_melo_standorteigenschaften<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn get_melo_standorteigenschaften<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     _claims: Claims,
     Path(id): Path<String>,
 ) -> impl IntoResponse
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,

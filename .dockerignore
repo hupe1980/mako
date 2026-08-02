@@ -45,3 +45,14 @@ docs/
 package-lock.json
 yarn.lock
 Pipfile.lock
+
+# makotest Python sources. The crate is a workspace member, so `makotest/Cargo.toml`
+# and `makotest/src/` must stay in the context or Cargo cannot resolve the
+# workspace — but no service image builds it (the Docker stages are
+# package-scoped: `-p makod -p marktd -p processd`), so the Python package,
+# tests and build artefacts are dead weight here.
+makotest/python/
+makotest/tests/
+makotest/README.md
+**/__pycache__/
+**/*.pyc

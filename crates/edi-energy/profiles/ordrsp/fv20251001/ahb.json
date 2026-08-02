@@ -2,7 +2,7 @@
   "schema_version": 1,
   "message_type": "ORDRSP",
   "release": "1.4b",
-  "source_document": "ORDRSP AHB 1.4b vom 01.10.2025",
+  "source_document": "ORDRSP AHB, wire release 1.4b (Stand 01.10.2025)",
   "pruefidentifikatoren": [
     {
       "code": 19001,

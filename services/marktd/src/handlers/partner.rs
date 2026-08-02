@@ -22,8 +22,8 @@ use mako_markt::{
     domain::MarktpartnerId,
     error::MdmError,
     repository::{
-        AppState, ContractRepository, CorrelationIndex, MaloRepository, MeloRepository,
-        PartnerRecord, PartnerRepository, PriCatRepository as _, SubscriptionRepository,
+        AppState, CorrelationIndex, MaloRepository, MeloRepository, PartnerRecord,
+        PartnerRepository, PriCatRepository as _, SubscriptionRepository,
     },
 };
 use mako_service::cedar::CedarEnforcer;
@@ -87,8 +87,8 @@ fn normalize_geschaeftspartner(
 }
 
 /// `PUT /api/v1/partners/:gln`
-pub async fn put_partner<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn put_partner<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pricat_repo): Extension<PriCatRepoExt>,
     Extension(pool): Extension<sqlx::PgPool>,
@@ -99,7 +99,6 @@ pub async fn put_partner<Ma, Me, Co, Su, Ci, Pa>(
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
@@ -237,8 +236,8 @@ where
     }
 }
 /// `GET /api/v1/partners/:gln`
-pub async fn get_partner<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn get_partner<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(gln_str): Path<String>,
@@ -246,7 +245,6 @@ pub async fn get_partner<Ma, Me, Co, Su, Ci, Pa>(
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
@@ -307,8 +305,8 @@ where
 }
 
 /// `GET /api/v1/partners`
-pub async fn list_partners<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn list_partners<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Query(q): Query<PartnerQuery>,
@@ -316,7 +314,6 @@ pub async fn list_partners<Ma, Me, Co, Su, Ci, Pa>(
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
@@ -362,8 +359,8 @@ where
 /// `makoadresse` and `display_name` → `geschaeftspartner.organisationsname`.
 ///
 /// Returns 404 when the partner is not registered.
-pub async fn get_partner_marktteilnehmer<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn get_partner_marktteilnehmer<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(mp_id_str): Path<String>,
@@ -371,7 +368,6 @@ pub async fn get_partner_marktteilnehmer<Ma, Me, Co, Su, Ci, Pa>(
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
@@ -416,8 +412,8 @@ where
 /// static config.
 ///
 /// Returns 404 when the partner is not registered or has no AS4 addresses.
-pub async fn get_as4_address<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn get_as4_address<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
     Path(mp_id_str): Path<String>,
@@ -425,7 +421,6 @@ pub async fn get_as4_address<Ma, Me, Co, Su, Ci, Pa>(
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,

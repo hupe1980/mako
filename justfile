@@ -110,6 +110,17 @@ doc-check:
 # Full CI suite (minimum gate + tests + quality + release-lifecycle checks)
 ci: check test clippy fmt-check deny no-version-alias doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
 
+# ── makotest (Python toolkit) ─────────────────────────────────────────────────
+
+# Build the PyO3 extension into the active virtualenv and run the Python suite.
+# Requires `maturin` and an activated venv (`python -m venv .venv && . .venv/bin/activate`).
+test-makotest:
+    cd makotest && maturin develop --extras dev && pytest -q
+
+# Build a release wheel (abi3, one wheel for Python ≥ 3.11).
+build-makotest:
+    cd makotest && maturin build --release
+
 # ── Build ─────────────────────────────────────────────────────────────────────
 
 # Build the 3 demo Docker images — makod, marktd, processd.

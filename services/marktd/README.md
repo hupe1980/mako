@@ -4,7 +4,7 @@
 
 `marktd` is the companion service to [`makod`](../../services/makod): while `makod` handles
 EDIFACT protocol processing, `marktd` is the single source of truth for all market entity
-state — market locations, metering locations, contracts, VersorgungsStatus (with full
+state — market locations, metering locations, VersorgungsStatus (with full
 history and `?at=YYYY-MM-DD` point-in-time queries), MaLo grid topology (`malo_grid`),
 Netz-Element-Lokationen (NeLo) for Redispatch 2.0, trading-partner channels, price sheets,
 and ERP webhook subscriptions. The two services communicate via HMAC-signed CloudEvents 1.0
@@ -47,7 +47,7 @@ and any historical state can be retrieved by date via `?at=YYYY-MM-DD`.
 | **MMMA import worker** | Background worker auto-imports monthly Ausgleichsenergie prices (Gas + Strom) on the 1st of each month. Configurable `gas_url` / `strom_url` — supports `https://` and `file:///` sources. POST `/api/v1/mmma-preise/import-trigger` for on-demand. |
 | **ZeitvariablePreisposition** | `PUT /api/v1/preisblaetter-messung/{mp_id}` validates each `zeitvariablePreispositionen` element: `bandNummer` rejected with 422, `zaehlzeitregister` mandatory. Deserialized as typed `Vec<ZeitvariablePreisposition>` on `GET`. |
 | **Event source** | `urn:mako:marktd:tenant:{tenant}` |
-| **CE extensions** | `marktrole`, `marktmaloid`, `marktmeloid`, `marktcontractid`, `markterpref` |
+| **CE extensions** | `marktrole`, `marktmaloid`, `marktmeloid`, `markterpref` |
 | **Idempotency** | Inbound `POST /api/v1/events` uses `INSERT … ON CONFLICT DO NOTHING` |
 | **Body limit** | 2 MiB per request |
 | **Errors** | RFC 7807 Problem Details (`application/problem+json`) on all error responses |
@@ -66,9 +66,6 @@ and any historical state can be retrieved by date via `?at=YYYY-MM-DD`.
 | `GET` | `/api/v1/melos` | List Messlokationen (paginated) |
 | `GET` | `/api/v1/melos/{melo_id}` | Fetch single MeLo |
 | `PUT` | `/api/v1/melos/{melo_id}` | Upsert MeLo |
-| `GET` | `/api/v1/contracts` | List contracts (paginated) |
-| `GET` | `/api/v1/contracts/{id}` | Fetch single contract |
-| `PUT` | `/api/v1/contracts/{id}` | Upsert contract |
 | `GET` | `/api/v1/nb-contracts/{id}` | Fetch NB network contract |
 | `PUT` | `/api/v1/nb-contracts/{id}` | Upsert NB network contract |
 | `GET` | `/api/v1/partners` | List trading partners (paginated) |

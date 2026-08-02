@@ -2,7 +2,7 @@
   "schema_version": 1,
   "message_type": "INVOIC",
   "release": "2.8e",
-  "source_document": "INVOIC AHB 2.8e vom 01.10.2025",
+  "source_document": "INVOIC AHB, wire release 2.8e (Stand 01.10.2025)",
   "pruefidentifikatoren": [
     {
       "code": 31001,

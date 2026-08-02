@@ -61,7 +61,7 @@
 //!     .sender("9900111222333")
 //!     .receiver("9900444555666")
 //!     .metering_point("DE0001234567890")
-//!         .location_id("12345678901")
+//!         .location_id("12345678907")
 //!         .quantity("220", "1000.500", "KWH")
 //!     .done()
 //!     .build()?;
@@ -223,6 +223,9 @@ macro_rules! emit_comp {
 // ── Sub-modules ───────────────────────────────────────────────────────────────
 
 #[cfg(feature = "utilmd")]
+mod interchange;
+pub use interchange::{InterchangeBuilder, unb_qualifier};
+
 mod utilmd;
 #[cfg(feature = "utilmd")]
 pub use utilmd::{UtilmdBuilder, UtilmdTransactionBuilder};

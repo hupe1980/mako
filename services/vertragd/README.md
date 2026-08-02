@@ -26,6 +26,7 @@ MaLo IDs.
 | **Rahmenvertrag Cascade** | `POST /api/v1/rahmenvertraege/{id}/kuendigen` — terminates all active child Versorgungsverträge; individual notice periods respected; returns dispatched/skipped summary |
 | **Stornierung** | `POST /api/v1/vertraege/{id}/stornieren` — pre-activation cancel (ANGELEGT/IN_BEARBEITUNG only) |
 | **OIDC→MaLo auth** | `GET /kunden/authenticate?malo_id=` — used by `portald` to scope all portal requests; updates `letzter_login` on every successful check |
+| **Aggregatorverträge** | §41e EnWG / Art. 17 RL (EU) 2019/944 VPP contracts: `PUT/GET /api/v1/aggregatorvertraege` — SR-ID → Einsatzkosten + validity; `agg_no_overlap` GiST constraint makes two simultaneously active contracts per SR unrepresentable; read by `billingd` per dispatch |
 | **Contract-by-MaLo** | `GET /api/v1/vertraege/by-malo/{malo_id}` — the active Versorgungsvertrag behind a MaLo, plus the next possible Kündigungstermin (incl. §309 Nr. 9 BGB one-month cap after auto-renewal); `billingd` sources the §40 Abs. 1 EnWG invoice facts here |
 | **Preisanpassungsbenachrichtigung** | Daily worker emits `de.vertrag.preisaenderung.ankuendigung` 42 days before Tarifwechsel (§41 Abs. 3 EnWG ≥ 6 weeks notice) |
 | **Auto-renewal** | Daily worker extends `vertragsende` + emits 30-day advance notice (§13 GasGVV / §14 StromGVV) |

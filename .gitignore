@@ -35,3 +35,11 @@ concepts/
 
 # Zola build output
 /site/public
+
+# Python / maturin build artefacts (makotest)
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+*.egg-info/
+.venv/

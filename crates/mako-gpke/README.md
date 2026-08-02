@@ -23,12 +23,12 @@ the APERAK response deadline — not Werktage. This is enforced by BK6-22-024.
 
 | PID   | Process name (AHB)                                    | Direction   | Status      |
 |-------|-------------------------------------------------------|-------------|-------------|
-| 55001 | Anfrage Lieferbeginn Strom                            | LFN → NB    | ✅ Implemented |
-| 55002 | Anfrage Lieferende Strom                              | LFN → NB    | ✅ Implemented |
-| 55003 | Bestätigung Lieferbeginn                              | NB → LFN    | ↩ Derived from 55001 accept |
-| 55004 | Ablehnung Lieferbeginn                                | NB → LFN    | ↩ Derived from 55001 reject |
-| 55005 | Bestätigung Lieferende                                | NB → LFN    | ↩ Derived from 55002 accept |
-| 55006 | Ablehnung Lieferende                                  | NB → LFN    | ↩ Derived from 55002 reject |
+| 55001 | Anmeldung verb. MaLo                                  | LF → NB     | ✅ Implemented |
+| 55002 | Bestätigung Anmeldung verb. MaLo                      | NB → LF     | ↩ Derived from 55001 accept |
+| 55003 | Ablehnung Anmeldung verb. MaLo                        | NB → LF     | ↩ Derived from 55001 reject |
+| 55004 | Abmeldung                                             | LF → NB     | ✅ Implemented |
+| 55005 | Bestätigung Abmeldung                                 | NB → LF     | ↩ Derived from 55004 accept |
+| 55006 | Ablehnung Abmeldung                                   | NB → LF     | ↩ Derived from 55004 reject |
 | 55007 | Ankündigung NB-seitiges Lieferende                    | NB → LFN    | ✅ Implemented (`gpke-lf-abmeldung`) |
 | 55010 | Anfrage zur Beendigung der Zuordnung (NB Abmeldeanfrage) | NB → LFA | ✅ Implemented (`gpke-beendigung-zuordnung`) |
 | 55011/55012 | Bestätigung / Ablehnung Beendigung der Zuordnung     | LFA → NB    | ↩ Derived from 55010 accept/reject |

@@ -286,3 +286,57 @@ COMMENT ON TABLE preisgarantie_override_log IS
 
 CREATE INDEX pg_override_vertrag    ON preisgarantie_override_log (vertrag_id);
 CREATE INDEX pg_override_tenant_time ON preisgarantie_override_log (tenant, overridden_at DESC);
+
+-- ── Aggregatorverträge (§41e EnWG) ───────────────────────────────────────────
+--
+-- Contracts between an Aggregator (VPP operator) and the operator of a
+-- generation plant or a Letztverbraucher, per §41e EnWG — the German
+-- transposition of Art. 17 RL (EU) 2019/944 ("Demand response through
+-- aggregation").
+--
+-- This is Contract-context master data: parties, agreed capacity price, and
+-- validity window. `billingd` reads it over HTTP when settling a dispatch; it
+-- owns no copy. The dispatch idempotency guard (`vpp_dispatch_ledger`) stays in
+-- `billingd` because it references `billing_records`.
+
+CREATE TABLE aggregatorvertraege (
+    id                          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant                      TEXT        NOT NULL,
+    -- SteuerbareRessource-ID (C…) or NeLo-ID from marktd
+    sr_id                       TEXT        NOT NULL,
+    -- Operator-assigned VPP portfolio identifier
+    vpp_id                      TEXT        NOT NULL,
+    malo_id                     TEXT        NOT NULL,
+    -- Aggregator market-partner ID (the invoicing party)
+    aggregator_mp_id            TEXT        NOT NULL,
+    -- Agreed Einsatzkosten in EUR/kWh
+    capacity_price_eur_per_kwh  NUMERIC(12, 6) NOT NULL
+                                CHECK (capacity_price_eur_per_kwh >= 0),
+    vertragsbeginn              DATE        NOT NULL,
+    vertragsende                DATE
+                                CHECK (vertragsende IS NULL OR vertragsbeginn <= vertragsende),
+    -- MwSt override; NULL = use the billing default
+    mwst_rate_override          NUMERIC(5, 4),
+    kunden_id                   UUID        REFERENCES kunden(id),
+    created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant, sr_id, vertragsbeginn)
+);
+
+COMMENT ON TABLE aggregatorvertraege IS
+    '§41e EnWG Aggregatorvertrag (Art. 17 RL (EU) 2019/944 demand response '
+    'through aggregation): SR-ID -> agreed capacity price and validity. '
+    'Read by billingd when settling de.vpp.dispatch.confirmed.';
+
+CREATE INDEX agg_sr_tenant ON aggregatorvertraege (tenant, sr_id, vertragsbeginn DESC);
+CREATE INDEX agg_kunde     ON aggregatorvertraege (kunden_id) WHERE kunden_id IS NOT NULL;
+
+-- Only one Aggregatorvertrag may be active per SR at any instant.
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+ALTER TABLE aggregatorvertraege
+    ADD CONSTRAINT agg_no_overlap
+    EXCLUDE USING gist (
+        tenant WITH =,
+        sr_id  WITH =,
+        daterange(vertragsbeginn, vertragsende, '[)') WITH &&
+    );

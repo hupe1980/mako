@@ -1899,7 +1899,7 @@ impl Profile for MsconsFv20261001Profile {
         Some("2.5")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("MSCONS AHB 2.5, Stand 01.10.2026")
+        Some("MSCONS MIG 2.5, Stand 01.10.2026")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

@@ -222,7 +222,7 @@ stateDiagram-v2
 
 ```
 1.  Customer logs in → portald receives JWT
-2.  portald: GET vertragd /api/v1/kunden/authenticate?malo_id=51238696781
+2.  portald: GET vertragd /api/v1/kunden/authenticate?malo_id=51238696780
     (forwards the customer's Bearer token; vertragd verifies it via the same
      OIDC Claims check as every other endpoint)
     → { kunden_id, kundentyp, malo_id }   on 200, else a uniform 403
@@ -404,7 +404,7 @@ operators can revoke it via `POST /api/v1/vertraege/{id}/widerruf-kuendigung`:
 
 - Contract reverts from `GEKÜNDIGT` → `AKTIV`
 - BEENDET components revert to `AKTIV`
-- Emits `de.vertrag.kuendigung_widerrufen` CloudEvent
+- Emits `de.vertrag.kuendigung-widerrufen` CloudEvent
 - **Caller must separately cancel the in-flight Lieferende UTILMD via processd** — `vertragd` does not send a UTILMD cancellation automatically
 
 ```mermaid
@@ -481,6 +481,8 @@ Initial startup delay staggers workers to avoid DB contention.
 | `GET` | `/api/v1/rahmenvertraege` | List all Rahmenverträge for tenant (`?status=&limit=`) |
 | `GET` | `/api/v1/rahmenvertraege/{id}` | Single Rahmenvertrag with all child Versorgungsverträge |
 | `GET\|PUT` | `/api/v1/vertraege/{id}/preisgarantie` | Typed `rubo4e::current::Preisgarantie` COM |
+| `GET` | `/api/v1/aggregatorvertraege` | §41e EnWG Aggregatorverträge; with `?sr_id=&on=YYYY-MM-DD` returns the one in force on that date (404 if none) — the lookup `billingd` performs per VPP dispatch |
+| `PUT` | `/api/v1/aggregatorvertraege/{sr_id}` | Create/replace an Aggregatorvertrag; `409` when the validity window overlaps an existing one for that SR |
 | `POST` | `/api/v1/events` | Inbound CloudEvents from `makod` / `processd` |
 | `POST` | `/api/v1/webhooks/angebot` | CPQ: `de.tarif.angebot.angenommen` → auto-create Rahmenvertrag + Versorgungsverträge from Angebot |
 | `GET` | `/health` | Liveness |
@@ -488,6 +490,27 @@ Initial startup delay staggers workers to avoid DB contention.
 
 ---
 
+
+## §41e EnWG Aggregatorverträge
+
+Contracts between an Aggregator (VPP operator) and the operator of a generation
+plant or a Letztverbraucher — §41e EnWG, transposing Art. 17 RL (EU) 2019/944
+("Demand response through aggregation").
+
+This is Contract-context master data and lives here, not in `billingd`:
+`aggregatorvertraege` holds the parties, the agreed Einsatzkosten
+(`capacity_price_eur_per_kwh`) and the validity window. When a
+`de.vpp.dispatch.confirmed` event arrives, `billingd` reads the contract in force
+**on the dispatch execution date** and settles against it — so a replayed or
+delayed event still bills under the contract that applied when the flexibility
+was actually delivered.
+
+A `btree_gist` exclusion constraint (`agg_no_overlap`) makes two simultaneously
+active Aggregatorverträge for one SteuerbareRessource unrepresentable; a
+back-to-back succession is accepted because the validity range is half-open
+`[von, bis)`.
+
+---
 
 ## §40b EnWG billing cadence
 
@@ -514,10 +537,10 @@ retry and a dead-letter queue.
 |---|---|
 | `de.vertrag.aktiv` | All commodity Komponenten confirmed by NB |
 | `de.vertrag.gekuendigt` | Lieferende dispatched (Rahmenvertrag cascade, per child contract) |
-| `de.vertrag.kuendigung_widerrufen` | Kündigung revoked via `POST /widerruf-kuendigung`; contract returned to AKTIV |
+| `de.vertrag.kuendigung-widerrufen` | Kündigung revoked via `POST /widerruf-kuendigung`; contract returned to AKTIV |
 | `de.vertrag.tarifwechsel` | Product change committed immediately (handler or due-worker) |
-| `de.vertrag.tarifwechsel_geplant` | Future-dated Tarifwechsel stored (applied later by the due-worker) |
-| `de.vertrag.preisgarantie_updated` | Price guarantee stored or replaced |
+| `de.vertrag.tarifwechsel-geplant` | Future-dated Tarifwechsel stored (applied later by the due-worker) |
+| `de.vertrag.preisgarantie-updated` | Price guarantee stored or replaced |
 | `de.vertrag.preisaenderung.ankuendigung` | ≤ 42 days before `wirksamkeit` (§5 Abs. 2 StromGVV/GasGVV six weeks; §41 Abs. 5 EnWG one month for Haushaltskunden) |
 | `de.vertrag.autoerneuerung.ankuendigung` | 30 days before auto-renewal (§13 GasGVV / §14 StromGVV) |
 | `de.vertrag.ablauf.ankuendigung` | 30 days before `vertragsende` or `preisgarantie_bis` expiry (§13 GasGVV / §41 EnWG) |

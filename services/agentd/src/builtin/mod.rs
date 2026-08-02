@@ -244,7 +244,7 @@ MSB (Messstellenbetreiber), and AWH (abrechnungswürdige Handlungen bei Sperrpro
 ## TRIGGERED BY
 - `de.netzbilanz.invoic.drafted` — new invoice draft created
 - `de.netzbilanz.invoic.dispatched` — invoice dispatched
-- `de.netzbilanz.invoic.dispatch_overdue` — dispatch deadline approaching
+- `de.netzbilanz.invoic.dispatch-overdue` — dispatch deadline approaching
 
 ## STEP-BY-STEP PROCEDURE
 
@@ -473,7 +473,7 @@ const EEG_AGENT: BuiltinAgentDef = BuiltinAgentDef {
 You are the EEG plant management specialist.
 
 ## TRIGGERED BY
-- `de.eeg.anlage.foerderung_auslaufend` — plant approaching end of 20-year EEG support
+- `de.eeg.anlage.foerderung-auslaufend` — plant approaching end of 20-year EEG support
 - `de.messwert.reading.direct.stored` — iMSys push (check if plant qualifies for §41a upgrade)
 
 ## FÖRDERUNG EXPIRY PROCEDURE
@@ -1000,7 +1000,7 @@ You are the customer portal notification specialist.
 
 ## TRIGGERED BY
 - `de.billing.rechnung.erstellt` — new invoice → notify customer
-- `de.eeg.anlage.foerderung_auslaufend` — EEG expiry → notify plant operator
+- `de.eeg.anlage.foerderung-auslaufend` — EEG expiry → notify plant operator
 - `de.accounting.mahnung.issued` — Mahnung → dunning notification
 
 ## PROCEDURE
@@ -1150,8 +1150,8 @@ const SMGW_DIAGNOSTICS_AGENT: BuiltinAgentDef = BuiltinAgentDef {
 You are the Smart Meter Gateway (SMGW) diagnostics specialist.
 
 ## TRIGGERED BY
-- `de.messwert.cls.compliance_issue`    — compliance issue detected by daily worker
-- `de.messwert.smgw.cert.expiry_warning` — cert 90/30/7 days from expiry; escalate renewal to the MSB before §14a Fernsteuerbarkeit is lost
+- `de.messwert.cls.compliance-issue`    — compliance issue detected by daily worker
+- `de.messwert.smgw.cert.expiry-warning` — cert 90/30/7 days from expiry; escalate renewal to the MSB before §14a Fernsteuerbarkeit is lost
 - `de.messwert.reading.quality.warning` — SMGW may be cause of quality degradation
 - `de.messwert.reading.direct.stored`   — verify gateway session is healthy post-push
 - `de.mako.process.initiated`       — §14a Steuerungsauftrag (check CLS channel)
@@ -1160,7 +1160,7 @@ You are the Smart Meter Gateway (SMGW) diagnostics specialist.
 ## PROCEDURE
 
 ### Step 1 — Read the triggering event
-The `de.messwert.cls.compliance_issue` / `de.messwert.smgw.cert.expiry_warning`
+The `de.messwert.cls.compliance-issue` / `de.messwert.smgw.cert.expiry-warning`
 CloudEvent that woke you carries the full finding in its `data`:
 `malo_id`, `device_id`, `issue_type`, `severity`, `cert_serial`, `cert_type`,
 `days_to_expiry`, `channel_id`, and a human-readable `description`. Assess from
@@ -1192,7 +1192,7 @@ If `last_contact_at` is > 2 hours ago → `COMMUNICATION_FAULT`:
 ### Step 6 — Trigger immediate re-scan if needed
 Call `POST /api/v1/smgw/compliance/scan` to run a side-effecting sweep that:
 - Logs all current issues to `cls_compliance_log`
-- Emits `de.messwert.cls.compliance_issue` CloudEvents to ERP
+- Emits `de.messwert.cls.compliance-issue` CloudEvents to ERP
 
 ## BSI TR-03109 REQUIREMENTS
 - TLS certificate: issued by BSI-approved CA, renew ≥ 30 days before expiry (TR-03109-4 §6.3)
@@ -1226,7 +1226,7 @@ const VPP_BILLING_AGENT: BuiltinAgentDef = BuiltinAgentDef {
     name: "vpp-billing-agent",
     specialty: "VPP settlement anomaly monitor. Verifies that every `de.vpp.dispatch.confirmed` \
                 event produced a matching `de.vpp.settlement.berechnet` within 5 minutes, \
-                alerts on missing settlements, and performs RED III Article 17 audit checks.",
+                alerts on missing settlements, and performs Art. 17 RL (EU) 2019/944 audit checks.",
     system_prompt: "\
 You are the VPP settlement compliance specialist.
 
@@ -1238,7 +1238,7 @@ Your job is anomaly detection, audit, and escalation.
 ## TRIGGERED BY
 - `de.vpp.dispatch.confirmed`   — a new dispatch was confirmed; check billing followed
 - `de.vpp.settlement.berechnet` — a settlement was generated; validate arithmetic
-- Manual run                    — periodic RED III audit sweep
+- Manual run                    — periodic Art. 17 RL (EU) 2019/944 audit sweep
 
 ## CHECKS (run in order)
 
@@ -1258,8 +1258,8 @@ Your job is anomaly detection, audit, and escalation.
 4. **Duplicate check**: Verify `tx_id` appears exactly once in `vpp_dispatch_ledger`.
    More than once = double-billing risk.
 
-5. **RED III Article 17 audit**: Confirm each settled `Rechnung` carries:
-   - `zusatzAttribute[].name = 'regulatory_basis'` with value `'RED III Article 17'`
+5. **Art. 17 RL (EU) 2019/944 audit**: Confirm each settled `Rechnung` carries:
+   - `zusatzAttribute[].name = 'regulatory_basis'` with value `'Art. 17 RL (EU) 2019/944'`
    - `zusatzAttribute[].name = 'tx_id'` cross-referencing the dispatch event
    - `zusatzAttribute[].name = 'sr_id'` identifying the controlled resource
 
@@ -1375,8 +1375,8 @@ const EINSD_BATCH_AGENT: BuiltinAgentDef = BuiltinAgentDef {
 You are the monthly EEG batch settlement and compliance sweep specialist.
 
 ## TRIGGERED BY
-- `de.eeg.settlement.batch_due`   — monthly auto-settle trigger (1st of month)
-- `de.eeg.anlage.foerderung_auslaufend` — with >0 plants in expiry window
+- `de.eeg.settlement.batch-due`   — monthly auto-settle trigger (1st of month)
+- `de.eeg.anlage.foerderung-auslaufend` — with >0 plants in expiry window
 - Manual / cron                   — on-demand §52 violation sweep
 
 ## STEP-BY-STEP PROCEDURE

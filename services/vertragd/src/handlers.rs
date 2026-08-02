@@ -1974,7 +1974,7 @@ pub async fn widerruf_kuendigung_handler(
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     // Persist-before-dispatch: the Widerruf writes (component + contract status
-    // reverts) and the de.vertrag.kuendigung_widerrufen CloudEvent commit in ONE
+    // reverts) and the de.vertrag.kuendigung-widerrufen CloudEvent commit in ONE
     // tx so an ERP-webhook outage can never lose the notice.
     let mut tx = match pool.begin().await {
         Ok(t) => t,
@@ -2487,4 +2487,90 @@ pub async fn post_angebot_webhook(
         })),
     )
         .into_response()
+}
+
+// ── Aggregatorverträge (§41e EnWG) ────────────────────────────────────────────
+
+/// `PUT /api/v1/aggregatorvertraege/{sr_id}` — create or replace the §41e
+/// Aggregatorvertrag for a SteuerbareRessource.
+///
+/// Returns `409 Conflict` when the validity window overlaps an existing
+/// contract for the same SR (`agg_no_overlap` exclusion constraint) — two
+/// simultaneously active Aggregatorverträge for one resource are not
+/// representable.
+pub async fn put_aggregatorvertrag(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(sr_id): Path<String>,
+    Json(input): Json<crate::pg::UpsertAggregatorvertragInput>,
+) -> impl IntoResponse {
+    match crate::pg::upsert_aggregatorvertrag(&pool, &cfg.tenant, &sr_id, &input).await {
+        Ok(id) => (StatusCode::OK, Json(serde_json::json!({ "id": id }))).into_response(),
+        Err(e) if is_exclusion_violation(&e) => (
+            StatusCode::CONFLICT,
+            format!("overlapping Aggregatorvertrag for SR {sr_id}: {e}"),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/aggregatorvertraege` — list all Aggregatorverträge.
+///
+/// With `?sr_id=…&on=YYYY-MM-DD`, returns the single contract in force for that
+/// resource on that date (404 when none is) — the lookup `billingd` performs
+/// when settling a dispatch.
+pub async fn get_aggregatorvertraege(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Query(q): Query<AggregatorvertragQuery>,
+) -> impl IntoResponse {
+    if let Some(sr_id) = q.sr_id {
+        let on = match q.on.as_deref() {
+            Some(s) => {
+                match time::Date::parse(s, &time::format_description::well_known::Iso8601::DATE) {
+                    Ok(d) => d,
+                    Err(_) => {
+                        return (StatusCode::BAD_REQUEST, format!("invalid `on` date: {s}"))
+                            .into_response();
+                    }
+                }
+            }
+            None => time::OffsetDateTime::now_utc().date(),
+        };
+        return match crate::pg::find_active_aggregatorvertrag(&pool, &cfg.tenant, &sr_id, on).await
+        {
+            Ok(Some(row)) => Json(row).into_response(),
+            Ok(None) => (
+                StatusCode::NOT_FOUND,
+                format!("no Aggregatorvertrag in force for SR {sr_id} on {on}"),
+            )
+                .into_response(),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+    }
+
+    match crate::pg::list_aggregatorvertraege(&pool, &cfg.tenant).await {
+        Ok(rows) => {
+            Json(serde_json::json!({ "count": rows.len(), "vertraege": rows })).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct AggregatorvertragQuery {
+    pub sr_id: Option<String>,
+    /// ISO 8601 date; defaults to today.
+    pub on: Option<String>,
+}
+
+/// `true` when the error is a Postgres exclusion-constraint violation (23P01).
+fn is_exclusion_violation(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<sqlx::Error>()
+        .and_then(sqlx::Error::as_database_error)
+        .and_then(|d| d.code().map(|c| c.into_owned()))
+        .is_some_and(|c| c == "23P01")
 }

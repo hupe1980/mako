@@ -1034,7 +1034,7 @@ impl Profile for InsrptFv20260101Profile {
         Some("1.1g")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("INSRPT AHB 1.1g, außerordentliche Veröffentlichung Stand 11.12.2025")
+        Some("INSRPT MIG 1.1g, außerordentliche Veröffentlichung Stand 11.12.2025")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

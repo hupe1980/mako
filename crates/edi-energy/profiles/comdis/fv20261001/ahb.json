@@ -2,7 +2,7 @@
   "schema_version": 1,
   "message_type": "COMDIS",
   "release": "1.0g",
-  "source_document": "COMDIS AHB 1.0g vom 01.10.2026",
+  "source_document": "COMDIS AHB, wire release 1.0g (Stand 01.10.2026)",
   "pruefidentifikatoren": [
     {
       "code": 29001,

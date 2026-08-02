@@ -428,8 +428,8 @@ impl mako_engine::builder::EngineModule for WimModule {
         // violating the AS4 acknowledgement obligation (BDEW AS4-Profile §5).
         //
         // The WimRechnungWorkflow provides a complete state machine with Settle/Dispute
-        // commands. Automatic outbound REMADV generation (auto-settlement deadline) is
-        // tracked in TODO.md §WiM-Rechnung.
+        // commands. Automatic outbound REMADV generation on the auto-settlement
+        // deadline is not implemented; settlement is driven by an explicit command.
         for &pid in rechnung::WIM_INVOIC_PIDS {
             router.register(pid, "wim-rechnung");
         }

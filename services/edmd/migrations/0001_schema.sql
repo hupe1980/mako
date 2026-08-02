@@ -445,7 +445,7 @@ CREATE INDEX smgw_session_gin    ON smgw_sessions USING GIN (session);
 --
 -- Append-only log of every compliance issue detected by the background worker
 -- or the on-demand compliance scan (`POST /api/v1/smgw/compliance/scan`).
--- Each row corresponds to one emitted `de.messwert.cls.compliance_issue` CloudEvent.
+-- Each row corresponds to one emitted `de.messwert.cls.compliance-issue` CloudEvent.
 --
 -- `issue_type` maps to the MSB's legal exposure:
 --   CERT_EXPIRED        — BNetzA can impose fines; §14a eligibility lost

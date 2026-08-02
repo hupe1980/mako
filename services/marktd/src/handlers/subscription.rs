@@ -17,8 +17,8 @@ use axum::{
 use mako_markt::{
     cloudevents::MarktEvent,
     repository::{
-        AppState, ContractRepository, CorrelationIndex, MaloRepository, MeloRepository,
-        PartnerRepository, Subscription, SubscriptionRepository,
+        AppState, CorrelationIndex, MaloRepository, MeloRepository, PartnerRepository,
+        Subscription, SubscriptionRepository,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -60,8 +60,8 @@ pub struct SubscriptionResponse {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// `PUT /api/v1/subscriptions/:id`
-pub async fn put_subscription<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn put_subscription<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     _claims: Claims,
     Path(id): Path<String>,
     Json(req): Json<SubscriptionUpsertRequest>,
@@ -69,7 +69,6 @@ pub async fn put_subscription<Ma, Me, Co, Su, Ci, Pa>(
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
@@ -92,15 +91,14 @@ where
 }
 
 /// `GET /api/v1/subscriptions/:id`
-pub async fn get_subscription<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn get_subscription<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     _claims: Claims,
     Path(id): Path<String>,
 ) -> impl IntoResponse
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
@@ -117,14 +115,13 @@ where
 }
 
 /// `GET /api/v1/subscriptions`
-pub async fn list_subscriptions<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn list_subscriptions<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     _claims: Claims,
 ) -> impl IntoResponse
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
@@ -144,8 +141,8 @@ where
 /// Unlike the fan-out worker, this is a synchronous targeted delivery — only the
 /// named subscriber receives the ping, even if the event type/role would match
 /// other subscriptions.  Returns the delivery result synchronously.
-pub async fn test_subscription<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn test_subscription<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(http): Extension<reqwest::Client>,
     _claims: Claims,
     Path(id): Path<String>,
@@ -153,7 +150,6 @@ pub async fn test_subscription<Ma, Me, Co, Su, Ci, Pa>(
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,

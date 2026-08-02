@@ -22,10 +22,10 @@
 //!        │  → AntwortGesendet state
 //!        │  → WorkflowOutput::outbox: MSCONS 13015 + ORDERS 17134
 //!        │
-//!        │  render UTILMD 55003 → EDIFACT wire bytes  (UtilmdBuilder)
+//!        │  render UTILMD 55002 → EDIFACT wire bytes  (UtilmdBuilder)
 //!        │  cancel APERAK deadline
 //!        ▼
-//!  3. parse UTILMD 55003 bytes
+//!  3. parse UTILMD 55002 bytes
 //!     HandleAntwort(accepted=true)
 //!     → Active state
 //! ```
@@ -345,16 +345,16 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
     assert_eq!(
         nb_output.outbox.len(),
         3,
-        "accepted 55001 must produce UTILMD 55003 + MSCONS + ORDERS outbox entries"
+        "accepted 55001 must produce UTILMD 55002 + MSCONS + ORDERS outbox entries"
     );
 
-    let utilmd_55003_ob = nb_output
+    let utilmd_55002_ob = nb_output
         .outbox
         .iter()
         .find(|e| e.message_type.as_ref() == "UTILMD")
-        .expect("UTILMD 55003 response must be present");
-    assert_eq!(utilmd_55003_ob.payload["pid"].as_u64().unwrap(), 55003);
-    assert_eq!(utilmd_55003_ob.recipient.as_ref(), LFN_ID);
+        .expect("UTILMD 55002 Bestätigung must be present");
+    assert_eq!(utilmd_55002_ob.payload["pid"].as_u64().unwrap(), 55002);
+    assert_eq!(utilmd_55002_ob.recipient.as_ref(), LFN_ID);
 
     let mscons = nb_output
         .outbox
@@ -385,19 +385,19 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
         "NB must be AntwortGesendet after accepting",
     );
 
-    // ── 6. NB renders UTILMD 55003 (Bestätigung) for the LFN ─────────────────
+    // ── 6. NB renders UTILMD 55002 (Bestätigung Anmeldung) for the LFN ───────
 
-    let utilmd_55003_bytes = render_utilmd(55003, NB_ID, LFN_ID, MALO_ID, antwort_ref);
+    let utilmd_55002_bytes = render_utilmd(55002, NB_ID, LFN_ID, MALO_ID, antwort_ref);
 
-    // Verify round-trip: PID 55003, sender NB, receiver LFN.
-    let msg_55003 = platform
-        .parse(&utilmd_55003_bytes)
-        .expect("55003 must parse");
+    // Verify round-trip: PID 55002, sender NB, receiver LFN.
+    let msg_55002 = platform
+        .parse(&utilmd_55002_bytes)
+        .expect("55002 must parse");
     assert_eq!(
-        msg_55003.detect_pruefidentifikator().unwrap().as_u32(),
-        55003
+        msg_55002.detect_pruefidentifikator().unwrap().as_u32(),
+        55002
     );
-    if let AnyMessage::Utilmd(utilmd) = &msg_55003 {
+    if let AnyMessage::Utilmd(utilmd) = &msg_55002 {
         assert_eq!(
             utilmd.sender().and_then(|n| n.party_id.as_deref()),
             Some(NB_ID)
@@ -424,17 +424,17 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
         "cancelled deadline must not appear in due_now",
     );
 
-    // ── 8. LFN receives the UTILMD 55003 and handles the acceptance ───────────
+    // ── 8. LFN receives the UTILMD 55002 Bestätigung and handles the acceptance ──
 
-    let pid_55003 = mako_engine::types::Pruefidentifikator::new(
-        msg_55003.detect_pruefidentifikator().unwrap().as_u32(),
+    let pid_55002 = mako_engine::types::Pruefidentifikator::new(
+        msg_55002.detect_pruefidentifikator().unwrap().as_u32(),
     )
     .unwrap();
-    // PID 55003 = Bestätigung Lieferbeginn — always accepted in GPKE.
-    let accepted = pid_55003.as_u32() == 55003;
+    // PID 55002 = Bestätigung Anmeldung verb. MaLo — always accepted in GPKE.
+    let accepted = pid_55002.as_u32() == 55002;
 
     lfn.execute(LfAnmeldungCommand::HandleAntwort {
-        response_pid: pid_55003,
+        response_pid: pid_55002,
         accepted,
         reason: None,
         response_ref: MessageRef::new(antwort_ref),
@@ -525,26 +525,26 @@ async fn bilateral_lieferbeginn_rejection_path() {
     assert_eq!(
         nb_out.outbox.len(),
         1,
-        "rejected 55001 must produce only UTILMD 55004 (no MSCONS/ORDERS)",
+        "rejected 55001 must produce only UTILMD 55003 (no MSCONS/ORDERS)",
     );
     assert_eq!(nb_out.outbox[0].message_type.as_ref(), "UTILMD");
-    assert_eq!(nb_out.outbox[0].payload["pid"].as_u64().unwrap(), 55004);
+    assert_eq!(nb_out.outbox[0].payload["pid"].as_u64().unwrap(), 55003);
 
     nb.execute(reject_cmd)
         .await
         .expect("NB execute SendAntwort(rejected)");
 
-    // NB renders UTILMD 55004 (Ablehnung) for the LFN.
-    let bytes_55004 = render_utilmd(55004, NB_ID, LFN_ID, MALO_ID, "MSG-NB-REJ-001");
-    let msg_55004 = platform.parse(&bytes_55004).expect("55004 must parse");
-    let pid_55004 = mako_engine::types::Pruefidentifikator::new(
-        msg_55004.detect_pruefidentifikator().unwrap().as_u32(),
+    // NB renders UTILMD 55003 (Ablehnung Anmeldung) for the LFN.
+    let bytes_55003 = render_utilmd(55003, NB_ID, LFN_ID, MALO_ID, "MSG-NB-REJ-001");
+    let msg_55003 = platform.parse(&bytes_55003).expect("55003 must parse");
+    let pid_55003 = mako_engine::types::Pruefidentifikator::new(
+        msg_55003.detect_pruefidentifikator().unwrap().as_u32(),
     )
     .unwrap();
-    assert_eq!(pid_55004.as_u32(), 55004);
+    assert_eq!(pid_55003.as_u32(), 55003);
 
     lfn.execute(LfAnmeldungCommand::HandleAntwort {
-        response_pid: pid_55004,
+        response_pid: pid_55003,
         accepted: false,
         reason: Some("MaLo hat laufenden Vertrag".to_owned()),
         response_ref: MessageRef::new("MSG-NB-REJ-001"),

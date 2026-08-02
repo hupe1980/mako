@@ -196,6 +196,49 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo xtask codegen --check
 
+  makotest:
+    name: makotest (Python toolkit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"   # the abi3 floor — the wheel must work here
+
+      - name: Install maturin
+        run: pip install 'maturin>=1.9,<2.0' pytest
+
+      # `maturin develop` enables pyo3/extension-module (see pyproject.toml);
+      # plain `cargo test --workspace` deliberately does not, so both paths
+      # need exercising.
+      - name: Build extension and run the Python suite
+        working-directory: makotest
+        run: |
+          maturin develop
+          pytest -q
+
+      - name: Build a release wheel
+        working-directory: makotest
+        run: maturin build --release
+
+      # The sdist is only exercised at release time otherwise, and it is the
+      # artifact pip falls back to when no wheel matches. It must build
+      # standalone: makotest depends on workspace crates by `path`, so maturin
+      # has to vendor them into the tarball. Verify that here, not on the tag.
+      - name: Verify the sdist builds standalone
+        run: |
+          maturin sdist --manifest-path makotest/Cargo.toml --out sdist-out
+          python -m venv /tmp/sdist-venv
+          /tmp/sdist-venv/bin/pip install --no-binary :all: sdist-out/*.tar.gz
+          /tmp/sdist-venv/bin/python -c "
+          import makotest
+          assert makotest.malo_from_base('5123869678') == '51238696780'
+          assert makotest.add_werktage('2026-12-24', 2) == '2026-12-29'
+          print('sdist OK', makotest.__version__)
+          "
+
   validate-profiles:
     name: Validate profiles
     runs-on: ubuntu-latest

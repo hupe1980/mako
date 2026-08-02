@@ -297,7 +297,7 @@ impl UtiltsDefinitionBlock {
 /// ```no_run
 /// use edi_energy::builders::{UtiltsCalcStep, UtiltsEnergyAmountRef, UtiltsUsagePeriod, UtiltsVorgang};
 /// let vorgang = UtiltsVorgang::new("V001", 25001)
-///     .location("DE0000012345678901234567890123456789")
+///     .location("DE0000012345678907234567890123456789")
 ///     .formula_status("Z33", 1)
 ///     .add_usage_period(UtiltsUsagePeriod::new(1, "202710012200+00"))
 ///     .add_energy_ref(UtiltsEnergyAmountRef::new(1, 1))
@@ -446,7 +446,7 @@ struct UtiltsBuilderInner {
 ///     .document_id("MKIDI5422")
 ///     .add_vorgang(
 ///         UtiltsVorgang::new("V001", 25001)
-///             .location("DE0000012345678901234567890123456789")
+///             .location("DE0000012345678907234567890123456789")
 ///             .formula_status("Z33", 1)
 ///             .add_usage_period(UtiltsUsagePeriod::new(1, "202710012200+00"))
 ///             .add_energy_ref(UtiltsEnergyAmountRef::new(1, 1))

@@ -570,7 +570,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
     // §14a Fernsteuerbarkeit compliance background worker (MsbG §21c, BSI TR-03109-4 §6.3).
     // Daily sweep of all SmgwSessions: checks TLS cert validity, CLS channel §14a
     // Konfigurationsprodukt, and communication faults.
-    // Emits `de.messwert.cls.compliance_issue` CloudEvents for every detected issue.
+    // Emits `de.messwert.cls.compliance-issue` CloudEvents for every detected issue.
     {
         use crate::smgw::spawn_cls_compliance_worker;
         spawn_cls_compliance_worker(
@@ -586,7 +586,7 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
     }
 
     // SMGW certificate-expiry alerting (BSI TR-03109-4 §6.3). Daily sweep of every
-    // certificate in `smgw_sessions`, emitting `de.messwert.smgw.cert.expiry_warning`
+    // certificate in `smgw_sessions`, emitting `de.messwert.smgw.cert.expiry-warning`
     // at 90 / 30 / 7 days before `valid_to` (SMGW_CERT_ABLAUFDATUM), once per tier per
     // certificate. An expired cert silently ends §14a Fernsteuerbarkeit.
     {

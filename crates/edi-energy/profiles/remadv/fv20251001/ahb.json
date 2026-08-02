@@ -2,7 +2,7 @@
   "schema_version": 1,
   "message_type": "REMADV",
   "release": "2.9e",
-  "source_document": "REMADV AHB 2.9e vom 01.10.2025",
+  "source_document": "REMADV AHB, wire release 2.9e (Stand 01.10.2025)",
   "pruefidentifikatoren": [
     {
       "code": 33001,

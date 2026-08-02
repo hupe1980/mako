@@ -401,7 +401,7 @@ curl -X POST http://mabis-syncd:8880/api/v1/pruefmitteilung \
         "period_from": "2026-05-01", "period_to": "2026-05-31",
         "version": "2026-06-15T05:00:00Z", "positiv": false,
         "sender_mp_id": "9900077000006", "pid": 21000,
-        "begruendung": "Abweichung MaLo 51238696781" }'
+        "begruendung": "Abweichung MaLo 51238696780" }'
 
 # Open Korrekturbedarf — negative Prüfmitteilungen with no correction yet
 curl http://mabis-syncd:8880/api/v1/korrekturbedarf

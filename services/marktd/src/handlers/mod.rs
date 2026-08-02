@@ -7,7 +7,6 @@
 //! - `etag` — `i64` version → ETag header value
 
 pub mod bilanzierung;
-pub mod contract;
 pub mod correlation;
 pub mod device;
 pub mod dlq;

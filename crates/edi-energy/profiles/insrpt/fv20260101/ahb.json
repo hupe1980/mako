@@ -2,7 +2,7 @@
   "schema_version": 1,
   "message_type": "INSRPT",
   "release": "1.1a",
-  "source_document": "INSRPT AHB 1.1a vom 01.01.2026",
+  "source_document": "INSRPT AHB, wire release 1.1a (Stand 01.01.2026)",
   "pruefidentifikatoren": [
     {
       "code": 23001,

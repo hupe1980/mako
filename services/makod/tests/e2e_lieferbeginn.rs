@@ -18,8 +18,8 @@
 //!                                                 → asserts adapter preserves ref
 //!                                               send_antwort(accepted=true)
 //!                                                 → asserts MSCONS 13015 present
-//!                                                 → renders UTILMD 55003 wire
-//!                        ◄─── UTILMD 55003 ────
+//!                                                 → renders UTILMD 55002 wire
+//!                        ◄─── UTILMD 55002 ────
 //!   receive_antwort(wire)
 //!   ──────────────────────────────────────────────────────────
 //!   final: Active                               AntwortGesendet
@@ -274,8 +274,8 @@ impl MockNb {
     /// (`accepted = false`) for the pending supplier-change request.
     ///
     /// Asserts outbox content:
-    /// - `accepted = true`  → UTILMD 55003 + MSCONS 13015 (Bewegungsdaten).
-    /// - `accepted = false` → UTILMD 55004 only (no MSCONS).
+    /// - `accepted = true`  → UTILMD 55002 + MSCONS 13015 (Bewegungsdaten).
+    /// - `accepted = false` → UTILMD 55003 only (no MSCONS).
     ///
     /// Returns the rendered UTILMD wire bytes for transport back to the LFN.
     async fn send_antwort(&self, accepted: bool, reason: Option<&str>) -> Vec<u8> {
@@ -296,7 +296,8 @@ impl MockNb {
             .await
             .expect("NB: execute SendAntwort");
 
-        let expected_pid: u64 = if accepted { 55003 } else { 55004 };
+        // AHB triple 55001|55002|55003 = (Anmeldung, Bestätigung, Ablehnung).
+        let expected_pid: u64 = if accepted { 55002 } else { 55003 };
         let utilmd = outbox
             .iter()
             .find(|e| e.message_type.as_ref() == "UTILMD")
@@ -353,7 +354,7 @@ impl MockNb {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-/// Lieferbeginn Strom — acceptance path (PID 55001 → 55003).
+/// Lieferbeginn Strom — acceptance path (PID 55001 → 55002).
 ///
 /// LFN ERP initiates a supplier change; NB ERP confirms; LFN reaches `Active`.
 #[tokio::test]
@@ -376,7 +377,7 @@ async fn e2e_lieferbeginn_strom_happy_path() {
     );
 
     // ── NB ERP: send Bestätigung ──────────────────────────────────────────────
-    let wire_55003 = nb.send_antwort(true, None).await;
+    let wire_55002 = nb.send_antwort(true, None).await;
     assert!(
         matches!(
             nb.state().await,
@@ -386,7 +387,7 @@ async fn e2e_lieferbeginn_strom_happy_path() {
     );
 
     // ── LFN ERP: receive Bestätigung ─────────────────────────────────────────
-    lfn.receive_antwort(&wire_55003).await;
+    lfn.receive_antwort(&wire_55002).await;
 
     // ── Final state: LFN Active — assert all business data fields ────────────
     let lfn_final = lfn.state().await;
@@ -403,7 +404,7 @@ async fn e2e_lieferbeginn_strom_happy_path() {
     }
 }
 
-/// Lieferbeginn Strom — rejection path (PID 55001 → 55004).
+/// Lieferbeginn Strom — rejection path (PID 55001 → 55003).
 ///
 /// NB ERP rejects the Anmeldung; both parties end in `Rejected`.
 #[tokio::test]
@@ -416,7 +417,7 @@ async fn e2e_lieferbeginn_strom_rejection_path() {
 
     // ── NB ERP: receive UTILMD 55001, then reject ─────────────────────────────
     nb.receive_utilmd(&wire_55001).await;
-    let wire_55004 = nb.send_antwort(false, Some("Stammdaten unbekannt")).await;
+    let wire_55003 = nb.send_antwort(false, Some("Stammdaten unbekannt")).await;
     // When accepted=false, apply() transitions NB to Rejected (not AntwortGesendet) —
     // the AntwortGesendet *event* is emitted but the state machine moves to Rejected.
     assert!(
@@ -425,7 +426,7 @@ async fn e2e_lieferbeginn_strom_rejection_path() {
     );
 
     // ── LFN ERP: receive Ablehnung ────────────────────────────────────────────
-    lfn.receive_antwort(&wire_55004).await;
+    lfn.receive_antwort(&wire_55003).await;
     assert!(
         matches!(lfn.state().await, LfAnmeldungState::Rejected { .. }),
         "LFN must be Rejected after receiving Ablehnung"

@@ -18,7 +18,7 @@
 //!    FV2025-10-01 UTILMD 55001 Anfrage message (release `S2.1`).
 //! 2. After reaching `ValidationPassed`, the NB issues a `SendAntwort` command
 //!    (`accepted = true`).
-//! 3. The acceptance response (PID 55003) is then routed to the LFN-side
+//! 3. The acceptance response (PID 55002) is then routed to the LFN-side
 //!    `GpkeLfAnmeldungWorkflow` — the LFN process was also started under
 //!    `FV2025-10-01`.
 //! 4. The LFN-side process transitions to `Active`, confirming the cross-FV
@@ -72,7 +72,7 @@ const RELEASE_START: &str = "S2.1";
 /// started with `FV_START` and the LFN process receives a `HandleAntwort`
 /// constructed at `FV_START`; both must coexist in the same engine context.
 ///
-/// A future evolution of this test can wire in a `FV2026-01-01` UTILMD 55003
+/// A future evolution of this test can wire in a `FV2026-01-01` UTILMD 55002
 /// once the `fv20260101` profiles are available in `edi-energy`.
 const RELEASE_RESPONSE: &str = "S2.1";
 
@@ -145,7 +145,7 @@ fn render_utilmd(
 ///     │  SendAntwort(accepted=true)
 ///     │  → AntwortGesendet
 ///     │  APERAK deadline cancelled
-///     │  UTILMD 55003 wire bytes
+///     │  UTILMD 55002 wire bytes
 ///     ▼
 ///  3. HandleAntwort (FV2025-10-01 process, response via FV2025-10-01 wire)
 ///     → Active         ← cross-FV tolerance confirmed
@@ -294,21 +294,21 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
     // with FV_RESPONSE (FV2025-10-01 in this baseline test, extendable to
     // FV2026-01-01 once the new profiles are available).
 
-    let antwort_bytes = render_utilmd(55003, NB_ID, LFN_ID, MALO_ID, antwort_ref, RELEASE_RESPONSE);
-    let antwort_msg = platform.parse(&antwort_bytes).expect("UTILMD 55003 parse");
+    let antwort_bytes = render_utilmd(55002, NB_ID, LFN_ID, MALO_ID, antwort_ref, RELEASE_RESPONSE);
+    let antwort_msg = platform.parse(&antwort_bytes).expect("UTILMD 55002 parse");
     let antwort_pid = antwort_msg
         .detect_pruefidentifikator()
         .expect("PID detection must succeed");
-    assert_eq!(antwort_pid.as_u32(), 55003, "response PID must be 55003");
+    assert_eq!(antwort_pid.as_u32(), 55002, "response PID must be 55002");
 
     let AnyMessage::Utilmd(utilmd_antwort) = &antwort_msg else {
-        panic!("expected AnyMessage::Utilmd for 55003");
+        panic!("expected AnyMessage::Utilmd for 55002");
     };
 
     // The LFN process receives HandleAntwort — this is the cross-FV routing step.
     // Under ForwardCompatible policy, the process accepts the response regardless
     // of which FV window the response was encoded in.
-    let accepted = matches!(antwort_pid.as_u32(), 55003 | 55005 | 55017);
+    let accepted = matches!(antwort_pid.as_u32(), 55002 | 55005 | 55017);
     let reason = utilmd_antwort
         .transactions()
         .first()
@@ -316,7 +316,7 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
         .and_then(|f| f.text.clone());
 
     lfn.execute(LfAnmeldungCommand::HandleAntwort {
-        response_pid: mako_engine::types::Pruefidentifikator::new(55003).unwrap(),
+        response_pid: mako_engine::types::Pruefidentifikator::new(55002).unwrap(),
         accepted,
         reason,
         response_ref: MessageRef::new(antwort_ref),
@@ -334,7 +334,7 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
 }
 
 /// A GPKE 55001 process started under FV2025-10-01 must reach `Rejected`
-/// when a rejection response (PID 55004) is routed — regardless of which
+/// when a rejection response (PID 55003) is routed — regardless of which
 /// FV the response was encoded in.
 ///
 /// Regression guard: the rejection path must also be cross-FV tolerant.
@@ -353,9 +353,9 @@ async fn cross_fv_rejection_also_terminates_cleanly() {
     .await
     .expect("LFN InitiateAnmeldung must succeed");
 
-    // PID 55004 = Ablehnung Lieferbeginn; accepted = false.
+    // PID 55003 = Ablehnung Anmeldung verb. MaLo; accepted = false.
     lfn.execute(LfAnmeldungCommand::HandleAntwort {
-        response_pid: mako_engine::types::Pruefidentifikator::new(55004).unwrap(),
+        response_pid: mako_engine::types::Pruefidentifikator::new(55003).unwrap(),
         accepted: false,
         reason: Some("Vertragsdaten unvollständig".to_owned()),
         response_ref: MessageRef::new("REJ-FV-001"),
@@ -517,7 +517,7 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
     // Route the S2.2-encoded response to the S2.1-started LFN process.
     // ForwardCompatible policy must accept this without VersionMismatch.
     lfn.execute(LfAnmeldungCommand::HandleAntwort {
-        response_pid: mako_engine::types::Pruefidentifikator::new(55003).unwrap(),
+        response_pid: mako_engine::types::Pruefidentifikator::new(55002).unwrap(),
         accepted: true,
         reason,
         response_ref: MessageRef::new(antwort_ref),

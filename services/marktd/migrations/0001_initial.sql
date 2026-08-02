@@ -141,32 +141,6 @@ CREATE INDEX biz_malo_at ON bilanzierungen (tenant, malo_id, bilanzierungsbeginn
 CREATE INDEX biz_bilanzkreis ON bilanzierungen (bilanzkreis) WHERE bilanzkreis IS NOT NULL;
 CREATE INDEX biz_data_gin ON bilanzierungen USING GIN (data jsonb_path_ops);
 
--- ── Contracts (LF supply contracts) ──────────────────────────────────────────
-
-CREATE TABLE contracts (
-    contract_id  TEXT        PRIMARY KEY,           -- ERP contract number or UUID
-    malo_id      TEXT        REFERENCES malo (malo_id) ON DELETE SET NULL,
-    sparte       TEXT        NOT NULL CHECK (sparte IN ('STROM', 'GAS')),
-    vertragsart  TEXT        NOT NULL,
-    valid_from   DATE,                              -- NULL = no known start (open)
-    valid_to     DATE,                              -- NULL = open-ended / currently active
-    version      BIGINT      NOT NULL DEFAULT 1,
-    data         JSONB       NOT NULL,              -- full BO4E VERTRAG + _mdm_billing
-    bo4e_version TEXT        NOT NULL DEFAULT 'v202607.0.0',
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX contracts_malo_id
-    ON contracts (malo_id);
-CREATE INDEX contracts_data_gin
-    ON contracts USING GIN (data jsonb_path_ops);
-CREATE INDEX contracts_malo_valid_from
-    ON contracts (malo_id, valid_from DESC NULLS LAST);
-CREATE INDEX contracts_malo_open_ended
-    ON contracts (malo_id, valid_from DESC NULLS LAST)
-    WHERE valid_to IS NULL;
-
 -- ── NB network contracts ──────────────────────────────────────────────────────
 --
 -- Typed NB network contracts (netzebene, bilanzierungsmethode, billing_schedule).

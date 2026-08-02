@@ -292,7 +292,7 @@ pub struct QualityRescoreQuery {
 ///
 /// ```json
 /// {
-///   "malo_id": "DE0001234567890123456789012345678",
+///   "malo_id": "DE0001234567890723456789012345678",
 ///   "rows_rescored": 96,
 ///   "warnings_found": 2,
 ///   "grades": { "A": 0, "B": 1, "C": 1, "F": 0 }

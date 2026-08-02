@@ -47,6 +47,21 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
     }
 
     eprintln!("Extracting text from PDF: {}", opts.file);
+
+    // The AHB rule tables are *column* layouts: a row's requirement belongs to
+    // whichever Prüfidentifikator column it sits under. `lopdf::extract_text`
+    // returns reading-order text with the columns collapsed, which destroys that
+    // information, so prefer poppler's `pdftotext -layout` when it is available
+    // and fall back to lopdf only for the MIG structure scan.
+    let layout_text = layout_text_via_pdftotext(&pdf_path);
+    if layout_text.is_none() {
+        eprintln!(
+            "warning: `pdftotext` not found on PATH — falling back to lopdf. \
+             The AHB table parser needs column-preserved text and will find no \
+             Prüfidentifikatoren. Install poppler-utils and re-run."
+        );
+    }
+
     let text = match lopdf::Document::load(&pdf_path) {
         Err(e) => {
             eprintln!("error: PDF load failed: {e}");
@@ -66,6 +81,8 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
 
     let line_count = text.lines().count();
     eprintln!("Extracted {} characters ({line_count} lines)", text.len());
+
+    let ahb_text = layout_text.as_deref().unwrap_or(&text);
 
     let release = opts.release.unwrap_or_else(|| infer_release(&opts.file));
     let msg_type = opts.message_type.to_uppercase();
@@ -90,7 +107,7 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
     let draft_release = format!("DRAFT-{release}");
 
     let mig = extract_mig(&text, &msg_type, &draft_release);
-    let ahb = extract_ahb(&text, &msg_type, &draft_release);
+    let ahb = extract_ahb(ahb_text, &msg_type, &draft_release);
 
     let mig_path = out_dir.join("mig.draft.json");
     let ahb_path = out_dir.join("ahb.draft.json");
@@ -485,93 +502,179 @@ fn dedup_rows(rows: Vec<SegmentRow>) -> Vec<SegmentRow> {
 
 // ── AHB extraction ────────────────────────────────────────────────────────────
 
-fn extract_ahb(text: &str, msg_type: &str, release: &str) -> Value {
-    let mut pids: Vec<String> = Vec::new();
-    let mut pid_rules: HashMap<String, Vec<String>> = HashMap::new();
-    // PIDs that are "current" on the next segment-rule lines.
-    let mut current_pids: Vec<String> = Vec::new();
+/// Column-preserved page text via poppler's `pdftotext -layout`.
+///
+/// Returns `None` when the binary is unavailable or fails, leaving the caller to
+/// fall back to `lopdf` (which is fine for the MIG structure scan but loses the
+/// column alignment the AHB table parser depends on).
+fn layout_text_via_pdftotext(pdf: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new("pdftotext")
+        .arg("-layout")
+        .arg(pdf)
+        .arg("-")
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
 
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
+/// Envelope segments carry no AHB rules of their own.
+const ENVELOPE_SEGMENTS: &[&str] = &["UNH", "UNT", "UNS", "UNB", "UNZ"];
+
+/// Parse the per-Prüfidentifikator segment requirements out of an AHB PDF.
+///
+/// The AHB lays each Anwendungsfall out as a table whose columns are PIDs. The
+/// header row reads `Prüfidentifikator  <pid> [<pid> …]`, and each following
+/// segment row carries `Muss` / `Kann` / `Soll` under the columns it applies to.
+///
+/// Rules established by validating against the XML-imported ORDERS `fv20260401`
+/// profile (32/32 for every PID the tag-level model can express):
+///
+/// - Column positions come from where each PID appears in the header line; a
+///   row's requirement is read from the slice around that position. A
+///   single-PID table has no neighbour to confuse, and its mark may sit well
+///   left of the header position, so the whole row is scanned instead.
+/// - `Muss` → `M`; `Kann` and `Soll` → `O`. `Soll` is a recommendation, not a
+///   requirement, and must not be promoted.
+/// - Segment-group nesting does **not** propagate: a `Muss` segment inside a
+///   `Kann` group stays `M`.
+/// - **Optional segments are absent from the AHB table.** The AHB marks what is
+///   *required*; the MIG lists what is *available*. Callers therefore complete
+///   the rule set with every remaining `mig.json` segment as `O`.
+///
+/// Known limitation: a conditional `Muss [n]` (e.g. ORDERS 17102/17301 `IMD`,
+/// "Wenn BGM+7 vorhanden") is reported as `M`. The XML encodes those as `C`
+/// with a `conditional_rules` entry; the tag-level model cannot express it.
+fn parse_ahb_requirements(text: &str) -> HashMap<String, HashMap<String, String>> {
+    // NB: split on '\n' only — pdftotext emits form feeds at page breaks and
+    // `str::lines()` would also split on those, shifting every subsequent row.
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
+
+    let mut i = 0;
+    while i < lines.len() {
+        let Some(pids) = pid_header_columns(lines[i]) else {
+            i += 1;
             continue;
-        }
-        let found_pids = extract_pids_from_line(trimmed);
-        if !found_pids.is_empty() {
-            // This line is a PID header — possibly multi-PID (UTILMD AHB style).
-            current_pids.clear();
-            for pid in found_pids {
-                if !pid_rules.contains_key(&pid) {
-                    pids.push(pid.clone());
-                    pid_rules.insert(pid.clone(), Vec::new());
-                }
-                current_pids.push(pid);
-            }
-        } else if !current_pids.is_empty() && trimmed.len() > 4 && !contains_table_header(trimmed) {
-            for pid in &current_pids {
-                pid_rules
-                    .entry(pid.clone())
-                    .or_default()
-                    .push(trimmed.to_owned());
-            }
-        }
-    }
+        };
+        let single = pids.len() == 1;
 
-    let pruefidentifikatoren: Vec<Value> = pids
+        let mut j = i + 1;
+        while j < lines.len() && pid_header_columns(lines[j]).is_none() {
+            if let Some(tag) = segment_row_tag(lines[j]) {
+                for (pid, col) in &pids {
+                    let cell = if single {
+                        lines[j].to_owned()
+                    } else {
+                        slice_around(lines[j], *col)
+                    };
+                    let Some(req) = requirement_of(&cell) else {
+                        continue;
+                    };
+                    let entry = out.entry(pid.clone()).or_default();
+                    // A tag may appear in several groups; `Muss` wins.
+                    if entry.get(&tag).map(String::as_str) != Some("M") {
+                        entry.insert(tag.clone(), req);
+                    }
+                }
+            }
+            j += 1;
+        }
+        i = j;
+    }
+    out
+}
+
+/// `Some([(pid, column)])` when `line` is a `Prüfidentifikator` table header.
+fn pid_header_columns(line: &str) -> Option<Vec<(String, usize)>> {
+    let trimmed = line.trim();
+    let rest = trimmed.strip_prefix("Prüfidentifikator")?.trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+    let mut cols = Vec::new();
+    let mut cursor = 0;
+    for tok in rest.split_whitespace() {
+        if tok.len() != 5 || !tok.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let at = line[cursor..].find(tok)? + cursor;
+        cursor = at + tok.len();
+        cols.push((tok.to_owned(), at));
+    }
+    (!cols.is_empty()).then_some(cols)
+}
+
+/// The EDIFACT tag of a segment requirement row (`[SGn ]TAG 00042 …`).
+fn segment_row_tag(line: &str) -> Option<String> {
+    let mut it = line.split_whitespace();
+    let mut tok = it.next()?;
+    if tok.starts_with("SG") && tok[2..].bytes().all(|b| b.is_ascii_digit()) {
+        tok = it.next()?;
+    }
+    let is_tag = tok.len() == 3 && tok.bytes().all(|b| b.is_ascii_uppercase());
+    if !is_tag || ENVELOPE_SEGMENTS.contains(&tok) {
+        return None;
+    }
+    let num = it.next()?;
+    (num.len() == 5 && num.bytes().all(|b| b.is_ascii_digit())).then(|| tok.to_owned())
+}
+
+/// The slice of `line` covering one PID column.
+fn slice_around(line: &str, col: usize) -> String {
+    let lo = col.saturating_sub(8);
+    let hi = (col + 13).min(line.len());
+    if lo >= line.len() {
+        return String::new();
+    }
+    line.get(lo..hi).unwrap_or("").to_owned()
+}
+
+/// `Muss` → `M`; `Kann` / `Soll` → `O`.
+fn requirement_of(cell: &str) -> Option<String> {
+    if cell.contains("Muss") {
+        Some("M".to_owned())
+    } else if cell.contains("Kann") || cell.contains("Soll") {
+        Some("O".to_owned())
+    } else {
+        None
+    }
+}
+
+fn extract_ahb(text: &str, msg_type: &str, release: &str) -> Value {
+    let parsed = parse_ahb_requirements(text);
+    let mut codes: Vec<&String> = parsed.keys().collect();
+    codes.sort();
+
+    let pruefidentifikatoren: Vec<Value> = codes
         .into_iter()
         .map(|pid| {
-            let rules = pid_rules.remove(&pid).unwrap_or_default();
-            json!({ "pruefidentifikator": pid, "extracted_context": rules })
+            let mut tags: Vec<(&String, &String)> = parsed[pid].iter().collect();
+            tags.sort();
+            let rules: Vec<Value> = tags
+                .into_iter()
+                .map(|(tag, req)| json!({ "tag": tag, "requirement": req }))
+                .collect();
+            json!({
+                "code": pid.parse::<u32>().unwrap_or(0),
+                "name": "",
+                "segment_rules": rules,
+                "group_rules": [],
+            })
         })
         .collect();
 
     json!({
-        "_WARNING": "DRAFT — auto-generated by `cargo xtask extract-pdf`. \
-                     Requires human review before use as a production profile.",
+        "_WARNING": "DRAFT — `segment_rules` carry only the AHB's `Muss` marks. \
+                     Complete them with every remaining mig.json segment as `O`, \
+                     fill in each `name`, and diff against the previous release \
+                     before promoting to a production profile.",
         "message_type": msg_type,
         "release": release,
-        "source": "pdf-extract (heuristic PID scan)",
+        "source": "pdf-extract (column-aware AHB table parser)",
         "pruefidentifikatoren": pruefidentifikatoren,
     })
-}
-
-/// Scan `line` for all valid EDI@Energy Pruefidentifikatoren (5-digit, 10000–99999).
-///
-/// Returns a `Vec` with all matched PIDs.  A return value with more than one
-/// entry indicates a multi-PID header row (common in UTILMD AHBs where several
-/// process codes share the same page, e.g. `"55001  55002  55003"`).
-///
-/// An empty `Vec` means no PIDs were found on this line.
-fn extract_pids_from_line(line: &str) -> Vec<String> {
-    let mut found = Vec::new();
-    for token in line.split_whitespace() {
-        if token.len() == 5
-            && token.bytes().all(|b| b.is_ascii_digit())
-            && let Ok(v) = token.parse::<u32>()
-            && (10000..=99999).contains(&v)
-        {
-            found.push(token.to_owned());
-        }
-    }
-    // Only treat the line as a PID line if ALL non-whitespace tokens are
-    // either PID numbers or short alphabetic words (e.g. "Prüfidentifikator").
-    // If mixed numeric tokens of different lengths appear it is more likely a
-    // segment data row (counters, status flags, MaxWdh values).
-    if found.is_empty() {
-        return found;
-    }
-    let non_pid_non_word = line.split_whitespace().any(|t| {
-        // A segment counter (4 digits) or level number (1-2 digits) appearing
-        // alongside a PID signals a data row rather than a PID header row.
-        let all_digits = t.bytes().all(|b| b.is_ascii_digit());
-        let len = t.len();
-        all_digits && len != 5 && len <= 4
-    });
-    if non_pid_non_word {
-        Vec::new() // looks like a segment data row — ignore
-    } else {
-        found
-    }
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -804,40 +907,28 @@ mod tests {
     }
 
     #[test]
-    fn pid_extraction_single() {
-        // Single-PID line — standard MSCONS / APERAK AHB style.
+    fn header_columns_single_pid() {
+        let cols = pid_header_columns("      Prüfidentifikator          11001").unwrap();
+        assert_eq!(cols.len(), 1);
+        assert_eq!(cols[0].0, "11001");
+    }
+
+    #[test]
+    fn header_columns_multi_pid_records_positions() {
+        let line = "   Prüfidentifikator     55001    55002    55003";
+        let cols = pid_header_columns(line).unwrap();
         assert_eq!(
-            extract_pids_from_line("11001 UTILMD Strom Netz"),
-            vec!["11001".to_owned()]
+            cols.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(),
+            ["55001", "55002", "55003"]
         );
-        // Too short / out of range
-        assert!(extract_pids_from_line("1234 too short").is_empty());
-        assert!(extract_pids_from_line("999999 out of range").is_empty());
+        // Positions must be strictly increasing — they drive the column slicing.
+        assert!(cols[0].1 < cols[1].1 && cols[1].1 < cols[2].1);
     }
 
     #[test]
-    fn pid_extraction_multi_pid_row() {
-        // UTILMD AHB style: multiple PIDs on one line (combined process table).
-        let pids = extract_pids_from_line("55001  55002  55003");
-        assert_eq!(pids, vec!["55001", "55002", "55003"]);
-    }
-
-    #[test]
-    fn pid_extraction_ignores_segment_row() {
-        // A segment data row has a 4-digit counter alongside a 5-digit value;
-        // should not be confused with a PID header.
-        let row = "  0010 3 UNH M M 1 1 0 Nachrichtenkopfsegment";
-        assert!(extract_pids_from_line(row.trim()).is_empty());
-    }
-
-    #[test]
-    fn version_inference() {
-        assert_eq!(infer_release("regulatories/MSCONS_MIG_2.4c.pdf"), "2.4c");
-        assert_eq!(
-            infer_release("regulatories/UTILMD_MIG_Strom_S2.1.pdf"),
-            "S2.1"
-        );
-        assert_eq!(infer_release("regulatories/CONTRL_MIG_2.0b.pdf"), "2.0b");
+    fn header_columns_rejects_non_header_rows() {
+        assert!(pid_header_columns("  0010 3 UNH M M 1 1 0 Nachrichtenkopfsegment").is_none());
+        assert!(pid_header_columns("      Prüfidentifikator").is_none());
     }
 
     /// `parse_segment_table` must assign a `parent_group` to segment rows that
@@ -919,6 +1010,63 @@ Zähler Ebene MaxWdh foo
             deduped
                 .iter()
                 .any(|r| r.parent_group.as_deref() == Some("SG4"))
+        );
+    }
+}
+
+#[cfg(test)]
+mod ahb_parser_tests {
+    use super::*;
+
+    /// A two-column AHB table, laid out as `pdftotext -layout` emits it.
+    const TABLE: &str = concat!(
+        "                    Prüfidentifikator          17007       17008\n",
+        " Nachrichten-Kopfsegment\n",
+        "        UNH           00001                     Muss        Muss\n",
+        "        BGM           00002                     Muss        Muss\n",
+        "        BGM 1001            Z10  Geräteübernahme  X           X\n",
+        " Positionsdaten\n",
+        " SG29                                            Kann        Kann\n",
+        " SG29 LIN            00052                       Muss\n",
+        "        IMD           00011                      Soll [104]  Soll [104]\n",
+    );
+
+    #[test]
+    fn reads_requirements_per_pid_column() {
+        let got = parse_ahb_requirements(TABLE);
+        let a = &got["17007"];
+        let b = &got["17008"];
+
+        // Envelope segments carry no AHB rules.
+        assert!(!a.contains_key("UNH"), "UNH must be excluded");
+
+        assert_eq!(a["BGM"], "M");
+        assert_eq!(b["BGM"], "M");
+
+        // `Muss` in one column only must not leak into its neighbour — this is
+        // the exact bug that dropped ORDERS 17008/17116/17117 on import.
+        assert_eq!(a["LIN"], "M");
+        assert!(!b.contains_key("LIN"), "17008 has no LIN mark");
+
+        // `Soll` is a recommendation, never promoted to `M`.
+        assert_eq!(a["IMD"], "O");
+        assert_eq!(b["IMD"], "O");
+    }
+
+    #[test]
+    fn group_requirement_does_not_downgrade_its_segments() {
+        // `SG29` is `Kann`, but `LIN` inside it reads `Muss` and stays `M`.
+        let got = parse_ahb_requirements(TABLE);
+        assert_eq!(got["17007"]["LIN"], "M");
+    }
+
+    #[test]
+    fn form_feeds_do_not_shift_rows() {
+        // pdftotext emits \x0c at page breaks; splitting on it would drop rows.
+        let paged = TABLE.replace(" Positionsdaten\n", " Positionsdaten\n\x0c");
+        assert_eq!(
+            parse_ahb_requirements(&paged),
+            parse_ahb_requirements(TABLE)
         );
     }
 }

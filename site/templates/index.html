@@ -44,6 +44,10 @@
         <h3>Customer &amp; operations</h3>
         <p>A tamper-evident FI-CA ledger, contracts &amp; tariff catalog, a customer portal, BNetzA KPI observability, and optional AI orchestration.</p>
       </div>
+      <div class="card">
+        <h3>Testable from Python</h3>
+        <p><a href="{{ get_url(path='@/docs/reference/makotest.md') | safe }}">makotest</a> binds the same Rust core the platform runs — BDEW check digits, the Werktag calendar, EDIFACT build and AHB validation — so a test and production can never disagree about what &ldquo;valid&rdquo; means.</p>
+      </div>
     </div>
   </div>
 </section>
@@ -66,7 +70,10 @@ cargo add edi-energy
 
 # Run the protocol daemon
 docker run --rm -p 8080:8080 \
-  ghcr.io/hupe1980/makod:latest</code></pre>
+  ghcr.io/hupe1980/makod:latest
+
+# Drive it from Python — generators, assertions, pytest plugin
+pip install makotest</code></pre>
       <p><a href="{{ get_url(path='@/docs/guide/getting-started.md') | safe }}">Full getting-started guide →</a></p>
     </div>
   </div>

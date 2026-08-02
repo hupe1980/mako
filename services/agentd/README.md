@@ -38,7 +38,7 @@ model = "gpt-4o"
 | `billing-regulatory-guard-agent` | `de.billing.rechnung.erstellt` | billingd, marktd |
 | `jahresabrechnung-agent` | manual | billingd, edmd, marktd |
 | `eeg-compliance-agent` | `de.eeg.anlage.*`, `de.eeg.verguetung.*` | einsd, obsd |
-| `eeg-agent` | `de.eeg.anlage.foerderung_auslaufend` | einsd, edmd |
+| `eeg-agent` | `de.eeg.anlage.foerderung-auslaufend` | einsd, edmd |
 | `payment-reconciliation-agent` | `de.accounting.payment.due` | accountingd |
 | `compliance-agent` | `de.obs.stp.parity.alert` | obsd, processd |
 | `msb-history-agent` | `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.completed` | edmd, makod, marktd |
@@ -58,7 +58,7 @@ model = "gpt-4o"
 | `vertragd-agent` | `de.vertrag.*` | vertragd, processd, marktd |
 | `vpp-billing-agent` | `de.vpp.dispatch.confirmed`, `de.vpp.settlement.berechnet` | billingd, marktd, obsd |
 | `gabi-gas-agent` | `de.gabi.imbalance.*`, `de.gabi.alocat.missing`, `de.gabi.nomination.*` | makod, netzbilanzd, marktd, obsd |
-| `einsd-batch-agent` | `de.eeg.settlement.batch_due`, `de.eeg.compliance.*` | einsd, edmd, tarifbd, obsd |
+| `einsd-batch-agent` | `de.eeg.settlement.batch-due`, `de.eeg.compliance.*` | einsd, edmd, tarifbd, obsd |
 
 ## Configuration
 

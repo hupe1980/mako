@@ -756,6 +756,39 @@ impl VertragdClient {
         resp.json().await.context("parse vertrag by malo")
     }
 
+    /// `GET /api/v1/aggregatorvertraege?sr_id={sr_id}&on={date}`
+    ///
+    /// The §41e EnWG Aggregatorvertrag in force for a SteuerbareRessource on
+    /// `on_date`. `billingd` keeps no copy of this contract — it is Contract-
+    /// context master data owned by `vertragd`.
+    ///
+    /// The date is the day the dispatch was *executed*, not the day the webhook
+    /// is processed, so a replayed or delayed event still bills under the
+    /// contract that was in force when the flexibility was delivered.
+    /// `Ok(None)` when no contract was in force.
+    pub async fn get_aggregatorvertrag(
+        &self,
+        sr_id: &str,
+        on_date: time::Date,
+    ) -> Result<Option<Aggregatorvertrag>> {
+        let url = format!(
+            "{}/api/v1/aggregatorvertraege?sr_id={}&on={}",
+            self.base_url, sr_id, on_date
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .context("vertragd GET aggregatorvertrag")?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| anyhow::anyhow!("vertragd {e}"))?;
+        resp.json().await.context("parse aggregatorvertrag")
+    }
+
     /// `GET /api/v1/vertraege/billing-candidates`
     ///
     /// Active supply components with their §40b EnWG billing cadence — the
@@ -829,4 +862,21 @@ pub struct RahmenvertragMaloEntry {
     pub product_code: Option<String>,
     #[allow(dead_code)]
     pub kundentyp: Option<String>,
+}
+
+/// A §41e EnWG Aggregatorvertrag as returned by `vertragd`.
+///
+/// Mirrors `vertragd::pg::AggregatorvertragRow`; only the fields `billingd`
+/// needs to settle a dispatch are modelled.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Aggregatorvertrag {
+    pub sr_id: String,
+    pub vpp_id: String,
+    pub malo_id: String,
+    /// Aggregator market-partner ID — the invoicing party.
+    pub aggregator_mp_id: String,
+    pub capacity_price_eur_per_kwh: rust_decimal::Decimal,
+    /// `None` = use the billingd default MwSt rate.
+    #[serde(default)]
+    pub mwst_rate_override: Option<rust_decimal::Decimal>,
 }

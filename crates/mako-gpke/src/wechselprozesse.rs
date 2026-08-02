@@ -13,18 +13,22 @@
 //!
 //! | PID   | Process name (AHB)                              | Direction  |
 //! |-------|-------------------------------------------------|------------|
-//! | 55001 | Anfrage Lieferbeginn Strom (LFN → NB)           | LFN → NB  |
-//! | 55002 | Anfrage Lieferende Strom (LFN → NB)             | LFN → NB  |
+//! | 55001 | Anmeldung verb. MaLo                            | LF → NB   |
+//! | 55004 | Abmeldung                                       | LF → NB   |
 //! | 55016 | Kündigung Lieferbeginn (LFN → LFA)              | LFN → LFA |
 //!
 //! ## Outbound ANTWORT — derived by this workflow, NOT routed as inbound
 //!
+//! The AHB lays each Anwendungsfall out as a triple of adjacent PID columns
+//! `(Anfrage, Bestätigung, Ablehnung)`, so the response is `anfrage + 1` to
+//! accept and `anfrage + 2` to reject.
+//!
 //! | PID   | Process name (AHB)                              | Derived from |
 //! |-------|-------------------------------------------------|--------------|
-//! | 55003 | Bestätigung Lieferbeginn (NB → LFN)             | 55001 accept |
-//! | 55004 | Ablehnung Lieferbeginn (NB → LFN)               | 55001 reject |
-//! | 55005 | Bestätigung Lieferende (NB → LFN)               | 55002 accept |
-//! | 55006 | Ablehnung Lieferende (NB → LFN)                 | 55002 reject |
+//! | 55002 | Bestätigung Anmeldung verb. MaLo (NB → LF)      | 55001 accept |
+//! | 55003 | Ablehnung Anmeldung verb. MaLo (NB → LF)        | 55001 reject |
+//! | 55005 | Bestätigung Abmeldung (NB → LF)                 | 55004 accept |
+//! | 55006 | Ablehnung Abmeldung (NB → LF)                   | 55004 reject |
 //! | 55017 | Bestätigung Kündigung Lieferbeginn (LFA → LFN)  | 55016 accept |
 //! | 55018 | Ablehnung Kündigung Lieferbeginn (LFA → LFN)    | 55016 reject |
 //!
@@ -91,7 +95,8 @@ pub const WORKFLOW_NAME: &str = "gpke-supplier-change";
 /// / "Änderung MSB-Abr.-Daten der MaLo"). **PIDs 55007–55015** are NB-initiated
 /// processes; routing is handled by `GpkeLfAbmeldungWorkflow` for PIDs 55007–55009.
 pub const UTILMD_PIDS: &[u32] = &[
-    55001, 55002, // Anfrage Lieferbeginn/Lieferende verb. MaLo (LFN → NB)
+    55001, // Anmeldung verb. MaLo (LF → NB); answers 55002/55003
+    55004, // Abmeldung (LF → NB); answers 55005/55006
     55016, // Kündigung Lieferbeginn (LFN → LFA)
     55077, // Anmeldung Lieferbeginn erz. MaLo (LFN → NB, BK6-24-174)
     55557, // Änderung MSB-Abr.-Daten der MaLo (GPKE Teil 4, PID 3.3 + PID 4.0)
@@ -502,28 +507,35 @@ impl CommandPayload for SupplierChangeCommand {}
 
 /// Derive the outbound UTILMD response PID from the inbound ANFRAGE PID.
 ///
-/// | Anfrage | accepted=true | accepted=false |
-/// |---------|---------------|----------------|
-/// | 55001   | 55003         | 55004          |
-/// | 55002   | 55005         | 55006          |
-/// | 55016   | 55017         | 55018          |
-/// | 55077   | 55078         | 55080          |
+/// | Anfrage | Anwendungsfall | accepted=true | accepted=false |
+/// |---------|----------------|---------------|----------------|
+/// | 55001   | Anmeldung verb. MaLo | 55002   | 55003          |
+/// | 55004   | Abmeldung            | 55005   | 55006          |
+/// | 55016   | Kündigung            | 55017   | 55018          |
+/// | 55077   | Anmeldung erz. MaLo  | 55078   | 55080          |
 ///
-/// Note: PID 55079 does not exist in BDEW UTILMD AHB Strom (no such PID assigned).
+/// The UTILMD AHB Strom lays each Anwendungsfall out as a **triple** of adjacent
+/// PID columns — `(Anfrage, Bestätigung, Ablehnung)` with the header reading
+/// `LF an NB / NB an LF / NB an LF` — so the response is `anfrage + 1` to accept
+/// and `anfrage + 2` to reject. Verified against AHB Strom 2.1 §55001/§55004 and
+/// 2.2; `pid-reference.md` carries the same mapping.
+///
+/// Note: PID 55079 does not exist in BDEW UTILMD AHB Strom (no such PID
+/// assigned), which is why 55077 rejects with 55080.
 fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruefidentifikator> {
     let code: u32 = match anfrage_pid {
         55001 => {
             if accepted {
-                55003
+                55002 // Bestätigung Anmeldung verb. MaLo (NB an LF)
             } else {
-                55004
+                55003 // Ablehnung Anmeldung verb. MaLo (NB an LF)
             }
         }
-        55002 => {
+        55004 => {
             if accepted {
-                55005
+                55005 // Bestätigung Abmeldung (NB an LF)
             } else {
-                55006
+                55006 // Ablehnung Abmeldung (NB an LF)
             }
         }
         55016 => {

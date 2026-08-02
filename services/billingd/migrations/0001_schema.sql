@@ -6,9 +6,6 @@
 --
 -- `billing_run_log`: monthly batch run audit + idempotency guard.
 --
--- `vpp_contracts`: VPP (Virtual Power Plant) billing configuration per SR-ID.
---   Enables auto-settlement of §41b EnWG Steuerungsauftrag confirmations.
---
 -- `vpp_dispatch_ledger`: idempotency guard for de.vpp.dispatch.confirmed deliveries.
 
 -- ── Invoice records ───────────────────────────────────────────────────────────
@@ -152,37 +149,10 @@ COMMENT ON TABLE abrechnungsinfo_log IS
     '§40b Abs. 2 EnWG: monthly Abrechnungsinformation dispatch log for '
     'iMSys/fernauslesbare MaLos. UNIQUE guard = one info per MaLo and month.';
 
--- ── VPP (Virtual Power Plant) contracts ──────────────────────────────────────
--- Maps SteuerbareRessource-ID → billing parameters for auto-settlement of
--- de.vpp.dispatch.confirmed CloudEvents (§41b EnWG / RED III Art. 17).
-
-CREATE TABLE vpp_contracts (
-    id                          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    -- SteuerbareRessource-ID (C…) or NeLo-ID from marktd
-    sr_id                       TEXT        NOT NULL,
-    -- Operator-assigned VPP portfolio identifier
-    vpp_id                      TEXT        NOT NULL,
-    malo_id                     TEXT        NOT NULL,
-    lf_mp_id                    TEXT        NOT NULL,
-    -- Agreed capacity price in EUR/kWh (Einsatzkosten)
-    capacity_price_eur_per_kwh  NUMERIC(12, 6) NOT NULL CHECK (capacity_price_eur_per_kwh >= 0),
-    valid_from                  DATE        NOT NULL,
-    valid_to                    DATE,
-    -- MwSt override; NULL = use billingd default (0.19)
-    mwst_rate_override          NUMERIC(5, 4),
-    tenant                      TEXT        NOT NULL,
-    updated_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (sr_id, tenant, valid_from)
-);
-
-COMMENT ON TABLE vpp_contracts IS
-    '§41b EnWG / RED III Art. 17: VPP dispatch billing configuration per SR-ID. '
-    'Enables auto-settlement when de.vpp.dispatch.confirmed is received.';
-
-CREATE INDEX vpp_sr_tenant    ON vpp_contracts (sr_id, tenant, valid_from DESC);
-
 -- ── VPP dispatch idempotency ──────────────────────────────────────────────────
--- Prevents double-billing when the outbox retries a de.vpp.dispatch.confirmed delivery.
+-- Prevents double-billing when the outbox retries a de.vpp.dispatch.confirmed
+-- delivery. The §41e EnWG Aggregatorvertrag itself is Contract-context master
+-- data and lives in `vertragd.aggregatorvertraege`; billingd reads it over HTTP.
 
 CREATE TABLE vpp_dispatch_ledger (
     tx_id           TEXT        NOT NULL,

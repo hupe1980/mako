@@ -54,20 +54,17 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
 
     // Step 2: replace version inside every internal workspace dep.
     // All workspace-member crates share the same X.Y.Z version; the deps use X.Y.
-    let internal_deps = [
-        "edi-energy",
-        "mako-engine",
-        "mako-markt",
-        "grid-billing",
-        "eeg-billing",
-        "mako-obs",
-        "mako-service",
-        "mako-plugin",
-        "invoic-checker",
-        "netz-checker",
-        "energy-billing",
-        "dvgw-edi",
-    ];
+    //
+    // The list is *derived* from `[workspace.dependencies]` rather than
+    // hardcoded: a hardcoded list silently skips any crate added later, and the
+    // resulting version skew only surfaces as a `failed to select a version`
+    // build error on the next bump. Every dep whose inline table carries a
+    // `path = "crates/…"` is a workspace member and must move together.
+    let internal_deps = internal_workspace_deps(&updated);
+    if internal_deps.is_empty() {
+        eprintln!("error: no internal crates found in [workspace.dependencies]");
+        return false;
+    }
     let mut updated = updated;
     for dep in &internal_deps {
         match replace_dep_version(&updated, dep, &major_minor) {
@@ -131,6 +128,33 @@ fn replace_first_version_field(src: &str, new_version: &str) -> Option<String> {
         result.pop();
     }
     replaced.then_some(result)
+}
+
+/// Collect every dependency in `[workspace.dependencies]` that points at a
+/// path inside `crates/` — i.e. the workspace's own member crates.
+///
+/// Returns them in file order so the rewrite is deterministic.
+fn internal_workspace_deps(src: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_section = false;
+    for line in src.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_section = trimmed == "[workspace.dependencies]";
+            continue;
+        }
+        if !in_section || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((name, rest)) = trimmed.split_once('=') else {
+            continue;
+        };
+        // Only inline tables with a `crates/` path are internal members.
+        if rest.trim_start().starts_with('{') && rest.contains("path = \"crates/") {
+            out.push(name.trim().to_owned());
+        }
+    }
+    out
 }
 
 /// Find the line starting with `<dep_name>` (optionally followed by alignment

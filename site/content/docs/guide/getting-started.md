@@ -213,7 +213,7 @@ curl -s http://localhost:8580/api/v1/decisions | jq '.[] | {
 
 With `NB_AUTO_ACCEPT=true` (set in the demo compose file), `Accept` automatically
 dispatches `gpke.lieferbeginn.bestaetigen` to `makod`, which enqueues the outbound
-**UTILMD 55003** (Bestätigung Lieferbeginn):
+**UTILMD 55002** (Bestätigung Anmeldung verb. MaLo):
 
 ```bash
 curl -s http://localhost:8000/events | jq '[.[] |

@@ -341,7 +341,7 @@ impl Profile for ContrlFv20260101Profile {
         Some("2.0b")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("CONTRL AHB 2.0b, Stand 01.01.2026")
+        Some("CONTRL MIG 2.0b, Stand 01.01.2026")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

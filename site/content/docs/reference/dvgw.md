@@ -262,20 +262,20 @@ the parser.
 
 ### 5.4 Decimal-safe quantity parsing
 
-ALOCAT messages carry gas energy quantities that require high precision (DVGW
-G 685 §7 mandates ≥ 3 decimal places). `AlocatQuantity` provides two accessors:
+Gas energy quantities require high precision (DVGW G 685 §7 mandates ≥ 3 decimal
+places), and binary floating point cannot represent those decimal fractions
+exactly. Every quantity type therefore exposes exactly one accessor, returning a
+`Decimal`:
 
 ```rust
-// ✅ Preferred for billing: returns Option<Decimal> (no float rounding)
+// Returns Option<Decimal> — exact, no float rounding
 if let Some(kwh) = qty.quantity_decimal() { ... }
-
-// ⚠️  Legacy/diagnostics only: returns Option<f64> (potential precision loss)
-if let Some(kwh) = qty.quantity_f64() { ... }
 ```
 
-The `decimal` feature (enabled by default) provides `quantity_decimal()`. Always
-use it when calculating gas allocation quantities or feeding values into
-`GasQuantity` or `GasBeschaffenheit::to_kwh_hs()`.
+The `decimal` feature (enabled by default) provides `quantity_decimal()` on
+`AlocatQuantity`, `NomintQuantity`, `NomresQuantity`, `SchedlQuantity`,
+`ImbalanceEntry`, `DeliveryOrderLine` and `DeliveryResponseLine`. Feed its value
+directly into `GasQuantity` or `GasBeschaffenheit::to_kwh_hs()`.
 
 ---
 

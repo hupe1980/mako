@@ -1,4 +1,4 @@
-//! Full end-to-end test: LFN ↔ NB Lieferende Strom (PID 55002).
+//! Full end-to-end test: LFN ↔ NB Abmeldung Strom (PID 55004).
 //!
 //! Two mock ERP backends — [`MockLfn`] (Lieferant) and [`MockNb`]
 //! (Netzbetreiber) — exchange EDIFACT over the **production**
@@ -9,10 +9,10 @@
 //! ```text
 //!   LFN ERP (MockLfn)                          NB ERP (MockNb)
 //!   ──────────────────────────────────────────────────────────
-//!   submit_anmeldung(55002)
+//!   submit_anmeldung(55004)
 //!     → asserts outbox payload invariants
-//!     → renders UTILMD 55002 wire bytes
-//!                        ──── UTILMD 55002 ────►
+//!     → renders UTILMD 55004 wire bytes
+//!                        ──── UTILMD 55004 ────►
 //!                                               receive_utilmd(wire)
 //!                                                 → asserts UNH ref ≠ "1"
 //!                                               send_antwort(accepted=true)
@@ -28,12 +28,12 @@
 //!
 //! # Regulatory context
 //!
-//! - **PID 55002**: Anfrage Lieferende Strom (LFN → NB)
-//! - **PID 55005**: Bestätigung Lieferende (NB → LFN, accept)
-//! - **PID 55006**: Ablehnung Lieferende (NB → LFN, reject)
+//! - **PID 55004**: Abmeldung (LF → NB)
+//! - **PID 55005**: Bestätigung Abmeldung (NB → LF, accept)
+//! - **PID 55006**: Ablehnung Abmeldung (NB → LF, reject)
 //! - **Deadline**: 24 wall-clock hours (BNetzA BK6-22-024)
 //! - **No MSCONS 13015**: Bewegungsdaten obligations are triggered **only** by
-//!   PID 55001 (Lieferbeginn). For PID 55002 (Lieferende) the acceptance does
+//!   PID 55001 (Anmeldung). For PID 55004 (Abmeldung) the acceptance does
 //!   not require a subsequent MSCONS 13015 — there are no Bewegungsdaten to
 //!   request when a supply relationship is ending.
 //!
@@ -105,7 +105,7 @@ impl MockLfn {
         }
     }
 
-    /// ERP action: submit a Lieferende Anmeldung (PID 55002).
+    /// ERP action: submit an Abmeldung (PID 55004).
     ///
     /// Asserts that the resulting outbox payload contains the ERP-supplied
     /// fields and that renderer-derived fields (`message_ref`, `document_date`)
@@ -116,7 +116,7 @@ impl MockLfn {
         let (_, outbox) = self
             .process
             .execute_and_collect(LfAnmeldungCommand::InitiateAnmeldung {
-                pid: Pruefidentifikator::new(55002).unwrap(),
+                pid: Pruefidentifikator::new(55004).unwrap(),
                 sender: MarktpartnerCode::new(LFN_ID),
                 receiver: MarktpartnerCode::new(NB_ID),
                 location_id: MaLo::new(malo_id),
@@ -124,7 +124,7 @@ impl MockLfn {
                 transaktionsgrund: None,
             })
             .await
-            .expect("LFN: execute InitiateAnmeldung 55002");
+            .expect("LFN: execute InitiateAnmeldung 55004");
 
         assert_eq!(
             outbox.len(),
@@ -135,8 +135,8 @@ impl MockLfn {
         assert_eq!(msg.message_type.as_ref(), "UTILMD");
         assert_eq!(
             msg.payload["pid"].as_u64().unwrap(),
-            55002_u64,
-            "outbox payload must carry PID 55002 (Anfrage Lieferende)"
+            55004_u64,
+            "outbox payload must carry PID 55004 (Abmeldung)"
         );
         assert_eq!(msg.payload["malo"].as_str().unwrap(), malo_id);
         assert_eq!(msg.payload["sender"].as_str().unwrap(), LFN_ID);
@@ -153,7 +153,7 @@ impl MockLfn {
         );
 
         render_to_wire_bytes(msg, &make_registry(LFN_ID, "LF"))
-            .expect("LFN: render_to_wire_bytes 55002")
+            .expect("LFN: render_to_wire_bytes 55004")
             .bytes
     }
 
@@ -203,7 +203,7 @@ impl MockNb {
         }
     }
 
-    /// ERP notification: receive LFN's UTILMD 55002 wire bytes, adapt, and execute.
+    /// ERP notification: receive LFN's UTILMD 55004 wire bytes, adapt, and execute.
     ///
     /// AHB validation is forced to `true` — the minimal rendered UTILMD does
     /// not satisfy all S2.1 profile rules; AHB conformance is tested separately.
@@ -239,8 +239,8 @@ impl MockNb {
             } => {
                 assert_eq!(
                     pid.as_u32(),
-                    55002,
-                    "NB adapter must extract PID 55002 from wire"
+                    55004,
+                    "NB adapter must extract PID 55004 from wire"
                 );
                 assert_eq!(
                     message_ref.as_str(),
@@ -271,7 +271,7 @@ impl MockNb {
         self.process
             .execute(cmd)
             .await
-            .expect("NB: execute ReceiveUtilmd 55002");
+            .expect("NB: execute ReceiveUtilmd 55004");
     }
 
     /// ERP action: send Bestätigung (`accepted = true`, PID 55005) or Ablehnung
@@ -280,12 +280,12 @@ impl MockNb {
     /// Asserts outbox content:
     /// - Both accept and reject produce exactly **one** UTILMD outbox entry.
     /// - **No MSCONS 13015** in either case: Bewegungsdaten obligations are
-    ///   triggered only by PID 55001 (Lieferbeginn). For PID 55002 (Lieferende)
-    ///   `post_acceptance::lieferbeginn_obligations(55002, …)` returns empty.
+    ///   triggered only by PID 55001 (Anmeldung). For PID 55004 (Abmeldung)
+    ///   `post_acceptance::lieferbeginn_obligations(55004, …)` returns empty.
     ///
     /// Returns the rendered UTILMD wire bytes for transport back to the LFN.
     async fn send_antwort(&self, accepted: bool, reason: Option<&str>) -> Vec<u8> {
-        // PID 55002 Lieferende has no post-acceptance obligations.
+        // PID 55004 Abmeldung has no post-acceptance obligations.
         // `lieferbeginn_obligations` guards on `anfrage_pid != 55001` and
         // returns an empty Vec for all other PIDs.
         let obligations: Vec<mako_engine::outbox::PendingOutbox> = vec![];
@@ -305,7 +305,7 @@ impl MockNb {
             outbox.len(),
             1,
             "Lieferende Antwort must enqueue exactly one UTILMD (PID {expected_pid}); \
-             no MSCONS obligations for 55002"
+             no MSCONS obligations for 55004"
         );
 
         let utilmd = &outbox[0];
@@ -380,7 +380,7 @@ async fn e2e_lieferende_strom_happy_path() {
         "LFN must be Active after receiving Bestätigung 55005; got: {lfn_final:?}"
     );
     if let LfAnmeldungState::Active(data) = lfn_final {
-        assert_eq!(data.pruefidentifikator.as_u32(), 55002);
+        assert_eq!(data.pruefidentifikator.as_u32(), 55004);
         assert_eq!(data.location_id.as_str(), MALO_ID);
         assert_eq!(data.process_date, "20251001");
         assert_eq!(data.sender.as_str(), LFN_ID);

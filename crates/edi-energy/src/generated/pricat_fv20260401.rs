@@ -1000,7 +1000,7 @@ impl Profile for PricatFv20260401Profile {
         Some("2.1")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("PRICAT AHB 2.1, Stand 01.04.2026")
+        Some("PRICAT MIG 2.1, Stand 01.04.2026")
     }
     fn pid_source(&self) -> crate::registry::PidSource {
         crate::registry::PidSource::RffZ13

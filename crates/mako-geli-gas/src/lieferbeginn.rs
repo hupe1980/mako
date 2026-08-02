@@ -4,8 +4,8 @@
 //!
 //! | Process | Anfrage PID | Antwort OK | Antwort NG | Initiator |
 //! |---|---|---|---|---|
-//! | Lieferbeginn Gas | 44001 | 44003 | 44004 | LFN → GNB |
-//! | Lieferende Gas | 44002 | 44005 | 44006 | LFN → GNB |
+//! | Anmeldung NN | 44001 | 44002 | 44003 | LF → NB |
+//! | Abmeldung NN | 44004 | 44005 | 44006 | LF → NB |
 //! | Abmeldung NN | 44007 | 44008 | 44009 | GNB → LFN |
 //! | Abmeldungsanfrage | 44010 | 44011 | 44012 | GNB → LFA |
 //! | EoG Anmeldung | 44013 | 44014 | 44015 | GNB → LF |
@@ -62,12 +62,12 @@ pub const RESPONSE_WINDOW_LABEL: &str = "geli-gas-response-10-werktage";
 // ── PID sets ──────────────────────────────────────────────────────────────────
 
 /// All inbound **Anfrage** PIDs that start a new GeLi Gas process stream.
-pub const ANFRAGE_PIDS: &[u32] = &[44001, 44002, 44007, 44010, 44013, 44016, 44019, 44020];
+pub const ANFRAGE_PIDS: &[u32] = &[44001, 44004, 44007, 44010, 44013, 44016, 44019, 44020];
 
 /// All **Antwort** PIDs that update an existing GeLi Gas process stream.
 pub const ANTWORT_PIDS: &[u32] = &[
-    44003, 44004, // Bestätigung/Ablehnung Lieferbeginn
-    44005, 44006, // Bestätigung/Ablehnung Lieferende
+    44002, 44003, // Bestätigung/Ablehnung Anmeldung NN
+    44005, 44006, // Bestätigung/Ablehnung Abmeldung NN
     44008, 44009, // Bestätigung/Ablehnung Abmeldung NN
     44011, 44012, // Bestätigung/Ablehnung Abmeldungsanfrage
     44014, 44015, // Bestätigung/Ablehnung EoG Anmeldung
@@ -86,9 +86,9 @@ pub const UTILMD_PIDS: &[u32] = &[
 /// Classification of the GeLi Gas process type, derived from the Anfrage PID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GasProcessVariant {
-    /// PID 44001 — Lieferbeginn Gas, LFN → GNB. Response: 44003/44004.
+    /// PID 44001 — Anmeldung NN, LF → NB. Response: 44002/44003.
     LieferbeginnGas,
-    /// PID 44002 — Lieferende Gas, LFN → GNB. Response: 44005/44006.
+    /// PID 44004 — Abmeldung NN, LF → NB. Response: 44005/44006.
     LieferendeGas,
     /// PID 44007 — Abmeldung NN vom GNB, GNB → LFN. Response: 44008/44009.
     AbmeldungNn,
@@ -110,7 +110,7 @@ impl GasProcessVariant {
     pub fn from_anfrage_pid(pid: u32) -> Option<Self> {
         Some(match pid {
             44001 => Self::LieferbeginnGas,
-            44002 => Self::LieferendeGas,
+            44004 => Self::LieferendeGas,
             44007 => Self::AbmeldungNn,
             44010 => Self::Abmeldungsanfrage,
             44013 => Self::EogAnmeldung,
@@ -143,8 +143,8 @@ impl GasProcessVariant {
 ///
 /// | Anfrage | accepted=true | accepted=false |
 /// |---------|---------------|----------------|
-/// | 44001   | 44003         | 44004          |
-/// | 44002   | 44005         | 44006          |
+/// | 44001   | 44002         | 44003          |
+/// | 44004   | 44005         | 44006          |
 /// | 44007   | 44008         | 44009          |
 /// | 44010   | 44011         | 44012          |
 /// | 44013   | 44014         | 44015          |
@@ -156,16 +156,16 @@ pub fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruefidentif
     let code: u32 = match anfrage_pid {
         44001 => {
             if accepted {
-                44003
+                44002 // Bestätigung Anmeldung NN (NB an LF)
             } else {
-                44004
+                44003 // Ablehnung Anmeldung NN (NB an LF)
             }
         }
-        44002 => {
+        44004 => {
             if accepted {
-                44005
+                44005 // Bestätigung Abmeldung NN (NB an LF)
             } else {
-                44006
+                44006 // Ablehnung Abmeldung NN (NB an LF)
             }
         }
         44007 => {
@@ -431,7 +431,7 @@ impl GasSupplierChangeState {
 pub enum GasSupplierChangeCommand {
     /// Inbound UTILMD G Anfrage received (responder role — GNB or LFA).
     ///
-    /// Valid Anfrage PIDs: 44001, 44002, 44007, 44010, 44013, 44016, 44019, 44020.
+    /// Valid Anfrage PIDs: 44001, 44004, 44007, 44010, 44013, 44016, 44019, 44020.
     ReceiveUtilmd {
         /// BDEW Prüfidentifikator (must be in `ANFRAGE_PIDS`).
         pid: Pruefidentifikator,
@@ -1280,8 +1280,8 @@ mod tests {
     #[test]
     fn response_pid_table_is_correct() {
         let pairs: &[(u32, u32, u32)] = &[
-            (44001, 44003, 44004),
-            (44002, 44005, 44006),
+            (44001, 44002, 44003),
+            (44004, 44005, 44006),
             (44007, 44008, 44009),
             (44010, 44011, 44012),
             (44013, 44014, 44015),
@@ -1341,7 +1341,7 @@ mod tests {
         assert!(matches!(
             &out.events[0],
             GasSupplierChangeEvent::AntwortGesendet { response_pid: Some(p), accepted: true, .. }
-            if p.as_u32() == 44003
+            if p.as_u32() == 44002
         ));
         let state = apply_all(state, &out.events);
         assert!(matches!(
@@ -1372,7 +1372,7 @@ mod tests {
         assert!(matches!(
             &out.events[0],
             GasSupplierChangeEvent::AntwortGesendet { response_pid: Some(p), accepted: false, .. }
-            if p.as_u32() == 44004
+            if p.as_u32() == 44003
         ));
         let state = apply_all(state, &out.events);
         assert!(matches!(state, GasSupplierChangeState::Rejected { .. }));
@@ -1381,9 +1381,9 @@ mod tests {
     // ── Lieferende Gas (44002) ────────────────────────────────────────────────
 
     #[test]
-    fn lieferende_positive_antwort_is_pid_44005() {
+    fn abmeldung_positive_antwort_is_pid_44005() {
         let state = GasSupplierChangeState::default();
-        let out = GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(44002, true)).unwrap();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(44004, true)).unwrap();
         let state = apply_all(state, &out.events);
         let out = GeliGasSupplierChangeWorkflow::handle(
             &state,
@@ -1641,7 +1641,7 @@ mod tests {
     #[test]
     fn activate_rejected_for_non_lieferbeginn_variant() {
         let state = GasSupplierChangeState::default();
-        let out = GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(44002, true)).unwrap();
+        let out = GeliGasSupplierChangeWorkflow::handle(&state, receive_cmd(44004, true)).unwrap();
         let state = apply_all(state, &out.events);
         let out = GeliGasSupplierChangeWorkflow::handle(
             &state,

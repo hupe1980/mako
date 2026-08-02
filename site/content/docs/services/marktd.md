@@ -1,6 +1,6 @@
 +++
 title = "marktd Operator Guide"
-description = "marktd operator guide: Market Data Hub for Marktlokation, Messlokation, contracts, VersorgungsStatus (with history + point-in-time queries), NeLo (Redispatch 2.0), MaLo grid topology (NB STP), trading-partner management, price sheets, Cedar ABAC, EventBus fan-out. PostgreSQL-backed, OIDC-secured, OpenAPI 3.1, CloudEvents 1.0 outbound webhooks."
+description = "marktd operator guide: Market Data Hub for Marktlokation, Messlokation, VersorgungsStatus (with history + point-in-time queries), NeLo (Redispatch 2.0), MaLo grid topology (NB STP), trading-partner management, price sheets, Cedar ABAC, EventBus fan-out. PostgreSQL-backed, OIDC-secured, OpenAPI 3.1, CloudEvents 1.0 outbound webhooks."
 weight = 22
 [extra]
 mermaid = true
@@ -50,7 +50,7 @@ graph TB
     marktd -->|"de.mako.*"| edmd
     marktd -->|"de.mako.*"| obsd
     marktd --- pg
-    erp -->|"PUT /api/v1/malo\nPUT /api/v1/contracts"| marktd
+    erp -->|"PUT /api/v1/malo\nPUT /api/v1/partners"| marktd
     invoicd -->|"GET /api/v1/preisblaetter\nGET /api/v1/nb-contracts"| marktd
     processd -->|"GET /api/v1/versorgung\nGET /api/v1/malo/{id}/grid\nGET /api/v1/partners"| marktd
     processd -->|"POST /api/v1/commands"| makod
@@ -226,7 +226,7 @@ Attribute-Based Access Control. The policy file is loaded once at startup.
 permit(
     principal,
     action in [
-        Action::"read-malo", Action::"read-melo", Action::"read-contract",
+        Action::"read-malo", Action::"read-melo", Action::"read-nb-contract",
         Action::"read-partner", Action::"read-preisblatt"
     ],
     resource
@@ -235,11 +235,11 @@ when {
     principal.tenant == resource.tenant
 };
 
-// Any principal of the same tenant can write malo/melo/contracts/partners.
+// Any principal of the same tenant can write malo/melo/nb-contracts/partners.
 permit(
     principal,
     action in [
-        Action::"write-malo", Action::"write-melo", Action::"write-contract",
+        Action::"write-malo", Action::"write-melo", Action::"write-nb-contract",
         Action::"write-partner"
     ],
     resource
@@ -313,8 +313,6 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/api/v1/malo` | `read-malo` | List Marktlokationen (schema-drift records silently filtered) |
 | `PUT` | `/api/v1/melo/{melo_id}` | `write-melo` | Upsert Messlokation; validates `_typ = MESSLOKATION` and **strictly** rejects any out-of-schema enum value anywhere in the BO (`Bo4eStrict::ensure_known_enums`, 422 with the offending JSON-path) |
 | `GET` | `/api/v1/melo/{melo_id}` | `read-melo` | Get Messlokation as typed `rubo4e::current::Messlokation` |
-| `PUT` | `/api/v1/contracts/{id}` | `write-contract` | Upsert contract (with `valid_from` / `valid_to`) |
-| `GET` | `/api/v1/contracts/{id}` | `read-contract` | Get contract |
 | `PUT` | `/api/v1/partners/{mp_id}` | `write-partner` | Upsert trading partner — validates payload as `rubo4e::current::Geschaeftspartner` (auto-injects `_typ`; validates `marktrolle`, `rollencodetyp`, `marktteilnehmerstatus`, `adresse`; canonicalises camelCase) |
 | `GET` | `/api/v1/partners/{mp_id}` | `read-partner` | Get trading partner — returns a `geschaeftspartner` field with the typed `rubo4e::current::Geschaeftspartner` payload (graceful fallback for legacy records) |
 | `GET` | `/api/v1/partners` | `read-partner` | List partners |
@@ -603,7 +601,6 @@ Migrations run automatically at startup via `sqlx migrate run`.
 | `bilanzierungen` | **BO4E `Bilanzierung`** (BO #3) — first-class temporal balancing resource per MaLo: `bilanzierungsbeginn/ende` validity, typed `bilanzkreis`/`aggregationsverantwortung`/`prognosegrundlage`/`fallgruppenzuordnung`, full BO in `data JSONB`. Authoritative home for the `Bilanzierung`-model fields. Writing a currently-effective Bilanzierung **derives** `malo.fallgruppe`. Note: `malo.bilanzierungsmethode`/`bilanzierungsgebiet` are **`Marktlokation`** fields (BO #12), correctly on `malo` — not `Bilanzierung` |
 | `lokationszuordnungen` | Location graph edges — `(tenant, von_id, von_typ, nach_id, nach_typ, valid_from, valid_to)`; `von_typ`/`nach_typ` are the canonical BO4E `Lokationstyp` codes (`MALO`/`MELO`/`NELO`/`SR`/`TR`); recursive-CTE BFS traversal |
 | `melo` | Messlokationen — JSONB payload, `bo4e_version` |
-| `contracts` | Energy contracts — JSONB payload, `bo4e_version`, **`valid_from DATE`**, **`valid_to DATE`** |
 | `partners` | Trading partners (GLN → channels) — JSONB |
 | `subscriptions` | ERP webhook registrations |
 | `process_correlation` | Running/completed MaKo process tracking per MaLo |
@@ -647,81 +644,6 @@ There are no incremental migration files — the initial schema is the authorita
 | `netzebene_messung` | `TEXT` | Netzebene where the meter is installed |
 | `regelzone` | `TEXT` | Regelzone EIC code — extracted from `standorteigenschaften.eigenschaftenStrom[0].regelzone` |
 | `standorteigenschaften` | `JSONB` | Full `StandortEigenschaften` object (GIN indexed) for WiM Stammdaten enrichment |
-
-### `contracts.valid_from` / `valid_to`
-
-These `DATE` columns define the temporal validity window of each contract and are
-used by the Wechselprozess auto-responder's rule 5L to detect conflicting active
-supply contracts at `process_date`.
-
-| Column | Type | Semantics |
-|---|---|---|
-| `valid_from` | `DATE` nullable | Start of the contract validity window. `NULL` for records created before this migration. |
-| `valid_to` | `DATE` nullable | End of the validity window (inclusive). `NULL` = open-ended / currently active. |
-
-Query pattern (rule 5L):
-
-```sql
-SELECT ... FROM contracts
-WHERE malo_id = $1
-  AND (valid_from IS NULL OR valid_from <= $2)   -- $2 = process_date
-  AND (valid_to   IS NULL OR valid_to   >= $2)
-ORDER BY valid_from DESC NULLS LAST
-```
-
-Two indexes cover this efficiently:
-- `contracts_malo_valid_from (malo_id, valid_from DESC NULLS LAST)` — general range query
-- `contracts_malo_open_ended ... WHERE valid_to IS NULL` — partial index for currently active contracts
-
----
-
-## Contracts — Validity Periods
-
-Contracts support explicit validity dates used by the auto-responder and by any
-ERP logic that needs to understand which supply contracts are currently active.
-
-### PUT request body
-
-```json
-{
-  "malo_id":      "51238696780",
-  "sparte":       "STROM",
-  "vertragsart":  "Liefervertrag",
-  "valid_from":   "2026-10-01",
-  "valid_to":     null,
-  "data": {
-    "bo_typ":          "VERTRAG",
-    "vertragsnummer":  "LFV-2026-123",
-    "vertragsart":     "NETZNUTZUNGSVERTRAG",
-    "vertragsstatus":  "AKTIV",
-    "sparte":          "STROM",
-    "vertragsbeginn":  "2026-10-01",
-    "vertragspartner": "4012345000023"
-  },
-  "bo4e_version": "v202607.0.0"
-}
-```
-
-`valid_from` / `valid_to` are ISO 8601 date strings (`YYYY-MM-DD`).
-`null` for `valid_to` means the contract is open-ended (currently active, no known end date).
-`null` for `valid_from` means the start date is unknown (legacy record).
-
-### GET response
-
-```json
-{
-  "contract_id": "lv-2026-123",
-  "malo_id":     "51238696780",
-  "sparte":      "STROM",
-  "vertragsart": "Liefervertrag",
-  "version":     1,
-  "valid_from":  "2026-10-01",
-  "valid_to":    null,
-  "data":        { ... }
-}
-```
-
----
 
 ## NB Network Contracts — `Vertrag` BO4E
 
@@ -1688,7 +1610,7 @@ When `CLS_FAEHIG = "false"` or absent, `processd` rejects the Steuerungsauftrag 
 
 Setting `SMGW_CERT_ABLAUFDATUM` triggers the `edmd` **daily compliance worker** to monitor
 the device. When the expiry date is ≤ 30 days away, `edmd` emits
-`de.messwert.cls.compliance_issue` (severity `WARNING`); after expiry, severity `CRITICAL`.
+`de.messwert.cls.compliance-issue` (severity `WARNING`); after expiry, severity `CRITICAL`.
 
 ---
 
@@ -2241,7 +2163,6 @@ alphanumeric only):
 |---|---|---|
 | `marktmaloid` | string | Resolved Marktlokations-ID |
 | `marktmeloid` | string | Resolved Messlokations-ID |
-| `marktcontractid` | string | Contract UUID |
 | `marktrole` | string | Marktrolle: `NB`, `LF`, `MSB`, `BIKO`, `UNB` |
 | `markterpref` | string | ERP-supplied idempotency key |
 | `makopid` | u32 | Forwarded BDEW Prüfidentifikator |

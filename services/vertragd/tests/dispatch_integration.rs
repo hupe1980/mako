@@ -198,6 +198,120 @@ async fn update_vertrag_status_is_tenant_scoped() {
     assert_eq!(status, "GEKÜNDIGT");
 }
 /// The Postgres container guard a test holds until it ends — dropping it removes
+fn agg_input(
+    price: &str,
+    von: time::Date,
+    bis: Option<time::Date>,
+) -> pg::UpsertAggregatorvertragInput {
+    use std::str::FromStr as _;
+    pg::UpsertAggregatorvertragInput {
+        vpp_id: "VPP-1".to_owned(),
+        malo_id: "51238696780".to_owned(),
+        aggregator_mp_id: "9900357000004".to_owned(),
+        capacity_price_eur_per_kwh: rust_decimal::Decimal::from_str(price).unwrap(),
+        vertragsbeginn: von,
+        vertragsende: bis,
+        mwst_rate_override: None,
+        kunden_id: None,
+    }
+}
+
+/// §41e EnWG: a SteuerbareRessource may have at most one Aggregatorvertrag in
+/// force at any instant. The `agg_no_overlap` GiST exclusion constraint enforces
+/// it in SQL — the predecessor table keyed only on `(sr_id, tenant, valid_from)`
+/// and happily stored two overlapping contracts.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn overlapping_aggregatorvertraege_are_refused() {
+    let Some((pool, _c)) = test_pool("agg_overlap").await else {
+        eprintln!("skipping: Docker unavailable");
+        return;
+    };
+    let t = "9900357000004";
+
+    // 2026-01-01 .. open-ended
+    pg::upsert_aggregatorvertrag(
+        &pool,
+        t,
+        "C1234567890123456789012345678901",
+        &agg_input("0.12", time::macros::date!(2026 - 01 - 01), None),
+    )
+    .await
+    .expect("first contract inserted");
+
+    // Starts inside the open-ended window -> must be refused.
+    let err = pg::upsert_aggregatorvertrag(
+        &pool,
+        t,
+        "C1234567890123456789012345678901",
+        &agg_input("0.15", time::macros::date!(2026 - 06 - 01), None),
+    )
+    .await
+    .expect_err("overlapping contract must be refused");
+    assert!(
+        format!("{err:?}").contains("agg_no_overlap"),
+        "expected the exclusion constraint to fire, got: {err:?}"
+    );
+}
+
+/// A back-to-back succession (`[a, b)` then `[b, …)`) must be accepted — the
+/// range is half-open, so touching endpoints do not overlap.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn back_to_back_aggregatorvertraege_are_allowed() {
+    use std::str::FromStr as _;
+
+    let Some((pool, _c)) = test_pool("agg_succession").await else {
+        eprintln!("skipping: Docker unavailable");
+        return;
+    };
+    let t = "9900357000004";
+    let sr = "C1234567890123456789012345678901";
+
+    pg::upsert_aggregatorvertrag(
+        &pool,
+        t,
+        sr,
+        &agg_input(
+            "0.12",
+            time::macros::date!(2026 - 01 - 01),
+            Some(time::macros::date!(2026 - 07 - 01)),
+        ),
+    )
+    .await
+    .expect("first contract");
+
+    pg::upsert_aggregatorvertrag(
+        &pool,
+        t,
+        sr,
+        &agg_input("0.15", time::macros::date!(2026 - 07 - 01), None),
+    )
+    .await
+    .expect("succeeding contract must be accepted");
+
+    // The lookup must select by the dispatch date, not by "latest".
+    let before =
+        pg::find_active_aggregatorvertrag(&pool, t, sr, time::macros::date!(2026 - 03 - 01))
+            .await
+            .unwrap()
+            .expect("contract in force in March");
+    assert_eq!(
+        before.capacity_price_eur_per_kwh,
+        rust_decimal::Decimal::from_str("0.12").unwrap()
+    );
+
+    let after =
+        pg::find_active_aggregatorvertrag(&pool, t, sr, time::macros::date!(2026 - 09 - 01))
+            .await
+            .unwrap()
+            .expect("contract in force in September");
+    assert_eq!(
+        after.capacity_price_eur_per_kwh,
+        rust_decimal::Decimal::from_str("0.15").unwrap()
+    );
+}
+
 /// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
 type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
 

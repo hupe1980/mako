@@ -26,9 +26,8 @@ use mako_markt::{
     domain::{MaloId, Sparte},
     error::MdmError,
     repository::{
-        AppState, BillingSchedule, ContractRepository, CorrelationIndex, MaloRepository,
-        MeloRepository, NbContractRecord, NbContractRepository, PartnerRepository,
-        SubscriptionRepository,
+        AppState, BillingSchedule, CorrelationIndex, MaloRepository, MeloRepository,
+        NbContractRecord, NbContractRepository, PartnerRepository, SubscriptionRepository,
     },
 };
 use mako_service::cedar::CedarEnforcer;
@@ -335,11 +334,10 @@ pub async fn list_nb_contracts(
 // Silence unused-import warnings for generic bounds that are needed for
 // the State extractor in other handlers but not used directly here.
 #[allow(dead_code)]
-fn _assert_bounds<Ma, Me, Co, Su, Ci, Pa>(_: &AppState<Ma, Me, Co, Su, Ci, Pa>)
+fn _assert_bounds<Ma, Me, Su, Ci, Pa>(_: &AppState<Ma, Me, Su, Ci, Pa>)
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,

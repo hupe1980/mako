@@ -218,14 +218,14 @@ sequenceDiagram
     participant LFA as Alter LF (LFA)
 
     Note over LFN,LFA: T = Lieferbeginn-Datum
-    LFN->>NB:  UTILMD 55001 (Anmeldung / Lieferbeginn)
+    LFN->>NB:  UTILMD 55001 (Anmeldung verb. MaLo)
     LFN->>LFA: UTILMD 55016 (Kündigung Lieferbeginn)
 
     alt Bestätigung
-        NB-->>LFN:  UTILMD 55003 (Bestätigung Lieferbeginn)
+        NB-->>LFN:  UTILMD 55002 (Bestätigung Anmeldung)
         LFA-->>LFN: UTILMD 55017 (Bestätigung Kündigung)
     else Ablehnung durch NB
-        NB-->>LFN:  UTILMD 55004 (Ablehnung Lieferbeginn)
+        NB-->>LFN:  UTILMD 55003 (Ablehnung Anmeldung)
     else Ablehnung durch LFA
         LFA-->>LFN: UTILMD 55018 (Ablehnung Kündigung)
     end
@@ -749,8 +749,8 @@ or 44004 (Ablehnung). This mirrors the GPKE `gpke-lf-anmeldung` workflow for Str
 | Direction | Message | PID | Role |
 |---|---|---|---|
 | Outbound (LFN → GNB) | Anmeldung Lieferbeginn | UTILMD G **44001** | LFN initiates |
-| Inbound (GNB → LFN) | Bestätigung Lieferbeginn | UTILMD G **44003** | GNB confirms |
-| Inbound (GNB → LFN) | Ablehnung Lieferbeginn | UTILMD G **44004** | GNB rejects |
+| Inbound (NB → LF) | Bestätigung Anmeldung NN | UTILMD G **44002** | NB confirms |
+| Inbound (NB → LF) | Ablehnung Anmeldung NN | UTILMD G **44003** | NB rejects |
 | Outbound (LFN → LFA) | Kündigung beim alten LF | UTILMD G **44016** | Concurrent with 44001 |
 | Inbound (LFA → LFN) | Bestätigung Kündigung | UTILMD G **44017** | LFA confirms |
 | Inbound (LFA → LFN) | Ablehnung Kündigung | UTILMD G **44018** | LFA rejects |
@@ -774,10 +774,10 @@ sequenceDiagram
     Note over LFN,GNB: Frist: 10 Werktage (keine Express-Option)
 
     alt GNB bestätigt
-        GNB-->>LFN: UTILMD G 44003 (Bestätigung Lieferbeginn)
+        GNB-->>LFN: UTILMD G 44002 (Bestätigung Anmeldung NN)
         LFA-->>LFN: UTILMD G 44017 (Bestätigung Kündigung)
     else GNB lehnt ab
-        GNB-->>LFN: UTILMD G 44004 (Ablehnung Lieferbeginn)
+        GNB-->>LFN: UTILMD G 44003 (Ablehnung Anmeldung NN)
     else LFA lehnt ab
         LFA-->>LFN: UTILMD G 44018 (Ablehnung Kündigung)
     end
@@ -801,10 +801,10 @@ sequenceDiagram
     LFN->>LFA: UTILMD G 44016 (Kündigung beim alten Lieferanten)
 
     alt Bestätigung
-        GNB-->>LFN: UTILMD G 44003 (Bestätigung Lieferbeginn)
+        GNB-->>LFN: UTILMD G 44002 (Bestätigung Anmeldung NN)
         LFA-->>LFN: UTILMD G 44017 (Bestätigung Kündigung)
     else Ablehnung durch GNB
-        GNB-->>LFN: UTILMD G 44004 (Ablehnung Lieferbeginn)
+        GNB-->>LFN: UTILMD G 44003 (Ablehnung Anmeldung NN)
     else Ablehnung durch LFA
         LFA-->>LFN: UTILMD G 44018 (Ablehnung Kündigung)
     end

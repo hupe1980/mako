@@ -2,7 +2,7 @@
   "schema_version": 1,
   "message_type": "PRICAT",
   "release": "2.0e",
-  "source_document": "PRICAT AHB 2.0e vom 01.04.2025",
+  "source_document": "PRICAT AHB, wire release 2.0e (Stand 01.04.2025)",
   "pruefidentifikatoren": [
     {
       "code": 27001,

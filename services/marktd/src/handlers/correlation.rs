@@ -15,8 +15,8 @@ use mako_markt::{
     domain::{MaloId, ProcessStatus},
     error::MdmError,
     repository::{
-        AppState, ContractRepository, CorrelationFilter, CorrelationIndex, MaloRepository,
-        MeloRepository, PartnerRepository, SubscriptionRepository,
+        AppState, CorrelationFilter, CorrelationIndex, MaloRepository, MeloRepository,
+        PartnerRepository, SubscriptionRepository,
     },
 };
 use serde::Deserialize;
@@ -32,15 +32,14 @@ pub struct CorrelationQuery {
 }
 
 /// `GET /api/v1/correlations/:process_id`
-pub async fn get_correlation<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn get_correlation<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     _claims: Claims,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
@@ -57,15 +56,14 @@ where
 }
 
 /// `GET /api/v1/correlations`
-pub async fn list_correlations<Ma, Me, Co, Su, Ci, Pa>(
-    State(state): State<Arc<AppState<Ma, Me, Co, Su, Ci, Pa>>>,
+pub async fn list_correlations<Ma, Me, Su, Ci, Pa>(
+    State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     _claims: Claims,
     Query(q): Query<CorrelationQuery>,
 ) -> impl IntoResponse
 where
     Ma: MaloRepository + Clone,
     Me: MeloRepository + Clone,
-    Co: ContractRepository + Clone,
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,

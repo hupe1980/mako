@@ -290,9 +290,8 @@ Both halts are **account-scoped**: disconnection is per supply point and
 auto-dunning creates a fresh case per Mahnstufe, so each flag is set on *every*
 open dunning case of the account owning `{id}`. Both are filtered out by every
 phase query, so a halted account never progresses. Fristen are configurable (`sperrandrohung_frist_days`,
-`sperrankuendigung_frist_werktage`). See
-`regulatories/gesetze/EnWG_41f_41g_Versorgungsunterbrechung_Nichtzahlung_2025-12-23.md`
-for the citable spec.
+`sperrankuendigung_frist_werktage`). The governing text is §§ 41f–41g EnWG in the
+consolidated version of 23.12.2025 (BGBl. 2025 I Nr. 347).
 
 ### Threshold — both §41f Abs. 3 gates
 

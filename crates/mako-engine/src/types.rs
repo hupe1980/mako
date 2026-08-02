@@ -30,9 +30,19 @@
 //! ```rust
 //! use mako_engine::types::{MaLo, MarktpartnerCode};
 //!
-//! let malo:   MaLo            = MaLo::new("DE00123456789012345678901234567890");
+//! let malo:   MaLo             = MaLo::new("51238696780");
 //! let sender: MarktpartnerCode = MarktpartnerCode::new("9900123456789");
 //! ```
+//!
+//! ## These are wire-boundary types, not validated value objects
+//!
+//! The wrappers carry no format or check-digit validation: a message arriving
+//! over AS4 may hold a malformed identifier, and the process must be able to
+//! represent it in order to reject it with a precise, citable error. Validation
+//! belongs one layer in, where `rubo4e::identifiers::{MaloId, MeloId,
+//! MarktpartnerId}` provide the check-digit-validated domain value objects.
+//! Treat a value of this module's types as "whatever the counterparty sent",
+//! never as "a valid MaLo".
 //!
 //! ## Serde
 //!
@@ -104,10 +114,15 @@ domain_id!(
     /// Marktlokations-ID (MaLo).
     ///
     /// Identifies a supply point for electricity or gas in the German energy
-    /// market. EIC format (33-char) or legacy 13-digit format; exact format
-    /// depends on the process family and format version.
+    /// market. A well-formed MaLo-ID is **11 digits**, the eleventh being a BDEW
+    /// check digit over the first ten.
+    ///
+    /// This wrapper does **not** verify that: it is the wire-boundary type, and
+    /// an inbound message carrying a malformed ID must still be representable so
+    /// the process can reject it with a precise error. Use
+    /// `rubo4e::identifiers::MaloId` for the validated domain value.
     MaLo,
-    "Marktlokations-ID — supply point identifier (EIC / MaLo format)"
+    "Marktlokations-ID — supply point identifier (11 digits incl. BDEW check digit)"
 );
 
 domain_id!(
@@ -116,8 +131,13 @@ domain_id!(
     /// Identifies a metering point in the WiM (Wechselprozesse im Messwesen)
     /// process family. Distinct from a MaLo — one supply point may have
     /// multiple metering points.
+    ///
+    /// A well-formed MeLo-ID is **33 characters**: a two-letter ISO 3166-1
+    /// country code followed by 31 alphanumerics. Unvalidated here for the same
+    /// wire-boundary reason as [`MaLo`]; the validated value object is
+    /// `rubo4e::identifiers::MeloId`.
     MeLo,
-    "Messlokations-ID — metering point identifier"
+    "Messlokations-ID — metering point identifier (33 chars, country-code prefixed)"
 );
 
 domain_id!(

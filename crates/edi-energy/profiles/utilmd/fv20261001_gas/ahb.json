@@ -2,11 +2,11 @@
   "schema_version": 1,
   "message_type": "UTILMD",
   "release": "G1.2",
-  "source_document": "UTILMD AHB G1.2 vom 01.10.2026",
+  "source_document": "UTILMD AHB, wire release G1.2 (Stand 01.10.2026)",
   "pruefidentifikatoren": [
     {
       "code": 44001,
-      "name": "Lieferbeginn Gas (Anfrage LFN an NB)",
+      "name": "Anmeldung NN",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -164,7 +164,7 @@
     },
     {
       "code": 44002,
-      "name": "Lieferende Gas (Anfrage LFN an NB)",
+      "name": "Bestätigung Anmeldung NN",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -322,7 +322,7 @@
     },
     {
       "code": 44003,
-      "name": "Bestätigung Lieferbeginn Gas (NB an LFN)",
+      "name": "Ablehnung Anmeldung NN",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -480,7 +480,7 @@
     },
     {
       "code": 44004,
-      "name": "Ablehnung Lieferbeginn Gas (NB an LFN)",
+      "name": "Abmeldung NN",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -670,7 +670,7 @@
     },
     {
       "code": 44005,
-      "name": "Bestätigung Lieferende Gas (NB an LFN)",
+      "name": "Bestätigung Abmeldung NN",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -860,7 +860,7 @@
     },
     {
       "code": 44006,
-      "name": "Ablehnung Lieferende Gas (NB an LFN)",
+      "name": "Ablehnung Abmeldung NN",
       "segment_rules": [
         {
           "tag": "BGM",

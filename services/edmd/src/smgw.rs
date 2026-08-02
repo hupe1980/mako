@@ -26,7 +26,7 @@
 //!         check_session_compliance()    append cls_compliance_log
 //!                   │                      │
 //!                   ▼                      ▼
-//!       de.messwert.cls.compliance_issue   GET /api/v1/smgw/compliance
+//!       de.messwert.cls.compliance-issue   GET /api/v1/smgw/compliance
 //!       CloudEvent (ERP webhook)       (on-demand status endpoint)
 //! ```
 //!
@@ -45,7 +45,7 @@
 //!
 //! Alongside the compliance sweep, a second daily worker
 //! ([`run_smgw_cert_expiry_sweep`]) emits a tiered
-//! `de.messwert.smgw.cert.expiry_warning` at **90 / 30 / 7 days** before each
+//! `de.messwert.smgw.cert.expiry-warning` at **90 / 30 / 7 days** before each
 //! certificate's `valid_to` (`SMGW_CERT_ABLAUFDATUM`), once per tier per
 //! certificate (dedup in `smgw_cert_expiry_alerts`; a renewed cert with a new
 //! `valid_to` gets a fresh set). This is the *advance* warning — an
@@ -360,7 +360,7 @@ pub fn check_session_compliance(
 
 /// Run a full fleet compliance sweep: query all `smgw_sessions`, check each
 /// session, log issues to `cls_compliance_log`, and emit
-/// `de.messwert.cls.compliance_issue` CloudEvents to the ERP webhook.
+/// `de.messwert.cls.compliance-issue` CloudEvents to the ERP webhook.
 ///
 /// Called by the daily background worker and by
 /// `POST /api/v1/smgw/compliance/scan` (on-demand).
@@ -456,7 +456,7 @@ pub async fn run_cls_compliance_sweep(
                 tracing::warn!(error = %e, "edmd: cls-compliance-sweep: failed to log issue");
             }
 
-            // ── 3. Emit de.messwert.cls.compliance_issue CloudEvent ───────────────
+            // ── 3. Emit de.messwert.cls.compliance-issue CloudEvent ───────────────
             if let Some(url) = erp_webhook_url {
                 let ce = mako_service::CloudEvent::new(
                     mako_service::source("edmd", tenant),
@@ -627,12 +627,12 @@ pub struct CertExpirySweepReport {
     pub sessions_scanned: usize,
     /// Non-revoked certificates examined.
     pub certs_scanned: usize,
-    /// `de.messwert.smgw.cert.expiry_warning` events emitted this sweep.
+    /// `de.messwert.smgw.cert.expiry-warning` events emitted this sweep.
     pub warnings_emitted: usize,
 }
 
 /// Sweep every SMGW certificate and emit a tiered
-/// `de.messwert.smgw.cert.expiry_warning` at the 90 / 30 / 7-day marks
+/// `de.messwert.smgw.cert.expiry-warning` at the 90 / 30 / 7-day marks
 /// (`SMGW_CERT_ABLAUFDATUM` = `GatewayCertificate::valid_to`).
 ///
 /// Idempotent: `smgw_cert_expiry_alerts` records one row per
@@ -1269,7 +1269,7 @@ pub async fn get_smgw_compliance(
 /// Trigger an immediate, side-effecting compliance sweep:
 /// - Runs `run_cls_compliance_sweep()` synchronously
 /// - Logs all found issues to `cls_compliance_log`
-/// - Emits `de.messwert.cls.compliance_issue` CloudEvents for each issue
+/// - Emits `de.messwert.cls.compliance-issue` CloudEvents for each issue
 ///
 /// Use this endpoint for manual compliance audits or integration tests.
 /// The daily background worker calls the same logic automatically.

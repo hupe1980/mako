@@ -738,7 +738,7 @@ impl Profile for OrdchgFv20241001Profile {
         Some("1.1")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("ORDCHG AHB 1.1, Stand 01.10.2024")
+        Some("ORDCHG MIG 1.1, Stand 01.10.2024")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

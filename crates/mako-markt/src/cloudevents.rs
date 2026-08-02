@@ -98,7 +98,6 @@ impl InboundMakoEvent {
 /// |---|---|
 /// | `marktmaloid` | Resolved Marktlokations-ID |
 /// | `marktmeloid` | Resolved Messlokations-ID |
-/// | `marktcontractid` | MDM contract UUID |
 /// | `marktrole` | Marktrolle: `"NB"`, `"LF"`, `"MSB"`, `"BIKO"`, `"UNB"` |
 /// | `markterpref` | ERP-supplied idempotency key |
 /// | `makopid` | Forwarded BDEW Prüfidentifikator |
@@ -128,8 +127,6 @@ pub struct MarktEvent {
     pub marktmaloid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub marktmeloid: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub marktcontractid: Option<String>,
     /// Canonical `marktrole` value (e.g. `"NB"`, `"LF"`, `"MSB"`, `"BIKO"`, `"UNB"`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub marktrole: Option<String>,
@@ -198,7 +195,6 @@ impl MarktEvent {
             datacontenttype: "application/json".into(),
             marktmaloid: None,
             marktmeloid: None,
-            marktcontractid: None,
             marktrole: None,
             markterpref: None,
             makoconvid: None,
@@ -216,7 +212,6 @@ impl MarktEvent {
     pub fn with_extensions(mut self, ext: EventExtensions) -> Self {
         self.marktmaloid = ext.marktmaloid;
         self.marktmeloid = ext.marktmeloid;
-        self.marktcontractid = ext.marktcontractid;
         self.marktrole = ext.marktrole;
         self.markterpref = ext.markterpref;
         self.makoconvid = ext.makoconvid;
@@ -234,7 +229,6 @@ impl MarktEvent {
 pub struct EventExtensions {
     pub marktmaloid: Option<String>,
     pub marktmeloid: Option<String>,
-    pub marktcontractid: Option<String>,
     pub marktrole: Option<String>,
     pub markterpref: Option<String>,
     /// Forwarded `makoconvid` from originating `InboundMakoEvent`.

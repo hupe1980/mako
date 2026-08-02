@@ -42,7 +42,7 @@
 //! let base = Url::parse("https://verzeichnisdienst.example.de/")?;
 //! let client = DirectoryServiceClient::new_insecure(base)?;
 //! let (record, _cert, _sig) = client
-//!     .get_record("1234567890123", "controlMeasuresV1", 1)
+//!     .get_record("1234567890723", "controlMeasuresV1", 1)
 //!     .await?;
 //! println!("{}", record.url);
 //! # Ok(())

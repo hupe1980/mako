@@ -233,7 +233,7 @@ bdew-codes.de or codevergabe.dvgw-sc.de.
 **Key rule:** The same MaLo-ID identifies the location regardless of whether
 the grid was transferred to a new DSO — the NB keeps the ID.
 
-**Examples:** `51238696781`, `40130000558`
+**Examples:** `51238696780`, `40130000551`
 
 ---
 
@@ -414,7 +414,7 @@ use mako_engine::types::{
 
 // --- Market location (MaLo) ---
 // 11-digit numeric; first digit 4-9 = BDEW-issued, 1-3 = DVGW-issued
-let malo: MaLo = MaLo::new("51238696781");   // starts with 5 = BDEW
+let malo: MaLo = MaLo::new("51238696780");   // starts with 5 = BDEW
 
 // --- Metering location (MeLo) = Zählpunktbezeichnung ---
 // 33-char Strom (VDE-AR-N 4400) or 11-char Gas (DVGW G2000)

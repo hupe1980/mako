@@ -202,6 +202,15 @@ impl Daemon for Vertragd {
             )
             // Supply contracts (B2C + B2B)
             .route("/api/v1/vertraege", get(handlers::list_vertraege))
+            // §41e EnWG Aggregatorverträge — read by billingd on VPP dispatch settlement
+            .route(
+                "/api/v1/aggregatorvertraege",
+                get(handlers::get_aggregatorvertraege),
+            )
+            .route(
+                "/api/v1/aggregatorvertraege/:sr_id",
+                axum::routing::put(handlers::put_aggregatorvertrag),
+            )
             .route(
                 "/api/v1/vertraege/by-malo/:malo_id",
                 get(handlers::get_vertrag_by_malo),

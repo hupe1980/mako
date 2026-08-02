@@ -36,13 +36,13 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     CommandDescriptor {
         name: "gpke.lieferbeginn.bestaetigen",
         permitted_roles: &[Marktrolle::Nb],
-        primary_pid: pid(55003),
+        primary_pid: pid(55002),
         dispatch: cmd_gpke_lieferbeginn_bestaetigen,
     },
     CommandDescriptor {
         name: "gpke.lieferbeginn.ablehnen",
         permitted_roles: &[Marktrolle::Nb],
-        primary_pid: pid(55004),
+        primary_pid: pid(55003),
         dispatch: cmd_gpke_lieferbeginn_ablehnen,
     },
     CommandDescriptor {

@@ -3874,7 +3874,7 @@ impl Profile for OrdrspFv20260401Profile {
         Some("1.4c")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("ORDRSP AHB 1.4c, Stand 01.04.2026")
+        Some("ORDRSP MIG 1.4c, Stand 01.04.2026")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

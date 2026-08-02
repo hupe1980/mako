@@ -82,7 +82,7 @@ Port: **`:9480`**
 
 ```json
 {
-  "malo_id": "51238696781",
+  "malo_id": "51238696780",
   "tenant": "9910000000002",
   "versorgung": {
     "lieferstatus": "Beliefert",
@@ -129,10 +129,10 @@ Returns an SSE stream. The current implementation emits a 30-second heartbeat:
 
 ```
 event: heartbeat
-data: {"malo_id": "51238696781"}
+data: {"malo_id": "51238696780"}
 
 event: heartbeat
-data: {"malo_id": "51238696781"}
+data: {"malo_id": "51238696780"}
 ```
 
 **Production wiring.** In production, wire the SSE stream to an internal notification channel

@@ -1,6 +1,6 @@
-//! End-to-end test: LFN Gas ↔ GNB Lieferende Gas (PID 44002).
+//! End-to-end test: LFN Gas ↔ GNB Abmeldung NN Gas (PID 44004).
 //!
-//! A mock GNB (Gasnetzbetreiber) receives a UTILMD G 44002 from the LFN
+//! A mock GNB (Gasnetzbetreiber) receives a UTILMD G 44004 from the LFN
 //! (Gaslieferant) and dispatches a positive or negative APERAK response.
 //!
 //! # Protocol trace
@@ -8,7 +8,7 @@
 //! ```text
 //!   LFN Gas ERP (wire fixture)                 GNB ERP (MockGnb)
 //!   ──────────────────────────────────────────────────────────────
-//!                        ──── UTILMD G 44002 ─►
+//!                        ──── UTILMD G 44004 ─►
 //!                                               receive_utilmd(wire)
 //!                                                 → adapter: ReceiveUtilmd
 //!                                                 → state: ValidationPassed
@@ -28,7 +28,7 @@
 //!
 //! # Regulatory context
 //!
-//! - **PID 44002**: Anfrage Lieferende Gas (LFN → GNB, GeLi Gas AHB G1.1)
+//! - **PID 44004**: Abmeldung NN (LF → NB, GeLi Gas AHB G1.1)
 //! - **APERAK Frist**: **10 Werktage** (BNetzA BK7 GeLi Gas 3.0, BK7-24-01-009)
 //! - **Saturdays, Sundays and federal public holidays are not Werktage.**
 //!   This is distinct from GPKE (24 wall-clock hours) and WiM (5 Werktage).
@@ -58,16 +58,16 @@ const GNB_ID: &str = "9900357000004"; // Gasnetzbetreiber (receiver)
 const MALO_GAS_ID: &str = "52695662085"; // Marktlokations-ID (Gas)
 const FV: &str = "FV2025-10-01";
 
-// ── UTILMD G 44002 wire fixture ───────────────────────────────────────────────
+// ── UTILMD G 44004 wire fixture ───────────────────────────────────────────────
 //
-// Minimal EDIFACT UTILMD G1.1 Anfrage Lieferende Gas (PID 44002).
+// Minimal EDIFACT UTILMD G1.1 Anfrage Abmeldung NN Gas (PID 44004).
 // Direction: LFN Gas (sender NAD+MS) → GNB (receiver NAD+MR).
 //
 // Source: GeLi Gas AHB G1.1 (BNetzA BK7), FV2025-10-01.
-const UTILMD_44002_BYTES: &[u8] = b"\
+const UTILMD_44004_BYTES: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0900+GAS-2025-002'\
 UNH+MSG-002+UTILMD:D:11A:UN:G1.1'\
-BGM+E03:::+00044002::+9'\
+BGM+E03:::+00044004::+9'\
 DTM+137:20250115:102'\
 RFF+Z13:GAS-REF-002'\
 NAD+MS+4012345000023::293'\
@@ -99,7 +99,7 @@ impl MockGnb {
         }
     }
 
-    /// ERP notification: receive LFN Gas UTILMD G 44002 wire bytes, adapt, and execute.
+    /// ERP notification: receive LFN Gas UTILMD G 44004 wire bytes, adapt, and execute.
     ///
     /// AHB validation is forced to `true` — the hand-crafted fixture does not
     /// satisfy all G1.1 profile rules; AHB conformance is tested separately in
@@ -114,7 +114,7 @@ impl MockGnb {
 
         let cmd = geli_gas_registry()
             .dispatch(&raw as &dyn Any, &self.fv)
-            .expect("GNB: adapt UTILMD G 44002 to GasSupplierChangeCommand");
+            .expect("GNB: adapt UTILMD G 44004 to GasSupplierChangeCommand");
 
         let cmd = match cmd {
             GasSupplierChangeCommand::ReceiveUtilmd {
@@ -129,7 +129,7 @@ impl MockGnb {
                 gasqualitaet: None,
                 ..
             } => {
-                assert_eq!(pid.as_u32(), 44002, "adapter must extract PID 44002");
+                assert_eq!(pid.as_u32(), 44004, "adapter must extract PID 44004");
                 assert_eq!(sender.as_str(), LFN_GAS_ID, "sender GLN must match NAD+MS");
                 assert_eq!(receiver.as_str(), GNB_ID, "receiver GLN must match NAD+MR");
                 assert_eq!(malo_id.as_str(), MALO_GAS_ID, "MaLo must match IDE+Z19");
@@ -161,7 +161,7 @@ impl MockGnb {
         self.process
             .execute(cmd)
             .await
-            .expect("GNB: execute ReceiveUtilmd 44002");
+            .expect("GNB: execute ReceiveUtilmd 44004");
     }
 
     /// ERP action: send Antwort (positive or negative) for the received Lieferende.
@@ -185,9 +185,9 @@ impl MockGnb {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-/// GeLi Gas Lieferende — positive Antwort path (PID 44002 → AntwortGesendet → Completed).
+/// GeLi Gas Lieferende — positive Antwort path (PID 44004 → AntwortGesendet → Completed).
 ///
-/// The GNB receives a 44002 Anfrage Lieferende, validates it, sends a positive
+/// The GNB receives a 44004 Anfrage Lieferende, validates it, sends a positive
 /// Antwort (44005 Bestätigung), and the workflow completes.
 ///
 /// BNetzA BK7 GeLi Gas: Antwort must be sent within **10 Werktage**.
@@ -196,13 +196,13 @@ impl MockGnb {
 async fn e2e_lieferende_gas_positive_aperak() {
     let gnb = MockGnb::new();
 
-    gnb.receive_utilmd(UTILMD_44002_BYTES).await;
+    gnb.receive_utilmd(UTILMD_44004_BYTES).await;
     assert!(
         matches!(
             gnb.state().await,
             GasSupplierChangeState::ValidationPassed(_)
         ),
-        "GNB must be ValidationPassed after ReceiveUtilmd 44002"
+        "GNB must be ValidationPassed after ReceiveUtilmd 44004"
     );
 
     let aperak_outbox = gnb.dispatch_aperak(true, None).await;
@@ -228,8 +228,8 @@ async fn e2e_lieferende_gas_positive_aperak() {
     );
     assert_eq!(
         payload["anfrage_pid"].as_u64().unwrap(),
-        44002_u64,
-        "outbox payload must carry anfrage_pid 44002"
+        44004_u64,
+        "outbox payload must carry anfrage_pid 44004"
     );
     assert_eq!(payload["malo_id"].as_str().unwrap(), MALO_GAS_ID);
 
@@ -250,8 +250,8 @@ async fn e2e_lieferende_gas_positive_aperak() {
     if let GasSupplierChangeState::AntwortGesendet { data, .. } = final_state {
         assert_eq!(
             data.pruefidentifikator.as_u32(),
-            44002,
-            "persisted data must carry PID 44002"
+            44004,
+            "persisted data must carry PID 44004"
         );
         assert_eq!(data.sender.as_str(), LFN_GAS_ID);
         assert_eq!(data.receiver.as_str(), GNB_ID);
@@ -259,7 +259,7 @@ async fn e2e_lieferende_gas_positive_aperak() {
     }
 }
 
-/// GeLi Gas Lieferende — negative APERAK path (PID 44002 → Rejected).
+/// GeLi Gas Lieferende — negative APERAK path (PID 44004 → Rejected).
 ///
 /// The GNB rejects the Lieferende request (e.g. Marktlokation unknown).
 /// A negative APERAK outbox entry is enqueued and the workflow reaches Rejected.
@@ -267,13 +267,13 @@ async fn e2e_lieferende_gas_positive_aperak() {
 async fn e2e_lieferende_gas_negative_aperak() {
     let gnb = MockGnb::new();
 
-    gnb.receive_utilmd(UTILMD_44002_BYTES).await;
+    gnb.receive_utilmd(UTILMD_44004_BYTES).await;
     assert!(
         matches!(
             gnb.state().await,
             GasSupplierChangeState::ValidationPassed(_)
         ),
-        "GNB must be ValidationPassed after ReceiveUtilmd 44002"
+        "GNB must be ValidationPassed after ReceiveUtilmd 44004"
     );
 
     let aperak_outbox = gnb
@@ -313,9 +313,9 @@ async fn e2e_lieferende_gas_negative_aperak() {
     );
 }
 
-/// GeLi Gas Lieferende — AHB validation failure (PID 44002 → immediate Rejected).
+/// GeLi Gas Lieferende — AHB validation failure (PID 44004 → immediate Rejected).
 ///
-/// If the received UTILMD G 44002 fails AHB validation, the workflow transitions
+/// If the received UTILMD G 44004 fails AHB validation, the workflow transitions
 /// to `Rejected` immediately after `ReceiveUtilmd`, without a `DispatchAperak`.
 #[tokio::test]
 async fn e2e_lieferende_gas_ahb_validation_failure() {
@@ -323,7 +323,7 @@ async fn e2e_lieferende_gas_ahb_validation_failure() {
 
     gnb.process
         .execute(GasSupplierChangeCommand::ReceiveUtilmd {
-            pid: mako_engine::types::Pruefidentifikator::new(44002).unwrap(),
+            pid: mako_engine::types::Pruefidentifikator::new(44004).unwrap(),
             sender: mako_engine::types::MarktpartnerCode::new(LFN_GAS_ID),
             receiver: mako_engine::types::MarktpartnerCode::new(GNB_ID),
             malo_id: mako_engine::types::MaLo::new(MALO_GAS_ID),
@@ -346,6 +346,6 @@ async fn e2e_lieferende_gas_ahb_validation_failure() {
     let final_state = gnb.state().await;
     assert!(
         matches!(final_state, GasSupplierChangeState::Rejected { .. }),
-        "invalid UTILMD G 44002 must reach Rejected without DispatchAperak; got: {final_state:?}"
+        "invalid UTILMD G 44004 must reach Rejected without DispatchAperak; got: {final_state:?}"
     );
 }

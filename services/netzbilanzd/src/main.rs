@@ -102,11 +102,11 @@ impl Daemon for Netzbilanzd {
         // ── Background workers ─────────────────────────────────────────────────
         //
         // Worker 1: Undispatched draft alert.
-        //   Emits `de.netzbilanz.invoic.dispatch_overdue` CloudEvent for each draft
+        //   Emits `de.netzbilanz.invoic.dispatch-overdue` CloudEvent for each draft
         //   older than 48 h that is still in 'draft' status.  Runs hourly by default.
         //
         // Worker 2: Kostenblatt 15th-of-month deadline alert.
-        //   Emits `de.netzbilanz.kostenblatt.deadline_approaching` when the 15th is
+        //   Emits `de.netzbilanz.kostenblatt.deadline-approaching` when the 15th is
         //   ≤5 days away and pending Kostenblatt records exist.  Runs daily by default.
 
         if cfg.erp_webhook_url.is_some() {
@@ -269,7 +269,7 @@ fn billing_routes() -> Router {
 
 // ── Background worker helpers ─────────────────────────────────────────────────
 
-/// Emit `de.netzbilanz.invoic.dispatch_overdue` for drafts stuck in 'draft' > 48 h.
+/// Emit `de.netzbilanz.invoic.dispatch-overdue` for drafts stuck in 'draft' > 48 h.
 async fn spawn_dispatch_alert(
     pool: &PgPool,
     cfg: &NetzbilanzConfig,
@@ -318,7 +318,7 @@ async fn spawn_dispatch_alert(
     }
 }
 
-/// Emit `de.netzbilanz.kostenblatt.deadline_approaching` when the 15th-of-month
+/// Emit `de.netzbilanz.kostenblatt.deadline-approaching` when the 15th-of-month
 /// Redispatch 2.0 Kostenblatt deadline is ≤5 days away and pending records exist.
 async fn spawn_kostenblatt_alert(
     pool: &PgPool,

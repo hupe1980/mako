@@ -50,7 +50,7 @@ sequenceDiagram
     processd->>marktd: GET /partners/{lf_mp_id}
     Note over processd: netz-checker: 6 checks → Accept
     processd->>makod: gpke.lieferbeginn.bestaetigen
-    makod-->>webhook: UTILMD 55003 Bestätigung Lieferbeginn
+    makod-->>webhook: UTILMD 55002 Bestätigung Anmeldung
 ```
 
 ## Prerequisites
@@ -136,7 +136,7 @@ Expected output:
 ✓ ProcessInitiated delivered via marktd fan-out (source: urn:markt:tenant:9900357000004)
 ✓ processd NB auto-responder dispatched bestaetigen → UTILMD 55003 already arrived
 ✓ POST /api/v1/commands → HTTP 409 (auto-responder already accepted — idempotency confirmed)
-✓ UTILMD 55003 Bestätigung Lieferbeginn delivered to LFN
+✓ UTILMD 55002 Bestätigung Anmeldung delivered to LFN
 ✓ Operator-override protection confirmed (source=api; api > mako enforced by SQL)
 All smoke tests passed.
   Wechselprozess auto-responder: ENABLED
@@ -169,7 +169,6 @@ already dispatched `bestaetigen` automatically — the manual ERP call arrives t
 | `fixtures/partner-lf.json` | Trading partner record for LFN GLN `4012345000023` |
 | `fixtures/preisblatt-nb.json` | `PreisblattNetznutzung` for NB `9900357000004` (FV2026-10-01) |
 | `fixtures/malo-nb.json` | `MARKTLOKATION` for NB `9900357000004` (demo MaLo) |
-| `fixtures/contract-lf.json` | NB network contract (Netznutzungsvertrag) |
 
 ## Demo configuration
 

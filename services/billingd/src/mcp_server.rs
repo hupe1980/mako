@@ -349,12 +349,12 @@ agentd billing-anomaly-agent calls this on every de.billing.rechnung.erstellt ev
         }
     }
 
-    // ── VPP Aggregation Settlement (B12 — RED III Article 17) ────────────────
+    // ── VPP Aggregation Settlement (B12 — Art. 17 RL (EU) 2019/944) ────────────────
 
     #[tool(
         description = "List VPP (Virtual Power Plant) aggregation settlement records for a VPP portfolio. \
 Returns billing records with category=VPP showing dispatch events, total flexibility kWh, and Einsatzkosten. \
-CloudEvent de.vpp.settlement.berechnet is emitted per settlement. RED III Article 17 / §41b EnWG (expected 2026).",
+CloudEvent de.vpp.settlement.berechnet is emitted per settlement. § 41e EnWG / Art. 17 RL (EU) 2019/944.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_vpp_settlements(

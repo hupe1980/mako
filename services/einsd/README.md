@@ -16,7 +16,7 @@ through Förderdauer expiry.
 | **Repowering** | `POST /api/v1/anlagen/{tr_id}/repowering` — resets 20-year Förderdauer (§22 EEG 2023) |
 | **Zusammenlegung** | `parent_tr_id` links merged plants (§24 EEG 2023) |
 | **KWKG Förderdauer** | `kwk_foerderdauer_h` (>2 MW, 30,000 h) or `kwk_foerderdauer_years` (≤2 MW) |
-| **Förderdauer alerts** | Background worker emits `de.eeg.anlage.foerderung_auslaufend` 180 days before expiry |
+| **Förderdauer alerts** | Background worker emits `de.eeg.anlage.foerderung-auslaufend` 180 days before expiry |
 | **§51 auto-derivation** | `PUT /api/v1/epex-spot` loads EPEX day-ahead prices; every settle without explicit values fetches the plant's ¼h feed-in from edmd (`GET /feed-in`), overlays the spot store, and derives the negative-price quarter-hours via `eeg-billing::negativpreis` (version-aware run logic). A **§60 Abs. 2 MsbG gate** skips the reduction when edmd coverage <95 % or any interval is non-billable |
 | **§51a Förderende-Verlängerung** | Raw lost quarter-hours accrue in `negative_price_qh_gesamt`; `effektives_foerderende` derives the extended end at settle time (solar: Volllastviertelstunden contingent; others: rounded up to whole calendar days) — the stored statutory `foerderendedatum` is left untouched |
 | **§36h Abs. 2 Standortgüte re-eval** | `POST /api/v1/anlagen/{tr_id}/wind-reevaluation` records the Gütefaktor re-evaluated from operating year 6/11/16 (`wind_guetefaktor_reevaluations`); settlement selects the effective Korrekturfaktor per period and flags `reconciliation_required` on a >2 pp deviation (§147 AO correction) |

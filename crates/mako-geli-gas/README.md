@@ -34,10 +34,10 @@ families. Saturdays, Sundays and public holidays are not Werktage.
 |---------|-----------------------------------------------------|---------------|-----------------------------------|
 | 44001   | Lieferbeginn Gas — Anfrage LFN → NB                 | UTILMD G1/G2  | ✅ Implemented                    |
 | 44002   | Lieferende Gas — Anfrage LFN → NB                   | UTILMD G1/G2  | ⚠️ Registered — partial handling |
-| 44003   | Bestätigung Lieferbeginn Gas — NB → LFN             | UTILMD G1/G2  | ⚠️ Registered — partial handling |
-| 44004   | Ablehnung Lieferbeginn Gas — NB → LFN               | UTILMD G1/G2  | ⚠️ Registered — partial handling |
-| 44005   | Bestätigung Lieferende Gas — NB → LFN               | UTILMD G1/G2  | ⚠️ Registered — partial handling |
-| 44006   | Ablehnung Lieferende Gas — NB → LFN                 | UTILMD G1/G2  | ⚠️ Registered — partial handling |
+| 44002   | Bestätigung Anmeldung NN — NB → LF                  | UTILMD G1/G2  | ⚠️ Registered — partial handling |
+| 44003   | Ablehnung Anmeldung NN — NB → LF                    | UTILMD G1/G2  | ⚠️ Registered — partial handling |
+| 44005   | Bestätigung Abmeldung NN — NB → LF                  | UTILMD G1/G2  | ⚠️ Registered — partial handling |
+| 44006   | Ablehnung Abmeldung NN — NB → LF                    | UTILMD G1/G2  | ⚠️ Registered — partial handling |
 | 44013   | Anmeldung / Zuordnung EOG (§36/§38 EnWG) — GNB → LF | UTILMD G1/G2  | ✅ Implemented (`EogAnmeldung` variant) |
 | 44014   | Bestätigung EOG Anmeldung — LF → GNB                | UTILMD G1/G2  | ↩ Derived from 44013 accept |
 | 44015   | Ablehnung EOG Anmeldung — LF → GNB                  | UTILMD G1/G2  | ↩ Derived from 44013 reject |
@@ -179,7 +179,7 @@ use mako_engine::{ids::MaloId, types::MarktpartnerCode};
 let cmd = GasSperrungLfCommand::InitiateSperrung {
     pid: Pruefidentifikator::new(17115).expect("Sperrauftrag"),
     gnb_gln: MarktpartnerCode::new("9900357000004"),
-    location_id: MaloId::parse("50123456789").expect("valid MaLo"),
+    location_id: MaloId::parse("50123456785").expect("valid MaLo"),
     message_ref: MessageRef::from("MSG-2025-001"),
 };
 let out = process.execute(cmd).await?;
