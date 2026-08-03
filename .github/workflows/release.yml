@@ -353,7 +353,13 @@ jobs:
             target: aarch64-unknown-linux-gnu
           - runner: macos-latest
             target: aarch64-apple-darwin
-          - runner: macos-13
+          # Intel macOS is cross-compiled from the Apple Silicon runner. The
+          # `macos-13` Intel image was retired by GitHub, and a job requesting
+          # it queues forever instead of failing — which blocks `makotest-publish`
+          # and with it the whole PyPI release. Cross-compiling needs no Intel
+          # runner at all: the wheel is abi3 and `pyo3/extension-module` leaves
+          # Python symbols undefined, so nothing here links against libpython.
+          - runner: macos-latest
             target: x86_64-apple-darwin
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
@@ -366,10 +372,18 @@ jobs:
 
       # `manylinux: auto` builds Linux wheels inside a manylinux container so
       # the resulting wheel is installable on distros older than the runner.
+      #
+      # `target` must be passed explicitly: without it maturin builds for the
+      # runner's host architecture and the matrix entry only renames the
+      # artifact. Two entries now share `macos-latest`, so an implicit host
+      # build would produce the same arm64 wheel twice — and because both would
+      # carry an identical filename, the `merge-multiple` download in
+      # `makotest-publish` would silently collapse them into one.
       - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
           command: build
+          target: ${{ matrix.target }}
           args: --release --manifest-path makotest/Cargo.toml --out dist
           manylinux: auto
 

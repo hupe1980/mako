@@ -209,6 +209,12 @@ x86_64/aarch64, Windows x86_64) rather than interpreter versions. Linux wheels
 build inside a `manylinux` container so they install on distros older than the
 runner.
 
+Each matrix entry passes its `target` to `maturin build` explicitly rather than
+relying on the runner's host architecture. The Intel macOS wheel is
+**cross-compiled from the Apple Silicon runner**: because the extension is abi3
+and `pyo3/extension-module` leaves the Python symbols undefined, nothing links
+against libpython, so no Intel runner or Intel interpreter is required.
+
 Publication uses **PyPI Trusted Publishing** (OIDC) — no API token is stored.
 PyPI is configured to trust `hupe1980/mako` with workflow `release.yml`; the
 `makotest-publish` job requests `id-token: write` to mint the short-lived
