@@ -34,6 +34,21 @@ jobs:
             | tar xz -C /usr/local/bin zola
           zola --version
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Zola validates links but never parses diagram source, so a broken
+      # diagram would publish as an error box. This also fails if the renderer
+      # regresses to `startOnLoad`, which silently stops rendering on a cold
+      # CDN cache — see site/tools/check-mermaid.mjs.
+      - name: Check Mermaid diagrams
+        working-directory: site
+        run: |
+          npm install --no-audit --no-fund
+          npm run check:mermaid
+
       - name: Configure Pages
         id: pages
         uses: actions/configure-pages@v5

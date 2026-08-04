@@ -1,0 +1,14 @@
+{
+  "name": "mako-site-tools",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Build-time checks for the mako documentation site. Not shipped — the site itself is static and loads Mermaid from a CDN at runtime.",
+  "scripts": {
+    "check:mermaid": "node tools/check-mermaid.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^27.0.0",
+    "mermaid": "^11.16.0"
+  }
+}

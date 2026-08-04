@@ -46,3 +46,7 @@ __pycache__/
 .hypothesis/
 *.egg-info/
 .venv/
+
+# Node tooling for the docs site (site/tools/check-mermaid.mjs)
+node_modules/
+site/package-lock.json

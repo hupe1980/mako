@@ -324,6 +324,19 @@ doc crate:
 doc-all:
     cargo doc --workspace --all-features --no-deps
 
+# Validate every Mermaid diagram on the site, and the script that renders them.
+#
+# `zola check` validates links only — it never parses diagram source, so a
+# broken diagram publishes as an error box. This also fails if the renderer
+# regresses to `startOnLoad`, which stops rendering on a cold CDN cache.
+# Mirrors the "Check Mermaid diagrams" step in .github/workflows/site.yml.
+check-mermaid:
+    cd site && npm install --no-audit --no-fund --silent && npm run --silent check:mermaid
+
+# Link check + diagram check for the docs site.
+check-site: check-mermaid
+    cd site && zola check
+
 # ── Fuzz ──────────────────────────────────────────────────────────────────────
 
 # Run a fuzz target (requires nightly + cargo-fuzz; e.g. `just fuzz fuzz_parse_validate`)

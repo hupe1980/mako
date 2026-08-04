@@ -53,10 +53,7 @@ graph TB
     end
 
     subgraph edmdpg["edmd PostgreSQL — business tables"]
-        biz["meter_billing_periods
-ablese_auftraege
-direct_push_sessions
-gdpr_deletions"]
+        biz["meter_billing_periods<br/>ablese_auftraege<br/>direct_push_sessions<br/>gdpr_deletions"]
     end
 
     erp["ERP / netzbilanzd<br/>mabis-syncd"]
