@@ -270,14 +270,15 @@ pub fn wim_registry() -> AdapterRegistry<WimDeviceChangeWorkflow> {
 // No `AdapterRegistry` is registered for this workflow; commands are
 // constructed in `energy-api` and submitted directly.
 
-// ── WiM Geräteübernahme (PIDs 17001, 17002, 17005, 17009, 17011) ─────────────
+// ── WiM Geräteübernahme (PIDs 17001, 17002, 17009) ───────────────────────────
 
 /// Build an [`AdapterRegistry`] for [`WimGeraeteubernahmeWorkflow`].
 ///
-/// Handles all five ORDERS PIDs in the Geräteübernahme family:
-/// - `17001`/`17002` (Anfrage) → [`GeraeteubernahmeCommand::ReceiveAnfrage`]
-/// - `17005` (Bestellung) → [`GeraeteubernahmeCommand::ReceiveBestellung`]
-/// - `17011` (Stornierung WiM Strom Teil 1) → [`GeraeteubernahmeCommand::ReceiveStornierung`]
+/// Handles the three ORDERS PIDs of the Geräteübernahme family:
+/// - `17001` (Bestellung Geräteübernahmeangebot, MSBN → MSBA) and `17002`
+///   (Weiterverpflichtung, NB → MSBA) → [`GeraeteubernahmeCommand::ReceiveAnfrage`]
+/// - `17009` (Anzeige Gerätewechselabsicht, MSBN → MSBA) →
+///   [`GeraeteubernahmeCommand::ReceiveGeraetewechselabsicht`]
 ///
 /// The MeLo ID is extracted from the `IDE` segment (element 1, component 0).
 /// The `DeviceId` (Anfrage only) is extracted from the first `RFF` segment's
@@ -366,12 +367,10 @@ pub fn wim_geraeteubernahme_registry() -> AdapterRegistry<WimGeraeteubernahmeWor
                     validation_passed,
                     validation_errors,
                 })
-            } else if pid_u32 == 17005 {
-                // Phase 2: Bestellung Geräteübernahme.
-                Ok(GeraeteubernahmeCommand::ReceiveBestellung { pid, message_ref })
             } else {
-                // Stornierung (17011 WiM Strom; 17009 routes to WiM Gas).
-                Ok(GeraeteubernahmeCommand::ReceiveStornierung { pid, message_ref })
+                // 17009 — Anzeige Gerätewechselabsicht (MSBN → MSBA). Answered by
+                // ORDRSP 19015/19016, not by a Bestellbestätigung.
+                Ok(GeraeteubernahmeCommand::ReceiveGeraetewechselabsicht { pid, message_ref })
             }
         },
     ));
@@ -788,7 +787,7 @@ pub fn wim_preisanfrage_registry() -> AdapterRegistry<WimPreisanfrageWorkflow> {
     registry
 }
 
-// ── WiM ESA Wertebestellung (REQOTE 35002 / ORDERS 17007 / ORDCHG 39002) ─────
+// ── WiM ESA Wertebestellung (REQOTE 35003 / ORDERS 17007 / ORDCHG 39002) ─────
 
 /// Build an [`AdapterRegistry`] for the ESA Wertebestellung workflow.
 ///
@@ -796,7 +795,7 @@ pub fn wim_preisanfrage_registry() -> AdapterRegistry<WimPreisanfrageWorkflow> {
 ///
 /// | PID | Message | Command |
 /// |---|---|---|
-/// | 35002 | REQOTE | `ReceiveAnfrage` (UC 4.1 Nr. 1) |
+/// | 35003 | REQOTE | `ReceiveAnfrage` (UC 4.1 Nr. 1) |
 /// | 17007 | ORDERS | `ReceiveBestellung` (UC 4.1 Nr. 3) |
 /// | 39002 | ORDCHG | `ReceiveStornierung` (UC 4.1 Nr. 5) |
 ///
@@ -838,7 +837,7 @@ pub fn wim_wertebestellung_registry() -> AdapterRegistry<WimWertebestellungWorkf
                 ANFRAGE_PID => {
                     let AnyMessage::Reqote(r) = msg else {
                         return Err(EngineError::Deserialization(
-                            "WiM Wertebestellung adapter: PID 35002 expects a REQOTE".into(),
+                            "WiM Wertebestellung adapter: PID 35003 expects a REQOTE".into(),
                         ));
                     };
                     // UC 4.1: the request names a MaLo-ID, a ZPB or a NeLo-ID
@@ -911,7 +910,7 @@ pub fn wim_wertebestellung_registry() -> AdapterRegistry<WimWertebestellungWorkf
                 }),
                 other => Err(EngineError::Deserialization(format!(
                     "WiM Wertebestellung adapter: PID {other} is not an ESA inbound PID \
-                     (expected 35002, 17007, 17008 or 39002)"
+                     (expected 35003, 17007, 17008 or 39002)"
                 ))),
             }
         },

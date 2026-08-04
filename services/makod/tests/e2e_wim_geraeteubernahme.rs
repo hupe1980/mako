@@ -22,7 +22,7 @@
 //! # Regulatory context
 //!
 //! - **PID 17001**: Anfrage Geräteübernahmeangebot (ORDERS, nMSB → NB/aMSB)
-//! - **ORDRSP Frist**: **5 Werktage** (BNetzA BK6-18-032)
+//! - **ORDRSP Frist**: **5 Werktage** (BK6-22-024 WiM Strom Teil 1 Kap. 3.2.2)
 //! - **Saturdays, Sundays and public holidays are not Werktage.**
 //! - NB/aMSB state machine (Phase 1):
 //!   `New → AnfrageReceived → ValidationPassed → AngebotGesendet` (positive)

@@ -369,6 +369,8 @@ pub async fn post_mmm_auto_run(
             minder_preis_ct_per_kwh: req.minder_preis_ct_per_kwh,
             lastprofil: req.lastprofil.clone(),
             msb_mp_id: None,
+            msb_empfaenger_rolle: None,
+            msb_empfaenger_mp_id: None,
             grundgebuehr_eur_per_month: None,
             billing_months: None,
             messdienstleistung_eur: None,
@@ -1231,6 +1233,8 @@ pub async fn post_ggv_nne(
                 minder_preis_ct_per_kwh: None,
                 lastprofil: None,
                 msb_mp_id: None,
+                msb_empfaenger_rolle: None,
+                msb_empfaenger_mp_id: None,
                 grundgebuehr_eur_per_month: req
                     .grundpreis_eur_per_year
                     .map(|gp| gp / Decimal::from(12)),

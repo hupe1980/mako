@@ -20,7 +20,7 @@
 //! ## Regulatory basis
 //!
 //! - **BDEW API-Guideline 1.0a** — API-Webdienste Strom, `controlMeasuresV1.yaml`
-//! - **BK6-18-032** — WiM timeline obligations (5 Werktage for responses)
+//! - **BK6-22-024** — WiM Strom (Anlagen 2a/2b), the Festlegung the Fristen come from
 //!
 //! ## Frist
 //!
@@ -56,7 +56,7 @@ use rubo4e::identifiers::{NeloId, SrId};
 /// Stable workflow name used in `WorkflowId` and `ProcessRegistry`.
 pub const WORKFLOW_NAME: &str = "wim-steuerungsauftrag";
 
-/// Deadline label for the 5-Werktage response confirmation window (WiM BK6-18-032).
+/// Deadline label for the 5-Werktage response confirmation window (WiM BK6-22-024).
 ///
 /// Register a `Deadline` with this label immediately after `KonfigurationReceived`
 /// or `InitialZustandReceived`:
@@ -351,7 +351,7 @@ impl Workflow for WimSteuerungsauftragWorkflow {
     ///
     /// | Label | State guard | Command emitted | BNetzA rule |
     /// |---|---|---|---|
-    /// | `"wim-steuerungsauftrag-deadline"` | `Received` | `TimeoutExpired` | BK6-18-032 — 5 Werktage Frist |
+    /// | `"wim-steuerungsauftrag-deadline"` | `Received` | `TimeoutExpired` | BK6-22-024 — 5 Werktage Frist |
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,

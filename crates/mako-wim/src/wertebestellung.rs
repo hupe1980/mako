@@ -11,7 +11,7 @@
 //! # Message flow
 //!
 //! ```text
-//! ESA ──REQOTE 35002 Anfrage──────────────────────────────────────────▶ MSB
+//! ESA ──REQOTE 35003 Anfrage──────────────────────────────────────────▶ MSB
 //! ESA ◀─QUOTES 15003 Angebot / Ablehnung──── 5 WT nach ÜT der Anfrage ─ MSB
 //! ESA ──ORDERS 17007 Bestellung──────────── bis Ablauf der Bindungsfrist ▶ MSB
 //! ESA ◀─ORDRSP 19011 / 19012──────────── 2 WT nach ÜT der Bestellung ── MSB
@@ -61,12 +61,18 @@ use time::OffsetDateTime;
 /// Workflow name used for PID routing and `WorkflowId` construction.
 pub const WORKFLOW_NAME: &str = "wim-wertebestellung";
 
-/// REQOTE — Anfrage von Werten (ESA → MSB), UC 4.1 Nr. 1.
+/// REQOTE — "Anfrage von Werten" (ESA → MSB), UC 4.1 Nr. 1.
 ///
-/// The generic "Anfrage" PID. There is no ESA-specific REQOTE Prüfidentifikator
-/// in any published format version; the ESA context is carried by the Messprodukt
-/// code and by the ESA-specific QUOTES answer [`ANGEBOT_PID`].
-pub const ANFRAGE_PID: Pruefidentifikator = Pruefidentifikator::const_new(35002);
+/// ESA-specific. REQOTE AHB 1.1 §4.3 gives the Kommunikation as *ESA an MSB* and
+/// labels the `SG1 RFF+Z13` text "35003 Anfrage von Werten für ESA"; the PID
+/// overview 4.0 lists it under WiM Strom Teil 2 and nowhere else.
+///
+/// Do not confuse it with **35002**, which is §4.2 "Anfrage zur Rechnungsabwicklung
+/// des Messstellenbetriebs über den LF" — a different process, LF → MSB, in WiM
+/// Teil 1. mako used to send 35002 here, which put the wrong Prüfidentifikator on
+/// the wire and motivated a sender-role classifier for a collision that does not
+/// exist.
+pub const ANFRAGE_PID: Pruefidentifikator = Pruefidentifikator::const_new(35003);
 
 /// QUOTES — "Angebot zur Anfrage von Werten für ESA" (MSB → ESA), UC 4.1 Nr. 2.
 pub const ANGEBOT_PID: Pruefidentifikator = Pruefidentifikator::const_new(15003);
@@ -519,7 +525,7 @@ impl WertebestellungState {
 /// Commands for the ESA Wertebestellung workflow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WertebestellungCommand {
-    /// UC 4.1 Nr. 1 — inbound REQOTE 35002.
+    /// UC 4.1 Nr. 1 — inbound REQOTE 35003.
     ReceiveAnfrage {
         /// Prüfidentifikator of the inbound message.
         pid: Pruefidentifikator,
@@ -1271,56 +1277,4 @@ impl Workflow for WimWertebestellungWorkflow {
             }
         }
     }
-}
-
-// ── Inbound REQOTE classification ─────────────────────────────────────────────
-
-/// What an inbound REQOTE turned out to be.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReqoteKind {
-    /// UC 4.1 Nr. 1 — an ESA asking for values and their cost.
-    EsaWerteanfrage,
-    /// A Preisanfrage for MSB/NB services (`wim-preisanfrage`).
-    Preisanfrage,
-}
-
-/// Classify an inbound REQOTE.
-///
-/// REQOTE 35002 ("Anfrage") is **not** ESA-specific: no ESA-only REQOTE
-/// Prüfidentifikator exists in any published format version, so an ESA
-/// Werteanfrage and a Preisanfrage arrive under the same PID. WiM Teil 2 Kap. 4
-/// resolves this at the content level — footnote 5 requires *"die entsprechenden
-/// Codes der zugehörigen Anwendungsfälle in der Codeliste der Messprodukte"*.
-///
-/// Two signals are used, strongest first:
-///
-/// 1. **The sender's market role.** An ESA is a registered market partner
-///    (PARTIN 37006, "Kommunikationsdaten des ESA Strom"), so a REQOTE from a
-///    party registered in that role is a Werteanfrage. This is decisive.
-/// 2. **A Messprodukt identifier in `PIA`.** A Werteanfrage names the product
-///    it wants delivered; a Preisanfrage asks for a price sheet and carries no
-///    Messprodukt.
-///
-/// When neither signal is present the REQOTE is classified as a Preisanfrage,
-/// which is the safe default: it preserves existing routing, and misrouting an
-/// ESA request would silently drop a message the MSB is obliged to answer,
-/// whereas the reverse merely fails validation in a workflow that rejects it.
-#[must_use]
-pub fn classify_reqote(sender_is_esa: bool, has_messprodukt: bool) -> ReqoteKind {
-    if sender_is_esa || has_messprodukt {
-        ReqoteKind::EsaWerteanfrage
-    } else {
-        ReqoteKind::Preisanfrage
-    }
-}
-
-/// `true` when any of the REQOTE's `PIA` product identifiers is non-empty.
-///
-/// BDEW encodes the Messprodukt in `PIA+5+<code>::<code list>`. A Werteanfrage
-/// names the product it wants delivered; a Preisanfrage asks for a price sheet
-/// and carries none. The caller extracts the codes, keeping this crate free of a
-/// dependency on the EDIFACT parser.
-#[must_use]
-pub fn has_messprodukt<'a>(pia_codes: impl IntoIterator<Item = &'a str>) -> bool {
-    pia_codes.into_iter().any(|c| !c.trim().is_empty())
 }

@@ -239,7 +239,6 @@ Azure credentials: `AZURE_STORAGE_ACCOUNT_KEY`, or service-principal via `AZURE_
 | `deadline_poll_interval_secs` | `MAKOD_DEADLINE_POLL_INTERVAL_SECS` | `--deadline-poll-interval-secs` | `30` | How often the deadline scheduler polls for due deadlines (minimum 1 s; set ≤30 s for Redispatch 2.0 Activation 5-minute constraint) |
 | *(CLI/env only)* | `MAKOD_MARKTROLLEN` | `--marktrollen` | *(all `[[party]]` roles)* | Optional override of the Marktrollen this instance accepts commands for (comma-separated) |
 | *(CLI/env only)* | `MAKOD_DEPLOYMENT_ROLES` | `--deployment-roles` | *(all roles)* | Roles that gate PID registration: `NB`, `LF`, `MSB`, `NMSB`, `AMSB`, `BKV`, `UENB`/`FNB`, `BIKO`, `ESA` |
-| *(CLI/env only)* | `MAKOD_ESA_PARTNER_MP_IDS` | `--esa-partner-mp-ids` | *(empty)* | Market-partner IDs of counterparties acting as an Energieserviceanbieter — see below |
 | *(CLI/env only)* | `MAKOD_MARKTD_URL` | `--marktd-url` | *(unset)* | Cluster-internal marktd base URL. Enables the ESA consent gate + M1 Konfigurationsprodukt guard — see below |
 | *(CLI/env only)* | `MAKOD_MARKTD_API_KEY` | `--marktd-api-key` | *(empty)* | Bearer token for machine-to-machine calls to `--marktd-url` |
 
@@ -270,18 +269,17 @@ mp_id = "9900001000002"
 roles = ["LF", "LFG"]
 ```
 
-### ESA counterparties
+### ESA messages
 
-REQOTE **35002** is shared: an ESA Werteanfrage (WiM Teil 2 Kap. 4 UC 4.1 Nr. 1)
-and a Preisanfrage arrive under the same Prüfidentifikator, because no
-ESA-specific REQOTE PID exists in any published format version. WiM Teil 2
-resolves this at content level, and the sender's registered role — an ESA is
-registered via PARTIN 37006 — is the decisive signal.
+REQOTE **35003** ("Anfrage von Werten") is ESA-specific: REQOTE AHB 1.1 §4.3
+gives the Kommunikation as *ESA an MSB* and labels `SG1 RFF+Z13` "35003 Anfrage
+von Werten für ESA". It routes to `wim-wertebestellung` on the
+Prüfidentifikator alone — no sender-role or content classification is involved,
+and no ESA counterparty list has to be configured.
 
-A NAD segment carries only the party code, not the role, so list the ESA
-counterparties in `--esa-partner-mp-ids`. Without them the classifier falls back to
-the `PIA` Messprodukt marker alone, and a Werteanfrage that omits it is routed to
-`wim-preisanfrage`.
+Do not confuse it with **35002**, "Anfrage zur Rechnungsabwicklung des
+Messstellenbetriebs über den LF" (§4.2), which is LF → MSB in WiM Teil 1 and
+belongs to a different process.
 
 `deployment-roles ESA` is for a deployment that **is** an ESA: it registers the
 inbound answers (QUOTES 15003, ORDRSP 19011/19012/19013/19014). An MSB *serving*
@@ -301,7 +299,7 @@ sequenceDiagram
     autonumber
     participant ESA as ESA · esa-wertebestellung
     participant MSB as MSB · wim-wertebestellung
-    ESA->>MSB: REQOTE 35002 Werteanfrage (LOC = MaLo)
+    ESA->>MSB: REQOTE 35003 Werteanfrage (LOC = MaLo)
     MSB-->>ESA: QUOTES 15003 Angebot · DTM+273 Bindungsfrist
     Note over ESA,MSB: 5 WT · no Bindungsfrist ⇒ Ablehnung der Anfrage
     ESA->>MSB: ORDERS 17007 Bestellung (within Bindungsfrist)
@@ -327,7 +325,7 @@ same subscription lifecycle; it is not a standalone process.
 
 #### Consent gate
 
-When `--marktd-url` is set, an inbound ESA Werteanfrage (REQOTE 35002) and
+When `--marktd-url` is set, an inbound ESA Werteanfrage (REQOTE 35003) and
 Bestellung (ORDERS 17007) are gated against the marktd consent registry before
 the Wertebestellung workflow runs. makod calls `GET /api/v1/esa/consent-check`
 with the sender (ESA), receiver (MSB) and location, and:
@@ -356,7 +354,7 @@ missing consent record is never a rejection.
 #### The ESA (outbound) direction is stricter
 
 Consent has asymmetric force. When a deployment **is** the ESA and *originates*
-outbound requests (Werteanfrage 35002, Bestellung 17007), it is the data
+outbound requests (Werteanfrage 35003, Bestellung 17007), it is the data
 controller that obtained the Einwilligung — a missing consent record means **no
 lawful basis** (GDPR Art. 7), not self-assertion. The same endpoint answers this
 with `perspective=esa_outbound`, which blocks a missing record
@@ -371,7 +369,7 @@ the `esa-wertebestellung` workflow, driven by these commands:
 
 | Command | Message | Consent gate |
 |---|---|---|
-| `esa.werteanfrage.stellen` | REQOTE 35002 Werteanfrage | `esa_outbound` (strict) |
+| `esa.werteanfrage.stellen` | REQOTE 35003 Werteanfrage | `esa_outbound` (strict) |
 | `esa.bestellung.beauftragen` | ORDERS 17007 Bestellung | `esa_outbound` (re-checked) |
 | `esa.stornierung.beauftragen` | ORDCHG 39002 Stornierung | — (before delivery) |
 | `esa.abbestellung.beauftragen` | ORDERS 17008 Abbestellung | **none** — the stop action |

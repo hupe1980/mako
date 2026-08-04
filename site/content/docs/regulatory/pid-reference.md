@@ -613,8 +613,8 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
 | 35001 | Anfrage Geräteübernahmeangebot | WiM Gas / WiM Strom Teil 1 | MSBN → MSBA | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
-| 35002 | Anfrage (shared: Preisanfrage **and** ESA Werteanfrage) | WiM Strom Teil 1 / Teil 2 | LF → MSB · **ESA → MSB** | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage`; an ESA sender (WiM Teil 2 UC 4.1 Nr. 1) reclassifies to `wim-wertebestellung` |
-| 35003 | Anfrage von Werten für Rechnungsabwicklung | WiM Strom Teil 1 | LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
+| 35002 | Anfrage Rechnungsabwicklung MSB über LF | WiM Strom Teil 1 | LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
+| 35003 | Anfrage von Werten (ESA) | WiM Strom Teil 2 | **ESA → MSB** | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-wertebestellung` |
 | 35004 | Anfrage einer Konfiguration | GPKE Teil 3 | NB → MSB · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
 | 35005 | Anfrage Angebot Änderung Technik | AWH Änd. Technik | NB → MSB · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
 

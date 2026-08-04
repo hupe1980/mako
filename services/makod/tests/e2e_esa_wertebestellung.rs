@@ -94,7 +94,10 @@ async fn relay_pending(
         let pid = detect_pid(&msg);
         // Route to (workflow_name, target dispatcher) the way the PidRouter would.
         let (workflow_name, dispatcher) = match (&*om.message_type, pid) {
-            ("REQOTE", 35002) => ("wim-preisanfrage", dispatcher_msb),
+            // 35003 is ESA-specific and registers straight to the
+            // wertebestellung workflow — it never passes through the
+            // Preisanfrage stream.
+            ("REQOTE", 35003) => ("wim-wertebestellung", dispatcher_msb),
             ("QUOTES", 15003) => ("esa-wertebestellung", dispatcher_esa),
             ("ORDERS", 17007 | 17008) => ("wim-wertebestellung", dispatcher_msb),
             ("ORDCHG", 39002) => ("wim-wertebestellung", dispatcher_msb),
@@ -141,13 +144,16 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
     );
     // The MSB must recognise the ESA as an ESA counterparty to classify the
     // shared-PID REQOTE 35002 as a Werteanfrage rather than a Preisanfrage.
+    // No ESA-partner registration: REQOTE 35003 is ESA-specific, so the MSB
+    // routes it on the Prüfidentifikator alone. The sender-role classifier this
+    // used to need existed only because mako sent 35002, which belongs to a
+    // different process.
     let dispatcher_msb = EdifactIngestDispatcher::new(
         Arc::clone(&store),
         store.as_snapshot_store(),
         100,
         tenant_msb,
-    )
-    .with_esa_partners([ESA_MP_ID.to_owned()]);
+    );
 
     let registry = party_registry();
 

@@ -12,7 +12,10 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use grid_billing::{MmmInput, MsbInput, NneInput, settle_mmm, settle_msb, settle_nne};
+use grid_billing::{
+    MmmInput, MsbEmpfaengerRolle, MsbInput, MsbRechnungsempfaenger, NneInput, settle_mmm,
+    settle_msb, settle_nne,
+};
 
 use crate::pg::upsert_draft;
 
@@ -102,8 +105,22 @@ pub struct BillingPosition {
     /// for `netzbilanzd` audit trail and downstream ERP import.
     pub lastprofil: Option<String>,
     // ── MSB fields (31009) ───────────────────────────────────────────────────
-    /// MSB (Messstellenbetreiber) MP-ID — invoice recipient for `"msb_31009"`.
+    /// MSB (Messstellenbetreiber) MP-ID — the invoice **sender** for
+    /// `"msb_31009"`.
+    ///
+    /// PID 31009 is issued by the MSB in all seven of its Anwendungsfälle
+    /// (PID overview 4.0); it is never addressed to one. The recipient is
+    /// [`Self::msb_empfaenger_rolle`] + [`Self::msb_empfaenger_mp_id`].
     pub msb_mp_id: Option<String>,
+    /// Which market role receives the MSB-Rechnung — `"NB"`, `"LF"` or `"ESA"`.
+    ///
+    /// Defaults to `"NB"` when absent, the GPKE Teil 3 / WiM Teil 1 case.
+    pub msb_empfaenger_rolle: Option<String>,
+    /// MP-ID of the MSB-Rechnung recipient.
+    ///
+    /// Defaults to the request's `nb_mp_id` when absent, which pairs with the
+    /// `"NB"` default above.
+    pub msb_empfaenger_mp_id: Option<String>,
     /// Grundgebühr Messstellenbetrieb in EUR/month (from `PreisblattMessung`).
     pub grundgebuehr_eur_per_month: Option<Decimal>,
     /// Number of full calendar months in the billing period.
@@ -334,10 +351,32 @@ pub async fn run_billing_internal(
                 let months = pos
                     .billing_months
                     .context("billing_months required for msb_31009")?;
+                let rolle = match pos
+                    .msb_empfaenger_rolle
+                    .as_deref()
+                    .unwrap_or("NB")
+                    .to_ascii_uppercase()
+                    .as_str()
+                {
+                    "NB" => MsbEmpfaengerRolle::Netzbetreiber,
+                    "LF" => MsbEmpfaengerRolle::Lieferant,
+                    "ESA" => MsbEmpfaengerRolle::Energieserviceanbieter,
+                    other => anyhow::bail!(
+                        "msb_empfaenger_rolle must be NB, LF or ESA (PID 31009 has no other \
+                         recipient role in the PID overview 4.0), got {other:?}"
+                    ),
+                };
+                let empfaenger_mp_id = pos
+                    .msb_empfaenger_mp_id
+                    .clone()
+                    .unwrap_or_else(|| req.nb_mp_id.clone());
                 let input = MsbInput {
                     malo_id: pos.malo_id.clone(),
-                    nb_mp_id: req.nb_mp_id.clone(),
                     msb_mp_id,
+                    empfaenger: MsbRechnungsempfaenger {
+                        rolle,
+                        mp_id: empfaenger_mp_id,
+                    },
                     period,
                     grundgebuehr_eur_per_month: grundgebuehr,
                     billing_months: months,
@@ -426,7 +465,7 @@ pub async fn run_billing_internal(
         }
         let report = InvoicCheckEngine::check(
             document.pid,
-            &result.nb_mp_id,
+            &result.sender_mp_id,
             &rechnung,
             &empty_store,
             &config,
@@ -434,18 +473,18 @@ pub async fn run_billing_internal(
 
         let rechnung_json = serde_json::to_value(&rechnung).context("serialize Rechnung")?;
 
-        // For msb_31009 the invoice recipient is the MSB, not the LF.
-        let counterparty = pos
-            .msb_mp_id
-            .as_deref()
-            .filter(|_| pos.billing_type == "msb_31009")
-            .unwrap_or(&req.lf_mp_id);
+        // The settlement already resolved both parties. Reading them back keeps
+        // the persisted draft consistent with the calculated document — for
+        // msb_31009 that means the MSB as sender and the NB/LF/ESA as recipient,
+        // which is the inverse of what this used to store.
+        let sender = result.sender_mp_id.as_str();
+        let counterparty = result.recipient_mp_id.as_str();
 
         let draft_id = upsert_draft(
             &mut *conn,
             tenant,
             &pos.malo_id,
-            &req.nb_mp_id,
+            sender,
             counterparty,
             document.pid as i32,
             document.settlement.period.from(),
@@ -509,6 +548,8 @@ mod tests {
             minder_preis_ct_per_kwh: None,
             lastprofil: None,
             msb_mp_id: None,
+            msb_empfaenger_rolle: None,
+            msb_empfaenger_mp_id: None,
             grundgebuehr_eur_per_month: None,
             billing_months: None,
             messdienstleistung_eur: None,
@@ -746,7 +787,10 @@ mod tests {
         use grid_billing::{MsbInput, settle_msb};
         let input = MsbInput {
             malo_id: "10001234567".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
+            empfaenger: MsbRechnungsempfaenger {
+                rolle: MsbEmpfaengerRolle::Netzbetreiber,
+                mp_id: "9900357000004".to_owned(),
+            },
             msb_mp_id: "4012345000023".to_owned(),
             period: grid_billing::SettlementPeriod::new(
                 time::macros::date!(2026 - 01 - 01),
@@ -1206,7 +1250,10 @@ mod tests {
         use grid_billing::{MsbInput, settle_msb};
         let input = MsbInput {
             malo_id: "10001234567".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
+            empfaenger: MsbRechnungsempfaenger {
+                rolle: MsbEmpfaengerRolle::Netzbetreiber,
+                mp_id: "9900357000004".to_owned(),
+            },
             msb_mp_id: "4012345000023".to_owned(),
             period: grid_billing::SettlementPeriod::new(
                 time::macros::date!(2026 - 01 - 01),
@@ -1272,7 +1319,8 @@ mod tests {
         let store = InMemoryPreisblattStore::new();
         let config = CheckConfig::default();
         let rechnung = grid_billing::bo4e::into_rechnung(&super::as_document(result.clone()));
-        let report = InvoicCheckEngine::check(31001, &result.nb_mp_id, &rechnung, &store, &config);
+        let report =
+            InvoicCheckEngine::check(31001, &result.sender_mp_id, &rechnung, &store, &config);
         use invoic_checker::check::CheckOutcome;
         assert_ne!(
             report.outcome,
@@ -1308,7 +1356,8 @@ mod tests {
         let store = InMemoryPreisblattStore::new();
         let config = CheckConfig::default();
         let rechnung = grid_billing::bo4e::into_rechnung(&super::as_document(result.clone()));
-        let report = InvoicCheckEngine::check(31001, &result.nb_mp_id, &rechnung, &store, &config);
+        let report =
+            InvoicCheckEngine::check(31001, &result.sender_mp_id, &rechnung, &store, &config);
         use invoic_checker::check::CheckOutcome;
         assert_ne!(
             report.outcome,
@@ -1458,7 +1507,10 @@ mod tests {
         // msb_31009 → 31009
         let msb_input = MsbInput {
             malo_id: "10001234567".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
+            empfaenger: MsbRechnungsempfaenger {
+                rolle: MsbEmpfaengerRolle::Netzbetreiber,
+                mp_id: "9900357000004".to_owned(),
+            },
             msb_mp_id: "4012345000023".to_owned(),
             period: grid_billing::SettlementPeriod::new(
                 time::macros::date!(2026 - 01 - 01),
@@ -1760,7 +1812,10 @@ mod tests {
         use grid_billing::{MsbInput, settle_msb};
         let input = MsbInput {
             malo_id: "10001234567".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
+            empfaenger: MsbRechnungsempfaenger {
+                rolle: MsbEmpfaengerRolle::Netzbetreiber,
+                mp_id: "9900357000004".to_owned(),
+            },
             msb_mp_id: "4012345000023".to_owned(),
             period: grid_billing::SettlementPeriod::new(
                 time::macros::date!(2026 - 01 - 01),
@@ -1792,7 +1847,10 @@ mod tests {
         };
         let input = MsbInput {
             malo_id: "10001234567".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
+            empfaenger: MsbRechnungsempfaenger {
+                rolle: MsbEmpfaengerRolle::Netzbetreiber,
+                mp_id: "9900357000004".to_owned(),
+            },
             msb_mp_id: "4012345000023".to_owned(),
             period: grid_billing::SettlementPeriod::new(
                 time::macros::date!(2026 - 01 - 01),
@@ -1809,7 +1867,8 @@ mod tests {
         let store = InMemoryPreisblattStore::new();
         let config = CheckConfig::default();
         let rechnung = grid_billing::bo4e::into_rechnung(&super::as_document(result.clone()));
-        let report = InvoicCheckEngine::check(31001, &result.nb_mp_id, &rechnung, &store, &config);
+        let report =
+            InvoicCheckEngine::check(31001, &result.sender_mp_id, &rechnung, &store, &config);
         use invoic_checker::check::CheckOutcome;
         assert_ne!(
             report.outcome,

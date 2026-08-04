@@ -84,7 +84,7 @@ Quick reference across all process families. Each row is a top-level domain.
 | **GPKE Konfiguration Änderung** | ⚡ | `mako-gpke` `gpke-konfiguration-aenderung` | ORDERS/ORDRSP config changes | 24 h | BK6-22-024 |
 | **PARTIN Strom Kommunikationsdaten** | ⚡ | `mako-gpke` `gpke-partin` | PARTIN 37000–37006 | — | PARTIN AHB 1.0f |
 | **WiM Strom MSB-Wechsel** | ⚡ | `mako-wim` `wim-device-change` | UTILMD 55039/55042/55051/55168 (out+in) · 55040/55041 · 55043/55044 · 55052/55053 · 55169/55170 (Antwort) | 3/5/7/1 WT — see below | BK6-24-174 |
-| **WiM Strom Geräteübernahme** | ⚡ | `mako-wim` `wim-geraeteubernahme` | ORDERS 17001–17011 · ORDRSP 19001/19002 | 5 WT | BK6-24-174 |
+| **WiM Strom Geräteübernahme** | ⚡ | `mako-wim` `wim-geraeteubernahme` | ORDERS 17001 · 17002 · 17009 · ORDRSP 19001/19002 · 19003/19004 · 19015/19016 | 5 WT | BK6-24-174 |
 | **WiM Strom Abrechnung** | ⚡ | `mako-wim` `wim-invoic` | INVOIC 31009 | 5 WT | BK6-24-174 |
 | **WiM Strom INSRPT** | ⚡ | `mako-wim` `wim-insrpt` | INSRPT 23001/23003/23004/23008 | 5 WT | BK6-24-174 |
 | **MaBiS Bilanzkreisabrechnung** | ⚡ | `mako-mabis` `mabis-billing` | MSCONS 13003; IFTSTA 21000–21005 | 1 WT (§13.8) | BK6-24-174 |
@@ -536,7 +536,7 @@ side**, not a bag of independent messages.
 
 | Step | Message | Direction | Antwort | Frist |
 |---|---|---|---|---|
-| Werteanfrage (UC 4.1 Nr. 1) | REQOTE **35002** | ESA → MSB | QUOTES 15003 | 5 WT |
+| Werteanfrage (UC 4.1 Nr. 1) | REQOTE **35003** | ESA → MSB | QUOTES 15003 | 5 WT |
 | Angebot / Ablehnung (UC 4.1 Nr. 2) | QUOTES **15003** | MSB → ESA | — | Bindungsfrist |
 | Bestellung (UC 4.1 Nr. 3) | ORDERS **17007** | ESA → MSB | ORDRSP 19011/19012 | 2 WT |
 | Wertelieferung (UC 4.2) | MSCONS **13027** | MSB → ESA | — | §60 Abs. 1 MsbG, daily |
@@ -548,7 +548,7 @@ sequenceDiagram
     autonumber
     participant ESA as ESA · esa-wertebestellung
     participant MSB as MSB · wim-wertebestellung
-    ESA->>MSB: REQOTE 35002 Werteanfrage (LOC = MaLo)
+    ESA->>MSB: REQOTE 35003 Werteanfrage (LOC = MaLo)
     MSB-->>ESA: QUOTES 15003 Angebot · DTM+273 Bindungsfrist
     Note over ESA,MSB: 5 WT · no Bindungsfrist ⇒ Ablehnung der Anfrage
     ESA->>MSB: ORDERS 17007 Bestellung (within Bindungsfrist)
@@ -570,11 +570,11 @@ sequenceDiagram
 MIG-conformant ORDRSP and ORDCHG carry **none** — they are correlated to the
 running process by the order reference each echoes: an answer references the order
 it answers in `RFF+ACW`, and the 39002 Stornierung references the original
-Bestellung in `RFF+ON`. REQOTE 35002 is shared with the Preisanfrage catalog; the
+Bestellung in `RFF+ON`. REQOTE 35003 is ESA-specific and routes on the PID alone; the
 sender's registered ESA role (or a `PIA` Messprodukt marker) selects the
 Wertebestellung. The 39002 Stornierung is part of this subscription lifecycle,
 not a standalone process. See the
-[makod ESA counterparties guide](@/docs/services/makod.md#esa-counterparties) for the consent
+[makod ESA messages guide](@/docs/services/makod.md#esa-messages) for the consent
 gate (§49 Abs. 2 Nr. 9 MsbG / GDPR Art. 7) and the loopback command surface.
 
 ### Preisanfrage, Angebote und Preislisten
@@ -588,7 +588,7 @@ or configuration change. **Workflow:** `wim-preisanfrage` / `wim-preisliste`.
 | Process | Initiator → Responder | PID | Crate |
 |---|---|---|---|
 | Anfrage Geräteübernahmeangebot | MSBN → MSBA | REQOTE **35001** | `mako-wim` ✅ |
-| Anfrage (shared with the ESA Werteanfrage, see above) | LF / **ESA** → MSB | REQOTE **35002** | `mako-wim` ✅ |
+| Anfrage Rechnungsabwicklung MSB über LF | **LF → MSB** | REQOTE **35002** | `mako-wim` ✅ |
 | Anfrage von Werten für Rechnungsabwicklung | LF → MSB | REQOTE **35003** | `mako-wim` ✅ |
 | Anfrage Konfigurationsangebot | NB/LF → MSB | REQOTE **35004** | `mako-wim` ✅ |
 | Anfrage Angebot Änderung Technik | NB/LF → MSB | REQOTE **35005** | `mako-wim` ✅ |
@@ -612,7 +612,7 @@ or configuration change. **Workflow:** `wim-preisanfrage` / `wim-preisliste`.
 
 The Steuerungsauftrag handles remote load control commands
 (`controlMeasuresV1`) via HTTPS using the **BDEW API-Webdienste Strom**
-interface (API-Guideline 1.0a, BK6-18-032). APERAK Frist: **5 Werktage**.
+interface (API-Guideline 1.0a). Business-answer Frist per PID (3 / 5 / 7 / 1 WT, BK6-22-024 WiM Teil 1).
 
 | Step | Sender → Empfänger | Transport | Description |
 |---|---|---|---|

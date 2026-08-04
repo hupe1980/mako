@@ -143,7 +143,7 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 - Messstellenbetreiberwechsel (UTILMD, PIDs 55039, 55042, 55051, 55168)
   — 55039 Kündigung MSB, 55042 Anmeldung MSB, 55051 Ende MSB, 55168 Verpflichtungsanfrage;
     legacy PIDs 11001–11003 are superseded and not in the current AHB
-- Geräteübernahme ORDERS (PIDs 17001–17002, 17005, 17009–17011)
+- Geräteübernahme ORDERS (PIDs 17001, 17002, 17009)
 - Stammdaten ORDERS (PIDs 17101–17135; 17101 inbound Anforderung, 17102–17135 outbound Übermittlung)
 - Stornierung ORDCHG (PID 39000; 39001–39002 outbound responses)
 - WiM-Rechnung (INVOIC, PID 31003) — MSB billing

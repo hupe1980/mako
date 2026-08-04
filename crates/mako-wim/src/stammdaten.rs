@@ -34,7 +34,7 @@
 //! # Regulatory basis
 //!
 //! - **BDEW WiM AHB** — Stammdaten Anfrage/Übermittlung
-//! - **BNetzA BK6-18-032** — 5 Werktage Frist
+//! - **BNetzA BK6-22-024** — 5 Werktage Frist
 
 use std::collections::HashMap;
 
@@ -88,7 +88,7 @@ pub const ANFORDERUNG_PID_GAS: Pruefidentifikator = Pruefidentifikator::const_ne
 /// cause a PID routing conflict on any instance running both WiM and GPKE modules.
 pub const UEBERMITTLUNG_PIDS: std::ops::RangeInclusive<u32> = 17102..=17133;
 
-/// Deadline label for the 5-Werktage data-transmittal window (WiM BK6-18-032).
+/// Deadline label for the 5-Werktage data-transmittal window (WiM BK6-22-024).
 ///
 /// Register a `Deadline` with this label immediately after `ValidationPassed`:
 ///
@@ -274,7 +274,7 @@ pub enum StammdatenCommand {
     },
     /// Transmit master data as an ORDERS response (PIDs 17102–17133).
     ///
-    /// **BNetzA BK6-18-032**: Data must be transmitted within **5 Werktage**
+    /// **BNetzA BK6-22-024**: Data must be transmitted within **5 Werktage**
     /// of receiving the Anforderung.
     TransmitStammdaten {
         /// ORDERS PID of the response (17102–17133).
@@ -325,7 +325,7 @@ impl Workflow for WimStammdatenWorkflow {
     ///
     /// | Label | State guard | Command emitted | BNetzA rule |
     /// |---|---|---|---|
-    /// | `"wim-stammdaten-deadline"` | `AnforderungReceived` or `ValidationPassed` | `TimeoutExpired` | BK6-18-032 — 5 Werktage Frist |
+    /// | `"wim-stammdaten-deadline"` | `AnforderungReceived` or `ValidationPassed` | `TimeoutExpired` | BK6-22-024 — 5 Werktage Frist |
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,

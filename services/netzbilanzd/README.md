@@ -33,7 +33,7 @@ Closes the payment lifecycle on REMADV receipt. Zero `f64` in the billing path.
 | `nne_gas` | 31002 | GNB → LFG | NN-Rechnung Gas |
 | `mmm_strom` | 31005 | NB → LF | Mehr-/Mindermengensaldo Strom |
 | `mmm_gas` | 31005 | GNB → LFG | Mehr-/Mindermengensaldo Gas (THE prices) |
-| `msb_31009` | 31009 | NB → MSB | MSB-Rechnung (Messstellenbetrieb) |
+| `msb_31009` | 31009 | **MSB → NB / LF / ESA** | MSB-Rechnung (Messstellenbetrieb). The MSB is the invoicer; set `msb_empfaenger_rolle` (`NB`/`LF`/`ESA`) and `msb_empfaenger_mp_id` to pick the recipient. |
 | `nne_gas_awh_31011` | 31011 | GNB → LFG | AWH Sperrprozesse Gas (GeLi Gas 3.0 (BK7-24-01-009)) |
 
 ## Configuration

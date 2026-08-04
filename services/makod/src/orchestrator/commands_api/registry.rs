@@ -22,7 +22,7 @@ use super::*;
 // Sources:
 // - BDEW GPKE AHB (BK6-22-024, LFW24)
 // - BDEW GeLi Gas AHB (BK7-24-01-009)
-// - BDEW WiM AHB (BK6-18-032)
+// - BDEW WiM AHB (BK6-22-024, Anlagen 2a/2b)
 // - BDEW MABIS AHB (BK6-24-174)
 
 pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[

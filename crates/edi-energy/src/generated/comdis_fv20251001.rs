@@ -104,8 +104,8 @@ static SEGMENTS: &[SegmentDefinition] = &[
         "Begründung Richtigkeit",
         &[
             ElementRef::new(1, "4451", Status::Mandatory, 1),
-            ElementRef::new(2, "C107", Status::Conditional, 1),
-            ElementRef::new(3, "C108", Status::Conditional, 1),
+            ElementRef::new(3, "C107", Status::Conditional, 1),
+            ElementRef::new(4, "C108", Status::Conditional, 1),
         ],
     ),
 ];

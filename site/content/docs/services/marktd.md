@@ -1401,7 +1401,7 @@ curl -s -X POST "http://marktd:8180/api/v1/mmma-preise/import-trigger?year=2026&
 
 `marktd` maintains a **device registry** for meters (Zähler) and their
 associated devices (Geräte). This is populated by WiM MSB/NB device-handover
-processes (ORDERS PIDs 17001–17011) and by operator REST uploads.
+processes (ORDERS PIDs 17001, 17002, 17009) and by operator REST uploads.
 
 ### Hierarchy
 

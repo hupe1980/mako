@@ -36,7 +36,7 @@ The `edi_energy::builders` module provides a fluent, type-state builder API for 
 | `PartinBuilder` | PARTIN (party information) *(requires `partin` feature)* |
 | `PricatBuilder` | PRICAT (price catalogues) *(requires `pricat` feature)* |
 | `QuotesBuilder` | QUOTES (quotations / **ESA Angebot 15003 — full MIG+AHB conformance**; `.pruefidentifikator()`, `.order_reference()`, `.reference()` (SG1 RFF), `.location()`, `.bindungsfrist()` → `DTM+273`, `.reason()` → `FTX+ACB`, `.currency()` → `CUX`, `.contact()` → `CTA+COM`, `.product()` → `LIN+PIA`, `.price()` → `PRI`) *(requires `quotes` feature)* |
-| `ReqoteBuilder` | REQOTE (requests for quotation / **ESA Werteanfrage 35002 — full MIG conformance**; `.reference()` (SG1 RFF+Z13), `.location()` (LOC+172), `.contact()` (CTA+COM), `.line_item()` (LIN)) *(requires `reqote` feature)* |
+| `ReqoteBuilder` | REQOTE (requests for quotation / **ESA Werteanfrage 35003 — full MIG conformance**; `.reference()` (SG1 RFF+Z13), `.location()` (LOC+172), `.contact()` (CTA+COM), `.free_text()` (FTX), `.characteristic()` (CCI), `.product()` (SG27 `LIN+<n>+<Z67|Z68>` + `PIA+5`), `.line_item()` (LIN)) *(requires `reqote` feature)* |
 | `ComdisBuilder` | COMDIS (commercial disputes) *(requires `comdis` feature)* |
 | `UtiltsBuilder` | UTILTS (Berechnungsformeln) *(requires `utilts` feature)* |
 

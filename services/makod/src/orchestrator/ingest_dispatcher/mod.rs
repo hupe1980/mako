@@ -119,8 +119,6 @@ pub struct EdifactIngestDispatcher {
     tenant_id: TenantId,
     /// GLNs of counterparties acting as an Energieserviceanbieter.
     ///
-    /// See [`EdifactIngestDispatcher::with_esa_partners`].
-    esa_partner_mp_ids: std::collections::HashSet<String>,
     /// marktd client used to gate inbound ESA messages against the consent
     /// registry. `None` disables the gate (dev mode / marktd not configured).
     ///
@@ -201,25 +199,9 @@ impl EdifactIngestDispatcher {
         mako_wim::wertebestellung::WORKFLOW_NAME,
     ];
 
-    /// Register the GLNs of counterparties known to act as an
-    /// Energieserviceanbieter.
-    ///
-    /// REQOTE 35002 is shared: an ESA Werteanfrage (WiM Teil 2 Kap. 4 UC 4.1
-    /// Nr. 1) and a Preisanfrage arrive under the same Prüfidentifikator,
-    /// because no ESA-specific REQOTE PID exists. The sender's registered role
-    /// is the decisive discriminator — an ESA is registered via PARTIN 37006 —
-    /// and the message itself carries only the market-partner ID, not the role.
-    /// Supplying the known ESA partner IDs here turns that signal on; without it
-    /// the classifier falls back to the `PIA` Messprodukt marker alone.
-    #[must_use]
-    pub fn with_esa_partners(mut self, mp_ids: impl IntoIterator<Item = String>) -> Self {
-        self.esa_partner_mp_ids = mp_ids.into_iter().collect();
-        self
-    }
-
     /// Wire the marktd consent-registry gate for inbound ESA messages.
     ///
-    /// With a client set, an ESA Werteanfrage (REQOTE 35002) or Bestellung
+    /// With a client set, an ESA Werteanfrage (REQOTE 35003) or Bestellung
     /// (ORDERS 17007) is checked against the registry before the workflow runs.
     /// A revoked consent or an unestablished framework agreement is answered
     /// with an Ablehnung (the clearing case) rather than being processed.
@@ -231,11 +213,6 @@ impl EdifactIngestDispatcher {
     ) -> Self {
         self.marktd_client = client;
         self
-    }
-
-    /// `true` when `gln` is a registered ESA counterparty.
-    fn sender_is_esa(&self, mp_id: &str) -> bool {
-        !mp_id.is_empty() && self.esa_partner_mp_ids.contains(mp_id)
     }
 
     /// Gate an inbound ESA `WertebestellungCommand` against the consent registry.
@@ -279,7 +256,6 @@ impl EdifactIngestDispatcher {
             snap_store,
             snapshot_interval,
             tenant_id,
-            esa_partner_mp_ids: std::collections::HashSet::new(),
             marktd_client: None,
         }
     }
@@ -990,23 +966,6 @@ pub fn extract_receiver_mp_id(msg: &AnyMessage) -> MarktpartnerCode {
             .and_then(|s| s.component_str(1, 0))
             .unwrap_or(""),
     )
-}
-
-/// Extract every `PIA` product identifier from a message.
-///
-/// BDEW encodes the Messprodukt as `PIA+5+<code>::<code list>`. Used to tell an
-/// ESA Werteanfrage from a Preisanfrage, which share REQOTE PID 35002.
-pub fn extract_pia_codes(msg: &AnyMessage) -> Vec<&str> {
-    let segs = match msg {
-        AnyMessage::Reqote(r) => r.segments(),
-        AnyMessage::Quotes(q) => q.segments(),
-        AnyMessage::Orders(o) => o.segments(),
-        _ => return Vec::new(),
-    };
-    segs.iter()
-        .filter(|s| s.tag == "PIA")
-        .filter_map(|s| s.component_str(1, 0))
-        .collect()
 }
 
 /// Extract the Messlokations-ID from the first UTILMD transaction's IDE segment.

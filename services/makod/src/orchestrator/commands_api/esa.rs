@@ -250,7 +250,7 @@ async fn resolve_werteanfrage_msb(
     Ok(msb)
 }
 
-/// `esa.werteanfrage.stellen` — originate REQOTE 35002 (UC 4.1 Nr. 1).
+/// `esa.werteanfrage.stellen` — originate REQOTE 35003 (UC 4.1 Nr. 1).
 pub(super) async fn dispatch_esa_werteanfrage(
     state: &CommandsApiState,
     payload: &serde_json::Value,

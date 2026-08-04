@@ -275,7 +275,7 @@ pub enum SettlementType {
     /// Per INVOIC AHB §3.x, PID 31006 covers the Mehrmenge leg when the Mehr-/
     /// Mindermenge is treated as a „Lieferung“ and the invoice is self-issued.
     MmmSelbstausstellt,
-    /// Messstellenbetrieb settlement — PID 31009 (NB → MSB).
+    /// Messstellenbetrieb settlement — PID 31009 (MSB → NB / LF / ESA).
     MsbRechnung,
     /// GaBi Gas AWH Sperrprozesse settlement — PID 31011 (NB → LF, BK7-24-01-009 §5.4).
     ///
@@ -1237,10 +1237,14 @@ pub struct SettlementResult {
     pub sparte: Sparte,
     /// The metering location settled.
     pub malo_id: String,
-    /// Sender MP-ID — Netzbetreiber, or MSB for a metering settlement.
-    pub nb_mp_id: String,
-    /// Recipient MP-ID — Lieferant, MSB, or MGV.
-    pub counterparty_mp_id: String,
+    /// Sender MP-ID — the party issuing the invoice.
+    ///
+    /// The Netzbetreiber for NNE/MMM, and the **Messstellenbetreiber** for a
+    /// MSB-Rechnung (PID 31009). Named for the role it plays, not for one of
+    /// the roles that can fill it.
+    pub sender_mp_id: String,
+    /// Recipient MP-ID — the party being billed (LF, NB, MSB, MGV or ESA).
+    pub recipient_mp_id: String,
     /// The positions, in calculation order.
     pub positions: Vec<SettlementPosition>,
     /// Net total in EUR, rounded to 2 decimal places.
@@ -1597,7 +1601,8 @@ pub struct MmmInput {
 /// Input for MSB (Messstellenbetreiber) invoice calculation.
 ///
 /// Covers:
-/// - **PID 31009** — MSB-Rechnung (NB → MSB, monthly metering service settlement)
+/// - **PID 31009** — MSB-Rechnung (MSB → NB / LF / ESA, monthly metering
+///   service settlement; Strom only)
 ///
 /// The NB bills the MSB for the metering service period.  Positions:
 /// 1. Grundgebühr Messstellenbetrieb — flat monthly base fee × billing months.
@@ -1606,10 +1611,13 @@ pub struct MmmInput {
 pub struct MsbInput {
     /// 11-digit Marktlokations-ID.
     pub malo_id: String,
-    /// Invoice sender — Netzbetreiber MP-ID.
-    pub nb_mp_id: String,
-    /// Invoice recipient — Messstellenbetreiber MP-ID.
+    /// Invoice **sender** — the Messstellenbetreiber.
+    ///
+    /// PID 31009 is issued *by* the MSB in all seven of its Anwendungsfälle; it
+    /// is never sent to one. See [`MsbRechnungsempfaenger`].
     pub msb_mp_id: String,
+    /// Invoice **recipient** — who is billed, and in which market role.
+    pub empfaenger: MsbRechnungsempfaenger,
     /// The delivery period being settled.
     pub period: SettlementPeriod,
     /// Grundgebühr Messstellenbetrieb in **EUR/month** (from `PreisblattMessung`).
@@ -1633,6 +1641,62 @@ pub struct MsbInput {
     /// §30 MsbG splits the ceiling between the Netzbetreiber and the
     /// Letztverbraucher, so the applicable cap depends on who is being billed.
     pub entgeltschuldner: Option<crate::msbg::Entgeltschuldner>,
+}
+
+/// Recipient of a MSB-Rechnung (PID 31009).
+///
+/// The *Anwendungsübersicht der Prüfidentifikatoren* 4.0 (01.04.2026) lists
+/// seven Anwendungsfälle for 31009, and the sender is the **MSB** in every one:
+///
+/// | Prozessbeschreibung | von | an |
+/// |---|---|---|
+/// | GPKE Teil 3 | MSB | NB |
+/// | GPKE Teil 3 | MSB | LF |
+/// | WiM Strom Teil 1 | MSB (am Objekt Marktlokation) | LF |
+/// | WiM Strom Teil 1 | MSB (am Objekt Marktlokation) | NB |
+/// | WiM Strom Teil 2 | MSB | ESA |
+/// | AWH Prozesse zur Änderung der Technik an Lokationen | MSB | NB |
+/// | AWH Prozesse zur Änderung der Technik an Lokationen | MSB | LF |
+///
+/// So the recipient varies across three market roles while the sender does not,
+/// which is why it is modelled as a role plus an MP-ID rather than a bare
+/// `nb_mp_id`. 31009 is Strom-only — the overview marks Sparte Gas `--`.
+///
+/// Distinct from [`crate::msbg::Entgeltschuldner`], which selects the §30 MsbG
+/// Preisobergrenze (whose *share* of the ceiling applies) rather than who
+/// receives the invoice. The LF commonly receives an invoice for the
+/// Letztverbraucher share under the Rechnungsabwicklung über den LF, so the two
+/// axes do not coincide.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct MsbRechnungsempfaenger {
+    /// Which market role receives the invoice.
+    pub rolle: MsbEmpfaengerRolle,
+    /// The recipient's 13-digit MP-ID.
+    pub mp_id: String,
+}
+
+/// Market role a MSB-Rechnung (PID 31009) may be addressed to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum MsbEmpfaengerRolle {
+    /// Netzbetreiber — GPKE Teil 3, WiM Strom Teil 1, AWH Technikänderung.
+    Netzbetreiber,
+    /// Lieferant — GPKE Teil 3, WiM Strom Teil 1, AWH Technikänderung
+    /// (Rechnungsabwicklung des MSB über den LF).
+    Lieferant,
+    /// Energieserviceanbieter — WiM Strom Teil 2.
+    Energieserviceanbieter,
+}
+
+impl MsbEmpfaengerRolle {
+    /// BDEW role code as it appears in the NAD segment.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Netzbetreiber => "NB",
+            Self::Lieferant => "LF",
+            Self::Energieserviceanbieter => "ESA",
+        }
+    }
 }
 
 // ── GasAwhInput ───────────────────────────────────────────────────────────────
@@ -2110,8 +2174,8 @@ mod korrektur_grund_tests {
             ),
             sparte: Sparte::Strom,
             malo_id: "51238696780".to_owned(),
-            nb_mp_id: "9900000000001".to_owned(),
-            counterparty_mp_id: "9900000000002".to_owned(),
+            sender_mp_id: "9900000000001".to_owned(),
+            recipient_mp_id: "9900000000002".to_owned(),
             positions: Vec::new(),
             total_eur: rust_decimal::Decimal::ZERO,
             warnings: Vec::new(),

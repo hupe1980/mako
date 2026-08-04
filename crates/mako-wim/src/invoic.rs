@@ -103,7 +103,7 @@ pub const WORKFLOW_NAME: &str = "wim-invoic";
 
 /// Deadline label for the INVOIC settlement response window.
 ///
-/// Per BDEW WiM BK6-24-174, the NB must respond within **5 Werktage** of receipt.
+/// Per BDEW WiM BK6-22-024, the NB must respond within **5 Werktage** of receipt.
 pub const SETTLEMENT_WINDOW_LABEL: &str = "wim-invoic-settlement-deadline";
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -296,7 +296,7 @@ pub enum WimInvoicCommand {
     },
     /// Payer role: inbound COMDIS 29001 received (invoicer rejects our REMADV).
     ///
-    /// COMDIS PID 29001 (Ablehnung REMADV, COMDIS AHB 1.0, WiM BK6-24-174).
+    /// COMDIS PID 29001 (Ablehnung REMADV, COMDIS AHB 1.0, WiM BK6-22-024).
     ReceiveComdis {
         /// EDIFACT message reference of the COMDIS.
         comdis_ref: MessageRef,

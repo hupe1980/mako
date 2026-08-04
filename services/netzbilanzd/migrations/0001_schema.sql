@@ -17,8 +17,11 @@
 CREATE TABLE invoice_drafts (
     id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     malo_id             TEXT        NOT NULL,
-    nb_mp_id            TEXT        NOT NULL,   -- invoice sender (NB/GNB)
-    lf_mp_id            TEXT        NOT NULL,   -- invoice recipient (LF)
+    -- Invoice parties, named for the role they play rather than the role that
+    -- usually fills it. For PID 31009 (MSB-Rechnung) the sender is the MSB and
+    -- the recipient is the NB, LF or ESA — the inverse of every other PID here.
+    sender_mp_id        TEXT        NOT NULL,   -- NB/GNB, or MSB for 31009
+    recipient_mp_id     TEXT        NOT NULL,   -- LF, or NB/LF/ESA for 31009
     tenant              TEXT        NOT NULL,
     pid                 INTEGER     NOT NULL,   -- 31001 | 31002 | 31005 | 31009 | 31011
     period_from         DATE        NOT NULL,

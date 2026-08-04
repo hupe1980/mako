@@ -380,7 +380,10 @@ fn each_step_rejects_a_foreign_pid() {
         consent_block: None,
     };
     let err = W::handle(&S::default(), wrong).unwrap_err();
-    assert!(err.to_string().contains("35002"), "got: {err}");
+    assert!(
+        err.to_string().contains(&ANFRAGE_PID.as_u32().to_string()),
+        "the rejection must name the expected PID: {err}"
+    );
 }
 
 #[test]
@@ -500,39 +503,44 @@ fn a_lapsed_bindungsfrist_is_not_a_fristversaeumnis() {
     assert!(out.events.is_empty());
 }
 
-// ── REQOTE classification ─────────────────────────────────────────────────────
+// ── PID identity ──────────────────────────────────────────────────────────────
 
-use mako_wim::wertebestellung::{ReqoteKind, classify_reqote, has_messprodukt};
-
-/// An ESA is a registered market role (PARTIN 37006), so the sender's role is
-/// decisive on its own.
+/// The ESA Werteanfrage is REQOTE **35003**, not 35002.
+///
+/// REQOTE AHB 1.1 §4.3 gives the Kommunikation as *ESA an MSB* and labels the
+/// `SG1 RFF+Z13` text "35003 Anfrage von Werten für ESA"; the PID overview 4.0
+/// lists 35003 under WiM Strom Teil 2 and nowhere else.
+///
+/// mako used to send 35002, which is §4.2 "Anfrage zur Rechnungsabwicklung des
+/// Messstellenbetriebs über den LF" (LF → MSB, WiM Teil 1) — a different process
+/// with a different sender role. That wrong PID also invented a collision with
+/// the Preisanfrage stream, which a sender-role classifier then had to resolve;
+/// with the correct PID there is nothing to resolve.
 #[test]
-fn a_reqote_from_an_esa_is_a_werteanfrage() {
+fn the_esa_werteanfrage_is_reqote_35003() {
     assert_eq!(
-        classify_reqote(true, false),
-        ReqoteKind::EsaWerteanfrage,
-        "the sender's registered role alone must decide"
+        mako_wim::wertebestellung::ANFRAGE_PID.as_u32(),
+        35_003,
+        "35002 is Rechnungsabwicklung MSB über LF (LF → MSB), a different process"
     );
+    // The Angebot that answers it is ESA-specific too.
+    assert_eq!(mako_wim::wertebestellung::ANGEBOT_PID.as_u32(), 15_003);
 }
 
-/// A Werteanfrage names the Messprodukt it wants delivered; a Preisanfrage asks
-/// for a price sheet and carries none.
+/// The Preisanfrage REQOTE set and the ESA Anfrage must stay disjoint, or both
+/// workflows would claim the same inbound message.
 #[test]
-fn a_messprodukt_marks_a_werteanfrage_even_without_a_known_role() {
-    assert_eq!(classify_reqote(false, true), ReqoteKind::EsaWerteanfrage);
-}
-
-/// Neither signal → Preisanfrage, preserving existing routing.
-#[test]
-fn an_unmarked_reqote_stays_a_preisanfrage() {
-    assert_eq!(classify_reqote(false, false), ReqoteKind::Preisanfrage);
-}
-
-#[test]
-fn messprodukt_detection_ignores_blank_product_codes() {
-    assert!(!has_messprodukt(Vec::<&str>::new()));
-    assert!(!has_messprodukt(vec!["", "   "]));
-    assert!(has_messprodukt(vec!["", "Z01"]));
+fn the_preisanfrage_reqote_set_excludes_the_esa_anfrage() {
+    let anfrage = mako_wim::wertebestellung::ANFRAGE_PID.as_u32();
+    assert!(
+        !mako_wim::preisanfrage::REQOTE_PIDS.contains(&anfrage),
+        "35003 belongs to wertebestellung, not the Preisanfrage stream"
+    );
+    assert!(
+        !mako_wim::preisanfrage::QUOTES_PIDS
+            .contains(&mako_wim::wertebestellung::ANGEBOT_PID.as_u32()),
+        "15003 answers 35003 and belongs to wertebestellung"
+    );
 }
 
 // ── Role-gated PID registration ───────────────────────────────────────────────

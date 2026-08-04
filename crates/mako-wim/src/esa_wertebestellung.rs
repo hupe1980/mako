@@ -2,7 +2,7 @@
 //!
 //! The mirror of [`super::wertebestellung`] (which is the MSB side). Here the
 //! deployment **is** the Energieserviceanbieter: it *originates* the Werteanfrage
-//! (REQOTE 35002), Bestellung (ORDERS 17007), Stornierung (ORDCHG 39002) and
+//! (REQOTE 35003), Bestellung (ORDERS 17007), Stornierung (ORDCHG 39002) and
 //! Abbestellung (ORDERS 17008), and *receives* the MSB's answers (QUOTES 15003,
 //! ORDRSP 19011/19012/19013/19014).
 //!
@@ -16,7 +16,7 @@
 //! # Message flow
 //!
 //! ```text
-//! ESA ──REQOTE 35002 Anfrage──────────────────────────────────────────▶ MSB
+//! ESA ──REQOTE 35003 Anfrage──────────────────────────────────────────▶ MSB
 //! ESA ◀─QUOTES 15003 Angebot──────────── 5 WT nach ÜT der Anfrage ────── MSB
 //! ESA ──ORDERS 17007 Bestellung──────────── bis Ablauf der Bindungsfrist ▶ MSB
 //! ESA ◀─ORDRSP 19011 / 19012──────────── 2 WT nach ÜT der Bestellung ─── MSB
@@ -69,7 +69,7 @@ pub use super::wertebestellung::ESA_INBOUND_PIDS;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum EsaWertebestellungEvent {
-    /// REQOTE 35002 sent — the ESA asked the MSB for values.
+    /// REQOTE 35003 sent — the ESA asked the MSB for values.
     AnfrageGesendet {
         /// GLN of this ESA.
         esa: MarktpartnerCode,
@@ -310,7 +310,7 @@ impl EsaWertebestellungState {
 /// Commands for the ESA-origination workflow.
 #[derive(Clone)]
 pub enum EsaWertebestellungCommand {
-    /// Originate REQOTE 35002 (UC 4.1 Nr. 1). Consent-gated at the makod
+    /// Originate REQOTE 35003 (UC 4.1 Nr. 1). Consent-gated at the makod
     /// boundary (`esa_outbound`) before it reaches this workflow.
     SendWerteanfrage {
         /// GLN of this ESA.

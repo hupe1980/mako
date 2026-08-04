@@ -1533,6 +1533,56 @@ fn collect_all_group_tags(groups: &[MigGroup]) -> std::collections::HashSet<Stri
 
 // ── Segment definitions ───────────────────────────────────────────────────────
 
+/// Canonical UN/EDIFACT element positions for segments whose MIG listing omits
+/// unused elements.
+///
+/// A MIG may mark an element unused, but it cannot renumber it: the position of
+/// a data element inside a segment is fixed by the EDIFACT directory and is what
+/// a counterparty actually writes on the wire. Deriving positions from the order
+/// of the MIG's element list therefore shifts every element after an omitted one.
+///
+/// That is not cosmetic. REQOTE's MIG lists only `4451` and `C108` for `FTX`, so
+/// the generated definition placed `C108` at position 2 and mako **rejected**
+/// inbound `FTX+ACB+++Freier Text` — the correct encoding — with "segment FTX
+/// has 4 elements, expected between 1 and 2".
+///
+/// Only segments that actually disagreed across the generated message families
+/// need an entry; everything else is already dense and sequential. Detected with
+/// the `element_positions_match_the_edifact_directory` test in `edi-energy`.
+const CANONICAL_ELEMENT_POSITIONS: &[(&str, &[(&str, usize)])] = &[
+    // FTX — Free Text
+    (
+        "FTX",
+        &[
+            ("4451", 1),
+            ("4453", 2),
+            ("C107", 3),
+            ("C108", 4),
+            ("3453", 5),
+            ("4447", 6),
+        ],
+    ),
+    // CCI — Characteristic/Class ID
+    ("CCI", &[("7059", 1), ("C502", 2), ("C240", 3), ("4051", 4)]),
+    // IMD — Item Description
+    ("IMD", &[("7077", 1), ("C272", 2), ("C273", 3), ("7383", 4)]),
+    // STS — Status
+    ("STS", &[("C601", 1), ("C555", 2), ("C556", 3)]),
+];
+
+/// The canonical position of `element_id` inside `tag`, when one is recorded.
+fn canonical_position(tag: &str, element_id: &str) -> Option<usize> {
+    CANONICAL_ELEMENT_POSITIONS
+        .iter()
+        .find(|(t, _)| *t == tag)
+        .and_then(|(_, elems)| {
+            elems
+                .iter()
+                .find(|(e, _)| *e == element_id)
+                .map(|(_, pos)| *pos)
+        })
+}
+
 fn emit_segments_array(out: &mut String, segments: &[&MigSegment]) {
     writeln!(out, "    static SEGMENTS: &[SegmentDefinition] = &[").unwrap();
     let mut seen_tags = std::collections::HashSet::new();
@@ -1546,18 +1596,19 @@ fn emit_segments_array(out: &mut String, segments: &[&MigSegment]) {
         writeln!(out, "            {:?},", seg.tag).unwrap();
         writeln!(out, "            {:?},", seg.name).unwrap();
         writeln!(out, "            &[").unwrap();
-        for (pos, elem) in seg.elements.iter().enumerate() {
+        for (idx, elem) in seg.elements.iter().enumerate() {
             let status = if elem.status == "M" {
                 "Status::Mandatory"
             } else {
                 "Status::Conditional"
             };
+            // Sequential order is only correct when the MIG lists every element.
+            // Where it omits unused ones, the canonical directory position wins.
+            let pos = canonical_position(&seg.tag, &elem.id).unwrap_or(idx + 1);
             writeln!(
                 out,
                 "                ElementRef::new({}, {:?}, {}, 1),",
-                pos + 1,
-                elem.id,
-                status
+                pos, elem.id, status
             )
             .unwrap();
         }

@@ -24,7 +24,7 @@ use super::*;
 /// | `pid`        | no       | ORDERS Prüfidentifikator (e.g. 17134)        |
 /// | `orders_ref` | no       | UUID reference → 14-char UNH message ref     |
 /// | `malo`       | no       | Supply point MaLo for BGM context            |
-/// Render an ESA-originated REQOTE 35002 Werteanfrage (WiM Teil 2 UC 4.1 Nr. 1).
+/// Render an ESA-originated REQOTE 35003 Werteanfrage (WiM Teil 2 UC 4.1 Nr. 1).
 ///
 /// The PID travels in BGM DE 1004 (`document_id`) and the addressed location in
 /// `LOC+172`, so the MSB can correlate the request to a Marktlokation.
@@ -69,11 +69,18 @@ pub(super) fn render_reqote(
         builder = builder.location(loc);
     }
 
-    // ── ESA Werteanfrage (PID 35002) full-conformance content ────────────────
-    // 35002 mandates SG1 RFF, SG14 CTA/COM and an SG27 LIN on top of the shared
-    // skeleton. Emitted only for 35002 so other REQOTE PIDs are untouched.
-    if pid == Some(35002) {
-        builder = builder.reference("Z13", "35002");
+    // ── ESA Werteanfrage (PID 35003) full-conformance content ────────────────
+    //
+    // On top of the shared skeleton, REQOTE AHB §4.3 requires SG1 RFF+Z13, the
+    // SG14 CTA/COM contact, an FTX, an SG10 characteristic and one SG27 per
+    // requested Messprodukt (LIN++Z67 with PIA+5 for "Werte nach Typ 2 aus
+    // Backend", LIN++Z68 for the SMGW Konfigurationserlaubnis).
+    //
+    // The Messprodukt is what makes this message a Werteanfrage — it is
+    // mandatory here, which is why sniffing for a `PIA` segment used to work as
+    // a heuristic when the wrong PID (35002) was being sent.
+    if pid == Some(35003) {
+        builder = builder.reference("Z13", "35003");
         let contact = p
             .get("contact")
             .and_then(|v| v.as_str())
@@ -82,7 +89,25 @@ pub(super) fn render_reqote(
             .get("contact_comm")
             .and_then(|v| v.as_str())
             .unwrap_or("esa@example.de");
-        builder = builder.contact(contact, comm).line_item();
+        builder = builder
+            .contact(contact, comm)
+            .free_text(
+                "ACB",
+                p.get("bemerkung").and_then(|v| v.as_str()).unwrap_or(""),
+            )
+            .characteristic(
+                "Z19",
+                p.get("cav_code").and_then(|v| v.as_str()).unwrap_or("Z01"),
+            );
+        // Codeliste der Konfigurationen §4.6.1 "Werte nach Typ 2 aus Backend".
+        let messprodukt = p
+            .get("messprodukt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Z01");
+        builder = builder.product("Z67", messprodukt);
+        if let Some(smgw) = p.get("smgw_produkt").and_then(|v| v.as_str()) {
+            builder = builder.product("Z68", smgw);
+        }
     }
 
     finish_interchange(builder.serialize(), sender, msg.recipient.as_ref(), msg)
@@ -304,7 +329,7 @@ pub(super) fn render_ordrsp(
 }
 
 /// Render a QUOTES (Angebot) envelope — the MSB's answer to an ESA Werteanfrage
-/// (REQOTE 35002), UC 4.1 Nr. 2. Prüfidentifikator 15003 in BGM DE 1004.
+/// (REQOTE 35003), UC 4.1 Nr. 2. Prüfidentifikator 15003 in BGM DE 1004.
 ///
 /// Payload fields:
 ///

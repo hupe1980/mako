@@ -14,7 +14,7 @@ is the classic mistake:
 | Clock | Window | Source |
 |---|---|---|
 | **APERAK** — technical acknowledgement | **45 minutes** (Strom UTILMD) | APERAK AHB §2.4.1 |
-| **Antwort** — business Bestätigung/Ablehnung | **per PID**: 55039 → 3 WT, 55042 → 5 WT, 55051 → 7 WT, 55168 → 1 WT | BK6-24-174 Teil 1 Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2 |
+| **Antwort** — business Bestätigung/Ablehnung | **per PID**: 55039 → 3 WT, 55042 → 5 WT, 55051 → 7 WT, 55168 → 1 WT | BK6-22-024 WiM Teil 1 Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2 |
 
 The business window comes from `antwort_frist_werktage(pid)` — never a flat
 value. Both the inbound and outbound paths read that one table. Saturdays,
@@ -41,7 +41,7 @@ holidays.
 
 | PID(s)       | Process name                                      | EDIFACT       | Module               | Status          |
 |--------------|---------------------------------------------------|---------------|----------------------|-----------------|
-| 17001–17011  | Geräteübernahme (Anfrage, Bestellung, Stornierung) | ORDERS 1.4b  | `geraeteubernahme`   | ✅ Implemented  |
+| 17001 · 17002 · 17009 | Geräteübernahme (Bestellung Geräteübernahmeangebot, Weiterverpflichtung, Anzeige Gerätewechselabsicht) | ORDERS 1.4b | `geraeteubernahme` | ✅ Implemented |
 | 19001, 19002 | ORDRSP Bestellbestätigung / Ablehnung (NB → nMSB) | ORDRSP 1.4c  | `geraeteubernahme`   | ✅ Registered (nMSB role only) |
 | 19015, 19016 | ORDRSP Gerätewechselabsicht Best./Ablehnung       | ORDRSP 1.4c  | `geraeteubernahme`   | ✅ Registered (nMSB role only) |
 
@@ -168,45 +168,15 @@ WiM Teil 2 Kap. 4 resolves this at content level — footnote 5 requires *"die
 entsprechenden Codes der zugehörigen Anwendungsfälle in der Codeliste der
 Messprodukte"*.
 
-`classify_reqote` uses two signals, strongest first:
+REQOTE **35003** ("Anfrage von Werten", ESA → MSB) is ESA-specific — REQOTE AHB
+1.1 §4.3 — so it routes to `wertebestellung` on the Prüfidentifikator alone.
 
-1. **The sender's market role.** An ESA is registered via PARTIN 37006
-   ("Kommunikationsdaten des ESA Strom"), so a REQOTE from a party in that role
-   is decisively a Werteanfrage.
-2. **A Messprodukt identifier in `PIA`.** A Werteanfrage names the product it
-   wants delivered; a Preisanfrage asks for a price sheet and carries none.
-
-With neither signal the message stays a Preisanfrage, preserving existing
-routing. The function is parser-free: the caller extracts the `PIA` codes, so
-`mako-wim` keeps no dependency on the EDIFACT reader.
-
-The role signal needs the ESA counterparty market-partner IDs, since a NAD segment
-carries only the party code, not the role. Supply them to `makod` with
-`--esa-partner-mp-ids` (or `MAKOD_ESA_PARTNER_MP_IDS`); without them only the
-`PIA` marker is active.
-
-### Role-gated registration
-
-| Deployment role | PIDs registered |
-|---|---|
-| `MSB` | ORDERS **17007** inbound — the order that authorises delivery and the one that stops it |
-| `ESA` | QUOTES **15003**, ORDRSP **19011/19012/19013/19014** inbound — the answers the MSB sends |
-
-The two sets are disjoint (pinned by a test), so an integrated deployment holding
-both roles registers both without tripping the router's conflict guard.
-
-### Fristen are keyed on the ÜT, not on parse time
-
-GPKE Teil 1 defines the **ÜT** as *"Tag des Empfangs der Übertragungsdatei.
-Dieser Tag ist aus der AS4-Zustellquittung zu entnehmen"*, and restricts it to a
-**positive** acknowledgement: *"Für die Fristenberechnung ist der Tag nur
-anwendbar, sofern es sich um eine positive Zustellquittung bzw. Response-Nachricht
-handelt."*
-
-`Zustellquittung` therefore carries the acknowledgement explicitly, and
-`Zustellquittung::frist` refuses to compute a deadline from a negative one — a
-Frist counted from an unacknowledged transmission is one the market partner is
-not bound by.
+mako previously sent and expected **35002** here, which is §4.2 "Anfrage zur
+Rechnungsabwicklung des Messstellenbetriebs über den LF" (LF → MSB, WiM Teil 1).
+That wrong PID manufactured an apparent collision with the Preisanfrage stream,
+which a sender-role classifier then had to resolve. With the correct PID there is
+nothing to resolve, and the classifier plus its ESA-partner configuration are
+gone.
 
 ## Regulatory references
 

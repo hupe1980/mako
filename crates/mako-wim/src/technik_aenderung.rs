@@ -21,7 +21,7 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BK6-24-174** — WiM Strom Teil 1 (Messstellenbetrieb)
+//! - **BK6-22-024** — WiM Strom Teil 1 (Messstellenbetrieb)
 //! - **BK7-24-01-009** — WiM Gas AWH V2.0
 //! - APERAK Frist: **5 Werktage** (WiM Strom), **10 Werktage** (WiM Gas)
 

@@ -31,7 +31,10 @@
 //! # Regulatory context
 //!
 //! - **PID 55042**: Anmeldung Messstellenbetrieb (nMSB → NB, WiM AHB S2.1)
-//! - **APERAK Frist**: **5 Werktage** (BNetzA BK6-18-032, WiM)
+//! - **Two clocks.** The **APERAK** acknowledgement is 45 minutes for Strom
+//!   UTILMD (APERAK AHB §2.4.1). The **business answer** is per PID —
+//!   55039 3 WT · 55042 5 WT · 55051 7 WT · 55168 1 WT (BK6-24-174 Teil 1
+//!   Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2), via `antwort_frist_werktage`.
 //! - **Saturdays, Sundays and federal public holidays are not Werktage**
 //!   do not.  This is distinct from GPKE (24 wall-clock hours) and GeLi Gas
 //!   (10 Werktage).
@@ -237,8 +240,8 @@ impl MockNb {
 
 /// WiM Gerätewechsel — positive APERAK path (PID 55042 → AperakSent → Completed).
 ///
-/// NB receives the UTILMD 55042, dispatches a positive APERAK within 5 Werktage
-/// (BNetzA BK6-18-032), then records physical completion of the device change.
+/// NB receives the UTILMD 55042 and answers it within its 5-Werktage window
+/// (BNetzA BK6-22-024), then records physical completion of the device change.
 ///
 /// Per WiM AHB: Saturdays, Sundays and federal public holidays are not Werktage.  This is distinct from GPKE (24 wall-clock hours) and GeLi Gas
 /// (10 Werktage).
@@ -254,7 +257,7 @@ async fn e2e_wim_geraetewechsel_positive_aperak() {
         "NB must be ValidationPassed after ReceiveUtilmd 55042; got: {state_after_receive:?}"
     );
 
-    // ── NB ERP: dispatch positive APERAK (within 5 Werktage per BK6-18-032) ──
+    // ── NB ERP: dispatch the positive answer (55042 → 5 WT) ──
     let aperak_outbox = nb.dispatch_aperak(true, None).await;
     // ── Assert APERAK outbox entry ─────────────────────────────────────────────
     assert_eq!(
@@ -315,7 +318,7 @@ async fn e2e_wim_geraetewechsel_positive_aperak() {
 /// NB receives the UTILMD 55042 but rejects the Anmeldung (e.g. the Messlokation
 /// is unknown at the NB, or the nMSB is not authorized for this grid area).
 ///
-/// Per WiM AHB: the negative APERAK must also be dispatched within 5 Werktage.
+/// The negative answer runs on the same per-PID window as the positive one.
 #[tokio::test]
 async fn e2e_wim_geraetewechsel_negative_aperak() {
     let nb = MockNb::new();

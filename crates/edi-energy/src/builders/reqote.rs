@@ -21,10 +21,15 @@ struct ReqoteBuilderInner {
     document_id: Option<String>,
     document_date: Option<String>,
     location: Option<String>,
-    // Additive ESA-Werteanfrage (PID 35002) content — only emitted when set.
+    // Additive ESA-Werteanfrage (PID 35003) content — only emitted when set.
     reference: Option<(String, String)>,
     contact: Option<(String, String)>,
     line_item: bool,
+    free_text: Option<(String, String)>,
+    /// SG27 product lines as `(lin_qualifier, produkt_code)`.
+    products: Vec<(String, String)>,
+    /// SG10 characteristics as `(cci_qualifier, cav_code)`.
+    characteristics: Vec<(String, String)>,
 }
 
 /// Fluent builder for `REQOTE` (Request for Quotation) messages.
@@ -77,6 +82,9 @@ impl ReqoteBuilder<Unset, Unset> {
                 reference: None,
                 contact: None,
                 line_item: false,
+                free_text: None,
+                products: Vec::new(),
+                characteristics: Vec::new(),
             },
         }
     }
@@ -164,9 +172,47 @@ impl<S, R> ReqoteBuilder<S, R> {
         self
     }
 
-    /// Emit a `LIN+1` line item (SG27) — the AHB requires one for PID 35002.
+    /// Emit a `LIN+1` line item (SG27).
     pub fn line_item(mut self) -> Self {
         self.inner.line_item = true;
+        self
+    }
+
+    /// Add an `FTX+<qualifier>+++<text>` free-text segment.
+    ///
+    /// REQOTE AHB §4.3 uses `FTX+ACB` ("Zusätzliche Informationen") on the ESA
+    /// Werteanfrage.
+    pub fn free_text(mut self, qualifier: impl Into<String>, text: impl Into<String>) -> Self {
+        self.inner.free_text = Some((qualifier.into(), text.into()));
+        self
+    }
+
+    /// Add an SG27 product line — `LIN+<n>+<qualifier>` followed by
+    /// `PIA+5+<produkt_code>:Z11`.
+    ///
+    /// REQOTE AHB §4.3 requires one SG27 per requested Messprodukt on the ESA
+    /// Werteanfrage (PID 35003): `Z67` for "Erforderliches Messprodukt für Werte
+    /// nach Typ 2 aus Backend", `Z68` for the SMGW Konfigurationserlaubnis.
+    pub fn product(
+        mut self,
+        lin_qualifier: impl Into<String>,
+        produkt_code: impl Into<String>,
+    ) -> Self {
+        self.inner
+            .products
+            .push((lin_qualifier.into(), produkt_code.into()));
+        self
+    }
+
+    /// Add an SG10 characteristic — `CCI+++<qualifier>` followed by `CAV+<code>`.
+    pub fn characteristic(
+        mut self,
+        cci_qualifier: impl Into<String>,
+        cav_code: impl Into<String>,
+    ) -> Self {
+        self.inner
+            .characteristics
+            .push((cci_qualifier.into(), cav_code.into()));
         self
     }
 
@@ -190,6 +236,11 @@ impl<S, R> ReqoteBuilder<S, R> {
         );
         emit_seg!(w, "BGM", code, doc_id);
         emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
+        // `FTX+<4451>+++<C108>` — C108 sits at element position 4 in the
+        // EDIFACT directory, with 4453 and C107 unused by this MIG.
+        if let Some((qual, text)) = &self.inner.free_text {
+            emit_seg!(w, "FTX", qual, "", "", text);
+        }
         // ── SG1: reference (RFF+Z13 = Prüfidentifikator) ─────────────────────
         if let Some((q, v)) = &self.inner.reference {
             emit_comp!(w, "RFF", [q, v]);
@@ -219,9 +270,25 @@ impl<S, R> ReqoteBuilder<S, R> {
         if let Some(loc) = &self.inner.location {
             emit_seg!(w, "LOC", "172", loc);
         }
-        // ── SG27: line item ──────────────────────────────────────────────────
-        if self.inner.line_item {
+        // ── SG10: characteristics ────────────────────────────────────────────
+        // CAV is not part of the REQOTE MIG, so the characteristic is carried by
+        // CCI alone.
+        for (qual, _code) in &self.inner.characteristics {
+            emit_seg!(w, "CCI", qual);
+        }
+        // ── SG27: line item / product lines ──────────────────────────────────
+        if self.inner.line_item && self.inner.products.is_empty() {
             emit_seg!(w, "LIN", "1");
+        }
+        // `LIN+<1082 Positionsnummer>+<1229 Handlung, Code>` — the MIG's own
+        // examples are `LIN+1+Z64'` / `LIN+1+Z65'`. The qualifier says which kind
+        // of product line follows (REQOTE AHB §4.3: `Z67` "Erforderliches
+        // Messprodukt für Werte nach Typ 2 aus Backend", `Z68` the SMGW
+        // Konfigurationserlaubnis), and `PIA+5` names the product itself.
+        for (idx, (qual, produkt)) in self.inner.products.iter().enumerate() {
+            let pos = (idx + 1).to_string();
+            emit_seg!(w, "LIN", &pos, qual);
+            emit_comp!(w, "PIA", ["5"], [produkt, "", "Z11"]);
         }
         w.finish_unt(&self.inner.message_ref)
             .map_err(Error::Parse)?;

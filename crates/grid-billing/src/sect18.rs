@@ -224,8 +224,8 @@ pub fn settle_dezentrale_einspeisung(
         status: SettlementStatus::Initial,
         korrektur_grund: None,
         period: input.period,
-        nb_mp_id: input.nb_mp_id.clone(),
-        counterparty_mp_id: input.anlagenbetreiber_mp_id.clone(),
+        sender_mp_id: input.nb_mp_id.clone(),
+        recipient_mp_id: input.anlagenbetreiber_mp_id.clone(),
         total_eur: positions
             .iter()
             .map(|p| p.net_eur)

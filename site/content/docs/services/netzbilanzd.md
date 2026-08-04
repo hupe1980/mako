@@ -104,7 +104,7 @@ graph LR
 
 2. **Invoice generation** — pure `grid-billing` library, no I/O.
    Returns `SettlementResult` (domain type, no BO4E dep) with:
-   - **`counterparty_mp_id`** — auto-populated from `lf_mp_id` (NNE/MMM) or `msb_mp_id` (PID 31009)
+   - **`sender_mp_id`** / **`recipient_mp_id`** — auto-populated. NNE/MMM/KA go NB → LF; PID 31009 goes **MSB → NB/LF/ESA**
    - **`CalculationTrace`** per position — `explanation`, `legal_refs`, `tariff_source`, `gross_eur`
    - **`LegalReference`** list — e.g. `StromNEV §21`, `KAV §2 Abs. 2`, `§14a EnWG Modul 3`
    - **`Sparte`** on input drives legal refs + `SettlementType` automatically (`Gas` → `GasNEV §14`; NN-Rechnung PID 31002 for both Sparten)
@@ -123,7 +123,7 @@ graph LR
 
 6. **Dispatch** — `PUT /api/v1/billing/drafts/{id}/dispatch` re-validates
    then issues the corresponding `makod` command.
-   The invoice recipient (`counterparty_mp_id`) is set automatically by `grid-billing`
+   The invoice recipient (`recipient_mp_id`) is set automatically by `grid-billing`
    from the input: `lf_mp_id` for NNE/MMM, `msb_mp_id` for `msb_31009`.
    No separate lookup required.
 
@@ -314,7 +314,7 @@ so it survives serialization.
 flowchart LR
     input["NneInput<br/>(sparte, tariff_sheet_id,<br/>ka_klasse, ...)"]
     calc["grid_billing::<br/>settle_nne()"]
-    gs["SettlementResult<br/>counterparty_mp_id<br/>positions[n].trace<br/>  .explanation<br/>  .legal_refs<br/>  .tariff_source"]
+    gs["SettlementResult<br/>sender_mp_id · recipient_mp_id<br/>positions[n].trace<br/>  .explanation<br/>  .legal_refs<br/>  .tariff_source"]
     rechnung["rubo4e::Rechnung<br/>rechnungspositionen"]
     db[("invoice_drafts<br/>.rechnung_json")]
 

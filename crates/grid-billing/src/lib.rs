@@ -155,7 +155,9 @@ pub use types::{
     Leistungspreis,
     MengePreis,
     MmmInput,
+    MsbEmpfaengerRolle,
     MsbInput,
+    MsbRechnungsempfaenger,
     NneInput,
     // The pricing formula behind a rate, as a value rather than a document.
     PriceReference,

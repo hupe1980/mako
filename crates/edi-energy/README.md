@@ -120,6 +120,26 @@ println!("{}", String::from_utf8_lossy(&bytes));
 
 See the [builder guide][builders] for the full builder API and all message types.
 
+## Segment definitions and element positions
+
+The `SegmentDefinition` tables under `src/generated/` are produced by
+`cargo xtask codegen` from the MIG profiles in `profiles/`.
+
+A MIG lists only the elements *that profile uses*, but an element's **position**
+inside a segment is fixed by the UN/EDIFACT directory — it is what a
+counterparty writes on the wire. Generating positions from the order of the
+MIG's list therefore shifts every element that follows an omitted one.
+
+`xtask::codegen::CANONICAL_ELEMENT_POSITIONS` pins the affected segments (`FTX`,
+`CCI`, `IMD`, `STS`) to their directory positions; the rest are dense and need no
+entry. `tests/element_positions.rs` enforces this — it fails if any element
+appears at two different positions across the generated message families, or if
+one of the known layouts drifts.
+
+When a MIG import turns out to be missing an element the AHB requires, fix the
+profile JSON against the MIG PDF and regenerate; do not work around it in a
+builder.
+
 ## Active Format Versions
 
 | Format version | Strom | Gas | Valid period |

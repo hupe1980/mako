@@ -296,7 +296,7 @@ mod tests {
 
     fn anfrage() -> WertebestellungCommand {
         WertebestellungCommand::ReceiveAnfrage {
-            pid: Pruefidentifikator::const_new(35002),
+            pid: Pruefidentifikator::const_new(35003),
             esa: MarktpartnerCode::new("9900000000001"),
             msb: MarktpartnerCode::new("9900000000002"),
             ebene: Lokationsebene::Marktlokation,

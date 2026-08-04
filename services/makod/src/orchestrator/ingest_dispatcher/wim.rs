@@ -101,17 +101,23 @@ impl EdifactIngestDispatcher {
                 }),
             },
             // ── WiM Geräteübernahme (nMSB role) ──────────────────────────────
-            // PIDs 17001/17002: nMSB → NB Anfrage/Weiterverpflichtung — spawn.
-            // PID  17005:       NB   → MSB Bestellung Rechnungsabwicklung — spawn.
-            // PIDs 17009/17011: Stornierung (ORDCHG) — spawn.
-            // PIDs 19001/19002: ORDRSP Bestätigung/Ablehnung (NB → nMSB) — resume.
+            // PID 17001: Bestellung Geräteübernahmeangebot, MSBN → MSBA — spawn.
+            // PID 17002: Weiterverpflichtung, NB → MSBA — spawn.
+            // PID 17009: Anzeige Gerätewechselabsicht, MSBN → MSBA — spawn.
+            // PIDs 19001/19002: ORDRSP Bestätigung/Ablehnung (MSBA → MSBN) — resume.
+            //
+            // 17005 and 17011 are deliberately absent — they are different
+            // processes and `GERAETEUBERNAHME_PIDS` never registers them here:
+            //   17005 Bestellung Rechnungsabwicklung MSB über LF (LF → MSB)
+            //   17011 Bestellung Angebot Änderung Technik (NB/LF → MSB),
+            //         owned by `wim-technik-aenderung`.
             //
             // Note: PIDs 19001/19002 are multi-domain — GPKE Konfiguration (NB role)
             // and WiM Geräteübernahme (nMSB role) share them.  Role-conditional
             // routing in the PidRouter ensures only one workflow is registered per
             // role (both cannot be active simultaneously — build() panics if both are).
             "wim-geraeteubernahme" => match pid {
-                17001 | 17002 | 17005 | 17009 | 17011 => {
+                17001 | 17002 | 17009 => {
                     let cmd = adapters::wim_geraeteubernahme_registry().dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_orders(msg);
                     // Process Frist: 5 Werktage (BK6-24-174 WiM Strom Teil 1).
@@ -283,10 +289,36 @@ impl EdifactIngestDispatcher {
             // ── WiM ESA Wertebestellung (WiM Teil 2 Kap. 4) ───────────────────
             //
             // ORDERS 17007 (Bestellung), 17008 (Abbestellung) and ORDCHG 39002
-            // (Stornierung). REQOTE 35002 arrives under "wim-preisanfrage"
-            // because the two share a PID; it is separated below.
+            // (Stornierung), plus the REQOTE 35003 Anfrage that opens the
+            // handshake — 35003 is ESA-specific, so it is registered straight to
+            // this workflow rather than being sorted out of the Preisanfrage
+            // stream on content.
             name if name == mako_wim::wertebestellung::WORKFLOW_NAME => {
-                if pid == mako_wim::wertebestellung::STORNIERUNG_PID.as_u32() {
+                if pid == mako_wim::wertebestellung::ANFRAGE_PID.as_u32() {
+                    let cmd = adapters::wim_wertebestellung_registry().dispatch(raw, &fv)?;
+                    // Consent gate: a revoked consent or an unestablished
+                    // framework agreement answers the Werteanfrage with a
+                    // QUOTES 15003 Ablehnung instead of an Angebot.
+                    let cmd = self.gate_esa_consent(msg, cmd).await;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // UC 4.1 Nr. 2: "spätester ÜT ist der 5. WT nach dem ÜT von
+                    // Nr. 1". makod issues its positive AS4 Receipt for this
+                    // message in the same request, so the dispatch instant is
+                    // the ÜT the Frist counts from.
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        mako_wim::wertebestellung::ANGEBOT_FRIST_WT,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
+                        malo_id.as_str(),
+                        mako_wim::wertebestellung::WORKFLOW_NAME,
+                        cmd,
+                        &fv,
+                        &[(mako_wim::wertebestellung::ANGEBOT_WINDOW_LABEL, due_at)],
+                    )
+                    .await
+                } else if pid == mako_wim::wertebestellung::STORNIERUNG_PID.as_u32() {
                     // ORDCHG 39002 Stornierung carries no LOC — correlate by the
                     // original Bestellung's Belegnummer echoed in RFF+ON. Resume
                     // only; a Stornierung without a running order is an orphan.
@@ -368,41 +400,6 @@ impl EdifactIngestDispatcher {
             }
             // ── WiM Preisanfrage REQOTE (PIDs 35001–35005) ────────────────────
             "wim-preisanfrage" => {
-                // REQOTE 35002 is shared: an ESA Werteanfrage (WiM Teil 2 UC 4.1
-                // Nr. 1) and a Preisanfrage arrive under the same PID, because no
-                // ESA-specific REQOTE Prüfidentifikator exists. Separate them on
-                // content before the Preisanfrage workflow claims the message.
-                if pid == mako_wim::wertebestellung::ANFRAGE_PID.as_u32()
-                    && mako_wim::wertebestellung::classify_reqote(
-                        self.sender_is_esa(extract_sender_mp_id(msg).as_str()),
-                        mako_wim::wertebestellung::has_messprodukt(extract_pia_codes(msg)),
-                    ) == mako_wim::wertebestellung::ReqoteKind::EsaWerteanfrage
-                {
-                    let cmd = adapters::wim_wertebestellung_registry().dispatch(raw, &fv)?;
-                    // Consent gate: a revoked consent or an unestablished
-                    // framework agreement answers the Werteanfrage with a
-                    // QUOTES 15003 Ablehnung instead of an Angebot.
-                    let cmd = self.gate_esa_consent(msg, cmd).await;
-                    let malo_id = extract_malo_from_msg(msg);
-                    // UC 4.1 Nr. 2: "spätester ÜT ist der 5. WT nach dem ÜT von
-                    // Nr. 1". makod issues its positive AS4 Receipt for this
-                    // message in the same request, so the dispatch instant is
-                    // the ÜT the Frist counts from.
-                    let due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
-                        mako_wim::wertebestellung::ANGEBOT_FRIST_WT,
-                        HolidayCalendar::BdewMaKo,
-                    );
-                    return self
-                        .spawn_or_resume::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
-                            malo_id.as_str(),
-                            mako_wim::wertebestellung::WORKFLOW_NAME,
-                            cmd,
-                            &fv,
-                            &[(mako_wim::wertebestellung::ANGEBOT_WINDOW_LABEL, due_at)],
-                        )
-                        .await;
-                }
                 if mako_wim::preisanfrage::REQOTE_PIDS.contains(&pid) {
                     let cmd = adapters::wim_preisanfrage_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);

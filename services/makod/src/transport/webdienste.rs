@@ -299,7 +299,7 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
     /// 1. Inbox idempotency guard — rejects duplicate `tx_id` values.
     /// 2. Converts the REST payload to a `DeviceChangeCommand::ReceiveRestOrder`.
     /// 3. Spawns a `WimDeviceChangeWorkflow` process.
-    /// 4. Registers a 5-Werktage response deadline (BDEW WiM / BK6-18-032).
+    /// 4. Registers the per-PID response deadline (BDEW WiM / BK6-22-024).
     /// 5. Registers a correlated index under `tx_id` for later ERP lookup.
     /// 6. Returns `Ok(())` → axum sends `202 Accepted`.
     fn on_anmeldung(
@@ -367,6 +367,23 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
 ///
 /// Used by the WiM Order API (`/wimBestellung/v1/anmeldung/`).
 /// Registers a 5-Werktage deadline and a correlated index under `tx_id`.
+/// The business-answer Frist for the order this command opens.
+///
+/// The MSB-Wechsel windows differ per Prüfidentifikator (BK6-22-024 WiM Teil 1):
+/// 55039 → 3 WT, 55042 → 5 WT, 55051 → 7 WT, 55168 → 1 WT. `mako_wim` owns the
+/// table so the REST and AS4 doors cannot drift apart.
+///
+/// Commands that carry no request PID fall back to 5 WT — the Anmeldung's value,
+/// and the most common order.
+fn device_change_frist_wt(command: &DeviceChangeCommand) -> u32 {
+    let pid = match command {
+        DeviceChangeCommand::ReceiveUtilmd { pid, .. }
+        | DeviceChangeCommand::InitiateDeviceChange { pid, .. } => Some(pid.as_u32()),
+        _ => None,
+    };
+    pid.and_then(mako_wim::antwort_frist_werktage).unwrap_or(5)
+}
+
 async fn spawn_device_change(
     store: SlateDbStore,
     tenant_id: TenantId,
@@ -392,12 +409,18 @@ async fn spawn_device_change(
     let stream_id = process.stream_id().clone();
     let identity = process.identity();
 
-    // Build 5-Werktage deadline before the atomic write (BK6-24-174).
+    // Business-answer Frist, sized from the order's own Prüfidentifikator —
+    // 55039 → 3 WT, 55042 → 5 WT, 55051 → 7 WT, 55168 → 1 WT (BK6-22-024 WiM
+    // Teil 1, Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2). This REST door has to agree
+    // with the AS4 door; a flat 5 WT here would give the same order two
+    // different deadlines depending on which transport it arrived on.
+    //
     // deadline_at_werktage computes 17:00 Europe/Berlin on the due Werktag,
     // correctly handling CET/CEST transitions.
+    let frist_wt = device_change_frist_wt(&command);
     let due_at = mako_engine::fristen::deadline_at_werktage(
         time::OffsetDateTime::now_utc(),
-        5,
+        frist_wt,
         mako_engine::fristen::HolidayCalendar::BdewMaKo,
     );
     let deadline = Deadline::new(
@@ -435,7 +458,8 @@ async fn spawn_device_change(
 
 ///
 /// Uses the latest BDEW format version from the compiled `edi-energy` registry.
-/// Also registers a 5-Werktage deadline (BDEW WiM / BK6-18-032).
+/// Also registers the Steuerungsauftrag's 5-Werktage confirmation deadline
+/// (BDEW WiM / BK6-22-024).
 async fn spawn_steuerungsauftrag(
     store: SlateDbStore,
     tenant_id: TenantId,
@@ -462,7 +486,8 @@ async fn spawn_steuerungsauftrag(
     // Capture identity before consume-by-execute.
     let identity = process.identity();
 
-    // Build 5-Werktage deadline before the atomic write (BK6-24-174).
+    // The Steuerungsauftrag has its own flat 5-Werktage confirmation window —
+    // unrelated to the per-PID MSB-Wechsel Fristen above.
     // deadline_at_werktage computes 17:00 Europe/Berlin on the due Werktag,
     // correctly handling CET/CEST transitions.
     let due_at = mako_engine::fristen::deadline_at_werktage(

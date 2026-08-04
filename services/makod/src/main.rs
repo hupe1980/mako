@@ -815,27 +815,9 @@ struct Cli {
     )]
     deployment_roles: Vec<String>,
 
-    /// GLNs of counterparties that act as an Energieserviceanbieter (ESA).
-    ///
-    /// REQOTE 35002 is shared: an ESA Werteanfrage (WiM Teil 2 Kap. 4 UC 4.1
-    /// Nr. 1) and a Preisanfrage arrive under the same Prüfidentifikator,
-    /// because no ESA-specific REQOTE PID exists. The message carries only the
-    /// sender's market-partner ID, not its role, so listing the known ESA
-    /// partners here turns on the decisive discriminator. Without it the
-    /// classifier falls back to the `PIA` Messprodukt marker alone.
-    ///
-    /// Comma-separated, e.g. `MAKOD_ESA_PARTNER_MP_IDS=9900555000005`.
-    #[arg(
-        long,
-        value_name = "MP_IDS",
-        env = "MAKOD_ESA_PARTNER_MP_IDS",
-        value_delimiter = ','
-    )]
-    esa_partner_mp_ids: Vec<String>,
-
     /// Cluster-internal marktd base URL, e.g. `http://marktd:8180`.
     ///
-    /// When set, inbound ESA messages (REQOTE 35002 Werteanfrage, ORDERS 17007
+    /// When set, inbound ESA messages (REQOTE 35003 Werteanfrage, ORDERS 17007
     /// Bestellung) are gated against the marktd consent registry: a revoked
     /// consent or an unestablished framework agreement is answered with an
     /// Ablehnung instead of being processed. Without it the gate is disabled.
@@ -1568,7 +1550,6 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             cli.snapshot_interval,
             mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
         )
-        .with_esa_partners(cli.esa_partner_mp_ids.clone())
         .with_marktd_client(marktd_client.clone()),
     );
 

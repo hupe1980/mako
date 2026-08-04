@@ -13,23 +13,26 @@
 //!
 //! ## Inbound REQOTE
 //!
-//! | PID   | Process name (AHB)                              | Direction   |
-//! |-------|-------------------------------------------------|-------------|
-//! | 35001 | Anforderung Angebot                             | nMSB → aMSB |
-//! | 35002 | Anfrage                                         | nMSB → aMSB |
-//! | 35003 | Anfrage von Werten für Rechnungsabwicklung       | nMSB → aMSB |
-//! | 35004 | Anfrage einer Konfiguration                     | nMSB → aMSB |
-//! | 35005 | Anfrage Angebot Änderung                        | nMSB → aMSB |
+//! The four are *not* one direction — each belongs to a different process.
+//!
+//! | PID   | Process name (AHB)                                      | Direction     | Prozess |
+//! |-------|---------------------------------------------------------|---------------|---------|
+//! | 35001 | Anfrage Geräteübernahmeangebot                          | MSBN → MSBA   | WiM Strom Teil 1 |
+//! | 35002 | Anfrage Rechnungsabwicklung MSB über LF                  | **LF → MSB**  | WiM Strom Teil 1 |
+//! | 35004 | Anfrage einer Konfiguration                             | NB / LF → MSB | GPKE Teil 3 |
+//! | 35005 | Anfrage Angebot Änderung Technik                        | NB / LF → MSB | AWH Änderung der Technik |
+//!
+//! **35003 is not in this set.** It is the ESA "Anfrage von Werten" (ESA → MSB,
+//! WiM Strom Teil 2) and belongs to [`crate::wertebestellung`].
 //!
 //! ## Outbound QUOTES (response)
 //!
 //! | PID   | Process name (AHB)                              | Derived from |
 //! |-------|-------------------------------------------------|--------------|
 //! | 15001 | Angebot Geräteübernahme                         | 35001        |
-//! | 15002 | Angebot                                         | 35002        |
-//! | 15003 | Angebot zur Anfrage von Werten für ESA          | 35003        |
-//! | 15004 | Angebot zur Anfrage einer Konfiguration         | 35004        |
-//! | 15005 | Angebot zur Anfrage Änderung Technik            | 35005        |
+//! | 15002 | Angebot Abrechnung Messstellenbetrieb MSB       | 35002        |
+//! | 15004 | Angebot einer Konfiguration                     | 35004        |
+//! | 15005 | Angebot Änderung Technik                        | 35005        |
 //!
 //! # Regulatory basis
 //!
@@ -55,23 +58,27 @@ pub const WORKFLOW_NAME: &str = "wim-preisanfrage";
 ///
 /// | PID   | Process (AHB)                                | AHB version |
 /// |-------|----------------------------------------------|-------------|
-/// | 35001 | Anforderung Angebot (nMSB → aMSB)            | 1.2 ✅      |
-/// | 35002 | Anfrage                                      | 1.2 ✅      |
-/// | 35003 | Anfrage von Werten für Rechnungsabwicklung    | 1.2 ✅      |
+/// | 35001 | Anfrage Geräteübernahmeangebot (MSBN → MSBA) | 1.2 ✅      |
+/// | 35002 | Anfrage Rechnungsabwicklung MSB über LF       | 1.2 ✅      |
 /// | 35004 | Anfrage einer Konfiguration                  | 1.2 ✅      |
-/// | 35005 | Anfrage Angebot Änderung                     | 1.2 ✅      |
-pub const REQOTE_PIDS: &[u32] = &[35001, 35002, 35003, 35004, 35005];
+/// | 35005 | Anfrage Angebot Änderung Technik             | 1.2 ✅      |
+///
+/// 35003 is deliberately absent: REQOTE AHB 1.1 §4.3 assigns it to the ESA
+/// "Anfrage von Werten" (WiM Teil 2), which `wertebestellung` owns.
+pub const REQOTE_PIDS: &[u32] = &[35001, 35002, 35004, 35005];
 
 /// Inbound QUOTES Prüfidentifikatoren (responses received by the nMSB side).
 ///
 /// | PID   | Process (AHB)                                | AHB version |
 /// |-------|----------------------------------------------|-------------|
 /// | 15001 | Angebot Geräteübernahme                      | 1.1a ✅     |
-/// | 15002 | Angebot                                      | 1.1a ✅     |
-/// | 15003 | Angebot zur Anfrage von Werten für ESA       | 1.1a ✅     |
-/// | 15004 | Angebot zur Anfrage einer Konfiguration      | 1.1a ✅     |
-/// | 15005 | Angebot zur Anfrage Änderung Technik         | 1.1a ✅     |
-pub const QUOTES_PIDS: &[u32] = &[15001, 15002, 15003, 15004, 15005];
+/// | 15002 | Angebot Abrechnung Messstellenbetrieb MSB    | 1.1a ✅     |
+/// | 15004 | Angebot einer Konfiguration                  | 1.1a ✅     |
+/// | 15005 | Angebot Änderung Technik                     | 1.1a ✅     |
+///
+/// 15003 (Angebot zur Anfrage von Werten, MSB → ESA) answers 35003 and belongs
+/// to [`crate::wertebestellung`], not here.
+pub const QUOTES_PIDS: &[u32] = &[15001, 15002, 15004, 15005];
 
 /// Deadline label for the 5-Werktage response window (BK6-24-174).
 pub const PREISANFRAGE_DEADLINE_LABEL: &str = "wim-preisanfrage-antwort";
@@ -84,14 +91,12 @@ pub const PREISANFRAGE_DEADLINE_LABEL: &str = "wim-preisanfrage-antwort";
 /// |--------|-----------------|
 /// | 35001  | 15001           |
 /// | 35002  | 15002           |
-/// | 35003  | 15003           |
 /// | 35004  | 15004           |
 /// | 35005  | 15005           |
 fn quotes_response_pid(reqote_pid: u32) -> Option<Pruefidentifikator> {
     let code: u32 = match reqote_pid {
         35001 => 15001,
         35002 => 15002,
-        35003 => 15003,
         35004 => 15004,
         35005 => 15005,
         _ => return None,

@@ -132,7 +132,7 @@ static SEGMENTS: &[SegmentDefinition] = &[
         "Profilgruppe",
         &[
             ElementRef::new(1, "7059", Status::Conditional, 1),
-            ElementRef::new(2, "C240", Status::Conditional, 1),
+            ElementRef::new(3, "C240", Status::Conditional, 1),
             ElementRef::new(3, "C889", Status::Conditional, 1),
         ],
     ),

@@ -92,7 +92,7 @@ static SEGMENTS: &[SegmentDefinition] = &[
         "Merkmal/Charakteristik",
         &[
             ElementRef::new(1, "7081", Status::Conditional, 1),
-            ElementRef::new(2, "C240", Status::Conditional, 1),
+            ElementRef::new(3, "C240", Status::Conditional, 1),
         ],
     ),
     SegmentDefinition::new(
@@ -118,7 +118,7 @@ static SEGMENTS: &[SegmentDefinition] = &[
         "Statusangabe",
         &[
             ElementRef::new(1, "9015", Status::Conditional, 1),
-            ElementRef::new(2, "C601", Status::Conditional, 1),
+            ElementRef::new(1, "C601", Status::Conditional, 1),
         ],
     ),
 ];

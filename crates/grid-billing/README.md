@@ -323,7 +323,7 @@ settle_*()                  ← pure, deterministic, no I/O
         ▼
 SettlementResult {
   settlement_type, status, period, regime, sparte,
-  malo_id, nb_mp_id, counterparty_mp_id,
+  malo_id, sender_mp_id, recipient_mp_id,
   positions: Vec<SettlementPosition {
     text, kind,                   ← what was charged
     quantity, unit, unit_price_eur, net_eur,
@@ -352,7 +352,7 @@ into_rechnung(&document)  → rubo4e::current::Rechnung {
                             }
         │
         ▼
-InvoicCheckEngine::check(pid, &nb_mp_id, &rechnung, …)
+InvoicCheckEngine::check(pid, &sender_mp_id, &rechnung, …)
         │
         ▼
 invoice_drafts (PostgreSQL) → AS4 dispatch
@@ -426,8 +426,8 @@ pub struct SettlementResult {
     pub regime: RegulatoryRegime,        // the rules this calculation applied
     pub sparte: Sparte,
     pub malo_id: String,
-    pub nb_mp_id: String,                // sender (NB, or MSB for a metering settlement)
-    pub counterparty_mp_id: String,      // recipient
+    pub sender_mp_id: String,            // NB, or MSB for a MSB-Rechnung (31009)
+    pub recipient_mp_id: String,         // LF, NB, MSB, MGV or ESA
     pub positions: Vec<SettlementPosition>,
     pub total_eur: Decimal,              // rounded to 2 dp
     pub warnings: Vec<SettlementWarning>,
@@ -571,7 +571,7 @@ pub enum SettlementType {
     MmmStrom,          // PID 31005 — MMM Strom, GPKE (BK6-24-174) Teil 1 Kap. 8.4
     MmmGas,            // PID 31005 — MMM Gas,   GaBi Gas 2.1 (BK7-24-01-008) (separate to ensure correct legal refs)
     MmmSelbstausstellt,// PID 31006 — MMM Mehrmenge, selbst ausgestellte Rechnung (Lieferung)
-    MsbRechnung,       // PID 31009 — MSB-Rechnung (NB → MSB)
+    MsbRechnung,       // PID 31009 — MSB-Rechnung (MSB → NB / LF / ESA)
     GasAwhSperrung,    // PID 31011 — AWH Sperrprozesse Gas (GNB → LFG)
     RedispatchKostenblatt, // no standard PID — Redispatch 2.0 Einsatzkosten (NB → ÜNB)
     DezentraleEinspeisung, // no standard PID — §18 StromNEV, NB → Anlagenbetreiber (bilateral)
@@ -662,7 +662,7 @@ applied to a §2 Abs. 7 exemption.
 
 | Consumer | Role | Use case |
 |---|---|---|
-| `netzbilanzd` | **NB** | Generate INVOIC 31001/31002/31005/31009/31011 to LF/MSB/LFG |
+| `netzbilanzd` | **NB** (and **MSB** for 31009) | Generate INVOIC 31001/31002/31005/31011 to LF/LFG, and 31009 from the MSB to NB/LF/ESA |
 | `invoicd` | **LF** | INVOIC AHB Selbstausstellung selbstausstellen PID 31006 — same formula, LF-initiated |
 
 ## Quick start
@@ -723,8 +723,8 @@ let settlement = settle_nne(&NneInput {
 // the standard PID:
 assert_eq!(settlement.settlement_type, SettlementType::NneStrom);
 assert_eq!(settlement.settlement_type.default_pid(), 31001);
-// counterparty_mp_id is auto-populated from lf_mp_id:
-assert_eq!(settlement.counterparty_mp_id, "9900012345678");
+// recipient_mp_id is auto-populated from lf_mp_id:
+assert_eq!(settlement.recipient_mp_id, "9900012345678");
 
 // A Strom NNE settlement also carries the three netzseitige Umlagen (§19 StromNEV,
 // Offshore, KWKG) alongside the Arbeit and Konzessionsabgabe positions.
@@ -1034,7 +1034,7 @@ fn into_rechnung(doc: &InvoiceDocument) -> Rechnung {
 | 31002 | NN-Rechnung Gas (Netznutzung) | GNB → LFG | Gas (auto via `Sparte::Gas`) |
 | 31005 | MMM-Rechnung (Mehr-/Mindermengensaldo) | NB → LF | both |
 | 31006 | MMM Mehrmenge, selbst ausgestellt | LF | both |
-| 31009 | MSB-Rechnung | NB → MSB | both |
+| 31009 | MSB-Rechnung | **MSB → NB / LF / ESA** | Strom |
 | 31011 | AWH Sperrprozesse Gas | GNB → LFG | Gas |
 
 ## Billing position reference
@@ -1113,7 +1113,7 @@ Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6, Section 3.2 (valid 01
 |---|---|
 | **No floating-point money** | `rust_decimal::Decimal` throughout; `billing::EuroAmount` for overflow guard. No `f64`. |
 | **No rubo4e dependency** | Returns `SettlementResult`; service layer owns `into_rechnung()`. |
-| **`counterparty_mp_id` auto-populated** | `lf_mp_id` (NNE/MMM) or `msb_mp_id` (PID 31009) copied automatically. |
+| **`recipient_mp_id` auto-populated** | `lf_mp_id` (NNE/MMM) or `empfaenger.mp_id` (PID 31009) copied automatically; `sender_mp_id` is the NB, or the **MSB** for 31009. |
 | **`Sparte` drives settlement type** | `Sparte::Gas` → `SettlementType::NneGas`, `GasNEV §14`, PID 31005. No manual override needed. |
 | **Every position cites regulation** | `trace.legal_refs` is non-empty for every position. Enables BNetzA audit without re-calculation. |
 | **Artikelnummer on every position** | `BillingPositionKind::artikelnummer()` in this crate. Never empty. |

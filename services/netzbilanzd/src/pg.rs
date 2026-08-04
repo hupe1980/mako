@@ -116,7 +116,7 @@ pub async fn list_undispatched_stale(
     limit: i64,
 ) -> anyhow::Result<Vec<DraftRow>> {
     sqlx::query_as::<_, DraftRow>(
-        r"SELECT id::TEXT, malo_id, nb_mp_id, lf_mp_id, pid, rechnungsart,
+        r"SELECT id::TEXT, malo_id, sender_mp_id, recipient_mp_id, pid, rechnungsart,
                  period_from, period_to, rechnung,
                  gross_eur_units, check_outcome, status,
                  dispatch_ref, reject_reason, original_draft_id, created_at, updated_at
@@ -147,8 +147,8 @@ pub async fn upsert_draft(
     executor: impl sqlx::PgExecutor<'_>,
     tenant: &str,
     malo_id: &str,
-    nb_mp_id: &str,
-    lf_mp_id: &str,
+    sender_mp_id: &str,
+    recipient_mp_id: &str,
     pid: i32,
     period_from: Date,
     period_to: Date,
@@ -173,7 +173,7 @@ pub async fn upsert_draft(
     // so billing runs are idempotent (operator double-click safety).
     let row = sqlx::query(
         r"INSERT INTO invoice_drafts
-              (tenant, malo_id, nb_mp_id, lf_mp_id, pid, period_from, period_to,
+              (tenant, malo_id, sender_mp_id, recipient_mp_id, pid, period_from, period_to,
                rechnung, gross_eur_units, check_outcome, status, rechnungsart)
           VALUES ($10, $1, $2, $3, $4, $5, $6, $7, $8, $9, 'draft', 'RECHNUNG')
           ON CONFLICT (tenant, malo_id, period_from, period_to, pid)
@@ -182,8 +182,8 @@ pub async fn upsert_draft(
           RETURNING id::TEXT",
     )
     .bind(malo_id)
-    .bind(nb_mp_id)
-    .bind(lf_mp_id)
+    .bind(sender_mp_id)
+    .bind(recipient_mp_id)
     .bind(pid)
     .bind(period_from)
     .bind(period_to)
@@ -205,8 +205,8 @@ pub async fn upsert_draft(
 pub struct DraftRow {
     pub id: String,
     pub malo_id: String,
-    pub nb_mp_id: String,
-    pub lf_mp_id: String,
+    pub sender_mp_id: String,
+    pub recipient_mp_id: String,
     pub pid: i32,
     pub rechnungsart: String,
     pub period_from: Date,
@@ -227,24 +227,24 @@ pub async fn list_drafts_pg(
     pool: &PgPool,
     status: Option<&str>,
     malo_id: Option<&str>,
-    nb_mp_id: Option<&str>,
+    sender_mp_id: Option<&str>,
     limit: i64,
 ) -> anyhow::Result<Vec<DraftRow>> {
     sqlx::query_as::<_, DraftRow>(
-        r"SELECT id::TEXT, malo_id, nb_mp_id, lf_mp_id, pid, rechnungsart,
+        r"SELECT id::TEXT, malo_id, sender_mp_id, recipient_mp_id, pid, rechnungsart,
                  period_from, period_to, rechnung,
                  gross_eur_units, check_outcome, status,
                  dispatch_ref, reject_reason, original_draft_id, created_at, updated_at
           FROM invoice_drafts
           WHERE ($1::TEXT IS NULL OR status = $1)
             AND ($2::TEXT IS NULL OR malo_id = $2)
-            AND ($3::TEXT IS NULL OR nb_mp_id = $3)
+            AND ($3::TEXT IS NULL OR sender_mp_id = $3)
           ORDER BY created_at DESC
           LIMIT $4",
     )
     .bind(status)
     .bind(malo_id)
-    .bind(nb_mp_id)
+    .bind(sender_mp_id)
     .bind(limit)
     .fetch_all(pool)
     .await
@@ -256,7 +256,7 @@ pub async fn list_drafts_pg(
 /// Fetch a single draft by UUID.
 pub async fn fetch_draft(pool: &PgPool, id: Uuid) -> anyhow::Result<Option<DraftRow>> {
     sqlx::query_as::<_, DraftRow>(
-        r"SELECT id::TEXT, malo_id, nb_mp_id, lf_mp_id, pid, rechnungsart,
+        r"SELECT id::TEXT, malo_id, sender_mp_id, recipient_mp_id, pid, rechnungsart,
                  period_from, period_to, rechnung,
                  gross_eur_units, check_outcome, status,
                  dispatch_ref, reject_reason, original_draft_id, created_at, updated_at
@@ -282,7 +282,7 @@ pub async fn approve_and_dispatch(
 ) -> anyhow::Result<String> {
     // Verify draft exists and is in draft state.
     let row = sqlx::query(
-        "SELECT status, check_outcome, malo_id, nb_mp_id, lf_mp_id, pid, rechnung
+        "SELECT status, check_outcome, malo_id, sender_mp_id, recipient_mp_id, pid, rechnung
          FROM invoice_drafts WHERE id = $1",
     )
     .bind(id)
@@ -297,8 +297,8 @@ pub async fn approve_and_dispatch(
     let status: String = row.try_get("status")?;
     let outcome: Option<String> = row.try_get("check_outcome")?;
     let malo_id: String = row.try_get("malo_id")?;
-    let nb_mp_id: String = row.try_get("nb_mp_id")?;
-    let lf_mp_id: String = row.try_get("lf_mp_id")?;
+    let sender_mp_id: String = row.try_get("sender_mp_id")?;
+    let recipient_mp_id: String = row.try_get("recipient_mp_id")?;
     let pid: i32 = row.try_get("pid")?;
     let rechnung: serde_json::Value = row.try_get("rechnung")?;
 
@@ -332,8 +332,8 @@ pub async fn approve_and_dispatch(
         malo_id: Some(malo_id.clone()),
         melo_id: None,
         payload: serde_json::json!({
-            "lf_mp_id":  lf_mp_id,
-            "nb_mp_id":  nb_mp_id,
+            "recipient_mp_id":  recipient_mp_id,
+            "sender_mp_id":  sender_mp_id,
             "pid":       pid,
             "rechnung":  rechnung,
         }),
@@ -678,32 +678,32 @@ pub async fn delete_fremdkosten(pool: &PgPool, draft_id: Uuid, tenant: &str) -> 
 
 /// Flexible invoice draft listing for MCP tools.
 ///
-/// Filters: `tenant` (mandatory), `malo_id`, `lf_mp_id`, `outcome`, `limit`.
+/// Filters: `tenant` (mandatory), `malo_id`, `recipient_mp_id`, `outcome`, `limit`.
 /// Used by `list_nne_drafts` and `list_disputed` MCP tools.
 #[allow(dead_code)]
 pub async fn list_billing_records(
     pool: &PgPool,
     tenant: &str,
     malo_id: Option<&str>,
-    lf_mp_id: Option<&str>,
+    recipient_mp_id: Option<&str>,
     outcome: Option<&str>,
     limit: i64,
 ) -> anyhow::Result<Vec<DraftRow>> {
     sqlx::query_as::<_, DraftRow>(
-        r"SELECT id::TEXT, malo_id, nb_mp_id, lf_mp_id, pid, rechnungsart,
+        r"SELECT id::TEXT, malo_id, sender_mp_id, recipient_mp_id, pid, rechnungsart,
                  period_from, period_to, rechnung,
                  gross_eur_units, check_outcome, status,
                  dispatch_ref, reject_reason, original_draft_id, created_at, updated_at
           FROM invoice_drafts
           WHERE tenant = $5
             AND ($1::TEXT IS NULL OR malo_id = $1)
-            AND ($2::TEXT IS NULL OR lf_mp_id = $2)
+            AND ($2::TEXT IS NULL OR recipient_mp_id = $2)
             AND ($3::TEXT IS NULL OR check_outcome = $3)
           ORDER BY created_at DESC
           LIMIT $4",
     )
     .bind(malo_id)
-    .bind(lf_mp_id)
+    .bind(recipient_mp_id)
     .bind(outcome)
     .bind(limit)
     .bind(tenant)
@@ -724,7 +724,7 @@ pub async fn fetch_billing_record(
     tenant: &str,
 ) -> anyhow::Result<Option<DraftRow>> {
     sqlx::query_as::<_, DraftRow>(
-        r"SELECT id::TEXT, malo_id, nb_mp_id, lf_mp_id, pid, rechnungsart,
+        r"SELECT id::TEXT, malo_id, sender_mp_id, recipient_mp_id, pid, rechnungsart,
                  period_from, period_to, rechnung,
                  gross_eur_units, check_outcome, status,
                  dispatch_ref, reject_reason, original_draft_id, created_at, updated_at
@@ -759,7 +759,7 @@ pub async fn insert_correction_draft(
 ) -> anyhow::Result<Uuid> {
     // Load the original draft.
     let row = sqlx::query(
-        r"SELECT malo_id, nb_mp_id, lf_mp_id, pid, period_from, period_to,
+        r"SELECT malo_id, sender_mp_id, recipient_mp_id, pid, period_from, period_to,
                  rechnung, gross_eur_units
           FROM invoice_drafts WHERE id = $1",
     )
@@ -770,8 +770,8 @@ pub async fn insert_correction_draft(
     .ok_or_else(|| anyhow::anyhow!("original draft not found: {original_id}"))?;
 
     let malo_id: String = row.try_get("malo_id")?;
-    let nb_mp_id: String = row.try_get("nb_mp_id")?;
-    let lf_mp_id: String = row.try_get("lf_mp_id")?;
+    let sender_mp_id: String = row.try_get("sender_mp_id")?;
+    let recipient_mp_id: String = row.try_get("recipient_mp_id")?;
     let pid: i32 = row.try_get("pid")?;
     let period_from: Date = row.try_get("period_from")?;
     let period_to: Date = row.try_get("period_to")?;
@@ -819,15 +819,15 @@ pub async fn insert_correction_draft(
 
     let new_row = sqlx::query(
         r"INSERT INTO invoice_drafts
-              (tenant, malo_id, nb_mp_id, lf_mp_id, pid, period_from, period_to,
+              (tenant, malo_id, sender_mp_id, recipient_mp_id, pid, period_from, period_to,
                rechnung, gross_eur_units, check_outcome, status,
                rechnungsart, original_draft_id)
           VALUES ('default', $1, $2, $3, $4, $5, $6, $7, $8, 'Ok', 'draft', $9, $10)
           RETURNING id::TEXT",
     )
     .bind(&malo_id)
-    .bind(&nb_mp_id)
-    .bind(&lf_mp_id)
+    .bind(&sender_mp_id)
+    .bind(&recipient_mp_id)
     .bind(pid)
     .bind(period_from)
     .bind(period_to)
@@ -925,8 +925,8 @@ pub struct AuditRow {
     pub id: String,
     pub tenant: String,
     pub malo_id: String,
-    pub nb_mp_id: String,
-    pub lf_mp_id: String,
+    pub sender_mp_id: String,
+    pub recipient_mp_id: String,
     pub pid: i32,
     pub rechnungsart: String,
     pub period_from: Date,
@@ -947,7 +947,7 @@ pub struct AuditRow {
 /// to keep response payload manageable for large portfolios.
 pub async fn list_audit(pool: &PgPool, q: AuditQuery) -> anyhow::Result<Vec<AuditRow>> {
     sqlx::query_as::<_, AuditRow>(
-        r"SELECT id::TEXT, tenant, malo_id, nb_mp_id, lf_mp_id, pid, rechnungsart,
+        r"SELECT id::TEXT, tenant, malo_id, sender_mp_id, recipient_mp_id, pid, rechnungsart,
                  period_from, period_to, gross_eur_units, check_outcome, status,
                  dispatch_ref, reject_reason, bo4e_version, created_at, updated_at
           FROM invoice_drafts

@@ -71,7 +71,7 @@ pub const ANFRAGE_PIDS: &[u32] = &[17001, 17002];
 pub const BESTELLUNG_PIDS: &[u32] = &[17001];
 
 /// ORDERS 17009 — "Ankündigung Gerätewechselabsicht".
-pub const STORNIERUNG_PIDS: &[u32] = &[17009];
+pub const ANKUENDIGUNG_PIDS: &[u32] = &[17009];
 
 /// QUOTES 15001 — "Angebot Geräteübernahme" (Kap. 3.2.2 Nr. 2).
 pub const ANGEBOT_PID: Pruefidentifikator = Pruefidentifikator::const_new(15001);
@@ -321,7 +321,7 @@ pub enum GeraeteubernahmeCommand {
     },
     /// Dispatch the Angebot (QUOTES 15001) or refuse the Anfrage.
     ///
-    /// **BNetzA BK6-18-032**: ORDRSP must be sent within **5 Werktage** of
+    /// **BNetzA BK6-22-024**: ORDRSP must be sent within **5 Werktage** of
     /// receiving the Anfrage. Use `fristen::add_werktage(5, BdewMaKo)`.
     DispatchAnfrageOrdrsp {
         /// `true` to send an Angebot, `false` to refuse.
@@ -357,7 +357,7 @@ pub enum GeraeteubernahmeCommand {
         device_id: DeviceId,
     },
     /// MSBN announces a Gerätewechselabsicht via ORDERS 17009.
-    ReceiveStornierung {
+    ReceiveGeraetewechselabsicht {
         /// ORDERS PID (17009).
         pid: Pruefidentifikator,
         /// EDIFACT message reference.
@@ -391,7 +391,7 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
     ///
     /// | Label | State guard | Command emitted | BNetzA rule |
     /// |---|---|---|---|
-    /// | `"wim-geraeteubernahme-ordrsp-deadline"` | any non-terminal | `TimeoutExpired` | BK6-18-032 — 5 Werktage ORDRSP Frist |
+    /// | `"wim-geraeteubernahme-ordrsp-deadline"` | any non-terminal | `TimeoutExpired` | BK6-22-024 — 5 Werktage ORDRSP Frist |
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
@@ -647,17 +647,17 @@ impl Workflow for WimGeraeteubernahmeWorkflow {
                 Ok(vec![GeraeteubernahmeEvent::Abgeschlossen { device_id }].into())
             }
 
-            GeraeteubernahmeCommand::ReceiveStornierung { pid, message_ref } => {
+            GeraeteubernahmeCommand::ReceiveGeraetewechselabsicht { pid, message_ref } => {
                 if state.is_terminal() {
-                    // Stornierung for an already-terminal process is a no-op;
-                    // transport layer should still send a Bestätigung-ORDRSP.
+                    // An Ankündigung for an already-terminal process is a no-op;
+                    // the transport layer still answers with ORDRSP 19015.
                     return Ok(WorkflowOutput::events(vec![]));
                 }
-                if !STORNIERUNG_PIDS.contains(&pid.as_u32()) {
+                if !ANKUENDIGUNG_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "PID {} is not a Geräteübernahme-Stornierung PID (expected {:?})",
+                        "PID {} is not an Ankündigung-Gerätewechselabsicht PID (expected {:?})",
                         pid.as_u32(),
-                        STORNIERUNG_PIDS,
+                        ANKUENDIGUNG_PIDS,
                     )));
                 }
                 Ok(vec![GeraeteubernahmeEvent::Storniert {
@@ -1036,7 +1036,7 @@ mod tests {
         // ValidationPassed → Storniert
         let events = WimGeraeteubernahmeWorkflow::handle(
             &state,
-            GeraeteubernahmeCommand::ReceiveStornierung {
+            GeraeteubernahmeCommand::ReceiveGeraetewechselabsicht {
                 pid: Pruefidentifikator::new(17009).unwrap(), // Ankündigung Gerätewechselabsicht
                 message_ref: MessageRef::new("MSG-STORNO-001"),
             },

@@ -1,6 +1,6 @@
 //! WiM Messstellenbetrieb — MSB change workflow (PIDs 55039, 55042, 55051, 55168).
 //!
-//! Covers the four MSB-Wechsel use cases of BK6-24-174 WiM Strom Teil 1: the
+//! Covers the four MSB-Wechsel use cases of BK6-22-024 WiM Strom Teil 1: the
 //! Kündigung between outgoing and incoming Messstellenbetreiber (Kap. 2.2), the
 //! Anmeldung of the incoming MSB at the Netzbetreiber (Kap. 2.3), the Abmeldung
 //! (Kap. 2.4), and the Verpflichtungsanfrage the NB puts to the grundzuständiger
@@ -73,7 +73,7 @@ pub const ANTWORT_FRIST_WINDOW_LABEL: &str = "wim-device-change-antwort-frist";
 /// Prüfidentifikatoren that carry a WiM MSB-Wechsel UTILMD.
 ///
 /// Directions are per *Anwendungsübersicht der Prüfidentifikatoren* 4.0 and the
-/// BK6-24-174 WiM Teil 1 Lesefassung. Note that they are **not** uniformly
+/// BK6-22-024 WiM Teil 1 Lesefassung. Note that they are **not** uniformly
 /// "MSB → NB" — 55039 never reaches the NB at all, and 55168 addresses the gMSB:
 ///
 /// | PID   | Process                            | Von  | An   | Kap.  |
@@ -95,7 +95,7 @@ pub const DEVICE_CHANGE_PIDS: &[u32] = &[55_039, 55_042, 55_051, 55_168];
 /// Antwortfrist in Werktagen for the counterparty's business response.
 ///
 /// **These differ per process** — a single flat window would fire early for the
-/// Kündigung and late for the Abmeldung. From BK6-24-174 WiM Teil 1
+/// Kündigung and late for the Abmeldung. From BK6-22-024 WiM Teil 1
 /// ("Unverzüglich, jedoch spätester ÜT ist der *n*. WT nach dem ÜT von Nr. 1"):
 ///
 /// | Request | Antwort | Frist | Fundstelle |
@@ -121,7 +121,7 @@ pub const fn antwort_frist_werktage(request_pid: u32) -> Option<u32> {
 }
 
 /// Deadline label for the counterparty's response window on an **outbound**
-/// MSB-Wechsel order (WiM BK6-24-174).
+/// MSB-Wechsel order (WiM BK6-22-024).
 ///
 /// Sized per PID via [`antwort_frist_werktage`] — 3 / 5 / 7 / 1 WT, never flat.
 ///
@@ -500,7 +500,7 @@ pub enum DeviceChangeCommand {
         ///
         /// Used to compute the APERAK 45-minute sending deadline
         /// (APERAK AHB 1.0 §2.4.1) and the 5-Werktage process deadline
-        /// (WiM BK6-24-174 §2a) that are registered atomically with
+        /// (WiM BK6-22-024 §2a) that are registered atomically with
         /// the `Initiated` event.
         received_at: OffsetDateTime,
     },
@@ -524,7 +524,7 @@ pub enum DeviceChangeCommand {
     },
     /// Dispatch a positive or negative APERAK.
     ///
-    /// **BDEW WiM / BNetzA BK6-18-032**: APERAK must be sent within
+    /// **BDEW WiM / BNetzA BK6-22-024**: APERAK must be sent within
     /// **5 Werktage** of receiving the UTILMD (not wall-clock hours).
     /// Use `fristen::add_werktage(5, HolidayCalendar::BdewMaKo)` to compute
     /// the deadline.
@@ -598,7 +598,7 @@ impl Workflow for WimDeviceChangeWorkflow {
     ///
     /// | Label | State guard | Command emitted | BNetzA rule |
     /// |---|---|---|---|
-    /// | `"wim-aperak-5-werktage"` | `Initiated` or `ValidationPassed` | `TimeoutExpired` | BK6-18-032 — 5 Werktage APERAK Frist |
+    /// | `"wim-aperak-5-werktage"` | `Initiated` or `ValidationPassed` | `TimeoutExpired` | BK6-22-024 — 5 Werktage APERAK Frist |
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,

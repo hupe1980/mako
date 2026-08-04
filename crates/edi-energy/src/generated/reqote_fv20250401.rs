@@ -44,7 +44,7 @@ static SEGMENTS: &[SegmentDefinition] = &[
         "Item Description",
         &[
             ElementRef::new(1, "7077", Status::Conditional, 1),
-            ElementRef::new(2, "C273", Status::Conditional, 1),
+            ElementRef::new(3, "C273", Status::Conditional, 1),
         ],
     ),
     SegmentDefinition::new(
@@ -52,7 +52,7 @@ static SEGMENTS: &[SegmentDefinition] = &[
         "Free Text",
         &[
             ElementRef::new(1, "4451", Status::Mandatory, 1),
-            ElementRef::new(2, "C108", Status::Conditional, 1),
+            ElementRef::new(4, "C108", Status::Conditional, 1),
         ],
     ),
     SegmentDefinition::new(
@@ -87,7 +87,10 @@ static SEGMENTS: &[SegmentDefinition] = &[
     SegmentDefinition::new(
         "LIN",
         "Line Item",
-        &[ElementRef::new(1, "1082", Status::Conditional, 1)],
+        &[
+            ElementRef::new(1, "1082", Status::Conditional, 1),
+            ElementRef::new(2, "1229", Status::Conditional, 1),
+        ],
     ),
     SegmentDefinition::new(
         "UNT",

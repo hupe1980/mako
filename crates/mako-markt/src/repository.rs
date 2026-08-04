@@ -2567,7 +2567,7 @@ pub struct GeraetRecord {
 
 /// Persistent store for Zähler (meters) and Geräte (devices).
 ///
-/// Populated by WiM MSB/NB device handover processes (ORDERS PIDs 17001–17011)
+/// Populated by WiM MSB/NB device handover processes (ORDERS PIDs 17001, 17002, 17009)
 /// and operator REST uploads.
 ///
 /// Source: WiM AHB BK6-24-174; BO4E Zaehler/Geraet schemas.

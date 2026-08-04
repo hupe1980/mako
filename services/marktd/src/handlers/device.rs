@@ -814,7 +814,7 @@ pub struct KonfigurationenEntry {
 ///
 /// Unlike `GET /api/v1/zaehler/{zaehler_id}/geraete` (list), this endpoint
 /// returns a `404 Not Found` if the device doesn't exist and is suitable for
-/// exact-identity lookup by ERP systems after WiM Geräteübernahme (PIDs 17001–17011).
+/// exact-identity lookup by ERP systems after WiM Geräteübernahme (PIDs 17001, 17002, 17009).
 pub async fn get_geraet(
     Extension(repo): Extension<DeviceRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

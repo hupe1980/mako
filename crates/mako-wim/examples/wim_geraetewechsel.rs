@@ -219,7 +219,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let utilmd_conversation_id = envs[0].conversation_id;
     let utilmd_event_id = envs[0].event_id;
 
-    // ── 5-Werktage APERAK deadline (WiM / BNetzA BK6-18-032) ─────────────────
+    // ── 5-Werktage APERAK deadline (WiM / BNetzA BK6-22-024) ─────────────────
     //
     // WiM differs from GPKE here: the APERAK Frist is 5 BUSINESS DAYS,
     // not 24 wall-clock hours. Public holidays are excluded.

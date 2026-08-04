@@ -19,7 +19,7 @@
 //!
 //! ## Regulatory basis
 //!
-//! - **BK6-24-174** — WiM Strom (APERAK Frist 5 Werktage)
+//! - **BK6-22-024** — WiM Strom (APERAK Frist 5 Werktage)
 //! - **INSRPT 1.x** — EDI@Energy inspection report format
 
 use mako_engine::types::Pruefidentifikator;

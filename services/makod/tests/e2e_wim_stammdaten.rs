@@ -22,7 +22,7 @@
 //! # Regulatory context
 //!
 //! - **PID 17132**: Anfrage zur Übermittlung von Stammdaten Strom (ORDERS, NB → MSB)
-//! - **Response Frist**: **5 Werktage** (BNetzA BK6-18-032)
+//! - **Response Frist**: **5 Werktage** (BNetzA BK6-22-024)
 //! - **Saturdays, Sundays and public holidays are not Werktage.**
 //! - MSB state machine:
 //!   `New → AnforderungReceived → ValidationPassed → Uebermittelt` (positive)

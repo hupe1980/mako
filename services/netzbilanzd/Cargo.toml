@@ -43,3 +43,5 @@ rmcp            = { workspace = true }
 tokio-util      = { workspace = true }
 
 [dev-dependencies]
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }

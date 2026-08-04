@@ -629,24 +629,24 @@ mod tests {
     }
 
     #[test]
-    fn render_reqote_35002_is_mig_conformant() {
+    fn render_reqote_35003_is_mig_conformant() {
         let msg = fake_msg(
             "REQOTE",
             "9900357000004",
             serde_json::json!({
-                "pid": 35002_u32,
+                "pid": 35003_u32,
                 "sender": "9900555000005",
                 "receiver": "9900357000004",
                 "location": "51238696781",
             }),
         );
         let wire =
-            render_to_wire_bytes(&msg, &test_registry("9900555000005")).expect("35002 renders");
+            render_to_wire_bytes(&msg, &test_registry("9900555000005")).expect("35003 renders");
         let wire = String::from_utf8(wire.bytes).expect("utf-8");
         edi_energy::EdiEnergyMessage::validate(&edi_energy::parse(wire.as_bytes()).expect("parse"))
             .expect("validate")
             .into_error_result()
-            .unwrap_or_else(|e| panic!("35002 Werteanfrage must be MIG-conformant: {e}\n{wire}"));
+            .unwrap_or_else(|e| panic!("35003 Werteanfrage must be MIG-conformant: {e}\n{wire}"));
     }
 
     #[test]

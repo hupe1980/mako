@@ -1020,8 +1020,8 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         status: SettlementStatus::Initial,
         korrektur_grund: None,
         period: input.period,
-        nb_mp_id: input.nb_mp_id.clone(),
-        counterparty_mp_id: input.lf_mp_id.clone(),
+        sender_mp_id: input.nb_mp_id.clone(),
+        recipient_mp_id: input.lf_mp_id.clone(),
         positions,
         total_eur,
         warnings,
@@ -1199,8 +1199,8 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
         status: SettlementStatus::Initial,
         korrektur_grund: None,
         period: input.period,
-        nb_mp_id: input.nb_mp_id.clone(),
-        counterparty_mp_id: input.lf_mp_id.clone(),
+        sender_mp_id: input.nb_mp_id.clone(),
+        recipient_mp_id: input.lf_mp_id.clone(),
         positions: vec![p1, p2],
         total_eur,
         warnings,
@@ -1209,7 +1209,12 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
 
 // ── MSB invoice (PID 31009) ───────────────────────────────────────────────────
 
-/// Calculate a MSB-Rechnung (PID 31009): NB → MSB metering service settlement.
+/// Calculate a MSB-Rechnung (PID 31009): **MSB → NB / LF / ESA** metering
+/// service settlement.
+///
+/// The MSB is the invoicer in all seven Anwendungsfälle of the PID overview 4.0;
+/// the recipient's market role varies and is carried on
+/// [`MsbInput::empfaenger`]. 31009 is Strom-only.
 ///
 /// ## Legal references
 ///
@@ -1327,8 +1332,11 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
         status: SettlementStatus::Initial,
         korrektur_grund: None,
         period: input.period,
-        nb_mp_id: input.nb_mp_id.clone(),
-        counterparty_mp_id: input.msb_mp_id.clone(),
+        // PID 31009 is issued *by* the MSB. This used to be filled the other way
+        // round — NB as sender, MSB as recipient — which inverted the invoice:
+        // the party owed money was named as the one billing for it.
+        sender_mp_id: input.msb_mp_id.clone(),
+        recipient_mp_id: input.empfaenger.mp_id.clone(),
         positions,
         total_eur,
         warnings,
@@ -1399,8 +1407,8 @@ pub fn reverse(original: &SettlementResult, grund: KorrekturGrund) -> Settlement
         status: SettlementStatus::Reversal,
         korrektur_grund: Some(grund),
         period: original.period,
-        nb_mp_id: original.nb_mp_id.clone(),
-        counterparty_mp_id: original.counterparty_mp_id.clone(),
+        sender_mp_id: original.sender_mp_id.clone(),
+        recipient_mp_id: original.recipient_mp_id.clone(),
         positions: reversed_positions,
         total_eur: -original.total_eur,
         warnings,
@@ -1573,8 +1581,8 @@ pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingEr
         status: SettlementStatus::Initial,
         korrektur_grund: None,
         period: input.period,
-        nb_mp_id: input.nb_mp_id.clone(),
-        counterparty_mp_id: input.lf_mp_id.clone(),
+        sender_mp_id: input.nb_mp_id.clone(),
+        recipient_mp_id: input.lf_mp_id.clone(),
         positions,
         total_eur,
         warnings,
@@ -1607,7 +1615,8 @@ fn modul1(pauschale_eur_pro_jahr: Decimal) -> ArbeitspreisModell {
 mod tests {
     use super::*;
     use crate::types::{
-        AwhPositionInput, GasAwhInput, InvoiceDocument, SettlementPeriod, validate_msb_input,
+        AwhPositionInput, GasAwhInput, InvoiceDocument, MsbEmpfaengerRolle, MsbRechnungsempfaenger,
+        SettlementPeriod, validate_msb_input,
     };
     use crate::types::{
         GemeindeGroesse, Grundpreis, Konzessionsabgabe, Leistungspreis, MengePreis,
@@ -1624,7 +1633,7 @@ mod tests {
         NneInput {
             blindarbeit: None,
             malo_id: "51238696780".into(),
-            nb_mp_id: "9900357000004".into(),
+            nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
             arbeitspreis: ArbeitspreisModell::Einheitlich(MengePreis {
@@ -1651,7 +1660,10 @@ mod tests {
     fn base_msb() -> MsbInput {
         MsbInput {
             malo_id: "51238696780".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
+            empfaenger: MsbRechnungsempfaenger {
+                rolle: MsbEmpfaengerRolle::Netzbetreiber,
+                mp_id: "9900357000004".to_owned(),
+            },
             msb_mp_id: "4012345000023".to_owned(),
             period: SettlementPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
             grundgebuehr_eur_per_month: d("3.00"),
@@ -1665,7 +1677,7 @@ mod tests {
     fn base_mmm() -> MmmInput {
         MmmInput {
             malo_id: "51238696780".into(),
-            nb_mp_id: "9900357000004".into(),
+            nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
             sparte: Sparte::Strom,
@@ -1983,7 +1995,7 @@ mod tests {
     fn over_consumption_is_a_mindermenge_charge() {
         let input = MmmInput {
             malo_id: "51238696780".into(),
-            nb_mp_id: "9900357000004".into(),
+            nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
             sparte: Sparte::Strom,
@@ -2010,7 +2022,7 @@ mod tests {
     fn under_consumption_is_a_mehrmenge_credit() {
         let input = MmmInput {
             malo_id: "51238696780".into(),
-            nb_mp_id: "9900357000004".into(),
+            nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
             sparte: Sparte::Strom,
@@ -2050,7 +2062,10 @@ mod tests {
     fn msb_grundgebuehr_only() {
         let input = MsbInput {
             malo_id: "51238696780".into(),
-            nb_mp_id: "9900357000004".into(),
+            empfaenger: MsbRechnungsempfaenger {
+                rolle: MsbEmpfaengerRolle::Netzbetreiber,
+                mp_id: "9900357000004".to_owned(),
+            },
             msb_mp_id: "9900123400001".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
             grundgebuehr_eur_per_month: d("12.50"),
@@ -2069,7 +2084,10 @@ mod tests {
     fn msb_with_messdienstleistung() {
         let input = MsbInput {
             malo_id: "51238696780".into(),
-            nb_mp_id: "9900357000004".into(),
+            empfaenger: MsbRechnungsempfaenger {
+                rolle: MsbEmpfaengerRolle::Netzbetreiber,
+                mp_id: "9900357000004".to_owned(),
+            },
             msb_mp_id: "9900123400001".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 03 - 31)).unwrap(),
             grundgebuehr_eur_per_month: d("12.50"),
@@ -2229,7 +2247,10 @@ mod tests {
     fn msb_has_msbg_reference() {
         let input = MsbInput {
             malo_id: "51238696780".into(),
-            nb_mp_id: "9900357000004".into(),
+            empfaenger: MsbRechnungsempfaenger {
+                rolle: MsbEmpfaengerRolle::Netzbetreiber,
+                mp_id: "9900357000004".to_owned(),
+            },
             msb_mp_id: "9900123400001".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
             grundgebuehr_eur_per_month: d("12.50"),
@@ -2449,7 +2470,7 @@ mod tests {
         assert_eq!(SettlementType::GasAwhSperrung.default_pid(), 31011);
     }
 
-    // ── sparte, counterparty_mp_id, reversal, Gas path, KA group, validation ──
+    // ── sparte, recipient_mp_id, reversal, Gas path, KA group, validation ──
 
     #[test]
     fn nne_gas_sparte_sets_gas_type_and_ref() {
@@ -2469,26 +2490,54 @@ mod tests {
     }
 
     #[test]
-    fn counterparty_mp_id_is_populated_for_nne() {
+    fn recipient_mp_id_is_populated_for_nne() {
         let r = settle_nne(&base_nne()).unwrap();
-        assert_eq!(r.counterparty_mp_id, "9900012345678");
+        assert_eq!(r.recipient_mp_id, "9900012345678");
     }
 
+    /// PID 31009 is issued **by** the MSB, to the NB / LF / ESA.
+    ///
+    /// This used to assert the opposite — the MSB as `counterparty` (recipient)
+    /// and the NB as sender — which inverted the invoice: the party owed money
+    /// was named as the one billing for it. Verified against the
+    /// *Anwendungsübersicht der Prüfidentifikatoren* 4.0, which lists seven
+    /// Anwendungsfälle for 31009, all `MSB -> {NB, LF, ESA}`.
     #[test]
-    fn counterparty_mp_id_is_msb_for_msb_invoice() {
-        let input = MsbInput {
-            malo_id: "51238696780".into(),
-            nb_mp_id: "9900357000004".into(),
-            msb_mp_id: "9900999000001".into(),
-            period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
-            grundgebuehr_eur_per_month: d("15.00"),
-            billing_months: 1,
-            messdienstleistung_eur: None,
-            messstellen_kategorie: None,
-            entgeltschuldner: None,
-        };
-        let r = settle_msb(&input).unwrap();
-        assert_eq!(r.counterparty_mp_id, "9900999000001");
+    fn msb_invoice_is_sent_by_the_msb_to_each_of_the_three_recipient_roles() {
+        for (rolle, empfaenger_id) in [
+            (MsbEmpfaengerRolle::Netzbetreiber, "9900357000004"),
+            (MsbEmpfaengerRolle::Lieferant, "9900111000002"),
+            (MsbEmpfaengerRolle::Energieserviceanbieter, "9905550000005"),
+        ] {
+            let input = MsbInput {
+                malo_id: "51238696780".into(),
+                msb_mp_id: "9900999000001".into(),
+                empfaenger: MsbRechnungsempfaenger {
+                    rolle,
+                    mp_id: empfaenger_id.to_owned(),
+                },
+                period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31))
+                    .unwrap(),
+                grundgebuehr_eur_per_month: d("15.00"),
+                billing_months: 1,
+                messdienstleistung_eur: None,
+                messstellen_kategorie: None,
+                entgeltschuldner: None,
+            };
+            let r = settle_msb(&input).unwrap();
+            assert_eq!(
+                r.sender_mp_id,
+                "9900999000001",
+                "the MSB issues the invoice ({})",
+                rolle.code()
+            );
+            assert_eq!(
+                r.recipient_mp_id,
+                empfaenger_id,
+                "the {} is billed",
+                rolle.code()
+            );
+        }
     }
 
     #[test]
@@ -2504,10 +2553,10 @@ mod tests {
     }
 
     #[test]
-    fn reversal_preserves_counterparty_mp_id() {
+    fn reversal_preserves_recipient_mp_id() {
         let original = settle_nne(&base_nne()).unwrap();
         let storno = reverse(&original, KorrekturGrund::Messwertkorrektur);
-        assert_eq!(storno.counterparty_mp_id, original.counterparty_mp_id);
+        assert_eq!(storno.recipient_mp_id, original.recipient_mp_id);
     }
 
     #[test]
@@ -2671,7 +2720,10 @@ mod tests {
     fn validate_msb_zero_months_is_error() {
         let input = MsbInput {
             malo_id: "51238696780".into(),
-            nb_mp_id: "9900357000004".into(),
+            empfaenger: MsbRechnungsempfaenger {
+                rolle: MsbEmpfaengerRolle::Netzbetreiber,
+                mp_id: "9900357000004".to_owned(),
+            },
             msb_mp_id: "9900123400001".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
             grundgebuehr_eur_per_month: d("12.50"),
@@ -2794,7 +2846,7 @@ mod tests {
     fn gas_awh_single_sperrung_arithmetic() {
         let input = GasAwhInput {
             malo_id: "51238696780".into(),
-            nb_mp_id: "9900357000004".into(),
+            nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
             tariff_sheet_id: None,
@@ -2818,7 +2870,7 @@ mod tests {
     fn gas_awh_multiple_actions_total_correct() {
         let input = GasAwhInput {
             malo_id: "51238696780".into(),
-            nb_mp_id: "9900357000004".into(),
+            nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
             tariff_sheet_id: None,
@@ -2848,7 +2900,7 @@ mod tests {
     fn gas_awh_empty_positions_rejected() {
         let input = GasAwhInput {
             malo_id: "51238696780".into(),
-            nb_mp_id: "9900357000004".into(),
+            nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
             tariff_sheet_id: None,
@@ -2933,7 +2985,7 @@ mod tests {
     fn a_2029_gas_awh_settlement_is_refused_under_agnes() {
         let input = GasAwhInput {
             malo_id: "51238696780".into(),
-            nb_mp_id: "9900357000004".into(),
+            nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2029 - 01 - 01), date!(2029 - 01 - 31)).unwrap(),
             tariff_sheet_id: None,
@@ -3055,7 +3107,7 @@ mod proptests {
             let input = NneInput {
                 blindarbeit: None,
                 malo_id: "51238696780".into(),
-                nb_mp_id: "9900357000004".into(),
+                nb_mp_id: "9900357000004".to_owned(),
                 lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 12 - 31)).unwrap(),
             arbeitspreis: ArbeitspreisModell::Einheitlich(MengePreis {
@@ -3097,7 +3149,7 @@ mod proptests {
             let base = NneInput {
                 blindarbeit: None,
                 malo_id: "51238696780".into(),
-                nb_mp_id: "9900357000004".into(),
+                nb_mp_id: "9900357000004".to_owned(),
                 lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 12 - 31)).unwrap(),
             arbeitspreis: ArbeitspreisModell::Einheitlich(MengePreis {
@@ -3163,7 +3215,7 @@ mod modul3_tests {
         NneInput {
             blindarbeit: None,
             malo_id: "51238696780".into(),
-            nb_mp_id: "9900357000004".into(),
+            nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2026 - 01 - 15), date!(2026 - 01 - 16)).unwrap(),
             arbeitspreis: ArbeitspreisModell::Einheitlich(MengePreis {

@@ -13,11 +13,11 @@
 //! | Kündigung MSB (MSBN → **MSBA**) | 55039 → 55040/55041 | UTILMD | `geraetewechsel` | ✅ Implemented |
 //! | Ende MSB / Abmeldung (**MSBA → NB**) | 55051 → 55052/55053 | UTILMD | `geraetewechsel` | ✅ Implemented |
 //! | Verpflichtungsanfrage (NB → **gMSB**) | 55168 → 55169/55170 | UTILMD | `geraetewechsel` | ✅ Implemented |
-//! | Bestellung Geräteübernahmeangebot | 17001–17011 | ORDERS | `geraeteubernahme` | ✅ Implemented |
+//! | Geräteübernahme (Bestellung/Weiterverpflichtung/Gerätewechselabsicht) | 17001, 17002, 17009 | ORDERS | `geraeteubernahme` | ✅ Implemented |
 //! | Stammdaten Anfrage / Übermittlung | 17132 (req), 17102–17133 (resp) | ORDERS | `stammdaten` | ✅ Implemented |
 //! | Preisanfrage (REQOTE/QUOTES) | 35001–35005 (REQOTE in), 15001–15005 (QUOTES in) | REQOTE, QUOTES | `preisanfrage` | ✅ Implemented |
 //! | Preisliste (PRICAT) | 27001–27003 | PRICAT | `preisliste` | ✅ Implemented |
-//! | ESA Wertebestellung (Anfrage/Angebot/Bestellung/Storno) | 35002, 15003, 17007/17008, 39002, 19011–19014 | REQOTE/QUOTES/ORDERS/ORDCHG/ORDRSP | `wertebestellung`, `esa_wertebestellung` | ✅ Implemented |
+//! | ESA Wertebestellung (Anfrage/Angebot/Bestellung/Storno) | 35003, 15003, 17007/17008, 39002, 19011–19014 | REQOTE/QUOTES/ORDERS/ORDCHG/ORDRSP | `wertebestellung`, `esa_wertebestellung` | ✅ Implemented |
 //! | MSB-Rechnung (INVOIC) | 31009 | INVOIC | `rechnung` | ✅ Implemented (send + receive; auto-REMADV pending in deadline_dispatch) |
 //!
 //! ## Architecture
@@ -110,11 +110,10 @@ pub mod technik_aenderung;
 pub mod wertebestellung;
 
 pub use geraeteubernahme::{
-    ANFRAGE_PIDS, BESTELLUNG_PIDS, GeraeteubernahmeCommand, GeraeteubernahmeData,
-    GeraeteubernahmeEvent, GeraeteubernahmeProjection, GeraeteubernahmeRecord,
-    GeraeteubernahmeRecordData, GeraeteubernahmeState,
-    ORDRSP_DEADLINE_LABEL as GERAETEUBERNAHME_ORDRSP_DEADLINE_LABEL,
-    STORNIERUNG_PIDS as GERAETEUBERNAHME_STORNIERUNG_PIDS,
+    ANFRAGE_PIDS, ANKUENDIGUNG_PIDS as GERAETEUBERNAHME_ANKUENDIGUNG_PIDS, BESTELLUNG_PIDS,
+    GeraeteubernahmeCommand, GeraeteubernahmeData, GeraeteubernahmeEvent,
+    GeraeteubernahmeProjection, GeraeteubernahmeRecord, GeraeteubernahmeRecordData,
+    GeraeteubernahmeState, ORDRSP_DEADLINE_LABEL as GERAETEUBERNAHME_ORDRSP_DEADLINE_LABEL,
     WORKFLOW_NAME as GERAETEUBERNAHME_WORKFLOW_NAME, WimGeraeteubernahmeWorkflow,
 };
 pub use geraetewechsel::{
@@ -173,7 +172,7 @@ pub use technik_aenderung::{
 /// | 55042 | `wim-device-change` | Anmeldung MSB (MSBN → NB) | any |
 /// | 55051 | `wim-device-change` | Ende MSB / Abmeldung (MSBA → NB) | any |
 /// | 55168 | `wim-device-change` | Verpflichtungsanfrage / Aufforderung (NB → gMSB) | any |
-/// | 17001–17011 | `wim-geraeteubernahme` | Geräteübernahme ORDERS (nMSB → NB) | any |
+/// | 17001, 17002, 17009 | `wim-geraeteubernahme` | Geräteübernahme ORDERS | any |
 /// | 17132 | `wim-stammdaten` | Stammdaten Anforderung Strom (NB → MSB), MSB role | any |
 /// | 17102–17133 | `wim-stammdaten` | Stammdatenübermittlung responses (MSB → NB), NB role | **Nb only** |
 /// | 39002 | `wim-wertebestellung` | ESA Stornierung der Bestellung (ORDCHG) | **Msb only** |
@@ -265,7 +264,7 @@ impl mako_engine::builder::EngineModule for WimModule {
         for &pid in geraeteubernahme::ANFRAGE_PIDS
             .iter()
             .chain(geraeteubernahme::BESTELLUNG_PIDS)
-            .chain(geraeteubernahme::STORNIERUNG_PIDS)
+            .chain(geraeteubernahme::ANKUENDIGUNG_PIDS)
         {
             router.register(pid, "wim-geraeteubernahme");
             router.register_with_sparte(
@@ -393,6 +392,13 @@ impl mako_engine::builder::EngineModule for WimModule {
         // carries no LOC — it is correlated by the Bestellung's Belegnummer
         // echoed in RFF+ON (see the makod ingest dispatcher).
         if roles.contains(mako_engine::marktrolle::Marktrolle::Msb) {
+            // REQOTE 35003 opens the handshake. ESA-specific (REQOTE AHB 1.1
+            // §4.3), so it routes straight here — it is not part of the
+            // Preisanfrage REQOTE set.
+            router.register(
+                wertebestellung::ANFRAGE_PID.as_u32(),
+                wertebestellung::WORKFLOW_NAME,
+            );
             router.register(
                 wertebestellung::BESTELLUNG_PID.as_u32(),
                 wertebestellung::WORKFLOW_NAME,
@@ -408,7 +414,7 @@ impl mako_engine::builder::EngineModule for WimModule {
         }
 
         // ESA side: this deployment *is* the ESA and originates the order
-        // handshake (REQOTE 35002 / ORDERS 17007 / ORDCHG 39002 / ORDERS 17008).
+        // handshake (REQOTE 35003 / ORDERS 17007 / ORDCHG 39002 / ORDERS 17008).
         // The MSB's answers (QUOTES 15003, ORDRSP 19011-19014) are inbound here
         // and resume the esa-wertebestellung process. Registered only for a
         // deployment that *is* an ESA — an ESA has no Zuordnung to a
@@ -584,8 +590,8 @@ impl mako_engine::builder::EngineModule for WimModule {
                 geraeteubernahme::BESTELLUNG_PIDS,
             ),
             (
-                "geraeteubernahme::STORNIERUNG_PIDS",
-                geraeteubernahme::STORNIERUNG_PIDS,
+                "geraeteubernahme::ANKUENDIGUNG_PIDS",
+                geraeteubernahme::ANKUENDIGUNG_PIDS,
             ),
             ("geraetewechsel::IFTSTA_PIDS", geraetewechsel::IFTSTA_PIDS),
             ("invoic::WIM_INVOIC_PIDS", invoic::WIM_INVOIC_PIDS),
