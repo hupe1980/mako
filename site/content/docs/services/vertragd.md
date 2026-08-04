@@ -14,6 +14,24 @@ and serves as the single authorization gateway between OIDC identities and MaLo 
 
 Port: **`:9780`** · PostgreSQL · OIDC/JWT + API-key auth
 
+## The deployment's tenant is enforced on the token, not assumed
+
+`vertragd` pins one tenant in configuration, which makes every query
+tenant-scoped by construction — but a configured tenant does not by itself
+*reject* a token carrying a different one. A validly signed JWT issued for
+another operator in the same OIDC realm is otherwise indistinguishable from a
+local one, and would be served this tenant's customer data.
+
+The router layers `ExpectedTenant`, and the `Claims` extractor rejects any token
+whose `mako_tenant` differs. Putting the check in extraction rather than in each
+handler matters: a route added later cannot skip it without also dropping
+authentication, so the failure mode is loud rather than silent.
+
+The `401` body carries a generic detail on purpose. A caller reaching that
+branch has already proved realm membership, so naming the expected tenant would
+hand a foreign operator this deployment's identifier; the full comparison is
+logged at `WARN` instead.
+
 ---
 
 ## Contract creation from the BO4E Angebot

@@ -14,7 +14,7 @@ Key responsibilities:
 
 - Store MSCONS meter readings (SLP and RLM) via the webhook from `marktd`.
 - Accept **iMSys / SMGW direct push** (15-min intervals in JSON, bypassing EDIFACT) for §41a real-time billing.
-- Run the **Hampel-filter quality scorer** and **V01–V10 validation engine** on all inbound interval data. Emit `de.messwert.reading.quality.warning` CloudEvents for grade C/F data.
+- Run the **Hampel-filter quality scorer** and **V01–V10 validation engine** on all inbound interval data. Emit `de.messwert.reading.quality.warning` CloudEvents when either fires, from every ingest door.
 - Schedule and track **reading orders** (Ablesesteuerung) for the market roles LF, MSB, NB and ESA (an ESA may order value delivery under §60 Abs. 1 MsbG). Auto-creates `INSRPT_STOERUNG` orders when a WiM INSRPT PID 23001 Störungsmeldung arrives.
 - Compute and serve **virtual meter time series** (Sum, Residual, PvSelfConsumption, GgvConstantAllocation, GgvProportionalAllocation per §42b EnWG Solarpaket I GGV community solar) on demand.
 - Generate **§ 60 Abs. 2 MsbG annual forecasts** (Jahresprognose — daily-average projection with automatic prior-year **seasonal correction** when the same window one year earlier has data) and **prior-period substitute values** for gap intervals.
@@ -62,12 +62,13 @@ gdpr_deletions"]
     erp["ERP / netzbilanzd<br/>mabis-syncd"]
     duckdb["DuckDB / Spark<br/>Trino / PyIceberg"]
     catalog["/api/v1/iceberg<br/>meterstore CatalogFacade<br/>(read-only · Cedar read-archive-olap)"]
-    qa["quality engine<br/>score_intervals_f64<br/>AVX2/NEON auto-vectorise"]
+    qa["quality engine<br/>Hampel score_intervals_f64 (AVX2/NEON)<br/>+ V01–V10 validate_intervals"]
 
     marktd -->|"de.mako.process.initiated (23001 INSRPT)<br/>de.mako.edifact.inbound (MSCONS)<br/>HMAC POST /webhook"| edmd
     smgw -->|"POST /api/v1/meter-reads/rlm/{malo_id}<br/>POST /api/v1/meter-reads/gas/{malo_id}"| edmd
     edmd --> qa
-    qa -->|"grade A/B/C/F<br/>de.messwert.reading.quality.warning"| store
+    qa -->|"annotated reads (ValidatedReads)"| store
+    qa -->|"grade C/F <b>or</b> any V01–V10 finding<br/>de.messwert.reading.quality.warning"| erp
     edmd -->|"store_reads (version-resolved, tier-split)"| store
     edmd --> edmdpg
     edmd -->|"mounts"| catalog
@@ -320,12 +321,27 @@ corrects — and `meterstore`'s one-operator exclusion would then reject the
 correction as a conflicting claim on the interval instead of accepting the
 supersede.
 
-### Every ingest family validates before it stores
+### Unvalidated reads are unrepresentable, not merely discouraged
 
-The IoT, RLM/gas direct-push and bulk-import paths all route through
-`validate_and_annotate`, which runs **V01–V10 before storing** and attaches each
-issue to the rows it names. One code path means a reading lands with the same
-quality record whichever door it came in by.
+The repository's `store_reads` does not accept a slice of readings. It accepts a
+`ValidatedReads`, whose only constructor is `ValidatedReads::validate` and whose
+field is private to `domain::validation`. Obtaining the type *is* running
+**V01–V10**; there is no path to the store that skips it.
+
+That is a type rule rather than a convention because the failure is silent. A
+new ingest path that forgot to validate would write rows indistinguishable from
+validated ones, and V03 (negative energy), V04 (impossible spike) and V09
+(non-billable quality) would simply never fire for that source — while
+§ 147 AO / GoBD requires billed data to have been validated. `validate` takes
+the batch **by value**, so a caller cannot retain the raw `Vec` and persist it
+by another route.
+
+Every family is behind it: IoT push, RLM/gas direct push, bulk import, the Kafka
+consumer, and edmd's own § 60 Abs. 2 MsbG Ersatzwerte — substitutes are edmd's
+output but are billed like any other reading, so a generator emitting a wrong
+interval length fails at ingest rather than at settlement. Issues attach to the
+rows they name, so a reading lands with the same quality record whichever door
+it came in by.
 
 Validation annotates and never rejects. Whether an interval is billable is a
 separate decision from whether it is stored — discarding a suspect reading would
@@ -399,6 +415,17 @@ data untouched and returns those intervals in `skipped_measured`.
 
 Four methods are honoured: `PriorPeriodAverage`, `LinearInterpolation`,
 `ZeroFill` and `LastValueCarryForward`. Anything else is `422`.
+
+`PriorPeriodAverage` resolves to **the same quarter-hour slot one week earlier**,
+not an average across the reference window — a gap at 08:15 on a Wednesday is
+filled from 08:15 the previous Wednesday, so the daily and weekly shape of the
+load profile survives. The reference window is fetched from the store and passed
+in; a requested method with nothing to work from degrades (prior-period →
+carry-forward → zero) and `methods_applied` names what actually ran rather than
+what was asked for. That distinction is worth stating because a degraded
+substitute looks identical to a correct one in the response body, so the
+integration suite asserts the *values* against a reference week whose every slot
+carries a different number.
 
 Each interval records the method that actually produced it in
 `intervals[].method`, which may differ from the request: a prior-period average
@@ -515,6 +542,20 @@ V07 fires when a series covers a **whole local fall-back day** but carries less
 than 25 hours. Anchoring on whole-day coverage is what makes it immune to
 truncated query windows: a series that merely *starts* inside the repeated hour
 is short, not corrupt.
+
+Quarter-hour metering therefore carries a different interval count on the two
+transition days, and both are pinned by tests against edmd's own ingest wrapper
+rather than only the upstream rule:
+
+| Local day (Europe/Berlin) | Hours | ¼-h intervals | UTC span |
+|---|---:|---:|---|
+| 2026-03-29 (CET→CEST) | 23 | **92** | `2026-03-28T23:00Z` → `2026-03-29T22:00Z` |
+| ordinary day | 24 | 96 | — |
+| 2026-10-25 (CEST→CET) | 25 | **100** | `2026-10-24T22:00Z` → `2026-10-25T23:00Z` |
+
+The failure mode is silent: the same 2026-10-25 delivered as 96 intervals still
+parses and passes every other rule, and bills an hour short. That case is the
+one V07 exists for.
 
 ## Reading-order idempotency
 
@@ -938,7 +979,29 @@ because outlier detection doesn't require accounting precision.
 | **C** | Significant issues | Manual review recommended |
 | **F** | Unusable | Block billing run |
 
-Any validation finding (grade C or F) emits a `de.messwert.reading.quality.warning` CloudEvent to the ERP webhook. In `agentd` that event triggers the `msb-history-agent` (LanceDB RAG indexing), the `meter-data-agent` (grade-F investigation), and the `replacement-value-agent` (§ 60 Abs. 2 MsbG Ersatzwertbildung via edmd `trigger_substitution`).
+`de.messwert.reading.quality.warning` is raised on the **union of both quality
+signals** — a Hampel grade of C or F, *or* any V01–V10 finding — and by **every**
+ingest door: MSCONS, RLM/gas direct push, IoT push, bulk import and the Kafka
+consumer. Both halves matter. A `FAULTY` interval (V09) can carry a perfectly
+ordinary statistical profile, so grading alone misses it; and a head-end feed
+over Kafka is the least supervised door there is, so a finding that only reached
+the log there would reach nobody.
+
+The event is the trigger, not a notification: in `agentd` it starts the
+`msb-history-agent` (LanceDB RAG indexing), the `meter-data-agent` (grade-F
+investigation) and the `replacement-value-agent` (§ 60 Abs. 2 MsbG
+Ersatzwertbildung via edmd `trigger_substitution`). A finding nobody is told
+about sits in the store until a settlement run trips over it — by then the
+window in which the meter could have been re-read has closed.
+
+The same predicate decides the HTTP status, so `202` and the event cannot
+disagree: a door that answers `202 Accepted` has raised the warning, and one
+that answers `201 Created` had nothing to raise. Where no ERP webhook is
+configured the finding is logged at `WARN` rather than dropped.
+
+`ingest_door` on the payload names which door the batch came through
+(`mscons` · `rlm-direct-push` · `iot-push` · `bulk-import` · `kafka-ingest`), so
+a recipient can tell an operator upload from a device feed without calling back.
 
 ### Retroactive rescoring
 
@@ -986,7 +1049,7 @@ deadline_weeks = 8
 When `edmd` receives `de.mako.process.initiated` for PID 23001 (INSRPT Störungsmeldung), it **automatically** creates an `INSRPT_STOERUNG` reading order:
 
 - `geplant_am` = tomorrow
-- `ausfuehrt_bis` = + 7 calendar days (covers 5 Werktage WiM Strom window)
+- `ausfuehrt_bis` = + 7 calendar days (an INSRPT scheduling horizon, not a WiM Antwortfrist)
 - `auftraggeber_rolle` = `MSB`
 - Idempotent on `insrpt_process_id`
 

@@ -66,4 +66,5 @@
 pub mod config;
 pub mod pg;
 pub mod server;
+pub mod submission;
 pub mod sync_engine;

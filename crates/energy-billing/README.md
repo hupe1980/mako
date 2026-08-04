@@ -24,15 +24,26 @@ field.
 
 ## §14a — all three modules
 
-| Modul | What is billed | Where |
-|---|---|---|
-| 1 | flat NNE reduction (per-kWh and per-kW credits) | `ControllableLoadProvider` |
-| 2 | zeitvariables Netzentgelt — **three** Tarifstufen HT/ST/NT (BK6-22-300 Anlage 2 §2) | `sect14a_modul2_nne_*` + `Sect14aModul2Verbrauch` |
-| 3 | dispatch compensation | `ControllableLoadProvider` |
+BK6-22-300 defines exactly three, and their numbering matters — it is printed on
+the invoice and shared with the NB-side `grid-billing` engine:
 
-The Modul 2 bands *replace* the flat NNE Arbeitspreis; setting both raises the
-Error-severity `MODUL2_AND_FLAT_NNE` and the run is refused — billing both
-charges the device's network usage twice. The bands come from the
+| Modul | What it is | Fields |
+|---|---|---|
+| **1** | *pauschale Reduzierung des Netzentgelts* — a flat reduction needing no extra metering, hence the default where no choice is made | `sect14a_modul1_pauschale_eur_per_kw_year` |
+| **2** | *prozentuale Reduzierung des Arbeitspreises* — attaches to the device's **separately metered** energy | `sect14a_modul2_nne_reduktion_ct_per_kwh` |
+| **3** | *zeitvariable Netzentgelte* (from 01.04.2025) — **three** Tarifstufen HT/ST/NT, requires an iMSys | `sect14a_modul3_nne_*` + `Sect14aModul3Verbrauch` |
+
+**Modul 2 and Modul 3 are mutually exclusive.** Both re-price the Arbeitspreis, so
+holding both reduces the same network usage twice; configuring both raises the
+Error-severity `MODUL2_AND_MODUL3` and the run is refused. Modul 1 composes with
+either.
+
+The Modul 3 bands *replace* the flat NNE Arbeitspreis; setting both raises
+`MODUL3_AND_FLAT_NNE` for the same reason.
+
+A **Steuerungsentschädigung** (`sect14a_steuerungsentschaedigung_*`) is compensation
+for a dispatch that actually happened. It is deliberately not numbered: all three
+BK6-22-300 modules are rate reductions, none of them a payment for a Steuerungseingriff. The bands come from the
 Netzbetreiber's time windows, which is why they are not derived from the
 supplier's own HT/NT split.
 
@@ -223,15 +234,15 @@ Each category has its own struct with only the relevant fields — no silent fie
 ```rust
 // Deserializes via #[serde(tag = "category")] from flat tarifbd JSONB:
 // {"category":"STROM","arbeitspreis_ct_per_kwh":28.5} → Product::Strom(ElectricityProduct{...})
-// {"category":"WAERMEPUMPE","sect14a_modul1_nne_reduktion_ct_per_kwh":1.5,...} → Product::Waermepumpe(...)
+// {"category":"WAERMEPUMPE","sect14a_modul2_nne_reduktion_ct_per_kwh":1.5,...} → Product::Waermepumpe(...)
 // {"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":7.5,...} → Product::Gas(GasProduct{...})
 ```
 
 | `Product` variant | Category string | Provider | Key features |
 |---|---|---|---|
 | `Strom(ElectricityProduct)` | `STROM` | `ElectricityProvider` or `DynamicElectricityProvider` | SLP/RLM; HT/NT; block tariffs; §41a EPEX |
-| `Waermepumpe(ControllableLoadProduct)` | `WAERMEPUMPE` | `ControllableLoadProvider` | §14a Modul 1/3 mandatory |
-| `Wallbox(ControllableLoadProduct)` | `WALLBOX` | `ControllableLoadProvider` | §14a Modul 1/3 mandatory |
+| `Waermepumpe(ControllableLoadProduct)` | `WAERMEPUMPE` | `ControllableLoadProvider` | §14a Modul 1/2/3 |
+| `Wallbox(ControllableLoadProduct)` | `WALLBOX` | `ControllableLoadProvider` | §14a Modul 1/2/3 |
 | `Gas(GasProduct)` | `GAS` | `GasProvider` | Brennwertkorrektur; Energiesteuer; BEHG CO₂ |
 | `Waerme(HeatProduct)` | `WAERME` | `HeatProvider` | Fernwärme; standard-rated (19 %); AVBFernwärmeV §24 Preisgleitklausel |
 | `Wasser(WaterProduct)` | `WASSER` | `WaterProvider` | Trinkwasser 7 % USt; gesplittete Abwassergebühr (Schmutzwasser − Absetzungen, Niederschlagswasser m²); public-law fee outside USt |
@@ -463,10 +474,10 @@ pub struct MeterInput {
 
 | Field | Law | Effect |
 |---|---|---|
-| `sect14a_modul1_nne_reduktion_ct_per_kwh` | §14a EnWG | Per-kWh NNE credit |
-| `steuerungsrabatt_modul1_eur_per_kw_year` | §14a EnWG | Capacity NNE reduction |
-| `sect14a_modul3_entschaedigung_ct_per_kwh` | §14a EnWG | Per-kWh Entschädigung |
-| `steuerungsrabatt_modul3_eur_per_kw_year` | §14a EnWG | Capacity Entschädigung |
+| `sect14a_modul2_nne_reduktion_ct_per_kwh` | §14a EnWG Modul 2 | Per-kWh Arbeitspreis reduction |
+| `sect14a_modul1_pauschale_eur_per_kw_year` | §14a EnWG Modul 1 | Pauschale Reduzierung (EUR/kW/year) |
+| `sect14a_steuerungsentschaedigung_ct_per_kwh` | §14a EnWG | Per-kWh Steuerungsentschädigung (not a module) |
+| `sect14a_steuerungsentschaedigung_eur_per_kw_year` | §14a EnWG | Capacity Steuerungsentschädigung (not a module) |
 
 ### `GasProduct`
 
@@ -591,7 +602,7 @@ if invoice.has_errors() {
 | §25 Nr. 4 MessEV | Brennwertkorrektur m³ → kWh_Hs |
 | §12 Abs. 2 Nr. 1 UStG | Reduced 7% MwSt for Anlage-2 goods (Trinkwasser) — NOT district heating |
 | §19 UStG | 0% USt on the feed-in Gutschrift (Kleinunternehmer election) |
-| §14a EnWG | Controllable loads Modul 1/3 (BK6-24-174) via `ControllableLoadProvider` |
+| §14a EnWG | Controllable loads, Modul 1/2/3 (BNetzA BK6-22-300) via `ControllableLoadProvider` |
 | § 60 Abs. 2 MsbG | Estimated reading notice on invoice |
 | §40 / §40b EnWG | Mandatory ct/kWh; structured price-comparison data in JSON |
 | §40 EnWG | Invoice content (Zählerstände §40 Abs. 2 Nr. 6, Netzbetreiber, Energiemix §42) |

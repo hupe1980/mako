@@ -14,7 +14,8 @@ through Förderdauer expiry.
 | **Settlement models** | 9: VERGUETUNG, MIETERSTROM (§21 Abs. 3), DIREKTVERMARKTUNG (§20 Gleitende Marktprämie), AUSSCHREIBUNG, POST_EEG_SPOT, EIGENVERBRAUCH, KWKG_ZUSCHLAG (§7 KWKG 2023), FLEXIBILITAET (§50), GGV (§42b Solarpaket I) |
 | **Rate table** | Built-in `eeg_verguetungssaetze` — Solar 2000–2024, Wind onshore/offshore, Biomasse/Biogas, Klärgas/Grubengas/Deponiegas, Wasserkraft, KWKG 2023, Geothermie/Gezeiten |
 | **Repowering** | `POST /api/v1/anlagen/{tr_id}/repowering` — resets 20-year Förderdauer (§22 EEG 2023) |
-| **Zusammenlegung** | `parent_tr_id` links merged plants (§24 EEG 2023) |
+| **Zusammenlegung** | `parent_tr_id` links merged plants. The endpoint evaluates **§24 Abs. 1 in full** — the four cumulative conditions of Satz 1 plus the Sätze 2–5 carve-outs — and refuses a merge the statute does not support with `422`, naming the rule that decided. Ownership is not a criterion ("unabhängig von den Eigentumsverhältnissen") |
+| **§§53b–54 AW cuts** | Only the triggering facts are stored (`eeg_regionalnachweise`, `eeg_stromsteuerbefreiungen`, `eeg_sect54_solar_defekte`); every amount but §53c's is statutory. All three cut the anzulegender Wert **before** the settlement formula, because the Marktprämie floors at zero |
 | **KWKG Förderdauer** | `kwk_foerderdauer_h` (>2 MW, 30,000 h) or `kwk_foerderdauer_years` (≤2 MW) |
 | **Förderdauer alerts** | Background worker emits `de.eeg.anlage.foerderung-auslaufend` 180 days before expiry |
 | **§51 auto-derivation** | `PUT /api/v1/epex-spot` loads EPEX day-ahead prices; every settle without explicit values fetches the plant's ¼h feed-in from edmd (`GET /feed-in`), overlays the spot store, and derives the negative-price quarter-hours via `eeg-billing::negativpreis` (version-aware run logic). A **§60 Abs. 2 MsbG gate** skips the reduction when edmd coverage <95 % or any interval is non-billable |
@@ -42,7 +43,7 @@ by unit tests without a database:
 cargo test -p einsd --test settlement_tests
 ```
 
-## MCP server — `/mcp` (18 tools, 6 prompts)
+## MCP server — `/mcp` (19 tools, 6 prompts)
 
 `einsd` exposes a Streamable HTTP MCP server at `/mcp`. All tools are read-only
 unless they explicitly trigger a side effect (e.g. `trigger_settle`).

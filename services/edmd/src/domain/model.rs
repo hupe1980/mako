@@ -419,12 +419,19 @@ pub struct MeterRead {
     #[serde(default)]
     pub sender_mp_id: Option<String>,
 
-    /// MaBiS data-delivery version (AllocationVersion).
+    /// Delivery label carried with the reading — provenance, not control flow.
     ///
-    /// `"INITIAL"` = vorläufige Summenzeitreihe (Erstaufschlag window);
-    /// `"FINAL"` = endgültige Summenzeitreihe (Clearing / Bilanzkreisabrechnung);
-    /// `"CORRECTION"` = Nachbearbeitungswert.
-    /// Used by `mabis-syncd` to distinguish preliminary from final Summenzeitreihen.
+    /// Ingest paths write `"INITIAL"`; the correction path writes `"CORRECTION"`;
+    /// the ESA Typ-2 route carries its own labels (`"ESA-…"`). The column is an
+    /// **open** string by design (`store.rs` declares it a nullable attribute
+    /// column, not an enum), so it can record whatever a delivery called itself.
+    ///
+    /// It is deliberately *not* how preliminary is told from final. That
+    /// question is answered by transaction time: `mabis-syncd` asks for the
+    /// readings as they were known at the Erstaufschlag versus at the Clearing
+    /// deadline via `repo.query_as_of` (see `valid_from_tx` below). A label
+    /// would have to be maintained in lockstep with the real correction history
+    /// and would drift; the `recorded_at` ceiling cannot.
     #[serde(default = "default_allocation_version")]
     pub allocation_version: String,
 

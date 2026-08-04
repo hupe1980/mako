@@ -287,12 +287,19 @@ async fn bill_one(
         nb_mp_id: cand.nb_mp_id.clone(),
         period_from: from.to_string(),
         period_to: to.to_string(),
+        // §40b Abs. 1 monthly billing shortens the §40c deadline to three weeks.
+        // The cadence comes from the contract, not from this period's length.
+        monatliche_abrechnung: cand.abrechnungszyklus.eq_ignore_ascii_case("MONATLICH"),
         ..Default::default()
     };
     let tariff = handlers::resolve_tariff(&req, tarifbd, &cand.malo_id)
         .await
         .map_err(|(_, msg)| anyhow::anyhow!("tariff: {msg}"))?;
-    let rates = cfg.regulatory_rates_for_period(tariff.category_str(), from, to);
+    // A period crossing a statutory rate boundary has no correct single rate;
+    // billing it whole would overcharge or undercharge one part silently.
+    let rates = cfg
+        .try_regulatory_rates_for_period(tariff.category_str(), from, to)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     let rechnungsnummer = format!(
         "BILL-{}-{}-{from}",
         cand.malo_id,
@@ -418,13 +425,18 @@ async fn deliver_abrechnungsinfo(
         nb_mp_id: cand.nb_mp_id.clone(),
         period_from: from.to_string(),
         period_to: to.to_string(),
+        // §40b Abs. 1 monthly billing shortens the §40c deadline to three weeks.
+        // The cadence comes from the contract, not from this period's length.
+        monatliche_abrechnung: cand.abrechnungszyklus.eq_ignore_ascii_case("MONATLICH"),
         ..Default::default()
     };
     let preview = async {
         let tariff = handlers::resolve_tariff(&req, tarifbd, &cand.malo_id)
             .await
             .map_err(|(_, m)| anyhow::anyhow!("tariff: {m}"))?;
-        let rates = cfg.regulatory_rates_for_period(tariff.category_str(), from, to);
+        let rates = cfg
+            .try_regulatory_rates_for_period(tariff.category_str(), from, to)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         handlers::dispatch_calculator(
             cfg,
             &tariff,

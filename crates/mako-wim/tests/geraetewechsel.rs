@@ -636,7 +636,7 @@ async fn answered_order_absorbs_the_response_deadline() {
 /// The Antwortfrist differs per process and must not be flattened to one value.
 ///
 /// BK6-24-174 WiM Teil 1: Kap. 2.2.2 Nr. 2 (3 WT), Kap. 2.3.2 Nr. 2 (5 WT),
-/// Kap. 2.4.2 Nr. 2 (7 WT), Kap. 2.4.2 Nr. 4 (1 WT).
+/// Kap. 2.4.2 Nr. 2 (7 WT), Kap. 2.5.2 Nr. 4 (1 WT).
 #[test]
 fn antwortfrist_is_per_process_not_flat() {
     assert_eq!(mako_wim::antwort_frist_werktage(55_039), Some(3));
@@ -679,5 +679,68 @@ fn antwort_pid_table_is_complete_and_consistent() {
             .count();
         assert_eq!(ja, 1, "request {req} needs exactly one Bestätigung");
         assert_eq!(nein, 1, "request {req} needs exactly one Ablehnung");
+    }
+}
+
+/// The **inbound** answer deadline must be sized per PID, like the outbound one.
+///
+/// The outbound path (`makod` commands API) always sized this correctly via
+/// `antwort_frist_werktage`. The inbound path registered a flat 5 WT for all
+/// four PIDs, so an Abmeldung (7 WT) escalated two Werktage before the
+/// counterparty's window closed, and a missed Verpflichtungsanfrage (1 WT) went
+/// unnoticed for four extra Werktage. Both errors read as plausible because 5 WT
+/// is the correct figure — for exactly one of the four processes.
+#[test]
+fn the_inbound_antwort_deadline_is_sized_per_pid() {
+    for (pid, expected_wt) in [(55_039_u32, 3_u32), (55_042, 5), (55_051, 7), (55_168, 1)] {
+        let received_at = time::macros::datetime!(2026-03-02 09:00 UTC); // a Monday
+        let out = WimDeviceChangeWorkflow::handle(
+            &DeviceChangeState::New,
+            DeviceChangeCommand::ReceiveUtilmd {
+                pid: Pruefidentifikator::new(pid).expect("valid PID"),
+                sender: MarktpartnerCode::new("4012345000023"),
+                receiver: MarktpartnerCode::new("9900357000004"),
+                melo_id: MeLo::new("DE00123456789012345678901234567890"),
+                device_id: DeviceId::new("MSB-DEVICE-001"),
+                document_date: "2026-03-02".to_owned(),
+                message_ref: MessageRef::new("MSG-1"),
+                validation_passed: true,
+                validation_errors: vec![],
+                received_at,
+            },
+        )
+        .expect("a valid inbound UTILMD is accepted");
+
+        let answer_dl = out
+            .deadlines
+            .iter()
+            .find(|d: &&mako_engine::workflow::PendingDeadline| {
+                d.label == mako_wim::GERAETEWECHSEL_ANTWORT_FRIST_WINDOW_LABEL
+            })
+            .unwrap_or_else(|| panic!("PID {pid}: no business-answer deadline registered"));
+
+        let expected = mako_engine::fristen::deadline_at_werktage(
+            received_at,
+            expected_wt,
+            mako_engine::fristen::HolidayCalendar::BdewMaKo,
+        );
+        assert_eq!(
+            answer_dl.due_at, expected,
+            "PID {pid} must get {expected_wt} WT, not a flat window"
+        );
+
+        // The APERAK acknowledgement is a separate, much shorter clock and must
+        // never be conflated with the business answer.
+        let aperak_dl = out
+            .deadlines
+            .iter()
+            .find(|d: &&mako_engine::workflow::PendingDeadline| {
+                d.label == mako_engine::fristen::APERAK_STROM_WINDOW_LABEL
+            })
+            .unwrap_or_else(|| panic!("PID {pid}: no APERAK deadline registered"));
+        assert!(
+            aperak_dl.due_at < answer_dl.due_at,
+            "PID {pid}: the 45-minute APERAK window must close before the business answer is due"
+        );
     }
 }

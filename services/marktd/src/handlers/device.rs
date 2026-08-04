@@ -1340,7 +1340,7 @@ pub async fn list_zaehler_saisons(
 /// ## Why this endpoint?
 ///
 /// ERP systems (Schleupen, SAP IS-U, powercloud) need to display Time-of-Use register
-/// definitions to customer portal users for §14a Modul 2 HT/NT tariffs.  Previously,
+/// definitions to customer portal users for §14a Modul 3 tariffs (HT/ST/NT).  Previously,
 /// clients had to query two separate endpoints and assemble the nested structure
 /// themselves.  This endpoint returns the canonical BO4E `Zaehlzeitdefinition` shape
 /// (saisons → tagtypen → umschaltzeiten) that portals can display and validate

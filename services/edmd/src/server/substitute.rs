@@ -93,7 +93,12 @@ pub async fn post_substitute_values(
 /// Shared by the HTTP handler (above) and the `trigger_substitution` MCP tool,
 /// so both write substitutes under identical guards: never over a billable
 /// reading, always with a `substitute_value_log` audit row, atomically.
-pub(crate) async fn run_substitute_values(
+///
+/// Public so the § 60 Abs. 2 MsbG obligation can be pinned against a real
+/// database rather than only through an authenticated HTTP round trip — the
+/// numbers it produces are the regulated artefact, and they are what the
+/// integration suite asserts.
+pub async fn run_substitute_values(
     repo: &crate::store::MeterStoreTimeSeriesRepository,
     tenant: &str,
     malo_id: &str,
@@ -369,7 +374,16 @@ pub(crate) async fn run_substitute_values(
     // (so an operator is later nudged to replace the estimate with a real value),
     // and writes the § 60 Abs. 6 MsbG displacement audit — none of which the old
     // raw upsert did.
-    if let Err(e) = repo.store_reads(&substitute_reads).await {
+    // Ersatzwerte are edmd's own output, but they are billed like any other
+    // reading, so they run the same V-rules — a generator that emits a wrong
+    // interval length or a duplicate slot must fail here, not at settlement.
+    let (validated, _) = crate::domain::validation::ValidatedReads::validate(
+        substitute_reads,
+        "SUBSTITUTE_VALIDATION",
+        malo_id,
+    );
+
+    if let Err(e) = repo.store_reads(validated).await {
         tracing::error!(malo_id = %malo_id, error = %e, "edmd: substitute store failed");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,

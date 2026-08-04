@@ -5,11 +5,11 @@
 //! metering-point operation. The workflow hosts **both** sides of the exchange —
 //! the deployment's market role selects which commands it issues:
 //!
-//! - **MSB (invoicer / sender):** [`WimRechnungCommand::SendInvoic`] records the
+//! - **MSB (invoicer / sender):** [`WimInvoicCommand::SendInvoic`] records the
 //!   outbound 31009, then awaits the payer's REMADV (33001–33004) / may reject it
 //!   with a COMDIS.
-//! - **NB/LF/ESA (payer / recipient):** [`WimRechnungCommand::ReceiveInvoic`]
-//!   ingests the inbound 31009, then `Settle`/`Dispute` and returns a REMADV.
+//! - **NB/LF/ESA (payer / recipient):** [`WimInvoicCommand::ReceiveInvoic`]
+//!   ingests the inbound 31009, then `SettleInvoice`/`DisputeInvoice` and returns a REMADV.
 //!
 //! # Covered Prüfidentifikatoren (INVOIC AHB 1.0 / FV2025-10-01)
 //!
@@ -36,21 +36,25 @@
 //! 2. Sends the outbound INVOIC (`SendInvoic`, MSB role) or accepts an inbound one
 //!    (`ReceiveInvoic`, payer role).
 //! 3. Transitions to `PendingSettlement`/`InvoicSent` and registers a 5-Werktage deadline.
-//! 4. Accepts `Settle` or `Dispute` commands to close the invoice lifecycle.
+//! 4. Accepts `SettleInvoice` or `DisputeInvoice` commands to close the invoice lifecycle.
 //! 5. Accepts inbound REMADV (`ReceiveRemadv`, 33001–33004) and COMDIS (`ReceiveComdis`).
 //! 6. Transitions to terminal states: `Settled`, `Disputed`, `PaymentConfirmed`,
 //!    `PaymentDisputed`, or `ComdisRejected`.
 //!
 //! **Not implemented in the application layer (`deadline_dispatch.rs`):**
 //! automatic outbound REMADV generation when the 5-Werktage deadline fires without
-//! an explicit `Settle`/`Dispute` command. The workflow satisfies the AS4
+//! an explicit `SettleInvoice`/`DisputeInvoice` command. The workflow satisfies the AS4
 //! acknowledgement obligation (BDEW AS4-Profile §5) and records the deadline, but
 //! `DeadlineExpired` does not itself emit a REMADV.
 
+use std::collections::HashMap;
+
 use mako_engine::{
+    envelope::EventEnvelope,
     error::WorkflowError,
     ids::DeadlineId,
     outbox::PendingOutbox,
+    projection::Projection,
     types::{MarktpartnerCode, MessageRef, Pruefidentifikator},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
@@ -95,19 +99,19 @@ pub const WIM_REMADV_PIDS: &[u32] = &[33001, 33002, 33003, 33004];
 pub const WIM_COMDIS_ABLEHNUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(29001);
 
 /// Workflow key for WiM billing processes.
-pub const WORKFLOW_NAME: &str = "wim-rechnung";
+pub const WORKFLOW_NAME: &str = "wim-invoic";
 
 /// Deadline label for the INVOIC settlement response window.
 ///
 /// Per BDEW WiM BK6-24-174, the NB must respond within **5 Werktage** of receipt.
-pub const WIM_RECHNUNG_WINDOW_LABEL: &str = "wim-invoic-settlement-deadline";
+pub const SETTLEMENT_WINDOW_LABEL: &str = "wim-invoic-settlement-deadline";
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 
 /// Events emitted by the WiM billing workflow.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
-pub enum WimRechnungEvent {
+pub enum WimInvoicEvent {
     /// INVOIC received and CONTRL acknowledgement enqueued.
     InvoicReceived {
         /// EDIFACT message reference of the INVOIC.
@@ -161,9 +165,9 @@ pub enum WimRechnungEvent {
         label: Box<str>,
     },
     /// Invoice settled — CONTRL acknowledgement was dispatched.
-    Settled,
+    InvoiceSettled,
     /// Invoice disputed — negative CONTRL or APERAK was dispatched.
-    Disputed {
+    InvoiceDisputed {
         /// Human-readable dispute reason.
         reason: String,
     },
@@ -188,17 +192,17 @@ pub enum WimRechnungEvent {
     },
 }
 
-impl EventPayload for WimRechnungEvent {
+impl EventPayload for WimInvoicEvent {
     fn event_type(&self) -> &'static str {
         match self {
-            Self::InvoicReceived { .. } => "WimRechnungInvoicReceived",
-            Self::InvoicSent { .. } => "WimRechnungInvoicSent",
-            Self::Rejected { .. } => "WimRechnungRejected",
-            Self::DeadlineExpired { .. } => "WimRechnungDeadlineExpired",
-            Self::Settled => "WimRechnungSettled",
-            Self::Disputed { .. } => "WimRechnungDisputed",
-            Self::RemadvReceived { .. } => "WimRechnungRemadvReceived",
-            Self::ComdisAbLehnungReceived { .. } => "WimRechnungComdisAbLehnungReceived",
+            Self::InvoicReceived { .. } => "WimInvoicReceived",
+            Self::InvoicSent { .. } => "WimInvoicSent",
+            Self::Rejected { .. } => "WimInvoicRejected",
+            Self::DeadlineExpired { .. } => "WimInvoicDeadlineExpired",
+            Self::InvoiceSettled => "WimInvoicSettled",
+            Self::InvoiceDisputed { .. } => "WimInvoicDisputed",
+            Self::RemadvReceived { .. } => "WimInvoicRemadvReceived",
+            Self::ComdisAbLehnungReceived { .. } => "WimInvoicComdisAbLehnungReceived",
         }
     }
 }
@@ -208,7 +212,7 @@ impl EventPayload for WimRechnungEvent {
 /// Commands accepted by the WiM billing workflow.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
-pub enum WimRechnungCommand {
+pub enum WimInvoicCommand {
     /// Receive an inbound INVOIC from a WiM market participant.
     ///
     /// The transport layer is responsible for parsing and validating the raw
@@ -261,9 +265,9 @@ pub enum WimRechnungCommand {
         invoice_ref: MessageRef,
     },
     /// Settle the invoice — a positive CONTRL will be dispatched.
-    Settle,
+    SettleInvoice,
     /// Dispute the invoice — a negative CONTRL / APERAK will be dispatched.
-    Dispute {
+    DisputeInvoice {
         /// Human-readable dispute reason.
         reason: String,
     },
@@ -299,13 +303,13 @@ pub enum WimRechnungCommand {
     },
 }
 
-impl CommandPayload for WimRechnungCommand {}
+impl CommandPayload for WimInvoicCommand {}
 
 // ── Workflow state ─────────────────────────────────────────────────────────────
 
 /// Internal state of the WiM billing workflow.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub enum WimRechnungState {
+pub enum WimInvoicState {
     /// No INVOIC received yet.
     #[default]
     New,
@@ -352,62 +356,62 @@ pub enum WimRechnungState {
 // ── Workflow implementation ───────────────────────────────────────────────────
 
 /// WiM Strom billing workflow for INVOIC PID 31009 (MSB-Rechnung).
-pub struct WimRechnungWorkflow;
+pub struct WimInvoicWorkflow;
 
-impl Workflow for WimRechnungWorkflow {
-    type Command = WimRechnungCommand;
-    type Event = WimRechnungEvent;
-    type State = WimRechnungState;
+impl Workflow for WimInvoicWorkflow {
+    type Command = WimInvoicCommand;
+    type Event = WimInvoicEvent;
+    type State = WimInvoicState;
 
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
         match event {
-            WimRechnungEvent::InvoicReceived {
+            WimInvoicEvent::InvoicReceived {
                 invoice_ref,
                 pruefidentifikator,
                 rechnung,
                 ..
-            } => WimRechnungState::PendingSettlement {
+            } => WimInvoicState::PendingSettlement {
                 invoice_ref: invoice_ref.clone(),
                 pruefidentifikator: *pruefidentifikator,
                 rechnung: rechnung.clone(),
             },
-            WimRechnungEvent::InvoicSent {
+            WimInvoicEvent::InvoicSent {
                 invoice_ref,
                 pruefidentifikator,
                 ..
-            } => WimRechnungState::InvoicSent {
+            } => WimInvoicState::InvoicSent {
                 invoice_ref: invoice_ref.clone(),
                 pruefidentifikator: *pruefidentifikator,
             },
-            WimRechnungEvent::Rejected { reason } => WimRechnungState::Rejected {
+            WimInvoicEvent::Rejected { reason } => WimInvoicState::Rejected {
                 reason: reason.clone(),
             },
-            WimRechnungEvent::Settled => WimRechnungState::Settled,
-            WimRechnungEvent::Disputed { reason } => WimRechnungState::Disputed {
+            WimInvoicEvent::InvoiceSettled => WimInvoicState::Settled,
+            WimInvoicEvent::InvoiceDisputed { reason } => WimInvoicState::Disputed {
                 reason: reason.clone(),
             },
-            WimRechnungEvent::DeadlineExpired { label, .. } => match state {
+            WimInvoicEvent::DeadlineExpired { label, .. } => match state {
                 // Terminal states — do not overwrite with deadline expiry.
-                WimRechnungState::Settled
-                | WimRechnungState::Disputed { .. }
-                | WimRechnungState::Rejected { .. }
-                | WimRechnungState::PaymentConfirmed
-                | WimRechnungState::PaymentDisputed { .. }
-                | WimRechnungState::ComdisRejected => state,
-                _ => WimRechnungState::Rejected {
+                WimInvoicState::Settled
+                | WimInvoicState::Disputed { .. }
+                | WimInvoicState::Rejected { .. }
+                | WimInvoicState::PaymentConfirmed
+                | WimInvoicState::PaymentDisputed { .. }
+                | WimInvoicState::ComdisRejected => state,
+                _ => WimInvoicState::Rejected {
                     reason: format!("settlement deadline expired: {label}"),
                 },
             },
-            WimRechnungEvent::RemadvReceived {
+            WimInvoicEvent::RemadvReceived {
                 pid, is_confirmed, ..
             } => {
                 if *is_confirmed {
-                    WimRechnungState::PaymentConfirmed
+                    WimInvoicState::PaymentConfirmed
                 } else {
-                    WimRechnungState::PaymentDisputed { remadv_pid: *pid }
+                    WimInvoicState::PaymentDisputed { remadv_pid: *pid }
                 }
             }
-            WimRechnungEvent::ComdisAbLehnungReceived { .. } => WimRechnungState::ComdisRejected,
+            WimInvoicEvent::ComdisAbLehnungReceived { .. } => WimInvoicState::ComdisRejected,
         }
     }
 
@@ -416,7 +420,7 @@ impl Workflow for WimRechnungWorkflow {
         command: Self::Command,
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
         match command {
-            WimRechnungCommand::ReceiveInvoic {
+            WimInvoicCommand::ReceiveInvoic {
                 invoice_ref,
                 sender,
                 recipient,
@@ -426,7 +430,7 @@ impl Workflow for WimRechnungWorkflow {
                 validation_errors,
                 rechnung,
             } => {
-                if !matches!(state, WimRechnungState::New) {
+                if !matches!(state, WimInvoicState::New) {
                     return Err(WorkflowError::invalid_state("New", format!("{state:?}")));
                 }
                 if !WIM_INVOIC_PIDS.contains(&pruefidentifikator.as_u32()) {
@@ -453,7 +457,7 @@ impl Workflow for WimRechnungWorkflow {
                         .caused_by(0),
                     ];
                     Ok(WorkflowOutput::with_outbox(
-                        vec![WimRechnungEvent::InvoicReceived {
+                        vec![WimInvoicEvent::InvoicReceived {
                             invoice_ref,
                             sender,
                             recipient,
@@ -468,20 +472,20 @@ impl Workflow for WimRechnungWorkflow {
                         outbox,
                     ))
                 } else {
-                    Ok(WorkflowOutput::events(vec![WimRechnungEvent::Rejected {
+                    Ok(WorkflowOutput::events(vec![WimInvoicEvent::Rejected {
                         reason: validation_errors.join("; "),
                     }]))
                 }
             }
 
-            WimRechnungCommand::SendInvoic {
+            WimInvoicCommand::SendInvoic {
                 pid,
                 sender,
                 recipient,
                 document_date,
                 invoice_ref,
             } => {
-                if !matches!(state, WimRechnungState::New) {
+                if !matches!(state, WimInvoicState::New) {
                     return Err(WorkflowError::invalid_state("New", format!("{state:?}")));
                 }
                 if !WIM_INVOIC_PIDS.contains(&pid.as_u32()) {
@@ -489,7 +493,7 @@ impl Workflow for WimRechnungWorkflow {
                         "expected a WiM INVOIC PID (31009), got {pid}"
                     )));
                 }
-                Ok(WorkflowOutput::events(vec![WimRechnungEvent::InvoicSent {
+                Ok(WorkflowOutput::events(vec![WimInvoicEvent::InvoicSent {
                     pruefidentifikator: pid,
                     sender,
                     recipient,
@@ -498,15 +502,15 @@ impl Workflow for WimRechnungWorkflow {
                 }]))
             }
 
-            WimRechnungCommand::Settle => {
-                if !matches!(state, WimRechnungState::PendingSettlement { .. }) {
+            WimInvoicCommand::SettleInvoice => {
+                if !matches!(state, WimInvoicState::PendingSettlement { .. }) {
                     return Err(WorkflowError::invalid_state(
                         "PendingSettlement",
                         format!("{state:?}"),
                     ));
                 }
                 let (pid, invoice_ref) = match &state {
-                    WimRechnungState::PendingSettlement {
+                    WimInvoicState::PendingSettlement {
                         pruefidentifikator,
                         invoice_ref,
                         ..
@@ -514,7 +518,7 @@ impl Workflow for WimRechnungWorkflow {
                     _ => (0, String::new()),
                 };
                 Ok(WorkflowOutput::with_outbox(
-                    vec![WimRechnungEvent::Settled],
+                    vec![WimInvoicEvent::InvoiceSettled],
                     vec![PendingOutbox::new(
                         "ProcessCompleted",
                         "",
@@ -527,15 +531,15 @@ impl Workflow for WimRechnungWorkflow {
                 ))
             }
 
-            WimRechnungCommand::Dispute { reason } => {
-                if !matches!(state, WimRechnungState::PendingSettlement { .. }) {
+            WimInvoicCommand::DisputeInvoice { reason } => {
+                if !matches!(state, WimInvoicState::PendingSettlement { .. }) {
                     return Err(WorkflowError::invalid_state(
                         "PendingSettlement",
                         format!("{state:?}"),
                     ));
                 }
                 let (pid, invoice_ref) = match &state {
-                    WimRechnungState::PendingSettlement {
+                    WimInvoicState::PendingSettlement {
                         pruefidentifikator,
                         invoice_ref,
                         ..
@@ -543,7 +547,7 @@ impl Workflow for WimRechnungWorkflow {
                     _ => (0, String::new()),
                 };
                 Ok(WorkflowOutput::with_outbox(
-                    vec![WimRechnungEvent::Disputed {
+                    vec![WimInvoicEvent::InvoiceDisputed {
                         reason: reason.clone(),
                     }],
                     vec![PendingOutbox::new(
@@ -559,28 +563,28 @@ impl Workflow for WimRechnungWorkflow {
                 ))
             }
 
-            WimRechnungCommand::TimeoutExpired { deadline_id, label } => {
-                if !matches!(state, WimRechnungState::PendingSettlement { .. }) {
+            WimInvoicCommand::TimeoutExpired { deadline_id, label } => {
+                if !matches!(state, WimInvoicState::PendingSettlement { .. }) {
                     return Err(WorkflowError::invalid_state(
                         "PendingSettlement",
                         format!("{state:?}"),
                     ));
                 }
                 Ok(WorkflowOutput::events(vec![
-                    WimRechnungEvent::DeadlineExpired { deadline_id, label },
+                    WimInvoicEvent::DeadlineExpired { deadline_id, label },
                 ]))
             }
 
-            WimRechnungCommand::ReceiveRemadv {
+            WimInvoicCommand::ReceiveRemadv {
                 pid,
                 remadv_ref,
                 sender,
             } => {
                 if !matches!(
                     state,
-                    WimRechnungState::Settled
-                        | WimRechnungState::PendingSettlement { .. }
-                        | WimRechnungState::InvoicSent { .. }
+                    WimInvoicState::Settled
+                        | WimInvoicState::PendingSettlement { .. }
+                        | WimInvoicState::InvoicSent { .. }
                 ) {
                     return Err(WorkflowError::invalid_state(
                         "Settled|PendingSettlement|InvoicSent",
@@ -594,7 +598,7 @@ impl Workflow for WimRechnungWorkflow {
                 }
                 let is_confirmed = pid.as_u32() == 33001;
                 Ok(WorkflowOutput::events(vec![
-                    WimRechnungEvent::RemadvReceived {
+                    WimInvoicEvent::RemadvReceived {
                         pid,
                         remadv_ref,
                         sender,
@@ -603,12 +607,12 @@ impl Workflow for WimRechnungWorkflow {
                 ]))
             }
 
-            WimRechnungCommand::ReceiveComdis { comdis_ref } => {
+            WimInvoicCommand::ReceiveComdis { comdis_ref } => {
                 if matches!(
                     state,
-                    WimRechnungState::New
-                        | WimRechnungState::Rejected { .. }
-                        | WimRechnungState::ComdisRejected
+                    WimInvoicState::New
+                        | WimInvoicState::Rejected { .. }
+                        | WimInvoicState::ComdisRejected
                 ) {
                     return Err(WorkflowError::invalid_state(
                         "Settled|PendingSettlement",
@@ -616,9 +620,103 @@ impl Workflow for WimRechnungWorkflow {
                     ));
                 }
                 Ok(WorkflowOutput::events(vec![
-                    WimRechnungEvent::ComdisAbLehnungReceived { comdis_ref },
+                    WimInvoicEvent::ComdisAbLehnungReceived { comdis_ref },
                 ]))
             }
+        }
+    }
+}
+
+// ── Read-model projection ──────────────────────────────────────────────────────
+
+/// Read-model record for a single WiM Strom INVOIC billing process stream.
+#[derive(Debug)]
+pub struct WimInvoicRecord {
+    /// Current lifecycle status label.
+    pub status: &'static str,
+    /// BDEW Prüfidentifikator once the INVOIC is received.
+    pub pruefidentifikator: Option<Pruefidentifikator>,
+    /// Total events processed for this stream.
+    pub event_count: usize,
+}
+
+impl Default for WimInvoicRecord {
+    fn default() -> Self {
+        Self {
+            status: "New",
+            pruefidentifikator: None,
+            event_count: 0,
+        }
+    }
+}
+
+/// In-process read model tracking all WiM Strom INVOIC billing process streams.
+#[derive(Debug, Default)]
+pub struct WimInvoicProjection {
+    /// All known billing process records keyed by stream ID.
+    pub records: HashMap<String, WimInvoicRecord>,
+    /// Sequence number of the last event applied.
+    pub last_seq: u64,
+}
+
+impl Projection for WimInvoicProjection {
+    fn name(&self) -> &'static str {
+        "WimInvoicProjection"
+    }
+
+    fn handle_event(&mut self, envelope: &EventEnvelope) {
+        self.last_seq = self.last_seq.max(envelope.sequence_number);
+
+        let record = self
+            .records
+            .entry(envelope.stream_id.as_str().to_owned())
+            .or_default();
+        record.event_count += 1;
+
+        let Ok(event) = envelope.decode::<WimInvoicEvent>() else {
+            return;
+        };
+
+        match event {
+            WimInvoicEvent::InvoicReceived {
+                pruefidentifikator, ..
+            } => {
+                record.status = "PendingSettlement";
+                record.pruefidentifikator = Some(pruefidentifikator);
+            }
+            WimInvoicEvent::InvoicSent {
+                pruefidentifikator, ..
+            } => {
+                record.status = "InvoicSent";
+                record.pruefidentifikator = Some(pruefidentifikator);
+            }
+            WimInvoicEvent::InvoiceSettled => {
+                record.status = "Settled";
+            }
+            WimInvoicEvent::InvoiceDisputed { .. } => {
+                record.status = "Disputed";
+            }
+            WimInvoicEvent::Rejected { .. } | WimInvoicEvent::DeadlineExpired { .. } => {
+                record.status = "Rejected";
+            }
+            WimInvoicEvent::RemadvReceived { is_confirmed, .. } => {
+                record.status = if is_confirmed {
+                    "PaymentConfirmed"
+                } else {
+                    "PaymentDisputed"
+                };
+            }
+            WimInvoicEvent::ComdisAbLehnungReceived { .. } => {
+                record.status = "ComdisRejected";
+            }
+        }
+    }
+
+    fn last_sequence(&self) -> Option<u64> {
+        if self.last_seq == 0 {
+            None
+        } else {
+            Some(self.last_seq)
         }
     }
 }
@@ -637,8 +735,8 @@ mod tests {
         MarktpartnerCode::new(s)
     }
 
-    fn send_cmd(p: u32) -> WimRechnungCommand {
-        WimRechnungCommand::SendInvoic {
+    fn send_cmd(p: u32) -> WimInvoicCommand {
+        WimInvoicCommand::SendInvoic {
             pid: pid(p),
             sender: mp("9900123456789"),    // MSB (invoicer)
             recipient: mp("9900987654321"), // NB/LF/ESA (payer)
@@ -647,8 +745,8 @@ mod tests {
         }
     }
 
-    fn remadv_cmd(p: u32) -> WimRechnungCommand {
-        WimRechnungCommand::ReceiveRemadv {
+    fn remadv_cmd(p: u32) -> WimInvoicCommand {
+        WimInvoicCommand::ReceiveRemadv {
             pid: pid(p),
             remadv_ref: MessageRef::new("REMADV-001"),
             sender: mp("9900987654321"),
@@ -659,27 +757,27 @@ mod tests {
 
     #[test]
     fn send_invoic_31009_from_new_emits_invoic_sent() {
-        let out = WimRechnungWorkflow::handle(&WimRechnungState::New, send_cmd(31009))
+        let out = WimInvoicWorkflow::handle(&WimInvoicState::New, send_cmd(31009))
             .expect("valid 31009 send must succeed");
         assert_eq!(out.events.len(), 1);
-        assert!(matches!(out.events[0], WimRechnungEvent::InvoicSent { .. }));
+        assert!(matches!(out.events[0], WimInvoicEvent::InvoicSent { .. }));
         // State transitions to InvoicSent (awaiting REMADV).
-        let state = WimRechnungWorkflow::apply(WimRechnungState::New, &out.events[0]);
-        assert!(matches!(state, WimRechnungState::InvoicSent { .. }));
+        let state = WimInvoicWorkflow::apply(WimInvoicState::New, &out.events[0]);
+        assert!(matches!(state, WimInvoicState::InvoicSent { .. }));
     }
 
     #[test]
     fn send_invoic_rejects_non_31009_pid() {
         // 31003 is the Gas twin (mako-wim-gas), not a Strom WiM INVOIC PID.
-        let err = WimRechnungWorkflow::handle(&WimRechnungState::New, send_cmd(31003))
+        let err = WimInvoicWorkflow::handle(&WimInvoicState::New, send_cmd(31003))
             .expect_err("31003 must be rejected by the Strom WiM workflow");
         assert!(format!("{err}").contains("31009"));
     }
 
     #[test]
     fn send_invoic_from_wrong_state_errors() {
-        let state = WimRechnungState::Settled;
-        let err = WimRechnungWorkflow::handle(&state, send_cmd(31009))
+        let state = WimInvoicState::Settled;
+        let err = WimInvoicWorkflow::handle(&state, send_cmd(31009))
             .expect_err("send from a non-New state must be rejected");
         assert!(format!("{err}").contains("New"));
     }
@@ -688,34 +786,34 @@ mod tests {
 
     #[test]
     fn remadv_33001_confirms_payment_after_send() {
-        let state = WimRechnungState::InvoicSent {
+        let state = WimInvoicState::InvoicSent {
             invoice_ref: MessageRef::new("MSB-RE-001"),
             pruefidentifikator: pid(31009),
         };
-        let out = WimRechnungWorkflow::handle(&state, remadv_cmd(33001))
+        let out = WimInvoicWorkflow::handle(&state, remadv_cmd(33001))
             .expect("33001 REMADV must be accepted after send");
-        let new_state = WimRechnungWorkflow::apply(state, &out.events[0]);
-        assert!(matches!(new_state, WimRechnungState::PaymentConfirmed));
+        let new_state = WimInvoicWorkflow::apply(state, &out.events[0]);
+        assert!(matches!(new_state, WimInvoicState::PaymentConfirmed));
     }
 
     #[test]
     fn remadv_33003_itemized_kopf_summe_rejection_after_send() {
-        let state = WimRechnungState::InvoicSent {
+        let state = WimInvoicState::InvoicSent {
             invoice_ref: MessageRef::new("MSB-RE-001"),
             pruefidentifikator: pid(31009),
         };
-        let out = WimRechnungWorkflow::handle(&state, remadv_cmd(33003))
+        let out = WimInvoicWorkflow::handle(&state, remadv_cmd(33003))
             .expect("33003 itemized rejection must be accepted");
         assert!(matches!(
             out.events[0],
-            WimRechnungEvent::RemadvReceived {
+            WimInvoicEvent::RemadvReceived {
                 is_confirmed: false,
                 ..
             }
         ));
-        let new_state = WimRechnungWorkflow::apply(state, &out.events[0]);
+        let new_state = WimInvoicWorkflow::apply(state, &out.events[0]);
         match new_state {
-            WimRechnungState::PaymentDisputed { remadv_pid } => {
+            WimInvoicState::PaymentDisputed { remadv_pid } => {
                 assert_eq!(remadv_pid.as_u32(), 33003);
             }
             other => panic!("expected PaymentDisputed(33003), got {other:?}"),
@@ -724,27 +822,130 @@ mod tests {
 
     #[test]
     fn remadv_33004_itemized_position_rejection_after_send() {
-        let state = WimRechnungState::InvoicSent {
+        let state = WimInvoicState::InvoicSent {
             invoice_ref: MessageRef::new("MSB-RE-001"),
             pruefidentifikator: pid(31009),
         };
-        let out = WimRechnungWorkflow::handle(&state, remadv_cmd(33004))
+        let out = WimInvoicWorkflow::handle(&state, remadv_cmd(33004))
             .expect("33004 itemized rejection must be accepted");
-        let new_state = WimRechnungWorkflow::apply(state, &out.events[0]);
+        let new_state = WimInvoicWorkflow::apply(state, &out.events[0]);
         assert!(matches!(
             new_state,
-            WimRechnungState::PaymentDisputed { remadv_pid } if remadv_pid.as_u32() == 33004
+            WimInvoicState::PaymentDisputed { remadv_pid } if remadv_pid.as_u32() == 33004
         ));
     }
 
     #[test]
     fn remadv_unknown_pid_is_rejected() {
-        let state = WimRechnungState::InvoicSent {
+        let state = WimInvoicState::InvoicSent {
             invoice_ref: MessageRef::new("MSB-RE-001"),
             pruefidentifikator: pid(31009),
         };
-        let err = WimRechnungWorkflow::handle(&state, remadv_cmd(33099))
+        let err = WimInvoicWorkflow::handle(&state, remadv_cmd(33099))
             .expect_err("an out-of-range REMADV PID must be rejected");
         assert!(format!("{err}").contains("33001"));
+    }
+
+    // ── Projection ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn projection_defaults_to_new() {
+        let proj = WimInvoicProjection::default();
+        assert!(proj.records.is_empty());
+        assert_eq!(proj.last_sequence(), None);
+    }
+
+    /// Build an envelope carrying `event` at `seq` on a fixed stream.
+    fn envelope(event: &WimInvoicEvent, seq: u64) -> EventEnvelope {
+        use mako_engine::ids::{ConversationId, CorrelationId, ProcessId, StreamId, TenantId};
+        use mako_engine::version::WorkflowId;
+
+        EventEnvelope::from_new(
+            mako_engine::envelope::NewEvent::new(
+                CorrelationId::new(),
+                None,
+                ConversationId::new(),
+                ProcessId::new(),
+                TenantId::new(),
+                WorkflowId::new(WORKFLOW_NAME, "FV2026-04-01"),
+                event.event_type(),
+                1,
+                serde_json::to_value(event).expect("event serialises"),
+            ),
+            StreamId::new("wim-invoic-test"),
+            seq,
+            time::OffsetDateTime::UNIX_EPOCH,
+        )
+    }
+
+    /// Every event must drive the record to its documented status label.
+    ///
+    /// The REMADV arm is the one worth pinning: 33001 confirms payment while
+    /// 33002/33003/33004 dispute it, so a projection that ignored
+    /// `is_confirmed` would silently report every itemized Abweisung as paid.
+    #[test]
+    fn projection_maps_each_event_to_its_status() {
+        let cases: Vec<(WimInvoicEvent, &str)> = vec![
+            (
+                WimInvoicEvent::InvoicSent {
+                    pruefidentifikator: pid(31009),
+                    sender: MarktpartnerCode::new("9900000000001"),
+                    recipient: MarktpartnerCode::new("9900000000002"),
+                    document_date: "20260401".to_owned(),
+                    invoice_ref: MessageRef::new("MSB-RE-001"),
+                },
+                "InvoicSent",
+            ),
+            (WimInvoicEvent::InvoiceSettled, "Settled"),
+            (
+                WimInvoicEvent::InvoiceDisputed {
+                    reason: "Preisabweichung".to_owned(),
+                },
+                "Disputed",
+            ),
+            (
+                WimInvoicEvent::Rejected {
+                    reason: "AHB".to_owned(),
+                },
+                "Rejected",
+            ),
+            (
+                WimInvoicEvent::RemadvReceived {
+                    pid: pid(33001),
+                    remadv_ref: MessageRef::new("R-1"),
+                    sender: MarktpartnerCode::new("9900000000002"),
+                    is_confirmed: true,
+                },
+                "PaymentConfirmed",
+            ),
+            (
+                WimInvoicEvent::RemadvReceived {
+                    pid: pid(33004),
+                    remadv_ref: MessageRef::new("R-2"),
+                    sender: MarktpartnerCode::new("9900000000002"),
+                    is_confirmed: false,
+                },
+                "PaymentDisputed",
+            ),
+            (
+                WimInvoicEvent::ComdisAbLehnungReceived {
+                    comdis_ref: MessageRef::new("C-1"),
+                },
+                "ComdisRejected",
+            ),
+        ];
+
+        for (seq, (event, expected)) in cases.into_iter().enumerate() {
+            let mut proj = WimInvoicProjection::default();
+            let seq = seq as u64 + 1;
+            proj.handle_event(&envelope(&event, seq));
+            let record = proj
+                .records
+                .get("wim-invoic-test")
+                .expect("record created for the stream");
+            assert_eq!(record.status, expected, "event {event:?}");
+            assert_eq!(record.event_count, 1);
+            assert_eq!(proj.last_sequence(), Some(seq));
+        }
     }
 }

@@ -134,10 +134,25 @@ pub(crate) async fn handle_command(
 
     // ── Idempotency key ───────────────────────────────────────────────────────
     //
-    // Required for all state-mutating commands. A missing or empty key means the
-    // ERP has no stable retry identity and will generate a new "duplicate" event
-    // on every HTTP retry before the engine's business-level DuplicateProcess guard
-    // fires. Return 422 so the ERP retries are blocked until the key is supplied.
+    // Required for all state-mutating commands, and echoed back on the response
+    // so a caller can correlate a reply with the request that produced it.
+    //
+    // What it does NOT do — stated explicitly because the name invites the
+    // opposite assumption: this key is not compared against previously seen
+    // keys, and no key→response record is kept. Replay protection comes from the
+    // per-family business guard below, which refuses a second `anmelden` while an
+    // active process exists for the same business key (`DuplicateProcess`, 409,
+    // carrying that process's id so the caller can adopt it).
+    //
+    // The practical difference: a retry whose response was lost gets 409 with the
+    // existing process id rather than a replay of the original 202. That is safe
+    // — no duplicate process is created — but it is not RFC-style idempotency,
+    // and the guard only covers processes that are still active. Callers must
+    // therefore treat `duplicate_process` as success, which `mako_markt`'s
+    // `classify_conflict` does.
+    //
+    // The key is still mandatory: without one, a retrying ERP leaves no trace
+    // tying its attempts together, so 422 rather than silently accepting.
     let idempotency_key = match headers
         .get("idempotency-key")
         .or_else(|| headers.get("Idempotency-Key"))

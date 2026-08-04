@@ -84,13 +84,31 @@ The AHB parser reads one requirement per PID column:
 | `Kann` | `O` |
 | `Soll` | `O` — a recommendation, never promoted |
 
-Two rules are easy to get wrong and are covered by tests:
+Four rules are easy to get wrong and are covered by tests:
 
-- **Segment-group nesting does not propagate.** A `Muss` segment inside a `Kann`
-  group stays `M`.
+- **An unconditional `Kann` group downgrades the segments inside it.** A `Muss`
+  segment nested in a plain `Kann` group flattens to `O`: the group may be
+  absent entirely and takes the segment with it, so `M` would reject conformant
+  messages. UTILMD `SG3` is `Kann` with `SG3 CTA` marked `Muss`, and the shipped
+  profiles record `CTA` as `O`.
+- **A *conditioned* `Kann [n]` does not.** ORDERS `SG29` reads `Kann [2092]`,
+  and 2092 requires exactly one position per message — the group is effectively
+  mandatory, so `LIN` stays `M`.
+- **Column ownership follows the table's own spacing.** UTILMD heads its columns
+  about ten characters apart where ORDERS spreads them much wider, and cell
+  content drifts away from the header pitch. The parser derives per-column
+  ranges from the header and pairs a fully-populated row off one-to-one; a fixed
+  window copies one PID's `Muss` onto its neighbours.
 - **Optional segments are absent from the AHB table.** The AHB marks what is
-  *required*; `mig.json` lists what is *available*. Complete each draft with
-  every remaining MIG segment as `O`.
+  *required*; `mig.json` lists what is *available*. `extract-pdf` completes this
+  for you: it reads the production `mig.json` beside the draft and adds every
+  segment the AHB never marks as `O` (envelope segments excluded). Without a
+  `mig.json` in place the step is skipped rather than guessed at, and the draft
+  carries only the AHB's own marks.
+
+Column arithmetic is in **characters, not bytes** — every header carries the `ü`
+of "Prüfidentifikator" while most data rows are ASCII, and mixing the units
+shifts every column by one.
 
 A conditional `Muss [n]` (e.g. "Wenn BGM+7 vorhanden") is reported as `M`; the
 XML encodes those as `C` with a `conditional_rules` entry. Review those by hand.
@@ -100,6 +118,34 @@ The output directory is derived from `--message-type` and `--release`
 `mig.draft.json` and `ahb.draft.json`. Review the drafts against the PDF, remove
 the `_WARNING` fields, and rename them to `mig.json` / `ahb.json` before
 continuing.
+
+**Measure the draft before trusting it.** `cargo xtask validate-extraction`
+compares every generated `ahb.draft.json` against the curated `ahb.json` beside
+it and classifies each Prüfidentifikator as `exact`, `superset`, `subset` or
+`differs`. A **`superset`** verdict means the draft marks more segments
+mandatory than the AHB requires — shipping it rejects valid messages. Today the
+UTILMD draft is `exact` for 2 of 104 PIDs and a superset for the other 102, so a
+draft is a starting point for review, never a drop-in profile.
+
+### What the extraction cannot decide for you
+
+Segment **requirements** are extracted exactly — validated against the
+hand-curated profiles at 597/597 (UTILMD Strom S2.2), 237/237 (UTILMD Gas G1.2)
+and 250/250 (ORDERS 1.1b) mandatory segments. Three things still need a human:
+
+- **Qualifier restrictions.** The table carries them (`BGM 1001 E01`), and they
+  extract at ~95% recall, but a tag appearing in several segment groups collapses
+  ambiguously. Which group a flat `segment_rules` entry is scoped to is a
+  curation decision the document does not determine.
+- **`conditional_rules`.** A `Muss [n]` is reported as `M`; whether condition *n*
+  makes it genuinely mandatory needs the condition text read.
+- **Group flattening at the margins.** A `Muss` nested in a conditioned group is
+  kept as `M` — the safe direction for review, but stricter than some curated
+  profiles, which relaxed it after reading the condition.
+
+Diff a freshly extracted draft against the shipped profile before promoting it;
+the mandatory set should match exactly, and every remaining difference is one of
+the three above.
 
 ### 3. Import updated code lists
 
@@ -172,6 +218,11 @@ cargo xtask validate-pruefids
 ### 9. Add fixtures
 
 Add at least one `.edi` fixture file for each new PID under `crates/edi-energy/tests/fixtures/<type>/valid/`.
+
+The directory must be a message type whose profiles declare that PID —
+`fixture_placement.rs` fails otherwise. A fixture filed under the wrong type
+still parses, so nothing else catches it, and it counts toward coverage while
+asserting a pairing no AHB defines.
 
 ```bash
 # Verify fixture coverage
@@ -276,7 +327,7 @@ cargo xtask codegen --check           # confirm mod.rs is up to date
 ```
 
 Archived profiles are hidden behind `{type}-archive` / `archive` Cargo features and do not
-inflate compile time for standard deployments.  See `docs/schema-versioning.md` for the
+inflate compile time for standard deployments.  See `site/content/docs/compliance/schema-versioning.md` for the
 full policy.
 
 ---

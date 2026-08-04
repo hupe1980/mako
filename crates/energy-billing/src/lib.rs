@@ -101,13 +101,14 @@ pub use quantities::{
     Abschlagsplan, AbschlagsplanEntry, Absetzung, AbsetzungsGrund, DynamicInterval, EegMeterInput,
     EmobilityMeterInput, EnergyShareMeterInput, GasMeterInput, GgvNutzungsplan,
     GgvNutzungsplanEntry, GgvSolarInput, GridInput, HemsMeterInput, MeterInput, MeteringMode,
-    ProsumerMeterInput, Quantities, Sect14aModul2Verbrauch, Sect41aAnnualComparison,
+    ProsumerMeterInput, Quantities, Sect14aModul3Verbrauch, Sect41aAnnualComparison,
     ServiceMeterInput, SolarMeterInput, WaermeMeterInput, WasserMeterInput,
 };
 pub use rates::{
     BEHG_CO2_FACTOR_H_GAS, BEHG_CO2_FACTOR_L_GAS, RegulatoryRates, RoundMoney,
     behg_ct_per_kwh_for_year, behg_ct_per_kwh_from_price, energiesteuer_gas_for_year,
-    mwst_rate_for_gas_waerme_period, mwst_rate_for_period, round_money, stromsteuer_for_year,
+    mwst_rate_for_gas_waerme_period, mwst_rate_for_period, round_money,
+    steuer_stichtage_im_zeitraum, stromsteuer_for_year,
 };
 
 // Typed Product enum + per-category product structs

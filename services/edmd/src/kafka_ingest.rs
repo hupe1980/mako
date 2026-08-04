@@ -32,7 +32,7 @@
 //! pill must not wedge the partition); records that fail to store abort the
 //! poll loop iteration without committing, so they are redelivered.
 //!
-//! Every batch runs the same V01–V10 `validate_and_annotate` pass as the REST
+//! Every batch runs the same V01–V10 `ValidatedReads::validate` pass as the REST
 //! ingest paths — a "trusted" transport does not skip validation.
 
 use std::time::Duration;
@@ -76,11 +76,33 @@ struct WireBatch {
     intervals: Vec<WireInterval>,
 }
 
+/// Outbound-webhook coordinates for the consumer's quality warnings.
+///
+/// The consumer runs outside the HTTP stack and so has no `HandlerState`; this
+/// carries the two fields it needs rather than the whole thing.
+#[derive(Clone)]
+pub struct QualityAlertTarget {
+    pub webhook_url: Option<String>,
+    pub secret: Option<secrecy::SecretString>,
+}
+
+impl QualityAlertTarget {
+    fn secret_bytes(&self) -> Option<&[u8]> {
+        use secrecy::ExposeSecret;
+        self.secret.as_ref().map(|s| s.expose_secret().as_bytes())
+    }
+}
+
 /// Spawn the Kafka ingest consumer. Runs until `shutdown` is cancelled.
+///
+/// `alerts` is where a quality warning goes. A head-end feed is the least
+/// supervised ingest door there is, so a V01–V10 finding on it has to reach the
+/// same CloudEvent the REST doors raise, not just the log.
 pub fn spawn(
     cfg: KafkaIngestConfig,
     repo: MeterStoreTimeSeriesRepository,
     tenant: String,
+    alerts: QualityAlertTarget,
     shutdown: CancellationToken,
 ) {
     tokio::spawn(async move {
@@ -88,7 +110,7 @@ pub fn spawn(
             if shutdown.is_cancelled() {
                 break;
             }
-            match run_consumer(&cfg, &repo, &tenant, &shutdown).await {
+            match run_consumer(&cfg, &repo, &tenant, &alerts, &shutdown).await {
                 Ok(()) => break, // clean shutdown
                 Err(e) => {
                     error!(error = %e, "edmd kafka-ingest: consumer failed — reconnecting in 5s");
@@ -107,6 +129,7 @@ async fn run_consumer(
     cfg: &KafkaIngestConfig,
     repo: &MeterStoreTimeSeriesRepository,
     tenant: &str,
+    alerts: &QualityAlertTarget,
     shutdown: &CancellationToken,
 ) -> anyhow::Result<()> {
     let consumer: Consumer = Consumer::builder()
@@ -202,7 +225,7 @@ async fn run_consumer(
                     continue;
                 }
             };
-            match store_batch(repo, tenant, batch).await {
+            match store_batch(repo, tenant, alerts, batch).await {
                 Ok(n) => {
                     stored_batches += 1;
                     tracing::debug!(intervals = n, "edmd kafka-ingest: batch stored");
@@ -232,6 +255,7 @@ async fn run_consumer(
 async fn store_batch(
     repo: &MeterStoreTimeSeriesRepository,
     tenant: &str,
+    alerts: &QualityAlertTarget,
     batch: WireBatch,
 ) -> anyhow::Result<usize> {
     let sparte = match batch
@@ -303,18 +327,34 @@ async fn store_batch(
 
     // Same V01–V10 pass as every REST ingest path.
     let malo_id = reads[0].malo_id.clone();
-    let validation = crate::server::validate_and_annotate(&mut reads, "KAFKA_INGEST", &malo_id);
-    if validation.billing_block_count > 0 {
-        warn!(
-            malo_id = %malo_id,
-            billing_blocks = validation.billing_block_count,
-            rules = ?validation.rules,
-            "edmd kafka-ingest: validation issues annotated (§ 60 Abs. 2 MsbG)"
-        );
-    }
+    let (validated, validation) =
+        crate::domain::validation::ValidatedReads::validate(reads, "KAFKA_INGEST", &malo_id);
+    // A Kafka record carries no session identifier, so the correlation id is
+    // minted here and both extensions share it — better an honest per-batch id
+    // than a borrowed field that means something else.
+    let correlation_id = uuid::Uuid::new_v4().to_string();
+    let alert = crate::server::quality_alert::QualityAlert {
+        malo_id: &malo_id,
+        door: "kafka-ingest",
+        correlation_id: &correlation_id,
+        causation_id: &correlation_id,
+        sparte: Some(sparte.as_str()),
+        period_from: validated.as_slice().first().map(|r| r.dtm_from),
+        period_to: validated.as_slice().last().map(|r| r.dtm_to),
+        validation: &validation,
+        // The Kafka door does not run the Hampel scorer; V01–V10 is its signal.
+        hampel: None,
+    };
+    crate::server::quality_alert::raise_quality_warning(
+        alerts.webhook_url.as_deref(),
+        alerts.secret_bytes(),
+        tenant,
+        &alert,
+    )
+    .await;
 
-    let n = reads.len();
-    repo.store_reads(&reads)
+    let n = validated.len();
+    repo.store_reads(validated)
         .await
         .map_err(|e| anyhow::anyhow!("store_reads: {e}"))?;
     Ok(n)

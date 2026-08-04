@@ -504,8 +504,8 @@ WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM
             { "category": "SOLAR", "description": "Solar self-consumption, Mieterstrom §21 Abs. 3 EEG, §42b EnWG GGV community solar", "required": ["solar_arbeitspreis_ct_per_kwh"], "optional": ["mieterstrom_aufschlag_ct_per_kwh", "gemeinschaft_rabatt_ct_per_kwh", "solar_include_stromsteuer", "mwst_rate_override: 0 for PV ≤30kWp from 2023"], "regulatory": "§12 Abs.3 UStG: 0% MwSt for PV ≤30kWp since 01.01.2023 (set mwst_rate_override: 0)" },
             { "category": "EEG", "description": "EEG feed-in Vergütung — credit note to plant operator (LF role, contractual)", "required": ["eeg_verguetungssatz_ct_per_kwh"], "optional": ["eeg_marktpraemie_ct_per_kwh", "eeg_managementpraemie_ct_per_kwh", "kwkg_zuschlag_ct_per_kwh"], "meter": "eeg_meter.einspeisung_kwh, eeg_meter.kwh_during_negative_epex (§51 contractual suspension)", "regulatory": "§21 EEG Vergütung; §20 EEG Marktprämie; §51 EEG Negativpreisregel (contractual for LF)" },
             { "category": "EINSPEISUNG", "description": "Direktvermarktung settlement — Marktwert minus Vermarktungsgebühr", "required": ["marktwert_ct_per_kwh"], "optional": ["vermarktungsgebuehr_ct_per_kwh"], "regulatory": "§20 EEG Direktvermarktung; Direktvermarkter bears negative-price risk (§51 does NOT apply)" },
-            { "category": "WAERMEPUMPE", "description": "Heat pump electricity with §14a EnWG Steuerungsrabatt Modul 1/3", "required": ["arbeitspreis_ct_per_kwh"], "optional": ["steuerungsrabatt_modul1_eur_per_kw_year", "steuerungsrabatt_modul3_eur_per_kw_year"], "meter": "meter.spitzenleistung_kw (required for §14a), meter.steuerung_stunden (Modul 3)", "regulatory": "§14a EnWG; BK6-22-300; mandatory for controlled devices ≥3.7kW from 01.01.2024" },
-            { "category": "WALLBOX", "description": "EV charging box with §14a EnWG Steuerungsrabatt Modul 1/3 — same as WAERMEPUMPE", "required": ["arbeitspreis_ct_per_kwh"], "optional": ["steuerungsrabatt_modul1_eur_per_kw_year", "steuerungsrabatt_modul3_eur_per_kw_year"], "regulatory": "§14a EnWG same as WAERMEPUMPE" },
+            { "category": "WAERMEPUMPE", "description": "Heat pump electricity with §14a EnWG Steuerungsrabatt Modul 1/3", "required": ["arbeitspreis_ct_per_kwh"], "optional": ["sect14a_modul1_pauschale_eur_per_kw_year", "sect14a_steuerungsentschaedigung_eur_per_kw_year"], "meter": "meter.spitzenleistung_kw (required for §14a), meter.steuerung_stunden (Modul 3)", "regulatory": "§14a EnWG; BK6-22-300; mandatory for controlled devices ≥3.7kW from 01.01.2024" },
+            { "category": "WALLBOX", "description": "EV charging box with §14a EnWG Steuerungsrabatt Modul 1/3 — same as WAERMEPUMPE", "required": ["arbeitspreis_ct_per_kwh"], "optional": ["sect14a_modul1_pauschale_eur_per_kw_year", "sect14a_steuerungsentschaedigung_eur_per_kw_year"], "regulatory": "§14a EnWG same as WAERMEPUMPE" },
             { "category": "HEMS", "description": "Home Energy Management System — platform subscription + optimization events", "required": ["hems_subscription_eur_per_month"], "optional": ["hems_optimization_event_eur", "hems_readout_event_eur"], "meter": "hems_meter.months, hems_meter.optimization_events, hems_meter.readout_events" },
             { "category": "EMOBILITY", "description": "EV charging CPO/EMSP — service fee + kWh + session fees", "required": ["emobility_service_fee_eur or emobility_kwh_price_ct"], "optional": ["emobility_session_fee_eur", "emobility_roaming_fee_eur"], "meter": "emobility_meter.months, emobility_meter.kwh_charged, emobility_meter.sessions" },
             { "category": "ENERGIEDIENSTLEISTUNG", "description": "Energy services (MSB, maintenance, analytics) — flat fee + event count", "required": ["service_fee_eur or service_event_price_eur"], "optional": [], "meter": "service_meter.months, service_meter.event_count" },
@@ -864,7 +864,7 @@ impl BillingdMcpHandler {
                 Role::Assistant,
                 "§14a EnWG (Steuerbarkeitsrabatt) has 3 implementation models:\n\n\
                 **Modul 1 — Capacity-based NNE reduction (kW/year)**\n\
-                In tarifbd: set `steuerungsrabatt_modul1_eur_per_kw_year` in the WAERMEPUMPE/WALLBOX product.\n\
+                In tarifbd: set `sect14a_modul1_pauschale_eur_per_kw_year` in the WAERMEPUMPE/WALLBOX product.\n\
                 Example: 150 EUR/kW/year → 5 kW WP → 750 EUR/year Netzentgelteinsparung (vor MwSt).\n\
                 Requires: spitzenleistung_kw in the meter reading or billing request.\n\
                 Formula: kW × rate_eur_per_kw_year / 12 × billing_months → credit position.\n\n\
@@ -872,14 +872,15 @@ impl BillingdMcpHandler {
                 Requires ZeitvariablePreisposition from marktd + actual controlled kWh from edmd.\n\
                 Planned: integrate with processd §14a Steuerungsauftrag CloudEvent pipeline.\n\n\
                 **Modul 3 — Load-shedding compensation (Laststeuerung hours × kW)**\n\
-                In tarifbd: set `steuerungsrabatt_modul3_eur_per_kw_year` in the product.\n\
+                In tarifbd: set `sect14a_steuerungsentschaedigung_eur_per_kw_year` in the product.\n\
                 Requires: steuerung_stunden in the meter reading (from agentd/processd).\n\
                 Formula: kW × rate × (steuerung_stunden / 8760) → credit position.\n\n\
                 **Setup steps:**\n\
                 1. GET tarifbd /api/v1/products → find WAERMEPUMPE or WALLBOX product\n\
-                2. PUT tarifbd /api/v1/products/{id} add steuerungsrabatt_modul1_eur_per_kw_year\n\
+                2. PUT tarifbd /api/v1/products/{id} add sect14a_modul1_pauschale_eur_per_kw_year\n\
                 3. POST /api/v1/billing/{malo_id}/preview — verify Steuerungsrabatt position appears\n\
-                4. Check: position tagged 'steuerungsrabatt_modul1' → negative credit amount\n\
+                4. Check: position tagged 'sect14a_modul1' (pauschale Reduzierung) or\n\
+                   'sect14a_modul2' (Arbeitspreisreduzierung) → negative credit amount\n\
                 5. Confirm: brutto_eur is LOWER than without §14a\n\n\
                 **Regulatory basis:** §14a EnWG (Gesetz zur Änderung des EnWG 2022), BNetzA Festlegung BK6-22-300.\n\
                 Pflicht ab 01.01.2024 für alle neuen steuerbaren Anlagen ≥3.7 kW.",

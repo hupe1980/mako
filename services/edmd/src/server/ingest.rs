@@ -176,122 +176,6 @@ pub(crate) fn quality_flag_from_wire(s: &str) -> Option<QualityFlag> {
     }
 }
 
-/// Outcome of running the V01–V10 engine over a batch, for the ingest response.
-pub(crate) struct BatchValidation {
-    pub(crate) issue_count: usize,
-    pub(crate) billing_block_count: usize,
-    pub(crate) rules: Vec<String>,
-}
-
-impl BatchValidation {
-    /// `true` when no rule fired.
-    pub(crate) fn is_clean(&self) -> bool {
-        self.issue_count == 0
-    }
-}
-
-/// Run V01–V10 over an ingest batch and annotate the rows each issue describes.
-///
-/// Every ingest family routes through here so a reading lands with the same
-/// quality record whichever door it came in by. Issues are attached to the rows
-/// they name rather than to the MaLo as a whole, so a downstream § 60 Abs. 2 MsbG
-/// substitution decision can see which intervals are actually implicated.
-///
-/// Validation annotates and never rejects: whether an interval is billable is a
-/// separate decision from whether it is stored, and discarding a suspect reading
-/// would destroy the evidence the Netzbetreiber needs to resolve it.
-pub(crate) fn validate_and_annotate(
-    batch: &mut [MeterRead],
-    source: &str,
-    malo_id: &str,
-) -> BatchValidation {
-    if batch.is_empty() {
-        return BatchValidation {
-            issue_count: 0,
-            billing_block_count: 0,
-            rules: Vec::new(),
-        };
-    }
-
-    let to_validate: Vec<metering::MeterInterval> = batch
-        .iter()
-        .map(|r| metering::MeterInterval {
-            from: r.dtm_from,
-            to: r.dtm_to,
-            value_kwh: r.quantity_kwh,
-            // The read's actual quality flag — hardcoding `Measured` here made
-            // V09 (non-billable quality) unfireable on every ingest path: a
-            // batch arriving as FAULTY/UNKNOWN validated as if it were clean.
-            quality: r.quality,
-            obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
-        })
-        .collect();
-
-    let report = metering::validation::validate_intervals(
-        &to_validate,
-        &metering::validation::ValidationConfig {
-            now: Some(OffsetDateTime::now_utc()),
-            ..Default::default()
-        },
-    );
-
-    let summary = BatchValidation {
-        issue_count: report.issues.len(),
-        billing_block_count: report.billing_block_count(),
-        rules: report
-            .issues
-            .iter()
-            .map(|i| i.rule_id.to_string())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect(),
-    };
-
-    if report.is_clean() {
-        return summary;
-    }
-
-    let warnings = serde_json::json!({
-        "has_warnings": true,
-        "issue_count": report.issues.len(),
-        "billing_block_count": report.billing_block_count(),
-        "has_errors": report.has_errors(),
-        "issues": report.issues.iter().map(|i| serde_json::json!({
-            "rule": i.rule_id.to_string(),
-            "message": i.message,
-            "blocks_billing": i.blocks_billing(),
-        })).collect::<Vec<_>>(),
-        "source": source,
-    });
-
-    tracing::warn!(
-        malo_id = %malo_id,
-        source = %source,
-        issue_count = report.issues.len(),
-        billing_block_count = report.billing_block_count(),
-        "edmd: ingest validation issues (§ 60 Abs. 2 MsbG)"
-    );
-
-    for (idx, read) in batch.iter_mut().enumerate() {
-        if !report.issues.iter().any(|i| i.interval_index == Some(idx)) {
-            continue;
-        }
-        // A row may already carry a session-level quality summary from Hampel
-        // scoring. The two describe different things, so the rule findings are
-        // added alongside it rather than replacing it.
-        read.quality_warnings = Some(match read.quality_warnings.take() {
-            Some(serde_json::Value::Object(mut existing)) => {
-                existing.insert("validation".to_owned(), warnings.clone());
-                existing.insert("has_warnings".to_owned(), serde_json::Value::Bool(true));
-                serde_json::Value::Object(existing)
-            }
-            _ => warnings.clone(),
-        });
-    }
-
-    summary
-}
-
 pub(crate) async fn post_direct_reads_inner(
     state: &HandlerState,
     malo_id: &str,
@@ -560,7 +444,7 @@ pub(crate) async fn post_direct_reads_inner(
             tenant: state.tenant.clone(),
             source: ingestion_source,
             push_session: Some(session_id.clone()),
-            // Session-level Hampel scoring. `validate_and_annotate` adds the
+            // Session-level Hampel scoring. `ValidatedReads::validate` adds the
             // per-interval V01–V10 findings under a `validation` key.
             quality_warnings: quality.has_warnings.then(|| quality_json.clone()),
             sender_mp_id: req.sender_mp_id.clone(),
@@ -569,9 +453,13 @@ pub(crate) async fn post_direct_reads_inner(
         });
     }
 
-    let validation = validate_and_annotate(&mut batch, "DIRECT_PUSH_VALIDATION", malo_id);
+    let (validated, validation) = crate::domain::validation::ValidatedReads::validate(
+        batch,
+        "DIRECT_PUSH_VALIDATION",
+        malo_id,
+    );
 
-    if let Err(e) = state.repo.store_reads(&batch).await {
+    if let Err(e) = state.repo.store_reads(validated).await {
         tracing::error!(malo_id, error = %e, "edmd: direct push batch insert failed");
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
@@ -613,9 +501,31 @@ pub(crate) async fn post_direct_reads_inner(
     // not a Postgres table) and redundant against the read-through model.
 
     // \u2500\u2500 CloudEvent notifications \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    let correlation_id = uuid::Uuid::new_v4().to_string();
+
+    // Both quality signals in one place, so the status code below and the event
+    // raised here cannot disagree about whether this batch was clean.
+    let alert = crate::server::quality_alert::QualityAlert {
+        malo_id,
+        door: "rlm-direct-push",
+        correlation_id: &correlation_id,
+        causation_id: &session_id,
+        sparte: Some(sparte_str),
+        period_from: accepted.first().map(|r| r.from),
+        period_to: accepted.last().map(|r| r.to),
+        validation: &validation,
+        hampel: Some(quality_json.clone()),
+    };
+    crate::server::quality_alert::raise_quality_warning(
+        state.erp_webhook_url.as_deref(),
+        state.webhook_secret_bytes(),
+        &state.tenant,
+        &alert,
+    )
+    .await;
+
     if let Some(ref webhook_url) = state.erp_webhook_url {
         let client = mako_service::http::default_client();
-        let correlation_id = uuid::Uuid::new_v4().to_string();
 
         // Always emit de.messwert.reading.direct.stored so billingd knows to recompute.
         let stored_ce = mako_service::CloudEvent::new(
@@ -646,40 +556,9 @@ pub(crate) async fn post_direct_reads_inner(
         {
             tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
         }
-
-        // If quality warnings detected, emit de.messwert.reading.quality.warning.
-        if quality.has_warnings {
-            let warn_ce = mako_service::CloudEvent::new(
-                mako_service::source("edmd", &state.tenant),
-                mako_events::messwert::READING_QUALITY_WARNING,
-                malo_id,
-                serde_json::json!({
-                    "malo_id": malo_id,
-                    "session_id": session_id,
-                    "sparte": sparte_str,
-                    "period_from": period_from_date.to_string(),
-                    "period_to": period_to_date.to_string(),
-                    "quality": quality_json,
-                    "recommended_action": "Investigate with agentd billing-anomaly-agent or edmd MCP get_lastgang tool",
-                }),
-            )
-            .extension("tenantid", state.tenant.clone())
-            .extension("correlationid", correlation_id)
-            .extension("causationid", session_id.clone());
-            if let Err(e) = mako_service::post_ce_with_retry(
-                &client,
-                webhook_url,
-                &warn_ce,
-                state.webhook_secret_bytes(),
-            )
-            .await
-            {
-                tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
-            }
-        }
     }
 
-    let status = if quality.has_warnings || !validation.is_clean() {
+    let status = if alert.is_warning() {
         StatusCode::ACCEPTED // 202 — stored but with quality warnings
     } else {
         StatusCode::CREATED // 201 — clean store
@@ -706,7 +585,7 @@ pub(crate) async fn post_direct_reads_inner(
             // on store; it is recomputed lazily on the next read (read-through),
             // not eagerly here.
             "billing_period_cache_invalidated": true,
-            "note": if quality.has_warnings || !validation.is_clean() {
+            "note": if alert.is_warning() {
                 "de.messwert.reading.quality.warning emitted — investigate before billing run"
             } else {
                 "de.messwert.reading.direct.stored emitted — billing period cache invalidated (read-through recompute)"
@@ -721,6 +600,106 @@ pub(crate) async fn post_direct_reads_inner(
 #[cfg(test)]
 mod ingest_contract_tests {
     use super::*;
+    use crate::domain::model::Sparte;
+    use time::macros::datetime;
+
+    // ── DST transitions ───────────────────────────────────────────────────────
+    //
+    // Germany runs on Europe/Berlin, so two days a year are not 24 hours long:
+    // the last Sunday in March has 23 (CET→CEST) and the last Sunday in October
+    // has 25 (CEST→CET). Quarter-hour metering therefore carries 92 and 100
+    // intervals on those days rather than 96.
+    //
+    // The failure this guards is a *silent* one. A head-end that emits local
+    // wall-clock timestamps collapses the repeated 02:00 hour on the fall-back
+    // day, so an hour of energy simply disappears — the series still parses,
+    // still validates against every other rule, and bills low. V07 exists to
+    // catch exactly that, and these tests prove edmd's own wrapper surfaces it
+    // rather than only the upstream `metering` rule doing so in isolation.
+
+    /// Build `count` consecutive quarter-hour reads starting at `start` (UTC).
+    fn quarter_hours(start: OffsetDateTime, count: usize) -> Vec<MeterRead> {
+        (0..count)
+            .map(|i| {
+                let from = start + time::Duration::minutes(15 * i as i64);
+                MeterRead {
+                    malo_id: "51238696780".to_owned(),
+                    melo_id: None,
+                    dtm_from: from,
+                    dtm_to: from + time::Duration::minutes(15),
+                    quantity_kwh: rust_decimal::Decimal::new(250, 2),
+                    quality: QualityFlag::Measured,
+                    pid: 13025,
+                    sparte: Sparte::Strom,
+                    obis_code: Some("1-1:1.29.0".to_owned()),
+                    tenant: "9900357000004".to_owned(),
+                    source: crate::domain::model::IngestionSource::Mscons,
+                    push_session: None,
+                    quality_warnings: None,
+                    sender_mp_id: None,
+                    allocation_version: "INITIAL".to_owned(),
+                    valid_from_tx: None,
+                }
+            })
+            .collect()
+    }
+
+    /// Drive V07 through the public seam — the same call the ingest handlers
+    /// make, so a change to the validation entry point breaks these tests
+    /// rather than silently bypassing them.
+    fn raised_v07(batch: Vec<MeterRead>) -> bool {
+        let (_, report) =
+            crate::domain::validation::ValidatedReads::validate(batch, "TEST", "51238696780");
+        report.rules.iter().any(|r: &String| r.contains("V07"))
+    }
+
+    /// 2026-10-25 is 25 hours long: 00:00 CEST is 2026-10-24T22:00Z and the day
+    /// ends at 2026-10-25T23:00Z. A correct series carries 100 quarter-hours.
+    #[test]
+    fn a_complete_fall_back_day_is_100_quarter_hours_and_is_accepted() {
+        let start = datetime!(2026-10-24 22:00:00 UTC);
+        let batch = quarter_hours(start, 100);
+        assert_eq!(
+            batch.last().expect("non-empty").dtm_to,
+            datetime!(2026-10-25 23:00:00 UTC),
+            "100 quarter-hours from 00:00 CEST must land on 00:00 CET the next day"
+        );
+        assert!(
+            !raised_v07(batch),
+            "a full 25-hour day is correct and must not raise V07"
+        );
+    }
+
+    /// The same local day delivered as 96 intervals means the repeated hour was
+    /// collapsed — an hour of energy is gone, and nothing else notices.
+    #[test]
+    fn a_collapsed_fall_back_day_raises_v07_through_edmds_own_wrapper() {
+        let start = datetime!(2026-10-24 22:00:00 UTC);
+        let batch = quarter_hours(start, 96);
+        assert!(
+            raised_v07(batch),
+            "a fall-back day carrying only 24 hours lost the repeated hour; V07 \
+             must fire, otherwise the series bills an hour short and no other \
+             rule can tell"
+        );
+    }
+
+    /// 2026-03-29 is 23 hours long: 00:00 CET is 2026-03-28T23:00Z and the day
+    /// ends at 2026-03-29T22:00Z. A correct series carries 92 quarter-hours.
+    #[test]
+    fn a_complete_spring_forward_day_is_92_quarter_hours_and_is_accepted() {
+        let start = datetime!(2026-03-28 23:00:00 UTC);
+        let batch = quarter_hours(start, 92);
+        assert_eq!(
+            batch.last().expect("non-empty").dtm_to,
+            datetime!(2026-03-29 22:00:00 UTC),
+            "92 quarter-hours from 00:00 CET must land on 00:00 CEST the next day"
+        );
+        assert!(
+            !raised_v07(batch),
+            "a 23-hour day is correct and must not raise V07"
+        );
+    }
 
     #[test]
     fn every_wire_quality_flag_is_one_the_column_check_accepts() {
@@ -1152,13 +1131,18 @@ pub async fn post_bulk_reads(
     // Validation runs before the write so its findings can be stored with the
     // rows they describe, in the same statement.
     batch.sort_by_key(|r| r.dtm_from);
-    let validation = validate_and_annotate(&mut batch, "BULK_IMPORT_VALIDATION", &malo_id);
+    let (validated, validation) = crate::domain::validation::ValidatedReads::validate(
+        batch,
+        "BULK_IMPORT_VALIDATION",
+        &malo_id,
+    );
 
-    let period_from = batch.first().map(|r| r.dtm_from);
-    let period_to = batch.last().map(|r| r.dtm_to);
+    let period_from = validated.as_slice().first().map(|r| r.dtm_from);
+    let period_to = validated.as_slice().last().map(|r| r.dtm_to);
 
     // One batched statement, so the count reported is the count committed.
-    if let Err(e) = state.repo.store_reads(&batch).await {
+    let stored = validated.len();
+    if let Err(e) = state.repo.store_reads(validated).await {
         tracing::error!(malo_id = %malo_id, error = %e, "edmd: bulk import batch insert failed");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1170,7 +1154,6 @@ pub async fn post_bulk_reads(
         )
             .into_response();
     }
-    let stored = batch.len();
 
     let issues_summary = serde_json::json!({
         "is_clean": validation.is_clean(),
@@ -1199,8 +1182,34 @@ pub async fn post_bulk_reads(
     .execute(state.repo.pool())
     .await;
 
+    // A bulk import used to answer 201 and stay silent whatever the V01–V10 pass
+    // found, so an operator uploading a month of corrected readings got the same
+    // "created" for a clean file and for one carrying billing-blocking intervals.
+    let alert = crate::server::quality_alert::QualityAlert {
+        malo_id: &malo_id,
+        door: "bulk-import",
+        correlation_id: &session_id,
+        causation_id: &session_id,
+        sparte: Some(sparte),
+        period_from,
+        period_to,
+        validation: &validation,
+        hampel: None,
+    };
+    crate::server::quality_alert::raise_quality_warning(
+        state.erp_webhook_url.as_deref(),
+        state.webhook_secret_bytes(),
+        &state.tenant,
+        &alert,
+    )
+    .await;
+
     (
-        StatusCode::CREATED,
+        if alert.is_warning() {
+            StatusCode::ACCEPTED
+        } else {
+            StatusCode::CREATED
+        },
         Json(serde_json::json!({
             "session_id": session_id,
             "malo_id": malo_id,

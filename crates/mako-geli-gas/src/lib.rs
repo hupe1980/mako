@@ -19,7 +19,7 @@
 //! | Abmeldungsanfrage des NB | 44010–44012 | ✅ Registered |
 //! | Anmeldung/Abmeldung EoG | 44013–44015 | ✅ Registered |
 //! | Kündigung beim alten Lieferanten | 44016 | ✅ Registered |
-//! | Kündigung Lieferbeginn Gas (LFN ↔ LFA) | 44017–44018 | ✅ Registered |
+//! | Bestätigung / Ablehnung Kündigung (LFA → LFN) | 44017–44018 | ✅ Registered |
 //! | Bestandsliste / Änderungsmeldung | 44019–44021 | ✅ Registered |
 //! | Stornierung Anfrage (LF → GNB) | 44022 | ✅ Outbound (LF-side), ERP-initiated |
 //! | Stornierung Bestätigung (GNB → LF) | 44023 | ✅ Inbound (LF-side), `geli-gas-stornierung-lf` |

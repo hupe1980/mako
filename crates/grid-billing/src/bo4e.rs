@@ -11,7 +11,8 @@
 
 use crate::{InvoiceDocument, QuantityUnit, SettlementResult};
 use rubo4e::current::{
-    Betrag, Menge, Mengeneinheit, Preis, Rechnung, Rechnungsposition, Zeitraum, ZusatzAttribut,
+    Betrag, Menge, Mengeneinheit, NetznutzungRechnungsart, NetznutzungRechnungstyp, Preis,
+    Rechnung, Rechnungsposition, Rechnungstyp, Zeitraum, ZusatzAttribut,
 };
 
 /// Parse the BDEW Artikelnummer that `grid-billing` decided on.
@@ -33,6 +34,70 @@ pub fn kind_to_artikelnummer(
     use std::str::FromStr as _;
     kind.artikelnummer(settlement_type)
         .and_then(|name| rubo4e::current::BdewArtikelnummer::from_str(name).ok())
+}
+
+/// The BO4E `rechnungstyp` for a settlement, when it is a Netznutzungsrechnung.
+///
+/// Not every settlement `grid-billing` produces is one. Grid usage (NNE) and
+/// Mehr-/Mindermengen are; the rest are separate commercial documents that
+/// happen to share this engine:
+///
+/// - **`MsbRechnung`** (31009) bills Messstellenbetrieb, not network use.
+/// - **`GasAwhSperrung`** (31011) is explicitly a *Rechnung sonstige Leistung*.
+/// - **`RedispatchKostenblatt`** is a §13a cost sheet toward the ÜNB.
+/// - **`DezentraleEinspeisung`** (§18 StromNEV) is a bilateral credit with no
+///   Prüfidentifikator at all.
+///
+/// Typing those as Netznutzungsrechnung would assert something the AHB does not,
+/// so they are left untyped rather than approximated.
+#[must_use]
+pub fn rechnungstyp_for(settlement_type: crate::SettlementType) -> Option<Rechnungstyp> {
+    use crate::SettlementType as S;
+    matches!(
+        settlement_type,
+        S::NneStrom | S::NneGas | S::MmmStrom | S::MmmGas | S::MmmSelbstausstellt
+    )
+    .then_some(Rechnungstyp::Netznutzungsrechnung)
+}
+
+/// The BO4E `netznutzungrechnungsart` — who issued the invoice.
+///
+/// PID 31006 is the Mehrmenge leg issued by the receiving party itself, which is
+/// exactly what *Selbstausgestellt* denotes. Everything else in this family is a
+/// conventional Handelsrechnung from the network operator.
+#[must_use]
+pub fn netznutzungrechnungsart_for(
+    settlement_type: crate::SettlementType,
+) -> Option<NetznutzungRechnungsart> {
+    use crate::SettlementType as S;
+    match settlement_type {
+        S::MmmSelbstausstellt => Some(NetznutzungRechnungsart::Selbstausgestellt),
+        S::NneStrom | S::NneGas | S::MmmStrom | S::MmmGas => {
+            Some(NetznutzungRechnungsart::Handelsrechnung)
+        }
+        _ => None,
+    }
+}
+
+/// The BO4E `netznutzungrechnungstyp` — which kind of Netznutzungsrechnung.
+///
+/// Only the Mehr-/Mindermengen family is derivable from the settlement type. The
+/// remaining variants (Turnus-, Monats-, Abschlags-, Abschluss-, Zwischen-,
+/// WiM-Rechnung) describe the **billing cadence**, which `SettlementType` does
+/// not carry: an NNE settlement is the same computation whether it is billed
+/// monthly or annually. Guessing one would put a specific claim about billing
+/// rhythm on the wire that nothing in the settlement supports, so NNE is left
+/// unset until the cadence is modelled.
+#[must_use]
+pub fn netznutzungrechnungstyp_for(
+    settlement_type: crate::SettlementType,
+) -> Option<NetznutzungRechnungstyp> {
+    use crate::SettlementType as S;
+    matches!(
+        settlement_type,
+        S::MmmStrom | S::MmmGas | S::MmmSelbstausstellt
+    )
+    .then_some(NetznutzungRechnungstyp::Mehrmindermengenrechnung)
 }
 
 /// Render a settlement, presented as an invoice, into a BO4E `Rechnung`.
@@ -86,7 +151,8 @@ pub fn into_rechnung(document: &InvoiceDocument) -> Rechnung {
         })
         .collect();
 
-    Rechnung::builder()
+    let settlement_type = invoice.settlement_type;
+    let mut rechnung = Rechnung::builder()
         .rechnungsnummer(document.rechnungsnummer.clone())
         .rechnungsdatum(document.invoice_date)
         .faelligkeitsdatum(document.due_date)
@@ -96,7 +162,15 @@ pub fn into_rechnung(document: &InvoiceDocument) -> Rechnung {
         // Every paragraph the settlement rests on, deduplicated across
         // positions, plus any warnings the engine raised.
         .zusatz_attribute(settlement_attributes(invoice))
-        .build()
+        .build();
+
+    // Typed after the builder rather than through it: each of these is `None`
+    // for a settlement that is not a Netznutzungsrechnung, and the builder's
+    // `setter(into)` would coerce an `Option` into `Some(None)`-shaped noise.
+    rechnung.rechnungstyp = rechnungstyp_for(settlement_type);
+    rechnung.netznutzungrechnungsart = netznutzungrechnungsart_for(settlement_type);
+    rechnung.netznutzungrechnungstyp = netznutzungrechnungstyp_for(settlement_type);
+    rechnung
 }
 
 /// Serialise a position's [`crate::CalculationTrace`] into a BO4E
@@ -158,6 +232,7 @@ mod tests {
 
     fn sample_nne() -> crate::NneInput {
         crate::NneInput {
+            blindarbeit: None,
             malo_id: "51238696780".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
@@ -354,5 +429,84 @@ mod artikelnummer_bridge_tests {
     fn strom_and_gas_nne_are_coded_differently() {
         assert_eq!(K::NneArbeit.artikelnummer(ST::NneGas), Some("WIRKARBEIT"));
         assert_eq!(K::NneArbeit.artikelnummer(ST::NneStrom), None);
+    }
+}
+
+#[cfg(test)]
+mod rechnungstyp_tests {
+    use super::*;
+    use crate::SettlementType as S;
+
+    #[test]
+    fn grid_usage_and_mmm_are_netznutzungsrechnungen() {
+        for st in [
+            S::NneStrom,
+            S::NneGas,
+            S::MmmStrom,
+            S::MmmGas,
+            S::MmmSelbstausstellt,
+        ] {
+            assert_eq!(
+                rechnungstyp_for(st),
+                Some(Rechnungstyp::Netznutzungsrechnung),
+                "{st:?} bills network use and must be typed as such"
+            );
+        }
+    }
+
+    #[test]
+    fn non_grid_settlements_are_left_untyped() {
+        // Typing these as Netznutzungsrechnung would assert something the AHB
+        // does not. `None` is the honest answer, not a gap to fill later.
+        for st in [
+            S::MsbRechnung,
+            S::GasAwhSperrung,
+            S::RedispatchKostenblatt,
+            S::DezentraleEinspeisung,
+        ] {
+            assert_eq!(
+                rechnungstyp_for(st),
+                None,
+                "{st:?} is not a Netznutzungsrechnung"
+            );
+            assert_eq!(netznutzungrechnungsart_for(st), None);
+            assert_eq!(netznutzungrechnungstyp_for(st), None);
+        }
+    }
+
+    #[test]
+    fn only_pid_31006_is_self_issued() {
+        assert_eq!(
+            netznutzungrechnungsart_for(S::MmmSelbstausstellt),
+            Some(NetznutzungRechnungsart::Selbstausgestellt)
+        );
+        for st in [S::NneStrom, S::NneGas, S::MmmStrom, S::MmmGas] {
+            assert_eq!(
+                netznutzungrechnungsart_for(st),
+                Some(NetznutzungRechnungsart::Handelsrechnung),
+                "{st:?} is issued by the network operator"
+            );
+        }
+    }
+
+    #[test]
+    fn the_cadence_field_is_only_set_where_it_is_known() {
+        // Mehr-/Mindermengen has a dedicated code, so it can be stated.
+        for st in [S::MmmStrom, S::MmmGas, S::MmmSelbstausstellt] {
+            assert_eq!(
+                netznutzungrechnungstyp_for(st),
+                Some(NetznutzungRechnungstyp::Mehrmindermengenrechnung)
+            );
+        }
+        // NNE has none: Turnus/Monats/Abschlag describe billing rhythm, which a
+        // settlement type does not carry. Emitting a guess would put an
+        // unsupported claim about billing cadence on the wire.
+        for st in [S::NneStrom, S::NneGas] {
+            assert_eq!(
+                netznutzungrechnungstyp_for(st),
+                None,
+                "{st:?} has no cadence to state"
+            );
+        }
     }
 }

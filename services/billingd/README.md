@@ -13,7 +13,7 @@ no customer management. It pulls product definitions from `tarifbd`, consumption
 | **Categories** | 13: STROM, GAS, WAERME, WASSER, SOLAR, EEG, EINSPEISUNG, WAERMEPUMPE, WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, SHARING |
 | **§41a EPEX dynamic** | 15-min Lastgang × hourly EPEX day-ahead → `STROM` dynamic category |
 | **§41a iMSys guard** | Hard error when `dynamic_epex=true` and `MeteringMode != Imsys` |
-| **§14a discount** | `ControllableLoadProvider` Modul 1 (capacity reduction) + Modul 3 (load-shedding) |
+| **§14a discount** | `ControllableLoadProvider` — Modul 1 (pauschale Reduzierung), Modul 2 (prozentuale Arbeitspreisreduzierung), Modul 3 (zeitvariable Netzentgelte, three Tarifstufen). Modul 2 and 3 are mutually exclusive per BK6-22-300 |
 | **§42b EnWG GGV** | `POST /api/v1/billing/ggv/{ggv_id}` — multi-tenant PV community solar, per-tenant share billing |
 | **§42c Sharing** | `Product::Sharing(SharingProduct)` — community energy allocation credit via `EnergyShareProvider` |
 | **Gas H2-blend** | `gasqualitaet` field on `GasMeterInput` — annotates Rechnung as `ZusatzAttribut` (per DVGW G 260, measured Brennwert already reflects blend) |
@@ -92,7 +92,7 @@ Engine failures answer with a structured body, not prose:
 
 ```json
 { "error": { "code": "VALIDATION_BLOCKED", "context": "51238696780",
-             "message": "…", "warnings": [{ "code": "MODUL2_AND_FLAT_NNE", … }] } }
+             "message": "…", "warnings": [{ "code": "MODUL3_AND_FLAT_NNE", … }] } }
 ```
 
 `code` is `EngineError::code()` — stable, machine-readable; `warnings` carries

@@ -1050,7 +1050,7 @@
     },
     {
       "code": 44017,
-      "name": "Kündigung Lieferbeginn Gas (LFN an LFA)",
+      "name": "Bestätigung Kündigung Lieferbeginn Gas (LFA an LFN)",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -1195,7 +1195,7 @@
     },
     {
       "code": 44018,
-      "name": "Bestätigung Kündigung Lieferbeginn Gas (LFA an LFN)",
+      "name": "Ablehnung Kündigung Lieferbeginn Gas (LFA an LFN)",
       "segment_rules": [
         {
           "tag": "BGM",

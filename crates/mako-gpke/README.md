@@ -35,8 +35,8 @@ the APERAK response deadline — not Werktage. This is enforced by BK6-22-024.
 | 55013 | Anmeldung / Zuordnung EOG (§36/§38 EnWG)              | NB → LF     | ✅ Implemented (`gpke-eog`, both roles) |
 | 55014 | Bestätigung EOG Anmeldung                             | LF → NB     | ✅ Implemented (`gpke-eog`) |
 | 55015 | Ablehnung EOG Anmeldung                               | LF → NB     | ✅ Implemented (`gpke-eog`) |
-| 55017 | Kündigung Lieferbeginn                                | LFN → LFA   | ✅ Implemented |
-| 55018 | Bestätigung Kündigung Lieferbeginn                    | LFA → LFN   | ↩ Derived from 55017 always |
+| 55016 | Kündigung Lieferbeginn                                | LFN → LFA   | ✅ Implemented |
+| 55017/55018 | Bestätigung / Ablehnung Kündigung Lieferbeginn  | LFA → LFN   | ↩ Derived from 55016 accept/reject |
 | 55555 | Anfrage Daten der individuellen Bestellung            | LFN → NB    | ✅ Implemented (GPKE Teil 4, BK6-24-174) |
 
 ### ORDERS/ORDRSP Konfigurationseinrichtung (GPKE Teil 4)
@@ -227,7 +227,7 @@ Allokationsliste, exchanged between LF and NB via ORDERS and answered with MSCON
 | `beendigung_zuordnung`      | `gpke-beendigung-zuordnung`      | PID 55010 (NB Abmeldeanfrage) + 55011/55012 derived responses |
 | `eog`                       | `gpke-eog`                       | PID 55013 (Anmeldung/Zuordnung EOG §36/§38 EnWG) + 55014/55015 derived |
 | `comdis`                    | `gpke-comdis`                    | PIDs 29001/29002 (COMDIS Kaufmännisch-Bilanzielle Ausgleichsprozesse) |
-| `lf_anmeldung`              | `gpke-lf-anmeldung`              | PIDs 55001/55002/55016/55077 (LF outbound) + 55003–55006/55017–55018/55078/55080 (LF-role receive NB ANTWORT) |
+| `lf_anmeldung`              | `gpke-lf-anmeldung`              | PIDs 55001/55004/55016/55077 (LF outbound) + 55002-55003/55005-55006/55017-55018/55078/55080 (LF-role receive NB ANTWORT) |
 | `lf_abmeldung`              | `gpke-lf-abmeldung`              | PID 55007 (NB → LF Kündigung) + 55008/55009 derived           |
 | `stammdatenaenderung`       | `gpke-stammdatenaenderung`       | GPKE Teil 4 Stammdatenänderung 55615–55694, 55109/55110 — inbound MaLo change → apply to marktd + Rückmeldung A01/A02 (quality feedback, tacit acceptance after 2 WT) |
 | `neuanlage`                 | `gpke-neuanlage`                 | PIDs 55600/55601 (Neuanlage MaLo, LF → NB) + 55602–55605 derived   |

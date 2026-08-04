@@ -1195,3 +1195,44 @@ CREATE INDEX msb_rv_gas_status
 
 COMMENT ON TABLE msb_rahmenvertraege_gas IS
     'Gas MSB framework contracts (GeLi Gas 3.0 Tenor 13–16, KoV XV Anlage 8): per-(GNB,MSB) conclusion state incl. the BK7-17-026 migration duty by 01.10.2026.';
+
+-- ── MaBiS-Zählpunkt assignments ──────────────────────────────────────────────
+--
+-- Which MaBiS-Zählpunkt a Bilanzierungsgebiet's Summenzeitreihen are filed
+-- under. MSCONS Summenzeitreihen (13003/13023) carry the Meldepunkt as SG6
+-- LOC+172 and the Bilanzierungsgebiet as LOC+107 — different identifiers with
+-- different meanings, both free text at the MIG level. A wrong Meldepunkt
+-- therefore produces a message that parses and validates and is, to the BIKO,
+-- indistinguishable from a correct one.
+--
+-- Master data rather than service configuration so that a territory with no
+-- assignment fails its submission loudly instead of silently substituting the
+-- Bilanzierungsgebiet EIC. Read by `mabis-syncd` before every submission.
+--
+-- BNetzA BK6-24-174 Anlage 3 (MaBiS); MSCONS AHB 3.2 SG6.
+
+CREATE TABLE mabis_zaehlpunkte (
+    bilanzierungsgebiet  TEXT        NOT NULL,   -- EIC, 16 chars (LOC+107)
+    tenant               TEXT        NOT NULL,
+    mabis_zp_id          TEXT        NOT NULL    -- Meldepunkt (LOC+172)
+                         CHECK (length(trim(mabis_zp_id)) > 0),
+    sparte               TEXT        NOT NULL DEFAULT 'STROM'
+                         CHECK (sparte IN ('STROM', 'GAS')),
+    source               TEXT        NOT NULL DEFAULT 'manual',
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (bilanzierungsgebiet, tenant),
+
+    -- The Meldepunkt must never be the territory code it belongs to. That
+    -- substitution is the exact defect this table exists to prevent, and it is
+    -- invisible once the message is on the wire.
+    CONSTRAINT mabis_zp_not_the_gebiet CHECK (mabis_zp_id <> bilanzierungsgebiet),
+
+    -- …and it must not be *any* territory code. A Bilanzierungsgebiet EIC is 16
+    -- characters, a Zählpunktbezeichnung 33, so the length alone separates them.
+    -- Without this, territory A's EIC stored as territory B's Meldepunkt passes
+    -- the inequality above and reads as valid master data until a submission run
+    -- refuses it — long after the assignment was made.
+    CONSTRAINT mabis_zp_ist_zaehlpunktbezeichnung
+        CHECK (length(trim(mabis_zp_id)) = 33)
+);

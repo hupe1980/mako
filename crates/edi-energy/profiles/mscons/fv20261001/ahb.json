@@ -246,7 +246,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3227": [
-              "172"
+              "172",
+              "107",
+              "237"
             ]
           },
           "field_rules": [
@@ -3001,7 +3003,9 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "3227": [
-              "172"
+              "172",
+              "107",
+              "237"
             ]
           },
           "field_rules": [

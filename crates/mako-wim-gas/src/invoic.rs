@@ -321,7 +321,7 @@ pub enum WimGasInvoicCommand {
     /// The billing module renders and dispatches the billed EDIFACT with amounts;
     /// this command records the process so an inbound REMADV (33001/33002) from the
     /// NB correlates back to it. Duplicated per Sparte from the Strom twin
-    /// (`mako-wim::rechnung::WimRechnungCommand::SendInvoic`) — no shared workflow.
+    /// (`mako-wim::invoic::WimInvoicCommand::SendInvoic`) — no shared workflow.
     SendInvoic {
         /// BDEW Prüfidentifikator of the outbound INVOIC (31003 or 31004).
         pid: Pruefidentifikator,

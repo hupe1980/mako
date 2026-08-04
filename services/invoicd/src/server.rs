@@ -1041,6 +1041,7 @@ async fn post_selbstausstellen(
     };
 
     let input = grid_billing::NneInput {
+        blindarbeit: None,
         malo_id: malo_id.clone(),
         nb_mp_id: body.nb_mp_id.clone(),
         lf_mp_id: state.tenant.clone(), // LF is selbstaussteller (= our own tenant)

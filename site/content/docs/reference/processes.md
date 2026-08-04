@@ -51,7 +51,7 @@ INSRPT last changed with `fv20260101`).
 | Domain | Frist |
 |---|---|
 | GPKE | 24 Stunden (wall-clock) |
-| WiM Strom | 5 Werktage |
+| WiM Strom | 3 / 5 / 7 / 1 Werktage, per PID (55039 / 55042 / 55051 / 55168) |
 | GeLi Gas | 10 Werktage |
 | WiM Gas | 10 Werktage |
 
@@ -85,10 +85,13 @@ Quick reference across all process families. Each row is a top-level domain.
 | **PARTIN Strom Kommunikationsdaten** | ⚡ | `mako-gpke` `gpke-partin` | PARTIN 37000–37006 | — | PARTIN AHB 1.0f |
 | **WiM Strom MSB-Wechsel** | ⚡ | `mako-wim` `wim-device-change` | UTILMD 55039/55042/55051/55168 (out+in) · 55040/55041 · 55043/55044 · 55052/55053 · 55169/55170 (Antwort) | 3/5/7/1 WT — see below | BK6-24-174 |
 | **WiM Strom Geräteübernahme** | ⚡ | `mako-wim` `wim-geraeteubernahme` | ORDERS 17001–17011 · ORDRSP 19001/19002 | 5 WT | BK6-24-174 |
-| **WiM Strom Abrechnung** | ⚡ | `mako-wim` `wim-rechnung` | INVOIC 31009 | 5 WT | BK6-24-174 |
+| **WiM Strom Abrechnung** | ⚡ | `mako-wim` `wim-invoic` | INVOIC 31009 | 5 WT | BK6-24-174 |
 | **WiM Strom INSRPT** | ⚡ | `mako-wim` `wim-insrpt` | INSRPT 23001/23003/23004/23008 | 5 WT | BK6-24-174 |
 | **MaBiS Bilanzkreisabrechnung** | ⚡ | `mako-mabis` `mabis-billing` | MSCONS 13003; IFTSTA 21000–21005 | 1 WT (§13.8) | BK6-24-174 |
 | **MaBiS Clearingliste** | ⚡ | `mako-mabis` `mabis-clearingliste` | UTILMD 55065/55069/55070 | — | BK6-24-174 |
+| **MaBiS-ZP Lifecycle** | ⚡ | `mako-mabis` `mabis-zp-lifecycle` | UTILMD 55062–55064, 55071/55072, 55197–55200, 55203–55214 | — | BK6-24-174 |
+| **MaBiS Anforderungen** | ⚡ | `mako-mabis` `mabis-anforderung` | ORDERS 17201–17208 | — | BK6-24-174 |
+| **MaBiS Listenabgleich** | ⚡ | `mako-mabis` `mabis-listenabgleich` | UTILMD 55195/55196, 55201/55202, 55223/55224 | — | BK6-24-174 |
 | **GeLi Gas Lieferantenwechsel** | 🔥 | `mako-geli-gas` `geli-gas-supplier-change` | UTILMD G 44001–44021 | 10 WT | BK7-24-01-009 |
 | **GeLi Gas Lieferbeginn (LF-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-lf-anmeldung` | UTILMD G 44001 (out) · 44002/44003 (in) | 10 WT | BK7-24-01-009 |
 | **GeLi Gas Stornierung (GNB-Sicht)** | 🔥 | `mako-geli-gas` `geli-gas-stornierung` | UTILMD G 44022 (Nb-only inbound) | 10 WT | BK7-24-01-009 |
@@ -193,8 +196,8 @@ the `processd` EoG module automates gap detection and the timer.
 
 | Process | Initiator → Responder | Anfrage PID | Antwort OK | Antwort NG | Crate |
 |---|---|---|---|---|---|
-| Anmeldung / Lieferbeginn (LF-AN) | LFN → NB | UTILMD **55001** | 55003 | 55004 | `mako-gpke` ✅ |
-| Lieferende / Abmeldung (LFN → NB) | LFN → NB | UTILMD **55002** | 55005 | 55006 | `mako-gpke` ✅ |
+| Anmeldung / Lieferbeginn (LF-AN) | LFN → NB | UTILMD **55001** | 55002 | 55003 | `mako-gpke` ✅ |
+| Lieferende / Abmeldung (LFN → NB) | LFN → NB | UTILMD **55004** | 55005 | 55006 | `mako-gpke` ✅ |
 | Anmeldung erz. MaLo (LF-AN) | LFN → NB | UTILMD **55077** | 55078 | 55080 | `mako-gpke` ✅ |
 | Neuanlage verb. MaLo | LF → NB | UTILMD **55600** | 55602 | 55604 | `mako-gpke` ✅ |
 | Neuanlage erz. MaLo | LF → NB | UTILMD **55601** | 55603 | 55605 | `mako-gpke` ✅ |
@@ -718,8 +721,8 @@ object. The grid operator is called **GNB** (Gasnetzbetreiber), not NB.
 
 | Process | Initiator → Responder | UTILMD PID | Antwort OK | Antwort NG | Crate |
 |---|---|---|---|---|---|
-| Lieferbeginn Gas (LF-AN) | LFN → GNB | UTILMD G **44001** | 44003 | 44004 | `mako-geli-gas` ✅ |
-| Lieferende Gas | LFN → GNB | UTILMD G **44002** | 44005 | 44006 | `mako-geli-gas` ✅ |
+| Lieferbeginn Gas (LF-AN) | LFN → GNB | UTILMD G **44001** | 44002 | 44003 | `mako-geli-gas` ✅ |
+| Lieferende Gas / Abmeldung NN | LFN → GNB | UTILMD G **44004** | 44005 | 44006 | `mako-geli-gas` ✅ |
 | Abmeldung NN (GNB → LFN) | GNB → LFN | UTILMD G **44007** | 44008 | 44009 | `mako-geli-gas` ✅ |
 | Abmeldungsanfrage (GNB → LFA) | GNB → LFA | UTILMD G **44010** | 44011 | 44012 | `mako-geli-gas` ✅ |
 | EoG Anmeldung (GNB → LF) | GNB → LF | UTILMD G **44013** | 44014 | 44015 | `mako-geli-gas` ✅ |
@@ -741,8 +744,8 @@ object. The grid operator is called **GNB** (Gasnetzbetreiber), not NB.
 #### LF-seitige Einreichung (geli-gas-lf-anmeldung)
 
 When makod is deployed in the **LF role**, the LF initiates the Lieferbeginn Gas by sending
-UTILMD G 44001 outbound to the GNB. The response arrives inbound as 44003 (Bestätigung)
-or 44004 (Ablehnung). This mirrors the GPKE `gpke-lf-anmeldung` workflow for Strom.
+UTILMD G 44001 outbound to the GNB. The response arrives inbound as 44002 (Bestätigung)
+or 44003 (Ablehnung). This mirrors the GPKE `gpke-lf-anmeldung` workflow for Strom.
 
 **Workflow:** `geli-gas-lf-anmeldung` — APERAK Frist: **10 Werktage**
 

@@ -81,6 +81,13 @@ struct LineItemSpec {
 struct MeteringPointSpec {
     malo_id: String,
     location_id: Option<String>,
+    /// Bilanzierungsgebiet EIC — `LOC+107`.
+    ///
+    /// Distinct from `location_id` (`LOC+172` Meldepunkt). MSCONS AHB 3.2 gives
+    /// the Summenzeitreihe PIDs three separate SG6 LOC qualifiers: `172`
+    /// Meldepunkt, `107` Bilanzierungsgebiet, `237` Bilanzkreis. Putting the
+    /// Bilanzierungsgebiet under `172` claims it is the Meldepunkt.
+    bilanzierungsgebiet: Option<String>,
     /// Bilanzierungsmonat as `CCYYMM` (`DTM+492`, format 610).
     balancing_period: Option<String>,
     /// Versionsangabe as `CCYYMMDDHHMMSSZZZ` (`DTM+293`, format 304).
@@ -261,6 +268,7 @@ impl<S, R> MsconsBuilder<S, R> {
             spec: MeteringPointSpec {
                 malo_id: malo_id.into(),
                 location_id: None,
+                bilanzierungsgebiet: None,
                 balancing_period: None,
                 version: None,
                 line_items: Vec::new(),
@@ -336,6 +344,11 @@ impl<S, R> MsconsBuilder<S, R> {
                     // a message the profile rejects for a missing segment.
                     let loc_id = mp.location_id.as_deref().unwrap_or(mp.malo_id.as_str());
                     emit_seg!(w, "LOC", "172", loc_id);
+                    // SG6 LOC+107 — the Bilanzierungsgebiet the Meldepunkt sits
+                    // in. Its own qualifier, not a second use of 172.
+                    if let Some(bg) = &mp.bilanzierungsgebiet {
+                        emit_seg!(w, "LOC", "107", bg);
+                    }
                     if let Some(period) = &mp.balancing_period {
                         emit_comp!(w, "DTM", ["492", period, "610"]);
                     }
@@ -433,10 +446,15 @@ impl<S, R> MeteringPointBuilder<S, R> {
         self
     }
 
-    /// Set the OBIS code (PIA+5) for the current line item.
+    /// Set the Bilanzierungsgebiet EIC (`LOC+107`).
     ///
-    /// The code must conform to IEC 62056-61: `[A-B:]C.D[.E][*F]`.
-    /// A new line item is created automatically if none is in progress.
+    /// Required for the `MaBiS` Summenzeitreihe PIDs; the Meldepunkt itself goes
+    /// to [`location_id`](MeteringPointBuilder::location_id) as `LOC+172`.
+    pub fn bilanzierungsgebiet(mut self, id: impl Into<String>) -> Self {
+        self.spec.bilanzierungsgebiet = Some(id.into());
+        self
+    }
+
     /// Set the Bilanzierungsmonat (`DTM+492`, format 610, `CCYYMM`).
     pub fn balancing_period(mut self, period: impl Into<String>) -> Self {
         self.spec.balancing_period = Some(period.into());

@@ -179,31 +179,31 @@ prompt, default trigger patterns, and default MCP server requirements.
 
 | Specialist | Default triggers | Default MCP servers |
 |---|---|---|
-| `mako-agent` | `de.mako.process.*`, `de.mako.aperak.*` | makod, marktd, processd, obsd |
-| `deadline-alert-agent` | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.obs.stp.parity.alert` | obsd, makod, marktd |
-| `billing-agent` | `de.invoic.receipt.disputed`, `de.accounting.*` | invoicd, billingd, accountingd, netzbilanzd |
-| `netzbilanz-agent` | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched` | netzbilanzd, marktd, edmd |
-| `invoice-reconciliation-agent` | `de.invoic.payment.overdue`, `de.invoic.receipt.disputed` | invoicd, marktd, netzbilanzd |
+| `mako-agent` | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.mako.aperak.*` | makod, marktd, obsd |
+| `deadline-alert-agent` | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.obs.deadline.approaching` | obsd, makod, marktd |
+| `billing-agent` | `de.invoic.receipt.disputed`, `de.accounting.mahnung.issued` | invoicd, billingd, accountingd, netzbilanzd |
+| `netzbilanz-agent` | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched`, `de.netzbilanz.invoic.dispatch-overdue` | netzbilanzd, marktd, edmd |
+| `invoice-reconciliation-agent` | `de.invoic.payment.overdue`, `de.invoic.receipt.*` | invoicd, marktd, netzbilanzd |
 | `billing-anomaly-agent` | `de.billing.rechnung.erstellt` | billingd, edmd |
 | `billing-regulatory-guard-agent` | `de.billing.rechnung.erstellt` | billingd, marktd |
-| `jahresabrechnung-agent` | manual trigger | billingd, edmd, marktd |
+| `jahresabrechnung-agent` | manual / scheduled (no trigger patterns) | billingd, edmd, marktd |
 | `eeg-agent` | `de.eeg.anlage.foerderung-auslaufend`, `de.messwert.reading.direct.stored` | einsd, edmd, marktd |
-| `eeg-compliance-agent` | `de.eeg.anlage.*`, `de.eeg.verguetung.*`, `de.eeg.marktpraemie.*` | einsd, obsd |
+| `eeg-compliance-agent` | `de.eeg.anlage.*`, `de.eeg.verguetung.*`, `de.eeg.marktpraemie.*`, `de.eeg.compliance.*` | einsd, obsd |
 | `payment-reconciliation-agent` | `de.accounting.payment.due`, `de.accounting.bankruecklast` | accountingd |
 | `compliance-agent` | `de.obs.stp.parity.alert` | obsd, processd, marktd, invoicd |
-| `msb-history-agent` | `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored` | edmd, makod, marktd |
+| `msb-history-agent` | `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.completed` | edmd, makod, marktd |
 | `meter-data-agent` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd |
 | `grid-anomaly-agent` | `de.markt.nb-contract.updated`, `de.markt.malo.updated` | marktd, obsd |
 | `tariff-optimization-agent` | `de.billing.rechnung.erstellt`, `de.mako.process.completed` | billingd, tarifbd, edmd, marktd |
 | `vertragd-agent` | `de.vertrag.*`, `de.mako.aperak.rejected`, `de.mako.process.failed`, `de.vertrag.ablauf.ankuendigung`, `de.vertrag.preisaenderung.ankuendigung` | vertragd, processd, marktd |
 | `tarifbd-agent` | `de.tarif.product.updated`, `de.tarif.angebot.abgelaufen`, `de.tarif.epex.missing` | tarifbd, marktd |
-| `processd-agent` | `de.mako.process.initiated`, `de.mako.process.rejected` | processd, marktd, obsd |
-| `sperrd-agent` | `de.sperr.*`, `de.mako.process.completed` | sperrd, makod, marktd |
-| `portald-agent` | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung-auslaufend`, `de.accounting.mahnung.issued` | portald, billingd, einsd, accountingd |
-| `regulatory-reporting-agent` | manual / scheduled | obsd, processd, invoicd, marktd |
+| `processd-agent` | `de.mako.process.initiated`, `de.mako.aperak.rejected`, `de.mako.process.failed` | processd, marktd, obsd |
+| `sperrd-agent` | `de.accounting.sperrauftrag`, `de.sperr.*`, `de.mako.process.completed` | sperrd, makod, marktd |
+| `portald-agent` | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung-auslaufend`, `de.accounting.mahnung.issued`, `de.vertrag.*` | portald, billingd, einsd, accountingd |
+| `regulatory-reporting-agent` | manual / scheduled (no trigger patterns) | obsd, processd, invoicd, marktd |
 | `replacement-value-agent` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd, obsd |
 | `mabis-syncd-agent` | `de.messwert.reading.quality.warning` | edmd, obsd, marktd |
-| `smgw-diagnostics-agent` | `de.messwert.cls.compliance-issue`, `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.initiated`, `de.markt.geraet.konfiguration.updated` | edmd, marktd, obsd, processd |
+| `smgw-diagnostics-agent` | `de.messwert.cls.compliance-issue`, `de.messwert.smgw.cert.expiry-warning`, `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.initiated`, `de.markt.geraet.konfiguration.updated` | edmd, marktd, obsd, processd |
 | `vpp-billing-agent` | `de.vpp.dispatch.confirmed`, `de.vpp.settlement.berechnet` | billingd, marktd, obsd |
 | `gabi-gas-agent` | `de.gabi.imbalance.*`, `de.gabi.alocat.missing`, `de.gabi.nomination.*`, `de.netzbilanz.invoic.drafted` | makod, netzbilanzd, marktd, obsd |
 | `einsd-batch-agent` | `de.eeg.settlement.batch-due`, `de.eeg.compliance.*`, `de.eeg.anlage.foerderung-auslaufend` | einsd, edmd, tarifbd, obsd |

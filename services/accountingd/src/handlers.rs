@@ -26,7 +26,7 @@ use uuid::Uuid;
 use crate::{
     config::AccountingdConfig,
     pg::{
-        CreateMandateRequest, UpdateAccountRequest, create_dunning_case, create_mandate,
+        CreateMandateRequest, UpdateAccountRequest, create_dunning_case_announced, create_mandate,
         fetch_account, fetch_account_by_id, fetch_mandate, fetch_vorauszahlung,
         jahresabschluss_already_settled, list_active_mandates, list_ledger, list_open_dunning,
         list_overdue_accounts, markiere_unverhaeltnismaessig, record_jahresabschluss,
@@ -766,6 +766,37 @@ pub async fn import_payments(
                         {
                             tracing::warn!(error = %e, "accountingd: bank_import_log insert failed");
                         }
+
+                        // Announce the booking. `de.accounting.bankruecklast`
+                        // drives agentd's payment-reconciliation agent, which
+                        // never ran because nothing emitted it — a returned
+                        // direct debit is precisely what it exists for.
+                        let is_return = entry.is_return();
+                        let ce_type = if is_return {
+                            mako_events::accounting::BANKRUECKLAST
+                        } else {
+                            mako_events::accounting::PAYMENT_IMPORTED
+                        };
+                        let amount_ct = entry.to_ledger_ct().abs();
+                        let ce = mako_service::CloudEvent::new(
+                            mako_service::source("accountingd", &cfg.tenant),
+                            ce_type,
+                            &malo_id,
+                            serde_json::json!({
+                                "malo_id":      malo_id,
+                                "lf_mp_id":     lf_mp_id,
+                                "amount_ct":    amount_ct,
+                                "amount_eur":   format!("{:.2}", amount_ct as f64 / 100.0),
+                                "is_return":    is_return,
+                                "reference":    entry.reference.as_str(),
+                                "bank_txn_id":  bank_txn_id,
+                                "booking_date": date.to_string(),
+                                "ledger_id":    ledger_id.to_string(),
+                            }),
+                        );
+                        if let Err(e) = enqueue_ce(&pool, &ce).await {
+                            tracing::warn!(error = %e, "accountingd: bank import CE enqueue failed");
+                        }
                         accepted += 1;
                     }
                     Err(e) => {
@@ -790,6 +821,21 @@ pub async fn import_payments(
         "total": entries.len(),
     }))
     .into_response()
+}
+
+/// Enqueue `ce` on the transactional outbox in its own transaction.
+///
+/// The ledger write already committed by the time this runs, so the event is
+/// announced after the fact rather than atomically with it. That is the weaker
+/// guarantee, but the alternative — threading the ledger's own transaction out
+/// of `post_entry` — would change the ledger API for every caller. A lost
+/// enqueue here re-appears on the next import of the same bank transaction,
+/// which is idempotent at the ledger level.
+async fn enqueue_ce(pool: &sqlx::PgPool, ce: &mako_service::CloudEvent) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    mako_service::outbox::enqueue(&mut tx, ce).await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// `POST /api/v1/payments/import/camt054` — ingest a **camt.054 XML document**
@@ -977,6 +1023,37 @@ pub async fn import_payments_camt054(
                         .await
                         {
                             tracing::warn!(error = %e, "accountingd: bank_import_log insert failed");
+                        }
+
+                        // Announce the booking. `de.accounting.bankruecklast`
+                        // drives agentd's payment-reconciliation agent, which
+                        // never ran because nothing emitted it — a returned
+                        // direct debit is precisely what it exists for.
+                        let is_return = entry.is_return();
+                        let ce_type = if is_return {
+                            mako_events::accounting::BANKRUECKLAST
+                        } else {
+                            mako_events::accounting::PAYMENT_IMPORTED
+                        };
+                        let amount_ct = ledger_ct.abs();
+                        let ce = mako_service::CloudEvent::new(
+                            mako_service::source("accountingd", &cfg.tenant),
+                            ce_type,
+                            &malo_id,
+                            serde_json::json!({
+                                "malo_id":      malo_id,
+                                "lf_mp_id":     lf_mp_id,
+                                "amount_ct":    amount_ct,
+                                "amount_eur":   format!("{:.2}", amount_ct as f64 / 100.0),
+                                "is_return":    is_return,
+                                "reference":    reference,
+                                "bank_txn_id":  bank_txn_id,
+                                "booking_date": date.to_string(),
+                                "ledger_id":    ledger_id.to_string(),
+                            }),
+                        );
+                        if let Err(e) = enqueue_ce(&pool, &ce).await {
+                            tracing::warn!(error = %e, "accountingd: bank import CE enqueue failed");
                         }
                         accepted += 1;
                     }
@@ -1197,10 +1274,15 @@ pub async fn escalate_dunning(
     let due_days: i64 = body.get("due_days").and_then(|v| v.as_i64()).unwrap_or(14);
     let due_date = (OffsetDateTime::now_utc() + time::Duration::days(due_days)).date();
 
-    match create_dunning_case(
+    // Manual escalation announces the Mahnstufe exactly like the auto-dunning
+    // worker — a case opened by an operator is no less material to the ERP or
+    // to agentd's payment-reconciliation agent.
+    match create_dunning_case_announced(
         &pool,
-        account_id,
         &cfg.tenant,
+        account_id,
+        &account.malo_id,
+        &account.lf_mp_id,
         stufe,
         amount_due_ct,
         due_date,
@@ -1752,7 +1834,14 @@ pub struct JahresabschlussQuery {
 /// Returns `{ settlement_ct, settlement_eur, new_monthly_abschlag_ct, committed }`.
 /// Use `?dry_run=true` for a preview without committing.
 ///
-/// Emits CloudEvent `de.accounting.jahresabschluss.abgeschlossen` on commit.
+/// Emits **no** completion CloudEvent. The only event on this path is
+/// [`mako_events::accounting::ERSTATTUNG_FAELLIG`]
+/// (`de.accounting.erstattung.faellig`), enqueued in step 5 and only when the
+/// settlement produced a refund *and* an ERP webhook is configured — so a
+/// Nachzahlung, or a refund on a deployment without an ERP webhook, announces
+/// nothing. Anything that needs to react to every Jahresabschluss must poll
+/// `jahresabschluss_runs`; there is no `de.accounting.jahresabschluss.*` type in
+/// the `mako-events` catalog.
 pub async fn post_jahresabschluss(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,

@@ -59,6 +59,14 @@ pub struct CalculateRequest {
     /// the Umsatzsteuer, and the EN 16931 tax breakdown carries an `AE` subtotal.
     #[serde(default)]
     pub reverse_charge: bool,
+    /// §40b Abs. 1 EnWG — this contract is billed **monthly**.
+    ///
+    /// Drives the §40c Abs. 1 deadline: monthly billing must reach the customer
+    /// within three weeks of the period end, everything else within six. The
+    /// trigger is the agreed cadence, not the length of this particular period —
+    /// a 30-day Teilrechnung for a move-out is not monthly billing.
+    #[serde(default)]
+    pub monatliche_abrechnung: bool,
     /// Paid advance payments to settle on this invoice (§40c Abs. 2 EnWG:
     /// credits are offset with the next Abschlag or refunded within two
     /// weeks). Each entry carries the VAT rate it was invoiced at.
@@ -100,7 +108,23 @@ pub async fn post_calculate(
         Err(e) => return e.into_response(),
     };
 
-    let mut rates = cfg.regulatory_rates_for_period(tariff.category_str(), period_from, period_to);
+    let mut rates =
+        match cfg.try_regulatory_rates_for_period(tariff.category_str(), period_from, period_to) {
+            Ok(r) => r,
+            // 422: the request is well-formed but cannot be billed as one period.
+            // The error names the Stichtage so the caller can split and retry.
+            Err(e) => {
+                return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": e.to_string(),
+                    "stichtage": e.stichtage.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                    "legal_basis": "§28 Abs. 5/6 UStG (Gas/Fernwärme), §10 BEHG",
+                })),
+            )
+                .into_response();
+            }
+        };
     apply_nehs_market_price(
         &mut rates,
         tariff.category_str(),
@@ -401,7 +425,23 @@ pub async fn post_preview(
         Ok(t) => t,
         Err(e) => return e.into_response(),
     };
-    let mut rates = cfg.regulatory_rates_for_period(tariff.category_str(), period_from, period_to);
+    let mut rates =
+        match cfg.try_regulatory_rates_for_period(tariff.category_str(), period_from, period_to) {
+            Ok(r) => r,
+            // 422: the request is well-formed but cannot be billed as one period.
+            // The error names the Stichtage so the caller can split and retry.
+            Err(e) => {
+                return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": e.to_string(),
+                    "stichtage": e.stichtage.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                    "legal_basis": "§28 Abs. 5/6 UStG (Gas/Fernwärme), §10 BEHG",
+                })),
+            )
+                .into_response();
+            }
+        };
     apply_nehs_market_price(
         &mut rates,
         tariff.category_str(),

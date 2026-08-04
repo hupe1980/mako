@@ -228,6 +228,7 @@ use mako_engine::{
         BikoId, BillingPeriod, BkvId, MaLo, MarktpartnerCode, MeLo, MessageRef, Pruefidentifikator,
     },
     version::WorkflowId,
+    workflow::OccupiesBusinessKey as _,
 };
 use mako_gabi_gas::{
     GaBiGasInvoicCommand, GaBiGasInvoicWorkflow,
@@ -256,7 +257,7 @@ use mako_mabis::{
 use mako_markt::repository::{
     NetzzugangAktion, NetzzugangAntrag, NetzzugangAntragTyp, NetzzugangStatus,
 };
-use mako_wim::rechnung::{WimRechnungCommand, WimRechnungWorkflow};
+use mako_wim::invoic::{WimInvoicCommand, WimInvoicWorkflow};
 use mako_wim::steuerungsauftrag::{SteuerungsauftragCommand, WimSteuerungsauftragWorkflow};
 use mako_wim::{DeviceChangeCommand, WimDeviceChangeWorkflow};
 use mako_wim::{PreisanfrageCommand, WimPreisanfrageWorkflow};
@@ -399,6 +400,101 @@ fn latest_format_version() -> mako_engine::version::FormatVersion {
             mako_engine::version::FormatVersion::parse("FV2025-10-01")
                 .expect("fallback FV is valid")
         })
+}
+
+// ── Duplicate guard ───────────────────────────────────────────────────────────
+
+/// Return the process that still occupies `business_key`, if any.
+///
+/// This is the check every `anmelden`-style dispatcher runs before spawning a
+/// process, and it must not be written as "does the correlation index contain
+/// an entry?". The index is append-only — `register_correlated` writes on spawn
+/// and nothing calls `remove_correlated` — so presence proves a process once
+/// existed, never that one is still running. Refusing on presence blocked a MaLo
+/// permanently after its first process, including the routine flow where the
+/// counterpart rejects and the sender submits a correction.
+///
+/// So each candidate is rehydrated and asked
+/// [`OccupiesBusinessKey::occupies_business_key`]. That also makes the guard
+/// self-healing: a stale index entry stops blocking as soon as its process
+/// reaches a terminal state, with no cleanup job to run or to forget.
+///
+/// # Errors
+///
+/// Propagates store failures from the correlation lookup or the state replay.
+async fn find_occupying_process<W>(
+    state: &CommandsApiState,
+    business_key: &str,
+    workflow_name: &str,
+) -> Result<Option<ProcessId>, DispatchError>
+where
+    W: mako_engine::workflow::Workflow,
+    W::State: mako_engine::workflow::OccupiesBusinessKey,
+{
+    let existing = state
+        .store
+        .as_process_registry()
+        .lookup_correlated(state.tenant_id, business_key)
+        .await
+        .map_err(DispatchError::Engine)?;
+
+    for identity in existing
+        .into_iter()
+        .filter(|id| id.workflow_id.name.as_ref() == workflow_name)
+    {
+        let process_id = identity.process_id;
+        let candidate = mako_engine::process::Process::<
+            W,
+            Arc<mako_engine::store_slatedb::SlateDbStore>,
+        >::from_identity(Arc::clone(&state.store), identity);
+        if candidate
+            .state()
+            .await
+            .map_err(DispatchError::Engine)?
+            .occupies_business_key()
+        {
+            return Ok(Some(process_id));
+        }
+        // Retire the stale index entry now that replay has *proved* the process
+        // finished. This is what keeps the index's meaning true — "processes that
+        // may still be resumed by this business key" — and it is not merely
+        // housekeeping:
+        //
+        // `dispatch_to_process_keyed` requires exactly one match for a business
+        // key and fails with `AmbiguousProcess` on two. Allowing a second process
+        // (which is the whole point of this guard) would therefore break every
+        // follow-up command — `bestaetigen`, `ablehnen`, `aktivieren` — on that
+        // MaLo. Pruning here means that by the time a replacement process is
+        // registered, the finished one is already gone, so the resume path still
+        // sees exactly one.
+        //
+        // A failure to prune is logged, not propagated: the guard's answer is
+        // already known and correct, and refusing a legitimate Anmeldung because
+        // a cleanup write failed would be the worse outcome. The next dispatch
+        // retries the prune.
+        if let Err(e) = state
+            .store
+            .as_process_registry()
+            .remove_correlated(state.tenant_id, business_key, process_id)
+            .await
+        {
+            tracing::warn!(
+                business_key,
+                workflow_name,
+                %process_id,
+                error = %e,
+                "duplicate guard: could not retire the finished process's correlation entry",
+            );
+        } else {
+            tracing::debug!(
+                business_key,
+                workflow_name,
+                %process_id,
+                "duplicate guard: prior process has finished — entry retired, not blocking",
+            );
+        }
+    }
+    Ok(None)
 }
 
 // ── Phase 3 — Response command dispatchers ────────────────────────────────────

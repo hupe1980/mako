@@ -4,6 +4,7 @@
 //! process-dispatch helpers live in `super`.
 
 use super::*;
+use mako_gpke::GpkeEogWorkflow;
 
 // ── Per-command wrapper functions ─────────────────────────────────────────────
 //
@@ -328,25 +329,24 @@ pub(super) async fn dispatch_lf_anmeldung(
             .map(str::to_owned),
     };
 
-    // ── Idempotency guard ─────────────────────────────────────────────────────
+    // ── Duplicate guard ───────────────────────────────────────────────────────
     //
-    // Reject duplicate Anmeldung for the same MaLo. ERP retries should re-send
-    // after the existing process reaches a terminal state.
-    let existing = state
-        .store
-        .as_process_registry()
-        .lookup_correlated(state.tenant_id, malo_id.as_str())
-        .await
-        .map_err(DispatchError::Engine)?;
-    if let Some(first) = existing
-        .into_iter()
-        .find(|id| id.workflow_id.name.as_ref() == mako_gpke::lf_anmeldung::WORKFLOW_NAME)
+    // Blocks only while an Anmeldung is still running (`Pending`/`Active`); a
+    // `Rejected` one does not retire the MaLo, so the LF's corrected Anmeldung
+    // goes through. See `find_occupying_process` for why presence in the
+    // correlation index is not the question, and `LfAnmeldungState`'s
+    // `OccupiesBusinessKey` impl for the per-state decision.
+    if let Some(dup_id) = find_occupying_process::<GpkeLfAnmeldungWorkflow>(
+        state,
+        malo_id.as_str(),
+        mako_gpke::lf_anmeldung::WORKFLOW_NAME,
+    )
+    .await?
     {
-        let dup_id = first.process_id;
         tracing::warn!(
             malo_id    = %malo_id,
             process_id = %dup_id,
-            "anmelden refused: active Anmeldung already registered for this MaLo",
+            "anmelden refused: an Anmeldung is still running for this MaLo",
         );
         return Err(DispatchError::DuplicateProcess {
             process_id: dup_id,
@@ -738,18 +738,16 @@ pub(super) async fn dispatch_gpke_sperrung_lf_beauftragen(
         message_ref,
     };
 
-    // Idempotency: one active Sperrung process per MaLo.
-    let existing = state
-        .store
-        .as_process_registry()
-        .lookup_correlated(state.tenant_id, malo_id.as_str())
-        .await
-        .map_err(DispatchError::Engine)?;
-    if let Some(first) = existing
-        .into_iter()
-        .find(|id| id.workflow_id.name.as_ref() == SPERRUNG_LF_WORKFLOW_NAME)
+    // Duplicate guard — only a Sperrung still awaiting the NB blocks. An
+    // executed one (`Ausgefuehrt`) is terminal, so the Entsperrung that follows
+    // — which reuses this workflow — goes through. See `find_occupying_process`.
+    if let Some(dup_id) = find_occupying_process::<GpkeSperrungLfWorkflow>(
+        state,
+        malo_id.as_str(),
+        SPERRUNG_LF_WORKFLOW_NAME,
+    )
+    .await?
     {
-        let dup_id = first.process_id;
         tracing::warn!(
             malo_id = %malo_id,
             process_id = %dup_id,
@@ -912,26 +910,24 @@ pub(super) async fn dispatch_gpke_eog_anmelden(
         haushaltskunde,
     };
 
-    // ── Idempotency guard (workflow-scoped) ───────────────────────────────────
-    // Only an already-running EoG process for this MaLo blocks; a concurrent
-    // Lieferbeginn or Sperrung on the same MaLo is legitimate.
-    let existing = state
-        .store
-        .as_process_registry()
-        .lookup_correlated(state.tenant_id, malo_id.as_str())
-        .await
-        .map_err(DispatchError::Engine)?;
-    if let Some(dup) = existing
-        .into_iter()
-        .find(|id| id.workflow_id.name.as_ref() == mako_gpke::EOG_WORKFLOW_NAME)
+    // ── Duplicate guard (workflow-scoped) ─────────────────────────────────────
+    // Only a still-running EoG process for this MaLo blocks; a concurrent
+    // Lieferbeginn or Sperrung on the same MaLo is legitimate, and an EoG that
+    // was rejected or ended is terminal. See `find_occupying_process`.
+    if let Some(dup_id) = find_occupying_process::<GpkeEogWorkflow>(
+        state,
+        malo_id.as_str(),
+        mako_gpke::EOG_WORKFLOW_NAME,
+    )
+    .await?
     {
         tracing::warn!(
             malo_id    = %malo_id,
-            process_id = %dup.process_id,
-            "gpke.eog.anmelden refused: EoG process already registered for this MaLo",
+            process_id = %dup_id,
+            "gpke.eog.anmelden refused: an EoG process is still running for this MaLo",
         );
         return Err(DispatchError::DuplicateProcess {
-            process_id: dup.process_id,
+            process_id: dup_id,
             malo_id: malo_id.into(),
         });
     }

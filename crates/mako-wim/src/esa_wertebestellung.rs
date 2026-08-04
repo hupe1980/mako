@@ -248,6 +248,23 @@ pub enum EsaWertebestellungState {
     },
 }
 
+impl mako_engine::workflow::OccupiesBusinessKey for EsaWertebestellungState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // Every in-flight step of the handshake, plus `Beliefert` — an
+            // authorised delivery is live and holds the order.
+            Self::AnfrageGesendet(_)
+            | Self::AngebotErhalten { .. }
+            | Self::BestellungGesendet(_)
+            | Self::Beliefert { .. }
+            | Self::StornierungGesendet(_)
+            | Self::AbbestellungGesendet(_) => true,
+            // Terminal: cancelled before delivery, delivery ended, or refused.
+            Self::New | Self::Storniert(_) | Self::Beendet(_) | Self::Abgelehnt { .. } => false,
+        }
+    }
+}
+
 impl EsaWertebestellungState {
     /// Stable string label for the current variant.
     #[must_use]

@@ -232,14 +232,14 @@ section above.
 | PID family | Process | CloudEvents `type` sequence |
 |---|---|---|
 | GPKE 55001 | Lieferbeginn LF-AN | `de.mako.process.initiated` → `de.mako.aperak.accepted` → `de.mako.process.completed` |
-| GPKE 55002 | Lieferbeginn NB-AN | same |
-| GPKE 55017 | Lieferbeginn Kündigung | same |
+| GPKE 55004 | Lieferende / Abmeldung (LFN → NB) | same |
+| GPKE 55016 | Kündigung Lieferbeginn (LFN → LFA) | same |
 | GPKE 31001–31005 | Abrechnung INVOIC | `de.mako.process.initiated` → `de.mako.process.completed` + `de.invoic.receipt.settled`/`disputed` |
 | WiM 31009 | MSB-Rechnung (LF payer) | `de.mako.process.initiated` → REMADV → `de.invoic.receipt.settled`/`disputed` |
 | WiM 55039, 55042, 55051, 55168 | Gerätewechsel / MSB-Wechsel | `de.mako.process.initiated` → `de.mako.aperak.accepted` → `de.mako.process.completed` |
 | WiM 55168 (Konfiguration confirmed) | Steuerungsauftrag positive Endantwort | `de.mako.process.completed` + **`de.vpp.dispatch.confirmed`** → auto-billing in `billingd` |
 | GeLi Gas 44001–44006 | Lieferbeginn Gas (LFN-initiated) | `de.mako.process.initiated` → `de.mako.aperak.accepted` → `de.mako.process.completed` |
-| GeLi Gas 44017–44018 | Lieferende / Kündigung Gas | same |
+| GeLi Gas 44016–44018 | Kündigung Lieferbeginn Gas (LFN ↔ LFA) | same |
 | GeLi Gas 17103 | Gas Datenabruf (Brennwert/Zustandszahl) | `de.mako.process.initiated` → `de.mako.process.completed` |
 | GeLi Gas 17115, 17117 | Sperr-/Entsperrauftrag Gas (LF-initiated) | `de.mako.process.initiated` → `de.mako.process.completed` or `de.mako.process.failed` |
 | MABIS 13003 | Bilanzkreisabrechnung Strom | `de.mako.process.initiated` → `de.mako.process.completed` or `de.mako.process.failed` |
@@ -456,15 +456,65 @@ Authorization: Bearer <token>
 }
 ```
 
-**Response:**
+**Response** — `202 Accepted`:
 
 ```json
-{ "process_id": "018f3a2b-...", "stream_id": "gpke/9900357000004/..." }
+{
+  "idempotency_key": "erp-order-991234",
+  "command": "gpke.lieferbeginn.anmelden",
+  "marktrolle": "LF",
+  "status": "accepted",
+  "process_id": "018f3a2b-..."
+}
 ```
 
-The `Idempotency-Key` header is forwarded to `InboxStore::accept` — duplicate
-submissions within the AS4 72-hour dedup window return the same `process_id`
-without re-executing.
+#### What `Idempotency-Key` does, and what it does not
+
+The header is **required** — a request without one is rejected with `422
+missing_idempotency_key`. It is echoed back on the response so you can correlate
+a reply with the request that produced it.
+
+It is **not** compared against previously seen keys. `makod` keeps no
+key→response record, so sending the same key twice does not replay the first
+response. Replay protection comes from a business-level guard instead: a second
+`anmelden` while a process is still active for the same business key is refused
+with `409 duplicate_process`, and that response carries the existing
+`process_id`.
+
+The practical consequence for a client: **treat `409 duplicate_process` as
+success.** It means your earlier attempt took effect and names the process it
+created — adopt the `process_id` and carry on. Distinguish it from the other
+409, `invalid_state`, which means the command is not legal in the process's
+current state and carries no `process_id`; that one is a real error and
+retrying it will fail identically.
+
+```json
+// 409 — your retry already succeeded. Adopt the process_id.
+{ "error": "duplicate_process", "malo_id": "51238696799", "process_id": "018f3a2b-..." }
+
+// 409 — genuine rejection. Do not retry.
+{ "error": "invalid_state", "detail": "cannot bestaetigen a process in state Abgeschlossen" }
+```
+
+The guard is scoped to a process that is still **running**, and to one process
+family. A GPKE Lieferbeginn the NB rejected is finished, so the corrected
+Anmeldung that follows is accepted as a new process — a rejection never retires
+the MaLo. The same holds across the other families: an executed Sperrung does
+not block the Entsperrung that follows, a completed Gerätewechsel does not block
+the next meter change, and a delivered or cancelled ESA Wertebestellung does not
+block a new order. A concurrent process of a *different* family on the same MaLo
+was always allowed and still is.
+
+Whether a given state still holds the MaLo is declared per workflow, so the two
+answers a client can get — `202` or `409 duplicate_process` — follow from the
+process's replayed state rather than from bookkeeping.
+
+Keys are per-command-instance, not per-lifetime: derive them from the business
+event (MaLo *and* the process date), not from the MaLo alone, so that a genuine
+second Lieferbeginn is not mistaken for a replay of the first.
+
+The separate `InboxStore` dedup window applies to inbound **AS4** messages, not
+to this API.
 
 **BO4E `_typ` → PID mapping:**
 

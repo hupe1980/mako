@@ -220,16 +220,18 @@ pub(crate) async fn dispatch_invoice(
         )
     })?;
 
-    // §40c EnWG — Abrechnungen must reach the customer within six weeks of
-    // the end of the Abrechnungszeitraum (Schlussrechnungen: of the end of
-    // supply); **three weeks** for monthly billing. The engine is clock-free
-    // by design, so the deadline is checked here, where a clock legitimately
-    // exists: generation time is what the law measures.
-    let deadline_weeks = if (period_to - period_from).whole_days() <= 32 {
-        3 // §40c Abs. 1 S. 2: monatliche Abrechnung → drei Wochen
-    } else {
-        6
-    };
+    // §40c Abs. 1 EnWG — an Abrechnung must reach the customer within six weeks
+    // of the end of the billed period, a Schlussrechnung within six weeks of the
+    // end of the Lieferverhältnis, and **three weeks** where §40b Abs. 1 monthly
+    // billing applies. The engine is clock-free by design, so the deadline is
+    // checked here, where a clock legitimately exists: issue time is what the
+    // law measures.
+    //
+    // The three-week rule keys on the agreed **cadence**, not on how long this
+    // period happens to be. Inferring it from the day count made every short
+    // period monthly — a ten-day move-out Schlussrechnung, entitled to six
+    // weeks, was warned about after three.
+    let deadline_weeks = sect40c_deadline_weeks(req.schlussrechnung, req.monatliche_abrechnung);
     let deadline = period_to + time::Duration::weeks(deadline_weeks);
     let today = time::OffsetDateTime::now_utc().date();
     if today > deadline {
@@ -328,6 +330,20 @@ pub(crate) async fn resolve_verbrauchshistorie(
     })
 }
 
+/// §40c Abs. 1 EnWG — how many weeks after the period end the invoice is due.
+///
+/// Six weeks for an Abrechnung, six for a Schlussrechnung (measured from the end
+/// of the Lieferverhältnis), and three where §40b Abs. 1 monthly billing applies.
+/// The short deadline follows the agreed **cadence**, not the length of the
+/// period being billed.
+const fn sect40c_deadline_weeks(schlussrechnung: bool, monatliche_abrechnung: bool) -> i64 {
+    if !schlussrechnung && monatliche_abrechnung {
+        3
+    } else {
+        6
+    }
+}
+
 /// Backward-compat shim: dispatch and return Invoice.
 ///
 /// Called by existing HTTP handlers.
@@ -362,4 +378,31 @@ pub(crate) async fn dispatch_calculator(
         vertragd,
     )
     .await
+}
+
+#[cfg(test)]
+mod sect40c_tests {
+    use super::sect40c_deadline_weeks;
+
+    /// §40c Abs. 1: six weeks is the rule.
+    #[test]
+    fn an_ordinary_abrechnung_has_six_weeks() {
+        assert_eq!(sect40c_deadline_weeks(false, false), 6);
+    }
+
+    /// Three weeks only where §40b Abs. 1 monthly billing applies.
+    #[test]
+    fn monthly_billing_has_three_weeks() {
+        assert_eq!(sect40c_deadline_weeks(false, true), 3);
+    }
+
+    /// A Schlussrechnung has six weeks from the end of the Lieferverhältnis,
+    /// however short the final period is — the rule this replaced inferred
+    /// "monthly" from the day count and warned about a ten-day move-out bill
+    /// three weeks early.
+    #[test]
+    fn a_schlussrechnung_keeps_six_weeks_even_on_a_monthly_contract() {
+        assert_eq!(sect40c_deadline_weeks(true, false), 6);
+        assert_eq!(sect40c_deadline_weeks(true, true), 6);
+    }
 }

@@ -6,11 +6,20 @@ Process engine workflows for the German electricity metering system change
 processes. Implements the BDEW WiM specification and the BNetzA ruling
 **BK6-24-174** (Beschluss 24.10.2024, gültig seit 06.06.2025).
 
-## APERAK Frist
+## Fristen
 
-WiM processes use **5 Werktage** (`fristen::add_werktage(5, BdewMaKo)`) for
-the APERAK response deadline. Saturdays, Sundays and public holidays are not
-Werktage; 24.12. and 31.12. count as holidays.
+Two independent clocks run on an inbound MSB-Wechsel order, and conflating them
+is the classic mistake:
+
+| Clock | Window | Source |
+|---|---|---|
+| **APERAK** — technical acknowledgement | **45 minutes** (Strom UTILMD) | APERAK AHB §2.4.1 |
+| **Antwort** — business Bestätigung/Ablehnung | **per PID**: 55039 → 3 WT, 55042 → 5 WT, 55051 → 7 WT, 55168 → 1 WT | BK6-24-174 Teil 1 Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2 |
+
+The business window comes from `antwort_frist_werktage(pid)` — never a flat
+value. Both the inbound and outbound paths read that one table. Saturdays,
+Sundays and public holidays are not Werktage; 24.12. and 31.12. count as
+holidays.
 
 ## PID Inventory
 
@@ -51,9 +60,9 @@ Werktage; 24.12. and 31.12. count as holidays.
 | PID(s)                 | Process name                          | EDIFACT         | Module             | Status         |
 |------------------------|---------------------------------------|-----------------|--------------------|----------------|
 | 39002                  | ESA Stornierung der Bestellung von Werten (ORDCHG) | ORDCHG 1.1 | `wertebestellung`  | ✅ Implemented |
-| 31009                  | MSB-Rechnung (MSB → NB/LF/ESA)        | INVOIC 2.8e     | `rechnung`         | ✅ Implemented (send + receive) |
-| 33001–33004 (REMADV)   | Zahlungsavis / itemized Abweisung     | REMADV 1.0a     | `rechnung`         | ✅ Implemented (33003/34 = Strom Kopf+Summe / Position) |
-| 29001 (COMDIS)         | Ablehnung REMADV                      | COMDIS 1.0      | `rechnung`         | ✅ Implemented |
+| 31009                  | MSB-Rechnung (MSB → NB/LF/ESA)        | INVOIC 2.8e     | `invoic`           | ✅ Implemented (send + receive) |
+| 33001–33004 (REMADV)   | Zahlungsavis / itemized Abweisung     | REMADV 1.0a     | `invoic`           | ✅ Implemented (33003/34 = Strom Kopf+Summe / Position) |
+| 29001 (COMDIS)         | Ablehnung REMADV                      | COMDIS 1.0      | `invoic`           | ✅ Implemented |
 | 35001–35005 (REQOTE)   | Preisanfrage — Anfrage (NB → MSB)     | REQOTE 1.3c     | `preisanfrage`     | ✅ Implemented |
 | 15001–15005 (QUOTES)   | Preisanfrage — Antwort (MSB → NB)     | QUOTES 1.3c     | `preisanfrage`     | ✅ Implemented |
 | 27001–27003            | Preisliste (PRICAT)                   | PRICAT 2.1      | `preisliste`       | ✅ Implemented |
@@ -80,7 +89,7 @@ Werktage; 24.12. and 31.12. count as holidays.
 | `geraeteubernahme` | ORDERS 17001/17002/17009 → QUOTES 15001, ORDRSP 19001/19002 (Bestellbestätigung/Ablehnung), 19003/19004 (Fortführung), 19015/19016 (Gerätewechselabsicht) — WiM Teil 1 Kap. 3.2 |
 | `stammdaten`       | PIDs 17102–17133, 17132 — Stammdaten Anforderung / Übermittlung           |
 | `wertebestellung`  | PIDs 35002/15003/17007/17008, ORDCHG 39002 (Stornierung, answered by ORDRSP 19013/19014), ORDRSP 19011/19012 — **ESA Wertebestellung** (WiM Teil 2 Kap. 4): Anfrage → Angebot → Bestellung → Stornierung/Abbestellung, plus MSB-initiated termination. Fristen keyed on the positive AS4-Zustellquittung (ÜT). |
-| `rechnung`         | PID 31009 — MSB-Rechnung INVOIC (WiM Strom Teil 1). Both sides: **MSB** sends via `SendInvoic` (invoicer, awaits REMADV); **NB/LF/ESA** ingests via `ReceiveInvoic` then settles/disputes. Inbound REMADV 33001–33004 (incl. the Strom itemized Abweisungen 33003/34) + COMDIS 29001. Routed via `wim-rechnung`; replies use conversation-ID correlation (RFF+Z13 → 31009 ref) so they resume this family even when the shared REMADV PID statically resolves to GPKE. |
+| `invoic`           | PID 31009 — MSB-Rechnung INVOIC (WiM Strom Teil 1). Both sides: **MSB** sends via `SendInvoic` (invoicer, awaits REMADV); **NB/LF/ESA** ingests via `ReceiveInvoic` then settles/disputes. Inbound REMADV 33001–33004 (incl. the Strom itemized Abweisungen 33003/34) + COMDIS 29001. Routed via `wim-invoic`; replies use conversation-ID correlation (RFF+Z13 → 31009 ref) so they resume this family even when the shared REMADV PID statically resolves to GPKE. |
 | `preisanfrage`     | PIDs 35001–35005 (REQOTE), 15001–15005 (QUOTES) — Preisanfrage            |
 | `preisliste`       | PIDs 27001–27003 — Preisliste PRICAT                                      |
 | `steuerungsauftrag`| PIDs 11021–11023 — iMS Steuerungsauftrag (API-Webdienste REST channel)    |

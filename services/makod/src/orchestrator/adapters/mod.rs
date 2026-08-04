@@ -96,7 +96,7 @@ use mako_mabis::{
 use mako_wim::{
     DeviceChangeCommand, GeraeteubernahmeCommand, PreisanfrageCommand, PreislisteCommand,
     StammdatenCommand, WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow,
-    WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimRechnungCommand, WimRechnungWorkflow,
+    WimInvoicCommand, WimInvoicWorkflow, WimPreisanfrageWorkflow, WimPreislisteWorkflow,
     WimStammdatenWorkflow, esa_wertebestellung::EsaWertebestellungWorkflow,
     insrpt::StorungsmeldungCommand, wertebestellung::WimWertebestellungWorkflow,
 };

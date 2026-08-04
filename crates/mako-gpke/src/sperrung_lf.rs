@@ -228,6 +228,28 @@ pub enum SperrungLfState {
     },
 }
 
+impl mako_engine::workflow::OccupiesBusinessKey for SperrungLfState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // Awaiting the NB: the ORDRSP for the Sperrauftrag, the IFTSTA
+            // execution notice, or the ORDRSP for a Stornierung.
+            Self::AuftragGesendet(_)
+            | Self::OrdrsepBestaetigt(_)
+            | Self::StornierungGesendet(_) => true,
+            // Every terminal outcome. `Ausgefuehrt` matters most: once the NB
+            // has executed the Sperrung this process is done, and the
+            // Entsperrung that follows — which reuses this workflow — must not
+            // be refused as a duplicate.
+            Self::New
+            | Self::OrdrsepAbgelehnt { .. }
+            | Self::Ausgefuehrt(_)
+            | Self::StornoBestaetigt(_)
+            | Self::StornoAbgelehnt(_)
+            | Self::DeadlineExpired { .. } => false,
+        }
+    }
+}
+
 impl SperrungLfState {
     /// Stable string label for the current variant.
     #[must_use]

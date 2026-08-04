@@ -181,6 +181,19 @@ pub enum LfStornierungState {
     },
 }
 
+impl mako_engine::workflow::OccupiesBusinessKey for LfStornierungState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // Awaiting the GNB's answer inside the 10-Werktage window.
+            Self::Pending(_) => true,
+            // `Accepted` and `Rejected` are both terminal — the Stornierung
+            // either took effect or did not, and either way this process is
+            // finished and must not block a later one.
+            Self::New | Self::Accepted(_) | Self::Rejected { .. } => false,
+        }
+    }
+}
+
 impl LfStornierungState {
     fn label(&self) -> &'static str {
         match self {

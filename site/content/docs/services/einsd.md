@@ -1,6 +1,6 @@
 +++
 title = "einsd Operator Guide"
-description = "einsd operator guide — Einspeiser Registry + EEG/KWKG Settlement daemon. 10 settlement schemes (SettlementScheme + TariffSource), EEG version-aware Bestandsschutz, §20 Abs. 3 Managementprämie (see implementation notes), §23a quarterly degression, §36h Wind Korrekturfaktor, §42b EnWG GGV multi-meter Messkonzept, §51 Negativpreisregel, §52 Pflichtzahlungen + §52 Abs. 6 Netting, SettlementPeriodState lifecycle, Repowering §22, Zusammenlegung §24, KWKG Förderdauer, §14 UStG Gutschrift, 18 MCP tools, eeg-agent."
+description = "einsd operator guide — Einspeiser Registry + EEG/KWKG Settlement daemon. 10 settlement schemes (SettlementScheme + TariffSource), EEG version-aware Bestandsschutz, §20 Abs. 3 Managementprämie (see implementation notes), §23a quarterly degression, §36h Wind Korrekturfaktor, §42b EnWG GGV multi-meter Messkonzept, §51 Negativpreisregel, §52 Pflichtzahlungen + §52 Abs. 6 Netting, SettlementPeriodState lifecycle, Repowering §22, Zusammenlegung §24, KWKG Förderdauer, §14 UStG Gutschrift, §§53b–54 AW-Reduktionen, 19 MCP tools, eeg-agent."
 weight = 28
 [extra]
 mermaid = true
@@ -24,7 +24,7 @@ graph TB
     edmd["edmd :8380<br/>¼h Einspeisung feed-in<br/>(GET /feed-in) + kWh"]
     einsd["einsd :9180"]
     eeg_billing["eeg-billing crate<br/>10 settlement schemes<br/>§20 Abs.3 Managementprämie<br/>§23a degression · §36h Abs.1/2 wind<br/>§51 Negativpreis · §51a Förderende<br/>§51b biogas Ausschreibung<br/>§39n feste Marktprämie<br/>§52 Abs.6 netting<br/>SettlementPeriodState · InbetriebnahmeTyp<br/>no I/O"]
-    db[("PostgreSQL<br/>eeg_anlagen · settlement_receipts<br/>settlement_receipt_history<br/>settlement_state_transitions<br/>sect53b_reductions · sect54_reductions<br/>epex_monthly_prices · epex_spot_prices<br/>wind_guetefaktor_reevaluations · eeg_verguetungssaetze")]
+    db[("PostgreSQL<br/>eeg_anlagen · settlement_receipts<br/>settlement_receipt_history<br/>settlement_state_transitions<br/>eeg_regionalnachweise · eeg_stromsteuerbefreiungen<br/>eeg_sect54_solar_defekte<br/>epex_monthly_prices · epex_spot_prices<br/>wind_guetefaktor_reevaluations · eeg_verguetungssaetze")]
     erp["ERP webhook<br/>CloudEvents 1.0"]
     agentd["agentd :9580<br/>eeg-agent<br/>(all de.eeg.* events)"]
 
@@ -660,27 +660,134 @@ Returns `422 Unprocessable Entity` when:
 
 ---
 
-## §53b / §54 EEG 2023 — Regional and Auction Reductions
+## §§53b–54 EEG 2023 — reductions of the anzulegender Wert
 
-### §53b — Regionale Grünstromkennzeichnung
+These three statutes cut the **anzulegender Wert** itself, before any settlement
+formula runs. That ordering is not a detail. The gleitende Marktprämie is
+`max(0, AW + Managementprämie − Marktwert)`, floored at zero, so a euro deduction
+taken *after* the floor is a different number from a cut applied *before* it:
+where the Marktwert already exceeds the AW the premium is zero, and a post-hoc
+deduction would push the settlement negative — charging the operator for
+electricity they fed in. `eeg-billing` therefore applies all of them to the AW
+and records each as a zero-euro audit position naming its §, so a Gutschrift
+shows every statute that touched the rate without double-counting the money.
 
-BNetzA-certified grid areas receive a per-ct/kWh reduction on Einspeisevergütung. Applied automatically when the plant's `grid_area` matches a certified area in `sect53b_reductions`.
+Only the **triggering facts** are stored. Every amount except §53c's is fixed by
+statute, so there is no rate column a data-entry error could use to invent a
+deduction the law does not provide for.
 
-Register the plant's Netzgebiet when creating it:
-```json
-{ ..., "grid_area": "DE-TN-001" }
+| § | Trigger | Amount | Table |
+|---|---|---|---|
+| 53b | A Regionalnachweis (§79a) was issued, **and** the AW is *gesetzlich bestimmt* | −0,1 ct/kWh | `eeg_regionalnachweise` |
+| 53c | Electricity transited through a grid **and** exempt from Stromsteuer | −the granted exemption | `eeg_stromsteuerbefreiungen` |
+| 54 | Solar first-segment auction, four distinct defects | −0,3 / −0,3 / −2,5 ct/kWh, or AW → 0 | `eeg_sect54_solar_defekte` |
+
+### §53b — Regionalnachweise
+
+> "Der anzulegende Wert für Strom, für den dem Anlagenbetreiber ein
+> Regionalnachweis ausgestellt worden ist, verringert sich bei Anlagen, deren
+> anzulegender Wert **gesetzlich bestimmt** ist, um 0,1 Cent pro Kilowattstunde."
+
+The qualifier is about how the AW was *determined*, not how the electricity is
+marketed: a statutory-AW plant in Direktvermarktung is in scope, a tender-awarded
+plant is not. Regionalnachweise are issued by the Herkunfts- und
+Regionalnachweisregister; no BNetzA certificate and no grid area is involved.
+
+```http
+POST /api/v1/anlagen/{tr_id}/aw-reduktionen/regionalnachweis
+Content-Type: application/json
+
+{ "nachweis_ref": "HKNR-RN-2026-0001", "effective_from": "2026-01-01" }
 ```
 
-The reduction is queried from `sect53b_reductions` during each settlement and passed as `sect53b_regional_reduction_ct` to `eeg-billing`.
+No amount is accepted — the response echoes the statutory 0,1 ct/kWh.
 
-### §54 — Ausschreibungsreduzierung
+### §53c — Stromsteuerbefreiung
 
-BNetzA may reduce the awarded AW for Ausschreibungsanlagen. `sect54_reductions` stores per-plant BNetzA deductions. Applied automatically during settlement: `effective_aw = direktverm_aw_ct − deduction_ct` (floor 0).
+> "Der anzulegende Wert verringert sich für Strom, der durch ein Netz
+> durchgeleitet wird und der von der Stromsteuer nach dem Stromsteuergesetz
+> befreit ist, um die Höhe der pro Kilowattstunde gewährten
+> Stromsteuerbefreiung."
 
-Manage via direct DB insert (no API endpoint; BNetzA-driven):
-```sql
-INSERT INTO sect54_reductions (tr_id, tenant, deduction_ct_kwh, bnetza_ref, effective_from)
-VALUES ('DE_TR_...', 'your-tenant', 0.50, 'BNetzA-54-2026-WIND-001', '2026-01-01');
+The amount is the exemption actually granted, which is why it is the one stored
+value here. It is capped — in the schema and again in the engine — at the full
+§3 StromStG rate of 20,50 EUR/MWh = 2,05 ct/kWh: an exemption cannot exceed the
+tax it exempts from.
+
+The combination is narrow in practice. §9 Abs. 1 Nr. 1 and Nr. 3 StromStG both
+require self-consumption at, or supply in spatial connection to, the generating
+plant — neither of which involves grid transit. Record a row only where an
+exemption has actually been granted for grid-transited electricity.
+
+```http
+POST /api/v1/anlagen/{tr_id}/aw-reduktionen/stromsteuerbefreiung
+Content-Type: application/json
+
+{
+  "befreiung_ct_kwh": "2.05",
+  "rechtsgrundlage": "§9 Abs. 1 Nr. 1 StromStG",
+  "effective_from": "2026-01-01"
+}
+```
+
+### §54 — Ausschreibungen für Solaranlagen des ersten Segments
+
+Solar first-segment tenders only. Four independent defects; Abs. 1 and Abs. 2
+stack, and Abs. 4 zeroes the AW outright and subsumes the rest.
+
+| Absatz | Defect | Effect |
+|---|---|---|
+| 1 | Zahlungsberechtigung applied for only after the 18th calendar month following announcement of the Zuschlag | −0,3 ct/kWh |
+| 2 | Plant location does not match, even partly, the Flurstücke named in the bid | −0,3 ct/kWh |
+| 3 | Nachweis of simultaneous crop cultivation / agricultural use (§37 Abs. 1 Nr. 3, §85c Abs. 1 Satz 4) not supplied | −2,5 ct/kWh |
+| 4 | Landesverordnung under §37c Abs. 2 not met | AW → 0 |
+
+Abs. 3 Satz 2/3 make the deduction lapse for the future once the proof arrives,
+and retroactively for the periods it covers — so a late Nachweis is recorded by
+closing the row's validity period, not by deleting it.
+
+```http
+POST /api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt
+Content-Type: application/json
+
+{ "zahlungsberechtigung_nach_18_monaten": true, "effective_from": "2026-01-01" }
+```
+
+A request setting no defect is refused: a row that deducts nothing is a
+data-entry error, not a record.
+
+When the missing Nachweis arrives, close the period rather than deleting the
+row — that the plant was short for the earlier periods is what the §147 AO trail
+has to keep:
+
+```http
+POST /api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt/{id}/nachweis-erbracht
+Content-Type: application/json
+
+{ "effective_until": "2026-07-31" }
+```
+
+### Inspecting what is in force
+
+A settlement shrinks silently when one of these rows exists, so the cuts are
+readable without settling again:
+
+```http
+GET /api/v1/anlagen/{tr_id}/aw-reduktionen?on=2026-07-01
+```
+
+```json
+{
+  "tr_id": "DE_TR_...",
+  "stichtag": "2026-07-01",
+  "reduktionen": [
+    { "paragraph": "§53b EEG 2023", "grund": "Regionalnachweis (§79a EEG) ausgestellt",
+      "abzug_ct_kwh": "0.1", "hinweis": "gilt nur bei gesetzlich bestimmtem anzulegendem Wert" },
+    { "paragraph": "§54 Abs. 3 EEG 2023",
+      "grund": "Nachweis der gleichzeitigen landwirtschaftlichen Nutzung fehlt",
+      "abzug_ct_kwh": "2.5", "setzt_aw_auf_null": false }
+  ]
+}
 ```
 
 ---
@@ -863,17 +970,56 @@ Content-Type: application/json
 
 ## Zusammenlegung (§24 EEG 2023)
 
-Co-located same-technology plants commissioned within **12 calendar months** can be merged:
+§24 Abs. 1 deems several plants **one plant** for the §19 Abs. 1 claim and the
+§21 Abs. 1 / §22 size determination. Because tariff bands and the tender
+threshold are size-dependent, a merge the statute does not support moves the
+survivor into a band it never qualified for — for the rest of its 20-year
+Förderdauer, and indistinguishably from a legitimate merge once written. The
+endpoint therefore evaluates §24 and **refuses** with `422` when it does not
+apply, naming the rule that decided.
+
+Satz 1 fuses two plants only when **all four** hold:
+
+1. same Grundstück, Gebäude or Betriebsgelände, or otherwise in unmittelbarer
+   räumlicher Nähe (`standort_id`, or `unmittelbare_raeumliche_naehe` on the
+   request),
+2. gleichartige erneuerbare Energien (`erzeugungsart`),
+3. the §19 Abs. 1 claim depends on Bemessungsleistung or installierte Leistung,
+4. commissioned within twelve consecutive calendar months (`inbetriebnahme`).
+
+Sätze 2–5 then override that result:
+
+| Satz | Rule |
+|---|---|
+| 2 | Biogas (not biomethane) from the **same** Biogaserzeugungsanlage is fused regardless of Satz 1 — including across sites and outside the window (`biogaserzeugungsanlage_id`) |
+| 3 | Freiflächenanlagen are never fused with solar on, in or at buildings and Lärmschutzwände (`solar_montage`) |
+| 4 | Building/Lärmschutzwand solar behind **different** Netzverknüpfungspunkte is not one plant (`netzverknuepfungspunkt`) |
+| 5 | Steckersolargeräte ≤ 2 kW installed and ≤ 800 VA inverter, behind a Letztverbraucher's Entnahmestelle, are disregarded entirely |
+
+**Ownership is not a criterion.** Satz 1 opens "unabhängig von den
+Eigentumsverhältnissen", so two plants with different operators fuse just the
+same; a model that keyed on operator identity would under-fuse, the direction
+that overpays.
 
 ```http
 POST /api/v1/anlagen/{tr_id}/zusammenlegen
 Content-Type: application/json
 
-{ "parent_tr_id": "DE_PARENT_MAIN" }
+{
+  "parent_tr_id": "DE_PARENT_MAIN",
+  "combined_leistung_kwp": "19.0",
+  "unmittelbare_raeumliche_naehe": false
+}
 ```
 
-Child → `abgemeldet`. Parent `foerderendedatum` unchanged. Update `verguetungssatz_ct` if
-the combined capacity crosses a rate band boundary.
+`unmittelbare_raeumliche_naehe` supplies Nr. 1's second limb and is a human
+judgement about the pair, so it is asserted per request rather than derived. It
+matters only when the two `standort_id` values differ.
+
+On a permitted merge the child becomes `abgemeldet`, the parent's
+`foerderendedatum` is unchanged (only Repowering resets it), and future
+settlements run on the parent alone. Update `verguetungssatz_ct` if the combined
+capacity crosses a rate band boundary. A refused merge changes nothing.
 
 ---
 
@@ -924,7 +1070,12 @@ See [BNetzA Einspeisevergütungen](https://www.bundesnetzagentur.de/DE/Fachtheme
 | `DELETE` | `/api/v1/anlagen/{tr_id}` | Decommission |
 | `POST` | `/api/v1/anlagen/{tr_id}/mastr-registrierung` | **Confirm MaStR** → `aktiv`; clears §52 violation clock |
 | `POST` | `/api/v1/anlagen/{tr_id}/repowering` | **Repowering** §22 EEG |
-| `POST` | `/api/v1/anlagen/{tr_id}/zusammenlegen` | **Zusammenlegung** §24 EEG |
+| `POST` | `/api/v1/anlagen/{tr_id}/zusammenlegen` | **Zusammenlegung** §24 EEG — refuses with `422` when §24 Abs. 1 does not fuse the pair |
+| `GET` | `/api/v1/anlagen/{tr_id}/aw-reduktionen` | What cuts the anzulegender Wert on `?on=` (default today), with statutory amounts |
+| `POST` | `/api/v1/anlagen/{tr_id}/aw-reduktionen/regionalnachweis` | §53b — record a Regionalnachweis period (§79a) |
+| `POST` | `/api/v1/anlagen/{tr_id}/aw-reduktionen/stromsteuerbefreiung` | §53c — record a granted per-kWh Stromsteuerbefreiung |
+| `POST` | `/api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt` | §54 — record solar first-segment defects |
+| `POST` | `/api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt/{id}/nachweis-erbracht` | §54 Abs. 3 Satz 2/3 — close the period once the Nachweis arrives |
 | `POST` | `/api/v1/anlagen/{tr_id}/switch-veraeusserungsform` | **§21b** monthly Veräußerungsform switch |
 | `POST` | `/api/v1/anlagen/{tr_id}/wind-reevaluation` | **§36h Abs. 2** Standortgüte re-evaluation (year 6/11/16) |
 | `GET` | `/api/v1/anlagen/foerderung-auslaufend` | Expiring within N days |
@@ -1010,9 +1161,13 @@ One row per Technische Ressource. PK: `(tr_id, tenant)`.
 | `settlement_state` | TEXT | `active`, `reduced`, `suspended`, `interrupted`, `post_eeg`, `ended` |
 | `ausschreibungs_zuschlag_id` | TEXT? | BNetzA Zuschlag-ID (e.g. `"SEE-2024-001234"`) |
 | `is_biogas_sect51b` | BOOL | §51b EEG 2023: biogas Ausschreibungsanlage (AW=0 when EPEX≤2ct) |
-| `grid_area` | TEXT? | Netzgebiet code for §53b regional reduction lookup (e.g. `"DE-TN-001"`) |
-| `award_expired` | BOOL | §35a EEG 2023: Zuschlag expired/revoked → FoerderungBeendet |
-| `zuschlag_erloeschen_datum` | DATE? | §35a: date when BNetzA Zuschlag automatically expires |
+| `grid_area` | TEXT? | Netzgebiet code (e.g. `"DE-TN-001"`) — reporting and grouping; **not** a §53b input |
+| `standort_id` | TEXT? | §24 Abs. 1 Satz 1 Nr. 1 — Grundstück / Gebäude / Betriebsgelände. NULL cannot establish a shared site |
+| `solar_montage` | TEXT? | §24 Sätze 3/4 — `AN_GEBAEUDE_ODER_LAERMSCHUTZWAND` · `FREIFLAECHE` · `SONSTIGE` |
+| `netzverknuepfungspunkt` | TEXT? | §24 Satz 4 — building solar behind different points is not one plant |
+| `biogaserzeugungsanlage_id` | TEXT? | §24 Satz 2 — biogas from the same Biogaserzeugungsanlage is fused regardless of Satz 1 |
+| `award_expired` | BOOL | Zuschlag erloschen → FoerderungBeendet. The rule is technology-specific: **§36e** (Wind an Land), **§37e** (Solaranlagen des ersten Segments), **§39e** (Biomasseanlagen) EEG 2023 |
+| `zuschlag_erloeschen_datum` | DATE? | Date the Zuschlag lapses for want of timely commissioning (§36e / §37e / §39e). Distinct from **§35a Entwertung von Zuschlägen**, which is a BNetzA act rather than a deadline |
 | `last_veraeusserungsform_switch` | DATE? | §21b: date of last Veräußerungsform switch (monthly guard) |
 | `mastr_violation_start` | DATE? | §52: date MaStR non-registration began (auto-set on registration) |
 | `fernsteuerbarkeit_violation_start` | DATE? | §52: date Fernsteuerbarkeit violation began |
@@ -1042,13 +1197,20 @@ Immutable active receipt per billing period. Unique per `(tr_id, tenant, billing
 
 Audit log of every settlement state change: `from_state`, `to_state`, `effective_from`, `reason`.
 
-### `sect54_reductions`
+### `eeg_regionalnachweise`
 
-§54 EEG 2023 Ausschreibungsreduzierung notices per plant (from BNetzA).
+§53b EEG 2023: periods for which a Regionalnachweis (§79a) was issued for a
+plant's electricity. The 0,1 ct/kWh deduction is statutory and is not stored.
 
-### `sect53b_reductions`
+### `eeg_stromsteuerbefreiungen`
 
-§53b EEG 2023 regional Grünstromkennzeichnung reductions per grid area.
+§53c EEG 2023: the per-kWh Stromsteuerbefreiung granted for grid-transited
+electricity, CHECK-capped at the §3 StromStG full rate of 2,05 ct/kWh.
+
+### `eeg_sect54_solar_defekte`
+
+§54 EEG 2023: the four statutory defects for solar first-segment auction plants,
+per validity period. A row recording no defect is rejected by a CHECK.
 
 ### `eeg_verguetungssaetze`
 
@@ -1123,14 +1285,14 @@ All events: `application/cloudevents+json` + `X-Mako-Signature` HMAC.
 
 At `/mcp` (Streamable HTTP 2025-11-25). Auth: `Authorization: Bearer <mcp_api_key>`.
 
-**18 tools:**
+**19 tools:**
 `list_plants` · `get_plant` · `list_expiring` · `list_settlements` ·
 `lookup_verguetungssatz` · `lookup_statutory_rate` · `trigger_settle` ·
 `list_unsettled_plants` · `get_epex_monthly_price` · `import_epex_monthly_price` ·
 `get_compliance_status` · `list_plants_without_mastr` ·
 `check_direktvermarktung_compliance` · `check_sect44b_quota` ·
 `import_jahresmarktwert` · `get_jahresmarktwert_tool` ·
-`get_settlement_state_history` · `explain_settlement`
+`get_settlement_state_history` · `explain_settlement` · `get_aw_reduktionen`
 
 | Tool | Description |
 |---|---|

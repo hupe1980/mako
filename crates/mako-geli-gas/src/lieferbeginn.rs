@@ -384,6 +384,24 @@ pub enum GasSupplierChangeState {
     },
 }
 
+impl mako_engine::workflow::OccupiesBusinessKey for GasSupplierChangeState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // In flight: validating, answered but not yet concluded, awaiting
+            // the counterpart within the 10-Werktage window, or supply running.
+            Self::Initiated(_)
+            | Self::ValidationPassed(_)
+            | Self::AntwortGesendet { .. }
+            | Self::GnbPending(_)
+            | Self::Active(_) => true,
+            // `New` never started; `Completed` and `Rejected` are terminal. A
+            // Gas Lieferbeginn the GNB rejected must not retire the MaLo — the
+            // corrected Anmeldung is a normal GeLi Gas flow.
+            Self::New | Self::Completed(_) | Self::Rejected { .. } => false,
+        }
+    }
+}
+
 impl GasSupplierChangeState {
     /// Stable status label.
     #[must_use]
@@ -856,13 +874,24 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 let anfrage_pid = data.pruefidentifikator.as_u32();
                 let response_pid = response_pid_for(anfrage_pid, accepted);
 
+                // Keys follow the `render_utilmd` contract — `pid`, `sender`,
+                // `malo`, `process_date` — because this entry is dispatched as a
+                // real UTILMD interchange. A key the renderer does not know is
+                // not a hard error: the AS4 sender falls back to putting the
+                // raw domain JSON on the wire, which the peer cannot parse.
                 let mut outbox_payload = serde_json::json!({
-                    "anfrage_pid": anfrage_pid,
-                    "accepted":    accepted,
-                    "malo_id":     data.malo_id.as_str(),
-                    "sender":      data.sender.as_str(),
-                    "receiver":    data.receiver.as_str(),
-                    "variant":     format!("{:?}", data.variant),
+                    // The answer PID is what goes on the wire; `anfrage_pid` is
+                    // kept for correlation and audit.
+                    "pid":           response_pid.map_or(anfrage_pid, |p| p.as_u32()),
+                    "anfrage_pid":   anfrage_pid,
+                    "accepted":      accepted,
+                    "malo":          data.malo_id.as_str(),
+                    // The answer flows back the way the request came.
+                    "sender":        data.receiver.as_str(),
+                    "receiver":      data.sender.as_str(),
+                    "document_date": data.document_date,
+                    "process_date":  data.process_date,
+                    "variant":       format!("{:?}", data.variant),
                 });
                 if let Some(ref r) = reason {
                     outbox_payload["reason"] = serde_json::Value::String(r.clone());
@@ -877,7 +906,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 }
 
                 let mut all_outbox = vec![PendingOutbox::new(
-                    "UtilmdAntwort",
+                    "UTILMD",
                     data.sender.as_str(),
                     outbox_payload,
                 )];
@@ -914,10 +943,12 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 let variant = GasProcessVariant::from_anfrage_pid(pid.as_u32())
                     .expect("GNB_INITIATOR_PIDS are all valid Anfrage PIDs");
 
+                // `render_utilmd` contract keys — see the SendAntwort branch.
                 let outbox_payload = serde_json::json!({
+                    "pid":           pid.as_u32(),
                     "anfrage_pid":   pid.as_u32(),
                     "variant":       format!("{variant:?}"),
-                    "malo_id":       malo_id.as_str(),
+                    "malo":          malo_id.as_str(),
                     "sender":        sender.as_str(),
                     "receiver":      receiver.as_str(),
                     "document_date": document_date,
@@ -925,7 +956,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     "message_ref":   message_ref.as_str(),
                 });
                 let outbox = vec![PendingOutbox::new(
-                    "UtilmdAnfrage",
+                    "UTILMD",
                     receiver.as_str(),
                     outbox_payload,
                 )];
@@ -1336,7 +1367,7 @@ mod tests {
         .unwrap();
         assert!(
             !out.outbox.is_empty(),
-            "must include UtilmdAntwort outbox entry"
+            "must include the UTILMD answer outbox entry"
         );
         assert!(matches!(
             &out.events[0],

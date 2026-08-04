@@ -40,6 +40,7 @@ permit(
         Action::"read-msb-rv-gas",
         Action::"read-melo-msb",
         Action::"read-bilanzierung",
+        Action::"read-mabis-zp",
         Action::"use-mcp"
     ],
     resource
@@ -63,7 +64,8 @@ permit(
         Action::"write-netzzugang",
         Action::"write-msb-rv-gas",
         Action::"write-melo-msb",
-        Action::"write-bilanzierung"
+        Action::"write-bilanzierung",
+        Action::"write-mabis-zp"
     ],
     resource
 ) when {

@@ -168,6 +168,14 @@ pub struct JahresmarktwertLookupParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct AwReduktionenParams {
+    /// TechnischeRessource ID of the plant.
+    pub tr_id: String,
+    /// Date to evaluate, ISO 8601 (`YYYY-MM-DD`). Defaults to today.
+    pub on: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct SettlementStateHistoryParams {
     /// TechnischeRessource ID of the plant.
     pub tr_id: String,
@@ -1007,6 +1015,38 @@ fall back to EPEX in that case). Use 'DEFAULT' as erzeugungsart to check the gen
     }
 
     #[tool(
+        name = "get_aw_reduktionen",
+        description = "Explain why a plant's anzulegender Wert is cut on a given date. Lists every \
+active sect. 53b / 53c / 54 EEG 2023 reduction with its statutory amount. Use this FIRST when an \
+operator asks why a Gutschrift is smaller than expected: these cuts apply silently and shrink the \
+payment without changing the Einspeisemenge or the tariff table. sect. 53b = Regionalnachweis \
+(sect. 79a), fixed 0.1 ct/kWh, only where the AW is gesetzlich bestimmt (never a tender award). \
+sect. 53c = Stromsteuerbefreiung for grid-transited electricity, capped at the sect. 3 StromStG \
+full rate of 2.05 ct/kWh. sect. 54 = solar first-segment auction defects (0.3 / 0.3 / 2.5 ct/kWh, \
+or AW to zero). All of them cut the AW BEFORE the settlement formula, and the gleitende \
+Marktpraemie is floored at zero, so a cut can reduce the payment to zero but never below it."
+    )]
+    async fn get_aw_reduktionen(
+        &self,
+        Parameters(params): Parameters<AwReduktionenParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let on = match params.on.as_deref() {
+            Some(s) => time::Date::parse(s, &time::format_description::well_known::Iso8601::DATE)
+                .map_err(|e| {
+                McpError::invalid_params(format!("invalid date `{s}`: {e}"), None)
+            })?,
+            None => time::OffsetDateTime::now_utc().date(),
+        };
+        let v =
+            crate::pg::aw_reduktionen_am(&self.state.pool, &self.state.tenant, &params.tr_id, on)
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        ContentBlock::json(v)
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    #[tool(
         name = "get_settlement_state_history",
         description = "Fetch the § 147 AO / GoBD audit trail of settlement state transitions for a plant \
 (tr_id). Returns all state changes (Active → Reduced → Suspended → PostEeg → Ended) with \
@@ -1278,8 +1318,14 @@ impl EinsdMcpHandler {
                  D. REPOWERING sect. 22 EEG — replace components, 20-year clock resets.\n\
                     POST /api/v1/anlagen/{tr_id}/repowering {repowering_datum, leistung_kwp_neu}\n\
                     New Verguetungssatz auto-looked up at repowering_datum.\n\n\
-                 E. ZUSAMMENLEGUNG sect. 24 EEG — merge adjacent plants into one entity.\n\
+                 E. ZUSAMMENLEGUNG sect. 24 EEG — merge plants the statute deems one.\n\
                     POST /api/v1/anlagen/{child_tr_id}/zusammenlegen {parent_tr_id}\n\
+                    The endpoint evaluates sect. 24 Abs. 1 and answers 422 when it does\n\
+                    not apply, naming the deciding rule — it does not merge on request.\n\
+                    Requires all of Satz 1: same standort_id (or\n\
+                    unmittelbare_raeumliche_naehe=true), gleichartige Energien, a\n\
+                    size-dependent claim, and commissioning within 12 calendar months.\n\
+                    Ownership is NOT a criterion (unabhaengig von den Eigentumsverhaeltnissen).\n\
                     Note: foerderendedatum NOT reset (only Repowering resets it).\n\n\
                  MaStR update: sect. 28a EEG — update Marktstammdatenregister after any change.",
             ),
@@ -1318,7 +1364,8 @@ impl EinsdMcpHandler {
                    PUT /api/v1/anlagen/{parent_tr_id} with combined leistung_kwp and \n\
                    new verguetungssatz_ct (the combined rate).\n\
                    POST /api/v1/anlagen/{child_tr_id}/zusammenlegen {parent_tr_id}\n\
-                   Simple, but loses block-level rate granularity.\n\n\
+                   Only available when sect. 24 Abs. 1 actually fuses the two; the\n\
+                   endpoint refuses otherwise. Simple, but loses block-level granularity.\n\n\
                  **B. Multi-block (§24 Erweiterung, preferred):**\n\
                    Register extension as new tr_id with its own rate and foerderendedatum.\n\
                    Use eeg_billing::CapacityBlock in SettleInput for proportional settlement.\n\

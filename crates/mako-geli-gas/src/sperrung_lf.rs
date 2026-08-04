@@ -1,4 +1,4 @@
-//! GeLi Gas LF-side Gas Sperrung / Entsperrung workflow (ORDERS 17115/17117, ORDRSP 19115/19116).
+//! GeLi Gas LF-side Gas Sperrung / Entsperrung workflow (ORDERS 17115/17117, ORDRSP 19116/19117).
 //!
 //! When `makod` operates as a **Lieferant (LF)** in the Gas market, the ERP instructs
 //! the engine to issue a Gas-Sperrauftrag (ORDERS 17115) or Gas-Entsperrauftrag
@@ -12,7 +12,7 @@
 //!        ↓ emits AuftragInitiiert + ORDERS 17115/17117 outbox entry
 //! AS4 sender → ORDERS 17115/17117 to GNB
 //!        ↓
-//! AS4 inbound ← ORDRSP 19115 (Bestätigung) or 19116 (Ablehnung) from GNB
+//! AS4 inbound ← ORDRSP 19116 (Bestätigung) or 19117 (Ablehnung) from GNB
 //! ```
 //!
 //! For **Stornierung** (cancellation before execution):
@@ -31,8 +31,8 @@
 //! |-------------|-------|-----------------------------------------------------|
 //! | Outbound LF | 17115 | Gas-Sperrauftrag (LF → GNB)                         |
 //! | Outbound LF | 17117 | Gas-Entsperrauftrag (LF → GNB)                      |
-//! | Inbound GNB | 19115 | Bestätigung Gas-Sperr-/Entsperrauftrag (GNB → LF)   |
-//! | Inbound GNB | 19116 | Ablehnung Gas-Sperr-/Entsperrauftrag (GNB → LF)     |
+//! | Inbound GNB | 19116 | Bestätigung Sperr-/Entsperrauftrag (GNB → LF)       |
+//! | Inbound GNB | 19117 | Ablehnung Sperr-/Entsperrauftrag (GNB → LF)         |
 //! | Inbound GNB | 19128 | Bestätigung Stornierung Gas-Sperrauftrag (GNB → LF)  |
 //! | Inbound GNB | 19129 | Ablehnung Stornierung Gas-Sperrauftrag (GNB → LF)   |
 //!
@@ -119,11 +119,11 @@ pub enum GasSperrungLfEvent {
         /// EDIFACT message reference of the outbound ORDERS.
         message_ref: MessageRef,
     },
-    /// ORDRSP 19115 (Bestätigung) or 19116 (Ablehnung) received from GNB.
+    /// ORDRSP 19116 (Bestätigung) or 19117 (Ablehnung) received from GNB.
     OrdrspEmpfangen {
-        /// 19115 = Bestätigung, 19116 = Ablehnung.
+        /// 19116 = Bestätigung, 19117 = Ablehnung.
         pruefidentifikator: Pruefidentifikator,
-        /// `true` for 19115 (GNB accepts and will execute), `false` for 19116 (GNB rejects).
+        /// `true` for 19116 (GNB accepts and will execute), `false` for 19117 (GNB rejects).
         is_confirmed: bool,
         /// EDIFACT message reference of the inbound ORDRSP.
         message_ref: MessageRef,
@@ -189,9 +189,9 @@ pub enum GasSperrungLfState {
     New,
     /// Gas-Sperrauftrag sent outbound; awaiting GNB's ORDRSP.
     AuftragGesendet(GasSperrungAuftragData),
-    /// GNB confirmed the Gas-Sperrauftrag (ORDRSP 19115, terminal success).
+    /// GNB confirmed the Gas-Sperrauftrag (ORDRSP 19116, terminal success).
     OrdrspBestaetigt(GasSperrungAuftragData),
-    /// GNB rejected the Gas-Sperrauftrag (ORDRSP 19116, terminal failure).
+    /// GNB rejected the Gas-Sperrauftrag (ORDRSP 19117, terminal failure).
     OrdrspAbgelehnt {
         /// Optional rejection reason from ORDRSP.
         reason: Option<String>,
@@ -270,17 +270,17 @@ pub enum GasSperrungLfCommand {
         /// EDIFACT message reference of the outbound ORDERS.
         message_ref: MessageRef,
     },
-    /// Inbound ORDRSP 19115/19116 from GNB received by the AS4 layer.
+    /// Inbound ORDRSP 19116/19117 from GNB received by the AS4 layer.
     ReceiveOrdrsp {
-        /// 19115 = Bestätigung, 19116 = Ablehnung.
+        /// 19116 = Bestätigung, 19117 = Ablehnung.
         pid: Pruefidentifikator,
-        /// `true` for 19115 (confirmed), `false` for 19116 (rejected).
+        /// `true` for 19116 (confirmed), `false` for 19117 (rejected).
         is_confirmed: bool,
         /// EDIFACT message reference of the inbound ORDRSP.
         message_ref: MessageRef,
         /// GLN of the GNB sender.
         sender: MarktpartnerCode,
-        /// Optional rejection reason from the ORDRSP (19116 only).
+        /// Optional rejection reason from the ORDRSP (19117 only).
         reason: Option<String>,
     },
     /// ERP instructs the LF to cancel the pending Gas-Sperrauftrag.
@@ -317,7 +317,7 @@ impl CommandPayload for GasSperrungLfCommand {}
 /// GeLi Gas LF-side Gas Sperrung / Entsperrung workflow (ORDERS 17115/17117).
 ///
 /// Handles the Lieferant's outbound Gas-Sperrauftrag lifecycle and all inbound
-/// responses from the Gasnetzbetreiber (ORDRSP 19115/19116) and Stornierung
+/// responses from the Gasnetzbetreiber (ORDRSP 19116/19117) and Stornierung
 /// responses (ORDRSP 19128/19129).
 ///
 /// Deadline: **10 Werktage** per BK7-24-01-009. Compute with
@@ -456,7 +456,7 @@ impl Workflow for GeliGasSperrungLfWorkflow {
             } => {
                 if !ORDRSP_SPERRUNG_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected a Gas-Sperrung ORDRSP PID (19115 or 19116), got {pid}",
+                        "expected a Gas-Sperrung ORDRSP PID (19116 or 19117), got {pid}",
                     )));
                 }
                 // Idempotent: ignore if already in terminal state.

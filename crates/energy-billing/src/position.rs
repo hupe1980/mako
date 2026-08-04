@@ -52,7 +52,16 @@ pub struct PositionTrace {
 
     /// Applicable regulatory citations (§-references).
     ///
-    /// Examples: `["§41 EnWG"]`, `["§3 StromStG"]`, `["§40a EnWG"]`, `["§12 Abs. 3 UStG"]`
+    /// Examples: `["§40 EnWG"]` (invoice content), `["§3 StromStG"]`
+    /// (Stromsteuer), `["§19 Abs. 2 StromNEV"]`, `["§12 Abs. 1 UStG"]`
+    /// (standard VAT rate).
+    ///
+    /// Two citations do **not** belong here and are easy to reach for:
+    /// **§40a EnWG** is Verbrauchsermittlung (estimation), not invoice content —
+    /// that is §40. **§12 Abs. 3 UStG** zero-rates the supply of a PV *system*,
+    /// never electricity or feed-in; a small operator's 0 % feed-in comes from
+    /// the Kleinunternehmerregelung (§19 UStG), which is an election rather than
+    /// a function of plant size.
     pub regulatory_basis: Vec<String>,
 
     /// Tariff source reference (product sheet or contract).

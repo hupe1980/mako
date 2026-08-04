@@ -13,8 +13,9 @@
 --   eeg_verguetungssaetze     — EEG/KWKG tariff reference data
 --   epex_monthly_prices       — monthly EPEX Spot reference (Marktprämie)
 --   jahresmarktwert_preise    — technology-specific Jahresmarktwert (§20 Abs. 2 EEG)
---   sect53b_reductions        — §53b regional Grünstromkennzeichnung reductions
---   sect54_reductions         — §54 BNetzA Ausschreibungsreduzierung per plant
+--   eeg_regionalnachweise     — §53b Regionalnachweis periods (§79a)
+--   eeg_stromsteuerbefreiungen — §53c per-kWh Stromsteuerbefreiung
+--   eeg_sect54_solar_defekte  — §54 solar first-segment auction defects
 
 -- ── EEG/KWKG plant register ───────────────────────────────────────────────────
 
@@ -169,8 +170,11 @@ CREATE TABLE eeg_anlagen (
     -- ── §51b EEG 2023: biogas Ausschreibungsanlage flag ──────────────────────
     is_biogas_sect51b          BOOLEAN     NOT NULL DEFAULT false,
 
-    -- ── Ausschreibung lifecycle (migration 0006) ──────────────────────────────
-    -- §35a EEG: date the Zuschlag expires if plant not commissioned
+    -- ── Ausschreibung lifecycle ───────────────────────────────────────────────
+    -- Erlöschen von Zuschlägen when the plant is not commissioned in time. The
+    -- rule is technology-specific: §36e (Wind an Land), §37e (Solaranlagen des
+    -- ersten Segments), §39e (Biomasseanlagen) EEG 2023. Distinct from §35a
+    -- Entwertung von Zuschlägen, which is a BNetzA act rather than a deadline.
     zuschlag_erloeschen_datum  DATE,
     award_expired              BOOLEAN     NOT NULL DEFAULT false,
     -- §52: cumulative violation start dates for Pflichtzahlung
@@ -186,6 +190,24 @@ CREATE TABLE eeg_anlagen (
 
     -- ── §53b regional reduction ───────────────────────────────────────────────
     grid_area                  TEXT,
+
+    -- ── §24 EEG 2023: facts that decide Zusammenfassung ──────────────────────
+    -- Two plants are deemed one — changing the tariff band and the tender
+    -- threshold for the whole Förderdauer — only when all of §24 Abs. 1 Satz 1
+    -- holds and none of Sätze 2–5 carves them out. Ownership is deliberately
+    -- absent: Satz 1 says "unabhängig von den Eigentumsverhältnissen".
+
+    -- Satz 1 Nr. 1 — Grundstück, Gebäude or Betriebsgelände. NULL = unknown,
+    -- which cannot establish a shared site.
+    standort_id                TEXT,
+    -- Sätze 3/4 — where a solar installation sits.
+    solar_montage              TEXT CHECK (solar_montage IN (
+        'AN_GEBAEUDE_ODER_LAERMSCHUTZWAND', 'FREIFLAECHE', 'SONSTIGE')),
+    -- Satz 4 — building solar behind different points is not one plant.
+    netzverknuepfungspunkt     TEXT,
+    -- Satz 2 — biogas (not biomethane) from the same Biogaserzeugungsanlage is
+    -- fused regardless of Satz 1.
+    biogaserzeugungsanlage_id  TEXT,
 
     -- ── §44b EEG 2023: Biogas annual 45%-cap quota ───────────────────────────
     biogas_quota_kwh_ytd       NUMERIC(14, 3) NOT NULL DEFAULT 0,
@@ -476,50 +498,121 @@ COMMENT ON TABLE jahresmarktwert_preise IS
 CREATE INDEX jmw_period    ON jahresmarktwert_preise (billing_year DESC, billing_month DESC);
 CREATE INDEX jmw_art_period ON jahresmarktwert_preise (erzeugungsart, billing_year DESC, billing_month DESC);
 
--- ── §53b EEG 2023: Regional Grünstromkennzeichnung reductions ─────────────────
--- Applied per Netzgebiet (not per plant). The settlement engine queries this table
--- to reduce tariffs for all plants in a certified grid area.
+-- ── §§53b–54 EEG 2023: reductions of the anzulegender Wert ───────────────────
+--
+-- Each of these cuts the AW itself, before the settlement formula. That matters
+-- for the gleitende Marktprämie, which floors at zero: a euro deduction taken
+-- after the floor would drive the settlement negative.
+--
+-- The amounts are fixed by statute and therefore NOT stored — only the facts
+-- that trigger them are. Storing a rate would let a data-entry error produce a
+-- deduction the law does not provide for.
 
-CREATE TABLE sect53b_reductions (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant          TEXT        NOT NULL,
-    grid_area       TEXT        NOT NULL,
-    reduction_ct_kwh NUMERIC(8, 5) NOT NULL,
-    bnetza_ref      TEXT        NOT NULL,
-    effective_from  DATE        NOT NULL,
-    effective_until DATE,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+-- §53b: "Der anzulegende Wert für Strom, für den dem Anlagenbetreiber ein
+-- Regionalnachweis ausgestellt worden ist, verringert sich bei Anlagen, deren
+-- anzulegender Wert gesetzlich bestimmt ist, um 0,1 Cent pro Kilowattstunde."
+--
+-- Per plant and period — a Regionalnachweis is issued to the Anlagenbetreiber
+-- for specific electricity (§79a EEG, Herkunfts- und Regionalnachweisregister
+-- des Umweltbundesamtes), not to a grid area.
 
-COMMENT ON TABLE sect53b_reductions IS
-    '§53b EEG 2023 Grünstromkennzeichnung reductions per Netzgebiet. '
-    'Applied per grid_area — all plants in the area are affected.';
-
-CREATE INDEX sect53b_area ON sect53b_reductions (tenant, grid_area, effective_from DESC);
-
--- ── §54 EEG 2023: Ausschreibungsreduzierung per plant ────────────────────────
--- BNetzA may reduce the awarded Anzulegender Wert after commissioning.
--- effective_aw = awarded_aw - SUM(deduction_ct_kwh) (floor 0).
-
-CREATE TABLE sect54_reductions (
+CREATE TABLE eeg_regionalnachweise (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tr_id           TEXT        NOT NULL,
     tenant          TEXT        NOT NULL,
-    deduction_ct_kwh NUMERIC(8, 5) NOT NULL,
-    bnetza_ref      TEXT        NOT NULL,
+    -- Register reference of the issued Regionalnachweis (§79a EEG).
+    nachweis_ref    TEXT        NOT NULL,
     effective_from  DATE        NOT NULL,
     effective_until DATE,
-    notes           TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT fk_sect54_anlage FOREIGN KEY (tr_id, tenant)
-        REFERENCES eeg_anlagen (tr_id, tenant) ON DELETE CASCADE
+    CONSTRAINT fk_rn_anlage FOREIGN KEY (tr_id, tenant)
+        REFERENCES eeg_anlagen (tr_id, tenant) ON DELETE CASCADE,
+    CONSTRAINT rn_period_forward CHECK (effective_until IS NULL OR effective_until >= effective_from)
 );
 
-COMMENT ON TABLE sect54_reductions IS
-    '§54 EEG 2023 BNetzA Ausschreibungsreduzierungen. '
-    'Each row = one BNetzA reduction notification for an Ausschreibungsanlage.';
+COMMENT ON TABLE eeg_regionalnachweise IS
+    '§53b EEG 2023: periods for which a Regionalnachweis (§79a) was issued. '
+    'The 0,1 ct/kWh deduction is statutory and is applied by the settlement '
+    'engine — deliberately not stored here.';
 
-CREATE INDEX sect54_tr_id ON sect54_reductions (tr_id, tenant, effective_from DESC);
+CREATE INDEX rn_tr_id ON eeg_regionalnachweise (tr_id, tenant, effective_from DESC);
+
+-- §53c: "Der anzulegende Wert verringert sich für Strom, der durch ein Netz
+-- durchgeleitet wird und der von der Stromsteuer nach dem Stromsteuergesetz
+-- befreit ist, um die Höhe der pro Kilowattstunde gewährten Stromsteuerbefreiung."
+--
+-- The amount IS stored here, because the statute ties it to the exemption
+-- actually granted rather than to a fixed rate. It is capped at the full §3
+-- StromStG rate (20,50 EUR/MWh = 2,05 ct/kWh) by the settlement engine.
+
+CREATE TABLE eeg_stromsteuerbefreiungen (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tr_id           TEXT        NOT NULL,
+    tenant          TEXT        NOT NULL,
+    befreiung_ct_kwh NUMERIC(8, 5) NOT NULL,
+    -- Which StromStG provision the exemption rests on, e.g. '§9 Abs. 1 Nr. 1'.
+    rechtsgrundlage TEXT        NOT NULL,
+    effective_from  DATE        NOT NULL,
+    effective_until DATE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT fk_sst_anlage FOREIGN KEY (tr_id, tenant)
+        REFERENCES eeg_anlagen (tr_id, tenant) ON DELETE CASCADE,
+    CONSTRAINT sst_positive CHECK (befreiung_ct_kwh > 0),
+    CONSTRAINT sst_max_vollsatz CHECK (befreiung_ct_kwh <= 2.05),
+    CONSTRAINT sst_period_forward CHECK (effective_until IS NULL OR effective_until >= effective_from)
+);
+
+COMMENT ON TABLE eeg_stromsteuerbefreiungen IS
+    '§53c EEG 2023: per-kWh Stromsteuerbefreiung granted for grid-transited '
+    'electricity. Capped at the §3 StromStG full rate of 2,05 ct/kWh.';
+
+CREATE INDEX stromsteuer_tr_id ON eeg_stromsteuerbefreiungen (tr_id, tenant, effective_from DESC);
+
+-- §54: Verringerung des Zahlungsanspruchs bei Ausschreibungen für Solaranlagen
+-- des ersten Segments. Four independent statutory defects; Abs. 1 and Abs. 2
+-- stack, Abs. 4 zeroes the AW outright.
+--
+-- Abs. 3 Satz 2/3: the deduction lapses for the future once the missing proof
+-- is supplied, and retroactively for the periods it covers — so a late Nachweis
+-- is recorded by closing the period, not by deleting the row.
+
+CREATE TABLE eeg_sect54_solar_defekte (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tr_id           TEXT        NOT NULL,
+    tenant          TEXT        NOT NULL,
+    -- Abs. 1 — Zahlungsberechtigung applied for after the 18th calendar month
+    -- following public announcement of the Zuschlag. −0,3 ct/kWh.
+    zahlungsberechtigung_nach_18_monaten BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Abs. 2 — location does not match the Flurstücke named in the bid. −0,3 ct/kWh.
+    flurstueck_abweichung                BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Abs. 3 — Nachweis of simultaneous crop cultivation / agricultural use
+    -- (§37 Abs. 1 Nr. 3, §85c Abs. 1 Satz 4) not supplied. −2,5 ct/kWh.
+    agri_nutzungsnachweis_fehlt          BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Abs. 4 — Landesverordnung under §37c Abs. 2 not met. AW → 0.
+    landesverordnung_nicht_erfuellt      BOOLEAN NOT NULL DEFAULT FALSE,
+    bnetza_ref      TEXT,
+    notes           TEXT,
+    effective_from  DATE        NOT NULL,
+    effective_until DATE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT fk_s54_anlage FOREIGN KEY (tr_id, tenant)
+        REFERENCES eeg_anlagen (tr_id, tenant) ON DELETE CASCADE,
+    CONSTRAINT s54_period_forward CHECK (effective_until IS NULL OR effective_until >= effective_from),
+    -- A row that records no defect deducts nothing; it is a data-entry error.
+    CONSTRAINT s54_at_least_one_defect CHECK (
+        zahlungsberechtigung_nach_18_monaten
+        OR flurstueck_abweichung
+        OR agri_nutzungsnachweis_fehlt
+        OR landesverordnung_nicht_erfuellt
+    )
+);
+
+COMMENT ON TABLE eeg_sect54_solar_defekte IS
+    '§54 EEG 2023 Ausschreibungen für Solaranlagen des ersten Segments: the four '
+    'statutory defects per plant and period. Deduction amounts are statutory and '
+    'applied by the settlement engine.';
+
+CREATE INDEX s54_tr_id ON eeg_sect54_solar_defekte (tr_id, tenant, effective_from DESC);
 
 -- ── Jahresabrechnung (§25 EEG 2023 / §14 UStG annual reconciliation) ──────────
 --

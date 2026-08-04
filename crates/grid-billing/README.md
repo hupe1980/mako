@@ -103,8 +103,8 @@ could forget:
 
 | Rule | Enforced by |
 |---|---|
-| Exactly one Arbeitspreis form (einheitlich, Modul 1, HT/NT Modul 2, or Modul 3 spot) | `ArbeitspreisModell` — one variant at a time; `Modul3Spotpreis` replaces the flat position, so the same energy is never billed twice |
-| §14a modules are mutually exclusive | `ArbeitspreisModell` — `Modul1Pauschal`/`Modul2ZeitVariabel`/`Modul3Spotpreis` are variants of the same enum |
+| Exactly one Arbeitspreis form (einheitlich, Modul 1 pauschal, Modul 2 prozentual, Modul 3 zeitvariabel, or spot-linked) | `ArbeitspreisModell` — one variant at a time; each replaces the flat position, so the same energy is never billed twice |
+| Modul 2 and Modul 3 are mutually exclusive (BK6-22-300) | `ArbeitspreisModell` holds one variant at a time. Note this also blocks the Modul 1 + Modul 3 combination the Festlegung *permits* — see `Sect14aModule::combinable_with` |
 | Reduction factors in `(0, 1]` | `Reduktionsfaktor` enforces the range at construction |
 | Leistungspreis needs both peak and rate | `Leistungspreis` — a pair |
 | Grundpreis needs both rate and months | `Grundpreis` — a pair |
@@ -346,6 +346,9 @@ InvoiceDocument { settlement, pid, rechnungsnummer, invoice_date, due_date }
 into_rechnung(&document)  → rubo4e::current::Rechnung {
                               rechnungspositionen[].positionsnummer ← assigned here
                               rechnungspositionen[].artikelnummer   ← via kind.artikelnummer()
+                              rechnungstyp                          ← Netznutzungsrechnung (NNE + MMM only)
+                              netznutzungrechnungsart               ← Handels-/Selbstausgestellt
+                              netznutzungrechnungstyp               ← Mehrmindermengenrechnung (MMM only)
                             }
         │
         ▼
@@ -355,6 +358,28 @@ InvoicCheckEngine::check(pid, &nb_mp_id, &rechnung, …)
 invoice_drafts (PostgreSQL) → AS4 dispatch
 ```
 
+### Netznutzungsrechnung typing
+
+`into_rechnung` marks the document so a consumer can recognise it without
+inspecting positions:
+
+| Field | Set for | Value |
+|---|---|---|
+| `rechnungstyp` | NNE Strom/Gas, MMM Strom/Gas, MMM selbst ausgestellt | `Netznutzungsrechnung` |
+| `netznutzungrechnungsart` | the same five | `Selbstausgestellt` for PID 31006, else `Handelsrechnung` |
+| `netznutzungrechnungstyp` | MMM only | `Mehrmindermengenrechnung` |
+
+The other four settlement types this engine produces — MSB-Rechnung (31009),
+Gas-AWH Sperrung (31011), Redispatch Kostenblatt, dezentrale Einspeisung (§18
+StromNEV) — are **left untyped on purpose**. They are not network-use invoices,
+and typing them as one would assert something the AHB does not.
+
+`netznutzungrechnungstyp` stays unset for NNE for the same reason: its remaining
+codes (Turnus-, Monats-, Abschlags-, Abschluss-, Zwischenrechnung) describe the
+billing *cadence*, and the same NNE computation is billed monthly or annually
+depending on contract. That is a document fact like `rechnungsnummer`, not a
+property of the settlement, so it needs a model change rather than a mapping.
+
 ### BDEW Artikelnummern architecture
 
 The service layer owns the BDEW Artikelnummer mapping. `grid-billing` stays free
@@ -362,15 +387,15 @@ of `rubo4e`:
 
 ```mermaid
 flowchart LR
-    calc["grid_billing\nsettle_*()"]
-    pos["SettlementPosition\n.kind: BillingPositionKind\n.trace: CalculationTrace"]
-    svc["Service layer\nkind_to_artikelnummer()"]
-    bo4e["Rechnungsposition\n.artikelnummer  ← Gas/MMM/KA\n.artikel_id     ← NNE Strom/AWH Gas"]
+    calc["grid_billing<br/>settle_*()"]
+    pos["SettlementPosition<br/>.kind: BillingPositionKind<br/>.trace: CalculationTrace"]
+    svc["Service layer<br/>kind_to_artikelnummer()"]
+    bo4e["Rechnungsposition<br/>.artikelnummer  ← Gas/MMM/KA<br/>.artikel_id     ← NNE Strom/AWH Gas"]
 
     calc --> pos --> svc --> bo4e
 
-    note1["BK6-20-160:\nNNE Strom replaced\nartikelnummer → artikel_id\nfrom PreisblattNetznutzung"]
-    note2["BDEW Codeliste v5.6:\nGas NNE/MMM/KA use\nclassic 9990001… codes\nAWH: 2-01-7-001/002"]
+    note1["BK6-20-160:<br/>NNE Strom replaced<br/>artikelnummer → artikel_id<br/>from PreisblattNetznutzung"]
+    note2["BDEW Codeliste v5.6:<br/>Gas NNE/MMM/KA use<br/>classic 9990001… codes<br/>AWH: 2-01-7-001/002"]
 
     note1 -.->|Strom| bo4e
     note2 -.->|Gas| bo4e
@@ -396,6 +421,7 @@ service layer, keeping this crate publishable to crates.io without pulling in in
 pub struct SettlementResult {
     pub settlement_type: SettlementType, // NneStrom | NneGas | MmmStrom | MsbRechnung | …
     pub status: SettlementStatus,        // Initial | Correction | Reversal | Final
+    pub korrektur_grund: Option<KorrekturGrund>, // why — None only for Initial
     pub period: SettlementPeriod,        // validated pair, both bounds inclusive
     pub regime: RegulatoryRegime,        // the rules this calculation applied
     pub sparte: Sparte,
@@ -467,7 +493,7 @@ pub struct CalculationTrace {
     pub gross_eur: Decimal,                       // qty × price before rounding
     pub legal_refs: Vec<LegalReference>,          // at least one, always
     pub tariff_source: Option<TariffSource>,      // where the rate came from
-    pub regulatory_reduction_factor: Option<Decimal>, // §14a Modul 1 factor (0–1)
+    pub regulatory_reduction_factor: Option<Decimal>, // §14a Modul 2 factor (0–1)
     pub rounding_note: Option<&'static str>,
 }
 ```
@@ -567,7 +593,7 @@ pub enum BillingPositionKind {
     NneArbeit,           // Wirkarbeit       (9990001 00026 9)
     NneArbeitHt,         // Wirkarbeit       (9990001 00026 9) — §14a Modul 2 HT
     NneArbeitNt,         // Wirkarbeit       (9990001 00026 9) — §14a Modul 2 NT
-    NneArbeitModul1,     // Wirkarbeit       (9990001 00026 9) — Modul 1 reduced rate
+    NneArbeitModul1,     // Wirkarbeit       (9990001 00026 9) — Modul 1 Arbeit + pauschale credit
     NneArbeitModul3,     // Wirkarbeit — §14a Modul 3 spot, one position per dispatch interval
     NneLeistung,         // Leistung         (9990001 00005 3)
     NneGasGrundpreis,    // Grundpreis       (9990001 00008 7)
@@ -743,7 +769,7 @@ use grid_billing::types::{
 
 let settlement = settle_nne(&NneInput {
     // Modul 2 requires both bands; the enum makes the flat/HT-NT states exclusive.
-    arbeitspreis: ArbeitspreisModell::Modul2ZeitVariabel {
+    arbeitspreis: ArbeitspreisModell::Modul3ZeitVariabel {
         ht: MengePreis { menge_kwh: d("600"), preis_ct_per_kwh: d("4.20") },
         nt: MengePreis { menge_kwh: d("400"), preis_ct_per_kwh: d("1.50") },
     },
@@ -766,21 +792,28 @@ let settlement = settle_nne(&NneInput {
 assert!(settlement.all_legal_refs().iter().any(|r| r.contains("§14a EnWG Modul 2")));
 ```
 
-### §14a Modul 1 (flat percentage reduction, mandatory offer since 2024-01-01)
+### §14a Modul 1 — pauschale Reduzierung (offered since 2024-01-01)
+
+Modul 1 is a **flat annual amount**, credited pro rata for the settlement period.
+It does not scale with consumption — that is what makes it *pauschal*, and what
+separates it from Modul 2, which reduces the Arbeitspreis by a percentage. The
+energy is billed at the full Arbeitspreis and the credit sits beside it as its
+own position, so the invoice shows both.
 
 ```rust,no_run
 use grid_billing::{NneInput, Sparte, settle_nne};
-use grid_billing::types::{ArbeitspreisModell, MengePreis, Reduktionsfaktor};
-use rust_decimal::dec;
+use grid_billing::types::{ArbeitspreisModell, MengePreis};
+use rust_decimal::{Decimal, dec};
 
-// BK6-22-300 Anlage 2: default reduction factor = 0.85 (customer pays 85% of full rate).
-// Reduktionsfaktor enforces the (0, 1] range at construction; REGELFALL is the 0.85 default.
 let settlement = settle_nne(&NneInput {
     // Modul 1 is a variant of ArbeitspreisModell, so it cannot coexist with a
-    // flat rate or the HT/NT split — the conflict is unrepresentable.
+    // flat rate or the Modul 3 bands — the conflict is unrepresentable.
     arbeitspreis: ArbeitspreisModell::Modul1Pauschal {
         basis: MengePreis { menge_kwh: d("1500"), preis_ct_per_kwh: d("3.5") },
-        reduktion: Reduktionsfaktor::new(dec!(0.85)).unwrap(),  // ← 15% reduction
+        // The NB's published annual amount, and the share of a year this
+        // period covers.
+        pauschale_eur_pro_jahr: dec!(120.00),
+        jahresanteil: Decimal::ONE / Decimal::from(12u32),
     },
     sparte: Sparte::Strom,
     leistungspreis: None,
@@ -861,21 +894,49 @@ assert!(settlement.all_legal_refs().iter().any(|r| r.contains("BK7-24-01-009")))
 
 ### Correction lifecycle (reversal + replacement pair)
 
+Two different facts are recorded in two different places, and the split is
+deliberate:
+
+- **What was replaced** — invoice numbers — lives on the `InvoiceDocument`.
+  The same pair of settlements can be presented under different invoice numbers,
+  so the chain is a property of the documents exchanged.
+- **Why the recalculation happened** — `KorrekturGrund` — lives on the
+  `SettlementResult`. That is a fact about the settlement, and the invoice
+  numbers never answer it: they cannot say whether the meter was wrong, the
+  tariff was wrong, or the law changed underneath. Those have different
+  consequences, so `reverse()` and `correct()` require the reason.
+
 ```rust,no_run
-use grid_billing::{settle_nne, correct, SettlementStatus};
+use grid_billing::{settle_nne, correct, KorrekturGrund, SettlementStatus};
 
 let original = settle_nne(&nne_input).unwrap();
 let corrected = settle_nne(&corrected_input).unwrap();
 
-// correct() negates the original and stamps the replacement's status. Invoice
-// numbers and the correction chain are recorded on the InvoiceDocuments built
-// around these results, not on the settlements themselves.
-let (reversal, replacement) = correct(&original, corrected);
+let (reversal, replacement) =
+    correct(&original, corrected, KorrekturGrund::Tarifkorrektur);
 
 assert_eq!(reversal.status, SettlementStatus::Reversal);
 assert_eq!(reversal.total_eur, -original.total_eur);
 assert_eq!(replacement.status, SettlementStatus::Correction);
+assert_eq!(replacement.korrektur_grund, Some(KorrekturGrund::Tarifkorrektur));
+assert!(replacement.lineage_is_consistent());
 ```
+
+| `KorrekturGrund` | Meaning | Defect? |
+|---|---|---|
+| `Messwertkorrektur` | replaced or re-read metering (§ 60 Abs. 2 MsbG) | no |
+| `Tarifkorrektur` | wrong tariff or price-sheet version applied | no |
+| `Stammdatenkorrektur` | wrong Netzebene, KA-Klasse or Konzessionsgemeinde | **yes** |
+| `RegulatorischeAenderung` | a regulatory change applies retroactively | no |
+| `Rechenfehler` | arithmetic or logic error in the original | **yes** |
+| `Clearing` | a clearing result between the parties (MMM, MaBiS) | no |
+| `Sonstiges` | anything else — detail rides in the warnings | no |
+
+`indicates_defect()` separates the two: a rising `Rechenfehler` count is an
+engineering signal, a rising `RegulatorischeAenderung` count is not.
+`lineage_is_consistent()` catches the state this exists to prevent — a
+`Correction` with no reason, which looks like a complete settlement and answers
+none of the questions an audit asks of one.
 
 ```rust,no_run
 use grid_billing::{settle_nne, reverse, SettlementStatus};
@@ -984,10 +1045,40 @@ fn into_rechnung(doc: &InvoiceDocument) -> Rechnung {
 |---|---|---|---|---|---|---|
 | 1 | `Netznutzung Arbeit` | kWh | `NneArbeit` | `arbeitspreis: ArbeitspreisModell::Einheitlich` | StromNEV §21 (Strom) · GasNEV §14 (Gas) | `Wirkarbeit` (Gas); `artikel_id` (Strom) |
 | 1 | `Netznutzung Arbeit §14a Modul 1 (85% Reduzierung)` | kWh | `NneArbeitModul1` | `arbeitspreis: ArbeitspreisModell::Modul1Pauschal` | §14a EnWG Modul 1 · BK6-22-300 | same as NneArbeit |
-| 1+2 | `Netznutzung Arbeit HT (§14a Modul 2)` + NT | kWh | `NneArbeitHt` / `NneArbeitNt` | `arbeitspreis: ArbeitspreisModell::Modul2ZeitVariabel` | §14a EnWG Modul 2 · BK6-22-300 | same as NneArbeit |
+| 1–3 | `Netznutzung Arbeit HT/ST/NT (§14a Modul 3)` | kWh | `NneArbeitHt` / `NneArbeitSt` / `NneArbeitNt` | `arbeitspreis: ArbeitspreisModell::Modul3ZeitVariabel` | §14a EnWG Modul 3 · BK6-22-300 | same as NneArbeit |
 | opt | `Netzentgelt Grundpreis Gas` | Monat | `NneGasGrundpreis` | `grundpreis` set | GasNEV §14 | `Grundpreis` |
 | next | `Netznutzung Leistung` | kW | `NneLeistung` | `leistungspreis` set (RLM) | StromNEV §17 | `Leistung` (Gas); `artikel_id` (Strom) |
+| next | `Blindmehrarbeit` | kvarh | `Blindmehrarbeit` | `blindarbeit` set **and** the draw exceeds the free share | StromNEV §17 (Preisblatt) | `Blindmehrarbeit` |
 | last | `Konzessionsabgabe[tier]` | kWh | `Konzessionsabgabe` | `konzessionsabgabe` set | KAV §2 Abs. 2 | `Konzessionsabgabe` |
+
+#### Blindmehrarbeit
+
+A Netzbetreiber supplies a *free share* of reactive energy alongside the active
+energy and charges only what exceeds it. The customary boundary is a power factor
+of cos φ 0,9 — reactive energy up to **tan φ ≈ 0,4843** of the active energy —
+but many Preisblätter round that to a flat 50 %, and some set separate shares for
+inductive and capacitive draw.
+
+The share is therefore an **input**, not a constant: it is a term of the price
+sheet, and hard-coding one would bill some networks wrongly.
+`Blindarbeit::COS_PHI_0_9` is the documented default.
+
+```rust,no_run
+use grid_billing::{Blindarbeit, NneInput};
+use rust_decimal::dec;
+
+let blindarbeit = Some(Blindarbeit {
+    blindarbeit_kvarh: dec!(600),
+    freigrenze_anteil: Blindarbeit::COS_PHI_0_9,
+    preis_ct_per_kvarh: dec!(2.0),
+});
+// 1 000 kWh active → 484,3 kvarh free → 115,7 kvarh charged.
+```
+
+An unused allowance is never a credit — the excess floors at zero. The charge
+rests on the Netzbetreiber's published Preisblatt, formed under **StromNEV §17**;
+it is not §18 (Entgelt für dezentrale Erzeugung) and not §19 (Sonderformen der
+Netznutzung).
 
 ### MMM
 

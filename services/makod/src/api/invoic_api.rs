@@ -8,8 +8,8 @@
 //!
 //! ## Design
 //!
-//! `wim-rechnung` stores the `Rechnung` BO4E object inside the
-//! `WimRechnungInvoicReceived` event payload. This endpoint loads the event
+//! `wim-invoic` stores the `Rechnung` BO4E object inside the
+//! `WimInvoicReceived` event payload. This endpoint loads the event
 //! stream for the given `process_id`, finds that event, and returns the
 //! embedded `rechnung` field.
 //!
@@ -57,7 +57,7 @@ pub fn router(state: Arc<InvoicApiState>) -> Router {
 
 /// `GET /api/v1/invoic/{process_id}/rechnung`
 ///
-/// Returns the BO4E `Rechnung` object embedded in the `WimRechnungInvoicReceived`
+/// Returns the BO4E `Rechnung` object embedded in the `WimInvoicReceived`
 /// event for the given process.
 ///
 /// - **200 OK** — JSON `Rechnung` (BO4E v202607 schema)
@@ -137,9 +137,9 @@ async fn get_rechnung(
             .into_response();
     }
 
-    // Find the first WimRechnungInvoicReceived event and extract the rechnung.
+    // Find the first WimInvoicReceived event and extract the rechnung.
     for env in &events {
-        if env.event_type.as_ref() == "WimRechnungInvoicReceived" {
+        if env.event_type.as_ref() == "WimInvoicReceived" {
             if let Some(rechnung) = env.payload.get("data").and_then(|d| d.get("rechnung")) {
                 return (StatusCode::OK, axum::Json(rechnung.clone())).into_response();
             }
@@ -159,7 +159,7 @@ async fn get_rechnung(
         StatusCode::NOT_FOUND,
         axum::Json(serde_json::json!({
             "error": "INVOIC_NOT_RECEIVED",
-            "message": format!("no WimRechnungInvoicReceived event in stream for process {process_uuid}")
+            "message": format!("no WimInvoicReceived event in stream for process {process_uuid}")
         })),
     )
         .into_response()

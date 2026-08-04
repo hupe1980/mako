@@ -142,16 +142,16 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 55052 | Bestätigung Ende MSB | WiM Strom Teil 1 | NB → MSBA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 55053 | Ablehnung Ende MSB | WiM Strom Teil 1 | NB → MSBA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 55060 | Antwort auf GDA | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
-| 55062 | Aktivierung von ZP | MaBiS / AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → NB · NB → BIKO · NB → LF · ÜNB → LF · ÜNB → BIKO · BIKO → NB · BIKO → BKV · BIKO → ÜNB · ÜNB → NB · ÜNB → BKV · NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 55063 | Deaktivierung von ZP | MaBiS / AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → NB · NB → BIKO · NB → LF · ÜNB → LF · ÜNB → BIKO · BIKO → NB · BIKO → BKV · BIKO → ÜNB · ÜNB → NB · ÜNB → BKV · NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 55064 | Antwort | MaBiS | NB → NB · BIKO → NB · BIKO → ÜNB | — | ✅ | — | ✅ | ✅ | — |
+| 55062 | Aktivierung von ZP | MaBiS / AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → NB · NB → BIKO · NB → LF · ÜNB → LF · ÜNB → BIKO · BIKO → NB · BIKO → BKV · BIKO → ÜNB · ÜNB → NB · ÜNB → BKV · NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55063 | Deaktivierung von ZP | MaBiS / AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → NB · NB → BIKO · NB → LF · ÜNB → LF · ÜNB → BIKO · BIKO → NB · BIKO → BKV · BIKO → ÜNB · ÜNB → NB · ÜNB → BKV · NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55064 | Antwort | MaBiS | NB → NB · BIKO → NB · BIKO → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
 | 55065 | Lieferantenclearingliste | MaBiS | NB → LF · ÜNB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-clearingliste` |
 | 55066 | Korrekturliste zu Lieferantenclearingliste | MaBiS | LF → NB · LF → ÜNB | — | ✅ | — | ✅ | ✅ | — |
 | 55067 | Bilanzkreiszuordnungsliste | MaBiS | NB → BKV · ÜNB → BKV | — | ✅ | — | ✅ | ✅ | — |
 | 55069 | Clearingliste DZR | MaBiS | BIKO → NB · BIKO → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-clearingliste` |
 | 55070 | Clearingliste BAS | MaBiS | BIKO → BKV | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-clearingliste` |
-| 55071 | Aktivierung der Zuordnungsermächtigung | MaBiS | BKV → NB | — | ✅ | — | ✅ | ✅ | — |
-| 55072 | Deaktivierung der Zuordnungsermächtigung | MaBiS | BKV → NB | — | ✅ | — | ✅ | ✅ | — |
+| 55071 | Aktivierung der Zuordnungsermächtigung | MaBiS | BKV → NB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55072 | Deaktivierung der Zuordnungsermächtigung | MaBiS | BKV → NB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
 | 55073 | Übermittlung der Profildefinitionen | MaBiS | NB → MSB · NB → LF | — | ✅ | — | ✅ | ✅ | — |
 | 55074 | Stammdaten auf eine ORDERS | HKN-R (NB↔UBA) | NB → HKN-R | — | ✅ | — | ✅ | ✅ | — |
 | 55075 | Stammdaten aufgrund einer Änderung | HKN-R (NB↔UBA) | NB → HKN-R | — | ✅ | — | ✅ | ✅ | — |
@@ -174,30 +174,30 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 55177 | Rückmeldung/Anfrage Lokationsbündelstruktur | GPKE Teil 4 | MSB → NB | 55173 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55180 | Rückmeldung/Anfrage Lokationsbündelstruktur | GPKE Teil 4 | LF → NB | 55175 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55194 | Antowrt auf GDA (Strom an Gas) | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
-| 55195 | Bilanzierungsgebietsclearingliste | MaBiS | ÜNB → NB | — | ✅ | — | ✅ | ✅ | — |
-| 55196 | Antwort auf Bilanzierungsgebietsclearingliste | MaBiS | NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 55197 | Aktivierung ZP tägliche AAÜZ | MaBiS | ANB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 55198 | Deaktivierung tägliche AAÜZ | MaBiS | ANB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 55199 | Aktivierung ZP LF-AASZR | MaBiS | ANB → LF | — | ✅ | — | ✅ | ✅ | — |
-| 55200 | Deaktivierung ZP LF-AASZR | MaBiS | ANB → LF | — | ✅ | — | ✅ | ✅ | — |
-| 55201 | LF-AACL | MaBiS | NB → LF | — | ✅ | — | ✅ | ✅ | — |
-| 55202 | Korrekturliste LF-AACL | MaBiS | LF → NB | — | ✅ | — | ✅ | ✅ | — |
-| 55203 | Aktivierung ZP monatliche AAÜZ | MaBiS | ANB → BIKO | — | ✅ | — | ✅ | ✅ | — |
-| 55204 | Antwort auf Aktivierung ZP | MaBiS | BIKO → ANB | — | ✅ | — | ✅ | ✅ | — |
-| 55205 | Weiterleitung Aktivierung ZP | MaBiS | BIKO → BKV | — | ✅ | — | ✅ | ✅ | — |
-| 55206 | Deaktivierung ZP monatliche AAÜZ | MaBiS | ANB → BIKO | — | ✅ | — | ✅ | ✅ | — |
-| 55207 | Antwort auf Deaktivierung ZP | MaBiS | BIKO → ANB | — | ✅ | — | ✅ | ✅ | — |
-| 55208 | Weiterleitung Deaktivierung ZP | MaBiS | BIKO → BKV | — | ✅ | — | ✅ | ✅ | — |
-| 55209 | Aktivierung ZP monatliche AAÜZ | MaBiS | ANB → BIKO | — | ✅ | — | ✅ | ✅ | — |
-| 55210 | Antwort auf Aktiveirung ZP | MaBiS | BIKO → ANB | — | ✅ | — | ✅ | ✅ | — |
-| 55211 | Weiterleitung Aktivierung ZP | MaBiS | BIKO → BKV | — | ✅ | — | ✅ | ✅ | — |
-| 55212 | Deaktivierung ZP monatliche AAÜZ | MaBiS | ANB → BIKO | — | ✅ | — | ✅ | ✅ | — |
-| 55213 | Antwort auf Deaktivierung ZP | MaBiS | BIKO → ANB | — | ✅ | — | ✅ | ✅ | — |
-| 55214 | Weiterleitung Deaktivierung ZP | MaBiS | BIKO → BKV | — | ✅ | — | ✅ | ✅ | — |
+| 55195 | Bilanzierungsgebietsclearingliste | MaBiS | ÜNB → NB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
+| 55196 | Antwort auf Bilanzierungsgebietsclearingliste | MaBiS | NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
+| 55197 | Aktivierung ZP tägliche AAÜZ | MaBiS | ANB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55198 | Deaktivierung tägliche AAÜZ | MaBiS | ANB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55199 | Aktivierung ZP LF-AASZR | MaBiS | ANB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55200 | Deaktivierung ZP LF-AASZR | MaBiS | ANB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55201 | LF-AACL | MaBiS | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
+| 55202 | Korrekturliste LF-AACL | MaBiS | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
+| 55203 | Aktivierung ZP monatliche AAÜZ | MaBiS | ANB → BIKO | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55204 | Antwort auf Aktivierung ZP | MaBiS | BIKO → ANB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55205 | Weiterleitung Aktivierung ZP | MaBiS | BIKO → BKV | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55206 | Deaktivierung ZP monatliche AAÜZ | MaBiS | ANB → BIKO | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55207 | Antwort auf Deaktivierung ZP | MaBiS | BIKO → ANB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55208 | Weiterleitung Deaktivierung ZP | MaBiS | BIKO → BKV | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55209 | Aktivierung ZP monatliche AAÜZ | MaBiS | ANB → BIKO | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55210 | Antwort auf Aktiveirung ZP | MaBiS | BIKO → ANB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55211 | Weiterleitung Aktivierung ZP | MaBiS | BIKO → BKV | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55212 | Deaktivierung ZP monatliche AAÜZ | MaBiS | ANB → BIKO | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55213 | Antwort auf Deaktivierung ZP | MaBiS | BIKO → ANB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
+| 55214 | Weiterleitung Deaktivierung ZP | MaBiS | BIKO → BKV | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
 | 55218 | Abr.-Daten NNA | GPKE Teil 2 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | — |
 | 55220 | Rückmeldung/Anfrage Abr.-Daten NNA | GPKE Teil 2 | LF → NB | 55218 | ✅ | — | ✅ | ✅ | — |
-| 55223 | DZÜ-Liste | MaBiS | ÜNB → NB | — | ✅ | — | ✅ | ✅ | — |
-| 55224 | Antwort auf DZÜ-Liste | MaBiS | NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
+| 55223 | DZÜ-Liste | MaBiS | ÜNB → NB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
+| 55224 | Antwort auf DZÜ-Liste | MaBiS | NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
 | 55225 | Änderung Blindabr.-Daten der NeLo | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55227 | Rückmeldung/Anfrage Blindabr.-Daten der NeLo | GPKE Teil 4 | LF → NB | 55225 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55230 | Änderung Blindabr.-Daten der NeLo | GPKE Teil 4 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
@@ -428,14 +428,14 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 17133 | Bestellung Änderung Abrechnungsdaten | GPKE Teil 2 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 17134 | Einrichtung Konfiguration Zuordnung LF von NB | GPKE Teil 3 | NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration` (outbound-only via outbox; not in `PidRouter`) |
 | 17135 | Einrichtung Konfiguration Zuordnung LF von MSB | GPKE Teil 3 | MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration` (outbound-only via outbox; not in `PidRouter`) |
-| 17201 | Anforder. normierter Profile und Profilscharen | MaBiS | LF → NB | — | ✅ | — | ✅ | ✅ | — |
-| 17202 | Anforder. Lieferantenclearingliste | MaBiS | LF → NB · LF → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 17203 | Anforder. Bilanzkreiszuordnungsliste | MaBiS | BKV → NB · BKV → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 17204 | Anforder. Clearingliste BAS | MaBiS | BKV → BIKO | — | ✅ | — | ✅ | ✅ | — |
-| 17205 | Anforder. Clearingliste DZR | MaBiS | NB → BIKO | — | ✅ | — | ✅ | ✅ | — |
-| 17206 | Anforderung Bilanzierungsgebietsclearingliste | MaBiS | NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 17207 | Ab-/Bestellung BK-SZR auf Aggregationsebene RZ | MaBiS | BKV → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 17208 | Anforderung Clearingliste ÜNB-DZR | MaBiS | ÜNB → BIKO | — | ✅ | — | ✅ | ✅ | — |
+| 17201 | Anforder. normierter Profile und Profilscharen | MaBiS | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-anforderung` |
+| 17202 | Anforder. Lieferantenclearingliste | MaBiS | LF → NB · LF → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-anforderung` |
+| 17203 | Anforder. Bilanzkreiszuordnungsliste | MaBiS | BKV → NB · BKV → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-anforderung` |
+| 17204 | Anforder. Clearingliste BAS | MaBiS | BKV → BIKO | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-anforderung` |
+| 17205 | Anforder. Clearingliste DZR | MaBiS | NB → BIKO | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-anforderung` |
+| 17206 | Anforderung Bilanzierungsgebietsclearingliste | MaBiS | NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-anforderung` |
+| 17207 | Ab-/Bestellung BK-SZR auf Aggregationsebene RZ | MaBiS | BKV → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-anforderung` |
+| 17208 | Anforderung Clearingliste ÜNB-DZR | MaBiS | ÜNB → BIKO | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-anforderung` |
 | 17209 | Anforderung Ausfallarbeit | Redispatch 2.0 | aNB → ANB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
 | 17210 | Anforderung Lieferantenausfallarbeitsclearingliste | MaBiS | LF → ANB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
 | 17211 | Reklamation Profile bzw. Profilscharen | MABIS | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
@@ -576,7 +576,7 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 | 31006 | MMM-selbst ausgest. Rechnung | MMM Strom/Gas | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
 | 31007 | Aggreg. MMM-Rechnung | MMM Strom/Gas | NB → MGV | — | — | ✅ | ✅ | ✅ | `mako-gabi-gas` `gabi-gas-invoic` |
 | 31008 | Aggreg. MMM-selbst ausgest. Rechnung | MMM Strom/Gas | NB → MGV | — | — | ✅ | ✅ | ✅ | `mako-gabi-gas` `gabi-gas-invoic` |
-| 31009 | MSB-Rechnung | GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik | MSB → NB · MSB → LF · MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-rechnung` |
+| 31009 | MSB-Rechnung | GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik | MSB → NB · MSB → LF · MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-invoic` |
 | 31010 | Kapazitätsrechnung | Kapazitätsabrechnung | NB → KN | — | — | ✅ | ✅ | ✅ | `mako-gabi-gas` `gabi-gas-invoic` |
 | 31011 | Rechnung sonstige Leistung | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-sperrprozesse-invoic` |
 
@@ -584,8 +584,8 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
-| 33001 | Bestätigung | WiM Gas / Kapazitätsabrechnung / MMM Strom/Gas / AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | NB → MSBA · MSBN → MSBA · KN → NB · LF → NB · MGV → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` · `mako-wim` `wim-rechnung` · `mako-wim-gas` `wim-gas-invoic` · `mako-gabi-gas` `gabi-gas-invoic` |
-| 33002 | Abweisung | WiM Gas / Kapazitätsabrechnung / MMM Strom/Gas / AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | NB → MSBA · MSBN → MSBA · KN → NB · LF → NB · MGV → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` · `mako-wim` `wim-rechnung` · `mako-wim-gas` `wim-gas-invoic` |
+| 33001 | Bestätigung | WiM Gas / Kapazitätsabrechnung / MMM Strom/Gas / AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | NB → MSBA · MSBN → MSBA · KN → NB · LF → NB · MGV → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` · `mako-wim` `wim-invoic` · `mako-wim-gas` `wim-gas-invoic` · `mako-gabi-gas` `gabi-gas-invoic` |
+| 33002 | Abweisung | WiM Gas / Kapazitätsabrechnung / MMM Strom/Gas / AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | NB → MSBA · MSBN → MSBA · KN → NB · LF → NB · MGV → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` · `mako-wim` `wim-invoic` · `mako-wim-gas` `wim-gas-invoic` |
 | 33003 | Strom Abweisung Kopf und Summe | GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik | LF → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
 | 33004 | Strom Abweisung Position | GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik | LF → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
 
@@ -666,7 +666,7 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
-| 29001 | Ablehnung REMADV | AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | NB → LF · MSB → NB · MSB → LF · MSB → ESA | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` · `mako-wim` `wim-rechnung` · `mako-wim-gas` `wim-gas-invoic` · `mako-gabi-gas` `gabi-gas-invoic` |
+| 29001 | Ablehnung REMADV | AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | NB → LF · MSB → NB · MSB → LF · MSB → ESA | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` · `mako-wim` `wim-invoic` · `mako-wim-gas` `wim-gas-invoic` · `mako-gabi-gas` `gabi-gas-invoic` |
 | 29002 | Ablehnung IFTSTA | GPKE Teil 2 | NB → LF | — | ✅ | — | ✅ | ✅ | — |
 
 ## SSQNOT AHB

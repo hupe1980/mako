@@ -52,6 +52,7 @@ pub const MABIS_SLOT: Duration = Duration::minutes(15);
 // Re-export the topology ID types (defined in `crate::ids`).
 pub use crate::ids::BilanzierungsgebietId;
 pub use crate::ids::BilanzkreisId;
+pub use crate::ids::MabisZaehlpunktId;
 
 // ── Interval aggregation ──────────────────────────────────────────────────────
 
@@ -86,8 +87,15 @@ pub struct SumInterval {
 /// calendar month. Preliminary and final versions are distinguished by `version`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Summenzeitreihe {
-    /// The Bilanzierungsgebiet this series belongs to.
+    /// The Bilanzierungsgebiet this series belongs to — MSCONS SG6 `LOC+107`.
     pub bilanzierungsgebiet_id: BilanzierungsgebietId,
+    /// The MaBiS-Zählpunkt the series is submitted under — MSCONS SG6
+    /// `LOC+172` (Meldepunkt), a 33-character Zählpunktbezeichnung.
+    ///
+    /// Distinct from [`bilanzierungsgebiet_id`](Self::bilanzierungsgebiet_id):
+    /// the AHB gives each its own qualifier, and submitting the territory EIC
+    /// as the Meldepunkt misidentifies the series to the BIKO.
+    pub mabis_zp_id: MabisZaehlpunktId,
     /// Start of the settlement period (UTC).
     pub period_from: OffsetDateTime,
     /// End of the settlement period (UTC).
@@ -212,6 +220,7 @@ impl Summenzeitreihe {
 /// ```
 pub struct SummenzeitreiheBuilder {
     bilanzierungsgebiet_id: BilanzierungsgebietId,
+    mabis_zp_id: MabisZaehlpunktId,
     period_from: OffsetDateTime,
     period_to: OffsetDateTime,
     version: OffsetDateTime,
@@ -245,8 +254,10 @@ pub struct SlotResolutionError {
 impl SummenzeitreiheBuilder {
     /// Create a new builder for a Bilanzierungsgebiet settlement period.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         bilanzierungsgebiet_id: BilanzierungsgebietId,
+        mabis_zp_id: MabisZaehlpunktId,
         period_from: OffsetDateTime,
         period_to: OffsetDateTime,
         version: OffsetDateTime,
@@ -256,6 +267,7 @@ impl SummenzeitreiheBuilder {
     ) -> Self {
         Self {
             bilanzierungsgebiet_id,
+            mabis_zp_id,
             period_from,
             period_to,
             version,
@@ -345,6 +357,7 @@ impl SummenzeitreiheBuilder {
         intervals.sort_by_key(|i| i.from);
 
         Summenzeitreihe {
+            mabis_zp_id: self.mabis_zp_id,
             bilanzierungsgebiet_id: self.bilanzierungsgebiet_id,
             period_from: self.period_from,
             period_to: self.period_to,
@@ -391,6 +404,7 @@ mod tests {
         let (from, to) = period();
         let builder = SummenzeitreiheBuilder::new(
             BilanzierungsgebietId("TEST".to_owned()),
+            MabisZaehlpunktId::new("DE0004030099000000000000000012345").unwrap(),
             from,
             to,
             datetime!(2026-07-03 05:00 UTC),
@@ -410,6 +424,7 @@ mod tests {
 
         let mut builder = SummenzeitreiheBuilder::new(
             BilanzierungsgebietId("TEST".to_owned()),
+            MabisZaehlpunktId::new("DE0004030099000000000000000012345").unwrap(),
             from,
             to,
             datetime!(2026-07-03 05:00 UTC),
@@ -443,6 +458,7 @@ mod tests {
 
         let mut builder = SummenzeitreiheBuilder::new(
             BilanzierungsgebietId("TEST".to_owned()),
+            MabisZaehlpunktId::new("DE0004030099000000000000000012345").unwrap(),
             from,
             to,
             datetime!(2026-07-08 05:00 UTC),
@@ -480,6 +496,7 @@ mod tests {
 
         let mut builder = SummenzeitreiheBuilder::new(
             BilanzierungsgebietId("QUALITY_TEST".to_owned()),
+            MabisZaehlpunktId::new("DE0004030099000000000000000012345").unwrap(),
             from,
             to,
             datetime!(2026-07-03 05:00 UTC),
@@ -503,6 +520,7 @@ mod tests {
         let (from, to) = period();
         let mut builder = SummenzeitreiheBuilder::new(
             BilanzierungsgebietId("MONTHLY_TEST".to_owned()),
+            MabisZaehlpunktId::new("DE0004030099000000000000000012345").unwrap(),
             from,
             to,
             datetime!(2026-07-08 05:00 UTC),
@@ -534,6 +552,7 @@ mod tests {
         let (from, to) = period();
         let mut builder = SummenzeitreiheBuilder::new(
             BilanzierungsgebietId("TEST".to_owned()),
+            MabisZaehlpunktId::new("DE0004030099000000000000000012345").unwrap(),
             from,
             to,
             datetime!(2026-07-03 05:00 UTC),
@@ -568,6 +587,7 @@ mod tests {
         let (from, to) = period();
         let mut builder = SummenzeitreiheBuilder::new(
             BilanzierungsgebietId("TEST".to_owned()),
+            MabisZaehlpunktId::new("DE0004030099000000000000000012345").unwrap(),
             from,
             to,
             datetime!(2026-07-03 05:00 UTC),
@@ -591,5 +611,113 @@ mod tests {
         assert_eq!(series.expected_slot_count(), 30 * 96);
         assert_eq!(series.missing_slot_count(), 30 * 96 - 2);
         assert!(!series.is_complete());
+    }
+}
+
+// ── Identifier integrity ──────────────────────────────────────────────────────
+
+/// A Summenzeitreihe whose identifiers cannot be filed as they stand.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum IdentifierDefect {
+    /// The Meldepunkt and the Bilanzierungsgebiet carry the same value.
+    #[error(
+        "Meldepunkt and Bilanzierungsgebiet are both `{0}` — MSCONS SG6 gives each \
+         its own qualifier (LOC+172 vs LOC+107), and filing the territory EIC as \
+         the Meldepunkt misidentifies the series to the BIKO, which accepts it"
+    )]
+    MeldepunktIstBilanzierungsgebiet(String),
+}
+
+impl Summenzeitreihe {
+    /// Check the identifiers that reach the wire.
+    ///
+    /// # Why this exists separately from the schema
+    ///
+    /// `marktd` refuses a MaBiS-Zählpunkt equal to its Bilanzierungsgebiet with a
+    /// `CHECK` constraint, but that only protects rows written to *that* table. A
+    /// series assembled from any other source — a caller passing the territory EIC
+    /// straight through, a fixture, a replayed payload — reaches MSCONS rendering
+    /// without ever meeting the constraint.
+    ///
+    /// The failure is undetectable downstream: MSCONS SG6 carries the Meldepunkt
+    /// (`LOC+172`), the Bilanzierungsgebiet (`LOC+107`) and the Bilanzkreis
+    /// (`LOC+237`) as free text at the MIG level, so a swapped pair parses,
+    /// validates, and is accepted by the BIKO, which then files the series
+    /// against the wrong point.
+    ///
+    /// # Errors
+    ///
+    /// [`IdentifierDefect`] naming which identifier cannot be filed.
+    pub fn validate_identifiers(&self) -> Result<(), IdentifierDefect> {
+        // Absence and the 33-character shape are guaranteed by
+        // `MabisZaehlpunktId`'s constructor, which `Deserialize` also runs — a
+        // Summenzeitreihe cannot hold a malformed Meldepunkt in the first place.
+        //
+        // Equality survives as a runtime check because `BilanzierungsgebietId`
+        // is unvalidated: a caller that put a 33-character value there could
+        // still make the two match, and that is the substitution the BIKO
+        // cannot detect.
+        if self.mabis_zp_id.as_str() == self.bilanzierungsgebiet_id.0 {
+            return Err(IdentifierDefect::MeldepunktIstBilanzierungsgebiet(
+                self.mabis_zp_id.to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod identifier_tests {
+    use super::*;
+
+    const ZP: &str = "DE0004030099000000000000000012345";
+
+    fn series(mabis_zp_id: MabisZaehlpunktId, gebiet: &str) -> Summenzeitreihe {
+        SummenzeitreiheBuilder::new(
+            BilanzierungsgebietId(gebiet.to_owned()),
+            mabis_zp_id,
+            OffsetDateTime::UNIX_EPOCH,
+            OffsetDateTime::UNIX_EPOCH + Duration::days(1),
+            OffsetDateTime::UNIX_EPOCH,
+            "9900000000001",
+            "9900000000002",
+            Duration::minutes(15),
+        )
+        .build()
+    }
+
+    /// A malformed Meldepunkt no longer reaches this check — it cannot be
+    /// constructed. The 16-character territory EIC, the empty string and every
+    /// other wrong shape fail at `MabisZaehlpunktId::new`, which `Deserialize`
+    /// also runs.
+    ///
+    /// This is the difference between the type and the runtime guard it
+    /// replaced: the earlier version could only refuse a bad value *after* a
+    /// caller had already put it in a Summenzeitreihe.
+    #[test]
+    fn a_malformed_meldepunkt_cannot_reach_a_summenzeitreihe() {
+        assert!(MabisZaehlpunktId::new("11XSWISSGRIDBGX1").is_err());
+        assert!(MabisZaehlpunktId::new("").is_err());
+    }
+
+    /// Equality survives as a runtime check because `BilanzierungsgebietId` is
+    /// unvalidated: a caller that put a 33-character value there could still
+    /// make the two match, and that is the substitution the BIKO cannot detect.
+    #[test]
+    fn a_meldepunkt_equal_to_its_territory_is_refused() {
+        let s = series(MabisZaehlpunktId::new(ZP).unwrap(), ZP);
+        let err = s.validate_identifiers().expect_err("must be refused");
+        assert!(matches!(
+            err,
+            IdentifierDefect::MeldepunktIstBilanzierungsgebiet(_)
+        ));
+        assert!(err.to_string().contains("LOC+172"), "{err}");
+    }
+
+    /// A proper Zählpunktbezeichnung against its own territory passes.
+    #[test]
+    fn a_well_formed_pair_is_accepted() {
+        let s = series(MabisZaehlpunktId::new(ZP).unwrap(), "11XSWISSGRIDBGX1");
+        assert!(s.validate_identifiers().is_ok());
     }
 }

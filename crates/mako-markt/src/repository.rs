@@ -3338,6 +3338,65 @@ mod partner_record_tests {
     }
 }
 
+// ── MabisZpRecord ─────────────────────────────────────────────────────────────
+
+/// The MaBiS-Zählpunkt a Bilanzierungsgebiet's Summenzeitreihen are filed under.
+///
+/// MSCONS Summenzeitreihen (PIDs 13003/13023) carry three distinct SG6 `LOC`
+/// qualifiers: `172` the **Meldepunkt** (this MaBiS-Zählpunkt), `107` the
+/// Bilanzierungsgebiet, and `237` the Bilanzkreis. They are different
+/// identifiers with different meanings, and both are free text at the MIG level
+/// — so filing a Summenzeitreihe under the wrong Meldepunkt produces a message
+/// that parses, validates, and is indistinguishable to the BIKO from a correct
+/// one.
+///
+/// Holding the mapping as master data rather than service configuration is what
+/// lets a territory without an assignment fail loudly at submission time instead
+/// of silently substituting the Bilanzierungsgebiet EIC.
+///
+/// Regulatory basis: **BNetzA BK6-24-174 Anlage 3 (MaBiS)**; MSCONS AHB 3.2 SG6.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MabisZpRecord {
+    /// Bilanzierungsgebiet-EIC this assignment is keyed on (16 characters).
+    pub bilanzierungsgebiet: String,
+    /// The MaBiS-Zählpunkt filed as `LOC+172` for this territory.
+    pub mabis_zp_id: String,
+    /// `STROM` or `GAS` — MaBiS is Strom-only today, but the column keeps the
+    /// door open rather than encoding the assumption in a primary key.
+    pub sparte: Sparte,
+    /// Where the assignment came from: `manual`, `erp`, or an import name.
+    pub source: String,
+    /// Deployment tenant.
+    pub tenant: String,
+    /// Last write time, set by the repository.
+    pub updated_at: time::OffsetDateTime,
+}
+
+/// Read/write access to the Bilanzierungsgebiet → MaBiS-Zählpunkt assignments.
+#[allow(async_fn_in_trait)]
+pub trait MabisZpRepository: Send + Sync {
+    /// Insert or replace the assignment for a Bilanzierungsgebiet.
+    ///
+    /// Idempotent; `updated_at` is set by the implementation.
+    #[must_use]
+    async fn upsert(&self, rec: MabisZpRecord) -> Result<(), MdmError>;
+
+    /// Return the assignment for a Bilanzierungsgebiet, or `None`.
+    ///
+    /// `None` is the signal to refuse the submission — never to fall back to the
+    /// Bilanzierungsgebiet EIC.
+    #[must_use]
+    async fn find(
+        &self,
+        bilanzierungsgebiet: &str,
+        tenant: &str,
+    ) -> Result<Option<MabisZpRecord>, MdmError>;
+
+    /// Every assignment for a tenant, ascending by Bilanzierungsgebiet.
+    #[must_use]
+    async fn list(&self, tenant: &str) -> Result<Vec<MabisZpRecord>, MdmError>;
+}
+
 #[cfg(test)]
 mod lokationsbuendel_tests {
     use std::collections::HashMap;

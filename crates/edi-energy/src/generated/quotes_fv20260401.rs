@@ -159,7 +159,7 @@ pub(crate) fn segment_lookup(tag: &str) -> Option<&'static SegmentDefinition> {
 }
 
 static CODES_1001: &[&str] = &["310"];
-static CODES_1153: &[&str] = &["AAV", "ACW", "APF", "Z09", "Z13", "Z18"];
+static CODES_1153: &[&str] = &["AAV", "ACW", "APF", "TN", "Z09", "Z13", "Z18"];
 static CODES_2005: &[&str] = &["137", "203", "273", "279", "469", "472", "76"];
 static CODES_3035: &[&str] = &["DP", "MR", "MS", "VY"];
 static CODES_3227: &[&str] = &["172"];

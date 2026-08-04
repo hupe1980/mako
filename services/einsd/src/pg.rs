@@ -706,6 +706,89 @@ pub struct SettleResult {
 
 // ── §44b quota computation ─────────────────────────────────────────────────────
 
+/// Load the §§53b–54 facts in force on `billing_date` for one plant.
+///
+/// Only facts are read. Every deduction amount except §53c's is fixed by statute
+/// and lives in `eeg_billing::aw_reductions`, so a wrong row cannot invent a
+/// reduction the law does not provide for. §53c is the exception the statute
+/// makes itself — it ties the cut to "die Höhe der pro Kilowattstunde gewährten
+/// Stromsteuerbefreiung" — and the column is CHECK-bounded to the §3 StromStG
+/// full rate.
+async fn load_aw_reductions(
+    conn: &mut sqlx::PgConnection,
+    tr_id: &str,
+    tenant: &str,
+    billing_date: time::Date,
+) -> anyhow::Result<eeg_billing::aw_reductions::AwReductionContext> {
+    use eeg_billing::aw_reductions::{AwReductionContext, Sect54SolarReduction};
+
+    let regionalnachweis_ausgestellt: bool = sqlx::query_scalar(
+        r"SELECT EXISTS (
+            SELECT 1 FROM eeg_regionalnachweise
+             WHERE tr_id = $1 AND tenant = $2
+               AND effective_from <= $3
+               AND (effective_until IS NULL OR effective_until >= $3))",
+    )
+    .bind(tr_id)
+    .bind(tenant)
+    .bind(billing_date)
+    .fetch_one(&mut *conn)
+    .await
+    .context("load §53b Regionalnachweis periods")?;
+
+    let stromsteuerbefreiung_ct_kwh: Option<rust_decimal::Decimal> = sqlx::query_scalar(
+        r"SELECT befreiung_ct_kwh FROM eeg_stromsteuerbefreiungen
+           WHERE tr_id = $1 AND tenant = $2
+             AND effective_from <= $3
+             AND (effective_until IS NULL OR effective_until >= $3)
+           ORDER BY effective_from DESC LIMIT 1",
+    )
+    .bind(tr_id)
+    .bind(tenant)
+    .bind(billing_date)
+    .fetch_optional(&mut *conn)
+    .await
+    .context("load §53c Stromsteuerbefreiung")?;
+
+    // Defects of the same period are unioned: each Absatz is independent, and a
+    // plant can carry more than one at once.
+    let s54: Option<(bool, bool, bool, bool)> = sqlx::query_as(
+        r"SELECT COALESCE(bool_or(zahlungsberechtigung_nach_18_monaten), FALSE),
+                 COALESCE(bool_or(flurstueck_abweichung), FALSE),
+                 COALESCE(bool_or(agri_nutzungsnachweis_fehlt), FALSE),
+                 COALESCE(bool_or(landesverordnung_nicht_erfuellt), FALSE)
+            FROM eeg_sect54_solar_defekte
+           WHERE tr_id = $1 AND tenant = $2
+             AND effective_from <= $3
+             AND (effective_until IS NULL OR effective_until >= $3)",
+    )
+    .bind(tr_id)
+    .bind(tenant)
+    .bind(billing_date)
+    .fetch_optional(&mut *conn)
+    .await
+    .context("load §54 solar defects")?;
+
+    // An un-grouped aggregate always returns one row, and `bool_or` over an empty
+    // set is NULL — hence the COALESCE. "No matching rows" and "rows that record
+    // nothing" therefore both arrive as all-false, and `is_clean` maps both to
+    // no §54 context, which is the same answer either way.
+    let sect54_solar = s54
+        .map(|(a1, a2, a3, a4)| Sect54SolarReduction {
+            zahlungsberechtigung_nach_18_monaten: a1,
+            flurstueck_abweichung: a2,
+            agri_nutzungsnachweis_fehlt: a3,
+            landesverordnung_nicht_erfuellt: a4,
+        })
+        .filter(|s| !s.is_clean());
+
+    Ok(AwReductionContext {
+        regionalnachweis_ausgestellt,
+        stromsteuerbefreiung_ct_kwh,
+        sect54_solar,
+    })
+}
+
 /// Compute the §44b eligible kWh for a Biogas plant billing period.
 ///
 /// §44b Abs. 1 EEG 2023: fermentation-Biogas plants >100 kW (excl. §39 Ausschreibung)
@@ -1216,7 +1299,10 @@ pub async fn run_settlement(
     // No local computation needed — pass billing_days_fraction: None and the library
     // will derive it from billing_date, inbetriebnahme, and foerderendedatum.
 
-    // ── §33/§35a: short-circuit when Zuschlag has expired ────────────────────
+    // ── Erlöschen des Zuschlags: nothing left to settle ─────────────────────
+    // §36e (Wind an Land) / §37e (Solar erstes Segment) / §39e (Biomasse) EEG
+    // 2023. Not §35a, which is BNetzA-driven Entwertung, and not §33, which
+    // excludes a bid before any award exists.
     if input.award_expired {
         let id = Uuid::new_v4();
         sqlx::query(
@@ -1263,32 +1349,18 @@ pub async fn run_settlement(
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
-    // ── §54 EEG 2023 — Ausschreibungsreduzierung: query per-plant AW deduction ─
-    // §54: BNetzA may reduce the awarded AW after commissioning (e.g. grid violations).
-    let sect54_deduction_ct: Option<rust_decimal::Decimal> = if let Some(bd) = input.billing_date {
-        sqlx::query_scalar::<_, rust_decimal::Decimal>(
-            r"SELECT deduction_ct_kwh FROM sect54_reductions
-              WHERE tr_id = $1 AND tenant = $2
-                AND effective_from <= $3
-                AND (effective_until IS NULL OR effective_until >= $3)
-              ORDER BY effective_from DESC LIMIT 1",
-        )
-        .bind(&input.tr_id)
-        .bind(&input.tenant)
-        .bind(bd)
-        .fetch_optional(&mut *conn)
-        .await
-        .ok()
-        .flatten()
+    // ── §§53b–54 EEG 2023 — facts that cut the anzulegender Wert ─────────────
+    // Only the triggering facts are stored; the deductions are statutory and are
+    // applied inside the settlement engine, which also owns the ordering against
+    // the Marktprämie floor. Amounts are deliberately not read from the database.
+    let aw_reductions = if let Some(bd) = input.billing_date {
+        load_aw_reductions(&mut *conn, &input.tr_id, &input.tenant, bd).await?
     } else {
-        None
+        eeg_billing::aw_reductions::AwReductionContext::default()
     };
 
-    // Apply §54 deduction to direktverm_aw_ct (floor 0)
-    let direktverm_aw_ct_effective = input.direktverm_aw_ct.map(|aw| {
-        let deduction = sect54_deduction_ct.unwrap_or(rust_decimal::Decimal::ZERO);
-        (aw - deduction).max(rust_decimal::Decimal::ZERO)
-    });
+    // The engine receives the raw awarded AW; §54 is applied there.
+    let direktverm_aw_ct_effective = input.direktverm_aw_ct;
 
     // Build data-bearing SettlementScheme variant now that direktverm_aw_ct_effective is ready.
     let (scheme, tariff_source) = match input.settlement_model.as_str() {
@@ -1387,29 +1459,6 @@ pub async fn run_settlement(
         other => anyhow::bail!("unknown settlement_model: {other}"),
     };
 
-    // ── §53b EEG 2023 — Regional Grünstromkennzeichnung reduction ────────────
-    // §53b: BNetzA-certified grid areas get a reduction on Einspeisevergütung.
-    // Requires the plant's grid_area to be set. Only applies to Vergütung schemes.
-    let sect53b_reduction_ct: Option<rust_decimal::Decimal> =
-        if let (Some(ga), Some(bd)) = (&input.grid_area, input.billing_date) {
-            sqlx::query_scalar::<_, rust_decimal::Decimal>(
-                r"SELECT reduction_ct_kwh FROM sect53b_reductions
-              WHERE tenant = $1 AND grid_area = $2
-                AND effective_from <= $3
-                AND (effective_until IS NULL OR effective_until >= $3)
-              ORDER BY effective_from DESC LIMIT 1",
-            )
-            .bind(&input.tenant)
-            .bind(ga)
-            .bind(bd)
-            .fetch_optional(&mut *conn)
-            .await
-            .ok()
-            .flatten()
-        } else {
-            None
-        };
-
     // ── §44b Abs. 1 EEG 2023 — Biogas annual 45%-cap quota ────────────────────
     // Auto-computed here when the caller did not supply an explicit eligible_kwh.
     // compute_biogas_sect44b_eligible resets the YTD counter when billing_year changed.
@@ -1473,8 +1522,8 @@ pub async fn run_settlement(
         // §13a EnWG (Redispatch 2.0): curtailment compensation (NB must pay for suppressed kWh)
         einspeisemanagement_kwh: input.einspeisemanagement_kwh,
         billing_days_fraction: None, // auto-computed by eeg-billing from billing_date + dates
-        // §53b: regional reduction from BNetzA-certified grid area
-        sect53b_regional_reduction_ct: sect53b_reduction_ct,
+        // §§53b–54: statutory AW cuts, from the recorded triggering facts.
+        aw_reductions,
         // §51a: pass quarter-hours for Verlängerungsanspruch computation
         negative_price_quarter_hours: input.negative_price_quarter_hours,
         // §44b Abs. 1 EEG 2023: computed above from annual quota tracking
@@ -1824,38 +1873,91 @@ pub async fn list_unsettled(
 /// - `foerderendedatum` of the parent is NOT reset (unlike Repowering).
 ///
 /// Returns `Ok(true)` if the child was found and updated, `Ok(false)` if not found.
+/// Load one plant in the terms §24 Abs. 1 asks about.
+async fn load_fuer_zusammenfassung(
+    pool: &PgPool,
+    tenant: &str,
+    tr_id: &str,
+    require_aktiv: bool,
+) -> anyhow::Result<Option<eeg_billing::AnlageFuerZusammenfassung>> {
+    use eeg_billing::{ErzeugungsArt, SolarMontage};
+
+    let sql = if require_aktiv {
+        "SELECT inbetriebnahme, erzeugungsart, standort_id, solar_montage,
+                netzverknuepfungspunkt, biogaserzeugungsanlage_id
+           FROM eeg_anlagen WHERE tr_id = $1 AND tenant = $2 AND status = 'aktiv'"
+    } else {
+        "SELECT inbetriebnahme, erzeugungsart, standort_id, solar_montage,
+                netzverknuepfungspunkt, biogaserzeugungsanlage_id
+           FROM eeg_anlagen WHERE tr_id = $1 AND tenant = $2"
+    };
+    let Some(row) = sqlx::query(sql)
+        .bind(tr_id)
+        .bind(tenant)
+        .fetch_optional(pool)
+        .await
+        .context("fetch plant for §24 Zusammenfassung")?
+    else {
+        return Ok(None);
+    };
+
+    let montage = match row
+        .try_get::<Option<String>, _>("solar_montage")?
+        .as_deref()
+    {
+        Some("AN_GEBAEUDE_ODER_LAERMSCHUTZWAND") => SolarMontage::AnGebaeudeOderLaermschutzwand,
+        Some("FREIFLAECHE") => SolarMontage::Freiflaeche,
+        _ => SolarMontage::Sonstige,
+    };
+    // A NULL standort_id must not make two plants share a site, so each unknown
+    // gets its own value. Fusing on ignorance moves a plant into a tariff band
+    // for twenty years.
+    let standort_id = row
+        .try_get::<Option<String>, _>("standort_id")?
+        .unwrap_or_else(|| format!("unbekannt:{tr_id}"));
+
+    Ok(Some(eeg_billing::AnlageFuerZusammenfassung {
+        inbetriebnahme: row.try_get("inbetriebnahme")?,
+        art: ErzeugungsArt::from_db_str(&row.try_get::<String, _>("erzeugungsart")?)
+            .unwrap_or_default(),
+        standort_id,
+        // Every plant einsd settles has a size-dependent §19 Abs. 1 claim; the
+        // size-independent case does not reach this service.
+        anspruch_leistungsabhaengig: true,
+        montage,
+        netzverknuepfungspunkt: row.try_get("netzverknuepfungspunkt")?,
+        biogaserzeugungsanlage_id: row.try_get("biogaserzeugungsanlage_id")?,
+        // Satz 5 devices are registered as ordinary plants here; a
+        // Steckersolargerät below the thresholds is not settled by einsd.
+        steckersolar: None,
+    }))
+}
+
 pub async fn zusammenlegen(
     pool: &PgPool,
     tenant: &str,
     child_tr_id: &str,
     parent_tr_id: &str,
     combined_leistung_kwp: Option<Decimal>,
+    unmittelbare_raeumliche_naehe: bool,
 ) -> anyhow::Result<bool> {
-    // Verify both plants exist for this tenant.
-    let child = sqlx::query(
-        "SELECT tr_id, leistung_kwp, status FROM eeg_anlagen WHERE tr_id = $1 AND tenant = $2",
-    )
-    .bind(child_tr_id)
-    .bind(tenant)
-    .fetch_optional(pool)
-    .await
-    .context("fetch child plant for Zusammenlegung")?;
-
-    let Some(_child) = child else {
+    let Some(child) = load_fuer_zusammenfassung(pool, tenant, child_tr_id, false).await? else {
         return Ok(false);
     };
-
-    let parent_exists = sqlx::query(
-        "SELECT 1 FROM eeg_anlagen WHERE tr_id = $1 AND tenant = $2 AND status = 'aktiv'",
-    )
-    .bind(parent_tr_id)
-    .bind(tenant)
-    .fetch_optional(pool)
-    .await
-    .context("fetch parent plant for Zusammenlegung")?;
-
-    if parent_exists.is_none() {
+    let Some(parent) = load_fuer_zusammenfassung(pool, tenant, parent_tr_id, true).await? else {
         anyhow::bail!("parent plant {} not found or not aktiv", parent_tr_id);
+    };
+
+    // §24 decides whether these two are one plant. Merging a pair the statute
+    // keeps apart moves the survivor into a tariff band and past a tender
+    // threshold it never qualified for, for the rest of its Förderdauer — and
+    // nothing downstream can tell that apart from a legitimate merge.
+    let verdict = eeg_billing::sind_eine_anlage(&child, &parent, unmittelbare_raeumliche_naehe);
+    if !verdict.gelten_als_eine_anlage {
+        anyhow::bail!(
+            "§24 Abs. 1 EEG 2023 does not treat {child_tr_id} and {parent_tr_id} as one plant: {:?}",
+            verdict.grund
+        );
     }
 
     // Mark child as merged (preserves history, stops future settlements).
@@ -2344,4 +2446,207 @@ pub async fn run_jahresabrechnung(
         correction_count,
         status: status.to_owned(),
     })
+}
+
+// ── §§53b–54 EEG 2023 — recording and inspecting the facts that cut the AW ───
+
+/// Record a Regionalnachweis period (§53b EEG 2023 i.V.m. §79a).
+///
+/// No amount is taken: §53b fixes 0,1 ct/kWh, so there is nothing here a
+/// data-entry error could use to invent a different deduction.
+pub async fn record_regionalnachweis(
+    pool: &PgPool,
+    tenant: &str,
+    tr_id: &str,
+    nachweis_ref: &str,
+    effective_from: time::Date,
+    effective_until: Option<time::Date>,
+) -> anyhow::Result<uuid::Uuid> {
+    sqlx::query_scalar(
+        r"INSERT INTO eeg_regionalnachweise
+              (tr_id, tenant, nachweis_ref, effective_from, effective_until)
+          VALUES ($1, $2, $3, $4, $5)
+          RETURNING id",
+    )
+    .bind(tr_id)
+    .bind(tenant)
+    .bind(nachweis_ref)
+    .bind(effective_from)
+    .bind(effective_until)
+    .fetch_one(pool)
+    .await
+    .context("record §53b Regionalnachweis")
+}
+
+/// Record a granted Stromsteuerbefreiung (§53c EEG 2023).
+///
+/// The amount is stored because the statute ties the cut to "die Höhe der pro
+/// Kilowattstunde gewährten Stromsteuerbefreiung". The schema caps it at the
+/// §3 StromStG full rate.
+pub async fn record_stromsteuerbefreiung(
+    pool: &PgPool,
+    tenant: &str,
+    tr_id: &str,
+    befreiung_ct_kwh: Decimal,
+    rechtsgrundlage: &str,
+    effective_from: time::Date,
+    effective_until: Option<time::Date>,
+) -> anyhow::Result<uuid::Uuid> {
+    sqlx::query_scalar(
+        r"INSERT INTO eeg_stromsteuerbefreiungen
+              (tr_id, tenant, befreiung_ct_kwh, rechtsgrundlage, effective_from, effective_until)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          RETURNING id",
+    )
+    .bind(tr_id)
+    .bind(tenant)
+    .bind(befreiung_ct_kwh)
+    .bind(rechtsgrundlage)
+    .bind(effective_from)
+    .bind(effective_until)
+    .fetch_one(pool)
+    .await
+    .context("record §53c Stromsteuerbefreiung")
+}
+
+/// Record §54 solar first-segment defects for a period.
+#[allow(clippy::too_many_arguments)]
+pub async fn record_sect54_defekt(
+    pool: &PgPool,
+    tenant: &str,
+    tr_id: &str,
+    defekte: eeg_billing::Sect54SolarReduction,
+    bnetza_ref: Option<&str>,
+    notes: Option<&str>,
+    effective_from: time::Date,
+    effective_until: Option<time::Date>,
+) -> anyhow::Result<uuid::Uuid> {
+    sqlx::query_scalar(
+        r"INSERT INTO eeg_sect54_solar_defekte
+              (tr_id, tenant, zahlungsberechtigung_nach_18_monaten, flurstueck_abweichung,
+               agri_nutzungsnachweis_fehlt, landesverordnung_nicht_erfuellt,
+               bnetza_ref, notes, effective_from, effective_until)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          RETURNING id",
+    )
+    .bind(tr_id)
+    .bind(tenant)
+    .bind(defekte.zahlungsberechtigung_nach_18_monaten)
+    .bind(defekte.flurstueck_abweichung)
+    .bind(defekte.agri_nutzungsnachweis_fehlt)
+    .bind(defekte.landesverordnung_nicht_erfuellt)
+    .bind(bnetza_ref)
+    .bind(notes)
+    .bind(effective_from)
+    .bind(effective_until)
+    .fetch_one(pool)
+    .await
+    .context("record §54 solar defect")
+}
+
+/// §54 Abs. 3 Satz 2/3 — close a defect period because the Nachweis arrived.
+///
+/// The statute makes the 2,5 ct deduction lapse *for the future* once the proof
+/// is supplied, and retroactively for the periods it covers. Closing the period
+/// is therefore the correct record: deleting the row would erase that the plant
+/// was ever short, which the §147 AO audit trail needs.
+///
+/// Returns `false` when no open row matches.
+pub async fn close_sect54_defekt(
+    pool: &PgPool,
+    tenant: &str,
+    id: uuid::Uuid,
+    effective_until: time::Date,
+) -> anyhow::Result<bool> {
+    let rows = sqlx::query(
+        r"UPDATE eeg_sect54_solar_defekte
+             SET effective_until = $3
+           WHERE id = $1 AND tenant = $2 AND effective_until IS NULL",
+    )
+    .bind(id)
+    .bind(tenant)
+    .bind(effective_until)
+    .execute(pool)
+    .await
+    .context("close §54 defect period")?
+    .rows_affected();
+    Ok(rows > 0)
+}
+
+/// Everything cutting a plant's anzulegender Wert on a given date, with the
+/// statutory amounts spelled out.
+///
+/// This is the explainability path for the §§53b–54 band: a settlement changes
+/// silently when one of these rows exists, so an operator needs to be able to
+/// ask what is in force without reading the settlement back.
+pub async fn aw_reduktionen_am(
+    pool: &PgPool,
+    tenant: &str,
+    tr_id: &str,
+    on: time::Date,
+) -> anyhow::Result<serde_json::Value> {
+    let mut conn = pool.acquire().await.context("acquire for AW reductions")?;
+    let ctx = load_aw_reductions(&mut conn, tr_id, tenant, on).await?;
+
+    let mut cuts = Vec::new();
+    if ctx.regionalnachweis_ausgestellt {
+        cuts.push(serde_json::json!({
+            "paragraph": "§53b EEG 2023",
+            "grund": "Regionalnachweis (§79a EEG) ausgestellt",
+            "abzug_ct_kwh": eeg_billing::aw_reductions::SECT53B_REGIONALNACHWEIS_CT_KWH,
+            "hinweis": "gilt nur bei gesetzlich bestimmtem anzulegendem Wert",
+        }));
+    }
+    if let Some(ct) = ctx.stromsteuerbefreiung_ct_kwh {
+        cuts.push(serde_json::json!({
+            "paragraph": "§53c EEG 2023",
+            "grund": "Stromsteuerbefreiung für durchgeleiteten Strom",
+            "abzug_ct_kwh": ct.min(eeg_billing::aw_reductions::STROMSTEUER_VOLLSATZ_CT_KWH),
+        }));
+    }
+    if let Some(s54) = ctx.sect54_solar {
+        for (flag, absatz, grund, ct) in [
+            (
+                s54.zahlungsberechtigung_nach_18_monaten,
+                "§54 Abs. 1 EEG 2023",
+                "Zahlungsberechtigung erst nach dem 18. Kalendermonat beantragt",
+                Some(eeg_billing::aw_reductions::SECT54_ABS1_ABS2_CT_KWH),
+            ),
+            (
+                s54.flurstueck_abweichung,
+                "§54 Abs. 2 EEG 2023",
+                "Standort weicht von den Gebots-Flurstücken ab",
+                Some(eeg_billing::aw_reductions::SECT54_ABS1_ABS2_CT_KWH),
+            ),
+            (
+                s54.agri_nutzungsnachweis_fehlt,
+                "§54 Abs. 3 EEG 2023",
+                "Nachweis der gleichzeitigen landwirtschaftlichen Nutzung fehlt",
+                Some(eeg_billing::aw_reductions::SECT54_ABS3_CT_KWH),
+            ),
+            (
+                s54.landesverordnung_nicht_erfuellt,
+                "§54 Abs. 4 EEG 2023",
+                "Landesverordnung nach §37c Abs. 2 nicht erfüllt — AW auf null",
+                None,
+            ),
+        ] {
+            if flag {
+                cuts.push(serde_json::json!({
+                    "paragraph": absatz,
+                    "grund": grund,
+                    "abzug_ct_kwh": ct,
+                    "setzt_aw_auf_null": ct.is_none(),
+                }));
+            }
+        }
+    }
+
+    Ok(serde_json::json!({
+        "tr_id": tr_id,
+        "stichtag": on.to_string(),
+        "reduktionen": cuts,
+        "hinweis": "Alle §§53b–54-Abzüge mindern den anzulegenden Wert vor der \
+                    Vergütungsformel; die gleitende Marktprämie ist bei null begrenzt.",
+    }))
 }

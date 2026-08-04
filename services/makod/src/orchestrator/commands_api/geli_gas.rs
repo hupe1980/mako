@@ -258,24 +258,24 @@ pub(super) async fn dispatch_geli_eog_anmelden(
         message_ref,
     };
 
-    // Idempotency guard: one active supplier-change process per Gas-MaLo.
-    let existing = state
-        .store
-        .as_process_registry()
-        .lookup_correlated(state.tenant_id, malo_id.as_str())
-        .await
-        .map_err(DispatchError::Engine)?;
-    if let Some(dup) = existing
-        .into_iter()
-        .find(|id| id.workflow_id.name.as_ref() == mako_geli_gas::WORKFLOW_NAME)
+    // Duplicate guard: refuse only while a supplier-change process is still
+    // running for this Gas-MaLo. A GNB rejection is terminal and must not retire
+    // the MaLo — the corrected Anmeldung that follows is a normal GeLi Gas flow.
+    // See `find_occupying_process`.
+    if let Some(dup_id) = find_occupying_process::<GeliGasSupplierChangeWorkflow>(
+        state,
+        malo_id.as_str(),
+        mako_geli_gas::WORKFLOW_NAME,
+    )
+    .await?
     {
         tracing::warn!(
             malo_id    = %malo_id,
-            process_id = %dup.process_id,
-            "geli.eog.anmelden refused: supplier-change process already registered for this Gas-MaLo",
+            process_id = %dup_id,
+            "geli.eog.anmelden refused: a supplier-change process is still running for this Gas-MaLo",
         );
         return Err(DispatchError::DuplicateProcess {
-            process_id: dup.process_id,
+            process_id: dup_id,
             malo_id: malo_id.into(),
         });
     }
@@ -381,18 +381,15 @@ pub(super) async fn dispatch_geli_gas_stornierung_initiieren(
         bgm_qualifier,
     };
 
-    // Idempotency: reject if an active stornierung already exists.
-    let existing = state
-        .store
-        .as_process_registry()
-        .lookup_correlated(state.tenant_id, malo_id.as_str())
-        .await
-        .map_err(DispatchError::Engine)?;
-    if let Some(first) = existing
-        .into_iter()
-        .find(|id| id.workflow_id.name.as_ref() == STORNIERUNG_LF_WORKFLOW_NAME)
+    // Duplicate guard — only a Stornierung still awaiting the GNB blocks a new
+    // one. See `find_occupying_process`.
+    if let Some(dup_id) = find_occupying_process::<GeliGasLfStornierungWorkflow>(
+        state,
+        malo_id.as_str(),
+        STORNIERUNG_LF_WORKFLOW_NAME,
+    )
+    .await?
     {
-        let dup_id = first.process_id;
         tracing::warn!(
             malo_id = %malo_id,
             process_id = %dup_id,
@@ -527,18 +524,15 @@ pub(super) async fn dispatch_geli_lf_anmeldung(
         received_at: time::OffsetDateTime::now_utc(),
     };
 
-    // Idempotency guard — reject duplicate active Lieferbeginn for same MaLo.
-    let existing = state
-        .store
-        .as_process_registry()
-        .lookup_correlated(state.tenant_id, malo_id.as_str())
-        .await
-        .map_err(DispatchError::Engine)?;
-    if let Some(first) = existing
-        .into_iter()
-        .find(|id| id.workflow_id.name.as_ref() == GELI_LF_ANMELDUNG_WF)
+    // Duplicate guard — a GNB rejection is terminal and must not retire the
+    // Gas-MaLo. See `find_occupying_process`.
+    if let Some(dup_id) = find_occupying_process::<GeliGasLfAnmeldungWorkflow>(
+        state,
+        malo_id.as_str(),
+        GELI_LF_ANMELDUNG_WF,
+    )
+    .await?
     {
-        let dup_id = first.process_id;
         tracing::warn!(
             malo_id = %malo_id,
             process_id = %dup_id,

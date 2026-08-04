@@ -10,6 +10,7 @@ MaLo IDs.
 | **HTTP port** | `:9780` |
 | **Database** | PostgreSQL (single consolidated `0001_schema.sql`, sqlx 0.8 dynamic queries) |
 | **Auth** | OIDC/JWT on every data endpoint (verified `Claims` extractor); fail-closed startup (refuses to boot without `[oidc]` unless `allow_insecure_no_auth = true`); MCP: independent API-key/OIDC layer. Every query is tenant-scoped |
+| **Tenant gate** | `ExpectedTenant` is layered into the router, so `Claims` extraction rejects a token whose `mako_tenant` is not this deployment's. A validly signed token from another operator in the same OIDC realm is otherwise indistinguishable from a local one. The check sits in extraction, not per handler, so a new route cannot skip it without also dropping auth; the `401` detail is generic and the mismatch is logged at `WARN` |
 | **Kunden** | B2C persons + B2B companies; `Geschaeftspartner` schema-validated on PUT |
 | **B2C Person** | `PUT/GET /api/v1/kunden/{id}/person` — `rubo4e::current::Person` BO (GDPR Art. 15) |
 | **Zahlungsinformation** | `PUT/GET /api/v1/kunden/{id}/zahlungsinformation` — typed `Zahlungsinformation` COM; IBAN mod-97 validated |

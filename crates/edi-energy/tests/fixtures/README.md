@@ -19,6 +19,19 @@ fixtures/
 | `pid_NNNNN`     | Minimal fixture for a single Prüfidentifikator |
 | `beispiel_*`    | Representative Beispielnachricht (see below)   |
 
+A `pid_NNNNN` fixture must sit under a message type whose shipped profiles
+**declare that Prüfidentifikator**; `fixture_placement.rs` enforces it.
+
+The directory is part of the assertion, not filing. A fixture placed under the
+wrong message type still parses and still counts toward `validate-pruefids`
+coverage, so nothing else catches it — while it asserts a message-type/PID
+pairing no AHB defines.
+
+The check resolves against the profiles rather than assuming a PID band maps to
+one message type, because the bands overlap: 29xxx belongs to **both** APERAK
+and COMDIS, so `comdis/valid/pid_29002.edi` and `aperak/…/pid_29002` are each
+correct.
+
 ## Beispielnachrichten
 
 Fixtures named `beispiel_*` are structured to resemble the _Beispielnachrichten_

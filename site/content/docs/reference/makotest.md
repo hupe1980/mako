@@ -177,13 +177,105 @@ def test_frist_is_met(frozen_clock, epex_sim):
 
 | | |
 |---|---|
-| **Fixtures** | `epex_sim`, `frozen_clock`, `makotest_seed`, `mako_endpoint` |
+| **Fixtures** | `epex_sim`, `nb_sim`, `biko_sim`, `imsys_sim`, `frozen_clock`, `makotest_seed`, `mako_endpoint` |
 | **Markers** | `@pytest.mark.regulatory("GPKE Teil 2")`, `@pytest.mark.requires_docker` |
 | **Options** | `--mako-endpoint URL`, `--makotest-seed N` |
 
 Only `makotest.plugin` imports pytest. The generators and simulators are plain
 objects usable from a script or notebook, so a demo and a CI test drive the same
 code path.
+
+---
+
+## Counterparty simulators
+
+Each simulator models what a counterparty *does* — including what it does not
+do. Silence is the mode worth having: a platform that never sees it is never
+tested against its own Fristen, and that is where regulated processes fail.
+
+```python
+def test_nb_bestaetigt(nb_sim):
+    nb_sim.on(55001).bestaetigung(zuordnungsbeginn="2026-11-01")
+    assert nb_sim.receive(interchange)["pid"] == 55002
+
+def test_frist_faellt(nb_sim):
+    nb_sim.on(55001).timeout()          # no answer, not even a CONTRL
+    assert nb_sim.receive(interchange) is None
+```
+
+An unconfigured partner is a **silent** one. Forgetting to bind an answer
+exercises the deadline path rather than quietly passing on a response the test
+never asked for.
+
+### The answer PIDs are not guessed
+
+`MarktpartnerSim` resolves its answer from the AHB table in `edi-energy` — the
+same table `mako-gpke` and `mako-geli-gas` derive their outbound response PID
+from, pinned by conformance tests on both sides. A simulator that computed
+`Anfrage + 1` would be wrong twice over:
+
+| Anfrage | Bestätigung | Ablehnung | Why |
+|---|---|---|---|
+| 55001 | 55002 | 55003 | the regular pattern |
+| 55077 | 55078 | **55080** | 55079 is unassigned |
+| 44020 | 44021 | **none** | confirmable, never rejectable |
+| 44019 | none | none | neither answer exists |
+
+`.antwort(pid=...)` bypasses the table when the *point* of the test is an
+adversarial answer — a counterparty replying with the wrong PID is a thing that
+happens, and a platform should reject it.
+
+### BIKO and iMSys
+
+`BikoSim` receives Abrechnungssummenzeitreihen and answers with an acceptance or
+a Klärfall. Rejections are **queued rather than sticky**, so the re-submission
+after Clearing can be asserted — the accept-only path proves little on its own.
+
+`ImsysSim` models the SMGW compliance surface a platform has to react to: TAF
+profile, CLS channel state, certificate expiry and revocation, and
+Zählerstandsgang gaps that force Ersatzwertbildung. It does not reimplement BSI
+TR-03109 crypto — that would be a second implementation of something the gateway
+owns, and getting it subtly wrong would make tests disagree with reality exactly
+where they must not.
+
+`MaStRSim` and `UbaSim` are specified in the concept but deliberately unbuilt:
+neither integration exists in mako yet, and a simulator written before its
+consumer encodes guesses about an interface nobody has implemented.
+
+---
+
+## Property-based testing
+
+```python
+from hypothesis import given
+from makotest.strategies import malo_ids, pruefidentifikatoren
+
+@given(malo=malo_ids(), pid=pruefidentifikatoren(message_type="UTILMD"))
+def test_every_utilmd_roundtrips(malo, pid):
+    ...
+```
+
+Needs the `hypothesis` extra. Every strategy draws through the Rust core, which
+is the point: a random 11-digit string is almost never a valid MaLo, so a
+hand-rolled strategy exercises the rejection path and proves nothing.
+
+`pruefidentifikatoren()` yields only PIDs the compiled profiles carry AHB rules
+for. A PID without rules validates **vacuously** — `is_valid` comes back true
+having checked nothing — so generating one produces a test that cannot fail.
+
+| Strategy | Draws |
+|---|---|
+| `malo_ids()` | check-digit-valid 11-digit Marktlokations-IDs |
+| `melo_ids(country=...)` | 33-character Messlokations-IDs |
+| `marktpartner_ids(kind=...)` | BDEW (`99…`), DVGW (`98…`) or GLN codes — the prefix decides the UNB qualifier |
+| `bilanzierungsgebiete()` | 16-character EIC codes (check character not computed) |
+| `pruefidentifikatoren(message_type=…, sparte=…)` | PIDs with real AHB rules |
+| `werktage()` | dates that are Werktage under the BDEW calendar |
+| `zeitreihen(periods=…)` | kWh series, one value per MTU |
+
+`message_types_of(pid)` returns a **list**: a Prüfidentifikator does not
+identify one message type — APERAK and COMDIS both declare 29001 and 29002.
+It resolves against the compiled profiles rather than a PID-band table.
 
 ---
 
@@ -240,10 +332,15 @@ Python symbols. CI exercises both paths.
 
 ## Status
 
-Pre-1.0. Shipping: the Rust core (identifiers, Fristen, EDIFACT build +
-interchange + validation), the EPEX generator, domain assertions and the pytest
-plugin. The counterparty simulators — an AS4 market partner that answers per
-EBD, then BIKO and iMSys/SMGW — are specified but not yet built.
+Pre-1.0. Shipping: the Rust core (identifiers, Fristen, Prüfidentifikator
+introspection, the AHB answer table, EDIFACT build + interchange + validation),
+the EPEX generator, the Marktpartner / BIKO / iMSys simulators, hypothesis
+strategies, domain assertions and the pytest plugin.
+
+Not built: AS4 transport for the Marktpartner simulator — it is a plain object
+with `receive()`, so a transport layers on top rather than being a dependency of
+everyone who does not need one — the testcontainers harness, and the MaStR / UBA
+simulators.
 
 The package version tracks `workspace.package.version` through Cargo.toml, so
 the wheel and the crates it binds can never report different versions.

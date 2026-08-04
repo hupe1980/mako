@@ -40,3 +40,11 @@
   </article>
 </div>
 {% endblock content %}
+
+{% block scripts %}
+<script type="module">
+  if (document.querySelector('pre > code[data-lang="mermaid"], code.language-mermaid, pre.mermaid')) {
+    import("{{ get_url(path='js/mermaid-init.js') | safe }}");
+  }
+</script>
+{% endblock scripts %}

@@ -233,11 +233,20 @@ pub fn assess(
     }
 
     // ── Engine-warning findings (Layer 1 surfaced into the score) ─────────────
+    //
+    // The two boundary warnings weigh into the HELD band on their own. They do
+    // not say "this looks unusual" — they say the period has **no** correct
+    // single rate, so whatever was billed is wrong for part of it. billingd
+    // refuses such a period upstream; if one reaches scoring anyway (an
+    // operator-pinned rate, a preview promoted to a bill), it must not dispatch
+    // automatically. A weight below the hold threshold would let the invoice go
+    // out with a silent over- or undercharge.
     for w in &invoice.warnings {
         let (weight, code) = match w.code {
             "ESTIMATED_READING" => (15, "ESTIMATED_READING"),
             "VERBRAUCH_ABWEICHUNG_50PCT" => (25, "VORJAHR_DEVIATION"),
-            "MWST_STICHTAG_IM_ZEITRAUM" => (20, "MWST_STICHTAG_IM_ZEITRAUM"),
+            "MWST_STICHTAG_IM_ZEITRAUM" => (80, "MWST_STICHTAG_IM_ZEITRAUM"),
+            "BEHG_JAHRESGRENZE_IM_ZEITRAUM" => (80, "BEHG_JAHRESGRENZE_IM_ZEITRAUM"),
             "SECT40C_DEADLINE_EXCEEDED" => (10, "SECT40C_DEADLINE_EXCEEDED"),
             "PREISGARANTIE_ENDET" => (5, "PREISGARANTIE_ENDET"),
             _ => continue,
@@ -356,6 +365,44 @@ mod tests {
             .build_engine(&GridInput::default(), &rates)
             .bill(ctx, &quantities)
             .unwrap()
+    }
+
+    /// A gas period crossing a statutory rate boundary has no correct single
+    /// rate, so whatever was billed is wrong for part of it. Such an invoice
+    /// must never dispatch automatically.
+    ///
+    /// billingd refuses these periods upstream; this is the backstop for a path
+    /// that reaches scoring anyway — an operator-pinned rate, or a preview
+    /// promoted to a bill.
+    #[test]
+    fn a_period_crossing_a_rate_boundary_is_held() {
+        for code in ["MWST_STICHTAG_IM_ZEITRAUM", "BEHG_JAHRESGRENZE_IM_ZEITRAUM"] {
+            let mut inv = invoice(dec!(300));
+            inv.warnings.push(energy_billing::BillingWarning {
+                code,
+                severity: energy_billing::WarningSeverity::Warning,
+                message: "Zeitraum überschreitet eine Satzgrenze".to_owned(),
+            });
+            let cfg = RiskConfig::default();
+            let a = assess(
+                &cfg,
+                &inv,
+                dec!(0.19),
+                date!(2026 - 06 - 01),
+                date!(2026 - 06 - 30),
+                &RiskContext::default(),
+            );
+            assert_eq!(
+                a.band,
+                RiskBand::Held,
+                "{code} must reach the HELD band on its own — score was {}",
+                a.score
+            );
+            assert!(
+                a.findings.iter().any(|f| f.code == code),
+                "{code} must be a coded finding, not just a score bump"
+            );
+        }
     }
 
     #[test]

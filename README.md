@@ -145,7 +145,7 @@ flowchart LR
 | Category | Detail |
 |---|---|
 | 📦 **17 message types** | UTILMD, MSCONS, APERAK, CONTRL, INVOIC, REMADV, ORDERS, IFTSTA, INSRPT, REQOTE, PARTIN, ORDCHG, ORDRSP, QUOTES, COMDIS, PRICAT, UTILTS |
-| 🔍 **5-layer validation** | MIG structural rules, AHB Pruefidentifikator-specific rules, semantic cross-field rules |
+| 🔍 **5-layer validation** | Schema, code lists, MIG structure, AHB Prüfidentifikator rules, semantic cross-field rules — all appended to one `ValidationReport` |
 | 📅 **Annual release lifecycle** | Multi-version profile registry with 7-day transition grace windows (BDEW-compliant) |
 | 🔒 **Security by default** | DoS limits (max 10 MB, 10 000 segments), log-injection sanitisation, fuzz-tested with 1 373+ corpus entries |
 | 🛠️ **Fluent message builders** | Type-state builder API with compile-time mandatory field enforcement |

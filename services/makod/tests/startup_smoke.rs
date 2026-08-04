@@ -16,9 +16,11 @@ use mako_engine::{
     builder::EngineBuilder, deadline::InMemoryDeadlineStore, event_store::InMemoryEventStore,
     registry::InMemoryProcessRegistry, snapshot::InMemorySnapshotStore,
 };
+use mako_gabi_gas::GaBiGasModule;
 use mako_geli_gas::GeliGasModule;
 use mako_gpke::GpkeModule;
 use mako_mabis::MabisModule;
+use mako_redispatch::RedispatchModule;
 use mako_wim::WimModule;
 use mako_wim_gas::WimGasModule;
 
@@ -47,6 +49,8 @@ fn all_registered_workflows_covered_by_dispatch_table() {
         .register(Box::new(GeliGasModule))
         .register(Box::new(WimGasModule))
         .register(Box::new(MabisModule))
+        .register(Box::new(GaBiGasModule))
+        .register(Box::new(RedispatchModule))
         .build();
 
     // Panics with an actionable message if any registered workflow is absent
@@ -196,3 +200,58 @@ fn party_registry_rejects_duplicate_role() {
 // The `all_registered_workflows_covered_by_dispatch_table` test above indirectly validates
 // that all registered workflows have coverage, since the EngineBuilder panics at build()
 // time for any workflow lacking a profile.
+
+/// Pin the headline figures the project's landing page advertises.
+///
+/// `site/templates/index.html` states a PID count and a workflow count. Those
+/// are the first numbers a reader sees, and nothing connected them to the code —
+/// so adding a module or a PID moved the truth and left the page behind, with no
+/// signal. This test is that signal.
+///
+/// The counts are taken over the **full** module stack, which is what the page
+/// describes: a deployment holding every market role. A role-limited deployment
+/// registers fewer.
+///
+/// When this fails, the fix is to update `index.html` to the number the
+/// assertion reports — not to loosen the assertion.
+#[test]
+fn the_landing_page_figures_match_the_registered_engine() {
+    let ctx = EngineBuilder::new()
+        .with_event_store(Arc::new(InMemoryEventStore::new()))
+        .with_snapshot_store(InMemorySnapshotStore::new())
+        .with_deadline_store(InMemoryDeadlineStore::new())
+        .with_registry(InMemoryProcessRegistry::new())
+        .register(Box::new(GpkeModule))
+        .register(Box::new(WimModule))
+        .register(Box::new(GeliGasModule))
+        .register(Box::new(WimGasModule))
+        .register(Box::new(MabisModule))
+        .register(Box::new(GaBiGasModule))
+        .register(Box::new(RedispatchModule))
+        .build();
+
+    let pids = ctx.pid_router().len();
+    let workflows = ctx.registered_workflows().len();
+
+    // Deliberately explicit so a diff shows the number, not just a symbol.
+    //
+    // `LANDING_PAGE_PIDS` counts PIDs the engine *routes* (`PidRouter::table` is
+    // keyed by PID). It is **not** the same figure as the 346 that
+    // `cargo xtask validate-pruefids` reports, which counts PIDs with validated
+    // AHB profile coverage — the difference is the deliberate
+    // `KNOWN_PROFILE_GAPS` set, routed but without AHB rules. Both numbers are
+    // correct and appear in different places; do not "harmonise" them.
+    const LANDING_PAGE_PIDS: usize = 418;
+    const LANDING_PAGE_WORKFLOWS: usize = 68;
+
+    assert_eq!(
+        pids, LANDING_PAGE_PIDS,
+        "site/templates/index.html advertises {LANDING_PAGE_PIDS} Prüfidentifikatoren, \
+         the engine registers {pids} — update the page"
+    );
+    assert_eq!(
+        workflows, LANDING_PAGE_WORKFLOWS,
+        "site/templates/index.html advertises {LANDING_PAGE_WORKFLOWS} MaKo workflows, \
+         the engine registers {workflows} — update the page"
+    );
+}

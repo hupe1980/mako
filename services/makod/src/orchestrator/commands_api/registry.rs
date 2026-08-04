@@ -445,6 +445,13 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     // ── WiM Rechnung (INVOIC 31009 MSB-Rechnung) ──────────────────────────────
     // `invoicd` dispatches these after plausibility check.
     // LF role: payer receives INVOIC from MSB → settle or dispute.
+    //
+    // The command namespace is German business vocabulary (`rechnung`), while the
+    // workflow behind it is named after its EDIFACT message (`wim-invoic`, module
+    // `mako_wim::invoic`). That split is deliberate and mirrored on the Gas side
+    // (`wim.gas.rechnung.*` → `wim-gas-invoic`): ERP-facing command names are not
+    // renamed when an internal module is. Dispatch fns follow the command name,
+    // adapter registries follow the workflow name.
     CommandDescriptor {
         name: "wim.rechnung.annehmen",
         permitted_roles: &[Marktrolle::Lf],

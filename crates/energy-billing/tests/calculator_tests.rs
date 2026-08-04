@@ -230,6 +230,7 @@ fn strom_zweitarif_higher_than_ht_eintarif() {
     );
 }
 
+#[cfg(feature = "bo4e")]
 #[test]
 fn billing_result_rechnung_json_has_period() {
     let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":10}"#);
@@ -579,6 +580,7 @@ fn sofortbonus_reduces_net_and_vat_as_entgeltminderung() {
 
 // ── EEG ───────────────────────────────────────────────────────────────────────
 
+#[cfg(feature = "bo4e")]
 #[test]
 fn eeg_verguetung_is_credit_note() {
     let (_f, _t) = period();
@@ -700,6 +702,7 @@ fn hems_platform_fee_one_month() {
 
 // ── Einspeisung ───────────────────────────────────────────────────────────────
 
+#[cfg(feature = "bo4e")]
 #[test]
 fn einspeisung_net_settlement_is_gutschrift() {
     let (_f, _t) = period();
@@ -728,6 +731,7 @@ fn einspeisung_net_settlement_is_gutschrift() {
 
 // ── GasQualitaet audit annotation ─────────────────────────────────────────────
 
+#[cfg(feature = "bo4e")]
 #[test]
 fn gas_gasqualitaet_added_as_zusatz_attribut() {
     let (_f, _t) = period();
@@ -783,6 +787,7 @@ fn gas_gasqualitaet_added_as_zusatz_attribut() {
     );
 }
 
+#[cfg(feature = "bo4e")]
 #[test]
 fn gas_no_gasqualitaet_no_zusatz_attribut() {
     let (_f, _t) = period();
@@ -822,7 +827,7 @@ fn waermepumpe_modul1_steuerungsrabatt_reduces_brutto() {
     let without =
         j(r#"{"category":"WAERMEPUMPE","grundpreis_ct_per_day":10,"arbeitspreis_ct_per_kwh":20}"#);
     let with_m1 = j(
-        r#"{"category":"WAERMEPUMPE","grundpreis_ct_per_day":10,"arbeitspreis_ct_per_kwh":20,"steuerungsrabatt_modul1_eur_per_kw_year":120}"#,
+        r#"{"category":"WAERMEPUMPE","grundpreis_ct_per_day":10,"arbeitspreis_ct_per_kwh":20,"sect14a_modul1_pauschale_eur_per_kw_year":120}"#,
     );
     let meter = MeterInput {
         arbeitsmenge_kwh: dec!(300),
@@ -863,7 +868,7 @@ fn wallbox_modul3_steuerungsrabatt_requires_steuerung_hours() {
     let (_f, _t) = period();
     // Without steuerung_stunden → Modul 3 position must NOT appear (hours = None)
     let tariff = j(
-        r#"{"category":"WALLBOX","grundpreis_ct_per_day":0,"arbeitspreis_ct_per_kwh":25,"steuerungsrabatt_modul3_eur_per_kw_year":200}"#,
+        r#"{"category":"WALLBOX","grundpreis_ct_per_day":0,"arbeitspreis_ct_per_kwh":25,"sect14a_steuerungsentschaedigung_eur_per_kw_year":200}"#,
     );
     let meter_no_h = MeterInput {
         arbeitsmenge_kwh: dec!(200),
@@ -893,15 +898,15 @@ fn wallbox_modul3_steuerungsrabatt_requires_steuerung_hours() {
     );
     assert!(
         r_h.brutto_eur < r_no_h.brutto_eur,
-        "Modul 3 must reduce brutto when steuerung_stunden > 0"
+        "the Steuerungsentschädigung must reduce brutto when steuerung_stunden > 0"
     );
-    let has_modul3 = r_h
+    let has_entschaedigung = r_h
         .positions
         .iter()
-        .any(|p| p.description.contains("Modul 3"));
+        .any(|p| p.description.contains("Steuerungsentschädigung"));
     assert!(
-        has_modul3,
-        "Modul 3 position must be present when steuerung_stunden provided"
+        has_entschaedigung,
+        "a Steuerungsentschädigung position must be present when steuerung_stunden is provided"
     );
 }
 
@@ -1363,6 +1368,7 @@ fn waerme_reduced_mwst_7pct() {
 
 // ── rechnung_json completeness ────────────────────────────────────────────────
 
+#[cfg(feature = "bo4e")]
 #[test]
 fn rechnung_json_has_gesamtsteuer() {
     let (_f, _t) = period();
@@ -1406,6 +1412,7 @@ fn rechnung_json_has_gesamtsteuer() {
     assert!(steuer > dec!(0), "gesamtsteuer must be positive");
 }
 
+#[cfg(feature = "bo4e")]
 #[test]
 fn rechnung_json_has_rechnungstyp_and_rechnungsersteller() {
     let (_f, _t) = period();
@@ -1763,6 +1770,7 @@ fn billing_result_position_total_by_tag() {
     );
 }
 
+#[cfg(feature = "bo4e")]
 #[test]
 fn rechnung_json_has_rechnungsempfaenger_and_faelligkeitsdatum() {
     let (_f, _t) = period();
@@ -2547,6 +2555,7 @@ fn strom_block_tariff_lower_than_flat_rate_for_high_consumption() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// §41 Abs. 1 Nr. 3 EnWG: prior-year and average consumption must appear on invoice.
+#[cfg(feature = "bo4e")]
 #[test]
 fn strom_verbrauchshistorie_produces_info_positions() {
     use energy_billing::Verbrauchshistorie;
@@ -2616,6 +2625,7 @@ fn strom_verbrauchshistorie_produces_info_positions() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// §40 EnWG: Rechnung JSON must include `kilowattstundenpreisGesamt`.
+#[cfg(feature = "bo4e")]
 #[test]
 fn strom_rechnung_json_includes_sect40_kilowattstundenpreis() {
     let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
@@ -2644,6 +2654,7 @@ fn strom_rechnung_json_includes_sect40_kilowattstundenpreis() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// §41 Abs. 1 Nr. 8 + §42 EnWG: Energiemix must appear in the invoice JSON.
+#[cfg(feature = "bo4e")]
 #[test]
 fn strom_energiemix_appears_in_rechnung_json() {
     use time::macros::date;
@@ -3905,6 +3916,7 @@ fn prosumer_meter_helpers() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// §40b invoice JSON must contain preisvergleichsdaten with Arbeitspreis ct/kWh.
+#[cfg(feature = "bo4e")]
 #[test]
 fn sect40b_preisvergleichsdaten_in_rechnung_json() {
     let tariff =
@@ -3946,6 +3958,7 @@ fn sect40b_preisvergleichsdaten_in_rechnung_json() {
 
 /// `InvoiceType::Initial` maps to BO4E Rechnungstyp `ENDKUNDENRECHNUNG`
 /// (actual consumption billed to the end customer).
+#[cfg(feature = "bo4e")]
 #[test]
 fn initial_invoice_type_maps_to_endkundenrechnung() {
     let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
@@ -3963,6 +3976,7 @@ fn initial_invoice_type_maps_to_endkundenrechnung() {
 }
 
 /// `InvoiceType::AdvancePayment` maps to BO4E Rechnungstyp `ABSCHLAGSRECHNUNG`.
+#[cfg(feature = "bo4e")]
 #[test]
 fn advance_payment_invoice_type_maps_to_abschlagsrechnung() {
     let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
@@ -3987,6 +4001,7 @@ fn advance_payment_invoice_type_maps_to_abschlagsrechnung() {
 
 /// A cancellation (Stornorechnung) reverses all position signs.
 /// If original brutto = +X, cancellation brutto = -X.
+#[cfg(feature = "bo4e")]
 #[test]
 fn cancellation_invoice_reverses_all_signs() {
     let tariff =
@@ -4039,6 +4054,7 @@ fn cancellation_invoice_reverses_all_signs() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// A correction invoice must have originalRechnungsId in the rechnung_json.
+#[cfg(feature = "bo4e")]
 #[test]
 fn correction_invoice_has_original_reference_in_json() {
     let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
@@ -4077,6 +4093,7 @@ fn correction_invoice_has_original_reference_in_json() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// §41 Abs. 1 Nr. 5 EnWG: invoice must identify the Netzbetreiber.
+#[cfg(feature = "bo4e")]
 #[test]
 fn nb_mp_id_appears_in_rechnung_json_when_set() {
     let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
@@ -4120,6 +4137,7 @@ fn nb_mp_id_appears_in_rechnung_json_when_set() {
 }
 
 /// When `nb_mp_id` is None, `netzbetreiber` is absent from the JSON.
+#[cfg(feature = "bo4e")]
 #[test]
 fn nb_mp_id_absent_from_json_when_not_set() {
     let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
@@ -4580,6 +4598,7 @@ fn preisgarantie_bis_produces_info_position_when_in_future() {
     );
 }
 
+#[cfg(feature = "bo4e")]
 #[test]
 fn billing_run_id_propagated_to_invoice_and_json() {
     let tariff: Product = serde_json::from_str(
@@ -5070,15 +5089,15 @@ fn the_promised_warnings_fire() {
 /// the zeitvariables Netzentgelt — BK6-22-300 Anlage 2 §2, with *three* bands,
 /// not two — was absent from the retail engine entirely.
 #[test]
-fn sect14a_modul2_bills_three_bands() {
-    use energy_billing::{MeterInput, Sect14aModul2Verbrauch};
+fn sect14a_modul3_bills_three_bands() {
+    use energy_billing::{MeterInput, Sect14aModul3Verbrauch};
 
     let product: energy_billing::Product = serde_json::from_value(serde_json::json!({
         "category": "WAERMEPUMPE",
         "arbeitspreis_ct_per_kwh": 20.0,
-        "sect14a_modul2_nne_ht_ct_per_kwh": 12.0,
-        "sect14a_modul2_nne_st_ct_per_kwh": 6.0,
-        "sect14a_modul2_nne_nt_ct_per_kwh": 2.0,
+        "sect14a_modul3_nne_ht_ct_per_kwh": 12.0,
+        "sect14a_modul3_nne_st_ct_per_kwh": 6.0,
+        "sect14a_modul3_nne_nt_ct_per_kwh": 2.0,
     }))
     .unwrap();
     let ctx = BillingContext {
@@ -5091,7 +5110,7 @@ fn sect14a_modul2_bills_three_bands() {
             arbeitsmenge_kwh: dec!(600),
             ..Default::default()
         }),
-        sect14a_modul2: Some(Sect14aModul2Verbrauch {
+        sect14a_modul3: Some(Sect14aModul3Verbrauch {
             ht_kwh: dec!(100),
             st_kwh: dec!(300),
             nt_kwh: dec!(200),
@@ -5106,7 +5125,7 @@ fn sect14a_modul2_bills_three_bands() {
     let bands: Vec<_> = invoice
         .positions
         .iter()
-        .filter(|p| p.description.starts_with("Netzentgelt §14a Modul 2"))
+        .filter(|p| p.description.starts_with("Netzentgelt §14a Modul 3"))
         .collect();
     assert_eq!(bands.len(), 3, "all three Tarifstufen appear");
     // HT 100×0.12 + ST 300×0.06 + NT 200×0.02 = 12 + 18 + 4 = 34.00 EUR.
@@ -5121,15 +5140,15 @@ fn sect14a_modul2_bills_three_bands() {
 /// Modul 2 alongside a flat NNE Arbeitspreis is refused — it would bill the
 /// device's network usage twice.
 #[test]
-fn sect14a_modul2_with_flat_nne_is_refused() {
+fn sect14a_modul3_with_flat_nne_is_refused() {
     use energy_billing::{GridInput, MeterInput};
 
     let product: energy_billing::Product = serde_json::from_value(serde_json::json!({
         "category": "WALLBOX",
         "arbeitspreis_ct_per_kwh": 20.0,
-        "sect14a_modul2_nne_ht_ct_per_kwh": 12.0,
-        "sect14a_modul2_nne_st_ct_per_kwh": 6.0,
-        "sect14a_modul2_nne_nt_ct_per_kwh": 2.0,
+        "sect14a_modul3_nne_ht_ct_per_kwh": 12.0,
+        "sect14a_modul3_nne_st_ct_per_kwh": 6.0,
+        "sect14a_modul3_nne_nt_ct_per_kwh": 2.0,
     }))
     .unwrap();
     let grid = GridInput {
@@ -5152,7 +5171,7 @@ fn sect14a_modul2_with_flat_nne_is_refused() {
         .build_engine(&grid, &ctx.regulatory_rates)
         .bill(ctx, &quantities)
         .unwrap_err();
-    assert!(err.to_string().contains("Modul 2"), "{err}");
+    assert!(err.to_string().contains("Modul 3"), "{err}");
 }
 
 // ── Vertragsart: §38 EnWG Ersatzversorgung, GVV disclosure ────────────────────
@@ -5193,6 +5212,7 @@ fn ersatzversorgung_over_three_months_blocks_the_run() {
 
 /// Three months minus a day is the longest lawful Ersatzversorgung period —
 /// it bills normally and the invoice names the regime.
+#[cfg(feature = "bo4e")]
 #[test]
 fn ersatzversorgung_within_three_months_bills_and_names_the_regime() {
     let product: Product =
@@ -5226,6 +5246,7 @@ fn ersatzversorgung_within_three_months_bills_and_names_the_regime() {
 
 /// The default Sondervertrag is stated on every invoice too — the regime is
 /// explicit, never inferred from the tariff.
+#[cfg(feature = "bo4e")]
 #[test]
 fn sondervertrag_is_stated_explicitly() {
     let product: Product =
@@ -5275,4 +5296,105 @@ fn billing_period_refuses_inversion() {
     };
     let parsed: Result<BillingPeriod, _> = serde_json::from_str(&swapped);
     assert!(parsed.is_err(), "deserialization must validate too");
+}
+
+/// BK6-22-300 makes §14a Modul 2 and Modul 3 mutually exclusive.
+///
+/// Both re-price the Netzentgelt-Arbeitspreis — Modul 2 as a percentage on the
+/// device's separately metered energy, Modul 3 through three time bands — so a
+/// connection holding both would have the same network usage reduced twice. The
+/// engine refuses rather than silently applying both.
+#[test]
+fn sect14a_modul2_and_modul3_together_are_refused() {
+    use energy_billing::Sect14aModul3Verbrauch;
+    let product: Product = serde_json::from_value(serde_json::json!({
+        "category": "WAERMEPUMPE",
+        "arbeitspreis_ct_per_kwh": 28.0,
+        "grundpreis_ct_per_day": 10.0,
+        "sect14a_modul2_nne_reduktion_ct_per_kwh": 3.0,
+        "sect14a_modul3_nne_ht_ct_per_kwh": 12.0,
+        "sect14a_modul3_nne_st_ct_per_kwh": 6.0,
+        "sect14a_modul3_nne_nt_ct_per_kwh": 2.0,
+    }))
+    .unwrap();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(600),
+            ..Default::default()
+        }),
+        sect14a_modul3: Some(Sect14aModul3Verbrauch {
+            ht_kwh: dec!(100),
+            st_kwh: dec!(300),
+            nt_kwh: dec!(200),
+        }),
+        ..Default::default()
+    };
+    let err = product
+        .build_engine(&Default::default(), &ctx.regulatory_rates)
+        .bill(ctx, &quantities)
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("MODUL2_AND_MODUL3"), "{msg}");
+    assert!(msg.contains("mutually exclusive"), "{msg}");
+}
+
+/// Modul 1 is a flat reduction needing no metering, so it composes with the
+/// time-variable Modul 3 — the combination BK6-22-300 explicitly allows.
+#[test]
+fn sect14a_modul1_combines_with_modul3() {
+    use energy_billing::Sect14aModul3Verbrauch;
+    let product: Product = serde_json::from_value(serde_json::json!({
+        "category": "WAERMEPUMPE",
+        "arbeitspreis_ct_per_kwh": 28.0,
+        "grundpreis_ct_per_day": 10.0,
+        "sect14a_modul1_pauschale_eur_per_kw_year": 24.0,
+        "sect14a_modul3_nne_ht_ct_per_kwh": 12.0,
+        "sect14a_modul3_nne_st_ct_per_kwh": 6.0,
+        "sect14a_modul3_nne_nt_ct_per_kwh": 2.0,
+    }))
+    .unwrap();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(600),
+            spitzenleistung_kw: Some(dec!(11)),
+            ..Default::default()
+        }),
+        sect14a_modul3: Some(Sect14aModul3Verbrauch {
+            ht_kwh: dec!(100),
+            st_kwh: dec!(300),
+            nt_kwh: dec!(200),
+        }),
+        ..Default::default()
+    };
+    let invoice = product
+        .build_engine(&Default::default(), &ctx.regulatory_rates)
+        .bill(ctx, &quantities)
+        .expect("Modul 1 and Modul 3 may be held together");
+
+    assert!(
+        invoice
+            .positions
+            .iter()
+            .any(|p| p.description.contains("Modul 1 — pauschale Reduzierung")),
+        "the Modul 1 pauschale must be billed"
+    );
+    assert_eq!(
+        invoice
+            .positions
+            .iter()
+            .filter(|p| p.description.starts_with("Netzentgelt §14a Modul 3"))
+            .count(),
+        3,
+        "and all three Modul 3 Tarifstufen alongside it"
+    );
 }

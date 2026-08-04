@@ -20,6 +20,16 @@ struct InsrptBuilderInner {
     document_code: String,
     document_id: Option<String>,
     document_date: Option<String>,
+    /// SG3 `DOC` — Referenz auf das Dokument (qualifier, id).
+    doc_reference: Option<(String, String)>,
+    /// SG4 `RFF+Z13` — Prüfidentifikator.
+    pruefidentifikator: Option<u32>,
+    /// SG7 `LIN` — Positionsnummer.
+    position: Option<String>,
+    /// SG7 `STS` — Statuscode.
+    status: Option<String>,
+    /// SG8 `LOC` — addressed location (qualifier, id).
+    location: Option<(String, String)>,
 }
 
 /// Fluent builder for `INSRPT` (Inspection Report) messages.
@@ -67,6 +77,11 @@ impl InsrptBuilder<Unset, Unset> {
                 document_code: "4".to_owned(),
                 document_id: None,
                 document_date: None,
+                doc_reference: None,
+                pruefidentifikator: None,
+                position: None,
+                status: None,
+                location: None,
             },
         }
     }
@@ -127,6 +142,40 @@ impl<S, R> InsrptBuilder<S, R> {
         self
     }
 
+    /// Set the SG3 `DOC` Dokumentenreferenz (e.g. `Z41` + Förderreferenz).
+    ///
+    /// `DOC` is **mandatory** in the INSRPT AHB for every Prüfidentifikator;
+    /// a message without it does not validate.
+    pub fn doc_reference(mut self, qualifier: impl Into<String>, id: impl Into<String>) -> Self {
+        self.inner.doc_reference = Some((qualifier.into(), id.into()));
+        self
+    }
+
+    /// Set the SG4 `RFF+Z13` Prüfidentifikator.
+    pub fn pruefidentifikator(mut self, pid: u32) -> Self {
+        self.inner.pruefidentifikator = Some(pid);
+        self
+    }
+
+    /// Set the SG7 `LIN` Positionsnummer (defaults to `1` when a position is
+    /// required but unset).
+    pub fn position(mut self, position: impl Into<String>) -> Self {
+        self.inner.position = Some(position.into());
+        self
+    }
+
+    /// Set the SG7 `STS` Statuscode (e.g. `Z01`).
+    pub fn status(mut self, code: impl Into<String>) -> Self {
+        self.inner.status = Some(code.into());
+        self
+    }
+
+    /// Set the SG8 `LOC` addressed location (e.g. `172` + `MeLo`-ID).
+    pub fn location(mut self, qualifier: impl Into<String>, id: impl Into<String>) -> Self {
+        self.inner.location = Some((qualifier.into(), id.into()));
+        self
+    }
+
     /// Set the document date for DTM+137 (`YYYYMMDD`).
     pub fn document_date(mut self, date: impl Into<String>) -> Self {
         self.inner.document_date = Some(date.into());
@@ -168,6 +217,23 @@ impl<S, R> InsrptBuilder<S, R> {
                 [id, "", self.inner.receiver_agency.as_str()]
             );
         }
+        // MIG order: SG3 DOC → SG4 RFF → SG7 LIN → STS → SG8 LOC.
+        if let Some((qual, id)) = &self.inner.doc_reference {
+            emit_seg!(w, "DOC", qual, id);
+        }
+        if let Some(pid) = self.inner.pruefidentifikator {
+            emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
+        }
+        if let Some(pos) = &self.inner.position {
+            emit_seg!(w, "LIN", pos);
+        }
+        if let Some(code) = &self.inner.status {
+            emit_seg!(w, "STS", code);
+        }
+        if let Some((qual, id)) = &self.inner.location {
+            emit_comp!(w, "LOC", [qual], [id]);
+        }
+
         w.finish_unt(&self.inner.message_ref)
             .map_err(Error::Parse)?;
         Ok(buf)

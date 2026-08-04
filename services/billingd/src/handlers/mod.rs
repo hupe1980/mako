@@ -179,7 +179,7 @@ fn build_aggregate_invoice(
 ///
 /// Carries the stable machine-readable code, the display message, and — for a
 /// blocked validation — every warning the engine collected, so a caller can
-/// act on `MODUL2_AND_FLAT_NNE` without parsing prose.
+/// act on `MODUL3_AND_FLAT_NNE` without parsing prose.
 fn engine_error_body(context: &str, e: &energy_billing::EngineError) -> String {
     serde_json::json!({
         "error": {
@@ -187,6 +187,26 @@ fn engine_error_body(context: &str, e: &energy_billing::EngineError) -> String {
             "context": context,
             "message": e.to_string(),
             "warnings": e.blocking_warnings(),
+        }
+    })
+    .to_string()
+}
+
+/// Structured JSON body for a period that crosses a statutory rate boundary.
+///
+/// Names the Stichtage so the caller can split and retry rather than being told
+/// only that the period was rejected. Choosing a rate instead would bill part of
+/// the period wrong and read exactly like a correct invoice downstream.
+pub(crate) fn straddle_error_body(e: &crate::config::StraddlesRateBoundary) -> String {
+    serde_json::json!({
+        "error": {
+            "code": "ZEITRAUM_UEBERSCHREITET_SATZGRENZE",
+            "message": e.to_string(),
+            "category": e.category,
+            "period_from": e.period_from.to_string(),
+            "period_to": e.period_to.to_string(),
+            "stichtage": e.stichtage.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "legal_basis": "§28 Abs. 5/6 UStG (Gas/Fernwärme), §10 BEHG",
         }
     })
     .to_string()

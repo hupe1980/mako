@@ -56,6 +56,7 @@ mod iot;
 mod jahresablesung;
 mod lastgang;
 mod quality;
+pub(crate) mod quality_alert;
 mod reading_orders;
 mod sharing;
 mod substitute;
@@ -491,6 +492,10 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
             kafka_cfg.clone(),
             state.repo.clone(),
             state.tenant.clone(),
+            crate::kafka_ingest::QualityAlertTarget {
+                webhook_url: state.erp_webhook_url.clone(),
+                secret: state.erp_webhook_secret.clone(),
+            },
             cfg.shutdown.clone(),
         );
     }

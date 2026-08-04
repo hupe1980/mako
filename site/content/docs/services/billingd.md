@@ -1,6 +1,6 @@
 +++
 title = "billingd Operator Guide"
-description = "billingd operator guide: Multi-Product Billing Engine (LF role). Energy billing engine — user-defined product prices from tarifbd; 13 categories (STROM/GAS/WAERME/WASSER/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/SHARING); §41a EPEX dynamic; §25 Nr. 4 MessEV Brennwertkorrektur; §14a Modul 1/3; EN 16931 e-invoicing (XRechnung 3.0 CII + PEPPOL UBL, B2G mandate 01.01.2027)."
+description = "billingd operator guide: Multi-Product Billing Engine (LF role). Energy billing engine — user-defined product prices from tarifbd; 13 categories (STROM/GAS/WAERME/WASSER/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/SHARING); §41a EPEX dynamic; §25 Nr. 4 MessEV Brennwertkorrektur; §14a Modul 1/2/3; EN 16931 e-invoicing (XRechnung 3.0 CII + PEPPOL UBL, B2G mandate 01.01.2027)."
 weight = 32
 [extra]
 mermaid = true
@@ -43,7 +43,7 @@ billingd (HTTP service)
             │   Invoice { positions, warnings, netto_eur, mwst_eur, brutto_eur }
             │
             ├── ElectricityProvider      §41a EPEX; HT/NT; block tariffs; RLM demand
-            ├── ControllableLoadProvider §14a Modul 1/3 (WAERMEPUMPE, WALLBOX)
+            ├── ControllableLoadProvider §14a Modul 1/2/3 (WAERMEPUMPE, WALLBOX)
             ├── GasProvider              §25 Nr. 4 MessEV Brennwertkorrektur; BEHG CO₂
             ├── HeatProvider             Fernwärme (standard-rated; 7% only in the §28 window)
             ├── WaterProvider            Trinkwasser 7% USt; Abwasser gesplittet; Absetzungen
@@ -112,7 +112,7 @@ rates. Statutory rates (Stromsteuer, Energiesteuer Gas, BEHG CO₂) are configur
 ```mermaid
 graph LR
     subgraph energy [Electricity]
-        STROM["STROM<br/>SLP/RLM Eintarif/Zweitarif<br/>§14a Modul 1/3<br/>EEG Gutschrift<br/>§41a EPEX dynamic"]
+        STROM["STROM<br/>SLP/RLM Eintarif/Zweitarif<br/>§14a Modul 1/2/3<br/>EEG Gutschrift<br/>§41a EPEX dynamic"]
         WP["WAERMEPUMPE<br/>§14a mandatory<br/>(like STROM)"]
         WB["WALLBOX<br/>§14a mandatory<br/>(like STROM)"]
     end
@@ -145,8 +145,10 @@ NNE Grundpreis          [from marktd]      pass-through
 NNE Arbeitspreis        [from marktd]      pass-through
 NNE Leistungspreis      [from marktd]      RLM only (EUR/kW/month)
 Konzessionsabgabe       [from marktd]      pass-through
-§14a Modul 1 Rabatt     [if product set]   negative EUR/kW/year
-§14a Modul 3 Gutschrift [if product set]   negative, pro-rated to load-shedding hours
+§14a Modul 1 pauschale  [if product set]   negative EUR/kW/year
+§14a Modul 2 AP-Redukt. [if product set]   negative ct/kWh (device's own metering)
+§14a Modul 3 HT/ST/NT   [if product set]   three Tarifstufen, replace the flat NNE
+§14a Steuerungsentsch.  [if product set]   negative, pro-rated to load-shedding hours
 EEG Gutschrift          [from einsd]       negative, if PV self-consumption
 Stromsteuer             [from billingd.toml, overridable per-product]  ct/kWh
 ──────────────────────────────────────────────────
@@ -204,8 +206,37 @@ the 2022 Energiesteuersenkungsgesetz reduced motor-fuel rates only) and
 `effective_behg_gas_for_year()`. VAT history is commodity-aware:
 `mwst_rate_for_period()` covers the 2020 COVID 16 % window, and
 `mwst_rate_for_gas_waerme_period()` additionally covers the **7 % gas/Fernwärme window
-01.10.2022–31.03.2024** (§28 Abs. 5/6 UStG). Periods straddling a VAT boundary return
-`None` — split at the Stichtag and merge the invoices.
+01.10.2022–31.03.2024** (§28 Abs. 5/6 UStG).
+
+### A period crossing a rate boundary is refused, not guessed
+
+A period straddling a statutory boundary has **no** correct single rate, so
+billingd **refuses** it with `422` rather than choosing one:
+
+```json
+{
+  "error": {
+    "code": "ZEITRAUM_UEBERSCHREITET_SATZGRENZE",
+    "category": "GAS",
+    "period_from": "2024-03-01",
+    "period_to": "2024-04-30",
+    "stichtage": ["2024-04-01"],
+    "legal_basis": "§28 Abs. 5/6 UStG (Gas/Fernwärme), §10 BEHG"
+  }
+}
+```
+
+Split at each Stichtag and bill the parts. The refusal names them because
+"period rejected" alone is not actionable — `energy_billing::steuer_stichtage_im_zeitraum`
+computes them, covering both the USt windows (commodity-aware: electricity never
+had the 7 % window) and the §10 BEHG CO₂ price, which steps at every calendar-year
+boundary for gas.
+
+This matters because the failure is invisible downstream. A gas period crossing
+31.03.2024 billed whole at 19 % overcharges the March portion, which was legally
+7 %, and the resulting invoice is indistinguishable from a correct one. An
+explicitly configured `[rates] mwst_rate` suppresses the refusal — that is the
+operator taking the decision themselves.
 
 Supply `gas_meter.messung_qm3` + `brennwert_kwh_per_qm3` + `zustandszahl` in the request.
 `billingd` computes `kWh_Hs = m³ × Hs × Z` and uses it for all price positions.
@@ -282,14 +313,28 @@ MwSt
 
 ### WAERMEPUMPE / WALLBOX — §14a Controlled Loads
 
-Identical to `STROM` but §14a positions are **always included** when the product carries
-`steuerungsrabatt_modul1_eur_per_kw_year` and/or `steuerungsrabatt_modul3_eur_per_kw_year`.
-No separate provider — `Product::Waermepumpe` and `Product::Wallbox` variants use
-`ControllableLoadProvider`, which delegates standard electricity billing to `ElectricityProvider`
-and appends §14a Modul 1/3 credit positions.
+Identical to `STROM` but §14a positions are appended by `ControllableLoadProvider`,
+which delegates standard electricity billing to `ElectricityProvider`.
 
-Set `steuerungsrabatt_modul1_eur_per_kw_year` (annual capacity-based NNE reduction) and/or
-`sect14a_modul1_nne_reduktion_ct_per_kwh` (per-kWh NNE reduction) in the product definition.
+BNetzA **BK6-22-300** defines exactly three modules, and the numbering is printed
+on the invoice and shared with the NB-side `grid-billing` engine:
+
+| Modul | What it is | Field |
+|---|---|---|
+| **1** | *pauschale Reduzierung des Netzentgelts* — needs no extra metering, so it is the default where the connection holder makes no choice | `sect14a_modul1_pauschale_eur_per_kw_year` |
+| **2** | *prozentuale Reduzierung des Arbeitspreises* — attaches to the device's **separately metered** energy | `sect14a_modul2_nne_reduktion_ct_per_kwh` |
+| **3** | *zeitvariable Netzentgelte* (from 01.04.2025) — three Tarifstufen HT/ST/NT, requires an iMSys | `sect14a_modul3_nne_ht/st/nt_ct_per_kwh` + `sect14a_modul3` quantities |
+
+**Modul 2 and Modul 3 are mutually exclusive** — both re-price the Arbeitspreis, so
+holding both would reduce the same network usage twice. Configuring both is refused
+with `MODUL2_AND_MODUL3`. Modul 1 composes with either. Setting the Modul 3 bands
+alongside a flat NNE Arbeitspreis is refused with `MODUL3_AND_FLAT_NNE`, for the
+same double-charging reason.
+
+A **Steuerungsentschädigung** (`sect14a_steuerungsentschaedigung_ct_per_kwh` /
+`_eur_per_kw_year`) compensates a dispatch that actually happened. It carries no
+module number: all three BK6-22-300 modules are rate reductions, none of them a
+payment for a Steuerungseingriff.
 
 ### HEMS / EMOBILITY / ENERGIEDIENSTLEISTUNG / BUNDLE
 
@@ -685,6 +730,14 @@ seller_bic    = "COBADEFFXXX"            # BT-86 (optional)
   `rechnungstyp`; the exact label rides as the `rechnungsart` ZusatzAttribut) and
   settles the paid advances passed as `"abschlaege": [{datum, betrag_eur,
   ust_satz}]` — each at the VAT rate it was invoiced at (§ 14 Abs. 5 UStG).
+- **§40c Abs. 1 issue deadline**: six weeks after the end of the billed period,
+  six weeks after the end of the Lieferverhältnis for a Schlussrechnung, and
+  **three weeks** where §40b Abs. 1 monthly billing applies. The short deadline
+  follows the agreed **cadence** — send `"monatliche_abrechnung": true`, which
+  the `[billing_runs]` worker sets from the contract's `abrechnungszyklus`. It is
+  not inferred from how long the period happens to be: a ten-day move-out
+  Schlussrechnung is not monthly billing and keeps its six weeks. Missing the
+  deadline raises `SECT40C_DEADLINE_EXCEEDED` on the invoice.
 - **Verbraucherinformationen (§40 Abs. 2 EnWG)**: every `rechnung_json`
   carries the supplier identity from config plus the statutory hints
   (Schlichtungsstelle Energie § 111b EnWG, BNetzA Verbraucherservice,
@@ -697,7 +750,17 @@ Every calculated invoice is scored by `billingd::risk` (`[risk]`, default
 on): coded findings — Σ-Steuerbeträge-Abgleich, USt-Satz-Validität,
 Null-/Negativverbrauch, Schätzwert-Ketten (§ 60 Abs. 2 MsbG),
 Perioden-Überlappung/-Lücke zur Vorrechnung, rollende Abweichung — summieren
-zu 0–100. Ab `hold_at` (Standard 80) wird der Versand angehalten:
+zu 0–100.
+
+`MWST_STICHTAG_IM_ZEITRAUM` und `BEHG_JAHRESGRENZE_IM_ZEITRAUM` wiegen **allein
+schon 80** und erreichen damit die HELD-Bande. Sie melden nicht „das sieht
+ungewöhnlich aus", sondern „für diesen Zeitraum gibt es **keinen** korrekten
+Einzelsatz" — was auch immer abgerechnet wurde, ist für einen Teil falsch.
+billingd weist solche Zeiträume bereits vorher ab; das Gewicht ist die
+Absicherung für Pfade, die dennoch bis zur Bewertung kommen (ein fest
+konfigurierter Satz, eine zur Rechnung beförderte Vorschau).
+
+Ab `hold_at` (Standard 80) wird der Versand angehalten:
 `GET /api/v1/billing/review-queue` listet REVIEW/HELD,
 `POST /api/v1/billing/{id}/release` gibt frei und versendet das CloudEvent.
 `risk_score`/`risk_band`/`risk_findings` sind auf jedem Record persistiert

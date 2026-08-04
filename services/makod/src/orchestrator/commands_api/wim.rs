@@ -67,8 +67,8 @@ pub(super) fn cmd_wim_rechnung_annehmen<'a>(
 > {
     Box::pin(async move {
         let invoice_ref = extract_invoice_ref(p)?;
-        dispatch_to_process::<WimRechnungWorkflow, _>(s, &invoice_ref, "wim-rechnung", || {
-            WimRechnungCommand::Settle
+        dispatch_to_process::<WimInvoicWorkflow, _>(s, &invoice_ref, "wim-invoic", || {
+            WimInvoicCommand::SettleInvoice
         })
         .await
     })
@@ -87,8 +87,8 @@ pub(super) fn cmd_wim_rechnung_ablehnen<'a>(
             .and_then(|v| v.as_str())
             .unwrap_or("Automatisch ermittelte Abweichung — WiM 31009")
             .to_owned();
-        dispatch_to_process::<WimRechnungWorkflow, _>(s, &invoice_ref, "wim-rechnung", || {
-            WimRechnungCommand::Dispute { reason }
+        dispatch_to_process::<WimInvoicWorkflow, _>(s, &invoice_ref, "wim-invoic", || {
+            WimInvoicCommand::DisputeInvoice { reason }
         })
         .await
     })
@@ -164,18 +164,15 @@ pub(super) async fn dispatch_wim_geraetewechsel_beauftragen(
         message_ref,
     };
 
-    // Idempotency: one active device-change process per MeLo.
-    let existing = state
-        .store
-        .as_process_registry()
-        .lookup_correlated(state.tenant_id, melo_id.as_str())
-        .await
-        .map_err(DispatchError::Engine)?;
-    if let Some(first) = existing
-        .into_iter()
-        .find(|id| id.workflow_id.name.as_ref() == mako_wim::WORKFLOW_NAME)
+    // Duplicate guard — a meter can be changed more than once, so only a
+    // device change still in flight blocks. See `find_occupying_process`.
+    if let Some(dup_id) = find_occupying_process::<WimDeviceChangeWorkflow>(
+        state,
+        melo_id.as_str(),
+        mako_wim::WORKFLOW_NAME,
+    )
+    .await?
     {
-        let dup_id = first.process_id;
         tracing::warn!(
             melo_id = %melo_id,
             process_id = %dup_id,

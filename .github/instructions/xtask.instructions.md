@@ -49,10 +49,15 @@ span, reporting any coverage gaps.
 cargo xtask import-codelists    # imports BDEW code lists (CSV/XLSX from regulatories/)
 cargo xtask import-xml-ahb      # imports AHB rules from BDEW XML exports
 cargo xtask extract-pdf         # extracts tables from BDEW PDFs
+cargo xtask validate-extraction # measures a draft against the curated profile beside it
 ```
+
+**A draft is never a drop-in profile.** `validate-extraction` classifies every
+Prüfidentifikator as `exact`, `superset`, `subset` or `differs` against the
+curated `ahb.json`. A `superset` marks more segments mandatory than the AHB
+requires, so promoting it **rejects valid messages** — worse than the vacuous
+validation an unimported PID has. The UTILMD draft is currently `exact` for 2 of
+104 PIDs and a superset for the other 102.
 
 These tasks write into `crates/edi-energy/profiles/` — always run `cargo xtask codegen` and `cargo xtask validate-profiles` after importing.
 
-## Smoke Tests
-
-`services/makod/tests/smoke.rs` calls the prebuilt `target/debug/xtask`. After changing any xtask CLI flags, run `cargo build -p xtask` before running smoke tests or you will see stale-CLI errors.

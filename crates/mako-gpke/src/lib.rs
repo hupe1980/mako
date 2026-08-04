@@ -14,37 +14,34 @@
 //!
 //! | PID   | Process name (AHB)                                        | Status |
 //! |-------|-----------------------------------------------------------|--------|
-//! | 55001 | Anfrage Lieferbeginn Strom (LFN → NB)                     | ✅ Implemented |
-//! | 55002 | Anfrage Lieferende Strom (LFN → NB)                       | ✅ Implemented |
-//! | 55016 | Kündigung Lieferbeginn (LFN → LFA)                       | ✅ Implemented |
+//! | 55001 | Anmeldung verb. MaLo — Lieferbeginn (LFN → NB)            | ✅ Implemented |
+//! | 55004 | Abmeldung — Lieferende (LFN → NB)                         | ✅ Implemented |
+//! | 55016 | Kündigung Lieferbeginn (LFN → LFA)                        | ✅ Implemented |
+//! | 55077 | Anmeldung erz. MaLo (LFN → NB, BK6-24-174)                | ✅ Implemented |
+//! | 55557 | Änderung MSB-Abrechnungsdaten (GPKE Teil 4)               | Registered, no receiver |
 //!
 //! #### Outbound ANTWORT — derived by `GpkeSupplierChangeWorkflow`, NOT routed (NB role)
 //!
+//! Each ANFRAGE has exactly one Bestätigung/Ablehnung pair. The pairs are *not*
+//! `+1/+2`: 55077 rejects with 55080 because 55079 is unassigned.
+//!
 //! | PID   | Process name (AHB)                              | Derived from   |
 //! |-------|-------------------------------------------------|----------------|
-//! | 55003 | Bestätigung Lieferbeginn (NB → LFN)             | 55001 accepted |
-//! | 55004 | Ablehnung Lieferbeginn (NB → LFN)               | 55001 rejected |
-//! | 55005 | Bestätigung Lieferende (NB → LFN)               | 55002 accepted |
-//! | 55006 | Ablehnung Lieferende (NB → LFN)                 | 55002 rejected |
-//! | 55017 | Bestätigung Kündigung Lieferbeginn (LFA → LFN)  | 55016 accept  |
-//! | 55018 | Ablehnung Kündigung Lieferbeginn (LFA → LFN)    | 55016 reject  |
+//! | 55002 | Bestätigung Anmeldung verb. MaLo (NB → LFN)     | 55001 accepted |
+//! | 55003 | Ablehnung Anmeldung verb. MaLo (NB → LFN)       | 55001 rejected |
+//! | 55005 | Bestätigung Abmeldung (NB → LFN)                | 55004 accepted |
+//! | 55006 | Ablehnung Abmeldung (NB → LFN)                  | 55004 rejected |
+//! | 55017 | Bestätigung Kündigung Lieferbeginn (LFA → LFN)  | 55016 accepted |
+//! | 55018 | Ablehnung Kündigung Lieferbeginn (LFA → LFN)    | 55016 rejected |
+//! | 55078 | Bestätigung Anmeldung erz. MaLo (NB → LFN)      | 55077 accepted |
+//! | 55080 | Ablehnung Anmeldung erz. MaLo (NB → LFN)        | 55077 rejected |
 //!
 //! #### Inbound ANTWORT — routed to `gpke-lf-anmeldung` (LF role)
 //!
 //! When `makod` acts as **Lieferant**, it sends the outbound ANFRAGE and
-//! subsequently receives the NB/LFA response via AS4.  These PIDs are
-//! registered to route back to [`GpkeLfAnmeldungWorkflow`].
-//!
-//! | PID   | Process name (AHB)                              | Initiated by   |
-//! |-------|-------------------------------------------------|----------------|
-//! | 55003 | Bestätigung Lieferbeginn (NB → LFN)             | 55001 Anfrage  |
-//! | 55004 | Ablehnung Lieferbeginn (NB → LFN)               | 55001 Anfrage  |
-//! | 55005 | Bestätigung Lieferende (NB → LFN)               | 55002 Anfrage  |
-//! | 55006 | Ablehnung Lieferende (NB → LFN)                 | 55002 Anfrage  |
-//! | 55017 | Bestätigung Kündigung Lieferbeginn (LFA → LFN)  | 55016 Kündigung|
-//! | 55018 | Ablehnung Kündigung Lieferbeginn (LFA → LFN)    | 55016 Kündigung|
-//! | 55078 | Bestätigung Anmeldung erz. MaLo (NB → LFN)      | 55077 Anfrage  |
-//! | 55080 | Ablehnung Anmeldung erz. MaLo (NB → LFN)        | 55077 Anfrage  |
+//! subsequently receives the NB/LFA response via AS4. These are the same eight
+//! PIDs derived above, registered to route back to [`GpkeLfAnmeldungWorkflow`]
+//! (see `ANTWORT_PIDS_LF`).
 //!
 //! #### Sperrung / Entsperrung — routed to `gpke-sperrung`
 //!
@@ -110,10 +107,11 @@
 //! (Ablehnung) are derived by [`GpkeBeendigungZuordnungWorkflow`]. See
 //! [`beendigung_zuordnung`] for the full model.
 //!
-//! The 3 inbound ANFRAGE PIDs share [`GpkeSupplierChangeWorkflow`] (workflow name:
+//! The 4 answerable inbound ANFRAGE PIDs (`UTILMD_ANFRAGE_PIDS`) share
+//! [`GpkeSupplierChangeWorkflow`] (workflow name:
 //! `"gpke-supplier-change"`). The `pruefidentifikator` stored in
 //! [`wechselprozesse::InitiatedData`] lets read-models distinguish variants.
-//! The derived ANTWORT PIDs (55003–55006, 55017, 55018) are recorded in the
+//! The derived ANTWORT PIDs (55002/55003, 55005/55006, 55017, 55018) are recorded in the
 //! `AntwortGesendet` event but are not routed as inbound messages.
 //!
 //! ### INVOIC-based billing processes (GPKE Netznutzungsabrechnung / MMM Strom)
@@ -134,8 +132,8 @@
 //! PIDs 31007/31008 (Aggreg. MMM-Rechnung NB → MGV, Gas-only) belong to
 //! `mako-gabi-gas` `gabi-gas-invoic` — MGV is a Gas-only market role.
 //! PID 31009 (MSB-Rechnung, multi-domain: GPKE Teil 3 / WiM Strom Teil 1) is
-//! registered by `mako-wim` (`wim-rechnung`) to avoid double-registration;
-//! see `crates/mako-wim/src/rechnung.rs`.
+//! registered by `mako-wim` (`wim-invoic`) to avoid double-registration;
+//! see `crates/mako-wim/src/invoic.rs`.
 //!
 //! ## Architecture
 //!
@@ -321,8 +319,8 @@ pub use utilts::{
 pub use wechselprozesse::{
     GPKE_PROCESS_RESPONSE_LABEL, GpkeSupplierChangeWorkflow, IFTSTA_PIDS as IFTSTA_VOLLZUGS_PIDS,
     InitiatedData, InitiatedDetails, SupplierChangeCommand, SupplierChangeEvent,
-    SupplierChangeProjection, SupplierChangeRecord, SupplierChangeState, UTILMD_PIDS,
-    WORKFLOW_NAME as SUPPLIER_CHANGE_WORKFLOW_NAME,
+    SupplierChangeProjection, SupplierChangeRecord, SupplierChangeState, UTILMD_ANFRAGE_PIDS,
+    UTILMD_PIDS, WORKFLOW_NAME as SUPPLIER_CHANGE_WORKFLOW_NAME,
 };
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
@@ -357,7 +355,7 @@ pub use wechselprozesse::{
 /// to prevent both modules from claiming the same PIDs.
 ///
 /// **Not registered (outbound-only):**
-/// - PIDs 55003–55006, 55017, 55018 are outbound ANTWORT messages derived by
+/// - PIDs 55002/55003, 55005/55006, 55017, 55018 are outbound ANTWORT messages derived by
 ///   `GpkeSupplierChangeWorkflow::handle`. They are never routed as inbound.
 /// - PIDs 17134, 17135 are outbound ORDERS messages dispatched via the outbox
 ///   by `GpkeKonfigurationWorkflow`. They are never routed as inbound.
@@ -421,7 +419,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
     ) {
         // UTILMD inbound ANFRAGE PIDs — routed to gpke-supplier-change.
         // Only inbound request PIDs are registered. The outbound ANTWORT PIDs
-        // (55003–55006, 55017, 55018) are derived internally and never routed as inbound.
+        // (55002/55003, 55005/55006, 55017, 55018) are derived internally and never routed as inbound.
         for &pid in UTILMD_PIDS {
             router.register(pid, "gpke-supplier-change");
         }
@@ -546,7 +544,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             }
         }
 
-        // LF-side Anmeldung: inbound NB/LFA response PIDs (55003–55006, 55017, 55018, 55078, 55080).
+        // LF-side Anmeldung: inbound NB/LFA response PIDs (55002/55003, 55005/55006, 55017, 55018, 55078, 55080).
         // Registered so the AS4 inbound layer can route them by conversation ID
         // to the correct GpkeLfAnmeldungWorkflow instance (makod acting as LF).
         // 55078 = Bestätigung Anmeldung erz. MaLo (NB → LFN)

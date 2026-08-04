@@ -106,7 +106,7 @@ graph LR
    Returns `SettlementResult` (domain type, no BO4E dep) with:
    - **`counterparty_mp_id`** — auto-populated from `lf_mp_id` (NNE/MMM) or `msb_mp_id` (PID 31009)
    - **`CalculationTrace`** per position — `explanation`, `legal_refs`, `tariff_source`, `gross_eur`
-   - **`LegalReference`** list — e.g. `StromNEV §21`, `KAV §2 Abs. 2`, `§14a EnWG Modul 2`
+   - **`LegalReference`** list — e.g. `StromNEV §21`, `KAV §2 Abs. 2`, `§14a EnWG Modul 3`
    - **`Sparte`** on input drives legal refs + `SettlementType` automatically (`Gas` → `GasNEV §14`; NN-Rechnung PID 31002 for both Sparten)
 
    `netzbilanzd` calls `into_rechnung()` locally before validation and serialization.
@@ -182,7 +182,7 @@ surplus energy the network absorbed, and that surplus is reimbursed.
 | 2 | Netznutzung Leistung (RLM) | `spitzenleistung_kw × EUR/kW` | When `spitzenleistung_kw` supplied |
 | 3 | Konzessionsabgabe | `kwh × ka_ct/kWh ÷ 100` | When `ka_satz_ct_per_kwh` supplied |
 
-### §14a Modul 2 — Time-of-Use NNE (mandatory since 01.01.2024)
+### §14a Modul 3 — zeitvariable Netzentgelte (offered since 01.04.2025)
 
 For controllable loads (Wärmepumpen, Wallboxen, §14a-eligible assets), set
 `arbeitsmenge_ht_kwh` **and** `arbeitsmenge_nt_kwh` to split the Arbeit position
@@ -190,8 +190,9 @@ into separate HT (Hochlast) and NT (Niedertarif) positions:
 
 | # | Position | Formula | Condition |
 |---|---|---|---|
-| 1 | Netznutzung Arbeit HT | `ht_kwh × ht_ct/kWh ÷ 100` | HT/NT split supplied |
-| 2 | Netznutzung Arbeit NT | `nt_kwh × nt_ct/kWh ÷ 100` | HT/NT split supplied |
+| 1 | Netznutzung Arbeit HT | `ht_kwh × ht_ct/kWh ÷ 100` | Tarifstufen supplied |
+| 2 | Netznutzung Arbeit ST | `st_kwh × st_ct/kWh ÷ 100` | Tarifstufen supplied |
+| 3 | Netznutzung Arbeit NT | `nt_kwh × nt_ct/kWh ÷ 100` | Tarifstufen supplied |
 | 3 | Netznutzung Leistung (RLM) | `spitzenleistung_kw × EUR/kW` | When set |
 | 4 | Konzessionsabgabe | `(ht_kwh + nt_kwh) × ka_ct/kWh ÷ 100` | When set |
 
@@ -199,7 +200,7 @@ into separate HT (Hochlast) and NT (Niedertarif) positions:
 - HT/NT split → `edmd GET /api/v1/billing-period/{malo_id}` (OBIS codes HT/NT)
 - Band prices → `marktd GET /api/v1/preisblaetter/{nb_mp_id}` → field `zeitvariable_preispositionen`
 
-### §14a Modul 1 — Flat reduction (mandatory offer since 01.01.2024)
+### §14a Modul 1 — pauschale Reduzierung (offered since 01.01.2024)
 
 For controllable loads that choose Modul 1 instead of HT/NT metering, set
 `sect14a_modul1_reduction_factor` (e.g. `0.85` for 15% reduction per BK6-22-300 Anlage 2):
@@ -208,8 +209,15 @@ For controllable loads that choose Modul 1 instead of HT/NT metering, set
 |---|---|---|---|
 | 1 | Netznutzung Arbeit §14a Modul 1 (85% Reduzierung) | `kwh × (ct × 0.85) ÷ 100` | `sect14a_modul1_reduction_factor` set |
 
-> Modul 1 and Modul 2 (HT/NT) are **mutually exclusive**. The validator rejects both
-> being set simultaneously (`MODUL1_AND_MODUL2_CONFLICT`).
+> **Module numbering (BNetzA BK6-22-300).** Modul 1 is the *pauschale
+> Reduzierung*, Modul 2 the *prozentuale Reduzierung des Arbeitspreises* on the
+> device's separately metered energy, and Modul 3 the *zeitvariablen
+> Netzentgelte* with three Tarifstufen. Modul 2 and Modul 3 are mutually
+> exclusive — both re-price the Arbeitspreis.
+>
+> `ArbeitspreisModell` holds exactly one model at a time, so the Modul 1 + Modul 3
+> combination BK6-22-300 permits is **not yet representable** here. A connection
+> using both is billed under whichever model is supplied.
 
 ### MMM billing positions
 
@@ -291,9 +299,9 @@ the calculation — a BNetzA §20 EnWG regulatory requirement.
 ```
 GET /api/v1/billing/drafts/{id}
 → rechnung JSONB
-  rechnungspositionen[0].positionstext = "Netznutzung Arbeit HT (§14a Modul 2)"
+  rechnungspositionen[0].positionstext = "Netznutzung Arbeit HT (§14a Modul 3)"
   trace.explanation  = "600.000 kWh × 0.042000 EUR/kWh = 25.20000 EUR"
-  trace.legal_refs   = ["§14a EnWG Modul 2", "BNetzA BK6-22-300", "StromNEV §21"]
+  trace.legal_refs   = ["§14a EnWG Modul 3", "BNetzA BK6-22-300", "StromNEV §21"]
   trace.tariff_source.sheet_id = "Preisblatt-NNE-2026-Q1"
   trace.gross_eur    = 25.200000
 ```
@@ -318,7 +326,7 @@ flowchart LR
 | Billing type | Arbeit basis | Leistung basis | KA basis | MMM basis |
 |---|---|---|---|---|
 | `nne_strom` | StromNEV §21 | StromNEV §17 | KAV §2 Abs. 2 | — |
-| `nne_strom` + §14a | §14a EnWG Modul 2 · BNetzA BK6-22-300 | StromNEV §17 | KAV §2 Abs. 2 | — |
+| `nne_strom` + §14a | §14a EnWG Modul 3 · BNetzA BK6-22-300 | StromNEV §17 | KAV §2 Abs. 2 | — |
 | `nne_gas` | GasNEV §14 | — | — | — |
 | `mmm_strom` | — | — | — | GPKE (BK6-24-174) Teil 1 Kap. 8.4 · GPKE BK6-22-024 |
 | `mmm_gas` | — | — | — | GaBi Gas 2.1 (BK7-24-01-008) · GeLi Gas 3.0 (BK7-24-01-009) |
@@ -530,7 +538,24 @@ sequenceDiagram
 | `POST`| `/api/v1/redispatch/kostenblatt/{activation_id}/compute` | Auto-compute via edmd |
 | `POST`| `/api/v1/redispatch/kostenblatt/submit/{year}/{month}` | Submit all pending |
 | `GET` | `/api/v1/redispatch/kostenblatt/gaps/{year}/{month}` | Activations still missing a Kostenblatt for the period |
-| `POST`| `/api/v1/redispatch/verguetung/{activation_id}/compute` | Compute the §13a Abs. 2 EnWG angemessene Vergütung for one activation (Ausfallarbeit via edmd Lastgang) |
+| `POST`| `/api/v1/redispatch/verguetung/{activation_id}/compute` | Compute the §13a Abs. 2 EnWG angemessene Vergütung for one activation. **`abwicklung` is required** — it selects the Ausfallarbeit basis (see below) |
+
+### The redispatch case selects the §13a counterfactual
+
+§13a Abs. 2 measures the curtailed energy differently in the two cases, and the
+two produce different figures for the same activation:
+
+| `abwicklung` | Counterfactual | Where the Ausfallarbeit comes from |
+|---|---|---|
+| `DULDUNGSFALL` | The NB steered the resource, so what the plant would have produced was never transmitted | The measured edmd Lastgang over the activation window |
+| `AUFFORDERUNGSFALL` | The EIV steered to a transmitted schedule, and that schedule *is* the counterfactual | `ausfallarbeit_kwh_override`, taken from that schedule — **required**; the request is refused with `422` without it |
+
+Using the Lastgang for an Aufforderungsfall would settle against what happened
+rather than against what was instructed — a money error in whichever direction
+the plant deviated, and one nothing downstream can detect. The chosen basis is
+carried into the result and its calculation trace, so an audit can see which
+counterfactual a figure rests on.
+
 
 ---
 

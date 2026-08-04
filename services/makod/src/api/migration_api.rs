@@ -78,8 +78,8 @@ use mako_redispatch::{
     },
 };
 use mako_wim::{
-    WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimPreisanfrageWorkflow,
-    WimPreislisteWorkflow, WimRechnungWorkflow, WimStammdatenWorkflow,
+    WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInvoicWorkflow,
+    WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
     WimSteuerungsauftragWorkflow,
 };
 use mako_wim_gas::{
@@ -351,8 +351,8 @@ pub async fn dispatch_migrations(
                 report,
                 count,
                 store,
-                WimRechnungWorkflow,
-                "wim-rechnung",
+                WimInvoicWorkflow,
+                "wim-invoic",
                 from,
                 to
             );

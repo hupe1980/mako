@@ -190,30 +190,27 @@ pub enum QuantityUnit {
 /// must offer at least Modul 1 to all eligible customers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum Sect14aModule {
-    /// Modul 1 — pauschale Reduzierung (flat reduction).
+    /// Modul 1 — **pauschale Reduzierung des Netzentgelts**.
     ///
-    /// The NB applies a fixed percentage reduction to the Arbeitspreis (or
-    /// Arbeitspreis + Leistungspreis) for the entire billing period.
-    /// Reduction factor = 85 % (i.e. customer pays 85 % of full rate) per BK6-22-300
-    /// Anlage 2. The NB may set a different approved rate in their tariff sheet.
-    ///
-    /// Equivalent UTILTS segment: `CCI+ZG6 CAV+Z28:::0.85` (multiplier).
+    /// A flat reduction applied for the whole billing period, published by the
+    /// NB either as an annual EUR amount or as a factor on the rate. It needs no
+    /// additional metering, which is why it is the default where the connection
+    /// holder makes no choice. It may be **combined with Modul 3**.
     Modul1,
-    /// Modul 2 — variable Netzentgelte (time-variable, HT/NT split).
+    /// Modul 2 — **prozentuale Reduzierung des Arbeitspreises**.
     ///
-    /// Two Arbeitspreis tiers: Hochlast (HT, higher price) and Niedertarif (NT,
-    /// lower price). Periods are defined in the UTILTS Zählzeitdefinition published
-    /// by the NB. Required for iMSys meters with quarter-hour metering.
+    /// The Arbeitspreis of the Netzentgelt is reduced by a percentage for the
+    /// controllable device, which therefore needs its **own metering** — the
+    /// reduction attaches to that device's energy, not to the whole connection.
+    ///
+    /// **Mutually exclusive with Modul 3** (see [`Sect14aModule::combinable_with`]).
     Modul2,
-    /// Modul 3 — Spotpreis-Netzentgelt (dynamic, spot-price linked).
+    /// Modul 3 — **zeitvariable Netzentgelte**, available from 01.04.2025.
     ///
-    /// NNE follows the intraday or day-ahead electricity spot price. The calculation
-    /// basis is the `PreisblattNetznutzung.spotpreisNetzentgelt` formula defined by
-    /// the NB. Requires smart meter (iMSys) with 15-min resolution.
-    ///
-    /// Note: Modul 3 rates are not yet calculable from static inputs alone —
-    /// populate `regulatory_reduction_factor` in the trace with the effective
-    /// period-average rate when using this module.
+    /// Three Tarifstufen — Hochtarif, Standardtarif and Niedertarif — whose
+    /// windows the NB publishes in the UTILTS Zählzeitdefinition. Requires an
+    /// intelligent metering system. It may be combined with Modul 1 but **not**
+    /// with Modul 2.
     Modul3,
 }
 
@@ -224,13 +221,27 @@ impl Sect14aModule {
         "BK6-22-300"
     }
 
+    /// Whether two modules may be held at once.
+    ///
+    /// Modul 1 is a flat reduction that needs no metering, so it composes with
+    /// the time-variable Modul 3. Modul 2 and Modul 3 both re-price the
+    /// Arbeitspreis and cannot both apply — a connection holding both would have
+    /// its network usage reduced twice.
+    #[must_use]
+    pub fn combinable_with(self, other: Self) -> bool {
+        !matches!(
+            (self, other),
+            (Self::Modul2, Self::Modul3) | (Self::Modul3, Self::Modul2)
+        )
+    }
+
     /// Display label for the module.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Modul1 => "§14a EnWG Modul 1 (pauschale Reduzierung)",
-            Self::Modul2 => "§14a EnWG Modul 2 (HT/NT variable)",
-            Self::Modul3 => "§14a EnWG Modul 3 (Spotpreis)",
+            Self::Modul2 => "§14a EnWG Modul 2 (prozentuale Arbeitspreisreduzierung)",
+            Self::Modul3 => "§14a EnWG Modul 3 (zeitvariable Netzentgelte)",
         }
     }
 }
@@ -305,18 +316,83 @@ impl SettlementType {
 
 /// Lifecycle status of a settlement result.
 ///
-/// Settlements are never destroyed — every correction or cancellation creates
-/// a new result that references the original. This ensures an immutable audit trail.
+/// Settlements are never destroyed — a correction or cancellation produces a new
+/// result and leaves the original intact.
+///
+/// **Which document supersedes which is not recorded here.** The invoice numbers
+/// linking a correction to what it replaces live on
+/// [`InvoiceDocument::correction_of`], because the same pair of settlements can
+/// be presented under different invoice numbers. What *is* recorded here is
+/// [`SettlementResult::korrektur_grund`] — why the recalculation happened, which
+/// is a fact about the settlement rather than about the document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum SettlementStatus {
     /// Initial calculation — no prior settlement exists for this period.
     Initial,
-    /// Correction of a prior settlement (references `correction_of`).
+    /// Correction of a prior settlement.
     Correction,
     /// Cancellation of a prior settlement — all positions are negated.
     Reversal,
     /// Final settlement — no further corrections expected.
     Final,
+}
+
+// ── KorrekturGrund ────────────────────────────────────────────────────────────
+
+/// Why a settlement was recalculated.
+///
+/// A correction that cannot say why it happened is not an audit trail. The
+/// invoice numbers alone answer *what* was replaced; they never answer whether
+/// the meter was wrong, the tariff was wrong, or the law changed underneath —
+/// and those have different consequences. A retroactive regulatory change is a
+/// lawful recalculation; a Rechenfehler in the same period is a defect that
+/// should be counted and investigated.
+///
+/// Carried on every non-`Initial` [`SettlementResult`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "bo4e", derive(serde::Deserialize))]
+pub enum KorrekturGrund {
+    /// Corrected metering — a replaced or re-read value (§ 60 Abs. 2 MsbG).
+    Messwertkorrektur,
+    /// The wrong tariff or price sheet version was applied.
+    Tarifkorrektur,
+    /// Master data was wrong — Netzebene, KA-Klasse, Konzessionsgemeinde.
+    Stammdatenkorrektur,
+    /// A regulatory change applies retroactively to a settled period.
+    RegulatorischeAenderung,
+    /// An arithmetic or logic error in the original settlement.
+    Rechenfehler,
+    /// A clearing result between the parties (Mehr-/Mindermengen, MaBiS).
+    Clearing,
+    /// Anything else — carry the detail in the settlement's warnings.
+    Sonstiges,
+}
+
+impl KorrekturGrund {
+    /// Stable machine-readable code for structured records and reporting.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Messwertkorrektur => "MESSWERTKORREKTUR",
+            Self::Tarifkorrektur => "TARIFKORREKTUR",
+            Self::Stammdatenkorrektur => "STAMMDATENKORREKTUR",
+            Self::RegulatorischeAenderung => "REGULATORISCHE_AENDERUNG",
+            Self::Rechenfehler => "RECHENFEHLER",
+            Self::Clearing => "CLEARING",
+            Self::Sonstiges => "SONSTIGES",
+        }
+    }
+
+    /// Whether this reason indicates a defect in the original settlement rather
+    /// than a lawful recalculation.
+    ///
+    /// Separating the two is the point of recording the reason: a rising count
+    /// of `Rechenfehler` is an engineering signal, while a rising count of
+    /// `RegulatorischeAenderung` is not.
+    #[must_use]
+    pub const fn indicates_defect(self) -> bool {
+        matches!(self, Self::Rechenfehler | Self::Stammdatenkorrektur)
+    }
 }
 
 // ── LegalReference ────────────────────────────────────────────────────────────
@@ -572,8 +648,10 @@ pub enum WarningSeverity {
 /// | `BillingPositionKind` | `BdewArtikelnummer` | INVOIC AHB ref |
 /// |---|---|---|
 /// | `NneArbeit` | `Wirkarbeit` | PID 31002 (NN-Rechnung) Arbeit |
-/// | `NneArbeitHt` | `Wirkarbeit` | PID 31002 §14a Modul 2 HT |
-/// | `NneArbeitNt` | `Wirkarbeit` | PID 31002 §14a Modul 2 NT |
+/// | `NneArbeitHt` | `Wirkarbeit` | PID 31002 §14a Modul 3 HT |
+/// | `NneArbeitSt` | `Wirkarbeit` | PID 31002 §14a Modul 3 ST |
+/// | `NneArbeitNt` | `Wirkarbeit` | PID 31002 §14a Modul 3 NT |
+/// | `NneArbeitModul2` | `Wirkarbeit` | PID 31002 §14a Modul 2 (rate reduced) |
 /// | `NneArbeitModul1` | `Wirkarbeit` | PID 31002 §14a Modul 1 (rate reduced) |
 /// | `NneLeistung` | `Leistung` | PID 31002 RLM kW charge |
 /// | `NneGasGrundpreis` | `Grundpreis` | PID 31002 Gas monthly base fee |
@@ -591,15 +669,21 @@ pub enum BillingPositionKind {
     /// Netznutzungsentgelt Arbeit — flat-rate active energy charge (kWh).
     /// SLP or Gas. → `BdewArtikelnummer::Wirkarbeit`
     NneArbeit,
-    /// §14a Modul 2 Hochlast (HT) Arbeit — time-variable higher-price band.
+    /// §14a Modul 3 Hochtarif (HT) Arbeit — zeitvariables Netzentgelt, high band.
     /// → `BdewArtikelnummer::Wirkarbeit`
     NneArbeitHt,
-    /// §14a Modul 2 Niedertarif (NT) Arbeit — time-variable lower-price band.
+    /// §14a Modul 3 Standardtarif (ST) Arbeit — zeitvariables Netzentgelt, middle band.
+    /// → `BdewArtikelnummer::Wirkarbeit`
+    NneArbeitSt,
+    /// §14a Modul 3 Niedertarif (NT) Arbeit — zeitvariables Netzentgelt, low band.
     /// → `BdewArtikelnummer::Wirkarbeit`
     NneArbeitNt,
-    /// §14a Modul 1 Arbeit — flat percentage reduction applied to Arbeitspreis.
+    /// §14a Modul 1 Arbeit — pauschale Reduzierung applied to the Arbeitspreis.
     /// → `BdewArtikelnummer::Wirkarbeit` (same article, different rate)
     NneArbeitModul1,
+    /// §14a Modul 2 Arbeit — prozentuale Reduzierung of the device's Arbeitspreis.
+    /// → `BdewArtikelnummer::Wirkarbeit` (same article, different rate)
+    NneArbeitModul2,
     /// §14a Modul 3 Spotpreis-NNE — per-dispatch-interval variable rate position.
     ///
     /// One `InvoicePosition` is generated per dispatch interval from
@@ -641,8 +725,12 @@ pub enum BillingPositionKind {
     /// Gas AWH sonstige — other abrechnungswürdige Handlung.
     /// BK7-24-01-009 §5.4. → `BdewArtikelnummer::EntgeltAbrechnung`
     GasAwhSonstige,
-    /// Blindmehrarbeit — reactive energy excess charge.
-    /// StromNEV §18. → `BdewArtikelnummer::Blindmehrarbeit`
+    /// Blindmehrarbeit — reactive energy beyond the free share.
+    ///
+    /// Charged from the Netzbetreiber's published Preisblatt; StromNEV §17
+    /// governs how those Netzentgelte are formed. **Not** §18, which is the
+    /// Entgelt für dezentrale Erzeugung, and not §19, which is Sonderformen der
+    /// Netznutzung. → `BdewArtikelnummer::Blindmehrarbeit`
     Blindmehrarbeit,
     /// Aufschlag für besondere Netznutzung (§19 StromNEV-Umlage).
     ///
@@ -778,8 +866,10 @@ impl BillingPositionKind {
             (
                 K::NneArbeit
                 | K::NneArbeitHt
+                | K::NneArbeitSt
                 | K::NneArbeitNt
                 | K::NneArbeitModul1
+                | K::NneArbeitModul2
                 | K::NneArbeitModul3,
                 ST::NneGas,
             ) => Some("WIRKARBEIT"),
@@ -789,8 +879,10 @@ impl BillingPositionKind {
             (
                 K::NneArbeit
                 | K::NneArbeitHt
+                | K::NneArbeitSt
                 | K::NneArbeitNt
                 | K::NneArbeitModul1
+                | K::NneArbeitModul2
                 | K::NneArbeitModul3
                 | K::NneLeistung,
                 _,
@@ -886,34 +978,64 @@ pub enum ArbeitspreisModell {
     /// A single rate for all metered energy.
     Einheitlich(MengePreis),
 
-    /// **§14a Modul 1** — the published rate reduced by a flat factor.
+    /// **§14a Modul 1** — pauschale Reduzierung des Netzentgelts.
     ///
-    /// BNetzA BK6-22-300 Anlage 2.
+    /// A **flat annual amount** the Netzbetreiber publishes, credited pro rata
+    /// for the settlement period. It does not scale with consumption — that is
+    /// what makes it *pauschal*, and what distinguishes it from
+    /// [`Self::Modul2ProzentualeReduzierung`], which reduces the Arbeitspreis by
+    /// a percentage. The two were structurally identical here once; a factor on
+    /// the Arbeitspreis is Modul 2's mechanism wearing Modul 1's name.
+    ///
+    /// Needs no additional metering, which is why it is the default where the
+    /// connection holder makes no choice.
     Modul1Pauschal {
-        /// The metered energy and its published rate, before reduction.
+        /// The energy delivered in the period, at its published rate. Billed in
+        /// full — Modul 1 does not touch the Arbeitspreis.
+        basis: MengePreis,
+        /// The Netzbetreiber's published annual pauschale, in EUR per year.
+        pauschale_eur_pro_jahr: Decimal,
+        /// The fraction of a year this settlement period covers, so the annual
+        /// pauschale is credited pro rata.
+        jahresanteil: Decimal,
+    },
+
+    /// **§14a Modul 2** — the Arbeitspreis reduced by a percentage.
+    ///
+    /// The reduction attaches to the controllable device's own metered energy,
+    /// so `basis` carries that device's consumption rather than the whole
+    /// connection's.
+    Modul2ProzentualeReduzierung {
+        /// The device's metered energy and its published rate, before reduction.
         basis: MengePreis,
         /// The fraction of that rate actually paid.
         reduktion: Reduktionsfaktor,
     },
 
-    /// **§14a Modul 2** — time-variable rates in a Hoch-/Niedertarif split.
+    /// **§14a Modul 3** — zeitvariable Netzentgelte in three Tarifstufen.
     ///
-    /// Both bands are required: a Modul 2 tariff has both, and permitting one
-    /// would reintroduce the partial state this type exists to prevent.
-    Modul2ZeitVariabel {
+    /// All three bands are required: BK6-22-300 defines Hochtarif, Standardtarif
+    /// and Niedertarif, and permitting a subset would reintroduce the partial
+    /// state this type exists to prevent. A band with no energy carries
+    /// `menge_kwh = 0` rather than being omitted.
+    Modul3ZeitVariabel {
         /// Hochtarif band.
         ht: MengePreis,
+        /// Standardtarif band.
+        st: MengePreis,
         /// Niedertarif band.
         nt: MengePreis,
     },
 
-    /// **§14a Modul 3** — a spot-derived rate per dispatch interval.
+    /// A spot-derived NNE rate per dispatch interval.
     ///
-    /// BNetzA BK6-22-300 Anlage 2 §3. The rates arrive already derived; this
-    /// crate never queries a spot market.
-    Modul3Spotpreis {
+    /// **Not a §14a module.** BK6-22-300 defines exactly three, none of which is
+    /// spot-linked; this models a Netzentgelt whose rate follows the spot price
+    /// under the NB's own `PreisblattNetznutzung` formula. The rates arrive
+    /// already derived — this crate never queries a spot market.
+    SpotpreisNetzentgelt {
         /// The dispatch intervals, each with its own rate.
-        intervalle: Vec<Sect14aModul3Interval>,
+        intervalle: Vec<SpotpreisInterval>,
     },
 }
 
@@ -926,8 +1048,11 @@ impl ArbeitspreisModell {
     pub fn menge_kwh(&self) -> Decimal {
         match self {
             Self::Einheitlich(mp) | Self::Modul1Pauschal { basis: mp, .. } => mp.menge_kwh,
-            Self::Modul2ZeitVariabel { ht, nt } => ht.menge_kwh + nt.menge_kwh,
-            Self::Modul3Spotpreis { intervalle } => intervalle.iter().map(|i| i.menge_kwh).sum(),
+            Self::Modul2ProzentualeReduzierung { basis, .. } => basis.menge_kwh,
+            Self::Modul3ZeitVariabel { ht, st, nt } => ht.menge_kwh + st.menge_kwh + nt.menge_kwh,
+            Self::SpotpreisNetzentgelt { intervalle } => {
+                intervalle.iter().map(|i| i.menge_kwh).sum()
+            }
         }
     }
 
@@ -937,9 +1062,53 @@ impl ArbeitspreisModell {
         match self {
             Self::Einheitlich(_) => None,
             Self::Modul1Pauschal { .. } => Some(Sect14aModule::Modul1),
-            Self::Modul2ZeitVariabel { .. } => Some(Sect14aModule::Modul2),
-            Self::Modul3Spotpreis { .. } => Some(Sect14aModule::Modul3),
+            Self::Modul2ProzentualeReduzierung { .. } => Some(Sect14aModule::Modul2),
+            Self::Modul3ZeitVariabel { .. } => Some(Sect14aModule::Modul3),
+            // A spot-linked Netzentgelt is the NB's own price model, not one of
+            // the three modules BK6-22-300 defines.
+            Self::SpotpreisNetzentgelt { .. } => None,
         }
+    }
+}
+
+// ── Blindarbeit ───────────────────────────────────────────────────────────────
+
+/// Reactive energy and the terms on which its excess is charged.
+///
+/// A Netzbetreiber supplies a *free share* of reactive energy alongside the
+/// active energy delivered, and charges only what exceeds it (Blindmehrarbeit).
+/// The customary boundary is a power factor of cos φ 0,9 — reactive energy up to
+/// **tan φ ≈ 0,4843** of the active energy — though many Preisblätter round that
+/// to a flat 50 %, and some set different shares for inductive and capacitive
+/// draw.
+///
+/// The share is therefore an **input**, not a constant: it is a term of the
+/// Netzbetreiber's price sheet, and hard-coding one would bill some networks
+/// wrongly. [`Blindarbeit::COS_PHI_0_9`] is the documented default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Blindarbeit {
+    /// Reactive energy drawn in the period, in kvarh.
+    pub blindarbeit_kvarh: Decimal,
+    /// Free share of the active energy, as a fraction.
+    ///
+    /// `0.4843` for cos φ 0,9; `0.5` where the Preisblatt rounds it.
+    pub freigrenze_anteil: Decimal,
+    /// Price per excess kvarh, in ct/kvarh, from the Preisblatt.
+    pub preis_ct_per_kvarh: Decimal,
+}
+
+impl Blindarbeit {
+    /// tan φ at cos φ 0,9 — the customary free share, to 4 dp.
+    pub const COS_PHI_0_9: Decimal = rust_decimal::dec!(0.4843);
+
+    /// The chargeable excess in kvarh for the given active energy.
+    ///
+    /// Zero when the draw stays inside the free share; never negative, because
+    /// an unused allowance is not a credit.
+    #[must_use]
+    pub fn mehrarbeit_kvarh(&self, wirkarbeit_kwh: Decimal) -> Decimal {
+        let frei = wirkarbeit_kwh * self.freigrenze_anteil;
+        (self.blindarbeit_kvarh - frei).max(Decimal::ZERO)
     }
 }
 
@@ -1055,6 +1224,11 @@ pub struct SettlementResult {
     pub settlement_type: SettlementType,
     /// Where this settlement sits in the correction lifecycle.
     pub status: SettlementStatus,
+    /// Why this settlement was recalculated.
+    ///
+    /// `None` for an `Initial` settlement and required for every other status —
+    /// see [`SettlementResult::lineage_is_consistent`].
+    pub korrektur_grund: Option<KorrekturGrund>,
     /// The delivery period.
     pub period: SettlementPeriod,
     /// The rules the calculation applied.
@@ -1073,6 +1247,32 @@ pub struct SettlementResult {
     pub total_eur: Decimal,
     /// What the engine could not do, or did with a caveat.
     pub warnings: Vec<SettlementWarning>,
+}
+
+impl SettlementResult {
+    /// Whether the lifecycle status and the recorded reason agree.
+    ///
+    /// An `Initial` settlement corrects nothing and must carry no reason; every
+    /// other status is a recalculation and must say why. A `Correction` with no
+    /// reason is the state this check exists to catch — it looks like a complete
+    /// settlement and answers none of the questions an audit asks of one.
+    #[must_use]
+    pub const fn lineage_is_consistent(&self) -> bool {
+        match self.status {
+            SettlementStatus::Initial => self.korrektur_grund.is_none(),
+            _ => self.korrektur_grund.is_some(),
+        }
+    }
+
+    /// Whether this settlement records a defect in an earlier one.
+    ///
+    /// Distinguishes an engineering signal from a lawful recalculation — see
+    /// [`KorrekturGrund::indicates_defect`].
+    #[must_use]
+    pub fn corrects_a_defect(&self) -> bool {
+        self.korrektur_grund
+            .is_some_and(KorrekturGrund::indicates_defect)
+    }
 }
 
 // ── InvoiceDocument ───────────────────────────────────────────────────────────
@@ -1208,6 +1408,12 @@ pub struct NneInput {
     /// KWKG-Umlage in ct/kWh, overriding the tabled rate.
     pub kwkg_umlage_ct_per_kwh: Option<Decimal>,
 
+    /// Reactive energy and its Preisblatt terms.
+    ///
+    /// `None` = the network does not charge Blindmehrarbeit at this location, or
+    /// the reactive energy was not metered.
+    pub blindarbeit: Option<Blindarbeit>,
+
     /// Optional tariff sheet identifier for audit tracing.
     ///
     /// When set, each position's `trace.tariff_source` references this sheet.
@@ -1228,14 +1434,14 @@ pub struct NneInput {
     /// to derive `nne_rate_ct_per_kwh`. `grid-billing` receives pre-calculated rates —
     /// it never queries EPEX directly.
     ///
-    /// **Empty (default)** when §14a Modul 3 does not apply to this MaLo.
+    /// **Empty (default)** when no spot-linked Netzentgelt applies to this MaLo.
     ///
-    /// **Cannot be combined with `sect14a_modul1_reduction_factor`** — the validator
-    /// returns `InvalidInput` when both are set.
+    /// Selecting this model excludes every other `ArbeitspreisModell` by
+    /// construction — the enum holds one at a time.
     ///
     /// Each interval generates one `InvoicePosition` with
     /// `kind = NneArbeitModul3` and `lastvariable_preisposition_json` populated.
-    #[doc = "§14a Modul 3 per-interval input data."]
+    #[doc = "Spot-linked Netzentgelt per-interval input data."]
     ///
     /// One value rather than twelve loose fields: the four shapes are mutually
     /// exclusive by construction.
@@ -1288,9 +1494,9 @@ pub struct NneInput {
     pub gas_kapazitaet: Option<crate::gas::GasKapazitaet>,
 }
 
-// ── Sect14aModul3Interval ─────────────────────────────────────────────────────
+// ── SpotpreisInterval ─────────────────────────────────────────────────────
 
-/// One controlled dispatch interval for §14a Modul 3 (Spotpreis-Netzentgelt).
+/// One dispatch interval for a spot-linked Netzentgelt (not a §14a module).
 ///
 /// Each interval represents a 15-min period during which the DSO exercised load
 /// control and the NNE rate is derived from the day-ahead spot price via the
@@ -1320,7 +1526,7 @@ pub struct NneInput {
 /// All controllable loads ≥ 3.7 kW registered under §14a must have Modul 1 at minimum;
 /// Modul 3 is the opt-in premium variant (lower NNE when spot prices are low).
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
-pub struct Sect14aModul3Interval {
+pub struct SpotpreisInterval {
     /// UTC start of this controlled dispatch interval (ISO-8601).
     ///
     /// Typically the start of a 15-min settlement slot.
@@ -1694,10 +1900,14 @@ mod input_model_tests {
         });
         assert_eq!(flat.menge_kwh(), dec!(1000));
 
-        let tou = ArbeitspreisModell::Modul2ZeitVariabel {
+        let tou = ArbeitspreisModell::Modul3ZeitVariabel {
             ht: MengePreis {
                 menge_kwh: dec!(600),
                 preis_ct_per_kwh: dec!(4.0),
+            },
+            st: MengePreis {
+                menge_kwh: dec!(0),
+                preis_ct_per_kwh: dec!(0),
             },
             nt: MengePreis {
                 menge_kwh: dec!(400),
@@ -1711,7 +1921,8 @@ mod input_model_tests {
                 menge_kwh: dec!(1000),
                 preis_ct_per_kwh: dec!(3.5),
             },
-            reduktion: Reduktionsfaktor::REGELFALL,
+            pauschale_eur_pro_jahr: dec!(120),
+            jahresanteil: dec!(1) / dec!(12),
         };
         assert_eq!(
             modul1.menge_kwh(),
@@ -1738,31 +1949,70 @@ mod input_model_tests {
                         menge_kwh: dec!(1),
                         preis_ct_per_kwh: dec!(1),
                     },
-                    reduktion: Reduktionsfaktor::REGELFALL,
+                    pauschale_eur_pro_jahr: dec!(120),
+                    jahresanteil: dec!(1) / dec!(12),
                 },
                 Some(M::Modul1),
             ),
             (
-                ArbeitspreisModell::Modul2ZeitVariabel {
+                ArbeitspreisModell::Modul3ZeitVariabel {
                     ht: MengePreis {
                         menge_kwh: dec!(1),
                         preis_ct_per_kwh: dec!(1),
+                    },
+                    st: MengePreis {
+                        menge_kwh: dec!(0),
+                        preis_ct_per_kwh: dec!(0),
                     },
                     nt: MengePreis {
                         menge_kwh: dec!(1),
                         preis_ct_per_kwh: dec!(1),
                     },
                 },
-                Some(M::Modul2),
+                Some(M::Modul3),
             ),
             (
-                ArbeitspreisModell::Modul3Spotpreis { intervalle: vec![] },
-                Some(M::Modul3),
+                // Not a §14a module at all — BK6-22-300 defines exactly three,
+                // none of them spot-linked.
+                ArbeitspreisModell::SpotpreisNetzentgelt { intervalle: vec![] },
+                None,
             ),
         ];
         for (model, expected) in cases {
             assert_eq!(model.sect14a_modul(), expected);
         }
+    }
+
+    /// BK6-22-300 numbers the three modules in a specific way, and this project
+    /// had them shuffled: the time-variable model was labelled Modul 2 and a
+    /// spot-linked Netzentgelt was labelled Modul 3.
+    ///
+    /// Getting this wrong prints the wrong statutory module on a real invoice
+    /// and makes the LF-side and NB-side engines disagree about the same
+    /// connection, so it is pinned here rather than left to a doc comment.
+    #[test]
+    fn the_modules_are_numbered_as_bk6_22_300_defines_them() {
+        use Sect14aModule as M;
+        assert!(M::Modul1.label().contains("pauschale Reduzierung"));
+        assert!(
+            M::Modul2
+                .label()
+                .contains("prozentuale Arbeitspreisreduzierung")
+        );
+        assert!(M::Modul3.label().contains("zeitvariable Netzentgelte"));
+    }
+
+    /// Modul 2 and Modul 3 both re-price the Arbeitspreis, so a connection
+    /// cannot hold both — it would have its network usage reduced twice. Modul 1
+    /// is a flat reduction needing no metering and composes with Modul 3.
+    #[test]
+    fn modul_2_and_modul_3_are_mutually_exclusive() {
+        use Sect14aModule as M;
+        assert!(!M::Modul2.combinable_with(M::Modul3));
+        assert!(!M::Modul3.combinable_with(M::Modul2));
+        assert!(M::Modul1.combinable_with(M::Modul3));
+        assert!(M::Modul3.combinable_with(M::Modul1));
+        assert!(M::Modul1.combinable_with(M::Modul2));
     }
 
     /// A period is ordered by construction; a single day is valid.
@@ -1776,5 +2026,167 @@ mod input_model_tests {
         let january =
             SettlementPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).expect("valid");
         assert_eq!(january.days(), 31, "both bounds are inclusive");
+    }
+}
+
+#[cfg(test)]
+mod korrektur_grund_tests {
+    use super::*;
+
+    /// A correction that cannot say why it happened is not an audit trail.
+    ///
+    /// The invoice numbers answer *what* was replaced; only the reason
+    /// distinguishes a lawful retroactive recalculation from a defect in the
+    /// original settlement, and those have different consequences.
+    #[test]
+    fn a_reason_is_required_for_every_recalculation() {
+        let mut r = sample_result(SettlementStatus::Initial, None);
+        assert!(
+            r.lineage_is_consistent(),
+            "an initial settlement corrects nothing"
+        );
+
+        r.status = SettlementStatus::Correction;
+        assert!(
+            !r.lineage_is_consistent(),
+            "a correction with no reason must be detectable"
+        );
+
+        r.korrektur_grund = Some(KorrekturGrund::Tarifkorrektur);
+        assert!(r.lineage_is_consistent());
+    }
+
+    /// An initial settlement carrying a correction reason is equally inconsistent.
+    #[test]
+    fn an_initial_settlement_carries_no_reason() {
+        let r = sample_result(
+            SettlementStatus::Initial,
+            Some(KorrekturGrund::Rechenfehler),
+        );
+        assert!(!r.lineage_is_consistent());
+    }
+
+    /// Separating defects from lawful recalculations is the point of the field:
+    /// a rising Rechenfehler count is an engineering signal, a rising
+    /// RegulatorischeAenderung count is not.
+    #[test]
+    fn only_some_reasons_indicate_a_defect() {
+        assert!(KorrekturGrund::Rechenfehler.indicates_defect());
+        assert!(KorrekturGrund::Stammdatenkorrektur.indicates_defect());
+        assert!(!KorrekturGrund::RegulatorischeAenderung.indicates_defect());
+        assert!(!KorrekturGrund::Messwertkorrektur.indicates_defect());
+        assert!(!KorrekturGrund::Clearing.indicates_defect());
+    }
+
+    /// The codes are stable — they reach reporting and structured records.
+    #[test]
+    fn the_codes_are_stable() {
+        assert_eq!(
+            KorrekturGrund::Messwertkorrektur.code(),
+            "MESSWERTKORREKTUR"
+        );
+        assert_eq!(
+            KorrekturGrund::RegulatorischeAenderung.code(),
+            "REGULATORISCHE_AENDERUNG"
+        );
+    }
+
+    fn sample_result(
+        status: SettlementStatus,
+        korrektur_grund: Option<KorrekturGrund>,
+    ) -> SettlementResult {
+        SettlementResult {
+            settlement_type: SettlementType::NneStrom,
+            status,
+            korrektur_grund,
+            period: SettlementPeriod::new(
+                time::macros::date!(2026 - 01 - 01),
+                time::macros::date!(2026 - 01 - 31),
+            )
+            .expect("valid period"),
+            regime: crate::regulatory::RegulatoryRegime::for_period(
+                time::macros::date!(2026 - 01 - 01),
+                time::macros::date!(2026 - 01 - 31),
+            ),
+            sparte: Sparte::Strom,
+            malo_id: "51238696780".to_owned(),
+            nb_mp_id: "9900000000001".to_owned(),
+            counterparty_mp_id: "9900000000002".to_owned(),
+            positions: Vec::new(),
+            total_eur: rust_decimal::Decimal::ZERO,
+            warnings: Vec::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod blindarbeit_tests {
+    use super::*;
+    use rust_decimal::dec;
+
+    /// cos φ 0,9 is the customary boundary: reactive energy up to tan φ ≈ 0,4843
+    /// of the active energy travels with it and is not charged.
+    #[test]
+    fn draw_inside_the_free_share_costs_nothing() {
+        let b = Blindarbeit {
+            blindarbeit_kvarh: dec!(400),
+            freigrenze_anteil: Blindarbeit::COS_PHI_0_9,
+            preis_ct_per_kvarh: dec!(2.0),
+        };
+        // 1 000 kWh × 0,4843 = 484,3 kvarh free; 400 stays inside it.
+        assert_eq!(b.mehrarbeit_kvarh(dec!(1000)), Decimal::ZERO);
+    }
+
+    /// Only the excess is chargeable.
+    #[test]
+    fn only_the_excess_is_charged() {
+        let b = Blindarbeit {
+            blindarbeit_kvarh: dec!(600),
+            freigrenze_anteil: Blindarbeit::COS_PHI_0_9,
+            preis_ct_per_kvarh: dec!(2.0),
+        };
+        assert_eq!(b.mehrarbeit_kvarh(dec!(1000)), dec!(115.7));
+    }
+
+    /// An unused allowance is not a credit — the excess floors at zero.
+    #[test]
+    fn an_unused_allowance_is_never_negative() {
+        let b = Blindarbeit {
+            blindarbeit_kvarh: dec!(10),
+            freigrenze_anteil: Blindarbeit::COS_PHI_0_9,
+            preis_ct_per_kvarh: dec!(2.0),
+        };
+        assert_eq!(b.mehrarbeit_kvarh(dec!(5000)), Decimal::ZERO);
+    }
+
+    /// The share is a term of the Preisblatt, not a constant: many networks
+    /// round cos φ 0,9 to a flat 50 %, and billing them at 0,4843 overcharges.
+    #[test]
+    fn the_free_share_follows_the_preisblatt() {
+        let rounded = Blindarbeit {
+            blindarbeit_kvarh: dec!(600),
+            freigrenze_anteil: dec!(0.5),
+            preis_ct_per_kvarh: dec!(2.0),
+        };
+        assert_eq!(rounded.mehrarbeit_kvarh(dec!(1000)), dec!(100.0));
+
+        let exact = Blindarbeit {
+            freigrenze_anteil: Blindarbeit::COS_PHI_0_9,
+            ..rounded
+        };
+        assert!(
+            exact.mehrarbeit_kvarh(dec!(1000)) > rounded.mehrarbeit_kvarh(dec!(1000)),
+            "the tighter cos φ 0,9 share charges more than a rounded 50 %"
+        );
+    }
+
+    /// Blindmehrarbeit rests on the Netzbetreiber's Preisblatt under StromNEV
+    /// §17 — not §18 (dezentrale Erzeugung) and not §19 (Sonderformen).
+    #[test]
+    fn the_position_kind_maps_to_the_bdew_artikelnummer() {
+        assert_eq!(
+            BillingPositionKind::Blindmehrarbeit.artikelnummer(SettlementType::NneStrom),
+            Some("BLINDMEHRARBEIT")
+        );
     }
 }

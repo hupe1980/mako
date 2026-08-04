@@ -1,26 +1,32 @@
 //! WiM Messstellenbetrieb — MSB change workflow (PIDs 55039, 55042, 55051, 55168).
 //!
-//! Covers the process by which an incoming metering point operator
-//! (neuer Messstellenbetreiber, nMSB) initiates a change of the MSB at a
-//! delivery point (Messlokation, MeLo) by sending a UTILMD message to the
-//! grid operator (Netzbetreiber, NB). The NB validates the message and
-//! dispatches an APERAK within **5 Werktage** (business days).
+//! Covers the four MSB-Wechsel use cases of BK6-24-174 WiM Strom Teil 1: the
+//! Kündigung between outgoing and incoming Messstellenbetreiber (Kap. 2.2), the
+//! Anmeldung of the incoming MSB at the Netzbetreiber (Kap. 2.3), the Abmeldung
+//! (Kap. 2.4), and the Verpflichtungsanfrage the NB puts to the grundzuständiger
+//! MSB when a Zuordnungslücke looms (Kap. 2.5).
+//!
+//! # Two clocks, never one
+//!
+//! An inbound order starts two independent timers, and treating them as one is
+//! the classic error here:
+//!
+//! | Clock | Window | Basis |
+//! |---|---|---|
+//! | **APERAK** — technical acknowledgement | 45 minutes (Strom UTILMD) | APERAK AHB §2.4.1 |
+//! | **Antwort** — business Bestätigung/Ablehnung | **1 / 3 / 5 / 7 WT, per PID** | WiM Teil 1 Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2 |
+//!
+//! The business window is never flat: see [`antwort_frist_werktage`]. Sizing all
+//! four at 5 WT escalates the Abmeldung (7 WT) two days early against a
+//! counterparty still inside its window, and lets a missed Verpflichtungsanfrage
+//! (1 WT) run four days undetected.
 //!
 //! # Regulatory basis
 //!
-//! - **MsbG** — Messstellenbetriebsgesetz (governing smart meter rollout)
-//! - **BDEW WiM** — Wechselprozesse im Messwesen Strom
-//! - **BNetzA BK6-18-032** — ruling governing WiM timeline obligations
+//! - **MsbG** — Messstellenbetriebsgesetz (Smart-Meter-Rollout)
+//! - **BNetzA BK6-24-174**, Anlage 2a — WiM Strom Teil 1 (Lesefassung)
 //! - **UTILMD S2.x** — EDI@Energy message format for metering processes
-//! - **APERAK 2.x** — Application error acknowledgement (**5 Werktage** Frist)
-//!
-//! # Frist comparison
-//!
-//! | Process family | APERAK Frist | Calculation |
-//! |---|---|---|
-//! | GPKE Lieferbeginn | 24 h wall-clock | `fristen::add_hours(24)` |
-//! | WiM Gerätewechsel | **5 Werktage** | `fristen::add_werktage(5, BdewMaKo)` |
-//! | GeLi Gas Anmeldung | **10 Werktage** | `fristen::add_werktage(10, BdewMaKo)` |
+//! - **APERAK 2.x** — application error acknowledgement
 
 use std::collections::HashMap;
 
@@ -42,18 +48,27 @@ use time::OffsetDateTime;
 /// Stable workflow name used as the `WorkflowId.name` and in the `ProcessRegistry`.
 pub const WORKFLOW_NAME: &str = "wim-device-change";
 
-/// Deadline label for the 5-Werktage APERAK response window (WiM BK6-18-032).
+/// Deadline label for **our** obligation to answer an inbound MSB-Wechsel order.
 ///
-/// Register a `Deadline` with this label immediately after `ValidationPassed`:
+/// Despite the process name, this is *not* the APERAK window. Two different
+/// clocks run on an inbound order and conflating them is the mistake this
+/// naming exists to prevent:
+///
+/// | Clock | Window | Label |
+/// |---|---|---|
+/// | Technical acknowledgement (APERAK) | **45 minutes**, Strom UTILMD (APERAK AHB §2.4.1) | `mako_engine::fristen::APERAK_STROM_WINDOW_LABEL` |
+/// | Business answer (Bestätigung/Ablehnung) | **1 / 3 / 5 / 7 WT**, per PID | this label |
+///
+/// Size it with [`antwort_frist_werktage`] — never a flat window:
 ///
 /// ```rust,ignore
+/// let wt = antwort_frist_werktage(pid).expect("a WiM MSB-Wechsel request PID");
 /// let due = mako_engine::fristen::deadline_at_werktage(
-///     received_at, 5, HolidayCalendar::BdewMaKo,
+///     received_at, wt, HolidayCalendar::BdewMaKo,
 /// );
-/// let deadline = Deadline::new(process.stream_id().clone(), ..., APERAK_WINDOW_LABEL, due);
-/// deadline_store.register(&deadline).await?;
+/// let deadline = Deadline::new(process.stream_id().clone(), ..., ANTWORT_FRIST_WINDOW_LABEL, due);
 /// ```
-pub const APERAK_WINDOW_LABEL: &str = "wim-aperak-5-werktage";
+pub const ANTWORT_FRIST_WINDOW_LABEL: &str = "wim-device-change-antwort-frist";
 
 /// Prüfidentifikatoren that carry a WiM MSB-Wechsel UTILMD.
 ///
@@ -66,7 +81,7 @@ pub const APERAK_WINDOW_LABEL: &str = "wim-aperak-5-werktage";
 /// | 55039 | Kündigung MSB                      | MSBN | MSBA | 2.2   |
 /// | 55042 | Anmeldung MSB                      | MSBN | NB   | 2.3   |
 /// | 55051 | Ende MSB (Abmeldung)               | MSBA | NB   | 2.4   |
-/// | 55168 | Verpflichtungsanfrage / Aufforderung | NB | gMSB | 2.4   |
+/// | 55168 | Verpflichtungsanfrage / Aufforderung | NB | gMSB | 2.5   |
 ///
 /// The Kündigung (55039) runs on the **contract layer** between the two MSB and
 /// is explicitly *non-constitutive*: BK6-24-174 Kap. 2.1.3 states that a switch
@@ -88,10 +103,10 @@ pub const DEVICE_CHANGE_PIDS: &[u32] = &[55_039, 55_042, 55_051, 55_168];
 /// | 55039   | 55040/55041 | **3 WT** | Kap. 2.2.2 Nr. 2 |
 /// | 55042   | 55043/55044 | **5 WT** | Kap. 2.3.2 Nr. 2 |
 /// | 55051   | 55052/55053 | **7 WT** | Kap. 2.4.2 Nr. 2 |
-/// | 55168   | 55169/55170 | **1 WT** | Kap. 2.4.2 Nr. 4 |
+/// | 55168   | 55169/55170 | **1 WT** | Kap. 2.5.2 Nr. 4 |
 ///
 /// Distinct from the APERAK window, which is **45 minutes** for UTILMD in Strom
-/// (APERAK AHB §2.4.1) — see [`APERAK_WINDOW_LABEL`].
+/// (APERAK AHB §2.4.1) — see [`ANTWORT_FRIST_WINDOW_LABEL`].
 ///
 /// Returns `None` when `request_pid` is not a WiM MSB-Wechsel request.
 #[must_use]
@@ -105,13 +120,15 @@ pub const fn antwort_frist_werktage(request_pid: u32) -> Option<u32> {
     }
 }
 
-/// Deadline label for the 5-Werktage counterparty response window on an
-/// **outbound** MSB-Wechsel order (WiM BK6-24-174).
+/// Deadline label for the counterparty's response window on an **outbound**
+/// MSB-Wechsel order (WiM BK6-24-174).
+///
+/// Sized per PID via [`antwort_frist_werktage`] — 3 / 5 / 7 / 1 WT, never flat.
 ///
 /// Registered by the caller alongside [`DeviceChangeCommand::InitiateDeviceChange`].
-/// Distinct from [`APERAK_WINDOW_LABEL`], which tracks *our* obligation to
+/// Distinct from [`ANTWORT_FRIST_WINDOW_LABEL`], which tracks *our* obligation to
 /// acknowledge an inbound message; this one tracks *their* obligation to answer ours.
-pub const AUFTRAG_ANTWORT_WINDOW_LABEL: &str = "wim-device-change-antwort-5-werktage";
+pub const AUFTRAG_ANTWORT_WINDOW_LABEL: &str = "wim-device-change-auftrag-antwort";
 
 /// Response Prüfidentifikatoren for the WiM MSB-Wechsel, as
 /// `(antwort_pid, request_pid, is_confirmed)`.
@@ -373,6 +390,23 @@ pub enum DeviceChangeState {
     },
 }
 
+impl mako_engine::workflow::OccupiesBusinessKey for DeviceChangeState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // Outbound order awaiting an answer, or an inbound order being
+            // worked through validation, APERAK and the physical swap.
+            Self::AuftragGesendet(_)
+            | Self::AuftragBestaetigt(_)
+            | Self::Initiated(_)
+            | Self::ValidationPassed(_)
+            | Self::AperakSent(_) => true,
+            // Terminal. A meter can be changed more than once, so a completed
+            // Gerätewechsel must not retire the MeLo.
+            Self::New | Self::Completed(_) | Self::Rejected { .. } => false,
+        }
+    }
+}
+
 impl DeviceChangeState {
     /// Stable string label for the current variant.
     #[must_use]
@@ -571,13 +605,13 @@ impl Workflow for WimDeviceChangeWorkflow {
     ) -> Option<Self::Command> {
         match (deadline.label(), state) {
             (
-                APERAK_WINDOW_LABEL,
+                ANTWORT_FRIST_WINDOW_LABEL,
                 DeviceChangeState::Initiated(_) | DeviceChangeState::ValidationPassed(_),
             ) => Some(DeviceChangeCommand::TimeoutExpired {
                 deadline_id: deadline.deadline_id(),
                 label: deadline.label().into(),
             }),
-            // Counterparty missed the 5-Werktage answer window on our outbound order.
+            // Counterparty missed its answer window on our outbound order.
             (AUFTRAG_ANTWORT_WINDOW_LABEL, DeviceChangeState::AuftragGesendet(_)) => {
                 Some(DeviceChangeCommand::TimeoutExpired {
                     deadline_id: deadline.deadline_id(),
@@ -870,17 +904,20 @@ impl Workflow for WimDeviceChangeWorkflow {
                     // Register TWO deadlines atomically with the events:
                     //   1. APERAK Strom *sending* deadline (APERAK AHB 1.0 \u00a72.4.1):
                     //      weekday = 45 min; Saturday = Sunday noon.
-                    //      Label: APERAK_STROM_WINDOW_LABEL
-                    //   2. WiM 5-Werktage *process response* deadline (BK6-24-174 \u00a72a):
-                    //      the NB must issue the positive/negative APERAK within 5 WT.
-                    //      Label: APERAK_WINDOW_LABEL ("wim-aperak-5-werktage")
+                    //   2. The *business answer* deadline \u2014 Best\u00e4tigung or Ablehnung.
+                    //      Sized per PID (3 / 5 / 7 / 1 WT), never flat: see
+                    //      `antwort_frist_werktage`. The PID guard above already
+                    //      rejected anything outside the family, so the lookup
+                    //      cannot fail here.
                     let aperak_send_dl = PendingDeadline::new(
                         APERAK_STROM_WINDOW_LABEL,
                         aperak_strom_due_at(received_at),
                     );
+                    let frist_wt = antwort_frist_werktage(pid.as_u32())
+                        .expect("PID guard above restricts this to the MSB-Wechsel family");
                     let process_dl = PendingDeadline::new(
-                        APERAK_WINDOW_LABEL,
-                        deadline_at_werktage(received_at, 5, HolidayCalendar::BdewMaKo),
+                        ANTWORT_FRIST_WINDOW_LABEL,
+                        deadline_at_werktage(received_at, frist_wt, HolidayCalendar::BdewMaKo),
                     );
                     Ok(WorkflowOutput::with_outbox_and_deadlines(
                         events,

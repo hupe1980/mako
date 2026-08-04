@@ -142,6 +142,37 @@ Triggering is separated from reading and restricted to the **NB** and **ÜNB** r
 
 ---
 
+## Submission target — BIKO today, MaBiS-Hub later
+
+`submission_target` selects where Summenzeitreihen are filed:
+
+```toml
+submission_target = "biko-bilateral"   # default; "mabis-hub" is not yet implemented
+```
+
+BK6-24-210 will replace bilateral BIKO submission with a central **MaBiS-Hub**
+that routes **exclusively by MaLo-ID**. Today a series is filed under its
+MaBiS-Zählpunkt (`LOC+172`) for a Bilanzierungsgebiet (`LOC+107`), and the
+aggregation step groups MaLos *by Bilanzierungsgebiet* — that grouping is what
+the cutover invalidates, not just the endpoint.
+
+The `mabis-hub` target **refuses at startup** rather than guessing a format.
+There is no Beschluss (the H1-2026 target slipped, the -1 consultation closed
+17.11.2025, go-live is planned for H2 2028), so no wire format, endpoint or
+payload shape is published. An invented format that reaches a real Hub is
+indistinguishable, at the point of failure, from a correct submission that was
+rejected.
+
+Three things the cutover will touch, recorded so the audit is not repeated:
+
+| What | Today | Under the Hub |
+|---|---|---|
+| Aggregation key | one series per Bilanzierungsgebiet | routed per MaLo-ID |
+| `mabis_zp_id` | `LOC+172` Meldepunkt, from marktd master data | not a routing key; payload content is a format question |
+| Tranchen | `marktd.tranche` keyed on `tranche_id`, parent `malo_id` | a Tranche is not a MaLo — needs a resolution rule |
+
+---
+
 ## Configuration
 
 ```toml
@@ -181,6 +212,41 @@ run_hour_utc          = 5    # 05:00 UTC = 06:00 CET / 07:00 CEST
 Every value may be written as `env:VARNAME` and is resolved at startup. A referenced variable that is not set fails the process with the variable named — unresolved, the placeholder would be sent as the literal bearer token and every upstream call would 401.
 
 `identity.bilanzierungsgebiet_id` is only a **fallback** for MaLos whose master data names no territory, and those MaLos are logged rather than folded in silently: energy filed against the wrong territory is a settlement error the BIKO cannot detect.
+
+### MaBiS-Zählpunkt vs Bilanzierungsgebiet
+
+The Summenzeitreihe carries **two different SG6 `LOC` identifiers**, and MSCONS
+AHB 3.2 gives each its own qualifier:
+
+| Qualifier | Carries |
+|---|---|
+| `LOC+172` | **Meldepunkt** — the MaBiS-Zählpunkt (33-char Zählpunktbezeichnung) |
+| `LOC+107` | **Bilanzierungsgebiet** (16-char EIC) |
+| `LOC+237` | Bilanzkreis |
+
+Both are free text at the MIG level, so a message that swaps them still parses
+and still validates — the BIKO simply files the Summenzeitreihe against the
+wrong Meldepunkt. Nothing downstream can detect it, which is why the two are
+kept as separate inputs all the way from master data to the wire.
+
+The assignment is **marktd master data**, not service configuration. Before each
+submission `mabis-syncd` resolves it over HTTP:
+
+```
+GET /api/v1/bilanzierungsgebiet/{eic}/mabis-zp   → { "mabis_zp_id": "DE0004030099000000000000000012345", ... }
+PUT /api/v1/bilanzierungsgebiet/{eic}/mabis-zp   (NB role, Cedar `write-mabis-zp`)
+GET /api/v1/mabis-zp                             → every assignment for the tenant
+```
+
+Every failure path **refuses** rather than substituting — an unassigned
+territory (`404`), an unreachable marktd, a malformed response, or a response
+echoing the EIC back as the Meldepunkt all abort the submission. A Summenzeitreihe
+filed against the wrong Meldepunkt is indistinguishable, to the BIKO, from a
+correct one, so not sending is the safe failure.
+
+Both ends refuse the EIC-as-Meldepunkt substitution: marktd rejects it on write
+(a `400`, and a table `CHECK`), and the submission path re-checks it rather than
+taking master data on trust.
 
 ---
 

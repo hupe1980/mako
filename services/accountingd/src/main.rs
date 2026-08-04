@@ -365,6 +365,52 @@ impl Daemon for Accountingd {
                                         error = %e,
                                         "accountingd: Abschlag entry failed"
                                     );
+                                } else {
+                                    // Announce the advance payment exactly once
+                                    // per (MaLo, month).
+                                    //
+                                    // `post_entry` is idempotent on its own key,
+                                    // so a second run in the same month is a
+                                    // ledger no-op — but it still returns `Ok`,
+                                    // so announcing on that alone re-sent the
+                                    // event every time the 23-hour loop drifted
+                                    // across midnight or the service restarted.
+                                    //
+                                    // The CloudEvent id is derived from the same
+                                    // (MaLo, month) key, and `outbox::enqueue`
+                                    // is `ON CONFLICT (event_id) DO NOTHING`, so
+                                    // the replay drops at the outbox. No guard
+                                    // table: the schema deliberately has none
+                                    // for Abschläge, because the ledger key
+                                    // already prevents double-booking.
+                                    let ce = mako_service::CloudEvent::new(
+                                        mako_service::source("accountingd", &tenant_bg),
+                                        mako_events::accounting::ABSCHLAG_POSTED,
+                                        &acct.malo_id,
+                                        serde_json::json!({
+                                            "malo_id":      acct.malo_id,
+                                            "lf_mp_id":     acct.lf_mp_id,
+                                            "amount_ct":    acct.abschlag_ct,
+                                            "amount_eur":   format!("{:.2}", acct.abschlag_ct as f64 / 100.0),
+                                            "period_month": format!("{:04}-{:02}", today.year(), today.month() as u8),
+                                            "reference":    ref_id,
+                                        }),
+                                    )
+                                    .with_id(ref_id.clone());
+                                    let announced = async {
+                                        let mut tx = pool_bg.begin().await?;
+                                        mako_service::outbox::enqueue(&mut tx, &ce).await?;
+                                        tx.commit().await?;
+                                        anyhow::Ok(())
+                                    }
+                                    .await;
+                                    if let Err(e) = announced {
+                                        tracing::warn!(
+                                            malo_id = %acct.malo_id,
+                                            error = %e,
+                                            "accountingd: Abschlag announcement failed"
+                                        );
+                                    }
                                 }
                             }
                         }

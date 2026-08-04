@@ -376,6 +376,22 @@ pub enum EogState {
     },
 }
 
+impl mako_engine::workflow::OccupiesBusinessKey for EogState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // Initiator side: awaiting the E/G, or the Zuordnung is effective
+            // and the supply relationship is live.
+            Self::Angemeldet(_) | Self::Zugeordnet { .. } => true,
+            // Responder side: an inbound Zuordnung is being worked. Once the
+            // answer is dispatched the responder's obligation is met, but the
+            // Zuordnung it confirmed is live, so it still holds the MaLo.
+            Self::Eingegangen(_) | Self::ValidationPassed(_) | Self::AntwortGesendet { .. } => true,
+            // Terminal.
+            Self::New | Self::Abgelehnt { .. } | Self::Rejected { .. } => false,
+        }
+    }
+}
+
 impl EogState {
     /// Stable string label for the current variant.
     #[must_use]

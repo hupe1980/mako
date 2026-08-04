@@ -65,10 +65,14 @@ use mako_gpke::{
     SPERRUNG_WORKFLOW_NAME, STORNIERUNG_GPKE_WORKFLOW_NAME, SUPPLIER_CHANGE_WORKFLOW_NAME,
     UTILTS_WORKFLOW_NAME,
 };
-use mako_mabis::{BILLING_WORKFLOW_NAME, CLEARINGLISTE_WORKFLOW_NAME};
+use mako_mabis::{
+    ANFORDERUNG_WORKFLOW_NAME, BILLING_WORKFLOW_NAME, CLEARINGLISTE_WORKFLOW_NAME,
+    LISTENABGLEICH_WORKFLOW_NAME, ZP_LIFECYCLE_WORKFLOW_NAME,
+};
 use mako_wim::{
-    GERAETEUBERNAHME_WORKFLOW_NAME, INSRPT_WORKFLOW_NAME, PREISANFRAGE_WORKFLOW_NAME,
-    PREISLISTE_WORKFLOW_NAME, RECHNUNG_WORKFLOW_NAME, STAMMDATEN_WORKFLOW_NAME,
+    GERAETEUBERNAHME_WORKFLOW_NAME, INSRPT_WORKFLOW_NAME,
+    INVOIC_WORKFLOW_NAME as WIM_INVOIC_WORKFLOW_NAME, PREISANFRAGE_WORKFLOW_NAME,
+    PREISLISTE_WORKFLOW_NAME, STAMMDATEN_WORKFLOW_NAME,
     WORKFLOW_NAME as WIM_DEVICE_CHANGE_WORKFLOW_NAME,
 };
 use mako_wim_gas::{
@@ -183,8 +187,8 @@ pub(crate) fn validate_adapter_coverage() {
             adapters::wim_stammdaten_registry().validate_policy(fc, &known),
         ),
         (
-            RECHNUNG_WORKFLOW_NAME,
-            adapters::wim_rechnung_registry().validate_policy(fc, &known),
+            WIM_INVOIC_WORKFLOW_NAME,
+            adapters::wim_invoic_registry().validate_policy(fc, &known),
         ),
         (
             INSRPT_WORKFLOW_NAME,
@@ -265,6 +269,22 @@ pub(crate) fn validate_adapter_coverage() {
         (
             CLEARINGLISTE_WORKFLOW_NAME,
             adapters::mabis_clearingliste_registry().validate_policy(fc, &known),
+        ),
+        // mabis-zp-lifecycle: UTILMD Aktivierung/Deaktivierung of the MaBiS-ZP,
+        // the Zuordnungsermächtigung and the AAÜZ/LF-AASZR series.
+        (
+            ZP_LIFECYCLE_WORKFLOW_NAME,
+            adapters::mabis_zp_lifecycle_registry().validate_policy(fc, &known),
+        ),
+        // mabis-anforderung: ORDERS 17201–17208 MaBiS list requests.
+        (
+            ANFORDERUNG_WORKFLOW_NAME,
+            adapters::mabis_anforderung_registry().validate_policy(fc, &known),
+        ),
+        // mabis-listenabgleich: UTILMD list distribution with a correction leg.
+        (
+            LISTENABGLEICH_WORKFLOW_NAME,
+            adapters::mabis_listenabgleich_registry().validate_policy(fc, &known),
         ),
         // gpke-partin: PARTIN Kommunikationsdaten (PIDs 37000–37006).
         (

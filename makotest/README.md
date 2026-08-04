@@ -126,10 +126,63 @@ def test_frist_is_met(frozen_clock, epex_sim):
     assert frozen_clock.date == "2026-11-09"
 ```
 
-Fixtures: `epex_sim`, `frozen_clock`, `makotest_seed`, `mako_endpoint`.
+Fixtures: `epex_sim`, `nb_sim`, `biko_sim`, `imsys_sim`, `frozen_clock`,
+`makotest_seed`, `mako_endpoint`.
 Markers: `@pytest.mark.regulatory("GPKE Teil 2")`, `@pytest.mark.requires_docker`.
 Options: `--mako-endpoint URL` (run against a live deployment),
 `--makotest-seed N` (reproduce a failing run exactly).
+
+## Counterparty simulators
+
+Each simulator models what a counterparty *does* — including what it does not
+do. Silence is the mode worth having: a platform that never sees it is never
+tested against its own Fristen.
+
+```python
+def test_nb_bestaetigt(nb_sim):
+    nb_sim.on(55001).bestaetigung(zuordnungsbeginn="2026-11-01")
+    answer = nb_sim.receive(interchange)
+    assert answer["pid"] == 55002          # the AHB answer PID, not 55001+1
+
+def test_frist_faellt(nb_sim):
+    nb_sim.on(55001).timeout()             # no answer, not even a CONTRL
+    assert nb_sim.receive(interchange) is None
+```
+
+The answer PIDs come from the same table `mako-gpke` and `mako-geli-gas` derive
+their outbound response from, so the simulator cannot answer with a code the
+platform rejects. It is not `Anfrage + 1`: GPKE 55077 rejects with **55080**
+because 55079 is unassigned, and GeLi Gas 44020 can be confirmed but never
+rejected.
+
+`BikoSim` receives Abrechnungssummenzeitreihen and can raise a Klärfall —
+queued rather than sticky, so the re-submission after Clearing can be asserted.
+`ImsysSim` models the SMGW compliance surface (TAF profile, CLS channel state,
+certificate expiry and revocation, Zählerstandsgang gaps) rather than
+reimplementing TR-03109 crypto.
+
+## Property-based testing
+
+```python
+from hypothesis import given
+from makotest.strategies import malo_ids, pruefidentifikatoren
+
+@given(malo=malo_ids(), pid=pruefidentifikatoren(message_type="UTILMD"))
+def test_every_utilmd_roundtrips(malo, pid): ...
+```
+
+Every strategy draws from the Rust core: MaLo-IDs carry a real check digit, and
+`pruefidentifikatoren()` yields only PIDs the compiled profiles have AHB rules
+for. Generating a PID without rules would produce a test that cannot fail —
+validation returns valid having checked nothing.
+
+Strategies: `malo_ids`, `melo_ids`, `marktpartner_ids`, `bilanzierungsgebiete`,
+`pruefidentifikatoren`, `werktage`, `zeitreihen`.
+
+`message_types_of(pid)` returns a **list**, because a Prüfidentifikator does
+not identify one message type: APERAK and COMDIS both declare 29001 and
+29002. It resolves against the compiled profiles rather than a PID-band
+table, so it cannot disagree with what the platform validates.
 
 ## BO4E generation
 
@@ -159,15 +212,18 @@ maturin enables it at build time. Declaring it would make `cargo test
 --workspace --all-features` link the test harness against it and fail on
 undefined Python symbols.
 
-Design rationale and the roadmap for the simulator suite (market partner over
-AS4, BIKO, iMSys/SMGW) live in `concepts/MAKOTEST.md`.
-
 ## Status
 
-Pre-1.0 and incomplete. Shipping today: the Rust core (identifiers, Fristen,
-EDIFACT build + interchange envelope + validation), the EPEX generator, domain
-assertions, and the pytest plugin. The counterparty simulators are specified but
-not yet built.
+Pre-1.0. Shipping today: the Rust core (identifiers, Fristen, Prüfidentifikator
+introspection, the AHB answer table, EDIFACT build + interchange envelope +
+validation), the EPEX generator, the Marktpartner / BIKO / iMSys simulators,
+hypothesis strategies, domain assertions, and the pytest plugin.
+
+Not built: AS4 transport for the Marktpartner simulator (it is a plain object
+with `receive()`, so a transport layers on top), the testcontainers harness, and
+the MaStR / UBA simulators — neither integration exists in mako yet, and a
+simulator written before its consumer would encode guesses about an interface
+nobody has implemented.
 
 The package version tracks `workspace.package.version` through Cargo.toml
 (`dynamic = ["version"]`), so the wheel and the crates it binds can never report

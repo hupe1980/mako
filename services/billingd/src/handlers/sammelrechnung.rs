@@ -61,7 +61,16 @@ pub async fn post_sammelrechnung(
         Err(e) => return (StatusCode::BAD_GATEWAY, format!("vertragd: {e}")).into_response(),
     };
 
-    let rates = cfg.regulatory_rates_for_period("STROM", period_from, period_to);
+    let rates = match cfg.try_regulatory_rates_for_period("STROM", period_from, period_to) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                super::straddle_error_body(&e),
+            )
+                .into_response();
+        }
+    };
     let sammel_nr = req
         .rechnungsnummer
         .clone()
@@ -75,6 +84,7 @@ pub async fn post_sammelrechnung(
     for entry in &malos {
         let dummy_req = CalculateRequest {
             schlussrechnung: false,
+            monatliche_abrechnung: false,
             reverse_charge: false,
             abschlaege: Vec::new(),
             lf_mp_id: req.lf_mp_id.clone(),

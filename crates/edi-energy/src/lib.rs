@@ -89,8 +89,10 @@ pub use parse::{
     parse_interchange,
 };
 pub use platform::Platform;
-pub use pruefidentifikator::Pruefidentifikator;
-pub use registry::{ProcessContext, ReleaseRegistry, TRANSITION_GRACE_DAYS, TransitionState};
+pub use pruefidentifikator::{Pruefidentifikator, ablehnung_pid, answer_pids, bestaetigung_pid};
+pub use registry::{
+    ProcessContext, ReleaseRegistry, TRANSITION_GRACE_DAYS, TransitionState, UNKNOWN_PID_PACK,
+};
 pub use release::{Release, ReleaseKind, ReleaseTrack};
 pub use report::EdiEnergyReport;
 

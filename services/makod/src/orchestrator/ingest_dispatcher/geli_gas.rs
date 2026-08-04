@@ -284,7 +284,10 @@ impl EdifactIngestDispatcher {
             // PIDs 44004/44006: GNB Ablehnung Lieferbeginn/Lieferende → resume.
             // Spawned via ERP command geli.lieferbeginn.anmelden (PIDs 44001/44002 outbound).
             "geli-gas-lf-anmeldung" => match pid {
-                44003..=44006 => {
+                // The GNB's answers, from the workflow's own constant rather
+                // than a range: a hand-written range drifts from the registered
+                // set, and a PID missing here is dropped silently.
+                p if mako_geli_gas::lf_anmeldung::ANTWORT_PIDS_LF.contains(&p) => {
                     let cmd = adapters::geli_gas_lf_anmeldung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     self.resume_by_malo::<GeliGasLfAnmeldungWorkflow>(

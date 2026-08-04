@@ -133,6 +133,25 @@ async fn post_json(app: &axum::Router, uri: &str, body: serde_json::Value) -> (S
     (status, String::from_utf8_lossy(&bytes).into_owned())
 }
 
+async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, String) {
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("router responds");
+    let status = res.status();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// Insert a plant directly.
 ///
 /// `foerderendedatum` is NOT NULL — the service derives it at registration from
@@ -889,4 +908,357 @@ async fn pg_container() -> Option<(String, PgContainer)> {
     let port = container.get_host_port_ipv4(5432).await.ok()?;
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
     Some((url, container))
+}
+
+/// §§53b–53c EEG 2023 — the recorded facts cut the anzulegender Wert, and the
+/// schema refuses amounts the statutes do not provide for.
+///
+/// The pure engine already proves the arithmetic. What only a real database can
+/// prove is the seam: that the settlement path finds these rows at all, that the
+/// deduction amounts come from the statute rather than from a column, and that
+/// the CHECKs stop a data-entry error from inventing a reduction.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn statutory_aw_cuts_are_driven_by_recorded_facts_not_stored_rates() {
+    let Some((pool, _pg)) = test_pool("aw_cuts").await else {
+        return;
+    };
+    let app = test_router(pool.clone());
+
+    // Baseline: 500 kWh × 8.11 ct = 40.55 EUR.
+    let (status, body) = post_json(&app, "/api/v1/anlagen", anlage_json("P-AW")).await;
+    assert!(status.is_success(), "register: {status} {body}");
+    let (status, body) = post_json(
+        &app,
+        "/api/v1/anlagen/P-AW/settle/2026/7",
+        serde_json::json!({ "einspeisemenge_kwh": "500" }),
+    )
+    .await;
+    assert!(status.is_success(), "baseline settle: {status} {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let baseline: rust_decimal::Decimal =
+        serde_json::from_value(v["settlement_eur"].clone()).expect("settlement present");
+    assert_eq!(baseline, rust_decimal::Decimal::new(4055, 2));
+
+    // §53b: a Regionalnachweis is on file for the period → AW 8.11 → 8.01.
+    sqlx::query(
+        "INSERT INTO eeg_regionalnachweise (tr_id, tenant, nachweis_ref, effective_from)
+         VALUES ('P-AW', $1, 'HKNR-RN-2026-0001', '2026-01-01')",
+    )
+    .bind(TENANT)
+    .execute(&pool)
+    .await
+    .expect("record the Regionalnachweis");
+
+    // §53c: a granted Stromsteuerbefreiung of 2.05 ct/kWh → AW 8.01 → 5.96.
+    sqlx::query(
+        "INSERT INTO eeg_stromsteuerbefreiungen
+             (tr_id, tenant, befreiung_ct_kwh, rechtsgrundlage, effective_from)
+         VALUES ('P-AW', $1, 2.05, '§9 Abs. 1 Nr. 1 StromStG', '2026-01-01')",
+    )
+    .bind(TENANT)
+    .execute(&pool)
+    .await
+    .expect("record the Stromsteuerbefreiung");
+
+    let (status, body) = post_json(
+        &app,
+        "/api/v1/anlagen/P-AW/settle/2026/8",
+        serde_json::json!({ "einspeisemenge_kwh": "500" }),
+    )
+    .await;
+    assert!(status.is_success(), "reduced settle: {status} {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let reduced: rust_decimal::Decimal =
+        serde_json::from_value(v["settlement_eur"].clone()).expect("settlement present");
+    // 500 kWh × 5.96 ct = 29.80 EUR
+    assert_eq!(
+        reduced,
+        rust_decimal::Decimal::new(2980, 2),
+        "§53b (0,1 ct) and §53c (2,05 ct) must both cut the AW"
+    );
+
+    // The §53c cap is the full §3 StromStG rate — an exemption cannot exceed the
+    // tax it exempts from.
+    let over_cap = sqlx::query(
+        "INSERT INTO eeg_stromsteuerbefreiungen
+             (tr_id, tenant, befreiung_ct_kwh, rechtsgrundlage, effective_from)
+         VALUES ('P-AW', $1, 3.00, 'bogus', '2026-01-01')",
+    )
+    .bind(TENANT)
+    .execute(&pool)
+    .await;
+    assert!(
+        over_cap.is_err(),
+        "a Stromsteuerbefreiung above 2,05 ct/kWh must be rejected by the CHECK"
+    );
+
+    // A §54 row that records no defect deducts nothing and is a data-entry error.
+    let no_defect = sqlx::query(
+        "INSERT INTO eeg_sect54_solar_defekte (tr_id, tenant, effective_from)
+         VALUES ('P-AW', $1, '2026-01-01')",
+    )
+    .bind(TENANT)
+    .execute(&pool)
+    .await;
+    assert!(
+        no_defect.is_err(),
+        "a §54 row with no defect set must be rejected by the CHECK"
+    );
+
+    // A reversed validity period is not a period.
+    let reversed = sqlx::query(
+        "INSERT INTO eeg_regionalnachweise
+             (tr_id, tenant, nachweis_ref, effective_from, effective_until)
+         VALUES ('P-AW', $1, 'HKNR-RN-BAD', '2026-06-01', '2026-01-01')",
+    )
+    .bind(TENANT)
+    .execute(&pool)
+    .await;
+    assert!(
+        reversed.is_err(),
+        "effective_until < effective_from must be rejected"
+    );
+}
+
+/// §24 Abs. 1 EEG 2023 — a merge the statute does not support is refused.
+///
+/// Zusammenlegung changes the plant size that §21 Abs. 1 / §22 read, so a merge
+/// of two plants §24 keeps apart moves the survivor into a tariff band and past
+/// a tender threshold it never qualified for — for the rest of its Förderdauer,
+/// and indistinguishably from a legitimate merge once written.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_merger_outside_sect24_is_refused() {
+    let Some((pool, _pg)) = test_pool("sect24").await else {
+        return;
+    };
+    let app = test_router(pool.clone());
+
+    // Two rooftop PV plants, same site, three months apart → §24 fuses them.
+    for (tr, ibn) in [("P-24-A", "2024-01-15"), ("P-24-B", "2024-03-15")] {
+        let mut a = anlage_json(tr);
+        a["inbetriebnahme"] = serde_json::json!(ibn);
+        let (status, body) = post_json(&app, "/api/v1/anlagen", a).await;
+        assert!(status.is_success(), "register {tr}: {status} {body}");
+    }
+    sqlx::query("UPDATE eeg_anlagen SET standort_id = 'FLST-1' WHERE tenant = $1")
+        .bind(TENANT)
+        .execute(&pool)
+        .await
+        .expect("set the shared site");
+
+    // A third plant on a different site, well outside the twelve-month window.
+    let mut c = anlage_json("P-24-C");
+    c["inbetriebnahme"] = serde_json::json!("2020-05-01");
+    let (status, body) = post_json(&app, "/api/v1/anlagen", c).await;
+    assert!(status.is_success(), "register C: {status} {body}");
+    sqlx::query("UPDATE eeg_anlagen SET standort_id = 'FLST-9' WHERE tr_id = 'P-24-C'")
+        .execute(&pool)
+        .await
+        .expect("set the other site");
+
+    // Different site, no proximity asserted → Satz 1 Nr. 1 refuses.
+    let (status, body) = post_json(
+        &app,
+        "/api/v1/anlagen/P-24-C/zusammenlegen",
+        serde_json::json!({ "parent_tr_id": "P-24-A" }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a merge across sites must be refused: {body}"
+    );
+    assert!(
+        body.contains("Satz1Nr1StandortVerschieden"),
+        "the refusal must name the rule that decided: {body}"
+    );
+
+    // Proximity asserted, but still six years apart → Satz 1 Nr. 4 refuses.
+    let (status, body) = post_json(
+        &app,
+        "/api/v1/anlagen/P-24-C/zusammenlegen",
+        serde_json::json!({
+            "parent_tr_id": "P-24-A",
+            "unmittelbare_raeumliche_naehe": true
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(
+        body.contains("Satz1Nr4AusserhalbZwoelfMonatsfenster"),
+        "the twelve-month window must be the stated reason: {body}"
+    );
+
+    // The child must still be settleable — a refused merge changes nothing.
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM eeg_anlagen WHERE tr_id = 'P-24-C'")
+            .fetch_one(&pool)
+            .await
+            .expect("read status");
+    assert_eq!(
+        status, "aktiv",
+        "a refused merge must not deregister the child"
+    );
+
+    // Same site, three months apart → permitted.
+    let (status, body) = post_json(
+        &app,
+        "/api/v1/anlagen/P-24-B/zusammenlegen",
+        serde_json::json!({ "parent_tr_id": "P-24-A", "combined_leistung_kwp": "19.0" }),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "a §24 merger must be permitted: {status} {body}"
+    );
+    let merged: String =
+        sqlx::query_scalar("SELECT status FROM eeg_anlagen WHERE tr_id = 'P-24-B'")
+            .fetch_one(&pool)
+            .await
+            .expect("read status");
+    assert_eq!(merged, "abgemeldet");
+}
+
+/// The §§53b–54 facts are recordable and inspectable through the API, and
+/// §54 Abs. 3 Satz 2/3 lapses by closing the period rather than deleting it.
+///
+/// These rows silently shrink a Gutschrift, so the seam that matters is whether
+/// a settlement run picks up exactly what the GET reports — and whether a late
+/// Nachweis stops the deduction going forward without erasing that the plant was
+/// ever short.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn aw_reduction_facts_are_recorded_inspected_and_lapse_correctly() {
+    let Some((pool, _pg)) = test_pool("aw_api").await else {
+        return;
+    };
+    let app = test_router(pool.clone());
+
+    let (status, body) = post_json(&app, "/api/v1/anlagen", anlage_json("P-API")).await;
+    assert!(status.is_success(), "register: {status} {body}");
+
+    // Nothing on file → nothing cutting the AW.
+    let (status, body) = get_json(&app, "/api/v1/anlagen/P-API/aw-reduktionen?on=2026-07-01").await;
+    assert!(status.is_success(), "empty GET: {status} {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(
+        v["reduktionen"].as_array().expect("array").is_empty(),
+        "a plant with no facts on file has no AW cuts: {body}"
+    );
+
+    // §53b — record a Regionalnachweis. No amount is accepted; it is statutory.
+    let (status, body) = post_json(
+        &app,
+        "/api/v1/anlagen/P-API/aw-reduktionen/regionalnachweis",
+        serde_json::json!({ "nachweis_ref": "HKNR-RN-2026-0007", "effective_from": "2026-01-01" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "record §53b: {body}");
+    assert!(
+        body.contains("0.1"),
+        "the response must state the statutory rate: {body}"
+    );
+
+    // §54 Abs. 3 — record the missing Agri-PV Nutzungsnachweis.
+    let (status, body) = post_json(
+        &app,
+        "/api/v1/anlagen/P-API/aw-reduktionen/sect54-defekt",
+        serde_json::json!({
+            "agri_nutzungsnachweis_fehlt": true,
+            "effective_from": "2026-01-01",
+            "bnetza_ref": "BNetzA-54-2026-PV-004"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "record §54: {body}");
+    let created: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let defekt_id = created["id"].as_str().expect("id").to_owned();
+
+    // A §54 row recording no defect deducts nothing and is refused.
+    let (status, _) = post_json(
+        &app,
+        "/api/v1/anlagen/P-API/aw-reduktionen/sect54-defekt",
+        serde_json::json!({ "effective_from": "2026-01-01" }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a defect-free §54 row must be refused"
+    );
+
+    // A reversed period is refused with a reason, not a constraint name.
+    let (status, body) = post_json(
+        &app,
+        "/api/v1/anlagen/P-API/aw-reduktionen/regionalnachweis",
+        serde_json::json!({
+            "nachweis_ref": "HKNR-RN-BAD",
+            "effective_from": "2026-06-01",
+            "effective_until": "2026-01-01"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body.contains("before effective_from"),
+        "explain why: {body}"
+    );
+
+    // Both cuts are now visible, with their statutory amounts.
+    let (status, body) = get_json(&app, "/api/v1/anlagen/P-API/aw-reduktionen?on=2026-07-01").await;
+    assert!(status.is_success(), "{body}");
+    assert!(
+        body.contains("§53b") && body.contains("§54 Abs. 3"),
+        "both cuts listed: {body}"
+    );
+
+    // …and the settlement agrees: AW 8.11 − 0.1 (§53b) − 2.5 (§54 Abs. 3) = 5.51.
+    let (status, body) = post_json(
+        &app,
+        "/api/v1/anlagen/P-API/settle/2026/7",
+        serde_json::json!({ "einspeisemenge_kwh": "1000" }),
+    )
+    .await;
+    assert!(status.is_success(), "settle: {status} {body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let eur: rust_decimal::Decimal =
+        serde_json::from_value(v["settlement_eur"].clone()).expect("settlement");
+    assert_eq!(
+        eur,
+        rust_decimal::Decimal::new(5510, 2),
+        "the settlement must apply exactly the cuts the GET reported"
+    );
+
+    // §54 Abs. 3 Satz 2/3 — the Nachweis arrives; the deduction lapses.
+    let (status, body) = post_json(
+        &app,
+        &format!(
+            "/api/v1/anlagen/P-API/aw-reduktionen/sect54-defekt/{defekt_id}/nachweis-erbracht"
+        ),
+        serde_json::json!({ "effective_until": "2026-07-31" }),
+    )
+    .await;
+    assert!(status.is_success(), "close the §54 period: {status} {body}");
+
+    // August: only §53b remains.
+    let (status, body) = get_json(&app, "/api/v1/anlagen/P-API/aw-reduktionen?on=2026-08-01").await;
+    assert!(status.is_success(), "{body}");
+    assert!(
+        body.contains("§53b"),
+        "§53b is open-ended and stays: {body}"
+    );
+    assert!(
+        !body.contains("§54 Abs. 3"),
+        "a supplied Nachweis must stop the §54 deduction going forward: {body}"
+    );
+
+    // July still carries it — the row was closed, not deleted, so the §147 AO
+    // trail still shows the plant was short then.
+    let (_, body) = get_json(&app, "/api/v1/anlagen/P-API/aw-reduktionen?on=2026-07-01").await;
+    assert!(
+        body.contains("§54 Abs. 3"),
+        "closing a period must not erase the past: {body}"
+    );
 }

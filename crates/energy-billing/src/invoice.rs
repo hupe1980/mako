@@ -1391,6 +1391,7 @@ mod rechnung_json_tests {
     /// keys into its extension map, so a misspelt or invented field name
     /// deserialises to `None` on the typed field rather than failing loudly —
     /// asserting the typed fields are populated is what catches it.
+    #[cfg(feature = "bo4e")]
     #[test]
     fn rechnung_json_uses_real_bo4e_field_names() {
         let json = invoice_with_advance().to_rechnung_json();
@@ -1569,6 +1570,7 @@ mod rechnung_json_tests {
 
     /// Legally relevant totals round-trip Decimal-exact through the JSON —
     /// serialised as strings by rubo4e, never through an `f64`.
+    #[cfg(feature = "bo4e")]
     #[test]
     fn money_round_trips_decimal_exact() {
         let ctx = BillingContext {
@@ -1764,6 +1766,7 @@ mod correction_tests {
     /// A correction negates every monetary figure, and the VAT breakdown has to
     /// travel with `gesamtsteuer` — BO4E requires the Steuerbeträge to sum to it,
     /// so a breakdown left positive contradicts the negated total it belongs to.
+    #[cfg(feature = "bo4e")]
     #[test]
     fn correction_negates_the_vat_breakdown_with_the_total() {
         let ctx = BillingContext {
@@ -1822,6 +1825,7 @@ mod trace_emission_tests {
     /// `PositionTrace` was serializable from the start and never emitted:
     /// `to_rechnung_json` dropped it, so billingd's explain tool read a field
     /// that was always null — while its own note promised seven trace fields.
+    #[cfg(feature = "bo4e")]
     #[test]
     fn the_position_trace_reaches_the_stored_rechnung() {
         let mut pos = BillingPosition::debit(

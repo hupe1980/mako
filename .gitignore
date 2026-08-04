@@ -27,6 +27,8 @@ CONCEPT.md
 FINDINGS.md
 REVIEW.md
 TODO.md
+# Official BDEW/BNetzA/DVGW source documents (copyrighted, ~400 MB).
+# Indexed by regulatories/README.md with the download URL for each file.
 regulatories
 concepts/
 .DS_Store
@@ -41,5 +43,6 @@ __pycache__/
 *.py[cod]
 *.so
 .pytest_cache/
+.hypothesis/
 *.egg-info/
 .venv/

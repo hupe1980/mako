@@ -431,6 +431,38 @@ mod rest {
         server::ProcessdState,
     };
 
+    /// Turn a failed `makod` command dispatch into a response.
+    ///
+    /// The status is taken from the error itself rather than hard-coded to 502.
+    /// A `MakodConflict` (makod's `invalid_state` — the command is not legal in
+    /// the process's current state) is a caller error at 409: repeating it will
+    /// fail identically, and callers such as `vertragd` retry on 5xx, so
+    /// reporting it as a gateway failure produced three pointless retries and a
+    /// component parked in `ANGELEGT` with a misleading "processd unreachable"
+    /// trail. Transport failures still surface as 502.
+    fn makod_dispatch_error(e: &mako_markt::error::MdmError) -> axum::response::Response {
+        let status =
+            StatusCode::from_u16(e.status_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status = if status == StatusCode::INTERNAL_SERVER_ERROR {
+            StatusCode::BAD_GATEWAY
+        } else {
+            status
+        };
+        (
+            status,
+            Json(serde_json::json!({
+                "error":   if status == StatusCode::CONFLICT {
+                    "MAKOD_COMMAND_CONFLICT"
+                } else {
+                    "MAKOD_DISPATCH_FAILED"
+                },
+                "message": e.to_string(),
+                "retryable": status.is_server_error(),
+            })),
+        )
+            .into_response()
+    }
+
     pub async fn list_decisions(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
@@ -868,14 +900,7 @@ mod rest {
                 })),
             )
                 .into_response(),
-            Err(e) => (
-                StatusCode::BAD_GATEWAY,
-                axum::Json(serde_json::json!({
-                    "error": "MAKOD_DISPATCH_FAILED",
-                    "message": e.to_string()
-                })),
-            )
-                .into_response(),
+            Err(e) => makod_dispatch_error(&e),
         }
     }
 
@@ -944,7 +969,18 @@ mod rest {
         }
 
         // Forward to makod `geli.lieferbeginn.anmelden`.
-        let idempotency_key = format!("processd-start-supply-gas-{malo_id}");
+        //
+        // The key carries the Lieferbeginn as well as the MaLo, matching the
+        // Strom sibling above and the Lieferende key below. A MaLo can legitimately
+        // have more than one Lieferbeginn over its life (move-out then move-back-in,
+        // or a corrected date after a GNB rejection), so a MaLo-only key would name
+        // two genuinely different commands identically.
+        let idempotency_key = format!(
+            "processd-start-supply-gas-{malo_id}-{}",
+            body.get("process_date")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+        );
         let cmd = mako_markt::makod_client::ForwardCommand {
             marktrolle: Some("LF".to_owned()),
             command: mako_markt::commands::GELI_LIEFERBEGINN_ANMELDEN.to_owned(),
@@ -964,14 +1000,7 @@ mod rest {
                 })),
             )
                 .into_response(),
-            Err(e) => (
-                StatusCode::BAD_GATEWAY,
-                axum::Json(serde_json::json!({
-                    "error": "MAKOD_DISPATCH_FAILED",
-                    "message": e.to_string()
-                })),
-            )
-                .into_response(),
+            Err(e) => makod_dispatch_error(&e),
         }
     }
 
@@ -1075,14 +1104,7 @@ mod rest {
                 })),
             )
                 .into_response(),
-            Err(e) => (
-                StatusCode::BAD_GATEWAY,
-                axum::Json(serde_json::json!({
-                    "error": "MAKOD_DISPATCH_FAILED",
-                    "message": e.to_string()
-                })),
-            )
-                .into_response(),
+            Err(e) => makod_dispatch_error(&e),
         }
     }
 }

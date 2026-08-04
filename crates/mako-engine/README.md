@@ -126,7 +126,7 @@ uses the correct helper from `fristen`:
 | Process family | Deadline | Helper |
 |---|---|---|
 | GPKE | 24 wall-clock hours | `fristen::add_hours(t, 24)` |
-| WiM | 5 Werktage | `fristen::add_werktage(d, 5, HolidayCalendar::BdewMaKo)` |
+| WiM Strom | 3 / 5 / 7 / 1 Werktage, per PID | `mako_wim::antwort_frist_werktage(pid)` → `fristen::deadline_at_werktage` |
 | GeLi Gas | 10 Werktage | `fristen::add_werktage(d, 10, HolidayCalendar::BdewMaKo)` |
 | WiM Gas | 10 Werktage | `fristen::add_werktage(d, 10, HolidayCalendar::BdewMaKo)` |
 

@@ -267,6 +267,13 @@ impl Daemon for Vertragd {
                 axum::routing::post(handlers::post_angebot_webhook),
             )
             .merge(mcp_server::router(mcp_state, ct.clone()))
+            // Every authenticated handler extracts `Claims`, and the extractor
+            // rejects a token whose `mako_tenant` is not this deployment's. A
+            // route added later cannot forget the check without also dropping
+            // authentication — the omission is not silent.
+            .layer(Extension(mako_service::oidc::ExpectedTenant(
+                cfg.tenant.clone(),
+            )))
             .layer(Extension(oidc))
             .layer(Extension(Arc::clone(&cfg)))
             .layer(Extension(Arc::clone(&http_client)))

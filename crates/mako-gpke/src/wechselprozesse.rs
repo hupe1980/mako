@@ -78,13 +78,13 @@ pub const WORKFLOW_NAME: &str = "gpke-supplier-change";
 /// Inbound ANFRAGE PIDs handled by this workflow as a receiving NB/LFA.
 ///
 /// Only these PIDs are routed to `GpkeSupplierChangeWorkflow` by the engine.
-/// The corresponding outbound ANTWORT PIDs (55003–55006, 55017, 55018, 55078, 55080)
+/// The corresponding outbound ANTWORT PIDs (55002/55003, 55005/55006, 55017, 55018, 55078, 55080)
 /// are derived internally by `response_pid_for` and stored in the `AntwortGesendet` event.
 ///
 /// | PID   | Process (LFW24 AHB name)                          | AHB profile  |
 /// |-------|---------------------------------------------------|--------------|
 /// | 55001 | Anfrage Lieferbeginn verb. MaLo (LFN → NB)        | S2.1–S2.2 ✅ |
-/// | 55002 | Anfrage Lieferende verb. MaLo (LFN → NB)          | S2.1–S2.2 ✅ |
+/// | 55004 | Abmeldung / Lieferende verb. MaLo (LFN → NB)      | S2.1–S2.2 ✅ |
 /// | 55016 | Kündigung Lieferbeginn (LFN → LFA)                | S2.1–S2.2 ✅ |
 /// | 55077 | Anmeldung Lieferbeginn erz. MaLo (LFN → NB)       | S2.1–S2.2 ✅ |
 /// | 55557 | Änderung MSB-Abr.-Daten der MaLo (LFN ↔ NB)       | GPKE Teil 4  |
@@ -101,6 +101,19 @@ pub const UTILMD_PIDS: &[u32] = &[
     55077, // Anmeldung Lieferbeginn erz. MaLo (LFN → NB, BK6-24-174)
     55557, // Änderung MSB-Abr.-Daten der MaLo (GPKE Teil 4, PID 3.3 + PID 4.0)
 ];
+
+/// The subset of [`UTILMD_PIDS`] this workflow can carry to completion.
+///
+/// `SendAntwort` derives its outbound PID from `response_pid_for`, which knows
+/// only these four. Spawning a process for a PID it cannot answer produces one
+/// that sits until the 24-hour BK6-22-024 deadline and then transitions to
+/// `Rejected` without anything having gone wrong — worse than not accepting the
+/// message, because it manufactures a false rejection.
+///
+/// `55557` (Änderung MSB-Abrechnungsdaten, GPKE Teil 4) stays registered so the
+/// router still resolves it, but has no Antwort mapping and therefore no
+/// receiving implementation yet.
+pub const UTILMD_ANFRAGE_PIDS: &[u32] = &[55001, 55004, 55016, 55077];
 
 /// IFTSTA GPKE Prüfidentifikatoren — PIDs 21024–21028, 21033, 21035.
 ///
@@ -416,9 +429,10 @@ pub enum SupplierChangeCommand {
     ///
     /// The workflow derives the correct response PID from the anfrage PID and
     /// the `accepted` flag:
-    /// - 55001 (Lieferbeginn) → 55003 (accepted) / 55004 (rejected)
-    /// - 55002 (Lieferende)   → 55005 (accepted) / 55006 (rejected)
-    /// - 55016 (Kündigung)    → 55017 (accepted) / 55018 (rejected)
+    /// - 55001 (Anmeldung / Lieferbeginn) → 55002 (accepted) / 55003 (rejected)
+    /// - 55004 (Abmeldung / Lieferende)   → 55005 (accepted) / 55006 (rejected)
+    /// - 55016 (Kündigung)                → 55017 (accepted) / 55018 (rejected)
+    /// - 55077 (Anmeldung erz. MaLo)      → 55078 (accepted) / 55080 (rejected)
     ///
     /// BDEW GPKE / BK6-22-024: Response must be sent within **24 wall-clock
     /// hours** of receiving the UTILMD Anfrage (not Werktage).
@@ -725,7 +739,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                     return Err(WorkflowError::invalid_state("New", state.label()));
                 }
                 // PID guard — accepts only inbound ANFRAGE PIDs per UTILMD AHB S2.1/S2.2.
-                // Response PIDs 55003–55006, 55017, 55018 are outbound; they are derived
+                // Response PIDs 55002/55003, 55005/55006, 55017, 55018 are outbound; they are derived
                 // internally by response_pid_for() and stored in AntwortGesendet events.
                 // ORDERS Sperrung (17115/17116/17117) is routed to GpkeSperrungWorkflow.
                 // PID 55555 is "Anfrage Daten der individuellen Bestellung" (GPKE Teil 4).
@@ -736,7 +750,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 if !UTILMD_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
                         "expected an inbound ANFRAGE PID (55001, 55002, or 55016), \
-                         got {pid}. Response PIDs (55003–55006, 55017, 55018) \
+                         got {pid}. Response PIDs (55002/55003, 55005/55006, 55017, 55018) \
                          are outbound only. ORDERS Sperrung (17115/17116/17117) \
                          routes to GpkeSperrungWorkflow.",
                     )));

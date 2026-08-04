@@ -16,6 +16,11 @@ pub struct Config {
     pub edmd: EdmdConfig,
     pub marktd: MarktdConfig,
     pub makod: MakodConfig,
+    /// Where Summenzeitreihen are filed — bilateral BIKO today, MaBiS-Hub after
+    /// BK6-24-210. See [`crate::submission::SubmissionTarget`]; an unimplemented
+    /// target is rejected at startup rather than mid-run.
+    #[serde(default)]
+    pub submission_target: crate::submission::SubmissionTarget,
     #[serde(default)]
     pub schedule: ScheduleConfig,
     #[serde(default)]
@@ -157,6 +162,10 @@ pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {
     let mut cfg: Config =
         toml::from_str(&text).map_err(|e| anyhow::anyhow!("config parse error: {e}"))?;
     cfg.resolve_env_refs()?;
+    // Reject an unimplemented submission target here rather than at the first
+    // submission: by then a run has aggregated a month of metering data and
+    // consumed its version number.
+    cfg.submission_target.ensure_supported()?;
     Ok(cfg)
 }
 

@@ -62,8 +62,8 @@ use mako_gpke::{
 };
 use mako_mabis::{MabisBillingWorkflow, MabisClearinglisteWorkflow};
 use mako_wim::{
-    WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow,
-    WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimRechnungWorkflow, WimStammdatenWorkflow,
+    WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimInvoicWorkflow,
+    WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
 };
 use mako_wim_gas::{
     WimGasAnmeldungWorkflow, WimGasGeraeteubernahmeWorkflow, WimGasInsrptWorkflow,
@@ -177,8 +177,11 @@ impl EdifactIngestDispatcher {
         "gpke-stornierung",
         "gpke-supplier-change",
         "gpke-utilts",
+        "mabis-anforderung",
         "mabis-billing",
         "mabis-clearingliste",
+        "mabis-listenabgleich",
+        "mabis-zp-lifecycle",
         "redispatch-aktivierung",
         "wim-device-change",
         "wim-gas-anmeldung",
@@ -190,9 +193,9 @@ impl EdifactIngestDispatcher {
         "wim-gas-verpflichtungsanfrage",
         "wim-geraeteubernahme",
         "wim-insrpt",
+        "wim-invoic",
         "wim-preisanfrage",
         "wim-preisliste",
-        "wim-rechnung",
         "wim-stammdaten",
         "wim-technik-aenderung",
         mako_wim::wertebestellung::WORKFLOW_NAME,

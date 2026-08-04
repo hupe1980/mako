@@ -5,14 +5,14 @@
 use super::*;
 // ── WiM INVOIC billing (PID 31009 MSB-Rechnung) ───────────────────────────────
 
-/// Build an [`AdapterRegistry`] for [`WimRechnungWorkflow`].
+/// Build an [`AdapterRegistry`] for [`WimInvoicWorkflow`].
 ///
-/// Extracts INVOIC fields to construct a [`WimRechnungCommand::ReceiveInvoic`]
+/// Extracts INVOIC fields to construct a [`WimInvoicCommand::ReceiveInvoic`]
 /// for the WiM Strom MSB-Rechnung (PID 31009). This PID is explicitly excluded
 /// from `mako-gpke`'s GPKE_INVOIC_PIDS. (The Gas WiM-Rechnung 31003 lives in
 /// `mako-wim-gas`, duplicated per Sparte.)
 #[must_use]
-pub fn wim_rechnung_registry() -> AdapterRegistry<WimRechnungWorkflow> {
+pub fn wim_invoic_registry() -> AdapterRegistry<WimInvoicWorkflow> {
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
         is_known_fv,
@@ -50,7 +50,7 @@ pub fn wim_rechnung_registry() -> AdapterRegistry<WimRechnungWorkflow> {
                 .and_then(|b| b.document_id.as_deref())
                 .unwrap_or(msg.message_ref());
 
-            Ok(WimRechnungCommand::ReceiveInvoic {
+            Ok(WimInvoicCommand::ReceiveInvoic {
                 pruefidentifikator: pid,
                 sender: MarktpartnerCode::new(
                     inv.sender()
@@ -83,14 +83,14 @@ pub fn wim_rechnung_registry() -> AdapterRegistry<WimRechnungWorkflow> {
 // ── WiM billing — REMADV payment advice (PIDs 33001–33004) ────────────────────
 
 /// Build an [`AdapterRegistry`] for REMADV 33001–33004 routed to
-/// [`WimRechnungWorkflow`] (MSB invoicer role).
+/// [`WimInvoicWorkflow`] (MSB invoicer role).
 ///
 /// After the MSB sends INVOIC 31009, the payer (NB/LF/ESA) returns a REMADV:
 /// 33001 confirms payment; 33002 non-itemized Abweisung; 33003/33004 the itemized
 /// Strom Abweisungen (Kopf+Summe / Position). `makod` resumes the billing process
-/// with [`WimRechnungCommand::ReceiveRemadv`]. Mirrors `gpke_abrechnung_remadv_registry`.
+/// with [`WimInvoicCommand::ReceiveRemadv`]. Mirrors `gpke_abrechnung_remadv_registry`.
 #[must_use]
-pub fn wim_rechnung_remadv_registry() -> AdapterRegistry<WimRechnungWorkflow> {
+pub fn wim_invoic_remadv_registry() -> AdapterRegistry<WimInvoicWorkflow> {
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
         is_known_fv,
@@ -112,7 +112,7 @@ pub fn wim_rechnung_remadv_registry() -> AdapterRegistry<WimRechnungWorkflow> {
                     )
                 })
                 .and_then(convert_pid)?;
-            Ok(WimRechnungCommand::ReceiveRemadv {
+            Ok(WimInvoicCommand::ReceiveRemadv {
                 pid,
                 remadv_ref: MessageRef::new(msg.message_ref()),
                 sender: MarktpartnerCode::new(
@@ -126,13 +126,13 @@ pub fn wim_rechnung_remadv_registry() -> AdapterRegistry<WimRechnungWorkflow> {
 
 // ── WiM billing — COMDIS payment rejection (PID 29001) ────────────────────────
 
-/// Build an [`AdapterRegistry`] for COMDIS 29001 routed to [`WimRechnungWorkflow`].
+/// Build an [`AdapterRegistry`] for COMDIS 29001 routed to [`WimInvoicWorkflow`].
 ///
 /// After the payer sends a REMADV, the MSB (invoicer) may reject it via COMDIS
 /// 29001 (Ablehnung der Zahlung); `makod` resumes with
-/// [`WimRechnungCommand::ReceiveComdis`]. Mirrors `gpke_abrechnung_comdis_registry`.
+/// [`WimInvoicCommand::ReceiveComdis`]. Mirrors `gpke_abrechnung_comdis_registry`.
 #[must_use]
-pub fn wim_rechnung_comdis_registry() -> AdapterRegistry<WimRechnungWorkflow> {
+pub fn wim_invoic_comdis_registry() -> AdapterRegistry<WimInvoicWorkflow> {
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
         is_known_fv,
@@ -145,7 +145,7 @@ pub fn wim_rechnung_comdis_registry() -> AdapterRegistry<WimRechnungWorkflow> {
                     "WiM COMDIS adapter: expected COMDIS message (PID 29001)".into(),
                 ));
             };
-            Ok(WimRechnungCommand::ReceiveComdis {
+            Ok(WimInvoicCommand::ReceiveComdis {
                 comdis_ref: MessageRef::new(msg.message_ref()),
             })
         },

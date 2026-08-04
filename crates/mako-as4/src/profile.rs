@@ -9,7 +9,7 @@ pub use asx_rs::as4::FragmentScopePolicy;
 use asx_rs::core::InteropMode;
 use asx_rs::interop::{
     As2ValidationPolicy, BaseProfile, CanonicalizationPolicy, ProfileStack,
-    ProfileValidationReport, ProfileValidationResult, SecurityPolicy, ValidationPolicy,
+    ProfileValidationReport, SecurityPolicy, ValidationPolicy,
 };
 
 use crate::{
@@ -127,7 +127,18 @@ pub fn bdew_mako_profile_stack() -> ProfileStack {
                 reject_ambiguous_headers: true,
                 enforce_payload_limits: true,
             },
-            // AS2-only concern, modelled separately from the AS4 policy (asx-rs 0.11).
+            // The floor no override may relax. asx-rs enforces this across the
+            // base and every override layer during `validate()`, rejecting a
+            // downgrade with `SecurityFloorViolation`.
+            //
+            // It matters because the generic AS4 invariant only rejects
+            // disabling *both* signature and encryption. BDEW AS4-Profil v1.2
+            // §2.2.6.2.2 requires both, so a layer that keeps signing and turns
+            // encryption off satisfies the generic rule while breaking the
+            // mandate — and every message to that partner would go out in the
+            // clear.
+            security_floor: SecurityPolicy::SIGN_AND_ENCRYPT,
+            // AS2-only concern, modelled separately from the AS4 policy.
             as2_validation: As2ValidationPolicy { require_mic: false },
         },
         extensions: Vec::new(),
@@ -352,15 +363,35 @@ impl BdewAs4Profile {
         self.registry.resolve(partner_mp_id, service, action)
     }
 
-    /// Validate the profile stack.
+    /// Validate the profile stack against the BDEW MaKo mandate.
     ///
-    /// Returns an error if any critical security invariant is violated (e.g.,
-    /// both `require_signature` and `require_encryption` are `false`).
+    /// Runs `asx-rs`'s generic AS4 validation and then the stricter BDEW rule on
+    /// top of it.
     ///
-    /// Call this at startup before serving traffic to catch misconfiguration early.
-    pub fn validate(&self) -> ProfileValidationResult<ProfileValidationReport> {
-        self.stack.validate()
+    /// # Errors
+    ///
+    /// [`BdewProfileError`] when any AS4 invariant fails, including a layer that
+    /// relaxes the sign-and-encrypt floor declared in [`bdew_mako_profile_stack`]
+    /// (`ProfileValidationCode::SecurityFloorViolation`).
+    ///
+    /// Call this at startup before serving traffic, so a misconfigured partner
+    /// overlay fails the process rather than silently downgrading its traffic.
+    pub fn validate(&self) -> Result<ProfileValidationReport, BdewProfileError> {
+        Ok(self.stack.validate()?)
     }
+}
+
+/// Startup validation of the BDEW MaKo AS4 profile failed.
+#[derive(Debug, thiserror::Error)]
+pub enum BdewProfileError {
+    /// An AS4 profile invariant was violated.
+    ///
+    /// Includes the BDEW sign-and-encrypt floor: `asx-rs` reports a relaxing
+    /// layer as `ProfileValidationCode::SecurityFloorViolation`, so the check
+    /// mako used to perform itself now lives in the layer that owns policy
+    /// resolution.
+    #[error(transparent)]
+    Validation(#[from] asx_rs::interop::ProfileValidationFailure),
 }
 
 #[cfg(test)]
@@ -399,6 +430,95 @@ mod tests {
             stack.base.security.require_encryption,
             "encryption must be required — BDEW AS4-Profil v1.2 §2.2.6.2.2"
         );
+    }
+
+    /// BDEW AS4-Profil v1.2 §2.2.6.2.2 requires MaKo messages to be signed **and**
+    /// encrypted. `asx-rs` only rejects a layer that disables *both*, so a partner
+    /// overlay that keeps signing and turns encryption off passes its check —
+    /// and every message to that partner would go out unencrypted.
+    ///
+    /// `partner_overrides` is a public field, so this is reachable by
+    /// configuration, not just in theory.
+    #[test]
+    fn a_partner_overlay_cannot_turn_off_encryption() {
+        use asx_rs::interop::{
+            PartnerProfileOverlay, ProfilePolicyOverrides, ProfileValidationCode,
+        };
+
+        let mut profile = BdewAs4Profile::new();
+        profile.stack.partner_overrides.push(PartnerProfileOverlay {
+            name: "legacy-partner".to_owned(),
+            partner_id: "9900000000001".to_owned(),
+            overrides: ProfilePolicyOverrides {
+                security: Some(SecurityPolicy {
+                    require_signature: true,
+                    require_encryption: false,
+                }),
+                ..Default::default()
+            },
+        });
+
+        // Signing stays on, so the generic "at least one of the two" invariant is
+        // satisfied. Only the declared floor rejects this.
+        let failure = profile
+            .stack
+            .validate()
+            .expect_err("the sign-and-encrypt floor must refuse the downgrade");
+        assert!(
+            failure.has_code(ProfileValidationCode::SecurityFloorViolation),
+            "expected a floor violation, got {failure}"
+        );
+
+        let err = profile
+            .validate()
+            .expect_err("and BdewAs4Profile::validate must surface it");
+        assert!(
+            err.to_string().contains("floor") || err.to_string().contains("encryption"),
+            "the refusal should name what was relaxed: {err}"
+        );
+    }
+
+    /// Signing may not be dropped either.
+    #[test]
+    fn a_layer_cannot_turn_off_signing() {
+        use asx_rs::interop::{ProfileOverride, ProfilePolicyOverrides, ProfileValidationCode};
+
+        let mut profile = BdewAs4Profile::new();
+        profile.stack.overrides.push(ProfileOverride {
+            name: "no-signing".to_owned(),
+            overrides: ProfilePolicyOverrides {
+                security: Some(SecurityPolicy {
+                    require_signature: false,
+                    require_encryption: true,
+                }),
+                ..Default::default()
+            },
+        });
+        let failure = profile.stack.validate().expect_err("must refuse");
+        assert!(
+            failure.has_code(ProfileValidationCode::SecurityFloorViolation),
+            "expected a floor violation, got {failure}"
+        );
+        assert!(profile.validate().is_err());
+    }
+
+    /// The floor is what makes the two tests above fail — assert it explicitly
+    /// so a stack built without it cannot pass unnoticed.
+    #[test]
+    fn the_stack_declares_the_bdew_sign_and_encrypt_floor() {
+        let stack = bdew_mako_profile_stack();
+        assert_eq!(
+            stack.base.security_floor,
+            SecurityPolicy::SIGN_AND_ENCRYPT,
+            "BDEW AS4-Profil v1.2 §2.2.6.2.2 requires signing AND encryption"
+        );
+    }
+
+    /// The unmodified BDEW profile still validates.
+    #[test]
+    fn the_base_profile_passes_the_bdew_check() {
+        let profile = BdewAs4Profile::new();
+        assert!(profile.validate().is_ok());
     }
 
     #[test]

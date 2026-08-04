@@ -21,6 +21,8 @@ path = "src/lib.rs"
 mako-events = { workspace = true }
 mako-markt = { workspace = true, features = ["marktd-client"] }
 mako-obs  = { workspace = true }
+mako-wim  = { workspace = true }
+mako-engine = { workspace = true }
 
 anyhow             = { workspace = true }
 thiserror          = { workspace = true }

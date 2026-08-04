@@ -22,7 +22,11 @@
 //!   erasing the mapping unlinks it (pseudonymisation).
 //! - **Tenant scoping** — the same MaLo under two tenants stays isolated on read,
 //!   never merged.
+//! - **§ 60 Abs. 2 MsbG Ersatzwertbildung** — a substitute reproduces the same
+//!   quarter-hour one week earlier (not a degraded fallback), never overwrites a
+//!   real measurement, and leaves one § 60 Abs. 6 audit row per substituted slot.
 
+use edmd::domain::validation::ValidatedReads;
 use edmd::domain::{
     CorrectionRecord, CorrectionSource, IngestionSource, MeterRead, QualityFlag, Sparte,
     TimeSeriesQuery, TimeSeriesRepository, Typ2DeliveryPath, Typ2Read, Typ2Repository,
@@ -104,6 +108,17 @@ async fn setup() -> (
 
 fn kwh(s: &str) -> Decimal {
     s.parse().expect("decimal")
+}
+
+/// `store_reads` only accepts a batch that has been through V01–V10, so these
+/// tests run the same validation the handlers do. Validation annotates and never
+/// rejects, so a deliberately faulty fixture still reaches the store.
+fn validated(reads: Vec<MeterRead>) -> ValidatedReads {
+    let malo = reads
+        .first()
+        .map_or("51238696780", |r| r.malo_id.as_str())
+        .to_owned();
+    ValidatedReads::validate(reads, "TEST", &malo).0
 }
 
 /// One 15-minute interval for `malo` starting at `from`.
@@ -219,7 +234,13 @@ async fn reads_and_typ2_share_a_catalog_but_stay_isolated() {
 
     let t = OffsetDateTime::now_utc() - Duration::days(1);
     reads
-        .store_reads(&[read("51238696780", t, "3.5", Sparte::Strom, "1-0:1.8.0")])
+        .store_reads(validated(vec![read(
+            "51238696780",
+            t,
+            "3.5",
+            Sparte::Strom,
+            "1-0:1.8.0",
+        )]))
         .await
         .expect("store authoritative read");
     typ2.store_typ2_reads(&[Typ2Read {
@@ -267,9 +288,15 @@ async fn ingest_roundtrip_preserves_gas_sparte() {
     let (repo, _pool, _pg, _wh) = setup().await;
     let t = OffsetDateTime::now_utc() - Duration::days(1);
 
-    repo.store_reads(&[read("51238696780", t, "3.5", Sparte::Gas, "7-1:3.0.0")])
-        .await
-        .expect("store gas read");
+    repo.store_reads(validated(vec![read(
+        "51238696780",
+        t,
+        "3.5",
+        Sparte::Gas,
+        "7-1:3.0.0",
+    )]))
+    .await
+    .expect("store gas read");
 
     let reads = repo.query(&window("51238696780", t)).await.expect("query");
     assert_eq!(reads.len(), 1, "the stored interval reads back");
@@ -296,7 +323,9 @@ async fn ingest_roundtrip_preserves_provenance() {
     r.source = IngestionSource::DirectPush;
     r.sender_mp_id = Some("9988888888888".to_owned());
     r.allocation_version = "ESA-42".to_owned();
-    repo.store_reads(&[r]).await.expect("store read");
+    repo.store_reads(validated(vec![r]))
+        .await
+        .expect("store read");
 
     let reads = repo.query(&window("51238696780", t)).await.expect("query");
     assert_eq!(reads.len(), 1);
@@ -334,7 +363,9 @@ async fn billable_filter_excludes_faulty_from_aggregates() {
         "1-0:1.8.0",
     );
     bad.quality = QualityFlag::Faulty;
-    repo.store_reads(&[good, bad]).await.expect("store reads");
+    repo.store_reads(validated(vec![good, bad]))
+        .await
+        .expect("store reads");
 
     let day = t.date();
     let report = repo
@@ -360,13 +391,15 @@ async fn query_as_of_reconstructs_the_value_in_force() {
     // Original delivered 3h ago.
     let mut original = read("51238696780", interval, "3.5", Sparte::Strom, "1-0:1.8.0");
     original.valid_from_tx = Some(OffsetDateTime::now_utc() - Duration::hours(3));
-    repo.store_reads(&[original]).await.expect("store original");
+    repo.store_reads(validated(vec![original]))
+        .await
+        .expect("store original");
 
     // Correction delivered 1h ago (supersedes on current read).
     let mut corrected = read("51238696780", interval, "4.0", Sparte::Strom, "1-0:1.8.0");
     corrected.quality = QualityFlag::Corrected;
     corrected.valid_from_tx = Some(OffsetDateTime::now_utc() - Duration::hours(1));
-    repo.store_reads(&[corrected])
+    repo.store_reads(validated(vec![corrected]))
         .await
         .expect("store correction");
 
@@ -406,7 +439,9 @@ async fn query_as_of_hides_an_interval_first_stored_later() {
 
     let mut early = read("51238696780", interval, "3.5", Sparte::Strom, "1-0:1.8.0");
     early.valid_from_tx = Some(OffsetDateTime::now_utc() - Duration::hours(3));
-    repo.store_reads(&[early]).await.expect("store early");
+    repo.store_reads(validated(vec![early]))
+        .await
+        .expect("store early");
 
     // A second interval, first stored 1h ago.
     let later_interval = interval + Duration::minutes(15);
@@ -418,7 +453,9 @@ async fn query_as_of_hides_an_interval_first_stored_later() {
         "1-0:1.8.0",
     );
     late.valid_from_tx = Some(OffsetDateTime::now_utc() - Duration::hours(1));
-    repo.store_reads(&[late]).await.expect("store late");
+    repo.store_reads(validated(vec![late]))
+        .await
+        .expect("store late");
 
     let q = window("51238696780", interval);
     let mid = OffsetDateTime::now_utc() - Duration::hours(2);
@@ -443,10 +480,10 @@ async fn latest_read_returns_the_newest_interval() {
     let earlier = base;
     let later = base + Duration::minutes(15);
 
-    repo.store_reads(&[
+    repo.store_reads(validated(vec![
         read("51238696780", earlier, "1.0", Sparte::Strom, "1-0:1.8.0"),
         read("51238696780", later, "2.0", Sparte::Strom, "1-0:1.8.0"),
-    ])
+    ]))
     .await
     .expect("store reads");
 
@@ -469,7 +506,9 @@ async fn correction_supersedes_value_and_writes_audit_row() {
     // stored now, is unambiguously the newer version on resolution.
     let mut original = read("51238696780", t, "3.5", Sparte::Strom, "1-0:1.8.0");
     original.valid_from_tx = Some(OffsetDateTime::now_utc() - Duration::hours(2));
-    repo.store_reads(&[original]).await.expect("store original");
+    repo.store_reads(validated(vec![original]))
+        .await
+        .expect("store original");
 
     let ids = repo
         .store_corrections(&[CorrectionRecord {
@@ -523,12 +562,16 @@ async fn ingest_overwrite_audit_row_covers_the_full_interval() {
 
     let mut first = read("51238696780", t, "3.5", Sparte::Strom, "1-0:1.8.0");
     first.valid_from_tx = Some(OffsetDateTime::now_utc() - Duration::hours(2));
-    repo.store_reads(&[first]).await.expect("store first");
+    repo.store_reads(validated(vec![first]))
+        .await
+        .expect("store first");
 
     // Same interval, newer transaction time, different value → overwrites.
     let mut second = read("51238696780", t, "9.0", Sparte::Strom, "1-0:1.8.0");
     second.valid_from_tx = Some(OffsetDateTime::now_utc());
-    repo.store_reads(&[second]).await.expect("store overwrite");
+    repo.store_reads(validated(vec![second]))
+        .await
+        .expect("store overwrite");
 
     let (dtm_from, dtm_to): (OffsetDateTime, OffsetDateTime) = sqlx::query_as(
         "SELECT dtm_from, dtm_to FROM meter_read_corrections WHERE malo_id = $1 AND source = 'MSCONS_UPDATE'",
@@ -551,9 +594,15 @@ async fn gdpr_erasure_unlinks_the_ingest_registered_subject() {
     let (repo, _pool, _pg, _wh) = setup().await;
     let t = OffsetDateTime::now_utc() - Duration::days(1);
 
-    repo.store_reads(&[read("51238696780", t, "3.5", Sparte::Strom, "1-0:1.8.0")])
-        .await
-        .expect("store read");
+    repo.store_reads(validated(vec![read(
+        "51238696780",
+        t,
+        "3.5",
+        Sparte::Strom,
+        "1-0:1.8.0",
+    )]))
+    .await
+    .expect("store read");
 
     let registry = repo
         .store()
@@ -603,8 +652,12 @@ async fn reads_are_scoped_to_their_tenant() {
     alpha.tenant = "9910000000001".to_owned();
     let mut beta = read("51238696780", t, "9.9", Sparte::Strom, "1-0:1.8.0");
     beta.tenant = "9920000000002".to_owned();
-    repo.store_reads(&[alpha]).await.expect("store alpha");
-    repo.store_reads(&[beta]).await.expect("store beta");
+    repo.store_reads(validated(vec![alpha]))
+        .await
+        .expect("store alpha");
+    repo.store_reads(validated(vec![beta]))
+        .await
+        .expect("store beta");
 
     let q = |tenant: &str| TimeSeriesQuery {
         malo_id: "51238696780".to_owned(),
@@ -629,4 +682,152 @@ async fn reads_are_scoped_to_their_tenant() {
     let b = repo.query(&q("9920000000002")).await.expect("query beta");
     assert_eq!(b.len(), 1);
     assert_eq!(b[0].quantity_kwh, kwh("9.9"));
+}
+
+/// § 60 Abs. 2 MsbG Ersatzwertbildung, end to end against a real database.
+///
+/// The regulated artefact is the *number* a substitute carries, and the method
+/// that has to produce it — `PriorPeriodSameSlot` — is the same shape as the
+/// seasonal-forecast defect this service already hit once, where the handler
+/// passed no reference window and every result silently degraded to a naive
+/// fallback. A degraded substitute is indistinguishable from a correct one in
+/// the response body, so the assertion has to be on the value.
+///
+/// The fixture gives every quarter-hour of the prior week a distinct value, so
+/// "same slot one week earlier" is the only rule that reproduces it: an average,
+/// a carry-forward and a zero-fill all land somewhere else.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
+    use edmd::server::{SubstituteRequest, run_substitute_values};
+    use time::format_description::well_known::Rfc3339;
+
+    let (repo, pool, _pg, _wh) = setup().await;
+    let malo = "51238696780";
+    let obis = "1-0:1.8.0";
+
+    // A gap well in the past, so V08 (future timestamp) cannot fire on the
+    // reference data, and slot-aligned so the week-earlier slot exists.
+    let gap_from = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("2026-01-01T00:00Z");
+    let gap_to = gap_from + Duration::hours(1); // four quarter-hours
+    let week = Duration::days(7);
+
+    // 672 quarter-hours covering exactly [gap_from - 7d, gap_from), each with a
+    // unique value derived from its index.
+    let prior: Vec<MeterRead> = (0..672)
+        .map(|i| {
+            let start = gap_from - week + Duration::minutes(15 * i);
+            read(malo, start, &format!("{}.5", i + 1), Sparte::Strom, obis)
+        })
+        .collect();
+    repo.store_reads(validated(prior))
+        .await
+        .expect("store prior week");
+
+    // One real measurement inside the gap: § 60 Abs. 2 authorises a substitute
+    // only where no measurement exists, so this slot must survive untouched.
+    let measured_slot = gap_from + Duration::minutes(30);
+    repo.store_reads(validated(vec![read(
+        malo,
+        measured_slot,
+        "9999.0",
+        Sparte::Strom,
+        obis,
+    )]))
+    .await
+    .expect("store the measured slot inside the gap");
+
+    let req = SubstituteRequest {
+        gap_from: gap_from.format(&Rfc3339).expect("rfc3339"),
+        gap_to: gap_to.format(&Rfc3339).expect("rfc3339"),
+        interval_secs: Some(900),
+        method: Some("PriorPeriodAverage".to_owned()),
+        prior_days: Some(7),
+        operator_id: Some("TEST-OPERATOR".to_owned()),
+        sparte: Some("STROM".to_owned()),
+        reason: Some("NoMeasurementAvailable".to_owned()),
+        obis_code: Some(obis.to_owned()),
+    };
+    let status = run_substitute_values(&repo, "9910000000001", malo, &req)
+        .await
+        .status();
+    assert_eq!(
+        status.as_u16(),
+        201,
+        "the substitute run must succeed with a full reference week"
+    );
+
+    let stored = repo
+        .query(&TimeSeriesQuery {
+            malo_id: malo.to_owned(),
+            from: gap_from,
+            to: gap_to,
+            sparte: None,
+            tenant: "9910000000001".to_owned(),
+        })
+        .await
+        .expect("read the gap window back");
+
+    // Gap slot `n` starts at `gap_from + 15n min`; one week earlier that is
+    // `gap_from - 7d + 15n min`, which is prior index `n` — value `n + 1` .5.
+    for (n, slot) in (0..4).map(|n| (n, gap_from + Duration::minutes(15 * n))) {
+        let row = stored
+            .iter()
+            .find(|r| r.dtm_from == slot)
+            .unwrap_or_else(|| panic!("no reading at gap slot {n}"));
+
+        if slot == measured_slot {
+            assert_eq!(
+                row.quantity_kwh,
+                kwh("9999.0"),
+                "a slot that already carried a measurement must not be substituted"
+            );
+            assert_eq!(
+                row.quality,
+                QualityFlag::Measured,
+                "the surviving measurement must keep its quality"
+            );
+            continue;
+        }
+
+        let expected = kwh(&format!("{}.5", n + 1));
+        assert_eq!(
+            row.quantity_kwh, expected,
+            "gap slot {n} must reproduce the value from the same slot one week \
+             earlier ({expected}), not a degraded fallback"
+        );
+        assert_eq!(
+            row.quality,
+            QualityFlag::Substituted,
+            "every § 60 Abs. 2 Ersatzwert must be flagged Substituted, or it is \
+             indistinguishable from a measurement"
+        );
+    }
+
+    // § 60 Abs. 6 MsbG: one audit row per substituted interval, and none for the
+    // slot that was left alone.
+    let logged: Vec<(OffsetDateTime, String)> = sqlx::query_as(
+        "SELECT dtm_from, method FROM substitute_value_log
+          WHERE malo_id = $1 AND tenant = $2 ORDER BY dtm_from",
+    )
+    .bind(malo)
+    .bind("9910000000001")
+    .fetch_all(&pool)
+    .await
+    .expect("read the substitute audit log");
+
+    assert_eq!(
+        logged.len(),
+        3,
+        "three substituted slots must each leave an audit row, and the measured \
+         slot none — got {logged:?}"
+    );
+    assert!(
+        logged.iter().all(|(_, m)| m == "PriorPeriodAverage"),
+        "the audit row must name the method that actually ran: {logged:?}"
+    );
+    assert!(
+        logged.iter().all(|(t, _)| *t != measured_slot),
+        "the untouched measured slot must not appear in the audit log"
+    );
 }

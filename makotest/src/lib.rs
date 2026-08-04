@@ -15,7 +15,10 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
 use edi_energy::builders::{InterchangeBuilder, MsconsBuilder, UtilmdBuilder};
-use edi_energy::{EdiEnergyMessage, ObjectType, Platform, Pruefidentifikator, Release};
+use edi_energy::registry::ReleaseRegistry;
+use edi_energy::{
+    EdiEnergyMessage, MessageType, ObjectType, Platform, Pruefidentifikator, Release,
+};
 use mako_engine::fristen::{self, HolidayCalendar};
 use rubo4e::identifiers::{MaloId, MeloId};
 
@@ -369,6 +372,155 @@ fn build_interchange(
         .map_err(|e| PyRuntimeError::new_err(format!("interchange build failed: {e}")))
 }
 
+// ── Prüfidentifikator introspection ───────────────────────────────────────────
+//
+// Which PIDs exist, and which of them the compiled profile set actually carries
+// AHB rules for, is a property of the BDEW documents — so it is answered here
+// rather than duplicated as a hand-maintained list in Python. Hypothesis
+// strategies draw from this, which is what keeps generated PIDs in step with
+// the profiles the platform validates against.
+
+fn message_type_from_str(name: &str) -> PyResult<MessageType> {
+    MessageType::from_unh_code(&name.to_ascii_uppercase())
+        .ok_or_else(|| PyValueError::new_err(format!("unknown EDIFACT message type {name:?}")))
+}
+
+/// Numeric bands the BDEW assigns to each message type's Prüfidentifikatoren.
+///
+/// UTILMD is the only type with two: Strom in 55xxx, Gas in 44xxx.
+fn pid_bands(mt: MessageType) -> &'static [(u32, u32)] {
+    match mt {
+        MessageType::Mscons => &[(13000, 13999)],
+        MessageType::Quotes => &[(15000, 15999)],
+        MessageType::Orders => &[(17000, 17999)],
+        MessageType::Ordrsp => &[(19000, 19999)],
+        MessageType::Iftsta => &[(21000, 21999)],
+        MessageType::Insrpt => &[(23000, 23999)],
+        MessageType::Utilts => &[(25000, 25999)],
+        MessageType::Pricat => &[(27000, 27999)],
+        MessageType::Aperak => &[(29000, 29999)],
+        MessageType::Invoic => &[(31000, 31999)],
+        MessageType::Remadv => &[(33000, 33999)],
+        MessageType::Reqote => &[(35000, 35999)],
+        MessageType::Partin => &[(37000, 37999)],
+        MessageType::Ordchg => &[(39000, 39999)],
+        MessageType::Utilmd => &[(44000, 44999), (55000, 55999)],
+        // COMDIS shares APERAK's 29xxx band — both AHBs declare 29001/29002,
+        // so neither owns it and a PID there resolves to *both*.
+        MessageType::Comdis => &[(29000, 29999)],
+        // CONTRL is a technical acknowledgement; its profiles are `pid_exempt`
+        // and the AHB assigns it no Prüfidentifikatoren at all.
+        MessageType::Contrl => &[],
+        // `MessageType` is #[non_exhaustive]. A type added upstream without a
+        // band here reports "no PIDs" rather than guessing a range; the
+        // `every_message_type_has_a_band` test fails so it is not missed.
+        _ => &[],
+    }
+}
+
+/// `True` when the compiled profile set carries real AHB rules for `pid`.
+///
+/// A message whose PID has no rules validates *vacuously*: `is_valid` comes
+/// back `True` having checked nothing. Asserting on such a message proves
+/// nothing, so tests that build one should assert this first.
+#[pyfunction]
+fn pid_has_ahb_rules(message_type: &str, pid: u32) -> PyResult<bool> {
+    let mt = message_type_from_str(message_type)?;
+    let Ok(p) = Pruefidentifikator::new(pid) else {
+        return Ok(false);
+    };
+    Ok(ReleaseRegistry::global().pid_has_ahb_rules(mt, p))
+}
+
+/// Every Prüfidentifikator of `message_type` the compiled profiles validate.
+///
+/// Ascending. Derived by scanning the type's BDEW number band, so it reflects
+/// exactly what this build can validate — a PID published by BDEW but not yet
+/// imported is absent, and that absence is the honest answer for a test
+/// generator.
+#[pyfunction]
+fn pruefidentifikatoren(message_type: &str) -> PyResult<Vec<u32>> {
+    let mt = message_type_from_str(message_type)?;
+    let reg = ReleaseRegistry::global();
+    let mut out = Vec::new();
+    for &(lo, hi) in pid_bands(mt) {
+        for code in lo..=hi {
+            if let Ok(p) = Pruefidentifikator::new(code)
+                && reg.pid_has_ahb_rules(mt, p)
+            {
+                out.push(code);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The `(Bestätigung, Ablehnung)` PIDs the AHB assigns to a request PID.
+///
+/// `None` when `anfrage` is not a request PID, or when the family has no
+/// complete pair — GeLi Gas 44020 is confirmable but cannot be rejected. Use
+/// `bestaetigung_pid` / `ablehnung_pid` for those.
+///
+/// Bound rather than re-tabulated in Python because the mapping is not
+/// `anfrage + 1` / `+ 2`: GPKE 55077 rejects with 55080 (55079 is unassigned).
+/// The GPKE and GeLi Gas workflows are conformance-tested against this same
+/// table, so a simulated counterparty answers with the PID the platform expects.
+#[pyfunction]
+fn answer_pids(anfrage: u32) -> Option<(u32, u32)> {
+    edi_energy::answer_pids(anfrage)
+}
+
+/// The Bestätigung PID for a request PID, if the AHB defines one.
+#[pyfunction]
+fn bestaetigung_pid(anfrage: u32) -> Option<u32> {
+    edi_energy::bestaetigung_pid(anfrage)
+}
+
+/// The Ablehnung PID for a request PID, if the AHB defines one.
+#[pyfunction]
+fn ablehnung_pid(anfrage: u32) -> Option<u32> {
+    edi_energy::ablehnung_pid(anfrage)
+}
+
+/// Every EDIFACT message type whose compiled profiles declare `pid`.
+///
+/// Ascending by type name, empty when no profile declares it.
+///
+/// A Prüfidentifikator does **not** identify one message type: APERAK and
+/// COMDIS both declare 29001 and 29002, so a function returning a single name
+/// has to be wrong for one of them. This resolves against the profiles rather
+/// than a band table, so it cannot disagree with what the platform validates.
+#[pyfunction]
+fn message_types_of(pid: u32) -> Vec<String> {
+    const TYPES: &[MessageType] = &[
+        MessageType::Aperak,
+        MessageType::Comdis,
+        MessageType::Iftsta,
+        MessageType::Insrpt,
+        MessageType::Invoic,
+        MessageType::Mscons,
+        MessageType::Ordchg,
+        MessageType::Orders,
+        MessageType::Ordrsp,
+        MessageType::Partin,
+        MessageType::Pricat,
+        MessageType::Quotes,
+        MessageType::Remadv,
+        MessageType::Reqote,
+        MessageType::Utilmd,
+        MessageType::Utilts,
+    ];
+    let Ok(p) = Pruefidentifikator::new(pid) else {
+        return Vec::new();
+    };
+    let reg = ReleaseRegistry::global();
+    TYPES
+        .iter()
+        .filter(|mt| reg.pid_has_ahb_rules(**mt, p))
+        .map(|mt| mt.as_str().to_owned())
+        .collect()
+}
+
 // ── Module ────────────────────────────────────────────────────────────────────
 
 #[pymodule]
@@ -387,6 +539,13 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(add_werktage, m)?)?;
     m.add_function(wrap_pyfunction!(next_werktag, m)?)?;
 
+    m.add_function(wrap_pyfunction!(pruefidentifikatoren, m)?)?;
+    m.add_function(wrap_pyfunction!(pid_has_ahb_rules, m)?)?;
+    m.add_function(wrap_pyfunction!(message_types_of, m)?)?;
+    m.add_function(wrap_pyfunction!(answer_pids, m)?)?;
+    m.add_function(wrap_pyfunction!(bestaetigung_pid, m)?)?;
+    m.add_function(wrap_pyfunction!(ablehnung_pid, m)?)?;
+
     m.add_function(wrap_pyfunction!(validate_edifact, m)?)?;
     m.add_function(wrap_pyfunction!(build_utilmd, m)?)?;
     m.add_function(wrap_pyfunction!(build_mscons, m)?)?;
@@ -395,4 +554,99 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Finding>()?;
     m.add_class::<ValidationReport>()?;
     Ok(())
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every EDIFACT message type that carries Prüfidentifikatoren must have a
+    /// band declared, or `pruefidentifikatoren()` silently returns nothing for
+    /// it and hypothesis draws from an empty pool.
+    ///
+    /// `MessageType` is `#[non_exhaustive]`, so a type added upstream reaches
+    /// the catch-all arm and this test is what surfaces it.
+    #[test]
+    fn every_pid_carrying_message_type_has_a_band() {
+        let carriers = [
+            MessageType::Utilmd,
+            MessageType::Mscons,
+            MessageType::Aperak,
+            MessageType::Invoic,
+            MessageType::Remadv,
+            MessageType::Orders,
+            MessageType::Iftsta,
+            MessageType::Insrpt,
+            MessageType::Reqote,
+            MessageType::Partin,
+            MessageType::Ordchg,
+            MessageType::Ordrsp,
+            MessageType::Quotes,
+            MessageType::Pricat,
+            MessageType::Utilts,
+        ];
+        for mt in carriers {
+            assert!(
+                !pid_bands(mt).is_empty(),
+                "{} carries Prüfidentifikatoren but has no band declared",
+                mt.as_str()
+            );
+        }
+    }
+
+    /// A PID resolves to every message type that declares it.
+    ///
+    /// 29001/29002 are declared by **both** APERAK and COMDIS, which is why
+    /// this returns a list: a single-name answer is wrong for one of them.
+    #[test]
+    fn message_types_of_resolves_against_the_profiles() {
+        for (pid, expected) in [
+            (55001u32, vec!["UTILMD"]),
+            (44001, vec!["UTILMD"]),
+            (13025, vec!["MSCONS"]),
+            (17115, vec!["ORDERS"]),
+            (31009, vec!["INVOIC"]),
+            (33001, vec!["REMADV"]),
+            (29001, vec!["APERAK", "COMDIS"]),
+            (29002, vec!["APERAK", "COMDIS"]),
+        ] {
+            assert_eq!(message_types_of(pid), expected, "pid {pid}");
+        }
+        assert!(message_types_of(99999).is_empty());
+        assert!(message_types_of(1).is_empty());
+    }
+
+    /// The enumeration must be non-empty, sorted, and free of the unknown-PID
+    /// false positives the old `rule_count() > 0` predicate produced.
+    #[test]
+    fn pruefidentifikatoren_are_sorted_and_exclude_unknown_codes() {
+        let utilmd = pruefidentifikatoren("UTILMD").expect("UTILMD is a known type");
+        assert!(
+            utilmd.len() > 50,
+            "expected a substantial UTILMD PID set, got {}",
+            utilmd.len()
+        );
+        assert!(
+            utilmd.windows(2).all(|w| w[0] < w[1]),
+            "PIDs must be ascending and unique"
+        );
+        for known in [55001u32, 55002, 55003, 55004] {
+            assert!(utilmd.contains(&known), "PID {known} must be enumerated");
+        }
+        // 56xxx is unassigned; it must not appear via the stand-in pack.
+        assert!(
+            !utilmd.iter().any(|&p| (56000..=56999).contains(&p)),
+            "unassigned 56xxx codes must not be reported as known"
+        );
+
+        // CONTRL has no Prüfidentifikatoren at all.
+        assert!(
+            pruefidentifikatoren("CONTRL")
+                .expect("known type")
+                .is_empty()
+        );
+        assert!(pruefidentifikatoren("NOSUCH").is_err());
+    }
 }

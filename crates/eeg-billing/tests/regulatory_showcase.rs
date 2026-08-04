@@ -2291,84 +2291,190 @@ fn s51a_no_qh_input_no_extension() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// §53b EEG 2023 — Regionale Grünstromkennzeichnung reduction
+// §§53b–54 EEG 2023 — reductions of the anzulegender Wert
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §53b EEG 2023 — BNetzA regional reduction reduces Vergütung.
-/// Plant in renewable-saturated area: 0.3 ct/kWh reduction.
-/// 1,000 kWh × 8.11 ct = 81.10 EUR gross → 81.10 − 3.00 = 78.10 EUR net.
+use eeg_billing::aw_reductions::{AwReductionContext, Sect54SolarReduction};
+
+/// §53b EEG 2023 — a Regionalnachweis cuts the AW by the statutory 0,1 ct/kWh.
+///
+/// 1 000 kWh at 8,11 ct → AW 8,01 ct → 80,10 EUR.
 #[test]
-fn s53b_regional_reduction_applied() {
+fn s53b_regionalnachweis_cuts_the_statutory_tenth_of_a_cent() {
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FeedInTariff {
             verguetungssatz_ct: d("8.11"),
         },
         einspeisemenge_kwh: Some(d("1000")),
-        sect53b_regional_reduction_ct: Some(d("0.3")),
+        aw_reductions: AwReductionContext {
+            regionalnachweis_ausgestellt: true,
+            ..AwReductionContext::default()
+        },
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
-    // Gross: 1000 × 8.11 / 100 = 81.10 EUR
-    // §53b reduction: 1000 × 0.3 / 100 = 3.00 EUR
-    // Net: 78.10 EUR
-    assert_eq!(out.settlement_eur, Some(d("78.10")));
-    assert_eq!(out.positions.len(), 2, "§21 Vergütung + §53b reduction");
-    assert!(
-        out.positions.iter().any(|p| p.legal_basis.contains("53b")),
-        "§53b position expected"
-    );
-    let r53b = out
+    assert_eq!(out.settlement_eur, Some(d("80.10")));
+    let cut = out
         .positions
         .iter()
         .find(|p| p.legal_basis.contains("53b"))
-        .unwrap();
-    assert_eq!(r53b.eur, d("-3.00")); // negative (reduces settlement)
+        .expect("§53b audit position expected");
+    assert_eq!(cut.rate_ct_kwh, d("-0.1"), "the rate is fixed by statute");
+    assert_eq!(
+        cut.eur,
+        d("0"),
+        "the euro effect is already in the reduced AW"
+    );
 }
 
-/// §53b — Does NOT apply to Direktvermarktung (market pricing governs directly).
+/// §53b reaches a Direktvermarktung plant whose AW is **gesetzlich bestimmt**.
+///
+/// The statute's test is how the AW was determined, not how the electricity is
+/// marketed — so a statutory-AW Marktprämie plant is in scope.
 #[test]
-fn s53b_not_applied_to_direktvermarktung() {
-    let with_r53b = calculate_settlement(&SettleInput {
+fn s53b_applies_to_a_statutory_aw_under_direktvermarktung() {
+    let mp = |ctx: AwReductionContext| {
+        calculate_settlement(&SettleInput {
+            scheme: SettlementScheme::MarketPremium {
+                direktverm_aw_ct: d("6.0"),
+                managementpraemie_ct: Some(d("0.4")),
+                wind_korrekturfaktor: None,
+                wind_standort: None,
+            },
+            einspeisemenge_kwh: Some(d("100000")),
+            marktwert_ct_kwh: Some(d("4.5")),
+            aw_reductions: ctx,
+            ..SettleInput::default()
+        })
+    };
+    let with_nachweis = mp(AwReductionContext {
+        regionalnachweis_ausgestellt: true,
+        ..AwReductionContext::default()
+    });
+    let without = mp(AwReductionContext::default());
+    // AW 6.0 → 5.9; premium = (5.9 + 0.4 − 4.5) × 100 000 / 100 = 1 800 EUR
+    assert_eq!(without.settlement_eur, Some(d("1900.00")));
+    assert_eq!(with_nachweis.settlement_eur, Some(d("1800.00")));
+}
+
+/// §53b does **not** reach a tender-determined AW — it is not gesetzlich bestimmt.
+#[test]
+fn s53b_does_not_reach_an_auction_aw() {
+    use eeg_billing::{AusschreibungMetadata, TariffSource};
+    let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::MarketPremium {
-            direktverm_aw_ct: d("6.0"),
+            direktverm_aw_ct: d("5.80"),
             managementpraemie_ct: Some(d("0.4")),
             wind_korrekturfaktor: None,
             wind_standort: None,
         },
         einspeisemenge_kwh: Some(d("100000")),
         marktwert_ct_kwh: Some(d("4.5")),
-        sect53b_regional_reduction_ct: Some(d("0.5")),
+        tariff_source: TariffSource::Auction(AusschreibungMetadata::default()),
+        aw_reductions: AwReductionContext {
+            regionalnachweis_ausgestellt: true,
+            ..AwReductionContext::default()
+        },
         ..SettleInput::default()
     });
-    let without_r53b = calculate_settlement(&SettleInput {
+    // Unreduced: (5.80 + 0.4 − 4.5) × 100 000 / 100 = 1 700 EUR
+    assert_eq!(out.settlement_eur, Some(d("1700.00")));
+    assert!(!out.positions.iter().any(|p| p.legal_basis.contains("53b")));
+}
+
+/// §53c EEG 2023 — the AW drops by the granted per-kWh Stromsteuerbefreiung.
+#[test]
+fn s53c_stromsteuerbefreiung_cuts_the_aw() {
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: d("8.11"),
+        },
+        einspeisemenge_kwh: Some(d("1000")),
+        aw_reductions: AwReductionContext {
+            // Full §3 StromStG rate: 20,50 EUR/MWh = 2,05 ct/kWh.
+            stromsteuerbefreiung_ct_kwh: Some(d("2.05")),
+            ..AwReductionContext::default()
+        },
+        ..SettleInput::default()
+    });
+    // AW 8.11 → 6.06 → 1 000 × 6.06 / 100 = 60.60 EUR
+    assert_eq!(out.settlement_eur, Some(d("60.60")));
+    assert!(out.positions.iter().any(|p| p.legal_basis.contains("53c")));
+}
+
+/// §54 Abs. 1 EEG 2023 — a Zahlungsberechtigung applied for after the 18th
+/// calendar month costs 0,3 ct/kWh on a solar first-segment award.
+#[test]
+fn s54_abs1_late_zahlungsberechtigung_cuts_the_award() {
+    use eeg_billing::{AusschreibungMetadata, ErzeugungsArt, TariffSource};
+    let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::MarketPremium {
-            direktverm_aw_ct: d("6.0"),
+            direktverm_aw_ct: d("5.80"),
             managementpraemie_ct: Some(d("0.4")),
             wind_korrekturfaktor: None,
             wind_standort: None,
         },
         einspeisemenge_kwh: Some(d("100000")),
         marktwert_ct_kwh: Some(d("4.5")),
-        sect53b_regional_reduction_ct: None,
+        tariff_source: TariffSource::Auction(AusschreibungMetadata::default()),
+        erzeugungsart: Some(ErzeugungsArt::SolarFreiflaeche),
+        aw_reductions: AwReductionContext {
+            sect54_solar: Some(Sect54SolarReduction {
+                zahlungsberechtigung_nach_18_monaten: true,
+                ..Sect54SolarReduction::default()
+            }),
+            ..AwReductionContext::default()
+        },
         ..SettleInput::default()
     });
-    // §53b must NOT affect Direktvermarktung
-    assert_eq!(with_r53b.settlement_eur, without_r53b.settlement_eur);
+    // AW 5.80 → 5.50; premium = (5.50 + 0.4 − 4.5) × 100 000 / 100 = 1 400 EUR
+    assert_eq!(out.settlement_eur, Some(d("1400.00")));
+    assert!(
+        out.positions
+            .iter()
+            .any(|p| p.legal_basis.contains("54 Abs. 1"))
+    );
 }
 
-/// §53b = None → no reduction.
+/// The reduction hits the AW **before** the Marktprämie floor, so a plant whose
+/// Marktwert already exceeds its AW settles at zero rather than going negative.
+///
+/// This is the defect the AW-level model exists to prevent: a post-hoc euro
+/// deduction would have billed the operator for feeding in.
 #[test]
-fn s53b_none_no_reduction() {
+fn an_aw_cut_cannot_push_the_marktpraemie_below_zero() {
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::MarketPremium {
+            direktverm_aw_ct: d("4.00"),
+            managementpraemie_ct: Some(d("0.4")),
+            wind_korrekturfaktor: None,
+            wind_standort: None,
+        },
+        einspeisemenge_kwh: Some(d("100000")),
+        // Marktwert well above AW + Managementprämie → premium already zero.
+        marktwert_ct_kwh: Some(d("9.00")),
+        aw_reductions: AwReductionContext {
+            regionalnachweis_ausgestellt: true,
+            stromsteuerbefreiung_ct_kwh: Some(d("2.05")),
+            ..AwReductionContext::default()
+        },
+        ..SettleInput::default()
+    });
+    assert_eq!(out.settlement_eur, Some(d("0")));
+}
+
+/// No reductions configured → the AW is untouched and no audit position appears.
+#[test]
+fn no_aw_reductions_leaves_the_settlement_alone() {
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FeedInTariff {
             verguetungssatz_ct: d("8.11"),
         },
         einspeisemenge_kwh: Some(d("500")),
-        sect53b_regional_reduction_ct: None,
         ..SettleInput::default()
     });
     assert_eq!(out.settlement_eur, Some(d("40.55")));
-    assert_eq!(out.positions.len(), 1, "no §53b position when None");
+    assert_eq!(out.positions.len(), 1);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3039,41 +3145,28 @@ fn sect52_abs6_netting_penalty_exceeds_vergutung() {
     assert_eq!(result.residual_pflichtzahlung_eur, d("470.00"));
 }
 
-/// §54 Ausschreibungsreduzierung: effective AW reduced by deduction, floored at 0.
+/// §52 Abs. 6 is a permission, not a duty: without it the operator receives the
+/// full Vergütung and the whole Pflichtzahlung stays outstanding.
 #[test]
-fn sect54_ausschreibungsreduzierung_reduces_aw() {
-    use eeg_billing::reductions::Sect54Reduction;
-    use time::macros::date;
-
-    let r = Sect54Reduction {
-        deduction_ct_kwh: d("0.5"),
-        bnetza_notification_ref: "BNetzA-54-2026-WIND-001".into(),
-        effective_from: date!(2026 - 01 - 01),
-    };
-    // Awarded AW = 6.28 ct → effective = 5.78 ct
-    assert_eq!(r.effective_aw(d("6.28")), d("5.78"));
-    // AW < deduction → floor at 0
-    assert_eq!(r.effective_aw(d("0.3")), d("0"));
-}
-
-/// §53b + §52 Abs. 6 combined: both reductions applied in correct order.
-#[test]
-fn sect53b_and_sect52_netting_combined_pipeline() {
+fn sect52_netting_is_optional_for_the_netzbetreiber() {
     use eeg_billing::reductions::ReductionPipeline;
 
-    let pipeline = ReductionPipeline {
+    let no_offset = ReductionPipeline {
+        pflichtzahlung_eur: Some(d("10.00")),
+        apply_sect52_netting: false,
+    }
+    .apply(d("42.55"));
+    assert_eq!(no_offset.net_vergütung_eur, d("42.55"));
+    assert_eq!(no_offset.residual_pflichtzahlung_eur, d("10.00"));
+    assert_eq!(no_offset.total_reductions_eur, d("0"));
+
+    let offset = ReductionPipeline {
         pflichtzahlung_eur: Some(d("10.00")),
         apply_sect52_netting: true,
-        sect53b_ct_kwh: Some(d("0.5")), // 0.5 ct/kWh regional reduction
-        sect53c: None,
-        sect54: None,
-    };
-    // 1000 kWh × 0.5 ct/kWh / 100 = 5.00 EUR §53b
-    // gross = 42.55 → after §53b = 37.55 → after §52 netting = 27.55
-    let result = pipeline.apply_with_kwh(d("42.55"), d("1000"));
-    assert_eq!(result.net_vergütung_eur, d("27.55"));
-    assert_eq!(result.residual_pflichtzahlung_eur, d("0"));
-    assert!(result.total_reductions_eur > d("0"));
+    }
+    .apply(d("42.55"));
+    assert_eq!(offset.net_vergütung_eur, d("32.55"));
+    assert_eq!(offset.residual_pflichtzahlung_eur, d("0"));
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -3411,7 +3504,6 @@ fn sect52_abs6_full_netting_pipeline() {
     let pipeline = ReductionPipeline {
         pflichtzahlung_eur: Some(penalty),
         apply_sect52_netting: true,
-        ..ReductionPipeline::none()
     };
     let result = pipeline.apply(gross);
 

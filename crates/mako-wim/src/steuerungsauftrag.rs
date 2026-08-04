@@ -244,6 +244,18 @@ pub enum SteuerungsauftragState {
     },
 }
 
+impl mako_engine::workflow::OccupiesBusinessKey for SteuerungsauftragState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // Awaiting the MSB back-end's confirmation.
+            Self::Received(_) => true,
+            // Terminal. §14a EnWG Steuerungsaufträge are inherently repeated —
+            // a completed or rejected one must never block the next dispatch.
+            Self::New | Self::Completed(_) | Self::Rejected { .. } => false,
+        }
+    }
+}
+
 impl SteuerungsauftragState {
     /// Stable string label for the current variant.
     #[must_use]

@@ -239,7 +239,7 @@ Before merging:
 - [ ] `cargo test --all-features` exits 0
 - [ ] At least one `.edi` fixture added for newly introduced PIDs
 - [ ] If any workflow state schema changed: bespoke `StateMigration` impl added
-  in the domain crate and dispatch table in `services/makod/src/migration_api.rs`
+  in the domain crate and dispatch table in `services/makod/src/api/migration_api.rs`
   updated with the new concrete migration type (replacing the `identity!` entry).
 - [ ] If any `#[ignore = "... until FVYYYYMMDD"]` tests exist past their date,
   un-ignore them.
@@ -303,7 +303,7 @@ data, etc.) — investigate each failure before retiring the old FV.
 If a workflow's state schema changed between FVs, add a bespoke `StateMigration`
 implementation in the domain crate (see
 [`mako_engine::migration::StateMigration`](https://github.com/hupe1980/mako/blob/main/crates/mako-engine/src/migration.rs))
-and update `services/makod/src/migration_api.rs` to use it.
+and update `services/makod/src/api/migration_api.rs` to use it.
 
 ---
 
@@ -352,7 +352,7 @@ version active for that process; new events are written under the corresponding
 During the 7 days following each October 1 cutover, both the outgoing and
 incoming release formats are normatively acceptable.  The library handles this
 automatically via `TransitionState` — no code changes are needed during the
-grace period.  See `docs/release-lifecycle.md` for details.
+grace period.  See `site/content/docs/compliance/release-lifecycle.md` for details.
 
 ---
 
@@ -454,5 +454,5 @@ edi-energy = { version = "0.14", features = ["archive"] }
 Archive features always imply their base type feature (`mscons-archive` implies
 `mscons`), so you never need to list both.
 
-See `docs/schema-versioning.md` for the full policy on how the `archived` flag
+See `site/content/docs/compliance/schema-versioning.md` for the full policy on how the `archived` flag
 is set and what the codegen guarantees are.

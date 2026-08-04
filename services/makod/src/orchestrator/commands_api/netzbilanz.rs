@@ -81,7 +81,7 @@ pub(super) fn cmd_gpke_nne_gas_rechnung_stellen<'a>(
 }
 
 /// Dispatch the WiM MSB-Rechnung (PID 31009) through the **dedicated** WiM billing
-/// workflow ([`WimRechnungWorkflow::SendInvoic`]) — not `GpkeAbrechnungWorkflow`,
+/// workflow ([`WimInvoicWorkflow::SendInvoic`]) — not `GpkeAbrechnungWorkflow`,
 /// which rejects 31009 (its `GPKE_INVOIC_PIDS` are GPKE-only). Spawns the WiM process
 /// in the MSB invoicer role so the payer's inbound REMADV (33001–33004) correlates
 /// back to it. The billed EDIFACT with amounts is rendered by `netzbilanzd`; this
@@ -107,11 +107,11 @@ async fn dispatch_wim_msb_send_invoic(
         .unwrap_or("")
         .to_owned();
     let invoice_ref_clone = invoice_ref_str.clone();
-    dispatch_to_process::<WimRechnungWorkflow, _>(
+    dispatch_to_process::<WimInvoicWorkflow, _>(
         state,
         &invoice_ref_str,
-        mako_wim::rechnung::WORKFLOW_NAME,
-        move || WimRechnungCommand::SendInvoic {
+        mako_wim::invoic::WORKFLOW_NAME,
+        move || WimInvoicCommand::SendInvoic {
             pid: mako_engine::types::Pruefidentifikator::new(31009)
                 .expect("valid MSB-Rechnung PID"),
             sender: mako_engine::types::MarktpartnerCode::new(sender.as_str()),

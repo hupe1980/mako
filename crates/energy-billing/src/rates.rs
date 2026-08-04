@@ -567,3 +567,200 @@ mod mwst_period_tests {
         );
     }
 }
+
+// ── Steuerliche Stichtage inside a billing period ────────────────────────────
+
+/// The dates inside `[from, to]` on which a statutory rate changes, for the
+/// given product category.
+///
+/// # Why a period must be split rather than billed at one rate
+///
+/// [`mwst_rate_for_period`] and [`mwst_rate_for_gas_waerme_period`] return
+/// `None` for a straddling period because **no single rate is correct** for it.
+/// Answering that `None` with a default silently bills part of the period at
+/// the wrong rate — for a gas period crossing 31.03.2024 that is the whole
+/// period at 19 % when the earlier portion was legally 7 %, i.e. a customer
+/// overcharge that no downstream check can distinguish from a correct invoice.
+///
+/// This returns the **first day of each new regime** inside the period, so a
+/// caller can split `[from, stichtag-1]` and `[stichtag, to]` and bill each at
+/// its own rate. An empty result means one rate governs the whole period.
+///
+/// Two families of Stichtag exist:
+///
+/// - **Umsatzsteuer** — the COVID window (01.07.2020–31.12.2020, 16 %) for every
+///   commodity, plus the gas/Fernwärme window (01.10.2022–31.03.2024, 7 %,
+///   §28 Abs. 5/6 UStG) for `GAS` and `WAERME`.
+/// - **BEHG** — the CO₂ price of §10 BEHG steps at each calendar-year boundary,
+///   so a gas period spanning a year-end has two levy rates.
+///
+/// # Example
+///
+/// ```rust
+/// use energy_billing::rates::steuer_stichtage_im_zeitraum;
+/// use time::macros::date;
+///
+/// // A gas period crossing the end of the 7 % window splits at 01.04.2024.
+/// let s = steuer_stichtage_im_zeitraum("GAS", date!(2024-03-01), date!(2024-04-30));
+/// assert_eq!(s, vec![date!(2024-04-01)]);
+///
+/// // Electricity never had the 7 % window, so the same period is uniform.
+/// assert!(steuer_stichtage_im_zeitraum("STROM", date!(2024-03-01), date!(2024-04-30)).is_empty());
+/// ```
+#[must_use]
+pub fn steuer_stichtage_im_zeitraum(
+    category: &str,
+    from: time::Date,
+    to: time::Date,
+) -> Vec<time::Date> {
+    let mut stichtage = Vec::new();
+    if from > to {
+        return stichtage;
+    }
+    let gas_or_waerme = matches!(category, "GAS" | "WAERME");
+
+    // Each entry is the first day of a new USt regime. A boundary counts only
+    // when it falls strictly inside the period: a period starting exactly on a
+    // Stichtag is already uniform.
+    let mut ust: Vec<time::Date> = vec![
+        time::macros::date!(2020 - 07 - 01),
+        time::macros::date!(2021 - 01 - 01),
+    ];
+    if gas_or_waerme {
+        ust.push(time::macros::date!(2022 - 10 - 01));
+        ust.push(time::macros::date!(2024 - 04 - 01));
+    }
+    for d in ust {
+        if d > from && d <= to {
+            stichtage.push(d);
+        }
+    }
+
+    // BEHG steps every 1 January. Only gas carries the levy, and only where the
+    // two years actually have different rates — a year pair the table does not
+    // cover cannot be split into two known rates, so it is left to the operator.
+    if gas_or_waerme {
+        for year in (from.year() + 1)..=to.year() {
+            let Ok(jan1) = time::Date::from_calendar_date(year, time::Month::January, 1) else {
+                continue;
+            };
+            if jan1 > from
+                && jan1 <= to
+                && behg_ct_per_kwh_for_year(year - 1) != behg_ct_per_kwh_for_year(year)
+            {
+                stichtage.push(jan1);
+            }
+        }
+    }
+
+    stichtage.sort_unstable();
+    stichtage.dedup();
+    stichtage
+}
+
+#[cfg(test)]
+mod stichtag_tests {
+    use super::*;
+    use time::macros::date;
+
+    #[test]
+    fn a_uniform_period_has_no_stichtag() {
+        assert!(
+            steuer_stichtage_im_zeitraum("STROM", date!(2026 - 01 - 01), date!(2026 - 01 - 31))
+                .is_empty()
+        );
+        assert!(
+            steuer_stichtage_im_zeitraum("GAS", date!(2026 - 05 - 01), date!(2026 - 05 - 31))
+                .is_empty()
+        );
+    }
+
+    /// The gas 7 % window ends 31.03.2024, so 01.04.2024 opens a new regime.
+    #[test]
+    fn the_gas_vat_window_end_splits_a_gas_period() {
+        assert_eq!(
+            steuer_stichtage_im_zeitraum("GAS", date!(2024 - 03 - 01), date!(2024 - 04 - 30)),
+            vec![date!(2024 - 04 - 01)]
+        );
+        assert_eq!(
+            steuer_stichtage_im_zeitraum("WAERME", date!(2024 - 03 - 01), date!(2024 - 04 - 30)),
+            vec![date!(2024 - 04 - 01)]
+        );
+    }
+
+    /// Electricity kept 19 % throughout — the gas window is not its boundary.
+    #[test]
+    fn electricity_does_not_see_the_gas_window() {
+        assert!(
+            steuer_stichtage_im_zeitraum("STROM", date!(2022 - 09 - 01), date!(2022 - 10 - 31))
+                .is_empty()
+        );
+        assert!(
+            steuer_stichtage_im_zeitraum("STROM", date!(2024 - 03 - 01), date!(2024 - 04 - 30))
+                .is_empty()
+        );
+    }
+
+    /// The COVID window applies to every commodity.
+    #[test]
+    fn the_covid_window_splits_any_commodity() {
+        assert_eq!(
+            steuer_stichtage_im_zeitraum("STROM", date!(2020 - 06 - 01), date!(2020 - 07 - 31)),
+            vec![date!(2020 - 07 - 01)]
+        );
+        assert_eq!(
+            steuer_stichtage_im_zeitraum("STROM", date!(2020 - 12 - 01), date!(2021 - 01 - 31)),
+            vec![date!(2021 - 01 - 01)]
+        );
+    }
+
+    /// A period starting exactly on a Stichtag is already uniform.
+    #[test]
+    fn a_period_starting_on_the_stichtag_is_uniform() {
+        assert!(
+            steuer_stichtage_im_zeitraum("GAS", date!(2024 - 04 - 01), date!(2024 - 04 - 30))
+                .is_empty()
+        );
+    }
+
+    /// §10 BEHG steps every 1 January, so a year-crossing gas period splits.
+    #[test]
+    fn a_year_crossing_gas_period_splits_on_the_behg_step() {
+        let s = steuer_stichtage_im_zeitraum("GAS", date!(2023 - 12 - 01), date!(2024 - 01 - 31));
+        assert!(
+            s.contains(&date!(2024 - 01 - 01)),
+            "the BEHG CO₂ price changes at the year boundary: {s:?}"
+        );
+    }
+
+    /// Electricity carries no BEHG levy, so a year crossing does not split it.
+    #[test]
+    fn a_year_crossing_electricity_period_does_not_split() {
+        assert!(
+            steuer_stichtage_im_zeitraum("STROM", date!(2025 - 12 - 01), date!(2026 - 01 - 31))
+                .is_empty()
+        );
+    }
+
+    /// A long gas period can carry both a VAT and a BEHG Stichtag, in order.
+    #[test]
+    fn several_stichtage_come_back_sorted_and_unique() {
+        let s = steuer_stichtage_im_zeitraum("GAS", date!(2023 - 11 - 01), date!(2024 - 04 - 30));
+        assert!(
+            s.contains(&date!(2024 - 01 - 01)) && s.contains(&date!(2024 - 04 - 01)),
+            "{s:?}"
+        );
+        let mut sorted = s.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(s, sorted, "must be sorted and deduplicated");
+    }
+
+    #[test]
+    fn a_reversed_period_yields_nothing_rather_than_panicking() {
+        assert!(
+            steuer_stichtage_im_zeitraum("GAS", date!(2024 - 04 - 30), date!(2024 - 03 - 01))
+                .is_empty()
+        );
+    }
+}

@@ -138,7 +138,7 @@ ci: check test test-features clippy fmt-check deny no-version-alias doc-check co
 # no activation is needed.
 test-makotest:
     cd makotest && test -d .venv || python3 -m venv .venv
-    cd makotest && .venv/bin/pip install -q --upgrade pip 'maturin>=1.9,<2.0' pytest
+    cd makotest && .venv/bin/pip install -q --upgrade pip 'maturin>=1.9,<2.0' pytest hypothesis
     cd makotest && .venv/bin/maturin develop && .venv/bin/pytest -q
 
 # Build a release wheel (abi3, one wheel for Python ≥ 3.11).

@@ -66,7 +66,7 @@ marktd ──(POST /webhook)──► invoicd
 
 > **31009 (M16 gap).** MSB invoices do not embed the `Rechnung` in the
 > `process.initiated` payload — add `GET /api/v1/invoic/{id}/rechnung` to `makod`
-> and a `Wim31009Ingestor` in `invoicd` triggering on `makoworkflow == "wim-rechnung"`.
+> and a `Wim31009Ingestor` in `invoicd` triggering on `makoworkflow == "wim-invoic"`.
 >
 > **PIDs 31003, 31004, 31007, 31008, 31010, 31011** are Gas or GaBi domain billing
 > and are handled by their own workflows. They do not trigger `invoicd`.

@@ -26,6 +26,10 @@ async fn setup() -> Option<(PgPool, PgLedger, PgContainer)> {
     let (url, container) = pg_container().await?;
     let pool = PgPool::connect(&url).await.ok()?;
     sqlx::migrate!("./migrations").run(&pool).await.ok()?;
+    // `event_outbox` is created by `mako-service` at service startup rather
+    // than by a migration, so the harness must create it too — otherwise any
+    // code path that announces a CloudEvent fails here but works in production.
+    mako_service::outbox::ensure_schema(&pool).await.ok()?;
     let ledger = PgLedger::connect(&url, TENANT).await.ok()?;
     Some((pool, ledger, container))
 }
@@ -756,4 +760,238 @@ async fn pg_container() -> Option<(String, PgContainer)> {
     let port = container.get_host_port_ipv4(5432).await.ok()?;
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
     Some((url, container))
+}
+
+// ── Event announcements ───────────────────────────────────────────────────────
+
+/// Opening a Mahnstufe case must announce `de.accounting.mahnung.issued`.
+///
+/// The event was declared in the catalog, documented as emitted, and subscribed
+/// to by `agentd`'s payment-reconciliation agent — but nothing produced it.
+/// `MAHNUNG_ISSUED` appeared in `pg.rs` only as the *correlation string* on the
+/// Mahngebühr ledger entry, which is not an emission, so the agent never ran.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn opening_a_dunning_case_announces_the_mahnstufe() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let account_id = pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+
+    let case_id = pg::create_dunning_case_announced(
+        &pool,
+        TENANT,
+        account_id,
+        &malo,
+        "LF1",
+        2,
+        4_500,
+        date!(2026 - 07 - 15),
+    )
+    .await
+    .expect("case created");
+
+    let row: Option<(String, serde_json::Value)> = sqlx::query_as(
+        "SELECT ce_type, envelope FROM event_outbox \
+         WHERE ce_type = $1 AND envelope->'data'->>'malo_id' = $2",
+    )
+    .bind(mako_events::accounting::MAHNUNG_ISSUED)
+    .bind(&malo)
+    .fetch_optional(&pool)
+    .await
+    .expect("outbox query");
+
+    let (ce_type, envelope) = row.expect(
+        "opening a dunning case must enqueue de.accounting.mahnung.issued — \
+         agentd triggers on it",
+    );
+    assert_eq!(ce_type, "de.accounting.mahnung.issued");
+    let data = &envelope["data"];
+    assert_eq!(data["mahnstufe"], 2);
+    assert_eq!(data["amount_due_ct"], 4_500);
+    assert_eq!(
+        data["amount_eur"], "45.00",
+        "agents read amount_eur — it must be the ct value, not a re-scaled one"
+    );
+    assert_eq!(data["case_id"], case_id.to_string());
+}
+
+/// The case row and its announcement must be written in one transaction.
+///
+/// The outbox is persist-before-dispatch: a case opened without its event would
+/// escalate a customer toward disconnection while nothing downstream heard.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_dunning_case_and_its_announcement_are_atomic() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let account_id = pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+
+    pg::create_dunning_case_announced(
+        &pool,
+        TENANT,
+        account_id,
+        &malo,
+        "LF1",
+        1,
+        1_000,
+        date!(2026 - 07 - 15),
+    )
+    .await
+    .expect("case created");
+
+    let cases: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM dunning_cases WHERE account_id = $1 AND tenant = $2",
+    )
+    .bind(account_id)
+    .bind(TENANT)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM event_outbox \
+         WHERE ce_type = $1 AND envelope->'data'->>'malo_id' = $2",
+    )
+    .bind(mako_events::accounting::MAHNUNG_ISSUED)
+    .bind(&malo)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    assert_eq!(cases, 1);
+    assert_eq!(
+        events, cases,
+        "one announcement per case, never a case alone"
+    );
+}
+
+/// A second interest charge for the same period must not duplicate the row.
+///
+/// The MAHNGEBUEHR ledger entry is idempotent on `interest:{malo}:{from}:{to}`,
+/// so a retry left the ledger correct — while `interest_charges` grew a second
+/// row and `GET /interest-charges` showed the customer the same Verzugszinsen
+/// twice. The table now carries a unique key, and the row, the announcement and
+/// the guard commit together.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn interest_for_the_same_period_is_charged_once() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let account_id = pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+
+    let first = pg::create_interest_charge(
+        &ledger,
+        &pool,
+        account_id,
+        TENANT,
+        &malo,
+        "LF1",
+        Some("RE-2026-001"),
+        50_000,
+        false,
+        date!(2026 - 02 - 01),
+        date!(2026 - 03 - 01),
+    )
+    .await
+    .expect("first charge books");
+
+    let second = pg::create_interest_charge(
+        &ledger,
+        &pool,
+        account_id,
+        TENANT,
+        &malo,
+        "LF1",
+        Some("RE-2026-001"),
+        50_000,
+        false,
+        date!(2026 - 02 - 01),
+        date!(2026 - 03 - 01),
+    )
+    .await
+    .expect("replay must not error");
+
+    assert_eq!(
+        first.id, second.id,
+        "a replay must return the existing charge, not create a second"
+    );
+
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM interest_charges WHERE tenant = $1 AND account_id = $2",
+    )
+    .bind(TENANT)
+    .bind(account_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows, 1,
+        "the customer must not be charged twice for one period"
+    );
+
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM event_outbox \
+         WHERE ce_type = $1 AND envelope->'data'->>'malo_id' = $2",
+    )
+    .bind(mako_events::accounting::INTEREST_CHARGED)
+    .bind(&malo)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(events, 1, "and announced exactly once");
+}
+
+/// A re-announced Abschlag drops at the outbox.
+///
+/// `post_entry` is idempotent, so a second run in the same month is a ledger
+/// no-op — but it returns `Ok`, so announcing on that alone re-sent the event
+/// every time the 23-hour scheduler drifted across midnight. The CloudEvent id
+/// is derived from the same `(MaLo, month)` key the ledger uses, and
+/// `outbox::enqueue` is `ON CONFLICT (event_id) DO NOTHING`.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_replayed_abschlag_is_announced_once() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let ref_id = format!("ABSCHLAG-{malo}-2026-07");
+
+    for _ in 0..3 {
+        let ce = mako_service::CloudEvent::new(
+            mako_service::source("accountingd", TENANT),
+            mako_events::accounting::ABSCHLAG_POSTED,
+            &malo,
+            serde_json::json!({ "malo_id": malo, "amount_ct": 12_000 }),
+        )
+        .with_id(ref_id.clone());
+        let mut tx = pool.begin().await.unwrap();
+        mako_service::outbox::enqueue(&mut tx, &ce).await.unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM event_outbox \
+         WHERE ce_type = $1 AND envelope->'data'->>'malo_id' = $2",
+    )
+    .bind(mako_events::accounting::ABSCHLAG_POSTED)
+    .bind(&malo)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        events, 1,
+        "three scheduler passes in one month must announce the advance payment once"
+    );
 }

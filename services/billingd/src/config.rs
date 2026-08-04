@@ -225,10 +225,10 @@ impl BillingdConfig {
     ///
     /// An explicitly configured rate still wins — configuration is the operator
     /// saying "I know better" — but the *defaults* come from the year tables.
-    /// A period straddling a VAT boundary is refused upstream by the period
-    /// helpers returning `None`; here it falls back to the configured default
-    /// so preview paths keep working, and the engine's own per-position rates
-    /// decide the rest.
+    ///
+    /// A period straddling a statutory rate boundary has **no** correct single
+    /// rate, so [`Self::regulatory_rates_for_period`] refuses it rather than
+    /// choosing one. See [`Self::steuer_stichtage`] for the split dates.
     /// Explicitly configured BEHG override (ct/kWh), when the operator pinned
     /// one in `[rates]`. An explicit override always wins over the nEHS
     /// market-price series.
@@ -245,6 +245,58 @@ impl BillingdConfig {
             .and_then(|r| r.behg_co2_factor_kg_per_kwh)
     }
 
+    /// The statutory rate boundaries inside a period, if any.
+    ///
+    /// Empty means one set of rates governs the whole period. Otherwise each
+    /// date is the first day of a new regime, and the period must be split
+    /// there and billed in parts.
+    #[must_use]
+    pub fn steuer_stichtage(
+        &self,
+        category: &str,
+        period_from: time::Date,
+        period_to: time::Date,
+    ) -> Vec<time::Date> {
+        // An operator who pinned an explicit VAT rate has taken the decision
+        // themselves; splitting would contradict it.
+        if self.rates.as_ref().and_then(|r| r.mwst_rate).is_some() {
+            return Vec::new();
+        }
+        energy_billing::steuer_stichtage_im_zeitraum(category, period_from, period_to)
+    }
+
+    /// Resolve the statutory rates for a period.
+    ///
+    /// # Errors
+    ///
+    /// Returns the split dates when the period straddles a statutory boundary.
+    /// Silently picking one rate would bill part of the period wrong — for a
+    /// gas period crossing 31.03.2024 that is the whole period at 19 % where
+    /// the earlier portion was legally 7 %, a customer overcharge that reads
+    /// exactly like a correct invoice downstream.
+    pub fn try_regulatory_rates_for_period(
+        &self,
+        category: &str,
+        period_from: time::Date,
+        period_to: time::Date,
+    ) -> Result<energy_billing::RegulatoryRates, StraddlesRateBoundary> {
+        let stichtage = self.steuer_stichtage(category, period_from, period_to);
+        if !stichtage.is_empty() {
+            return Err(StraddlesRateBoundary {
+                category: category.to_owned(),
+                period_from,
+                period_to,
+                stichtage,
+            });
+        }
+        Ok(self.regulatory_rates_for_period(category, period_from, period_to))
+    }
+
+    /// Resolve the statutory rates for a period, assuming it is uniform.
+    ///
+    /// Prefer [`Self::try_regulatory_rates_for_period`] on any path that bills:
+    /// this one falls back to the configured default where a period straddles a
+    /// boundary, which is only safe for previews and estimates.
     pub fn regulatory_rates_for_period(
         &self,
         category: &str,
@@ -278,5 +330,112 @@ impl BillingdConfig {
                 })
                 .unwrap_or(defaults.mwst_rate),
         }
+    }
+}
+
+/// A billing period crosses a statutory rate boundary and cannot be billed whole.
+///
+/// Carries the split dates so the caller can act on it rather than being told
+/// only that something is wrong.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "Abrechnungszeitraum {period_from}..{period_to} ({category}) überschreitet eine \
+     gesetzliche Satzgrenze: kein einzelner Steuersatz ist für den gesamten Zeitraum \
+     korrekt. Am Stichtag splitten und die Teilzeiträume jeweils mit ihrem eigenen \
+     Satz abrechnen. Stichtage: {stichtage:?}"
+)]
+pub struct StraddlesRateBoundary {
+    pub category: String,
+    pub period_from: time::Date,
+    pub period_to: time::Date,
+    /// First day of each new regime inside the period.
+    pub stichtage: Vec<time::Date>,
+}
+
+#[cfg(test)]
+mod straddle_tests {
+    use super::*;
+    use time::macros::date;
+
+    /// Build a config from JSON — the struct is `Deserialize`, and this avoids
+    /// a TOML dev-dependency for what is a two-field fixture.
+    fn cfg(pinned_mwst: Option<&str>) -> BillingdConfig {
+        let mut v = serde_json::json!({
+            "database": { "url": "postgres://localhost/x" },
+            "tenant": "9900357000004",
+            "tarifbd_url": "http://localhost:9080",
+            "edmd_url": "http://localhost:8380",
+            "marktd_url": "http://localhost:8080"
+        });
+        if let Some(rate) = pinned_mwst {
+            v["rates"] = serde_json::json!({ "mwst_rate": rate });
+        }
+        serde_json::from_value(v).expect("config parses")
+    }
+
+    /// The defect this refusal exists to prevent.
+    ///
+    /// Gas carried 7 % USt until 31.03.2024 and 19 % after (§28 Abs. 5/6 UStG).
+    /// A March–April period has no correct single rate, and the old resolver
+    /// answered the `None` with the 19 % default — billing the March portion,
+    /// legally 7 %, at 19 %. That reads exactly like a correct invoice
+    /// downstream, so nothing else would have caught it.
+    #[test]
+    fn a_gas_period_crossing_the_vat_window_is_refused_with_its_stichtag() {
+        let c = cfg(None);
+        let err = c
+            .try_regulatory_rates_for_period("GAS", date!(2024 - 03 - 01), date!(2024 - 04 - 30))
+            .expect_err("a straddling gas period must be refused");
+        assert_eq!(err.stichtage, vec![date!(2024 - 04 - 01)]);
+        assert!(
+            err.to_string().contains("splitten"),
+            "the refusal must say what to do: {err}"
+        );
+    }
+
+    /// Electricity never had the 7 % window, so the same period bills whole.
+    #[test]
+    fn the_same_period_is_fine_for_electricity() {
+        let c = cfg(None);
+        assert!(
+            c.try_regulatory_rates_for_period(
+                "STROM",
+                date!(2024 - 03 - 01),
+                date!(2024 - 04 - 30)
+            )
+            .is_ok()
+        );
+    }
+
+    /// §10 BEHG steps at each calendar-year boundary, so a year-crossing gas
+    /// period carries two levy rates and is refused too.
+    #[test]
+    fn a_year_crossing_gas_period_is_refused() {
+        let c = cfg(None);
+        let err = c
+            .try_regulatory_rates_for_period("GAS", date!(2023 - 12 - 01), date!(2024 - 01 - 31))
+            .expect_err("the BEHG year boundary must be refused");
+        assert!(err.stichtage.contains(&date!(2024 - 01 - 01)), "{err:?}");
+    }
+
+    /// An operator who pinned an explicit rate has taken the decision; splitting
+    /// would contradict it, so the refusal stands down.
+    #[test]
+    fn an_explicitly_configured_rate_wins_over_the_split() {
+        let c = cfg(Some("0.19"));
+        let rates = c
+            .try_regulatory_rates_for_period("GAS", date!(2024 - 03 - 01), date!(2024 - 04 - 30))
+            .expect("a pinned rate suppresses the refusal");
+        assert_eq!(rates.mwst_rate, rust_decimal::dec!(0.19));
+    }
+
+    /// A uniform period resolves normally.
+    #[test]
+    fn a_uniform_gas_period_resolves() {
+        let c = cfg(None);
+        assert!(
+            c.try_regulatory_rates_for_period("GAS", date!(2026 - 05 - 01), date!(2026 - 05 - 31))
+                .is_ok()
+        );
     }
 }

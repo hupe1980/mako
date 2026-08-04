@@ -47,8 +47,11 @@ graph TB
     invoicd -->|"de.invoic.receipt.settled → ZAHLUNG credit"| accountingd
 
     accountingd -->|"de.accounting.mahnung.issued (Mahnstufe 1–3)"| erp
+    accountingd -->|"de.accounting.abschlag.posted (Abschlagslauf)"| erp
+    accountingd -->|"de.accounting.payment.imported / .bankruecklast (camt.054)"| erp
+    accountingd -->|"de.accounting.interest.charged (§288 BGB)"| erp
     accountingd -->|"de.accounting.sperrandrohung / .sperrankuendigung (§41f)"| erp
-    accountingd -->|"de.accounting.sperrauftrag (§41f Sperrauftrag)"| sperrd
+    accountingd -->|"POST /api/v1/sperr-orders (the order itself)<br/>+ de.accounting.sperrauftrag (announcement)"| sperrd
     accountingd -->|"de.accounting.eeg.payout.rejected (pain.002 RJCT)"| erp
     accountingd -->|"pain.001 XML (SCT Inst <10s / CORE D+1)"| bank
     bank -->|"pain.002 ACCP/RJCT → PUT /eeg/payouts/{id}/status"| accountingd
@@ -272,7 +275,7 @@ Mahnungen were created), advancing each qualifying Mahnstufe-3 case one phase:
 |---|---|---|---|---|
 | **1. Sperrandrohung** | Mahnstufe 3, both §41f Abs. 3 thresholds cleared (see below), not halted | ≥ 4 Wochen nach Mahnung | `de.accounting.sperrandrohung` via outbox; sets `sperrandrohung_at` | §41f Abs. 1 |
 | **2. Sperrankündigung** | Androhung + `sperrandrohung_frist_days` (default 28) elapsed | announces disconnection **8 Werktage im Voraus** | `de.accounting.sperrankuendigung` via outbox; sets `sperrankuendigung_at` + `geplantes_sperrdatum = heute + 8 Werktage` (BDEW-Kalender) | §41f Abs. 5 |
-| **3. Sperrauftrag** | `geplantes_sperrdatum` reached | — | `POST sperrd /api/v1/sperr-orders` (`order_type: "sperrung"`); sets `sperrauftrag_ce_id` | §41f |
+| **3. Sperrauftrag** | `geplantes_sperrdatum` reached | `de.accounting.sperrauftrag` | `POST sperrd /api/v1/sperr-orders` (`order_type: "sperrung"`) — the order is an HTTP call, the CloudEvent announces it for obsd/agentd. The mark commits **before** the enqueue, because `sperrd` does not deduplicate orders and the candidate query selects on `sperrauftrag_ce_id IS NULL`: a lost announcement is replayable, a second disconnection order is not | §41f |
 
 Each phase is **idempotent** (its candidate query excludes already-advanced
 cases); the first two commit the state flag and the outbound CloudEvent in **one

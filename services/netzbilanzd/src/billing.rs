@@ -160,6 +160,7 @@ pub async fn run_billing_internal(
                     .arbeitspreis_ct_per_kwh
                     .context("arbeitspreis_ct_per_kwh required for NNE")?;
                 let input = NneInput {
+                    blindarbeit: None,
                     malo_id: pos.malo_id.clone(),
                     nb_mp_id: req.nb_mp_id.clone(),
                     lf_mp_id: req.lf_mp_id.clone(),
@@ -361,6 +362,7 @@ pub async fn run_billing_internal(
                     .arbeitspreis_ct_per_kwh
                     .context("arbeitspreis_ct_per_kwh required for nne_gas_awh_31011")?;
                 let input = NneInput {
+                    blindarbeit: None,
                     malo_id: pos.malo_id.clone(),
                     nb_mp_id: req.nb_mp_id.clone(),
                     lf_mp_id: req.lf_mp_id.clone(),
@@ -518,6 +520,7 @@ mod tests {
     fn nne_strom_arbeit_basic() {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
+            blindarbeit: None,
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
@@ -563,6 +566,7 @@ mod tests {
     fn nne_strom_tou_ht_nt() {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
+            blindarbeit: None,
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
@@ -571,10 +575,14 @@ mod tests {
                 time::macros::date!(2026 - 01 - 31),
             )
             .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Modul2ZeitVariabel {
+            arbeitspreis: grid_billing::ArbeitspreisModell::Modul3ZeitVariabel {
                 ht: grid_billing::MengePreis {
                     menge_kwh: dec!(500),
                     preis_ct_per_kwh: dec!(32.0),
+                },
+                st: grid_billing::MengePreis {
+                    menge_kwh: dec!(0),
+                    preis_ct_per_kwh: dec!(0),
                 },
                 nt: grid_billing::MengePreis {
                     menge_kwh: dec!(200),
@@ -680,6 +688,7 @@ mod tests {
     fn nne_strom_with_konzessionsabgabe() {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
+            blindarbeit: None,
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
@@ -864,6 +873,7 @@ mod tests {
         use grid_billing::{NneInput, settle_nne};
         // 600 kWh HT × 4.00 ct = 24.00 EUR; 400 kWh NT × 1.50 ct = 6.00 EUR; total 30.00 EUR
         let input = NneInput {
+            blindarbeit: None,
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
@@ -872,10 +882,14 @@ mod tests {
                 time::macros::date!(2026 - 01 - 31),
             )
             .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Modul2ZeitVariabel {
+            arbeitspreis: grid_billing::ArbeitspreisModell::Modul3ZeitVariabel {
                 ht: grid_billing::MengePreis {
                     menge_kwh: dec!(600),
                     preis_ct_per_kwh: dec!(4.00),
+                },
+                st: grid_billing::MengePreis {
+                    menge_kwh: dec!(0),
+                    preis_ct_per_kwh: dec!(0),
                 },
                 nt: grid_billing::MengePreis {
                     menge_kwh: dec!(400),
@@ -921,6 +935,7 @@ mod tests {
     fn nne_tou_with_ka_position_count() {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
+            blindarbeit: None,
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
@@ -929,10 +944,14 @@ mod tests {
                 time::macros::date!(2026 - 01 - 31),
             )
             .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Modul2ZeitVariabel {
+            arbeitspreis: grid_billing::ArbeitspreisModell::Modul3ZeitVariabel {
                 ht: grid_billing::MengePreis {
                     menge_kwh: dec!(600),
                     preis_ct_per_kwh: dec!(4.00),
+                },
+                st: grid_billing::MengePreis {
+                    menge_kwh: dec!(0),
+                    preis_ct_per_kwh: dec!(0),
                 },
                 nt: grid_billing::MengePreis {
                     menge_kwh: dec!(400),
@@ -986,6 +1005,7 @@ mod tests {
         use grid_billing::{NneInput, settle_nne};
         // 50 000 kWh × 3.80ct + 120 kW × 8.50 EUR/kW
         let input = NneInput {
+            blindarbeit: None,
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
@@ -1041,6 +1061,7 @@ mod tests {
     fn nne_gas_billing_matches_strom_formula() {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
+            blindarbeit: None,
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
@@ -1089,6 +1110,7 @@ mod tests {
         use grid_billing::{NneInput, settle_nne};
         // Simulate the billing.rs path: calculate NNE then override PID to 31011
         let input = NneInput {
+            blindarbeit: None,
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
@@ -1137,6 +1159,7 @@ mod tests {
     fn decimal_precision_no_float_error() {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
+            blindarbeit: None,
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
@@ -1215,6 +1238,7 @@ mod tests {
             InvoicCheckEngine, check::CheckConfig, tariff::InMemoryPreisblattStore,
         };
         let input = NneInput {
+            blindarbeit: None,
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
@@ -1319,6 +1343,7 @@ mod tests {
     fn nne_due_date_after_invoice_date() {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
+            blindarbeit: None,
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
@@ -1363,6 +1388,7 @@ mod tests {
     fn pid_mapping_correctness() {
         use grid_billing::{MmmInput, MsbInput, NneInput, settle_mmm, settle_msb, settle_nne};
         let base_nne = NneInput {
+            blindarbeit: None,
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
@@ -1462,6 +1488,7 @@ mod tests {
     fn tou_zero_nt_still_produces_positions() {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
+            blindarbeit: None,
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
@@ -1470,13 +1497,17 @@ mod tests {
                 time::macros::date!(2026 - 01 - 31),
             )
             .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Modul2ZeitVariabel {
+            arbeitspreis: grid_billing::ArbeitspreisModell::Modul3ZeitVariabel {
                 ht: grid_billing::MengePreis {
                     menge_kwh: dec!(1000),
                     preis_ct_per_kwh: dec!(4.00),
                 },
                 // A zero NT band is still a band: it must produce a position, so
                 // that a rate band is never silently omitted from the invoice.
+                st: grid_billing::MengePreis {
+                    menge_kwh: dec!(0),
+                    preis_ct_per_kwh: dec!(0),
+                },
                 nt: grid_billing::MengePreis {
                     menge_kwh: dec!(0),
                     preis_ct_per_kwh: dec!(1.50),
@@ -1517,6 +1548,7 @@ mod tests {
         use grid_billing::{NneInput, settle_nne};
         // Residential: 1000 kWh × 28.50 ct + 1000 × 1.32 ct KA = 285.00 + 13.20 = 298.20
         let residential = NneInput {
+            blindarbeit: None,
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
@@ -1631,6 +1663,7 @@ mod tests {
     fn rlm_zero_spitzenleistung_no_leistung_position() {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
+            blindarbeit: None,
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
@@ -1682,6 +1715,7 @@ mod tests {
     fn period_ordering_validity() {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
+            blindarbeit: None,
             malo_id: "10001234567".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),

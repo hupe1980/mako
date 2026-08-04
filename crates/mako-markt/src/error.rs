@@ -42,6 +42,17 @@ pub enum MdmError {
     #[error("makod sync failed: {0}")]
     MakodSync(String),
 
+    /// `makod` rejected a forwarded command with a business-level 409 that is
+    /// **not** an idempotent replay.
+    ///
+    /// The common case is `invalid_state` — the command is not legal in the
+    /// process's current state (e.g. `bestaetigen` on an already-accepted
+    /// process). Kept distinct from [`Self::MakodSync`] because it is a caller
+    /// error, not a transport failure: retrying the same command will keep
+    /// failing, so it maps to 409 rather than 500.
+    #[error("makod rejected the command ({kind}): {detail}")]
+    MakodConflict { kind: String, detail: String },
+
     /// A downstream call to an ERP webhook failed.
     #[error("webhook delivery failed (subscriber={subscriber_id}): {reason}")]
     WebhookDelivery {
@@ -67,6 +78,7 @@ impl MdmError {
             | Self::Unprocessable { .. } => 422,
             Self::NotFound { .. } => 404,
             Self::VersionConflict { .. } => 412,
+            Self::MakodConflict { .. } => 409,
             Self::Forbidden { .. } => 403,
             Self::MakodSync(_) | Self::WebhookDelivery { .. } | Self::Internal(_) => 500,
         }
@@ -83,6 +95,7 @@ impl MdmError {
             Self::VersionConflict { .. } => "version_conflict",
             Self::Forbidden { .. } => "forbidden",
             Self::Unprocessable { .. } => "unprocessable",
+            Self::MakodConflict { .. } => "makod_conflict",
             Self::MakodSync(_) => "makod_sync_failed",
             Self::WebhookDelivery { .. } => "webhook_delivery_failed",
             Self::Internal(_) => "internal_error",
@@ -100,6 +113,7 @@ impl MdmError {
             Self::VersionConflict { .. } => "Version Conflict",
             Self::Forbidden { .. } => "Forbidden",
             Self::Unprocessable { .. } => "Unprocessable Content",
+            Self::MakodConflict { .. } => "Command Conflict",
             Self::MakodSync(_) | Self::WebhookDelivery { .. } | Self::Internal(_) => {
                 "Internal Server Error"
             }

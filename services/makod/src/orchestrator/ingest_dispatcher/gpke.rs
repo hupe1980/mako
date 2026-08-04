@@ -111,7 +111,15 @@ impl EdifactIngestDispatcher {
             // ── GPKE SupplierChange — NB side ────────────────────────────────
             // PIDs 55001, 55002, 55016: Lieferbeginn/Lieferende ANFRAGE (LF → NB) — spawn.
             "gpke-supplier-change" => match pid {
-                55001 | 55002 | 55016 => {
+                // Drive off the workflow's own Anfrage set rather than a copy:
+                // a hardcoded list drifts from the router registration, and a
+                // PID missing here is dropped silently.
+                //
+                // `UTILMD_ANFRAGE_PIDS`, not `UTILMD_PIDS`: the latter also
+                // carries 55557, which has no Antwort mapping. Spawning it
+                // yields a process that cannot be answered and the 24-hour
+                // deadline turns into a false `Rejected`.
+                p if mako_gpke::UTILMD_ANFRAGE_PIDS.contains(&p) => {
                     let cmd = adapters::gpke_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     // Process Frist: 24 wall-clock hours (BK6-22-024 §5).

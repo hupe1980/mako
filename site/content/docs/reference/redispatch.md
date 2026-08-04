@@ -217,10 +217,22 @@ the transport layer from the resource's Stammdaten.
 proven lost revenue — Nr. 3) plus zusätzliche Aufwendungen (Nr. 1/2/4) minus
 ersparte Aufwendungen (Satz 4 — reimbursed to the NB; the net may be
 negative). netzbilanzd exposes it as
-`POST /api/v1/redispatch/verguetung/{activation_id}/compute`, resolving the
-Ausfallarbeit from the same edmd 15-min Lastgang window the BK6-20-061
-Kostenblatt uses. Calculation endpoint only — the payment run is the
-operator's ERP.
+`POST /api/v1/redispatch/verguetung/{activation_id}/compute`. Calculation
+endpoint only — the payment run is the operator's ERP.
+
+**The case selects the counterfactual, and the request must say which.**
+`abwicklung` is required, and it picks the `AusfallarbeitBasis`:
+
+| `abwicklung` | Ausfallarbeit from | Why |
+|---|---|---|
+| `DULDUNGSFALL` | the edmd 15-min Lastgang window (the same resolution the BK6-20-061 Kostenblatt uses) | the NB steered the resource, so what the plant would have produced was never transmitted |
+| `AUFFORDERUNGSFALL` | `ausfallarbeit_kwh_override`, taken from the transmitted schedule — **required**, `422` without it | the EIV steered to that schedule, and the schedule *is* the counterfactual |
+
+Resolving both from the Lastgang would settle an Aufforderungsfall against what
+happened rather than against what was instructed — a money error in whichever
+direction the plant deviated, and one nothing downstream detects. The chosen
+basis travels into the result and its calculation trace, so an audit can see
+which counterfactual a figure rests on.
 
 ## Workflow overview
 

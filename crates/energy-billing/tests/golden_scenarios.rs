@@ -434,6 +434,7 @@ fn golden_gas_with_levies_jan_2026() {
 /// MwSt 0%:   22.96 × 0 = 0.00 EUR
 /// Brutto:    22.96 EUR
 /// ```
+#[cfg(feature = "bo4e")]
 #[test]
 fn golden_eeg_gutschrift_kleinunternehmer_jan_2026() {
     use energy_billing::EegMeterInput;
@@ -826,6 +827,7 @@ fn sect40a_kilowattstundenpreis_brutto_includes_all_charges() {
 
 /// §41 Abs. 1 EnWG requires specific mandatory fields on every energy invoice.
 /// This test verifies that `to_rechnung_json()` includes all required fields.
+#[cfg(feature = "bo4e")]
 #[test]
 fn sect41_rechnung_json_contains_mandatory_fields() {
     use energy_billing::*;

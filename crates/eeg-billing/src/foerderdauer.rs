@@ -497,59 +497,6 @@ pub fn effektives_foerderende(
     }
 }
 
-/// §24 Abs. 1 Nr. 4 EEG 2023 — Check whether two plants fall within the
-/// 12-consecutive-calendar-months commissioning window for Zusammenlegung.
-///
-/// Under §24 Abs. 1 EEG 2023, multiple plants at the same location that are
-/// commissioned **within 12 consecutive calendar months** are treated as a single
-/// plant for tariff-threshold purposes (`§21`, `§22`).
-///
-/// # Returns
-/// `true` when the time condition is met (both plants in the same 12-month window).
-/// The caller must additionally verify the location and energy-type conditions.
-///
-/// # Legal basis
-/// §24 Abs. 1 Satz 1 Nr. 4 EEG 2023: "innerhalb von zwölf aufeinanderfolgenden
-/// Kalendermonaten in Betrieb genommen worden sind."
-///
-/// "12 aufeinanderfolgende Kalendermonate" starting from month M covers months M..M+11.
-/// Two plants are within the window when their commissioning months are at most 11 months apart
-/// (month_diff < 12). A plant commissioned exactly 12 calendar months later is **outside**.
-///
-/// # Example
-/// ```rust
-/// use eeg_billing::zusammenlegung_within_12_months;
-/// use time::macros::date;
-/// // Jan 2024 (month 0) and Dec 2024 (month 11): diff = 11 < 12 → YES
-/// assert!(zusammenlegung_within_12_months(date!(2024-01-15), date!(2024-12-15)));
-/// // Jan 2024 and Jan 2025: diff = 12 months → NO (outside the 12-month window)
-/// assert!(!zusammenlegung_within_12_months(date!(2024-01-01), date!(2025-01-01)));
-/// // Jan 2024 and Feb 2025: diff = 13 months → NO
-/// assert!(!zusammenlegung_within_12_months(date!(2024-01-01), date!(2025-02-01)));
-/// // Dec 2024 and Nov 2025: diff = 11 months → YES
-/// assert!(zusammenlegung_within_12_months(date!(2024-12-01), date!(2025-11-01)));
-/// ```
-pub fn zusammenlegung_within_12_months(ibn_a: Date, ibn_b: Date) -> bool {
-    let (earlier, later) = if ibn_a <= ibn_b {
-        (ibn_a, ibn_b)
-    } else {
-        (ibn_b, ibn_a)
-    };
-    // Calendar-month arithmetic: "innerhalb von zwölf aufeinanderfolgenden Kalendermonaten"
-    // means both plants must fall within the same rolling 12-calendar-month window.
-    //
-    // Example: Jan 2024 (month 0) + Dec 2024 (month 11) → diff = 11 months → YES
-    //          Jan 2024 (month 0) + Jan 2025 (month 12) → diff = 12 months → NO
-    //
-    // The old Duration::days(366) approach was wrong: in a non-leap year it allowed
-    // plants 366 days apart (≈ 12 months + 1 day) to qualify, and in some leap-year
-    // configurations it excluded valid 12-month windows.
-    let month_diff =
-        (later.year() - earlier.year()) as i64 * 12 + later.month() as i64 - earlier.month() as i64;
-    // Strictly less than 12: months [0..11] inclusive = 12 calendar months (§24 Abs. 1 Nr. 4)
-    month_diff < 12
-}
-
 // ── §52 EEG 2023 Pflichtzahlung ───────────────────────────────────────────────
 
 /// Compute the §52 EEG 2023 penalty payment owed by the plant operator to the NB.

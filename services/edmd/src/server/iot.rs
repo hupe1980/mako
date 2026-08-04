@@ -374,15 +374,16 @@ pub(crate) async fn post_iot_reads(
         stored += 1;
     }
 
-    let validation = validate_and_annotate(&mut batch, "IOT_PUSH_VALIDATION", &malo_id);
+    let (validated, validation) =
+        crate::domain::validation::ValidatedReads::validate(batch, "IOT_PUSH_VALIDATION", &malo_id);
 
     // The IoT path scores with `score_intervals_f64` rather than
     // `compute_quality`, so the report is adapted before it is recorded — the
     // history must not depend on which door the reading came in by.
     if let (Some(q), Some(first), Some(last)) = (
         quality.as_ref(),
-        batch.first().map(|r| r.dtm_from),
-        batch.last().map(|r| r.dtm_to),
+        validated.as_slice().first().map(|r| r.dtm_from),
+        validated.as_slice().last().map(|r| r.dtm_to),
     ) {
         let report = QualityReport {
             intervals_accepted: q.intervals_analysed,
@@ -408,8 +409,13 @@ pub(crate) async fn post_iot_reads(
         .await;
     }
 
-    if !batch.is_empty()
-        && let Err(e) = state.repo.store_reads(&batch).await
+    // Captured before the batch moves into the store, so the alert below can
+    // name the window it covers.
+    let period_from = validated.as_slice().first().map(|r| r.dtm_from);
+    let period_to = validated.as_slice().last().map(|r| r.dtm_to);
+
+    if !validated.is_empty()
+        && let Err(e) = state.repo.store_reads(validated).await
     {
         tracing::error!(malo_id = %malo_id, error = %e, "edmd: IoT batch insert failed");
         return (
@@ -436,9 +442,41 @@ pub(crate) async fn post_iot_reads(
         .await;
     }
 
+    // Same warning every other ingest door raises. Without it a FAULTY reading
+    // pushed by a LoRaWAN device is annotated and then silent — agentd's
+    // meter-data-agent and replacement-value-agent are event-driven.
+    let hampel = quality.as_ref().map(|q| {
+        serde_json::json!({
+            "grade": q.grade.as_str(),
+            "coverage_pct": q.coverage_pct,
+            "gaps_detected": q.gaps_detected,
+            "outliers": q.outlier_intervals.len() + q.spike_intervals.len(),
+            "has_warnings": q.has_warnings,
+            "blocks_billing": q.grade.blocks_billing(),
+        })
+    });
+    let alert = crate::server::quality_alert::QualityAlert {
+        malo_id: &malo_id,
+        door: "iot-push",
+        correlation_id: &req.session_id,
+        causation_id: &req.session_id,
+        sparte: Some(sparte.as_str()),
+        period_from,
+        period_to,
+        validation: &validation,
+        hampel,
+    };
+    crate::server::quality_alert::raise_quality_warning(
+        state.erp_webhook_url.as_deref(),
+        state.webhook_secret_bytes(),
+        &state.tenant,
+        &alert,
+    )
+    .await;
+
     let status = if stored == 0 {
         StatusCode::UNPROCESSABLE_ENTITY
-    } else if warnings.is_empty() && rejected.is_empty() && validation.is_clean() {
+    } else if warnings.is_empty() && rejected.is_empty() && !alert.is_warning() {
         StatusCode::CREATED
     } else {
         StatusCode::ACCEPTED

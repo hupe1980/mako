@@ -26,10 +26,10 @@ use rust_decimal::Decimal;
 use crate::error::BillingError;
 use crate::types::{
     ArbeitspreisModell, BillingPositionKind, CalculationTrace, GasAwhInput, KaKundengruppe,
-    LegalReference, MmmInput, MsbInput, NneInput, PriceReference, PriceStep, QuantityUnit,
-    Sect14aModul3Interval, Sect14aModule, SettlementPosition, SettlementResult, SettlementStatus,
-    SettlementType, SettlementWarning, Sparte, SpotPriceFormula, TariffCalculationMethod,
-    TariffSource, WarningSeverity,
+    KorrekturGrund, LegalReference, MmmInput, MsbInput, NneInput, PriceReference, PriceStep,
+    QuantityUnit, Sect14aModule, SettlementPosition, SettlementResult, SettlementStatus,
+    SettlementType, SettlementWarning, Sparte, SpotPriceFormula, SpotpreisInterval,
+    TariffCalculationMethod, TariffSource, WarningSeverity,
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -217,15 +217,20 @@ pub(crate) fn warn_if_straddles_turnover(
 /// - Gas Grundpreis position → `GasNEV §14`
 /// - Arbeit positions → `StromNEV §21` (or `GasNEV §14` for Gas)
 /// - §14a Modul 1 positions → `Sect14aEnwg { module: Modul1 }` + `BNetzA BK6-22-300`
-/// - §14a ToU positions → `Sect14aEnwg { module: Modul2 }` + `BNetzA BK6-22-300`
+/// - §14a ToU positions → `Sect14aEnwg { module: Modul3 }` + `BNetzA BK6-22-300`
 /// - Leistung position → `StromNEV §17`
 /// - Konzessionsabgabe → `KAV §2 Abs. 2`
 ///
-/// ## §14a Modul 1 flat reduction
+/// ## §14a Modul 1 — pauschale Reduzierung
 ///
-/// Set `sect14a_modul1_reduction_factor = Some(dec!(0.85))` to apply the BNetzA
-/// BK6-22-300 Modul 1 15 % discount: the Arbeitspreis is multiplied by the factor
-/// before billing. The trace carries `regulatory_reduction_factor` for auditability.
+/// Select `ArbeitspreisModell::Modul1Pauschal` with the NB's published annual
+/// amount and the fraction of a year the period covers: the energy is billed at
+/// the full Arbeitspreis and the pauschale is credited pro rata alongside it.
+///
+/// **Known limitation.** BK6-22-300 permits Modul 1 alongside Modul 3, but
+/// `ArbeitspreisModell` holds one model at a time, so that combination is not
+/// yet representable. Modul 2 with Modul 3 is genuinely forbidden and stays
+/// unrepresentable by design — see [`Sect14aModule::combinable_with`].
 ///
 /// ## Errors
 ///
@@ -246,7 +251,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
             reason: "metered energy must be non-negative".to_owned(),
         });
     }
-    if let ArbeitspreisModell::Modul3Spotpreis { intervalle } = &input.arbeitspreis {
+    if let ArbeitspreisModell::SpotpreisNetzentgelt { intervalle } = &input.arbeitspreis {
         if intervalle.is_empty() {
             return Err(BillingError::InvalidInput {
                 reason: "§14a Modul 3 requires at least one dispatch interval".to_owned(),
@@ -426,15 +431,20 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
     // mutually exclusive by construction, so there is no precedence to get wrong
     // and no partial state to fall through.
     match &input.arbeitspreis {
-        ArbeitspreisModell::Modul2ZeitVariabel { ht, nt } => {
+        ArbeitspreisModell::Modul3ZeitVariabel { ht, st, nt } => {
             for (label, kind, mp) in [
                 (
-                    "Netznutzung Arbeit HT (§14a Modul 2)",
+                    "Netznutzung Arbeit HT (§14a Modul 3)",
                     BillingPositionKind::NneArbeitHt,
                     ht,
                 ),
                 (
-                    "Netznutzung Arbeit NT (§14a Modul 2)",
+                    "Netznutzung Arbeit ST (§14a Modul 3)",
+                    BillingPositionKind::NneArbeitSt,
+                    st,
+                ),
+                (
+                    "Netznutzung Arbeit NT (§14a Modul 3)",
                     BillingPositionKind::NneArbeitNt,
                     nt,
                 ),
@@ -447,7 +457,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                     vec![
                         arbeit_ref.clone(),
                         LegalReference::Sect14aEnwg {
-                            module: Sect14aModule::Modul2,
+                            module: Sect14aModule::Modul3,
                         },
                         LegalReference::BnetzaDecision {
                             reference: "BK6-22-300",
@@ -460,17 +470,85 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
             }
         }
 
-        ArbeitspreisModell::Modul1Pauschal { basis, reduktion } => {
+        ArbeitspreisModell::Modul1Pauschal {
+            basis,
+            pauschale_eur_pro_jahr,
+            jahresanteil,
+        } => {
+            // Two positions, because Modul 1 is not a rate change: the energy is
+            // billed at the published Arbeitspreis in full, and the pauschale is
+            // credited alongside it. Folding it into the rate would make the
+            // credit scale with consumption, which is precisely what "pauschal"
+            // excludes — and is Modul 2's mechanism, not this one's.
+            let arbeit_eur = ct_to_eur(basis.preis_ct_per_kwh);
+            let p = kwh_pos_traced(
+                "Netznutzung Arbeit (§14a Modul 1)",
+                BillingPositionKind::NneArbeitModul1,
+                basis.menge_kwh,
+                arbeit_eur,
+                vec![
+                    arbeit_ref.clone(),
+                    LegalReference::Sect14aEnwg {
+                        module: Sect14aModule::Modul1,
+                    },
+                    LegalReference::BnetzaDecision {
+                        reference: "BK6-22-300",
+                    },
+                ],
+                tariff_src.clone(),
+            );
+            total += p.net_eur;
+            positions.push(p);
+
+            let credit_eur = -(*pauschale_eur_pro_jahr * *jahresanteil).round_dp(6);
+            let c = SettlementPosition {
+                text: "§14a Modul 1 pauschale Reduzierung".to_owned(),
+                kind: BillingPositionKind::NneArbeitModul1,
+                quantity: jahresanteil.round_dp(6),
+                unit: QuantityUnit::Monat,
+                unit_price_eur: credit_eur,
+                net_eur: credit_eur.round_dp(5),
+                spot_price_formula: None,
+                trace: CalculationTrace {
+                    explanation: format!(
+                        "{pauschale_eur_pro_jahr:.2} EUR/Jahr × {jahresanteil:.6} \
+                         Jahresanteil = {credit_eur:.5} EUR (Gutschrift)"
+                    ),
+                    input_quantity: *jahresanteil,
+                    input_unit_price_eur: credit_eur,
+                    gross_eur: credit_eur,
+                    legal_refs: vec![
+                        LegalReference::Sect14aEnwg {
+                            module: Sect14aModule::Modul1,
+                        },
+                        LegalReference::BnetzaDecision {
+                            reference: "BK6-22-300",
+                        },
+                    ],
+                    tariff_source: tariff_src.clone(),
+                    regulatory_reduction_factor: None,
+                    rounding_note: Some("annual pauschale pro-rated; net to 5 dp"),
+                },
+            };
+            total += c.net_eur;
+            positions.push(c);
+        }
+
+        // §14a Modul 2 — the device's own Arbeitspreis, reduced by a percentage.
+        // Unlike Modul 1's flat credit, this one scales with consumption, and it
+        // attaches to the controllable device's *separately metered* energy —
+        // which is why Modul 2 requires that metering and Modul 1 does not.
+        ArbeitspreisModell::Modul2ProzentualeReduzierung { basis, reduktion } => {
             let base_eur = ct_to_eur(basis.preis_ct_per_kwh);
             let factor = reduktion.get();
             let reduced_eur = (base_eur * factor).round_dp(6);
             let gross = basis.menge_kwh * reduced_eur;
             let p = SettlementPosition {
                 text: format!(
-                    "Netznutzung Arbeit §14a Modul 1 ({:.0}% Reduzierung)",
+                    "Netznutzung Arbeit §14a Modul 2 ({:.0}% Reduzierung)",
                     (Decimal::ONE - factor) * HUNDRED
                 ),
-                kind: BillingPositionKind::NneArbeitModul1,
+                kind: BillingPositionKind::NneArbeitModul2,
                 quantity: basis.menge_kwh.round_dp(3),
                 unit: QuantityUnit::Kwh,
                 unit_price_eur: reduced_eur,
@@ -478,7 +556,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                 spot_price_formula: None,
                 trace: CalculationTrace {
                     explanation: format!(
-                        "{:.3} kWh × {:.6} EUR/kWh (= {:.6} × {factor} Modul 1) = {:.5} EUR",
+                        "{:.3} kWh × {:.6} EUR/kWh (= {:.6} × {factor} Modul 2) = {:.5} EUR",
                         basis.menge_kwh,
                         reduced_eur,
                         base_eur,
@@ -490,7 +568,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                     legal_refs: vec![
                         arbeit_ref.clone(),
                         LegalReference::Sect14aEnwg {
-                            module: Sect14aModule::Modul1,
+                            module: Sect14aModule::Modul2,
                         },
                         LegalReference::BnetzaDecision {
                             reference: "BK6-22-300",
@@ -521,7 +599,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         }
 
         // Modul 3 positions are emitted below, per dispatch interval.
-        ArbeitspreisModell::Modul3Spotpreis { .. } => {}
+        ArbeitspreisModell::SpotpreisNetzentgelt { .. } => {}
     }
 
     // Leistung (RLM only) — StromNEV §17
@@ -733,6 +811,55 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         }
     }
 
+    // Blindmehrarbeit — reactive energy beyond the Preisblatt's free share.
+    //
+    // Billed on the excess only: the free share travels with the active energy,
+    // and an unused allowance is not a credit. The share and the rate are terms
+    // of the Netzbetreiber's price sheet, so both arrive as input rather than as
+    // constants here — networks differ, and some set separate shares for
+    // inductive and capacitive draw.
+    if let Some(blind) = input.blindarbeit {
+        let wirkarbeit_kwh = input.arbeitspreis.menge_kwh();
+        let mehrarbeit = blind.mehrarbeit_kvarh(wirkarbeit_kwh);
+        if mehrarbeit > Decimal::ZERO {
+            let preis_eur = ct_to_eur(blind.preis_ct_per_kvarh);
+            let gross = mehrarbeit * preis_eur;
+            let p = SettlementPosition {
+                text: "Blindmehrarbeit".to_owned(),
+                kind: BillingPositionKind::Blindmehrarbeit,
+                quantity: mehrarbeit.round_dp(3),
+                unit: QuantityUnit::Kvarh,
+                unit_price_eur: preis_eur,
+                net_eur: pos_net(mehrarbeit, preis_eur),
+                spot_price_formula: None,
+                trace: CalculationTrace {
+                    explanation: format!(
+                        "{:.3} kvarh bezogen − {:.3} kvarh frei ({:.3} kWh × {}) \
+                         = {:.3} kvarh × {:.6} EUR/kvarh = {:.5} EUR",
+                        blind.blindarbeit_kvarh,
+                        (wirkarbeit_kwh * blind.freigrenze_anteil).round_dp(3),
+                        wirkarbeit_kwh,
+                        blind.freigrenze_anteil,
+                        mehrarbeit,
+                        preis_eur,
+                        gross.round_dp(5)
+                    ),
+                    input_quantity: mehrarbeit,
+                    input_unit_price_eur: preis_eur,
+                    gross_eur: gross,
+                    legal_refs: vec![LegalReference::StromNev { paragraph: "§17" }],
+                    tariff_source: tariff_src.clone(),
+                    regulatory_reduction_factor: None,
+                    rounding_note: Some(
+                        "quantity rounded to 3 dp; unit price to 6 dp; net to 5 dp",
+                    ),
+                },
+            };
+            total += p.net_eur;
+            positions.push(p);
+        }
+    }
+
     // Konzessionsabgabe (KAV §2 Abs. 2)
     let ka_base_kwh = input.arbeitspreis.menge_kwh();
     if let Some(ka) = input.konzessionsabgabe {
@@ -806,8 +933,8 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
     // The rate is pre-calculated by the caller from the spot-price formula in
     // `PreisblattNetznutzung.lastvariablePreispositionen`.
     // Each position carries a `LastvariablePreisposition` JSON for ERP validation.
-    let modul3_intervalle: &[Sect14aModul3Interval] = match &input.arbeitspreis {
-        ArbeitspreisModell::Modul3Spotpreis { intervalle } => intervalle,
+    let modul3_intervalle: &[SpotpreisInterval] = match &input.arbeitspreis {
+        ArbeitspreisModell::SpotpreisNetzentgelt { intervalle } => intervalle,
         _ => &[],
     };
     for interval in modul3_intervalle.iter() {
@@ -891,6 +1018,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         regime,
         settlement_type,
         status: SettlementStatus::Initial,
+        korrektur_grund: None,
         period: input.period,
         nb_mp_id: input.nb_mp_id.clone(),
         counterparty_mp_id: input.lf_mp_id.clone(),
@@ -1069,6 +1197,7 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
         regime,
         settlement_type: mmm_settlement_type,
         status: SettlementStatus::Initial,
+        korrektur_grund: None,
         period: input.period,
         nb_mp_id: input.nb_mp_id.clone(),
         counterparty_mp_id: input.lf_mp_id.clone(),
@@ -1196,6 +1325,7 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
         ),
         settlement_type: SettlementType::MsbRechnung,
         status: SettlementStatus::Initial,
+        korrektur_grund: None,
         period: input.period,
         nb_mp_id: input.nb_mp_id.clone(),
         counterparty_mp_id: input.msb_mp_id.clone(),
@@ -1218,11 +1348,11 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
 /// ```rust,no_run
 /// # use grid_billing::{SettlementResult, reverse};
 /// # let original: SettlementResult = unimplemented!();
-/// let reversal = reverse(&original);
+/// let reversal = reverse(&original, grid_billing::KorrekturGrund::Messwertkorrektur);
 /// assert_eq!(reversal.total_eur, -original.total_eur);
 /// ```
 #[must_use]
-pub fn reverse(original: &SettlementResult) -> SettlementResult {
+pub fn reverse(original: &SettlementResult, grund: KorrekturGrund) -> SettlementResult {
     use crate::types::SettlementStatus;
     let reversed_positions: Vec<_> = original
         .positions
@@ -1267,6 +1397,7 @@ pub fn reverse(original: &SettlementResult) -> SettlementResult {
         regime: original.regime,
         settlement_type: original.settlement_type,
         status: SettlementStatus::Reversal,
+        korrektur_grund: Some(grund),
         period: original.period,
         nb_mp_id: original.nb_mp_id.clone(),
         counterparty_mp_id: original.counterparty_mp_id.clone(),
@@ -1300,7 +1431,7 @@ pub fn reverse(original: &SettlementResult) -> SettlementResult {
 /// # use grid_billing::{SettlementResult, correct};
 /// # let original: SettlementResult = unimplemented!();
 /// # let corrected: SettlementResult = unimplemented!();
-/// let (reversal, replacement) = correct(&original, corrected);
+/// let (reversal, replacement) = correct(&original, corrected, grid_billing::KorrekturGrund::Tarifkorrektur);
 /// assert_eq!(reversal.total_eur, -original.total_eur);
 /// assert_eq!(replacement.status, grid_billing::SettlementStatus::Correction);
 /// ```
@@ -1308,12 +1439,14 @@ pub fn reverse(original: &SettlementResult) -> SettlementResult {
 pub fn correct(
     original: &SettlementResult,
     mut replacement: SettlementResult,
+    grund: KorrekturGrund,
 ) -> (SettlementResult, SettlementResult) {
     // No AgNeS guard here: the reversal prices nothing (see [`reverse`]) and
     // the replacement was computed by a settlement builder that already ran
     // `ensure_berechenbar` for its own period.
-    let reversal = reverse(original);
+    let reversal = reverse(original, grund);
     replacement.status = SettlementStatus::Correction;
+    replacement.korrektur_grund = Some(grund);
     (reversal, replacement)
 }
 
@@ -1438,6 +1571,7 @@ pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingEr
         regime,
         settlement_type: SettlementType::GasAwhSperrung,
         status: SettlementStatus::Initial,
+        korrektur_grund: None,
         period: input.period,
         nb_mp_id: input.nb_mp_id.clone(),
         counterparty_mp_id: input.lf_mp_id.clone(),
@@ -1454,14 +1588,18 @@ pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingEr
 }
 #[cfg(test)]
 /// Build a §14a Modul 1 Arbeitspreis over the standard test basis.
-fn modul1(factor: Decimal) -> ArbeitspreisModell {
-    use crate::types::{MengePreis, Reduktionsfaktor};
+///
+/// `pauschale_eur_pro_jahr` is the NB's published annual amount; the period here
+/// is one month, so a twelfth of it is credited.
+fn modul1(pauschale_eur_pro_jahr: Decimal) -> ArbeitspreisModell {
+    use crate::types::MengePreis;
     ArbeitspreisModell::Modul1Pauschal {
         basis: MengePreis {
             menge_kwh: rust_decimal::dec!(1500),
             preis_ct_per_kwh: rust_decimal::dec!(3.5),
         },
-        reduktion: Reduktionsfaktor::new(factor).expect("valid reduction factor"),
+        pauschale_eur_pro_jahr,
+        jahresanteil: rust_decimal::dec!(1) / rust_decimal::dec!(12),
     }
 }
 
@@ -1484,6 +1622,7 @@ mod tests {
 
     fn base_nne() -> NneInput {
         NneInput {
+            blindarbeit: None,
             malo_id: "51238696780".into(),
             nb_mp_id: "9900357000004".into(),
             lf_mp_id: "9900012345678".into(),
@@ -1584,10 +1723,14 @@ mod tests {
     #[test]
     fn nne_sect14a_tou_arithmetic() {
         let mut i = base_nne();
-        i.arbeitspreis = ArbeitspreisModell::Modul2ZeitVariabel {
+        i.arbeitspreis = ArbeitspreisModell::Modul3ZeitVariabel {
             ht: MengePreis {
                 menge_kwh: d("900"),
                 preis_ct_per_kwh: d("4.0"),
+            },
+            st: MengePreis {
+                menge_kwh: d("0"),
+                preis_ct_per_kwh: d("0"),
             },
             nt: MengePreis {
                 menge_kwh: d("600"),
@@ -1596,10 +1739,69 @@ mod tests {
         };
         let r = settle_nne(&i).unwrap();
         assert_eq!(r.total_eur, d("48.00"));
-        assert_eq!(r.positions.len(), 2);
-        assert_eq!(r.positions[0].text, "Netznutzung Arbeit HT (§14a Modul 2)");
+        // BK6-22-300 defines three Tarifstufen; the ST band carries no energy
+        // here but is still billed, so the invoice shows the full structure.
+        assert_eq!(r.positions.len(), 3);
+        assert_eq!(r.positions[0].text, "Netznutzung Arbeit HT (§14a Modul 3)");
         assert_eq!(r.positions[0].net_eur, d("36.00000"));
-        assert_eq!(r.positions[1].net_eur, d("12.00000"));
+        assert_eq!(r.positions[1].text, "Netznutzung Arbeit ST (§14a Modul 3)");
+        assert_eq!(r.positions[1].net_eur, d("0.00000"));
+        assert_eq!(r.positions[2].net_eur, d("12.00000"));
+    }
+
+    /// Blindmehrarbeit is billed on the excess only, and only when there is one.
+    ///
+    /// The position kind, the Artikelnummer and the BO4E bridge all existed
+    /// before the calculation did — nothing could produce the position, so a
+    /// network that charges reactive energy was simply under-billed with no
+    /// signal anywhere.
+    #[test]
+    fn blindmehrarbeit_bills_only_the_excess() {
+        use crate::types::Blindarbeit;
+
+        let mut i = base_nne();
+        i.arbeitspreis = ArbeitspreisModell::Einheitlich(MengePreis {
+            menge_kwh: d("1000"),
+            preis_ct_per_kwh: d("5.0"),
+        });
+
+        // Inside the free share → no position at all.
+        i.blindarbeit = Some(Blindarbeit {
+            blindarbeit_kvarh: d("400"),
+            freigrenze_anteil: Blindarbeit::COS_PHI_0_9,
+            preis_ct_per_kvarh: d("2.0"),
+        });
+        let r = settle_nne(&i).expect("settles");
+        assert!(
+            !r.positions
+                .iter()
+                .any(|p| p.kind == BillingPositionKind::Blindmehrarbeit),
+            "a draw inside the free share raises no charge"
+        );
+
+        // Beyond it → 600 − (1 000 × 0,4843) = 115,7 kvarh × 0,02 EUR = 2,314 EUR.
+        i.blindarbeit = Some(Blindarbeit {
+            blindarbeit_kvarh: d("600"),
+            freigrenze_anteil: Blindarbeit::COS_PHI_0_9,
+            preis_ct_per_kvarh: d("2.0"),
+        });
+        let r = settle_nne(&i).expect("settles");
+        let p = r
+            .positions
+            .iter()
+            .find(|p| p.kind == BillingPositionKind::Blindmehrarbeit)
+            .expect("the excess is billed");
+        assert_eq!(p.quantity, d("115.700"));
+        assert_eq!(p.unit, QuantityUnit::Kvarh);
+        assert_eq!(p.net_eur, d("2.31400"));
+        // The basis is the NB's Preisblatt under StromNEV §17 — not §18.
+        assert!(
+            p.trace.legal_refs.iter().any(
+                |r| matches!(r, LegalReference::StromNev { paragraph } if *paragraph == "§17")
+            ),
+            "{:?}",
+            p.trace.legal_refs
+        );
     }
 
     /// An inverted period cannot reach the engine at all.
@@ -1933,10 +2135,14 @@ mod tests {
     #[test]
     fn nne_tou_has_sect14a_reference() {
         let mut i = base_nne();
-        i.arbeitspreis = ArbeitspreisModell::Modul2ZeitVariabel {
+        i.arbeitspreis = ArbeitspreisModell::Modul3ZeitVariabel {
             ht: MengePreis {
                 menge_kwh: d("900"),
                 preis_ct_per_kwh: d("4.0"),
+            },
+            st: MengePreis {
+                menge_kwh: d("0"),
+                preis_ct_per_kwh: d("0"),
             },
             nt: MengePreis {
                 menge_kwh: d("600"),
@@ -2098,10 +2304,14 @@ mod tests {
     fn nne_negative_zero_nt_does_not_panic() {
         // Guard: zero consumption in one ToU band must produce zero position, not NaN
         let mut i = base_nne();
-        i.arbeitspreis = ArbeitspreisModell::Modul2ZeitVariabel {
+        i.arbeitspreis = ArbeitspreisModell::Modul3ZeitVariabel {
             ht: MengePreis {
                 menge_kwh: d("1500"),
                 preis_ct_per_kwh: d("4.0"),
+            },
+            st: MengePreis {
+                menge_kwh: d("0"),
+                preis_ct_per_kwh: d("0"),
             },
             nt: MengePreis {
                 menge_kwh: d("0"),
@@ -2208,7 +2418,7 @@ mod tests {
                 paragraph: "§2 Abs. 2",
             },
             LegalReference::Sect14aEnwg {
-                module: Sect14aModule::Modul2,
+                module: Sect14aModule::Modul3,
             },
             LegalReference::MsbG {
                 paragraph: "§§6–7"
@@ -2284,7 +2494,7 @@ mod tests {
     #[test]
     fn reversal_negates_all_positions_and_total() {
         let original = settle_nne(&base_nne()).unwrap();
-        let storno = reverse(&original);
+        let storno = reverse(&original, KorrekturGrund::Messwertkorrektur);
         assert_eq!(storno.total_eur, -original.total_eur);
         assert_eq!(storno.status, SettlementStatus::Reversal);
         for (orig, rev) in original.positions.iter().zip(storno.positions.iter()) {
@@ -2296,7 +2506,7 @@ mod tests {
     #[test]
     fn reversal_preserves_counterparty_mp_id() {
         let original = settle_nne(&base_nne()).unwrap();
-        let storno = reverse(&original);
+        let storno = reverse(&original, KorrekturGrund::Messwertkorrektur);
         assert_eq!(storno.counterparty_mp_id, original.counterparty_mp_id);
     }
 
@@ -2487,7 +2697,7 @@ mod tests {
             klasse: KaKundengruppe::Sondervertragskunde,
         });
         let original = settle_nne(&i).unwrap();
-        let storno = reverse(&original);
+        let storno = reverse(&original, KorrekturGrund::Messwertkorrektur);
         assert_eq!(storno.positions.len(), original.positions.len());
         assert_eq!(storno.total_eur, -original.total_eur);
         assert_eq!(storno.recomputed_total(), storno.total_eur);
@@ -2495,41 +2705,62 @@ mod tests {
 
     // ── §14a Modul 1 (BNetzA BK6-22-300 flat reduction) ──────────────────────
 
+    /// Modul 1 is a *pauschale* reduction: the energy is billed at the full
+    /// Arbeitspreis and a flat annual amount is credited pro rata alongside it.
+    ///
+    /// The credit does not scale with consumption — that is what makes it
+    /// pauschal, and what separates it from Modul 2, which reduces the
+    /// Arbeitspreis by a percentage. Both were once the same computation here,
+    /// with Modul 1 wearing Modul 2's mechanism.
     #[test]
-    fn nne_sect14a_modul1_applies_reduction_factor() {
-        // 1500 kWh × 3.5 ct/kWh × 0.85 = 1500 × 0.02975 EUR = 44.625 → 44.63
+    fn sect14a_modul1_credits_a_flat_amount_beside_the_full_arbeitspreis() {
         let mut i = base_nne();
-        i.arbeitspreis = modul1(d("0.85"));
+        i.arbeitspreis = modul1(d("120.00"));
         let r = settle_nne(&i).unwrap();
-        assert_eq!(r.positions.len(), 1);
+
+        assert_eq!(r.positions.len(), 2, "the Arbeit position plus the credit");
+        // 1500 kWh × 3.5 ct = 52.50 EUR, billed in full.
+        assert_eq!(r.positions[0].net_eur, d("52.50000"));
+        // 120 EUR/year ÷ 12 = 10.00 EUR credited for the month.
+        assert_eq!(r.positions[1].net_eur, d("-10.00000"));
+        assert_eq!(r.total_eur, d("42.50"));
+
         assert!(
-            r.positions[0].text.contains("Modul 1"),
-            "position text must mention Modul 1"
+            r.positions[1].text.contains("pauschale"),
+            "{}",
+            r.positions[1].text
         );
-        // 1500 × 0.035 × 0.85 = 1500 × 0.02975 = 44.625 → round_dp(2, MidpointNearestEven) = 44.62
-        assert_eq!(r.total_eur, d("44.62"), "expected Modul 1 reduced total");
         let refs = r.all_legal_refs();
-        assert!(
-            refs.iter().any(|r| r.contains("Modul 1")),
-            "must cite §14a Modul 1"
-        );
-        assert!(
-            refs.iter().any(|r| r.contains("BK6-22-300")),
-            "must cite BK6-22-300"
-        );
-        assert_eq!(
-            r.positions[0].trace.regulatory_reduction_factor,
-            Some(d("0.85"))
-        );
+        assert!(refs.iter().any(|x| x.contains("Modul 1")));
+        assert!(refs.iter().any(|x| x.contains("BK6-22-300")));
+    }
+
+    /// Doubling the consumption does not double the credit — the defining
+    /// property of a pauschale, and the one the old factor model got wrong.
+    #[test]
+    fn the_modul1_credit_does_not_scale_with_consumption() {
+        let credit_for = |kwh: &str| {
+            let mut i = base_nne();
+            i.arbeitspreis = ArbeitspreisModell::Modul1Pauschal {
+                basis: MengePreis {
+                    menge_kwh: d(kwh),
+                    preis_ct_per_kwh: d("3.5"),
+                },
+                pauschale_eur_pro_jahr: d("120.00"),
+                jahresanteil: Decimal::ONE / Decimal::from(12u32),
+            };
+            settle_nne(&i).unwrap().positions[1].net_eur
+        };
+        assert_eq!(credit_for("1500"), credit_for("3000"));
     }
 
     #[test]
-    fn nne_sect14a_modul1_full_reduction_yields_zero() {
-        // Reduction factor = 0 is invalid; factor = 1 = no reduction
+    /// A zero pauschale bills exactly like plain Arbeit — the credit position is
+    /// still emitted, so the invoice shows the module was in force.
+    fn sect14a_modul1_with_a_zero_pauschale_bills_the_full_arbeitspreis() {
         let mut i = base_nne();
-        i.arbeitspreis = modul1(d("1.0"));
+        i.arbeitspreis = modul1(d("0.00"));
         let r = settle_nne(&i).unwrap();
-        // 1500 × 0.035 × 1.0 = 52.50 — same as plain Arbeit
         assert_eq!(r.total_eur, d("52.50"));
     }
 
@@ -2640,7 +2871,7 @@ mod tests {
         }
         let replacement = settle_nne(&corrected_input).unwrap();
 
-        let (reversal, corrected) = correct(&original, replacement);
+        let (reversal, corrected) = correct(&original, replacement, KorrekturGrund::Tarifkorrektur);
         assert_eq!(reversal.status, SettlementStatus::Reversal);
         assert_eq!(reversal.total_eur, -original.total_eur);
         assert_eq!(corrected.status, SettlementStatus::Correction);
@@ -2781,7 +3012,7 @@ mod tests {
         let mut i = base_nne();
         i.period = SettlementPeriod::new(date!(2025 - 12 - 15), date!(2026 - 01 - 15)).unwrap();
         let original = settle_nne(&i).unwrap();
-        let reversal = reverse(&original);
+        let reversal = reverse(&original, KorrekturGrund::Messwertkorrektur);
         assert!(
             reversal
                 .warnings
@@ -2798,8 +3029,8 @@ mod tests {
 #[cfg(test)]
 mod proptests {
     use super::*;
+    use crate::types::MengePreis;
     use crate::types::SettlementPeriod;
-    use crate::types::{MengePreis, Reduktionsfaktor};
     use proptest::prelude::*;
     use rust_decimal::Decimal;
     use time::macros::date;
@@ -2822,6 +3053,7 @@ mod proptests {
             ct in arb_ct_per_kwh(),
         ) {
             let input = NneInput {
+                blindarbeit: None,
                 malo_id: "51238696780".into(),
                 nb_mp_id: "9900357000004".into(),
                 lf_mp_id: "9900012345678".into(),
@@ -2846,7 +3078,7 @@ mod proptests {
                 sparte: Sparte::Strom,
             };
             if let Ok(original) = settle_nne(&input) {
-                let reversal = reverse(&original);
+                let reversal = reverse(&original, KorrekturGrund::Messwertkorrektur);
                 prop_assert_eq!(reversal.total_eur, -original.total_eur);
                 prop_assert_eq!(reversal.recomputed_total(), reversal.total_eur);
                 prop_assert_eq!(reversal.positions.len(), original.positions.len());
@@ -2863,6 +3095,7 @@ mod proptests {
         ) {
             let factor = Decimal::new(factor_pct as i64, 2);
             let base = NneInput {
+                blindarbeit: None,
                 malo_id: "51238696780".into(),
                 nb_mp_id: "9900357000004".into(),
                 lf_mp_id: "9900012345678".into(),
@@ -2893,7 +3126,12 @@ mod proptests {
                         menge_kwh: kwh,
                         preis_ct_per_kwh: ct,
                     },
-                    reduktion: Reduktionsfaktor::new(factor).expect("factor is in (0,1]"),
+                    // Any non-negative pauschale is a credit, so the total can
+                    // only move down — that is the invariant, and it no longer
+                    // depends on consumption the way a rate factor did.
+                    pauschale_eur_pro_jahr: (Decimal::ONE - factor)
+                        * Decimal::from(1200u32),
+                    jahresanteil: Decimal::ONE / Decimal::from(12u32),
                 };
                 if let Ok(reduced) = settle_nne(&reduced_input) {
                     prop_assert!(
@@ -2912,8 +3150,8 @@ mod proptests {
 mod modul3_tests {
     use super::*;
     use crate::types::MengePreis;
-    use crate::types::Sect14aModul3Interval;
     use crate::types::SettlementPeriod;
+    use crate::types::SpotpreisInterval;
     use rust_decimal::Decimal;
     use time::macros::date;
 
@@ -2923,6 +3161,7 @@ mod modul3_tests {
 
     fn base_nne() -> NneInput {
         NneInput {
+            blindarbeit: None,
             malo_id: "51238696780".into(),
             nb_mp_id: "9900357000004".into(),
             lf_mp_id: "9900012345678".into(),
@@ -2959,8 +3198,8 @@ mod modul3_tests {
         let end = start + time::Duration::minutes(15);
 
         let mut i = base_nne();
-        i.arbeitspreis = ArbeitspreisModell::Modul3Spotpreis {
-            intervalle: vec![Sect14aModul3Interval {
+        i.arbeitspreis = ArbeitspreisModell::SpotpreisNetzentgelt {
+            intervalle: vec![SpotpreisInterval {
                 period_from: start,
                 period_to: end,
                 menge_kwh: d("2.5"),
@@ -3055,16 +3294,16 @@ mod modul3_tests {
         )
         .unwrap();
         let mut i = base_nne();
-        i.arbeitspreis = ArbeitspreisModell::Modul3Spotpreis {
+        i.arbeitspreis = ArbeitspreisModell::SpotpreisNetzentgelt {
             intervalle: vec![
-                Sect14aModul3Interval {
+                SpotpreisInterval {
                     period_from: base,
                     period_to: base + time::Duration::minutes(15),
                     menge_kwh: d("1.25"),
                     nne_rate_ct_per_kwh: d("2.00"),
                     epex_spot_ct_per_kwh: None,
                 },
-                Sect14aModul3Interval {
+                SpotpreisInterval {
                     period_from: base + time::Duration::minutes(15),
                     period_to: base + time::Duration::minutes(30),
                     menge_kwh: d("1.75"),
@@ -3104,16 +3343,16 @@ mod modul3_tests {
         )
         .unwrap();
         let mut i = base_nne();
-        i.arbeitspreis = ArbeitspreisModell::Modul3Spotpreis {
+        i.arbeitspreis = ArbeitspreisModell::SpotpreisNetzentgelt {
             intervalle: vec![
-                Sect14aModul3Interval {
+                SpotpreisInterval {
                     period_from: base,
                     period_to: base + time::Duration::minutes(15),
                     menge_kwh: d("0"),
                     nne_rate_ct_per_kwh: d("2.00"),
                     epex_spot_ct_per_kwh: None,
                 },
-                Sect14aModul3Interval {
+                SpotpreisInterval {
                     period_from: base + time::Duration::minutes(15),
                     period_to: base + time::Duration::minutes(30),
                     menge_kwh: d("1.50"),
@@ -3147,12 +3386,13 @@ mod modul3_tests {
         .unwrap();
 
         let mut i = base_nne();
-        i.arbeitspreis = modul1(d("0.85"));
+        i.arbeitspreis = modul1(d("120.00"));
         assert_eq!(i.arbeitspreis.sect14a_modul(), Some(Sect14aModule::Modul1));
 
-        // Assigning Modul 3 replaces Modul 1 rather than adding to it.
-        i.arbeitspreis = ArbeitspreisModell::Modul3Spotpreis {
-            intervalle: vec![Sect14aModul3Interval {
+        // A spot-linked Netzentgelt replaces Modul 1 rather than adding to it —
+        // and is not itself one of the three modules BK6-22-300 defines.
+        i.arbeitspreis = ArbeitspreisModell::SpotpreisNetzentgelt {
+            intervalle: vec![SpotpreisInterval {
                 period_from: base,
                 period_to: base + time::Duration::minutes(15),
                 menge_kwh: d("1.0"),
@@ -3160,10 +3400,14 @@ mod modul3_tests {
                 epex_spot_ct_per_kwh: None,
             }],
         };
-        assert_eq!(i.arbeitspreis.sect14a_modul(), Some(Sect14aModule::Modul3));
+        assert_eq!(
+            i.arbeitspreis.sect14a_modul(),
+            None,
+            "a spot-linked Netzentgelt is the NB's own price model, not §14a Modul 3"
+        );
 
         // And the settlement bills the interval once, not the flat rate as well.
-        let r = settle_nne(&i).expect("Modul 3 settles");
+        let r = settle_nne(&i).expect("the spot model settles");
         let modul1_positions = r
             .positions
             .iter()

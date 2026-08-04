@@ -2120,8 +2120,29 @@ pub struct VerguetungComputeRequest {
     #[serde(default)]
     pub ersparte_aufwendungen_eur: rust_decimal::Decimal,
     /// Manual Ausfallarbeit override — when set, edmd is not queried.
+    ///
+    /// For an Aufforderungsfall this is **required**: the counterfactual is the
+    /// schedule transmitted to the EIV, which edmd does not hold.
     #[serde(default)]
     pub ausfallarbeit_kwh_override: Option<rust_decimal::Decimal>,
+    /// Which redispatch case this activation was — Aufforderungsfall (the EIV
+    /// steers to a transmitted schedule) or Duldungsfall (the NB steers via the
+    /// Steuerkanal).
+    ///
+    /// Required, because the two use different §13a counterfactuals and picking
+    /// one silently misstates the compensation. Take it from the activation's
+    /// `Abwicklung`.
+    pub abwicklung: RedispatchFall,
+}
+
+/// The redispatch case, as the compensation endpoint receives it.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RedispatchFall {
+    /// EIV steers to a transmitted schedule.
+    Aufforderungsfall,
+    /// NB steers the resource via the Steuerkanal.
+    Duldungsfall,
 }
 
 /// `POST /api/v1/redispatch/verguetung/{activation_id}/compute`
@@ -2149,6 +2170,35 @@ pub async fn post_verguetung_compute(
         return (
             StatusCode::BAD_REQUEST,
             "activation_start_utc/activation_end_utc must be RFC 3339",
+        )
+            .into_response();
+    }
+
+    // The §13a counterfactual differs by case, so the case decides the basis.
+    //
+    // Duldungsfall: the NB steered the resource, so what the plant would have
+    // produced was never transmitted — it is derived from the measured Lastgang.
+    // Aufforderungsfall: the EIV steered to a transmitted schedule, and that
+    // schedule *is* the counterfactual. Using the Lastgang there would settle
+    // against what happened rather than against what was instructed, which is a
+    // money error in whichever direction the plant deviated.
+    let basis = match req.abwicklung {
+        RedispatchFall::Duldungsfall => grid_billing::AusfallarbeitBasis::GemessenerLastgang,
+        RedispatchFall::Aufforderungsfall => {
+            grid_billing::AusfallarbeitBasis::UebermittelterFahrplan
+        }
+    };
+    if matches!(req.abwicklung, RedispatchFall::Aufforderungsfall)
+        && req.ausfallarbeit_kwh_override.is_none()
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "Aufforderungsfall: supply ausfallarbeit_kwh_override from the \
+                          transmitted schedule — the measured Lastgang is the Duldungsfall \
+                          basis and would settle §13a Abs. 2 against the wrong counterfactual",
+                "legal_basis": "§13a Abs. 2 EnWG",
+            })),
         )
             .into_response();
     }
@@ -2223,6 +2273,7 @@ pub async fn post_verguetung_compute(
 
     let input = grid_billing::RedispatchVerguetungInput {
         ausfallarbeit_kwh,
+        basis,
         verguetungsart: req.verguetungsart,
         entgangene_einnahmen_eur: entgangene,
         zusaetzliche_aufwendungen_eur: req.zusaetzliche_aufwendungen_eur,

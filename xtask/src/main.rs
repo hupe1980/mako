@@ -14,6 +14,7 @@ Commands:
   bump-version        Bump workspace version in root Cargo.toml (usage: bump-version X.Y.Z)
   codegen             Generate Rust profile code from EDI@Energy specifications
   validate-profiles   Validate all committed profiles for consistency errors
+  validate-extraction Measure how well extract-pdf drafts reproduce the curated profiles
   validate-pruefids   Check that every AHB Pruefidentifikator has a test fixture
   validate-release-codes  Verify that every profile's release code appears in a UNH 0057 fixture
   audit-ahb           Comprehensive AHB rule-coverage analysis for all profiles
@@ -122,6 +123,7 @@ mod generate_fixtures;
 mod import_codelists;
 mod import_xml_profiles;
 mod release_diff;
+mod validate_extraction;
 mod validate_profiles;
 mod validate_pruefids;
 mod validate_release_codes;
@@ -134,6 +136,7 @@ fn main() {
         Some("check-bo4e-coverage") => check_bo4e_coverage(),
         Some("check-release-coverage") => check_release_coverage::check_release_coverage(),
         Some("codegen") => codegen(),
+        Some("validate-extraction") => validate_extraction::validate_extraction(),
         Some("validate-profiles") => validate_profiles(),
         Some("validate-pruefids") => validate_pruefids(),
         Some("validate-release-codes") => validate_release_codes(),

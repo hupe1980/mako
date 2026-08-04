@@ -9,7 +9,7 @@ impl EdifactIngestDispatcher {
     /// Phase-2 dispatch arms for the WiM Strom workflow family:
     /// `wim-device-change`
     /// `wim-geraeteubernahme`
-    /// `wim-rechnung`
+    /// `wim-invoic`
     /// `wim-insrpt`
     /// `wim-stammdaten`
     /// `wim-preisanfrage`
@@ -38,11 +38,19 @@ impl EdifactIngestDispatcher {
                 55042 | 55039 | 55051 | 55168 => {
                     let cmd = adapters::wim_registry().dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_utilmd(msg);
-                    // Process Frist: 5 Werktage (BK6-24-174 WiM Strom Teil 1).
-                    // APERAK AHB 1.0 §2.4.1: Strom UTILMD — 45 min on weekdays.
+                    // Business-answer Frist, per PID — 55039 → 3 WT, 55042 → 5 WT,
+                    // 55051 → 7 WT, 55168 → 1 WT (BK6-24-174 WiM Strom Teil 1,
+                    // Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2). A flat 5 WT here
+                    // escalated the Abmeldung two days early and hid a missed
+                    // Verpflichtungsanfrage for four.
+                    //
+                    // Distinct from the APERAK acknowledgement below, which is
+                    // 45 min on weekdays (APERAK AHB 1.0 §2.4.1).
+                    let frist_wt = mako_wim::antwort_frist_werktage(pid)
+                        .expect("the match arm restricts this to the MSB-Wechsel family");
                     let process_due_at = fristen::deadline_at_werktage(
                         OffsetDateTime::now_utc(),
-                        5,
+                        frist_wt,
                         HolidayCalendar::BdewMaKo,
                     );
                     let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
@@ -52,7 +60,10 @@ impl EdifactIngestDispatcher {
                         cmd,
                         &fv,
                         &[
-                            (mako_wim::GERAETEWECHSEL_APERAK_WINDOW_LABEL, process_due_at),
+                            (
+                                mako_wim::GERAETEWECHSEL_ANTWORT_FRIST_WINDOW_LABEL,
+                                process_due_at,
+                            ),
                             (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
                         ],
                     )
@@ -143,9 +154,9 @@ impl EdifactIngestDispatcher {
             },
             // ── WiM Rechnung (Strom) — PID 31009 ─────────────────────────────
             // PID 31009: MSB-Rechnung (MSB → NB, multi-domain GPKE/WiM) — spawn.
-            "wim-rechnung" => match pid {
+            "wim-invoic" => match pid {
                 31009 => {
-                    let cmd = adapters::wim_rechnung_registry().dispatch(raw, &fv)?;
+                    let cmd = adapters::wim_invoic_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_invoic(msg);
                     // Settlement deadline: 5 Werktage (BK6-24-174 WiM Strom).
                     let due_at = fristen::deadline_at_werktage(
@@ -153,12 +164,12 @@ impl EdifactIngestDispatcher {
                         5,
                         HolidayCalendar::BdewMaKo,
                     );
-                    self.spawn_or_resume::<WimRechnungWorkflow>(
+                    self.spawn_or_resume::<WimInvoicWorkflow>(
                         malo_id.as_str(),
-                        "wim-rechnung",
+                        "wim-invoic",
                         cmd,
                         &fv,
-                        &[(mako_wim::WIM_RECHNUNG_WINDOW_LABEL, due_at)],
+                        &[(mako_wim::INVOIC_SETTLEMENT_WINDOW_LABEL, due_at)],
                     )
                     .await
                 }
@@ -167,21 +178,21 @@ impl EdifactIngestDispatcher {
                 // 31009 invoice reference (RFF+Z13). 33003/33004 are the Strom
                 // itemized Abweisungen owned by mako-wim.
                 33001..=33004 => {
-                    let cmd = adapters::wim_rechnung_remadv_registry().dispatch(raw, &fv)?;
+                    let cmd = adapters::wim_invoic_remadv_registry().dispatch(raw, &fv)?;
                     let invoice_ref = extract_invoice_ref_from_remadv(msg);
-                    self.resume_by_malo::<WimRechnungWorkflow>(&invoice_ref, "wim-rechnung", cmd)
+                    self.resume_by_malo::<WimInvoicWorkflow>(&invoice_ref, "wim-invoic", cmd)
                         .await
                 }
                 // COMDIS 29001 (MSB invoicer rejects the payer's REMADV) resumes
                 // the same process by the invoice reference.
                 29001 => {
-                    let cmd = adapters::wim_rechnung_comdis_registry().dispatch(raw, &fv)?;
+                    let cmd = adapters::wim_invoic_comdis_registry().dispatch(raw, &fv)?;
                     let invoice_ref = extract_invoice_ref_from_comdis(msg);
-                    self.resume_by_malo::<WimRechnungWorkflow>(&invoice_ref, "wim-rechnung", cmd)
+                    self.resume_by_malo::<WimInvoicWorkflow>(&invoice_ref, "wim-invoic", cmd)
                         .await
                 }
                 _ => Ok(IngestOutcome::Skipped {
-                    workflow_name: "wim-rechnung",
+                    workflow_name: "wim-invoic",
                     reason: "pid_not_in_dispatch_table",
                 }),
             },

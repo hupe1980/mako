@@ -488,7 +488,7 @@ irrelevant for a particular operator — reducing binary size and attack surface
 | `role-lf-gas` | `mako-geli-gas` (LF side): `geli-gas-stornierung-lf`, `geli-gas-sperrung-lf`, `geli-gas-mscons` |
 | `role-nb-strom` | `mako-gpke` (NB side): `gpke-supplier-change`, `gpke-sperrung`, `gpke-konfiguration`, `gpke-konfiguration-aenderung`, `gpke-neuanlage`, `gpke-partin`, `mako-wim` (NB side), **`mako-redispatch`** (Redispatch 2.0 is gated to NB Strom / ÜNB — LF and MSB deployments are out of scope per BK6-20-059/060/061) |
 | `role-nb-gas` | `mako-geli-gas` (GNB side): `geli-gas-supplier-change`, `geli-gas-sperrung-nb`, `geli-gas-stornierung`, `geli-gas-datenabruf`, `geli-gas-partin`, `geli-gas-sperrprozesse-invoic` |
-| `role-msb-strom` | `mako-wim`: `wim-device-change`, `wim-geraeteubernahme`, `wim-stammdaten`, `wim-preisanfrage`, `wim-preisliste`, `wim-rechnung`, `wim-insrpt`, `wim-wertebestellung` |
+| `role-msb-strom` | `mako-wim`: `wim-device-change`, `wim-geraeteubernahme`, `wim-stammdaten`, `wim-preisanfrage`, `wim-preisliste`, `wim-invoic`, `wim-insrpt`, `wim-wertebestellung` |
 | `role-msb-gas` | `mako-wim-gas`: all WiM Gas workflows |
 
 ### Composite flags
@@ -796,6 +796,20 @@ such a partner would fail at send time anyway, since the sender refuses
 `encrypt = true` without a recipient certificate. `--allow-unencrypted-as4`
 downgrades both refusals to warnings for dev/test.
 
+The profile itself is checked too. The BDEW stack declares a **security floor**
+of sign-and-encrypt, and `asx-rs` enforces it across the base profile and every
+override layer, rejecting a relaxing layer with
+`ProfileValidationCode::SecurityFloorViolation`.
+
+Declaring the floor is what makes this strict enough. The generic AS4 invariant
+only rejects disabling signing *and* encryption — "at least one", the sensible
+baseline for AS4 in general, but weaker than §2.2.6.2.2, which mandates both.
+Because `ProfileStack::overrides` and `partner_overrides` are public, a single
+partner overlay keeping signatures and turning encryption off is reachable by
+configuration; without the floor it would validate cleanly while every message to
+that partner went out in the clear. This is a startup check, so a downgraded
+profile never serves traffic.
+
 **Signed receipts and receipt-verified delivery.** Inbound messages are
 answered with a **signed** `eb:Receipt` echoing the inbound signature digests
 as NonRepudiationInformation. Outbound deliveries are acknowledged only after
@@ -1032,7 +1046,7 @@ When a client connects, `makod` returns dynamic server instructions that include
 
 - The instance's tenant ID and configured Marktrollen
 - A filtered command list (only commands relevant to the configured roles)
-- A regulatory deadline table (GPKE 24 h, WiM 5 Werktage, GeLi Gas 10 Werktage, MABIS 1 Werktag)
+- A regulatory deadline table (GPKE 24 h, WiM Strom 3/5/7/1 Werktage per PID, GeLi Gas 10 Werktage, MABIS 1 Werktag)
 - Machine-readable error prefix glossary
 
 This means the LLM always has full operational context without additional configuration.
@@ -1201,8 +1215,16 @@ For multi-role commands, include `"marktrolle"` to disambiguate:
 | `marktrolle` | See below | Required only for multi-role commands; inferred for single-role |
 | `payload` | ✅ | Command-specific fields (see payload table below) |
 
-**Recommended:** send an `Idempotency-Key: <uuid>` header to prevent
-double-execution on network retries.
+**Required:** every command must carry an `Idempotency-Key` header. A missing or
+empty value is rejected with `422 missing_idempotency_key`.
+
+The key is echoed back on the response for correlation; it is not compared
+against earlier keys. Double-execution is prevented by a business-level guard
+that refuses a second `anmelden` while a process for the same business key is
+still active, answering `409 duplicate_process` with that process's id — treat
+that as success. See
+[ERP integration](@/docs/architecture/erp-integration.md#what-idempotency-key-does-and-what-it-does-not)
+for the full contract, including how it differs from `409 invalid_state`.
 
 ### Marktrolle resolution
 
@@ -1579,13 +1601,13 @@ the GitHub Container Registry:
 docker pull ghcr.io/hupe1980/makod:latest
 
 # Pin to a specific version
-docker pull ghcr.io/hupe1980/makod:0.14.0
+docker pull ghcr.io/hupe1980/makod:latest
 
 # Smoke-test the image
-docker run --rm ghcr.io/hupe1980/makod:0.14.0 --check
+docker run --rm ghcr.io/hupe1980/makod:latest --check
 ```
 
-Images are tagged with the semver version (`0.14.0`), major.minor (`0.14`), and `latest`.
+Images are tagged with the release version (e.g. `1.2.3`), its major.minor (`1.2`), and `latest`. Pin a concrete tag in production; the examples here use `latest` so they never go stale.
 
 ### Building locally
 
@@ -1654,7 +1676,7 @@ spec:
     spec:
       containers:
         - name: makod
-          image: ghcr.io/hupe1980/makod:0.14.0
+          image: ghcr.io/hupe1980/makod:latest
           ports:
             - containerPort: 4080    # AS4
             - containerPort: 8080    # HTTP REST
@@ -1937,7 +1959,7 @@ the `wim_stammdaten_uebermittlung_registry()` adapter automatically:
 2. Emits a `de.mako.process.completed` outbox entry carrying `melo_id` + parsed register data
 
 `marktd` receives the event and upserts the `ZaehlzeitRegister` + `ZaehlzeitSaison` rows.
-This feeds `billingd`'s §14a Modul 2 HT/NT tariff-zone resolution without manual setup.
+This feeds `billingd`'s §14a Modul 3 tariff-zone resolution (HT/ST/NT) without manual setup.
 
 | ZAK/ZE segment | Parsed field | Values |
 |---|---|---|

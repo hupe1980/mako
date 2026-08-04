@@ -39,7 +39,10 @@ from ._native import (
     Finding,
     UtilmdTransaction,
     ValidationReport,
+    ablehnung_pid,
     add_werktage,
+    answer_pids,
+    bestaetigung_pid,
     build_interchange,
     build_mscons,
     build_utilmd,
@@ -48,15 +51,26 @@ from ._native import (
     malo_from_base,
     malo_is_valid,
     melo_is_valid,
+    message_types_of,
     next_werktag,
+    pid_has_ahb_rules,
+    pruefidentifikatoren,
     validate_edifact,
 )
+from .simulators import BikoSim, ImsysSim, Klaerfall, MarktpartnerSim
 
 __all__ = [
+    "BikoSim",
     "Finding",
+    "ImsysSim",
+    "Klaerfall",
+    "MarktpartnerSim",
     "UtilmdTransaction",
     "ValidationReport",
+    "ablehnung_pid",
     "add_werktage",
+    "answer_pids",
+    "bestaetigung_pid",
     "bo4e_generation",
     "build_interchange",
     "build_mscons",
@@ -66,7 +80,10 @@ __all__ = [
     "malo_from_base",
     "malo_is_valid",
     "melo_is_valid",
+    "message_types_of",
     "next_werktag",
+    "pid_has_ahb_rules",
+    "pruefidentifikatoren",
     "validate_edifact",
 ]
 

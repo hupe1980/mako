@@ -9,6 +9,25 @@ test helpers for the German electricity and gas AS4 network.
 
 ---
 
+## Security policy — stricter than the AS4 baseline
+
+`bdew_mako_profile_stack()` sets `require_signature: true` and
+`require_encryption: true` per **BDEW AS4-Profil v1.2 §2.2.6.2.2**.
+
+It also declares that pair as the stack's **security floor**, which `asx-rs`
+enforces across the base and every override layer during `validate()`. A layer
+that relaxes it is rejected with `ProfileValidationCode::SecurityFloorViolation`.
+
+The floor is what makes this strict enough. The generic AS4 invariant rejects a
+layer only when it disables signing *and* encryption — a sensible baseline, but
+weaker than §2.2.6.2.2, which mandates both. Since `ProfileStack::overrides` and
+`partner_overrides` are public fields, a single partner overlay that keeps
+signing and turns encryption off is reachable by configuration, and without a
+declared floor it would validate cleanly while every message to that partner
+went out in the clear.
+
+Validation runs at startup, so a downgraded profile never serves traffic.
+
 ## BDEW AS4-Profil v1.2 requirements
 
 | Requirement | Value | Spec |

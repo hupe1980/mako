@@ -82,9 +82,9 @@ use mako_wim::{
     DeviceChangeCommand, GeraeteubernahmeCommand, INSRPT_WORKFLOW_NAME as WIM_INSRPT_WORKFLOW,
     PreisanfrageCommand, PreislisteCommand, StammdatenCommand, SteuerungsauftragCommand,
     StorungsmeldungCommand, TechnikAenderungCommand, WimDeviceChangeWorkflow,
-    WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimPreisanfrageWorkflow, WimPreislisteWorkflow,
-    WimRechnungCommand, WimRechnungWorkflow, WimStammdatenWorkflow, WimSteuerungsauftragWorkflow,
-    WimTechnikAenderungWorkflow,
+    WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimInvoicCommand, WimInvoicWorkflow,
+    WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
+    WimSteuerungsauftragWorkflow, WimTechnikAenderungWorkflow,
 };
 use mako_wim_gas::{
     GasGeraeteubernahmeCommand, WimGasAnmeldungCommand, WimGasAnmeldungWorkflow,
@@ -424,6 +424,35 @@ pub async fn dispatch_deadline(
             );
             Ok(())
         }
+        "mabis-listenabgleich" => {
+            // The Korrekturliste is owed but BK6-24-174 attaches no Frist to it
+            // in these three families. This arm satisfies assert_dispatch_coverage.
+            tracing::debug!(
+                deadline_id = %deadline_id,
+                "mabis-listenabgleich: no deadline action (no AHB Frist on the correction leg)",
+            );
+            Ok(())
+        }
+        "mabis-anforderung" => {
+            // MaBiS Anforderungen register no deadlines: the requested list is
+            // delivered by its own process, not by answering this stream.
+            // This arm exists solely to satisfy assert_dispatch_coverage.
+            tracing::debug!(
+                deadline_id = %deadline_id,
+                "mabis-anforderung: no deadline action (list delivered separately)",
+            );
+            Ok(())
+        }
+        "mabis-zp-lifecycle" => {
+            // The MaBiS-ZP lifecycle registers no deadlines: BK6-24-174 defines
+            // no response window for the Aktivierung/Deaktivierung Anfragen.
+            // This arm exists solely to satisfy assert_dispatch_coverage.
+            tracing::debug!(
+                deadline_id = %deadline_id,
+                "mabis-zp-lifecycle: no deadline action (no AHB response window)",
+            );
+            Ok(())
+        }
         "mabis-billing" => {
             let p = Process::<MabisBillingWorkflow, _>::from_identity(
                 Arc::clone(&event_store),
@@ -578,13 +607,11 @@ pub async fn dispatch_deadline(
                 .await
                 .map(|_| ())
         }
-        "wim-rechnung" => {
-            let p = Process::<WimRechnungWorkflow, _>::from_identity(
-                Arc::clone(&event_store),
-                identity,
-            );
+        "wim-invoic" => {
+            let p =
+                Process::<WimInvoicWorkflow, _>::from_identity(Arc::clone(&event_store), identity);
             p.execute_and_enqueue_with_retry(
-                WimRechnungCommand::TimeoutExpired { deadline_id, label },
+                WimInvoicCommand::TimeoutExpired { deadline_id, label },
                 3,
             )
             .await?;
@@ -1066,7 +1093,7 @@ pub const DISPATCH_TABLE: &[&str] = &[
     "wim-steuerungsauftrag",
     "wim-preisanfrage",
     "wim-preisliste",
-    "wim-rechnung",
+    "wim-invoic",
     WIM_INSRPT_WORKFLOW,
     "gpke-konfiguration-aenderung",
     "gpke-datenabruf",
@@ -1089,8 +1116,11 @@ pub const DISPATCH_TABLE: &[&str] = &[
     "geli-gas-stornierung",
     "geli-gas-stornierung-lf",
     "geli-gas-partin",
+    "mabis-anforderung",
     "mabis-billing",
     "mabis-clearingliste",
+    "mabis-listenabgleich",
+    "mabis-zp-lifecycle",
     "wim-gas-anmeldung",
     "wim-gas-geraeteubernahme",
     "wim-gas-kuendigung",

@@ -85,11 +85,19 @@
 #![allow(clippy::map_unwrap_or)]
 #![allow(clippy::items_after_statements)]
 
+pub mod anforderung;
 pub mod bilanzkreisabrechnung;
 pub mod clearingliste;
 pub mod ids;
+pub mod listenabgleich;
 pub mod summenzeitreihe;
+pub mod zp_lifecycle;
 
+pub use anforderung::{
+    ANFORDERUNG_PIDS, AbonnementVorgang, AnforderungCommand, AnforderungData, AnforderungEvent,
+    AnforderungKind, AnforderungState, MabisAnforderungWorkflow,
+    WORKFLOW_NAME as ANFORDERUNG_WORKFLOW_NAME,
+};
 pub use bilanzkreisabrechnung::{
     BillingCommand, BillingData, BillingEvent, BillingProjection, BillingRecord, BillingRecordData,
     BillingState, BillingVersion, DataStatus, IFTSTA_DATENSTATUS_PID, IFTSTA_PIDS,
@@ -100,10 +108,20 @@ pub use clearingliste::{
     ClearinglisteKind, ClearinglisteState, MabisClearinglisteWorkflow,
     WORKFLOW_NAME as CLEARINGLISTE_WORKFLOW_NAME,
 };
+pub use listenabgleich::{
+    LISTEN_FAMILIEN, ListenFamilie, ListenTyp, ListenabgleichCommand, ListenabgleichData,
+    ListenabgleichEvent, ListenabgleichState, MabisListenabgleichWorkflow,
+    WORKFLOW_NAME as LISTENABGLEICH_WORKFLOW_NAME, all_pids as listenabgleich_pids,
+};
 // Canonical balance-group topology IDs (defined in `ids`).
-pub use ids::{BilanzierungsgebietId, BilanzkreisId};
+pub use ids::{BilanzierungsgebietId, BilanzkreisId, InvalidMabisZaehlpunkt, MabisZaehlpunktId};
 pub use summenzeitreihe::{
     MABIS_SLOT, SlotResolutionError, SumInterval, Summenzeitreihe, SummenzeitreiheBuilder,
+};
+pub use zp_lifecycle::{
+    MabisZpLifecycleWorkflow, WORKFLOW_NAME as ZP_LIFECYCLE_WORKFLOW_NAME, ZP_FAMILIEN, ZpFamilie,
+    ZpLifecycleCommand, ZpLifecycleData, ZpLifecycleEvent, ZpLifecycleState, ZpSerie, ZpVorgang,
+    all_pids as zp_lifecycle_pids, familie_for,
 };
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
@@ -122,7 +140,13 @@ impl mako_engine::builder::EngineModule for MabisModule {
     }
 
     fn workflow_names(&self) -> &'static [&'static str] {
-        &["mabis-billing", "mabis-clearingliste"]
+        &[
+            "mabis-billing",
+            "mabis-clearingliste",
+            "mabis-zp-lifecycle",
+            "mabis-anforderung",
+            "mabis-listenabgleich",
+        ]
     }
 
     fn register_pids(&self, router: &mut mako_engine::pid_router::PidRouter) {
@@ -163,6 +187,39 @@ impl mako_engine::builder::EngineModule for MabisModule {
         // are all part of the MaBiS Clearingverfahren (BK6-24-174 Anlage 3).
         for &pid in clearingliste::CLEARINGLISTE_PIDS {
             router.register(pid, "mabis-clearingliste");
+        }
+
+        // MaBiS-Zählpunkt lifecycle — Aktivierung/Deaktivierung of the MaBiS-ZP,
+        // the Zuordnungsermächtigung and the AAÜZ/LF-AASZR series, together with
+        // their Antwort and Weiterleitung codes.
+        //
+        // The PID set comes from `zp_lifecycle::ZP_FAMILIEN`, so the router and
+        // the state machine cannot disagree about which codes exist. See that
+        // module for the table and its BDEW source.
+        //
+        // These PIDs have no AHB profile entry yet, so their validation is
+        // vacuous; they are enumerated in `KNOWN_PROFILE_GAPS` and tracked by
+        // the AHB-coverage item in the roadmap.
+        for pid in zp_lifecycle::all_pids() {
+            router.register(pid, zp_lifecycle::WORKFLOW_NAME);
+        }
+
+        // MaBiS Anforderungen — ORDERS 17201–17208. mako plays both sides:
+        // it requests lists as LF/BKV/NB/ÜNB and receives requests for lists it
+        // maintains as NB/ÜNB/BIKO.
+        //
+        // No AHB profile entry yet; enumerated in `KNOWN_PROFILE_GAPS`.
+        for &pid in anforderung::ANFORDERUNG_PIDS {
+            router.register(pid, anforderung::WORKFLOW_NAME);
+        }
+
+        // MaBiS Listenabgleich — list distribution with a correction leg
+        // (55195/55196, 55201/55202, 55223/55224). Distinct from
+        // `mabis-clearingliste`, whose lists are record-only.
+        //
+        // No AHB profile entry yet; enumerated in `KNOWN_PROFILE_GAPS`.
+        for pid in listenabgleich::all_pids() {
+            router.register(pid, listenabgleich::WORKFLOW_NAME);
         }
     }
 

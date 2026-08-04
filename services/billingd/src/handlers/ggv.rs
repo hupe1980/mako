@@ -160,8 +160,20 @@ pub async fn post_tarifwechsel(
     // commodity — that is the point of the split (§41 Abs. 5 EnWG price
     // change; a leg inside a VAT window carries that window's rate).
     let period_a_to = switch_date - time::Duration::days(1);
-    let rates_a =
-        cfg.regulatory_rates_for_period(req.old_tariff.category_str(), period_from, period_a_to);
+    let rates_a = match cfg.try_regulatory_rates_for_period(
+        req.old_tariff.category_str(),
+        period_from,
+        period_a_to,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                super::straddle_error_body(&e),
+            )
+                .into_response();
+        }
+    };
     let run_id_a = Uuid::new_v4().to_string();
     let ctx_a = BillingContext {
         malo_id: malo_id.clone(),
@@ -192,8 +204,20 @@ pub async fn post_tarifwechsel(
     };
 
     // ── Sub-period B: switch_date → period_to ─────────────────────────────────
-    let rates_b =
-        cfg.regulatory_rates_for_period(req.new_tariff.category_str(), switch_date, period_to);
+    let rates_b = match cfg.try_regulatory_rates_for_period(
+        req.new_tariff.category_str(),
+        switch_date,
+        period_to,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                super::straddle_error_body(&e),
+            )
+                .into_response();
+        }
+    };
     let run_id_b = Uuid::new_v4().to_string();
     let ctx_b = BillingContext {
         malo_id: malo_id.clone(),
@@ -364,7 +388,16 @@ pub async fn post_ggv_billing(
             std::collections::HashMap::new()
         };
 
-    let rates = cfg.regulatory_rates_for_period("SOLAR", period_from, period_to);
+    let rates = match cfg.try_regulatory_rates_for_period("SOLAR", period_from, period_to) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                super::straddle_error_body(&e),
+            )
+                .into_response();
+        }
+    };
     let mut tenant_results: Vec<serde_json::Value> = Vec::with_capacity(req.tenants.len());
     let mut parts: Vec<(String, Invoice)> = Vec::with_capacity(req.tenants.len());
     let mut tenant_record_ids: Vec<Uuid> = Vec::with_capacity(req.tenants.len());

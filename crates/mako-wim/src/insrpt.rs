@@ -27,7 +27,7 @@ use mako_engine::{
     error::WorkflowError,
     ids::DeadlineId,
     outbox::PendingOutbox,
-    types::{MarktpartnerCode, MessageRef},
+    types::{MarktpartnerCode, MeLo, MessageRef},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
 
@@ -71,6 +71,8 @@ pub struct StorungsmeldungData {
     pub pruefidentifikator: Pruefidentifikator,
     /// GLN of the MSB the Störungsmeldung was sent to.
     pub msb_mp_id: MarktpartnerCode,
+    /// Messlokation the Störung concerns.
+    pub melo_id: MeLo,
     /// EDIFACT document date.
     pub document_date: String,
     /// EDIFACT message reference.
@@ -89,6 +91,8 @@ pub enum StorungsmeldungEvent {
         pruefidentifikator: Pruefidentifikator,
         /// GLN of the receiving MSB.
         msb_mp_id: MarktpartnerCode,
+        /// Messlokation the Störung concerns (`LOC+172`).
+        melo_id: MeLo,
         /// Document date.
         document_date: String,
         /// Message reference.
@@ -197,6 +201,11 @@ pub enum StorungsmeldungCommand {
         pid: Pruefidentifikator,
         /// GLN of the receiving MSB.
         msb_mp_id: MarktpartnerCode,
+        /// Messlokation the Störung concerns.
+        ///
+        /// The INSRPT AHB marks `LOC` mandatory, so a Störungsmeldung without
+        /// a Messlokation cannot be rendered into a valid interchange.
+        melo_id: MeLo,
         /// Document date.
         document_date: String,
         /// Message reference of the outbound INSRPT.
@@ -259,11 +268,13 @@ impl Workflow for WimInsrptWorkflow {
             StorungsmeldungEvent::StorungsmeldungGesendet {
                 pruefidentifikator,
                 msb_mp_id,
+                melo_id,
                 document_date,
                 message_ref,
             } => StorungsmeldungState::StorungsmeldungGesendet(StorungsmeldungData {
                 pruefidentifikator: *pruefidentifikator,
                 msb_mp_id: msb_mp_id.clone(),
+                melo_id: melo_id.clone(),
                 document_date: document_date.clone(),
                 message_ref: message_ref.clone(),
             }),
@@ -306,6 +317,7 @@ impl Workflow for WimInsrptWorkflow {
             StorungsmeldungCommand::SendStorungsmeldung {
                 pid,
                 msb_mp_id,
+                melo_id,
                 document_date,
                 message_ref,
             } => {
@@ -320,16 +332,23 @@ impl Workflow for WimInsrptWorkflow {
                 let outbox = PendingOutbox::new(
                     "INSRPT",
                     msb_mp_id.as_str(),
+                    // Keys follow the `render_insrpt` contract: `melo` feeds
+                    // the mandatory `LOC+172`, without which the interchange
+                    // parses but fails AHB validation.
                     serde_json::json!({
-                        "type":         "Stoerungsmeldung",
-                        "pid":          pid.as_u32(),
-                        "message_ref":  message_ref.as_str(),
+                        "type":          "Stoerungsmeldung",
+                        "pid":           pid.as_u32(),
+                        "melo":          melo_id.as_str(),
+                        "receiver":      msb_mp_id.as_str(),
+                        "document_date": document_date,
+                        "message_ref":   message_ref.as_str(),
                     }),
                 );
                 Ok(WorkflowOutput::with_outbox(
                     vec![StorungsmeldungEvent::StorungsmeldungGesendet {
                         pruefidentifikator: pid,
                         msb_mp_id,
+                        melo_id,
                         document_date,
                         message_ref,
                     }],

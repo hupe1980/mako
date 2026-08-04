@@ -297,10 +297,20 @@ impl SyncEngine {
             .map(|m| format!("{m}: no Bilanzierungsgebiet in marktd master data"))
             .collect();
 
+        // Territories whose grid still has holes after every MaLo aggregated.
+        let mut incomplete: Vec<String> = Vec::new();
         let mut series: Vec<Summenzeitreihe> = Vec::with_capacity(by_gebiet.len());
         for (gebiet, gebiet_malos) in &by_gebiet {
+            // A Summenzeitreihe is submitted under its MaBiS-Zählpunkt
+            // (SG6 LOC+172); the Bilanzierungsgebiet EIC is a separate
+            // LOC+107. Refuse rather than substitute: a Summenzeitreihe filed
+            // against the wrong Meldepunkt is indistinguishable, to the BIKO,
+            // from a correct one.
+            let mabis_zp = self.resolve_mabis_zp(gebiet).await?;
+
             let mut builder = SummenzeitreiheBuilder::new(
                 BilanzierungsgebietId(gebiet.clone()),
+                mabis_zp,
                 from_ts,
                 to_ts,
                 version,
@@ -358,13 +368,24 @@ impl SyncEngine {
             }
 
             let szr = builder.build();
+            // The identifiers reach MSCONS SG6 as free text, so a Meldepunkt that
+            // is really the territory EIC would parse, validate and be accepted —
+            // and the BIKO would file the series against the wrong point. There is
+            // no downstream check that catches it, so the run fails here.
+            szr.validate_identifiers().map_err(|e| {
+                anyhow::anyhow!("Summenzeitreihe for Bilanzierungsgebiet {gebiet}: {e}")
+            })?;
+            // MaBiS settles against a gap-free grid, so an empty slot omits energy
+            // rather than reporting zero for it. That under-reports the territory,
+            // and the BIKO cannot tell a short series from a complete one — the
+            // same reason the excluded-MaLo check below fails the run. Warning and
+            // filing anyway would settle the territory low, irreversibly once acked.
             if !szr.is_complete() {
-                warn!(
-                    gebiet,
-                    missing_slots = szr.missing_slot_count(),
-                    expected_slots = szr.expected_slot_count(),
-                    "mabis-syncd: Summenzeitreihe has empty settlement slots — energy is omitted, not zeroed"
-                );
+                incomplete.push(format!(
+                    "{gebiet}: {} of {} settlement slots carry no value",
+                    szr.missing_slot_count(),
+                    szr.expected_slot_count()
+                ));
             }
             series.push(szr);
         }
@@ -383,6 +404,18 @@ impl SyncEngine {
             );
         }
 
+        // Every MaLo aggregated, yet the grid still has holes: the missing energy
+        // is real absence, not an aggregation failure. It under-reports exactly
+        // as an excluded MaLo does, so it fails the run for the same reason.
+        if !incomplete.is_empty() {
+            anyhow::bail!(
+                "{} Summenzeitreihe(n) would be filed with gaps in the settlement grid, \
+                 under-reporting the territory: {}",
+                incomplete.len(),
+                incomplete.join("; ")
+            );
+        }
+
         Ok(series)
     }
 
@@ -396,6 +429,82 @@ impl SyncEngine {
     /// Returns the per-Bilanzierungsgebiet grouping plus the MaLos whose master
     /// data names **no** territory — those must be excluded and the run failed,
     /// never folded into a fallback zone (misfiling energy the BIKO cannot detect).
+    /// The MaBiS-Zählpunkt a Bilanzierungsgebiet's Summenzeitreihen are filed
+    /// under, from `marktd` master data.
+    ///
+    /// A Summenzeitreihe is submitted under its MaBiS-Zählpunkt (SG6 `LOC+172`);
+    /// the Bilanzierungsgebiet EIC is a separate `LOC+107`. Both are free text
+    /// at the MIG level, so a Summenzeitreihe filed against the wrong Meldepunkt
+    /// is, to the BIKO, indistinguishable from a correct one.
+    ///
+    /// Every failure path therefore **refuses** rather than substituting: an
+    /// unassigned territory, an unreachable marktd, and a malformed response all
+    /// abort the submission. Falling back to the EIC would produce exactly the
+    /// misfiled message this lookup exists to prevent.
+    async fn resolve_mabis_zp(
+        &self,
+        gebiet: &str,
+    ) -> anyhow::Result<mako_mabis::MabisZaehlpunktId> {
+        let cfg = &self.cfg;
+        let url = format!(
+            "{}/api/v1/bilanzierungsgebiet/{gebiet}/mabis-zp",
+            cfg.marktd.url
+        );
+        let resp = self
+            .marktd_client
+            .get(&url)
+            .bearer_auth(&cfg.marktd.api_key)
+            .send()
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "marktd unreachable while resolving the MaBiS-Zählpunkt for \
+                     Bilanzierungsgebiet {gebiet}: {e}"
+                )
+            })?;
+
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            anyhow::bail!(
+                "no MaBiS-Zählpunkt assigned to Bilanzierungsgebiet {gebiet} — assign one via \
+                 PUT /api/v1/bilanzierungsgebiet/{gebiet}/mabis-zp on marktd; the \
+                 Summenzeitreihe cannot be submitted without the SG6 LOC+172 Meldepunkt"
+            );
+        }
+        if !resp.status().is_success() {
+            anyhow::bail!(
+                "marktd returned {} resolving the MaBiS-Zählpunkt for Bilanzierungsgebiet {gebiet}",
+                resp.status()
+            );
+        }
+
+        let body: serde_json::Value = resp.json().await.map_err(|e| {
+            anyhow::anyhow!("malformed marktd response for Bilanzierungsgebiet {gebiet}: {e}")
+        })?;
+        let zp = body["mabis_zp_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("marktd returned no mabis_zp_id for Bilanzierungsgebiet {gebiet}")
+            })?;
+
+        // marktd rejects a malformed Meldepunkt on write, but the submission
+        // path is the one with the irreversible consequence, so it does not take
+        // that on trust. Parsing here is the boundary: past this point the
+        // identifier is a `MabisZaehlpunktId`, and putting a territory code in
+        // its place stops being expressible.
+        let zp = mako_mabis::MabisZaehlpunktId::new(zp).map_err(|e| {
+            anyhow::anyhow!("marktd returned an unusable MaBiS-Zählpunkt for {gebiet}: {e}")
+        })?;
+        if zp.as_str() == gebiet {
+            anyhow::bail!(
+                "marktd returned the Bilanzierungsgebiet EIC as the MaBiS-Zählpunkt for \
+                 {gebiet} — refusing to file the Summenzeitreihe under a territory code"
+            );
+        }
+        Ok(zp)
+    }
+
     async fn resolve_bilanzierungsgebiete(
         &self,
         malo_ids: &[String],
@@ -664,6 +773,11 @@ impl SyncEngine {
     ) -> Result<(String, Option<Uuid>)> {
         let cfg = &self.cfg;
 
+        // Re-checked per submission, not only at startup: the target selects the
+        // routing key (Bilanzierungsgebiet today, MaLo-ID under BK6-24-210), so a
+        // future Hub arm must not fall through to the bilateral payload.
+        cfg.submission_target.ensure_supported()?;
+
         // Build makod command payload
         // A Summenzeitreihe is an MSCONS message, Prüfidentifikator 13003
         // ("Übertragung Summenzeitreihe", MSCONS AHB 3.2 §8.3.1). UTILTS carries
@@ -682,6 +796,7 @@ impl SyncEngine {
             "marktrolle": "ÜNB",
             "correlation_id": run_id.to_string(),
             "payload": {
+                "mabis_zp_id": summenzeitreihe.mabis_zp_id,
                 "bilanzierungsgebiet_id": summenzeitreihe.bilanzierungsgebiet_id.0,
                 "balancing_period": fmt_edifact_month(summenzeitreihe.period_from),
                 "version": fmt_edifact_version(summenzeitreihe.version),

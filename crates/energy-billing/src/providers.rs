@@ -823,13 +823,14 @@ impl ElectricityProvider {
 /// §14a EnWG controllable load billing provider (WAERMEPUMPE / WALLBOX).
 ///
 /// Delegates standard electricity billing to [`ElectricityProvider`] and then
-/// appends §14a Steuerungsrabatt (Modul 1 NNE reduction + Modul 3 Entschädigung)
+/// appends the §14a credits (Modul 1 pauschale Reduzierung, Modul 2 Arbeitspreis-
+/// reduzierung, Modul 3 zeitvariable Bänder, plus any Steuerungsentschädigung)
 /// credit positions.
 ///
 /// ## Legal basis
 ///
 /// §14a Abs. 1 EnWG (BK6-22-024 §2.13): DSOs must offer controllable load
-/// (Steuerbare Verbrauchseinrichtungen) customers a reduced NNE (Modul 1 or 3).
+/// (Steuerbare Verbrauchseinrichtungen) customers a reduced NNE (Modul 1, 2 or 3).
 /// The LF reflects this reduction as a credit on the retail invoice.
 pub struct ControllableLoadProvider {
     product: ControllableLoadProduct,
@@ -853,15 +854,36 @@ impl BillingProvider for ControllableLoadProvider {
         let base = ElectricityProvider::new(self.product.base.clone(), self.grid.clone());
         let mut w = base.validate_warnings(ctx, quantities);
 
-        // The Modul 2 bands *replace* the flat NNE Arbeitspreis. Both at once
+        // BK6-22-300 lets a connection hold Modul 1 together with Modul 3, but
+        // never Modul 2 and Modul 3: both re-price the Arbeitspreis, so holding
+        // both reduces the same network usage twice. Modul 1 is a flat
+        // reduction needing no metering and composes with either.
+        if self
+            .product
+            .sect14a_modul2_nne_reduktion_ct_per_kwh
+            .is_some()
+            && self.product.sect14a_modul3_nne_ht_ct_per_kwh.is_some()
+        {
+            w.push(BillingWarning {
+                code: "MODUL2_AND_MODUL3",
+                severity: WarningSeverity::Error,
+                message: "§14a EnWG Modul 2 (prozentuale Arbeitspreisreduzierung) and \
+                          Modul 3 (zeitvariable Netzentgelte) are both configured — \
+                          BK6-22-300 makes them mutually exclusive; both would reduce \
+                          the same network usage twice"
+                    .to_owned(),
+            });
+        }
+
+        // The Modul 3 bands *replace* the flat NNE Arbeitspreis. Both at once
         // bill the device's network usage twice.
-        if self.product.sect14a_modul2_nne_ht_ct_per_kwh.is_some()
+        if self.product.sect14a_modul3_nne_ht_ct_per_kwh.is_some()
             && self.grid.nne_arbeitspreis_ct_per_kwh.is_some()
         {
             w.push(BillingWarning {
-                code: "MODUL2_AND_FLAT_NNE",
+                code: "MODUL3_AND_FLAT_NNE",
                 severity: WarningSeverity::Error,
-                message: "§14a Modul 2 band rates are set alongside a flat NNE \
+                message: "§14a Modul 3 band rates are set alongside a flat NNE \
                           Arbeitspreis — the bands replace it; billing both charges \
                           the network usage twice"
                     .to_owned(),
@@ -886,20 +908,20 @@ impl BillingProvider for ControllableLoadProvider {
         let days = ctx.days();
         let p = &self.product;
 
-        // ── §14a Modul 2 — zeitvariables Netzentgelt (BK6-22-300 Anlage 2 §2) ─
+        // ── §14a Modul 3 — zeitvariables Netzentgelt (BK6-22-300) ─────────────
         // Three Tarifstufen replace the flat NNE Arbeitspreis for the device.
         // A zero band still produces a position: a rate band silently omitted
         // from the invoice is indistinguishable from one that was never priced.
         if let (Some(ht), Some(st), Some(nt)) = (
-            p.sect14a_modul2_nne_ht_ct_per_kwh,
-            p.sect14a_modul2_nne_st_ct_per_kwh,
-            p.sect14a_modul2_nne_nt_ct_per_kwh,
+            p.sect14a_modul3_nne_ht_ct_per_kwh,
+            p.sect14a_modul3_nne_st_ct_per_kwh,
+            p.sect14a_modul3_nne_nt_ct_per_kwh,
         ) {
-            let verbrauch = quantities.sect14a_modul2.unwrap_or_default();
+            let verbrauch = quantities.sect14a_modul3.unwrap_or_default();
             for (label, band_kwh, rate_ct) in [
-                ("Netzentgelt §14a Modul 2 HT", verbrauch.ht_kwh, ht),
-                ("Netzentgelt §14a Modul 2 ST", verbrauch.st_kwh, st),
-                ("Netzentgelt §14a Modul 2 NT", verbrauch.nt_kwh, nt),
+                ("Netzentgelt §14a Modul 3 HT", verbrauch.ht_kwh, ht),
+                ("Netzentgelt §14a Modul 3 ST", verbrauch.st_kwh, st),
+                ("Netzentgelt §14a Modul 3 NT", verbrauch.nt_kwh, nt),
             ] {
                 let mut pos = BillingPosition::debit(
                     label,
@@ -917,20 +939,20 @@ impl BillingProvider for ControllableLoadProvider {
                 positions.push(
                     pos.with_legal_basis("§14a EnWG")
                         .with_tag("§14a")
-                        .with_tag("modul2")
+                        .with_tag("modul3")
                         .with_tag("nne"),
                 );
             }
         }
 
-        // Modul 1 per-kWh NNE reduction (ct/kWh)
-        if let Some(sect14a_m1_ct) = p.sect14a_modul1_nne_reduktion_ct_per_kwh
+        // Modul 2 — prozentuale Arbeitspreisreduzierung, as a per-kWh credit
+        if let Some(sect14a_m1_ct) = p.sect14a_modul2_nne_reduktion_ct_per_kwh
             && sect14a_m1_ct > Decimal::ZERO
             && kwh > Decimal::ZERO
         {
             positions.push(
                 BillingPosition::credit(
-                    "§14a EnWG Modul 1 — NNE Reduktion",
+                    "§14a EnWG Modul 2 — Arbeitspreisreduzierung",
                     kwh,
                     "kWh",
                     sect14a_m1_ct / dec!(100),
@@ -938,13 +960,13 @@ impl BillingProvider for ControllableLoadProvider {
                 )
                 .with_legal_basis("§14a EnWG")
                 .with_tag("§14a")
-                .with_tag("sect14a_modul1"),
+                .with_tag("sect14a_modul2"),
             );
         }
 
-        // Modul 1 annual capacity-based NNE reduction (EUR/kW/year)
+        // Modul 1 — pauschale Reduzierung, published per kW and per year
         if let (Some(m1_year), Some(kw)) = (
-            p.steuerungsrabatt_modul1_eur_per_kw_year,
+            p.sect14a_modul1_pauschale_eur_per_kw_year,
             meter.spitzenleistung_kw,
         ) && m1_year > Decimal::ZERO
             && kw > Decimal::ZERO
@@ -952,7 +974,7 @@ impl BillingProvider for ControllableLoadProvider {
             let months_frac = Decimal::from(days) / dec!(30.4375);
             positions.push(
                 BillingPosition::credit(
-                    "§14a EnWG Modul 1 — Steuerungsrabatt NNE",
+                    "§14a EnWG Modul 1 — pauschale Reduzierung",
                     kw,
                     "kW",
                     (m1_year / dec!(12)) * months_frac,
@@ -964,9 +986,9 @@ impl BillingProvider for ControllableLoadProvider {
             );
         }
 
-        // Modul 3 annual capacity × steuerung hours (EUR/kW/year rate)
+        // Steuerungsentschädigung — annual capacity rate × hours actually dimmed
         if let (Some(m3_year), Some(kw), Some(steuerung_h)) = (
-            p.steuerungsrabatt_modul3_eur_per_kw_year,
+            p.sect14a_steuerungsentschaedigung_eur_per_kw_year,
             meter.spitzenleistung_kw,
             meter.steuerung_stunden,
         ) && m3_year > Decimal::ZERO
@@ -975,7 +997,7 @@ impl BillingProvider for ControllableLoadProvider {
         {
             positions.push(
                 BillingPosition::credit(
-                    "§14a EnWG Modul 3 — Steuerungsentschädigung",
+                    "§14a EnWG Steuerungsentschädigung",
                     kw,
                     "kW",
                     m3_year * (steuerung_h / dec!(8760)),
@@ -983,13 +1005,13 @@ impl BillingProvider for ControllableLoadProvider {
                 )
                 .with_legal_basis("§14a EnWG")
                 .with_tag("§14a")
-                .with_tag("sect14a_modul3"),
+                .with_tag("sect14a_steuerungsentschaedigung"),
             );
         }
 
-        // Modul 3 per-kWh steuerung compensation
+        // Steuerungsentschädigung — per kWh of dimmed energy
         if let (Some(modul3_ct), Some(steuerung_h)) = (
-            p.sect14a_modul3_entschaedigung_ct_per_kwh,
+            p.sect14a_steuerungsentschaedigung_ct_per_kwh,
             meter.steuerung_stunden,
         ) {
             let kw = meter.spitzenleistung_kw.unwrap_or(Decimal::ZERO);
@@ -997,7 +1019,7 @@ impl BillingProvider for ControllableLoadProvider {
                 let steuerung_kwh = kw * steuerung_h;
                 positions.push(
                     BillingPosition::credit(
-                        "§14a EnWG Modul 3 — Steuerungsentschädigung",
+                        "§14a EnWG Steuerungsentschädigung",
                         steuerung_kwh,
                         "kWh",
                         modul3_ct / dec!(100),
@@ -1005,7 +1027,7 @@ impl BillingProvider for ControllableLoadProvider {
                     )
                     .with_legal_basis("§14a EnWG")
                     .with_tag("§14a")
-                    .with_tag("sect14a_modul3"),
+                    .with_tag("sect14a_steuerungsentschaedigung"),
                 );
             }
         }
@@ -2713,8 +2735,8 @@ impl BillingProvider for DynamicElectricityProvider {
             // §41a: market spot clamped into [floor, cap] + fixed Arbeitspreis-Aufschlag.
             let effective_ct = spot_ct + aufschlag_ct;
 
-            // ct/kWh → EUR/kWh as Amount<5>.  round_dp(5) first ensures the
-            // Decimal has at most 5 non-zero fractional digits before conversion.
+            // ct/kWh → EUR/kWh as Amount<5>. Rounding kaufmännisch to 5 dp first
+            // ensures the Decimal fits the target precision before conversion.
             // EPEX prices are typically 2 dp in ct/kWh → 4 dp after /100, so this
             // never loses precision in practice.
             if let Ok(price_eur) =

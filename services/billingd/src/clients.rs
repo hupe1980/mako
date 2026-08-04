@@ -222,8 +222,8 @@ fn extract_tariff_from_product_data(
     let mut arbeitspreis_ct_per_kwh: Option<Decimal> = None;
     let mut arbeitspreis_ht_ct_per_kwh: Option<Decimal> = None;
     let mut arbeitspreis_nt_ct_per_kwh: Option<Decimal> = None;
-    let mut steuerungsrabatt_modul1_eur_per_kw_year: Option<Decimal> = None;
-    let mut steuerungsrabatt_modul3_eur_per_kw_year: Option<Decimal> = None;
+    let mut sect14a_modul1_pauschale_eur_per_kw_year: Option<Decimal> = None;
+    let mut sect14a_steuerungsentschaedigung_eur_per_kw_year: Option<Decimal> = None;
     let mut gas_grundpreis_ct_per_day: Option<Decimal> = None;
     let mut gas_arbeitspreis_ct_per_kwh_hs: Option<Decimal> = None;
     let mut waerme_grundpreis_eur_per_month: Option<Decimal> = None;
@@ -285,8 +285,10 @@ fn extract_tariff_from_product_data(
             ("KWKG_ZUSCHLAG", _) => kwkg_zuschlag_ct_per_kwh = preis,
             ("MARKTWERT", _) => marktwert_ct_per_kwh = preis,
             ("VERMARKTUNGSGEBUEHR", _) => vermarktungsgebuehr_ct_per_kwh = preis,
-            ("STEUERUNGSRABATT_MODUL1", _) => steuerungsrabatt_modul1_eur_per_kw_year = preis,
-            ("STEUERUNGSRABATT_MODUL3", _) => steuerungsrabatt_modul3_eur_per_kw_year = preis,
+            ("STEUERUNGSRABATT_MODUL1", _) => sect14a_modul1_pauschale_eur_per_kw_year = preis,
+            ("STEUERUNGSRABATT_MODUL3", _) => {
+                sect14a_steuerungsentschaedigung_eur_per_kw_year = preis
+            }
             ("HEMS_PLATTFORMGEBUEHR", _) => hems_subscription_eur_per_month_from_code = preis,
             ("HEMS_OPTIMIERUNGSEVENT", _) => hems_optimization_event_eur = preis,
             ("HEMS_AUSLESUNG", _) => hems_readout_event_eur = preis,
@@ -322,10 +324,10 @@ fn extract_tariff_from_product_data(
         "arbeitspreis_ht_ct_per_kwh": arbeitspreis_ht_ct_per_kwh,
         "arbeitspreis_nt_ct_per_kwh": arbeitspreis_nt_ct_per_kwh,
         "leistungspreis_strom_ct_per_kw_month": get_decimal("leistungspreis_strom_ct_per_kw_month"),
-        "sect14a_modul1_nne_reduktion_ct_per_kwh": get_decimal("sect14a_modul1_nne_reduktion_ct_per_kwh"),
-        "sect14a_modul3_entschaedigung_ct_per_kwh": get_decimal("sect14a_modul3_entschaedigung_ct_per_kwh"),
-        "steuerungsrabatt_modul1_eur_per_kw_year": steuerungsrabatt_modul1_eur_per_kw_year,
-        "steuerungsrabatt_modul3_eur_per_kw_year": steuerungsrabatt_modul3_eur_per_kw_year,
+        "sect14a_modul2_nne_reduktion_ct_per_kwh": get_decimal("sect14a_modul2_nne_reduktion_ct_per_kwh"),
+        "sect14a_steuerungsentschaedigung_ct_per_kwh": get_decimal("sect14a_steuerungsentschaedigung_ct_per_kwh"),
+        "sect14a_modul1_pauschale_eur_per_kw_year": sect14a_modul1_pauschale_eur_per_kw_year,
+        "sect14a_steuerungsentschaedigung_eur_per_kw_year": sect14a_steuerungsentschaedigung_eur_per_kw_year,
         "gas_grundpreis_ct_per_day": gas_grundpreis_ct_per_day,
         "gas_arbeitspreis_ct_per_kwh_hs": gas_arbeitspreis_ct_per_kwh_hs,
         "gas_leistungspreis_ct_per_kw_month": get_decimal("gas_leistungspreis_ct_per_kw_month"),

@@ -1,5 +1,6 @@
 #![allow(async_fn_in_trait)]
 
+use crate::domain::validation::ValidatedReads;
 use rust_decimal::Decimal;
 use time::Date;
 
@@ -27,7 +28,7 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
     ///
     /// Idempotent: duplicate `(malo_id, dtm_from, dtm_to)` rows are silently
     /// overwritten with the latest `quality` and `quantity_kwh`.
-    async fn store_reads(&self, reads: &[MeterRead]) -> Result<(), EdmError>;
+    async fn store_reads(&self, reads: ValidatedReads) -> Result<(), EdmError>;
 
     /// Query typed meter reads for a MaLo over a time window.
     async fn query(&self, q: &TimeSeriesQuery) -> Result<Vec<MeterRead>, EdmError>;

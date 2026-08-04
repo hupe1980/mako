@@ -16,6 +16,7 @@ pub mod event_log;
 pub mod grundversorger;
 pub mod health;
 pub mod lokationszuordnung;
+pub mod mabis_zp;
 pub mod malo;
 pub mod malo_grid;
 pub mod melo;

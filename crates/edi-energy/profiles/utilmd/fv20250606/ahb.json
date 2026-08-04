@@ -1173,7 +1173,7 @@
     },
     {
       "code": 55017,
-      "name": "Kündigung Lieferbeginn (LFN an LFA)",
+      "name": "Bestätigung Kündigung Lieferbeginn (LFA an LFN)",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -1337,7 +1337,7 @@
     },
     {
       "code": 55018,
-      "name": "Bestätigung Kündigung Lieferbeginn (LFA an LFN)",
+      "name": "Ablehnung Kündigung Lieferbeginn (LFA an LFN)",
       "segment_rules": [
         {
           "tag": "BGM",

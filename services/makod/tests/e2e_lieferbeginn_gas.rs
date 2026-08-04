@@ -261,21 +261,21 @@ async fn e2e_lieferbeginn_gas_positive_aperak() {
     assert_eq!(
         aperak_outbox.len(),
         1,
-        "positive SendAntwort must enqueue exactly one UtilmdAntwort outbox entry"
+        "positive SendAntwort must enqueue exactly one UTILMD answer outbox entry"
     );
     let aperak = &aperak_outbox[0];
-    assert_eq!(aperak.message_type.as_ref(), "UtilmdAntwort");
+    assert_eq!(aperak.message_type.as_ref(), "UTILMD");
     assert_eq!(
         aperak.recipient.as_ref(),
         LFN_GAS_ID,
-        "UtilmdAntwort must be addressed to the LFN Gas sender"
+        "the UTILMD answer must be addressed to the LFN Gas sender"
     );
     let payload = aperak
         .payload
         .as_object()
-        .expect("UtilmdAntwort payload must be a JSON object");
+        .expect("UTILMD answer payload must be a JSON object");
     assert_eq!(payload["anfrage_pid"].as_u64().unwrap(), 44001);
-    assert_eq!(payload["malo_id"].as_str().unwrap(), MALO_GAS_ID);
+    assert_eq!(payload["malo"].as_str().unwrap(), MALO_GAS_ID);
     assert!(
         payload["accepted"].as_bool().unwrap(),
         "accepted flag must be true"
@@ -344,15 +344,15 @@ async fn e2e_lieferbeginn_gas_negative_aperak() {
     assert_eq!(
         aperak_outbox.len(),
         1,
-        "negative SendAntwort must also enqueue one UtilmdAntwort outbox entry"
+        "negative SendAntwort must also enqueue one UTILMD answer outbox entry"
     );
     let aperak = &aperak_outbox[0];
-    assert_eq!(aperak.message_type.as_ref(), "UtilmdAntwort");
+    assert_eq!(aperak.message_type.as_ref(), "UTILMD");
     assert_eq!(aperak.recipient.as_ref(), LFN_GAS_ID);
     let payload = aperak
         .payload
         .as_object()
-        .expect("UtilmdAntwort payload must be a JSON object");
+        .expect("UTILMD answer payload must be a JSON object");
     assert!(
         !payload["accepted"].as_bool().unwrap(),
         "accepted flag must be false for rejection"

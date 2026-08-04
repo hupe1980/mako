@@ -117,13 +117,39 @@ pub(super) fn render_mscons(
         .and_then(|v| v.as_str())
         .unwrap_or(msg.recipient.as_ref());
 
-    let zaehlpunkt = p
+    // SG6 carries three *different* LOC qualifiers (MSCONS AHB 3.2): `172` is
+    // the Meldepunkt, `107` the Bilanzierungsgebiet, `237` the Bilanzkreis.
+    //
+    // What `172` holds depends on the use case: for the Summenzeitreihe family
+    // it is the **MaBiS-Zählpunkt**, elsewhere the MaLo/MeLo. Both fields are
+    // free text at the MIG level, so swapping them produces a message that
+    // parses and validates while naming the wrong Meldepunkt.
+    // Only the Summenzeitreihe PIDs reach here — the other MSCONS families
+    // have their own renderers above and address a MaLo, not a MaBiS-ZP.
+    let mabis_zp = p
+        .get("mabis_zp_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| RenderError::MissingField {
+            message_type: mt.into(),
+            field: "mabis_zp_id (SG6 LOC+172 Meldepunkt — the MaBiS-Zählpunkt, not the Bilanzierungsgebiet)".into(),
+        })?;
+    let bilanzierungsgebiet = p
         .get("bilanzierungsgebiet_id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| RenderError::MissingField {
             message_type: mt.into(),
-            field: "bilanzierungsgebiet_id".into(),
+            field: "bilanzierungsgebiet_id (SG6 LOC+107)".into(),
         })?;
+    // The two identify different things and can never share a value. Equality
+    // means the Bilanzierungsgebiet was passed for both — the original defect,
+    // refused here because it is invisible once on the wire.
+    if bilanzierungsgebiet == mabis_zp {
+        return Err(RenderError::BuilderError(format!(
+            "MSCONS {pid}: mabis_zp_id and bilanzierungsgebiet_id are both \
+             {bilanzierungsgebiet:?} — LOC+172 is the MaBiS-Zählpunkt and LOC+107 the \
+             Bilanzierungsgebiet, so one value for both misidentifies the Meldepunkt"
+        )));
+    }
     let balancing_period = p
         .get("balancing_period")
         .and_then(|v| v.as_str())
@@ -170,7 +196,8 @@ pub(super) fn render_mscons(
                 |e| RenderError::BuilderError(format!("invalid Prüfidentifikator {pid}: {e}")),
             )?,
         )
-        .metering_point(zaehlpunkt)
+        .metering_point(mabis_zp)
+        .bilanzierungsgebiet(bilanzierungsgebiet)
         .balancing_period(balancing_period)
         .version(version);
 

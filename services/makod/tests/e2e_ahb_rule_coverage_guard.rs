@@ -52,9 +52,33 @@ const KNOWN_PROFILE_GAPS: &[u32] = &[
     // GPKE: NB-initiated Lieferende, erzeugende MaLo, MSB-Abrechnungsdaten,
     // Stammdatenänderung
     55007, 55077, 55078, 55080, 55557, 55607,
+    // MaBiS-ZP lifecycle (`mabis-zp-lifecycle`) — Aktivierung/Deaktivierung of
+    // the MaBiS-Zählpunkt, the Zuordnungsermächtigung and the AAÜZ/LF-AASZR
+    // series, with their Antwort and Weiterleitung codes.
+    //
+    // The UTILMD AHB Strom PDF carries all of these, and `extract-pdf`
+    // reproduces them — but the drafts mark strictly more segments `M` than the
+    // AHB requires (the group-flattening margin), so promoting them unreviewed
+    // would reject valid messages rather than merely fail to check them. They
+    // are routed because the workflow is real and the alternative is dropping
+    // the message entirely; validation stays vacuous until the entries are
+    // curated.
+    55062, 55063, 55064, 55071, 55072, 55197, 55198, 55199, 55200, 55203, 55204, 55205, 55206,
+    55207, 55208, 55209, 55210, 55211, 55212, 55213, 55214,
+    // MaBiS Anforderungen (`mabis-anforderung`) — ORDERS 17201–17208. Same
+    // curation gate as the UTILMD band above: the ORDERS AHB carries them, the
+    // extracted drafts are stricter than the AHB, so they stay uncurated.
+    17201, 17202, 17203, 17204, 17205, 17206, 17207, 17208,
+    // MaBiS Listenabgleich (`mabis-listenabgleich`) — the three list/correction
+    // pairs. Same curation gate as the bands above.
+    55195, 55196, 55201, 55202, 55223, 55224,
 ];
 
 /// Message type a PID belongs to, from its leading digits.
+///
+/// 29xxx is declared by both APERAK and COMDIS. Either resolves the same way
+/// here — both profiles carry identical rules for 29001/29002 — so the coarse
+/// mapping is sufficient for a has-rules check.
 fn message_type_of(pid: u32) -> Option<MessageType> {
     Some(match pid / 1000 {
         13 => MessageType::Mscons,

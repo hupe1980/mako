@@ -1473,13 +1473,29 @@ pub struct ZusammenlegungRequest {
     /// Combined installed capacity in kWp after merger.
     /// When absent, the parent's capacity is unchanged.
     pub combined_leistung_kwp: Option<Decimal>,
+    /// §24 Abs. 1 Satz 1 Nr. 1, second limb — the two plants are in
+    /// *unmittelbarer räumlicher Nähe* although they do not share a
+    /// `standort_id`.
+    ///
+    /// A human judgement about the pair, so it is asserted per request rather
+    /// than derived. It only matters when the two sites differ; sharing a
+    /// `standort_id` already satisfies Nr. 1.
+    #[serde(default)]
+    pub unmittelbare_raeumliche_naehe: bool,
 }
 
 /// `POST /api/v1/anlagen/{tr_id}/zusammenlegen`
 ///
 /// **§24 EEG 2023 — Zusammenlegung (plant merger).**
 ///
-/// Merges `{tr_id}` (child) into `parent_tr_id`.  Per §24 EEG 2023:
+/// Merges `{tr_id}` (child) into `parent_tr_id`, but **only where §24 Abs. 1
+/// actually deems them one plant** — all four conditions of Satz 1, and none of
+/// the Sätze 2–5 carve-outs. A merge the statute does not support moves the
+/// survivor into a tariff band and past a tender threshold it never qualified
+/// for, for the rest of its Förderdauer, and no later correction detects it.
+/// A refused merge answers `422` naming the rule that decided.
+///
+/// On a permitted merge:
 /// - The child plant is deregistered (`status = abgemeldet`).
 /// - `parent_tr_id` is set on the child for audit trail.
 /// - The parent plant assumes the combined capacity (`combined_leistung_kwp`).
@@ -1512,7 +1528,16 @@ pub async fn post_zusammenlegen(
             .into_response();
     }
 
-    match zusammenlegen(&pool, &cfg.tenant, &child_tr_id, &req.parent_tr_id, req.combined_leistung_kwp).await {
+    match zusammenlegen(
+        &pool,
+        &cfg.tenant,
+        &child_tr_id,
+        &req.parent_tr_id,
+        req.combined_leistung_kwp,
+        req.unmittelbare_raeumliche_naehe,
+    )
+    .await
+    {
         Ok(true) => (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -1961,4 +1986,341 @@ mod calendar_tests {
             "2100 is divisible by 100, not 400"
         );
     }
+}
+
+// ── §§53b–54 EEG 2023 — the facts that cut the anzulegender Wert ─────────────
+//
+// These rows change what a plant is paid, silently: a settlement run picks them
+// up and the Gutschrift is simply smaller. Recording them through the API rather
+// than by hand keeps that behind the same Cedar gate and audit path as every
+// other lifecycle change, and the GET answers "why is this plant paid less"
+// without reading a settlement back.
+//
+// No amount is accepted except §53c's, which the statute ties to the exemption
+// actually granted. §53b's 0,1 ct/kWh and §54's 0,3 / 2,5 ct/kWh are fixed by
+// law and live in `eeg_billing::aw_reductions`.
+
+/// Request body for `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/regionalnachweis`.
+#[derive(Debug, serde::Deserialize)]
+pub struct RegionalnachweisRequest {
+    /// Register reference of the issued Regionalnachweis (§79a EEG).
+    pub nachweis_ref: String,
+    /// First day the Nachweis covers (ISO 8601).
+    pub effective_from: String,
+    /// Last day it covers; open-ended when absent.
+    pub effective_until: Option<String>,
+}
+
+/// Request body for `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/stromsteuerbefreiung`.
+#[derive(Debug, serde::Deserialize)]
+pub struct StromsteuerbefreiungRequest {
+    /// The exemption granted, in ct/kWh. Capped at the §3 StromStG full rate of
+    /// 2,05 ct/kWh — an exemption cannot exceed the tax it exempts from.
+    pub befreiung_ct_kwh: Decimal,
+    /// Which StromStG provision it rests on, e.g. `"§9 Abs. 1 Nr. 1 StromStG"`.
+    pub rechtsgrundlage: String,
+    pub effective_from: String,
+    pub effective_until: Option<String>,
+}
+
+/// Request body for `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt`.
+#[derive(Debug, serde::Deserialize)]
+pub struct Sect54DefektRequest {
+    /// Abs. 1 — Zahlungsberechtigung applied for after the 18th Kalendermonat.
+    #[serde(default)]
+    pub zahlungsberechtigung_nach_18_monaten: bool,
+    /// Abs. 2 — location does not match the Flurstücke named in the bid.
+    #[serde(default)]
+    pub flurstueck_abweichung: bool,
+    /// Abs. 3 — Agri-PV Nutzungsnachweis not supplied.
+    #[serde(default)]
+    pub agri_nutzungsnachweis_fehlt: bool,
+    /// Abs. 4 — Landesverordnung under §37c Abs. 2 not met; AW → 0.
+    #[serde(default)]
+    pub landesverordnung_nicht_erfuellt: bool,
+    pub bnetza_ref: Option<String>,
+    pub notes: Option<String>,
+    pub effective_from: String,
+    pub effective_until: Option<String>,
+}
+
+/// Request body for closing a §54 defect period.
+#[derive(Debug, serde::Deserialize)]
+pub struct Sect54NachweisRequest {
+    /// Last day the defect applied — §54 Abs. 3 Satz 2/3.
+    pub effective_until: String,
+}
+
+fn parse_iso_date(s: &str) -> Result<time::Date, String> {
+    time::Date::parse(s, &time::format_description::well_known::Iso8601::DATE)
+        .map_err(|e| format!("invalid date `{s}`: {e}"))
+}
+
+/// `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/regionalnachweis`
+///
+/// Record that a Regionalnachweis (§79a EEG) was issued for this plant's
+/// electricity. §53b then cuts the anzulegender Wert by the statutory
+/// 0,1 ct/kWh for the recorded period — but only where the AW is *gesetzlich
+/// bestimmt*, so a tender-awarded plant is unaffected even with a Nachweis on
+/// file.
+///
+/// **Cedar action**: `manage-lifecycle`
+pub async fn post_regionalnachweis(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Path(tr_id): Path<String>,
+    Json(req): Json<RegionalnachweisRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    let (from, until) = match parse_period(&req.effective_from, req.effective_until.as_deref()) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    match crate::pg::record_regionalnachweis(
+        &pool,
+        &cfg.tenant,
+        &tr_id,
+        &req.nachweis_ref,
+        from,
+        until,
+    )
+    .await
+    {
+        Ok(id) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "id": id,
+                "tr_id": tr_id,
+                "paragraph": "§53b EEG 2023",
+                "abzug_ct_kwh": eeg_billing::aw_reductions::SECT53B_REGIONALNACHWEIS_CT_KWH,
+                "hinweis": "gilt nur bei gesetzlich bestimmtem anzulegendem Wert",
+            })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+    }
+}
+
+/// `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/stromsteuerbefreiung`
+///
+/// Record a granted per-kWh Stromsteuerbefreiung for grid-transited electricity
+/// (§53c EEG 2023). The schema rejects an amount above the §3 StromStG full rate.
+///
+/// **Cedar action**: `manage-lifecycle`
+pub async fn post_stromsteuerbefreiung(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Path(tr_id): Path<String>,
+    Json(req): Json<StromsteuerbefreiungRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    let (from, until) = match parse_period(&req.effective_from, req.effective_until.as_deref()) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    match crate::pg::record_stromsteuerbefreiung(
+        &pool,
+        &cfg.tenant,
+        &tr_id,
+        req.befreiung_ct_kwh,
+        &req.rechtsgrundlage,
+        from,
+        until,
+    )
+    .await
+    {
+        Ok(id) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "id": id,
+                "tr_id": tr_id,
+                "paragraph": "§53c EEG 2023",
+                "abzug_ct_kwh": req.befreiung_ct_kwh,
+            })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+    }
+}
+
+/// `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt`
+///
+/// Record §54 defects for a solar first-segment auction plant. At least one
+/// defect must be set — a row recording none deducts nothing and is a
+/// data-entry error, which the schema rejects.
+///
+/// **Cedar action**: `manage-lifecycle`
+pub async fn post_sect54_defekt(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Path(tr_id): Path<String>,
+    Json(req): Json<Sect54DefektRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    let (from, until) = match parse_period(&req.effective_from, req.effective_until.as_deref()) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    let defekte = eeg_billing::Sect54SolarReduction {
+        zahlungsberechtigung_nach_18_monaten: req.zahlungsberechtigung_nach_18_monaten,
+        flurstueck_abweichung: req.flurstueck_abweichung,
+        agri_nutzungsnachweis_fehlt: req.agri_nutzungsnachweis_fehlt,
+        landesverordnung_nicht_erfuellt: req.landesverordnung_nicht_erfuellt,
+    };
+    if defekte.is_clean() {
+        return (
+            StatusCode::BAD_REQUEST,
+            "at least one §54 defect must be set — a row recording none deducts nothing",
+        )
+            .into_response();
+    }
+    match crate::pg::record_sect54_defekt(
+        &pool,
+        &cfg.tenant,
+        &tr_id,
+        defekte,
+        req.bnetza_ref.as_deref(),
+        req.notes.as_deref(),
+        from,
+        until,
+    )
+    .await
+    {
+        Ok(id) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "id": id, "tr_id": tr_id, "paragraph": "§54 EEG 2023" })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+    }
+}
+
+/// `POST /api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt/{id}/nachweis-erbracht`
+///
+/// §54 Abs. 3 Satz 2/3 — the missing Nachweis has been supplied, so the
+/// deduction lapses from `effective_until` onwards. The row is closed rather
+/// than deleted: that the plant was short for the earlier periods is exactly
+/// what the §147 AO audit trail has to keep.
+///
+/// **Cedar action**: `manage-lifecycle`
+pub async fn post_sect54_nachweis_erbracht(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Path((tr_id, id)): Path<(String, uuid::Uuid)>,
+    Json(req): Json<Sect54NachweisRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "manage-lifecycle", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    let until = match parse_iso_date(&req.effective_until) {
+        Ok(d) => d,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    match crate::pg::close_sect54_defekt(&pool, &cfg.tenant, id, until).await {
+        Ok(true) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "id": id,
+                "tr_id": tr_id,
+                "effective_until": until.to_string(),
+                "legal_basis": "§54 Abs. 3 Satz 2/3 EEG 2023",
+            })),
+        )
+            .into_response(),
+        Ok(false) => (StatusCode::NOT_FOUND, "no open §54 defect with that id").into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+    }
+}
+
+/// Query for `GET /api/v1/anlagen/{tr_id}/aw-reduktionen`.
+#[derive(Debug, serde::Deserialize)]
+pub struct AwReduktionenQuery {
+    /// The date to evaluate; today when absent.
+    pub on: Option<String>,
+}
+
+/// `GET /api/v1/anlagen/{tr_id}/aw-reduktionen?on=YYYY-MM-DD`
+///
+/// What is cutting this plant's anzulegender Wert on a given day, with the
+/// statutory amount for each. A settlement changes silently when one of these
+/// rows exists, so this is the path that answers "why is this plant paid less"
+/// without settling again.
+///
+/// **Cedar action**: `read-anlage`
+pub async fn get_aw_reduktionen(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Path(tr_id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<AwReduktionenQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-anlage", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    let on = match q.on.as_deref() {
+        Some(s) => match parse_iso_date(s) {
+            Ok(d) => d,
+            Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+        },
+        None => time::OffsetDateTime::now_utc().date(),
+    };
+    match crate::pg::aw_reduktionen_am(&pool, &cfg.tenant, &tr_id, on).await {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// Parse a validity period, refusing one that ends before it starts.
+///
+/// The schema CHECKs this too; catching it here answers `400` with the reason
+/// instead of surfacing a constraint name.
+fn parse_period(
+    from: &str,
+    until: Option<&str>,
+) -> Result<(time::Date, Option<time::Date>), String> {
+    let from = parse_iso_date(from)?;
+    let until = until.map(parse_iso_date).transpose()?;
+    if let Some(u) = until
+        && u < from
+    {
+        return Err(format!(
+            "effective_until {u} is before effective_from {from}"
+        ));
+    }
+    Ok((from, until))
 }

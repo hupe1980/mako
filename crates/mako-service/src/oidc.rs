@@ -130,7 +130,40 @@ pub enum OidcError {
 
     #[error("JWT is missing the required `mako_tenant` claim")]
     MissingTenant,
+
+    #[error(
+        "JWT `mako_tenant` {actual:?} does not match this deployment's tenant {expected:?} — \
+         a validly signed token from another operator must not read this tenant's data"
+    )]
+    TenantMismatch {
+        /// The tenant this deployment serves.
+        expected: String,
+        /// The tenant the token carries.
+        actual: String,
+    },
 }
+
+// ── ExpectedTenant ────────────────────────────────────────────────────────────
+
+/// The tenant a single-tenant deployment serves, enforced at token extraction.
+///
+/// # Why this is an Extension and not a per-handler check
+///
+/// A service that pins one tenant in configuration still has to *reject* tokens
+/// carrying a different one. Doing that per handler is the "auth by omission"
+/// shape: it works until someone adds a route and forgets, and nothing fails
+/// loudly when they do — the endpoint simply serves another operator's data to
+/// anyone holding a validly signed token from the same OIDC realm.
+///
+/// Layering this Extension moves the check into [`Claims`] extraction, which
+/// every authenticated handler already performs. A new route cannot opt out of
+/// it without also opting out of authentication.
+///
+/// Services that derive the tenant *from* the token instead (`claims.tenant()`
+/// used as the query key) do not need this — there is no second value to
+/// disagree with.
+#[derive(Debug, Clone)]
+pub struct ExpectedTenant(pub String);
 
 // ── OidcVerifier ─────────────────────────────────────────────────────────────
 
@@ -535,13 +568,40 @@ impl Claims {
 #[derive(Debug)]
 pub struct AuthError(pub OidcError);
 
+impl OidcError {
+    /// The detail safe to put on the wire.
+    ///
+    /// Most variants describe the *caller's* token and say nothing about this
+    /// deployment. [`OidcError::TenantMismatch`] is the exception: its message
+    /// names the tenant we serve, and the caller reaching it already holds a
+    /// validly signed token — so echoing it would hand a foreign operator our
+    /// tenant identifier. The full message still reaches the server log.
+    fn client_detail(&self) -> String {
+        match self {
+            Self::TenantMismatch { .. } => "token is not valid for this deployment".to_owned(),
+            other => other.to_string(),
+        }
+    }
+}
+
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
+        if let OidcError::TenantMismatch {
+            ref expected,
+            ref actual,
+        } = self.0
+        {
+            tracing::warn!(
+                expected_tenant = %expected,
+                token_tenant = %actual,
+                "rejected a validly signed token issued for another tenant"
+            );
+        }
         let body = serde_json::json!({
             "type":   "https://docs.mako.energy/problems/unauthorized",
             "title":  "Unauthorized",
             "status": 401u16,
-            "detail": self.0.to_string(),
+            "detail": self.0.client_detail(),
         });
         let mut resp = (StatusCode::UNAUTHORIZED, axum::Json(body)).into_response();
         resp.headers_mut().insert(
@@ -589,8 +649,20 @@ where
         let claims = verifier.verify(token).map_err(AuthError)?;
         // Enforce the tenant invariant at extraction time: every `Claims`
         // handed to a handler carries `mako_tenant` (data-isolation boundary).
-        if claims.mako_tenant.is_none() {
+        let Some(ref tenant) = claims.mako_tenant else {
             return Err(AuthError(OidcError::MissingTenant));
+        };
+        // …and, where the deployment pins a tenant, that it is *this* one. A
+        // token signed by the same realm for a different operator is otherwise
+        // indistinguishable from a local one.
+        if let Ok(Extension(ExpectedTenant(expected))) =
+            Extension::<ExpectedTenant>::from_request_parts(parts, state).await
+            && *tenant != expected
+        {
+            return Err(AuthError(OidcError::TenantMismatch {
+                expected,
+                actual: tenant.clone(),
+            }));
         }
         Ok(Claims(claims))
     }
@@ -735,7 +807,7 @@ mod tests {
     // Private key in PKCS#8 PEM format; JWK n/e derived from it.
     // Generated with `openssl genrsa 2048`.
 
-    const TEST_RSA_PRIVATE_KEY_PEM: &str = concat!(
+    pub(super) const TEST_RSA_PRIVATE_KEY_PEM: &str = concat!(
         "-----BEGIN PRIVATE KEY-----\n",
         "MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCv6YP9yEHHvG3o\n",
         "gIPI2GVw16HoDxXnD2TnnRiQCH/ChaYOA580amRfdmnazjlpdiE+DpMtlAMEOIF9\n",
@@ -775,9 +847,9 @@ mod tests {
 
     // e = 65537 → AQAB
     const TEST_JWK_E: &str = "AQAB";
-    const TEST_KID: &str = "test-key-1";
+    pub(super) const TEST_KID: &str = "test-key-1";
 
-    fn test_jwks() -> JwkSet {
+    pub(super) fn test_jwks() -> JwkSet {
         serde_json::from_value(serde_json::json!({
             "keys": [{
                 "kty": "RSA",
@@ -1016,5 +1088,146 @@ mod tests {
         });
         assert_eq!(claims.tenant(), "");
         assert_eq!(claims.principal().tenant, "");
+    }
+}
+
+#[cfg(test)]
+mod expected_tenant_tests {
+    use super::*;
+
+    /// A tenant mismatch must not echo this deployment's tenant back.
+    ///
+    /// The caller reaching this branch already holds a validly signed token —
+    /// they proved they belong to the realm, just not to us. Returning the
+    /// expected value would hand a foreign operator our tenant identifier for
+    /// free; the full detail belongs in the server log instead.
+    #[test]
+    fn the_mismatch_detail_does_not_leak_the_expected_tenant() {
+        let err = OidcError::TenantMismatch {
+            expected: "9900357000004".to_owned(),
+            actual: "9900987654321".to_owned(),
+        };
+        let detail = err.client_detail();
+        assert!(
+            !detail.contains("9900357000004"),
+            "the response must not name our tenant: {detail}"
+        );
+        assert!(
+            !detail.contains("9900987654321"),
+            "nor echo the caller's: {detail}"
+        );
+        // …while the full message, which reaches the log, names both.
+        let full = err.to_string();
+        assert!(
+            full.contains("9900357000004") && full.contains("9900987654321"),
+            "{full}"
+        );
+    }
+
+    /// Every other variant keeps its detail — those describe the caller's own
+    /// token and disclose nothing about the deployment.
+    #[test]
+    fn other_variants_keep_their_detail() {
+        let err = OidcError::MissingTenant;
+        assert_eq!(err.client_detail(), err.to_string());
+    }
+}
+
+#[cfg(test)]
+mod expected_tenant_extraction_tests {
+    use super::tests::{TEST_KID, TEST_RSA_PRIVATE_KEY_PEM, test_jwks};
+    use super::*;
+    use axum::http::Request;
+    use jsonwebtoken::{Algorithm, EncodingKey, Header};
+
+    /// Mint a real RS256 token carrying `mako_tenant`, signed by the test key.
+    fn token_for_tenant(tenant: &str) -> String {
+        #[derive(serde::Serialize)]
+        struct C<'a> {
+            sub: &'a str,
+            iss: &'a str,
+            aud: &'a str,
+            exp: u64,
+            mako_tenant: &'a str,
+        }
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some(TEST_KID.to_owned());
+        jsonwebtoken::encode(
+            &header,
+            &C {
+                sub: "user-1",
+                iss: "https://idp.example.com",
+                aud: "makod",
+                exp: 9_999_999_999,
+                mako_tenant: tenant,
+            },
+            &EncodingKey::from_rsa_pem(TEST_RSA_PRIVATE_KEY_PEM.as_bytes()).unwrap(),
+        )
+        .unwrap()
+    }
+
+    async fn extract(token: &str, expected: Option<&str>) -> Result<Claims, AuthError> {
+        let verifier =
+            OidcVerifier::from_jwks_for_testing("https://idp.example.com", "makod", test_jwks());
+        let mut builder = Request::builder()
+            .uri("/")
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .extension(verifier);
+        if let Some(t) = expected {
+            builder = builder.extension(ExpectedTenant(t.to_owned()));
+        }
+        let (mut parts, ()) = builder.body(()).unwrap().into_parts();
+        Claims::from_request_parts(&mut parts, &()).await
+    }
+
+    /// The defect this closes: a token signed by the same realm for a different
+    /// operator is cryptographically valid and, without the gate, would be
+    /// served this deployment's customer data.
+    #[tokio::test]
+    async fn a_validly_signed_token_for_another_tenant_is_rejected() {
+        let err = extract(&token_for_tenant("9900987654321"), Some("9900357000004"))
+            .await
+            .expect_err("a foreign tenant must not authenticate");
+        match err.0 {
+            OidcError::TenantMismatch { expected, actual } => {
+                assert_eq!(expected, "9900357000004");
+                assert_eq!(actual, "9900987654321");
+            }
+            other => panic!("expected TenantMismatch, got {other:?}"),
+        }
+    }
+
+    /// The matching tenant passes — the gate rejects the foreign token, not
+    /// every token.
+    #[tokio::test]
+    async fn the_deployments_own_tenant_is_accepted() {
+        let claims = extract(&token_for_tenant("9900357000004"), Some("9900357000004"))
+            .await
+            .expect("the local tenant must authenticate");
+        assert_eq!(claims.tenant(), "9900357000004");
+    }
+
+    /// Without the Extension the gate stands down, so services that derive the
+    /// tenant from the token are unaffected.
+    #[tokio::test]
+    async fn without_the_extension_any_tenant_passes() {
+        let claims = extract(&token_for_tenant("9900987654321"), None)
+            .await
+            .expect("no ExpectedTenant layered → no comparison");
+        assert_eq!(claims.tenant(), "9900987654321");
+    }
+
+    /// A `Claims` built by hand without a tenant fails every equality check —
+    /// deny by default, as the type's own docs promise.
+    #[test]
+    fn a_tenantless_claims_matches_no_tenant() {
+        let c = Claims(JwtClaims {
+            sub: "x".to_owned(),
+            mako_tenant: None,
+            mako_roles: vec![],
+            mako_sparte: vec![],
+        });
+        assert_eq!(c.tenant(), "");
+        assert_ne!(c.tenant(), "9900357000004");
     }
 }

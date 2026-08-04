@@ -165,6 +165,7 @@ pub fn render_to_wire_bytes(
         "REMADV" => render_remadv(p, msg, registry),
         "MSCONS" => render_mscons(p, msg, registry),
         "IFTSTA" => render_iftsta(p, msg, registry),
+        "INSRPT" => render_insrpt(p, msg, registry),
         other => Err(intent_only(other)),
     }
 }
@@ -250,6 +251,7 @@ fn finish_interchange(
 mod aperak;
 mod contrl;
 mod iftsta;
+mod insrpt;
 mod invoic;
 mod mscons;
 mod orders;
@@ -258,6 +260,7 @@ mod utilmd;
 use aperak::*;
 use contrl::*;
 use iftsta::*;
+use insrpt::*;
 use invoic::*;
 use mscons::*;
 use orders::*;
@@ -406,6 +409,7 @@ mod tests {
             "9900987654321",
             serde_json::json!({
                 "pid": 13003_u32,
+                "mabis_zp_id": "DE0004030099000000000000000012345",
                 "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
             }),
         );
@@ -831,7 +835,8 @@ mod tests {
             let payload = if pid == 13003 || pid == 13023 {
                 serde_json::json!({
                     "pid": pid,
-                    "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
+                    "mabis_zp_id": "DE0004030099000000000000000012345",
+                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
                     "balancing_period": "202606",
                     "version": "20260714050000+00",
                     "intervals": [
@@ -916,6 +921,7 @@ mod tests {
             "9900987654321",
             serde_json::json!({
                 "pid": 13021_u32,
+                "mabis_zp_id": "DE0004030099000000000000000012345",
                 "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
                 "balancing_period": "202606",
                 "version": "20260714050000+00",
@@ -940,6 +946,7 @@ mod tests {
             "9900987654321",
             serde_json::json!({
                 "pid": 13023_u32,
+                "mabis_zp_id": "DE0004030099000000000000000012345",
                 "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
                 "balancing_period": "202606",
                 "version": "20260714050000+00",
@@ -965,6 +972,7 @@ mod tests {
                 "pid": 13003_u32,
                 "sender_mp_id": "9900357000004",
                 "receiver_mp_id": "9900077000006",
+                "mabis_zp_id": "DE0004030099000000000000000012345",
                 "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
                 "balancing_period": "202606",
                 "version": "20260714050000+00",

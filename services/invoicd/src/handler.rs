@@ -479,7 +479,7 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
 ///
 /// # Design note
 ///
-/// The `wim-rechnung` workflow embeds the `Rechnung` BO4E object directly in the
+/// The `wim-invoic` workflow embeds the `Rechnung` BO4E object directly in the
 /// `ProcessInitiated` outbox payload (same pattern as GPKE abrechnung, since
 /// `FV2025-10-01` / workspace 0.8.0). This function extracts it and runs the
 /// same validation pipeline as `handle_invoic_initiated`.

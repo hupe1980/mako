@@ -427,7 +427,13 @@ CREATE TABLE interest_charges (
     legal_basis     TEXT        NOT NULL DEFAULT '§288 Abs. 1 BGB',
     -- doubleentry EntryId of the MAHNGEBUEHR entry (in the ledger schema; no FK).
     ledger_entry_id UUID,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- One interest charge per account and period. The MAHNGEBUEHR ledger entry
+    -- is already idempotent on `interest:{malo}:{from}:{to}`, so without this
+    -- the ledger stayed correct on a retry while this satellite grew a second
+    -- row — and `GET /interest-charges` then showed the customer the same
+    -- Verzugszinsen twice.
+    UNIQUE (tenant, account_id, period_from, period_to)
 );
 
 COMMENT ON TABLE interest_charges IS

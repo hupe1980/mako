@@ -157,6 +157,19 @@ const _: () = {
 /// GPKE §10 and `WiM` §12 (7 calendar days).
 pub const TRANSITION_GRACE_DAYS: i64 = 7;
 
+/// Name of the stand-in AHB rule pack returned for an unregistered
+/// Prüfidentifikator.
+///
+/// The pack carries exactly one **warning** rule ("Pruefidentifikator is not
+/// registered for this release"), so `report.is_valid()` stays `true` and a
+/// message with an unknown PID passes the AHB layer unchecked. That makes the
+/// pack *name* the only sound way to ask whether a PID is really known —
+/// `rule_count() > 0` is true for every PID, registered or not.
+///
+/// Emitted by `xtask codegen` into every generated profile; the registry tests
+/// pin that the generated literal still matches this constant.
+pub const UNKNOWN_PID_PACK: &str = "unknown-pid";
+
 /// The normative dispatch state for a `(MessageType, date, track)` triple.
 ///
 /// Produced by [`ReleaseRegistry::transition_state`] and
@@ -496,30 +509,36 @@ impl ReleaseRegistry {
     }
 
     /// Returns `true` if at least one registered profile for `message_type`
-    /// has one or more AHB rules for `pid`.
+    /// carries real AHB rules for `pid`.
     ///
-    /// Returns `false` when no profile exists for `message_type`, or when all
-    /// matching profiles return an empty rule pack for `pid` — which is the
-    /// case for unknown or not-yet-imported Prüfidentifikatoren.
+    /// Returns `false` when no profile exists for `message_type`, or when every
+    /// matching profile falls back to the stand-in pack — the case for unknown
+    /// or not-yet-imported Prüfidentifikatoren.
     ///
-    /// Use this to detect **vacuous validation**: `msg.validate()` always
-    /// returns `Ok(report)` with `report.is_valid() == true` when the AHB
-    /// rule pack for a PID is empty, making it impossible from the report
-    /// alone to distinguish a genuinely-validated message from one that
-    /// passed only because no rules were checked.
+    /// Use this to detect **vacuous validation**: `msg.validate()` returns
+    /// `Ok(report)` with `report.is_valid() == true` for an unregistered PID,
+    /// so the report alone cannot distinguish a genuinely-validated message
+    /// from one that passed because no rules applied to it.
+    ///
+    /// # Detection idiom
+    ///
+    /// The discriminator is the pack **name**, not its rule count. For an
+    /// unknown PID `ahb_rule_pack` returns a stand-in pack named `unknown-pid`
+    /// carrying exactly one warning rule, so `rule_count() > 0` is `true` for
+    /// *every* PID — including nonsense ones — and is useless as a predicate.
     ///
     /// # Example
     /// ```rust,no_run
     /// use edi_energy::{MessageType, Pruefidentifikator, registry::ReleaseRegistry};
     ///
-    /// let has_rules = ReleaseRegistry::global()
-    ///     .pid_has_ahb_rules(MessageType::Utilmd, Pruefidentifikator::new(55001).unwrap());
-    /// assert!(has_rules, "PID 55001 must have an AHB profile");
+    /// let reg = ReleaseRegistry::global();
+    /// assert!(reg.pid_has_ahb_rules(MessageType::Utilmd, Pruefidentifikator::new(55001).unwrap()));
+    /// assert!(!reg.pid_has_ahb_rules(MessageType::Utilmd, Pruefidentifikator::new(56001).unwrap()));
     /// ```
     #[must_use]
     pub fn pid_has_ahb_rules(&self, message_type: MessageType, pid: Pruefidentifikator) -> bool {
         self.profiles_for(message_type)
-            .any(|p| p.ahb_rule_pack(Some(pid)).rule_count() > 0)
+            .any(|p| p.ahb_rule_pack(Some(pid)).name() != UNKNOWN_PID_PACK)
     }
 
     /// Return all known releases for a message type in ascending semantic order.

@@ -88,7 +88,7 @@ pub fn wim_gas_invoic_registry() -> AdapterRegistry<WimGasInvoicWorkflow> {
 /// After the gMSB sends INVOIC 31003/31004, the NB (payer) returns a REMADV;
 /// `makod` resumes the billing process with [`WimGasInvoicCommand::ReceiveRemadv`].
 /// Gas has no itemized Abweisungen (33003/34 are Strom-only), so the set is
-/// 33001/33002. Mirrors `wim_rechnung_remadv_registry`, duplicated per Sparte.
+/// 33001/33002. Mirrors `wim_invoic_remadv_registry`, duplicated per Sparte.
 #[must_use]
 pub fn wim_gas_invoic_remadv_registry() -> AdapterRegistry<WimGasInvoicWorkflow> {
     let mut registry = AdapterRegistry::new();

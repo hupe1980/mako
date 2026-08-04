@@ -12,8 +12,17 @@ import datetime as _dt
 import pytest
 
 from .generators import EpexSim
+from .simulators import BikoSim, ImsysSim, MarktpartnerSim
 
-__all__ = ["epex_sim", "frozen_clock", "pytest_addoption", "pytest_configure"]
+__all__ = [
+    "biko_sim",
+    "epex_sim",
+    "frozen_clock",
+    "imsys_sim",
+    "nb_sim",
+    "pytest_addoption",
+    "pytest_configure",
+]
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -114,3 +123,37 @@ def frozen_clock() -> FrozenClock:
     set their own instant.
     """
     return FrozenClock("2026-11-03T09:00:00+01:00")
+
+
+# ── Counterparty simulators ───────────────────────────────────────────────────
+#
+# Each fixture is function-scoped: a simulator accumulates the exchanges it
+# handled, and sharing that across tests would make one test's assertions
+# depend on another's traffic.
+
+
+@pytest.fixture
+def nb_sim() -> MarktpartnerSim:
+    """A Netzbetreiber counterparty with no answers bound.
+
+    Unconfigured means silent, which is the safe default: a test that forgets
+    to bind an answer exercises the Frist path rather than silently passing on
+    a response it never asked for.
+    """
+    return MarktpartnerSim(mp_id="9900357000004", rolle="NB")
+
+
+@pytest.fixture
+def biko_sim() -> BikoSim:
+    """A Bilanzkoordinator that accepts submissions until told otherwise."""
+    return BikoSim(mp_id="9979999000007")
+
+
+@pytest.fixture
+def imsys_sim() -> ImsysSim:
+    """A Smart-Meter-Gateway with a valid certificate and TAF-7."""
+    return ImsysSim(
+        melo_id="DE0006819497000000000000000001234",
+        taf="TAF-7",
+        today="2026-11-03",
+    )

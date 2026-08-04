@@ -47,6 +47,7 @@ use marktd::{
             delete_lokationszuordnung, get_malo_buendel, get_malo_lokationen, get_melo_lokationen,
             put_lokationszuordnung,
         },
+        mabis_zp::{get_mabis_zp, list_mabis_zp, put_mabis_zp},
         malo::{get_malo, get_malo_lastprofil, list_malo, put_malo},
         malo_grid::{get_malo_grid, put_malo_grid},
         melo::{get_melo, get_melo_standorteigenschaften, put_melo},
@@ -75,10 +76,10 @@ use marktd::{
     openapi::swagger_ui,
     pg::{
         PgBilanzierungRepository, PgCorrelationIndex, PgDeviceRepository, PgEinwilligungRepository,
-        PgGrundversorgerRepository, PgLokationszuordnungRepository, PgMaloGridRepository,
-        PgMaloRepository, PgMeloMsbRepository, PgMeloRepository, PgMmmPreisStromRepository,
-        PgMmmaPreisGasRepository, PgMsbRahmenvertragGasRepository, PgNbContractRepository,
-        PgNeLoRepository, PgNetzzugangRepository, PgPartnerRepository,
+        PgGrundversorgerRepository, PgLokationszuordnungRepository, PgMabisZpRepository,
+        PgMaloGridRepository, PgMaloRepository, PgMeloMsbRepository, PgMeloRepository,
+        PgMmmPreisStromRepository, PgMmmaPreisGasRepository, PgMsbRahmenvertragGasRepository,
+        PgNbContractRepository, PgNeLoRepository, PgNetzzugangRepository, PgPartnerRepository,
         PgPreisblattDienstleistungRepository, PgPreisblattHardwareRepository,
         PgPreisblattKaRepository, PgPreisblattMessungRepository, PgPreisblattRepository,
         PgPriCatRepository, PgSteuerbareRessourceRepository, PgSubscriptionRepository,
@@ -216,6 +217,7 @@ async fn main() -> anyhow::Result<()> {
     let nelo_repo = std::sync::Arc::new(PgNeLoRepository::new(pool.clone()));
     let tranche_repo = std::sync::Arc::new(marktd::pg::PgTrancheRepository::new(pool.clone()));
     let malo_grid_repo = Arc::new(PgMaloGridRepository::new(pool.clone()));
+    let mabis_zp_repo = Arc::new(PgMabisZpRepository::new(pool.clone()));
     let grundversorger_repo = Arc::new(PgGrundversorgerRepository::new(pool.clone()));
     let melo_msb_repo = Arc::new(PgMeloMsbRepository::new(pool.clone()));
     let bilanzierung_repo = Arc::new(PgBilanzierungRepository::new(pool.clone()));
@@ -598,6 +600,12 @@ async fn main() -> anyhow::Result<()> {
                 "/api/v1/malo/{id}/grid",
                 get(get_malo_grid).put(put_malo_grid),
             )
+            // MaBiS-Zählpunkt per Bilanzierungsgebiet (mabis-syncd LOC+172)
+            .route("/api/v1/mabis-zp", get(list_mabis_zp))
+            .route(
+                "/api/v1/bilanzierungsgebiet/{eic}/mabis-zp",
+                get(get_mabis_zp).put(put_mabis_zp),
+            )
             // Grundversorger Feststellung (§36 Abs. 2 EnWG — EoG gap closure)
             .route(
                 "/api/v1/grundversorger/{nb_mp_id}",
@@ -752,6 +760,7 @@ async fn main() -> anyhow::Result<()> {
             .layer(Extension(tranche_repo))
             // MaLo grid topology extension (N7)
             .layer(Extension(malo_grid_repo))
+            .layer(Extension(mabis_zp_repo))
             // Grundversorger Feststellung extension (§36 EnWG EoG)
             .layer(Extension(grundversorger_repo))
             // Per-MeLo dated MSB timeline extension (WiM Teil 2 UC 4.1.1)

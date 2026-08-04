@@ -258,36 +258,50 @@ fn derive_family(workflow_name: &str, pid: u32) -> String {
 /// | Family | Deadline | Source |
 /// |--------|----------|--------|
 /// | GPKE   | 24 wall-clock hours | BK6-22-024 §5 |
-/// | WiM    | 5 Werktage ≈ 7 calendar days | BK6-24-174 |
-/// | GeLi Gas | 10 Werktage ≈ 14 calendar days | BK7-24-01-009 §5 |
-/// | WiM Gas  | 10 Werktage ≈ 14 calendar days | BK7-24-01-009 §5 |
-/// | MABIS  | 1 Werktag ≈ 2 calendar days | BK6-24-174 §13.8 |
+/// | WiM Strom | **per PID** — 3 / 5 / 7 / 1 Werktage | BK6-24-174 Teil 1 Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2 |
+/// | GeLi Gas | 10 Werktage | BK7-24-01-009 §5 |
+/// | WiM Gas  | 10 Werktage | BK7-24-01-009 §5 |
+/// | MABIS  | 1 Werktag | BK6-24-174 §13.8 |
 ///
-/// Calendar-day approximations are **always conservative**: 7 calendar days ≥ 5
-/// Werktage, so obsd never marks a process as overdue before its true deadline.
-/// Exact Werktage arithmetic (accounting for Samstag + public holidays) is
-/// performed by `processd`/`mako-engine`; `obsd` uses the coarser approximation
-/// for alerting purposes only.
+/// Werktage windows are computed **exactly**, with the same BdewMaKo calendar
+/// `processd`/`mako-engine` use, so an obsd alert and the engine's own deadline
+/// agree on the instant.
+///
+/// This used to be a calendar-day approximation described as "always
+/// conservative". It was not. WiM Strom was flattened to one 7-day window when
+/// its four PIDs run 3 / 5 / 7 / 1 Werktage, so the Abmeldung (55051, 7 WT)
+/// raised breaches while the counterparty still had days in hand. No fixed
+/// day-count could have been correct anyway: `deadline_at_werktage` resolves to
+/// a 17:00 local cutoff and public holidays shift it further, so any midnight
+/// day-count bound can land before the true deadline.
 pub fn compute_deadline(
     pid: u32,
     started_at: time::OffsetDateTime,
 ) -> Option<time::OffsetDateTime> {
+    use mako_engine::fristen::{HolidayCalendar, deadline_at_werktage};
     use time::Duration;
-    let d = match pid {
-        // GPKE — 24 wall-clock hours exact
-        55001..=55018 | 55022..=55024 | 55555 | 55607..=55609 => Duration::hours(24),
-        // WiM — 5 Werktage (7 calendar days conservative)
-        55039 | 55042 | 55051 | 55168 => Duration::days(7),
-        // GeLi Gas — 10 Werktage (14 calendar days conservative)
-        44001..=44024 => Duration::days(14),
-        // WiM Gas — 10 Werktage (14 calendar days conservative)
-        44039..=44053 | 44168..=44170 => Duration::days(14),
-        // MABIS Prüfmitteilung — 1 Werktag (2 calendar days conservative)
-        13003 => Duration::days(2),
+
+    // Werktage windows per family. GPKE is the exception: 24 wall-clock hours,
+    // not Werktage (BK6-22-024 §5).
+    let werktage = match pid {
+        55001..=55018 | 55022..=55024 | 55555 | 55607..=55609 => {
+            return Some(started_at + Duration::hours(24));
+        }
+        // WiM Strom — per PID; mako-wim is the single source of truth.
+        55039 | 55042 | 55051 | 55168 => mako_wim::antwort_frist_werktage(pid)
+            .expect("the match arm restricts this to the MSB-Wechsel family"),
+        // GeLi Gas / WiM Gas — 10 Werktage (BK7-24-01-009 §5)
+        44001..=44024 | 44039..=44053 | 44168..=44170 => 10,
+        // MABIS Prüfmitteilung — 1 Werktag (BK6-24-174 §13.8)
+        13003 => 1,
         // All other PIDs: billing, PARTIN, INSRPT — no per-process deadline
         _ => return None,
     };
-    Some(started_at + d)
+    Some(deadline_at_werktage(
+        started_at,
+        werktage,
+        HolidayCalendar::BdewMaKo,
+    ))
 }
 
 #[cfg(test)]
@@ -370,32 +384,83 @@ mod tests {
         assert_eq!(d, datetime!(2026-07-15 10:00 UTC));
     }
 
+    /// WiM Strom is per PID — a flat window raised false breaches on the
+    /// Abmeldung (7 WT) and hid real ones on the Verpflichtungsanfrage (1 WT).
     #[test]
-    fn compute_deadline_wim_7_days() {
-        let started = datetime!(2026-07-14 00:00 UTC);
-        let d = compute_deadline(55039, started).unwrap();
-        assert_eq!(d, datetime!(2026-07-21 00:00 UTC));
+    fn compute_deadline_wim_strom_is_per_pid() {
+        let started = datetime!(2026-07-14 08:00 UTC);
+        let exact = |wt| {
+            mako_engine::fristen::deadline_at_werktage(
+                started,
+                wt,
+                mako_engine::fristen::HolidayCalendar::BdewMaKo,
+            )
+        };
+        assert_eq!(compute_deadline(55_039, started).unwrap(), exact(3));
+        assert_eq!(compute_deadline(55_042, started).unwrap(), exact(5));
+        assert_eq!(compute_deadline(55_051, started).unwrap(), exact(7));
+        assert_eq!(compute_deadline(55_168, started).unwrap(), exact(1));
+
+        // The four must not collapse onto one instant.
+        let all =
+            [55_039_u32, 55_042, 55_051, 55_168].map(|p| compute_deadline(p, started).unwrap());
+        assert_eq!(
+            all.iter().collect::<std::collections::BTreeSet<_>>().len(),
+            4,
+            "each WiM Strom PID carries its own Frist"
+        );
+    }
+
+    /// obsd and the engine must agree on the instant, or an alert contradicts
+    /// the deadline the process actually carries.
+    #[test]
+    fn obsd_agrees_with_the_engine_on_every_werktage_window() {
+        for (pid, wt) in [
+            (55_039_u32, 3_u32),
+            (55_042, 5),
+            (55_051, 7),
+            (55_168, 1),
+            (44_001, 10),
+            (44_039, 10),
+            (13_003, 1),
+        ] {
+            let mut day = datetime!(2026-01-01 09:00 UTC);
+            for _ in 0..365 {
+                let exact = mako_engine::fristen::deadline_at_werktage(
+                    day,
+                    wt,
+                    mako_engine::fristen::HolidayCalendar::BdewMaKo,
+                );
+                assert_eq!(
+                    compute_deadline(pid, day).unwrap(),
+                    exact,
+                    "PID {pid} at {day} disagrees with the engine"
+                );
+                day += time::Duration::days(1);
+            }
+        }
     }
 
     #[test]
-    fn compute_deadline_geli_gas_14_days() {
+    fn compute_deadline_geli_gas_10_werktage() {
         let started = datetime!(2026-07-01 00:00 UTC);
         let d = compute_deadline(44001, started).unwrap();
-        assert_eq!(d, datetime!(2026-07-15 00:00 UTC));
+        // 10 WT, resolved on the BdewMaKo calendar to the 17:00 CEST cutoff.
+        assert_eq!(d, datetime!(2026-07-15 17:00 +2));
     }
 
     #[test]
-    fn compute_deadline_wim_gas_14_days() {
+    fn compute_deadline_wim_gas_10_werktage() {
         let started = datetime!(2026-07-01 00:00 UTC);
         let d = compute_deadline(44039, started).unwrap();
-        assert_eq!(d, datetime!(2026-07-15 00:00 UTC));
+        assert_eq!(d, datetime!(2026-07-15 17:00 +2));
     }
 
     #[test]
-    fn compute_deadline_mabis_2_days() {
-        let started = datetime!(2026-07-14 08:00 UTC);
+    fn compute_deadline_mabis_1_werktag() {
+        let started = datetime!(2026-07-14 08:00 UTC); // a Tuesday
         let d = compute_deadline(13003, started).unwrap();
-        assert_eq!(d, datetime!(2026-07-16 08:00 UTC));
+        assert_eq!(d, datetime!(2026-07-15 17:00 +2));
     }
 
     #[test]

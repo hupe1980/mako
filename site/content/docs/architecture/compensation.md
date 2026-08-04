@@ -12,7 +12,7 @@ MaKo regulatory processes have hard SLA windows enforced by BNetzA rulings:
 | Domain        | Window          | Helper                               | Ruling       |
 |---------------|-----------------|--------------------------------------|--------------|
 | GPKE (Strom)  | **24 h wall-clock** | `fristen::add_hours(t, 24)`      | BK6-24-174   |
-| WiM (Strom)   | **5 Werktage**  | `fristen::add_werktage(d, 5, BdewMaKo)` | BK6-24-174 |
+| WiM (Strom)   | **3 / 5 / 7 / 1 WT**, per PID | `antwort_frist_werktage(pid)` | BK6-24-174 Teil 1 |
 | GeLi Gas      | **10 Werktage** | `fristen::add_werktage(d, 10, BdewMaKo)` | BK7-24-01-009 |
 | WiM Gas       | **10 Werktage** | `fristen::add_werktage(d, 10, BdewMaKo)` | BK7-24-01-009 |
 | MABIS         | **1 Werktag** (Prüfmitteilung) | `fristen::add_werktage(d, 1, BdewMaKo)` | BK6-24-174 |

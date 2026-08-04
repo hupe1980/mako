@@ -1036,3 +1036,34 @@ where
         .await?;
     Ok(result.events)
 }
+
+// ── Business-key occupancy ────────────────────────────────────────────────────
+
+/// Whether a process in this state still occupies its business key.
+///
+/// MaKo processes are correlated by a business key — usually the MaLo — through
+/// the process registry's correlation index. That index is **append-only**:
+/// an entry is written when a process spawns and nothing removes it when the
+/// process finishes. So "is there an entry for this MaLo?" cannot answer "is a
+/// process still running for this MaLo?" — only the replayed state can.
+///
+/// A duplicate guard that refuses on entry presence therefore blocks a business
+/// key permanently. That is wrong for every MaKo process family: an Anmeldung
+/// the NB rejected is finished, and the corrected Anmeldung that follows is a
+/// normal flow, not a retry.
+///
+/// Implement this on a workflow's [`Workflow::State`] so the decision sits next
+/// to the state definition. Write the impl as an **exhaustive match** rather
+/// than a catch-all, so adding a state variant forces a deliberate choice
+/// instead of silently inheriting whichever default the catch-all happened to
+/// pick.
+pub trait OccupiesBusinessKey {
+    /// `true` while a *new* process for the same business key must be refused.
+    ///
+    /// Return `false` for the pre-start state and for every terminal state
+    /// (completed, rejected, timed out). When a state's meaning is genuinely
+    /// ambiguous, return `true`: refusing a legitimate process surfaces as a
+    /// `409` the operator can see, whereas admitting a duplicate one puts a
+    /// second live process on the same MaLo, which the market cannot untangle.
+    fn occupies_business_key(&self) -> bool;
+}

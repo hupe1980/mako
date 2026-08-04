@@ -299,55 +299,6 @@ pub async fn update_account_tenanted(
     Ok(())
 }
 
-/// Check whether an Abschlag has already been posted for this MaLo in this calendar month.
-///
-/// Used by the Abschlagslauf scheduler to prevent duplicate ABSCHLAG entries on restart.
-/// Returns `true` when an `abschlag_runs` entry already exists for `(tenant, malo_id, period_month)`.
-pub async fn abschlag_already_posted(
-    pool: &PgPool,
-    tenant: &str,
-    malo_id: &str,
-    period_month: time::Date,
-) -> anyhow::Result<bool> {
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM abschlag_runs WHERE tenant = $1 AND malo_id = $2 AND period_month = $3)"
-    )
-    .bind(tenant)
-    .bind(malo_id)
-    .bind(period_month)
-    .fetch_one(pool)
-    .await
-    .context("abschlag_already_posted")?;
-    Ok(exists)
-}
-
-/// Record that an Abschlag was successfully posted, creating the idempotency guard row.
-///
-/// Uses `ON CONFLICT DO NOTHING` so concurrent calls are safe.
-pub async fn record_abschlag_run(
-    pool: &PgPool,
-    tenant: &str,
-    malo_id: &str,
-    period_month: time::Date,
-    amount_ct: i64,
-    ledger_entry_id: Option<Uuid>,
-) -> anyhow::Result<()> {
-    sqlx::query(
-        "INSERT INTO abschlag_runs (tenant, malo_id, period_month, amount_ct, ledger_entry_id)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (tenant, malo_id, period_month) DO NOTHING",
-    )
-    .bind(tenant)
-    .bind(malo_id)
-    .bind(period_month)
-    .bind(amount_ct)
-    .bind(ledger_entry_id)
-    .execute(pool)
-    .await
-    .context("record_abschlag_run")?;
-    Ok(())
-}
-
 /// Check whether a Jahresabschluss has already been posted for this MaLo in this year.
 /// Returns `Some(zahlbetrag_ct)` when already settled, `None` when not yet processed.
 pub async fn jahresabschluss_already_settled(
@@ -810,7 +761,7 @@ pub struct DunningCaseRow {
 }
 
 pub async fn create_dunning_case(
-    pool: &PgPool,
+    exec: impl sqlx::PgExecutor<'_>,
     account_id: Uuid,
     tenant: &str,
     stufe: i16,
@@ -827,7 +778,7 @@ pub async fn create_dunning_case(
     .bind(stufe)
     .bind(amount_due_ct)
     .bind(due_date)
-    .fetch_one(pool)
+    .fetch_one(exec)
     .await
     .context("create_dunning_case")?;
     Ok(row.try_get("id")?)
@@ -1668,7 +1619,7 @@ pub async fn markiere_unverhaeltnismaessig(
 
 /// Record that a Sperrauftrag was handed to sperrd (idempotency: won't re-post).
 pub async fn mark_sperrauftrag_dispatched(
-    pool: &PgPool,
+    exec: impl sqlx::PgExecutor<'_>,
     case_id: Uuid,
     tenant: &str,
     reference: &str,
@@ -1680,10 +1631,54 @@ pub async fn mark_sperrauftrag_dispatched(
     .bind(reference)
     .bind(case_id)
     .bind(tenant)
-    .execute(pool)
+    .execute(exec)
     .await
     .context("mark_sperrauftrag_dispatched")?;
     Ok(())
+}
+
+/// Open a Mahnstufe case and announce it as `de.accounting.mahnung.issued`.
+///
+/// The event was declared in the catalog and documented as emitted, and
+/// `agentd`'s payment-reconciliation agent triggers on it — but nothing ever
+/// produced it. (`MAHNUNG_ISSUED` appeared in this file only as a *correlation
+/// string* on the Mahngebühr ledger entry, which is not an emission.)
+///
+/// Case insert and outbox enqueue share one transaction: the outbox is
+/// persist-before-dispatch, so a crash between them would open a dunning case
+/// nobody downstream ever hears about.
+#[allow(clippy::too_many_arguments)]
+pub async fn create_dunning_case_announced(
+    pool: &PgPool,
+    tenant: &str,
+    account_id: Uuid,
+    malo_id: &str,
+    lf_mp_id: &str,
+    stufe: i16,
+    amount_due_ct: i64,
+    due_date: Date,
+) -> anyhow::Result<Uuid> {
+    let mut tx = pool.begin().await?;
+    let case_id =
+        create_dunning_case(&mut *tx, account_id, tenant, stufe, amount_due_ct, due_date).await?;
+
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("accountingd", tenant),
+        mako_events::accounting::MAHNUNG_ISSUED,
+        malo_id,
+        serde_json::json!({
+            "malo_id":       malo_id,
+            "lf_mp_id":      lf_mp_id,
+            "mahnstufe":     stufe,
+            "amount_due_ct": amount_due_ct,
+            "amount_eur":    format!("{:.2}", amount_due_ct as f64 / 100.0),
+            "due_date":      due_date.to_string(),
+            "case_id":       case_id.to_string(),
+        }),
+    );
+    mako_service::outbox::enqueue(&mut tx, &ce).await?;
+    tx.commit().await?;
+    Ok(case_id)
 }
 
 pub async fn run_auto_dunning(
@@ -1772,10 +1767,18 @@ pub async fn run_auto_dunning(
     let stufe1_due_date = today + time::Duration::days(14); // 14-day payment deadline
 
     for (account_id, malo_id, lf_mp_id, balance_ct) in &candidates {
-        let case_id =
-            create_dunning_case(pool, *account_id, tenant, 1, *balance_ct, stufe1_due_date)
-                .await
-                .context("auto_dunning: create Mahnstufe1")?;
+        let case_id = create_dunning_case_announced(
+            pool,
+            tenant,
+            *account_id,
+            malo_id,
+            lf_mp_id,
+            1,
+            *balance_ct,
+            stufe1_due_date,
+        )
+        .await
+        .context("auto_dunning: create Mahnstufe1")?;
 
         // Post Mahngebühr if configured > 0. Deterministic idempotency key per
         // (malo, Mahnstufe, run-date) — a same-day re-run replays as a no-op
@@ -1843,10 +1846,12 @@ pub async fn run_auto_dunning(
             .await
             .context("auto_dunning: resolve Mahnstufe1")?;
 
-        let case_id = create_dunning_case(
+        let case_id = create_dunning_case_announced(
             pool,
-            *account_id,
             tenant,
+            *account_id,
+            malo_id,
+            lf_mp_id,
             2,
             *amount_due_ct,
             stufe2_due_date,
@@ -1912,10 +1917,12 @@ pub async fn run_auto_dunning(
             .await
             .context("auto_dunning: resolve Mahnstufe2")?;
 
-        let _case_id = create_dunning_case(
+        let _case_id = create_dunning_case_announced(
             pool,
-            *account_id,
             tenant,
+            *account_id,
+            malo_id,
+            lf_mp_id,
             3,
             *amount_due_ct,
             stufe3_due_date,
@@ -2161,11 +2168,18 @@ pub async fn create_interest_charge(
     .await
     .context("create_interest_charge: ledger entry")?;
 
+    // The satellite row, the outbox announcement and the idempotency guard all
+    // commit together. Previously the insert had no unique key and the enqueue
+    // ran in its own transaction *after* it: an enqueue failure returned `Err`,
+    // the caller retried, and the ledger (idempotent on its own key) stayed
+    // right while this table grew a second charge for the same period.
+    let mut tx = pool.begin().await?;
     let row = sqlx::query_as::<_, InterestChargeRow>(
         r"INSERT INTO interest_charges
               (account_id, tenant, invoice_reference, principal_ct, interest_ct, rate_pct,
                ecb_base_rate_pct, customer_type, period_from, period_to, legal_basis, ledger_entry_id)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+          ON CONFLICT (tenant, account_id, period_from, period_to) DO NOTHING
           RETURNING *",
     )
     .bind(account_id)
@@ -2180,9 +2194,50 @@ pub async fn create_interest_charge(
     .bind(period_to)
     .bind(legal_basis)
     .bind(ledger_id)
-    .fetch_one(pool)
+    .fetch_optional(&mut *tx)
     .await
     .context("create_interest_charge: insert")?;
+
+    let Some(row) = row else {
+        // Already charged for this period — return the existing row and do not
+        // announce again.
+        tx.rollback().await.ok();
+        return sqlx::query_as::<_, InterestChargeRow>(
+            "SELECT * FROM interest_charges \
+             WHERE tenant = $1 AND account_id = $2 AND period_from = $3 AND period_to = $4",
+        )
+        .bind(tenant)
+        .bind(account_id)
+        .bind(period_from)
+        .bind(period_to)
+        .fetch_one(pool)
+        .await
+        .context("create_interest_charge: fetch existing");
+    };
+
+    // Verzugszinsen are a charge to the customer, so the ERP has to learn of
+    // them to put them on the next statement. `INTEREST_CHARGED` was declared
+    // in the catalog and never emitted.
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("accountingd", tenant),
+        mako_events::accounting::INTEREST_CHARGED,
+        malo_id,
+        serde_json::json!({
+            "malo_id":           malo_id,
+            "lf_mp_id":          lf_mp_id,
+            "principal_ct":      principal_ct,
+            "interest_ct":       interest_ct,
+            "interest_eur":      format!("{:.2}", interest_ct as f64 / 100.0),
+            "rate_pct":          annual_rate.to_string(),
+            "customer_type":     customer_type,
+            "period_from":       period_from.to_string(),
+            "period_to":         period_to.to_string(),
+            "rechtsgrundlage":   legal_basis,
+            "invoice_reference": invoice_reference,
+        }),
+    );
+    mako_service::outbox::enqueue(&mut tx, &ce).await?;
+    tx.commit().await?;
 
     Ok(row)
 }

@@ -545,12 +545,12 @@ pub struct Quantities {
     /// Electricity consumption (STROM, WAERMEPUMPE, WALLBOX).
     pub electricity: Option<MeterInput>,
 
-    /// §14a Modul 2 — the controllable device's energy per Tarifstufe.
+    /// §14a Modul 3 — the controllable device's energy per Tarifstufe.
     ///
     /// The Netzbetreiber's time windows, not the supplier's HT/NT: the two
     /// gratings are set by different parties and rarely coincide, which is why
     /// this is not derived from `MeterInput`'s Zweitarif split.
-    pub sect14a_modul2: Option<Sect14aModul2Verbrauch>,
+    pub sect14a_modul3: Option<Sect14aModul3Verbrauch>,
     /// Natural gas consumption (GAS).
     pub gas: Option<GasMeterInput>,
     /// District heat / Fernwärme (WAERME).
@@ -869,15 +869,15 @@ mod tests {
     }
 }
 
-// ── Sect14aModul2Verbrauch ────────────────────────────────────────────────────
+// ── Sect14aModul3Verbrauch ────────────────────────────────────────────────────
 
-/// Energy per §14a Modul 2 Tarifstufe (BK6-22-300 Anlage 2 §2).
+/// Energy per §14a Modul 3 Tarifstufe (zeitvariable Netzentgelte, BK6-22-300).
 ///
-/// All three bands are present by construction — a Modul 2 metering
+/// All three bands are present by construction — a Modul 3 metering
 /// configuration reports every window, and a zero band is a real zero, not an
 /// absent one.
 #[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
-pub struct Sect14aModul2Verbrauch {
+pub struct Sect14aModul3Verbrauch {
     /// Hochtarif energy in kWh.
     pub ht_kwh: Decimal,
     /// Standardtarif energy in kWh.

@@ -44,6 +44,7 @@
 //! // The engine is given what was supplied and at what rates — no invoice
 //! // number, no issue date, no Prüfidentifikator.
 //! let settlement = settle_nne(&NneInput {
+//!     blindarbeit: None,
 //!     malo_id: "51238696780".into(),
 //!     nb_mp_id: "9900357000004".into(),
 //!     lf_mp_id: "9900012345678".into(),
@@ -120,7 +121,7 @@ pub mod umlagen;
 pub use billing::{correct, reverse, settle_gas_awh, settle_mmm, settle_msb, settle_nne};
 pub use error::BillingError;
 pub use redispatch::{
-    RedispatchVerguetung, RedispatchVerguetungInput, RedispatchVerguetungsart,
+    AusfallarbeitBasis, RedispatchVerguetung, RedispatchVerguetungInput, RedispatchVerguetungsart,
     bilarem_finanzielle_korrektur, eeg_entgangene_einnahmen, redispatch_verguetung,
 };
 pub use regulatory::{
@@ -149,6 +150,7 @@ pub use types::{
     InvoiceDocument,
     KaKundengruppe,
     Konzessionsabgabe,
+    KorrekturGrund,
     LegalReference,
     Leistungspreis,
     MengePreis,
@@ -160,7 +162,6 @@ pub use types::{
     PriceStep,
     QuantityUnit,
     Reduktionsfaktor,
-    Sect14aModul3Interval,
     // §14a module type (replaces module: u8 for type safety)
     Sect14aModule,
     SettlementPeriod,
@@ -171,6 +172,7 @@ pub use types::{
     SettlementWarning,
     Sparte,
     SpotPriceFormula,
+    SpotpreisInterval,
     TariffCalculationMethod,
     TariffSource,
     ValidationResult,

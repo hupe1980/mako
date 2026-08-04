@@ -508,7 +508,7 @@ fn utilmd_strom_s1_2_known_pid_detection_is_sound() {
     // "unknown-pid" fallback (which has exactly 1 rule for any unknown code).
     let has_pid = |code: u32| -> bool {
         let pid = edi_energy::Pruefidentifikator::new(code).unwrap();
-        profile.ahb_rule_pack(Some(pid)).name() != "unknown-pid"
+        profile.ahb_rule_pack(Some(pid)).name() != edi_energy::UNKNOWN_PID_PACK
     };
 
     // Core GPKE supply PIDs must be registered in S1.2.
@@ -688,5 +688,50 @@ fn utilmd_gas_g1_1_boundary_selects_correct_profile() {
         profile_boundary.valid_from(),
         Some(date!(2025 - 10 - 01)),
         "on 2025-10-01 the fv20251001_gas (valid_from 2025-10-01) profile must be selected"
+    );
+}
+
+/// `pid_has_ahb_rules` must reject unregistered Prüfidentifikatoren.
+///
+/// It previously discriminated on `rule_count() > 0`, which is `true` for
+/// *every* PID: an unknown code yields the `unknown-pid` stand-in pack, and
+/// that pack carries exactly one warning rule. The predicate was therefore
+/// always-true, and its own doctest passed vacuously. The generated profiles
+/// must also still emit the literal that `UNKNOWN_PID_PACK` names.
+#[cfg(feature = "utilmd")]
+#[test]
+fn pid_has_ahb_rules_discriminates_known_from_unknown() {
+    use edi_energy::registry::ReleaseRegistry;
+
+    let reg = ReleaseRegistry::global();
+    let pid = |c: u32| edi_energy::Pruefidentifikator::new(c).expect("constructible");
+
+    for known in [55001u32, 55002, 55003, 55004] {
+        assert!(
+            reg.pid_has_ahb_rules(MessageType::Utilmd, pid(known)),
+            "PID {known} is published and imported — it must report as known"
+        );
+    }
+
+    // 56xxx is an unassigned band; 99999 is not a PID at all.
+    for unknown in [56001u32, 56002, 99999] {
+        assert!(
+            !reg.pid_has_ahb_rules(MessageType::Utilmd, pid(unknown)),
+            "PID {unknown} is not registered — it must not report as known, or \
+             callers cannot tell real validation from vacuous validation"
+        );
+    }
+
+    // The stand-in pack is what makes the name check necessary: it is non-empty.
+    let profile = reg
+        .profiles_for(MessageType::Utilmd)
+        .next()
+        .expect("a UTILMD profile is registered");
+    let stand_in = profile.ahb_rule_pack(Some(pid(99999)));
+    assert_eq!(stand_in.name(), edi_energy::UNKNOWN_PID_PACK);
+    assert!(
+        stand_in.rule_count() > 0,
+        "the stand-in pack is non-empty — this is exactly why rule_count() is \
+         not a usable known-PID predicate"
     );
 }

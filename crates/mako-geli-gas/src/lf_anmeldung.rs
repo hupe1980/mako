@@ -167,6 +167,19 @@ pub enum GeliGasLfAnmeldungState {
     Completed(GeliGasLfAnmeldungData),
 }
 
+impl mako_engine::workflow::OccupiesBusinessKey for GeliGasLfAnmeldungState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // Awaiting the GNB inside the 10-Werktage window, or supply
+            // confirmed and running.
+            Self::Pending(_) | Self::Active(_) => true,
+            // `Rejected` (GNB refusal or deadline) and `Completed` are terminal;
+            // a corrected Gas Anmeldung after a rejection is a normal flow.
+            Self::New | Self::Rejected { .. } | Self::Completed(_) => false,
+        }
+    }
+}
+
 impl GeliGasLfAnmeldungState {
     fn label(&self) -> &'static str {
         match self {

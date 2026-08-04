@@ -88,17 +88,18 @@ Deadlines are derived from the PID using conservative calendar-day approximation
 | Process family | Deadline | Regulatory source |
 |---|---|---|
 | GPKE (PIDs 55001–55609) | **24 wall-clock hours** | BK6-22-024 §5 |
-| WiM Strom (PIDs 55039, 55042, 55051, 55168) | **7 calendar days** (≥ 5 Werktage) | BK6-24-174 |
-| GeLi Gas (PIDs 44001–44024) | **14 calendar days** (≥ 10 Werktage) | BK7-24-01-009 §5 |
-| WiM Gas (PIDs 44039–44053, 44168–44170) | **14 calendar days** (≥ 10 Werktage) | BK7-24-01-009 §5 |
-| MABIS (PID 13003) | **2 calendar days** (≥ 1 Werktag) | BK6-24-174 §13.8 |
+| WiM Strom | **per PID** — Kündigung 55039 **3 WT**, Anmeldung 55042 **5 WT**, Abmeldung 55051 **7 WT**, Verpflichtungsanfrage 55168 **1 WT** | BK6-24-174 Teil 1 Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2 |
+| GeLi Gas (PIDs 44001–44024) | **10 Werktage** | BK7-24-01-009 §5 |
+| WiM Gas (PIDs 44039–44053, 44168–44170) | **10 Werktage** | BK7-24-01-009 §5 |
+| MABIS (PID 13003) | **1 Werktag** | BK6-24-174 §13.8 |
 | Billing / PARTIN / INSRPT PIDs | `null` (no per-process deadline) | — |
 
-> **Conservative approximations:** 7 calendar days ≥ 5 Werktage in all cases
-> (Saturdays, Sundays and public holidays are not Werktage).
-> `obsd` therefore never marks a process as overdue before its true BNetzA deadline.
-> Exact Werktage arithmetic lives in `processd`/`mako-engine`; `obsd` uses the coarser
-> approximation for alerting.
+> Werktage are resolved **exactly**, on the same BdewMaKo calendar
+> `processd`/`mako-engine` use — including the 17:00 local cutoff and public
+> holidays — so an obsd alert and the deadline the process actually carries name
+> the same instant. The WiM Strom windows come from
+> `mako-wim::antwort_frist_werktage`, the same table both makod dispatch paths
+> use, so the monitor cannot drift from the engine it monitors.
 
 `deadline_risk` is re-classified on every event:
 - `green` — more than 24 h before deadline
@@ -167,7 +168,7 @@ When `own_mp_ids` is omitted, it defaults to `[tenant]` (pure single-role deploy
 | PID family | Deadline |
 |------------|---------|
 | GPKE (55001–55018) | 24 wall-clock hours |
-| WiM Strom (55039…) | 5 Werktage |
+| WiM Strom (55039 / 55042 / 55051 / 55168) | 3 / 5 / 7 / 1 Werktage |
 | GeLi Gas (44001…) | 10 Werktage |
 | MABIS (13003) | 1 Werktag |
 

@@ -23,7 +23,10 @@
 //! Output: `crates/edi-energy/profiles/<type>/<release>/mig.draft.json` and
 //! `ahb.draft.json`.  Both carry `"_WARNING"` and require human review.
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{BTreeSet, HashMap},
+    path::PathBuf,
+};
 
 use serde_json::{Value, json};
 
@@ -107,7 +110,10 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
     let draft_release = format!("DRAFT-{release}");
 
     let mig = extract_mig(&text, &msg_type, &draft_release);
-    let ahb = extract_ahb(ahb_text, &msg_type, &draft_release);
+    // The production `mig.json` beside the draft supplies the segments the AHB
+    // table never lists — see `mig_segment_tags`.
+    let mig_tags = mig_segment_tags(&out_dir.join("mig.json"));
+    let ahb = extract_ahb(ahb_text, &msg_type, &draft_release, &mig_tags);
 
     let mig_path = out_dir.join("mig.draft.json");
     let ahb_path = out_dir.join("ahb.draft.json");
@@ -537,8 +543,11 @@ const ENVELOPE_SEGMENTS: &[&str] = &["UNH", "UNT", "UNS", "UNB", "UNZ"];
 ///   left of the header position, so the whole row is scanned instead.
 /// - `Muss` → `M`; `Kann` and `Soll` → `O`. `Soll` is a recommendation, not a
 ///   requirement, and must not be promoted.
-/// - Segment-group nesting does **not** propagate: a `Muss` segment inside a
-///   `Kann` group stays `M`.
+/// - Segment-group nesting **does** propagate downward: a `Muss` segment inside
+///   a `Kann` group flattens to `O`, because the group may be absent entirely
+///   and takes the segment with it. Marking it `M` would reject conformant
+///   messages — and would disagree with the shipped profiles, which record
+///   UTILMD `SG3 CTA` (`Muss` inside a `Kann` group) as `O`.
 /// - **Optional segments are absent from the AHB table.** The AHB marks what is
 ///   *required*; the MIG lists what is *available*. Callers therefore complete
 ///   the rule set with every remaining `mig.json` segment as `O`.
@@ -552,31 +561,73 @@ fn parse_ahb_requirements(text: &str) -> HashMap<String, HashMap<String, String>
     let lines: Vec<&str> = text.split('\n').collect();
     let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
 
+    let mut group_req: HashMap<String, HashMap<String, Mark>> = HashMap::new();
+    let mut last_pid_set: Vec<String> = Vec::new();
+
     let mut i = 0;
     while i < lines.len() {
         let Some(pids) = pid_header_columns(lines[i]) else {
             i += 1;
             continue;
         };
-        let single = pids.len() == 1;
+        let regions = column_regions(&pids);
+        // Segment groups are scoped to their table: the same SG carries a
+        // different requirement under a different Prüfidentifikator.
+        //
+        // A table spans pages and repeats its header on each one, so the group
+        // state must survive a continuation — the requirement for `SG13` is
+        // often declared pages before the `SG13 CTA` row it governs. Reset only
+        // when the Prüfidentifikator set actually changes.
+        let pid_set: Vec<&str> = pids.iter().map(|(p, _)| p.as_str()).collect();
+        if pid_set != last_pid_set {
+            group_req.clear();
+            last_pid_set = pid_set.iter().map(|s| (*s).to_owned()).collect();
+        }
 
         let mut j = i + 1;
         while j < lines.len() && pid_header_columns(lines[j]).is_none() {
-            if let Some(tag) = segment_row_tag(lines[j]) {
-                for (pid, col) in &pids {
-                    let cell = if single {
-                        lines[j].to_owned()
-                    } else {
-                        slice_around(lines[j], *col)
-                    };
-                    let Some(req) = requirement_of(&cell) else {
-                        continue;
-                    };
-                    let entry = out.entry(pid.clone()).or_default();
-                    // A tag may appear in several groups; `Muss` wins.
-                    if entry.get(&tag).map(String::as_str) != Some("M") {
-                        entry.insert(tag.clone(), req);
+            let row = classify_row(lines[j]);
+            let marks = requirements_by_column(lines[j], &regions);
+            for ((pid, _), mark) in pids.iter().zip(marks) {
+                let Some(mark) = mark else {
+                    continue;
+                };
+                match &row {
+                    RowKind::Group(group) => {
+                        group_req
+                            .entry(group.clone())
+                            .or_default()
+                            .insert(pid.clone(), mark);
                     }
+                    RowKind::Segment { group, tag } => {
+                        if ENVELOPE_SEGMENTS.contains(&tag.as_str()) {
+                            continue;
+                        }
+                        // A `Muss` segment inside an *unconditional* `Kann`
+                        // group is optional at message level: the group may be
+                        // absent entirely and takes the segment with it, so
+                        // flattening to `M` would reject conformant messages.
+                        //
+                        // A conditioned `Kann [n]` is different — ORDERS `SG29`
+                        // reads `Kann [2092]`, and 2092 requires exactly one
+                        // position per message, making the group effectively
+                        // mandatory. Downgrading through it would lose `LIN`.
+                        let plain_optional = group
+                            .as_ref()
+                            .and_then(|g| group_req.get(g))
+                            .and_then(|m| m.get(pid))
+                            .is_some_and(|g| g.requirement == "O" && !g.conditioned);
+                        let effective = if plain_optional {
+                            "O".to_owned()
+                        } else {
+                            mark.requirement
+                        };
+                        let entry = out.entry(pid.clone()).or_default();
+                        if entry.get(tag).map(String::as_str) != Some("M") {
+                            entry.insert(tag.clone(), effective);
+                        }
+                    }
+                    RowKind::Other => {}
                 }
             }
             j += 1;
@@ -584,6 +635,66 @@ fn parse_ahb_requirements(text: &str) -> HashMap<String, HashMap<String, String>
         i = j;
     }
     out
+}
+
+/// What a table row asserts.
+enum RowKind {
+    /// A segment-group requirement row (`SG3` followed by per-column marks).
+    Group(String),
+    /// A segment requirement row (`[SGn ]TAG 00009` followed by marks).
+    Segment {
+        group: Option<String>,
+        tag: String,
+    },
+    Other,
+}
+
+fn classify_row(line: &str) -> RowKind {
+    let mut it = line.split_whitespace();
+    let Some(first) = it.next() else {
+        return RowKind::Other;
+    };
+
+    let (group, tag_tok) =
+        if first.starts_with("SG") && first[2..].bytes().all(|b| b.is_ascii_digit()) {
+            match it.next() {
+                // `SG3` alone (or `SG5  Muss [2061]`) is a group requirement row.
+                None => return RowKind::Group(first.to_owned()),
+                Some(t) => (Some(first.to_owned()), t),
+            }
+        } else {
+            (None, first)
+        };
+
+    let is_tag = tag_tok.len() == 3 && tag_tok.bytes().all(|b| b.is_ascii_uppercase());
+    if !is_tag {
+        // `SG5   Muss [2061]` — a group row whose marks follow the id directly.
+        return match group {
+            Some(g) => RowKind::Group(g),
+            None => RowKind::Other,
+        };
+    }
+    // A requirement row names its segment number next (`UNH 00003`).
+    match it.next() {
+        Some(num) if num.len() == 5 && num.bytes().all(|b| b.is_ascii_digit()) => {
+            RowKind::Segment {
+                group,
+                tag: tag_tok.to_owned(),
+            }
+        }
+        _ => RowKind::Other,
+    }
+}
+
+/// Character offset of the byte position `byte_idx` in `line`.
+///
+/// Column arithmetic must be in characters, not bytes: `pdftotext` lays the
+/// table out by character, and every header row contains the `ü` of
+/// "Prüfidentifikator" while most data rows are pure ASCII. Comparing a
+/// two-byte header offset against a one-byte row offset shifts every column by
+/// one, which is enough to push a mark across a boundary and lose it.
+fn char_offset(line: &str, byte_idx: usize) -> usize {
+    line[..byte_idx].chars().count()
 }
 
 /// `Some([(pid, column)])` when `line` is a `Prüfidentifikator` table header.
@@ -601,48 +712,200 @@ fn pid_header_columns(line: &str) -> Option<Vec<(String, usize)>> {
         }
         let at = line[cursor..].find(tok)? + cursor;
         cursor = at + tok.len();
-        cols.push((tok.to_owned(), at));
+        cols.push((tok.to_owned(), char_offset(line, at)));
     }
     (!cols.is_empty()).then_some(cols)
 }
 
-/// The EDIFACT tag of a segment requirement row (`[SGn ]TAG 00042 …`).
-fn segment_row_tag(line: &str) -> Option<String> {
-    let mut it = line.split_whitespace();
-    let mut tok = it.next()?;
-    if tok.starts_with("SG") && tok[2..].bytes().all(|b| b.is_ascii_digit()) {
-        tok = it.next()?;
+/// Character ranges each Prüfidentifikator column may claim a mark from.
+///
+/// Boundaries are derived from the table's own spacing rather than a fixed
+/// offset. That matters: UTILMD packs its columns about ten characters apart
+/// while ORDERS spreads them much wider, so any fixed window that fits one
+/// bleeds across the other, silently copying a `Muss` onto its neighbours.
+/// That bleed is why UTILMD extraction previously yielded nothing usable.
+///
+/// Ranges deliberately **overlap on the left**: a cell carrying a `[nnn]`
+/// condition suffix (`Muss [500]`) is wider than the header digits above it and
+/// its mark starts well left of the column centre — up to a full column width.
+/// [`requirements_by_column`] resolves the overlap by assigning marks to columns
+/// left to right and consuming each as it goes, so a right column cannot claim
+/// its neighbour's mark and starve it.
+///
+/// The last column stops half a width past its centre so the trailing free-text
+/// "Bedingungen" column, whose prose can contain the word `Muss`, is not read
+/// as a requirement.
+fn column_regions(pids: &[(String, usize)]) -> Vec<(f64, f64)> {
+    #[allow(clippy::cast_precision_loss)]
+    let centres: Vec<f64> = pids
+        .iter()
+        .map(|(p, c)| *c as f64 + p.len() as f64 / 2.0)
+        .collect();
+    if centres.len() == 1 {
+        // A single-PID table has no neighbour to bleed into — scan the row.
+        return vec![(0.0, f64::MAX)];
     }
-    let is_tag = tok.len() == 3 && tok.bytes().all(|b| b.is_ascii_uppercase());
-    if !is_tag || ENVELOPE_SEGMENTS.contains(&tok) {
-        return None;
-    }
-    let num = it.next()?;
-    (num.len() == 5 && num.bytes().all(|b| b.is_ascii_digit())).then(|| tok.to_owned())
+
+    let mut gaps: Vec<f64> = centres.windows(2).map(|w| w[1] - w[0]).collect();
+    gaps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let gap = gaps[gaps.len() / 2];
+
+    let mids: Vec<f64> = centres
+        .windows(2)
+        .map(|w| f64::midpoint(w[0], w[1]))
+        .collect();
+    centres
+        .iter()
+        .enumerate()
+        .map(|(i, &cen)| {
+            let hi = if i < mids.len() {
+                mids[i]
+            } else {
+                cen + gap / 2.0
+            };
+            (cen - gap, hi)
+        })
+        .collect()
 }
 
-/// The slice of `line` covering one PID column.
-fn slice_around(line: &str, col: usize) -> String {
-    let lo = col.saturating_sub(8);
-    let hi = (col + 13).min(line.len());
-    if lo >= line.len() {
-        return String::new();
+/// Assign each requirement mark on `line` to the column that owns it.
+///
+/// Returns one entry per column: `M` for `Muss`, `O` for `Kann`/`Soll` (a
+/// recommendation is never promoted), `None` where the column is blank.
+///
+/// Marks are matched to columns **in order, consuming as they go**. Column
+/// windows overlap on the left — a cell carrying a `[nnn]` condition suffix
+/// (`Muss [500]`) is wider than the header digits above it, so its mark starts
+/// up to a full column-width left of centre — and without consumption a right
+/// column would claim its neighbour's mark and starve it. Ordered assignment
+/// works because a row's marks and its columns are both left-to-right.
+fn requirements_by_column(line: &str, regions: &[(f64, f64)]) -> Vec<Option<Mark>> {
+    // (position, requirement, conditioned), ascending by position.
+    let mut marks: Vec<(f64, &str, bool)> = Vec::new();
+    for (pat, req) in [("Muss", "M"), ("Kann", "O"), ("Soll", "O")] {
+        for (idx, _) in line.match_indices(pat) {
+            // A conditioned mark (`Kann [2092]`, `Soll [165]`) may turn out to
+            // be mandatory once its condition is read — ORDERS 2092 demands
+            // exactly one position per message — so it does not downgrade what
+            // it contains. Whether a given condition *does* make the group
+            // mandatory is not mechanically decidable from the table, which is
+            // why this errs toward keeping the segment's own mark.
+            let tail = &line[idx + pat.len()..];
+            let conditioned = tail.strip_prefix(' ').is_some_and(|t| {
+                t.starts_with('[') && t[1..].starts_with(|c: char| c.is_ascii_digit())
+            });
+            #[allow(clippy::cast_precision_loss)]
+            marks.push((char_offset(line, idx) as f64, req, conditioned));
+        }
     }
-    line.get(lo..hi).unwrap_or("").to_owned()
+    marks.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Marks outside the table's column span belong to the row description on
+    // the left or the free-text "Bedingungen" column on the right, whose prose
+    // can contain the word `Muss`.
+    //
+    // The span is one column-width wider than the regions themselves: cell
+    // content drifts right of the header pitch in wider tables, and clipping a
+    // real mark here would break the count and force the weaker positional
+    // fallback. The regions stay tight — they are what that fallback uses.
+    let last = regions.len() - 1;
+    let width = regions[last].1 - regions[last].0;
+    let (span_lo, span_hi) = (regions[0].0, regions[last].1 + width / 2.0);
+    marks.retain(|&(at, _, _)| at >= span_lo && at < span_hi);
+
+    let mut out: Vec<Option<Mark>> = vec![None; regions.len()];
+
+    // A fully-populated row is unambiguous: as many marks as columns, both
+    // left-to-right, so pair them off. Cell widths drift away from the header
+    // pitch in wider tables — UTILMD Gas 44051–44183 heads its columns ten
+    // characters apart but spaces the marks by fourteen, twelve and eleven —
+    // and position matching alone loses a column and shifts the rest.
+    if marks.len() == regions.len() {
+        for (slot, &(_, req, conditioned)) in out.iter_mut().zip(&marks) {
+            *slot = Some(Mark {
+                requirement: req.to_owned(),
+                conditioned,
+            });
+        }
+        return out;
+    }
+
+    // Otherwise some columns are blank: fall back to position, consuming marks
+    // left to right so a column cannot claim its neighbour's.
+    let mut next = 0;
+
+    for (i, &(lo, hi)) in regions.iter().enumerate() {
+        // Skip marks left of this column — they belong to a column already
+        // filled, or to the row's description text.
+        while next < marks.len() && marks[next].0 < lo {
+            next += 1;
+        }
+        if next < marks.len() && marks[next].0 < hi {
+            out[i] = Some(Mark {
+                requirement: marks[next].1.to_owned(),
+                conditioned: marks[next].2,
+            });
+            next += 1;
+        }
+    }
+    out
 }
 
-/// `Muss` → `M`; `Kann` / `Soll` → `O`.
-fn requirement_of(cell: &str) -> Option<String> {
-    if cell.contains("Muss") {
-        Some("M".to_owned())
-    } else if cell.contains("Kann") || cell.contains("Soll") {
-        Some("O".to_owned())
-    } else {
-        None
-    }
+/// One requirement mark read out of an AHB column.
+#[derive(Clone)]
+struct Mark {
+    /// `M` (Muss) or `O` (Kann/Soll).
+    requirement: String,
+    /// The mark carried a condition reference, e.g. `Kann [2092]`.
+    ///
+    /// A conditioned `Kann` is not plain-optional: ORDERS `SG29` reads
+    /// `Kann [2092]` where 2092 requires exactly one position per message, so
+    /// the group is effectively mandatory. Only an unconditional `Kann` may
+    /// downgrade the segments nested inside it.
+    conditioned: bool,
 }
 
-fn extract_ahb(text: &str, msg_type: &str, release: &str) -> Value {
+/// Every segment tag the MIG declares, at any nesting depth.
+///
+/// Returns an empty set when `mig_path` is absent or unreadable — completion is
+/// then skipped and the draft carries only the AHB's own marks.
+fn mig_segment_tags(mig_path: &std::path::Path) -> BTreeSet<String> {
+    fn walk(groups: &[Value], out: &mut BTreeSet<String>) {
+        for g in groups {
+            if let Some(segs) = g.get("segments").and_then(Value::as_array) {
+                for seg in segs {
+                    if let Some(t) = seg.get("tag").and_then(Value::as_str) {
+                        out.insert(t.to_owned());
+                    }
+                }
+            }
+            if let Some(nested) = g.get("groups").and_then(Value::as_array) {
+                walk(nested, out);
+            }
+        }
+    }
+
+    let mut out = BTreeSet::new();
+    let Ok(raw) = std::fs::read_to_string(mig_path) else {
+        return out;
+    };
+    let Ok(mig) = serde_json::from_str::<Value>(&raw) else {
+        return out;
+    };
+    if let Some(segs) = mig.get("segments").and_then(Value::as_array) {
+        for seg in segs {
+            if let Some(t) = seg.get("tag").and_then(Value::as_str) {
+                out.insert(t.to_owned());
+            }
+        }
+    }
+    if let Some(groups) = mig.get("segment_groups").and_then(Value::as_array) {
+        walk(groups, &mut out);
+    }
+    out
+}
+
+fn extract_ahb(text: &str, msg_type: &str, release: &str, mig_tags: &BTreeSet<String>) -> Value {
     let parsed = parse_ahb_requirements(text);
     let mut codes: Vec<&String> = parsed.keys().collect();
     codes.sort();
@@ -652,10 +915,23 @@ fn extract_ahb(text: &str, msg_type: &str, release: &str) -> Value {
         .map(|pid| {
             let mut tags: Vec<(&String, &String)> = parsed[pid].iter().collect();
             tags.sort();
-            let rules: Vec<Value> = tags
-                .into_iter()
+            let mut rules: Vec<Value> = tags
+                .iter()
                 .map(|(tag, req)| json!({ "tag": tag, "requirement": req }))
                 .collect();
+
+            // The AHB table lists only what it *requires*; the MIG lists what is
+            // *available*. Every remaining MIG segment is therefore optional,
+            // and adding it is mechanical — no judgement, and it reproduces the
+            // hand-curated profiles' `O` set exactly. Envelope segments are
+            // excluded because the AHB defines no rules for them at all.
+            let marked: BTreeSet<&str> = tags.iter().map(|(t, _)| t.as_str()).collect();
+            for tag in mig_tags {
+                if !marked.contains(tag.as_str()) && !ENVELOPE_SEGMENTS.contains(&tag.as_str()) {
+                    rules.push(json!({ "tag": tag, "requirement": "O" }));
+                }
+            }
+            rules.sort_by(|a, b| a["tag"].as_str().cmp(&b["tag"].as_str()));
             json!({
                 "code": pid.parse::<u32>().unwrap_or(0),
                 "name": "",
@@ -666,10 +942,12 @@ fn extract_ahb(text: &str, msg_type: &str, release: &str) -> Value {
         .collect();
 
     json!({
-        "_WARNING": "DRAFT — `segment_rules` carry only the AHB's `Muss` marks. \
-                     Complete them with every remaining mig.json segment as `O`, \
-                     fill in each `name`, and diff against the previous release \
-                     before promoting to a production profile.",
+        "_WARNING": "DRAFT — `segment_rules` carry the AHB's own marks plus every \
+                     remaining mig.json segment as `O`. Still missing and NOT \
+                     derivable from the AHB table alone: qualifier restrictions, \
+                     `conditional_rules` for each `Muss [n]`, and each `name`. \
+                     Fill those in and diff against the previous release before \
+                     promoting to a production profile.",
         "message_type": msg_type,
         "release": release,
         "source": "pdf-extract (column-aware AHB table parser)",
@@ -1045,7 +1323,6 @@ mod ahb_parser_tests {
 
         // `Muss` in one column only must not leak into its neighbour — this is
         // the exact bug that dropped ORDERS 17008/17116/17117 on import.
-        assert_eq!(a["LIN"], "M");
         assert!(!b.contains_key("LIN"), "17008 has no LIN mark");
 
         // `Soll` is a recommendation, never promoted to `M`.
@@ -1053,11 +1330,262 @@ mod ahb_parser_tests {
         assert_eq!(b["IMD"], "O");
     }
 
+    /// A `Muss` segment inside a `Kann` group is optional at message level.
+    ///
+    /// `SG29` is `Kann` and `LIN` inside it reads `Muss`, so `LIN` flattens to
+    /// `O`: the group may be absent entirely, taking the segment with it, and a
+    /// flat `M` would reject conformant messages.
+    ///
+    /// This inverts the rule the parser previously applied. The shipped
+    /// profiles are the evidence: UTILMD `SG3` is `Kann` with `SG3 CTA` marked
+    /// `Muss`, and `fv20251001` records `CTA` as `O` for every PID in that
+    /// table. With the old rule the parser disagreed with its own profiles.
     #[test]
-    fn group_requirement_does_not_downgrade_its_segments() {
-        // `SG29` is `Kann`, but `LIN` inside it reads `Muss` and stays `M`.
+    fn a_muss_segment_inside_a_kann_group_is_optional() {
         let got = parse_ahb_requirements(TABLE);
-        assert_eq!(got["17007"]["LIN"], "M");
+        assert_eq!(got["17007"]["LIN"], "O");
+    }
+
+    /// Column ownership must follow the table's own spacing.
+    ///
+    /// UTILMD packs Prüfidentifikator columns about ten characters apart where
+    /// ORDERS spreads them far wider. The parser previously used a fixed
+    /// `col-8..col+13` window, which spans 21 characters and therefore
+    /// overlapped both neighbours on UTILMD — every `Muss` was copied across
+    /// the whole row. That is why UTILMD extraction yielded nothing usable.
+    #[test]
+    fn narrow_columns_do_not_bleed_into_their_neighbours() {
+        // Header digits at cols 42, 52, 63 — the real UTILMD S2.1 spacing.
+        let narrow = concat!(
+            "                    Prüfidentifikator     55016     55017      55018
+",
+            "        BGM           00004                Muss      Muss       Muss
+",
+            "        AGR           00007                Muss
+",
+            "        FTX           00009                          Muss
+",
+            "        LOC           00011                                     Muss
+",
+        );
+        let got = parse_ahb_requirements(narrow);
+
+        assert_eq!(got["55016"]["BGM"], "M");
+        assert_eq!(got["55017"]["BGM"], "M");
+        assert_eq!(got["55018"]["BGM"], "M");
+
+        // Each single-column mark belongs to exactly one Prüfidentifikator.
+        assert_eq!(got["55016"]["AGR"], "M");
+        assert!(!got["55017"].contains_key("AGR"), "AGR leaked right");
+        assert!(!got["55018"].contains_key("AGR"), "AGR leaked right");
+
+        assert_eq!(got["55017"]["FTX"], "M");
+        assert!(!got["55016"].contains_key("FTX"), "FTX leaked left");
+        assert!(!got["55018"].contains_key("FTX"), "FTX leaked right");
+
+        assert_eq!(got["55018"]["LOC"], "M");
+        assert!(!got["55016"].contains_key("LOC"), "LOC leaked left");
+        assert!(!got["55017"].contains_key("LOC"), "LOC leaked left");
+    }
+
+    /// The trailing free-text "Bedingungen" column must not read as a mark.
+    ///
+    /// It sits immediately right of the last Prüfidentifikator and its prose
+    /// can contain the word `Muss`.
+    #[test]
+    fn the_trailing_conditions_column_is_not_a_requirement() {
+        let with_notes = concat!(
+            "                    Prüfidentifikator     55016     55017      55018
+",
+            "        BGM           00004                Muss      Muss       Muss    [494] Dieses Feld Muss
+",
+            "        DTM           00005                                            [931] Format Muss ZZZ
+",
+        );
+        let got = parse_ahb_requirements(with_notes);
+        assert_eq!(got["55018"]["BGM"], "M");
+        assert!(
+            !got["55018"].contains_key("DTM"),
+            "prose in the conditions column must not become a requirement"
+        );
+    }
+
+    /// Column arithmetic must be in characters, not bytes.
+    ///
+    /// Every header row carries the `ü` of "Prüfidentifikator" — two bytes in
+    /// UTF-8 — while most data rows are pure ASCII. Mixing the two units shifts
+    /// every column by one, which is enough to push a mark across a boundary.
+    /// UTILMD Gas 44017 `BGM` was lost exactly this way.
+    #[test]
+    fn header_umlaut_does_not_shift_the_columns() {
+        // The `Muss` marks sit directly under their header digits, so any
+        // byte/char confusion moves them out of their column.
+        let table = concat!(
+            "        Prüfidentifikator    44016     44017     44018
+",
+            "        BGM      00004       Muss      Muss      Muss
+",
+        );
+        let got = parse_ahb_requirements(table);
+        for pid in ["44016", "44017", "44018"] {
+            assert_eq!(got[pid]["BGM"], "M", "PID {pid} lost its BGM mark");
+        }
+    }
+
+    /// A fully-populated row pairs off 1:1 even when the marks drift.
+    ///
+    /// Cell widths do not always follow the header pitch: UTILMD Gas heads
+    /// 44051–44183 ten characters apart but spaces that row's marks by
+    /// fourteen, twelve and eleven. Matching purely on position loses the third
+    /// column and shifts the fourth.
+    #[test]
+    fn drifting_marks_still_pair_with_their_columns() {
+        // Verbatim from UTILMD_AHB_Gas_1.2.pdf via .
+        let table = concat!(
+            "                                 Prüfidentifikator            44051     44052     44053     44183",
+            "
+",
+            " SG5 LOC      00034                                             Muss          Muss        Muss       Muss",
+            "
+",
+        );
+        let got = parse_ahb_requirements(table);
+        for pid in ["44051", "44052", "44053", "44183"] {
+            assert_eq!(got[pid]["LOC"], "M", "PID {pid} lost its LOC mark");
+        }
+    }
+
+    /// A conditioned `Kann [n]` group must not downgrade its segments.
+    ///
+    /// ORDERS `SG29` reads `Kann [2092]`, and 2092 requires exactly one
+    /// position per message — the group is effectively mandatory, so `LIN`
+    /// stays `M`. Only a plain `Kann` means "may be absent entirely".
+    #[test]
+    fn a_conditioned_kann_group_does_not_downgrade_its_segments() {
+        let conditioned = concat!(
+            "            Prüfidentifikator      17115       17116       17117
+",
+            " SG29                            Kann [2092] Kann [2092] Kann [2092]
+",
+            " SG29 LIN         00052            Muss        Muss        Muss
+",
+        );
+        let got = parse_ahb_requirements(conditioned);
+        assert_eq!(
+            got["17115"]["LIN"], "M",
+            "a conditioned Kann is not plain-optional"
+        );
+
+        let plain = conditioned.replace(
+            "Kann [2092] Kann [2092] Kann [2092]",
+            "Kann        Kann        Kann       ",
+        );
+        let got = parse_ahb_requirements(&plain);
+        assert_eq!(
+            got["17115"]["LIN"], "O",
+            "a plain Kann group downgrades its segments"
+        );
+    }
+
+    /// The AHB lists what is *required*; the MIG lists what is *available*.
+    ///
+    /// Every MIG segment the AHB table never marks is therefore optional, and
+    /// adding it is mechanical — it reproduces the hand-curated profiles' `O`
+    /// set exactly. Envelope segments stay out: the AHB defines no rules for
+    /// them at all.
+    #[test]
+    fn remaining_mig_segments_are_completed_as_optional() {
+        let mig: BTreeSet<String> = ["BGM", "DTM", "FTX", "NAD", "UNH", "UNT"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let table = concat!(
+            "            Prüfidentifikator      17007       17008
+",
+            "        BGM      00002              Muss        Muss
+",
+        );
+        let ahb = extract_ahb(table, "orders", "DRAFT-1.1b", &mig);
+
+        let entry = &ahb["pruefidentifikatoren"][0];
+        let rules: Vec<(&str, &str)> = entry["segment_rules"]
+            .as_array()
+            .expect("segment_rules is an array")
+            .iter()
+            .map(|r| {
+                (
+                    r["tag"].as_str().unwrap_or_default(),
+                    r["requirement"].as_str().unwrap_or_default(),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            rules,
+            vec![("BGM", "M"), ("DTM", "O"), ("FTX", "O"), ("NAD", "O")],
+            "the AHB mark is kept, the rest of the MIG is completed as O, \
+             envelope segments are excluded, and the result is tag-sorted"
+        );
+    }
+
+    /// Without a `mig.json` beside the draft, completion is skipped rather than
+    /// guessed at — the draft then carries only the AHB's own marks.
+    #[test]
+    fn missing_mig_leaves_the_draft_with_only_ahb_marks() {
+        let table = concat!(
+            "            Prüfidentifikator      17007       17008
+",
+            "        BGM      00002              Muss        Muss
+",
+        );
+        let ahb = extract_ahb(table, "orders", "DRAFT-1.1b", &BTreeSet::new());
+        let rules = ahb["pruefidentifikatoren"][0]["segment_rules"]
+            .as_array()
+            .expect("segment_rules is an array");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0]["tag"], "BGM");
+    }
+
+    /// A table spans pages and repeats its header, so group state must survive
+    /// the continuation.
+    ///
+    /// UTILMD declares `SG13`'s requirement pages before the `SG13 CTA` row it
+    /// governs. Resetting on every header row loses it, and the segment keeps
+    /// an `M` the group should have relaxed.
+    #[test]
+    fn group_state_survives_a_repeated_header() {
+        let paged = concat!(
+            "            Prüfidentifikator      55001       55002
+",
+            " SG3                                Kann        Kann
+",
+            "            Prüfidentifikator      55001       55002
+",
+            " SG3 CTA          00009             Muss        Muss
+",
+        );
+        let got = parse_ahb_requirements(paged);
+        assert_eq!(
+            got["55001"]["CTA"], "O",
+            "the SG3 Kann declared on the previous page must still apply"
+        );
+
+        // A genuinely different table does reset the group state.
+        let switched = concat!(
+            "            Prüfidentifikator      55001       55002
+",
+            " SG3                                Kann        Kann
+",
+            "            Prüfidentifikator      55010       55011
+",
+            " SG3 CTA          00009             Muss        Muss
+",
+        );
+        let got = parse_ahb_requirements(switched);
+        assert_eq!(
+            got["55010"]["CTA"], "M",
+            "a new Prüfidentifikator set starts with no group state"
+        );
     }
 
     #[test]

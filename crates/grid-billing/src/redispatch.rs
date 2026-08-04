@@ -37,12 +37,59 @@ pub enum RedispatchVerguetungsart {
     Sonstige,
 }
 
+/// Which §13a Abs. 2 basis the Ausfallarbeit was established on.
+///
+/// The two redispatch cases do not measure the curtailed energy the same way,
+/// and the difference is money:
+///
+/// - **Duldungsfall** — the Netzbetreiber steers the resource itself, so what
+///   the plant *would* have produced is not transmitted anywhere. The
+///   Ausfallarbeit is derived from the measured Lastgang against a reference.
+/// - **Aufforderungsfall** — the Einsatzverantwortliche steers to a transmitted
+///   schedule, and that schedule *is* the counterfactual. Deriving it from the
+///   Lastgang instead would settle against what happened rather than against
+///   what was instructed.
+///
+/// This is carried on the input so the basis is stated rather than assumed: a
+/// compensation computed on the wrong basis is a plain money error against
+/// either the operator or the network, and nothing downstream can tell.
+///
+/// It mirrors `mako_redispatch::aktivierung::Abwicklung` without depending on
+/// it — this crate settles, it does not run the activation workflow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AusfallarbeitBasis {
+    /// Duldungsfall — measured Lastgang against a reference.
+    GemessenerLastgang,
+    /// Aufforderungsfall — the schedule transmitted to the EIV.
+    UebermittelterFahrplan,
+}
+
+impl AusfallarbeitBasis {
+    /// The §13a wording this basis rests on, for the calculation trace.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::GemessenerLastgang => {
+                "Duldungsfall — Ausfallarbeit aus gemessenem Lastgang (§13a Abs. 2 EnWG)"
+            }
+            Self::UebermittelterFahrplan => {
+                "Aufforderungsfall — Ausfallarbeit aus übermitteltem Fahrplan (§13a Abs. 2 EnWG)"
+            }
+        }
+    }
+}
+
 /// Inputs to the §13a Abs. 2 compensation for one activation.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RedispatchVerguetungInput {
-    /// Curtailed energy in kWh (Ausfallarbeit). Duldungsfall: measured vs.
-    /// reference Lastgang; Aufforderungsfall: from the transmitted schedule.
+    /// Curtailed energy in kWh (Ausfallarbeit).
     pub ausfallarbeit_kwh: Decimal,
+    /// How that figure was established — see [`AusfallarbeitBasis`].
+    ///
+    /// Required rather than defaulted: the two redispatch cases use different
+    /// counterfactuals, and picking one silently misstates the compensation.
+    pub basis: AusfallarbeitBasis,
     /// The resource's Vergütungsart (Stammdaten Z01/Z02/Z03).
     pub verguetungsart: RedispatchVerguetungsart,
     /// Entgangene Einnahmen in EUR (Abs. 2 Satz 3 Nr. 3 / Nr. 5).
@@ -61,6 +108,9 @@ pub struct RedispatchVerguetungInput {
 pub struct RedispatchVerguetung {
     /// Curtailed energy this compensation covers (kWh).
     pub ausfallarbeit_kwh: Decimal,
+    /// How that figure was established — carried through so an audit can see
+    /// which counterfactual the compensation rests on.
+    pub basis: AusfallarbeitBasis,
     /// Vergütungsart the entgangene-Einnahmen basis was formed under.
     pub verguetungsart: RedispatchVerguetungsart,
     /// Entgangene Einnahmen component, cent-rounded (Nr. 3 / Nr. 5).
@@ -145,6 +195,7 @@ pub fn redispatch_verguetung(
 
     Ok(RedispatchVerguetung {
         ausfallarbeit_kwh: input.ausfallarbeit_kwh,
+        basis: input.basis,
         verguetungsart: input.verguetungsart,
         entgangene_einnahmen_eur: entgangene,
         zusaetzliche_aufwendungen_eur: zusaetzliche,
@@ -152,6 +203,7 @@ pub fn redispatch_verguetung(
         verguetung_eur: total,
         trace: vec![
             format!("Ausfallarbeit: {} kWh", input.ausfallarbeit_kwh),
+            input.basis.label().to_owned(),
             format!("+ {entgangene} € {basis}"),
             format!("+ {zusaetzliche} € zusätzliche Aufwendungen (Nr. 1/2/4)"),
             format!("− {ersparte} € ersparte Aufwendungen (S. 4 — an den NB zu erstatten)"),
@@ -206,6 +258,7 @@ mod tests {
 
         let v = redispatch_verguetung(&RedispatchVerguetungInput {
             ausfallarbeit_kwh: dec!(12_500),
+            basis: AusfallarbeitBasis::GemessenerLastgang,
             verguetungsart: RedispatchVerguetungsart::Eeg,
             entgangene_einnahmen_eur: entgangene,
             zusaetzliche_aufwendungen_eur: dec!(40),
@@ -236,6 +289,7 @@ mod tests {
         // exceeds lost revenue owes the difference to the NB.
         let v = redispatch_verguetung(&RedispatchVerguetungInput {
             ausfallarbeit_kwh: dec!(50_000),
+            basis: AusfallarbeitBasis::GemessenerLastgang,
             verguetungsart: RedispatchVerguetungsart::Sonstige,
             entgangene_einnahmen_eur: dec!(2_000),
             zusaetzliche_aufwendungen_eur: dec!(100),
@@ -249,11 +303,84 @@ mod tests {
     fn negative_components_are_rejected() {
         let err = redispatch_verguetung(&RedispatchVerguetungInput {
             ausfallarbeit_kwh: dec!(100),
+            basis: AusfallarbeitBasis::GemessenerLastgang,
             verguetungsart: RedispatchVerguetungsart::Kwkg,
             entgangene_einnahmen_eur: dec!(-1),
             zusaetzliche_aufwendungen_eur: Decimal::ZERO,
             ersparte_aufwendungen_eur: Decimal::ZERO,
         });
         assert!(err.is_err());
+    }
+}
+
+#[cfg(test)]
+mod basis_tests {
+    use super::*;
+    use rust_decimal::dec;
+
+    fn input(basis: AusfallarbeitBasis) -> RedispatchVerguetungInput {
+        RedispatchVerguetungInput {
+            ausfallarbeit_kwh: dec!(1000),
+            basis,
+            verguetungsart: RedispatchVerguetungsart::Eeg,
+            entgangene_einnahmen_eur: dec!(80),
+            zusaetzliche_aufwendungen_eur: dec!(10),
+            ersparte_aufwendungen_eur: dec!(5),
+        }
+    }
+
+    /// The basis travels into the result and its trace, so an audit can see
+    /// which counterfactual the compensation rests on.
+    ///
+    /// §13a Abs. 2 measures the curtailed energy differently per case, and the
+    /// two produce different figures for the same activation. A compensation
+    /// that does not say which one it used cannot be checked.
+    #[test]
+    fn the_basis_is_carried_into_the_result_and_the_trace() {
+        for basis in [
+            AusfallarbeitBasis::GemessenerLastgang,
+            AusfallarbeitBasis::UebermittelterFahrplan,
+        ] {
+            let v = redispatch_verguetung(&input(basis)).expect("computes");
+            assert_eq!(v.basis, basis);
+            assert!(
+                v.trace.iter().any(|l| l == basis.label()),
+                "the trace must name the basis: {:?}",
+                v.trace
+            );
+        }
+    }
+
+    /// The labels name the case and the paragraph — they are read by auditors,
+    /// not only by code.
+    #[test]
+    fn the_labels_name_the_case_and_the_paragraph() {
+        assert!(
+            AusfallarbeitBasis::GemessenerLastgang
+                .label()
+                .contains("Duldungsfall")
+        );
+        assert!(
+            AusfallarbeitBasis::UebermittelterFahrplan
+                .label()
+                .contains("Aufforderungsfall")
+        );
+        for b in [
+            AusfallarbeitBasis::GemessenerLastgang,
+            AusfallarbeitBasis::UebermittelterFahrplan,
+        ] {
+            assert!(b.label().contains("§13a Abs. 2 EnWG"), "{}", b.label());
+        }
+    }
+
+    /// The arithmetic itself does not change with the basis — only the input
+    /// figure does. Making the basis alter the sum would double-count the
+    /// distinction.
+    #[test]
+    fn the_basis_does_not_change_the_arithmetic() {
+        let a = redispatch_verguetung(&input(AusfallarbeitBasis::GemessenerLastgang)).unwrap();
+        let b = redispatch_verguetung(&input(AusfallarbeitBasis::UebermittelterFahrplan)).unwrap();
+        assert_eq!(a.verguetung_eur, b.verguetung_eur);
+        assert_eq!(a.verguetung_eur, dec!(85));
     }
 }

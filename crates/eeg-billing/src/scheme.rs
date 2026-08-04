@@ -205,17 +205,6 @@ impl SettlementScheme {
         )
     }
 
-    /// Returns `true` for schemes where §53b regional Grünstromkennzeichnung reduction applies.
-    #[must_use]
-    pub fn sect53b_applicable(&self) -> bool {
-        matches!(
-            self,
-            Self::FeedInTariff { .. }
-                | Self::TenantElectricity { .. }
-                | Self::FlexibilityPremium { .. }
-        )
-    }
-
     /// Return the `verguetungssatz_ct` for schemes that have a fixed tariff rate.
     /// Returns `None` for market-based or capacity-based schemes.
     #[must_use]

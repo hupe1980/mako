@@ -300,26 +300,36 @@ impl MakodClient {
                 .await
                 .map_err(|e| MdmError::MakodSync(e.to_string()))
         } else if resp.status() == reqwest::StatusCode::CONFLICT {
-            // 409: makod already processed this idempotency key (at-least-once
-            // re-delivery from marktd fanout). Treat as idempotent success — the
-            // command was executed on the first delivery and the outbound EDIFACT
-            // is already in the outbox.
-            debug!(
-                idempotency_key,
-                "makod returned 409 — command already processed (idempotent)"
-            );
+            // `makod` returns 409 for two unrelated reasons, and only one of them
+            // is an idempotent success. Note that `makod` does **not** dedupe on
+            // the `Idempotency-Key` header — it requires the header but never
+            // compares it. Both 409s come from business-level guards, so the
+            // discriminator has to be the `error` field, not the status code.
+            //
+            //   duplicate_process — an active process already exists for this
+            //     business key. This is the at-least-once redelivery case: the
+            //     command took effect on the first delivery and the body carries
+            //     that process's id. Safe to report as success.
+            //
+            //   invalid_state — the command is not legal in the process's current
+            //     state (e.g. `bestaetigen` on an already-accepted process). The
+            //     body carries no `process_id`. This is a genuine error and must
+            //     reach the caller.
+            //
+            // Treating every 409 as success and substituting `Uuid::nil()` for the
+            // missing id turned `invalid_state` into a silent success whose
+            // process_id pointed at no process — callers persisted the nil UUID as
+            // a correlation handle and every later lookup missed it.
             let body: serde_json::Value = resp.json().await.unwrap_or_default();
-            // Extract process_id from the error body if available; fall back to nil UUID.
-            let process_id = body
-                .get("process_id")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(uuid::Uuid::nil());
-            Ok(CommandAccepted {
-                process_id,
-                command: cmd.command.clone(),
-                idempotency_key: Some(idempotency_key.to_owned()),
-            })
+            let outcome = classify_conflict(&body, &cmd.command, idempotency_key);
+            if let Ok(ref accepted) = outcome {
+                debug!(
+                    idempotency_key,
+                    process_id = %accepted.process_id,
+                    "makod returned 409 duplicate_process — adopting the existing process"
+                );
+            }
+            outcome
         } else {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
@@ -370,5 +380,141 @@ impl MakodClient {
                 "GET /api/v1/invoic/{process_id}/rechnung returned HTTP {status}: {body}"
             )))
         }
+    }
+}
+
+// ── 409 classification ────────────────────────────────────────────────────────
+
+/// Decide whether a `makod` 409 is an idempotent replay or a real rejection.
+///
+/// Split out from [`MakodClient::post_command`] so the decision can be tested
+/// without an HTTP server — the classification is the part that was wrong, not
+/// the transport.
+fn classify_conflict(
+    body: &serde_json::Value,
+    command: &str,
+    idempotency_key: &str,
+) -> Result<CommandAccepted, MdmError> {
+    let kind = body.get("error").and_then(|v| v.as_str()).unwrap_or("");
+    let detail = body
+        .get("detail")
+        .and_then(|v| v.as_str())
+        .unwrap_or("(no detail)")
+        .to_owned();
+    let process_id = body
+        .get("process_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<uuid::Uuid>().ok());
+
+    match (kind, process_id) {
+        ("duplicate_process", Some(process_id)) => Ok(CommandAccepted {
+            process_id,
+            command: command.to_owned(),
+            idempotency_key: Some(idempotency_key.to_owned()),
+        }),
+        // A `duplicate_process` we cannot correlate is not a success: reporting
+        // one without a usable id is what produced the nil-UUID correlations.
+        ("duplicate_process", None) => Err(MdmError::MakodConflict {
+            kind: "duplicate_process_without_id".to_owned(),
+            detail: format!(
+                "makod reported duplicate_process but the body carried no parseable \
+                 process_id, so the existing process cannot be correlated: {detail}"
+            ),
+        }),
+        _ => Err(MdmError::MakodConflict {
+            kind: if kind.is_empty() {
+                "unknown".to_owned()
+            } else {
+                kind.to_owned()
+            },
+            detail,
+        }),
+    }
+}
+
+#[cfg(test)]
+mod conflict_tests {
+    use super::{MdmError, classify_conflict};
+    use serde_json::json;
+
+    /// The at-least-once redelivery case: the command took effect on the first
+    /// delivery, and the body names the process it created.
+    #[test]
+    fn duplicate_process_with_an_id_is_an_idempotent_success() {
+        let id = "018f3c1e-0000-7000-8000-0000000000aa";
+        let accepted = classify_conflict(
+            &json!({ "error": "duplicate_process", "process_id": id }),
+            "gpke.lieferbeginn.anmelden",
+            "k-1",
+        )
+        .expect("duplicate_process with an id is a success");
+        assert_eq!(accepted.process_id.to_string(), id);
+        assert_eq!(accepted.idempotency_key.as_deref(), Some("k-1"));
+    }
+
+    /// The defect this function exists to close.
+    ///
+    /// `invalid_state` (e.g. `bestaetigen` on an already-accepted process) is a
+    /// 409 that carries no `process_id`. It used to be reported as a success
+    /// whose `process_id` was `Uuid::nil()`; callers persisted that nil UUID as
+    /// a correlation handle, so the real error vanished and every later lookup
+    /// against the stored id missed.
+    #[test]
+    fn invalid_state_is_an_error_not_a_nil_uuid_success() {
+        let err = classify_conflict(
+            &json!({
+                "error":  "invalid_state",
+                "detail": "cannot bestaetigen a process in state Abgeschlossen",
+            }),
+            "gpke.lieferbeginn.bestaetigen",
+            "k-2",
+        )
+        .expect_err("invalid_state must not be reported as success");
+        match err {
+            MdmError::MakodConflict { kind, detail } => {
+                assert_eq!(kind, "invalid_state");
+                assert!(detail.contains("Abgeschlossen"), "detail lost: {detail}");
+            }
+            other => panic!("expected MakodConflict, got {other:?}"),
+        }
+    }
+
+    /// A `duplicate_process` whose id is absent or unparseable cannot be
+    /// correlated, so it is an error rather than a success with a fabricated id.
+    #[test]
+    fn duplicate_process_without_a_usable_id_is_an_error() {
+        for body in [
+            json!({ "error": "duplicate_process" }),
+            json!({ "error": "duplicate_process", "process_id": "not-a-uuid" }),
+        ] {
+            let err = classify_conflict(&body, "cmd", "k")
+                .expect_err("an uncorrelatable duplicate is not a success");
+            assert!(
+                matches!(err, MdmError::MakodConflict { ref kind, .. }
+                         if kind == "duplicate_process_without_id"),
+                "unexpected: {err:?}"
+            );
+        }
+    }
+
+    /// An empty or unrecognised body must not fall through to success either.
+    #[test]
+    fn an_unrecognised_conflict_body_is_an_error() {
+        let err = classify_conflict(&json!({}), "cmd", "k").expect_err("unknown 409 is an error");
+        assert!(
+            matches!(err, MdmError::MakodConflict { ref kind, .. } if kind == "unknown"),
+            "unexpected: {err:?}"
+        );
+    }
+
+    /// `MakodConflict` maps to 409, not 500: retrying will not help.
+    #[test]
+    fn a_command_conflict_is_reported_as_409() {
+        let err = MdmError::MakodConflict {
+            kind: "invalid_state".to_owned(),
+            detail: "x".to_owned(),
+        };
+        assert_eq!(err.status_u16(), 409);
+        assert_eq!(err.error_code(), "makod_conflict");
     }
 }

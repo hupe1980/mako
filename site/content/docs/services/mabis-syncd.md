@@ -106,6 +106,41 @@ Each MaLo's territory comes from `marktd` (`GET /api/v1/malo/{id}` →
 rather than silently folded into the fallback zone — energy filed against the
 wrong territory is a settlement error the BIKO cannot detect.
 
+### MaBiS-Zählpunkt vs Bilanzierungsgebiet
+
+The Summenzeitreihe carries **two different SG6 `LOC` identifiers**, and MSCONS
+AHB 3.2 gives each its own qualifier:
+
+| Qualifier | Carries |
+|---|---|
+| `LOC+172` | **Meldepunkt** — the MaBiS-Zählpunkt (33-char Zählpunktbezeichnung) |
+| `LOC+107` | **Bilanzierungsgebiet** (16-char EIC) |
+| `LOC+237` | Bilanzkreis |
+
+Both are free text at the MIG level, so a message that swaps them still parses
+and still validates — the BIKO simply files the Summenzeitreihe against the
+wrong Meldepunkt. Nothing downstream can detect it, which is why the two are
+kept as separate inputs all the way from master data to the wire.
+
+The assignment is **marktd master data**, not service configuration. Before each
+submission `mabis-syncd` resolves it over HTTP:
+
+```
+GET /api/v1/bilanzierungsgebiet/{eic}/mabis-zp   → { "mabis_zp_id": "DE0004030099000000000000000012345", ... }
+PUT /api/v1/bilanzierungsgebiet/{eic}/mabis-zp   (NB role, Cedar `write-mabis-zp`)
+GET /api/v1/mabis-zp                             → every assignment for the tenant
+```
+
+Every failure path **refuses** rather than substituting — an unassigned
+territory (`404`), an unreachable marktd, a malformed response, or a response
+echoing the EIC back as the Meldepunkt all abort the submission. A Summenzeitreihe
+filed against the wrong Meldepunkt is indistinguishable, to the BIKO, from a
+correct one, so not sending is the safe failure.
+
+Both ends refuse the EIC-as-Meldepunkt substitution: marktd rejects it on write
+(a `400`, and a table `CHECK`), and the submission path re-checks it rather than
+taking master data on trust.
+
 This requires a `[marktd]` config section:
 
 ```toml
@@ -136,8 +171,21 @@ Two guards make the resolution explicit rather than implied:
   under-reports rather than mis-reports.
 - `Summenzeitreihe::missing_slot_count()` reports slots in the settlement period
   that no MaLo covered. A non-zero count means the BIKO would receive a series
-  that silently omits energy rather than reporting zero, so it is logged at
-  `WARN` when the series is built.
+  that silently omits energy rather than reporting zero, so **the run fails** —
+  for the same reason an excluded MaLo fails it. Both under-report the territory
+  identically, and a short series is indistinguishable from a complete one once
+  the BIKO has acked it.
+- The Meldepunkt is a validating newtype (`MabisZaehlpunktId`), so a malformed
+  one — a 16-character territory EIC, an empty string — cannot be constructed at
+  all, and `Deserialize` runs the same check because the value arrives as JSON
+  from marktd. `Summenzeitreihe::validate_identifiers()` then refuses the one
+  case the type cannot rule out: a Meldepunkt *equal* to its Bilanzierungsgebiet.
+  MSCONS SG6 carries `LOC+172` (Meldepunkt), `LOC+107` (Bilanzierungsgebiet) and
+  `LOC+237` (Bilanzkreis) as free text at the MIG level, so a swapped pair parses,
+  validates and is accepted — filed against the wrong point. `marktd`'s
+  `mabis_zp_not_the_gebiet` CHECK guards only rows written to that table; a series
+  assembled from any other source reaches rendering without meeting it, which is
+  why the check also lives in the pure crate.
 
 Quality flags are mapped conservatively on the way in: the forward BO4E mapping
 in `edmd` is lossy, so anything not plainly `ABGELESEN` counts as non-measured.
@@ -272,6 +320,37 @@ are automatically included. There is no static MaLo configuration file.
 
 To **exclude** a MaLo from MABIS aggregation, remove its billing period records
 from `edmd` or set a negative tenant override (advanced use case).
+
+---
+
+## Submission target — BIKO today, MaBiS-Hub later
+
+`submission_target` selects where Summenzeitreihen are filed:
+
+```toml
+submission_target = "biko-bilateral"   # default; "mabis-hub" is not yet implemented
+```
+
+BK6-24-210 will replace bilateral BIKO submission with a central **MaBiS-Hub**
+that routes **exclusively by MaLo-ID**. Today a series is filed under its
+MaBiS-Zählpunkt (`LOC+172`) for a Bilanzierungsgebiet (`LOC+107`), and the
+aggregation step groups MaLos *by Bilanzierungsgebiet* — that grouping is what
+the cutover invalidates, not just the endpoint.
+
+The `mabis-hub` target **refuses at startup** rather than guessing a format.
+There is no Beschluss (the H1-2026 target slipped, the -1 consultation closed
+17.11.2025, go-live is planned for H2 2028), so no wire format, endpoint or
+payload shape is published. An invented format that reaches a real Hub is
+indistinguishable, at the point of failure, from a correct submission that was
+rejected.
+
+Three things the cutover will touch, recorded so the audit is not repeated:
+
+| What | Today | Under the Hub |
+|---|---|---|
+| Aggregation key | one series per Bilanzierungsgebiet | routed per MaLo-ID |
+| `mabis_zp_id` | `LOC+172` Meldepunkt, from marktd master data | not a routing key; payload content is a format question |
+| Tranchen | `marktd.tranche` keyed on `tranche_id`, parent `malo_id` | a Tranche is not a MaLo — needs a resolution rule |
 
 ---
 
@@ -469,8 +548,11 @@ for malo in &malos {
 
 let series = builder.build();
 println!("total kWh: {}, intervals: {}", series.total_kwh(), series.interval_count());
+// Both checks fail the run rather than filing: a misidentified or short series
+// cannot be withdrawn once the BIKO has acked it.
+series.validate_identifiers()?;
 if !series.is_complete() {
-    warn!(missing = series.missing_slot_count(), "settlement slots uncovered");
+    anyhow::bail!("{} settlement slots uncovered", series.missing_slot_count());
 }
 // Monthly roll-up, for reporting only — the message carries the ¼-h slots:
 let monthly = series.monthly_totals();

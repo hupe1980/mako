@@ -482,38 +482,6 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
         }
     }
 
-    // ── §53b EEG 2023 — Regionale Grünstromkennzeichnung reduction ───────────
-    // BNetzA-certified reduction for plants in renewable-saturated grid areas.
-    // Applies only to Verguetung / Mieterstrom / Flexibilitaet.
-    if let Some(r53b_ct) = input
-        .sect53b_regional_reduction_ct
-        .filter(|r| *r > Decimal::ZERO)
-        && !matches!(
-            result.status,
-            SettlementStatus::NoData | SettlementStatus::PriceMissing
-        )
-        && matches!(
-            input.scheme,
-            crate::scheme::SettlementScheme::FeedInTariff { .. }
-                | crate::scheme::SettlementScheme::TenantElectricity { .. }
-                | crate::scheme::SettlementScheme::FlexibilityPremium { .. }
-        )
-        && let Some(elig_kwh) = result.eligible_kwh.filter(|k| *k > Decimal::ZERO)
-    {
-        let reduction_eur = -validated_eur(elig_kwh * r53b_ct / Decimal::from(100));
-        result.positions.push(crate::model::SettlePosition {
-            description: format!(
-                "\u{00a7}53b EEG 2023 Regionale Reduzierung ({r53b_ct}\u{202f}ct/kWh)"
-            ),
-            legal_basis: "\u{00a7}53b EEG 2023".to_owned(),
-            kwh: elig_kwh,
-            rate_ct_kwh: -r53b_ct,
-            eur: reduction_eur,
-        });
-        result.settlement_eur =
-            Some(result.settlement_eur.unwrap_or(Decimal::ZERO) + reduction_eur);
-    }
-
     // ── §25 billing_days_fraction — auto-compute or use caller override ──────
     // Legal basis: §25 Abs. 1 Satz 3 EEG 2023 (commissioning day = start of entitlement)
     // When None: auto-compute from billing_date + inbetriebnahme + foerderendedatum.
@@ -732,6 +700,47 @@ fn calculate_settlement_inner(input: &SettleInput) -> SettleOutput {
     settle_normal_body(input)
 }
 
+/// Apply §§53b–54 to an anzulegender Wert, using the input's context.
+///
+/// Returns the reduced AW and the list of cuts that fired. Reductions act on the
+/// AW rather than the settled amount because that is what the statutes say and
+/// because the Marktprämie floors at zero — see [`crate::aw_reductions`].
+fn apply_aw_cuts(
+    aw_ct: Decimal,
+    input: &SettleInput,
+) -> (Decimal, Vec<crate::aw_reductions::AwReductionApplied>) {
+    if input.aw_reductions.is_empty() {
+        return (aw_ct, Vec::new());
+    }
+    crate::aw_reductions::apply_aw_reductions(
+        aw_ct,
+        &input.aw_reductions,
+        &input.tariff_source,
+        input.erzeugungsart.unwrap_or_default(),
+    )
+}
+
+/// Render each AW cut as a zero-euro audit position.
+///
+/// The euro effect is already inside the reduced rate on the main position, so
+/// these carry the deduction as a negative `rate_ct_kwh` and `eur: 0` — double
+/// counting the money would misstate the settlement. They exist so the
+/// Gutschrift names every statute that touched the AW.
+fn aw_cut_positions(
+    cuts: &[crate::aw_reductions::AwReductionApplied],
+    kwh: Decimal,
+) -> Vec<crate::model::SettlePosition> {
+    cuts.iter()
+        .map(|c| crate::model::SettlePosition {
+            description: c.description.clone(),
+            legal_basis: c.legal_basis.clone(),
+            kwh,
+            rate_ct_kwh: -c.deduction_ct_kwh,
+            eur: Decimal::ZERO,
+        })
+        .collect()
+}
+
 /// Core settlement body — executes AFTER all §52 sanction checks.
 /// Also called directly by the §52 Abs. 3 (-20%) path.
 fn settle_normal_body(input: &SettleInput) -> SettleOutput {
@@ -831,7 +840,7 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
     // 3. Scheme dispatch → gross settlement positions
     // 4. §51a verlängerungsanspruch (output field, informational)
     // 5. §13a EnWG EInsMan compensation (separate position)
-    // 6. §53b regional reduction (separate position)
+    // 6. §§53b–54 AW-level reductions (applied to the AW, not the result)
     // Output: SettleOutput with all positions summed
     match &input.scheme {
         // ── EUR 0 — Eigenverbrauch ────────────────────────────────────────────
@@ -894,12 +903,15 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             } else {
                 *verguetungssatz_ct
             };
+            // §§53b–54 reduce the anzulegender Wert itself, after §53 Abs. 1.
+            let (rate_ct, aw_cuts) = apply_aw_cuts(rate_ct, input);
             let desc = if neg_kwh.is_some() {
                 "Einspeiseverg\u{00fc}tung \u{00a7}21 EEG (\u{00a7}51 Negativpreisregel angewendet)"
             } else {
                 "Einspeiseverg\u{00fc}tung \u{00a7}21 EEG"
             };
-            let positions = vec![pos(desc, "\u{00a7}21 EEG 2023", effective, rate_ct)];
+            let mut positions = vec![pos(desc, "\u{00a7}21 EEG 2023", effective, rate_ct)];
+            positions.extend(aw_cut_positions(&aw_cuts, effective));
             SettleOutput {
                 settlement_eur: total(&positions),
                 eligible_kwh: Some(effective),
@@ -1025,6 +1037,9 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             } else {
                 raw_aw_ct
             };
+            // §§53b–54 cut the AW before the max(0, …) floor below, so a plant
+            // whose Marktwert already exceeds its AW is not driven negative.
+            let (aw_ct, aw_cuts) = apply_aw_cuts(aw_ct, input);
             // ── §39n EEG 2023 — Innovationsausschreibung: feste Marktprämie ───
             // Innovation-auction awards pay a FIXED premium (the Zuschlagswert per
             // kWh, §3 InnAusV) on top of the market sale — it is not reduced by the
@@ -1035,15 +1050,17 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             // eligible kWh), so no separate handling is needed here.
             if input.tariff_source.is_innovation_auction() {
                 let feste_praemie_eur = validated_eur(kwh * aw_ct / Decimal::from(100));
+                let mut positions = vec![pos(
+                    "Feste Marktpr\u{00e4}mie \u{00a7}39n EEG 2023 (Innovationsausschreibung, \u{00a7}3 InnAusV)",
+                    "\u{00a7}39n EEG 2023 i.V.m. \u{00a7}3 InnAusV",
+                    kwh,
+                    aw_ct,
+                )];
+                positions.extend(aw_cut_positions(&aw_cuts, kwh));
                 return SettleOutput {
                     settlement_eur: Some(feste_praemie_eur),
                     eligible_kwh: Some(kwh),
-                    positions: vec![pos(
-                        "Feste Marktpr\u{00e4}mie \u{00a7}39n EEG 2023 (Innovationsausschreibung, \u{00a7}3 InnAusV)",
-                        "\u{00a7}39n EEG 2023 i.V.m. \u{00a7}3 InnAusV",
-                        kwh,
-                        aw_ct,
-                    )],
+                    positions,
                     status: SettlementStatus::Calculated,
                     pflichtzahlung_eur: None,
                     pflichtzahlung_faelligkeitsdatum: None,
@@ -1102,6 +1119,8 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 // EPEX ≥ AW + Managementprämie: zero payment — show audit position.
                 positions.push(pos(praemie_desc, praemie_basis, kwh, Decimal::ZERO));
             }
+            // Name every statute that cut the AW, even where the floor absorbed it.
+            positions.extend(aw_cut_positions(&aw_cuts, kwh));
 
             let total_eur = positions.iter().map(|p| p.eur).sum();
             SettleOutput {

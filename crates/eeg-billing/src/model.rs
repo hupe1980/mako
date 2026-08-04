@@ -443,11 +443,14 @@ pub struct SettleInput {
     /// Default: empty Vec (no violations).
     pub pflichtverstoss: Vec<Pflichtverstoss>,
 
-    /// §53b EEG 2023 — Regionale Grünstromkennzeichnung reduction in ct/kWh.
+    /// §§53b–54 EEG 2023 — reductions that act on the anzulegender Wert.
     ///
-    /// BNetzA-certified area reduction applied as: `kWh × ct / 100`.
-    /// Only applies to `FeedInTariff`, `TenantElectricity`, `FlexibilityPremium`.
-    pub sect53b_regional_reduction_ct: Option<Decimal>,
+    /// §53b Regionalnachweise, §53c Stromsteuerbefreiung and §54 solar
+    /// first-segment auction defects. Each reduces the AW *before* the
+    /// settlement formula, which matters for the gleitende Marktprämie: its
+    /// `max(0, …)` floor must absorb the reduction rather than the result being
+    /// pushed negative afterwards. See [`crate::aw_reductions`].
+    pub aw_reductions: crate::aw_reductions::AwReductionContext,
 
     /// §51a EEG 2023 — quarter-hours during which §51 reduced Vergütung to zero.
     ///

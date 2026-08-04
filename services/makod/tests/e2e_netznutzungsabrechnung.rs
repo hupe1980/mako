@@ -10,7 +10,7 @@
 //! universal Storno (INVOIC AHB §3.1.2) — not a GPKE-specific billing PID. It is
 //! checked generically by `invoicd`, so it is not registered by this workflow.
 //! **Note**: PID 31009 ("MSB-Rechnung") is registered by `mako-wim`'s
-//! `wim-rechnung` workflow, not here — see `crates/mako-wim/src/rechnung.rs`.
+//! `wim-invoic` workflow, not here — see `crates/mako-wim/src/invoic.rs`.
 //!
 //! # Regulatory basis
 //!

@@ -565,7 +565,7 @@ mod gas_enrichment_tests {
     fn engine_error_body_is_structured() {
         let e = energy_billing::EngineError::ValidationBlocked {
             warnings: vec![energy_billing::BillingWarning {
-                code: "MODUL2_AND_FLAT_NNE",
+                code: "MODUL3_AND_FLAT_NNE",
                 severity: energy_billing::WarningSeverity::Error,
                 message: "both configured".to_owned(),
             }],
@@ -574,7 +574,7 @@ mod gas_enrichment_tests {
             serde_json::from_str(&engine_error_body("51238696781", &e)).unwrap();
         assert_eq!(body["error"]["code"], "VALIDATION_BLOCKED");
         assert_eq!(body["error"]["context"], "51238696781");
-        assert_eq!(body["error"]["warnings"][0]["code"], "MODUL2_AND_FLAT_NNE");
+        assert_eq!(body["error"]["warnings"][0]["code"], "MODUL3_AND_FLAT_NNE");
     }
 }
 

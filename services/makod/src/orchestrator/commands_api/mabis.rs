@@ -228,7 +228,8 @@ pub(super) async fn dispatch_mabis_billing_einleiten(
 ///
 /// | Field | Required | Description |
 /// |-------|----------|-------------|
-/// | `bilanzierungsgebiet_id` | Yes | MaBiS-Zählpunkt of the Bilanzierungsgebiet |
+/// | `mabis_zp_id` | Yes | MaBiS-Zählpunkt — SG6 `LOC+172` Meldepunkt (33-char Zählpunktbezeichnung) |
+/// | `bilanzierungsgebiet_id` | Yes | Bilanzierungsgebiet EIC — SG6 `LOC+107` |
 /// | `balancing_period` | Yes | Bilanzierungsmonat, `CCYYMM` |
 /// | `version` | Yes | Versionsangabe, `CCYYMMDDHHMMSSZZZ`, ascending per §3.8.2 |
 /// | `receiver_mp_id` | Yes | BIKO code |
@@ -250,7 +251,18 @@ pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
             .ok_or_else(|| DispatchError::InvalidPayload(format!("\"{field}\" is required")))
     };
 
+    // Two distinct SG6 LOC qualifiers, not one: `172` is the MaBiS-Zählpunkt
+    // and `107` the Bilanzierungsgebiet. Both are required so neither can
+    // silently stand in for the other on the wire.
+    let mabis_zp_id = require("mabis_zp_id")?;
     let bilanzierungsgebiet_id = require("bilanzierungsgebiet_id")?;
+    if mabis_zp_id == bilanzierungsgebiet_id {
+        return Err(DispatchError::InvalidPayload(
+            "\"mabis_zp_id\" and \"bilanzierungsgebiet_id\" identify different things \
+             (SG6 LOC+172 vs LOC+107) and must differ"
+                .into(),
+        ));
+    }
     let balancing_period = require("balancing_period")?;
     let version = require("version")?;
     let receiver_mp_id = require("receiver_mp_id")?;
@@ -290,6 +302,7 @@ pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
             "pid": 13003,
             "sender_mp_id": sender_mp_id,
             "receiver_mp_id": receiver_mp_id,
+            "mabis_zp_id": mabis_zp_id,
             "bilanzierungsgebiet_id": bilanzierungsgebiet_id,
             "balancing_period": balancing_period,
             "version": version,

@@ -16,17 +16,50 @@
 
 <section class="stats">
   <div class="stats-inner">
-    <div><strong>346</strong><span>Prüfidentifikatoren</span></div>
+    <div><strong>418</strong><span>Prüfidentifikatoren geroutet</span></div>
     <div><strong>17</strong><span>EDIFACT message types</span></div>
-    <div><strong>67+</strong><span>MaKo workflows</span></div>
-    <div><strong>16</strong><span>production services</span></div>
+    <div><strong>68</strong><span>MaKo workflows</span></div>
+    <div><strong>16</strong><span>services</span></div>
     <div><strong>4</strong><span>market roles (NB·LF·MSB·ESA)</span></div>
   </div>
 </section>
 
 <section class="features section-pad">
   <div class="wrap">
-    <h2>One platform, four layers</h2>
+    <h2>What happens to a message</h2>
+    <p>A market partner sends an interchange over AS4. Everything after that is the
+      same path for every process — parse, validate against the AHB in force on
+      that date, route to a workflow, and answer inside the Frist.</p>
+
+    <pre class="mermaid">
+graph LR
+    MP["Marktpartner"]
+    AS4["AS4 / ebMS3<br/>sign · encrypt · receipt"]
+    VAL["Parse + validate<br/>MIG · AHB · semantic"]
+    WF["Workflow<br/>event-sourced, replayable"]
+    FRIST["Frist<br/>BDEW Werktag calendar"]
+    OUT["Outbox<br/>persist before dispatch"]
+    ERP["ERP · CloudEvents"]
+
+    MP -->|"UTILMD · MSCONS · ORDERS · INVOIC"| AS4
+    AS4 --> VAL
+    VAL -->|"Prüfidentifikator"| WF
+    WF --> FRIST
+    WF --> OUT
+    OUT -->|"answer interchange"| AS4
+    OUT --> ERP
+    AS4 -->|"CONTRL / APERAK"| MP
+    </pre>
+
+    <p>The format layer is generated from the BDEW profiles, so an annual release is
+      a codegen run rather than a rewrite. The domain layer never sees EDIFACT: it
+      receives typed commands and emits typed events.</p>
+  </div>
+</section>
+
+<section class="features section-pad alt">
+  <div class="wrap">
+    <h2>One platform, five layers</h2>
     <div class="card-grid">
       <div class="card">
         <h3>Protocol &amp; process</h3>
@@ -52,7 +85,7 @@
   </div>
 </section>
 
-<section class="why section-pad alt">
+<section class="why section-pad">
   <div class="wrap why-grid">
     <div>
       <h2>Built for the regulatory pace</h2>
@@ -60,6 +93,7 @@
       <ul class="check">
         <li>Correct &amp; auditable: event-sourced processes, replayable state, GoBD/§146 AO period seals.</li>
         <li>Every regulated process modeled — for every market role.</li>
+        <li>Validation that fails loudly: an unregistered Prüfidentifikator is reported, never quietly accepted.</li>
         <li>Readable, verifiable, extensible: source you can audit and run.</li>
       </ul>
     </div>
@@ -72,7 +106,7 @@ cargo add edi-energy
 docker run --rm -p 8080:8080 \
   ghcr.io/hupe1980/makod:latest
 
-# Drive it from Python — generators, assertions, pytest plugin
+# Drive it from Python — generators, simulators, pytest plugin
 pip install makotest</code></pre>
       <p><a href="{{ get_url(path='@/docs/guide/getting-started.md') | safe }}">Full getting-started guide →</a></p>
     </div>
@@ -83,3 +117,11 @@ pip install makotest</code></pre>
 <section class="section-pad"><div class="wrap doc-body">{{ section.content | safe }}</div></section>
 {% endif %}
 {% endblock content %}
+
+{% block scripts %}
+<script type="module">
+  if (document.querySelector('pre > code[data-lang="mermaid"], code.language-mermaid, pre.mermaid')) {
+    import("{{ get_url(path='js/mermaid-init.js') | safe }}");
+  }
+</script>
+{% endblock scripts %}

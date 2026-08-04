@@ -123,14 +123,14 @@ mod tests {
                     message: "reading estimated".into(),
                 },
                 BillingWarning {
-                    code: "MODUL2_AND_FLAT_NNE",
+                    code: "MODUL3_AND_FLAT_NNE",
                     severity: WarningSeverity::Error,
                     message: "both configured".into(),
                 },
             ],
         };
         let s = err.to_string();
-        assert!(s.contains("MODUL2_AND_FLAT_NNE: both configured"), "{s}");
+        assert!(s.contains("MODUL3_AND_FLAT_NNE: both configured"), "{s}");
         assert!(!s.contains("ESTIMATED_READING"), "{s}");
         assert_eq!(err.code(), "VALIDATION_BLOCKED");
         assert_eq!(err.blocking_warnings().len(), 2);

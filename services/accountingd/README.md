@@ -60,6 +60,44 @@ The XML schema version defaults to the current EPC releases (`pain.008.001.08`,
 `pain001_schema` config keys (e.g. `pain.008.001.02` for the pre-2023 version).
 Unknown values fail at startup rather than on a rejected batch.
 
+## Emitted events
+
+Every event goes through the transactional outbox — written in the same
+transaction as the state change it announces, then drained by a worker with
+retry and dead-letter.
+
+| CloudEvent | Emitted when |
+|---|---|
+| `de.accounting.mahnung.issued` | a Mahnstufe case is opened (auto-dunning **and** manual escalation) |
+| `de.accounting.sperrandrohung` | §41f Abs. 1 notice |
+| `de.accounting.sperrankuendigung` | §41f Abs. 5 notice |
+| `de.accounting.sperrauftrag` | Sperrauftrag handed to `sperrd` |
+| `de.accounting.payment.imported` | camt.054 credit booked (JSON or XML import) |
+| `de.accounting.bankruecklast` | camt.054 SEPA return booked |
+| `de.accounting.abschlag.posted` | Abschlagslauf posts the monthly advance payment |
+| `de.accounting.interest.charged` | Verzugszinsen booked (§288 BGB) |
+| `de.accounting.payment.due` | SEPA direct debit due date approaching |
+| `de.accounting.erstattung.faellig` | Jahresabschluss yields a refund |
+| `de.accounting.eeg.payout.rejected` | pain.002 RJCT on an EEG payout |
+
+### Delivery guarantees
+
+Most events commit in the same transaction as the state change they announce.
+Two are deliberately different:
+
+**Sperrauftrag** — the order is a `POST sperrd /api/v1/sperr-orders`; the
+CloudEvent only announces it. `sperrd` does not deduplicate orders and the
+candidate query selects on `sperrauftrag_ce_id IS NULL`, so the mark commits
+**before** the announcement. The asymmetry is deliberate: a lost announcement
+logs at `ERROR` with the case id and can be replayed, while a second §41f
+disconnection order cannot be withdrawn.
+
+**Abschlag** — the CloudEvent id *is* the ledger idempotency key
+(`ABSCHLAG-{malo}-{YYYY}-{MM}`), so `outbox::enqueue`'s
+`ON CONFLICT (event_id) DO NOTHING` makes the announcement exactly-once per MaLo
+and month. The scheduler runs on a 23-hour cycle and therefore passes twice in
+some months.
+
 ## Configuration
 
 ```toml

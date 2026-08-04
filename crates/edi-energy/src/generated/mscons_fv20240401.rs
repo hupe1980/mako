@@ -130,7 +130,7 @@ static CODES_1153: &[&str] = &["ACW", "AGI", "AGK", "MG", "Z13", "Z19"];
 static CODES_1225: &[&str] = &["1", "9"];
 static CODES_2005: &[&str] = &["137", "163", "164", "25", "293", "306", "37", "7"];
 static CODES_3035: &[&str] = &["DP", "MR", "MS"];
-static CODES_3227: &[&str] = &["172", "237", "Z04", "Z06", "Z98"];
+static CODES_3227: &[&str] = &["107", "172", "237", "Z04", "Z06", "Z98"];
 static CODES_4347: &[&str] = &["5"];
 static CODES_6063: &[&str] = &["220", "67", "Z10", "Z18", "Z19", "Z47"];
 static CODES_7143: &[&str] = &["SRW"];
@@ -651,7 +651,7 @@ static AHB_13003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13003-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13003", "13003", issues);
             })
             .with_named_stateless_rule_fn("AHB-13003-LOC-3227-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "LOC", "AHB-13003-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13003", issues);
+                ahb_check_qualifier(segs, "LOC", "AHB-13003-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172', '107', '237']", |q| matches!(q, "172" | "107" | "237"), "13003", issues);
             })
             .with_named_stateless_rule_fn("AHB-13003-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13003-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13003", "13003", issues);
@@ -1552,7 +1552,7 @@ static AHB_13023_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "LOC", "AHB-13023-LOC-M", "mandatory segment LOC is missing for Pruefidentifikator 13023", "13023", issues);
             })
             .with_named_stateless_rule_fn("AHB-13023-LOC-3227-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "LOC", "AHB-13023-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172']", |q| matches!(q, "172"), "13023", issues);
+                ahb_check_qualifier(segs, "LOC", "AHB-13023-LOC-3227-Q", "segment LOC DE 3227 (element 0, component 0): qualifier is not one of the allowed values ['172', '107', '237']", |q| matches!(q, "172" | "107" | "237"), "13023", issues);
             })
             .with_named_stateless_rule_fn("AHB-13023-QTY-M", |segs, issues| {
                 ahb_check_mandatory(segs, "QTY", "AHB-13023-QTY-M", "mandatory segment QTY is missing for Pruefidentifikator 13023", "13023", issues);

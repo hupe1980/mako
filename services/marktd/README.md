@@ -77,6 +77,9 @@ and any historical state can be retrieved by date via `?at=YYYY-MM-DD`.
 | `GET`/`PUT` | `/api/v1/grundversorger/{nb_mp_id}` | Grundversorger Feststellung (§36 Abs. 2 EnWG; `?sparte=STROM\|GAS`) — read by the processd EoG gap closure |
 | `GET` | `/api/v1/malo/{id}/grid` | Fetch NB grid topology record for a MaLo (read by `processd` NB module) |
 | `PUT` | `/api/v1/malo/{id}/grid` | Upsert NB grid topology (sourced from NIS/GIS; read by `processd`) |
+| `GET` | `/api/v1/mabis-zp` | List every Bilanzierungsgebiet → MaBiS-Zählpunkt assignment |
+| `GET` | `/api/v1/bilanzierungsgebiet/{eic}/mabis-zp` | Resolve the MaBiS-Zählpunkt for a territory — `404` means *refuse the submission*, never *substitute the EIC* |
+| `PUT` | `/api/v1/bilanzierungsgebiet/{eic}/mabis-zp` | Assign the MaBiS-Zählpunkt (NB role); rejects the EIC-as-Meldepunkt substitution |
 | `GET` | `/api/v1/nelo` | List Netz-Element-Lokationen (`?nb_mp_id=` filter) |
 | `GET` | `/api/v1/nelo/{id}` | Fetch a NeLo by EIC or BDEW Codenummer |
 | `PUT` | `/api/v1/nelo/{id}` | Upsert a NeLo (NB role required) |
@@ -115,7 +118,7 @@ services:
     ports: ["5432:5432"]
 
   marktd:
-    image: ghcr.io/hupe1980/marktd:0.14.0
+    image: ghcr.io/hupe1980/marktd:latest
     depends_on: [postgres]
     environment:
       DATABASE_URL: postgres://marktd:secret@postgres/marktd

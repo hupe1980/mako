@@ -15,7 +15,7 @@
 //! All 4 PIDs share the same INVOIC-receive → settle/dispute state machine.
 //! PID 31003 (WiM-Rechnung) belongs to `mako-wim-gas`; not listed here.
 //! PID 31009 (MSB-Rechnung, multi-domain: GPKE Teil 3 / WiM Strom Teil 1) belongs to
-//! `mako-wim` (`wim-rechnung` workflow) per `crates/mako-wim/src/rechnung.rs`. It must
+//! `mako-wim` (`wim-invoic` workflow) per `crates/mako-wim/src/invoic.rs`. It must
 //! not be registered here to avoid double-registration with `WIM_INVOIC_PIDS`.
 //! PIDs 31007/31008 (Aggreg. MMM-Rechnung Gas, NB → MGV, Gas-only) belong to
 //! `mako-gabi-gas` `gabi-gas-invoic` — MGV is a Gas-only role; not registered here.
@@ -51,7 +51,7 @@ use rubo4e::current::Rechnung;
 /// (INVOIC AHB §3.1.2) — not GPKE-specific; `invoicd` checks it Sparte-neutrally
 /// via `InvoicCheckEngine::check_storno`.
 /// PID 31009 (MSB-Rechnung, multi-domain: GPKE Teil 3 / WiM Strom Teil 1) belongs to
-/// `mako-wim` to avoid double-registration; see `crates/mako-wim/src/rechnung.rs`.
+/// `mako-wim` to avoid double-registration; see `crates/mako-wim/src/invoic.rs`.
 /// PIDs 31007/31008 (Aggreg. MMM-Rechnung NB → MGV, Gas-only) belong to
 /// `mako-gabi-gas` `gabi-gas-invoic` — MGV is a Gas-only role.
 ///

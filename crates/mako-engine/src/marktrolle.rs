@@ -55,17 +55,20 @@ use std::collections::HashSet;
 pub enum Marktrolle {
     /// Netzbetreiber (NB) — distribution/transmission network operator.
     ///
-    /// Receives the GPKE Anmeldung ANFRAGE (55001 Lieferbeginn / 55002 Lieferende),
-    /// issues ANTWORT messages (55003–55006), runs GPKE Konfiguration (17134/17135
-    /// outbound ORDERS, 19001/19002 inbound ORDRSP). The Kündigung (55016/55017)
-    /// is an LFN↔LFA exchange, not an NB ANFRAGE.
+    /// Receives the GPKE ANFRAGE — 55001 (Anmeldung / Lieferbeginn) and 55004
+    /// (Abmeldung / Lieferende) — and issues the matching ANTWORT pair:
+    /// 55002 Bestätigung / 55003 Ablehnung, 55005 Bestätigung / 55006 Ablehnung.
+    /// Also runs GPKE Konfiguration (17134/17135 outbound ORDERS, 19001/19002
+    /// inbound ORDRSP). The Kündigung (55016 → 55017/55018) is an LFN↔LFA
+    /// exchange, not an NB ANFRAGE.
     Nb,
 
     /// Lieferant (LF) — energy supplier.
     ///
-    /// Initiates GPKE Lieferbeginn/Lieferende, receives ANTWORT from NB.
-    /// Registers as inbound-ANTWORT recipient (55003–55006/55018) for the
-    /// LF-side anmeldung workflow.
+    /// Initiates GPKE Lieferbeginn (55001) and Lieferende (55004), and receives
+    /// the ANTWORT from the NB. Registers as inbound-ANTWORT recipient for
+    /// 55002/55003, 55005/55006 and 55017/55018 in the LF-side anmeldung
+    /// workflow.
     Lf,
 
     /// grundzuständiger Messstellenbetreiber (gMSB) — incumbent meter operator.

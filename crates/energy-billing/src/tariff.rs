@@ -331,35 +331,50 @@ pub struct ElectricityProduct {
 pub struct ControllableLoadProduct {
     #[serde(flatten)]
     pub base: ElectricityProduct,
-    /// §14a Modul 1: per-kWh NNE reduction credit (ct/kWh).
+    /// §14a **Modul 2** — prozentuale Reduzierung des NNE-Arbeitspreises,
+    /// carried here as the resulting per-kWh credit (ct/kWh).
+    ///
+    /// The reduction attaches to the controllable device's own metered energy,
+    /// which is why Modul 2 requires separate metering. **Mutually exclusive
+    /// with Modul 3** — both re-price the Arbeitspreis, and holding both would
+    /// reduce the network usage twice (`MODUL2_AND_MODUL3`).
     #[serde(default)]
-    pub sect14a_modul1_nne_reduktion_ct_per_kwh: Option<Decimal>,
+    pub sect14a_modul2_nne_reduktion_ct_per_kwh: Option<Decimal>,
 
-    /// §14a Modul 2 — zeitvariables Netzentgelt (BK6-22-300 Anlage 2 §2).
+    /// §14a **Modul 3** — zeitvariables Netzentgelt (BK6-22-300), from 01.04.2025.
     ///
     /// Three Tarifstufen, not two: Hochtarif, Standardtarif and Niedertarif,
     /// each a NNE rate in ct/kWh published by the Netzbetreiber. All three must
     /// be set together; the matching band energies arrive on
-    /// [`crate::Sect14aModul2Verbrauch`]. When Modul 2 is billed, the flat NNE
+    /// [`crate::Sect14aModul3Verbrauch`]. When Modul 3 is billed, the flat NNE
     /// Arbeitspreis from `GridInput` must be left unset — the bands *replace*
-    /// it, and setting both raises `MODUL2_AND_FLAT_NNE`.
+    /// it, and setting both raises `MODUL3_AND_FLAT_NNE`.
     #[serde(default)]
-    pub sect14a_modul2_nne_ht_ct_per_kwh: Option<Decimal>,
-    /// §14a Modul 2 Standardtarif rate. See `sect14a_modul2_nne_ht_ct_per_kwh`.
+    pub sect14a_modul3_nne_ht_ct_per_kwh: Option<Decimal>,
+    /// §14a Modul 3 Standardtarif rate. See `sect14a_modul3_nne_ht_ct_per_kwh`.
     #[serde(default)]
-    pub sect14a_modul2_nne_st_ct_per_kwh: Option<Decimal>,
-    /// §14a Modul 2 Niedertarif rate. See `sect14a_modul2_nne_ht_ct_per_kwh`.
+    pub sect14a_modul3_nne_st_ct_per_kwh: Option<Decimal>,
+    /// §14a Modul 3 Niedertarif rate. See `sect14a_modul3_nne_ht_ct_per_kwh`.
     #[serde(default)]
-    pub sect14a_modul2_nne_nt_ct_per_kwh: Option<Decimal>,
-    /// §14a Modul 3: per-kWh Steuerungsentschädigung (ct/kWh).
+    pub sect14a_modul3_nne_nt_ct_per_kwh: Option<Decimal>,
+    /// §14a Steuerungsentschädigung per kWh of dimmed energy (ct/kWh).
+    ///
+    /// Compensation for an actual Steuerungseingriff — **not** one of the three
+    /// BK6-22-300 modules, which are all rate reductions rather than payments
+    /// for a dispatch that happened.
     #[serde(default)]
-    pub sect14a_modul3_entschaedigung_ct_per_kwh: Option<Decimal>,
-    /// §14a Modul 1: annual capacity-based NNE reduction (EUR/kW/year).
+    pub sect14a_steuerungsentschaedigung_ct_per_kwh: Option<Decimal>,
+    /// §14a **Modul 1** — pauschale Reduzierung des Netzentgelts, published by
+    /// the Netzbetreiber as an annual amount per kW (EUR/kW/year).
+    ///
+    /// Needs no additional metering, which is why it is the default where the
+    /// connection holder makes no choice. It **may be combined with Modul 3**.
     #[serde(default)]
-    pub steuerungsrabatt_modul1_eur_per_kw_year: Option<Decimal>,
-    /// §14a Modul 3: annual capacity-based Entschädigung (EUR/kW/year).
+    pub sect14a_modul1_pauschale_eur_per_kw_year: Option<Decimal>,
+    /// §14a Steuerungsentschädigung as an annual capacity rate (EUR/kW/year),
+    /// pro-rated by the hours actually dimmed. Not a BK6-22-300 module.
     #[serde(default)]
-    pub steuerungsrabatt_modul3_eur_per_kw_year: Option<Decimal>,
+    pub sect14a_steuerungsentschaedigung_eur_per_kw_year: Option<Decimal>,
 }
 
 /// Natural gas supply product — GAS (SLP / RLM / B2B indexed).
@@ -885,7 +900,7 @@ mod tests {
 
     #[test]
     fn product_waermepumpe_flattens_electricity_base() {
-        let json = r#"{"category":"WAERMEPUMPE","arbeitspreis_ct_per_kwh":20.0,"sect14a_modul1_nne_reduktion_ct_per_kwh":1.5}"#;
+        let json = r#"{"category":"WAERMEPUMPE","arbeitspreis_ct_per_kwh":20.0,"sect14a_modul2_nne_reduktion_ct_per_kwh":1.5}"#;
         let p: Product = serde_json::from_str(json).unwrap();
         match p {
             Product::Waermepumpe(c) => {
@@ -894,7 +909,7 @@ mod tests {
                     Some(rust_decimal::dec!(20.0))
                 );
                 assert_eq!(
-                    c.sect14a_modul1_nne_reduktion_ct_per_kwh,
+                    c.sect14a_modul2_nne_reduktion_ct_per_kwh,
                     Some(rust_decimal::dec!(1.5))
                 );
             }

@@ -80,6 +80,7 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod aw_reductions;
 pub mod biomasse;
 pub mod bridge;
 pub mod degression;
@@ -102,7 +103,9 @@ pub mod technology;
 pub mod ust;
 pub mod version;
 pub mod wind;
+pub mod zusammenfassung;
 
+pub use aw_reductions::{AwReductionApplied, AwReductionContext, Sect54SolarReduction};
 pub use error::SettlementError;
 pub use foerderdauer::{
     calculate_pflichtzahlung, compute_billing_days_fraction, foerderendedatum_eeg,
@@ -110,7 +113,7 @@ pub use foerderdauer::{
     kwk_eligible_kwh, kwk_foerderend_calendar, kwk_max_kwh, managementpraemie_ct,
     negativpreis_kw_exemption, negativpreis_rule_applies_for_version, pflichtzahlung_verjaehrt_am,
     sect52a_netztrennung_erforderlich, verguetungszeitraum_verlaengerung_qh,
-    wind_onshore_korrekturfaktor_corrected_aw, zusammenlegung_within_12_months,
+    wind_onshore_korrekturfaktor_corrected_aw,
 };
 pub use formula::calculate_settlement;
 pub use model::{
@@ -126,13 +129,19 @@ pub use technology::{
     RepoweringScope,
 };
 pub use version::{EegGesetz, InvalidEegGesetz};
+pub use zusammenfassung::{
+    AnlageFuerZusammenfassung, SolarMontage, Steckersolar, ZusammenfassungErgebnis,
+    ZusammenfassungGrund, sind_eine_anlage, zusammenlegung_within_12_months,
+};
 
 // Domain module guide:
 // degression: §23a quarterly solar PV tariff degression — Quarter, DegressionTier, apply_degression
 // direktverm: §§20–22 Direktvermarktung — mandatory threshold, Ausschreibungspflicht, period model
 // (Metering topology, Eigenverbrauch/Überschuss split and §42b EnWG GGV allocation live in the
 //  external `metering` crate — AggregationRule, compute_virtual_meter, MeasurementPoint, Messtyp.)
-// reductions: §§52–54 reduction pipeline — Sect52Netting, Sect53c, Sect54, ReductionPipeline
+// reductions: §52 Pflichtzahlungen — apply_sect52_netting, ReductionPipeline (euro level)
+// aw_reductions: §§53b–54 — cuts to the anzulegender Wert, applied before the formula
+// zusammenfassung: §24 Abs. 1 — sind_eine_anlage, the full Sätze 1–5 decision
 // settlement_state: Monthly lifecycle state machine — SettlementPeriodState, derive_settlement_state
 // solar: §48 EEG PV subtypes, Volleinspeisung/Überschuss, Agri-PV
 // wind:  §36h Korrekturfaktor, Standortklasse, reference yield model

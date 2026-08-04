@@ -42,6 +42,7 @@ use meterstore::{
 /// by name for this one struct.
 pub use meterstore::WarehouseAuth;
 
+use crate::domain::validation::ValidatedReads;
 use crate::domain::{
     BillingPeriodQuery, CorrectionRecord, ImbalanceReport, Messtyp, MeterBillingPeriod,
     MeterDataReceipt, MeterRead, QualityFlag, Sparte, TimeSeriesQuery, Typ2DeliveryPath, Typ2Read,
@@ -396,7 +397,8 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         Ok(())
     }
 
-    async fn store_reads(&self, reads: &[MeterRead]) -> Result<(), EdmError> {
+    async fn store_reads(&self, reads: ValidatedReads) -> Result<(), EdmError> {
+        let reads = reads.as_slice();
         if reads.is_empty() {
             return Ok(());
         }

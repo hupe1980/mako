@@ -117,7 +117,9 @@ eeg-billing/src/
 ├── degression.rs        §23a quarterly solar PV degression — Quarter, DegressionTier
 ├── direktverm.rs        §§20–22 — mandatory threshold, Ausschreibungspflicht, period model
 ├── negativpreis.rs      §51 per-interval negative-price derivation (version-aware runs)
-├── reductions.rs        §§52–54 reduction pipeline — §52 Abs. 6 netting, §53c, §54
+├── reductions.rs        §52 Pflichtzahlungen — §52 Abs. 6 netting (a euro-level offset)
+├── aw_reductions.rs     §§53b–54 — cuts to the anzulegender Wert, before the formula
+├── zusammenfassung.rs   §24 Abs. 1 — the full Zusammenfassung decision (Sätze 1–5)
 ├── settlement_state.rs  Monthly lifecycle state machine — Active/Reduced/Suspended/PostEeg
 │
 ├── solar.rs             §48 PV subtypes, Agri-PV bonus
@@ -420,13 +422,13 @@ The typical pipeline for a single billing period:
 6. §52 Pflichtzahlungen (separate penalty, Vergütung unchanged)
          │
          ▼
-7. §53b regional reduction / §54 Ausschreibungsreduzierung
+7. §52 Abs. 6 netting (optional: NB deducts penalty from disbursement)
          │
          ▼
-8. §52 Abs. 6 netting (optional: NB deducts penalty from disbursement)
-         │
-         ▼
-9. SettleOutput { settlement_eur, eligible_kwh, positions, pflichtzahlung_eur, faelligkeitsdatum }
+8. SettleOutput { settlement_eur, eligible_kwh, positions, pflichtzahlung_eur, faelligkeitsdatum }
+
+(§§53b–54 do not appear as a step: they cut the anzulegender Wert at step 3,
+ before the scheme formula, because the Marktprämie floors at zero.)
 ```
 
 VAT is applied by the caller via `EegSettleTariff` + `ust::ust_tax_layers()` — not
@@ -464,13 +466,20 @@ breakdown entry.
 - §21 EEG Einspeisevergütung (all EEG versions 2000–2023)
 - §20 EEG Gleitende Marktprämie + §§22a/28 Ausschreibung
 - §21 Abs. 3 Mieterstrom, §50a/b Flexibilitätsprämie, §7 KWKG
-- §51/§51a/§51b Negativpreisregel, §52 sanctions, §53/§53b/§54 reductions
+- §51/§51a/§51b Negativpreisregel, §52 sanctions and Abs. 6 netting
+- §53 Einspeisevergütungsabzug, and the AW-level cuts of §53b (Regionalnachweise,
+  0,1 ct/kWh, statutory-AW plants only), §53c (Stromsteuerbefreiung, capped at the
+  §3 StromStG rate) and §54 (solar first-segment auctions, four Absätze)
 - §19 EInsMan curtailment compensation (separate position, §51 exempt)
 - §23a quarterly degression, §36h wind Korrekturfaktor
-- §24 multi-block **Anlagenzusammenfassung**: proportional allocation for pre-aggregated plant groups
-  > The library computes settlement **after** §24 aggregation has been determined by the caller.
-  > The legal aggregation analysis itself (operator identity, location, commissioning window,
-  > technology criteria) is **not** performed here — that is the caller's responsibility.
+- §24 **Zusammenfassung**: `sind_eine_anlage` decides the whole of Abs. 1 — the four
+  cumulative conditions of Satz 1 and the Sätze 2–5 carve-outs (same
+  Biogaserzeugungsanlage, Freifläche vs. building solar, differing
+  Netzverknüpfungspunkte, disregarded Steckersolargeräte) — and returns the rule
+  that decided. Ownership is deliberately not an input: Satz 1 says "unabhängig
+  von den Eigentumsverhältnissen".
+- §24 multi-block allocation: `CapacityBlock` proportionally allocates settlement
+  across the blocks of an already-fused plant group
 - §42b EnWG GGV / §21 Abs. 3 multi-meter split is **not** modelled here — the metering topology,
   Eigenverbrauch/Überschuss split and GGV tenant allocation live in the external `metering`
   crate (`AggregationRule`, `compute_virtual_meter`) + edmd; this crate settles the resulting
@@ -482,8 +491,11 @@ breakdown entry.
 
 **Intentionally out of scope** (caller's responsibility):
 - §21b monthly switch enforcement — enforced by `einsd` (`validate_switch_to_vergütung`)
-- §53b/§54 DB lookups — resolved by `einsd` before calling `calculate_settlement`
-- §55 Pönalen computation — `einsd` tracks commissioning deadlines
+- §§53b–54 fact lookups — `einsd` reads the triggering facts and passes an
+  `AwReductionContext`; the amounts themselves are statutory and live here
+- §55 Pönalen — outside this domain entirely: a bidder↔regelverantwortlicher-ÜNB
+  obligation from the tender process, not operator↔NB settlement. `einsd` tracks
+  commissioning deadlines for the **Erlöschen** of a Zuschlag (§36e/§37e/§39e)
 - §52 cumulative months tracking — `einsd` computes from `violation_start` dates
 - § 147 AO / GoBD receipt archival — `einsd` manages `settlement_receipt_history`
 - Redispatch 2.0 compensation (§13a/§14 EnWG) — see `crates/mako-redispatch`

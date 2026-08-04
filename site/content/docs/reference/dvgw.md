@@ -323,8 +323,8 @@ all other domain workflow crates in this workspace:
 | Concern | Reference |
 |---|---|
 | Workflow state machine | `crates/mako-gabi-gas/src/invoic.rs` |
-| `on_deadline` dispatch | `services/makod/src/deadline_dispatch.rs` |
-| Adapter registry | `services/makod/src/adapters.rs` |
+| `on_deadline` dispatch | `services/makod/src/orchestrator/deadline_dispatch.rs` |
+| Adapter registry | `services/makod/src/orchestrator/adapters/mod.rs` |
 | Startup validation | `services/makod/src/main.rs` — `adapter.validate_policy()` |
 | `DISPATCH_TABLE` enforcement | `deadline_dispatch::assert_dispatch_coverage()` |
 

@@ -143,7 +143,7 @@ pub(crate) fn segment_lookup(tag: &str) -> Option<&'static SegmentDefinition> {
     SEGMENT_MAP.get(tag).copied()
 }
 
-static CODES_1001: &[&str] = &["E01", "E03", "E0F", "E1A", "E44"];
+static CODES_1001: &[&str] = &["E01", "E02", "E03", "E0F", "E1A", "E35", "E44"];
 static CODES_1153: &[&str] = &["ACE", "AGI", "AGL", "MG", "TN", "Z13"];
 static CODES_1245: &[&str] = &["Z01", "Z02", "Z03"];
 static CODES_2005: &[&str] = &["137", "163", "164", "165", "166", "203"];

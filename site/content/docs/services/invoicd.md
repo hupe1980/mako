@@ -76,7 +76,7 @@ graph TB
 
 **Gas PIDs 31003/31011:** Use the standard 5-check pipeline with `PreisblattNetznutzung` Gas tariff.
 
-**PID 31004 (Stornorechnung), any Sparte:** A single universal, **Sparte-neutral** Storno (INVOIC AHB §3.1.2) that cancels an original invoice from any process — GPKE, MMM Strom+Gas, WiM Strom+Gas, Kapazitätsabrechnung, AWH, GeLi Gas. The Sparte is read from `Rechnung.sparte` (resolved from the market-partner IDs), not assumed. `handle_stornorechnung` runs the arithmetic-only `InvoicCheckEngine::check_storno` (Storno reference + period + totals; tariff checks skipped), resolves `AcceptedPartial` unless a check fails, and dispatches the Sparte-neutral `invoic.stornorechnung.{annehmen,ablehnen}` command — a Strom storno is no longer forced onto the Gas `wim.gas.*` namespace.
+**PID 31004 (Stornorechnung), any Sparte:** A single universal, **Sparte-neutral** Storno (INVOIC AHB §3.1.2) that cancels an original invoice from any process — GPKE, MMM Strom+Gas, WiM Strom+Gas, Kapazitätsabrechnung, AWH, GeLi Gas. The Sparte is read from `Rechnung.sparte` (resolved from the market-partner IDs), not assumed. `handle_stornorechnung` runs the arithmetic-only `InvoicCheckEngine::check_storno` (Storno reference + period + totals; tariff checks skipped), resolves `AcceptedPartial` unless a check fails, and dispatches the Sparte-neutral `invoic.stornorechnung.{annehmen,ablehnen}` command.
 
 **GaBi Gas PIDs 31007/31008:** Standard 5 checks + MMM Gas check 6 against Trading Hub Europe (THE) MMMA prices from `marktd`. These are Gas MGV billing PIDs (`mako-gabi-gas`).
 

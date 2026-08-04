@@ -101,9 +101,9 @@ pub mod esa_wertebestellung;
 pub mod geraeteubernahme;
 pub mod geraetewechsel;
 pub mod insrpt;
+pub mod invoic;
 pub mod preisanfrage;
 pub mod preisliste;
-pub mod rechnung;
 pub mod stammdaten;
 pub mod steuerungsauftrag;
 pub mod technik_aenderung;
@@ -118,15 +118,21 @@ pub use geraeteubernahme::{
     WORKFLOW_NAME as GERAETEUBERNAHME_WORKFLOW_NAME, WimGeraeteubernahmeWorkflow,
 };
 pub use geraetewechsel::{
-    APERAK_WINDOW_LABEL as GERAETEWECHSEL_APERAK_WINDOW_LABEL, AUFTRAG_ANTWORT_WINDOW_LABEL,
-    DEVICE_CHANGE_ANTWORT_PIDS, DEVICE_CHANGE_PIDS, DeviceChangeCommand, DeviceChangeData,
-    DeviceChangeEvent, DeviceChangeProjection, DeviceChangeRecord, DeviceChangeState,
-    WORKFLOW_NAME, WimDeviceChangeWorkflow, antwort_frist_werktage, antwort_pid_meaning,
+    ANTWORT_FRIST_WINDOW_LABEL as GERAETEWECHSEL_ANTWORT_FRIST_WINDOW_LABEL,
+    AUFTRAG_ANTWORT_WINDOW_LABEL, DEVICE_CHANGE_ANTWORT_PIDS, DEVICE_CHANGE_PIDS,
+    DeviceChangeCommand, DeviceChangeData, DeviceChangeEvent, DeviceChangeProjection,
+    DeviceChangeRecord, DeviceChangeState, WORKFLOW_NAME, WimDeviceChangeWorkflow,
+    antwort_frist_werktage, antwort_pid_meaning,
 };
 pub use insrpt::{
     ANTWORT_WINDOW_LABEL as INSRPT_ANTWORT_WINDOW_LABEL, INSRPT_ANFRAGE_PIDS, INSRPT_ANTWORT_PIDS,
     StorungsmeldungCommand, StorungsmeldungData, StorungsmeldungEvent, StorungsmeldungState,
     WORKFLOW_NAME as INSRPT_WORKFLOW_NAME, WimInsrptWorkflow,
+};
+pub use invoic::{
+    SETTLEMENT_WINDOW_LABEL as INVOIC_SETTLEMENT_WINDOW_LABEL, WIM_COMDIS_ABLEHNUNG_PID,
+    WIM_INVOIC_PIDS, WIM_REMADV_PIDS, WORKFLOW_NAME as INVOIC_WORKFLOW_NAME, WimInvoicCommand,
+    WimInvoicEvent, WimInvoicProjection, WimInvoicRecord, WimInvoicState, WimInvoicWorkflow,
 };
 pub use preisanfrage::{
     PREISANFRAGE_DEADLINE_LABEL, PreisanfrageCommand, PreisanfrageData, PreisanfrageEvent,
@@ -136,11 +142,6 @@ pub use preisanfrage::{
 pub use preisliste::{
     PRICAT_PIDS, PreislisteCommand, PreislisteData, PreislisteEvent, PreislisteState,
     WORKFLOW_NAME as PREISLISTE_WORKFLOW_NAME, WimPreislisteWorkflow,
-};
-pub use rechnung::{
-    WIM_COMDIS_ABLEHNUNG_PID, WIM_INVOIC_PIDS, WIM_RECHNUNG_WINDOW_LABEL, WIM_REMADV_PIDS,
-    WORKFLOW_NAME as RECHNUNG_WORKFLOW_NAME, WimRechnungCommand, WimRechnungEvent,
-    WimRechnungState, WimRechnungWorkflow,
 };
 pub use stammdaten::{
     ANFORDERUNG_PID, STAMMDATEN_DEADLINE_LABEL, StammdatenCommand, StammdatenData, StammdatenEvent,
@@ -218,7 +219,7 @@ impl mako_engine::builder::EngineModule for WimModule {
             "wim-steuerungsauftrag",
             "wim-preisanfrage",
             "wim-preisliste",
-            "wim-rechnung",
+            "wim-invoic",
             insrpt::WORKFLOW_NAME,
             technik_aenderung::WORKFLOW_NAME,
         ]
@@ -427,11 +428,11 @@ impl mako_engine::builder::EngineModule for WimModule {
         // be silently dead-lettered and no CONTRL acknowledgement would be sent,
         // violating the AS4 acknowledgement obligation (BDEW AS4-Profile §5).
         //
-        // The WimRechnungWorkflow provides a complete state machine with Settle/Dispute
+        // The WimInvoicWorkflow provides a complete state machine with Settle/Dispute
         // commands. Automatic outbound REMADV generation on the auto-settlement
         // deadline is not implemented; settlement is driven by an explicit command.
-        for &pid in rechnung::WIM_INVOIC_PIDS {
-            router.register(pid, "wim-rechnung");
+        for &pid in invoic::WIM_INVOIC_PIDS {
+            router.register(pid, "wim-invoic");
         }
 
         // REMADV 33001–33002 — inbound payment advice for WiM billing (invoicer role).
@@ -444,14 +445,14 @@ impl mako_engine::builder::EngineModule for WimModule {
         // Position — itemized rejections). Per REMADV AHB 1.0a, WiM Strom billing
         // (incl. ESA→MSB) ALSO rejects with the itemized 33003/33004; today mako-wim
         // registers only 33001/33002 and leans on GPKE's 33003/34 registration, so a
-        // WiM itemized rejection is not yet routed to `wim-rechnung` — see ROADMAP
+        // WiM itemized rejection is not yet routed to `wim-invoic` — see ROADMAP
         // "REMADV itemized rejections in WiM scope". The registrations coexist because
         // the makod router disambiguates shared REMADV PIDs by conversation ID
         // (invoice correlation), not by PID alone.
         //
         // Source: REMADV AHB 1.0a §3, WiM Strom Teil 1, BK6-24-174.
-        for &pid in rechnung::WIM_REMADV_PIDS {
-            router.register(pid, "wim-rechnung");
+        for &pid in invoic::WIM_REMADV_PIDS {
+            router.register(pid, "wim-invoic");
         }
 
         // COMDIS 29001 — inbound Ablehnung REMADV (invoicer rejects payer's REMADV).
@@ -460,7 +461,7 @@ impl mako_engine::builder::EngineModule for WimModule {
         // workflow instance via conversation ID correlation.
         //
         // Source: COMDIS AHB 1.0, WiM Strom Teil 1, BK6-24-174.
-        router.register(rechnung::WIM_COMDIS_ABLEHNUNG_PID.as_u32(), "wim-rechnung");
+        router.register(invoic::WIM_COMDIS_ABLEHNUNG_PID.as_u32(), "wim-invoic");
 
         // IFTSTA WiM PIDs 21009–21018 (MSB-Wechsel status messages).
         //
@@ -587,8 +588,8 @@ impl mako_engine::builder::EngineModule for WimModule {
                 geraeteubernahme::STORNIERUNG_PIDS,
             ),
             ("geraetewechsel::IFTSTA_PIDS", geraetewechsel::IFTSTA_PIDS),
-            ("rechnung::WIM_INVOIC_PIDS", rechnung::WIM_INVOIC_PIDS),
-            ("rechnung::WIM_REMADV_PIDS", rechnung::WIM_REMADV_PIDS),
+            ("invoic::WIM_INVOIC_PIDS", invoic::WIM_INVOIC_PIDS),
+            ("invoic::WIM_REMADV_PIDS", invoic::WIM_REMADV_PIDS),
             ("insrpt::INSRPT_ANFRAGE_PIDS", insrpt::INSRPT_ANFRAGE_PIDS),
             ("insrpt::INSRPT_ANTWORT_PIDS", insrpt::INSRPT_ANTWORT_PIDS),
             (

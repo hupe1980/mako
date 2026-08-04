@@ -144,11 +144,52 @@ pub async fn run_sperr_sequence(
                     .ok()
                     .and_then(|v| v.get("id").and_then(|i| i.as_str()).map(str::to_owned))
                     .unwrap_or_else(|| format!("sperrd:{malo_id}"));
-                if let Err(e) =
-                    pg::mark_sperrauftrag_dispatched(pool, case_id, tenant, &reference).await
-                {
+                // A real §41f order now exists in sperrd, `create_order` there
+                // does not deduplicate, and the candidate query selects on
+                // `sperrauftrag_ce_id IS NULL` — so anything that leaves that
+                // column NULL makes the next run place a second order.
+                //
+                // The mark therefore commits on its own, before the
+                // announcement. Sharing one transaction would let an outbox
+                // failure roll it back; a lost announcement is replayable, a
+                // duplicate disconnection is not.
+                let ce = mako_service::CloudEvent::new(
+                    mako_service::source("accountingd", tenant),
+                    mako_events::accounting::SPERRAUFTRAG,
+                    &malo_id,
+                    serde_json::json!({
+                        "malo_id":          malo_id,
+                        "lf_mp_id":         lf_mp_id,
+                        "amount_due_ct":    amount_ct,
+                        "amount_eur":       format!("{:.2}", amount_ct as f64 / 100.0),
+                        "rechtsgrundlage":  "§41f EnWG",
+                        "sperrd_reference": reference,
+                    }),
+                );
+                let marked =
+                    pg::mark_sperrauftrag_dispatched(pool, case_id, tenant, &reference).await;
+                if let Err(e) = marked {
                     tracing::warn!(error = %e, "accountingd: mark_sperrauftrag_dispatched failed");
                 } else {
+                    // The order is placed and recorded; announce it. A failure
+                    // here loses only the announcement — logged at ERROR with
+                    // the case id so it can be replayed.
+                    let announced = async {
+                        let mut tx = pool.begin().await?;
+                        mako_service::outbox::enqueue(&mut tx, &ce).await?;
+                        tx.commit().await?;
+                        anyhow::Ok(())
+                    }
+                    .await;
+                    if let Err(e) = announced {
+                        tracing::error!(
+                            error = %e,
+                            %case_id,
+                            %malo_id,
+                            "accountingd: Sperrauftrag placed and recorded but \
+                             de.accounting.sperrauftrag was NOT announced — replay it"
+                        );
+                    }
                     summary.sperrauftraege += 1;
                     tracing::info!(%malo_id, amount_ct, "accountingd: Sperrauftrag created in sperrd (§41f EnWG)");
                 }

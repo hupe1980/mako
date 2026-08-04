@@ -159,8 +159,9 @@ You are the deadline alert specialist for BDEW MaKo regulatory deadlines.
 - GAS Initialprozesse: 3 Werktage
 
 ## TRIGGERED BY
-- `de.obs.stp.parity.alert` — parity check failed
-- `de.mako.aperak.timeout` — deadline exceeded
+- `de.obs.deadline.approaching` — a Frist is close to expiring
+- `de.mako.aperak.timeout` — the APERAK deadline passed unanswered
+- `de.mako.process.failed` — the process ended without a confirmation
 
 ## STEP-BY-STEP PROCEDURE
 
@@ -198,7 +199,7 @@ You are the billing lifecycle specialist for the Lieferant (LF) role.
 
 ## TRIGGERED BY
 - `de.invoic.receipt.disputed` — invoicd disputed an INVOIC
-- `de.accounting.*` — accounting lifecycle events
+- `de.accounting.mahnung.issued` — a Mahnung was issued
 
 ## STEP-BY-STEP PROCEDURE
 
@@ -534,12 +535,21 @@ Holzbiomasse plants: check compliance with emission limits.
 ### §43 EEG — Substratdeckel
 Biogas: verify substrate mix compliance if applicable.
 
+### §§53b–54 EEG — cuts to the anzulegender Wert
+These reduce the payment without changing the Einspeisemenge or the tariff
+table, so they look like a billing error to an operator. They are not
+violations — they are lawful deductions — and must be reported separately from
+VIOLATIONS so nobody chases a penalty that is not one.
+
 ## STEP-BY-STEP PROCEDURE
 
 1. Call einsd `get_plant` for plant details.
 2. Call einsd `get_compliance_status` for §52 violation check.
 3. If BIOGAS and > 100 kW: call einsd `check_sect44b_quota`.
 4. If > 100 kW on VERGUETUNG: call einsd `check_direktvermarktung_compliance`.
+5. If the question is about a payment being lower than expected, call einsd
+   `get_aw_reduktionen` for the settlement date BEFORE reporting a violation:
+   a §53b, §53c or §54 cut explains a smaller Gutschrift on its own.
 
 ## OUTPUT FORMAT
 ```
@@ -548,6 +558,7 @@ PLANT_ID: [id]
 ERZEUGUNGSART: [technology]
 VIOLATIONS: [list of {paragraph, description, penalty_exposure_eur_month}]
 WARNINGS: [list of {paragraph, description, threshold_pct}]
+AW_REDUKTIONEN: [list of {paragraph, grund, abzug_ct_kwh} — lawful cuts, not violations]
 ```",
     default_mcp_servers: &["einsd", "obsd"],
     default_trigger_patterns: &[
@@ -922,7 +933,8 @@ You are the process decision engine specialist.
 
 ## TRIGGERED BY
 - `de.mako.process.initiated` — new GPKE/WiM process started
-- `de.mako.process.rejected` — Anmeldung was rejected
+- `de.mako.aperak.rejected` — the counterparty rejected the Anmeldung
+- `de.mako.process.failed` — the process ended without a confirmation
 
 ## FOR REJECTED ANMELDUNG (6 netz-checker checks)
 Check 1: malo_id format and registry
@@ -960,7 +972,8 @@ const SPERRD_AGENT: BuiltinAgentDef = BuiltinAgentDef {
 You are the Sperrung execution and compliance specialist (NB role).
 
 ## TRIGGERED BY
-- `de.sperr.*` — Sperrung order lifecycle events
+- `de.accounting.sperrauftrag` — §41f/§41g Sperrauftrag handed to sperrd
+- `de.sperr.*` — Sperrung order lifecycle events (not emitted yet)
 - `de.mako.process.completed` — after Sperrung ORDERS process completes
 
 ## PROCEDURE
@@ -1002,6 +1015,7 @@ You are the customer portal notification specialist.
 - `de.billing.rechnung.erstellt` — new invoice → notify customer
 - `de.eeg.anlage.foerderung-auslaufend` — EEG expiry → notify plant operator
 - `de.accounting.mahnung.issued` — Mahnung → dunning notification
+- `de.vertrag.*` — contract lifecycle → keep the portal view current
 
 ## PROCEDURE
 
@@ -1310,7 +1324,7 @@ GasImbalanceSaldo (Mehr/Minder/Balanced).
 - `de.gabi.imbalance.*`      — gas imbalance event (IMBNOT received)
 - `de.gabi.alocat.missing`   — daily ALOCAT not received by GasDay+3h deadline
 - `de.gabi.nomination.*`     — NOMINT/NOMRES lifecycle
-- `de.netzbilanz.invoic.*`   — GaBi Gas invoicing (INVOIC 31007/31008/31010)
+- `de.netzbilanz.invoic.drafted` — GaBi Gas invoicing (INVOIC 31007/31008/31010)
 - Manual / cron              — daily GasDay-closing sweep
 
 ## STEP-BY-STEP PROCEDURE
@@ -1434,3 +1448,138 @@ ACTION_REQUIRED: [YES/NO — list of specific actions]
     default_max_turns: 20,
     default_use_rag: false,
 };
+
+#[cfg(test)]
+mod trigger_contract_tests {
+    use super::{BuiltinAgentDef, all};
+
+    /// Trigger patterns that deliberately match nothing in the catalog yet.
+    ///
+    /// Each entry is a subscription placed ahead of the emitter, so the glob is
+    /// live but nothing fires it. Removing an entry here is the last step of
+    /// wiring the emitter, not a chore.
+    const UNEMITTED_PATTERNS: &[(&str, &str)] = &[
+        (
+            "de.sperr.*",
+            "sperrd does not emit a concrete de.sperr.* type yet; \
+             mako-events documents the gap and the ROADMAP tracks it",
+        ),
+        (
+            "de.eeg.compliance.*",
+            "einsd does not emit a concrete de.eeg.compliance.* type yet; \
+             mako-events documents the gap on the `eeg` module",
+        ),
+    ];
+
+    /// The concrete event types named under `## TRIGGERED BY` in a prompt.
+    fn prompt_triggers(def: &BuiltinAgentDef) -> Vec<String> {
+        let Some(start) = def.system_prompt.find("## TRIGGERED BY") else {
+            return Vec::new();
+        };
+        let body = &def.system_prompt[start + "## TRIGGERED BY".len()..];
+        // The block runs to the next `##` heading.
+        let body = body.split("\n##").next().unwrap_or(body);
+
+        let mut out = Vec::new();
+        for line in body.lines() {
+            if !line.trim_start().starts_with("- ") {
+                continue;
+            }
+            // A line may name more than one type:
+            // ``- `de.eeg.verguetung.*` / `de.eeg.marktpraemie.*` — settlement``
+            let mut rest = line;
+            while let Some(open) = rest.find('`') {
+                rest = &rest[open + 1..];
+                let Some(close) = rest.find('`') else { break };
+                let token = &rest[..close];
+                if token.starts_with("de.") {
+                    out.push(token.to_owned());
+                }
+                rest = &rest[close + 1..];
+            }
+        }
+        out
+    }
+
+    /// A subscription that matches no catalog event can never fire.
+    #[test]
+    fn builtin_trigger_patterns_match_a_catalog_event() {
+        let catalog = mako_events::all();
+        let mut dead = Vec::new();
+
+        for def in all() {
+            for pattern in def.default_trigger_patterns {
+                if UNEMITTED_PATTERNS.iter().any(|(p, _)| p == pattern) {
+                    continue;
+                }
+                if !catalog.iter().any(|ev| mako_events::matches(pattern, ev)) {
+                    dead.push(format!("{}: {pattern}", def.name));
+                }
+            }
+        }
+
+        assert!(
+            dead.is_empty(),
+            "these specialists subscribe to event types that exist nowhere in \
+             the mako-events catalog, so the agent can never be triggered: \
+             {dead:#?}\n\n\
+             Either correct the pattern to a real type, or — if the emitter is \
+             genuinely not built yet — add it to UNEMITTED_PATTERNS with the \
+             reason."
+        );
+    }
+
+    /// The prompt tells the model what wakes it; the subscription decides.
+    ///
+    /// When they disagree the model reasons about a trigger it never receives
+    /// (or stays silent about one it does), and nothing fails loudly.
+    #[test]
+    fn builtin_prompt_triggers_match_subscriptions() {
+        let mut drift = Vec::new();
+
+        for def in all() {
+            let promised = prompt_triggers(def);
+            if promised.is_empty() {
+                continue;
+            }
+            let subscribed = def.default_trigger_patterns;
+
+            for ev in &promised {
+                // A prompt entry may be a glob itself, so accept an exact
+                // pattern match as well as a glob that covers it.
+                let covered = subscribed
+                    .iter()
+                    .any(|p| *p == ev.as_str() || mako_events::matches(p, ev));
+                if !covered {
+                    drift.push(format!(
+                        "{}: prompt promises `{ev}` but no trigger pattern covers it",
+                        def.name
+                    ));
+                }
+            }
+
+            for p in subscribed {
+                // A pattern nothing emits yet need not be promised to the
+                // model — it would describe a wake-up that cannot happen.
+                if UNEMITTED_PATTERNS.iter().any(|(u, _)| u == p) {
+                    continue;
+                }
+                let mentioned = promised
+                    .iter()
+                    .any(|ev| ev == p || mako_events::matches(p, ev));
+                if !mentioned {
+                    drift.push(format!(
+                        "{}: subscribes to `{p}` but the prompt never mentions it",
+                        def.name
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            drift.is_empty(),
+            "the `## TRIGGERED BY` prompt block and `default_trigger_patterns` \
+             disagree for these specialists: {drift:#?}"
+        );
+    }
+}

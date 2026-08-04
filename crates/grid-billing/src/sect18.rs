@@ -222,6 +222,7 @@ pub fn settle_dezentrale_einspeisung(
         ),
         settlement_type: SettlementType::DezentraleEinspeisung,
         status: SettlementStatus::Initial,
+        korrektur_grund: None,
         period: input.period,
         nb_mp_id: input.nb_mp_id.clone(),
         counterparty_mp_id: input.anlagenbetreiber_mp_id.clone(),

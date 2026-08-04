@@ -1,19 +1,38 @@
-//! Dispatch-coverage guard for **reply-PID families**.
+//! Dispatch-coverage guard: every registered PID must reach a dispatch arm.
 //!
-//! Regression guard for the "registered-but-not-dispatched" bug class: a reply
-//! PID (ORDRSP / ORDCHG / IFTSTA / REMADV / COMDIS / QUOTES) is registered in the
-//! PID router (so `resolve_workflow` returns its workflow) but the ingest
-//! `match pid` arm has no branch for it, so the inbound reply is silently dropped
-//! (`Skipped { pid_not_in_* }`).
+//! Regression guard for the "registered-but-not-dispatched" bug class. A PID is
+//! registered in the router — so `resolve_workflow` returns its workflow and
+//! makod claims to handle the message — but the ingest `match pid` arm has no
+//! branch for it, so the inbound message is silently dropped
+//! (`Skipped { pid_not_in_* }`). Nothing errors; the message simply vanishes.
 //!
-//! For every reply-range PID each domain module registers, this test dispatches a
-//! parseable message of the right type and asserts the outcome is **not**
-//! `pid_not_in_*`. The dispatch arms match on the passed PID (not the message
-//! content), so a minimal message suffices; `process_not_found` / `no_malo_id` /
-//! adapter `Err` all mean "the PID reached its arm" — only `pid_not_in_*` is the bug.
+//! For every PID each domain module registers, this test dispatches a real
+//! message and asserts the outcome is **not** `pid_not_in_*`. Dispatch arms
+//! match on the passed PID rather than message content, so any parseable
+//! message of the right type suffices: `process_not_found` / `no_malo_id` /
+//! adapter `Err` all mean "the PID reached its arm" — only `pid_not_in_*` is
+//! the bug.
 //!
-//! Router is built **per module** (a combined all-roles router would panic on the
-//! deliberate geli-gas ↔ wim-gas 44022–44024 `register_with_module` conflict).
+//! Messages come from the `edi-energy` fixtures (`valid/` first, then the
+//! generated `gen/` minimals, then any fixture of the same message type whose
+//! content carries the PID), falling back to a synthetic template for reply
+//! families that have no fixture at all.
+//!
+//! Reach today: **318 of 432 registrations**. Every registration it cannot
+//! exercise is a Prüfidentifikator with no AHB profile entry — the
+//! `KNOWN_PROFILE_GAPS` set from `e2e_ahb_rule_coverage_guard` — plus the
+//! send-only entries below. That is one root cause with three downstream
+//! effects: no profile entry means validation passes vacuously,
+//! `generate-fixtures` skips the PID, and its dispatch arm goes unexercised
+//! here. Closing the AHB coverage gap closes all three.
+//!
+//! The ratchet below therefore measures reach over the **profiled** subset: a
+//! PID with no profile cannot have a fixture, so counting it would let the AHB
+//! backlog dilute a guard that exists to detect fixture loss.
+//!
+//! Router is built **per module** — a combined all-roles router would panic on
+//! the deliberate geli-gas ↔ wim-gas 44022–44024 `register_with_module`
+//! conflict.
 
 use std::sync::Arc;
 
@@ -26,10 +45,229 @@ use makod::ingest_dispatcher::{EdifactIngestDispatcher, IngestOutcome};
 const OWN_MP: &str = "9900357000004";
 const LOC: &str = "51238696780";
 
-/// A parseable message of the reply type implied by `pid`'s range, or `None` if
-/// `pid` is not a reply-family PID. All carry a LOC and an `RFF+ON`/`Z13` so both
-/// the MaLo and order-ref/reference correlation paths have something to read.
-fn reply_message(pid: u32) -> Option<String> {
+/// PIDs mako registers but deliberately does not receive, with the reason.
+///
+/// Every entry is a process where **mako implements the initiating side and
+/// sends this PID**; the counterparty role that would receive it has no
+/// workflow yet. They stay registered so `validate_dispatch_completeness` and
+/// the AHB-coverage guard still see the process, and so the outbound render
+/// path keeps a name to resolve.
+///
+/// This list must only ever shrink. Implementing a receiver makes the PID reach
+/// an arm, and the test then fails until the entry is removed — so it cannot go
+/// stale in the quiet direction.
+const SEND_ONLY_PIDS: &[(u32, &str, &str)] = &[
+    // ── Registered, received, but not answerable ─────────────────────────────
+    // 55557 (Änderung MSB-Abrechnungsdaten, GPKE Teil 4) has no Antwort mapping
+    // in `response_pid_for`, so `gpke-supplier-change` cannot carry it to
+    // completion: spawning it yields a process the 24-hour BK6-22-024 deadline
+    // turns into a false `Rejected`. It stays registered so the router resolves
+    // it; the receiving implementation is the missing piece.
+    (
+        55557,
+        "gpke-supplier-change",
+        "Änderung MSB-Abr.-Daten (GPKE Teil 4) — no Antwort mapping, receiver not implemented",
+    ),
+    // ── MaBiS MSCONS series (NB → MSB · NB → LF) ─────────────────────────────
+    // Built by the aggregation layer (`startup.rs`) and rendered outbound;
+    // makod never ingests one.
+    (
+        13003,
+        "mabis-billing",
+        "Abrechnungssummenzeitreihe — aggregation layer",
+    ),
+    (13010, "mabis-billing", "normiertes Profil — outbound only"),
+    (13011, "mabis-billing", "Profilschar — outbound only"),
+    (
+        13012,
+        "mabis-billing",
+        "TEP vergl. Werte Referenzmessung — outbound only",
+    ),
+    // ── GPKE Datenabruf ORDERS Anfragen (→ MSB) ──────────────────────────────
+    // mako is the requester; it ingests only the ORDRSP answers. An MSB-side
+    // receiver for these does not exist.
+    (
+        17004,
+        "gpke-datenabruf",
+        "Anforderung von Werten — MSB receiver not implemented",
+    ),
+    (
+        17102,
+        "gpke-datenabruf",
+        "Anfrage Werte — MSB receiver not implemented",
+    ),
+    (
+        17113,
+        "gpke-datenabruf",
+        "Reklamation Werte — MSB receiver not implemented",
+    ),
+    // ── MMM Allokationsliste Anforderungen ───────────────────────────────────
+    (
+        17110,
+        "gpke-allokationsliste",
+        "Anforderung Allokationsliste (LF → NB) — NB receiver not implemented",
+    ),
+    // Retired in ORDERS AHB 1.1b (01.04.2026): absent from the current
+    // `fv20260401` profile and from the PID overview 4.0 (see `RETIRED_PIDS` in
+    // xtask). Still registered so messages from the `fv20251001` window resolve,
+    // but no counterparty can send one under the current release — this entry is
+    // to be dropped, not implemented.
+    (
+        17114,
+        "gpke-allokationsliste",
+        "Anforderung bilanzierte Menge (NB → ÜNB) — RETIRED 01.04.2026, do not implement",
+    ),
+    // ── Sperrprozesse ────────────────────────────────────────────────────────
+    (
+        17116,
+        "gpke-sperrung",
+        "Anfrage Sperrung (NB → MSB) — MSB receiver not implemented",
+    ),
+    (
+        17116,
+        "geli-gas-sperrung-nb",
+        "Anfrage Sperrung (NB → MSB) — MSB receiver not implemented",
+    ),
+    // ── GPKE Teil 3 Konfigurationsänderung ORDERS Anfragen (LF → NB/MSB) ─────
+    // mako implements the LF side: it sends these and ingests the ORDRSP /
+    // IFTSTA answers. The NB/MSB receiving side is a separate workflow that
+    // does not exist yet.
+    (
+        17120,
+        "gpke-konfiguration-aenderung",
+        "Bestellung Änderung Prognosegrundlage — NB receiver not implemented",
+    ),
+    (
+        17121,
+        "gpke-konfiguration-aenderung",
+        "Bestellung Änderung (NB → MSB) — MSB receiver not implemented",
+    ),
+    (
+        17122,
+        "gpke-konfiguration-aenderung",
+        "Reklamation einer Definition — NB receiver not implemented",
+    ),
+    (
+        17123,
+        "gpke-konfiguration-aenderung",
+        "Bestellung Änderung Zählzeitdefinition — NB receiver not implemented",
+    ),
+    (
+        17128,
+        "gpke-konfiguration-aenderung",
+        "Reklamation einer Konfiguration — MSB receiver not implemented",
+    ),
+    (
+        17129,
+        "gpke-konfiguration-aenderung",
+        "Bestellung Beendigung Konfiguration — MSB receiver not implemented",
+    ),
+    (
+        17130,
+        "gpke-konfiguration-aenderung",
+        "Bestellung Konfiguration (ohne Angebot) — MSB receiver not implemented",
+    ),
+    (
+        17131,
+        "gpke-konfiguration-aenderung",
+        "Bestellung Angebot Konfiguration — MSB receiver not implemented",
+    ),
+    (
+        17133,
+        "gpke-konfiguration-aenderung",
+        "Bestellung Änderung Abrechnungsdaten — NB receiver not implemented",
+    ),
+];
+
+/// The EDIFACT message directory a PID's band belongs to.
+fn fixture_dir(pid: u32) -> Option<&'static str> {
+    Some(match pid / 1000 {
+        13 => "mscons",
+        15 => "quotes",
+        17 => "orders",
+        19 => "ordrsp",
+        21 => "iftsta",
+        23 => "insrpt",
+        25 => "utilts",
+        27 => "pricat",
+        29 => "aperak",
+        31 => "invoic",
+        33 => "remadv",
+        35 => "reqote",
+        37 => "partin",
+        39 => "ordchg",
+        44 | 55 => "utilmd",
+        _ => return None,
+    })
+}
+
+/// A real fixture carrying `pid`, preferring the curated file over the
+/// generated one, then any fixture of the same message type whose content
+/// carries the PID.
+///
+/// The content scan matters: 28 Prüfidentifikatoren have no file named after
+/// them but do appear in another fixture's `BGM` DE1004 or `RFF+Z13` — which is
+/// exactly how `validate-pruefids` and `generate-fixtures` count coverage. A
+/// filename-only lookup silently skips those, leaving their dispatch arms
+/// unguarded.
+fn fixture(pid: u32) -> Option<String> {
+    let dir = fixture_dir(pid)?;
+    let base = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../crates/edi-energy/tests/fixtures"
+    );
+    let named = [
+        format!("{base}/{dir}/valid/pid_{pid}.edi"),
+        format!("{base}/{dir}/gen/pid_{pid}.gen.edi"),
+    ]
+    .into_iter()
+    .find_map(|p| std::fs::read_to_string(p).ok());
+    if named.is_some() {
+        return named;
+    }
+
+    // Fall back to any fixture of this message type that carries the PID.
+    for sub in ["valid", "gen"] {
+        let Ok(entries) = std::fs::read_dir(format!("{base}/{dir}/{sub}")) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(text) = std::fs::read_to_string(entry.path()) else {
+                continue;
+            };
+            if carries_pid(&text, pid) {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
+/// `true` when the interchange announces `pid` in `BGM` DE1004 or `RFF+Z13`.
+///
+/// Both carry the Prüfidentifikator with optional leading zeros, which is why
+/// this trims rather than comparing the raw token.
+fn carries_pid(text: &str, pid: u32) -> bool {
+    let want = pid.to_string();
+    for seg in text.split('\'') {
+        let seg = seg.trim();
+        if let Some(rest) = seg.strip_prefix("RFF+Z13:")
+            && rest.trim_start_matches('0').starts_with(&want)
+        {
+            return true;
+        }
+        if seg.starts_with("BGM+") && seg.split('+').any(|f| f.trim_start_matches('0') == want) {
+            return true;
+        }
+    }
+    false
+}
+
+/// A synthetic reply-family message, for PIDs with no fixture on disk.
+///
+/// Each carries a `LOC` and an `RFF+ON`/`Z13` so both the MaLo and the
+/// order-reference correlation paths have something to read.
+fn synthetic_reply(pid: u32) -> Option<String> {
     let msg = match pid {
         15000..=15999 => format!(
             "UNB+UNOC:3+4012345000023:14+9900357000004:14+230101:0000+1'\
@@ -79,8 +317,8 @@ async fn make_dispatcher() -> EdifactIngestDispatcher {
     )
 }
 
-#[tokio::test]
-async fn every_registered_reply_pid_has_a_dispatch_arm() {
+/// Every registered `(pid, workflow)` pair, across every domain module.
+fn registered_pairs() -> Vec<(u32, String)> {
     let modules: Vec<Box<dyn EngineModule>> = vec![
         Box::new(mako_gpke::GpkeModule),
         Box::new(mako_wim::WimModule),
@@ -91,50 +329,142 @@ async fn every_registered_reply_pid_has_a_dispatch_arm() {
         Box::new(mako_redispatch::RedispatchModule),
     ];
     let roles = DeploymentRoles::all();
-    let dispatcher = make_dispatcher().await;
 
-    // Collect (pid, workflow) reply-family registrations across all modules, each
-    // module into its own router to avoid the deliberate cross-module conflict.
     let mut pairs: Vec<(u32, String)> = Vec::new();
     for m in &modules {
         let mut router = PidRouter::new();
         m.register_pids_with_roles(&mut router, &roles);
         for pid in router.registered_pids() {
-            if reply_message(pid).is_some()
-                && let Some(wf) = router.route(pid)
-            {
+            if let Some(wf) = router.route(pid) {
                 pairs.push((pid, wf.to_owned()));
             }
         }
         for (pid, _sparte, wf) in router.registered_commodity_entries() {
-            if reply_message(pid).is_some() {
-                pairs.push((pid, wf.to_owned()));
-            }
+            pairs.push((pid, wf.to_owned()));
         }
     }
-    assert!(
-        !pairs.is_empty(),
-        "expected some reply-family PIDs to be registered"
-    );
+    pairs.sort();
+    pairs.dedup();
+    pairs
+}
+
+#[tokio::test]
+async fn every_registered_pid_reaches_a_dispatch_arm() {
+    let dispatcher = make_dispatcher().await;
+    let pairs = registered_pairs();
+    assert!(!pairs.is_empty(), "expected registered PIDs");
+
+    let allowed: std::collections::HashSet<(u32, &str)> = SEND_ONLY_PIDS
+        .iter()
+        .map(|(pid, wf, _)| (*pid, *wf))
+        .collect();
 
     let mut gaps: Vec<String> = Vec::new();
+    let mut now_covered: Vec<String> = Vec::new();
+    let mut exercised = 0usize;
+
     for (pid, wf) in pairs {
-        let edi = reply_message(pid).expect("checked above");
-        let Ok(msg) = edi_energy::parse(edi.as_bytes()) else {
-            // A template that fails to parse is a test-fixture issue, not a
-            // coverage gap — skip (the arm-coverage assertion is what matters).
+        let Some(edi) = fixture(pid).or_else(|| synthetic_reply(pid)) else {
+            // No message available for this PID — coverage is reported by
+            // `dispatch_coverage_is_not_silently_shrinking` below.
             continue;
         };
-        if let Ok(IngestOutcome::Skipped { reason, .. }) = dispatcher.dispatch(&msg, &wf, pid).await
-            && reason.starts_with("pid_not_in_")
-        {
-            gaps.push(format!("PID {pid} → {wf} ({reason})"));
+        let Ok(msg) = edi_energy::parse(edi.as_bytes()) else {
+            // An unparseable fixture is a fixture problem, not a coverage gap.
+            continue;
+        };
+        exercised += 1;
+
+        let dropped = matches!(
+            dispatcher.dispatch(&msg, &wf, pid).await,
+            Ok(IngestOutcome::Skipped { reason, .. }) if reason.starts_with("pid_not_in_")
+        );
+
+        match (dropped, allowed.contains(&(pid, wf.as_str()))) {
+            (true, false) => gaps.push(format!("  PID {pid} → {wf}")),
+            (false, true) => now_covered.push(format!("  PID {pid} → {wf}")),
+            _ => {}
         }
     }
+
+    // Ratchet: 318 registrations are exercised today. A drop means fixtures
+    // moved or the lookup broke, which would hollow the guard out silently.
+    assert!(
+        exercised >= 310,
+        "only {exercised} PIDs were exercised (expected >= 310) — fixture \
+         lookup is probably broken, and the coverage assertion below would \
+         then be verifying almost nothing"
+    );
+
+    assert!(
+        now_covered.is_empty(),
+        "these PIDs now reach a dispatch arm — remove them from SEND_ONLY_PIDS \
+         so the list keeps shrinking:\n{}",
+        now_covered.join("\n")
+    );
 
     assert!(
         gaps.is_empty(),
-        "reply PIDs registered but not dispatched (registered-but-not-dispatched bug):\n  {}",
-        gaps.join("\n  ")
+        "these PIDs are registered in the router but never reach a dispatch \
+         arm, so an inbound message carrying one is silently dropped:\n{}\n\n\
+         Either add the dispatch arm, or — if mako only ever *sends* this PID — \
+         add it to SEND_ONLY_PIDS with the role whose receiver is missing.",
+        gaps.join("\n")
+    );
+}
+
+/// Guards the guard: most *exercisable* registered PIDs must be exercised.
+///
+/// The coverage check above can only catch a gap for a PID it has a message
+/// for. If fixtures were moved or renamed it would quietly verify almost
+/// nothing, so pin the ratio.
+///
+/// The denominator counts only PIDs that **could** have a fixture. A PID with
+/// no AHB profile entry cannot: `generate-fixtures` skips it, so there is
+/// nothing to find. Counting those would let the AHB backlog dilute the ratio —
+/// registering a batch of unprofiled PIDs would trip this guard even though not
+/// a single fixture had been lost, which is the opposite of what it watches for.
+#[tokio::test]
+async fn dispatch_coverage_is_not_silently_shrinking() {
+    let platform = edi_energy::Platform::with_all_profiles();
+    // Asked across every shipped profile rather than via a PID→message-type
+    // band map: the bands genuinely overlap (29xxx is both APERAK and COMDIS),
+    // so only the profiles can answer whether a PID was ever imported.
+    let has_profile = |pid: u32| {
+        let Ok(p) = edi_energy::Pruefidentifikator::new(pid) else {
+            return false;
+        };
+        platform
+            .registry()
+            .all_profiles()
+            .iter()
+            .any(|prof| prof.ahb_rule_pack(Some(p)).name() != "unknown-pid")
+    };
+
+    let pairs: Vec<_> = registered_pairs()
+        .into_iter()
+        .filter(|(pid, _)| has_profile(*pid))
+        .collect();
+    let with_message = pairs
+        .iter()
+        .filter(|(pid, _)| fixture(*pid).is_some() || synthetic_reply(*pid).is_some())
+        .count();
+
+    // If `has_profile` ever broke, the denominator would collapse and the
+    // percentage below would pass vacuously (or divide by zero).
+    assert!(
+        pairs.len() >= 300,
+        "only {} registered PIDs resolve to a shipped profile — the profile \
+         lookup is broken, not the fixtures",
+        pairs.len()
+    );
+
+    let pct = with_message * 100 / pairs.len();
+    assert!(
+        pct >= 75,
+        "only {with_message}/{} profiled registered PIDs ({pct}%) have a message \
+         to dispatch — the coverage guard is running near-empty. Add fixtures \
+         under crates/edi-energy/tests/fixtures/<type>/valid/pid_<pid>.edi",
+        pairs.len()
     );
 }

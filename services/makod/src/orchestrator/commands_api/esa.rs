@@ -266,19 +266,18 @@ pub(super) async fn dispatch_esa_werteanfrage(
 
     esa_outbound_consent_gate(state, &esa, &msb, &location).await?;
 
-    // Idempotency: one active ESA process per location.
-    let existing = state
-        .store
-        .as_process_registry()
-        .lookup_correlated(state.tenant_id, &location)
-        .await
-        .map_err(DispatchError::Engine)?;
-    if let Some(first) = existing
-        .into_iter()
-        .find(|id| id.workflow_id.name.as_ref() == mako_wim::esa_wertebestellung::WORKFLOW_NAME)
+    // Duplicate guard — an order that was cancelled, ended or refused is
+    // terminal, so the ESA may place a new one. See `find_occupying_process`.
+    if let Some(dup_id) =
+        find_occupying_process::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow>(
+            state,
+            &location,
+            mako_wim::esa_wertebestellung::WORKFLOW_NAME,
+        )
+        .await?
     {
         return Err(DispatchError::DuplicateProcess {
-            process_id: first.process_id,
+            process_id: dup_id,
             malo_id: location,
         });
     }

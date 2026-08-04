@@ -552,11 +552,17 @@ pub async fn handle_webhook(
 
             // Warnings attach to the intervals they name, in the same statement
             // as the readings.
-            let validation =
-                crate::server::validate_and_annotate(&mut batch, "MSCONS_VALIDATION", &malo_id);
+            let (validated, validation) = crate::domain::validation::ValidatedReads::validate(
+                batch,
+                "MSCONS_VALIDATION",
+                &malo_id,
+            );
 
-            let stored = batch.len();
-            if let Err(err) = state.repo.store_reads(&batch).await {
+            let stored = validated.len();
+            // Captured before the batch moves into the store, for the alert below.
+            let period_from = validated.as_slice().first().map(|r| r.dtm_from);
+            let period_to = validated.as_slice().last().map(|r| r.dtm_to);
+            if let Err(err) = state.repo.store_reads(validated).await {
                 // A 5xx makes `marktd` redeliver. Answering 204 here would mark
                 // the process delivered while the readings were never stored.
                 error!(
@@ -572,46 +578,36 @@ pub async fn handle_webhook(
                 "edmd: stored MSCONS intervals"
             );
 
-            if !validation.is_clean() {
+            // Same emitter, same payload schema and same trigger as every other
+            // ingest door — a recipient must not have to special-case MSCONS.
+            let alert = crate::server::quality_alert::QualityAlert {
+                malo_id: &malo_id,
+                door: "mscons",
+                correlation_id: &process_id.to_string(),
+                causation_id: &process_id.to_string(),
+                sparte: Some(sparte.as_str()),
+                period_from,
+                period_to,
+                validation: &validation,
+                // The MSCONS door does not run the Hampel scorer at ingest;
+                // V01–V10 is its signal. Retroactive rescoring adds the grade.
+                hampel: None,
+            };
+            if alert.is_warning() {
                 warn!(
                     process_id = %process_id, pid, malo_id = %malo_id,
                     issue_count = validation.issue_count,
                     billing_block_count = validation.billing_block_count,
                     "edmd: MSCONS ingest validation issues (§ 60 Abs. 2 MsbG — substitute values may be required)"
                 );
-
-                if let Some(ref webhook_url) = state.erp_webhook_url {
-                    let event = mako_service::CloudEvent::new(
-                        mako_service::source("edmd", &state.tenant),
-                        mako_events::messwert::READING_QUALITY_WARNING,
-                        malo_id.clone(),
-                        serde_json::json!({
-                            "malo_id": malo_id, "pid": pid,
-                            "process_id": process_id.to_string(),
-                            "issue_count": validation.issue_count,
-                            "billing_block_count": validation.billing_block_count,
-                            "rules": validation.rules,
-                        }),
-                    )
-                    .extension("tenantid", state.tenant.clone())
-                    // The MSCONS process that carried the anomalous batch —
-                    // same tracing contract as the direct-push events.
-                    .extension("correlationid", process_id.to_string())
-                    .extension("causationid", process_id.to_string());
-                    // One signed, retrying emitter for every edmd CloudEvent.
-                    let client = mako_service::http::default_client();
-                    if let Err(e) = mako_service::post_ce_with_retry(
-                        &client,
-                        webhook_url,
-                        &event,
-                        state.webhook_secret_bytes(),
-                    )
-                    .await
-                    {
-                        tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
-                    }
-                }
             }
+            crate::server::quality_alert::raise_quality_warning(
+                state.erp_webhook_url.as_deref(),
+                state.webhook_secret_bytes(),
+                &state.tenant,
+                &alert,
+            )
+            .await;
         }
     } else {
         debug!(ce_type, pid, "edmd: event ignored");

@@ -77,3 +77,27 @@ def build_interchange(
     date: str = "000000",
     time: str = "0000",
 ) -> bytes: ...
+
+# ── Prüfidentifikator introspection ───────────────────────────────────────────
+
+def pruefidentifikatoren(message_type: str) -> list[int]:
+    """Every PID of `message_type` the compiled profiles carry AHB rules for."""
+
+def pid_has_ahb_rules(message_type: str, pid: int) -> bool:
+    """`True` when the compiled profile set carries real AHB rules for `pid`."""
+
+def message_types_of(pid: int) -> list[str]:
+    """Every EDIFACT message type whose profiles declare `pid`.
+
+    A list because a PID does not identify one type: APERAK and COMDIS both
+    declare 29001 and 29002.
+    """
+
+def answer_pids(anfrage: int) -> tuple[int, int] | None:
+    """The `(Bestätigung, Ablehnung)` pair the AHB assigns to a request PID."""
+
+def bestaetigung_pid(anfrage: int) -> int | None:
+    """The Bestätigung PID for a request PID, if the AHB defines one."""
+
+def ablehnung_pid(anfrage: int) -> int | None:
+    """The Ablehnung PID for a request PID, if the AHB defines one."""

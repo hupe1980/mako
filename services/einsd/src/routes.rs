@@ -67,6 +67,29 @@ pub fn build_router(
             "/api/v1/anlagen/{tr_id}/mastr-registrierung",
             post(crate::handlers::post_mastr_registrierung),
         )
+        // ── §§53b–54 EEG 2023 — facts that cut the anzulegender Wert ─────────
+        // Recording them through the API keeps a change that silently reduces a
+        // Gutschrift behind the same Cedar gate as every other lifecycle event.
+        .route(
+            "/api/v1/anlagen/{tr_id}/aw-reduktionen",
+            get(crate::handlers::get_aw_reduktionen),
+        )
+        .route(
+            "/api/v1/anlagen/{tr_id}/aw-reduktionen/regionalnachweis",
+            post(crate::handlers::post_regionalnachweis),
+        )
+        .route(
+            "/api/v1/anlagen/{tr_id}/aw-reduktionen/stromsteuerbefreiung",
+            post(crate::handlers::post_stromsteuerbefreiung),
+        )
+        .route(
+            "/api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt",
+            post(crate::handlers::post_sect54_defekt),
+        )
+        .route(
+            "/api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt/{id}/nachweis-erbracht",
+            post(crate::handlers::post_sect54_nachweis_erbracht),
+        )
         // ── Zusammenlegung (§24 EEG 2023) ─────────────────────────────────────
         .route(
             "/api/v1/anlagen/{tr_id}/zusammenlegen",

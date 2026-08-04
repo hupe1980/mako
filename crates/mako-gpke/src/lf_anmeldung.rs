@@ -190,6 +190,21 @@ pub enum LfAnmeldungState {
     },
 }
 
+impl mako_engine::workflow::OccupiesBusinessKey for LfAnmeldungState {
+    fn occupies_business_key(&self) -> bool {
+        match self {
+            // Awaiting the NB's answer, or supply is running — a second
+            // Anmeldung for the same MaLo would put two live processes on one
+            // supply point.
+            Self::Pending(_) | Self::Active(_) => true,
+            // `New` never started. `Rejected` is terminal: the NB refused, and
+            // the LF's corrected Anmeldung is a normal GPKE flow that must be
+            // allowed rather than answered with `duplicate_process`.
+            Self::New | Self::Rejected { .. } => false,
+        }
+    }
+}
+
 impl LfAnmeldungState {
     fn label(&self) -> &'static str {
         match self {

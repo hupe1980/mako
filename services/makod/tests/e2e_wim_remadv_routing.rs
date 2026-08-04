@@ -1,14 +1,14 @@
 //! Conversation-ID routing for shared reply PIDs (REMADV 33001–33004 / COMDIS).
 //!
 //! REMADV PIDs are legitimately claimed by **both** Strom billing families
-//! (`gpke-abrechnung` and `wim-rechnung`), so the static PID router resolves them
+//! (`gpke-abrechnung` and `wim-invoic`), so the static PID router resolves them
 //! by last-write-wins and `resolve_workflow`'s MP-ID→Sparte narrowing cannot tell
 //! the two Strom families apart. `EdifactIngestDispatcher::dispatch` therefore runs
 //! a correlation step (`correlation_route`) that re-routes the reply to the family
 //! actually holding an open process for the referenced invoice (RFF+Z13).
 //!
 //! These tests prove:
-//! 1. a REMADV for a WiM MSB-Rechnung (31009) resumes the `wim-rechnung` process
+//! 1. a REMADV for a WiM MSB-Rechnung (31009) resumes the `wim-invoic` process
 //!    even when dispatched with the *wrong* statically-resolved `gpke-abrechnung`;
 //! 2. an orphan REMADV (no correlated process) is still `Skipped` — the override
 //!    never invents a route or mis-books.
@@ -24,7 +24,7 @@ use mako_engine::{
     types::{MarktpartnerCode, MessageRef, Pruefidentifikator},
     version::WorkflowId,
 };
-use mako_wim::rechnung::{WimRechnungCommand, WimRechnungWorkflow};
+use mako_wim::invoic::{WimInvoicCommand, WimInvoicWorkflow};
 use makod::ingest_dispatcher::{EdifactIngestDispatcher, IngestOutcome};
 
 const OWN_MP: &str = "9900357000004"; // UNB recipient (our own party) in the fixture
@@ -64,19 +64,19 @@ async fn make_dispatcher() -> (SlateDbStore, TenantId, EdifactIngestDispatcher) 
     (store, tenant, dispatcher)
 }
 
-/// Spawn a `wim-rechnung` process (MSB sent the 31009 INVOIC) and register it under
+/// Spawn a `wim-invoic` process (MSB sent the 31009 INVOIC) and register it under
 /// the invoice reference — exactly how the outbound `SendInvoic` command indexes it
 /// for REMADV correlation.
-async fn spawn_wim_rechnung(store: &SlateDbStore, tenant: TenantId, invoice_ref: &str) {
-    let workflow_id = WorkflowId::new("wim-rechnung", "FV2025-10-01");
-    let process = Process::<WimRechnungWorkflow, Arc<SlateDbStore>>::new(
+async fn spawn_wim_invoic(store: &SlateDbStore, tenant: TenantId, invoice_ref: &str) {
+    let workflow_id = WorkflowId::new("wim-invoic", "FV2025-10-01");
+    let process = Process::<WimInvoicWorkflow, Arc<SlateDbStore>>::new(
         Arc::new(store.clone()),
         tenant,
         workflow_id.clone(),
     );
     let process_id = process.process_id();
     process
-        .execute(WimRechnungCommand::SendInvoic {
+        .execute(WimInvoicCommand::SendInvoic {
             pid: Pruefidentifikator::new(31009).unwrap(),
             sender: MarktpartnerCode::new("4012345000023"), // MSB invoicer
             recipient: MarktpartnerCode::new(OWN_MP),       // NB/LF/ESA payer
@@ -94,9 +94,9 @@ async fn spawn_wim_rechnung(store: &SlateDbStore, tenant: TenantId, invoice_ref:
 }
 
 #[tokio::test]
-async fn remadv_routes_to_wim_rechnung_despite_wrong_static_resolution() {
+async fn remadv_routes_to_wim_invoic_despite_wrong_static_resolution() {
     let (store, tenant, dispatcher) = make_dispatcher().await;
-    spawn_wim_rechnung(&store, tenant, INVOICE_REF).await;
+    spawn_wim_invoic(&store, tenant, INVOICE_REF).await;
 
     let msg = edi_energy::parse(REMADV_33001.as_bytes()).expect("parse REMADV 33001");
     assert!(matches!(msg, AnyMessage::Remadv(_)), "fixture is a REMADV");
@@ -110,10 +110,10 @@ async fn remadv_routes_to_wim_rechnung_despite_wrong_static_resolution() {
 
     match outcome {
         IngestOutcome::Dispatched { workflow_name, .. } => assert_eq!(
-            workflow_name, "wim-rechnung",
+            workflow_name, "wim-invoic",
             "correlation override must route the REMADV to the family owning the 31009 invoice"
         ),
-        other => panic!("expected Dispatched to wim-rechnung, got {other:?}"),
+        other => panic!("expected Dispatched to wim-invoic, got {other:?}"),
     }
 }
 
