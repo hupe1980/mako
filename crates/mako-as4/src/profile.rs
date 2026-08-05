@@ -85,9 +85,17 @@ pub fn bdew_push_policy(decryption_key_pem: Option<Vec<u8>>) -> As4PushPolicy {
 /// |---|---|---|
 /// | Interop mode | `Strict` | BDEW requires full AS4 conformance |
 /// | Canonicalization | Exclusive C14N, no comments | BDEW KH §5.5 |
-/// | Signing required | `true` | BDEW KH §5.5 (mandatory) |
-/// | Encryption required | `false` | BDEW KH §5.6 (optional) |
+/// | Signing required | `true` | AS4-Profil v1.2 §2.2.6.2.1 |
+/// | Encryption required | `true` | AS4-Profil v1.2 §2.2.6.2.2 |
+/// | Security floor | sign **and** encrypt | §2.2.6.2.2 — no override may relax it |
 /// | Payload limits enforced | `true` | defense-in-depth |
+///
+/// §2.2.6.2.2 is unambiguous that encryption is a *MUSS*, and fixes the
+/// algorithms: the key reference MUSS be `X509SKI`, the content algorithm MUSS
+/// be `http://www.w3.org/2009/xmlenc11#aes128-gcm`, and key transport follows
+/// BSI [TR-03116-3] §9.2. This table previously read "Encryption required:
+/// `false` — BDEW KH §5.6 (optional)", which contradicted both the statute and
+/// the code beneath it.
 ///
 /// (Since asx-rs 0.11 the AS2 MIC knob lives in a separate `As2ValidationPolicy`,
 /// not the shared AS4 `ValidationPolicy` — an AS4 profile no longer carries a field

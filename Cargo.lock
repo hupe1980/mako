@@ -7144,6 +7144,7 @@ dependencies = [
  "fd-lock",
  "governor",
  "hmac 0.12.1",
+ "http-body-util",
  "mako-as4",
  "mako-engine",
  "mako-events",
@@ -7173,6 +7174,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "toml 0.8.23",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "utoipa",
@@ -7187,6 +7189,7 @@ version = "0.15.0"
 dependencies = [
  "edi-energy",
  "mako-engine",
+ "mako-wim",
  "pyo3",
  "rubo4e",
  "time",

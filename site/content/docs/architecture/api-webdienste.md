@@ -232,8 +232,8 @@ Note the specs are split across two repositories: `EDI-Energy/api-electricity`
 
 ## Further reading
 
-- [Getting Started](getting-started.md) — EDIFACT parsing and process engine first steps
-- [Process Engine Guide](engine.md) — `mako-engine` architecture, stores, deadlines, outbox
-- [Platform guide](platform.md) — multi-tenant EDIFACT processing
-- [Validation guide](validation.md)
+- [Getting Started](@/docs/guide/getting-started.md) — EDIFACT parsing and process engine first steps
+- [Process Engine Guide](@/docs/architecture/engine.md) — `mako-engine` architecture, stores, deadlines, outbox
+- [Platform guide](@/docs/reference/platform.md) — multi-tenant EDIFACT processing
+- [Validation guide](@/docs/reference/validation.md)
 - BDEW MaKo document portal: <https://www.bdew-mako.de/documents>

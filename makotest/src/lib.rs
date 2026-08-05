@@ -92,6 +92,119 @@ fn next_werktag(date: &str) -> PyResult<String> {
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))
 }
 
+// ── Deadlines ─────────────────────────────────────────────────────────────────
+//
+// The functions above do calendar arithmetic and return a *date*. These return
+// the *instant* a Frist actually expires, which is what the engine registers on
+// a `Deadline` and what an operator is measured against.
+//
+// The distinction is not academic. A Werktage deadline resolves to **17:00
+// Europe/Berlin** on the due Werktag, so "date + n Werktage" is not the same
+// moment — and public holidays shift it further. A monitor in this repo once
+// approximated Werktage as calendar days and reported breaches that had not
+// happened; these bindings exist so a test can assert the engine's own instant
+// instead of re-deriving it.
+
+fn parse_dt(s: &str) -> PyResult<time::OffsetDateTime> {
+    time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+        .map_err(|e| PyValueError::new_err(format!("invalid RFC 3339 datetime {s:?}: {e}")))
+}
+
+fn fmt_dt(t: time::OffsetDateTime) -> PyResult<String> {
+    t.format(&time::format_description::well_known::Rfc3339)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+}
+
+/// The instant `werktage` Werktage after `received` expires.
+///
+/// `received` and the result are RFC 3339. The result carries the **Europe/Berlin
+/// offset**, not UTC: the deadline is 17:00 local on the due Werktag, and
+/// rendering it as UTC hides the CET/CEST transition that makes it correct.
+///
+/// ```python
+/// import makotest
+/// # A Monday 09:00 UTC order with a 3-Werktage window (WiM Kündigung 55039).
+/// makotest.deadline_at_werktage("2026-03-02T09:00:00Z", 3)
+/// # '2026-03-05T17:00:00+01:00'
+/// ```
+#[pyfunction]
+fn deadline_at_werktage(received: &str, werktage: u32) -> PyResult<String> {
+    let t = parse_dt(received)?;
+    fmt_dt(fristen::deadline_at_werktage(
+        t,
+        werktage,
+        HolidayCalendar::BdewMaKo,
+    ))
+}
+
+/// `received` plus `hours` wall-clock hours — the GPKE 24-hour form.
+///
+/// Wall-clock, so it does not skip weekends or holidays.
+#[pyfunction]
+fn add_hours(received: &str, hours: u32) -> PyResult<String> {
+    let t = parse_dt(received)?;
+    fmt_dt(fristen::add_hours(t, hours))
+}
+
+/// When the CONTRL for a message received at `received` is due (6 hours).
+#[pyfunction]
+fn contrl_due_at(received: &str) -> PyResult<String> {
+    let t = parse_dt(received)?;
+    fmt_dt(fristen::contrl_due_at(t))
+}
+
+/// When the APERAK for an inbound **Strom** message is due.
+///
+/// 45 minutes on a weekday; a Saturday arrival is due Sunday noon.
+#[pyfunction]
+fn aperak_strom_due_at(received: &str) -> PyResult<String> {
+    let t = parse_dt(received)?;
+    fmt_dt(fristen::aperak_strom_due_at(t))
+}
+
+/// When the APERAK for an inbound **Gas Folgeprozess** message is due
+/// (next Werktag, 12:00).
+#[pyfunction]
+fn aperak_gas_folgeprozess_due_at(received: &str) -> PyResult<String> {
+    let t = parse_dt(received)?;
+    fmt_dt(fristen::aperak_gas_folgeprozess_due_at(t))
+}
+
+/// When the APERAK for an inbound **Gas Initialprozess** message is due
+/// (3 Werktage).
+#[pyfunction]
+fn aperak_gas_initialprozess_due_at(received: &str) -> PyResult<String> {
+    let t = parse_dt(received)?;
+    fmt_dt(fristen::aperak_gas_initialprozess_due_at(t))
+}
+
+/// Werktage a counterparty has to answer a WiM MSB-Wechsel order, by request PID.
+///
+/// `None` when `pid` is not a MSB-Wechsel request. The four windows come from
+/// four separate Use-Cases of BK6-22-024 WiM Strom Teil 1 and are **not** one
+/// value:
+///
+/// | PID   | Process                        | Frist    | Fundstelle       |
+/// |-------|--------------------------------|----------|------------------|
+/// | 55039 | Kündigung Messstellenbetrieb   | **3 WT** | Kap. 2.2.2 Nr. 2 |
+/// | 55042 | Beginn Messstellenbetrieb      | **5 WT** | Kap. 2.3.2 Nr. 2 |
+/// | 55051 | Ende Messstellenbetrieb        | **7 WT** | Kap. 2.4.2 Nr. 2 |
+/// | 55168 | Antwort Verpflichtungsanfrage  | **1 WT** | Kap. 2.5.2 Nr. 4 |
+///
+/// Pair it with [`deadline_at_werktage`] to get the instant:
+///
+/// ```python
+/// wt = makotest.wim_antwort_frist_werktage(55051)      # 7
+/// due = makotest.deadline_at_werktage(received, wt)
+/// ```
+///
+/// Distinct from the **APERAK** acknowledgement, which is 45 minutes for Strom
+/// UTILMD — see [`aperak_strom_due_at`].
+#[pyfunction]
+fn wim_antwort_frist_werktage(pid: u32) -> Option<u32> {
+    mako_wim::antwort_frist_werktage(pid)
+}
+
 // ── EDIFACT validation ────────────────────────────────────────────────────────
 
 /// One validation finding.
@@ -538,6 +651,14 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(is_werktag, m)?)?;
     m.add_function(wrap_pyfunction!(add_werktage, m)?)?;
     m.add_function(wrap_pyfunction!(next_werktag, m)?)?;
+
+    m.add_function(wrap_pyfunction!(deadline_at_werktage, m)?)?;
+    m.add_function(wrap_pyfunction!(add_hours, m)?)?;
+    m.add_function(wrap_pyfunction!(contrl_due_at, m)?)?;
+    m.add_function(wrap_pyfunction!(aperak_strom_due_at, m)?)?;
+    m.add_function(wrap_pyfunction!(aperak_gas_folgeprozess_due_at, m)?)?;
+    m.add_function(wrap_pyfunction!(aperak_gas_initialprozess_due_at, m)?)?;
+    m.add_function(wrap_pyfunction!(wim_antwort_frist_werktage, m)?)?;
 
     m.add_function(wrap_pyfunction!(pruefidentifikatoren, m)?)?;
     m.add_function(wrap_pyfunction!(pid_has_ahb_rules, m)?)?;

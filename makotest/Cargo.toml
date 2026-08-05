@@ -22,6 +22,7 @@ edi-energy   = { path = "../crates/edi-energy", features = [
     "comdis", "pricat", "utilts",
 ] }
 mako-engine  = { path = "../crates/mako-engine" }
+mako-wim     = { workspace = true }
 rubo4e       = { workspace = true }
 time         = { workspace = true }
 

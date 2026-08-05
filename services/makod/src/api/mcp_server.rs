@@ -82,6 +82,16 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use crate::cedar_authz::CedarAuthorizer;
+
+/// Expired deadlines returned by one `list_overdue_deadlines` call.
+const OVERDUE_PAGE: usize = 50;
+
+/// Expired deadlines scanned before §9 EnWG filtering is applied.
+///
+/// Wider than [`OVERDUE_PAGE`] because the authorization filter runs on the
+/// scan result: in a combined-role deployment a page-sized scan could return
+/// nothing but the other market role's deadlines, hiding the caller's own.
+const OVERDUE_SCAN_WINDOW: usize = 400;
 use crate::commands_api::{
     COMMAND_REGISTRY, CommandsApiState, DispatchOutcome, dispatch_command, validate_command,
 };
@@ -684,22 +694,69 @@ impl MakodMcpHandler {
     /// - `response-*`: Process response deadline (24 h GPKE / 5 WT WiM / 10 WT GeLi Gas)
     ///
     /// Source: APERAK AHB 1.0 §2.3 / §2.4; BK6-22-024 §5; BK7-24-01-009 §5.
+    ///
+    /// §9 EnWG informatorisches Unbundling applies here exactly as it does to
+    /// [`Self::get_process`]: each entry names a workflow and its timing, so an
+    /// unfiltered listing would tell an NB-scoped principal in a combined-role
+    /// (VIU) deployment which supply-side processes exist and which are missing
+    /// their regulatory windows. Entries are filtered through the same
+    /// `ReadProcess` decision, which the default policy permits for every
+    /// authenticated principal — a single-role deployment sees no change.
+    ///
+    /// Filtering happens after the store scan, so the scan window
+    /// ([`OVERDUE_SCAN_WINDOW`]) is deliberately wider than the returned page
+    /// ([`OVERDUE_PAGE`]) — otherwise a window full of the other arm's
+    /// deadlines would starve a filtered principal of its own.
     #[tool(
         description = "List processes with expired regulatory deadlines (up to 50). Non-empty = compliance issue requiring immediate action.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     #[instrument(skip(self))]
-    async fn list_overdue_deadlines(&self) -> Result<CallToolResult, McpError> {
+    async fn list_overdue_deadlines(
+        &self,
+        rmcp::handler::server::tool::Extension(parts): rmcp::handler::server::tool::Extension<
+            axum::http::request::Parts,
+        >,
+    ) -> Result<CallToolResult, McpError> {
         let result = self
             .state
             .deadline_store
-            .due_now(50)
+            .due_now(OVERDUE_SCAN_WINDOW)
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let items: Vec<serde_json::Value> = result
+        let caller = parts
+            .extensions
+            .get::<crate::cedar_authz::CallerIdentity>()
+            .cloned()
+            .ok_or_else(|| {
+                McpError::internal_error(
+                    "authenticated identity missing from request context".to_owned(),
+                    None,
+                )
+            })?;
+
+        let visible: Vec<&mako_engine::deadline::Deadline> = result
             .deadlines
             .iter()
+            .filter(|d| {
+                self.state.cedar.authorize_process_read(
+                    &caller,
+                    &crate::cedar_authz::ProcessResource {
+                        tenant: &self.state.tenant,
+                        workflow: d.workflow_id().name.as_ref(),
+                    },
+                )
+            })
+            .collect();
+
+        // `has_more` must stay truthful after filtering: either the store had
+        // more beyond the scan window, or filtering left more than one page.
+        let has_more = result.has_more || visible.len() > OVERDUE_PAGE;
+
+        let items: Vec<serde_json::Value> = visible
+            .iter()
+            .take(OVERDUE_PAGE)
             .map(|d| {
                 use time::format_description::well_known::Rfc3339;
                 let overdue_mins = (time::OffsetDateTime::now_utc() - d.due_at()).whole_minutes();
@@ -715,7 +772,7 @@ impl MakodMcpHandler {
 
         ContentBlock::json(serde_json::json!({
             "overdue_count": items.len(),
-            "has_more":      result.has_more,
+            "has_more":      has_more,
             "alert":         !items.is_empty(),
             "items":         items,
             "note": "Each entry is a process that missed its APERAK or response deadline. \
@@ -747,6 +804,83 @@ impl MakodMcpHandler {
             "note": "Count of process instances (streams) registered in the process \
                      registry. Each entry corresponds to one MaKo workflow instance \
                      (e.g. one Lieferantenwechsel or one Messstellenwechsel).",
+        }))
+        .map(|block| CallToolResult::success(vec![block]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    /// Report, per EDIFACT message type, whether today falls inside a
+    /// format-version transition window.
+    ///
+    /// The question this answers is the one an operator has during the annual
+    /// BDEW cutover: *are both the outgoing and incoming format versions
+    /// dispatchable right now, or have we already switched?*
+    #[tool(
+        annotations(read_only_hint = true, open_world_hint = false),
+        description = "Report per message type whether today is inside a BDEW format-version \
+                       transition window, naming the outgoing and incoming releases. Use during \
+                       the annual FV cutover to confirm both versions are dispatchable."
+    )]
+    async fn get_format_version_coverage(&self) -> Result<CallToolResult, McpError> {
+        use edi_energy::registry::{ReleaseRegistry, TransitionState};
+
+        let registry = ReleaseRegistry::global();
+        let today = time::OffsetDateTime::now_utc().date();
+
+        // Derived from the registry rather than a hardcoded list: `MessageType`
+        // is `#[non_exhaustive]`, so an enumeration written here would silently
+        // omit any type added upstream — and this tool would then report full
+        // coverage while saying nothing about the new one.
+        let mut message_types: Vec<edi_energy::MessageType> = registry
+            .all_profiles()
+            .iter()
+            .map(|p| p.message_type())
+            .collect();
+        message_types.sort_by_key(|mt| mt.as_str());
+        message_types.dedup();
+
+        let mut types = Vec::new();
+        let mut in_transition = 0_usize;
+        for mt in message_types {
+            let entry = match registry.transition_state(mt, today, None) {
+                TransitionState::Stable { profile } => serde_json::json!({
+                    "message_type": mt.to_string(),
+                    "state":        "stable",
+                    "release":      profile.release().as_str(),
+                    "valid_from":   profile.valid_from().map(|d| d.to_string()),
+                    "valid_until":  profile.valid_until().map(|d| d.to_string()),
+                }),
+                TransitionState::Transition { outgoing, incoming } => {
+                    in_transition += 1;
+                    serde_json::json!({
+                        "message_type":     mt.to_string(),
+                        "state":            "transition",
+                        "outgoing_release": outgoing.release().as_str(),
+                        "incoming_release": incoming.release().as_str(),
+                        "note": "Both releases must be accepted inbound. Prefer the \
+                                 incoming release for outbound.",
+                    })
+                }
+                TransitionState::None => serde_json::json!({
+                    "message_type": mt.to_string(),
+                    "state":        "no_profile",
+                    "note": "No profile is valid on this date — inbound messages of \
+                             this type cannot be validated.",
+                }),
+            };
+            types.push(entry);
+        }
+
+        ContentBlock::json(serde_json::json!({
+            "as_of":                 today.to_string(),
+            "transition_grace_days": registry.transition_grace_days(),
+            "types_in_transition":   in_transition,
+            "message_types":         types,
+            "note": "Adapter coverage itself is enforced at startup — makod panics if a \
+                     workflow lacks a MessageAdapter for any known format version, so a \
+                     running instance always covers every release listed here. This tool \
+                     reports which releases are *in force*, which is what changes daily \
+                     during a cutover.",
         }))
         .map(|block| CallToolResult::success(vec![block]))
         .map_err(|e| McpError::internal_error(e.message, None))
@@ -1486,5 +1620,46 @@ fn dispatch_error_to_string(e: crate::commands_api::DispatchError) -> String {
         DispatchError::NotImplemented(cmd) => {
             format!("not_implemented: Command '{cmd}' is registered but not yet dispatchable.")
         }
+    }
+}
+
+#[cfg(test)]
+mod tool_inventory_tests {
+    use super::MakodMcpHandler;
+
+    /// The published tool list is a documented contract, and the docs state a
+    /// count. Pin both here: a tool added without updating
+    /// `site/content/docs/services/makod.md` fails this test rather than
+    /// shipping a page that undercounts what the server exposes.
+    #[test]
+    fn the_tool_inventory_matches_the_published_list() {
+        let mut names: Vec<String> = MakodMcpHandler::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        names.sort();
+
+        let mut expected = vec![
+            "get_format_version_coverage",
+            "get_health",
+            "get_malo",
+            "get_outbox_status",
+            "get_partner",
+            "get_process",
+            "list_active_processes",
+            "list_commands",
+            "list_dead_letters",
+            "list_overdue_deadlines",
+            "list_partners",
+            "submit_command",
+        ];
+        expected.sort_unstable();
+
+        assert_eq!(
+            names, expected,
+            "MCP tool inventory changed — update the tool table and the count in \
+             site/content/docs/services/makod.md to match"
+        );
     }
 }

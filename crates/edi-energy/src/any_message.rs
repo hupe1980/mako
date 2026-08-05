@@ -156,6 +156,95 @@ pub enum AnyMessage {
 }
 
 impl AnyMessage {
+    /// The message-level sender MP-ID — `NAD+MS` DE 3039.
+    ///
+    /// `None` for CONTRL, which is a syntax acknowledgement carried at the
+    /// interchange level and has no NAD, and for `Unknown`.
+    ///
+    /// Per BDEW Allgemeine Festlegungen §2.13 this **must** equal the
+    /// interchange sender in `UNB` DE 0004; [`crate::parse`] rejects a message
+    /// where they disagree.
+    #[must_use]
+    pub fn nad_sender(&self) -> Option<&str> {
+        match self {
+            #[cfg(feature = "utilmd")]
+            Self::Utilmd(m) => m.sender().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "mscons")]
+            Self::Mscons(m) => m.sender().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "aperak")]
+            Self::Aperak(m) => m.sender().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "invoic")]
+            Self::Invoic(m) => m.sender().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "remadv")]
+            Self::Remadv(m) => m.sender().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "orders")]
+            Self::Orders(m) => m.sender().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "iftsta")]
+            Self::Iftsta(m) => m.sender().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "insrpt")]
+            Self::Insrpt(m) => m.sender().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "reqote")]
+            Self::Reqote(m) => m.sender().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "partin")]
+            Self::Partin(m) => m.sender().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "ordchg")]
+            Self::Ordchg(m) => m.sender().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "ordrsp")]
+            Self::Ordrsp(m) => m.sender().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "quotes")]
+            Self::Quotes(m) => m.sender().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "comdis")]
+            Self::Comdis(m) => m.sender().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "pricat")]
+            Self::Pricat(m) => m.sender().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "utilts")]
+            Self::Utilts(m) => m.sender().and_then(|n| n.party_id.as_deref()),
+            _ => None,
+        }
+    }
+
+    /// The message-level receiver MP-ID — `NAD+MR` DE 3039.
+    ///
+    /// Counterpart to [`Self::nad_sender`]; must equal `UNB` DE 0010.
+    #[must_use]
+    pub fn nad_receiver(&self) -> Option<&str> {
+        match self {
+            #[cfg(feature = "utilmd")]
+            Self::Utilmd(m) => m.receiver().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "mscons")]
+            Self::Mscons(m) => m.receiver().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "aperak")]
+            Self::Aperak(m) => m.receiver().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "invoic")]
+            Self::Invoic(m) => m.receiver().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "remadv")]
+            Self::Remadv(m) => m.receiver().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "orders")]
+            Self::Orders(m) => m.receiver().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "iftsta")]
+            Self::Iftsta(m) => m.receiver().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "insrpt")]
+            Self::Insrpt(m) => m.receiver().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "reqote")]
+            Self::Reqote(m) => m.receiver().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "partin")]
+            Self::Partin(m) => m.receiver().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "ordchg")]
+            Self::Ordchg(m) => m.receiver().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "ordrsp")]
+            Self::Ordrsp(m) => m.receiver().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "quotes")]
+            Self::Quotes(m) => m.receiver().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "comdis")]
+            Self::Comdis(m) => m.receiver().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "pricat")]
+            Self::Pricat(m) => m.receiver().and_then(|n| n.party_id.as_deref()),
+            #[cfg(feature = "utilts")]
+            Self::Utilts(m) => m.receiver().and_then(|n| n.party_id.as_deref()),
+            _ => None,
+        }
+    }
+
     /// Returns `true` if this message has a recognised, compiled-in type.
     ///
     /// Returns `false` for the [`Unknown`][AnyMessage::Unknown] variant.

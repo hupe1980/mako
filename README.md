@@ -684,7 +684,7 @@ The `justfile` is the front door — every gate below has a recipe:
 just            # list all recipes
 just check      # cargo check, all targets & features
 just test       # full test suite
-just ci         # the complete CI gate (check + test + clippy + fmt + deny + codegen/profile/PID validation)
+just ci         # the complete CI gate (check + test + clippy incl. role-scoped builds + fmt + deny + codegen/profile/PID validation)
 just test-db           # every real-PostgreSQL integration suite (testcontainers)
 just test-accountingd-db  # …or one at a time: edmd, einsd, accountingd, billingd, vertragd, tarifbd, marktd
 ```

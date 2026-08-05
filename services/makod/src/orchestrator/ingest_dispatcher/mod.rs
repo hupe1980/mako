@@ -1021,49 +1021,69 @@ pub fn extract_invoice_ref_from_comdis(msg: &AnyMessage) -> String {
         .unwrap_or_else(|| msg.message_ref().to_owned())
 }
 
-/// Detect the BDEW format version to use when spawning a new `WorkflowId`.
+/// Detect the BDEW format version to dispatch a message under.
 ///
-/// Reads the association-assigned release code from UNH element S009 component
-/// DE 0057 (e.g. `"S2.1"`, `"G1.1"`, `"2.8e"`), then resolves the profile active
-/// for that release code today via [`ReleaseRegistry::global`].  The profile's
-/// `valid_from` date is used to build the `FormatVersion` key
-/// (e.g. `"FV2025-10-01"`).
+/// The FV selects which `MessageAdapter` handles the message
+/// (`accepts_format_version`) and names the spawned `WorkflowId`. It does **not**
+/// choose the AHB profile used for validation — that comes from the message's
+/// own release in the AS4 ingest path.
 ///
-/// Falls back to `FV2025-10-01` when:
-/// - The message is an `AnyMessage::Unknown` variant (no message type).
-/// - The UNH association code is absent or empty.
-/// - No profile is registered for the `(message_type, release)` pair.
-/// - The profile exists but has no `valid_from` date (legacy undated profile).
+/// Falls back to the **newest registered FV** when the version cannot be derived:
 ///
-/// The fallback is safe because:
-/// 1. The FV only affects the `WorkflowId` name on the spawned process.
-/// 2. Adapters use `is_known_fv`, which accepts all registered FVs.
-/// 3. A running process keeps its original `WorkflowId` and is never re-versioned.
+/// - the message is an `AnyMessage::Unknown` variant (no message type);
+/// - the UNH association code is absent or unparseable;
+/// - no profile is registered for the `(message_type, release)` pair on today's
+///   date, i.e. a release this binary predates or one already archived;
+/// - the profile carries no `valid_from` date.
+///
+/// Falling back rather than rejecting is deliberate: during an annual cutover a
+/// counterparty may send a release this binary has not been updated for, and
+/// refusing the message outright is worse than dispatching it under the closest
+/// registered version. Adapters accept every registered FV and a running process
+/// keeps its original `WorkflowId`, so the substitution is usually invisible in
+/// behaviour.
+///
+/// It is logged all the same. A substituted FV means mako could not read the
+/// release the counterparty stated, and during the transition window that is a
+/// signal a profile is missing from the deployed binary. The spawned process also
+/// carries the substituted FV in its `WorkflowId`, so the audit trail names a
+/// release the message did not claim.
 fn detect_format_version(msg: &AnyMessage) -> FormatVersion {
     // Derive the fallback dynamically from the registry so it stays current
     // across annual format-version cutovers without a code change.
-    let fallback = || {
-        adapters::known_fvs().into_iter().max().unwrap_or_else(|| {
+    let fallback = |reason: &'static str| {
+        let fv = adapters::known_fvs().into_iter().max().unwrap_or_else(|| {
             // Last-resort: if the registry is empty (pathological), use
             // the current production FV. This branch should never fire.
             FormatVersion::parse("FV2025-10-01")
                 .expect("FV2025-10-01 is always a valid FormatVersion literal")
-        })
+        });
+        tracing::warn!(
+            reason,
+            substituted_fv = %fv.as_str(),
+            message_type = ?msg.try_message_type(),
+            "format version could not be derived from the message — validating \
+             against the newest known release instead; the AHB rules applied are \
+             not necessarily those of the release the message claims",
+        );
+        fv
     };
 
     let Some(message_type) = msg.try_message_type() else {
-        return fallback();
+        return fallback("unknown message type");
     };
     let Ok(release) = msg.detect_release() else {
-        return fallback();
+        return fallback("release not present or unparseable in UNH");
     };
 
     let today = OffsetDateTime::now_utc().date();
     let Ok(profile) = ReleaseRegistry::global().profile_on(message_type, release, today) else {
-        return fallback();
+        // The interesting case: a release mako has no profile for on this date —
+        // a future FV it has not been updated for, or one already archived.
+        return fallback("no profile registered for this release on today's date");
     };
     let Some(valid_from) = profile.valid_from() else {
-        return fallback();
+        return fallback("profile carries no valid_from date");
     };
 
     let fv_str = format!(
@@ -1072,7 +1092,8 @@ fn detect_format_version(msg: &AnyMessage) -> FormatVersion {
         valid_from.month() as u8,
         valid_from.day(),
     );
-    FormatVersion::parse(&fv_str).unwrap_or_else(|_| fallback())
+    FormatVersion::parse(&fv_str)
+        .unwrap_or_else(|_| fallback("profile valid_from did not render a valid FormatVersion"))
 }
 
 // ── Unknown-workflow fallback ─────────────────────────────────────────────────

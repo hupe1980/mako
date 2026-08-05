@@ -1672,7 +1672,7 @@ that can be schema-validated client-side.
 **§14a Modul 2 context.** Under BK6-22-300, the NB assigns HT/NT registers to controllable
 loads at specific switching times communicated via WiM Stammdaten (ORDERS 17102–17133 ZAK+ZE segments).
 `marktd` auto-populates the underlying data from those events; this endpoint exposes it in
-BO4E form. See also [`billingd`](billingd.md) §14a Modul 2 billing.
+BO4E form. See also [`billingd`](@/docs/services/billingd.md) §14a Modul 2 billing.
 
 ---
 

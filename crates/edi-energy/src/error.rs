@@ -276,6 +276,36 @@ pub enum Error {
         unz_ref: String,
     },
 
+    /// A message's `NAD` party MP-ID disagrees with the interchange envelope.
+    ///
+    /// BDEW Allgemeine Festlegungen V6.1d §2.13:
+    ///
+    /// > "Die im UNB- und NAD-Segment für den Absender / Empfänger verwendeten
+    /// > MP-ID sind identisch."
+    ///
+    /// The rule holds for every EDI@Energy message. Accepting a mismatch lets an
+    /// authenticated partner attribute a message to a different market
+    /// participant at the business layer, because downstream logic (consent
+    /// gates, partner lookup, role resolution) reads `NAD`, while the transport
+    /// authenticated the envelope.
+    #[error(
+        "interchange party mismatch: UNB {qualifier} is {unb_id:?} but NAD+{nad_qualifier} \
+         is {nad_id:?} (message {message_index}) — BDEW Allgemeine Festlegungen §2.13 \
+         requires them to be identical"
+    )]
+    InterchangePartyMismatch {
+        /// `"DE0004"` (sender) or `"DE0010"` (receiver).
+        qualifier: &'static str,
+        /// `"MS"` (sender) or `"MR"` (receiver).
+        nad_qualifier: &'static str,
+        /// MP-ID from the interchange envelope.
+        unb_id: String,
+        /// MP-ID from the message's NAD segment.
+        nad_id: String,
+        /// Zero-based index of the offending message inside the interchange.
+        message_index: usize,
+    },
+
     /// The interchange exceeds the configured `max_messages_per_interchange` limit.
     ///
     /// Increase [`crate::ParseConfig::max_messages_per_interchange`] or process a
@@ -326,6 +356,7 @@ impl miette::Diagnostic for Error {
             Error::Profile(_) => "edi-energy::profile-config",
             Error::InterchangeCountMismatch { .. } => "edi-energy::interchange-count-mismatch",
             Error::InterchangeRefMismatch { .. } => "edi-energy::interchange-ref-mismatch",
+            Error::InterchangePartyMismatch { .. } => "edi-energy::interchange-party-mismatch",
             Error::TooManyMessages { .. } => "edi-energy::too-many-messages",
             Error::TooManySegmentsInMessage { .. } => "edi-energy::too-many-segments-in-message",
         };

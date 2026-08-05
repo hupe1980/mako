@@ -10,10 +10,11 @@ database. That is what keeps the toolkit portable across implementations.
 
 from __future__ import annotations
 
-from ._native import ValidationReport, validate_edifact
+from ._native import ValidationReport, deadline_at_werktage, validate_edifact
 
 __all__ = [
     "assert_bo4e_generation_matches",
+    "assert_deadline_is",
     "assert_edifact_valid",
     "assert_positions_sum_to_total",
     "assert_rule_fires",
@@ -96,3 +97,39 @@ def _money(value: object) -> float:
     if isinstance(value, dict):
         return float(value.get("wert") or 0.0)
     return float(value)  # type: ignore[arg-type]
+
+
+def assert_deadline_is(
+    actual: str,
+    *,
+    received: str,
+    werktage: int,
+) -> None:
+    """Assert a deadline is exactly the instant `werktage` Werktage buys.
+
+    Both `actual` and `received` are RFC 3339. The expected instant is computed
+    with the engine's own arithmetic, so the assertion measures the same thing
+    the platform registered rather than a re-derivation.
+
+    Write it this way rather than comparing dates. A Werktage deadline expires at
+    **17:00 Europe/Berlin** on the due Werktag, and public holidays move it — a
+    day-granular comparison passes on a deadline that is hours wrong, and a
+    calendar-day approximation reports breaches that never happened.
+
+        assert_deadline_is(
+            response["deadline"],
+            received="2026-03-02T09:00:00Z",
+            werktage=makotest.wim_antwort_frist_werktage(55051),  # 7
+        )
+    """
+    expected = deadline_at_werktage(received, werktage)
+    if actual != expected:
+        raise AssertionError(
+            f"deadline mismatch\n"
+            f"  received: {received}\n"
+            f"  werktage: {werktage}\n"
+            f"  expected: {expected}\n"
+            f"  actual:   {actual}\n"
+            f"A Werktage deadline is 17:00 Europe/Berlin on the due Werktag; "
+            f"weekends and any holiday observed in a German state do not count."
+        )

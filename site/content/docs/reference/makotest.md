@@ -1,6 +1,6 @@
 +++
 title = "makotest (Python)"
-description = "Python test & simulation toolkit for MaKo platforms: BDEW identifier check digits, Werktag/Fristen arithmetic, AHB-validated EDIFACT, seeded EPEX curves, and a pytest plugin — over the same Rust core the platform runs."
+description = "Python test & simulation toolkit for MaKo platforms: BDEW identifier check digits, Werktag arithmetic and deadline instants, AHB-validated EDIFACT, seeded EPEX curves, and a pytest plugin — over the same Rust core the platform runs."
 weight = 18
 +++
 
@@ -14,10 +14,11 @@ It is **not mako-specific**. Everything it drives is a public wire contract
 implementation.
 
 ```python
-from makotest import malo_from_base, add_werktage, validate_edifact
+from makotest import malo_from_base, deadline_at_werktage, validate_edifact
 
 malo_from_base("5123869678")    # '51238696780' — BDEW check digit applied
-add_werktage("2026-12-24", 2)   # '2026-12-29' — skips holidays and the weekend
+deadline_at_werktage("2026-12-30T09:00:00Z", 1)
+# '2027-01-04T17:00:00+01:00' — one Werktag, five calendar days
 
 report = validate_edifact(utilmd_bytes, "2026-10-01")
 report.is_valid                 # MIG + AHB + semantic rules, on that format version
@@ -39,7 +40,8 @@ test ergonomics is Python.**
 |---|---|
 | EDIFACT MIG/AHB/semantic validation | Rust — `edi-energy` |
 | MaLo/MeLo check digits and formats | Rust — `rubo4e::identifiers` |
-| Werktag / Feiertag calendar | Rust — `mako-engine::fristen` |
+| Werktag calendar and deadline instants | Rust — `mako-engine::fristen` |
+| WiM per-PID Antwortfristen | Rust — `mako-wim` |
 | EPEX curves, load profiles | Python |
 | Counterparty behaviour, fixtures | Python |
 
@@ -82,12 +84,17 @@ melo_is_valid("51238696780")                         # False — that is a MaLo
 
 ---
 
-## Fristen
+## Fristen and deadlines
 
 Regulated processes are deadline-driven, so time is an input, never ambient.
 The calendar is BDEW's **conservative-inclusive** one: a day observed as a
 holiday in *any* German state is a non-Werktag, so no Frist is ever computed
 shorter than the AHB requires for some participant.
+
+Two different questions live here, and mixing them up is a recurring source of
+wrong deadlines.
+
+### Which date — calendar arithmetic
 
 ```python
 from makotest import add_werktage, is_werktag, next_werktag
@@ -96,6 +103,58 @@ is_werktag("2026-01-06")       # False — Heilige Drei Könige (BY, BW, ST only
 add_werktage("2026-12-24", 2)  # '2026-12-29' — 25/26 holidays, 27/28 weekend
 next_werktag("2026-11-07")     # '2026-11-09' — Saturday rolls to Monday
 ```
+
+### Which moment — the deadline the platform registers
+
+A Werktage Frist expires at **17:00 Europe/Berlin** on the due Werktag. That
+instant, not the date, is the obligation.
+
+```python
+from makotest import deadline_at_werktage
+
+deadline_at_werktage("2026-03-02T09:00:00Z", 3)   # '2026-03-05T17:00:00+01:00'
+deadline_at_werktage("2026-07-13T09:00:00Z", 1)   # '…+02:00' — CEST
+```
+
+The offset follows the CET/CEST transition; rendering the result in UTC hides
+the hour that makes it correct. And no calendar-day approximation is sound —
+**one** Werktag from Wednesday 30.12.2026 expires Monday 04.01.2027, five
+calendar days later, because 31.12. and 01.01. are non-Werktage and 02./03.01.
+is a weekend.
+
+| Function | Window | Basis |
+|---|---|---|
+| `deadline_at_werktage(received, n)` | *n* Werktage → 17:00 Berlin | BDEW MaKo calendar |
+| `add_hours(received, h)` | wall-clock hours (GPKE 24 h) | runs through weekends |
+| `contrl_due_at(received)` | 6 hours | CONTRL |
+| `aperak_strom_due_at(received)` | 45 minutes on a weekday | APERAK AHB §2.4.1 |
+| `aperak_gas_folgeprozess_due_at(received)` | next Werktag 12:00 | GeLi Gas |
+| `aperak_gas_initialprozess_due_at(received)` | 3 Werktage | GeLi Gas |
+| `wim_antwort_frist_werktage(pid)` | 3 / 5 / 7 / 1 WT, per PID | BK6-22-024 WiM Teil 1 |
+
+The **APERAK acknowledgement and the business answer are separate clocks** —
+45 minutes versus days for Strom. Conflating them is the classic WiM error.
+
+### WiM MSB-Wechsel is per process
+
+```python
+from makotest import assert_deadline_is, wim_antwort_frist_werktage
+
+wim_antwort_frist_werktage(55039)   # 3 — Kündigung             (Kap. 2.2.2 Nr. 2)
+wim_antwort_frist_werktage(55042)   # 5 — Beginn                (Kap. 2.3.2 Nr. 2)
+wim_antwort_frist_werktage(55051)   # 7 — Ende                  (Kap. 2.4.2 Nr. 2)
+wim_antwort_frist_werktage(55168)   # 1 — Verpflichtungsanfrage (Kap. 2.5.2 Nr. 4)
+
+assert_deadline_is(
+    response["deadline"],
+    received="2026-03-02T09:00:00Z",
+    werktage=wim_antwort_frist_werktage(55051),
+)
+```
+
+`assert_deadline_is` computes the expectation with the platform's own
+arithmetic, so the assertion measures the same instant the platform registered
+rather than a re-derivation. On failure it prints both instants and the rule.
 
 ---
 

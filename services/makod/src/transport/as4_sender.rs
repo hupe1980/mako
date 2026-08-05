@@ -295,7 +295,52 @@ pub struct BdewAs4Sender {
     /// §20b Netzzugangsplattform requests must never travel over AS4 — they
     /// route here when wired (see [`crate::netzzugang`]).
     netzzugang_sender: Option<Arc<crate::netzzugang::NetzzugangSender>>,
+    /// Loopback hops seen per `conversation_id`, for the runaway guard.
+    ///
+    /// A combined-role deployment delivers self-addressed messages in-process:
+    /// render → parse → dispatch → the workflow may emit another outbox message.
+    /// If that message is self-addressed too, the cycle repeats — and nothing
+    /// else bounds it. The outbox retry budget does not: a successful loopback
+    /// *acknowledges*, and the message the workflow emits is a fresh entry with
+    /// `attempt_count` 0. An unbounded cycle would spin the outbox worker and
+    /// grow the event store without limit.
+    ///
+    /// A cycle stays inside one conversation, so counting hops per
+    /// `conversation_id` bounds it. In-memory and per-process: a restart resets
+    /// the counter, which is the right trade for a runaway guard — it must never
+    /// be the reason a legitimate long conversation stalls.
+    loopback_hops: Arc<std::sync::Mutex<std::collections::HashMap<String, u32>>>,
 }
+
+/// Count one loopback hop for `conversation_id`.
+///
+/// `Ok(n)` when the hop is within budget, `Err(n)` when it exceeds
+/// [`MAX_LOOPBACK_HOPS`] and the delivery must be dead-lettered to break the
+/// cycle. Split out of the send path so the budget is testable without an AS4
+/// stack — the counting is the part that has to be right.
+fn record_loopback_hop(
+    hops: &std::sync::Mutex<std::collections::HashMap<String, u32>>,
+    conversation_id: &str,
+) -> Result<u32, u32> {
+    let mut guard = hops
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let seen = guard.entry(conversation_id.to_owned()).or_insert(0);
+    *seen += 1;
+    if *seen > MAX_LOOPBACK_HOPS {
+        Err(*seen)
+    } else {
+        Ok(*seen)
+    }
+}
+
+/// Maximum in-process loopback deliveries per conversation.
+///
+/// Real combined-role exchanges are short: an NB→MSB Anfrage and its answer is
+/// two hops, and the longest modelled chain (Geräteübernahme with a
+/// Stornierung) stays in single digits. 32 leaves generous headroom while still
+/// catching a cycle long before it costs anything.
+const MAX_LOOPBACK_HOPS: u32 = 32;
 
 impl BdewAs4Sender {
     /// Construct from the shared AS4 session context, event bus, P-Mode
@@ -329,6 +374,7 @@ impl BdewAs4Sender {
             platform,
             lenient_receipts,
             netzzugang_sender: None,
+            loopback_hops: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         })
     }
 
@@ -365,6 +411,7 @@ impl As4Sender for BdewAs4Sender {
         let platform = Arc::clone(&self.platform);
         let lenient_receipts = self.lenient_receipts;
         let netzzugang_sender = self.netzzugang_sender.clone();
+        let loopback_hops = Arc::clone(&self.loopback_hops);
         async move {
             // Route MaloIdentCallback to the existing cache-lookup path.
             if message_type.as_ref() == "MaloIdentCallback" {
@@ -401,6 +448,29 @@ impl As4Sender for BdewAs4Sender {
             // even when NB and MSB have DIFFERENT GLNs on the same makod instance.
             if mp_id_registry.is_own_mp_id(recipient.as_ref()) {
                 if let Some(ref loopback_state) = loopback {
+                    // Runaway guard — see `loopback_hops`. Dead-letter rather
+                    // than retry: a cycle is a workflow defect, and retrying it
+                    // is what the guard exists to stop.
+                    if let Err(seen) = record_loopback_hop(&loopback_hops, &conversation_id) {
+                        {
+                            tracing::error!(
+                                message_id      = %message_id_str,
+                                message_type    = %message_type,
+                                conversation_id = %conversation_id,
+                                hops            = seen,
+                                "BdewAs4Sender loopback: conversation exceeded \
+                                 MAX_LOOPBACK_HOPS — dead-lettering to break the cycle",
+                            );
+                            return Err(EngineError::Transport {
+                                endpoint: "loopback".into(),
+                                message: format!(
+                                    "loopback cycle: conversation {conversation_id} exceeded \
+                                     {MAX_LOOPBACK_HOPS} in-process hops — a workflow is \
+                                     answering its own self-addressed message"
+                                ),
+                            });
+                        }
+                    }
                     // ── In-process loopback delivery ──────────────────────────
                     let payload_bytes = match edifact_renderer::render_to_wire_bytes(
                         &msg_owned,
@@ -844,4 +914,60 @@ fn anwendungsreferenz_for(_message_type: &str) -> &'static str {
     // VL / TL / EM are only used for MSCONS, and only when the sender
     // explicitly sets UNB DE0026 — which our bare-UNH builders never do.
     ""
+}
+
+#[cfg(test)]
+mod loopback_guard_tests {
+    use super::{MAX_LOOPBACK_HOPS, record_loopback_hop};
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    fn hops() -> Mutex<HashMap<String, u32>> {
+        Mutex::new(HashMap::new())
+    }
+
+    /// A real combined-role exchange is a handful of hops and must pass
+    /// untouched — the guard must never be why a legitimate conversation stalls.
+    #[test]
+    fn an_ordinary_conversation_stays_within_budget() {
+        let h = hops();
+        for expected in 1..=8 {
+            assert_eq!(record_loopback_hop(&h, "conv-1"), Ok(expected));
+        }
+    }
+
+    /// The defect this guard exists to bound: a workflow answering its own
+    /// self-addressed message. Nothing else stops it — a successful loopback
+    /// *acknowledges*, so the message the workflow emits is a fresh outbox entry
+    /// with `attempt_count` 0 and the retry budget never applies.
+    #[test]
+    fn a_cycle_is_broken_once_the_budget_is_exhausted() {
+        let h = hops();
+        for _ in 0..MAX_LOOPBACK_HOPS {
+            assert!(record_loopback_hop(&h, "runaway").is_ok());
+        }
+        assert_eq!(
+            record_loopback_hop(&h, "runaway"),
+            Err(MAX_LOOPBACK_HOPS + 1),
+            "the hop after the budget must be refused"
+        );
+        // And it stays refused — the cycle cannot resume by trying again.
+        assert!(record_loopback_hop(&h, "runaway").is_err());
+    }
+
+    /// Conversations are counted independently: one runaway must not
+    /// dead-letter unrelated traffic.
+    #[test]
+    fn conversations_do_not_share_a_budget() {
+        let h = hops();
+        for _ in 0..=MAX_LOOPBACK_HOPS {
+            let _ = record_loopback_hop(&h, "runaway");
+        }
+        assert!(record_loopback_hop(&h, "runaway").is_err());
+        assert_eq!(
+            record_loopback_hop(&h, "healthy"),
+            Ok(1),
+            "an unrelated conversation must be unaffected"
+        );
+    }
 }

@@ -43,6 +43,26 @@ flowchart LR
 | **4 — AHB** | Pruefidentifikator-specific rules from the Anwendungshandbuch: mandatory/conditional/forbidden field presence |
 | **5 — Semantic** | Cross-field business rules (date coherence, reference completeness, syntax acknowledgement validity) |
 
+### Before the layers — the envelope
+
+Two checks run at **parse** time and return `Err` rather than a report entry,
+because a message that fails them has no coherent identity to validate:
+
+| Check | Rule |
+|---|---|
+| Interchange control reference | `UNZ` DE 0036 must equal `UNB` DE 0020 (EDIFACT syntax) |
+| **Interchange party identity** | The `NAD+MS` / `NAD+MR` MP-IDs must equal `UNB` DE 0004 / DE 0010 — **Allgemeine Festlegungen V6.1d §2.13** |
+
+> "Die im UNB- und NAD-Segment für den Absender / Empfänger verwendeten MP-ID
+> sind identisch." — §2.13
+
+The party check is an authorisation boundary rather than a formatting rule. AS4
+authenticates the **envelope** sender, while consuming services read `NAD+MS`
+for consent gates, partner lookup and role resolution; tolerating a mismatch
+would let an authenticated partner attribute a message to a different market
+participant. A party absent from either side is not a mismatch — whether the
+omission is legal is an AHB (layer 4) question.
+
 ---
 
 ## Basic Validation

@@ -94,6 +94,34 @@ See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
 
 ---
 
+## Reading the “Crate / Workflow” column
+
+The column names the crate and workflow that owns a Prüfidentifikator. It does
+**not** by itself mean an inbound message with that PID is routed — a handful of
+PIDs are ones mako *generates* as responses, and a further group is credited to
+a workflow whose registered band does not yet include them.
+
+| Situation | PIDs |
+|---|---|
+| **Outbound-only** — generated as a response, never received | 55011, 55012 |
+| **Named but not yet routed** — constants exist or the band is narrower than the credit implies | 17134, 17135, 19015, 19016, 55035, 55060, 55095, 55173, 55175, 55177, 55180, 55194, 55225, 55227, 55230, 55232, 55553, 55559 |
+
+An inbound message carrying one of the second group is dead-lettered as
+`UnknownPid` — audited under § 147 AO, logged, and counted by
+`makod_dead_letter_recorded_total{reason="unknown_pid:N"}`. It is observable, not
+silent, but it is not handled.
+
+The split is enforced: `pid_reference_guard` cross-checks this table against the
+`PidRouter` on every CI run, so a row added here without a matching registration
+(or an entry in the test's `NOT_ROUTED_BY_DESIGN` list) fails the build.
+
+**Not listed here at all:** the twelve synthetic GaBi Gas PIDs (90001–90062).
+They are mako-internal routing keys for Gas balancing sub-processes, not
+BDEW-published Prüfidentifikatoren, so they are deliberately absent from a
+reference to the published set.
+
+---
+
 ## UTILMD AHB Strom
 
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |

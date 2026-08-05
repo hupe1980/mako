@@ -555,6 +555,36 @@ pub fn router(handler: Arc<MakodApiHandler>) -> Router {
         .merge(wim_order::router(handler))
 }
 
+/// Assemble the `:8090` application: routes, body limit, and — unless `auth`
+/// is `None` — the bearer/OIDC + Cedar authentication layer.
+///
+/// This exists as a function rather than inline wiring because it *is* the
+/// access-control decision for the port. Composed at the call site, the only
+/// way to test that `:8090` rejects an anonymous request would be to rebuild
+/// the same layer stack in the test, which proves the test's copy correct and
+/// says nothing about the binary's.
+///
+/// `auth: None` corresponds to `--webdienste-allow-unauthenticated` and leaves
+/// every route open — valid only behind a proxy terminating mTLS against the
+/// BDEW PKI CA.
+///
+/// Health routes are deliberately **not** included: the caller merges them
+/// afterwards so that Kubernetes probes stay reachable without a token.
+pub fn build_app(
+    handler: Arc<MakodApiHandler>,
+    auth: Option<WebdiensteAuthState>,
+    max_body_bytes: usize,
+) -> Router {
+    let routes = router(handler).layer(axum::extract::DefaultBodyLimit::max(max_body_bytes));
+    match auth {
+        Some(state) => routes.layer(axum::middleware::from_fn_with_state(
+            state,
+            webdienste_auth_middleware,
+        )),
+        None => routes,
+    }
+}
+
 /// Bearer/OIDC authentication state for the `:8090` API-Webdienste port.
 #[derive(Clone)]
 pub struct WebdiensteAuthState {

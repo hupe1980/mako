@@ -529,6 +529,7 @@ RUN cargo build -p makod --release \
 | `max_body_bytes` | `MAKOD_HTTP_MAX_BODY_BYTES` | `--http-max-body-bytes` | `10485760` | Max `POST /edifact` body in bytes |
 | *(CLI/env only)* | `MAKOD_AUTH_KEYS` | `--auth-key` | *(none)* | Named API keys `NAME=TOKEN`. Repeatable. At least one `--auth-key` or `--oidc-issuer` is required when `--http-addr` is set. |
 | *(CLI/env only)* | `MAKOD_CEDAR_POLICY_DIR` | `--cedar-policy-dir` | *(none)* | Directory of extra `.cedar` policy files appended to the built-in policy |
+| *(CLI/env only)* | `MAKOD_CEDAR_NO_DEFAULT_POLICY` | `--cedar-no-default-policy` | `false` | Omit the built-in permit-all baseline; requires `--cedar-policy-dir` |
 
 `makod` **refuses to start** when `--http-addr` is set and neither `--auth-key`
 nor `--oidc-issuer` is provided. `GET /health` is always public. Every other
@@ -546,9 +547,11 @@ constant-time matching, Bearer/JWT routing, schema-validated policy loading)
 live in `mako_service::cedar_schema`, shared with the rest of the platform;
 makod contributes only the typed `MaKo::` domain layer (actions, resource
 entities, the embedded schema). OIDC verification likewise comes from
-`mako_service::oidc` (sub-only IdP tokens supported — `mako_tenant` is
-optional at the verifier level and enforced by the `Claims` extractor where
-services need it).
+`mako_service::oidc`. The verifier itself does not check `mako_tenant` —
+a service that derives its tenant *from* the token has nothing to compare
+against — so the gate lives one level up: the `Claims` extractor uses
+`ExpectedTenant`, and the Cedar path (`BearerAuthenticator`) is given makod's
+primary MP-ID. See **Tenant isolation** below.
 
 ### How it works
 
@@ -558,8 +561,21 @@ key name from `--auth-key NAME=TOKEN`. On each request the engine builds a Cedar
 active policy set.
 
 The **built-in `default.cedar` policy** permits all actions to every authenticated
-principal — a reasonable default for single-tenant operator deployments. Replace
-it with stricter policies for multi-tenant or multi-system deployments.
+principal — a reasonable default for single-tenant operator deployments.
+
+A Cedar request is allowed when **any** `permit` matches and no `forbid` does.
+While that baseline is active it therefore sets a floor that additional `permit`
+statements cannot lower: layering policies on top can only *remove* access, via
+`forbid`. Two ways to tighten, and the choice matters:
+
+| Goal | How |
+|---|---|
+| Carve exceptions out of a broadly trusted deployment | Keep the baseline, add `forbid` rules via `--cedar-policy-dir` |
+| Grant nothing that is not written down | `--cedar-no-default-policy` — the baseline is omitted and `--cedar-policy-dir` becomes the only source of access |
+
+The second is required for least privilege and for §9 EnWG role separation; the
+shipped `conservative.cedar` is written for it. `makod` refuses to start if the
+flag is set without a policy directory, rather than denying every request.
 
 At startup, Cedar Validator runs in **strict mode** against the built-in schema.
 A policy file with type errors **prevents startup** — misconfigured policies are
@@ -590,15 +606,20 @@ Every mutating or data-bearing endpoint is behind a Cedar action:
 `SubmitCommand`, `IngestEdifact`, the `AdminMalo*`/`AdminPartner*` families,
 `ReadMetrics`, `UseMcp`, `ReadRechnung` (`GET /api/v1/invoic/{id}/rechnung` —
 BO4E billing data), `AdminMigrations` (`POST /admin/migrations`),
-`UseWebdienste` (every `:8090` route), and `ReadProcess` (MCP `get_process`).
+`UseWebdienste` (every `:8090` route), and `ReadProcess` (MCP `get_process` and
+`list_overdue_deadlines`).
 The conservative policy grants `AdminMigrations` to **no** standing principal:
 grant it to a break-glass principal for the FV-cutover window, then remove it.
 
 `ReadProcess` carries the process's **workflow name** in the Cedar context, so
 a combined-role (VIU) deployment enforces §9 EnWG Informatorisches Unbundling
-with policy alone — an NB-scoped principal can be limited to NB-side
-workflows and never sees LF process state (denials answer as `not_found` to
-avoid an existence oracle). On the MCP transport, `UseMcp` only opens the
+with policy alone — an NB-scoped principal can be limited to NB-side workflows
+and never sees LF process state. It governs both process-reading MCP tools:
+`get_process` denies as `not_found` to avoid an existence oracle, and
+`list_overdue_deadlines` filters entries per workflow, since a missed
+regulatory window names the process it belongs to. Role separation needs
+`--cedar-no-default-policy`; under the permit-all baseline a workflow-scoped
+`permit` adds nothing and both tools stay readable by every principal. On the MCP transport, `UseMcp` only opens the
 endpoint; `submit_command` additionally evaluates the same `SubmitCommand`
 action as the REST handler, with the identity the transport authenticated.
 
@@ -677,6 +698,10 @@ unless { action == MaKo::Action::"AdminMaloStats" };
 makod --cedar-policy-dir /etc/makod/cedar ...
 ```
 
+That example uses `forbid` because it narrows the permit-all baseline. To go the
+other way — deny everything and grant back only what is listed — copy the shipped
+`conservative.cedar` into the directory and add `--cedar-no-default-policy`.
+
 Or via the environment variable:
 
 ```bash
@@ -711,6 +736,16 @@ per-request network round-trips.  A background task refreshes the JWKS every
 - HMAC algorithms (`HS256`, `HS384`, `HS512`) are unconditionally rejected.
 - The JWT `iss` and `aud` claims are validated on every token.
 - JWT expiry (`exp`) is enforced.
+- The `mako_tenant` claim must equal this deployment's primary MP-ID.
+
+**Tenant isolation.** `iss` and `aud` alone do not identify an *operator*: in a
+shared OIDC realm every operator's tokens carry the same issuer and audience, so
+a token minted for another operator is cryptographically valid here. `makod`
+therefore pins its primary MP-ID as the expected tenant and rejects any token
+whose `mako_tenant` differs — **or is missing**, since "absent" is not
+"matching". The check sits in `BearerAuthenticator`, which every Cedar-gated
+endpoint authenticates through, so a newly added route cannot opt out of it
+without also opting out of authentication.
 
 **Identity mapping:**  The JWT `sub` claim becomes the Cedar principal entity
 ID — identical to API-key names.  All Cedar policies work unchanged regardless
@@ -771,7 +806,7 @@ principal entity ID in your policies.
 | `signing_cert_pem` | `MAKOD_AS4_SIGNING_CERT_PEM` | `--as4-signing-cert-pem` | PEM cert (inline) |
 | `signing_cert_pem_file` | — | — | Path to PEM cert file *(preferred)* |
 | `partners` | `MAKOD_AS4_PARTNER` | `--as4-partner` | Trading-partner MP-ID=URL pairs |
-| — | `MAKOD_AS4_PARTNER_CERT` | `--as4-partner-cert` | Trading-partner encryption certificates, `MP-ID=<PEM>` pairs (see [docs/as4-bdew.md]) |
+| — | `MAKOD_AS4_PARTNER_CERT` | `--as4-partner-cert` | Trading-partner encryption certificates, `MP-ID=<PEM>` pairs (see [AS4 / BDEW](@/docs/reference/as4-bdew.md)). Required for every partner: a send to a partner with no registered certificate fails with a policy violation rather than going out unencrypted |
 | — | `MAKOD_AS4_DECRYPTION_KEY_PEM` | `--as4-decryption-key-pem` | Operator's own EC (BrainpoolP256r1) private key for inbound decryption |
 | — | `MAKOD_ALLOW_UNENCRYPTED_AS4` | `--allow-unencrypted-as4` | **Dev/test only:** downgrade missing-encryption-material startup refusals to warnings |
 
@@ -977,7 +1012,7 @@ Both static auth keys and OIDC tokens are accepted, whichever is configured.
 
 ### Tools
 
-`makod` ships **11 MCP tools** covering process management, operational monitoring, and incident response:
+`makod` ships **12 MCP tools** covering process management, operational monitoring, and incident response:
 
 | Tool | Annotations | Description |
 |---|---|---|
@@ -992,6 +1027,21 @@ Both static auth keys and OIDC tokens are accepted, whichever is configured.
 | **`list_active_processes`** | `read_only` | **Total count of registered process instances (capacity planning)** |
 | **`get_outbox_status`** | `read_only` | **Pending outbox count + oldest message age — alert when stuck > 5 min** |
 | **`list_dead_letters`** | `read_only` | **20 most recent permanently dead-lettered messages (§ 147 AO / GoBD — requires investigation)** |
+| **`get_format_version_coverage`** | `read_only` | **Per message type: is today inside a BDEW format-version transition window, and which releases are in force** |
+
+`get_format_version_coverage` answers the question the annual cutover raises —
+*are both the outgoing and incoming releases dispatchable right now?* It reports
+`stable` or `transition` per message type, naming the outgoing and incoming
+release during the grace window, so an operator can confirm dual-run readiness
+without reading profile metadata by hand.
+
+Adapter *coverage* is not in question at runtime: `makod` panics at startup if
+any workflow lacks a `MessageAdapter` for a known format version, so a running
+instance always covers every release the tool lists. What changes daily during a
+cutover is which releases are **in force**, and that is what it reports.
+
+The tool list is pinned by `tool_inventory_tests` in `mcp_server.rs` — adding a
+tool without updating this table fails the build.
 
 Call `list_commands` first — it returns every command name, its Marktrolle(n),
 primary Prüfidentifikator, and whether a `marktrolle` override is required at
@@ -1400,6 +1450,21 @@ No `--as4-partner` registration is required for own-MP-ID loopback delivery.  `-
 NB,MSB` (or `GNB,gMSB`) is still required so the Command API accepts
 multi-role ERP commands.
 
+**Runaway guard.** Step 3 can make the workflow emit another outbox message, and
+if that one is self-addressed too the cycle repeats. Nothing else bounds it: a
+successful loopback *acknowledges* the message, so what the workflow emits is a
+fresh outbox entry with `attempt_count` 0 and the delivery retry budget never
+applies. An unbounded cycle would spin the outbox worker and grow the event
+store.
+
+`makod` therefore counts loopback hops per `conversation_id` and dead-letters
+past **32**, logging `conversation_id` and the hop count. Real combined-role
+exchanges are short — an Anfrage and its answer is two hops, and the longest
+modelled chain stays in single digits — so the cap is far above legitimate
+traffic and exists only to break a cycle. The counter is in-memory and
+per-process: a restart resets it, which is the right trade for a guard that must
+never be the reason a long conversation stalls.
+
 **Dispatch table for loopback-delivered messages:**
 
 | PID(s) received via loopback | Action | Workflow |
@@ -1587,7 +1652,7 @@ It uses a **4-stage cargo-chef + distroless** build:
 - `TZ=Europe/Berlin` — `/usr/share/zoneinfo/Europe/` copied from builder so `time::OffsetDateTime` resolves CET/CEST correctly for regulatory deadline arithmetic.
 - `/var/lib/makod` pre-created with uid 65532 (distroless `nonroot`) so SlateDB can write without a mounted volume (e.g. `--check` mode and CI).
 - `VOLUME ["/var/lib/makod"]` declared *after* the pre-owned directory so Docker does not reset ownership.
-- `HEALTHCHECK CMD ["/usr/local/bin/makod", "--check"]` — validates all adapters and profiles; exits 0 on success.
+- `HEALTHCHECK CMD ["/usr/local/bin/makod", "--check"]` — validates all adapters, profiles and port credentials; exits 0 on success.
 
 ### Pre-built image
 
@@ -1672,6 +1737,10 @@ spec:
     metadata:
       labels: { app: makod }
     spec:
+      # Worst-case drain: 5 s dead-letter flush + --shutdown-timeout-secs
+      # (default 30 s) for the SlateDB close. Leave headroom above that sum —
+      # a SIGKILL during the store close can leave the last writes unflushed.
+      terminationGracePeriodSeconds: 60
       containers:
         - name: makod
           image: ghcr.io/hupe1980/makod:latest
@@ -1690,11 +1759,24 @@ spec:
               mountPath: /etc/makod
             - name: data
               mountPath: /var/lib/makod
+          # Liveness restarts the pod; keep it tolerant. A SlateDB compaction
+          # or a slow object-store round trip can delay /health well past a
+          # single period, and a restart mid-delivery costs an AS4 retry cycle.
           livenessProbe:
             httpGet: { path: /health, port: 8080 }
             initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6        # ~60 s unhealthy before restart
+          # Readiness only removes the pod from Service endpoints, so it may
+          # react quickly — makod reports ready once its stores answer.
           readinessProbe:
             httpGet: { path: /health, port: 8080 }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # See terminationGracePeriodSeconds above: it must exceed the drain,
+          # or Kubernetes SIGKILLs makod mid-delivery.
       volumes:
         - name: config
           secret: { secretName: makod-config }
@@ -1719,9 +1801,28 @@ instance writes at a time.
 `GET /health` is mounted on every enabled port.
 
 ```
-HTTP 200 {"status":"ok","store":"open"}      ← store is healthy
-HTTP 503 {"status":"degraded","store":"err"} ← store closed or unreachable
+HTTP 200 {"status":"ok","store":"open"}      ← store healthy, all workers alive
+HTTP 503 {"status":"degraded","store":"err"} ← store unreachable, or a worker stalled
 ```
+
+### Worker liveness
+
+`degraded` covers more than the store. Every background worker publishes a
+heartbeat, and a watch that goes stale flips the endpoint to 503:
+
+| Worker | Stale after | What a stall costs |
+|---|---|---|
+| `deadline-scheduler` | 3 × poll interval | **Regulatory deadlines expire unnoticed** — the most consequential stall |
+| `outbox-worker` | 120 s | Outbound EDIFACT stops leaving the queue |
+| `erp-webhook-worker` | 120 s | ERP stops receiving CloudEvents |
+| `projection-worker:gpke-konfiguration` | 5 × checkpoint interval (min 300 s) | Read models serve stale data |
+| `projection-worker:gpke-supplier-change` | 5 × checkpoint interval (min 300 s) | Read models serve stale data |
+| `inbox-purge-worker` | 26 h | AS4 dedup entries accumulate — storage grows without bound |
+
+The purge window is deliberately loose: the loop ticks daily, so a tighter
+threshold would flap on a slow purge over a large store. A stalled purge is the
+mildest of the six — deduplication keeps working, entries simply are not
+reclaimed — but it is the one that degrades silently over weeks.
 
 In Kubernetes, target the `--http-addr` port for both liveness and readiness
 probes. Target `--as4-addr` separately if the AS4 server must be healthy before

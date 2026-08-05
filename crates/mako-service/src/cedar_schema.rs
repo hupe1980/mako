@@ -116,13 +116,41 @@ pub enum AuthzBuildError {
 pub struct BearerAuthenticator {
     keys: Vec<NamedKey>,
     oidc: Option<OidcVerifier>,
+    /// The tenant this deployment serves, when it pins one.
+    ///
+    /// `OidcVerifier::verify` checks issuer, audience, algorithm and expiry — it
+    /// does **not** check `mako_tenant`, because a service that derives its
+    /// tenant *from* the token has nothing to compare against. A service that
+    /// pins one in configuration does, and must reject a token carrying a
+    /// different one: otherwise any validly signed token from the same OIDC
+    /// realm reaches another operator's data.
+    ///
+    /// Enforced here rather than per handler for the same reason
+    /// [`crate::oidc::ExpectedTenant`] is an Extension on the extractor path —
+    /// a new route cannot opt out of it without also opting out of
+    /// authentication.
+    expected_tenant: Option<String>,
 }
 
 impl BearerAuthenticator {
     /// Build an authenticator from named keys and an optional OIDC verifier.
     #[must_use]
     pub fn new(keys: Vec<NamedKey>, oidc: Option<OidcVerifier>) -> Self {
-        Self { keys, oidc }
+        Self {
+            keys,
+            oidc,
+            expected_tenant: None,
+        }
+    }
+
+    /// Pin the tenant this deployment serves.
+    ///
+    /// A JWT whose `mako_tenant` differs — or is absent — is rejected. Leave
+    /// unset for services that derive the tenant from the token.
+    #[must_use]
+    pub fn with_expected_tenant(mut self, tenant: impl Into<String>) -> Self {
+        self.expected_tenant = Some(tenant.into());
+        self
     }
 
     /// Resolve the `Authorization: Bearer <token>` header to a [`CallerIdentity`].
@@ -152,6 +180,21 @@ impl BearerAuthenticator {
         {
             return match oidc.verify(provided) {
                 Ok(claims) => {
+                    // Reject a token minted for a different operator. The claim
+                    // being *absent* is also a rejection when a tenant is
+                    // pinned — otherwise a token without it would pass.
+                    if let Some(expected) = &self.expected_tenant {
+                        let presented = claims.mako_tenant.as_deref().unwrap_or("");
+                        if presented != expected {
+                            tracing::warn!(
+                                sub = %claims.sub,
+                                presented_tenant = %presented,
+                                expected_tenant  = %expected,
+                                "OIDC: JWT rejected — tenant mismatch",
+                            );
+                            return None;
+                        }
+                    }
                     tracing::debug!(sub = %claims.sub, "OIDC: JWT authenticated");
                     Some(CallerIdentity {
                         name: Arc::from(claims.sub.as_str()),

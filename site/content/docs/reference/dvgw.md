@@ -351,6 +351,6 @@ profile-JSON layer** — they are parsed and validated entirely in typed Rust co
 | GaBi Gas 2.1 Festlegung | BNetzA BK7-24-01-008 |
 | `dvgw-edi` source | [crates/dvgw-edi/](https://github.com/hupe1980/mako/tree/main/crates/dvgw-edi) |
 | `mako-gabi-gas` source | [crates/mako-gabi-gas/](https://github.com/hupe1980/mako/tree/main/crates/mako-gabi-gas) |
-| Process engine guide | [docs/engine.md](engine.md) |
+| Process engine guide | [docs/engine.md](@/docs/architecture/engine.md) |
 
 ---

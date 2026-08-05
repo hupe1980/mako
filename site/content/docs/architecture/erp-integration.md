@@ -922,14 +922,14 @@ With BO4E:
 
 | Topic | File |
 |---|---|
-| `makod` operator reference | [docs/makod.md](makod.md) |
-| `marktd` operator reference | [docs/marktd.md](marktd.md) |
-| `invoicd` operator guide | [docs/invoicd.md](invoicd.md) |
-| `edmd` operator guide | [docs/edmd.md](edmd.md) |
-| `obsd` operator guide | [docs/obsd.md](obsd.md) |
-| Engine architecture | [docs/engine.md](engine.md) |
-| API-Webdienste Strom (MaLo-ID) | [docs/api-webdienste.md](api-webdienste.md) |
-| Annual release workflow | [docs/annual-release-workflow.md](annual-release-workflow.md) |
+| `makod` operator reference | [makod](@/docs/services/makod.md) |
+| `marktd` operator reference | [marktd](@/docs/services/marktd.md) |
+| `invoicd` operator guide | [invoicd](@/docs/services/invoicd.md) |
+| `edmd` operator guide | [edmd](@/docs/services/edmd.md) |
+| `obsd` operator guide | [obsd](@/docs/services/obsd.md) |
+| Engine architecture | [Engine](@/docs/architecture/engine.md) |
+| API-Webdienste Strom (MaLo-ID) | [API-Webdienste](@/docs/architecture/api-webdienste.md) |
+| Annual release workflow | [Annual release workflow](@/docs/compliance/annual-release-workflow.md) |
 
 ---
 
@@ -937,7 +937,7 @@ With BO4E:
 
 For the Lieferant (LF) role, received INVOIC messages (PIDs 31001, 31002, 31005,
 31006) require a plausibility check before settlement. Rather than routing every
-invoice through the ERP, deploy [`invoicd`](invoicd.md) as
+invoice through the ERP, deploy [`invoicd`](@/docs/services/invoicd.md) as
 an autonomous sidecar. It subscribes to `de.mako.process.initiated` events from
 `marktd`, runs the `invoic-checker` pipeline, **persists every receipt to PostgreSQL**
 (satisfying the 3-year retention requirement under § 147 AO / GoBD and §41 EnWG), and

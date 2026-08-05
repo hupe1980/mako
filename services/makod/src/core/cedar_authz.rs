@@ -21,8 +21,9 @@
 //!
 //! - A **named-key registry** — maps `Authorization: Bearer <token>` to a
 //!   Cedar principal (`MaKo::Principal::"<name>"`).
-//! - A compiled policy set — the embedded default policy plus any
-//!   operator-supplied extras from `--cedar-policy-dir`.
+//! - A compiled policy set — operator-supplied policies from
+//!   `--cedar-policy-dir`, over the embedded default policy unless
+//!   `--cedar-no-default-policy` omits it.
 //! - The compiled **schema** for validation.
 //!
 //! ## Identity model
@@ -36,9 +37,15 @@
 //! ## Default policy
 //!
 //! The embedded default policy (`cedar/default.cedar`) permits any
-//! authenticated principal to perform any action — identical to the previous
-//! single-token model.  Operators layer more specific policies on top using
-//! `permit when {…}` conditions or `forbid` rules.
+//! authenticated principal to perform any action.
+//!
+//! A Cedar request is allowed when **any** `permit` matches and no `forbid`
+//! does, so while that baseline is in the policy set an operator `permit`
+//! grants nothing that is not already granted — only `forbid` narrows it. To
+//! build up from nothing instead, start `makod` with
+//! `--cedar-no-default-policy` ([`DefaultPolicy::Deny`]); the baseline is then
+//! omitted and `--cedar-policy-dir` becomes the only source of access. That is
+//! the mode `cedar/conservative.cedar` and §9 EnWG role separation require.
 //!
 //! ## Operator ABAC policies
 //!
@@ -313,28 +320,76 @@ struct Inner {
     auth: BearerAuthenticator,
 }
 
+/// Whether the compiled-in `default.cedar` baseline is part of the policy set.
+///
+/// Cedar is deny-by-default, but `default.cedar` contains a catch-all
+/// `permit(principal is MaKo::Principal, action, resource)`. Because a Cedar
+/// decision is *allow if any permit matches and no forbid matches*, an
+/// operator's own `permit` statements can never narrow that catch-all — only a
+/// `forbid` can. A least-privilege policy set therefore has to omit the
+/// baseline entirely, which is what [`DefaultPolicy::Deny`] does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefaultPolicy {
+    /// Include the baseline: every authenticated principal may perform every
+    /// action unless an operator `forbid` removes it. Suitable for development
+    /// and single-tenant deployments where all keys are trusted equally.
+    PermitAll,
+    /// Omit the baseline. Access comes only from operator-supplied `permit`
+    /// statements, so anything not granted is denied. Required for a
+    /// least-privilege deployment and for §9 EnWG role separation.
+    Deny,
+}
+
 impl CedarAuthorizer {
     /// Build an authorizer from named keys, an optional extra policy string,
     /// and an optional OIDC verifier.
     ///
-    /// The embedded default policy is always included.  `extra_policies` is
-    /// concatenated on top and is typically the content of `.cedar` files
-    /// loaded from `--cedar-policy-dir`.
+    /// `extra_policies` is typically the content of `.cedar` files loaded from
+    /// `--cedar-policy-dir`. `default_policy` decides whether the compiled-in
+    /// permit-all baseline sits underneath them — see [`DefaultPolicy`], and
+    /// note that with [`DefaultPolicy::PermitAll`] an operator `permit` grants
+    /// nothing new and only a `forbid` restricts.
     ///
     /// When `oidc` is `Some`, bearer tokens shaped like JWTs (three
     /// dot-separated parts) are validated against the OIDC issuer's cached
     /// JWKS.  API-key and OIDC authentication coexist — the token shape
     /// determines which path is taken.
+    /// `expected_tenant` pins the operator this deployment serves: a JWT whose
+    /// `mako_tenant` differs — or is absent — is rejected at authentication.
+    /// `OidcVerifier` checks issuer, audience and expiry but not the tenant, so
+    /// without this a validly signed token from another operator in the same
+    /// OIDC realm would authenticate here.
     pub fn new(
         keys: Vec<NamedKey>,
         extra_policies: Option<String>,
         oidc: Option<OidcVerifier>,
+        expected_tenant: Option<String>,
+        default_policy: DefaultPolicy,
     ) -> Result<Self, AuthzBuildError> {
-        let engine = SchemaPolicySet::new(SCHEMA_SRC, DEFAULT_POLICIES, extra_policies)?;
+        // Omitting the baseline *and* supplying no policies of your own denies
+        // every request, including the operator's own. That is a misconfigured
+        // service rather than a locked-down one, so refuse at startup instead
+        // of serving 403 to everything.
+        if default_policy == DefaultPolicy::Deny && extra_policies.is_none() {
+            return Err(AuthzBuildError::PolicyParse(
+                "--cedar-no-default-policy omits the permit-all baseline, so every request \
+                 would be denied. Supply your own grants with --cedar-policy-dir (see the \
+                 shipped conservative.cedar for a least-privilege starting point)."
+                    .to_owned(),
+            ));
+        }
+        let baseline = match default_policy {
+            DefaultPolicy::PermitAll => DEFAULT_POLICIES,
+            DefaultPolicy::Deny => "",
+        };
+        let engine = SchemaPolicySet::new(SCHEMA_SRC, baseline, extra_policies)?;
         Ok(Self {
             inner: Arc::new(Inner {
                 engine,
-                auth: BearerAuthenticator::new(keys, oidc),
+                auth: match expected_tenant {
+                    Some(t) => BearerAuthenticator::new(keys, oidc).with_expected_tenant(t),
+                    None => BearerAuthenticator::new(keys, oidc),
+                },
             }),
         })
     }
@@ -355,7 +410,16 @@ impl CedarAuthorizer {
             "  resource\n",
             ");\n",
         );
-        Self::new(vec![], Some(anonymous_policy.to_owned()), None)
+        // `Deny` rather than `PermitAll`: the anonymous grant above is the whole
+        // intended policy, so the baseline would only add a second, broader way
+        // to reach the same allow.
+        Self::new(
+            vec![],
+            Some(anonymous_policy.to_owned()),
+            None,
+            None,
+            DefaultPolicy::Deny,
+        )
     }
 
     // ── Authentication ────────────────────────────────────────────────────────
@@ -769,6 +833,8 @@ mod tests {
             }],
             None,
             None,
+            None,
+            DefaultPolicy::PermitAll,
         )
         .expect("authorizer construction failed")
     }
@@ -850,6 +916,8 @@ forbid(
             }],
             Some(extra.to_owned()),
             None,
+            None,
+            DefaultPolicy::PermitAll,
         )
         .unwrap();
         // write denied
@@ -891,6 +959,8 @@ unless {
             }],
             Some(extra.to_owned()),
             None,
+            None,
+            DefaultPolicy::PermitAll,
         )
         .unwrap();
         // Strom command blocked
@@ -934,6 +1004,8 @@ unless {
             }],
             Some(extra.to_owned()),
             None,
+            None,
+            DefaultPolicy::PermitAll,
         )
         .unwrap();
         // PID 55001 allowed
@@ -977,6 +1049,8 @@ unless {
             }],
             Some(extra.to_owned()),
             None,
+            None,
+            DefaultPolicy::PermitAll,
         )
         .unwrap();
         assert!(!a.authorize_malo(
@@ -1020,6 +1094,8 @@ unless {
             }],
             Some(extra.to_owned()),
             None,
+            None,
+            DefaultPolicy::PermitAll,
         )
         .unwrap();
         // Stats permitted
@@ -1070,6 +1146,8 @@ unless {
             }],
             Some(extra.to_owned()),
             None,
+            None,
+            DefaultPolicy::PermitAll,
         )
         .unwrap();
         // Read permitted
@@ -1099,5 +1177,140 @@ unless {
                 "expected {action:?} to be denied",
             );
         }
+    }
+
+    // ── Default-policy baseline (§9 EnWG / least privilege) ───────────────────
+
+    /// A least-privilege policy set is only least-privilege when the built-in
+    /// catch-all is gone.
+    ///
+    /// This is the trap `conservative.cedar` used to fall into: it grants four
+    /// named principals a narrow set of actions, but the baseline
+    /// `permit(principal is MaKo::Principal, action, resource)` was compiled in
+    /// unconditionally, and a Cedar request allows on *any* matching permit. So
+    /// every named grant was redundant and every unlisted principal kept full
+    /// access — the file documented a restriction it could not impose.
+    #[test]
+    fn permit_all_baseline_swallows_a_least_privilege_policy_set() {
+        // "erp-operator" may submit commands; nothing grants "stray" anything.
+        let extra = r#"
+permit(
+  principal == MaKo::Principal::"erp-operator",
+  action    == MaKo::Action::"SubmitCommand",
+  resource  is MaKo::Command
+);
+        "#;
+        let with_baseline = CedarAuthorizer::new(
+            vec![],
+            Some(extra.to_owned()),
+            None,
+            None,
+            DefaultPolicy::PermitAll,
+        )
+        .unwrap();
+        assert!(
+            with_baseline.authorize_malo(
+                &id("stray"),
+                MakoAction::AdminMaloDelete,
+                &MaloResource {
+                    tenant: "9900357000004",
+                    malo_id: Some("10001234567"),
+                },
+            ),
+            "with the baseline present an unlisted principal still gets everything — \
+             this is why DefaultPolicy::Deny exists"
+        );
+
+        let without_baseline = CedarAuthorizer::new(
+            vec![],
+            Some(extra.to_owned()),
+            None,
+            None,
+            DefaultPolicy::Deny,
+        )
+        .unwrap();
+        assert!(
+            !without_baseline.authorize_malo(
+                &id("stray"),
+                MakoAction::AdminMaloDelete,
+                &MaloResource {
+                    tenant: "9900357000004",
+                    malo_id: Some("10001234567"),
+                },
+            ),
+            "an unlisted principal must be denied once the baseline is dropped"
+        );
+        assert!(
+            without_baseline.authorize_command(
+                &id("erp-operator"),
+                &CommandResource {
+                    tenant: "9900357000004",
+                    name: "gpke.lieferbeginn.anmelden",
+                    marktrolle: "LF",
+                    pid: 55001,
+                },
+            ),
+            "the grant the operator did write must still work"
+        );
+    }
+
+    /// Omitting the baseline with no replacement denies everything, including
+    /// the operator's own traffic. Fail at startup rather than at request time.
+    #[test]
+    fn deny_baseline_without_policies_is_refused_at_construction() {
+        let Err(err) = CedarAuthorizer::new(vec![], None, None, None, DefaultPolicy::Deny) else {
+            panic!("a policy set that denies everything must not build");
+        };
+        assert!(
+            err.to_string().contains("--cedar-policy-dir"),
+            "the error must name the flag that supplies the grants, got: {err}"
+        );
+    }
+
+    /// §9 EnWG informatorisches Unbundling: in a combined-role (VIU) deployment
+    /// an NB-scoped principal must not read supply-side process state.
+    ///
+    /// This pins the mechanism both `get_process` and `list_overdue_deadlines`
+    /// rely on — the workflow name reaches Cedar as a context attribute, so a
+    /// site policy can discriminate on it.
+    #[test]
+    fn viu_policy_separates_grid_and_supply_process_reads() {
+        let extra = r#"
+permit(
+  principal == MaKo::Principal::"nb-operator",
+  action    == MaKo::Action::"ReadProcess",
+  resource  is MaKo::ProcessRecord
+)
+when { context.workflow like "gpke-sperrung*" };
+        "#;
+        let a = CedarAuthorizer::new(
+            vec![],
+            Some(extra.to_owned()),
+            None,
+            None,
+            DefaultPolicy::Deny,
+        )
+        .unwrap();
+
+        assert!(
+            a.authorize_process_read(
+                &id("nb-operator"),
+                &ProcessResource {
+                    tenant: "9900357000004",
+                    workflow: "gpke-sperrung",
+                },
+            ),
+            "the NB arm must still read its own Sperrung processes"
+        );
+        assert!(
+            !a.authorize_process_read(
+                &id("nb-operator"),
+                &ProcessResource {
+                    tenant: "9900357000004",
+                    workflow: "gpke-lieferbeginn",
+                },
+            ),
+            "§9 EnWG: the grid arm must not see supply-side process state"
+        );
     }
 }

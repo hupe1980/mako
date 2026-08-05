@@ -96,7 +96,7 @@
 //!         ├── MabisModule       — PID 13003 only (MABIS Bilanzkreisabrechnung Strom, MSCONS Summenzeitreihe)
 //!         │                       [role-nb-strom OR no role flags]
 //!         └── RedispatchModule  — Redispatch 2.0 (§§ 13/13a/14 EnWG); XML routing + IFTSTA PIDs 21037/21038
-//!                                 [always registered]
+//!                                 [role-nb-strom OR no role flags]
 //!
 //! Background tasks:
 //!   ├── OutboxWorker      — drains pending outbox messages via MaloIdentSender
@@ -145,24 +145,6 @@ use mako_engine::{
     marktrolle::{DeploymentRoles, Marktrolle},
     store_slatedb::SlateDbStore,
 };
-use mako_gabi_gas::GaBiGasModule;
-use mako_geli_gas::GeliGasModule;
-use mako_gpke::GpkeModule;
-use mako_mabis::MabisModule;
-#[cfg(any(
-    not(any(
-        feature = "role-lf-strom",
-        feature = "role-lf-gas",
-        feature = "role-nb-strom",
-        feature = "role-nb-gas",
-        feature = "role-msb-strom",
-        feature = "role-msb-gas",
-    )),
-    feature = "role-nb-strom",
-))]
-use mako_redispatch::RedispatchModule;
-use mako_wim::WimModule;
-use mako_wim_gas::WimGasModule;
 use secrecy::{ExposeSecret as _, SecretString};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -363,6 +345,22 @@ struct Cli {
     /// Can also be set via `MAKOD_CEDAR_POLICY_DIR`.
     #[arg(long, value_name = "DIR", env = "MAKOD_CEDAR_POLICY_DIR")]
     cedar_policy_dir: Option<std::path::PathBuf>,
+
+    /// Drop the built-in permit-all baseline and grant access only from
+    /// `--cedar-policy-dir`.
+    ///
+    /// `src/cedar/default.cedar` permits every authenticated principal to
+    /// perform every action. A Cedar request is allowed when *any* `permit`
+    /// matches and no `forbid` does, so operator-supplied `permit` statements
+    /// cannot narrow that baseline — without this flag a least-privilege policy
+    /// set has no effect. Required to run `conservative.cedar` as intended, and
+    /// to enforce §9 EnWG role separation in a combined-role (VIU) deployment.
+    ///
+    /// Refuses to start unless `--cedar-policy-dir` supplies the grants.
+    ///
+    /// Can also be set via `MAKOD_CEDAR_NO_DEFAULT_POLICY`.
+    #[arg(long, env = "MAKOD_CEDAR_NO_DEFAULT_POLICY")]
+    cedar_no_default_policy: bool,
 
     /// OIDC issuer URL for JWT bearer token validation.
     ///
@@ -1294,7 +1292,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             feature = "role-lf-strom",
             feature = "role-nb-strom",
         ))]
-        m.push(Box::new(GpkeModule));
+        m.push(Box::new(mako_gpke::GpkeModule));
 
         // WimModule: Messstellenbetrieb Strom (55039, 55042, 55051, 55168) +
         //   ORDERS Geräteübernahme 17001-17011 + INSRPT 23001-23012.
@@ -1311,7 +1309,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             feature = "role-msb-strom",
             feature = "role-nb-strom",
         ))]
-        m.push(Box::new(WimModule));
+        m.push(Box::new(mako_wim::WimModule));
 
         // GeliGasModule: GeLi Gas 3.0 (44001-44024) + ORDERS Sperrung Gas
         //   17115-17117 + PARTIN Gas 37008-37014 + INVOIC 31011 (AWH Rechnung).
@@ -1328,7 +1326,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             feature = "role-lf-gas",
             feature = "role-nb-gas",
         ))]
-        m.push(Box::new(GeliGasModule));
+        m.push(Box::new(mako_geli_gas::GeliGasModule));
 
         // WimGasModule: WiM Gas (44022-44024, 44039-44053, 44168-44170) +
         //   INVOIC 31003/31004 + INSRPT Gas 23005/23009.
@@ -1345,7 +1343,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             feature = "role-msb-gas",
             feature = "role-nb-gas",
         ))]
-        m.push(Box::new(WimGasModule));
+        m.push(Box::new(mako_wim_gas::WimGasModule));
 
         // GaBiGasModule: GaBi Gas (31010/31007/31008 INVOIC + 13013 MSCONS +
         //   33001 REMADV + 29001 COMDIS).
@@ -1361,7 +1359,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             )),
             feature = "role-nb-gas",
         ))]
-        m.push(Box::new(GaBiGasModule));
+        m.push(Box::new(mako_gabi_gas::GaBiGasModule));
 
         // MabisModule: MABIS Bilanzkreisabrechnung Strom, PID 13003 only (BKV↔ÜNB).
         //   Required for NB (Strom) role.
@@ -1376,7 +1374,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             )),
             feature = "role-nb-strom",
         ))]
-        m.push(Box::new(MabisModule));
+        m.push(Box::new(mako_mabis::MabisModule));
 
         // RedispatchModule: Redispatch 2.0 (§§ 13/13a/14 EnWG); IFTSTA 21037/21038.
         // Applicable to NB (VNB/ANB) and ÜNB roles only — Lieferant (LF) and MSB
@@ -1398,7 +1396,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             )),
             feature = "role-nb-strom",
         ))]
-        m.push(Box::new(RedispatchModule));
+        m.push(Box::new(mako_redispatch::RedispatchModule));
         m
     };
 
@@ -1496,15 +1494,38 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // start with a Noop backend, whether in check mode or full daemon mode.
     ctx.assert_production_stores();
 
+    // ── Authenticated ports must have credentials ──────────────────────────
+    //
+    // Checked here, above the `--check` exit, because it is a property of the
+    // configuration rather than of the running daemon. Left below, `--check`
+    // reported success for a config whose real boot then failed on this very
+    // bail — a deployment pipeline gating on the exit code would promote it.
+    let needs_auth = cli.http_addr.is_some()
+        || (cli.api_webdienste_addr.is_some() && !cli.webdienste_allow_unauthenticated);
+    if needs_auth && cli.auth_keys.is_empty() && cli.oidc_issuer.is_none() {
+        anyhow::bail!(
+            "--auth-key / MAKOD_AUTH_KEYS or --oidc-issuer / MAKOD_OIDC_ISSUER is \
+             required when --http-addr or --api-webdienste-addr is set.\n\
+             These ports perform privileged operations (submitting commands, \
+             triggering migrations, API-Webdienste requests) and must not be \
+             exposed unauthenticated.\n\
+             Provide at least one named API key with --auth-key NAME=TOKEN \
+             (e.g. --auth-key erp-prod=$(openssl rand -hex 32)), or configure \
+             an OIDC issuer with --oidc-issuer <URL> --oidc-audience <AUD>."
+        );
+    }
+
     // ── --check mode early exit ────────────────────────────────────────
     //
     // All critical startup checks (profile validator, adapter coverage, data-dir
-    // lock acquisition, ProcessRegistry reconciliation) have now completed.
-    // In check mode we exit here — no workers, no transports, no listeners.
+    // lock acquisition, ProcessRegistry reconciliation, credentials for every
+    // authenticated port) have now completed. In check mode we exit here — no
+    // workers, no transports, no listeners.
     if cli.check {
         info!(
             "check mode: all startup validations passed \
-             (profiles, adapter coverage, store connectivity, ProcessRegistry reconciliation)"
+             (profiles, adapter coverage, store connectivity, ProcessRegistry \
+              reconciliation, port credentials)"
         );
         return Ok(());
     }
@@ -1570,21 +1591,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("HTTP client build: {e}"))?;
 
     // ── Build Cedar authorizer (shared by :8080 REST, /mcp, and :8090) ───────
-    // Required whenever any authenticated port is enabled.
-    let needs_auth = cli.http_addr.is_some()
-        || (cli.api_webdienste_addr.is_some() && !cli.webdienste_allow_unauthenticated);
-    if needs_auth && cli.auth_keys.is_empty() && cli.oidc_issuer.is_none() {
-        anyhow::bail!(
-            "--auth-key / MAKOD_AUTH_KEYS or --oidc-issuer / MAKOD_OIDC_ISSUER is \
-             required when --http-addr or --api-webdienste-addr is set.\n\
-             These ports perform privileged operations (submitting commands, \
-             triggering migrations, API-Webdienste requests) and must not be \
-             exposed unauthenticated.\n\
-             Provide at least one named API key with --auth-key NAME=TOKEN \
-             (e.g. --auth-key erp-prod=$(openssl rand -hex 32)), or configure \
-             an OIDC issuer with --oidc-issuer <URL> --oidc-audience <AUD>."
-        );
-    }
+    // The credential requirement for these ports is enforced above, before
+    // the `--check` early exit.
     let oidc = if let Some(issuer) = cli.oidc_issuer.clone() {
         let audience = cli.oidc_audience.clone().context(
             "--oidc-audience / MAKOD_OIDC_AUDIENCE is required when \
@@ -1611,8 +1619,20 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     let cedar = Arc::new(
-        cedar_authz::CedarAuthorizer::new(auth_keys, extra_policies, oidc)
-            .map_err(|e| anyhow::anyhow!("{e}"))?,
+        cedar_authz::CedarAuthorizer::new(
+            auth_keys,
+            extra_policies,
+            oidc,
+            // makod is single-tenant: the primary MP-ID *is* the tenant
+            // (see the API states below, which key on the same value).
+            Some(mp_id_registry.primary_mp_id().to_owned()),
+            if cli.cedar_no_default_policy {
+                cedar_authz::DefaultPolicy::Deny
+            } else {
+                cedar_authz::DefaultPolicy::PermitAll
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?,
     );
 
     if let Some(addr) = cli.http_addr {
@@ -1949,26 +1969,21 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         // body-size limit. `--webdienste-allow-unauthenticated` disables the
         // auth layer for deployments that terminate mTLS (BDEW PKI CA) at a
         // fronting proxy and enforce access there.
-        let wd_routes = webdienste::router(handler).layer(axum::extract::DefaultBodyLimit::max(
-            cli.http_max_body_bytes,
-        ));
-        let wd_routes = if cli.webdienste_allow_unauthenticated {
+        let wd_auth = if cli.webdienste_allow_unauthenticated {
             tracing::warn!(
                 addr = %addr,
                 "--webdienste-allow-unauthenticated: API-Webdienste Strom port \
                  has NO authentication. Only acceptable behind a proxy that \
                  terminates mTLS with the BDEW PKI CA.",
             );
-            wd_routes
+            None
         } else {
-            wd_routes.layer(axum::middleware::from_fn_with_state(
-                webdienste::WebdiensteAuthState {
-                    cedar: Arc::clone(&cedar),
-                    tenant: Arc::from(mp_id_registry.primary_mp_id()),
-                },
-                webdienste::webdienste_auth_middleware,
-            ))
+            Some(webdienste::WebdiensteAuthState {
+                cedar: Arc::clone(&cedar),
+                tenant: Arc::from(mp_id_registry.primary_mp_id()),
+            })
         };
+        let wd_routes = webdienste::build_app(handler, wd_auth, cli.http_max_body_bytes);
         // Per-peer rate limit, same GCRA policy as the AS4 port.
         let app = wd_routes
             .layer(axum::middleware::from_fn(as4_ingest::rate_limit_middleware))

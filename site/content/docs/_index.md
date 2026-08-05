@@ -14,7 +14,7 @@ to do.
 
 | If you want to… | Go to |
 |---|---|
-| See it work end to end in a few minutes | [Getting started](guide/getting-started.md) |
+| See it work end to end in a few minutes | [Getting started](@/docs/guide/getting-started.md) |
 | Understand how a message becomes a process | [Architecture](architecture/) |
 | Run a service in production | [Services](services/) |
 | Parse, validate or build EDIFACT yourself | [Reference](reference/) |

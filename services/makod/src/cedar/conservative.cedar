@@ -1,16 +1,25 @@
 // Conservative MaKo authorization policy — least-privilege baseline.
 //
-// This file is NOT loaded automatically.  Enable it by passing
-// `--cedar-policy-dir <dir>` at startup where this file (or a symlink) is
-// placed alongside the schema file.
+// This file is NOT loaded automatically.  Enable it by passing BOTH
+//
+//   --cedar-policy-dir <dir>      (this file, or a symlink, lives in <dir>)
+//   --cedar-no-default-policy     (drops the built-in permit-all baseline)
+//
+// Both are required.  `default.cedar` is compiled into the binary and its
+// catch-all `permit(principal is MaKo::Principal, action, resource)` is part of
+// the policy set unless the second flag omits it.  A Cedar request is allowed
+// when *any* permit matches and no forbid does, so with the baseline present
+// every grant below is redundant and every principal not named here still has
+// full access — the restriction this file describes would not exist.
 //
 // Design intent
 // ─────────────
 // The default.cedar "permit all authenticated principals" policy is suitable
 // for development and single-tenant deployments where all API keys are trusted
 // equally.  In production, a leaked or compromised key should not grant
-// full admin access.  This file replaces the catch-all permit with four
-// named role grants, each covering only the actions needed for that role.
+// full admin access.  Run with `--cedar-no-default-policy` and this file
+// becomes the entire policy set: four named role grants, each covering only
+// the actions needed for that role, and nothing else reaches an allow.
 //
 // Roles (add further specialised principals as needed)
 // ─────────────────────────────────────────────────────
@@ -34,8 +43,9 @@
 // multiple related actions in a single permit statement.
 //
 // IMPORTANT: do NOT add `permit(principal is MaKo::Principal, action, resource)`
-// (the default.cedar catch-all) alongside this file — that would defeat the
-// purpose of this conservative baseline.
+// (the default.cedar catch-all) alongside this file, and do not drop
+// `--cedar-no-default-policy` — either one restores the catch-all and defeats
+// this baseline entirely.
 
 // ── erp-operator: submit workflow commands + full MaLo admin ─────────────────
 permit(
@@ -119,13 +129,17 @@ permit(
 // in your site policy for the FV-cutover window, then remove it.
 
 // ── Process reads: workflow-scoped (§9 EnWG Informatorisches Unbundling) ──────
-// The context carries the process's workflow name; a VIU site can split this
-// into role-scoped principals, e.g. permit an NB operator only when the
-// workflow is NB-side:
+// The context carries the process's workflow name, so a VIU site running with
+// `--cedar-no-default-policy` can split process reads into role-scoped
+// principals — an NB operator sees grid-side workflows and nothing else:
 //
 //   permit(principal == MaKo::Principal::"nb-operator",
 //          action == MaKo::Action::"ReadProcess", resource)
 //   when { context.workflow like "gpke-sperrung*" };
+//
+// This governs both MCP `get_process` and `list_overdue_deadlines`, which name
+// workflows and their missed regulatory windows.  Without the flag the grant
+// above adds nothing and both tools stay fully readable by every principal.
 permit(
   principal == MaKo::Principal::"mcp-agent",
   action    == MaKo::Action::"ReadProcess",

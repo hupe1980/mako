@@ -120,6 +120,31 @@ println!("{}", String::from_utf8_lossy(&bytes));
 
 See the [builder guide][builders] for the full builder API and all message types.
 
+## Interchange party identity (§2.13)
+
+`parse` and `parse_interchange` reject a message whose `NAD` parties disagree
+with the interchange envelope:
+
+```
+interchange party mismatch: UNB DE0004 is "9900555000005" but NAD+MS is
+"9900111000002" (message 0) — BDEW Allgemeine Festlegungen §2.13 requires them
+to be identical
+```
+
+> "Die im UNB- und NAD-Segment für den Absender / Empfänger verwendeten MP-ID
+> sind identisch."
+> — Allgemeine Festlegungen V6.1d §2.13
+
+This is an authorisation boundary, not a formatting rule. AS4 authenticates the
+**envelope** sender, while consuming services read `NAD+MS` for consent gates,
+partner lookup and role resolution. Tolerating a mismatch would let an
+authenticated partner attribute a message to a different market participant.
+
+A party absent from either side is not a mismatch — some profiles omit one, and
+whether that is legal is an AHB question. `AnyMessage::nad_sender()` /
+`nad_receiver()` expose the message-level parties uniformly; CONTRL has none,
+being an interchange-level acknowledgement.
+
 ## Segment definitions and element positions
 
 The `SegmentDefinition` tables under `src/generated/` are produced by

@@ -1180,6 +1180,98 @@ mod expected_tenant_extraction_tests {
         Claims::from_request_parts(&mut parts, &()).await
     }
 
+    // ── BearerAuthenticator (the Cedar path) ─────────────────────────────
+    //
+    // `Claims`-extractor services get the tenant gate from `ExpectedTenant`.
+    // Cedar-gated services (makod) authenticate through `BearerAuthenticator`
+    // instead, which calls `OidcVerifier::verify` directly — and `verify`
+    // deliberately does not check `mako_tenant`, because a service that derives
+    // its tenant *from* the token has nothing to compare against. So the gate
+    // has to exist on this path too, or every Cedar-protected endpoint accepts
+    // a token minted for another operator in the same realm.
+
+    fn bearer(expected: Option<&str>) -> crate::cedar_schema::BearerAuthenticator {
+        let verifier =
+            OidcVerifier::from_jwks_for_testing("https://idp.example.com", "makod", test_jwks());
+        let auth = crate::cedar_schema::BearerAuthenticator::new(vec![], Some(verifier));
+        match expected {
+            Some(t) => auth.with_expected_tenant(t),
+            None => auth,
+        }
+    }
+
+    fn headers_with(token: &str) -> axum::http::HeaderMap {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {token}").parse().expect("valid header"),
+        );
+        h
+    }
+
+    #[test]
+    fn cedar_path_rejects_a_validly_signed_token_for_another_tenant() {
+        let auth = bearer(Some("9900357000004"));
+        assert!(
+            auth.authenticate(&headers_with(&token_for_tenant("9900987654321")))
+                .is_none(),
+            "a token minted for another operator must not authenticate"
+        );
+    }
+
+    #[test]
+    fn cedar_path_accepts_the_configured_tenant() {
+        let auth = bearer(Some("9900357000004"));
+        let identity = auth
+            .authenticate(&headers_with(&token_for_tenant("9900357000004")))
+            .expect("the configured tenant must authenticate");
+        assert_eq!(&*identity.name, "user-1");
+    }
+
+    /// A token with no `mako_tenant` must not slip through a deployment that
+    /// pins one — "absent" is not "matching".
+    #[test]
+    fn cedar_path_rejects_a_token_with_no_tenant_claim_when_one_is_pinned() {
+        #[derive(serde::Serialize)]
+        struct C<'a> {
+            sub: &'a str,
+            iss: &'a str,
+            aud: &'a str,
+            exp: u64,
+        }
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some(TEST_KID.to_owned());
+        let token = jsonwebtoken::encode(
+            &header,
+            &C {
+                sub: "user-1",
+                iss: "https://idp.example.com",
+                aud: "makod",
+                exp: 9_999_999_999,
+            },
+            &EncodingKey::from_rsa_pem(TEST_RSA_PRIVATE_KEY_PEM.as_bytes()).unwrap(),
+        )
+        .expect("token");
+
+        assert!(
+            bearer(Some("9900357000004"))
+                .authenticate(&headers_with(&token))
+                .is_none(),
+            "a token without mako_tenant must not pass a tenant-pinned deployment"
+        );
+    }
+
+    /// Services that derive the tenant from the token pin nothing and are
+    /// unaffected.
+    #[test]
+    fn cedar_path_without_a_pinned_tenant_accepts_any_realm_token() {
+        assert!(
+            bearer(None)
+                .authenticate(&headers_with(&token_for_tenant("9900987654321")))
+                .is_some()
+        );
+    }
+
     /// The defect this closes: a token signed by the same realm for a different
     /// operator is cryptographically valid and, without the gate, would be
     /// served this deployment's customer data.

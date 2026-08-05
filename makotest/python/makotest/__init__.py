@@ -40,12 +40,18 @@ from ._native import (
     UtilmdTransaction,
     ValidationReport,
     ablehnung_pid,
+    add_hours,
     add_werktage,
     answer_pids,
+    aperak_gas_folgeprozess_due_at,
+    aperak_gas_initialprozess_due_at,
+    aperak_strom_due_at,
     bestaetigung_pid,
     build_interchange,
     build_mscons,
     build_utilmd,
+    contrl_due_at,
+    deadline_at_werktage,
     is_werktag,
     malo_check_digit,
     malo_from_base,
@@ -56,7 +62,9 @@ from ._native import (
     pid_has_ahb_rules,
     pruefidentifikatoren,
     validate_edifact,
+    wim_antwort_frist_werktage,
 )
+from .assertions import assert_deadline_is
 from .simulators import BikoSim, ImsysSim, Klaerfall, MarktpartnerSim
 
 __all__ = [
@@ -68,8 +76,13 @@ __all__ = [
     "UtilmdTransaction",
     "ValidationReport",
     "ablehnung_pid",
+    "add_hours",
     "add_werktage",
     "answer_pids",
+    "aperak_gas_folgeprozess_due_at",
+    "aperak_gas_initialprozess_due_at",
+    "aperak_strom_due_at",
+    "assert_deadline_is",
     "bestaetigung_pid",
     "bo4e_generation",
     "build_interchange",
@@ -82,9 +95,12 @@ __all__ = [
     "melo_is_valid",
     "message_types_of",
     "next_werktag",
+    "contrl_due_at",
+    "deadline_at_werktage",
     "pid_has_ahb_rules",
     "pruefidentifikatoren",
     "validate_edifact",
+    "wim_antwort_frist_werktage",
 ]
 
 try:  # pragma: no cover - packaging metadata lookup

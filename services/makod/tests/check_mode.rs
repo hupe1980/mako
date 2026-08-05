@@ -98,3 +98,81 @@ primary = true
         "error explains the volatile refusal: {stderr}"
     );
 }
+
+/// `--check` must fail a config that enables an authenticated port without
+/// credentials — the same way the real boot fails it.
+///
+/// This ordering was wrong once. The credential guard sat *below* the `--check`
+/// early exit, so `--check` reported "all startup validations passed" (exit 0)
+/// for a config whose real start then bailed with "--auth-key … is required".
+/// A pipeline gating rollout on the exit code promoted it.
+#[test]
+fn check_rejects_an_authenticated_port_without_credentials() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cfg = write_config(
+        dir.path(),
+        r#"
+[[party]]
+mp_id = "9900001000001"
+roles = ["NB"]
+primary = true
+"#,
+    );
+    let out = makod()
+        .args(["--config"])
+        .arg(&cfg)
+        .args([
+            "--allow-volatile",
+            "--api-webdienste-addr",
+            "127.0.0.1:18090",
+            "--check",
+        ])
+        .output()
+        .expect("spawn makod");
+    assert!(
+        !out.status.success(),
+        "--check must reject :8090 without --auth-key or --oidc-issuer.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--auth-key") || stderr.contains("--oidc-issuer"),
+        "the error must name the flag that fixes it, got: {stderr}"
+    );
+}
+
+/// The same port *with* credentials passes, so the test above is about the
+/// missing credential and not merely about the flag being present.
+#[test]
+fn check_accepts_an_authenticated_port_with_credentials() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cfg = write_config(
+        dir.path(),
+        r#"
+[[party]]
+mp_id = "9900001000001"
+roles = ["NB"]
+primary = true
+"#,
+    );
+    let out = makod()
+        .args(["--config"])
+        .arg(&cfg)
+        .args([
+            "--allow-volatile",
+            "--api-webdienste-addr",
+            "127.0.0.1:18090",
+            "--auth-key",
+            "erp-prod=0123456789abcdef0123456789abcdef",
+            "--check",
+        ])
+        .output()
+        .expect("spawn makod");
+    assert!(
+        out.status.success(),
+        "--check must accept :8090 once a named key is configured.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}

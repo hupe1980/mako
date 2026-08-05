@@ -1184,7 +1184,7 @@ The AS4 endpoint URL is carried in the `COM` segment with qualifier `"AK"`
 ## Redispatch 2.0
 
 **Regulatory basis:** §§ 13, 13a, 14 EnWG; BNetzA Beschlüsse BK6-20-059,
-BK6-20-060, BK6-20-061 (see [Redispatch 2.0](redispatch.md) for the
+BK6-20-060, BK6-20-061 (see [Redispatch 2.0](@/docs/reference/redispatch.md) for the
 per-ruling deadline table)
 
 Redispatch 2.0 uses **XML-based messages** (not EDIFACT) alongside IFTSTA

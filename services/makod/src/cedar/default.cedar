@@ -4,8 +4,14 @@
 // MaKo action. This replicates the previous shared-token model while
 // introducing named principal identities that appear in audit logs.
 //
-// Layer additional policies on top — either via `--cedar-policy-dir` or via
-// a policy file loaded at startup — to implement fine-grained ABAC rules:
+// Layer additional policies on top via `--cedar-policy-dir` to implement
+// fine-grained ABAC rules. Because the catch-all below already permits
+// everything, only `forbid` statements narrow it — an added `permit` grants
+// nothing new. To build up from a deny-all baseline instead, start makod with
+// `--cedar-no-default-policy`, which omits this file entirely and makes the
+// policy directory the only source of access (see conservative.cedar).
+//
+// Examples, all in the layer-on-top form:
 //
 //   // Example: restrict "ci-readonly" to read-only MaLo access
 //   forbid(

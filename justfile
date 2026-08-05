@@ -127,7 +127,52 @@ test-features:
     done
 
 # Full CI suite (minimum gate + tests + quality + release-lifecycle checks)
-ci: check test test-features clippy fmt-check deny no-version-alias doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
+# Lint every documented role-scoped deployment profile of makod.
+#
+# `clippy` above runs --all-features, which turns on *every* role at once. That
+# is exactly the configuration in which role gating cannot be wrong: each
+# `#[cfg(feature = "role-…")]` is satisfied, so nothing is excluded and no
+# unused import appears. A role-scoped build is the opposite case and the one
+# operators actually deploy, so it needs its own pass — the profiles below are
+# the ones documented in services/makod/Cargo.toml.
+clippy-roles:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for f in "role-lf" "role-nb" "role-msb" \
+             "role-lf-strom" "role-lf-gas" \
+             "role-nb-strom" "role-nb-gas" \
+             "role-msb-strom" "role-msb-gas" "role-esa-strom" \
+             "role-lf,role-nb,role-msb"; do
+        echo "==> cargo clippy -p makod --features $f"
+        cargo clippy -p makod --features "$f" --all-targets -- -D warnings
+    done
+
+# Boot each umbrella deployment profile and assert it passes --check.
+#
+# `clippy-roles` proves a role-scoped build *compiles*; it cannot prove the
+# binary starts. Startup runs assertions that only fire at runtime — adapter
+# coverage and dispatch completeness both panic — so a role gate that excludes
+# a module while leaving its PIDs registered produces a binary that lints clean
+# and dies on boot. That is the failure an operator would meet in production,
+# so it needs a real run.
+#
+# Umbrella profiles only (lf/nb/msb): the per-Sparte features are components of
+# these, and a full build per feature is too slow for the default gate.
+smoke-roles:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    for pair in "role-lf:LF" "role-nb:NB" "role-msb:MSB"; do
+        feat="${pair%%:*}"; role="${pair##*:}"
+        echo "==> $feat (party role $role)"
+        cargo build -p makod --features "$feat"
+        printf '[[party]]\nmp_id = "9900001000001"\nroles = ["%s"]\nprimary = true\n' \
+            "$role" > "$tmp/makod.toml"
+        ./target/debug/makod --config "$tmp/makod.toml" --allow-volatile --check
+    done
+
+ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
 
 # ── makotest (Python toolkit) ─────────────────────────────────────────────────
 
@@ -334,7 +379,15 @@ check-mermaid:
     cd site && npm install --no-audit --no-fund --silent && npm run --silent check:mermaid
 
 # Link check + diagram check for the docs site.
-check-site: check-mermaid
+# Fail on bare relative Markdown links in site content.
+#
+# `zola check` validates `@/docs/…` links only; a plain `[text](page.md)` is
+# emitted verbatim, never resolved, and 404s silently. See
+# site/tools/check-links.mjs.
+check-links:
+    cd site && node tools/check-links.mjs
+
+check-site: check-mermaid check-links
     cd site && zola check
 
 # ── Fuzz ──────────────────────────────────────────────────────────────────────

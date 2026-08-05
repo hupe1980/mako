@@ -11,10 +11,14 @@ mako-specific**: everything it drives is a public wire contract (EDIFACT over
 AS4, REST, CloudEvents), so it can exercise any MaKo implementation.
 
 ```python
-from makotest import malo_from_base, add_werktage, validate_edifact
+from makotest import malo_from_base, deadline_at_werktage, validate_edifact
 
 malo_from_base("5123869678")      # '51238696780' — BDEW check digit applied
-add_werktage("2026-12-24", 2)     # '2026-12-29' — skips holidays and the weekend
+
+# The instant a Frist expires — 17:00 Europe/Berlin on the due Werktag.
+deadline_at_werktage("2026-12-30T09:00:00Z", 1)
+# '2027-01-04T17:00:00+01:00' — one Werktag, five calendar days:
+# 31.12. and 01.01. are non-Werktage and 02./03.01. is a weekend.
 
 report = validate_edifact(utilmd_bytes, "2026-10-01")
 report.is_valid                   # MIG + AHB + semantic rules, on that FV
@@ -43,7 +47,8 @@ Rust; anything shaped by test ergonomics is Python.**
 |---|---|
 | EDIFACT MIG/AHB/semantic validation | Rust (`edi-energy`) |
 | MaLo/MeLo check digits and formats | Rust (`rubo4e`) |
-| Werktag / Feiertag calendar | Rust (`mako-engine::fristen`) |
+| Werktag calendar **and deadline instants** | Rust (`mako-engine::fristen`) |
+| WiM per-PID Antwortfristen | Rust (`mako-wim`) |
 | EPEX curves, load profiles | Python |
 | Counterparty behaviour, fixtures, DSL | Python |
 
@@ -61,6 +66,58 @@ plain objects usable from a script or a notebook. Only `makotest.plugin` imports
 pytest, so a demo and a CI test drive the same code path.
 
 ---
+
+## Fristen and deadlines
+
+Two different questions, two different answers.
+
+`add_werktage` / `next_werktag` / `is_werktag` do **calendar arithmetic** and
+return a date. `deadline_at_werktage` and the `*_due_at` helpers return the
+**instant a Frist expires**, which is what the platform registers on a deadline
+and what an operator is measured against.
+
+```python
+from makotest import add_werktage, deadline_at_werktage
+
+add_werktage("2026-03-02", 3)                       # '2026-03-05'          — a date
+deadline_at_werktage("2026-03-02T09:00:00Z", 3)     # '2026-03-05T17:00:00+01:00'
+```
+
+A Werktage Frist expires at **17:00 Europe/Berlin** on the due Werktag, and the
+offset follows the CET/CEST transition — rendering it in UTC hides the hour that
+makes it correct. Comparing dates instead of instants passes a deadline that is
+hours wrong; approximating Werktage as calendar days is worse still, because one
+Werktag from 30.12. is five calendar days.
+
+| Function | Window | Basis |
+|---|---|---|
+| `deadline_at_werktage(received, n)` | *n* Werktage → 17:00 Berlin | BDEW MaKo calendar |
+| `add_hours(received, h)` | wall-clock hours (GPKE 24 h) | runs through weekends |
+| `contrl_due_at(received)` | 6 hours | CONTRL |
+| `aperak_strom_due_at(received)` | 45 min on a weekday | APERAK AHB §2.4.1 |
+| `aperak_gas_folgeprozess_due_at(received)` | next Werktag 12:00 | GeLi Gas |
+| `aperak_gas_initialprozess_due_at(received)` | 3 Werktage | GeLi Gas |
+| `wim_antwort_frist_werktage(pid)` | 3 / 5 / 7 / 1 WT, per PID | BK6-22-024 WiM Teil 1 |
+
+The **APERAK acknowledgement and the business answer are separate clocks** —
+45 minutes versus days. Conflating them is the classic WiM error.
+
+WiM MSB-Wechsel is per process, not one window:
+
+```python
+from makotest import assert_deadline_is, wim_antwort_frist_werktage
+
+wim_antwort_frist_werktage(55039)   # 3 — Kündigung          (Kap. 2.2.2 Nr. 2)
+wim_antwort_frist_werktage(55042)   # 5 — Beginn             (Kap. 2.3.2 Nr. 2)
+wim_antwort_frist_werktage(55051)   # 7 — Ende               (Kap. 2.4.2 Nr. 2)
+wim_antwort_frist_werktage(55168)   # 1 — Verpflichtungsanfrage (Kap. 2.5.2 Nr. 4)
+
+assert_deadline_is(
+    response["deadline"],
+    received="2026-03-02T09:00:00Z",
+    werktage=wim_antwort_frist_werktage(55051),
+)
+```
 
 ## Building EDIFACT
 
@@ -214,7 +271,8 @@ undefined Python symbols.
 
 ## Status
 
-Pre-1.0. Shipping today: the Rust core (identifiers, Fristen, Prüfidentifikator
+Pre-1.0. Shipping today: the Rust core (identifiers, Fristen **and deadline
+instants**, Prüfidentifikator
 introspection, the AHB answer table, EDIFACT build + interchange envelope +
 validation), the EPEX generator, the Marktpartner / BIKO / iMSys simulators,
 hypothesis strategies, domain assertions, and the pytest plugin.

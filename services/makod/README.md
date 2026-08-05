@@ -73,7 +73,7 @@ cargo build -p makod --release
 ./target/release/makod --check --config /etc/makod/makod.toml --data-dir /var/lib/makod
 ```
 
-`--check` validates configuration, loads profiles, and runs all adapter startup checks, then exits with code 0 on success. Use this in deployment pipelines before starting the live process.
+`--check` validates configuration, loads profiles, runs all adapter startup checks, and verifies that every authenticated port has credentials configured, then exits with code 0 on success. Use this in deployment pipelines before starting the live process: exit 0 means the same configuration will start.
 
 ---
 
@@ -116,10 +116,11 @@ Adjust the timeout via `--shutdown-timeout-secs <N>`.
 | `--oidc-audience <AUD>` | `MAKOD_OIDC_AUDIENCE` | Expected JWT `aud` claim (required when `--oidc-issuer` is set). |
 | `--oidc-jwks-refresh-secs <N>` | `MAKOD_OIDC_JWKS_REFRESH_SECS` | JWKS key-set refresh interval in seconds (default: 300). |
 | `--cedar-policy-dir <DIR>` | `MAKOD_CEDAR_POLICY_DIR` | Directory of extra `.cedar` policy files appended to the built-in default policy. |
+| `--cedar-no-default-policy` | `MAKOD_CEDAR_NO_DEFAULT_POLICY` | Omit the built-in permit-all baseline so only `--cedar-policy-dir` grants access. |
 | `--as4-addr <ADDR>` | `MAKOD_AS4_ADDR` | Enable AS4/ebMS3 inbound transport. |
 | `--api-webdienste-addr <ADDR>` | `MAKOD_API_WEBDIENSTE_ADDR` | Enable API-Webdienste Strom port. |
 | `--erp-webhook-url <URL>` | `MAKOD_ERP_WEBHOOK_URL` | CloudEvents 1.0 webhook for ERP integration. |
-| `--check` | `MAKOD_CHECK` | Validate config/profiles, then exit. |
+| `--check` | `MAKOD_CHECK` | Validate config, profiles, adapters and port credentials, then exit. |
 | `-l, --log-level` | `MAKOD_LOG_LEVEL` | Log level (`trace`/`debug`/`info`/`warn`/`error`). Default: `info`. |
 | `-f, --log-format` | `MAKOD_LOG_FORMAT` | Log format (`pretty`/`json`/`compact`). Default: `pretty`. |
 
@@ -133,6 +134,14 @@ All non-health HTTP endpoints are protected by [Cedar](https://cedarpolicy.com)
 attribute-based access control. Every request is evaluated against a Cedar policy
 set. The built-in `default.cedar` policy grants all actions to every authenticated
 principal — suitable for single-tenant deployments.
+
+A Cedar request is allowed when any `permit` matches and no `forbid` does, so an
+added `permit` cannot narrow that baseline — only `forbid` can. For a
+least-privilege deployment (and for §9 EnWG role separation in a combined-role
+VIU install) pass `--cedar-no-default-policy`, which drops the baseline and makes
+`--cedar-policy-dir` the only source of access. `conservative.cedar` ships as a
+starting point. The flag requires a policy directory; without one `makod` refuses
+to start rather than denying every request.
 
 ### Provisioning API keys
 
@@ -177,6 +186,10 @@ unless { action == MaKo::Action::"AdminMaloStats" };
 ```bash
 makod --cedar-policy-dir /etc/makod/cedar ...
 ```
+
+That example uses `forbid` because it narrows the permit-all baseline. To deny by
+default and grant back only what is listed, copy `conservative.cedar` into the
+directory and add `--cedar-no-default-policy`.
 
 Cedar policies are validated at startup against the built-in schema using the
 Cedar Validator in strict mode — a policy with type errors prevents startup. This

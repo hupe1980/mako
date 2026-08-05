@@ -35,14 +35,17 @@ use mako_gpke::{
 /// bypassing the HTTP auth layer.
 async fn make_state(marktrollen: &[&str]) -> makod::commands_api::CommandsApiState {
     use makod::{
-        cedar_authz::CedarAuthorizer,
+        cedar_authz::{CedarAuthorizer, DefaultPolicy},
         commands_api::CommandsApiState,
         malo_cache::{MaloIdentResultCache, SlateDbMaloCache},
     };
     let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
         .await
         .expect("open in-memory SlateDB");
-    let cedar = Arc::new(CedarAuthorizer::new(vec![], None, None).expect("cedar build"));
+    let cedar = Arc::new(
+        CedarAuthorizer::new(vec![], None, None, None, DefaultPolicy::PermitAll)
+            .expect("cedar build"),
+    );
     CommandsApiState {
         tenant_id: TenantId::from_party_id("9900357000004"),
         sender_party_id: "9900357000004".to_owned(),

@@ -226,6 +226,44 @@ pub fn parse(input: &[u8]) -> Result<AnyMessage, Error> {
 /// Parse a single message using an explicit registry.
 ///
 /// Used by [`Platform::parse`] to avoid the global-registry singleton.
+/// Enforce BDEW Allgemeine Festlegungen §2.13 on one message.
+///
+/// > "Die im UNB- und NAD-Segment für den Absender / Empfänger verwendeten
+/// > MP-ID sind identisch."
+///
+/// Checked at parse time because the envelope and the message disagreeing is an
+/// interchange-level defect, and because it is an authorisation boundary: the
+/// transport authenticates the *envelope* sender while business logic reads
+/// `NAD`, so a tolerated mismatch lets an authenticated partner attribute a
+/// message to a different market participant.
+///
+/// A party absent from either side is not a mismatch — some profiles omit one,
+/// and whether that is legal is an AHB question.
+pub(crate) fn check_interchange_party_identity(
+    unb_sender: &str,
+    unb_receiver: &str,
+    message: &AnyMessage,
+    message_index: usize,
+) -> Result<(), Error> {
+    for (unb_id, nad_id, qualifier, nad_qualifier) in [
+        (unb_sender, message.nad_sender(), "DE0004", "MS"),
+        (unb_receiver, message.nad_receiver(), "DE0010", "MR"),
+    ] {
+        let Some(nad_id) = nad_id else { continue };
+        if unb_id.is_empty() || nad_id.is_empty() || unb_id == nad_id {
+            continue;
+        }
+        return Err(Error::InterchangePartyMismatch {
+            qualifier,
+            nad_qualifier,
+            unb_id: unb_id.to_owned(),
+            nad_id: nad_id.to_owned(),
+            message_index,
+        });
+    }
+    Ok(())
+}
+
 pub(crate) fn parse_with_registry(
     input: &[u8],
     config: ParseConfig,
@@ -242,7 +280,22 @@ pub(crate) fn parse_with_registry(
             return Err(Error::TooManySegmentsInMessage { limit: lim, actual });
         }
     }
-    dispatch_message(segments, registry)
+    // §2.13 — read the envelope parties before `dispatch_message` consumes the
+    // segments; an interchange-less message simply has no UNB and is skipped.
+    let (unb_sender, unb_receiver) = segments
+        .iter()
+        .find(|s| s.tag == "UNB")
+        .map(|unb| {
+            (
+                unb.component_str(1, 0).unwrap_or("").to_owned(),
+                unb.component_str(2, 0).unwrap_or("").to_owned(),
+            )
+        })
+        .unwrap_or_default();
+
+    let message = dispatch_message(segments, registry)?;
+    check_interchange_party_identity(&unb_sender, &unb_receiver, &message, 0)?;
+    Ok(message)
 }
 
 /// Parse all messages from an interchange using the global registry.
@@ -840,6 +893,16 @@ fn parse_interchange_full_from_segments_with_registry(
             header: header.clone(),
             message_index: index,
         });
+    }
+
+    // §2.13 — every message's NAD parties must match the envelope.
+    for (index, envelope) in messages.iter().enumerate() {
+        check_interchange_party_identity(
+            header.sender_id.as_ref(),
+            header.receiver_id.as_ref(),
+            &envelope.message,
+            index,
+        )?;
     }
 
     // validate UNZ control reference matches UNB control reference.

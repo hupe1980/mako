@@ -262,6 +262,40 @@ kubectl rollout status deployment/makod
 
 Do **not** remove the old FV from the adapter config yet.
 
+### Watch for format-version substitution
+
+`makod` derives the format version from each inbound message's release. When it
+cannot — an unknown message type, an unparseable release, or a release with **no
+registered profile for today's date** — it falls back to the newest known FV and
+logs at `WARN`:
+
+```
+format version could not be derived from the message — validating against the
+newest known release instead; the AHB rules applied are not necessarily those of
+the release the message claims
+  reason="no profile registered for this release on today's date"
+  substituted_fv="FV2026-10-01"
+```
+
+Falling back rather than rejecting is deliberate: during a cutover a counterparty
+may send a release this binary predates, and refusing the message outright is
+worse than dispatching it under the closest registered version.
+
+The substitution does **not** change which AHB rules apply — validation derives
+its profile from the message's own release. What the FV selects is the
+`MessageAdapter` and the `WorkflowId` name, and since adapters accept every
+registered FV the substitution is usually invisible in behaviour. Two things make
+it worth watching anyway: it means mako could not read the release the
+counterparty stated, and the spawned process carries a `WorkflowId` naming a
+release the message never claimed.
+
+Treat a burst during the transition window as a signal that a profile is missing
+from the deployed binary — not as noise.
+
+Alert on `reason="no profile registered for this release on today's date"`
+specifically; the other reasons indicate a malformed message rather than a
+deployment gap.
+
 ---
 
 ## Step 13 — Run in-flight process migration (online, no downtime)

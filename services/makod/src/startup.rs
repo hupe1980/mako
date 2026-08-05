@@ -433,9 +433,15 @@ pub(crate) fn validate_dispatch_completeness(router: &mako_engine::pid_router::P
             missing.join("\n  ")
         );
     }
+    // Log what this binary actually registers, not only what the dispatcher
+    // could handle. `KNOWN_WORKFLOW_NAMES` is a const array and identical in
+    // every build, so on its own it reads as "all workflows active" even in a
+    // role-scoped deployment that registers a fraction of them. The registered
+    // counts are what identify the binary's role scope for a BNetzA audit.
     info!(
-        dispatched_workflows =
-            ingest_dispatcher::EdifactIngestDispatcher::KNOWN_WORKFLOW_NAMES.len(),
+        registered_workflows = router.workflow_names().len(),
+        registered_pids = router.registered_pids().count(),
+        dispatch_arms = ingest_dispatcher::EdifactIngestDispatcher::KNOWN_WORKFLOW_NAMES.len(),
         "dispatch completeness validated"
     );
 }
@@ -963,10 +969,24 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
     // message. Retention adds a 24-hour safety margin on top of the window.
     const INBOX_DEDUP_RETENTION: time::Duration = time::Duration::hours(72 + 24);
     let inbox_store_for_purge = cfg.inbox_store_for_purge;
+
+    // Heartbeat like every other worker. A stalled purge is not a compliance
+    // failure — dedup keeps working, entries simply accumulate — but it leaks
+    // storage indefinitely, and this was the only worker whose death was
+    // invisible to `GET /health`.
+    //
+    // The window is generous: the loop ticks daily, so anything under ~2 cycles
+    // would flap on a slow purge over a large store.
+    let (purge_hb, purge_watch) = new_heartbeat("inbox-purge-worker", 26 * 3600);
+    cfg.health_state.register_worker(purge_watch);
+
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(24 * 3600));
         loop {
             interval.tick().await;
+            // Tick before the work: the heartbeat proves the loop is alive, and
+            // a purge that fails still logs its own error below.
+            purge_hb.tick();
             let cutoff = time::OffsetDateTime::now_utc() - INBOX_DEDUP_RETENTION;
             match inbox_store_for_purge.purge_expired(cutoff).await {
                 Ok(n) => tracing::info!(removed = n, "inbox purge complete"),

@@ -731,16 +731,16 @@ cargo test -p energy-billing --all-features  # all categories, §41a guard, §54
 
 | Topic | File |
 |---|---|
-| Getting started | [getting-started.md](getting-started.md) |
-| Engine internals | [engine.md](engine.md) |
-| `makod` operator guide | [makod.md](makod.md) |
-| `marktd` operator guide | [marktd.md](marktd.md) |
-| `processd` operator guide | [processd.md](processd.md) |
-| `invoicd` operator guide | [invoicd.md](invoicd.md) |
-| `netzbilanzd` operator guide | [netzbilanzd.md](netzbilanzd.md) |
-| `sperrd` operator guide | [sperrd.md](sperrd.md) |
-| `edmd` operator guide | [edmd.md](edmd.md) |
-| `obsd` operator guide | [obsd.md](obsd.md) |
-| ERP integration | [erp-integration.md](erp-integration.md) |
-| PID reference | [pid-reference.md](pid-reference.md) |
-| Compensation flows | [compensation.md](compensation.md) |
+| Getting started | [Getting started](@/docs/guide/getting-started.md) |
+| Engine internals | [Engine internals](@/docs/architecture/engine.md) |
+| `makod` operator guide | [makod](@/docs/services/makod.md) |
+| `marktd` operator guide | [marktd](@/docs/services/marktd.md) |
+| `processd` operator guide | [processd](@/docs/services/processd.md) |
+| `invoicd` operator guide | [invoicd](@/docs/services/invoicd.md) |
+| `netzbilanzd` operator guide | [netzbilanzd](@/docs/services/netzbilanzd.md) |
+| `sperrd` operator guide | [sperrd](@/docs/services/sperrd.md) |
+| `edmd` operator guide | [edmd](@/docs/services/edmd.md) |
+| `obsd` operator guide | [obsd](@/docs/services/obsd.md) |
+| ERP integration | [erp-integration](@/docs/architecture/erp-integration.md) |
+| PID reference | [pid-reference](@/docs/regulatory/pid-reference.md) |
+| Compensation flows | [compensation](@/docs/architecture/compensation.md) |

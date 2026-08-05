@@ -805,7 +805,16 @@ mod tests {
         let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
             .await
             .expect("open in-memory SlateDB");
-        let cedar = Arc::new(CedarAuthorizer::new(vec![], None, None).expect("cedar build"));
+        let cedar = Arc::new(
+            CedarAuthorizer::new(
+                vec![],
+                None,
+                None,
+                None,
+                crate::cedar_authz::DefaultPolicy::PermitAll,
+            )
+            .expect("cedar build"),
+        );
         CommandsApiState {
             tenant_id: TenantId::from_party_id("4033872000022"),
             sender_party_id: "4033872000022".to_owned(),
