@@ -842,7 +842,6 @@ the raw `data` JSONB for backward compatibility:
 | makod process relay | `de.mako.aperak.timeout` | forwarded from `makod` ingest |
 | makod process relay | `de.mako.process.completed` | forwarded from `makod` ingest |
 | makod process relay | `de.mako.process.failed` | forwarded from `makod` ingest |
-| makod process relay | `de.mako.edifact.inbound` | forwarded from `makod` ingest |
 
 > `de.mako.*` events carry the CloudEvents extensions `makoconvid`, `makopid`,
 > `makoworkflow`, and `marktrole` (role of the counterparty: `NB`, `LF`, `MSB`,

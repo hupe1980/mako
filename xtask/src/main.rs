@@ -187,23 +187,26 @@ fn audit_ahb() {
 }
 
 fn check_bo4e_coverage() {
-    // Count distinct rubo4e::current types used across crates/ and services/.
+    // Count the distinct `rubo4e::current` types mako actually uses.
     //
-    // The grep for single-line imports misses multi-line brace imports such as
-    //   use rubo4e::current::{
-    //       Energiemenge, Lastgang, ...
-    //   };
-    // This implementation scans all Rust source files and accumulates type names
-    // from both single-line and multi-line import forms.
+    // Two forms count, because both are real usage:
     //
-    // Exit 1 if the count deviates by more than 2 from the claimed value in README.md.
+    //   use rubo4e::current::{Energiemenge, Lastgang};   // imported
+    //   let v: Vec<rubo4e::current::Lastgang> = ...;     // fully-qualified inline
+    //
+    // Counting only the import form under-reports every type a service names
+    // inline — `netzbilanzd` deserialises `Vec<rubo4e::current::Lastgang>`
+    // without importing it.
+    //
+    // Comments are stripped first. A type named only in a doc comment (the
+    // sibling line above is exactly that) is documentation, not usage, and
+    // counting it would inflate the figure the README publishes.
     use std::collections::BTreeSet;
 
     let (root_str, _) = workspace_info();
     let root = std::path::Path::new(&root_str);
     let mut types: BTreeSet<String> = BTreeSet::new();
 
-    // Walk crates/ and services/ for *.rs files.
     let search_dirs = [root.join("crates"), root.join("services")];
     let mut rs_files: Vec<std::path::PathBuf> = Vec::new();
     for dir in &search_dirs {
@@ -212,50 +215,12 @@ fn check_bo4e_coverage() {
         }
     }
 
-    // For each file, scan for `use rubo4e::current::<ident>` or `use rubo4e::current::{...}`
     for path in &rs_files {
         let Ok(src) = std::fs::read_to_string(path) else {
             continue;
         };
-        let mut in_import = false;
-        for line in src.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("use rubo4e::current::") {
-                in_import = true;
-            }
-            if in_import {
-                // Extract PascalCase identifiers, skipping `as Alias` rename targets.
-                // e.g. `Sparte as Bo4eSparte` → adds Sparte, skips Bo4eSparte.
-                let mut word = String::new();
-                let mut prev_word_was_as = false;
-                for ch in trimmed.chars() {
-                    if ch.is_alphanumeric() || ch == '_' {
-                        word.push(ch);
-                    } else if !word.is_empty() {
-                        if word == "as" {
-                            prev_word_was_as = true;
-                        } else {
-                            let is_type = word.chars().next().is_some_and(|c| c.is_uppercase());
-                            if is_type && !prev_word_was_as && word != "Bool" && word != "String" {
-                                types.insert(word.clone());
-                            }
-                            prev_word_was_as = false;
-                        }
-                        word.clear();
-                    }
-                }
-                if !word.is_empty() && word != "as" {
-                    let is_type = word.chars().next().is_some_and(|c| c.is_uppercase());
-                    if is_type && !prev_word_was_as {
-                        types.insert(word);
-                    }
-                }
-                // End of import: no trailing comma or open brace means single-line form done.
-                if !trimmed.ends_with('{') && !trimmed.ends_with(',') {
-                    in_import = false;
-                }
-            }
-        }
+        let code = strip_line_comments(&src);
+        collect_rubo4e_types(&code, &mut types);
     }
 
     println!("rubo4e::current types found:");
@@ -265,14 +230,12 @@ fn check_bo4e_coverage() {
     let found = types.len();
     println!("\nTotal: {found} distinct rubo4e::current types");
 
-    // Check against the claim in README.md.
-    // The claim looks like: **24 active `rubo4e::current` types**
+    // The claim reads: **80 active `rubo4e::current` types — ...**
     let readme = std::fs::read_to_string(root.join("README.md")).unwrap_or_default();
     let claimed: usize = readme
         .lines()
         .find(|l| l.contains("rubo4e::current") && l.contains("types"))
         .and_then(|l| {
-            // Strip markdown formatting and find the first integer.
             let stripped: String = l
                 .chars()
                 .filter(|c| c.is_ascii_digit() || c.is_whitespace())
@@ -284,19 +247,79 @@ fn check_bo4e_coverage() {
         .unwrap_or(0);
 
     if claimed == 0 {
-        println!("⚠ Could not parse claimed count from README.md.");
+        eprintln!("ERROR: could not parse the claimed count from README.md.");
+        std::process::exit(1);
+    }
+    // Exact, not a tolerance. A published count is either right or it is not,
+    // and a ±2 band silently permits three types to appear or vanish.
+    if found == claimed {
+        println!("✓ README.md claim {claimed} matches.");
     } else {
-        let delta = (found as i64 - claimed as i64).unsigned_abs() as usize;
-        if delta > 2 {
-            eprintln!(
-                "ERROR: found {found} types but README.md claims {claimed} (delta={delta} > 2)."
-            );
-            eprintln!("Update the count in README.md and site/content/_index.md.");
-            std::process::exit(1);
+        eprintln!("ERROR: found {found} types but README.md claims {claimed}.");
+        eprintln!("Update the count in README.md and concepts/BO4E_COVERAGE.md.");
+        std::process::exit(1);
+    }
+}
+
+/// Remove `//` line comments, preserving anything inside a string literal.
+fn strip_line_comments(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    for line in src.lines() {
+        let bytes = line.as_bytes();
+        let mut in_str = false;
+        let mut cut = line.len();
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' if in_str => i += 1,
+                b'"' => in_str = !in_str,
+                b'/' if !in_str && i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                    cut = i;
+                    break;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        out.push_str(&line[..cut]);
+        out.push('\n');
+    }
+    out
+}
+
+/// Accumulate every `rubo4e::current::…` type named in `code`, covering both the
+/// braced-import form and fully-qualified inline paths.
+fn collect_rubo4e_types(code: &str, types: &mut std::collections::BTreeSet<String>) {
+    const PREFIX: &str = "rubo4e::current::";
+    let mut rest = code;
+    while let Some(idx) = rest.find(PREFIX) {
+        rest = &rest[idx + PREFIX.len()..];
+        let tail = rest.trim_start();
+        if let Some(inner) = tail.strip_prefix('{') {
+            // Braced group, possibly spanning lines: take everything to the `}`.
+            let Some(close) = inner.find('}') else {
+                continue;
+            };
+            for part in inner[..close].split(',') {
+                let name = part.trim().split(" as ").next().unwrap_or("").trim();
+                if is_type_ident(name) {
+                    types.insert(name.to_owned());
+                }
+            }
         } else {
-            println!("✓ Count {found} matches README.md claim {claimed} (delta={delta} ≤ 2).");
+            let name: String = tail
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if is_type_ident(&name) {
+                types.insert(name);
+            }
         }
     }
+}
+
+fn is_type_ident(s: &str) -> bool {
+    !s.is_empty() && s.chars().next().is_some_and(char::is_uppercase)
 }
 
 fn collect_rs_files(walker: std::fs::ReadDir, out: &mut Vec<std::path::PathBuf>) {

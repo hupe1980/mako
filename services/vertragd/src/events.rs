@@ -39,7 +39,7 @@ pub fn build_cloud_event(
 /// | `de.vertrag.kuendigung-widerrufen` | Kündigung withdrawn before Lieferende |
 /// | `de.vertrag.tarifwechsel` | Product change applied immediately |
 /// | `de.vertrag.tarifwechsel-geplant` | Future-dated product change stored |
-/// | `de.vertrag.preisgarantie-updated` | Price guarantee stored/replaced |
+/// | `de.vertrag.preisgarantie-hinterlegt` | Price guarantee stored/replaced |
 /// | `de.vertrag.preisaenderung.ankuendigung` | Notice worker, ≤ 42 days before Wirksamkeit |
 /// | `de.vertrag.autoerneuerung.ankuendigung` | 30 days before auto-renewal |
 /// | `de.vertrag.ablauf.ankuendigung` | 30 days before vertragsende / preisgarantie_bis |

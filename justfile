@@ -172,7 +172,7 @@ smoke-roles:
         ./target/debug/makod --config "$tmp/makod.toml" --allow-volatile --check
     done
 
-ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
+ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
 
 # ── makotest (Python toolkit) ─────────────────────────────────────────────────
 

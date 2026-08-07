@@ -1471,7 +1471,7 @@ pub async fn get_rahmenvertrag_malos(
 /// this endpoint exposes the structured metadata for ERP systems to
 /// display guarantee windows in customer-facing UIs.
 ///
-/// Emits `de.vertrag.preisgarantie.updated`.
+/// Emits `de.vertrag.preisgarantie-hinterlegt`.
 pub async fn put_preisgarantie(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
@@ -1526,7 +1526,7 @@ pub async fn put_preisgarantie(
     }
     if cfg.erp_webhook_url.is_some() {
         let ce = build_cloud_event(
-            mako_events::vertrag::PREISGARANTIE_UPDATED,
+            mako_events::vertrag::PREISGARANTIE_HINTERLEGT,
             vertrag_id,
             &cfg.tenant,
             serde_json::json!({ "vertrag_id": vertrag_id }),

@@ -14,6 +14,14 @@
 //!   with `-` — never `_`. German domain nouns keep their established spelling
 //!   (participles like `beliefert`, compound nouns like `nb-contract`).
 //!   `segments_use_hyphen_not_underscore` enforces this.
+//! - A namespace names its facts in one language. `de.vertrag.*` is German
+//!   throughout (`gekuendigt`, `preisgarantie-hinterlegt`); `de.mako.*`,
+//!   `de.gabi.*` and `de.accounting.*` are technical or English-domain and stay
+//!   English. `german_namespaces_use_german_participles` enforces the German
+//!   set. This is about the *participle*, not the noun — and it does not mean
+//!   `.updated` and `.geaendert` are interchangeable: in `de.markt.*` they name
+//!   different facts (any master-data write vs. a regulated GPKE
+//!   Stammdatenänderung carrying its patch).
 //! - Statuses worth grepping for are flagged in doc comments:
 //!   - `⚠ phantom:` — subscribed (usually by `agentd`), but no emitter
 //!     exists yet; the emitter is tracked in the roadmap.
@@ -58,9 +66,28 @@ pub mod mako {
     pub const CONTRL_RECEIVED: &str = "de.mako.contrl.received";
     /// MaLo identified during Lieferantenwechsel (GPKE identification step).
     pub const MALO_IDENTIFIED: &str = "de.mako.malo.identified";
-    /// Outbound EDIFACT interchange handed to the AS4/AS2 sender.
+    /// Outbound EDIFACT interchange handed to the webhook EDIFACT sender.
+    ///
+    /// Emitted **only** by `WebhookEdifactSender`, the development / ERP
+    /// integration transport used when there is no AS4 infrastructure; the
+    /// production `BdewAs4Sender` path does not emit it. The CloudEvent is the
+    /// delivery envelope carrying the interchange, not a notification about it.
     pub const EDIFACT_OUTBOUND: &str = "de.mako.edifact.outbound";
     /// Inbound EDIFACT interchange received (edmd ingest allow-list).
+    ///
+    /// ⚠ phantom: no emitter yet (tracked in ROADMAP). `edmd` subscribes to
+    /// this by default (`SubscriptionConfig::default_event_types`), but nothing
+    /// emits it: `ErpEventType::cloud_event_type` has no matching variant and
+    /// no call site emits the literal. Unlike the `de.gabi.*` phantoms this one
+    /// is *referenced* — by its own subscriber — so
+    /// `unreferenced_constants_are_marked_phantom` cannot detect it.
+    ///
+    /// It also has no settled channel. [`EDIFACT_OUTBOUND`] looks like its pair
+    /// but is a webhook-transport delivery envelope emitted only in the
+    /// AS4-less development mode, whereas `edmd` subscribing by default implies
+    /// a production notification, which would belong on the ERP event path
+    /// (`ErpEventType`). Deciding which of the two it is comes before
+    /// implementing it.
     pub const EDIFACT_INBOUND: &str = "de.mako.edifact.inbound";
     // Design note: there are deliberately NO per-process outcome types
     // (`de.mako.gpke.lieferbeginn.bestaetigt` and friends). Process outcomes
@@ -287,7 +314,7 @@ pub mod vertrag {
     /// Future-dated product change stored.
     pub const TARIFWECHSEL_GEPLANT: &str = "de.vertrag.tarifwechsel-geplant";
     /// Price guarantee stored/replaced.
-    pub const PREISGARANTIE_UPDATED: &str = "de.vertrag.preisgarantie-updated";
+    pub const PREISGARANTIE_HINTERLEGT: &str = "de.vertrag.preisgarantie-hinterlegt";
     /// §41 Abs. 5 EnWG price-change notice (≤ 42 days before Wirksamkeit).
     pub const PREISAENDERUNG_ANKUENDIGUNG: &str = "de.vertrag.preisaenderung.ankuendigung";
     /// 30 days before auto-renewal.
@@ -459,7 +486,7 @@ pub fn all() -> &'static [&'static str] {
         vertrag::KUENDIGUNG_WIDERRUFEN,
         vertrag::TARIFWECHSEL,
         vertrag::TARIFWECHSEL_GEPLANT,
-        vertrag::PREISGARANTIE_UPDATED,
+        vertrag::PREISGARANTIE_HINTERLEGT,
         vertrag::PREISAENDERUNG_ANKUENDIGUNG,
         vertrag::AUTOERNEUERUNG_ANKUENDIGUNG,
         vertrag::ABLAUF_ANKUENDIGUNG,
@@ -602,6 +629,156 @@ mod tests {
     /// The catalog is a published contract, so a drifting separator means two
     /// spellings of the same concept reach subscribers. Ten types used `_`
     /// before this rule was enforced; hyphen is now the single convention.
+    /// Namespaces whose domain vocabulary is German keep German participles.
+    ///
+    /// `de.vertrag.*` is the clearest case: every event is a contract-lifecycle
+    /// fact named in the language the contract itself uses — `gekuendigt`,
+    /// `kuendigung-widerrufen`, `tarifwechsel-geplant`, `abgelaufen`. One event
+    /// used an English participle on a German noun
+    /// (`de.vertrag.preisgarantie-updated`), so a subscriber reading the
+    /// namespace had to know which of two languages each fact was named in.
+    ///
+    /// This is deliberately narrow. It is **not** a rule that every event must
+    /// be German: `de.mako.*` (EDIFACT transport), `de.gabi.*` and
+    /// `de.accounting.*` are technical or English-domain namespaces and stay
+    /// English. Nor does it merge `.updated` into `.geaendert` elsewhere —
+    /// in `de.markt.*` those are different facts (`malo.updated` is any
+    /// master-data write; `malo.stammdaten-geaendert` is a regulated GPKE
+    /// Stammdatenänderung carrying the applied patch for audit), and collapsing
+    /// them would lose a distinction the ERP relies on.
+    /// A constant nothing references must say so.
+    ///
+    /// `⚠ phantom:` marks a type the catalog declares but no service emits. The
+    /// marker only helps if it is true, and prose rots: the roadmap entry that
+    /// tracked this drifted to "six constants, none has a subscriber" when the
+    /// real figures were eleven unused and a subscriber that does exist
+    /// (`gabi-gas-agent` globs `de.gabi.imbalance.*` and `de.gabi.nomination.*`).
+    ///
+    /// So the annotation is checked rather than trusted: any constant not named
+    /// anywhere outside this crate must carry the marker. The reverse does not
+    /// hold — `ALOCAT_MISSING` is referenced by a *subscriber* and is still
+    /// phantom, because subscribing is not emitting.
+    #[test]
+    fn unreferenced_constants_are_marked_phantom() {
+        let src = include_str!("lib.rs");
+        let catalog = src.split("#[cfg(test)]").next().expect("catalog section");
+
+        // Every `pub const NAME: &str = "value";` with the doc block above it.
+        let lines: Vec<&str> = catalog.lines().collect();
+        let mut entries: Vec<(String, bool)> = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            let Some(rest) = line.trim().strip_prefix("pub const ") else {
+                continue;
+            };
+            let Some(name) = rest.split(':').next() else {
+                continue;
+            };
+            // Walk back over *this* constant's own doc block only. A fixed
+            // lookback window would span into the previous entry's comment —
+            // and in `gabi` every neighbour carries the marker, so the check
+            // passed for a constant whose marker had been deleted.
+            let mut phantom = false;
+            for prev in lines[..i].iter().rev() {
+                let t = prev.trim();
+                if t.starts_with("///") {
+                    if t.contains("⚠ phantom:") {
+                        phantom = true;
+                    }
+                } else if !t.is_empty() {
+                    break;
+                }
+            }
+            entries.push((name.trim().to_owned(), phantom));
+        }
+        assert!(
+            entries.len() > 80,
+            "parsed only {} constants — the parser broke, not the catalog",
+            entries.len()
+        );
+
+        // Concatenate every other Rust source in the workspace.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("workspace root");
+        let mut blob = String::new();
+        for dir in ["crates", "services"] {
+            collect_rs(&root.join(dir), &mut blob);
+        }
+
+        let unmarked: Vec<&str> = entries
+            .iter()
+            .filter(|(name, phantom)| !*phantom && !blob.contains(name.as_str()))
+            .map(|(name, _)| name.as_str())
+            .collect();
+
+        assert!(
+            unmarked.is_empty(),
+            "these constants are referenced nowhere outside `mako-events` but carry no \
+             `⚠ phantom:` marker:\n  {unmarked:?}\n\
+             Either wire an emitter, or document the gap with `⚠ phantom:` so the \
+             catalog does not imply the event exists."
+        );
+    }
+
+    /// Append every `.rs` file under `dir` (skipping this crate) to `out`.
+    fn collect_rs(dir: &std::path::Path, out: &mut String) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|n| n == "mako-events") {
+                    continue;
+                }
+                collect_rs(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && let Ok(s) = std::fs::read_to_string(&path)
+            {
+                out.push_str(&s);
+            }
+        }
+    }
+
+    #[test]
+    fn german_namespaces_use_german_participles() {
+        /// Namespaces whose events are named in German.
+        const GERMAN_NAMESPACES: &[&str] = &["vertrag"];
+        /// English participles that have an established German form already in
+        /// use elsewhere in the catalog.
+        const ENGLISH_PARTICIPLES: &[&str] = &[
+            "updated",
+            "changed",
+            "created",
+            "deleted",
+            "stored",
+            "replaced",
+            "cancelled",
+            "canceled",
+            "renewed",
+            "expired",
+            "planned",
+        ];
+
+        for ty in all() {
+            let Some(ns) = ty.split('.').nth(1) else {
+                continue;
+            };
+            if !GERMAN_NAMESPACES.contains(&ns) {
+                continue;
+            }
+            for bad in ENGLISH_PARTICIPLES {
+                assert!(
+                    !ty.ends_with(&format!("-{bad}")) && !ty.ends_with(&format!(".{bad}")),
+                    "{ty}: `de.{ns}.*` names its facts in German — use the German \
+                     participle instead of {bad:?} (e.g. `preisgarantie-hinterlegt`, \
+                     not `preisgarantie-updated`)"
+                );
+            }
+        }
+    }
+
     #[test]
     fn segments_use_hyphen_not_underscore() {
         for ty in all() {

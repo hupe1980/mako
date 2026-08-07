@@ -108,7 +108,6 @@ flowchart LR
 | `grid-billing` | Role-neutral German grid **settlement** engine — `settle_nne`, `settle_mmm`, `settle_msb`, `settle_gas_awh`, `reverse`, `correct`; returns `SettlementResult`/`InvoiceDocument`; every position carries `CalculationTrace` with `LegalReference`s (StromNEV §17/§21, GasNEV §14, KAV §2, §14a EnWG, ARegV) and `TariffSource`; `Sparte` drives Gas vs. Strom legal refs; `KaKundengruppe` annotates the KAV tier; regime turnovers enforced (`ensure_berechenbar` refuses AgNeS-era settlements); zero I/O; BO4E only via the opt-in `bo4e` feature (`grid_billing::bo4e::into_rechnung`) |
 | `eeg-billing` | Pure EEG/KWKG feed-in settlement library — `calculate_settlement` for all 10 settlement schemes (`SettlementScheme + TariffSource`, EEG 2000–2023 + KWKG 2023); §51 Negativpreisregel (version-aware: EEG 2017/2021/2023 thresholds + Bestandsschutz); §51a Verlängerungsanspruch; §52 Pflichtzahlungen (€10/kW) + §52 Abs. 6 Netting; §20 Abs. 3 Managementprämie; §23a quarterly degression; §36h Abs. 1/2 Wind Korrekturfaktor + Standortgüte re-eval; §39n Innovationsausschreibung feste Marktprämie; §51a Förderende-Verlängerung; §24 multi-block `CapacityBlock`; `SettlementPeriodState` lifecycle state machine; **§14 UStG Gutschrift** (opt-in `bo4e` feature → BO4E `Rechnung` with per-rate USt breakdown, VAT from declared `ust_status`); zero float money; no I/O |
 | `energy-billing` | Retail energy billing engine (LF role) — `Product` typed enum (13 categories, serde-tagged); per-category typed structs (`ElectricityProduct`, `GasProduct`, …); `ControllableLoadProvider` for §14a; `BillingEngine.validate()` + `bill_batch()`; `Invoice.warnings`; §41a Abs. 1 iMSys guard; `Invoice::to_en16931` (EN 16931 model, opt-in `en16931` feature); `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label; RLM demand charge; §54 EnergieStG exemption; historic levy lookups; §41a EPEX; HT/NT ToU; zero I/O; rubo4e behind the opt-in `bo4e` feature (typed `Rechnung` bridge) |
-| `metering` | German energy metering domain library — `MeterInterval`, Gas m³→kWh_Hs (§25 Nr. 4 MessEV / DVGW G 685 incl. `G685Rounding`); billing period aggregation; SLP/RLM/iMSys classification; BDEW 2025 load profiles (H25/G25/L25/P25/S25) + Dynamisierung; Zählzeitdefinition resolution (§14a); §29/§45 MsbG rollout obligations; Hampel quality scoring; V01–V10 validation engine (incl. plant-capacity ceiling); virtual meters (§42b EnWG GGV Solarpaket I); BSI TR-03109 `SmgwSession`/`ClsChannel`; § 60 Abs. 2 MsbG Jahresprognose with confidence bounds; zero I/O, no async, no float money |
 | `invoic-checker` | INVOIC plausibility — 6 checks (period validity, position arithmetic, document total, tariff match ToU-aware, tariff found, MMM settlement price check) |
 | `netz-checker` | NB Anmeldung validation — 6 deterministic checks, ERC A02/A05/A06/A07/E17 (EBD E_0622 / G_0011); no I/O |
 
@@ -122,7 +121,7 @@ flowchart LR
 | `invoicd` | `:8280` | LF | INVOIC plausibility-check — 6 checks, auto-settle/dispute, § 147 AO / GoBD receipts |
 | `netzbilanzd` | `:8680` | NB | NNE/KA/MMM/MSB/AWH billing — generates INVOIC 31001/31002/31005/31009/31011, full REMADV lifecycle, §14a Modul 2 ToU, §42a GGV, 13-tool MCP server |
 | `sperrd` | `:8780` | NB | Sperrung execution tracking — IFTSTA 21039 auto-dispatch, `GET /stats` compliance snapshot, 5-tool MCP server |
-| `edmd` | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest (optional per-message HMAC), Hampel quality scoring, V01–V10 validation, virtual meters (§42b GGV), § 60 Abs. 2 MsbG Jahresprognose **and Schätzwert-Bestätigungsschleife** (estimated-reading confirmation tracking with overdue escalation), §22 EnWG Netzverlust indicator, Iceberg/S3 OLAP, 15-tool MCP server |
+| `edmd` | `:8380` | All | Energy Data Management — built on the `metering` (computation) and `meterstore` (hot/cold storage) crates: MSCONS, iMSys direct push, Kafka batch ingest (optional per-message HMAC), Hampel quality scoring, V01–V10 validation, virtual meters (§42b GGV), § 60 Abs. 2 MsbG Jahresprognose **and Schätzwert-Bestätigungsschleife** (estimated-reading confirmation tracking with overdue escalation), §22 EnWG Netzverlust indicator, Iceberg/S3 OLAP, 15-tool MCP server |
 | `mabis-syncd` | `:8880` | ÜNB/NB | MaBiS Summenzeitreihen (MSCONS 13003) — aggregates per-MaLo Lastgang from edmd; submits to BIKO on the 10. Werktag; Erstaufschlag 1.–10. WT / Clearing 11.–30. WT / KBKA windows per BK6-24-174 Anlage 3 §3.10 |
 | `einsd` | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes, §52 sanctions, §51 neg-price, 18 MCP tools + 6 prompts |
 | `obsd` | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, automated deadline computation, `GET /api/v1/audit/bnetza-report` |
@@ -186,7 +185,7 @@ flowchart LR
 
 ### BO4E typed API (`marktd`)
 
-**64 active `rubo4e::current` types — schema validated at every read/write boundary.**
+**77 active `rubo4e::current` types — schema validated at every read/write boundary.**
 
 | Category | Detail |
 |---|---|
@@ -787,4 +786,9 @@ at your option.
 - [BDEW MaKo](https://www.bdew.de/energie/marktkommunikation/) — Market communication framework
 - [edifact-rs](https://crates.io/crates/edifact-rs) — Underlying EDIFACT parser
 - [asx-rs](https://crates.io/crates/asx-rs) — AS4/ebMS3 transport library used by `makod`
+- [metering](https://crates.io/crates/metering) — German energy metering domain library (intervals, SLP/RLM classification, Gas m³→kWh_Hs); pure computation, no storage
+- [meterstore](https://crates.io/crates/meterstore) — Metering time-series store (PostgreSQL hot window + Iceberg/S3 settled history) beneath `edmd`
+- [doubleentry](https://crates.io/crates/doubleentry) — General-purpose tamper-evident double-entry ledger used by `accountingd`
+- [rubo4e](https://crates.io/crates/rubo4e) — BO4E business-object types
+- [billing](https://crates.io/crates/billing) — Generic EN 16931 tariff/invoicing engine under the settlement crates
 - [SlateDB](https://slatedb.io/) — Embedded LSM storage backing `mako-engine`

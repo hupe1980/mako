@@ -558,7 +558,7 @@ retry and a dead-letter queue.
 | `de.vertrag.kuendigung-widerrufen` | Kündigung revoked via `POST /widerruf-kuendigung`; contract returned to AKTIV |
 | `de.vertrag.tarifwechsel` | Product change committed immediately (handler or due-worker) |
 | `de.vertrag.tarifwechsel-geplant` | Future-dated Tarifwechsel stored (applied later by the due-worker) |
-| `de.vertrag.preisgarantie-updated` | Price guarantee stored or replaced |
+| `de.vertrag.preisgarantie-hinterlegt` | Price guarantee stored or replaced |
 | `de.vertrag.preisaenderung.ankuendigung` | ≤ 42 days before `wirksamkeit` (§5 Abs. 2 StromGVV/GasGVV six weeks; §41 Abs. 5 EnWG one month for Haushaltskunden) |
 | `de.vertrag.autoerneuerung.ankuendigung` | 30 days before auto-renewal (§13 GasGVV / §14 StromGVV) |
 | `de.vertrag.ablauf.ankuendigung` | 30 days before `vertragsende` or `preisgarantie_bis` expiry (§13 GasGVV / §41 EnWG) |

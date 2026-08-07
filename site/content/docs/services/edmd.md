@@ -61,7 +61,7 @@ graph TB
     catalog["/api/v1/iceberg<br/>meterstore CatalogFacade<br/>(read-only · Cedar read-archive-olap)"]
     qa["quality engine<br/>Hampel score_intervals_f64 (AVX2/NEON)<br/>+ V01–V10 validate_intervals"]
 
-    marktd -->|"de.mako.process.initiated (23001 INSRPT)<br/>de.mako.edifact.inbound (MSCONS)<br/>HMAC POST /webhook"| edmd
+    marktd -->|"de.mako.process.initiated (23001 INSRPT)<br/>HMAC POST /webhook"| edmd
     smgw -->|"POST /api/v1/meter-reads/rlm/{malo_id}<br/>POST /api/v1/meter-reads/gas/{malo_id}"| edmd
     edmd --> qa
     qa -->|"annotated reads (ValidatedReads)"| store
@@ -1630,6 +1630,9 @@ subscriber_id = "edmd"                       # default
 event_types   = [
   "de.mako.process.initiated",
   "de.mako.process.completed",
+  # Subscribed by default, but nothing emits `de.mako.edifact.inbound` yet —
+  # the channel it should travel on is still undecided. MSCONS reaches edmd
+  # through the meter-read endpoints below, not through this event.
   "de.mako.edifact.inbound",
 ]
 
@@ -2181,6 +2184,6 @@ permit(
 
 | Metric | Target |
 |--------|--------|
-| Webhook `de.mako.edifact.inbound` success rate | > 99 % |
+| Webhook `de.mako.process.initiated` success rate | > 99 % |
 | DB pool utilisation | < 80 % |
 | meterstore tiering-watermark lag (age of the oldest hot-tier interval) | Bounded — settled intervals should roll to the cold tier within the one-week settlement lag |
