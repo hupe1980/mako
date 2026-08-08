@@ -22,7 +22,9 @@ use std::sync::Arc;
 
 use agentplane::tools::{McpClient, ToolClient};
 use anyhow::{Context as _, Result};
-use rmcp::transport::{StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig};
+use rmcp::ServiceExt as _;
+use rmcp::transport::StreamableHttpClientTransport;
+use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use secrecy::ExposeSecret as _;
 
 /// Every tool server the embedded manifests actually grant.
@@ -109,7 +111,7 @@ async fn connect_one(name: &str, uri: &str, token: &str) -> Result<Arc<dyn ToolC
     if !token.is_empty() {
         config = config.auth_header(token);
     }
-    let transport = StreamableHttpClientTransport::from_config(config);
+    let transport = StreamableHttpClientTransport::with_client(reqwest::Client::new(), config);
 
     // `host_info` advertises exactly what agentplane implements. Elicitation,
     // sampling and roots are deliberately not advertised: a server offered one

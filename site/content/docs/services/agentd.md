@@ -34,9 +34,9 @@ Port: **`:9580`**
 
 ### The manifest is the agent
 
-A specialist is `agents/<name>.yaml`. It declares the procedure, the model pair,
-each tool the agent may call, the ceilings it runs under and the schema its
-result must satisfy. The manifest is digest-covered: editing a procedure changes
+A specialist is `agents/<name>.yaml`. It declares the procedure, the model, each
+tool the agent may call, the ceilings it runs under and the schema its result
+must satisfy. The manifest is digest-covered: editing a procedure changes
 the digest, which is a version bump a reviewer sees in a diff.
 
 What stays in Rust is the one thing agentplane has no notion of — **which
@@ -149,18 +149,58 @@ rather than discovered at an erasure request.
 
 ---
 
-## Prompt channel discipline
+## Where the trust boundary is
 
-The CloudEvent payload derives from inbound counterparty EDIFACT, so it is
-untrusted. **It never enters the system message.** The system message carries the
-agent's own procedure — read from the manifest, never from a Rust copy — and the
-event arrives as separate labelled content.
+A CloudEvent payload is emitted by one of mako's own services, but almost
+everything in it originated on the wire: a MaLo came out of a counterparty's
+UTILMD, an amount off their INVOIC, a `reference` is free text they wrote. So the
+payload is **not admitted as trusted**.
 
-agentplane enforces this beyond convention. Untrusted input is `Tainted<T>`
-carrying a `Label` whose trust degrades and sensitivity escalates on every join,
-and a specialist declares two models: a **privileged** model that may call tools,
-and a **quarantined** model that reads counterparty text and cannot. A value that
-came from the wire cannot silently acquire the authority to act.
+A field is promoted to trusted only if `agentd` **re-validates it at admission**,
+against the format that identifier is defined to have — an 11-digit MaLo, a
+5-digit Prüfidentifikator, a 33-character MeLo, a UUID mako generated itself.
+Not because the emitting service says so, and not because the key looks like an
+identifier. Everything else — free text, amounts, nested objects, and any
+identifier whose value fails re-validation — is untrusted and carries a source
+naming the event it arrived on.
+
+This is what makes `protected_fields` mean something. A grant marking `/malo_id`
+as `require_trusted` is satisfied by a re-validated identifier and refused for a
+counterparty-authored string. Admitting the payload wholesale would have
+satisfied it with either.
+
+Re-validating is also why the promotion is honest rather than convenient: an
+11-digit MaLo has no room for an instruction. Collapsing the value space to one
+that cannot carry a payload is the whole justification, and it is checked at the
+boundary rather than assumed from an emitter's good behaviour.
+
+### Two shapes, and what each buys
+
+| | `tool-calling` (27 specialists) | `planned` (`gabi-gas-agent`) |
+|---|---|---|
+| Input | the whole payload, per-field labels | only the re-validated identifiers |
+| Control flow | the model chooses each next call | fixed before anything untrusted is read |
+| Untrusted material | read by the privileged model | read by the **quarantined** model in a `parse` step |
+| Cost | the injection surface is real | cannot react to what it discovers mid-flight |
+
+A `planned` specialist makes one privileged call that reads its trusted input and
+emits a plan: which granted tools, in what order, with which arguments. The
+runtime executes that plan itself, and step outputs travel between steps **by
+reference** rather than back through a model's context — so a hostile tool result
+cannot steer the steps that follow it.
+
+`gabi-gas-agent` is converted because its shape is known up front (read the
+imbalance, check the deadline, decide) while the ALOCAT and NOMRES values it
+reads are counterparty-authored — which is exactly the condition `planned` is
+for. Its `parse` step is where a model reads that material, on the quarantined
+model, under a declared schema and an extraction-only instruction. The only thing
+that step can say out of band is *not enough information*, which fails it rather
+than letting a guess stand.
+
+The other 27 declare **no quarantined model**, and that is deliberate. Under
+`tool-calling` with no memory formation nothing would ever select it, so
+declaring one would read as dual-model isolation while every call went to the
+privileged model. agentplane refuses that outright.
 
 ---
 
@@ -241,36 +281,40 @@ Each row is a subscription in `src/builtin/mod.rs` paired with a manifest in
 `agents/`. The capability is what `Runtime::run` is given; the manifest owns
 everything else.
 
-| Specialist | Capability | Subscribes to |
-|---|---|---|
-| `mako-agent` | `mako` | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.mako.aperak.*` |
-| `deadline-alert-agent` | `deadline.alert` | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.obs.deadline.approaching` |
-| `billing-agent` | `billing` | `de.invoic.receipt.disputed`, `de.accounting.mahnung.issued` |
-| `netzbilanz-agent` | `netzbilanz` | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched`, `de.netzbilanz.invoic.dispatch-overdue` |
-| `invoice-reconciliation-agent` | `invoice.reconciliation` | `de.invoic.payment.overdue`, `de.invoic.receipt.*` |
-| `billing-anomaly-agent` | `billing.anomaly` | `de.billing.rechnung.erstellt` |
-| `billing-regulatory-guard-agent` | `billing.regulatory.guard` | `de.billing.rechnung.erstellt` |
-| `jahresabrechnung-agent` | `jahresabrechnung` | _manual / scheduled_ |
-| `eeg-agent` | `eeg` | `de.eeg.anlage.foerderung-auslaufend`, `de.messwert.reading.direct.stored` |
-| `eeg-compliance-agent` | `eeg.compliance` | `de.eeg.anlage.*`, `de.eeg.verguetung.*`, `de.eeg.marktpraemie.*`, `de.eeg.compliance.*` |
-| `payment-reconciliation-agent` | `payment.reconciliation` | `de.accounting.payment.due`, `de.accounting.bankruecklast` |
-| `compliance-agent` | `compliance` | `de.obs.stp.parity.alert` |
-| `msb-history-agent` | `msb.history` | `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.completed` |
-| `meter-data-agent` | `meter.data` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` |
-| `grid-anomaly-agent` | `grid.anomaly` | `de.markt.nb-contract.updated`, `de.markt.malo.updated` |
-| `tariff-optimization-agent` | `tariff.optimization` | `de.billing.rechnung.erstellt`, `de.mako.process.completed` |
-| `vertragd-agent` | `vertragd` | `de.vertrag.*`, `de.mako.aperak.rejected`, `de.mako.process.failed`, `de.vertrag.ablauf.ankuendigung`, `de.vertrag.preisaenderung.ankuendigung` |
-| `tarifbd-agent` | `tarifbd` | `de.tarif.product.updated`, `de.tarif.angebot.abgelaufen`, `de.tarif.epex.missing` |
-| `processd-agent` | `processd` | `de.mako.process.initiated`, `de.mako.aperak.rejected`, `de.mako.process.failed` |
-| `sperrd-agent` | `sperrd` | `de.accounting.sperrauftrag`, `de.sperr.*`, `de.mako.process.completed` |
-| `portald-agent` | `portald` | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung-auslaufend`, `de.accounting.mahnung.issued`, `de.vertrag.*` |
-| `regulatory-reporting-agent` | `regulatory.reporting` | _manual / scheduled_ |
-| `replacement-value-agent` | `replacement.value` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` |
-| `mabis-syncd-agent` | `mabis.syncd` | `de.messwert.reading.quality.warning` |
-| `smgw-diagnostics-agent` | `smgw.diagnostics` | `de.messwert.cls.compliance-issue`, `de.messwert.smgw.cert.expiry-warning`, `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.initiated`, `de.markt.geraet.konfiguration.updated` |
-| `vpp-billing-agent` | `vpp.billing` | `de.vpp.dispatch.confirmed`, `de.vpp.settlement.berechnet` |
-| `gabi-gas-agent` | `gabi.gas.balancing` | `de.gabi.imbalance.*`, `de.gabi.alocat.missing`, `de.gabi.nomination.*`, `de.netzbilanz.invoic.drafted` |
-| `einsd-batch-agent` | `einsd.batch` | `de.eeg.settlement.batch-due`, `de.eeg.compliance.*`, `de.eeg.anlage.foerderung-auslaufend` |
+The **shape** column is the execution kind: `planned` where the task shape is
+known up front and the material is hostile, `tool-calling` where the shape is the
+discovery.
+
+| Specialist | Capability | Shape | Subscribes to |
+|---|---|---|---|
+| `mako-agent` | `mako` | `tool-calling` | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.mako.aperak.*` |
+| `deadline-alert-agent` | `deadline.alert` | `tool-calling` | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.obs.deadline.approaching` |
+| `billing-agent` | `billing` | `tool-calling` | `de.invoic.receipt.disputed`, `de.accounting.mahnung.issued` |
+| `netzbilanz-agent` | `netzbilanz` | `tool-calling` | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched`, `de.netzbilanz.invoic.dispatch-overdue` |
+| `invoice-reconciliation-agent` | `invoice.reconciliation` | `tool-calling` | `de.invoic.payment.overdue`, `de.invoic.receipt.*` |
+| `billing-anomaly-agent` | `billing.anomaly` | `tool-calling` | `de.billing.rechnung.erstellt` |
+| `billing-regulatory-guard-agent` | `billing.regulatory.guard` | `tool-calling` | `de.billing.rechnung.erstellt` |
+| `jahresabrechnung-agent` | `jahresabrechnung` | `tool-calling` | _manual / scheduled_ |
+| `eeg-agent` | `eeg` | `tool-calling` | `de.eeg.anlage.foerderung-auslaufend`, `de.messwert.reading.direct.stored` |
+| `eeg-compliance-agent` | `eeg.compliance` | `tool-calling` | `de.eeg.anlage.*`, `de.eeg.verguetung.*`, `de.eeg.marktpraemie.*`, `de.eeg.compliance.*` |
+| `payment-reconciliation-agent` | `payment.reconciliation` | `tool-calling` | `de.accounting.payment.due`, `de.accounting.bankruecklast` |
+| `compliance-agent` | `compliance` | `tool-calling` | `de.obs.stp.parity.alert` |
+| `msb-history-agent` | `msb.history` | `tool-calling` | `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.completed` |
+| `meter-data-agent` | `meter.data` | `tool-calling` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` |
+| `grid-anomaly-agent` | `grid.anomaly` | `tool-calling` | `de.markt.nb-contract.updated`, `de.markt.malo.updated` |
+| `tariff-optimization-agent` | `tariff.optimization` | `tool-calling` | `de.billing.rechnung.erstellt`, `de.mako.process.completed` |
+| `vertragd-agent` | `vertragd` | `tool-calling` | `de.vertrag.*`, `de.mako.aperak.rejected`, `de.mako.process.failed`, `de.vertrag.ablauf.ankuendigung`, `de.vertrag.preisaenderung.ankuendigung` |
+| `tarifbd-agent` | `tarifbd` | `tool-calling` | `de.tarif.product.updated`, `de.tarif.angebot.abgelaufen`, `de.tarif.epex.missing` |
+| `processd-agent` | `processd` | `tool-calling` | `de.mako.process.initiated`, `de.mako.aperak.rejected`, `de.mako.process.failed` |
+| `sperrd-agent` | `sperrd` | `tool-calling` | `de.accounting.sperrauftrag`, `de.sperr.*`, `de.mako.process.completed` |
+| `portald-agent` | `portald` | `tool-calling` | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung-auslaufend`, `de.accounting.mahnung.issued`, `de.vertrag.*` |
+| `regulatory-reporting-agent` | `regulatory.reporting` | `tool-calling` | _manual / scheduled_ |
+| `replacement-value-agent` | `replacement.value` | `tool-calling` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` |
+| `mabis-syncd-agent` | `mabis.syncd` | `tool-calling` | `de.messwert.reading.quality.warning` |
+| `smgw-diagnostics-agent` | `smgw.diagnostics` | `tool-calling` | `de.messwert.cls.compliance-issue`, `de.messwert.smgw.cert.expiry-warning`, `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.initiated`, `de.markt.geraet.konfiguration.updated` |
+| `vpp-billing-agent` | `vpp.billing` | `tool-calling` | `de.vpp.dispatch.confirmed`, `de.vpp.settlement.berechnet` |
+| `gabi-gas-agent` | `gabi.gas.balancing` | `planned` | `de.gabi.imbalance.*`, `de.gabi.alocat.missing`, `de.gabi.nomination.*`, `de.netzbilanz.invoic.drafted` |
+| `einsd-batch-agent` | `einsd.batch` | `tool-calling` | `de.eeg.settlement.batch-due`, `de.eeg.compliance.*`, `de.eeg.anlage.foerderung-auslaufend` |
 
 Activate them with `[bundled_agents]`. A role-scoped build contains only its own
 role's specialists, so `enable_all` never activates another Marktrolle's agents.
@@ -300,7 +344,9 @@ cannot reach a model is a silent no-op, not a degraded mode.
 | **`POST /api/v1/run` auth** | OIDC/JWT via `Claims` extractor; dev mode emits `[WARN]` |
 | **Inbound webhook HMAC** | `X-Mako-Signature: sha256=...` verified when `inbound_hmac_secret` is set; constant-time compare; 403 on mismatch |
 | **Mutating tools** | `requires_approval` + `spec.oversight` obligation, `on_expiry: deny` |
+| **Admission** | payload fields are re-validated at the boundary; only identifiers that pass are trusted |
 | **Authority-bearing arguments** | `protected_fields` with `require_trusted` — counterparty-derived values are refused |
+| **Tool transport** | one MCP client per server, routed by the server component of a `tool://` grant, so a call cannot reach a different server offering the same tool name |
 | **Personal data at rest** | Key ring seals journal, cases, events and task proposals; erasure destroys the case's wrapping key |
 | **Egress ceiling** | `max_sensitivity_egress` and `max_sensitivity_journaled` per agent |
 | **Max concurrent sessions** | `max_sessions` semaphore; 429 when exhausted |
@@ -315,6 +361,8 @@ cannot reach a model is a silent no-op, not a degraded mode.
 # agentd.toml
 tenant       = "9900357000004"
 journal_path = "/var/lib/agentd/journal.redb"   # § 147 AO record — durable storage
+# `tenant` also scopes the erasure keys, so one operator's cryptographic erasure
+# cannot reach another's bytes.
 
 # ── Model providers ───────────────────────────────────────────────────────────
 # The key is the name a manifest's `spec.models` refers to.
@@ -330,6 +378,8 @@ enable_all = true
 # There are no per-agent overrides. Prompts, models, tool grants and ceilings
 # are declared in agents/<name>.yaml, where the digest covers them.
 
+# Every server a manifest grants a tool on must appear here. One that is missing
+# is a startup failure, not a specialist that fails at its first tool call.
 [mcp_servers]
 makod    = "http://makod:8080/mcp"
 marktd   = "http://marktd:8180/mcp"
@@ -399,7 +449,9 @@ curl -X POST http://agentd:9580/api/v1/run \
 | `de.agent.decision.made` | A run reaches a terminal state. Carries `outcome`, the summary and `session_id` — the journal run id. |
 
 `outcome` is one of `completed`, `failed`, `suspended`, `exhausted`,
-`quarantined`, `replanning` or `cancelled`. A **suspended** run is not a failure:
+`quarantined`, `replanning`, `cancelled` or `not-admitted` — the last meaning the
+plane declined to start the run, which for a `planned` specialist means the event
+carried no identifier that re-validated. A **suspended** run is not a failure:
 it is waiting for a human decision or an inbound event.
 
 ---

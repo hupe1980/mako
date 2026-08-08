@@ -56,7 +56,6 @@ spec:
 
   models:
     privileged:  { provider: anthropic, model: claude-sonnet-5 }
-    quarantined: { provider: anthropic, model: claude-haiku-4-5 }
 
   security:
     max_sensitivity_egress: internal

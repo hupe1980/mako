@@ -32,6 +32,12 @@ reqwest      = { workspace = true }
 tokio-util   = { workspace = true }
 secrecy      = { version = "0.10", features = ["serde"] }
 agentplane = { version = "0.9", features = ["manifest", "mcp", "providers", "postgres", "cedar", "signing", "keyring"] }
+# The client transport that reaches mako's MCP servers. agentplane takes an
+# already-initialised rmcp service rather than a connection string, so which
+# transport carries a call stays a deployment decision.
+rmcp = { version = "3.1", default-features = false, features = [
+    "client", "transport-streamable-http-client", "transport-streamable-http-client-reqwest",
+] }
 async-trait = "0.1.91"
 
 [dev-dependencies]

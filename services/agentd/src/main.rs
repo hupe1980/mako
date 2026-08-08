@@ -117,15 +117,32 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // One transport per MCP server the manifests grant. Connecting at startup
+    // rather than lazily is deliberate: an agent whose tools are unreachable
+    // still answers, from the model alone and with no evidence behind it, which
+    // is worse than a daemon that declines to start.
+    let tool_servers = agentd::plane::tools::connect(&cfg.mcp_servers, &cfg.mcp_api_key)
+        .await
+        .context("connect MCP tool transports")?;
+
     // Only specialists the operator activated are registered and routed. An
     // `enable` name that matches nothing compiled in refuses to boot rather than
     // presenting as an agent that never fires.
     let activated = agentd::plane::Activation::from_config(&cfg.bundled_agents);
-    let plane = Plane::new(store, "agentd", &activated, providers, None, None)
-        .map_err(|e| anyhow::anyhow!("build agent plane: {e}"))?;
+    let plane = Plane::new(
+        store,
+        "agentd",
+        &cfg.tenant,
+        &activated,
+        providers,
+        tool_servers,
+        None,
+    )
+    .map_err(|e| anyhow::anyhow!("build agent plane: {e}"))?;
     info!(
         specialists = plane.router().routes().len(),
         journal = %cfg.journal_path,
+        tenant = %cfg.tenant,
         "agent plane ready"
     );
 

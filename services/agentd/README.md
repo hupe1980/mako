@@ -14,6 +14,7 @@ survives a crash and replays for audit.
 | **Specialists** | 28 manifests in `agents/`, embedded at compile time |
 | **Runtime** | agentplane — journaled effects, strict replay, human approval on mutating tools |
 | **Model providers** | Anthropic · OpenAI (and OpenAI-compatible) · AWS Bedrock |
+| **Tool transport** | one MCP client per server in `[mcp_servers]`, routed by the server component of each `tool://` grant |
 | **Role scoping** | `role-lf` · `role-nb` · `role-msb` — a role build contains no other arm's specialists (§ 9 EnWG) |
 | **Journal** | redb at `journal_path` — the § 147 AO / GoBD record, sealed by the key ring |
 | **A2A cards** | `GET /.well-known/agents/{name}` for each specialist |
@@ -33,7 +34,7 @@ model reads.
 Consequently there are **no per-agent config overrides**. Changing a specialist's
 model is a manifest edit, which is the reviewable path by design.
 
-Two properties matter for a regulated deployment:
+Three properties matter for a regulated deployment:
 
 - **Mutating tools require a human.** Every state-changing grant carries
   `requires_approval: true`, bounded by an obligation in `spec.oversight` with
@@ -41,6 +42,29 @@ Two properties matter for a regulated deployment:
 - **Authority-bearing arguments are bound to trusted sources.**
   `protected_fields` marks `/malo_id` and `/pid` as `require_trusted`, so a value
   derived from counterparty free text cannot reach `submit_command`.
+- **The payload is not trusted just because mako emitted it.** A CloudEvent field
+  is promoted only if `plane::label` re-validates it against the format that
+  identifier is defined to have; everything else is untrusted and carries the
+  event it arrived on as its source. Admitting the payload wholesale would have
+  satisfied `require_trusted` with a counterparty-chosen value.
+
+## Two execution shapes
+
+27 specialists run `tool-calling`: the model chooses each next call, and it is
+handed the whole payload with per-field labels.
+
+`gabi-gas-agent` runs **`planned`**. One privileged call reads only the
+re-validated identifiers and emits a plan — which granted tools, in what order,
+with which arguments — and the runtime executes that plan itself. Control flow is
+fixed before anything untrusted is read, and step outputs move between steps by
+reference rather than back through a model's context, so a hostile tool result
+cannot steer the steps that follow it. Counterparty material is read in a `parse`
+step on the **quarantined** model, under a declared schema; the only thing that
+step can say out of band is *not enough information*, which fails it.
+
+The other 27 declare no quarantined model on purpose. Under `tool-calling` with
+no memory formation nothing would select it, so the declaration would read as
+dual-model isolation while every call went to the privileged model.
 
 The deterministic boundary is unchanged: an agent may prepare and may wait,
 `makod` still dispatches.
@@ -50,36 +74,36 @@ The deterministic boundary is unchanged: an agent may prepare and may wait,
 Each row is a subscription paired with a manifest. The capability is what
 `Runtime::run` is given.
 
-| Specialist | Capability | Subscribes to |
-|---|---|---|
-| `mako-agent` | `mako` | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.mako.aperak.*` |
-| `deadline-alert-agent` | `deadline.alert` | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.obs.deadline.approaching` |
-| `billing-agent` | `billing` | `de.invoic.receipt.disputed`, `de.accounting.mahnung.issued` |
-| `netzbilanz-agent` | `netzbilanz` | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched`, `de.netzbilanz.invoic.dispatch-overdue` |
-| `invoice-reconciliation-agent` | `invoice.reconciliation` | `de.invoic.payment.overdue`, `de.invoic.receipt.*` |
-| `billing-anomaly-agent` | `billing.anomaly` | `de.billing.rechnung.erstellt` |
-| `billing-regulatory-guard-agent` | `billing.regulatory.guard` | `de.billing.rechnung.erstellt` |
-| `jahresabrechnung-agent` | `jahresabrechnung` | _manual / scheduled_ |
-| `eeg-agent` | `eeg` | `de.eeg.anlage.foerderung-auslaufend`, `de.messwert.reading.direct.stored` |
-| `eeg-compliance-agent` | `eeg.compliance` | `de.eeg.anlage.*`, `de.eeg.verguetung.*`, `de.eeg.marktpraemie.*`, `de.eeg.compliance.*` |
-| `payment-reconciliation-agent` | `payment.reconciliation` | `de.accounting.payment.due`, `de.accounting.bankruecklast` |
-| `compliance-agent` | `compliance` | `de.obs.stp.parity.alert` |
-| `msb-history-agent` | `msb.history` | `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.completed` |
-| `meter-data-agent` | `meter.data` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` |
-| `grid-anomaly-agent` | `grid.anomaly` | `de.markt.nb-contract.updated`, `de.markt.malo.updated` |
-| `tariff-optimization-agent` | `tariff.optimization` | `de.billing.rechnung.erstellt`, `de.mako.process.completed` |
-| `vertragd-agent` | `vertragd` | `de.vertrag.*`, `de.mako.aperak.rejected`, `de.mako.process.failed`, `de.vertrag.ablauf.ankuendigung`, `de.vertrag.preisaenderung.ankuendigung` |
-| `tarifbd-agent` | `tarifbd` | `de.tarif.product.updated`, `de.tarif.angebot.abgelaufen`, `de.tarif.epex.missing` |
-| `processd-agent` | `processd` | `de.mako.process.initiated`, `de.mako.aperak.rejected`, `de.mako.process.failed` |
-| `sperrd-agent` | `sperrd` | `de.accounting.sperrauftrag`, `de.sperr.*`, `de.mako.process.completed` |
-| `portald-agent` | `portald` | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung-auslaufend`, `de.accounting.mahnung.issued`, `de.vertrag.*` |
-| `regulatory-reporting-agent` | `regulatory.reporting` | _manual / scheduled_ |
-| `replacement-value-agent` | `replacement.value` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` |
-| `mabis-syncd-agent` | `mabis.syncd` | `de.messwert.reading.quality.warning` |
-| `smgw-diagnostics-agent` | `smgw.diagnostics` | `de.messwert.cls.compliance-issue`, `de.messwert.smgw.cert.expiry-warning`, `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.initiated`, `de.markt.geraet.konfiguration.updated` |
-| `vpp-billing-agent` | `vpp.billing` | `de.vpp.dispatch.confirmed`, `de.vpp.settlement.berechnet` |
-| `gabi-gas-agent` | `gabi.gas.balancing` | `de.gabi.imbalance.*`, `de.gabi.alocat.missing`, `de.gabi.nomination.*`, `de.netzbilanz.invoic.drafted` |
-| `einsd-batch-agent` | `einsd.batch` | `de.eeg.settlement.batch-due`, `de.eeg.compliance.*`, `de.eeg.anlage.foerderung-auslaufend` |
+| Specialist | Capability | Shape | Subscribes to |
+|---|---|---|---|
+| `mako-agent` | `mako` | `tool-calling` | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.mako.aperak.*` |
+| `deadline-alert-agent` | `deadline.alert` | `tool-calling` | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.obs.deadline.approaching` |
+| `billing-agent` | `billing` | `tool-calling` | `de.invoic.receipt.disputed`, `de.accounting.mahnung.issued` |
+| `netzbilanz-agent` | `netzbilanz` | `tool-calling` | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched`, `de.netzbilanz.invoic.dispatch-overdue` |
+| `invoice-reconciliation-agent` | `invoice.reconciliation` | `tool-calling` | `de.invoic.payment.overdue`, `de.invoic.receipt.*` |
+| `billing-anomaly-agent` | `billing.anomaly` | `tool-calling` | `de.billing.rechnung.erstellt` |
+| `billing-regulatory-guard-agent` | `billing.regulatory.guard` | `tool-calling` | `de.billing.rechnung.erstellt` |
+| `jahresabrechnung-agent` | `jahresabrechnung` | `tool-calling` | _manual / scheduled_ |
+| `eeg-agent` | `eeg` | `tool-calling` | `de.eeg.anlage.foerderung-auslaufend`, `de.messwert.reading.direct.stored` |
+| `eeg-compliance-agent` | `eeg.compliance` | `tool-calling` | `de.eeg.anlage.*`, `de.eeg.verguetung.*`, `de.eeg.marktpraemie.*`, `de.eeg.compliance.*` |
+| `payment-reconciliation-agent` | `payment.reconciliation` | `tool-calling` | `de.accounting.payment.due`, `de.accounting.bankruecklast` |
+| `compliance-agent` | `compliance` | `tool-calling` | `de.obs.stp.parity.alert` |
+| `msb-history-agent` | `msb.history` | `tool-calling` | `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.completed` |
+| `meter-data-agent` | `meter.data` | `tool-calling` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` |
+| `grid-anomaly-agent` | `grid.anomaly` | `tool-calling` | `de.markt.nb-contract.updated`, `de.markt.malo.updated` |
+| `tariff-optimization-agent` | `tariff.optimization` | `tool-calling` | `de.billing.rechnung.erstellt`, `de.mako.process.completed` |
+| `vertragd-agent` | `vertragd` | `tool-calling` | `de.vertrag.*`, `de.mako.aperak.rejected`, `de.mako.process.failed`, `de.vertrag.ablauf.ankuendigung`, `de.vertrag.preisaenderung.ankuendigung` |
+| `tarifbd-agent` | `tarifbd` | `tool-calling` | `de.tarif.product.updated`, `de.tarif.angebot.abgelaufen`, `de.tarif.epex.missing` |
+| `processd-agent` | `processd` | `tool-calling` | `de.mako.process.initiated`, `de.mako.aperak.rejected`, `de.mako.process.failed` |
+| `sperrd-agent` | `sperrd` | `tool-calling` | `de.accounting.sperrauftrag`, `de.sperr.*`, `de.mako.process.completed` |
+| `portald-agent` | `portald` | `tool-calling` | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung-auslaufend`, `de.accounting.mahnung.issued`, `de.vertrag.*` |
+| `regulatory-reporting-agent` | `regulatory.reporting` | `tool-calling` | _manual / scheduled_ |
+| `replacement-value-agent` | `replacement.value` | `tool-calling` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` |
+| `mabis-syncd-agent` | `mabis.syncd` | `tool-calling` | `de.messwert.reading.quality.warning` |
+| `smgw-diagnostics-agent` | `smgw.diagnostics` | `tool-calling` | `de.messwert.cls.compliance-issue`, `de.messwert.smgw.cert.expiry-warning`, `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.initiated`, `de.markt.geraet.konfiguration.updated` |
+| `vpp-billing-agent` | `vpp.billing` | `tool-calling` | `de.vpp.dispatch.confirmed`, `de.vpp.settlement.berechnet` |
+| `gabi-gas-agent` | `gabi.gas.balancing` | `planned` | `de.gabi.imbalance.*`, `de.gabi.alocat.missing`, `de.gabi.nomination.*`, `de.netzbilanz.invoic.drafted` |
+| `einsd-batch-agent` | `einsd.batch` | `tool-calling` | `de.eeg.settlement.batch-due`, `de.eeg.compliance.*`, `de.eeg.anlage.foerderung-auslaufend` |
 
 ## Configuration
 

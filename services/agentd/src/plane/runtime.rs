@@ -98,6 +98,13 @@ pub struct Route {
     pub capability: String,
     /// CloudEvent type globs this specialist subscribes to.
     pub triggers: &'static [&'static str],
+    /// Whether the manifest declares `execution.kind: planned`.
+    ///
+    /// It decides how the payload is admitted, so it is read once at startup
+    /// rather than re-parsed per event: a planned agent receives only the
+    /// re-validated routing envelope, a tool-calling one the whole payload with
+    /// per-field labels.
+    pub plans: bool,
 }
 
 /// Event type → specialists.
@@ -145,6 +152,10 @@ impl Router {
                         name: def.name,
                         capability: cap.to_string(),
                         triggers: def.trigger_patterns,
+                        plans: matches!(
+                            m.spec.execution.as_ref().map(|e| e.kind),
+                            Some(agentplane::manifest::ExecutionKind::Planned)
+                        ),
                     }),
                     None => problems.push(format!("{}: manifest provides no capability", def.name)),
                 },
@@ -226,32 +237,47 @@ impl std::fmt::Debug for Plane {
 impl Plane {
     /// Assemble the runtime from the embedded manifests.
     ///
-    /// Every manifest is registered as an agent, so a run addressed to a
-    /// capability finds the declaration that governs it.
+    /// Every activated manifest is registered as an agent, so a run addressed to
+    /// a capability finds the declaration that governs it.
+    ///
+    /// `tenant` scopes the **data keys**, so one operator's cryptographic
+    /// erasure cannot reach another's bytes. `tool_servers` supplies one
+    /// transport per MCP server named in the grants; the catalogue is derived
+    /// from the declarations themselves, so a grant, its ceiling and its
+    /// protected fields are stated once.
     ///
     /// # Errors
     ///
-    /// Returns an error when the routing table cannot be built or a manifest
-    /// fails to parse — both are deployment errors, surfaced at startup.
+    /// Returns an error when the routing table cannot be built, a manifest fails
+    /// to parse, or the runtime refuses to build — all are deployment errors,
+    /// surfaced at startup. In particular a declarative agent whose tool servers
+    /// are unreachable is refused here rather than failing identically on every
+    /// run.
     pub fn new(
         store: Arc<dyn JournalStore>,
         owner: &str,
+        tenant: &str,
         activated: &Activation,
         providers: Vec<(String, Arc<dyn agentplane::model::ModelProvider>)>,
-        tools: Option<(
-            Arc<agentplane::tools::ToolCatalog>,
-            Arc<dyn agentplane::tools::ToolClient>,
-        )>,
+        tool_servers: Vec<(String, Arc<dyn agentplane::tools::ToolClient>)>,
         keyring: Option<Arc<dyn agentplane::keyring::KeyRing>>,
     ) -> Result<Self, String> {
         let router = Router::build(activated)?;
 
-        let mut builder = Runtime::builder(store).owner(owner.to_owned());
+        let mut builder = Runtime::builder(store)
+            .owner(owner.to_owned())
+            // The erasure unit is the case, and the key that opens it is scoped
+            // by tenant. A plane that left this at the default would write one
+            // operator's runs into another's keyspace.
+            .tenant(
+                agentplane::core::TenantId::new(tenant)
+                    .map_err(|e| format!("tenant `{tenant}` is not a usable key scope: {e}"))?,
+            );
         for (name, driver) in providers {
             builder = builder.provider(name, driver);
         }
-        if let Some((catalog, client)) = tools {
-            builder = builder.tools(catalog, client);
+        for (name, client) in tool_servers {
+            builder = builder.tool_server(name, client);
         }
         if let Some(keys) = keyring {
             // Seals the journal, case state, events and task proposals — done at
@@ -266,10 +292,14 @@ impl Plane {
             builder = builder.agent(Agent::new(&m));
         }
 
-        Ok(Self {
-            runtime: builder.build(),
-            router,
-        })
+        // `try_build`, not `build`: `build` panics on a wiring fault, and a
+        // declarative agent whose tool servers are unreachable is exactly that.
+        // A daemon should refuse to start with a diagnostic, not abort.
+        let runtime = builder
+            .try_build()
+            .map_err(|e| format!("assemble the agent runtime: {e}"))?;
+
+        Ok(Self { runtime, router })
     }
 
     /// Routing table, for health and inventory endpoints.
@@ -319,6 +349,25 @@ impl Plane {
         Some(self.run_one(route, event_id, event_type, payload).await)
     }
 
+    /// A decision recording that the plane declined to start a run.
+    ///
+    /// Not a failure of the agent — the agent never ran. It is on the record
+    /// because a specialist that silently receives nothing is indistinguishable
+    /// from one that ran and found nothing.
+    fn did_not_run(route: &Route, event_id: &str, event_type: &str, why: &str) -> AgentDecision {
+        AgentDecision {
+            agent_name: route.name.to_owned(),
+            session_id: String::new(),
+            event_id: event_id.to_owned(),
+            event_type: event_type.to_owned(),
+            outcome: "not-admitted".to_owned(),
+            summary: why.to_owned(),
+            tool_calls: 0,
+            turns: 0,
+            handoff_to: None,
+        }
+    }
+
     async fn run_one(
         &self,
         route: &Route,
@@ -326,7 +375,36 @@ impl Plane {
         event_type: &str,
         payload: Value,
     ) -> AgentDecision {
-        let outcome = self.runtime.run(&route.capability, payload).await;
+        // Admission is where mako's trust boundary is drawn. `Runtime::run`
+        // would label the whole payload trusted, and almost nothing in it is:
+        // a MaLo came out of a counterparty's UTILMD, a `reference` is text they
+        // wrote. `run_tainted` carries the real labels in.
+        let input = match route.plans {
+            // A `planned` agent refuses untrusted input — the plan it compiles
+            // is the authorization graph. It gets the re-validated identifiers
+            // and reaches the rest through its granted tools.
+            true => match super::label::routing_envelope(&payload) {
+                Some(envelope) => envelope,
+                None => {
+                    warn!(
+                        agent = route.name,
+                        event_type,
+                        "no re-validated identifier in the payload — a planned specialist \
+                         has nothing to plan from"
+                    );
+                    return Self::did_not_run(
+                        route,
+                        event_id,
+                        event_type,
+                        "The event carried no identifier this plane could re-validate, so a \
+                         planned specialist had no trusted input to compile a plan from.",
+                    );
+                }
+            },
+            false => super::label::admit(event_type, payload),
+        };
+
+        let outcome = self.runtime.run_tainted(&route.capability, input).await;
 
         let (run_id, status, summary) = match outcome {
             Ok(o) => {

@@ -17,7 +17,9 @@
 //! See `concepts/AGENTD.md` for the migration plan and the boundary this keeps:
 //! the agent may prepare and may wait, the deterministic engine still dispatches.
 
+pub mod label;
 pub mod runtime;
+pub mod tools;
 pub use runtime::{Activation, AgentDecision, Plane, Route, Router};
 
 use std::sync::Arc;
@@ -276,13 +278,25 @@ mod tests {
                         m.spec.identity.is_some(),
                         "{name}: an agent without an identity has no prompt"
                     );
+                    // A quarantined model is declared only where something
+                    // selects it. Under `tool-calling` with no memory formation
+                    // nothing does, so the declaration would read as dual-model
+                    // isolation while every call went to the privileged model.
+                    // agentplane refuses that outright; this states the rule on
+                    // mako's side so the reason survives in our own tree.
+                    let quarantined = m
+                        .spec
+                        .models
+                        .as_ref()
+                        .and_then(|x| x.quarantined.as_ref())
+                        .is_some();
+                    let plans = matches!(
+                        m.spec.execution.as_ref().map(|e| e.kind),
+                        Some(agentplane::manifest::ExecutionKind::Planned)
+                    );
                     assert!(
-                        m.spec
-                            .models
-                            .as_ref()
-                            .and_then(|x| x.quarantined.as_ref())
-                            .is_some(),
-                        "{name}: the quarantined model is what reads counterparty text"
+                        !quarantined || plans || m.spec.memory_formation.is_some(),
+                        "{name}: declares a quarantined model that nothing would select"
                     );
                 }
                 Err(e) => failures.push(format!("{name}: {e}")),

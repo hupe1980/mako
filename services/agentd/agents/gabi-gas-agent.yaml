@@ -18,7 +18,20 @@ metadata:
   version: "1.0.0"
 spec:
   execution:
-    kind: tool-calling
+    # `planned`, not `tool-calling`, and the difference is the whole security
+    # argument. One privileged call reads the run's trusted input — the
+    # re-validated Bilanzkreis and gas day, nothing a counterparty wrote — and
+    # emits a plan: which granted tools, in what order, with which arguments.
+    # The runtime executes that plan itself. Control flow is therefore fixed
+    # before anything untrusted is read, and step outputs travel by reference
+    # (`$step0/...`) rather than back through a model's context, so a hostile
+    # tool result cannot steer the steps that follow it.
+    #
+    # The price is real: a plan cannot react to what it discovers mid-flight.
+    # It is the right trade here because the shape of gas balancing is known up
+    # front — read the imbalance, check the deadline, decide — while the ALOCAT
+    # and NOMRES values it reads are counterparty-authored.
+    kind: planned
     max_turns: 12
 
   identity:
@@ -66,10 +79,17 @@ spec:
     provides: [gabi.gas.balancing]
 
   models:
-    # The privileged model decides and may call tools. The quarantined model
-    # reads counterparty-derived material. The pair is refused if both name the
-    # same model, which is the point: untrusted gas-market payloads are read by
-    # a model that cannot reach a tool.
+    # The privileged model plans and may call tools. The quarantined model reads
+    # counterparty-derived material in a `parse` step, under a declared schema
+    # and an extraction-only instruction — the only thing it can say out of band
+    # is *not enough information*, which fails the step.
+    #
+    # Under `execution.kind: planned` this pair is load-bearing rather than
+    # decorative: `parse` steps are one of exactly two places the declarative
+    # tier points a model at untrusted-derived content, so the quarantined role
+    # is actually selected. A `tool-calling` agent declaring the same pair is
+    # refused at parse, because every call would have gone to the privileged
+    # model while the file read as dual-model isolation.
     privileged:  { provider: anthropic, model: claude-sonnet-5 }
     quarantined: { provider: anthropic, model: claude-haiku-4-5 }
 
