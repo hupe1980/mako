@@ -414,10 +414,15 @@ name    = "reqwest"
 version = "=0.13"
 reason  = "portald introduces reqwest 0.13; coexists with workspace 0.12 services."
 
+# ── darling three-way split ─────────────────────────────────────────────────
+# 0.20: iceberg-datafusion 0.9.1 (edmd cold tier) → derive_builder.
+# 0.23: serde_with 3.21 + bon 3.9 (both already at their latest releases).
+# 0.24: rmcp-macros 3.1.2 (the MCP server SDK, all services) — the newest and
+#       therefore canonical version. Resolve when serde_with/bon bump to 0.24.
 [[bans.skip]]
 name    = "darling"
 version = "=0.20"
-reason  = "iceberg-datafusion 0.9.1 transitively requires darling 0.20; workspace uses darling 0.23."
+reason  = "iceberg-datafusion 0.9.1 transitively requires darling 0.20; rmcp-macros 3.1 uses darling 0.24."
 
 [[bans.skip]]
 name    = "darling_core"
@@ -428,6 +433,26 @@ reason  = "paired with darling 0.20 skip above."
 name    = "darling_macro"
 version = "=0.20"
 reason  = "paired with darling 0.20 skip above."
+
+[[bans.skip]]
+name    = "darling"
+version = "=0.23"
+reason  = "serde_with 3.21 and bon 3.9 (latest releases) pin darling 0.23; rmcp-macros 3.1.2 pulls 0.24. Resolve when serde_with/bon bump to darling 0.24."
+
+[[bans.skip]]
+name    = "darling_core"
+version = "=0.23"
+reason  = "paired with darling 0.23 skip above."
+
+[[bans.skip]]
+name    = "darling_macro"
+version = "=0.23"
+reason  = "paired with darling 0.23 skip above."
+
+[[bans.skip]]
+name    = "pem"
+version = "=3"
+reason  = "jsonwebtoken 11 (mako-service JWT/OIDC) pins pem 3; reqsign-azure-storage 3.2 (opendal → iceberg-storage-opendal → meterstore/edmd cold tier) pulls pem 4. Both only parse PEM at their own boundary — no shared key material. Resolve when jsonwebtoken bumps to pem 4."
 
 [[bans.skip]]
 name    = "itertools"
