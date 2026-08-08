@@ -21,7 +21,7 @@
 //!
 //! ## Port: 9580
 
-use agentd::{dlq::DlqStore, handlers, llm};
+use agentd::handlers;
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -33,12 +33,42 @@ use mako_service::{health::health_routes, http::default_client, load_config, oid
 use tracing::info;
 
 use agentd::{
-    agent::{AgentRegistry, OrchestratorAgent},
     config::AgentdConfig,
     handlers::{AppState, SessionStore},
-    mcp::McpPool,
-    rag::RagEngine,
+    plane::Plane,
 };
+
+/// Build an agentplane model driver for a configured provider.
+///
+/// The name is the key a manifest's `spec.models` refers to, so `[providers.anthropic]`
+/// is what makes `provider: anthropic` resolvable. An unknown name is skipped
+/// with a warning rather than failing the boot — a deployment may configure
+/// providers it has no manifest for.
+fn build_model_driver(
+    name: &str,
+    cfg: &agentd::config::ProviderConfig,
+) -> Option<Arc<dyn agentplane::model::ModelProvider>> {
+    use secrecy::ExposeSecret as _;
+    let key = cfg.api_key.expose_secret().to_owned();
+    if key.is_empty() {
+        tracing::warn!(provider = %name, "no api_key configured — driver not registered");
+        return None;
+    }
+    let built: Result<Arc<dyn agentplane::model::ModelProvider>, _> = match name {
+        "anthropic" => agentplane::model::anthropic::Anthropic::new(key)
+            .map(|d| Arc::new(d) as Arc<dyn agentplane::model::ModelProvider>),
+        "openai" => agentplane::model::openai::OpenAi::new(key)
+            .map(|d| Arc::new(d) as Arc<dyn agentplane::model::ModelProvider>),
+        _ => return None,
+    };
+    match built {
+        Ok(d) => Some(d),
+        Err(e) => {
+            tracing::warn!(provider = %name, error = %e, "model driver construction failed");
+            None
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -56,65 +86,48 @@ async fn main() -> anyhow::Result<()> {
         port,
         tenant = %cfg.tenant,
         providers = cfg.providers.len(),
-        custom_agents = cfg.agents.len(),
-        bundled_enable_all = cfg.bundled_agents.enable_all,
-        bundled_enabled = cfg.bundled_agents.enable.len(),
+        enable_all = cfg.bundled_agents.enable_all,
+        enabled = cfg.bundled_agents.enable.len(),
         "agentd starting"
     );
 
-    // Build LLM provider registry + agent registry (builtins + custom merged)
-    let registry = AgentRegistry::build(&cfg).context("build agent registry")?;
-    let orchestrator = OrchestratorAgent::new(&cfg).context("build orchestrator")?;
-
-    let builtin_count = registry
-        .agent_names
-        .iter()
-        .filter_map(|n| registry.get(n))
-        .filter(|a| a.is_builtin)
-        .count();
-    info!(
-        orchestrator_model = %cfg.orchestrator.model,
-        total_agents = registry.agent_names.len(),
-        builtin_agents = builtin_count,
-        dispatch_mode = ?cfg.orchestrator.dispatch_mode,
-        "orchestrator ready"
+    // ── The plane ────────────────────────────────────────────────────────
+    //
+    // The journal is the § 147 AO / GoBD record for the agent layer, so it must
+    // live on durable storage. Every model and tool call is written here before
+    // it happens.
+    let store: Arc<dyn agentplane::journal::JournalStore> = Arc::new(
+        agentplane::store::RedbStore::open(&cfg.journal_path)
+            .with_context(|| format!("open agent journal at {}", cfg.journal_path))?,
     );
-    for name in &registry.agent_names {
-        if let Some(a) = registry.get(name) {
-            info!(
-                agent = %name,
-                model = %a.completion_cfg.model,
-                triggers = a.trigger_patterns.len(),
-                is_builtin = a.is_builtin,
-                "specialist ready"
-            );
+
+    // Model drivers, registered under the names the manifests use.
+    let mut providers: Vec<(String, Arc<dyn agentplane::model::ModelProvider>)> = Vec::new();
+    for (name, pcfg) in &cfg.providers {
+        if let Some(driver) = build_model_driver(name, pcfg) {
+            providers.push((name.clone(), driver));
+        } else {
+            tracing::warn!(provider = %name, "unknown model provider — skipping");
         }
     }
+    if providers.is_empty() {
+        anyhow::bail!(
+            "no model provider configured. agentd cannot run an agent without one — \
+             declare at least one [providers.<name>] matching a manifest's `spec.models`."
+        );
+    }
 
-    // Build MCP pool (connects to all configured MCP servers)
-    let mcp = McpPool::connect(&cfg.mcp_servers, &cfg.mcp_api_key).await;
-
-    // Build RAG engine (if enabled)
-    let rag = if cfg.rag.enabled {
-        // Use orchestrator provider for embeddings unless overridden
-        let embed_provider_name = cfg
-            .rag
-            .embedding_provider
-            .as_deref()
-            .unwrap_or(&cfg.orchestrator.provider);
-        let embed_provider_cfg = cfg.providers.get(embed_provider_name).ok_or_else(|| {
-            anyhow::anyhow!("RAG embedding_provider '{}' not found", embed_provider_name)
-        })?;
-        let embed_provider = llm::build_provider(embed_provider_name, embed_provider_cfg);
-        let engine = RagEngine::new(&cfg.rag, embed_provider, &cfg.tenant)
-            .await
-            .context("RAG engine init")?;
-        info!(uri = %cfg.rag.storage_uri, "RAG: ready");
-        Some(engine)
-    } else {
-        info!("RAG: disabled");
-        None
-    };
+    // Only specialists the operator activated are registered and routed. An
+    // `enable` name that matches nothing compiled in refuses to boot rather than
+    // presenting as an agent that never fires.
+    let activated = agentd::plane::Activation::from_config(&cfg.bundled_agents);
+    let plane = Plane::new(store, "agentd", &activated, providers, None, None)
+        .map_err(|e| anyhow::anyhow!("build agent plane: {e}"))?;
+    info!(
+        specialists = plane.router().routes().len(),
+        journal = %cfg.journal_path,
+        "agent plane ready"
+    );
 
     let max_sessions = cfg.max_sessions;
     if cfg.inbound_hmac_secret.is_none() {
@@ -133,23 +146,12 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("[WARN] OIDC disabled -- POST /api/v1/run accepts all requests (dev mode)");
     }
 
-    // Build DLQ store
-    let dlq = DlqStore::new(
-        cfg.dlq.capacity,
-        cfg.dlq.max_retries,
-        cfg.dlq.base_backoff_secs,
-    );
-
     let state = Arc::new(AppState {
         cfg,
-        orchestrator,
-        registry,
-        mcp,
-        rag,
+        plane,
         sessions: SessionStore::new(100),
         oidc: Some(Arc::new(oidc.clone())),
         session_sem: Arc::new(tokio::sync::Semaphore::new(max_sessions as usize)),
-        dlq: dlq.clone(),
         // 1h dedup window, 10k ids — comfortably beyond any legitimate
         // emitter's retry horizon.
         seen_events: handlers::SeenEvents::new(std::time::Duration::from_secs(3600), 10_000),
@@ -163,41 +165,21 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v1/run", post(handlers::manual_run))
         // Session history
         .route("/api/v1/sessions", get(handlers::get_sessions))
-        // Dead-letter queue status
-        .route("/api/v1/dlq", get(handlers::get_dlq))
         // Agent discovery — list active agents
         .route("/api/v1/agents", get(handlers::list_agents))
         // Agent catalog — all 28 built-in definitions (even if not enabled)
         .route("/api/v1/agents/catalog", get(handlers::agents_catalog))
         // A2A Agent Cards for each specialist
         .route("/.well-known/agents/:name", get(handlers::agent_card))
-        // RAG: Live ingestion and search
-        .route("/api/v1/rag/ingest", post(handlers::rag_ingest))
-        .route("/api/v1/rag/search", post(handlers::rag_search))
         // OIDC verifier extension for the Claims Axum extractor
         .layer(Extension(oidc))
         .with_state(Arc::clone(&state))
         .merge(health);
 
     // Spawn DLQ background retry worker (checks every 10 s)
-    {
-        let dlq_state = Arc::clone(&state);
-        let ct2 = ct.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
-                        agentd::dlq::run_retry_pass(&dlq_state).await;
-                    }
-                    _ = ct2.cancelled() => break,
-                }
-            }
-            tracing::debug!("DLQ retry worker shutdown");
-        });
-    }
 
     let addr = format!("0.0.0.0:{port}");
-    info!(%addr, agents = state.registry.agent_names.len(), "agentd listening");
+    info!(%addr, specialists = state.plane.router().routes().len(), "agentd listening");
     let listener = tokio::net::TcpListener::bind(&addr).await.context("bind")?;
     mako_service::shutdown::serve(listener, app, ct).await
 }

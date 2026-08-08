@@ -1,0 +1,342 @@
+# EEG/KWKG monthly auto-settlement orchestrator and §52 violation sweep. Triggers batch settlement for all active plants, detects §52 Pflichtzahlungen accrual, checks §44b biogas cap utilisation, and ensures post-EEG plants are on correct remuneration scheme.
+#
+# Generated from the compiled specialist definition during the agentplane
+# cutover. The tool grants reproduce the previous reach — every tool on each
+# granted MCP server — so no capability was silently lost. What is new: each
+# grant is named, `mutates` comes from the server's own read-only hint, and
+# every mutating tool requires a human decision.
+#
+# Narrowing the read set per specialist is domain review, not mechanical work.
+# Role: NB. Compiled only into a `role-nb` build (and the default all-roles build).
+apiVersion: agentplane.hupe1980.github.io/v1alpha1
+kind: Agent
+metadata:
+  name: einsd-batch-agent
+  version: "1.0.0"
+spec:
+  execution:
+    kind: tool-calling
+    max_turns: 20
+
+  identity:
+    role: >-
+      EEG/KWKG monthly auto-settlement orchestrator and §52 violation sweep.
+      Triggers batch settlement for all active plants, detects §52
+      Pflichtzahlungen accrual, checks §44b biogas cap utilisation, and ensures
+      post-EEG plants are on correct remuneration scheme.
+    constraints: |
+      You are the monthly EEG batch settlement and compliance sweep specialist.
+
+      ## TRIGGERED BY
+      - `de.eeg.settlement.batch-due`   — monthly auto-settle trigger (1st of month)
+      - `de.eeg.anlage.foerderung-auslaufend` — with >0 plants in expiry window
+      - Manual / cron                   — on-demand §52 violation sweep
+
+      ## STEP-BY-STEP PROCEDURE
+
+      ### Monthly settlement batch (run by 1st of month)
+      1. Call einsd `list_unsettled_plants` — plants not yet settled for the billing month.
+      2. For each returned plant:
+         a. Fetch edmd `get_billing_period` for prior month meter data.
+         b. Call einsd `POST /settlements/batch` — triggers auto-settle pipeline.
+         c. Verify `settlement_state` transitioned to SETTLED or NEEDS_REVIEW.
+      3. Plants in NEEDS_REVIEW: call einsd `get_plant` to read violation flags,
+         `einspeisemanagement_kwh`, and `foerderendedatum`.
+      4. Flag plants where monthly payment is negative (§51 Negativpreisregel triggered).
+
+      ### §52 Pflichtzahlungen sweep
+      1. Call einsd `check_direktvermarktung_compliance` — lists plants >100 kW NOT in Direktvermarktung.
+      2. For each violation: calculate penalty exposure:
+         - EEG 2023: §52 Abs. 3 Nr. 4: 10 EUR/kW/month from `mastr_violation_start`.
+         - EEG 2017: §52 old-regime (SanktionAlt) — use `fernsteuerbarkeit_violation_start`.
+      3. Call einsd `check_sect44b_quota` for all active BIOGAS plants:
+         - Alert at 75% of annual cap (leistung_kw × 0.45 × 8760 kWh).
+         - Escalate at 90%.
+      4. List plants approaching `foerderendedatum` within 90 days.
+
+      ### Post-EEG transition check
+      1. Plants with `settlement_state = POST_EEG` — verify post_eeg_price_floor is configured.
+      2. Plants with EEG Förderung expiring this calendar year: notify operator to configure
+         post-EEG product in tarifbd/billingd.
+
+      ## §52 PENALTY REFERENCE (EEG 2023)
+      | Violation | Paragraph | Penalty |
+      |---|---|---|
+      | >100 kW not in Direktvermarktung | §52 Abs. 3 Nr. 4 | 10 EUR/kW/month |
+      | No fernsteuerbarkeit (>100 kW) | §52 Abs. 3 Nr. 2 | 2 EUR/kW/month |
+      | No MaStR registration | §52 Abs. 1 | Full remuneration loss |
+      §52 Abs. 6 netting: multiple violations in same month → apply highest single penalty only.
+
+      ## OUTPUT FORMAT
+      ```
+      BATCH_PERIOD: [YYYY-MM]
+      SETTLED_COUNT: [number]
+      NEEDS_REVIEW_COUNT: [number]
+      SECT52_VIOLATIONS: [count and total_monthly_exposure_eur]
+      SECT44B_ALERTS: [list of {plant_id, quota_pct} or NONE]
+      EXPIRING_FOERDERUNG_COUNT: [number in next 90 days]
+      NEGATIVE_PRICE_TRIGGERED_COUNT: [§51 count]
+      ACTION_REQUIRED: [YES/NO — list of specific actions]
+      ```
+
+  capabilities:
+    provides: [einsd.batch]
+
+  models:
+    privileged:  { provider: anthropic, model: claude-sonnet-5 }
+    quarantined: { provider: anthropic, model: claude-haiku-4-5 }
+
+  security:
+    max_sensitivity_egress: internal
+    max_delegation_depth: 0
+    max_sensitivity_journaled: internal
+
+  oversight:
+    approval:  tools-only
+    approvers: [mako-operations]
+    deadline:
+      name: einsd-batch-agent-freigabe
+      kind: hours
+      params: { n: 4 }
+    on_expiry: deny
+
+  budgets:
+    max_tokens: 200000
+    max_steps: 60
+    max_effects: 100
+    max_wallclock_secs: 900
+
+  tools:
+    - ref: tool://einsd/list_plants
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "list plants via einsd"
+    - ref: tool://einsd/get_plant
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "get plant via einsd"
+    - ref: tool://einsd/list_expiring
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "list expiring via einsd"
+    - ref: tool://einsd/list_settlements
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "list settlements via einsd"
+    - ref: tool://einsd/lookup_verguetungssatz
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "lookup verguetungssatz via einsd"
+    - ref: tool://einsd/trigger_settle
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "trigger settle via einsd"
+    - ref: tool://einsd/list_unsettled_plants
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "list unsettled plants via einsd"
+    - ref: tool://einsd/get_epex_monthly_price
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "get epex monthly price via einsd"
+    - ref: tool://einsd/import_epex_monthly_price
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "import epex monthly price via einsd"
+    - ref: tool://einsd/lookup_statutory_rate
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "lookup statutory rate via einsd"
+    - ref: tool://einsd/get_compliance_status
+      mutates: false
+      max_sensitivity: internal
+      description: "get compliance status via einsd"
+    - ref: tool://einsd/list_plants_without_mastr
+      mutates: false
+      max_sensitivity: internal
+      description: "list plants without mastr via einsd"
+    - ref: tool://einsd/check_direktvermarktung_compliance
+      mutates: false
+      max_sensitivity: internal
+      description: "check direktvermarktung compliance via einsd"
+    - ref: tool://einsd/check_sect44b_quota
+      mutates: false
+      max_sensitivity: internal
+      description: "check sect44b quota via einsd"
+    - ref: tool://einsd/import_jahresmarktwert
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "import jahresmarktwert via einsd"
+    - ref: tool://einsd/get_jahresmarktwert
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "get jahresmarktwert via einsd"
+    - ref: tool://einsd/get_aw_reduktionen
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "get aw reduktionen via einsd"
+    - ref: tool://einsd/get_settlement_state_history
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "get settlement state history via einsd"
+    - ref: tool://einsd/explain_settlement
+      mutates: false
+      max_sensitivity: internal
+      description: "explain settlement via einsd"
+    - ref: tool://edmd/get_timeseries
+      mutates: false
+      max_sensitivity: internal
+      description: "get timeseries via edmd"
+    - ref: tool://edmd/get_imbalance
+      mutates: false
+      max_sensitivity: internal
+      description: "get imbalance via edmd"
+    - ref: tool://edmd/get_billing_period
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing period via edmd"
+    - ref: tool://edmd/get_device_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get device history via edmd"
+    - ref: tool://edmd/get_quality_warnings
+      mutates: false
+      max_sensitivity: internal
+      description: "get quality warnings via edmd"
+    - ref: tool://edmd/list_reading_orders
+      mutates: false
+      max_sensitivity: internal
+      description: "list reading orders via edmd"
+    - ref: tool://edmd/list_overdue_reading_orders
+      mutates: false
+      max_sensitivity: internal
+      description: "list overdue reading orders via edmd"
+    - ref: tool://edmd/trigger_jahresablesung
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "trigger jahresablesung via edmd"
+    - ref: tool://edmd/trigger_substitution
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "trigger substitution via edmd"
+    - ref: tool://edmd/get_correction_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get correction history via edmd"
+    - ref: tool://edmd/validate_timeseries
+      mutates: false
+      max_sensitivity: internal
+      description: "validate timeseries via edmd"
+    - ref: tool://edmd/get_quality_assessments
+      mutates: false
+      max_sensitivity: internal
+      description: "get quality assessments via edmd"
+    - ref: tool://edmd/get_summenzeitreihe
+      mutates: false
+      max_sensitivity: internal
+      description: "get summenzeitreihe via edmd"
+    - ref: tool://edmd/get_annual_forecast
+      mutates: false
+      max_sensitivity: internal
+      description: "get annual forecast via edmd"
+    - ref: tool://edmd/get_gas_quality
+      mutates: false
+      max_sensitivity: internal
+      description: "get gas quality via edmd"
+    - ref: tool://tarifbd/list_products
+      mutates: false
+      max_sensitivity: internal
+      description: "list products via tarifbd"
+    - ref: tool://tarifbd/get_product
+      mutates: false
+      max_sensitivity: internal
+      description: "get product via tarifbd"
+    - ref: tool://tarifbd/get_customer_product
+      mutates: false
+      max_sensitivity: internal
+      description: "get customer product via tarifbd"
+    - ref: tool://tarifbd/get_epex_price
+      mutates: false
+      max_sensitivity: internal
+      description: "get epex price via tarifbd"
+    - ref: tool://tarifbd/list_expiring_contracts
+      mutates: false
+      max_sensitivity: internal
+      description: "list expiring contracts via tarifbd"
+    - ref: tool://tarifbd/list_angebote
+      mutates: false
+      max_sensitivity: internal
+      description: "list angebote via tarifbd"
+    - ref: tool://tarifbd/get_angebot
+      mutates: false
+      max_sensitivity: internal
+      description: "get angebot via tarifbd"
+    - ref: tool://tarifbd/get_angebot_summary
+      mutates: false
+      max_sensitivity: internal
+      description: "get angebot summary via tarifbd"
+    - ref: tool://tarifbd/check_41a_epex_status
+      mutates: false
+      max_sensitivity: internal
+      description: "check 41a epex status via tarifbd"
+    - ref: tool://tarifbd/get_product_energiemix
+      mutates: false
+      max_sensitivity: internal
+      description: "get product energiemix via tarifbd"
+    - ref: tool://tarifbd/validate_tariff_config
+      mutates: false
+      max_sensitivity: internal
+      description: "validate tariff config via tarifbd"
+    - ref: tool://tarifbd/explain_invoice_position
+      mutates: false
+      max_sensitivity: internal
+      description: "explain invoice position via tarifbd"
+    - ref: tool://tarifbd/get_product_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get product history via tarifbd"
+    - ref: tool://tarifbd/get_comparison_feed
+      mutates: false
+      max_sensitivity: internal
+      description: "get comparison feed via tarifbd"
+    - ref: tool://obsd/get_process
+      mutates: false
+      max_sensitivity: internal
+      description: "get process via obsd"
+    - ref: tool://obsd/list_overdue_processes
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "list overdue processes via obsd"
+    - ref: tool://obsd/get_kpi_report
+      mutates: false
+      max_sensitivity: internal
+      description: "get kpi report via obsd"
+    - ref: tool://obsd/get_parity_report
+      mutates: false
+      max_sensitivity: internal
+      description: "get parity report via obsd"
+    - ref: tool://obsd/get_stp_rate
+      mutates: false
+      max_sensitivity: internal
+      description: "get stp rate via obsd"
+    - ref: tool://obsd/list_processes_by_family
+      mutates: false
+      max_sensitivity: internal
+      description: "list processes by family via obsd"

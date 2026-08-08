@@ -1,0 +1,132 @@
+# SEPA payment reconciliation and Mahnwesen escalation. Matches CAMT.054 bank returns against accountingd ledger, triggers Mahnstufe escalation (1→2→3), and generates Sperrauftrag when needed.
+#
+# Generated from the compiled specialist definition during the agentplane
+# cutover. The tool grants reproduce the previous reach — every tool on each
+# granted MCP server — so no capability was silently lost. What is new: each
+# grant is named, `mutates` comes from the server's own read-only hint, and
+# every mutating tool requires a human decision.
+#
+# Narrowing the read set per specialist is domain review, not mechanical work.
+# Role: LF. Compiled only into a `role-lf` build (and the default all-roles build).
+apiVersion: agentplane.hupe1980.github.io/v1alpha1
+kind: Agent
+metadata:
+  name: payment-reconciliation-agent
+  version: "1.0.0"
+spec:
+  execution:
+    kind: tool-calling
+    max_turns: 10
+
+  identity:
+    role: >-
+      SEPA payment reconciliation and Mahnwesen escalation. Matches CAMT.054 bank
+      returns against accountingd ledger, triggers Mahnstufe escalation (1→2→3),
+      and generates Sperrauftrag when needed.
+    constraints: |
+      You are the payment reconciliation specialist.
+
+      ## TRIGGERED BY
+      - `de.accounting.payment.due` — SEPA DD due date approaching
+      - `de.accounting.bankruecklast` — SEPA direct debit returned by bank
+
+      ## PROCEDURE
+
+      1. Extract `malo_id` and `amount_eur` from event payload.
+      2. Call accountingd `get_balance` for current balance.
+      3. Call accountingd `get_open_items` for outstanding positions (FIFO).
+      4. For Bankrücklast: identify which invoice triggered the return, check return code.
+      5. Determine Mahnwesen level: Mahnstufe 1 (reminder) → 2 (fee) → 3 (Sperrauftrag).
+      6. If Sperrauftrag required: emit `de.accounting.sperrauftrag` for sperrd processing.
+
+      ## OUTPUT FORMAT
+      ```
+      PAYMENT_STATUS: [CURRENT|OVERDUE|RETURNED|SPERR_REQUIRED]
+      OUTSTANDING_EUR: [amount]
+      MAHNSTUFE: [0|1|2|3]
+      RETURN_CODE: [R-code if applicable]
+      ACTION: [NONE|MAHNUNG_1|MAHNUNG_2|SPERRAUFTRAG]
+      ```
+
+  capabilities:
+    provides: [payment.reconciliation]
+
+  models:
+    privileged:  { provider: anthropic, model: claude-sonnet-5 }
+    quarantined: { provider: anthropic, model: claude-haiku-4-5 }
+
+  security:
+    max_sensitivity_egress: internal
+    max_delegation_depth: 0
+    max_sensitivity_journaled: internal
+
+  oversight:
+    approval:  tools-only
+    approvers: [mako-operations]
+    deadline:
+      name: payment-reconciliation-agent-freigabe
+      kind: hours
+      params: { n: 4 }
+    on_expiry: deny
+
+  budgets:
+    max_tokens: 200000
+    max_steps: 30
+    max_effects: 50
+    max_wallclock_secs: 900
+
+  tools:
+    - ref: tool://accountingd/get_balance
+      mutates: false
+      max_sensitivity: internal
+      description: "get balance via accountingd"
+    - ref: tool://accountingd/list_ledger
+      mutates: false
+      max_sensitivity: internal
+      description: "list ledger via accountingd"
+    - ref: tool://accountingd/list_dunning
+      mutates: false
+      max_sensitivity: internal
+      description: "list dunning via accountingd"
+    - ref: tool://accountingd/list_overdue
+      mutates: false
+      max_sensitivity: internal
+      description: "list overdue via accountingd"
+    - ref: tool://accountingd/update_abschlag
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "update abschlag via accountingd"
+    - ref: tool://accountingd/import_payments
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "import payments via accountingd"
+    - ref: tool://accountingd/run_sepa_collection
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "run sepa collection via accountingd"
+    - ref: tool://accountingd/trigger_jahresabschluss
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "trigger jahresabschluss via accountingd"
+    - ref: tool://accountingd/run_abschlag_cycle
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "run abschlag cycle via accountingd"
+    - ref: tool://accountingd/compute_bilanzielle_abgrenzung
+      mutates: false
+      max_sensitivity: internal
+      description: "compute bilanzielle abgrenzung via accountingd"
+    - ref: tool://accountingd/suggest_payment_match
+      mutates: false
+      max_sensitivity: internal
+      description: "suggest payment match via accountingd"
+    - ref: tool://accountingd/post_manual_booking
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "post manual booking via accountingd"

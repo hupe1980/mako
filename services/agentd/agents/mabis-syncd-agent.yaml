@@ -1,0 +1,242 @@
+# MaBiS Summenzeitreihe submission monitor. Tracks the Werktag-based Erstaufschlag/Clearing windows (BK6-24-174 Anlage 3 §3.10), detects failed aggregations, and diagnoses BIKO delivery issues.
+#
+# Generated from the compiled specialist definition during the agentplane
+# cutover. The tool grants reproduce the previous reach — every tool on each
+# granted MCP server — so no capability was silently lost. What is new: each
+# grant is named, `mutates` comes from the server's own read-only hint, and
+# every mutating tool requires a human decision.
+#
+# Narrowing the read set per specialist is domain review, not mechanical work.
+# Role: NB. Compiled only into a `role-nb` build (and the default all-roles build).
+apiVersion: agentplane.hupe1980.github.io/v1alpha1
+kind: Agent
+metadata:
+  name: mabis-syncd-agent
+  version: "1.0.0"
+spec:
+  execution:
+    kind: tool-calling
+    max_turns: 10
+
+  identity:
+    role: >-
+      MaBiS Summenzeitreihe submission monitor. Tracks the Werktag-based
+      Erstaufschlag/Clearing windows (BK6-24-174 Anlage 3 §3.10), detects failed
+      aggregations, and diagnoses BIKO delivery issues.
+    constraints: |
+      You are the MaBiS Summenzeitreihe submission specialist.
+
+      ## TRIGGERED BY
+      - `de.messwert.reading.quality.warning` — quality issue may affect Summenzeitreihe accuracy
+
+      ## MABIS WINDOWS (BK6-24-174 Anlage 3 §3.10, Werktage after month end)
+      - Erstaufschlag (BKA): ≤ 10 Werktage — a new version becomes Abrechnungsdaten directly
+      - Clearing (BKA): ≤ 30 Werktage — a new version starts as Prüfdaten and needs a positive Prüfmitteilung
+      - After 30 Werktage: KBKA (korrigierte Bilanzkreisabrechnung)
+      - mabis-syncd submits at 05:00 UTC on the configured Erstaufschlag-Werktag (default 10)
+
+      ## PROCEDURE
+
+      1. Call obsd `get_kpi_report` for MaBiS submission status.
+      2. For each active MaLo with BKV assignment: check last submission run.
+      3. If submission missing or failed: call edmd `get_billing_period` to verify data availability.
+      4. Check `attempt_count < 3` guard — after 3 failures, escalate.
+      5. Determine if BIKO acceptance was received.
+
+      ## OUTPUT FORMAT
+      ```
+      SUBMISSION_STATUS: [ON_TIME|OVERDUE|FAILED|PENDING]
+      SUBMISSION_TYPE: [VORLAEUFIG|ENDGUELTIG]
+      DEADLINE_UTC: [datetime]
+      FAILED_MALO_COUNT: [number]
+      ACTION: [NONE|RETRY|ESCALATE]
+      ```
+
+  capabilities:
+    provides: [mabis.syncd]
+
+  models:
+    privileged:  { provider: anthropic, model: claude-sonnet-5 }
+    quarantined: { provider: anthropic, model: claude-haiku-4-5 }
+
+  security:
+    max_sensitivity_egress: internal
+    max_delegation_depth: 0
+    max_sensitivity_journaled: internal
+
+  oversight:
+    approval:  tools-only
+    approvers: [mako-operations]
+    deadline:
+      name: mabis-syncd-agent-freigabe
+      kind: hours
+      params: { n: 4 }
+    on_expiry: deny
+
+  budgets:
+    max_tokens: 200000
+    max_steps: 30
+    max_effects: 50
+    max_wallclock_secs: 900
+
+  tools:
+    - ref: tool://edmd/get_timeseries
+      mutates: false
+      max_sensitivity: internal
+      description: "get timeseries via edmd"
+    - ref: tool://edmd/get_imbalance
+      mutates: false
+      max_sensitivity: internal
+      description: "get imbalance via edmd"
+    - ref: tool://edmd/get_billing_period
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing period via edmd"
+    - ref: tool://edmd/get_device_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get device history via edmd"
+    - ref: tool://edmd/get_quality_warnings
+      mutates: false
+      max_sensitivity: internal
+      description: "get quality warnings via edmd"
+    - ref: tool://edmd/list_reading_orders
+      mutates: false
+      max_sensitivity: internal
+      description: "list reading orders via edmd"
+    - ref: tool://edmd/list_overdue_reading_orders
+      mutates: false
+      max_sensitivity: internal
+      description: "list overdue reading orders via edmd"
+    - ref: tool://edmd/trigger_jahresablesung
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "trigger jahresablesung via edmd"
+    - ref: tool://edmd/trigger_substitution
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "trigger substitution via edmd"
+    - ref: tool://edmd/get_correction_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get correction history via edmd"
+    - ref: tool://edmd/validate_timeseries
+      mutates: false
+      max_sensitivity: internal
+      description: "validate timeseries via edmd"
+    - ref: tool://edmd/get_quality_assessments
+      mutates: false
+      max_sensitivity: internal
+      description: "get quality assessments via edmd"
+    - ref: tool://edmd/get_summenzeitreihe
+      mutates: false
+      max_sensitivity: internal
+      description: "get summenzeitreihe via edmd"
+    - ref: tool://edmd/get_annual_forecast
+      mutates: false
+      max_sensitivity: internal
+      description: "get annual forecast via edmd"
+    - ref: tool://edmd/get_gas_quality
+      mutates: false
+      max_sensitivity: internal
+      description: "get gas quality via edmd"
+    - ref: tool://obsd/get_process
+      mutates: false
+      max_sensitivity: internal
+      description: "get process via obsd"
+    - ref: tool://obsd/list_overdue_processes
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "list overdue processes via obsd"
+    - ref: tool://obsd/get_kpi_report
+      mutates: false
+      max_sensitivity: internal
+      description: "get kpi report via obsd"
+    - ref: tool://obsd/get_parity_report
+      mutates: false
+      max_sensitivity: internal
+      description: "get parity report via obsd"
+    - ref: tool://obsd/get_stp_rate
+      mutates: false
+      max_sensitivity: internal
+      description: "get stp rate via obsd"
+    - ref: tool://obsd/list_processes_by_family
+      mutates: false
+      max_sensitivity: internal
+      description: "list processes by family via obsd"
+    - ref: tool://marktd/get_malo
+      mutates: false
+      max_sensitivity: confidential
+      description: "get malo via marktd"
+    - ref: tool://marktd/list_partners
+      mutates: false
+      max_sensitivity: confidential
+      description: "list partners via marktd"
+    - ref: tool://marktd/get_preisblatt
+      mutates: false
+      max_sensitivity: confidential
+      description: "get preisblatt via marktd"
+    - ref: tool://marktd/get_versorgungsstatus
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgungsstatus via marktd"
+    - ref: tool://marktd/get_nb_contract
+      mutates: false
+      max_sensitivity: confidential
+      description: "get nb contract via marktd"
+    - ref: tool://marktd/get_correlation
+      mutates: false
+      max_sensitivity: confidential
+      description: "get correlation via marktd"
+    - ref: tool://marktd/list_pricat_versions
+      mutates: false
+      max_sensitivity: confidential
+      description: "list pricat versions via marktd"
+    - ref: tool://marktd/dispatch_pricat
+      mutates: true
+      max_sensitivity: confidential
+      requires_approval: true
+      description: "dispatch pricat via marktd"
+    - ref: tool://marktd/list_malo
+      mutates: false
+      max_sensitivity: confidential
+      description: "list malo via marktd"
+    - ref: tool://marktd/get_melo
+      mutates: false
+      max_sensitivity: confidential
+      description: "get melo via marktd"
+    - ref: tool://marktd/get_rollenzuordnung
+      mutates: false
+      max_sensitivity: confidential
+      description: "get rollenzuordnung via marktd"
+    - ref: tool://marktd/get_versorgungsstatus_history
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgungsstatus history via marktd"
+    - ref: tool://marktd/get_nb_energiemix
+      mutates: false
+      max_sensitivity: confidential
+      description: "get nb energiemix via marktd"
+    - ref: tool://marktd/get_technische_ressource
+      mutates: false
+      max_sensitivity: confidential
+      description: "get technische ressource via marktd"
+    - ref: tool://marktd/get_steuerbare_ressource
+      mutates: false
+      max_sensitivity: confidential
+      description: "get steuerbare ressource via marktd"
+    - ref: tool://marktd/get_partner
+      mutates: false
+      max_sensitivity: confidential
+      description: "get partner via marktd"
+    - ref: tool://marktd/get_melo_standorteigenschaften
+      mutates: false
+      max_sensitivity: confidential
+      description: "get melo standorteigenschaften via marktd"
+    - ref: tool://marktd/get_versorgung_at
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgung at via marktd"

@@ -1,0 +1,201 @@
+# Retail invoice anomaly detection. Rolling 3-month statistical deviation analysis (threshold: 20%). Investigates root causes: meter exchange, tariff change, quality substitution, or data error.
+#
+# Generated from the compiled specialist definition during the agentplane
+# cutover. The tool grants reproduce the previous reach — every tool on each
+# granted MCP server — so no capability was silently lost. What is new: each
+# grant is named, `mutates` comes from the server's own read-only hint, and
+# every mutating tool requires a human decision.
+#
+# Narrowing the read set per specialist is domain review, not mechanical work.
+# Role: LF. Compiled only into a `role-lf` build (and the default all-roles build).
+apiVersion: agentplane.hupe1980.github.io/v1alpha1
+kind: Agent
+metadata:
+  name: billing-anomaly-agent
+  version: "1.0.0"
+spec:
+  execution:
+    kind: tool-calling
+    max_turns: 10
+
+  identity:
+    role: >-
+      Retail invoice anomaly detection. Rolling 3-month statistical deviation
+      analysis (threshold: 20%). Investigates root causes: meter exchange, tariff
+      change, quality substitution, or data error.
+    constraints: |
+      You are the billing anomaly detection specialist.
+
+      ## TRIGGERED BY
+      - `de.billing.rechnung.erstellt` — new retail invoice dispatched
+
+      ## STEP-BY-STEP PROCEDURE
+
+      1. Extract `malo_id` and `brutto_eur` from CloudEvent payload.
+      2. Call billingd `get_billing_record` first: every invoice carries the deterministic
+         risk gate's output — `risk_score` (0-100), `risk_band`
+         (AUTO_RELEASED/SAMPLE/REVIEW/HELD) and coded `risk_findings` (e.g.
+         PERIOD_OVERLAP, CONSECUTIVE_ESTIMATES, TAX_BREAKDOWN_MISMATCH). Triage from
+         those findings before any statistics; HELD records await analyst release via
+         POST /api/v1/billing/{id}/release.
+      3. Call billingd `check_billing_anomaly` with `malo_id` for the rolling baseline.
+      4. If `risk_band` is REVIEW/HELD or `is_anomaly = true` (deviation > 20%):
+         a. Call billingd `get_billing_record` for full position details.
+         b. Call edmd `get_timeseries` to compare metered consumption.
+         c. Determine likely cause: meter exchange, tariff change, quality substitution, data error.
+      4. If deviation > 50%: CRITICAL — escalate immediately.
+
+      ## ROOT CAUSE TAXONOMY
+      - METER_EXCHANGE: zaehler_replaced=true in positions
+      - TARIFF_CHANGE: arbeitspreis changed between periods
+      - QUALITY_SUBSTITUTION: is_estimated=true, Ersatzwert used
+      - DATA_ERROR: consumption implausibly high/low vs Vorjahr
+
+      ## OUTPUT FORMAT
+      ```
+      ANOMALY_DETECTED: [YES|NO]
+      DEVIATION_PCT: [percentage]
+      SEVERITY: [CRITICAL|WARNING|OK]
+      ROOT_CAUSE: [from taxonomy above or UNKNOWN]
+      RECOMMENDED_ACTION: [specific step or NONE]
+      ```
+
+  capabilities:
+    provides: [billing.anomaly]
+
+  models:
+    privileged:  { provider: anthropic, model: claude-sonnet-5 }
+    quarantined: { provider: anthropic, model: claude-haiku-4-5 }
+
+  security:
+    max_sensitivity_egress: internal
+    max_delegation_depth: 0
+    max_sensitivity_journaled: internal
+
+  oversight:
+    approval:  tools-only
+    approvers: [mako-operations]
+    deadline:
+      name: billing-anomaly-agent-freigabe
+      kind: hours
+      params: { n: 4 }
+    on_expiry: deny
+
+  budgets:
+    max_tokens: 200000
+    max_steps: 30
+    max_effects: 50
+    max_wallclock_secs: 900
+
+  tools:
+    - ref: tool://billingd/list_billing_records
+      mutates: false
+      max_sensitivity: internal
+      description: "list billing records via billingd"
+    - ref: tool://billingd/get_billing_record
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing record via billingd"
+    - ref: tool://billingd/preview_billing
+      mutates: false
+      max_sensitivity: internal
+      description: "preview billing via billingd"
+    - ref: tool://billingd/get_xrechnung
+      mutates: false
+      max_sensitivity: internal
+      description: "get xrechnung via billingd"
+    - ref: tool://billingd/check_billing_anomaly
+      mutates: false
+      max_sensitivity: internal
+      description: "check billing anomaly via billingd"
+    - ref: tool://billingd/list_vpp_settlements
+      mutates: false
+      max_sensitivity: internal
+      description: "list vpp settlements via billingd"
+    - ref: tool://billingd/list_corrections
+      mutates: false
+      max_sensitivity: internal
+      description: "list corrections via billingd"
+    - ref: tool://billingd/calculate_billing
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "calculate billing via billingd"
+    - ref: tool://billingd/list_product_categories
+      mutates: false
+      max_sensitivity: internal
+      description: "list product categories via billingd"
+    - ref: tool://billingd/validate_tariff_config
+      mutates: false
+      max_sensitivity: internal
+      description: "validate tariff config via billingd"
+    - ref: tool://billingd/explain_invoice_position
+      mutates: false
+      max_sensitivity: internal
+      description: "explain invoice position via billingd"
+    - ref: tool://billingd/get_billing_summary
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing summary via billingd"
+    - ref: tool://edmd/get_timeseries
+      mutates: false
+      max_sensitivity: internal
+      description: "get timeseries via edmd"
+    - ref: tool://edmd/get_imbalance
+      mutates: false
+      max_sensitivity: internal
+      description: "get imbalance via edmd"
+    - ref: tool://edmd/get_billing_period
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing period via edmd"
+    - ref: tool://edmd/get_device_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get device history via edmd"
+    - ref: tool://edmd/get_quality_warnings
+      mutates: false
+      max_sensitivity: internal
+      description: "get quality warnings via edmd"
+    - ref: tool://edmd/list_reading_orders
+      mutates: false
+      max_sensitivity: internal
+      description: "list reading orders via edmd"
+    - ref: tool://edmd/list_overdue_reading_orders
+      mutates: false
+      max_sensitivity: internal
+      description: "list overdue reading orders via edmd"
+    - ref: tool://edmd/trigger_jahresablesung
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "trigger jahresablesung via edmd"
+    - ref: tool://edmd/trigger_substitution
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "trigger substitution via edmd"
+    - ref: tool://edmd/get_correction_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get correction history via edmd"
+    - ref: tool://edmd/validate_timeseries
+      mutates: false
+      max_sensitivity: internal
+      description: "validate timeseries via edmd"
+    - ref: tool://edmd/get_quality_assessments
+      mutates: false
+      max_sensitivity: internal
+      description: "get quality assessments via edmd"
+    - ref: tool://edmd/get_summenzeitreihe
+      mutates: false
+      max_sensitivity: internal
+      description: "get summenzeitreihe via edmd"
+    - ref: tool://edmd/get_annual_forecast
+      mutates: false
+      max_sensitivity: internal
+      description: "get annual forecast via edmd"
+    - ref: tool://edmd/get_gas_quality
+      mutates: false
+      max_sensitivity: internal
+      description: "get gas quality via edmd"

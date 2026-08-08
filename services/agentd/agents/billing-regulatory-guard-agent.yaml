@@ -1,0 +1,226 @@
+# Post-billing §40/§41/§41a Abs. 1/§42 EnWG compliance guard. Validates every dispatched invoice for mandatory fields, §41a Abs. 1 iMSys requirement, CO₂ label, arithmetic invariants, and MwSt validity.
+#
+# Generated from the compiled specialist definition during the agentplane
+# cutover. The tool grants reproduce the previous reach — every tool on each
+# granted MCP server — so no capability was silently lost. What is new: each
+# grant is named, `mutates` comes from the server's own read-only hint, and
+# every mutating tool requires a human decision.
+#
+# Narrowing the read set per specialist is domain review, not mechanical work.
+# Role: LF. Compiled only into a `role-lf` build (and the default all-roles build).
+apiVersion: agentplane.hupe1980.github.io/v1alpha1
+kind: Agent
+metadata:
+  name: billing-regulatory-guard-agent
+  version: "1.0.0"
+spec:
+  execution:
+    kind: tool-calling
+    max_turns: 12
+
+  identity:
+    role: >-
+      Post-billing §40/§41/§41a Abs. 1/§42 EnWG compliance guard. Validates every
+      dispatched invoice for mandatory fields, §41a Abs. 1 iMSys requirement, CO₂
+      label, arithmetic invariants, and MwSt validity.
+    constraints: |
+      You are the regulatory compliance guard for retail energy billing under German EnWG.
+
+      ## TRIGGERED BY
+      - `de.billing.rechnung.erstellt` — every new invoice must pass this check
+
+      ## COMPLIANCE CHECKS
+
+      ### §40a EnWG — Kilowattstundenpreis (MANDATORY for Haushalt/Gewerbe)
+      Check: `rechnung_json.zusatzAttribute[name="kilowattstundenpreis"]` exists.
+      If missing: WARNING SECT40A_MISSING.
+
+      ### §41 EnWG — Pflichtinhalte
+      - `rechnungsnummer` set and non-empty → ERROR if missing
+      - `rechnungsperiode.startdatum` and `enddatum` set
+      - `gesamtbrutto.wert` ≈ Σ(rechnungspositionen[].gesamtpreis.wert) ± 0.01 → ERROR if mismatch
+      - `nb_mp_id` present (§41 Abs. 1 Nr. 5) → WARNING SECT41_NB_MISSING if absent
+
+      ### §41 Abs. 5 EnWG — Preisgarantie
+      Positions repricing a period covered by an active Preisgarantie (vertragd `preisgarantie_bis` >= period end) must not raise guaranteed price components. Violation: ERROR SECT41_PREISGARANTIE_VIOLATION.
+
+      ### §41a Abs. 1 EnWG — iMSys guard for §41a dynamic tariffs
+      If any position has tag `"sect41a"`: verify `metering_mode=IMSYS`.
+      SLP/RLM + dynamic tariff → ERROR SECT41A_IMSYS_REQUIRED.
+
+      ### §42 EnWG — Energiemix + CO₂ label
+      For STROM: `zusatzAttribute[name="energiemix"]` or `zusatzAttribute[name="co2_g_per_kwh"]` must exist.
+      Missing: WARNING SECT42_ENERGIEMIX_MISSING.
+
+      ### Arithmetic invariants
+      `netto_eur + mwst_eur = brutto_eur` (±0.01) → ERROR ARITHMETIC_INVARIANT.
+      All MwSt rates ∈ {0%, 7%, 19%} → ERROR INVALID_MWST_RATE if other value.
+
+      ## STEP-BY-STEP PROCEDURE
+
+      1. Extract `record_id` and `malo_id` from the CE payload.
+      2. Call billingd `get_billing_record` for full Rechnung JSON.
+      3. Run all compliance checks above in sequence.
+      4. Call billingd `validate_tariff_config` with the invoice's tariff category.
+      5. Aggregate findings and determine overall status.
+      6. If ERROR-severity: emit alert.
+
+      ## OUTPUT FORMAT
+      ```
+      COMPLIANCE_STATUS: [COMPLIANT|WARNINGS|VIOLATIONS]
+      ERROR_COUNT: [number]
+      WARNING_COUNT: [number]
+      FINDINGS: [list of {code, severity, paragraph, description}]
+      DISPATCH_SAFE: [YES|NO]
+      ```
+
+  capabilities:
+    provides: [billing.regulatory.guard]
+
+  models:
+    privileged:  { provider: anthropic, model: claude-sonnet-5 }
+    quarantined: { provider: anthropic, model: claude-haiku-4-5 }
+
+  security:
+    max_sensitivity_egress: internal
+    max_delegation_depth: 0
+    max_sensitivity_journaled: internal
+
+  oversight:
+    approval:  tools-only
+    approvers: [mako-operations]
+    deadline:
+      name: billing-regulatory-guard-agent-freigabe
+      kind: hours
+      params: { n: 4 }
+    on_expiry: deny
+
+  budgets:
+    max_tokens: 200000
+    max_steps: 36
+    max_effects: 60
+    max_wallclock_secs: 900
+
+  tools:
+    - ref: tool://billingd/list_billing_records
+      mutates: false
+      max_sensitivity: internal
+      description: "list billing records via billingd"
+    - ref: tool://billingd/get_billing_record
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing record via billingd"
+    - ref: tool://billingd/preview_billing
+      mutates: false
+      max_sensitivity: internal
+      description: "preview billing via billingd"
+    - ref: tool://billingd/get_xrechnung
+      mutates: false
+      max_sensitivity: internal
+      description: "get xrechnung via billingd"
+    - ref: tool://billingd/check_billing_anomaly
+      mutates: false
+      max_sensitivity: internal
+      description: "check billing anomaly via billingd"
+    - ref: tool://billingd/list_vpp_settlements
+      mutates: false
+      max_sensitivity: internal
+      description: "list vpp settlements via billingd"
+    - ref: tool://billingd/list_corrections
+      mutates: false
+      max_sensitivity: internal
+      description: "list corrections via billingd"
+    - ref: tool://billingd/calculate_billing
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "calculate billing via billingd"
+    - ref: tool://billingd/list_product_categories
+      mutates: false
+      max_sensitivity: internal
+      description: "list product categories via billingd"
+    - ref: tool://billingd/validate_tariff_config
+      mutates: false
+      max_sensitivity: internal
+      description: "validate tariff config via billingd"
+    - ref: tool://billingd/explain_invoice_position
+      mutates: false
+      max_sensitivity: internal
+      description: "explain invoice position via billingd"
+    - ref: tool://billingd/get_billing_summary
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing summary via billingd"
+    - ref: tool://marktd/get_malo
+      mutates: false
+      max_sensitivity: confidential
+      description: "get malo via marktd"
+    - ref: tool://marktd/list_partners
+      mutates: false
+      max_sensitivity: confidential
+      description: "list partners via marktd"
+    - ref: tool://marktd/get_preisblatt
+      mutates: false
+      max_sensitivity: confidential
+      description: "get preisblatt via marktd"
+    - ref: tool://marktd/get_versorgungsstatus
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgungsstatus via marktd"
+    - ref: tool://marktd/get_nb_contract
+      mutates: false
+      max_sensitivity: confidential
+      description: "get nb contract via marktd"
+    - ref: tool://marktd/get_correlation
+      mutates: false
+      max_sensitivity: confidential
+      description: "get correlation via marktd"
+    - ref: tool://marktd/list_pricat_versions
+      mutates: false
+      max_sensitivity: confidential
+      description: "list pricat versions via marktd"
+    - ref: tool://marktd/dispatch_pricat
+      mutates: true
+      max_sensitivity: confidential
+      requires_approval: true
+      description: "dispatch pricat via marktd"
+    - ref: tool://marktd/list_malo
+      mutates: false
+      max_sensitivity: confidential
+      description: "list malo via marktd"
+    - ref: tool://marktd/get_melo
+      mutates: false
+      max_sensitivity: confidential
+      description: "get melo via marktd"
+    - ref: tool://marktd/get_rollenzuordnung
+      mutates: false
+      max_sensitivity: confidential
+      description: "get rollenzuordnung via marktd"
+    - ref: tool://marktd/get_versorgungsstatus_history
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgungsstatus history via marktd"
+    - ref: tool://marktd/get_nb_energiemix
+      mutates: false
+      max_sensitivity: confidential
+      description: "get nb energiemix via marktd"
+    - ref: tool://marktd/get_technische_ressource
+      mutates: false
+      max_sensitivity: confidential
+      description: "get technische ressource via marktd"
+    - ref: tool://marktd/get_steuerbare_ressource
+      mutates: false
+      max_sensitivity: confidential
+      description: "get steuerbare ressource via marktd"
+    - ref: tool://marktd/get_partner
+      mutates: false
+      max_sensitivity: confidential
+      description: "get partner via marktd"
+    - ref: tool://marktd/get_melo_standorteigenschaften
+      mutates: false
+      max_sensitivity: confidential
+      description: "get melo standorteigenschaften via marktd"
+    - ref: tool://marktd/get_versorgung_at
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgung at via marktd"

@@ -1,83 +1,103 @@
 # agentd — Multi-Agent LLM Orchestration
 
-`agentd` connects large language models to all 16 mako production services via MCP,
-enabling automated analysis, compliance checking, and workflow orchestration.
+`agentd` connects large language models to the mako production services via MCP,
+enabling automated analysis, compliance checking and workflow orchestration.
+
+Every specialist is a **declarative manifest** run by
+[agentplane](https://github.com/hupe1980/agentplane), a journal-first durable
+agent runtime. Every model call and tool call is a journaled effect, so a run
+survives a crash and replays for audit.
 
 | Feature | Detail |
 |---|---|
 | **HTTP port** | `:9580` |
-| **Built-in agents** | 28 specialists compiled into binary — ship in container image |
-| **Custom agents** | `[[agents]]` in `agentd.toml` — fully customizable |
-| **LLM providers** | OpenAI · Anthropic Claude · AWS Bedrock SigV4 |
-| **Dispatch modes** | `sequential` · `parallel` (fan-out) · `race` (first wins) |
-| **RAG** | LanceDB vector store (S3/GCS/Azure Blob/local) |
+| **Specialists** | 28 manifests in `agents/`, embedded at compile time |
+| **Runtime** | agentplane — journaled effects, strict replay, human approval on mutating tools |
+| **Model providers** | Anthropic · OpenAI (and OpenAI-compatible) · AWS Bedrock |
+| **Role scoping** | `role-lf` · `role-nb` · `role-msb` — a role build contains no other arm's specialists (§ 9 EnWG) |
+| **Journal** | redb at `journal_path` — the § 147 AO / GoBD record, sealed by the key ring |
 | **A2A cards** | `GET /.well-known/agents/{name}` for each specialist |
-| **Catalog** | `GET /api/v1/agents/catalog` — all 28 built-in definitions |
+| **Catalogue** | `GET /api/v1/agents/catalog` |
 
-## Built-in specialists (shipped in container)
+## The manifest is the agent
 
-All 28 specialists are compiled into the binary. Activate them via `[bundled_agents]`:
+`agents/<name>.yaml` declares the procedure, the model pair, every tool the agent
+may call, the ceilings it runs under and the schema its result must satisfy. It
+is digest-covered: editing a procedure is a version bump a reviewer sees.
 
-```toml
-[bundled_agents]
-enable_all       = true
-default_provider = "openai"
-default_model    = "gpt-4o-mini"
+`src/builtin/mod.rs` holds the one thing agentplane has no notion of — which
+CloudEvent types reach which specialist — and nothing else. A second copy of the
+prompt in Rust could disagree with the manifest, and the manifest is the copy the
+model reads.
 
-# Upgrade specific agents
-[bundled_agents.overrides.mako-agent]
-model = "gpt-4o"
-```
+Consequently there are **no per-agent config overrides**. Changing a specialist's
+model is a manifest edit, which is the reviewable path by design.
 
-| Specialist | Trigger events | MCP tools used |
+Two properties matter for a regulated deployment:
+
+- **Mutating tools require a human.** Every state-changing grant carries
+  `requires_approval: true`, bounded by an obligation in `spec.oversight` with
+  `on_expiry: deny`.
+- **Authority-bearing arguments are bound to trusted sources.**
+  `protected_fields` marks `/malo_id` and `/pid` as `require_trusted`, so a value
+  derived from counterparty free text cannot reach `submit_command`.
+
+The deterministic boundary is unchanged: an agent may prepare and may wait,
+`makod` still dispatches.
+
+## Specialists
+
+Each row is a subscription paired with a manifest. The capability is what
+`Runtime::run` is given.
+
+| Specialist | Capability | Subscribes to |
 |---|---|---|
-| `mako-agent` | `de.mako.process.failed`, `de.mako.aperak.*` | makod, marktd, obsd |
-| `deadline-alert-agent` | `de.mako.aperak.timeout` | obsd, makod |
-| `billing-agent` | `de.invoic.receipt.disputed` | invoicd, billingd, accountingd |
-| `billing-anomaly-agent` | `de.billing.rechnung.erstellt` | billingd, edmd |
-| `billing-regulatory-guard-agent` | `de.billing.rechnung.erstellt` | billingd, marktd |
-| `jahresabrechnung-agent` | manual | billingd, edmd, marktd |
-| `eeg-compliance-agent` | `de.eeg.anlage.*`, `de.eeg.verguetung.*` | einsd, obsd |
-| `eeg-agent` | `de.eeg.anlage.foerderung-auslaufend` | einsd, edmd |
-| `payment-reconciliation-agent` | `de.accounting.payment.due` | accountingd |
-| `compliance-agent` | `de.obs.stp.parity.alert` | obsd, processd |
-| `msb-history-agent` | `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.completed` | edmd, makod, marktd |
-| `meter-data-agent` | `de.messwert.reading.quality.warning` | edmd, marktd |
-| `grid-anomaly-agent` | `de.markt.nb-contract.updated`, `de.markt.malo.updated` | marktd, obsd |
-| `tariff-optimization-agent` | `de.billing.rechnung.erstellt` | billingd, tarifbd, edmd |
-| `replacement-value-agent` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` | edmd, marktd, obsd |
-| `mabis-syncd-agent` | `de.messwert.reading.quality.warning` | edmd, obsd, marktd |
-| `smgw-diagnostics-agent` | `de.messwert.reading.direct.stored` | edmd, marktd, processd |
-| `invoice-reconciliation-agent` | `de.invoic.receipt.*` | invoicd, billingd |
-| `netzbilanz-agent` | `de.netzbilanz.invoic.*` | netzbilanzd, marktd |
-| `portald-agent` | `de.vertrag.*` | portald, vertragd, billingd |
-| `processd-agent` | `de.mako.process.failed` | processd, obsd, marktd |
-| `regulatory-reporting-agent` | manual | obsd, marktd, processd |
-| `sperrd-agent` | `de.accounting.sperrauftrag` | sperrd, accountingd |
-| `tarifbd-agent` | `de.tarif.*` | tarifbd, billingd |
-| `vertragd-agent` | `de.vertrag.*` | vertragd, processd, marktd |
-| `vpp-billing-agent` | `de.vpp.dispatch.confirmed`, `de.vpp.settlement.berechnet` | billingd, marktd, obsd |
-| `gabi-gas-agent` | `de.gabi.imbalance.*`, `de.gabi.alocat.missing`, `de.gabi.nomination.*` | makod, netzbilanzd, marktd, obsd |
-| `einsd-batch-agent` | `de.eeg.settlement.batch-due`, `de.eeg.compliance.*` | einsd, edmd, tarifbd, obsd |
+| `mako-agent` | `mako` | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.mako.aperak.*` |
+| `deadline-alert-agent` | `deadline.alert` | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.obs.deadline.approaching` |
+| `billing-agent` | `billing` | `de.invoic.receipt.disputed`, `de.accounting.mahnung.issued` |
+| `netzbilanz-agent` | `netzbilanz` | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched`, `de.netzbilanz.invoic.dispatch-overdue` |
+| `invoice-reconciliation-agent` | `invoice.reconciliation` | `de.invoic.payment.overdue`, `de.invoic.receipt.*` |
+| `billing-anomaly-agent` | `billing.anomaly` | `de.billing.rechnung.erstellt` |
+| `billing-regulatory-guard-agent` | `billing.regulatory.guard` | `de.billing.rechnung.erstellt` |
+| `jahresabrechnung-agent` | `jahresabrechnung` | _manual / scheduled_ |
+| `eeg-agent` | `eeg` | `de.eeg.anlage.foerderung-auslaufend`, `de.messwert.reading.direct.stored` |
+| `eeg-compliance-agent` | `eeg.compliance` | `de.eeg.anlage.*`, `de.eeg.verguetung.*`, `de.eeg.marktpraemie.*`, `de.eeg.compliance.*` |
+| `payment-reconciliation-agent` | `payment.reconciliation` | `de.accounting.payment.due`, `de.accounting.bankruecklast` |
+| `compliance-agent` | `compliance` | `de.obs.stp.parity.alert` |
+| `msb-history-agent` | `msb.history` | `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.completed` |
+| `meter-data-agent` | `meter.data` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` |
+| `grid-anomaly-agent` | `grid.anomaly` | `de.markt.nb-contract.updated`, `de.markt.malo.updated` |
+| `tariff-optimization-agent` | `tariff.optimization` | `de.billing.rechnung.erstellt`, `de.mako.process.completed` |
+| `vertragd-agent` | `vertragd` | `de.vertrag.*`, `de.mako.aperak.rejected`, `de.mako.process.failed`, `de.vertrag.ablauf.ankuendigung`, `de.vertrag.preisaenderung.ankuendigung` |
+| `tarifbd-agent` | `tarifbd` | `de.tarif.product.updated`, `de.tarif.angebot.abgelaufen`, `de.tarif.epex.missing` |
+| `processd-agent` | `processd` | `de.mako.process.initiated`, `de.mako.aperak.rejected`, `de.mako.process.failed` |
+| `sperrd-agent` | `sperrd` | `de.accounting.sperrauftrag`, `de.sperr.*`, `de.mako.process.completed` |
+| `portald-agent` | `portald` | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung-auslaufend`, `de.accounting.mahnung.issued`, `de.vertrag.*` |
+| `regulatory-reporting-agent` | `regulatory.reporting` | _manual / scheduled_ |
+| `replacement-value-agent` | `replacement.value` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` |
+| `mabis-syncd-agent` | `mabis.syncd` | `de.messwert.reading.quality.warning` |
+| `smgw-diagnostics-agent` | `smgw.diagnostics` | `de.messwert.cls.compliance-issue`, `de.messwert.smgw.cert.expiry-warning`, `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.initiated`, `de.markt.geraet.konfiguration.updated` |
+| `vpp-billing-agent` | `vpp.billing` | `de.vpp.dispatch.confirmed`, `de.vpp.settlement.berechnet` |
+| `gabi-gas-agent` | `gabi.gas.balancing` | `de.gabi.imbalance.*`, `de.gabi.alocat.missing`, `de.gabi.nomination.*`, `de.netzbilanz.invoic.drafted` |
+| `einsd-batch-agent` | `einsd.batch` | `de.eeg.settlement.batch-due`, `de.eeg.compliance.*`, `de.eeg.anlage.foerderung-auslaufend` |
 
 ## Configuration
 
 ```toml
 # agentd.toml
-tenant = "9900357000004"
+tenant       = "9900357000004"
+journal_path = "/var/lib/agentd/journal.redb"   # § 147 AO record — durable storage
 
-[providers.openai]
-backend = "openai"
-api_key = "env:OPENAI_API_KEY"   # SecretString — never logged
+# The key is the name a manifest's `spec.models` refers to.
+[providers.anthropic]
+backend = "anthropic"
+api_key = "env:ANTHROPIC_API_KEY"   # SecretString — never logged
 
-[orchestrator]
-provider = "openai"
-model    = "gpt-4o"
-
+# Which specialists this deployment runs. A name matching no compiled
+# specialist is a startup failure, not an inactive agent.
 [bundled_agents]
-enable_all       = true
-default_provider = "openai"
-default_model    = "gpt-4o-mini"
+enable_all = true
+# enable = ["mako-agent", "billing-anomaly-agent"]
 
 # OIDC (optional — dev mode when absent, all POST /api/v1/run requests accepted)
 [oidc]
@@ -85,13 +105,9 @@ issuer   = "https://keycloak:8080/realms/mako"
 audience = "agentd"
 
 # Inbound HMAC verification (strongly recommended in production)
-inbound_hmac_secret = "env:AGENTD_INBOUND_HMAC_SECRET"
-
-# Dead-letter queue (retries failed sessions with exponential backoff)
-[dlq]
-capacity         = 100
-max_retries      = 4
-base_backoff_secs = 30   # retry delays: 30s, 90s, 270s, 810s
+inbound_hmac_secret  = "env:AGENTD_INBOUND_HMAC_SECRET"
+max_sessions         = 20
+session_timeout_secs = 300   # bounds one event's whole fan-out
 
 mcp_api_key = "env:AGENTD_MCP_API_KEY"   # SecretString — never logged
 
@@ -102,29 +118,26 @@ makod    = "http://makod:8080/mcp"
 marktd   = "http://marktd:8180/mcp"
 billingd = "http://billingd:9280/mcp"
 # ... more services
-
-[rag]
-enabled           = true
-storage_uri       = "/var/lib/agentd/rag"
-embedding_provider = "openai"
-embedding_model   = "text-embedding-3-small"
-score_threshold   = 0.3   # min cosine similarity (filters low-quality results)
-top_k             = 5
 ```
 
-## Research basis
+## Durability instead of retries
 
-The Orchestrator → Specialist Mesh pattern is proven at scale (Guo et al. 2024 multi-agent
-survey) and aligns with:
+A failed run is not a message with nowhere to go: its effects are journaled, so
+it resumes from the last completed effect rather than being replayed from the top
+by a retry loop. There is no dead-letter queue and no `de.agent.session.dlq.*`
+event.
 
-- **LangGraph** supervisor pattern — orchestrator routes to subagent graphs
-- **AutoGen** GroupChat — specialists communicate via shared context
-- **CrewAI** hierarchical process — orchestrator assigns tasks to specialists
-- **A2A protocol** — each specialist exposes a discoverable Agent Card
+`de.agent.decision.made` carries the run's real outcome — `completed`, `failed`,
+`suspended`, `exhausted`, `quarantined`, `replanning` or `cancelled` — and its
+`session_id` is the journal run id an operator can look up. A **suspended** run
+is waiting for a human decision, not failing.
 
-Key design choices vs alternatives:
-- **ReAct over CoT** — interleaved tool calls reduce hallucination for factual energy-domain tasks
-- **Structured output format** — every specialist ends with a machine-parseable block
-  (STATUS/OUTCOME/FINDINGS), not prose, enabling downstream automation
-- **Domain specialization** — narrow prompts outperform general-purpose agents on EDIFACT/§-law tasks
-- **Parallel dispatch** — compliance events (§40/§41/§41b) benefit from simultaneous multi-specialist checks
+## Fan-out
+
+Several specialists may subscribe to one event; they are independent opinions, so
+each gets its own run and its own journal. There is deliberately no first-wins
+mode — abandoning an in-flight branch leaves a started effect with no terminal
+record, which for a mutating tool call is an unrecoverable unknown outcome.
+
+See [the operator guide](https://hupe1980.github.io/mako/docs/services/agentd/)
+for the architecture diagrams, role scoping and erasure model.

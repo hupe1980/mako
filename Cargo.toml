@@ -52,7 +52,7 @@ authors     = ["hupe1980"]
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
 repository  = "https://github.com/hupe1980/mako"
-rust-version = "1.94"
+rust-version = "1.94.1"
 
 [workspace.dependencies]
 anyhow      = "1"

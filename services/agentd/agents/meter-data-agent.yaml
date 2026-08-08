@@ -1,0 +1,215 @@
+# MSCONS meter data quality and § 60 Abs. 2 MsbG substitute value analysis. Detects missing intervals, validates Hampel quality grades, and recommends Ersatzwertbildung methods.
+#
+# Generated from the compiled specialist definition during the agentplane
+# cutover. The tool grants reproduce the previous reach — every tool on each
+# granted MCP server — so no capability was silently lost. What is new: each
+# grant is named, `mutates` comes from the server's own read-only hint, and
+# every mutating tool requires a human decision.
+#
+# Narrowing the read set per specialist is domain review, not mechanical work.
+# Role: MSB. Compiled only into a `role-msb` build (and the default all-roles build).
+apiVersion: agentplane.hupe1980.github.io/v1alpha1
+kind: Agent
+metadata:
+  name: meter-data-agent
+  version: "1.0.0"
+spec:
+  execution:
+    kind: tool-calling
+    max_turns: 12
+
+  identity:
+    role: >-
+      MSCONS meter data quality and § 60 Abs. 2 MsbG substitute value analysis.
+      Detects missing intervals, validates Hampel quality grades, and recommends
+      Ersatzwertbildung methods.
+    constraints: |
+      You are the energy data management and meter quality specialist.
+
+      ## TRIGGERED BY
+      - `de.messwert.reading.quality.warning` — Hampel/V01-V10 quality flag
+      - `de.mako.process.completed` — process that may require meter data
+
+      ## PROCEDURE
+
+      1. Extract `malo_id` from event payload.
+      2. Call edmd `get_quality_assessments` for current quality grades (A/B/C/F).
+      3. For F-grade intervals: call edmd `get_timeseries` to identify gap extent.
+      4. Determine appropriate § 60 Abs. 2 MsbG substitute method:
+         - Short gap (≤ 6h): linear interpolation
+         - Medium gap (≤ 24h): prior-period average (same time-slot last week)
+         - Long gap: profile-based substitution
+      5. Check if gaps affect an active billing period.
+
+      ## OUTPUT FORMAT
+      ```
+      DATA_STATUS: [COMPLETE|PARTIAL|MISSING]
+      QUALITY_GRADE: [A|B|C|F]
+      GAP_HOURS: [total hours of missing data]
+      AFFECTED_BILLING_PERIOD: [YES|NO]
+      RECOMMENDED_SUBSTITUTION: [method per § 60 Abs. 2 MsbG]
+      ```
+
+  capabilities:
+    provides: [meter.data]
+
+  models:
+    privileged:  { provider: anthropic, model: claude-sonnet-5 }
+    quarantined: { provider: anthropic, model: claude-haiku-4-5 }
+
+  security:
+    max_sensitivity_egress: internal
+    max_delegation_depth: 0
+    max_sensitivity_journaled: internal
+
+  oversight:
+    approval:  tools-only
+    approvers: [mako-operations]
+    deadline:
+      name: meter-data-agent-freigabe
+      kind: hours
+      params: { n: 4 }
+    on_expiry: deny
+
+  budgets:
+    max_tokens: 200000
+    max_steps: 36
+    max_effects: 60
+    max_wallclock_secs: 900
+
+  tools:
+    - ref: tool://edmd/get_timeseries
+      mutates: false
+      max_sensitivity: internal
+      description: "get timeseries via edmd"
+    - ref: tool://edmd/get_imbalance
+      mutates: false
+      max_sensitivity: internal
+      description: "get imbalance via edmd"
+    - ref: tool://edmd/get_billing_period
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing period via edmd"
+    - ref: tool://edmd/get_device_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get device history via edmd"
+    - ref: tool://edmd/get_quality_warnings
+      mutates: false
+      max_sensitivity: internal
+      description: "get quality warnings via edmd"
+    - ref: tool://edmd/list_reading_orders
+      mutates: false
+      max_sensitivity: internal
+      description: "list reading orders via edmd"
+    - ref: tool://edmd/list_overdue_reading_orders
+      mutates: false
+      max_sensitivity: internal
+      description: "list overdue reading orders via edmd"
+    - ref: tool://edmd/trigger_jahresablesung
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "trigger jahresablesung via edmd"
+    - ref: tool://edmd/trigger_substitution
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "trigger substitution via edmd"
+    - ref: tool://edmd/get_correction_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get correction history via edmd"
+    - ref: tool://edmd/validate_timeseries
+      mutates: false
+      max_sensitivity: internal
+      description: "validate timeseries via edmd"
+    - ref: tool://edmd/get_quality_assessments
+      mutates: false
+      max_sensitivity: internal
+      description: "get quality assessments via edmd"
+    - ref: tool://edmd/get_summenzeitreihe
+      mutates: false
+      max_sensitivity: internal
+      description: "get summenzeitreihe via edmd"
+    - ref: tool://edmd/get_annual_forecast
+      mutates: false
+      max_sensitivity: internal
+      description: "get annual forecast via edmd"
+    - ref: tool://edmd/get_gas_quality
+      mutates: false
+      max_sensitivity: internal
+      description: "get gas quality via edmd"
+    - ref: tool://marktd/get_malo
+      mutates: false
+      max_sensitivity: confidential
+      description: "get malo via marktd"
+    - ref: tool://marktd/list_partners
+      mutates: false
+      max_sensitivity: confidential
+      description: "list partners via marktd"
+    - ref: tool://marktd/get_preisblatt
+      mutates: false
+      max_sensitivity: confidential
+      description: "get preisblatt via marktd"
+    - ref: tool://marktd/get_versorgungsstatus
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgungsstatus via marktd"
+    - ref: tool://marktd/get_nb_contract
+      mutates: false
+      max_sensitivity: confidential
+      description: "get nb contract via marktd"
+    - ref: tool://marktd/get_correlation
+      mutates: false
+      max_sensitivity: confidential
+      description: "get correlation via marktd"
+    - ref: tool://marktd/list_pricat_versions
+      mutates: false
+      max_sensitivity: confidential
+      description: "list pricat versions via marktd"
+    - ref: tool://marktd/dispatch_pricat
+      mutates: true
+      max_sensitivity: confidential
+      requires_approval: true
+      description: "dispatch pricat via marktd"
+    - ref: tool://marktd/list_malo
+      mutates: false
+      max_sensitivity: confidential
+      description: "list malo via marktd"
+    - ref: tool://marktd/get_melo
+      mutates: false
+      max_sensitivity: confidential
+      description: "get melo via marktd"
+    - ref: tool://marktd/get_rollenzuordnung
+      mutates: false
+      max_sensitivity: confidential
+      description: "get rollenzuordnung via marktd"
+    - ref: tool://marktd/get_versorgungsstatus_history
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgungsstatus history via marktd"
+    - ref: tool://marktd/get_nb_energiemix
+      mutates: false
+      max_sensitivity: confidential
+      description: "get nb energiemix via marktd"
+    - ref: tool://marktd/get_technische_ressource
+      mutates: false
+      max_sensitivity: confidential
+      description: "get technische ressource via marktd"
+    - ref: tool://marktd/get_steuerbare_ressource
+      mutates: false
+      max_sensitivity: confidential
+      description: "get steuerbare ressource via marktd"
+    - ref: tool://marktd/get_partner
+      mutates: false
+      max_sensitivity: confidential
+      description: "get partner via marktd"
+    - ref: tool://marktd/get_melo_standorteigenschaften
+      mutates: false
+      max_sensitivity: confidential
+      description: "get melo standorteigenschaften via marktd"
+    - ref: tool://marktd/get_versorgung_at
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgung at via marktd"

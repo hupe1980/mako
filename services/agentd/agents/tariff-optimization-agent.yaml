@@ -1,0 +1,321 @@
+# §41a dynamic tariff upgrade advisor. Identifies iMSys customers not yet on dynamic tariffs, estimates annual savings vs fixed tariff, and recommends product changes in tarifbd.
+#
+# Generated from the compiled specialist definition during the agentplane
+# cutover. The tool grants reproduce the previous reach — every tool on each
+# granted MCP server — so no capability was silently lost. What is new: each
+# grant is named, `mutates` comes from the server's own read-only hint, and
+# every mutating tool requires a human decision.
+#
+# Narrowing the read set per specialist is domain review, not mechanical work.
+# Role: LF. Compiled only into a `role-lf` build (and the default all-roles build).
+apiVersion: agentplane.hupe1980.github.io/v1alpha1
+kind: Agent
+metadata:
+  name: tariff-optimization-agent
+  version: "1.0.0"
+spec:
+  execution:
+    kind: tool-calling
+    max_turns: 12
+
+  identity:
+    role: >-
+      §41a dynamic tariff upgrade advisor. Identifies iMSys customers not yet on
+      dynamic tariffs, estimates annual savings vs fixed tariff, and recommends
+      product changes in tarifbd.
+    constraints: |
+      You are the tariff optimization specialist.
+
+      ## TRIGGERED BY
+      - `de.billing.rechnung.erstellt` — analyse each new invoice for optimization potential
+      - `de.mako.process.completed` — WiM completion may indicate new iMSys available
+
+      ## PROCEDURE
+
+      1. Call billingd `get_billing_summary` for the MaLo's 3-month average.
+      2. Call edmd `get_timeseries` for 15-min reading availability (iMSys indicator).
+      3. If 15-min data available and product is STROM without dynamic_epex: UPGRADE_CANDIDATE.
+      4. Compare expected §41a cost vs current fixed tariff using billing `preview`.
+      5. Check tarifbd for available dynamic EPEX product.
+
+      ## UPGRADE CONDITIONS (§41a Abs. 1 EnWG)
+      - MeteringMode=iMSys (BSI TR-03109 SMGW active) REQUIRED
+      - EPEX price data available in tarifbd for billing period
+
+      ## OUTPUT FORMAT
+      ```
+      OPTIMIZATION_STATUS: [OPTIMAL|UPGRADE_CANDIDATE|NOT_ELIGIBLE]
+      CURRENT_TARIFF: [category and key price]
+      POTENTIAL_ANNUAL_SAVINGS_EUR: [estimate or N/A]
+      ELIGIBILITY_BLOCKER: [reason if NOT_ELIGIBLE]
+      RECOMMENDED_ACTION: [specific step or NONE]
+      ```
+
+  capabilities:
+    provides: [tariff.optimization]
+
+  models:
+    privileged:  { provider: anthropic, model: claude-sonnet-5 }
+    quarantined: { provider: anthropic, model: claude-haiku-4-5 }
+
+  security:
+    max_sensitivity_egress: internal
+    max_delegation_depth: 0
+    max_sensitivity_journaled: internal
+
+  oversight:
+    approval:  tools-only
+    approvers: [mako-operations]
+    deadline:
+      name: tariff-optimization-agent-freigabe
+      kind: hours
+      params: { n: 4 }
+    on_expiry: deny
+
+  budgets:
+    max_tokens: 200000
+    max_steps: 36
+    max_effects: 60
+    max_wallclock_secs: 900
+
+  tools:
+    - ref: tool://billingd/list_billing_records
+      mutates: false
+      max_sensitivity: internal
+      description: "list billing records via billingd"
+    - ref: tool://billingd/get_billing_record
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing record via billingd"
+    - ref: tool://billingd/preview_billing
+      mutates: false
+      max_sensitivity: internal
+      description: "preview billing via billingd"
+    - ref: tool://billingd/get_xrechnung
+      mutates: false
+      max_sensitivity: internal
+      description: "get xrechnung via billingd"
+    - ref: tool://billingd/check_billing_anomaly
+      mutates: false
+      max_sensitivity: internal
+      description: "check billing anomaly via billingd"
+    - ref: tool://billingd/list_vpp_settlements
+      mutates: false
+      max_sensitivity: internal
+      description: "list vpp settlements via billingd"
+    - ref: tool://billingd/list_corrections
+      mutates: false
+      max_sensitivity: internal
+      description: "list corrections via billingd"
+    - ref: tool://billingd/calculate_billing
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "calculate billing via billingd"
+    - ref: tool://billingd/list_product_categories
+      mutates: false
+      max_sensitivity: internal
+      description: "list product categories via billingd"
+    - ref: tool://billingd/validate_tariff_config
+      mutates: false
+      max_sensitivity: internal
+      description: "validate tariff config via billingd"
+    - ref: tool://billingd/explain_invoice_position
+      mutates: false
+      max_sensitivity: internal
+      description: "explain invoice position via billingd"
+    - ref: tool://billingd/get_billing_summary
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing summary via billingd"
+    - ref: tool://tarifbd/list_products
+      mutates: false
+      max_sensitivity: internal
+      description: "list products via tarifbd"
+    - ref: tool://tarifbd/get_product
+      mutates: false
+      max_sensitivity: internal
+      description: "get product via tarifbd"
+    - ref: tool://tarifbd/get_customer_product
+      mutates: false
+      max_sensitivity: internal
+      description: "get customer product via tarifbd"
+    - ref: tool://tarifbd/get_epex_price
+      mutates: false
+      max_sensitivity: internal
+      description: "get epex price via tarifbd"
+    - ref: tool://tarifbd/list_expiring_contracts
+      mutates: false
+      max_sensitivity: internal
+      description: "list expiring contracts via tarifbd"
+    - ref: tool://tarifbd/list_angebote
+      mutates: false
+      max_sensitivity: internal
+      description: "list angebote via tarifbd"
+    - ref: tool://tarifbd/get_angebot
+      mutates: false
+      max_sensitivity: internal
+      description: "get angebot via tarifbd"
+    - ref: tool://tarifbd/get_angebot_summary
+      mutates: false
+      max_sensitivity: internal
+      description: "get angebot summary via tarifbd"
+    - ref: tool://tarifbd/check_41a_epex_status
+      mutates: false
+      max_sensitivity: internal
+      description: "check 41a epex status via tarifbd"
+    - ref: tool://tarifbd/get_product_energiemix
+      mutates: false
+      max_sensitivity: internal
+      description: "get product energiemix via tarifbd"
+    - ref: tool://tarifbd/validate_tariff_config
+      mutates: false
+      max_sensitivity: internal
+      description: "validate tariff config via tarifbd"
+    - ref: tool://tarifbd/explain_invoice_position
+      mutates: false
+      max_sensitivity: internal
+      description: "explain invoice position via tarifbd"
+    - ref: tool://tarifbd/get_product_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get product history via tarifbd"
+    - ref: tool://tarifbd/get_comparison_feed
+      mutates: false
+      max_sensitivity: internal
+      description: "get comparison feed via tarifbd"
+    - ref: tool://edmd/get_timeseries
+      mutates: false
+      max_sensitivity: internal
+      description: "get timeseries via edmd"
+    - ref: tool://edmd/get_imbalance
+      mutates: false
+      max_sensitivity: internal
+      description: "get imbalance via edmd"
+    - ref: tool://edmd/get_billing_period
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing period via edmd"
+    - ref: tool://edmd/get_device_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get device history via edmd"
+    - ref: tool://edmd/get_quality_warnings
+      mutates: false
+      max_sensitivity: internal
+      description: "get quality warnings via edmd"
+    - ref: tool://edmd/list_reading_orders
+      mutates: false
+      max_sensitivity: internal
+      description: "list reading orders via edmd"
+    - ref: tool://edmd/list_overdue_reading_orders
+      mutates: false
+      max_sensitivity: internal
+      description: "list overdue reading orders via edmd"
+    - ref: tool://edmd/trigger_jahresablesung
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "trigger jahresablesung via edmd"
+    - ref: tool://edmd/trigger_substitution
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "trigger substitution via edmd"
+    - ref: tool://edmd/get_correction_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get correction history via edmd"
+    - ref: tool://edmd/validate_timeseries
+      mutates: false
+      max_sensitivity: internal
+      description: "validate timeseries via edmd"
+    - ref: tool://edmd/get_quality_assessments
+      mutates: false
+      max_sensitivity: internal
+      description: "get quality assessments via edmd"
+    - ref: tool://edmd/get_summenzeitreihe
+      mutates: false
+      max_sensitivity: internal
+      description: "get summenzeitreihe via edmd"
+    - ref: tool://edmd/get_annual_forecast
+      mutates: false
+      max_sensitivity: internal
+      description: "get annual forecast via edmd"
+    - ref: tool://edmd/get_gas_quality
+      mutates: false
+      max_sensitivity: internal
+      description: "get gas quality via edmd"
+    - ref: tool://marktd/get_malo
+      mutates: false
+      max_sensitivity: confidential
+      description: "get malo via marktd"
+    - ref: tool://marktd/list_partners
+      mutates: false
+      max_sensitivity: confidential
+      description: "list partners via marktd"
+    - ref: tool://marktd/get_preisblatt
+      mutates: false
+      max_sensitivity: confidential
+      description: "get preisblatt via marktd"
+    - ref: tool://marktd/get_versorgungsstatus
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgungsstatus via marktd"
+    - ref: tool://marktd/get_nb_contract
+      mutates: false
+      max_sensitivity: confidential
+      description: "get nb contract via marktd"
+    - ref: tool://marktd/get_correlation
+      mutates: false
+      max_sensitivity: confidential
+      description: "get correlation via marktd"
+    - ref: tool://marktd/list_pricat_versions
+      mutates: false
+      max_sensitivity: confidential
+      description: "list pricat versions via marktd"
+    - ref: tool://marktd/dispatch_pricat
+      mutates: true
+      max_sensitivity: confidential
+      requires_approval: true
+      description: "dispatch pricat via marktd"
+    - ref: tool://marktd/list_malo
+      mutates: false
+      max_sensitivity: confidential
+      description: "list malo via marktd"
+    - ref: tool://marktd/get_melo
+      mutates: false
+      max_sensitivity: confidential
+      description: "get melo via marktd"
+    - ref: tool://marktd/get_rollenzuordnung
+      mutates: false
+      max_sensitivity: confidential
+      description: "get rollenzuordnung via marktd"
+    - ref: tool://marktd/get_versorgungsstatus_history
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgungsstatus history via marktd"
+    - ref: tool://marktd/get_nb_energiemix
+      mutates: false
+      max_sensitivity: confidential
+      description: "get nb energiemix via marktd"
+    - ref: tool://marktd/get_technische_ressource
+      mutates: false
+      max_sensitivity: confidential
+      description: "get technische ressource via marktd"
+    - ref: tool://marktd/get_steuerbare_ressource
+      mutates: false
+      max_sensitivity: confidential
+      description: "get steuerbare ressource via marktd"
+    - ref: tool://marktd/get_partner
+      mutates: false
+      max_sensitivity: confidential
+      description: "get partner via marktd"
+    - ref: tool://marktd/get_melo_standorteigenschaften
+      mutates: false
+      max_sensitivity: confidential
+      description: "get melo standorteigenschaften via marktd"
+    - ref: tool://marktd/get_versorgung_at
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgung at via marktd"

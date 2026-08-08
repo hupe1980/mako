@@ -146,6 +146,14 @@ clippy-roles:
         echo "==> cargo clippy -p makod --features $f"
         cargo clippy -p makod --features "$f" --all-targets -- -D warnings
     done
+    # agentd carries the same role flags: it is the one service that reaches all
+    # the others, so a role-scoped build must exclude the other arm's
+    # specialists rather than merely decline to run them (§ 9 EnWG).
+    for f in "role-lf" "role-nb" "role-msb"; do
+        echo "==> cargo clippy -p agentd --features $f"
+        cargo clippy -p agentd --features "$f" --all-targets -- -D warnings
+        cargo test   -p agentd --features "$f" --lib role_scoped
+    done
 
 # Boot each umbrella deployment profile and assert it passes --check.
 #

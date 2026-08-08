@@ -1,5 +1,6 @@
 //! HTTP handlers — CloudEvent webhook + manual run.
 
+use crate::plane::{AgentDecision, Plane};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -15,14 +16,7 @@ use secrecy::ExposeSecret;
 use serde_json::Value;
 use tokio::sync::Semaphore;
 
-use crate::{
-    agent::registry::glob_match,
-    agent::{AgentDecision, AgentRegistry, OrchestratorAgent},
-    config::AgentdConfig,
-    dlq::{DlqEntry, DlqStore},
-    mcp::McpPool,
-    rag::RagEngine,
-};
+use crate::config::AgentdConfig;
 
 // ── Session ring buffer ────────────────────────────────────────────────────
 
@@ -68,18 +62,18 @@ impl SessionStore {
 /// Shared application state injected into all handlers via `axum::extract::State`.
 pub struct AppState {
     pub cfg: AgentdConfig,
-    pub orchestrator: OrchestratorAgent,
-    pub registry: AgentRegistry,
-    pub mcp: McpPool,
-    pub rag: Option<RagEngine>,
+    /// The agentplane runtime and its routing table.
+    ///
+    /// Replaces the orchestrator, registry, session loop, MCP pool and
+    /// dead-letter queue: routing is the only part agentplane does not do, and
+    /// a failed run resumes from its journal rather than landing in a queue.
+    pub plane: Plane,
     /// In-memory ring buffer of the last 100 agent decisions (best-effort; not persisted).
     pub sessions: SessionStore,
     /// OIDC verifier (None = dev mode, all requests accepted with warning).
     pub oidc: Option<Arc<OidcVerifier>>,
     /// Semaphore limiting concurrent agent sessions to `cfg.max_sessions`.
     pub session_sem: Arc<Semaphore>,
-    /// Dead-letter queue for failed sessions.
-    pub dlq: DlqStore,
     /// CloudEvent-id dedup window (at-least-once delivery must not double-spawn).
     pub seen_events: SeenEvents,
 }
@@ -180,7 +174,7 @@ pub async fn webhook(
         .cfg
         .trigger_event_types
         .iter()
-        .any(|t| glob_match(t, &event_type))
+        .any(|t| mako_events::matches(t, &event_type))
     {
         tracing::debug!(event_type, "agentd: ignoring non-trigger event");
         return StatusCode::NO_CONTENT.into_response();
@@ -201,55 +195,38 @@ pub async fn webhook(
     tracing::info!(event_type, event_id, "agentd: trigger received");
     let state2 = Arc::clone(&state);
     let timeout_secs = state.cfg.session_timeout_secs;
-    let event_data_for_dlq = data.clone(); // capture for DLQ
     tokio::spawn(async move {
-        let _permit = permit; // released when task completes
-        let dispatch = state2.orchestrator.dispatch(
-            event_id.clone(),
-            event_type.clone(),
-            data,
-            &state2.registry,
-            &state2.mcp,
-            state2.rag.as_ref(),
-            &state2.cfg.tenant,
-        );
-        let decision = match tokio::time::timeout(
+        let _permit = permit; // released when the task completes
+
+        // One run per subscribing specialist. There is no dead-letter queue:
+        // a run that fails is durable, and resumes from its last completed
+        // effect rather than being replayed from the top by a retry loop.
+        let decisions = match tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
-            dispatch,
+            state2.plane.dispatch(&event_id, &event_type, data),
         )
         .await
         {
             Ok(d) => d,
             Err(_) => {
-                tracing::warn!(timeout_secs, "agentd: session timed out");
-                AgentDecision {
+                tracing::warn!(timeout_secs, "agentd: dispatch timed out");
+                vec![AgentDecision {
                     agent_name: "timeout".into(),
-                    session_id: uuid::Uuid::new_v4().to_string(),
+                    session_id: String::new(),
                     event_id: event_id.clone(),
                     event_type: event_type.clone(),
                     outcome: "timeout".into(),
-                    summary: format!("Session exceeded {timeout_secs}s wall-clock limit."),
+                    summary: format!("Dispatch exceeded {timeout_secs}s wall-clock limit."),
                     tool_calls: 0,
                     turns: 0,
                     handoff_to: None,
-                }
+                }]
             }
         };
 
-        // Push to DLQ if session failed so it can be retried
-        if matches!(decision.outcome.as_str(), "error" | "timeout") {
-            let entry = DlqEntry::new(
-                &event_type,
-                &event_id,
-                event_data_for_dlq,
-                &decision.summary,
-                state2.cfg.dlq.max_retries,
-                state2.cfg.dlq.base_backoff_secs,
-            );
-            state2.dlq.push(entry);
+        for decision in &decisions {
+            emit_audit(&state2, decision).await;
         }
-
-        emit_audit(&state2, &decision).await;
     });
     StatusCode::ACCEPTED.into_response()
 }
@@ -285,59 +262,52 @@ pub async fn manual_run(
     // The wall-clock timeout must wrap the dispatch FUTURE — wrapping the
     // already-awaited value would make the timeout a no-op.
     let timeout_secs = state.cfg.session_timeout_secs;
+    // One run per subscribing specialist, each on its own journal. A named
+    // agent bypasses routing and addresses that specialist directly.
     let dispatch = async {
-        if let Some(ref name) = agent_name
-            && let Some(specialist) = state.registry.get(name)
-        {
-            // Direct invocation of a named specialist (bypass orchestrator)
-            use crate::agent::session::AgentSession;
-            let peers: Vec<String> = state
-                .registry
-                .agent_names
+        match agent_name.as_deref() {
+            Some(name) => match state
+                .plane
+                .router()
+                .routes()
                 .iter()
-                .filter(|n| *n != name)
-                .cloned()
-                .collect();
-            let session = AgentSession::new(specialist, event_id.clone(), event_type.clone());
-            session
-                .run(data, &state.mcp, &peers, state.rag.as_ref())
-                .await
-        } else {
-            state
-                .orchestrator
-                .dispatch(
-                    event_id,
-                    event_type,
-                    data,
-                    &state.registry,
-                    &state.mcp,
-                    state.rag.as_ref(),
-                    &state.cfg.tenant,
-                )
-                .await
+                .find(|r| r.name == name)
+            {
+                Some(route) => state
+                    .plane
+                    .dispatch_one(route.name, &event_id, &event_type, data)
+                    .await
+                    .map(|d| vec![d])
+                    .unwrap_or_default(),
+                None => Vec::new(),
+            },
+            None => state.plane.dispatch(&event_id, &event_type, data).await,
         }
     };
 
-    let decision =
+    let decisions =
         match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), dispatch).await {
             Ok(d) => d,
-            Err(_) => AgentDecision {
+            Err(_) => vec![AgentDecision {
                 agent_name: "timeout".into(),
-                session_id: uuid::Uuid::new_v4().to_string(),
-                event_id: "timeout".into(),
-                event_type: "timeout".into(),
+                session_id: String::new(),
+                event_id: event_id.clone(),
+                event_type: event_type.clone(),
                 outcome: "timeout".into(),
-                summary: format!("Session exceeded {timeout_secs}s wall-clock limit."),
+                summary: format!("Dispatch exceeded {timeout_secs}s wall-clock limit."),
                 tool_calls: 0,
                 turns: 0,
                 handoff_to: None,
-            },
+            }],
         };
-    emit_audit(&state, &decision).await;
-    (StatusCode::OK, Json(decision)).into_response()
+
+    for decision in &decisions {
+        emit_audit(&state, decision).await;
+    }
+    (StatusCode::OK, Json(decisions)).into_response()
 }
 
-async fn emit_audit(state: &AppState, decision: &crate::agent::AgentDecision) {
+async fn emit_audit(state: &AppState, decision: &AgentDecision) {
     // Always push to the in-memory ring buffer (best-effort, never fails).
     state.sessions.push(decision.clone());
 
@@ -375,72 +345,6 @@ pub struct RagIngestRequest {
     pub metadata: Option<serde_json::Value>,
 }
 
-/// `POST /api/v1/rag/ingest`
-///
-/// Index a live text document into the LanceDB RAG store.
-///
-/// ## Intended callers
-///
-/// - `agentd` `msb-history-agent` after calling `edmd.get_device_history`
-/// - ERP integrations that want to index operator runbooks or device notes
-/// - Direct API clients for one-off document ingestion
-///
-/// ## M9 workflow
-///
-/// ```text or de.mako.process.initiated (WiM PID)
-/// 2. msb-history-agent calls edmd MCP get_device_history { malo_id }
-/// 3. msb-history-agent calls POST /api/v1/rag/ingest { source: "msb-{malo_id}", text: <document> }
-/// 4. LanceDB stores chunks → available for natural-language queries
-/// 5. Field operator: POST /api/v1/run { event_type: "msb.query", context: { query: "..." } }
-/// ```
-pub async fn rag_ingest(
-    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
-    _claims: mako_service::oidc::Claims,
-    Json(req): Json<RagIngestRequest>,
-) -> impl axum::response::IntoResponse {
-    use axum::http::StatusCode;
-
-    let Some(ref rag) = state.rag else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "RAG is disabled — enable [rag] in agentd.toml",
-        )
-            .into_response();
-    };
-
-    if req.text.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "text must not be empty").into_response();
-    }
-    if req.source.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "source must not be empty").into_response();
-    }
-
-    let chunk_size = state.cfg.rag.chunk_size;
-    let chunk_overlap = state.cfg.rag.chunk_overlap;
-
-    match rag
-        .index_live_text(&req.source, &req.text, chunk_size, chunk_overlap)
-        .await
-    {
-        Ok(count) => {
-            tracing::info!(source = %req.source, chunks = count, "RAG: live ingest complete");
-            (
-                StatusCode::CREATED,
-                Json(serde_json::json!({
-                    "source": req.source,
-                    "chunks_indexed": count,
-                    "note": "Document indexed into LanceDB RAG store. Available for natural-language queries immediately.",
-                })),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            tracing::error!(source = %req.source, error = %e, "RAG: live ingest failed");
-            (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
-        }
-    }
-}
-
 // ── GET /api/v1/sessions ──────────────────────────────────────────────────────
 
 /// `GET /api/v1/sessions` — list the last 100 agent decisions (in-memory ring buffer).
@@ -465,14 +369,14 @@ pub async fn get_sessions(State(state): State<Arc<AppState>>) -> impl IntoRespon
 /// - Orchestrator LLM context for routing decisions
 /// - A2A agent discovery
 pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let agents = state.registry.list_agents();
-    let builtin_count = agents.iter().filter(|a| a.is_builtin).count();
-    let custom_count = agents.iter().filter(|a| !a.is_builtin).count();
+    let routes = state.plane.router().routes();
     Json(serde_json::json!({
-        "total": agents.len(),
-        "builtin": builtin_count,
-        "custom": custom_count,
-        "agents": agents,
+        "total": routes.len(),
+        "agents": routes.iter().map(|r| serde_json::json!({
+            "name": r.name,
+            "capability": r.capability,
+            "triggers": r.triggers,
+        })).collect::<Vec<_>>(),
     }))
     .into_response()
 }
@@ -497,136 +401,76 @@ pub async fn agent_card(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> impl IntoResponse {
-    let Some(agent) = state.registry.get(&name) else {
+    let Some(route) = state
+        .plane
+        .router()
+        .routes()
+        .iter()
+        .find(|r| r.name == name)
+    else {
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": format!("agent '{name}' not found") })),
         )
             .into_response();
     };
-
-    // Build A2A Agent Card
-    let card = serde_json::json!({
-        "name": agent.name,
-        "description": agent.specialty,
-        "version": env!("CARGO_PKG_VERSION"),
-        // Manual invocation goes through POST /api/v1/run with {"agent": name}.
-        "url": "/api/v1/run",
-        "provider": {
-            "organization": "mako agentd",
-            "url": "https://github.com/hupe1980/mako"
-        },
-        "capabilities": {
-            "streaming": false,
-            "push_notifications": false,
-            "state_transition_history": true,
-            "multi_turn": true
-        },
+    Json(serde_json::json!({
+        "protocolVersion": "0.3.0",
+        "name": route.name,
+        "description": route.capability,
         "skills": [{
-            "id": agent.name.clone(),
-            "name": agent.name.clone(),
-            "description": agent.specialty,
-            "inputModes": ["text", "application/json"],
-            "outputModes": ["text"],
-            "tags": agent.trigger_patterns.iter()
-                .map(|p| p.replace("de.", "").replace(".*", ""))
-                .collect::<Vec<_>>()
+            "id": route.capability,
+            "name": route.name,
+            "tags": route.triggers,
         }],
         "defaultInputModes": ["application/cloudevents+json"],
-        "defaultOutputModes": ["text"],
-        "authentication": {
-            "schemes": ["Bearer"],
-            "credentials": null
-        },
-        "meta": {
-            "mcp_servers": agent.mcp_servers,
-            "max_turns": agent.max_turns,
-            "is_builtin": agent.is_builtin,
-            "trigger_patterns": agent.trigger_patterns
-        }
-    });
-
-    (StatusCode::OK, Json(card)).into_response()
+        "defaultOutputModes": ["application/json"],
+    }))
+    .into_response()
 }
 
 // ── GET /api/v1/agents/catalog ────────────────────────────────────────────────
 
-/// `GET /api/v1/agents/catalog` — list all 28 built-in agent definitions.
+/// `GET /api/v1/agents/catalog` — every specialist compiled into this binary.
 ///
-/// Returns the full catalog of built-in agents regardless of whether they are
-/// currently enabled. Useful for operators exploring available specialists before
-/// adding them to `[bundled_agents]`.
+/// Lists what is *available*, whether or not it is activated, so an operator can
+/// see what `[bundled_agents] enable` accepts. The declared ceilings come from
+/// each specialist's manifest, which is the authority on them.
 pub async fn agents_catalog() -> impl IntoResponse {
     let catalog: Vec<serde_json::Value> = crate::builtin::all()
         .map(|def| {
+            let manifest = crate::plane::MANIFESTS
+                .iter()
+                .find(|(n, _)| *n == def.name)
+                .and_then(|(_, src)| crate::plane::parse_manifest(src).ok());
+
+            let (model, max_turns, tools) = manifest.as_ref().map_or((None, None, 0), |m| {
+                (
+                    m.spec
+                        .models
+                        .as_ref()
+                        .and_then(|x| x.privileged.as_ref())
+                        .map(|p| format!("{}/{}", p.provider, p.model)),
+                    m.spec.execution.as_ref().map(|e| e.max_turns),
+                    m.spec.tools.len(),
+                )
+            });
+
             serde_json::json!({
                 "name": def.name,
                 "specialty": def.specialty,
-                "default_trigger_patterns": def.default_trigger_patterns,
-                "default_mcp_servers": def.default_mcp_servers,
-                "default_max_turns": def.default_max_turns,
-                "default_use_rag": def.default_use_rag,
+                "trigger_patterns": def.trigger_patterns,
+                "model": model,
+                "max_turns": max_turns,
+                "tool_grants": tools,
             })
         })
         .collect();
     Json(serde_json::json!({
         "total": catalog.len(),
-        "note": "Enable agents via [bundled_agents] enable = [\"name\"] in agentd.toml",
+        "note": "Activate via [bundled_agents] enable = [\"name\"] (or enable_all) in agentd.toml. \
+                 Prompts, models, tool grants and ceilings are declared in each agent's manifest.",
         "agents": catalog
     }))
     .into_response()
-}
-
-// ── POST /api/v1/rag/search ───────────────────────────────────────────────────
-
-/// Request body for `POST /api/v1/rag/search`.
-#[derive(Debug, serde::Deserialize)]
-pub struct RagSearchRequest {
-    /// Natural-language query.
-    pub query: String,
-}
-
-/// `POST /api/v1/rag/search`
-///
-/// Query the LanceDB RAG knowledge base directly and return the raw retrieved context
-/// string (the same text that gets injected into agent system prompts).
-///
-/// Useful for operators who want to verify what background knowledge an agent has
-/// access to for a given topic, or for debugging RAG quality.
-pub async fn rag_search(
-    State(state): State<Arc<AppState>>,
-    _claims: mako_service::oidc::Claims,
-    Json(req): Json<RagSearchRequest>,
-) -> impl IntoResponse {
-    let Some(ref rag) = state.rag else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "RAG is disabled — enable [rag] in agentd.toml",
-        )
-            .into_response();
-    };
-    if req.query.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "query must not be empty").into_response();
-    }
-    let context = rag.search(&req.query).await;
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "query": req.query,
-            "context": context,
-            "note": "This is the exact context injected into agent system prompts for this query.",
-        })),
-    )
-        .into_response()
-}
-
-// ── GET /api/v1/dlq ───────────────────────────────────────────────────────────
-
-/// `GET /api/v1/dlq` — dead-letter queue status.
-///
-/// Returns the current DLQ depth (pending and exhausted) plus up to 20 recent
-/// exhausted entries.  Use this endpoint to detect persistent session failures
-/// that require operator intervention.
-pub async fn get_dlq(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    Json(state.dlq.snapshot()).into_response()
 }

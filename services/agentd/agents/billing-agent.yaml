@@ -1,0 +1,270 @@
+# INVOIC dispute resolution and O2C lifecycle. Handles receipt.disputed events, checks REMADV positions against Rechnung, and coordinates with netzbilanzd for settlement corrections.
+#
+# Generated from the compiled specialist definition during the agentplane
+# cutover. The tool grants reproduce the previous reach — every tool on each
+# granted MCP server — so no capability was silently lost. What is new: each
+# grant is named, `mutates` comes from the server's own read-only hint, and
+# every mutating tool requires a human decision.
+#
+# Narrowing the read set per specialist is domain review, not mechanical work.
+# Role: LF. Compiled only into a `role-lf` build (and the default all-roles build).
+apiVersion: agentplane.hupe1980.github.io/v1alpha1
+kind: Agent
+metadata:
+  name: billing-agent
+  version: "1.0.0"
+spec:
+  execution:
+    kind: tool-calling
+    max_turns: 15
+
+  identity:
+    role: >-
+      INVOIC dispute resolution and O2C lifecycle. Handles receipt.disputed
+      events, checks REMADV positions against Rechnung, and coordinates with
+      netzbilanzd for settlement corrections.
+    constraints: |
+      You are the billing lifecycle specialist for the Lieferant (LF) role.
+
+      ## TRIGGERED BY
+      - `de.invoic.receipt.disputed` — invoicd disputed an INVOIC
+      - `de.accounting.mahnung.issued` — a Mahnung was issued
+
+      ## STEP-BY-STEP PROCEDURE
+
+      1. Extract `malo_id`, `receipt_id`, and `lf_mp_id` from the event.
+      2. Call invoicd `get_receipt` to retrieve full check results (6 checks).
+      3. Identify which check failed:
+         - Check 1 (period): billing period validity
+         - Check 2 (arithmetic): position totals match Gesamtbetrag
+         - Check 3 (document total): Brutto = Netto + MwSt
+         - Check 4 (tariff match): tariff matches PreisblattNetznutzung
+         - Check 5 (tariff found): product code exists in marktd
+         - Check 6 (MMM settlement): MMM prices match marktd store
+      4. For arithmetic errors: call billingd `get_billing_record` to compare positions.
+      5. For tariff errors: call marktd to check PreisblattNetznutzung validity dates.
+      6. Determine if dispute is valid or can be auto-resolved.
+
+      ## OUTPUT FORMAT
+      ```
+      DISPUTE_STATUS: [VALID_DISPUTE|AUTO_RESOLVABLE|NB_ERROR]
+      FAILED_CHECK: [check number and description]
+      CORRECTION_PATH: [specific steps to resolve]
+      AMOUNT_AT_RISK_EUR: [amount]
+      ```
+
+  capabilities:
+    provides: [billing]
+
+  models:
+    privileged:  { provider: anthropic, model: claude-sonnet-5 }
+    quarantined: { provider: anthropic, model: claude-haiku-4-5 }
+
+  security:
+    max_sensitivity_egress: internal
+    max_delegation_depth: 0
+    max_sensitivity_journaled: internal
+
+  oversight:
+    approval:  tools-only
+    approvers: [mako-operations]
+    deadline:
+      name: billing-agent-freigabe
+      kind: hours
+      params: { n: 4 }
+    on_expiry: deny
+
+  budgets:
+    max_tokens: 200000
+    max_steps: 45
+    max_effects: 75
+    max_wallclock_secs: 900
+
+  tools:
+    - ref: tool://invoicd/get_receipt
+      mutates: false
+      max_sensitivity: internal
+      description: "get receipt via invoicd"
+    - ref: tool://invoicd/list_disputes
+      mutates: false
+      max_sensitivity: internal
+      description: "list disputes via invoicd"
+    - ref: tool://invoicd/get_check_result
+      mutates: false
+      max_sensitivity: internal
+      description: "get check result via invoicd"
+    - ref: tool://invoicd/list_overdue_remadv
+      mutates: false
+      max_sensitivity: internal
+      description: "list overdue remadv via invoicd"
+    - ref: tool://invoicd/get_zahlungsstatus
+      mutates: false
+      max_sensitivity: internal
+      description: "get zahlungsstatus via invoicd"
+    - ref: tool://invoicd/summarize_billing_month
+      mutates: false
+      max_sensitivity: internal
+      description: "summarize billing month via invoicd"
+    - ref: tool://invoicd/dispatch_remadv
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "dispatch remadv via invoicd"
+    - ref: tool://billingd/list_billing_records
+      mutates: false
+      max_sensitivity: internal
+      description: "list billing records via billingd"
+    - ref: tool://billingd/get_billing_record
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing record via billingd"
+    - ref: tool://billingd/preview_billing
+      mutates: false
+      max_sensitivity: internal
+      description: "preview billing via billingd"
+    - ref: tool://billingd/get_xrechnung
+      mutates: false
+      max_sensitivity: internal
+      description: "get xrechnung via billingd"
+    - ref: tool://billingd/check_billing_anomaly
+      mutates: false
+      max_sensitivity: internal
+      description: "check billing anomaly via billingd"
+    - ref: tool://billingd/list_vpp_settlements
+      mutates: false
+      max_sensitivity: internal
+      description: "list vpp settlements via billingd"
+    - ref: tool://billingd/list_corrections
+      mutates: false
+      max_sensitivity: internal
+      description: "list corrections via billingd"
+    - ref: tool://billingd/calculate_billing
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "calculate billing via billingd"
+    - ref: tool://billingd/list_product_categories
+      mutates: false
+      max_sensitivity: internal
+      description: "list product categories via billingd"
+    - ref: tool://billingd/validate_tariff_config
+      mutates: false
+      max_sensitivity: internal
+      description: "validate tariff config via billingd"
+    - ref: tool://billingd/explain_invoice_position
+      mutates: false
+      max_sensitivity: internal
+      description: "explain invoice position via billingd"
+    - ref: tool://billingd/get_billing_summary
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing summary via billingd"
+    - ref: tool://accountingd/get_balance
+      mutates: false
+      max_sensitivity: internal
+      description: "get balance via accountingd"
+    - ref: tool://accountingd/list_ledger
+      mutates: false
+      max_sensitivity: internal
+      description: "list ledger via accountingd"
+    - ref: tool://accountingd/list_dunning
+      mutates: false
+      max_sensitivity: internal
+      description: "list dunning via accountingd"
+    - ref: tool://accountingd/list_overdue
+      mutates: false
+      max_sensitivity: internal
+      description: "list overdue via accountingd"
+    - ref: tool://accountingd/update_abschlag
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "update abschlag via accountingd"
+    - ref: tool://accountingd/import_payments
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "import payments via accountingd"
+    - ref: tool://accountingd/run_sepa_collection
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "run sepa collection via accountingd"
+    - ref: tool://accountingd/trigger_jahresabschluss
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "trigger jahresabschluss via accountingd"
+    - ref: tool://accountingd/run_abschlag_cycle
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "run abschlag cycle via accountingd"
+    - ref: tool://accountingd/compute_bilanzielle_abgrenzung
+      mutates: false
+      max_sensitivity: internal
+      description: "compute bilanzielle abgrenzung via accountingd"
+    - ref: tool://accountingd/suggest_payment_match
+      mutates: false
+      max_sensitivity: internal
+      description: "suggest payment match via accountingd"
+    - ref: tool://accountingd/post_manual_booking
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "post manual booking via accountingd"
+    - ref: tool://netzbilanzd/list_nne_drafts
+      mutates: false
+      max_sensitivity: internal
+      description: "list nne drafts via netzbilanzd"
+    - ref: tool://netzbilanzd/list_disputed
+      mutates: false
+      max_sensitivity: internal
+      description: "list disputed via netzbilanzd"
+    - ref: tool://netzbilanzd/get_nne_draft
+      mutates: false
+      max_sensitivity: internal
+      description: "get nne draft via netzbilanzd"
+    - ref: tool://netzbilanzd/list_pending_kostenblatt
+      mutates: false
+      max_sensitivity: internal
+      description: "list pending kostenblatt via netzbilanzd"
+    - ref: tool://netzbilanzd/compute_kostenblatt
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "compute kostenblatt via netzbilanzd"
+    - ref: tool://netzbilanzd/get_billing_summary
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing summary via netzbilanzd"
+    - ref: tool://netzbilanzd/list_undispatched_drafts
+      mutates: false
+      max_sensitivity: internal
+      description: "list undispatched drafts via netzbilanzd"
+    - ref: tool://netzbilanzd/dispatch_draft
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "dispatch draft via netzbilanzd"
+    - ref: tool://netzbilanzd/reject_draft
+      mutates: true
+      max_sensitivity: internal
+      requires_approval: true
+      description: "reject draft via netzbilanzd"
+    - ref: tool://netzbilanzd/trigger_mmm_auto_run
+      mutates: false
+      max_sensitivity: internal
+      description: "trigger mmm auto run via netzbilanzd"
+    - ref: tool://netzbilanzd/list_corrections
+      mutates: false
+      max_sensitivity: internal
+      description: "list corrections via netzbilanzd"
+    - ref: tool://netzbilanzd/get_payment_stats
+      mutates: false
+      max_sensitivity: internal
+      description: "get payment stats via netzbilanzd"
+    - ref: tool://netzbilanzd/list_paid_invoices
+      mutates: false
+      max_sensitivity: internal
+      description: "list paid invoices via netzbilanzd"

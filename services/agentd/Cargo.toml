@@ -31,17 +31,26 @@ anyhow       = "1"
 reqwest      = { workspace = true }
 tokio-util   = { workspace = true }
 secrecy      = { version = "0.10", features = ["serde"] }
-# RAG vector store — LanceDB (persistent, S3/GCS/Azure/local)
-lancedb      = { workspace = true }
-# arrow 58 — matches lancedb 0.31 transitive dep. Declared explicitly here so
-# the agentd binary gets arrow 58 types that are compatible with lancedb.
-# (edmd uses arrow 57 via iceberg — they coexist as separate crate versions.)
-arrow-array  = { version = "58", default-features = false }
-arrow-schema = { version = "58", default-features = false }
-futures      = { version = "0.3", default-features = false, features = ["std"] }
-# AWS Bedrock SigV4 (manual — avoids full AWS SDK)
-hmac         = { version = "0.12", default-features = false }
-sha2         = { version = "0.10", default-features = false }
-hex          = { version = "0.4" }
-# Base64 for Bedrock JSON body encoding check
-base64       = { version = "0.22" }
+agentplane = { version = "0.9", features = ["manifest", "mcp", "providers", "postgres", "cedar", "signing", "keyring"] }
+async-trait = "0.1.91"
+
+[dev-dependencies]
+# testkit brings FakeProvider, Faulty and the replay assertions. It carries no
+# reqwest dependency, so it resolves independently of the provider drivers.
+agentplane = { version = "0.9", features = [
+    "manifest", "mcp", "providers", "postgres", "cedar", "signing", "keyring", "testkit",
+] }
+tokio = { version = "1", features = ["full"] }
+toml  = "0.9"
+
+# ── Role-isolation feature flags (§ 9 EnWG informatorisches Unbundling) ──────
+#
+# Mirrors the flags every other daemon carries. An `role-lf` build compiles no
+# NB or MSB specialist and configures no NB or MSB MCP endpoint — structural
+# separation rather than a policy decision at request time.
+#
+# Default (no flags): all roles, matching the other services.
+[features]
+role-lf  = []
+role-nb  = []
+role-msb = []

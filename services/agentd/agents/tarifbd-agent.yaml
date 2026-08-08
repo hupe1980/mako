@@ -1,0 +1,240 @@
+# Product catalog hygiene, §41a EPEX price availability monitor, and §42 Energiemix completeness guard. Checks for missing EPEX daily prices, stale §42 Energiemix disclosures (annual update), expired B2B quotations needing ERP follow-up, and DRAFT products not yet published.
+#
+# Generated from the compiled specialist definition during the agentplane
+# cutover. The tool grants reproduce the previous reach — every tool on each
+# granted MCP server — so no capability was silently lost. What is new: each
+# grant is named, `mutates` comes from the server's own read-only hint, and
+# every mutating tool requires a human decision.
+#
+# Narrowing the read set per specialist is domain review, not mechanical work.
+# Role: LF. Compiled only into a `role-lf` build (and the default all-roles build).
+apiVersion: agentplane.hupe1980.github.io/v1alpha1
+kind: Agent
+metadata:
+  name: tarifbd-agent
+  version: "1.0.0"
+spec:
+  execution:
+    kind: tool-calling
+    max_turns: 12
+
+  identity:
+    role: >-
+      Product catalog hygiene, §41a EPEX price availability monitor, and §42
+      Energiemix completeness guard. Checks for missing EPEX daily prices, stale
+      §42 Energiemix disclosures (annual update), expired B2B quotations needing
+      ERP follow-up, and DRAFT products not yet published.
+    constraints: |
+      You are the product catalog, EPEX price, and §42 EnWG Energiemix compliance specialist.
+
+      ## TRIGGERED BY
+      - `de.tarif.product.updated` — new/updated product in tarifbd
+      - `de.tarif.angebot.abgelaufen` — B2B quote expired, needs ERP follow-up
+      - `de.tarif.epex.missing` — EPEX D-1 prices not imported by 18:00 CET
+      - Annual cron (January) — check §42 Energiemix completeness for all active products
+
+      ## PROCEDURE
+
+      ### On product update (de.tarif.product.updated)
+      1. Extract `lf_mp_id` and `product_code` from event.
+      2. Call tarifbd `get_product` to fetch the current product definition.
+      3. Call tarifbd `validate_tariff_config` to verify BO4E schema correctness.
+      4. Check §42 EnWG Energiemix:
+         - Call tarifbd `get_product_energiemix`.
+         - For STROM/GAS/WAERME/SOLAR categories: Energiemix is MANDATORY per §42 Abs. 2 Nr. 2 EnWG.
+         - Check that `co2Emission` (g/kWh) and `anteilErneuerbareEnergien` (%) are present.
+         - Missing: emit warning §42_ENERGIEMIX_INCOMPLETE.
+      5. For dynamic products (`dyn_source = 'epex-spot-day-ahead'`):
+         - Call tarifbd `check_41a_epex_status` to verify D-1 prices are available.
+         - Alert if tomorrow's prices are missing and it is past 14:00 CET.
+
+      ### On Angebot expiry (de.tarif.angebot.abgelaufen)
+      1. Extract `angebot_id` and `lf_mp_id` from event.
+      2. Call tarifbd `get_angebot` to retrieve customer and product details.
+      3. Generate ERP follow-up recommendation: re-quote or mark as lost opportunity.
+
+      ### On EPEX missing alert (de.tarif.epex.missing)
+      1. Call tarifbd `check_41a_epex_status` for current coverage status.
+      2. Determine gap severity (stale days).
+      3. Alert operator via output: trigger immediate EPEX import.
+
+      ### Annual §42 Energiemix sweep (January cron)
+      1. Call tarifbd `get_comparison_feed` to list all active PUBLISHED products.
+      2. For each STROM/GAS product: call tarifbd `get_product_energiemix`.
+      3. Flag products missing Energiemix or with Energiemix older than 12 months.
+      4. Generate compliance report: §42 Abs. 2 Nr. 2 EnWG requires annual update of energy source mix.
+
+      ## §42 MANDATORY ENERGIEMIX FIELDS (per EnWG)
+      - `anteilErneuerbareEnergien` (Prozent) — mandatory
+      - `anteilKernenergie` — mandatory (may be 0)
+      - `anteilFossilBraunkohle`, `anteilFossilSteinkohle`, `anteilFossilGas` — mandatory if applicable
+      - `co2Emission` (g CO₂/kWh) — mandatory per §42 Abs. 5 Nr. 1
+      - `radioaktiverAbfall` (mg/kWh) — mandatory per §42 Abs. 5 Nr. 2
+
+      ## OUTPUT FORMAT
+      ```
+      CATALOG_STATUS: [VALID|WARNINGS|INVALID]
+      PRODUCT_CODE: [code or N/A]
+      §42_ENERGIEMIX_STATUS: [OK|MISSING|INCOMPLETE|STALE (>12 months)]
+      §41A_EPEX_STATUS: [OK|WARNING|CRITICAL|N/A]
+      ANGEBOT_FOLLOWUP: [description or N/A]
+      ISSUES: [list or NONE]
+      ```
+
+  capabilities:
+    provides: [tarifbd]
+
+  models:
+    privileged:  { provider: anthropic, model: claude-sonnet-5 }
+    quarantined: { provider: anthropic, model: claude-haiku-4-5 }
+
+  security:
+    max_sensitivity_egress: internal
+    max_delegation_depth: 0
+    max_sensitivity_journaled: internal
+
+  oversight:
+    approval:  tools-only
+    approvers: [mako-operations]
+    deadline:
+      name: tarifbd-agent-freigabe
+      kind: hours
+      params: { n: 4 }
+    on_expiry: deny
+
+  budgets:
+    max_tokens: 200000
+    max_steps: 36
+    max_effects: 60
+    max_wallclock_secs: 900
+
+  tools:
+    - ref: tool://tarifbd/list_products
+      mutates: false
+      max_sensitivity: internal
+      description: "list products via tarifbd"
+    - ref: tool://tarifbd/get_product
+      mutates: false
+      max_sensitivity: internal
+      description: "get product via tarifbd"
+    - ref: tool://tarifbd/get_customer_product
+      mutates: false
+      max_sensitivity: internal
+      description: "get customer product via tarifbd"
+    - ref: tool://tarifbd/get_epex_price
+      mutates: false
+      max_sensitivity: internal
+      description: "get epex price via tarifbd"
+    - ref: tool://tarifbd/list_expiring_contracts
+      mutates: false
+      max_sensitivity: internal
+      description: "list expiring contracts via tarifbd"
+    - ref: tool://tarifbd/list_angebote
+      mutates: false
+      max_sensitivity: internal
+      description: "list angebote via tarifbd"
+    - ref: tool://tarifbd/get_angebot
+      mutates: false
+      max_sensitivity: internal
+      description: "get angebot via tarifbd"
+    - ref: tool://tarifbd/get_angebot_summary
+      mutates: false
+      max_sensitivity: internal
+      description: "get angebot summary via tarifbd"
+    - ref: tool://tarifbd/check_41a_epex_status
+      mutates: false
+      max_sensitivity: internal
+      description: "check 41a epex status via tarifbd"
+    - ref: tool://tarifbd/get_product_energiemix
+      mutates: false
+      max_sensitivity: internal
+      description: "get product energiemix via tarifbd"
+    - ref: tool://tarifbd/validate_tariff_config
+      mutates: false
+      max_sensitivity: internal
+      description: "validate tariff config via tarifbd"
+    - ref: tool://tarifbd/explain_invoice_position
+      mutates: false
+      max_sensitivity: internal
+      description: "explain invoice position via tarifbd"
+    - ref: tool://tarifbd/get_product_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get product history via tarifbd"
+    - ref: tool://tarifbd/get_comparison_feed
+      mutates: false
+      max_sensitivity: internal
+      description: "get comparison feed via tarifbd"
+    - ref: tool://marktd/get_malo
+      mutates: false
+      max_sensitivity: confidential
+      description: "get malo via marktd"
+    - ref: tool://marktd/list_partners
+      mutates: false
+      max_sensitivity: confidential
+      description: "list partners via marktd"
+    - ref: tool://marktd/get_preisblatt
+      mutates: false
+      max_sensitivity: confidential
+      description: "get preisblatt via marktd"
+    - ref: tool://marktd/get_versorgungsstatus
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgungsstatus via marktd"
+    - ref: tool://marktd/get_nb_contract
+      mutates: false
+      max_sensitivity: confidential
+      description: "get nb contract via marktd"
+    - ref: tool://marktd/get_correlation
+      mutates: false
+      max_sensitivity: confidential
+      description: "get correlation via marktd"
+    - ref: tool://marktd/list_pricat_versions
+      mutates: false
+      max_sensitivity: confidential
+      description: "list pricat versions via marktd"
+    - ref: tool://marktd/dispatch_pricat
+      mutates: true
+      max_sensitivity: confidential
+      requires_approval: true
+      description: "dispatch pricat via marktd"
+    - ref: tool://marktd/list_malo
+      mutates: false
+      max_sensitivity: confidential
+      description: "list malo via marktd"
+    - ref: tool://marktd/get_melo
+      mutates: false
+      max_sensitivity: confidential
+      description: "get melo via marktd"
+    - ref: tool://marktd/get_rollenzuordnung
+      mutates: false
+      max_sensitivity: confidential
+      description: "get rollenzuordnung via marktd"
+    - ref: tool://marktd/get_versorgungsstatus_history
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgungsstatus history via marktd"
+    - ref: tool://marktd/get_nb_energiemix
+      mutates: false
+      max_sensitivity: confidential
+      description: "get nb energiemix via marktd"
+    - ref: tool://marktd/get_technische_ressource
+      mutates: false
+      max_sensitivity: confidential
+      description: "get technische ressource via marktd"
+    - ref: tool://marktd/get_steuerbare_ressource
+      mutates: false
+      max_sensitivity: confidential
+      description: "get steuerbare ressource via marktd"
+    - ref: tool://marktd/get_partner
+      mutates: false
+      max_sensitivity: confidential
+      description: "get partner via marktd"
+    - ref: tool://marktd/get_melo_standorteigenschaften
+      mutates: false
+      max_sensitivity: confidential
+      description: "get melo standorteigenschaften via marktd"
+    - ref: tool://marktd/get_versorgung_at
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgung at via marktd"
