@@ -154,7 +154,7 @@ already dispatched `bestaetigen` automatically — the manual ERP call arrives t
 | makod Swagger UI | http://localhost:8080/api/v1/docs/ | Interactive API docs |
 | makod MCP server | http://localhost:8080/mcp | LLM tooling (Claude Desktop, VS Code) |
 | marktd REST API | http://localhost:8180 | Master data (MaLo/MeLo, typed BO4E, VersorgungsStatus) |
-| marktd Swagger UI | http://localhost:8180/api/v1/docs/ | Interactive API docs |
+| marktd Swagger UI | http://localhost:8180/swagger-ui/ | Interactive API docs |
 | marktd DLQ admin | http://localhost:8180/admin/fanout/dlq | Inspect failed CloudEvent deliveries |
 | marktd metrics | http://localhost:8180/metrics | Prometheus metrics |
 | processd decisions | http://localhost:8580/api/v1/decisions | NB STP audit log |
@@ -196,6 +196,29 @@ curl http://localhost:8080/health | jq .
 curl http://localhost:8180/health | jq .
 # → {"status":"ok"}
 ```
+
+### Seed master data
+
+`netz-checker` needs these before the UTILMD arrives — plus the price sheet below:
+
+```bash
+# LF partner directory (check 6)
+curl -X PUT http://localhost:8180/api/v1/partners/4012345000023 \
+  -H "Content-Type: application/json" \
+  -d '{"mp_id":"4012345000023","display_name":"Demo LF","marktrolle":"LF","sparte":"STROM","makoadresse":[],"channels":{}}'
+
+# MaLo with NB rollenzuordnung
+curl -X PUT http://localhost:8180/api/v1/malo/51238696780 \
+  -H "Content-Type: application/json" --data-binary "@fixtures/malo-nb.json"
+
+# NIS grid record (check 1)
+curl -X PUT http://localhost:8180/api/v1/malo/51238696780/grid \
+  -H "Content-Type: application/json" \
+  -d '{"nb_mp_id":"9900357000004","bilanzierungsgebiet":"11YN0------0STXC","netzgebiet":"DEMO-NZ-001","sparte":"STROM","source":"manual"}'
+```
+
+Submit once per MaLo — a repeat Anmeldung is rejected with **A06** „Andere
+Anmeldung in Bearbeitung". Use `docker compose down -v` to re-run.
 
 ### Submit EDIFACT
 

@@ -41,6 +41,9 @@ BASE_URL="${BASE_URL:-http://localhost:8080}"
 AUTH_TOKEN="${AUTH_TOKEN:-demo-secret-change-me}"
 MARKTD_URL="${MARKTD_URL:-}"
 WEBHOOK_URL="${WEBHOOK_URL:-}"
+# processd REST API — used to assert the NB decision is Accept (not merely that
+# *some* UTILMD came back; an Ablehnung is a UTILMD too).
+PROCESSD_URL="${PROCESSD_URL:-http://localhost:8580}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Unique per-run identifiers — prevents EDIFACT interchange deduplication and
 # workflow key collisions so the test is idempotent across re-runs on a live stack.
@@ -171,8 +174,23 @@ echo "  mako smoke test  →  $BASE_URL"
 echo "================================================="
 echo
 
+wait_webhook_healthy() {
+    info "Waiting for webhook receiver at $WEBHOOK_URL ..."
+    local retries=15
+    local code=""
+    while [[ $retries -gt 0 ]]; do
+        code=$(curl -sS -o /dev/null -w '%{http_code}' "$WEBHOOK_URL/events" 2>/dev/null || true)
+        [[ "$code" == "200" ]] && { pass "webhook receiver is ready"; return 0; }
+        retries=$((retries - 1))
+        sleep 2
+    done
+    fail "webhook receiver did not respond within 30s (last HTTP status: ${code:-none}). \
+Steps 6 and 8 poll this endpoint — start it with 'docker compose up -d webhook'."
+}
+
 wait_healthy
 [[ -n "${MARKTD_URL:-}" ]] && wait_marktd_healthy
+[[ -n "${WEBHOOK_URL:-}" ]] && wait_webhook_healthy
 
 # ── Reset webhook event log ───────────────────────────────────────────────────
 if [[ -n "${WEBHOOK_URL:-}" ]]; then
@@ -222,7 +240,7 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
     #   Rule 4L (Lieferbeginn): 4012345000023 must NOT be active LF → passes (fresh MaLo)
     # Combined with preisblatt (P1) → auto_accept will dispatch bestaetigen.
     info "[P2] PUT MaLo $SMOKE_MALO_ID (NB=9900357000004, no active LF — fresh MaLo)"
-    MALO_JSON=$(jq --arg mid "$SMOKE_MALO_ID" '.data.marktlokations_id = $mid' "$SCRIPT_DIR/fixtures/malo-nb.json")
+    MALO_JSON=$(jq --arg mid "$SMOKE_MALO_ID" '.data.marktlokationsId = $mid' "$SCRIPT_DIR/fixtures/malo-nb.json")
     resp=$(marktd_put_json "/api/v1/malo/$SMOKE_MALO_ID" "$MALO_JSON")
     code=$(status "$resp")
     [[ "$code" == "200" || "$code" == "201" ]] || \
@@ -424,6 +442,18 @@ else
             [[ "$AUTO_COUNT" -gt 0 ]] && break
         done
         if [[ "$AUTO_COUNT" -gt 0 ]]; then
+            # An *Ablehnung* is also a UTILMD — assert the PID so a Reject can
+            # never be mistaken for the 55002 Bestätigung this demo is about.
+            # The PID lives in BGM DE1004. Inbound fixtures use the zero-padded
+            # composite form (`BGM+E01:::+00055001::+9`); makod renders outbound
+            # unpadded (`BGM+E01+55002+9`) — so match both.
+            AUTO_EDI=$(printf '%s' "$AUTO_UTILMD" | jq -r '[.[].body.data.edifact] | join(" ")')
+            if printf '%s' "$AUTO_EDI" | grep -qE 'BGM\+[^+]*\+0*55003'; then
+                fail "auto-responder dispatched UTILMD 55003 (Ablehnung), expected 55002 (Bestätigung). \
+Check: curl -s $PROCESSD_URL/api/v1/decisions | jq '.[0]'"
+            fi
+            printf '%s' "$AUTO_EDI" | grep -qE 'BGM\+[^+]*\+0*55002' || \
+                fail "outbound UTILMD carries neither PID 55002 nor 55003: $AUTO_EDI"
             pass "processd NB auto-responder dispatched bestaetigen → UTILMD 55002 already arrived:"
             echo
             printf '%s' "$AUTO_UTILMD" | jq '.[] | .body | {type, makomessagetype, makorecipient, edifact: .data.edifact}'
@@ -433,6 +463,28 @@ else
             echo -e "${YELLOW}▶${NC}  UTILMD 55002 not yet visible — auto-responder may still be processing."
             echo "      Step 7 will dispatch bestaetigen manually as fallback."
         fi
+
+        # 6d. The NB decision itself — the demo's actual subject. Without this,
+        #     a Reject or Escalate is indistinguishable from success, because
+        #     every outcome produces *some* outbound traffic.
+        info "[6d] processd NB decision for MaLo $SMOKE_MALO_ID must be Accept"
+        DEC=$(curl -sS "$PROCESSD_URL/api/v1/decisions" 2>/dev/null || echo '[]')
+        MY_DEC=$(printf '%s' "$DEC" | \
+            jq --arg m "$SMOKE_MALO_ID" 'map(select(.malo_id == $m)) | .[0] // {}' 2>/dev/null || echo '{}')
+        DECISION=$(printf '%s' "$MY_DEC" | jq -r '.decision // "(none)"')
+        case "$DECISION" in
+            Accept)
+                pass "processd decision → Accept (netz-checker: all 6 checks passed)"
+                ;;
+            "(none)")
+                fail "no NB decision recorded for MaLo $SMOKE_MALO_ID — processd did not evaluate the Anmeldung. \
+Check the marktd subscription and processd logs."
+                ;;
+            *)
+                fail "processd decision → $DECISION (erc=$(printf '%s' "$MY_DEC" | jq -r '.erc_code // "-"')), expected Accept.
+      $(printf '%s' "$MY_DEC" | jq -r '.detail // "-"')"
+                ;;
+        esac
     fi
 
     # Clear the event log so step 8 only captures fresh events.
@@ -533,7 +585,16 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
     NB_GLN=$(body "$resp" | jq -r '.rollenzuordnung[] | select(.zuordnungstyp == "NB") | .rollencodenummer')
     [[ "$NB_GLN" == "9900357000004" ]] || fail "expected NB=9900357000004, got NB=$NB_GLN"
     MALO_SPARTE=$(body "$resp" | jq -r '.sparte')
-    pass "GET /api/v1/malo/$SMOKE_MALO_ID → sparte=$MALO_SPARTE  NB=$NB_GLN"
+    # The BO4E `data` payload, not just the mako-native wrapper.  marktd does
+    # not reject unknown keys, so a fixture written against the wrong field
+    # names round-trips as an empty Marktlokation with a 200 — assert on fields
+    # that only survive when the schema actually matched.
+    body "$resp" | jq -e --arg m "$SMOKE_MALO_ID" '.data.marktlokationsId == $m' >/dev/null || \
+        fail "data.marktlokationsId != $SMOKE_MALO_ID — BO4E payload was dropped on ingest \
+(check fixtures/malo-nb.json field names against rubo4e::current::Marktlokation): $(body "$resp" | jq -c '.data')"
+    body "$resp" | jq -e '.netzebene != null' >/dev/null || \
+        fail "netzebene is null — Marktlokation.netzebene did not survive ingest"
+    pass "GET /api/v1/malo/$SMOKE_MALO_ID → sparte=$MALO_SPARTE  NB=$NB_GLN  (BO4E payload intact)"
 
     # ── m3. GET preisblatt — verify FV2026 coverage ───────────────────────────
     info "[m3/m5] GET preisblatt for NB 9900357000004 at process_date 2026-10-01"
@@ -543,7 +604,13 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
     SOURCE=$(body "$resp" | jq -r '.source')
     BEZ=$(body "$resp" | jq -r '.data.bezeichnung // "(none)"')
     [[ "$SOURCE" == "api" ]] || fail "expected source=api, got source=$SOURCE"
-    pass "GET /api/v1/preisblaetter/9900357000004 → source=$SOURCE  bezeichnung=$BEZ"
+    # Same silent-drop hazard: a Preisstaffel with the wrong field names stores
+    # as an empty object, so the sheet round-trips with no prices at all.
+    PREIS=$(body "$resp" | jq -r '.data.preispositionen[0].preisstaffeln[0].preis // "null"')
+    [[ "$PREIS" != "null" ]] || \
+        fail "preisblatt stored without any price — preisstaffeln[0].preis is absent \
+(check fixtures/preisblatt-nb.json against rubo4e::current::Preisstaffel; v202607 renamed einheitspreis → preis)"
+    pass "GET /api/v1/preisblaetter/9900357000004 → source=$SOURCE  bezeichnung=$BEZ  preis=$PREIS"
 
     # ── m4. Operator-override protection: mako source must not overwrite api ──
     info "[m4/m5] Operator-override protection: mako source cannot overwrite api sheet"

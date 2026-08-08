@@ -1,5 +1,6 @@
 # marktd.toml — EEG billing demo (auth disabled, no OIDC)
 # DO NOT use in production.
+allow_insecure_no_auth = true
 
 [storage.postgres]
 url = "postgres://demo:demo-secret@postgres/marktd"
