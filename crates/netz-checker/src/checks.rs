@@ -412,11 +412,22 @@ pub fn evaluate(
 
     // ── Check 3: No conflicting active supply ─────────────────────────────────
     //
-    // If `lf_mp_id_next` is already set, another Anmeldung is in Bearbeitung
-    // for this MaLo. EBD E_0622 Prüfschritt 70 → A06 „Andere Anmeldung in
-    // Bearbeitung".
+    // If `lf_mp_id_next` is already set by a *different* LF, another Anmeldung
+    // is in Bearbeitung for this MaLo. EBD E_0622 Prüfschritt 70 → A06
+    // „Andere Anmeldung in Bearbeitung".
+    //
+    // The GLN comparison is load-bearing, not a refinement: `marktd`'s
+    // `event_ingest` calls `announce_lf_next` while ingesting the
+    // `process.initiated` CloudEvent — i.e. *before* it fans the event out to
+    // `processd`. By the time this check runs, the Anmeldung under evaluation
+    // has already written its own `lf_mp_id_next`. A bare `is_some()` test
+    // therefore rejects every first-time Anmeldung against itself with A06.
     if let Some(vs) = versorgung {
-        if vs.lf_mp_id_next.is_some() {
+        if vs
+            .lf_mp_id_next
+            .as_deref()
+            .is_some_and(|next| next != anfrage.new_supplier_gln.as_str())
+        {
             return NetzCheckResult::Reject(RejectReason {
                 erc_code: "A06".to_owned(),
                 detail: format!(
@@ -885,6 +896,37 @@ mod tests {
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
         let result = evaluate(&anfrage, Some(&vs), Some(&grid), true, NOW, &cfg());
         assert_eq!(result.erc_code(), Some("A05"), "got {result:?}");
+    }
+
+    // ── Check 3: A06 only for a *foreign* pending Anmeldung ──────────────────
+
+    /// `marktd` writes `lf_mp_id_next` while ingesting the `process.initiated`
+    /// event, before `processd` evaluates it — so the Anmeldung under
+    /// evaluation always sees its own reservation. It must not self-reject.
+    #[test]
+    fn own_pending_lieferbeginn_is_not_a06() {
+        let anfrage = make_anfrage(55001, d(2026, Month::July, 10));
+        let vs = make_versorgung(
+            LieferStatus::Unbeliefert,
+            None,
+            Some(anfrage.new_supplier_gln.clone()),
+        );
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
+        assert_ne!(result.erc_code(), Some("A06"), "got {result:?}");
+    }
+
+    /// A pending Anmeldung from a *different* LF is a genuine
+    /// EBD E_0622 Prüfschritt 70 conflict.
+    #[test]
+    fn foreign_pending_lieferbeginn_is_a06() {
+        let anfrage = make_anfrage(55001, d(2026, Month::July, 10));
+        let vs = make_versorgung(
+            LieferStatus::Unbeliefert,
+            None,
+            Some("9900000000009".to_owned()),
+        );
+        let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
+        assert_eq!(result.erc_code(), Some("A06"), "got {result:?}");
     }
 
     #[test]

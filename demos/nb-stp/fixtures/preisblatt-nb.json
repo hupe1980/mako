@@ -1,49 +1,55 @@
 {
   "data": {
-    "bo_typ": "PREISBLATT_NETZNUTZUNG",
-    "version_struktur": "1",
-    "typ": "NETZNUTZUNG_STROM",
+    "_typ": "PREISBLATTNETZNUTZUNG",
+    "_version": "v202607.0.0",
     "bezeichnung": "Demo Netznutzungspreise FV2026 — NB 9900357000004",
+    "sparte": "STROM",
+    "preisstatus": "ENDGUELTIG",
+    "bilanzierungsmethode": "SLP",
     "gueltigkeit": {
+      "_typ": "ZEITRAUM",
       "startdatum": "2026-10-01",
       "enddatum": "2027-09-30"
     },
-    "marktteilnehmer": {
-      "bo_typ": "MARKTTEILNEHMER",
+    "herausgeber": {
+      "_typ": "MARKTTEILNEHMER",
       "marktrolle": "NB",
       "rollencodenummer": "9900357000004",
-      "rollencodetyp": "BDEW"
+      "rollencodetyp": "BDEW",
+      "sparte": "STROM"
     },
     "preispositionen": [
       {
-        "bo_typ": "PREISPOSITION",
-        "berechnungsmethode": "STAFFELN",
-        "leistungstyp": "LEISTUNGSABHAENGIGE_NETZENTGELTE_STROM",
-        "messebene": "HV",
-        "bezeichnung": "Arbeitspreis HV",
+        "_typ": "PREISPOSITION",
+        "berechnungsmethode": "STUFEN",
+        "leistungstyp": "ARBEITSPREIS_WIRKARBEIT",
+        "leistungsbezeichnung": "Arbeitspreis Wirkarbeit",
+        "preiseinheit": "EUR",
+        "bezugsgroesse": "KWH",
         "preisstaffeln": [
           {
-            "bo_typ": "PREISSTAFFEL",
-            "einheitspreis": 0.0412,
-            "mengengrenzeunten": 0
+            "_typ": "PREISSTAFFEL",
+            "preis": 0.0412,
+            "staffelgrenzeVon": 0
           }
         ]
       },
       {
-        "bo_typ": "PREISPOSITION",
-        "berechnungsmethode": "STAFFELN",
-        "leistungstyp": "LEISTUNGSABHAENGIGE_NETZENTGELTE_STROM",
-        "messebene": "MS",
-        "bezeichnung": "Arbeitspreis MS",
+        "_typ": "PREISPOSITION",
+        "berechnungsmethode": "STUFEN",
+        "leistungstyp": "GRUNDPREIS",
+        "leistungsbezeichnung": "Grundpreis Netznutzung",
+        "preiseinheit": "EUR",
+        "bezugsgroesse": "JAHR",
         "preisstaffeln": [
           {
-            "bo_typ": "PREISSTAFFEL",
-            "einheitspreis": 0.0589,
-            "mengengrenzeunten": 0
+            "_typ": "PREISSTAFFEL",
+            "preis": 0.0589,
+            "staffelgrenzeVon": 0
           }
         ]
       }
     ]
   },
-  "bo4e_version": "v202501.0.0"
+  "bo4e_version": "v202607.0.0"
 }

@@ -138,6 +138,13 @@ services:
     volumes:
       - ./makod.toml:/etc/makod/makod.toml:ro
     environment:
+      # The image HEALTHCHECK runs `makod --check` with no arguments, so it sees
+      # none of the flags in `command:` below. Mirror the two that `--check`
+      # requires into the env vars the same flags read, otherwise the probe
+      # fails on missing config / missing auth key and the container is
+      # reported unhealthy while serving traffic normally.
+      MAKOD_CONFIG:                   /etc/makod/makod.toml
+      MAKOD_AUTH_KEYS:                demo=demo-secret-change-me
       MAKOD_DATA_DIR:                 ""     # in-memory (no persistence)
       MAKOD_EDIFACT_OUTBOX_WEBHOOK_URL: http://webhook:8000
       # Push process lifecycle CloudEvents to marktd so processd can react
