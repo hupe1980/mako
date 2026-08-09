@@ -203,7 +203,9 @@ pub fn load_config<C: DeserializeOwned>(name: &str) -> Result<C, ConfigError> {
         // a config key — ignore it so a struct with `#[serde(deny_unknown_fields)]`
         // does not fail startup on a stray `config` field.
         .merge(FileAdapter::wrap(
-            Env::prefixed(&prefix).split("__").ignore(&["CONFIG", "LOG_FORMAT", "LOG_LEVEL"]),
+            Env::prefixed(&prefix)
+                .split("__")
+                .ignore(&["CONFIG", "LOG_FORMAT", "LOG_LEVEL"]),
         ))
         .extract()
 }
