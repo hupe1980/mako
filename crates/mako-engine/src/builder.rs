@@ -680,6 +680,17 @@ impl<OS: OutboxStore, S: As4Sender> OutboxWorker<OS, S> {
     #[allow(clippy::too_many_lines)]
     pub async fn run(self) {
         loop {
+            // Tick liveness at the *start* of every poll cycle, ahead of the
+            // early-`continue` paths below.  An idle worker (empty outbox) and
+            // one retrying after a store error are both alive and must keep
+            // ticking; only a worker genuinely hung inside an `.await` stops.
+            if let Some(ref hb) = self.heartbeat {
+                hb.store(
+                    time::OffsetDateTime::now_utc().unix_timestamp(),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
+
             let batch = match self.store.pending_now(self.batch_size).await {
                 Ok(b) => b,
                 Err(e) => {
@@ -841,14 +852,6 @@ impl<OS: OutboxStore, S: As4Sender> OutboxWorker<OS, S> {
                         }
                     }
                 }
-            }
-            // Tick liveness heartbeat at the end of every poll cycle so the
-            // health endpoint can detect a stale (hung) outbox worker.
-            if let Some(ref hb) = self.heartbeat {
-                hb.store(
-                    time::OffsetDateTime::now_utc().unix_timestamp(),
-                    std::sync::atomic::Ordering::Relaxed,
-                );
             }
         }
     }
@@ -1038,6 +1041,17 @@ impl<DS: DeadlineStore> DeadlineScheduler<DS> {
     /// Run the deadline poll loop until the task is cancelled.
     pub async fn run(self) {
         loop {
+            // Tick liveness at the *start* of every poll cycle, ahead of the
+            // early-`continue` paths below.  An idle scheduler (no due
+            // deadlines) is alive and must keep ticking; only one genuinely
+            // hung inside an `.await` stops.
+            if let Some(ref hb) = self.heartbeat {
+                hb.store(
+                    time::OffsetDateTime::now_utc().unix_timestamp(),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            }
+
             let result = match self.store.due_now(self.batch_size).await {
                 Ok(r) => r,
                 Err(e) => {
@@ -1114,15 +1128,6 @@ impl<DS: DeadlineStore> DeadlineScheduler<DS> {
             }
 
             // If has_more, loop immediately to drain the batch.
-
-            // Tick liveness heartbeat at the end of every poll cycle so the
-            // health endpoint can detect a stale (hung) deadline scheduler.
-            if let Some(ref hb) = self.heartbeat {
-                hb.store(
-                    time::OffsetDateTime::now_utc().unix_timestamp(),
-                    std::sync::atomic::Ordering::Relaxed,
-                );
-            }
         }
     }
 }
