@@ -336,11 +336,14 @@ pub mod agent {
     /// An agent run reached a terminal state and produced a decision.
     ///
     /// Carries the run's outcome — `completed`, `failed`, `suspended`,
-    /// `exhausted`, `quarantined`, `replanning` or `cancelled` — so a
-    /// subscriber sees a run awaiting human approval as readily as a
-    /// successful one. There is no separate dead-letter event: a run that
-    /// fails is resumable from its journal rather than a message that has
-    /// nowhere left to go.
+    /// `exhausted`, `quarantined`, `replanning`, `cancelled` or
+    /// `not-admitted` — so a subscriber sees a run awaiting human approval as
+    /// readily as a successful one. Beside it: `run_id` (the journal key, which
+    /// `GET /api/v1/oversight/runs/{run_id}` takes), `waiting_for` (present only
+    /// when suspended — an approval, a message, an instant) and `tokens`.
+    ///
+    /// There is no separate dead-letter event: a run that fails is resumable
+    /// from its journal rather than a message that has nowhere left to go.
     pub const DECISION_MADE: &str = "de.agent.decision.made";
 }
 

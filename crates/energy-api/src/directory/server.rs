@@ -147,13 +147,13 @@ where
             routing::get(handle_get_service_info::<S>),
         )
         .route(
-            "/record/:provider_id/:api_id/:major_version/v1",
+            "/record/{provider_id}/{api_id}/{major_version}/v1",
             routing::get(handle_get_record::<S>)
                 .put(handle_put_record::<S>)
                 .delete(handle_delete_record::<S>),
         )
         .route(
-            "/redirect/:provider_id/:api_id/:major_version/v1",
+            "/redirect/{provider_id}/{api_id}/{major_version}/v1",
             routing::put(handle_put_redirect::<S>).delete(handle_delete_redirect::<S>),
         )
         .with_state(state)

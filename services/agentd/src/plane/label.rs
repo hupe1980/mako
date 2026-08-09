@@ -30,7 +30,7 @@
 //! Nothing else is promoted. An amount is a number a counterparty influenced,
 //! and a run that treats it as authority should say so.
 
-use agentplane::core::{SourceId, Tainted};
+use agentplane::core::{CorrelationKey, SourceId, Tainted};
 use serde_json::Value;
 
 /// The shape an identifier must have to be promoted.
@@ -159,6 +159,76 @@ pub fn routing_envelope(payload: &Value) -> Option<Tainted<Value>> {
     (!kept.is_empty()).then(|| Tainted::trusted(Value::Object(kept)))
 }
 
+/// Which business keys bind a run to a case, and what kind of case it opens.
+///
+/// A case is two things at once in agentplane, and both matter here: it is the
+/// **matter** a run belongs to — so an approval, an obligation and a decision
+/// have somewhere to live — and it is the **erasure unit**, the scope of the
+/// wrapping key that `erase_case` destroys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Correlation {
+    /// Classification for a newly opened case. Correlation itself matches on
+    /// the keys alone, so this labels the case rather than narrowing the match.
+    pub kind: &'static str,
+    /// The keys. A run joins any open case sharing one of them.
+    pub keys: Vec<CorrelationKey>,
+}
+
+/// The keys under which a payload's runs share a case.
+///
+/// Only **re-validated** identifiers become keys — the same rule the label
+/// promotion uses, and for a sharper reason: a correlation key decides which
+/// customer's case a run joins, so a counterparty-chosen string here would
+/// attach our reasoning about their MaLo to somebody else's matter, and the
+/// erasure that follows would destroy the wrong keys.
+///
+/// A payload carrying no re-validated identifier falls back to the CloudEvent's
+/// own id, which gives that run a case of its own. That is deliberately not
+/// "no case": a run without one cannot register an obligation or open a task,
+/// so every `requires_approval` grant in every manifest would fail at dispatch.
+#[must_use]
+pub fn correlation(event_id: &str, payload: &Value) -> Correlation {
+    // Ordered by how specific the matter is: a MaLo is a customer's connection,
+    // a MeLo is a meter on it, a process is one exchange about it.
+    const BUSINESS_KEYS: &[(&str, &str)] = &[
+        ("malo_id", "malo"),
+        ("melo_id", "melo"),
+        ("process_id", "process"),
+    ];
+
+    let keys: Vec<CorrelationKey> = payload
+        .as_object()
+        .map(|map| {
+            BUSINESS_KEYS
+                .iter()
+                .filter_map(|(field, namespace)| {
+                    let value = map.get(*field)?.as_str()?;
+                    let shape = PROMOTABLE.iter().find(|(k, _)| k == field)?.1;
+                    shape
+                        .accepts(value)
+                        .then(|| CorrelationKey::new(*namespace, value))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if keys.is_empty() {
+        return Correlation {
+            kind: "ereignis",
+            keys: vec![CorrelationKey::new("event", event_id)],
+        };
+    }
+
+    // A case opened on a MaLo or MeLo is a customer matter and is what an
+    // erasure request names; one opened on a process alone is protocol work.
+    let kind = if keys.iter().any(|k| k.namespace == "process") && keys.len() == 1 {
+        "prozess"
+    } else {
+        "marktlokation"
+    };
+    Correlation { kind, keys }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +345,59 @@ mod tests {
     fn a_non_object_payload_is_untrusted_entirely() {
         let labelled = admit("de.mako.process.failed", json!("free-form text"));
         assert!(labelled.label().is_untrusted());
+    }
+
+    /// Two events about one MaLo correlate to the same case.
+    ///
+    /// This is what makes an erasure request answerable: "everything we
+    /// processed about this Marktlokation" is one case, and one wrapping key.
+    #[test]
+    fn events_about_one_malo_share_a_case() {
+        let a = correlation("ce-1", &json!({ "malo_id": "51238696780", "amount_ct": 1 }));
+        let b = correlation(
+            "ce-2",
+            &json!({ "malo_id": "51238696780", "reference": "other" }),
+        );
+
+        assert_eq!(a.keys, b.keys, "the same MaLo must correlate identically");
+        assert_eq!(a.keys[0], CorrelationKey::new("malo", "51238696780"));
+        assert_eq!(a.kind, "marktlokation");
+    }
+
+    /// A malformed identifier does not become a correlation key.
+    ///
+    /// The failure this prevents is the sharpest one in this module: a
+    /// counterparty-chosen string as a case key attaches our reasoning to a
+    /// matter they named, and the erasure that follows destroys those keys.
+    #[test]
+    fn a_malformed_identifier_never_becomes_a_case_key() {
+        let c = correlation("ce-3", &json!({ "malo_id": "51238696780; DROP" }));
+        assert_eq!(
+            c.keys,
+            vec![CorrelationKey::new("event", "ce-3")],
+            "a malformed MaLo fell back to the event's own case"
+        );
+    }
+
+    /// A payload with no business key still gets a case, of its own.
+    ///
+    /// Not "no case": a run without one cannot open a task, so every
+    /// `requires_approval` grant would fail at dispatch instead of asking.
+    #[test]
+    fn an_event_with_no_business_key_gets_its_own_case() {
+        let c = correlation("ce-4", &json!({ "note": "something happened" }));
+        assert_eq!(c.kind, "ereignis");
+        assert_eq!(c.keys, vec![CorrelationKey::new("event", "ce-4")]);
+    }
+
+    /// A process-only event opens a protocol case, not a customer one.
+    #[test]
+    fn a_process_only_event_opens_a_process_case() {
+        let c = correlation(
+            "ce-5",
+            &json!({ "process_id": "123e4567-e89b-12d3-a456-426614174000" }),
+        );
+        assert_eq!(c.kind, "prozess");
+        assert_eq!(c.keys.len(), 1);
     }
 }

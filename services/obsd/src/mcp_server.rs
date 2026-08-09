@@ -173,7 +173,10 @@ impl ObsdMcpHandler {
     /// regulatory violation under BNetzA monitoring.
     ///
     /// Returns up to 200 results ordered by deadline ascending (most urgent first).
-    #[tool(description = "List processes past their regulatory deadline (most urgent first)")]
+    #[tool(
+        description = "List processes past their regulatory deadline (most urgent first)",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn list_overdue_processes(&self) -> Result<CallToolResult, McpError> {
         let rows = sqlx::query_as::<
             _,

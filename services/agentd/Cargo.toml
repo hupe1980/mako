@@ -19,6 +19,9 @@ path = "src/main.rs"
 
 [dependencies]
 mako-events = { workspace = true }
+# The BDEW MaKo Werktage calendar, so an agent's approval window and the
+# regulatory window it guards resolve through the same holiday table.
+mako-engine = { workspace = true }
 mako-service = { workspace = true, features = ["otel", "oidc", "cedar"] }
 axum         = { version = "0.8" }
 tokio        = { version = "1", features = ["full"] }
@@ -31,7 +34,19 @@ anyhow       = "1"
 reqwest      = { workspace = true }
 tokio-util   = { workspace = true }
 secrecy      = { version = "0.10", features = ["serde"] }
-agentplane = { version = "0.9", features = ["manifest", "mcp", "providers", "postgres", "cedar", "signing", "keyring"] }
+agentplane = { version = "0.10", features = [
+    # The declaration, and the wires that reach a model and a tool server.
+    "manifest", "mcp", "providers",
+    # Both journal backends: an embedded file, or one database several
+    # instances share.
+    "redb", "postgres",
+    # The gate every effect passes, and the signature on every record.
+    "cedar", "signing",
+    # Envelope encryption, with the wrapping key held by Vault rather than us.
+    "keyring", "keyring-vault",
+    # The operator surface: worklist, run views, case history, event delivery.
+    "http",
+] }
 # The client transport that reaches mako's MCP servers. agentplane takes an
 # already-initialised rmcp service rather than a connection string, so which
 # transport carries a call stays a deployment decision.
@@ -43,8 +58,9 @@ async-trait = "0.1.91"
 [dev-dependencies]
 # testkit brings FakeProvider, Faulty and the replay assertions. It carries no
 # reqwest dependency, so it resolves independently of the provider drivers.
-agentplane = { version = "0.9", features = [
-    "manifest", "mcp", "providers", "postgres", "cedar", "signing", "keyring", "testkit",
+agentplane = { version = "0.10", features = [
+    "manifest", "mcp", "providers", "redb", "postgres", "cedar", "signing",
+    "keyring", "keyring-vault", "http", "testkit",
 ] }
 tokio = { version = "1", features = ["full"] }
 toml  = "0.9"
@@ -57,6 +73,13 @@ toml  = "0.9"
 #
 # Default (no flags): all roles, matching the other services.
 [features]
+# Amazon Bedrock Converse, off by default. The AWS SDK is a substantial
+# dependency tree — and pulls `http` 0.2 alongside the workspace's 1.x, which
+# costs two cargo-deny skips — so a deployment that does not run on Bedrock
+# does not pay for it. Everything else agentd speaks (Anthropic, OpenAI,
+# Gemini, and the OpenAI-compatible wire for TGI/vLLM/Ollama) is unconditional.
+bedrock  = ["agentplane/bedrock"]
+
 role-lf  = []
 role-nb  = []
 role-msb = []

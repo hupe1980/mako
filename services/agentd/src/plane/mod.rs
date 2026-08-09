@@ -17,10 +17,16 @@
 //! See `concepts/AGENTD.md` for the migration plan and the boundary this keeps:
 //! the agent may prepare and may wait, the deterministic engine still dispatches.
 
+pub mod calendar;
+pub mod keys;
 pub mod label;
+pub mod oversight;
+pub mod policy;
+pub mod providers;
 pub mod runtime;
+pub mod sweep;
 pub mod tools;
-pub use runtime::{Activation, AgentDecision, Plane, Route, Router};
+pub use runtime::{Activation, AgentDecision, Plane, PlaneConfig, Route, Router, Stores};
 
 use std::sync::Arc;
 

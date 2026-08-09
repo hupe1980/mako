@@ -136,11 +136,11 @@ impl Daemon for Vertragd {
                 get(handlers::list_kunden_handler).post(handlers::post_create_kunde),
             )
             .route(
-                "/api/v1/kunden/:id",
+                "/api/v1/kunden/{id}",
                 get(handlers::get_kunde).put(handlers::put_update_kunde),
             )
             .route(
-                "/api/v1/kunden/by-sub/:sub",
+                "/api/v1/kunden/by-sub/{sub}",
                 get(handlers::get_kunde_by_sub),
             )
             .route(
@@ -149,31 +149,31 @@ impl Daemon for Vertragd {
             )
             // Identity management (B2B portal users: 1 company → N logins)
             .route(
-                "/api/v1/kunden/:id/identitaeten",
+                "/api/v1/kunden/{id}/identitaeten",
                 post(handlers::post_upsert_identitaet).get(handlers::list_kunde_identitaeten),
             )
             .route(
-                "/api/v1/kunden/:id/identitaeten/:sub",
+                "/api/v1/kunden/{id}/identitaeten/{sub}",
                 axum::routing::delete(handlers::delete_identitaet),
             )
             // GDPR Art. 15 full data export
             .route(
-                "/api/v1/kunden/:id/export",
+                "/api/v1/kunden/{id}/export",
                 get(handlers::get_kunde_gdpr_export),
             )
             // GDPR Art. 17 — right to erasure (anonymize PII, retain contract records)
             .route(
-                "/api/v1/kunden/:id/anonymize",
+                "/api/v1/kunden/{id}/anonymize",
                 post(handlers::post_anonymize_kunde),
             )
             // Person sub-object — B2C natural person details (L13 — GDPR Art. 15)
             .route(
-                "/api/v1/kunden/:id/person",
+                "/api/v1/kunden/{id}/person",
                 get(handlers::get_person).put(handlers::put_person),
             )
             // Zahlungsinformation typed BO4E REST (IBAN + BIC + SEPA)
             .route(
-                "/api/v1/kunden/:id/zahlungsinformation",
+                "/api/v1/kunden/{id}/zahlungsinformation",
                 get(handlers::get_zahlungsinformation_kunde)
                     .put(handlers::put_zahlungsinformation_kunde),
             )
@@ -183,21 +183,21 @@ impl Daemon for Vertragd {
                 get(handlers::list_rahmenvertraege_handler),
             )
             .route(
-                "/api/v1/rahmenvertraege/:id",
+                "/api/v1/rahmenvertraege/{id}",
                 get(handlers::get_rahmenvertrag_handler),
             )
             // Rahmenvertrag MaLo enumeration for Sammelrechnung (L2)
             .route(
-                "/api/v1/rahmenvertraege/:id/malos",
+                "/api/v1/rahmenvertraege/{id}/malos",
                 get(handlers::get_rahmenvertrag_malos),
             )
             // Framework + supply contracts
             .route(
-                "/api/v1/kunden/:id/rahmenvertraege",
+                "/api/v1/kunden/{id}/rahmenvertraege",
                 get(handlers::list_kunde_rahmenvertraege).post(handlers::post_create_rahmenvertrag),
             )
             .route(
-                "/api/v1/kunden/:id/vertraege",
+                "/api/v1/kunden/{id}/vertraege",
                 get(handlers::list_kunde_vertraege).post(handlers::post_create_vertrag),
             )
             // Supply contracts (B2C + B2B)
@@ -208,11 +208,11 @@ impl Daemon for Vertragd {
                 get(handlers::get_aggregatorvertraege),
             )
             .route(
-                "/api/v1/aggregatorvertraege/:sr_id",
+                "/api/v1/aggregatorvertraege/{sr_id}",
                 axum::routing::put(handlers::put_aggregatorvertrag),
             )
             .route(
-                "/api/v1/vertraege/by-malo/:malo_id",
+                "/api/v1/vertraege/by-malo/{malo_id}",
                 get(handlers::get_vertrag_by_malo),
             )
             // §40b EnWG billing cadence — consumed by billingd's billing-run worker
@@ -225,38 +225,38 @@ impl Daemon for Vertragd {
                 "/api/v1/vertraege/expiring",
                 get(handlers::list_expiring_vertraege),
             )
-            .route("/api/v1/vertraege/:id", get(handlers::get_vertrag))
+            .route("/api/v1/vertraege/{id}", get(handlers::get_vertrag))
             .route(
-                "/api/v1/vertraege/:id/kuendigen",
+                "/api/v1/vertraege/{id}/kuendigen",
                 post(handlers::kuendige_vertrag),
             )
             // Stornieren (cancel before AKTIV — ANGELEGT/IN_BEARBEITUNG only)
             .route(
-                "/api/v1/vertraege/:id/stornieren",
+                "/api/v1/vertraege/{id}/stornieren",
                 post(handlers::stornieren_vertrag),
             )
             // Kündigung Widerruf (GPKE §20 EnWG: LF may withdraw Lieferende before effective date)
             .route(
-                "/api/v1/vertraege/:id/widerruf-kuendigung",
+                "/api/v1/vertraege/{id}/widerruf-kuendigung",
                 post(handlers::widerruf_kuendigung_handler),
             )
             // B2B Rahmenvertrag cascade Kündigung (terminates all child Versorgungsverträge)
             .route(
-                "/api/v1/rahmenvertraege/:id/kuendigen",
+                "/api/v1/rahmenvertraege/{id}/kuendigen",
                 post(handlers::kuendige_rahmenvertrag_handler),
             )
             .route(
-                "/api/v1/vertraege/:id/tarifwechsel",
+                "/api/v1/vertraege/{id}/tarifwechsel",
                 post(handlers::tarifwechsel_vertrag),
             )
             // Preisgarantie typed BO4E REST resource (guard on tarifwechsel enforces it)
             .route(
-                "/api/v1/vertraege/:id/preisgarantie",
+                "/api/v1/vertraege/{id}/preisgarantie",
                 get(handlers::get_preisgarantie).put(handlers::put_preisgarantie),
             )
             // B2B portfolio summary (all active MaLo/Sparte per Kunde)
             .route(
-                "/api/v1/kunden/:id/portfolio",
+                "/api/v1/kunden/{id}/portfolio",
                 get(handlers::get_kunde_portfolio),
             )
             // CloudEvent webhook

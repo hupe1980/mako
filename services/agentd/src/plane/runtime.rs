@@ -27,7 +27,10 @@
 
 use std::sync::Arc;
 
+use agentplane::case::{CaseStore, EventStore, TaskStore, TimerStore};
+use agentplane::core::{PolicyEngine, TenantId};
 use agentplane::journal::JournalStore;
+use agentplane::keyring::KeyRing;
 use agentplane::runtime::{Agent, RunStatus, Runtime};
 use serde_json::Value;
 use tracing::{info, warn};
@@ -191,20 +194,34 @@ impl Router {
 }
 
 /// What one specialist concluded, in the shape the CloudEvent carries.
+///
+/// Every field is read off the run's own outcome. The three that used to be
+/// here and are not — `tool_calls`, `turns`, `handoff_to` — were always zero or
+/// `None` after the cutover: the runtime drives the turn loop, so agentd never
+/// saw a per-turn count, and there is no peer handoff to report. A field that
+/// is structurally always empty reads as "this agent called no tools", which is
+/// worse than not answering.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AgentDecision {
     pub agent_name: String,
-    /// The run id — the journal key. Replaces the old opaque session UUID with
-    /// something an operator can actually look up.
-    pub session_id: String,
+    /// The run id — the journal key, and what `GET /api/v1/oversight/runs/{id}`
+    /// takes. An operator can look up every effect behind this decision.
+    pub run_id: String,
     pub event_id: String,
     pub event_type: String,
-    /// `completed` · `failed` · `suspended` · `exhausted` · `quarantined`
+    /// `completed` · `failed` · `suspended` · `exhausted` · `quarantined` ·
+    /// `replanning` · `cancelled` · `not-admitted`
     pub outcome: String,
     pub summary: String,
-    pub tool_calls: usize,
-    pub turns: u32,
-    pub handoff_to: Option<String>,
+    /// What a suspended run is waiting for — an approval, a message, an instant.
+    ///
+    /// "Suspended" tells an operator a run is stuck; it does not tell them
+    /// whether to approve something, chase a counterparty, or wait. Present
+    /// only when the run is suspended.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_for: Option<String>,
+    /// Model tokens this run consumed, as the journal metered them.
+    pub tokens: u64,
 }
 
 impl AgentDecision {
@@ -218,6 +235,91 @@ impl AgentDecision {
             serde_json::to_value(self).unwrap_or(Value::Null),
         )
     }
+}
+
+/// Everything the plane persists to.
+///
+/// One backend supplies all five: the journal is the run's record, and the case
+/// layer is where a matter, its obligations, its buffered events and its human
+/// tasks live. Bundling them is not a convenience — a plane whose journal and
+/// case store were different backends could resume a run whose case it cannot
+/// read, and the failure would appear as an approval that never opens.
+pub struct Stores {
+    pub journal: Arc<dyn JournalStore>,
+    pub cases: Arc<dyn CaseStore>,
+    pub tasks: Arc<dyn TaskStore>,
+    pub timers: Arc<dyn TimerStore>,
+    pub events: Arc<dyn EventStore>,
+}
+
+impl std::fmt::Debug for Stores {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Stores").finish_non_exhaustive()
+    }
+}
+
+impl Stores {
+    /// The embedded backend: one redb file holds all five tables.
+    ///
+    /// The tenant is part of every key rather than a predicate somebody
+    /// remembers to add, so it is bound to the *store* and not only to the
+    /// runtime. agentplane refuses to build when the two disagree — a plane
+    /// whose runs land in another tenant's keyspace while every erasure and
+    /// policy request names this one is the failure that does not surface at
+    /// runtime.
+    #[must_use]
+    pub fn redb(store: agentplane::store::RedbStore, tenant: &TenantId) -> Self {
+        Self::from_arc(Arc::new(store.for_tenant(tenant.clone())))
+    }
+
+    /// The shared backend: several agentd instances on one database.
+    ///
+    /// The topology an embedded store cannot serve — fencing and exactly-once
+    /// are arbitrated by Postgres rather than by hoping the writers agree.
+    #[must_use]
+    pub fn postgres(store: agentplane::store::PostgresStore, tenant: &TenantId) -> Self {
+        Self::from_arc(Arc::new(store.for_tenant(tenant.clone())))
+    }
+
+    /// One backend, five seams.
+    fn from_arc<S>(store: Arc<S>) -> Self
+    where
+        S: JournalStore + CaseStore + TaskStore + TimerStore + EventStore + 'static,
+    {
+        Self {
+            journal: Arc::clone(&store) as Arc<dyn JournalStore>,
+            cases: Arc::clone(&store) as Arc<dyn CaseStore>,
+            tasks: Arc::clone(&store) as Arc<dyn TaskStore>,
+            timers: Arc::clone(&store) as Arc<dyn TimerStore>,
+            events: store as Arc<dyn EventStore>,
+        }
+    }
+}
+
+/// What a deployment decides about its plane, beyond the stores.
+///
+/// A struct rather than eight positional arguments: every field here is
+/// something an operator configured, and a call site that transposes two
+/// `Arc<dyn …>` parameters compiles.
+pub struct PlaneConfig<'a> {
+    /// Identifies this *process* for lease fencing — not the agent.
+    pub owner: &'a str,
+    /// Scopes the data keys, so one operator's erasure cannot reach another's.
+    ///
+    /// The same value the stores were built with — agentplane refuses the build
+    /// if they disagree.
+    pub tenant: &'a TenantId,
+    /// Which compiled specialists this deployment runs.
+    pub activated: &'a Activation,
+    /// Model drivers, under the names the manifests use.
+    pub providers: Vec<(String, Arc<dyn agentplane::model::ModelProvider>)>,
+    /// One transport per MCP server named in the grants.
+    pub tool_servers: Vec<(String, Arc<dyn agentplane::tools::ToolClient>)>,
+    /// The authorization engine. Not optional: agentplane ships no `AllowAll`,
+    /// and its operator surface refuses to open on an ungoverned plane.
+    pub policy: Arc<dyn PolicyEngine>,
+    /// Envelope encryption for everything written down, when configured.
+    pub keyring: Option<Arc<dyn KeyRing>>,
 }
 
 /// The runtime and its routing table.
@@ -246,6 +348,12 @@ impl Plane {
     /// from the declarations themselves, so a grant, its ceiling and its
     /// protected fields are stated once.
     ///
+    /// The case layer is wired unconditionally, and it is not optional in
+    /// practice: asking a human needs a case to hold the task, a calendar to
+    /// resolve the deadline and a timer to expire it. A plane without them
+    /// assembles cleanly and then fails every `requires_approval` call at
+    /// dispatch — which is the one path a test suite is least likely to reach.
+    ///
     /// # Errors
     ///
     /// Returns an error when the routing table cannot be built, a manifest fails
@@ -253,33 +361,35 @@ impl Plane {
     /// surfaced at startup. In particular a declarative agent whose tool servers
     /// are unreachable is refused here rather than failing identically on every
     /// run.
-    pub fn new(
-        store: Arc<dyn JournalStore>,
-        owner: &str,
-        tenant: &str,
-        activated: &Activation,
-        providers: Vec<(String, Arc<dyn agentplane::model::ModelProvider>)>,
-        tool_servers: Vec<(String, Arc<dyn agentplane::tools::ToolClient>)>,
-        keyring: Option<Arc<dyn agentplane::keyring::KeyRing>>,
-    ) -> Result<Self, String> {
-        let router = Router::build(activated)?;
+    pub fn new(stores: Stores, cfg: PlaneConfig<'_>) -> Result<Self, String> {
+        let router = Router::build(cfg.activated)?;
 
-        let mut builder = Runtime::builder(store)
-            .owner(owner.to_owned())
+        let mut builder = Runtime::builder(stores.journal)
+            .owner(cfg.owner.to_owned())
             // The erasure unit is the case, and the key that opens it is scoped
             // by tenant. A plane that left this at the default would write one
             // operator's runs into another's keyspace.
-            .tenant(
-                agentplane::core::TenantId::new(tenant)
-                    .map_err(|e| format!("tenant `{tenant}` is not a usable key scope: {e}"))?,
-            );
-        for (name, driver) in providers {
+            .tenant(cfg.tenant.clone())
+            // The matter a run belongs to, the humans it may have to ask, the
+            // instants it waits for, and the messages that wake it.
+            .cases(stores.cases)
+            .tasks(stores.tasks)
+            .timers(stores.timers)
+            .events(stores.events)
+            // Werktage, resolved through mako's own BDEW holiday table — so an
+            // agent's approval window and the regulatory window it guards
+            // cannot disagree about when Karfreitag is.
+            .calendar(Arc::new(super::calendar::MakoCalendar))
+            // No `AllowAll` exists, and none is wanted: this is what every
+            // effect is checked against.
+            .policy(cfg.policy);
+        for (name, driver) in cfg.providers {
             builder = builder.provider(name, driver);
         }
-        for (name, client) in tool_servers {
+        for (name, client) in cfg.tool_servers {
             builder = builder.tool_server(name, client);
         }
-        if let Some(keys) = keyring {
+        if let Some(keys) = cfg.keyring {
             // Seals the journal, case state, events and task proposals — done at
             // `build`, so registration order cannot lose the guarantee.
             builder = builder.keyring(keys);
@@ -287,7 +397,7 @@ impl Plane {
         // Only activated specialists are registered. An agent the operator did
         // not enable is not merely unrouted — it has no declaration in the
         // runtime, so a run cannot address its capability by any other path.
-        for (name, src) in MANIFESTS.iter().filter(|(n, _)| activated.includes(n)) {
+        for (name, src) in MANIFESTS.iter().filter(|(n, _)| cfg.activated.includes(n)) {
             let m = Arc::new(parse_manifest(src).map_err(|e| format!("{name}: {e}"))?);
             builder = builder.agent(Agent::new(&m));
         }
@@ -307,6 +417,24 @@ impl Plane {
     pub fn router(&self) -> &Router {
         &self.router
     }
+
+    /// The runtime itself — for the operator surface and the sweeper.
+    ///
+    /// Handed out rather than wrapped: the worklist, run views and event
+    /// delivery are agentplane's own HTTP surface, and re-implementing them
+    /// here would be a second copy of an authorization rule.
+    #[must_use]
+    pub fn runtime(&self) -> Arc<Runtime> {
+        Arc::clone(&self.runtime)
+    }
+
+    // Inbound-message delivery — waking a run suspended on `await_event` — is
+    // deliberately *not* wrapped here. It is `POST /api/v1/oversight/events` on
+    // agentplane's own surface, authenticated and authorized like every other
+    // operation there. A second door into the same store would be a second
+    // place to get the authorization wrong, and delivering every webhook event
+    // blindly would buffer messages nobody waits for until the sweeper
+    // dead-letters them, turning a healthy signal into noise.
 
     /// Run every specialist subscribing to this event.
     ///
@@ -357,14 +485,13 @@ impl Plane {
     fn did_not_run(route: &Route, event_id: &str, event_type: &str, why: &str) -> AgentDecision {
         AgentDecision {
             agent_name: route.name.to_owned(),
-            session_id: String::new(),
+            run_id: String::new(),
             event_id: event_id.to_owned(),
             event_type: event_type.to_owned(),
             outcome: "not-admitted".to_owned(),
             summary: why.to_owned(),
-            tool_calls: 0,
-            turns: 0,
-            handoff_to: None,
+            waiting_for: None,
+            tokens: 0,
         }
     }
 
@@ -375,10 +502,16 @@ impl Plane {
         event_type: &str,
         payload: Value,
     ) -> AgentDecision {
-        // Admission is where mako's trust boundary is drawn. `Runtime::run`
-        // would label the whole payload trusted, and almost nothing in it is:
-        // a MaLo came out of a counterparty's UTILMD, a `reference` is text they
-        // wrote. `run_tainted` carries the real labels in.
+        // Read the business keys before the payload is consumed by labelling:
+        // which case this run joins is a question of fact about the message,
+        // decided the same way for every specialist that receives it.
+        let correlation = super::label::correlation(event_id, &payload);
+
+        // Admission is where mako's trust boundary is drawn, and 0.10 made the
+        // label part of the value rather than part of the method name: every
+        // door takes a `Tainted<Value>`. Almost nothing in a CloudEvent payload
+        // is trusted — a MaLo came out of a counterparty's UTILMD, a `reference`
+        // is text they wrote — so `plane::label` carries the real labels in.
         let input = match route.plans {
             // A `planned` agent refuses untrusted input — the plan it compiles
             // is the authorization graph. It gets the re-validated identifiers
@@ -404,29 +537,42 @@ impl Plane {
             false => super::label::admit(event_type, payload),
         };
 
-        let outcome = self.runtime.run_tainted(&route.capability, input).await;
+        // Correlated, not bare. A run outside a case cannot register an
+        // obligation or open a task, so `requires_approval` — declared on 200
+        // grants across the 28 manifests — would fail at dispatch. The keys are
+        // the re-validated identifiers, which makes the case the erasure unit
+        // for one Marktlokation: destroying its wrapping key destroys every
+        // sealed payload of every run about that customer.
+        let outcome = self
+            .runtime
+            .run_correlated(
+                &route.capability,
+                input,
+                correlation.kind,
+                &correlation.keys,
+            )
+            .await;
 
-        let (run_id, status, summary) = match outcome {
+        let (run_id, status, summary, tokens) = match outcome {
             Ok(o) => {
                 let summary = o
                     .output
                     .as_ref()
                     .map(|t| t.peek().to_string())
                     .unwrap_or_default();
-                (o.run_id.to_string(), o.status, summary)
+                (o.run_id.to_string(), o.status, summary, o.spend.tokens)
             }
             Err(e) => {
                 warn!(agent = route.name, error = %e, "agent run failed to start");
                 return AgentDecision {
                     agent_name: route.name.to_owned(),
-                    session_id: String::new(),
+                    run_id: String::new(),
                     event_id: event_id.to_owned(),
                     event_type: event_type.to_owned(),
                     outcome: "failed".to_owned(),
                     summary: e.to_string(),
-                    tool_calls: 0,
-                    turns: 0,
-                    handoff_to: None,
+                    waiting_for: None,
+                    tokens: 0,
                 };
             }
         };
@@ -445,25 +591,33 @@ impl Plane {
             RunStatus::Cancelled { .. } => "cancelled",
         };
 
+        // Why it is waiting, not merely that it is. A run suspended on an
+        // approval needs a reviewer; one waiting for an APERAK needs patience
+        // or a counterparty chased. Both read as "suspended" without this.
+        let waiting_for = match &status {
+            RunStatus::Suspended(reason) => Some(reason.to_string()),
+            _ => None,
+        };
+
         if !matches!(status, RunStatus::Succeeded) {
             warn!(
                 agent = route.name,
                 run_id,
                 outcome = outcome_label,
+                waiting_for = waiting_for.as_deref().unwrap_or(""),
                 "agent run did not complete"
             );
         }
 
         AgentDecision {
             agent_name: route.name.to_owned(),
-            session_id: run_id,
+            run_id,
             event_id: event_id.to_owned(),
             event_type: event_type.to_owned(),
             outcome: outcome_label.to_owned(),
             summary,
-            tool_calls: 0,
-            turns: 0,
-            handoff_to: None,
+            waiting_for,
+            tokens,
         }
     }
 }

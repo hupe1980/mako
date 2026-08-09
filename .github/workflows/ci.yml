@@ -184,6 +184,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p xtask
       - run: cargo run -p xtask -- help
+      # axum 0.7 `/:param` route literals panic at startup under 0.8, and no
+      # test builds those routers — so this is the only thing that catches them.
+      - run: cargo run -p xtask -- check-routes
+      # A read grant declared mutating stops for a human on every call; a
+      # mutating one declared read-only is dispatched unattended.
+      - run: cargo run -p xtask -- check-tool-grants
 
   codegen-check:
     name: Codegen check (generated files are up-to-date)

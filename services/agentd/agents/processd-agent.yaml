@@ -1,12 +1,14 @@
 # NB STP decision trace and LF E_0624 auto-response monitor. Explains why processd rejected an Anmeldung (which of 6 netz-checker checks failed), and tracks approval_queue items.
 #
 # Generated from the compiled specialist definition during the agentplane
-# cutover. The tool grants reproduce the previous reach — every tool on each
-# granted MCP server — so no capability was silently lost. What is new: each
-# grant is named, `mutates` comes from the server's own read-only hint, and
-# every mutating tool requires a human decision.
+# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
+# own `read_only_hint` — the cutover inherited it from servers that declared
+# nothing, so 91 plain reads were marked mutating and would have stopped for an
+# approval on every call. The mutating grants are gone entirely, because a
+# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
 #
-# Narrowing the read set per specialist is domain review, not mechanical work.
+# Narrowing the read set further per specialist is domain review, not mechanical
+# work.
 # Cross-cutting: present in every role-scoped build.
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
@@ -62,14 +64,17 @@ spec:
     max_delegation_depth: 0
     max_sensitivity_journaled: internal
 
-  oversight:
-    approval:  tools-only
-    approvers: [mako-operations]
-    deadline:
-      name: processd-agent-freigabe
-      kind: hours
-      params: { n: 4 }
-    on_expiry: deny
+  # No `oversight` block, and no mutating tool grant: this specialist reads and
+  # reports. Both absences are the same fact — a `tool-calling` agent cannot
+  # dispatch a mutating call at all, because the arguments come from a model
+  # completion, which agentplane labels untrusted by construction, and its taint
+  # gate refuses a mutating sink with untrusted arguments. Declaring the grant
+  # anyway would read as an ability this agent does not have.
+  #
+  # Acting on a conclusion is a `planned` specialist's job — see
+  # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
+  # resolves itself, so the authority-bearing arguments keep the run input's own
+  # labels and a named human approves the call before it leaves.
 
   budgets:
     max_tokens: 200000
@@ -79,50 +84,33 @@ spec:
 
   tools:
     - ref: tool://processd/list_decisions
-      mutates: true
+      mutates: false
       max_sensitivity: internal
-      requires_approval: true
       description: "list decisions via processd"
     - ref: tool://processd/get_decision
-      mutates: true
+      mutates: false
       max_sensitivity: internal
-      requires_approval: true
       description: "get decision via processd"
     - ref: tool://processd/get_stp_breakdown_by_erc
-      mutates: true
+      mutates: false
       max_sensitivity: internal
-      requires_approval: true
       description: "get stp breakdown by erc via processd"
     - ref: tool://processd/list_affiliate_decisions
-      mutates: true
+      mutates: false
       max_sensitivity: internal
-      requires_approval: true
       description: "list affiliate decisions via processd"
     - ref: tool://processd/get_stp_rate
-      mutates: true
+      mutates: false
       max_sensitivity: internal
-      requires_approval: true
       description: "get stp rate via processd"
     - ref: tool://processd/list_pending_approvals
-      mutates: true
+      mutates: false
       max_sensitivity: internal
-      requires_approval: true
       description: "list pending approvals via processd"
     - ref: tool://processd/get_queue_entry
-      mutates: true
+      mutates: false
       max_sensitivity: internal
-      requires_approval: true
       description: "get queue entry via processd"
-    - ref: tool://processd/approve_queue_entry
-      mutates: true
-      max_sensitivity: internal
-      requires_approval: true
-      description: "approve queue entry via processd"
-    - ref: tool://processd/reject_queue_entry
-      mutates: true
-      max_sensitivity: internal
-      requires_approval: true
-      description: "reject queue entry via processd"
     - ref: tool://marktd/get_malo
       mutates: false
       max_sensitivity: confidential
@@ -151,11 +139,6 @@ spec:
       mutates: false
       max_sensitivity: confidential
       description: "list pricat versions via marktd"
-    - ref: tool://marktd/dispatch_pricat
-      mutates: true
-      max_sensitivity: confidential
-      requires_approval: true
-      description: "dispatch pricat via marktd"
     - ref: tool://marktd/list_malo
       mutates: false
       max_sensitivity: confidential
@@ -201,9 +184,8 @@ spec:
       max_sensitivity: internal
       description: "get process via obsd"
     - ref: tool://obsd/list_overdue_processes
-      mutates: true
+      mutates: false
       max_sensitivity: internal
-      requires_approval: true
       description: "list overdue processes via obsd"
     - ref: tool://obsd/get_kpi_report
       mutates: false

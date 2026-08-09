@@ -136,7 +136,6 @@ krafka           = { version = "0.14" }
 # meterstore owns the cold tier now, and edmd declares the handful of Iceberg
 # catalog crates it still needs to *construct* a meterstore directly.
 arrow                   = { version = "58", default-features = false }
-lancedb                 = { version = "0.31" }   # compatible with the workspace `time` pin via rubo4e
 
 # ── Testing utilities ───────────────────────────────────────────────────────
 # testcontainers: spin up Docker containers in Rust integration tests.

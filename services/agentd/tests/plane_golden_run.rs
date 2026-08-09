@@ -205,7 +205,7 @@ async fn the_gabi_specialist_runs_and_replays_deterministically() {
         .build();
 
     let out = runtime
-        .run_tainted("gabi.gas.balancing", gabi_envelope())
+        .run("gabi.gas.balancing", gabi_envelope())
         .await
         .expect("the run completes");
     assert_eq!(out.status, RunStatus::Succeeded, "run status");
@@ -256,7 +256,7 @@ async fn the_model_is_asked_with_the_manifests_own_procedure() {
         .build();
 
     runtime
-        .run_tainted("gabi.gas.balancing", gabi_envelope())
+        .run("gabi.gas.balancing", gabi_envelope())
         .await
         .expect("run");
 
@@ -355,10 +355,7 @@ async fn run_and_dump_journal(event: serde_json::Value) -> String {
         .agent(Agent::new(&manifest))
         .build();
 
-    let out = runtime
-        .run_tainted("gabi.gas.balancing", event)
-        .await
-        .expect("run");
+    let out = runtime.run("gabi.gas.balancing", event).await.expect("run");
 
     let records = store.read(out.run_id, 0).await.expect("journal records");
     records
@@ -458,7 +455,7 @@ async fn a_key_ring_seals_personal_data_in_the_journal() {
         .build();
 
     let out = runtime
-        .run_tainted("gabi.gas.balancing", gabi_envelope())
+        .run("gabi.gas.balancing", gabi_envelope())
         .await
         .expect("run");
 
