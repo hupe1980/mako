@@ -45,13 +45,6 @@ metrics = ["dep:prometheus"]
 ## Adds a global GCRA rate limiter (429 when exhausted) via `governor`.
 rate-limit = ["dep:governor"]
 
-## Enables plugin extension points — CloudEvent, Billing, Validator, Webhook, McpTool.
-## Register plugins via `PluginRegistry` in service startup code.
-plugins = []
-
-## Enables WASM plugin loading via Extism (Wasmtime). Requires `plugins` feature.
-wasm-plugins = ["plugins", "mako-plugin/wasm"]
-
 [dependencies]
 mako-events = { workspace = true }
 thiserror  = { workspace = true }
@@ -104,8 +97,8 @@ krafka                    = { workspace = true, optional = true }
 # Optional Prometheus dep — only compiled when feature=metrics is enabled
 prometheus                = { version = "0.14", default-features = false, features = ["process"], optional = true }
 
-# Plugin infrastructure (always compiled — lightweight trait definitions only).
-# Enable `plugins` feature for PluginRegistry re-export; `wasm-plugins` for WASM loading.
+# Operator event-bus extension point. Trait + registry only — no runtime cost
+# when a deployment registers no plugin (`WebhookBus` checks `is_empty` first).
 mako-plugin              = { workspace = true }
 
 # Optional governor dep — only compiled when feature=rate-limit is enabled

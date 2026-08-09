@@ -1736,6 +1736,20 @@ fn emit_expected_components(out: &mut String, segments: &[&MigSegment]) {
             continue;
         }
         for (i, elem) in seg.elements.iter().enumerate() {
+            // Only a **mandatory** element gets an exact-arity arm.
+            //
+            // `expected_components` is an exact count and outranks the
+            // directory's own cap, which correctly reads "more components than
+            // declared is an error, fewer is normal — conditional components
+            // may be omitted". Emitting it for a conditional element converts
+            // "may be omitted" into "must be present with exactly N", which
+            // rejects a conformant message wherever a middle composite is
+            // unused: BDEW writes `STS+7++E01'` precisely because C555 is
+            // *nicht benutzt* for Statuskategorie 7, and an element between two
+            // populated ones cannot be left out, only left empty.
+            if elem.status != "M" {
+                continue;
+            }
             if let Some(components) = elem.components {
                 if components == 1 {
                     arms.push((seg.tag.clone(), i, components as u8));
@@ -4627,7 +4641,7 @@ fn emit_profile_impl(out: &mut String, p: &ProfileData, struct_name: &str, _feat
     .unwrap();
     writeln!(
         out,
-        "        fn group_schema(&self) -> &'static [GroupDef] {{ GROUP_SCHEMA }}"
+        "        fn group_schema(&self) -> &'static [GroupDef<'static>] {{ GROUP_SCHEMA }}"
     )
     .unwrap();
     writeln!(out, "    }}").unwrap();

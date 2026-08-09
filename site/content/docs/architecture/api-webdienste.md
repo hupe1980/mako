@@ -59,11 +59,10 @@ participants who are in scope for iMS.
 
 ### EDIFACT/AS4 channel — `edi-energy` + `mako-engine` + `makod`
 
-```toml
-[dependencies]
-edi-energy  = { version = "0.14", features = ["utilmd", "mscons"] }
-mako-engine = { version = "0.14", features = ["slatedb"] }
-mako-gpke   = "0.14"   # or mako-wim / mako-geli-gas / mako-mabis
+```bash
+cargo add edi-energy --features utilmd,mscons
+cargo add mako-engine --features slatedb
+cargo add mako-gpke          # or mako-wim / mako-geli-gas / mako-mabis
 ```
 
 Use these crates for:
@@ -76,10 +75,9 @@ See the [Process Engine Guide](@/docs/architecture/engine.md) for `mako-engine` 
 
 ### `energy-api` — for iMS REST processes
 
-```toml
-[dependencies]
-energy-api = { version = "0.14", features = ["client"] }   # HTTP client
-energy-api = { version = "0.14", features = ["server"] }   # Axum server handler
+```bash
+cargo add energy-api --features client   # HTTP client
+cargo add energy-api --features server   # Axum server handler
 ```
 
 Use this crate for:

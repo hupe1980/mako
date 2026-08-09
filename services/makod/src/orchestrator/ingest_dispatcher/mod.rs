@@ -45,7 +45,10 @@ use mako_engine::{
     version::{FormatVersion, WorkflowId},
     workflow::{CommandPayload, Workflow},
 };
-use mako_gabi_gas::{GaBiGasAllocationWorkflow, GaBiGasInvoicWorkflow, GaBiGasNominationWorkflow};
+use mako_gabi_gas::{
+    AllocationCommand, GaBiGasAllocationWorkflow, GaBiGasInvoicWorkflow, GaBiGasNominationWorkflow,
+    NominationCommand,
+};
 use mako_geli_gas::{
     GeliGasDatanabrufWorkflow, GeliGasLfAnmeldungWorkflow, GeliGasLfStornierungWorkflow,
     GeliGasMsconsWorkflow, GeliGasPartinWorkflow, GeliGasSperrprozesseInvoicWorkflow,
@@ -64,6 +67,7 @@ use mako_mabis::{MabisBillingWorkflow, MabisClearinglisteWorkflow};
 use mako_wim::{
     WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimInvoicWorkflow,
     WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
+    WimTechnikAenderungWorkflow,
 };
 use mako_wim_gas::{
     WimGasAnmeldungWorkflow, WimGasGeraeteubernahmeWorkflow, WimGasInsrptWorkflow,

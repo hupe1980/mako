@@ -520,9 +520,14 @@ Teil 1 and AWH Änderung Technik (BK6-24-174). APERAK Frist: **5 Werktage**.
 
 > **ORDRSP semantics:** 19005 = Auftragsbestätigung Änderung Technik · 19006 = Ablehnung ·
 > 19003 = Fortführungsbestätigung · 19004 = Ablehnung Fortführung ·
-> 19007 = Ablehnung Anforderung Messwerte. ORDRSP 19003–19007 route to
-> `wim-technik-aenderung`. The ESA Ab-/Bestellung answers (ORDRSP 19011–19014)
+> 19007 = Ablehnung Anforderung Messwerte. ORDRSP 19003–19007 resume the process
+> that sent the ORDERS; a rejection reason is read from `FTX`, falling back to the
+> `BGM` response code. The ESA Ab-/Bestellung answers (ORDRSP 19011–19014)
 > belong to the ESA Wertebestellung below, **not** here.
+>
+> **Direction:** mako implements the **requester** side of all three rows — it
+> sends the ORDERS and ingests the ORDRSP. Receiving an inbound 17011/17118 as
+> the MSB is a separate workflow that does not exist yet.
 
 ### ESA Wertebestellung (WiM Strom Teil 2, Kap. 4)
 

@@ -218,9 +218,7 @@ fn expected_components(tag: &str, idx: usize) -> Option<u8> {
         | ("UNT", 1)
         | ("NAD", 0)
         | ("LOC", 0)
-        | ("CTA", 0)
         | ("PYT", 0)
-        | ("LIN", 0)
         | ("TAX", 0)
         | ("ALC", 0) => Some(1),
         _ => None,
@@ -2684,7 +2682,7 @@ impl Profile for InvoicFv20251001Profile {
     fn directory_validator(&self) -> &'static DirectoryValidator {
         directory_validator()
     }
-    fn group_schema(&self) -> &'static [GroupDef] {
+    fn group_schema(&self) -> &'static [GroupDef<'static>] {
         GROUP_SCHEMA
     }
 }

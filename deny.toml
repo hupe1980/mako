@@ -137,16 +137,6 @@ version = "0.23"
 reason  = "rmcp 3.1 (the MCP server SDK) pins base64 0.23; the mainline workspace (arrow, agentd, …) uses base64 0.22 (canonical). Resolve when rmcp bumps base64 or the mainline reaches 0.23."
 
 [[bans.skip]]
-name    = "wasm-encoder"
-version = "0.245"
-reason  = "wasmtime 43 internals pin wasm-encoder 0.245 while wast 254 (via wat/wasm-compose in the same extism/mako-plugin chain) uses 0.254. Resolve when extism bumps wasmtime."
-
-[[bans.skip]]
-name    = "wast"
-version = "35"
-reason  = "witx 0.9 (transitive via wiggle/wasi-common of the extism/wasmtime WASM plugin sandbox in mako-plugin) pins the ancient wast 0.35; wasmtime's own tooling uses current wast. Resolve when wiggle drops witx or extism updates."
-
-[[bans.skip]]
 name    = "typed-builder"
 version = "0.20.1"
 reason  = "iceberg 0.9.1 (edmd Iceberg cold-tier archive) pins typed-builder 0.20.1; rubo4e 0.8.0 (the BO4E domain model, used workspace-wide) uses 0.23.2. Resolve when iceberg bumps typed-builder."
@@ -373,8 +363,6 @@ name    = "windows_x86_64_gnu"
 version = "0.48"
 reason  = "windows_x86_64_gnu 0.48 legacy path alongside newer version."
 
-
-
 # ── p256/ecdsa vs asx-rs const-oid split ─────────────────────────────────────────
 # p256/ecdsa (energy-api) use const-oid 0.9 (RustCrypto 2022 generation).
 # asx-rs / digest 0.11 / hmac 0.13 use const-oid 0.10 (RustCrypto 2024 generation).
@@ -443,17 +431,6 @@ ignore = [
     # a private key; this usage only verifies signatures (public-key operation).
     # Resolve when asx-rs updates to a mitigated rsa version.
     { id = "RUSTSEC-2023-0071", reason = "rsa Marvin timing attack; only used for signature verification (public-key operation) via asx-rs WS-Security — not for key decryption" },
-    # RUSTSEC-2026-0222: wasmtime 43 "Stores can mix up type indices between engines".
-    # wasmtime 43 is pulled ONLY by extism (the WASM plugin sandbox in mako-plugin),
-    # behind the OPT-IN `wasm-plugins` feature that NO service enables and no default
-    # turns on — so wasmtime never ships in a production binary; it appears only in the
-    # `--all-features` graph that cargo-deny and clippy scan. The bug also requires
-    # sharing/mixing type indices across *multiple* wasmtime engines; extism uses one
-    # engine per plugin and mako exposes only host-function-gated plugins, so the
-    # cross-engine confusion is not reachable in our usage. There is no fix in the 43.x
-    # line (patched: 46.0.2+/47.0.3+) and extism 1.30 (latest) pins wasmtime ^43.
-    # Resolution: drop this ignore the moment extism bumps to a patched wasmtime line.
-    { id = "RUSTSEC-2026-0222", reason = "wasmtime 43 type-index confusion; reachable only via the opt-in wasm-plugins feature (enabled by no service → not in any shipped binary), single-engine extism usage, and no fix exists in wasmtime 43.x (extism 1.30 pins ^43)" },
 ]
 
 # ── Bans: duplicate-version skip entries ──────────────────────────────────────
@@ -520,11 +497,6 @@ reason  = "iceberg ecosystem requires itertools 0.13 alongside workspace 0.14/0.
 name    = "itertools"
 version = "=0.14"
 reason  = "transitional: iceberg/slatedb ecosystem requires 0.14 alongside 0.15."
-
-[[bans.skip]]
-name    = "quick-xml"
-version = "=0.26"
-reason  = "roxmltree/testcontainers require an older quick-xml alongside workspace 0.40/0.41."
 
 [[bans.skip]]
 name    = "quick-xml"
@@ -602,16 +574,6 @@ version = "=0.7"
 reason  = "iceberg 0.9.1 uses petgraph 0.7; workspace uses petgraph 0.8."
 
 [[bans.skip]]
-name    = "petgraph"
-version = "=0.6"
-reason  = "wasm-compose (extism/mako-plugin wasmtime 43 chain, all-features graph) pins petgraph 0.6; workspace uses 0.8. Resolve when extism bumps wasmtime."
-
-[[bans.skip]]
-name    = "fixedbitset"
-version = "=0.4"
-reason  = "companion of petgraph 0.6 on the extism/wasmtime chain; petgraph 0.8 uses fixedbitset 0.5."
-
-[[bans.skip]]
 name    = "syn"
 version = "2.0"
 reason  = "async-trait 0.1.91 (datafusion 53 via edmd, lance via agentd) uses syn 3; the rest of the proc-macro graph is still on syn 2."
@@ -641,12 +603,6 @@ name    = "webpki-roots"
 version = "=0.26"
 reason  = "older rustls consumers use webpki-roots 0.26; newer use 1.0."
 
-# ── strum three-way split (0.26 / 0.27 / 0.28) ───────────────────────────────────
-[[bans.skip]]
-name    = "strum"
-version = "0.26"
-reason  = "strum three-way split after cargo update: 0.26 pulled by older ecosystem crates."
-
 [[bans.skip]]
 name    = "strum"
 version = "0.27"
@@ -654,19 +610,8 @@ reason  = "strum three-way split: 0.27 pulled by mid-generation crates; 0.28 is 
 
 [[bans.skip]]
 name    = "strum_macros"
-version = "0.26"
-reason  = "proc-macro companion of strum 0.26."
-
-[[bans.skip]]
-name    = "strum_macros"
 version = "0.27"
 reason  = "proc-macro companion of strum 0.27."
-
-# ── bitflags 1.x vs 2.x ──────────────────────────────────────────────────────────
-[[bans.skip]]
-name    = "bitflags"
-version = "1"
-reason  = "Some ecosystem crates still depend on bitflags 1.x; workspace uses 2.x."
 
 # ── lz4_flex 0.11 vs 0.13 ─────────────────────────────────────────────────────
 # krafka 0.12 pins lz4_flex 0.11; 0.13 is current.
@@ -675,23 +620,6 @@ name    = "lz4_flex"
 version = "0.11"
 reason  = "krafka 0.12 pins lz4_flex 0.11 (visible in the all-features graph); 0.13 is current."
 
-# ── nix 0.26 vs 0.31 ─────────────────────────────────────────────────────────────
-[[bans.skip]]
-name    = "nix"
-version = "0.26"
-reason  = "nix 0.26 pulled by older OS-level deps in the ecosystem; 0.31 is current."
-
-# ── snafu 0.8 vs 0.9 ─────────────────────────────────────────────────────────────
-[[bans.skip]]
-name    = "snafu"
-version = "0.8"
-reason  = "snafu 0.8 pulled by some iceberg/datafusion ecosystem crates; 0.9 is current."
-
-[[bans.skip]]
-name    = "snafu-derive"
-version = "0.8"
-reason  = "proc-macro companion of snafu 0.8."
-
 # ── object_store 0.13 (three-way: 0.12 / 0.13 / 0.14) ───────────────────────────
 # 0.12 was already skipped above. Adding 0.13 for the cargo update bump.
 [[bans.skip]]
@@ -699,17 +627,15 @@ name    = "object_store"
 version = "=0.13"
 reason  = "object_store split: datafusion 53 / lance pin 0.13; makod + slatedb use 0.14. Resolve when lance updates to 0.14."
 
-# ── toml ecosystem split (extism/mako-plugin/wasmtime build-dep chain) ────────────
-# extism 1.30 (mako-plugin WASM sandbox) + wasmtime 43 pull a newer toml/toml_edit
-# ecosystem via cbindgen, proc-macro-crate, and witx build dependencies.
-# The workspace runtime (figment, slatedb) uses toml 0.8 / toml_edit 0.22.
-# All duplicates below are build-time vs runtime splits — no shared state.
-# Resolve when extism/wasmtime align their build deps with the runtime toml stack.
+# ── toml ecosystem split (build-dep vs runtime) ───────────────────────────────
+# Build dependencies (cbindgen and friends) pull the toml 0.9 line; the workspace
+# runtime (figment, slatedb) uses toml 0.8. Build-time vs runtime — no shared
+# state. Resolve when the runtime stack reaches toml 0.9.
 
 [[bans.skip]]
 name    = "toml"
 version = "=0.8"
-reason  = "runtime side of the split: figment/slatedb use toml 0.8 while cbindgen and wasmtime-internal-cache (extism/mako-plugin build chain) use toml 0.9. Build-time vs runtime — no shared state. Resolve when extism/wasmtime align."
+reason  = "runtime side of the split: figment/slatedb use toml 0.8 while build-dependency crates (cbindgen chain) use toml 0.9. Build-time vs runtime — no shared state. Resolve when figment/slatedb reach toml 0.9."
 
 [[bans.skip]]
 name    = "toml_datetime"
@@ -719,34 +645,28 @@ reason  = "companion to toml 0.8 (toml_edit 0.22 chain)."
 [[bans.skip]]
 name    = "toml_datetime"
 version = "=0.7"
-reason  = "companion to toml 0.9 (extism cbindgen build-dep chain)."
-
-[[bans.skip]]
-name    = "toml_edit"
-version = "=0.22"
-reason  = "runtime (toml 0.8/figment) uses toml_edit 0.22; extism build-dep pulls toml_edit 0.25."
+reason  = "companion to toml 0.9 (cbindgen build-dep chain)."
 
 [[bans.skip]]
 name    = "serde_spanned"
 version = "=0.6"
-reason  = "companion to toml 0.8 (runtime figment/slatedb chain); toml 0.9 (extism build-dep) uses serde_spanned 1.1."
+reason  = "companion to toml 0.8 (runtime figment/slatedb chain); toml 0.9 (build-dep chain) uses serde_spanned 1.1."
 
-# ── rustix 0.38 / linux-raw-sys 0.4 / socket2 0.5 (prometheus + krafka + wasi-common) ──────
+# ── rustix 0.38 / linux-raw-sys 0.4 / socket2 0.5 (prometheus + krafka) ───────
 # These older versions are pulled by:
-# - prometheus 0.14 → procfs 0.17 → rustix 0.38 (mako-service rate metrics)
-# - wasi-common 43 → system-interface → rustix 0.38 (extism/mako-plugin WASM sandbox)
+# - prometheus 0.14 → procfs 0.17 → rustix 0.38 (mako-service metrics)
 # - krafka 0.12 → socket2 0.5 (mako-service Kafka EventBus feature)
 # Modern stack (asx-rs, foyer/slatedb, tokio) uses rustix 1.x / socket2 0.6.
 
 [[bans.skip]]
 name    = "rustix"
 version = "0.38"
-reason  = "prometheus 0.14 (procfs chain) + wasi-common 43 (extism/mako-plugin) pin rustix 0.38; modern stack uses rustix 1.x."
+reason  = "prometheus 0.14 (procfs chain) pins rustix 0.38; modern stack uses rustix 1.x."
 
 [[bans.skip]]
 name    = "linux-raw-sys"
 version = "0.4"
-reason  = "companion to rustix 0.38 (prometheus/procfs + wasi-common chain); modern stack pulls linux-raw-sys 0.12."
+reason  = "companion to rustix 0.38 (prometheus/procfs chain); modern stack pulls linux-raw-sys 0.12."
 
 [[bans.skip]]
 name    = "socket2"
@@ -763,45 +683,12 @@ name    = "dashmap"
 version = "5"
 reason  = "governor 0.6 (mako-service rate-limit) pins dashmap 5; asx-rs/datafusion use dashmap 6."
 
-# ── rand_xoshiro 0.6 (wasm-compose/wasmtime 43) ─────────────────────────────
-# im-rc (via wasm-compose/wasmtime 43/extism/mako-plugin) pins rand_xoshiro 0.6;
-# lance-datagen/slatedb use 0.7.
-
-# ── addr2line / gimli / object split (backtrace vs wasmtime 43) ───────────────────
-# backtrace 0.3 (miette/cedar/pprof chain) uses addr2line 0.25/gimli 0.32/object 0.37.
-# wasmtime 43 (extism/mako-plugin WASM sandbox) uses addr2line 0.26/gimli 0.33/object 0.38.
-# Resolve when backtrace updates its addr2line/gimli/object deps.
-
-[[bans.skip]]
-name    = "addr2line"
-version = "0.25"
-reason  = "backtrace 0.3 (miette/cedar/pprof chain) uses addr2line 0.25; wasmtime 43 uses 0.26."
-
-[[bans.skip]]
-name    = "gimli"
-version = "0.32"
-reason  = "companion to addr2line 0.25 (backtrace chain); wasmtime 43 uses gimli 0.33."
+# ── object split (backtrace vs ar_archive_writer) ─────────────────────────────
 
 [[bans.skip]]
 name    = "object"
 version = "0.37"
 reason  = "backtrace 0.3.76 (miette/cedar chain) pins object 0.37; the newer cedar → ar_archive_writer chain uses object 0.39 (canonical). Resolve when backtrace bumps object."
-
-[[bans.skip]]
-name    = "object"
-version = "0.38"
-reason  = "wasmtime 43 (extism/mako-plugin WASM sandbox, all-features graph) pins object 0.38. Vanishes when extism bumps wasmtime."
-
-[[bans.skip]]
-name    = "rand_xoshiro"
-version = "0.6"
-reason  = "im-rc (wasm-compose/wasmtime 43/extism) pins rand_xoshiro 0.6; lance-datagen/slatedb use 0.7."
-
-# ── wasm-encoder / wast split (wasmtime 43 internal versioning) ───────────────────
-# wasmtime 43 uses wasm-encoder 0.245 directly; wasm-compose/wat (via wasmtime 43)
-# depend on wasm-encoder 0.253 / wast 253. Older wast 35 is pulled by witx/wiggle
-# (also via wasmtime 43). Both splits are internal to the wasmtime 43 dep tree.
-# Resolve when wasmtime aligns its internal wasm-tools versions.
 
 # ── ordered-float 4.x (three-way: 2 / 4 / 5) ────────────────────────────────────
 # 2 was already skipped above (petgraph 0.7). Adding 4.x for the cargo update bump.
@@ -821,14 +708,3 @@ reason  = "phf three-way split after cargo update: 0.11 (older crates), 0.12 (mi
 name    = "phf_shared"
 version = "=0.12"
 reason  = "paired with phf 0.12 skip."
-
-[[bans.skip]]
-name    = "phf_codegen"
-version = "0.11"
-reason  = "phf_codegen 0.11 pulled by older ecosystem crates; 0.13 is current."
-
-[[bans.skip]]
-name    = "phf_generator"
-version = "0.11"
-reason  = "phf_generator 0.11 pulled by older ecosystem crates; 0.13 is current."
-

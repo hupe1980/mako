@@ -201,8 +201,8 @@ Each issue carries:
 
 Enable the `serde` feature to serialize reports as JSON:
 
-```toml
-edi-energy = { version = "0.14", features = ["serde"] }
+```bash
+cargo add edi-energy --features serde
 ```
 
 ```rust
@@ -230,8 +230,8 @@ Output shape:
 
 Enable the `diagnostics` feature for `miette` integration:
 
-```toml
-edi-energy = { version = "0.14", features = ["diagnostics"] }
+```bash
+cargo add edi-energy --features diagnostics
 ```
 
 Reports then implement `miette::Diagnostic`, giving annotated terminal output with source spans when used with the `miette` error handler.

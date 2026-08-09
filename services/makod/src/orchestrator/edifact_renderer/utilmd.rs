@@ -96,7 +96,7 @@ pub(super) fn render_utilmd(
         .process_date(dtm_qualifier, &process_date_yyyymmdd);
     // SG4 STS Transaktionsgrund (e.g. EoG cause codes Z36/ZT6/ZC7, §38 EnWG).
     if let Some(grund) = p.get("transaktionsgrund").and_then(|v| v.as_str()) {
-        tx = tx.status(grund);
+        tx = tx.transaktionsgrund(grund);
     }
     finish_interchange(tx.done().serialize(), sender, receiver, msg)
 }

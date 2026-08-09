@@ -44,9 +44,8 @@ explicitly (or `--all-features`) for the full set of 17.
 
 Add to `Cargo.toml`:
 
-```toml
-[dependencies]
-edi-energy = "0.14"
+```bash
+cargo add edi-energy
 ```
 
 ### Parse and validate
@@ -191,9 +190,8 @@ automatically — no per-message format selection is needed.
 
 To enable a minimal build for a single message type:
 
-```toml
-[dependencies]
-edi-energy = { version = "0.14", default-features = false, features = ["utilmd", "serde"] }
+```bash
+cargo add edi-energy --no-default-features --features utilmd,serde
 ```
 
 ## Multi-Tenant and Test Isolation

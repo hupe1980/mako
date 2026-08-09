@@ -40,8 +40,9 @@ use mako_engine::{
     process::Process,
 };
 use mako_gabi_gas::{
-    DeliveryOrderCommand, GaBiGasAllocationWorkflow, GaBiGasDeliveryOrderWorkflow,
-    GaBiGasInvoicCommand, GaBiGasInvoicWorkflow, GaBiGasNominationWorkflow, NominationCommand,
+    AllocationCommand, DeliveryOrderCommand, GaBiGasAllocationWorkflow,
+    GaBiGasDeliveryOrderWorkflow, GaBiGasInvoicCommand, GaBiGasInvoicWorkflow,
+    GaBiGasNominationWorkflow, NominationCommand,
 };
 use mako_geli_gas::{
     GasSperrungLfCommand, GasSperrungNbCommand, GasSupplierChangeCommand, GeliGasDatanabrufCommand,
@@ -754,17 +755,31 @@ pub async fn dispatch_deadline(
                 .map(|_| ())
         }
         "gabi-gas-allocation" => {
-            // ALOCAT is a simple receive-and-record workflow with no deadline obligation.
-            // This arm exists solely to satisfy assert_dispatch_coverage.
-            tracing::debug!(
+            // KoV §6.4 final-allocation window (end of month M+2, 12:00 CET).
+            // If it fires with no binding final ALOCAT on file, the gas day's
+            // imbalance cannot be settled. `on_deadline` refuses to raise it for
+            // a stream that is already settled or already overdue, so reaching
+            // the event here means the obligation really was missed.
+            tracing::error!(
                 deadline_id = %deadline_id,
-                "gabi-gas-allocation: no deadline action (simple receipt workflow)",
+                label       = %label,
+                "REGULATORY ALERT: GaBi Gas final-allocation window expired \
+                 (KoV §6.4) — no binding final ALOCAT was received for this gas \
+                 day by the end of month M+2. The imbalance cannot be settled; \
+                 raise a Clearingfall with the FNB/MGV.",
             );
-            let _ = Process::<GaBiGasAllocationWorkflow, _>::from_identity(
+            let p = Process::<GaBiGasAllocationWorkflow, _>::from_identity(
                 Arc::clone(&event_store),
                 identity,
             );
-            Ok(())
+            p.execute_and_enqueue_with_retry(
+                AllocationCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
         }
         "gabi-gas-mmma" => {
             // MMMA (Gas Allokationsliste) is a receive-and-record workflow with no deadline

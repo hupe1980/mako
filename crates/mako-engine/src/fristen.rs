@@ -82,7 +82,7 @@ pub const CONTRL_FRIST_HOURS: i64 = 6;
 /// entry. The outbox worker clears the deadline after successful CONTRL delivery.
 /// If the deadline fires before the CONTRL is delivered, the 6h Frist has been
 /// violated (CONTRL AHB 1.0 §1.2).
-pub const CONTRL_FRIST_LABEL: &str = "contrl-delivery";
+pub const CONTRL_FRIST_LABEL: &str = "contrl-6h-delivery-window";
 
 /// Compute the CONTRL delivery deadline as 6 wall-clock hours after `received`.
 ///
@@ -708,7 +708,7 @@ mod tests {
     #[test]
     fn contrl_frist_label_is_stable() {
         // Changing this label would silently orphan all existing Deadline records.
-        assert_eq!(CONTRL_FRIST_LABEL, "contrl-delivery");
+        assert_eq!(CONTRL_FRIST_LABEL, "contrl-6h-delivery-window");
     }
 
     #[test]

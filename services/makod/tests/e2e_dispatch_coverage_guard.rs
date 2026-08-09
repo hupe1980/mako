@@ -177,6 +177,20 @@ const SEND_ONLY_PIDS: &[(u32, &str, &str)] = &[
         "gpke-konfiguration-aenderung",
         "Bestellung Änderung Abrechnungsdaten — NB receiver not implemented",
     ),
+    // ── WiM Technikänderung ORDERS Anfragen ──────────────────────────────────
+    // mako implements the requester side: it sends these and ingests the
+    // ORDRSP 19003–19007 answers. The MSB receiving side has no command —
+    // `TechnikAenderungCommand` models `SendAuftrag`, not `ReceiveAuftrag`.
+    (
+        17011,
+        "wim-technik-aenderung",
+        "Beauftragung Änderung der Technik (LF/NB → MSB) — MSB receiver not implemented",
+    ),
+    (
+        17118,
+        "wim-technik-aenderung",
+        "Bestellung Konfigurationsänderung (MSB → MSB) — MSB receiver not implemented",
+    ),
 ];
 
 /// The EDIFACT message directory a PID's band belongs to.
@@ -304,6 +318,26 @@ NAD+MS+4012345000023::293'NAD+MR+9900357000004::293'UNS+D'UNT+8+1'UNZ+1+1'"
     Some(msg)
 }
 
+/// `true` when a `Skipped` reason means **nothing handled the message**.
+///
+/// Two distinct shapes drop a message silently, and both must count:
+///
+/// - `pid_not_in_*` — the workflow has an arm, but its inner `match pid` has no
+///   branch for this Prüfidentifikator.
+/// - `phase2_dispatch_not_yet_implemented` / `workflow_not_in_dispatch_table` —
+///   the *whole workflow* is a stub, so every one of its registered PIDs is
+///   dropped at once. This is the wider gap of the two, and checking only the
+///   first shape hid seven `wim-technik-aenderung` PIDs behind a single stub
+///   arm.
+///
+/// Every other reason (`no_malo_id`, `process_not_found`, `*_resumes_only`)
+/// means the PID *did* reach its arm and the arm made a domain decision.
+fn is_silent_drop(reason: &str) -> bool {
+    reason.starts_with("pid_not_in_")
+        || reason == "phase2_dispatch_not_yet_implemented"
+        || reason == "workflow_not_in_dispatch_table"
+}
+
 async fn make_dispatcher() -> EdifactIngestDispatcher {
     let store = SlateDbStore::open_in_memory()
         .await
@@ -377,7 +411,7 @@ async fn every_registered_pid_reaches_a_dispatch_arm() {
 
         let dropped = matches!(
             dispatcher.dispatch(&msg, &wf, pid).await,
-            Ok(IngestOutcome::Skipped { reason, .. }) if reason.starts_with("pid_not_in_")
+            Ok(IngestOutcome::Skipped { reason, .. }) if is_silent_drop(reason)
         );
 
         match (dropped, allowed.contains(&(pid, wf.as_str()))) {

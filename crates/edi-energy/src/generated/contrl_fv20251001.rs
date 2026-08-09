@@ -110,16 +110,10 @@ fn expected_components(tag: &str, idx: usize) -> Option<u8> {
         ("UNH", 0)
         | ("UCI", 0)
         | ("UCI", 3)
-        | ("UCI", 4)
-        | ("UCI", 5)
         | ("UNT", 0)
         | ("UNT", 1)
-        | ("UCM", 0)
         | ("UCM", 2)
-        | ("UCM", 3)
-        | ("UCM", 4)
         | ("UCS", 0)
-        | ("UCS", 1)
         | ("UCD", 0) => Some(1),
         _ => None,
     }
@@ -364,7 +358,7 @@ impl Profile for ContrlFv20251001Profile {
     fn directory_validator(&self) -> &'static DirectoryValidator {
         directory_validator()
     }
-    fn group_schema(&self) -> &'static [GroupDef] {
+    fn group_schema(&self) -> &'static [GroupDef<'static>] {
         GROUP_SCHEMA
     }
 }

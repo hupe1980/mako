@@ -937,6 +937,19 @@ pub fn geli_gas_stammdaten_registry()
                 .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
                 .unwrap_or_default();
 
+            // A Stammdatenanfrage **data-return** is an answer, not a change.
+            // mako implements only the answering side of the G8–G10 round-trip,
+            // so nothing should send us one — and the fall-through below would
+            // otherwise apply it as a master-data Änderung. Refuse it loudly:
+            // an audited rejection beats a silent wrong write.
+            if mako_geli_gas::stammdatenaenderung::is_anfrage_response_pid(pid_u32) {
+                return Err(EngineError::Deserialization(format!(
+                    "GeLi Gas Stammdaten adapter: PID {pid_u32} is a Stammdatenanfrage \
+                     data-return; mako implements no requester side, so there is no open \
+                     Anfrage for it to answer"
+                )));
+            }
+
             // Stammdatenanfrage (G8–G10): we are the data owner — answer with the
             // requested master data (auto data-return).
             if mako_geli_gas::stammdatenaenderung::is_anfrage_request_pid(pid_u32) {

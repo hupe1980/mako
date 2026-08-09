@@ -29,8 +29,13 @@
 //!
 //! ```text
 //! New
-//!  └─ AllocationReceived   [terminal — no response required]
+//!  └─ Recorded ──(correction / final ALOCAT)──→ Recorded
+//!       └─ FinalOverdue   [KoV §6.4 M+2 deadline passed with no final]
 //! ```
+//!
+//! No response is sent, but the process is **not** terminal on first receipt:
+//! KoV §6.4 lets the FNB/MGV correct an allocation and then confirm a binding
+//! final one, and only the final allocation settles the imbalance.
 //!
 //! # Regulatory basis
 //!
@@ -39,7 +44,9 @@
 //! - **DVGW ALOCAT 5.11a** — message format (valid from 2024-10-01)
 
 use mako_engine::{
+    deadline::Deadline,
     error::WorkflowError,
+    ids::DeadlineId,
     types::MessageRef,
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
@@ -59,6 +66,15 @@ pub const ALLOCATION_PIDS: &[u32] = &[90001, 90002, 90003];
 
 /// Workflow key for PID router registration.
 pub const WORKFLOW_NAME: &str = "gabi-gas-allocation";
+
+/// Deadline label for the KoV §6.4 final-allocation window.
+///
+/// The binding final allocation is due by the end of month M+2 at 12:00 CET;
+/// register a [`mako_engine::deadline::Deadline`] with this label using
+/// [`GasDay::final_alocat_deadline_utc`] when the first ALOCAT for a gas day is
+/// recorded. If it fires with no [`AllocationVersion::Final`] on file, the
+/// FNB/MGV has missed a binding obligation.
+pub const FINAL_ALOCAT_DEADLINE_LABEL: &str = "gabi-gas-final-alocat-deadline";
 
 // ── Allocation type ───────────────────────────────────────────────────────────
 
@@ -181,12 +197,24 @@ pub enum AllocationEvent {
         /// ALOCAT document message reference.
         message_ref: MessageRef,
     },
+
+    /// The KoV §6.4 final-allocation window closed with no binding final
+    /// ALOCAT on file. The imbalance for this gas day cannot be settled.
+    FinalAllocationOverdue {
+        /// Gas day whose final allocation is missing.
+        gas_day: GasDay,
+        /// Deadline that fired, for audit.
+        deadline_id: DeadlineId,
+        /// Deadline label (always [`FINAL_ALOCAT_DEADLINE_LABEL`]).
+        label: Box<str>,
+    },
 }
 
 impl EventPayload for AllocationEvent {
     fn event_type(&self) -> &'static str {
         match self {
             Self::AllocationReceived { .. } => "GaBiGasAllocationReceived",
+            Self::FinalAllocationOverdue { .. } => "GaBiGasFinalAllocationOverdue",
         }
     }
 }
@@ -208,8 +236,12 @@ pub enum AllocationState {
     /// No ALOCAT received yet.
     #[default]
     New,
-    /// ALOCAT received and recorded (terminal).
-    AllocationReceived(Box<AllocationData>),
+    /// At least one ALOCAT recorded. The payload is the **most recent** one —
+    /// its [`AllocationVersion`] says whether that is the initial allocation, a
+    /// correction, or the binding final.
+    Recorded(Box<AllocationData>),
+    /// The KoV §6.4 window closed with no final allocation on file.
+    FinalOverdue(Box<AllocationData>),
 }
 
 impl AllocationState {
@@ -218,8 +250,28 @@ impl AllocationState {
     pub fn label(&self) -> &'static str {
         match self {
             Self::New => "New",
-            Self::AllocationReceived(_) => "AllocationReceived",
+            Self::Recorded(_) => "Recorded",
+            Self::FinalOverdue(_) => "FinalOverdue",
         }
+    }
+
+    /// The most recent allocation on file, if any.
+    #[must_use]
+    pub fn latest(&self) -> Option<&AllocationData> {
+        match self {
+            Self::New => None,
+            Self::Recorded(d) | Self::FinalOverdue(d) => Some(d),
+        }
+    }
+
+    /// `true` once the binding final allocation has been recorded. No further
+    /// correction is admissible after this point (KoV §6.4).
+    #[must_use]
+    pub fn is_settled(&self) -> bool {
+        matches!(
+            self.latest().map(|d| d.version),
+            Some(AllocationVersion::Final)
+        )
     }
 }
 
@@ -255,6 +307,14 @@ pub enum AllocationCommand {
         /// ALOCAT document message reference.
         message_ref: MessageRef,
     },
+
+    /// The KoV §6.4 final-allocation deadline fired.
+    TimeoutExpired {
+        /// Deadline identifier, for audit.
+        deadline_id: DeadlineId,
+        /// Deadline label (always [`FINAL_ALOCAT_DEADLINE_LABEL`]).
+        label: Box<str>,
+    },
 }
 
 impl CommandPayload for AllocationCommand {}
@@ -272,8 +332,29 @@ impl Workflow for GaBiGasAllocationWorkflow {
     type Event = AllocationEvent;
     type Command = AllocationCommand;
 
-    fn apply(_state: Self::State, event: &Self::Event) -> Self::State {
+    /// Fire the timeout only while a final allocation is still outstanding.
+    /// A settled or already-overdue stream must not re-raise it.
+    fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
+        match (deadline.label(), state) {
+            (FINAL_ALOCAT_DEADLINE_LABEL, AllocationState::New)
+            | (FINAL_ALOCAT_DEADLINE_LABEL, AllocationState::Recorded(_))
+                if !state.is_settled() =>
+            {
+                Some(AllocationCommand::TimeoutExpired {
+                    deadline_id: deadline.deadline_id(),
+                    label: deadline.label().into(),
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn apply(state: Self::State, event: &Self::Event) -> Self::State {
         match event {
+            AllocationEvent::FinalAllocationOverdue { .. } => match state {
+                AllocationState::Recorded(d) => AllocationState::FinalOverdue(d),
+                other => other,
+            },
             AllocationEvent::AllocationReceived {
                 synthetic_pid,
                 allocation_type,
@@ -284,7 +365,7 @@ impl Workflow for GaBiGasAllocationWorkflow {
                 allocated_quantity,
                 clearing_number,
                 message_ref,
-            } => AllocationState::AllocationReceived(Box::new(AllocationData {
+            } => AllocationState::Recorded(Box::new(AllocationData {
                 synthetic_pid: *synthetic_pid,
                 allocation_type: *allocation_type,
                 sender_eic: sender_eic.clone(),
@@ -313,8 +394,15 @@ impl Workflow for GaBiGasAllocationWorkflow {
                 clearing_number,
                 message_ref,
             } => {
-                if !matches!(state, AllocationState::New) {
-                    return Err(WorkflowError::invalid_state("New", state.label()));
+                // KoV §6.4 admits corrections and then one binding final
+                // allocation, so a second ALOCAT for the same gas day is the
+                // normal case, not an error. Only a message *after* the final
+                // one is refused — the final allocation settles the imbalance.
+                if state.is_settled() {
+                    return Err(WorkflowError::rejected(
+                        "the binding final allocation is already on file; \
+                         KoV §6.4 admits no further correction",
+                    ));
                 }
                 let allocation_type = AllocationType::from_pid(synthetic_pid).ok_or_else(|| {
                     WorkflowError::rejected(format!(
@@ -332,6 +420,22 @@ impl Workflow for GaBiGasAllocationWorkflow {
                     allocated_quantity,
                     clearing_number,
                     message_ref,
+                }]
+                .into())
+            }
+
+            AllocationCommand::TimeoutExpired { deadline_id, label } => {
+                // Idempotent: a settled or already-overdue stream records nothing.
+                let AllocationState::Recorded(data) = state else {
+                    return Ok(WorkflowOutput::events(vec![]));
+                };
+                if state.is_settled() {
+                    return Ok(WorkflowOutput::events(vec![]));
+                }
+                Ok(vec![AllocationEvent::FinalAllocationOverdue {
+                    gas_day: data.gas_day,
+                    deadline_id,
+                    label,
                 }]
                 .into())
             }

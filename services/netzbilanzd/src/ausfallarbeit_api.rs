@@ -13,6 +13,12 @@
 //!   (one entry per Viertelstunde) plus the sum, for every Kap.-3 variant.
 //! - `POST /api/v1/redispatch/ausfallarbeit/ueberbauung` — the Kap.-3.4 cap
 //!   for one Viertelstunde of a Netzlokation across its TR.
+//! - `POST /api/v1/redispatch/ausfallarbeit/kf-bin` — the Kap.-3.2.3.2
+//!   Wind-Bin-Verfahren factor `KF_Bin` for offshore Windenergieanlagen, to be
+//!   fed back in as `kf` on a `wind_spitz` request.
+//! - `POST /api/v1/redispatch/ausfallarbeit/malo-split` — splits one
+//!   marktlokationsscharfer Wert onto the TR behind the MaLo
+//!   (§ 24 Abs. 3 S. 2 EEG 2023).
 
 use axum::Json;
 use axum::http::StatusCode;
@@ -308,6 +314,118 @@ pub async fn post_ausfallarbeit_ueberbauung(Json(req): Json<UeberbauungRequest>)
     }
 }
 
+// ── Kap. 3.2.3.2 — Wind-Bin-Verfahren (KF_Bin) ──────────────────────────────
+
+/// Per-bin Leistungswerte for one 0,5-m/s wind-speed bin.
+///
+/// `leistungswerte_kw` must already be filtered to störungsfreier Betrieb,
+/// unrestricted feed-in and ≥ 10 % Nennleistung, per Kap. 3.2.3.2. Fewer than
+/// [`engine::WIND_BIN_MINDEST_WERTEPAARE`] pairs makes the bin invalid and the
+/// Ersatzwert chain below applies.
+#[derive(Debug, Deserialize)]
+pub struct KfBinRequest {
+    /// Wind speed in m/s identifying the bin. Echoed back as `bin_index`.
+    pub windgeschwindigkeit_ms: Decimal,
+    /// Measured Leistungswerte of the bin in kW.
+    #[serde(default)]
+    pub leistungswerte_kw: Vec<Decimal>,
+    /// Zertifizierte Leistungskennlinie value `P_zertLK` for the bin, in kW.
+    pub p_zert_lk: Decimal,
+    /// `KF_LBin` of the same bin in the Vormonat, if one was determined.
+    #[serde(default)]
+    pub kf_lbin_vormonat: Option<Decimal>,
+    /// `KF_LBin` of the same bin in the Folgemonat, if one was determined.
+    #[serde(default)]
+    pub kf_lbin_folgemonat: Option<Decimal>,
+    /// Mittelwert of the twelve months before the relevant month, if available.
+    #[serde(default)]
+    pub kf_lbin_zwoelf_monats_mittel: Option<Decimal>,
+    /// Einspeisung at the Messlokation over twelve months, in kWh.
+    pub e_einsp_kwh: Decimal,
+    /// Sum of the WEA-side Erzeugung over the same twelve months, in kWh.
+    pub summe_e_wea_kwh: Decimal,
+}
+
+#[derive(Debug, Serialize)]
+pub struct KfBinResponse {
+    /// Index of the 0,5-m/s bin the wind speed falls into.
+    pub bin_index: i64,
+    /// Leistungsfaktor of the bin.
+    pub kf_lbin: Decimal,
+    /// Where `kf_lbin` came from — `monat` when the bin was sufficiently
+    /// occupied, otherwise the Ersatzwert step that supplied it.
+    pub kf_lbin_quelle: engine::KfLbinQuelle,
+    /// Verlustfaktor `KF_V` over twelve months.
+    pub kf_v: Decimal,
+    /// `KF_Bin = KF_LBin × KF_V` — pass this as `kf` on a `wind_spitz` request.
+    pub kf_bin: Decimal,
+}
+
+/// `POST /api/v1/redispatch/ausfallarbeit/kf-bin`
+///
+/// An underoccupied bin is not an error: Kap. 3.2.3.2 prescribes a binding
+/// Ersatzwert order (Vormonat → Folgemonat → 12-Monats-Mittel → 1), and the
+/// response names which step applied so the operator can evidence it.
+pub async fn post_ausfallarbeit_kf_bin(Json(req): Json<KfBinRequest>) -> Response {
+    let kf_v = match engine::verlustfaktor(req.e_einsp_kwh, req.summe_e_wea_kwh) {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+    };
+
+    let (kf_lbin, kf_lbin_quelle) = match engine::kf_lbin(&req.leistungswerte_kw, req.p_zert_lk) {
+        Ok(v) => (v, engine::KfLbinQuelle::Monat),
+        Err(engine::AusfallarbeitError::BinUnterbesetzt(_)) => engine::kf_lbin_ersatzwert(
+            req.kf_lbin_vormonat,
+            req.kf_lbin_folgemonat,
+            req.kf_lbin_zwoelf_monats_mittel,
+        ),
+        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+    };
+
+    Json(KfBinResponse {
+        bin_index: engine::wind_bin_index(req.windgeschwindigkeit_ms),
+        kf_lbin,
+        kf_lbin_quelle,
+        kf_v,
+        kf_bin: engine::kf_bin(kf_lbin, kf_v),
+    })
+    .into_response()
+}
+
+// ── § 24 Abs. 3 S. 2 EEG 2023 — MaLo → TR split ─────────────────────────────
+
+/// One marktlokationsscharfer Wert and the installed capacities to split it by.
+#[derive(Debug, Deserialize)]
+pub struct MaloSplitRequest {
+    /// The MaLo-level value to distribute (kWh or kW — the split is linear, so
+    /// the unit is whatever the caller supplied).
+    pub malo_wert: Decimal,
+    /// Installierte Leistung `P_inst,k` per TR in kW, in the caller's order.
+    pub p_inst_kw: Vec<Decimal>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MaloSplitResponse {
+    /// The per-TR share, in the same order as `p_inst_kw`.
+    pub anteile: Vec<Decimal>,
+}
+
+/// `POST /api/v1/redispatch/ausfallarbeit/malo-split`
+///
+/// A measurement taken at the Marktlokation has to reach the Technische
+/// Ressourcen behind it before any Kap.-3 variant can be applied per TR. The
+/// split is pro rata by installed capacity; `Σ P_inst ≤ 0` is refused rather
+/// than divided by.
+pub async fn post_ausfallarbeit_malo_split(Json(req): Json<MaloSplitRequest>) -> Response {
+    if req.p_inst_kw.is_empty() {
+        return (StatusCode::BAD_REQUEST, "p_inst_kw is empty").into_response();
+    }
+    match engine::malo_wert_auf_tr(req.malo_wert, &req.p_inst_kw) {
+        Ok(anteile) => Json(MaloSplitResponse { anteile }).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,6 +433,23 @@ mod tests {
 
     fn dec(v: f64) -> Decimal {
         Decimal::from_f64(v).expect("finite")
+    }
+
+    /// Read a handler `Response` back as JSON.
+    async fn body_json(resp: Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        serde_json::from_slice(&bytes).expect("json body")
+    }
+
+    /// Decimals serialise as strings; compare them numerically.
+    fn dec_field(v: &serde_json::Value, key: &str) -> Decimal {
+        v[key]
+            .as_str()
+            .expect("decimal string")
+            .parse()
+            .expect("decimal")
     }
 
     #[test]
@@ -365,5 +500,92 @@ mod tests {
         .expect("valid request");
         // P_lim = min(950, 1000) = 950 → (400 − 950)/4 = −137.5 (Mehrarbeit).
         assert_eq!(compute(&req).expect("computes"), vec![dec(-137.5)]);
+    }
+
+    #[tokio::test]
+    async fn kf_bin_uses_the_measured_bin_when_it_is_occupied() {
+        let req: KfBinRequest = serde_json::from_value(serde_json::json!({
+            "windgeschwindigkeit_ms": "8.2",
+            "leistungswerte_kw": ["900", "1000", "1100"],
+            "p_zert_lk": "2000",
+            "e_einsp_kwh": "900000",
+            "summe_e_wea_kwh": "1000000"
+        }))
+        .expect("valid request");
+        let body = body_json(post_ausfallarbeit_kf_bin(Json(req)).await).await;
+        // Bin index = round(8.2 / 0.5) = 16; KF_LBin = 1000/2000 = 0.5;
+        // KF_V = 0.9 → KF_Bin = 0.45.
+        assert_eq!(body["bin_index"], serde_json::json!(16));
+        assert_eq!(body["kf_lbin_quelle"], serde_json::json!("monat"));
+        assert_eq!(dec_field(&body, "kf_bin"), dec(0.45));
+    }
+
+    /// An underoccupied bin must fall through the binding Ersatzwert order
+    /// rather than fail — and say which step supplied the value.
+    #[tokio::test]
+    async fn kf_bin_falls_through_the_ersatzwert_chain() {
+        let req: KfBinRequest = serde_json::from_value(serde_json::json!({
+            "windgeschwindigkeit_ms": "3.0",
+            "leistungswerte_kw": ["900"],
+            "p_zert_lk": "2000",
+            "kf_lbin_folgemonat": "0.6",
+            "e_einsp_kwh": "900000",
+            "summe_e_wea_kwh": "1000000"
+        }))
+        .expect("valid request");
+        let body = body_json(post_ausfallarbeit_kf_bin(Json(req)).await).await;
+        assert_eq!(body["kf_lbin_quelle"], serde_json::json!("folgemonat"));
+        assert_eq!(dec_field(&body, "kf_bin"), dec(0.54));
+    }
+
+    /// `KF_V` outside `]0;1[` is a data error, not a silent clamp.
+    #[tokio::test]
+    async fn kf_bin_rejects_a_verlustfaktor_outside_its_domain() {
+        let req: KfBinRequest = serde_json::from_value(serde_json::json!({
+            "windgeschwindigkeit_ms": "8.0",
+            "leistungswerte_kw": ["900", "1000", "1100"],
+            "p_zert_lk": "2000",
+            "e_einsp_kwh": "1200000",
+            "summe_e_wea_kwh": "1000000"
+        }))
+        .expect("valid request");
+        let resp = post_ausfallarbeit_kf_bin(Json(req)).await;
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// The split is pro rata by installed capacity and conserves the total.
+    #[tokio::test]
+    async fn malo_split_distributes_pro_rata_by_installed_capacity() {
+        let req: MaloSplitRequest = serde_json::from_value(serde_json::json!({
+            "malo_wert": "1000",
+            "p_inst_kw": ["3000", "1000"]
+        }))
+        .expect("valid request");
+        let body = body_json(post_ausfallarbeit_malo_split(Json(req)).await).await;
+        let anteile: Vec<Decimal> = body["anteile"]
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .expect("decimal string")
+                    .parse()
+                    .expect("decimal")
+            })
+            .collect();
+        assert_eq!(anteile, vec![dec(750.0), dec(250.0)]);
+        assert_eq!(anteile.iter().copied().sum::<Decimal>(), dec(1000.0));
+    }
+
+    /// Zero installed capacity is a data error, not a division.
+    #[tokio::test]
+    async fn malo_split_refuses_zero_installed_capacity() {
+        let req: MaloSplitRequest = serde_json::from_value(serde_json::json!({
+            "malo_wert": "1000",
+            "p_inst_kw": ["0", "0"]
+        }))
+        .expect("valid request");
+        let resp = post_ausfallarbeit_malo_split(Json(req)).await;
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 }

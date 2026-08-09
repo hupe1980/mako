@@ -214,6 +214,74 @@ if let AnyMessage::Mscons(m) = &msg {
 }
 ```
 
+### Data elements are addressed by code, not by position
+
+Segment accessors name the BDEW data element they read —
+`#[edifact(element = "9013")]`, not `element = 2` — and the derive resolves it
+against a `SegmentDefinition` **at compile time**. A code that does not exist in
+the segment, or that appears at more than one position, is a build error rather
+than a silent read of the neighbouring field.
+
+The layouts come from the BDEW MIGs rather than the UN/EDIFACT directory,
+because for EDI@Energy the two differ: a MIG may mark a composite *nicht
+benutzt* (which keeps its slot but empties it), and it may restrict which
+components a composite carries. `edi_energy::messages::layouts` holds them, and
+a guard checks every addressed code against the MIG layouts so an edit to one
+has to move the other.
+
+### `STS` is polymorphic in its Statuskategorie
+
+`STS` carries its value in one of two composites, and **which one depends on
+DE 9015 in element 0**. The BDEW MIGs mark the other *nicht benutzt* in each
+case, so reading the wrong one yields `None` for every conformant message.
+
+| Statuskategorie (element 0) | Value in | Element | Example |
+|---|---|---|---|
+| `7` Transaktionsgrund (UTILMD) | `C556` / DE 9013 | 2 | `STS+7++E01'` |
+| `Z33` Plausibilisierungshinweis (MSCONS) | `C556` / DE 9013 | 2 | `STS+Z33++Z84'` |
+| `Z18` Bilanzkreiszuordnung (UTILMD) | `C555` / DE 4405 | 1 | `STS+Z18+Z13'` |
+| `10` Messklassifizierung (MSCONS) | `C555` / DE 4405 | 1 | `STS+10+Z36'` |
+
+`Sts` exposes both — `reason_code` (DE 9013) and `status_code` (DE 4405) — plus
+`Sts::code()`, which returns whichever this instance actually populates. Prefer
+`code()` unless the Statuskategorie is known.
+
+Note the empty middle element in `STS+7++E01'`: an unused composite between two
+populated ones must be written empty, never omitted, because a MIG may mark an
+element unused but cannot renumber the ones after it. The same rule puts the
+`CCI` Merkmal at element 2 (`CCI+15++BI1'`), behind an unused `C502`.
+
+---
+
+## Character repertoire
+
+**BDEW MaKo interchanges declare `UNB+UNOC:3`, and `UNOC` is ISO 8859-1 — not
+UTF-8.** In `UNOC` the `ü` of "Prüfidentifikator" is the single byte `0xFC`, so
+a conformant German interchange handed to a UTF-8 parser is rejected as invalid
+text. Party names, addresses and `FTX` free text carry umlauts routinely, which
+makes this the common case rather than an edge one.
+
+Every parse entry point reads the repertoire out of the interchange's own `UNB`
+S001 DE 0001 and decodes accordingly — nothing to configure:
+
+| Repertoire | Encoding | Handling |
+|---|---|---|
+| `UNOA`, `UNOB` | ASCII subsets | Borrowed, zero-copy |
+| `UNOC` | ISO 8859-1 | Transcoded to UTF-8 |
+| `UNOD`–`UNOK` | ISO 8859-2 … -9 | Transcoded to UTF-8 |
+| `UNOY` | UTF-8 | Borrowed, zero-copy |
+| `UNOX`, `KECA` | stateful / multi-byte | Refused rather than mis-decoded |
+
+An ASCII payload is borrowed rather than copied, so the zero-copy path is
+untouched for the interchanges this does not affect. The streaming entry points
+buffer only far enough to find the `UNB` before streaming the rest through the
+right decoder, so constant memory is preserved.
+
+**Outbound**, `InterchangeBuilder` encodes into the repertoire its `UNB`
+declares. A `UNOC` header over a UTF-8 body arrives as mojibake with nothing in
+the file to explain why, so a character the repertoire cannot carry is refused
+at build time instead.
+
 ---
 
 ## Security Notes

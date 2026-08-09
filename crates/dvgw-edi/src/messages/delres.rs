@@ -254,22 +254,14 @@ mod tests {
     use super::*;
 
     fn seg(tag: &str, elements: Vec<Vec<&str>>) -> OwnedSegment {
-        use edifact_rs::{OwnedElement, Span};
-        OwnedSegment {
-            tag: tag.to_owned(),
-            span: Span::new(0, 0),
-            tag_span: Span::new(0, 0),
-            elements: elements
+        use edifact_rs::OwnedElement;
+        OwnedSegment::new(
+            tag,
+            elements
                 .into_iter()
-                .map(|comps| OwnedElement {
-                    span: Span::new(0, 0),
-                    components: comps
-                        .into_iter()
-                        .map(|c| (c.to_owned(), Span::new(0, 0)))
-                        .collect(),
-                })
+                .map(|comps| OwnedElement::of(&comps))
                 .collect(),
-        }
+        )
     }
 
     fn accepted_segments() -> Vec<OwnedSegment> {

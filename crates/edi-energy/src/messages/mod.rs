@@ -175,6 +175,27 @@ macro_rules! impl_edi_energy_message {
 ))]
 pub mod segments;
 
+#[cfg(any(
+    feature = "utilmd",
+    feature = "mscons",
+    feature = "aperak",
+    feature = "contrl",
+    feature = "invoic",
+    feature = "remadv",
+    feature = "orders",
+    feature = "iftsta",
+    feature = "insrpt",
+    feature = "reqote",
+    feature = "partin",
+    feature = "ordchg",
+    feature = "ordrsp",
+    feature = "quotes",
+    feature = "comdis",
+    feature = "pricat",
+    feature = "utilts",
+))]
+pub mod layouts;
+
 /// APERAK — Application Error and Acknowledgement message.
 #[cfg(feature = "aperak")]
 pub mod aperak;

@@ -1156,7 +1156,7 @@ impl Profile for RemadvFv20260401Profile {
     fn directory_validator(&self) -> &'static DirectoryValidator {
         directory_validator()
     }
-    fn group_schema(&self) -> &'static [GroupDef] {
+    fn group_schema(&self) -> &'static [GroupDef<'static>] {
         GROUP_SCHEMA
     }
 }

@@ -608,10 +608,17 @@ UNZ+1+1'";
 
 /// CONTRL missing the mandatory UCI segment (invalid — triggers MIG-UCI-REQ).
 #[cfg(feature = "contrl")]
+/// A CONTRL with a body but no `UCI`.
+///
+/// The body must not be empty: ISO 9735-1 §7.3 requires content between `UNH`
+/// and `UNT`, and an empty message is rejected at parse — before `MIG-UCI-REQ`
+/// could ever be reached. A `UCM` keeps the message well-formed while leaving
+/// the `UCI` absent, which is what this fixture is for.
 const CONTRL_MISSING_UCI: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
 UNH+1+CONTRL:D:3:UN:2.0b'\
-UNT+2+1'\
+UCM+1+UTILMD:D:11A:UN:S1.2e+4'\
+UNT+3+1'\
 UNZ+1+1'";
 
 #[cfg(feature = "contrl")]

@@ -345,10 +345,12 @@ fn default_subscriber_id() -> String {
     "edmd".to_owned()
 }
 fn default_event_types() -> Vec<String> {
+    // Exactly the two types `handler.rs` branches on. Subscribing to more
+    // would register a marktd fan-out edge whose deliveries edmd silently
+    // discards.
     vec![
         mako_events::mako::PROCESS_INITIATED.to_owned(),
         mako_events::mako::PROCESS_COMPLETED.to_owned(),
-        mako_events::mako::EDIFACT_INBOUND.to_owned(),
     ]
 }
 

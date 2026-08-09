@@ -138,7 +138,7 @@ pub trait Profile: Send + Sync {
     /// implementing the per-SG-instance segment window.
     ///
     /// Returns an empty slice for profiles with no segment groups.
-    fn group_schema(&self) -> &'static [edifact_rs::GroupDef] {
+    fn group_schema(&self) -> &'static [edifact_rs::GroupDef<'static>] {
         &[]
     }
 }

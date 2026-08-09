@@ -124,7 +124,7 @@ pub use portfolio::{ConservationViolation, GasMarketRole, GasPortfolioBalance, P
 
 pub use allocation::{
     ALLOCATION_PIDS, AllocationCommand, AllocationData, AllocationEvent, AllocationState,
-    AllocationType, AllocationVersion, GaBiGasAllocationWorkflow,
+    AllocationType, AllocationVersion, FINAL_ALOCAT_DEADLINE_LABEL, GaBiGasAllocationWorkflow,
     WORKFLOW_NAME as ALLOCATION_WORKFLOW_NAME,
 };
 pub use delord::{

@@ -29,19 +29,19 @@ use edifact_rs::{EdifactDeserialize, EdifactSerialize};
 /// | 1       | 1004 | Document / message number (Pruefidentifikator value)     |
 /// | 2       | 1225 | Message function, coded (e.g. `9` = original)            |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "BGM")]
+#[edifact(segment = "BGM", layout = crate::messages::layouts::BGM)]
 pub struct Bgm {
     /// DE 1001 — document / message name code.  In EDI@Energy this is the
     /// message category identifier (e.g. `"E01"` for grid-feed-in UTILMD,
     /// `"1000"` for a positive APERAK).
-    #[edifact(element = 0)]
+    #[edifact(element = "1001")]
     pub document_code: String,
     /// DE 1004 — document / message number.  Carries the Pruefidentifikator
     /// value (e.g. `"11001"`) or an 8-digit document reference number.
-    #[edifact(element = 1)]
+    #[edifact(element = "1004")]
     pub document_id: Option<String>,
     /// DE 1225 — message function, coded (e.g. `"9"` = original).
-    #[edifact(element = 2)]
+    #[edifact(element = "1225")]
     pub function: Option<String>,
 }
 
@@ -71,17 +71,17 @@ impl Bgm {
 /// | 0       | 1         | 2380 | Date/time/period text value             |
 /// | 0       | 2         | 2379 | Date/time/period format qualifier       |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "DTM")]
+#[edifact(segment = "DTM", layout = crate::messages::layouts::DTM)]
 pub struct Dtm {
     /// DE 2005 — date/time/period qualifier (e.g. `"137"` = document date,
     /// `"163"` = beginning of delivery period).
-    #[edifact(element = 0)]
+    #[edifact(element = "2005")]
     pub qualifier: String,
     /// DE 2380 — date/time/period value (e.g. `"20230101"`).
-    #[edifact(element = 0, component = 1)]
+    #[edifact(element = "2380")]
     pub value: Option<String>,
     /// DE 2379 — date/time/period format qualifier (e.g. `"102"` = CCYYMMDD).
-    #[edifact(element = 0, component = 2)]
+    #[edifact(element = "2379")]
     pub format: Option<String>,
 }
 
@@ -132,13 +132,13 @@ impl Dtm {
 /// - `"MR"` — message recipient (DE 3035)
 /// - `"AG"` — authorised/requesting agent
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "NAD", qualifier_from = 0)]
+#[edifact(segment = "NAD", qualifier_from = 0, layout = crate::messages::layouts::NAD)]
 pub struct Nad {
     /// DE 3035 — party function qualifier (e.g. `"MS"` = message sender).
-    #[edifact(element = 0)]
+    #[edifact(element = "3035")]
     pub qualifier: String,
     /// DE 3039 — party identification code (GLN / BDEW code), component 0 of C082.
-    #[edifact(element = 1)]
+    #[edifact(element = "3039")]
     pub party_id: Option<String>,
     /// DE 3055 — code list responsible agency, component 2 of C082.
     ///
@@ -149,10 +149,10 @@ pub struct Nad {
     /// - `"332"` — DVGW (legacy gas-sector codes)
     ///
     /// Use [`crate::AgencyCode`] to parse or format this value.
-    #[edifact(element = 1, component = 2)]
+    #[edifact(element = "3055")]
     pub agency_code: Option<String>,
     /// DE 3036 — party name, component 0 of C080.
-    #[edifact(element = 3)]
+    #[edifact(element = "3036")]
     pub party_name: Option<String>,
 }
 
@@ -172,13 +172,13 @@ pub struct Nad {
 /// - `"TN"` — transaction reference number
 /// - `"Z13"` — Pruefidentifikator of referenced message
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "RFF")]
+#[edifact(segment = "RFF", layout = crate::messages::layouts::RFF)]
 pub struct Rff {
     /// DE 1153 — reference function qualifier (e.g. `"ACW"`, `"TN"`, `"Z13"`).
-    #[edifact(element = 0)]
+    #[edifact(element = "1153")]
     pub qualifier: String,
     /// DE 1154 — reference identifier value.
-    #[edifact(element = 0, component = 1)]
+    #[edifact(element = "1154")]
     pub reference: Option<String>,
 }
 
@@ -193,15 +193,15 @@ pub struct Rff {
 /// | 0       | 0         | 7495 | Object type qualifier               |
 /// | 1       | 0         | 7402 | Identity number (MaLo / MeLo ID)    |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "IDE")]
+#[edifact(segment = "IDE", layout = crate::messages::layouts::IDE)]
 pub struct Ide {
     /// DE 7495 — object type qualifier (e.g. `"Z18"` = Marktlokation,
     /// `"Z19"` = Messlokation).
-    #[edifact(element = 0)]
+    #[edifact(element = "7495")]
     pub qualifier: String,
     /// DE 7402 — object identity number (component 0 of C206).
     /// Must be exactly 11 upper-case alphanumeric characters for EDI@Energy.
-    #[edifact(element = 1)]
+    #[edifact(element = "7402")]
     pub object_id: Option<String>,
 }
 
@@ -214,13 +214,13 @@ pub struct Ide {
 /// | 0       | 0         | 3227 | Location function qualifier         |
 /// | 1       | 0         | 3225 | Location name code                  |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "LOC")]
+#[edifact(segment = "LOC", layout = crate::messages::layouts::LOC)]
 pub struct Loc {
     /// DE 3227 — location function qualifier (e.g. `"172"` = measurement point).
-    #[edifact(element = 0)]
+    #[edifact(element = "3227")]
     pub qualifier: String,
     /// DE 3225 — location name code / identifier, component 0 of C517.
-    #[edifact(element = 1)]
+    #[edifact(element = "3225")]
     pub location_id: Option<String>,
 }
 
@@ -230,21 +230,18 @@ pub struct Loc {
 ///
 /// Used in APERAK to carry application-level error codes.
 ///
-/// | Element | Component | DE   | Meaning                             |
-/// |---------|-----------|------|-------------------------------------|
-/// | 0       | 0         | 9321 | Application error code              |
+/// | Element | DE   | Composite | Meaning                                  |
+/// |---------|------|-----------|------------------------------------------|
+/// | 0       | 9321 | `C901`    | Anwendungsfehler, Code                   |
+///
+/// `C901` carries **only** DE 9321 in the BDEW profile — DE 1131 (code list)
+/// and DE 3055 (agency) are not part of it. BDEW's example is `ERC+Z10'`.
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "ERC")]
+#[edifact(segment = "ERC", layout = crate::messages::layouts::ERC)]
 pub struct Erc {
-    /// DE 9321 — application error code (component 0 of C901).
-    #[edifact(element = 0)]
+    /// DE 9321 — Anwendungsfehler, Code (`C901`).
+    #[edifact(element = "9321")]
     pub error_code: String,
-    /// DE 1131 — code list identification (component 1 of C901), if present.
-    #[edifact(element = 0, component = 1)]
-    pub code_list_id: Option<String>,
-    /// DE 3055 — responsible agency code (component 2 of C901), if present.
-    #[edifact(element = 0, component = 2)]
-    pub agency_code: Option<String>,
 }
 
 // ── FTX ───────────────────────────────────────────────────────────────────────
@@ -259,14 +256,14 @@ pub struct Erc {
 /// | 1       | 0         | 4453 | Text function, coded                |
 /// | 3       | 0         | 4440 | Free text (first line)              |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "FTX")]
+#[edifact(segment = "FTX", layout = crate::messages::layouts::FTX)]
 pub struct Ftx {
     /// DE 4451 — text subject qualifier (e.g. `"AAI"` = general information,
     /// `"AIM"` = APERAK error text, `"ZZZ"` = mutually defined).
-    #[edifact(element = 0)]
+    #[edifact(element = "4451")]
     pub qualifier: String,
     /// DE 4440 — free text, component 0 of C108 (element 3).
-    #[edifact(element = 3)]
+    #[edifact(element = "4440")]
     pub text: Option<String>,
 }
 
@@ -282,16 +279,16 @@ pub struct Ftx {
 /// | 0       | 1         | 6060 | Quantity value                      |
 /// | 0       | 2         | 6411 | Measurement unit code               |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "QTY")]
+#[edifact(segment = "QTY", layout = crate::messages::layouts::QTY)]
 pub struct Qty {
     /// DE 6063 — quantity type code qualifier (e.g. `"220"` = metered quantity).
-    #[edifact(element = 0)]
+    #[edifact(element = "6063")]
     pub qualifier: String,
     /// DE 6060 — quantity value as string (e.g. `"1234.5"`).
-    #[edifact(element = 0, component = 1)]
+    #[edifact(element = "6060")]
     pub value: Option<String>,
     /// DE 6411 — measurement unit code (e.g. `"KWH"`, `"MWH"`, `"M3"`).
-    #[edifact(element = 0, component = 2)]
+    #[edifact(element = "6411")]
     pub unit: Option<String>,
 }
 
@@ -329,20 +326,20 @@ impl Qty {
 /// | 2       | 0         | 0010 | Recipient identification             |
 /// | 3       | 0         | 0083 | Action, coded (4/7/8)                |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "UCI")]
+#[edifact(segment = "UCI", layout = edifact_rs::service::UCI)]
 pub struct Uci {
     /// DE 0020 — interchange control reference.
-    #[edifact(element = 0)]
+    #[edifact(element = "0020")]
     pub interchange_ref: String,
-    /// DE 0004 — sender identification (S002 component 0).
-    #[edifact(element = 1)]
+    /// DE 0004 — sender identification (S002).
+    #[edifact(element = "0004")]
     pub sender: Option<String>,
-    /// DE 0010 — recipient identification (S003 component 0).
-    #[edifact(element = 2)]
+    /// DE 0010 — recipient identification (S003).
+    #[edifact(element = "0010")]
     pub recipient: Option<String>,
     /// DE 0083 — action, coded: `"4"` = acknowledged, `"7"` = rejected (group),
     /// `"8"` = rejected (interchange).
-    #[edifact(element = 3)]
+    #[edifact(element = "0083")]
     pub action_code: Option<String>,
 }
 
@@ -356,17 +353,17 @@ pub struct Uci {
 /// | 1       | 0         | 0065 | Message type identifier              |
 /// | 1       | 4         | 0057 | Association assigned code (release)  |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "UNH")]
+#[edifact(segment = "UNH", layout = edifact_rs::service::UNH)]
 pub struct Unh {
     /// DE 0062 — message reference number.
-    #[edifact(element = 0)]
+    #[edifact(element = "0062")]
     pub message_ref: String,
     /// DE 0065 — message type identifier (e.g. `"UTILMD"`, `"MSCONS"`).
-    #[edifact(element = 1)]
+    #[edifact(element = "0065")]
     pub message_type: String,
-    /// DE 0057 — association assigned code, component 4 of S009
-    /// (e.g. `"5.5.3a"`).  This is the EDI@Energy release identifier.
-    #[edifact(element = 1, component = 4)]
+    /// DE 0057 — association assigned code (S009).  This is the EDI@Energy
+    /// release identifier, e.g. `"5.5.3a"`.
+    #[edifact(element = "0057")]
     pub assoc_code: Option<String>,
 }
 
@@ -379,13 +376,13 @@ pub struct Unh {
 /// | 0       | 0         | 0074 | Number of segments in message        |
 /// | 1       | 0         | 0062 | Message reference number             |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "UNT")]
+#[edifact(segment = "UNT", layout = edifact_rs::service::UNT)]
 pub struct Unt {
     /// DE 0074 — number of segments in the message (including UNH and UNT).
-    #[edifact(element = 0)]
+    #[edifact(element = "0074")]
     pub segment_count: String,
-    /// DE 0062 — message reference number (must match UNH element 0).
-    #[edifact(element = 1)]
+    /// DE 0062 — message reference number (must match the `UNH`).
+    #[edifact(element = "0062")]
     pub message_ref: String,
 }
 
@@ -463,47 +460,45 @@ pub(crate) fn collect_com(segments: &[edifact_rs::Segment<'_>]) -> Vec<Com> {
 /// | 2       | 0         | 0083 | Action, coded (`"4"` = acknowledged, `"7"` = rejected) |
 /// | 3       | 0         | 0085 | Syntax error code (if rejected)      |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "UCM")]
+#[edifact(segment = "UCM", layout = edifact_rs::service::UCM)]
 pub struct Ucm {
-    /// DE 0062 — message reference number (matches UNH element 0).
-    #[edifact(element = 0)]
+    /// DE 0062 — message reference number (matches the `UNH`).
+    #[edifact(element = "0062")]
     pub message_ref: String,
     /// DE 0065 — message type identifier (e.g. `"UTILMD"`).
-    #[edifact(element = 1)]
+    #[edifact(element = "0065")]
     pub message_type: String,
-    /// DE 0057 — association assigned code (component 4 of S009).
-    #[edifact(element = 1, component = 4)]
+    /// DE 0057 — association assigned code (S009).
+    #[edifact(element = "0057")]
     pub assoc_code: Option<String>,
     /// DE 0083 — action, coded: `"4"` = acknowledged, `"7"` = rejected.
-    #[edifact(element = 2)]
+    #[edifact(element = "0083")]
     pub action_code: String,
-    /// DE 0085 — syntax error code (component 0 of S011), present when rejected.
-    #[edifact(element = 3)]
+    /// DE 0085 — syntax error, coded; present when rejected.
+    #[edifact(element = "0085")]
     pub syntax_error: Option<String>,
 }
 
 // ── UCS ───────────────────────────────────────────────────────────────────────
 
-/// `UCS` — Segment Identification (CONTRL SG2).
+/// `UCS` — Segment Error Indication (CONTRL SG2).
 ///
-/// Identifies the erroneous segment within a message.
+/// Identifies the erroneous segment within a message. Both data elements are
+/// **simple** — ISO 9735-4 gives `UCS` no composite, and the service segment
+/// tag (DE 0135) belongs to `UCI`/`UCF`/`UCM`, not here.
 ///
-/// | Element | Component | DE   | Meaning                             |
-/// |---------|-----------|------|-------------------------------------|
-/// | 0       | 0         | 0096 | Segment position in message body    |
-/// | 0       | 1         | 0135 | Service segment tag (if applicable) |
-/// | 1       | 0         | 0085 | Syntax error code                   |
+/// | Element | DE   | Meaning                                        |
+/// |---------|------|------------------------------------------------|
+/// | 1       | 0096 | Segment position in message body (`UNH` is 1)  |
+/// | 2       | 0085 | Syntax error, coded                            |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "UCS")]
+#[edifact(segment = "UCS", layout = edifact_rs::service::UCS)]
 pub struct Ucs {
-    /// DE 0096 — segment position in message body (component 0 of S011).
-    #[edifact(element = 0)]
+    /// DE 0096 — segment position in message body, counting the `UNH` as 1.
+    #[edifact(element = "0096")]
     pub segment_position: String,
-    /// DE 0135 — service segment tag (component 1 of S011).
-    #[edifact(element = 0, component = 1)]
-    pub segment_tag: Option<String>,
     /// DE 0085 — syntax error, coded.
-    #[edifact(element = 1)]
+    #[edifact(element = "0085")]
     pub error_code: Option<String>,
 }
 
@@ -517,16 +512,16 @@ pub struct Ucs {
 /// | 1       | 0         | 0098 | Data element position               |
 /// | 1       | 1         | 0104 | Component position (optional)       |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "UCD")]
+#[edifact(segment = "UCD", layout = edifact_rs::service::UCD)]
 pub struct Ucd {
     /// DE 0085 — syntax error, coded.
-    #[edifact(element = 0)]
+    #[edifact(element = "0085")]
     pub error_code: String,
-    /// DE 0098 — data element position (component 0 of C085).
-    #[edifact(element = 1)]
+    /// DE 0098 — erroneous data element position in the segment (S011).
+    #[edifact(element = "0098")]
     pub element_position: Option<String>,
-    /// DE 0104 — component data element position (component 1 of C085).
-    #[edifact(element = 1, component = 1)]
+    /// DE 0104 — erroneous component data element position (S011).
+    #[edifact(element = "0104")]
     pub component_position: Option<String>,
 }
 
@@ -540,10 +535,10 @@ pub struct Ucd {
 /// |---------|-----------|------|-------------------------------------|
 /// | 0       | 0         | 1082 | Line item number (sequential)       |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "LIN")]
+#[edifact(segment = "LIN", layout = crate::messages::layouts::LIN)]
 pub struct Lin {
     /// DE 1082 — line item number.
-    #[edifact(element = 0)]
+    #[edifact(element = "1082")]
     pub line_number: Option<String>,
 }
 
@@ -589,21 +584,21 @@ pub struct Lin {
 /// one component and its colons are escaped structurally — never pre-join the
 /// composite with `:` and hand it to `write_raw`.
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "PIA")]
+#[edifact(segment = "PIA", layout = crate::messages::layouts::PIA)]
 pub struct Pia {
     /// DE 4347 — product ID function qualifier (e.g. `"5"` = product ID).
-    #[edifact(element = 0)]
+    #[edifact(element = "4347")]
     pub qualifier: String,
     /// DE 7140 — full OBIS code (e.g. `"1-0:1.8.0"`).
     ///
     /// This field contains the complete OBIS identifier because the BDEW AHB
     /// requires the `:` inside OBIS values to be escaped with `?:`.
     /// `edifact-rs` strips the release character during parsing.
-    #[edifact(element = 1)]
+    #[edifact(element = "7140")]
     pub item_number: Option<String>,
     /// DE 7143 — item type code (e.g. `"Z12"` for OBIS, `"SRW"` for
     /// Strom-Richtung-Wirkleistung).
-    #[edifact(element = 1, component = 1)]
+    #[edifact(element = "7143")]
     pub item_type: Option<String>,
 }
 
@@ -637,60 +632,79 @@ impl Pia {
 ///
 /// In MSCONS, carries the time-series type (Zeitreihentyp).
 ///
-/// | Element | Component | DE   | Meaning                              |
-/// |---------|-----------|------|--------------------------------------|
-/// | 0       | 0         | 7059 | Property class code (optional)       |
-/// | 2       | 0         | 7037 | Characteristic ID (Zeitreihentyp)    |
-/// | 2       | 1         | 1131 | Code list identification             |
-/// | 2       | 2         | 3055 | Responsible agency code              |
+/// | Element | DE   | Composite | Meaning                                  |
+/// |---------|------|-----------|------------------------------------------|
+/// | 0       | 7059 | —         | Klassentyp, Code                         |
+/// | 1       | —    | `C502`    | *Nicht benutzt* — keeps its slot         |
+/// | 2       | 7037 | `C240`    | Merkmal, Code (Zeitreihentyp)            |
+///
+/// `C502` is unused in the BDEW MIG but still occupies element 1, which is why
+/// the Merkmal sits at element 2: a MIG may mark an element unused, it cannot
+/// renumber the ones after it. BDEW's own example is `CCI+15++BI1'`.
+///
+/// `C240` carries **only** DE 7037 in the BDEW profile — DE 1131 (code list)
+/// and DE 3055 (agency) are not part of it, so there is nothing to read there.
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "CCI")]
+#[edifact(segment = "CCI", layout = crate::messages::layouts::CCI)]
 pub struct Cci {
-    /// DE 7059 — property class code (element 0), usually empty in MSCONS.
-    #[edifact(element = 0)]
+    /// DE 7059 — Klassentyp, Code.
+    #[edifact(element = "7059")]
     pub category: Option<String>,
-    /// DE 7037 — characteristic identifier (component 0 of C240, element 2).
-    /// In MSCONS: time-series type code, e.g. `"Z05"` = measured quantity.
-    #[edifact(element = 2)]
+    /// DE 7037 — Merkmal, Code (`C240`). In MSCONS the Zeitreihentyp,
+    /// e.g. `"Z05"` = measured quantity.
+    #[edifact(element = "7037")]
     pub characteristic_id: Option<String>,
-    /// DE 1131 — code list identification (component 1 of C240).
-    #[edifact(element = 2, component = 1)]
-    pub code_list_id: Option<String>,
-    /// DE 3055 — responsible agency code (component 2 of C240).
-    #[edifact(element = 2, component = 2)]
-    pub agency_code: Option<String>,
 }
 
 // ── STS ───────────────────────────────────────────────────────────────────────
 
-/// `STS` — Status (MSCONS SG10).
+/// `STS` — Status.
 ///
-/// Carries the quality / validation status of a quantity reading.
+/// | Element | DE   | Composite | Meaning                                |
+/// |---------|------|-----------|----------------------------------------|
+/// | 0       | 9015 | C601      | Statuskategorie — selects the meaning of the rest |
+/// | 1       | 4405 | C555      | Status, Code                            |
+/// | 2       | 9013 | C556      | Statusanlass, Code                      |
 ///
-/// | Element | Component | DE   | Meaning                             |
-/// |---------|-----------|------|-------------------------------------|
-/// | 0       | 0         | 9015 | Status category code                |
-/// | 1       | 0         | 9011 | Status value code                   |
-/// | 1       | 1         | 4405 | Status value sub-qualifier          |
-/// | 1       | 2         | 3055 | Agency code for status value        |
+/// **The segment is polymorphic in its Statuskategorie**, and which of the two
+/// following composites is populated depends on it. Both BDEW MIGs are explicit
+/// about this, and mark the other one *nicht benutzt*:
+///
+/// | Statuskategorie | Carried in | Example |
+/// |---|---|---|
+/// | `7` Transaktionsgrund (UTILMD) | `C556` / DE 9013 | `STS+7++E01'` |
+/// | `Z33` Plausibilisierungshinweis (MSCONS) | `C556` / DE 9013 | `STS+Z33++Z84'` |
+/// | `Z18` Bilanzkreiszuordnung (UTILMD) | `C555` / DE 4405 | `STS+Z18+Z13'` |
+/// | `10` Messklassifizierung (MSCONS) | `C555` / DE 4405 | `STS+10+Z36'` |
+///
+/// Read [`Sts::code`] rather than either field directly unless the category is
+/// known: it returns whichever composite this instance actually populates.
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "STS")]
+#[edifact(segment = "STS", layout = crate::messages::layouts::STS)]
 pub struct Sts {
-    /// DE 9015 — status category (component 0 of C601, e.g. `"7"` = measurement).
-    #[edifact(element = 0)]
+    /// DE 9015 — Statuskategorie (C601), e.g. `"7"` = Transaktionsgrund.
+    #[edifact(element = "9015")]
     pub category: Option<String>,
-    /// DE 9011 — status value code (component 0 of C555, e.g. `"Z03"` = validated).
-    #[edifact(element = 1)]
+    /// DE 4405 — Status, Code (C555). Populated for the `Z18` / `10` categories.
+    #[edifact(element = "4405")]
     pub status_code: Option<String>,
-    /// DE 4405 — status value sub-qualifier (component 1 of C555).
+    /// DE 9013 — Statusanlass, Code (C556). Populated for the `7` / `Z33`
+    /// categories — this is where the UTILMD **Transaktionsgrund**
+    /// (`E01` Einzug, `E03` Wechsel, `E05` Stornierung, …) is carried.
+    #[edifact(element = "9013")]
+    pub reason_code: Option<String>,
+}
+
+impl Sts {
+    /// The status value this instance actually carries, whichever composite
+    /// holds it.
     ///
-    /// Present in APERAK and CONTRL `STS` segments that carry a two-level qualifier,
-    /// e.g. `STS+E10:ZF3'` where `ZF3` is the sub-qualifier.
-    #[edifact(element = 1, component = 1)]
-    pub sub_qualifier: Option<String>,
-    /// DE 3055 — agency code (component 2 of C555).
-    #[edifact(element = 1, component = 2)]
-    pub agency_code: Option<String>,
+    /// `C555` and `C556` are mutually exclusive per Statuskategorie, so at most
+    /// one is populated; `C556` wins when both are present.
+    #[must_use]
+    pub fn code(&self) -> Option<&str> {
+        self.reason_code.as_deref().or(self.status_code.as_deref())
+    }
 }
 
 // ── UNS ───────────────────────────────────────────────────────────────────────
@@ -703,10 +717,10 @@ pub struct Sts {
 /// |---------|-----------|------|-------------------------------------|
 /// | 0       | 0         | 0081 | Section identification              |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "UNS")]
+#[edifact(segment = "UNS", layout = edifact_rs::service::UNS)]
 pub struct Uns {
     /// DE 0081 — section identification (`"D"` = detail section).
-    #[edifact(element = 0)]
+    #[edifact(element = "0081")]
     pub section_id: String,
 }
 
@@ -719,13 +733,13 @@ pub struct Uns {
 /// | 0       | 0         | 3139 | Contact function code               |
 /// | 1       | 0         | 3413 | Department / employee name          |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "CTA")]
+#[edifact(segment = "CTA", layout = crate::messages::layouts::CTA)]
 pub struct Cta {
     /// DE 3139 — contact function, coded.
-    #[edifact(element = 0)]
+    #[edifact(element = "3139")]
     pub function_code: Option<String>,
     /// DE 3413 — department or employee name (component 0 of C056).
-    #[edifact(element = 1)]
+    #[edifact(element = "3413")]
     pub name: Option<String>,
 }
 
@@ -738,14 +752,14 @@ pub struct Cta {
 /// | 0       | 0         | 3148 | Communication number                |
 /// | 0       | 1         | 3155 | Communication channel qualifier     |
 #[derive(Debug, Clone, PartialEq, Eq, EdifactDeserialize, EdifactSerialize)]
-#[edifact(segment = "COM")]
+#[edifact(segment = "COM", layout = crate::messages::layouts::COM)]
 pub struct Com {
     /// DE 3148 — communication number (component 0 of C076).
-    #[edifact(element = 0)]
+    #[edifact(element = "3148")]
     pub number: Option<String>,
     /// DE 3155 — communication channel qualifier (component 1 of C076,
     /// e.g. `"EM"` = email, `"TE"` = telephone).
-    #[edifact(element = 0, component = 1)]
+    #[edifact(element = "3155")]
     pub channel: Option<String>,
 }
 

@@ -1,12 +1,9 @@
-//! mako Plugin Infrastructure.
+//! Operator extension point for the mako event bus.
 //!
-//! Provides a three-tier plugin system for mako daemons:
-//!
-//! ## Tier 1 — Native Rust plugins
-//!
-//! Implement the extension-point traits directly in Rust and register them
-//! at startup.  Zero overhead — trait dispatch is a single virtual call.
-//! Suitable for operator-customised binary builds.
+//! A deployment can enrich or annotate every CloudEvent before it is delivered
+//! — adding an operator identifier, tagging events for a downstream ERP,
+//! dropping a field an internal policy forbids — without forking mako. That is
+//! the whole of this crate: one trait, one registry, one host call-site.
 //!
 //! ```rust,no_run
 //! use mako_plugin::{PluginRegistry, CloudEventPlugin, PluginContext, PluginError};
@@ -21,7 +18,6 @@
 //!         -> Result<(), PluginError>
 //!     {
 //!         payload["x-operator-id"] = "my-company".into();
-//!         tracing::debug!(plugin = "my-enricher", ce_type, "enriched event");
 //!         Ok(())
 //!     }
 //! }
@@ -30,61 +26,39 @@
 //! registry.register_cloud_event(Box::new(MyEnricher));
 //! ```
 //!
-//! ## Tier 2 — WASM plugins (feature `wasm`)
+//! Hand the registry to the bus with `WebhookBus::with_plugins` (in
+//! `mako-service`); every `EventBus::publish` then runs the chain in
+//! registration order. A plugin that returns `Err` is logged and skipped — the
+//! event is still delivered, because an operator customisation must not be able
+//! to stop a regulated market notification.
 //!
-//! Drop any `.wasm` file into the `plugins_dir` configured in the daemon's
-//! TOML.  Plugins may be written in Rust, Go, TypeScript, Python, C, or any
-//! other WASM-targeting language.  The sandbox is enforced by Wasmtime —
-//! plugins cannot read host memory, open sockets, or access the filesystem
-//! unless the host explicitly grants those capabilities.
+//! # Scope
 //!
-//! ```toml
-//! # makod.toml
-//! [plugins]
-//! dir = "/etc/mako/plugins"
-//! wasm_allowed_paths = []     # filesystem paths exposed to WASM plugins
-//! ```
+//! Plugins are compiled into the daemon. There is deliberately no dynamic
+//! loading tier: mako daemons ship as distroless images built per deployment,
+//! so "rebuild with your plugin" is already the delivery model, and a sandboxed
+//! runtime would add an attack surface and a JIT dependency for a capability
+//! the build step already provides.
 //!
-//! ## Tier 3 — Process plugins (via agentd)
+//! # Unbundling
 //!
-//! The `agentd` service is itself a process-level plugin host: it calls other
-//! services' MCP tool servers and exposes them to the LLM agent loop.
-//! Custom MCP tools can be added by registering a `McpToolPlugin` in agentd.
-//!
-//! ## Extension points
-//!
-//! | Trait | Called by | Purpose |
-//! |---|---|---|
-//! | [`CloudEventPlugin`] | `event_bus` | Enrich/filter events before delivery |
-//! | [`McpToolPlugin`] | `agentd` | Add custom LLM-callable tools |
-//! | [`BillingPlugin`] | `billingd` | Custom `Rechnungsposition` adjustments |
-//! | [`ValidatorPlugin`] | `invoic-checker` | Operator-specific plausibility rules |
-//! | [`WebhookPlugin`] | `mako-service` webhook | Add headers/metadata to outbound webhooks |
+//! A plugin registered in an NB-role service must not copy LF customer data
+//! into an enriched event. §6a EnWG informatorisches Unbundling applies to
+//! operator extensions exactly as it applies to mako's own code.
 
 pub mod error;
-pub mod manifest;
 pub mod registry;
 pub mod traits;
 
-#[cfg(feature = "wasm")]
-pub mod wasm;
-
 pub use error::PluginError;
-pub use manifest::PluginManifest;
 pub use registry::PluginRegistry;
-pub use traits::{
-    BillingPlugin, BillingPosition, CloudEventPlugin, McpPluginTool, McpToolPlugin,
-    ValidationIssue, ValidatorPlugin, WebhookPlugin,
-};
+pub use traits::CloudEventPlugin;
 
-/// Context passed to every plugin call — read-only access to operator metadata.
-///
-/// Plugins receive this context but cannot modify it.  They must not call back
-/// into the host outside of the explicitly exposed host functions.
+/// Context passed to every plugin call — read-only operator metadata.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PluginContext {
-    /// Operator tenant identifier.
+    /// Operator tenant identifier (the BDEW Marktpartner code).
     pub tenant: String,
-    /// Plugin-specific configuration extracted from TOML `[[plugins]]` entry.
+    /// Plugin-specific configuration, supplied by the registering daemon.
     pub config: serde_json::Value,
 }

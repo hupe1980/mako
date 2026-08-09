@@ -1,30 +1,38 @@
 //! Plugin error type.
 
-/// Error returned by any plugin extension point.
+/// Error returned by a plugin.
 #[derive(Debug, thiserror::Error)]
 pub enum PluginError {
-    /// The plugin returned a business-logic failure (not a crash).
+    /// The plugin rejected the input for a business reason.
     #[error("plugin '{name}' error: {message}")]
-    Business { name: String, message: String },
+    Business {
+        /// Plugin name, for the log line.
+        name: String,
+        /// What went wrong.
+        message: String,
+    },
 
-    /// JSON serialisation / deserialisation failed at the plugin boundary.
+    /// The plugin produced a payload that is not valid JSON.
     #[error("plugin '{name}' serialise error: {source}")]
     Serialise {
+        /// Plugin name, for the log line.
         name: String,
         #[source]
         source: serde_json::Error,
     },
 
-    /// WASM plugin panicked or trapped.
-    #[error("plugin '{name}' wasm trap: {message}")]
-    WasmTrap { name: String, message: String },
-
-    /// Plugin configuration is invalid.
+    /// The plugin was configured with values it cannot use.
     #[error("plugin '{name}' config error: {message}")]
-    Config { name: String, message: String },
+    Config {
+        /// Plugin name, for the log line.
+        name: String,
+        /// What is wrong with the configuration.
+        message: String,
+    },
 }
 
 impl PluginError {
+    /// Construct a [`Business`](PluginError::Business) error.
     pub fn business(name: impl Into<String>, message: impl Into<String>) -> Self {
         Self::Business {
             name: name.into(),

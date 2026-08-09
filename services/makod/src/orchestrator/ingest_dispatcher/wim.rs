@@ -456,10 +456,33 @@ impl EdifactIngestDispatcher {
                     })
                 }
             }
-            "wim-technik-aenderung" => Ok(IngestOutcome::Skipped {
-                workflow_name: "wim-technik-aenderung",
-                reason: "phase2_dispatch_not_yet_implemented",
-            }),
+            // ── WiM Technikänderung (requester role) ─────────────────────────
+            // mako initiates: ORDERS 17011 (Änderung der Technik, LF/NB → MSB)
+            // and 17118 (Konfigurationsänderung, MSB → MSB) are rendered
+            // outbound by the workflow's `SendAuftrag` command. The MSB-side
+            // receiver for those two is not implemented — they are listed in
+            // `SEND_ONLY_PIDS`.
+            //
+            // ORDRSP 19003–19007 close an order **we** sent — resume, never
+            // spawn. An answer with no open order is Skipped rather than
+            // creating an orphan stream.
+            "wim-technik-aenderung" => {
+                if mako_wim::TECHNIK_AENDERUNG_ORDRSP_PIDS.contains(&pid) {
+                    let cmd = adapters::wim_technik_aenderung_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_orders(msg);
+                    self.resume_by_malo::<WimTechnikAenderungWorkflow>(
+                        &melo_id,
+                        "wim-technik-aenderung",
+                        cmd,
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "wim-technik-aenderung",
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
             wf_name => unknown_workflow_skip(wf_name, pid),
         }
     }

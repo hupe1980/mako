@@ -95,9 +95,10 @@ use mako_mabis::{
 };
 use mako_wim::{
     DeviceChangeCommand, GeraeteubernahmeCommand, PreisanfrageCommand, PreislisteCommand,
-    StammdatenCommand, WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow,
-    WimInvoicCommand, WimInvoicWorkflow, WimPreisanfrageWorkflow, WimPreislisteWorkflow,
-    WimStammdatenWorkflow, esa_wertebestellung::EsaWertebestellungWorkflow,
+    StammdatenCommand, TechnikAenderungCommand, WimDeviceChangeWorkflow,
+    WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimInvoicCommand, WimInvoicWorkflow,
+    WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
+    WimTechnikAenderungWorkflow, esa_wertebestellung::EsaWertebestellungWorkflow,
     insrpt::StorungsmeldungCommand, wertebestellung::WimWertebestellungWorkflow,
 };
 use mako_wim_gas::{
@@ -1029,24 +1030,16 @@ fn parse_dvgw_gas_day(raw: Option<&str>) -> mako_gabi_gas::GasDay {
 #[cfg(test)]
 mod fernsteuerbarkeit_tests {
     use super::*;
-    use edifact_rs::{OwnedElement, Span};
+    use edifact_rs::OwnedElement;
 
     fn seg(tag: &str, elements: Vec<Vec<&str>>) -> OwnedSegment {
-        OwnedSegment {
-            tag: tag.to_owned(),
-            span: Span::new(0, 0),
-            tag_span: Span::new(0, 0),
-            elements: elements
+        OwnedSegment::new(
+            tag,
+            elements
                 .into_iter()
-                .map(|comps| OwnedElement {
-                    span: Span::new(0, 0),
-                    components: comps
-                        .into_iter()
-                        .map(|c| (c.to_owned(), Span::new(0, 0)))
-                        .collect(),
-                })
+                .map(|comps| OwnedElement::of(&comps))
                 .collect(),
-        }
+        )
     }
 
     #[test]

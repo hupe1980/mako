@@ -26,7 +26,7 @@ const CONTRL_HIERARCHY: &[u8] = b"\
 UNH+MSG001+CONTRL:D:3:UN:1.0a'\
 UCI+INTERCHANGE01+SENDER001+RECEIVER001+7'\
 UCM+MSG999+UTILMD:D:11A:UN:5.5.3a+7+12'\
-UCS+5:BGM+5'\
+UCS+5+5'\
 UCD+12+2:1'\
 UNT+5+MSG001'";
 
@@ -60,9 +60,10 @@ fn contrl_message_response_parsed() {
     // One SG2 (UCS) segment error.
     assert_eq!(resp.segment_errors.len(), 1, "one UCS group expected");
     let seg_err = &resp.segment_errors[0];
-    // UCS+5:BGM+5' — C011: component 0 = position "5", component 1 = tag "BGM".
+    // `UCS+5+5'` — ISO 9735-4 gives UCS two *simple* data elements: DE 0096
+    // (segment position, UNH = 1) and DE 0085 (syntax error). There is no
+    // composite and no segment tag; DE 0135 lives on UCI/UCF/UCM.
     assert_eq!(seg_err.ucs.segment_position, "5");
-    assert_eq!(seg_err.ucs.segment_tag.as_deref(), Some("BGM"));
     assert_eq!(seg_err.ucs.error_code.as_deref(), Some("5"));
 
     // One SG3 (UCD) element error.

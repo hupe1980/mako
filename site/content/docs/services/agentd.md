@@ -85,14 +85,14 @@ The deterministic boundary is unchanged: an agent may prepare and may wait,
 through the command API, so what goes on the wire is still a pure function of a
 recorded command.
 
-### Durability replaces the dead-letter queue
+### Durability instead of a dead-letter queue
 
 A failed run is not a message with nowhere to go. Its effects are journaled, so
 it resumes from the last completed effect rather than being replayed from the
-top by a retry loop. The `/api/v1/dlq` endpoint and the retry worker are gone,
-and so is `de.agent.session.dlq.exhausted`.
+top by a retry loop. There is no retry worklist to drain and no exhaustion event
+to subscribe to.
 
-`de.agent.decision.made` now carries the run's real outcome — `completed`,
+`de.agent.decision.made` carries the run's real outcome — `completed`,
 `failed`, `suspended`, `exhausted`, `quarantined`, `replanning` or `cancelled` —
 so a subscriber sees a run waiting on human approval as readily as a successful
 one. Beside it: `run_id` (the journal key an operator looks up), `waiting_for`

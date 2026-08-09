@@ -92,9 +92,6 @@ pub const ANFRAGE_PIDS: &[u32] = &[
     44162, 44163, 44164, 44143, 44145, 44146, 44165, 44167, 44147, 44149, 44166, 44148,
 ];
 
-/// Deadline label for the 10-Werktage Anfrage-Antwort window (GeLiGas AWH §5.12).
-pub const ANFRAGE_ANTWORT_WINDOW_LABEL: &str = "geli-gas-stammdaten-anfrage-antwort-window";
-
 /// Stammdatenanfrage round-trip rows `(Anfrage PID, Antwort PID)` — the data
 /// owner answers an inbound Anfrage with the requested master data (GeLiGas AWH
 /// V1.2 §5.12–5.13, „Stammdatenanfrage vom Berechtigten aus gestartet").
@@ -131,6 +128,21 @@ pub fn antwort_for_anfrage(anfrage_pid: u32) -> Option<u32> {
 #[must_use]
 pub fn is_anfrage_request_pid(pid: u32) -> bool {
     ANFRAGE_ANTWORT_PAIRS.iter().any(|(a, _)| *a == pid)
+}
+
+/// `true` when `pid` is a Stammdatenanfrage **data-return** PID — the answer a
+/// requester receives, not a change it must apply.
+///
+/// mako implements only the answering side of the G8–G10 Anfrage round-trip
+/// (there is no `SendAnfrage` command), so no counterparty should send one of
+/// these unsolicited. It is separated out anyway because the alternative is
+/// worse than dropping it: these PIDs are neither `is_antwort_pid` nor
+/// `is_anfrage_request_pid`, so without this predicate they fall through to the
+/// Änderung branch and a *data-return* would be **applied as a master-data
+/// change**.
+#[must_use]
+pub fn is_anfrage_response_pid(pid: u32) -> bool {
+    ANFRAGE_ANTWORT_PAIRS.iter().any(|(_, r)| *r == pid)
 }
 
 /// Return `(Antwort PID, bilanzierungsrelevant)` for an inbound Änderung PID.

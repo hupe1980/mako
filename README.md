@@ -218,9 +218,8 @@ flowchart LR
 
 ## 🚀 Quick Start — EDIFACT parsing
 
-```toml
-[dependencies]
-edi-energy = "0.13"
+```bash
+cargo add edi-energy
 ```
 
 ```rust
@@ -236,10 +235,9 @@ println!("Valid: {}", report.is_valid());
 
 ## 🚀 Quick Start — Process engine
 
-```toml
-[dependencies]
-mako-engine = { version = "0.13", features = ["testing"] }
-mako-gpke   = "0.13"
+```bash
+cargo add mako-engine --features testing
+cargo add mako-gpke
 ```
 
 ```rust
@@ -267,9 +265,8 @@ let state = process.state().await?;
 
 ## 🚀 Quick Start — DVGW gas transport
 
-```toml
-[dependencies]
-dvgw-edi = "0.13"
+```bash
+cargo add dvgw-edi
 ```
 
 ```rust
@@ -294,9 +291,8 @@ let pid = msg.detect_pid(Some("Z01"));
 
 ## 🚀 Quick Start — Redispatch 2.0 XML
 
-```toml
-[dependencies]
-redispatch-xml = "0.13"
+```bash
+cargo add redispatch-xml
 ```
 
 ```rust
@@ -321,9 +317,8 @@ let out = serialize(&doc)?;
 
 ## 🚀 Quick Start — Master data (`mako-markt`)
 
-```toml
-[dependencies]
-mako-markt = { version = "0.13", features = ["testing"] }
+```bash
+cargo add mako-markt --features testing
 ```
 
 ```rust
@@ -607,9 +602,8 @@ Process::execute_and_enqueue  ──  replay state · Workflow::handle · Atomic
 
 By default UTILMD, MSCONS, APERAK, and CONTRL are compiled in:
 
-```toml
-[dependencies]
-edi-energy = { version = "0.13", features = ["invoic", "remadv", "orders"] }
+```bash
+cargo add edi-energy --features invoic,remadv,orders
 ```
 
 | Flag | Default | Enables |
@@ -640,8 +634,8 @@ edi-energy = { version = "0.13", features = ["invoic", "remadv", "orders"] }
 
 All 8 format parsers are compiled in by default. Disable unused formats to reduce binary size:
 
-```toml
-dvgw-edi = { version = "0.13", default-features = false, features = ["nomint", "nomres"] }
+```bash
+cargo add dvgw-edi --no-default-features --features nomint,nomres
 ```
 
 | Flag | Default | Enables |

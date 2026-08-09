@@ -178,21 +178,13 @@ pub(crate) fn suggest_code(de_id: &str, code: &str) -> Option<&'static str> {
 fn expected_components(tag: &str, idx: usize) -> Option<u8> {
     match (tag, idx) {
         ("UNH", 0)
-        | ("BGM", 2)
-        | ("IMD", 0)
-        | ("IMD", 1)
         | ("FTX", 0)
-        | ("FTX", 1)
         | ("UNS", 0)
         | ("UNT", 0)
         | ("UNT", 1)
         | ("NAD", 0)
         | ("LOC", 0)
-        | ("CTA", 0)
-        | ("LIN", 0)
-        | ("LIN", 1)
-        | ("PIA", 0)
-        | ("CCI", 0) => Some(1),
+        | ("PIA", 0) => Some(1),
         _ => None,
     }
 }
@@ -3736,7 +3728,7 @@ impl Profile for OrdersFv20260401Profile {
     fn directory_validator(&self) -> &'static DirectoryValidator {
         directory_validator()
     }
-    fn group_schema(&self) -> &'static [GroupDef] {
+    fn group_schema(&self) -> &'static [GroupDef<'static>] {
         GROUP_SCHEMA
     }
 }

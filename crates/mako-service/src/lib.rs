@@ -74,7 +74,7 @@ pub mod rate_limit;
 
 /// Compile-time catalog of every `CloudEvents` `type` in the workspace.
 pub use mako_events as cloud_events;
-pub use mako_plugin::{PluginContext, PluginError, PluginManifest, PluginRegistry};
+pub use mako_plugin::{CloudEventPlugin, PluginContext, PluginError, PluginRegistry};
 
 pub use builder::ServiceBuilder;
 pub use cloudevent::{CloudEvent, PublishError, post_ce_with_retry, source};

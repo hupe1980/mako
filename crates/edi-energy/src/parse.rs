@@ -33,6 +33,29 @@ fn sanitize_release_code(s: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
+// ── Character repertoire ─────────────────────────────────────────────────────
+
+/// Decode an interchange from the character repertoire its own `UNB` declares.
+///
+/// **BDEW `MaKo` interchanges are `UNOC:3`, which is ISO 8859-1 — not UTF-8.** In
+/// `UNOC` the `ü` of "Prüfidentifikator" is the single byte `0xFC`, so a
+/// conformant German interchange handed straight to a UTF-8 parser is rejected
+/// as invalid text. Party names, addresses and `FTX` free text carry umlauts
+/// routinely, so this is the common case rather than an edge one.
+///
+/// [`edifact_rs::decode_interchange`] reads the repertoire out of `UNB` S001
+/// DE 0001 and transcodes. It returns [`Cow::Borrowed`] when the payload is
+/// already ASCII or `UNOY` (UTF-8), so the zero-copy path is untouched for the
+/// interchanges this does not affect — which is most of them.
+///
+/// `UNOX` and `KECA` are refused by `edifact-rs` rather than mis-decoded; that
+/// surfaces here as an ordinary parse error.
+///
+/// [`Cow::Borrowed`]: std::borrow::Cow::Borrowed
+fn decode_repertoire(input: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, Error> {
+    edifact_rs::decode_interchange(input).map_err(Error::Parse)
+}
+
 // ── PID source lookup ─────────────────────────────────────────────────────────
 
 /// Determine where the Prüfidentifikator lives for the given message type and
@@ -197,7 +220,8 @@ impl ParseConfig {
 /// Returns `Err` on EDIFACT syntax errors or a missing UNH segment.
 pub fn parse_envelope_only(input: &[u8]) -> Result<crate::light_message::LightMessage, Error> {
     let cfg = ParseConfig::default().to_reader_config();
-    let segments: Vec<OwnedSegment> = edifact_rs::from_bytes_owned_with_config(input, cfg)
+    let input = decode_repertoire(input)?;
+    let segments: Vec<OwnedSegment> = edifact_rs::from_bytes_owned_with_config(&input, cfg)
         .collect::<Result<_, _>>()
         .map_err(Error::Parse)?;
     crate::light_message::LightMessage::from_segments(
@@ -271,7 +295,8 @@ pub(crate) fn parse_with_registry(
 ) -> Result<AnyMessage, Error> {
     let per_msg_limit = config.max_segments_per_message;
     let cfg = config.to_reader_config();
-    let segments: Vec<OwnedSegment> = edifact_rs::from_bytes_owned_with_config(input, cfg)
+    let input = decode_repertoire(input)?;
+    let segments: Vec<OwnedSegment> = edifact_rs::from_bytes_owned_with_config(&input, cfg)
         .collect::<Result<_, _>>()
         .map_err(Error::Parse)?;
     if let Some(lim) = per_msg_limit {
@@ -341,23 +366,43 @@ pub(crate) fn parse_interchange_impl(
     let limit = config.max_messages_per_interchange;
     let per_msg_limit = config.max_segments_per_message;
     let cfg = config.to_reader_config();
-    MessageWindowsIter::new(from_bufread_stream_with_config(BufReader::new(reader), cfg))
-        .enumerate()
-        .map(move |(index, window)| {
-            if let Some(lim) = limit {
-                if index >= lim {
-                    return Err(Error::TooManyMessages { limit: lim });
-                }
-            }
-            let window = window.map_err(Error::Parse)?;
-            if let Some(lim) = per_msg_limit {
-                let actual = window.segments.len();
-                if actual > lim {
-                    return Err(Error::TooManySegmentsInMessage { limit: lim, actual });
-                }
-            }
-            dispatch_message(window.segments, &registry)
-        })
+
+    // Streaming counterpart of `decode_repertoire`: buffer only far enough to
+    // find the `UNB`, then stream the rest through the decoder for the
+    // repertoire it declares. Constant memory is preserved — the whole point of
+    // this path — so a `UNOC` interchange never has to be read into memory to
+    // be transcoded.
+    //
+    // A decode failure yields one `Err` and no messages, rather than an empty
+    // stream that reads as "the interchange was fine and contained nothing".
+    let (decoded, fatal) = match edifact_rs::decode_reader(BufReader::new(reader)) {
+        Ok(d) => (Some(d), None),
+        Err(e) => (None, Some(Error::Parse(e))),
+    };
+
+    fatal
+        .map(Err)
+        .into_iter()
+        .chain(decoded.into_iter().flat_map(move |d| {
+            let registry = std::sync::Arc::clone(&registry);
+            MessageWindowsIter::new(from_bufread_stream_with_config(BufReader::new(d), cfg))
+                .enumerate()
+                .map(move |(index, window)| {
+                    if let Some(lim) = limit {
+                        if index >= lim {
+                            return Err(Error::TooManyMessages { limit: lim });
+                        }
+                    }
+                    let window = window.map_err(Error::Parse)?;
+                    if let Some(lim) = per_msg_limit {
+                        let actual = window.segments.len();
+                        if actual > lim {
+                            return Err(Error::TooManySegmentsInMessage { limit: lim, actual });
+                        }
+                    }
+                    dispatch_message(window.segments, &registry)
+                })
+        }))
 }
 
 /// Parse all messages from an interchange using an `Arc`-owned registry.
@@ -551,7 +596,8 @@ impl Parser {
         input: &[u8],
     ) -> Result<crate::light_message::LightMessage, Error> {
         let cfg = self.config.to_reader_config();
-        let segments: Vec<OwnedSegment> = edifact_rs::from_bytes_owned_with_config(input, cfg)
+        let input = decode_repertoire(input)?;
+        let segments: Vec<OwnedSegment> = edifact_rs::from_bytes_owned_with_config(&input, cfg)
             .collect::<Result<_, _>>()
             .map_err(Error::Parse)?;
         crate::light_message::LightMessage::from_segments(
@@ -789,7 +835,8 @@ pub(crate) fn parse_interchange_full_with_arc_registry(
     registry: std::sync::Arc<crate::registry::ReleaseRegistry>,
 ) -> Result<crate::interchange::ParsedInterchange, Error> {
     let cfg = config.to_reader_config();
-    let segments: Vec<OwnedSegment> = edifact_rs::from_bytes_owned_with_config(data, cfg)
+    let data = decode_repertoire(data)?;
+    let segments: Vec<OwnedSegment> = edifact_rs::from_bytes_owned_with_config(&data, cfg)
         .collect::<Result<_, _>>()
         .map_err(Error::Parse)?;
     parse_interchange_full_from_segments_with_registry(segments, &config, registry)

@@ -86,7 +86,8 @@ impl InterchangeBuilder {
     /// beyond the `an..14` bound of DE 0020.
     pub fn build(self) -> Result<Vec<u8>, Error> {
         let payload_len: usize = self.messages.iter().map(Vec::len).sum();
-        let mut w = edifact_rs::Writer::new(Vec::with_capacity(payload_len + 96));
+        let mut w = edifact_rs::Writer::new(Vec::with_capacity(payload_len + 96))
+            .with_charset(INTERCHANGE_CHARSET);
         w.write_composites(
             "UNB",
             &[
@@ -102,18 +103,38 @@ impl InterchangeBuilder {
             .finish()
             .map_err(|e| Error::Serialize(format!("UNB envelope: {e}")))?;
 
+        // The message builders render `UNH`…`UNT` as UTF-8, because their own
+        // `build()` parses the bytes straight back into a typed message. The
+        // interchange is where those bytes become wire output, so it is where
+        // the declared repertoire has to be honoured: a `UNB+UNOC:3` header
+        // over a UTF-8 body puts `Ã¼` on the counterparty's screen, with
+        // nothing in the file to explain why.
+        //
+        // `Charset::encode` borrows for ASCII, so the common interchange
+        // copies nothing.
         for m in &self.messages {
-            bytes.extend_from_slice(m);
+            let text = core::str::from_utf8(m)
+                .map_err(|e| Error::Serialize(format!("message payload is not UTF-8: {e}")))?;
+            let encoded = INTERCHANGE_CHARSET
+                .encode(text)
+                .map_err(|e| Error::Serialize(format!("message payload: {e}")))?;
+            bytes.extend_from_slice(&encoded);
         }
 
         let count = self.messages.len().to_string();
-        let mut w = edifact_rs::Writer::new(bytes);
+        let mut w = edifact_rs::Writer::new(bytes).with_charset(INTERCHANGE_CHARSET);
         w.write_composites("UNZ", &[&[count.as_str()], &[&self.dar]])
             .map_err(|e| Error::Serialize(format!("UNZ envelope: {e}")))?;
         w.finish()
             .map_err(|e| Error::Serialize(format!("UNZ envelope: {e}")))
     }
 }
+
+/// The character repertoire every BDEW `MaKo` interchange declares in `UNB`
+/// S001 DE 0001 — `UNOC`, which is ISO 8859-1 rather than UTF-8.
+///
+/// Declared once so the header and the payload encoding cannot disagree.
+const INTERCHANGE_CHARSET: edifact_rs::Charset = edifact_rs::Charset::UnoC;
 
 /// The UNB party-identification qualifier (DE 3055) for a market-partner ID.
 ///

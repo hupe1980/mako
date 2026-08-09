@@ -73,22 +73,6 @@ pub mod mako {
     /// production `BdewAs4Sender` path does not emit it. The CloudEvent is the
     /// delivery envelope carrying the interchange, not a notification about it.
     pub const EDIFACT_OUTBOUND: &str = "de.mako.edifact.outbound";
-    /// Inbound EDIFACT interchange received (edmd ingest allow-list).
-    ///
-    /// ⚠ phantom: no emitter yet (tracked in ROADMAP). `edmd` subscribes to
-    /// this by default (`SubscriptionConfig::default_event_types`), but nothing
-    /// emits it: `ErpEventType::cloud_event_type` has no matching variant and
-    /// no call site emits the literal. Unlike the `de.gabi.*` phantoms this one
-    /// is *referenced* — by its own subscriber — so
-    /// `unreferenced_constants_are_marked_phantom` cannot detect it.
-    ///
-    /// It also has no settled channel. [`EDIFACT_OUTBOUND`] looks like its pair
-    /// but is a webhook-transport delivery envelope emitted only in the
-    /// AS4-less development mode, whereas `edmd` subscribing by default implies
-    /// a production notification, which would belong on the ERP event path
-    /// (`ErpEventType`). Deciding which of the two it is comes before
-    /// implementing it.
-    pub const EDIFACT_INBOUND: &str = "de.mako.edifact.inbound";
     // Design note: there are deliberately NO per-process outcome types
     // (`de.mako.gpke.lieferbeginn.bestaetigt` and friends). Process outcomes
     // are the generic `PROCESS_*`/`APERAK_*` family — the process family
@@ -415,7 +399,6 @@ pub fn all() -> &'static [&'static str] {
         mako::CONTRL_RECEIVED,
         mako::MALO_IDENTIFIED,
         mako::EDIFACT_OUTBOUND,
-        mako::EDIFACT_INBOUND,
         mako::NETZZUGANG_UEBERMITTLUNGSBEDARF,
         // de.markt.*
         markt::MALO_UPDATED,

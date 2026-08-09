@@ -1627,13 +1627,11 @@ inbound_secret = "env:EDMD_INBOUND_SECRET"  # optional; omit for dev
 # Self-registers with marktd on startup — no manual curl required.
 webhook_url   = "http://edmd:8380/webhook"  # public URL marktd POSTs to
 subscriber_id = "edmd"                       # default
+# Exactly the two types edmd branches on. MSCONS reaches edmd through the
+# meter-read endpoints below, not through an event.
 event_types   = [
   "de.mako.process.initiated",
   "de.mako.process.completed",
-  # Subscribed by default, but nothing emits `de.mako.edifact.inbound` yet —
-  # the channel it should travel on is still undecided. MSCONS reaches edmd
-  # through the meter-read endpoints below, not through this event.
-  "de.mako.edifact.inbound",
 ]
 
 # [oidc]          # omit to disable auth (dev only — never omit in production)

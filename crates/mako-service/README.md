@@ -364,8 +364,6 @@ so the table stays small.
 | `metrics` | Real Prometheus `/metrics` + `mako_http_requests_total` counter |
 | `rate-limit` | GCRA rate limiter via `governor` |
 | `kafka` | `KafkaBus` for high-throughput CloudEvent fan-out |
-| `plugins` | `PluginRegistry` and extension-point traits |
-| `wasm-plugins` | WASM plugin loading via Extism/Wasmtime sandbox |
 
 Typical production config:
 

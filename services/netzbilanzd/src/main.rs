@@ -189,7 +189,8 @@ impl Daemon for Netzbilanzd {
                 post(handlers::post_verguetung_compute),
             )
             // BilAReM Kap. 3 (BK6-23-241) — stateless Ausfallarbeit engine:
-            // per-TR W_A series for all Abrechnungsvarianten + Kap.-3.4 Überbauung.
+            // per-TR W_A series for all Abrechnungsvarianten, the Kap.-3.4
+            // Überbauung cap, and the Kap.-3.2.3.2 offshore Wind-Bin factor.
             .route(
                 "/api/v1/redispatch/ausfallarbeit/compute",
                 post(netzbilanzd::ausfallarbeit_api::post_ausfallarbeit_compute),
@@ -197,6 +198,14 @@ impl Daemon for Netzbilanzd {
             .route(
                 "/api/v1/redispatch/ausfallarbeit/ueberbauung",
                 post(netzbilanzd::ausfallarbeit_api::post_ausfallarbeit_ueberbauung),
+            )
+            .route(
+                "/api/v1/redispatch/ausfallarbeit/kf-bin",
+                post(netzbilanzd::ausfallarbeit_api::post_ausfallarbeit_kf_bin),
+            )
+            .route(
+                "/api/v1/redispatch/ausfallarbeit/malo-split",
+                post(netzbilanzd::ausfallarbeit_api::post_ausfallarbeit_malo_split),
             )
             // N5a: Kostenblatt gap detection — activations without dispatch_kwh data.
             .route(

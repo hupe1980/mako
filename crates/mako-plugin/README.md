@@ -1,25 +1,16 @@
 # mako-plugin
 
-**Plugin infrastructure for mako daemons — extension-point traits, `PluginRegistry`, and optional WASM plugin loading.**
+**Operator extension point for the mako event bus — the `CloudEventPlugin` trait and its registry.**
 
-`mako-plugin` lets operators extend mako's behaviour without forking the core:
-add custom billing adjustments, inject additional MCP tools into `agentd`,
-enrich CloudEvents, or add operator-specific INVOIC validation rules.
+A deployment can enrich or annotate every CloudEvent before it is delivered —
+adding an operator identifier, tagging events for a downstream ERP, dropping a
+field an internal policy forbids — without forking mako.
 
-Two integration modes are supported:
-
-| Mode | How | Overhead |
-|---|---|---|
-| **Native Rust** | Implement the trait, register at startup | Zero — single virtual call |
-| **WASM** | Compile any language to `.wasm`, load at startup | ~1 MB binary + Wasmtime JIT |
+That is the whole crate: one trait, one registry, one host call-site.
 
 ---
 
-## Extension-point traits
-
-### `CloudEventPlugin`
-
-Enrich or filter CloudEvents before they are delivered by the EventBus:
+## `CloudEventPlugin`
 
 ```rust
 pub trait CloudEventPlugin: Send + Sync + 'static {
@@ -29,130 +20,57 @@ pub trait CloudEventPlugin: Send + Sync + 'static {
 }
 ```
 
-**Informatorisches Unbundling:** plugins in NB-role services must not include
-LF customer data in enriched events.
+The CloudEvents envelope fields (`type`, `source`, `id`, `time`) are present on
+entry and must not be renamed or removed — subscribers match on them, and
+`marktd`'s fan-out routes on `type`.
 
----
-
-### `McpToolPlugin`
-
-Add custom MCP tools to the `agentd` LLM agent:
-
-```rust
-pub trait McpToolPlugin: Send + Sync + 'static {
-    fn name(&self) -> &str;
-    fn list_tools(&self) -> Vec<McpPluginTool>;
-    fn call_tool(&self, tool_name: &str, args: Value, ctx: &PluginContext)
-        -> Pin<Box<dyn Future<Output = Result<Value, PluginError>> + Send + '_>>;
-}
-```
-
-`McpPluginTool` contains `name`, `description`, and `input_schema` (JSON Schema).
-Tools are merged with the built-in mako MCP tool list at `agentd` startup.
-
----
-
-### `BillingPlugin`
-
-Adjust `billingd` positions after the standard calculation:
-
-```rust
-pub trait BillingPlugin: Send + Sync + 'static {
-    fn name(&self) -> &str;
-    fn adjust_positions(&self, malo_id: &str, positions: &mut Vec<BillingPosition>,
-                        ctx: &PluginContext) -> Result<(), PluginError>;
-}
-```
-
-Plugins can add discount lines, promotional credits, or §14a Steuerungsrabatt
-overrides. Must not modify positions with names starting with `NNE_` or `KA_`
-(pass-through grid costs are protected).
-
----
-
-### `ValidatorPlugin`
-
-Add operator-specific INVOIC plausibility rules to `invoic-checker`:
-
-```rust
-pub trait ValidatorPlugin: Send + Sync + 'static {
-    fn name(&self) -> &str;
-    fn validate(&self, rechnung: &Value, ctx: &PluginContext)
-        -> Result<Vec<ValidationIssue>, PluginError>;
-}
-```
-
-`Error`-severity issues trigger a `Dispute` outcome (REMADV 33002).
-`Warning` produces auto-accepted `Warn`; `Info` is logged only.
-
----
-
-### `WebhookPlugin`
-
-Enrich outbound CloudEvent webhook requests before they are sent:
-
-```rust
-pub trait WebhookPlugin: Send + Sync + 'static {
-    fn name(&self) -> &str;
-    fn enrich_request(&self, url: &str, ce_type: &str,
-                      headers: &mut HashMap<String, String>,
-                      ctx: &PluginContext) -> Result<(), PluginError>;
-}
-```
-
-Use cases: custom `X-Operator-Signature` headers, outbound event logging,
-routing to different webhook URLs per event type.
+**Informatorisches Unbundling:** a plugin registered in an NB-role service must
+not copy LF customer data into an enriched event. §6a EnWG applies to operator
+extensions exactly as it applies to mako's own code.
 
 ---
 
 ## `PluginRegistry`
 
-All plugins are registered in a `PluginRegistry` at daemon startup:
+Built during service construction, wrapped in an `Arc`, handed to the event bus.
+Plugins run in registration order.
 
 ```rust
 let mut registry = PluginRegistry::new();
+registry.register_cloud_event(Box::new(MyEnricher));
 
-// Native Rust plugins are registered as boxed trait objects. Each
-// register_* method takes &mut self and returns &mut Self for chaining.
-registry.register_billing(Box::new(MyDiscountPlugin));
-registry.register_mcp_tool(Box::new(MyCustomTools));
+let bus = WebhookBus::new(config).with_plugins(Arc::new(registry));
 ```
 
-WASM plugins are loaded separately via the free function
-`load_wasm_plugins(&[PluginManifest])` (feature `wasm`) — see below.
+A plugin that returns `Err` is logged and skipped — the event is still
+delivered. An operator customisation must not be able to suppress a regulated
+market notification.
 
----
-
-## WASM plugins
-
-Enable the `wasm` feature for Extism/Wasmtime-backed WASM loading:
-
-```toml
-[dependencies]
-mako-plugin = { path = "../crates/mako-plugin", features = ["wasm"] }
-```
-
-WASM plugins are sandboxed: they can only call host functions explicitly exposed
-via Extism's plugin development kit (PDK). They cannot access the filesystem,
-network, or other mako services directly.
-
-WASM plugins can be written in any WASM-targeting language:
-Rust, Go, TypeScript, Python, C/C++, Zig, etc.
+With no plugin registered the bus checks `is_empty()` first, so a zero-plugin
+deployment pays nothing.
 
 ---
 
 ## `PluginContext`
 
-Every plugin call receives a read-only `PluginContext`:
-
 ```rust
 pub struct PluginContext {
-    /// Operator tenant identifier.
+    /// Operator tenant identifier (the BDEW Marktpartner code).
     pub tenant: String,
-    /// Plugin-specific configuration extracted from the TOML `[[plugins]]` entry.
+    /// Plugin-specific configuration, supplied by the registering daemon.
     pub config: serde_json::Value,
 }
 ```
 
-Plugins receive context but cannot modify it, and cannot call back into the host
-outside of explicitly exposed host functions.
+Read-only. The bus derives `tenant` from the CloudEvent `source`
+(`urn:mako:{service}:tenant:{tenant}`).
+
+---
+
+## Scope
+
+Plugins are compiled into the daemon. There is deliberately **no dynamic
+loading tier**: mako daemons ship as distroless images built per deployment, so
+"rebuild with your plugin" is already the delivery model, and a sandboxed WASM
+runtime would add an attack surface and a JIT dependency for a capability the
+build step already provides.

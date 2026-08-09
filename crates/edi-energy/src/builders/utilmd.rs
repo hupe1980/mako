@@ -15,7 +15,7 @@ use super::{Set, Unset, bytes_to_segments, today_ccyymmdd};
 struct UtilmdTransactionSpec {
     ide_qualifier: String,
     ide_id: String,
-    status_code: Option<String>,
+    transaktionsgrund: Option<String>,
     process_dates: Vec<(String, String)>,
     location: Option<(String, String)>,
     references: Vec<(String, String)>,
@@ -267,8 +267,13 @@ impl<S, R> UtilmdBuilder<S, R> {
         }
         for tx in &self.inner.transactions {
             emit_seg!(w, "IDE", &tx.ide_qualifier, &tx.ide_id);
-            if let Some(status) = &tx.status_code {
-                emit_seg!(w, "STS", status);
+            if let Some(grund) = &tx.transaktionsgrund {
+                // `STS+7++<code>` — Statuskategorie 7 (Transaktionsgrund) in
+                // C601, the code in C556 (DE 9013). C555 sits between them and
+                // is *nicht benutzt* for this category, so it is written empty
+                // rather than omitted: a two-element STS puts the code in the
+                // composite the MIG says is unused.
+                emit_seg!(w, "STS", "7", "", grund);
             }
             for (qualifier, date_val) in &tx.process_dates {
                 emit_comp!(w, "DTM", [qualifier, date_val, "102"]);
@@ -341,9 +346,17 @@ pub struct UtilmdTransactionBuilder<S = Unset, R = Unset> {
 }
 
 impl<S, R> UtilmdTransactionBuilder<S, R> {
-    /// Set the STS status code (DE 9015), e.g. `"E07"` for Sperrung.
-    pub fn status(mut self, code: impl Into<String>) -> Self {
-        self.spec.status_code = Some(code.into());
+    /// Set the SG4 **Transaktionsgrund** — DE 9013 in `C556`, not DE 9015.
+    ///
+    /// Emits `STS+7++<code>`: Statuskategorie `7` (Transaktionsgrund) in
+    /// `C601`, the code in `C556`. `C555` sits between them and is *nicht
+    /// benutzt* for this Statuskategorie, so it is written empty rather than
+    /// omitted — an element between two populated ones cannot be left out.
+    ///
+    /// Codes are the UTILMD MIG DE 9013 values, e.g. `"E01"` Ein-/Auszug,
+    /// `"E03"` Wechsel, `"E05"` Stornierung, `"ZW3"` erzeugende Marktlokation.
+    pub fn transaktionsgrund(mut self, code: impl Into<String>) -> Self {
+        self.spec.transaktionsgrund = Some(code.into());
         self
     }
 

@@ -667,11 +667,9 @@ applied to a §2 Abs. 7 exemption.
 
 ## Quick start
 
-```toml
-[dependencies]
-grid-billing = { version = "0.14" }
-rust_decimal = "1"
-time         = "0.3"
+```bash
+cargo add grid-billing
+cargo add rust_decimal time
 ```
 
 ### NNE flat-rate (SLP, Strom)

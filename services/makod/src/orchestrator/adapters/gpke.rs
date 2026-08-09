@@ -94,13 +94,18 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                 // Gas GaBi RLM Fallgruppe from UTILMD TM+Z10 segment (L1/N1).
                 // Only populated for Gas PIDs; Strom UTILMD has no TM+Z10.
                 fallgruppe: extract_fallgruppe(u.segments()),
-                // SG4 STS Transaktionsgrund (category 7) — drives the
+                // SG4 STS Transaktionsgrund (Statuskategorie 7) — drives the
                 // netz-checker date-plausibility rules (retroactive Einzug).
+                //
+                // The value is DE 9013 in C556 (`STS+7++E01'`), not DE 4405 in
+                // C555: the UTILMD MIG marks C555 *nicht benutzt* for this
+                // Statuskategorie, so reading it yields `None` for every
+                // conformant message.
                 transaktionsgrund: u.transactions().first().and_then(|t| {
                     t.sts
                         .iter()
                         .find(|s| s.category.as_deref() == Some("7"))
-                        .and_then(|s| s.status_code.clone())
+                        .and_then(|s| s.reason_code.clone())
                 }),
                 // SG4 STS Transaktionsgrundergänzung 9013=ZW3 („Erzeugende
                 // Marktlokation") — an EEG-/KWKG-Einspeise-MaLo. Drives the §10c
@@ -108,7 +113,7 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                 ist_erzeugende_marktlokation: u.transactions().first().is_some_and(|t| {
                     t.sts.iter().any(|s| {
                         s.category.as_deref() == Some("7")
-                            && s.status_code.as_deref() == Some("ZW3")
+                            && s.reason_code.as_deref() == Some("ZW3")
                     })
                 }),
                 message_ref: MessageRef::new(msg.message_ref()),
@@ -1167,11 +1172,13 @@ pub fn gpke_datenabruf_registry() -> AdapterRegistry<GpkeDatanabrufWorkflow> {
                     ))
                 })
                 .and_then(convert_pid)?;
+            // FTX C108 free text — the fourth element (4451, 4453, C107, C108),
+            // index 3 zero-based.
             let reason = o
                 .segments()
                 .iter()
                 .find(|s| s.tag == "FTX")
-                .and_then(|s| s.component_str(4, 0))
+                .and_then(|s| s.component_str(3, 0))
                 .map(|s| s.to_owned());
             Ok(DatanabrufCommand::ReceiveAblehnung {
                 ordrsp_pid,

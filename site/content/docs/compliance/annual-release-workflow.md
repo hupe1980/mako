@@ -480,9 +480,8 @@ matching Cargo feature:
 
 The `archive` meta-feature activates all per-type archive features:
 
-```toml
-[dependencies]
-edi-energy = { version = "0.14", features = ["archive"] }
+```bash
+cargo add edi-energy --features archive
 ```
 
 Archive features always imply their base type feature (`mscons-archive` implies

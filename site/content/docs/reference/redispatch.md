@@ -53,12 +53,24 @@ The BilAReM domain layer spans three seams:
   settlement for fluctuating plants in the Planwertmodell).
 
 `netzbilanzd` exposes the engine as stateless, schema-validated compute
-endpoints — `POST /api/v1/redispatch/ausfallarbeit/compute` (per-TR `W_A`
-series + sum for every Abrechnungsvariante) and
-`POST /api/v1/redispatch/ausfallarbeit/ueberbauung` (Kap.-3.4 cap across the
-TR of one Netzlokation). The caller supplies the quarter-hour input series
-(SCADA/edmd/DWD sourcing stays operator-side); the EDI@Energy wire formats
-plug in once published (go-live ≤ 6 months after publication).
+endpoints:
+
+| Endpoint | Computes |
+|---|---|
+| `POST /api/v1/redispatch/ausfallarbeit/compute` | Per-TR `W_A` series + sum, for every Abrechnungsvariante |
+| `POST /api/v1/redispatch/ausfallarbeit/ueberbauung` | Kap.-3.4 cap across the TR of one Netzlokation |
+| `POST /api/v1/redispatch/ausfallarbeit/kf-bin` | Kap.-3.2.3.2 `KF_Bin` for one 0,5-m/s bin — feed the result back as `kf` on a `wind_spitz` request |
+| `POST /api/v1/redispatch/ausfallarbeit/malo-split` | § 24 Abs. 3 S. 2 EEG 2023 — splits one marktlokationsscharfer Wert onto the TR behind the MaLo, pro rata by installed capacity |
+
+An underoccupied bin is not an error on the `kf-bin` route: Kap. 3.2.3.2
+prescribes a binding Ersatzwert order, and the response names which step
+supplied the value (`monat` / `vormonat` / `folgemonat` /
+`zwoelf_monats_mittel` / `standard`) so the operator can evidence it. A `KF_V`
+outside `]0;1[` *is* rejected — that is a data error, not a value to clamp.
+
+The caller supplies the quarter-hour input series (SCADA/edmd/DWD sourcing
+stays operator-side); the EDI@Energy wire formats plug in once published
+(go-live ≤ 6 months after publication).
 
 ---
 

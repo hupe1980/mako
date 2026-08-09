@@ -1908,8 +1908,8 @@ Log lines look like:
 Enable the `tracing` feature in `edi-energy` to get per-message parse/validate
 spans:
 
-```toml
-edi-energy = { version = "0.14", features = ["tracing"] }
+```bash
+cargo add edi-energy --features tracing
 ```
 
 These integrate with OpenTelemetry exporters when a global subscriber is

@@ -112,9 +112,8 @@ let push_policy = mako_as4::bdew_push_policy(Some(own_decrypt_key_pem));
 Enable the `testing` feature to generate BrainpoolP256r1 test keypairs in memory.
 The test helpers build on the `asx-rs` testing API:
 
-```toml
-[dev-dependencies]
-mako-as4 = { version = "0.14", features = ["testing"] }
+```bash
+cargo add mako-as4 --dev --features testing
 ```
 
 ### Full sign+encrypt round-trip test

@@ -955,11 +955,15 @@ pub fn esa_wertebestellung_registry() -> AdapterRegistry<EsaWertebestellungWorkf
                 .and_then(convert_pid)?;
             let message_ref = MessageRef::new(msg.message_ref());
             // Rejection reason (ORDRSP 19012/19014) from the first FTX free text.
+            // C108 is the *fourth* element of FTX (4451, 4453, C107, C108) and
+            // `component_str` indexes elements from zero, so the free text is at
+            // 3. Reading 4 addresses 3453 (language code) and yields `None` for
+            // every conformant message.
             let reason = msg
                 .segments()
                 .iter()
                 .find(|s| s.tag == "FTX")
-                .and_then(|s| s.component_str(4, 0))
+                .and_then(|s| s.component_str(3, 0))
                 .map(str::to_owned);
 
             match pid {
@@ -1157,6 +1161,82 @@ pub fn wim_insrpt_registry() -> AdapterRegistry<WimInsrptWorkflow> {
                     message_ref,
                 }),
             }
+        },
+    ));
+    registry
+}
+
+// ── WiM Technikänderung ORDRSP (PIDs 19003–19007) ────────────────────────────
+
+/// Build an [`AdapterRegistry`] for [`WimTechnikAenderungWorkflow`].
+///
+/// The Technikänderung process is **requester-initiated**: mako sends ORDERS
+/// 17011 (Änderung der Technik, LF/NB → MSB) or 17118 (Konfigurationsänderung,
+/// MSB → MSB) and the counterparty answers with an ORDRSP. Only that answer is
+/// ingested here — it resumes the open process, never spawns one.
+///
+/// The accepted/rejected split is carried by the ORDRSP **PID** rather than the
+/// BGM response code: 19003 (Fortführungsbestätigung) and 19005
+/// (Auftragsbestätigung) are confirmations, 19004/19006/19007 are rejections.
+/// `TechnikAenderungCommand::ReceiveOrdrsp` re-derives that split from the PID,
+/// so the adapter only supplies the human-readable rejection reason.
+///
+/// # Segment mapping (BDEW ORDRSP AHB — WiM Strom Teil 1)
+///
+/// | Segment | Field | Description |
+/// |---|---|---|
+/// | `BGM` element 2 comp. 0 | response code | `27` = accepted; anything else is quoted into `reason` |
+/// | `FTX` element 3 comp. 0 | free text | Preferred rejection reason when present |
+/// | `BGM` element 0 comp. 0 | `message_ref` | Falls back to the interchange message reference |
+#[must_use]
+pub fn wim_technik_aenderung_registry() -> AdapterRegistry<WimTechnikAenderungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for WiM Technikänderung adapter".into(),
+                )
+            })?;
+
+            let AnyMessage::Ordrsp(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "WiM Technikänderung adapter: expected ORDRSP message".into(),
+                ));
+            };
+
+            let ordrsp_pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "WiM Technikänderung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+
+            // A rejection reason is only meaningful for the negative PIDs; the
+            // workflow discards it for 19003/19005. Prefer the FTX free text and
+            // fall back to quoting the BGM response code.
+            let reason = o
+                .segments()
+                .iter()
+                .find(|s| s.tag == "FTX")
+                .and_then(|s| s.component_str(3, 0))
+                .map(str::to_owned)
+                .or_else(|| {
+                    o.segments()
+                        .iter()
+                        .find(|s| s.tag == "BGM")
+                        .and_then(|s| s.component_str(2, 0))
+                        .map(|code| format!("ORDRSP response code: {code}"))
+                });
+
+            Ok(TechnikAenderungCommand::ReceiveOrdrsp {
+                ordrsp_pid,
+                reason,
+                message_ref: MessageRef::new(msg.message_ref()),
+            })
         },
     ));
     registry

@@ -107,26 +107,36 @@ impl EdifactIngestDispatcher {
             },
             // ── GaBi Gas Nomination (PIDs 90011, 90012, 90021, 90022) ─────────
             // Regulatory basis: Kooperationsvereinbarung Gas (KoV), BK7-24-01-008.
-            // Nomination response (NOMRES) is required by D-1 15:00 CET (≈ 2 h after
-            // the D-1 13:00 nomination deadline). The 10-Werktage value here is a
-            // conservative outer bound for the engine deadline store; the actual
-            // KoV intraday window is enforced by the FNB/MGV at the application layer.
+            //
+            // The NOMRES response window closes at **15:00 CET on gas day D-1**,
+            // roughly two hours after the 13:00 CET nomination deadline. It is a
+            // wall-clock instant tied to the nominated gas day, not an elapsed
+            // duration from arrival, so it is derived from the command's
+            // `GasDay` via `GasDay::nomres_deadline_utc()` (DST-correct through
+            // `time-tz`). A relative Werktage window cannot express it: any
+            // multi-day bound outruns the two-hour obligation by so far that a
+            // missed NOMRES would never be detected.
             "gabi-gas-nomination" => {
                 if mako_gabi_gas::nomination::NOMINATION_PIDS.contains(&pid) {
                     let cmd = adapters::gabi_gas_nomination_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // Gas nomination deadline: response required within 10 Werktage.
-                    let due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
-                        10,
-                        HolidayCalendar::BdewMaKo,
-                    );
+                    let due_at = match &cmd {
+                        NominationCommand::SendNomination { gas_day, .. }
+                        | NominationCommand::ReceiveNomres { gas_day, .. } => {
+                            Some(gas_day.nomres_deadline_utc())
+                        }
+                        NominationCommand::NomresDeadlineExpired { .. } => None,
+                    };
+                    let deadlines: Vec<(&'static str, OffsetDateTime)> = due_at
+                        .map(|d| (mako_gabi_gas::nomination::NOMRES_DEADLINE_LABEL, d))
+                        .into_iter()
+                        .collect();
                     self.spawn_or_resume::<GaBiGasNominationWorkflow>(
                         malo_id.as_str(),
                         "gabi-gas-nomination",
                         cmd,
                         &fv,
-                        &[(mako_gabi_gas::nomination::NOMRES_DEADLINE_LABEL, due_at)],
+                        &deadlines,
                     )
                     .await
                 } else {
@@ -137,20 +147,31 @@ impl EdifactIngestDispatcher {
                 }
             }
             // ── GaBi Gas Allocation (PIDs 90001, 90002, 90003) ────────────────
-            // Regulatory basis: DVGW ALOCAT (allocation list) — no statutory
-            // response deadline in BK7-24-01-008; ALOCAT is a one-way push from MMMA
-            // to participants. spawn_deadline = None.
+            // Regulatory basis: DVGW ALOCAT (allocation list). ALOCAT is a
+            // one-way push from the FNB/MGV, so there is nothing to answer —
+            // but KoV §6.4 does bind the *sender*: corrections may follow the
+            // initial allocation, and a binding final allocation is due by the
+            // end of month M+2 at 12:00 CET. That window is registered on spawn
+            // from the message's own gas day, so a gas day that never receives
+            // its final allocation becomes a recorded fact rather than a
+            // silently unsettled imbalance.
             "gabi-gas-allocation" => {
                 if mako_gabi_gas::allocation::ALLOCATION_PIDS.contains(&pid) {
                     let cmd = adapters::gabi_gas_allocation_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // Allocation list: no statutory response deadline defined.
+                    let AllocationCommand::ReceiveAlocat { gas_day, .. } = &cmd else {
+                        return Ok(IngestOutcome::Skipped {
+                            workflow_name: "gabi-gas-allocation",
+                            reason: "pid_not_in_dispatch_table",
+                        });
+                    };
+                    let final_due_at = gas_day.final_alocat_deadline_utc();
                     self.spawn_or_resume::<GaBiGasAllocationWorkflow>(
                         malo_id.as_str(),
                         "gabi-gas-allocation",
-                        cmd,
+                        cmd.clone(),
                         &fv,
-                        &[],
+                        &[(mako_gabi_gas::FINAL_ALOCAT_DEADLINE_LABEL, final_due_at)],
                     )
                     .await
                 } else {

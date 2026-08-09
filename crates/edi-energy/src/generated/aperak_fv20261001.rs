@@ -113,13 +113,7 @@ pub(crate) fn suggest_code(de_id: &str, code: &str) -> Option<&'static str> {
 
 fn expected_components(tag: &str, idx: usize) -> Option<u8> {
     match (tag, idx) {
-        ("UNH", 0)
-        | ("BGM", 2)
-        | ("UNT", 0)
-        | ("UNT", 1)
-        | ("NAD", 0)
-        | ("FTX", 0)
-        | ("FTX", 1) => Some(1),
+        ("UNH", 0) | ("UNT", 0) | ("UNT", 1) | ("NAD", 0) | ("FTX", 0) => Some(1),
         _ => None,
     }
 }
@@ -560,7 +554,7 @@ impl Profile for AperakFv20261001Profile {
     fn directory_validator(&self) -> &'static DirectoryValidator {
         directory_validator()
     }
-    fn group_schema(&self) -> &'static [GroupDef] {
+    fn group_schema(&self) -> &'static [GroupDef<'static>] {
         GROUP_SCHEMA
     }
 }

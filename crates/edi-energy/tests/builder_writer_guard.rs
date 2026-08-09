@@ -116,3 +116,48 @@ fn separator_hostile_free_text_round_trips() {
         "the free text must survive the writer/parser round-trip unchanged"
     );
 }
+
+/// `UNT` DE 0074 must equal the number of segments in the message, counting
+/// `UNH` and `UNT` themselves and **excluding** the interchange envelope.
+///
+/// The writer derives the count from its own bookkeeping. A writer that records
+/// only some emit paths, or that counts over its whole lifetime rather than the
+/// current message, produces an interchange that fails its own `UNT` check at
+/// the counterparty — the class of defect a syntactically valid message hides,
+/// because every segment is well-formed and only the tally is wrong.
+#[cfg(feature = "aperak")]
+#[test]
+fn unt_segment_count_matches_the_message() {
+    use edi_energy::Release;
+    use edi_energy::builders::AperakBuilder;
+
+    let msg = AperakBuilder::new(Release::new("2.4a"))
+        .sender("9900987654321")
+        .receiver("9900123456789")
+        .error_text("Prüfidentifikator ungültig")
+        .build()
+        .expect("build APERAK");
+
+    let segments = msg.segments();
+    let unh = segments
+        .iter()
+        .position(|s| s.tag == "UNH")
+        .expect("UNH present");
+    let unt_idx = segments
+        .iter()
+        .position(|s| s.tag == "UNT")
+        .expect("UNT present");
+    let expected = unt_idx - unh + 1;
+
+    let declared: usize = segments[unt_idx]
+        .element_str(0)
+        .expect("UNT DE 0074 present")
+        .parse()
+        .expect("DE 0074 is numeric");
+
+    let tags: Vec<&str> = segments.iter().map(|s| s.tag.as_ref()).collect();
+    assert_eq!(
+        declared, expected,
+        "UNT declared {declared} segments, message has {expected} (tags: {tags:?})"
+    );
+}

@@ -350,7 +350,7 @@ mod utilmd_transaction_tests {
             .sender("4012345000023")
             .receiver("9900357000004")
             .transaction(ObjectType::Messlokation, "DE00012345678")
-            .status("E07")
+            .transaktionsgrund("E07")
             .reference("Z13", "55555")
             .done()
             .serialize()
@@ -365,7 +365,12 @@ mod utilmd_transaction_tests {
 
         let tx = &u.transactions()[0];
         assert_eq!(tx.sts.len(), 1, "STS segment must be captured");
-        assert_eq!(tx.sts[0].category.as_deref(), Some("E07"));
+        // `STS+7++E07'` — Statuskategorie 7 in C601, the Transaktionsgrund in
+        // C556. C555 is *nicht benutzt* for this category and stays empty.
+        assert_eq!(tx.sts[0].category.as_deref(), Some("7"));
+        assert_eq!(tx.sts[0].status_code.as_deref(), None);
+        assert_eq!(tx.sts[0].reason_code.as_deref(), Some("E07"));
+        assert_eq!(tx.sts[0].code(), Some("E07"));
     }
 
     /// UTILMD S2.2 message — structurally identical to S2.1, different assoc_code.

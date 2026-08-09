@@ -86,9 +86,9 @@ static SEGMENTS: &[SegmentDefinition] = &[
         "STS",
         "Status",
         &[
-            ElementRef::new(1, "9015", Status::Mandatory, 1),
-            ElementRef::new(2, "9013", Status::Conditional, 1),
-            ElementRef::new(3, "9011", Status::Conditional, 1),
+            ElementRef::new(1, "C601", Status::Mandatory, 1),
+            ElementRef::new(2, "C555", Status::Conditional, 1),
+            ElementRef::new(3, "C556", Status::Conditional, 1),
         ],
     ),
     SegmentDefinition::new(
@@ -146,15 +146,11 @@ pub(crate) fn suggest_code(de_id: &str, code: &str) -> Option<&'static str> {
 fn expected_components(tag: &str, idx: usize) -> Option<u8> {
     match (tag, idx) {
         ("UNH", 0)
-        | ("BGM", 2)
         | ("UNT", 0)
         | ("UNT", 1)
         | ("NAD", 0)
-        | ("CTA", 0)
         | ("IDE", 0)
         | ("STS", 0)
-        | ("STS", 1)
-        | ("STS", 2)
         | ("FTX", 0)
         | ("LOC", 0) => Some(1),
         _ => None,
@@ -3414,7 +3410,7 @@ impl Profile for UtilmdFv20251001GasProfile {
     fn directory_validator(&self) -> &'static DirectoryValidator {
         directory_validator()
     }
-    fn group_schema(&self) -> &'static [GroupDef] {
+    fn group_schema(&self) -> &'static [GroupDef<'static>] {
         GROUP_SCHEMA
     }
 }
