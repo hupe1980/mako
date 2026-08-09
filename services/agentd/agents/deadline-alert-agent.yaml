@@ -1,0 +1,227 @@
+# APERAK deadline monitor. Detects processes approaching BDEW MaKo response windows (45 min Strom UTILMD, 3 WT Gas APERAK). Triggers operator alerts when SLAs are at risk.
+#
+# Generated from the compiled specialist definition during the agentplane
+# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
+# own `read_only_hint` — the cutover inherited it from servers that declared
+# nothing, so 91 plain reads were marked mutating and would have stopped for an
+# approval on every call. The mutating grants are gone entirely, because a
+# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
+#
+# Narrowing the read set further per specialist is domain review, not mechanical
+# work.
+# Cross-cutting: present in every role-scoped build.
+apiVersion: agentplane.hupe1980.github.io/v1alpha1
+kind: Agent
+metadata:
+  name: deadline-alert-agent
+  version: "1.0.0"
+spec:
+  execution:
+    kind: tool-calling
+    max_turns: 8
+
+  identity:
+    role: >-
+      APERAK deadline monitor. Detects processes approaching BDEW MaKo response
+      windows (45 min Strom UTILMD, 3 WT Gas APERAK). Triggers operator alerts
+      when SLAs are at risk.
+    constraints: |
+      You are the deadline alert specialist for BDEW MaKo regulatory deadlines.
+
+      ## DEADLINE RULES (APERAK AHB 1.0 §2.3 / §2.4.1)
+      - STROM UTILMD/ORDERS weekday: 45 minutes
+      - STROM UTILMD Saturday: Sonntag 12:00
+      - STROM other: next Werktag 12:00
+      - GAS Folgeprozesse: next Werktag 12:00
+      - GAS Initialprozesse: 3 Werktage
+
+      ## TRIGGERED BY
+      - `de.obs.deadline.approaching` — a Frist is close to expiring
+      - `de.mako.aperak.timeout` — the APERAK deadline passed unanswered
+      - `de.mako.process.failed` — the process ended without a confirmation
+
+      ## STEP-BY-STEP PROCEDURE
+
+      1. Call obsd `list_overdue_processes` to get all processes past their deadline.
+      2. For each overdue process, call obsd `get_process` for details.
+      3. Classify by severity:
+         - < 30 min remaining: CRITICAL
+         - < 2h remaining: WARNING
+         - Already overdue: BREACH
+      4. Identify the responsible market participant and likely cause.
+      5. Generate a structured alert for the operator dashboard.
+
+      ## OUTPUT FORMAT
+      ```
+      DEADLINE_STATUS: [CRITICAL|WARNING|BREACH|COMPLIANT]
+      OVERDUE_COUNT: [number]
+      CRITICAL_PROCESSES: [list of process_ids with deadline_utc]
+      RECOMMENDED_ACTION: [specific next step]
+      ```
+
+  capabilities:
+    provides: [deadline.alert]
+
+  models:
+    privileged:  { provider: anthropic, model: claude-sonnet-5 }
+
+  security:
+    max_sensitivity_egress: internal
+    max_delegation_depth: 0
+    max_sensitivity_journaled: internal
+
+  # No `oversight` block, and no mutating tool grant: this specialist reads and
+  # reports. Both absences are the same fact — a `tool-calling` agent cannot
+  # dispatch a mutating call at all, because the arguments come from a model
+  # completion, which agentplane labels untrusted by construction, and its taint
+  # gate refuses a mutating sink with untrusted arguments. Declaring the grant
+  # anyway would read as an ability this agent does not have.
+  #
+  # Acting on a conclusion is a `planned` specialist's job — see
+  # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
+  # resolves itself, so the authority-bearing arguments keep the run input's own
+  # labels and a named human approves the call before it leaves.
+
+  budgets:
+    max_tokens: 200000
+    max_steps: 24
+    max_effects: 40
+    max_wallclock_secs: 900
+
+  tools:
+    - ref: tool://obsd/get_process
+      mutates: false
+      max_sensitivity: internal
+      description: "get process via obsd"
+    - ref: tool://obsd/list_overdue_processes
+      mutates: false
+      max_sensitivity: internal
+      description: "list overdue processes via obsd"
+    - ref: tool://obsd/get_kpi_report
+      mutates: false
+      max_sensitivity: internal
+      description: "get kpi report via obsd"
+    - ref: tool://obsd/get_parity_report
+      mutates: false
+      max_sensitivity: internal
+      description: "get parity report via obsd"
+    - ref: tool://obsd/get_stp_rate
+      mutates: false
+      max_sensitivity: internal
+      description: "get stp rate via obsd"
+    - ref: tool://obsd/list_processes_by_family
+      mutates: false
+      max_sensitivity: internal
+      description: "list processes by family via obsd"
+    - ref: tool://makod/list_commands
+      mutates: false
+      max_sensitivity: internal
+      description: "list commands via makod"
+    - ref: tool://makod/get_malo
+      mutates: false
+      max_sensitivity: internal
+      description: "get malo via makod"
+    - ref: tool://makod/list_partners
+      mutates: false
+      max_sensitivity: internal
+      description: "list partners via makod"
+    - ref: tool://makod/get_partner
+      mutates: false
+      max_sensitivity: internal
+      description: "get partner via makod"
+    - ref: tool://makod/get_health
+      mutates: false
+      max_sensitivity: internal
+      description: "get health via makod"
+    - ref: tool://makod/get_process
+      mutates: false
+      max_sensitivity: internal
+      description: "get process via makod"
+    - ref: tool://makod/list_overdue_deadlines
+      mutates: false
+      max_sensitivity: internal
+      description: "list overdue deadlines via makod"
+    - ref: tool://makod/list_active_processes
+      mutates: false
+      max_sensitivity: internal
+      description: "list active processes via makod"
+    - ref: tool://makod/get_format_version_coverage
+      mutates: false
+      max_sensitivity: internal
+      description: "get format version coverage via makod"
+    - ref: tool://makod/get_outbox_status
+      mutates: false
+      max_sensitivity: internal
+      description: "get outbox status via makod"
+    - ref: tool://makod/list_dead_letters
+      mutates: false
+      max_sensitivity: internal
+      description: "list dead letters via makod"
+    - ref: tool://marktd/get_malo
+      mutates: false
+      max_sensitivity: confidential
+      description: "get malo via marktd"
+    - ref: tool://marktd/list_partners
+      mutates: false
+      max_sensitivity: confidential
+      description: "list partners via marktd"
+    - ref: tool://marktd/get_preisblatt
+      mutates: false
+      max_sensitivity: confidential
+      description: "get preisblatt via marktd"
+    - ref: tool://marktd/get_versorgungsstatus
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgungsstatus via marktd"
+    - ref: tool://marktd/get_nb_contract
+      mutates: false
+      max_sensitivity: confidential
+      description: "get nb contract via marktd"
+    - ref: tool://marktd/get_correlation
+      mutates: false
+      max_sensitivity: confidential
+      description: "get correlation via marktd"
+    - ref: tool://marktd/list_pricat_versions
+      mutates: false
+      max_sensitivity: confidential
+      description: "list pricat versions via marktd"
+    - ref: tool://marktd/list_malo
+      mutates: false
+      max_sensitivity: confidential
+      description: "list malo via marktd"
+    - ref: tool://marktd/get_melo
+      mutates: false
+      max_sensitivity: confidential
+      description: "get melo via marktd"
+    - ref: tool://marktd/get_rollenzuordnung
+      mutates: false
+      max_sensitivity: confidential
+      description: "get rollenzuordnung via marktd"
+    - ref: tool://marktd/get_versorgungsstatus_history
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgungsstatus history via marktd"
+    - ref: tool://marktd/get_nb_energiemix
+      mutates: false
+      max_sensitivity: confidential
+      description: "get nb energiemix via marktd"
+    - ref: tool://marktd/get_technische_ressource
+      mutates: false
+      max_sensitivity: confidential
+      description: "get technische ressource via marktd"
+    - ref: tool://marktd/get_steuerbare_ressource
+      mutates: false
+      max_sensitivity: confidential
+      description: "get steuerbare ressource via marktd"
+    - ref: tool://marktd/get_partner
+      mutates: false
+      max_sensitivity: confidential
+      description: "get partner via marktd"
+    - ref: tool://marktd/get_melo_standorteigenschaften
+      mutates: false
+      max_sensitivity: confidential
+      description: "get melo standorteigenschaften via marktd"
+    - ref: tool://marktd/get_versorgung_at
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgung at via marktd"

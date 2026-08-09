@@ -29,7 +29,6 @@ review. They are permissive OSI-approved licences commonly used in the Rust ecos
 | `MIT-0` | MIT without attribution requirement. More permissive than MIT. |
 | `bzip2-1.0.6` | bzip2 compression library licence — BSD-like, no restrictions. |
 | `CC0-1.0` | Creative Commons Zero — public-domain dedication, no conditions. |
-| `BSL-1.0` | Boost Software License 1.0 — OSI-approved, permissive. |
 
 ---
 
@@ -56,36 +55,20 @@ permissive than `MIT` and imposes no conditions whatsoever.
 
 ---
 
-### `CDDL-1.0` — Common Development and Distribution License 1.0
-
-**Status:** Approved  
-**Approval owner:** project maintainer (see deny.toml commit)
-
-**Rationale:**  
-`CDDL-1.0` is **file-level** (weak) copyleft: only files already under CDDL that we
-*modify* must remain under CDDL. It imposes no obligation on the rest of the workspace
-and no linking or network-use conditions. mako consumes the affected crate unmodified,
-so no source-disclosure obligation is triggered.
-
-**Transitive path:** `inferno` → `flamegraph` (lancedb profiling, `agentd`).
-
-**Risk assessment:** Low. OSI-approved and FSF Free/Libre. File-level copyleft only
-bites on modification of the CDDL-licensed files themselves, which we do not do.
-
----
-
 ### `MPL-2.0` — Mozilla Public License 2.0
 
 **Status:** Approved  
 **Approval owner:** project maintainer (see deny.toml commit)
 
 **Rationale:**  
-`MPL-2.0` is **file-level** (weak) copyleft, like CDDL: modifications to MPL-covered
+`MPL-2.0` is **file-level** (weak) copyleft: modifications to MPL-covered
 files must be released under MPL, but the licence explicitly permits combining MPL code
 with proprietary/permissively-licensed code in a larger work without relicensing that
 work. mako consumes the affected crate unmodified.
 
-**Transitive path:** `option-ext` (via `lance`/`lancedb`, `agentd`).
+**Transitive path:** `cbindgen` (build-time header generation for `aws-lc-sys`) and the
+`im-rc` / `bitmaps` / `sized-chunks` trio. Both appear only in the **all-features** graph,
+which is what CI resolves.
 
 **Risk assessment:** Low. OSI-approved and FSF Free/Libre. No obligation on the
 combined work; the file-level share-alike applies only to modified MPL files.
@@ -107,7 +90,7 @@ When a new non-standard licence needs to be added to `deny.toml`:
 3. Commit both files together so `deny.toml` and this document are always in sync.
 
 **A note on copyleft strength.** mako distinguishes *file-level* weak copyleft
-(`MPL-2.0`, `CDDL-1.0`) — which only constrains modifications to the licensed files
+(`MPL-2.0`) — which only constrains modifications to the licensed files
 themselves and is **allowed** with governance review — from *library/linking-level* and
 *network* copyleft (LGPL, AGPL), which impose obligations on the combined or served work
 and are **never acceptable** for this dual-MIT/Apache workspace.

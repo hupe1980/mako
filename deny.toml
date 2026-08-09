@@ -1,4 +1,9 @@
 [graph]
+# CI runs `cargo deny check --all-features`, and a local run that does not is a
+# different graph: an optional feature (agentd's `bedrock`, which pulls the AWS
+# SDK) can add duplicates that only the CI graph sees. Declared here so both
+# resolve the same set.
+all-features = true
 targets = [
     { triple = "x86_64-unknown-linux-gnu" },
     { triple = "aarch64-unknown-linux-gnu" },
@@ -28,14 +33,12 @@ allow = [
     # CC0-1.0: Creative Commons Zero — public domain dedication.
     # Used by some data/test crates as transitive deps.
     "CC0-1.0",
-    # BSL-1.0: Boost Software License 1.0 — OSI-approved, FSF Free/Libre, permissive.
-    # Introduced via xxhash-rust (lancedb → lance-encoding → agentd).
-    "BSL-1.0",
-    # CDDL-1.0: Common Development and Distribution License 1.0 — OSI-approved, FSF Free/Libre.
-    # Weak copyleft (file-level). Introduced via inferno (flamegraph, lancedb profiling).
-    "CDDL-1.0",
     # MPL-2.0: Mozilla Public License 2.0 — OSI-approved, FSF Free/Libre.
-    # Weak copyleft (file-level). Introduced via option-ext (lance/lancedb transitive dep).
+    # Weak copyleft (file-level): only modified MPL files must stay MPL, and
+    # combining with other code carries no obligation on the combined work.
+    # In the all-features graph: `cbindgen` (a build-time header generator for
+    # aws-lc-sys) and the `im-rc`/`bitmaps`/`sized-chunks` trio. All consumed
+    # unmodified, so no source-disclosure obligation is triggered.
     "MPL-2.0",
 ]
 confidence-threshold = 0.9
@@ -73,6 +76,60 @@ deny = [
 #
 # Each entry documents WHY the duplicate exists and what would resolve it.
 # Review and tighten on every annual dependency update pass.
+
+# ── AWS SDK, behind agentd's optional `bedrock` feature ──────────────────────
+# The Bedrock Converse driver is off by default (`--features bedrock`), but this
+# graph resolves every feature, so the AWS SDK is present here. `aws-smithy-*`
+# and every `aws-sdk-*` crate still build on `http` 0.2 while the workspace
+# (axum 0.8, reqwest, hyper 1) is on 1.x. Nothing crosses the boundary: the SDK
+# builds its own requests and mako never hands it a `http::Request`.
+# Resolve when the AWS SDK migrates to http 1.
+[[bans.skip]]
+name    = "http"
+version = "0.2"
+reason  = "aws-smithy-runtime / aws-sdk-* pin http 0.2; the workspace is on http 1. Only reachable with agentd's optional `bedrock` feature."
+
+[[bans.skip]]
+name    = "http-body"
+version = "0.4"
+reason  = "companion of http 0.2 on the AWS SDK chain; hyper 1 uses http-body 1."
+
+[[bans.skip]]
+name    = "chacha20"
+version = "0.9"
+reason  = "agentplane's keyring AEAD (chacha20poly1305 0.10, its latest release) pins chacha20 0.9; our rand 0.10 (mako-engine, lopdf) uses 0.10. Not unifiable from here — resolve when chacha20poly1305 bumps."
+
+# ── agentplane 0.7 crypto chain ───────────────────────────────────────────────
+# agentplane's `signing` feature uses the ed25519-dalek 3 line for journal record
+# attestation; our JWT verification (jsonwebtoken 11, via mako-service) still
+# pulls the 2 line. Both are maintained and the two chains never exchange types —
+# one signs journal records, the other verifies bearer tokens. Resolve when
+# jsonwebtoken bumps to ed25519-dalek 3.
+[[bans.skip]]
+name    = "ed25519-dalek"
+version = "2.2"
+reason  = "jsonwebtoken 11 (JWT verification) pins ed25519-dalek 2; agentplane 0.6 signing uses 3."
+
+[[bans.skip]]
+name    = "ed25519"
+version = "2.2"
+reason  = "Transitive of ed25519-dalek 2 — see the ed25519-dalek skip."
+
+[[bans.skip]]
+name    = "curve25519-dalek"
+version = "4.1"
+reason  = "Transitive of ed25519-dalek 2 — see the ed25519-dalek skip."
+
+[[bans.skip]]
+name    = "signature"
+version = "2.2"
+reason  = "Transitive of ed25519-dalek 2 — see the ed25519-dalek skip."
+
+# ── agentplane 0.6 Postgres backend ───────────────────────────────────────────
+[[bans.skip]]
+name    = "whoami"
+version = "1.6"
+reason  = "sqlx-postgres 0.8 pins whoami 1.6; agentplane's postgres journal backend (tokio-postgres) uses 2.1. Resolve when sqlx bumps whoami."
 
 [[bans.skip]]
 name    = "base64"

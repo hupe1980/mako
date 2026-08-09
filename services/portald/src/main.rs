@@ -89,71 +89,74 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         // Dashboard — aggregated customer snapshot.
         .route(
-            "/api/v1/portal/:malo_id/dashboard",
+            "/api/v1/portal/{malo_id}/dashboard",
             get(handlers::get_dashboard),
         )
         // Energy consumption.
         .route(
-            "/api/v1/portal/:malo_id/lastgang",
+            "/api/v1/portal/{malo_id}/lastgang",
             get(handlers::get_lastgang),
         )
         // Billing & invoices.
         .route(
-            "/api/v1/portal/:malo_id/invoices",
+            "/api/v1/portal/{malo_id}/invoices",
             get(handlers::get_invoices),
         )
         // Customer account ledger.
         .route(
-            "/api/v1/portal/:malo_id/balance",
+            "/api/v1/portal/{malo_id}/balance",
             get(handlers::get_balance),
         )
         .route(
-            "/api/v1/portal/:malo_id/kontoauszug",
+            "/api/v1/portal/{malo_id}/kontoauszug",
             get(handlers::get_kontoauszug),
         )
         // EEG plant status.
-        .route("/api/v1/portal/:malo_id/eeg", get(handlers::get_eeg_status))
+        .route(
+            "/api/v1/portal/{malo_id}/eeg",
+            get(handlers::get_eeg_status),
+        )
         // Supply status.
         .route(
-            "/api/v1/portal/:malo_id/versorgung",
+            "/api/v1/portal/{malo_id}/versorgung",
             get(handlers::get_versorgung),
         )
         // Real-time SSE stream.
-        .route("/api/v1/portal/:malo_id/events", get(handlers::sse_events))
+        .route("/api/v1/portal/{malo_id}/events", get(handlers::sse_events))
         // ── Self-service write API (L3 — §41 EnWG) ───────────────────────────
         // Contract view — prerequisite for Tarifwechsel / Kündigung UI.
         .route(
-            "/api/v1/portal/:malo_id/vertrag",
+            "/api/v1/portal/{malo_id}/vertrag",
             get(handlers::get_portal_vertrag),
         )
         // §41 Abs. 1 EnWG — Tarifwechsel (minimum 14 days notice)
         .route(
-            "/api/v1/portal/:malo_id/tarifwechsel",
+            "/api/v1/portal/{malo_id}/tarifwechsel",
             post(handlers::post_portal_tarifwechsel),
         )
         // §41 Abs. 3 EnWG — Kündigung (minimum 14 days, end-of-month billing boundary)
         .route(
-            "/api/v1/portal/:malo_id/kuendigen",
+            "/api/v1/portal/{malo_id}/kuendigen",
             post(handlers::post_portal_kuendigen),
         )
         // GDPR Art. 16 — contact data update (Geschaeftspartner + SEPA)
         .route(
-            "/api/v1/portal/:malo_id/kontakt",
+            "/api/v1/portal/{malo_id}/kontakt",
             put(handlers::put_portal_kontakt),
         )
         // Document download — XRechnung 3.0 CII XML (EN 16931)
         .route(
-            "/api/v1/portal/:malo_id/invoices/:record_id/download",
+            "/api/v1/portal/{malo_id}/invoices/{record_id}/download",
             get(handlers::get_portal_invoice_download),
         )
         // SEPA mandate self-service (§41 EnWG customer rights + GDPR Art. 16)
         .route(
-            "/api/v1/portal/:malo_id/sepa",
+            "/api/v1/portal/{malo_id}/sepa",
             put(handlers::put_portal_sepa),
         )
         // Vorauszahlung (advance payment schedule, §40 Abs. 1 EnWG)
         .route(
-            "/api/v1/portal/:malo_id/vorauszahlung",
+            "/api/v1/portal/{malo_id}/vorauszahlung",
             get(handlers::get_portal_vorauszahlung),
         )
         // MCP server.

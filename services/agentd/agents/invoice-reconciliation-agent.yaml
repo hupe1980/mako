@@ -1,0 +1,214 @@
+# REMADV payment reconciliation and overdue invoice resolution. Matches incoming REMADV 33001/33002 against open invoices, identifies partial payments, and triggers dunning when appropriate.
+#
+# Generated from the compiled specialist definition during the agentplane
+# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
+# own `read_only_hint` — the cutover inherited it from servers that declared
+# nothing, so 91 plain reads were marked mutating and would have stopped for an
+# approval on every call. The mutating grants are gone entirely, because a
+# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
+#
+# Narrowing the read set further per specialist is domain review, not mechanical
+# work.
+# Role: LF. Compiled only into a `role-lf` build (and the default all-roles build).
+apiVersion: agentplane.hupe1980.github.io/v1alpha1
+kind: Agent
+metadata:
+  name: invoice-reconciliation-agent
+  version: "1.0.0"
+spec:
+  execution:
+    kind: tool-calling
+    max_turns: 15
+
+  identity:
+    role: >-
+      REMADV payment reconciliation and overdue invoice resolution. Matches
+      incoming REMADV 33001/33002 against open invoices, identifies partial
+      payments, and triggers dunning when appropriate.
+    constraints: |
+      You are the invoice reconciliation specialist.
+
+      ## TRIGGERED BY
+      - `de.invoic.payment.overdue` — payment deadline exceeded
+      - `de.invoic.receipt.disputed` — dispute requires manual review
+
+      ## STEP-BY-STEP PROCEDURE
+
+      1. Call invoicd `get_receipt` for disputed/overdue invoice details.
+      2. Call accountingd `get_open_items` for the MaLo to check outstanding balance.
+      3. Cross-reference invoicd receipt against accountingd ledger entries.
+      4. Check if a REMADV 33002 (partial payment) was received.
+      5. For disputes: retrieve the original Rechnung from billingd and compare against disputed amount.
+      6. Determine escalation level (reminder → fee → Sperrauftrag).
+
+      ## OUTPUT FORMAT
+      ```
+      RECONCILIATION_STATUS: [MATCHED|PARTIAL|OUTSTANDING|DISPUTED]
+      OUTSTANDING_EUR: [amount]
+      DAYS_OVERDUE: [number]
+      ESCALATION_LEVEL: [NONE|REMINDER|FEE|SPERR]
+      RECOMMENDED_ACTION: [specific step]
+      ```
+
+  capabilities:
+    provides: [invoice.reconciliation]
+
+  models:
+    privileged:  { provider: anthropic, model: claude-sonnet-5 }
+
+  security:
+    max_sensitivity_egress: internal
+    max_delegation_depth: 0
+    max_sensitivity_journaled: internal
+
+  # No `oversight` block, and no mutating tool grant: this specialist reads and
+  # reports. Both absences are the same fact — a `tool-calling` agent cannot
+  # dispatch a mutating call at all, because the arguments come from a model
+  # completion, which agentplane labels untrusted by construction, and its taint
+  # gate refuses a mutating sink with untrusted arguments. Declaring the grant
+  # anyway would read as an ability this agent does not have.
+  #
+  # Acting on a conclusion is a `planned` specialist's job — see
+  # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
+  # resolves itself, so the authority-bearing arguments keep the run input's own
+  # labels and a named human approves the call before it leaves.
+
+  budgets:
+    max_tokens: 200000
+    max_steps: 45
+    max_effects: 75
+    max_wallclock_secs: 900
+
+  tools:
+    - ref: tool://invoicd/get_receipt
+      mutates: false
+      max_sensitivity: internal
+      description: "get receipt via invoicd"
+    - ref: tool://invoicd/list_disputes
+      mutates: false
+      max_sensitivity: internal
+      description: "list disputes via invoicd"
+    - ref: tool://invoicd/get_check_result
+      mutates: false
+      max_sensitivity: internal
+      description: "get check result via invoicd"
+    - ref: tool://invoicd/list_overdue_remadv
+      mutates: false
+      max_sensitivity: internal
+      description: "list overdue remadv via invoicd"
+    - ref: tool://invoicd/get_zahlungsstatus
+      mutates: false
+      max_sensitivity: internal
+      description: "get zahlungsstatus via invoicd"
+    - ref: tool://invoicd/summarize_billing_month
+      mutates: false
+      max_sensitivity: internal
+      description: "summarize billing month via invoicd"
+    - ref: tool://marktd/get_malo
+      mutates: false
+      max_sensitivity: confidential
+      description: "get malo via marktd"
+    - ref: tool://marktd/list_partners
+      mutates: false
+      max_sensitivity: confidential
+      description: "list partners via marktd"
+    - ref: tool://marktd/get_preisblatt
+      mutates: false
+      max_sensitivity: confidential
+      description: "get preisblatt via marktd"
+    - ref: tool://marktd/get_versorgungsstatus
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgungsstatus via marktd"
+    - ref: tool://marktd/get_nb_contract
+      mutates: false
+      max_sensitivity: confidential
+      description: "get nb contract via marktd"
+    - ref: tool://marktd/get_correlation
+      mutates: false
+      max_sensitivity: confidential
+      description: "get correlation via marktd"
+    - ref: tool://marktd/list_pricat_versions
+      mutates: false
+      max_sensitivity: confidential
+      description: "list pricat versions via marktd"
+    - ref: tool://marktd/list_malo
+      mutates: false
+      max_sensitivity: confidential
+      description: "list malo via marktd"
+    - ref: tool://marktd/get_melo
+      mutates: false
+      max_sensitivity: confidential
+      description: "get melo via marktd"
+    - ref: tool://marktd/get_rollenzuordnung
+      mutates: false
+      max_sensitivity: confidential
+      description: "get rollenzuordnung via marktd"
+    - ref: tool://marktd/get_versorgungsstatus_history
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgungsstatus history via marktd"
+    - ref: tool://marktd/get_nb_energiemix
+      mutates: false
+      max_sensitivity: confidential
+      description: "get nb energiemix via marktd"
+    - ref: tool://marktd/get_technische_ressource
+      mutates: false
+      max_sensitivity: confidential
+      description: "get technische ressource via marktd"
+    - ref: tool://marktd/get_steuerbare_ressource
+      mutates: false
+      max_sensitivity: confidential
+      description: "get steuerbare ressource via marktd"
+    - ref: tool://marktd/get_partner
+      mutates: false
+      max_sensitivity: confidential
+      description: "get partner via marktd"
+    - ref: tool://marktd/get_melo_standorteigenschaften
+      mutates: false
+      max_sensitivity: confidential
+      description: "get melo standorteigenschaften via marktd"
+    - ref: tool://marktd/get_versorgung_at
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgung at via marktd"
+    - ref: tool://netzbilanzd/list_nne_drafts
+      mutates: false
+      max_sensitivity: internal
+      description: "list nne drafts via netzbilanzd"
+    - ref: tool://netzbilanzd/list_disputed
+      mutates: false
+      max_sensitivity: internal
+      description: "list disputed via netzbilanzd"
+    - ref: tool://netzbilanzd/get_nne_draft
+      mutates: false
+      max_sensitivity: internal
+      description: "get nne draft via netzbilanzd"
+    - ref: tool://netzbilanzd/list_pending_kostenblatt
+      mutates: false
+      max_sensitivity: internal
+      description: "list pending kostenblatt via netzbilanzd"
+    - ref: tool://netzbilanzd/get_billing_summary
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing summary via netzbilanzd"
+    - ref: tool://netzbilanzd/list_undispatched_drafts
+      mutates: false
+      max_sensitivity: internal
+      description: "list undispatched drafts via netzbilanzd"
+    - ref: tool://netzbilanzd/trigger_mmm_auto_run
+      mutates: false
+      max_sensitivity: internal
+      description: "trigger mmm auto run via netzbilanzd"
+    - ref: tool://netzbilanzd/list_corrections
+      mutates: false
+      max_sensitivity: internal
+      description: "list corrections via netzbilanzd"
+    - ref: tool://netzbilanzd/get_payment_stats
+      mutates: false
+      max_sensitivity: internal
+      description: "get payment stats via netzbilanzd"
+    - ref: tool://netzbilanzd/list_paid_invoices
+      mutates: false
+      max_sensitivity: internal
+      description: "list paid invoices via netzbilanzd"

@@ -1,4 +1,10 @@
 //! `agentd.toml` — multi-agent configuration.
+//!
+//! What is *not* here is the point: no prompts, no models, no tool grants, no
+//! ceilings. Those live in each specialist's manifest, where they are covered by
+//! the digest a reviewer approves. This file is deployment wiring — where the
+//! journal lives, which providers exist, which MCP servers to reach, who may
+//! approve, and what the plane is allowed to do.
 
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -7,43 +13,44 @@ use std::collections::HashMap;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentdConfig {
+    /// Where the agentplane journal and case layer live.
+    #[serde(default)]
+    pub journal: JournalConfig,
     /// HTTP listen port (default: 9580).
     #[serde(default = "default_port")]
     pub port: u16,
     /// Operator tenant identifier.
     pub tenant: String,
-    /// Maximum concurrent agent sessions (default: 20).
+    /// How this plane is reached from outside, for the A2A Agent Cards.
+    ///
+    /// A card states where an agent is; that is deployment wiring and not a
+    /// property of the agent, which is why it is here and not in a manifest.
+    #[serde(default = "default_public_base_url")]
+    pub public_base_url: String,
+    /// Maximum concurrent agent runs (default: 20).
     #[serde(default = "default_max_sessions")]
     pub max_sessions: u32,
 
     /// Named LLM provider configurations.
-    /// Reference these by name in `[[agents]]`.
+    ///
+    /// The key is the name a manifest's `spec.models` refers to, so a manifest
+    /// declaring `provider: anthropic` needs a `[providers.anthropic]` block.
     pub providers: HashMap<String, ProviderConfig>,
 
-    /// Orchestrator configuration.
-    pub orchestrator: OrchestratorConfig,
-
-    /// Built-in specialist agent activation.
-    ///
-    /// Enables pre-designed agents compiled into the binary.
-    /// These agents ship in the container image — no copy-paste of system prompts needed.
+    /// Which built-in specialists this deployment activates.
     ///
     /// ```toml
     /// [bundled_agents]
     /// enable_all = true
-    /// default_provider = "openai"
-    /// default_model = "gpt-4o-mini"
-    ///
-    /// [bundled_agents.overrides.mako-agent]
-    /// model = "claude-3-5-sonnet-20241022"
-    /// provider = "claude"
     /// ```
+    ///
+    /// The prompt, model pair, tool grants and ceilings are **not** configurable
+    /// here — they live in the specialist's manifest, where they are covered by
+    /// the digest a reviewer approves. Changing a model is a manifest edit and a
+    /// version bump, which is the point: an operator cannot silently move a
+    /// regulated decision onto a different model.
     #[serde(default)]
     pub bundled_agents: BundledAgentsConfig,
-
-    /// Operator-defined custom specialists. Extend or override built-ins as needed.
-    #[serde(default)]
-    pub agents: Vec<AgentConfig>,
 
     /// MCP server endpoints (name → base URL).
     pub mcp_servers: HashMap<String, String>,
@@ -51,11 +58,7 @@ pub struct AgentdConfig {
     /// Use `"env:AGENTD_MCP_API_KEY"` to defer to environment; never log this value.
     pub mcp_api_key: SecretString,
 
-    /// RAG knowledge base.
-    #[serde(default)]
-    pub rag: RagConfig,
-
-    /// CloudEvent types that trigger agent sessions.
+    /// CloudEvent types that trigger agent runs.
     #[serde(default = "default_triggers")]
     pub trigger_event_types: Vec<String>,
 
@@ -71,102 +74,159 @@ pub struct AgentdConfig {
     /// When absent, all inbound webhooks are accepted (dev mode only — log a WARNING).
     pub inbound_hmac_secret: Option<SecretString>,
 
-    /// Per-session wall-clock timeout in seconds (default: 300 = 5 minutes).
-    /// Applies to every specialist ReAct loop. Prevents hung LLM calls from
-    /// blocking Tokio threads indefinitely.
+    /// Wall-clock ceiling in seconds for one event's whole fan-out (default: 300).
+    ///
+    /// A single run is already bounded by its manifest's `budgets`; this bounds
+    /// the *set* of runs one event triggers, so a slow specialist cannot hold a
+    /// concurrency permit indefinitely. Exceeding it abandons the wait, not the
+    /// work — each run's effects stay journaled and resumable.
     #[serde(default = "default_session_timeout_secs")]
     pub session_timeout_secs: u64,
 
-    /// OIDC configuration for authenticating `POST /api/v1/run`.
-    /// When absent, all manual run requests are accepted (dev mode — logs a WARNING).
+    /// How often the sweeper ticks, in seconds (default: 60).
+    ///
+    /// The tick that warns on approaching deadlines, breaches the ones that
+    /// passed, expires overdue approvals and wakes sleeping runs. It bounds how
+    /// *late* a warning is, not when a breach is recorded — the breach instant
+    /// was resolved and journaled when the obligation was registered.
+    #[serde(default = "default_sweep_interval_secs")]
+    pub sweep_interval_secs: u64,
+
+    /// OIDC configuration.
+    ///
+    /// Authenticates `POST /api/v1/run` and — with no dev-mode relaxation — the
+    /// whole oversight surface. When absent, manual runs are accepted with a
+    /// warning and **the worklist is not mounted at all**: an approval by an
+    /// unauthenticated caller is a forged signature on a regulated dispatch, not
+    /// a convenience.
     pub oidc: Option<mako_service::oidc::OidcConfig>,
 
-    /// Dead-letter queue for failed CloudEvent sessions.
+    /// The Cedar policy set. Omit to use mako's own, embedded in the binary.
     #[serde(default)]
-    pub dlq: DlqConfig,
+    pub policy: PolicyConfig,
+
+    /// Envelope encryption for everything the plane writes down.
+    pub keyring: Option<KeyringConfig>,
+}
+
+impl mako_service::service::ServiceConfig for AgentdConfig {
+    /// No `[database]`: agentd owns no SQL schema. Its durable state is the
+    /// agentplane journal, which is either an embedded redb file or a Postgres
+    /// database agentplane connects to and migrates itself.
+    fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
+        None
+    }
+
+    fn bind_addr(&self) -> String {
+        format!("0.0.0.0:{}", self.port)
+    }
+}
+
+// ── Journal ────────────────────────────────────────────────────────────────
+
+/// Where the journal, the cases, the tasks, the timers and the events live.
+///
+/// One backend holds all five. The journal is the § 147 AO / GoBD record for the
+/// agent layer — every model call, tool call and human decision is written here
+/// before it happens — so it belongs on durable storage, not a container's
+/// ephemeral filesystem.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "backend", rename_all = "lowercase", deny_unknown_fields)]
+pub enum JournalConfig {
+    /// The embedded backend: one file, pure Rust, ACID. Single-instance
+    /// deployments.
+    Redb {
+        #[serde(default = "default_journal_path")]
+        path: String,
+    },
+    /// The shared backend: several agentd instances on one database, where
+    /// fencing and exactly-once are arbitrated by Postgres rather than by hoping
+    /// the writers agree. Use `"env:AGENTD_JOURNAL_URL"` to keep the DSN out of
+    /// the file.
+    Postgres { url: String },
+}
+
+impl Default for JournalConfig {
+    fn default() -> Self {
+        Self::Redb {
+            path: default_journal_path(),
+        }
+    }
+}
+
+// ── Policy ─────────────────────────────────────────────────────────────────
+
+/// Which rules govern this plane.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyConfig {
+    /// A Cedar policy file that **replaces** the embedded rules.
+    ///
+    /// Replaces rather than extends: Cedar allows on any matching permit, so a
+    /// least-privilege file layered over a broader one cannot narrow anything.
+    /// An operator who mounts a file gets exactly their rules.
+    pub path: Option<String>,
+}
+
+// ── Keyring ────────────────────────────────────────────────────────────────
+
+/// Envelope encryption for journal records, case state, events and tasks.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KeyringConfig {
+    /// Refuse to start unless a key ring is configured.
+    ///
+    /// For any deployment whose events can carry personal data: an unsealed
+    /// plane writes it into an append-only chain that no later configuration
+    /// change can reach.
+    #[serde(default)]
+    pub required: bool,
+    /// HashiCorp Vault's transit engine. The wrapping key is created inside
+    /// Vault and never leaves it, so erasure is something mako asks for and
+    /// cannot undo.
+    pub vault: Option<VaultConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VaultConfig {
+    /// e.g. `https://vault.internal:8200`.
+    pub address: String,
+    /// Mount path of the transit engine (usually `transit`).
+    #[serde(default = "default_vault_mount")]
+    pub mount: String,
+    /// A token that may use the transit mount. Prefer `"env:VAULT_TOKEN"`.
+    pub token: SecretString,
 }
 
 // ── BundledAgentsConfig ────────────────────────────────────────────────────
 
-/// Configuration for enabling compiled-in (built-in) specialist agents.
+/// Which compiled-in specialists this deployment activates.
 ///
-/// Built-in agents ship inside the `agentd` container image — operators do not
-/// need to write system prompts. Activate them by name or enable all at once.
+/// Activation is the whole of the operator's control. What an activated
+/// specialist *does* — its procedure, its model pair, the tools it may call and
+/// the ceilings it runs under — is declared in its manifest and covered by that
+/// manifest's digest.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BundledAgentsConfig {
-    /// Enable ALL 28 built-in specialist agents at once.
+    /// Activate every specialist compiled into this binary.
     ///
-    /// When `true`, `enable` list is ignored.
+    /// When `true`, `enable` is ignored. Note that a role-scoped build contains
+    /// only its own role's specialists, so this never activates another
+    /// Marktrolle's agents (§ 9 EnWG).
     #[serde(default)]
     pub enable_all: bool,
 
-    /// Explicitly enable specific built-in agents by name.
+    /// Activate specific specialists by name.
     ///
     /// Example: `enable = ["eeg-compliance-agent", "billing-anomaly-agent"]`
+    ///
+    /// A name that matches no compiled specialist is a startup failure, not a
+    /// silently inactive agent — the usual cause is a name that exists only in
+    /// another role's build.
     #[serde(default)]
     pub enable: Vec<String>,
-
-    /// Default LLM provider name for all built-in agents (must exist in `[providers]`).
-    /// Each agent can override this via `[bundled_agents.overrides.<name>]`.
-    pub default_provider: Option<String>,
-
-    /// Default model for all built-in agents.
-    /// Each agent can override this via `[bundled_agents.overrides.<name>]`.
-    pub default_model: Option<String>,
-
-    /// Per-agent overrides for model, provider, max_turns, or mcp_servers.
-    ///
-    /// ```toml
-    /// [bundled_agents.overrides.mako-agent]
-    /// model = "claude-3-5-sonnet-20241022"
-    /// provider = "claude"
-    /// max_turns = 20
-    /// ```
-    #[serde(default)]
-    pub overrides: HashMap<String, AgentOverride>,
-}
-
-/// Per-agent override for built-in agents.
-///
-/// All fields are optional — only set what you want to change from the built-in default.
-#[derive(Debug, Default, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentOverride {
-    /// Override the LLM provider name.
-    pub provider: Option<String>,
-    /// Override the LLM model identifier.
-    pub model: Option<String>,
-    /// Override maximum ReAct turns.
-    pub max_turns: Option<u32>,
-    /// Override which MCP servers this agent can access.
-    pub mcp_servers: Option<Vec<String>>,
-    /// Override the system prompt prefix (appended BEFORE the built-in prompt).
-    /// Use for org-specific context injection without replacing the full prompt.
-    pub system_prompt_prefix: Option<String>,
-}
-
-// ── DispatchMode ───────────────────────────────────────────────────────────
-
-/// How the orchestrator dispatches events to specialists.
-///
-/// Default: `Sequential`.
-#[derive(Debug, Default, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum DispatchMode {
-    /// Route to one specialist at a time (current default).
-    /// Low token cost; good for clear single-domain events.
-    #[default]
-    Sequential,
-
-    /// Fan out to ALL matching specialists concurrently.
-    /// Returns an aggregated `AgentDecision` with all responses.
-    /// Good for compliance events that need multiple independent checks.
-    Parallel,
-
-    /// Fan out to matching specialists; return the first to complete.
-    /// Best for latency-sensitive events where any specialist can handle it.
-    Race,
 }
 
 // ── Provider config ────────────────────────────────────────────────────────
@@ -178,20 +238,25 @@ pub enum DispatchMode {
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
-    /// Backend: "openai" | "anthropic" | "bedrock"
+    /// Which driver: `openai` · `anthropic` · `gemini` · `chat-completions` ·
+    /// `bedrock`.
+    ///
+    /// The **key** of the `[providers.…]` table is the name a manifest refers
+    /// to; this is the wire it speaks. The two are separate on purpose: a
+    /// deployment may register `[providers.anthropic]` backed by
+    /// `chat-completions` against its own vLLM, and no manifest changes.
     pub backend: String,
-    /// API base URL (optional override).
+    /// API base URL. Required for `chat-completions` (there is no default
+    /// endpoint for your own server); an override elsewhere — an Azure
+    /// deployment, a gateway, a recording proxy.
     pub api_base: Option<String>,
     /// API key / secret (never logged).
     /// Use `"env:OPENAI_API_KEY"` form in TOML to read from environment.
     #[serde(default)]
     pub api_key: SecretString,
-    /// AWS region (Bedrock only).
+    /// AWS region, for `bedrock`. Credentials come from the standard AWS chain
+    /// (IAM role, environment, profile) and deliberately not from this file.
     pub aws_region: Option<String>,
-    /// AWS access key ID (Bedrock only; prefer IAM roles in production).
-    pub aws_access_key_id: Option<String>,
-    /// AWS secret access key (Bedrock only; never logged).
-    pub aws_secret_access_key: Option<SecretString>,
 }
 
 impl std::fmt::Debug for ProviderConfig {
@@ -201,189 +266,32 @@ impl std::fmt::Debug for ProviderConfig {
             .field("api_base", &self.api_base)
             .field("api_key", &"[REDACTED]")
             .field("aws_region", &self.aws_region)
-            .field("aws_access_key_id", &self.aws_access_key_id)
-            .field("aws_secret_access_key", &"[REDACTED]")
             .finish()
     }
 }
 
-// ── Orchestrator config ────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OrchestratorConfig {
-    /// Named provider to use for the orchestrator.
-    pub provider: String,
-    /// LLM model identifier.
-    pub model: String,
-    /// Maximum orchestrator turns before forcing specialist delegation.
-    #[serde(default = "default_orch_turns")]
-    pub max_turns: u32,
-    /// Custom system prompt prefix for the orchestrator.
-    pub system_prompt: Option<String>,
-    /// How to dispatch events to specialists.
-    /// `sequential` (default): one specialist at a time.
-    /// `parallel`: fan out to all matching specialists concurrently.
-    /// `race`: first specialist to complete wins.
-    #[serde(default)]
-    pub dispatch_mode: DispatchMode,
-    /// Maximum number of specialists to run in parallel (used with `parallel` and `race`).
-    /// Default: 4.
-    #[serde(default = "default_parallel_limit")]
-    pub parallel_limit: usize,
-}
-
-// ── Specialist agent config ────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentConfig {
-    /// Unique agent name (used for routing and handoff tool names).
-    pub name: String,
-    /// One-line specialty description (shown in orchestrator + handoff tools).
-    pub specialty: String,
-    /// Named provider for this agent.
-    pub provider: String,
-    /// LLM model identifier.
-    pub model: String,
-    /// Maximum ReAct turns per session.
-    #[serde(default = "default_agent_turns")]
-    pub max_turns: u32,
-    /// MCP server names this agent can access (subset of `[mcp_servers]`).
-    /// Empty = access to all servers.
-    #[serde(default)]
-    pub mcp_servers: Vec<String>,
-    /// CloudEvent type glob patterns for direct routing (bypasses orchestrator).
-    /// Example: `["de.eeg.*", "de.invoic.receipt.disputed"]`
-    #[serde(default)]
-    pub trigger_patterns: Vec<String>,
-    /// Custom system prompt prefix.
-    pub system_prompt: Option<String>,
-    /// Enable RAG context injection for this agent.
-    #[serde(default = "default_true")]
-    pub use_rag: bool,
-}
-
-// ── DlqConfig ──────────────────────────────────────────────────────────────
-
-/// Dead-letter queue configuration for failed CloudEvent sessions.
-///
-/// Sessions with outcome `"error"` or `"timeout"` are retried up to `max_retries`
-/// times with exponential backoff. After exhaustion an alert CloudEvent is emitted.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, default)]
-pub struct DlqConfig {
-    /// Maximum DLQ depth (default: 100). Entries beyond this are silently dropped.
-    pub capacity: usize,
-    /// Maximum retry attempts per entry (default: 4).
-    pub max_retries: u32,
-    /// Base backoff in seconds; actual wait = `base_backoff_secs * 3^attempt` (default: 30).
-    pub base_backoff_secs: u64,
-}
-
-impl Default for DlqConfig {
-    fn default() -> Self {
-        Self {
-            capacity: 100,
-            max_retries: 4,
-            base_backoff_secs: 30,
-        }
-    }
-}
-
-// ── RAG config ─────────────────────────────────────────────────────────────
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RagConfig {
-    /// Enable RAG (default: false — requires sources to be configured).
-    #[serde(default)]
-    pub enabled: bool,
-    /// LanceDB storage URI.
-    /// - `/var/lib/agentd/rag` — local filesystem
-    /// - `s3://my-bucket/agentd/rag` — AWS S3 (env AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)
-    /// - `gs://bucket/prefix` — Google Cloud Storage
-    /// - `az://container/prefix` — Azure Blob Storage
-    #[serde(default = "default_rag_db")]
-    pub storage_uri: String,
-    /// Embedding vector dimension (default: 1536 for text-embedding-3-small).
-    #[serde(default = "default_embed_dim")]
-    pub embedding_dim: i32,
-    /// Named provider to use for embeddings (must support `embed()`).
-    /// Defaults to orchestrator provider.
-    pub embedding_provider: Option<String>,
-    /// Embedding model (e.g. `text-embedding-3-small`, `amazon.titan-embed-text-v2:0`).
-    #[serde(default = "default_embed_model")]
-    pub embedding_model: String,
-    /// Number of chunks to retrieve per query (default: 5).
-    #[serde(default = "default_top_k")]
-    pub top_k: usize,
-    /// Text chunk size in characters (default: 512).
-    #[serde(default = "default_chunk_size")]
-    pub chunk_size: usize,
-    /// Chunk overlap in characters (default: 64).
-    #[serde(default = "default_chunk_overlap")]
-    pub chunk_overlap: usize,
-    /// Minimum cosine similarity score to include a RAG result (0.0–1.0, default: 0.3).
-    /// Low-quality chunks with score < threshold are filtered out before injection.
-    #[serde(default = "default_score_threshold")]
-    pub score_threshold: f32,
-    /// Document sources to index at startup.
-    #[serde(default)]
-    pub sources: Vec<RagSource>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct RagSource {
-    /// Logical name for this source.
-    pub name: String,
-    /// Path to a file (Markdown, plain text, or PDF — PDF requires `pdfium`).
-    pub path: String,
-}
-
 // ── Defaults ──────────────────────────────────────────────────────────────
 
+fn default_journal_path() -> String {
+    "/var/lib/agentd/journal.redb".to_owned()
+}
 fn default_port() -> u16 {
     9580
+}
+fn default_public_base_url() -> String {
+    "http://localhost:9580".to_owned()
 }
 fn default_max_sessions() -> u32 {
     20
 }
-fn default_orch_turns() -> u32 {
-    5
-}
-fn default_agent_turns() -> u32 {
-    20
-}
-fn default_true() -> bool {
-    true
-}
-fn default_parallel_limit() -> usize {
-    4
-}
-fn default_rag_db() -> String {
-    "/var/lib/agentd/rag".into()
-}
-fn default_embed_dim() -> i32 {
-    1536
-}
-fn default_embed_model() -> String {
-    "text-embedding-3-small".into()
-}
-fn default_top_k() -> usize {
-    5
-}
-fn default_chunk_size() -> usize {
-    512
-}
-fn default_chunk_overlap() -> usize {
-    64
-}
-fn default_score_threshold() -> f32 {
-    0.3
-}
 fn default_session_timeout_secs() -> u64 {
     300
+}
+fn default_sweep_interval_secs() -> u64 {
+    60
+}
+fn default_vault_mount() -> String {
+    "transit".to_owned()
 }
 fn default_triggers() -> Vec<String> {
     vec![
@@ -394,64 +302,92 @@ fn default_triggers() -> Vec<String> {
     ]
 }
 
+/// Every credential the config points at, with its `env:VAR` indirection
+/// resolved.
+///
+/// Separate from [`AgentdConfig`] rather than resolved in place, and the reason
+/// is the runner's ownership: `mako_service::run` hands `build` an
+/// `Arc<Self::Config>` and keeps its own reference for the bind address, so
+/// there is no `&mut` to resolve into and no way to take the config back. Every
+/// consumer therefore reads its credential from here.
+///
+/// No `Debug`: this type is nothing but secrets.
+pub struct Secrets {
+    /// Providers with `api_key` resolved, keyed as in `[providers.*]`.
+    pub providers: HashMap<String, ProviderConfig>,
+    pub mcp_api_key: SecretString,
+    pub audit_hmac_secret: Option<SecretString>,
+    pub inbound_hmac_secret: Option<SecretString>,
+    /// The Vault token, when a key ring is configured.
+    pub vault_token: Option<SecretString>,
+    /// The journal DSN, when the backend is Postgres.
+    pub journal_url: Option<String>,
+}
+
 impl AgentdConfig {
     /// Resolve every `env:VAR` indirection in secret-bearing fields.
     ///
     /// Config values like `api_key = "env:OPENAI_API_KEY"` are placeholders,
-    /// not credentials — a config that ships them unresolved sends the
-    /// literal string as the bearer token and fails as a 401 against the
-    /// provider. Call once right after loading, before anything clones a
-    /// provider config.
+    /// not credentials — a config that ships them unresolved sends the literal
+    /// string as the bearer token and fails as a 401 against the provider.
+    /// Resolve once at startup and pass [`Secrets`] to whatever needs them.
     ///
     /// # Errors
     ///
     /// Returns an error naming the missing environment variable.
-    pub fn resolve_env_indirection(&mut self) -> anyhow::Result<()> {
+    pub fn resolve_secrets(&self) -> anyhow::Result<Secrets> {
         use mako_service::config::{resolve_env, resolve_env_secret};
         use secrecy::ExposeSecret as _;
 
-        for (name, p) in &mut self.providers {
-            p.api_key = resolve_env_secret(p.api_key.expose_secret())
+        let mut providers = HashMap::with_capacity(self.providers.len());
+        for (name, p) in &self.providers {
+            let mut resolved = p.clone();
+            resolved.api_key = resolve_env_secret(p.api_key.expose_secret())
                 .map_err(|e| anyhow::anyhow!("providers.{name}.api_key: {e}"))?;
-            if let Some(sk) = &p.aws_secret_access_key {
-                p.aws_secret_access_key =
-                    Some(resolve_env_secret(sk.expose_secret()).map_err(|e| {
-                        anyhow::anyhow!("providers.{name}.aws_secret_access_key: {e}")
-                    })?);
-            }
-            if let Some(ak) = &p.aws_access_key_id {
-                p.aws_access_key_id = Some(
-                    resolve_env(ak)
-                        .map_err(|e| anyhow::anyhow!("providers.{name}.aws_access_key_id: {e}"))?,
-                );
-            }
+            providers.insert(name.clone(), resolved);
         }
-        self.mcp_api_key = resolve_env_secret(self.mcp_api_key.expose_secret())
-            .map_err(|e| anyhow::anyhow!("mcp_api_key: {e}"))?;
-        if let Some(s) = &self.audit_hmac_secret {
-            self.audit_hmac_secret = Some(
-                resolve_env_secret(s.expose_secret())
-                    .map_err(|e| anyhow::anyhow!("audit_hmac_secret: {e}"))?,
-            );
-        }
-        if let Some(s) = &self.inbound_hmac_secret {
-            self.inbound_hmac_secret = Some(
-                resolve_env_secret(s.expose_secret())
-                    .map_err(|e| anyhow::anyhow!("inbound_hmac_secret: {e}"))?,
-            );
-        }
-        Ok(())
+
+        let secret = |field: &str, s: &SecretString| -> anyhow::Result<SecretString> {
+            resolve_env_secret(s.expose_secret()).map_err(|e| anyhow::anyhow!("{field}: {e}"))
+        };
+
+        Ok(Secrets {
+            providers,
+            mcp_api_key: secret("mcp_api_key", &self.mcp_api_key)?,
+            audit_hmac_secret: self
+                .audit_hmac_secret
+                .as_ref()
+                .map(|s| secret("audit_hmac_secret", s))
+                .transpose()?,
+            inbound_hmac_secret: self
+                .inbound_hmac_secret
+                .as_ref()
+                .map(|s| secret("inbound_hmac_secret", s))
+                .transpose()?,
+            vault_token: self
+                .keyring
+                .as_ref()
+                .and_then(|k| k.vault.as_ref())
+                .map(|v| secret("keyring.vault.token", &v.token))
+                .transpose()?,
+            journal_url: match &self.journal {
+                JournalConfig::Postgres { url } => {
+                    Some(resolve_env(url).map_err(|e| anyhow::anyhow!("journal.url: {e}"))?)
+                }
+                JournalConfig::Redb { .. } => None,
+            },
+        })
     }
 }
 
 #[cfg(test)]
-mod env_resolution_tests {
+mod tests {
+    use super::*;
     use secrecy::ExposeSecret as _;
 
-    fn cfg_with_key(key: &str) -> super::AgentdConfig {
+    fn cfg_with_key(key: &str) -> AgentdConfig {
         serde_json::from_value(serde_json::json!({
             "tenant": "9900000000001",
-            "orchestrator": { "provider": "openai", "model": "gpt-4o-mini" },
             "mcp_servers": {},
             "mcp_api_key": "test-key",
             "providers": {
@@ -466,12 +402,91 @@ mod env_resolution_tests {
     /// the provider.
     #[test]
     fn passthrough_and_missing_var_error() {
-        let mut cfg = cfg_with_key("sk-plain");
-        cfg.resolve_env_indirection().expect("resolve");
-        assert_eq!(cfg.providers["openai"].api_key.expose_secret(), "sk-plain");
+        let secrets = cfg_with_key("sk-plain").resolve_secrets().expect("resolve");
+        assert_eq!(
+            secrets.providers["openai"].api_key.expose_secret(),
+            "sk-plain"
+        );
 
-        let mut cfg2 = cfg_with_key("env:AGENTD_TEST_KEY_DOES_NOT_EXIST");
-        let err = cfg2.resolve_env_indirection().unwrap_err().to_string();
+        // `map_or_else` rather than `unwrap_err`: reporting the failure would
+        // need `Debug` on `Secrets`, and `Secrets` is nothing but secrets.
+        let err = cfg_with_key("env:AGENTD_TEST_KEY_DOES_NOT_EXIST")
+            .resolve_secrets()
+            .map_or_else(|e| e.to_string(), |_| String::new());
         assert!(err.contains("AGENTD_TEST_KEY_DOES_NOT_EXIST"), "{err}");
+    }
+
+    /// Resolution reads the config without needing to own it.
+    ///
+    /// The runner hands `Daemon::build` an `Arc<Config>` and keeps its own
+    /// reference for the bind address, so an in-place `&mut` resolution cannot
+    /// work — an earlier version tried to unwrap the `Arc` and would have
+    /// panicked on every start.
+    #[test]
+    fn secrets_resolve_from_a_shared_config() {
+        let shared = std::sync::Arc::new(cfg_with_key("sk-plain"));
+        let _also_held = std::sync::Arc::clone(&shared);
+        let secrets = shared
+            .resolve_secrets()
+            .expect("resolve from behind an Arc");
+        assert_eq!(secrets.mcp_api_key.expose_secret(), "test-key");
+    }
+
+    /// A config that says nothing about its journal gets the embedded one.
+    #[test]
+    fn the_journal_defaults_to_the_embedded_backend() {
+        let cfg = cfg_with_key("sk");
+        assert!(
+            matches!(cfg.journal, JournalConfig::Redb { .. }),
+            "a deployment that names no backend runs on redb"
+        );
+    }
+
+    /// The Postgres backend is chosen by name and carries its DSN.
+    #[test]
+    fn a_postgres_journal_parses() {
+        let cfg: AgentdConfig = toml::from_str(
+            r#"
+tenant = "9900357000004"
+mcp_api_key = "k"
+[mcp_servers]
+[providers.anthropic]
+backend = "anthropic"
+api_key = "k"
+[journal]
+backend = "postgres"
+url = "postgres://localhost/agentd"
+"#,
+        )
+        .expect("parses");
+        match cfg.journal {
+            JournalConfig::Postgres { url } => assert!(url.contains("agentd")),
+            JournalConfig::Redb { .. } => panic!("named backend was ignored"),
+        }
+    }
+
+    /// A key ring declared required with no Vault parses — and is refused later,
+    /// at startup, where the message can explain the consequence.
+    #[test]
+    fn a_keyring_block_parses() {
+        let cfg: AgentdConfig = toml::from_str(
+            r#"
+tenant = "9900357000004"
+mcp_api_key = "k"
+[mcp_servers]
+[providers.anthropic]
+backend = "anthropic"
+api_key = "k"
+[keyring]
+required = true
+[keyring.vault]
+address = "https://vault.internal:8200"
+token = "s.dev"
+"#,
+        )
+        .expect("parses");
+        let keyring = cfg.keyring.expect("declared");
+        assert!(keyring.required);
+        assert_eq!(keyring.vault.expect("vault").mount, "transit");
     }
 }

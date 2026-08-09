@@ -333,10 +333,18 @@ pub mod vpp {
 
 /// Agent runtime events (`de.agent.*`), emitted by `agentd`.
 pub mod agent {
-    /// An agent session finished and produced a decision.
+    /// An agent run reached a terminal state and produced a decision.
+    ///
+    /// Carries the run's outcome — `completed`, `failed`, `suspended`,
+    /// `exhausted`, `quarantined`, `replanning`, `cancelled` or
+    /// `not-admitted` — so a subscriber sees a run awaiting human approval as
+    /// readily as a successful one. Beside it: `run_id` (the journal key, which
+    /// `GET /api/v1/oversight/runs/{run_id}` takes), `waiting_for` (present only
+    /// when suspended — an approval, a message, an instant) and `tokens`.
+    ///
+    /// There is no separate dead-letter event: a run that fails is resumable
+    /// from its journal rather than a message that has nowhere left to go.
     pub const DECISION_MADE: &str = "de.agent.decision.made";
-    /// A DLQ entry exhausted its redelivery attempts.
-    pub const SESSION_DLQ_EXHAUSTED: &str = "de.agent.session.dlq.exhausted";
 }
 
 /// GaBi Gas balancing events (`de.gabi.*`), defined in `mako-gabi-gas`.
@@ -495,7 +503,6 @@ pub fn all() -> &'static [&'static str] {
         vpp::SETTLEMENT_BERECHNET,
         // de.agent.*
         agent::DECISION_MADE,
-        agent::SESSION_DLQ_EXHAUSTED,
         // de.gabi.*
         gabi::MEASUREMENT_RECEIVED,
         gabi::ALLOCATION_COMPLETED,

@@ -1,0 +1,194 @@
+# EEG/KWKG regulatory compliance monitor. Checks §52 Pflichtzahlungen, §44b Biogas 45% cap, §20 Direktvermarktungspflicht (>100 kW), §42a Holzbiomasse, and §43 Substratdeckel violations.
+#
+# Generated from the compiled specialist definition during the agentplane
+# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
+# own `read_only_hint` — the cutover inherited it from servers that declared
+# nothing, so 91 plain reads were marked mutating and would have stopped for an
+# approval on every call. The mutating grants are gone entirely, because a
+# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
+#
+# Narrowing the read set further per specialist is domain review, not mechanical
+# work.
+# Role: NB. Compiled only into a `role-nb` build (and the default all-roles build).
+apiVersion: agentplane.hupe1980.github.io/v1alpha1
+kind: Agent
+metadata:
+  name: eeg-compliance-agent
+  version: "1.0.0"
+spec:
+  execution:
+    kind: tool-calling
+    max_turns: 12
+
+  identity:
+    role: >-
+      EEG/KWKG regulatory compliance monitor. Checks §52 Pflichtzahlungen, §44b
+      Biogas 45% cap, §20 Direktvermarktungspflicht (>100 kW), §42a Holzbiomasse,
+      and §43 Substratdeckel violations.
+    constraints: |
+      You are the EEG compliance specialist.
+
+      ## TRIGGERED BY
+      - `de.eeg.anlage.*` — plant registration/update
+      - `de.eeg.verguetung.*` / `de.eeg.marktpraemie.*` — settlement events
+
+      ## COMPLIANCE CHECKS
+
+      ### §20 EEG + §52 Abs. 1 Nr. 4 — Direktvermarktungspflicht
+      Plants > 100 kW must be in Direktvermarktung. VERGUETUNG model → violation.
+      Penalty: €10/kW/month from violation date.
+
+      ### §44b EEG 2023 — Biogas 45% annual cap
+      Biogas plants > 100 kW: track annual kWh vs cap (leistung_kw × 0.45 × 8760).
+      Alert at 75%, flag at 90%.
+
+      ### §42a EEG — Holzbiomasse restriction
+      Holzbiomasse plants: check compliance with emission limits.
+
+      ### §43 EEG — Substratdeckel
+      Biogas: verify substrate mix compliance if applicable.
+
+      ### §§53b–54 EEG — cuts to the anzulegender Wert
+      These reduce the payment without changing the Einspeisemenge or the tariff
+      table, so they look like a billing error to an operator. They are not
+      violations — they are lawful deductions — and must be reported separately from
+      VIOLATIONS so nobody chases a penalty that is not one.
+
+      ## STEP-BY-STEP PROCEDURE
+
+      1. Call einsd `get_plant` for plant details.
+      2. Call einsd `get_compliance_status` for §52 violation check.
+      3. If BIOGAS and > 100 kW: call einsd `check_sect44b_quota`.
+      4. If > 100 kW on VERGUETUNG: call einsd `check_direktvermarktung_compliance`.
+      5. If the question is about a payment being lower than expected, call einsd
+         `get_aw_reduktionen` for the settlement date BEFORE reporting a violation:
+         a §53b, §53c or §54 cut explains a smaller Gutschrift on its own.
+
+      ## OUTPUT FORMAT
+      ```
+      COMPLIANCE_STATUS: [OK|WARNING|VIOLATION]
+      PLANT_ID: [id]
+      ERZEUGUNGSART: [technology]
+      VIOLATIONS: [list of {paragraph, description, penalty_exposure_eur_month}]
+      WARNINGS: [list of {paragraph, description, threshold_pct}]
+      AW_REDUKTIONEN: [list of {paragraph, grund, abzug_ct_kwh} — lawful cuts, not violations]
+      ```
+
+  capabilities:
+    provides: [eeg.compliance]
+
+  models:
+    privileged:  { provider: anthropic, model: claude-sonnet-5 }
+
+  security:
+    max_sensitivity_egress: internal
+    max_delegation_depth: 0
+    max_sensitivity_journaled: internal
+
+  # No `oversight` block, and no mutating tool grant: this specialist reads and
+  # reports. Both absences are the same fact — a `tool-calling` agent cannot
+  # dispatch a mutating call at all, because the arguments come from a model
+  # completion, which agentplane labels untrusted by construction, and its taint
+  # gate refuses a mutating sink with untrusted arguments. Declaring the grant
+  # anyway would read as an ability this agent does not have.
+  #
+  # Acting on a conclusion is a `planned` specialist's job — see
+  # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
+  # resolves itself, so the authority-bearing arguments keep the run input's own
+  # labels and a named human approves the call before it leaves.
+
+  budgets:
+    max_tokens: 200000
+    max_steps: 36
+    max_effects: 60
+    max_wallclock_secs: 900
+
+  tools:
+    - ref: tool://einsd/list_plants
+      mutates: false
+      max_sensitivity: internal
+      description: "list plants via einsd"
+    - ref: tool://einsd/get_plant
+      mutates: false
+      max_sensitivity: internal
+      description: "get plant via einsd"
+    - ref: tool://einsd/list_expiring
+      mutates: false
+      max_sensitivity: internal
+      description: "list expiring via einsd"
+    - ref: tool://einsd/list_settlements
+      mutates: false
+      max_sensitivity: internal
+      description: "list settlements via einsd"
+    - ref: tool://einsd/lookup_verguetungssatz
+      mutates: false
+      max_sensitivity: internal
+      description: "lookup verguetungssatz via einsd"
+    - ref: tool://einsd/list_unsettled_plants
+      mutates: false
+      max_sensitivity: internal
+      description: "list unsettled plants via einsd"
+    - ref: tool://einsd/get_epex_monthly_price
+      mutates: false
+      max_sensitivity: internal
+      description: "get epex monthly price via einsd"
+    - ref: tool://einsd/lookup_statutory_rate
+      mutates: false
+      max_sensitivity: internal
+      description: "lookup statutory rate via einsd"
+    - ref: tool://einsd/get_compliance_status
+      mutates: false
+      max_sensitivity: internal
+      description: "get compliance status via einsd"
+    - ref: tool://einsd/list_plants_without_mastr
+      mutates: false
+      max_sensitivity: internal
+      description: "list plants without mastr via einsd"
+    - ref: tool://einsd/check_direktvermarktung_compliance
+      mutates: false
+      max_sensitivity: internal
+      description: "check direktvermarktung compliance via einsd"
+    - ref: tool://einsd/check_sect44b_quota
+      mutates: false
+      max_sensitivity: internal
+      description: "check sect44b quota via einsd"
+    - ref: tool://einsd/get_jahresmarktwert
+      mutates: false
+      max_sensitivity: internal
+      description: "get jahresmarktwert via einsd"
+    - ref: tool://einsd/get_aw_reduktionen
+      mutates: false
+      max_sensitivity: internal
+      description: "get aw reduktionen via einsd"
+    - ref: tool://einsd/get_settlement_state_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get settlement state history via einsd"
+    - ref: tool://einsd/explain_settlement
+      mutates: false
+      max_sensitivity: internal
+      description: "explain settlement via einsd"
+    - ref: tool://obsd/get_process
+      mutates: false
+      max_sensitivity: internal
+      description: "get process via obsd"
+    - ref: tool://obsd/list_overdue_processes
+      mutates: false
+      max_sensitivity: internal
+      description: "list overdue processes via obsd"
+    - ref: tool://obsd/get_kpi_report
+      mutates: false
+      max_sensitivity: internal
+      description: "get kpi report via obsd"
+    - ref: tool://obsd/get_parity_report
+      mutates: false
+      max_sensitivity: internal
+      description: "get parity report via obsd"
+    - ref: tool://obsd/get_stp_rate
+      mutates: false
+      max_sensitivity: internal
+      description: "get stp rate via obsd"
+    - ref: tool://obsd/list_processes_by_family
+      mutates: false
+      max_sensitivity: internal
+      description: "list processes by family via obsd"

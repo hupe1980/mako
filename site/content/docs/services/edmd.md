@@ -985,7 +985,7 @@ over Kafka is the least supervised door there is, so a finding that only reached
 the log there would reach nobody.
 
 The event is the trigger, not a notification: in `agentd` it starts the
-`msb-history-agent` (LanceDB RAG indexing), the `meter-data-agent` (grade-F
+`msb-history-agent` (device-history review), the `meter-data-agent` (grade-F
 investigation) and the `replacement-value-agent` (§ 60 Abs. 2 MsbG
 Ersatzwertbildung via edmd `trigger_substitution`). A finding nobody is told
 about sits in the store until a settlement run trips over it — by then the
@@ -1063,7 +1063,7 @@ This eliminates the risk of billing a zero-reading period after a device swap �
 | `get_timeseries` | Meter data time-series for a MaLo in a date range |
 | `get_imbalance` | Mehr-/Mindermengen imbalance report |
 | `get_billing_period` | MeterBillingPeriod (arbeitsmenge, spitzenleistung, brennwert) |
-| `get_device_history` | MSB device history text for LanceDB RAG indexing |
+| `get_device_history` | MSB device history as narrative text |
 | `get_quality_warnings` | Hampel-filter quality warnings (grade A/B/C/F) |
 | `list_reading_orders` | Ablesesteuerung orders for a MaLo |
 | `list_overdue_reading_orders` | §40 EnWG compliance gaps |

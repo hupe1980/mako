@@ -1,0 +1,246 @@
+# Customer portal proactive notification orchestrator. Triggers invoice-ready notifications, EEG Förderung expiry alerts, Mahnung reminders, and Tarifwechsel confirmation messages.
+#
+# Generated from the compiled specialist definition during the agentplane
+# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
+# own `read_only_hint` — the cutover inherited it from servers that declared
+# nothing, so 91 plain reads were marked mutating and would have stopped for an
+# approval on every call. The mutating grants are gone entirely, because a
+# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
+#
+# Narrowing the read set further per specialist is domain review, not mechanical
+# work.
+# Role: LF. Compiled only into a `role-lf` build (and the default all-roles build).
+apiVersion: agentplane.hupe1980.github.io/v1alpha1
+kind: Agent
+metadata:
+  name: portald-agent
+  version: "1.0.0"
+spec:
+  execution:
+    kind: tool-calling
+    max_turns: 8
+
+  identity:
+    role: >-
+      Customer portal proactive notification orchestrator. Triggers invoice-ready
+      notifications, EEG Förderung expiry alerts, Mahnung reminders, and
+      Tarifwechsel confirmation messages.
+    constraints: |
+      You are the customer portal notification specialist.
+
+      ## TRIGGERED BY
+      - `de.billing.rechnung.erstellt` — new invoice → notify customer
+      - `de.eeg.anlage.foerderung-auslaufend` — EEG expiry → notify plant operator
+      - `de.accounting.mahnung.issued` — Mahnung → dunning notification
+      - `de.vertrag.*` — contract lifecycle → keep the portal view current
+
+      ## PROCEDURE
+
+      1. Determine notification type from event.
+      2. Call portald to check if customer has active portal session.
+      3. Retrieve relevant data (invoice brutto_eur, EEG foerderendedatum, Mahnstufe).
+      4. Compose notification summary for customer-facing display.
+      5. Flag if notification requires operator approval before sending.
+
+      ## OUTPUT FORMAT
+      ```
+      NOTIFICATION_TYPE: [INVOICE_READY|EEG_EXPIRY|DUNNING|TARIFF_CHANGE]
+      CUSTOMER_PORTAL_ACTIVE: [YES|NO]
+      NOTIFICATION_SAFE: [YES|NEEDS_REVIEW]
+      SUMMARY: [customer-friendly one-liner]
+      ```
+
+  capabilities:
+    provides: [portald]
+
+  models:
+    privileged:  { provider: anthropic, model: claude-sonnet-5 }
+
+  security:
+    max_sensitivity_egress: internal
+    max_delegation_depth: 0
+    max_sensitivity_journaled: internal
+
+  # No `oversight` block, and no mutating tool grant: this specialist reads and
+  # reports. Both absences are the same fact — a `tool-calling` agent cannot
+  # dispatch a mutating call at all, because the arguments come from a model
+  # completion, which agentplane labels untrusted by construction, and its taint
+  # gate refuses a mutating sink with untrusted arguments. Declaring the grant
+  # anyway would read as an ability this agent does not have.
+  #
+  # Acting on a conclusion is a `planned` specialist's job — see
+  # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
+  # resolves itself, so the authority-bearing arguments keep the run input's own
+  # labels and a named human approves the call before it leaves.
+
+  budgets:
+    max_tokens: 200000
+    max_steps: 24
+    max_effects: 40
+    max_wallclock_secs: 900
+
+  tools:
+    - ref: tool://portald/get_dashboard
+      mutates: false
+      max_sensitivity: confidential
+      description: "get dashboard via portald"
+    - ref: tool://portald/get_lastgang
+      mutates: false
+      max_sensitivity: confidential
+      description: "get lastgang via portald"
+    - ref: tool://portald/get_invoices
+      mutates: false
+      max_sensitivity: confidential
+      description: "get invoices via portald"
+    - ref: tool://portald/get_balance
+      mutates: false
+      max_sensitivity: confidential
+      description: "get balance via portald"
+    - ref: tool://portald/get_kontoauszug
+      mutates: false
+      max_sensitivity: confidential
+      description: "get kontoauszug via portald"
+    - ref: tool://portald/get_vorauszahlung
+      mutates: false
+      max_sensitivity: confidential
+      description: "get vorauszahlung via portald"
+    - ref: tool://portald/get_eeg_status
+      mutates: false
+      max_sensitivity: confidential
+      description: "get eeg status via portald"
+    - ref: tool://portald/get_versorgung
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgung via portald"
+    - ref: tool://billingd/list_billing_records
+      mutates: false
+      max_sensitivity: internal
+      description: "list billing records via billingd"
+    - ref: tool://billingd/get_billing_record
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing record via billingd"
+    - ref: tool://billingd/preview_billing
+      mutates: false
+      max_sensitivity: internal
+      description: "preview billing via billingd"
+    - ref: tool://billingd/get_xrechnung
+      mutates: false
+      max_sensitivity: internal
+      description: "get xrechnung via billingd"
+    - ref: tool://billingd/check_billing_anomaly
+      mutates: false
+      max_sensitivity: internal
+      description: "check billing anomaly via billingd"
+    - ref: tool://billingd/list_vpp_settlements
+      mutates: false
+      max_sensitivity: internal
+      description: "list vpp settlements via billingd"
+    - ref: tool://billingd/list_corrections
+      mutates: false
+      max_sensitivity: internal
+      description: "list corrections via billingd"
+    - ref: tool://billingd/list_product_categories
+      mutates: false
+      max_sensitivity: internal
+      description: "list product categories via billingd"
+    - ref: tool://billingd/validate_tariff_config
+      mutates: false
+      max_sensitivity: internal
+      description: "validate tariff config via billingd"
+    - ref: tool://billingd/explain_invoice_position
+      mutates: false
+      max_sensitivity: internal
+      description: "explain invoice position via billingd"
+    - ref: tool://billingd/get_billing_summary
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing summary via billingd"
+    - ref: tool://einsd/list_plants
+      mutates: false
+      max_sensitivity: internal
+      description: "list plants via einsd"
+    - ref: tool://einsd/get_plant
+      mutates: false
+      max_sensitivity: internal
+      description: "get plant via einsd"
+    - ref: tool://einsd/list_expiring
+      mutates: false
+      max_sensitivity: internal
+      description: "list expiring via einsd"
+    - ref: tool://einsd/list_settlements
+      mutates: false
+      max_sensitivity: internal
+      description: "list settlements via einsd"
+    - ref: tool://einsd/lookup_verguetungssatz
+      mutates: false
+      max_sensitivity: internal
+      description: "lookup verguetungssatz via einsd"
+    - ref: tool://einsd/list_unsettled_plants
+      mutates: false
+      max_sensitivity: internal
+      description: "list unsettled plants via einsd"
+    - ref: tool://einsd/get_epex_monthly_price
+      mutates: false
+      max_sensitivity: internal
+      description: "get epex monthly price via einsd"
+    - ref: tool://einsd/lookup_statutory_rate
+      mutates: false
+      max_sensitivity: internal
+      description: "lookup statutory rate via einsd"
+    - ref: tool://einsd/get_compliance_status
+      mutates: false
+      max_sensitivity: internal
+      description: "get compliance status via einsd"
+    - ref: tool://einsd/list_plants_without_mastr
+      mutates: false
+      max_sensitivity: internal
+      description: "list plants without mastr via einsd"
+    - ref: tool://einsd/check_direktvermarktung_compliance
+      mutates: false
+      max_sensitivity: internal
+      description: "check direktvermarktung compliance via einsd"
+    - ref: tool://einsd/check_sect44b_quota
+      mutates: false
+      max_sensitivity: internal
+      description: "check sect44b quota via einsd"
+    - ref: tool://einsd/get_jahresmarktwert
+      mutates: false
+      max_sensitivity: internal
+      description: "get jahresmarktwert via einsd"
+    - ref: tool://einsd/get_aw_reduktionen
+      mutates: false
+      max_sensitivity: internal
+      description: "get aw reduktionen via einsd"
+    - ref: tool://einsd/get_settlement_state_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get settlement state history via einsd"
+    - ref: tool://einsd/explain_settlement
+      mutates: false
+      max_sensitivity: internal
+      description: "explain settlement via einsd"
+    - ref: tool://accountingd/get_balance
+      mutates: false
+      max_sensitivity: internal
+      description: "get balance via accountingd"
+    - ref: tool://accountingd/list_ledger
+      mutates: false
+      max_sensitivity: internal
+      description: "list ledger via accountingd"
+    - ref: tool://accountingd/list_dunning
+      mutates: false
+      max_sensitivity: internal
+      description: "list dunning via accountingd"
+    - ref: tool://accountingd/list_overdue
+      mutates: false
+      max_sensitivity: internal
+      description: "list overdue via accountingd"
+    - ref: tool://accountingd/compute_bilanzielle_abgrenzung
+      mutates: false
+      max_sensitivity: internal
+      description: "compute bilanzielle abgrenzung via accountingd"
+    - ref: tool://accountingd/suggest_payment_match
+      mutates: false
+      max_sensitivity: internal
+      description: "suggest payment match via accountingd"

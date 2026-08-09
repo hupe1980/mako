@@ -118,7 +118,8 @@ impl ProcessdMcpHandler {
     }
 
     #[tool(
-        description = "List recent Anmeldung STP decisions (NB role). Returns decisions ordered by decided_at descending."
+        description = "List recent Anmeldung STP decisions (NB role). Returns decisions ordered by decided_at descending.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_decisions(
         &self,
@@ -136,7 +137,8 @@ impl ProcessdMcpHandler {
     }
 
     #[tool(
-        description = "Get a single NB Anmeldung decision by process_id. NB role. Returns the decision outcome, ERC code (if reject), and whether §20 EnWG affiliate check was triggered."
+        description = "Get a single NB Anmeldung decision by process_id. NB role. Returns the decision outcome, ERC code (if reject), and whether §20 EnWG affiliate check was triggered.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_decision(
         &self,
@@ -175,7 +177,8 @@ A07 (Strom) / E17 (Gas) = Datums-/Fristverletzung (LFW24 future rule; \
 Gas 6-week retroactive window for E01/E02, 10 WT lead for E03), \
 A05 = Anforderungen nicht erfüllbar (Bilanzierungsgebiet/unknown partner). \
 Escalate = data gap (grid record missing) or affiliate initiator \
-(§20 EnWG — operator must approve manually)."
+(§20 EnWG — operator must approve manually).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_stp_breakdown_by_erc(
         &self,
@@ -219,7 +222,8 @@ Escalate = data gap (grid record missing) or affiliate initiator \
         description = "List NB Anmeldung decisions where `initiator_is_affiliate = true` — §20 EnWG \
 Diskriminierungsfreiheitspflicht audit. Returns decisions where the LF MP-ID matches the operator's \
 own MP-ID. These MUST NOT be auto-accepted (BNetzA §20 EnWG; BK6-22-024 §5.2). \
-Use `obsd.get_kpi_report` for the aggregated §20 parity report."
+Use `obsd.get_kpi_report` for the aggregated §20 parity report.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_affiliate_decisions(
         &self,
@@ -248,7 +252,8 @@ Any entry with decision=Accept indicates a §20 EnWG violation — report to BNe
     }
 
     #[tool(
-        description = "Get the Anmeldung STP rate for the last N days. NB role. Returns a float 0.0–1.0 or null when no decisions exist."
+        description = "Get the Anmeldung STP rate for the last N days. NB role. Returns a float 0.0–1.0 or null when no decisions exist.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_stp_rate(
         &self,
@@ -269,7 +274,8 @@ Any entry with decision=Accept indicates a §20 EnWG violation — report to BNe
     }
 
     #[tool(
-        description = "List LF approval-queue entries needing operator action (status: Pending/Approved/Rejected/Expired)."
+        description = "List LF approval-queue entries needing operator action (status: Pending/Approved/Rejected/Expired).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_pending_approvals(
         &self,
@@ -291,7 +297,10 @@ Any entry with decision=Accept indicates a §20 EnWG violation — report to BNe
         }
     }
 
-    #[tool(description = "Get a single LF approval queue entry by its UUID.")]
+    #[tool(
+        description = "Get a single LF approval queue entry by its UUID.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
     async fn get_queue_entry(
         &self,
         Parameters(params): Parameters<GetQueueEntryParams>,

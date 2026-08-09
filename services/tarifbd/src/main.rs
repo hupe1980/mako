@@ -95,48 +95,48 @@ impl Daemon for Tarifbd {
             .merge(mcp_server::router(mcp_state, ctx.shutdown.clone()))
             // ── Product CRUD ────────────────────────────────────────────────
             .route(
-                "/api/v1/products/:lf_mp_id/:product_code",
+                "/api/v1/products/{lf_mp_id}/{product_code}",
                 put(handlers::put_product)
                     .get(handlers::get_product)
                     .delete(handlers::delete_product),
             )
             .route(
-                "/api/v1/products/:lf_mp_id/:product_code/history",
+                "/api/v1/products/{lf_mp_id}/{product_code}/history",
                 get(handlers::get_product_history),
             )
             // ── Energiemix sub-resource (§42 EnWG) ───────────────────────────────
             .route(
-                "/api/v1/products/:lf_mp_id/:product_code/energiemix",
+                "/api/v1/products/{lf_mp_id}/{product_code}/energiemix",
                 put(handlers::put_energiemix)
                     .get(handlers::get_energiemix)
                     .delete(handlers::delete_energiemix_handler),
             )
             .route(
-                "/api/v1/products/:lf_mp_id",
+                "/api/v1/products/{lf_mp_id}",
                 get(handlers::list_products_handler),
             )
             // ── Customer → product assignment ─────────────────────────────────────
             .route(
-                "/api/v1/customer/:malo_id/product",
+                "/api/v1/customer/{malo_id}/product",
                 get(handlers::get_customer_product_handler)
                     .put(handlers::put_customer_product_handler),
             )
             .route(
-                "/api/v1/customer/:malo_id/product/history",
+                "/api/v1/customer/{malo_id}/product/history",
                 get(handlers::get_customer_product_history_handler),
             )
             // ── EPEX Spot prices ──────────────────────────────────────────────────
-            .route("/api/v1/epex-prices/:date", put(handlers::put_epex_prices))
+            .route("/api/v1/epex-prices/{date}", put(handlers::put_epex_prices))
             .route(
-                "/api/v1/epex-prices/:date/quarter-hourly",
+                "/api/v1/epex-prices/{date}/quarter-hourly",
                 get(handlers::get_epex_prices_quarter_hourly),
             )
             .route(
-                "/api/v1/epex-prices/:year/:month/average",
+                "/api/v1/epex-prices/{year}/{month}/average",
                 get(handlers::get_epex_monthly_average),
             )
             // ── nEHS certificate prices (BEHG CO₂, auctioned since 2026) ──────────
-            .route("/api/v1/nehs-prices/:date", put(handlers::put_nehs_price))
+            .route("/api/v1/nehs-prices/{date}", put(handlers::put_nehs_price))
             .route(
                 "/api/v1/nehs-prices/latest",
                 get(handlers::get_nehs_price_latest),
@@ -150,26 +150,26 @@ impl Daemon for Tarifbd {
                 "/api/v1/angebote/expire",
                 post(handlers::post_expire_angebote),
             )
-            .route("/api/v1/angebote/:id", get(handlers::get_angebot_handler))
+            .route("/api/v1/angebote/{id}", get(handlers::get_angebot_handler))
             .route(
-                "/api/v1/angebote/:id/comparison",
+                "/api/v1/angebote/{id}/comparison",
                 get(handlers::get_angebot_comparison),
             )
             .route(
-                "/api/v1/angebote/:id/versenden",
+                "/api/v1/angebote/{id}/versenden",
                 post(handlers::post_angebot_versenden),
             )
             .route(
-                "/api/v1/angebote/:id/annehmen",
+                "/api/v1/angebote/{id}/annehmen",
                 post(handlers::post_angebot_annehmen),
             )
             .route(
-                "/api/v1/angebote/:id/ablehnen",
+                "/api/v1/angebote/{id}/ablehnen",
                 post(handlers::post_angebot_ablehnen),
             )
             // ── Angebot editing (before VERSANDT) ────────────────────────────────
             .route(
-                "/api/v1/angebote/:id",
+                "/api/v1/angebote/{id}",
                 axum::routing::put(handlers::put_angebot),
             )
             // ── Comparison portal feed (public, ETag-cached) ──────────────────────

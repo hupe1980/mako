@@ -22,6 +22,10 @@ Commands:
                         verify the count matches the claim in README.md. Exits 1 if the count
                         deviates by more than 2.
   check-release-coverage  Fail when no profile covers the current (or --date) date
+  check-routes        Refuse axum 0.7 `/:param` route literals, which panic at startup
+                        under axum 0.8 (the fix is `/{param}`)
+  check-tool-grants   Verify every agentd manifest tool grant names a real MCP tool and
+                        agrees with that server's own `read_only_hint`
 
 Options for `validate-pruefids`:
   --message-type <TYPE> Filter coverage check to the given message type (e.g. INVOIC)
@@ -116,6 +120,8 @@ mod add_release;
 mod audit_ahb;
 mod bump_version;
 mod check_release_coverage;
+mod check_routes;
+mod check_tool_grants;
 mod codegen;
 mod extract_docx;
 mod extract_pdf;
@@ -135,6 +141,8 @@ fn main() {
         Some("audit-ahb") => audit_ahb(),
         Some("check-bo4e-coverage") => check_bo4e_coverage(),
         Some("check-release-coverage") => check_release_coverage::check_release_coverage(),
+        Some("check-routes") => check_routes(),
+        Some("check-tool-grants") => check_tool_grants(),
         Some("codegen") => codegen(),
         Some("validate-extraction") => validate_extraction::validate_extraction(),
         Some("validate-profiles") => validate_profiles(),
@@ -182,6 +190,20 @@ fn audit_ahb() {
     let args: Vec<String> = std::env::args().skip(2).collect();
     let ok = audit_ahb::run(&workspace_root, &args);
     if !ok {
+        std::process::exit(1);
+    }
+}
+
+fn check_routes() {
+    let (workspace_root, _) = workspace_info();
+    if !check_routes::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_tool_grants() {
+    let (workspace_root, _) = workspace_info();
+    if !check_tool_grants::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

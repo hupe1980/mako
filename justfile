@@ -146,6 +146,14 @@ clippy-roles:
         echo "==> cargo clippy -p makod --features $f"
         cargo clippy -p makod --features "$f" --all-targets -- -D warnings
     done
+    # agentd carries the same role flags: it is the one service that reaches all
+    # the others, so a role-scoped build must exclude the other arm's
+    # specialists rather than merely decline to run them (§ 9 EnWG).
+    for f in "role-lf" "role-nb" "role-msb"; do
+        echo "==> cargo clippy -p agentd --features $f"
+        cargo clippy -p agentd --features "$f" --all-targets -- -D warnings
+        cargo test   -p agentd --features "$f" --lib role_scoped
+    done
 
 # Boot each umbrella deployment profile and assert it passes --check.
 #
@@ -172,7 +180,7 @@ smoke-roles:
         ./target/debug/makod --config "$tmp/makod.toml" --allow-volatile --check
     done
 
-ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
+ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-routes check-tool-grants doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
 
 # ── makotest (Python toolkit) ─────────────────────────────────────────────────
 
@@ -304,6 +312,17 @@ check-release-coverage:
 # Verify the rubo4e::current active-type count matches the README.md claim (delta ≤ 2).
 check-bo4e-coverage:
     cargo xtask check-bo4e-coverage
+
+# Refuse axum 0.7 `/:param` route literals. Under axum 0.8 they panic while the
+# router is built — i.e. at startup — so nothing in the test suite catches them.
+check-routes:
+    cargo xtask check-routes
+
+# Every agentd tool grant must name a real MCP tool and agree with that server's
+# own `read_only_hint`. A read declared mutating stops for a human on every call;
+# a mutation declared read-only is dispatched unattended.
+check-tool-grants:
+    cargo xtask check-tool-grants
 
 # ── AHB audit ─────────────────────────────────────────────────────────────────
 

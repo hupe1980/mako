@@ -1,27 +1,35 @@
-//! `agentd` — Multi-agent LLM orchestration daemon for mako.
+//! `agentd` — the multi-agent plane for mako.
 //!
-//! ## Architecture
+//! 28 declarative specialists run on the [agentplane] durable runtime. What
+//! agentd owns is the bridge from mako to that runtime: routing a CloudEvent to
+//! the specialists that subscribe to it, labelling the payload at the trust
+//! boundary, wiring the stores, the policy set, the key ring and the calendar,
+//! and mounting the surface a human approves things on.
 //!
 //! ```text
-//! CloudEvent → OrchestratorAgent
-//!   ├── trigger_patterns → SpecialistAgent (direct)
-//!   └── LLM triage → SpecialistAgent (via handoff tool)
-//!         ↓ ReAct loop (MCP tools + peer handoffs)
-//!         ↓ RAG context from LanceDB (S3/GCS/local)
-//!         ↓ de.agent.decision.made → marktd audit log
+//! CloudEvent  →  Router          one run per subscribing specialist
+//!             →  plane::label    re-validated identifiers trusted, the rest not
+//!             →  Runtime         journaled effects, strict replay, Cedar gate
+//!                  ├─ tools      MCP calls to mako's own services
+//!                  ├─ tasks      a mutating call waits for a named approver
+//!                  └─ deadlines  Werktage, from mako's BDEW holiday table
+//!             →  de.agent.decision.made → marktd audit log
 //! ```
 //!
-//! ## LLM Providers
+//! | Route | What it is for |
+//! |---|---|
+//! | `POST /webhook` | CloudEvent ingest (HMAC-verified) |
+//! | `POST /api/v1/run` | Run a specialist by hand (OIDC) |
+//! | `GET /api/v1/decisions` | The last 100 decisions |
+//! | `GET /api/v1/agents` | What this deployment activated |
+//! | `GET /api/v1/agents/catalog` | Everything compiled in |
+//! | `GET /.well-known/agents/{name}` | A2A Agent Card, derived from the manifest |
+//! | `/api/v1/oversight/*` | agentplane's operator surface: worklist, runs, cases |
 //!
-//! | Provider | Config `backend` | Env vars |
-//! |---|---|---|
-//! | OpenAI / Azure / Ollama | `"openai"` | (api_key in config) |
-//! | Anthropic Claude | `"anthropic"` | (api_key in config) |
-//! | AWS Bedrock | `"bedrock"` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` |
+//! Port: 9580
 //!
-//! ## Port: 9580
+//! [agentplane]: https://hupe1980.github.io/agentplane/
 
-use agentd::{dlq::DlqStore, handlers, llm};
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -29,175 +37,227 @@ use axum::{
     Extension, Router,
     routing::{get, post},
 };
-use mako_service::{health::health_routes, http::default_client, load_config, oidc::OidcConfig};
-use tracing::info;
+use mako_service::{
+    oidc::OidcConfig,
+    service::{Daemon, ServiceContext},
+};
+use tracing::{info, warn};
 
 use agentd::{
-    agent::{AgentRegistry, OrchestratorAgent},
-    config::AgentdConfig,
-    handlers::{AppState, SessionStore},
-    mcp::McpPool,
-    rag::RagEngine,
+    config::{AgentdConfig, JournalConfig},
+    handlers::{self, AppState, DecisionLog},
+    plane::{Activation, Plane, PlaneConfig, Stores},
 };
+
+/// The `agentd` daemon. `mako_service::run` owns the lifecycle (tracing, config,
+/// health, metrics, graceful shutdown); this supplies the plane and the routes.
+struct Agentd;
+
+impl Daemon for Agentd {
+    type Config = AgentdConfig;
+    const NAME: &'static str = "agentd";
+
+    async fn build(cfg: Arc<AgentdConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
+        // Credentials first: an `env:VAR` placeholder that reached a driver
+        // would be sent literally as a bearer token and come back as a 401 per
+        // model call. The config itself stays as the runner handed it over —
+        // it holds the placeholders, `Secrets` holds what they resolved to.
+        let secrets = cfg
+            .resolve_secrets()
+            .context("resolve env: indirection in secrets")?;
+
+        info!(
+            port = cfg.port,
+            tenant = %cfg.tenant,
+            providers = cfg.providers.len(),
+            enable_all = cfg.bundled_agents.enable_all,
+            enabled = cfg.bundled_agents.enable.len(),
+            "agentd starting"
+        );
+
+        // The tenant is part of every store key, so it is parsed once and
+        // bound to both the stores and the runtime. agentplane refuses to build
+        // when the two disagree.
+        let tenant = agentplane::core::TenantId::new(&cfg.tenant).map_err(|e| {
+            anyhow::anyhow!("tenant `{}` is not a usable key scope: {e}", cfg.tenant)
+        })?;
+
+        // ── Durable state ────────────────────────────────────────────────
+        //
+        // The journal is the § 147 AO / GoBD record for the agent layer, and the
+        // case layer beside it holds the matters, the obligations and the human
+        // tasks. One backend supplies both.
+        let stores = match &cfg.journal {
+            JournalConfig::Redb { path } => Stores::redb(
+                agentplane::store::RedbStore::open(path)
+                    .with_context(|| format!("open the agent journal at {path}"))?,
+                &tenant,
+            ),
+            // The DSN comes from `secrets`, where its `env:VAR` indirection was
+            // resolved: connecting with the literal placeholder would fail as a
+            // hostname nobody can find.
+            JournalConfig::Postgres { .. } => {
+                let url = secrets
+                    .journal_url
+                    .as_deref()
+                    .context("journal.url is required for the postgres backend")?;
+                Stores::postgres(
+                    agentplane::store::PostgresStore::connect(url)
+                        .await
+                        .context("connect the agent journal to Postgres")?,
+                    &tenant,
+                )
+            }
+        };
+
+        // ── Sealing ──────────────────────────────────────────────────────
+        let keyring =
+            agentd::plane::keys::build(cfg.keyring.as_ref(), secrets.vault_token.as_ref())
+                .map_err(|e| anyhow::anyhow!(e))?;
+        if keyring.is_none() {
+            warn!("agentd: {}", agentd::plane::keys::UNSEALED_WARNING);
+        }
+
+        // ── Authorization ────────────────────────────────────────────────
+        let policy_source = agentd::plane::policy::source(cfg.policy.path.as_deref())
+            .map_err(|e| anyhow::anyhow!(e))?;
+        let policy =
+            agentd::plane::policy::engine(&policy_source).map_err(|e| anyhow::anyhow!(e))?;
+        info!(
+            policy = cfg.policy.path.as_deref().unwrap_or("<embedded>"),
+            "agent policy set compiled"
+        );
+
+        // ── Model drivers, under the names the manifests use ──────────────
+        let providers = agentd::plane::providers::build_all(&secrets.providers)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        // One transport per MCP server the manifests grant. Connecting at
+        // startup rather than lazily is deliberate: an agent whose tools are
+        // unreachable still answers, from the model alone and with no evidence
+        // behind it, which is worse than a daemon that declines to start.
+        let tool_servers = agentd::plane::tools::connect(&cfg.mcp_servers, &secrets.mcp_api_key)
+            .await
+            .context("connect MCP tool transports")?;
+
+        // Only specialists the operator activated are registered and routed. An
+        // `enable` name that matches nothing compiled in refuses to boot rather
+        // than presenting as an agent that never fires.
+        let activated = Activation::from_config(&cfg.bundled_agents);
+        let plane = Plane::new(
+            stores,
+            PlaneConfig {
+                owner: &owner_id(),
+                tenant: &tenant,
+                activated: &activated,
+                providers,
+                tool_servers,
+                policy,
+                keyring,
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("build agent plane: {e}"))?;
+        info!(
+            specialists = plane.router().routes().len(),
+            tenant = %cfg.tenant,
+            "agent plane ready"
+        );
+
+        // ── The tick that makes a deadline mean something ────────────────
+        agentd::plane::sweep::spawn(
+            plane.runtime(),
+            std::time::Duration::from_secs(cfg.sweep_interval_secs),
+            ctx.shutdown.clone(),
+        );
+
+        if secrets.inbound_hmac_secret.is_none() {
+            warn!(
+                "agentd: inbound_hmac_secret not configured — POST /webhook accepts all \
+                 inbound events (dev mode)"
+            );
+        }
+
+        // ── Identity ─────────────────────────────────────────────────────
+        let oidc = OidcConfig::build_verifier(
+            cfg.oidc.as_ref(),
+            &ctx.http,
+            &cfg.tenant,
+            ctx.shutdown.clone(),
+        )
+        .await
+        .context("OIDC verifier init")?;
+
+        // The oversight surface exists only where callers have names. Every
+        // other dev-mode relaxation here accepts an unauthenticated request and
+        // warns; an approval is the one place where that is not a relaxation but
+        // a forged signature on a regulated dispatch.
+        let oversight = if oidc.is_disabled() {
+            warn!(
+                "agentd: OIDC disabled — POST /api/v1/run accepts all requests and the \
+                 oversight surface ({}) is NOT mounted. Every tool grant that requires \
+                 approval will suspend its run with nobody able to answer it.",
+                agentd::plane::oversight::MOUNT
+            );
+            None
+        } else {
+            Some(
+                agentd::plane::oversight::router(plane.runtime(), Arc::new(oidc.clone()))
+                    .map_err(|e| anyhow::anyhow!(e))?,
+            )
+        };
+
+        let max_sessions = cfg.max_sessions;
+        let state = Arc::new(AppState {
+            cfg: Arc::clone(&cfg),
+            secrets,
+            plane,
+            decisions: DecisionLog::new(100),
+            session_sem: Arc::new(tokio::sync::Semaphore::new(max_sessions as usize)),
+            // 1h dedup window, 10k ids — comfortably beyond any legitimate
+            // emitter's retry horizon.
+            seen_events: handlers::SeenEvents::new(std::time::Duration::from_secs(3600), 10_000),
+        });
+
+        let mut app = Router::new()
+            // CloudEvent ingest
+            .route("/webhook", post(handlers::webhook))
+            // Manual trigger (OIDC-protected)
+            .route("/api/v1/run", post(handlers::manual_run))
+            // What just happened
+            .route("/api/v1/decisions", get(handlers::get_decisions))
+            // What this deployment runs, and what it could run
+            .route("/api/v1/agents", get(handlers::list_agents))
+            .route("/api/v1/agents/catalog", get(handlers::agents_catalog))
+            // A2A Agent Cards, derived from each manifest
+            .route("/.well-known/agents/{name}", get(handlers::agent_card))
+            // OIDC verifier extension for the Claims Axum extractor
+            .layer(Extension(oidc))
+            .with_state(state);
+
+        if let Some(surface) = oversight {
+            info!(
+                mount = agentd::plane::oversight::MOUNT,
+                "oversight surface mounted"
+            );
+            app = app.nest(agentd::plane::oversight::MOUNT, surface);
+        }
+
+        Ok(app)
+    }
+}
+
+/// Identifies this **process** for lease fencing.
+///
+/// Not the agent and not the service: two agentd instances sharing a Postgres
+/// journal must not believe they are the same writer, or a resumed run could be
+/// executed twice. The hostname is what distinguishes them in every deployment
+/// mako runs.
+fn owner_id() -> String {
+    std::env::var("HOSTNAME").map_or_else(|_| "agentd".to_owned(), |h| format!("agentd@{h}"))
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let _guard = mako_service::init_tracing_from_env("agentd");
-
-    let mut cfg: AgentdConfig = load_config("agentd").context("load config")?;
-    // `env:VAR` indirection: resolve before any provider/pool clones the keys —
-    // unresolved placeholders would be sent literally as bearer tokens.
-    cfg.resolve_env_indirection()
-        .context("resolve env: indirection in secrets")?;
-    let cfg = cfg;
-    let port = cfg.port;
-
-    info!(
-        port,
-        tenant = %cfg.tenant,
-        providers = cfg.providers.len(),
-        custom_agents = cfg.agents.len(),
-        bundled_enable_all = cfg.bundled_agents.enable_all,
-        bundled_enabled = cfg.bundled_agents.enable.len(),
-        "agentd starting"
-    );
-
-    // Build LLM provider registry + agent registry (builtins + custom merged)
-    let registry = AgentRegistry::build(&cfg).context("build agent registry")?;
-    let orchestrator = OrchestratorAgent::new(&cfg).context("build orchestrator")?;
-
-    let builtin_count = registry
-        .agent_names
-        .iter()
-        .filter_map(|n| registry.get(n))
-        .filter(|a| a.is_builtin)
-        .count();
-    info!(
-        orchestrator_model = %cfg.orchestrator.model,
-        total_agents = registry.agent_names.len(),
-        builtin_agents = builtin_count,
-        dispatch_mode = ?cfg.orchestrator.dispatch_mode,
-        "orchestrator ready"
-    );
-    for name in &registry.agent_names {
-        if let Some(a) = registry.get(name) {
-            info!(
-                agent = %name,
-                model = %a.completion_cfg.model,
-                triggers = a.trigger_patterns.len(),
-                is_builtin = a.is_builtin,
-                "specialist ready"
-            );
-        }
-    }
-
-    // Build MCP pool (connects to all configured MCP servers)
-    let mcp = McpPool::connect(&cfg.mcp_servers, &cfg.mcp_api_key).await;
-
-    // Build RAG engine (if enabled)
-    let rag = if cfg.rag.enabled {
-        // Use orchestrator provider for embeddings unless overridden
-        let embed_provider_name = cfg
-            .rag
-            .embedding_provider
-            .as_deref()
-            .unwrap_or(&cfg.orchestrator.provider);
-        let embed_provider_cfg = cfg.providers.get(embed_provider_name).ok_or_else(|| {
-            anyhow::anyhow!("RAG embedding_provider '{}' not found", embed_provider_name)
-        })?;
-        let embed_provider = llm::build_provider(embed_provider_name, embed_provider_cfg);
-        let engine = RagEngine::new(&cfg.rag, embed_provider, &cfg.tenant)
-            .await
-            .context("RAG engine init")?;
-        info!(uri = %cfg.rag.storage_uri, "RAG: ready");
-        Some(engine)
-    } else {
-        info!("RAG: disabled");
-        None
-    };
-
-    let max_sessions = cfg.max_sessions;
-    if cfg.inbound_hmac_secret.is_none() {
-        tracing::warn!(
-            "agentd: inbound_hmac_secret not configured -- webhook accepts all inbound events (dev mode)"
-        );
-    }
-
-    // Build OIDC verifier
-    let ct = mako_service::shutdown::token();
-    let http = default_client();
-    let oidc = OidcConfig::build_verifier(cfg.oidc.as_ref(), &http, &cfg.tenant, ct.clone())
-        .await
-        .context("OIDC verifier init")?;
-    if oidc.is_disabled() {
-        tracing::warn!("[WARN] OIDC disabled -- POST /api/v1/run accepts all requests (dev mode)");
-    }
-
-    // Build DLQ store
-    let dlq = DlqStore::new(
-        cfg.dlq.capacity,
-        cfg.dlq.max_retries,
-        cfg.dlq.base_backoff_secs,
-    );
-
-    let state = Arc::new(AppState {
-        cfg,
-        orchestrator,
-        registry,
-        mcp,
-        rag,
-        sessions: SessionStore::new(100),
-        oidc: Some(Arc::new(oidc.clone())),
-        session_sem: Arc::new(tokio::sync::Semaphore::new(max_sessions as usize)),
-        dlq: dlq.clone(),
-        // 1h dedup window, 10k ids — comfortably beyond any legitimate
-        // emitter's retry horizon.
-        seen_events: handlers::SeenEvents::new(std::time::Duration::from_secs(3600), 10_000),
-    });
-
-    let health = health_routes(|| async { true });
-    let app = Router::new()
-        // CloudEvent ingest
-        .route("/webhook", post(handlers::webhook))
-        // Manual trigger (OIDC-protected)
-        .route("/api/v1/run", post(handlers::manual_run))
-        // Session history
-        .route("/api/v1/sessions", get(handlers::get_sessions))
-        // Dead-letter queue status
-        .route("/api/v1/dlq", get(handlers::get_dlq))
-        // Agent discovery — list active agents
-        .route("/api/v1/agents", get(handlers::list_agents))
-        // Agent catalog — all 28 built-in definitions (even if not enabled)
-        .route("/api/v1/agents/catalog", get(handlers::agents_catalog))
-        // A2A Agent Cards for each specialist
-        .route("/.well-known/agents/:name", get(handlers::agent_card))
-        // RAG: Live ingestion and search
-        .route("/api/v1/rag/ingest", post(handlers::rag_ingest))
-        .route("/api/v1/rag/search", post(handlers::rag_search))
-        // OIDC verifier extension for the Claims Axum extractor
-        .layer(Extension(oidc))
-        .with_state(Arc::clone(&state))
-        .merge(health);
-
-    // Spawn DLQ background retry worker (checks every 10 s)
-    {
-        let dlq_state = Arc::clone(&state);
-        let ct2 = ct.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
-                        agentd::dlq::run_retry_pass(&dlq_state).await;
-                    }
-                    _ = ct2.cancelled() => break,
-                }
-            }
-            tracing::debug!("DLQ retry worker shutdown");
-        });
-    }
-
-    let addr = format!("0.0.0.0:{port}");
-    info!(%addr, agents = state.registry.agent_names.len(), "agentd listening");
-    let listener = tokio::net::TcpListener::bind(&addr).await.context("bind")?;
-    mako_service::shutdown::serve(listener, app, ct).await
+    mako_service::service::run::<Agentd>().await
 }

@@ -174,18 +174,18 @@ impl Daemon for Netzbilanzd {
                 get(handlers::list_kostenblatt_handler),
             )
             .route(
-                "/api/v1/redispatch/kostenblatt/:activation_id",
+                "/api/v1/redispatch/kostenblatt/{activation_id}",
                 put(handlers::put_kostenblatt).get(handlers::get_kostenblatt),
             )
             // N5: Kostenblatt edmd auto-compute (BK6-20-061 §4.2)
             // Lastgang 15-min sum primary; billing-period fallback; manual override.
             .route(
-                "/api/v1/redispatch/kostenblatt/:activation_id/compute",
+                "/api/v1/redispatch/kostenblatt/{activation_id}/compute",
                 post(handlers::post_kostenblatt_compute),
             )
             // §13a Abs. 2 EnWG — angemessene Vergütung for one activation
             .route(
-                "/api/v1/redispatch/verguetung/:activation_id/compute",
+                "/api/v1/redispatch/verguetung/{activation_id}/compute",
                 post(handlers::post_verguetung_compute),
             )
             // BilAReM Kap. 3 (BK6-23-241) — stateless Ausfallarbeit engine:
@@ -200,16 +200,16 @@ impl Daemon for Netzbilanzd {
             )
             // N5a: Kostenblatt gap detection — activations without dispatch_kwh data.
             .route(
-                "/api/v1/redispatch/kostenblatt/gaps/:year/:month",
+                "/api/v1/redispatch/kostenblatt/gaps/{year}/{month}",
                 get(handlers::get_kostenblatt_gaps),
             )
             // Fremdkosten typed BO4E REST (§ 147 AO / GoBD external cost pass-through)
             .route(
-                "/api/v1/billing/fremdkosten/:draft_id",
+                "/api/v1/billing/fremdkosten/{draft_id}",
                 put(handlers::put_fremdkosten).get(handlers::get_fremdkosten),
             )
             .route(
-                "/api/v1/redispatch/kostenblatt/submit/:year/:month",
+                "/api/v1/redispatch/kostenblatt/submit/{year}/{month}",
                 post(handlers::post_submit_kostenblatt),
             )
             // REMADV CloudEvent ingest (status update webhook)
@@ -239,16 +239,16 @@ fn billing_routes() -> Router {
     Router::new()
         .route("/run", post(handlers::run_billing))
         // N6: MMM auto-run — auto-fetches profil_kwh from edmd (GPKE (BK6-24-174) Teil 1 Kap. 8.4)
-        .route("/mmm-run/:malo_id", post(handlers::post_mmm_auto_run))
+        .route("/mmm-run/{malo_id}", post(handlers::post_mmm_auto_run))
         // N8: §42b EnWG GGV NNE NB-side billing — N × NNE per tenant from Lokationszuordnung
-        .route("/ggv-nne/:ggv_malo_id", post(handlers::post_ggv_nne))
+        .route("/ggv-nne/{ggv_malo_id}", post(handlers::post_ggv_nne))
         .route("/drafts", get(handlers::list_drafts))
-        .route("/drafts/:id", get(handlers::get_draft))
-        .route("/drafts/:id/dispatch", put(handlers::dispatch_draft))
-        .route("/drafts/:id/reject", put(handlers::reject_draft))
+        .route("/drafts/{id}", get(handlers::get_draft))
+        .route("/drafts/{id}/dispatch", put(handlers::dispatch_draft))
+        .route("/drafts/{id}/reject", put(handlers::reject_draft))
         // REMADV payment lifecycle
-        .route("/drafts/:id/mark-paid", put(handlers::mark_paid))
-        .route("/drafts/:id/mark-disputed", put(handlers::mark_disputed))
+        .route("/drafts/{id}/mark-paid", put(handlers::mark_paid))
+        .route("/drafts/{id}/mark-disputed", put(handlers::mark_disputed))
         // Batch dispatch — dispatch all approved drafts at once
         .route(
             "/drafts/dispatch-batch",
@@ -256,11 +256,11 @@ fn billing_routes() -> Router {
         )
         // Korrekturrechnung / Stornorechnung (§ 147 AO / GoBD audit trail)
         .route(
-            "/drafts/:id/correction",
+            "/drafts/{id}/correction",
             post(handlers::post_draft_correction),
         )
         // Billing history per MaLo (lightweight, no Rechnung JSONB)
-        .route("/malo/:malo_id", get(handlers::get_malo_billing_history))
+        .route("/malo/{malo_id}", get(handlers::get_malo_billing_history))
         // Monthly billing summary (REST equivalent of get_billing_summary MCP tool)
         .route("/summary", get(handlers::get_billing_summary_rest))
         // § 147 AO / GoBD BNetzA audit export

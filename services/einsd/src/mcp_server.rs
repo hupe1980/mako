@@ -215,7 +215,8 @@ impl EinsdMcpHandler {
     }
 
     #[tool(
-        description = "List EEG/KWKG plants. Filter by malo_id, erzeugungsart (SOLAR/WIND_ONSHORE/KWKG/etc.), or status (aktiv/abgemeldet/foerderung_beendet/repowered)."
+        description = "List EEG/KWKG plants. Filter by malo_id, erzeugungsart (SOLAR/WIND_ONSHORE/KWKG/etc.), or status (aktiv/abgemeldet/foerderung_beendet/repowered).",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_plants(
         &self,
@@ -238,7 +239,8 @@ impl EinsdMcpHandler {
     }
 
     #[tool(
-        description = "Get a single EEG/KWKG plant by TechnischeRessource ID (tr_id). Returns all fields including settlement model, Vergütungssatz, Förderendedatum, and KWKG data."
+        description = "Get a single EEG/KWKG plant by TechnischeRessource ID (tr_id). Returns all fields including settlement model, Vergütungssatz, Förderendedatum, and KWKG data.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_plant(
         &self,
@@ -258,7 +260,8 @@ impl EinsdMcpHandler {
     }
 
     #[tool(
-        description = "List plants whose EEG/KWKG Foerderung ends within the given days (default 180). Use to trigger early notification and plan Post-EEG transitions."
+        description = "List plants whose EEG/KWKG Foerderung ends within the given days (default 180). Use to trigger early notification and plan Post-EEG transitions.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_expiring(
         &self,
@@ -279,7 +282,8 @@ impl EinsdMcpHandler {
     }
 
     #[tool(
-        description = "Monthly settlement history for a plant. Returns settlement amount, model, kWh, status, and CloudEvent ID for each settled month."
+        description = "Monthly settlement history for a plant. Returns settlement amount, model, kWh, status, and CloudEvent ID for each settled month.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_settlements(
         &self,
@@ -298,7 +302,8 @@ impl EinsdMcpHandler {
     }
 
     #[tool(
-        description = "Look up the applicable EEG or KWKG Verguetungssatz (tariff rate ct/kWh) for a commissioning date and capacity. The rate is fixed at commissioning for the full 20-year Foerderdauer."
+        description = "Look up the applicable EEG or KWKG Verguetungssatz (tariff rate ct/kWh) for a commissioning date and capacity. The rate is fixed at commissioning for the full 20-year Foerderdauer.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn lookup_verguetungssatz(
         &self,
@@ -420,7 +425,8 @@ impl EinsdMcpHandler {
 
     #[tool(
         description = "List active plants NOT yet settled for the given billing month. \
-        Use to preview before POST /api/v1/settle/{year}/{month} batch run."
+        Use to preview before POST /api/v1/settle/{year}/{month} batch run.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_unsettled_plants(
         &self,
@@ -451,7 +457,8 @@ impl EinsdMcpHandler {
 
     #[tool(
         description = "Look up the stored EPEX Spot Day-Ahead monthly average price (ct/kWh). \
-        Required for DIREKTVERMARKTUNG (Gleitende Marktpraemie) and POST_EEG_SPOT settlement."
+        Required for DIREKTVERMARKTUNG (Gleitende Marktpraemie) and POST_EEG_SPOT settlement.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_epex_monthly_price(
         &self,
@@ -521,7 +528,8 @@ impl EinsdMcpHandler {
             rate tables. Use erzeugungsart: SOLAR_AUFDACH | SOLAR_FREIFLAECHE | WIND_ONSHORE \
             | BIOMASSE | KWKG. messkonzept: VOLLEINSPEISUNG | UEBERSCHUSSEINSPEISUNG (solar only). \
             Returns reference starting rate for the EEG year — for quarterly degression use \
-            lookup_verguetungssatz."
+            lookup_verguetungssatz.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn lookup_statutory_rate(
         &self,
@@ -982,7 +990,8 @@ SOLAR_FREIFLAECHE, BIOMASSE, BIOGAS, WASSERKRAFT, etc.) or 'DEFAULT' for the gen
         name = "get_jahresmarktwert",
         description = "Look up the stored §20 Abs. 2 technology-specific monthly Marktwert for a given \
 year, month, and erzeugungsart. Returns NOT_FOUND when no row exists (settlements will \
-fall back to EPEX in that case). Use 'DEFAULT' as erzeugungsart to check the generic fallback row."
+fall back to EPEX in that case). Use 'DEFAULT' as erzeugungsart to check the generic fallback row.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_jahresmarktwert_tool(
         &self,
@@ -1024,7 +1033,8 @@ payment without changing the Einspeisemenge or the tariff table. sect. 53b = Reg
 sect. 53c = Stromsteuerbefreiung for grid-transited electricity, capped at the sect. 3 StromStG \
 full rate of 2.05 ct/kWh. sect. 54 = solar first-segment auction defects (0.3 / 0.3 / 2.5 ct/kWh, \
 or AW to zero). All of them cut the AW BEFORE the settlement formula, and the gleitende \
-Marktpraemie is floored at zero, so a cut can reduce the payment to zero but never below it."
+Marktpraemie is floored at zero, so a cut can reduce the payment to zero but never below it.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_aw_reduktionen(
         &self,
@@ -1051,7 +1061,8 @@ Marktpraemie is floored at zero, so a cut can reduce the payment to zero but nev
         description = "Fetch the § 147 AO / GoBD audit trail of settlement state transitions for a plant \
 (tr_id). Returns all state changes (Active → Reduced → Suspended → PostEeg → Ended) with \
 effective dates and transition reasons. Required for BNetzA regulatory audit and §20 EnWG \
-compliance reporting."
+compliance reporting.",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_settlement_state_history(
         &self,

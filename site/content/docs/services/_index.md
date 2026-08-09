@@ -60,7 +60,7 @@ graph TB
         portald[":9480 portald<br/>customer portal read-model<br/>SSE · §41 self-service"]
     end
 
-    agentd[":9580 agentd<br/>28 built-in specialists (binary)<br/>sequential|parallel|race dispatch<br/>LanceDB RAG (tenant-isolated) · A2A cards<br/>OIDC · HMAC · DLQ · OpenAI/Anthropic/Bedrock"]
+    agentd[":9580 agentd<br/>28 declarative manifests on agentplane<br/>journaled effects · strict replay<br/>approval on mutating tools · A2A cards<br/>OIDC · HMAC · Anthropic/OpenAI/Bedrock"]
 
     ext -->|AS4 / REST| makod
     makod <-->|CloudEvents| marktd
@@ -113,7 +113,7 @@ graph TB
 |---|---|---|---|
 | [vertragd](@/docs/services/vertragd.md) | `:9780` | LF | Contract & Customer Management — Kunden (B2C+B2B), Rahmenverträge, Versorgungsverträge, kunden_identitaeten (N portal users per company), Tarifwechsel, Kündigung, OIDC→MaLo auth gateway for portald |
 | [portald](@/docs/services/portald.md) | `:9480` | LF | Customer Portal gateway — aggregates all LF services, REST + SSE, §41 EnWG self-service write API (Tarifwechsel, Kündigung, SEPA, GDPR Art. 16), 8-tool MCP server |
-| [agentd](@/docs/services/agentd.md) | `:9580` | All | Multi-agent LLM orchestration — **28 built-in specialists compiled into binary**, activated via `[bundled_agents]`; `sequential`/`parallel`/`race` dispatch; OIDC auth on `/api/v1/run`; inbound HMAC; DLQ with exponential-backoff retry; LanceDB RAG (tenant-isolated, cosine distance score filtering); A2A agent cards; MCP tools across all 16 services |
+| [agentd](@/docs/services/agentd.md) | `:9580` | All | Multi-agent LLM orchestration — **28 declarative manifests** run on the agentplane durable runtime, activated via `[bundled_agents]`; one journaled run per subscribing specialist (no first-wins); human approval on mutating tools; OIDC auth on `/api/v1/run`; inbound HMAC; A2A agent cards; MCP tools across the production services |
 
 ---
 

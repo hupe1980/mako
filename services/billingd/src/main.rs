@@ -174,7 +174,7 @@ impl Daemon for Billingd {
 
         let app = Router::new()
             .route(
-                "/api/v1/billing/:malo_id/calculate",
+                "/api/v1/billing/{malo_id}/calculate",
                 post(handlers::post_calculate),
             )
             .route("/api/v1/billing", get(handlers::list_records))
@@ -183,39 +183,39 @@ impl Daemon for Billingd {
                 "/api/v1/billing/review-queue",
                 get(handlers::get_review_queue),
             )
-            .route("/api/v1/billing/:id/release", post(handlers::post_release))
-            .route("/api/v1/billing/:id", get(handlers::get_record))
+            .route("/api/v1/billing/{id}/release", post(handlers::post_release))
+            .route("/api/v1/billing/{id}", get(handlers::get_record))
             .route(
-                "/api/v1/billing/:id/xrechnung",
+                "/api/v1/billing/{id}/xrechnung",
                 get(handlers::get_xrechnung),
             )
             .route(
-                "/api/v1/billing/:malo_id/preview",
+                "/api/v1/billing/{malo_id}/preview",
                 post(handlers::post_preview),
             )
             // L8: Korrekturrechnung / Stornorechnung (§ 147 AO / GoBD audit trail)
             .route(
-                "/api/v1/billing/:id/correction",
+                "/api/v1/billing/{id}/correction",
                 post(handlers::post_correction),
             )
             // Tarifwechsel: combined invoice for price change mid-period (§41 EnWG)
             .route(
-                "/api/v1/billing/:malo_id/tarifwechsel",
+                "/api/v1/billing/{malo_id}/tarifwechsel",
                 post(handlers::post_tarifwechsel),
             )
             // L2: B2B Sammelrechnung for Rahmenvertrag with rechnungsstellung=SAMMEL
             .route(
-                "/api/v1/billing/sammelrechnung/:rahmenvertrag_id",
+                "/api/v1/billing/sammelrechnung/{rahmenvertrag_id}",
                 post(handlers::post_sammelrechnung),
             )
             // B1: §42b EnWG GGV community solar multi-tenant proportional billing
             .route(
-                "/api/v1/billing/ggv/:ggv_id",
+                "/api/v1/billing/ggv/{ggv_id}",
                 post(handlers::post_ggv_billing),
             )
             // B12: VPP aggregation billing (Art. 17 RL (EU) 2019/944) — de.vpp.settlement.berechnet
             .route(
-                "/api/v1/billing/vpp/:vpp_id",
+                "/api/v1/billing/vpp/{vpp_id}",
                 post(handlers::post_vpp_billing),
             )
             // B12: VPP dispatch-confirmed auto-billing webhook (de.vpp.dispatch.confirmed)
@@ -225,12 +225,12 @@ impl Daemon for Billingd {
             )
             // B10: XRechnung B2G submission (\u00a727 EGovG — mandatory from 01.01.2027)
             .route(
-                "/api/v1/billing/:id/submit-b2g",
+                "/api/v1/billing/{id}/submit-b2g",
                 post(handlers::post_submit_b2g),
             )
             // B11: PEPPOL BIS Billing 3.0 UBL 2.1 XML (EN16931 — mandatory from 01.01.2028)
             .route(
-                "/api/v1/billing/:id/ubl",
+                "/api/v1/billing/{id}/ubl",
                 axum::routing::get(handlers::get_ubl),
             )
             .layer(Extension(oidc))

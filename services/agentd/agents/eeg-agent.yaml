@@ -1,0 +1,272 @@
+# EEG/KWKG plant lifecycle and settlement. Handles Förderung expiry, post-EEG transition planning, settlement history queries, and iMSys rollout detection from edmd direct pushes.
+#
+# Generated from the compiled specialist definition during the agentplane
+# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
+# own `read_only_hint` — the cutover inherited it from servers that declared
+# nothing, so 91 plain reads were marked mutating and would have stopped for an
+# approval on every call. The mutating grants are gone entirely, because a
+# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
+#
+# Narrowing the read set further per specialist is domain review, not mechanical
+# work.
+# Role: NB. Compiled only into a `role-nb` build (and the default all-roles build).
+apiVersion: agentplane.hupe1980.github.io/v1alpha1
+kind: Agent
+metadata:
+  name: eeg-agent
+  version: "1.0.0"
+spec:
+  execution:
+    kind: tool-calling
+    max_turns: 15
+
+  identity:
+    role: >-
+      EEG/KWKG plant lifecycle and settlement. Handles Förderung expiry, post-EEG
+      transition planning, settlement history queries, and iMSys rollout detection
+      from edmd direct pushes.
+    constraints: |
+      You are the EEG plant management specialist.
+
+      ## TRIGGERED BY
+      - `de.eeg.anlage.foerderung-auslaufend` — plant approaching end of 20-year EEG support
+      - `de.messwert.reading.direct.stored` — iMSys push (check if plant qualifies for §41a upgrade)
+
+      ## FÖRDERUNG EXPIRY PROCEDURE
+
+      1. Call einsd `get_plant` for full plant details.
+      2. Calculate remaining days to foerderendedatum.
+      3. Determine post-EEG path: PostEegSpot (default) → check EPEX config in tarifbd.
+      4. Check iMSys status: required for §41a dynamic tariffs post-EEG.
+      5. Generate operator checklist.
+
+      ## iMSys DETECTION (de.messwert.reading.direct.stored)
+
+      1. Call edmd `get_device_history` for plant's recent reading history.
+      2. If readings are 15-min intervals (RLM/iMSys): plant may qualify for §41a upgrade.
+      3. Call einsd `get_plant` to check current settlement_model.
+      4. If plant is on VERGUETUNG and has iMSys: recommend switching to MARKTPRAEMIE.
+
+      ## OUTPUT FORMAT
+      ```
+      PLANT_STATUS: [ACTIVE|EXPIRING_SOON|POST_EEG|UPGRADE_CANDIDATE]
+      FOERDERENDEDATUM: [date or N/A]
+      REMAINING_DAYS: [number or N/A]
+      IMSYS_INSTALLED: [YES|NO|UNKNOWN]
+      RECOMMENDED_ACTION: [specific step]
+      ```
+
+  capabilities:
+    provides: [eeg]
+
+  models:
+    privileged:  { provider: anthropic, model: claude-sonnet-5 }
+
+  security:
+    max_sensitivity_egress: internal
+    max_delegation_depth: 0
+    max_sensitivity_journaled: internal
+
+  # No `oversight` block, and no mutating tool grant: this specialist reads and
+  # reports. Both absences are the same fact — a `tool-calling` agent cannot
+  # dispatch a mutating call at all, because the arguments come from a model
+  # completion, which agentplane labels untrusted by construction, and its taint
+  # gate refuses a mutating sink with untrusted arguments. Declaring the grant
+  # anyway would read as an ability this agent does not have.
+  #
+  # Acting on a conclusion is a `planned` specialist's job — see
+  # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
+  # resolves itself, so the authority-bearing arguments keep the run input's own
+  # labels and a named human approves the call before it leaves.
+
+  budgets:
+    max_tokens: 200000
+    max_steps: 45
+    max_effects: 75
+    max_wallclock_secs: 900
+
+  tools:
+    - ref: tool://einsd/list_plants
+      mutates: false
+      max_sensitivity: internal
+      description: "list plants via einsd"
+    - ref: tool://einsd/get_plant
+      mutates: false
+      max_sensitivity: internal
+      description: "get plant via einsd"
+    - ref: tool://einsd/list_expiring
+      mutates: false
+      max_sensitivity: internal
+      description: "list expiring via einsd"
+    - ref: tool://einsd/list_settlements
+      mutates: false
+      max_sensitivity: internal
+      description: "list settlements via einsd"
+    - ref: tool://einsd/lookup_verguetungssatz
+      mutates: false
+      max_sensitivity: internal
+      description: "lookup verguetungssatz via einsd"
+    - ref: tool://einsd/list_unsettled_plants
+      mutates: false
+      max_sensitivity: internal
+      description: "list unsettled plants via einsd"
+    - ref: tool://einsd/get_epex_monthly_price
+      mutates: false
+      max_sensitivity: internal
+      description: "get epex monthly price via einsd"
+    - ref: tool://einsd/lookup_statutory_rate
+      mutates: false
+      max_sensitivity: internal
+      description: "lookup statutory rate via einsd"
+    - ref: tool://einsd/get_compliance_status
+      mutates: false
+      max_sensitivity: internal
+      description: "get compliance status via einsd"
+    - ref: tool://einsd/list_plants_without_mastr
+      mutates: false
+      max_sensitivity: internal
+      description: "list plants without mastr via einsd"
+    - ref: tool://einsd/check_direktvermarktung_compliance
+      mutates: false
+      max_sensitivity: internal
+      description: "check direktvermarktung compliance via einsd"
+    - ref: tool://einsd/check_sect44b_quota
+      mutates: false
+      max_sensitivity: internal
+      description: "check sect44b quota via einsd"
+    - ref: tool://einsd/get_jahresmarktwert
+      mutates: false
+      max_sensitivity: internal
+      description: "get jahresmarktwert via einsd"
+    - ref: tool://einsd/get_aw_reduktionen
+      mutates: false
+      max_sensitivity: internal
+      description: "get aw reduktionen via einsd"
+    - ref: tool://einsd/get_settlement_state_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get settlement state history via einsd"
+    - ref: tool://einsd/explain_settlement
+      mutates: false
+      max_sensitivity: internal
+      description: "explain settlement via einsd"
+    - ref: tool://edmd/get_timeseries
+      mutates: false
+      max_sensitivity: internal
+      description: "get timeseries via edmd"
+    - ref: tool://edmd/get_imbalance
+      mutates: false
+      max_sensitivity: internal
+      description: "get imbalance via edmd"
+    - ref: tool://edmd/get_billing_period
+      mutates: false
+      max_sensitivity: internal
+      description: "get billing period via edmd"
+    - ref: tool://edmd/get_device_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get device history via edmd"
+    - ref: tool://edmd/get_quality_warnings
+      mutates: false
+      max_sensitivity: internal
+      description: "get quality warnings via edmd"
+    - ref: tool://edmd/list_reading_orders
+      mutates: false
+      max_sensitivity: internal
+      description: "list reading orders via edmd"
+    - ref: tool://edmd/list_overdue_reading_orders
+      mutates: false
+      max_sensitivity: internal
+      description: "list overdue reading orders via edmd"
+    - ref: tool://edmd/get_correction_history
+      mutates: false
+      max_sensitivity: internal
+      description: "get correction history via edmd"
+    - ref: tool://edmd/validate_timeseries
+      mutates: false
+      max_sensitivity: internal
+      description: "validate timeseries via edmd"
+    - ref: tool://edmd/get_quality_assessments
+      mutates: false
+      max_sensitivity: internal
+      description: "get quality assessments via edmd"
+    - ref: tool://edmd/get_summenzeitreihe
+      mutates: false
+      max_sensitivity: internal
+      description: "get summenzeitreihe via edmd"
+    - ref: tool://edmd/get_annual_forecast
+      mutates: false
+      max_sensitivity: internal
+      description: "get annual forecast via edmd"
+    - ref: tool://edmd/get_gas_quality
+      mutates: false
+      max_sensitivity: internal
+      description: "get gas quality via edmd"
+    - ref: tool://marktd/get_malo
+      mutates: false
+      max_sensitivity: confidential
+      description: "get malo via marktd"
+    - ref: tool://marktd/list_partners
+      mutates: false
+      max_sensitivity: confidential
+      description: "list partners via marktd"
+    - ref: tool://marktd/get_preisblatt
+      mutates: false
+      max_sensitivity: confidential
+      description: "get preisblatt via marktd"
+    - ref: tool://marktd/get_versorgungsstatus
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgungsstatus via marktd"
+    - ref: tool://marktd/get_nb_contract
+      mutates: false
+      max_sensitivity: confidential
+      description: "get nb contract via marktd"
+    - ref: tool://marktd/get_correlation
+      mutates: false
+      max_sensitivity: confidential
+      description: "get correlation via marktd"
+    - ref: tool://marktd/list_pricat_versions
+      mutates: false
+      max_sensitivity: confidential
+      description: "list pricat versions via marktd"
+    - ref: tool://marktd/list_malo
+      mutates: false
+      max_sensitivity: confidential
+      description: "list malo via marktd"
+    - ref: tool://marktd/get_melo
+      mutates: false
+      max_sensitivity: confidential
+      description: "get melo via marktd"
+    - ref: tool://marktd/get_rollenzuordnung
+      mutates: false
+      max_sensitivity: confidential
+      description: "get rollenzuordnung via marktd"
+    - ref: tool://marktd/get_versorgungsstatus_history
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgungsstatus history via marktd"
+    - ref: tool://marktd/get_nb_energiemix
+      mutates: false
+      max_sensitivity: confidential
+      description: "get nb energiemix via marktd"
+    - ref: tool://marktd/get_technische_ressource
+      mutates: false
+      max_sensitivity: confidential
+      description: "get technische ressource via marktd"
+    - ref: tool://marktd/get_steuerbare_ressource
+      mutates: false
+      max_sensitivity: confidential
+      description: "get steuerbare ressource via marktd"
+    - ref: tool://marktd/get_partner
+      mutates: false
+      max_sensitivity: confidential
+      description: "get partner via marktd"
+    - ref: tool://marktd/get_melo_standorteigenschaften
+      mutates: false
+      max_sensitivity: confidential
+      description: "get melo standorteigenschaften via marktd"
+    - ref: tool://marktd/get_versorgung_at
+      mutates: false
+      max_sensitivity: confidential
+      description: "get versorgung at via marktd"
