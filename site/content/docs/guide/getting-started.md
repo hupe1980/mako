@@ -134,12 +134,12 @@ curl -s -X PUT http://localhost:8180/api/v1/preisblaetter/9900357000004 \
 ### 4b — MaLo + NIS grid record
 
 ```bash
-MALO_ID=17835382035
+MALO_ID=51238696780
 
 # MaLo (NB=9900357000004, no active LF)
 curl -s -X PUT "http://localhost:8180/api/v1/malo/$MALO_ID" \
   -H "Content-Type: application/json" \
-  --data-binary "$(jq --arg m "$MALO_ID" '.data.marktlokations_id=$m' demos/nb-stp/fixtures/malo-nb.json)" \
+  --data-binary "$(jq --arg m "$MALO_ID" '.data.marktlokationsId=$m' demos/nb-stp/fixtures/malo-nb.json)" \
   -w "\nHTTP %{http_code}\n"
 # → HTTP 201
 
@@ -157,7 +157,7 @@ curl -s -X PUT "http://localhost:8180/api/v1/malo/$MALO_ID/grid" \
 # Register in marktd partner directory
 curl -s -X PUT http://localhost:8180/api/v1/partners/4012345000023 \
   -H "Content-Type: application/json" \
-  -d '{"mp_id":"4012345000023","display_name":"Demo LF","marktrolle":"LF","sparte":"STROM","channels":{}}' \
+  -d '{"mp_id":"4012345000023","display_name":"Demo LF","marktrolle":"LF","sparte":"STROM","makoadresse":["https://as4.example.com/as4/receive"],"channels":{}}' \
   -w "\nHTTP %{http_code}\n"
 # → HTTP 200
 
@@ -165,7 +165,7 @@ curl -s -X PUT http://localhost:8180/api/v1/partners/4012345000023 \
 curl -s -X PUT http://localhost:8080/admin/partners/4012345000023 \
   -H "Authorization: Bearer demo-secret-change-me" \
   -H "Content-Type: application/json" \
-  --data-binary @demos/nb-stp/fixtures/partner-lf.json | jq '.version'
+  --data-binary @demos/nb-stp/fixtures/partner-lf.json | jq '.'
 ```
 
 ---
@@ -191,7 +191,7 @@ Expected response:
     "workflow": "gpke-supplier-change",
     "status": "routed",
     "process_id": "...",
-    "malo_id": "17835382035"
+    "malo_id": "51238696780"
   }]
 }
 ```
@@ -208,7 +208,7 @@ Within ~200 ms, `processd` receives the `de.mako.process.initiated` event from
 curl -s http://localhost:8580/api/v1/decisions | jq '.[] | {
   malo_id, decision, erc_code, decided_at
 }'
-# → {"malo_id":"17835382035","decision":"Accept","erc_code":null,"decided_at":"..."}
+# → {"malo_id":"51238696780","decision":"Accept","erc_code":null,"decided_at":"..."}
 ```
 
 With `NB_AUTO_ACCEPT=true` (set in the demo compose file), `Accept` automatically

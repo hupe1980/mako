@@ -8,6 +8,7 @@
 # Automated NB decisions (bestaetigen/ablehnen) are made by processd, NOT by
 # marktd.  Start a processd instance pointed at this marktd to enable the NB
 # STP auto-responder.
+allow_insecure_no_auth = true
 
 [storage.postgres]
 # url is injected via MARKTD_STORAGE__POSTGRES__URL env var
