@@ -75,6 +75,7 @@ pub async fn post_vpp_billing(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
+    Extension(vertragd): Extension<Arc<crate::clients::VertragdClient>>,
     Path(vpp_id): Path<String>,
     Json(req): Json<VppBillingRequest>,
 ) -> impl IntoResponse {
@@ -226,7 +227,23 @@ pub async fn post_vpp_billing(
             return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
     }
-    if let Err(e) = crate::einvoice::store(&mut *tx, record_id, &invoice, &cfg, &req.malo_id).await
+    // The §41e settlement is issued against the prosumer behind the MaLo, so the
+    // ordinary BG-7 lookup resolves the right party.
+    let buyer = vertragd
+        .get_vertrag_by_malo(&req.malo_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.rechnungsempfaenger);
+    if let Err(e) = crate::einvoice::store(
+        &mut *tx,
+        record_id,
+        &invoice,
+        &cfg,
+        &req.malo_id,
+        buyer.as_ref(),
+    )
+    .await
     {
         tracing::warn!(%record_id, error = %e, "billingd: attach en16931 model failed");
     }
@@ -605,8 +622,23 @@ pub async fn post_vpp_webhook(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     }
-    if let Err(e) =
-        crate::einvoice::store(&mut *tx, record_id, &invoice, &cfg, &contract.malo_id).await
+    // The §41e settlement is issued against the prosumer behind the MaLo, so the
+    // ordinary BG-7 lookup resolves the right party.
+    let buyer = vertragd
+        .get_vertrag_by_malo(&contract.malo_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.rechnungsempfaenger);
+    if let Err(e) = crate::einvoice::store(
+        &mut *tx,
+        record_id,
+        &invoice,
+        &cfg,
+        &contract.malo_id,
+        buyer.as_ref(),
+    )
+    .await
     {
         tracing::warn!(%record_id, error = %e, "billingd: attach en16931 model failed");
     }

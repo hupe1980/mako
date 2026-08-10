@@ -641,12 +641,12 @@ fn lookup_rate_unknown_tech_returns_err() {
     assert!(rates::lookup_rate("NOT_A_REAL_TECHNOLOGY", dec!(100), 2023).is_err());
 }
 
-// ── billing::Tariff integration ───────────────────────────────────────────────
+// ── billing::PricingModel integration ───────────────────────────────────────────────
 
 #[test]
 fn eeg_settle_tariff_produces_billing_document() {
     use billing::DocumentMeta;
-    use billing::ScalarTariff;
+    use billing::PricingModel;
     use eeg_billing::tariff::EegSettleTariff;
 
     let output = calculate_settlement(&SettleInput {
@@ -665,7 +665,7 @@ fn eeg_settle_tariff_produces_billing_document() {
 #[test]
 fn eeg_settle_tariff_mit_mwst_19_percent() {
     use billing::DocumentMeta;
-    use billing::ScalarTariff;
+    use billing::PricingModel;
     use eeg_billing::tariff::EegSettleTariffRegelbesteuerung;
 
     let output = calculate_settlement(&SettleInput {
@@ -1070,7 +1070,7 @@ fn ust_tax_layers_one_layer_per_status() {
 
 #[test]
 fn ust_kleinunternehmer_billing_document_is_exempt() {
-    use billing::{BillingDocument, DocumentMeta, ScalarTariff as _};
+    use billing::{BillingDocument, DocumentMeta, PricingModel as _};
     use eeg_billing::tariff::EegSettleTariffKleinunternehmer;
     use eeg_billing::ust::{VatStatus, ust_tax_layers};
 
@@ -1088,7 +1088,7 @@ fn ust_kleinunternehmer_billing_document_is_exempt() {
     let tariff = EegSettleTariffKleinunternehmer::new(&output);
     let doc = BillingDocument::from_positions(
         DocumentMeta::default(),
-        tariff.positions().unwrap().into_inner(),
+        tariff.positions(&()).unwrap().into_inner(),
         ust_tax_layers(vat),
         vec![],
     )
@@ -1116,7 +1116,7 @@ fn ust_kleinunternehmer_billing_document_is_exempt() {
 
 #[test]
 fn ust_regelbesteuerung_19pct_billing_document() {
-    use billing::{BillingDocument, DocumentMeta, ScalarTariff as _};
+    use billing::{BillingDocument, DocumentMeta, PricingModel as _};
     use eeg_billing::tariff::EegSettleTariffRegelbesteuerung;
     use eeg_billing::ust::{VatStatus, ust_tax_layers};
 
@@ -1133,7 +1133,7 @@ fn ust_regelbesteuerung_19pct_billing_document() {
     let tariff = EegSettleTariffRegelbesteuerung::new(&output);
     let doc = BillingDocument::from_positions(
         DocumentMeta::default(),
-        tariff.positions().unwrap().into_inner(),
+        tariff.positions(&()).unwrap().into_inner(),
         ust_tax_layers(vat), // 19%
         vec![],
     )

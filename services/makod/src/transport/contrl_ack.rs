@@ -220,9 +220,12 @@ impl ContrlAckService {
 
         // The 6-hour CONTRL delivery deadline (CONTRL AHB 1.0 §2.3.1): the
         // Empfangsbestätigung must be delivered within 6 wall-clock hours.
-        // The deadline scheduler fires a `contrl-ack-obligation` event if the
-        // OutboxWorker has not cleared the message by then; `deadline_dispatch`
-        // logs a regulatory alert for any fired `contrl-ack-obligation`.
+        //
+        // `OutboxWorker::discharge_delivery_window` retires this deadline as
+        // soon as the CONTRL is delivered, so it only ever reaches the scheduler
+        // when the message did *not* go out — which is what lets
+        // `deadline_dispatch` treat a fired `contrl-ack-obligation` as a
+        // regulatory violation without re-checking anything.
         //
         // The format version is the latest known FV from the release registry.
         // `contrl-ack-obligation` is not a domain workflow; the FV is used

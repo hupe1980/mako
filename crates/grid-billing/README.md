@@ -305,7 +305,7 @@ and `KA_CHARGED_WHILE_EXEMPT` when a rate is applied to a §2 Abs. 7 exemption.
 - **Reversal (Stornorechnung)** — `reverse()` negates any prior settlement immutably
 
 All calculations are **pure functions** — zero I/O, zero async, no side effects.
-All monetary arithmetic uses `rust_decimal::Decimal` via `billing::EuroAmount` — no `f64` anywhere.
+All monetary arithmetic uses `rust_decimal::Decimal` via `EuroAmount` — no `f64` anywhere.
 
 ## Architecture
 
@@ -1109,7 +1109,7 @@ Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6, Section 3.2 (valid 01
 
 | Invariant | Detail |
 |---|---|
-| **No floating-point money** | `rust_decimal::Decimal` throughout; `billing::EuroAmount` for overflow guard. No `f64`. |
+| **No floating-point money** | `rust_decimal::Decimal` throughout; `EuroAmount` for overflow guard. No `f64`. |
 | **No rubo4e dependency** | Returns `SettlementResult`; service layer owns `into_rechnung()`. |
 | **`recipient_mp_id` auto-populated** | `lf_mp_id` (NNE/MMM) or `empfaenger.mp_id` (PID 31009) copied automatically; `sender_mp_id` is the NB, or the **MSB** for 31009. |
 | **`Sparte` drives settlement type** | `Sparte::Gas` → `SettlementType::NneGas`, `GasNEV §14`, PID 31005. No manual override needed. |

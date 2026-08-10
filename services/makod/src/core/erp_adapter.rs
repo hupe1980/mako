@@ -580,6 +580,8 @@ fn map_message_type_to_erp_event(msg_type: &str) -> Option<mako_engine::erp::Erp
         "MaloIdentified" => ErpEventType::MaloIdentified,
         // WiM Steuerungsauftrag positive Endantwort (PID 55168) — triggers VPP billing.
         "DispatchConfirmed" => ErpEventType::VppDispatchConfirmed,
+        // GaBi Gas KoV §6.4 final-allocation window closed unsettled.
+        "GabiFinalAllocationOverdue" => ErpEventType::GabiFinalAllocationOverdue,
         _ => return None,
     })
 }
@@ -595,6 +597,50 @@ fn extract_pid(payload: &serde_json::Value) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    /// The outbox `message_type` is a bare string shared across crate
+    /// boundaries: a workflow in `mako-gabi-gas` writes it and
+    /// [`map_message_type_to_erp_event`] here reads it, with no type linking
+    /// the two. A rename on either side compiles cleanly and silently turns the
+    /// notification into an unrecognised type the worker skips.
+    #[test]
+    fn every_enqueued_message_type_maps_to_a_cloud_event() {
+        use super::map_message_type_to_erp_event;
+
+        // Written by domain workflows via `PendingOutbox::new`.
+        for msg_type in [
+            "AperakAccepted",
+            "AperakRejected",
+            "AperakTimeout",
+            "ContrlReceived",
+            "ProcessCompleted",
+            "ProcessInitiated",
+            "MaloIdentified",
+            "DispatchConfirmed",
+            "GabiFinalAllocationOverdue",
+        ] {
+            let event = map_message_type_to_erp_event(msg_type).unwrap_or_else(|| {
+                panic!(
+                    "`{msg_type}` maps to no ErpEventType — it would be \
+                                           skipped by OutboxErpWorker and never delivered"
+                )
+            });
+            assert!(
+                event.cloud_event_type().starts_with("de."),
+                "`{msg_type}` must map to a reverse-DNS CloudEvent type",
+            );
+        }
+    }
+
+    /// The GaBi Gas notification must land on the type `gabi-gas-agent`
+    /// subscribes to, not merely on *some* type.
+    #[test]
+    fn the_gabi_overdue_notification_carries_the_alocat_missing_type() {
+        use super::map_message_type_to_erp_event;
+
+        let event = map_message_type_to_erp_event("GabiFinalAllocationOverdue").expect("mapped");
+        assert_eq!(event.cloud_event_type(), mako_events::gabi::ALOCAT_MISSING);
+    }
+
     #[test]
     fn sha256_known_vector() {
         // SHA-256("abc") — NIST FIPS 180-4 Example 1.

@@ -326,9 +326,26 @@ pub async fn get_vertrag_by_malo(
                 Some(ende) => ende,
                 None => mit_frist,
             };
+            // BG-7 buyer: billingd has no customer master of its own, so an
+            // EN 16931 invoice built without this carries a synthesised buyer
+            // and fails XRechnung on the address terms. Best-effort — a missing
+            // Kunde must not fail the contract lookup that §40 Abs. 1 needs.
+            let rechnungsempfaenger =
+                crate::pg::fetch_rechnungsempfaenger_by_malo(&pool, &malo_id, &cfg.tenant)
+                    .await
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(
+                            malo_id = %malo_id,
+                            error   = %e,
+                            "vertragd: BG-7 buyer lookup failed; invoice will fall back \
+                             to the synthesised buyer and not be XRechnung-conformant",
+                        );
+                        None
+                    });
             Json(serde_json::json!({
                 "vertrag": vertrag,
                 "komponente": komponente,
+                "rechnungsempfaenger": rechnungsempfaenger,
                 "naechstmoeglicher_kuendigungstermin":
                     naechstmoeglicher_kuendigungstermin.to_string(),
             }))
@@ -1444,19 +1461,41 @@ pub async fn get_person(
 
 /// `GET /api/v1/rahmenvertraege/{id}/malos`
 ///
-/// Returns all active MaLo IDs + product codes for a Rahmenvertrag.
+/// Returns all active MaLo IDs + product codes for a Rahmenvertrag, together
+/// with the BG-7 buyer the bundled invoice is addressed to.
 ///
 /// Used by `billingd` `POST /api/v1/billing/sammelrechnung/{id}` to enumerate
-/// the sites to include in a consolidated B2B Sammelrechnung.
+/// the sites to include in a consolidated B2B Sammelrechnung. The
+/// `rechnungsempfaenger` block is the **Rahmenvertrag holder** — a Sammelrechnung
+/// bills them, not any one site's supply customer, so billingd cannot derive it
+/// from the MaLo list.
 pub async fn get_rahmenvertrag_malos(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<VertragdConfig>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    match list_rahmenvertrag_malos(&pool, id, &cfg.tenant).await {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+    let rows = match list_rahmenvertrag_malos(&pool, id, &cfg.tenant).await {
+        Ok(rows) => rows,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    // Best-effort: a missing Kunde must not fail the site enumeration a billing
+    // run depends on; the invoice then falls back to its unaddressed buyer.
+    let rechnungsempfaenger =
+        crate::pg::fetch_rechnungsempfaenger_by_rahmenvertrag(&pool, id, &cfg.tenant)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    rahmenvertrag_id = %id,
+                    error = %e,
+                    "vertragd: BG-7 buyer lookup for the Rahmenvertrag failed",
+                );
+                None
+            });
+    Json(serde_json::json!({
+        "malos": rows,
+        "rechnungsempfaenger": rechnungsempfaenger,
+    }))
+    .into_response()
 }
 
 // ── Preisgarantie typed REST resource ───────────────────────────────

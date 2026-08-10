@@ -4,7 +4,7 @@
 //! and **KWKG 2023**. Zero I/O, zero async — every function is deterministic
 //! and synchronous. No floating-point money: amounts are computed in
 //! `rust_decimal::Decimal`, and every EUR result is rounded and
-//! range-checked through [`billing::EuroAmount`] (`i64 × 10⁻⁵ EUR`).
+//! range-checked through [`crate::EuroAmount`] (`i64 × 10⁻⁵ EUR`).
 //!
 //! # Settlement schemes (10)
 //!
@@ -104,6 +104,14 @@ pub mod ust;
 pub mod version;
 pub mod wind;
 pub mod zusammenfassung;
+
+/// A monetary amount in euro at 10⁻⁵-EUR resolution.
+///
+/// `billing` 0.12 dropped its own `EuroAmount` alias — the engine is
+/// currency-agnostic and the name asserted a currency the type does not carry.
+/// EEG/KWKG Vergütung is euro-denominated by statute, so the alias is correct
+/// here; it just belongs to the domain crate rather than the engine.
+pub type EuroAmount = billing::Amount<5>;
 
 pub use aw_reductions::{AwReductionApplied, AwReductionContext, Sect54SolarReduction};
 pub use error::SettlementError;

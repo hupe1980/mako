@@ -625,9 +625,12 @@ pub trait As4Sender: Send + Sync + 'static {
 /// ```
 ///
 /// [`DeadLetterReason::OutboxExhausted`]: crate::dead_letter::DeadLetterReason::OutboxExhausted
-pub struct OutboxWorker<OS: OutboxStore, S: As4Sender> {
+pub struct OutboxWorker<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> {
     store: OS,
     sender: S,
+    /// Used to discharge a delivery-window deadline once the message it was
+    /// watching has actually been sent — see [`OutboxWorker::run`].
+    deadline_store: DS,
     batch_size: usize,
     poll_interval: std::time::Duration,
     /// Maximum total delivery attempts before a message is dead-lettered.
@@ -670,7 +673,7 @@ fn backoff_delay(attempt: u32, entropy: u64) -> std::time::Duration {
     std::time::Duration::from_secs(jitter_secs)
 }
 
-impl<OS: OutboxStore, S: As4Sender> OutboxWorker<OS, S> {
+impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
     /// Run the outbox drain loop until the task is cancelled.
     ///
     /// # Panics
@@ -789,6 +792,17 @@ impl<OS: OutboxStore, S: As4Sender> OutboxWorker<OS, S> {
                                 );
                             }
                         }
+                        // The message is out, so any delivery window that was
+                        // watching for it has been answered — retire it.
+                        //
+                        // Nothing else cancels these. A monitoring deadline that
+                        // outlives the obligation it monitors fires for every
+                        // process, including every one that answered on time,
+                        // and the scheduler cannot tell those apart because a
+                        // deadline reaching `due_now` is late by construction.
+                        // Leaving them registered turns the miss counters into
+                        // counts of *processes started*.
+                        self.discharge_delivery_window(&msg).await;
                     }
                     // Permanent error: dead-letter immediately without retrying.
                     // PartnerUnknown requires operator intervention (add --as4-partner);
@@ -884,10 +898,14 @@ where
         batch_size: usize,
         poll_interval: std::time::Duration,
         max_attempts: u32,
-    ) -> OutboxWorker<OS, S> {
+    ) -> OutboxWorker<OS, S, DS>
+    where
+        DS: DeadlineStore + Clone,
+    {
         OutboxWorker {
             store: self.outbox_store.clone(),
             sender,
+            deadline_store: self.deadline_store.clone(),
             batch_size,
             poll_interval,
             max_attempts,
@@ -897,7 +915,7 @@ where
     }
 }
 
-impl<OS: OutboxStore, S: As4Sender> OutboxWorker<OS, S> {
+impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
     /// Attach a liveness heartbeat to this worker.
     ///
     /// The worker will store the current UTC Unix timestamp (seconds) into
@@ -910,6 +928,60 @@ impl<OS: OutboxStore, S: As4Sender> OutboxWorker<OS, S> {
     ) -> Self {
         self.heartbeat = Some(heartbeat);
         self
+    }
+
+    /// Retire the delivery window `msg` was being watched by, if one is open.
+    ///
+    /// A delivery-window deadline exists to answer one question: *did this
+    /// message go out in time?* Once it has gone out the question is settled,
+    /// and leaving the deadline registered only guarantees a false alarm later.
+    /// [`fristen::discharges_delivery_window`] decides which labels a given
+    /// message type answers for; deadlines that merely share the stream (a
+    /// process-response window, say) are left alone.
+    ///
+    /// Best-effort: a failure here costs a spurious alert at the window's close,
+    /// never a lost or duplicated message, so it is logged rather than
+    /// propagated — the delivery itself has already been acknowledged.
+    ///
+    /// [`fristen::discharges_delivery_window`]: crate::fristen::discharges_delivery_window
+    async fn discharge_delivery_window(&self, msg: &crate::outbox::OutboxMessage) {
+        let open = match self.deadline_store.for_stream(&msg.stream_id).await {
+            Ok(deadlines) => deadlines,
+            Err(e) => {
+                tracing::warn!(
+                    message_id   = %msg.message_id,
+                    message_type = %msg.message_type,
+                    error        = %e,
+                    "outbox worker: could not read deadlines to discharge the delivery \
+                     window; it may fire a spurious regulatory alert",
+                );
+                return;
+            }
+        };
+
+        for deadline in open
+            .iter()
+            .filter(|d| crate::fristen::discharges_delivery_window(&msg.message_type, d.label()))
+        {
+            if let Err(e) = self.deadline_store.cancel(deadline.deadline_id()).await {
+                tracing::warn!(
+                    message_id  = %msg.message_id,
+                    deadline_id = %deadline.deadline_id(),
+                    label       = %deadline.label(),
+                    error       = %e,
+                    "outbox worker: could not discharge the delivery window; \
+                     it may fire a spurious regulatory alert",
+                );
+            } else {
+                tracing::debug!(
+                    message_id   = %msg.message_id,
+                    message_type = %msg.message_type,
+                    deadline_id  = %deadline.deadline_id(),
+                    label        = %deadline.label(),
+                    "outbox worker: message delivered — delivery window discharged",
+                );
+            }
+        }
     }
 }
 
@@ -1073,25 +1145,30 @@ impl<DS: DeadlineStore> DeadlineScheduler<DS> {
                 let id = deadline.deadline_id();
                 let label = deadline.label().to_owned();
 
-                // Detect late-fired APERAK deadlines — any deadline whose label starts
-                // with "aperak-" that fires after its due_at is a regulatory violation
-                // under APERAK AHB 1.0 §2.4.1 (Strom 45 min) / §2.3.1 (Gas 1 Werktag).
-                // Increment `makod_aperak_missed_total` so Alertmanager can page on-call.
-                if label.starts_with("aperak-") {
+                // An APERAK delivery window that reaches this point is a
+                // regulatory violation under APERAK AHB 1.0 §2.4.1 (Strom
+                // 45 min) / §2.3.1 (Gas 1 Werktag): the outbox worker discharges
+                // the window the moment the APERAK goes out, so one that is
+                // still registered when it comes due was never answered.
+                //
+                // Do NOT re-test `now > due_at` here. `due_now` selects on
+                // `due_at <= now`, so that comparison is true by construction and
+                // says nothing about compliance — it was the reason this counter
+                // once tracked "Strom processes started" rather than "APERAKs
+                // missed". The discharge is what carries the meaning.
+                if label.starts_with(crate::fristen::APERAK_WINDOW_LABEL_PREFIX) {
                     let now = time::OffsetDateTime::now_utc();
-                    if now > deadline.due_at() {
-                        crate::metrics::EngineMetrics::global().aperak_missed(&label);
-                        tracing::error!(
-                            deadline_id = %id,
-                            label       = %label,
-                            due_at      = %deadline.due_at(),
-                            fired_at    = %now,
-                            overdue_secs = (now - deadline.due_at()).whole_seconds(),
-                            "APERAK deadline fired LATE — regulatory violation \
-                             (APERAK AHB 1.0 §2.4.1 Strom / §2.3.1 Gas). \
-                             Counter: makod_aperak_missed_total",
-                        );
-                    }
+                    crate::metrics::EngineMetrics::global().aperak_missed(&label);
+                    tracing::error!(
+                        deadline_id = %id,
+                        label       = %label,
+                        due_at      = %deadline.due_at(),
+                        fired_at    = %now,
+                        overdue_secs = (now - deadline.due_at()).whole_seconds(),
+                        "APERAK delivery window closed with no delivery — regulatory \
+                         violation (APERAK AHB 1.0 §2.4.1 Strom / §2.3.1 Gas). \
+                         Counter: makod_aperak_missed_total",
+                    );
                 }
 
                 let should_cancel = match (self.dispatch)(deadline).await {
@@ -2133,5 +2210,183 @@ mod tests {
             Some("workflow-a"),
             "first module should win on PID conflict with explicit roles"
         );
+    }
+
+    // ── APERAK delivery-window discharge ──────────────────────────────────────
+
+    /// A sender that always succeeds, so the worker takes the delivery path.
+    struct AlwaysDelivers;
+    impl As4Sender for AlwaysDelivers {
+        async fn send(&self, _msg: &crate::outbox::OutboxMessage) -> Result<(), EngineError> {
+            Ok(())
+        }
+    }
+
+    fn outbox_message(
+        stream_id: &crate::ids::StreamId,
+        message_type: &str,
+    ) -> crate::outbox::OutboxMessage {
+        crate::outbox::OutboxMessage::new(
+            stream_id.clone(),
+            crate::ids::ProcessId::new(),
+            TenantId::new(),
+            crate::ids::CorrelationId::new(),
+            crate::ids::ConversationId::new(),
+            crate::ids::EventId::new(),
+            message_type,
+            "9900357000004",
+            serde_json::json!({}),
+        )
+    }
+
+    fn deadline_on(
+        stream_id: &crate::ids::StreamId,
+        msg: &crate::outbox::OutboxMessage,
+        label: &str,
+    ) -> Deadline {
+        Deadline::new(
+            stream_id.clone(),
+            msg.process_id,
+            msg.tenant_id,
+            WorkflowId::new("gpke-supplier-change", "FV2025-10-01"),
+            label,
+            time::OffsetDateTime::now_utc() + time::Duration::hours(6),
+        )
+    }
+
+    /// Deliver `msg` through the worker's real loop and return the labels that
+    /// survive on its stream.
+    ///
+    /// Drives `run` rather than calling the discharge directly — the wiring is
+    /// the thing under test, and calling the method straight passes even when
+    /// `run` never invokes it.
+    async fn labels_surviving_delivery(
+        msg: &crate::outbox::OutboxMessage,
+        stream_id: &crate::ids::StreamId,
+        registered: &[&str],
+    ) -> Vec<String> {
+        let deadlines = InMemoryDeadlineStore::new();
+        for label in registered {
+            deadlines
+                .register(&deadline_on(stream_id, msg, label))
+                .await
+                .unwrap();
+        }
+        let outbox = InMemoryOutboxStore::new();
+        outbox.enqueue(std::slice::from_ref(msg)).await.unwrap();
+
+        let worker = OutboxWorker {
+            store: outbox.clone(),
+            sender: AlwaysDelivers,
+            deadline_store: deadlines.clone(),
+            batch_size: 10,
+            poll_interval: std::time::Duration::from_millis(5),
+            max_attempts: 48,
+            dead_letter_sink: std::sync::Arc::new(crate::dead_letter::LogDeadLetterSink),
+            heartbeat: None,
+        };
+        // `run` never returns; give it enough cycles to drain the one message.
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(300), worker.run()).await;
+        assert!(
+            outbox.pending_now(10).await.unwrap().is_empty(),
+            "the message must have been delivered and acknowledged",
+        );
+
+        let mut left: Vec<String> = deadlines
+            .for_stream(stream_id)
+            .await
+            .unwrap()
+            .iter()
+            .map(|d| d.label().to_owned())
+            .collect();
+        left.sort();
+        left
+    }
+
+    /// Delivering a message must retire the window that was watching for it.
+    ///
+    /// These windows are registered when the message is enqueued and nothing
+    /// else ever cancels them, so without the discharge they fire for **every**
+    /// process — including every one that answered on time. The scheduler cannot
+    /// tell those apart (a deadline reaching `due_now` is late by construction),
+    /// so the miss counters would track processes started, not obligations
+    /// missed.
+    #[tokio::test]
+    async fn delivering_a_message_discharges_its_delivery_window() {
+        // (message type, the window it answers for)
+        for (message_type, window) in [
+            ("APERAK", crate::fristen::APERAK_STROM_WINDOW_LABEL),
+            ("APERAK", crate::fristen::APERAK_GAS_FOLGEPROZESS_LABEL),
+            ("APERAK", crate::fristen::APERAK_GAS_INITIALPROZESS_LABEL),
+            ("CONTRL", crate::fristen::CONTRL_FRIST_LABEL),
+        ] {
+            let stream_id = crate::ids::StreamId::new("gpke-supplier-change-1");
+            let msg = outbox_message(&stream_id, message_type);
+            // A process-response deadline shares the stream and must survive:
+            // it is waiting on the counterparty, not on our delivery.
+            let left =
+                labels_surviving_delivery(&msg, &stream_id, &[window, "gpke-response-window"])
+                    .await;
+            assert_eq!(
+                left,
+                vec!["gpke-response-window"],
+                "delivering {message_type} must discharge `{window}` and leave \
+                 every other deadline alone",
+            );
+        }
+    }
+
+    /// A delivery must not discharge a *different* message's window.
+    ///
+    /// The CONTRL and APERAK obligations run concurrently on the same
+    /// interchange. Acknowledging syntax (CONTRL) says nothing about whether the
+    /// application-level APERAK went out, so discharging both on one delivery
+    /// would silence a real violation.
+    #[tokio::test]
+    async fn a_delivery_does_not_discharge_another_messages_window() {
+        let stream_id = crate::ids::StreamId::new("gpke-supplier-change-1");
+        let contrl = outbox_message(&stream_id, "CONTRL");
+
+        let left = labels_surviving_delivery(
+            &contrl,
+            &stream_id,
+            &[
+                crate::fristen::CONTRL_FRIST_LABEL,
+                crate::fristen::APERAK_STROM_WINDOW_LABEL,
+            ],
+        )
+        .await;
+
+        assert_eq!(
+            left,
+            vec![crate::fristen::APERAK_STROM_WINDOW_LABEL.to_owned()],
+            "a delivered CONTRL discharges only the CONTRL window; the APERAK \
+             obligation is still outstanding",
+        );
+    }
+
+    /// Every delivery-window label must be discharged by the message it watches.
+    ///
+    /// This is the invariant the miss counters rest on. A window label that
+    /// `discharges_delivery_window` does not recognise is never retired, so it
+    /// fires on every process and is counted as a regulatory violation each
+    /// time — which is precisely how `makod_aperak_missed_total` once came to
+    /// count Strom processes rather than missed APERAKs.
+    ///
+    /// Adding a delivery window means adding a row here.
+    #[test]
+    fn every_delivery_window_label_is_discharged_by_its_message() {
+        for (message_type, label) in [
+            ("APERAK", crate::fristen::APERAK_STROM_WINDOW_LABEL),
+            ("APERAK", crate::fristen::APERAK_GAS_FOLGEPROZESS_LABEL),
+            ("APERAK", crate::fristen::APERAK_GAS_INITIALPROZESS_LABEL),
+            ("CONTRL", crate::fristen::CONTRL_FRIST_LABEL),
+        ] {
+            assert!(
+                crate::fristen::discharges_delivery_window(message_type, label),
+                "delivering {message_type} must discharge `{label}`, or the window \
+                 outlives its obligation and alerts on every process",
+            );
+        }
     }
 }

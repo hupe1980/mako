@@ -65,7 +65,7 @@ impl EdifactIngestDispatcher {
                 19118 | 19119 => {
                     let cmd = adapters::gpke_sperrung_msb_response_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.resume_by_malo::<GpkeSperrungWorkflow>(
+                    self.resume_by_key::<GpkeSperrungWorkflow>(
                         malo_id.as_str(),
                         "gpke-sperrung",
                         cmd,
@@ -78,7 +78,7 @@ impl EdifactIngestDispatcher {
                 39000 | 39001 => {
                     let cmd = adapters::gpke_sperrung_stornierung_registry().dispatch(raw, &fv)?;
                     let order_ref = extract_order_ref_from_msg(msg);
-                    self.resume_by_malo::<GpkeSperrungWorkflow>(&order_ref, "gpke-sperrung", cmd)
+                    self.resume_by_key::<GpkeSperrungWorkflow>(&order_ref, "gpke-sperrung", cmd)
                         .await
                 }
                 _ => Ok(IngestOutcome::Skipped {
@@ -96,7 +96,7 @@ impl EdifactIngestDispatcher {
                 19116 | 19117 | 19128 | 19129 | 21039 => {
                     let cmd = adapters::gpke_sperrung_lf_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.resume_by_malo::<GpkeSperrungLfWorkflow>(
+                    self.resume_by_key::<GpkeSperrungLfWorkflow>(
                         malo_id.as_str(),
                         "gpke-sperrung-lf",
                         cmd,
@@ -146,7 +146,7 @@ impl EdifactIngestDispatcher {
                 p if mako_gpke::IFTSTA_VOLLZUGS_PIDS.contains(&p) => {
                     let cmd = adapters::gpke_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.resume_by_malo::<GpkeSupplierChangeWorkflow>(
+                    self.resume_by_key::<GpkeSupplierChangeWorkflow>(
                         malo_id.as_str(),
                         "gpke-supplier-change",
                         cmd,
@@ -248,7 +248,7 @@ impl EdifactIngestDispatcher {
                 55014 | 55015 => {
                     let cmd = adapters::gpke_eog_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.resume_by_malo::<mako_gpke::GpkeEogWorkflow>(
+                    self.resume_by_key::<mako_gpke::GpkeEogWorkflow>(
                         malo_id.as_str(),
                         "gpke-eog",
                         cmd,
@@ -278,7 +278,7 @@ impl EdifactIngestDispatcher {
                     .await
                 } else if mako_gpke::is_rueckmeldung_pid(pid) {
                     let cmd = adapters::gpke_stammdaten_registry().dispatch(raw, &fv)?;
-                    self.resume_by_malo::<mako_gpke::GpkeStammdatenaenderungWorkflow>(
+                    self.resume_by_key::<mako_gpke::GpkeStammdatenaenderungWorkflow>(
                         malo_id.as_str(),
                         "gpke-stammdatenaenderung",
                         cmd,
@@ -297,7 +297,7 @@ impl EdifactIngestDispatcher {
                 55003 | 55004 | 55005 | 55006 | 55017 | 55018 => {
                     let cmd = adapters::gpke_lf_anmeldung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.resume_by_malo::<GpkeLfAnmeldungWorkflow>(
+                    self.resume_by_key::<GpkeLfAnmeldungWorkflow>(
                         malo_id.as_str(),
                         "gpke-lf-anmeldung",
                         cmd,
@@ -324,7 +324,7 @@ impl EdifactIngestDispatcher {
                     let cmd =
                         adapters::gpke_allokationsliste_ordrsp_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.resume_by_malo::<GpkeAllokationslisteWorkflow>(
+                    self.resume_by_key::<GpkeAllokationslisteWorkflow>(
                         malo_id.as_str(),
                         "gpke-allokationsliste",
                         cmd,
@@ -335,7 +335,7 @@ impl EdifactIngestDispatcher {
                     let cmd =
                         adapters::gpke_allokationsliste_mscons_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.resume_by_malo::<GpkeAllokationslisteWorkflow>(
+                    self.resume_by_key::<GpkeAllokationslisteWorkflow>(
                         malo_id.as_str(),
                         "gpke-allokationsliste",
                         cmd,
@@ -381,7 +381,7 @@ impl EdifactIngestDispatcher {
                     // REMADV from payer — resume the invoicer-side billing process.
                     let cmd = adapters::gpke_abrechnung_remadv_registry().dispatch(raw, &fv)?;
                     let invoice_ref = extract_invoice_ref_from_remadv(msg);
-                    self.resume_by_malo::<GpkeAbrechnungWorkflow>(
+                    self.resume_by_key::<GpkeAbrechnungWorkflow>(
                         &invoice_ref,
                         "gpke-abrechnung",
                         cmd,
@@ -392,7 +392,7 @@ impl EdifactIngestDispatcher {
                     // COMDIS from invoicer — resume the payer-side billing process.
                     let cmd = adapters::gpke_abrechnung_comdis_registry().dispatch(raw, &fv)?;
                     let invoice_ref = extract_invoice_ref_from_comdis(msg);
-                    self.resume_by_malo::<GpkeAbrechnungWorkflow>(
+                    self.resume_by_key::<GpkeAbrechnungWorkflow>(
                         &invoice_ref,
                         "gpke-abrechnung",
                         cmd,
@@ -433,7 +433,7 @@ impl EdifactIngestDispatcher {
                 19001 | 19002 => {
                     let cmd = adapters::gpke_konfiguration_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.resume_by_malo::<GpkeKonfigurationWorkflow>(
+                    self.resume_by_key::<GpkeKonfigurationWorkflow>(
                         malo_id.as_str(),
                         "gpke-konfiguration",
                         cmd,
@@ -634,7 +634,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::gpke_datenabruf_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     // Resume existing process; no spawn — LF initiates.
-                    self.resume_by_malo::<GpkeDatanabrufWorkflow>(
+                    self.resume_by_key::<GpkeDatanabrufWorkflow>(
                         malo_id.as_str(),
                         "gpke-datenabruf",
                         cmd,
@@ -658,7 +658,7 @@ impl EdifactIngestDispatcher {
                     let cmd =
                         adapters::gpke_konfiguration_aenderung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.resume_by_malo::<GpkeKonfigurationAenderungWorkflow>(
+                    self.resume_by_key::<GpkeKonfigurationAenderungWorkflow>(
                         malo_id.as_str(),
                         "gpke-konfiguration-aenderung",
                         cmd,

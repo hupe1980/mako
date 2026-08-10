@@ -1,7 +1,7 @@
 //! NNE, MMM, and MSB settlement calculation logic.
 //!
 //! Amounts are computed in `rust_decimal::Decimal`; every EUR result is
-//! range-checked through [`billing::EuroAmount`] for exact
+//! range-checked through [`crate::EuroAmount`] for exact
 //! representation.  Functions return [`SettlementResult`] — a pure domain type
 //! with no BO4E coupling.  The service layer (netzbilanzd / invoicd) converts
 //! `SettlementResult` to `rubo4e::current::Rechnung` via a local `into_rechnung()`
@@ -20,7 +20,7 @@
 //! This enables AI-assisted invoice explainability and regulator audits without
 //! re-running the calculation.
 
-use billing::EuroAmount;
+use crate::EuroAmount;
 use rust_decimal::Decimal;
 
 use crate::error::BillingError;

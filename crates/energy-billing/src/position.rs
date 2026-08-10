@@ -17,6 +17,7 @@
 //! This makes every invoice amount reproducible and auditable without re-running
 //! the calculation, satisfying BNetzA §20 EnWG audit requirements.
 
+use crate::EuroAmount;
 use crate::rates::RoundMoney;
 use rust_decimal::Decimal;
 use rust_decimal::dec;
@@ -465,15 +466,15 @@ impl BillingPosition {
 
 /// Round and range-validate a monetary EUR amount to 5 decimal places.
 ///
-/// Uses [`billing::EuroAmount`] internally to detect overflow (max ~92 M EUR).
+/// Uses [`EuroAmount`] internally to detect overflow (max ~92 M EUR).
 /// Beyond the fixed-point range the amount is kept and rounded directly —
 /// zeroing it (the old behaviour) silently erased the position's value,
 /// which is exactly the silent-degradation failure a billing engine must
 /// not have. An out-of-range line then fails loudly downstream in the
 /// EN16931 total-reconciliation checks instead of vanishing.
 pub(crate) fn validated_eur(amount: Decimal) -> Decimal {
-    billing::EuroAmount::checked_from_decimal(amount)
-        .map(billing::EuroAmount::into_decimal)
+    EuroAmount::checked_from_decimal(amount)
+        .map(EuroAmount::into_decimal)
         .unwrap_or_else(|_| amount.round_kfm(5))
 }
 

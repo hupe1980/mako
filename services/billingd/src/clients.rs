@@ -717,7 +717,7 @@ impl VertragdClient {
     pub async fn get_rahmenvertrag_malos(
         &self,
         rahmenvertrag_id: &str,
-    ) -> Result<Vec<RahmenvertragMaloEntry>> {
+    ) -> Result<RahmenvertragSites> {
         let url = format!(
             "{}/api/v1/rahmenvertraege/{}/malos",
             self.base_url, rahmenvertrag_id
@@ -729,7 +729,7 @@ impl VertragdClient {
             .await
             .context("vertragd GET rahmenvertrag malos")?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(vec![]);
+            return Ok(RahmenvertragSites::default());
         }
         resp.error_for_status_ref()
             .map_err(|e| anyhow::anyhow!("vertragd {e}"))?;
@@ -837,8 +837,32 @@ pub struct BillingCandidate {
 pub struct VertragByMalo {
     /// The contract row — only the fields billing needs are read.
     pub vertrag: VertragFacts,
+    /// The BG-7 buyer behind the MaLo, when vertragd has a Kunde on file.
+    ///
+    /// `billingd` keeps no customer master. Without this the e-invoice buyer is
+    /// synthesised from the MaLo-ID and the document fails XRechnung on its
+    /// address terms — see `einvoice::buyer_party`.
+    #[serde(default)]
+    pub rechnungsempfaenger: Option<Rechnungsempfaenger>,
     /// Next possible Kündigungstermin, computed by vertragd as of today.
     pub naechstmoeglicher_kuendigungstermin: Option<time::Date>,
+}
+
+/// BG-7 BUYER terms owned by `vertragd`, mirrored here for e-invoicing.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Rechnungsempfaenger {
+    /// BT-44 buyer name.
+    pub name: Option<String>,
+    /// BT-50 address line.
+    pub line1: Option<String>,
+    /// BT-53 post code.
+    pub post_code: Option<String>,
+    /// BT-52 city.
+    pub city: Option<String>,
+    /// BT-55 country code.
+    pub country: Option<String>,
+    /// BT-48 buyer VAT identifier (B2B only).
+    pub vat_id: Option<String>,
 }
 
 /// The contract facts billingd puts on the invoice (§40 Abs. 1 EnWG).
@@ -854,6 +878,19 @@ pub struct VertragFacts {
     pub vertragsende: Option<time::Date>,
     /// Notice period in months.
     pub kuendigungsfrist_monate: i32,
+}
+
+/// The sites under a Rahmenvertrag plus the holder the bundled invoice addresses.
+///
+/// A Sammelrechnung bills the **framework-contract holder**, not any one site's
+/// supply customer, so the BG-7 buyer cannot be derived from the MaLo list and
+/// travels with it.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct RahmenvertragSites {
+    #[serde(default)]
+    pub malos: Vec<RahmenvertragMaloEntry>,
+    #[serde(default)]
+    pub rechnungsempfaenger: Option<Rechnungsempfaenger>,
 }
 
 /// One active supply site within a Rahmenvertrag.

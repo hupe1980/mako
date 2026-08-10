@@ -19,7 +19,7 @@
 //! reference Lastgang in the Duldungsfall, from the transmitted schedule in
 //! the Aufforderungsfall) and the payment run live in the service layer.
 
-use billing::EuroAmount;
+use crate::EuroAmount;
 use rust_decimal::Decimal;
 
 use crate::error::BillingError;

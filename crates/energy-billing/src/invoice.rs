@@ -3,6 +3,7 @@
 //! Collects all `BillingPosition` items from the `BillingEngine` providers,
 //! computes totals, and can serialise to BO4E-compatible `Rechnung` JSON.
 
+use crate::EuroAmount;
 use crate::rates::RoundMoney;
 use rust_decimal::Decimal;
 use rust_decimal::dec;
@@ -1093,7 +1094,7 @@ impl TaxSubtotal {
     /// # Errors
     ///
     /// Returns [`EngineError::Arithmetic`] if the base or tax overflows
-    /// [`billing::EuroAmount`].
+    /// [`EuroAmount`].
     pub fn to_breakdown_entry(&self) -> Result<billing::TaxBreakdownEntry, EngineError> {
         Ok(billing::TaxBreakdownEntry::new(
             match self.category {
@@ -1103,8 +1104,8 @@ impl TaxSubtotal {
                 VatCategory::Exempt => billing::TaxCategory::Exempt,
             },
             self.rate_percent / Decimal::ONE_HUNDRED,
-            billing::EuroAmount::checked_from_decimal(self.taxable_base_eur)?,
-            billing::EuroAmount::checked_from_decimal(self.tax_amount_eur)?,
+            EuroAmount::checked_from_decimal(self.taxable_base_eur)?,
+            EuroAmount::checked_from_decimal(self.tax_amount_eur)?,
         ))
     }
 

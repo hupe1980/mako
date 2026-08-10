@@ -108,7 +108,7 @@ Each is independently testable and suitable for crates.io publication.
 | `mako-engine` | Event-sourced process runtime | `Workflow`, `EventStore`, `OutboxStore`, `DeadlineStore` |
 | `mako-markt` | Market data domain types + repo traits | `MaloId`, `MeloId`, `MarktpartnerId`, `VersorgungsStatus` |
 | `grid-billing` | NNE/KA/MMM/MSB grid **settlement** engine | `calculate_nne_invoice`, `GridSettlement` (+ `CalculationTrace`, `LegalReference`); `Sparte` drives Gas/Strom refs; `calculate_reversal()`; rubo4e-free core, opt-in `bo4e` feature → `into_rechnung()` |
-| `energy-billing` | Pure multi-product retail energy billing (LF) | `Product` typed enum (13 categories, serde-tagged); `BillingEngine`/`BillingProvider` pipeline; `ControllableLoadProvider` (§14a); `validate()` + `bill_batch()`; `Invoice.warnings` + `§41a Abs. 1` guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label; HT/NT (`billing::TimeOfUsePricing`); block tariffs (`billing::TariffSchedule`); **RLM demand charge**; **gas §54 exemption**; **historic levy rates**; §41a EPEX; `Invoice::merge()`, `Invoice::allocate_proportionally()`; `eeg` optional feature; rubo4e-free core, opt-in `bo4e` feature → `Invoice::to_rechnung()`; zero I/O |
+| `energy-billing` | Pure multi-product retail energy billing (LF) | `Product` typed enum (13 categories, serde-tagged); `BillingEngine`/`BillingProvider` pipeline; `ControllableLoadProvider` (§14a); `validate()` + `bill_batch()`; `Invoice.warnings` + `§41a Abs. 1` guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label; HT/NT (`billing::TimeOfUsePricing`); block tariffs (`billing::RateSchedule`); **RLM demand charge**; **gas §54 exemption**; **historic levy rates**; §41a EPEX; `Invoice::merge()`, `Invoice::allocate_proportionally()`; `eeg` optional feature; rubo4e-free core, opt-in `bo4e` feature → `Invoice::to_rechnung()`; zero I/O |
 | `eeg-billing` | Pure EEG/KWKG feed-in settlement (NB) | `calculate_settlement`, 10 settlement schemes, §51/§52 rules, `InbetriebnahmeTyp`, proptest invariants; opt-in `bo4e` feature → **§14 UStG Gutschrift** (`settlement_to_gutschrift` → BO4E `Rechnung` with per-rate USt breakdown) |
 | `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
 | `netz-checker` | NB Anmeldung 6-check validation | `check_anmeldung`, ERC A02/A05/A06/A07/E17 |
@@ -121,7 +121,7 @@ Each is independently testable and suitable for crates.io publication.
 ```mermaid
 graph TD
     subgraph pure ["Pure calculation crates (zero I/O)"]
-        billing["billing 0.10 (crates.io)<br/>ScalarTariff · TariffSchedule · TimeOfUsePricing<br/>EN 16931 line items — BG-23 VAT breakdown · BG-27/28 line<br/>allowances · BG-29 price detail · BT-130 unit code<br/>AmountScale · AdvancePayment · integer-cent money"]
+        billing["billing 0.13 (crates.io)<br/>PricingModel · RateSchedule · TimeOfUsePricing<br/>EN 16931 line items — BG-23 VAT breakdown · BG-27/28 line<br/>allowances · BG-29 price detail · BT-130 unit code<br/>AmountScale · AdvancePayment · integer-cent money"]
         metering["metering<br/>MeterInterval · fill_gaps (§17)<br/>Hampel quality · gas_m3_to_kwh_hs"]
         eeg["eeg-billing<br/>10 EEG/KWKG schemes · §51/§52/§36h<br/>§14 UStG Gutschrift → BO4E Rechnung (bo4e)"]
         grid["grid-billing<br/>NNE · KA · MMM · MSB · §13a<br/>CalculationTrace · into_rechnung (bo4e)"]
@@ -186,7 +186,7 @@ Pass 5  Cancellation sign reversal   (Stornorechnung)
 
 | Crate | Version | Purpose |
 |---|---|---|
-| [`billing`](https://crates.io/crates/billing) | `0.10` | Generic tariff billing engine — `Tariff`/`ScalarTariff` document assembly, graduated/volume/block/capacity pricing (`TariffSchedule`), HT/NT (`TimeOfUsePricing`), EPEX intervals (`DynamicPricing`), typed `Quantity`/`UnitPrice`, exact `Amount<P>` money (`checked_from_decimal`), VAT breakdown (EN 16931 BG-23) with `FixedRateTax::exempt`/`zero_rated`, `AmountScale::EN16931`, `AdvancePayment`, `prorate`/`merge_period_documents`; the shared money engine under `energy-billing`, `grid-billing` and `eeg-billing` |
+| [`billing`](https://crates.io/crates/billing) | `0.13` | Generic billing engine — `PricingModel` document assembly (one trait; a usage-free model sets `type Usage = ()`), graduated/volume/block/capacity pricing (`RateSchedule`), HT/NT (`TimeOfUsePricing`), EPEX intervals (`DynamicPricing`), typed `Quantity`/`UnitPrice`, exact `Amount<P>` money (`checked_from_decimal`), VAT breakdown (EN 16931 BG-23) with `FixedRateTax::exempt`/`zero_rated`, `AmountScale::EN16931`, `AdvancePayment`, `prorate`/`merge_period_documents`; the shared money engine under `energy-billing`, `grid-billing` and `eeg-billing` |
 | [`sepa`](https://crates.io/crates/sepa) | `0.5` | SEPA payment utilities — IBAN (ISO 13616, full 89-entry registry, BBAN structure checks), BIC (SEPA pattern + country validation), `CreditorId` (EPC AT-02, correct EPC262-08 check digits), typed `IsoDate`/`IsoDateTime`, pain.008 SDD CORE+B2B (`Pain008Builder` + `DirectDebitGroup`, multi-`PmtInf` messages, mandatory `CdtrSchmeId`), pain.001 SCT+SCT Instant (`Pain001Builder` + `CreditTransferGroup`), config-selectable schema version (`DirectDebitSchema` / `CreditTransferSchema`), pain.002 parser, camt.052/053/054 XML + simplified-JSON parsers (shared `CashEntry` model, `signed_ct()`), EPC217-08 transliteration, located `build()`/`validate()` errors; used by `accountingd` and `vertragd` |
 | [`metering`](https://crates.io/crates/metering) | `0.16` | German energy metering domain — `MeterInterval`, `aggregate`, `fill_gaps` / `fill_gaps_with_config` (§ 60 Abs. 2 MsbG — `FillGapsConfig` supports `PriorPeriodAverage`), `gas_m3_to_kwh_hs` (§ 25 Nr. 4 MessEV / DVGW G 685), `score_intervals` (Hampel A/B/C/F), SLP/RLM/iMSys classification, BDEW 2025 load profiles; pure computation, no storage — used by `edmd`, `marktd`, `mabis-syncd`, `mako-gabi-gas` and `mako-mabis` |
 | [`meterstore`](https://crates.io/crates/meterstore) | `0.2` | Metering time-series store — the persistence layer beneath `edmd`: PostgreSQL hot window + Apache Iceberg/S3 settled history, version-resolved reads, and `as_known_at` transaction-time reads across both tiers (what backs `edmd`'s `?as_of=` reproducible settlement snapshots) |
@@ -378,7 +378,7 @@ MSB-Rechnung invoices, running `invoic-checker` self-validation, and dispatching
 via `makod` as INVOIC 31001/31002/31005/31009.
 
 Key facts:
-- **`grid-billing` pure library** — all monetary arithmetic uses `rust_decimal::Decimal` via `billing::EuroAmount`,
+- **`grid-billing` pure library** — all monetary arithmetic uses `rust_decimal::Decimal` via `EuroAmount`,
   zero floating-point money. Returns `GridSettlement` (`GridInvoice` is a backward-compatible alias) — no `rubo4e` dependency.
   Every position carries `CalculationTrace { explanation, legal_refs, tariff_source, … }` for full audit.
   `Sparte::Gas` automatically selects `GasNEV §14` legal references; the NN-Rechnung PID is 31002 for both Sparten. `KaKundengruppe` annotates the KAV tier.
@@ -662,7 +662,7 @@ biller would reuse.
 ### Money types — the `Decimal` / `Amount` split
 
 The calculation pipelines run on `rust_decimal::Decimal`; monetary *results*
-pass through `billing::EuroAmount` (= `Amount<5>`, an `i64` scaled by 10⁻⁵):
+pass through `EuroAmount` (= `Amount<5>`, an `i64` scaled by 10⁻⁵):
 
 - **Pipelines need non-money operands** — kWh, kW, months, percentage
   factors, ct→EUR divisions, pro-rata day fractions. A fixed-point money

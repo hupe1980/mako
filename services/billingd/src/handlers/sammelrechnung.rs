@@ -49,8 +49,8 @@ pub async fn post_sammelrechnung(
     };
 
     // Enumerate MaLos for this Rahmenvertrag.
-    let malos = match vertragd.get_rahmenvertrag_malos(&rahmenvertrag_id).await {
-        Ok(m) if m.is_empty() => {
+    let sites = match vertragd.get_rahmenvertrag_malos(&rahmenvertrag_id).await {
+        Ok(m) if m.malos.is_empty() => {
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "no active MaLos in Rahmenvertrag",
@@ -77,11 +77,11 @@ pub async fn post_sammelrechnung(
         .unwrap_or_else(|| format!("SAMMEL-{rahmenvertrag_id}-{period_from}"));
 
     // Calculate each MaLo independently.
-    let mut parts: Vec<(String, Invoice)> = Vec::with_capacity(malos.len());
+    let mut parts: Vec<(String, Invoice)> = Vec::with_capacity(sites.malos.len());
     let mut per_malo_ids: Vec<Uuid> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
 
-    for entry in &malos {
+    for entry in &sites.malos {
         let dummy_req = CalculateRequest {
             schlussrechnung: false,
             monatliche_abrechnung: false,
@@ -153,8 +153,23 @@ pub async fn post_sammelrechnung(
         )
         .await
         {
-            if let Err(e) =
-                crate::einvoice::store(&pool, record_id, &result, &cfg, &entry.malo_id).await
+            // Each per-MaLo line of a Sammelrechnung bills that site's own supply
+            // customer, so the ordinary BG-7 lookup is the right one.
+            let buyer = vertragd
+                .get_vertrag_by_malo(&entry.malo_id)
+                .await
+                .ok()
+                .flatten()
+                .and_then(|v| v.rechnungsempfaenger);
+            if let Err(e) = crate::einvoice::store(
+                &pool,
+                record_id,
+                &result,
+                &cfg,
+                &entry.malo_id,
+                buyer.as_ref(),
+            )
+            .await
             {
                 tracing::warn!(%record_id, error = %e, "billingd: attach en16931 model failed");
             }
@@ -240,6 +255,10 @@ pub async fn post_sammelrechnung(
         &sammel_invoice,
         &cfg,
         &rahmenvertrag_id,
+        // The bundled document bills the **Rahmenvertrag holder**, not any one
+        // site's supply customer, so this is vertragd's holder projection rather
+        // than the per-MaLo one used for the lines above.
+        sites.rechnungsempfaenger.as_ref(),
     )
     .await
     {

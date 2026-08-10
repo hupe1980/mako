@@ -1,16 +1,16 @@
-//! [`billing::ScalarTariff`] implementation bridge for EEG/KWKG settlement.
+//! [`billing::PricingModel`] implementation bridge for EEG/KWKG settlement.
 //!
-//! [`EegSettleTariff`] wraps a pre-computed [`SettleOutput`] and exposes it
-//! via the [`billing::ScalarTariff`] trait (no `Usage`, no ignored
-//! argument), enabling EEG settlement results to be used in
-//! `billing::BillingDocument` generation alongside other tariffs.
+//! [`EegSettleTariff`] wraps a pre-computed [`SettleOutput`] and exposes it via
+//! the [`billing::PricingModel`] trait with `type Usage = ()`, enabling EEG
+//! settlement results to be used in `billing::BillingDocument` generation
+//! alongside other pricing models.
 //!
 //! ## Workflow
 //!
 //! 1. Call [`crate::calculate_settlement`] to compute the settlement output.
 //! 2. Handle non-billable status variants (`NoData`, `PriceMissing`).
 //! 3. Wrap the output in [`EegSettleTariff`].
-//! 4. Call `.settle(meta)` ([`billing::ScalarTariff`]) to produce a `BillingDocument`.
+//! 4. Call `.settle(meta)` ([`billing::PricingModel`]) to produce a `BillingDocument`.
 //!
 //! ## Tax layers
 //!
@@ -40,13 +40,13 @@
 //! assert_eq!(output.status, SettlementStatus::Calculated);
 //!
 //! let tariff = EegSettleTariff::new(&output);
-//! use billing::ScalarTariff as _;
+//! use billing::PricingModel as _;
 //! let doc = tariff.settle(
 //!     DocumentMeta {
 //!         invoice_number: "EEG-2026-07-001".into(),
 //!         period_label:   "Juli 2026".into(),
 //!         period: Some(Period::from_display("2026-07-01", "2026-07-31")),
-//!         issuer_id: Some("9904234560001".into()),  // NB MP-ID
+//!         issuer_id: Some(billing::PartyIdentifier::new("9904234560001")),  // NB MP-ID
 //!         issue_date: Some("2026-07-13".into()),
 //!         ..Default::default()
 //!     },
@@ -62,7 +62,7 @@ use crate::model::{SettleOutput, SettlementStatus};
 
 // ── EegSettleTariff ──────────────────────────────────────────────────────────
 
-/// [`billing::ScalarTariff`] adapter for EEG/KWKG settlement results.
+/// [`billing::PricingModel`] adapter for EEG/KWKG settlement results.
 ///
 /// Wraps a pre-computed [`SettleOutput`] and exposes it through the `Tariff` trait
 /// so EEG settlement can be composed with other billing positions and documents.
@@ -89,7 +89,12 @@ impl<'a> EegSettleTariff<'a> {
     }
 }
 
-impl billing::ScalarTariff for EegSettleTariff<'_> {
+impl billing::PricingModel for EegSettleTariff<'_> {
+    /// The positions are already computed in [`SettleOutput`], so the model
+    /// consumes no usage. `billing` 0.12 folded the old `ScalarTariff` into
+    /// `PricingModel` with `type Usage = ()` rather than keeping two traits.
+    type Usage = ();
+
     /// Use `BillingError` directly for compatibility with `BillingDocument` construction.
     type Error = BillingError;
 
@@ -99,9 +104,10 @@ impl billing::ScalarTariff for EegSettleTariff<'_> {
     /// two-state billing reason and is what callers already inspect.
     type NotBillable = std::convert::Infallible;
 
-    /// `ScalarTariff`: the positions are already computed in `SettleOutput`,
-    /// so there is no `Usage` and no ignored `_usage` argument.
-    fn positions(&self) -> Result<billing::Positions<std::convert::Infallible>, BillingError> {
+    fn positions(
+        &self,
+        (): &Self::Usage,
+    ) -> Result<billing::Positions<std::convert::Infallible>, BillingError> {
         // NoData/PriceMissing → empty, Sanctioned → EUR 0 audit line, etc.
         Ok(crate::bridge::settlement_to_line_items(self.output).into())
     }
@@ -162,12 +168,16 @@ fn ust_layer(rate: rust_decimal::Decimal) -> Result<FixedRateTax, BillingError> 
     FixedRateTax::new(format!("Umsatzsteuer {pct:.0}\u{202f}%"), rate)
 }
 
-impl billing::ScalarTariff for EegSettleTariffRegelbesteuerung<'_> {
+impl billing::PricingModel for EegSettleTariffRegelbesteuerung<'_> {
+    type Usage = ();
     type Error = BillingError;
     type NotBillable = std::convert::Infallible;
 
-    fn positions(&self) -> Result<billing::Positions<std::convert::Infallible>, BillingError> {
-        billing::ScalarTariff::positions(&self.inner)
+    fn positions(
+        &self,
+        usage: &Self::Usage,
+    ) -> Result<billing::Positions<std::convert::Infallible>, BillingError> {
+        billing::PricingModel::positions(&self.inner, usage)
     }
 
     fn tax_layers(&self) -> Vec<Box<dyn TaxLayer>> {

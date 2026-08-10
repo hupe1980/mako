@@ -137,3 +137,89 @@ fn the_known_edifact_layouts_are_exact() {
     expect("STS", "C555", 2);
     expect("STS", "C556", 3);
 }
+
+/// The hand-authored layouts and the generated tables must agree.
+///
+/// mako carries **two** descriptions of where a data element sits, filled from
+/// the same MIGs by different routes:
+///
+/// - `messages::layouts` — hand-authored, and what the `EdifactDeserialize`
+///   derive resolves `#[edifact(element = "4440")]` against when *reading* a
+///   typed segment.
+/// - the generated `SEGMENTS` tables — emitted by `xtask codegen` from the MIG
+///   JSON via `CANONICAL_ELEMENT_POSITIONS`, and what *validates* an inbound
+///   segment's arity.
+///
+/// Each is separately guarded against a hand-written MIG table
+/// (`segment_layout_guard.rs` and the two tests above), but nothing checked
+/// them against **each other** — so a fix applied to one source could leave the
+/// other pointing at the old slot. That splits the failure in two: the parser
+/// reads the wrong component while the validator still accepts the segment, or
+/// the validator rejects a segment the parser would have read correctly. This
+/// closes the triangle.
+#[test]
+fn the_hand_authored_layouts_agree_with_the_generated_tables() {
+    use edi_energy::messages::layouts;
+
+    let generated = generated_positions();
+
+    // Every layout `messages::segments` addresses. A composite is named by its
+    // own identifier (`C108`) in both sources, so the two are directly
+    // comparable without expanding components.
+    let layouts: &[&'static edifact_rs::SegmentDefinition] = &[
+        &layouts::BGM,
+        &layouts::DTM,
+        &layouts::NAD,
+        &layouts::RFF,
+        &layouts::IDE,
+        &layouts::LOC,
+        &layouts::ERC,
+        &layouts::FTX,
+        &layouts::QTY,
+        &layouts::LIN,
+        &layouts::PIA,
+        &layouts::CCI,
+        &layouts::STS,
+        &layouts::CTA,
+        &layouts::COM,
+    ];
+
+    let mut offenders = Vec::new();
+    let mut compared = 0usize;
+
+    for def in layouts {
+        let Some(gen_tag) = generated.get(def.tag) else {
+            // No generated profile carries this segment — nothing to compare.
+            continue;
+        };
+        for elem in def.elements {
+            let id = elem.data_element();
+            let Some(gen_positions) = gen_tag.get(id) else {
+                // The MIGs of the generated profiles do not use this element.
+                continue;
+            };
+            compared += 1;
+            let want = usize::from(elem.position());
+            if !gen_positions.contains(&want) {
+                offenders.push(format!(
+                    "{}.{id}: messages::layouts says position {want}, \
+                     the generated tables say {gen_positions:?}",
+                    def.tag
+                ));
+            }
+        }
+    }
+
+    assert!(
+        compared > 20,
+        "expected the two sources to overlap on many elements, compared only {compared}"
+    );
+    assert!(
+        offenders.is_empty(),
+        "the hand-authored segment layouts and the generated MIG tables disagree \
+         on where a data element sits. The parser resolves named elements against \
+         `messages::layouts`; the validator checks arity against the generated \
+         tables — they must describe the same segment.\n  {}",
+        offenders.join("\n  ")
+    );
+}

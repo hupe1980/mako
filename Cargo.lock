@@ -1386,9 +1386,9 @@ dependencies = [
 
 [[package]]
 name = "billing"
-version = "0.10.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90bfe72b47c0f5b0e07722e33fbb97af4a26d29a69512ea4e2423c1aebb37b6d"
+checksum = "17a692f67eee09246dec0abb92318d8e6ec4a6a8cd04332e7ececb62bb47c8d1"
 dependencies = [
  "rust_decimal",
  "serde",
@@ -3819,9 +3819,9 @@ dependencies = [
 
 [[package]]
 name = "en16931"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f9f40c3bf43774c6eb7c78021fe4b34e491ce63ac736a7c54826b2851a6862b"
+checksum = "5388d2c507a005b1ce80b85f36ebec9d0c1e1fa7c44e63bef3edf6894dbd5d75"
 dependencies = [
  "billing",
  "rust_decimal",
@@ -3832,9 +3832,9 @@ dependencies = [
 
 [[package]]
 name = "en16931-formats"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "480bfb8a4606d9a7cc6472895504ffe0d0929134485b0675e0c344ea7a51e874"
+checksum = "dd0393e58df6e182fb2cc0fd5aa5b0b184685eb8703102033b9d6c89f397e411"
 dependencies = [
  "en16931",
  "roxmltree",

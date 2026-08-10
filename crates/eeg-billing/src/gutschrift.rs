@@ -15,7 +15,7 @@
 //! `energy-billing::Invoice::to_rechnung` and `grid_billing::bo4e::into_rechnung`
 //! already follow.
 
-use billing::{BillingDocument, BillingError, DocumentMeta, LineItem, ScalarTariff, TaxCategory};
+use billing::{BillingDocument, BillingError, DocumentMeta, LineItem, PricingModel, TaxCategory};
 use rubo4e::current as bo;
 use rust_decimal::Decimal;
 
@@ -55,7 +55,7 @@ pub fn settlement_to_gutschrift_with_document(
     vat: VatStatus,
     meta: DocumentMeta,
 ) -> Result<(bo::Rechnung, BillingDocument), BillingError> {
-    let positions = EegSettleTariff::new(output).positions()?.into_inner();
+    let positions = EegSettleTariff::new(output).positions(&())?.into_inner();
     let doc = BillingDocument::from_positions(meta, positions, ust_tax_layers(vat), vec![])?;
     let rechnung = document_to_rechnung(&doc)?;
     Ok((rechnung, doc))
@@ -125,12 +125,12 @@ fn document_to_rechnung(doc: &BillingDocument) -> Result<bo::Rechnung, BillingEr
     if let Some(id) = &meta.issuer_id {
         let _ = rechnung
             ._additional
-            .try_insert("rechnungserstellerId".into(), id.as_str().into());
+            .try_insert("rechnungserstellerId".into(), id.value.as_str().into());
     }
     if let Some(id) = &meta.recipient_id {
         let _ = rechnung
             ._additional
-            .try_insert("rechnungsempfaengerId".into(), id.as_str().into());
+            .try_insert("rechnungsempfaengerId".into(), id.value.as_str().into());
     }
     Ok(rechnung)
 }

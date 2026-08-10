@@ -490,6 +490,8 @@ Initial startup delay staggers workers to avoid DB contention.
 | `GET` | `/api/v1/vertraege` | All active contracts (`?tenant=&status=`) |
 | `GET` | `/api/v1/vertraege/billing-candidates` | §40b EnWG: active supply components + `abrechnungszyklus` — billingd's billing-run work list |
 | `GET` | `/api/v1/vertraege/expiring` | Near-expiry contracts (`?days=30`) — §13 GasGVV / §41 EnWG |
+| `GET` | `/api/v1/rahmenvertraege/{id}/malos` | Active MaLos under a Rahmenvertrag **plus** the `rechnungsempfaenger` (BG-7 holder) a Sammelrechnung is addressed to |
+| `GET` | `/api/v1/vertraege/by-malo/{malo_id}` | Active contract behind a MaLo — §40 Abs. 1 EnWG invoice facts, next Kündigungstermin, and the `rechnungsempfaenger` block (BG-7 buyer: BT-44 name, BT-50/52/53 address, BT-48 VAT-ID) `billingd` needs for EN 16931 |
 | `GET` | `/api/v1/vertraege/{id}` | Contract + Komponenten + status |
 | `POST` | `/api/v1/vertraege/{id}/tarifwechsel` | Change product code; blocked within Preisgarantie window |
 | `POST` | `/api/v1/vertraege/{id}/stornieren` | Cancel pre-activation contract (`ANGELEGT`/`IN_BEARBEITUNG` only) |

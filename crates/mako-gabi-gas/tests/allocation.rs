@@ -241,6 +241,146 @@ async fn final_allocation_window_closing_without_a_final_is_recorded() {
     assert!(matches!(state, AllocationState::FinalOverdue(_)));
 }
 
+/// The missed KoV §6.4 obligation must leave the platform, not just the state.
+///
+/// A `FinalOverdue` stream that raises no notification is indistinguishable
+/// from a healthy one to everything outside makod: the imbalance cannot be
+/// settled and only a Clearingfall with the FNB/MGV resolves it, so the fact
+/// has to reach the operator. The outbox entry is what `OutboxErpWorker` turns
+/// into `de.gabi.alocat.missing`.
+#[tokio::test]
+async fn a_closed_window_enqueues_the_alocat_missing_notification() {
+    use mako_engine::workflow::Workflow as _;
+
+    // Drive the state through the real command path, then hand it to `handle`
+    // directly — `Process::execute` persists the outbox rather than returning it.
+    let proc = make_process();
+    proc.execute(receive_alocat(90001, "20250115"))
+        .await
+        .unwrap();
+    let state = proc.state().await.unwrap();
+
+    let out = GaBiGasAllocationWorkflow::handle(
+        &state,
+        AllocationCommand::TimeoutExpired {
+            deadline_id: DeadlineId::new(),
+            label: FINAL_ALOCAT_DEADLINE_LABEL.into(),
+        },
+    )
+    .expect("the window closing is not an error");
+
+    assert_eq!(out.events.len(), 1, "one FinalAllocationOverdue event");
+    assert_eq!(
+        out.outbox.len(),
+        1,
+        "the missed obligation must be notified, not only recorded"
+    );
+
+    let notice = &out.outbox[0];
+    // This string is the contract with `map_message_type_to_erp_event` in
+    // makod; changing it silently drops the notification on the floor.
+    assert_eq!(notice.message_type.as_ref(), "GabiFinalAllocationOverdue");
+    assert_eq!(notice.recipient.as_ref(), "11XBKV-RECVTEST2");
+    assert_eq!(notice.payload["sender_eic"], "11XFNB-SENDTEST1");
+    assert_eq!(
+        notice.payload["deadline_label"],
+        FINAL_ALOCAT_DEADLINE_LABEL
+    );
+    assert!(
+        notice.payload.get("gas_day").is_some(),
+        "the Clearingfall is opened for a specific gas day"
+    );
+}
+
+/// A settled gas day raises neither the event nor the notification.
+#[tokio::test]
+async fn a_settled_gas_day_enqueues_no_notification() {
+    use mako_engine::workflow::Workflow as _;
+
+    let proc = make_process();
+    proc.execute(receive_alocat_versioned(
+        90001,
+        "20250115",
+        AllocationVersion::Final,
+    ))
+    .await
+    .unwrap();
+    let state = proc.state().await.unwrap();
+
+    let out = GaBiGasAllocationWorkflow::handle(
+        &state,
+        AllocationCommand::TimeoutExpired {
+            deadline_id: DeadlineId::new(),
+            label: FINAL_ALOCAT_DEADLINE_LABEL.into(),
+        },
+    )
+    .expect("idempotent no-op");
+
+    assert!(out.events.is_empty());
+    assert!(
+        out.outbox.is_empty(),
+        "a settled gas day must not raise a Clearingfall notification"
+    );
+}
+
+/// `on_deadline` is what tells makod whether the obligation was really missed.
+///
+/// The KoV §6.4 window is registered when the *first* ALOCAT arrives and is
+/// never cancelled, so the deadline fires for **every** gas day — including the
+/// ones that settled normally. `makod`'s `dispatch_deadline` routes through
+/// `execute_timeout_with_retry` and raises its error-level REGULATORY ALERT
+/// only when this hook produced a command. If the hook stopped discriminating,
+/// every healthy gas day would page the operator at M+2.
+#[tokio::test]
+async fn on_deadline_is_silent_for_a_gas_day_that_settled() {
+    use mako_engine::{deadline::Deadline, ids::ProcessId, workflow::Workflow as _};
+
+    fn window(label: &str) -> Deadline {
+        Deadline::new(
+            mako_engine::ids::StreamId::new("gabi-gas-allocation-20250115"),
+            ProcessId::new(),
+            TenantId::new(),
+            WorkflowId::new("gabi-gas-allocation", "FV2025-10-01"),
+            label,
+            time::OffsetDateTime::now_utc(),
+        )
+    }
+
+    // Settled — the final allocation is on file, nothing is overdue.
+    let settled = make_process();
+    settled
+        .execute(receive_alocat_versioned(
+            90001,
+            "20250115",
+            AllocationVersion::Final,
+        ))
+        .await
+        .unwrap();
+    assert!(
+        GaBiGasAllocationWorkflow::on_deadline(
+            &window(FINAL_ALOCAT_DEADLINE_LABEL),
+            &settled.state().await.unwrap(),
+        )
+        .is_none(),
+        "a settled gas day must not raise the KoV §6.4 alert",
+    );
+
+    // Unsettled — only the initial allocation arrived.
+    let unsettled = make_process();
+    unsettled
+        .execute(receive_alocat(90001, "20250115"))
+        .await
+        .unwrap();
+    assert!(
+        GaBiGasAllocationWorkflow::on_deadline(
+            &window(FINAL_ALOCAT_DEADLINE_LABEL),
+            &unsettled.state().await.unwrap(),
+        )
+        .is_some(),
+        "a gas day with no binding final allocation must raise the alert",
+    );
+}
+
 /// A settled gas day must not raise an overdue event when the window closes.
 #[tokio::test]
 async fn a_settled_gas_day_does_not_go_overdue() {

@@ -60,7 +60,7 @@ impl EdifactIngestDispatcher {
                     let cmd =
                         adapters::geli_gas_sperrung_nb_response_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.resume_by_malo::<GeliGasSperrungNbWorkflow>(
+                    self.resume_by_key::<GeliGasSperrungNbWorkflow>(
                         malo_id.as_str(),
                         "geli-gas-sperrung-nb",
                         cmd,
@@ -73,7 +73,7 @@ impl EdifactIngestDispatcher {
                     let cmd =
                         adapters::geli_gas_sperrung_nb_stornierung_registry().dispatch(raw, &fv)?;
                     let order_ref = extract_order_ref_from_msg(msg);
-                    self.resume_by_malo::<GeliGasSperrungNbWorkflow>(
+                    self.resume_by_key::<GeliGasSperrungNbWorkflow>(
                         &order_ref,
                         "geli-gas-sperrung-nb",
                         cmd,
@@ -93,7 +93,7 @@ impl EdifactIngestDispatcher {
                 19116 | 19117 | 19128 | 19129 => {
                     let cmd = adapters::geli_gas_sperrung_lf_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.resume_by_malo::<GeliGasSperrungLfWorkflow>(
+                    self.resume_by_key::<GeliGasSperrungLfWorkflow>(
                         malo_id.as_str(),
                         "geli-gas-sperrung-lf",
                         cmd,
@@ -143,7 +143,7 @@ impl EdifactIngestDispatcher {
                     && !mako_geli_gas::stammdatenaenderung::is_aenderung_pid(pid)
                 {
                     let cmd = adapters::geli_gas_stammdaten_registry().dispatch(raw, &fv)?;
-                    self.resume_by_malo::<mako_geli_gas::GeliGasStammdatenaenderungWorkflow>(
+                    self.resume_by_key::<mako_geli_gas::GeliGasStammdatenaenderungWorkflow>(
                         malo_id.as_str(),
                         "geli-gas-stammdatenaenderung",
                         cmd,
@@ -267,7 +267,7 @@ impl EdifactIngestDispatcher {
                 44023 | 44024 => {
                     let cmd = adapters::geli_gas_stornierung_lf_registry().dispatch(raw, &fv)?;
                     let vorgang_id = extract_melo_from_utilmd(msg);
-                    self.resume_by_malo::<GeliGasLfStornierungWorkflow>(
+                    self.resume_by_key::<GeliGasLfStornierungWorkflow>(
                         &vorgang_id,
                         "geli-gas-stornierung-lf",
                         cmd,
@@ -290,7 +290,7 @@ impl EdifactIngestDispatcher {
                 p if mako_geli_gas::lf_anmeldung::ANTWORT_PIDS_LF.contains(&p) => {
                     let cmd = adapters::geli_gas_lf_anmeldung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.resume_by_malo::<GeliGasLfAnmeldungWorkflow>(
+                    self.resume_by_key::<GeliGasLfAnmeldungWorkflow>(
                         malo_id.as_str(),
                         mako_geli_gas::LF_ANMELDUNG_WORKFLOW_NAME,
                         cmd,
@@ -339,7 +339,7 @@ impl EdifactIngestDispatcher {
                     let cmd =
                         adapters::geli_gas_datenabruf_ablehnung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.resume_by_malo::<GeliGasDatanabrufWorkflow>(
+                    self.resume_by_key::<GeliGasDatanabrufWorkflow>(
                         malo_id.as_str(),
                         mako_geli_gas::GELI_GAS_DATENABRUF_WORKFLOW_NAME,
                         cmd,

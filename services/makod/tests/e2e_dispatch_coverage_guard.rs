@@ -9,7 +9,7 @@
 //! For every PID each domain module registers, this test dispatches a real
 //! message and asserts the outcome is **not** `pid_not_in_*`. Dispatch arms
 //! match on the passed PID rather than message content, so any parseable
-//! message of the right type suffices: `process_not_found` / `no_malo_id` /
+//! message of the right type suffices: `process_not_found` / `no_correlation_key` /
 //! adapter `Err` all mean "the PID reached its arm" — only `pid_not_in_*` is
 //! the bug.
 //!
@@ -330,7 +330,7 @@ NAD+MS+4012345000023::293'NAD+MR+9900357000004::293'UNS+D'UNT+8+1'UNZ+1+1'"
 ///   first shape hid seven `wim-technik-aenderung` PIDs behind a single stub
 ///   arm.
 ///
-/// Every other reason (`no_malo_id`, `process_not_found`, `*_resumes_only`)
+/// Every other reason (`no_correlation_key`, `process_not_found`, `*_resumes_only`)
 /// means the PID *did* reach its arm and the arm made a domain decision.
 fn is_silent_drop(reason: &str) -> bool {
     reason.starts_with("pid_not_in_")

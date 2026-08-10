@@ -109,6 +109,53 @@ pub fn contrl_due_at(received: OffsetDateTime) -> OffsetDateTime {
 /// 45 Minuten".
 pub const APERAK_STROM_WEEKDAY_MINUTES: i64 = 45;
 
+/// Shared prefix of every APERAK delivery-window label.
+///
+/// The outbox worker discharges a window under this prefix when the APERAK it
+/// was watching is delivered, so a window that *does* fire means the obligation
+/// really was missed. Any new APERAK window label must keep the prefix, or it
+/// will outlive its obligation and raise a false regulatory alert on every
+/// process.
+pub const APERAK_WINDOW_LABEL_PREFIX: &str = "aperak-";
+
+/// Does delivering `message_type` discharge the delivery window `label`?
+///
+/// A **delivery window** is a deadline that exists to ask one question: *did
+/// this message go out in time?* Once it has gone out the question is settled,
+/// and the window has to be retired — a window that outlives its obligation
+/// fires for every process, including every one that answered on time, and the
+/// scheduler cannot tell those apart, because a deadline it hands out is late
+/// by construction (`due_now` selects on `due_at <= now`).
+///
+/// Used by [`OutboxWorker::run`](crate::builder::OutboxWorker::run) on
+/// successful delivery. Adding a delivery window means adding it here too;
+/// forgetting turns its miss counter into a count of *processes started*.
+///
+/// # Example
+///
+/// ```rust
+/// use mako_engine::fristen::{
+///     discharges_delivery_window, APERAK_STROM_WINDOW_LABEL, CONTRL_FRIST_LABEL,
+/// };
+///
+/// assert!(discharges_delivery_window("APERAK", APERAK_STROM_WINDOW_LABEL));
+/// assert!(discharges_delivery_window("CONTRL", CONTRL_FRIST_LABEL));
+/// // A message never discharges another message's window.
+/// assert!(!discharges_delivery_window("CONTRL", APERAK_STROM_WINDOW_LABEL));
+/// // Nor does it touch a process-response deadline that shares the stream.
+/// assert!(!discharges_delivery_window("APERAK", "gpke-response-window"));
+/// ```
+#[must_use]
+pub fn discharges_delivery_window(message_type: &str, label: &str) -> bool {
+    match message_type {
+        // Strom 45 min, Gas Folgeprozess and Gas Initialprozess all share the
+        // prefix, and all are discharged by the same delivery.
+        "APERAK" => label.starts_with(APERAK_WINDOW_LABEL_PREFIX),
+        "CONTRL" => label == CONTRL_FRIST_LABEL,
+        _ => false,
+    }
+}
+
 /// Deadline label for Strom APERAK 45-minute sending obligations.
 ///
 /// Register a [`Deadline`](crate::deadline::Deadline) with this label after

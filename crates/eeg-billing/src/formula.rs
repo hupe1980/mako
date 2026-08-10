@@ -1,6 +1,6 @@
 //! Pure settlement formula — [`calculate_settlement`].
 
-use billing::EuroAmount;
+use crate::EuroAmount;
 use rust_decimal::Decimal;
 use rust_decimal::dec;
 
@@ -25,7 +25,7 @@ fn validated_eur(d: Decimal) -> Decimal {
     // `from_decimal_rounded`; the remaining error arm is a true range overflow,
     // which no physical EEG settlement can reach.
     EuroAmount::from_decimal_rounded(d, billing::RoundingStrategy::MidpointAwayFromZero)
-        .map(billing::EuroAmount::into_decimal)
+        .map(crate::EuroAmount::into_decimal)
         .unwrap_or_else(|_| panic!("settlement amount {d} EUR exceeds the EuroAmount range"))
 }
 

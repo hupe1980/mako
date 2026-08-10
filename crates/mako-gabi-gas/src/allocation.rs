@@ -47,6 +47,7 @@ use mako_engine::{
     deadline::Deadline,
     error::WorkflowError,
     ids::DeadlineId,
+    outbox::PendingOutbox,
     types::MessageRef,
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
@@ -432,12 +433,31 @@ impl Workflow for GaBiGasAllocationWorkflow {
                 if state.is_settled() {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
-                Ok(vec![AllocationEvent::FinalAllocationOverdue {
-                    gas_day: data.gas_day,
-                    deadline_id,
-                    label,
-                }]
-                .into())
+                // The missed obligation is the FNB's/MGV's, so nothing is sent
+                // back on the wire — but the operator has to open a Clearingfall,
+                // and that is a decision a human or an agent makes off-platform.
+                // The outbox entry carries it out as `de.gabi.alocat.missing`
+                // through the same ERP path every other notification uses.
+                let notice = PendingOutbox::new(
+                    "GabiFinalAllocationOverdue",
+                    data.receiver_eic.as_str(),
+                    serde_json::json!({
+                        "gas_day":        data.gas_day,
+                        "deadline_label": label.as_ref(),
+                        "sender_eic":     data.sender_eic,
+                        "receiver_eic":   data.receiver_eic,
+                        "synthetic_pid":  data.synthetic_pid,
+                    }),
+                );
+                Ok(WorkflowOutput {
+                    events: vec![AllocationEvent::FinalAllocationOverdue {
+                        gas_day: data.gas_day,
+                        deadline_id,
+                        label,
+                    }],
+                    outbox: vec![notice],
+                    deadlines: Vec::new(),
+                })
             }
         }
     }

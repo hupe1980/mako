@@ -26,7 +26,7 @@
 //! ## No float money
 //!
 //! Quantities, rates, and factors are `rust_decimal::Decimal`; every EUR
-//! result is range-checked through the `billing::EuroAmount` newtype
+//! result is range-checked through the `crate::EuroAmount` newtype
 //! (`Amount<5>`) before it leaves the crate.
 //!
 //! ## Example
@@ -117,6 +117,14 @@ pub mod sect18;
 pub mod sect19;
 pub mod types;
 pub mod umlagen;
+
+/// A monetary amount in euro at 10⁻⁵-EUR resolution.
+///
+/// `billing` 0.12 dropped its own `EuroAmount` alias — the engine is
+/// currency-agnostic and the name asserted a currency the type does not carry.
+/// Netznutzungsentgelte are euro-denominated by statute, so the alias is correct
+/// here; it just belongs to the domain crate rather than the engine.
+pub type EuroAmount = ::billing::Amount<5>;
 
 pub use billing::{correct, reverse, settle_gas_awh, settle_mmm, settle_msb, settle_nne};
 pub use error::BillingError;

@@ -34,9 +34,11 @@ use std::path::Path;
 /// tracked in `concepts/ROADMAP.md`, not a way to silence the check.
 const PLANNED_TOOLS: &[(&str, &str)] = &[(
     "netzbilanzd/get_gas_imbalance",
-    "GaBi Gas balancing has no daemon yet — see ROADMAP 'GaBi Gas: no CloudEvent ever \
-     leaves the ingest path'. `gabi-gas-agent` cannot fire either, because nothing emits \
-     `de.gabi.*`; the grant is kept so the manifest still describes the intended reach.",
+    "GaBi Gas imbalance has no daemon yet — see ROADMAP 'GaBi Gas: eleven of twelve \
+     de.gabi.* types still have no emitter'. `gabi-gas-agent` now fires on \
+     `de.gabi.alocat.missing` (the KoV §6.4 window closing unsettled), but the imbalance \
+     globs it also subscribes to stay dark until IMBNOT dispatch lands; the grant is kept \
+     so the manifest still describes the intended reach.",
 )];
 
 /// Check every grant in every specialist manifest.

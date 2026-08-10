@@ -938,7 +938,7 @@ fn bridge_verguetung_one_line_item() {
     assert!(items[0].has_tag("verguetung"));
     assert_eq!(
         items[0].net_amount,
-        billing::EuroAmount::checked_from_decimal(d("40.55")).unwrap()
+        eeg_billing::EuroAmount::checked_from_decimal(d("40.55")).unwrap()
     );
 }
 
@@ -980,7 +980,7 @@ fn bridge_sanctioned_zero_item() {
     let items = settlement_to_line_items(&output);
     assert_eq!(items.len(), 1);
     assert!(items[0].has_tag("§25-sanctioned"));
-    assert_eq!(items[0].net_amount, billing::EuroAmount::ZERO);
+    assert_eq!(items[0].net_amount, eeg_billing::EuroAmount::ZERO);
 }
 
 /// NoData → empty line items (nothing to bill yet).

@@ -42,6 +42,38 @@ Deadline scheduler (makod/src/deadline_dispatch.rs)
 - the event is persisted but the ERP notification is lost, or
 - the ERP notification is sent but the event is missing from the audit log.
 
+### Key invariant: a deadline is discharged when its obligation is met
+
+Deadlines fall into two kinds, and they are retired differently.
+
+A **process-response window** waits on the counterparty (*did they answer within
+24 h?*). It is meant to fire; `Workflow::on_deadline` inspects process state and
+returns `None` when the answer already arrived, which is why deadline dispatch
+should route through `Process::execute_timeout_with_retry` rather than
+constructing a `TimeoutExpired` command directly.
+
+A **delivery window** waits on *us* (*did our APERAK go out within 45 minutes?*).
+It must never fire on the happy path, so `OutboxWorker` retires it the moment the
+message it watches is delivered — `fristen::discharges_delivery_window` maps each
+message type to the labels its delivery answers for:
+
+| Message | Discharges | Obligation |
+|---|---|---|
+| `APERAK` | `aperak-strom-45min-window`, `aperak-gas-folgeprozess-…`, `aperak-gas-initialprozess-…` | APERAK AHB 1.0 §2.4.1 / §2.3.1 |
+| `CONTRL` | `contrl-6h-delivery-window` | CONTRL AHB 1.0 §1.2 |
+
+A delivery discharges only its own windows — an acknowledged CONTRL says nothing
+about whether the application-level APERAK went out, and a deadline that merely
+shares the stream is left alone.
+
+**This discharge is what gives the miss counters meaning.** The scheduler selects
+deadlines on `due_at <= now`, so "fired after its due time" is true of every
+deadline it ever hands out and proves nothing on its own. A delivery window that
+survives to its due time is an undelivered message — that, and only that, is the
+violation. A new delivery window that `discharges_delivery_window` does not
+recognise is never retired, so it alerts on every process; the
+`every_delivery_window_label_is_discharged_by_its_message` test pins that.
+
 ### Retry on conflict
 
 Deadline workers use `execute_and_enqueue_with_retry(..., 3)` so that a

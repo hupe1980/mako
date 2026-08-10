@@ -186,14 +186,14 @@ impl EdifactIngestDispatcher {
                 33001 | 33002 => {
                     let cmd = adapters::wim_gas_invoic_remadv_registry().dispatch(raw, &fv)?;
                     let invoice_ref = extract_invoice_ref_from_remadv(msg);
-                    self.resume_by_malo::<WimGasInvoicWorkflow>(&invoice_ref, "wim-gas-invoic", cmd)
+                    self.resume_by_key::<WimGasInvoicWorkflow>(&invoice_ref, "wim-gas-invoic", cmd)
                         .await
                 }
                 // COMDIS 29001 (gMSB invoicer rejects the NB's REMADV).
                 29001 => {
                     let cmd = adapters::wim_gas_invoic_comdis_registry().dispatch(raw, &fv)?;
                     let invoice_ref = extract_invoice_ref_from_comdis(msg);
-                    self.resume_by_malo::<WimGasInvoicWorkflow>(&invoice_ref, "wim-gas-invoic", cmd)
+                    self.resume_by_key::<WimGasInvoicWorkflow>(&invoice_ref, "wim-gas-invoic", cmd)
                         .await
                 }
                 _ => Ok(IngestOutcome::Skipped {

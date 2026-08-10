@@ -2068,3 +2068,120 @@ pub async fn list_aggregatorvertraege(
     .fetch_all(pool)
     .await?)
 }
+
+// ── Rechnungsempfänger (BG-7 buyer) ───────────────────────────────────────────
+
+/// The BG-7 BUYER terms an EN 16931 invoice needs, resolved for one MaLo.
+///
+/// `billingd` bills a MaLo and has no customer master of its own, so without
+/// this it synthesises a buyer from the MaLo-ID alone — which costs four fatal
+/// XRechnung findings (BR-DE-8 city, BR-DE-9 post code, BR-DE-15 buyer
+/// reference, PEPPOL-EN16931-R010 electronic address). The Kunde behind the
+/// contract carries the real terms; this is the projection of it that billing
+/// is allowed to see.
+///
+/// Deliberately *not* the whole `KundeRow`: an invoice needs a name, a postal
+/// address and a VAT-ID, and nothing about payment details or portal identities.
+#[derive(Debug, Clone, Serialize)]
+pub struct RechnungsempfaengerRow {
+    /// BT-44 buyer name.
+    pub name: Option<String>,
+    /// BT-50 address line (Straße + Hausnummer).
+    pub line1: Option<String>,
+    /// BT-53 post code.
+    pub post_code: Option<String>,
+    /// BT-52 city.
+    pub city: Option<String>,
+    /// BT-55 country code; BO4E `landescode`, defaulted to `DE` by the caller.
+    pub country: Option<String>,
+    /// BT-48 buyer VAT identifier — B2B only, `NULL` for a household.
+    pub vat_id: Option<String>,
+}
+
+/// Read `geschaeftspartner->>'name1'`-style fields out of the BO4E JSONB.
+///
+/// The column holds a BO4E `Geschaeftspartner`, whose address is a nested
+/// `Adresse` (`strasse`/`hausnummer`/`postleitzahl`/`ort`/`landescode`). Read
+/// defensively — the column is nullable and operator-populated, and a partly
+/// filled address must yield partly filled terms rather than an error.
+fn buyer_from_geschaeftspartner(
+    gp: Option<&serde_json::Value>,
+    vat_id: Option<String>,
+) -> RechnungsempfaengerRow {
+    let s = |v: Option<&serde_json::Value>, k: &str| {
+        v.and_then(|v| v.get(k))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let adresse = gp.and_then(|g| g.get("adresse"));
+    let line1 = match (s(adresse, "strasse"), s(adresse, "hausnummer")) {
+        (Some(st), Some(nr)) => Some(format!("{st} {nr}")),
+        (Some(st), None) => Some(st),
+        (None, nr) => nr,
+    };
+    RechnungsempfaengerRow {
+        // BO4E carries a company name in `name1`; a natural person's name is
+        // assembled by vertragd's own portal layer, so `name1` is the one field
+        // that is populated for both.
+        name: s(gp, "name1"),
+        line1,
+        post_code: s(adresse, "postleitzahl"),
+        city: s(adresse, "ort"),
+        country: s(adresse, "landescode"),
+        vat_id,
+    }
+}
+
+/// The BG-7 buyer behind `malo_id`, or `None` when no contract/Kunde is on file.
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn fetch_rechnungsempfaenger_by_malo(
+    pool: &PgPool,
+    malo_id: &str,
+    tenant: &str,
+) -> Result<Option<RechnungsempfaengerRow>> {
+    let row: Option<(Option<serde_json::Value>, Option<String>)> = sqlx::query_as(
+        "SELECT ku.geschaeftspartner, ku.umsatzsteuer_id
+           FROM versorgungsvertraege v
+           JOIN vertragskomponenten k ON k.vertrag_id = v.id
+           JOIN kunden ku            ON ku.id = v.kunden_id
+          WHERE k.malo_id=$1 AND v.tenant=$2
+            AND v.status IN ('TEILERFUELLUNG','AKTIV','GEKÜNDIGT')
+            AND k.status IN ('AKTIV','BESTAETIGT')
+          ORDER BY v.vertragsbeginn DESC LIMIT 1",
+    )
+    .bind(malo_id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(gp, vat)| buyer_from_geschaeftspartner(gp.as_ref(), vat)))
+}
+
+/// The BG-7 buyer behind a Rahmenvertrag — the holder a Sammelrechnung bills.
+///
+/// A Sammelrechnung bundles many supply sites onto one document addressed to the
+/// **framework-contract holder**, not to any one site's customer, so the
+/// per-MaLo projection would name the wrong party.
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn fetch_rechnungsempfaenger_by_rahmenvertrag(
+    pool: &PgPool,
+    rahmenvertrag_id: Uuid,
+    tenant: &str,
+) -> Result<Option<RechnungsempfaengerRow>> {
+    let row: Option<(Option<serde_json::Value>, Option<String>)> = sqlx::query_as(
+        "SELECT ku.geschaeftspartner, ku.umsatzsteuer_id
+           FROM rahmenvertraege r
+           JOIN kunden ku ON ku.id = r.kunden_id
+          WHERE r.id=$1 AND r.tenant=$2",
+    )
+    .bind(rahmenvertrag_id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(gp, vat)| buyer_from_geschaeftspartner(gp.as_ref(), vat)))
+}

@@ -1882,8 +1882,10 @@ falls back to a conservative message-level heuristic (an unambiguous Gas-only PI
 such as UTILMD G 44xxx / INVOIC 31003/31004/31007/31008/31010/31011, or a Gas
 UTILMD release track). The CONTRL and its 6h escalation deadline are written in one
 transaction (`enqueue_outbox_with_deadlines`), so a crash can never queue the
-acknowledgement without its deadline. The CONTRL sender is the recipient MP-ID —
-the Sparte-correct own GLN, even in a combined Strom+Gas deployment.
+acknowledgement without its deadline. The outbox worker **discharges** that
+deadline once the CONTRL is delivered, so it only ever escalates when the
+acknowledgement genuinely did not go out. The CONTRL sender is the recipient
+MP-ID — the Sparte-correct own GLN, even in a combined Strom+Gas deployment.
 
 ---
 
@@ -2009,10 +2011,18 @@ Every significant operation carries a trace context:
 | `makod_process_initiated_total` | `family` | Baseline for process volume |
 | `makod_process_completed_total` | `family`, `result` | `result != "accepted"` for NB-STP compliance |
 | `makod_outbox_delivery_attempts_total` | `result` | `result = "transport_error"` spikes |
-| `makod_deadline_fired_total` | `family` | Missed APERAK windows |
+| `makod_deadline_fired_total` | `family` | Baseline for deadline volume |
 | `makod_dead_letter_recorded_total` | `reason` | Any dead-letter = regulatory risk |
 | `makod_inbound_messages_total` | `pid`, `result` | `result = "error"` for unknown PIDs |
-| **`makod_aperak_missed_total`** | `label` | **Alert when > 0** — late APERAK = regulatory violation (APERAK AHB 1.0 §2.4.1 Strom / §2.3.1 Gas) |
+| **`makod_aperak_missed_total`** | `label` | **Alert when > 0** — an undelivered APERAK is a regulatory violation (APERAK AHB 1.0 §2.4.1 Strom / §2.3.1 Gas) |
+
+`makod_aperak_missed_total` counts APERAK delivery windows that were **still
+registered when they came due**. The outbox worker discharges a window the
+moment the APERAK it was watching is delivered, so a window that survives to its
+due time is an APERAK that never went out. That discharge is what makes the
+counter meaningful — the deadline scheduler selects on `due_at <= now`, so
+"fired after its due time" is true of every deadline it ever hands out and is
+not, on its own, evidence of anything.
 
 ### AS4 inbound rate limiting
 

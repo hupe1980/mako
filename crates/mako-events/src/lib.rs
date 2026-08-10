@@ -333,9 +333,15 @@ pub mod agent {
 
 /// GaBi Gas balancing events (`de.gabi.*`), defined in `mako-gabi-gas`.
 ///
-/// ⚠ phantom (all 12): subscribed by agentd (`gabi-gas-agent` globs
-/// `de.gabi.imbalance.*`, `de.gabi.nomination.*` and exact types), but no
-/// service emits them yet (tracked in ROADMAP).
+/// [`gabi::ALOCAT_MISSING`] is emitted by `makod`: the `gabi-gas-allocation` workflow
+/// enqueues a `GabiFinalAllocationOverdue` outbox entry when the KoV §6.4
+/// final-allocation window closes unsettled, and `OutboxErpWorker` delivers it
+/// as a CloudEvent like every other ERP notification.
+///
+/// ⚠ The remaining eleven are phantom: subscribed by agentd (`gabi-gas-agent`
+/// globs `de.gabi.imbalance.*`, `de.gabi.nomination.*`), but no service emits
+/// them yet — the ingest arms for IMBNOT/SCHEDL/TRANOT/DELORD still return
+/// `Skipped`, so there is no domain fact to raise an event about (ROADMAP).
 pub mod gabi {
     /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
     pub const MEASUREMENT_RECEIVED: &str = "de.gabi.measurement.received";
@@ -353,7 +359,14 @@ pub mod gabi {
     pub const INVOIC_MMM_RECEIVED: &str = "de.gabi.invoic.mmm.received";
     /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
     pub const INVOIC_KAPAZITAET_RECEIVED: &str = "de.gabi.invoic.kapazitaet.received";
-    /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
+    /// The KoV §6.4 final-allocation window closed with no binding final
+    /// ALOCAT on file, so the gas day's imbalance cannot be settled.
+    ///
+    /// Emitted by `makod` from the `gabi-gas-allocation` deadline via
+    /// `ErpEventType::GabiFinalAllocationOverdue`. The `data` payload carries
+    /// `gas_day`, `deadline_label`, `sender_eic`, `receiver_eic` and
+    /// `synthetic_pid`. The operator's action is to open a Clearingfall with
+    /// the FNB/MGV.
     pub const ALOCAT_MISSING: &str = "de.gabi.alocat.missing";
     /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
     pub const IMBNOT_RECEIVED: &str = "de.gabi.imbnot.received";

@@ -11,7 +11,7 @@
 use en16931::identifier::Identifier;
 use en16931::invoice::{Code, Contact, Party, PostalAddress};
 use energy_billing::Invoice;
-use energy_billing::en16931_map::XRECHNUNG_SPEC_ID;
+use energy_billing::en16931_map::{EN16931_SPEC_ID, XRECHNUNG_SPEC_ID};
 
 use crate::config::BillingdConfig;
 
@@ -85,28 +85,122 @@ fn seller_party(cfg: &BillingdConfig) -> Party {
     }
 }
 
-/// BG-7 BUYER, from the billed MaLo.
-fn buyer_party(malo_id: &str) -> Party {
+/// BG-7 BUYER — from `vertragd`'s Kunde when one is on file, else a stub.
+///
+/// `billingd` holds no customer master, so the real name, postal address and
+/// VAT-ID come from `vertragd.kunden` via `GET /vertraege/by-malo/{id}`. With
+/// them the document satisfies BR-DE-8 (city) and BR-DE-9 (post code); without
+/// them the fallback names the supply site and those two findings stand. The
+/// fallback is deliberate — a vertragd outage must degrade the invoice, not fail
+/// the billing run.
+///
+/// # Why there is no BT-49 electronic address
+///
+/// A MaLo-ID is an **11-digit BDEW Marktlokations-ID**. It is not a GS1 GLN, and
+/// the EAS code list has no entry for it. This function used to emit it under
+/// EAS `0088` (GLN), which is a false claim about the identifier's registry:
+/// syntactically valid — `Identifier::eas` only checks that the *scheme code*
+/// exists, and BR-CL-25 only checks the same — but semantically wrong, and
+/// unresolvable for any receiver that takes it at face value.
+///
+/// Omitting it is the honest encoding, and it is not a data gap that master data
+/// closes: a household has no Peppol endpoint (BT-49) and no Leitweg-ID (BT-10).
+/// Those two findings are what a retail invoice legitimately carries; a B2G
+/// recipient supplies both through [`apply_b2g_buyer`] / [`with_buyer_reference`].
+fn buyer_party(malo_id: &str, buyer: Option<&crate::clients::Rechnungsempfaenger>) -> Party {
+    let Some(b) = buyer else {
+        return Party {
+            name: Some(format!("Marktlokation {malo_id}")),
+            address: PostalAddress {
+                country: Some(Code::from("DE")),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+    };
     Party {
-        name: Some(format!("Marktlokation {malo_id}")),
-        electronic_address: Identifier::eas(malo_id.to_owned(), "0088").ok(),
+        // Fall back to the MaLo label rather than an empty BT-44: a nameless
+        // party is a worse document than one naming the supply site.
+        name: b
+            .name
+            .clone()
+            .or_else(|| Some(format!("Marktlokation {malo_id}"))),
+        vat_identifier: b.vat_id.clone(),
         address: PostalAddress {
-            country: Some(Code::from("DE")),
+            line1: b.line1.clone(),
+            city: b.city.clone(),
+            post_code: b.post_code.clone(),
+            country: Some(Code::from(b.country.as_deref().unwrap_or("DE"))),
             ..Default::default()
         },
         ..Default::default()
     }
 }
 
+/// Findings against the profile the document actually declares in BT-24.
+///
+/// A document is held to what it claims, not to a fixed profile — so a retail
+/// invoice (plain EN 16931) is checked against the core rules and a B2G
+/// submission (XRechnung, set by [`with_buyer_reference`]) against the CIUS.
+/// Validating retail against XRechnung would report BR-DE findings the document
+/// never claimed to satisfy.
+///
+/// Reports rather than rejects. The B2G path is separately *proven* before
+/// writing — [`render_xrechnung_cii`] refuses to emit a rejectable file.
+#[must_use]
+pub fn validate(model: &en16931::Invoice) -> en16931::validation::ValidationReport {
+    if model.specification_id.as_deref() == Some(XRECHNUNG_SPEC_ID) {
+        en16931::profiles::XRECHNUNG.validate(model)
+    } else {
+        en16931::validation::validate(model)
+    }
+}
+
+/// Log any fatal conformance finding against the declared profile.
+fn report_conformance(model: &en16931::Invoice, invoice_number: &str) {
+    let report = validate(model);
+    let fatal: Vec<String> = report
+        .fatal()
+        .map(|f| format!("{} at {}", f.rule, f.path))
+        .collect();
+    if !fatal.is_empty() {
+        tracing::warn!(
+            invoice_number,
+            findings = %fatal.join(", "),
+            "e-invoice: the stored model does not satisfy the profile it declares \
+             in BT-24 — a receiving validator will reject it",
+        );
+    }
+}
+
 /// PEPPOL BIS Billing 3.0 business process (BT-23), required by XRechnung/Peppol.
 const BUSINESS_PROCESS: &str = "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0";
 
-/// Build the EN 16931 semantic model for a freshly-billed invoice, and stamp the
-/// operator-level terms XRechnung needs on every document: BT-23 business process
-/// and the BG-16 SEPA payment instruction (BT-81 means code 58 + BT-84 seller IBAN).
+/// Build the EN 16931 semantic model for a freshly-billed invoice.
+///
+/// BT-24 declares **plain EN 16931**, not XRechnung. XRechnung is the German
+/// *B2G* CIUS: it requires a Leitweg-ID (BT-10) and a Peppol endpoint (BT-49),
+/// neither of which a household supply customer has. §14 UStG requires an
+/// e-invoice to conform to **EN 16931** — XRechnung and ZUGFeRD are examples,
+/// not the requirement — so core is both sufficient and true here. Claiming a
+/// CIUS the document cannot satisfy is the same class of defect as a fabricated
+/// identifier scheme. [`with_buyer_reference`] upgrades BT-24 once a B2G caller
+/// supplies the missing terms.
+///
+/// Also stamps BT-23 business process and the BG-16 SEPA payment instruction
+/// (BT-81 means code 58 + BT-84 seller IBAN).
 #[must_use]
-pub fn build(invoice: &Invoice, cfg: &BillingdConfig, malo_id: &str) -> en16931::Invoice {
-    let mut model = invoice.to_en16931(XRECHNUNG_SPEC_ID, seller_party(cfg), buyer_party(malo_id));
+pub fn build(
+    invoice: &Invoice,
+    cfg: &BillingdConfig,
+    malo_id: &str,
+    buyer: Option<&crate::clients::Rechnungsempfaenger>,
+) -> en16931::Invoice {
+    let mut model = invoice.to_en16931(
+        EN16931_SPEC_ID,
+        seller_party(cfg),
+        buyer_party(malo_id, buyer),
+    );
     model.business_process = Some(BUSINESS_PROCESS.to_owned());
     if let Some(iban) = cfg.seller_iban.clone() {
         model.payment = Some(en16931::invoice::PaymentInstructions {
@@ -123,6 +217,7 @@ pub fn build(invoice: &Invoice, cfg: &BillingdConfig, malo_id: &str) -> en16931:
             ])),
         });
     }
+    report_conformance(&model, model.number.as_deref().unwrap_or("<no number>"));
     model
 }
 
@@ -135,8 +230,9 @@ pub async fn store(
     invoice: &Invoice,
     cfg: &BillingdConfig,
     malo_id: &str,
+    buyer: Option<&crate::clients::Rechnungsempfaenger>,
 ) -> anyhow::Result<()> {
-    let model = build(invoice, cfg, malo_id);
+    let model = build(invoice, cfg, malo_id, buyer);
     crate::pg::attach_en16931(exec, record_id, &serde_json::to_value(&model)?).await
 }
 
@@ -213,6 +309,10 @@ pub fn buyer_gaps(model: &en16931::Invoice) -> Vec<String> {
 #[must_use]
 pub fn with_buyer_reference(mut model: en16931::Invoice, leitweg_id: &str) -> en16931::Invoice {
     model.buyer_reference = Some(leitweg_id.to_owned());
+    // BT-10 is the last term XRechnung needs that a retail document cannot have,
+    // so this is the point the document may honestly claim the CIUS. Everything
+    // before it declares plain EN 16931 — see `build`.
+    model.specification_id = Some(XRECHNUNG_SPEC_ID.to_owned());
     model
 }
 

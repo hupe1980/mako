@@ -17,10 +17,14 @@
 //!
 //! - **Spawn** (new process): the tenant receives an initiating message, e.g.
 //!   NB receives ORDERS 17115 Sperrauftrag from LF.  Uses `lookup_correlated`
-//!   by MaLo; if nothing found, spawns a fresh process and registers it.
+//!   by business key; if nothing found, spawns a fresh process and registers it.
 //! - **Resume** (continue existing): e.g. NB receives ORDRSP 19118 from MSB.
-//!   Uses `lookup_correlated` by MaLo; returns [`IngestOutcome::Skipped`] if no
-//!   process is found (not an error — peer may have sent an orphan message).
+//!   Uses `lookup_correlated` by business key; returns [`IngestOutcome::Skipped`]
+//!   if no process is found (not an error — peer may have sent an orphan message).
+//!
+//! The correlation key is untyped by design: a MaLo for most GPKE flows, a MeLo
+//! for WiM, an invoice reference for INVOIC/REMADV, and the echoed order
+//! reference for the LOC-less ORDRSP/ORDCHG answers.
 //!
 //! ## Combined-role loopback
 //!
@@ -286,7 +290,7 @@ impl EdifactIngestDispatcher {
         // the static PID router falls back to a last-write-wins guess. Re-resolve to
         // the family that actually holds an open process for the referenced invoice
         // (RFF+Z13 → original INVOIC message-ref, the same key the family's
-        // `resume_by_malo` uses downstream). If none is found, the static route
+        // `resume_by_key` uses downstream). If none is found, the static route
         // stands — behaviour is unchanged for correctly-routed and orphan messages.
         let corrected = self.correlation_route(msg, workflow_name).await;
         let effective_name = corrected.as_deref().unwrap_or(workflow_name);
@@ -301,7 +305,7 @@ impl EdifactIngestDispatcher {
         // in the router) but the ingest `match pid` arm has no branch for it — the
         // message is silently dropped. That is always a coverage bug, so make it
         // LOUD (distinct from expected orphans like `process_not_found` /
-        // `no_malo_id`, which stay quiet). This is the runtime safety net for the
+        // `no_correlation_key`, which stay quiet). This is the runtime safety net for the
         // registered-but-not-dispatched class; see the PID-coverage guard in ROADMAP.
         if let Ok(IngestOutcome::Skipped {
             workflow_name,
@@ -424,18 +428,23 @@ impl EdifactIngestDispatcher {
         W::Command: CommandPayload + Clone,
         W::State: serde::Serialize,
     {
-        self.resume_by_malo::<W>(key, workflow_name_static, cmd)
+        self.resume_by_key::<W>(key, workflow_name_static, cmd)
             .await
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
 
-    /// Look up an existing process by MaLo business key and workflow name.
+    /// Look up an existing process by business key and workflow name.
     ///
     /// If a matching process exists, execute `cmd` on it and return
     /// [`IngestOutcome::Dispatched`].  Otherwise spawn a new process, execute
-    /// `cmd`, register the process under the MaLo tag, and return
+    /// `cmd`, register the process under `key`, and return
     /// [`IngestOutcome::Spawned`].
+    ///
+    /// `key` is whatever business key identifies the process for this message
+    /// family — a MaLo for most GPKE flows, but a MeLo for WiM, an invoice
+    /// reference for INVOIC/REMADV, or an order reference for the LOC-less
+    /// ORDRSP/ORDCHG answers. The correlation index is untyped by design.
     ///
     /// `spawn_deadlines`: zero or more `(label, due_at)` pairs to register
     /// atomically with the events in a single `WriteBatch` via
@@ -449,7 +458,7 @@ impl EdifactIngestDispatcher {
     /// 45-minute APERAK sending window (`fristen::APERAK_STROM_WINDOW_LABEL`).
     async fn spawn_or_resume<W>(
         &self,
-        malo_id: &str,
+        key: &str,
         workflow_name_static: &'static str,
         cmd: W::Command,
         fv: &FormatVersion,
@@ -461,15 +470,8 @@ impl EdifactIngestDispatcher {
         W::State: serde::Serialize,
         Arc<SlateDbStore>: mako_engine::event_store::AtomicAppend,
     {
-        self.spawn_or_resume_keyed::<W>(
-            malo_id,
-            workflow_name_static,
-            cmd,
-            fv,
-            spawn_deadlines,
-            &[],
-        )
-        .await
+        self.spawn_or_resume_keyed::<W>(key, workflow_name_static, cmd, fv, spawn_deadlines, &[])
+            .await
     }
 
     /// [`spawn_or_resume`](Self::spawn_or_resume) that also indexes the process
@@ -477,7 +479,7 @@ impl EdifactIngestDispatcher {
     /// LOC-less ORDRSP/ORDCHG can resume it by the echoed order reference.
     async fn spawn_or_resume_keyed<W>(
         &self,
-        malo_id: &str,
+        key: &str,
         workflow_name_static: &'static str,
         cmd: W::Command,
         fv: &FormatVersion,
@@ -491,22 +493,22 @@ impl EdifactIngestDispatcher {
         // `execute_and_enqueue_with_deadlines` requires `AtomicAppend`:
         Arc<SlateDbStore>: mako_engine::event_store::AtomicAppend,
     {
-        if malo_id.is_empty() {
+        if key.is_empty() {
             tracing::warn!(
                 workflow_name = %workflow_name_static,
-                "ingest dispatcher: no MaLo ID in message — cannot register; skipping",
+                "ingest dispatcher: no correlation key in message — cannot register; skipping",
             );
             return Ok(IngestOutcome::Skipped {
                 workflow_name: workflow_name_static,
-                reason: "no_malo_id",
+                reason: "no_correlation_key",
             });
         }
 
         let registry = self.store.as_process_registry();
-        let identities = registry.lookup_correlated(self.tenant_id, malo_id).await?;
+        let identities = registry.lookup_correlated(self.tenant_id, key).await?;
 
         // Filter for this workflow family specifically — there can be multiple
-        // concurrent processes per MaLo (e.g. active Lieferbeginn + Sperrung).
+        // concurrent processes per key (e.g. active Lieferbeginn + Sperrung).
         let matching: Vec<&ProcessIdentity> = identities
             .iter()
             .filter(|id| id.workflow_id.name.as_ref() == workflow_name_static)
@@ -578,17 +580,17 @@ impl EdifactIngestDispatcher {
                 .await?;
         }
 
-        // Register under MaLo business key for future correlation lookups.
+        // Register under the business key for future correlation lookups.
         let identity = process.identity();
         if let Err(e) = registry
-            .register_correlated(self.tenant_id, malo_id, process_id, identity.clone())
+            .register_correlated(self.tenant_id, key, process_id, identity.clone())
             .await
         {
             tracing::warn!(
                 process_id = %process_id,
-                malo_id    = %malo_id,
+                key        = %key,
                 error      = %e,
-                "ingest dispatcher: MaLo registry failed (non-fatal — process was spawned)",
+                "ingest dispatcher: correlation registry failed (non-fatal — process was spawned)",
             );
         }
         self.register_extra_keys(&registry, process_id, identity, extra_keys)
@@ -627,14 +629,19 @@ impl EdifactIngestDispatcher {
         }
     }
 
-    /// Look up an existing process by MaLo and execute the continuation command.
+    /// Look up an existing process by business key and execute the continuation
+    /// command.
+    ///
+    /// `key` is whatever the answering message carries: a MaLo for most GPKE
+    /// flows, a MeLo for WiM, an invoice reference for REMADV, or the echoed
+    /// order reference for a LOC-less ORDRSP/ORDCHG.
     ///
     /// Returns [`IngestOutcome::Skipped`] (not `Err`) when no process is found —
     /// this is expected when the initiating command was handled by the peer role
     /// and no local LF-side process was ever spawned.
-    async fn resume_by_malo<W>(
+    async fn resume_by_key<W>(
         &self,
-        malo_id: &str,
+        key: &str,
         workflow_name_static: &'static str,
         cmd: W::Command,
     ) -> Result<IngestOutcome, EngineError>
@@ -643,21 +650,21 @@ impl EdifactIngestDispatcher {
         W::Command: CommandPayload + Clone,
         W::State: serde::Serialize,
     {
-        if malo_id.is_empty() {
+        if key.is_empty() {
             tracing::warn!(
                 workflow_name = %workflow_name_static,
-                "ingest dispatcher: no MaLo ID in response message — skipping",
+                "ingest dispatcher: no correlation key in response message — skipping",
             );
             return Ok(IngestOutcome::Skipped {
                 workflow_name: workflow_name_static,
-                reason: "no_malo_id",
+                reason: "no_correlation_key",
             });
         }
 
         let identities = self
             .store
             .as_process_registry()
-            .lookup_correlated(self.tenant_id, malo_id)
+            .lookup_correlated(self.tenant_id, key)
             .await?;
 
         let matching: Vec<&ProcessIdentity> = identities
@@ -670,9 +677,9 @@ impl EdifactIngestDispatcher {
             None => {
                 tracing::warn!(
                     workflow_name = %workflow_name_static,
-                    malo_id       = %malo_id,
-                    "ingest dispatcher: no active process for MaLo — response dropped; \
-                     ensure the initiating command was executed first",
+                    key           = %key,
+                    "ingest dispatcher: no active process for this correlation key — response \
+                     dropped; ensure the initiating command was executed first",
                 );
                 return Ok(IngestOutcome::Skipped {
                     workflow_name: workflow_name_static,

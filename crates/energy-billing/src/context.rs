@@ -3,6 +3,7 @@
 //! Separates *what we're billing* (quantities, products) from *how we're billing it*
 //! (period, identifiers, invoice type, regulatory rates).
 
+use crate::EuroAmount;
 use crate::rates::RoundMoney;
 use rust_decimal::Decimal;
 
@@ -441,7 +442,7 @@ impl AbschlagDeduction {
     /// # Errors
     ///
     /// Returns [`EngineError::Arithmetic`](crate::EngineError::Arithmetic) if
-    /// the amounts overflow [`billing::EuroAmount`].
+    /// the amounts overflow [`EuroAmount`].
     pub fn to_advance_payment(&self) -> Result<billing::AdvancePayment, crate::EngineError> {
         let category = if self.ust_satz.is_zero() {
             billing::TaxCategory::ZeroRated
@@ -451,8 +452,8 @@ impl AbschlagDeduction {
         let entry = billing::TaxBreakdownEntry::new(
             category,
             self.ust_satz,
-            billing::EuroAmount::checked_from_decimal(self.netto_eur())?,
-            billing::EuroAmount::checked_from_decimal(self.ust_eur())?,
+            EuroAmount::checked_from_decimal(self.netto_eur())?,
+            EuroAmount::checked_from_decimal(self.ust_eur())?,
         );
         let advance =
             billing::AdvancePayment::new(vec![entry])?.with_received_on(self.datum.to_string());

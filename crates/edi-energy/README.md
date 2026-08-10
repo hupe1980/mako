@@ -146,19 +146,35 @@ being an interchange-level acknowledgement.
 
 ## Segment definitions and element positions
 
-The `SegmentDefinition` tables under `src/generated/` are produced by
-`cargo xtask codegen` from the MIG profiles in `profiles/`.
-
 A MIG lists only the elements *that profile uses*, but an element's **position**
 inside a segment is fixed by the UN/EDIFACT directory — it is what a
-counterparty writes on the wire. Generating positions from the order of the
-MIG's list therefore shifts every element that follows an omitted one.
+counterparty writes on the wire. Deriving positions from the order of the MIG's
+list therefore shifts every element that follows an omitted one, and the shift
+stays invisible until a real message arrives.
 
-`xtask::codegen::CANONICAL_ELEMENT_POSITIONS` pins the affected segments (`FTX`,
-`CCI`, `IMD`, `STS`) to their directory positions; the rest are dense and need no
-entry. `tests/element_positions.rs` enforces this — it fails if any element
-appears at two different positions across the generated message families, or if
-one of the known layouts drifts.
+Two tables describe those positions, because parsing and validation reach them
+by different routes:
+
+| Source | Authored | Used by |
+|---|---|---|
+| `src/messages/layouts.rs` | by hand from the MIG PDFs | the `EdifactDeserialize` derive, to resolve `#[edifact(element = "4440")]` when **reading** a typed segment |
+| `src/generated/*.rs` | `cargo xtask codegen` from `profiles/` | segment arity **validation** of an inbound message |
+
+Segments are addressed by UN/EDIFACT data element identifier
+(`#[edifact(element = "4440")]`), never by ordinal, so a mistyped code is a
+compile error rather than a silent read of the wrong slot.
+`xtask::codegen::CANONICAL_ELEMENT_POSITIONS` pins the segments whose MIG
+listing omits an unused element (`FTX`, `CCI`, `IMD`, `STS`) to their directory
+positions; the rest are dense and need no entry.
+
+Three tests hold the sources together, and all three must pass before a layout
+change ships:
+
+- `tests/element_positions.rs` — no element appears at two different positions
+  across the generated message families, the known layouts are exact, **and the
+  hand-authored layouts agree with the generated tables**.
+- `tests/segment_layout_guard.rs` — every data element the accessors address
+  sits where the BDEW MIG puts it.
 
 When a MIG import turns out to be missing an element the AHB requires, fix the
 profile JSON against the MIG PDF and regenerate; do not work around it in a

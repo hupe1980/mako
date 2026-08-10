@@ -195,6 +195,16 @@ pub enum ErpEventType {
     /// `execution_time_until`, `max_power_kw`, `command_type`, `sender_mp_id`,
     /// `produkt_code`.
     VppDispatchConfirmed,
+    /// The KoV §6.4 final-allocation window closed with no binding final ALOCAT
+    /// on file, so the gas day's imbalance cannot be settled.
+    ///
+    /// Raised from the `gabi-gas-allocation` deadline. The obligation is the
+    /// FNB's/MGV's, not ours — the operator's action is to open a Clearingfall,
+    /// which is why this leaves the platform as an event rather than a message.
+    ///
+    /// The CE `data` payload carries `gas_day`, `deadline_label` and
+    /// `sender_eic` / `receiver_eic` of the last ALOCAT recorded for the stream.
+    GabiFinalAllocationOverdue,
 }
 
 impl ErpEventType {
@@ -211,6 +221,7 @@ impl ErpEventType {
             Self::MaloIdentified => "malo_identified",
             Self::ProcessFailed { .. } => "process_failed",
             Self::VppDispatchConfirmed => "vpp_dispatch_confirmed",
+            Self::GabiFinalAllocationOverdue => "gabi_final_allocation_overdue",
         }
     }
 
@@ -231,6 +242,7 @@ impl ErpEventType {
             Self::MaloIdentified => mako_events::mako::MALO_IDENTIFIED,
             Self::ProcessFailed { .. } => mako_events::mako::PROCESS_FAILED,
             Self::VppDispatchConfirmed => mako_events::vpp::DISPATCH_CONFIRMED,
+            Self::GabiFinalAllocationOverdue => mako_events::gabi::ALOCAT_MISSING,
         }
     }
 }

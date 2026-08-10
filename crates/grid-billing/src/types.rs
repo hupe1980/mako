@@ -18,7 +18,7 @@
 //!
 //! ## No float money
 //!
-//! All monetary amounts use [`rust_decimal::Decimal`]. The `billing::EuroAmount`
+//! All monetary amounts use [`rust_decimal::Decimal`]. The `crate::EuroAmount`
 //! newtype provides overflow-safe EUR arithmetic. No `f32`/`f64` appears anywhere
 //! in settlement calculations.
 

@@ -28,8 +28,15 @@ use crate::position::PositionCategory;
 use crate::rates::RoundMoney;
 
 /// The XRechnung 3.0 specification identifier (BT-24).
+///
+/// The namespace changed **at 3.0**, when XRechnung governance moved from XÖV to
+/// XStandards Einkauf: 2.x used `urn:xoev-de:kosit:standard:xrechnung_2.3`, and
+/// 3.0 uses `urn:xeinkauf.de:kosit:xrechnung_3.0`. Pairing the old namespace
+/// with a `_3.0` version — which this constant did until 2026-08 — produces an
+/// identifier that matches *no* published XRechnung version, so BR-DE-21 fails
+/// and a receiving validator picks the wrong profile or rejects outright.
 pub const XRECHNUNG_SPEC_ID: &str =
-    "urn:cen.eu:en16931:2017#compliant#urn:xoev-de:kosit:standard:xrechnung_3.0";
+    "urn:cen.eu:en16931:2017#compliant#urn:xeinkauf.de:kosit:xrechnung_3.0";
 
 /// The plain EN 16931 core specification identifier (BT-24).
 pub const EN16931_SPEC_ID: &str = "urn:cen.eu:en16931:2017";

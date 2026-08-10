@@ -5,7 +5,7 @@
 //! with `BillingEngine`.
 
 use crate::rates::RoundMoney;
-use billing::{Currency, DynamicPricing, TariffBand, TariffSchedule, TimeOfUsePricing, TouBand};
+use billing::{Currency, DynamicPricing, RateBand, RateSchedule, TimeBand, TimeOfUsePricing};
 use rust_decimal::Decimal;
 use rust_decimal::dec;
 
@@ -186,7 +186,7 @@ impl BillingProvider for ElectricityProvider {
         // ── Arbeitspreis ───────────────────────────────────────────────────────
         if kwh > Decimal::ZERO {
             if let Some(tiers) = product.block_tiers.as_ref().filter(|t| !t.is_empty()) {
-                // Delegate to billing::TariffSchedule for correct graduated pricing.
+                // Delegate to billing::RateSchedule for correct graduated pricing.
                 // Replaces manual tier iteration — gains contiguous-band validation
                 // and exact Amount<5> arithmetic. Legal basis: §41 EnWG.
                 positions.extend(build_block_tariff_positions(tiers, kwh, &[])?);
@@ -202,7 +202,7 @@ impl BillingProvider for ElectricityProvider {
                             field: "arbeitspreis_ht_ct_per_kwh".to_owned(),
                             value: ap_ht,
                         })?;
-                    bands.push(TouBand::new("HT", price));
+                    bands.push(TimeBand::new("HT", price));
                 }
                 if let Some(ap_nt) = product.arbeitspreis_nt_ct_per_kwh {
                     let price = billing::Amount::<5>::try_from((ap_nt / dec!(100)).round_kfm(5))
@@ -210,7 +210,7 @@ impl BillingProvider for ElectricityProvider {
                             field: "arbeitspreis_nt_ct_per_kwh".to_owned(),
                             value: ap_nt,
                         })?;
-                    bands.push(TouBand::new("NT", price));
+                    bands.push(TimeBand::new("NT", price));
                 }
                 if !bands.is_empty() {
                     let items = TimeOfUsePricing::builder()
@@ -3061,7 +3061,7 @@ fn billing_item_to_position(
     }
 }
 
-/// Build block tariff `BillingPosition`s using [`billing::TariffSchedule`].
+/// Build block tariff `BillingPosition`s using [`billing::RateSchedule`].
 ///
 /// Replaces the manual tier-iteration loop with the well-tested graduated
 /// schedule from the `billing` crate, gaining:
@@ -3078,7 +3078,7 @@ fn build_block_tariff_positions(
     kwh: Decimal,
     extra_tags: &[&str],
 ) -> Result<Vec<BillingPosition>, EngineError> {
-    let mut builder = TariffSchedule::graduated().unit("kWh");
+    let mut builder = RateSchedule::graduated().unit("kWh");
     let mut prev: Option<Decimal> = None;
 
     for (idx, tier) in tiers.iter().enumerate() {
@@ -3096,9 +3096,9 @@ fn build_block_tariff_positions(
             None => format!("Arbeitspreis Strom Stufe {}", idx + 1),
         };
         let band = match (prev, tier.bis_kwh) {
-            (None, Some(upper)) => TariffBand::up_to(upper, price_eur),
-            (Some(lower), Some(upper)) => TariffBand::between(lower, upper, price_eur),
-            (lower, None) => TariffBand::over(lower.unwrap_or(Decimal::ZERO), price_eur),
+            (None, Some(upper)) => RateBand::up_to(upper, price_eur),
+            (Some(lower), Some(upper)) => RateBand::between(lower, upper, price_eur),
+            (lower, None) => RateBand::over(lower.unwrap_or(Decimal::ZERO), price_eur),
         }
         .with_description(desc);
         builder = builder.band(band);

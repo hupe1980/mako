@@ -40,9 +40,8 @@ use mako_engine::{
     process::Process,
 };
 use mako_gabi_gas::{
-    AllocationCommand, DeliveryOrderCommand, GaBiGasAllocationWorkflow,
-    GaBiGasDeliveryOrderWorkflow, GaBiGasInvoicCommand, GaBiGasInvoicWorkflow,
-    GaBiGasNominationWorkflow, NominationCommand,
+    DeliveryOrderCommand, GaBiGasAllocationWorkflow, GaBiGasDeliveryOrderWorkflow,
+    GaBiGasInvoicCommand, GaBiGasInvoicWorkflow, GaBiGasNominationWorkflow, NominationCommand,
 };
 use mako_geli_gas::{
     GasSperrungLfCommand, GasSperrungNbCommand, GasSupplierChangeCommand, GeliGasDatanabrufCommand,
@@ -127,9 +126,14 @@ pub async fn dispatch_deadline(
 
     // ── APERAK Strom 45-minute sending-window obligation (APERAK AHB 1.0 §2.4.1) ──
     //
-    // If this deadline fires, the OutboxWorker has not delivered the outbound
-    // APERAK within 45 minutes (weekday) or by Sunday 12:00 (Saturday).
-    // This is a BNetzA regulatory compliance violation.
+    // Reaching this point means the window was still registered when it came
+    // due: `OutboxWorker::discharge_delivery_window` retires it the moment the
+    // APERAK is delivered, so an undischarged window is an undelivered APERAK.
+    // That is a BNetzA regulatory compliance violation.
+    //
+    // The alert is unconditional *because* of that discharge — without it the
+    // window would outlive every obligation it monitors and fire on every Strom
+    // process, answered or not.
     //
     // This label is purely a monitoring marker: it does NOT carry a workflow
     // command.  Log the alert and return early — do NOT dispatch TimeoutExpired
@@ -756,27 +760,36 @@ pub async fn dispatch_deadline(
         }
         "gabi-gas-allocation" => {
             // KoV §6.4 final-allocation window (end of month M+2, 12:00 CET).
-            // If it fires with no binding final ALOCAT on file, the gas day's
-            // imbalance cannot be settled. `on_deadline` refuses to raise it for
-            // a stream that is already settled or already overdue, so reaching
-            // the event here means the obligation really was missed.
-            tracing::error!(
-                deadline_id = %deadline_id,
-                label       = %label,
-                "REGULATORY ALERT: GaBi Gas final-allocation window expired \
-                 (KoV §6.4) — no binding final ALOCAT was received for this gas \
-                 day by the end of month M+2. The imbalance cannot be settled; \
-                 raise a Clearingfall with the FNB/MGV.",
-            );
+            //
+            // The window is registered when the *first* ALOCAT for a gas day
+            // arrives and is never cancelled, so this deadline fires for every
+            // gas day — including the ones that settled normally. Whether the
+            // obligation was actually missed is a question only the state can
+            // answer, so go through `execute_timeout_with_retry`: it consults
+            // `on_deadline`, which returns `None` for a settled or
+            // already-overdue stream. Alerting before that check would page the
+            // operator on the healthiest path there is.
             let p = Process::<GaBiGasAllocationWorkflow, _>::from_identity(
                 Arc::clone(&event_store),
                 identity,
             );
-            p.execute_and_enqueue_with_retry(
-                AllocationCommand::TimeoutExpired { deadline_id, label },
-                3,
-            )
-            .await?;
+            let fired = p.execute_timeout_with_retry(&deadline, 3).await?;
+            if fired.is_some_and(|events| !events.is_empty()) {
+                tracing::error!(
+                    deadline_id = %deadline_id,
+                    label       = %label,
+                    "REGULATORY ALERT: GaBi Gas final-allocation window expired \
+                     (KoV §6.4) — no binding final ALOCAT was received for this gas \
+                     day by the end of month M+2. The imbalance cannot be settled; \
+                     raise a Clearingfall with the FNB/MGV.",
+                );
+            } else {
+                tracing::debug!(
+                    deadline_id = %deadline_id,
+                    "gabi-gas-allocation: final-allocation window closed on a \
+                     settled gas day — no action",
+                );
+            }
             p.take_snapshot(&snap_store, snapshot_interval)
                 .await
                 .map(|_| ())
@@ -1046,8 +1059,16 @@ pub async fn dispatch_deadline(
                 .map(|_| ())
         }
         // CONTRL 6h delivery-window obligation (CONTRL AHB 1.0 §2.3.1).
-        // Registered by ContrlAckService; fires if the OutboxWorker has not
-        // delivered the CONTRL Empfangsbestätigung within 6 hours.
+        //
+        // Registered by ContrlAckService atomically with the Empfangsbestätigung
+        // it watches, and discharged by `OutboxWorker::discharge_delivery_window`
+        // the moment that CONTRL is delivered. Reaching this arm therefore means
+        // the window was still open when it came due: the CONTRL never went out.
+        //
+        // The alert is unconditional *because* of that discharge — without it
+        // the window would outlive every obligation it monitors and fire on
+        // every acknowledged interchange.
+        //
         // There is no domain workflow to retry — log a regulatory alert so the
         // operator can investigate and manually trigger a re-delivery.
         "contrl-ack-obligation" => {

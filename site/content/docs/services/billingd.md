@@ -550,7 +550,7 @@ at the correction path.
 | `POST` | `/api/v1/billing/{malo_id}/preview` | Dry-run calculation (no persist, no CloudEvent) |
 | `GET` | `/api/v1/billing` | List records (`?malo_id=&lf_mp_id=&outcome=`) |
 | `GET` | `/api/v1/billing/{id}` | Fetch single record with full `Rechnung` JSONB |
-| `GET` | `/api/v1/billing/{id}/xrechnung` | XRechnung 3.0 CII XML (via `en16931-formats`) |
+| `GET` | `/api/v1/billing/{id}/xrechnung` | CII XML of the stored model (via `en16931-formats`); BT-24 is plain EN 16931 for a retail invoice — only the B2G path declares XRechnung |
 | `GET` | `/api/v1/billing/{id}/ubl` | PEPPOL BIS Billing 3.0 UBL 2.1 (EN16931) |
 | `POST` | `/api/v1/billing/{id}/correction` | Korrekturrechnung / Stornorechnung (§ 147 AO / GoBD) |
 | `POST` | `/api/v1/billing/{malo_id}/tarifwechsel` | Combined invoice for mid-period price change (§41 EnWG) |
@@ -678,7 +678,36 @@ carries a distinct BT-151/BT-152 per line that reconciles with the BG-23 breakdo
 the single-blended-rate defect of the old renderer is gone.
 
 **`GET /api/v1/billing/{id}/xrechnung`** → XRechnung 3.0 CII (`en16931-formats::cii`).
-Profile identifier `urn:cen.eu:en16931:2017#compliant#urn:xoev-de:kosit:standard:xrechnung_3.0`.
+Profile identifier `urn:cen.eu:en16931:2017#compliant#urn:xeinkauf.de:kosit:xrechnung_3.0` — the namespace moved from XÖV to XStandards Einkauf at 3.0, so a `xoev-de` URN with a `_3.0` version matches no published version and fails BR-DE-21.
+
+**BT-24 declares plain EN 16931, not XRechnung.** XRechnung is the German *B2G*
+CIUS: it requires a Leitweg-ID (BT-10) and a Peppol endpoint (BT-49), neither of
+which a household supply customer has. §14 UStG requires conformance to **EN 16931**
+— XRechnung and ZUGFeRD are examples of it, not the requirement — so core is both
+sufficient and truthful for a retail invoice. `POST .../submit-b2g` upgrades BT-24
+to XRechnung at the point the caller supplies those terms.
+
+The **BG-7 buyer comes from `vertragd`** — `GET /vertraege/by-malo/{id}` returns a
+`rechnungsempfaenger` block (BT-44 name, BT-50/52/53 address, BT-48 VAT-ID) read
+from `vertragd.kunden`, because `billingd` holds no customer master. A vertragd
+outage degrades the invoice rather than failing the run: the buyer falls back to
+naming the supply site.
+
+`billingd` runs `einvoice::validate` on every model it builds — against the profile
+the document *declares* — and logs any finding.
+
+| Path | BG-7 buyer resolved from |
+|---|---|
+| Retail (`/calculate`) | the MaLo's customer — `vertragd.kunden` |
+| GGV per-Teilnehmer | the MaLo's customer (a §42b Teilnehmer is a Letztverbraucher) |
+| VPP settlement — webhook and operator batch | the prosumer behind the MaLo |
+| Sammelrechnung, per-MaLo line | that site's own customer |
+| Sammelrechnung, bundled document | the **Rahmenvertrag holder** — `rahmenvertraege.kunden_id` |
+| GGV, bundled document | *not resolved* — bills the GGV operator, keyed by a GGV id |
+
+`GET /api/v1/rahmenvertraege/{id}/malos` returns `{ malos, rechnungsempfaenger }`:
+a Sammelrechnung is addressed to the framework-contract holder, which billingd
+cannot derive from the site list. See the ROADMAP for the GGV bundle.
 **`GET /api/v1/billing/{id}/ubl`** → PEPPOL BIS Billing 3.0 UBL 2.1 from the same model.
 The MCP `get_xrechnung` tool renders CII the same way.
 

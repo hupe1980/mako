@@ -18,7 +18,7 @@ MSRV 1.94
 |---|---|
 | **No I/O** | All inputs are passed as arguments. No database calls, no HTTP. |
 | **No async** | Synchronous — wraps cheaply in `tokio::task::spawn_blocking`. |
-| **No float money** | Amounts are computed in `rust_decimal::Decimal`; every EUR result is rounded and range-checked through `billing::EuroAmount` (i64 × 10⁻⁵ EUR). |
+| **No float money** | Amounts are computed in `rust_decimal::Decimal`; every EUR result is rounded and range-checked through `EuroAmount` (i64 × 10⁻⁵ EUR). |
 | **Deterministic** | Same inputs always produce the same output. Pure functions. |
 | **EEG-version-aware** | `EegGesetz` enum drives all version-specific rule dispatch. |
 | **Domain-rich** | Multiple domain modules covering settlement, degression, sanctions, repowering. |
@@ -126,7 +126,7 @@ eeg-billing/src/
 ├── wind.rs              §36h Korrekturfaktor, WindStandort, Gütegrad/Standortklasse
 ├── biomasse.rs          §43/§44 fuel classes, Güllekleinanlage (≤75 kW, ≥80% Gülle)
 │
-├── tariff.rs            billing::ScalarTariff adapter — EegSettleTariff, VAT variants
+├── tariff.rs            billing::PricingModel adapter — EegSettleTariff, VAT variants
 ├── bridge.rs            settlement_to_line_items() → billing::LineItem
 ├── gutschrift.rs        §14 UStG Gutschrift → rubo4e::current::Rechnung (feature `bo4e`)
 └── ust.rs               §19 UStG Kleinunternehmer (E) / Regelbesteuerung (S)

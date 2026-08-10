@@ -131,4 +131,12 @@ pub use providers::{
 // error reachable through [`EngineError::Arithmetic`]. `round_money` /
 // `RoundMoney` delegate their mode to this crate; use `Amount` directly
 // where the precision is statutory (cents, 10⁻⁵-EUR unit prices).
-pub use billing::{Amount, BillingError, EuroAmount, RoundingStrategy};
+pub use billing::{Amount, BillingError, RoundingStrategy};
+
+/// A monetary amount in euro at 10⁻⁵-EUR resolution.
+///
+/// `billing` 0.12 dropped its own `EuroAmount` alias — the engine is
+/// currency-agnostic and the name asserted a currency the type does not carry.
+/// German retail energy billing *is* euro-denominated, so the alias is correct
+/// here; it just belongs to the domain crate rather than the engine.
+pub type EuroAmount = Amount<5>;

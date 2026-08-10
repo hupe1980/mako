@@ -33,13 +33,6 @@ allow = [
     # CC0-1.0: Creative Commons Zero — public domain dedication.
     # Used by some data/test crates as transitive deps.
     "CC0-1.0",
-    # MPL-2.0: Mozilla Public License 2.0 — OSI-approved, FSF Free/Libre.
-    # Weak copyleft (file-level): only modified MPL files must stay MPL, and
-    # combining with other code carries no obligation on the combined work.
-    # In the all-features graph: `cbindgen` (a build-time header generator for
-    # aws-lc-sys) and the `im-rc`/`bitmaps`/`sized-chunks` trio. All consumed
-    # unmodified, so no source-disclosure obligation is triggered.
-    "MPL-2.0",
 ]
 confidence-threshold = 0.9
 

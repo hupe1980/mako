@@ -52,7 +52,7 @@
 //!
 //! ```rust
 //! use eeg_billing::ust::{VatStatus, ust_tax_layers};
-//! use billing::{DocumentMeta, Tariff};
+//! use billing::{DocumentMeta, PricingModel};
 //! use eeg_billing::{SettleInput, SettlementScheme, calculate_settlement};
 //! use eeg_billing::tariff::EegSettleTariff;
 //! use rust_decimal::dec;

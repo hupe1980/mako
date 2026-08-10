@@ -231,7 +231,23 @@ pub async fn post_calculate(
     }
     // Attach the EN 16931 semantic model (the XRechnung/CII/UBL render source),
     // mapped from the invoice with full per-line VAT — not from BO4E.
-    if let Err(e) = crate::einvoice::store(&mut *tx, record_id, &result, &cfg, &malo_id).await {
+    //
+    // The BG-7 buyer comes from vertragd: billingd holds no customer master, and
+    // a model built without it carries a synthesised buyer that fails XRechnung
+    // on BR-DE-8/9. Best-effort — a vertragd outage must not fail a billing run,
+    // and `einvoice::build` logs the resulting conformance findings either way.
+    let buyer = vertragd
+        .get_vertrag_by_malo(&malo_id)
+        .await
+        .inspect_err(|e| {
+            tracing::warn!(%malo_id, error = %e, "billingd: BG-7 buyer lookup failed");
+        })
+        .ok()
+        .flatten()
+        .and_then(|v| v.rechnungsempfaenger);
+    if let Err(e) =
+        crate::einvoice::store(&mut *tx, record_id, &result, &cfg, &malo_id, buyer.as_ref()).await
+    {
         tracing::warn!(%record_id, error = %e, "billingd: attach en16931 model failed");
     }
     if let Err(e) = tx.commit().await {

@@ -193,12 +193,18 @@ pub struct EngineMetrics {
     /// - `result`: `"dispatched"`, `"skipped"`, or `"error"`
     inbound_received: MetricVec,
 
-    /// `makod_aperak_missed_total{label}` — incremented when the deadline
-    /// scheduler fires an APERAK deadline after its due-at time has passed.
+    /// `makod_aperak_missed_total{label}` — incremented when an APERAK delivery
+    /// window comes due while still registered.
     ///
-    /// A non-zero value means an APERAK was dispatched late; this is a
-    /// regulatory violation under APERAK AHB 1.0 §2.4.1 (Strom) / §2.3.1
-    /// (Gas). Alert on `makod_aperak_missed_total > 0` in Alertmanager.
+    /// The outbox worker discharges the window as soon as the APERAK is
+    /// delivered, so a window that survives to its due time was never answered.
+    /// A non-zero value is a regulatory violation under APERAK AHB 1.0 §2.4.1
+    /// (Strom) / §2.3.1 (Gas). Alert on `makod_aperak_missed_total > 0`.
+    ///
+    /// The discharge is what gives this counter meaning. Firing *after* the due
+    /// time is not evidence of anything on its own — the scheduler selects
+    /// deadlines on `due_at <= now`, so every deadline it hands out is late by
+    /// construction.
     aperak_missed: MetricVec,
 }
 
@@ -284,8 +290,9 @@ impl EngineMetrics {
 
     /// Increment `makod_aperak_missed_total{label=<label>}`.
     ///
-    /// Call in the deadline scheduler when an APERAK deadline fires **after** its
-    /// `due_at` timestamp has already passed, indicating a late dispatch.
+    /// Call in the deadline scheduler when an APERAK delivery window comes due
+    /// **while still registered** — the outbox worker discharges it on delivery,
+    /// so surviving to the due time is what marks the obligation unmet.
     /// `label` should be the APERAK deadline label constant from `fristen::`
     /// (e.g. `APERAK_STROM_WINDOW_LABEL`, `APERAK_GAS_FOLGEPROZESS_LABEL`).
     pub fn aperak_missed(&self, label: &str) {

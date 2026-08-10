@@ -56,7 +56,7 @@ impl EdifactIngestDispatcher {
                     // Correlation: RFF+Z13 back-reference to original INVOIC message_ref.
                     let cmd = adapters::gabi_gas_remadv_registry().dispatch(raw, &fv)?;
                     let invoice_ref = extract_invoice_ref_from_remadv(msg);
-                    self.resume_by_malo::<GaBiGasInvoicWorkflow>(
+                    self.resume_by_key::<GaBiGasInvoicWorkflow>(
                         &invoice_ref,
                         "gabi-gas-invoic",
                         cmd,
@@ -68,7 +68,7 @@ impl EdifactIngestDispatcher {
                     // Correlation: RFF+Z13 back-reference to original INVOIC message_ref.
                     let cmd = adapters::gabi_gas_comdis_registry().dispatch(raw, &fv)?;
                     let invoice_ref = extract_invoice_ref_from_comdis(msg);
-                    self.resume_by_malo::<GaBiGasInvoicWorkflow>(
+                    self.resume_by_key::<GaBiGasInvoicWorkflow>(
                         &invoice_ref,
                         "gabi-gas-invoic",
                         cmd,
@@ -93,7 +93,7 @@ impl EdifactIngestDispatcher {
                     let cmd =
                         adapters::gpke_allokationsliste_mscons_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    self.resume_by_malo::<GpkeAllokationslisteWorkflow>(
+                    self.resume_by_key::<GpkeAllokationslisteWorkflow>(
                         malo_id.as_str(),
                         "gpke-allokationsliste",
                         cmd,

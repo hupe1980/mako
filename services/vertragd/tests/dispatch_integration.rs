@@ -106,6 +106,173 @@ async fn reposting_same_erp_contract_id_dispatches_no_second_lieferbeginn() {
     assert_eq!(komp_count, 1, "no duplicate component rows either");
 }
 
+/// Bring a freshly created contract into the state billing actually sees.
+///
+/// `insert_versorgungsvertrag` leaves both rows `ANGELEGT`; the buyer projection
+/// (like `fetch_vertrag_by_malo`) deliberately only resolves *active* supply,
+/// because a contract that has not started has no invoice to carry a buyer.
+async fn activate(pool: &PgPool, vertrag_id: Uuid) {
+    sqlx::query("UPDATE versorgungsvertraege SET status='AKTIV' WHERE id=$1")
+        .bind(vertrag_id)
+        .execute(pool)
+        .await
+        .expect("activate contract");
+    sqlx::query("UPDATE vertragskomponenten SET status='AKTIV' WHERE vertrag_id=$1")
+        .bind(vertrag_id)
+        .execute(pool)
+        .await
+        .expect("activate component");
+}
+
+// ── BG-7 buyer projection — the join billingd's e-invoice depends on ─────────
+
+/// `fetch_rechnungsempfaenger_by_malo` must resolve the Kunde behind a MaLo.
+///
+/// `billingd` holds no customer master: without this projection its EN 16931
+/// buyer is synthesised from the MaLo-ID and the invoice fails XRechnung on
+/// BR-DE-8 (BT-52 city) and BR-DE-9 (BT-53 post code). The whole chain is SQL —
+/// a three-table join plus a status filter — so nothing but a real database
+/// proves it. The BO4E address is read out of `geschaeftspartner` JSONB, which a
+/// compile-time check cannot verify either.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_bg7_buyer_resolves_from_the_kunde_behind_the_malo() {
+    let Some((pool, _pg)) = test_pool("bg7_buyer").await else {
+        return;
+    };
+    let tenant = "9800000000009";
+    let kunde = make_kunde(&pool, tenant).await;
+
+    // A BO4E Geschaeftspartner with a nested Adresse, as the portal stores it.
+    sqlx::query(
+        "UPDATE kunden SET geschaeftspartner = $2::jsonb, umsatzsteuer_id = $3 WHERE id = $1",
+    )
+    .bind(kunde)
+    .bind(
+        r#"{"name1":"Erika Mustermann",
+            "adresse":{"strasse":"Beispielweg","hausnummer":"7",
+                       "postleitzahl":"10115","ort":"Berlin","landescode":"DE"}}"#,
+    )
+    .bind("DE987654321")
+    .execute(&pool)
+    .await
+    .expect("populate kunde master data");
+
+    let v =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("ERP-BG7-1"))
+            .await
+            .expect("create contract");
+    activate(&pool, v.id).await;
+
+    let buyer = pg::fetch_rechnungsempfaenger_by_malo(&pool, "51238696781", tenant)
+        .await
+        .expect("query succeeds")
+        .expect("a Kunde is on file for this MaLo");
+
+    assert_eq!(buyer.name.as_deref(), Some("Erika Mustermann"));
+    // Straße and Hausnummer are separate BO4E fields and one BT-50 line.
+    assert_eq!(buyer.line1.as_deref(), Some("Beispielweg 7"));
+    assert_eq!(buyer.post_code.as_deref(), Some("10115"));
+    assert_eq!(buyer.city.as_deref(), Some("Berlin"));
+    assert_eq!(buyer.country.as_deref(), Some("DE"));
+    assert_eq!(buyer.vat_id.as_deref(), Some("DE987654321"));
+
+    // Tenant-scoped: another tenant must not read this customer's address.
+    assert!(
+        pg::fetch_rechnungsempfaenger_by_malo(&pool, "51238696781", "9800000000008")
+            .await
+            .expect("query succeeds")
+            .is_none(),
+        "the buyer projection must not leak across tenants",
+    );
+
+    // An unknown MaLo is absent, not an error — billingd falls back to the stub.
+    assert!(
+        pg::fetch_rechnungsempfaenger_by_malo(&pool, "99999999999", tenant)
+            .await
+            .expect("query succeeds")
+            .is_none(),
+    );
+}
+
+/// A Kunde with no master data yields a buyer with empty terms, not an error.
+///
+/// `geschaeftspartner` is nullable and operator-populated. billingd must be able
+/// to tell "no Kunde" (fall back to the supply-site stub) from "a Kunde with
+/// nothing filled in", and neither may fail the billing run.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_kunde_without_master_data_yields_empty_buyer_terms() {
+    let Some((pool, _pg)) = test_pool("bg7_buyer_empty").await else {
+        return;
+    };
+    let tenant = "9800000000010";
+    let kunde = make_kunde(&pool, tenant).await;
+    let v =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("ERP-BG7-2"))
+            .await
+            .expect("create contract");
+    activate(&pool, v.id).await;
+
+    let buyer = pg::fetch_rechnungsempfaenger_by_malo(&pool, "51238696781", tenant)
+        .await
+        .expect("query succeeds")
+        .expect("the Kunde row exists even with no master data");
+    assert!(buyer.name.is_none() && buyer.city.is_none() && buyer.post_code.is_none());
+}
+
+/// A Sammelrechnung's buyer is the Rahmenvertrag holder, not a site's customer.
+///
+/// The bundled B2B document is addressed to the framework-contract holder, so
+/// `billingd` cannot derive it from the MaLo list it enumerates. This is the
+/// second projection over `kunden`, reached by a different join.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_rahmenvertrag_holder_resolves_as_the_bundled_invoice_buyer() {
+    let Some((pool, _pg)) = test_pool("bg7_rahmenvertrag").await else {
+        return;
+    };
+    let tenant = "9800000000011";
+    let kunde = make_kunde(&pool, tenant).await;
+    sqlx::query("UPDATE kunden SET geschaeftspartner = $2::jsonb WHERE id = $1")
+        .bind(kunde)
+        .bind(
+            r#"{"name1":"Musterfiliale GmbH",
+                "adresse":{"strasse":"Zentrale","hausnummer":"1",
+                           "postleitzahl":"20095","ort":"Hamburg","landescode":"DE"}}"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("populate holder master data");
+
+    let rv_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO rahmenvertraege (id, kunden_id, tenant, gueltig_von)
+         VALUES ($1, $2, $3, DATE '2026-01-01')",
+    )
+    .bind(rv_id)
+    .bind(kunde)
+    .bind(tenant)
+    .execute(&pool)
+    .await
+    .expect("insert rahmenvertrag");
+
+    let buyer = pg::fetch_rechnungsempfaenger_by_rahmenvertrag(&pool, rv_id, tenant)
+        .await
+        .expect("query succeeds")
+        .expect("the holder is on file");
+    assert_eq!(buyer.name.as_deref(), Some("Musterfiliale GmbH"));
+    assert_eq!(buyer.city.as_deref(), Some("Hamburg"));
+
+    assert!(
+        pg::fetch_rechnungsempfaenger_by_rahmenvertrag(&pool, rv_id, "9800000000012")
+            .await
+            .expect("query succeeds")
+            .is_none(),
+        "the holder projection must not leak across tenants",
+    );
+}
+
 // ── D2 — Stornierung state guard ──────────────────────────────────────────────
 
 #[tokio::test]

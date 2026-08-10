@@ -4,13 +4,13 @@
 //! module is a thin adapter — it calls `SettlePosition::to_line_item` on each
 //! position and handles the special cases (`NoData`, `PriceMissing`, `Sanctioned`).
 //!
-//! # `ScalarTariff`, not `Tariff`
+//! # A `PricingModel` with no usage
 //!
 //! EEG settlement is a **scalar calculation** — the positions are already computed
-//! by [`crate::calculate_settlement`], with no usage input. That maps exactly onto
-//! [`billing::ScalarTariff`] (`fn positions(&self)`, no `Usage` and no
-//! ignored argument); [`crate::tariff::EegSettleTariff`] implements it and a
-//! blanket impl still supplies `Tariff` for composition. The domain not-billable
+//! by [`crate::calculate_settlement`], with no usage input. `billing` 0.12 folded
+//! the old `ScalarTariff` into [`billing::PricingModel`] rather than keeping two
+//! traits, so that shape is now expressed as `type Usage = ()`;
+//! [`crate::tariff::EegSettleTariff`] implements it. The domain not-billable
 //! reasons (`NoData` / `PriceMissing` / `Sanctioned` / `FoerderungBeendet`) live on
 //! [`crate::SettleOutput::status`], which is richer than a billing-layer reason and
 //! is what callers inspect. This module only converts positions to

@@ -338,6 +338,7 @@ pub async fn post_ggv_billing(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
     Extension(tarifbd): Extension<Arc<TarifbdClient>>,
+    Extension(vertragd): Extension<Arc<crate::clients::VertragdClient>>,
     Path(ggv_id): Path<String>,
     Json(req): Json<GgvBillingRequest>,
 ) -> impl IntoResponse {
@@ -539,8 +540,23 @@ pub async fn post_ggv_billing(
             Ok(id) => id,
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         };
-        if let Err(e) =
-            crate::einvoice::store(&pool, record_id, &result, &cfg, &tenant.malo_id).await
+        // A GGV Teilnehmer under §42b is a Letztverbraucher with their own MaLo
+        // and supply relationship, so the ordinary BG-7 lookup applies.
+        let buyer = vertragd
+            .get_vertrag_by_malo(&tenant.malo_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|v| v.rechnungsempfaenger);
+        if let Err(e) = crate::einvoice::store(
+            &pool,
+            record_id,
+            &result,
+            &cfg,
+            &tenant.malo_id,
+            buyer.as_ref(),
+        )
+        .await
         {
             tracing::warn!(%record_id, error = %e, "billingd: attach en16931 model failed");
         }
@@ -614,7 +630,11 @@ pub async fn post_ggv_billing(
         }
     }
     if let Err(e) =
-        crate::einvoice::store(&mut *tx, sammel_id, &sammel_invoice, &cfg, &ggv_id).await
+        // No BG-7 buyer, and none is reachable: this bills the GGV operator, and
+        // the key is a GGV id rather than a MaLo. vertragd models Kunden behind
+        // Versorgungs- and Rahmenverträge, not GGV bundles.
+        crate::einvoice::store(&mut *tx, sammel_id, &sammel_invoice, &cfg, &ggv_id, None)
+                .await
     {
         tracing::warn!(%sammel_id, error = %e, "billingd: attach en16931 model failed");
     }
