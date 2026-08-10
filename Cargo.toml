@@ -64,9 +64,12 @@ rust_decimal = { version = "1", features = ["db-postgres", "macros"] }
 billing      = { version = "0.13.0", features = ["serde"] }
 # EN 16931 semantic invoice model + business-rule validation (the `billing`
 # adapter bridges the shared money core); en16931-formats renders XRechnung/CII +
-# PEPPOL UBL (ZUGFeRD PDF/A-3 is behind its `zugferd` feature, not enabled here).
-en16931         = { version = "0.3.0", features = ["billing", "serde", "time"] }
-en16931-formats = { version = "0.3.0", features = ["cii", "ubl", "serde"] }
+# PEPPOL UBL, and its `zugferd` feature *reads* a finished ZUGFeRD PDF — the
+# catalogue walk, the CII re-parse and the metadata/payload `Divergence` checks
+# billingd's publish gate runs. Writing the carrier is mako's (`document::facturx`),
+# because that crate deliberately ships no writer; see EN16931_FEEDBACK.md.
+en16931         = { version = "0.4.0", features = ["billing", "serde", "time"] }
+en16931-formats = { version = "0.4.0", features = ["cii", "ubl", "serde", "zugferd"] }
 serde        = { version = "1", features = ["derive"] }
 serde_json   = "1"
 thiserror    = "2"
@@ -113,7 +116,7 @@ invoic-checker   = { path = "crates/invoic-checker",   version = "0.16" }
 netz-checker     = { path = "crates/netz-checker",     version = "0.16" }
 energy-billing   = { path = "crates/energy-billing",   version = "0.16" }
 dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.16" }
-metering         = { version = "0.16" }
+metering         = { version = "0.17" }
 sepa             = { version = "0.5.0" }
 # Immutable, tamper-evident double-entry ledger kernel (sibling repo). accountingd's
 # storage/accounting base. Domain-neutral by design — the BillingDocument→Entry and

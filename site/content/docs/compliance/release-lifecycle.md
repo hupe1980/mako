@@ -64,11 +64,22 @@ Place the PDFs in a local working directory.
 
 ```bash
 cargo xtask extract-pdf --file <working-dir>/UTILMD_MIG_S3.1.pdf \
-    --message-type utilmd --release fv20271001
+    --message-type utilmd --release FV2027-10-01
 
 cargo xtask extract-pdf --file <working-dir>/UTILMD_AHB_S3.1.pdf \
-    --message-type utilmd --release fv20271001
+    --message-type utilmd --release FV2027-10-01
+
+# Strom and Gas share a release, so the folder has to be named explicitly:
+cargo xtask extract-pdf --file <working-dir>/UTILMD_AHB_G2.0.pdf \
+    --message-type utilmd --release FV2027-10-01 --profile-dir fv20271001_gas
 ```
+
+> **The draft is written *beside* the curated profile it will be compared
+> against**, in `crates/edi-energy/profiles/<type>/<folder>/`. The folder name is
+> the compact form of the release (`FV2027-10-01` → `fv20271001`), and
+> `extract-pdf` refuses rather than creating a new directory: an unpaired draft
+> is invisible to `validate-extraction` and extracts without the neighbouring
+> `mig.json` that supplies the segments the AHB table never lists.
 
 > **`pdftotext` is required for AHB extraction.** The AHB rule tables are column
 > layouts — a row's `Muss`/`Kann` belongs to whichever Prüfidentifikator column
@@ -123,9 +134,38 @@ continuing.
 compares every generated `ahb.draft.json` against the curated `ahb.json` beside
 it and classifies each Prüfidentifikator as `exact`, `superset`, `subset` or
 `differs`. A **`superset`** verdict means the draft marks more segments
-mandatory than the AHB requires — shipping it rejects valid messages. Today the
-UTILMD draft is `exact` for 2 of 104 PIDs and a superset for the other 102, so a
-draft is a starting point for review, never a drop-in profile.
+mandatory than the AHB requires — shipping it rejects valid messages.
+
+It also reports **how far off** each PID is, because that is what decides where
+review starts:
+
+```text
+utilmd/fv20261001   exact 2/104 (1%)  superset 102  subset 0  differs 0
+    superset: 102 PIDs, 443 excess mandatory segments in total (median +4)
+      review first (≤2 excess, 16 PIDs): 55005 (+1), 55011 (+1), …
+      worst: 55601 (+8), 55600 (+8), …
+```
+
+and which **segments** drive it:
+
+```text
+      by segment (12 distinct tags): STS 88 (19%), SEQ 84 (18%), CCI 72 (16%),
+                                     CAV 68 (15%), PIA 42 (9%)  -> top 5 = 79%
+```
+
+That last line is the one to act on. The excess is not one judgement per PID —
+the same few tags recur, because `segment_rules` is flat and a tag that is `Muss`
+in one segment group and optional in another must still be given a single mark.
+The extractor keeps the strongest, which over-marks; keeping the weakest instead
+under-marks (measured: 443 → 305 excess, but 21 PIDs then *lose* segments the AHB
+requires).
+
+Drafts do now emit `group_rules`, so the `(group, tag)` scoping no longer has to
+be re-derived by hand — but that relocates marks rather than correcting them, and
+the totals are unchanged. `validate-extraction` compares the mandatory set across
+**both** `segment_rules` and `group_rules` for exactly that reason: a draft must
+not be able to score clean by moving its marks between the two lists. A draft is
+a starting point for review, never a drop-in profile.
 
 ### What the extraction cannot decide for you
 
@@ -138,7 +178,10 @@ and 250/250 (ORDERS 1.1b) mandatory segments. Three things still need a human:
   ambiguously. Which group a flat `segment_rules` entry is scoped to is a
   curation decision the document does not determine.
 - **`conditional_rules`.** A `Muss [n]` is reported as `M`; whether condition *n*
-  makes it genuinely mandatory needs the condition text read.
+  makes it genuinely mandatory needs the condition text read. Note that condition
+  markers are sometimes column-positioned on a neighbouring line rather than
+  inline in the mark (`STS` under UTILMD 55004/55005 reads `Muss` with `[577]` a
+  line above), and those are read by no code path.
 - **Group flattening at the margins.** A `Muss` nested in a conditioned group is
   kept as `M` — the safe direction for review, but stricter than some curated
   profiles, which relaxed it after reading the condition.

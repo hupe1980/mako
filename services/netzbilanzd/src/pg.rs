@@ -849,7 +849,8 @@ pub async fn insert_correction_draft(
 /// Bestätigung; 33002/33003/33004 are Abweisungen and route to `mark_draft_disputed`).
 ///
 /// `remadv_ref` is the EDIFACT reference from the REMADV message
-/// (stored for BNetzA § 147 AO / GoBD 3-year audit trail).
+/// (stored for the § 14b UStG / § 147 AO / GoBD audit trail — an invoice is a
+/// Buchungsbeleg, so 8 years, reduced from 10 with effect from 01.01.2025).
 ///
 /// Returns `Ok(true)` when the update succeeded (draft was in `dispatched` status).
 /// Returns `Ok(false)` when the draft does not exist or is not in `dispatched` status.
@@ -918,7 +919,8 @@ pub struct AuditQuery {
 
 /// Full audit export row (lightweight — no Rechnung JSONB).
 ///
-/// Satisfies BNetzA § 147 AO / GoBD 3-year retention requirement.
+/// Satisfies the § 14b UStG / § 147 AO / GoBD retention requirement (8 years
+/// for a Buchungsbeleg, reduced from 10 with effect from 01.01.2025).
 /// The full Rechnung JSONB can be fetched separately via `fetch_draft(id)`.
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct AuditRow {

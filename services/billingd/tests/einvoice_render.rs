@@ -53,7 +53,11 @@ fn mixed_rate_invoice() -> energy_billing::Invoice {
 fn cfg() -> BillingdConfig {
     serde_json::from_value(serde_json::json!({
         "database": { "url": "postgres://localhost/x" },
-        "tenant": "9900000000001",
+        // A valid GS1 GLN: a BDEW-Codenummer is issued through GS1, so a real
+        // operator's MP-ID has a correct check digit and BT-34 can honestly
+        // claim EAS 0088. `9900000000001` — the placeholder used elsewhere in
+        // the fixtures — does not: the first twelve digits require a `4`.
+        "tenant": "9900000000004",
         "tarifbd_url": "http://tarifbd",
         "edmd_url": "http://edmd",
         "marktd_url": "http://marktd",
@@ -236,5 +240,236 @@ fn a_buyer_from_vertragd_closes_the_address_findings() {
     assert!(
         einvoice::validate(&model).is_valid(),
         "a retail invoice with buyer master data is EN 16931-valid",
+    );
+}
+
+// ── Template contract ─────────────────────────────────────────────────────────
+
+/// The template view must carry the invoice, not a lossy summary of it.
+///
+/// An operator's layout renders from `DocumentView` and never from the semantic
+/// model, so anything missing here is a field no invoice can ever print. This
+/// pins the mixed-rate case in particular: two VAT rates must survive into the
+/// breakdown a template iterates, because a single blended rate on the page is
+/// exactly the defect the hand-rolled renderer had.
+#[test]
+fn the_template_view_carries_what_an_invoice_must_print() {
+    use billingd::document::DocumentView;
+
+    let buyer = billingd::clients::Rechnungsempfaenger {
+        name: Some("Erika Mustermann".to_owned()),
+        line1: Some("Beispielweg 7".to_owned()),
+        post_code: Some("10115".to_owned()),
+        city: Some("Berlin".to_owned()),
+        country: Some("DE".to_owned()),
+        vat_id: None,
+    };
+    let model = einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", Some(&buyer));
+    let view = DocumentView::of(&model);
+
+    // §14 Abs. 4 UStG Pflichtangaben the page cannot omit.
+    assert_eq!(view.number.as_deref(), Some("R-XR-9001"));
+    assert!(view.issue_date.is_some(), "BT-2 issue date");
+    assert_eq!(
+        view.seller.name.as_deref(),
+        Some("Stadtwerke Musterstadt GmbH")
+    );
+    assert_eq!(view.seller.vat_id.as_deref(), Some("DE123456789"));
+    assert_eq!(view.buyer.name.as_deref(), Some("Erika Mustermann"));
+    assert_eq!(view.buyer.city.as_deref(), Some("Berlin"));
+
+    // Both rates reach the breakdown a template iterates.
+    let mut rates: Vec<&str> = view
+        .vat_breakdown
+        .iter()
+        .filter_map(|v| v.rate.as_deref())
+        .collect();
+    rates.sort();
+    assert_eq!(rates.len(), 2, "mixed-rate invoice keeps two BG-23 entries");
+
+    assert!(
+        !view.lines.is_empty(),
+        "an invoice with no lines prints nothing"
+    );
+    for l in &view.lines {
+        assert!(!l.net_amount.is_empty() && !l.quantity.is_empty());
+        assert!(!l.vat_category.is_empty(), "BT-151 per line");
+    }
+
+    // Amounts are decimal strings — a total that round-trips through f64 is not
+    // a total. Guard the type, not just the value.
+    assert!(
+        view.totals
+            .gross_total
+            .parse::<rust_decimal::Decimal>()
+            .is_ok(),
+        "totals must be exact decimals",
+    );
+
+    // The view is what a template consumes: it has to serialise.
+    let json = serde_json::to_value(&view).expect("DocumentView serialises");
+    assert!(json["totals"]["gross_total"].is_string());
+    assert!(json["lines"].as_array().is_some_and(|l| !l.is_empty()));
+}
+
+/// The view must never become a second source of truth for the XML.
+///
+/// It is a *projection*: every field is copied from the model, so the page and
+/// the embedded CII cannot disagree. This checks the one pair most likely to
+/// drift — what the customer owes.
+#[test]
+fn the_view_agrees_with_the_model_it_projects() {
+    use billingd::document::DocumentView;
+
+    let model = einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", None);
+    let view = DocumentView::of(&model);
+
+    assert_eq!(
+        view.totals.gross_total,
+        model.totals.gross_total.to_string()
+    );
+    assert_eq!(view.totals.due, model.totals.due.to_string());
+    assert_eq!(view.lines.len(), model.lines.len());
+    assert_eq!(view.vat_breakdown.len(), model.vat_breakdown.len());
+}
+
+/// The view may omit document-level allowances only while there are none.
+///
+/// `DocumentView` carries BG-25 lines, the BG-23 breakdown and BG-22 totals, but
+/// not BG-20/BG-21 — the document-level allowances and charges that sit between
+/// the line total (BT-106) and the taxable total (BT-109). That omission is
+/// safe today for one reason only: `energy_billing`'s mapping never emits them,
+/// because every discount in this engine is a negative *line*. So BT-106 always
+/// equals BT-109 and a page showing one shows the other.
+///
+/// The day that changes, a template would print a "Summe netto" that does not
+/// reconcile with the total below it while the embedded XML stays correct —
+/// exactly the visual/machine disagreement the whole design exists to prevent,
+/// and the one failure mode no rendering test would catch. This is the tripwire:
+/// if it fails, `DocumentView` needs BG-20/BG-21 before the mapping ships them.
+#[test]
+fn the_view_may_omit_document_level_allowances_only_while_there_are_none() {
+    let model = einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", None);
+
+    assert!(
+        model.allowances.is_empty() && model.charges.is_empty(),
+        "the mapping now emits BG-20/BG-21; DocumentView must carry them, or a \
+         template's totals will silently stop reconciling with the embedded XML",
+    );
+    assert_eq!(
+        model.totals.line_total, model.totals.taxable_total,
+        "BT-106 and BT-109 diverge only through document-level allowances",
+    );
+}
+
+/// The seller's BT-34 is a GLN or it is absent — never a false claim.
+///
+/// mako fixed this on the buyer side (a MaLo-ID must not be dressed up as a
+/// GLN) and left the identical defect on the seller side, because
+/// `Identifier::eas` validates the scheme and accepts any content, and no
+/// business rule can test a claim about a registry. `Identifier::eas_checked`
+/// (en16931 0.4.0) can, and this pins both directions.
+#[test]
+fn the_seller_electronic_address_is_a_gln_or_absent() {
+    // A correctly configured operator: a real BDEW-Codenummer is a real GLN.
+    let model = einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", None);
+    let bt34 = model
+        .seller
+        .electronic_address
+        .clone()
+        .expect("a valid GLN is emitted");
+    assert_eq!(bt34.content(), "9900000000004");
+    assert_eq!(bt34.scheme(), Some("0088"));
+
+    // A mistyped one: the term is omitted rather than asserting a GLN the
+    // identifier is not. BT-34 is optional in EN 16931 core, so the retail
+    // document stays valid — it simply stops making a claim it cannot support.
+    let mut mistyped = cfg();
+    mistyped.tenant = "9900000000001".to_owned();
+    let model = einvoice::build(&mixed_rate_invoice(), &mistyped, "51238696781", None);
+    assert!(
+        model.seller.electronic_address.is_none(),
+        "a bad GS1 check digit must omit BT-34, not claim it",
+    );
+    assert!(
+        einvoice::validate(&model).fatal().next().is_none(),
+        "BT-34 is optional in core; omitting it must not invalidate the document",
+    );
+}
+
+/// Every invoice carries its billing period (BG-14).
+///
+/// § 14 Abs. 4 Nr. 6 UStG requires the Leistungszeitraum on the document, and
+/// XRechnung's BR-DE-TMP-32 requires BT-72, BG-14 or a period on every line.
+/// `to_en16931` never mapped it: the term was absent from the semantic model
+/// and therefore from every syntax rendered out of it — including the
+/// "Abrechnungszeitraum" line on the PDF, which silently rendered nothing.
+/// en16931 0.4.0's XRechnung profile is what surfaced it.
+#[test]
+fn the_billing_period_reaches_the_semantic_model() {
+    let model = einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", None);
+    let period = model.invoicing_period.clone().expect("BG-14 is mapped");
+    assert_eq!(
+        period.start.map(|d| d.to_string()).as_deref(),
+        Some("2026-01-01")
+    );
+    assert_eq!(
+        period.end.map(|d| d.to_string()).as_deref(),
+        Some("2026-01-31")
+    );
+
+    // And it reaches the page: the template reads these two fields.
+    let view = billingd::document::DocumentView::of(&model);
+    assert_eq!(view.period_start.as_deref(), Some("2026-01-01"));
+    assert_eq!(view.period_end.as_deref(), Some("2026-01-31"));
+}
+
+/// The gate specimen carries every term production stamps on a real document.
+///
+/// The specimen is hand-built, so it can drift from `einvoice::build` — and it
+/// had: it was missing BT-23, BT-34 and BG-16, which meant it could not satisfy
+/// XRechnung and was proving templates against a document shape production never
+/// emits. This pins the two together on the terms that are *stamped* rather than
+/// calculated, which are exactly the ones a hand-built specimen forgets.
+#[test]
+fn the_gate_specimen_matches_what_production_stamps() {
+    let produced = einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", None);
+    let specimen = billingd::document::gate::specimen_invoice();
+
+    assert_eq!(
+        specimen.business_process, produced.business_process,
+        "BT-23 business process",
+    );
+    assert_eq!(
+        specimen
+            .seller
+            .electronic_address
+            .as_ref()
+            .map(|i| i.scheme()),
+        produced
+            .seller
+            .electronic_address
+            .as_ref()
+            .map(|i| i.scheme()),
+        "BT-34 seller electronic address, under the same EAS scheme",
+    );
+    assert!(
+        specimen.payment.is_some() && produced.payment.is_some(),
+        "BG-16 payment instructions",
+    );
+    assert_eq!(
+        specimen
+            .payment
+            .as_ref()
+            .and_then(|p| p.means_code.as_ref().map(|c| c.as_str())),
+        produced
+            .payment
+            .as_ref()
+            .and_then(|p| p.means_code.as_ref().map(|c| c.as_str())),
+        "the SEPA means code (UNCL 4461 58)",
+    );
+    assert!(
+        specimen.invoicing_period.is_some() && produced.invoicing_period.is_some(),
+        "BG-14 billing period",
     );
 }

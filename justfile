@@ -182,6 +182,60 @@ smoke-roles:
 
 ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-routes check-tool-grants doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
 
+# mako proves the carrier by reading its own output back (billingd's publish
+# gate), and `en16931 validate` — an independent implementation — reports the
+# payload valid. Neither proves **PDF/A-3 conformance**: nothing in Rust does,
+# and the XMP `document::facturx::stamp` appends lands after typst-pdf's own
+# enforcement has finished. That is what veraPDF is for, and it needs a file.
+
+# Write a stamped ZUGFeRD specimen for veraPDF / the ZUGFeRD validator
+zugferd-specimen out="target/zugferd-specimen.pdf":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Absolute, because `cargo test` runs a test with the *package* directory as
+    # its working directory — a relative path lands in services/billingd/, not
+    # where the caller is standing.
+    out="$(cd "$(dirname "{{ out }}")" 2>/dev/null && pwd || mkdir -p "$(dirname "{{ out }}")" && cd "$(dirname "{{ out }}")" && pwd)/$(basename "{{ out }}")"
+    MAKO_ZUGFERD_OUT="$out" cargo test -p billingd --test zugferd_carrier \
+        -- --ignored --nocapture write_specimen_for_external_validators
+    echo ""
+    echo "Wrote three files: the stamped carrier, the XRechnung-profile carrier"
+    echo "(\${out%.pdf}-xrechnung.pdf) and the pre-stamp control (\${out%.pdf}-unstamped.pdf)."
+    echo "Verify, in order of what each proves:"
+    echo "  en16931 validate $out                       # payload, 227 core rules"
+    echo "  en16931 validate \${out%.pdf}-xrechnung.pdf  # 282 rules incl. BR-DE"
+    echo "  verapdf -f 3b $out                          # PDF/A-3b; the control isolates stamp regressions"
+    echo "  ZUGFeRD validator on $out                   # carrier metadata against the specification"
+
+# Verify the ZUGFeRD specimens with the two external validators, containerized —
+# no host Java, no host veraPDF. `verapdf/cli` is the veraPDF Foundation's own
+# image; Mustang is the ZUGFeRD project's reference validator, fetched once into
+# target/ and run under Temurin. Both must report every file valid/compliant.
+# In-repo checks cannot replace these: the duplicate-schemas XMP defect was
+# invisible to four layers of our own checking and found only by veraPDF.
+
+# Validate the specimens with veraPDF + Mustang, containerized (needs Docker only)
+zugferd-verify: zugferd-specimen
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v docker >/dev/null || { echo "docker required (host verapdf/java work too — see site docs)"; exit 1; }
+    jar=target/Mustang-CLI-2.25.0.jar
+    [ -f "$jar" ] || curl -sL -o "$jar" \
+        https://github.com/ZUGFeRD/mustangproject/releases/download/core-2.25.0/Mustang-CLI-2.25.0.jar
+    fail=0
+    for f in zugferd-specimen zugferd-specimen-xrechnung zugferd-specimen-unstamped; do
+        echo "==> veraPDF: $f"
+        docker run --rm -v "$PWD/target:/data" verapdf/cli:latest -f 3b "/data/$f.pdf" \
+            | grep -oE 'isCompliant="[a-z]+"' | grep -q 'true' || { echo "   NOT COMPLIANT"; fail=1; }
+    done
+    for f in zugferd-specimen zugferd-specimen-xrechnung; do
+        echo "==> Mustang: $f"
+        docker run --rm -v "$PWD/target:/data" eclipse-temurin:21-jre \
+            java -jar "/data/$(basename "$jar")" --action validate --source "/data/$f.pdf" \
+            | grep -cE '<summary status="valid"/>' | grep -qv '^0$' || { echo "   NOT VALID"; fail=1; }
+    done
+    [ "$fail" = 0 ] && echo "all specimens valid under veraPDF + Mustang" || exit 1
+
 # ── makotest (Python toolkit) ─────────────────────────────────────────────────
 
 # Build the PyO3 extension and run the Python suite.

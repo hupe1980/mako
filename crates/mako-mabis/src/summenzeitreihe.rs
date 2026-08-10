@@ -182,7 +182,7 @@ impl Summenzeitreihe {
                 MeterInterval {
                     from: iv.from,
                     to: iv.to,
-                    value_kwh: iv.quantity_kwh,
+                    value: iv.quantity_kwh,
                     quality,
                     obis_code: None,
                 }
@@ -321,7 +321,7 @@ impl SummenzeitreiheBuilder {
                 metering::QualityFlag::Measured | metering::QualityFlag::Calculated
             );
             let entry = self.slots.entry(key).or_insert((Decimal::ZERO, 0, 0));
-            entry.0 += iv.value_kwh;
+            entry.0 += iv.value;
             entry.1 += 1;
             if is_substituted {
                 entry.2 += 1;
@@ -393,7 +393,7 @@ mod tests {
         MeterInterval {
             from,
             to: from + Duration::minutes(15),
-            value_kwh: kwh,
+            value: kwh,
             quality,
             obis_code: None,
         }
@@ -472,7 +472,7 @@ mod tests {
                 MeterInterval {
                     from: before_period,
                     to: from, // to == period_from → excluded (not strictly inside)
-                    value_kwh: dec!(10.0),
+                    value: dec!(10.0),
                     quality: QualityFlag::Measured,
                     obis_code: None,
                 },
@@ -544,7 +544,7 @@ mod tests {
             1,
             "all intervals in June should produce one bucket"
         );
-        assert_eq!(monthly[0].total_kwh, dec!(2.0));
+        assert_eq!(monthly[0].total, dec!(2.0));
     }
 
     #[test]
@@ -567,7 +567,7 @@ mod tests {
             .add_malo(&[MeterInterval {
                 from,
                 to,
-                value_kwh: dec!(1234.5),
+                value: dec!(1234.5),
                 quality: QualityFlag::Measured,
                 obis_code: None,
             }])

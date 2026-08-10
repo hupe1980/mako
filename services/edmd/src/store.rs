@@ -327,7 +327,7 @@ fn read_to_stored(r: &MeterRead) -> Result<StoredSeries, EdmError> {
     let interval = MeterInterval {
         from: r.dtm_from,
         to: r.dtm_to,
-        value_kwh: r.quantity_kwh,
+        value: r.quantity_kwh,
         quality: r.quality,
         obis_code: obis,
     };
@@ -975,7 +975,7 @@ fn typ2_to_stored(r: &Typ2Read) -> Result<StoredSeries, EdmError> {
     let interval = MeterInterval {
         from: r.dtm_from,
         to: r.dtm_to,
-        value_kwh: r.quantity_kwh,
+        value: r.quantity_kwh,
         quality: r.quality,
         obis_code: obis,
     };
@@ -1083,7 +1083,7 @@ fn series_to_reads(resolved: &meterstore::ResolvedSeries, tenant: &str) -> Vec<M
             melo_id: series.melo_id.clone(),
             dtm_from: iv.from,
             dtm_to: iv.to,
-            quantity_kwh: iv.value_kwh,
+            quantity_kwh: iv.value,
             quality: iv.quality,
             pid,
             sparte: resolved.sparte,
@@ -1114,7 +1114,7 @@ fn series_to_typ2(resolved: &meterstore::ResolvedSeries, tenant: &str) -> Vec<Ty
             melo_id: series.melo_id.clone(),
             dtm_from: iv.from,
             dtm_to: iv.to,
-            quantity_kwh: iv.value_kwh,
+            quantity_kwh: iv.value,
             quality: iv.quality,
             pid,
             sparte: resolved.sparte,

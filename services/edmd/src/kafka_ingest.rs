@@ -54,6 +54,14 @@ use crate::store::MeterStoreTimeSeriesRepository;
 struct WireInterval {
     from: String,
     to: String,
+    /// Energy in kWh. The name is the wire contract and it is *deliberately*
+    /// `value_kwh` where `metering::MeterInterval` says `value`: that rename
+    /// exists because an interval's unit is the Sparte's own (m³ for gas), but
+    /// this wire carries no unit field and stores straight into `quantity_kwh` —
+    /// it is kWh by contract, and the name should say so. (A blanket rename
+    /// during the metering-0.17 migration changed this silently; head-end
+    /// producers would have had every batch rejected with a missing-field
+    /// error. Reverted, with this comment as the tripwire.)
     value_kwh: Decimal,
     #[serde(default)]
     quality: Option<String>,

@@ -762,7 +762,7 @@ CREATE TABLE fremdkosten_records (
 | GPKE BK6-22-024 §5 | NNE invoice generation and dispatch (INVOIC 31001) |
 | GPKE (BK6-24-174) Teil 1 Kap. 8.4 | MMM settlement reflecting actual vs. SLP profile deviation (INVOIC 31002) |
 | KAV §2 | KA as separate Rechnungsposition; §17 residential (1.32 ct/kWh) and commercial (0.11 ct/kWh) rates accepted |
-| Lieferantenrahmenvertrag Strom | Zahlungsziel (due_date) recorded per invoice; § 147 AO / GoBD 3-year retention enforced in PostgreSQL |
+| Lieferantenrahmenvertrag Strom | Zahlungsziel (due_date) recorded per invoice; § 14b UStG / § 147 AO / GoBD retention (8 years for a Buchungsbeleg, reduced from 10 with effect from 01.01.2025) — the ledger is append-only in PostgreSQL |
 | § 147 AO / GoBD | BNetzA audit export via `GET /api/v1/billing/audit`; Stornorechnung/Korrekturrechnung with `originalRechnungsnummer` + `korrekturGrund` |
 | WiM BK6-24-174 | MSB-Rechnung (INVOIC 31009): NB → MSB metering service fee |
 | GeLi Gas 3.0 (BK7-24-01-009) §5.4 | AWH Sperrprozesse Gas (INVOIC 31011): GNB → LFG for billable Sperrprozess actions |

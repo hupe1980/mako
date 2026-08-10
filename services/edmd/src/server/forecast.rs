@@ -77,7 +77,7 @@ pub(crate) async fn get_annual_forecast(
         .map(|r| metering::MeterInterval {
             from: r.dtm_from,
             to: r.dtm_to,
-            value_kwh: r.quantity_kwh,
+            value: r.quantity_kwh,
             quality: r.quality,
             obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
         })
@@ -100,7 +100,7 @@ pub(crate) async fn get_annual_forecast(
             .map(|r| metering::MeterInterval {
                 from: r.dtm_from,
                 to: r.dtm_to,
-                value_kwh: r.quantity_kwh,
+                value: r.quantity_kwh,
                 quality: r.quality,
                 obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
             })
@@ -112,17 +112,26 @@ pub(crate) async fn get_annual_forecast(
     };
     let prior = (!prior_intervals.is_empty()).then_some(prior_intervals.as_slice());
 
-    match project_annual_consumption(&malo_id, &intervals, prior) {
+    // `malo_id` is the caller's, not the forecast's: `metering` 0.17 dropped it
+    // from `AnnualForecast`, correctly — a projection is arithmetic over a
+    // series and does not know whose series it is. The endpoint already has it.
+    match project_annual_consumption(&intervals, prior) {
         Some(forecast) => Json(serde_json::json!({
-            "malo_id": forecast.malo_id,
+            "malo_id": malo_id,
             "observation_from": forecast.observation_from,
             "observation_to": forecast.observation_to,
-            "observed_kwh": forecast.observed_kwh,
+            "observed_kwh": forecast.observed,
             "observed_days": forecast.observed_days,
-            "projected_annual_kwh": forecast.projected_annual_kwh,
+            "target_year_days": forecast.target_year_days,
+            "projected_annual_kwh": forecast.projected_annual,
             "seasonal_correction_applied": forecast.seasonal_correction_applied,
             "seasonal_factor": forecast.seasonal_factor,
-            "method": format!("{:?}", forecast.method),
+            // New in 0.17: a 95 % prediction interval over the observed daily
+            // sums. `None` when fewer than two whole days were observed — a
+            // projection with no spread stated is one a caller cannot judge.
+            "confidence_lower_kwh": forecast.confidence_lower,
+            "confidence_upper_kwh": forecast.confidence_upper,
+            "prediction_interval_note": metering::AnnualForecast::prediction_interval_note(),
             "legal_basis": "§ 60 Abs. 2 MsbG Jahresprognose",
         }))
         .into_response(),

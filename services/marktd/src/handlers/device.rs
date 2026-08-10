@@ -1706,6 +1706,47 @@ pub struct SharingEligibilityEvidence {
     ),
     tag = "melo"
 )]
+
+/// BO4E `Zaehlertyp` wire value → the § 42c distinction `metering` models.
+///
+/// `metering` 0.17 takes typed inputs where it used to take free text and match
+/// on strings internally. The parse belongs here: this is the boundary that
+/// reads the column, and it is the layer that knows the value came from BO4E
+/// rather than from somewhere else.
+///
+/// Everything that is a meter but neither an iMSys nor a moderne Messeinrichtung
+/// is `Conventional` — Drehstrom-, Wechselstrom- and Ferrariszähler differ in
+/// ways § 42c does not turn on. `None` only for an *absent* value, which is a
+/// different finding (`ZaehlertypMissing`) from "some other meter".
+fn parse_zaehlertyp(raw: &str) -> Option<metering::Zaehlertyp> {
+    use metering::Zaehlertyp as Z;
+    match raw.trim().to_ascii_uppercase().as_str() {
+        "" => None,
+        "INTELLIGENTES_MESSSYSTEM" => Some(Z::IntelligentesMesssystem),
+        "MODERNE_MESSEINRICHTUNG" => Some(Z::ModerneMesseinrichtung),
+        _ => Some(Z::Conventional),
+    }
+}
+
+/// `Marktlokation.bilanzierungsmethode` wire value → the typed method.
+///
+/// `TLP` is matched by prefix: BO4E spells the temperature-dependent profiles
+/// `TLP_TAGESPARAMETER` and friends, and every one of them is Gas — which
+/// § 42c, being Strom-only, can never qualify. An unrecognised value is `None`
+/// rather than a guess, so it surfaces as `BilanzierungsmethodeMissing`.
+fn parse_bilanzierungsmethode(raw: &str) -> Option<metering::Bilanzierungsmethode> {
+    use metering::Bilanzierungsmethode as B;
+    let v = raw.trim().to_ascii_uppercase();
+    match v.as_str() {
+        "RLM" => Some(B::Rlm),
+        "SLP" => Some(B::Slp),
+        "IMS" => Some(B::Ims),
+        "PAUSCHAL" => Some(B::Pauschal),
+        _ if v.starts_with("TLP") => Some(B::Tlp),
+        _ => None,
+    }
+}
+
 pub async fn get_sharing_eligibility(
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1767,13 +1808,22 @@ pub async fn get_sharing_eligibility(
         .and_then(|s| s.parse::<bool>().ok());
 
     let input = MeteringCapabilityInput {
-        zaehlertyp: zaehlertyp.clone(),
+        zaehlertyp: zaehlertyp.as_deref().and_then(parse_zaehlertyp),
         ist_fernauslesbar,
-        bilanzierungsmethode: bilanzierungsmethode.clone(),
+        bilanzierungsmethode: bilanzierungsmethode
+            .as_deref()
+            .and_then(parse_bilanzierungsmethode),
         // marktd holds no SMGW session state; edmd owns that signal.
         smgw_operational: None,
     };
-    let (capability, mut reasons) = assess_capability(&input);
+    let (capability, findings) = assess_capability(&input);
+
+    // `assess_capability` returns typed `Finding`s since metering 0.17, where it
+    // returned prose. The API still emits strings, so they are rendered at this
+    // boundary — and marktd's own finding, which the crate cannot know about
+    // because Bilanzierungsgebiet is master data rather than metering, is
+    // appended here rather than being pushed into the crate's vocabulary.
+    let mut reasons: Vec<String> = findings.iter().map(|f| format!("{f:?}")).collect();
 
     if bilanzierungsgebiet.is_none() {
         reasons.push(

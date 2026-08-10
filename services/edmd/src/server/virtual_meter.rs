@@ -100,7 +100,7 @@ pub(crate) async fn get_virtual_lastgang(
                     .map(|r| metering::MeterInterval {
                         from: r.dtm_from,
                         to: r.dtm_to,
-                        value_kwh: r.quantity_kwh,
+                        value: r.quantity_kwh,
                         quality: r.quality,
                         obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
                     })
@@ -120,7 +120,7 @@ pub(crate) async fn get_virtual_lastgang(
                 .map(|iv| {
                     serde_json::json!({
                         "from": iv.from, "to": iv.to,
-                        "value_kwh": iv.value_kwh,
+                        "value": iv.value,
                         "quality": format!("{:?}", iv.quality),
                     })
                 })

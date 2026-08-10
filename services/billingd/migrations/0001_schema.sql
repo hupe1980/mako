@@ -1,7 +1,10 @@
 -- ── billingd schema — Energy Billing Engine ──────────────────────────────────
 --
 -- `billing_records`: immutable audit log of every generated invoice.
---   Full rubo4e::current::Rechnung JSONB for § 147 AO / GoBD compliance (3-year retention).
+--   Full rubo4e::current::Rechnung JSONB for § 14b UStG / § 147 AO / GoBD
+--   compliance. An invoice is a Buchungsbeleg: 8 years, reduced from 10 by
+--   BEG IV with effect from 01.01.2025. GoBD additionally requires
+--   Unveraenderbarkeit, which is why this table is append-only.
 --   Supports Einzelrechnung, Korrektur/Storno (is_correction), and B2B Sammelrechnung.
 --
 -- `billing_run_log`: monthly batch run audit + idempotency guard.
@@ -25,7 +28,7 @@ CREATE TABLE billing_records (
     period_from         DATE        NOT NULL,
     period_to           DATE        NOT NULL,
 
-    -- Full rubo4e::current::Rechnung JSONB (§ 147 AO / GoBD 3-year retention)
+    -- Full rubo4e::current::Rechnung JSONB (§ 14b UStG / § 147 AO: 8 years)
     rechnung_json       JSONB       NOT NULL,
     bo4e_version        TEXT        NOT NULL DEFAULT 'v202607.0.0',
     -- EN 16931 semantic invoice model (serde JSON) — the source for XRechnung /
@@ -73,7 +76,7 @@ CREATE TABLE billing_records (
 );
 
 COMMENT ON TABLE billing_records IS
-    '§ 147 AO / GoBD: 3-year audit ledger for all generated invoices. '
+    '§ 14b UStG / § 147 AO / GoBD: 8-year audit ledger for all generated invoices. '
     'Supports original invoices, Storno/Korrektur chains, and B2B Sammelrechnungen.';
 
 COMMENT ON COLUMN billing_records.is_correction IS
@@ -166,3 +169,74 @@ CREATE TABLE vpp_dispatch_ledger (
 COMMENT ON TABLE vpp_dispatch_ledger IS
     'Idempotency guard for de.vpp.dispatch.confirmed webhook delivery. '
     'Prevents double-billing on outbox retry.';
+
+-- ── Document templates ───────────────────────────────────────────────────────
+--
+-- The operator owns the *visual* layout of an invoice (logo, Briefkopf, where
+-- the Pflichtangaben sit); the embedded CII XML is always rendered from the
+-- EN 16931 semantic model, never from a template. See `billingd::document`.
+--
+-- **Content-addressed and append-only.** An invoice is a Buchungsbeleg kept for
+-- 8 years (§ 14b UStG / § 147 AO), and GoBD requires Unveraenderbarkeit — a
+-- document issued today must still be explicable in 2034. A mutable template row
+-- would silently rewrite the history of how documents looked, so a template is
+-- identified by the hash of its source and never updated in place. Publishing a
+-- change means inserting a new row and moving the pointer.
+
+CREATE TABLE document_templates (
+    -- SHA-256 of `source`, lowercase hex. The identity of the template.
+    hash            TEXT        PRIMARY KEY,
+    tenant          TEXT        NOT NULL,
+    -- Which document this renders. Textform kinds share the engine and the
+    -- store with the invoice kind so an operator maintains one template system.
+    kind            TEXT        NOT NULL CHECK (kind IN (
+                        'INVOICE',          -- ZUGFeRD PDF/A-3 carrier
+                        'MAHNUNG',          -- Textform (§ 126b BGB)
+                        'PREISANPASSUNG'    -- § 41 Abs. 5 EnWG notice, Textform
+                    )),
+    -- The template source. Typst.
+    source          TEXT        NOT NULL,
+    -- PDF/A conformance level the publish gate enforced, in Typst's spelling
+    -- (`a-3b`). NULL for the Textform kinds, which have no PDF/A to meet.
+    pdf_standard    TEXT,
+    -- What the publish gate actually established about this template. Recorded
+    -- rather than assumed: RENDERED_PDFA means it produced a conformant carrier
+    -- whose embedded invoice was extracted again and matched, PARSED means only
+    -- that it compiles and exports the contract function. An INVOICE row is
+    -- always RENDERED_PDFA; the Textform kinds have no view to render against
+    -- yet, and a column saying so beats a comment implying otherwise.
+    proof           TEXT        NOT NULL CHECK (proof IN ('RENDERED_PDFA', 'PARSED')),
+    published_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    published_by    TEXT,
+    -- An invoice template is only ever stored after the full proof.
+    CONSTRAINT dt_invoice_is_rendered
+        CHECK (kind <> 'INVOICE' OR (proof = 'RENDERED_PDFA' AND pdf_standard IS NOT NULL))
+);
+
+COMMENT ON TABLE document_templates IS
+    'Append-only, content-addressed store of operator document templates. '
+    'Never UPDATE or DELETE: an issued document pins the hash that rendered it, '
+    'and § 147 AO / GoBD require that to stay resolvable for 8 years.';
+
+-- One template per (tenant, kind) is "the current one". This pointer moves;
+-- the rows it points at do not.
+CREATE TABLE document_template_current (
+    tenant          TEXT        NOT NULL,
+    kind            TEXT        NOT NULL,
+    hash            TEXT        NOT NULL REFERENCES document_templates(hash),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, kind)
+);
+
+COMMENT ON TABLE document_template_current IS
+    'Which published template each tenant renders with now. The pointer is '
+    'mutable; the templates it references are not.';
+
+-- An issued document records the template that produced it, so its appearance
+-- is reproducible for as long as the document must be kept.
+ALTER TABLE billing_records
+    ADD COLUMN template_hash TEXT REFERENCES document_templates(hash);
+
+COMMENT ON COLUMN billing_records.template_hash IS
+    'The document_templates.hash that rendered this invoice''s PDF. NULL for '
+    'records issued before a template was configured, or XML-only records.';

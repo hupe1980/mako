@@ -251,53 +251,61 @@ pub(crate) async fn post_iot_reads(
 
     // Hampel-filter quality scoring with media-aware thresholds: heat and water
     // profiles contain long legitimate zero runs.
-    let mut scored: Vec<(f64, i64)> = req
+    // Typed intervals: `metering` 0.17's `score_intervals` takes the same
+    // `MeterInterval` the rest of the pipeline already speaks, so the values
+    // keep their `Decimal` precision instead of being flattened to `f64` and
+    // the timestamps stay instants instead of bare nanosecond counts.
+    let mut samples: Vec<metering::MeterInterval> = req
         .intervals
         .iter()
         .filter_map(|iv| {
             let from = time::OffsetDateTime::parse(&iv.from, &Rfc3339).ok()?;
+            let to = time::OffsetDateTime::parse(&iv.to, &Rfc3339).ok()?;
             let rescaled = scale.apply(iv.value);
             let converted = conversion.map_or(rescaled, |(hs, z)| {
                 metering::gas_m3_to_kwh_hs(rescaled, hs, z)
             });
-            let v = converted.to_string().parse::<f64>().ok()?;
-            Some((v, (from.unix_timestamp_nanos() as i64)))
+            Some(metering::MeterInterval {
+                from,
+                to,
+                value: converted,
+                quality: metering::QualityFlag::Measured,
+                obis_code: None,
+            })
         })
         .collect();
-    scored.sort_by_key(|(_, ts)| *ts);
+    samples.sort_by_key(|iv| iv.from);
 
-    let quality = if scored.len() >= 3 {
-        let values: Vec<f64> = scored.iter().map(|(v, _)| *v).collect();
-        let stamps: Vec<i64> = scored.iter().map(|(_, t)| *t).collect();
-        let period_end = req
-            .intervals
-            .iter()
-            .filter_map(|iv| time::OffsetDateTime::parse(&iv.to, &Rfc3339).ok())
-            .map(|t| t.unix_timestamp_nanos() as i64)
-            .max()
-            .unwrap_or_else(|| stamps[stamps.len() - 1]);
-        Some(metering::score_intervals_f64(
-            &values,
-            &stamps,
-            stamps[0],
-            period_end,
-            metering::QualityConfig::for_sparte(sparte),
+    let quality = if samples.len() >= 3 {
+        Some(metering::score_intervals(
+            &samples,
+            &metering::QualityConfig::for_sparte(sparte),
         ))
     } else {
         None
     };
 
-    // `score_intervals_f64` reports outliers as `"t+<unix_nanos>"`, not RFC 3339
-    // — it takes raw `i64` nanosecond stamps and has no calendar to format
-    // against. Parsing them as RFC 3339 silently yields an empty set, which
-    // makes the PRELIMINARY flag below unreachable.
+    // Findings carry the instant they are about, so the anomalous slots are read
+    // straight off them.
+    //
+    // They did not before: `score_intervals_f64` took bare `f64`s and `i64`
+    // nanosecond stamps, had no calendar to format against, and reported
+    // outliers as synthetic `"t+<unix_nanos>"` strings the caller had to decode.
+    // `metering` 0.17 takes typed intervals and returns real timestamps.
     let outlier_stamps: std::collections::HashSet<i64> = quality
         .as_ref()
         .map(|q| {
-            q.outlier_intervals
+            q.issues
                 .iter()
-                .chain(q.spike_intervals.iter())
-                .filter_map(|ts| ts.strip_prefix("t+").and_then(|n| n.parse::<i64>().ok()))
+                .filter(|i| {
+                    matches!(
+                        i.rule_id,
+                        metering::validation::ValidationRuleId::StatisticalOutlier
+                            | metering::validation::ValidationRuleId::ImplausiblePower
+                    )
+                })
+                .filter_map(|i| i.affected_from)
+                .map(|t| t.unix_timestamp_nanos() as i64)
                 .collect()
         })
         .unwrap_or_default();
@@ -385,15 +393,25 @@ pub(crate) async fn post_iot_reads(
         validated.as_slice().first().map(|r| r.dtm_from),
         validated.as_slice().last().map(|r| r.dtm_to),
     ) {
+        // The anomalous slots are read off the findings, which carry the
+        // instant each is about — see the note where `outlier_stamps` is built.
+        let at = |rule: metering::validation::ValidationRuleId| -> Vec<String> {
+            q.issues
+                .iter()
+                .filter(|i| i.rule_id == rule)
+                .filter_map(|i| i.affected_from)
+                .map(|t| t.to_string())
+                .collect()
+        };
         let report = QualityReport {
             intervals_accepted: q.intervals_analysed,
             intervals_rejected: rejected.len(),
             gaps_detected: q.gaps_detected,
             zero_run_length: q.max_zero_run,
-            outlier_intervals: q.outlier_intervals.clone(),
-            spike_intervals: q.spike_intervals.clone(),
+            outlier_intervals: at(metering::validation::ValidationRuleId::StatisticalOutlier),
+            spike_intervals: at(metering::validation::ValidationRuleId::ImplausiblePower),
             intervals_consistent: q.intervals_consistent,
-            has_warnings: q.has_warnings,
+            has_warnings: q.has_warnings(),
             coverage_pct: q.coverage_pct,
             grade: q.grade.as_str(),
         };
@@ -450,8 +468,8 @@ pub(crate) async fn post_iot_reads(
             "grade": q.grade.as_str(),
             "coverage_pct": q.coverage_pct,
             "gaps_detected": q.gaps_detected,
-            "outliers": q.outlier_intervals.len() + q.spike_intervals.len(),
-            "has_warnings": q.has_warnings,
+            "outliers": q.outliers_detected,
+            "has_warnings": q.has_warnings(),
             "blocks_billing": q.grade.blocks_billing(),
         })
     });
@@ -501,7 +519,7 @@ pub(crate) async fn post_iot_reads(
                 "grade":         q.grade.as_str(),
                 "coverage_pct":  q.coverage_pct,
                 "gaps_detected": q.gaps_detected,
-                "outliers":      q.outlier_intervals.len() + q.spike_intervals.len(),
+                "outliers":      q.outliers_detected,
                 "blocks_billing": q.grade.blocks_billing(),
             })),
             "validation": {

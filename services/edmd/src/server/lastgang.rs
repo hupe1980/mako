@@ -736,7 +736,7 @@ pub(crate) async fn get_lastgang_resampled(
         .map(|r| metering::MeterInterval {
             from: r.dtm_from,
             to: r.dtm_to,
-            value_kwh: r.quantity_kwh,
+            value: r.quantity_kwh,
             quality: r.quality,
             obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
         })
@@ -750,12 +750,12 @@ pub(crate) async fn get_lastgang_resampled(
             serde_json::json!({
                 "from": b.from,
                 "to": b.to,
-                "total_kwh": b.total_kwh,
+                "total_kwh": b.total,
                 "peak_kw": b.peak_kw,
                 "interval_count": b.interval_count,
                 "expected_count": b.expected_count,
                 "coverage_pct": b.coverage_pct(),
-                "has_missing_data": b.has_missing_data,
+                "has_missing_data": b.has_missing_data(),
                 "quality": format!("{:?}", b.quality),
             })
         })
@@ -836,14 +836,14 @@ pub(crate) async fn get_summenzeitreihe(
         .map(|r| metering::MeterInterval {
             from: r.dtm_from,
             to: r.dtm_to,
-            value_kwh: r.quantity_kwh,
+            value: r.quantity_kwh,
             quality: r.quality,
             obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
         })
         .collect();
 
     let buckets = resample(&intervals, &ResampleConfig::to_monthly());
-    let total_kwh: rust_decimal::Decimal = buckets.iter().map(|b| b.total_kwh).sum();
+    let total_kwh: rust_decimal::Decimal = buckets.iter().map(|b| b.total).sum();
 
     let months: Vec<serde_json::Value> = buckets
         .iter()
@@ -851,10 +851,10 @@ pub(crate) async fn get_summenzeitreihe(
             serde_json::json!({
                 "from": b.from,
                 "to": b.to,
-                "total_kwh": b.total_kwh,
+                "total_kwh": b.total,
                 "peak_kw": b.peak_kw,
                 "coverage_pct": b.coverage_pct(),
-                "has_missing_data": b.has_missing_data,
+                "has_missing_data": b.has_missing_data(),
                 "quality": format!("{:?}", b.quality),
             })
         })

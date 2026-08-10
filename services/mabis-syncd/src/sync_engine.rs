@@ -323,7 +323,7 @@ impl SyncEngine {
                 match self.fetch_lastgang(malo_id, from_ts, to_ts, as_of).await {
                     Ok(intervals) => {
                         let interval_count = intervals.len() as i32;
-                        let total_kwh: Decimal = intervals.iter().map(|iv| iv.value_kwh).sum();
+                        let total_kwh: Decimal = intervals.iter().map(|iv| iv.value).sum();
                         let has_gaps = intervals.is_empty();
                         let substituted_count = intervals
                             .iter()
@@ -726,13 +726,13 @@ impl SyncEngine {
                 let (Some(from), Some(to)) = (from, to) else {
                     continue;
                 };
-                let Some(value_kwh) = Self::parse_decimal(&wert["wert"]) else {
+                let Some(value) = Self::parse_decimal(&wert["wert"]) else {
                     continue;
                 };
                 intervals.push(metering::MeterInterval {
                     from,
                     to,
-                    value_kwh,
+                    value,
                     quality: Self::messwertstatus_to_quality(wert["status"].as_str()),
                     obis_code: obis,
                 });

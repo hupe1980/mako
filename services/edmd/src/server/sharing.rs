@@ -159,7 +159,7 @@ pub(crate) async fn get_sharing_allocation(
             all_production.push(MeterInterval {
                 from: r.dtm_from,
                 to: r.dtm_to,
-                value_kwh: r.quantity_kwh,
+                value: r.quantity_kwh,
                 quality: r.quality,
                 obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
             });
@@ -172,7 +172,7 @@ pub(crate) async fn get_sharing_allocation(
     // (GgvConstantAllocation) or by the dynamic consumption ratio (GgvProportionalAllocation).
     // This endpoint returns the community-level production data; callers fetch individual
     // participant consumption via GET /api/v1/lastgang/{malo_id}.
-    let total_kwh: Decimal = all_production.iter().map(|iv| iv.value_kwh).sum();
+    let total_kwh: Decimal = all_production.iter().map(|iv| iv.value).sum();
     let interval_count = all_production.len();
 
     let allocation_intervals: Vec<serde_json::Value> = all_production
@@ -181,7 +181,7 @@ pub(crate) async fn get_sharing_allocation(
             serde_json::json!({
                 "from":         iv.from,
                 "to":           iv.to,
-                "total_kwh":    iv.value_kwh.to_string(),
+                "total_kwh":    iv.value.to_string(),
                 "quality":      "MEASURED",
             })
         })
@@ -400,14 +400,29 @@ pub(crate) async fn get_sharing_readiness(
         // `query` does not filter quality; keep only billable qualities
         // (`QualityFlag::is_billable`) — a faulty read is not a delivered
         // quarter-hour value.
-        let source_hint: Option<String> = reads.first().map(|r| r.source.as_str().to_owned());
+        // `classify_messtyp` takes a typed `SeriesOrigin` since metering 0.17;
+        // it used to take a free-text hint and match on strings the caller
+        // happened to pass. Only one distinction matters to it — did this series
+        // come from a Smart-Meter-Gateway — so edmd's own ingestion source is
+        // mapped onto that question rather than handed over verbatim.
+        let source_hint: Option<metering::SeriesOrigin> = reads.first().map(|r| {
+            match r.source {
+                // A gateway push, direct or over CLS.
+                IngestionSource::DirectPush | IngestionSource::DirectGas => {
+                    metering::SeriesOrigin::SmartMeterGateway
+                }
+                // MSCONS, imports, manual entry, substitutes: the interval
+                // length is the only evidence, which is what `Other` means.
+                _ => metering::SeriesOrigin::Other,
+            }
+        });
         let intervals: Vec<MeterInterval> = reads
             .iter()
             .filter(|r| r.quality.is_billable())
             .map(|r| MeterInterval {
                 from: r.dtm_from,
                 to: r.dtm_to,
-                value_kwh: r.quantity_kwh,
+                value: r.quantity_kwh,
                 quality: r.quality,
                 obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
             })
@@ -417,7 +432,7 @@ pub(crate) async fn get_sharing_readiness(
         let messtyp = if intervals.is_empty() {
             None
         } else {
-            Some(classify_messtyp(&intervals, source_hint.as_deref()))
+            Some(classify_messtyp(&intervals, source_hint))
         };
         let coverage_pct = if intervals.is_empty() {
             None
@@ -452,7 +467,11 @@ pub(crate) async fn get_sharing_readiness(
             messtyp: messtyp.map(|m| format!("{m:?}").to_uppercase()),
             coverage_pct,
             reading_count: intervals.len() as u64,
-            reasons,
+            // `assess_delivery` returns typed `Finding`s since metering 0.17,
+            // where it returned free text. The API keeps emitting strings, so
+            // they are rendered here — one place, one vocabulary, instead of
+            // prose composed inside the crate.
+            reasons: reasons.iter().map(|f| format!("{f:?}")).collect(),
             required_action: required_action.to_owned(),
         });
     }

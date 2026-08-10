@@ -38,21 +38,26 @@ pub struct SubstituteRequest {
     pub obis_code: Option<String>,
 }
 
-/// Map a [`metering::ForecastMethod`] onto the `substitute_value_log.method`
+/// Map a [`metering::SubstituteMethod`] onto the `substitute_value_log.method`
 /// vocabulary.
 ///
-/// The two vocabularies were never reconciled: `ForecastMethod` describes *how*
-/// a value was derived, the CHECK list describes § 60 Abs. 2 MsbG substitution
-/// categories. Methods with no § 60 Abs. 2 MsbG category map to
-/// `LinearInterpolation`, the closest admissible description, rather than failing
-/// the write.
-pub(crate) fn forecast_method_to_db(method: metering::ForecastMethod) -> &'static str {
-    use metering::ForecastMethod as F;
+/// One-to-one since `metering` 0.17. It was not: the crate used to expose a
+/// `ForecastMethod` describing *how* a value was derived — prior-period,
+/// weighted rolling average, profile-based, annual projection — while this
+/// column records the § 60 Abs. 2 MsbG substitution *categories*, and three of
+/// those methods had no category to map onto. They were folded into
+/// `LinearInterpolation` as the closest admissible description, which recorded
+/// something that had not happened.
+///
+/// `SubstituteMethod` is now exactly the § 60 Abs. 2 vocabulary, so the audit
+/// trail records the method that actually ran.
+pub(crate) fn substitute_method_to_db(method: metering::SubstituteMethod) -> &'static str {
+    use metering::SubstituteMethod as M;
     match method {
-        F::PriorPeriodSameSlot | F::WeightedRollingAverage => "PriorPeriodAverage",
-        F::LastValueCarryForward => "LastValueCarryForward",
-        F::ZeroFill => "ZeroFill",
-        F::LinearInterpolation | F::ProfileBased | F::AnnualProjection => "LinearInterpolation",
+        M::PriorPeriodAverage => "PriorPeriodAverage",
+        M::LastValueCarryForward => "LastValueCarryForward",
+        M::ZeroFill => "ZeroFill",
+        M::LinearInterpolation => "LinearInterpolation",
     }
 }
 
@@ -194,7 +199,7 @@ pub async fn run_substitute_values(
         .map(|r| MeterInterval {
             from: r.dtm_from,
             to: r.dtm_to,
-            value_kwh: r.quantity_kwh,
+            value: r.quantity_kwh,
             quality: r.quality,
             obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
         })
@@ -208,24 +213,60 @@ pub async fn run_substitute_values(
         .map(|r| r.dtm_from)
         .collect();
 
-    // Values bracketing the gap; interpolation needs a leading and a trailing one.
-    let last_known = prior_intervals.last().map(|iv| iv.value_kwh);
-    let next_known: Option<rust_decimal::Decimal> = existing
+    // Generate substitute values.
+    //
+    // `fill_gaps` fills the whole configured grid, so the values bracketing the
+    // gap no longer have to be found and passed in by hand: it is given the
+    // measured series and works out for itself what each gap is bounded by.
+    // The measured intervals inside the window go in alongside the prior-period
+    // reference, because a fill that cannot see them would treat a partially
+    // covered window as one long gap.
+    let measured: Vec<MeterInterval> = existing
         .iter()
-        .filter(|r| r.dtm_from >= gap_to)
-        .min_by_key(|r| r.dtm_from)
-        .map(|r| r.quantity_kwh);
+        .filter(|r| r.dtm_from >= gap_from && r.dtm_to <= gap_to)
+        .map(|r| MeterInterval {
+            from: r.dtm_from,
+            to: r.dtm_to,
+            value: r.quantity_kwh,
+            quality: r.quality,
+            obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
+        })
+        .collect();
 
-    // Generate substitute values
-    let substitute_entries = metering::substitute_values(
-        gap_from,
-        gap_to,
-        interval_secs,
-        method,
-        &prior_intervals,
-        last_known,
-        next_known,
+    let filled = metering::substitute::fill_gaps(
+        &measured,
+        &metering::substitute::FillGapsConfig {
+            // `from_seconds` is fallible now: a resolution the crate does not model
+            // (a 7-minute grid) has no Berlin-calendar meaning, and defaulting it
+            // would silently fill against the wrong grid.
+            resolution: match metering::IntervalResolution::from_seconds(interval_secs) {
+                Some(r) => r,
+                None => {
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(serde_json::json!({
+                            "error": format!(
+                                "unsupported interval length {interval_secs}s — \
+                                 use 900 (15 min), 1800, 3600 or a calendar resolution"
+                            )
+                        })),
+                    )
+                        .into_response();
+                }
+            },
+            period: (gap_from, gap_to),
+            method,
+            prior_period_intervals: prior_intervals.clone(),
+            short_gap_threshold: 3,
+            // § 60 Abs. 2 MsbG: this endpoint fills a gap, which is what
+            // `NoMeasurementAvailable` records. A caller that knows better —
+            // a meter fault, a gateway outage — is a richer request than this
+            // endpoint currently accepts, and inventing a reason it was not
+            // told would put a false one in an audit trail.
+            reason: metering::substitute::SubstitutionReason::NoMeasurementAvailable,
+        },
     );
+    let substitute_entries = filled.substitutions;
 
     if substitute_entries.is_empty() {
         return (
@@ -323,15 +364,16 @@ pub async fn run_substitute_values(
             skipped.push(iv.from.format(&Rfc3339).unwrap_or_default());
             continue;
         }
-        // `entry.method` is a `ForecastMethod`; `forecast_method_to_db` maps it to
-        // the vocabulary the `substitute_value_log.method` CHECK accepts.
-        let method_str = forecast_method_to_db(entry.method);
+        // `entry.method` is the method that *actually ran* — `fill_gaps` may
+        // interpolate a short gap whatever the request asked for, and the audit
+        // trail must record what happened rather than what was requested.
+        let method_str = substitute_method_to_db(entry.method);
         substitute_reads.push(MeterRead {
             malo_id: malo_id.to_string(),
             melo_id: None,
             dtm_from: iv.from,
             dtm_to: iv.to,
-            quantity_kwh: iv.value_kwh,
+            quantity_kwh: iv.value,
             quality: QualityFlag::Substituted,
             pid: 0,
             sparte,
@@ -344,15 +386,16 @@ pub async fn run_substitute_values(
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: None,
         });
-        audit.push((iv.from, iv.to, method_str, iv.value_kwh));
+        audit.push((iv.from, iv.to, method_str, iv.value));
         stored += 1;
         log_entries.push(serde_json::json!({
             "from": iv.from,
             "to": iv.to,
-            "value_kwh": iv.value_kwh.to_string(),
+            "value": iv.value.to_string(),
             "method": method_str,
             "reference_count": entry.reference_count,
-            "confidence_note": entry.confidence_note,
+            "reason": format!("{:?}", entry.reason),
+            "reference_count": entry.reference_count,
         }));
     }
 

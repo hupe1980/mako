@@ -809,13 +809,19 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
             .map(|r| MeterInterval {
                 from: r.dtm_from,
                 to: r.dtm_to,
-                value_kwh: r.quantity_kwh,
+                value: r.quantity_kwh,
                 quality: r.quality,
                 obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
             })
             .collect();
 
-        let report = metering::score_intervals(&intervals, metering::QualityConfig::default());
+        // The response reports `window_from`/`window_to` next to `coverage_pct`,
+        // so coverage must be measured against that window — without
+        // `over_period` a truncated delivery reads as 100 %.
+        let report = metering::score_intervals(
+            &intervals,
+            &metering::QualityConfig::default().over_period(from_dt, to_dt),
+        );
 
         ContentBlock::json(serde_json::json!({
             "malo_id": p.malo_id,
@@ -823,13 +829,26 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
             "window_to": to_dt.to_string(),
             "interval_count": intervals.len(),
             "grade": report.grade.as_str(),
-            "has_warnings": report.has_warnings,
+            "has_warnings": report.has_warnings(),
             "gaps_detected": report.gaps_detected,
             "zero_run_length": report.max_zero_run,
             "coverage_pct": report.coverage_pct,
             "intervals_consistent": report.intervals_consistent,
-            "outlier_intervals": report.outlier_intervals,
-            "spike_intervals": report.spike_intervals,
+            // Findings carry the instant they are about since metering 0.17,
+            // so the anomalous slots come off `issues` rather than from two
+            // pre-split lists of synthetic timestamp strings.
+            "outlier_intervals": report
+                .issues
+                .iter()
+                .filter(|i| i.rule_id == metering::validation::ValidationRuleId::StatisticalOutlier)
+                .filter_map(|i| i.affected_from.map(|t| t.to_string()))
+                .collect::<Vec<_>>(),
+            "spike_intervals": report
+                .issues
+                .iter()
+                .filter(|i| i.rule_id == metering::validation::ValidationRuleId::ImplausiblePower)
+                .filter_map(|i| i.affected_from.map(|t| t.to_string()))
+                .collect::<Vec<_>>(),
             "algorithm": "hampel_k3_t3",
             "hint": "Use POST /api/v1/quality-score/{malo_id} to persist this rescore to quality_assessments.",
         }))
@@ -1441,7 +1460,7 @@ impl EdmdMcpHandler {
             .map(|r| MeterInterval {
                 from: r.dtm_from,
                 to: r.dtm_to,
-                value_kwh: r.quantity_kwh,
+                value: r.quantity_kwh,
                 quality: r.quality,
                 obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
             })
@@ -1464,7 +1483,7 @@ impl EdmdMcpHandler {
                     "message": i.message,
                     "interval_index": i.interval_index,
                     "affected_from": i.affected_from.map(|t| t.format(&Rfc3339).ok()),
-                    "affected_value_kwh": i.affected_value_kwh,
+                    "affected_value_kwh": i.affected_value,
                     "blocks_billing": i.blocks_billing(),
                 })
             })
@@ -1614,13 +1633,13 @@ impl EdmdMcpHandler {
             .map(|r| metering::MeterInterval {
                 from: r.dtm_from,
                 to: r.dtm_to,
-                value_kwh: r.quantity_kwh,
+                value: r.quantity_kwh,
                 quality: r.quality,
                 obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
             })
             .collect();
         let buckets = metering::resample(&intervals, &metering::ResampleConfig::to_monthly());
-        let total_kwh: rust_decimal::Decimal = buckets.iter().map(|b| b.total_kwh).sum();
+        let total_kwh: rust_decimal::Decimal = buckets.iter().map(|b| b.total).sum();
 
         let months: Vec<serde_json::Value> = buckets
             .iter()
@@ -1628,10 +1647,10 @@ impl EdmdMcpHandler {
                 serde_json::json!({
                     "from": b.from,
                     "to": b.to,
-                    "total_kwh": b.total_kwh.to_string(),
+                    "total_kwh": b.total.to_string(),
                     "peak_kw": b.peak_kw,
                     "coverage_pct": b.coverage_pct(),
-                    "has_missing_data": b.has_missing_data,
+                    "has_missing_data": b.has_missing_data(),
                     "quality": format!("{:?}", b.quality),
                 })
             })
@@ -1700,7 +1719,7 @@ impl EdmdMcpHandler {
             .map(|r| MeterInterval {
                 from: r.dtm_from,
                 to: r.dtm_to,
-                value_kwh: r.quantity_kwh,
+                value: r.quantity_kwh,
                 quality: r.quality,
                 obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
             })
@@ -1727,23 +1746,31 @@ impl EdmdMcpHandler {
             .map(|r| MeterInterval {
                 from: r.dtm_from,
                 to: r.dtm_to,
-                value_kwh: r.quantity_kwh,
+                value: r.quantity_kwh,
                 quality: r.quality,
                 obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
             })
             .collect();
         let prior = (!prior_intervals.is_empty()).then_some(prior_intervals.as_slice());
 
-        match metering::project_annual_consumption(&p.malo_id, &intervals, prior) {
+        match metering::project_annual_consumption(&intervals, prior) {
             Some(forecast) => serde_json::to_string_pretty(&serde_json::json!({
-                "malo_id": forecast.malo_id,
+                // The caller's MaLo, not the forecast's: a projection is
+                // arithmetic over a series and does not know whose it is.
+                "malo_id": p.malo_id,
                 "observation_from": forecast.observation_from,
                 "observation_to": forecast.observation_to,
-                "observed_kwh": forecast.observed_kwh.to_string(),
+                "observed_kwh": forecast.observed.to_string(),
                 "observed_days": forecast.observed_days,
-                "projected_annual_kwh": forecast.projected_annual_kwh.to_string(),
+                "target_year_days": forecast.target_year_days,
+                "projected_annual_kwh": forecast.projected_annual.to_string(),
                 "seasonal_correction_applied": forecast.seasonal_correction_applied,
-                "method": format!("{:?}", forecast.method),
+                "seasonal_factor": forecast.seasonal_factor.to_string(),
+                // A projection an agent cannot judge the spread of is one it
+                // should not bill on; metering 0.17 supplies the interval.
+                "confidence_lower_kwh": forecast.confidence_lower.map(|d| d.to_string()),
+                "confidence_upper_kwh": forecast.confidence_upper.map(|d| d.to_string()),
+                "prediction_interval_note": metering::AnnualForecast::prediction_interval_note(),
                 "legal_basis": "§ 60 Abs. 2 MsbG Jahresprognose",
             }))
             .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))

@@ -94,7 +94,7 @@ fn validate_and_annotate(batch: &mut [MeterRead], source: &str, malo_id: &str) -
         .map(|r| metering::MeterInterval {
             from: r.dtm_from,
             to: r.dtm_to,
-            value_kwh: r.quantity_kwh,
+            value: r.quantity_kwh,
             // The read's actual quality flag — hardcoding `Measured` here made
             // V09 (non-billable quality) unfireable on every ingest path: a
             // batch arriving as FAULTY/UNKNOWN validated as if it were clean.

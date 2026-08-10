@@ -106,14 +106,11 @@ pub struct QualityReport {
     pub grade: &'static str,
 }
 
-/// Compute quality metrics for a set of accepted intervals.
+/// Compute quality metrics for a set of accepted intervals over a window.
 ///
-/// Compute quality metrics using `metering::score_intervals_f64`.
-///
-/// This is the fast path: converts `DirectInterval` values to `f64` and
-/// timestamps to nanoseconds, then calls the SIMD-friendly scoring function
-/// that auto-vectorises the hot loops to AVX2/NEON without platform-specific
-/// intrinsics or external TSDB dependencies.
+/// `metering::score_intervals` over typed `MeterInterval`s, with the window
+/// passed via `over_period` so `coverage_pct` measures coverage of what the
+/// caller asked about rather than of whatever data happened to arrive.
 /// Persist a quality verdict to `quality_assessments`.
 ///
 /// Every scoring path records one, so the table is a history of how a MaLo's
@@ -194,57 +191,62 @@ pub(crate) fn compute_quality(
     period_end: OffsetDateTime,
 ) -> QualityReport {
     use metering::QualityConfig;
-    use rust_decimal::prelude::ToPrimitive;
+    use metering::validation::ValidationRuleId;
 
     let mut sorted: Vec<&DirectInterval> = accepted.to_vec();
     sorted.sort_by_key(|iv| iv.from);
 
-    // Convert to f64 values + nanosecond timestamps in one pass.
-    // to_f64() is lossless for kWh values ≤ 10^13 (53-bit mantissa).
-    let values: Vec<f64> = sorted
+    // Typed intervals, not parallel `f64` + nanosecond arrays.
+    //
+    // `metering` 0.17 replaced `score_intervals_f64` with `score_intervals`,
+    // which takes `MeterInterval`s. That deleted a whole class of bookkeeping
+    // here: the old call had to flatten values to `f64` (lossless only up to
+    // 2^53), pass timestamps as raw `i64` nanoseconds, and then map the
+    // report's synthetic `"t+<nanos>"` strings back onto real instants,
+    // because a function taking bare numbers has no calendar to format
+    // against. The findings now carry `affected_from` directly.
+    let samples: Vec<metering::MeterInterval> = sorted
         .iter()
-        .map(|iv| iv.value.to_f64().unwrap_or(0.0))
-        .collect();
-    let timestamps_ns: Vec<i64> = sorted
-        .iter()
-        .map(|iv| iv.from.unix_timestamp_nanos() as i64)
+        .map(|iv| metering::MeterInterval {
+            from: iv.from,
+            to: iv.to,
+            value: iv.value,
+            // `DirectInterval.quality` is the wire representation
+            // (`Option<String>`); the scorer wants the parsed flag. An
+            // unrecognised or absent value is `Measured`, which is what the
+            // caller asserted by sending it as a reading.
+            quality: iv
+                .quality
+                .as_deref()
+                .and_then(|q| q.parse().ok())
+                .unwrap_or(metering::QualityFlag::Measured),
+            obis_code: None,
+        })
         .collect();
 
-    let period_start_ns = period_start.unix_timestamp_nanos() as i64;
-    let period_end_ns = period_end.unix_timestamp_nanos() as i64;
-
-    let report = metering::score_intervals_f64(
-        &values,
-        &timestamps_ns,
-        period_start_ns,
-        period_end_ns,
-        QualityConfig::default(),
+    // `over_period` is what makes `coverage_pct` mean coverage of the window
+    // the caller asked about. Without it the crate measures against the extent
+    // of the data itself — its own docs: "a truncated delivery reads as 100 %".
+    // The first migration to 0.17 dropped this and graded half-empty windows
+    // as fully covered.
+    let report = metering::score_intervals(
+        &samples,
+        &QualityConfig::default().over_period(period_start, period_end),
     );
 
-    // score_intervals_f64 returns "t+<nanos>" timestamp strings for portability.
-    // Map them back to the actual RFC3339 from-timestamps for API compatibility.
-    let ns_to_from_str = |ns_str: &str| -> String {
-        let ns: i64 = ns_str
-            .strip_prefix("t+")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        sorted
+    // The report counts anomalies; the API also names when they happened. Both
+    // come from `issues`, filtered by the rule that raised them.
+    let at = |rule: ValidationRuleId| -> Vec<String> {
+        report
+            .issues
             .iter()
-            .find(|iv| iv.from.unix_timestamp_nanos() as i64 == ns)
-            .map(|iv| iv.from.to_string())
-            .unwrap_or_else(|| ns_str.to_owned())
+            .filter(|i| i.rule_id == rule)
+            .filter_map(|i| i.affected_from)
+            .map(|t| t.to_string())
+            .collect()
     };
-
-    let outlier_intervals: Vec<String> = report
-        .outlier_intervals
-        .iter()
-        .map(|s| ns_to_from_str(s))
-        .collect();
-    let spike_intervals: Vec<String> = report
-        .spike_intervals
-        .iter()
-        .map(|s| ns_to_from_str(s))
-        .collect();
+    let outlier_intervals = at(ValidationRuleId::StatisticalOutlier);
+    let spike_intervals = at(ValidationRuleId::ImplausiblePower);
 
     let total_anomalies = outlier_intervals.len() + spike_intervals.len();
     QualityReport {
@@ -255,7 +257,7 @@ pub(crate) fn compute_quality(
         outlier_intervals,
         spike_intervals,
         intervals_consistent: report.intervals_consistent,
-        has_warnings: report.has_warnings,
+        has_warnings: report.has_warnings(),
         coverage_pct: report.coverage_pct,
         grade: report.grade.as_str(),
     }
@@ -477,6 +479,34 @@ mod quality_tests {
         }
     }
 
+    /// Coverage is measured against the *requested* window, not the data's own
+    /// span.
+    ///
+    /// Pins the regression the metering-0.17 migration introduced: the period
+    /// bounds were dropped from the scoring call, and the crate then measures
+    /// coverage against the extent of the data itself — its docs say it
+    /// plainly, "a truncated delivery reads as 100 %". Half a window of data
+    /// graded as fully covered, A-grade, billable.
+    #[test]
+    fn coverage_is_against_the_requested_window() {
+        let base = datetime!(2026-07-01 00:00:00 UTC);
+        // 24 quarter-hours delivered of a 48-quarter-hour window.
+        let intervals: Vec<DirectInterval> = (0..24)
+            .map(|i| make_interval(base + time::Duration::minutes(15 * i), "2.0"))
+            .collect();
+        let refs: Vec<&DirectInterval> = intervals.iter().collect();
+        let report = compute_quality(&refs, base, base + time::Duration::hours(12));
+        assert!(
+            report.coverage_pct < 60.0,
+            "half-empty window must not read as covered: {}",
+            report.coverage_pct,
+        );
+        assert_ne!(
+            report.grade, "A",
+            "a half-delivered window is not clean data"
+        );
+    }
+
     /// Hampel filter must flag an obvious spike surrounded by stable neighbours.
     #[test]
     fn hampel_filter_flags_spike() {
@@ -541,12 +571,24 @@ mod quality_tests {
         assert!(report.has_warnings);
     }
 
-    /// Spike detection: value > 10× window median is flagged separately from Hampel.
+    /// A spike in a series long enough to assess is flagged.
+    ///
+    /// **Long enough is a real constraint.** The Hampel filter runs a window of
+    /// `outlier_window` (12) either side of each point, and `metering` 0.17
+    /// refuses to run it at all on a series of `2 × window` or fewer — with
+    /// twelve neighbours to draw on and ten points to draw from, every point is
+    /// its own median and nothing can deviate from it. This test used ten
+    /// intervals and passed under 0.16, which scored short series anyway; the
+    /// upgrade turned it red, and the crate is right. Detection on a ten-point
+    /// series was a claim the statistics could not support.
+    ///
+    /// So the series is 30 intervals — a length a quarter-hour profile reaches
+    /// in under eight hours, and below which edmd now reports no outliers.
     #[test]
     fn quality_spike_detection() {
         let base = datetime!(2026-07-01 00:00:00 UTC);
-        // 10 stable intervals at 2.0 kWh, then one spike at 200.0 (100× median)
-        let mut intervals: Vec<DirectInterval> = (0..10)
+        // 30 stable intervals at 2.0 kWh, one spike at 200.0 (100× the median).
+        let mut intervals: Vec<DirectInterval> = (0..30)
             .map(|i| make_interval(base + time::Duration::minutes(15 * i), "2.0"))
             .collect();
         intervals[5] = {
@@ -555,7 +597,7 @@ mod quality_tests {
             iv
         };
         let refs: Vec<&DirectInterval> = intervals.iter().collect();
-        let period_end = base + time::Duration::minutes(15 * 10);
+        let period_end = base + time::Duration::minutes(15 * 30);
         let report = compute_quality(&refs, base, period_end);
         // Either Hampel or spike detection should flag position 5
         let flagged_ts = intervals[5].from.to_string();

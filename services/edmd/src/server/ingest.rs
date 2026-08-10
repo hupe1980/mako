@@ -670,17 +670,56 @@ mod ingest_contract_tests {
         );
     }
 
-    /// The same local day delivered as 96 intervals means the repeated hour was
-    /// collapsed — an hour of energy is gone, and nothing else notices.
+    /// A day that omits the *repeated hour itself* — an hour of energy is gone,
+    /// and the surviving intervals are ambiguous between the two passes.
+    ///
+    /// The fixture drops the four quarter-hours covering 01:00–02:00 UTC, which
+    /// is the second pass of local 02:00–03:00. That is what a collapsed
+    /// fall-back day looks like on the wire.
+    ///
+    /// It used to be "any 96-interval day", which passed under `metering` 0.16
+    /// because V07 counted a day's intervals. 0.17 looks at the two-hour window
+    /// around the transition instead, and its own docs say why: an interval
+    /// count "cannot tell a collapsed hour from an ordinary gap", so *any* two
+    /// missing quarter-hours anywhere on the day produced a confident report
+    /// that the repeated hour had been collapsed — "which was simply untrue and
+    /// sent the reader looking in the wrong place". The old fixture was one of
+    /// those false positives: 96 contiguous quarter-hours from 22:00 UTC do
+    /// cover the repeated hour and simply stop an hour early.
     #[test]
     fn a_collapsed_fall_back_day_raises_v07_through_edmds_own_wrapper() {
         let start = datetime!(2026-10-24 22:00:00 UTC);
-        let batch = quarter_hours(start, 96);
+        let repeated_from = datetime!(2026-10-25 01:00:00 UTC);
+        let repeated_to = datetime!(2026-10-25 02:00:00 UTC);
+        let batch: Vec<MeterRead> = quarter_hours(start, 100)
+            .into_iter()
+            .filter(|r| r.dtm_from < repeated_from || r.dtm_from >= repeated_to)
+            .collect();
+        assert_eq!(
+            batch.len(),
+            96,
+            "the repeated hour is the part that is gone"
+        );
         assert!(
             raised_v07(batch),
-            "a fall-back day carrying only 24 hours lost the repeated hour; V07 \
-             must fire, otherwise the series bills an hour short and no other \
-             rule can tell"
+            "a fall-back day missing the repeated hour bills an hour short, and \
+             no other rule can tell — V07 must fire"
+        );
+    }
+
+    /// A day that is merely *short* is not reported as a collapsed hour.
+    ///
+    /// The distinction 0.17 introduced, pinned from mako's side: a truncated
+    /// read is a truncated read. Reporting it as "the repeated hour was
+    /// collapsed" names a cause that did not happen.
+    #[test]
+    fn a_fall_back_day_that_is_merely_truncated_is_not_reported_as_collapsed() {
+        let start = datetime!(2026-10-24 22:00:00 UTC);
+        // 96 contiguous quarter-hours: the repeated hour is present, the day
+        // just stops an hour before the local day ends.
+        assert!(
+            !raised_v07(quarter_hours(start, 96)),
+            "a complete-but-short series is not an ambiguous one"
         );
     }
 

@@ -157,6 +157,33 @@ fn the_known_edifact_layouts_are_exact() {
 /// reads the wrong component while the validator still accepts the segment, or
 /// the validator rejects a segment the parser would have read correctly. This
 /// closes the triangle.
+///
+/// # Why the `cfg`
+///
+/// `messages::layouts` is itself gated on "at least one message type", so with
+/// `--no-default-features` this test referenced a module that does not exist and
+/// the whole test binary failed to compile — which `just test-features` runs and
+/// nothing else does. The list must stay identical to the one on `pub mod
+/// layouts` in `src/messages/mod.rs`.
+#[cfg(any(
+    feature = "utilmd",
+    feature = "mscons",
+    feature = "aperak",
+    feature = "contrl",
+    feature = "invoic",
+    feature = "remadv",
+    feature = "orders",
+    feature = "iftsta",
+    feature = "insrpt",
+    feature = "reqote",
+    feature = "partin",
+    feature = "ordchg",
+    feature = "ordrsp",
+    feature = "quotes",
+    feature = "comdis",
+    feature = "pricat",
+    feature = "utilts",
+))]
 #[test]
 fn the_hand_authored_layouts_agree_with_the_generated_tables() {
     use edi_energy::messages::layouts;

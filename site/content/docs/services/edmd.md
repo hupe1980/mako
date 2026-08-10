@@ -27,6 +27,16 @@ Key responsibilities:
 
 The **domain calculation logic** is provided by the external [`metering`](https://github.com/hupe1980/metering) library crate (zero I/O, no async):
 
+> **`metering` 0.17 narrowed its scope**, and that moved a boundary. The crate
+> now states it computes *"energy and volume, not money"* with *"zero I/O, no
+> async, no clock"* — so the BSI TR-03109 **SMGW domain model** (gateway status,
+> certificate inventory, CLS channels) left it. Those are device administration,
+> not quantity calculations: they change without a single metered value
+> changing. They live in `edmd::smgw_model` now, next to the `smgw_sessions`
+> table and the two compliance sweeps that read them. The serde representation
+> is unchanged, so rows already stored deserialise untouched.
+
+
 | Function / Type | §-basis | Used in |
 |---|---|---|
 | `gas_m3_to_kwh_hs(m3, hs, z)` | §25 Nr. 4 MessEV / DVGW G 685 | Gas direct push |
@@ -59,7 +69,7 @@ graph TB
     erp["ERP / netzbilanzd<br/>mabis-syncd"]
     duckdb["DuckDB / Spark<br/>Trino / PyIceberg"]
     catalog["/api/v1/iceberg<br/>meterstore CatalogFacade<br/>(read-only · Cedar read-archive-olap)"]
-    qa["quality engine<br/>Hampel score_intervals_f64 (AVX2/NEON)<br/>+ V01–V10 validate_intervals"]
+    qa["quality engine<br/>Hampel score_intervals<br/>+ V01–V10 validate_intervals"]
 
     marktd -->|"de.mako.process.initiated (23001 INSRPT)<br/>HMAC POST /webhook"| edmd
     smgw -->|"POST /api/v1/meter-reads/rlm/{malo_id}<br/>POST /api/v1/meter-reads/gas/{malo_id}"| edmd
@@ -927,8 +937,12 @@ was removed with the embedded-Iceberg storage layer it depended on).
 
 ## Hampel-filter quality scoring
 
-`edmd` runs the **Hampel filter** (window k=3, threshold t=3.0, MAD × 1.4826 robust σ)
-on every inbound interval batch via `metering::score_intervals_f64`.
+`edmd` runs the **Hampel filter** (window 12 either side, 6 robust σ,
+MAD × 1.4826) on every inbound interval batch via `metering::score_intervals`
+over typed `MeterInterval`s. Two constraints are load-bearing: outlier
+detection refuses series of ≤ 2 × window intervals (too short to support the
+statistic), and coverage is measured against the window passed via
+`over_period` — without it a truncated delivery reads as 100 %.
 
 Thresholds are **media-aware** — `QualityConfig::for_sparte`. The k=3/t=3.0
 defaults suit 15-minute RLM electricity profiles, which are noisy and rarely flat.

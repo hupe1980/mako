@@ -90,18 +90,25 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
     let release = opts.release.unwrap_or_else(|| infer_release(&opts.file));
     let msg_type = opts.message_type.to_uppercase();
 
-    // Write inside crates/edi-energy/profiles/<type>/<release>/
-    let out_dir = PathBuf::from(workspace_root)
+    // Write **beside the curated profile** the draft is meant to be compared
+    // against: `crates/edi-energy/profiles/<type>/<folder>/`.
+    //
+    // The folder name is not the release string. Profiles use the compact form
+    // (`FV2026-10-01` → `fv20261001`), and Strom/Gas share a release while
+    // living in different folders (`fv20261001` / `fv20261001_gas`). Joining the
+    // raw release created a *new, empty* directory instead: the draft landed
+    // with no `ahb.json` beside it, so `validate-extraction` skipped it and
+    // reported "no ahb.draft.json found", and `mig_segment_tags` read a
+    // non-existent `mig.json` — degrading extraction quality at the same time.
+    let type_dir = PathBuf::from(workspace_root)
         .join("crates")
         .join("edi-energy")
         .join("profiles")
-        .join(msg_type.to_lowercase())
-        .join(&release);
-
-    if let Err(e) = std::fs::create_dir_all(&out_dir) {
-        eprintln!("error: cannot create output dir {}: {e}", out_dir.display());
-        return false;
-    }
+        .join(msg_type.to_lowercase());
+    let out_dir = match resolve_profile_dir(&type_dir, &release, opts.profile_dir.as_deref()) {
+        Some(d) => d,
+        None => return false,
+    };
 
     // The in-file release value uses a "DRAFT-" prefix to make clear that this
     // JSON has not been reviewed/promoted to a production profile.  The directory
@@ -555,11 +562,12 @@ const ENVELOPE_SEGMENTS: &[&str] = &["UNH", "UNT", "UNS", "UNB", "UNZ"];
 /// Known limitation: a conditional `Muss [n]` (e.g. ORDERS 17102/17301 `IMD`,
 /// "Wenn BGM+7 vorhanden") is reported as `M`. The XML encodes those as `C`
 /// with a `conditional_rules` entry; the tag-level model cannot express it.
-fn parse_ahb_requirements(text: &str) -> HashMap<String, HashMap<String, String>> {
+fn parse_ahb_requirements(text: &str) -> AhbRequirements {
     // NB: split on '\n' only — pdftotext emits form feeds at page breaks and
     // `str::lines()` would also split on those, shifting every subsequent row.
     let lines: Vec<&str> = text.split('\n').collect();
     let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut grouped: HashMap<String, Vec<(String, String, String)>> = HashMap::new();
 
     let mut group_req: HashMap<String, HashMap<String, Mark>> = HashMap::new();
     let mut last_pid_set: Vec<String> = Vec::new();
@@ -617,11 +625,54 @@ fn parse_ahb_requirements(text: &str) -> HashMap<String, HashMap<String, String>
                             .and_then(|g| group_req.get(g))
                             .and_then(|m| m.get(pid))
                             .is_some_and(|g| g.requirement == "O" && !g.conditioned);
+                        // A conditional `Muss [n]` is reported as `M`.
+                        //
+                        // Demoting it to `C` was tried and reverted. Measured on
+                        // UTILMD Strom S2.2 it removed only 27 of 443 excess
+                        // marks (−6 %) and cost both exact-matching PIDs
+                        // (exact 2 → 0, subset 0 → 3): it overshoots on segments
+                        // the AHB does require, and it does not touch the bulk.
+                        // `STS` — 20 % of the excess on its own — was unchanged,
+                        // because its condition markers are column-positioned on
+                        // a neighbouring line rather than inline in the mark, so
+                        // `Mark::conditioned` never sees them.
+                        //
+                        // The `[n]` markers therefore explain far less of the
+                        // over-marking than their raw count suggests. See the
+                        // AHB coverage item in `concepts/ROADMAP.md`.
                         let effective = if plain_optional {
                             "O".to_owned()
                         } else {
                             mark.requirement
                         };
+                        // Record the group scoping *in addition to* the flat
+                        // mark — `group_rules` is the `(group, tag)` view that
+                        // `segment_rules` has no dimension for, and which
+                        // reviewers otherwise re-derive from the PDF by hand.
+                        //
+                        // Purely additive. The flat mark keeps the existing
+                        // rule (strongest wins, with the plain-optional-group
+                        // downgrade above), because that is what the
+                        // `a_conditioned_kann_group_does_not_downgrade_its_segments`
+                        // and `drifting_marks_still_pair_with_their_columns`
+                        // tests pin: a `Muss` under a conditioned `Kann [n]`
+                        // group really is required, and dropping it from the
+                        // flat list would lose it.
+                        //
+                        // Two flattens were tried and reverted, both measured on
+                        // UTILMD Strom S2.2: weakest-wins cut the excess 443 →
+                        // 305 but moved 21 PIDs to `differs` (dropping segments
+                        // the AHB requires), and forcing grouped tags to `O`
+                        // left the excess at 443 — it relocates marks without
+                        // correcting them. The over-marking is in the marks
+                        // themselves, not in which list holds them.
+                        if let Some(g) = group {
+                            grouped.entry(pid.clone()).or_default().push((
+                                g.clone(),
+                                tag.clone(),
+                                effective.clone(),
+                            ));
+                        }
                         let entry = out.entry(pid.clone()).or_default();
                         if entry.get(tag).map(String::as_str) != Some("M") {
                             entry.insert(tag.clone(), effective);
@@ -634,7 +685,16 @@ fn parse_ahb_requirements(text: &str) -> HashMap<String, HashMap<String, String>
         }
         i = j;
     }
-    out
+    AhbRequirements { flat: out, grouped }
+}
+
+/// Segment marks read from an AHB table, at both levels the profile records.
+///
+/// `flat` is the message-level `segment_rules` view; `grouped` is the
+/// `(group, tag)` view that `group_rules` needs and that a flat map cannot hold.
+struct AhbRequirements {
+    flat: HashMap<String, HashMap<String, String>>,
+    grouped: HashMap<String, Vec<(String, String, String)>>,
 }
 
 /// What a table row asserts.
@@ -869,6 +929,52 @@ struct Mark {
 ///
 /// Returns an empty set when `mig_path` is absent or unreadable — completion is
 /// then skipped and the draft carries only the AHB's own marks.
+/// The curated-profile directory a draft belongs beside.
+///
+/// `explicit` wins when given — necessary because a release string alone cannot
+/// choose between the Strom and Gas folders that share it.
+///
+/// Refuses rather than creating a directory: an unpaired draft is invisible to
+/// `validate-extraction` and silently extracts without its `mig.json`, which is
+/// exactly the failure this function exists to prevent.
+fn resolve_profile_dir(
+    type_dir: &std::path::Path,
+    release: &str,
+    explicit: Option<&str>,
+) -> Option<PathBuf> {
+    let candidate = explicit
+        .map(str::to_owned)
+        .unwrap_or_else(|| release.to_lowercase().replace('-', ""));
+    let dir = type_dir.join(&candidate);
+    if dir.is_dir() {
+        return Some(dir);
+    }
+    let mut existing: Vec<String> = std::fs::read_dir(type_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    existing.sort();
+    eprintln!(
+        "error: no curated profile directory `{}` under {}.\n\
+         A draft must be written beside the `ahb.json` it will be compared against —\n\
+         `validate-extraction` pairs them by directory, and extraction reads the\n\
+         neighbouring `mig.json` for the segments the AHB table omits.\n\
+         Existing directories: {}\n\
+         Pass --profile-dir <name> to choose one (Strom and Gas share a release).",
+        candidate,
+        type_dir.display(),
+        if existing.is_empty() {
+            "<none>".to_owned()
+        } else {
+            existing.join(", ")
+        },
+    );
+    None
+}
+
 fn mig_segment_tags(mig_path: &std::path::Path) -> BTreeSet<String> {
     fn walk(groups: &[Value], out: &mut BTreeSet<String>) {
         for g in groups {
@@ -906,7 +1012,10 @@ fn mig_segment_tags(mig_path: &std::path::Path) -> BTreeSet<String> {
 }
 
 fn extract_ahb(text: &str, msg_type: &str, release: &str, mig_tags: &BTreeSet<String>) -> Value {
-    let parsed = parse_ahb_requirements(text);
+    let AhbRequirements {
+        flat: parsed,
+        grouped,
+    } = parse_ahb_requirements(text);
     let mut codes: Vec<&String> = parsed.keys().collect();
     codes.sort();
 
@@ -932,11 +1041,30 @@ fn extract_ahb(text: &str, msg_type: &str, release: &str, mig_tags: &BTreeSet<St
                 }
             }
             rules.sort_by(|a, b| a["tag"].as_str().cmp(&b["tag"].as_str()));
+
+            // The (group, tag) view the flat `segment_rules` cannot hold. It is
+            // where a grouped segment's real requirement lives — see the merge
+            // in `parse_ahb_requirements`. Qualifier restrictions and
+            // `conditional_rules` still need a human; the group scoping does not.
+            let mut group_rules: Vec<Value> = grouped
+                .get(pid.as_str())
+                .into_iter()
+                .flatten()
+                .map(|(group_id, tag, req)| {
+                    json!({ "group_id": group_id, "tag": tag, "requirement": req })
+                })
+                .collect();
+            group_rules.sort_by(|a, b| {
+                (a["group_id"].as_str(), a["tag"].as_str())
+                    .cmp(&(b["group_id"].as_str(), b["tag"].as_str()))
+            });
+            group_rules.dedup_by(|a, b| a == b);
+
             json!({
                 "code": pid.parse::<u32>().unwrap_or(0),
                 "name": "",
                 "segment_rules": rules,
-                "group_rules": [],
+                "group_rules": group_rules,
             })
         })
         .collect();
@@ -997,6 +1125,12 @@ struct ExtractPdfOpts {
     file: String,
     message_type: String,
     release: Option<String>,
+    /// Curated-profile directory to write the draft beside (e.g. `fv20261001_gas`).
+    ///
+    /// Defaults to the release in profile-folder form (`FV2026-10-01` →
+    /// `fv20261001`). Required when Strom and Gas share a release, since the
+    /// string alone cannot pick between `fv20261001` and `fv20261001_gas`.
+    profile_dir: Option<String>,
     /// Minimum number of MIG segment entries required; `0` disables the check.
     min_segments: usize,
     /// Minimum number of AHB Prüfidentifikatoren required; `0` disables the check.
@@ -1014,6 +1148,7 @@ fn parse_args(args: &[String]) -> Result<ExtractPdfOpts, String> {
     let mut file = None;
     let mut message_type = None;
     let mut release = None;
+    let mut profile_dir: Option<String> = None;
     let mut min_segments: usize = 0;
     let mut min_pids: usize = 0;
     let mut compare_dir: Option<String> = None;
@@ -1036,6 +1171,14 @@ fn parse_args(args: &[String]) -> Result<ExtractPdfOpts, String> {
             "--release" | "-r" => {
                 i += 1;
                 release = Some(args.get(i).cloned().ok_or("missing value for --release")?);
+            }
+            "--profile-dir" => {
+                i += 1;
+                profile_dir = Some(
+                    args.get(i)
+                        .cloned()
+                        .ok_or("missing value for --profile-dir")?,
+                );
             }
             "--min-segments" => {
                 i += 1;
@@ -1079,6 +1222,7 @@ fn parse_args(args: &[String]) -> Result<ExtractPdfOpts, String> {
         file: file.ok_or("--file is required")?,
         message_type: message_type.ok_or("--message-type is required")?,
         release,
+        profile_dir,
         min_segments,
         min_pids,
         compare_dir,
@@ -1093,6 +1237,9 @@ Arguments:
   --file           <PATH>    Path to the MIG/AHB PDF file
   --message-type   <TYPE>    Message type (e.g. utilmd, mscons, aperak, contrl)
   --release        <REL>     EDI@Energy release (inferred from file path if omitted)
+  --profile-dir    <NAME>    Curated profile dir to write the draft beside
+                             (default: release in folder form, FV2026-10-01 -> fv20261001).
+                             Required when Strom and Gas share a release.
   --min-segments   <N>       Fail if MIG extraction yields fewer than N segment entries (default: 0 = disabled)
   --min-pids       <N>       Fail if AHB extraction yields fewer than N Prüfidentifikatoren (default: 0 = disabled)
   --compare-dir    <DIR>     Path to a prior-release profile dir containing mig.json / ahb.json.
@@ -1311,7 +1458,7 @@ mod ahb_parser_tests {
 
     #[test]
     fn reads_requirements_per_pid_column() {
-        let got = parse_ahb_requirements(TABLE);
+        let got = parse_ahb_requirements(TABLE).flat;
         let a = &got["17007"];
         let b = &got["17008"];
 
@@ -1342,7 +1489,7 @@ mod ahb_parser_tests {
     /// table. With the old rule the parser disagreed with its own profiles.
     #[test]
     fn a_muss_segment_inside_a_kann_group_is_optional() {
-        let got = parse_ahb_requirements(TABLE);
+        let got = parse_ahb_requirements(TABLE).flat;
         assert_eq!(got["17007"]["LIN"], "O");
     }
 
@@ -1368,7 +1515,7 @@ mod ahb_parser_tests {
             "        LOC           00011                                     Muss
 ",
         );
-        let got = parse_ahb_requirements(narrow);
+        let got = parse_ahb_requirements(narrow).flat;
 
         assert_eq!(got["55016"]["BGM"], "M");
         assert_eq!(got["55017"]["BGM"], "M");
@@ -1402,7 +1549,7 @@ mod ahb_parser_tests {
             "        DTM           00005                                            [931] Format Muss ZZZ
 ",
         );
-        let got = parse_ahb_requirements(with_notes);
+        let got = parse_ahb_requirements(with_notes).flat;
         assert_eq!(got["55018"]["BGM"], "M");
         assert!(
             !got["55018"].contains_key("DTM"),
@@ -1426,7 +1573,7 @@ mod ahb_parser_tests {
             "        BGM      00004       Muss      Muss      Muss
 ",
         );
-        let got = parse_ahb_requirements(table);
+        let got = parse_ahb_requirements(table).flat;
         for pid in ["44016", "44017", "44018"] {
             assert_eq!(got[pid]["BGM"], "M", "PID {pid} lost its BGM mark");
         }
@@ -1449,7 +1596,7 @@ mod ahb_parser_tests {
             "
 ",
         );
-        let got = parse_ahb_requirements(table);
+        let got = parse_ahb_requirements(table).flat;
         for pid in ["44051", "44052", "44053", "44183"] {
             assert_eq!(got[pid]["LOC"], "M", "PID {pid} lost its LOC mark");
         }
@@ -1470,7 +1617,7 @@ mod ahb_parser_tests {
             " SG29 LIN         00052            Muss        Muss        Muss
 ",
         );
-        let got = parse_ahb_requirements(conditioned);
+        let got = parse_ahb_requirements(conditioned).flat;
         assert_eq!(
             got["17115"]["LIN"], "M",
             "a conditioned Kann is not plain-optional"
@@ -1480,7 +1627,7 @@ mod ahb_parser_tests {
             "Kann [2092] Kann [2092] Kann [2092]",
             "Kann        Kann        Kann       ",
         );
-        let got = parse_ahb_requirements(&plain);
+        let got = parse_ahb_requirements(&plain).flat;
         assert_eq!(
             got["17115"]["LIN"], "O",
             "a plain Kann group downgrades its segments"
@@ -1564,7 +1711,7 @@ mod ahb_parser_tests {
             " SG3 CTA          00009             Muss        Muss
 ",
         );
-        let got = parse_ahb_requirements(paged);
+        let got = parse_ahb_requirements(paged).flat;
         assert_eq!(
             got["55001"]["CTA"], "O",
             "the SG3 Kann declared on the previous page must still apply"
@@ -1581,7 +1728,7 @@ mod ahb_parser_tests {
             " SG3 CTA          00009             Muss        Muss
 ",
         );
-        let got = parse_ahb_requirements(switched);
+        let got = parse_ahb_requirements(switched).flat;
         assert_eq!(
             got["55010"]["CTA"], "M",
             "a new Prüfidentifikator set starts with no group state"
@@ -1592,9 +1739,11 @@ mod ahb_parser_tests {
     fn form_feeds_do_not_shift_rows() {
         // pdftotext emits \x0c at page breaks; splitting on it would drop rows.
         let paged = TABLE.replace(" Positionsdaten\n", " Positionsdaten\n\x0c");
-        assert_eq!(
+        let (a, b) = (
             parse_ahb_requirements(&paged),
-            parse_ahb_requirements(TABLE)
+            parse_ahb_requirements(TABLE),
         );
+        assert_eq!(a.flat, b.flat);
+        assert_eq!(a.grouped, b.grouped);
     }
 }

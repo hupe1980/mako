@@ -47,6 +47,39 @@ fn parse_contact(contact: &str) -> (Option<String>, Option<String>) {
     (phone, email)
 }
 
+/// BT-34, the seller's own electronic address — but only if it is really a GLN.
+///
+/// A BDEW-Codenummer is issued through GS1 and *is* a GLN, so declaring the
+/// operator's MP-ID under EAS `0088` is true for a correctly configured tenant.
+/// It is false for a mistyped one, and `Identifier::eas` cannot tell the
+/// difference: it validates the *scheme* code and accepts any content. That is
+/// the same defect this crate already fixed on the buyer side — a MaLo-ID
+/// dressed up as a GLN — and it was still here on the seller side, unnoticed,
+/// because nothing checks a claim no rule can test.
+///
+/// `eas_checked` verifies the GS1 check digit and length. On failure the term is
+/// **omitted**: BT-34 is optional in EN 16931 core, so a retail invoice stays
+/// valid, and omitting is the honest encoding of "we do not have one". A
+/// misconfigured operator therefore ships documents without BT-34 rather than
+/// documents asserting a GLN that no receiver can resolve — and finds out at the
+/// B2G path, where XRechnung requires the term and `render_xrechnung_cii`
+/// refuses to write a rejectable file.
+fn seller_electronic_address(tenant: &str) -> Option<Identifier> {
+    match Identifier::eas_checked(tenant, "0088") {
+        Ok(id) => Some(id),
+        Err(e) => {
+            tracing::warn!(
+                tenant,
+                error = %e,
+                "seller MP-ID is not a valid GS1 GLN — BT-34 omitted rather than \
+                 claiming a GLN this identifier is not. Check the `tenant` setting \
+                 against the operator's BDEW-Codenummer",
+            );
+            None
+        }
+    }
+}
+
 /// BG-4 SELLER, from the operator's `[seller]` configuration. Fills BG-6 contact
 /// and the split BG-5 address so the seller side satisfies XRechnung's BR-DE-2..7.
 fn seller_party(cfg: &BillingdConfig) -> Party {
@@ -65,10 +98,11 @@ fn seller_party(cfg: &BillingdConfig) -> Party {
     Party {
         name: Some(name.clone()),
         vat_identifier: cfg.seller_vat_id.clone(),
-        // BT-49 electronic address: the LF's MP-ID under EAS 0088 (GLN — a
-        // BDEW MP-ID is GLN-format). A strict-XRechnung buyer Leitweg-ID (BT-10)
-        // is set per document where a B2G recipient supplies one.
-        electronic_address: Identifier::eas(cfg.tenant.clone(), "0088").ok(),
+        // BT-34 electronic address: the LF's own MP-ID under EAS 0088 (GLN).
+        // A BDEW-Codenummer *is* a GLN — BDEW issues them through GS1 — so the
+        // claim is true for a correctly configured operator, and `eas_checked`
+        // is what makes "correctly configured" checkable rather than assumed.
+        electronic_address: seller_electronic_address(&cfg.tenant),
         address: PostalAddress {
             line1,
             city,
@@ -102,6 +136,11 @@ fn seller_party(cfg: &BillingdConfig) -> Party {
 /// syntactically valid — `Identifier::eas` only checks that the *scheme code*
 /// exists, and BR-CL-25 only checks the same — but semantically wrong, and
 /// unresolvable for any receiver that takes it at face value.
+///
+/// `Identifier::eas_checked` now catches exactly this, and
+/// [`seller_electronic_address`] uses it on the seller side where the same
+/// mistake had survived. It refuses an 11-digit value for scheme `0088` with
+/// the reason: *"a GS1 GLN is exactly 13 digits, and this is 11"*.
 ///
 /// Omitting it is the honest encoding, and it is not a data gap that master data
 /// closes: a household has no Peppol endpoint (BT-49) and no Leitweg-ID (BT-10).
@@ -174,7 +213,7 @@ fn report_conformance(model: &en16931::Invoice, invoice_number: &str) {
 }
 
 /// PEPPOL BIS Billing 3.0 business process (BT-23), required by XRechnung/Peppol.
-const BUSINESS_PROCESS: &str = "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0";
+pub const BUSINESS_PROCESS: &str = "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0";
 
 /// Build the EN 16931 semantic model for a freshly-billed invoice.
 ///
@@ -348,7 +387,10 @@ pub fn apply_b2g_buyer(mut model: en16931::Invoice, buyer: &B2gBuyer) -> en16931
         name: Some(buyer.name.clone()),
         vat_identifier: buyer.vat_id.clone(),
         // BT-49 under EAS 0204 (German Leitweg-ID); omitted if not supplied.
-        electronic_address: eas.and_then(|a| Identifier::eas(a, "0204").ok()),
+        // `eas_checked` rather than `eas`: 0204 has no published shape check
+        // today, so the two behave identically — but the day the crate learns
+        // one, this call picks it up instead of continuing to accept anything.
+        electronic_address: eas.and_then(|a| Identifier::eas_checked(a, "0204").ok()),
         address: PostalAddress {
             line1: buyer.line1.clone(),
             city: buyer.city.clone(),

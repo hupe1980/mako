@@ -104,7 +104,7 @@ pub(crate) async fn get_archive_olap(
         .await
     {
         Ok(Some(series)) => {
-            let total: rust_decimal::Decimal = series.intervals.iter().map(|i| i.value_kwh).sum();
+            let total: rust_decimal::Decimal = series.intervals.iter().map(|i| i.value).sum();
             Json(serde_json::json!({
                 "malo_id": malo_id,
                 "total_kwh": total.to_string(),
@@ -308,7 +308,7 @@ pub(crate) async fn get_archive_timeseries(
                     serde_json::json!({
                         "dtm_from": i.from.to_string(),
                         "dtm_to": i.to.to_string(),
-                        "quantity_kwh": i.value_kwh.to_string(),
+                        "quantity_kwh": i.value.to_string(),
                         "quality": i.quality.as_str(),
                         "obis_code": i.obis_code.map(|o| o.to_string()),
                     })

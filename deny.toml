@@ -87,6 +87,29 @@ name    = "http-body"
 version = "0.4"
 reason  = "companion of http 0.2 on the AWS SDK chain; hyper 1 uses http-body 1."
 
+# ── Typst document renderer ──────────────────────────────────────────────────
+# `billingd` compiles operator invoice templates with Typst. Its syntax
+# highlighter (`syntect` → `two-face`) is a NON-optional dependency of
+# `typst-library` — there is no feature that trims it — so these four duplicates
+# arrive with the renderer and cannot be resolved by configuration. An invoice
+# template contains no code blocks, so the highlighting path is never entered.
+[[bans.skip]]
+name    = "fancy-regex"
+version = "0.16"
+reason  = "syntect (via typst-library) pins fancy-regex 0.16; jsonschema uses 0.19. Syntax highlighting is unreachable from an invoice render."
+
+[[bans.skip]]
+name    = "phf_generator"
+reason  = "duplicate major pulled by the typst syntax-highlighting chain; build-time only."
+
+[[bans.skip]]
+name    = "roxmltree"
+reason  = "typst parses SVG with a different roxmltree major than en16931-formats uses for CII/UBL. Both parse trusted input (bundled assets / our own rendered XML)."
+
+[[bans.skip]]
+name    = "weezl"
+reason  = "GIF/LZW decoder duplicated across the typst image stack; not reachable from an invoice render."
+
 [[bans.skip]]
 name    = "chacha20"
 version = "0.9"
@@ -410,6 +433,18 @@ ignore = [
     # tests only); not present in any production binary. Resolved when testcontainers
     # upgrades to rustls-pemfile 2.x.
     { id = "RUSTSEC-2025-0111", reason = "rustls-pemfile 1.x unmaintained; dev-only dep via testcontainers — not in production binaries" },
+    # RUSTSEC-2024-0320: yaml-rust unmaintained — syntect loads syntax
+    # definitions with it. Unreachable from an invoice render (no code blocks),
+    # and non-optional in typst-library.
+    { id = "RUSTSEC-2024-0320", reason = "yaml-rust unmaintained; reached only by syntect's syntax-definition loading via typst-library, which an invoice template never enters" },
+    # RUSTSEC-2026-0206: rustybuzz unmaintained. NOTE this one IS on the render
+    # path — it is Typst's text shaper. Accepted because the inputs are not
+    # attacker-controlled: the fonts are the bundled typst-assets set, which
+    # `billingd::document::world` is the only source of (there is deliberately no
+    # way for a template to supply one), and the text is mako's own EN 16931
+    # model plus the operator's template literals — never a counterparty's.
+    # Revisit if operator-supplied font files are ever accepted.
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz unmaintained (no CVE); Typst's text shaper, on the render path but fed only bundled fonts, mako's own invoice model and the operator's own template — no counterparty-controlled input" },
     # RUSTSEC-2025-0134: tokio-tar PAX header smuggling vulnerability.
     # Pulled transitively by testcontainers → bollard. Dev-only dependency (integration
     # tests only); not present in any production binary. tokio-tar is used to download

@@ -55,6 +55,7 @@
 
 use std::sync::Arc;
 
+use crate::smgw_model::{CertificateType, SmgwSession};
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
@@ -63,7 +64,6 @@ use axum::{
 };
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::Claims;
-use metering::{CertificateType, SmgwSession};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use time::OffsetDateTime;
@@ -178,7 +178,7 @@ pub fn check_session_compliance(
 
     // ── 1. Gateway-level status checks ───────────────────────────────────────
 
-    if matches!(session.status, metering::GatewayStatus::Revoked) {
+    if matches!(session.status, crate::smgw_model::GatewayStatus::Revoked) {
         issues.push(ComplianceIssue {
             malo_id: session.malo_id.clone(),
             device_id: session.device_id.clone(),
@@ -893,12 +893,12 @@ pub async fn put_smgw_session(
     };
 
     let gateway_status = match session.status {
-        metering::GatewayStatus::Provisioned => "PROVISIONED",
-        metering::GatewayStatus::Commissioned => "COMMISSIONED",
-        metering::GatewayStatus::Operational => "OPERATIONAL",
-        metering::GatewayStatus::Revoked => "REVOKED",
-        metering::GatewayStatus::Replaced => "REPLACED",
-        metering::GatewayStatus::CommunicationFault => "COMMUNICATION_FAULT",
+        crate::smgw_model::GatewayStatus::Provisioned => "PROVISIONED",
+        crate::smgw_model::GatewayStatus::Commissioned => "COMMISSIONED",
+        crate::smgw_model::GatewayStatus::Operational => "OPERATIONAL",
+        crate::smgw_model::GatewayStatus::Revoked => "REVOKED",
+        crate::smgw_model::GatewayStatus::Replaced => "REPLACED",
+        crate::smgw_model::GatewayStatus::CommunicationFault => "COMMUNICATION_FAULT",
     };
 
     let last_contact = session.last_contact_at;
@@ -1307,7 +1307,7 @@ pub async fn post_smgw_compliance_scan(
 #[cfg(test)]
 mod cert_expiry_tests {
     use super::{cert_tier_severity, cert_type_str, most_urgent_cert_tier};
-    use metering::CertificateType;
+    use crate::smgw_model::CertificateType;
 
     #[test]
     fn tier_is_the_smallest_threshold_reached() {

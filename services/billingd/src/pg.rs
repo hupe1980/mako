@@ -43,6 +43,10 @@ pub struct BillingRecordRow {
     pub risk_band: Option<String>,
     /// Coded findings explaining the score (XAI by construction).
     pub risk_findings: Option<serde_json::Value>,
+    /// The `document_templates.hash` that rendered this invoice's PDF, pinned
+    /// on first render and never changed afterwards. `None` until the document
+    /// has been rendered at all.
+    pub template_hash: Option<String>,
     /// Analyst who released a HELD record.
     pub released_by: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -198,6 +202,39 @@ pub async fn attach_en16931(
         .await
         .context("attach_en16931")?;
     Ok(())
+}
+
+/// Pin the template that rendered an *issued* document — once.
+///
+/// `COALESCE(template_hash, $2)` is half the point: the first render fixes how
+/// the invoice looks, and every later render must reproduce that document
+/// rather than restyle it with whatever layout is current. Rolling out a new
+/// template changes what new invoices look like and nothing about one already
+/// sent, which is what § 147 AO reproducibility means in practice.
+///
+/// `outcome <> 'generated'` is the other half. A record still in `generated` is
+/// a **draft**: nobody has received it, so there is nothing to reproduce, and
+/// pinning one would trap an operator's own preview — publish, look at it, fix a
+/// typo, roll out the correction, and the invoice they were looking at is stuck
+/// on the version with the typo, permanently, because the store never deletes.
+/// A draft therefore renders with the current layout every time and pins
+/// nothing; the first render *after* dispatch is the one that fixes it.
+///
+/// Returns the pinned hash — the one just written, or the one already there.
+/// `None` means nothing is pinned, which for a draft is the normal answer.
+pub async fn pin_template(pool: &PgPool, id: Uuid, hash: &str) -> anyhow::Result<Option<String>> {
+    sqlx::query_scalar::<_, Option<String>>(
+        r"UPDATE billing_records
+             SET template_hash = COALESCE(template_hash, $2), updated_at = now()
+           WHERE id = $1 AND outcome <> 'generated'
+       RETURNING template_hash",
+    )
+    .bind(id)
+    .bind(hash)
+    .fetch_optional(pool)
+    .await
+    .context("pin_template")
+    .map(Option::flatten)
 }
 
 pub async fn mark_dispatched(pool: &PgPool, id: Uuid, ce_id: Uuid) -> anyhow::Result<()> {

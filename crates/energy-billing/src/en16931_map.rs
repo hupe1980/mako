@@ -19,7 +19,7 @@ use rust_decimal::Decimal;
 use en16931::amount::{InvoiceAmount, UnitPriceAmount};
 use en16931::date::Date;
 use en16931::invoice::{
-    Code, Invoice as EnInvoice, InvoiceLine, Item, LineVat, Party, PriceDetails,
+    Code, Invoice as EnInvoice, InvoiceLine, Item, LineVat, Party, Period, PriceDetails,
 };
 use en16931::numeric::{Percentage, Quantity};
 
@@ -84,6 +84,12 @@ impl Invoice {
     /// with positive amounts (the document kind conveys the sign).
     #[must_use]
     pub fn to_en16931(&self, spec_id: &str, seller: Party, buyer: Party) -> EnInvoice {
+        /// A `time::Date` as EN 16931 spells one. `None` only for a date outside
+        /// the four-digit calendar year, which a billing period cannot be.
+        fn calendar_date(d: time::Date) -> Option<Date> {
+            Date::new(d.year(), d.month() as u8, d.day()).ok()
+        }
+
         let is_credit = self.context.invoice_type.is_reversal()
             || matches!(self.context.invoice_type, crate::InvoiceType::CreditNote);
         let sign = if is_credit {
@@ -112,7 +118,18 @@ impl Invoice {
         )
         .seller(seller)
         .buyer(buyer)
-        .due_date(due_date);
+        .due_date(due_date)
+        // BG-14 — the billing period. Not optional in practice for a utility
+        // invoice: § 14 Abs. 4 Nr. 6 UStG requires the Leistungszeitraum on the
+        // document, and XRechnung's BR-DE-TMP-32 requires BT-72, BG-14 or a
+        // period on every line. Every `BillingContext` carries one, so this is
+        // free — it was simply never mapped, which left the term absent from the
+        // semantic model and therefore from every syntax rendered out of it,
+        // including the period line on the PDF.
+        .invoicing_period(Period {
+            start: calendar_date(self.context.period_from()),
+            end: calendar_date(self.context.period_to()),
+        });
         if is_credit {
             builder = builder.credit_note();
         }
