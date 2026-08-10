@@ -435,6 +435,47 @@ impl EdifactIngestDispatcher {
                     })
                 }
             }
+            // ── WiM Rechnungsabwicklung MSB über LF ──────────────────────────
+            // ORDERS 17005 (Bestellung — terminal on receipt, nothing answers
+            // it) and 17006 (Beendigung, either direction) spawn; ORDRSP
+            // 19009/19010 answer a Beendigung *mako* sent and resume that
+            // process by MaLo. Directions per BDEW PID overview 4.0 / AWH
+            // Aktivitätsdiagramme WiM V1.3 §§2.8–2.11 (EBDs E_0206/E_0209).
+            "wim-rechnungsabwicklung" => {
+                if mako_wim::RECHNUNGSABWICKLUNG_ORDERS_PIDS.contains(&pid) {
+                    let cmd = adapters::wim_rechnungsabwicklung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // Beendigung answer window: 5 Werktage, the WiM Teil 1
+                    // process window the sibling workflows use (BK6-24-174).
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        5,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    self.spawn_or_resume::<mako_wim::WimRechnungsabwicklungWorkflow>(
+                        malo_id.as_str(),
+                        "wim-rechnungsabwicklung",
+                        cmd,
+                        &fv,
+                        &[(mako_wim::RECHNUNGSABWICKLUNG_DEADLINE_LABEL, due_at)],
+                    )
+                    .await
+                } else if mako_wim::RECHNUNGSABWICKLUNG_ORDRSP_PIDS.contains(&pid) {
+                    let cmd = adapters::wim_rechnungsabwicklung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    self.resume_by_key::<mako_wim::WimRechnungsabwicklungWorkflow>(
+                        malo_id.as_str(),
+                        "wim-rechnungsabwicklung",
+                        cmd,
+                    )
+                    .await
+                } else {
+                    Ok(IngestOutcome::Skipped {
+                        workflow_name: "wim-rechnungsabwicklung",
+                        reason: "pid_not_in_dispatch_table",
+                    })
+                }
+            }
             // ── WiM Preisliste PRICAT (PIDs 27001–27003) ──────────────────────
             "wim-preisliste" => {
                 if mako_wim::preisliste::PRICAT_PIDS.contains(&pid) {

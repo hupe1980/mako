@@ -832,9 +832,17 @@ impl As4Sender for BdewAs4Sender {
                     // Delivery confirmed (NRR proven under the regulated policy).
                 }
                 Ok(asx_rs::as4::As4SyncSignal::Error(err)) => {
-                    // The counterparty rejected the message with an eb:Error. This is a
-                    // confirmed rejection, not a lost receipt — the ebMS3 diagnostics
-                    // drive retry-vs-dead-letter in the outbox worker.
+                    // The counterparty rejected the message with an eb:Error — a
+                    // confirmed rejection, not a lost receipt. Deliberately still
+                    // *retryable* (bounded by the outbox retry window): re-sending
+                    // is protocol-safe — the ebMS MessageId is the stable outbox id
+                    // and the AS4-Profil mandates receiver duplicate elimination
+                    // (`ReceptionAwareness.DuplicateDetection` MUSS true) — and a
+                    // retry can genuinely succeed, because the P-Mode, partner
+                    // certificate and rendering are resolved per attempt, so an
+                    // operator fixing the configuration the counterparty rejected
+                    // heals the delivery without re-enqueueing. The metrics label
+                    // separates this from a lost receipt for observability.
                     EngineMetrics::global().outbox_delivery_attempted("counterparty_error");
                     return Err(EngineError::Transport {
                         endpoint: endpoint.as_str().into(),

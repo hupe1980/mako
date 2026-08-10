@@ -231,6 +231,7 @@ fn a_buyer_from_vertragd_closes_the_address_findings() {
         city: Some("Berlin".to_owned()),
         country: Some("DE".to_owned()),
         vat_id: None,
+        stromwiederverkaeufer: false,
     };
     let model = einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", Some(&buyer));
 
@@ -254,7 +255,7 @@ fn a_buyer_from_vertragd_closes_the_address_findings() {
 /// exactly the defect the hand-rolled renderer had.
 #[test]
 fn the_template_view_carries_what_an_invoice_must_print() {
-    use billingd::document::DocumentView;
+    use billingd::document_view::DocumentView;
 
     let buyer = billingd::clients::Rechnungsempfaenger {
         name: Some("Erika Mustermann".to_owned()),
@@ -263,6 +264,7 @@ fn the_template_view_carries_what_an_invoice_must_print() {
         city: Some("Berlin".to_owned()),
         country: Some("DE".to_owned()),
         vat_id: None,
+        stromwiederverkaeufer: false,
     };
     let model = einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", Some(&buyer));
     let view = DocumentView::of(&model);
@@ -319,7 +321,7 @@ fn the_template_view_carries_what_an_invoice_must_print() {
 /// drift — what the customer owes.
 #[test]
 fn the_view_agrees_with_the_model_it_projects() {
-    use billingd::document::DocumentView;
+    use billingd::document_view::DocumentView;
 
     let model = einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", None);
     let view = DocumentView::of(&model);
@@ -419,57 +421,43 @@ fn the_billing_period_reaches_the_semantic_model() {
     );
 
     // And it reaches the page: the template reads these two fields.
-    let view = billingd::document::DocumentView::of(&model);
+    let view = billingd::document_view::DocumentView::of(&model);
     assert_eq!(view.period_start.as_deref(), Some("2026-01-01"));
     assert_eq!(view.period_end.as_deref(), Some("2026-01-31"));
 }
 
-/// The gate specimen carries every term production stamps on a real document.
+/// The gate specimen's stamped terms match what production stamps.
 ///
-/// The specimen is hand-built, so it can drift from `einvoice::build` — and it
-/// had: it was missing BT-23, BT-34 and BG-16, which meant it could not satisfy
-/// XRechnung and was proving templates against a document shape production never
-/// emits. This pins the two together on the terms that are *stamped* rather than
-/// calculated, which are exactly the ones a hand-built specimen forgets.
+/// The specimen itself lives with the renderer now
+/// (`outputd::document::gate::specimen_invoice`), where its own suite asserts
+/// the same terms with the same expected values — the two tests together are
+/// the cross-service drift tripwire the old in-process equality check was.
+/// This side pins what *production* stamps.
 #[test]
-fn the_gate_specimen_matches_what_production_stamps() {
+fn production_stamps_the_terms_the_gate_specimen_proves_templates_against() {
     let produced = einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", None);
-    let specimen = billingd::document::gate::specimen_invoice();
 
     assert_eq!(
-        specimen.business_process, produced.business_process,
+        produced.business_process.as_deref(),
+        Some("urn:fdc:peppol.eu:2017:poacc:billing:01:1.0"),
         "BT-23 business process",
     );
     assert_eq!(
-        specimen
-            .seller
-            .electronic_address
-            .as_ref()
-            .map(|i| i.scheme()),
         produced
             .seller
             .electronic_address
             .as_ref()
-            .map(|i| i.scheme()),
-        "BT-34 seller electronic address, under the same EAS scheme",
-    );
-    assert!(
-        specimen.payment.is_some() && produced.payment.is_some(),
-        "BG-16 payment instructions",
+            .and_then(|i| i.scheme()),
+        Some("0088"),
+        "BT-34 seller electronic address, EAS 0088 (GLN)",
     );
     assert_eq!(
-        specimen
-            .payment
-            .as_ref()
-            .and_then(|p| p.means_code.as_ref().map(|c| c.as_str())),
         produced
             .payment
             .as_ref()
-            .and_then(|p| p.means_code.as_ref().map(|c| c.as_str())),
-        "the SEPA means code (UNCL 4461 58)",
+            .and_then(|p| p.means_code.as_ref().map(en16931::invoice::Code::as_str)),
+        Some("58"),
+        "BG-16 payment instructions with the SEPA means code (UNCL 4461 58)",
     );
-    assert!(
-        specimen.invoicing_period.is_some() && produced.invoicing_period.is_some(),
-        "BG-14 billing period",
-    );
+    assert!(produced.invoicing_period.is_some(), "BG-14 billing period");
 }

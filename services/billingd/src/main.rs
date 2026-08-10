@@ -47,12 +47,6 @@
 //! | `GET` | `/api/v1/billing/{id}/xrechnung` | ZUGFeRD 2.3 / XRechnung 3.0 CII XML |
 //! | `GET` | `/api/v1/billing/{id}/ubl` | PEPPOL BIS Billing 3.0 UBL 2.1 XML (EN16931) |
 //! | `GET` | `/api/v1/billing/{id}/pdf` | ZUGFeRD PDF/A-3: the page with the CII XML embedded |
-//! | `GET` | `/api/v1/templates` | Every template this tenant published (`?kind=&limit=`) — how a rollback finds its hash |
-//! | `POST` | `/api/v1/templates` | Prove and publish a document template |
-//! | `POST` | `/api/v1/templates/preview` | Render a candidate template against the gate specimen |
-//! | `GET` | `/api/v1/templates/reference` | The reference invoice layout mako ships |
-//! | `GET`/`PUT` | `/api/v1/templates/{kind}/current` | Which template is rolled out |
-//! | `GET` | `/api/v1/templates/by-hash/{hash}` | Resolve the layout an issued document used |
 //! | `GET` | `/health` | Liveness |
 //! | `GET` | `/health/ready` | Readiness |
 
@@ -143,6 +137,12 @@ impl Daemon for Billingd {
                 .as_deref()
                 .unwrap_or("http://localhost:9780"),
         ));
+        let outputd = Arc::new(clients::OutputdClient::new(
+            cfg.outputd_url
+                .as_deref()
+                .unwrap_or("http://localhost:9880"),
+            cfg.outputd_api_key.clone(),
+        ));
 
         // ── Outbox drain worker (config-gated on the ERP webhook) ────────────────
         // Only runs when there is somewhere to deliver to; signs with the same
@@ -190,30 +190,6 @@ impl Daemon for Billingd {
                 "/api/v1/billing/review-queue",
                 get(handlers::get_review_queue),
             )
-            // Document templates. Publishing and rolling out are separate
-            // routes because they are separate decisions; there is no update
-            // and no delete, because an issued invoice pins the hash that
-            // rendered it (§ 147 AO / GoBD, 8 years).
-            .route(
-                "/api/v1/templates",
-                get(handlers::list_templates).post(handlers::post_template),
-            )
-            .route(
-                "/api/v1/templates/preview",
-                post(handlers::post_template_preview),
-            )
-            .route(
-                "/api/v1/templates/reference",
-                get(handlers::get_reference_template),
-            )
-            .route(
-                "/api/v1/templates/{kind}/current",
-                get(handlers::get_current_template).put(handlers::put_current_template),
-            )
-            .route(
-                "/api/v1/templates/by-hash/{hash}",
-                get(handlers::get_template_by_hash),
-            )
             .route("/api/v1/billing/{id}/release", post(handlers::post_release))
             .route("/api/v1/billing/{id}", get(handlers::get_record))
             .route(
@@ -221,7 +197,9 @@ impl Daemon for Billingd {
                 get(handlers::get_xrechnung),
             )
             // The ZUGFeRD document: the page and the XML in one file, both
-            // rendered from the record's stored EN 16931 model.
+            // from the record's stored EN 16931 model. billingd renders and
+            // proves the payload; outputd renders the page and the PDF/A-3
+            // carrier with the operator's template (templates live there).
             .route("/api/v1/billing/{id}/pdf", get(handlers::get_invoice_pdf))
             .route(
                 "/api/v1/billing/{malo_id}/preview",
@@ -273,6 +251,7 @@ impl Daemon for Billingd {
             .layer(Extension(edmd))
             .layer(Extension(marktd))
             .layer(Extension(vertragd))
+            .layer(Extension(outputd))
             .layer(Extension(pool.clone()));
 
         let port = cfg.port.unwrap_or(9280);

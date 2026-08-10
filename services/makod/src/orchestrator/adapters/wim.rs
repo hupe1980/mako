@@ -1241,3 +1241,82 @@ pub fn wim_technik_aenderung_registry() -> AdapterRegistry<WimTechnikAenderungWo
     ));
     registry
 }
+
+// ── WiM Rechnungsabwicklung MSB über LF (ORDERS 17005/17006, ORDRSP 19009/19010) ──
+
+/// Build an [`AdapterRegistry`] for
+/// [`mako_wim::WimRechnungsabwicklungWorkflow`].
+///
+/// One registry, two message types, because the process has two entries:
+///
+/// - **ORDERS** 17005 (Bestellung — the LF accepting the quote; terminal on
+///   receipt, nothing answers it) or 17006 (Beendigung — either side may send
+///   it) → [`RechnungsabwicklungCommand::ReceiveOrders`], spawning a process.
+/// - **ORDRSP** 19009/19010 (Bestätigung/Ablehnung der Beendigung) →
+///   [`RechnungsabwicklungCommand::ReceiveAntwort`], resuming the process the
+///   outbound 17006 opened.
+///
+/// Directions verified against the BDEW PID overview 4.0 and AWH
+/// Aktivitätsdiagramme WiM V1.3 §§2.8–2.11 (EBDs `E_0206`/`E_0209`).
+///
+/// [`RechnungsabwicklungCommand::ReceiveOrders`]: mako_wim::RechnungsabwicklungCommand::ReceiveOrders
+/// [`RechnungsabwicklungCommand::ReceiveAntwort`]: mako_wim::RechnungsabwicklungCommand::ReceiveAntwort
+#[must_use]
+pub fn wim_rechnungsabwicklung_registry()
+-> AdapterRegistry<mako_wim::WimRechnungsabwicklungWorkflow> {
+    use mako_wim::RechnungsabwicklungCommand;
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for WiM Rechnungsabwicklung adapter".into(),
+                )
+            })?;
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "WiM Rechnungsabwicklung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            match msg {
+                AnyMessage::Orders(o) => {
+                    let validation_result = msg.validate().ok();
+                    let validation_passed = validation_result
+                        .as_ref()
+                        .map(|r| r.is_valid())
+                        .unwrap_or(false);
+                    let validation_errors: Vec<String> = validation_result
+                        .as_ref()
+                        .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                        .unwrap_or_default();
+                    Ok(RechnungsabwicklungCommand::ReceiveOrders {
+                        pid,
+                        sender: MarktpartnerCode::new(
+                            o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                        ),
+                        receiver: MarktpartnerCode::new(
+                            o.receiver()
+                                .and_then(|n| n.party_id.as_deref())
+                                .unwrap_or(""),
+                        ),
+                        message_ref: MessageRef::new(msg.message_ref()),
+                        validation_passed,
+                        validation_errors,
+                    })
+                }
+                AnyMessage::Ordrsp(_) => Ok(RechnungsabwicklungCommand::ReceiveAntwort {
+                    pid,
+                    message_ref: MessageRef::new(msg.message_ref()),
+                }),
+                _ => Err(EngineError::Deserialization(
+                    "WiM Rechnungsabwicklung adapter: expected ORDERS or ORDRSP".into(),
+                )),
+            }
+        },
+    ));
+    registry
+}

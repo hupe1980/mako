@@ -1566,7 +1566,8 @@ pub async fn run_settlement(
     let verlaengerungsanspruch_qh = output.verlaengerungsanspruch_qh as i64;
     // Use the fraction actually applied by the library (may be auto-computed from dates)
     let billing_days_fraction_stored = output.billing_days_fraction_applied;
-    // Serialize positions to JSONB for § 147 AO / GoBD 3-year audit trail.
+    // Serialize positions to JSONB for the § 147 AO / GoBD audit trail
+    // (Buchungsbeleg, 8-year retention).
     // Each position: { description, legal_basis, kwh, rate_ct_kwh, eur }
     let positions_json = serde_json::to_value(
         output

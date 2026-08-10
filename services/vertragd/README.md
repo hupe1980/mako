@@ -59,7 +59,7 @@ curl -X POST http://vertragd:9780/api/v1/vertraege/{id}/tarifwechsel \
 ## GDPR erasure
 
 ```bash
-# Pseudonymize all PII (irreversible; retains contract records for §147 AO)
+# Pseudonymize all PII (irreversible; retains contract records per § 147 AO — up to 8 years)
 curl -X POST http://vertragd:9780/api/v1/kunden/{id}/anonymize \
   -H "Content-Type: application/json" \
   -d '{"requested_by": "operator-dpo"}'

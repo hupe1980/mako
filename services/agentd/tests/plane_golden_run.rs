@@ -193,6 +193,11 @@ async fn the_gabi_specialist_runs_and_replays_deterministically() {
 
     let store = Arc::new(RedbStore::open_in_memory().expect("store"));
     let runtime = Runtime::builder(Arc::clone(&store) as Arc<dyn JournalStore>)
+        // agentplane 0.14 fails closed: a manifest declaring `spec.oversight`
+        // refuses to run on a plane with no case store — the exact wiring
+        // production has (`runtime.rs .cases(..)`), so the tests carry it too.
+        .cases(Arc::clone(&store) as Arc<dyn agentplane::case::CaseStore>)
+        .tasks(Arc::clone(&store) as Arc<dyn agentplane::case::TaskStore>)
         .owner("agentd-test")
         // The manifest names `anthropic`; the driver is registered under that
         // name. Declarative agent — no Rust skill, the runtime drives the turn.
@@ -244,6 +249,11 @@ async fn the_model_is_asked_with_the_manifests_own_procedure() {
 
     let store = Arc::new(RedbStore::open_in_memory().expect("store"));
     let runtime = Runtime::builder(Arc::clone(&store) as Arc<dyn JournalStore>)
+        // agentplane 0.14 fails closed: a manifest declaring `spec.oversight`
+        // refuses to run on a plane with no case store — the exact wiring
+        // production has (`runtime.rs .cases(..)`), so the tests carry it too.
+        .cases(Arc::clone(&store) as Arc<dyn agentplane::case::CaseStore>)
+        .tasks(Arc::clone(&store) as Arc<dyn agentplane::case::TaskStore>)
         .owner("agentd-test")
         // The manifest names `anthropic`; the driver is registered under that
         // name. Declarative agent — no Rust skill, the runtime drives the turn.
@@ -346,6 +356,11 @@ async fn run_and_dump_journal(event: serde_json::Value) -> String {
 
     let store = Arc::new(RedbStore::open_in_memory().expect("store"));
     let runtime = Runtime::builder(Arc::clone(&store) as Arc<dyn JournalStore>)
+        // agentplane 0.14 fails closed: a manifest declaring `spec.oversight`
+        // refuses to run on a plane with no case store — the exact wiring
+        // production has (`runtime.rs .cases(..)`), so the tests carry it too.
+        .cases(Arc::clone(&store) as Arc<dyn agentplane::case::CaseStore>)
+        .tasks(Arc::clone(&store) as Arc<dyn agentplane::case::TaskStore>)
         .owner("agentd-test")
         .provider(
             "anthropic",
@@ -444,6 +459,11 @@ async fn a_key_ring_seals_personal_data_in_the_journal() {
 
     let store = Arc::new(RedbStore::open_in_memory().expect("store"));
     let runtime = Runtime::builder(Arc::clone(&store) as Arc<dyn JournalStore>)
+        // agentplane 0.14 fails closed: a manifest declaring `spec.oversight`
+        // refuses to run on a plane with no case store — the exact wiring
+        // production has (`runtime.rs .cases(..)`), so the tests carry it too.
+        .cases(Arc::clone(&store) as Arc<dyn agentplane::case::CaseStore>)
+        .tasks(Arc::clone(&store) as Arc<dyn agentplane::case::TaskStore>)
         .owner("agentd-test")
         .keyring(Arc::new(MemoryKeyRing::new()) as Arc<dyn agentplane::keyring::KeyRing>)
         .provider(

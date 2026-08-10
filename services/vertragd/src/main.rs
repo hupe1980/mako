@@ -46,6 +46,7 @@
 //! | `GET`  | `/api/v1/kunden/{id}` | Get customer + active MaLo IDs |
 //! | `GET`  | `/api/v1/kunden/by-sub/{sub}` | portald authorization: OIDC sub → customer + MaLos |
 //! | `POST` | `/api/v1/kunden/{id}/rahmenvertraege` | Create B2B framework contract |
+//! | `GET`/`PUT` | `/api/v1/ggv/{ggv_id}/betreiber` | § 42b GGV operator as a Kunde — BG-7 buyer of the GGV bundle |
 //! | `POST` | `/api/v1/kunden/{id}/vertraege` | Create supply contract (B2C or B2B) |
 //! | `GET`  | `/api/v1/vertraege` | List open contracts |
 //! | `GET`  | `/api/v1/vertraege/{id}` | Get contract + components |
@@ -190,6 +191,12 @@ impl Daemon for Vertragd {
             .route(
                 "/api/v1/rahmenvertraege/{id}/malos",
                 get(handlers::get_rahmenvertrag_malos),
+            )
+            // GGV-Betreiber (§ 42b EnWG): the operator behind a ggv_id, as a
+            // Kunde — the BG-7 buyer of the bundled GGV Sammelrechnung.
+            .route(
+                "/api/v1/ggv/{ggv_id}/betreiber",
+                get(handlers::get_ggv_betreiber).put(handlers::put_ggv_betreiber),
             )
             // Framework + supply contracts
             .route(

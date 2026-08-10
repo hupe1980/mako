@@ -35,9 +35,12 @@ use super::*;
 ///
 /// ## Regulatory basis
 ///
-/// DSGVO Art. 17. § 60 Abs. 6 MsbG (3-year audit trail) binds *billing-relevant*
-/// readings; pseudonymisation satisfies it — the values remain for reconciliation
-/// but no longer identify anyone.
+/// DSGVO Art. 17 — and § 60 Abs. 6 MsbG, which is a *deletion* duty, not a
+/// retention one: personal Messwerte must be deleted or anonymized (§ 52
+/// Abs. 3 Satz 2 MsbG) at latest three years after the end of the calendar
+/// year they were collected in. Destroying the subject mapping is exactly that
+/// anonymization: the values remain for § 147 AO reconciliation (billed data
+/// is a Buchungsbeleg, 8 years) but no longer identify anyone.
 ///
 /// **Cedar action**: `write-gdpr-erasure` — erasure is irreversible, so it is
 /// gated by its own action rather than the general write permission.

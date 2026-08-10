@@ -25,7 +25,7 @@ The workspace covers the full BDEW MaKo stack across four layers:
 | **Protocol** | `edi-energy` EDIFACT · `dvgw-edi` DVGW gas · `redispatch-xml` Redispatch 2.0 · `mako-engine` event-sourced process runtime · `makod` daemon |
 | **Market data** | `mako-markt` library · `marktd` Market Data Hub (PostgreSQL, CloudEvents, OIDC/JWT, EventBus) |
 | **Settlement & billing** | `grid-billing` + `netzbilanzd` NNE/MMM/MSB settlement · `eeg-billing` + `einsd` EEG/KWKG · `energy-billing` + `billingd` retail billing |
-| **Customer management** | `accountingd` FI-CA ledger · `portald` customer portal · `vertragd` contracts · `tarifbd` tariff catalog · `agentd` AI orchestration |
+| **Customer management** | `accountingd` FI-CA ledger · `portald` customer portal · `outputd` customer documents · `vertragd` contracts · `tarifbd` tariff catalog · `agentd` AI orchestration |
 | **Testing** | `makotest` — Python toolkit over the same Rust core: BDEW identifier check digits, Werktag/Fristen arithmetic, AHB-validated EDIFACT, seeded EPEX curves, and a `pytest` plugin ([README](makotest/README.md)) |
 
 ---
@@ -58,6 +58,7 @@ flowchart LR
     subgraph Business["Customer & operations"]
         VERTRAGD["vertragd<br/>contracts · §40b cadence<br/>§41e Aggregatorverträge"]
         ACCOUNTINGD["accountingd<br/>FI-CA ledger"]
+        OUTPUTD["outputd<br/>customer documents"]
         PORTALD["portald<br/>customer portal"]
         OBSD["obsd<br/>BNetzA KPIs"]
         AGENTD["agentd<br/>28 LLM specialists"]
@@ -70,6 +71,7 @@ flowchart LR
     MAKOD --> INVOICD
     TARIFBD --> BILLINGD
     BILLINGD --> ACCOUNTINGD
+    BILLINGD --> OUTPUTD
     VERTRAGD --> BILLINGD
     PROCESSD --> SPERRD
     EDMD & VERTRAGD --> PORTALD
@@ -111,7 +113,7 @@ flowchart LR
 | `invoic-checker` | INVOIC plausibility — 6 checks (period validity, position arithmetic, document total, tariff match ToU-aware, tariff found, MMM settlement price check) |
 | `netz-checker` | NB Anmeldung validation — 6 deterministic checks, ERC A02/A05/A06/A07/E17 (EBD E_0622 / G_0011); no I/O |
 
-### Production Services (16 daemons)
+### Production Services (17 daemons)
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
@@ -126,7 +128,8 @@ flowchart LR
 | `einsd` | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes, §52 sanctions, §51 neg-price, 18 MCP tools + 6 prompts |
 | `obsd` | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, automated deadline computation, `GET /api/v1/audit/bnetza-report` |
 | `tarifbd` | `:9080` | LF | Product & Tariff Catalog — **14 categories** (STROM/GAS/WAERME/WASSER/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/SHARING §42c); OIDC/JWT auth; `product_status` DRAFT/PUBLISHED workflow; §42d comparison portal feed (ETag-cached, BO4E `Tarifinfo`); EPEX Spot for §41a; B2B Angebote ANGELEGT→ANGENOMMEN; **14-tool MCP server + 3 prompts** |
-| `billingd` | `:9280` | LF | Energy Billing Engine — **all commercial prices user-defined in `tarifbd`**; pure calculation via `energy-billing` crate; `STROM` (SLP/RLM Eintarif/HT/NT; `leistungspreis_strom_ct_per_kw_month` demand charge; §14a Modul 1/3 via `ControllableLoadProvider`; §41a Abs. 1 iMSys guard); `GAS` (§25 Nr. 4 MessEV Brennwertkorrektur, Energiesteuer, **§54 KWK exemption**, BEHG CO₂, RLM Leistungspreis, indexed TTF/NCG); `WAERME`; `SOLAR` §42b/§42a; `EEG`/`EINSPEISUNG`; §41a EPEX dynamic; **§41a Abs. 1 iMSys enforcement**; `StromsteuerBefreiung` typed enum (§9 Nr. 1-5); `EnergieQuellen` CO₂ label; `Invoice.warnings`; **historic levy lookups** (`stromsteuer_for_year`, `energiesteuer_gas_for_year`; commodity-aware VAT history incl. the 7 % gas/Fernwärme window 10/2022–03/2024); **VPP auto-billing** (`de.vpp.dispatch.confirmed` → `Rechnung`, § 41e EnWG / Art. 17 RL (EU) 2019/944); **EN 16931 e-invoicing** (semantic model in `en16931_json`, CII + PEPPOL UBL via `en16931-formats`; BG-7 buyer from `vertragd.kunden`; BT-24 declares plain EN 16931 for retail and upgrades to XRechnung 3.0 only on the B2G path, which is profile-validated before writing); **ZUGFeRD PDF/A-3 documents** (Typst renders an operator-published template in a no-I/O sandbox; `document::facturx` stamps the Factur-X XMP by incremental update; publishing is gated by a render that validates the payload, enforces PDF/A, and reads the finished file back with `en16931-formats::zugferd::extract`; content-addressed append-only template store, layout pinned per issued invoice for § 147 AO); **deterministic risk gate** (banded 0–100 scoring, HELD dispatch block + analyst release); **§40b billing-run worker** (cadence from vertragd, monthly iMSys Abrechnungsinformation); **12 MCP tools** |
+| `billingd` | `:9280` | LF | Energy Billing Engine — **all commercial prices user-defined in `tarifbd`**; pure calculation via `energy-billing` crate; `STROM` (SLP/RLM Eintarif/HT/NT; `leistungspreis_strom_ct_per_kw_month` demand charge; §14a Modul 1/3 via `ControllableLoadProvider`; §41a Abs. 1 iMSys guard); `GAS` (§25 Nr. 4 MessEV Brennwertkorrektur, Energiesteuer, **§54 KWK exemption**, BEHG CO₂, RLM Leistungspreis, indexed TTF/NCG); `WAERME`; `SOLAR` §42b/§42a; `EEG`/`EINSPEISUNG`; §41a EPEX dynamic; **§41a Abs. 1 iMSys enforcement**; `StromsteuerBefreiung` typed enum (§9 Nr. 1-5); `EnergieQuellen` CO₂ label; `Invoice.warnings`; **historic levy lookups** (`stromsteuer_for_year`, `energiesteuer_gas_for_year`; commodity-aware VAT history incl. the 7 % gas/Fernwärme window 10/2022–03/2024); **VPP auto-billing** (`de.vpp.dispatch.confirmed` → `Rechnung`, § 41e EnWG / Art. 17 RL (EU) 2019/944); **EN 16931 e-invoicing** (semantic model in `en16931_json`, CII + PEPPOL UBL via `en16931-formats`; BG-7 buyer from `vertragd.kunden`; BT-24 declares plain EN 16931 for retail and upgrades to XRechnung 3.0 only on the B2G path, which is profile-validated before writing); **ZUGFeRD PDF/A-3 documents via `outputd`** (billingd proves the payload against the profile it declares before it leaves, projects the template view, and pins the answered template hash per issued invoice for § 147 AO); **deterministic risk gate** (banded 0–100 scoring, HELD dispatch block + analyst release); **§40b billing-run worker** (cadence from vertragd, monthly iMSys Abrechnungsinformation); **12 MCP tools** |
+| `outputd` | `:9880` | — | Customer Communications — renders what other services computed, never recomputes a number; operator-owned **Typst templates** in a no-I/O sandbox (content-addressed, append-only store; publishing gated by proof: payload validated, PDF/A enforced, finished file read back with `en16931-formats::zugferd::extract`, § 14 Abs. 4 UStG terms on the page); **ZUGFeRD PDF/A-3 carrier** (Factur-X XMP by incremental update) around the caller's CII payload; Textform kinds (`MAHNUNG` § 126b BGB with Stufe-3 gate; `PREISANPASSUNG` parse-only until its view exists) share the store so one brand has one template system; `POST /api/v1/render/{kind}` answers with the PDF + `X-Mako-Template-Hash` for the caller to pin; external validation panel containerized (veraPDF + Mustang, `just zugferd-verify`) |
 | `accountingd` | `:9380` | LF | Massenkontokorrent / Customer Account Ledger — **tamper-evident double-entry ledger** on the `doubleentry` crate (append-only BLAKE3 Merkle log, `O(log n)` inclusion proofs, period seals for GoBD/§146 AO **Festschreibung**, store-level idempotent CE ingest); per-MaLo Kontokorrent + GL contras; ABSCHLAG advance-payment credits; **FIFO open-item clearing**; **Summen- und Saldenliste** §238 HGB; aging analysis; Verzugszinsen §288 BGB; Zahlungsvereinbarung (payment plans); pain.008 single-message multi-group (mandatory Gläubiger-ID EPC AT-02); camt.054 XML + JSON dedup import; keyed-BLAKE3 IBAN hash; OIDC/JWT + inbound HMAC; auto-Mahnwesen |
 | `portald` | `:9480` | LF | Customer Portal read-model gateway — aggregates Lastgang/invoices/balance/VersorgungsStatus/EEG into single REST + SSE API; OIDC auth |
 | `vertragd` | `:9780` | LF | Contract & Customer Management — Kunden (B2C + B2B), Rahmenverträge (cascade Kündigung, `angebot_id` CPQ traceability), Versorgungsverträge; OIDC/JWT auth; Preisgarantie guard (§41 EnWG); `widerruf-kuendigung`; dispatch retry (3×); proactive expiry notifications; GDPR Art. 15/17/20; OIDC→MaLo authorization gateway; **16-tool MCP server + 4 prompts** |
@@ -405,7 +408,7 @@ a searchable site (source under [`site/`](./site), built with [Zola](https://www
 | [Guide](https://hupe1980.github.io/mako/docs/guide/) | Install, parse your first interchange, run a workflow |
 | [Architecture](https://hupe1980.github.io/mako/docs/architecture/) | Event-sourced engine, domain model, deadlines, ERP/API integration |
 | [Reference](https://hupe1980.github.io/mako/docs/reference/) | Parsing, validation, builders, the platform API, the full process catalog, AS4, DVGW, Redispatch |
-| [Services](https://hupe1980.github.io/mako/docs/services/) | Operator guides for all 16 daemons — ports, config, APIs, deployment |
+| [Services](https://hupe1980.github.io/mako/docs/services/) | Operator guides for all 17 daemons — ports, config, APIs, deployment |
 | [Regulatory](https://hupe1980.github.io/mako/docs/regulatory/) | BNetzA determinations and the authoritative Prüfidentifikator catalog |
 | [Release & Compliance](https://hupe1980.github.io/mako/docs/compliance/) | Annual EDI@Energy release lifecycle, schema versioning, license governance |
 | [API Reference (docs.rs)](https://docs.rs/edi-energy) | Full rustdoc for the published crates |
@@ -680,7 +683,7 @@ just check      # cargo check, all targets & features
 just test       # full test suite
 just ci         # the complete CI gate (check + test + clippy incl. role-scoped builds + fmt + deny + codegen/profile/PID validation)
 just test-db           # every real-PostgreSQL integration suite (testcontainers)
-just test-accountingd-db  # …or one at a time: edmd, einsd, accountingd, billingd, vertragd, tarifbd, marktd
+just test-accountingd-db  # …or one at a time: edmd, einsd, accountingd, billingd, outputd, vertragd, tarifbd, marktd
 ```
 
 The `test-*-db` suites self-manage PostgreSQL via **testcontainers** — a throwaway

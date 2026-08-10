@@ -41,7 +41,9 @@ const EVENT_GRACE: Duration = Duration::from_secs(3600);
 /// late a breach is recorded: the breach instant is the deadline's, resolved
 /// and journaled when the obligation was registered.
 pub fn spawn(runtime: Arc<Runtime>, every: Duration, shutdown: CancellationToken) {
-    let grace = time::Duration::try_from(EVENT_GRACE).unwrap_or(time::Duration::HOUR);
+    // agentplane 0.11: one `Duration` on the public surface — `sweep` takes
+    // `std::time::Duration` (unsigned), so the conversion shim is gone.
+    let grace = EVENT_GRACE;
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(every);
         // A missed tick is not a reason to run two immediately: the work is

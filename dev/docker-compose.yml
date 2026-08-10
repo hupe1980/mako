@@ -21,6 +21,7 @@
 #   einsd:       postgres://dev:dev@localhost:5432/einsd
 #   accountingd: postgres://dev:dev@localhost:5432/accountingd
 #   billingd:    postgres://dev:dev@localhost:5432/billingd
+#   outputd:     postgres://dev:dev@localhost:5432/outputd
 #   tarifbd:     postgres://dev:dev@localhost:5432/tarifbd
 #   vertragd:    postgres://dev:dev@localhost:5432/vertragd
 #   mabis-syncd: postgres://dev:dev@localhost:5432/mabis_syncd

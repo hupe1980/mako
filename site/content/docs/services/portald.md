@@ -1,7 +1,7 @@
 +++
 title = "portald Operator Guide"
 description = "portald operator guide: Customer Portal read-model gateway. Aggregates Lastgang (edmd), invoices (billingd), account balance (accountingd), VersorgungsStatus (marktd), and EEG settlement (einsd) into a single REST + SSE API. OIDC bearer-token authentication. Port :9480."
-weight = 35
+weight = 36
 [extra]
 mermaid = true
 +++

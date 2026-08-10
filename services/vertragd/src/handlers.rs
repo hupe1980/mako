@@ -1498,6 +1498,69 @@ pub async fn get_rahmenvertrag_malos(
     .into_response()
 }
 
+// ── GGV-Betreiber (§ 42b EnWG) ────────────────────────────────────────────────
+
+/// `PUT /api/v1/ggv/{ggv_id}/betreiber` body.
+#[derive(Debug, serde::Deserialize)]
+pub struct SetGgvBetreiberRequest {
+    /// The Kunde operating the community — the BG-7 buyer of its bundled
+    /// Sammelrechnung.
+    pub kunden_id: Uuid,
+}
+
+/// `PUT /api/v1/ggv/{ggv_id}/betreiber` — record who operates a GGV.
+///
+/// The § 42b operator is a **Kunde**, not a Marktpartner: it has no MP-ID and
+/// never appears in MaKo, but it is who the bundled GGV Sammelrechnung bills —
+/// so the mapping from the operator-assigned `ggv_id` to a customer lives
+/// here, beside every other buyer. Idempotent; re-PUT moves the pointer.
+pub async fn put_ggv_betreiber(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(ggv_id): Path<String>,
+    Json(req): Json<SetGgvBetreiberRequest>,
+) -> impl IntoResponse {
+    match crate::pg::upsert_ggv_betreiber(&pool, &cfg.tenant, &ggv_id, req.kunden_id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            format!("no Kunde {} for this tenant", req.kunden_id),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /api/v1/ggv/{ggv_id}/betreiber` — the BG-7 buyer of the GGV bundle.
+///
+/// `404` until a Betreiber is recorded — billingd treats that as "no buyer
+/// reachable" and the e-invoice findings say what is missing, exactly as an
+/// unconfigured retail buyer does.
+pub async fn get_ggv_betreiber(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<VertragdConfig>>,
+    Path(ggv_id): Path<String>,
+) -> impl IntoResponse {
+    match crate::pg::fetch_rechnungsempfaenger_by_ggv(&pool, &ggv_id, &cfg.tenant).await {
+        Ok(Some(re)) => Json(serde_json::json!({
+            "ggv_id": ggv_id,
+            "rechnungsempfaenger": re,
+        }))
+        .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            format!(
+                "no Betreiber recorded for GGV {ggv_id} — \
+                 PUT /api/v1/ggv/{ggv_id}/betreiber with a kunden_id"
+            ),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 // ── Preisgarantie typed REST resource ───────────────────────────────
 
 /// `PUT /api/v1/vertraege/{id}/preisgarantie`
@@ -1948,7 +2011,10 @@ pub async fn get_kunde_gdpr_export(
 /// `POST /api/v1/kunden/{id}/anonymize` \u2014 GDPR Art. 17 right to erasure.
 ///
 /// Pseudonymizes all PII for the customer while retaining contract records
-/// for the legal retention period (\u00a7147 AO: 10-year retention obligation).
+/// for the legal retention period. Post-BEG IV (§ 147 Abs. 3 AO, 01.01.2025)
+/// contracts are Handelsbriefe (6 years) resp. Buchungsbelege where they ground
+/// bookings (8 years) — the record is kept for the longest applicable period,
+/// 8 years from the end of the year the contract ended.
 ///
 /// After anonymization:
 /// - All portal access for this customer is revoked (`aktiv = false`)
@@ -1981,7 +2047,7 @@ pub async fn post_anonymize_kunde(
                 "kunden_id": id,
                 "anonymized": true,
                 "regulatory_basis": "DSGVO Art. 17 - Recht auf Loeschung",
-                "retention_note": "§147 AO: Vertragsdaten werden 10 Jahre aufbewahrt (ohne PII)",
+                "retention_note": "§ 147 Abs. 3 AO: Vertragsdaten werden bis zu 8 Jahre aufbewahrt (Handelsbriefe 6, Buchungsbelege 8; ohne PII)",
                 "audit_log": "anonymization_log Eintrag erstellt",
             })),
         )
@@ -2366,6 +2432,7 @@ pub async fn post_angebot_webhook(
             zahlungsziel_tage: Some(30),
             sepa_erlaubt: Some(false),
             erp_kunde_id: Some(angebot_id_str.to_owned()),
+            stromwiederverkaeufer: None,
             notizen: None,
         };
         match crate::pg::upsert_kunde(&pool, &cfg.tenant, &input).await {

@@ -202,6 +202,7 @@ impl EdifactIngestDispatcher {
         "wim-invoic",
         "wim-preisanfrage",
         "wim-preisliste",
+        "wim-rechnungsabwicklung",
         "wim-stammdaten",
         "wim-technik-aenderung",
         mako_wim::wertebestellung::WORKFLOW_NAME,

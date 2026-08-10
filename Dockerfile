@@ -133,7 +133,7 @@ RUN --mount=type=cache,id=cargo-registry-demo,sharing=locked,target=/usr/local/c
     && install -d -o 65532 -g 65532 -m 0700 /var/lib/makod
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 3b — builder  (all 16 services — production / CI release pipeline)
+# ║ Stage 3b — builder  (all 17 services — production / CI release pipeline)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM chef AS builder
 ARG PROFILE=release
@@ -152,7 +152,7 @@ RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/
     cargo chef cook --profile ${PROFILE} \
                     -p makod -p marktd -p processd -p invoicd -p edmd -p obsd \
                     -p netzbilanzd -p sperrd -p einsd \
-                    -p tarifbd -p billingd -p accountingd -p vertragd \
+                    -p tarifbd -p billingd -p outputd -p accountingd -p vertragd \
                     -p portald -p agentd -p mabis-syncd \
                     --recipe-path recipe.json
 
@@ -162,7 +162,7 @@ RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/
     --mount=type=cache,id=cargo-target-full,sharing=locked,target=/build/target \
     CARGO_INCREMENTAL=1 mold -run cargo build --profile ${PROFILE} -p makod -p marktd -p invoicd -p edmd -p obsd \
                                      -p netzbilanzd -p sperrd -p einsd \
-                                     -p tarifbd -p billingd -p accountingd \
+                                     -p tarifbd -p billingd -p outputd -p accountingd \
                                      -p vertragd -p portald -p agentd -p mabis-syncd \
     && CARGO_INCREMENTAL=1 mold -run cargo build --profile ${PROFILE} -p processd --features integrated \
     && BIN_DIR="$([ "${PROFILE}" = "release" ] && echo target/release || echo target/debug)" \
@@ -177,6 +177,7 @@ RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/
     && cp "${BIN_DIR}/einsd"       /usr/local/bin/einsd       && strip /usr/local/bin/einsd \
     && cp "${BIN_DIR}/tarifbd"     /usr/local/bin/tarifbd     && strip /usr/local/bin/tarifbd \
     && cp "${BIN_DIR}/billingd"    /usr/local/bin/billingd    && strip /usr/local/bin/billingd \
+    && cp "${BIN_DIR}/outputd"     /usr/local/bin/outputd     && strip /usr/local/bin/outputd \
     && cp "${BIN_DIR}/accountingd" /usr/local/bin/accountingd && strip /usr/local/bin/accountingd \
     && cp "${BIN_DIR}/vertragd"    /usr/local/bin/vertragd    && strip /usr/local/bin/vertragd \
     && cp "${BIN_DIR}/portald"     /usr/local/bin/portald     && strip /usr/local/bin/portald \
@@ -255,9 +256,6 @@ LABEL org.opencontainers.image.title="makod" \
       org.opencontainers.image.source="https://github.com/hupe1980/mako" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
-# ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 5 — mdmd-runtime (distroless)
-# ╚══════════════════════════════════════════════════════════════════════════════
 # ╔══════════════════════════════════════════════════════════════════════════════
 # ║ Stage 5 — marktd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
@@ -497,7 +495,7 @@ LABEL org.opencontainers.image.title="sperrd" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 13 — einsd-runtime (distroless)
+# ║ Stage 12 — einsd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM gcr.io/distroless/cc-debian12:nonroot AS einsd-runtime
 
@@ -526,7 +524,7 @@ LABEL org.opencontainers.image.title="einsd" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 14 — tarifbd-runtime (distroless)
+# ║ Stage 13 — tarifbd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM gcr.io/distroless/cc-debian12:nonroot AS tarifbd-runtime
 
@@ -555,7 +553,7 @@ LABEL org.opencontainers.image.title="tarifbd" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 15 — billingd-runtime (distroless)
+# ║ Stage 14 — billingd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
 FROM gcr.io/distroless/cc-debian12:nonroot AS billingd-runtime
 
@@ -577,6 +575,35 @@ ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
 LABEL org.opencontainers.image.title="billingd" \
       org.opencontainers.image.description="Energy Billing Engine daemon — LF role, 12 categories, XRechnung 3.0, §14a, §41a (MaKo)" \
+      org.opencontainers.image.version="${OCI_VERSION}" \
+      org.opencontainers.image.revision="${OCI_REVISION}" \
+      org.opencontainers.image.created="${OCI_CREATED}" \
+      org.opencontainers.image.source="https://github.com/hupe1980/mako" \
+      org.opencontainers.image.licenses="MIT OR Apache-2.0"
+
+# ╔══════════════════════════════════════════════════════════════════════════════
+# ║ Stage 15 — outputd-runtime (distroless)
+# ╚══════════════════════════════════════════════════════════════════════════════
+FROM gcr.io/distroless/cc-debian12:nonroot AS outputd-runtime
+
+COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
+COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
+COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
+                    /usr/share/zoneinfo/leap-seconds.list
+COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
+ENV TZ=Europe/Berlin
+COPY --from=builder --chown=root:root /usr/local/bin/outputd /usr/local/bin/outputd
+EXPOSE 9880
+ENV OUTPUTD_LOG_FORMAT=json \
+    OUTPUTD_LOG_LEVEL=info
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
+    CMD ["/usr/local/bin/outputd", "--check"]
+ENTRYPOINT ["/usr/local/bin/outputd"]
+ARG OCI_VERSION=0.11.0
+ARG OCI_REVISION=unknown
+ARG OCI_CREATED=unknown
+LABEL org.opencontainers.image.title="outputd" \
+      org.opencontainers.image.description="Customer Communications daemon — operator Typst templates, ZUGFeRD PDF/A-3 carrier, publish gates (MaKo)" \
       org.opencontainers.image.version="${OCI_VERSION}" \
       org.opencontainers.image.revision="${OCI_REVISION}" \
       org.opencontainers.image.created="${OCI_CREATED}" \

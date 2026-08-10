@@ -34,7 +34,7 @@ anyhow       = "1"
 reqwest      = { workspace = true }
 tokio-util   = { workspace = true }
 secrecy      = { version = "0.10", features = ["serde"] }
-agentplane = { version = "0.10", features = [
+agentplane = { version = "0.14", features = [
     # The declaration, and the wires that reach a model and a tool server.
     "manifest", "mcp", "providers",
     # Both journal backends: an embedded file, or one database several
@@ -58,7 +58,7 @@ async-trait = "0.1.91"
 [dev-dependencies]
 # testkit brings FakeProvider, Faulty and the replay assertions. It carries no
 # reqwest dependency, so it resolves independently of the provider drivers.
-agentplane = { version = "0.10", features = [
+agentplane = { version = "0.14", features = [
     "manifest", "mcp", "providers", "redb", "postgres", "cedar", "signing",
     "keyring", "keyring-vault", "http", "testkit",
 ] }

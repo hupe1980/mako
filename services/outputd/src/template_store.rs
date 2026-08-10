@@ -32,6 +32,44 @@ use sha2::{Digest, Sha256};
 
 use crate::document::gate::Proof;
 
+/// Why a store write was refused — separated from plain storage errors so the
+/// HTTP layer can answer the caller's fault as the caller's fault (`409`/`422`)
+/// and a broken database as what it is (`500`), instead of folding both into
+/// one status.
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    /// The identical source is already published under a different kind (or,
+    /// in a shared database, by a different tenant). The hash is the identity
+    /// of the *source*, and a template's kind decides which proof it was
+    /// admitted on — so one row cannot honestly serve both. Without this
+    /// refusal the second publish was a silent no-op that returned a hash whose
+    /// row carried the *first* publisher's kind and proof: rollout then
+    /// succeeded and every render answered 422, with no error anywhere naming
+    /// the cause.
+    #[error(
+        "this exact source is already published {}as {existing_kind} — the hash is the identity \
+         of the source, so one row cannot serve two owners; change the source (a comment line \
+         suffices) to give it its own identity{}",
+        if *other_tenant { "by another tenant " } else { "" },
+        if *other_tenant { "" } else { ", or publish it under that kind" },
+    )]
+    IdentityCollision {
+        existing_kind: String,
+        /// Whether the colliding row belongs to a different tenant — in that
+        /// case "publish it under {kind}" is not advice, it is what the caller
+        /// just did.
+        other_tenant: bool,
+    },
+
+    /// The hash names no template published as `kind` by this tenant.
+    #[error("{0} is not a published {1} template of this tenant")]
+    NotPublished(String, &'static str),
+
+    /// The database, not the caller.
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
 /// Which document a template renders.
 ///
 /// The Textform kinds share this store and (once it exists) the same engine with
@@ -150,24 +188,29 @@ pub fn hash_source(source: &str) -> String {
 /// row whose proof is not the full one.
 ///
 /// Idempotent by construction: the same source yields the same hash, and a
-/// re-publish is a no-op rather than a duplicate or an error. **Does not** move
-/// the current pointer — publishing and rolling out are separate acts, so a
-/// template can be stored and rendered against before anyone is billed with it.
+/// re-publish under the same kind is a no-op rather than a duplicate or an
+/// error. **Does not** move the current pointer — publishing and rolling out
+/// are separate acts, so a template can be stored and rendered against before
+/// anyone is billed with it.
 ///
 /// # Errors
 ///
-/// Propagates storage errors.
+/// [`StoreError::IdentityCollision`] when the identical source is already
+/// published under a different kind or tenant — the row keeps the first
+/// publisher's kind and proof, so silently returning its hash would hand the
+/// caller an identity that fails `render_admissible` on every render, with the
+/// cause reported nowhere. Otherwise storage errors.
 pub async fn publish(
-    exec: impl sqlx::PgExecutor<'_>,
+    pool: &sqlx::PgPool,
     tenant: &str,
     kind: TemplateKind,
     source: &str,
     pdf_standard: Option<&str>,
     proof: Proof,
     published_by: Option<&str>,
-) -> Result<String> {
+) -> Result<String, StoreError> {
     let hash = hash_source(source);
-    sqlx::query(
+    let inserted = sqlx::query(
         "INSERT INTO document_templates
              (hash, tenant, kind, source, pdf_standard, proof, published_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -180,27 +223,51 @@ pub async fn publish(
     .bind(pdf_standard)
     .bind(proof.as_str())
     .bind(published_by)
-    .execute(exec)
-    .await?;
+    .execute(pool)
+    .await?
+    .rows_affected();
+    if inserted == 0 {
+        // The hash already exists. Rows are immutable, so this read cannot
+        // race anything: either it is the same (tenant, kind) — the documented
+        // idempotent re-publish — or the caller collided with an identity that
+        // is not theirs.
+        let (existing_tenant, existing_kind): (String, String) =
+            sqlx::query_as("SELECT tenant, kind FROM document_templates WHERE hash = $1")
+                .bind(&hash)
+                .fetch_one(pool)
+                .await?;
+        if existing_tenant != tenant || existing_kind != kind.as_str() {
+            return Err(StoreError::IdentityCollision {
+                existing_kind,
+                other_tenant: existing_tenant != tenant,
+            });
+        }
+    }
     Ok(hash)
 }
 
 /// Point `(tenant, kind)` at an already-published template.
 ///
+/// The guarded `INSERT … SELECT` requires the row to exist **as this kind, for
+/// this tenant** — not merely to exist. A pointer is a rollout decision, and
+/// rolling out a Mahnung layout as the invoice template must fail *here*, at
+/// the `PUT`, not at the first render when invoices are due.
+///
 /// # Errors
 ///
-/// Returns an error when `hash` is not a published template — the foreign key
-/// refuses a pointer into nothing, which is the whole reason the pointer is a
-/// separate table rather than a mutable column.
+/// [`StoreError::NotPublished`] when `hash` names no template published as
+/// `kind` by this tenant; otherwise storage errors.
 pub async fn set_current(
     exec: impl sqlx::PgExecutor<'_>,
     tenant: &str,
     kind: TemplateKind,
     hash: &str,
-) -> Result<()> {
-    sqlx::query(
+) -> Result<(), StoreError> {
+    let written = sqlx::query(
         "INSERT INTO document_template_current (tenant, kind, hash, updated_at)
-         VALUES ($1, $2, $3, now())
+         SELECT t.tenant, t.kind, t.hash, now()
+           FROM document_templates t
+          WHERE t.hash = $3 AND t.tenant = $1 AND t.kind = $2
          ON CONFLICT (tenant, kind) DO UPDATE
            SET hash = EXCLUDED.hash, updated_at = now()",
     )
@@ -208,7 +275,11 @@ pub async fn set_current(
     .bind(kind.as_str())
     .bind(hash)
     .execute(exec)
-    .await?;
+    .await?
+    .rows_affected();
+    if written == 0 {
+        return Err(StoreError::NotPublished(hash.to_owned(), kind.as_str()));
+    }
     Ok(())
 }
 

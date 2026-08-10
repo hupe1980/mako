@@ -5,10 +5,10 @@
 //! looks for — because "the gate passed" and "the file is a ZUGFeRD invoice"
 //! are only the same statement if the gate is checking the right things.
 
-use billingd::document::facturx::{self, Profile};
-use billingd::document::gate;
-use billingd::document::render::{RenderRequest, render};
-use billingd::document::{DocumentView, REFERENCE_INVOICE_TEMPLATE, RenderError};
+use outputd::document::facturx::{self, Profile};
+use outputd::document::gate;
+use outputd::document::render::{RenderRequest, render};
+use outputd::document::{DocumentView, REFERENCE_INVOICE_TEMPLATE, RenderError};
 
 /// The specimen invoice for a profile.
 ///
@@ -18,39 +18,51 @@ use billingd::document::{DocumentView, REFERENCE_INVOICE_TEMPLATE, RenderError};
 /// without satisfying it would have this test exercising the carrier with a
 /// document no B2G portal would accept, which proves less than it appears to.
 ///
-/// So the XRechnung specimen is completed the way production completes one: the
+/// So the XRechnung specimen is completed the way a caller completes one: the
 /// receiving authority's BG-7 and the Leitweg-ID that BT-10 and BT-49 need.
+/// (In production that completion happens in the issuing service — billingd's
+/// `einvoice::apply_b2g_buyer` — because outputd never edits the model; this
+/// test builds the same shape with the `en16931` types directly.)
 fn specimen(profile: Profile) -> en16931::Invoice {
-    let model = gate::specimen_invoice();
-    let model = match profile {
-        Profile::XRechnung => {
-            const LEITWEG: &str = "991-33333TEST-33";
-            let authority = billingd::einvoice::B2gBuyer {
-                name: "Bundesamt für Musterverwaltung".to_owned(),
+    use en16931::identifier::Identifier;
+    use en16931::invoice::{Code, Contact, Party, PostalAddress};
+
+    let mut model = gate::specimen_invoice();
+    if profile == Profile::XRechnung {
+        const LEITWEG: &str = "991-33333TEST-33";
+        // BG-7: the receiving public authority.
+        model.buyer = Party {
+            name: Some("Bundesamt für Musterverwaltung".to_owned()),
+            // BT-49 under EAS 0204 (German Leitweg-ID).
+            electronic_address: Identifier::eas_checked(LEITWEG.to_owned(), "0204").ok(),
+            address: PostalAddress {
                 line1: Some("Behördenstraße 2".to_owned()),
-                post_code: Some("53113".to_owned()),
                 city: Some("Bonn".to_owned()),
-                country: Some("DE".to_owned()),
-                contact_name: Some("Rechnungseingang".to_owned()),
+                post_code: Some("53113".to_owned()),
+                country: Some(Code::from("DE")),
+                ..Default::default()
+            },
+            contact: Contact {
+                name: Some("Rechnungseingang".to_owned()),
                 phone: Some("+49 228 000".to_owned()),
                 email: Some("re@bund.example".to_owned()),
-                vat_id: None,
-                electronic_address: Some(LEITWEG.to_owned()),
-            };
-            billingd::einvoice::with_buyer_reference(
-                billingd::einvoice::apply_b2g_buyer(model, &authority),
-                LEITWEG,
-            )
-        }
-        _ => model,
-    };
+            },
+            ..Default::default()
+        };
+        // BT-10 is the last term XRechnung needs that a retail document cannot
+        // have, so this is the point the document may honestly claim the CIUS.
+        model.buyer_reference = Some(LEITWEG.to_owned());
+        model.specification_id = Some(
+            "urn:cen.eu:en16931:2017#compliant#urn:xeinkauf.de:kosit:xrechnung_3.0".to_owned(),
+        );
+    }
     assert_eq!(facturx::profile_of(&model), profile, "BT-24 decides");
     model
 }
 
 /// The CII payload the carrier is built around — real, not a placeholder.
 ///
-/// A B2G document goes through `render_xrechnung_cii`, which **validates against
+/// A B2G document goes through `cii::to_string_for`, which **validates against
 /// the full CIUS before writing** and refuses to produce a rejectable file — so
 /// this returning at all is itself the proof that the XRechnung specimen is a
 /// valid XRechnung document.
@@ -58,11 +70,15 @@ fn payload(profile: Profile) -> String {
     let model = specimen(profile);
     match profile {
         Profile::XRechnung => {
-            billingd::einvoice::render_xrechnung_cii(&model).unwrap_or_else(|findings| {
-                panic!("the XRechnung specimen must satisfy the CIUS: {findings:#?}")
-            })
+            en16931_formats::cii::to_string_for(&model, &en16931::profiles::XRECHNUNG)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "the XRechnung specimen must satisfy the CIUS: {e}\n{}",
+                        e.report()
+                    )
+                })
         }
-        _ => billingd::einvoice::render_cii(&model),
+        _ => en16931_formats::cii::to_string(&model),
     }
 }
 
@@ -598,6 +614,30 @@ fn customer_text_is_content_not_markup() {
     );
 }
 
+/// Write the reference Mahnung render for visual inspection. Not an assertion.
+#[test]
+#[ignore = "writes a file for visual inspection (pdftoppm -r 150)"]
+fn write_mahnung_specimen_for_visual_inspection() {
+    let out = std::env::var("MAKO_ZUGFERD_OUT")
+        .unwrap_or_else(|_| "target/mahnung-specimen.pdf".to_owned());
+    if let Some(dir) = std::path::Path::new(&out).parent() {
+        std::fs::create_dir_all(dir).expect("create dir");
+    }
+    let rendered = render(&RenderRequest {
+        template: outputd::document::REFERENCE_MAHNUNG_TEMPLATE.to_owned(),
+        data: Some(
+            serde_json::to_string(&outputd::document::mahnung::specimen()).expect("serialises"),
+        ),
+        attachment: None,
+        standard: None,
+        date: gate::SPECIMEN_DATE,
+        ident: "mahnung-visual".to_owned(),
+    })
+    .expect("renders");
+    std::fs::write(&out, &rendered.pdf).expect("write");
+    println!("wrote {out} ({} pages)", rendered.pages);
+}
+
 /// Write a **multi-page** render for visual inspection. Not an assertion.
 ///
 /// Sammelrechnung and VPP documents carry dozens of lines, and nothing else in
@@ -608,7 +648,7 @@ fn customer_text_is_content_not_markup() {
 #[test]
 #[ignore = "writes a file for visual inspection (pdftoppm -r 150)"]
 fn write_multipage_specimen_for_visual_inspection() {
-    use billingd::document::{LineView, VatView};
+    use outputd::document::{LineView, VatView};
 
     let mut model = specimen(Profile::En16931);
     // Repeat the first line often enough to break the page. The amounts stop

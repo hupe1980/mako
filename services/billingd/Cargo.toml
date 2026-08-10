@@ -45,38 +45,8 @@ tokio-util   = { workspace = true }
 en16931         = { workspace = true }
 en16931-formats = { workspace = true }
 
-# Template identity is the SHA-256 of the source: an issued invoice pins the
-# hash that rendered it, and § 147 AO / GoBD require that to stay resolvable.
-sha2       = { version = "0.10", default-features = false }
-
-# Document rendering. Typst compiles the operator's template; typst-pdf emits
-# the PDF/A-3b carrier (PdfStandard::A_3b) with the CII XML attached via
-# pdf.attach(); typst-assets supplies the embedded fonts a distroless image has
-# no system fonts for, plus the sRGB ICC profile a PDF/A OutputIntent requires.
-typst        = "0.15"
-# `PagedDocument` — the laid-out document `typst::compile` produces and
-# `typst_pdf::pdf` consumes. It lives in typst-layout, which neither crate
-# re-exports, so naming the type needs the crate.
-typst-layout = "0.15"
-typst-pdf    = "0.15"
-typst-assets = { version = "0.15", features = ["fonts"] }
-
-# ZUGFeRD carrier surgery: locating the XMP stream `document::facturx` extends,
-# and reading text back off the rendered page so the publish gate can check the
-# § 14 Abs. 4 UStG content is really printed. *Reading* a finished ZUGFeRD file
-# is `en16931-formats::zugferd`, not this. Kept on the same version that crate
-# resolves, so the dependency graph carries one lopdf rather than two. Default
-# features off — the date crates and rayon are for authoring PDFs, which mako
-# does not do here.
-lopdf        = { version = "0.44", default-features = false }
 
 [dev-dependencies]
-# Parsing the stamped XMP packet back as XML. `document::facturx::stamp` splices
-# into the metadata stream as a *string*, so nothing in the crate proves the
-# result is well-formed — a substring check passes just as happily on broken
-# XML. Version matched to the one `en16931-formats` already resolves so the
-# graph does not gain a third roxmltree.
-roxmltree = "0.21"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 time = { workspace = true }

@@ -873,9 +873,10 @@ CREATE INDEX event_log_type_time ON event_log (ce_type, received_at DESC);
 -- DLQ: dead_lettered_at IS NOT NULL is the dead-letter queue. Inspect / requeue
 -- via /admin/fanout/dlq.
 --
--- § 147 AO / GoBD: silent drop of a de.mako.process.initiated event to invoicd
--- would violate the 3-year receipt retention obligation; dead-lettering (never
--- dropping) provides the recovery path.
+-- GoBD (Vollständigkeit) / § 147 AO: a de.mako.process.initiated event to
+-- invoicd announces a message that becomes a Buchungsbeleg (8-year retention);
+-- silently dropping it would break the audit trail's completeness.
+-- Dead-lettering (never dropping) provides the recovery path.
 CREATE TABLE event_delivery (
     event_id         TEXT        NOT NULL REFERENCES event_log(event_id) ON DELETE CASCADE,
     subscriber_id    TEXT        NOT NULL,

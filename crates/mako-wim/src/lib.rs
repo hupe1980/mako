@@ -104,6 +104,7 @@ pub mod insrpt;
 pub mod invoic;
 pub mod preisanfrage;
 pub mod preisliste;
+pub mod rechnungsabwicklung;
 pub mod stammdaten;
 pub mod steuerungsauftrag;
 pub mod technik_aenderung;
@@ -141,6 +142,12 @@ pub use preisanfrage::{
 pub use preisliste::{
     PRICAT_PIDS, PreislisteCommand, PreislisteData, PreislisteEvent, PreislisteState,
     WORKFLOW_NAME as PREISLISTE_WORKFLOW_NAME, WimPreislisteWorkflow,
+};
+pub use rechnungsabwicklung::{
+    RECHNUNGSABWICKLUNG_DEADLINE_LABEL, RECHNUNGSABWICKLUNG_ORDERS_PIDS,
+    RECHNUNGSABWICKLUNG_ORDRSP_PIDS, RechnungsabwicklungCommand, RechnungsabwicklungData,
+    RechnungsabwicklungEvent, RechnungsabwicklungState,
+    WORKFLOW_NAME as RECHNUNGSABWICKLUNG_WORKFLOW_NAME, WimRechnungsabwicklungWorkflow,
 };
 pub use stammdaten::{
     ANFORDERUNG_PID, STAMMDATEN_DEADLINE_LABEL, StammdatenCommand, StammdatenData, StammdatenEvent,
@@ -218,6 +225,7 @@ impl mako_engine::builder::EngineModule for WimModule {
             "wim-steuerungsauftrag",
             "wim-preisanfrage",
             "wim-preisliste",
+            rechnungsabwicklung::WORKFLOW_NAME,
             "wim-invoic",
             insrpt::WORKFLOW_NAME,
             technik_aenderung::WORKFLOW_NAME,
@@ -375,6 +383,19 @@ impl mako_engine::builder::EngineModule for WimModule {
         // PRICAT 27001–27003 (Preisliste).
         for &pid in preisliste::PRICAT_PIDS {
             router.register(pid, "wim-preisliste");
+        }
+
+        // Rechnungsabwicklung MSB über LF (WiM Strom Teil 1): ORDERS 17005
+        // (Bestellung — the LF accepting the quote; nothing answers it) and
+        // 17006 (Beendigung, either direction), plus ORDRSP 19009/19010
+        // (Bestätigung/Ablehnung der Beendigung) resuming a Beendigung mako
+        // sent. Directions per BDEW PID overview 4.0 / AWH Aktivitätsdiagramme
+        // WiM V1.3 §§2.8–2.11 (EBDs E_0206/E_0209).
+        for &pid in rechnungsabwicklung::RECHNUNGSABWICKLUNG_ORDERS_PIDS
+            .iter()
+            .chain(rechnungsabwicklung::RECHNUNGSABWICKLUNG_ORDRSP_PIDS)
+        {
+            router.register(pid, rechnungsabwicklung::WORKFLOW_NAME);
         }
 
         // ── ESA Wertebestellung (WiM Teil 2 Kap. 4) ───────────────────────

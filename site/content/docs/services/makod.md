@@ -486,7 +486,7 @@ irrelevant for a particular operator — reducing binary size and attack surface
 | `role-lf-gas` | `mako-geli-gas` (LF side): `geli-gas-stornierung-lf`, `geli-gas-sperrung-lf`, `geli-gas-mscons` |
 | `role-nb-strom` | `mako-gpke` (NB side): `gpke-supplier-change`, `gpke-sperrung`, `gpke-konfiguration`, `gpke-konfiguration-aenderung`, `gpke-neuanlage`, `gpke-partin`, `mako-wim` (NB side), **`mako-redispatch`** (Redispatch 2.0 is gated to NB Strom / ÜNB — LF and MSB deployments are out of scope per BK6-20-059/060/061) |
 | `role-nb-gas` | `mako-geli-gas` (GNB side): `geli-gas-supplier-change`, `geli-gas-sperrung-nb`, `geli-gas-stornierung`, `geli-gas-datenabruf`, `geli-gas-partin`, `geli-gas-sperrprozesse-invoic` |
-| `role-msb-strom` | `mako-wim`: `wim-device-change`, `wim-geraeteubernahme`, `wim-stammdaten`, `wim-preisanfrage`, `wim-preisliste`, `wim-invoic`, `wim-insrpt`, `wim-wertebestellung` |
+| `role-msb-strom` | `mako-wim`: `wim-device-change`, `wim-geraeteubernahme`, `wim-stammdaten`, `wim-preisanfrage`, `wim-rechnungsabwicklung`, `wim-preisliste`, `wim-invoic`, `wim-insrpt`, `wim-wertebestellung` |
 | `role-msb-gas` | `mako-wim-gas`: all WiM Gas workflows |
 
 ### Composite flags
@@ -852,10 +852,17 @@ signal: it parses the SOAP namespace-correctly, checks the receipt signature
 every NonRepudiationInformation digest against what the sent message was signed
 over, and enforces a replay window — the Non-Repudiation-of-Receipt guarantee,
 proven rather than assumed. A returned `eb:Error` is surfaced as a typed
-rejection (with its ebMS3 code) so retry-vs-dead-letter routing keys on the real
-reason; an unverifiable receipt is a retryable failure that backs off and
-eventually dead-letters. `--as4-lenient-receipts` drops to asx-rs's `relaxed()`
-policy (accepts unsigned / non-NRR receipts) for interop bring-up.
+rejection (with its ebMS3 code); like an unverifiable receipt, it backs off and
+retries — deliberately, because the ebMS MessageId is the stable outbox id and
+the AS4-Profil mandates receiver duplicate elimination, so a resend cannot
+double-process, while the P-Mode, partner certificate and rendering are resolved
+per attempt, so a configuration fix heals delivery without re-enqueueing. The
+retry budget is the profile's duty stated as *time*: 72 hours from creation
+(`max_retry_window`), with an attempt belt only against runaway loops. The
+`outbox_delivery_attempted` metric separates `counterparty_error`,
+`receipt_unverified` and `transport_error`. `--as4-lenient-receipts` drops to
+asx-rs's `relaxed()` policy (accepts unsigned / non-NRR receipts) for interop
+bring-up.
 
 **Per-sender rate limiting.** The AS4 port applies two independent GCRA
 limits: per peer IP (100 req/s, burst 50) and per sender MP-ID (50 req/s,
@@ -1358,6 +1365,9 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `geli.lieferende.bestaetigen` | `GNB` | GeLi Gas | 44005/44006 | Gas DSO accepts/rejects supply end |
 | `wim.geraetewechsel.beauftragen` | `NB` or `MSB` | WiM | 55039/55042/55051/55168 | Commission a meter-device change |
 | `wim.geraetewechsel.bestaetigen` | `MSB` | WiM | 55039/55042/55051/55168 | MSB confirms physical device swap |
+| `wim.rechnungsabwicklung.beenden` | `LF` or `MSB` | WiM | 17006 | End the Rechnungsabwicklung MSB über LF (either side may) |
+| `wim.rechnungsabwicklung.zustimmen` | `LF` or `MSB` | WiM | 19009 | Confirm a received Beendigung (ORDRSP) |
+| `wim.rechnungsabwicklung.ablehnen` | `LF` or `MSB` | WiM | 19010 | Reject a received Beendigung (ORDRSP) |
 | `wim.steuerungsauftrag.bestaetigen` | `MSB` | WiM | — | MSB sends final positive control-measure response |
 | `wim.steuerungsauftrag.ablehnen` | `MSB` | WiM | — | MSB sends final negative control-measure response |
 | `mabis.abrechnung.einleiten` | `BKV` | MABIS | 13003 | Open a balancing-zone billing period |

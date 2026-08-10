@@ -125,6 +125,9 @@ pub struct CreateKundeInput {
     pub zahlungsziel_tage: Option<i32>,
     pub sepa_erlaubt: Option<bool>,
     pub erp_kunde_id: Option<String>,
+    /// § 13b Abs. 2 Nr. 5 lit. b UStG Stromwiederverkäufer flag (USt 1 TH on
+    /// file). Defaults to `false`; billingd derives reverse charge from it.
+    pub stromwiederverkaeufer: Option<bool>,
     #[allow(dead_code)]
     pub notizen: Option<String>,
 }
@@ -249,10 +252,12 @@ pub async fn upsert_kunde(pool: &PgPool, tenant: &str, input: &CreateKundeInput)
     let row = sqlx::query(
         "INSERT INTO kunden
          (id,tenant,kunden_nr,kundentyp,geschaeftspartner,
-          organisations_id,umsatzsteuer_id,zahlungsziel_tage,sepa_erlaubt,erp_kunde_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          organisations_id,umsatzsteuer_id,zahlungsziel_tage,sepa_erlaubt,erp_kunde_id,
+          stromwiederverkaeufer)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
          ON CONFLICT (tenant, erp_kunde_id) WHERE erp_kunde_id IS NOT NULL DO UPDATE
-           SET geschaeftspartner=EXCLUDED.geschaeftspartner, updated_at=now()
+           SET geschaeftspartner=EXCLUDED.geschaeftspartner,
+               stromwiederverkaeufer=EXCLUDED.stromwiederverkaeufer, updated_at=now()
          RETURNING id",
     )
     .bind(id)
@@ -265,6 +270,7 @@ pub async fn upsert_kunde(pool: &PgPool, tenant: &str, input: &CreateKundeInput)
     .bind(input.zahlungsziel_tage.unwrap_or(14))
     .bind(input.sepa_erlaubt.unwrap_or(true))
     .bind(&input.erp_kunde_id)
+    .bind(input.stromwiederverkaeufer.unwrap_or(false))
     .fetch_one(pool)
     .await?;
     let actual_id: Uuid = row.try_get("id")?;
@@ -1838,7 +1844,8 @@ pub async fn apply_auto_renewal(pool: &PgPool, id: Uuid, new_end: Date) -> anyho
 
 /// Pseudonymize all PII for a customer (GDPR Art. 17 — right to erasure).
 ///
-/// Retains contract records for the legal retention period (§147 AO: 10 years)
+/// Retains contract records for the legal retention period (§ 147 Abs. 3 AO:
+/// Handelsbriefe 6 years, Buchungsbelege 8 years — kept 8, the longest applicable)
 /// but replaces all personal data with non-reversible pseudonyms.
 ///
 /// Fields anonymized:
@@ -1935,7 +1942,7 @@ pub async fn anonymize_kunde(
         ][..],
     )
     .bind(requested_by)
-    .bind("\u{00a7}147 AO: Handels- und Steuerb\u{00fc}cher 10 Jahre Aufbewahrungspflicht")
+    .bind("§ 147 Abs. 3 AO: Handelsbriefe 6 Jahre / Buchungsbelege 8 Jahre Aufbewahrungspflicht")
     .execute(pool)
     .await?;
 
@@ -2096,6 +2103,9 @@ pub struct RechnungsempfaengerRow {
     pub country: Option<String>,
     /// BT-48 buyer VAT identifier — B2B only, `NULL` for a household.
     pub vat_id: Option<String>,
+    /// § 13b Abs. 2 Nr. 5 lit. b UStG — the buyer is a Stromwiederverkäufer;
+    /// billingd derives reverse charge (net invoice, `AE` breakdown) from it.
+    pub stromwiederverkaeufer: bool,
 }
 
 /// Read `geschaeftspartner->>'name1'`-style fields out of the BO4E JSONB.
@@ -2107,6 +2117,7 @@ pub struct RechnungsempfaengerRow {
 fn buyer_from_geschaeftspartner(
     gp: Option<&serde_json::Value>,
     vat_id: Option<String>,
+    stromwiederverkaeufer: bool,
 ) -> RechnungsempfaengerRow {
     let s = |v: Option<&serde_json::Value>, k: &str| {
         v.and_then(|v| v.get(k))
@@ -2129,6 +2140,7 @@ fn buyer_from_geschaeftspartner(
         city: s(adresse, "ort"),
         country: s(adresse, "landescode"),
         vat_id,
+        stromwiederverkaeufer,
     }
 }
 
@@ -2142,8 +2154,8 @@ pub async fn fetch_rechnungsempfaenger_by_malo(
     malo_id: &str,
     tenant: &str,
 ) -> Result<Option<RechnungsempfaengerRow>> {
-    let row: Option<(Option<serde_json::Value>, Option<String>)> = sqlx::query_as(
-        "SELECT ku.geschaeftspartner, ku.umsatzsteuer_id
+    let row: Option<(Option<serde_json::Value>, Option<String>, bool)> = sqlx::query_as(
+        "SELECT ku.geschaeftspartner, ku.umsatzsteuer_id, ku.stromwiederverkaeufer
            FROM versorgungsvertraege v
            JOIN vertragskomponenten k ON k.vertrag_id = v.id
            JOIN kunden ku            ON ku.id = v.kunden_id
@@ -2156,7 +2168,7 @@ pub async fn fetch_rechnungsempfaenger_by_malo(
     .bind(tenant)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(gp, vat)| buyer_from_geschaeftspartner(gp.as_ref(), vat)))
+    Ok(row.map(|(gp, vat, wv)| buyer_from_geschaeftspartner(gp.as_ref(), vat, wv)))
 }
 
 /// The BG-7 buyer behind a Rahmenvertrag — the holder a Sammelrechnung bills.
@@ -2173,8 +2185,8 @@ pub async fn fetch_rechnungsempfaenger_by_rahmenvertrag(
     rahmenvertrag_id: Uuid,
     tenant: &str,
 ) -> Result<Option<RechnungsempfaengerRow>> {
-    let row: Option<(Option<serde_json::Value>, Option<String>)> = sqlx::query_as(
-        "SELECT ku.geschaeftspartner, ku.umsatzsteuer_id
+    let row: Option<(Option<serde_json::Value>, Option<String>, bool)> = sqlx::query_as(
+        "SELECT ku.geschaeftspartner, ku.umsatzsteuer_id, ku.stromwiederverkaeufer
            FROM rahmenvertraege r
            JOIN kunden ku ON ku.id = r.kunden_id
           WHERE r.id=$1 AND r.tenant=$2",
@@ -2183,5 +2195,73 @@ pub async fn fetch_rechnungsempfaenger_by_rahmenvertrag(
     .bind(tenant)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(gp, vat)| buyer_from_geschaeftspartner(gp.as_ref(), vat)))
+    Ok(row.map(|(gp, vat, wv)| buyer_from_geschaeftspartner(gp.as_ref(), vat, wv)))
+}
+
+// ── GGV-Betreiber (§ 42b EnWG) ────────────────────────────────────────────────
+
+/// Point `(tenant, ggv_id)` at the Kunde who operates the community.
+///
+/// `false` when the Kunde does not exist for this tenant — checked explicitly
+/// rather than left to the foreign key, so the handler can answer 404 with the
+/// actual problem instead of relaying a constraint violation as a 500.
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn upsert_ggv_betreiber(
+    pool: &PgPool,
+    tenant: &str,
+    ggv_id: &str,
+    kunden_id: Uuid,
+) -> Result<bool> {
+    let kunde_exists: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM kunden WHERE id=$1 AND tenant=$2")
+            .bind(kunden_id)
+            .bind(tenant)
+            .fetch_optional(pool)
+            .await?;
+    if kunde_exists.is_none() {
+        return Ok(false);
+    }
+    sqlx::query(
+        "INSERT INTO ggv_betreiber (tenant, ggv_id, kunden_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (tenant, ggv_id) DO UPDATE
+           SET kunden_id = EXCLUDED.kunden_id, updated_at = now()",
+    )
+    .bind(tenant)
+    .bind(ggv_id)
+    .bind(kunden_id)
+    .execute(pool)
+    .await?;
+    Ok(true)
+}
+
+/// The BG-7 buyer behind a GGV — the § 42b operator the bundled Sammelrechnung
+/// bills.
+///
+/// Same projection as the Rahmenvertrag holder: the per-Teilnehmer documents
+/// resolve their buyers per MaLo, but the bundle addresses the community's
+/// operator, who is a Kunde here and nowhere else.
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn fetch_rechnungsempfaenger_by_ggv(
+    pool: &PgPool,
+    ggv_id: &str,
+    tenant: &str,
+) -> Result<Option<RechnungsempfaengerRow>> {
+    let row: Option<(Option<serde_json::Value>, Option<String>, bool)> = sqlx::query_as(
+        "SELECT ku.geschaeftspartner, ku.umsatzsteuer_id, ku.stromwiederverkaeufer
+           FROM ggv_betreiber g
+           JOIN kunden ku ON ku.id = g.kunden_id
+          WHERE g.ggv_id=$1 AND g.tenant=$2",
+    )
+    .bind(ggv_id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(gp, vat, wv)| buyer_from_geschaeftspartner(gp.as_ref(), vat, wv)))
 }

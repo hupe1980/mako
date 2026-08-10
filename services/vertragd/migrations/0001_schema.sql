@@ -32,6 +32,12 @@ CREATE TABLE kunden (
     organisations_id    TEXT,           -- company/org identifier from ERP
     umsatzsteuer_id     TEXT,           -- VAT-ID for B2B XRechnung
     zahlungsziel_tage   INTEGER     NOT NULL DEFAULT 14,
+    -- § 13b Abs. 2 Nr. 5 lit. b UStG: this customer is a Stromwiederverkäufer
+    -- (reseller — in practice evidenced by a USt 1 TH certificate). When true,
+    -- billingd invoices the supply net (reverse charge — the recipient owes the
+    -- VAT); § 13b is mandatory when its conditions are met, so this is master
+    -- data, not a per-invoice choice.
+    stromwiederverkaeufer BOOLEAN   NOT NULL DEFAULT false,
     sepa_erlaubt        BOOLEAN     NOT NULL DEFAULT true,
     erp_kunde_id        TEXT,           -- CRM idempotency key
     notizen             TEXT,
@@ -125,6 +131,30 @@ CREATE TABLE rahmenvertraege (
 
 CREATE INDEX rahmen_kunden ON rahmenvertraege (kunden_id, tenant, status);
 CREATE INDEX rahmen_status ON rahmenvertraege (tenant, status) WHERE status = 'AKTIV';
+
+-- ── GGV-Betreiber (§ 42b EnWG) ────────────────────────────────────────────────
+--
+-- The operator of a Gemeinschaftliche Gebäudeversorgung is the LF's *customer*
+-- for the bundled GGV Sammelrechnung — the BG-7 buyer of that document. It is
+-- deliberately not a Marktpartner: a GGV-Betreiber has no MP-ID and never
+-- appears in MaKo (§ 42b keeps the participants' ordinary supply
+-- relationships), so its master data lives here with every other buyer, not in
+-- marktd. `ggv_id` is the operator-assigned community identifier billingd and
+-- edmd key allocation and billing on; this table is the one place that says
+-- who is behind it.
+
+CREATE TABLE ggv_betreiber (
+    tenant     TEXT        NOT NULL,
+    ggv_id     TEXT        NOT NULL,
+    kunden_id  UUID        NOT NULL REFERENCES kunden(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, ggv_id)
+);
+
+COMMENT ON TABLE ggv_betreiber IS
+    'The § 42b EnWG GGV operator as a Kunde — the BG-7 buyer of the bundled '
+    'GGV Sammelrechnung. Keyed by the operator-assigned ggv_id billingd bills on.';
 
 -- ── Versorgungsverträge (Individual Supply Contracts) ─────────────────────────
 

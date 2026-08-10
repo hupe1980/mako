@@ -624,168 +624,33 @@ async fn pg_container() -> Option<(String, PgContainer)> {
     Some((url, container))
 }
 
-// ── Document template store ───────────────────────────────────────────────────
-
-/// Publishing is content-addressed and idempotent; the pointer moves, the
-/// templates it points at do not.
-///
-/// All of this is SQL — a primary key on the hash, a foreign key from the
-/// pointer, a foreign key from the issued invoice — so only a real database
-/// proves it. The property that matters is the last one: a template an invoice
-/// was rendered with must stay resolvable, because § 147 AO / GoBD keep that
-/// invoice for 8 years and its appearance has to remain explicable.
-#[tokio::test]
-#[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn a_published_template_stays_resolvable_after_the_pointer_moves() {
-    use billingd::document::gate::Proof;
-    use billingd::template_store::{self, TemplateKind};
-
-    let Some((pool, _pg)) = test_pool("template_store").await else {
-        return;
-    };
-    let tenant = "9900000000001";
-
-    let v1 = template_store::publish(
-        &pool,
-        tenant,
-        TemplateKind::Invoice,
-        "#set page(paper: \"a4\")\n= Rechnung v1",
-        Some("a-3b"),
-        Proof::RenderedPdfa,
-        Some("ops@example"),
-    )
-    .await
-    .expect("publish v1");
-
-    // Same source → same identity, and no duplicate row.
-    let again = template_store::publish(
-        &pool,
-        tenant,
-        TemplateKind::Invoice,
-        "#set page(paper: \"a4\")\n= Rechnung v1",
-        Some("a-3b"),
-        Proof::RenderedPdfa,
-        None,
-    )
-    .await
-    .expect("re-publish is a no-op");
-    assert_eq!(
-        again, v1,
-        "content-addressed: identical source, identical hash"
-    );
-    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM document_templates")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(rows, 1, "re-publishing must not duplicate");
-
-    template_store::set_current(&pool, tenant, TemplateKind::Invoice, &v1)
-        .await
-        .expect("roll out v1");
-    assert_eq!(
-        template_store::current(&pool, tenant, TemplateKind::Invoice)
-            .await
-            .unwrap()
-            .map(|t| t.hash),
-        Some(v1.clone()),
-    );
-
-    // Publish a redesign and roll it out.
-    let v2 = template_store::publish(
-        &pool,
-        tenant,
-        TemplateKind::Invoice,
-        "#set page(paper: \"a4\")\n= Rechnung v2 (neues Logo)",
-        Some("a-3b"),
-        Proof::RenderedPdfa,
-        None,
-    )
-    .await
-    .expect("publish v2");
-    assert_ne!(v2, v1);
-    template_store::set_current(&pool, tenant, TemplateKind::Invoice, &v2)
-        .await
-        .expect("roll out v2");
-
-    // The point of the whole design: v1 is still there, unchanged, and an
-    // invoice rendered with it can still explain how it looked.
-    let old = template_store::by_hash(&pool, &v1)
-        .await
-        .unwrap()
-        .expect("v1 survives the rollout");
-    assert!(old.source.contains("v1"), "the old source is intact");
-    assert_eq!(
-        template_store::current(&pool, tenant, TemplateKind::Invoice)
-            .await
-            .unwrap()
-            .map(|t| t.hash),
-        Some(v2),
-        "only the pointer moved",
-    );
-
-    // A pointer into nothing is refused — that is why it is a table with a
-    // foreign key rather than a free-text column.
-    assert!(
-        template_store::set_current(&pool, tenant, TemplateKind::Invoice, "deadbeef")
-            .await
-            .is_err(),
-        "cannot point at an unpublished template",
-    );
-
-    // Textform kinds share the store, and their pointers are independent.
-    let mahnung = template_store::publish(
-        &pool,
-        tenant,
-        TemplateKind::Mahnung,
-        "= Zahlungserinnerung",
-        None,
-        Proof::Parsed,
-        None,
-    )
-    .await
-    .expect("publish Mahnung");
-    template_store::set_current(&pool, tenant, TemplateKind::Mahnung, &mahnung)
-        .await
-        .unwrap();
-    assert_eq!(
-        template_store::current(&pool, tenant, TemplateKind::Invoice)
-            .await
-            .unwrap()
-            .map(|t| t.kind),
-        Some("INVOICE".to_owned()),
-        "rolling out a Mahnung must not disturb the invoice pointer",
-    );
-}
+// ── Template pinning ──────────────────────────────────────────────────────────
 
 /// The template a document was rendered with is pinned once and never moves.
 ///
-/// This is the § 147 AO property expressed in SQL, and only a real database can
-/// show it: a conditional `UPDATE`, a foreign key into an append-only table, and
-/// a pointer that other rows share. Rolling out a redesign must change how *new*
-/// invoices look and nothing at all about one already issued.
+/// This is the § 147 AO property expressed in SQL: a conditional `UPDATE` that
+/// refuses to overwrite. Rolling out a redesign (in outputd) must change how
+/// *new* invoices look and nothing at all about one already issued.
+///
+/// The hash is a value from another service — templates live in outputd, so no
+/// foreign key can reach them. Resolvability is outputd's append-only store
+/// policy, proven in its own suite
+/// (`outputd/tests/store_integration.rs::a_published_template_stays_resolvable_after_the_pointer_moves`);
+/// what billingd owns, and what this test pins, is that the pin itself never
+/// moves.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn an_issued_document_keeps_the_layout_it_was_issued_with() {
-    use billingd::document::gate::Proof;
-    use billingd::template_store::{self, TemplateKind};
-
     let Some((pool, _pg)) = test_pool("template_pin").await else {
         return;
     };
     let tenant = "9910000000002";
     let record = insert_draft(&pool, dec!(100)).await;
 
-    let v1 = template_store::publish(
-        &pool,
-        tenant,
-        TemplateKind::Invoice,
-        "#let render(i) = [Rechnung v1]",
-        Some("a-3b"),
-        Proof::RenderedPdfa,
-        Some("ops@example"),
-    )
-    .await
-    .expect("publish v1");
+    // The hash outputd answered with on the first render — an opaque value
+    // on this side of the boundary.
+    let v1 = "1111111111111111111111111111111111111111111111111111111111111111";
+    let v2 = "2222222222222222222222222222222222222222222222222222222222222222";
 
     // Nothing is pinned until the document is first rendered.
     let before = pg::fetch_billing_record(&pool, tenant, record)
@@ -796,9 +661,9 @@ async fn an_issued_document_keeps_the_layout_it_was_issued_with() {
 
     // Rendering a *draft* pins nothing: nobody has received it, and trapping an
     // operator's own preview on the layout they were about to fix would be
-    // irreversible in an append-only store.
+    // irreversible, because outputd's store never deletes.
     assert_eq!(
-        pg::pin_template(&pool, record, &v1).await.unwrap(),
+        pg::pin_template(&pool, record, v1).await.unwrap(),
         None,
         "a draft renders with the current layout and pins nothing",
     );
@@ -808,213 +673,31 @@ async fn an_issued_document_keeps_the_layout_it_was_issued_with() {
         .await
         .expect("dispatch");
     assert_eq!(
-        pg::pin_template(&pool, record, &v1).await.unwrap(),
-        Some(v1.clone()),
+        pg::pin_template(&pool, record, v1)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(v1),
         "the first render after dispatch pins the layout",
     );
 
-    // A redesign is published and rolled out.
-    let v2 = template_store::publish(
-        &pool,
-        tenant,
-        TemplateKind::Invoice,
-        "#let render(i) = [Rechnung v2]",
-        Some("a-3b"),
-        Proof::RenderedPdfa,
-        None,
-    )
-    .await
-    .expect("publish v2");
-    template_store::set_current(&pool, tenant, TemplateKind::Invoice, &v2)
-        .await
-        .expect("roll out v2");
-
-    // Re-rendering the issued invoice still resolves v1 — the pin refuses to
-    // move, so an audit in 2034 gets the document as it was sent.
+    // A redesign is rolled out in outputd; re-rendering the issued invoice
+    // still resolves v1 — the pin refuses to move, so an audit in 2034 gets
+    // the document as it was sent.
     assert_eq!(
-        pg::pin_template(&pool, record, &v2).await.unwrap(),
-        Some(v1.clone()),
+        pg::pin_template(&pool, record, v2)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(v1),
         "an issued document's layout is fixed; a rollout cannot restyle it",
     );
     assert_eq!(
         pg::fetch_billing_record(&pool, tenant, record)
             .await
             .unwrap()
-            .and_then(|r| r.template_hash),
+            .and_then(|r| r.template_hash)
+            .as_deref(),
         Some(v1),
-    );
-}
-
-/// The schema refuses an invoice template that was not fully proven.
-///
-/// The gate is a code path and code paths can be bypassed — by a future caller,
-/// by a migration script, by a hand-written `INSERT`. The constraint is what
-/// makes "an INVOICE row is always a rendered, conformant carrier" a property of
-/// the data rather than of the current call graph.
-#[tokio::test]
-#[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn the_database_refuses_an_unproven_invoice_template() {
-    use billingd::document::gate::Proof;
-    use billingd::template_store::{self, TemplateKind};
-
-    let Some((pool, _pg)) = test_pool("template_proof").await else {
-        return;
-    };
-    let tenant = "9910000000002";
-
-    assert!(
-        template_store::publish(
-            &pool,
-            tenant,
-            TemplateKind::Invoice,
-            "#let render(i) = []",
-            Some("a-3b"),
-            Proof::Parsed,
-            None,
-        )
-        .await
-        .is_err(),
-        "an invoice template may not be stored on the weaker proof",
-    );
-
-    assert!(
-        template_store::publish(
-            &pool,
-            tenant,
-            TemplateKind::Invoice,
-            "#let render(i) = []",
-            None,
-            Proof::RenderedPdfa,
-            None,
-        )
-        .await
-        .is_err(),
-        "an invoice template must record the PDF/A level it met",
-    );
-
-    // The Textform kinds are stored on the proof they can actually offer.
-    let hash = template_store::publish(
-        &pool,
-        tenant,
-        TemplateKind::Mahnung,
-        "#let render(i) = [Zahlungserinnerung]",
-        None,
-        Proof::Parsed,
-        None,
-    )
-    .await
-    .expect("a Textform template stores on the parse proof");
-    assert_eq!(
-        template_store::by_hash(&pool, &hash)
-            .await
-            .unwrap()
-            .map(|t| t.proof),
-        Some("PARSED".to_owned()),
-        "the store records which proof was obtained",
-    );
-}
-
-/// An operator can find the hash to roll back to.
-///
-/// The store never deletes so a previous layout stays restorable, and the API
-/// documents rollback as "PUT the previous hash" — which is not a performable
-/// instruction unless something says what the previous hash was. `current`
-/// names exactly one template and `by_hash` needs the answer already, so
-/// without a listing the documented recovery path could not be walked.
-#[tokio::test]
-#[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn a_rollback_can_discover_the_hash_to_roll_back_to() {
-    use billingd::document::gate::Proof;
-    use billingd::template_store::{self, TemplateKind};
-
-    let Some((pool, _pg)) = test_pool("template_list").await else {
-        return;
-    };
-    let tenant = "9910000000002";
-
-    let v1 = template_store::publish(
-        &pool,
-        tenant,
-        TemplateKind::Invoice,
-        "#let render(i) = [v1]",
-        Some("a-3b"),
-        Proof::RenderedPdfa,
-        Some("ops@example"),
-    )
-    .await
-    .expect("publish v1");
-    let v2 = template_store::publish(
-        &pool,
-        tenant,
-        TemplateKind::Invoice,
-        "#let render(i) = [v2]",
-        Some("a-3b"),
-        Proof::RenderedPdfa,
-        None,
-    )
-    .await
-    .expect("publish v2");
-    let mahnung = template_store::publish(
-        &pool,
-        tenant,
-        TemplateKind::Mahnung,
-        "#let render(i) = [Mahnung]",
-        None,
-        Proof::Parsed,
-        None,
-    )
-    .await
-    .expect("publish Mahnung");
-    template_store::set_current(&pool, tenant, TemplateKind::Invoice, &v2)
-        .await
-        .expect("roll out v2");
-
-    let all = template_store::list(&pool, tenant, None, 100)
-        .await
-        .expect("list");
-    assert_eq!(all.len(), 3, "every kind, newest first");
-    assert_eq!(all[0].hash, mahnung, "ordered by publication, newest first");
-
-    // Exactly one INVOICE row is current, and it is the one rolled out.
-    let invoices = template_store::list(&pool, tenant, Some(TemplateKind::Invoice), 100)
-        .await
-        .expect("list invoices");
-    assert_eq!(invoices.len(), 2, "the kind filter applies");
-    let current: Vec<&String> = invoices
-        .iter()
-        .filter(|t| t.is_current)
-        .map(|t| &t.hash)
-        .collect();
-    assert_eq!(current, vec![&v2]);
-
-    // And the previous one is right there, which is the whole point.
-    let previous = invoices
-        .iter()
-        .find(|t| !t.is_current)
-        .expect("the layout to roll back to");
-    assert_eq!(previous.hash, v1);
-    assert_eq!(previous.proof, "RENDERED_PDFA");
-    assert_eq!(previous.pdf_standard.as_deref(), Some("a-3b"));
-    assert_eq!(previous.published_by.as_deref(), Some("ops@example"));
-
-    template_store::set_current(&pool, tenant, TemplateKind::Invoice, &previous.hash)
-        .await
-        .expect("roll back");
-    assert_eq!(
-        template_store::current(&pool, tenant, TemplateKind::Invoice)
-            .await
-            .unwrap()
-            .map(|t| t.hash),
-        Some(v1),
-        "the rollback the listing made discoverable actually works",
-    );
-
-    // A tenant sees only its own templates.
-    assert!(
-        template_store::list(&pool, "9900000000004", None, 100)
-            .await
-            .expect("list")
-            .is_empty(),
-        "listings are tenant-scoped",
     );
 }

@@ -815,9 +815,12 @@ mod ingest_contract_tests {
 /// ## § 60 Abs. 6 MsbG compliance
 ///
 /// Every correction creates an immutable `meter_read_corrections` row that
-/// preserves the original value, corrected value, reason, and operator identity.
-/// This enables BNetzA auditors to reconstruct the billing basis at any point
-/// in time over the mandatory 3-year retention period.
+/// preserves the original value, corrected value, reason, and operator identity,
+/// so an auditor can reconstruct the billing basis at any point in time. Billed
+/// data is a Buchungsbeleg (§ 147 Abs. 3 AO / GoBD: 8 years); § 60 Abs. 6 MsbG
+/// separately caps *personal* Messwert storage (delete or anonymize at latest
+/// three years after the end of the collection year) — the correction trail
+/// itself carries no personal data beyond the MaLo reference.
 ///
 /// ## Request body
 ///

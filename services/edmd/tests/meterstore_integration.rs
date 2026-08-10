@@ -687,15 +687,22 @@ async fn reads_are_scoped_to_their_tenant() {
 /// § 60 Abs. 2 MsbG Ersatzwertbildung, end to end against a real database.
 ///
 /// The regulated artefact is the *number* a substitute carries, and the method
-/// that has to produce it — `PriorPeriodSameSlot` — is the same shape as the
-/// seasonal-forecast defect this service already hit once, where the handler
-/// passed no reference window and every result silently degraded to a naive
-/// fallback. A degraded substitute is indistinguishable from a correct one in
-/// the response body, so the assertion has to be on the value.
+/// that has to produce it — Vergleichstag, the same slot one week earlier — is
+/// the same shape as the seasonal-forecast defect this service already hit
+/// once, where the handler passed no reference window and every result
+/// silently degraded to a naive fallback. A degraded substitute is
+/// indistinguishable from a correct one in the response body, so the assertion
+/// has to be on the value.
 ///
 /// The fixture gives every quarter-hour of the prior week a distinct value, so
 /// "same slot one week earlier" is the only rule that reproduces it: an average,
 /// a carry-forward and a zero-fill all land somewhere else.
+///
+/// Both missing runs are deliberately **longer than the short-gap threshold**
+/// (3 intervals): runs of at most three slots are linearly interpolated
+/// whatever method was requested — the VDE-AR-N 4400 hierarchy, pinned by
+/// `a_short_gap_interpolates_between_its_real_brackets` below — so a fixture
+/// with short runs would (correctly) never see the reference week at all.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
@@ -709,7 +716,10 @@ async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
     // A gap well in the past, so V08 (future timestamp) cannot fire on the
     // reference data, and slot-aligned so the week-earlier slot exists.
     let gap_from = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("2026-01-01T00:00Z");
-    let gap_to = gap_from + Duration::hours(1); // four quarter-hours
+    // Ten quarter-hours: with the measurement at slot 4, the missing runs are
+    // 4 and 5 slots — both past the short-gap threshold, so the requested
+    // Vergleichstag method is what runs.
+    let gap_to = gap_from + Duration::minutes(150);
     let week = Duration::days(7);
 
     // 672 quarter-hours covering exactly [gap_from - 7d, gap_from), each with a
@@ -726,7 +736,7 @@ async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
 
     // One real measurement inside the gap: § 60 Abs. 2 authorises a substitute
     // only where no measurement exists, so this slot must survive untouched.
-    let measured_slot = gap_from + Duration::minutes(30);
+    let measured_slot = gap_from + Duration::minutes(60);
     repo.store_reads(validated(vec![read(
         malo,
         measured_slot,
@@ -770,7 +780,7 @@ async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
 
     // Gap slot `n` starts at `gap_from + 15n min`; one week earlier that is
     // `gap_from - 7d + 15n min`, which is prior index `n` — value `n + 1` .5.
-    for (n, slot) in (0..4).map(|n| (n, gap_from + Duration::minutes(15 * n))) {
+    for (n, slot) in (0..10).map(|n| (n, gap_from + Duration::minutes(15 * n))) {
         let row = stored
             .iter()
             .find(|r| r.dtm_from == slot)
@@ -818,8 +828,8 @@ async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
 
     assert_eq!(
         logged.len(),
-        3,
-        "three substituted slots must each leave an audit row, and the measured \
+        9,
+        "nine substituted slots must each leave an audit row, and the measured \
          slot none — got {logged:?}"
     );
     assert!(
@@ -829,5 +839,115 @@ async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
     assert!(
         logged.iter().all(|(t, _)| *t != measured_slot),
         "the untouched measured slot must not appear in the audit log"
+    );
+}
+
+/// A run of at most three missing slots is linearly interpolated between its
+/// real neighbours — the VDE-AR-N 4400 short-gap rule — even when those
+/// neighbours lie *outside* the requested gap window.
+///
+/// This pins the bracket plumbing: the engine derives a gap's opening bracket
+/// only from slots its walk has visited, so the handler must start the fill at
+/// the last billable reading before the gap. Before it did, a leading short
+/// gap had no left bracket and "interpolation" silently produced a flat copy
+/// of the closing value — a degraded number indistinguishable from a correct
+/// one in the response body. The audit row must also name what actually ran
+/// (`LinearInterpolation`), not what was requested.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn a_short_gap_interpolates_between_its_real_brackets() {
+    use edmd::server::{SubstituteRequest, run_substitute_values};
+    use time::format_description::well_known::Rfc3339;
+
+    let (repo, pool, _pg, _wh) = setup().await;
+    let malo = "51238696780";
+    let obis = "1-0:1.8.0";
+
+    // Brackets at T0 and T0+45min; the two slots between them are missing.
+    // Both brackets are outside the requested window [T0+15, T0+45).
+    let t0 = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("2026-01-01T00:00Z");
+    repo.store_reads(validated(vec![
+        read(malo, t0, "100.0", Sparte::Strom, obis),
+        read(
+            malo,
+            t0 + Duration::minutes(45),
+            "400.0",
+            Sparte::Strom,
+            obis,
+        ),
+    ]))
+    .await
+    .expect("store the bracketing measurements");
+
+    let gap_from = t0 + Duration::minutes(15);
+    let gap_to = t0 + Duration::minutes(45);
+    let req = SubstituteRequest {
+        gap_from: gap_from.format(&Rfc3339).expect("rfc3339"),
+        gap_to: gap_to.format(&Rfc3339).expect("rfc3339"),
+        interval_secs: Some(900),
+        // Deliberately *not* interpolation: the short-gap rule must override
+        // the requested method, and the audit trail must say so.
+        method: Some("PriorPeriodAverage".to_owned()),
+        prior_days: Some(7),
+        operator_id: Some("TEST-OPERATOR".to_owned()),
+        sparte: Some("STROM".to_owned()),
+        reason: Some("NoMeasurementAvailable".to_owned()),
+        obis_code: Some(obis.to_owned()),
+    };
+    let status = run_substitute_values(&repo, "9910000000001", malo, &req)
+        .await
+        .status();
+    assert_eq!(status.as_u16(), 201, "the substitute run must succeed");
+
+    let stored = repo
+        .query(&TimeSeriesQuery {
+            malo_id: malo.to_owned(),
+            from: gap_from,
+            to: gap_to,
+            sparte: None,
+            tenant: "9910000000001".to_owned(),
+        })
+        .await
+        .expect("read the gap window back");
+
+    // Two unknowns between 100 and 400 sit at thirds: 200 and 300. A flat
+    // copy of either bracket is exactly the degradation this test exists to
+    // refuse.
+    for (slot, expected) in [
+        (gap_from, kwh("200.0")),
+        (gap_from + Duration::minutes(15), kwh("300.0")),
+    ] {
+        let row = stored
+            .iter()
+            .find(|r| r.dtm_from == slot)
+            .unwrap_or_else(|| panic!("no reading at {slot}"));
+        assert_eq!(
+            row.quantity_kwh, expected,
+            "a short gap must interpolate between its real brackets \
+             (100 → 400 at thirds), not copy one of them"
+        );
+        assert_eq!(row.quality, QualityFlag::Substituted);
+    }
+
+    // Nothing outside the requested window was written: the run-up slot the
+    // handler walks for its opening bracket is bracket, not product.
+    let logged: Vec<(OffsetDateTime, String)> = sqlx::query_as(
+        "SELECT dtm_from, method FROM substitute_value_log
+          WHERE malo_id = $1 AND tenant = $2 ORDER BY dtm_from",
+    )
+    .bind(malo)
+    .bind("9910000000001")
+    .fetch_all(&pool)
+    .await
+    .expect("read the substitute audit log");
+    assert_eq!(
+        logged.len(),
+        2,
+        "exactly the two requested slots leave audit rows — got {logged:?}"
+    );
+    assert!(
+        logged.iter().all(|(_, m)| m == "LinearInterpolation"),
+        "the audit row must name the method that actually ran, not the one \
+         requested: {logged:?}"
     );
 }

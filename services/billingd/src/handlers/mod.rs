@@ -219,7 +219,6 @@ mod enrichment;
 mod ggv;
 mod records;
 mod sammelrechnung;
-mod templates;
 mod vpp;
 
 // Path-preserving re-exports: everything that used to live directly in
@@ -231,7 +230,6 @@ pub(crate) use enrichment::*;
 pub use ggv::*;
 pub use records::*;
 pub use sammelrechnung::*;
-pub use templates::*;
 pub use vpp::*;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────

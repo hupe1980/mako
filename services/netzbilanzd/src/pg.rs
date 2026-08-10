@@ -943,7 +943,8 @@ pub struct AuditRow {
     pub updated_at: time::OffsetDateTime,
 }
 
-/// Export invoice records for BNetzA audit (§ 147 AO / GoBD 3-year retention).
+/// Export invoice records for BNetzA audit (§ 147 AO / GoBD; invoices are
+/// Buchungsbelege — 8-year retention).
 ///
 /// Filters by date range, PID, and status.  Does not return `rechnung` JSONB
 /// to keep response payload manageable for large portfolios.

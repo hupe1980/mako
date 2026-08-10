@@ -3,11 +3,9 @@
 #[allow(unused_imports)]
 use super::*;
 
-use super::templates::{RENDER_BUDGET, pdf_response};
-use crate::document::facturx::{self, Profile};
-use crate::document::render::{RenderRequest, render_guarded};
-use crate::document::view::DocumentView;
-use crate::template_store::{self, StoredTemplate, TemplateKind};
+use crate::clients::OutputdClient;
+use crate::document_view::DocumentView;
+use en16931_formats::zugferd::Profile;
 
 // ── Records ────────────────────────────────────────────────────────────────────
 
@@ -107,6 +105,7 @@ pub async fn get_invoice_pdf(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<BillingdConfig>>,
+    Extension(outputd): Extension<Arc<OutputdClient>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     let row = match fetch_billing_record(&pool, &cfg.tenant, id).await {
@@ -126,15 +125,30 @@ pub async fn get_invoice_pdf(
             .into_response();
     };
 
-    let template = match resolve_template(&pool, &cfg.tenant, &row).await {
-        Ok(t) => t,
-        Err(response) => return response,
-    };
-
     // The profile the document declares decides the embedded filename and the
     // carrier's conformance level; a B2G document is additionally *proven*
-    // against XRechnung before it is written, so a rejectable file cannot ship.
-    let profile = facturx::profile_of(&model);
+    // against XRechnung before it is sent to the renderer, so a rejectable file
+    // cannot ship. What the invoice *says* is proven here, where the model
+    // lives; how it *looks* is outputd's job.
+    let profile = model
+        .specification_id
+        .as_deref()
+        .map_or(Profile::Unknown, Profile::parse);
+    // A profile that is not an EN 16931 invoice (MINIMUM, BASIC WL) — or one
+    // this system does not recognise — cannot be wrapped in a carrier that
+    // claims to hold an invoice. outputd would refuse it too, but from here
+    // that surfaces as a gateway error; the defect is in this record's BT-24,
+    // and the answer must say so.
+    if let en16931_formats::zugferd::IsInvoice::No(why) = profile.is_en16931_invoice() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "the stored model's BT-24 declares {profile}, which is not an EN 16931 \
+                 invoice ({why}) — re-run the billing calculation"
+            ),
+        )
+            .into_response();
+    }
     let xml = match profile {
         Profile::XRechnung => match crate::einvoice::render_xrechnung_cii(&model) {
             Ok(xml) => xml,
@@ -149,13 +163,10 @@ pub async fn get_invoice_pdf(
                     .into_response();
             }
         },
-        // Everything else is plain CII — validated against the profile the
-        // document declares before it is embedded. The B2G arm above proves
-        // itself through `to_string_for`; without this arm doing the same, a
-        // retail record whose stored model has gone invalid would be wrapped in
-        // a conformant carrier and shipped — the publish gate validates only
-        // its own specimen, and a carrier round-trips an invalid payload
-        // exactly as faithfully as a valid one.
+        // Everything else is plain CII — validated before it leaves billingd.
+        // outputd wraps whatever payload it is handed exactly as faithfully
+        // when it is invalid, so the sender is the only place this check can
+        // live.
         _ => {
             let fatal: Vec<String> = crate::einvoice::validate(&model)
                 .fatal()
@@ -175,105 +186,106 @@ pub async fn get_invoice_pdf(
             crate::einvoice::render_cii(&model)
         }
     };
-
-    let request = RenderRequest {
-        template: template.source.clone(),
-        data: match serde_json::to_string(&DocumentView::of(&model)) {
-            Ok(json) => Some(json),
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        },
-        attachment: Some(match facturx::attachment(profile, xml) {
-            Ok(a) => a,
-            Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
-        }),
-        standard: Some(
-            template
-                .pdf_standard
-                .clone()
-                .unwrap_or_else(|| crate::document::gate::DEFAULT_PDF_STANDARD.to_owned()),
-        ),
-        // BT-2, not the wall clock: `datetime.today()` in the template and the
-        // PDF's creation timestamp are both the invoice's own date. Falling
-        // back to the period end keeps a model without BT-2 deterministic
-        // rather than letting the clock in through the back door.
-        date: model.issue_date.map_or(row.period_to, Into::into),
-        // Stable across renders, and distinct across documents and layouts.
-        ident: format!("{}:{}:{}", cfg.tenant, template.hash, id),
-    };
-
-    let rendered = match render_guarded(request, RENDER_BUDGET).await {
-        Ok(rendered) => rendered,
-        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
-    };
-    for warning in &rendered.warnings {
-        tracing::warn!(record = %id, template = %template.hash, %warning, "invoice render warning");
-    }
-    match facturx::stamp(&rendered.pdf, profile) {
-        Ok(pdf) => {
-            let name = model.number.as_deref().map_or_else(
-                || id.to_string(),
-                |n| {
-                    // BT-1 reaches an HTTP header here; a quote or a newline in
-                    // it would end the header early. Invoice numbers are ours,
-                    // but a filename is the wrong place to rely on that.
-                    n.chars()
-                        .map(|c| {
-                            if c.is_alphanumeric() || c == '-' {
-                                c
-                            } else {
-                                '_'
-                            }
-                        })
-                        .collect()
-                },
-            );
-            pdf_response(&format!("rechnung-{name}.pdf"), pdf)
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
-    }
-}
-
-/// The template this record's document is rendered with, pinning it if this is
-/// the first render.
-///
-/// Racing renders of the same record are safe: the pin is a conditional update
-/// that returns the winning hash, and both callers then use it.
-async fn resolve_template(
-    pool: &PgPool,
-    tenant: &str,
-    row: &crate::pg::BillingRecordRow,
-) -> Result<StoredTemplate, axum::response::Response> {
-    let chosen = match &row.template_hash {
-        Some(hash) => hash.clone(),
-        None => match template_store::current(pool, tenant, TemplateKind::Invoice).await {
-            Ok(Some(t)) => t.hash,
-            Ok(None) => {
-                return Err((
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "no invoice template is rolled out for this tenant — publish one and \
-                     PUT /api/v1/templates/INVOICE/current",
-                )
-                    .into_response());
-            }
-            Err(e) => {
-                return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response());
-            }
-        },
-    };
-    let pinned = match crate::pg::pin_template(pool, row.id, &chosen).await {
-        Ok(Some(hash)) => hash,
-        Ok(None) => chosen,
-        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()),
-    };
-    match template_store::by_hash(pool, &pinned).await {
-        Ok(Some(t)) => Ok(t),
-        // The foreign key makes this unreachable; report it as the server fault
-        // it would be rather than blaming the caller.
-        Ok(None) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("record pins template {pinned}, which is not in the store"),
+    let Some(specification_id) = model.specification_id.clone() else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "the stored model carries no BT-24 — re-run the billing calculation",
         )
-            .into_response()),
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()),
-    }
+            .into_response();
+    };
+
+    let view = DocumentView::of(&model);
+    // BT-2, not the wall clock: `datetime.today()` in the template and the
+    // PDF's creation timestamp are both the invoice's own date. Falling back to
+    // the period end keeps a model without BT-2 deterministic rather than
+    // letting the clock in through the back door.
+    let date: time::Date = model.issue_date.map_or(row.period_to, Into::into);
+
+    // First render with the pinned template if the record has one, otherwise
+    // with whatever outputd has rolled out for the tenant. outputd names the
+    // template it used in `X-Mako-Template-Hash`; for an issued record that
+    // hash is then pinned so a request a decade later reproduces the document
+    // that was sent rather than re-styling it. A draft pins nothing and renders
+    // with the current layout every time — see [`crate::pg::pin_template`].
+    //
+    // Racing first renders of the same record are safe: the pin is a
+    // conditional update that returns the winning hash, and the loser re-renders
+    // once with the winner. Two renders suffice whenever outputd honours its
+    // contract (a requested hash is the hash used); the bound turns a renderer
+    // that does not into a 502 instead of a hot loop.
+    let mut chosen = row.template_hash.clone();
+    let mut renders = 0;
+    let rendered = loop {
+        if renders >= 2 {
+            return (
+                StatusCode::BAD_GATEWAY,
+                "outputd keeps answering with a template other than the requested one",
+            )
+                .into_response();
+        }
+        renders += 1;
+        let rendered = match outputd
+            .render_invoice(
+                &view,
+                xml.clone(),
+                &specification_id,
+                chosen.as_deref(),
+                date,
+                &id.to_string(),
+            )
+            .await
+        {
+            Ok(r) => r,
+            // outputd's deterministic refusals are this record's (or this
+            // tenant's rollout state's) fault — relay them as such. Only a
+            // renderer that cannot answer is a gateway problem.
+            Err(e @ crate::clients::OutputdError::Refused { .. }) => {
+                return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response();
+            }
+            Err(e) => return (StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+        };
+        if chosen.as_deref() == Some(rendered.template_hash.as_str()) {
+            break rendered; // pinned render — nothing left to agree on
+        }
+        match crate::pg::pin_template(&pool, id, &rendered.template_hash).await {
+            // Draft (no pin written) or this render won the pin: ship it.
+            Ok(None) => break rendered,
+            Ok(Some(pinned)) if pinned == rendered.template_hash => break rendered,
+            // A concurrent render pinned a different hash first — reproduce
+            // *that* document.
+            Ok(Some(pinned)) => chosen = Some(pinned),
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        }
+    };
+
+    let name = model.number.as_deref().map_or_else(
+        || id.to_string(),
+        |n| {
+            // BT-1 reaches an HTTP header here; a quote or a newline in it
+            // would end the header early. ASCII-only, because `HeaderValue`
+            // refuses non-ASCII outright — `is_alphanumeric` would wave an
+            // umlaut through and turn it into a 500 at header construction.
+            n.chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect()
+        },
+    );
+    (
+        StatusCode::OK,
+        [
+            ("Content-Type", "application/pdf".to_owned()),
+            (
+                "Content-Disposition",
+                format!("attachment; filename=\"rechnung-{name}.pdf\""),
+            ),
+        ],
+        rendered.pdf,
+    )
+        .into_response()
 }

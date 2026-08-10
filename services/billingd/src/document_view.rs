@@ -1,30 +1,24 @@
-//! The typed view a document template renders from.
+//! billingd's copy of the outputd template view — the render-boundary contract.
 //!
-//! # Why a projection and not the model
+//! outputd renders documents from a JSON view; **outputd's
+//! `document::view::DocumentView` is the normative definition** of that view,
+//! because it is what the publish gate proves templates against. This module is
+//! billingd's client-side copy: the projection from the stored
+//! [`en16931::Invoice`] onto the JSON that crosses the HTTP boundary.
 //!
-//! An operator owns the invoice *layout* — logo, Briefkopf, where the
-//! Pflichtangaben sit — so the template is their file, not ours. Handing it
-//! [`en16931::Invoice`] directly would make every field of the semantic model a
-//! public API that no template may outgrow: rename one and somebody's invoice
-//! stops rendering at the next release.
-//!
-//! [`DocumentView`] is the contract instead. It is deliberately small, flat and
-//! named for what a reader sees rather than for the BT/BG codes underneath, and
-//! it carries the term identifiers in its documentation so an operator can find
-//! the legal basis for a field without reading EN 16931.
-//!
-//! It is also **total in the fields it declares**: every value is copied from
-//! the model, so a page and the XML embedded beside it cannot disagree. See the
-//! [module docs](super) for the layering this sits in.
+//! Two copies is the mako idiom for wire structs at service boundaries (the
+//! same way CloudEvents payloads are duplicated at each end): billingd must not
+//! link outputd's crate — that would drag the whole Typst engine back in and
+//! undo the extraction. Drift is caught on both sides: outputd's gate specimen
+//! pins what templates consume, and `tests/einvoice_render.rs` pins what this
+//! projection emits.
 //!
 //! # Numbers
 //!
-//! Amounts are decimal strings, not floats: an invoice total that survives a
-//! round trip through `f64` is not an invoice total. The strings keep the scale
-//! their business term carries — `InvoiceAmount` always prints two decimals, a
-//! quantity or a VAT rate prints its own — so a template must *pad* a value to
-//! the precision it wants to show and must never truncate one. The reference
-//! template's `money` and `num` helpers do exactly that.
+//! Amounts are decimal strings, not floats. The strings keep the scale their
+//! business term carries — `InvoiceAmount` always prints two decimals, a
+//! quantity or a VAT rate prints its own — and the template pads, never
+//! truncates.
 
 use serde::Serialize;
 
@@ -112,9 +106,6 @@ pub struct TotalsView {
 }
 
 /// Everything a template may render, and nothing else.
-///
-/// See the [module docs](self) for why this exists rather than the semantic
-/// model itself.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct DocumentView {
     /// BT-1 — invoice number.

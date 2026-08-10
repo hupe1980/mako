@@ -38,6 +38,7 @@ members = [
     "services/tarifbd",
     "services/agentd",
     "services/billingd",
+    "services/outputd",
     "services/accountingd",
     "services/portald",
     "services/vertragd",
@@ -66,10 +67,11 @@ billing      = { version = "0.13.0", features = ["serde"] }
 # adapter bridges the shared money core); en16931-formats renders XRechnung/CII +
 # PEPPOL UBL, and its `zugferd` feature *reads* a finished ZUGFeRD PDF — the
 # catalogue walk, the CII re-parse and the metadata/payload `Divergence` checks
-# billingd's publish gate runs. Writing the carrier is mako's (`document::facturx`),
-# because that crate deliberately ships no writer; see EN16931_FEEDBACK.md.
-en16931         = { version = "0.4.0", features = ["billing", "serde", "time"] }
-en16931-formats = { version = "0.4.0", features = ["cii", "ubl", "serde", "zugferd"] }
+# outputd's publish gate runs. Writing the carrier is mako's
+# (`outputd::document::facturx`), because that crate deliberately ships no
+# writer — a position upstream holds by design (fed back to its authors).
+en16931         = { version = "0.5.0", features = ["billing", "serde", "time"] }
+en16931-formats = { version = "0.5.0", features = ["cii", "ubl", "serde", "zugferd"] }
 serde        = { version = "1", features = ["derive"] }
 serde_json   = "1"
 thiserror    = "2"

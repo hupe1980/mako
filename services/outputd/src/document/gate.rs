@@ -58,8 +58,13 @@ pub enum Proof {
     /// Rendered to a conformant PDF/A carrier whose embedded XML was extracted
     /// again and matched. The full proof, and the only one an invoice accepts.
     RenderedPdfa,
+    /// Rendered against the kind's specimen and the page carried its mandatory
+    /// content — the full proof for a Textform document, which has no PDF/A to
+    /// meet and nothing to embed. What a MAHNUNG requires.
+    RenderedTextform,
     /// Compiled far enough to show the template parses and exports `render`.
-    /// No page was produced, because there is nothing yet to render it from.
+    /// What remains for kinds whose data contract lives in another service and
+    /// has not been projected into a view yet (PREISANPASSUNG).
     Parsed,
 }
 
@@ -69,6 +74,7 @@ impl Proof {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::RenderedPdfa => "RENDERED_PDFA",
+            Self::RenderedTextform => "RENDERED_TEXTFORM",
             Self::Parsed => "PARSED",
         }
     }
@@ -99,6 +105,26 @@ const MAX_SPECIMEN_PAGES: usize = 8;
 /// examples use and the one every receiver accepts.
 pub const DEFAULT_PDF_STANDARD: &str = "a-3b";
 
+/// PEPPOL BIS Billing 3.0 business process (BT-23) — stamped on the specimen so
+/// it matches what billingd's production mapping stamps. One constant, two
+/// services: the value is a published PEPPOL identifier, not shared state.
+const BUSINESS_PROCESS: &str = "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0";
+
+/// Findings against the profile the document declares in BT-24 — the same
+/// dispatch billingd's `einvoice::validate` performs, inlined because the
+/// semantic model is a *library* both services hold, not a service boundary.
+fn validate_payload(model: &en16931::Invoice) -> en16931::validation::ValidationReport {
+    if model
+        .specification_id
+        .as_deref()
+        .is_some_and(|id| id.to_ascii_lowercase().contains("xrechnung"))
+    {
+        en16931::profiles::XRECHNUNG.validate(model)
+    } else {
+        en16931::validation::validate(model)
+    }
+}
+
 /// Prove a template, or refuse it.
 ///
 /// # Errors
@@ -108,8 +134,101 @@ pub const DEFAULT_PDF_STANDARD: &str = "a-3b";
 pub fn prove(kind: TemplateKind, source: &str, pdf_standard: Option<&str>) -> Result<Proven> {
     match kind {
         TemplateKind::Invoice => prove_invoice(source, pdf_standard),
-        TemplateKind::Mahnung | TemplateKind::Preisanpassung => prove_parses(source),
+        TemplateKind::Mahnung => prove_mahnung(source),
+        TemplateKind::Preisanpassung => prove_parses(source),
     }
+}
+
+/// The Textform proof: render the Stufe-3 specimen, then read the page back.
+///
+/// No carrier, no PDF/A — a Mahnung is § 126b Textform. What the page must
+/// say instead: the **declarant** (§ 126b names it as a requirement of the
+/// form), the **Gesamtforderung** (a demand without an amount demands
+/// nothing), the **Zahlungsfrist**, and — because the specimen is Stufe 3 —
+/// the § 41f Sperrtermin, so a template cannot silently drop the one block
+/// with statutory form requirements attached.
+fn prove_mahnung(source: &str) -> Result<Proven> {
+    let view = super::mahnung::specimen();
+    let rendered = render(&RenderRequest {
+        template: source.to_owned(),
+        data: Some(serde_json::to_string(&view)?),
+        attachment: None,
+        standard: None,
+        date: SPECIMEN_DATE,
+        ident: "mako-publish-gate-mahnung".to_owned(),
+    })?;
+    if rendered.pages > 3 {
+        bail!(
+            "the specimen Mahnung came to {} pages; a dunning letter over three pages has a layout fault",
+            rendered.pages,
+        );
+    }
+
+    let doc = lopdf::Document::load_mem(&rendered.pdf).context("reading back the render")?;
+    let pages: Vec<u32> = doc.get_pages().keys().copied().collect();
+    let text = doc
+        .extract_text(&pages)
+        .context("a Textform document must carry extractable text")?;
+    let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+
+    // German customer-facing renderings, deliberately: the view carries ISO
+    // values (`523.40`, `2026-03-15`) and the reference template formats them
+    // the way a German Mahnung reads (`523,40`, `15.03.2026`) — a template
+    // printing the raw ISO forms fails here, and the message says what was
+    // expected. The declarant needle comes from the view, and an empty needle
+    // would make its check vacuously true (`contains("")` always holds), so it
+    // is refused rather than skipped.
+    let declarant = view.absender.name.clone().unwrap_or_default();
+    if declarant.is_empty() {
+        bail!("the Mahnung specimen carries no declarant name — the § 126b check cannot run");
+    }
+    let required: [(&str, String); 4] = [
+        ("§ 126b declarant", declarant),
+        ("Gesamtforderung", "523,40".to_owned()),
+        ("Zahlungsfrist", "15.03.2026".to_owned()),
+        ("§ 41f Sperrtermin", "01.04.2026".to_owned()),
+    ];
+    for (term, value) in required {
+        let needle: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+        if !contains_standalone(&flat, &needle) {
+            bail!(
+                "the rendered Mahnung does not print the {term} (`{value}`, in its German \
+                 customer-facing format) — a Textform document without it does not meet its form"
+            );
+        }
+    }
+
+    Ok(Proven {
+        proof: Proof::RenderedTextform,
+        warnings: rendered.warnings,
+        pages: rendered.pages,
+    })
+}
+
+/// Whether `haystack` contains `needle` *not embedded in a larger number* —
+/// no digit or thousands separator directly before it, no digit directly
+/// after. Plain `contains` would accept a Mahnung that misprints the
+/// Gesamtforderung `523,40` as `1.523,40`: the wrong amount contains the right
+/// one as a suffix, and the whole point of the check is that the printed
+/// number is the demanded number.
+fn contains_standalone(haystack: &str, needle: &str) -> bool {
+    let mut from = 0;
+    while let Some(pos) = haystack[from..].find(needle) {
+        let at = from + pos;
+        let ok_before = haystack[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_ascii_digit() && c != '.' && c != ',');
+        let ok_after = haystack[at + needle.len()..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_ascii_digit());
+        if ok_before && ok_after {
+            return true;
+        }
+        from = at + 1;
+    }
+    false
 }
 
 /// The full proof: render, conform, stamp, then read the result back as a
@@ -126,7 +245,7 @@ fn prove_invoice(source: &str, pdf_standard: Option<&str>) -> Result<Proven> {
     // BR-E-05 requires to be zero — that nothing else here could see, because
     // the carrier round-trips an invalid payload exactly as faithfully as a
     // valid one.
-    let fatal: Vec<String> = crate::einvoice::validate(&model)
+    let fatal: Vec<String> = validate_payload(&model)
         .fatal()
         .map(|f| format!("[{}] {} — {}", f.rule, f.path, f.message))
         .collect();
@@ -141,7 +260,7 @@ fn prove_invoice(source: &str, pdf_standard: Option<&str>) -> Result<Proven> {
     // Real CII, produced by the same function production uses — not a stub.
     // A gate that embeds a placeholder proves the carrier moves *bytes*; it
     // cannot prove the bytes an invoice actually consists of survive it.
-    let xml = crate::einvoice::render_cii(&model);
+    let xml = en16931_formats::cii::to_string(&model);
 
     let request = RenderRequest {
         template: source.to_owned(),
@@ -333,7 +452,7 @@ pub const SPECIMEN_DATE: time::Date = time::macros::date!(2026 - 03 - 01);
 /// view the template renders comes from [`DocumentView::of`], the production
 /// projection, so the gate exercises it instead of a stand-in that could drift
 /// from it; and the payload embedded in the carrier is real CII from
-/// [`crate::einvoice::render_cii`], so "the invoice survives the carrier" is a
+/// `en16931_formats::cii::to_string`, so "the invoice survives the carrier" is a
 /// statement about an invoice rather than about a placeholder.
 ///
 /// It is chosen to be the awkward cases rather than the easy one, because a
@@ -359,7 +478,10 @@ pub const SPECIMEN_DATE: time::Date = time::macros::date!(2026 - 03 - 01);
 pub fn specimen_invoice() -> en16931::Invoice {
     use en16931::invoice::{Code, Contact, InvoiceLine, Item, Party, PostalAddress, PriceDetails};
     use en16931::{Date, Invoice, InvoiceAmount, Percentage, Quantity, UnitPriceAmount};
-    use energy_billing::en16931_map::EN16931_SPEC_ID;
+    /// BT-24 of the core specimen — the EN 16931 spec id, not any CIUS.
+    /// (Matches `energy_billing::en16931_map::EN16931_SPEC_ID`; inlined so the
+    /// renderer does not depend on a billing-domain crate.)
+    const EN16931_SPEC_ID: &str = "urn:cen.eu:en16931:2017";
 
     let party = |name: &str, vat: Option<&str>, line1: &str, plz: &str, city: &str| Party {
         name: Some(name.to_owned()),
@@ -498,9 +620,18 @@ pub fn specimen_invoice() -> en16931::Invoice {
     // subject to VAT"), and BR-O-11/12 make `O` exclusive — an invoice carrying
     // it may hold no other category — so it cannot appear on a mixed-rate
     // document like this one.
+    //
+    // The exempt position is a *genuine* durchlaufender Posten: under the WiM
+    // Rechnungsabwicklung des MSB über den LF (QUOTES 15002 / ORDERS 17005),
+    // the LF collects the MSB's Messentgelt in the MSB's name and for the
+    // MSB's account — exactly § 10 Abs. 1 Satz 4 UStG. (It was previously
+    // labelled "Konzessionsabgabe", which is wrong twice over: the
+    // Konzessionsabgabe is collected in the supplier's own name as part of
+    // the Entgelt and is subject to VAT, and the Satz cited was the pre-2019
+    // numbering.)
     .line(line(
         "5",
-        "Durchlaufender Posten Konzessionsabgabe",
+        "Durchlaufender Posten: Messentgelt MSB (in fremdem Namen vereinnahmt)",
         "1",
         "C62",
         "8.40",
@@ -517,13 +648,13 @@ pub fn specimen_invoice() -> en16931::Invoice {
         end: Some(Date::new(2026, 2, 28).expect("specimen period end")),
     });
 
-    // The terms `crate::einvoice::build` stamps on every production document.
+    // The terms billingd's `einvoice::build` stamps on every production document.
     // Without them the specimen is not a document production could have
     // produced — and, concretely, cannot satisfy XRechnung, which requires all
     // three (PEPPOL-EN16931-R001, -R020 and BR-DE-1). A gate specimen that is
     // less complete than the real thing proves templates against a document
     // shape they will never meet.
-    inv.business_process = Some(crate::einvoice::BUSINESS_PROCESS.to_owned());
+    inv.business_process = Some(BUSINESS_PROCESS.to_owned());
     inv.payment = Some(en16931::invoice::PaymentInstructions {
         // UNCL 4461 code 58 — SEPA credit transfer.
         means_code: Some(Code::from("58")),
@@ -544,7 +675,7 @@ pub fn specimen_invoice() -> en16931::Invoice {
     en16931::reconcile::Reconciler::new()
         .exemption(
             "E",
-            Some("Durchlaufender Posten, § 10 Abs. 1 Satz 6 UStG"),
+            Some("Durchlaufender Posten, § 10 Abs. 1 Satz 4 UStG"),
             None,
         )
         .apply(&mut inv)
@@ -563,6 +694,29 @@ pub fn specimen_view() -> DocumentView {
 mod tests {
     use super::*;
     use crate::document::REFERENCE_INVOICE_TEMPLATE;
+
+    /// The Gesamtforderung check must not accept the right digits inside the
+    /// wrong number.
+    ///
+    /// `"1.523,40".contains("523,40")` is true — so plain substring matching
+    /// would pass a template that misprints the demanded amount, and the whole
+    /// point of the check is that the printed number is the demanded number.
+    #[test]
+    fn an_amount_inside_a_larger_number_does_not_count_as_printed() {
+        assert!(contains_standalone("Gesamtforderung:523,40EUR", "523,40"));
+        assert!(!contains_standalone(
+            "Gesamtforderung:1.523,40EUR",
+            "523,40"
+        ));
+        assert!(!contains_standalone("Gesamtforderung:8523,40EUR", "523,40"));
+        // Trailing digits extend the number too: 523,401 is not 523,40.
+        assert!(!contains_standalone("Betrag523,401EUR", "523,40"));
+        // A later clean occurrence still counts even after an embedded one.
+        assert!(contains_standalone("alt:1.523,40neu:523,40", "523,40"));
+        // Dates keep working: dotted dates match only as themselves.
+        assert!(contains_standalone("zahlbarbis15.03.2026.", "15.03.2026"));
+        assert!(!contains_standalone("bis115.03.2026", "15.03.2026"));
+    }
 
     /// The reference template must survive its own gate.
     ///
@@ -631,17 +785,90 @@ mod tests {
         );
     }
 
-    /// The Textform kinds get the weaker proof, and it is still a proof.
+    /// The reference Mahnung passes its own gate, at the Textform proof.
     #[test]
-    fn a_textform_template_is_parsed_but_not_rendered() {
-        let proven = prove(TemplateKind::Mahnung, "#let render(x) = [Mahnung]", None)
-            .expect("a well-formed Textform template parses");
+    fn the_reference_mahnung_passes_the_gate() {
+        let proven = prove(
+            TemplateKind::Mahnung,
+            crate::document::REFERENCE_MAHNUNG_TEMPLATE,
+            None,
+        )
+        .expect("the shipped Mahnung template must pass its own gate");
+        assert_eq!(proven.proof, Proof::RenderedTextform);
+        assert!(
+            proven.warnings.is_empty(),
+            "no warnings: {:?}",
+            proven.warnings
+        );
+    }
+
+    /// A Mahnung that renders but omits its mandatory content is refused.
+    ///
+    /// `#let render(x) = [Mahnung]` used to *pass* (parse-proof only). With a
+    /// view and a specimen it now fails the page-content check — a dunning
+    /// letter naming neither declarant, amount, deadline nor the § 41f
+    /// Sperrtermin is not a Mahnung in any form the statute recognises.
+    #[test]
+    fn a_mahnung_that_prints_nothing_is_refused() {
+        let err = prove(TemplateKind::Mahnung, "#let render(x) = [Mahnung]", None)
+            .expect_err("an empty dunning letter is not a Mahnung");
+        assert!(
+            err.to_string().contains("declarant") || err.to_string().contains("Gesamtforderung"),
+            "the refusal names what is missing: {err}",
+        );
+    }
+
+    /// PREISANPASSUNG remains parse-only — its data lives in vertragd.
+    #[test]
+    fn preisanpassung_is_parsed_but_not_rendered() {
+        let proven = prove(
+            TemplateKind::Preisanpassung,
+            "#let render(x) = [Hinweis]",
+            None,
+        )
+        .expect("a well-formed Textform template parses");
         assert_eq!(proven.proof, Proof::Parsed);
 
         assert!(
             prove(TemplateKind::Preisanpassung, "#let falsch(x) = []", None).is_err(),
             "a template without the contract function is refused for every kind",
         );
+    }
+
+    /// The specimen's stamped terms match what billingd's production stamps.
+    ///
+    /// The specimen is hand-built, so it can drift from `billingd::einvoice::build`
+    /// — and it had: it was once missing BT-23, BT-34 and BG-16, proving
+    /// templates against a document shape production never emits. The old
+    /// in-process equality check died with the extraction; the tripwire is now
+    /// two-sided: billingd's `einvoice_render.rs::production_stamps_the_terms_the_gate_specimen_proves_templates_against`
+    /// pins production to these same expected values.
+    #[test]
+    fn the_specimen_carries_the_terms_production_stamps() {
+        let specimen = specimen_invoice();
+        assert_eq!(
+            specimen.business_process.as_deref(),
+            Some("urn:fdc:peppol.eu:2017:poacc:billing:01:1.0"),
+            "BT-23 business process",
+        );
+        assert_eq!(
+            specimen
+                .seller
+                .electronic_address
+                .as_ref()
+                .and_then(|i| i.scheme()),
+            Some("0088"),
+            "BT-34 seller electronic address, EAS 0088 (GLN)",
+        );
+        assert_eq!(
+            specimen
+                .payment
+                .as_ref()
+                .and_then(|p| p.means_code.as_ref().map(en16931::invoice::Code::as_str)),
+            Some("58"),
+            "BG-16 payment instructions with the SEPA means code (UNCL 4461 58)",
+        );
+        assert!(specimen.invoicing_period.is_some(), "BG-14 billing period");
     }
 
     /// The specimen must exercise what production will.

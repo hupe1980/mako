@@ -34,7 +34,7 @@ group "default" {
   targets = [
     "makod", "marktd", "processd", "invoicd", "edmd", "obsd",
     "netzbilanzd", "sperrd", "einsd",
-    "tarifbd", "billingd", "accountingd", "vertragd",
+    "tarifbd", "billingd", "outputd", "accountingd", "vertragd",
     "portald", "agentd", "mabis-syncd",
   ]
 }
@@ -121,6 +121,12 @@ target "billingd" {
   inherits = ["_base"]
   target   = "billingd-runtime"
   tags     = ["${REGISTRY}/billingd"]
+}
+
+target "outputd" {
+  inherits = ["_base"]
+  target   = "outputd-runtime"
+  tags     = ["${REGISTRY}/outputd"]
 }
 
 target "accountingd" {

@@ -584,6 +584,20 @@ pub async fn dispatch_deadline(
                 .await
                 .map(|_| ())
         }
+        "wim-rechnungsabwicklung" => {
+            let p = Process::<mako_wim::WimRechnungsabwicklungWorkflow, _>::from_identity(
+                Arc::clone(&event_store),
+                identity,
+            );
+            p.execute_and_enqueue_with_retry(
+                mako_wim::RechnungsabwicklungCommand::TimeoutExpired { deadline_id, label },
+                3,
+            )
+            .await?;
+            p.take_snapshot(&snap_store, snapshot_interval)
+                .await
+                .map(|_| ())
+        }
         "wim-preisanfrage" => {
             let p = Process::<WimPreisanfrageWorkflow, _>::from_identity(
                 Arc::clone(&event_store),
@@ -1129,6 +1143,7 @@ pub const DISPATCH_TABLE: &[&str] = &[
     "wim-steuerungsauftrag",
     "wim-preisanfrage",
     "wim-preisliste",
+    mako_wim::RECHNUNGSABWICKLUNG_WORKFLOW_NAME,
     "wim-invoic",
     WIM_INSRPT_WORKFLOW,
     "gpke-konfiguration-aenderung",

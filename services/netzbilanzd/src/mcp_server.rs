@@ -886,7 +886,7 @@ impl NetzbilanzMcpHandler {
                  | 31009 | MSB-Rechnung (metering service) | NB → MSB | per MSB contract | `msb_31009` |\n\
                  | 31011 | AWH Sperrprozesse Gas (GeLi Gas) | GNB → LFG | per Sperrprozess close | `nne_gas_awh_31011` |\n\n\
                  **Key compliance rules:**\n\
-                 - § 147 AO / GoBD: 3-year retention; Stornorechnung/Korrekturrechnung for corrections\n\
+                 - § 147 Abs. 3 AO / § 14b UStG: invoices are Buchungsbelege, 8-year retention; Stornorechnung/Korrekturrechnung for corrections\n\
                  - invoic-checker blocks dispatch on Dispute outcome (NB can only send defensible invoices)\n\
                  - REMADV 33002 (dispute) → COMDIS 29001 (makod) for formal escalation\n\
                  - GPKE (BK6-24-174) Teil 1 Kap. 8.4: MMM settlement due annually; `mmm-run/{malo_id}` auto-fetches profil_kwh\n\

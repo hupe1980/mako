@@ -53,10 +53,15 @@ pub struct CalculateRequest {
     /// the paid `abschlaege` against the consumption bill.
     #[serde(default)]
     pub schlussrechnung: bool,
-    /// §13b UStG reverse charge — set `true` when the customer is a
-    /// Stromwiederverkäufer (electricity/gas reseller, §13b Abs. 2 Nr. 5 lit. b
-    /// UStG). The whole supply is then invoiced net (no VAT); the recipient owes
-    /// the Umsatzsteuer, and the EN 16931 tax breakdown carries an `AE` subtotal.
+    /// §13b UStG reverse charge — the supply is invoiced net (no VAT); the
+    /// recipient owes the Umsatzsteuer and the EN 16931 tax breakdown carries
+    /// an `AE` subtotal.
+    ///
+    /// **Derived automatically** from the customer master
+    /// (`vertragd kunden.stromwiederverkaeufer`, §13b Abs. 2 Nr. 5 lit. b
+    /// UStG) — this flag ORs with it: a caller can assert reverse charge for
+    /// a customer not yet flagged, but cannot switch it off for one that is,
+    /// because §13b is mandatory when its conditions are met.
     #[serde(default)]
     pub reverse_charge: bool,
     /// §40b Abs. 1 EnWG — this contract is billed **monthly**.

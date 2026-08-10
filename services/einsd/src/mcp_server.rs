@@ -1103,7 +1103,7 @@ compliance reporting.",
             "tr_id": params.tr_id,
             "total": items.len(),
             "transitions": items,
-            "legal_basis": "§ 147 AO / GoBD: 3-year audit trail of settlement state transitions.",
+            "legal_basis": "§ 147 AO / GoBD: audit trail of settlement state transitions (Buchungsbelege, 8-year retention).",
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))

@@ -218,12 +218,13 @@ pub async fn run_substitute_values(
     // `fill_gaps` fills the whole configured grid, so the values bracketing the
     // gap no longer have to be found and passed in by hand: it is given the
     // measured series and works out for itself what each gap is bounded by.
-    // The measured intervals inside the window go in alongside the prior-period
-    // reference, because a fill that cannot see them would treat a partially
-    // covered window as one long gap.
+    // The whole queried series goes in, not just the slice inside the gap
+    // window: the engine finds a gap's *closing* bracket by lookahead over
+    // whatever series it was handed, so clipping at `gap_to` would hide a
+    // measurement one slot past the window and degrade a genuine
+    // interpolation to a one-sided copy.
     let measured: Vec<MeterInterval> = existing
         .iter()
-        .filter(|r| r.dtm_from >= gap_from && r.dtm_to <= gap_to)
         .map(|r| MeterInterval {
             from: r.dtm_from,
             to: r.dtm_to,
@@ -232,6 +233,19 @@ pub async fn run_substitute_values(
             obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
         })
         .collect();
+
+    // The *opening* bracket is different: the engine derives it only from
+    // slots its walk has visited, so the fill period must start at the last
+    // billable reading before the gap — starting at the gap itself leaves a
+    // leading short gap bracketless, and "interpolation" silently becomes a
+    // flat copy of the closing value. Substitutes generated for the run-up
+    // are dropped again below; only the requested window is ever stored.
+    let fill_from = existing
+        .iter()
+        .filter(|r| r.dtm_from < gap_from)
+        .map(|r| r.dtm_from)
+        .max()
+        .unwrap_or(gap_from);
 
     let filled = metering::substitute::fill_gaps(
         &measured,
@@ -254,7 +268,7 @@ pub async fn run_substitute_values(
                         .into_response();
                 }
             },
-            period: (gap_from, gap_to),
+            period: (fill_from, gap_to),
             method,
             prior_period_intervals: prior_intervals.clone(),
             short_gap_threshold: 3,
@@ -266,7 +280,14 @@ pub async fn run_substitute_values(
             reason: metering::substitute::SubstitutionReason::NoMeasurementAvailable,
         },
     );
-    let substitute_entries = filled.substitutions;
+    // Only the requested window is stored. The run-up from `fill_from` exists
+    // to give the walk its opening bracket; anything synthesised there was
+    // never asked for.
+    let substitute_entries: Vec<_> = filled
+        .substitutions
+        .into_iter()
+        .filter(|e| e.interval.from >= gap_from && e.interval.from < gap_to)
+        .collect();
 
     if substitute_entries.is_empty() {
         return (

@@ -13,7 +13,7 @@ human before it changes anything.
 |---|---|
 | **HTTP port** | `:9580` |
 | **Specialists** | 28 manifests in `agents/`, embedded at compile time |
-| **Runtime** | agentplane 0.10 — journaled effects, strict replay, Cedar gate, sealed at rest |
+| **Runtime** | agentplane 0.14 — journaled effects, strict replay, Cedar gate, sealed at rest; RFC 8785-complete canonicalization (`canon::VERSION` 3), oversight fails closed without a case store |
 | **Model providers** | Anthropic · OpenAI · Gemini · the OpenAI-compatible wire (TGI, vLLM, Ollama, llama.cpp) · AWS Bedrock behind `--features bedrock` |
 | **Tool transport** | one MCP client per server in `[mcp_servers]`, routed by the server component of each `tool://` grant |
 | **Journal** | redb *or* Postgres — the § 147 AO / GoBD record, sealed by a Vault-held key |

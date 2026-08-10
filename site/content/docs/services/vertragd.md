@@ -1,7 +1,7 @@
 +++
 title = "vertragd Operator Guide"
 description = "vertragd operator guide: B2C + B2B Contract & Customer Management. Kunden, Rahmenverträge (B2B), Versorgungsverträge, Tarifwechsel, Kündigung, multi-user portal access via kunden_identitaeten, and OIDC → MaLo authorization for portald."
-weight = 34
+weight = 35
 [extra]
 mermaid = true
 +++
@@ -96,6 +96,7 @@ erDiagram
         text kundentyp "B2C | B2B_SLP | B2B_RLM | B2B_HV"
         jsonb geschaeftspartner
         text umsatzsteuer_id "B2B only"
+        bool stromwiederverkaeufer "§13b Abs. 2 Nr. 5 lit. b UStG — billingd derives reverse charge"
         bool sepa_erlaubt
         int  zahlungsziel_tage
         text tenant
@@ -384,7 +385,8 @@ Vertragskomponenten. Suitable for the statutory data-subject access request.
 ### Art. 17 — Right to erasure
 
 `POST /api/v1/kunden/{id}/anonymize` pseudonymizes all PII while retaining contract
-records for the 10-year legal retention period (§147 AO):
+records for the legal retention period (§ 147 Abs. 3 AO: Handelsbriefe 6 years,
+Buchungsbelege 8 years — kept 8, the longest applicable):
 
 ```http
 POST /api/v1/kunden/{id}/anonymize
@@ -402,7 +404,8 @@ Content-Type: application/json
 - `kunden_identitaeten.email` / `display_name` — nulled
 
 **Retention:** Contract history (Versorgungsverträge, Vertragskomponenten, Rechnungen)
-is retained unmodified for §147 AO compliance (10-year obligation).
+is retained unmodified for § 147 AO compliance — contracts as Handelsbriefe/
+Buchungsbelege up to 8 years, invoices 8 years (§ 14b UStG).
 
 **Audit trail:** Every anonymization is written to the immutable `anonymization_log`
 table with `requested_by`, `anonymized_at`, and the list of affected fields.
@@ -491,6 +494,7 @@ Initial startup delay staggers workers to avoid DB contention.
 | `GET` | `/api/v1/vertraege/billing-candidates` | §40b EnWG: active supply components + `abrechnungszyklus` — billingd's billing-run work list |
 | `GET` | `/api/v1/vertraege/expiring` | Near-expiry contracts (`?days=30`) — §13 GasGVV / §41 EnWG |
 | `GET` | `/api/v1/rahmenvertraege/{id}/malos` | Active MaLos under a Rahmenvertrag **plus** the `rechnungsempfaenger` (BG-7 holder) a Sammelrechnung is addressed to |
+| `GET`/`PUT` | `/api/v1/ggv/{ggv_id}/betreiber` | The § 42b GGV operator behind a community id, as a Kunde — the BG-7 buyer of the bundled GGV Sammelrechnung |
 | `GET` | `/api/v1/vertraege/by-malo/{malo_id}` | Active contract behind a MaLo — §40 Abs. 1 EnWG invoice facts, next Kündigungstermin, and the `rechnungsempfaenger` block (BG-7 buyer: BT-44 name, BT-50/52/53 address, BT-48 VAT-ID) `billingd` needs for EN 16931 |
 | `GET` | `/api/v1/vertraege/{id}` | Contract + Komponenten + status |
 | `POST` | `/api/v1/vertraege/{id}/tarifwechsel` | Change product code; blocked within Preisgarantie window |

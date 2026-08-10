@@ -427,3 +427,148 @@ pub(super) async fn dispatch_steuerungsauftrag_endantwort(
         .await
     }
 }
+
+// ── WiM Rechnungsabwicklung MSB über LF ──────────────────────────────────────
+
+pub(super) fn cmd_wim_rechnungsabwicklung_beenden<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_wim_rechnungsabwicklung_beenden(s, p))
+}
+
+pub(super) fn cmd_wim_rechnungsabwicklung_zustimmen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_wim_rechnungsabwicklung_antwort(s, p, true))
+}
+
+pub(super) fn cmd_wim_rechnungsabwicklung_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_wim_rechnungsabwicklung_antwort(s, p, false))
+}
+
+/// Spawn an outbound Beendigung Rechnungsabwicklung (ORDERS 17006).
+///
+/// Either side of the arrangement may end it (AWH Aktivitätsdiagramme WiM V1.3
+/// §§2.9/2.11), so the sending role is whatever this deployment is; the
+/// counterparty GLN comes from the ERP, which knows whom the arrangement is
+/// with. The counterparty answers with ORDRSP 19009/19010, which resumes this
+/// process by MaLo.
+pub(super) async fn dispatch_wim_rechnungsabwicklung_beenden(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    use mako_wim::{RechnungsabwicklungCommand, WimRechnungsabwicklungWorkflow};
+
+    let malo_id = extract_malo_id(payload)?;
+    let counterparty = payload
+        .get("counterparty_mp_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"counterparty_mp_id\" (13-digit GLN of the \
+                 other side of the arrangement — the MSB when the LF ends it, \
+                 the LF when the MSB does)"
+                    .to_owned(),
+            )
+        })?
+        .to_owned();
+
+    let domain_cmd = RechnungsabwicklungCommand::SendBeendigung {
+        counterparty: MarktpartnerCode::new(counterparty),
+        location_id: malo_id.to_string(),
+        message_ref: MessageRef::new(format!("WIM-RA-{}", uuid::Uuid::new_v4())),
+    };
+
+    // Duplicate guard — one Beendigung in flight per MaLo. A settled process
+    // (Bestellt/Beendet/Rejected) does not block; see `find_occupying_process`.
+    if let Some(dup_id) = find_occupying_process::<WimRechnungsabwicklungWorkflow>(
+        state,
+        malo_id.as_str(),
+        mako_wim::RECHNUNGSABWICKLUNG_WORKFLOW_NAME,
+    )
+    .await?
+    {
+        return Err(DispatchError::DuplicateProcess {
+            process_id: dup_id,
+            malo_id: malo_id.into(),
+        });
+    }
+
+    let workflow_id = WorkflowId::new(
+        mako_wim::RECHNUNGSABWICKLUNG_WORKFLOW_NAME,
+        latest_format_version(),
+    );
+    let process = mako_engine::process::Process::<
+        WimRechnungsabwicklungWorkflow,
+        Arc<mako_engine::store_slatedb::SlateDbStore>,
+    >::new(
+        Arc::clone(&state.store),
+        state.tenant_id,
+        workflow_id.clone(),
+    );
+    let process_id = process.process_id();
+
+    // The counterparty's answer window: the WiM Teil 1 process window the
+    // sibling workflows use (5 Werktage, BK6-24-174).
+    let due_at = mako_engine::fristen::deadline_at_werktage(
+        time::OffsetDateTime::now_utc(),
+        5,
+        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+    );
+    let deadline = Deadline::new(
+        process.stream_id().clone(),
+        process_id,
+        state.tenant_id,
+        workflow_id,
+        mako_wim::RECHNUNGSABWICKLUNG_DEADLINE_LABEL,
+        due_at,
+    );
+    process
+        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
+        .await?;
+
+    let identity = process.identity();
+    let _ = state
+        .store
+        .as_process_registry()
+        .register_correlated(state.tenant_id, malo_id.as_str(), process_id, identity)
+        .await;
+
+    Ok(DispatchOutcome::Spawned { process_id })
+}
+
+/// Answer a received Beendigung (ORDRSP 19009 Zustimmung / 19010 Ablehnung).
+///
+/// Called for `wim.rechnungsabwicklung.zustimmen` / `.ablehnen` — the decision
+/// the counterparty's EBD (`E_0206`/`E_0209`) checks is the operator's to
+/// make, so it arrives here rather than being auto-echoed.
+pub(super) async fn dispatch_wim_rechnungsabwicklung_antwort(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+    zustimmung: bool,
+) -> Result<DispatchOutcome, DispatchError> {
+    use mako_wim::{RechnungsabwicklungCommand, WimRechnungsabwicklungWorkflow};
+
+    let malo_id = extract_malo_id(payload)?;
+    dispatch_to_process::<WimRechnungsabwicklungWorkflow, _>(
+        state,
+        malo_id.as_str(),
+        mako_wim::RECHNUNGSABWICKLUNG_WORKFLOW_NAME,
+        move || RechnungsabwicklungCommand::SendAntwort {
+            zustimmung,
+            message_ref: MessageRef::new(format!("WIM-RA-RSP-{}", uuid::Uuid::new_v4())),
+        },
+    )
+    .await
+}

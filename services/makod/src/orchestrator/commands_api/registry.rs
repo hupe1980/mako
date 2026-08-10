@@ -316,6 +316,29 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(55039),
         dispatch: cmd_wim_geraetewechsel_beauftragen,
     },
+    // ── Rechnungsabwicklung MSB über LF (WiM Strom Teil 1) ────────────────────
+    // `.beenden` spawns an outbound ORDERS 17006; either side may end the
+    // arrangement (AWH AD WiM V1.3 §§2.9/2.11), hence both roles. `.zustimmen`
+    // / `.ablehnen` answer an inbound Beendigung with ORDRSP 19009/19010 —
+    // the decision the counterparty's EBD (E_0206/E_0209) then checks.
+    CommandDescriptor {
+        name: "wim.rechnungsabwicklung.beenden",
+        permitted_roles: &[Marktrolle::Lf, Marktrolle::Msb],
+        primary_pid: pid(17006),
+        dispatch: cmd_wim_rechnungsabwicklung_beenden,
+    },
+    CommandDescriptor {
+        name: "wim.rechnungsabwicklung.zustimmen",
+        permitted_roles: &[Marktrolle::Lf, Marktrolle::Msb],
+        primary_pid: pid(19009),
+        dispatch: cmd_wim_rechnungsabwicklung_zustimmen,
+    },
+    CommandDescriptor {
+        name: "wim.rechnungsabwicklung.ablehnen",
+        permitted_roles: &[Marktrolle::Lf, Marktrolle::Msb],
+        primary_pid: pid(19010),
+        dispatch: cmd_wim_rechnungsabwicklung_ablehnen,
+    },
     // ── ESA Wertebestellung — ESA origination side ────────────────────────────
     // This deployment *is* the ESA. Consent-gated (esa_outbound) except the
     // Abbestellung, which is the GDPR Art. 7(3) revocation path.

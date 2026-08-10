@@ -43,7 +43,7 @@ pub struct BillingRecordRow {
     pub risk_band: Option<String>,
     /// Coded findings explaining the score (XAI by construction).
     pub risk_findings: Option<serde_json::Value>,
-    /// The `document_templates.hash` that rendered this invoice's PDF, pinned
+    /// The outputd template hash that rendered this invoice's PDF, pinned
     /// on first render and never changed afterwards. `None` until the document
     /// has been rendered at all.
     pub template_hash: Option<String>,

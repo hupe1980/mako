@@ -40,7 +40,7 @@ test-integration name:
 # vars. Without Docker the `#[ignore]`d tests skip gracefully.
 
 # All database integration suites in one go.
-test-db: test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-vertragd-db test-tarifbd-db test-marktd-db
+test-db: test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-outputd-db test-vertragd-db test-tarifbd-db test-marktd-db
 
 # Storage integration tests for edmd (meterstore hot/cold over PostgreSQL + a
 # filesystem Iceberg warehouse).
@@ -60,6 +60,10 @@ test-accountingd-db:
 # Records integration tests for billingd.
 test-billingd-db:
     cargo test -p billingd --test records_integration -- --include-ignored --test-threads=1
+
+# Template-store integration tests for outputd.
+test-outputd-db:
+    cargo test -p outputd --test store_integration -- --include-ignored --test-threads=1
 
 # Dispatch integration tests for vertragd.
 test-vertragd-db:
@@ -182,7 +186,7 @@ smoke-roles:
 
 ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-routes check-tool-grants doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
 
-# mako proves the carrier by reading its own output back (billingd's publish
+# mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
 # payload valid. Neither proves **PDF/A-3 conformance**: nothing in Rust does,
 # and the XMP `document::facturx::stamp` appends lands after typst-pdf's own
@@ -193,10 +197,10 @@ zugferd-specimen out="target/zugferd-specimen.pdf":
     #!/usr/bin/env bash
     set -euo pipefail
     # Absolute, because `cargo test` runs a test with the *package* directory as
-    # its working directory — a relative path lands in services/billingd/, not
+    # its working directory — a relative path lands in services/outputd/, not
     # where the caller is standing.
     out="$(cd "$(dirname "{{ out }}")" 2>/dev/null && pwd || mkdir -p "$(dirname "{{ out }}")" && cd "$(dirname "{{ out }}")" && pwd)/$(basename "{{ out }}")"
-    MAKO_ZUGFERD_OUT="$out" cargo test -p billingd --test zugferd_carrier \
+    MAKO_ZUGFERD_OUT="$out" cargo test -p outputd --test zugferd_carrier \
         -- --ignored --nocapture write_specimen_for_external_validators
     echo ""
     echo "Wrote three files: the stamped carrier, the XRechnung-profile carrier"
@@ -213,6 +217,15 @@ zugferd-specimen out="target/zugferd-specimen.pdf":
 # target/ and run under Temurin. Both must report every file valid/compliant.
 # In-repo checks cannot replace these: the duplicate-schemas XMP defect was
 # invisible to four layers of our own checking and found only by veraPDF.
+#
+# Expected notices on the *core* specimen (not the XRechnung one, which is
+# clean): Mustang applies XRechnung/Peppol rules informationally to a document
+# that does not claim that CIUS (BR-DE-*), and `PEPPOL-EN16931-R008` on the
+# empty `ram:ApplicableHeaderTradeDelivery` is a false positive — the element
+# is mandatory in the D16B XSD (omitting it fails schema validation) and
+# KoSIT's own Schematron carves exactly this element out of the R008
+# empty-element rule; Peppol publishes no CII Schematron at all. Settled with
+# en16931-formats 0.5.0 (the writer documents the evidence). Do not "fix" it.
 
 # Validate the specimens with veraPDF + Mustang, containerized (needs Docker only)
 zugferd-verify: zugferd-specimen

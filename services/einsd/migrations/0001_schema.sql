@@ -3,7 +3,7 @@
 -- Regulatory frameworks:
 --   EEG 2000–2023 (§§20–22, §24, §21 Abs. 3, §42b, §44b, §48–54)
 --   KWKG 2023 (§7 KWK-Zuschlag)
---   § 147 AO / GoBD (3-year settlement audit trail)
+--   § 147 AO / GoBD (settlement receipts are Buchungsbelege: 8-year retention)
 --
 -- Tables:
 --   eeg_anlagen               — central plant register (composite PK: tr_id + tenant)
@@ -253,7 +253,8 @@ CREATE INDEX ea_notification_pending ON eeg_anlagen (tenant, last_veraeusserungs
     WHERE veraeusserungsform_notification_sent_at IS NULL AND last_veraeusserungsform_switch IS NOT NULL;
 
 -- ── Monthly settlement receipts ───────────────────────────────────────────────
--- § 147 AO / GoBD: 3-year retention. Written before any CloudEvent dispatch.
+-- § 147 Abs. 3 AO / GoBD: settlement receipts ground EEG payout bookings —
+-- Buchungsbelege, 8-year retention. Written before any CloudEvent dispatch.
 -- Correction receipts (is_correction = true) coexist freely with originals.
 
 CREATE TABLE settlement_receipts (
@@ -297,7 +298,7 @@ CREATE TABLE settlement_receipts (
 );
 
 COMMENT ON TABLE settlement_receipts IS
-    '§ 147 AO / GoBD: 3-year immutable settlement audit log. '
+    '§ 147 Abs. 3 AO / GoBD: immutable settlement audit log (Buchungsbelege, 8-year retention). '
     'Correction receipts (is_correction=true) coexist with originals via partial unique index.';
 
 -- Partial unique: exactly one non-correction receipt per plant × period.

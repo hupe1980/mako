@@ -22,7 +22,7 @@ Closes the payment lifecycle on REMADV receipt. Zero `f64` in the billing path.
 | **Background workers** | Hourly dispatch-overdue alert; daily Kostenblatt deadline alert |
 | **CloudEvents emitted** | `de.netzbilanz.invoic.{drafted,dispatched,paid,disputed,dispatch_overdue}` · `de.netzbilanz.kostenblatt.deadline-approaching` |
 | **MCP server** | 13 tools · 6 prompts at `/mcp` (Streamable HTTP 2025-11-25) |
-| **Retention** | § 147 AO / GoBD 3-year; `GET /api/v1/billing/audit` for BNetzA export (up to 50k rows) |
+| **Retention** | § 147 Abs. 3 AO / § 14b UStG — invoices are Buchungsbelege, 8 years; `GET /api/v1/billing/audit` for BNetzA export (up to 50k rows) |
 | **Health** | `GET /health/live` · `GET /health/ready` |
 
 ## Billing types

@@ -1,7 +1,7 @@
 +++
 title = "accountingd Operator Guide"
 description = "accountingd operator guide — Massenkontokorrent / Customer Account Ledger (LF role). Tamper-evident double-entry ledger (the doubleentry crate — Merkle proofs, period seals), per-Marktlokation Kontokorrent + GL contra chart (SKR 03/04-aligned), FIFO open-item management, camt.054 XML + JSON dedup import, SEPA pain.008 (multi-group single message, mandatory Gläubiger-ID) + pain.001 XML, Verzugszinsen §288 BGB, payment plans (Zahlungsvereinbarung), aging analysis, Mahnwesen automatic rule engine (Mahnstufe 1–3), OIDC/JWT auth, inbound HMAC verification, GDPR Art. 17 pseudonymization, balance reconciliation, EEG Gutschrift + Marktprämie ingest, Jahresabschluss §40 EnWG."
-weight = 33
+weight = 34
 [extra]
 mermaid = true
 +++

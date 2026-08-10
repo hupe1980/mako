@@ -633,12 +633,21 @@ pub struct OutboxWorker<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> {
     deadline_store: DS,
     batch_size: usize,
     poll_interval: std::time::Duration,
-    /// Maximum total delivery attempts before a message is dead-lettered.
-    ///
-    /// Default: 48 (covers ~4 hours at the 300 s backoff cap).
-    /// Set to `u32::MAX` to disable the cap (not recommended for production).
+    /// Maximum total delivery attempts before a message is dead-lettered — a
+    /// runaway belt, not the budget. The budget is [`Self::max_retry_window`]:
+    /// the backoff is full-jitter, so an attempt *count* cannot promise a
+    /// retry *duration*, and the BDEW retry duty is stated in hours.
     max_attempts: u32,
-    /// Sink for messages that exceed `max_attempts`.
+    /// Maximum age (from `created_at`) a message is retried for before it is
+    /// dead-lettered. This is what honours a time-stated retry duty (BDEW AS4
+    /// Kommunikationshandbuch: 72 h for unacknowledged messages) — see
+    /// `mako_as4::constants::MAX_RETRY_DURATION_SECS`.
+    ///
+    /// Checked only after at least one attempt: a message that aged in a
+    /// stopped worker still gets its first try rather than being buried
+    /// unsent.
+    max_retry_window: std::time::Duration,
+    /// Sink for messages that exceed `max_attempts` or `max_retry_window`.
     dead_letter_sink: std::sync::Arc<dyn crate::dead_letter::DeadLetterSink>,
     /// Optional liveness heartbeat — stores the current UTC Unix timestamp
     /// (seconds) after each poll cycle so health probes can detect stale workers.
@@ -709,20 +718,31 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
             }
 
             for msg in batch {
-                // ── Max-attempt cap ───────────────────────────────────
+                // ── Retry budget ──────────────────────────────────────
                 // `attempt_count` starts at 0 and is incremented on each
-                // `reschedule` call.  When it reaches `max_attempts` the
-                // message is considered permanently undeliverable: acknowledge
-                // it (remove from outbox) and dead-letter it so the regulatory
-                // audit trail is preserved.
-                if msg.attempt_count >= self.max_attempts {
+                // `reschedule` call. The message is permanently undeliverable
+                // when the retry *window* has elapsed (the BDEW duty is stated
+                // in hours, and full-jitter backoff makes a count no proxy for
+                // a duration) or the attempt belt is exhausted: acknowledge it
+                // (remove from outbox) and dead-letter it so the regulatory
+                // audit trail is preserved. The window is only consulted after
+                // a first attempt, so a message that aged while the worker was
+                // down still gets tried once.
+                let age = time::OffsetDateTime::now_utc() - msg.created_at;
+                let window_elapsed = msg.attempt_count > 0
+                    && age
+                        >= time::Duration::try_from(self.max_retry_window)
+                            .unwrap_or(time::Duration::hours(72));
+                if msg.attempt_count >= self.max_attempts || window_elapsed {
                     tracing::error!(
                         message_id   = %msg.message_id,
                         message_type = %msg.message_type,
                         recipient    = %msg.recipient,
                         attempts     = msg.attempt_count,
                         max_attempts = self.max_attempts,
-                        "outbox worker: max delivery attempts reached; dead-lettering message",
+                        age_secs     = age.whole_seconds(),
+                        window_secs  = self.max_retry_window.as_secs(),
+                        "outbox worker: retry budget exhausted; dead-lettering message",
                     );
                     self.dead_letter_sink.reject(
                         &crate::dead_letter::DeadLetterReason::OutboxExhausted {
@@ -806,9 +826,15 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                     }
                     // Permanent error: dead-letter immediately without retrying.
                     // PartnerUnknown requires operator intervention (add --as4-partner);
-                    // Serialization errors will never succeed on retry.
+                    // Serialization errors will never succeed on retry; a missing
+                    // wire-format renderer cannot appear between attempts — its own
+                    // documentation promises immediate dead-lettering, and until this
+                    // arm matched it, that promise was broken and the message burned
+                    // the whole retry budget first.
                     Err(ref e)
-                        if e.is_partner_unknown() || matches!(e, EngineError::Serialization(_)) =>
+                        if e.is_partner_unknown()
+                            || e.is_renderer_not_implemented()
+                            || matches!(e, EngineError::Serialization(_)) =>
                     {
                         tracing::error!(
                             message_id   = %msg.message_id,
@@ -881,14 +907,20 @@ where
     /// `batch_size` — messages fetched per poll cycle.
     /// `poll_interval` — sleep duration when the batch is empty.
     ///
-    /// `max_attempts` — maximum total delivery attempts before dead-lettering.
-    /// Pass `48` for a ~4-hour retry budget at the 300 s backoff cap, or
-    /// `u32::MAX` to disable the cap (not recommended for production).
+    /// `max_attempts` — attempt belt against runaway loops; the real budget is
+    /// `max_retry_window`, the message age after which delivery is abandoned.
+    /// The BDEW AS4 retry duty is stated in *hours* (72 h for unacknowledged
+    /// messages — `mako_as4::constants::MAX_RETRY_DURATION_SECS`), and the
+    /// full-jitter backoff makes an attempt count no proxy for a duration, so
+    /// both are taken and either exhausts the message.
     ///
     /// ```rust,ignore
     /// use std::time::Duration;
     ///
-    /// let worker = ctx.run_outbox_worker(my_sender, 50, Duration::from_secs(1), 48);
+    /// let worker = ctx.run_outbox_worker(
+    ///     my_sender, 50, Duration::from_secs(1),
+    ///     10_000, Duration::from_secs(72 * 3600),
+    /// );
     /// tokio::spawn(async move { worker.run().await });
     /// ```
     #[must_use]
@@ -898,6 +930,7 @@ where
         batch_size: usize,
         poll_interval: std::time::Duration,
         max_attempts: u32,
+        max_retry_window: std::time::Duration,
     ) -> OutboxWorker<OS, S, DS>
     where
         DS: DeadlineStore + Clone,
@@ -909,6 +942,7 @@ where
             batch_size,
             poll_interval,
             max_attempts,
+            max_retry_window,
             dead_letter_sink: self.dead_letter_sink.clone(),
             heartbeat: None,
         }
@@ -2282,6 +2316,7 @@ mod tests {
             batch_size: 10,
             poll_interval: std::time::Duration::from_millis(5),
             max_attempts: 48,
+            max_retry_window: std::time::Duration::from_secs(72 * 3600),
             dead_letter_sink: std::sync::Arc::new(crate::dead_letter::LogDeadLetterSink),
             heartbeat: None,
         };
@@ -2388,5 +2423,130 @@ mod tests {
                  outlives its obligation and alerts on every process",
             );
         }
+    }
+
+    // ── Retry-budget classification ───────────────────────────────────────────
+
+    /// Sink double that records every rejection's attempt count.
+    #[derive(Default)]
+    struct RecordingSink(std::sync::Mutex<Vec<u32>>);
+    impl crate::dead_letter::DeadLetterSink for std::sync::Arc<RecordingSink> {
+        fn reject(&self, reason: &crate::dead_letter::DeadLetterReason) {
+            if let crate::dead_letter::DeadLetterReason::OutboxExhausted { attempts, .. } = reason {
+                self.0
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(*attempts);
+            }
+        }
+    }
+
+    struct NoRenderer;
+    impl As4Sender for NoRenderer {
+        async fn send(&self, msg: &crate::outbox::OutboxMessage) -> Result<(), EngineError> {
+            Err(EngineError::RendererNotImplemented {
+                message_type: msg.message_type.as_ref().into(),
+                message_id: msg.message_id.to_string().into(),
+            })
+        }
+    }
+
+    async fn drive_worker<S: As4Sender>(
+        sender: S,
+        msg: crate::outbox::OutboxMessage,
+    ) -> (InMemoryOutboxStore, std::sync::Arc<RecordingSink>) {
+        let outbox = InMemoryOutboxStore::new();
+        outbox.enqueue(std::slice::from_ref(&msg)).await.unwrap();
+        let sink = std::sync::Arc::new(RecordingSink::default());
+        let worker = OutboxWorker {
+            store: outbox.clone(),
+            sender,
+            deadline_store: InMemoryDeadlineStore::new(),
+            batch_size: 10,
+            poll_interval: std::time::Duration::from_millis(5),
+            max_attempts: 48,
+            max_retry_window: std::time::Duration::from_secs(72 * 3600),
+            dead_letter_sink: std::sync::Arc::new(std::sync::Arc::clone(&sink)),
+            heartbeat: None,
+        };
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(300), worker.run()).await;
+        (outbox, sink)
+    }
+
+    /// `RendererNotImplemented` is documented as permanent — the worker must
+    /// dead-letter it on the *first* attempt, not burn the retry budget on a
+    /// failure that cannot heal between attempts. Until the permanent arm
+    /// matched it, this promise was broken.
+    #[tokio::test(start_paused = true)]
+    async fn a_missing_renderer_dead_letters_without_retrying() {
+        let stream_id = crate::ids::StreamId::new("test-renderer-missing");
+        let msg = outbox_message(&stream_id, "MSCONS");
+        let (outbox, sink) = drive_worker(NoRenderer, msg).await;
+
+        assert!(
+            outbox.pending_now(10).await.unwrap().is_empty(),
+            "the message must be acknowledged, not left for another attempt",
+        );
+        let rejections = sink
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(
+            rejections,
+            vec![0],
+            "exactly one dead-letter, on the first attempt (attempt_count 0)",
+        );
+    }
+
+    /// The retry budget is a *window*, not a count: a message whose age has
+    /// exceeded it after at least one attempt is dead-lettered even though the
+    /// attempt belt is nowhere near exhausted — full-jitter backoff makes a
+    /// count no proxy for the 72 h duty.
+    #[tokio::test(start_paused = true)]
+    async fn an_aged_message_with_a_prior_attempt_is_dead_lettered() {
+        let stream_id = crate::ids::StreamId::new("test-window-exhausted");
+        let mut msg = outbox_message(&stream_id, "UTILMD");
+        msg.created_at = time::OffsetDateTime::now_utc() - time::Duration::hours(73);
+        msg.attempt_count = 1;
+        let (outbox, sink) = drive_worker(AlwaysDelivers, msg).await;
+
+        assert!(
+            outbox.pending_now(10).await.unwrap().is_empty(),
+            "the exhausted message must leave the outbox",
+        );
+        let rejections = sink
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        assert_eq!(
+            rejections,
+            vec![1],
+            "the window, not the attempt belt, must have dead-lettered it",
+        );
+    }
+
+    /// A message that aged past the window while the worker was down still
+    /// gets its first try — the window is only consulted after an attempt, so
+    /// downtime never buries a message unsent.
+    #[tokio::test(start_paused = true)]
+    async fn an_aged_message_with_no_attempts_is_still_tried_once() {
+        let stream_id = crate::ids::StreamId::new("test-aged-first-try");
+        let mut msg = outbox_message(&stream_id, "UTILMD");
+        msg.created_at = time::OffsetDateTime::now_utc() - time::Duration::hours(200);
+        let (outbox, sink) = drive_worker(AlwaysDelivers, msg).await;
+
+        assert!(
+            outbox.pending_now(10).await.unwrap().is_empty(),
+            "the message must have been delivered and acknowledged",
+        );
+        assert!(
+            sink.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_empty(),
+            "delivery, not dead-lettering: age alone must never bury a message",
+        );
     }
 }

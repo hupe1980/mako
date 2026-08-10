@@ -50,7 +50,8 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub http: HttpConfig,
-    /// Required for § 147 AO / GoBD / §41 EnWG compliance (3-year receipt retention).
+    /// Required for § 147 AO / § 14b UStG compliance — received INVOIC are
+    /// Buchungsbelege, retained 8 years.
     pub database: DatabaseConfig,
     pub identity: IdentityConfig,
     pub makod: MakodConfig,

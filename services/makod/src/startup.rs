@@ -40,6 +40,19 @@ use crate::{
     party_registry::MpIdRegistry,
 };
 
+/// The outbox retry duty: unacknowledged messages are retried for **72 hours**
+/// (BDEW AS4 Kommunikationshandbuch, via
+/// [`mako_as4::constants::MAX_RETRY_DURATION_SECS`]) before dead-lettering.
+/// This window is the budget; the attempt count below is only a runaway belt —
+/// the backoff is full-jitter, so a count cannot promise a duration.
+const OUTBOX_RETRY_WINDOW: Duration =
+    Duration::from_secs(mako_as4::constants::MAX_RETRY_DURATION_SECS);
+
+/// Attempt belt for the outbox worker. At the 300 s backoff cap the expected
+/// cadence is ~150 s, so 72 h needs ≈ 1 700 attempts; 10 000 leaves jitter
+/// headroom while still bounding a pathological loop long before it matters.
+const OUTBOX_MAX_ATTEMPTS: u32 = 10_000;
+
 // ── Domain workflow name imports ──────────────────────────────────────────────
 // Import WORKFLOW_NAME constants rather than using inline string literals.
 // This makes typos a compile error instead of a silent dispatch gap.
@@ -334,6 +347,12 @@ pub(crate) fn validate_adapter_coverage() {
         (
             PREISLISTE_WORKFLOW_NAME,
             adapters::wim_preisliste_registry().validate_policy(fc, &known),
+        ),
+        // wim-rechnungsabwicklung: ORDERS 17005/17006 + ORDRSP 19009/19010
+        // (Rechnungsabwicklung MSB über LF, WiM Strom Teil 1).
+        (
+            mako_wim::RECHNUNGSABWICKLUNG_WORKFLOW_NAME,
+            adapters::wim_rechnungsabwicklung_registry().validate_policy(fc, &known),
         ),
         // wim-gas-stornierung: UTILMD G PID 44022 (Anfrage Stornierung, LF → GNB).
         (
@@ -798,7 +817,13 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
         let (outbox_hb, outbox_watch) = new_heartbeat("outbox-worker", 120);
         let worker = cfg
             .ctx
-            .run_outbox_worker(sender, 50, Duration::from_secs(5), 48)
+            .run_outbox_worker(
+                sender,
+                50,
+                Duration::from_secs(5),
+                OUTBOX_MAX_ATTEMPTS,
+                OUTBOX_RETRY_WINDOW,
+            )
             .with_heartbeat(outbox_hb.last_tick_raw());
         cfg.health_state.register_worker(outbox_watch);
         tokio::spawn(async move { worker.run().await });
@@ -819,7 +844,13 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
         let (outbox_hb, outbox_watch) = new_heartbeat("outbox-worker", 120);
         let worker = cfg
             .ctx
-            .run_outbox_worker(sender, 50, Duration::from_secs(5), 48)
+            .run_outbox_worker(
+                sender,
+                50,
+                Duration::from_secs(5),
+                OUTBOX_MAX_ATTEMPTS,
+                OUTBOX_RETRY_WINDOW,
+            )
             .with_heartbeat(outbox_hb.last_tick_raw());
         cfg.health_state.register_worker(outbox_watch);
         tokio::spawn(async move { worker.run().await });
@@ -844,7 +875,13 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
         let (outbox_hb, outbox_watch) = new_heartbeat("outbox-worker", 120);
         let worker = cfg
             .ctx
-            .run_outbox_worker(malo_sender, 50, Duration::from_secs(5), 48)
+            .run_outbox_worker(
+                malo_sender,
+                50,
+                Duration::from_secs(5),
+                OUTBOX_MAX_ATTEMPTS,
+                OUTBOX_RETRY_WINDOW,
+            )
             .with_heartbeat(outbox_hb.last_tick_raw());
         cfg.health_state.register_worker(outbox_watch);
         tokio::spawn(async move { worker.run().await });

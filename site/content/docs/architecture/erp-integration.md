@@ -941,7 +941,7 @@ For the Lieferant (LF) role, received INVOIC messages (PIDs 31001, 31002, 31005,
 invoice through the ERP, deploy [`invoicd`](@/docs/services/invoicd.md) as
 an autonomous sidecar. It subscribes to `de.mako.process.initiated` events from
 `marktd`, runs the `invoic-checker` pipeline, **persists every receipt to PostgreSQL**
-(satisfying the 3-year retention requirement under § 147 AO / GoBD and §41 EnWG), and
+(a received INVOIC is a Buchungsbeleg — 8-year retention under § 147 Abs. 3 AO / § 14b UStG), and
 issues the settlement command — all without any ERP involvement.
 
 ### Full billing flow

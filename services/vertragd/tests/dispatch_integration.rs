@@ -157,6 +157,13 @@ async fn the_bg7_buyer_resolves_from_the_kunde_behind_the_malo() {
     .execute(&pool)
     .await
     .expect("populate kunde master data");
+    // § 13b flag: master data, projected with the buyer so billingd can derive
+    // reverse charge without a second lookup.
+    sqlx::query("UPDATE kunden SET stromwiederverkaeufer = true WHERE id = $1")
+        .bind(kunde)
+        .execute(&pool)
+        .await
+        .expect("flag the kunde as Stromwiederverkäufer");
 
     let v =
         pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("ERP-BG7-1"))
@@ -176,6 +183,10 @@ async fn the_bg7_buyer_resolves_from_the_kunde_behind_the_malo() {
     assert_eq!(buyer.city.as_deref(), Some("Berlin"));
     assert_eq!(buyer.country.as_deref(), Some("DE"));
     assert_eq!(buyer.vat_id.as_deref(), Some("DE987654321"));
+    assert!(
+        buyer.stromwiederverkaeufer,
+        "the § 13b flag must travel with the BG-7 projection",
+    );
 
     // Tenant-scoped: another tenant must not read this customer's address.
     assert!(
@@ -476,6 +487,101 @@ async fn back_to_back_aggregatorvertraege_are_allowed() {
     assert_eq!(
         after.capacity_price_eur_per_kwh,
         rust_decimal::Decimal::from_str("0.15").unwrap()
+    );
+}
+
+/// The § 42b GGV operator resolves to a BG-7 buyer by community id.
+///
+/// The bundled GGV Sammelrechnung bills the operator, who is a Kunde behind
+/// `ggv_betreiber` — the one buyer path keyed by a GGV id rather than a MaLo
+/// or a contract. The chain is SQL (mapping row → kunden JSONB projection),
+/// so a real database proves it; the upsert's move-the-pointer semantics and
+/// the missing-Kunde refusal are pinned alongside.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_ggv_bundle_buyer_resolves_from_the_betreiber_kunde() {
+    let Some((pool, _pg)) = test_pool("ggv_betreiber").await else {
+        return;
+    };
+    let tenant = "9800000000009";
+    let kunde = make_kunde(&pool, tenant).await;
+    sqlx::query("UPDATE kunden SET geschaeftspartner = $2::jsonb WHERE id = $1")
+        .bind(kunde)
+        .bind(
+            r#"{"name1":"WEG Sonnenhof Verwaltungs-GmbH",
+                "adresse":{"strasse":"Solarweg","hausnummer":"1",
+                           "postleitzahl":"10115","ort":"Berlin","landescode":"DE"}}"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("populate operator master data");
+
+    // A Kunde that does not exist (or belongs to another tenant) is refused
+    // with `false`, not written: the handler answers 404 from this.
+    assert!(
+        !pg::upsert_ggv_betreiber(&pool, tenant, "GGV-SONNENHOF", Uuid::new_v4())
+            .await
+            .expect("upsert against missing kunde"),
+        "an unknown kunden_id must be refused",
+    );
+    assert!(
+        !pg::upsert_ggv_betreiber(&pool, "9800000000001", "GGV-SONNENHOF", kunde)
+            .await
+            .expect("upsert across tenants"),
+        "another tenant's Kunde must be refused",
+    );
+    assert!(
+        pg::fetch_rechnungsempfaenger_by_ggv(&pool, "GGV-SONNENHOF", tenant)
+            .await
+            .expect("fetch before mapping")
+            .is_none(),
+        "no Betreiber recorded yet",
+    );
+
+    assert!(
+        pg::upsert_ggv_betreiber(&pool, tenant, "GGV-SONNENHOF", kunde)
+            .await
+            .expect("record the operator"),
+    );
+    let buyer = pg::fetch_rechnungsempfaenger_by_ggv(&pool, "GGV-SONNENHOF", tenant)
+        .await
+        .expect("fetch the bundle buyer")
+        .expect("the operator is the buyer");
+    assert_eq!(
+        buyer.name.as_deref(),
+        Some("WEG Sonnenhof Verwaltungs-GmbH")
+    );
+    assert_eq!(buyer.line1.as_deref(), Some("Solarweg 1"));
+    assert_eq!(buyer.post_code.as_deref(), Some("10115"));
+    assert_eq!(buyer.city.as_deref(), Some("Berlin"));
+
+    // Re-PUT moves the pointer — the mapping is operator-correctable, unlike
+    // the append-only stores; the previous operator leaves no residue.
+    let kunde2 = make_kunde(&pool, tenant).await;
+    sqlx::query("UPDATE kunden SET geschaeftspartner = $2::jsonb WHERE id = $1")
+        .bind(kunde2)
+        .bind(r#"{"name1":"Hausverwaltung Neu GmbH"}"#)
+        .execute(&pool)
+        .await
+        .expect("populate second operator");
+    assert!(
+        pg::upsert_ggv_betreiber(&pool, tenant, "GGV-SONNENHOF", kunde2)
+            .await
+            .expect("move the pointer"),
+    );
+    let moved = pg::fetch_rechnungsempfaenger_by_ggv(&pool, "GGV-SONNENHOF", tenant)
+        .await
+        .expect("fetch after move")
+        .expect("the new operator answers");
+    assert_eq!(moved.name.as_deref(), Some("Hausverwaltung Neu GmbH"));
+
+    // Tenant scoping on the read side too.
+    assert!(
+        pg::fetch_rechnungsempfaenger_by_ggv(&pool, "GGV-SONNENHOF", "9800000000001")
+            .await
+            .expect("cross-tenant read")
+            .is_none(),
+        "another tenant must not see this community's operator",
     );
 }
 

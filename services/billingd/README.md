@@ -23,8 +23,7 @@ no customer management. It pulls product definitions from `tarifbd`, consumption
 | **EN 16931 rendering** | `en16931` + `en16931-formats` render XRechnung/CII and PEPPOL UBL from the stored `en16931_json` semantic model — mapped at bill time (`energy_billing::Invoice::to_en16931`) with **per-line VAT** (BT-151/152), not re-parsed from BO4E |
 | **XRechnung 3.0** | `GET /api/v1/billing/{id}/xrechnung` — CII XML via `en16931-formats` |
 | **PEPPOL BIS 3.0** | `GET /api/v1/billing/{id}/ubl` — UBL 2.1 XML (EU Directive 2014/55/EU) |
-| **ZUGFeRD PDF/A-3** | `GET /api/v1/billing/{id}/pdf` — the page and the CII XML in one file. Typst renders an operator-published template in a no-I/O sandbox; `document::facturx` stamps the Factur-X XMP by incremental update |
-| **Template store** | `POST /api/v1/templates` — content-addressed, append-only, and gated: a template is rendered, PDF/A-checked and its embedded invoice extracted back out before a row is written |
+| **ZUGFeRD PDF/A-3** | `GET /api/v1/billing/{id}/pdf` — the page and the CII XML in one file. billingd proves the payload and projects the view; **outputd** renders the operator's template and stamps the carrier, and the template hash it answers with is pinned to the record |
 | **XRechnung B2G** | `POST /api/v1/billing/{id}/submit-b2g` — validates the model against EN 16931 (`fatal` rules block submission), then emits `de.billing.xrechnung.b2g.ready` (§27 EGovG from 01.01.2027) |
 | **MCP** | 12 tools at `/mcp`: list/get/preview/calculate, `validate_tariff_config`, `explain_invoice_position` |
 | **Health** | `GET /health/live`, `GET /health/ready` |
@@ -78,70 +77,30 @@ the precise `buyer_gaps` (via `Party::missing_for`). (`en16931`/`en16931-formats
 ## The document a customer receives
 
 `GET /api/v1/billing/{id}/pdf` is the ZUGFeRD file: a page a person reads with
-the EN 16931 invoice embedded inside it, both rendered from the same stored
-model. The layout is the operator's — a **Typst** template published over the
-API — and the embedded CII XML is mako's, always.
+the EN 16931 invoice embedded inside it, both from the same stored model.
+Rendering lives in **outputd** (`services/outputd`), the customer-communications
+daemon extracted from billingd 2026-08-10 — the operator's Typst templates, the
+PDF/A-3 carrier, the publish gates and the append-only template store are all
+documented there.
 
-That split is enforced rather than agreed. mako compiles its own harness, not
-the operator's file; the harness imports the template, hands it a fixed
-`DocumentView`, and emits the `pdf.attach` itself with the XML as a literal. A
-template therefore cannot omit the invoice, rename it, replace it, or read it,
-and the compilation runs in a `World` with no filesystem, no network, no
-package registry and no clock. A broken template is a rendering failure, never a
-compliance failure.
+billingd's half of the boundary is everything about what the document *says*:
 
-**Publishing is gated by proof, not by review.** `POST /api/v1/templates`
-renders the candidate against a deliberately awkward specimen — two VAT rates,
-an exempt position, a credit line, a four-decimal unit price, umlauts, absent
-optional fields — enforces PDF/A-3 conformance, stamps the Factur-X XMP, and
-then **reads the finished document back with the counterparty's reader**
-(`en16931-formats::zugferd::extract`): byte-identical payload, re-parses as CII,
-same BT-1 and BT-115, and no `Divergence` between what the PDF declares and what
-it holds. It also reads the text off the page and requires the § 14 Abs. 4 UStG
-terms a Rechnung cannot omit — without that, a template rendering a blank page
-passes every machine-side check. Only then is a row written.
-`document_templates.proof` records which proof was obtained, and a database
-constraint refuses an `INVOICE` row that carries anything less.
-
-The specimen is a real `en16931::Invoice`, projected through `DocumentView::of`
-and rendered to real CII by `einvoice::render_cii` — the same functions
-production calls, so the gate proves the pipeline rather than a stand-in.
-
-**Renders are reproducible.** Nothing ambient reaches the output: the date comes
-from BT-2 (so `datetime.today()` in a template *is* the invoice date), the PDF
-`/ID` is derived from the record, and the fonts are compiled into the binary.
-Re-rendering an issued invoice in 2034 produces the same bytes — which is what
-§ 147 AO retention means in practice, and what `billing_records.template_hash`
-makes possible after a redesign. The pin is taken on the first render *after*
-dispatch and never moves; a draft renders with the current layout and pins
-nothing, so an operator's own preview is never trapped on a version they were
-about to fix.
-
-```
-POST /api/v1/templates/preview      # render a candidate, store nothing
-POST /api/v1/templates              # prove it, then store it forever
-GET  /api/v1/templates              # what has been published (?kind=), is_current marked
-PUT  /api/v1/templates/INVOICE/current   # roll it out — or back, to any listed hash
-GET  /api/v1/templates/reference    # the layout mako ships, as a starting point
-```
-
-Renders are **capped** at one fewer than the machine's cores: typesetting is
-CPU-bound and shares tokio's blocking pool with `sqlx`, so an unbounded burst of
-publishes would stall database work unrelated to rendering. Waiting for a slot
-counts against the caller's budget.
-
-**Verifying the output.** `just zugferd-specimen` writes a stamped file for the
-two checks mako cannot make on itself. `en16931 validate` — an independent
-implementation — reports the payload **valid, 0 findings of 227 rules**; it is
-what found a missing BT-152 that every internal check had passed, and the gate
-now validates the payload before embedding it. **PDF/A-3b is verified**: veraPDF
-1.30.2 reports both stamped profiles and the pre-stamp control compliant with 0
-failed rules — after the first run caught a real defect (a duplicate
-`pdfaExtension:schemas` property, legal XML but illegal XMP). `just zugferd-verify` runs
-veraPDF **and** Mustang (the ZUGFeRD reference validator) containerized — Docker
-is the only dependency — and both report every specimen valid; the XRechnung
-profile validates with zero findings. Not part of `just ci`; re-run after
-changes to `document::facturx`.
+- **Payload, proven before it leaves.** The profile is derived from BT-24. A
+  B2G document renders through `einvoice::render_xrechnung_cii` (validates the
+  full CIUS before writing); every other profile is validated against what it
+  declares, and an invalid stored model answers `422` here — outputd wraps an
+  invalid payload exactly as faithfully as a valid one, so the sender is the
+  only place this check can live.
+- **View.** `document_view::DocumentView::of` projects the model onto the
+  template contract. outputd's copy of the view is normative (the publish gate
+  proves templates against it); billingd serialises the same shape at the HTTP
+  boundary.
+- **Pin.** outputd answers every render with `X-Mako-Template-Hash`. The first
+  render after dispatch pins it into `billing_records.template_hash` (a
+  conditional `COALESCE` update that never overwrites), so re-rendering an
+  issued invoice in 2034 reproduces the document that was sent. A draft pins
+  nothing. The hash crosses a service boundary, so no foreign key guards it —
+  outputd's append-only store policy is what keeps it resolvable (§ 147 AO).
 
 ## Every document through the engine
 
@@ -217,6 +176,7 @@ edmd_url        = "http://edmd:8380"
 edmd_api_key    = "env:BILLINGD_EDMD_SERVICE_KEY"  # opaque Bearer; register in edmd [[oidc.service_keys]]
 marktd_url      = "http://marktd:8180"
 vertragd_url    = "http://vertragd:9780"
+outputd_url     = "http://outputd:9880"   # renders the ZUGFeRD PDF; without it /pdf answers 502
 
 [database]
 url = "postgresql://billingd:secret@db:5432/billingd"

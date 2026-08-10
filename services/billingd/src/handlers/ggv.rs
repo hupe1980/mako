@@ -598,6 +598,19 @@ pub async fn post_ggv_billing(
     };
     let (sammel_netto, sammel_brutto) = (sammel_invoice.netto_eur, sammel_invoice.brutto_eur);
 
+    // The bundle bills the § 42b GGV operator — a Kunde in vertragd, resolved
+    // by the community id (`ggv_betreiber`), the same buyer master every other
+    // e-invoice path uses. Best-effort like the per-MaLo lookups: an
+    // unconfigured Betreiber ships the document with its buyer findings rather
+    // than failing the billing run.
+    let sammel_buyer = vertragd
+        .get_ggv_betreiber(&ggv_id)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(%ggv_id, error = %e, "GGV: Betreiber lookup failed");
+            None
+        });
+
     // Consolidated GGV Sammelrechnung + its dispatch event commit atomically;
     // the per-tenant detail records above are separate bookkeeping writes.
     let mut tx = match pool.begin().await {
@@ -629,12 +642,15 @@ pub async fn post_ggv_billing(
             return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
     }
-    if let Err(e) =
-        // No BG-7 buyer, and none is reachable: this bills the GGV operator, and
-        // the key is a GGV id rather than a MaLo. vertragd models Kunden behind
-        // Versorgungs- and Rahmenverträge, not GGV bundles.
-        crate::einvoice::store(&mut *tx, sammel_id, &sammel_invoice, &cfg, &ggv_id, None)
-                .await
+    if let Err(e) = crate::einvoice::store(
+        &mut *tx,
+        sammel_id,
+        &sammel_invoice,
+        &cfg,
+        &ggv_id,
+        sammel_buyer.as_ref(),
+    )
+    .await
     {
         tracing::warn!(%sammel_id, error = %e, "billingd: attach en16931 model failed");
     }

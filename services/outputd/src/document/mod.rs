@@ -20,7 +20,7 @@
 //! # What that buys
 //!
 //! - No template can emit a non-conformant or mismatched XML — it never emits
-//!   XML at all. The bytes come from `crate::einvoice::render_cii`, and
+//!   XML at all. The bytes arrive from the calling service (billingd renders its CII), and
 //!   [`gate`] proves they come back out of the finished PDF unchanged.
 //! - A broken template is a rendering failure, never a compliance failure.
 //! - The visual and machine layers cannot disagree: one model feeds both.
@@ -43,6 +43,7 @@
 
 pub mod facturx;
 pub mod gate;
+pub mod mahnung;
 pub mod render;
 pub mod view;
 pub mod world;
@@ -57,3 +58,6 @@ pub use view::{DocumentView, LineView, PartyView, TotalsView, VatView};
 /// that document, and it is compiled by the test suite on every run, so the
 /// example an operator starts from is never stale.
 pub const REFERENCE_INVOICE_TEMPLATE: &str = include_str!("templates/invoice.typ");
+
+/// The reference Mahnung layout — same rationale, same gate (Textform proof).
+pub const REFERENCE_MAHNUNG_TEMPLATE: &str = include_str!("templates/mahnung.typ");

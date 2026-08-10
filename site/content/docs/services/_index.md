@@ -1,6 +1,6 @@
 +++
 title = "Services"
-description = "Operator guides for the 16 production daemons — ports, config, APIs, deployment."
+description = "Operator guides for the 17 production daemons — ports, config, APIs, deployment."
 weight = 4
 sort_by = "weight"
 template = "section.html"
@@ -10,7 +10,7 @@ mermaid = true
 +++
 # Services
 
-mako consists of **16 independently deployable services**, each built as a self-contained Docker image with:
+mako consists of **17 independently deployable services**, each built as a self-contained Docker image with:
 - TOML configuration with `_FILE` suffix for Kubernetes secrets
 - Cedar ABAC authorization
 - OIDC/JWT + API-key authentication  
@@ -18,7 +18,7 @@ mako consists of **16 independently deployable services**, each built as a self-
 - Built-in MCP server at `/mcp` (Streamable HTTP 2025-11-25)
 - Structured health endpoints (`/health`, `/health/ready`)
 
-All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)** — the shared SDK that provides `shutdown::token/serve` (SIGINT+SIGTERM graceful drain), `OidcConfig::build_verifier`, `McpAuth`+`McpAuthConfig`, `init_tracing_from_env`, `DatabaseConfig`, `HttpConfig`, `CedarEnforcer`, `EventBus`, and more. This means zero copy-pasted infrastructure code across the 16 daemons.
+All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)** — the shared SDK that provides `shutdown::token/serve` (SIGINT+SIGTERM graceful drain), `OidcConfig::build_verifier`, `McpAuth`+`McpAuthConfig`, `init_tracing_from_env`, `DatabaseConfig`, `HttpConfig`, `CedarEnforcer`, `EventBus`, and more. This means zero copy-pasted infrastructure code across the 17 daemons.
 
 `DatabaseConfig::connect(url, service_name)` is the single PostgreSQL pool builder every daemon uses: it applies the configured `pool_size` plus `acquire_timeout_secs` / `idle_timeout_secs` / `max_lifetime_secs` (so a pool never queues unboundedly or pins a connection across a failover) and tags each connection with the service name in `pg_stat_activity`. Tuning lives in one place rather than being re-derived per service.
 
@@ -52,6 +52,7 @@ graph TB
     subgraph lf_billing ["Retail Billing (LF)"]
         tarifbd[":9080 tarifbd<br/>14 categories · §42d feed<br/>EPEX §41a · B2B Angebote"]
         billingd[":9280 billingd<br/>13 categories · XRechnung 3.0<br/>RLM demand · §54 exemption"]
+        outputd[":9880 outputd<br/>Typst templates · ZUGFeRD carrier<br/>publish gates · append-only store"]
         accountingd[":9380 accountingd<br/>Massenkontokorrent<br/>SEPA FRST/RCUR · GLN ID · Aging · §288 BGB"]
     end
 
@@ -68,6 +69,7 @@ graph TB
     makod -->|commands| netzbilanzd & invoicd
     mabis -->|UTILTS cmd| makod
     billingd -->|de.billing.rechnung.erstellt| accountingd
+    billingd -->|render · pin hash| outputd
     vertragd -->|start-supply| processd
     portald -->|aggregates| billingd & accountingd & edmd & einsd & marktd
 ```
@@ -104,7 +106,8 @@ graph TB
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [tarifbd](@/docs/services/tarifbd.md) | `:9080` | LF | Product & Tariff Catalog — user-defined energy products, EPEX Spot for §41a, B2B Angebote/quotations |
-| [billingd](@/docs/services/billingd.md) | `:9280` | LF | Energy Billing Engine — 13 categories, §41a dynamic, §42b EnWG GGV community solar, EN 16931 e-invoicing (XRechnung 3.0 CII / PEPPOL UBL) |
+| [billingd](@/docs/services/billingd.md) | `:9280` | LF | Energy Billing Engine — 13 categories, §41a dynamic, §42b EnWG GGV community solar, EN 16931 e-invoicing (XRechnung 3.0 CII / PEPPOL UBL); the ZUGFeRD PDF renders via outputd |
+| [outputd](@/docs/services/outputd.md) | `:9880` | — | Customer Communications — operator Typst templates (content-addressed, append-only, publish gated by proof), ZUGFeRD PDF/A-3 carrier around the caller's CII, Textform kinds (Mahnung § 126b BGB); external validation panel (veraPDF + Mustang) |
 | [accountingd](@/docs/services/accountingd.md) | `:9380` | LF | Customer Account Ledger — tamper-evident double-entry ledger (the `doubleentry` crate: Merkle proofs + period seals for GoBD/§146 AO Festschreibung); per-MaLo Kontokorrent + GL contras; FIFO open-item clearing; Summen- und Saldenliste §238 HGB; aging analysis; Verzugszinsen §288 BGB; Zahlungsvereinbarung; SEPA pain.008 (FRST/RCUR separated, Gläubiger-ID EPC AT-02); CAMT.054 dedup; keyed-BLAKE3 IBAN hash; OIDC/JWT + inbound HMAC; auto-dunning; GDPR Art. 17 |
 
 ## B2C & AI
@@ -121,7 +124,7 @@ graph TB
 
 Every daemon is built on the [`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)
 crate, so the operational surface — health, config, auth, tracing, shutdown, event delivery — is
-identical across all 16. A service's `main` is a single line:
+identical across all 17. A service's `main` is a single line:
 
 ```rust
 #[tokio::main]

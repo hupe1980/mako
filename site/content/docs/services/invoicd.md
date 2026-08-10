@@ -13,7 +13,7 @@ It subscribes to `marktd`'s EventBus, receives inbound INVOIC events, and:
 1. Fetches the `PreisblattNetznutzung` and `NbContractRecord` from `marktd`.
 2. Runs **5+1 deterministic checks** via `invoic-checker` (check 6 applies to MMM PIDs only).
 3. Auto-settles (REMADV 33001) or disputes (REMADV 33002).
-4. Persists every receipt to PostgreSQL for the **3-year § 147 AO / GoBD** audit trail.
+4. Persists every receipt to PostgreSQL for the **§ 147 AO / § 14b UStG** audit trail (a received INVOIC is a Buchungsbeleg: 8-year retention).
 5. Emits `de.invoic.receipt.*` CloudEvents to your ERP — **durable at-least-once delivery** with exponential-backoff retry.
 
 ```mermaid
@@ -188,7 +188,7 @@ blocks the regulatory obligation.  Reconcile dead-lettered events by querying
 to `makod`. The `invoic_receipts` table has a `UNIQUE (process_id)` constraint,
 so re-delivery of the same `de.mako.process.initiated` event is a no-op.
 
-Receipts must be retained for **3 years** (§ 147 AO / GoBD / §41 EnWG).
+Receipts must be retained for **8 years** — a received INVOIC is a Buchungsbeleg (§ 147 Abs. 3 AO / § 14b UStG).
 The `received_at` column drives the retention query:
 
 ```sql
@@ -317,7 +317,7 @@ INVOICD_CONFIG=/etc/invoicd/invoicd.toml invoicd
 addr = "0.0.0.0:8280"          # default
 
 [database]
-# Required for § 147 AO / GoBD 3-year receipt retention.
+# Required for § 147 AO / § 14b UStG receipt retention (Buchungsbelege, 8 years).
 url             = "env:DATABASE_URL"   # required; use env: for secrets
 max_connections = 5                    # default
 
@@ -480,7 +480,7 @@ generic request-counter `/metrics` separately.
 | `invoicd_receipts_by_pid_outcome{pid, outcome}` | Receipt count broken down by PID and outcome |
 
 ```sql
--- invoic_receipts (§ 147 AO / GoBD, 3-year retention)
+-- invoic_receipts (§ 147 AO / § 14b UStG, 8-year retention)
 SELECT
   process_id,    -- UUID, unique business key
   pid,           -- 31001 | 31002 | 31005 | 31006 | 31009

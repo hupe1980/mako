@@ -1,8 +1,9 @@
 //! INVOIC receipt persistence — `invoic_receipts` table.
 //!
 //! Every INVOIC event handled by `invoicd` is written here **before** the
-//! corresponding REMADV/COMDIS command is dispatched to makod.  This satisfies
-//! the § 147 AO / GoBD / §41 EnWG 3-year retention obligation.
+//! corresponding REMADV/COMDIS command is dispatched to makod.  A received
+//! INVOIC is a received invoice — a Buchungsbeleg — so § 147 Abs. 3 AO /
+//! § 14b UStG require 8-year retention (GoBD: complete, unaltered).
 //!
 //! ## Idempotency
 //!

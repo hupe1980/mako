@@ -1,7 +1,7 @@
 +++
 title = "agentd Operator Guide"
 description = "agentd operator guide: 28 declarative specialist manifests run on the agentplane durable runtime. Journal-backed runs, a four-eyes worklist for mutating calls, per-MaLo cases as the erasure unit, role-scoped builds."
-weight = 37
+weight = 38
 [extra]
 mermaid = true
 +++

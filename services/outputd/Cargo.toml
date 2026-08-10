@@ -1,0 +1,59 @@
+[package]
+name        = "outputd"
+description = "Customer-communications daemon: operator-owned Typst templates, the ZUGFeRD PDF/A-3 carrier, publish gates and the append-only template store. Renders what other services computed — billingd's invoices, accountingd's Mahnungen — and will own the delivery channel with per-document evidence. Port :9880."
+version.workspace     = true
+authors.workspace     = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+rust-version.workspace = true
+publish         = false
+
+[lib]
+name = "outputd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "outputd"
+path = "src/main.rs"
+
+[dependencies]
+mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
+axum         = { version = "0.8" }
+sqlx         = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json"] }
+tokio        = { version = "1", features = ["full"] }
+serde        = { workspace = true, features = ["derive"] }
+serde_json   = { workspace = true }
+time         = { workspace = true }
+thiserror    = { workspace = true }
+tracing      = "0.1"
+anyhow       = "1"
+
+# The EN 16931 machinery the *gates* need: the invoice specimen is a real
+# semantic model, its payload real CII, and the finished carrier is read back
+# with the same `zugferd` reader a counterparty runs. outputd renders and
+# verifies documents; it does not bill — `energy-billing` stays in billingd.
+en16931         = { workspace = true }
+en16931-formats = { workspace = true }
+rust_decimal    = { workspace = true }
+
+# Template identity is the SHA-256 of the source: an issued document pins the
+# hash that rendered it, and § 147 AO / GoBD require that to stay resolvable.
+sha2       = { version = "0.10", default-features = false }
+
+# Document rendering. Typst compiles the operator's template; typst-pdf emits
+# the PDF/A carrier; typst-assets supplies fonts a distroless image lacks.
+typst        = "0.15"
+typst-layout = "0.15"
+typst-pdf    = "0.15"
+typst-assets = { version = "0.15", features = ["fonts"] }
+
+# Carrier surgery: locating the XMP stream `document::facturx` extends, and
+# reading page text so gates prove mandatory content is printed. Version kept
+# in step with en16931-formats' own lopdf.
+lopdf        = { version = "0.44", default-features = false }
+
+[dev-dependencies]
+roxmltree = "0.21"
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }

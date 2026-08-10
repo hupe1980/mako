@@ -1537,7 +1537,8 @@ pub struct MarkPaidRequest {
 /// when a REMADV 33001 payment confirmation is received from the LF.
 ///
 /// Regulatory basis: INVOIC AHB 1.0 §3 — NB must track payment status for
-/// § 147 AO / GoBD 3-year retention and BNetzA audit readiness.
+/// § 147 AO / GoBD retention (invoices: Buchungsbelege, 8 years) and BNetzA
+/// audit readiness.
 pub async fn mark_paid(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
@@ -1709,7 +1710,7 @@ pub struct AuditExportQuery {
 ///
 /// Returns all invoice records (lightweight, no Rechnung JSONB) filtered by
 /// date range, PID, and status.  Used for:
-/// - BNetzA § 147 AO / GoBD 3-year retention audit (Prüfung der Abrechnungsunterlagen)
+/// - BNetzA § 147 AO / GoBD retention audit (invoices: 8-year Buchungsbelege; Prüfung der Abrechnungsunterlagen)
 /// - Annual NNE portfolio reconciliation
 /// - Automated ERP import jobs
 ///
@@ -1733,7 +1734,7 @@ pub async fn get_billing_audit(
         Ok(rows) => Json(serde_json::json!({
             "count": rows.len(),
             "records": rows,
-            "regulatory_note": "§ 147 AO / GoBD: 3-year retention; full Rechnung via GET /api/v1/billing/drafts/{id}",
+            "regulatory_note": "§ 147 Abs. 3 AO / § 14b UStG: invoices are Buchungsbelege (8-year retention); full Rechnung via GET /api/v1/billing/drafts/{id}",
         })).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }

@@ -12,7 +12,7 @@ counterparty.
 Every checked invoice is persisted to PostgreSQL **before** the command is
 dispatched, in a single transaction that also records the payment deadline
 (`pay_by`) from the invoice's `DTM+faelligkeitsdatum` field. This satisfies the
-**3-year retention requirement under § 147 AO / GoBD and §41 EnWG** and enables
+**8-year retention requirement under § 147 Abs. 3 AO / § 14b UStG (a received INVOIC is a Buchungsbeleg)** and enables
 automated REMADV deadline tracking.
 
 ---
@@ -301,7 +301,7 @@ plain string is used verbatim. This is how secrets (API keys, HMAC secrets,
 [http]
 addr = "0.0.0.0:8280"
 
-# Required — § 147 AO / GoBD / §41 EnWG 3-year receipt retention.
+# Required — § 147 AO / § 14b UStG receipt retention (Buchungsbelege, 8 years).
 [database]
 url = "env:DATABASE_URL"
 
@@ -401,7 +401,7 @@ invoicd:
 
 ## Regulatory basis
 
-- **§ 147 AO / GoBD / §41 EnWG** — 3-year billing receipt retention (PostgreSQL persistence)
+- **§ 147 Abs. 3 AO / § 14b UStG** — 8-year billing receipt retention, Buchungsbelege (PostgreSQL persistence)
 - **BK6-24-174** — GPKE Teil 1–3 (Lieferantenwechsel, Netznutzungsabrechnung)
 - INVOIC AHB for PIDs 31001, 31002, 31005, 31006
 - REMADV AHB (outbound via `makod` after `gpke.abrechnung.annehmen`)

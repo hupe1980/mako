@@ -632,8 +632,9 @@ impl InvoicdMcpHandler {
                  Overdue unpaid items should trigger dunning via accountingd.\n\
                  \n\
                  **5. Retention audit**\n\
-                 Query: `SELECT COUNT(*) FROM invoic_receipts WHERE received_at < now() - INTERVAL '3 years'`\n\
-                 These rows are eligible for deletion per § 147 AO / GoBD (3-year retention period).",
+                 Query: `SELECT COUNT(*) FROM invoic_receipts WHERE received_at < now() - INTERVAL '8 years'`\n\
+                 Only rows older than 8 years are eligible for deletion: a received INVOIC is a \
+                 Buchungsbeleg (§ 147 Abs. 3 AO / § 14b UStG, 8-year retention since BEG IV).",
             ),
         ]
     }

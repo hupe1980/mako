@@ -88,7 +88,7 @@ version = "0.4"
 reason  = "companion of http 0.2 on the AWS SDK chain; hyper 1 uses http-body 1."
 
 # ── Typst document renderer ──────────────────────────────────────────────────
-# `billingd` compiles operator invoice templates with Typst. Its syntax
+# `outputd` compiles operator document templates with Typst. Its syntax
 # highlighter (`syntect` → `two-face`) is a NON-optional dependency of
 # `typst-library` — there is no feature that trims it — so these four duplicates
 # arrive with the renderer and cannot be resolved by configuration. An invoice
@@ -440,7 +440,7 @@ ignore = [
     # RUSTSEC-2026-0206: rustybuzz unmaintained. NOTE this one IS on the render
     # path — it is Typst's text shaper. Accepted because the inputs are not
     # attacker-controlled: the fonts are the bundled typst-assets set, which
-    # `billingd::document::world` is the only source of (there is deliberately no
+    # `outputd::document::world` is the only source of (there is deliberately no
     # way for a template to supply one), and the text is mako's own EN 16931
     # model plus the operator's template literals — never a counterparty's.
     # Revisit if operator-supplied font files are ever accepted.

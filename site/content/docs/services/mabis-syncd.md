@@ -1,7 +1,7 @@
 +++
 title = "mabis-syncd Operator Guide"
 description = "mabis-syncd operator guide: MaBiS Summenzeitreihe synchronisation daemon. Aggregates per-MaLo Lastgang time series from edmd and submits monthly Summenzeitreihen to the BIKO via makod as MSCONS PID 13003, per BK6-24-174 Anlage 3 MaBiS. PostgreSQL-backed status and Datenstatus tracking."
-weight = 36
+weight = 37
 [extra]
 mermaid = true
 +++
@@ -202,7 +202,7 @@ lets an estimate settle as a reading.
 | **BK6-24-174 Anlage 3 §9.8.1** | Negative Prüfmitteilung → corrected Summenzeitreihe |
 | **MSCONS AHB 3.2 §8.3.1** | PID 13003, Summenzeitreihe message format |
 | **IFTSTA AHB 2.1** | PID 21000/21001 Prüfmitteilung, 21003/21004 Datenstatus |
-| **§ 147 AO / GoBD** | 3-year audit retention for all billing-relevant data |
+| **§ 147 AO / GoBD** | Audit retention for billing-relevant data (Buchungsbelege: 8 years) |
 
 ---
 

@@ -61,6 +61,14 @@ pub struct BillingdConfig {
     /// `vertragd` base URL — Rahmenvertrag + MaLo enumeration for Sammelrechnung (L2).
     pub vertragd_url: Option<String>,
 
+    /// `outputd` base URL — renders the ZUGFeRD PDF from the stored model.
+    /// Defaults to `http://localhost:9880`. Without a reachable outputd the
+    /// PDF endpoint returns 502; the XML endpoints need no renderer.
+    pub outputd_url: Option<String>,
+
+    /// `outputd` bearer token.
+    pub outputd_api_key: Option<String>,
+
     /// ERP webhook URL — receives `de.billing.rechnung.erstellt` CloudEvents.
     pub erp_webhook_url: Option<String>,
 

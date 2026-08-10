@@ -830,7 +830,7 @@ async fn get_zahlungsstatus(
 /// The receipt is written to `invoic_receipts` (direction=Outbound,
 /// outcome=Dispatched) in a single PostgreSQL transaction BEFORE the command
 /// is dispatched to `makod`.  A crash between persist and dispatch is
-/// recoverable; a crash before persist would violate 3-year retention.
+/// recoverable; a crash before persist would break the § 147 AO audit trail.
 ///
 /// Source: GPKE Teil 3 BK6-24-174; § 147 AO / GoBD.
 #[derive(Debug, serde::Deserialize)]

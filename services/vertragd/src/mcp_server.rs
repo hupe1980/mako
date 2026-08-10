@@ -648,7 +648,7 @@ impl VertragdMcpHandler {
                 "**GDPR Art. 17 — Recht auf Löschung (Erasure) Workflow**\n\n\
                  **Step 1 — Verify identity and legal basis**\n\
                  Confirm the request comes from the data subject or their authorized representative.\n\
-                 Check retention obligations: §147 AO requires 10-year retention of contract/financial records.\n\n\
+                 Check retention obligations: § 147 Abs. 3 AO — contracts are Handelsbriefe (6 years) resp. Buchungsbelege (8 years); invoices 8 years (§ 14b UStG).\n\n\
                  **Step 2 — Look up the customer**\n\
                  Use `list_alle_kunden` or `get_kunde_by_sub` to find the kunden_id.\n\
                  Use `get_kunde_gdpr_export` (via REST) to retrieve all PII fields for the record.\n\n\
@@ -658,7 +658,7 @@ impl VertragdMcpHandler {
                  **Step 4 — Anonymize PII**\n\
                  `POST /api/v1/kunden/{id}/anonymize` with `requested_by = operator_sub`\n\
                  This pseudonymizes: geschaeftspartner, person, zahlungsinformation, umsatzsteuer_id, oidc_sub, email.\n\
-                 Contract records are RETAINED (§147 AO legal basis).\n\n\
+                 Contract records are RETAINED (§ 147 AO legal basis, up to 8 years).\n\n\
                  **Step 5 — Verify the anonymization_log entry**\n\
                  The immutable `anonymization_log` table records the operator sub, fields anonymized, and timestamp.\n\
                  This satisfies GDPR Art. 5(2) accountability obligation.\n\n\

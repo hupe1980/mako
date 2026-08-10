@@ -758,6 +758,35 @@ impl VertragdClient {
         resp.json().await.context("parse vertrag by malo")
     }
 
+    /// `GET /api/v1/ggv/{ggv_id}/betreiber`
+    ///
+    /// The § 42b GGV operator behind the community id — the BG-7 buyer of the
+    /// bundled GGV Sammelrechnung. A Kunde in vertragd (the operator has no
+    /// MP-ID and never appears in MaKo), so this is the same buyer master
+    /// every other e-invoice path resolves from. `Ok(None)` until a Betreiber
+    /// is recorded; the bundle then ships with its buyer findings, exactly as
+    /// an unconfigured retail buyer does.
+    pub async fn get_ggv_betreiber(&self, ggv_id: &str) -> Result<Option<Rechnungsempfaenger>> {
+        let url = format!("{}/api/v1/ggv/{}/betreiber", self.base_url, ggv_id);
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .context("vertragd GET ggv betreiber")?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| anyhow::anyhow!("vertragd {e}"))?;
+        #[derive(serde::Deserialize)]
+        struct Answer {
+            rechnungsempfaenger: Option<Rechnungsempfaenger>,
+        }
+        let answer: Answer = resp.json().await.context("parse ggv betreiber")?;
+        Ok(answer.rechnungsempfaenger)
+    }
+
     /// `GET /api/v1/aggregatorvertraege?sr_id={sr_id}&on={date}`
     ///
     /// The §41e EnWG Aggregatorvertrag in force for a SteuerbareRessource on
@@ -863,6 +892,10 @@ pub struct Rechnungsempfaenger {
     pub country: Option<String>,
     /// BT-48 buyer VAT identifier (B2B only).
     pub vat_id: Option<String>,
+    /// § 13b Abs. 2 Nr. 5 lit. b UStG — the buyer is a Stromwiederverkäufer;
+    /// billingd derives reverse charge from this master-data flag.
+    #[serde(default)]
+    pub stromwiederverkaeufer: bool,
 }
 
 /// The contract facts billingd puts on the invoice (§40 Abs. 1 EnWG).
@@ -918,4 +951,111 @@ pub struct Aggregatorvertrag {
     /// `None` = use the billingd default MwSt rate.
     #[serde(default)]
     pub mwst_rate_override: Option<rust_decimal::Decimal>,
+}
+
+// ── OutputdClient ─────────────────────────────────────────────────────────────
+
+/// What `outputd` answered: the ZUGFeRD PDF and the template that rendered it.
+pub struct RenderedDocument {
+    pub pdf: Vec<u8>,
+    /// `X-Mako-Template-Hash` — pin this next to the record so the document is
+    /// reproducible for as long as it must be kept (§ 147 AO / GoBD).
+    pub template_hash: String,
+}
+
+/// Why a render did not come back — split so the HTTP layer can answer with a
+/// status that names the right party. outputd's deterministic refusals (no
+/// template rolled out, a payload it cannot carry) are the *request's* fault
+/// and re-occur on every retry: reporting them as a gateway error points the
+/// operator at infrastructure and invites retries that cannot succeed.
+#[derive(Debug, thiserror::Error)]
+pub enum OutputdError {
+    /// outputd answered 4xx: the request (or the record behind it) is at
+    /// fault, and the message says what to fix. Relay as `422`.
+    #[error("outputd refused the render ({status}): {message}")]
+    Refused {
+        status: reqwest::StatusCode,
+        message: String,
+    },
+    /// Transport failure or an outputd 5xx — the renderer, not the request.
+    /// Report as `502`.
+    #[error(transparent)]
+    Unavailable(#[from] anyhow::Error),
+}
+
+/// Client for `outputd`, the customer-document renderer.
+///
+/// billingd owns what an invoice *says* (the stored EN 16931 model and the CII
+/// rendered from it); outputd owns what it *looks like* (the operator's Typst
+/// template, the PDF/A-3 carrier, the publish gate). This client carries the
+/// view and the payload across that boundary and brings back the PDF plus the
+/// template hash to pin.
+pub struct OutputdClient {
+    base_url: String,
+    api_key: Option<String>,
+    client: reqwest::Client,
+}
+
+impl OutputdClient {
+    pub fn new(base_url: &str, api_key: Option<String>) -> Self {
+        Self {
+            base_url: base_url.trim_end_matches('/').to_owned(),
+            api_key,
+            // The 30 s default must stay above outputd's 20 s render budget
+            // (which already includes queueing for a render slot), or a slow
+            // render would surface here as a transport error instead of
+            // outputd's own diagnostic.
+            client: mako_service::http::default_client(),
+        }
+    }
+
+    /// `POST /api/v1/render/INVOICE`.
+    ///
+    /// `template_hash = None` renders with the tenant's current template —
+    /// outputd resolves it and names it in the response, which is what the
+    /// caller then pins. `Some(hash)` reproduces a pinned document.
+    ///
+    /// Errors carry outputd's own message (a `Refused` names the missing
+    /// template or the payload defect), prefixed so a log line says which hop
+    /// failed.
+    pub async fn render_invoice(
+        &self,
+        view: &crate::document_view::DocumentView,
+        xml: String,
+        specification_id: &str,
+        template_hash: Option<&str>,
+        date: time::Date,
+        ident: &str,
+    ) -> Result<RenderedDocument, OutputdError> {
+        let url = format!("{}/api/v1/render/INVOICE", self.base_url);
+        let body = serde_json::json!({
+            "view": view,
+            "template_hash": template_hash,
+            "attachment": { "xml": xml, "specification_id": specification_id },
+            "date": date.to_string(),
+            "ident": ident,
+        });
+        let mut req = self.client.post(&url).json(&body);
+        if let Some(ref key) = self.api_key {
+            req = req.bearer_auth(key);
+        }
+        let resp = req.send().await.context("outputd POST render")?;
+        let status = resp.status();
+        if status.is_client_error() {
+            let message = resp.text().await.unwrap_or_default();
+            return Err(OutputdError::Refused { status, message });
+        }
+        if !status.is_success() {
+            let msg = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("outputd render failed ({status}): {msg}").into());
+        }
+        let template_hash = resp
+            .headers()
+            .get("X-Mako-Template-Hash")
+            .and_then(|v| v.to_str().ok())
+            .map(ToOwned::to_owned)
+            .context("outputd response is missing X-Mako-Template-Hash")?;
+        let pdf = resp.bytes().await.context("outputd render body")?.to_vec();
+        Ok(RenderedDocument { pdf, template_hash })
+    }
 }

@@ -13,7 +13,7 @@ mermaid = true
 This document covers the design of `mako-engine` and the full service mesh:
 event-sourced process runtime, inbound/outbound transport channels, ERP
 integration via BO4E + CloudEvents 1.0, and the SlateDB persistence layer.
-It also describes all **seventeen** companion daemons and the `mako-service` shared
+It also describes the **seventeen** production daemons and the `mako-service` shared
 infrastructure library they build on.
 
 ---
@@ -113,7 +113,7 @@ Each is independently testable and suitable for crates.io publication.
 | `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
 | `netz-checker` | NB Anmeldung 6-check validation | `check_anmeldung`, ERC A02/A05/A06/A07/E17 |
 | `mako-obs` | Process observability types | `ProcessProjection`, `KpiReport`, `DeadlineRisk` |
-| `mako-service` | **Service SDK** — cross-cutting infrastructure for all 16 daemons | `load_config`, `DatabaseConfig`, `HttpConfig`, `shutdown::token/serve`, `OidcConfig::build_verifier`, `McpAuth`, `McpAuthConfig`, `init_tracing_from_env`, `CedarEnforcer`, `EventBus`, `ServiceBuilder` |
+| `mako-service` | **Service SDK** — cross-cutting infrastructure for all 17 daemons | `load_config`, `DatabaseConfig`, `HttpConfig`, `shutdown::token/serve`, `OidcConfig::build_verifier`, `McpAuth`, `McpAuthConfig`, `init_tracing_from_env`, `CedarEnforcer`, `EventBus`, `ServiceBuilder` |
 | `mako-plugin` | Operator event-bus extension point | `CloudEventPlugin`, `PluginRegistry`; run by `mako-service::event_bus` before delivery |
 
 ### Billing crate hierarchy
@@ -132,6 +132,7 @@ graph TD
         netzbilanzd["netzbilanzd :8680<br/>NB billing"]
         einsd["einsd :9180<br/>EEG settlement"]
         billingd["billingd :9280<br/>LF retail billing<br/>VPP auto-billing webhook<br/>EN 16931 — XRechnung 3.0 CII / PEPPOL UBL<br/>12 MCP tools"]
+        outputd["outputd :9880<br/>customer documents<br/>Typst templates · ZUGFeRD carrier"]
         invoicd["invoicd :8280<br/>INVOIC plausibility"]
     end
 
@@ -144,6 +145,7 @@ graph TD
     grid --> netzbilanzd
     grid --> invoicd
     energy --> billingd
+    billingd -->|render · pin hash| outputd
 ```
 
 ### `energy-billing` — LF retail billing engine
@@ -216,7 +218,8 @@ All **16** daemons share a common operational model:
 | `obsd` | `:8480` | Process observability — KPI reports, deadline-risk alerts, §20 EnWG parity | `obsd.toml` |
 | `einsd` | `:9180` | Einspeiser Registry + EEG/KWKG Settlement (NB/LF role) — **10 settlement schemes** (Vergütung, Mieterstrom §21 Abs. 3 EEG, Direktvermarktung MarketPremium, sonstige Direktvermarktung, Ausschreibung, Post-EEG Spot, Eigenverbrauch, KWKG-Zuschlag §7 KWKG 2023, Flexibilitätsprämie §50 EEG, Flexibilitätszuschlag §50b EEG); Repowering §22 EEG; KWKG Förderdauer; built-in rate table EEG 2000–2023 + KWKG 2023; **§14 UStG Gutschrift** issued per billable settlement (Gutschriftverfahren — NB issues the document; BO4E `Rechnung` in `rechnung_json`, VAT breakdown per plant tax status); CloudEvents `de.eeg.verguetung.berechnet` (net + USt + brutto) + `de.eeg.marktpraemie.berechnet` + `de.eeg.anlage.foerderung-auslaufend` | `einsd.toml` |
 | `tarifbd` | `:9080` | Product & Tariff Catalog (LF role) — user-defined energy products (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE); all prices in `Tarifpreisblatt` JSONB; version history; MaLo→product assignment; EPEX Spot for §41a | `tarifbd.toml` |
-| `billingd` | `:9280` | Energy Billing Engine (LF role) — all prices user-defined in `tarifbd`; 13 categories (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/VPP); §41a dynamic; VPP auto-billing webhook (`de.vpp.dispatch.confirmed` → `Rechnung`); `/preview` dry-run; EN 16931 e-invoicing (XRechnung 3.0 CII / PEPPOL UBL); `de.billing.rechnung.erstellt` | `billingd.toml` |
+| `billingd` | `:9280` | Energy Billing Engine (LF role) — all prices user-defined in `tarifbd`; 13 categories (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/VPP); §41a dynamic; VPP auto-billing webhook (`de.vpp.dispatch.confirmed` → `Rechnung`); `/preview` dry-run; EN 16931 e-invoicing (XRechnung 3.0 CII / PEPPOL UBL); ZUGFeRD PDF via `outputd`, template hash pinned per issued invoice; `de.billing.rechnung.erstellt` | `billingd.toml` |
+| `outputd` | `:9880` | Customer Communications — operator-owned Typst templates in a no-I/O sandbox (content-addressed, append-only store; publish gated by proof); ZUGFeRD PDF/A-3 carrier (Factur-X XMP by incremental update) around the caller's CII payload; Textform kinds (MAHNUNG § 126b BGB render-proven; PREISANPASSUNG parse-only until its view exists); `POST /api/v1/render/{kind}` → PDF + `X-Mako-Template-Hash` | `outputd.toml` |
 | `accountingd` | `:9380` | Customer Account Ledger (LF role) — **tamper-evident double-entry ledger** on the `doubleentry` crate (Merkle inclusion proofs, period seals for GoBD/§146 AO **Festschreibung**, store-level idempotent CE ingest); per-MaLo Kontokorrent + GL contras; **FIFO open-item clearing** (`/open-items`); **Summen- und Saldenliste** §238 HGB (`/trial-balance`); camt.054 XML + JSON import; SEPA pain.008 XML (multi-group single message, hard `creditor_iban`/`creditor_id` validation); pain.001 SCT credit-transfer; **auto-dunning rule engine** (Mahnstufe 1–3, background worker); **balance reconciliation** (`/reconcile`); keyed-BLAKE3 IBAN hash; **GDPR Art. 17 pseudonymization** (`/anonymize`) | `accountingd.toml` |
 | `portald` | `:9480` | Customer Portal read-model gateway (LF role, stateless) — aggregates Lastgang, invoices, account balance, VersorgungsStatus, EEG settlement; `/dashboard` parallel aggregation; `/events` SSE stream; OIDC-gated | `portald.toml` |
 | `vertragd` | `:9780` | Contract & Customer Management (LF role) — `Kunden` (B2C + B2B) with `kunden_identitaeten` (N OIDC logins per company, rolle=VOLLZUGRIFF/ADMIN/FINANZEN/TECHNIK/READONLY, optional `standort_filter` for site-scoped B2B access); `Rahmenverträge` (B2B portfolio: Sammelrechnung, indexation, volume discount, `angebot_id` CPQ); `Versorgungsverträge` per site/commodity (ANGELEGT→IN_BEARBEITUNG→TEILERFUELLUNG→AKTIV→GEKÜNDIGT→ABGELAUFEN); triggers GPKE/GeLi Gas Lieferbeginn/-ende via `processd`; Tarifwechsel + Preisgarantie guard (§41 EnWG); Kündigung with coordinated Schlussablesung; auto-renewal worker; Preisanpassungsbenachrichtigung worker (§41 Abs. 3 EnWG); OIDC sub → MaLo authorization gateway (`GET /kunden/authenticate`) for `portald`; **GDPR Art. 15 export** (`/export`); **GDPR Art. 17 pseudonymization** (`/anonymize`) with immutable audit log; `Zahlungsinformation` typed IBAN/SEPA; 3 DB migrations; 16-tool MCP server | `vertragd.toml` |
@@ -424,7 +427,7 @@ cross-cutting boilerplate so service code focuses exclusively on domain logic.
 ```mermaid
 graph TD
     A["makod :8080"] & B["marktd :8180"] & C["processd :8580"] & D["invoicd :8280"]
-    E["edmd :8380"] & F["netzbilanzd :8680"] & G["einsd :9180"] & H["…12 more"]
+    E["edmd :8380"] & F["netzbilanzd :8680"] & G["einsd :9180"] & H["…10 more"]
 
     subgraph sdk ["mako-service SDK"]
         direction LR

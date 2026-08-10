@@ -90,9 +90,6 @@ pub const ENC_CONTENT_AES256_GCM: &str = "http://www.w3.org/2009/xmlenc11#aes256
 /// this TTL (96 hours recommended for safety margin).
 pub const MAX_RETRY_DURATION_SECS: u64 = 72 * 3600;
 
-/// Maximum number of delivery attempts (BDEW AS4 Kommunikationshandbuch).
-pub const MAX_RETRY_COUNT: u32 = 5;
-
 /// Timestamp freshness window in seconds.
 ///
 /// Per eDelivery AS4 v1.15 §5.1.3, inbound `<eb:Timestamp>` values outside
