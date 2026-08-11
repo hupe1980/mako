@@ -806,7 +806,10 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<()> {
             Arc::clone(&cfg.platform),
             cfg.as4_lenient_receipts,
         )?
-        .with_netzzugang(Arc::clone(&netzzugang_sender));
+        .with_netzzugang(Arc::clone(&netzzugang_sender))
+        // `<eb:From>/<eb:PartyId>` must match the signing certificate's subject
+        // (AS4-Profil §2.3.2), and this is the identity that cert was issued to.
+        .with_party_id(party_id.as_str());
 
         info!(
             party_id        = %party_id,

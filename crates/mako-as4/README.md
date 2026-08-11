@@ -227,6 +227,6 @@ println!("Encryption key (PEM): {}", pki.encryption.key_pem_str());
 | Crate | Role |
 |---|---|
 | `mako-as4` ← **this crate** | BDEW AS4 profile (P-Modes, constants, policy, test helpers) |
-| `asx-rs` 0.11 | AS4/ebMS3 transport engine (ECDSA signing, ECDH-ES encrypt, signed-receipt NRR verification, dedup, testing helpers) |
+| `asx-rs` 0.13 | AS4/ebMS3 transport engine (ECDSA signing, ECDH-ES encrypt, signed-receipt NRR verification, dedup, testing helpers) |
 | `makod` | Production daemon — assembles AS4 ingest, sender, and all 45+ BDEW workflows |
 

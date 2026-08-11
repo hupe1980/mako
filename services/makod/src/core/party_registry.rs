@@ -559,7 +559,6 @@ impl MpIdRegistry {
     /// Uses the configured or auto-derived value for known GLNs;
     /// falls back to `"293"` (BDEW Strom) for unknown GLNs.
     #[must_use]
-    #[allow(dead_code)]
     pub fn agency_for_mp_id(&self, mp_id: &str) -> &str {
         self.mp_id_to_agency
             .get(mp_id)

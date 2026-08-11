@@ -295,6 +295,14 @@ pub struct BdewAs4Sender {
     /// §20b Netzzugangsplattform requests must never travel over AS4 — they
     /// route here when wired (see [`crate::netzzugang`]).
     netzzugang_sender: Option<Arc<crate::netzzugang::NetzzugangSender>>,
+    /// The MP-ID emitted as `<eb:From>/<eb:PartyId>` on every outbound message.
+    ///
+    /// BDEW AS4-Profil §2.3.2 lets the receiver accept any value here **only**
+    /// if it matches the subject of the presented certificate. This daemon
+    /// signs everything with one key, so the AS4 party is the signing identity
+    /// — not the interchange's `NAD+MS` sender, which in a combined Strom+Gas
+    /// deployment can be a different own MP-ID.
+    as4_party_id: Arc<str>,
     /// Loopback hops seen per `conversation_id`, for the runaway guard.
     ///
     /// A combined-role deployment delivers self-addressed messages in-process:
@@ -372,6 +380,7 @@ impl BdewAs4Sender {
     ) -> anyhow::Result<Self> {
         let transport = As4HttpTransport::new(TransportConfig::default())
             .map_err(|e| anyhow::anyhow!("AS4 HTTP transport init failed: {e}"))?;
+        let mp_id_registry_party = mp_id_registry.primary_mp_id().to_owned();
         Ok(Self {
             session,
             event_bus,
@@ -383,8 +392,19 @@ impl BdewAs4Sender {
             platform,
             lenient_receipts,
             netzzugang_sender: None,
+            as4_party_id: Arc::from(mp_id_registry_party),
             loopback_hops: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         })
+    }
+
+    /// Set the `<eb:From>/<eb:PartyId>` emitted on outbound messages.
+    ///
+    /// Defaults to the registry's primary MP-ID; override it when the AS4
+    /// signing certificate is issued to a different identity (`--as4-party-id`).
+    #[must_use]
+    pub fn with_party_id(mut self, party_id: impl Into<Arc<str>>) -> Self {
+        self.as4_party_id = party_id.into();
+        self
     }
 
     /// Route `NetzzugangAntrag` outbox messages (§20b EnWG) to the given sender.
@@ -417,6 +437,7 @@ impl As4Sender for BdewAs4Sender {
         let message_id_str = msg.message_id.to_string();
         let conversation_id = msg.conversation_id.to_string();
         let mp_id_registry: Arc<MpIdRegistry> = Arc::clone(&self.mp_id_registry);
+        let as4_party_id: Arc<str> = Arc::clone(&self.as4_party_id);
         let platform = Arc::clone(&self.platform);
         let lenient_receipts = self.lenient_receipts;
         let netzzugang_sender = self.netzzugang_sender.clone();
@@ -725,6 +746,34 @@ impl As4Sender for BdewAs4Sender {
                 message: format!("P-Mode policy materialisation failed for {message_id_str}: {e}"),
             })?;
             policy.conversation_id = Some(conversation_id);
+
+            // The ebMS3 party/role/agreement fields carry fixed BDEW values that
+            // `to_send_policy` cannot know — it sees only the P-Mode. The receiving
+            // MSH resolves its P-Mode from them, and §2.3.1.1 requires the PartyId
+            // `type` attribute to name the agency that issued each MP-ID, so the
+            // ebCore URI is derived from the same agency code the EDIFACT layer
+            // puts in NAD DE3055 rather than assumed.
+            policy.from_party_id = Some(as4_party_id.to_string());
+            policy.to_party_id = Some(rendered.receiver_mp_id.to_string());
+            policy.from_party_id_type = Some(
+                mako_as4::constants::party_id_type_for_agency(
+                    mp_id_registry.agency_for_mp_id(&as4_party_id),
+                )
+                .to_owned(),
+            );
+            policy.to_party_id_type = Some(
+                mako_as4::constants::party_id_type_for_agency(
+                    mp_id_registry.agency_for_mp_id(&rendered.receiver_mp_id),
+                )
+                .to_owned(),
+            );
+            policy.from_role = mako_as4::constants::ROLE_INITIATOR.to_owned();
+            policy.to_role = mako_as4::constants::ROLE_RESPONDER.to_owned();
+            // §2.3.2: fixed agreement value, and its `pmode`/`type` attributes
+            // must not be emitted.
+            policy.agreement_ref = Some(mako_as4::constants::AGREEMENT_REF.to_owned());
+            policy.agreement_ref_type = None;
+
             let action = bdew_action.as_uri();
 
             // Build the §AF §2.12 Content-Disposition filename:
@@ -777,6 +826,16 @@ impl As4Sender for BdewAs4Sender {
                     },
                 ),
                 payload_filename,
+                // §2.2.3.2: the payload is an EDIFACT interchange carried as binary
+                // in its own MIME part. Stated explicitly because asx-rs would
+                // otherwise label it `application/xml` — its default whenever
+                // encryption is on, which for this profile is always.
+                payload_mime_type: Some(mako_as4::constants::PAYLOAD_MIME_TYPE.to_owned()),
+                // Derived from the content digest; BDEW pins no Content-ID.
+                payload_content_id: None,
+                // One interchange per AS4 message — the profile defines no
+                // multi-payload UserMessage.
+                additional_payloads: Vec::new(),
             };
 
             // Build the signed SOAP envelope (CPU-bound; runs on Tokio blocking pool).
@@ -999,6 +1058,49 @@ mod loopback_guard_tests {
         assert!(
             h.lock().expect("not poisoned").len() <= MAX_TRACKED_CONVERSATIONS,
             "the loopback-hop map must be bounded"
+        );
+    }
+}
+
+#[cfg(test)]
+mod bdew_envelope_tests {
+    use mako_as4::constants;
+
+    /// BDEW AS4-Profil §2.3.1.1 requires the `<eb:PartyId>/@type` attribute and
+    /// derives it from the agency that issued the MP-ID. The AS4 party type and
+    /// the EDIFACT NAD DE3055 agency describe the same fact, so they are derived
+    /// from one source rather than configured twice.
+    #[test]
+    fn party_type_is_derived_from_the_registry_agency() {
+        // The registry's own derivation: 99… → BDEW, 98… → DVGW, other 13 → GS1.
+        let cases = [
+            ("293", constants::PARTY_TYPE_BDEW),
+            ("332", constants::PARTY_TYPE_DVGW),
+            ("9", constants::PARTY_TYPE_GLN),
+        ];
+        for (agency, expected) in cases {
+            assert_eq!(
+                constants::party_id_type_for_agency(agency),
+                expected,
+                "agency {agency} must map to its ebCore party type"
+            );
+        }
+    }
+
+    /// §2.3.2 lets a receiver accept any `<eb:From>/<eb:PartyId>` **only** when
+    /// it matches the subject of the presented certificate. This daemon signs
+    /// every outbound message with one key, so the AS4 party is the signing
+    /// identity — never the interchange's `NAD+MS` sender, which in a combined
+    /// Strom+Gas deployment is a different own MP-ID and would present a
+    /// certificate that does not match.
+    #[test]
+    fn the_agreement_ref_carries_no_type_attribute() {
+        // The fixed agreement value selects the profile's dynamic party model;
+        // §2.3.2 forbids the accompanying `pmode` and `type` attributes, which
+        // the sender expresses by passing `None` for the type.
+        assert_eq!(
+            constants::AGREEMENT_REF,
+            "https://www.bdew.de/as4/communication/agreement"
         );
     }
 }

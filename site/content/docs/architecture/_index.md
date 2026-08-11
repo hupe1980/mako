@@ -564,7 +564,7 @@ sequenceDiagram
 
 1. Render EDIFACT interchange via `edi-energy` builders.
 2. Look up trading partner AS4 endpoint in `PartnerStore`.
-3. Sign + encrypt with operator BrainpoolP256r1 credentials (`asx-rs` v0.11 — ECDSA-SHA256 + ECDH-ES key agreement via `with_signing_material(cert, key)`).
+3. Sign + encrypt with operator BrainpoolP256r1 credentials (`asx-rs` v0.13 — ECDSA-SHA256 + ECDH-ES key agreement via `with_signing_material(cert, key)`).
 4. POST via `asx-rs` AS4 sender.
 5. On HTTP 200: delete outbox entry. On 4xx/5xx: back-off and retry.
 

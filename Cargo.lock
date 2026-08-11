@@ -682,9 +682,9 @@ dependencies = [
 
 [[package]]
 name = "asx-rs"
-version = "0.12.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a75c4768ac9cc9dc33d950bf6fd0474e3e342fd098383c603e676737cf0d59ca"
+checksum = "e5fdd8d7f9f686d74caf72e448838a18fb8729624fe1d91365cfa9f7ec63cd03"
 dependencies = [
  "aes-gcm 0.11.0",
  "axum",

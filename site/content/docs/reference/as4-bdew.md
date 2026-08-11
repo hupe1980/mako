@@ -175,6 +175,36 @@ Company X
 For outbound messages the EDIFACT `NAD+MS` sender is set automatically per workflow
 (Strom workflows use the BDEW code, Gas workflows use the DVGW code).
 
+#### ebMS3 envelope fields
+
+The profile fixes several `<eb:UserMessage>` values, and a counterparty's MSH
+resolves its P-Mode from them — a wrong value is a delivery failure the sender
+never sees. `makod` sets them on every outbound message:
+
+| Field | Value | Basis |
+|---|---|---|
+| `<eb:AgreementRef>` | `https://www.bdew.de/as4/communication/agreement` (no `pmode`/`type` attributes) | §2.3.2 |
+| `<eb:From>/<eb:Role>` | `…/ebms/v3.0/ns/core/200704/initiator` | §2.3, Tabelle 1 |
+| `<eb:To>/<eb:Role>` | `…/ebms/v3.0/ns/core/200704/responder` | §2.3, Tabelle 1 |
+| `<eb:PartyId>/@type` | ebCore URI of the issuing agency — `…iso6523:0088` (GLN), `…unregistered:BDEW`, `…unregistered:DVGW` | §2.3.1.1 |
+| `<eb:PartInfo>/@MimeType` | `application/octet-stream` | §2.2.3.2 |
+
+The party type is derived from the same agency code the EDIFACT layer puts in
+`NAD` DE3055, so the two identifier vocabularies cannot drift apart for one
+MP-ID.
+
+Payloads travel as **SOAP-with-Attachments**: an `application/soap+xml` root
+part, an **empty SOAP Body**, and the EDIFACT interchange in its own MIME part
+referenced from the signed `<eb:PartInfo href="cid:…">`. §2.2.3.2 requires that
+shape — compression is mandatory in this profile, so the payload is binary and
+never inline.
+
+Compression is **gzip and always on** (`PMode[1].PayloadService.CompressionType`
+= `application/gzip`, §2.2.3.3). The interchange is compressed first, then
+encrypted, and the `CompressionType` part property rides in the *signed* ebMS
+header — the receiver decrypts and needs that property to know it must still
+decompress before handing the bytes to its business layer.
+
 #### Signing cert and `<eb:From>`
 
 `makod` maintains **one outbound `SessionContext`** backed by a single signing
@@ -183,8 +213,12 @@ means:
 
 - All outbound AS4 messages are signed with that one key, regardless of which mp_id
   is the EDIFACT `NAD+MS` sender.
-- The AS4 `<eb:From>/<eb:PartyId>` for receipts and error signals is always the
-  **primary** mp_id (or the explicit `--as4-party-id`).
+- The AS4 `<eb:From>/<eb:PartyId>` is always the **primary** mp_id (or the explicit
+  `--as4-party-id`) — on UserMessages as well as on receipts and error signals.
+  §2.3.2 lets a receiver accept an arbitrary `<eb:From>` **only** where it matches
+  the subject of the presented certificate, so the AS4 party has to be the signing
+  identity rather than the interchange sender, which in a combined Strom+Gas
+  deployment is a different own mp_id.
 
 In practice counterparties validate the cert against the BDEW PKI trust anchor (not
 against the `<eb:From>` value), so this works for the majority of deployments. For

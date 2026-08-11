@@ -301,13 +301,18 @@ async fn sign_encrypt_round_trip_via_mock_endpoint() {
                 signing_key_pem: None,
             }),
             payload_filename: None,
+            payload_mime_type: Some(mako_as4::constants::PAYLOAD_MIME_TYPE.to_owned()),
+            payload_content_id: None,
+            additional_payloads: Vec::new(),
         },
     )
     .await
     .expect("sign+encrypt send_async must succeed with BrainpoolP256r1 material");
 
-    let soap_str = std::str::from_utf8(&output.soap_envelope.body)
-        .expect("sign+encrypt SOAP envelope must be valid UTF-8");
+    // The body is a MIME multipart: a UTF-8 SOAP root part plus the gzip-
+    // compressed, encrypted payload attachment (§2.2.3.2/§2.2.3.3), so only the
+    // SOAP part is text. Scan lossily rather than asserting UTF-8 over binary.
+    let soap_str = String::from_utf8_lossy(&output.soap_envelope.body);
 
     assert!(
         soap_str.contains("BinarySecurityToken"),
@@ -411,13 +416,16 @@ async fn sign_only_round_trip_envelope_contains_wssec_signature() {
             policy: pm.to_send_policy().expect("sign-only policy must build"),
             credentials: None,
             payload_filename: None,
+            payload_mime_type: Some(mako_as4::constants::PAYLOAD_MIME_TYPE.to_owned()),
+            payload_content_id: None,
+            additional_payloads: Vec::new(),
         },
     )
     .await
     .expect("sign-only send_async must succeed");
 
-    let soap_str =
-        std::str::from_utf8(&output.soap_envelope.body).expect("SOAP envelope must be valid UTF-8");
+    // Compressed payload attachment ⇒ the multipart body is not wholly UTF-8.
+    let soap_str = String::from_utf8_lossy(&output.soap_envelope.body);
 
     assert!(
         soap_str.contains("BinarySecurityToken"),
@@ -524,6 +532,9 @@ async fn tampered_signature_is_rejected() {
             policy: pm.to_send_policy().expect("policy must build"),
             credentials: None,
             payload_filename: None,
+            payload_mime_type: Some(mako_as4::constants::PAYLOAD_MIME_TYPE.to_owned()),
+            payload_content_id: None,
+            additional_payloads: Vec::new(),
         },
     )
     .await
@@ -636,6 +647,9 @@ async fn inbound_encryption_enforced_when_decryption_key_set() {
             policy: pm.to_send_policy().expect("policy must build"),
             credentials: None,
             payload_filename: None,
+            payload_mime_type: Some(mako_as4::constants::PAYLOAD_MIME_TYPE.to_owned()),
+            payload_content_id: None,
+            additional_payloads: Vec::new(),
         },
     )
     .await
@@ -749,6 +763,9 @@ async fn sync_receipt_is_verified_and_correlated() {
             policy,
             credentials: None,
             payload_filename: None,
+            payload_mime_type: Some(mako_as4::constants::PAYLOAD_MIME_TYPE.to_owned()),
+            payload_content_id: None,
+            additional_payloads: Vec::new(),
         },
     )
     .await

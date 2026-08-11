@@ -111,7 +111,7 @@ mako-wim         = { path = "crates/mako-wim",         version = "0.16" }
 # AS4/ebMS3 stack behind the BDEW MaKo profile. Declared once here: mako-as4 and
 # makod both depend on it, and independent declarations previously drifted onto
 # two different versions in the same build.
-asx-rs           = { version = "0.12" }
+asx-rs           = { version = "0.13" }
 mako-service     = { path = "crates/mako-service",     version = "0.16" }
 mako-plugin      = { path = "crates/mako-plugin",      version = "0.16" }
 invoic-checker   = { path = "crates/invoic-checker",   version = "0.16" }

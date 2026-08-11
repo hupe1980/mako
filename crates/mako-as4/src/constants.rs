@@ -3,14 +3,6 @@
 //! All values are taken from the **BDEW AS4 Kommunikationshandbuch** (mandatory
 //! for electricity since 1 April 2024, for gas since 1 April 2025).
 
-// ── Party identification ──────────────────────────────────────────────────────
-
-/// BDEW party ID type: GLN (Global Location Number, ISO 6523 ICD 0088).
-///
-/// All BDEW market participants are identified by their 13-digit GLN.
-/// Used as the `type` attribute on `<eb:PartyId>` elements.
-pub const PARTY_ID_TYPE: &str = "urn:oasis:names:tc:ebcore:partyid-type:iso6523:0088";
-
 // ── Service / action ─────────────────────────────────────────────────────────
 
 /// BDEW MaKo AS4 service identifier used in `<eb:Service>`.
@@ -22,11 +14,51 @@ pub const SERVICE: &str = "urn:bdew:as4:service";
 /// `type` attribute on `<eb:Service>` — empty string omits the attribute.
 pub const SERVICE_TYPE: &str = "";
 
-/// BDEW MaKo AS4 agreement reference name (`<eb:AgreementRef>`).
-pub const AGREEMENT_REF: &str = "urn:bdew:as4:agreement";
+/// BDEW MaKo AS4 agreement reference (`<eb:AgreementRef>`).
+///
+/// Fixed value per BDEW AS4-Profil v1.2 §2.3.2, signalling that the profile's
+/// dynamic sender/receiver model is in use. The `pmode` and `type` attributes
+/// **must not** be emitted alongside it — pass `None` for the type.
+pub const AGREEMENT_REF: &str = "https://www.bdew.de/as4/communication/agreement";
 
-/// `type` attribute on `<eb:AgreementRef>`.
-pub const AGREEMENT_TYPE: &str = "bdew:as4";
+// ── Roles ─────────────────────────────────────────────────────────────────────
+
+/// `<eb:From>/<eb:Role>` — fixed `PMode.Initiator.Role` per §2.3, Tabelle 1.
+pub const ROLE_INITIATOR: &str =
+    "http://docs.oasis-open.org/ebxml-msg/ebms/v3.0/ns/core/200704/initiator";
+
+/// `<eb:To>/<eb:Role>` — fixed `PMode.Responder.Role` per §2.3, Tabelle 1.
+pub const ROLE_RESPONDER: &str =
+    "http://docs.oasis-open.org/ebxml-msg/ebms/v3.0/ns/core/200704/responder";
+
+// ── Party identifier types ────────────────────────────────────────────────────
+
+/// `<eb:PartyId>/@type` for a GLN, per §2.3.1.1 (ebCore ISO 6523, ICD 0088).
+pub const PARTY_TYPE_GLN: &str = "urn:oasis:names:tc:ebcore:partyid-type:iso6523:0088";
+
+/// `<eb:PartyId>/@type` for a BDEW-assigned MP-ID, per §2.3.1.1.
+pub const PARTY_TYPE_BDEW: &str = "urn:oasis:names:tc:ebcore:partyid-type:unregistered:BDEW";
+
+/// `<eb:PartyId>/@type` for a DVGW-assigned MP-ID, per §2.3.1.1.
+pub const PARTY_TYPE_DVGW: &str = "urn:oasis:names:tc:ebcore:partyid-type:unregistered:DVGW";
+
+/// `<eb:PartyId>/@type` for a DB (Bahnstromnetz) MP-ID, per §2.3.1.1.
+pub const PARTY_TYPE_BAHN: &str = "urn:oasis:names:tc:ebcore:partyid-type:unregistered:BAHN";
+
+/// Map a NAD DE3055 agency code to its ebCore `<eb:PartyId>/@type`.
+///
+/// §2.3.1.1 requires the attribute and derives it from the agency that issued
+/// the MP-ID, so the two identifier vocabularies — EDIFACT's numeric agency
+/// code and AS4's ebCore URI — must not drift apart. Unknown codes fall back
+/// to the BDEW scheme, matching the registry's own default agency.
+#[must_use]
+pub const fn party_id_type_for_agency(agency: &str) -> &'static str {
+    match agency.as_bytes() {
+        b"9" | b"500" | b"14" => PARTY_TYPE_GLN,
+        b"332" | b"502" => PARTY_TYPE_DVGW,
+        _ => PARTY_TYPE_BDEW,
+    }
+}
 
 // ── MPC ───────────────────────────────────────────────────────────────────────
 
@@ -96,7 +128,83 @@ pub const MAX_RETRY_DURATION_SECS: u64 = 72 * 3600;
 /// ±5 minutes of the current time MUST be rejected.
 pub const TIMESTAMP_FRESHNESS_WINDOW_SECS: u64 = 300;
 
-// ── EDIFACT content type ──────────────────────────────────────────────────────
+// ── Payload media type ────────────────────────────────────────────────────────
 
-/// MIME content type for EDIFACT UN/EDIFACT payloads in AS4 attachments.
-pub const EDIFACT_CONTENT_TYPE: &str = "application/edifact";
+/// `<eb:PartInfo>/@MimeType` for the EDIFACT payload part.
+///
+/// BDEW AS4-Profil v1.2 §2.2.3.2: because compression is mandatory in this
+/// profile the payload is carried as binary in its own MIME part with
+/// Content-Type `application/octet-stream`, never in the SOAP Body — which
+/// this profile requires to be empty.
+///
+/// This must be stated explicitly on every send. `asx-rs` defaults an unset
+/// media type to `application/xml` **whenever encryption is on**, and BDEW
+/// encrypts unconditionally (§2.2.6.2.2), so leaving it unset would label an
+/// EDIFACT interchange as XML on the wire.
+pub const PAYLOAD_MIME_TYPE: &str = "application/octet-stream";
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The ebMS3 envelope vocabulary is quoted verbatim from BDEW AS4-Profil
+    /// v1.2. A counterparty resolves its P-Mode from these strings, so a typo
+    /// is a delivery failure the sender cannot see.
+    #[test]
+    fn envelope_vocabulary_matches_the_profile() {
+        // §2.3.2 — Festwert; the pmode/type attributes must not accompany it.
+        assert_eq!(
+            AGREEMENT_REF,
+            "https://www.bdew.de/as4/communication/agreement"
+        );
+        // §2.3 Tabelle 1 — PMode.Initiator.Role / PMode.Responder.Role.
+        assert_eq!(
+            ROLE_INITIATOR,
+            "http://docs.oasis-open.org/ebxml-msg/ebms/v3.0/ns/core/200704/initiator"
+        );
+        assert_eq!(
+            ROLE_RESPONDER,
+            "http://docs.oasis-open.org/ebxml-msg/ebms/v3.0/ns/core/200704/responder"
+        );
+        // §2.3.1.1 — one party type per issuing agency.
+        assert_eq!(
+            PARTY_TYPE_GLN,
+            "urn:oasis:names:tc:ebcore:partyid-type:iso6523:0088"
+        );
+        assert_eq!(
+            PARTY_TYPE_BDEW,
+            "urn:oasis:names:tc:ebcore:partyid-type:unregistered:BDEW"
+        );
+        assert_eq!(
+            PARTY_TYPE_DVGW,
+            "urn:oasis:names:tc:ebcore:partyid-type:unregistered:DVGW"
+        );
+        assert_eq!(
+            PARTY_TYPE_BAHN,
+            "urn:oasis:names:tc:ebcore:partyid-type:unregistered:BAHN"
+        );
+    }
+
+    /// The AS4 party type and the EDIFACT NAD DE3055 agency describe the same
+    /// fact in two vocabularies; they must not disagree for one MP-ID.
+    #[test]
+    fn party_type_follows_the_issuing_agency() {
+        assert_eq!(party_id_type_for_agency("293"), PARTY_TYPE_BDEW);
+        assert_eq!(party_id_type_for_agency("332"), PARTY_TYPE_DVGW);
+        assert_eq!(party_id_type_for_agency("502"), PARTY_TYPE_DVGW);
+        // GS1 appears as "9" (NAD DE3055) and "14"/"500" in the UNB vocabulary.
+        assert_eq!(party_id_type_for_agency("9"), PARTY_TYPE_GLN);
+        assert_eq!(party_id_type_for_agency("14"), PARTY_TYPE_GLN);
+        assert_eq!(party_id_type_for_agency("500"), PARTY_TYPE_GLN);
+        // Unknown agencies fall back to BDEW, matching the registry default.
+        assert_eq!(party_id_type_for_agency("ZEW"), PARTY_TYPE_BDEW);
+    }
+
+    /// §2.2.3.2 — the payload is binary in its own part, never inline XML.
+    #[test]
+    fn payload_media_type_is_binary() {
+        assert_eq!(PAYLOAD_MIME_TYPE, "application/octet-stream");
+    }
+}

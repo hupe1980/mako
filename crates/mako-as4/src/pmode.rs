@@ -350,10 +350,11 @@ pub fn bdew_action_from_str(message_type: &str) -> BdewAction {
 /// | `security.sign` | `true` — ECDSA-SHA256 + BrainpoolP256r1 | §2.2.6.2.1, BSI TR-03116-3 §9.1 |
 /// | `security.encrypt` | `true` — ECDH-ES + ConcatKDF + AES-128-GCM | §2.2.6.2.2, BSI TR-03116-3 §9.2 |
 /// | `security.outbound_key_info_profile` | [`X509PKIPathv1`] | §2.2.6.2.1 |
-/// | `payload_packaging` | [`MimeAttachment`] | AS4-Profil §3.3 |
+/// | `security.compress` | `true` — `application/gzip` | §2.2.3.2, §2.2.3.3 |
+/// | `payload_packaging` | [`MimeAttachment`] — SwA, empty SOAP Body | §2.2.3.2 |
 /// | `endpoint_url` | `None` | use [`bdew_pmode_with_endpoint`] |
 ///
-/// ## Algorithm auto-detection (asx-rs v0.7)
+/// ## Algorithm auto-detection
 ///
 /// The WS-Security algorithm is selected automatically from the key material
 /// supplied to the `asx_rs` `SessionContext`:
@@ -402,7 +403,12 @@ pub fn bdew_pmode(
             // `recipient_cert_pem` must be set in `As4SendCredentials` at send time.
             encrypt: true,
             encrypt_soap_headers: false,
-            compress: false,
+            // Mandatory per §2.2.3.2/§2.2.3.3: this profile always compresses,
+            // which is why the payload is binary in its own MIME part and the
+            // SOAP Body is empty. `PayloadService.CompressionType` is
+            // `application/gzip`, emitted as a signed PartProperty so the
+            // receiver knows to decompress after decrypting.
+            compress: true,
             // X509PKIPathv1 BST token type — mandatory per §2.2.6.2.1.
             outbound_key_info_profile: WsSecOutboundKeyInfoProfile::X509PKIPathv1,
         },
@@ -487,7 +493,12 @@ pub fn bdew_pmode_sign_only(
             sign: true,
             encrypt: false,
             encrypt_soap_headers: false,
-            compress: false,
+            // Mandatory per §2.2.3.2/§2.2.3.3: this profile always compresses,
+            // which is why the payload is binary in its own MIME part and the
+            // SOAP Body is empty. `PayloadService.CompressionType` is
+            // `application/gzip`, emitted as a signed PartProperty so the
+            // receiver knows to decompress after decrypting.
+            compress: true,
             outbound_key_info_profile: WsSecOutboundKeyInfoProfile::X509PKIPathv1,
         },
         ..bdew_pmode(id, partner_mp_id, action)
@@ -662,6 +673,11 @@ mod tests {
         assert!(
             pm.security.encrypt,
             "BDEW AS4-Profil v1.2 §2.2.6.2.2 requires encryption"
+        );
+        assert!(
+            pm.security.compress,
+            "BDEW AS4-Profil v1.2 §2.2.3.2/§2.2.3.3 make AS4 compression mandatory — \
+             it is why the payload is binary in its own part and the SOAP Body is empty"
         );
         assert_eq!(pm.payload_packaging, PayloadPackagingMode::MimeAttachment);
         assert!(
