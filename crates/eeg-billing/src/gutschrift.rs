@@ -81,8 +81,11 @@ fn document_to_rechnung(doc: &BillingDocument) -> Result<bo::Rechnung, BillingEr
         .tax_breakdown()
         .iter()
         .map(|e| bo::Steuerbetrag {
-            basiswert: Some(e.taxable_base.into_decimal()),
-            steuerwert: Some(e.tax_amount.into_decimal()),
+            // BT-116 / BT-117 are document-level amounts: EN 16931 BR-DEC-19 and
+            // BR-DEC-20 cap them at two decimals, and a third of a cent is not
+            // bankable in any case.
+            basiswert: Some(e.taxable_base.into_decimal().round_dp(2)),
+            steuerwert: Some(e.tax_amount.into_decimal().round_dp(2)),
             // BO4E carries the rate as a percentage (BT-119); billing stores a fraction.
             steuersatz: Some(e.rate * Decimal::ONE_HUNDRED),
             steuerart: Some(match e.category {
@@ -93,6 +96,17 @@ fn document_to_rechnung(doc: &BillingDocument) -> Result<bo::Rechnung, BillingEr
             ..Default::default()
         })
         .collect();
+
+    // EN 16931 BR-DEC-14 / -13 / -15: BT-109, BT-110 and BT-112 carry at most two
+    // decimals. 81.10 net at 19 % is 15.409 EUR of VAT — a figure no bank can
+    // move — so the cent rounding happens here, once, and the gross is the sum of
+    // the two rounded parts rather than a third independently rounded number.
+    let taxable_total = doc.taxable_total()?.into_decimal().round_dp(2);
+    let vat_total = doc.vat_total()?.into_decimal().round_dp(2);
+    let non_vat_total = (doc.gross_total().into_decimal()
+        - doc.taxable_total()?.into_decimal()
+        - doc.vat_total()?.into_decimal())
+    .round_dp(2);
 
     let mut rechnung = bo::Rechnung {
         typ: Some(bo::BoTyp::Rechnung),
@@ -111,9 +125,9 @@ fn document_to_rechnung(doc: &BillingDocument) -> Result<bo::Rechnung, BillingEr
         // accessors — unlike `net_total()` (BT-106−BT-107) and `tax_total()` (all
         // tax layers incl. non-VAT levies), they stay correct if the Gutschrift
         // ever gains a document charge or a second, non-VAT tax layer.
-        gesamtnetto: Some(betrag(doc.taxable_total()?.into_decimal())),
-        gesamtsteuer: Some(betrag(doc.vat_total()?.into_decimal())),
-        gesamtbrutto: Some(betrag(doc.gross_total().into_decimal())),
+        gesamtnetto: Some(betrag(taxable_total)),
+        gesamtsteuer: Some(betrag(vat_total)),
+        gesamtbrutto: Some(betrag(taxable_total + vat_total + non_vat_total)),
         steuerbetraege: (!steuerbetraege.is_empty()).then_some(steuerbetraege),
         rechnungspositionen: Some(rechnungspositionen),
         ..Default::default()
@@ -219,9 +233,10 @@ mod tests {
             .unwrap();
         assert_eq!(r.rechnungsnummer.as_deref(), Some("GS-EEG-2026-07-000123"));
         assert_eq!(r.sparte, Some(bo::Sparte::Strom));
-        assert_eq!(r.gesamtnetto.unwrap().wert, Some(dec!(81.10000)));
-        // 81.10 × 19 % = 15.409 → gross 96.509
-        assert_eq!(r.gesamtbrutto.unwrap().wert, Some(dec!(96.50900)));
+        assert_eq!(r.gesamtnetto.unwrap().wert, Some(dec!(81.10)));
+        // EN 16931 BR-DEC-13/-14/-15: 81.10 × 19 % = 15.409 → 15.41, gross 96.51.
+        assert_eq!(r.gesamtsteuer.unwrap().wert, Some(dec!(15.41)));
+        assert_eq!(r.gesamtbrutto.unwrap().wert, Some(dec!(96.51)));
         let steuer = r
             .steuerbetraege
             .expect("a Gutschrift must carry the VAT breakdown");

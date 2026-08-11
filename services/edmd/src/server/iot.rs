@@ -378,6 +378,7 @@ pub(crate) async fn post_iot_reads(
             sender_mp_id: req.device_id.clone(),
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: Some(OffsetDateTime::now_utc()),
+            mscons_version: None,
         });
         stored += 1;
     }

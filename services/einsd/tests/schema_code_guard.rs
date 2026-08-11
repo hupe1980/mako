@@ -31,16 +31,25 @@ fn code_only(src: &str) -> String {
 #[test]
 fn receipt_upserts_repeat_the_partial_index_predicate() {
     let code = code_only(PG);
-    let conflicts: Vec<&str> = code
-        .match_indices("ON CONFLICT (tr_id, tenant, billing_year, billing_month)")
-        .map(|(i, _)| &code[i..(i + 160).min(code.len())])
+    // Anchored on the target table: other tables key on the same
+    // (tr_id, tenant, billing_year, billing_month) tuple with a total
+    // constraint, and their upserts must not be held to this predicate.
+    let inserts: Vec<&str> = code
+        .match_indices("INSERT INTO settlement_receipts")
+        .map(|(i, _)| {
+            let rest = &code[i..];
+            &rest[..rest.find("RETURNING").unwrap_or(rest.len().min(1600))]
+        })
         .collect();
 
     assert!(
-        !conflicts.is_empty(),
+        !inserts.is_empty(),
         "expected receipt upserts to exist in pg.rs"
     );
-    for c in &conflicts {
+    for c in &inserts {
+        if !c.contains("ON CONFLICT") {
+            continue;
+        }
         assert!(
             c.contains("is_correction = false"),
             "an ON CONFLICT on settlement_receipts omits the partial-index \

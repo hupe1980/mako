@@ -447,6 +447,20 @@ pub async fn handle_webhook(
                 _ => EdmSparte::Strom,
             };
 
+            // The MSCONS correction version the operator assigned, if the
+            // decode carried it up. It is what resolution *should* order by;
+            // when absent, `store.rs` falls back to arrival time, which
+            // reverses a correction that is later replayed against. Accepted as
+            // number or string because a ≥14-digit label is routinely quoted.
+            let mscons_version = data
+                .get("mscons_version")
+                .or_else(|| data.get("version"))
+                .and_then(|v| {
+                    v.as_u64()
+                        .map(u128::from)
+                        .or_else(|| v.as_str().and_then(|s| s.parse::<u128>().ok()))
+                });
+
             let mut batch: Vec<MeterRead> = Vec::with_capacity(reads_array.len());
             let mut skipped = 0usize;
             for r in reads_array {
@@ -500,6 +514,7 @@ pub async fn handle_webhook(
                         .then(|| receipt.sender_mp_id.clone()),
                     allocation_version: "INITIAL".to_owned(),
                     valid_from_tx: Some(time::OffsetDateTime::now_utc()),
+                    mscons_version,
                 });
             }
 

@@ -99,7 +99,7 @@ impl NbContractRepository for PgNbContractRepository {
             r#"SELECT {SELECT_COLS} FROM nb_contracts
                WHERE malo_id = $1
                  AND valid_from <= $2
-                 AND (valid_to IS NULL OR valid_to >= $2)
+                 AND (valid_to IS NULL OR valid_to > $2)
                  AND tenant = $3
                ORDER BY valid_from DESC
                LIMIT 1"#

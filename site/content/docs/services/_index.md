@@ -15,7 +15,7 @@ mako consists of **17 independently deployable services**, each built as a self-
 - Cedar ABAC authorization
 - OIDC/JWT + API-key authentication  
 - OpenTelemetry traces and metrics
-- Built-in MCP server at `/mcp` (Streamable HTTP 2025-11-25)
+- MCP server at `/mcp` (Streamable HTTP 2025-11-25) on 14 of the 17 services — all except mabis-syncd, outputd and agentd (the MCP host)
 - Structured health endpoints (`/health`, `/health/ready`)
 
 All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)** — the shared SDK that provides `shutdown::token/serve` (SIGINT+SIGTERM graceful drain), `OidcConfig::build_verifier`, `McpAuth`+`McpAuthConfig`, `init_tracing_from_env`, `DatabaseConfig`, `HttpConfig`, `CedarEnforcer`, `EventBus`, and more. This means zero copy-pasted infrastructure code across the 17 daemons.
@@ -84,7 +84,7 @@ graph TB
 | [marktd](@/docs/services/marktd.md) | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus, typed BO4E API, EventBus fan-out, MMMA monthly import worker |
 | [processd](@/docs/services/processd.md) | `:8580` | NB + LF + MSB | Process Decision Engine — Anmeldung STP ≥95%, LF E_0624 45-min auto-response, MSB REQOTE auto-response, §14a Steuerungsauftrag produktcode check |
 
-## Invoice & Billing (NB)
+## Invoice & Grid Billing
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|

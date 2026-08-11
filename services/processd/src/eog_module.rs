@@ -89,8 +89,63 @@ pub async fn handle_versorgung_event(
             handle_eog_begonnen(event, pool, tenant).await?;
             Ok(true)
         }
+        t if t == mako_events::markt::VERSORGUNG_CHANGED => {
+            handle_versorgung_changed(event, pool, tenant).await?;
+            Ok(true)
+        }
         _ => Ok(false),
     }
+}
+
+/// An `angemeldet` case older than this is stuck, not in flight: `makod`
+/// answers the 55013/44013 Zuordnung well inside the window, and no timer
+/// touches `angemeldet`. Re-detection is allowed to reopen it past this age.
+const ANGEMELDET_STALE_HOURS: i64 = 72;
+
+/// Regular supply resumed — close the case.
+///
+/// This is the only writer of `closed`. Without it the state existed in the
+/// CHECK constraint and nothing ever reached it, so the case log kept reporting
+/// fallback supply for MaLos that had a Lieferant again.
+async fn handle_versorgung_changed(
+    event: &serde_json::Value,
+    pool: &PgPool,
+    tenant: &str,
+) -> anyhow::Result<()> {
+    let data = &event["data"];
+    let Some(malo_id) = data["malo_id"]
+        .as_str()
+        .or_else(|| event["marktmaloid"].as_str())
+        .or_else(|| event["subject"].as_str())
+    else {
+        return Ok(());
+    };
+    // marktd emits the LieferStatus Display form.
+    if !data["lieferstatus"]
+        .as_str()
+        .is_some_and(|s| s.eq_ignore_ascii_case("beliefert"))
+    {
+        return Ok(());
+    }
+
+    let closed = sqlx::query(
+        r"UPDATE eog_activations
+          SET status = 'closed', updated_at = now()
+          WHERE tenant = $1 AND malo_id = $2
+            AND status IN ('detected', 'angemeldet', 'active', 'expiring', 'expired')",
+    )
+    .bind(tenant)
+    .bind(malo_id)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    if closed > 0 {
+        info!(
+            malo_id,
+            "processd EoG: regular supply resumed — case closed"
+        );
+    }
+    Ok(())
 }
 
 /// Gap detected: record the case and (when `auto_activate`) dispatch the
@@ -116,7 +171,9 @@ async fn handle_gap_detected(
     let nb_mp_id = data["nb_mp_id"].as_str().unwrap_or(own_mp_id);
 
     // Idempotency: one open case per MaLo. Re-detection of a closed case
-    // reopens it (a MaLo can fall into a gap repeatedly).
+    // reopens it (a MaLo can fall into a gap repeatedly), and so does a stale
+    // `angemeldet` one — nothing else ever moves that state, so a dispatch whose
+    // Zuordnung never landed used to sit there permanently.
     let inserted = sqlx::query(
         r"INSERT INTO eog_activations (tenant, malo_id, sparte, status, detail)
           VALUES ($1, $2, $3, 'detected', $4)
@@ -127,12 +184,15 @@ async fn handle_gap_detected(
               haushaltskunde = NULL, warned_at = NULL, expired_at = NULL,
               detail = EXCLUDED.detail,
               updated_at = now()
-          WHERE eog_activations.status IN ('closed', 'expired', 'detected')",
+          WHERE eog_activations.status IN ('closed', 'expired', 'detected')
+             OR (eog_activations.status = 'angemeldet'
+                 AND eog_activations.updated_at < now() - make_interval(hours => $5))",
     )
     .bind(tenant)
     .bind(malo_id)
     .bind(sparte.to_string())
     .bind(format!("gap detected via PID {}", data["pid"]))
+    .bind(i32::try_from(ANGEMELDET_STALE_HOURS).unwrap_or(72))
     .execute(pool)
     .await?
     .rows_affected();
@@ -167,9 +227,10 @@ async fn handle_gap_detected(
             );
             return Ok(());
         }
+        // Nothing retries a 'detected' case, so acking here strands it forever.
         Err(e) => {
             warn!(malo_id, error = %e, "processd EoG: Grundversorger lookup failed");
-            return Ok(());
+            return Err(e.into());
         }
     };
 
@@ -235,6 +296,10 @@ async fn handle_eog_begonnen(
     let Some(malo_id) = data["malo_id"].as_str() else {
         return Ok(());
     };
+    let sparte = data["sparte"]
+        .as_str()
+        .and_then(|s| s.parse::<mako_markt::domain::Sparte>().ok())
+        .unwrap_or(mako_markt::domain::Sparte::Strom);
     let eog_art = data["eog_art"].as_str().map(|s| {
         // marktd emits the LieferStatus Display form; normalise to the
         // SCREAMING_SNAKE wire labels used in eog_activations.
@@ -244,20 +309,42 @@ async fn handle_eog_begonnen(
             other => other.to_uppercase(),
         }
     });
-    let eog_seit = data["eog_seit"]
+    // §38 Abs. 4 S. 1 EnWG runs from the Zuordnungsbeginn, which may be
+    // retroactive. Anchoring an unusable value on TODAY silently extends the
+    // statutory 3-month maximum; the event time is the closest honest floor.
+    let event_time = event["time"]
         .as_str()
         .and_then(|s| {
-            time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT).ok()
+            time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
         })
-        .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+        .unwrap_or_else(time::OffsetDateTime::now_utc)
+        .date();
+    let eog_seit = match data["eog_seit"].as_str() {
+        Some(s) => time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT)
+            .unwrap_or_else(|e| {
+                warn!(
+                    malo_id, eog_seit = s, error = %e,
+                    "processd EoG: unparseable eog_seit — §38 clock anchored on the event time"
+                );
+                event_time
+            }),
+        None => {
+            warn!(
+                malo_id,
+                "processd EoG: eog-begonnen without eog_seit — §38 clock anchored on the event time"
+            );
+            event_time
+        }
+    };
     let haushaltskunde = data["haushaltskunde"].as_bool();
 
     sqlx::query(
         r"INSERT INTO eog_activations
               (tenant, malo_id, sparte, status, gv_mp_id, eog_art, eog_seit, haushaltskunde)
-          VALUES ($1, $2, 'STROM', 'active', $3, $4, $5, $6)
+          VALUES ($1, $2, $7, 'active', $3, $4, $5, $6)
           ON CONFLICT (tenant, malo_id) DO UPDATE
           SET status = 'active',
+              sparte = EXCLUDED.sparte,
               gv_mp_id = COALESCE(EXCLUDED.gv_mp_id, eog_activations.gv_mp_id),
               eog_art = EXCLUDED.eog_art,
               eog_seit = EXCLUDED.eog_seit,
@@ -270,6 +357,7 @@ async fn handle_eog_begonnen(
     .bind(&eog_art)
     .bind(eog_seit)
     .bind(haushaltskunde)
+    .bind(sparte.to_string())
     .execute(pool)
     .await?;
 

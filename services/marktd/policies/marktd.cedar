@@ -17,7 +17,8 @@
 // Role model:
 //   Any authenticated user can read resources in their own tenant.
 //   Any authenticated user can write MaLo/MeLo/contract/partner data.
-//   Only the NB (Netzbetreiber) role may write price sheets (INVOIC billing).
+//   Only the NB (Netzbetreiber) role may write price sheets (INVOIC billing),
+//   NeLo/Tranche balancing topology and MaLo grid topology.
 
 // ── Read access — any role, same tenant ──────────────────────────────────────
 
@@ -58,7 +59,6 @@ permit(
         Action::"write-nb-contract",
         Action::"write-partner",
         Action::"write-versorgungsstatus",
-        Action::"write-malo-grid",
         Action::"write-device",
         Action::"write-sr",
         Action::"write-netzzugang",
@@ -108,6 +108,17 @@ permit(
 permit(
     principal,
     action == Action::"write-tranche",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    context.principal_roles.contains("NB")
+};
+
+// MaLo grid topology comes from the NB's own NIS/GIS and feeds processd's
+// Anmeldung STP decisions — reads open to the tenant, writes require the NB role.
+permit(
+    principal,
+    action == Action::"write-malo-grid",
     resource
 ) when {
     context.principal_tenant == context.resource_tenant &&

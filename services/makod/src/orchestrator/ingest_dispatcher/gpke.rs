@@ -59,6 +59,7 @@ impl EdifactIngestDispatcher {
                             (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
                         ],
                         &[msg.message_ref()],
+                        Some(|s| !s.is_terminal()),
                     )
                     .await
                 }

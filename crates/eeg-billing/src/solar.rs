@@ -118,15 +118,22 @@ impl SolarBauform {
 
 /// Whether the plant feeds in 100% of generation or only the surplus after self-consumption.
 ///
-/// This has a DIRECT impact on the EEG tariff rate (§48 Abs. 2 vs. Abs. 2a EEG 2023):
+/// This has a DIRECT impact on the EEG tariff rate (§48 Abs. 2 vs. Abs. 2a EEG 2023).
+/// For a ≤ 10 kW Gebäudeanlage, in gross anzulegende Werte before §49 degression:
 ///
-/// | Modus | EEG rate (≤10 kWp, Solarpaket I 2024) |
+/// | Modus | Anzulegender Wert |
 /// |---|---|
-/// | `Ueberschuss` | 8.11 ct/kWh (§48 Abs. 2) |
-/// | `Volleinspeisung` | **8.51 ct/kWh** (§48 Abs. 2a, +0.40 ct bonus) |
+/// | `Ueberschusseinspeisung` | 8,60 ct/kWh (§48 Abs. 2 Nr. 1) |
+/// | `Volleinspeisung` | **13,40 ct/kWh** (§48 Abs. 2 Nr. 1 + Abs. 2a Nr. 1: +4,8 ct) |
 ///
-/// **Billing consequence**: Using the wrong tariff causes systematic billing errors.
-/// Always check whether the plant registered for Volleinspeisung at commissioning.
+/// The uplift is large, not marginal — over half the rate again — which is why
+/// §48 Abs. 2a Satz 1 conditions it on a textual declaration to the Netzbetreiber
+/// before commissioning (or before 1 December of the preceding year), and why
+/// §52 sanctions self-consumption on a plant registered for Volleinspeisung.
+///
+/// Resolve the rate for a given commissioning date with
+/// [`crate::rates::solar_pv_ueberschuss_aw_ct`] /
+/// [`crate::rates::solar_pv_volleinspeisung_aw_ct`], which apply §49.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]

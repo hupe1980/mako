@@ -759,7 +759,7 @@ pub async fn insert_correction_draft(
 ) -> anyhow::Result<Uuid> {
     // Load the original draft.
     let row = sqlx::query(
-        r"SELECT malo_id, sender_mp_id, recipient_mp_id, pid, period_from, period_to,
+        r"SELECT tenant, malo_id, sender_mp_id, recipient_mp_id, pid, period_from, period_to,
                  rechnung, gross_eur_units
           FROM invoice_drafts WHERE id = $1",
     )
@@ -769,6 +769,7 @@ pub async fn insert_correction_draft(
     .context("load original draft for correction")?
     .ok_or_else(|| anyhow::anyhow!("original draft not found: {original_id}"))?;
 
+    let tenant: String = row.try_get("tenant")?;
     let malo_id: String = row.try_get("malo_id")?;
     let sender_mp_id: String = row.try_get("sender_mp_id")?;
     let recipient_mp_id: String = row.try_get("recipient_mp_id")?;
@@ -822,9 +823,10 @@ pub async fn insert_correction_draft(
               (tenant, malo_id, sender_mp_id, recipient_mp_id, pid, period_from, period_to,
                rechnung, gross_eur_units, check_outcome, status,
                rechnungsart, original_draft_id)
-          VALUES ('default', $1, $2, $3, $4, $5, $6, $7, $8, 'Ok', 'draft', $9, $10)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'Ok', 'draft', $10, $11)
           RETURNING id::TEXT",
     )
+    .bind(&tenant)
     .bind(&malo_id)
     .bind(&sender_mp_id)
     .bind(&recipient_mp_id)

@@ -558,6 +558,7 @@ CREATE TABLE versorgungsstatus_history (
     lieferende       DATE,
     msb_mp_id          TEXT,
     nb_mp_id           TEXT        NOT NULL,
+    eog_seit         DATE,                                    -- snapshotted §38/§36 fallback start
     last_process_id  UUID,
     version          BIGINT      NOT NULL,                    -- version of this state
     valid_from       TIMESTAMPTZ NOT NULL DEFAULT now()       -- when this state became active

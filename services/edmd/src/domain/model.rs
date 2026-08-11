@@ -447,6 +447,22 @@ pub struct MeterRead {
     /// audit log (who/when/why), not the reconstruction mechanism.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub valid_from_tx: Option<OffsetDateTime>,
+
+    /// The MSCONS correction version this reading was delivered under.
+    ///
+    /// MSCONS assigns a numeric, monotonically ascending version per network
+    /// operator per month, and **that** is what decides which of two deliveries
+    /// for one interval wins — not the order they happened to arrive in.
+    /// Without it, replaying an original after its correction landed gives the
+    /// stale value the higher version and silently supersedes the correction.
+    ///
+    /// `None` when the delivery carried no version, in which case `store.rs`
+    /// falls back to transaction time. Today that is every MSCONS delivery: the
+    /// `process.completed` payload does not carry the version off the wire yet,
+    /// so only callers that state one explicitly (direct push, Kafka batch) can
+    /// populate it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mscons_version: Option<u128>,
 }
 
 /// Query parameters for time-series reads.

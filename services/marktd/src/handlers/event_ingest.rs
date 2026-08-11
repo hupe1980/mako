@@ -38,7 +38,7 @@ use mako_markt::{
     cloudevents::{EventExtensions, InboundMakoEvent, MarktEvent},
     repository::{
         AppState, CorrelationIndex, MaloRepository, MeloRepository, PartnerRepository,
-        SubscriptionRepository, VersorgungsStatusRepository,
+        SubscriptionRepository,
     },
 };
 use sqlx::PgPool;
@@ -58,7 +58,6 @@ pub async fn ingest_event<Ma, Me, Su, Ci, Pa>(
     State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(secret): Extension<InboundWebhookSecret>,
     Extension(pool): Extension<PgPool>,
-    Extension(vs_repo): Extension<Arc<crate::pg::PgVersorgungsStatusRepository>>,
     Extension(device_repo): Extension<Arc<PgDeviceRepository>>,
     Extension(zaehzeit_repo): Extension<Arc<PgZaehlzeitRepository>>,
     Extension(nelo_repo): Extension<Arc<PgNeLoRepository>>,
@@ -111,19 +110,32 @@ where
         "event_ingest: received"
     );
 
-    // 3. Idempotency — INSERT ON CONFLICT returns true only for fresh inserts.
-    let is_new: bool = sqlx::query_scalar(
-        "INSERT INTO processed_events (event_id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING true",
-    )
-    .bind(&event.id)
-    .fetch_optional(&pool)
-    .await
-    .unwrap_or(None) // treat DB error conservatively: don't re-process
-    .unwrap_or(false);
+    // 3. One transaction for the whole ingest: idempotency marker, business
+    //    derivation and the durable fan-out enqueue commit together or not at
+    //    all.  A DB error must surface as 5xx so makod's durable webhook channel
+    //    redelivers — only a genuine unique violation means "already processed".
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            error!(event_id = %event.id, error = %e, "event_ingest: begin failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
 
-    if !is_new {
-        debug!(event_id = %event.id, "event_ingest: duplicate, skipping");
-        return StatusCode::ACCEPTED.into_response();
+    match sqlx::query("INSERT INTO processed_events (event_id) VALUES ($1)")
+        .bind(&event.id)
+        .execute(&mut *tx)
+        .await
+    {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
+            debug!(event_id = %event.id, "event_ingest: duplicate, skipping");
+            return StatusCode::ACCEPTED.into_response();
+        }
+        Err(e) => {
+            error!(event_id = %event.id, error = %e, "event_ingest: idempotency insert failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     }
 
     // 4. Re-emit as MarktEvent enriched with the tenant GLN as source.
@@ -154,19 +166,6 @@ where
         ..Default::default()
     });
 
-    // Durable, persist-before-fan-out: the enqueue INSERT is FATAL. If it fails
-    // we roll back the idempotency marker so a client retry re-processes the
-    // event (otherwise the duplicate guard at step 3 would swallow it and the
-    // event would be lost).
-    if let Err(e) = crate::outbox::enqueue(&pool, &markt_event, &state.notify).await {
-        error!(event_id = %event_id_for_vs, error = %e, "event_ingest: durable enqueue failed; rolling back idempotency marker");
-        let _ = sqlx::query("DELETE FROM processed_events WHERE event_id = $1")
-            .bind(&event_id_for_vs)
-            .execute(&pool)
-            .await;
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
-
     // 5. Derive VersorgungsStatus from supply-state-changing CloudEvents.
     //
     // Event → action mapping (GPKE BK6-24-174 + GeLi Gas 3.0 (BK7-24-01-009)):
@@ -195,316 +194,78 @@ where
     //
     // The CE subject is always the process UUID — malo_id is extracted from
     // the data payload.  All actions are idempotent under at-least-once delivery.
+    // Every failure rolls the whole transaction back — including the idempotency
+    // marker — so makod redelivers instead of leaving the projection behind.
+    let derived = match derive_supply_state(
+        &mut tx,
+        &state.tenant_gln,
+        &ce_type_for_vs,
+        pid_for_vs,
+        &data_for_vs,
+        &event_id_for_vs,
+    )
+    .await
     {
-        let is_initiated = ce_type_for_vs == mako_events::mako::PROCESS_INITIATED;
-        let is_completed = ce_type_for_vs == mako_events::mako::PROCESS_COMPLETED;
-
-        if let Some(pid) = pid_for_vs {
-            // Extract malo_id from data payload — the CE subject is a process UUID.
-            let malo_id_str = data_for_vs
-                .get("malo_id")
-                .and_then(|v| v.as_str())
-                .map(str::to_owned);
-
-            if let Some(malo_str) = malo_id_str {
-                // GPKE Teil 4 / GeLi Gas Stammdatenänderung apply — object-generic.
-                // Runs BEFORE the MaLo-ID parse gate below because non-MaLo object
-                // IDs (MeLo DE+31, NeLo EIC, Tranche) are not valid MaLo-IDs. The
-                // workflow tags the ProcessCompleted with the `objekt` marker; we
-                // route it to the matching typed-column patch_stammdaten.
-                if is_completed && let Some(patch_val) = data_for_vs.get("stammdaten_patch") {
-                    let objekt = data_for_vs
-                        .get("objekt")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("MARKTLOKATION");
-                    let aenderungsdatum =
-                        data_for_vs.get("aenderungsdatum").and_then(|v| v.as_str());
-                    apply_object_stammdaten(
-                        &state,
-                        &pool,
-                        nelo_repo.as_ref(),
-                        tranche_repo.as_ref(),
-                        tr_repo.as_ref(),
-                        sr_repo.as_ref(),
-                        melo_msb_repo.as_ref(),
-                        objekt,
-                        &malo_str,
-                        pid,
-                        aenderungsdatum,
-                        patch_val,
-                    )
-                    .await;
-                }
-
-                let malo_id = malo_str.parse::<mako_markt::domain::MaloId>();
-                let nb_mp_id = data_for_vs
-                    .get("nb_mp_id")
-                    .or_else(|| data_for_vs.get("grid_operator"))
-                    .and_then(|v| v.as_str())
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| state.tenant_gln.clone());
-                let process_id = uuid::Uuid::parse_str(&event_id_for_vs).ok();
-
-                if let Ok(malo_id) = malo_id {
-                    let vs = Arc::clone(&vs_repo);
-
-                    if is_initiated && matches!(pid, 55001 | 44001) {
-                        // NB received Lieferbeginn Anfrage — record the pending transition.
-                        let lf_mp_id_next = data_for_vs
-                            .get("new_supplier")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_owned);
-                        let lf_next_lieferbeginn = data_for_vs
-                            .get("process_date")
-                            .and_then(|v| v.as_str())
-                            .and_then(|s| {
-                                time::Date::parse(
-                                    s,
-                                    &time::format_description::well_known::Iso8601::DEFAULT,
-                                )
-                                .ok()
-                            });
-                        if let Some(lf_mp_id_next) = lf_mp_id_next
-                            && let Err(e) = vs
-                                .announce_lf_next(
-                                    &malo_id,
-                                    &state.tenant_gln,
-                                    &lf_mp_id_next,
-                                    lf_next_lieferbeginn,
-                                    &nb_mp_id,
-                                    process_id,
-                                )
-                                .await
-                        {
-                            tracing::warn!(
-                                malo_id = %malo_str,
-                                pid,
-                                error = %e,
-                                "event_ingest: failed to announce_lf_next"
-                            );
-                        }
-
-                        // L1/N1: Patch malo.bilanzierungsmethode + malo.fallgruppe
-                        // from the ProcessInitiated payload.  These are populated
-                        // by the makod GPKE/GeLi Gas adapter from UTILMD TM+EM /
-                        // TM+Z10 segments and propagated into the outbox event.
-                        // Best-effort: failure is logged but does not affect the
-                        // VersorgungsStatus update above.
-                        let bilanzierungsmethode = data_for_vs
-                            .get("bilanzierungsmethode")
-                            .and_then(|v| v.as_str());
-                        let fallgruppe = data_for_vs.get("fallgruppe").and_then(|v| v.as_str());
-                        if bilanzierungsmethode.is_some() || fallgruppe.is_some() {
-                            if let Err(e) = state
-                                .malo_repo
-                                .patch_typenmerkmal(&malo_id, bilanzierungsmethode, fallgruppe)
-                                .await
-                            {
-                                tracing::warn!(
-                                    malo_id = %malo_str,
-                                    pid,
-                                    error = %e,
-                                    "event_ingest: patch_typenmerkmal failed (non-fatal)"
-                                );
-                            } else if bilanzierungsmethode.is_some() || fallgruppe.is_some() {
-                                tracing::debug!(
-                                    malo_id = %malo_str,
-                                    bilanzierungsmethode,
-                                    fallgruppe,
-                                    "event_ingest: patched malo Typenmerkmale from ProcessInitiated"
-                                );
-                            }
-                        }
-                    } else if is_completed && matches!(pid, 55002 | 44002) {
-                        // NB confirmed Lieferbeginn (Bestätigung Anmeldung) —
-                        // promote the announced LF to active.
-                        if let Err(e) = vs
-                            .confirm_supply(&malo_id, &state.tenant_gln, process_id)
-                            .await
-                        {
-                            tracing::warn!(
-                                malo_id = %malo_str,
-                                pid,
-                                error = %e,
-                                "event_ingest: failed to confirm_supply"
-                            );
-                        }
-                    } else if is_completed && matches!(pid, 55005 | 44005) {
-                        // Bestätigung Lieferende — active LF removed; preserve
-                        // pending transition. When no successor is announced,
-                        // the MaLo is in a §38 EnWG supply gap: emit the
-                        // gap-detected trigger for the processd EoG automation.
-                        if let Err(e) = vs
-                            .end_supply(&malo_id, &state.tenant_gln, &nb_mp_id, process_id)
-                            .await
-                        {
-                            tracing::warn!(
-                                malo_id = %malo_str,
-                                pid,
-                                error = %e,
-                                "event_ingest: failed to end_supply"
-                            );
-                        } else {
-                            match vs.find(&malo_id, &state.tenant_gln).await {
-                                Ok(Some(rec)) if rec.lf_mp_id_next.is_none() => {
-                                    let gap_evt = MarktEvent::new(
-                                        &state.tenant_gln,
-                                        mako_events::markt::VERSORGUNG_GAP_DETECTED,
-                                        malo_str.clone(),
-                                        serde_json::json!({
-                                            "malo_id":  malo_str,
-                                            "nb_mp_id": rec.nb_mp_id,
-                                            "pid":      pid,
-                                            "sparte":   if pid == 55005 { "STROM" } else { "GAS" },
-                                        }),
-                                    )
-                                    .with_extensions(EventExtensions {
-                                        marktmaloid: Some(malo_str.clone()),
-                                        makopid: Some(pid),
-                                        ..Default::default()
-                                    });
-                                    if let Err(e) =
-                                        crate::outbox::enqueue(&pool, &gap_evt, &state.notify).await
-                                    {
-                                        error!(error = %e, "event_ingest: gap-detected enqueue failed");
-                                    }
-                                }
-                                Ok(_) => {}
-                                Err(e) => tracing::warn!(
-                                    malo_id = %malo_str,
-                                    error = %e,
-                                    "event_ingest: gap-detection read failed (non-fatal)"
-                                ),
-                            }
-                        }
-                    } else if is_completed && matches!(pid, 55013 | 44013) {
-                        // Anmeldung/Zuordnung EOG completed — the E/G is now the
-                        // supplier of record (GPKE Teil 2 Kap. 2.3, §36/§38 EnWG).
-                        let gv_mp_id = data_for_vs
-                            .get("new_supplier")
-                            .and_then(|v| v.as_str())
-                            .map(str::to_owned);
-                        let eog_status = match data_for_vs.get("eog_art").and_then(|v| v.as_str()) {
-                            Some("GRUNDVERSORGUNG") => {
-                                Some(mako_markt::repository::LieferStatus::Grundversorgung)
-                            }
-                            // Default: §38 Abs. 1 EnWG applies ipso iure.
-                            None | Some("ERSATZVERSORGUNG") => {
-                                Some(mako_markt::repository::LieferStatus::Ersatzversorgung)
-                            }
-                            // Vertragliche Ersatzbelieferung (ZE3) and §38a
-                            // Übergangsversorgung (ZZD) are contract regimes
-                            // outside the statutory fallback states — the
-                            // operator records them via the REST upsert.
-                            Some(other) => {
-                                tracing::warn!(
-                                    malo_id = %malo_str,
-                                    eog_art = other,
-                                    "event_ingest: EoG completion with non-statutory \
-                                     Versorgungsart — no automatic status transition"
-                                );
-                                None
-                            }
-                        };
-                        let eog_seit = data_for_vs
-                            .get("process_date")
-                            .and_then(|v| v.as_str())
-                            .and_then(parse_civil_date);
-                        // Resolve the Bilanzkreis: the E/G's own BK from the
-                        // completion payload when present, else the NB's
-                        // pre-deposited default BK (GPKE Teil 4 „Übermittlung von
-                        // Informationen") — consumed when the E/G answered late
-                        // (`ohne_antwort`).
-                        let bilanzkreis: Option<String> =
-                            match data_for_vs.get("bilanzkreis").and_then(|v| v.as_str()) {
-                                Some(bk) => Some(bk.to_owned()),
-                                None => sqlx::query_scalar::<_, Option<String>>(
-                                    r"SELECT default_bilanzkreis FROM grundversorger
-                                      WHERE tenant = $1 AND nb_mp_id = $2 AND sparte = $3",
-                                )
-                                .bind(&state.tenant_gln)
-                                .bind(&nb_mp_id)
-                                .bind(if pid == 44013 { "GAS" } else { "STROM" })
-                                .fetch_optional(&pool)
-                                .await
-                                .ok()
-                                .flatten()
-                                .flatten(),
-                            };
-                        if let (Some(gv), Some(status)) = (gv_mp_id, eog_status) {
-                            if let Err(e) = vs
-                                .begin_eog_supply(
-                                    &malo_id,
-                                    &state.tenant_gln,
-                                    &gv,
-                                    &nb_mp_id,
-                                    status,
-                                    eog_seit,
-                                    process_id,
-                                )
-                                .await
-                            {
-                                tracing::warn!(
-                                    malo_id = %malo_str,
-                                    pid,
-                                    error = %e,
-                                    "event_ingest: failed to begin_eog_supply"
-                                );
-                            } else {
-                                let eog_evt = MarktEvent::new(
-                                    &state.tenant_gln,
-                                    mako_events::markt::VERSORGUNG_EOG_BEGONNEN,
-                                    malo_str.clone(),
-                                    serde_json::json!({
-                                        "malo_id":  malo_str,
-                                        "gv_mp_id": gv,
-                                        "nb_mp_id": nb_mp_id,
-                                        "eog_art":  status.to_string(),
-                                        "eog_seit": eog_seit.map(|d| d.to_string()),
-                                        "bilanzkreis": bilanzkreis,
-                                        "haushaltskunde":
-                                            data_for_vs.get("haushaltskunde").cloned(),
-                                    }),
-                                )
-                                .with_extensions(EventExtensions {
-                                    marktmaloid: Some(malo_str.clone()),
-                                    makopid: Some(pid),
-                                    ..Default::default()
-                                });
-                                if let Err(e) =
-                                    crate::outbox::enqueue(&pool, &eog_evt, &state.notify).await
-                                {
-                                    error!(error = %e, "event_ingest: eog-begonnen enqueue failed");
-                                }
-                            }
-                        } else {
-                            tracing::warn!(
-                                malo_id = %malo_str,
-                                pid,
-                                "event_ingest: EoG completion without new_supplier — skipped"
-                            );
-                        }
-                    } else if is_completed && matches!(pid, 55003 | 44003) {
-                        // Lieferbeginn rejected (Ablehnung Anmeldung — GPKE
-                        // 55003 / GeLi Gas 44003): reset the announced future
-                        // Lieferant so no consumer acts on a supplier switch
-                        // that will not happen. Without it `lf_mp_id_next` was
-                        // stale forever.
-                        if let Err(e) = vs
-                            .clear_lf_next(&malo_id, &state.tenant_gln, process_id)
-                            .await
-                        {
-                            tracing::warn!(
-                                malo_id = %malo_str,
-                                pid,
-                                error = %e,
-                                "event_ingest: failed to clear_lf_next"
-                            );
-                        }
-                    }
-                }
-            }
+        Ok(evts) => evts,
+        Err(e) => {
+            error!(
+                event_id = %event_id_for_vs,
+                error = %e,
+                "event_ingest: supply-state derivation failed — rolling back"
+            );
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
+    };
+
+    // 6. Durable, persist-before-fan-out: the relayed event and every derived
+    //    event are enqueued on the same transaction as the idempotency marker,
+    //    so a crash can never leave the marker committed without the events.
+    for evt in std::iter::once(&markt_event).chain(derived.iter()) {
+        if let Err(e) = crate::outbox::enqueue(&mut *tx, evt, &state.notify).await {
+            error!(event_id = %event_id_for_vs, error = %e, "event_ingest: durable enqueue failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    if let Err(e) = tx.commit().await {
+        error!(event_id = %event_id_for_vs, error = %e, "event_ingest: commit failed");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    // 7. Secondary applies on other master-data objects. These run after the
+    //    commit and stay best-effort by contract — the object repositories own
+    //    their own pools and cannot join the ingest transaction.
+    //
+    // GPKE Teil 4 / GeLi Gas Stammdatenänderung apply — object-generic. The
+    // workflow tags the ProcessCompleted with the `objekt` marker; we route it to
+    // the matching typed-column patch_stammdaten. Non-MaLo object IDs (MeLo
+    // DE+31, NeLo EIC, Tranche) are not valid MaLo-IDs, so this runs off the raw
+    // `malo_id` string.
+    if ce_type_for_vs == mako_events::mako::PROCESS_COMPLETED
+        && let Some(pid) = pid_for_vs
+        && let Some(object_id) = data_for_vs.get("malo_id").and_then(|v| v.as_str())
+        && let Some(patch_val) = data_for_vs.get("stammdaten_patch")
+    {
+        let objekt = data_for_vs
+            .get("objekt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("MARKTLOKATION");
+        let aenderungsdatum = data_for_vs.get("aenderungsdatum").and_then(|v| v.as_str());
+        apply_object_stammdaten(
+            &state,
+            &pool,
+            nelo_repo.as_ref(),
+            tranche_repo.as_ref(),
+            tr_repo.as_ref(),
+            sr_repo.as_ref(),
+            melo_msb_repo.as_ref(),
+            objekt,
+            object_id,
+            pid,
+            aenderungsdatum,
+            patch_val,
+        )
+        .await;
     }
 
     // WiM Stammdaten Übermittlung (PIDs 17102–17133) — auto-update ZaehlzeitRegister.
@@ -572,6 +333,205 @@ where
     StatusCode::ACCEPTED.into_response()
 }
 
+// ── VersorgungsStatus derivation ─────────────────────────────────────────────
+
+/// Apply the supply-state transition an inbound makod CloudEvent implies, on the
+/// caller's transaction.
+///
+/// Returns the secondary `MarktEvent`s the transition produces
+/// (`versorgung.gap-detected`, `versorgung.eog-begonnen`); the caller enqueues
+/// them on the same transaction. Every DB error propagates — the projection that
+/// processd's automated LFA answers read must never silently diverge from the
+/// acknowledged event.
+///
+/// # Errors
+///
+/// Any DB failure; the caller must roll the ingest transaction back.
+pub async fn derive_supply_state(
+    conn: &mut sqlx::PgConnection,
+    tenant_gln: &str,
+    ce_type: &str,
+    pid: Option<u32>,
+    data: &serde_json::Value,
+    event_id: &str,
+) -> Result<Vec<MarktEvent>, mako_markt::error::MdmError> {
+    use crate::pg::{PgMaloRepository, PgVersorgungsStatusRepository as Vs};
+
+    let is_initiated = ce_type == mako_events::mako::PROCESS_INITIATED;
+    let is_completed = ce_type == mako_events::mako::PROCESS_COMPLETED;
+
+    let (Some(pid), Some(malo_str)) = (pid, data.get("malo_id").and_then(|v| v.as_str())) else {
+        return Ok(Vec::new());
+    };
+    // Non-MaLo objects (MeLo, NeLo, Tranche) carry no supply state.
+    let Ok(malo_id) = malo_str.parse::<mako_markt::domain::MaloId>() else {
+        return Ok(Vec::new());
+    };
+    let nb_mp_id = data
+        .get("nb_mp_id")
+        .or_else(|| data.get("grid_operator"))
+        .and_then(|v| v.as_str())
+        .map_or_else(|| tenant_gln.to_owned(), str::to_owned);
+    let process_id = uuid::Uuid::parse_str(event_id).ok();
+    let mut events = Vec::new();
+
+    if is_initiated && matches!(pid, 55001 | 44001) {
+        // NB received Lieferbeginn Anfrage — record the pending transition.
+        if let Some(lf_mp_id_next) = data.get("new_supplier").and_then(|v| v.as_str()) {
+            let lf_next_lieferbeginn = data
+                .get("process_date")
+                .and_then(|v| v.as_str())
+                .and_then(parse_civil_date);
+            Vs::announce_lf_next_tx(
+                conn,
+                &malo_id,
+                tenant_gln,
+                lf_mp_id_next,
+                lf_next_lieferbeginn,
+                &nb_mp_id,
+                process_id,
+            )
+            .await?;
+        }
+
+        // L1/N1: patch malo.bilanzierungsmethode + malo.fallgruppe from the
+        // ProcessInitiated payload — populated by the makod GPKE/GeLi Gas
+        // adapter from UTILMD TM+EM / TM+Z10 segments.
+        let bilanzierungsmethode = data.get("bilanzierungsmethode").and_then(|v| v.as_str());
+        let fallgruppe = data.get("fallgruppe").and_then(|v| v.as_str());
+        PgMaloRepository::patch_typenmerkmal_tx(conn, &malo_id, bilanzierungsmethode, fallgruppe)
+            .await?;
+    } else if is_completed && matches!(pid, 55002 | 44002) {
+        // Bestätigung Anmeldung — promote the announced LF to active.
+        Vs::confirm_supply_tx(conn, &malo_id, tenant_gln, process_id).await?;
+    } else if is_completed && matches!(pid, 55005 | 44005) {
+        // Bestätigung Lieferende — active LF removed; the pending transition is
+        // preserved. With no successor announced the MaLo is in a §38 EnWG
+        // supply gap: emit the trigger for the processd EoG automation.
+        Vs::end_supply_tx(conn, &malo_id, tenant_gln, &nb_mp_id, None, process_id).await?;
+
+        let row: Option<(Option<String>, String)> = sqlx::query_as(
+            "SELECT lf_mp_id_next, nb_mp_id FROM versorgungsstatus
+              WHERE malo_id = $1 AND tenant = $2",
+        )
+        .bind(&malo_id)
+        .bind(tenant_gln)
+        .fetch_optional(&mut *conn)
+        .await
+        .map_err(|e| mako_markt::error::MdmError::Internal(e.to_string()))?;
+
+        if let Some((None, row_nb_mp_id)) = row {
+            events.push(
+                MarktEvent::new(
+                    tenant_gln,
+                    mako_events::markt::VERSORGUNG_GAP_DETECTED,
+                    malo_str.to_owned(),
+                    serde_json::json!({
+                        "malo_id":  malo_str,
+                        "nb_mp_id": row_nb_mp_id,
+                        "pid":      pid,
+                        "sparte":   if pid == 55005 { "STROM" } else { "GAS" },
+                    }),
+                )
+                .with_extensions(EventExtensions {
+                    marktmaloid: Some(malo_str.to_owned()),
+                    makopid: Some(pid),
+                    ..Default::default()
+                }),
+            );
+        }
+    } else if is_completed && matches!(pid, 55013 | 44013) {
+        // Anmeldung/Zuordnung EOG completed — the E/G is now the supplier of
+        // record (GPKE Teil 2 Kap. 2.3, §36/§38 EnWG).
+        let gv_mp_id = data.get("new_supplier").and_then(|v| v.as_str());
+        let eog_status = match data.get("eog_art").and_then(|v| v.as_str()) {
+            Some("GRUNDVERSORGUNG") => Some(mako_markt::repository::LieferStatus::Grundversorgung),
+            // Default: §38 Abs. 1 EnWG applies ipso iure.
+            None | Some("ERSATZVERSORGUNG") => {
+                Some(mako_markt::repository::LieferStatus::Ersatzversorgung)
+            }
+            // Vertragliche Ersatzbelieferung (ZE3) and §38a Übergangsversorgung
+            // (ZZD) are contract regimes outside the statutory fallback states —
+            // the operator records them via the REST upsert.
+            Some(other) => {
+                warn!(
+                    malo_id = %malo_str,
+                    eog_art = other,
+                    "event_ingest: EoG completion with non-statutory \
+                     Versorgungsart — no automatic status transition"
+                );
+                None
+            }
+        };
+        let eog_seit = data
+            .get("process_date")
+            .and_then(|v| v.as_str())
+            .and_then(parse_civil_date);
+
+        let (Some(gv), Some(status)) = (gv_mp_id, eog_status) else {
+            warn!(
+                malo_id = %malo_str,
+                pid,
+                "event_ingest: EoG completion without new_supplier — skipped"
+            );
+            return Ok(events);
+        };
+
+        // Resolve the Bilanzkreis: the E/G's own BK from the completion payload
+        // when present, else the NB's pre-deposited default BK (GPKE Teil 4
+        // „Übermittlung von Informationen") — consumed when the E/G answered
+        // late (`ohne_antwort`). A lookup error is fatal: emitting
+        // `bilanzkreis: null` would be indistinguishable from "none deposited".
+        let bilanzkreis: Option<String> = match data.get("bilanzkreis").and_then(|v| v.as_str()) {
+            Some(bk) => Some(bk.to_owned()),
+            None => sqlx::query_scalar::<_, Option<String>>(
+                r"SELECT default_bilanzkreis FROM grundversorger
+                  WHERE tenant = $1 AND nb_mp_id = $2 AND sparte = $3",
+            )
+            .bind(tenant_gln)
+            .bind(&nb_mp_id)
+            .bind(if pid == 44013 { "GAS" } else { "STROM" })
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| mako_markt::error::MdmError::Internal(e.to_string()))?
+            .flatten(),
+        };
+
+        Vs::begin_eog_supply_tx(
+            conn, &malo_id, tenant_gln, gv, &nb_mp_id, status, eog_seit, process_id,
+        )
+        .await?;
+
+        events.push(
+            MarktEvent::new(
+                tenant_gln,
+                mako_events::markt::VERSORGUNG_EOG_BEGONNEN,
+                malo_str.to_owned(),
+                serde_json::json!({
+                    "malo_id":     malo_str,
+                    "gv_mp_id":    gv,
+                    "nb_mp_id":    nb_mp_id,
+                    "eog_art":     status.to_string(),
+                    "eog_seit":    eog_seit.map(|d| d.to_string()),
+                    "bilanzkreis": bilanzkreis,
+                    "haushaltskunde": data.get("haushaltskunde").cloned(),
+                }),
+            )
+            .with_extensions(EventExtensions {
+                marktmaloid: Some(malo_str.to_owned()),
+                makopid: Some(pid),
+                ..Default::default()
+            }),
+        );
+    } else if is_completed && matches!(pid, 55003 | 44003) {
+        // Ablehnung Anmeldung (GPKE 55003 / GeLi Gas 44003): reset the announced
+        // future Lieferant so no consumer acts on a switch that will not happen.
+        Vs::clear_lf_next_tx(conn, &malo_id, tenant_gln, process_id).await?;
+    }
+
+    Ok(events)
+}
+
 // ── ZaehlzeitRegister auto-update (WiM Stammdaten) ───────────────────────────
 
 /// Upsert `ZaehlzeitRegister` + `ZaehlzeitSaison` records from parsed ZAK+ZE
@@ -609,7 +569,7 @@ async fn upsert_zaehlzeitregister_from_zaehlwerke(
         ZaehlzeitRegisterRecord, ZaehlzeitRepository, ZaehlzeitSaisonRecord,
     };
 
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = crate::handlers::malo::today_berlin();
 
     for zw in zaehlwerke {
         let obis_kennzahl = zw

@@ -19,6 +19,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::config::Config;
+use crate::pg::projection::TERMINAL_STATE_SQL;
 use crate::{
     handler::{HandlerState, handle_webhook},
     pg::PgProcessProjectionRepository,
@@ -54,17 +55,20 @@ async fn metrics(State(state): State<HandlerState>) -> impl IntoResponse {
         .fetch_one(pool)
         .await
         .unwrap_or(0);
-    let open_processes: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM process_projections WHERE state = 'Open'")
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
-    let overdue_processes: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM process_projections \
-         WHERE state = 'Open' AND deadline_at < now()",
-    )
+    let open_processes: i64 = sqlx::query_scalar(&format!(
+        "SELECT COUNT(*) FROM process_projections WHERE state NOT IN ({TERMINAL_STATE_SQL})"
+    ))
     .fetch_one(pool)
     .await
+    .inspect_err(|e| tracing::warn!(%e, "obsd: open-process gauge query failed"))
+    .unwrap_or(0);
+    let overdue_processes: i64 = sqlx::query_scalar(&format!(
+        "SELECT COUNT(*) FROM process_projections \
+         WHERE state NOT IN ({TERMINAL_STATE_SQL}) AND deadline_at < now()"
+    ))
+    .fetch_one(pool)
+    .await
+    .inspect_err(|e| tracing::warn!(%e, "obsd: overdue-process gauge query failed"))
     .unwrap_or(0);
     let pool_size = pool.size();
     let pool_idle = pool.num_idle();
@@ -254,7 +258,16 @@ async fn get_kpis(
         .kpi_report(params.pid, from, to, &state.tenant)
         .await
     {
-        Ok(report) => Json(serde_json::to_value(report).unwrap_or_default()).into_response(),
+        Ok(report) => {
+            let mut body = serde_json::to_value(&report).unwrap_or_default();
+            // The cycle-time aggregates are NULL until something in the bucket
+            // reaches a terminal state; report that as null, not as 0.0 hours.
+            if report.total_completed + report.total_rejected + report.total_cancelled == 0 {
+                body["avg_cycle_time_hours"] = serde_json::Value::Null;
+                body["p95_cycle_time_hours"] = serde_json::Value::Null;
+            }
+            Json(body).into_response()
+        }
         Err(mako_obs::error::ObsError::NoKpiData { .. }) => {
             (StatusCode::NOT_FOUND, "no data for this PID / period").into_response()
         }
@@ -427,6 +440,25 @@ pub async fn build_router(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Resu
 
 // ── BNetzA §20 Diskriminierungsbericht ───────────────────────────────────────
 
+/// §20 parity counts per PID.
+///
+/// The `state` literals are the ones `state_to_str` writes — lowercase. They
+/// were `'Completed'` / `'Rejected'` here, which matches nothing, so every PID
+/// reported perfect parity and discrimination was invisible in the artifact
+/// the BNetzA audit relies on. `bnetza_report_state_literals_match_projection`
+/// pins them.
+const BNETZA_REPORT_SQL: &str = r"SELECT
+      pid::int,
+      initiator_is_affiliate,
+      COUNT(*)                                      AS total,
+      COUNT(*) FILTER (WHERE state = 'completed')   AS completed,
+      COUNT(*) FILTER (WHERE state = 'rejected')    AS rejected
+  FROM process_projections
+  WHERE EXTRACT(YEAR FROM updated_at)::int = $1
+    AND tenant = $2
+  GROUP BY pid, initiator_is_affiliate
+  ORDER BY pid, initiator_is_affiliate";
+
 /// Query parameters for `GET /api/v1/audit/bnetza-report`.
 #[derive(Debug, Deserialize)]
 struct BnetzaReportQuery {
@@ -485,23 +517,11 @@ async fn get_bnetza_report(
 
     // Query parity stats: affiliate vs. non-affiliate per PID for the year.
     let rows: Vec<(i32, bool, i64, i64, i64)> =
-        match sqlx::query_as::<_, (i32, bool, i64, i64, i64)>(
-            r"SELECT
-              pid::int,
-              initiator_is_affiliate,
-              COUNT(*)                                              AS total,
-              COUNT(*) FILTER (WHERE state = 'Completed')          AS completed,
-              COUNT(*) FILTER (WHERE state = 'Rejected')           AS rejected
-          FROM process_projections
-          WHERE EXTRACT(YEAR FROM updated_at)::int = $1
-            AND tenant = $2
-          GROUP BY pid, initiator_is_affiliate
-          ORDER BY pid, initiator_is_affiliate",
-        )
-        .bind(year)
-        .bind(&state.tenant)
-        .fetch_all(state.repo.pool())
-        .await
+        match sqlx::query_as::<_, (i32, bool, i64, i64, i64)>(BNETZA_REPORT_SQL)
+            .bind(year)
+            .bind(&state.tenant)
+            .fetch_all(state.repo.pool())
+            .await
         {
             Ok(r) => r,
             Err(e) => {
@@ -616,4 +636,48 @@ async fn get_bnetza_report(
         "by_pid": by_pid_json,
     }))
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BNETZA_REPORT_SQL, TERMINAL_STATE_SQL};
+    use crate::pg::projection::state_to_str;
+    use mako_obs::domain::ProcessState;
+
+    /// The §20 Diskriminierungsbericht must count the states the projection
+    /// actually writes. Casing drift here is silent: every PID reports
+    /// completed=0/rejected=0 and therefore perfect parity.
+    #[test]
+    fn bnetza_report_state_literals_match_projection() {
+        for s in [ProcessState::Completed, ProcessState::Rejected] {
+            assert!(
+                BNETZA_REPORT_SQL.contains(&format!("state = '{}'", state_to_str(s))),
+                "BNetzA report does not filter on the stored literal for {s:?}"
+            );
+        }
+        assert!(
+            !BNETZA_REPORT_SQL.contains("'Completed'") && !BNETZA_REPORT_SQL.contains("'Rejected'"),
+            "BNetzA report still carries the PascalCase literals"
+        );
+    }
+
+    /// The metrics gauges count non-terminal rows; the literal list they
+    /// exclude is the projection's terminal set.
+    #[test]
+    fn open_process_gauge_excludes_exactly_the_terminal_states() {
+        for s in [
+            ProcessState::Initiated,
+            ProcessState::Running,
+            ProcessState::AperakTimeout,
+            ProcessState::Completed,
+            ProcessState::Rejected,
+            ProcessState::Cancelled,
+        ] {
+            assert_eq!(
+                TERMINAL_STATE_SQL.contains(&format!("'{}'", state_to_str(s))),
+                s.is_terminal(),
+                "{s:?} is on the wrong side of the open-process gauge filter"
+            );
+        }
+    }
 }

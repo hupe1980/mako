@@ -33,6 +33,7 @@ serde_json       = { workspace = true }
 sqlx             = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "rust_decimal"] }
 thiserror        = { workspace = true }
 time             = { workspace = true }
+time-tz          = { workspace = true }
 tokio            = { version = "1", features = ["full"] }
 tokio-util       = { workspace = true }
 toml             = { version = "0.8", default-features = false, features = ["parse"] }

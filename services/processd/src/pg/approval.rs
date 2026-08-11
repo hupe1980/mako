@@ -46,11 +46,59 @@ pub struct ApprovalQueueEntry {
     pub malo_id: Option<String>,
     pub reason: String,
     pub status: QueueStatus,
+    /// `makod` command to dispatch when an operator approves. `None` falls back
+    /// to the PID-based mapping in the REST handler.
+    pub approve_command: Option<String>,
+    /// `makod` command to dispatch when an operator rejects. `None` means the
+    /// rejection is recorded without a market message.
+    pub reject_command: Option<String>,
+    /// Marktrolle forwarded on the dispatched command.
+    pub marktrolle: Option<String>,
     pub expires_at: OffsetDateTime,
     pub created_at: OffsetDateTime,
     pub decided_at: Option<OffsetDateTime>,
     pub tenant: String,
 }
+
+impl ApprovalQueueEntry {
+    /// A pending entry with no pre-resolved commands (LF E_0624 legacy shape).
+    pub fn pending(
+        process_id: Uuid,
+        pid: i32,
+        malo_id: Option<String>,
+        reason: String,
+        expires_at: OffsetDateTime,
+        tenant: String,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            process_id,
+            pid,
+            malo_id,
+            reason,
+            status: QueueStatus::Pending,
+            approve_command: None,
+            reject_command: None,
+            marktrolle: None,
+            expires_at,
+            created_at: OffsetDateTime::now_utc(),
+            decided_at: None,
+            tenant,
+        }
+    }
+
+    #[must_use]
+    pub fn with_commands(mut self, approve: &str, reject: &str, marktrolle: Option<&str>) -> Self {
+        self.approve_command = Some(approve.to_owned());
+        self.reject_command = Some(reject.to_owned());
+        self.marktrolle = marktrolle.map(ToOwned::to_owned);
+        self
+    }
+}
+
+/// Every column `map_entry` reads.
+const ENTRY_COLUMNS: &str = "id, process_id, pid, malo_id, reason, status, approve_command, \
+                             reject_command, marktrolle, expires_at, created_at, decided_at, tenant";
 
 fn map_entry(row: &PgRow) -> Result<ApprovalQueueEntry, sqlx::Error> {
     let status_str: String = row.try_get("status")?;
@@ -67,6 +115,9 @@ fn map_entry(row: &PgRow) -> Result<ApprovalQueueEntry, sqlx::Error> {
         malo_id: row.try_get("malo_id")?,
         reason: row.try_get("reason")?,
         status,
+        approve_command: row.try_get("approve_command")?,
+        reject_command: row.try_get("reject_command")?,
+        marktrolle: row.try_get("marktrolle")?,
         expires_at: row.try_get("expires_at")?,
         created_at: row.try_get("created_at")?,
         decided_at: row.try_get("decided_at")?,
@@ -86,25 +137,48 @@ impl PgApprovalQueue {
 
     pub async fn enqueue(&self, entry: &ApprovalQueueEntry) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO approval_queue (id, process_id, pid, malo_id, reason, status, expires_at, created_at, tenant) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (process_id, tenant) DO NOTHING",
+            "INSERT INTO approval_queue (id, process_id, pid, malo_id, reason, status, approve_command, reject_command, marktrolle, expires_at, created_at, tenant) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (process_id, tenant) DO NOTHING",
         )
         .bind(entry.id).bind(entry.process_id).bind(entry.pid).bind(&entry.malo_id)
-        .bind(&entry.reason).bind(entry.status.to_string()).bind(entry.expires_at)
-        .bind(entry.created_at).bind(&entry.tenant)
+        .bind(&entry.reason).bind(entry.status.to_string())
+        .bind(&entry.approve_command).bind(&entry.reject_command).bind(&entry.marktrolle)
+        .bind(entry.expires_at).bind(entry.created_at).bind(&entry.tenant)
         .execute(&self.pool).await?;
         Ok(())
     }
 
-    pub async fn approve(&self, id: Uuid, tenant: &str) -> Result<bool, sqlx::Error> {
-        let r = sqlx::query("UPDATE approval_queue SET status = 'Approved', decided_at = now() WHERE id = $1 AND tenant = $2 AND status = 'Pending'")
-            .bind(id).bind(tenant).execute(&self.pool).await?;
-        Ok(r.rows_affected() > 0)
+    /// Atomically move a `Pending` entry to `status` and return it.
+    ///
+    /// The decision must be claimed **before** the market command is dispatched:
+    /// dispatch-then-record let two operators deciding at once send both an
+    /// einwilligung and an ablehnen (different idempotency keys) while the DB
+    /// recorded only one, and let a terminal entry re-trigger a market message.
+    /// `Ok(None)` means the entry is gone or no longer Pending.
+    pub async fn claim(
+        &self,
+        id: Uuid,
+        tenant: &str,
+        status: QueueStatus,
+    ) -> Result<Option<ApprovalQueueEntry>, sqlx::Error> {
+        let opt = sqlx::query(&format!(
+            "UPDATE approval_queue SET status = $3, decided_at = now() \
+             WHERE id = $1 AND tenant = $2 AND status = 'Pending' RETURNING {ENTRY_COLUMNS}"
+        ))
+        .bind(id)
+        .bind(tenant)
+        .bind(status.to_string())
+        .fetch_optional(&self.pool)
+        .await?;
+        opt.map(|r| map_entry(&r)).transpose()
     }
 
-    pub async fn reject(&self, id: Uuid, tenant: &str) -> Result<bool, sqlx::Error> {
-        let r = sqlx::query("UPDATE approval_queue SET status = 'Rejected', decided_at = now() WHERE id = $1 AND tenant = $2 AND status = 'Pending'")
-            .bind(id).bind(tenant).execute(&self.pool).await?;
-        Ok(r.rows_affected() > 0)
+    /// Release a claim taken by [`Self::claim`] so the operator can retry.
+    pub async fn unclaim(&self, id: Uuid, tenant: &str) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE approval_queue SET status = 'Pending', decided_at = NULL WHERE id = $1 AND tenant = $2",
+        )
+        .bind(id).bind(tenant).execute(&self.pool).await?;
+        Ok(())
     }
 
     pub async fn expire_stale(&self) -> Result<u64, sqlx::Error> {
@@ -120,9 +194,9 @@ impl PgApprovalQueue {
         limit: u32,
     ) -> Result<Vec<ApprovalQueueEntry>, sqlx::Error> {
         let status_str = status.map(|s| s.to_string());
-        let rows = sqlx::query(
-            "SELECT id, process_id, pid, malo_id, reason, status, expires_at, created_at, decided_at, tenant FROM approval_queue WHERE tenant = $1 AND ($2::text IS NULL OR status = $2) ORDER BY created_at DESC LIMIT $3",
-        )
+        let rows = sqlx::query(&format!(
+            "SELECT {ENTRY_COLUMNS} FROM approval_queue WHERE tenant = $1 AND ($2::text IS NULL OR status = $2) ORDER BY created_at DESC LIMIT $3"
+        ))
         .bind(tenant).bind(status_str).bind(limit as i64)
         .fetch_all(&self.pool).await?;
         rows.iter().map(map_entry).collect()
@@ -133,10 +207,13 @@ impl PgApprovalQueue {
         id: Uuid,
         tenant: &str,
     ) -> Result<Option<ApprovalQueueEntry>, sqlx::Error> {
-        let opt = sqlx::query(
-            "SELECT id, process_id, pid, malo_id, reason, status, expires_at, created_at, decided_at, tenant FROM approval_queue WHERE id = $1 AND tenant = $2",
-        )
-        .bind(id).bind(tenant).fetch_optional(&self.pool).await?;
+        let opt = sqlx::query(&format!(
+            "SELECT {ENTRY_COLUMNS} FROM approval_queue WHERE id = $1 AND tenant = $2"
+        ))
+        .bind(id)
+        .bind(tenant)
+        .fetch_optional(&self.pool)
+        .await?;
         opt.map(|r| map_entry(&r)).transpose()
     }
 }

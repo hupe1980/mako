@@ -68,9 +68,9 @@ supplied the value (`monat` / `vormonat` / `folgemonat` /
 `zwoelf_monats_mittel` / `standard`) so the operator can evidence it. A `KF_V`
 outside `]0;1[` *is* rejected — that is a data error, not a value to clamp.
 
-The caller supplies the quarter-hour input series (SCADA/edmd/DWD sourcing
-stays operator-side); the EDI@Energy wire formats plug in once published
-(go-live ≤ 6 months after publication).
+The caller supplies the quarter-hour input series — SCADA/edmd/DWD sourcing stays
+operator-side. BDEW has not published the EDI@Energy wire formats for this
+exchange; the Festlegung sets go-live at ≤ 6 months after their publication.
 
 ---
 
@@ -396,6 +396,6 @@ feature set or `role-nb-strom`).
 ## See also
 
 - [`redispatch-xml` crate](https://crates.io/crates/redispatch-xml) — XML format layer
-- [Process Engine Guide]({{ '/engine' | relative_url }}) — `Workflow`, `Process`, `EventStore`
-- [PID Reference — Redispatch section]({{ '/pid-reference' | relative_url }}#redispatch-20--xml-document-types-not-edifact-pids)
-- [BNetzA Regulatory Reference]({{ '/bnetza' | relative_url }}) — BK6-20-059, BK6-20-060, BK6-20-061
+- [Process Engine Guide](@/docs/architecture/engine.md) — `Workflow`, `Process`, `EventStore`
+- [PID Reference — Redispatch section](@/docs/regulatory/pid-reference.md#redispatch-2-0-xml-document-types-not-edifact-pids)
+- [BNetzA Regulatory Reference](@/docs/regulatory/bnetza.md) — BK6-20-059, BK6-20-060, BK6-20-061

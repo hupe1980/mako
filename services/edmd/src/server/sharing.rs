@@ -132,10 +132,13 @@ pub(crate) async fn get_sharing_allocation(
     // repository (version-resolved, tenant-scoped). `repo.query` returns the
     // NUMERIC quantity as a typed `Decimal`, so the previous
     // String-decode-then-parse (which silently allocated ZERO on the NUMERIC
-    // column) is gone. `query` does not filter quality, so Faulty/Unknown are
-    // dropped here via the §60 Abs. 2 billable rule (`QualityFlag::is_billable`).
-    // A failed read must error, not silently under-allocate the §42c settlement,
-    // so the former `unwrap_or_default()` is removed.
+    // column) is gone. Sources are the community's *producers*, so each is
+    // projected onto its generation registers via `source_intervals` — which
+    // also drops non-billable qualities (§60 Abs. 2) and same-slot register
+    // duplicates; summing every register would book the plant's own grid draw
+    // (1.8.x Bezug) as community production. A failed read must error, not
+    // silently under-allocate the §42c settlement, so the former
+    // `unwrap_or_default()` is removed.
     let mut all_production: Vec<MeterInterval> = Vec::new();
     for malo_id in &source_malo_ids {
         let reads = match state
@@ -155,15 +158,7 @@ pub(crate) async fn get_sharing_allocation(
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         };
-        for r in reads.iter().filter(|r| r.quality.is_billable()) {
-            all_production.push(MeterInterval {
-                from: r.dtm_from,
-                to: r.dtm_to,
-                value: r.quantity_kwh,
-                quality: r.quality,
-                obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
-            });
-        }
+        all_production.extend(source_intervals(&reads, true));
     }
     all_production.sort_by_key(|iv| iv.from);
 
@@ -182,7 +177,11 @@ pub(crate) async fn get_sharing_allocation(
                 "from":         iv.from,
                 "to":           iv.to,
                 "total_kwh":    iv.value.to_string(),
-                "quality":      "MEASURED",
+                // The real flag, not a hardcoded MEASURED: the filter admits
+                // Estimated/Substituted/Corrected/Preliminary, and a §42c
+                // settlement consumer has to be able to see that a slot of
+                // "production" is an Ersatzwert.
+                "quality":      crate::store::quality_to_str(iv.quality),
             })
         })
         .collect();

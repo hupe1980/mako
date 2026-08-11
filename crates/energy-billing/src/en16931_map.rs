@@ -41,6 +41,14 @@ pub const XRECHNUNG_SPEC_ID: &str =
 /// The plain EN 16931 core specification identifier (BT-24).
 pub const EN16931_SPEC_ID: &str = "urn:cen.eu:en16931:2017";
 
+/// BT-120 exemption reason for the §13b UStG reverse-charge (`AE`) breakdown —
+/// the statement § 14a Abs. 5 UStG requires on a reverse-charge invoice.
+pub const SECT13B_EXEMPTION_REASON: &str =
+    "Steuerschuldnerschaft des Leistungsempfängers (§13b UStG)";
+
+/// BT-121 VATEX code for the reverse-charge category.
+pub const VATEX_REVERSE_CHARGE: &str = "VATEX-EU-AE";
+
 impl VatCategory {
     /// UNCL 5305 category code (BT-151 / BT-118).
     #[must_use]
@@ -141,6 +149,7 @@ impl Invoice {
         // so BR-CO-10..16 and the BR-S/BR-Z family reconcile by construction — the
         // crate owns the reconciliation instead of us re-deriving it.
         let mut line_no = 0u32;
+        let mut has_reverse_charge = false;
         for p in &self.positions {
             if matches!(
                 p.category,
@@ -150,7 +159,13 @@ impl Invoice {
             }
             line_no += 1;
             let rate = p.applicable_tax_rate.unwrap_or(default_rate).normalize();
-            let cat = if rate.is_zero() {
+            // Same categorisation as `tax_subtotals_of`: a §13b reverse-charge
+            // supply is `AE`, never `Z` — both carry rate 0, but only `AE`
+            // states that the recipient owes the VAT.
+            let cat = if p.is_reverse_charge() {
+                has_reverse_charge = true;
+                VatCategory::ReverseCharge
+            } else if rate.is_zero() {
                 VatCategory::ZeroRated
             } else {
                 VatCategory::Standard
@@ -190,6 +205,14 @@ impl Invoice {
         let mut inv = builder.build();
         let paid = (self.abschlag_total_eur * sign).round_kfm(2);
         let mut rec = en16931::reconcile::Reconciler::new();
+        if has_reverse_charge {
+            // BR-AE-10: the AE breakdown must carry an exemption reason.
+            rec = rec.exemption(
+                "AE",
+                Some(SECT13B_EXEMPTION_REASON),
+                Some(VATEX_REVERSE_CHARGE),
+            );
+        }
         if !paid.is_zero() {
             rec = rec.paid(amount(paid));
         }

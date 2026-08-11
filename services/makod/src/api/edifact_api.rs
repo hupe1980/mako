@@ -651,9 +651,20 @@ pub(crate) async fn ingest_edifact(
     // from the UNB…UNZ have been collected.
     if let Some(contrl_svc) = state.contrl_ack.as_deref() {
         let refs: Vec<&AnyMessage> = parsed_msgs.iter().collect();
-        contrl_svc
+        if let Err(e) = contrl_svc
             .emit_for_interchange(&refs, &pi.header.control_ref, &pi.header.receiver_id)
-            .await;
+            .await
+        {
+            state.dl_sink.reject(&DeadLetterReason::ProcessingError {
+                message: format!("contrl_ack_failed: {e}"),
+                context: AuditContext::from_interchange(
+                    &pi.header.sender_id,
+                    &pi.header.receiver_id,
+                    &pi.header.control_ref,
+                )
+                .with_message_type("CONTRL"),
+            });
+        }
     }
 
     let accepted = messages

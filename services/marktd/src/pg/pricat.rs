@@ -23,6 +23,49 @@ impl PgPriCatRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
+
+    /// Snapshot a PRICAT version on the caller's transaction, so the price sheet
+    /// write, this snapshot and the `pricat.published` outbox row commit together.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upsert_version_tx(
+        conn: &mut sqlx::PgConnection,
+        nb_mp_id: &str,
+        tenant: &str,
+        valid_from: Date,
+        valid_to: Option<Date>,
+        data: &serde_json::Value,
+        bo4e_version: &str,
+        source: PreisblattSource,
+    ) -> Result<uuid::Uuid, MdmError> {
+        let row: (uuid::Uuid,) = sqlx::query_as(
+            r#"INSERT INTO pricat_versions
+                   (nb_mp_id, tenant, valid_from, valid_to, data, bo4e_version, source,
+                    dispatch_queued_at, dispatch_done_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, NULL)
+               ON CONFLICT (nb_mp_id, tenant, valid_from) DO UPDATE
+               SET valid_to           = EXCLUDED.valid_to,
+                   data               = EXCLUDED.data,
+                   bo4e_version       = EXCLUDED.bo4e_version,
+                   source             = EXCLUDED.source,
+                   dispatch_queued_at = NULL,
+                   dispatch_done_at   = NULL,
+                   dispatch_error     = NULL,
+                   updated_at         = now()
+               RETURNING id"#,
+        )
+        .bind(nb_mp_id)
+        .bind(tenant)
+        .bind(valid_from)
+        .bind(valid_to)
+        .bind(data)
+        .bind(bo4e_version)
+        .bind(source.to_string())
+        .fetch_one(conn)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+
+        Ok(row.0)
+    }
 }
 
 // ── row helpers ──────────────────────────────────────────────────────────────
@@ -100,34 +143,22 @@ impl PriCatRepository for PgPriCatRepository {
         bo4e_version: &str,
         source: PreisblattSource,
     ) -> Result<uuid::Uuid, MdmError> {
-        let row: (uuid::Uuid,) = sqlx::query_as(
-            r#"INSERT INTO pricat_versions
-                   (nb_mp_id, tenant, valid_from, valid_to, data, bo4e_version, source,
-                    dispatch_queued_at, dispatch_done_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, NULL)
-               ON CONFLICT (nb_mp_id, tenant, valid_from) DO UPDATE
-               SET valid_to           = EXCLUDED.valid_to,
-                   data               = EXCLUDED.data,
-                   bo4e_version       = EXCLUDED.bo4e_version,
-                   source             = EXCLUDED.source,
-                   dispatch_queued_at = NULL,
-                   dispatch_done_at   = NULL,
-                   dispatch_error     = NULL,
-                   updated_at         = now()
-               RETURNING id"#,
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Self::upsert_version_tx(
+            &mut conn,
+            nb_mp_id,
+            tenant,
+            valid_from,
+            valid_to,
+            &data,
+            bo4e_version,
+            source,
         )
-        .bind(nb_mp_id)
-        .bind(tenant)
-        .bind(valid_from)
-        .bind(valid_to)
-        .bind(&data)
-        .bind(bo4e_version)
-        .bind(source.to_string())
-        .fetch_one(&self.pool)
         .await
-        .map_err(|e| MdmError::Internal(e.to_string()))?;
-
-        Ok(row.0)
     }
 
     async fn list_versions(

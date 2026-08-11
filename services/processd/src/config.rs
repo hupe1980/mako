@@ -195,13 +195,15 @@ fn default_subscriber_id() -> String {
     "processd".to_owned()
 }
 fn default_event_types() -> String {
-    // PROCESS_INITIATED drives the NB/LF/MSB STP modules; the two
-    // versorgung events drive the EoG gap-closure automation (§38 EnWG).
+    // PROCESS_INITIATED drives the NB/LF/MSB STP modules; the versorgung
+    // events drive the EoG gap-closure automation (§38 EnWG) — CHANGED closes
+    // a case once regular supply resumes.
     format!(
-        "{},{},{}",
+        "{},{},{},{}",
         mako_events::mako::PROCESS_INITIATED,
         mako_events::markt::VERSORGUNG_GAP_DETECTED,
         mako_events::markt::VERSORGUNG_EOG_BEGONNEN,
+        mako_events::markt::VERSORGUNG_CHANGED,
     )
 }
 

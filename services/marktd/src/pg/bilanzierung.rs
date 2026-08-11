@@ -78,23 +78,31 @@ impl BilanzierungRepository for PgBilanzierungRepository {
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
-        // Derive the denormalised `malo.fallgruppe` current-value when this
-        // Bilanzierung is the one effective *now* (BO4E: Fallgruppe is a
-        // Bilanzierung field, not a Marktlokation field — the resource is
-        // authoritative and the MaLo column is derived from it). No-op when the
-        // MaLo row does not exist.
-        let is_current = rec.bilanzierungsbeginn <= OffsetDateTime::now_utc()
-            && rec
-                .bilanzierungsende
-                .is_none_or(|e| e > OffsetDateTime::now_utc());
-        if is_current {
-            sqlx::query("UPDATE malo SET fallgruppe = $1, updated_at = now() WHERE malo_id = $2")
-                .bind(&rec.fallgruppenzuordnung)
-                .bind(&rec.malo_id)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| MdmError::Internal(e.to_string()))?;
-        }
+        // Re-derive the denormalised `malo.fallgruppe` current-value from the
+        // record `find_at(now)` resolves — not from the row just written, which
+        // may be an older overlapping one that loses the ordering. (BO4E:
+        // Fallgruppe is a Bilanzierung field, not a Marktlokation field — the
+        // resource is authoritative and the MaLo column is derived from it.)
+        // No-op when no Bilanzierung is effective now, or the MaLo row is absent.
+        sqlx::query(
+            r"UPDATE malo m
+              SET fallgruppe = b.fallgruppenzuordnung, updated_at = now()
+              FROM (
+                  SELECT fallgruppenzuordnung
+                  FROM bilanzierungen
+                  WHERE tenant = $1 AND malo_id = $2
+                    AND bilanzierungsbeginn <= now()
+                    AND (bilanzierungsende IS NULL OR bilanzierungsende > now())
+                  ORDER BY bilanzierungsbeginn DESC
+                  LIMIT 1
+              ) b
+              WHERE m.malo_id = $2",
+        )
+        .bind(&rec.tenant)
+        .bind(&rec.malo_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
 
         tx.commit()
             .await

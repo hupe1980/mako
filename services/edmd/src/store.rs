@@ -26,7 +26,7 @@ use std::sync::Arc;
 use datafusion::scalar::ScalarValue;
 use rust_decimal::Decimal;
 use sqlx::{PgPool, Row};
-use time::{Date, OffsetDateTime, macros::time};
+use time::{Date, OffsetDateTime};
 
 use metering::interval::{MeasurementUnit, MeterInterval};
 use metering::measurement_series::{MeasurementSeries, MeasurementSource};
@@ -322,6 +322,44 @@ impl MeterStoreTimeSeriesRepository {
 /// when the reading carries no operator. The scope is derived from the
 /// *interval* (`VersionScope::for_interval`), so a July reading corrected in
 /// August still lands in July's scope.
+/// The meterstore version a delivery resolves under.
+///
+/// Resolution has to follow the version the network operator assigned, not the
+/// order deliveries arrived in — otherwise replaying an original after its
+/// correction landed gives the stale value the higher version and supersedes
+/// the correction. So a stated version is used as stated, through
+/// `Version::mscons`: the strict constructor, so a malformed label fails at the
+/// boundary instead of entering the resolved view, where a short version still
+/// orders — wrongly but silently — within its scope.
+///
+/// A delivery that states none falls back to **transaction time in
+/// milliseconds**, which is a deliberate choice of magnitude, not just of
+/// precision:
+///
+/// - Unix milliseconds are 13 digits, one short of the ≥ 14 MSCONS mandates,
+///   so a timestamp fallback always sorts *below* any stated version in the
+///   same scope. A delivery that says which version it is therefore always
+///   beats one that does not, whatever order they arrived in. Anything finer
+///   (microseconds, 16 digits) crosses into the MSCONS band and the two
+///   schemes would start interleaving by accident.
+/// - It is still sub-second, so two writes for one interval in the same second
+///   are two versions rather than one `(merge_key, version)` conflict on the
+///   hot tier — which whole-second timestamps produced.
+///
+/// This is not a substitute for the wire version. Between two unversioned
+/// deliveries, arrival order still decides, and a replayed original still wins.
+/// Only a version off the wire fixes that, and the `process.completed` payload
+/// does not carry one yet.
+fn version_of(mscons: Option<u128>, recorded_at: OffsetDateTime) -> Result<Version, EdmError> {
+    match mscons {
+        Some(v) => Version::mscons(v).map_err(store_err),
+        None => {
+            let millis = (recorded_at.unix_timestamp_nanos() / 1_000_000).max(1);
+            Version::new(millis as u128).map_err(store_err)
+        }
+    }
+}
+
 fn read_to_stored(r: &MeterRead) -> Result<StoredSeries, EdmError> {
     let obis: Option<ObisCode> = r.obis_code.as_deref().and_then(|s| ObisCode::parse(s).ok());
     let interval = MeterInterval {
@@ -335,11 +373,8 @@ fn read_to_stored(r: &MeterRead) -> Result<StoredSeries, EdmError> {
     // reporting NB/MSB, not the tenant.
     let operator = r.sender_mp_id.clone().unwrap_or_else(|| r.tenant.clone());
     let scope = VersionScope::for_interval(&operator, r.dtm_from).map_err(store_err)?;
-    // Derive a monotone version from the transaction time; a real MSCONS version
-    // would come off the wire via `Version::mscons`.
     let recorded_at = r.valid_from_tx.unwrap_or_else(OffsetDateTime::now_utc);
-    let version_num = (recorded_at.unix_timestamp() as u128).max(1);
-    let version = Version::new(version_num).map_err(store_err)?;
+    let version = version_of(r.mscons_version, recorded_at)?;
 
     let source = MeasurementSource::Mscons {
         pid: r.pid,
@@ -538,8 +573,10 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             )
             .bind(&tenant)
             .bind(&malo_id)
-            .bind(from.date())
-            .bind(to.date())
+            // Period bounds are Berlin calendar dates, so the reads' overlap
+            // window must be expressed in Berlin days too.
+            .bind(metering::calendar::local_day(from))
+            .bind(metering::calendar::local_day(to))
             .execute(&self.pool)
             .await
             {
@@ -598,9 +635,10 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         tenant: &str,
     ) -> Result<ImbalanceReport, EdmError> {
         // Aggregate over the tier-split resolved series (§60 MMM); a Date range
-        // maps to a [from 00:00, to+1d 00:00) UTC window.
-        let from_ts = from.midnight().assume_utc();
-        let to_ts = to.next_day().unwrap_or(to).midnight().assume_utc();
+        // is a Berlin calendar period, so its UTC window comes from the calendar
+        // (23:00/22:00 UTC boundaries, DST-correct length).
+        let from_ts = metering::calendar::day_start_utc(from);
+        let to_ts = metering::calendar::day_end_utc(to);
         // Only billable qualities enter the MMM saldo — the FAULTY/UNKNOWN filter
         // is pushed into the scan (§60 Abs. 2 billable set) rather than applied
         // after materialising the series.
@@ -700,10 +738,11 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             }));
         }
 
-        // 2. Fall back to on-the-fly aggregation from the resolved series.
-        let from_ts = q.period_from.midnight().assume_utc();
-        let to_ts =
-            OffsetDateTime::new_utc(q.period_to.next_day().unwrap_or(q.period_to), time!(0:00));
+        // 2. Fall back to on-the-fly aggregation from the resolved series. The
+        //    billing period is a Berlin calendar period (Liefermonat), so the UTC
+        //    window comes from the calendar.
+        let from_ts = metering::calendar::day_start_utc(q.period_from);
+        let to_ts = metering::calendar::day_end_utc(q.period_to);
         // Billable qualities only (§60 Abs. 2), pushed into the scan.
         let resolved = self
             .store
@@ -742,7 +781,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         let worst_quality = reads
             .iter()
             .map(|r| r.quality)
-            .max_by_key(|q| *q as u8)
+            .max_by_key(|q| q.severity_rank())
             .unwrap_or_default();
 
         let result = MeterBillingPeriod {
@@ -906,6 +945,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 sender_mp_id: operator,
                 allocation_version: "CORRECTION".to_owned(),
                 valid_from_tx: Some(OffsetDateTime::now_utc()),
+                mscons_version: None,
             };
             // A correction is another write to the subject store, so it carries
             // the same pseudonymous reference; `register` returns the existing one.
@@ -982,7 +1022,10 @@ fn typ2_to_stored(r: &Typ2Read) -> Result<StoredSeries, EdmError> {
     let operator = r.sender_mp_id.clone().unwrap_or_else(|| r.tenant.clone());
     let scope = VersionScope::for_interval(&operator, r.dtm_from).map_err(store_err)?;
     let recorded_at = r.received_at.unwrap_or_else(OffsetDateTime::now_utc);
-    let version = Version::new((recorded_at.unix_timestamp() as u128).max(1)).map_err(store_err)?;
+    // Typ-2 values are stored as delivered and never corrected, so arrival order
+    // is the only order there is — but it still has to be an order, hence the
+    // nanosecond resolution (see `version_of`).
+    let version = version_of(None, recorded_at)?;
     let source = MeasurementSource::Mscons {
         pid: r.pid,
         message_ref: None,
@@ -1095,6 +1138,7 @@ fn series_to_reads(resolved: &meterstore::ResolvedSeries, tenant: &str) -> Vec<M
             sender_mp_id: sender_mp_id.clone(),
             allocation_version: allocation_version.clone(),
             valid_from_tx: None,
+            mscons_version: None,
         })
         .collect()
 }
@@ -1147,7 +1191,9 @@ fn normalise_obis(obis_code: Option<&str>) -> String {
     })
 }
 
-fn quality_to_str(q: QualityFlag) -> &'static str {
+/// The canonical wire spelling of a quality flag, shared with the API surface so
+/// a response cannot invent a different vocabulary than the one stored.
+pub(crate) fn quality_to_str(q: QualityFlag) -> &'static str {
     match q {
         QualityFlag::Measured => "MEASURED",
         QualityFlag::Estimated => "ESTIMATED",
@@ -1179,5 +1225,72 @@ fn str_to_sparte(s: &str) -> Sparte {
         "WAERME" => Sparte::Waerme,
         "WASSER" => Sparte::Wasser,
         _ => Sparte::Strom,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::macros::datetime;
+
+    /// The wire version, when there is one, is what resolution orders by — so a
+    /// correction stays superseding no matter when a replay of the original
+    /// arrives.
+    #[test]
+    fn a_wire_version_outranks_arrival_order() {
+        let original = version_of(Some(20_260_701_100_000), datetime!(2026-07-01 10:00 UTC))
+            .expect("well-formed MSCONS version");
+        // The correction was issued earlier in wall-clock terms than the replay
+        // of the original, which lands a month later.
+        let correction = version_of(Some(20_260_702_090_000), datetime!(2026-07-02 09:00 UTC))
+            .expect("well-formed MSCONS version");
+        let replay = version_of(Some(20_260_701_100_000), datetime!(2026-08-15 12:00 UTC))
+            .expect("well-formed MSCONS version");
+
+        assert!(correction.get() > original.get());
+        assert_eq!(
+            replay.get(),
+            original.get(),
+            "a replay carries the version it was issued under, not the one it \
+             arrived at, so it cannot supersede the correction"
+        );
+        assert!(replay.get() < correction.get());
+    }
+
+    /// A version MSCONS would not have issued fails at the boundary rather than
+    /// entering the resolved view, where a short version still orders — wrongly
+    /// but silently — within its scope.
+    #[test]
+    fn a_malformed_wire_version_is_refused() {
+        assert!(version_of(Some(7), datetime!(2026-07-01 10:00 UTC)).is_err());
+    }
+
+    /// Without a wire version, arrival time stands in — in milliseconds, so two
+    /// writes in the same second are two versions rather than one
+    /// `(merge_key, version)` conflict on the hot tier.
+    #[test]
+    fn the_arrival_time_fallback_separates_writes_inside_one_second() {
+        let first = version_of(None, datetime!(2026-07-01 10:00:00.100 UTC)).expect("version");
+        let second = version_of(None, datetime!(2026-07-01 10:00:00.200 UTC)).expect("version");
+        assert!(first.get() < second.get());
+    }
+
+    /// The fallback stays *below* the MSCONS band on purpose: a delivery that
+    /// states its version must beat one that does not, in either arrival order.
+    /// Finer than milliseconds would cross into 14+ digits and the two schemes
+    /// would interleave by accident.
+    #[test]
+    fn a_stated_version_always_outranks_the_arrival_time_fallback() {
+        let fallback = version_of(None, datetime!(2026-07-01 10:00:00.100 UTC)).expect("version");
+        assert!(
+            !fallback.is_well_formed(),
+            "13 digits — deliberately not a well-formed MSCONS version"
+        );
+
+        // The smallest version MSCONS could assign, arriving before the
+        // fallback was written, still wins.
+        let smallest_stated =
+            version_of(Some(10_000_000_000_000), datetime!(2020-01-01 0:00 UTC)).expect("version");
+        assert!(smallest_stated.get() > fallback.get());
     }
 }

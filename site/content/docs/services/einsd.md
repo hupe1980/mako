@@ -1,6 +1,6 @@
 +++
 title = "einsd Operator Guide"
-description = "einsd operator guide — Einspeiser Registry + EEG/KWKG Settlement daemon. 10 settlement schemes (SettlementScheme + TariffSource), EEG version-aware Bestandsschutz, §20 Abs. 3 Managementprämie (see implementation notes), §23a quarterly degression, §36h Wind Korrekturfaktor, §42b EnWG GGV multi-meter Messkonzept, §51 Negativpreisregel, §52 Pflichtzahlungen + §52 Abs. 6 Netting, SettlementPeriodState lifecycle, Repowering §22, Zusammenlegung §24, KWKG Förderdauer, §14 UStG Gutschrift, §§53b–54 AW-Reduktionen, 19 MCP tools, eeg-agent."
+description = "einsd operator guide — Einspeiser Registry + EEG/KWKG Settlement daemon. 10 settlement schemes (SettlementScheme + TariffSource), EEG version-aware Bestandsschutz, Anlage 1 gleitende Marktprämie, §49 semi-annual solar degression, §36h Wind Korrekturfaktor, §42b EnWG GGV multi-meter Messkonzept, §51 Negativpreisregel, §52 Pflichtzahlungen + §52 Abs. 6 Netting, SettlementPeriodState lifecycle, Repowering §22, Zusammenlegung §24, KWKG Förderdauer, §14 UStG Gutschrift, §§53b–54 AW-Reduktionen, 19 MCP tools, eeg-agent."
 weight = 28
 [extra]
 mermaid = true
@@ -23,7 +23,7 @@ graph TB
     Operator["NB Operator / ERP"]
     edmd["edmd :8380<br/>¼h Einspeisung feed-in<br/>(GET /feed-in) + kWh"]
     einsd["einsd :9180"]
-    eeg_billing["eeg-billing crate<br/>10 settlement schemes<br/>§20 Abs.3 Managementprämie<br/>§23a degression · §36h Abs.1/2 wind<br/>§51 Negativpreis · §51a Förderende<br/>§51b biogas Ausschreibung<br/>§39n feste Marktprämie<br/>§52 Abs.6 netting<br/>SettlementPeriodState · InbetriebnahmeTyp<br/>no I/O"]
+    eeg_billing["eeg-billing crate<br/>10 settlement schemes<br/>Anlage 1 Marktprämie<br/>§49 degression · §36h Abs.1/2 wind<br/>§51 Negativpreis · §51a Förderende<br/>§51b biogas Ausschreibung<br/>§39n feste Marktprämie<br/>§52 Abs.6 netting<br/>SettlementPeriodState · InbetriebnahmeTyp<br/>no I/O"]
     db[("PostgreSQL<br/>eeg_anlagen · settlement_receipts<br/>settlement_receipt_history<br/>settlement_state_transitions<br/>eeg_regionalnachweise · eeg_stromsteuerbefreiungen<br/>eeg_sect54_solar_defekte<br/>epex_monthly_prices · epex_spot_prices<br/>wind_guetefaktor_reevaluations · eeg_verguetungssaetze")]
     erp["ERP webhook<br/>CloudEvents 1.0"]
     agentd["agentd :9580<br/>eeg-agent<br/>(all de.eeg.* events)"]
@@ -200,31 +200,22 @@ The scheme is stored as `settlement_model` in `settlement_receipts` and selected
 anzulegender Wert**. Award validity, reductions, and revocation are the caller's responsibility;
 the library receives the already-resolved AW from the caller.
 
-### §20 Abs. 3 EEG 2023 — Managementprämie
+### Anlage 1 EEG 2023 — die gleitende Marktprämie
 
-**This library's implementation** follows the reading that the Managementprämie is incorporated
-into the AW before computing the spread, based on the statutory text:
-§20 Abs. 3 EEG 2023: *"Bei der Berechnung der Marktprämie ist der anzulegende Wert um
-0,4 ct/kWh zu erhöhen."*
+Anlage 1 Nr. 3.1.2 defines the Marktprämie as the anzulegender Wert minus the
+Monatsmarktwert, floored at zero:
 
 ```
-eff_AW = direktverm_aw_ct + managementpraemie_ct
-Marktprämie = max(0, eff_AW − EPEX_avg) × kwh / 100
+Marktprämie = max(0, AW − Monatsmarktwert) × kwh / 100
 ```
 
-When `EPEX > eff_AW`, the **total payment is zero** — no guaranteed floor.
-Auto-calculated from `leistung_kwp` when `managementpraemie_ct` is null:
-0.4 ct/kWh (≤100 MW) · 0.2 ct/kWh (>100 MW).
+There is **no additive Managementprämie**. Marketing costs have been folded into
+the anzulegender Wert since EEG 2014 — the §53 Vergütungsabzug (0.4 ct/kWh solar
+and wind, 0.2 ct/kWh biomass and gas) is that same cost appearing on the
+Einspeisevergütung route instead. Adding a premium on top would pay it twice.
 
-> ⚠ **Settlement positions vs. legal components.** For audit transparency, `eeg-billing`
-> decomposes the total spread into two billing positions: `"Gleitende Marktprämie"` and
-> `"Managementprämie"`. This is a **software decomposition** to make the calculation
-> auditable — it does not mean the Managementprämie is a legally separate payment
-> component. The single payment to the operator is `max(0, eff_AW − EPEX) × kwh / 100`.
->
-> ⚠ **Verify before production use.** The treatment of the Managementprämie in the context
-> of current BNetzA guidance and bilateral contract terms should be confirmed against the
-> current statutory text before relying on this calculation for settlement disputes.
+When the Monatsmarktwert exceeds the AW the payment is zero: the plant earns from
+the market, and there is no guaranteed floor to fall back on.
 
 **KWKG rates** (§7 Abs. 1 KWKG 2023, from 01.01.2023):
 
@@ -465,7 +456,7 @@ whose Anzulegender Wert was set by BNetzA tender. The rule is triggered by a
 graph LR
     EPEX["EPEX avg<br/>ct/kWh"]
     EPEX -->|"<= 2 ct/kWh"| ZERO["AW = 0<br/>Payment = EUR 0<br/>§51/§51a do NOT apply"]
-    EPEX -->|"> 2 ct/kWh"| NORMAL["Normal MarketPremium formula<br/>eff_AW = AW + Managementprämie<br/>Prämie = max(0, eff_AW - EPEX) x kwh"]
+    EPEX -->|"> 2 ct/kWh"| NORMAL["Normal MarketPremium formula<br/>Prämie = max(0, AW - Monatsmarktwert) x kwh"]
 ```
 
 Register biogas Ausschreibungsanlagen with `is_biogas_sect51b: true`.
@@ -493,14 +484,11 @@ For plants commissioned after Q2 2024, use `lookup_statutory_rate` MCP tool or
 `GET /api/v1/verguetungssatz-lookup` to retrieve the correctly degresssed rate for the
 commissioning quarter.
 
-**§23a degression tiers** (based on previous year's installed GW):
-
-| Previous year PV | Degression | Example |
-|---|---|---|
-| ≤9 GW | 0.00% | no change |
-| 9–12 GW | 0.25%/quarter | typical 2022 |
-| 13–14 GW | 1.00%/quarter | typical 2023 |
-| >15 GW | 1.50%/quarter (max) | typical 2024/2025 |
+**§49 degression.** Solar anzulegende Werte fall by a fixed **1 %** every six
+months, on 1 February and 1 August, starting 01.02.2024. The steps compound on
+the unrounded value and each result is rounded kaufmännisch to the cent, which is
+what reproduces the BNetzA-published series exactly. The GW-dependent "atmender
+Deckel" of earlier EEG versions no longer exists.
 
 ---
 
@@ -664,7 +652,7 @@ Returns `422 Unprocessable Entity` when:
 
 These three statutes cut the **anzulegender Wert** itself, before any settlement
 formula runs. That ordering is not a detail. The gleitende Marktprämie is
-`max(0, AW + Managementprämie − Marktwert)`, floored at zero, so a euro deduction
+`max(0, AW − Marktwert)`, floored at zero, so a euro deduction
 taken *after* the floor is a different number from a cut applied *before* it:
 where the Marktwert already exceeds the AW the premium is zero, and a post-hoc
 deduction would push the settlement negative — charging the operator for
@@ -1139,7 +1127,7 @@ One row per Technische Ressource. PK: `(tr_id, tenant)`.
 | `verguetungssatz_ct` | NUMERIC | **Net** rate ct/kWh (gross AW minus §53 deduction) |
 | `foerderendedatum` | DATE | Dec 31 of year+20 (statutory); exact 20y for Ausschreibung |
 | `settlement_model` | TEXT | `FEED_IN_TARIFF`, `MARKET_PREMIUM`, … |
-| `direktverm_aw_ct` | NUMERIC? | Statutory AW in ct/kWh (before Managementprämie) |
+| `direktverm_aw_ct` | NUMERIC? | Statutory or tendered AW in ct/kWh |
 | `mieter_zuschlag_ct` | NUMERIC? | Mieterstrom surcharge ct/kWh (§21 Abs. 3 EEG 2023) |
 | `mastr_registriert` | BOOL | MaStR confirmed; `false` → §52 penalty |
 | `mastr_nummer` | TEXT? | MaStR Registrierungsnummer (`SEE900000012345`) |

@@ -995,3 +995,212 @@ async fn a_replayed_abschlag_is_announced_once() {
         "three scheduler passes in one month must announce the advance payment once"
     );
 }
+
+// ── IBAN payment matching ─────────────────────────────────────────────────────
+
+/// Registering a SEPA mandate must write `accounts.iban_hash`, because that is
+/// the only key CAMT.054 import resolves an account by. It was read but never
+/// written, so every incoming payment fell to unmatched and dunning could fire
+/// against customers who had already paid.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_mandate_makes_the_account_findable_by_iban() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let key = accountingd::ledger::iban_hash_key("test-secret");
+    let iban = "DE89 3704 0044 0532 0130 00";
+
+    pg::create_mandate(
+        &pool,
+        TENANT,
+        Some(&key),
+        pg::CreateMandateRequest {
+            malo_id: malo.clone(),
+            lf_mp_id: "LF1".to_owned(),
+            iban: iban.to_owned(),
+            bic: None,
+            kontoinhaber: Some("Erika Mustermann".to_owned()),
+            mandatsref: uniq("MND"),
+            sequence_type: "FRST".to_owned(),
+            signed_at: "2026-01-15".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // The CAMT.054 lookup, verbatim — a bank statement quotes the IBAN without
+    // spaces, so the stored hash must be over the normalised form.
+    let hit: Option<(String, String)> = sqlx::query_as(
+        "SELECT malo_id, lf_mp_id FROM accounts WHERE iban_hash = $1 AND tenant = $2 LIMIT 1",
+    )
+    .bind(accountingd::ledger::iban_hash(
+        Some(&key),
+        "de89370400440532013000",
+    ))
+    .bind(TENANT)
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        hit,
+        Some((malo.clone(), "LF1".to_owned())),
+        "the mandate's IBAN must resolve the account"
+    );
+
+    // A different key must not match — the hash is keyed, not a plain digest.
+    let other = accountingd::ledger::iban_hash_key("other-secret");
+    let miss: Option<String> = sqlx::query_scalar(
+        "SELECT malo_id FROM accounts WHERE iban_hash = $1 AND tenant = $2 LIMIT 1",
+    )
+    .bind(accountingd::ledger::iban_hash(
+        Some(&other),
+        "DE89370400440532013000",
+    ))
+    .bind(TENANT)
+    .fetch_optional(&pool)
+    .await
+    .unwrap();
+    assert_eq!(miss, None);
+}
+
+/// Updating an account's IBAN re-keys the lookup hash along with it — otherwise
+/// a customer who changes bank stops matching after the first statement.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn changing_the_iban_rekeys_the_lookup_hash() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let key = accountingd::ledger::iban_hash_key("test-secret");
+    pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+
+    pg::update_account_tenanted(
+        &pool,
+        &malo,
+        "LF1",
+        TENANT,
+        Some(&key),
+        pg::UpdateAccountRequest {
+            iban: Some("DE02120300000000202051".to_owned()),
+            mandatsref: None,
+            abschlag_ct: None,
+            billing_day: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT iban_hash FROM accounts WHERE malo_id = $1 AND tenant = $2")
+            .bind(&malo)
+            .bind(TENANT)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        stored,
+        Some(accountingd::ledger::iban_hash(
+            Some(&key),
+            "DE02120300000000202051"
+        ))
+    );
+
+    // An unrelated field update leaves the hash intact (COALESCE, not overwrite).
+    pg::update_account_tenanted(
+        &pool,
+        &malo,
+        "LF1",
+        TENANT,
+        None,
+        pg::UpdateAccountRequest {
+            iban: None,
+            mandatsref: None,
+            abschlag_ct: Some(9_900),
+            billing_day: None,
+        },
+    )
+    .await
+    .unwrap();
+    let after: Option<String> =
+        sqlx::query_scalar("SELECT iban_hash FROM accounts WHERE malo_id = $1 AND tenant = $2")
+            .bind(&malo)
+            .bind(TENANT)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(after, stored, "an Abschlag update must not clear the hash");
+}
+
+// ── Jahresabschluss settlement ────────────────────────────────────────────────
+
+/// The annual settlement must account for cash settled outside the Abschlag
+/// plan. Summing only RECHNUNG/STORNO/MAHNGEBUEHR/ABSCHLAG treated a direct
+/// payment as unpaid and still credited a bounced Abschlag — the latter paying
+/// out an Erstattung for money never received.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn settlement_counts_direct_payments_and_chargebacks() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+    let d = date!(2026 - 06 - 15);
+
+    let post = async |kind: &str, amount: i64, key: String| {
+        pg::post_entry(
+            &ledger,
+            &pool,
+            TENANT,
+            &malo,
+            "LF1",
+            kind,
+            amount,
+            &key,
+            None,
+            None,
+            d,
+            d,
+            Some(kind),
+            None,
+        )
+        .await
+        .unwrap();
+    };
+
+    // 1200.00 billed, 1100.00 collected by Abschlag, of which 100.00 bounced,
+    // and 200.00 paid directly by the customer.
+    post("RECHNUNG", 120_000, uniq("inv")).await;
+    post("ABSCHLAG", -110_000, uniq("abs")).await;
+    post("BANKRUECKLAST", 10_000, uniq("ret")).await;
+    post("ZAHLUNG", -20_000, uniq("pay")).await;
+
+    let sums = ledger.year_kind_sums("LF1", &malo, 2026).await.unwrap();
+    let s = accountingd::handlers::JahresabschlussSums::from_kind_sums(&sums);
+
+    assert_eq!(s.rechnung_sum, 120_000);
+    assert_eq!(s.abschlag_sum, -110_000);
+    assert_eq!(
+        s.zahlung_sum, -10_000,
+        "200.00 paid directly less the 100.00 chargeback"
+    );
+    assert_eq!(
+        s.settlement_ct, 0,
+        "1200 billed − 1100 Abschlag + 100 returned − 200 paid = 0, ausgeglichen"
+    );
+    assert_eq!(
+        s.settlement_ct,
+        ledger.balance_ct("LF1", &malo).await.unwrap(),
+        "the settlement must equal the Kontokorrent balance it settles"
+    );
+
+    // The old formula refunded 100.00 EUR here.
+    assert_eq!(s.rechnung_sum + s.abschlag_sum, 10_000);
+}

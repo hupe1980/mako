@@ -54,7 +54,7 @@ impl EdifactIngestDispatcher {
                         HolidayCalendar::BdewMaKo,
                     );
                     let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
-                    self.spawn_or_resume::<WimDeviceChangeWorkflow>(
+                    self.spawn_or_resume_guarded::<WimDeviceChangeWorkflow>(
                         &melo_id,
                         "wim-device-change",
                         cmd,
@@ -66,6 +66,7 @@ impl EdifactIngestDispatcher {
                             ),
                             (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
                         ],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }
@@ -128,7 +129,7 @@ impl EdifactIngestDispatcher {
                         HolidayCalendar::BdewMaKo,
                     );
                     let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
-                    self.spawn_or_resume::<WimGeraeteubernahmeWorkflow>(
+                    self.spawn_or_resume_guarded::<WimGeraeteubernahmeWorkflow>(
                         &melo_id,
                         "wim-geraeteubernahme",
                         cmd,
@@ -140,6 +141,7 @@ impl EdifactIngestDispatcher {
                             ),
                             (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
                         ],
+                        |s| !s.is_terminal(),
                     )
                     .await
                 }
@@ -215,12 +217,13 @@ impl EdifactIngestDispatcher {
                         5,
                         HolidayCalendar::BdewMaKo,
                     );
-                    self.spawn_or_resume::<WimInsrptWorkflow>(
+                    self.spawn_or_resume_guarded::<WimInsrptWorkflow>(
                         &melo_id,
                         "wim-insrpt",
                         cmd,
                         &fv,
                         &[(mako_wim::insrpt::ANTWORT_WINDOW_LABEL, due_at)],
+                        |s| !s.is_terminal(),
                     )
                     .await
                 }
@@ -248,7 +251,7 @@ impl EdifactIngestDispatcher {
                         HolidayCalendar::BdewMaKo,
                     );
                     let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
-                    self.spawn_or_resume::<WimStammdatenWorkflow>(
+                    self.spawn_or_resume_guarded::<WimStammdatenWorkflow>(
                         &melo_id,
                         "wim-stammdaten",
                         cmd,
@@ -260,6 +263,7 @@ impl EdifactIngestDispatcher {
                             ),
                             (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
                         ],
+                        |s| !s.is_terminal(),
                     )
                     .await
                 }
@@ -355,6 +359,7 @@ impl EdifactIngestDispatcher {
                         &fv,
                         &[(mako_wim::wertebestellung::ANTWORT_WINDOW_LABEL, due_at)],
                         &[order_belegnr],
+                        None,
                     )
                     .await
                 } else {

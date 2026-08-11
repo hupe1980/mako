@@ -9,8 +9,9 @@ mermaid = true
 
 This page is the definitive reference for the BDEW **Rollenmodell für die
 Marktkommunikation im deutschen Energiemarkt** and all identifier types used
-across EDI@Energy messages. Every developer working with this library will need
-this material to understand what a MaLo is, why the NB sends UTILMD messages on
+across EDI@Energy messages. It is the shared vocabulary of the whole platform —
+all 17 services speak it — and every developer working on mako will need this
+material to understand what a MaLo is, why the NB sends UTILMD messages on
 behalf of the LF, and how to parse a `9900357000004` out of a NAD segment.
 
 **Source documents:**
@@ -476,8 +477,8 @@ accepts `WAERME`/`WASSER` for submetering series.
 
 | Topic | Document |
 |---|---|
-| Full PID table for all process families | [PID Reference](pid-reference) |
-| BNetzA rulings governing each process | [BNetzA Regulatory Reference](bnetza) |
+| Full PID table for all process families | [PID Reference](@/docs/regulatory/pid-reference.md) |
+| BNetzA rulings governing each process | [BNetzA Regulatory Reference](@/docs/regulatory/bnetza.md) |
 | How EDIFACT messages are parsed and validated | [Parsing Guide](@/docs/reference/parsing.md) |
 | How the engine routes messages to workflows | [Process Engine](@/docs/architecture/engine.md) |
 | BO4E objects in ERP integration | [ERP Integration](@/docs/architecture/erp-integration.md) |

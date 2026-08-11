@@ -483,20 +483,30 @@ pub async fn insert_rahmenvertrag(
 /// The actual end-of-month rounding is the customer's responsibility in practice;
 /// we store the strict calendar minimum here.
 pub fn earliest_kuendigungsdatum(vertragsbeginn: Date, kuendigungsfrist_monate: i32) -> Date {
-    // Add kuendigungsfrist_monate months: year carries over when month > 12.
-    let total_months = vertragsbeginn.month() as i32 + kuendigungsfrist_monate;
-    let extra_years = (total_months - 1) / 12;
-    let new_month = ((total_months - 1) % 12 + 1) as u8;
-    let new_year = vertragsbeginn.year() + extra_years;
+    add_months(vertragsbeginn, kuendigungsfrist_monate)
+}
+
+/// Add `months` calendar months to `from`, clamping the day to the target month.
+///
+/// Contract terms are expressed in months, and a term of 1, 3 or 6 months is not
+/// expressible in whole years: `year + months / 12` truncated every such term to
+/// zero, so an auto-renewal renewed a contract to the day it already ended.
+#[must_use]
+pub fn add_months(from: Date, months: i32) -> Date {
+    // Year carries over when the month index passes 12.
+    let total_months = from.month() as i32 + months;
+    let extra_years = (total_months - 1).div_euclid(12);
+    let new_month = ((total_months - 1).rem_euclid(12) + 1) as u8;
+    let new_year = from.year() + extra_years;
     // Clamp day to last day of target month (e.g. Jan 31 + 1M = Feb 28).
     let days_in_month = days_in_month(new_year, new_month);
-    let day = vertragsbeginn.day().min(days_in_month);
+    let day = from.day().min(days_in_month);
     time::Date::from_calendar_date(
         new_year,
         time::Month::try_from(new_month).unwrap_or(time::Month::January),
         day,
     )
-    .unwrap_or(vertragsbeginn)
+    .unwrap_or(from)
 }
 
 fn days_in_month(year: i32, month: u8) -> u8 {
@@ -682,6 +692,11 @@ pub struct BillingCandidateRow {
 }
 
 /// All active supply components eligible for scheduled billing (§40b EnWG).
+///
+/// A component is in supply from the moment the MaKo Lieferbeginn is confirmed.
+/// `BESTAETIGT` is that state — nothing ever promotes it to `AKTIV` — so
+/// requiring `AKTIV` alone left the §40b billing feed permanently empty. Every
+/// other reader already accepts both.
 pub async fn list_billing_candidates(
     pool: &PgPool,
     tenant: &str,
@@ -694,7 +709,7 @@ pub async fn list_billing_candidates(
          JOIN vertragskomponenten k ON k.vertrag_id = v.id
          WHERE v.tenant = $1
            AND v.status IN ('TEILERFUELLUNG','AKTIV','GEKÜNDIGT')
-           AND k.status = 'AKTIV'
+           AND k.status IN ('AKTIV','BESTAETIGT')
            AND k.malo_id IS NOT NULL
          ORDER BY k.malo_id",
     )
@@ -724,9 +739,13 @@ pub async fn fetch_vertrag_by_malo(
     let Some(vertrag) = vertrag else {
         return Ok(None);
     };
+    // The same status filter as the contract lookup. Without it a later
+    // ABGELEHNT/STORNIERT retry row for the same MaLo won the ORDER BY and fed
+    // billingd the §40 facts of a component that never went into supply.
     let komponente: Option<VertragskomponenteRow> = sqlx::query_as(
         "SELECT * FROM vertragskomponenten
          WHERE vertrag_id=$1 AND malo_id=$2
+           AND status IN ('AKTIV','BESTAETIGT')
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(vertrag.id)
@@ -821,17 +840,35 @@ pub async fn list_aktive_malo_ids(
     Ok(rows.into_iter().map(|(m,)| m).collect())
 }
 
+/// Statuses a Versorgungsvertrag never leaves.
+///
+/// A late or replayed MaKo outcome re-derives the contract status from its
+/// components, and that derivation knows nothing about a Kündigung or a
+/// Stornierung — it happily returned AKTIV for a contract that had already
+/// ended. Terminal states are therefore not overwritten.
+const VERTRAG_TERMINAL: &str = "('GEKÜNDIGT','ABGELAUFEN','STORNIERT')";
+
+/// Statuses a Vertragskomponente never leaves.
+///
+/// A replayed rejection flipped an already-confirmed or already-ended component
+/// to ABGELEHNT, which took it out of the billing feed retroactively.
+const KOMPONENTE_TERMINAL: &str = "('BEENDET','ABGELEHNT','STORNIERT')";
+
 pub async fn update_vertrag_status(
     executor: impl sqlx::PgExecutor<'_>,
     id: Uuid,
     tenant: &str,
     status: &str,
 ) -> Result<()> {
-    sqlx::query(
+    // A terminal contract may still progress between terminal states
+    // (GEKÜNDIGT → ABGELAUFEN once every component has ended), but it never
+    // returns to a live one.
+    sqlx::query(&format!(
         "UPDATE versorgungsvertraege SET status=$1, updated_at=now(),
          completed_at = CASE WHEN $1 IN ('ABGELAUFEN','STORNIERT') THEN now() ELSE completed_at END
-         WHERE id=$2 AND tenant=$3",
-    )
+         WHERE id=$2 AND tenant=$3
+           AND (status NOT IN {VERTRAG_TERMINAL} OR $1 IN {VERTRAG_TERMINAL})"
+    ))
     .bind(status)
     .bind(id)
     .bind(tenant)
@@ -849,19 +886,40 @@ pub async fn update_komponente_status(
     erc: Option<&str>,
     reason: Option<&str>,
 ) -> Result<()> {
-    sqlx::query(
+    // The rejection detail is written only by a rejection. Overwriting it with
+    // NULL on every later update erased the ERC code the customer was told.
+    sqlx::query(&format!(
         "UPDATE vertragskomponenten SET status=$1, updated_at=now(),
          mako_process_id=COALESCE($2,mako_process_id),
          malo_id=COALESCE($3,malo_id),
-         abgelehnt_erc=$4, abgelehnt_reason=$5
-         WHERE id=$6",
-    )
+         abgelehnt_erc=COALESCE($4,abgelehnt_erc),
+         abgelehnt_reason=COALESCE($5,abgelehnt_reason)
+         WHERE id=$6 AND status NOT IN {KOMPONENTE_TERMINAL}"
+    ))
     .bind(status)
     .bind(mako_process_id)
     .bind(malo_id)
     .bind(erc)
     .bind(reason)
     .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// End a component's supply on `lieferende`.
+///
+/// The date is what ties the component to the Kündigung that ended it: a
+/// Widerruf can then revert exactly the components whose supply had not started
+/// running out yet, instead of every BEENDET component the contract ever had.
+pub async fn end_komponente(pool: &PgPool, id: Uuid, lieferende: Date) -> Result<()> {
+    sqlx::query(&format!(
+        "UPDATE vertragskomponenten
+         SET status='BEENDET', lieferende=$2, updated_at=now()
+         WHERE id=$1 AND status NOT IN {KOMPONENTE_TERMINAL}"
+    ))
+    .bind(id)
+    .bind(lieferende)
     .execute(pool)
     .await?;
     Ok(())
@@ -983,64 +1041,6 @@ pub async fn list_rahmenvertraege_by_kunde(
     .bind(tenant)
     .fetch_all(pool)
     .await?)
-}
-
-/// Extract OIDC `sub` from a JWT Bearer token payload (no signature verification).
-/// Decodes the middle base64url segment as JSON.
-pub fn extract_sub_from_bearer(authorization: &str) -> Option<String> {
-    let jwt = authorization.strip_prefix("Bearer ")?;
-    let payload_b64 = jwt.split('.').nth(1)?;
-    // base64url → standard base64
-    let standard: String = payload_b64
-        .chars()
-        .map(|c| match c {
-            '-' => '+',
-            '_' => '/',
-            c => c,
-        })
-        .collect();
-    // Add padding
-    let pad = (4 - standard.len() % 4) % 4;
-    let padded = format!("{}{}", standard, "=".repeat(pad));
-    // Decode
-    let bytes = decode_base64(&padded)?;
-    let claims: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    claims.get("sub")?.as_str().map(str::to_owned)
-}
-
-/// Minimal base64 decoder (no external dep).
-fn decode_base64(s: &str) -> Option<Vec<u8>> {
-    let lookup = |c: u8| -> Option<u8> {
-        match c {
-            b'A'..=b'Z' => Some(c - b'A'),
-            b'a'..=b'z' => Some(c - b'a' + 26),
-            b'0'..=b'9' => Some(c - b'0' + 52),
-            b'+' => Some(62),
-            b'/' => Some(63),
-            b'=' => Some(0),
-            _ => None,
-        }
-    };
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
-    let mut i = 0;
-    while i + 3 < bytes.len() {
-        let (a, b, c, d) = (
-            lookup(bytes[i])?,
-            lookup(bytes[i + 1])?,
-            lookup(bytes[i + 2])?,
-            lookup(bytes[i + 3])?,
-        );
-        out.push((a << 2) | (b >> 4));
-        if bytes[i + 2] != b'=' {
-            out.push((b << 4) | (c >> 2));
-        }
-        if bytes[i + 3] != b'=' {
-            out.push((c << 6) | d);
-        }
-        i += 4;
-    }
-    Some(out)
 }
 
 // \u2500\u2500 Pending Tarifwechsel (B13 \u2014 \u00a741 Abs. 3 EnWG Preisanpassungsbenachrichtigung) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -1594,11 +1594,15 @@ pub async fn widerruf_kuendigung(
         );
     }
 
-    // Revert components from BEENDET → AKTIV
+    // Revert only the components this Kündigung ended — those whose supply has
+    // not run out yet. Reverting every BEENDET component put a component that
+    // had ended for its own reasons, possibly years earlier, back into supply
+    // and nulled the lieferende that said when it left.
     sqlx::query(
         "UPDATE vertragskomponenten
          SET status = 'AKTIV', lieferende = NULL, updated_at = now()
-         WHERE vertrag_id = $1 AND status = 'BEENDET'",
+         WHERE vertrag_id = $1 AND status = 'BEENDET'
+           AND (lieferende IS NULL OR lieferende > CURRENT_DATE)",
     )
     .bind(id)
     .execute(&mut *conn)
@@ -1802,7 +1806,11 @@ pub struct AutoRenewalRow {
 }
 
 /// Find AKTIV vertraege with `auto_renewal = TRUE` whose `vertragsende` falls
-/// within the next `look_ahead_days` days (for 30-day advance customer notice).
+/// within the next `look_ahead_days` days and whose notice has not gone out yet.
+///
+/// The notice is tracked against the term it announces
+/// (`autoerneuerung_notif_fuer`), so the daily loop stops re-sending it and the
+/// next term's notice is still due.
 pub async fn find_auto_renewal_due(
     pool: &PgPool,
     tenant: &str,
@@ -1817,13 +1825,78 @@ pub async fn find_auto_renewal_due(
             AND status = 'AKTIV'
             AND auto_renewal = TRUE
             AND vertragsende IS NOT NULL
-            AND vertragsende BETWEEN $2 AND $3",
+            AND vertragsende BETWEEN $2 AND $3
+            AND autoerneuerung_notif_fuer IS DISTINCT FROM vertragsende",
     )
     .bind(tenant)
     .bind(today)
     .bind(cutoff)
     .fetch_all(pool)
     .await?)
+}
+
+/// Record that the 30-day Ankündigung for the term ending `vertragsende` went out.
+pub async fn mark_auto_renewal_notified(
+    pool: &PgPool,
+    id: Uuid,
+    vertragsende: Date,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE versorgungsvertraege \
+         SET autoerneuerung_notif_fuer = $2, updated_at = now() \
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(vertragsende)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Verträge whose term has ended and that renew automatically.
+///
+/// `vertragsende <= today` rather than `= today`: the worker runs once a day, so
+/// a single missed run otherwise skipped the renewal permanently and left the
+/// contract expired.
+pub async fn find_auto_renewal_overdue(
+    pool: &PgPool,
+    tenant: &str,
+    today: Date,
+) -> anyhow::Result<Vec<AutoRenewalRow>> {
+    Ok(sqlx::query_as::<_, AutoRenewalRow>(
+        r"SELECT id, kunden_id, vertrags_nr, vertragsende, renewal_monate, bundle_code
+          FROM versorgungsvertraege
+          WHERE tenant = $1
+            AND status = 'AKTIV'
+            AND auto_renewal = TRUE
+            AND vertragsende IS NOT NULL
+            AND vertragsende <= $2",
+    )
+    .bind(tenant)
+    .bind(today)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// The end date an overdue term renews to.
+///
+/// Renewal runs from the term that ended, not from today, and repeats until the
+/// contract is in force again — a contract several terms overdue is caught up in
+/// one pass rather than one term per day.
+#[must_use]
+pub fn renewed_vertragsende(vertragsende: Date, renewal_monate: i32, today: Date) -> Option<Date> {
+    if renewal_monate <= 0 {
+        return None;
+    }
+    let mut end = vertragsende;
+    // 12 terms is more catch-up than any real outage needs, and bounds the loop.
+    for _ in 0..12 {
+        end = add_months(end, renewal_monate);
+        if end > today {
+            return Some(end);
+        }
+    }
+    Some(end)
 }
 
 /// Apply auto-renewal: extend vertragsende by renewal_monate months.

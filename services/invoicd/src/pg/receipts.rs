@@ -16,6 +16,18 @@ use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+/// Direction value for received INVOICs (NB/MSB → LF). Must stay in the
+/// `invoic_receipts.direction` CHECK list (migrations/0001_schema.sql).
+pub const DIRECTION_INBOUND: &str = "inbound";
+/// Direction value for selbstausgestellte INVOICs (LF → NB, PID 31006).
+pub const DIRECTION_OUTBOUND: &str = "outbound";
+
+/// `erp_attempts` value at which an ERP delivery is terminally dead-lettered.
+/// [`fetch_erp_pending`] excludes rows that have reached it, so it is the single
+/// definition of "unselectable" — `erp_next_attempt_at` is `NOT NULL` and must
+/// never be used as the sentinel.
+pub const DEAD_LETTER_ATTEMPTS: i16 = 5;
+
 /// A single row in `invoic_receipts`.
 #[derive(Debug)]
 pub struct ReceiptRow {
@@ -23,7 +35,7 @@ pub struct ReceiptRow {
     pub process_id: Uuid,
     /// BDEW PID (31001–31009, 31011).
     pub pid: i16,
-    /// Message flow direction: `"Inbound"` (NB/MSB → LF) or `"Outbound"` (LF selbstausgestellt).
+    /// Message flow direction: [`DIRECTION_INBOUND`] or [`DIRECTION_OUTBOUND`].
     pub direction: String,
     /// GLN of the counterparty that issued the invoice.
     /// - Inbound: the NB or MSB GLN.
@@ -166,13 +178,17 @@ pub async fn record_erp_failure(
     process_id: Uuid,
     attempts: i16,
 ) -> Result<(), sqlx::Error> {
-    // Backoff intervals in seconds: 30, 300, 1800, 7200, ∞ (dead-letter)
+    // Backoff intervals in seconds: 30, 300, 1800, 7200, then dead-lettered.
+    // The terminal attempt keeps the last backoff rather than an "infinite" one:
+    // `now() + (i64::MAX/2 * INTERVAL '1 second')` is an `interval out of range`
+    // error, which aborted the very UPDATE that raises `erp_attempts` to the
+    // dead-letter mark — so the row stayed at 4 and was retried forever.
+    // `erp_attempts` alone makes it unselectable (see [`DEAD_LETTER_ATTEMPTS`]).
     let delay_secs: i64 = match attempts {
         0 => 30,
         1 => 300,
         2 => 1_800,
-        3 => 7_200,
-        _ => i64::MAX / 2, // effectively dead-lettered; never re-queried (erp_attempts >= 5)
+        _ => 7_200,
     };
     sqlx::query(
         r#"UPDATE invoic_receipts
@@ -199,11 +215,11 @@ pub async fn record_erp_failure(
 pub async fn dead_letter_erp(pool: &PgPool, process_id: Uuid) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"UPDATE invoic_receipts
-           SET erp_attempts = 5,
-               erp_next_attempt_at = NULL
+           SET erp_attempts = $2
            WHERE process_id = $1"#,
     )
     .bind(process_id)
+    .bind(DEAD_LETTER_ATTEMPTS)
     .execute(pool)
     .await?;
     Ok(())
@@ -250,11 +266,13 @@ pub async fn fetch_erp_pending(
         ),
     >(
         r#"SELECT process_id, pid, direction, sender_mp_id, outcome,
-                  pay_by, jsonb_array_length(findings), erp_attempts
+                  -- ::bigint: jsonb_array_length returns int4, which does not
+                  -- decode into the i64 below — the claim failed on every row.
+                  pay_by, jsonb_array_length(findings)::bigint, erp_attempts
            FROM invoic_receipts
            WHERE tenant = $1
              AND erp_notified_at IS NULL
-             AND erp_attempts < 5
+             AND erp_attempts < $3
              AND erp_next_attempt_at <= now()
            ORDER BY erp_next_attempt_at
            LIMIT $2
@@ -262,6 +280,7 @@ pub async fn fetch_erp_pending(
     )
     .bind(tenant)
     .bind(limit)
+    .bind(DEAD_LETTER_ATTEMPTS)
     .fetch_all(pool)
     .await?;
 

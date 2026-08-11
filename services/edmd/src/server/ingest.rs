@@ -79,6 +79,14 @@ pub struct DirectPushRequest {
     pub brennwert_kwh_per_m3: Option<Decimal>,
     /// Zustandszahl (volume correction factor) — default 1.0 when absent.
     pub zustandszahl: Option<Decimal>,
+
+    /// MSCONS correction version this batch is delivered under (≥ 14 digits).
+    ///
+    /// Supply it and resolution follows the version the operator assigned, so a
+    /// replayed original cannot supersede a correction that landed after it.
+    /// Omit it and arrival order decides — see `MeterRead::mscons_version`.
+    #[serde(default)]
+    pub mscons_version: Option<u128>,
 }
 
 pub(crate) fn default_source() -> String {
@@ -450,6 +458,7 @@ pub(crate) async fn post_direct_reads_inner(
             sender_mp_id: req.sender_mp_id.clone(),
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: Some(OffsetDateTime::now_utc()),
+            mscons_version: req.mscons_version,
         });
     }
 
@@ -639,6 +648,7 @@ mod ingest_contract_tests {
                     sender_mp_id: None,
                     allocation_version: "INITIAL".to_owned(),
                     valid_from_tx: None,
+                    mscons_version: None,
                 }
             })
             .collect()
@@ -975,6 +985,10 @@ pub struct BulkReadRequest {
     pub source: Option<String>,
     /// The interval readings.
     pub reads: Vec<BulkReadEntry>,
+    /// MSCONS correction version this batch is delivered under (≥ 14 digits).
+    /// See [`DirectPushRequest::mscons_version`].
+    #[serde(default)]
+    pub mscons_version: Option<u128>,
 }
 
 /// One interval in a bulk read batch.
@@ -1167,6 +1181,7 @@ pub async fn post_bulk_reads(
             sender_mp_id: None,
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: Some(OffsetDateTime::now_utc()),
+            mscons_version: req.mscons_version,
         });
     }
 

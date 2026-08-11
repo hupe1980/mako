@@ -269,17 +269,25 @@ where
     };
 
     // Extract fields for the makod MaLo cache push from the canonical payload.
-    let nb_mp_id = req
-        .rollenzuordnung
-        .iter()
-        .find(|z| z.zuordnungstyp == "NB" || z.zuordnungstyp == "GNB")
-        .map(|z| z.rollencodenummer.clone())
-        .unwrap_or_else(|| state.tenant_gln.clone());
-    let msb_mp_id = req
-        .rollenzuordnung
-        .iter()
-        .find(|z| z.zuordnungstyp == "MSB" || z.zuordnungstyp == "GMSB")
-        .map(|z| z.rollencodenummer.clone());
+    //
+    // makod resolves outbound EDIFACT recipients from this cache, so the role
+    // codes must be the ones valid *today* — an ERP PUT carrying the full role
+    // history would otherwise push an expired NB/MSB GLN. Same half-open
+    // `[valid_from, valid_to)` window as the SQL read path; latest start wins.
+    let today = today_berlin();
+    let current_role = |typ: &str, generic: &str| {
+        req.rollenzuordnung
+            .iter()
+            .filter(|z| {
+                (z.zuordnungstyp == typ || z.zuordnungstyp == generic)
+                    && z.valid_from <= today
+                    && z.valid_to.is_none_or(|to| to > today)
+            })
+            .max_by_key(|z| z.valid_from)
+            .map(|z| z.rollencodenummer.clone())
+    };
+    let nb_mp_id = current_role("NB", "GNB").unwrap_or_else(|| state.tenant_gln.clone());
+    let msb_mp_id = current_role("MSB", "GMSB");
     let bilanzierungsgebiet = canonical_data
         .get("bilanzierungsgebiet")
         .and_then(|v| v.as_str())
@@ -292,78 +300,92 @@ where
     let sparte_str = req.sparte.to_string();
     let malo_id_str = malo_id.to_string();
 
-    match state
-        .malo_repo
-        .upsert(
-            &malo_id,
-            req.sparte,
-            canonical_data,
-            req.rollenzuordnung,
-            if_match,
-            &req.bo4e_version,
+    // Persist-before-dispatch: the master record and the de.markt.malo.updated
+    // outbox row commit in ONE transaction, so a crash can never leave the
+    // record changed without the event.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            tracing::error!(error = %e, "put_malo: begin failed");
+            return MdmError::Internal(e.to_string()).into_response();
+        }
+    };
+
+    let version = match crate::pg::PgMaloRepository::upsert_tx(
+        &mut tx,
+        &malo_id,
+        req.sparte,
+        canonical_data,
+        req.rollenzuordnung,
+        if_match,
+        &req.bo4e_version,
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => return e.into_response(),
+    };
+
+    // Emit de.markt.malo.updated so ERP subscribers and obsd get notified.
+    let evt = MarktEvent::new(
+        &state.tenant_gln,
+        mako_events::markt::MALO_UPDATED,
+        malo_id_str.clone(),
+        serde_json::json!({ "version": version }),
+    )
+    .with_extensions(EventExtensions {
+        marktmaloid: Some(malo_id_str.clone()),
+        ..Default::default()
+    });
+    if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt, &state.notify).await {
+        tracing::error!(error = %e, "malo: durable enqueue failed");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "event enqueue failed"})),
         )
+            .into_response();
+    }
+    if let Err(e) = tx.commit().await {
+        tracing::error!(error = %e, "put_malo: commit failed");
+        return MdmError::Internal(e.to_string()).into_response();
+    }
+
+    // Push to makod's MaLo cache so the engine can resolve NB/MSB GLNs for
+    // outbound EDIFACT without the ERP having to call makod directly.
+    // Best-effort: a failure here is logged but does NOT fail the API call —
+    // the master record is already durably stored in marktd's PostgreSQL.
+    let cache_record = mako_markt::makod_client::MaloIdentResultPositive {
+        malo_id: malo_id_str.clone(),
+        nb_mp_id,
+        msb_mp_id,
+        sender_market_partner_id: state.tenant_gln.clone(),
+        bilanzierungsgebiet,
+        netzgebiet,
+        sparte: sparte_str,
+    };
+    if let Err(e) = state
+        .makod_client
+        .put_malo(&cache_record.malo_id, &cache_record)
         .await
     {
-        Ok(version) => {
-            // Push to makod's MaLo cache so the engine can resolve NB/MSB GLNs
-            // for outbound EDIFACT without the ERP having to call makod directly.
-            // Best-effort: a failure here is logged but does NOT fail the API call —
-            // the master record is already durably stored in marktd's PostgreSQL.
-            let cache_record = mako_markt::makod_client::MaloIdentResultPositive {
-                malo_id: malo_id_str.clone(),
-                nb_mp_id,
-                msb_mp_id,
-                sender_market_partner_id: state.tenant_gln.clone(),
-                bilanzierungsgebiet,
-                netzgebiet,
-                sparte: sparte_str,
-            };
-            if let Err(e) = state
-                .makod_client
-                .put_malo(&cache_record.malo_id, &cache_record)
-                .await
-            {
-                tracing::warn!(
-                    malo_id = %malo_id,
-                    error   = %e,
-                    "put_malo: makod cache push failed (non-fatal — marktd record saved)",
-                );
-            }
-
-            // Emit de.markt.malo.updated so ERP subscribers and obsd get notified.
-            let evt = MarktEvent::new(
-                &state.tenant_gln,
-                mako_events::markt::MALO_UPDATED,
-                malo_id_str,
-                serde_json::json!({ "version": version }),
-            )
-            .with_extensions(EventExtensions {
-                marktmaloid: Some(malo_id.to_string()),
-                ..Default::default()
-            });
-            if let Err(e) = crate::outbox::enqueue(&pool, &evt, &state.notify).await {
-                tracing::error!(error = %e, "malo: durable enqueue failed");
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": "event enqueue failed"})),
-                )
-                    .into_response();
-            }
-
-            let status = if exists {
-                StatusCode::OK
-            } else {
-                StatusCode::CREATED
-            };
-            (
-                status,
-                [(axum::http::header::ETAG, etag(version))],
-                Json(serde_json::json!({ "version": version })),
-            )
-                .into_response()
-        }
-        Err(e) => e.into_response(),
+        tracing::warn!(
+            malo_id = %malo_id,
+            error   = %e,
+            "put_malo: makod cache push failed (non-fatal — marktd record saved)",
+        );
     }
+
+    let status = if exists {
+        StatusCode::OK
+    } else {
+        StatusCode::CREATED
+    };
+    (
+        status,
+        [(axum::http::header::ETAG, etag(version))],
+        Json(serde_json::json!({ "version": version })),
+    )
+        .into_response()
 }
 
 /// `GET /api/v1/malo/:id`

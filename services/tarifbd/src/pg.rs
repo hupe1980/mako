@@ -105,7 +105,8 @@ pub async fn upsert_product(
                dyn_source, valid_from, valid_to, data, bo4e_version, product_status,
                energiemix, oekolabel, tenant, updated_at)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now())
-          ON CONFLICT (lf_mp_id, product_code, valid_from) DO UPDATE
+          ON CONFLICT (tenant, lf_mp_id, product_code, (COALESCE(valid_from, DATE '0001-01-01')))
+          DO UPDATE
           SET category      = EXCLUDED.category,
               name          = EXCLUDED.name,
               sparte        = EXCLUDED.sparte,
@@ -119,6 +120,7 @@ pub async fn upsert_product(
               energiemix    = COALESCE(EXCLUDED.energiemix, products.energiemix),
               oekolabel     = COALESCE(EXCLUDED.oekolabel, products.oekolabel),
               updated_at    = now()
+          WHERE products.tenant = EXCLUDED.tenant
           RETURNING id",
     )
     .bind(lf_mp_id)
@@ -144,19 +146,28 @@ pub async fn upsert_product(
     Ok(row.try_get("id")?)
 }
 
+/// The product version in force at `as_of`.
+///
+/// `as_of` defaults to today in Berlin. Without the filter the highest
+/// `valid_from` won outright, so a price version dated next quarter became the
+/// current one the moment it was staged — and a retroactive billing run read
+/// today's version instead of the one that was valid in the period it bills.
 pub async fn fetch_product(
     pool: &PgPool,
     lf_mp_id: &str,
     tenant: &str,
     product_code: &str,
+    as_of: Option<Date>,
 ) -> anyhow::Result<Option<ProductRow>> {
     sqlx::query_as::<_, ProductRow>(
         "SELECT * FROM products WHERE lf_mp_id = $1 AND product_code = $2 AND tenant = $3
+           AND (valid_from IS NULL OR valid_from <= $4)
          ORDER BY valid_from DESC NULLS LAST LIMIT 1",
     )
     .bind(lf_mp_id)
     .bind(product_code)
     .bind(tenant)
+    .bind(as_of.unwrap_or_else(berlin_today))
     .fetch_optional(pool)
     .await
     .context("fetch product")
@@ -177,7 +188,7 @@ pub async fn soft_delete_product(
     tenant: &str,
     product_code: &str,
 ) -> anyhow::Result<bool> {
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = berlin_today();
     let res = sqlx::query(
         r"UPDATE products
           SET valid_to = $3, updated_at = now()
@@ -300,7 +311,7 @@ pub async fn upsert_energiemix(
     Ok(())
 }
 
-/// Fetch the `Energiemix` + `Oekolabel` for a product.
+/// Fetch the `Energiemix` + `Oekolabel` of the product version in force today.
 pub async fn fetch_energiemix(
     pool: &PgPool,
     lf_mp_id: &str,
@@ -311,12 +322,14 @@ pub async fn fetch_energiemix(
         r"SELECT lf_mp_id, product_code, energiemix, oekolabel, updated_at
           FROM products
           WHERE lf_mp_id = $1 AND product_code = $2 AND tenant = $3
+            AND (valid_from IS NULL OR valid_from <= $4)
           ORDER BY valid_from DESC NULLS LAST
           LIMIT 1",
     )
     .bind(lf_mp_id)
     .bind(product_code)
     .bind(tenant)
+    .bind(berlin_today())
     .fetch_optional(pool)
     .await
     .context("fetch energiemix")?;
@@ -412,11 +425,14 @@ pub struct CustomerProductRow {
     pub product: Option<ProductRow>,
 }
 
+/// The customer's current assignment plus the product version in force at
+/// `as_of` (default: today in Berlin).
 pub async fn get_customer_product(
     pool: &PgPool,
     malo_id: &str,
     lf_mp_id: &str,
     tenant: &str,
+    as_of: Option<Date>,
 ) -> anyhow::Result<Option<CustomerProductRow>> {
     let row = sqlx::query(
         r"SELECT cp.malo_id, cp.lf_mp_id, cp.product_code, cp.assigned_from, cp.assigned_to
@@ -433,7 +449,7 @@ pub async fn get_customer_product(
 
     if let Some(r) = row {
         let product_code: String = r.try_get("product_code")?;
-        let product = fetch_product(pool, lf_mp_id, tenant, &product_code).await?;
+        let product = fetch_product(pool, lf_mp_id, tenant, &product_code, as_of).await?;
         Ok(Some(CustomerProductRow {
             malo_id: r.try_get("malo_id")?,
             lf_mp_id: r.try_get("lf_mp_id")?,
@@ -570,6 +586,19 @@ pub struct EpexPricePoint {
     pub avg_ct_kwh: Decimal,
 }
 
+/// Today's civil date in Europe/Berlin.
+///
+/// Every deadline in this service is a German civil date. Reading the UTC date
+/// makes the day roll over an hour early in summer, which expires an Angebot on
+/// its `gueltig_bis` evening and switches a price version a day early.
+#[must_use]
+pub fn berlin_today() -> Date {
+    use time_tz::OffsetDateTimeExt as _;
+    OffsetDateTime::now_utc()
+        .to_timezone(time_tz::timezones::db::europe::BERLIN)
+        .date()
+}
+
 /// UTC instant of Europe/Berlin local midnight for `date`.
 ///
 /// Midnight never falls in a DST gap/overlap (transitions are at 02:00/03:00),
@@ -688,8 +717,11 @@ pub async fn monthly_epex_average(
     year: i32,
     month: u8,
 ) -> anyhow::Result<Option<Decimal>> {
+    // Weighted by MTU length: a month that mixes hourly and quarter-hourly rows
+    // (the SDAC 15-min go-live falls inside one) skews a plain AVG toward
+    // whichever resolution has more rows, not more energy.
     let row = sqlx::query(
-        r"SELECT AVG(avg_ct_kwh) as avg
+        r"SELECT SUM(avg_ct_kwh * mtu_minutes) / NULLIF(SUM(mtu_minutes), 0) AS avg
           FROM epex_prices
           WHERE EXTRACT(YEAR  FROM price_date) = $1
             AND EXTRACT(MONTH FROM price_date) = $2",
@@ -1123,7 +1155,7 @@ pub async fn accept_angebot(
         .await?
         .ok_or_else(|| anyhow::anyhow!("Angebot {id} not found"))?;
 
-    let today = time::OffsetDateTime::now_utc().date();
+    let today = berlin_today();
     if angebot.gueltig_bis < today {
         // Auto-expire
         sqlx::query("UPDATE angebote SET status='ABGELAUFEN', updated_at=now() WHERE id=$1")
@@ -1152,6 +1184,9 @@ pub async fn accept_angebot(
         );
     }
 
+    // The status was read on a separate statement, so a decline or an expiry
+    // landing in between was overwritten and a terminal ABGELEHNT/ABGELAUFEN
+    // became ANGENOMMEN. The state the read established is re-asserted here.
     let row = sqlx::query_as::<_, AngebotRow>(
         r"UPDATE angebote
           SET status = 'ANGENOMMEN',
@@ -1159,16 +1194,22 @@ pub async fn accept_angebot(
               accepted_at = now(),
               updated_at  = now()
           WHERE id = $1 AND tenant = $2
+            AND status IN ('ANGELEGT', 'VERSANDT')
           RETURNING *",
     )
     .bind(id)
     .bind(tenant)
     .bind(gewaehlte_variante)
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await
     .context("accept_angebot")?;
 
-    Ok(row)
+    // The handler maps any error here to 409, which is what a lost race is.
+    row.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Angebot {id} left its acceptable state concurrently — it was declined or expired"
+        )
+    })
 }
 
 /// Transition Angebot to ABGELEHNT.
@@ -1236,8 +1277,9 @@ pub async fn expire_stale_angebote(pool: &PgPool) -> anyhow::Result<u64> {
         r"UPDATE angebote
           SET status = 'ABGELAUFEN', updated_at = now()
           WHERE status IN ('ANGELEGT', 'VERSANDT')
-            AND gueltig_bis < CURRENT_DATE",
+            AND gueltig_bis < $1",
     )
+    .bind(berlin_today())
     .execute(pool)
     .await
     .context("expire_stale_angebote")?;
@@ -1246,19 +1288,24 @@ pub async fn expire_stale_angebote(pool: &PgPool) -> anyhow::Result<u64> {
 
 /// Generate the next Angebotsnummer in sequence.
 /// Format: `ANG-{YYYY}-{6-digit-seq}` — e.g. `ANG-2026-000001`.
+///
+/// Counted in a per-(tenant, year) row rather than as `COUNT(*) + 1`: two
+/// concurrent quotations both read the same count and then collided on the
+/// `angebotsnummer` unique constraint, so one of them simply failed.
 pub async fn next_angebotsnummer(pool: &PgPool, tenant: &str) -> anyhow::Result<String> {
-    let year = time::OffsetDateTime::now_utc().year();
-    let row = sqlx::query(
-        r"SELECT COUNT(*)+1 AS seq FROM angebote
-          WHERE tenant = $1
-            AND extract(year FROM created_at) = $2",
+    let year = berlin_today().year();
+    let seq: i64 = sqlx::query_scalar(
+        r"INSERT INTO angebot_sequenzen (tenant, jahr, letzte_nummer)
+          VALUES ($1, $2, 1)
+          ON CONFLICT (tenant, jahr) DO UPDATE
+          SET letzte_nummer = angebot_sequenzen.letzte_nummer + 1
+          RETURNING letzte_nummer",
     )
     .bind(tenant)
     .bind(year)
     .fetch_one(pool)
     .await
     .context("next_angebotsnummer")?;
-    let seq: i64 = row.try_get("seq").unwrap_or(1);
     Ok(format!("ANG-{year}-{seq:06}"))
 }
 

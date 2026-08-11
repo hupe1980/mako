@@ -454,7 +454,7 @@ pub async fn get_product(
     Extension(pool): Extension<PgPool>,
     Path((lf_mp_id, product_code)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    match fetch_product(&pool, &lf_mp_id, claims.tenant(), &product_code).await {
+    match fetch_product(&pool, &lf_mp_id, claims.tenant(), &product_code, None).await {
         Ok(Some(row)) => Json(row).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -530,7 +530,7 @@ pub async fn get_customer_product_handler(
     Query(q): Query<CustomerProductQuery>,
 ) -> impl IntoResponse {
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
-    match get_customer_product(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
+    match get_customer_product(&pool, &malo_id, lf_mp_id, &cfg.tenant, None).await {
         Ok(Some(row)) => Json(row).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -1166,7 +1166,7 @@ pub async fn post_angebot(
     let mut total_netto = Decimal::ZERO;
 
     for pos in &req.positionen {
-        let product = fetch_product(&pool, lf_mp_id, &cfg.tenant, &pos.product_code)
+        let product = fetch_product(&pool, lf_mp_id, &cfg.tenant, &pos.product_code, None)
             .await
             .ok()
             .flatten();
@@ -1446,7 +1446,7 @@ pub async fn get_angebot_comparison(
         std::collections::HashMap::new();
     for pos in &positionen {
         if !product_cache.contains_key(&pos.product_code) {
-            let p = fetch_product(&pool, lf_mp_id, &cfg.tenant, &pos.product_code)
+            let p = fetch_product(&pool, lf_mp_id, &cfg.tenant, &pos.product_code, None)
                 .await
                 .unwrap_or(None);
             product_cache.insert(pos.product_code.clone(), p);
@@ -1455,7 +1455,7 @@ pub async fn get_angebot_comparison(
             if let Some(ref overrides) = v.product_codes_override {
                 for code in overrides.iter().flatten() {
                     if !product_cache.contains_key(code) {
-                        let p = fetch_product(&pool, lf_mp_id, &cfg.tenant, code)
+                        let p = fetch_product(&pool, lf_mp_id, &cfg.tenant, code, None)
                             .await
                             .unwrap_or(None);
                         product_cache.insert(code.clone(), p);
@@ -1775,7 +1775,7 @@ pub async fn put_angebot(
         let mut enriched: Vec<serde_json::Value> = Vec::new();
         let mut total_netto = rust_decimal::Decimal::ZERO;
         for pos in new_pos {
-            let product = fetch_product(&pool, lf_mp_id, &cfg.tenant, &pos.product_code)
+            let product = fetch_product(&pool, lf_mp_id, &cfg.tenant, &pos.product_code, None)
                 .await
                 .ok()
                 .flatten();

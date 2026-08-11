@@ -511,10 +511,107 @@ mod rest {
         }
     }
 
-    /// Approve a LFA E_0624 approval queue entry.
+    /// Default `makod` command for an entry that carries no pre-resolved one.
     ///
-    /// This dispatches `gpke.nb-lieferende.bestaetigen` (PID 55008 Strom) to `makod`
-    /// AND marks the entry as `Approved` in the database.
+    /// Strom: `gpke.nb-lieferende.*` → PID 55008 (LF Zustimmung/Ablehnung Lieferende).
+    /// Gas 44022/44023: the operator decision is whether to initiate the
+    /// Stornierung at all, so only the approve side has a market message.
+    fn legacy_command(pid: u32, approve: bool) -> Option<&'static str> {
+        match (pid, approve) {
+            (44022 | 44023, true) => Some(mako_markt::commands::GELI_GAS_STORNIERUNG_INITIIEREN),
+            (44022 | 44023, false) => None,
+            (_, true) => Some(mako_markt::commands::GPKE_NB_LIEFERENDE_BESTAETIGEN),
+            (_, false) => Some(mako_markt::commands::GPKE_NB_LIEFERENDE_ABLEHNEN),
+        }
+    }
+
+    /// Claim a pending entry, dispatch its market command, release the claim on
+    /// failure.
+    ///
+    /// The claim comes **first**. Dispatching before the `status = 'Pending'`
+    /// guard let a terminal entry re-send its market command, and let operator A
+    /// approving while operator B rejected send both an einwilligung and an
+    /// ablehnen (different idempotency keys) while the DB recorded one decision.
+    async fn decide_queue_entry(
+        state: &ProcessdState,
+        pool: PgPool,
+        id_str: &str,
+        approve: bool,
+    ) -> axum::response::Response {
+        let Ok(id) = id_str.parse::<uuid::Uuid>() else {
+            return StatusCode::BAD_REQUEST.into_response();
+        };
+        let queue = PgApprovalQueue::new(pool);
+        let target = if approve {
+            crate::pg::approval::QueueStatus::Approved
+        } else {
+            crate::pg::approval::QueueStatus::Rejected
+        };
+
+        let entry = match queue.claim(id, &state.tenant, target).await {
+            Ok(Some(e)) => e,
+            // Absent or already decided — nothing to dispatch.
+            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+
+        let stored = if approve {
+            entry.approve_command.as_deref()
+        } else {
+            entry.reject_command.as_deref()
+        };
+        let Some(command) = stored.or_else(|| legacy_command(entry.pid as u32, approve)) else {
+            tracing::info!(%id, pid = entry.pid, approve, "processd: queue entry decided without a market message");
+            return StatusCode::NO_CONTENT.into_response();
+        };
+
+        let verb = if approve { "approve" } else { "reject" };
+        let cmd = mako_markt::makod_client::ForwardCommand {
+            marktrolle: entry.marktrolle.clone(),
+            command: command.to_owned(),
+            malo_id: entry.malo_id.clone(),
+            melo_id: None,
+            payload: if approve {
+                serde_json::json!({
+                    "process_id": entry.process_id,
+                    "approved_by": "operator",
+                })
+            } else {
+                serde_json::json!({
+                    "process_id": entry.process_id,
+                    "reason": entry.reason,
+                    "rejected_by": "operator",
+                })
+            },
+        };
+        if let Err(e) = state
+            .makod
+            .post_command(&format!("processd-lf-{verb}-{id}"), &cmd)
+            .await
+        {
+            tracing::warn!(
+                %id,
+                process_id = %entry.process_id,
+                error = %e,
+                "processd: makod dispatch failed for decided queue entry — releasing the claim"
+            );
+            // Back to Pending so the operator can retry; leaving it decided
+            // would record a decision the market never saw.
+            if let Err(e) = queue.unclaim(id, &state.tenant).await {
+                tracing::error!(%id, error = %e, "processd: failed to release the queue claim");
+            }
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("makod dispatch failed: {e}"),
+            )
+                .into_response();
+        }
+
+        tracing::info!(%id, process_id = %entry.process_id, command, "processd: queue entry {verb}d — command dispatched");
+        StatusCode::NO_CONTENT.into_response()
+    }
+
+    /// Approve an approval-queue entry: claim it, then dispatch its command.
     ///
     /// **Regulatory note:** The 45-min deadline applies from the original
     /// process.initiated event.  Operators must act before `expires_at`.
@@ -523,145 +620,16 @@ mod rest {
         Extension(pool): Extension<PgPool>,
         Path(id_str): Path<String>,
     ) -> impl IntoResponse {
-        let Ok(id) = id_str.parse::<uuid::Uuid>() else {
-            return StatusCode::BAD_REQUEST.into_response();
-        };
-        let queue = PgApprovalQueue::new(pool.clone());
-
-        // Fetch entry first to get process_id, pid, malo_id for dispatch.
-        let entry = match queue.find_by_id(id, &state.tenant).await {
-            Ok(Some(e)) => e,
-            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        };
-
-        // Determine the command name from PID.
-        // Strom: gpke.nb-lieferende.bestaetigen → PID 55008 (LF Zustimmung Lieferende)
-        // Gas stornierung 44022: LF initiates UTILMD G 44022 to GNB via geli.gas.stornierung.initiieren
-        // Gas stornierung 44023: GNB confirmed 44023 — this is an inbound response, not an ERP approval;
-        //   approval queue entries for 44023 indicate operator review of an automated accept.
-        let command = match entry.pid as u32 {
-            55008 => mako_markt::commands::GPKE_NB_LIEFERENDE_BESTAETIGEN,
-            44022 | 44023 => mako_markt::commands::GELI_GAS_STORNIERUNG_INITIIEREN,
-            _ => mako_markt::commands::GPKE_NB_LIEFERENDE_BESTAETIGEN,
-        };
-
-        // Dispatch einwilligung to makod — BEFORE marking as Approved.
-        // If dispatch fails, the entry stays Pending so the operator can retry.
-        let idempotency_key = format!("processd-lf-approve-{id}");
-        let cmd = mako_markt::makod_client::ForwardCommand {
-            marktrolle: None,
-            command: command.to_owned(),
-            malo_id: entry.malo_id.clone(),
-            melo_id: None,
-            payload: serde_json::json!({
-                "process_id": entry.process_id,
-                "approved_by": "operator",
-            }),
-        };
-        if let Err(e) = state.makod.post_command(&idempotency_key, &cmd).await {
-            tracing::warn!(
-                %id,
-                process_id = %entry.process_id,
-                error = %e,
-                "processd: failed to dispatch einwilligung for approved queue entry"
-            );
-            return (
-                StatusCode::BAD_GATEWAY,
-                format!("makod dispatch failed: {e}"),
-            )
-                .into_response();
-        }
-
-        // Mark as Approved in DB.
-        match queue.approve(id, &state.tenant).await {
-            Ok(true) => {
-                tracing::info!(%id, process_id = %entry.process_id, "processd: E_0624 approved — einwilligung dispatched");
-                StatusCode::NO_CONTENT.into_response()
-            }
-            Ok(false) => StatusCode::NOT_FOUND.into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        }
+        decide_queue_entry(&state, pool, &id_str, true).await
     }
 
-    /// Reject a LFA E_0624 approval queue entry.
-    ///
-    /// This dispatches `gpke.nb-lieferende.ablehnen` (PID 55009 Strom) to `makod`
-    /// AND marks the entry as `Rejected` in the database.
+    /// Reject an approval-queue entry: claim it, then dispatch its command.
     pub async fn reject_queue_entry(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
         Path(id_str): Path<String>,
     ) -> impl IntoResponse {
-        let Ok(id) = id_str.parse::<uuid::Uuid>() else {
-            return StatusCode::BAD_REQUEST.into_response();
-        };
-        let queue = PgApprovalQueue::new(pool.clone());
-
-        // Fetch entry first to get process_id, pid, malo_id for dispatch.
-        let entry = match queue.find_by_id(id, &state.tenant).await {
-            Ok(Some(e)) => e,
-            Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        };
-
-        // Determine the command name from PID.
-        // Strom: gpke.nb-lieferende.ablehnen → PID 55009 (LF Ablehnung Lieferende)
-        // Gas stornierung 44022/44023: reject means the operator declines to initiate stornierung.
-        //   Mark as Rejected in the queue without dispatching to makod.
-        let command = match entry.pid as u32 {
-            55008 => mako_markt::commands::GPKE_NB_LIEFERENDE_ABLEHNEN,
-            44022 | 44023 => {
-                // For Gas stornierung rejections, there is no inbound command to dispatch
-                // (the GNB was not queried). Mark as Rejected immediately.
-                return match queue.reject(id, &state.tenant).await {
-                    Ok(true) => {
-                        tracing::info!(%id, "processd: Gas stornierung approval rejected by operator");
-                        StatusCode::NO_CONTENT.into_response()
-                    }
-                    Ok(false) => StatusCode::NOT_FOUND.into_response(),
-                    Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-                };
-            }
-            _ => mako_markt::commands::GPKE_NB_LIEFERENDE_ABLEHNEN,
-        };
-
-        // Dispatch ablehnen to makod — BEFORE marking as Rejected.
-        let idempotency_key = format!("processd-lf-reject-{id}");
-        let cmd = mako_markt::makod_client::ForwardCommand {
-            marktrolle: None,
-            command: command.to_owned(),
-            malo_id: entry.malo_id.clone(),
-            melo_id: None,
-            payload: serde_json::json!({
-                "process_id": entry.process_id,
-                "reason": entry.reason,
-                "rejected_by": "operator",
-            }),
-        };
-        if let Err(e) = state.makod.post_command(&idempotency_key, &cmd).await {
-            tracing::warn!(
-                %id,
-                process_id = %entry.process_id,
-                error = %e,
-                "processd: failed to dispatch ablehnen for rejected queue entry"
-            );
-            return (
-                StatusCode::BAD_GATEWAY,
-                format!("makod dispatch failed: {e}"),
-            )
-                .into_response();
-        }
-
-        // Mark as Rejected in DB.
-        match queue.reject(id, &state.tenant).await {
-            Ok(true) => {
-                tracing::info!(%id, process_id = %entry.process_id, "processd: E_0624 rejected — ablehnen dispatched");
-                StatusCode::NO_CONTENT.into_response()
-            }
-            Ok(false) => StatusCode::NOT_FOUND.into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        }
+        decide_queue_entry(&state, pool, &id_str, false).await
     }
 
     pub async fn metrics(
@@ -690,10 +658,16 @@ mod rest {
         }
 
         // ── LF approval queue depth ───────────────────────────────────────────
+        // `resolved_at` is not a column here (the timestamp is `decided_at`),
+        // and Pending is the state that needs an operator — the old query
+        // errored into a permanent 0 and hid the 45-min E_0624 escalations.
         let queue_depth: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM approval_queue WHERE resolved_at IS NULL")
+            sqlx::query_scalar("SELECT COUNT(*) FROM approval_queue WHERE status = 'Pending'")
                 .fetch_one(&pool)
                 .await
+                .inspect_err(
+                    |e| tracing::warn!(error = %e, "processd: approval-queue depth query failed"),
+                )
                 .unwrap_or(0);
 
         out.push_str(

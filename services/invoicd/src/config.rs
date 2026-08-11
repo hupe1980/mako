@@ -91,10 +91,11 @@ impl Config {
         }
     }
 
-    /// EUR-cents threshold (converted from the TOML EUR value).
+    /// Threshold in `Amount<5>` raw units (10⁻⁵ EUR) — the resolution of
+    /// `CheckReport::total_net_invoic.to_raw()`, converted from the TOML EUR value.
     #[must_use]
-    pub fn auto_dispute_threshold_eur_cents(&self) -> i64 {
-        (self.check.auto_dispute_threshold_eur * 100.0_f64).round() as i64
+    pub fn auto_dispute_threshold_raw(&self) -> i64 {
+        (self.check.auto_dispute_threshold_eur * 100_000.0_f64).round() as i64
     }
 }
 
@@ -300,4 +301,46 @@ pub fn resolve_env(value: &str) -> anyhow::Result<String> {
 
 pub fn resolve_env_secret(value: &str) -> anyhow::Result<secrecy::SecretString> {
     resolve_env(value).map(secrecy::SecretString::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_with_threshold(eur: f64) -> CheckSectionConfig {
+        CheckSectionConfig {
+            auto_dispute_threshold_eur: eur,
+            ..CheckSectionConfig::default()
+        }
+    }
+
+    /// The threshold and `EuroAmount::to_raw()` must share one unit (10⁻⁵ EUR):
+    /// an invoice total exactly at the threshold does not escalate, one raw unit
+    /// above does.
+    #[test]
+    fn threshold_matches_euro_amount_raw_units() {
+        let check = config_with_threshold(250.0);
+        let threshold_raw = (check.auto_dispute_threshold_eur * 100_000.0).round() as i64;
+
+        let at = invoic_checker::EuroAmount::from_decimal_rounded(
+            rust_decimal::dec!(250.00),
+            invoic_checker::amount::RoundingStrategy::MidpointAwayFromZero,
+        )
+        .unwrap();
+        assert_eq!(at.to_raw(), threshold_raw);
+        assert!(
+            at.to_raw() <= threshold_raw,
+            "exactly at threshold: no escalation"
+        );
+
+        let above = invoic_checker::EuroAmount::from_decimal_rounded(
+            rust_decimal::dec!(250.00001),
+            invoic_checker::amount::RoundingStrategy::MidpointAwayFromZero,
+        )
+        .unwrap();
+        assert!(
+            above.to_raw() > threshold_raw,
+            "one raw unit above escalates"
+        );
+    }
 }

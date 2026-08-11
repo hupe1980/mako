@@ -13,6 +13,10 @@
 //! ermittelt worden ist." The Gütefaktor is defined in §36h Abs. 1 Satz 5 as the
 //! ratio of Standortertrag to Referenzertrag (Anlage 2 Nummer 2), in percent.
 //! (§36k EEG 2021/2023 is "Finanzielle Beteiligung von Kommunen" — unrelated.)
+//!
+//! The Korrekturfaktor **Stützwerte live in §36h Abs. 1 Satz 2 itself**, not in
+//! Anlage 2 Nummer 7 — Anlage 2 Nummer 7 only defines how the Standortertrag
+//! that feeds the Gütefaktor is measured. See [`KORREKTURFAKTOR_STUETZWERTE`].
 
 use rust_decimal::Decimal;
 use rust_decimal::dec;
@@ -32,35 +36,34 @@ use time::Date;
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct WindStandort {
-    /// Gütegrad: ratio of actual site yield to reference yield, as a fraction.
+    /// Gütefaktor: ratio of Standortertrag to Referenzertrag, as a fraction.
+    ///
+    /// §36h Abs. 1 Satz 5 states it in percent; this field carries the same
+    /// quantity as a fraction (`1.03` = 103 %).
     ///
     /// Examples:
-    /// - `1.03` = 103% of reference yield (slightly above reference)
-    /// - `0.85` = 85% of reference yield (below-reference = higher AW)
-    /// - `1.50` = 150% of reference yield (excellent site = lower AW)
-    ///
-    /// Valid range: 0.70 – 2.00 (outside this range: contact BNetzA).
-    pub guetegrad: Decimal,
+    /// - `1.03` = 103 % of reference yield (slightly above reference)
+    /// - `0.85` = 85 % of reference yield (below-reference = higher AW)
+    /// - `1.50` = 150 % of reference yield (excellent site = lower AW)
+    pub guetefaktor: Decimal,
 
-    /// Pre-certified Korrekturfaktor from BNetzA §36h tables.
+    /// Korrekturfaktor from the §36h Abs. 1 Satz 2 Stützwerte.
     ///
-    /// Computed from `guetegrad` by the wind energy assessor using the BNetzA
-    /// Korrekturfaktortabelle. Typical range: 0.70 – 1.30.
+    /// Derive it with [`korrekturfaktor_fuer_guetefaktor`] or take the value
+    /// certified in the Windgutachten. Range: 0.79 – 1.55.
     ///
     /// The billing engine uses this to adjust the statutory AW:
     /// `effective_aw = base_aw × korrekturfaktor`
     pub korrekturfaktor: Decimal,
 
-    /// Whether the **Grundvergütungsperiode** is currently active.
+    /// **§36h Abs. 1 Satz 2 Halbsatz 2** — whether the plant is in the Südregion.
     ///
-    /// Plants with Gütegrad < 100% receive a higher "Grundvergütung" rate
-    /// for the first N full calendar years after commissioning.
-    /// After that, the regular corrected AW applies.
-    ///
-    /// This flag is `true` during the Grundvergütungsperiode.
-    pub grundverguetungsperiode_aktiv: bool,
+    /// A Gütefaktor below 60 % may only be applied to Südregion plants; for all
+    /// others the Korrekturfaktor is capped at the 60 % Stützwert (1.55 vs 1.42,
+    /// §36h Abs. 1 Satz 4 Nr. 2 and 3).
+    pub suedregion: bool,
 
-    /// Site quality classification per BNetzA §36h table.
+    /// Site quality classification derived from the Gütefaktor.
     pub standortklasse: WindStandortklasse,
 }
 
@@ -72,59 +75,104 @@ impl WindStandort {
     /// use rust_decimal::dec;
     ///
     /// let standort = WindStandort {
-    ///     guetegrad: dec!(0.95),
-    ///     korrekturfaktor: dec!(1.06),
-    ///     grundverguetungsperiode_aktiv: true,
+    ///     guetefaktor: dec!(0.95),
+    ///     korrekturfaktor: dec!(1.035),
+    ///     suedregion: false,
     ///     standortklasse: WindStandortklasse::BelowReference,
     /// };
     /// let base_aw = dec!(7.0);
-    /// let effective_aw = standort.effective_aw(base_aw);
-    /// assert_eq!(effective_aw.round_dp(2), dec!(7.42)); // 7.0 × 1.06
+    /// assert_eq!(standort.effective_aw(base_aw), dec!(7.245)); // 7.0 × 1.035
     /// ```
     #[must_use]
     pub fn effective_aw(&self, base_aw_ct_kwh: Decimal) -> Decimal {
         (base_aw_ct_kwh * self.korrekturfaktor).round_dp(5)
     }
 
-    /// Construct from Gütegrad using the §36h approximate formula.
+    /// Construct from the certified Gütefaktor via the §36h Abs. 1 Satz 2 table.
     ///
-    /// This is a simplified approximation of the BNetzA §36h correction table.
-    /// For production billing, always use the certified Korrekturfaktor from
-    /// the wind energy assessor's report (Windgutachten).
-    ///
-    /// ## Approximation formula
-    ///
-    /// Based on the §36h Abs. 1 / Anlage 2 Nr. 7 EEG 2023 correction curve:
-    /// - Gütegrad < 0.80: not eligible for EEG support
-    /// - 0.80 ≤ Gütegrad < 1.00: Korrekturfaktor = (1.25 − 0.25 × Gütegrad)
-    /// - 1.00 ≤ Gütegrad ≤ 1.50: Korrekturfaktor = (0.90 − 0.10 × Gütegrad + 0.05)
-    /// - Gütegrad > 1.50: Korrekturfaktor = 0.70 (floor)
-    ///
-    /// **Important**: Use certified values from §36h table in production.
+    /// `suedregion` selects between the §36h Abs. 1 Satz 4 Nr. 2 and Nr. 3 floors
+    /// below the tabled range — see [`korrekturfaktor_fuer_guetefaktor`].
     #[must_use]
-    pub fn approximate_from_guetegrad(guetegrad: Decimal) -> Self {
-        let korrekturfaktor = if guetegrad < dec!(0.80) {
-            dec!(0.0) // not eligible
-        } else if guetegrad < Decimal::ONE {
-            // §36h Abs. 1 / Anlage 2 Nr. 7 interpolation for below-reference sites
-            (dec!(1.25) - dec!(0.25) * guetegrad).round_dp(4)
-        } else if guetegrad <= dec!(1.50) {
-            // Above-reference sites
-            (dec!(0.95) - dec!(0.10) * (guetegrad - Decimal::ONE)).round_dp(4)
-        } else {
-            dec!(0.70) // floor
-        };
-
-        let standortklasse = WindStandortklasse::from_guetegrad(guetegrad);
-        let grundverguetungsperiode_aktiv = guetegrad < Decimal::ONE;
-
+    pub fn from_guetefaktor(guetefaktor: Decimal, suedregion: bool) -> Self {
         Self {
-            guetegrad,
-            korrekturfaktor,
-            grundverguetungsperiode_aktiv,
-            standortklasse,
+            guetefaktor,
+            korrekturfaktor: korrekturfaktor_fuer_guetefaktor(guetefaktor, suedregion),
+            suedregion,
+            standortklasse: WindStandortklasse::from_guetefaktor(guetefaktor),
         }
     }
+}
+
+// ── §36h Abs. 1 Satz 2 EEG 2023 — Korrekturfaktor Stützwerte ─────────────────
+
+/// **§36h Abs. 1 Satz 2 EEG 2023** — the Gütefaktor → Korrekturfaktor Stützwerte.
+///
+/// | Gütefaktor | 50 % | 60 % | 70 % | 80 % | 90 % | 100 % | 110 % | 120 % | 130 % | 140 % | 150 % |
+/// |---|---|---|---|---|---|---|---|---|---|---|---|
+/// | Korrekturfaktor | 1,55 | 1,42 | 1,29 | 1,16 | 1,07 | 1 | 0,94 | 0,89 | 0,85 | 0,81 | 0,79 |
+///
+/// Gütefaktor is stored here as a fraction, so `100 %` is `1.00` and the
+/// reference site's Korrekturfaktor is exactly `1` — an exactly-reference site
+/// receives the unmodified Zuschlagswert.
+pub const KORREKTURFAKTOR_STUETZWERTE: [(Decimal, Decimal); 11] = [
+    (dec!(0.50), dec!(1.55)),
+    (dec!(0.60), dec!(1.42)),
+    (dec!(0.70), dec!(1.29)),
+    (dec!(0.80), dec!(1.16)),
+    (dec!(0.90), dec!(1.07)),
+    (dec!(1.00), dec!(1.00)),
+    (dec!(1.10), dec!(0.94)),
+    (dec!(1.20), dec!(0.89)),
+    (dec!(1.30), dec!(0.85)),
+    (dec!(1.40), dec!(0.81)),
+    (dec!(1.50), dec!(0.79)),
+];
+
+/// **§36h Abs. 1 Satz 2–4 EEG 2023** — the Korrekturfaktor for a Gütefaktor.
+///
+/// Linear interpolation between the neighbouring [`KORREKTURFAKTOR_STUETZWERTE`]
+/// (Satz 3). Outside the tabled range (Satz 4):
+///
+/// - above 150 %: `0.79`
+/// - Südregion, below 50 %: `1.55`
+/// - all other plants, below 60 %: `1.42` — a Gütefaktor under 60 % may only be
+///   applied to Südregion plants (Satz 2 Halbsatz 2)
+///
+/// There is **no eligibility floor** in §36h: a poor site yields a *higher*
+/// Korrekturfaktor, never a zero one.
+///
+/// ```rust
+/// use eeg_billing::wind::korrekturfaktor_fuer_guetefaktor;
+/// use rust_decimal::dec;
+///
+/// // §36h Abs. 1 Satz 2: the reference site is exactly 1, not an approximation.
+/// assert_eq!(korrekturfaktor_fuer_guetefaktor(dec!(1.00), false), dec!(1.00));
+/// // Interpolated midway between the 90 % (1.07) and 100 % (1.00) Stützwerte.
+/// assert_eq!(korrekturfaktor_fuer_guetefaktor(dec!(0.95), false), dec!(1.035));
+/// ```
+#[must_use]
+pub fn korrekturfaktor_fuer_guetefaktor(guetefaktor: Decimal, suedregion: bool) -> Decimal {
+    let (lowest_gf, lowest_kf) = KORREKTURFAKTOR_STUETZWERTE[0];
+    let (highest_gf, highest_kf) =
+        KORREKTURFAKTOR_STUETZWERTE[KORREKTURFAKTOR_STUETZWERTE.len() - 1];
+
+    // Satz 4 Nr. 3: non-Südregion plants never go below the 60 % Stützwert.
+    let floor_gf = if suedregion { lowest_gf } else { dec!(0.60) };
+    if guetefaktor <= floor_gf {
+        return if suedregion { lowest_kf } else { dec!(1.42) };
+    }
+    if guetefaktor >= highest_gf {
+        return highest_kf; // Satz 4 Nr. 1
+    }
+
+    // Satz 3: linear interpolation between the neighbouring Stützwerte.
+    let upper = KORREKTURFAKTOR_STUETZWERTE
+        .iter()
+        .position(|(gf, _)| *gf >= guetefaktor)
+        .unwrap_or(KORREKTURFAKTOR_STUETZWERTE.len() - 1);
+    let (gf_lo, kf_lo) = KORREKTURFAKTOR_STUETZWERTE[upper - 1];
+    let (gf_hi, kf_hi) = KORREKTURFAKTOR_STUETZWERTE[upper];
+    (kf_lo + (kf_hi - kf_lo) * (guetefaktor - gf_lo) / (gf_hi - gf_lo)).round_dp(5)
 }
 
 // ── §36h Abs. 2 EEG 2023 — Standortgüte re-evaluation (year 6/11/16) ─────────
@@ -141,7 +189,17 @@ pub struct GuetefaktorReeval {
     /// Year after commissioning from which the adjusted AW takes effect: 6, 11 or 16.
     pub wirksam_ab_jahr: u8,
     /// Gütefaktor recomputed from the measured 5-year Standortertrag (ratio, e.g. 1.05).
+    ///
+    /// Carried for the §36h Abs. 2 Satz 2 reconciliation test, which compares
+    /// Gütefaktoren — not Korrekturfaktoren.
     pub guetefaktor: Decimal,
+    /// The Korrekturfaktor certified for this re-evaluation.
+    ///
+    /// Supplied rather than derived: §36h Abs. 3 Nr. 2 makes the adjusted claim
+    /// conditional on the operator *proving* the new Gütefaktor by Gutachten, and
+    /// that Gutachten's factor is what the Netzbetreiber settles on. Build it with
+    /// [`korrekturfaktor_fuer_guetefaktor`] when no certified value is at hand.
+    pub korrekturfaktor: Decimal,
 }
 
 /// §36h Abs. 2 EEG 2023 — the Korrekturfaktor in effect for `billing_date`.
@@ -161,9 +219,7 @@ pub fn korrekturfaktor_fuer_periode(
         .iter()
         .filter(|r| jahr_erreicht(inbetriebnahme, billing_date, r.wirksam_ab_jahr))
         .max_by_key(|r| r.wirksam_ab_jahr)
-        .map_or(initial_korrekturfaktor, |r| {
-            WindStandort::approximate_from_guetegrad(r.guetefaktor).korrekturfaktor
-        })
+        .map_or(initial_korrekturfaktor, |r| r.korrekturfaktor)
 }
 
 /// `true` when `billing_date` is at or after the start of the plant's `n`-th
@@ -193,37 +249,40 @@ pub fn reevaluation_requires_reconciliation(
 
 // ── WindStandortklasse ────────────────────────────────────────────────────────
 
-/// Site quality classification based on Gütegrad.
+/// Site quality classification based on the Gütefaktor.
+///
+/// Descriptive only — §36h sets no eligibility threshold, so no class here means
+/// "not funded". A weak site is *better* paid, via a Korrekturfaktor above 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
 pub enum WindStandortklasse {
-    /// Gütegrad ≥ 150%: excellent site (reduced AW, Korrekturfaktor ≤ 0.70).
+    /// Gütefaktor ≥ 150 %: excellent site (Korrekturfaktor floored at 0.79).
     Excellent,
-    /// 110% ≤ Gütegrad < 150%: above-reference site.
+    /// 110 % ≤ Gütefaktor < 150 %: above-reference site.
     AboveReference,
-    /// 90% ≤ Gütegrad < 110%: reference site (Korrekturfaktor ≈ 1.0).
+    /// 90 % ≤ Gütefaktor < 110 %: reference site (Korrekturfaktor ≈ 1.0).
     Reference,
-    /// 80% ≤ Gütegrad < 90%: below-reference site (Grundvergütungsperiode applies).
+    /// 60 % ≤ Gütefaktor < 90 %: below-reference site.
     BelowReference,
-    /// Gütegrad < 80%: marginal site (not eligible for EEG support).
-    Marginal,
+    /// Gütefaktor < 60 %: only applicable to Südregion plants (§36h Abs. 1 Satz 2).
+    Suedregion,
 }
 
 impl WindStandortklasse {
-    /// Derive the Standortklasse from a Gütegrad value.
+    /// Derive the Standortklasse from a Gütefaktor value.
     #[must_use]
-    pub fn from_guetegrad(guetegrad: Decimal) -> Self {
-        if guetegrad >= dec!(1.50) {
+    pub fn from_guetefaktor(guetefaktor: Decimal) -> Self {
+        if guetefaktor >= dec!(1.50) {
             Self::Excellent
-        } else if guetegrad >= dec!(1.10) {
+        } else if guetefaktor >= dec!(1.10) {
             Self::AboveReference
-        } else if guetegrad >= dec!(0.90) {
+        } else if guetefaktor >= dec!(0.90) {
             Self::Reference
-        } else if guetegrad >= dec!(0.80) {
+        } else if guetefaktor >= dec!(0.60) {
             Self::BelowReference
         } else {
-            Self::Marginal
+            Self::Suedregion
         }
     }
 }
@@ -235,6 +294,86 @@ mod tests {
     use super::*;
     use time::macros::date;
 
+    /// The eleven §36h Abs. 1 Satz 2 Stützwerte, as published.
+    #[test]
+    fn sect36h_abs1_satz2_stuetzwerte() {
+        for (gf, kf) in [
+            (dec!(0.50), dec!(1.55)),
+            (dec!(0.60), dec!(1.42)),
+            (dec!(0.70), dec!(1.29)),
+            (dec!(0.80), dec!(1.16)),
+            (dec!(0.90), dec!(1.07)),
+            (dec!(1.00), dec!(1.00)),
+            (dec!(1.10), dec!(0.94)),
+            (dec!(1.20), dec!(0.89)),
+            (dec!(1.30), dec!(0.85)),
+            (dec!(1.40), dec!(0.81)),
+            (dec!(1.50), dec!(0.79)),
+        ] {
+            assert_eq!(
+                korrekturfaktor_fuer_guetefaktor(gf, true),
+                kf,
+                "Gütefaktor {gf} (Südregion)"
+            );
+            // Only the sub-60 % Stützwert is Südregion-only.
+            if gf >= dec!(0.60) {
+                assert_eq!(korrekturfaktor_fuer_guetefaktor(gf, false), kf);
+            }
+        }
+    }
+
+    /// §36h Abs. 1 Satz 2: an exactly-reference site keeps its full Zuschlagswert.
+    #[test]
+    fn sect36h_reference_site_is_exactly_one() {
+        assert_eq!(
+            korrekturfaktor_fuer_guetefaktor(Decimal::ONE, false),
+            dec!(1)
+        );
+        assert_eq!(
+            WindStandort::from_guetefaktor(Decimal::ONE, false).effective_aw(dec!(7.35)),
+            dec!(7.35)
+        );
+    }
+
+    /// §36h Abs. 1 Satz 3 — linear interpolation between neighbouring Stützwerte.
+    #[test]
+    fn sect36h_abs1_satz3_interpolates_linearly() {
+        // Halfway 90 %→100 %: (1.07 + 1.00) / 2.
+        assert_eq!(
+            korrekturfaktor_fuer_guetefaktor(dec!(0.95), false),
+            dec!(1.035)
+        );
+        // A fifth of the way 100 %→110 %: 1.00 − 0.2 × 0.06.
+        assert_eq!(
+            korrekturfaktor_fuer_guetefaktor(dec!(1.02), false),
+            dec!(0.988)
+        );
+    }
+
+    /// §36h Abs. 1 Satz 4 — the three out-of-range rules, and no eligibility floor.
+    #[test]
+    fn sect36h_abs1_satz4_out_of_range_rules() {
+        // Nr. 1: above 150 % → 0.79.
+        assert_eq!(
+            korrekturfaktor_fuer_guetefaktor(dec!(1.80), false),
+            dec!(0.79)
+        );
+        // Nr. 2: Südregion below 50 % → 1.55.
+        assert_eq!(
+            korrekturfaktor_fuer_guetefaktor(dec!(0.40), true),
+            dec!(1.55)
+        );
+        // Nr. 3: all other plants below 60 % → 1.42, never zero.
+        assert_eq!(
+            korrekturfaktor_fuer_guetefaktor(dec!(0.55), false),
+            dec!(1.42)
+        );
+        assert_eq!(
+            korrekturfaktor_fuer_guetefaktor(dec!(0.10), false),
+            dec!(1.42)
+        );
+    }
+
     #[test]
     fn sect36h_abs2_korrekturfaktor_steps_at_year_6_and_11() {
         let ibn = date!(2024 - 07 - 01);
@@ -243,10 +382,12 @@ mod tests {
             GuetefaktorReeval {
                 wirksam_ab_jahr: 6,
                 guetefaktor: dec!(0.90),
+                korrekturfaktor: dec!(1.07),
             },
             GuetefaktorReeval {
                 wirksam_ab_jahr: 11,
                 guetefaktor: dec!(0.95),
+                korrekturfaktor: dec!(1.035),
             },
         ];
         // Before year 6 → the initial factor.
@@ -254,17 +395,15 @@ mod tests {
             korrekturfaktor_fuer_periode(ibn, date!(2028 - 12 - 01), initial, &reevals),
             initial
         );
-        // Year 6 starts 2029-07-01 → the first re-evaluation applies.
-        let kf_y6 = WindStandort::approximate_from_guetegrad(dec!(0.90)).korrekturfaktor;
+        // Year 6 starts 2029-07-01 → the certified factor of the first re-evaluation.
         assert_eq!(
             korrekturfaktor_fuer_periode(ibn, date!(2029 - 07 - 01), initial, &reevals),
-            kf_y6
+            dec!(1.07)
         );
         // Year 11 starts 2034-07-01 → the second supersedes it.
-        let kf_y11 = WindStandort::approximate_from_guetegrad(dec!(0.95)).korrekturfaktor;
         assert_eq!(
             korrekturfaktor_fuer_periode(ibn, date!(2034 - 08 - 01), initial, &reevals),
-            kf_y11
+            dec!(1.035)
         );
     }
 
@@ -284,57 +423,46 @@ mod tests {
     }
 
     #[test]
-    fn standortklasse_from_guetegrad() {
+    fn standortklasse_from_guetefaktor() {
         assert_eq!(
-            WindStandortklasse::from_guetegrad(dec!(1.60)),
+            WindStandortklasse::from_guetefaktor(dec!(1.60)),
             WindStandortklasse::Excellent
         );
         assert_eq!(
-            WindStandortklasse::from_guetegrad(dec!(1.20)),
+            WindStandortklasse::from_guetefaktor(dec!(1.20)),
             WindStandortklasse::AboveReference
         );
         assert_eq!(
-            WindStandortklasse::from_guetegrad(dec!(1.00)),
+            WindStandortklasse::from_guetefaktor(dec!(1.00)),
             WindStandortklasse::Reference
         );
         assert_eq!(
-            WindStandortklasse::from_guetegrad(dec!(0.85)),
+            WindStandortklasse::from_guetefaktor(dec!(0.85)),
             WindStandortklasse::BelowReference
         );
         assert_eq!(
-            WindStandortklasse::from_guetegrad(dec!(0.70)),
-            WindStandortklasse::Marginal
+            WindStandortklasse::from_guetefaktor(dec!(0.55)),
+            WindStandortklasse::Suedregion
         );
     }
 
     #[test]
     fn effective_aw_applies_korrekturfaktor() {
         let standort = WindStandort {
-            guetegrad: dec!(0.85),
-            korrekturfaktor: dec!(1.08),
-            grundverguetungsperiode_aktiv: true,
+            guetefaktor: dec!(0.85),
+            korrekturfaktor: dec!(1.115),
+            suedregion: false,
             standortklasse: WindStandortklasse::BelowReference,
         };
-        let effective = standort.effective_aw(dec!(7.35));
-        // 7.35 × 1.08 = 7.938 (5dp)
-        assert_eq!(effective, dec!(7.938));
+        // 7.35 × 1.115 = 8.19525
+        assert_eq!(standort.effective_aw(dec!(7.35)), dec!(8.19525));
     }
 
     #[test]
-    fn reference_site_korrekturfaktor_near_one() {
-        let standort = WindStandort::approximate_from_guetegrad(dec!(1.00));
-        // At Gütegrad = 1.0, korrekturfaktor should be ≈ 0.95
-        assert!(standort.korrekturfaktor > dec!(0.90) && standort.korrekturfaktor < dec!(1.10));
-        assert!(!standort.grundverguetungsperiode_aktiv);
-    }
-
-    #[test]
-    fn below_reference_triggers_grundverguetungsperiode() {
-        let standort = WindStandort::approximate_from_guetegrad(dec!(0.85));
-        assert!(standort.grundverguetungsperiode_aktiv);
-        assert!(
-            standort.korrekturfaktor > Decimal::ONE,
-            "below-reference => higher AW"
-        );
+    fn below_reference_site_raises_the_aw() {
+        let standort = WindStandort::from_guetefaktor(dec!(0.85), false);
+        // Halfway 80 %→90 %: (1.16 + 1.07) / 2 = 1.115.
+        assert_eq!(standort.korrekturfaktor, dec!(1.115));
+        assert!(standort.korrekturfaktor > Decimal::ONE);
     }
 }

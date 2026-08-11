@@ -121,7 +121,7 @@ sequenceDiagram
     participant dir as Verzeichnisdienst<br/>(BDEW)
 
     Note over MSB,dir: Channel 1 — EDIFACT/AS4 (Gerätewechsel)
-    MSB->>NB_AS4: POST /as4/inbox<br/>UTILMD PID 11002
+    MSB->>NB_AS4: POST /as4/inbox<br/>UTILMD PID 55042
     NB_AS4->>engine: WimDeviceChangeWorkflow::Initiate
     engine-->>NB_AS4: events + APERAK outbox
     NB_AS4-->>MSB: AS4 Receipt + APERAK
@@ -192,9 +192,9 @@ valid from 2026-01-29).  As of the 2026 annual update cycle, **BDEW has not
 published an equivalent Gas API-Webdienste specification**.  Gas iMS processes
 continue to use EDIFACT over AS4 via the `edi-energy` crate.
 
-When BDEW publishes a Gas API specification, the intent is to add a `gas` feature
-flag to `energy-api` alongside the existing `client`/`server` features, keeping
-the electricity and gas implementations independently opt-in.
+The feature flags above are therefore Strom-scoped throughout: `energy-api`
+carries no gas surface because there is no gas specification to implement
+against.
 
 Monitor the BDEW document portal at <https://www.bdew-mako.de/documents> for
 Gas API-Webdienste announcements.

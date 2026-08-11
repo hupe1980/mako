@@ -194,6 +194,7 @@ impl TarifbdMcpHandler {
             &p.lf_mp_id,
             &self.state.tenant,
             &p.product_code,
+            None,
         )
         .await
         {
@@ -219,7 +220,15 @@ impl TarifbdMcpHandler {
         Parameters(p): Parameters<CustomerProductParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::get_customer_product;
-        match get_customer_product(&self.state.pool, &p.malo_id, &p.lf_mp_id, &self.state.tenant).await {
+        match get_customer_product(
+            &self.state.pool,
+            &p.malo_id,
+            &p.lf_mp_id,
+            &self.state.tenant,
+            None,
+        )
+        .await
+        {
             Ok(Some(assignment)) => ContentBlock::json(serde_json::to_value(assignment).unwrap_or_default())
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None)),
@@ -587,6 +596,7 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
             &p.lf_mp_id,
             &self.state.tenant,
             &p.product_code,
+            None,
         )
         .await
         {

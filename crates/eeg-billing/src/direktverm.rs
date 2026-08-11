@@ -29,11 +29,12 @@
 //! EEG 2023, `TemporaryFeedInTariff` scheme) — this is NOT the same as switching back to
 //! regular Einspeisevergütung.
 //!
-//! ## Managementprämie (§20 Abs. 3 EEG 2023)
+//! ## No separate Managementprämie
 //!
-//! Paid monthly by NB to the plant operator (or Direktvermarkter) as a flat fee
-//! for the administrative effort of participating in direct marketing.
-//! Rate: 0.4 ct/kWh for plants ≤ 100 MW; 0.2 ct/kWh for plants > 100 MW.
+//! Anlage 1 Nr. 3.1.2 EEG 2023 is `MP = AW – MW` and nothing more. Since EEG 2014
+//! the marketing cost sits *inside* the anzulegender Wert; the additive
+//! Managementprämie of the EEG 2012 era is gone. Its mirror image on the
+//! Einspeisevergütung route is the §53 Abs. 1 deduction of 0,4 / 0,2 ct.
 
 use rust_decimal::Decimal;
 use rust_decimal::dec;

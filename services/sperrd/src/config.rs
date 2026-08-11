@@ -22,6 +22,20 @@ pub struct SperrdConfig {
     /// See `[mcp]` section in TOML — e.g. `api_key = "env:SPERRD_MCP_API_KEY"`.
     #[serde(default)]
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
+    /// OIDC token verification for the REST API.
+    ///
+    /// Required: `execute` and `fail` each dispatch a real IFTSTA 21039 into the
+    /// market, and `create` schedules a physical disconnection. The service does
+    /// not start without it unless `allow_insecure_no_auth` is set explicitly.
+    #[serde(default)]
+    pub oidc: Option<mako_service::oidc::OidcConfig>,
+    /// Start without token verification.
+    ///
+    /// Intended for local development. It must be named in the config rather
+    /// than reached by omitting a section, so that running unauthenticated is
+    /// always a decision someone wrote down.
+    #[serde(default)]
+    pub allow_insecure_no_auth: bool,
 }
 
 impl mako_service::ServiceConfig for SperrdConfig {

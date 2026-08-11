@@ -66,10 +66,16 @@ pub enum SettlementScheme {
         verguetungssatz_ct: Decimal,
     },
 
-    /// §20 EEG — **Gleitende Marktprämie**.
+    /// §23a EEG i.V.m. Anlage 1 — **Gleitende Marktprämie**.
     ///
-    /// Formula: `max(0, eff_AW − marktwert) × kwh / 100`
-    /// where `eff_AW = direktverm_aw_ct × wind_korrekturfaktor + managementpraemie_ct`.
+    /// Formula (Anlage 1 Nr. 3.1.2 / 4.1.2): `MP = max(0, AW − MW)`, settled as
+    /// `MP × kwh / 100`, where `AW = direktverm_aw_ct × wind_korrekturfaktor`.
+    ///
+    /// There is **no additive Managementprämie**. Anlage 1 defines `MP = AW – MW`
+    /// and nothing else; §20 EEG 2023 has no Absätze at all, let alone the
+    /// "+0,4 ct" one. Since EEG 2014 the marketing cost is folded *into* the
+    /// anzulegender Wert — its mirror image is the §53 Abs. 1 deduction of
+    /// 0,4 / 0,2 ct that the Einspeisevergütung route takes off the same AW.
     ///
     /// `marktwert_ct_kwh` (context field on `SettleInput`) provides the market reference
     /// price. Use `TariffSource::Auction(…)` for BNetzA tender plants — same formula,
@@ -78,11 +84,6 @@ pub enum SettlementScheme {
         /// Anzulegender Wert in ct/kWh — statutory or BNetzA-tendered.
         /// For Ausschreibungsanlagen: the tender-awarded value.
         direktverm_aw_ct: Decimal,
-
-        /// §20 Abs. 3 EEG 2023 Managementprämie in ct/kWh.
-        /// `None` → auto-computed from `SettleInput.leistung_kwp`
-        /// (0.4 ct/kWh for ≤100 MW, 0.2 ct/kWh for >100 MW).
-        managementpraemie_ct: Option<Decimal>,
 
         /// §36h EEG — certified wind-onshore Korrekturfaktor.
         /// Multiplied into `direktverm_aw_ct` before computing the spread.
@@ -192,13 +193,21 @@ impl SettlementScheme {
 
     /// Returns `true` when §51 Negativpreisregel potentially applies to this scheme.
     ///
-    /// Does NOT apply to `MarketPremium`/`PostEeg` (market risk borne by Direktvermarkter),
-    /// `KwkSurcharge`, `Eigenverbrauch`, or `SonstigeDirektvermarktung`.
+    /// §51 Abs. 1 reduces *the anzulegender Wert* to zero, and the AW is what
+    /// Anlage 1 Nr. 1 feeds into `MP = AW − MW` ("der anzulegende Wert unter
+    /// Berücksichtigung der §§ 19 bis 54"). The Marktprämie is therefore §51's
+    /// primary object, not an exception to it.
+    ///
+    /// Does NOT apply to `PostEeg` (no AW left to reduce — the plant is
+    /// ausgefördert), `KwkSurcharge` (KWKG, a different law), `Eigenverbrauch`,
+    /// `SonstigeDirektvermarktung` (§21a: no EEG payment at all), or
+    /// `FlexibilitySurcharge` (§50a is capacity- not energy-based).
     #[must_use]
     pub fn negativpreis_rule_applicable(&self) -> bool {
         matches!(
             self,
             Self::FeedInTariff { .. }
+                | Self::MarketPremium { .. }
                 | Self::TenantElectricity { .. }
                 | Self::TemporaryFeedInTariff { .. }
                 | Self::FlexibilityPremium { .. }
@@ -245,9 +254,10 @@ impl SettlementScheme {
 pub enum TariffSource {
     /// §21 EEG — Statutory AW, set by law at commissioning date (§48 EEG 2023).
     ///
-    /// Rate is fixed for the 20-year Förderdauer. Quarterly degression applies
-    /// from commissioning month (§23a EEG 2023 — not computed here; caller provides
-    /// the net rate in `direktverm_aw_ct` / `verguetungssatz_ct`).
+    /// Rate is fixed for the 20-year Förderdauer. For solar, the §49 EEG 2023
+    /// semi-annual degression selects the value from the commissioning date —
+    /// see [`crate::rates::solar_pv_ueberschuss_aw_ct`]. The caller supplies the
+    /// resolved rate in `direktverm_aw_ct` / `verguetungssatz_ct`.
     Statutory,
 
     /// §§22a, 28 EEG — BNetzA **tender award**: AW set by sealed-bid auction.

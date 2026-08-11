@@ -20,7 +20,7 @@ use rust_decimal::dec;
 use time::macros::date;
 
 use invoic_checker::check::CheckOutcome;
-use netzbilanzd::pg::{fetch_draft, list_drafts_pg, upsert_draft};
+use netzbilanzd::pg::{fetch_draft, insert_correction_draft, list_drafts_pg, upsert_draft};
 
 /// Container guard the test holds until it ends — dropping it removes the
 /// container (no leak, no external reaper).
@@ -144,4 +144,53 @@ async fn nne_rechnung_keeps_the_netzbetreiber_as_sender() {
         .expect("the draft exists");
     assert_eq!(row.sender_mp_id, NB);
     assert_eq!(row.recipient_mp_id, LF);
+}
+
+/// A Storno / Korrektur inherits the original draft's tenant. Hardcoding
+/// `'default'` filed a correction of tenant B's invoice under someone else's
+/// tenant — invisible to B's tenant-scoped reads.
+#[tokio::test]
+async fn correction_inherits_the_original_tenant() {
+    let Some((pool, _guard)) = pg_pool().await else {
+        eprintln!("skipping: no Docker daemon");
+        return;
+    };
+
+    let original = upsert_draft(
+        &pool,
+        "tenant-b",
+        MALO,
+        NB,
+        LF,
+        31001,
+        date!(2026 - 02 - 01),
+        date!(2026 - 02 - 28),
+        serde_json::json!({ "_typ": "RECHNUNG", "rechnungsnummer": "NNE-2026-02" }),
+        dec!(1234.56),
+        CheckOutcome::Ok,
+    )
+    .await
+    .expect("insert the original draft");
+
+    let storno = insert_correction_draft(&pool, original, "Ablesefehler", None)
+        .await
+        .expect("insert a Storno");
+
+    let row = fetch_draft(&pool, storno)
+        .await
+        .expect("fetch")
+        .expect("the correction exists");
+    assert_eq!(row.rechnungsart, "STORNORECHNUNG");
+    assert_eq!(
+        row.gross_eur_units, -123_456_000,
+        "Storno negates the gross"
+    );
+    assert_eq!(row.original_draft_id, Some(original));
+
+    let tenant: String = sqlx::query_scalar("SELECT tenant FROM invoice_drafts WHERE id = $1")
+        .bind(storno)
+        .fetch_one(&pool)
+        .await
+        .expect("read the correction tenant");
+    assert_eq!(tenant, "tenant-b", "the correction belongs to tenant-b");
 }

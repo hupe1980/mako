@@ -221,7 +221,6 @@ fn sanction_takes_priority_over_all_other_conditions() {
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::MarketPremium {
             direktverm_aw_ct: dec!(0),
-            managementpraemie_ct: None,
             wind_korrekturfaktor: None,
             wind_standort: None,
         },
@@ -269,11 +268,10 @@ fn mieterstrom_without_zuschlag_produces_one_position() {
 // ── §20 EEG — Gleitende Marktprämie ──────────────────────────────────────────
 
 #[test]
-fn direktvermarktung_positive_spread_plus_mgmt() {
+fn direktvermarktung_positive_spread() {
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::MarketPremium {
             direktverm_aw_ct: dec!(6.5),
-            managementpraemie_ct: Some(dec!(0.4)),
             wind_korrekturfaktor: None,
             wind_standort: None,
         },
@@ -282,30 +280,29 @@ fn direktvermarktung_positive_spread_plus_mgmt() {
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
-    // Prämie: 10000×2.4/100=240; Mgmt: 10000×0.4/100=40; Total=280
-    assert_eq!(out.settlement_eur, Some(dec!(280.00)));
-    assert_eq!(out.positions.len(), 2);
+    // Anlage 1 EEG 2023: Marktprämie = AW − Monatsmarktwert, marketing costs
+    // already folded into the AW. 10000 × (6.5 − 4.1) / 100 = 240.
+    assert_eq!(out.settlement_eur, Some(dec!(240.00)));
+    assert_eq!(out.positions.len(), 1);
 }
 
 #[test]
-fn direktvermarktung_zero_spread_only_mgmt() {
-    // §20 Abs. 3 EEG 2023 correct formula: eff_AW = AW + Managementprämie = 6.5 + 0.4 = 6.9 ct.
-    // EPEX = 30.0 ct >> eff_AW (6.9 ct) → total = max(0, 6.9 − 30.0) = 0 EUR.
-    // The Managementprämie is NOT a guaranteed floor — it is incorporated into the AW.
-    // When EPEX > eff_AW, the plant receives nothing from the NB.
+fn direktvermarktung_negative_spread_pays_nothing() {
+    // Anlage 1 EEG 2023: the Marktprämie floors at zero. With a Monatsmarktwert
+    // above the anzulegender Wert the plant earns from the market, not the NB —
+    // there is no guaranteed marketing floor to fall back on.
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::MarketPremium {
             direktverm_aw_ct: dec!(6.5),
-            managementpraemie_ct: Some(dec!(0.4)),
             wind_korrekturfaktor: None,
             wind_standort: None,
         },
         einspeisemenge_kwh: Some(dec!(50000)),
-        marktwert_ct_kwh: Some(dec!(30.0)), // EPEX >> eff_AW (6.9 ct) → zero
+        marktwert_ct_kwh: Some(dec!(30.0)), // Marktwert >> AW (6.5 ct) → zero
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
-    // Correct EEG 2023: eff_AW (6.9) < EPEX (30.0) → EUR 0
+    // AW (6.5) < Monatsmarktwert (30.0) → max(0, …) = EUR 0
     assert_eq!(out.settlement_eur, Some(dec!(0)));
 }
 
@@ -314,7 +311,6 @@ fn direktvermarktung_price_missing() {
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::MarketPremium {
             direktverm_aw_ct: dec!(6.5),
-            managementpraemie_ct: None,
             wind_korrekturfaktor: None,
             wind_standort: None,
         },
@@ -326,43 +322,6 @@ fn direktvermarktung_price_missing() {
     assert!(out.settlement_eur.is_none());
 }
 
-#[test]
-fn direktvermarktung_auto_managementpraemie_standard_plant() {
-    // ≤100 MW → 0.4 ct/kWh auto
-    let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::MarketPremium {
-            direktverm_aw_ct: dec!(6.5),
-            managementpraemie_ct: None,
-            wind_korrekturfaktor: None,
-            wind_standort: None,
-        },
-        einspeisemenge_kwh: Some(dec!(1000)),
-        marktwert_ct_kwh: Some(dec!(4.1)),
-        leistung_kwp: Some(dec!(5000)),
-        ..SettleInput::default()
-    });
-    assert_eq!(out.settlement_eur, Some(dec!(28.00)));
-}
-
-#[test]
-fn direktvermarktung_auto_managementpraemie_large_plant() {
-    // >100 MW → 0.2 ct/kWh auto (§20 Abs. 3 Nr. 1 EEG 2023)
-    let out = calculate_settlement(&SettleInput {
-        scheme: SettlementScheme::MarketPremium {
-            direktverm_aw_ct: dec!(6.5),
-            managementpraemie_ct: None,
-            wind_korrekturfaktor: None,
-            wind_standort: None,
-        },
-        einspeisemenge_kwh: Some(dec!(1000)),
-        marktwert_ct_kwh: Some(dec!(4.1)),
-        leistung_kwp: Some(dec!(110_000)), // >100 MW
-        ..SettleInput::default()
-    });
-    // Prämie: 24; Mgmt 0.2 ct: 2; Total = 26
-    assert_eq!(out.settlement_eur, Some(dec!(26.00)));
-}
-
 // ── §§22a,28 EEG — Ausschreibung ─────────────────────────────────────────────
 
 #[test]
@@ -370,7 +329,6 @@ fn ausschreibung_large_solar_park() {
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::MarketPremium {
             direktverm_aw_ct: dec!(5.82),
-            managementpraemie_ct: Some(dec!(0.4)),
             wind_korrekturfaktor: None,
             wind_standort: None,
         },
@@ -380,7 +338,8 @@ fn ausschreibung_large_solar_park() {
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
-    assert_eq!(out.settlement_eur, Some(dec!(53_000)));
+    // 2_500_000 × (5.82 − 4.1) / 100 = 43_000.
+    assert_eq!(out.settlement_eur, Some(dec!(43_000)));
     assert!(out.positions[0].legal_basis.contains("22a"));
 }
 
@@ -569,42 +528,6 @@ fn anlagenerweiterung_all_expired_foerderung_beendet() {
 // ── Statutory EEG rate tables ─────────────────────────────────────────────────
 
 #[test]
-fn solar_pv_eeg_2023_rate_table() {
-    let table = rates::solar_pv_lookup(2023).expect("EEG 2023 rates known");
-    assert_eq!(
-        table.rate_for(dec!(10)).unwrap(),
-        billing::Amount::parse("0.08110").unwrap()
-    );
-    assert_eq!(
-        table.rate_for(dec!(15)).unwrap(),
-        billing::Amount::parse("0.06790").unwrap()
-    );
-    assert_eq!(
-        table.rate_for(dec!(100)).unwrap(),
-        billing::Amount::parse("0.05560").unwrap()
-    );
-}
-
-#[test]
-fn solar_pv_eeg_2021_rate_table() {
-    let table = rates::solar_pv_lookup(2021).expect("EEG 2021 rates known");
-    assert_eq!(
-        table.rate_for(dec!(5)).unwrap(),
-        billing::Amount::parse("0.09030").unwrap()
-    );
-    assert_eq!(
-        table.rate_for(dec!(20)).unwrap(),
-        billing::Amount::parse("0.08750").unwrap()
-    );
-}
-
-#[test]
-fn solar_pv_old_eeg_year_returns_none() {
-    assert!(rates::solar_pv_lookup(2000).is_none());
-    assert!(rates::solar_pv_lookup(2010).is_none());
-}
-
-#[test]
 fn kwkg_2023_rate_all_tiers() {
     let table = rates::kwkg_zuschlag_lookup().expect("KWKG rates known");
     assert_eq!(
@@ -631,8 +554,10 @@ fn kwkg_2023_rate_all_tiers() {
 
 #[test]
 fn lookup_rate_solar_aufdach_2023() {
+    // §48 Abs. 2 EEG 2023 gross AW for ≤10 kWp. The published 8.20 ct
+    // Einspeisevergütung is this minus the §53 deduction of 0.4 ct.
     let rate = rates::lookup_rate("SOLAR_AUFDACH", dec!(9), 2023).unwrap();
-    assert_eq!(rate, billing::Amount::parse("0.08110").unwrap());
+    assert_eq!(rate, billing::Amount::parse("0.08600").unwrap());
 }
 
 #[test]
@@ -747,20 +672,6 @@ fn kwk_foerderend_calendar_15_years() {
         kwk_foerderend_calendar(date!(2020 - 01 - 15)).unwrap(),
         date!(2035 - 01 - 15)
     );
-}
-
-#[test]
-fn managementpraemie_standard_plant() {
-    use eeg_billing::managementpraemie_ct;
-    // ≤100 MW → 0.4 ct/kWh
-    assert_eq!(managementpraemie_ct(dec!(5000)), dec!(0.4));
-}
-
-#[test]
-fn managementpraemie_large_plant_reduced() {
-    use eeg_billing::managementpraemie_ct;
-    // >100 MW → 0.2 ct/kWh
-    assert_eq!(managementpraemie_ct(dec!(110_000)), dec!(0.2));
 }
 
 #[test]
@@ -921,67 +832,6 @@ fn zusammenlegung_13_months_apart_is_outside_window() {
 }
 
 // ── EEG rate table accuracy (with Solarpaket I 2024 rates) ───────────────────
-
-#[test]
-fn solar_pv_eeg_2024_solarpaket_rates() {
-    // After Solarpaket I (BGBl 2024 Nr.107, effective 01.05.2024):
-    // ≤10 kWp: 8.51 ct, ≤40 kWp: 7.43 ct, >40 kWp: 7.64 ct
-    let table = rates::solar_pv_ueberschuss_lookup(2024).expect("2024 rates known");
-    assert_eq!(
-        table.rate_for(dec!(8)).unwrap(),
-        billing::Amount::parse("0.08510").unwrap()
-    );
-    assert_eq!(
-        table.rate_for(dec!(20)).unwrap(),
-        billing::Amount::parse("0.07430").unwrap()
-    );
-    assert_eq!(
-        table.rate_for(dec!(100)).unwrap(),
-        billing::Amount::parse("0.07640").unwrap()
-    );
-}
-
-#[test]
-fn solar_pv_volleinspeisung_2024_higher_than_ueberschuss() {
-    // Volleinspeisung rates must be higher than Überschusseinspeisung
-    let ueber = rates::solar_pv_ueberschuss_lookup(2024).unwrap();
-    let voll = rates::solar_pv_volleinspeisung_lookup(2024).unwrap();
-    assert!(
-        voll.rate_for(dec!(9)).unwrap() > ueber.rate_for(dec!(9)).unwrap(),
-        "Volleinspeisung rate must exceed Überschusseinspeisung rate"
-    );
-    // ≤10 kWp Volleinspeisung = 13.31 ct/kWh
-    assert_eq!(
-        voll.rate_for(dec!(9)).unwrap(),
-        billing::Amount::parse("0.13310").unwrap()
-    );
-}
-
-#[test]
-fn solar_pv_volleinspeisung_2024_five_brackets() {
-    // Volleinspeisung has 5 brackets (≤10, ≤40, ≤100, ≤400, >400)
-    let table = rates::solar_pv_volleinspeisung_lookup(2024).unwrap();
-    assert_eq!(
-        table.rate_for(dec!(10)).unwrap(),
-        billing::Amount::parse("0.13310").unwrap()
-    );
-    assert_eq!(
-        table.rate_for(dec!(40)).unwrap(),
-        billing::Amount::parse("0.11230").unwrap()
-    );
-    assert_eq!(
-        table.rate_for(dec!(100)).unwrap(),
-        billing::Amount::parse("0.12740").unwrap()
-    );
-    assert_eq!(
-        table.rate_for(dec!(400)).unwrap(),
-        billing::Amount::parse("0.10840").unwrap()
-    );
-    assert_eq!(
-        table.rate_for(dec!(999)).unwrap(),
-        billing::Amount::parse("0.09540").unwrap()
-    );
-}
 
 // ── Umsatzsteuer (VAT) — §19 UStG Kleinunternehmer + Regelbesteuerung ───────
 //

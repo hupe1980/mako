@@ -384,6 +384,17 @@ pub async fn post_ggv_billing(
                 )
                     .into_response();
             }
+            // A tenant absent from the plan gets no allocation and falls through
+            // to Model B below — their entire consumption billed as Solar-
+            // Eigenverbrauch, with no grid residual and no Stromsteuer. Refuse
+            // instead of silently mis-billing them.
+            if let Err(e) = plan.validate_covers(req.tenants.iter().map(|t| t.malo_id.as_str())) {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    format!("nutzungsplan: {e}"),
+                )
+                    .into_response();
+            }
             plan.allocate(pv_gen_kwh).into_iter().collect()
         } else {
             std::collections::HashMap::new()

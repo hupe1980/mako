@@ -25,6 +25,8 @@ use mako_markt::{
 };
 use mako_service::cedar::CedarEnforcer;
 use serde::{Deserialize, Serialize};
+
+use crate::pg::PgVersorgungsStatusRepository;
 use time::format_description::well_known::Rfc3339;
 use utoipa::{IntoParams, ToSchema};
 
@@ -312,14 +314,12 @@ where
 
 /// PUT /api/v1/versorgung/:malo_id
 #[expect(clippy::type_complexity)]
-#[allow(clippy::too_many_arguments)]
-pub async fn put_versorgungsstatus<Ma, Me, Su, Ci, Pa, Vs>(
+pub async fn put_versorgungsstatus<Ma, Me, Su, Ci, Pa>(
     State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<sqlx::PgPool>,
     claims: Claims,
     Path(malo_id): Path<String>,
-    Extension(vs_repo): Extension<Arc<Vs>>,
     headers: HeaderMap,
     Json(body): Json<VersorgungsStatusUpsertRequest>,
 ) -> impl IntoResponse
@@ -329,7 +329,6 @@ where
     Su: SubscriptionRepository + Clone,
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
-    Vs: VersorgungsStatusRepository + Send + Sync,
 {
     if enforcer
         .check(
@@ -410,35 +409,52 @@ where
         tenant: state.tenant_gln.clone(),
         version: 0,
     };
-    match vs_repo.upsert(rec, if_version).await {
-        Ok(new_version) => {
-            // Emit de.markt.versorgung.changed so ERP subscribers (vertragd, billingd)
-            // are notified of supply-state transitions (Lieferbeginn, Lieferende,
-            // Lieferant changes) in near-real-time without polling.
-            let malo_id_str2 = malo_id_str.clone();
-            let evt = MarktEvent::new(
-                &state.tenant_gln,
-                mako_events::markt::VERSORGUNG_CHANGED,
-                malo_id_str2,
-                serde_json::json!({
-                    "lieferstatus": body.lieferstatus,
-                    "version": new_version,
-                }),
-            )
-            .with_extensions(EventExtensions {
-                marktmaloid: Some(malo_id_str.clone()),
-                ..Default::default()
-            });
-            if let Err(e) = crate::outbox::enqueue(&pool, &evt, &state.notify).await {
-                tracing::error!(error = %e, "versorgung: durable enqueue failed");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-
-            let mut resp_headers = HeaderMap::new();
-            resp_headers.insert("ETag", etag(new_version).parse().unwrap());
-            (StatusCode::OK, resp_headers).into_response()
+    // Persist-before-dispatch: the state change and the de.markt.versorgung.changed
+    // outbox row commit in ONE transaction, so a crash can never change the supply
+    // state without emitting the event.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => {
+            tracing::error!(error = %e, "versorgung: begin failed");
+            return MdmError::Internal(e.to_string()).into_response();
         }
-        Err(MdmError::VersionConflict { .. }) => StatusCode::PRECONDITION_FAILED.into_response(),
-        Err(e) => e.into_response(),
+    };
+
+    let new_version =
+        match PgVersorgungsStatusRepository::upsert_tx(&mut tx, &rec, if_version).await {
+            Ok(v) => v,
+            Err(MdmError::VersionConflict { .. }) => {
+                return StatusCode::PRECONDITION_FAILED.into_response();
+            }
+            Err(e) => return e.into_response(),
+        };
+
+    // Emit de.markt.versorgung.changed so ERP subscribers (vertragd, billingd)
+    // are notified of supply-state transitions (Lieferbeginn, Lieferende,
+    // Lieferant changes) in near-real-time without polling.
+    let evt = MarktEvent::new(
+        &state.tenant_gln,
+        mako_events::markt::VERSORGUNG_CHANGED,
+        malo_id_str.clone(),
+        serde_json::json!({
+            "lieferstatus": body.lieferstatus,
+            "version": new_version,
+        }),
+    )
+    .with_extensions(EventExtensions {
+        marktmaloid: Some(malo_id_str),
+        ..Default::default()
+    });
+    if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt, &state.notify).await {
+        tracing::error!(error = %e, "versorgung: durable enqueue failed");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
+    if let Err(e) = tx.commit().await {
+        tracing::error!(error = %e, "versorgung: commit failed");
+        return MdmError::Internal(e.to_string()).into_response();
+    }
+
+    let mut resp_headers = HeaderMap::new();
+    resp_headers.insert("ETag", etag(new_version).parse().unwrap());
+    (StatusCode::OK, resp_headers).into_response()
 }

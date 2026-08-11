@@ -25,6 +25,13 @@
 //! - **§ 60 Abs. 2 MsbG Ersatzwertbildung** — a substitute reproduces the same
 //!   quarter-hour one week earlier (not a degraded fallback), never overwrites a
 //!   real measurement, and leaves one § 60 Abs. 6 audit row per substituted slot.
+//! - **A FAULTY slot is a gap** — the case § 60 Abs. 2 exists for. The
+//!   substitute displaces the faulty reading rather than coexisting with it,
+//!   which only holds while the Ersatzwert inherits the reporting operator that
+//!   keys its meterstore version scope.
+//! - **Periods are Berlin calendar periods** — German July runs
+//!   2026-06-30T22:00Z → 2026-07-31T22:00Z, and a period's quality is its worst
+//!   contributor by `severity_rank`, not by discriminant order.
 
 use edmd::domain::validation::ValidatedReads;
 use edmd::domain::{
@@ -140,6 +147,7 @@ fn read(malo: &str, from: OffsetDateTime, value: &str, sparte: Sparte, obis: &st
         sender_mp_id: Some("9900000000001".to_owned()),
         allocation_version: "INITIAL".to_owned(),
         valid_from_tx: None,
+        mscons_version: None,
     }
 }
 
@@ -367,7 +375,11 @@ async fn billable_filter_excludes_faulty_from_aggregates() {
         .await
         .expect("store reads");
 
-    let day = t.date();
+    // The report's period is a Berlin calendar day, so the day the interval
+    // belongs to is its *local* one — `t.date()` disagrees for anything in the
+    // last one or two UTC hours of a day and would make this test's outcome
+    // depend on the hour it runs at.
+    let day = metering::calendar::local_day(t);
     let report = repo
         .imbalance("51238696780", day, day, "9910000000001")
         .await
@@ -950,4 +962,268 @@ async fn a_short_gap_interpolates_between_its_real_brackets() {
         "the audit row must name the method that actually ran, not the one \
          requested: {logged:?}"
     );
+}
+
+/// A Liefermonat is a **Berlin** calendar period, not a UTC one.
+///
+/// German July 2026 runs from 2026-06-30T22:00Z to 2026-07-31T22:00Z. Deriving
+/// the window from naive UTC midnight instead misses the first two hours of the
+/// month and reaches two hours into August — an off-by-one-to-two-hour error at
+/// every month edge, and the wrong length across a DST transition. The fixture
+/// puts one quarter-hour on each side of both boundaries, so a UTC window and a
+/// Berlin one cannot produce the same total.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn a_billing_period_is_a_berlin_month_not_a_utc_one() {
+    use edmd::domain::BillingPeriodQuery;
+    use time::macros::{date, datetime};
+
+    let (repo, _pool, _pg, _wh) = setup().await;
+    let malo = "51238696780";
+    let obis = "1-0:1.8.0";
+
+    let reads = vec![
+        // Still June in Berlin (23:45 CEST on the 30th).
+        read(
+            malo,
+            datetime!(2026-06-30 21:45 UTC),
+            "100",
+            Sparte::Strom,
+            obis,
+        ),
+        // The first quarter-hour of German July.
+        read(
+            malo,
+            datetime!(2026-06-30 22:00 UTC),
+            "1",
+            Sparte::Strom,
+            obis,
+        ),
+        // The last quarter-hour of German July (23:45 CEST on the 31st).
+        read(
+            malo,
+            datetime!(2026-07-31 21:45 UTC),
+            "2",
+            Sparte::Strom,
+            obis,
+        ),
+        // Already August in Berlin.
+        read(
+            malo,
+            datetime!(2026-07-31 22:00 UTC),
+            "500",
+            Sparte::Strom,
+            obis,
+        ),
+    ];
+    repo.store_reads(validated(reads))
+        .await
+        .expect("store the month-boundary fixture");
+
+    let period = repo
+        .billing_period(&BillingPeriodQuery {
+            malo_id: malo.to_owned(),
+            period_from: date!(2026 - 07 - 01),
+            period_to: date!(2026 - 07 - 31),
+            tenant: "9910000000001".to_owned(),
+        })
+        .await
+        .expect("billing period")
+        .expect("the period has readings");
+
+    assert_eq!(
+        period.arbeitsmenge_kwh,
+        kwh("3"),
+        "German July is [2026-06-30T22:00Z, 2026-07-31T22:00Z): it holds both \
+         boundary quarter-hours and neither neighbour"
+    );
+}
+
+/// The quality a period reports is its worst contributor, ranked the way the
+/// domain ranks it.
+///
+/// `QualityFlag`'s declaration order is not the severity order —
+/// `severity_rank` puts Corrected/Substituted at 2 and Estimated at 3 — so
+/// picking the maximum discriminant reports a period of [Estimated, Corrected]
+/// as CORRECTED, which understates it, and caches that answer.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn a_periods_quality_is_its_worst_contributor_by_severity_rank() {
+    use edmd::domain::BillingPeriodQuery;
+    use time::macros::{date, datetime};
+
+    let (repo, _pool, _pg, _wh) = setup().await;
+    let malo = "51238696781";
+    let obis = "1-0:1.8.0";
+
+    let mut estimated = read(
+        malo,
+        datetime!(2026-07-10 10:00 UTC),
+        "4",
+        Sparte::Strom,
+        obis,
+    );
+    estimated.quality = QualityFlag::Estimated;
+    let mut corrected = read(
+        malo,
+        datetime!(2026-07-10 10:15 UTC),
+        "6",
+        Sparte::Strom,
+        obis,
+    );
+    corrected.quality = QualityFlag::Corrected;
+    repo.store_reads(validated(vec![estimated, corrected]))
+        .await
+        .expect("store the mixed-quality period");
+
+    let period = repo
+        .billing_period(&BillingPeriodQuery {
+            malo_id: malo.to_owned(),
+            period_from: date!(2026 - 07 - 01),
+            period_to: date!(2026 - 07 - 31),
+            tenant: "9910000000001".to_owned(),
+        })
+        .await
+        .expect("billing period")
+        .expect("the period has readings");
+
+    assert_eq!(
+        period.quality,
+        QualityFlag::Estimated,
+        "Estimated outranks Corrected on the canonical severity ranking, so a \
+         period holding both is Estimated"
+    );
+}
+
+/// § 60 Abs. 2 MsbG exists for the meter that reported something wrong, not
+/// only for the one that reported nothing.
+///
+/// A FAULTY interval is deliberately stored — ingest annotates and never
+/// rejects — so a substitute flow that treats "a row exists" as "a measurement
+/// exists" generates nothing for exactly the case the paragraph is about, and
+/// answers `generated_count: 0`. The reference series must therefore be
+/// filtered to billable qualities: a FAULTY slot is a gap.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn a_faulty_slot_is_a_gap_a_substitute_may_fill() {
+    use edmd::server::{SubstituteRequest, run_substitute_values};
+    use time::format_description::well_known::Rfc3339;
+
+    let (repo, pool, _pg, _wh) = setup().await;
+    let malo = "51238696782";
+    let obis = "1-0:1.8.0";
+
+    let gap_from = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("2026-01-01T00:00Z");
+    let gap_to = gap_from + Duration::minutes(150);
+    let week = Duration::days(7);
+
+    // A full, distinct reference week, so the Vergleichstag value is checkable.
+    let prior: Vec<MeterRead> = (0..672)
+        .map(|i| {
+            let start = gap_from - week + Duration::minutes(15 * i);
+            read(malo, start, &format!("{}.5", i + 1), Sparte::Strom, obis)
+        })
+        .collect();
+    repo.store_reads(validated(prior))
+        .await
+        .expect("store prior week");
+
+    // The window is not empty: every slot in it carries a FAULTY row. Nothing
+    // here is a measurement, so every slot is substitutable.
+    let faulty: Vec<MeterRead> = (0..10)
+        .map(|n| {
+            let mut r = read(
+                malo,
+                gap_from + Duration::minutes(15 * n),
+                "0.0",
+                Sparte::Strom,
+                obis,
+            );
+            r.quality = QualityFlag::Faulty;
+            r
+        })
+        .collect();
+    repo.store_reads(validated(faulty))
+        .await
+        .expect("store the faulty window");
+
+    let req = SubstituteRequest {
+        gap_from: gap_from.format(&Rfc3339).expect("rfc3339"),
+        gap_to: gap_to.format(&Rfc3339).expect("rfc3339"),
+        interval_secs: Some(900),
+        method: Some("PriorPeriodAverage".to_owned()),
+        prior_days: Some(7),
+        operator_id: Some("TEST-OPERATOR".to_owned()),
+        sparte: None,
+        reason: Some("MeterFault".to_owned()),
+        obis_code: Some(obis.to_owned()),
+    };
+    let status = run_substitute_values(&repo, "9910000000001", malo, &req)
+        .await
+        .status();
+    assert_eq!(
+        status.as_u16(),
+        201,
+        "a window full of FAULTY readings is exactly what § 60 Abs. 2 authorises \
+         a substitute for — it must not answer `generated_count: 0`"
+    );
+
+    let stored = repo
+        .query(&TimeSeriesQuery {
+            malo_id: malo.to_owned(),
+            from: gap_from,
+            to: gap_to,
+            sparte: None,
+            tenant: "9910000000001".to_owned(),
+        })
+        .await
+        .expect("read the gap window back");
+
+    // Exactly one row per slot. The Ersatzwert has to *displace* the faulty
+    // reading, not sit beside it — meterstore versions only supersede within a
+    // version scope, and that scope is keyed on the reporting operator, so a
+    // substitute filed under the tenant would leave both rows standing and
+    // double-count every slot in every aggregate.
+    assert_eq!(
+        stored.len(),
+        10,
+        "the substitute must supersede the faulty reading, not coexist with it: \
+         {stored:#?}"
+    );
+
+    for n in 0..10i64 {
+        let slot = gap_from + Duration::minutes(15 * n);
+        let row = stored
+            .iter()
+            .find(|r| r.dtm_from == slot)
+            .unwrap_or_else(|| panic!("no reading at slot {n}"));
+        assert_eq!(
+            row.quality,
+            QualityFlag::Substituted,
+            "slot {n} must have been replaced by an Ersatzwert, not left FAULTY"
+        );
+        assert_eq!(
+            row.quantity_kwh,
+            kwh(&format!("{}.5", n + 1)),
+            "the Ersatzwert must be the same slot one week earlier, and the \
+             FAULTY 0.0 must not have been used as reference data"
+        );
+    }
+
+    // The Sparte comes from the resolved series, not the (omitted) request
+    // field, so a Strom gap stays Strom rather than defaulting by luck.
+    assert!(
+        stored.iter().all(|r| r.sparte == Sparte::Strom),
+        "the substitute must inherit the stored series' Sparte"
+    );
+
+    let logged: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM substitute_value_log WHERE malo_id = $1 AND tenant = $2",
+    )
+    .bind(malo)
+    .bind("9910000000001")
+    .fetch_one(&pool)
+    .await
+    .expect("read the substitute audit log");
+    assert_eq!(logged, 10, "one § 60 Abs. 6 audit row per substituted slot");
 }

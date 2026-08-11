@@ -104,8 +104,13 @@ pub async fn post_vpp_billing(
     // whose Steuerkennzeichen said UST_19 whatever the override rate was.
     let mut positions: Vec<BillingPosition> = Vec::with_capacity(req.dispatch_events.len());
     let mut total_flex_kwh = Decimal::ZERO;
+    // Load-increase (negative flexibility) dispatches are not billable on this
+    // capacity-price model, but dropping them without trace makes a settlement
+    // silently smaller than the dispatch log. Count them and report the count.
+    let mut skipped_events = 0usize;
     for ev in &req.dispatch_events {
         if ev.flexibility_kwh <= Decimal::ZERO {
+            skipped_events += 1;
             continue;
         }
         total_flex_kwh += ev.flexibility_kwh;
@@ -133,6 +138,16 @@ pub async fn post_vpp_billing(
             "all dispatch events have zero or negative flexibility — no billing generated",
         )
             .into_response();
+    }
+    if skipped_events > 0 {
+        tracing::warn!(
+            %vpp_id,
+            malo_id = %req.malo_id,
+            skipped_events,
+            billed_events = positions.len(),
+            "billingd VPP: dispatch events with zero or negative flexibility are not billable \
+             on the capacity-price model — excluded from this settlement"
+        );
     }
 
     let rechnungsnummer = req
@@ -260,6 +275,9 @@ pub async fn post_vpp_billing(
             "period_from": period_from.to_string(),
             "period_to": period_to.to_string(),
             "dispatch_count": req.dispatch_events.len(),
+            // Not billable on the capacity-price model — stated so the caller can
+            // reconcile the settlement against its dispatch log.
+            "skipped_non_positive_events": skipped_events,
             "total_flexibility_kwh": total_flex_kwh.to_string(),
             "total_netto_eur": total_netto.to_string(),
             "total_brutto_eur": total_brutto.to_string(),

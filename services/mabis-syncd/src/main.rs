@@ -82,6 +82,7 @@ impl Daemon for MabisSyncd {
         {
             let engine = engine.clone();
             let cfg = cfg.clone();
+            let pool = ctx.pool().clone();
             let shutdown = ctx.shutdown.clone();
             tokio::spawn(async move {
                 // BK6-24-174 Anlage 3 §3.10, Tabelle 2: the Erstaufschlag window for
@@ -103,14 +104,43 @@ impl Daemon for MabisSyncd {
                         continue;
                     }
 
-                    let (from, to) = mabis_syncd::sync_engine::previous_month_period(now.date());
+                    // The Bilanzierungsmonat and its Werktag calendar are civil,
+                    // so the due date is compared against the Berlin date — a UTC
+                    // date is a day behind for the first hour of every local day.
+                    let today = mabis_syncd::sync_engine::berlin_date(now);
+                    let (from, to) = mabis_syncd::sync_engine::previous_month_period(today);
                     let due = mako_engine::fristen::add_werktage(
                         to,
                         submit_wt,
                         mako_engine::fristen::HolidayCalendar::BdewMaKo,
                     );
-                    if now.date() != due {
+                    if today != due {
                         continue;
+                    }
+
+                    // The loop wakes every 5 minutes and the hour test stays true
+                    // for the whole `run_hour`, so without this the same binding
+                    // Summenzeitreihe went out a dozen times. A failed run is not
+                    // a filing, so it does not block the retry.
+                    match mabis_syncd::pg::has_live_run_for_period(
+                        &pool,
+                        &cfg.identity.tenant,
+                        &cfg.identity.bilanzierungsgebiet_id,
+                        from,
+                        to,
+                    )
+                    .await
+                    {
+                        Ok(true) => continue,
+                        Ok(false) => {}
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "mabis-syncd: cannot check for an existing run — skipping this \
+                                 tick rather than risking a duplicate filing"
+                            );
+                            continue;
+                        }
                     }
 
                     match engine.run_aggregation(from, to, None, None).await {

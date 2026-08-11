@@ -46,9 +46,23 @@ CREATE TABLE products (
     -- Certification labels extracted from energiemix for GIN filtering
     oekolabel       TEXT[],
     tenant          TEXT    NOT NULL,
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (lf_mp_id, product_code, valid_from)
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- The identity of a product version. Two things the plain
+-- `UNIQUE (lf_mp_id, product_code, valid_from)` got wrong:
+--
+--   * no tenant — tenant B's PUT of the same product code overwrote tenant A's
+--     row, because the upsert's DO UPDATE had no tenant predicate either;
+--   * NULLs are distinct under a plain UNIQUE, so every PUT of an open-ended
+--     product (valid_from IS NULL) inserted another duplicate instead of
+--     updating, after which `fetch_product`'s LIMIT 1 picked among them
+--     nondeterministically.
+--
+-- The COALESCE sentinel gives the open-ended version a single identity it can
+-- actually conflict on. It is never read back — `valid_from` stays NULL.
+CREATE UNIQUE INDEX products_identity ON products
+    (tenant, lf_mp_id, product_code, (COALESCE(valid_from, DATE '0001-01-01')));
 
 COMMENT ON TABLE products IS
     'Product catalog. ALL prices are user-defined in data.tarifpreispositionen. '
@@ -250,6 +264,19 @@ CREATE TABLE angebote (
 COMMENT ON TABLE angebote IS
     'Formal B2B quotation (Angebot) for C&I/RLM customers. '
     'Acceptance emits de.tarif.angebot.angenommen → vertragd creates Rahmenvertrag.';
+
+-- Angebotsnummer counter, one row per tenant and year.
+--
+-- The number was derived as `COUNT(*) + 1` over `angebote`, so two quotations
+-- created at the same time read the same count and the second collided on
+-- `UNIQUE (tenant, lf_mp_id, angebotsnummer)`. An upsert on this row hands out
+-- each number exactly once.
+CREATE TABLE angebot_sequenzen (
+    tenant        TEXT     NOT NULL,
+    jahr          INTEGER  NOT NULL,
+    letzte_nummer BIGINT   NOT NULL DEFAULT 0,
+    PRIMARY KEY (tenant, jahr)
+);
 
 COMMENT ON COLUMN angebote.varianten IS
     'Array of AngebotVariante: alternative scenarios for comparison. '

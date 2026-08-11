@@ -45,6 +45,71 @@ fn fmt_edifact_version(t: OffsetDateTime) -> String {
     )
 }
 
+/// The Berlin civil date of an instant.
+///
+/// MaBiS Fristen and Bilanzierungsmonate run on the local calendar, so the
+/// Werktag arithmetic must not shift by a day around midnight UTC.
+#[must_use]
+pub fn berlin_date(t: OffsetDateTime) -> Date {
+    use time_tz::OffsetDateTimeExt as _;
+    t.to_timezone(time_tz::timezones::db::europe::BERLIN).date()
+}
+
+/// Berlin local midnight of `d`, as a UTC instant.
+///
+/// Midnight never falls in a DST gap/overlap (transitions are at 02:00/03:00),
+/// so `take_first` is unambiguous.
+#[must_use]
+pub fn berlin_midnight_utc(d: Date) -> OffsetDateTime {
+    use time_tz::PrimitiveDateTimeExt as _;
+    d.midnight()
+        .assume_timezone(time_tz::timezones::db::europe::BERLIN)
+        .take_first()
+        .expect("Berlin local midnight is unambiguous")
+        .to_offset(time::UtcOffset::UTC)
+}
+
+/// The settlement window `[from, to)` for a Bilanzierungsmonat, as UTC instants.
+///
+/// `period_to` is the **inclusive** last day of the month, so the exclusive end
+/// is the following Berlin midnight. Taking `period_to` itself dropped the last
+/// day of every month, and UTC midnight shifted the grid by an hour, which made
+/// the two DST months come out four slots short or long.
+#[must_use]
+pub fn aggregation_window(period_from: Date, period_to: Date) -> (OffsetDateTime, OffsetDateTime) {
+    let end = period_to.next_day().unwrap_or(period_to);
+    (berlin_midnight_utc(period_from), berlin_midnight_utc(end))
+}
+
+/// Idempotency key for one Summenzeitreihe submission.
+///
+/// `makod` requires the header on every command and rejects the request with
+/// 422 `missing_idempotency_key` otherwise, so an omitted key failed every run.
+/// It never compares the key, but a retry must still present the same one: the
+/// key ties the attempts of one submission together in makod's log, and the
+/// identity of a submission is exactly (run, Bilanzierungsgebiet, Version).
+#[must_use]
+pub fn idempotency_key(
+    run_id: Uuid,
+    bilanzierungsgebiet_id: &str,
+    version: OffsetDateTime,
+) -> String {
+    format!(
+        "mabis-szr-{run_id}-{bilanzierungsgebiet_id}-{}",
+        fmt_edifact_version(version)
+    )
+}
+
+/// Truncate a version timestamp to whole seconds.
+///
+/// The wire value (MSCONS SG6 DTM+293, format 304) carries seconds and no more,
+/// so a stored version with sub-second precision can never be matched again when
+/// the BIKO echoes it back in a Datenstatus or Prüfmitteilung.
+#[must_use]
+pub fn truncate_to_seconds(t: OffsetDateTime) -> OffsetDateTime {
+    t.replace_nanosecond(0).unwrap_or(t)
+}
+
 /// Interval bound as EDIFACT format 303 (`CCYYMMDDHHMMZZZ`).
 fn fmt_edifact_instant(t: OffsetDateTime) -> String {
     let t = t.to_offset(time::UtcOffset::UTC);
@@ -151,17 +216,21 @@ impl SyncEngine {
 
         // The window decides the Datenstatus the BIKO will assign, so it is
         // derived from the settlement calendar rather than chosen by the caller.
-        let (abrechnungslauf, phase) = phase_for(period_to, OffsetDateTime::now_utc().date());
+        // The Bilanzierungsmonat is civil, so the phase runs off the Berlin date
+        // — a UTC date is a day behind for the first hour of every local day.
+        let (abrechnungslauf, phase) = phase_for(period_to, berlin_date(OffsetDateTime::now_utc()));
 
-        // Create submission record. `version` defaults to `now()` — ascending
-        // per §3.8.2, and a resubmission for the same period is a new version
-        // rather than a replacement of the previous row.
+        // The version is ascending per §3.8.2 and truncated to whole seconds,
+        // because that is all the wire carries. A resubmission for the same
+        // period is a new version rather than a replacement of the previous row.
+        let version = truncate_to_seconds(OffsetDateTime::now_utc());
         let run_id = pg::insert_run(
             &self.pool,
             pg::InsertRunParams {
                 bilanzierungsgebiet_id,
                 period_from,
                 period_to,
+                version,
                 abrechnungslauf,
                 phase,
                 corrects_run_id,
@@ -172,14 +241,6 @@ impl SyncEngine {
         )
         .await
         .context("failed to create submission_run record")?;
-
-        // The version the row was assigned, which travels into the message.
-        let version: OffsetDateTime =
-            sqlx::query_scalar("SELECT version FROM submission_runs WHERE id = $1")
-                .bind(run_id)
-                .fetch_one(&self.pool)
-                .await
-                .context("failed to read back the assigned version")?;
 
         info!(
             run_id = %run_id,
@@ -229,6 +290,21 @@ impl SyncEngine {
                         pg::mark_acked(&self.pool, run_id, &message_ref, process_id)
                             .await
                             .context("failed to mark run as acked")?;
+                        // §9.8.1: the corrected BG-SZR is the answer to the
+                        // negative Prüfmitteilung, so the obligation closes here
+                        // — otherwise it stays open on /korrekturbedarf forever.
+                        if let Some(corrected) = corrects_run_id {
+                            match pg::close_korrekturbedarf(&self.pool, corrected, run_id).await {
+                                Ok(n) => info!(
+                                    run_id = %run_id, corrects_run_id = %corrected, closed = n,
+                                    "mabis-syncd: Korrekturbedarf closed by correcting submission"
+                                ),
+                                Err(e) => warn!(
+                                    run_id = %run_id, error = %e,
+                                    "mabis-syncd: failed to close Korrekturbedarf"
+                                ),
+                            }
+                        }
                         info!(
                             run_id = %run_id,
                             message_ref,
@@ -239,18 +315,14 @@ impl SyncEngine {
                     }
                     Err(e) => {
                         warn!(run_id = %run_id, error = %e, "mabis-syncd: Summenzeitreihe submission failed");
-                        pg::mark_failed(&self.pool, run_id, &e.to_string())
-                            .await
-                            .ok();
+                        Self::mark_failed(&self.pool, run_id, &e.to_string()).await;
                         return Err(e);
                     }
                 }
             }
             Err(e) => {
                 warn!(run_id = %run_id, error = %e, "mabis-syncd: aggregation failed");
-                pg::mark_failed(&self.pool, run_id, &e.to_string())
-                    .await
-                    .ok();
+                Self::mark_failed(&self.pool, run_id, &e.to_string()).await;
                 return Err(e);
             }
         }
@@ -273,11 +345,10 @@ impl SyncEngine {
         as_of: Option<OffsetDateTime>,
     ) -> Result<Vec<Summenzeitreihe>> {
         let cfg = &self.cfg;
-        let from_ts = OffsetDateTime::new_utc(period_from, time::Time::MIDNIGHT);
-        let to_ts = OffsetDateTime::new_utc(period_to, time::Time::MIDNIGHT);
+        let (from_ts, to_ts) = aggregation_window(period_from, period_to);
 
         // Discover MaLo list from edmd — query all billing periods in this period
-        let malo_ids = self.discover_malos(from_ts, to_ts).await?;
+        let malo_ids = self.discover_malos(period_from, period_to).await?;
         info!(
             malo_count = malo_ids.len(),
             "mabis-syncd: discovered MaLos for aggregation"
@@ -557,16 +628,10 @@ impl SyncEngine {
     }
 
     /// Discover MaLo IDs from edmd billing periods for the given time window.
-    async fn discover_malos(
-        &self,
-        from: OffsetDateTime,
-        to: OffsetDateTime,
-    ) -> Result<Vec<String>> {
+    async fn discover_malos(&self, from: Date, to: Date) -> Result<Vec<String>> {
         let cfg = &self.cfg;
-        let from_date = from.date();
-        let to_date = to.date();
         let url = format!(
-            "{}/api/v1/billing-periods?from={from_date}&to={to_date}&tenant={}",
+            "{}/api/v1/billing-periods?from={from}&to={to}&tenant={}",
             cfg.edmd.url, cfg.identity.tenant,
         );
 
@@ -706,18 +771,34 @@ impl SyncEngine {
             .await
             .with_context(|| format!("failed to parse lastgang response for {malo_id}"))?;
 
-        // The endpoint returns one BO4E `Lastgang` per OBIS code, each holding
-        // the slot values under `werte`.
+        Self::parse_lastgaenge(malo_id, &data)
+    }
+
+    /// Turn edmd's BO4E `Lastgang` array into the MaLo's Bezugs-intervals.
+    ///
+    /// The endpoint returns **one Lastgang per OBIS code**. Flattening all of
+    /// them summed a MaLo's Bezugs- (`1.x.y`) and Einspeisungsregister
+    /// (`2.x.y`) into the same settlement slot, double-counting the MaLo into
+    /// the Summenzeitreihe. The BG-SZR settles Bezug, so only the import
+    /// direction contributes.
+    fn parse_lastgaenge(
+        malo_id: &str,
+        data: &serde_json::Value,
+    ) -> Result<Vec<metering::MeterInterval>> {
         let lastgaenge = data
             .as_array()
             .with_context(|| format!("edmd /lastgang/{malo_id} did not return an array"))?;
 
         let mut intervals: Vec<metering::MeterInterval> = Vec::new();
+        let mut skipped: Vec<String> = Vec::new();
         for lastgang in lastgaenge {
             // metering 0.16 types OBIS as `ObisCode`; parse and drop an unparseable code.
-            let obis = lastgang["obisKennzahl"]
-                .as_str()
-                .and_then(|s| metering::ObisCode::parse(s).ok());
+            let raw_obis = lastgang["obisKennzahl"].as_str().unwrap_or_default();
+            let obis = metering::ObisCode::parse(raw_obis).ok();
+            if !obis.as_ref().is_some_and(metering::ObisCode::is_import) {
+                skipped.push(raw_obis.to_owned());
+                continue;
+            }
             for wert in lastgang["werte"].as_array().into_iter().flatten() {
                 let zeitraum = &wert["zeitraum"];
                 let from =
@@ -739,6 +820,23 @@ impl SyncEngine {
             }
         }
         intervals.sort_by_key(|iv| iv.from);
+
+        // Every series was a non-Bezug register. Reporting nothing would look
+        // like a MaLo without data and short the territory silently, so it is
+        // named instead.
+        if intervals.is_empty() && !skipped.is_empty() {
+            anyhow::bail!(
+                "edmd returned no Bezugs-Lastgang for {malo_id}; only these registers: {}",
+                skipped.join(", ")
+            );
+        }
+        if !skipped.is_empty() {
+            info!(
+                malo_id,
+                skipped = skipped.join(", "),
+                "mabis-syncd: non-Bezug registers excluded from the Summenzeitreihe"
+            );
+        }
 
         Ok(intervals)
     }
@@ -810,11 +908,18 @@ impl SyncEngine {
             }
         });
 
+        let idempotency_key = idempotency_key(
+            run_id,
+            &summenzeitreihe.bilanzierungsgebiet_id.0,
+            summenzeitreihe.version,
+        );
+
         let url = format!("{}/api/v1/commands", cfg.makod.url);
         let resp = self
             .makod_client
             .post(&url)
             .bearer_auth(&cfg.makod.api_key)
+            .header("Idempotency-Key", &idempotency_key)
             .json(&command)
             .send()
             .await
@@ -839,6 +944,19 @@ impl SyncEngine {
             .and_then(|s| Uuid::parse_str(s).ok());
 
         Ok((message_ref, process_id))
+    }
+
+    /// Mark a run failed, logging rather than dropping a write error.
+    ///
+    /// Swallowing it left the run in `pending`, where the retry list picks it up
+    /// forever and nothing records why the submission never went out.
+    async fn mark_failed(pool: &sqlx::PgPool, run_id: Uuid, error_msg: &str) {
+        if let Err(e) = pg::mark_failed(pool, run_id, error_msg).await {
+            warn!(
+                run_id = %run_id, error = %e,
+                "mabis-syncd: could not record the run failure — the run stays in 'pending'"
+            );
+        }
     }
 
     /// Helper: count MaLos logged for a run.
@@ -954,5 +1072,149 @@ mod edifact_format_tests {
         let berlin_summer = datetime!(2026-06-14 07:07:09 +02:00);
         assert_eq!(fmt_edifact_version(berlin_summer), "20260614050709+00");
         assert_eq!(fmt_edifact_instant(berlin_summer), "202606140507+00");
+    }
+
+    /// The stored version is what the BIKO echoes back in a Datenstatus, and it
+    /// is matched by equality. Anything the wire cannot carry must therefore be
+    /// gone before the row is written.
+    #[test]
+    fn the_stored_version_round_trips_through_the_wire_format() {
+        let raw = datetime!(2026-06-14 05:07:09.123456 UTC);
+        let stored = truncate_to_seconds(raw);
+
+        assert_eq!(stored, datetime!(2026-06-14 05:07:09 UTC));
+        assert_eq!(stored.nanosecond(), 0);
+        // The wire value is identical either way — which is exactly why an
+        // untruncated row could never be found again.
+        assert_eq!(fmt_edifact_version(raw), fmt_edifact_version(stored));
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+    use time::macros::{date, datetime};
+
+    /// Number of MaBiS quarter-hour slots the window spans — the same
+    /// derivation `Summenzeitreihe::expected_slot_count` performs.
+    fn slots(period_from: Date, period_to: Date) -> i64 {
+        let (from, to) = aggregation_window(period_from, period_to);
+        (to - from).whole_seconds() / (15 * 60)
+    }
+
+    /// `period_to` is the inclusive last day of the month, so the window has to
+    /// run to the *following* midnight. Ending at `period_to` itself dropped the
+    /// last day of every Bilanzierungsmonat — 96 slots of energy.
+    #[test]
+    fn a_plain_month_spans_every_slot_including_the_last_day() {
+        assert_eq!(slots(date!(2026 - 06 - 01), date!(2026 - 06 - 30)), 30 * 96);
+        let (from, to) = aggregation_window(date!(2026 - 06 - 01), date!(2026 - 06 - 30));
+        assert_eq!(
+            from,
+            datetime!(2026-05-31 22:00 UTC),
+            "Berlin midnight, CEST"
+        );
+        assert_eq!(to, datetime!(2026-06-30 22:00 UTC));
+    }
+
+    /// The MaBiS grid is a Berlin-local grid. A UTC window keeps every month at
+    /// 24 h a day, which is wrong for exactly the two DST months — and the BIKO
+    /// cannot tell a short series from a complete one.
+    #[test]
+    fn the_dst_months_are_short_and_long_by_one_hour() {
+        // 2026-03-29: 02:00 → 03:00, so March holds 31 × 96 − 4 slots.
+        assert_eq!(slots(date!(2026 - 03 - 01), date!(2026 - 03 - 31)), 2972);
+        // 2026-10-25: 03:00 → 02:00, so October holds 31 × 96 + 4 slots.
+        assert_eq!(slots(date!(2026 - 10 - 01), date!(2026 - 10 - 31)), 2980);
+    }
+
+    /// A January period must start in the previous UTC year (CET is +01).
+    #[test]
+    fn a_winter_window_starts_the_evening_before() {
+        let (from, to) = aggregation_window(date!(2026 - 01 - 01), date!(2026 - 01 - 31));
+        assert_eq!(from, datetime!(2025-12-31 23:00 UTC));
+        assert_eq!(to, datetime!(2026-01-31 23:00 UTC));
+        assert_eq!(slots(date!(2026 - 01 - 01), date!(2026 - 01 - 31)), 31 * 96);
+    }
+}
+
+#[cfg(test)]
+mod lastgang_tests {
+    use super::*;
+
+    fn lastgang(obis: &str, wert: &str) -> serde_json::Value {
+        serde_json::json!({
+            "obisKennzahl": obis,
+            "werte": [{
+                "zeitraum": {
+                    "startdatum": "2026-06-01",
+                    "startuhrzeit": "00:00:00+00:00",
+                    "enddatum": "2026-06-01",
+                    "enduhrzeit": "00:15:00+00:00",
+                },
+                "wert": wert,
+                "status": "ABGELESEN",
+            }],
+        })
+    }
+
+    /// A MaLo with both a Bezugs- and an Einspeisungsregister returns two
+    /// Lastgänge over the same slots. Summing both put the feed-in energy into
+    /// the Summenzeitreihe as consumption.
+    #[test]
+    fn the_einspeisung_register_does_not_contribute() {
+        let data = serde_json::json!([
+            lastgang("1-0:1.29.0", "12.5"),
+            lastgang("1-0:2.29.0", "40.0"),
+        ]);
+        let intervals = SyncEngine::parse_lastgaenge("50123456789", &data).expect("parses");
+        assert_eq!(intervals.len(), 1, "one slot, not one per register");
+        assert_eq!(intervals[0].value, Decimal::new(125, 1));
+    }
+
+    /// A MaLo whose only registers are non-Bezug would otherwise look like a
+    /// MaLo without data, and short the territory without saying so.
+    #[test]
+    fn a_malo_with_no_bezug_register_is_an_error() {
+        let data = serde_json::json!([lastgang("1-0:2.29.0", "40.0")]);
+        let err = SyncEngine::parse_lastgaenge("50123456789", &data).expect_err("refuses");
+        assert!(err.to_string().contains("1-0:2.29.0"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod idempotency_tests {
+    use super::*;
+    use time::macros::datetime;
+
+    /// `makod` rejects a command without the header (422
+    /// `missing_idempotency_key`), so the key must exist — and a retry must
+    /// present the same one, which means it derives only from the submission's
+    /// identity and never from the clock.
+    #[test]
+    fn the_key_is_stable_for_one_submission_and_distinct_across_them() {
+        let run = uuid::uuid!("2f1a5b6c-0d3e-4f50-8a91-b2c3d4e5f607");
+        let other_run = uuid::uuid!("3f1a5b6c-0d3e-4f50-8a91-b2c3d4e5f607");
+        let version = datetime!(2026-07-14 05:07:09 UTC);
+
+        let key = idempotency_key(run, "11XBG-DEMO-----K", version);
+        assert_eq!(
+            key,
+            idempotency_key(run, "11XBG-DEMO-----K", version),
+            "a retry must reuse the key"
+        );
+        assert_eq!(
+            key,
+            "mabis-szr-2f1a5b6c-0d3e-4f50-8a91-b2c3d4e5f607-11XBG-DEMO-----K-20260714050709+00"
+        );
+
+        // Each territory files its own MSCONS, and each version is a distinct
+        // filing — neither may share a key with another.
+        assert_ne!(key, idempotency_key(run, "11XBG-OTHER----5", version));
+        assert_ne!(key, idempotency_key(other_run, "11XBG-DEMO-----K", version));
+        assert_ne!(
+            key,
+            idempotency_key(run, "11XBG-DEMO-----K", datetime!(2026-07-14 05:07:10 UTC))
+        );
     }
 }

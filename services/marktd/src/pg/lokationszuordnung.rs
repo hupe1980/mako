@@ -169,7 +169,7 @@ impl LokationszuordnungRepository for PgLokationszuordnungRepository {
                 WHERE tenant = $1
                   AND von_id = $2
                   AND ($3::DATE IS NULL OR (valid_from IS NULL OR valid_from <= $3))
-                  AND ($3::DATE IS NULL OR (valid_to   IS NULL OR valid_to   >= $3))
+                  AND ($3::DATE IS NULL OR (valid_to   IS NULL OR valid_to   >  $3))
                 UNION ALL
                 -- Recursive: follow edges from each reached node, depth < 8
                 SELECT lz.id::TEXT, lz.tenant, lz.von_id, lz.von_typ, lz.nach_id,
@@ -179,7 +179,7 @@ impl LokationszuordnungRepository for PgLokationszuordnungRepository {
                 JOIN graph g ON lz.von_id = g.nach_id AND lz.tenant = g.tenant
                 WHERE g.depth < 8
                   AND ($3::DATE IS NULL OR (lz.valid_from IS NULL OR lz.valid_from <= $3))
-                  AND ($3::DATE IS NULL OR (lz.valid_to   IS NULL OR lz.valid_to   >= $3))
+                  AND ($3::DATE IS NULL OR (lz.valid_to   IS NULL OR lz.valid_to   >  $3))
             )
             SELECT * FROM graph ORDER BY depth, von_id, nach_id",
         )
@@ -212,7 +212,7 @@ impl LokationszuordnungRepository for PgLokationszuordnungRepository {
               WHERE tenant = $1
                 AND von_id = $2
                 AND ($3::DATE IS NULL OR (valid_from IS NULL OR valid_from <= $3))
-                AND ($3::DATE IS NULL OR (valid_to   IS NULL OR valid_to   >= $3))
+                AND ($3::DATE IS NULL OR (valid_to   IS NULL OR valid_to   >  $3))
               ORDER BY nach_typ, nach_id",
         )
         .bind(tenant)

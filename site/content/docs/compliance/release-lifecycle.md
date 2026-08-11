@@ -5,20 +5,22 @@ weight = 11
 +++
 # Annual BDEW Release Lifecycle
 
-EDI@Energy specifications are updated annually. This document describes how new BDEW releases are incorporated into the library and what the `xtask` automation covers.
+EDI@Energy specifications are updated on a recurring cycle. This document describes how new BDEW releases are incorporated into `edi-energy`, how they are rolled out across the platform, and what the `xtask` automation covers.
 
 ---
 
 ## BDEW Release Cycle
 
-| Event | Date |
-|---|---|
-| BDEW publishes new specifications | ~ August each year |
-| Specifications become **valid** | **October 1** (e.g. `fv20261001`) |
-| Previous specifications **expire** | September 30 of the same year |
-| Transition window (both valid) | **± 7 days** around Oct 1 |
+Cutovers are **staggered per message type**, not synchronised on one annual date. A given format version carries its own `valid_from`, and different message types move on different dates in the same year — `contrl` on January 1, `invoic`/`orders`/`ordrsp` on April 1, `utilmd`/`mscons`/`aperak` on October 1.
 
-The library enforces this via `valid_from` / `valid_until` metadata in each profile JSON and the `TRANSITION_GRACE_DAYS = 7` constant.
+| Event | Timing |
+|---|---|
+| BDEW publishes a new specification | ~ 2–3 months before that message type's cutover |
+| The specification becomes **valid** | its own `valid_from` — **January 1**, **April 1** or **October 1** (e.g. `fv20260101`, `fv20260401`, `fv20261001`) |
+| The predecessor **expires** | the day before its successor's `valid_from` |
+| Transition window (both valid) | **± 7 days** around the cutover |
+
+`edi-energy` enforces this via `valid_from` / `valid_until` metadata in each profile JSON and the `TRANSITION_GRACE_DAYS = 7` constant. Because the dates differ per message type, a running instance normally holds several format versions valid at once — see [Annual Release Workflow](@/docs/compliance/annual-release-workflow.md) for the step-by-step rollout and its appendices.
 
 ---
 

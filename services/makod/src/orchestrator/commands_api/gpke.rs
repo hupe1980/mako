@@ -26,7 +26,7 @@ pub(super) fn cmd_gpke_lieferende_anmelden<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(dispatch_lf_anmeldung(s, p, 55002, "lieferende_datum"))
+    Box::pin(dispatch_lf_anmeldung(s, p, 55004, "lieferende_datum"))
 }
 
 pub(super) fn cmd_gpke_kuendigung_anmelden<'a>(

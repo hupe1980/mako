@@ -589,7 +589,6 @@ pub struct SettleInput {
     pub direktverm_aw_ct: Option<Decimal>,
     pub mieter_zuschlag_ct: Option<Decimal>,
     pub flex_praemie_ct_kwh: Option<Decimal>,
-    pub managementpraemie_ct: Option<Decimal>,
     pub kwk_strom_kwh_gesamt: Option<Decimal>,
     pub kwk_max_kwh: Option<Decimal>,
     /// Derived from `mastr_registriert` in `run_settlement` — not set by caller.
@@ -839,6 +838,104 @@ async fn compute_biogas_sect44b_eligible(
     Ok(Some(remaining))
 }
 
+// ── Idempotent accrual of the cumulative counters ────────────────────────────
+
+/// What one billing period contributes to the plant's running totals.
+///
+/// These counters (§44b quota, §51a Förderende extension, KWKG kWh limit) run
+/// over the whole Förderdauer, while `POST /settle` is idempotent. Recording the
+/// contribution per period is what lets a re-settle apply the difference instead
+/// of the full amount a second time.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PeriodAccrual {
+    /// §51a: raw negative-price quarter-hours.
+    pub negative_price_qh: i64,
+    /// §44b: kWh charged against the annual Biogas quota.
+    pub biogas_kwh: Decimal,
+    /// KWKG: kWh charged against the Zuschlag limit.
+    pub kwk_kwh: Decimal,
+}
+
+impl PeriodAccrual {
+    /// What still has to be applied to reach `self` from `previous`.
+    #[must_use]
+    pub fn delta_from(&self, previous: &Self) -> Self {
+        Self {
+            negative_price_qh: self.negative_price_qh - previous.negative_price_qh,
+            biogas_kwh: self.biogas_kwh - previous.biogas_kwh,
+            kwk_kwh: self.kwk_kwh - previous.kwk_kwh,
+        }
+    }
+
+    /// `true` when nothing needs to be applied.
+    #[must_use]
+    pub fn is_zero(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Record this period's contribution and return what still has to be applied.
+///
+/// The stored row is the period's *absolute* contribution, so the returned delta
+/// is zero for an unchanged re-settle and carries only the change for a
+/// correction — including a negative one when a period is re-settled lower.
+async fn record_period_accrual(
+    conn: &mut sqlx::PgConnection,
+    tr_id: &str,
+    tenant: &str,
+    billing_year: i16,
+    billing_month: i16,
+    period: &PeriodAccrual,
+) -> anyhow::Result<PeriodAccrual> {
+    // The row is locked for the rest of the settlement transaction, so two
+    // concurrent settles of the same period cannot both read the same baseline.
+    let previous: Option<(i64, Decimal, Decimal)> = sqlx::query_as(
+        "SELECT negative_price_qh, biogas_kwh, kwk_kwh
+           FROM settlement_period_accruals
+          WHERE tr_id = $1 AND tenant = $2
+            AND billing_year = $3 AND billing_month = $4
+          FOR UPDATE",
+    )
+    .bind(tr_id)
+    .bind(tenant)
+    .bind(billing_year)
+    .bind(billing_month)
+    .fetch_optional(&mut *conn)
+    .await
+    .context("read period accrual")?;
+
+    let previous =
+        previous.map_or_else(PeriodAccrual::default, |(qh, biogas, kwk)| PeriodAccrual {
+            negative_price_qh: qh,
+            biogas_kwh: biogas,
+            kwk_kwh: kwk,
+        });
+
+    sqlx::query(
+        "INSERT INTO settlement_period_accruals
+             (tr_id, tenant, billing_year, billing_month,
+              negative_price_qh, biogas_kwh, kwk_kwh)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (tr_id, tenant, billing_year, billing_month) DO UPDATE
+         SET negative_price_qh = EXCLUDED.negative_price_qh,
+             biogas_kwh        = EXCLUDED.biogas_kwh,
+             kwk_kwh           = EXCLUDED.kwk_kwh,
+             updated_at        = now()",
+    )
+    .bind(tr_id)
+    .bind(tenant)
+    .bind(billing_year)
+    .bind(billing_month)
+    .bind(period.negative_price_qh)
+    .bind(period.biogas_kwh)
+    .bind(period.kwk_kwh)
+    .execute(&mut *conn)
+    .await
+    .context("record period accrual")?;
+
+    Ok(period.delta_from(&previous))
+}
+
 /// Update the Biogas §44b year-to-date counter after a successful settlement.
 async fn update_biogas_quota_ytd(
     conn: &mut sqlx::PgConnection,
@@ -849,7 +946,7 @@ async fn update_biogas_quota_ytd(
 ) -> anyhow::Result<()> {
     sqlx::query(
         "UPDATE eeg_anlagen
-         SET biogas_quota_kwh_ytd  = biogas_quota_kwh_ytd + $4,
+         SET biogas_quota_kwh_ytd  = GREATEST(biogas_quota_kwh_ytd + $4, 0),
              biogas_quota_ytd_year = $3
          WHERE tr_id = $1 AND tenant = $2",
     )
@@ -968,8 +1065,6 @@ pub struct SettleOverrides {
     pub einspeisemenge_kwh: Option<Decimal>,
     /// Explicit EPEX / Jahresmarktwert ct/kWh (overrides DB lookup).
     pub epex_avg_ct_kwh: Option<Decimal>,
-    /// §20 Abs. 3 Managementprämie override ct/kWh.
-    pub managementpraemie_ct_override: Option<Decimal>,
     /// §13a EnWG curtailed kWh for this billing period.
     pub einspeisemanagement_kwh: Option<Decimal>,
     /// §51 EEG — kWh fed in during negative-spot-price intervals this period.
@@ -1007,24 +1102,6 @@ pub fn build_settle_input(
     billing_month: i16,
     overrides: SettleOverrides,
 ) -> SettleInput {
-    use rust_decimal::dec;
-
-    let is_dv = matches!(
-        anlage.settlement_model.as_str(),
-        "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" | "MARKET_PREMIUM"
-    );
-    let managementpraemie_ct = if is_dv {
-        Some(overrides.managementpraemie_ct_override.unwrap_or_else(|| {
-            if anlage.leistung_kwp > dec!(100_000) {
-                dec!(0.2)
-            } else {
-                dec!(0.4)
-            }
-        }))
-    } else {
-        None
-    };
-
     let billing_date = time::Date::from_calendar_date(
         billing_year as i32,
         time::Month::try_from(billing_month as u8).unwrap_or(time::Month::January),
@@ -1077,7 +1154,6 @@ pub fn build_settle_input(
         direktverm_aw_ct: anlage.direktverm_aw_ct,
         mieter_zuschlag_ct: anlage.mieter_zuschlag_ct,
         flex_praemie_ct_kwh: anlage.flex_praemie_ct_kwh,
-        managementpraemie_ct,
         kwk_strom_kwh_gesamt: if anlage.settlement_model == "KWKG_ZUSCHLAG" {
             anlage.kwk_strom_kwh_gesamt
         } else {
@@ -1386,7 +1462,6 @@ pub async fn run_settlement(
         "MARKET_PREMIUM" | "DIREKTVERMARKTUNG" => (
             SettlementScheme::MarketPremium {
                 direktverm_aw_ct: direktverm_aw_ct_effective.unwrap_or(rust_decimal::Decimal::ZERO),
-                managementpraemie_ct: input.managementpraemie_ct,
                 wind_korrekturfaktor: input.wind_korrekturfaktor,
                 wind_standort: None,
             },
@@ -1395,7 +1470,6 @@ pub async fn run_settlement(
         "AUSSCHREIBUNG" => (
             SettlementScheme::MarketPremium {
                 direktverm_aw_ct: direktverm_aw_ct_effective.unwrap_or(rust_decimal::Decimal::ZERO),
-                managementpraemie_ct: input.managementpraemie_ct,
                 wind_korrekturfaktor: input.wind_korrekturfaktor,
                 wind_standort: None,
             },
@@ -1599,6 +1673,9 @@ pub async fn run_settlement(
             (None, None, None, None)
         };
 
+    // Proposed id for a first settlement. An upsert that lands on the DO UPDATE
+    // branch keeps the row's original id, which is what `RETURNING` yields — the
+    // caller must get the id of the receipt that actually exists.
     let id = Uuid::new_v4();
 
     // ── § 147 AO / GoBD: snapshot ANY existing initial receipt before overwrite ────
@@ -1640,7 +1717,7 @@ pub async fn run_settlement(
         .context("snapshot receipt before overwrite")?;
     }
 
-    sqlx::query(
+    let id: Uuid = sqlx::query_scalar(
         r"INSERT INTO settlement_receipts
               (id, tr_id, tenant, billing_year, billing_month,
                settlement_model, einspeisemenge_kwh, settlement_eur, status,
@@ -1665,7 +1742,8 @@ pub async fn run_settlement(
               correction_reason         = EXCLUDED.correction_reason,
               rechnung_json             = EXCLUDED.rechnung_json,
               gutschrift_nummer         = EXCLUDED.gutschrift_nummer,
-              settled_at                = now()",
+              settled_at                = now()
+          RETURNING id",
     )
     .bind(id)
     .bind(&input.tr_id)
@@ -1686,29 +1764,62 @@ pub async fn run_settlement(
     .bind(input.correction_reason.as_deref())
     .bind(rechnung_json.clone())
     .bind(gutschrift_nummer.clone())
-    .execute(&mut *conn)
+    .fetch_one(&mut *conn)
     .await
     .context("persist settlement")?;
 
+    // ── Cumulative counters, accrued once per period ──────────────────────────
+    //
+    // `POST /settle` is idempotent — the receipt is an upsert — but the counters
+    // below are not: they are running totals over the plant's whole Förderdauer.
+    // Adding this period's contribution on every settle burnt the §44b quota,
+    // over-extended the §51a Förderende and expired the KWKG limit early, all
+    // from an operator merely re-running a month.
+    //
+    // The contribution this period has already made is therefore recorded, and
+    // only the difference is applied. Re-settling the same month with unchanged
+    // numbers is then a no-op; a correction moves the counters by exactly what
+    // changed.
+    let period = PeriodAccrual {
+        negative_price_qh: i64::try_from(input.negative_price_quarter_hours.unwrap_or(0))
+            .unwrap_or(i64::MAX),
+        // §44b: only a settled period consumes quota — NoData / PriceMissing do not.
+        biogas_kwh: if matches!(
+            output.status,
+            SettlementStatus::Calculated | SettlementStatus::FoerderungBeendet
+        ) && biogas_sect44b_eligible_kwh.is_some()
+        {
+            effective_kwh.unwrap_or(Decimal::ZERO).max(Decimal::ZERO)
+        } else {
+            Decimal::ZERO
+        },
+        kwk_kwh: if input.settlement_model == "KWKG_ZUSCHLAG" {
+            effective_kwh.unwrap_or(Decimal::ZERO).max(Decimal::ZERO)
+        } else {
+            Decimal::ZERO
+        },
+    };
+    let delta = record_period_accrual(
+        &mut *conn,
+        &input.tr_id,
+        &input.tenant,
+        input.billing_year,
+        input.billing_month,
+        &period,
+    )
+    .await?;
+
     // ── §44b: update Biogas year-to-date production counter ──────────────────
-    // Only update when settled (Calculated / FoerderungBeendet), not for NoData / PriceMissing.
-    if matches!(
-        output.status,
-        SettlementStatus::Calculated | SettlementStatus::FoerderungBeendet
-    ) && biogas_sect44b_eligible_kwh.is_some()
-    {
-        let kwh_to_add = effective_kwh.unwrap_or(rust_decimal::Decimal::ZERO);
-        if kwh_to_add > rust_decimal::Decimal::ZERO {
-            update_biogas_quota_ytd(
-                &mut *conn,
-                &input.tr_id,
-                &input.tenant,
-                input.billing_year,
-                kwh_to_add,
-            )
-            .await
-            .context("update biogas §44b YTD")?;
-        }
+    if delta.biogas_kwh != Decimal::ZERO {
+        update_biogas_quota_ytd(
+            &mut *conn,
+            &input.tr_id,
+            &input.tenant,
+            input.billing_year,
+            delta.biogas_kwh,
+        )
+        .await
+        .context("update biogas §44b YTD")?;
     }
 
     // ── §51a: accrue the RAW negative-price quarter-hours on the plant ────────
@@ -1717,28 +1828,27 @@ pub async fn run_settlement(
     // cumulative column stores the raw lost QH — `build_settle_input` converts it
     // to the effective Förderende via `effektives_foerderende`. Accruing the
     // per-month rounded value would over-extend (each partial day rounding up).
-    let raw_negative_qh =
-        i64::try_from(input.negative_price_quarter_hours.unwrap_or(0)).unwrap_or(i64::MAX);
-    if raw_negative_qh > 0 {
+    if delta.negative_price_qh != 0 {
         sqlx::query(
             r"UPDATE eeg_anlagen
               SET negative_price_qh_gesamt =
-                      COALESCE(negative_price_qh_gesamt, 0) + $3,
+                      GREATEST(COALESCE(negative_price_qh_gesamt, 0) + $3, 0),
                   updated_at = now()
               WHERE tr_id = $1 AND tenant = $2",
         )
         .bind(&input.tr_id)
         .bind(&input.tenant)
-        .bind(raw_negative_qh)
+        .bind(delta.negative_price_qh)
         .execute(&mut *conn)
         .await
         .context("accrue negative_price_qh_gesamt")?;
     }
 
     // ── KWKG: update accumulated kWh + auto-expire when limit reached ────────
-    if input.settlement_model == "KWKG_ZUSCHLAG"
-        && let Some(kwh_this_period) = effective_kwh.filter(|&k| k > Decimal::ZERO)
-    {
+    // The status is idempotent and follows this settlement's outcome, so it is
+    // written whenever the plant is on the KWKG model; only the kWh total is
+    // guarded by the delta.
+    if input.settlement_model == "KWKG_ZUSCHLAG" && period.kwk_kwh > Decimal::ZERO {
         let new_status = if status == "foerderung_beendet" {
             "foerderung_beendet"
         } else {
@@ -1746,14 +1856,15 @@ pub async fn run_settlement(
         };
         sqlx::query(
             r"UPDATE eeg_anlagen
-              SET kwk_strom_kwh_gesamt = COALESCE(kwk_strom_kwh_gesamt, 0) + $3,
+              SET kwk_strom_kwh_gesamt =
+                      GREATEST(COALESCE(kwk_strom_kwh_gesamt, 0) + $3, 0),
                   status = $4,
                   updated_at = now()
               WHERE tr_id = $1 AND tenant = $2",
         )
         .bind(&input.tr_id)
         .bind(&input.tenant)
-        .bind(kwh_this_period)
+        .bind(delta.kwk_kwh)
         .bind(new_status)
         .execute(&mut *conn)
         .await
@@ -1834,9 +1945,19 @@ pub async fn run_settlement(
     })
 }
 
+/// Statuses of a receipt that represent a settlement actually having happened.
+///
+/// `price_missing` and `no_data` are the opposite: they record that the run
+/// found nothing to settle with. Treating them as settled meant a plant settled
+/// too early — before the ÜNB Marktwert or the complete edmd data existed —
+/// was never picked up again and simply went unpaid.
+const SETTLED_STATUSES: [&str; 3] = ["calculated", "foerderung_beendet", "sanctioned"];
+
 /// List all active plants that have NOT been settled for `(year, month)` yet.
 ///
-/// Used by the batch settlement endpoint and the monthly auto-settle worker.
+/// Used by the batch settlement endpoint and the monthly auto-settle worker. A
+/// plant whose only receipt for the period is `price_missing` or `no_data`
+/// counts as unsettled and is retried.
 pub async fn list_unsettled(
     pool: &PgPool,
     tenant: &str,
@@ -1854,12 +1975,14 @@ pub async fn list_unsettled(
                   AND s.tenant = a.tenant
                   AND s.billing_year = $2
                   AND s.billing_month = $3
+                  AND s.status = ANY($4)
             )
           ORDER BY a.tr_id",
     )
     .bind(tenant)
     .bind(year)
     .bind(month)
+    .bind(SETTLED_STATUSES.as_slice())
     .fetch_all(pool)
     .await
     .context("list_unsettled")
@@ -2210,7 +2333,13 @@ pub async fn upsert_spot_prices(
     Ok(n)
 }
 
-/// Fetch the spot prices whose delivery start falls in `[from, to)`, ascending.
+/// Fetch the spot prices whose delivery start falls in `[from, to)`, ascending,
+/// **expanded to the quarter-hour grid**.
+///
+/// The store permits `resolution_min = 60`, and §51 matches feed-in
+/// quarter-hours against a price by their start instant. An hourly row therefore
+/// matched only the `:00` quarter, and three quarters of every negative hour
+/// went unnoticed — the plant was paid for kWh §51 says it must not be.
 ///
 /// # Errors
 /// Propagates the query error.
@@ -2220,7 +2349,7 @@ pub async fn fetch_spot_prices(
     to: time::OffsetDateTime,
 ) -> anyhow::Result<Vec<(time::OffsetDateTime, Decimal)>> {
     let rows = sqlx::query(
-        r"SELECT delivery_start, price_ct_kwh FROM epex_spot_prices
+        r"SELECT delivery_start, resolution_min, price_ct_kwh FROM epex_spot_prices
           WHERE delivery_start >= $1 AND delivery_start < $2
           ORDER BY delivery_start",
     )
@@ -2229,16 +2358,25 @@ pub async fn fetch_spot_prices(
     .fetch_all(pool)
     .await
     .context("fetch_spot_prices")?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|r| {
-            Some((
-                r.try_get::<time::OffsetDateTime, _>("delivery_start")
-                    .ok()?,
-                r.try_get::<Decimal, _>("price_ct_kwh").ok()?,
-            ))
-        })
-        .collect())
+
+    let mut out: Vec<(time::OffsetDateTime, Decimal)> = Vec::with_capacity(rows.len());
+    for r in rows {
+        let Ok(start) = r.try_get::<time::OffsetDateTime, _>("delivery_start") else {
+            continue;
+        };
+        let Ok(price) = r.try_get::<Decimal, _>("price_ct_kwh") else {
+            continue;
+        };
+        let resolution = r.try_get::<i16, _>("resolution_min").unwrap_or(15).max(15);
+        // The price is constant across the market time unit, so every
+        // quarter-hour it covers carries it.
+        let slots = i64::from(resolution) / 15;
+        for i in 0..slots.max(1) {
+            out.push((start + time::Duration::minutes(i * 15), price));
+        }
+    }
+    out.retain(|(t, _)| *t < to);
+    Ok(out)
 }
 
 // ── §36h Abs. 2 EEG 2023 — Wind Standortgüte re-evaluation ───────────────────
@@ -2262,6 +2400,7 @@ pub async fn record_wind_reevaluation(
     tr_id: &str,
     wirksam_ab_jahr: i16,
     guetefaktor: Decimal,
+    korrekturfaktor: Option<Decimal>,
 ) -> anyhow::Result<Option<(bool, Option<Decimal>)>> {
     let Some(row) = sqlx::query(
         "SELECT wind_guetegrad, wind_guetefaktor_reevaluations
@@ -2296,9 +2435,14 @@ pub async fn record_wind_reevaluation(
     // Upsert: one entry per effective year.
     let jahr = u8::try_from(wirksam_ab_jahr).unwrap_or(0);
     reevals.retain(|r| r.wirksam_ab_jahr != jahr);
+    // §36h Abs. 3 Nr. 2: the Netzbetreiber settles on the Gutachten's factor.
+    // Südregion is not modelled here, so the fallback takes the Nr. 3 floor.
     reevals.push(eeg_billing::wind::GuetefaktorReeval {
         wirksam_ab_jahr: jahr,
         guetefaktor,
+        korrekturfaktor: korrekturfaktor.unwrap_or_else(|| {
+            eeg_billing::wind::korrekturfaktor_fuer_guetefaktor(guetefaktor, false)
+        }),
     });
     let json = serde_json::to_value(&reevals).context("serialise re-evaluations")?;
 

@@ -44,39 +44,43 @@ const PARITY_MIN_SAMPLE: i64 = 10;
 /// Cap on deadline alerts emitted per sweep (protects the fan-out).
 const DEADLINE_ALERT_LIMIT: i64 = 200;
 
-/// Emit one `de.obs.*` CloudEvent, fire-and-forget, HMAC-signed when configured.
+/// Emit one `de.obs.*` CloudEvent, HMAC-signed when configured. Returns `true`
+/// when the event reached the outbound webhook.
+///
+/// The deadline sweep stamps `deadline_alerted_at` from the outcome, so this
+/// awaits the POST: a spawned emit let a downed webhook target lose the
+/// warning permanently while the row was marked as alerted.
 ///
 /// `subject` is the business subject the event concerns (a process id for the
 /// per-process deadline alert); `None` for the tenant-level parity alert, which
 /// has no single subject.
-fn emit_obs_event(
+async fn emit_obs_event(
     rt: &WorkerRuntime,
     ce_type: &'static str,
     subject: Option<String>,
     data: serde_json::Value,
-) {
-    let client = Arc::clone(&rt.client);
-    let url = Arc::clone(&rt.outbound_url);
-    let secret = rt.outbound_secret.clone();
-    let tenant = rt.tenant.clone();
-    tokio::spawn(async move {
-        let source = mako_service::source("obsd", &tenant);
-        let ce = match subject {
-            Some(s) => mako_service::CloudEvent::new(source, ce_type, s, data),
-            None => mako_service::CloudEvent::new(source, ce_type, String::new(), data)
-                .without_subject(),
-        };
-        if let Err(e) = mako_service::post_ce_with_retry(
-            &client,
-            url.as_str(),
-            &ce,
-            secret.as_deref().map(|s| s.as_bytes()),
-        )
-        .await
-        {
-            warn!(%e, ce_type, "obsd: outbound CloudEvent emit failed");
+) -> bool {
+    let source = mako_service::source("obsd", &rt.tenant);
+    let ce = match subject {
+        Some(s) => mako_service::CloudEvent::new(source, ce_type, s, data),
+        None => {
+            mako_service::CloudEvent::new(source, ce_type, String::new(), data).without_subject()
         }
-    });
+    };
+    match mako_service::post_ce_with_retry(
+        &rt.client,
+        rt.outbound_url.as_str(),
+        &ce,
+        rt.outbound_secret.as_deref().map(|s| s.as_bytes()),
+    )
+    .await
+    {
+        Ok(()) => true,
+        Err(e) => {
+            warn!(%e, ce_type, "obsd: outbound CloudEvent emit failed");
+            false
+        }
+    }
 }
 
 // ── Deadline sweep ─────────────────────────────────────────────────────────────
@@ -103,6 +107,11 @@ pub fn spawn_deadline_sweep(rt: WorkerRuntime, shutdown: CancellationToken) {
 
 /// Emit `de.obs.deadline.approaching` for every open, not-yet-alerted process
 /// whose deadline is within the warn window; returns the number emitted.
+///
+/// Deadlines that are **already past** when first seen are included. The window
+/// used to be `deadline_at > now()`, so an obsd outage longer than the warn
+/// window meant the breach produced no event at all — the one case where the
+/// alert matters most. Those rows carry `"breached": true`.
 pub async fn sweep_deadlines(rt: &WorkerRuntime) -> Result<usize, sqlx::Error> {
     let rows = sqlx::query(
         r"SELECT process_id, pid, family, workflow_name, malo_id, partner_mp_id,
@@ -111,7 +120,6 @@ pub async fn sweep_deadlines(rt: &WorkerRuntime) -> Result<usize, sqlx::Error> {
           WHERE state NOT IN ('completed','rejected','cancelled','aperak_timeout')
             AND deadline_at IS NOT NULL
             AND deadline_alerted_at IS NULL
-            AND deadline_at > now()
             AND deadline_at <= now() + make_interval(hours => $1::int)
             AND ($2::text IS NULL OR tenant = $2)
           ORDER BY deadline_at ASC
@@ -143,16 +151,26 @@ pub async fn sweep_deadlines(rt: &WorkerRuntime) -> Result<usize, sqlx::Error> {
             "partner_mp_id":  row.try_get::<Option<String>, _>("partner_mp_id").ok().flatten(),
             "due_at":         deadline_at.format(&Rfc3339).unwrap_or_default(),
             "hours_remaining": hours_remaining,
+            "breached":       deadline_at <= now,
             "deadline_risk":  row.try_get::<String, _>("deadline_risk").ok(),
             "tenant":         row.try_get::<String, _>("tenant").ok(),
         });
-        emit_obs_event(
+        // Only a delivered alert may be stamped — otherwise a downed webhook
+        // target silently consumes the warning and it is never re-emitted.
+        if emit_obs_event(
             rt,
             mako_events::obs::DEADLINE_APPROACHING,
             Some(process_id.to_string()),
             data,
-        );
-        alerted.push(process_id);
+        )
+        .await
+        {
+            alerted.push(process_id);
+        }
+    }
+
+    if alerted.is_empty() {
+        return Ok(0);
     }
 
     // Mark alerted so the next sweep does not re-emit for these processes.
@@ -223,7 +241,7 @@ pub async fn sweep_parity(rt: &WorkerRuntime) -> Result<bool, sqlx::Error> {
     let Some((gap_pp, favored)) = parity_decision(&aff, &non_aff, rt.parity_threshold_pp) else {
         return Ok(false);
     };
-    emit_obs_event(
+    let emitted = emit_obs_event(
         rt,
         mako_events::obs::STP_PARITY_ALERT,
         None,
@@ -238,8 +256,9 @@ pub async fn sweep_parity(rt: &WorkerRuntime) -> Result<bool, sqlx::Error> {
             "note":          "§20 EnWG Diskriminierungsfreiheit: STP completion-rate gap between \
                               affiliate- and non-affiliate-initiated Anmeldungen exceeds the threshold",
         }),
-    );
-    Ok(true)
+    )
+    .await;
+    Ok(emitted)
 }
 
 /// Pure §20 EnWG parity decision. Returns `Some((signed_gap_pp, favored))` when

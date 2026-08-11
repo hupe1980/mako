@@ -59,6 +59,7 @@ fn test_config() -> einsd::config::EinsdConfig {
         alert_interval_secs: None,
         jahresmarktwert_url: None,
         jahresmarktwert_import_interval_secs: None,
+        auto_settle_from_day: None,
         mcp: Default::default(),
         oidc: None,
         allow_insecure_no_auth: true,
@@ -846,6 +847,171 @@ async fn spot_prices_upsert_and_range_fetch() {
     assert!(fetched.windows(2).all(|w| w[0].0 <= w[1].0));
 }
 
+/// §51 matches feed-in quarter-hours against a spot row by start instant, and
+/// the store permits hourly rows. Returning them unexpanded matched only the
+/// `:00` quarter, so three quarters of every negative hour were paid in full.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_hourly_spot_row_covers_all_four_of_its_quarter_hours() {
+    use rust_decimal::dec;
+    use time::macros::datetime;
+    let Some((pool, _pg)) = test_pool("spot_hourly").await else {
+        return;
+    };
+    let base = datetime!(2026-06-01 00:00 UTC);
+    let prices: Vec<einsd::pg::SpotPrice> = (0..2)
+        .map(|n| einsd::pg::SpotPrice {
+            delivery_start: base + time::Duration::hours(n),
+            resolution_min: 60,
+            price_ct_kwh: if n == 0 { dec!(-1.5) } else { dec!(4.0) },
+        })
+        .collect();
+    einsd::pg::upsert_spot_prices(&pool, &prices, "test")
+        .await
+        .expect("bulk upsert");
+
+    let fetched = einsd::pg::fetch_spot_prices(&pool, base, base + time::Duration::hours(2))
+        .await
+        .expect("range fetch");
+    assert_eq!(fetched.len(), 8, "two hours are eight quarter-hours");
+    let negatives: Vec<_> = fetched
+        .iter()
+        .filter(|(_, p)| p.is_sign_negative())
+        .map(|(t, _)| *t)
+        .collect();
+    assert_eq!(
+        negatives,
+        (0..4)
+            .map(|n| base + time::Duration::minutes(15 * n))
+            .collect::<Vec<_>>(),
+        "the whole negative hour is negative, not just its first quarter"
+    );
+    // The window is half-open: an hourly row starting at the boundary must not
+    // spill past it.
+    let clipped = einsd::pg::fetch_spot_prices(&pool, base, base + time::Duration::hours(1))
+        .await
+        .expect("clipped fetch");
+    assert_eq!(clipped.len(), 4);
+}
+
+/// `POST /settle` is idempotent — the receipt is an upsert — but the plant-level
+/// counters are running totals over the whole Förderdauer. Accruing on every
+/// settle burnt the §44b quota, over-extended the §51a Förderende and expired
+/// the KWKG limit from an operator merely re-running a month.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn re_settling_a_month_does_not_accrue_the_counters_twice() {
+    use rust_decimal::dec;
+    let Some((pool, _pg)) = test_pool("resettle_accrual").await else {
+        return;
+    };
+    seed_plant(&pool, "TR-RESETTLE", TENANT, "", "").await;
+
+    let settle = |qh: u64| {
+        let pool = pool.clone();
+        async move {
+            let anlage = einsd::pg::fetch_anlage(&pool, TENANT, "TR-RESETTLE")
+                .await
+                .expect("fetch")
+                .expect("plant exists");
+            let input = einsd::pg::build_settle_input(
+                TENANT,
+                &anlage,
+                2026,
+                6,
+                einsd::pg::SettleOverrides {
+                    einspeisemenge_kwh: Some(dec!(1000)),
+                    negative_price_quarter_hours: Some(qh),
+                    kwh_during_negative_epex: Some(dec!(10)),
+                    ..Default::default()
+                },
+            );
+            let mut tx = pool.begin().await.expect("begin");
+            let res = einsd::pg::run_settlement(&mut tx, input)
+                .await
+                .expect("settle");
+            tx.commit().await.expect("commit");
+            res
+        }
+    };
+
+    let first = settle(96).await;
+    let qh_after_first: i64 =
+        sqlx::query_scalar("SELECT negative_price_qh_gesamt FROM eeg_anlagen WHERE tr_id = $1")
+            .bind("TR-RESETTLE")
+            .fetch_one(&pool)
+            .await
+            .expect("read counter");
+    assert_eq!(qh_after_first, 96);
+
+    // Same month, same numbers: nothing more is owed to the counter.
+    let second = settle(96).await;
+    let qh_after_second: i64 =
+        sqlx::query_scalar("SELECT negative_price_qh_gesamt FROM eeg_anlagen WHERE tr_id = $1")
+            .bind("TR-RESETTLE")
+            .fetch_one(&pool)
+            .await
+            .expect("read counter");
+    assert_eq!(qh_after_second, 96, "re-settling must not double-accrue");
+    assert_eq!(
+        first.id, second.id,
+        "the upsert keeps the receipt's id, and the caller must be told the real one"
+    );
+
+    // A correction that raises the claim moves the counter by the difference only.
+    settle(120).await;
+    let qh_after_correction: i64 =
+        sqlx::query_scalar("SELECT negative_price_qh_gesamt FROM eeg_anlagen WHERE tr_id = $1")
+            .bind("TR-RESETTLE")
+            .fetch_one(&pool)
+            .await
+            .expect("read counter");
+    assert_eq!(qh_after_correction, 120);
+
+    // And one that lowers it gives the difference back.
+    settle(96).await;
+    let qh_after_lowering: i64 =
+        sqlx::query_scalar("SELECT negative_price_qh_gesamt FROM eeg_anlagen WHERE tr_id = $1")
+            .bind("TR-RESETTLE")
+            .fetch_one(&pool)
+            .await
+            .expect("read counter");
+    assert_eq!(qh_after_lowering, 96);
+}
+
+/// A plant settled before the ÜNB Marktwert existed gets a `price_missing`
+/// receipt. Counting that as settled left it out of every later batch, so it
+/// was simply never paid.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_price_missing_receipt_leaves_the_plant_unsettled() {
+    let Some((pool, _pg)) = test_pool("unsettled_retry").await else {
+        return;
+    };
+    seed_plant(&pool, "TR-RETRY", TENANT, "", "").await;
+    seed_plant(&pool, "TR-DONE", TENANT, "", "").await;
+
+    for (tr_id, status) in [("TR-RETRY", "price_missing"), ("TR-DONE", "calculated")] {
+        sqlx::query(
+            "INSERT INTO settlement_receipts
+                 (tr_id, tenant, billing_year, billing_month, settlement_model, status)
+             VALUES ($1, $2, 2026, 6, 'FEED_IN_TARIFF', $3)",
+        )
+        .bind(tr_id)
+        .bind(TENANT)
+        .bind(status)
+        .execute(&pool)
+        .await
+        .expect("seed receipt");
+    }
+
+    let unsettled = einsd::pg::list_unsettled(&pool, TENANT, 2026, 6)
+        .await
+        .expect("list_unsettled");
+    let ids: Vec<&str> = unsettled.iter().map(|a| a.tr_id.as_str()).collect();
+    assert_eq!(ids, vec!["TR-RETRY"]);
+}
+
 /// §36h Abs. 2: recording a Standortgüte re-evaluation persists it and flags
 /// reconciliation when the Gütefaktor moves more than 2 percentage points.
 #[tokio::test]
@@ -865,18 +1031,20 @@ async fn wind_reevaluation_records_and_flags_reconciliation() {
     .await;
 
     // Year-6 re-evaluation: 0.90 → 0.95 is a 5 pp move (> 2 pp) → reconcile.
-    let (recon1, prev1) = einsd::pg::record_wind_reevaluation(&pool, TENANT, "W1", 6, dec!(0.95))
-        .await
-        .expect("record")
-        .expect("plant exists");
+    let (recon1, prev1) =
+        einsd::pg::record_wind_reevaluation(&pool, TENANT, "W1", 6, dec!(0.95), None)
+            .await
+            .expect("record")
+            .expect("plant exists");
     assert!(recon1);
     assert_eq!(prev1, Some(dec!(0.90)));
 
     // Year-11 re-evaluation vs the year-6 value: 0.95 → 0.96 is 1 pp → no reconcile.
-    let (recon2, prev2) = einsd::pg::record_wind_reevaluation(&pool, TENANT, "W1", 11, dec!(0.96))
-        .await
-        .expect("record")
-        .expect("plant exists");
+    let (recon2, prev2) =
+        einsd::pg::record_wind_reevaluation(&pool, TENANT, "W1", 11, dec!(0.96), None)
+            .await
+            .expect("record")
+            .expect("plant exists");
     assert!(!recon2);
     assert_eq!(prev2, Some(dec!(0.95)));
 

@@ -61,6 +61,11 @@ fn total(positions: &[SettlePosition]) -> Option<Decimal> {
 /// The caller must only pass `kwh_during_negative_epex` after verifying that the
 /// version-specific consecutive-hour threshold was met (caller's responsibility).
 /// This function enforces only the **kW exemption** and the iMSys post-rollout rule.
+///
+/// `leistung_kwp` must be the **aggregated** plant capacity: §51 Abs. 2 Satz 2
+/// applies §24 to the size test, so §24-linked capacity blocks count as one plant.
+/// Passing a single block's capacity would let a 180 kWp plant split into three
+/// 60 kWp blocks escape §51 entirely.
 fn should_apply_negativpreis_versioned(
     kwh_during_negative_epex: Option<Decimal>,
     leistung_kwp: Option<Decimal>,
@@ -89,6 +94,18 @@ fn apply_negativpreis(kwh: Decimal, negative_kwh: Decimal) -> Decimal {
     (kwh - negative_kwh).max(Decimal::ZERO)
 }
 
+/// The plant capacity the size-dependent rules test against.
+///
+/// §51 Abs. 2 Satz 2 EEG 2023 applies §24 to the §51 size test, so §24-linked
+/// capacity blocks are one plant. Returns `None` only when nothing is known.
+fn aggregierte_leistung_kwp(input: &SettleInput) -> Option<Decimal> {
+    if input.capacity_blocks.is_empty() {
+        return input.leistung_kwp;
+    }
+    let blocks: Decimal = input.capacity_blocks.iter().map(|b| b.leistung_kwp).sum();
+    Some(input.leistung_kwp.unwrap_or(Decimal::ZERO) + blocks)
+}
+
 /// Resolve the effective §36h wind onshore Korrekturfaktor.
 ///
 /// Priority:
@@ -100,22 +117,6 @@ fn resolve_wind_korrekturfaktor(
     wind_standort: Option<&crate::wind::WindStandort>,
 ) -> Option<Decimal> {
     wind_korrekturfaktor.or_else(|| wind_standort.map(|ws| ws.korrekturfaktor))
-}
-
-/// Resolve the effective Managementprämie for Direktvermarktung/Ausschreibung.
-///
-/// - If explicitly provided, use it.
-/// - If `leistung_kwp` is provided, compute from the §20 Abs. 3 EEG threshold.
-/// - Otherwise: 0 (caller omitted — audit log will show no premium).
-fn resolve_managementpraemie(
-    managementpraemie_ct: Option<Decimal>,
-    leistung_kwp: Option<Decimal>,
-) -> Decimal {
-    managementpraemie_ct.unwrap_or_else(|| {
-        leistung_kwp
-            .map(crate::foerderdauer::managementpraemie_ct)
-            .unwrap_or(Decimal::ZERO)
-    })
 }
 
 // ── Multi-block settlement (§24 EEG Anlagenerweiterung) ──────────────────────
@@ -153,6 +154,33 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
     let additional_total_kwp: Decimal = input.capacity_blocks.iter().map(|b| b.leistung_kwp).sum();
     let total_kwp = primary_kwp + additional_total_kwp;
 
+    // §21 EEG needs a rate per block. `verguetungssatz_ct()` is `None` for the
+    // market- and capacity-based schemes, and settling those at zero would report
+    // a €0 claim as `Calculated` — a §24-extended Direktvermarktung plant would
+    // silently lose its whole Marktprämie.
+    let Some(primary_rate) = input.scheme.verguetungssatz_ct() else {
+        return SettleOutput {
+            settlement_eur: None,
+            eligible_kwh: None,
+            positions: vec![crate::model::SettlePosition {
+                description: "§24 Anlagenerweiterung: das Abrechnungsmodell führt keinen \
+                     Vergütungssatz je Block (Marktprämie/Post-EEG) — kein Preis ermittelbar"
+                    .to_owned(),
+                legal_basis: "§24 EEG 2023".to_owned(),
+                kwh: Decimal::ZERO,
+                rate_ct_kwh: Decimal::ZERO,
+                eur: Decimal::ZERO,
+            }],
+            status: SettlementStatus::PriceMissing,
+            pflichtzahlung_eur: None,
+            pflichtzahlung_faelligkeitsdatum: None,
+            verlaengerungsanspruch_qh: 0,
+            dezentrale_einspeisung_anspruch_verloren: false,
+            billing_days_fraction_applied: None,
+            faelligkeitsdatum: None,
+        };
+    };
+
     let mut positions: Vec<SettlePosition> = Vec::new();
     let mut total_eligible = Decimal::ZERO;
 
@@ -167,10 +195,11 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
         };
         let mut block_kwh = (total_kwh * share).round_dp(3);
 
-        // Apply §51 Negativpreisregel for this block if applicable
+        // §51 Negativpreisregel — the size test runs on the aggregated plant
+        // (§51 Abs. 2 Satz 2 i.V.m. §24), the deduction on this block's share.
         if should_apply_negativpreis_versioned(
             input.kwh_during_negative_epex,
-            Some(primary_kwp),
+            Some(total_kwp),
             input.effective_eeg_gesetz(),
             input.erzeugungsart,
             input.has_imesys,
@@ -183,7 +212,6 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
             block_kwh = apply_negativpreis(block_kwh, neg_share);
         }
 
-        let primary_rate = input.scheme.verguetungssatz_ct().unwrap_or(Decimal::ZERO);
         if block_kwh > Decimal::ZERO || primary_rate != Decimal::ZERO {
             let ibn_label = input
                 .inbetriebnahme
@@ -217,7 +245,7 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
             crate::version::EegGesetz::from_inbetriebnahme_year(block.inbetriebnahme.year());
         if should_apply_negativpreis_versioned(
             input.kwh_during_negative_epex,
-            Some(block.leistung_kwp),
+            Some(total_kwp),
             block_gesetz,
             input.erzeugungsart,
             input.has_imesys,
@@ -420,25 +448,71 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
     }
 
     // ── §51a EEG 2023 — Verlängerungsanspruch (payment period extension) ─────
-    // §51a does NOT apply to §51b biogas Ausschreibungsanlagen (§51b Satz 2 EEG 2023).
+    // §51a Abs. 1: the extension is "für Strom aus Anlagen, für den sich der
+    // anzulegende Wert nach Maßgabe des § 51 verringert" — so it accrues only
+    // where §51 actually bit. A plant under the Abs. 2 kW exemption, or on a
+    // scheme §51 does not reach, was paid in full and gets no extension.
+    // §51a does NOT apply to §51b biogas Ausschreibungsanlagen (§51b Satz 2).
     if !input.tariff_source.is_biogas_sect51b()
         && let Some(lost_qh) = input.negative_price_quarter_hours.filter(|&q| q > 0)
+        && input.scheme.negativpreis_rule_applicable()
+        && should_apply_negativpreis_versioned(
+            input.kwh_during_negative_epex,
+            aggregierte_leistung_kwp(input),
+            input.effective_eeg_gesetz(),
+            input.erzeugungsart,
+            input.has_imesys,
+        )
     {
-        let was_applied = input
-            .kwh_during_negative_epex
-            .is_some_and(|k| k > rust_decimal::Decimal::ZERO);
-        if was_applied {
-            let is_solar = input.erzeugungsart.is_some_and(|a| a.is_solar());
-            result.verlaengerungsanspruch_qh =
-                crate::foerderdauer::verguetungszeitraum_verlaengerung_qh(lost_qh, is_solar);
+        let is_solar = input.erzeugungsart.is_some_and(|a| a.is_solar());
+        result.verlaengerungsanspruch_qh =
+            crate::foerderdauer::verguetungszeitraum_verlaengerung_qh(lost_qh, is_solar);
+    }
+
+    // ── §25 billing_days_fraction — auto-compute or use caller override ──────
+    // Legal basis: §25 Abs. 1 Satz 3 EEG 2023 (commissioning day = start of entitlement)
+    // When None: auto-compute from billing_date + foerderendedatum. The auto rule
+    // narrows the Förderende month only — a meter commissioned mid-month already
+    // recorded only the eligible days, so prorating it again would bill a
+    // fraction of a fraction. See `compute_billing_days_fraction`.
+    // When Some(x): use provided value directly (caller override for edge cases).
+    let billing_days_fraction = input.billing_days_fraction.or_else(|| {
+        crate::foerderdauer::compute_billing_days_fraction(
+            input.foerderendedatum,
+            input.billing_date,
+        )
+    });
+
+    // Apply billing_days_fraction when < 1.0 (partial month)
+    if let Some(fraction) =
+        billing_days_fraction.filter(|&f| f > Decimal::ZERO && f < rust_decimal::Decimal::ONE)
+    {
+        if let Some(eur) = result.settlement_eur {
+            result.settlement_eur = Some(validated_eur(eur * fraction));
+        }
+        if let Some(kwh) = result.eligible_kwh {
+            result.eligible_kwh = Some((kwh * fraction).round_dp(3));
+        }
+        // Annotate all positions with the fraction
+        for p in &mut result.positions {
+            p.eur = validated_eur(p.eur * fraction);
+            p.kwh = (p.kwh * fraction).round_dp(3);
         }
     }
+
+    // Record the applied fraction in SettleOutput for audit trail (§ 147 AO / GoBD)
+    result.billing_days_fraction_applied =
+        billing_days_fraction.filter(|&f| f > Decimal::ZERO && f < rust_decimal::Decimal::ONE);
 
     // ── §13a EnWG — Einspeisemanagement (curtailment) compensation ───────────
     // Curtailment of EEG plants is Redispatch 2.0: the entschädigungspflichtige
     // Abregelung under §13a EnWG (historically §15 EEG Härtefallregelung). §51
     // Negativpreisregel does not touch these kWh because they were never fed in
     // (not by virtue of §19 EEG).
+    //
+    // Sequenced after the §25 proration on purpose: this is actual curtailed
+    // energy under a separate EnWG claim, not a share of the month's
+    // entitlement, so it must not be scaled by the billing-days fraction.
     if let Some(einsman_kwh) = input.einspeisemanagement_kwh.filter(|k| *k > Decimal::ZERO)
         && !matches!(
             result.status,
@@ -477,43 +551,10 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
         });
         result.settlement_eur = Some(result.settlement_eur.unwrap_or(Decimal::ZERO) + comp_eur);
         result.eligible_kwh = Some(result.eligible_kwh.unwrap_or(Decimal::ZERO) + einsman_kwh);
-        if result.status == SettlementStatus::Sanctioned {
-            result.status = SettlementStatus::Calculated;
-        }
+        // The status stays whatever the EEG rules made it: a §13a EnWG
+        // compensation rides alongside, it does not undo a §42a/§43 sanction,
+        // and reporting `Calculated` would conceal one.
     }
-
-    // ── §25 billing_days_fraction — auto-compute or use caller override ──────
-    // Legal basis: §25 Abs. 1 Satz 3 EEG 2023 (commissioning day = start of entitlement)
-    // When None: auto-compute from billing_date + inbetriebnahme + foerderendedatum.
-    // When Some(x): use provided value directly (caller override for edge cases).
-    let billing_days_fraction = input.billing_days_fraction.or_else(|| {
-        crate::foerderdauer::compute_billing_days_fraction(
-            input.inbetriebnahme,
-            input.foerderendedatum,
-            input.billing_date,
-        )
-    });
-
-    // Apply billing_days_fraction when < 1.0 (partial month)
-    if let Some(fraction) =
-        billing_days_fraction.filter(|&f| f > Decimal::ZERO && f < rust_decimal::Decimal::ONE)
-    {
-        if let Some(eur) = result.settlement_eur {
-            result.settlement_eur = Some(validated_eur(eur * fraction));
-        }
-        if let Some(kwh) = result.eligible_kwh {
-            result.eligible_kwh = Some((kwh * fraction).round_dp(3));
-        }
-        // Annotate all positions with the fraction
-        for p in &mut result.positions {
-            p.eur = validated_eur(p.eur * fraction);
-            p.kwh = (p.kwh * fraction).round_dp(3);
-        }
-    }
-
-    // Record the applied fraction in SettleOutput for audit trail (§ 147 AO / GoBD)
-    result.billing_days_fraction_applied =
-        billing_days_fraction.filter(|&f| f > Decimal::ZERO && f < rust_decimal::Decimal::ONE);
 
     // ── §26 Abs. 1 EEG 2023 — Fälligkeitsdatum ───────────────────────────────────
     // §26 Abs. 1: "monatlich jeweils zum 15. Kalendertag für den Vormonat" —
@@ -566,8 +607,12 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
                 | crate::scheme::SettlementScheme::TemporaryFeedInTariff { .. }
                 | crate::scheme::SettlementScheme::FlexibilityPremium { .. } => {
                     // §44b Abs. 1 Satz 2: Einspeisevergütung → Marktwert for excess
-                    let epex_source = input.marktwert_ct_kwh;
-                    let excess_rate = epex_source.unwrap_or(rust_decimal::Decimal::ZERO);
+                    // Without a Marktwert there is no price for the excess —
+                    // settling it at zero would silently expropriate the operator.
+                    let Some(excess_rate) = input.marktwert_ct_kwh else {
+                        result.status = SettlementStatus::PriceMissing;
+                        return result;
+                    };
                     let excess_eur =
                         validated_eur(excess_kwh * excess_rate / rust_decimal::Decimal::from(100));
                     result.positions.push(crate::model::SettlePosition {
@@ -821,13 +866,14 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
     }
 
     // ── Effective §51 application ─────────────────────────────────────────────
-    let apply_neg = should_apply_negativpreis_versioned(
-        input.kwh_during_negative_epex,
-        input.leistung_kwp,
-        input.effective_eeg_gesetz(),
-        input.erzeugungsart,
-        input.has_imesys,
-    );
+    let apply_neg = input.scheme.negativpreis_rule_applicable()
+        && should_apply_negativpreis_versioned(
+            input.kwh_during_negative_epex,
+            aggregierte_leistung_kwp(input),
+            input.effective_eeg_gesetz(),
+            input.erzeugungsart,
+            input.has_imesys,
+        );
     let neg_kwh = if apply_neg {
         input.kwh_during_negative_epex
     } else {
@@ -973,10 +1019,17 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
         // ── §§22a,28 EEG — Ausschreibungsanlagen ─────────────────────────────
         SettlementScheme::MarketPremium {
             direktverm_aw_ct,
-            managementpraemie_ct,
             wind_korrekturfaktor,
             wind_standort,
         } => {
+            // §51 Abs. 1 zeroes the anzulegender Wert for the negative-price
+            // intervals, and Anlage 1 Nr. 1 defines "AW" as the anzulegender Wert
+            // "unter Berücksichtigung der §§ 19 bis 54" — so those kWh earn no
+            // Marktprämie. Excluding them is the same arithmetic as AW = 0.
+            let effective = match neg_kwh {
+                Some(n) => apply_negativpreis(kwh, n),
+                None => kwh,
+            };
             // §20 Abs. 2 + Anlage 1 EEG 2023: Jahresmarktwert takes precedence over monthly EPEX
             // when provided. The ÜNB publishes technology-specific annual market values.
             let epex_source = input.marktwert_ct_kwh;
@@ -1046,20 +1099,20 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             // Monatsmarktwert like the gleitende Marktprämie. §39n Abs. 3 delegates
             // the mechanism to the Innovationsausschreibungsverordnung (§88d); the
             // fixed-premium rule is the defining InnAusV feature. §51 still zeroes
-            // the AW for negative-price intervals (applied upstream via the reduced
-            // eligible kWh), so no separate handling is needed here.
+            // the AW for negative-price intervals, which `effective` already
+            // carries, so no separate handling is needed here.
             if input.tariff_source.is_innovation_auction() {
-                let feste_praemie_eur = validated_eur(kwh * aw_ct / Decimal::from(100));
+                let feste_praemie_eur = validated_eur(effective * aw_ct / Decimal::from(100));
                 let mut positions = vec![pos(
                     "Feste Marktpr\u{00e4}mie \u{00a7}39n EEG 2023 (Innovationsausschreibung, \u{00a7}3 InnAusV)",
                     "\u{00a7}39n EEG 2023 i.V.m. \u{00a7}3 InnAusV",
-                    kwh,
+                    effective,
                     aw_ct,
                 )];
-                positions.extend(aw_cut_positions(&aw_cuts, kwh));
+                positions.extend(aw_cut_positions(&aw_cuts, effective));
                 return SettleOutput {
                     settlement_eur: Some(feste_praemie_eur),
-                    eligible_kwh: Some(kwh),
+                    eligible_kwh: Some(effective),
                     positions,
                     status: SettlementStatus::Calculated,
                     pflichtzahlung_eur: None,
@@ -1071,61 +1124,38 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 };
             }
 
-            let mgmt_ct = resolve_managementpraemie(*managementpraemie_ct, input.leistung_kwp);
-
-            // ── §20 Abs. 3 EEG 2023 — Managementprämie ────────────────────────
-            // The Managementprämie is NOT a separate guaranteed floor payment.
-            // §20 Abs. 3 EEG 2023: "der anzulegende Wert um 0,4 ct/kWh zu erhöhen"
-            // → AW_eff = AW + Managementprämie; Marktprämie = max(0, AW_eff − EPEX).
-            //
-            // When EPEX > AW + Managementprämie: total = 0 (no payment at all).
-            // The old EEG ≤2012 "separate floor" model (mgmt always paid) is gone.
-            //
-            // For billing positions we decompose into pure-spread and management components:
-            //   pure_praemie = max(0, AW − EPEX)        — the spread ignoring Managementprämie
-            //   effective_mgmt = total − pure_praemie   — the residual Managementprämie amount
-            // Both can be zero when EPEX ≥ AW + Managementprämie.
-            let eff_aw_ct = aw_ct + mgmt_ct;
-            let total_spread_ct = (eff_aw_ct - epex_ct).max(Decimal::ZERO);
-            let pure_praemie_ct = (aw_ct - epex_ct).max(Decimal::ZERO);
-            let effective_mgmt_ct = total_spread_ct - pure_praemie_ct;
-            // Invariant: pure_praemie_ct + effective_mgmt_ct == total_spread_ct
+            // ── Anlage 1 Nr. 3.1.2 / 4.1.2 EEG 2023 — MP = AW − MW ────────────
+            // Floored at zero: "Ergibt sich bei der Berechnung ein Wert kleiner
+            // null, wird … der Wert 'MP' mit null festgesetzt."
+            let praemie_ct = (aw_ct - epex_ct).max(Decimal::ZERO);
 
             let (praemie_desc, praemie_basis) = if input.tariff_source.is_auction() {
                 (
                     "Gleitende Marktpr\u{00e4}mie \u{00a7}\u{00a7}22a,28 EEG 2023 (Ausschreibung)",
                     "\u{00a7}\u{00a7}22a,28 EEG 2023",
                 )
+            } else if neg_kwh.is_some() {
+                (
+                    "Gleitende Marktpr\u{00e4}mie \u{00a7}23a EEG 2023 (\u{00a7}51 Negativpreisregel angewendet)",
+                    "\u{00a7}23a EEG 2023 i.V.m. Anlage 1",
+                )
             } else {
                 (
-                    "Gleitende Marktpr\u{00e4}mie \u{00a7}20 EEG 2023",
-                    "\u{00a7}20 EEG 2023",
+                    "Gleitende Marktpr\u{00e4}mie \u{00a7}23a EEG 2023",
+                    "\u{00a7}23a EEG 2023 i.V.m. Anlage 1",
                 )
             };
 
-            let mut positions = vec![];
-            if pure_praemie_ct > Decimal::ZERO {
-                positions.push(pos(praemie_desc, praemie_basis, kwh, pure_praemie_ct));
-            }
-            if effective_mgmt_ct > Decimal::ZERO {
-                positions.push(pos(
-                    "Managementpr\u{00e4}mie \u{00a7}20 Abs.\u{202f}3 EEG 2023",
-                    "\u{00a7}20 Abs. 3 EEG 2023",
-                    kwh,
-                    effective_mgmt_ct,
-                ));
-            }
-            if positions.is_empty() {
-                // EPEX ≥ AW + Managementprämie: zero payment — show audit position.
-                positions.push(pos(praemie_desc, praemie_basis, kwh, Decimal::ZERO));
-            }
+            // A zero premium still gets a position: MW ≥ AW is a settled result,
+            // not a missing one, and the Gutschrift has to show the period.
+            let mut positions = vec![pos(praemie_desc, praemie_basis, effective, praemie_ct)];
             // Name every statute that cut the AW, even where the floor absorbed it.
-            positions.extend(aw_cut_positions(&aw_cuts, kwh));
+            positions.extend(aw_cut_positions(&aw_cuts, effective));
 
             let total_eur = positions.iter().map(|p| p.eur).sum();
             SettleOutput {
                 settlement_eur: Some(total_eur),
-                eligible_kwh: Some(kwh),
+                eligible_kwh: Some(effective),
                 positions,
                 status: SettlementStatus::Calculated,
                 pflichtzahlung_eur: None,

@@ -115,9 +115,13 @@ CREATE TABLE eeg_anlagen (
     flex_leistung_kw           NUMERIC(8, 3),
     flex_praemie_ct_kwh        NUMERIC(6, 4),
 
-    -- Plant status
+    -- Plant status. Only the three values the service actually writes:
+    -- 'aktiv' on registration, 'abgemeldet' on Abmeldung/Zusammenlegung and
+    -- 'foerderung_beendet' when the KWKG limit is reached. §22 Repowering is
+    -- recorded by `ist_repowering` + `repowering_datum` — the plant stays
+    -- 'aktiv' and keeps settling, so there is no 'repowered' status.
     status                     TEXT        NOT NULL DEFAULT 'aktiv' CHECK (status IN (
-                                    'aktiv', 'abgemeldet', 'foerderung_beendet', 'repowered'
+                                    'aktiv', 'abgemeldet', 'foerderung_beendet'
                                 )),
     notes                      TEXT,
 
@@ -318,6 +322,38 @@ CREATE INDEX sr_faelligkeitsdatum ON settlement_receipts (tenant, faelligkeitsda
     WHERE faelligkeitsdatum IS NOT NULL;
 CREATE INDEX sr_correction      ON settlement_receipts (correction_of)
     WHERE is_correction = true;
+
+-- ── Per-period contribution to the cumulative counters ───────────────────────
+--
+-- The §44b Biogas quota, the §51a Förderende extension and the KWKG kWh limit
+-- are running totals over the whole Förderdauer, but `POST /settle` is
+-- idempotent and its receipt is an upsert. Without a record of what a period has
+-- already contributed, re-running a month added its kWh and quarter-hours a
+-- second time — burning quota, over-extending the Förderende and expiring the
+-- KWKG limit early.
+--
+-- One row per plant × period holds the period's *absolute* contribution, so a
+-- re-settle applies only the difference (which may be negative).
+
+CREATE TABLE settlement_period_accruals (
+    tr_id             TEXT           NOT NULL,
+    tenant            TEXT           NOT NULL,
+    billing_year      SMALLINT       NOT NULL,
+    billing_month     SMALLINT       NOT NULL CHECK (billing_month BETWEEN 1 AND 12),
+    -- §51a: raw negative-price quarter-hours claimed for this period.
+    negative_price_qh BIGINT         NOT NULL DEFAULT 0,
+    -- §44b: kWh charged against the annual Biogas quota.
+    biogas_kwh        NUMERIC(14, 3) NOT NULL DEFAULT 0,
+    -- KWKG: kWh charged against the Zuschlag limit.
+    kwk_kwh           NUMERIC(14, 3) NOT NULL DEFAULT 0,
+    updated_at        TIMESTAMPTZ    NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (tr_id, tenant, billing_year, billing_month)
+);
+
+COMMENT ON TABLE settlement_period_accruals IS
+    'What each billing period contributed to the plant-level cumulative counters. '
+    'Makes the §44b/§51a/KWKG accrual idempotent across re-settles of the same period.';
 
 -- ── Settlement state audit log ────────────────────────────────────────────────
 

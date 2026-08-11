@@ -6,8 +6,10 @@ weight = 12
 # Annual Release Workflow
 
 This document is the step-by-step engineering playbook for incorporating a new
-BDEW annual release into the `mako` workspace.  Follow the steps in order for every
-October 1 rollover cycle.
+BDEW release into the `mako` workspace.  Follow the steps in order for every
+cutover.  Cutovers are staggered per message type — January 1, April 1 and
+October 1 all carry format versions — so this playbook runs several times a year,
+once per message type that moves.
 
 ---
 
@@ -383,14 +385,14 @@ version active for that process; new events are written under the corresponding
 
 ## Appendix B — BDEW Übergangsfrist (7-day grace period)
 
-During the 7 days following each October 1 cutover, both the outgoing and
+During the 7 days following each cutover date, both the outgoing and
 incoming release formats are normatively acceptable.  The library handles this
 automatically via `TransitionState` — no code changes are needed during the
-grace period.  See `site/content/docs/compliance/release-lifecycle.md` for details.
+grace period.  See [Release Lifecycle](@/docs/compliance/release-lifecycle.md) for details.
 
 ---
 
-## Appendix E — FV2026 profile effective dates and pairing rules
+## Appendix C — FV2026 profile effective dates and pairing rules
 
 Different message types take effect on **different dates** within the 2026
 release cycle.  This is the BDEW-mandated staggered rollout schedule.  When an
@@ -455,7 +457,7 @@ Both commands must exit 0 for the workspace to be considered FV2026-ready.
 
 
 
-## Appendix C — Release naming conventions
+## Appendix D — Release naming conventions
 
 | Profile directory | Wire release code | Rule |
 |---|---|---|
@@ -466,7 +468,7 @@ Both commands must exit 0 for the workspace to be considered FV2026-ready.
 The wire release code comes from UNH segment, data element 0057 (association-
 assigned code).  It must match the `release` field in `mig.json` exactly.
 
-## Appendix D — Archive features
+## Appendix E — Archive features
 
 Profiles marked `"archived": true` in `mig.json` are excluded from the default
 build.  They can still be compiled for historical validation by enabling the
@@ -487,5 +489,5 @@ cargo add edi-energy --features archive
 Archive features always imply their base type feature (`mscons-archive` implies
 `mscons`), so you never need to list both.
 
-See `site/content/docs/compliance/schema-versioning.md` for the full policy on how the `archived` flag
+See [Schema Versioning](@/docs/compliance/schema-versioning.md) for the full policy on how the `archived` flag
 is set and what the codegen guarantees are.

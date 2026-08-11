@@ -593,7 +593,7 @@ pub(crate) async fn get_zeitreihe(
                 group.iter().map(|r| read_to_zeitreihenwert(r)).collect();
             Zeitreihe {
                 bezeichnung: Some(bezeichnung),
-                einheit: Some(Mengeneinheit::Kwh),
+                einheit: Some(edm_sparte_to_einheit(group[0].sparte)),
                 medium: Some(medium),
                 messart: Some(Messart::Mittelwert),
                 werte: Some(werte),
@@ -731,8 +731,11 @@ pub(crate) async fn get_lastgang_resampled(
 
     // Convert MeterRead → MeterInterval (metering crate). `QualityFlag` is the
     // same type on both sides — `edmd::domain` re-exports `metering::QualityFlag`.
+    // Billable qualities only (§60 Abs. 2), consistent with aggregate/imbalance:
+    // a Faulty/Unknown value must not enter a billing-preview total.
     let intervals: Vec<metering::MeterInterval> = reads
         .iter()
+        .filter(|r| r.quality.is_billable())
         .map(|r| metering::MeterInterval {
             from: r.dtm_from,
             to: r.dtm_to,
@@ -831,8 +834,11 @@ pub(crate) async fn get_summenzeitreihe(
         }
     };
 
+    // Billable qualities only (§60 Abs. 2) — the Summenzeitreihe feeds MaBiS
+    // and MMM totals, where a Faulty/Unknown value must not contribute.
     let intervals: Vec<metering::MeterInterval> = reads
         .iter()
+        .filter(|r| r.quality.is_billable())
         .map(|r| metering::MeterInterval {
             from: r.dtm_from,
             to: r.dtm_to,

@@ -192,6 +192,10 @@ CREATE TABLE versorgungsvertraege (
                             )),
     auto_renewal            BOOLEAN     NOT NULL DEFAULT false,
     renewal_monate          INTEGER     NOT NULL DEFAULT 12,
+    -- §13 GasGVV / §14 StromGVV: the vertragsende whose 30-day Ankündigung has
+    -- gone out. Compared against the current vertragsende, so the daily worker
+    -- sends the notice once per term instead of once per day.
+    autoerneuerung_notif_fuer DATE,
     naechste_moegliche_kuendigung DATE,
     bundle_code             TEXT,
     standort_bezeichnung    TEXT,       -- e.g. "Werk Nord" for B2B site identification
@@ -268,7 +272,6 @@ CREATE TABLE received_events (
     event_id    TEXT        PRIMARY KEY,
     event_type  TEXT        NOT NULL,
     payload     JSONB       NOT NULL,
-    processed   BOOLEAN     NOT NULL DEFAULT false,
     received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -343,8 +346,11 @@ CREATE TABLE aggregatorvertraege (
     capacity_price_eur_per_kwh  NUMERIC(12, 6) NOT NULL
                                 CHECK (capacity_price_eur_per_kwh >= 0),
     vertragsbeginn              DATE        NOT NULL,
+    -- Strictly less: the no-overlap constraint below reads the term as the
+    -- half-open range [beginn, ende), so beginn = ende is an empty range — a
+    -- contract that is never in force, and that overlaps nothing.
     vertragsende                DATE
-                                CHECK (vertragsende IS NULL OR vertragsbeginn <= vertragsende),
+                                CHECK (vertragsende IS NULL OR vertragsbeginn < vertragsende),
     -- MwSt override; NULL = use the billing default
     mwst_rate_override          NUMERIC(5, 4),
     kunden_id                   UUID        REFERENCES kunden(id),

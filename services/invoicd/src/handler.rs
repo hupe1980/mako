@@ -77,10 +77,10 @@ pub struct HandlerState {
     pub makod: MakodClient,
     pub check_config: Arc<CheckConfig>,
     pub inbound_secret: Arc<Option<SecretString>>,
-    /// When `total_net_invoic` (in EUR-cents) exceeds this value, a `Warn`
-    /// outcome is escalated to a `Dispute` instead of automatic approval.
+    /// When `total_net_invoic.to_raw()` (10⁻⁵ EUR units) exceeds this value, a
+    /// `Warn` outcome is escalated to a `Dispute` instead of automatic approval.
     /// `0` means `Warn` is always approved.
-    pub auto_dispute_threshold_eur_cents: i64,
+    pub auto_dispute_threshold_raw: i64,
     /// PostgreSQL pool for persisting receipts (§ 147 AO / GoBD compliance).
     /// `None` in development mode — receipts are NOT persisted.
     pub pool: Option<sqlx::PgPool>,
@@ -337,10 +337,10 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
         CheckOutcome::Ok => false,
         CheckOutcome::Warn => {
             // Escalate if the invoice total exceeds the configured threshold.
-            state.auto_dispute_threshold_eur_cents > 0
+            state.auto_dispute_threshold_raw > 0
                 && report
                     .total_net_invoic
-                    .map(|t| t.to_raw() > state.auto_dispute_threshold_eur_cents)
+                    .map(|t| t.to_raw() > state.auto_dispute_threshold_raw)
                     .unwrap_or(false)
         }
         CheckOutcome::Dispute => true,
@@ -371,7 +371,7 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
         let row = pg::ReceiptRow {
             process_id,
             pid: pid as i16,
-            direction: "Inbound".to_owned(),
+            direction: pg::receipts::DIRECTION_INBOUND.to_owned(),
             sender_mp_id: sender_mp_id.clone(),
             receiver_gln,
             malo_id: malo_id.clone(),
@@ -462,7 +462,7 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
             PaymentEventCtx {
                 process_id,
                 pid,
-                direction: "Inbound",
+                direction: pg::receipts::DIRECTION_INBOUND,
                 sender_mp_id: &sender_mp_id,
                 outcome: outcome_str,
                 pay_by: rechnung.faelligkeitsdatum,
@@ -615,10 +615,10 @@ async fn handle_wim_31009_initiated(state: HandlerState, subject: String, data: 
     let should_dispute = match report.outcome {
         CheckOutcome::Ok => false,
         CheckOutcome::Warn => {
-            state.auto_dispute_threshold_eur_cents > 0
+            state.auto_dispute_threshold_raw > 0
                 && report
                     .total_net_invoic
-                    .map(|t| t.to_raw() > state.auto_dispute_threshold_eur_cents)
+                    .map(|t| t.to_raw() > state.auto_dispute_threshold_raw)
                     .unwrap_or(false)
         }
         CheckOutcome::Dispute => true,
@@ -646,7 +646,7 @@ async fn handle_wim_31009_initiated(state: HandlerState, subject: String, data: 
         let row = pg::ReceiptRow {
             process_id,
             pid: 31009_i16,
-            direction: "Inbound".to_owned(),
+            direction: pg::receipts::DIRECTION_INBOUND.to_owned(),
             sender_mp_id: sender_mp_id.clone(),
             receiver_gln,
             malo_id: malo_id_31009,
@@ -878,10 +878,10 @@ async fn handle_gas_invoic_initiated(
     let should_dispute = match report.outcome {
         invoic_checker::CheckOutcome::Ok => false,
         invoic_checker::CheckOutcome::Warn => {
-            state.auto_dispute_threshold_eur_cents > 0
+            state.auto_dispute_threshold_raw > 0
                 && report
                     .total_net_invoic
-                    .map(|t| t.to_raw() > state.auto_dispute_threshold_eur_cents)
+                    .map(|t| t.to_raw() > state.auto_dispute_threshold_raw)
                     .unwrap_or(false)
         }
         invoic_checker::CheckOutcome::Dispute => true,
@@ -903,7 +903,7 @@ async fn handle_gas_invoic_initiated(
         let row = pg::ReceiptRow {
             process_id,
             pid: pid as i16,
-            direction: "Inbound".to_owned(),
+            direction: pg::receipts::DIRECTION_INBOUND.to_owned(),
             sender_mp_id: sender_mp_id.clone(),
             receiver_gln,
             malo_id: malo_id.clone(),
@@ -975,7 +975,7 @@ async fn handle_gas_invoic_initiated(
             PaymentEventCtx {
                 process_id,
                 pid,
-                direction: "Inbound",
+                direction: pg::receipts::DIRECTION_INBOUND,
                 sender_mp_id: &sender_mp_id,
                 outcome: outcome_str,
                 pay_by: rechnung.faelligkeitsdatum,
@@ -1085,7 +1085,7 @@ async fn handle_stornorechnung(state: HandlerState, subject: String, data: serde
         let row = pg::ReceiptRow {
             process_id,
             pid: 31004_i16,
-            direction: "Inbound".to_owned(),
+            direction: pg::receipts::DIRECTION_INBOUND.to_owned(),
             sender_mp_id: sender_mp_id.clone(),
             receiver_gln,
             malo_id,

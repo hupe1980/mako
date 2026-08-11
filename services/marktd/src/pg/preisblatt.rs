@@ -28,13 +28,14 @@ impl PgPreisblattRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
-}
 
-impl PreisblattRepository for PgPreisblattRepository {
-    async fn upsert(
-        &self,
+    /// Upsert on the caller's transaction, so the durable price sheet, its
+    /// PRICAT version snapshot and the `pricat.published` outbox row commit
+    /// together.
+    pub async fn upsert_tx(
+        conn: &mut sqlx::PgConnection,
         nb_mp_id: &str,
-        data: serde_json::Value,
+        data: &serde_json::Value,
         bo4e_version: &str,
         source: PreisblattSource,
     ) -> Result<(), MdmError> {
@@ -66,14 +67,31 @@ impl PreisblattRepository for PgPreisblattRepository {
                WHERE preisblaetter.source <> 'api' OR EXCLUDED.source = 'api'"#,
         )
         .bind(nb_mp_id)
-        .bind(&data)
+        .bind(data)
         .bind(bo4e_version)
         .bind(source.to_string())
-        .execute(&self.pool)
+        .execute(conn)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
         Ok(())
+    }
+}
+
+impl PreisblattRepository for PgPreisblattRepository {
+    async fn upsert(
+        &self,
+        nb_mp_id: &str,
+        data: serde_json::Value,
+        bo4e_version: &str,
+        source: PreisblattSource,
+    ) -> Result<(), MdmError> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Self::upsert_tx(&mut conn, nb_mp_id, &data, bo4e_version, source).await
     }
 
     async fn find_for_date(

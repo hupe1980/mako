@@ -585,6 +585,52 @@ async fn the_ggv_bundle_buyer_resolves_from_the_betreiber_kunde() {
     );
 }
 
+/// §40b EnWG: the billing feed must contain a component the MaKo confirmed.
+///
+/// Nothing ever promotes a component from BESTAETIGT to AKTIV, so requiring
+/// AKTIV alone left the feed to billingd permanently empty — every scheduled
+/// invoice for every customer simply never ran.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_confirmed_component_is_a_billing_candidate() {
+    let Some((pool, _pg)) = test_pool("billing_candidates").await else {
+        return;
+    };
+    let tenant = "9800000000002";
+    let kunde = make_kunde(&pool, tenant).await;
+    let created =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("ERP-BILL-1"))
+            .await
+            .expect("create");
+
+    // Fresh contract: nothing is in supply yet.
+    assert!(
+        pg::list_billing_candidates(&pool, tenant)
+            .await
+            .expect("list")
+            .is_empty(),
+        "an ANGELEGT component is not billable"
+    );
+
+    // The state a confirmed MaKo Lieferbeginn actually leaves behind.
+    sqlx::query("UPDATE versorgungsvertraege SET status='AKTIV' WHERE id=$1")
+        .bind(created.id)
+        .execute(&pool)
+        .await
+        .expect("activate contract");
+    sqlx::query("UPDATE vertragskomponenten SET status='BESTAETIGT' WHERE vertrag_id=$1")
+        .bind(created.id)
+        .execute(&pool)
+        .await
+        .expect("confirm component");
+
+    let candidates = pg::list_billing_candidates(&pool, tenant)
+        .await
+        .expect("list");
+    assert_eq!(candidates.len(), 1, "the confirmed component is billable");
+    assert_eq!(candidates[0].malo_id, "51238696781");
+}
+
 /// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
 type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
 

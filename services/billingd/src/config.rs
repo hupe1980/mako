@@ -183,6 +183,21 @@ pub struct BillingRunsConfig {
     /// Default: true (only effective while `enabled`).
     #[serde(default = "default_true")]
     pub abrechnungsinformation: bool,
+    /// Bill `JAEHRLICH` contracts from the scheduled sweep. Default: **false**.
+    ///
+    /// A Jahresrechnung is a settlement: §40 Abs. 1 / §41 EnWG require it to
+    /// itemise the advance payments and deduct them from the Zahlbetrag. The
+    /// sweep has no source for them — `vertragd`'s billing candidates carry no
+    /// Abschlag data and the postings live in `accountingd`, which is
+    /// downstream of billingd — so an automated annual run would state the full
+    /// year's gross as `zuZahlen` with zero Vorauszahlungen. Until the
+    /// Abschlag read path exists, the sweep refuses these contracts and they
+    /// are billed through `POST /api/v1/billing/{malo_id}/calculate` with
+    /// `schlussrechnung` + `abschlaege` supplied by the caller.
+    ///
+    /// Setting this to `true` opts into emitting those documents anyway.
+    #[serde(default)]
+    pub jahresrechnung: bool,
 }
 
 fn default_billing_run_hour() -> u8 {
@@ -198,6 +213,7 @@ impl Default for BillingRunsConfig {
             enabled: false,
             run_hour_utc: default_billing_run_hour(),
             abrechnungsinformation: true,
+            jahresrechnung: false,
         }
     }
 }

@@ -211,7 +211,7 @@ curl -X PUT http://localhost:8180/api/v1/partners/4012345000023 \
 curl -X PUT http://localhost:8180/api/v1/malo/51238696780 \
   -H "Content-Type: application/json" --data-binary "@fixtures/malo-nb.json"
 
-# NIS grid record (check 1)
+# MaLo grid record (check 1)
 curl -X PUT http://localhost:8180/api/v1/malo/51238696780/grid \
   -H "Content-Type: application/json" \
   -d '{"nb_mp_id":"9900357000004","bilanzierungsgebiet":"11YN0------0STXC","netzgebiet":"DEMO-NZ-001","sparte":"STROM","source":"manual"}'

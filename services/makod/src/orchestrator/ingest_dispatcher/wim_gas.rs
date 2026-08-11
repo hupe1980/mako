@@ -63,7 +63,7 @@ impl EdifactIngestDispatcher {
                         2,
                         HolidayCalendar::BdewMaKo,
                     );
-                    self.spawn_or_resume::<WimGasGeraeteubernahmeWorkflow>(
+                    self.spawn_or_resume_guarded::<WimGasGeraeteubernahmeWorkflow>(
                         &melo_id,
                         "wim-gas-geraeteubernahme",
                         cmd,
@@ -72,6 +72,7 @@ impl EdifactIngestDispatcher {
                             mako_wim_gas::GAS_GERAETEUBERNAHME_ORDRSP_DEADLINE_LABEL,
                             process_due_at,
                         )],
+                        |s| !s.is_terminal(),
                     )
                     .await
                 }

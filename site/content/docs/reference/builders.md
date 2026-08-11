@@ -158,13 +158,12 @@ println!("{}", pid.as_u32());  // 55001
 println!("{}", pid);           // "55001"
 
 // Common Pruefidentifikatoren
-// 11001 — UTILMD Strom: Abmeldung Lieferant
-// 11002 — UTILMD Strom: Abmeldung Netz
-// 11003 — UTILMD Strom: Netzanschluss
 // 13001 — MSCONS: Netzbetreiber an Lieferant (SLP)
 // 29001 — APERAK: Annahme
 // 29002 — APERAK: Ablehnung
-// 55001 — UTILMD Strom: Lieferbeginn
+// 55001 — UTILMD Strom: Anmeldung Lieferbeginn (LF → NB)
+// 55004 — UTILMD Strom: Abmeldung / Lieferende (LF → NB)
+// 55042 — UTILMD Strom: WiM Anmeldung MSB (MSBN → NB)
 ```
 
 ---

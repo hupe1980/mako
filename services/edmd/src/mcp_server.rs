@@ -176,8 +176,10 @@ pub struct TriggerSubstitutionParams {
     pub method: Option<String>,
     /// Interval length in seconds (default 900; use 3600 for hourly gas).
     pub interval_secs: Option<u32>,
-    /// Prior-period reference window in days for `PriorPeriodAverage`
-    /// (default 7).
+    /// Reference read window in days (default 7). `PriorPeriodAverage` averages
+    /// the matching slot over the 7 days before the gap and ignores anything
+    /// past that; a larger value only widens the search for the bracketing
+    /// values the other methods use.
     pub prior_days: Option<u32>,
     /// OBIS register the gap belongs to (part of the reading identity).
     pub obis_code: Option<String>,
@@ -448,12 +450,11 @@ impl EdmdMcpHandler {
             .map_err(|_| McpError::invalid_params("period_to must be YYYY-MM-DD", None))?
             .unwrap_or(period_from);
 
-        let from_ts = period_from.midnight().assume_utc();
-        let to_ts = period_to
-            .next_day()
-            .unwrap_or(period_to)
-            .midnight()
-            .assume_utc();
+        // A billing period is a Berlin calendar period (Liefermonat), so its UTC
+        // window comes from the calendar — naive UTC midnight is 1–2 h off at
+        // every month edge and the wrong length across a DST transition.
+        let from_ts = metering::calendar::day_start_utc(period_from);
+        let to_ts = metering::calendar::day_end_utc(period_to);
 
         // Query pre-aggregated billing periods first, fall back to raw aggregation.
         let pre = sqlx::query(

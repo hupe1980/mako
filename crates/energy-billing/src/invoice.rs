@@ -72,6 +72,8 @@ pub struct Invoice {
     /// Total of advance payments (Abschläge) deducted on this invoice, gross.
     ///
     /// Non-zero only for `InvoiceType::Final` with `ctx.abschlage` populated.
+    /// Negative on a Stornorechnung, which reverses the deduction along with
+    /// everything else.
     pub abschlag_total_eur: Decimal,
 
     /// Tax contained in `abschlag_total_eur`.
@@ -191,7 +193,7 @@ impl Invoice {
     /// - `netto_eur` = sum of non-Tax, non-Abschlag positions
     /// - `mwst_eur`  = sum of Tax positions
     /// - `brutto_eur` = netto + mwst
-    /// - `abschlag_total_eur` = sum of Abschlag positions
+    /// - `abschlag_total_eur` = negated sum of Abschlag positions (signed)
     /// - `zahlbetrag_eur` = brutto - abschlag_total_eur
     #[must_use]
     pub fn from_positions(
@@ -212,19 +214,31 @@ impl Invoice {
             .map(|p| p.net_eur)
             .sum();
         let brutto_eur = netto_eur + mwst_eur;
+        // Signed, not `.abs()`: an Abschlag position carries the deduction as a
+        // negative net, so the advance total is its negation. A Stornorechnung
+        // has already negated every position, which flips this total too — that
+        // is what makes the reversal the exact negation of the original
+        // (`−(B − A)`, not `−B − A`).
         let abschlag_total_eur: Decimal = positions
             .iter()
             .filter(|p| p.category == PositionCategory::Abschlag)
-            .map(|p| p.net_eur.abs())
+            .map(|p| -p.net_eur)
             .sum();
         let zahlbetrag_eur = brutto_eur - abschlag_total_eur;
         // From the context, not the positions: an Abschlag position carries only
         // the gross paid, while the rate it was invoiced at lives on the deduction.
+        // Sign-follows-the-document, as above.
+        let reversal_sign = if context.invoice_type.is_reversal() {
+            Decimal::NEGATIVE_ONE
+        } else {
+            Decimal::ONE
+        };
         let abschlag_ust_eur: Decimal = context
             .abschlage
             .iter()
             .map(AbschlagDeduction::ust_eur)
-            .sum();
+            .sum::<Decimal>()
+            * reversal_sign;
         let billing_run_id = context.billing_run_id.clone();
         Self {
             context,

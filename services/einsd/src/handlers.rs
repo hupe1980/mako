@@ -137,10 +137,27 @@ pub async fn derive_negativpreis_from_edmd(
         return None;
     }
 
-    let spot = crate::pg::fetch_spot_prices(pool, range_from, range_to)
-        .await
-        .ok()?;
+    let spot = match crate::pg::fetch_spot_prices(pool, range_from, range_to).await {
+        Ok(spot) => spot,
+        Err(e) => {
+            tracing::warn!(
+                malo_id, year, month, error = %e,
+                "§51 auto-derivation skipped — the EPEX spot store could not be read"
+            );
+            return None;
+        }
+    };
     if spot.is_empty() {
+        // Without prices no quarter-hour can be negative, so the plant is paid
+        // in full for a month §51 may well have excluded. That is an operator
+        // problem (import the day-ahead curve), not a quiet skip.
+        tracing::warn!(
+            malo_id,
+            year,
+            month,
+            "§51 auto-derivation skipped — the EPEX spot store has no coverage for the \
+             period; import the day-ahead prices or supply kwh_during_negative_epex"
+        );
         return None;
     }
     let negative_starts: std::collections::HashSet<time::OffsetDateTime> = spot
@@ -529,7 +546,6 @@ pub struct SettleTriggerRequest {
     /// Override §20 Abs. 3 EEG 2023 Managementprämie ct/kWh.
     /// Defaults to 0.4 ct/kWh (0.2 ct/kWh for plants >100 MW).
     /// Only applies to DIREKTVERMARKTUNG and AUSSCHREIBUNG settlement models.
-    pub managementpraemie_ct_override: Option<Decimal>,
     /// §13a EnWG (Redispatch 2.0) — kWh curtailed by NB this billing month.
     ///
     /// The NB must compensate the operator at the AW rate for these kWh
@@ -639,7 +655,6 @@ pub async fn post_settle(
         SettleOverrides {
             einspeisemenge_kwh,
             epex_avg_ct_kwh,
-            managementpraemie_ct_override: req.managementpraemie_ct_override,
             einspeisemanagement_kwh: req.einspeisemanagement_kwh,
             kwh_during_negative_epex,
             negative_price_quarter_hours,
@@ -926,6 +941,12 @@ pub struct WindReevaluationRequest {
     pub wirksam_ab_jahr: i16,
     /// Gütefaktor recomputed from the measured 5-year Standortertrag.
     pub guetefaktor: Decimal,
+    /// Korrekturfaktor certified by the Gutachten (§36h Abs. 3 Nr. 2).
+    ///
+    /// The Netzbetreiber settles on the certified value, so it is accepted
+    /// rather than derived. Omit it to interpolate the Anlage 2 Nr. 7 table
+    /// from `guetefaktor`.
+    pub korrekturfaktor: Option<Decimal>,
 }
 
 /// `POST /api/v1/anlagen/{tr_id}/wind-reevaluation`
@@ -965,6 +986,7 @@ pub async fn post_wind_reevaluation(
         &tr_id,
         req.wirksam_ab_jahr,
         req.guetefaktor,
+        req.korrekturfaktor,
     )
     .await
     {
@@ -1115,9 +1137,13 @@ pub struct MastrRegistrierungRequest {
 
 /// `POST /api/v1/anlagen/{tr_id}/mastr-registrierung`
 ///
-/// Confirm MaStR registration for a plant. Transitions:
+/// Confirm MaStR registration for a plant:
 /// - `mastr_registriert` → `true`
-/// - `status` `angemeldet` → `aktiv` (if it was angemeldet)
+/// - the §52 Abs. 1 Nr. 11 violation clock (`mastr_violation_start`) is cleared
+///
+/// The plant status is untouched. `eeg_anlagen.status` has no pre-activation
+/// value — a plant is `aktiv` from registration — so there is no transition to
+/// make here.
 ///
 /// ## Legal basis
 ///
@@ -1157,10 +1183,10 @@ pub async fn post_mastr_registrierung(
         time::OffsetDateTime::now_utc().date()
     };
 
-    // Transactional outbox: the `eeg_anlagen` state change (mastr_registriert +
-    // status angemeldet→aktiv) and its ERP CloudEvent commit as one unit, so the
-    // registration-release signal cannot be lost on a webhook 5xx/crash. A
-    // background OutboxWorker drains `event_outbox` (persist-before-dispatch).
+    // Transactional outbox: the `eeg_anlagen` state change (mastr_registriert)
+    // and its ERP CloudEvent commit as one unit, so the registration-release
+    // signal cannot be lost on a webhook 5xx/crash. A background OutboxWorker
+    // drains `event_outbox` (persist-before-dispatch).
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -1172,10 +1198,8 @@ pub async fn post_mastr_registrierung(
             mastr_nummer         = $3, \
             mastr_datum          = $4, \
             mastr_violation_start = NULL, \
-            status               = CASE WHEN status = 'angemeldet' THEN 'aktiv' ELSE status END, \
             updated_at           = now() \
-         WHERE tr_id = $1 AND tenant = $2 \
-           AND status IN ('angemeldet', 'aktiv')",
+         WHERE tr_id = $1 AND tenant = $2 AND status = 'aktiv'",
     )
     .bind(&tr_id)
     .bind(&cfg.tenant)
@@ -1369,7 +1393,6 @@ pub async fn post_batch_settle(
                     SettleOverrides {
                         einspeisemenge_kwh,
                         epex_avg_ct_kwh,
-                        managementpraemie_ct_override: None,
                         einspeisemanagement_kwh: None,
                         kwh_during_negative_epex: None,
                         negative_price_quarter_hours: None,
@@ -1864,7 +1887,6 @@ pub async fn post_correction_settle(
         SettleOverrides {
             einspeisemenge_kwh,
             epex_avg_ct_kwh,
-            managementpraemie_ct_override: None,
             einspeisemanagement_kwh: None,
             kwh_during_negative_epex: None,
             negative_price_quarter_hours: None,

@@ -124,10 +124,15 @@ pub async fn handle_webhook(
         .or_else(|| data["error_code"].as_str())
         .map(str::to_owned);
 
-    // Look up existing projection to preserve started_at.
+    // Look up existing projection to preserve started_at. A read failure is not
+    // "no row": treating it as one re-anchors the deadline on this event.
     let (started_at, existing_deadline) = match state.repo.get(process_id).await {
         Ok(Some(existing)) => (existing.started_at, existing.deadline_at),
-        _ => (event_time, None),
+        Ok(None) => (event_time, None),
+        Err(err) => {
+            warn!(%err, process_id = %process_id, "obsd: projection read failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     };
 
     let deadline_at = match state_val {
@@ -171,20 +176,20 @@ pub async fn handle_webhook(
         tenant: state.tenant.clone(),
     };
 
-    match state.repo.upsert(&projection).await {
-        Ok(()) => {
-            info!(
-                process_id = %process_id,
-                pid,
-                ce_type,
-                state = ?state_val,
-                "obsd: upserted process projection"
-            );
-        }
-        Err(err) => {
-            warn!(%err, process_id = %process_id, "obsd: failed to upsert projection");
-        }
+    // A swallowed failure would let marktd's fan-out mark the event delivered:
+    // a lost `process.initiated` leaves no projection and no deadline, and the
+    // process can then breach in silence. Fail loudly so the fan-out retries.
+    if let Err(err) = state.repo.upsert(&projection).await {
+        warn!(%err, process_id = %process_id, "obsd: failed to upsert projection");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
+    info!(
+        process_id = %process_id,
+        pid,
+        ce_type,
+        state = ?state_val,
+        "obsd: upserted process projection"
+    );
 
     StatusCode::NO_CONTENT.into_response()
 }

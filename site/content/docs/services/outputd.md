@@ -14,11 +14,9 @@ carrier, the publish gates and the append-only template store. What a document
 for invoices, accountingd for the Mahnwesen figures. outputd never recomputes a
 number; it renders what it is handed and proves the rendering.
 
-Extracted from billingd (2026-08-10) because the template system was never
-invoice-specific: one brand has one template store, and a logo change must reach
-the invoice *and* the Mahnung. The delivery channel — mail, e-mail, portal
-inbox, with per-document evidence — is this daemon's designed growth; see the
-ROADMAP's customer-communications item.
+The template system is deliberately not invoice-specific: one brand has one
+template store, and a logo change must reach the invoice *and* the Mahnung.
+outputd renders and proves documents; delivering them is the caller's concern.
 
 Port: `:9880`
 

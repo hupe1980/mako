@@ -33,27 +33,30 @@
 //!
 //! ```rust
 //! use eeg_billing::rates;
-//! use eeg_billing::{ErzeugungsArt};
+//! use eeg_billing::ErzeugungsArt;
 //! use rust_decimal::dec;
+//! use time::macros::date;
 //!
-//! // Gross AW for a 15 kWp solar plant (EEG 2023 initial)
-//! let lookup = rates::solar_pv_lookup(2023).expect("EEG 2023 solar PV rates known");
-//! let gross_aw = lookup.rate_for(dec!(15)).expect("15 kWp is within table");
-//! // Net Vergütungssatz = AW − §53 deduction (0.4 ct for solar)
-//! let sect53 = rates::sect53_deduction(ErzeugungsArt::SolarAufdach);
-//! // Store the NET rate in verguetungssatz_ct; the formula uses it directly.
+//! // Gross AW for a 15 kWp rooftop plant commissioned in the 1 Feb 2025 window.
+//! let gross_aw = rates::solar_pv_ueberschuss_aw_ct(dec!(15), date!(2025-04-01)).unwrap();
+//! assert_eq!(gross_aw, dec!(7.28)); // §48 Abs. 2 Nr. 2: 7.50 × 0.99³
+//! // Net Einspeisevergütung = AW − §53 Abs. 1 deduction (0.4 ct for solar).
+//! let net = gross_aw - rates::sect53_deduction(ErzeugungsArt::SolarAufdach);
+//! assert_eq!(net, dec!(6.88));
 //! ```
 //!
 //! ## Source
 //!
-//! - **EEG 2023**: BGBl I 2023 Nr. 1 (10.01.2023), §21 EEG 2023 + §48 Abs. 2
-//! - **EEG 2021**: BGBl I 2021 S. 3426, §21 EEG 2021 + Anlage 1
-//! - **EEG 2017**: BGBl I 2017 S. 2532, §21 EEG 2017 + Anlage 1
+//! - **§48 Abs. 2 / Abs. 2a EEG 2023** in the version §101 Abs. 1 Satz 2 keeps in
+//!   force pending EU state-aid approval, i.e. the one as at 15 May 2024
+//! - **§49 EEG 2023** for the semi-annual degression, cross-checked against the
+//!   Bundesnetzagentur "Anzulegende Werte für Solaranlagen" spreadsheets
+//! - **§53 Abs. 1 EEG 2023** for the Einspeisevergütung deduction
 //!
-//! **Important:** These are **reference starting rates** (gross AW).
-//! Actual rates degrade quarterly (§23a EEG 2023, §49 EEG 2021) and depend on the
-//! exact commissioning month.  For production billing, use `einsd`'s
-//! `lookup_verguetungssatz` DB function which holds the full quarterly degression table.
+//! **Important:** the solar figures here are **gross anzulegende Werte** for the
+//! §49 window of a given commissioning date. Non-solar tables are reference
+//! starting rates only; for those, `einsd`'s `lookup_verguetungssatz` DB function
+//! holds the full per-window series.
 //!
 //! ## KWKG rates
 //!
@@ -61,155 +64,196 @@
 //! (§7 KWKG 2023 Anlage).  §53 does NOT apply to KWKG.  See [`kwkg_zuschlag_lookup`].
 
 use billing::{Amount, BillingError, RateLookup};
+use rust_decimal::Decimal;
 use rust_decimal::dec;
 
-// ── Solar PV ──────────────────────────────────────────────────────────────────
+// ── Solar PV — §48 EEG 2023 ───────────────────────────────────────────────────
 
-/// Return the EEG rate table for **solar PV** plants (Gebäudeanlagen, Überschusseinspeisung).
+/// **§48 Abs. 2 EEG 2023** — the Gebäude/Lärmschutzwand base anzulegende Werte,
+/// in ct/kWh, before any §49 degression.
 ///
-/// These are the **§48 Abs. 2** rates — for plants that do NOT declare full feed-in
-/// (Überschusseinspeisung: surplus after self-consumption). For Volleinspeisung
-/// (100% feed-in) rates, use [`solar_pv_volleinspeisung_lookup`].
+/// | Installed capacity | Anzulegender Wert |
+/// |---|---|
+/// | ≤ 10 kW | 8,60 ct |
+/// | ≤ 40 kW | 7,50 ct |
+/// | ≤ 1 MW | 6,20 ct |
 ///
-/// The parameter passed to `rate_for()` is the **installed capacity in kWp**.
+/// ## Which version of §48 Abs. 2 this is
 ///
-/// ## Rate history (§48 Abs. 2 EEG 2023, Gebäudeanlagen)
+/// The consolidated text of §48 Abs. 2 currently reads 8,51 / 7,43 / 7,64 ct —
+/// the Solarpaket-I figures. Those are **not yet in force**: §101 Abs. 1 Satz 1
+/// lists § 48 Absatz 2 among the provisions that "erst nach der beihilferechtlichen
+/// Genehmigung durch die Europäische Kommission … angewandt werden" dürfen, and
+/// Satz 2 directs that until then "§ 48 Absatz 2 … in der am 15. Mai 2024
+/// geltenden Fassung anzuwenden" is — the 8,60 / 7,50 / 6,20 ladder below.
 ///
-/// | Period | ≤10 kWp | ≤40 kWp | ≤1 MWp | Source |
-/// |---|---|---|---|---|
-/// | 2023-02 – 2024-04 | 8.11 ct | 6.79 ct | 5.56 ct | EEG 2023 initial (BGBl 2023 Nr.1) |
-/// | from 2024-05 | **8.51 ct** | **7.43 ct** | **7.64 ct** | Solarpaket I (BGBl 2024 Nr.107) |
+/// This is also what the Bundesnetzagentur actually publishes: its "Anzulegende
+/// Werte für Solaranlagen" series runs the §49 degression off 8,60 / 7,50 / 6,20
+/// in every window through 2026/27.
+pub const SOLAR_GEBAEUDE_BASIS_CT: [(Decimal, Decimal); 3] = [
+    (dec!(10), dec!(8.60)),
+    (dec!(40), dec!(7.50)),
+    (dec!(1_000), dec!(6.20)),
+];
+
+/// **§48 Abs. 2a EEG 2023** — the Volleinspeisung uplift on top of Abs. 2, in ct/kWh.
 ///
-/// **Important:** These are **reference starting rates** for the respective EEG
-/// version. Actual rates degrade quarterly (§23a EEG 2023) from commissioning month.
-/// For production billing, use `einsd`'s `lookup_verguetungssatz` DB function.
+/// Payable where the operator feeds in the entire annual generation and told the
+/// Netzbetreiber so in text form before the deadline in Satz 1. The uplift is
+/// itself subject to §49 (which names Absatz 2a expressly), so it degresses in
+/// step with the base rather than staying nominal.
 ///
-/// Use `eeg_year = 2023` for plants commissioned from 01.02.2023 (initial rates)
-/// or `eeg_year = 2024` for plants commissioned from 01.05.2024 (Solarpaket I).
+/// | Installed capacity | Uplift |
+/// |---|---|
+/// | ≤ 10 kW | +4,8 ct |
+/// | ≤ 40 kW | +3,8 ct |
+/// | ≤ 100 kW | +5,1 ct |
+/// | ≤ 400 kW | +3,2 ct |
+/// | ≤ 1 MW | +1,9 ct |
+pub const SOLAR_VOLLEINSPEISUNG_ZUSCHLAG_CT: [(Decimal, Decimal); 5] = [
+    (dec!(10), dec!(4.8)),
+    (dec!(40), dec!(3.8)),
+    (dec!(100), dec!(5.1)),
+    (dec!(400), dec!(3.2)),
+    (dec!(1_000), dec!(1.9)),
+];
+
+/// **§48 Abs. 1 EEG 2023** — the base anzulegender Wert for the Freiflächen and
+/// other Nicht-Gebäude forms: 7,00 ct/kWh, likewise before §49 degression.
+pub const SOLAR_FREIFLAECHE_BASIS_CT: Decimal = dec!(7.00);
+
+/// The first day §48 Abs. 2/2a apply from — EEG 2023 in force.
 ///
-/// ## Supported EEG years
+/// Plants commissioned earlier settle under their own EEG version's quarterly
+/// tables, which no three-row constant can express; resolve those from `einsd`'s
+/// `eeg_verguetungssaetze` table instead.
+const EEG2023_START: time::Date = time::macros::date!(2023 - 01 - 01);
+
+fn tier_ct(table: &[(Decimal, Decimal)], leistung_kwp: Decimal) -> Option<Decimal> {
+    table
+        .iter()
+        .find(|(max, _)| leistung_kwp <= *max)
+        .map(|(_, ct)| *ct)
+}
+
+/// **§48 Abs. 2 EEG 2023 i.V.m. §49** — the Überschusseinspeisung **gross AW**
+/// in ct/kWh for a plant of `leistung_kwp` commissioned on `inbetriebnahme`.
 ///
-/// | Year | Source | Rate track |
-/// |---|---|---|
-/// | 2023 | BGBl I 2023 Nr. 1, §48 Abs. 2 | Initial EEG 2023 rates (before Solarpaket I) |
-/// | 2024+ | BGBl I 2024 Nr. 107, Solarpaket I | Increased rates from 01.05.2024 |
-/// | 2021 | BGBl I 2021 S. 3426, §21 + Anlage 1 | Q3 2021 reference rate |
-/// | 2017 | BGBl I 2017 S. 2532, §21 + Anlage 1 | Q2 2017 reference rate |
+/// Gross: this is the anzulegender Wert, which is what the Marktprämie is
+/// computed from directly (Anlage 1 Nr. 1). For the feste Einspeisevergütung,
+/// subtract [`sect53_deduction`] — see the module docs.
 ///
-/// # Example
+/// Returns `None` before 1 January 2023 and above 1 MW (§22 Abs. 3 makes those
+/// ausschreibungspflichtig — there is no statutory AW to look up).
+///
+/// ```rust
+/// use eeg_billing::rates::solar_pv_ueberschuss_aw_ct;
+/// use rust_decimal::dec;
+/// use time::macros::date;
+///
+/// // §48 Abs. 2 Nr. 1, 1 Feb 2024 window: 8.60 × 0.99 = 8.51 ct gross AW.
+/// assert_eq!(solar_pv_ueberschuss_aw_ct(dec!(9), date!(2024-03-01)), Some(dec!(8.51)));
+/// ```
+#[must_use]
+pub fn solar_pv_ueberschuss_aw_ct(
+    leistung_kwp: Decimal,
+    inbetriebnahme: time::Date,
+) -> Option<Decimal> {
+    if inbetriebnahme < EEG2023_START {
+        return None;
+    }
+    let base = tier_ct(&SOLAR_GEBAEUDE_BASIS_CT, leistung_kwp)?;
+    Some(crate::degression::anzulegender_wert_bei_inbetriebnahme(
+        base,
+        inbetriebnahme,
+    ))
+}
+
+/// **§48 Abs. 2 + Abs. 2a EEG 2023 i.V.m. §49** — the Volleinspeisung **gross AW**
+/// in ct/kWh.
+///
+/// §49 degresses the Abs. 2 base and the Abs. 2a uplift together, so the sum is
+/// formed first and the degression applied to it once — which is how the
+/// Bundesnetzagentur publishes the Volleinspeisung column.
+///
+/// ```rust
+/// use eeg_billing::rates::solar_pv_volleinspeisung_aw_ct;
+/// use rust_decimal::dec;
+/// use time::macros::date;
+///
+/// // (8.60 + 4.80) × 0.99 = 13.266 → 13.27 ct gross AW.
+/// assert_eq!(solar_pv_volleinspeisung_aw_ct(dec!(9), date!(2024-03-01)), Some(dec!(13.27)));
+/// ```
+#[must_use]
+pub fn solar_pv_volleinspeisung_aw_ct(
+    leistung_kwp: Decimal,
+    inbetriebnahme: time::Date,
+) -> Option<Decimal> {
+    if inbetriebnahme < EEG2023_START {
+        return None;
+    }
+    let base = tier_ct(&SOLAR_GEBAEUDE_BASIS_CT, leistung_kwp)?;
+    let zuschlag = tier_ct(&SOLAR_VOLLEINSPEISUNG_ZUSCHLAG_CT, leistung_kwp)?;
+    Some(crate::degression::anzulegender_wert_bei_inbetriebnahme(
+        base + zuschlag,
+        inbetriebnahme,
+    ))
+}
+
+/// **§48 Abs. 1 EEG 2023 i.V.m. §49** — the Freiflächen **gross AW** in ct/kWh.
+#[must_use]
+pub fn solar_pv_freiflaeche_aw_ct(inbetriebnahme: time::Date) -> Option<Decimal> {
+    (inbetriebnahme >= EEG2023_START).then(|| {
+        crate::degression::anzulegender_wert_bei_inbetriebnahme(
+            SOLAR_FREIFLAECHE_BASIS_CT,
+            inbetriebnahme,
+        )
+    })
+}
+
+/// The §48 Abs. 2 Überschusseinspeisung table as a [`RateLookup`], for the §49
+/// window `inbetriebnahme` falls into. Gross AW, in EUR/kWh.
 ///
 /// ```rust
 /// use eeg_billing::rates;
 /// use rust_decimal::dec;
+/// use time::macros::date;
 ///
-/// // EEG 2024 (Solarpaket I): 9 kWp building-mounted PV → 8.51 ct/kWh
-/// let table = rates::solar_pv_ueberschuss_lookup(2024).expect("known year");
+/// let table = rates::solar_pv_ueberschuss_lookup(date!(2024-03-01)).unwrap();
 /// assert_eq!(table.rate_for(dec!(9)).unwrap(), billing::Amount::parse("0.08510").unwrap());
 /// ```
-pub fn solar_pv_ueberschuss_lookup(eeg_year: i16) -> Option<RateLookup> {
-    match eeg_year {
-        // ── EEG 2024 / Solarpaket I — valid from 01.05.2024 ──────────────────
-        // Source: §48 Abs. 2 EEG 2023 n.F. (Solarpaket I, BGBl I 2024 Nr. 107)
-        2024..=2026 => RateLookup::builder()
-            .at_most(dec!(10), amount_ct("8.51")) // ≤10 kWp:  8.51 ct/kWh
-            .at_most(dec!(40), amount_ct("7.43")) // ≤40 kWp:  7.43 ct/kWh
-            .fallback(amount_ct("7.64")) // >40 kWp:  7.64 ct/kWh (≤1 MWp)
-            .build()
-            .ok(),
-
-        // ── EEG 2023 (initial) — valid from 01.02.2023 to 30.04.2024 ─────────
-        // Source: §48 Abs. 2 EEG 2023 a.F. (BGBl I 2023 Nr. 1)
-        2023 => RateLookup::builder()
-            .at_most(dec!(10), amount_ct("8.11")) // ≤10 kWp:  8.11 ct/kWh
-            .at_most(dec!(40), amount_ct("6.79")) // ≤40 kWp:  6.79 ct/kWh
-            .fallback(amount_ct("5.56")) // >40 kWp:  5.56 ct/kWh (≤1 MWp)
-            .build()
-            .ok(),
-
-        // ── EEG 2021 — Q3 2021 starting rate ─────────────────────────────────
-        2021 | 2022 => RateLookup::builder()
-            .at_most(dec!(10), amount_ct("9.03")) // ≤10 kWp:  9.03 ct/kWh
-            .at_most(dec!(40), amount_ct("8.75")) // ≤40 kWp:  8.75 ct/kWh
-            .fallback(amount_ct("7.29")) // >40 kWp:  7.29 ct/kWh (≤750 kWp)
-            .build()
-            .ok(),
-
-        // ── EEG 2017 — Q2 2017 starting rate ─────────────────────────────────
-        2017..=2020 => RateLookup::builder()
-            .at_most(dec!(10), amount_ct("12.35")) // ≤10 kWp: 12.35 ct/kWh
-            .at_most(dec!(40), amount_ct("12.00")) // ≤40 kWp: 12.00 ct/kWh
-            .fallback(amount_ct("10.96")) // >40 kWp: 10.96 ct/kWh (≤750 kWp)
-            .build()
-            .ok(),
-
-        // ── Earlier EEG versions ──────────────────────────────────────────────
-        _ => None,
+#[must_use]
+pub fn solar_pv_ueberschuss_lookup(inbetriebnahme: time::Date) -> Option<RateLookup> {
+    if inbetriebnahme < EEG2023_START {
+        return None;
     }
+    let at = |kwp| solar_pv_ueberschuss_aw_ct(kwp, inbetriebnahme).unwrap_or(Decimal::ZERO);
+    RateLookup::builder()
+        .at_most(dec!(10), amount_from_ct(at(dec!(10))))
+        .at_most(dec!(40), amount_from_ct(at(dec!(40))))
+        .at_most(dec!(1_000), amount_from_ct(at(dec!(1_000))))
+        .build()
+        .ok()
 }
 
-/// Backward-compatible alias for [`solar_pv_ueberschuss_lookup`].
-///
-/// Returns Überschusseinspeisung rates. Prefer the explicit function name in new code.
-pub fn solar_pv_lookup(eeg_year: i16) -> Option<RateLookup> {
-    solar_pv_ueberschuss_lookup(eeg_year)
-}
-
-/// Return the EEG **Volleinspeisung** rate table for solar PV plants.
-///
-/// These are the **§48 Abs. 2 + Abs. 2a** rates — for plants that declare 100%
-/// grid feed-in (Volleinspeisung: all generated electricity goes to the grid).
-/// The bonus (§48 Abs. 2a) is added to the §48 Abs. 2 base rate.
-///
-/// ## EEG 2024 (Solarpaket I) Volleinspeisung rates (§48 Abs. 2 + Abs. 2a):
-///
-/// | Capacity | Base (Abs. 2) | Bonus (Abs. 2a) | Total |
-/// |---|---|---|---|
-/// | ≤10 kWp | 8.51 ct | +4.80 ct | **13.31 ct/kWh** |
-/// | ≤40 kWp | 7.43 ct | +3.80 ct | **11.23 ct/kWh** |
-/// | ≤100 kWp | 7.64 ct | +5.10 ct | **12.74 ct/kWh** |
-/// | ≤400 kWp | 7.64 ct | +3.20 ct | **10.84 ct/kWh** |
-/// | ≤1 MWp | 7.64 ct | +1.90 ct | **9.54 ct/kWh** |
-///
-/// # Example
-///
-/// ```rust
-/// use eeg_billing::rates;
-/// use rust_decimal::dec;
-///
-/// // EEG 2024: 9 kWp full feed-in → 13.31 ct/kWh
-/// let table = rates::solar_pv_volleinspeisung_lookup(2024).expect("known year");
-/// assert_eq!(table.rate_for(dec!(9)).unwrap(), billing::Amount::parse("0.13310").unwrap());
-/// ```
-pub fn solar_pv_volleinspeisung_lookup(eeg_year: i16) -> Option<RateLookup> {
-    match eeg_year {
-        // ── EEG 2024 (Solarpaket I) Volleinspeisung ────────────────────────────
-        2024..=2026 => RateLookup::builder()
-            .at_most(dec!(10), amount_ct("13.31")) // 8.51 + 4.80
-            .at_most(dec!(40), amount_ct("11.23")) // 7.43 + 3.80
-            .at_most(dec!(100), amount_ct("12.74")) // 7.64 + 5.10
-            .at_most(dec!(400), amount_ct("10.84")) // 7.64 + 3.20
-            .fallback(amount_ct("9.54")) // 7.64 + 1.90  (≤1 MWp)
-            .build()
-            .ok(),
-
-        // ── EEG 2023 initial Volleinspeisung ──────────────────────────────────
-        // §48 Abs. 2 (8.11/6.79/5.56) + Abs. 2a bonus (4.89/3.79/…)
-        2023 => RateLookup::builder()
-            .at_most(dec!(10), amount_ct("13.00")) // 8.11 + 4.89
-            .at_most(dec!(40), amount_ct("10.58")) // 6.79 + 3.79
-            .at_most(dec!(100), amount_ct("11.36")) // 5.56 + 5.80
-            .at_most(dec!(400), amount_ct("8.60")) // 5.56 + 3.04
-            .fallback(amount_ct("7.31")) // 5.56 + 1.75
-            .build()
-            .ok(),
-
-        // ── Earlier versions ── use einsd DB lookup for quarterly degression
-        _ => None,
+/// The §48 Abs. 2 + Abs. 2a Volleinspeisung table as a [`RateLookup`], for the
+/// §49 window `inbetriebnahme` falls into. Gross AW, in EUR/kWh.
+#[must_use]
+pub fn solar_pv_volleinspeisung_lookup(inbetriebnahme: time::Date) -> Option<RateLookup> {
+    if inbetriebnahme < EEG2023_START {
+        return None;
     }
+    let at = |kwp| solar_pv_volleinspeisung_aw_ct(kwp, inbetriebnahme).unwrap_or(Decimal::ZERO);
+    RateLookup::builder()
+        .at_most(dec!(10), amount_from_ct(at(dec!(10))))
+        .at_most(dec!(40), amount_from_ct(at(dec!(40))))
+        .at_most(dec!(100), amount_from_ct(at(dec!(100))))
+        .at_most(dec!(400), amount_from_ct(at(dec!(400))))
+        .at_most(dec!(1_000), amount_from_ct(at(dec!(1_000))))
+        .build()
+        .ok()
 }
-// | 2017 | BGBl I 2017 S. 2532, §21 + Anlage 1 | Q2 2017 starting rate |
-//
-// Returns `None` for unsupported years (use `einsd`'s DB table instead).
+
 // ── Wind Onshore ──────────────────────────────────────────────────────────────
 
 /// Return the EEG reference Anzulegender Wert table for **wind onshore** plants.
@@ -329,6 +373,17 @@ pub fn kwkg_zuschlag_lookup() -> Option<RateLookup> {
 }
 
 // ── Convenience helper ────────────────────────────────────────────────────────
+
+/// Convert a ct/kWh string to a `billing::Amount<5>` (EUR/kWh).
+///
+/// 8.11 ct/kWh → `Amount::parse("0.00811")`
+///
+/// # Panics
+/// Panics if the string is malformed — only called from static table constructors.
+fn amount_from_ct(ct: rust_decimal::Decimal) -> Amount<5> {
+    let eur = ct / rust_decimal::Decimal::from(100u32);
+    Amount::parse(&format!("{eur:.5}")).expect("5dp EUR/kWh")
+}
 
 /// Convert a ct/kWh string to a `billing::Amount<5>` (EUR/kWh).
 ///
@@ -463,6 +518,10 @@ pub fn gasart_lookup(eeg_year: i16) -> Option<RateLookup> {
 /// - `leistung_kwp`: installed capacity in kWp (or kW_el for KWKG)
 /// - `eeg_year`: EEG version year from the plant's `eeg_gesetz` column
 ///
+/// For solar this returns the **§48 Abs. 2 Startwerte** — a calendar year cannot
+/// select a half-yearly §49 window. Use [`solar_pv_ueberschuss_aw_ct`] when the
+/// commissioning date is known.
+///
 /// ## Example
 ///
 /// ```rust
@@ -470,8 +529,8 @@ pub fn gasart_lookup(eeg_year: i16) -> Option<RateLookup> {
 /// use rust_decimal::dec;
 ///
 /// let rate = rates::lookup_rate("SOLAR_AUFDACH", dec!(9), 2023).unwrap();
-/// // 9 kWp ≤10 kWp bracket → 8.11 ct/kWh (EEG 2023)
-/// assert_eq!(rate, billing::Amount::parse("0.08110").unwrap());
+/// // 9 kWp ≤ 10 kWp bracket → §48 Abs. 2 Nr. 1 Startwert 8.60 ct/kWh gross AW.
+/// assert_eq!(rate, billing::Amount::parse("0.08600").unwrap());
 /// ```
 pub fn lookup_rate(
     erzeugungsart: &str,
@@ -505,12 +564,17 @@ pub fn lookup_rate_for(
 ) -> Result<Amount<5>, BillingError> {
     use crate::ErzeugungsArt as E;
     let table = match art {
+        // Solar has half-yearly §49 windows, which a calendar year cannot
+        // select. This routes to the §48 Abs. 2 Startwerte; for the window that
+        // actually applies to a plant use `solar_pv_ueberschuss_aw_ct`.
         E::Solar
         | E::SolarAufdach
         | E::SolarFreiflaeche
         | E::SolarAgriPv
         | E::SolarMieterstrom
-        | E::SolarStecker => solar_pv_lookup(eeg_year),
+        | E::SolarStecker => (eeg_year >= 2023)
+            .then(|| solar_pv_ueberschuss_lookup(EEG2023_START))
+            .flatten(),
         E::WindOnshore => wind_onshore_lookup(eeg_year),
         // Offshore wind (§§70 ff.) is tender-only — no static statutory table.
         E::WindOffshore => None,

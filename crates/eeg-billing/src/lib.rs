@@ -12,7 +12,7 @@
 //! |---|---|---|
 //! | `FeedInTariff` | `kwh × verguetungssatz_ct / 100` | §21 EEG |
 //! | `TenantElectricity` | Vergütung + `kwh × mieter_zuschlag_ct / 100` | §21 Abs. 3 EEG 2023 |
-//! | `MarketPremium` | `max(0, (AW+Mgmt) − EPEX) × kwh / 100` (§20 Abs. 3) | §20 EEG |
+//! | `MarketPremium` | `max(0, AW − Marktwert) × kwh / 100` | §23a EEG + Anlage 1 |
 //! | `MarketPremium` + `TariffSource::Auction` | same formula, AW from BNetzA tender | §§22a,28 EEG 2023 |
 //! | `PostEeg` | `kwh × EPEX / 100` (§23b cap: 10 ct; configurable floor) | §21 EEG (post-Förderung) |
 //! | `Eigenverbrauch` | EUR 0 (no feed-in remuneration) | §21 Abs. 3 EEG |
@@ -28,7 +28,7 @@
 //! identical across all EEG versions. What differs between versions:
 //!
 //! 1. **Vergütungssatz (rate)** — fixed at commissioning for 20 years; caller provides it.
-//!    Use [`rates::solar_pv_ueberschuss_lookup`] or `einsd`'s `lookup_verguetungssatz`.
+//!    Use [`rates::solar_pv_ueberschuss_aw_ct`] or `einsd`'s `lookup_verguetungssatz`.
 //!
 //! 2. **§51 Negativpreisregel** — guard applied automatically from `inbetriebnahme`.
 //!    EEG 2023: any negative hour. Pre-2023 EEG 2017–2021: ≥6 consecutive hours.
@@ -118,8 +118,8 @@ pub use error::SettlementError;
 pub use foerderdauer::{
     calculate_pflichtzahlung, compute_billing_days_fraction, foerderendedatum_eeg,
     foerderendedatum_eeg_ausschreibung, foerderendedatum_kwkg_years, foerderendedatum_repowering,
-    kwk_eligible_kwh, kwk_foerderend_calendar, kwk_max_kwh, managementpraemie_ct,
-    negativpreis_kw_exemption, negativpreis_rule_applies_for_version, pflichtzahlung_verjaehrt_am,
+    kwk_eligible_kwh, kwk_foerderend_calendar, kwk_max_kwh, negativpreis_kw_exemption,
+    negativpreis_rule_applies_for_version, pflichtzahlung_verjaehrt_am,
     sect52a_netztrennung_erforderlich, verguetungszeitraum_verlaengerung_qh,
     wind_onshore_korrekturfaktor_corrected_aw,
 };
@@ -143,7 +143,7 @@ pub use zusammenfassung::{
 };
 
 // Domain module guide:
-// degression: §23a quarterly solar PV tariff degression — Quarter, DegressionTier, apply_degression
+// degression: §49 semi-annual solar AW degression — degressionsstufen, abgesenkter_wert
 // direktverm: §§20–22 Direktvermarktung — mandatory threshold, Ausschreibungspflicht, period model
 // (Metering topology, Eigenverbrauch/Überschuss split and §42b EnWG GGV allocation live in the
 //  external `metering` crate — AggregationRule, compute_virtual_meter, MeasurementPoint, Messtyp.)

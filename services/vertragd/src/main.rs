@@ -301,7 +301,7 @@ impl Daemon for Vertragd {
                 tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
                 loop {
                     let today = time::OffsetDateTime::now_utc().date();
-                    // Phase 1: 30-day advance notification
+                    // Phase 1: 30-day advance notification, once per term.
                     if let Ok(due) = pg::find_auto_renewal_due(&pool_ar, &cfg_ar.tenant, 30).await {
                         for row in &due {
                             if let Some(ref url) = cfg_ar.erp_webhook_url {
@@ -326,25 +326,39 @@ impl Daemon for Vertragd {
                                 )
                                 .await;
                             }
+                            // Recorded even without a webhook: the notice is
+                            // due once per term either way, and re-deriving it
+                            // daily is what made the ERP see 30 of them.
+                            if let Err(e) =
+                                pg::mark_auto_renewal_notified(&pool_ar, row.id, row.vertragsende)
+                                    .await
+                            {
+                                tracing::error!(vertrag_id = %row.id, error = %e, "vertragd: marking the renewal notice failed");
+                            }
                         }
                     }
-                    // Phase 2: Apply renewals due today
-                    if let Ok(due) = pg::find_auto_renewal_due(&pool_ar, &cfg_ar.tenant, 0).await {
+                    // Phase 2: apply renewals whose term has ended, including
+                    // any the worker missed while it was down.
+                    if let Ok(due) =
+                        pg::find_auto_renewal_overdue(&pool_ar, &cfg_ar.tenant, today).await
+                    {
                         for row in &due {
-                            if row.vertragsende == today
-                                && let Ok(new_end) = time::Date::from_calendar_date(
-                                    today.year() + row.renewal_monate / 12,
-                                    today.month(),
-                                    today.day().clamp(1, 28),
-                                )
+                            let Some(new_end) = pg::renewed_vertragsende(
+                                row.vertragsende,
+                                row.renewal_monate,
+                                today,
+                            ) else {
+                                tracing::warn!(
+                                    vertrag_id = %row.id, renewal_monate = row.renewal_monate,
+                                    "vertragd: auto-renewal skipped — renewal_monate is not positive"
+                                );
+                                continue;
+                            };
+                            if let Err(e) = pg::apply_auto_renewal(&pool_ar, row.id, new_end).await
                             {
-                                if let Err(e) =
-                                    pg::apply_auto_renewal(&pool_ar, row.id, new_end).await
-                                {
-                                    tracing::error!(vertrag_id = %row.id, error = %e, "vertragd: auto-renewal failed");
-                                } else {
-                                    tracing::info!(vertrag_id = %row.id, new_end = %new_end, "vertragd: auto-renewal applied");
-                                }
+                                tracing::error!(vertrag_id = %row.id, error = %e, "vertragd: auto-renewal failed");
+                            } else {
+                                tracing::info!(vertrag_id = %row.id, new_end = %new_end, "vertragd: auto-renewal applied");
                             }
                         }
                     }

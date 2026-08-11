@@ -141,6 +141,10 @@ pub struct LookupStatutoryRateParams {
     pub leistung_kwp: f64,
     /// EEG law year: 2017, 2021, 2023, or 2024 (Solarpaket I).
     pub eeg_year: i16,
+    /// Inbetriebnahme date (`YYYY-MM-DD`) — **required for solar**. The §49
+    /// degression steps on 1 February and 1 August, so a year alone does not
+    /// determine a solar rate.
+    pub inbetriebnahme: Option<String>,
     /// VOLLEINSPEISUNG or UEBERSCHUSSEINSPEISUNG (solar only; default: UEBERSCHUSS).
     pub messkonzept: Option<String>,
 }
@@ -379,7 +383,6 @@ impl EinsdMcpHandler {
             crate::pg::SettleOverrides {
                 einspeisemenge_kwh,
                 epex_avg_ct_kwh,
-                managementpraemie_ct_override: None,
                 einspeisemanagement_kwh: None,
                 kwh_during_negative_epex: None,
                 negative_price_quarter_hours: None,
@@ -527,8 +530,9 @@ impl EinsdMcpHandler {
         description = "Look up the statutory EEG feed-in tariff (ct/kWh) from the built-in \
             rate tables. Use erzeugungsart: SOLAR_AUFDACH | SOLAR_FREIFLAECHE | WIND_ONSHORE \
             | BIOMASSE | KWKG. messkonzept: VOLLEINSPEISUNG | UEBERSCHUSSEINSPEISUNG (solar only). \
-            Returns reference starting rate for the EEG year — for quarterly degression use \
-            lookup_verguetungssatz.",
+            Solar requires inbetriebnahme (YYYY-MM-DD): the §49 degression steps on 1 Feb \
+            and 1 Aug, so a year alone does not determine a solar rate. For the stored \
+            per-plant rate use lookup_verguetungssatz.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn lookup_statutory_rate(
@@ -561,18 +565,42 @@ impl EinsdMcpHandler {
             })?;
 
         let result = if art.is_solar() {
+            // §49 degresses on 1 February and 1 August, so the solar tables are
+            // keyed by Inbetriebnahme rather than by law year.
+            let ibn = params
+                .inbetriebnahme
+                .as_deref()
+                .ok_or_else(|| {
+                    McpError::invalid_params(
+                        "inbetriebnahme (YYYY-MM-DD) is required for solar: the §49 degression steps twice a year, so eeg_year alone does not determine the rate",
+                        None,
+                    )
+                })
+                .and_then(|s| {
+                    time::Date::parse(
+                        s,
+                        &time::format_description::well_known::Iso8601::DATE,
+                    )
+                    .map_err(|_| {
+                        McpError::invalid_params(
+                            format!("invalid inbetriebnahme {s}; expected YYYY-MM-DD"),
+                            None,
+                        )
+                    })
+                })?;
+
             // Solar splits by Messkonzept (Überschuss vs Volleinspeisung + bonus).
             let table = if volleinspeisung {
-                rates::solar_pv_volleinspeisung_lookup(params.eeg_year).ok_or_else(|| {
+                rates::solar_pv_volleinspeisung_lookup(ibn).ok_or_else(|| {
                     McpError::invalid_params(
-                        format!("no Volleinspeisung rates for EEG year {}; use einsd DB lookup_verguetungssatz", params.eeg_year),
+                        format!("no Volleinspeisung rates for Inbetriebnahme {ibn}; use einsd DB lookup_verguetungssatz"),
                         None,
                     )
                 })?
             } else {
-                rates::solar_pv_ueberschuss_lookup(params.eeg_year).ok_or_else(|| {
+                rates::solar_pv_ueberschuss_lookup(ibn).ok_or_else(|| {
                     McpError::invalid_params(
-                        format!("no Überschusseinspeisung rates for EEG year {}; use einsd DB lookup_verguetungssatz", params.eeg_year),
+                        format!("no Überschusseinspeisung rates for Inbetriebnahme {ibn}; use einsd DB lookup_verguetungssatz"),
                         None,
                     )
                 })?
@@ -589,9 +617,8 @@ impl EinsdMcpHandler {
                 Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                     "Statutory rate for {erzeugungsart} {kwp} kWp (EEG {eeg_year}{ms}): \
                     {rate_ct:.2} ct/kWh ({rate} EUR/kWh).\n\
-                    Note: this is the reference starting rate. Actual rate depends on \
-                    commissioning month (quarterly degression). Use lookup_verguetungssatz \
-                    for production billing.",
+                    Note: this is the statutory table rate. Use lookup_verguetungssatz for the \
+                    rate actually stored against a plant.",
                     erzeugungsart = params.erzeugungsart,
                     eeg_year = params.eeg_year,
                     ms = if volleinspeisung {

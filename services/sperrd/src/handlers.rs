@@ -7,6 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use mako_markt::makod_client::MakodClient;
+use mako_service::oidc::Claims;
 use mako_service::{ApiError, ApiResult};
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -26,16 +27,18 @@ pub struct OrdersQuery {
     pub status: Option<String>,
     pub malo_id: Option<String>,
     pub limit: Option<i64>,
-    /// Filter to orders created more than `older_than_hours` hours ago.
+    /// Filter to orders whose `n`-Werktage deadline has already passed.
     ///
     /// Used by the sperrd-agent daily compliance sweep:
-    /// `?status=pending&older_than_hours=48` returns stuck orders past the
-    /// 2-Werktage BK6-22-024 deadline.
-    pub older_than_hours: Option<i64>,
+    /// `?status=pending&older_than_werktage=2` returns stuck orders past the
+    /// 2-Werktage BK6-22-024 deadline. Counting 48 calendar hours instead
+    /// flagged every order placed on a Friday as non-compliant on Sunday.
+    pub older_than_werktage: Option<u32>,
 }
 
 /// `POST /api/v1/sperr-orders`
 pub async fn create_order(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Json(req): Json<CreateOrderRequest>,
@@ -48,6 +51,7 @@ pub async fn create_order(
 
 /// `GET /api/v1/sperr-orders`
 pub async fn list_orders(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(Tenant(tenant)): Extension<Tenant>,
     Query(q): Query<OrdersQuery>,
@@ -57,7 +61,7 @@ pub async fn list_orders(
         &tenant,
         q.status.as_deref(),
         q.malo_id.as_deref(),
-        q.older_than_hours,
+        q.older_than_werktage,
         q.limit.unwrap_or(100).min(1000),
     )
     .await?;
@@ -66,10 +70,14 @@ pub async fn list_orders(
 
 /// `GET /api/v1/sperr-orders/{id}`
 pub async fn get_order(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Response> {
-    let row = fetch_order_pg(&pool, id).await?.ok_or(ApiError::NotFound)?;
+    let row = fetch_order_pg(&pool, id, &tenant)
+        .await?
+        .ok_or(ApiError::NotFound)?;
     Ok(Json(row).into_response())
 }
 
@@ -86,8 +94,10 @@ pub struct ExecuteRequest {
 /// Reports that the field team executed the disconnection/reconnection.
 /// Auto-dispatches IFTSTA 21039 to `makod`.
 pub async fn execute_order(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(makod): Extension<Arc<MakodClient>>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(id): Path<Uuid>,
     Json(req): Json<ExecuteRequest>,
 ) -> ApiResult<StatusCode> {
@@ -95,6 +105,7 @@ pub async fn execute_order(
         &pool,
         &makod,
         id,
+        &tenant,
         req.note.as_deref(),
         req.executed_at.as_deref(),
     )
@@ -120,12 +131,14 @@ pub struct FailRequest {
 /// why the Sperrung did not happen instead of waiting out its 24-hour deadline
 /// (GPKE BK6-22-024 §5).
 pub async fn fail_order(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(makod): Extension<Arc<MakodClient>>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(id): Path<Uuid>,
     Json(req): Json<FailRequest>,
 ) -> ApiResult<StatusCode> {
-    let done = fail_order_pg(&pool, &makod, id, &req.reason)
+    let done = fail_order_pg(&pool, &makod, id, &tenant, &req.reason)
         .await
         .map_err(|e| ApiError::unprocessable(e.to_string()))?;
     if done {
@@ -143,10 +156,12 @@ pub async fn fail_order(
 /// the order is terminal. No IFTSTA is dispatched — cancelled orders were
 /// never executed.
 pub async fn cancel_order(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
+    Extension(Tenant(tenant)): Extension<Tenant>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    let done = cancel_order_pg(&pool, id)
+    let done = cancel_order_pg(&pool, id, &tenant)
         .await
         .map_err(|e| ApiError::unprocessable(e.to_string()))?;
     if done {
@@ -163,6 +178,7 @@ pub async fn cancel_order(
 ///
 /// Used by monitoring dashboards and the `sperrd-agent` compliance sweep.
 pub async fn get_stats(
+    _claims: Claims,
     Extension(pool): Extension<PgPool>,
     Extension(Tenant(tenant)): Extension<Tenant>,
 ) -> ApiResult<Response> {

@@ -128,15 +128,15 @@ impl TarifbdClient {
                 else {
                     continue;
                 };
-                let price_ct = entry
-                    .get("price_ct_kwh")
-                    .and_then(|v| {
-                        v.as_str()
-                            .map(str::to_owned)
-                            .or_else(|| v.as_f64().map(|f| f.to_string()))
-                    })
-                    .and_then(|s| s.parse::<Decimal>().ok())
-                    .unwrap_or(Decimal::ZERO);
+                // A missing or unparsable price is an error, not 0 ct/kWh: a
+                // zero silently bills the interval free of charge. The §41a path
+                // refuses to bill an interval it has no price for, so surfacing
+                // the failure here keeps that guard reachable.
+                let price_ct = decimal_from_json(entry.get("price_ct_kwh")).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "tarifbd epex: price_ct_kwh missing or not a decimal for MTU {mtu_start}"
+                    )
+                })?;
                 map.insert(mtu_start, price_ct);
             }
             day = day.next_day().unwrap_or(day);

@@ -30,6 +30,17 @@ pub(crate) fn edm_sparte_to_medium(s: EdmSparte) -> Medium {
     }
 }
 
+/// The `Mengeneinheit` a stored quantity of this Sparte is expressed in.
+///
+/// Matches the storage convention (`store.rs`): gas and water readings are
+/// stored as volume (m³), everything else as energy (kWh).
+pub(crate) fn edm_sparte_to_einheit(s: EdmSparte) -> Mengeneinheit {
+    match s {
+        EdmSparte::Gas | EdmSparte::Wasser => Mengeneinheit::Kubikmeter,
+        EdmSparte::Strom | EdmSparte::Waerme => Mengeneinheit::Kwh,
+    }
+}
+
 /// Map a `QualityFlag` to the nearest `Messwertstatus` variant.
 pub(crate) fn quality_to_messwertstatus(q: QualityFlag) -> Messwertstatus {
     match q {
@@ -65,7 +76,7 @@ pub(crate) fn read_to_energiemenge(r: &crate::domain::MeterRead) -> Energiemenge
         obis_kennzahl: r.obis_code.as_deref().and_then(|s| ObisCode::new(s).ok()),
         menge: Some(Menge {
             wert: Some(r.quantity_kwh),
-            einheit: Some(Mengeneinheit::Kwh),
+            einheit: Some(edm_sparte_to_einheit(r.sparte)),
             ..Default::default()
         }),
         zeitraum: Some(Zeitraum {
@@ -110,7 +121,7 @@ pub(crate) fn read_to_zeitreihenwert(r: &crate::domain::MeterRead) -> Zeitreihen
 pub(crate) fn minutes_to_menge(minutes: u32) -> Menge {
     let (wert, einheit) = match minutes {
         15 => (Decimal::from(15u32), Mengeneinheit::ViertelStunde),
-        60 => (Decimal::from(60u32), Mengeneinheit::Minute),
+        60 => (Decimal::from(1u32), Mengeneinheit::Stunde),
         1440 => (Decimal::from(1u32), Mengeneinheit::Tag),
         m => (Decimal::from(m), Mengeneinheit::Minute),
     };

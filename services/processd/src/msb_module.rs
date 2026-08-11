@@ -33,6 +33,8 @@
 use secrecy::SecretString;
 use tracing::{info, warn};
 
+use crate::pg::approval::{ApprovalQueueEntry, PgApprovalQueue};
+
 // ── Configuration ─────────────────────────────────────────────────────────────
 
 /// Runtime configuration for the MSB module.
@@ -139,7 +141,9 @@ const ERC_NMSB_NOT_REGISTERED: &str = "A05";
 /// - `melo_exists` — whether the MeLo is in `marktd`'s device registry
 /// - `nmsb_registered` — whether the nMSB is in `marktd`'s partner directory
 /// - `zaehler_count` — number of existing meters registered at the MeLo
-/// - `is_ima_device` — whether the MeLo already has an iMSys (§14a mandatory MSB)
+/// - `is_ima_device` — whether the MeLo already has an iMSys (§14a mandatory
+///   MSB); `None` when the device registry cannot answer, which escalates —
+///   an unknown iMSys status must never resolve to an auto-Accept
 /// - `sr_linked` — whether a `SteuerbareRessource` is linked to this MeLo
 ///
 /// # Returns
@@ -150,7 +154,7 @@ pub fn evaluate_msb_anmeldung(
     melo_exists: bool,
     nmsb_registered: bool,
     zaehler_count: u32,
-    is_ima_device: bool,
+    is_ima_device: Option<bool>,
     sr_linked: bool,
 ) -> MsbDecisionOutcome {
     // Check 1: MeLo must exist in marktd device registry.
@@ -172,19 +176,41 @@ pub fn evaluate_msb_anmeldung(
         };
     }
 
-    // Check 3: §14a iMSys — if the MeLo has an iMSys device, the grundzuständige MSB
-    // (gMSB) is mandated. Only the NB/gMSB can assign a wMSB for iMSys devices after
-    // explicit §14a eligibility check. Escalate for operator review.
-    if is_ima_device {
+    // Check 3: No existing meters → grid record incomplete. Escalate.
+    if zaehler_count == 0 {
         return MsbDecisionOutcome::Escalate {
             reason: format!(
-                "MeLo {} has an iMSys device — §14a eligibility check required before MSB wechsel",
+                "MeLo {} has no registered meters in marktd — NIS/GIS data import required",
                 payload.melo_id
             ),
         };
     }
 
-    // Check 4: §14a SR linked with unknown eligibility — escalate.
+    // Check 4: §14a iMSys — if the MeLo has an iMSys device, the grundzuständige MSB
+    // (gMSB) is mandated. Only the NB/gMSB can assign a wMSB for iMSys devices after
+    // explicit §14a eligibility check. Escalate for operator review.
+    match is_ima_device {
+        Some(true) => {
+            return MsbDecisionOutcome::Escalate {
+                reason: format!(
+                    "MeLo {} has an iMSys device — §14a eligibility check required before MSB wechsel",
+                    payload.melo_id
+                ),
+            };
+        }
+        None => {
+            return MsbDecisionOutcome::Escalate {
+                reason: format!(
+                    "MeLo {} — Zählertyp not available from marktd, iMSys status unknown; \
+                     §14a eligibility cannot be decided automatically",
+                    payload.melo_id
+                ),
+            };
+        }
+        Some(false) => {}
+    }
+
+    // Check 5: §14a SR linked with unknown eligibility — escalate.
     if sr_linked && payload.sr_id.is_some() {
         // Conservative: if a SR is linked but we can't confirm §14a module,
         // escalate rather than accept blindly.
@@ -193,16 +219,6 @@ pub fn evaluate_msb_anmeldung(
                 "MeLo {} has linked SteuerbareRessource {} — §14a Modul eligibility check required",
                 payload.melo_id,
                 payload.sr_id.as_deref().unwrap_or("?")
-            ),
-        };
-    }
-
-    // Check 5: No existing meters → grid record may be incomplete. Escalate.
-    if zaehler_count == 0 {
-        return MsbDecisionOutcome::Escalate {
-            reason: format!(
-                "MeLo {} has no registered meters in marktd — NIS/GIS data import required",
-                payload.melo_id
             ),
         };
     }
@@ -274,41 +290,53 @@ fn geraetewechsel_answer_command(pid: u32, accept: bool) -> (&'static str, &'sta
 /// |---|---|---|
 /// | Accept | `wim.geraetewechsel.bestaetigen` | `wim.geraetewechsel.bestaetigen` |
 /// | Reject | `wim.geraetewechsel.ablehnen` (ERC in reason) | `wim.geraetewechsel.ablehnen` (ERC in reason) |
-/// | Escalate | operator alert (no command) | operator alert (no command) |
+/// | Escalate | approval-queue entry | approval-queue entry |
+///
+/// # Errors
+///
+/// Every `marktd` lookup failure is propagated so the caller answers 5xx and
+/// `marktd`'s durable fan-out redelivers. A transport error is **not** evidence
+/// of absence: treating it as one used to dispatch a wrongful A02 "MeLo not
+/// found" rejection into the market against a valid §21 MsbG registration.
 pub async fn handle_msb_wechsel(
     cfg: &MsbModuleConfig,
     payload: MsbWechselPayload,
     marktd: &mako_markt::marktd_client::MarktdClient,
     makod: &mako_markt::makod_client::MakodClient,
-) {
+    queue: &PgApprovalQueue,
+) -> anyhow::Result<()> {
     // ── Query marktd in parallel ──────────────────────────────────────────────
-    // Use get_versorgung to check if MaLo/MeLo exists; check Zaehler via partner
-    // lookup as a proxy for MeLo device existence.
-    let (versorgung_result, nmsb_known, sr_result) = tokio::join!(
+    let (versorgung_result, nmsb_known, zaehler_result, sr_result) = tokio::join!(
         marktd.get_versorgung(&payload.malo_id),
         marktd.partner_known(&payload.nmsb_mp_id),
         async {
-            if let Some(ref sr_id) = payload.sr_id {
-                marktd.get_technische_ressource(sr_id).await.ok().flatten()
+            if payload.melo_id.is_empty() {
+                Ok(Vec::new())
             } else {
-                None
+                marktd.list_zaehler_ids(&payload.melo_id).await
+            }
+        },
+        async {
+            if let Some(ref sr_id) = payload.sr_id {
+                marktd.get_technische_ressource(sr_id).await
+            } else {
+                Ok(None)
             }
         },
     );
 
-    // MeLo considered to exist when the MaLo is in marktd.
-    // A finer check (via `GET /api/v1/melos/{melo_id}`) would require a new
-    // MarktdClient method — using VersorgungsStatus as proxy for now.
-    let melo_exists = versorgung_result.is_ok();
-    // zaehler_count: 0 = no meters known = escalate.
-    // Without a direct zaehler query we conservatively set to 1 when MaLo exists.
-    let zaehler_list = if melo_exists { 1 } else { 0 };
-    let nmsb_registered = nmsb_known.unwrap_or(false);
-    let sr_linked = sr_result.is_some();
+    // `Ok(None)` is the 404 — a genuinely absent MaLo, and the A02 ground.
+    // MeLo considered to exist when the MaLo is in marktd; a finer check (via
+    // `GET /api/v1/melos/{melo_id}`) would require a new MarktdClient method.
+    let melo_exists = versorgung_result?.is_some();
+    let nmsb_registered = nmsb_known?;
+    let zaehler_count = u32::try_from(zaehler_result?.len()).unwrap_or(u32::MAX);
+    let sr_linked = sr_result?.is_some();
 
-    // iMSys detection: check for a Zaehler with `geraeteeigenschaften` = iMSys
-    // (simplified: any meter with `istImsys: true` in the response).
-    let is_ima_device = false; // Conservative: expand when marktd carries `ist_imsys` column.
+    // iMSys detection needs the Zählertyp, which `MarktdClient` does not expose
+    // (`list_zaehler_ids` returns identifiers only). Unknown, so check 4
+    // escalates rather than fabricating a value that auto-accepts.
+    let is_ima_device = None;
 
     // ── Evaluate ──────────────────────────────────────────────────────────────
     let outcome = if payload.pid == 55042 {
@@ -316,7 +344,7 @@ pub async fn handle_msb_wechsel(
             &payload,
             melo_exists,
             nmsb_registered,
-            zaehler_list,
+            zaehler_count,
             is_ima_device,
             sr_linked,
         )
@@ -347,18 +375,18 @@ pub async fn handle_msb_wechsel(
                     }),
                 };
                 let idem = format!("msb-wechsel-accept-{}", payload.process_id);
-                match makod.post_command(&idem, &cmd).await {
-                    Ok(_) => info!(
-                        process_id = %payload.process_id,
-                        command = command_name,
-                        "processd MSB STP: dispatched Accept command"
-                    ),
-                    Err(e) => warn!(
+                makod.post_command(&idem, &cmd).await.inspect_err(|e| {
+                    warn!(
                         process_id = %payload.process_id,
                         error = %e,
                         "processd MSB STP: Accept dispatch failed"
-                    ),
-                }
+                    );
+                })?;
+                info!(
+                    process_id = %payload.process_id,
+                    command = command_name,
+                    "processd MSB STP: dispatched Accept command"
+                );
             }
         }
         MsbDecisionOutcome::Reject { erc_code, reason } => {
@@ -384,35 +412,65 @@ pub async fn handle_msb_wechsel(
                 }),
             };
             let idem = format!("msb-wechsel-reject-{}", payload.process_id);
-            match makod.post_command(&idem, &cmd).await {
-                Ok(_) => info!(
-                    process_id = %payload.process_id,
-                    command = command_name,
-                    erc_code,
-                    "processd MSB STP: dispatched Reject command"
-                ),
-                Err(e) => warn!(
+            makod.post_command(&idem, &cmd).await.inspect_err(|e| {
+                warn!(
                     process_id = %payload.process_id,
                     error = %e,
                     "processd MSB STP: Reject dispatch failed"
-                ),
-            }
+                );
+            })?;
+            info!(
+                process_id = %payload.process_id,
+                command = command_name,
+                erc_code,
+                "processd MSB STP: dispatched Reject command"
+            );
         }
         MsbDecisionOutcome::Escalate { reason } => {
             warn!(
                 process_id = %payload.process_id,
                 pid = payload.pid,
                 reason,
-                "processd MSB STP: Escalate — manual operator decision required"
+                "processd MSB STP: Escalate — enqueued for operator decision"
             );
+            let (approve, reject) = (
+                geraetewechsel_answer_command(payload.pid, true),
+                geraetewechsel_answer_command(payload.pid, false),
+            );
+            let entry = ApprovalQueueEntry::pending(
+                payload.process_id,
+                payload.pid as i32,
+                Some(payload.malo_id.clone()),
+                reason.clone(),
+                msb_wechsel_expires_at(payload.pid, payload.received_at),
+                cfg.tenant.clone(),
+            )
+            .with_commands(approve.0, reject.0, Some(approve.1));
+            queue.enqueue(&entry).await?;
         }
     }
+    Ok(())
+}
+
+/// Operator deadline for an escalated MSB-Wechsel: the per-PID WiM Antwortfrist
+/// (3 / 5 / 7 / 1 Werktage, BK6-24-174 Teil 1), minus an hour of headroom.
+///
+/// A warn!-only escalation let this Frist lapse unseen.
+fn msb_wechsel_expires_at(pid: u32, received_at: time::OffsetDateTime) -> time::OffsetDateTime {
+    use mako_engine::fristen::{HolidayCalendar, deadline_at_werktage};
+    let werktage = mako_wim::antwort_frist_werktage(pid).unwrap_or(3);
+    deadline_at_werktage(received_at, werktage, HolidayCalendar::BdewMaKo)
+        - time::Duration::hours(1)
 }
 
 // ── M3: Preisanfrage REQOTE auto-response ──────────────────────────────────────
 
 /// PIDs for which the MSB must auto-respond with a QUOTES message.
-const REQOTE_PIDS: &[u32] = &[35001, 35002, 35003, 35004, 35005];
+///
+/// Single-sourced from `mako-wim`. A local copy here also listed 35003, which
+/// is the ESA Werteanfrage (answered by 15003 in `esa-wertebestellung`) — so a
+/// request for measurement values was answered with a PreisblattMessung quote.
+use mako_wim::preisanfrage::REQOTE_PIDS;
 
 /// Process an inbound `de.mako.process.initiated` event for PIDs 35001–35005
 /// (REQOTE Preisanfrage, nMSB → aMSB).
@@ -576,25 +634,29 @@ mod tests {
 
     #[test]
     fn anmeldung_accept_when_all_checks_pass() {
-        let result = evaluate_msb_anmeldung(&payload(55042, None), true, true, 1, false, false);
+        let result =
+            evaluate_msb_anmeldung(&payload(55042, None), true, true, 1, Some(false), false);
         assert!(matches!(result, MsbDecisionOutcome::Accept));
     }
 
     #[test]
     fn anmeldung_reject_melo_not_found() {
-        let result = evaluate_msb_anmeldung(&payload(55042, None), false, true, 1, false, false);
+        let result =
+            evaluate_msb_anmeldung(&payload(55042, None), false, true, 1, Some(false), false);
         assert!(matches!(result, MsbDecisionOutcome::Reject { erc_code, .. } if erc_code == "A02"));
     }
 
     #[test]
     fn anmeldung_reject_nmsb_not_registered() {
-        let result = evaluate_msb_anmeldung(&payload(55042, None), true, false, 1, false, false);
+        let result =
+            evaluate_msb_anmeldung(&payload(55042, None), true, false, 1, Some(false), false);
         assert!(matches!(result, MsbDecisionOutcome::Reject { erc_code, .. } if erc_code == "A05"));
     }
 
     #[test]
     fn anmeldung_escalate_no_zaehler() {
-        let result = evaluate_msb_anmeldung(&payload(55042, None), true, true, 0, false, false);
+        let result =
+            evaluate_msb_anmeldung(&payload(55042, None), true, true, 0, Some(false), false);
         assert!(matches!(result, MsbDecisionOutcome::Escalate { .. }));
     }
 
@@ -605,7 +667,7 @@ mod tests {
             true,
             true,
             2,
-            false,
+            Some(false),
             true,
         );
         assert!(matches!(result, MsbDecisionOutcome::Escalate { .. }));
@@ -613,7 +675,16 @@ mod tests {
 
     #[test]
     fn anmeldung_escalate_ima_device() {
-        let result = evaluate_msb_anmeldung(&payload(55042, None), true, true, 1, true, false);
+        let result =
+            evaluate_msb_anmeldung(&payload(55042, None), true, true, 1, Some(true), false);
+        assert!(matches!(result, MsbDecisionOutcome::Escalate { .. }));
+    }
+
+    /// Unknown iMSys status must never resolve to an auto-Accept — §21 MsbG /
+    /// §14a policy is a decision, not a default.
+    #[test]
+    fn anmeldung_escalate_when_ima_status_unknown() {
+        let result = evaluate_msb_anmeldung(&payload(55042, None), true, true, 1, None, false);
         assert!(matches!(result, MsbDecisionOutcome::Escalate { .. }));
     }
 
@@ -652,6 +723,15 @@ mod tests {
             geraetewechsel_answer_command(55039, false),
             ("wim.geraetewechsel.ablehnen", "MSB")
         );
+    }
+
+    /// 35003 is the ESA Werteanfrage (answered by 15003 in `esa-wertebestellung`),
+    /// not a Preisanfrage. A local copy of the list here drifted into answering
+    /// it with a PreisblattMessung quote.
+    #[test]
+    fn reqote_pids_are_the_canonical_preisanfrage_set() {
+        assert_eq!(REQOTE_PIDS, mako_wim::preisanfrage::REQOTE_PIDS);
+        assert!(!REQOTE_PIDS.contains(&35003));
     }
 
     #[test]

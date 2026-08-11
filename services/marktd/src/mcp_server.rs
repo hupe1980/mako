@@ -378,18 +378,22 @@ impl MdmdMcpHandler {
             .and_then(|s| {
                 time::Date::parse(s, time::macros::format_description!("[year]-[month]-[day]")).ok()
             })
-            .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+            .unwrap_or_else(crate::handlers::malo::today_berlin);
 
         // `preisblaetter` is keyed on nb_mp_id (the NB's own MP-ID) — it has no
         // `tenant` column; single-tenant isolation is enforced at the Cedar
         // layer, not here. The column list matches the table: the JSONB payload
         // is `data`, not `preisblatt`.
-        let row = sqlx::query_as::<_, (uuid::Uuid, time::Date, serde_json::Value)>(
+        // Same validity window as the REST / invoicd read path
+        // (`pg::preisblatt::find_for_date`): half-open `[valid_from, valid_to)`
+        // with NULL = open-started / open-ended.
+        let row = sqlx::query_as::<_, (uuid::Uuid, Option<time::Date>, serde_json::Value)>(
             r"SELECT id, valid_from, data
               FROM preisblaetter
               WHERE nb_mp_id = $1
-                AND valid_from <= $2
-              ORDER BY valid_from DESC
+                AND (valid_from IS NULL OR valid_from <= $2)
+                AND (valid_to   IS NULL OR valid_to   >  $2)
+              ORDER BY valid_from DESC NULLS LAST
               LIMIT 1",
         )
         .bind(&p.nb_mp_id)
@@ -402,7 +406,7 @@ impl MdmdMcpHandler {
             Some((id, valid_from, preisblatt)) => ContentBlock::json(serde_json::json!({
                 "id": id,
                 "nb_mp_id": p.nb_mp_id,
-                "valid_from": valid_from.to_string(),
+                "valid_from": valid_from.map(|d| d.to_string()),
                 "preisblatt": preisblatt,
             }))
             .map(|b| CallToolResult::success(vec![b]))
@@ -508,7 +512,7 @@ impl MdmdMcpHandler {
             .and_then(|s| {
                 time::Date::parse(s, time::macros::format_description!("[year]-[month]-[day]")).ok()
             })
-            .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+            .unwrap_or_else(crate::handlers::malo::today_berlin);
 
         let row = sqlx::query_as::<
             _,
@@ -533,7 +537,7 @@ impl MdmdMcpHandler {
             WHERE tenant = $1
               AND malo_id = $2
               AND valid_from <= $3
-              AND (valid_to IS NULL OR valid_to >= $3)
+              AND (valid_to IS NULL OR valid_to > $3)
             ORDER BY valid_from DESC
             LIMIT 1
             "#,
@@ -835,14 +839,14 @@ Returns the version_id that was queued. Actual dispatch is asynchronous. \
             .and_then(|s| {
                 time::Date::parse(s, time::macros::format_description!("[year]-[month]-[day]")).ok()
             })
-            .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+            .unwrap_or_else(crate::handlers::malo::today_berlin);
 
         let rows = sqlx::query(
             r"SELECT zuordnungstyp, rollencodenummer, valid_from, valid_to
               FROM rollenzuordnungen
               WHERE malo_id = $1
                 AND valid_from <= $2
-                AND (valid_to IS NULL OR valid_to >= $2)
+                AND (valid_to IS NULL OR valid_to > $2)
               ORDER BY zuordnungstyp",
         )
         .bind(&p.malo_id)

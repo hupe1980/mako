@@ -4,7 +4,7 @@
 //!
 //! | Tool | Description |
 //! |---|---|
-//! | `list_sperr_orders`     | List orders — filterable by status + older_than_hours |
+//! | `list_sperr_orders`     | List orders — filterable by status + older_than_werktage |
 //! | `get_sperr_order`       | Get a single order by UUID |
 //! | `get_sperr_stats`       | Aggregate stats: pending, executed, overdue, missing IFTSTA |
 //! | `list_overdue_orders`   | Orders past their planned_date still in pending state |
@@ -50,11 +50,11 @@ pub struct SperrdMcpState {
 pub struct ListSperrParams {
     /// Filter by status: `pending`, `executed`, `failed`, `cancelled`.
     pub status: Option<String>,
-    /// Only return orders created more than N hours ago.
+    /// Only return orders whose N-Werktage deadline has already passed.
     ///
-    /// Use `older_than_hours=48` in the daily compliance sweep to find
+    /// Use `older_than_werktage=2` in the daily compliance sweep to find
     /// stuck orders that have exceeded the BK6-22-024 2-Werktage window.
-    pub older_than_hours: Option<i64>,
+    pub older_than_werktage: Option<u32>,
     /// Maximum results (default 50).
     pub limit: Option<i64>,
 }
@@ -92,7 +92,7 @@ impl SperrdMcpHandler {
     }
 
     #[tool(
-        description = "List Sperrung/Entsperrung execution orders. Filter by status (pending/executed/failed/cancelled) and/or older_than_hours (returns orders stuck for more than N hours). GPKE BK6-22-024: use older_than_hours=48 in daily sweep to detect 2-Werktage violations.",
+        description = "List Sperrung/Entsperrung execution orders. Filter by status (pending/executed/failed/cancelled) and/or older_than_werktage (returns orders whose N-Werktage deadline has passed). GPKE BK6-22-024: use older_than_werktage=2 in the daily sweep to detect violations.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_sperr_orders(
@@ -105,7 +105,7 @@ impl SperrdMcpHandler {
             &self.state.tenant,
             p.status.as_deref(),
             None,
-            p.older_than_hours,
+            p.older_than_werktage,
             p.limit.unwrap_or(50),
         )
         .await
@@ -136,7 +136,7 @@ impl SperrdMcpHandler {
         let Ok(id) = p.id.parse::<uuid::Uuid>() else {
             return Err(McpError::invalid_params("id must be a valid UUID", None));
         };
-        match fetch_order_pg(&self.state.pool, id).await {
+        match fetch_order_pg(&self.state.pool, id, &self.state.tenant).await {
             Ok(Some(order)) => ContentBlock::json(serde_json::to_value(order).unwrap_or_default())
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None)),
@@ -236,7 +236,7 @@ impl SperrdMcpHandler {
         let Ok(id) = p.id.parse::<uuid::Uuid>() else {
             return Err(McpError::invalid_params("id must be a valid UUID", None));
         };
-        match cancel_order_pg(&self.state.pool, id).await {
+        match cancel_order_pg(&self.state.pool, id, &self.state.tenant).await {
             Ok(true) => ContentBlock::json(serde_json::json!({
                 "cancelled": true, "id": p.id,
                 "note": "Order cancelled. No IFTSTA dispatched. Inform LF if the Sperrung was already communicated.",
@@ -334,7 +334,7 @@ impl ServerHandler for SperrdMcpHandler {
              Tracks ORDERS 17115/17117 execution and auto-dispatches IFTSTA 21039.\n\
              A missing IFTSTA 21039 = GPKE BK6-22-024 protocol violation.\n\n\
              ## Tools (5)\n\
-             - `list_sperr_orders(status, older_than_hours, limit)` — filter by status + age\n\
+             - `list_sperr_orders(status, older_than_werktage, limit)` — filter by status + age\n\
              - `get_sperr_order(id)` — full order with timestamps and IFTSTA dispatch status\n\
              - `get_sperr_stats` — aggregate: pending/executed/failed + overdue + missing IFTSTA\n\
              - `list_overdue_orders` — pending orders past planned_date (BK6-22-024 violations)\n\

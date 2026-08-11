@@ -103,10 +103,11 @@ a workflow whose registered band does not yet include them.
 
 | Situation | PIDs |
 |---|---|
-| **Outbound-only** — generated as a response, never received | 55011, 55012 |
-| **Named but not yet routed** — constants exist or the band is narrower than the credit implies | 17134, 17135, 19015, 19016, 55035, 55060, 55095, 55173, 55175, 55177, 55180, 55194, 55225, 55227, 55230, 55232, 55553, 55559 |
+| **Outbound-only** — generated or dispatched by mako, never received | 55011, 55012 · 17134, 17135 (ORDERS dispatched via the outbox by `GpkeKonfigurationWorkflow`) |
+| **Role-conditional** — registered only under an explicit `NMSB` role build | 19015, 19016 (ORDRSP Gerätewechselabsicht Bestätigung/Ablehnung, answering ORDERS 17009) |
+| **Named but not routed** — constants exist or the band is narrower than the credit implies | 55035, 55060, 55095, 55173, 55175, 55177, 55180, 55194, 55225, 55227, 55230, 55232, 55553, 55559 |
 
-An inbound message carrying one of the second group is dead-lettered as
+An inbound message carrying one of the last group is dead-lettered as
 `UnknownPid` — audited under § 147 AO, logged, and counted by
 `makod_dead_letter_recorded_total{reason="unknown_pid:N"}`. It is observable, not
 silent, but it is not handled.
@@ -426,7 +427,7 @@ reference to the published set.
 | 17001 | Bestellung Geräteübernahmeangebot | WiM Gas / WiM Strom Teil 1 | MSBN → MSBA | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme` |
 | 17002 | Weiterverpflichtung | WiM Gas / WiM Strom Teil 1 | NB → MSB · NB → MSBA | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme` |
 | 17004 | Anforderung von Werten | WiM Strom Teil 2 / GeLi Gas 2.0 | NB → MSB · MSB → MSB · LF → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-datenabruf` |
-| 17005 | Bestellung Angebot Rechnungsabwicklung Messstellenbetrieb | WiM Strom Teil 1 | LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-rechnungsabwicklung` |
+| 17005 | Bestellung Angebot Rechnungsabwicklung Messstellenbetrieb — this Bestellung *is* the answer to the QUOTES 15002 Angebot; no ORDRSP answers it | WiM Strom Teil 1 | LF → MSB | 15002 | ✅ | — | ✅ | ✅ | `mako-wim` `wim-rechnungsabwicklung` |
 | 17006 | Beendigung Rechnungsabwicklung MSB über LF | WiM Strom Teil 1 | MSB → LF · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-rechnungsabwicklung` |
 | 17007 | Bestellung von Werten ESA | WiM Strom Teil 2 Kap. 4 | ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-wertebestellung` (MSB inbound) / `esa-wertebestellung` (ESA outbound) |
 | 17008 | Abbestellung von Werten ESA | WiM Strom Teil 2 Kap. 4 | ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-wertebestellung` (MSB inbound) / `esa-wertebestellung` (ESA outbound) |
@@ -480,8 +481,8 @@ reference to the published set.
 | 19005 | Bestätigung Auftrag Änderung Technik | WiM Gas / WiM Strom Teil 1 / AWH Änd. Technik | MSB → LF · MSB → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-technik-aenderung` |
 | 19006 | Ablehnung Auftrag Änderung Technik | WiM Gas / WiM Strom Teil 1 / AWH Änd. Technik | MSB → LF · MSB → NB | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-technik-aenderung` |
 | 19007 | Ablehnung Anforderung Werte | WiM Strom Teil 2 / GeLi Gas 2.0 | MSB → NB · MSB → MSB · MSB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-technik-aenderung` |
-| 19009 | Bestätigung Beendigung Rechnungsabwicklung MSB | WiM Strom Teil 1 | LF → MSB · MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-rechnungsabwicklung` |
-| 19010 | Ablehnung Beendigung Rechnungsabwicklung MSB | WiM Strom Teil 1 | LF → MSB · MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-rechnungsabwicklung` |
+| 19009 | Bestätigung Beendigung Rechnungsabwicklung MSB | WiM Strom Teil 1 | LF → MSB · MSB → LF | 17006 | ✅ | — | ✅ | ✅ | `mako-wim` `wim-rechnungsabwicklung` |
+| 19010 | Ablehnung Beendigung Rechnungsabwicklung MSB | WiM Strom Teil 1 | LF → MSB · MSB → LF | 17006 | ✅ | — | ✅ | ✅ | `mako-wim` `wim-rechnungsabwicklung` |
 | 19011 | Bestätigung der Ab-/Bestellung von Werten für ESA | WiM Strom Teil 2 Kap. 4 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `esa-wertebestellung` |
 | 19012 | Ablehnung der Ab-/Bestellung von Werten für ESA | WiM Strom Teil 2 Kap. 4 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `esa-wertebestellung` |
 | 19013 | Bestätigung der Stornierung einer Bestellung | WiM Strom Teil 2 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `esa-wertebestellung` |
@@ -503,7 +504,7 @@ reference to the published set.
 | 19121 | Mitteilung zur Änderung Prognosegrundlage | GPKE Teil 3 | NB → LF | 17120 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 19123 | Ablehnung Reklamation einer Definition | GPKE Teil 3 | NB → LF · NB → MSB · LF → NB · LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 19124 | Mitteilung zur Änderung Zählzeitdefinition | GPKE Teil 3 | NB → LF · MSB → LF | 17123 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
-| 19127 | Mitteilung zur Konfigurationsänderung | GPKE Teil 3 | MSB → MSB | 17118 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
+| 19127 | Mitteilung zur Konfigurationsänderung | GPKE Teil 3 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 19128 | Bestätigung Stornierung Sperr-/Entsperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung-lf` · `mako-geli-gas` `geli-gas-sperrung-lf` |
 | 19129 | Ablehnung Stornierung Sperr-/Entsperrauftrag | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung-lf` · `mako-geli-gas` `geli-gas-sperrung-lf` |
 | 19130 | Bearbeitungsstand Reklamation Konfiguration | GPKE Teil 3 | MSB → NB · MSB → LF · MSB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
@@ -651,7 +652,7 @@ reference to the published set.
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
 | 15001 | Angebot Geräteübernahme | WiM Gas / WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
-| 15002 | Angebot Abrechnung Messstellenbetrieb MSB | WiM Strom Teil 1 | MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
+| 15002 | Angebot Abrechnung Messstellenbetrieb MSB | WiM Strom Teil 1 | MSB → LF | 35002 | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
 | 15003 | Angebot zur Anfrage von Werten | WiM Strom Teil 2 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `esa-wertebestellung` |
 | 15004 | Angebot  einer Konfiguration | GPKE Teil 3 | MSB → NB · MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |
 | 15005 | Angebot Änderung Technik | AWH Änd. Technik | MSB → NB · MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-preisanfrage` |

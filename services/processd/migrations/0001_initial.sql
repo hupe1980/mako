@@ -17,6 +17,11 @@ CREATE TABLE approval_queue (
     malo_id     TEXT,
     reason      TEXT        NOT NULL,
     status      TEXT        NOT NULL CHECK (status IN ('Pending','Approved','Rejected','Expired')),
+    -- makod command dispatched on operator approve/reject. NULL = legacy
+    -- PID-based mapping in the REST handler (55008 GPKE, 44022/44023 GeLi).
+    approve_command TEXT,
+    reject_command  TEXT,
+    marktrolle      TEXT,
     expires_at  TIMESTAMPTZ NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     decided_at  TIMESTAMPTZ,

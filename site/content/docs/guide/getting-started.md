@@ -131,7 +131,7 @@ curl -s -X PUT http://localhost:8180/api/v1/preisblaetter/9900357000004 \
 # → HTTP 204
 ```
 
-### 4b — MaLo + NIS grid record
+### 4b — MaLo + MaLo grid record
 
 ```bash
 MALO_ID=51238696780
@@ -143,7 +143,7 @@ curl -s -X PUT "http://localhost:8180/api/v1/malo/$MALO_ID" \
   -w "\nHTTP %{http_code}\n"
 # → HTTP 201
 
-# NIS grid record (netz-checker check 1)
+# MaLo grid record (netz-checker check 1)
 curl -s -X PUT "http://localhost:8180/api/v1/malo/$MALO_ID/grid" \
   -H "Content-Type: application/json" \
   -d '{"nb_mp_id":"9900357000004","bilanzierungsgebiet":"11YN0------0STXC","netzgebiet":"DEMO-NZ-001","sparte":"STROM","source":"manual"}' \

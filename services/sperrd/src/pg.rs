@@ -5,6 +5,7 @@ use mako_markt::makod_client::{ForwardCommand, MakodClient};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
+use time::{Date, OffsetDateTime};
 use uuid::Uuid;
 
 // ── CreateOrderRequest ────────────────────────────────────────────────────────
@@ -111,14 +112,40 @@ pub async fn create_order_pg(
 
 // ── list_orders_pg ────────────────────────────────────────────────────────────
 
+/// The latest creation date whose `werktage`-Werktage deadline is already over.
+///
+/// BK6-22-024 counts the Sperrung window in Werktagen, not in calendar hours.
+/// A flat 48 h flagged every order placed on a Friday as overdue on Sunday, and
+/// let one placed before a public holiday run past its real deadline unflagged.
+#[must_use]
+pub fn werktage_cutoff(today: Date, werktage: u32) -> Date {
+    use mako_engine::fristen::{HolidayCalendar, add_werktage};
+    let cal = HolidayCalendar::BdewMaKo;
+    let mut day = today;
+    // A deadline of n Werktagen is never more than a few weeks of calendar days.
+    for _ in 0..90 {
+        if add_werktage(day, werktage, cal) < today {
+            return day;
+        }
+        match day.previous_day() {
+            Some(prev) => day = prev,
+            None => return day,
+        }
+    }
+    day
+}
+
 pub async fn list_orders_pg(
     pool: &PgPool,
     tenant: &str,
     status: Option<&str>,
     malo_id: Option<&str>,
-    older_than_hours: Option<i64>,
+    older_than_werktage: Option<u32>,
     limit: i64,
 ) -> anyhow::Result<Vec<SperrOrderRow>> {
+    // The deadline runs on the German civil calendar, so the creation date is
+    // read in Berlin rather than in the session timezone.
+    let cutoff = older_than_werktage.map(|n| werktage_cutoff(OffsetDateTime::now_utc().date(), n));
     sqlx::query_as::<_, SperrOrderRow>(
         r"SELECT id::TEXT, malo_id, lf_mp_id, order_type, process_id,
                  planned_date, status, executed_at, execution_note,
@@ -128,14 +155,15 @@ pub async fn list_orders_pg(
           WHERE (tenant = $1 OR $1 = '')
             AND ($2::TEXT IS NULL OR status = $2)
             AND ($3::TEXT IS NULL OR malo_id = $3)
-            AND ($4::BIGINT IS NULL OR created_at < NOW() - make_interval(hours => $4::INT))
+            AND ($4::DATE IS NULL
+                 OR (created_at AT TIME ZONE 'Europe/Berlin')::DATE <= $4)
           ORDER BY created_at DESC
           LIMIT $5",
     )
     .bind(tenant)
     .bind(status)
     .bind(malo_id)
-    .bind(older_than_hours)
+    .bind(cutoff)
     .bind(limit)
     .fetch_all(pool)
     .await
@@ -144,15 +172,20 @@ pub async fn list_orders_pg(
 
 // ── fetch_order_pg ────────────────────────────────────────────────────────────
 
-pub async fn fetch_order_pg(pool: &PgPool, id: Uuid) -> anyhow::Result<Option<SperrOrderRow>> {
+pub async fn fetch_order_pg(
+    pool: &PgPool,
+    id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<Option<SperrOrderRow>> {
     sqlx::query_as::<_, SperrOrderRow>(
         r"SELECT id::TEXT, malo_id, lf_mp_id, order_type, process_id,
                  planned_date, status, executed_at, execution_note,
                  fail_reason, iftsta_ref, iftsta_dispatched_at,
                  tenant, created_at, updated_at
-          FROM sperr_orders WHERE id = $1",
+          FROM sperr_orders WHERE id = $1 AND tenant = $2",
     )
     .bind(id)
+    .bind(tenant)
     .fetch_optional(pool)
     .await
     .context("fetch_order_pg")
@@ -169,25 +202,35 @@ pub async fn execute_order_pg(
     pool: &PgPool,
     makod: &Arc<MakodClient>,
     id: Uuid,
+    tenant: &str,
     note: Option<&str>,
     executed_at_str: Option<&str>,
 ) -> anyhow::Result<bool> {
     let executed_at = if let Some(s) = executed_at_str {
-        time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
+        OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
             .map(Some)
             .context("parse executed_at")?
     } else {
-        Some(time::OffsetDateTime::now_utc())
+        Some(OffsetDateTime::now_utc())
     };
 
-    // Fetch order details for the makod command payload.
+    // Claim the order before dispatching. Reading the row, dispatching, and only
+    // then guarding the UPDATE let a concurrent execute and fail both pass the
+    // read and both put an IFTSTA on the wire — the LF received an
+    // Ausführungs- *and* a Fehlmeldung for the same order.
     let order_row = sqlx::query(
-        "SELECT malo_id, lf_mp_id, process_id FROM sperr_orders WHERE id = $1 AND status = 'pending'",
+        r"UPDATE sperr_orders
+          SET status = 'executed', executed_at = $3, execution_note = $4, updated_at = now()
+          WHERE id = $1 AND tenant = $2 AND status = 'pending'
+          RETURNING malo_id, lf_mp_id, process_id",
     )
     .bind(id)
+    .bind(tenant)
+    .bind(executed_at)
+    .bind(note)
     .fetch_optional(pool)
     .await
-    .context("fetch order for execute")?;
+    .context("claim order for execute")?;
 
     let Some(order) = order_row else {
         return Ok(false);
@@ -215,35 +258,61 @@ pub async fn execute_order_pg(
         }),
     };
 
-    let accepted = makod
-        .post_command(&idempotency_key, &cmd)
-        .await
-        .context("dispatch IFTSTA 21039 to makod")?;
+    let accepted = match makod.post_command(&idempotency_key, &cmd).await {
+        Ok(accepted) => accepted,
+        Err(e) => {
+            // The claim already moved the order out of 'pending'. Release it, or
+            // the field team's confirmation is recorded with no IFTSTA behind it
+            // and nothing left to retry.
+            release_claim(pool, id, tenant).await;
+            return Err(e).context("dispatch IFTSTA 21039 to makod");
+        }
+    };
 
-    let iftsta_ref = accepted.process_id.to_string();
-    let now = time::OffsetDateTime::now_utc();
+    record_iftsta(pool, id, tenant, &accepted.process_id.to_string()).await?;
+    Ok(true)
+}
 
-    let rows = sqlx::query(
+/// Return a claimed order to `pending` after its dispatch failed.
+async fn release_claim(pool: &PgPool, id: Uuid, tenant: &str) {
+    let res = sqlx::query(
         r"UPDATE sperr_orders
-          SET status               = 'executed',
-              executed_at          = $1,
-              execution_note       = $2,
-              iftsta_ref           = $3,
-              iftsta_dispatched_at = $4,
-              updated_at           = now()
-          WHERE id = $5 AND status = 'pending'",
+          SET status = 'pending', executed_at = NULL, execution_note = NULL,
+              fail_reason = NULL, updated_at = now()
+          WHERE id = $1 AND tenant = $2 AND iftsta_ref IS NULL",
     )
-    .bind(executed_at)
-    .bind(note)
-    .bind(&iftsta_ref)
-    .bind(now)
     .bind(id)
+    .bind(tenant)
+    .execute(pool)
+    .await;
+    if let Err(e) = res {
+        tracing::error!(
+            order_id = %id, error = %e,
+            "sperrd: could not release the claim after a failed IFTSTA dispatch — \
+             the order is stuck out of 'pending'"
+        );
+    }
+}
+
+/// Record the dispatched IFTSTA against the claimed order.
+async fn record_iftsta(
+    pool: &PgPool,
+    id: Uuid,
+    tenant: &str,
+    iftsta_ref: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r"UPDATE sperr_orders
+          SET iftsta_ref = $3, iftsta_dispatched_at = now(), updated_at = now()
+          WHERE id = $1 AND tenant = $2",
+    )
+    .bind(id)
+    .bind(tenant)
+    .bind(iftsta_ref)
     .execute(pool)
     .await
-    .context("execute_order_pg update")?
-    .rows_affected();
-
-    Ok(rows > 0)
+    .context("record IFTSTA dispatch")?;
+    Ok(())
 }
 
 // ── fail_order_pg ─────────────────────────────────────────────────────────────
@@ -258,16 +327,24 @@ pub async fn fail_order_pg(
     pool: &PgPool,
     makod: &Arc<MakodClient>,
     id: Uuid,
+    tenant: &str,
     reason: &str,
 ) -> anyhow::Result<bool> {
-    // Fetch order details before the status transition so we can address the command.
+    // Claimed before dispatch for the same reason as `execute_order_pg`: the two
+    // routes race, and both IFTSTA messages reaching the LF is worse than
+    // either one not being sent.
     let order_row = sqlx::query(
-        "SELECT malo_id, lf_mp_id, process_id FROM sperr_orders WHERE id = $1 AND status = 'pending'",
+        r"UPDATE sperr_orders
+          SET status = 'failed', fail_reason = $3, updated_at = now()
+          WHERE id = $1 AND tenant = $2 AND status = 'pending'
+          RETURNING malo_id, lf_mp_id, process_id",
     )
     .bind(id)
+    .bind(tenant)
+    .bind(reason)
     .fetch_optional(pool)
     .await
-    .context("fetch order for fail")?;
+    .context("claim order for fail")?;
 
     let Some(order) = order_row else {
         return Ok(false);
@@ -290,32 +367,16 @@ pub async fn fail_order_pg(
         }),
     };
 
-    let accepted = makod
-        .post_command(&idempotency_key, &cmd)
-        .await
-        .context("dispatch IFTSTA 21039 (non-execution) to makod")?;
+    let accepted = match makod.post_command(&idempotency_key, &cmd).await {
+        Ok(accepted) => accepted,
+        Err(e) => {
+            release_claim(pool, id, tenant).await;
+            return Err(e).context("dispatch IFTSTA 21039 (non-execution) to makod");
+        }
+    };
 
-    let iftsta_ref = accepted.process_id.to_string();
-    let now = time::OffsetDateTime::now_utc();
-
-    let rows = sqlx::query(
-        r"UPDATE sperr_orders
-          SET status               = 'failed',
-              fail_reason          = $1,
-              iftsta_ref           = $2,
-              iftsta_dispatched_at = $3,
-              updated_at           = now()
-          WHERE id = $4 AND status = 'pending'",
-    )
-    .bind(reason)
-    .bind(&iftsta_ref)
-    .bind(now)
-    .bind(id)
-    .execute(pool)
-    .await
-    .context("fail_order_pg")?
-    .rows_affected();
-    Ok(rows > 0)
+    record_iftsta(pool, id, tenant, &accepted.process_id.to_string()).await?;
+    Ok(true)
 }
 
 // ── cancel_order_pg ───────────────────────────────────────────────────────────
@@ -324,13 +385,14 @@ pub async fn fail_order_pg(
 ///
 /// Only `pending` orders can be cancelled.  Once `executed` or `failed`,
 /// the order is terminal and cannot be cancelled.
-pub async fn cancel_order_pg(pool: &PgPool, id: Uuid) -> anyhow::Result<bool> {
+pub async fn cancel_order_pg(pool: &PgPool, id: Uuid, tenant: &str) -> anyhow::Result<bool> {
     let rows = sqlx::query(
         r"UPDATE sperr_orders
           SET status = 'cancelled', updated_at = now()
-          WHERE id = $1 AND status = 'pending'",
+          WHERE id = $1 AND tenant = $2 AND status = 'pending'",
     )
     .bind(id)
+    .bind(tenant)
     .execute(pool)
     .await
     .context("cancel_order_pg")?

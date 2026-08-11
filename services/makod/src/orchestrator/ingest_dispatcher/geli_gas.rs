@@ -51,6 +51,7 @@ impl EdifactIngestDispatcher {
                             due_at,
                         )],
                         &[msg.message_ref()],
+                        Some(|s| !s.is_terminal()),
                     )
                     .await
                 }
@@ -117,12 +118,13 @@ impl EdifactIngestDispatcher {
                         10,
                         HolidayCalendar::BdewMaKo,
                     );
-                    self.spawn_or_resume::<GeliGasSupplierChangeWorkflow>(
+                    self.spawn_or_resume_guarded::<GeliGasSupplierChangeWorkflow>(
                         malo_id.as_str(),
                         "geli-gas-supplier-change",
                         cmd,
                         &fv,
                         &[(mako_geli_gas::LIEFERBEGINN_RESPONSE_WINDOW_LABEL, due_at)],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }

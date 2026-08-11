@@ -131,12 +131,13 @@ impl EdifactIngestDispatcher {
                         .map(|d| (mako_gabi_gas::nomination::NOMRES_DEADLINE_LABEL, d))
                         .into_iter()
                         .collect();
-                    self.spawn_or_resume::<GaBiGasNominationWorkflow>(
+                    self.spawn_or_resume_guarded::<GaBiGasNominationWorkflow>(
                         malo_id.as_str(),
                         "gabi-gas-nomination",
                         cmd,
                         &fv,
                         &deadlines,
+                        |s| !s.is_terminal(),
                     )
                     .await
                 } else {

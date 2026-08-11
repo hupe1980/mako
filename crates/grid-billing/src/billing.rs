@@ -312,21 +312,36 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         ),
     };
 
-    // Gas Grundpreis / Verrechnungspreis (Gas NNE monthly standing charge per GasNEV)
+    // Gas Grundpreis / Verrechnungspreis (Gas NNE monthly standing charge per GasNEV).
+    //
+    // Sparte-guarded like the Kapazitätsentgelt below: the position kind, its
+    // label and its GasNEV §14 citation are all gas-specific, so billing it on a
+    // Strom settlement would put "Netzentgelt Grundpreis Gas" and a gas ordinance
+    // on an electricity invoice.
     if let Some(gp) = input.grundpreis
         && gp.months > Decimal::ZERO
     {
-        let months = gp.months;
-        let p = monat_pos_traced(
-            "Netzentgelt Grundpreis Gas (Verrechnungspreis)",
-            BillingPositionKind::NneGasGrundpreis,
-            months,
-            gp.eur_per_month,
-            vec![LegalReference::GasNev { paragraph: "§14" }],
-            tariff_src.clone(),
-        );
-        total += p.net_eur;
-        positions.push(p);
+        if input.sparte != Sparte::Gas {
+            warnings.push(SettlementWarning {
+                severity: WarningSeverity::Warning,
+                code: "GRUNDPREIS_ON_STROM",
+                message: "a Grundpreis was supplied on a Strom settlement — the Gas \
+                          Verrechnungspreis position of §14 GasNEV does not apply to Strom"
+                    .to_owned(),
+            });
+        } else {
+            let months = gp.months;
+            let p = monat_pos_traced(
+                "Netzentgelt Grundpreis Gas (Verrechnungspreis)",
+                BillingPositionKind::NneGasGrundpreis,
+                months,
+                gp.eur_per_month,
+                vec![LegalReference::GasNev { paragraph: "§14" }],
+                tariff_src.clone(),
+            );
+            total += p.net_eur;
+            positions.push(p);
+        }
     }
 
     // §17 StromNEV context, recorded rather than applied: the Netzebene a rate
@@ -377,8 +392,14 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                     .to_owned(),
             });
         } else {
+            // The divisor is the actual length of the settlement year, not a
+            // flat 365. §15 GasNEV fixes no day-count convention, so the only
+            // defensible reading of an *annual* Entgelt is that a full year of
+            // capacity costs exactly that Entgelt — a fixed 365 would bill a leap
+            // year at 366/365 = 100.274 % of the price sheet's annual figure.
+            let jahrestage = Decimal::from(time::util::days_in_year(input.period.from().year()));
             let tage = Decimal::from(input.period.days());
-            let anteil = tage / Decimal::from(365);
+            let anteil = tage / jahrestage;
             let price_eur = (kap.entgelt_eur_per_kwh_h_a * anteil).round_dp(6);
             let net_eur = (kap.bestellte_kapazitaet_kwh_h * price_eur).round_dp(5);
             let stufe = kap
@@ -395,8 +416,8 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                 spot_price_formula: None,
                 trace: CalculationTrace {
                     explanation: format!(
-                        "{:.3} kWh/h × {:.6} EUR (= {:.6} EUR/a × {tage}/365 days) = {:.5} EUR \
-                         ({}{stufe})",
+                        "{:.3} kWh/h × {:.6} EUR (= {:.6} EUR/a × {tage}/{jahrestage} days) \
+                         = {:.5} EUR ({}{stufe})",
                         kap.bestellte_kapazitaet_kwh_h,
                         price_eur,
                         kap.entgelt_eur_per_kwh_h_a,
@@ -417,8 +438,8 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
                     tariff_source: tariff_src.clone(),
                     regulatory_reduction_factor: None,
                     rounding_note: Some(
-                        "annual rate pro-rated by calendar days over 365; unit price to 6 dp; \
-                         net to 5 dp",
+                        "annual rate pro-rated by calendar days over the actual year length \
+                         (365 or 366); unit price to 6 dp; net to 5 dp",
                     ),
                 },
             };
@@ -614,112 +635,6 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         );
         total += p.net_eur;
         positions.push(p);
-    }
-
-    // §19 Abs. 2 StromNEV — an agreed individual charge replaces the published
-    // Netzentgelt at a fraction the ordinance floors. The reduction covers the
-    // Arbeits- and Leistungspreis positions and nothing else: the KA and the
-    // levies are not the Netzbetreiber's revenue to reduce, and the lost NNE
-    // revenue is recovered through the §19-Umlage billed below.
-    if let Some(v) = &input.sect19 {
-        let floor = match v.art {
-            crate::sect19::Sect19Art::AtypischeNetznutzung => {
-                Some(crate::sect19::ATYPISCH_MINDESTENTGELT)
-            }
-            crate::sect19::Sect19Art::IntensiveNetznutzung => {
-                match (input.jahresarbeit_kwh, input.jahreshoechstleistung_kw) {
-                    (Some(arbeit), Some(peak)) => {
-                        crate::netzebene::benutzungsstundenzahl(arbeit, peak)
-                            .and_then(|bh| crate::sect19::bandlast_mindestentgelt(bh, arbeit))
-                    }
-                    _ => None,
-                }
-            }
-        };
-        match floor {
-            None => warnings.push(SettlementWarning {
-                severity: WarningSeverity::Warning,
-                code: "SECT19_BANDLAST_CRITERIA_NOT_MET",
-                message: "a §19 Abs. 2 Satz 2 agreement needs at least 7 000 \
-                          Benutzungsstunden and 10 GWh a year — the utilisation data \
-                          supplied does not qualify (or is missing)"
-                    .to_owned(),
-            }),
-            Some(f) if v.vereinbarter_prozentsatz < f => warnings.push(SettlementWarning {
-                severity: WarningSeverity::Warning,
-                code: "SECT19_BELOW_MINDESTENTGELT",
-                message: format!(
-                    "the agreed {} % is below the statutory Mindestentgelt of {} % \
-                     (§19 Abs. 2 StromNEV)",
-                    (v.vereinbarter_prozentsatz * HUNDRED).normalize(),
-                    (f * HUNDRED).normalize()
-                ),
-            }),
-            Some(_) => {}
-        }
-
-        let nne_basis: Decimal = positions
-            .iter()
-            .filter(|p| {
-                matches!(
-                    p.kind,
-                    BillingPositionKind::NneArbeit
-                        | BillingPositionKind::NneArbeitHt
-                        | BillingPositionKind::NneArbeitNt
-                        | BillingPositionKind::NneArbeitModul1
-                        | BillingPositionKind::NneArbeitModul3
-                        | BillingPositionKind::NneLeistung
-                )
-            })
-            .map(|p| p.net_eur)
-            .sum();
-        let reduction = -(nne_basis * (Decimal::ONE - v.vereinbarter_prozentsatz)).round_dp(5);
-        if !reduction.is_zero() {
-            let art_label = match v.art {
-                crate::sect19::Sect19Art::AtypischeNetznutzung => "atypische Netznutzung",
-                crate::sect19::Sect19Art::IntensiveNetznutzung => "intensive Netznutzung",
-            };
-            let genehmigung = v
-                .genehmigung
-                .as_deref()
-                .map(|g| format!(", {g}"))
-                .unwrap_or_default();
-            let p = SettlementPosition {
-                text: format!(
-                    "Individuelles Netzentgelt §19 Abs. 2 ({art_label}, {} %)",
-                    (v.vereinbarter_prozentsatz * HUNDRED).normalize()
-                ),
-                kind: BillingPositionKind::Sect19IndividuellesEntgelt,
-                quantity: Decimal::ONE,
-                unit: QuantityUnit::Monat,
-                unit_price_eur: reduction,
-                net_eur: reduction,
-                spot_price_formula: None,
-                trace: CalculationTrace {
-                    explanation: format!(
-                        "-(1 − {}) × {nne_basis:.5} EUR Netzentgelt = {reduction:.5} EUR \
-                         ({art_label}{genehmigung})",
-                        v.vereinbarter_prozentsatz
-                    ),
-                    input_quantity: nne_basis,
-                    input_unit_price_eur: reduction,
-                    gross_eur: reduction,
-                    legal_refs: vec![
-                        LegalReference::StromNev {
-                            paragraph: "§19 Abs. 2",
-                        },
-                        LegalReference::BnetzaDecision {
-                            reference: "BK4-22-089",
-                        },
-                    ],
-                    tariff_source: None,
-                    regulatory_reduction_factor: Some(v.vereinbarter_prozentsatz),
-                    rounding_note: Some("net to 5 dp"),
-                },
-            };
-            total += p.net_eur;
-            positions.push(p);
-        }
     }
 
     // ── Netzseitige Umlagen (EnFG) ────────────────────────────────────────────
@@ -1007,6 +922,120 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         };
         total += p.net_eur;
         positions.push(p);
+    }
+
+    // §19 Abs. 2 StromNEV — an agreed individual charge replaces the published
+    // Netzentgelt at a fraction the ordinance floors. The reduction covers the
+    // Arbeits- and Leistungspreis positions and nothing else: the KA and the
+    // levies are not the Netzbetreiber's revenue to reduce, and the lost NNE
+    // revenue is recovered through the §19-Umlage billed above.
+    //
+    // Sequenced last on purpose. It reduces a *basis*, so every NNE position it
+    // covers has to exist before it runs — the §14a Modul 3 Spotpreis positions
+    // are emitted per dispatch interval further down and would otherwise be
+    // outside the basis entirely, leaving a Modul-3 customer with a 10 %
+    // agreement billed as though they had none.
+    if let Some(v) = &input.sect19 {
+        let floor = match v.art {
+            crate::sect19::Sect19Art::AtypischeNetznutzung => {
+                Some(crate::sect19::ATYPISCH_MINDESTENTGELT)
+            }
+            crate::sect19::Sect19Art::IntensiveNetznutzung => {
+                match (input.jahresarbeit_kwh, input.jahreshoechstleistung_kw) {
+                    (Some(arbeit), Some(peak)) => {
+                        crate::netzebene::benutzungsstundenzahl(arbeit, peak)
+                            .and_then(|bh| crate::sect19::bandlast_mindestentgelt(bh, arbeit))
+                    }
+                    _ => None,
+                }
+            }
+        };
+        match floor {
+            None => warnings.push(SettlementWarning {
+                severity: WarningSeverity::Warning,
+                code: "SECT19_BANDLAST_CRITERIA_NOT_MET",
+                message: "a §19 Abs. 2 Satz 2 agreement needs at least 7 000 \
+                          Benutzungsstunden and 10 GWh a year — the utilisation data \
+                          supplied does not qualify (or is missing)"
+                    .to_owned(),
+            }),
+            Some(f) if v.vereinbarter_prozentsatz < f => warnings.push(SettlementWarning {
+                severity: WarningSeverity::Warning,
+                code: "SECT19_BELOW_MINDESTENTGELT",
+                message: format!(
+                    "the agreed {} % is below the statutory Mindestentgelt of {} % \
+                     (§19 Abs. 2 StromNEV)",
+                    (v.vereinbarter_prozentsatz * HUNDRED).normalize(),
+                    (f * HUNDRED).normalize()
+                ),
+            }),
+            Some(_) => {}
+        }
+
+        let nne_basis: Decimal = positions
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p.kind,
+                    BillingPositionKind::NneArbeit
+                        | BillingPositionKind::NneArbeitHt
+                        | BillingPositionKind::NneArbeitSt
+                        | BillingPositionKind::NneArbeitNt
+                        | BillingPositionKind::NneArbeitModul1
+                        | BillingPositionKind::NneArbeitModul2
+                        | BillingPositionKind::NneArbeitModul3
+                        | BillingPositionKind::NneLeistung
+                )
+            })
+            .map(|p| p.net_eur)
+            .sum();
+        let reduction = -(nne_basis * (Decimal::ONE - v.vereinbarter_prozentsatz)).round_dp(5);
+        if !reduction.is_zero() {
+            let art_label = match v.art {
+                crate::sect19::Sect19Art::AtypischeNetznutzung => "atypische Netznutzung",
+                crate::sect19::Sect19Art::IntensiveNetznutzung => "intensive Netznutzung",
+            };
+            let genehmigung = v
+                .genehmigung
+                .as_deref()
+                .map(|g| format!(", {g}"))
+                .unwrap_or_default();
+            let p = SettlementPosition {
+                text: format!(
+                    "Individuelles Netzentgelt §19 Abs. 2 ({art_label}, {} %)",
+                    (v.vereinbarter_prozentsatz * HUNDRED).normalize()
+                ),
+                kind: BillingPositionKind::Sect19IndividuellesEntgelt,
+                quantity: Decimal::ONE,
+                unit: QuantityUnit::Monat,
+                unit_price_eur: reduction,
+                net_eur: reduction,
+                spot_price_formula: None,
+                trace: CalculationTrace {
+                    explanation: format!(
+                        "-(1 − {}) × {nne_basis:.5} EUR Netzentgelt = {reduction:.5} EUR \
+                         ({art_label}{genehmigung})",
+                        v.vereinbarter_prozentsatz
+                    ),
+                    input_quantity: nne_basis,
+                    input_unit_price_eur: reduction,
+                    gross_eur: reduction,
+                    legal_refs: vec![
+                        LegalReference::StromNev {
+                            paragraph: "§19 Abs. 2",
+                        },
+                        LegalReference::BnetzaDecision {
+                            reference: "BK4-22-089",
+                        },
+                    ],
+                    tariff_source: None,
+                    regulatory_reduction_factor: Some(v.vereinbarter_prozentsatz),
+                    rounding_note: Some("net to 5 dp"),
+                },
+            };
+            total += p.net_eur;
+            positions.push(p);
+        }
     }
 
     let total_eur = total.round_dp(2);
@@ -3468,6 +3497,171 @@ mod modul3_tests {
         assert_eq!(
             modul1_positions, 0,
             "no flat Modul 1 position alongside Modul 3"
+        );
+    }
+
+    // ── §19 Abs. 2 StromNEV — the reduction basis ────────────────────────────
+
+    /// The §19 Abs. 2 reduction must cover the §14a Modul 3 Spotpreis positions.
+    ///
+    /// Those are emitted per dispatch interval, and used to be pushed *after* the
+    /// §19 block ran — so a Modul-3 customer with a 10 % agreement had a basis of
+    /// zero and was billed the published Netzentgelt in full.
+    #[test]
+    fn sect19_reduction_covers_the_modul3_spot_positions() {
+        use time::macros::datetime;
+        let interval = |kwh: &str, ct: &str, hour: u8| SpotpreisInterval {
+            period_from: datetime!(2025-01-01 00:00 UTC) + time::Duration::hours(hour as i64),
+            period_to: datetime!(2025-01-01 00:15 UTC) + time::Duration::hours(hour as i64),
+            menge_kwh: d(kwh),
+            nne_rate_ct_per_kwh: d(ct),
+            epex_spot_ct_per_kwh: None,
+        };
+        let out = settle_nne(&NneInput {
+            arbeitspreis: ArbeitspreisModell::SpotpreisNetzentgelt {
+                intervalle: vec![interval("400", "5.0", 1), interval("600", "5.0", 2)],
+            },
+            jahresarbeit_kwh: Some(d("70000000")),
+            jahreshoechstleistung_kw: Some(d("8000")),
+            sect19: Some(crate::sect19::Sect19Vereinbarung {
+                art: crate::sect19::Sect19Art::IntensiveNetznutzung,
+                vereinbarter_prozentsatz: d("0.10"),
+                genehmigung: Some("BK4-24-001".to_owned()),
+            }),
+            ..base_nne()
+        })
+        .expect("a settleable NNE");
+
+        let modul3: Decimal = out
+            .positions
+            .iter()
+            .filter(|p| p.kind == BillingPositionKind::NneArbeitModul3)
+            .map(|p| p.net_eur)
+            .sum();
+        assert_eq!(modul3, d("50.00000"), "1 000 kWh × 5 ct");
+
+        let reduktion = out
+            .positions
+            .iter()
+            .find(|p| p.kind == BillingPositionKind::Sect19IndividuellesEntgelt)
+            .expect("a §19 reduction position");
+        // 10 % agreed → 90 % of the Modul-3 NNE is credited back.
+        assert_eq!(reduktion.net_eur, d("-45.00000"));
+    }
+
+    /// The basis covers every NNE kind the settlement can emit — including the
+    /// Modul 3 ST band and the Modul 2 reduced Arbeitspreis, both of which the
+    /// filter used to omit.
+    #[test]
+    fn sect19_reduction_covers_the_modul3_time_of_use_bands() {
+        let mp = |kwh: &str| MengePreis {
+            menge_kwh: d(kwh),
+            preis_ct_per_kwh: d("10.0"),
+        };
+        let out = settle_nne(&NneInput {
+            arbeitspreis: ArbeitspreisModell::Modul3ZeitVariabel {
+                ht: mp("100"),
+                st: mp("200"),
+                nt: mp("300"),
+            },
+            sect19: Some(crate::sect19::Sect19Vereinbarung {
+                art: crate::sect19::Sect19Art::AtypischeNetznutzung,
+                vereinbarter_prozentsatz: d("0.20"),
+                genehmigung: None,
+            }),
+            ..base_nne()
+        })
+        .expect("a settleable NNE");
+
+        let reduktion = out
+            .positions
+            .iter()
+            .find(|p| p.kind == BillingPositionKind::Sect19IndividuellesEntgelt)
+            .expect("a §19 reduction position");
+        // HT+ST+NT = 600 kWh × 10 ct = 60 EUR; 80 % is credited back.
+        assert_eq!(reduktion.net_eur, d("-48.00000"));
+    }
+
+    // ── §15 GasNEV — Kapazitätsentgelt pro-ration ────────────────────────────
+
+    /// A full year of capacity costs exactly the annual Entgelt, leap year or not.
+    ///
+    /// §15 GasNEV fixes no day-count convention; a hard-coded 365 divisor billed
+    /// a leap year at 366/365 = 100.274 % of the price sheet figure.
+    #[test]
+    fn gas_kapazitaetsentgelt_a_full_year_costs_the_annual_entgelt() {
+        use crate::gas::{GasKapazitaet, Kapazitaetsprodukt};
+        let jahr = |from, to| {
+            settle_nne(&NneInput {
+                sparte: Sparte::Gas,
+                period: SettlementPeriod::new(from, to).unwrap(),
+                gas_kapazitaet: Some(GasKapazitaet {
+                    bestellte_kapazitaet_kwh_h: d("100"),
+                    entgelt_eur_per_kwh_h_a: d("36.5"),
+                    produkt: Kapazitaetsprodukt::Fest,
+                    druckstufe: None,
+                }),
+                ..base_nne()
+            })
+            .expect("a settleable NNE")
+            .positions
+            .iter()
+            .find(|p| p.kind == BillingPositionKind::GasKapazitaetsentgelt)
+            .expect("a Kapazitätsentgelt position")
+            .net_eur
+        };
+        // 2024 is a leap year (366 days), 2025 is not (365).
+        let leap = jahr(date!(2024 - 01 - 01), date!(2024 - 12 - 31));
+        let common = jahr(date!(2025 - 01 - 01), date!(2025 - 12 - 31));
+        assert_eq!(common, d("3650.00000"), "100 kWh/h × 36.50 EUR/a");
+        assert_eq!(leap, common, "a leap year is not 0.274 % more capacity");
+    }
+
+    // ── Sparte guards ────────────────────────────────────────────────────────
+
+    /// A Grundpreis on a Strom settlement is not billed as a GasNEV §14 position.
+    #[test]
+    fn a_grundpreis_on_strom_is_refused_not_labelled_gas() {
+        let out = settle_nne(&NneInput {
+            sparte: Sparte::Strom,
+            grundpreis: Some(crate::types::Grundpreis {
+                eur_per_month: d("12.00"),
+                months: Decimal::ONE,
+            }),
+            ..base_nne()
+        })
+        .expect("a settleable NNE");
+
+        assert!(
+            !out.positions
+                .iter()
+                .any(|p| p.kind == BillingPositionKind::NneGasGrundpreis),
+            "no Gas Grundpreis position on a Strom invoice"
+        );
+        assert!(
+            out.warnings.iter().any(|w| w.code == "GRUNDPREIS_ON_STROM"),
+            "the refusal must be visible to the caller"
+        );
+    }
+
+    /// …and on Gas it is billed, unchanged.
+    #[test]
+    fn a_grundpreis_on_gas_is_billed() {
+        let out = settle_nne(&NneInput {
+            sparte: Sparte::Gas,
+            grundpreis: Some(crate::types::Grundpreis {
+                eur_per_month: d("12.00"),
+                months: Decimal::ONE,
+            }),
+            ..base_nne()
+        })
+        .expect("a settleable NNE");
+        assert_eq!(
+            out.positions
+                .iter()
+                .find(|p| p.kind == BillingPositionKind::NneGasGrundpreis)
+                .map(|p| p.net_eur),
+            Some(d("12.00000"))
         );
     }
 }

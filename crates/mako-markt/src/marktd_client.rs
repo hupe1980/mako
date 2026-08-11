@@ -530,7 +530,18 @@ impl MarktdClient {
             .bearer_auth(self.api_key.expose_secret())
             .send()
             .await?;
-        Ok(resp.status().is_success())
+        let status = resp.status();
+        if status.is_success() {
+            return Ok(true);
+        }
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(false);
+        }
+        // Anything else is marktd failing, not the partner being absent. Callers
+        // reject registrations on `false`, so collapsing the two would turn an
+        // outage into a wrongful market rejection.
+        warn!(mp_id, %status, "partner_known: HTTP error");
+        Err(MarktdClientError::Http(format!("HTTP {}", status.as_u16())))
     }
 
     /// `GET /api/v1/preisblaetter/{nb_mp_id}?date={billing_date}` — Preisblatt.
@@ -1363,6 +1374,54 @@ mod tests {
         assert!(
             matches!(r, Ok(None)),
             "breaker is shared with get_preisblatt"
+        );
+    }
+
+    /// Serve one request with `status`, then return the bound base URL.
+    async fn one_shot_server(status: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                use tokio::io::AsyncWriteExt as _;
+                let _ = sock
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                        )
+                        .as_bytes(),
+                    )
+                    .await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn client_for(base: &str) -> MarktdClient {
+        MarktdClient::new(base, SecretString::from("test-key"), reqwest::Client::new())
+    }
+
+    /// A 404 means the partner is genuinely unregistered.
+    #[tokio::test]
+    async fn partner_known_reports_absent_on_404() {
+        let base = one_shot_server("404 Not Found").await;
+        let r = client_for(&base).partner_known("9900000000001").await;
+        assert!(matches!(r, Ok(false)));
+    }
+
+    /// A 5xx means marktd is failing, not that the partner is missing. Callers
+    /// reject market registrations on `Ok(false)`, so collapsing the two would
+    /// turn an outage into a wrongful rejection on the wire.
+    #[tokio::test]
+    async fn partner_known_errors_on_server_failure() {
+        let base = one_shot_server("500 Internal Server Error").await;
+        let r = client_for(&base).partner_known("9900000000001").await;
+        assert!(
+            matches!(r, Err(MarktdClientError::Http(_))),
+            "5xx must not read as an unknown partner"
         );
     }
 }

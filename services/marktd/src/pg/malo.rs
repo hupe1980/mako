@@ -5,10 +5,14 @@ use mako_markt::{
     error::MdmError,
     repository::{MaloFilter, MaloRecord, MaloRepository, PageResult, Rollenzuordnung},
 };
-use sqlx::{PgPool, Row, postgres::PgRow};
+use sqlx::{PgConnection, PgPool, Row, postgres::PgRow};
 use time::Date;
 
 /// PostgreSQL-backed MaLo repository.
+///
+/// The mutations are also available as inherent `*_tx` functions taking a
+/// `&mut PgConnection`, so callers (the PUT handler, event ingest) can commit
+/// the write atomically with their outbox enqueue / idempotency marker.
 #[derive(Clone, Debug)]
 pub struct PgMaloRepository {
     pool: PgPool,
@@ -19,11 +23,13 @@ impl PgMaloRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
-}
 
-impl MaloRepository for PgMaloRepository {
-    async fn upsert(
-        &self,
+    /// Full-row upsert. Returns the actual new version (`RETURNING version`).
+    ///
+    /// With `if_match` the UPDATE is guarded on `version = $expected`; 0 rows —
+    /// a concurrent write, or no row at all — is a [`MdmError::VersionConflict`].
+    pub async fn upsert_tx(
+        conn: &mut PgConnection,
         malo_id: &MaloId,
         sparte: Sparte,
         data: serde_json::Value,
@@ -31,30 +37,6 @@ impl MaloRepository for PgMaloRepository {
         if_match: Option<i64>,
         bo4e_version: &str,
     ) -> Result<i64, MdmError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| MdmError::Internal(e.to_string()))?;
-
-        let current_version: Option<i64> =
-            sqlx::query_scalar("SELECT version FROM malo WHERE malo_id = $1")
-                .bind(malo_id)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(|e| MdmError::Internal(e.to_string()))?;
-
-        let new_version = match (current_version, if_match) {
-            (Some(v), Some(expected)) if v != expected => {
-                return Err(MdmError::VersionConflict {
-                    expected: expected.to_string(),
-                    actual: v.to_string(),
-                });
-            }
-            (Some(v), _) => v + 1,
-            (None, _) => 1,
-        };
-
         let sparte_str = sparte.to_string();
         // Extract typed fields from the BO4E Marktlokation JSONB payload.
         // These are stored as indexed columns for efficient SQL queries.
@@ -95,46 +77,94 @@ impl MaloRepository for PgMaloRepository {
             .get("fernsteuerbar")
             .and_then(serde_json::Value::as_bool);
 
-        sqlx::query(
-            r#"INSERT INTO malo (malo_id, sparte, netzebene, bilanzierungsgebiet, gasqualitaet, energierichtung, bilanzierungsmethode, regelzone, fallgruppe, lokationsbuendel_objektcode, fernsteuerbar, version, data, bo4e_version, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
-               ON CONFLICT (malo_id) DO UPDATE
-               SET sparte               = EXCLUDED.sparte,
-                   netzebene            = EXCLUDED.netzebene,
-                   bilanzierungsgebiet  = EXCLUDED.bilanzierungsgebiet,
-                   gasqualitaet         = EXCLUDED.gasqualitaet,
-                   energierichtung      = EXCLUDED.energierichtung,
-                   bilanzierungsmethode = EXCLUDED.bilanzierungsmethode,
-                   regelzone            = EXCLUDED.regelzone,
-                   fallgruppe           = EXCLUDED.fallgruppe,
-                   lokationsbuendel_objektcode = EXCLUDED.lokationsbuendel_objektcode,
-                   fernsteuerbar        = EXCLUDED.fernsteuerbar,
-                   version              = EXCLUDED.version,
-                   data                 = EXCLUDED.data,
-                   bo4e_version         = EXCLUDED.bo4e_version,
-                   updated_at           = now()"#,
-        )
-        .bind(malo_id)
-        .bind(&sparte_str)
-        .bind(&netzebene)
-        .bind(&bilanzierungsgebiet)
-        .bind(&gasqualitaet)
-        .bind(&energierichtung)
-        .bind(&bilanzierungsmethode)
-        .bind(&regelzone)
-        .bind(&fallgruppe)
-        .bind(&lokationsbuendel_objektcode)
-        .bind(fernsteuerbar)
-        .bind(new_version)
-        .bind(&data)
-        .bind(bo4e_version)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| MdmError::Internal(e.to_string()))?;
+        // Optimistic concurrency in SQL: with If-Match the UPDATE is guarded on
+        // the expected version, so two concurrent PUTs cannot both win.
+        let new_version: Option<i64> = if let Some(expected) = if_match {
+            sqlx::query_scalar(
+                r#"UPDATE malo
+                   SET sparte               = $2,
+                       netzebene            = $3,
+                       bilanzierungsgebiet  = $4,
+                       gasqualitaet         = $5,
+                       energierichtung      = $6,
+                       bilanzierungsmethode = $7,
+                       regelzone            = $8,
+                       fallgruppe           = $9,
+                       lokationsbuendel_objektcode = $10,
+                       fernsteuerbar        = $11,
+                       data                 = $12,
+                       bo4e_version         = $13,
+                       version              = version + 1,
+                       updated_at           = now()
+                   WHERE malo_id = $1 AND version = $14
+                   RETURNING version"#,
+            )
+            .bind(malo_id)
+            .bind(&sparte_str)
+            .bind(&netzebene)
+            .bind(&bilanzierungsgebiet)
+            .bind(&gasqualitaet)
+            .bind(&energierichtung)
+            .bind(&bilanzierungsmethode)
+            .bind(&regelzone)
+            .bind(&fallgruppe)
+            .bind(&lokationsbuendel_objektcode)
+            .bind(fernsteuerbar)
+            .bind(&data)
+            .bind(bo4e_version)
+            .bind(expected)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?
+        } else {
+            sqlx::query_scalar(
+                r#"INSERT INTO malo (malo_id, sparte, netzebene, bilanzierungsgebiet, gasqualitaet, energierichtung, bilanzierungsmethode, regelzone, fallgruppe, lokationsbuendel_objektcode, fernsteuerbar, version, data, bo4e_version, updated_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, $12, $13, now())
+                   ON CONFLICT (malo_id) DO UPDATE
+                   SET sparte               = EXCLUDED.sparte,
+                       netzebene            = EXCLUDED.netzebene,
+                       bilanzierungsgebiet  = EXCLUDED.bilanzierungsgebiet,
+                       gasqualitaet         = EXCLUDED.gasqualitaet,
+                       energierichtung      = EXCLUDED.energierichtung,
+                       bilanzierungsmethode = EXCLUDED.bilanzierungsmethode,
+                       regelzone            = EXCLUDED.regelzone,
+                       fallgruppe           = EXCLUDED.fallgruppe,
+                       lokationsbuendel_objektcode = EXCLUDED.lokationsbuendel_objektcode,
+                       fernsteuerbar        = EXCLUDED.fernsteuerbar,
+                       version              = malo.version + 1,
+                       data                 = EXCLUDED.data,
+                       bo4e_version         = EXCLUDED.bo4e_version,
+                       updated_at           = now()
+                   RETURNING version"#,
+            )
+            .bind(malo_id)
+            .bind(&sparte_str)
+            .bind(&netzebene)
+            .bind(&bilanzierungsgebiet)
+            .bind(&gasqualitaet)
+            .bind(&energierichtung)
+            .bind(&bilanzierungsmethode)
+            .bind(&regelzone)
+            .bind(&fallgruppe)
+            .bind(&lokationsbuendel_objektcode)
+            .bind(fernsteuerbar)
+            .bind(&data)
+            .bind(bo4e_version)
+            .fetch_optional(&mut *conn)
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?
+        };
+
+        let Some(new_version) = new_version else {
+            return Err(MdmError::VersionConflict {
+                expected: if_match.map_or_else(|| "new".into(), |v| v.to_string()),
+                actual: "(concurrent update)".into(),
+            });
+        };
 
         sqlx::query("DELETE FROM rollenzuordnungen WHERE malo_id = $1")
             .bind(malo_id)
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await
             .map_err(|e| MdmError::Internal(e.to_string()))?;
 
@@ -164,11 +194,68 @@ impl MaloRepository for PgMaloRepository {
             .bind(rollencodenummern)
             .bind(valid_froms)
             .bind(valid_tos)
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await
             .map_err(|e| MdmError::Internal(e.to_string()))?;
         }
 
+        Ok(new_version)
+    }
+
+    /// Patch the derived Typenmerkmale columns on the caller's transaction.
+    /// A `None` argument leaves the existing value unchanged.
+    pub async fn patch_typenmerkmal_tx(
+        conn: &mut PgConnection,
+        malo_id: &MaloId,
+        bilanzierungsmethode: Option<&str>,
+        fallgruppe: Option<&str>,
+    ) -> Result<(), MdmError> {
+        if bilanzierungsmethode.is_none() && fallgruppe.is_none() {
+            return Ok(());
+        }
+        // Patch only the typed columns — do NOT touch data JSONB or version.
+        sqlx::query(
+            r#"UPDATE malo
+               SET bilanzierungsmethode = COALESCE($2, bilanzierungsmethode),
+                   fallgruppe           = COALESCE($3, fallgruppe),
+                   updated_at           = now()
+               WHERE malo_id = $1"#,
+        )
+        .bind(malo_id)
+        .bind(bilanzierungsmethode)
+        .bind(fallgruppe)
+        .execute(conn)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Ok(())
+    }
+}
+
+impl MaloRepository for PgMaloRepository {
+    async fn upsert(
+        &self,
+        malo_id: &MaloId,
+        sparte: Sparte,
+        data: serde_json::Value,
+        rollenzuordnung: Vec<Rollenzuordnung>,
+        if_match: Option<i64>,
+        bo4e_version: &str,
+    ) -> Result<i64, MdmError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        let new_version = Self::upsert_tx(
+            &mut tx,
+            malo_id,
+            sparte,
+            data,
+            rollenzuordnung,
+            if_match,
+            bo4e_version,
+        )
+        .await?;
         tx.commit()
             .await
             .map_err(|e| MdmError::Internal(e.to_string()))?;
@@ -207,7 +294,7 @@ impl MaloRepository for PgMaloRepository {
                LEFT JOIN rollenzuordnungen lz
                      ON  lz.malo_id   = m.malo_id
                      AND lz.valid_from <= $2
-                     AND (lz.valid_to IS NULL OR lz.valid_to >= $2)
+                     AND (lz.valid_to IS NULL OR lz.valid_to > $2)
                WHERE m.malo_id = $1
                GROUP BY m.malo_id, m.sparte, m.netzebene, m.bilanzierungsgebiet, m.gasqualitaet, m.energierichtung, m.bilanzierungsmethode, m.regelzone, m.fallgruppe, m.lokationsbuendel_objektcode, m.fernsteuerbar, m.version, m.data, m.bo4e_version, m.updated_at"#,
         )
@@ -261,7 +348,7 @@ impl MaloRepository for PgMaloRepository {
                LEFT JOIN rollenzuordnungen lz
                      ON  lz.malo_id   = m.malo_id
                      AND lz.valid_from <= $1
-                     AND (lz.valid_to IS NULL OR lz.valid_to >= $1)
+                     AND (lz.valid_to IS NULL OR lz.valid_to > $1)
                WHERE ($2::text IS NULL OR m.sparte = $2)
                  AND ($3::text IS NULL OR lz.zuordnungstyp    = $3)
                  AND ($4::text IS NULL OR lz.rollencodenummer = $4)
@@ -305,26 +392,12 @@ impl MaloRepository for PgMaloRepository {
         bilanzierungsmethode: Option<&str>,
         fallgruppe: Option<&str>,
     ) -> Result<(), mako_markt::error::MdmError> {
-        // Only update if at least one value is supplied.
-        if bilanzierungsmethode.is_none() && fallgruppe.is_none() {
-            return Ok(());
-        }
-        // Patch only the typed columns — do NOT touch data JSONB or version.
-        // Uses COALESCE so a NULL argument leaves the existing column unchanged.
-        sqlx::query(
-            r#"UPDATE malo
-               SET bilanzierungsmethode = COALESCE($2, bilanzierungsmethode),
-                   fallgruppe           = COALESCE($3, fallgruppe),
-                   updated_at           = now()
-               WHERE malo_id = $1"#,
-        )
-        .bind(malo_id.to_string())
-        .bind(bilanzierungsmethode)
-        .bind(fallgruppe)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| mako_markt::error::MdmError::Internal(e.to_string()))?;
-        Ok(())
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Self::patch_typenmerkmal_tx(&mut conn, malo_id, bilanzierungsmethode, fallgruppe).await
     }
 
     async fn patch_stammdaten(

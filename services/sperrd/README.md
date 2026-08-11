@@ -32,7 +32,7 @@ permanently unresolved in the LF's system — a GPKE protocol violation.
 
 | Tool | Description |
 |------|-------------|
-| `list_sperr_orders` | List orders, filter by status or `older_than_hours` |
+| `list_sperr_orders` | List orders, filter by status or `older_than_werktage` |
 | `get_sperr_order` | Fetch a single order by UUID |
 | `get_sperr_stats` | Compliance counters incl. `executed_missing_iftsta` |
 | `list_overdue_orders` | Pending orders past `planned_date` |

@@ -281,7 +281,7 @@ directly into `GasQuantity` or `GasBeschaffenheit::to_kwh_hs()`.
 
 ## 6. GaBi Gas Workflow Integration
 
-### 6.1 INVOIC billing (live)
+### 6.1 INVOIC billing
 
 `GaBiGasInvoicWorkflow` in `mako-gabi-gas` handles the INVOIC PIDs:
 

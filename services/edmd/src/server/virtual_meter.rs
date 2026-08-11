@@ -5,6 +5,87 @@ use super::*;
 
 // ── Virtual meter endpoints ──────────────────────────────────────────────
 
+/// Project one source's resolved reads onto the register that matches its role
+/// in the aggregation.
+///
+/// A MaLo/MeLo delivers *all* its OBIS registers (1.8.x Bezug, 2.8.x
+/// Einspeisung, HT/NT splits), but `metering`'s virtual-meter engine indexes
+/// each source by interval start alone — feeding it every register makes
+/// same-slot registers collide and an arbitrary one win. So per source:
+///
+/// - non-billable qualities are dropped (Faulty/Unknown must not enter a
+///   derived series),
+/// - the wrong direction is dropped — import registers for a generation
+///   source, export registers for a consumption source (reads without an OBIS
+///   code, and non-electricity media whose codes carry no direction, are kept),
+/// - reactive registers and the Fehlerregister (E = 63, a fault *count*) are
+///   dropped — neither is an Arbeitsmenge,
+/// - when several same-direction registers still share a slot (total beside
+///   HT/NT), the total register (E = 0) wins.
+pub(crate) fn source_intervals(
+    reads: &[MeterRead],
+    generation: bool,
+) -> Vec<metering::MeterInterval> {
+    let mut by_slot: BTreeMap<OffsetDateTime, metering::MeterInterval> = BTreeMap::new();
+    for r in reads.iter().filter(|r| r.quality.is_billable()) {
+        let obis: Option<metering::obis::ObisCode> =
+            r.obis_code.as_deref().and_then(|s| s.parse().ok());
+        if let Some(c) = obis {
+            if c.is_reactive() || c.is_fehlerregister() {
+                continue;
+            }
+            if generation && c.is_import() {
+                continue;
+            }
+            if !generation && c.is_export() {
+                continue;
+            }
+        }
+        let iv = metering::MeterInterval {
+            from: r.dtm_from,
+            to: r.dtm_to,
+            value: r.quantity_kwh,
+            quality: r.quality,
+            obis_code: obis,
+        };
+        match by_slot.entry(r.dtm_from) {
+            std::collections::btree_map::Entry::Vacant(e) => {
+                e.insert(iv);
+            }
+            std::collections::btree_map::Entry::Occupied(mut e) => {
+                let held_total = e.get().obis_code.is_some_and(|c| c.is_total_register());
+                let new_total = obis.is_some_and(|c| c.is_total_register());
+                if new_total && !held_total {
+                    e.insert(iv);
+                }
+            }
+        }
+    }
+    by_slot.into_values().collect()
+}
+
+/// The source IDs that carry generation (Einspeisung) in this rule; every other
+/// source is a consumption series.
+///
+/// `Residual` is the one judgement call: the crate documents it as arithmetic
+/// ("which series to subtract from which is the contract's to say"), and its
+/// stated common application is building load minus PV, so the subtrahends are
+/// read as generation.
+pub(crate) fn generation_source_ids(rule: &metering::AggregationRule) -> Vec<&str> {
+    use metering::AggregationRule as R;
+    match rule {
+        R::Sum { .. } => Vec::new(),
+        R::Residual {
+            subtract_malo_ids, ..
+        } => subtract_malo_ids.iter().map(String::as_str).collect(),
+        R::PvSelfConsumption {
+            generation_malo_id, ..
+        } => vec![generation_malo_id.as_str()],
+        R::GgvConstantAllocation { plant_melo_id, .. }
+        | R::GgvProportionalAllocation { plant_melo_id, .. } => vec![plant_melo_id.as_str()],
+    }
+}
+
 /// `GET /api/v1/virtual/{virtual_malo_id}/lastgang`
 ///
 /// Computes the virtual meter time series by fetching all source MaLo time
@@ -83,7 +164,9 @@ pub(crate) async fn get_virtual_lastgang(
         .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
         .unwrap_or_else(OffsetDateTime::now_utc);
 
-    // Fetch source series for all referenced MaLos
+    // Fetch source series for all referenced MaLos, projected per source onto
+    // the register matching its role in the rule (see `source_intervals`).
+    let generation_ids = generation_source_ids(&rule);
     let mut sources: HashMap<String, Vec<metering::MeterInterval>> = HashMap::new();
     for malo_id in rule.source_malo_ids() {
         let q = TimeSeriesQuery {
@@ -95,16 +178,7 @@ pub(crate) async fn get_virtual_lastgang(
         };
         match state.repo.query(&q).await {
             Ok(reads) => {
-                let intervals: Vec<metering::MeterInterval> = reads
-                    .iter()
-                    .map(|r| metering::MeterInterval {
-                        from: r.dtm_from,
-                        to: r.dtm_to,
-                        value: r.quantity_kwh,
-                        quality: r.quality,
-                        obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
-                    })
-                    .collect();
+                let intervals = source_intervals(&reads, generation_ids.contains(&malo_id));
                 sources.insert(malo_id.to_owned(), intervals);
             }
             Err(e) => {
@@ -357,5 +431,88 @@ pub(crate) async fn delete_virtual_meter(
             tracing::warn!(error = %e, "edmd: delete_virtual_meter failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{IngestionSource, Sparte};
+    use time::macros::datetime;
+
+    fn read(from: OffsetDateTime, value: &str, obis: &str, quality: QualityFlag) -> MeterRead {
+        MeterRead {
+            malo_id: "51238696780".to_owned(),
+            melo_id: None,
+            dtm_from: from,
+            dtm_to: from + time::Duration::minutes(15),
+            quantity_kwh: value.parse().expect("decimal"),
+            quality,
+            pid: 13025,
+            sparte: Sparte::Strom,
+            obis_code: Some(obis.to_owned()),
+            tenant: "9910000000001".to_owned(),
+            source: IngestionSource::Mscons,
+            push_session: None,
+            quality_warnings: None,
+            sender_mp_id: None,
+            allocation_version: "INITIAL".to_owned(),
+            valid_from_tx: None,
+            mscons_version: None,
+        }
+    }
+
+    /// A MeLo carrying both directions is the ordinary prosumer case, and
+    /// `metering`'s virtual-meter engine keys its sources by interval start
+    /// alone — so handing it both registers made the two collide and let
+    /// whichever sorted last win. A tenant's "consumption" could silently be
+    /// its export series.
+    #[test]
+    fn a_bidirectional_melo_projects_onto_the_register_its_role_needs() {
+        let slot = datetime!(2026-07-01 10:00 UTC);
+        let reads = vec![
+            read(slot, "5.0", "1-0:1.8.0", QualityFlag::Measured),
+            read(slot, "3.0", "1-0:2.8.0", QualityFlag::Measured),
+        ];
+
+        let consumption = source_intervals(&reads, false);
+        assert_eq!(consumption.len(), 1, "one slot, one value");
+        assert_eq!(
+            consumption[0].value.to_string(),
+            "5.0",
+            "a consumption source must read Bezug (1.8.x), never Einspeisung"
+        );
+
+        let generation = source_intervals(&reads, true);
+        assert_eq!(generation.len(), 1);
+        assert_eq!(
+            generation[0].value.to_string(),
+            "3.0",
+            "a generation source must read Einspeisung (2.8.x), never Bezug"
+        );
+    }
+
+    /// The total register (E = 0) beats its own HT/NT split, so a meter
+    /// delivering both does not double-book or pick by sort order. Faulty,
+    /// reactive and Fehlerregister rows never enter a derived series at all.
+    #[test]
+    fn same_direction_collisions_and_non_billable_rows_are_resolved() {
+        let slot = datetime!(2026-07-01 10:00 UTC);
+        let later = slot + time::Duration::minutes(15);
+        let reads = vec![
+            read(slot, "6.0", "1-0:1.8.1", QualityFlag::Measured),
+            read(slot, "10.0", "1-0:1.8.0", QualityFlag::Measured),
+            read(slot, "99.0", "1-0:3.8.0", QualityFlag::Measured),
+            read(later, "7.0", "1-0:1.8.0", QualityFlag::Faulty),
+        ];
+
+        let out = source_intervals(&reads, false);
+        assert_eq!(out.len(), 1, "the faulty slot must not contribute: {out:?}");
+        assert_eq!(
+            out[0].value.to_string(),
+            "10.0",
+            "the total register must win over its HT split, and Blindarbeit \
+             must not be summed as Wirkarbeit"
+        );
     }
 }

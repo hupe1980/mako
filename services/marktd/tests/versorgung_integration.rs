@@ -195,19 +195,188 @@ async fn preisblatt_is_read_by_nb_mp_id_without_a_tenant_column() {
     .await
     .expect("insert preisblatt");
 
-    // The corrected get_preisblatt query shape: no `tenant`, column is `data`.
-    let row: Option<(uuid::Uuid, time::Date, serde_json::Value)> = sqlx::query_as(
-        r"SELECT id, valid_from, data
-          FROM preisblaetter
-          WHERE nb_mp_id = $1 AND valid_from <= $2
-          ORDER BY valid_from DESC LIMIT 1",
+    // An expired sheet and an open-started one for a second NB.
+    sqlx::query(
+        "INSERT INTO preisblaetter (nb_mp_id, valid_from, valid_to, data)
+         VALUES ('9900000000002', '2024-01-01', '2025-01-01', '{}'::jsonb),
+                ('9900000000003', NULL, NULL, '{}'::jsonb)",
     )
-    .bind("9900000000001")
-    .bind(time::macros::date!(2026 - 06 - 01))
-    .fetch_optional(&pool)
+    .execute(&pool)
     .await
-    .expect("the query must run — the old `WHERE tenant=$1` referenced a missing column");
+    .expect("insert more preisblaetter");
+
+    // The corrected get_preisblatt query shape: no `tenant`, column is `data`,
+    // half-open validity window, NULL valid_from = open-started.
+    let q = r"SELECT id, valid_from, data
+              FROM preisblaetter
+              WHERE nb_mp_id = $1
+                AND (valid_from IS NULL OR valid_from <= $2)
+                AND (valid_to   IS NULL OR valid_to   >  $2)
+              ORDER BY valid_from DESC NULLS LAST LIMIT 1";
+    let at = time::macros::date!(2026 - 06 - 01);
+    type Row = Option<(uuid::Uuid, Option<time::Date>, serde_json::Value)>;
+
+    let row: Row = sqlx::query_as(q)
+        .bind("9900000000001")
+        .bind(at)
+        .fetch_optional(&pool)
+        .await
+        .expect("the query must run — the old `WHERE tenant=$1` referenced a missing column");
     assert!(row.is_some(), "the price sheet is found by nb_mp_id");
+
+    let expired: Row = sqlx::query_as(q)
+        .bind("9900000000002")
+        .bind(at)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+    assert!(expired.is_none(), "an expired sheet is not returned");
+
+    let open_started: Row = sqlx::query_as(q)
+        .bind("9900000000003")
+        .bind(at)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+    assert!(
+        open_started.is_some(),
+        "an open-started sheet (valid_from IS NULL) still matches"
+    );
+}
+
+// ── Ingest is one transaction: marker + projection + outbox ───────────────────
+
+/// A failing derivation must leave nothing behind — no idempotency marker, no
+/// projection row, no outbox entry — so makod's redelivery can repair it.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_rolled_back_ingest_leaves_neither_marker_nor_projection_nor_outbox() {
+    use marktd::handlers::event_ingest::derive_supply_state;
+
+    let Some((pool, _pg)) = test_pool("ingest_rollback").await else {
+        return;
+    };
+    let event_id = uuid::Uuid::new_v4().to_string();
+    let mut tx = pool.begin().await.unwrap();
+
+    sqlx::query("INSERT INTO processed_events (event_id) VALUES ($1)")
+        .bind(&event_id)
+        .execute(&mut *tx)
+        .await
+        .expect("marker");
+
+    // The handler rolls this transaction back on any derivation / enqueue
+    // failure; the rollback below stands in for that failure.
+    let evts = derive_supply_state(
+        &mut tx,
+        TENANT,
+        mako_events::mako::PROCESS_INITIATED,
+        Some(55001),
+        &serde_json::json!({
+            "malo_id":      MALO,
+            "new_supplier": "9911111111111",
+            "process_date": "2026-10-01",
+            "nb_mp_id":     "9900000000001",
+        }),
+        &event_id,
+    )
+    .await
+    .expect("derivation");
+    assert!(evts.is_empty(), "an announce emits no secondary event");
+    marktd::outbox::enqueue(
+        &mut *tx,
+        &mako_markt::cloudevents::MarktEvent::new(
+            TENANT,
+            mako_events::mako::PROCESS_INITIATED,
+            MALO.to_owned(),
+            serde_json::json!({}),
+        ),
+        &tokio::sync::Notify::new(),
+    )
+    .await
+    .expect("enqueue");
+    tx.rollback().await.unwrap();
+
+    let markers: i64 = sqlx::query_scalar("SELECT count(*) FROM processed_events")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM versorgungsstatus")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let log: i64 = sqlx::query_scalar("SELECT count(*) FROM event_log")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        (markers, rows, log),
+        (0, 0, 0),
+        "a rolled-back ingest is invisible in all three tables"
+    );
+}
+
+/// The EoG derivation resolves the NB's pre-deposited default Bilanzkreis, writes
+/// `eog_seit` (which the history snapshot must carry) and returns the
+/// `eog-begonnen` event for the caller to enqueue on the same transaction.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn eog_derivation_resolves_the_default_bilanzkreis_and_snapshots_eog_seit() {
+    use marktd::handlers::event_ingest::derive_supply_state;
+
+    let Some((pool, _pg)) = test_pool("ingest_eog").await else {
+        return;
+    };
+    sqlx::query(
+        "INSERT INTO grundversorger (tenant, nb_mp_id, sparte, gv_mp_id, default_bilanzkreis)
+         VALUES ($1, '9900000000001', 'STROM', '9922222222222', 'BK-DEFAULT-1')",
+    )
+    .bind(TENANT)
+    .execute(&pool)
+    .await
+    .expect("seed grundversorger");
+
+    let mut tx = pool.begin().await.unwrap();
+    let evts = derive_supply_state(
+        &mut tx,
+        TENANT,
+        mako_events::mako::PROCESS_COMPLETED,
+        Some(55013),
+        &serde_json::json!({
+            "malo_id":      MALO,
+            "new_supplier": "9922222222222",
+            "nb_mp_id":     "9900000000001",
+            "process_date": "20261115",
+        }),
+        &uuid::Uuid::new_v4().to_string(),
+    )
+    .await
+    .expect("derivation");
+    tx.commit().await.unwrap();
+
+    assert_eq!(evts.len(), 1, "eog-begonnen is emitted");
+    assert_eq!(
+        evts[0].data.get("bilanzkreis").and_then(|v| v.as_str()),
+        Some("BK-DEFAULT-1"),
+        "the NB's deposited default BK is resolved, not null"
+    );
+
+    let vs = PgVersorgungsStatusRepository::new(pool.clone());
+    let rec = vs.find(&malo(), TENANT).await.unwrap().expect("row");
+    assert_eq!(rec.lieferstatus.to_string(), "Ersatzversorgung");
+    assert_eq!(rec.eog_seit, Some(time::macros::date!(2026 - 11 - 15)));
+
+    // The history snapshot carries eog_seit, so ?at= reconstructs the §38 clock.
+    let at = vs
+        .find_at(&malo(), TENANT, time::macros::date!(2099 - 01 - 01))
+        .await
+        .unwrap()
+        .expect("history row");
+    assert_eq!(at.eog_seit, rec.eog_seit);
+    assert_eq!(
+        at.version, rec.version,
+        "history records the actual version"
+    );
 }
 
 // ── Per-MeLo dated MSB timeline (WiM Teil 2 UC 4.1.1) ─────────────────────────
@@ -468,7 +637,141 @@ async fn bilanzierung_write_derives_the_malo_fallgruppe_column() {
         Some("GABI_RLM_MIT_TAGESBAND"),
         "a future-dated Bilanzierung does not touch the current derived value"
     );
+
+    // An OLDER overlapping record is currently-effective by its own window but
+    // loses `find_at`'s ordering — it must not clobber the derived cache.
+    repo.upsert(&BilanzierungRecord {
+        malo_id: malo.to_owned(),
+        bilanzierungsbeginn: datetime!(2023-01-01 00:00 UTC),
+        bilanzierungsende: None,
+        bilanzkreis: None,
+        aggregationsverantwortung: None,
+        prognosegrundlage: None,
+        fallgruppenzuordnung: Some("GABI_RLM_OHNE_TAGESBAND".to_owned()),
+        data: serde_json::json!({"_typ": "BILANZIERUNG"}),
+        bo4e_version: "v202607.0.0".to_owned(),
+        tenant: tenant.to_owned(),
+        updated_at: time::OffsetDateTime::now_utc(),
+    })
+    .await
+    .expect("upsert older overlapping");
+    let fg3: Option<String> = sqlx::query_scalar("SELECT fallgruppe FROM malo WHERE malo_id = $1")
+        .bind(malo)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        fg3.as_deref(),
+        Some("GABI_RLM_MIT_TAGESBAND"),
+        "the derived cache follows find_at, not the row just written"
+    );
 }
+// ── Optimistic concurrency is enforced in SQL, not read-then-write ────────────
+
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn two_puts_with_the_same_if_match_cannot_both_win() {
+    use mako_markt::domain::Sparte;
+    use mako_markt::repository::MaloRepository as _;
+    use marktd::pg::PgMaloRepository;
+
+    let Some((pool, _pg)) = test_pool("malo_occ").await else {
+        return;
+    };
+    let repo = PgMaloRepository::new(pool.clone());
+    let m = malo();
+    let data = serde_json::json!({"_typ": "MARKTLOKATION"});
+
+    let v1 = repo
+        .upsert(&m, Sparte::Strom, data.clone(), vec![], None, "v202607.0.0")
+        .await
+        .expect("create");
+    assert_eq!(v1, 1);
+
+    let v2 = repo
+        .upsert(
+            &m,
+            Sparte::Strom,
+            data.clone(),
+            vec![],
+            Some(v1),
+            "v202607.0.0",
+        )
+        .await
+        .expect("first If-Match write wins");
+    assert_eq!(v2, 2, "the returned version is the one actually stored");
+
+    let conflict = repo
+        .upsert(&m, Sparte::Strom, data, vec![], Some(v1), "v202607.0.0")
+        .await;
+    assert!(
+        matches!(
+            conflict,
+            Err(mako_markt::error::MdmError::VersionConflict { .. })
+        ),
+        "the second writer with the stale If-Match is rejected, not silently applied"
+    );
+}
+
+// ── A backdated MSB correction leaves exactly one open assignment ─────────────
+
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_backdated_msb_assignment_does_not_leave_two_open_rows() {
+    use mako_markt::repository::MeloMsbRepository as _;
+    use marktd::pg::PgMeloMsbRepository;
+    use time::macros::date;
+
+    let Some((pool, _pg)) = test_pool("melo_msb_backdated").await else {
+        return;
+    };
+    let tenant = "9900000000002";
+    let melo = "DE0001112223334445556667778889990";
+    sqlx::query("INSERT INTO melo (melo_id, data) VALUES ($1, '{}'::jsonb)")
+        .bind(melo)
+        .execute(&pool)
+        .await
+        .expect("seed melo");
+
+    let repo = PgMeloMsbRepository::new(pool.clone());
+    repo.assign_msb(tenant, melo, "9900000000011", date!(2025 - 06 - 01))
+        .await
+        .expect("current assignment");
+    // Backdated correction: an earlier assignment arrives late.
+    repo.assign_msb(tenant, melo, "9900000000010", date!(2024 - 01 - 01))
+        .await
+        .expect("backdated assignment");
+
+    let hist = repo.history(tenant, melo).await.unwrap();
+    assert_eq!(
+        hist.iter().filter(|z| z.valid_to.is_none()).count(),
+        1,
+        "only the latest assignment stays open"
+    );
+    assert_eq!(
+        hist.iter()
+            .find(|z| z.msb_mp_id == "9900000000010")
+            .unwrap()
+            .valid_to,
+        Some(date!(2025 - 06 - 01)),
+        "the backdated row ends where the later one starts"
+    );
+    assert_eq!(
+        repo.find_msb_at(tenant, melo, date!(2024 - 06 - 01))
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("9900000000010"),
+    );
+    assert_eq!(
+        repo.find_msb_at(tenant, melo, date!(2025 - 07 - 01))
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("9900000000011"),
+    );
+}
+
 /// The Postgres container guard a test holds until it ends — dropping it removes
 /// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
 type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;

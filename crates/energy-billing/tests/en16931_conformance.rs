@@ -105,3 +105,79 @@ fn mixed_rate_invoice_maps_to_conformant_en16931() {
     // BG-23: two buckets (19 % and 7 %), taxable amounts summing to the line total.
     assert_eq!(en.vat_breakdown.len(), 2, "one BG-23 entry per rate");
 }
+
+/// §13b UStG reverse charge: every line is `AE`, the BG-23 breakdown is a single
+/// `AE` entry with zero tax, and it carries the § 14a Abs. 5 UStG statement
+/// (BR-AE-10). Deriving the category from the rate alone made these lines `Z` —
+/// a zero-rated supply, which says the opposite about who owes the VAT.
+#[test]
+fn reverse_charge_invoice_maps_to_ae_lines_and_breakdown() {
+    use energy_billing::en16931_map::{SECT13B_EXEMPTION_REASON, VATEX_REVERSE_CHARGE};
+
+    let elec: Product = serde_json::from_str(
+        r#"{"category":"STROM","grundpreis_ct_per_day":30.0,"arbeitspreis_ct_per_kwh":30.0}"#,
+    )
+    .unwrap();
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(100000),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        lf_mp_id: "9900000000001".to_owned(),
+        rechnungsnummer: "R-EN16931-13B".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: RegulatoryRates::default(),
+        // §13b Abs. 2 Nr. 5 lit. b UStG — the customer is a Stromwiederverkäufer.
+        reverse_charge: true,
+        ..Default::default()
+    };
+
+    let invoice = BillingEngine::new()
+        .add(ElectricityProvider::from_product(
+            &elec,
+            GridInput::default(),
+        ))
+        .add(MwStProvider::new(dec!(0.19)))
+        .bill(ctx, &quantities)
+        .unwrap();
+    assert_eq!(invoice.mwst_eur, dec!(0), "the supplier invoices net");
+
+    let en = invoice.to_en16931(
+        XRECHNUNG_SPEC_ID,
+        party("Stadtwerke Musterstadt GmbH", "9900000000001"),
+        party("Reseller GmbH", "51238696781"),
+    );
+
+    let report = validate(&en);
+    assert!(
+        report.is_valid(),
+        "en16931 findings: {:?}",
+        report.fatal().map(|f| &f.rule).collect::<Vec<_>>()
+    );
+
+    assert!(!en.lines.is_empty());
+    for line in &en.lines {
+        assert_eq!(
+            line.vat.category.as_str(),
+            "AE",
+            "every line is AE, never Z"
+        );
+    }
+    assert_eq!(en.vat_breakdown.len(), 1);
+    let ae = &en.vat_breakdown[0];
+    assert_eq!(ae.category.as_str(), "AE");
+    assert_eq!(ae.tax_amount.into_decimal(), dec!(0));
+    assert_eq!(
+        ae.exemption_reason.as_deref(),
+        Some(SECT13B_EXEMPTION_REASON)
+    );
+    assert_eq!(
+        ae.exemption_reason_code.as_ref().map(Code::as_str),
+        Some(VATEX_REVERSE_CHARGE)
+    );
+}

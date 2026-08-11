@@ -4,10 +4,7 @@
 use uuid::Uuid;
 use vertragd::{
     events::{build_cloud_event, parse_mako_outcome},
-    pg::{
-        VertragskomponenteRow, derive_vertrag_status, earliest_kuendigungsdatum,
-        extract_sub_from_bearer,
-    },
+    pg::{VertragskomponenteRow, derive_vertrag_status, earliest_kuendigungsdatum},
 };
 
 /// Build a minimal VertragskomponenteRow with only `status` set for testing.
@@ -158,45 +155,6 @@ fn build_cloud_event_produces_valid_structure() {
     assert!(uuid::Uuid::parse_str(event_id).is_ok());
 }
 
-// ── extract_sub_from_bearer ───────────────────────────────────────────────────
-
-/// Extracts `sub` from a valid JWT payload (base64url-encoded, no sig check).
-#[test]
-fn extracts_sub_from_valid_jwt() {
-    // Build a minimal JWT: header.payload (no sig needed for this function)
-    // payload: { "sub": "user-123", "iss": "https://example.com" }
-    let payload = r#"{"sub":"user-123","iss":"https://example.com"}"#;
-    let encoded = base64_encode(payload.as_bytes());
-    let token = format!("eyJhbGciOiJSUzI1NiJ9.{encoded}.fakesig");
-    let bearer = format!("Bearer {token}");
-    assert_eq!(
-        extract_sub_from_bearer(&bearer),
-        Some("user-123".to_owned())
-    );
-}
-
-/// Empty Authorization header → None.
-#[test]
-fn empty_bearer_returns_none() {
-    assert_eq!(extract_sub_from_bearer(""), None);
-    assert_eq!(extract_sub_from_bearer("Bearer "), None);
-}
-
-/// Token with only 2 segments (missing payload) → None.
-#[test]
-fn malformed_jwt_returns_none() {
-    assert_eq!(extract_sub_from_bearer("Bearer onlyone"), None);
-}
-
-/// JWT without `sub` claim → None.
-#[test]
-fn jwt_without_sub_returns_none() {
-    let payload = r#"{"iss":"https://example.com","email":"x@y.z"}"#;
-    let encoded = base64_encode(payload.as_bytes());
-    let token = format!("eyJ0eXAiOiJKV1QifQ.{encoded}.sig");
-    assert_eq!(extract_sub_from_bearer(&format!("Bearer {token}")), None);
-}
-
 // ── Preisgarantie guard logic (pure date arithmetic) ─────────────────────────
 
 /// Within guarantee window: wirksamkeit ≤ preisgarantie_bis → blocked.
@@ -244,40 +202,6 @@ fn preisanpassung_notification_window_is_42_days() {
         days_late < 42,
         "within notification window: {days_late} days"
     );
-}
-
-// ── Helper ────────────────────────────────────────────────────────────────────
-
-/// Minimal base64url encoding (no padding, URL-safe) for JWT test fixtures.
-fn base64_encode(data: &[u8]) -> String {
-    let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    let mut i = 0;
-    while i < data.len() {
-        let b0 = data[i] as u32;
-        let b1 = if i + 1 < data.len() {
-            data[i + 1] as u32
-        } else {
-            0
-        };
-        let b2 = if i + 2 < data.len() {
-            data[i + 2] as u32
-        } else {
-            0
-        };
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-        out.push(alphabet[((triple >> 18) & 63) as usize] as char);
-        out.push(alphabet[((triple >> 12) & 63) as usize] as char);
-        if i + 1 < data.len() {
-            out.push(alphabet[((triple >> 6) & 63) as usize] as char);
-        }
-        if i + 2 < data.len() {
-            out.push(alphabet[(triple & 63) as usize] as char);
-        }
-        i += 3;
-    }
-    // URL-safe: replace + → - and / → _; no padding
-    out.replace('+', "-").replace('/', "_")
 }
 
 // ── earliest_kuendigungsdatum (§14 StromGVV / §13 GasGVV) ────────────────────
@@ -811,4 +735,46 @@ fn gas_lieferbeginn_falls_back_to_malo_when_no_melo() {
         d,
     );
     assert_eq!(body["zaehlpunkt"], "51238696781");
+}
+
+// ── add_months (auto-renewal term arithmetic) ────────────────────────────────
+
+/// The renewal term is expressed in months, and `year + monate / 12` truncated
+/// every term shorter than a year to zero — a 1-, 3- or 6-month renewal renewed
+/// the contract to the day it had just ended, and 18 months became 12.
+#[test]
+fn a_renewal_term_shorter_than_a_year_still_moves_the_end_date() {
+    use time::macros::date;
+    use vertragd::pg::add_months;
+    let end = date!(2026 - 03 - 31);
+    assert_eq!(add_months(end, 1), date!(2026 - 04 - 30), "day clamps");
+    assert_eq!(add_months(end, 3), date!(2026 - 06 - 30));
+    assert_eq!(add_months(end, 6), date!(2026 - 09 - 30));
+    assert_eq!(add_months(end, 12), date!(2027 - 03 - 31));
+    assert_eq!(add_months(end, 18), date!(2027 - 09 - 30), "not 12");
+    assert_eq!(add_months(date!(2026 - 11 - 15), 3), date!(2027 - 02 - 15));
+}
+
+/// The renewal runs from the term that ended, not from today, and catches up:
+/// the worker runs once a day, so an outage otherwise left the contract expired
+/// with its renewal permanently skipped.
+#[test]
+fn an_overdue_term_is_caught_up_in_one_pass() {
+    use time::macros::date;
+    use vertragd::pg::renewed_vertragsende;
+    let today = date!(2026 - 08 - 11);
+
+    // Ended yesterday, annual term.
+    assert_eq!(
+        renewed_vertragsende(date!(2026 - 08 - 10), 12, today),
+        Some(date!(2027 - 08 - 10))
+    );
+    // Two monthly terms missed — the result must be in the future, not one term
+    // past an end date that is still behind us. (The day clamps at the first
+    // short month and stays there, as everywhere else in this arithmetic.)
+    let caught_up = renewed_vertragsende(date!(2026 - 05 - 31), 1, today).expect("renews");
+    assert!(caught_up > today, "{caught_up} must be in force");
+    assert_eq!(caught_up, date!(2026 - 08 - 30));
+    // A non-positive term cannot renew anything.
+    assert_eq!(renewed_vertragsende(date!(2026 - 08 - 10), 0, today), None);
 }

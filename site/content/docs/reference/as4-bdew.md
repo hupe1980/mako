@@ -175,7 +175,7 @@ Company X
 For outbound messages the EDIFACT `NAD+MS` sender is set automatically per workflow
 (Strom workflows use the BDEW code, Gas workflows use the DVGW code).
 
-#### Signing cert and `<eb:From>` in the current release
+#### Signing cert and `<eb:From>`
 
 `makod` maintains **one outbound `SessionContext`** backed by a single signing
 key/cert (configured via `--as4-signing-key-pem` / `--as4-signing-cert-pem`). This
@@ -471,8 +471,10 @@ let uri: String = BdewAction::Partin.as_uri(); // "urn:bdew:as4:service:PARTIN"
 
 ---
 
+### Two-node local loopback test
 
-one as sender, one as receiver — using self-signed test certificates:
+Run two `makod` instances — one as sender, one as receiver — using self-signed
+test certificates:
 
 ```toml
 # nb.toml

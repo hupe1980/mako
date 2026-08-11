@@ -38,13 +38,30 @@ async fn pg_pool() -> Option<(sqlx::PgPool, PgContainer)> {
     Some((pool, container))
 }
 
-fn runtime(pool: sqlx::PgPool, tenant: &str) -> WorkerRuntime {
+/// Minimal always-200 CloudEvent sink. The sweeps only stamp
+/// `deadline_alerted_at` (and only report an alert) once the POST succeeded, so
+/// they need a receiver that is actually up.
+async fn event_sink() -> String {
+    let app = axum::Router::new().route(
+        "/events",
+        axum::routing::post(|| async { axum::http::StatusCode::NO_CONTENT }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    format!("http://{addr}/events")
+}
+
+/// An outbound URL nothing listens on — every emit fails.
+const DEAD_SINK: &str = "http://127.0.0.1:9/none";
+
+fn runtime(pool: sqlx::PgPool, tenant: &str, outbound_url: &str) -> WorkerRuntime {
     WorkerRuntime {
         pool,
         client: Arc::new(reqwest::Client::new()),
-        // A dummy outbound URL — emission is fire-and-forget, so the failing
-        // POST never affects the sweep's DB effects or return value.
-        outbound_url: Arc::new("http://127.0.0.1:9/none".to_owned()),
+        outbound_url: Arc::new(outbound_url.to_owned()),
         outbound_secret: None,
         tenant: tenant.to_owned(),
         deadline_sweep_secs: 900,
@@ -122,8 +139,9 @@ async fn deadline_sweep_alerts_once_for_approaching_open_processes() {
         false,
     )
     .await;
-    // Already overdue → excluded (handled by the overdue/aperak-timeout path).
-    insert_projection(
+    // Already overdue and still open → alerted as a breach. Skipping these
+    // meant an obsd outage longer than the warn window produced no event at all.
+    let breached = insert_projection(
         &pool,
         tenant,
         55001,
@@ -133,24 +151,58 @@ async fn deadline_sweep_alerts_once_for_approaching_open_processes() {
     )
     .await;
 
-    let rt = runtime(pool.clone(), tenant);
+    let rt = runtime(pool.clone(), tenant, &event_sink().await);
 
-    // First sweep alerts exactly the one approaching-open process.
-    assert_eq!(sweep_deadlines(&rt).await.expect("sweep"), 1);
-    let alerted: Option<OffsetDateTime> = sqlx::query_scalar(
-        "SELECT deadline_alerted_at FROM process_projections WHERE process_id=$1",
-    )
-    .bind(approaching)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(
-        alerted.is_some(),
-        "the approaching process is marked alerted"
-    );
+    // First sweep alerts the approaching process and the breached one.
+    assert_eq!(sweep_deadlines(&rt).await.expect("sweep"), 2);
+    for id in [approaching, breached] {
+        let alerted: Option<OffsetDateTime> = sqlx::query_scalar(
+            "SELECT deadline_alerted_at FROM process_projections WHERE process_id=$1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(alerted.is_some(), "{id} is marked alerted");
+    }
 
     // Second sweep is idempotent — nothing new to alert.
     assert_eq!(sweep_deadlines(&rt).await.expect("sweep"), 0);
+}
+
+/// A downed webhook target must not consume the warning: nothing is stamped, so
+/// the next sweep retries the same processes.
+#[tokio::test]
+async fn deadline_sweep_does_not_stamp_when_the_emit_fails() {
+    let Some((pool, _pg)) = pg_pool().await else {
+        return;
+    };
+    let tenant = "9900000000004";
+    let now = OffsetDateTime::now_utc();
+    let id = insert_projection(
+        &pool,
+        tenant,
+        55001,
+        "initiated",
+        Some(now + Duration::hours(6)),
+        false,
+    )
+    .await;
+
+    let dead = runtime(pool.clone(), tenant, DEAD_SINK);
+    assert_eq!(sweep_deadlines(&dead).await.expect("sweep"), 0);
+    let alerted: Option<OffsetDateTime> = sqlx::query_scalar(
+        "SELECT deadline_alerted_at FROM process_projections WHERE process_id=$1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(alerted.is_none(), "an undelivered alert is not stamped");
+
+    // With the sink back up the same process is alerted.
+    let live = runtime(pool.clone(), tenant, &event_sink().await);
+    assert_eq!(sweep_deadlines(&live).await.expect("sweep"), 1);
 }
 
 #[tokio::test]
@@ -170,7 +222,8 @@ async fn parity_sweep_alerts_when_affiliate_is_favoured_beyond_threshold() {
         insert_projection(&pool, tenant, 55001, state, None, false).await;
     }
 
-    let rt = runtime(pool.clone(), tenant);
+    let sink = event_sink().await;
+    let rt = runtime(pool.clone(), tenant, &sink);
     assert!(
         sweep_parity(&rt).await.expect("parity sweep"),
         "a 50 pp affiliate-favoured gap must alert"
@@ -186,7 +239,7 @@ async fn parity_sweep_alerts_when_affiliate_is_favoured_beyond_threshold() {
         let s = if i == 0 { "rejected" } else { "completed" };
         insert_projection(&pool, tenant2, 55001, s, None, false).await;
     }
-    let rt2 = runtime(pool, tenant2);
+    let rt2 = runtime(pool, tenant2, &sink);
     assert!(
         !sweep_parity(&rt2).await.expect("parity sweep"),
         "a within-threshold gap must not alert"

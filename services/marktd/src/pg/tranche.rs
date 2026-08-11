@@ -133,8 +133,9 @@ impl TrancheRepository for PgTrancheRepository {
         page: u32,
         size: u32,
     ) -> Result<PageResult<TrancheRecord>, MdmError> {
-        let offset = i64::from(page * size);
+        let size = size.min(500);
         let limit = i64::from(size);
+        let offset = i64::from(page) * limit;
         let total: i64 =
             sqlx::query_scalar("SELECT COUNT(*) FROM tranche WHERE tenant = $1 AND malo_id = $2")
                 .bind(tenant)

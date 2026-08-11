@@ -529,12 +529,23 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                                         outcome        = ?outcome,
                                         "AS4 ingest: Phase 2 command dispatched",
                                     ),
-                                    Err(e) => tracing::warn!(
-                                        as4_message_id = %msg_id,
-                                        workflow       = %wf_name,
-                                        error          = %e,
-                                        "AS4 ingest: Phase 2 command dispatch failed (non-fatal)",
-                                    ),
+                                    Err(e) => {
+                                        dead_letter_dispatch_failure(
+                                            self.ingest.dl_sink.as_ref(),
+                                            &msg_id,
+                                            message_type.as_deref(),
+                                            pid_val,
+                                            wf_name,
+                                            &e,
+                                        );
+                                        tracing::error!(
+                                            as4_message_id = %msg_id,
+                                            workflow       = %wf_name,
+                                            error          = %e,
+                                            "AS4 ingest: Phase 2 command dispatch failed — \
+                                             dead-lettered",
+                                        );
+                                    }
                                 }
                             }
 
@@ -559,9 +570,21 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                 // does not satisfy this EDIFACT-level obligation.
                 if let Some(contrl_svc) = self.contrl_ack.as_deref() {
                     let refs: Vec<&AnyMessage> = parsed_msgs.iter().collect();
-                    contrl_svc
+                    if let Err(e) = contrl_svc
                         .emit_for_interchange(&refs, &interchange_ref, &recipient_mp_id)
-                        .await;
+                        .await
+                    {
+                        use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                        self.ingest
+                            .dl_sink
+                            .reject(&DeadLetterReason::ProcessingError {
+                                message: format!("contrl_ack_failed: {e}"),
+                                context: AuditContext::now()
+                                    .with_message_type("CONTRL")
+                                    .with_receiver_eic(recipient_mp_id.as_str())
+                                    .with_message_ref(interchange_ref.as_str()),
+                            });
+                    }
                 }
 
                 // ── Synchronous receipt (BDEW AS4-Profil §2.2.4) ──────────────
@@ -576,6 +599,33 @@ impl As4AxumHandler for BdewAs4IngestHandler {
             }
         }
     }
+}
+
+// ── Dispatch failure dead-letter ──────────────────────────────────────────────
+
+/// Record a Phase-2 dispatch failure as a dead letter (§ 147 AO / GoBD).
+///
+/// A failed dispatch is the message's last chance: the AS4 dedup entry is
+/// already durable, so the sender's 72-hour retries come back as duplicates,
+/// and the synchronous receipt tells it the message arrived. Without this entry
+/// the message would simply be gone — the same reason the parse-error and
+/// unknown-PID paths dead-letter.
+fn dead_letter_dispatch_failure(
+    sink: &dyn mako_engine::dead_letter::DeadLetterSink,
+    as4_message_id: &str,
+    message_type: Option<&str>,
+    pid: mako_engine::ids::Pid,
+    workflow: &str,
+    error: &mako_engine::error::EngineError,
+) {
+    use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+    sink.reject(&DeadLetterReason::ProcessingError {
+        message: format!("dispatch_failed: workflow {workflow}: {error}"),
+        context: AuditContext::now()
+            .with_message_type(message_type.unwrap_or(""))
+            .with_pid(pid)
+            .with_message_ref(as4_message_id),
+    });
 }
 
 // ── Router builder ────────────────────────────────────────────────────────────
@@ -804,6 +854,62 @@ mod sender_extract_tests {
         assert_eq!(
             extract_sender_mp_id(soap).as_deref(),
             Some("10XDE-EON-NETZ-I")
+        );
+    }
+}
+
+#[cfg(test)]
+mod dispatch_failure_tests {
+    use std::sync::Mutex;
+
+    use mako_engine::dead_letter::{DeadLetterReason, DeadLetterSink};
+
+    use super::dead_letter_dispatch_failure;
+
+    #[derive(Default)]
+    struct CapturingSink(Mutex<Vec<(String, String)>>);
+
+    impl DeadLetterSink for CapturingSink {
+        fn reject(&self, reason: &DeadLetterReason) {
+            let detail = match reason {
+                DeadLetterReason::ProcessingError { message, .. } => message.clone(),
+                other => format!("{other:?}"),
+            };
+            self.0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((reason.label().to_owned(), detail));
+        }
+    }
+
+    /// A dispatch failure used to be logged as "non-fatal" while the receipt
+    /// still went out and the dedup entry stayed durable — the message was lost
+    /// with no § 147 AO trace. It must leave a dead letter naming the failure.
+    #[test]
+    fn a_failed_dispatch_is_dead_lettered() {
+        let sink = CapturingSink::default();
+        dead_letter_dispatch_failure(
+            &sink,
+            "as4-msg-1",
+            Some("UTILMD"),
+            mako_engine::ids::Pid::new(55001),
+            "gpke-supplier-change",
+            &mako_engine::error::EngineError::Registry {
+                message: "store unavailable".to_owned(),
+                transient: false,
+            },
+        );
+        let recorded = sink.0.lock().expect("not poisoned");
+        assert_eq!(recorded.len(), 1, "exactly one dead letter");
+        let (label, detail) = &recorded[0];
+        assert_eq!(label, "processing_error");
+        assert!(
+            detail.starts_with("dispatch_failed: workflow gpke-supplier-change:"),
+            "the reason must identify the failing dispatch: {detail}"
+        );
+        assert!(
+            detail.contains("store unavailable"),
+            "the underlying error must survive into the audit trail: {detail}"
         );
     }
 }

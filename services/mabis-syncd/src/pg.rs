@@ -45,6 +45,9 @@ pub struct InsertRunParams<'a> {
     pub bilanzierungsgebiet_id: &'a str,
     pub period_from: Date,
     pub period_to: Date,
+    /// Ascending version (§3.8.2), truncated to whole seconds by the caller so
+    /// that it survives the second-precision wire format unchanged.
+    pub version: OffsetDateTime,
     /// Which settlement run the submission belongs to.
     pub abrechnungslauf: Abrechnungslauf,
     /// Phase the submission is made in, which decides the Datenstatus the BIKO
@@ -101,20 +104,23 @@ impl SubmissionPhase {
 
 /// Create a new submission run in `pending` status.
 pub async fn insert_run(pool: &PgPool, p: InsertRunParams<'_>) -> Result<Uuid, sqlx::Error> {
-    // `version` defaults to `now()`, which is ascending by construction and is
-    // what MSCONS SG6 DTM+293 carries. A resubmission for the same period is a
-    // correction, so it takes a new version rather than replacing the old row.
+    // `version` is supplied rather than defaulted, because it must be truncated
+    // to whole seconds: MSCONS SG6 DTM+293 carries no more, and a stored value
+    // with microseconds can never be matched again when the BIKO echoes it back.
+    // A resubmission for the same period is a correction, so it takes a new
+    // version rather than replacing the old row.
     let row = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO submission_runs
-         (bilanzierungsgebiet_id, period_from, period_to,
+         (bilanzierungsgebiet_id, period_from, period_to, version,
           abrechnungslauf, phase, corrects_run_id,
           sender_mp_id, receiver_mp_id, tenant)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
          RETURNING id",
     )
     .bind(p.bilanzierungsgebiet_id)
     .bind(p.period_from)
     .bind(p.period_to)
+    .bind(p.version)
     .bind(p.abrechnungslauf.as_str())
     .bind(p.phase.as_str())
     .bind(p.corrects_run_id)
@@ -443,5 +449,65 @@ pub async fn open_korrekturbedarf(
     )
     .bind(tenant)
     .fetch_all(pool)
+    .await
+}
+
+/// Close the Korrekturbedarf raised against `corrected_run_id`.
+///
+/// §9.8.1: the corrected BG-SZR *is* the answer to the negative Prüfmitteilung.
+/// Without this the obligation stays open on `/korrekturbedarf` even after the
+/// correction has been filed and acked.
+///
+/// Returns the number of Prüfmitteilungen closed.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn close_korrekturbedarf(
+    pool: &PgPool,
+    corrected_run_id: Uuid,
+    correcting_run_id: Uuid,
+) -> Result<u64, sqlx::Error> {
+    let res = sqlx::query(
+        "UPDATE pruefmitteilung
+            SET corrected_by_run_id = $2
+          WHERE run_id = $1 AND NOT positiv AND corrected_by_run_id IS NULL",
+    )
+    .bind(corrected_run_id)
+    .bind(correcting_run_id)
+    .execute(pool)
+    .await?;
+    Ok(res.rows_affected())
+}
+
+/// `true` when a run for this period already exists that has not failed.
+///
+/// The scheduler wakes every 5 minutes and its due-date test is true for the
+/// whole `run_hour`, so without this it filed the same binding Summenzeitreihe
+/// a dozen times over.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn has_live_run_for_period(
+    pool: &PgPool,
+    tenant: &str,
+    bilanzierungsgebiet_id: &str,
+    period_from: Date,
+    period_to: Date,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (
+             SELECT 1 FROM submission_runs
+              WHERE tenant = $1 AND bilanzierungsgebiet_id = $2
+                AND period_from = $3 AND period_to = $4
+                AND status <> 'failed'
+         )",
+    )
+    .bind(tenant)
+    .bind(bilanzierungsgebiet_id)
+    .bind(period_from)
+    .bind(period_to)
+    .fetch_one(pool)
     .await
 }

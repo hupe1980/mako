@@ -68,16 +68,121 @@ async fn upsert_product_writes_tenant_and_reads_are_tenant_scoped() {
     assert_eq!(stored, tenant_a);
 
     // Tenant A reads its product; tenant B (same lf_mp_id path) sees nothing.
-    let seen_by_a = pg::fetch_product(&pool, tenant_a, tenant_a, "P-1")
+    let seen_by_a = pg::fetch_product(&pool, tenant_a, tenant_a, "P-1", None)
         .await
         .expect("read");
     assert!(seen_by_a.is_some(), "owner reads its own product");
-    let seen_by_b = pg::fetch_product(&pool, tenant_a, tenant_b, "P-1")
+    let seen_by_b = pg::fetch_product(&pool, tenant_a, tenant_b, "P-1", None)
         .await
         .expect("read");
     assert!(
         seen_by_b.is_none(),
         "a different tenant must not read another operator's product by lf_mp_id"
+    );
+}
+
+/// A PUT of the same product version must update, and two tenants must not
+/// share a row.
+///
+/// The unique key was `(lf_mp_id, product_code, valid_from)`: no tenant, so
+/// tenant B's PUT overwrote tenant A's row — and NULLs are distinct under a
+/// plain UNIQUE, so every PUT of an open-ended product inserted another
+/// duplicate that `fetch_product`'s LIMIT 1 then picked among at random.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_product_version_has_one_row_per_tenant_even_without_a_valid_from() {
+    let Some((pool, _pg)) = test_pool("product_identity").await else {
+        return;
+    };
+    let tenant_a = "9900000000001";
+    let tenant_b = "9900000000002";
+    let open_ended = |name: &str| pg::ProductUpsertRequest {
+        name: name.to_owned(),
+        valid_from: None,
+        ..strom_product("P-OPEN")
+    };
+
+    for name in ["first", "second", "third"] {
+        pg::upsert_product(&pool, tenant_a, tenant_a, "P-OPEN", open_ended(name))
+            .await
+            .expect("open-ended PUT");
+    }
+    let rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM products WHERE product_code = 'P-OPEN' AND tenant = $1",
+    )
+    .bind(tenant_a)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(rows, 1, "a NULL valid_from must conflict, not duplicate");
+
+    let current = pg::fetch_product(&pool, tenant_a, tenant_a, "P-OPEN", None)
+        .await
+        .expect("read")
+        .expect("exists");
+    assert_eq!(current.name, "third", "the last PUT is the current version");
+
+    // The other tenant's PUT is its own row, not an overwrite.
+    pg::upsert_product(&pool, tenant_a, tenant_b, "P-OPEN", open_ended("theirs"))
+        .await
+        .expect("other tenant PUT");
+    let mine = pg::fetch_product(&pool, tenant_a, tenant_a, "P-OPEN", None)
+        .await
+        .expect("read")
+        .expect("exists");
+    assert_eq!(
+        mine.name, "third",
+        "another tenant must not overwrite this row"
+    );
+}
+
+/// A price version dated in the future is not yet the current one, and a
+/// retroactive read gets the version that was valid then.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_future_dated_price_version_is_not_current_yet() {
+    let Some((pool, _pg)) = test_pool("product_as_of").await else {
+        return;
+    };
+    let tenant = "9900000000001";
+    for (name, from) in [("alt", "2026-01-01"), ("neu", "2099-01-01")] {
+        pg::upsert_product(
+            &pool,
+            tenant,
+            tenant,
+            "P-VER",
+            pg::ProductUpsertRequest {
+                name: name.to_owned(),
+                valid_from: Some(from.to_owned()),
+                ..strom_product("P-VER")
+            },
+        )
+        .await
+        .expect("versioned PUT");
+    }
+
+    let today = pg::fetch_product(&pool, tenant, tenant, "P-VER", None)
+        .await
+        .expect("read")
+        .expect("exists");
+    assert_eq!(
+        today.name, "alt",
+        "a version valid from 2099 is not current"
+    );
+
+    let then = pg::fetch_product(
+        &pool,
+        tenant,
+        tenant,
+        "P-VER",
+        Some(time::macros::date!(2099 - 06 - 01)),
+    )
+    .await
+    .expect("read")
+    .expect("exists");
+    assert_eq!(
+        then.name, "neu",
+        "as_of picks the version valid at that date"
     );
 }
 
@@ -137,7 +242,7 @@ async fn product_assignment_and_tarifwechsel_preserve_one_active_row() {
         "exactly one active assignment after Tarifwechsel"
     );
 
-    let cur = pg::get_customer_product(&pool, "51238696781", tenant, tenant)
+    let cur = pg::get_customer_product(&pool, "51238696781", tenant, tenant, None)
         .await
         .expect("read")
         .expect("has active product");

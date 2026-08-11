@@ -76,18 +76,24 @@ async fn approval_queue_enqueue_list_approve() {
 
     // Enqueue
     queue
-        .enqueue(&ApprovalQueueEntry {
-            id,
-            process_id,
-            pid: 55001,
-            malo_id: Some("12345678901".to_owned()),
-            reason: "test E_0624 event".to_owned(),
-            status: QueueStatus::Pending,
-            expires_at: now + time::Duration::minutes(45),
-            created_at: now,
-            decided_at: None,
-            tenant: "9900357000004".to_owned(),
-        })
+        .enqueue(
+            &ApprovalQueueEntry {
+                id,
+                ..ApprovalQueueEntry::pending(
+                    process_id,
+                    55001,
+                    Some("12345678901".to_owned()),
+                    "test E_0624 event".to_owned(),
+                    now + time::Duration::minutes(45),
+                    "9900357000004".to_owned(),
+                )
+            }
+            .with_commands(
+                "gpke.nb-lieferende.bestaetigen",
+                "gpke.nb-lieferende.ablehnen",
+                None,
+            ),
+        )
         .await
         .expect("enqueue approval entry");
 
@@ -108,21 +114,45 @@ async fn approval_queue_enqueue_list_approve() {
         .expect("find_by_id")
         .expect("entry exists");
     assert_eq!(entry.process_id, process_id);
+    assert_eq!(
+        entry.approve_command.as_deref(),
+        Some("gpke.nb-lieferende.bestaetigen")
+    );
 
-    // Approve
-    let affected = queue.approve(id, "9900357000004").await.expect("approve");
-    assert!(affected, "approve must affect 1 row");
+    // Claim: the decision is taken before any market command is dispatched.
+    let claimed = queue
+        .claim(id, "9900357000004", QueueStatus::Approved)
+        .await
+        .expect("claim")
+        .expect("a Pending entry is claimable");
+    assert!(matches!(claimed.status, QueueStatus::Approved));
+    assert!(claimed.decided_at.is_some(), "the claim stamps decided_at");
 
-    let approved = queue
+    // A second operator cannot claim the same entry — one decision, one command.
+    assert!(
+        queue
+            .claim(id, "9900357000004", QueueStatus::Rejected)
+            .await
+            .expect("second claim")
+            .is_none(),
+        "an already-decided entry must not be claimable again"
+    );
+
+    // Releasing the claim (dispatch failed) makes it retryable.
+    queue.unclaim(id, "9900357000004").await.expect("unclaim");
+    let released = queue
         .find_by_id(id, "9900357000004")
         .await
-        .expect("find approved")
+        .expect("find released")
         .expect("entry still exists");
-    assert!(matches!(approved.status, QueueStatus::Approved));
-    assert!(
-        approved.decided_at.is_some(),
-        "decided_at must be set after approve"
-    );
+    assert!(matches!(released.status, QueueStatus::Pending));
+    assert!(released.decided_at.is_none());
+
+    queue
+        .claim(id, "9900357000004", QueueStatus::Approved)
+        .await
+        .expect("re-claim")
+        .expect("a released entry is claimable again");
 
     // Expire stale (no stale entries — all decided)
     let expired_count = queue.expire_stale().await.expect("expire stale");

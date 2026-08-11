@@ -165,7 +165,12 @@ message is dead-lettered.
 | ERP → marktd | `PUT /api/v1/nb-contracts/{id}` | Upsert NB contract with full BO4E `Vertrag` payload |
 | obsd API → ERP | `GET /obs/kpis` | BNetzA KPI report — §20 EnWG parity, STP rates, decision times |
 
-### Full service topology
+### ERP-facing integration topology
+
+The services below are the ones an ERP integration touches directly. They are a
+selection, not the whole platform — see [Architecture — Service
+topology](@/docs/architecture/_index.md#service-topology) for all 17 services and
+how they relate.
 
 ```mermaid
 graph TB
@@ -176,6 +181,9 @@ graph TB
     edmd["edmd :8380 · PostgreSQL<br/>Vec<Energiemenge> deliveries<br/>Lastgang · MeterBillingPeriod"]
     obsd["obsd :8480 · PostgreSQL<br/>process projections<br/>BNetzA §20 KPI reports"]
     processd["processd :8580<br/>NB STP netz-checker<br/>LF E_0624 auto-response"]
+    billingd["billingd :9280 · PostgreSQL<br/>energy billing · EN 16931<br/>XRechnung CII / PEPPOL UBL"]
+    outputd["outputd :9880<br/>template store · ZUGFeRD PDF/A-3<br/>Textform proofs"]
+    accountingd["accountingd :9380 · PostgreSQL<br/>double-entry ledger · Kontokorrent<br/>SEPA pain.008 / camt.05x"]
 
     ERP -->|"PUT /api/v1/malo/{id}<br/>PUT /api/v1/nb-contracts/{id}<br/>(typed BO4E payload)"| marktd
     ERP -->|"POST /api/v1/commands<br/>(initiate Lieferbeginn, …)"| makod
@@ -194,6 +202,10 @@ graph TB
 
     ERP -->|"GET /api/v1/deliveries/{malo_id}<br/>(Vec<Energiemenge>)<br/>GET /obs/kpis"| edmd
     ERP -.->|"GET /obs/kpis<br/>GET /obs/overdue"| obsd
+
+    billingd -->|"render · pin template hash"| outputd
+    billingd -->|"de.billing.rechnung.erstellt"| accountingd
+    ERP -.->|"GET /open-items<br/>GET /trial-balance"| accountingd
 ```
 
 Every `de.mako.*` event from `makod` flows through `marktd`'s EventBus fan-out,
@@ -225,7 +237,7 @@ re-enqueued — no lost APERAK.
 ### Event types
 
 See the event type table in the [CloudEvents envelope schema](#cloudevents-envelope-schema)
-section above.
+section below.
 
 ### PID → event mapping
 
@@ -522,9 +534,9 @@ to this API.
 | BO4E `_typ` | `marktrolle` / context | PID family |
 |---|---|---|
 | `VERTRAG` (Beginn, Strom) | `LIEFERANT` | GPKE 55001 |
-| `VERTRAG` (Ende, Strom) | `LIEFERANT` | GPKE 55003 |
+| `VERTRAG` (Ende, Strom) | `LIEFERANT` | GPKE 55004 |
 | `VERTRAG` (Beginn, Gas) | `LIEFERANT` | GeLi Gas 44001 |
-| `ZAEHLER` (Gerätewechsel) | — | WiM 11001 |
+| `ZAEHLER` (Geräteübernahme) | `MESSSTELLENBETREIBER` | WiM ORDERS 17001/17002 |
 | `RECHNUNG` | `BKV` | MABIS 13003 |
 
 ### Event-driven inbound (`ErpCommandSource`)
@@ -979,15 +991,20 @@ invoicd :8280
                                AS4 → NB
 ```
 
-### Five plausibility checks
+### Six plausibility checks
 
 | Check | What it verifies |
 |---|---|
 | Period validity | `rechnungsperiode.startdatum` ≤ `enddatum`; line-item periods via `lieferungszeitraum` |
+| Zahlungsziel | `faelligkeitsdatum` is not before `rechnungsdatum` (dispute) and does not exceed `max_zahlungsziel_days` — 30 days by default (warn). Source: §7 Allgemeine Festlegungen V6.1d |
 | Position arithmetic | `position.positions_menge × einzelpreis` ≈ `gesamtpreis` (within `arithmetic_tolerance`) |
 | Document total | Sum of `rechnungspositionen[*].gesamtpreis` ≈ `gesamtnetto` (within `total_tolerance`) |
-| Tariff match | Each position's unit price falls within the registered tariff band ± `tariff_tolerance` |
-| Tariff found | A tariff entry for the MaLo + period exists in the tariff store (only when `require_tariff = true`) |
+| Tariff match | Each position's unit price falls within the registered tariff band ± `tariff_tolerance`; a missing tariff entry for the MaLo + period is a finding whose severity follows `require_tariff` |
+| MMM settlement price | For MMM invoices (PIDs 31005, 31006, 31007, 31008), `mehr_preis` / `minder_preis` positions match the MMMA reference prices held in `marktd`, within tolerance |
+
+A Stornorechnung (`ist_storno = true`) must reference the original invoice via
+`original_rechnungsnummer`, and the tariff check is skipped for it — a Storno
+carries the negated original amounts, not tariff positions.
 
 > **BO4E v202607 field names:** `Rechnungsposition` uses `gesamtpreis` (line total)
 > and `lieferungszeitraum` (delivery period) instead of the v202501 `teilsumme_netto`
@@ -1048,7 +1065,8 @@ store is needed.
 
 With `invoicd` deployed, the ERP's billing integration is narrowed to:
 
-1. Seeding tariffs in `invoicd` when rates change.
+1. Uploading the price sheet to `marktd` when rates change — `invoicd` fetches it
+   from there at check time.
 2. Receiving `de.mako.process.completed` (settlement confirmed) or
    `de.mako.process.failed` (manual review required) events from `marktd`
    to update the ERP's payment status.

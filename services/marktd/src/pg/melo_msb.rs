@@ -60,19 +60,34 @@ impl MeloMsbRepository for PgMeloMsbRepository {
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
+        // A backdated correction must not leave two open assignments: the new
+        // row ends where the next one starts (half-open `[from, to)`), so the
+        // later assignment stays the open one.
+        let next_start: Option<Date> = sqlx::query_scalar(
+            r"SELECT MIN(valid_from) FROM melo_msb_zuordnungen
+              WHERE tenant = $1 AND melo_id = $2 AND valid_from > $3",
+        )
+        .bind(tenant)
+        .bind(melo_id)
+        .bind(valid_from)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?;
+
         // Insert (or overwrite) the assignment effective `valid_from`.
         sqlx::query(
             r"INSERT INTO melo_msb_zuordnungen (tenant, melo_id, msb_mp_id, valid_from, valid_to)
-              VALUES ($1, $2, $3, $4, NULL)
+              VALUES ($1, $2, $3, $4, $5)
               ON CONFLICT (tenant, melo_id, valid_from) DO UPDATE
               SET msb_mp_id = EXCLUDED.msb_mp_id,
-                  valid_to = NULL,
+                  valid_to = EXCLUDED.valid_to,
                   updated_at = now()",
         )
         .bind(tenant)
         .bind(melo_id)
         .bind(msb_mp_id)
         .bind(valid_from)
+        .bind(next_start)
         .execute(&mut *tx)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;

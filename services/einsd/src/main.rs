@@ -158,12 +158,15 @@ impl Daemon for Einsd {
             }
         });
 
-        // Background worker: auto-settle any active plant with no receipt for the
-        // previous month.
+        // Background worker: auto-settle any active plant with no successful
+        // receipt for the previous month.
         //
-        // Runs once 60 s after startup and then on a fixed ~23 h interval — it does
-        // not wait for a particular day of the month. Settling is idempotent per
-        // (plant, period), so a plant already settled is skipped rather than rebilled.
+        // Runs on a fixed ~23 h interval but only from `auto_settle_from_day`
+        // onwards: the ÜNB publishes the Marktwert around the 5th and edmd's
+        // month is not complete before then, so an earlier run only produced
+        // `price_missing` / `no_data` receipts. Settling is idempotent per
+        // (plant, period), so a plant already settled is skipped rather than
+        // rebilled — and one that was not is retried.
         //
         // EEG Vergütung must be paid monthly per §23 EEG 2023. The NB is responsible
         // for initiating payment within 30 days of the billing month end.
@@ -171,10 +174,20 @@ impl Daemon for Einsd {
         let auto_cfg = Arc::clone(&cfg);
         let auto_client = Arc::clone(&http_client);
         tokio::spawn(async move {
+            let from_day = auto_cfg.auto_settle_from_day.unwrap_or(7);
             // Wait for startup before first run.
             tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
             loop {
                 let now = time::OffsetDateTime::now_utc();
+                if now.day() < from_day {
+                    tracing::debug!(
+                        day = now.day(),
+                        from_day,
+                        "auto-settle worker: waiting for the ÜNB Marktwert window"
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_secs(82_800)).await;
+                    continue;
+                }
                 // Settle the previous calendar month.
                 let prev_month_year = if now.month() as u8 == 1 {
                     now.year() - 1
@@ -187,11 +200,34 @@ impl Daemon for Einsd {
                     now.month() as i16 - 1
                 };
 
-                // Resolve EPEX price for previous month.
-                let epex = pg::fetch_epex_price(&auto_pool, prev_month_year as i16, prev_month)
-                    .await
-                    .ok()
-                    .flatten();
+                // Resolve EPEX price for previous month. A missing price and a
+                // failed lookup are different problems — one waits for an
+                // import, the other for an operator — so they are logged apart.
+                let epex = match pg::fetch_epex_price(
+                    &auto_pool,
+                    prev_month_year as i16,
+                    prev_month,
+                )
+                .await
+                {
+                    Ok(price) => {
+                        if price.is_none() {
+                            tracing::info!(
+                                year = prev_month_year,
+                                month = prev_month,
+                                "auto-settle worker: no EPEX monthly price imported yet"
+                            );
+                        }
+                        price
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            year = prev_month_year, month = prev_month, error = %e,
+                            "auto-settle worker: EPEX monthly price lookup failed"
+                        );
+                        None
+                    }
+                };
 
                 let plants = pg::list_unsettled(
                     &auto_pool,
@@ -251,7 +287,6 @@ impl Daemon for Einsd {
                             einsd::pg::SettleOverrides {
                                 einspeisemenge_kwh: kwh,
                                 epex_avg_ct_kwh: epex,
-                                managementpraemie_ct_override: None,
                                 einspeisemanagement_kwh: None,
                                 kwh_during_negative_epex: neg_kwh,
                                 negative_price_quarter_hours: neg_qh,

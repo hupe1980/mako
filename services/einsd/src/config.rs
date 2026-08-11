@@ -61,6 +61,15 @@ pub struct EinsdConfig {
     /// Interval in seconds between Jahresmarktwert auto-import runs (default: 86400, once/day).
     /// On startup, the worker runs once after a 60-second delay.
     pub jahresmarktwert_import_interval_secs: Option<u64>,
+
+    /// Earliest day of the month on which the auto-settle worker settles the
+    /// previous month. Defaults to 7.
+    ///
+    /// The ÜNB publishes the Marktwert around the 5th and edmd's month is not
+    /// complete before then. Running earlier wrote `price_missing` / `no_data`
+    /// receipts for plants that were merely early, and those had to be settled
+    /// again afterwards.
+    pub auto_settle_from_day: Option<u8>,
     /// MCP server authentication. Supports API-key, OIDC, or dev mode.
     /// See `[mcp]` section in TOML — e.g. `api_key = "env:EINSD_MCP_API_KEY"`.
     #[serde(default)]

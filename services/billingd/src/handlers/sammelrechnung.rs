@@ -385,36 +385,46 @@ pub async fn post_submit_b2g(
 
     let portal = req.portal.as_deref().unwrap_or("ZRE");
 
-    // Notify ERP via CloudEvent — the ERP's PEPPOL AS4 gateway transmits the XML.
-    if let Some(ref webhook_url) = cfg.erp_webhook_url {
-        let ce = mako_service::CloudEvent::new(
-            mako_service::source("billingd", &cfg.tenant),
-            mako_events::billing::XRECHNUNG_B2G_READY,
-            id.to_string(),
-            serde_json::json!({
+    // Hand the XML to the ERP via the transactional outbox — the ERP's PEPPOL AS4
+    // gateway transmits it. Posting the CloudEvent inline lost the submission
+    // whenever the ERP was briefly down, while the caller was told "submitted";
+    // the outbox row commits first and the dispatcher retries until it lands.
+    if cfg.erp_webhook_url.is_none() {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
                 "billing_record_id": id,
-                "malo_id": row.malo_id,
-                "lf_mp_id": row.lf_mp_id,
                 "portal": portal,
-                "reference": req.reference,
-                "xrechnung_xml": xml,
-                "standard": "XRechnung 3.0 / ZUGFeRD 2.3 (EN 16931)",
-                "regulatory": "§27 EGovG B2G e-invoicing mandatory from 01.01.2027",
-            }),
-        );
-        let client = mako_service::http::default_client();
-        if let Err(e) = mako_service::post_ce_with_retry(
-            &client,
-            webhook_url,
-            &ce,
-            cfg.erp_hmac_secret.as_deref().map(str::as_bytes),
+                "status": "not_submitted",
+                "error": "no erp_webhook_url configured — nothing can transmit the XRechnung",
+            })),
         )
-        .await
-        {
-            tracing::warn!(record_id = %id, error = %e, "billingd: B2G submission webhook failed");
-        }
-    } else {
-        tracing::warn!(record_id = %id, "billingd: submit-b2g called but no erp_webhook_url configured");
+            .into_response();
+    }
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("billingd", &cfg.tenant),
+        mako_events::billing::XRECHNUNG_B2G_READY,
+        id.to_string(),
+        serde_json::json!({
+            "billing_record_id": id,
+            "malo_id": row.malo_id,
+            "lf_mp_id": row.lf_mp_id,
+            "portal": portal,
+            "reference": req.reference,
+            "xrechnung_xml": xml,
+            "standard": "XRechnung 3.0 / ZUGFeRD 2.3 (EN 16931)",
+            "regulatory": "§27 EGovG B2G e-invoicing mandatory from 01.01.2027",
+        }),
+    );
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
     (
@@ -422,8 +432,8 @@ pub async fn post_submit_b2g(
         Json(serde_json::json!({
             "billing_record_id": id,
             "portal": portal,
-            "status": "submitted",
-            "message": "de.billing.xrechnung.b2g.ready CloudEvent dispatched to ERP webhook",
+            "status": "queued",
+            "message": "de.billing.xrechnung.b2g.ready enqueued in the outbox for the ERP webhook",
             "note": "ERP PEPPOL AS4 gateway is responsible for actual transmission to ZRE/OZG-RE",
             "regulatory": "§27 EGovG: B2G e-invoicing mandatory from 01.01.2027",
             "conformance": "XRechnung 3.0 (validated before dispatch)",

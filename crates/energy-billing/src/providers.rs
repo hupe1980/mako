@@ -277,21 +277,27 @@ impl BillingProvider for ElectricityProvider {
         }
 
         // ── EEG-Gutschrift pass-through ────────────────────────────────────────
+        // The feed-in is a separate supply with its own USt status: for a §19
+        // Kleinunternehmer operator it carries 0 %, so the credit must not net
+        // against the standard-rate consumption base — that would understate the
+        // supplier's own output VAT by the standard rate on the credit.
         if let Some(eeg_ct) = quantities.eeg_gutschrift_eur
             && eeg_ct != Decimal::ZERO
         {
-            positions.push(
-                BillingPosition::credit(
-                    "EEG-Gutschrift (Photovoltaik)",
-                    Decimal::ONE,
-                    "EUR",
-                    eeg_ct.abs(),
-                    PositionCategory::Credit,
-                )
-                .with_legal_basis("§38 EEG 2023")
-                .with_tag("eeg_gutschrift")
-                .with_tag("solar"),
-            );
+            let mut p = BillingPosition::credit(
+                "EEG-Gutschrift (Photovoltaik)",
+                Decimal::ONE,
+                "EUR",
+                eeg_ct.abs(),
+                PositionCategory::Credit,
+            )
+            .with_legal_basis("§38 EEG 2023")
+            .with_tag("eeg_gutschrift")
+            .with_tag("solar");
+            if product.eeg_gutschrift_kleinunternehmer_19_ustg {
+                p = p.with_tax_rate(Decimal::ZERO);
+            }
+            positions.push(p);
         }
 
         // ── Grid charges (NNE / KA) ────────────────────────────────────────────
@@ -704,18 +710,18 @@ impl ElectricityProvider {
         rates: &crate::rates::RegulatoryRates,
         seasonal_arbeitspreis: Option<Decimal>,
     ) -> Result<Vec<BillingPosition>, EngineError> {
-        let days = ctx.days();
         let mut positions: Vec<BillingPosition> = Vec::new();
         let grid_kwh = prosumer.grid_consumption_kwh;
         let self_kwh = prosumer.self_consumption_kwh;
 
-        // Grundpreis on the full billing period (independent of consumption split)
+        // Grundpreis over the active contract days, independent of the
+        // consumption split — the same clipping the non-prosumer path applies.
         if let Some(gp_ct_day) = product.grundpreis_ct_per_day {
             positions.push(
                 grundpreis_position(
                     "Grundpreis",
                     gp_ct_day / dec!(100),
-                    days,
+                    ctx.prorate_days().0 as i64,
                     "§41 EnWG",
                     &["strom"],
                 )
@@ -886,6 +892,28 @@ impl BillingProvider for ControllableLoadProvider {
                 message: "§14a Modul 3 band rates are set alongside a flat NNE \
                           Arbeitspreis — the bands replace it; billing both charges \
                           the network usage twice"
+                    .to_owned(),
+            });
+        }
+
+        // One Steuerungsentschädigung, one rate basis. The per-kW-year and the
+        // per-kWh variants describe the same compensation for the same dimming
+        // hours; configured together they both fire and pay it twice.
+        if self
+            .product
+            .sect14a_steuerungsentschaedigung_eur_per_kw_year
+            .is_some()
+            && self
+                .product
+                .sect14a_steuerungsentschaedigung_ct_per_kwh
+                .is_some()
+        {
+            w.push(BillingWarning {
+                code: "STEUERUNGSENTSCHAEDIGUNG_DOPPELT",
+                severity: WarningSeverity::Error,
+                message: "§14a EnWG Steuerungsentschädigung is configured both per \
+                          kW/Jahr and per kWh — the two are alternative rate bases \
+                          for the same compensation; billing both pays it twice"
                     .to_owned(),
             });
         }
@@ -1081,6 +1109,23 @@ impl BillingProvider for GasProvider {
                     .to_owned(),
             });
         }
+        // §25 Nr. 4 MessEV / DVGW G 685: the Zustandszahl converts Betriebs- to
+        // Normkubikmeter and is never 1 in practice (typically ≈ 0.95). Billing
+        // a volume reading without it overstates kWh_Hs by 3–5 %.
+        if quantities
+            .gas
+            .as_ref()
+            .is_some_and(|m| m.kwh_hs.is_none() && m.zustandszahl.is_none())
+        {
+            w.push(BillingWarning {
+                code: "ZUSTANDSZAHL_FEHLT",
+                severity: WarningSeverity::Warning,
+                message: "keine Zustandszahl übergeben — die Mengenumwertung rechnet mit \
+                          z = 1,0 (§25 Nr. 4 MessEV, DVGW G 685); reale Werte liegen bei \
+                          etwa 0,95, die Abrechnung überschätzt kWh_Hs entsprechend"
+                    .to_owned(),
+            });
+        }
         // Gas carried 7 % USt from 01.10.2022 to 31.03.2024 (§28 Abs. 5
         // UStG) and 16 % in H2/2020. A period straddling a window boundary
         // has no single correct rate — split at the Stichtag and merge.
@@ -1257,16 +1302,20 @@ impl BillingProvider for GasProvider {
             // ── RLM Leistungspreis Gas (demand charge for large gas customers) ────
             // Applicable to RLM gas metering points with a capacity-based supply contract.
             // Triggered by gas_leistungspreis_ct_per_kw_month + GasMeterInput::spitzenleistung_kw.
+            // The rate is per kW *and month*, so it scales with the billed
+            // period's month fraction — the same treatment as the Strom NNE
+            // Leistungspreis and the Fernwärme Leistungspreis.
             if let (Some(lp_ct_per_kw_month), Some(kw)) = (
                 product.gas_leistungspreis_ct_per_kw_month,
                 meter.spitzenleistung_kw.filter(|kw| *kw > Decimal::ZERO),
             ) {
+                let months_frac = Decimal::from(ctx.days()) / dec!(30.4375);
                 positions.push(
                     BillingPosition::debit(
                         "Leistungspreis Gas",
                         kw,
                         "kW",
-                        lp_ct_per_kw_month / dec!(100),
+                        lp_ct_per_kw_month / dec!(100) * months_frac,
                         PositionCategory::Commodity,
                     )
                     .with_legal_basis("§41 EnWG")
@@ -2660,7 +2709,6 @@ impl BillingProvider for DynamicElectricityProvider {
         let product = &self.product;
         let grid = &self.grid;
         let rates = &ctx.regulatory_rates;
-        let days = ctx.days();
         let floor_ct = product.dynamic_epex_floor_ct_kwh;
         let cap_ct = product.dynamic_epex_cap_ct_kwh;
         // §41a EnWG: the customer's per-kWh price is the market spot price plus
@@ -2672,13 +2720,14 @@ impl BillingProvider for DynamicElectricityProvider {
         let source_name = self.spot_price_source.source_name().to_owned();
         let mut positions: Vec<BillingPosition> = Vec::new();
 
-        // Grundpreis
+        // Grundpreis — active contract days, like every other Grundpreis in this
+        // crate: a mid-period move-in must not be charged the full period.
         if let Some(gp_ct_day) = product.grundpreis_ct_per_day {
             positions.push(
                 grundpreis_position(
                     "Grundpreis Strom (§41a)",
                     gp_ct_day / dec!(100),
-                    days,
+                    ctx.prorate_days().0 as i64,
                     "§41a EnWG",
                     &["strom"],
                 )
@@ -2994,7 +3043,14 @@ impl BillingProvider for MwStProvider {
             if net_base.is_zero() {
                 continue;
             }
-            let mwst_eur = validated_eur(net_base.abs() * rate);
+            // Rounded to the cent per rate, not carried at 5 dp: the Steuerbetrag
+            // is a document amount (§14 Abs. 4 Nr. 8 UStG) and the BO4E/EN 16931
+            // per-rate breakdown states it to the cent. Summing 5-dp tax layers
+            // and rounding once at the end can land a cent away from the sum of
+            // the stated Steuerbeträge, which breaks the documented invariant
+            // "Σ steuerbetraege == gesamtsteuer" (19 % 1.995 + 7 % 0.525 →
+            // 2.00 + 0.53 = 2.53, not round2(2.52)).
+            let mwst_eur = validated_eur((net_base.abs() * rate).round_kfm(2));
             // Sign follows the net base (credit invoices \u2192 negative MwSt)
             let mwst_eur = if net_base < Decimal::ZERO {
                 -mwst_eur

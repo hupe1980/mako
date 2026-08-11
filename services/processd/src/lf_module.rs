@@ -37,7 +37,7 @@ use uuid::Uuid;
 
 use secrecy::SecretString;
 
-use crate::pg::approval::{ApprovalQueueEntry, PgApprovalQueue, QueueStatus};
+use crate::pg::approval::{ApprovalQueueEntry, PgApprovalQueue};
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -69,7 +69,7 @@ pub struct E0624Payload {
     pub lieferende_date: Option<time::Date>,
     /// Whether this is a Vertragsbindung or Einzug scenario.
     pub scenario: E0624Scenario,
-    /// CE deadline (computed from event `time` + 45 min).
+    /// APERAK Strom Frist from the event `time` (`aperak_strom_due_at`).
     pub deadline_at: OffsetDateTime,
 }
 
@@ -124,14 +124,16 @@ impl E0624Payload {
                 }
             });
 
-        // Compute deadline: event time + 45 min (APERAK AHB 1.0 §2.4.1)
+        // APERAK AHB 1.0 §2.4.1 — 45 minutes on Mon–Fri and Sunday, but a
+        // Saturday arrival is due the next Sunday at 12:00 Berlin. A hand-rolled
+        // `+45min` expired Saturday escalations hours before the real Frist.
         let event_time = event["time"]
             .as_str()
             .and_then(|s| {
                 OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
             })
             .unwrap_or_else(OffsetDateTime::now_utc);
-        let deadline_at = event_time + time::Duration::minutes(45);
+        let deadline_at = mako_engine::fristen::aperak_strom_due_at(event_time);
 
         Some(Self {
             process_id,
@@ -258,6 +260,27 @@ pub async fn process_e0624(
         "processd LF: E_0624 decision"
     );
 
+    // Expire 5 minutes before the regulatory deadline.
+    let enqueue = async |reason: String| -> Result<(), sqlx::Error> {
+        let entry = ApprovalQueueEntry::pending(
+            payload.process_id,
+            55008_i32,
+            Some(payload.malo_id.clone()),
+            reason,
+            payload.deadline_at - time::Duration::minutes(5),
+            config.tenant.clone(),
+        )
+        .with_commands(
+            mako_markt::commands::GPKE_NB_LIEFERENDE_BESTAETIGEN,
+            mako_markt::commands::GPKE_NB_LIEFERENDE_ABLEHNEN,
+            None,
+        );
+        queue
+            .enqueue(&entry)
+            .await
+            .inspect_err(|e| warn!(%e, "processd LF: failed to enqueue approval entry"))
+    };
+
     match &decision {
         LfDecision::Einwilligung => {
             if config.auto_respond {
@@ -279,6 +302,14 @@ pub async fn process_e0624(
                     .await
                     .inspect_err(|e| warn!(%e, "processd LF: einwilligung dispatch failed"))?;
                 info!(process_id = %payload.process_id, "processd LF: dispatched einwilligung");
+            } else {
+                // auto_respond off is "operator decides", not "nobody answers":
+                // without a queue row the E_0624 goes unanswered and unseen.
+                enqueue(format!(
+                    "auto_respond disabled — decidable E_0624 for MaLo {}: Einwilligung",
+                    payload.malo_id
+                ))
+                .await?;
             }
         }
         LfDecision::Ablehnen { erc_code } => {
@@ -301,6 +332,12 @@ pub async fn process_e0624(
                     .await
                     .inspect_err(|e| warn!(%e, "processd LF: ablehnen dispatch failed"))?;
                 info!(process_id = %payload.process_id, %erc_code, "processd LF: dispatched ablehnen");
+            } else {
+                enqueue(format!(
+                    "auto_respond disabled — decidable E_0624 for MaLo {}: Ablehnung {erc_code}",
+                    payload.malo_id
+                ))
+                .await?;
             }
         }
         LfDecision::Escalate { reason } => {
@@ -310,23 +347,7 @@ pub async fn process_e0624(
                 %reason,
                 "processd LF: E_0624 escalated — creating approval_queue entry"
             );
-            let entry = ApprovalQueueEntry {
-                id: Uuid::new_v4(),
-                process_id: payload.process_id,
-                pid: 55008_i32,
-                malo_id: Some(payload.malo_id.clone()),
-                reason: reason.clone(),
-                status: QueueStatus::Pending,
-                // Expire 5 minutes before the regulatory deadline.
-                expires_at: payload.deadline_at - time::Duration::minutes(5),
-                created_at: OffsetDateTime::now_utc(),
-                decided_at: None,
-                tenant: config.tenant.clone(),
-            };
-            queue
-                .enqueue(&entry)
-                .await
-                .inspect_err(|e| warn!(%e, "processd LF: failed to enqueue approval entry"))?;
+            enqueue(reason.clone()).await?;
         }
     }
 

@@ -325,6 +325,12 @@ fn record_loopback_hop(
     let mut guard = hops
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // Nothing signals that a conversation has ended, so the map only grows.
+    // Drop every counter once it gets large: that is the same trade a restart
+    // makes, and a real cycle re-trips the budget within MAX_LOOPBACK_HOPS hops.
+    if guard.len() >= MAX_TRACKED_CONVERSATIONS && !guard.contains_key(conversation_id) {
+        guard.clear();
+    }
     let seen = guard.entry(conversation_id.to_owned()).or_insert(0);
     *seen += 1;
     if *seen > MAX_LOOPBACK_HOPS {
@@ -341,6 +347,9 @@ fn record_loopback_hop(
 /// Stornierung) stays in single digits. 32 leaves generous headroom while still
 /// catching a cycle long before it costs anything.
 const MAX_LOOPBACK_HOPS: u32 = 32;
+
+/// Conversations the runaway guard tracks at once.
+const MAX_TRACKED_CONVERSATIONS: usize = 10_000;
 
 impl BdewAs4Sender {
     /// Construct from the shared AS4 session context, event bus, P-Mode
@@ -926,7 +935,7 @@ fn anwendungsreferenz_for(_message_type: &str) -> &'static str {
 
 #[cfg(test)]
 mod loopback_guard_tests {
-    use super::{MAX_LOOPBACK_HOPS, record_loopback_hop};
+    use super::{MAX_LOOPBACK_HOPS, MAX_TRACKED_CONVERSATIONS, record_loopback_hop};
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -976,6 +985,20 @@ mod loopback_guard_tests {
             record_loopback_hop(&h, "healthy"),
             Ok(1),
             "an unrelated conversation must be unaffected"
+        );
+    }
+
+    /// The counter map has no expiry, so it must not grow with every
+    /// conversation the node ever sees.
+    #[test]
+    fn the_counter_map_stays_bounded() {
+        let h = hops();
+        for i in 0..=MAX_TRACKED_CONVERSATIONS {
+            let _ = record_loopback_hop(&h, &format!("conv-{i}"));
+        }
+        assert!(
+            h.lock().expect("not poisoned").len() <= MAX_TRACKED_CONVERSATIONS,
+            "the loopback-hop map must be bounded"
         );
     }
 }

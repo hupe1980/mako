@@ -301,6 +301,7 @@ Also sets the SEPA billing_day (day of month for direct debit).",
             &self.state.pool,
             &p.malo_id,
             &acct.lf_mp_id,
+            None,
             UpdateAccountRequest {
                 iban: None,
                 mandatsref: None,

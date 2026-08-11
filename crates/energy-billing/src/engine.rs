@@ -210,8 +210,14 @@ impl BillingEngine {
                 // Use the configured MwSt rate directly — deriving it from existing
                 // positions is unreliable when netto is zero or all positions are
                 // credits (P0 fix: use configured rate, not derived ratio).
+                // Under §13b reverse charge the invoice carries no VAT, so the
+                // gap is net as-is.
                 let mwst_rate = ctx.regulatory_rates.mwst_rate;
-                let divisor = rust_decimal::Decimal::ONE + mwst_rate;
+                let divisor = if ctx.reverse_charge {
+                    rust_decimal::Decimal::ONE
+                } else {
+                    rust_decimal::Decimal::ONE + mwst_rate
+                };
                 let gap_netto = if divisor.is_zero() {
                     gap_brutto
                 } else {
@@ -224,17 +230,20 @@ impl BillingEngine {
                     .filter(|p| p.category != crate::position::PositionCategory::Tax)
                     .cloned()
                     .collect();
-                positions2.push(
-                    crate::position::BillingPosition::debit(
-                        format!("Mindestbetrag (Minimum {min_brutto:.2}\u{202f}EUR brutto)"),
-                        rust_decimal::Decimal::ONE,
-                        "EUR",
-                        gap_netto,
-                        crate::position::PositionCategory::Commodity,
-                    )
-                    .with_legal_basis("Vertraglich")
-                    .with_tag("mindestbetrag"),
-                );
+                let mut topup = crate::position::BillingPosition::debit(
+                    format!("Mindestbetrag (Minimum {min_brutto:.2}\u{202f}EUR brutto)"),
+                    rust_decimal::Decimal::ONE,
+                    "EUR",
+                    gap_netto,
+                    crate::position::PositionCategory::Commodity,
+                )
+                .with_legal_basis("Vertraglich")
+                .with_tag("mindestbetrag");
+                // The top-up is a supply position like any other: §13b covers it too.
+                if ctx.reverse_charge {
+                    topup = topup.with_reverse_charge();
+                }
+                positions2.push(topup);
                 let pre_tax2: Vec<BillingPosition> = positions2.clone();
                 for provider in self.providers.iter().filter(|p| p.is_tax_pass()) {
                     let new = provider.bill(&ctx, quantities, &pre_tax2)?;
@@ -247,7 +256,9 @@ impl BillingEngine {
                 {
                     positions2.push(p.clone());
                 }
-                return Ok(Invoice::from_positions(ctx, positions2, warnings));
+                // Fall through — a Stornorechnung of a topped-up invoice must
+                // still be negated by Pass 5.
+                positions = positions2;
             }
         }
 

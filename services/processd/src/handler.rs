@@ -58,6 +58,7 @@ pub async fn handle_webhook(
     #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
     if ce_type == mako_events::markt::VERSORGUNG_GAP_DETECTED
         || ce_type == mako_events::markt::VERSORGUNG_EOG_BEGONNEN
+        || ce_type == mako_events::markt::VERSORGUNG_CHANGED
     {
         use crate::eog_module;
         return match eog_module::handle_versorgung_event(
@@ -145,8 +146,22 @@ pub async fn handle_webhook(
                 tenant: state.tenant.clone(),
                 auto_accept: true,
             };
-            msb_module::handle_msb_wechsel(&msb_cfg, payload, &state.marktd, &state.makod).await;
-            return StatusCode::OK.into_response();
+            let queue = crate::pg::PgApprovalQueue::new(state.pool.clone());
+            return match msb_module::handle_msb_wechsel(
+                &msb_cfg,
+                payload,
+                &state.marktd,
+                &state.makod,
+                &queue,
+            )
+            .await
+            {
+                Ok(()) => StatusCode::OK.into_response(),
+                Err(e) => {
+                    warn!(error = %e, "processd MSB: STP evaluation failed — fan-out will redeliver");
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
+            };
         }
     }
     // ── 6. §14a Steuerungsauftrag auto-ORDRSP (N5) ────────────────────────
@@ -206,31 +221,73 @@ pub async fn handle_webhook(
             })
         };
 
-        match (is_fernschaltbar, produktcode_contracted) {
+        // A swallowed dispatch failure drops the ORDRSP the AHB mandates, and the
+        // fan-out has already marked the event delivered. Answer 5xx instead.
+        let dispatch = |command: &'static str, key: &str, payload: serde_json::Value| {
+            let cmd = mako_markt::makod_client::ForwardCommand {
+                command: command.to_owned(),
+                marktrolle: None,
+                malo_id: None,
+                melo_id: None,
+                payload,
+            };
+            let idem_key = format!("{key}-{process_id}");
+            async move { state.makod.post_command(&idem_key, &cmd).await }
+        };
+
+        // Escalations get an approval-queue row — a warn! alone leaves the
+        // operator no surface and the ORDRSP unanswered.
+        let sa_pid = event["makopid"]
+            .as_u64()
+            .or_else(|| event["data"]["pid"].as_u64())
+            .unwrap_or(0) as i32;
+        let escalate = |reason: String| {
+            let entry = process_id.parse().ok().map(|pid_uuid| {
+                crate::pg::approval::ApprovalQueueEntry::pending(
+                    pid_uuid,
+                    sa_pid,
+                    None,
+                    reason,
+                    time::OffsetDateTime::now_utc() + time::Duration::hours(24),
+                    state.tenant.clone(),
+                )
+                .with_commands(
+                    mako_markt::commands::WIM_STEUERUNGSAUFTRAG_BESTAETIGEN,
+                    mako_markt::commands::WIM_STEUERUNGSAUFTRAG_ABLEHNEN,
+                    Some("MSB"),
+                )
+            });
+            let queue = crate::pg::PgApprovalQueue::new(state.pool.clone());
+            async move {
+                match entry {
+                    Some(e) => queue.enqueue(&e).await,
+                    None => Ok(()),
+                }
+            }
+        };
+
+        let result: Result<(), String> = match (is_fernschaltbar, produktcode_contracted) {
             (Some(true), true) => {
                 // Auto-confirm: SR is remote-switchable and produktcode is contracted.
-                let cmd = mako_markt::makod_client::ForwardCommand {
-                    command: mako_markt::commands::WIM_STEUERUNGSAUFTRAG_BESTAETIGEN.to_owned(),
-                    marktrolle: None,
-                    malo_id: None,
-                    melo_id: None,
-                    payload: serde_json::json!({
+                dispatch(
+                    mako_markt::commands::WIM_STEUERUNGSAUFTRAG_BESTAETIGEN,
+                    "steuerungsauftrag-bestaetigen",
+                    serde_json::json!({
                         "process_id": process_id,
                         "auto_ordrsp": true,
                         "produktcode": dispatched_produktcode,
                     }),
-                };
-                let idem_key = format!("steuerungsauftrag-bestaetigen-{process_id}");
-                if let Err(e) = state.makod.post_command(&idem_key, &cmd).await {
-                    warn!(sr_id, error = %e, "processd: Steuerungsauftrag auto-bestaetigen failed");
-                } else {
+                )
+                .await
+                .map(|_| {
                     debug!(
                         sr_id,
                         process_id,
                         produktcode = dispatched_produktcode,
                         "processd: Steuerungsauftrag auto-confirmed (istFernschaltbar=true, produktcode contracted)"
                     );
-                }
+                })
+                .map_err(|e| e.to_string())
             }
             (Some(true), false) => {
                 // SR is remote-switchable but produktcode is NOT contracted — must ablehnen.
@@ -241,19 +298,18 @@ pub async fn handle_webhook(
                     produktcode = dispatched_produktcode,
                     "processd: Steuerungsauftrag ablehnen — produktcode not in contracted konfigurationsprodukte (BK6-24-174 §4.3)"
                 );
-                let cmd = mako_markt::makod_client::ForwardCommand {
-                    command: mako_markt::commands::WIM_STEUERUNGSAUFTRAG_ABLEHNEN.to_owned(),
-                    marktrolle: None,
-                    malo_id: None,
-                    melo_id: None,
-                    payload: serde_json::json!({
+                dispatch(
+                    mako_markt::commands::WIM_STEUERUNGSAUFTRAG_ABLEHNEN,
+                    "steuerungsauftrag-ablehnen",
+                    serde_json::json!({
                         "process_id": process_id,
                         "reason": "produktcode not in contracted konfigurationsprodukte (BK6-24-174 §4.3)",
                         "produktcode": dispatched_produktcode,
                     }),
-                };
-                let idem_key = format!("steuerungsauftrag-ablehnen-{process_id}");
-                let _ = state.makod.post_command(&idem_key, &cmd).await;
+                )
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string())
             }
             (Some(false), _) => {
                 // SR is not remote-switchable — escalate to operator.
@@ -262,6 +318,11 @@ pub async fn handle_webhook(
                     process_id,
                     "processd: Steuerungsauftrag escalated — istFernschaltbar=false; manual ORDRSP required"
                 );
+                escalate(format!(
+                    "SteuerbareRessource {sr_id} has istFernschaltbar=false — manual ORDRSP required"
+                ))
+                .await
+                .map_err(|e| e.to_string())
             }
             (None, _) => {
                 // Unknown SR or marktd unavailable — escalate.
@@ -270,9 +331,21 @@ pub async fn handle_webhook(
                     process_id,
                     "processd: Steuerungsauftrag escalated — SR not found in marktd or ist_fernschaltbar unknown"
                 );
+                escalate(format!(
+                    "SteuerbareRessource {sr_id} not found in marktd or istFernschaltbar unknown"
+                ))
+                .await
+                .map_err(|e| e.to_string())
             }
-        }
-        return StatusCode::OK.into_response();
+        };
+
+        return match result {
+            Ok(()) => StatusCode::OK.into_response(),
+            Err(e) => {
+                warn!(sr_id, process_id, error = %e, "processd: Steuerungsauftrag handling failed");
+                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+            }
+        };
     }
 
     // ── 7. M3: Preisanfrage REQOTE auto-response ──────────────────────────

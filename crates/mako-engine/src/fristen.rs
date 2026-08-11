@@ -63,7 +63,7 @@
 //! assert_eq!(due - received, time::Duration::hours(6));
 //! ```
 
-use time::{Date, Duration, OffsetDateTime, PrimitiveDateTime, Time, Weekday};
+use time::{Date, Duration, Month, OffsetDateTime, PrimitiveDateTime, Time, Weekday};
 use time_tz::{OffsetDateTimeExt, OffsetResult, PrimitiveDateTimeExt, timezones};
 
 // ── CONTRL Übertragungsquittung ───────────────────────────────────────────────
@@ -391,10 +391,13 @@ pub enum HolidayCalendar {
     /// |------|---------|--------|
     /// | 1 Jan | Neujahr | all |
     /// | 6 Jan | Heilige Drei Könige | BY, BW, ST |
+    /// | 8 Mar | Internationaler Frauentag | BE, MV |
     /// | 1 May | Tag der Arbeit | all |
+    /// | 20 Sep | Weltkindertag | TH |
     /// | 3 Oct | Tag der Deutschen Einheit | all |
     /// | 31 Oct | Reformationstag | BB, HB, HH, MV, NI, SN, ST, SH, TH |
     /// | 1 Nov | Allerheiligen | BW, BY, NW, RP, SL |
+    /// | Wed before 23 Nov | Buß- und Bettag | SN |
     /// | 25 Dec | 1. Weihnachtstag | all |
     /// | 26 Dec | 2. Weihnachtstag | all |
     /// | Easter−2 | Karfreitag | all |
@@ -404,6 +407,10 @@ pub enum HolidayCalendar {
     /// | Easter+50 | Pfingstmontag | all |
     /// | Easter+60 | Fronleichnam | BW, BY, HE, NW, RP, SL, SN (parts), TH (parts) |
     /// | 15 Aug | Mariä Himmelfahrt | BY, SL |
+    ///
+    /// Augsburger Friedensfest (8 Aug) is deliberately absent: it is observed by
+    /// the city of Augsburg, not by a Bundesland, so the BDEW rule does not
+    /// extend it nationwide — and the published Feiertagskalender omits it.
     ///
     /// **Rationale**: A counterparty in any of these states is legally entitled
     /// not to process messages on their regional holiday. Using a maximally
@@ -626,10 +633,17 @@ fn is_bdew_mako_holiday(date: Date) -> bool {
         (m, d),
         (1 | 5 | 11, 1)      // Neujahr, Tag der Arbeit, Allerheiligen
             | (1, 6)          // Heilige Drei Könige
+            | (3, 8)          // Internationaler Frauentag (BE, MV)
             | (8, 15)         // Mariä Himmelfahrt
+            | (9, 20)         // Weltkindertag (TH)
             | (10, 3 | 31)    // Tag der Deutschen Einheit, Reformationstag
             | (12, 24 | 25 | 26 | 31) // Heiligabend, Weihnachten, Silvester
     ) {
+        return true;
+    }
+
+    // Buß- und Bettag (SN): the last Wednesday before 23 November.
+    if m == 11 && date == buss_und_bettag(y) {
         return true;
     }
 
@@ -653,6 +667,19 @@ fn is_bdew_mako_holiday(date: Date) -> bool {
     }
 
     false
+}
+
+/// Compute Buß- und Bettag — the last Wednesday before 23 November.
+///
+/// A statutory holiday in Sachsen, and therefore a non-Werktag nationwide under
+/// the BDEW rule. It always falls on a weekday, so it always moves a Frist.
+fn buss_und_bettag(year: i32) -> Date {
+    let mut day = Date::from_calendar_date(year, Month::November, 22)
+        .expect("22 November is a valid date in every year");
+    while day.weekday() != Weekday::Wednesday {
+        day -= Duration::days(1);
+    }
+    day
 }
 
 /// Compute Easter Sunday for `year` using the Anonymous Gregorian algorithm.
@@ -776,8 +803,16 @@ mod tests {
             is_bdew_mako_holiday(date(2025, 1, 6)),
             "Heilige Drei Könige"
         );
+        assert!(
+            is_bdew_mako_holiday(date(2025, 3, 8)),
+            "Internationaler Frauentag (BE, MV)"
+        );
         assert!(is_bdew_mako_holiday(date(2025, 5, 1)), "Tag der Arbeit");
         assert!(is_bdew_mako_holiday(date(2025, 8, 15)), "Mariä Himmelfahrt");
+        assert!(
+            is_bdew_mako_holiday(date(2025, 9, 20)),
+            "Weltkindertag (TH)"
+        );
         assert!(
             is_bdew_mako_holiday(date(2025, 10, 3)),
             "Tag der Deutschen Einheit"
@@ -786,6 +821,25 @@ mod tests {
         assert!(is_bdew_mako_holiday(date(2025, 11, 1)), "Allerheiligen");
         assert!(is_bdew_mako_holiday(date(2025, 12, 25)), "1. Weihnachtstag");
         assert!(is_bdew_mako_holiday(date(2025, 12, 26)), "2. Weihnachtstag");
+    }
+
+    /// Buß- und Bettag is the last Wednesday before 23 November, so it always
+    /// falls on a weekday and always moves a Frist. Dates cross-checked against
+    /// the published BDEW Feiertagskalender GPKE/GeLi Gas.
+    #[test]
+    fn buss_und_bettag_is_the_wednesday_before_23_november() {
+        assert_eq!(buss_und_bettag(2025), date(2025, 11, 19));
+        assert_eq!(buss_und_bettag(2026), date(2026, 11, 18));
+        assert_eq!(buss_und_bettag(2027), date(2027, 11, 17));
+        // 2029: 23 Nov is a Friday, so the Wednesday before is the 21st.
+        assert_eq!(buss_und_bettag(2029), date(2029, 11, 21));
+
+        assert!(is_bdew_mako_holiday(date(2025, 11, 19)));
+        assert!(!is_bdew_mako_holiday(date(2025, 11, 20)));
+        assert!(
+            !is_bdew_mako_holiday(date(2025, 8, 8)),
+            "Augsburger Friedensfest is city-level, not a Landesfeiertag"
+        );
     }
 
     #[test]
@@ -895,7 +949,7 @@ mod tests {
 
     #[test]
     fn skips_heilige_drei_koenige() {
-        // 2025-01-04 is a Saturday (Werktag).
+        // Counting starts the day after 2025-01-04 (a Saturday).
         // +1 Werktag: Sun 05 (skip), Mon 06 = Heilige Drei Könige (skip),
         //              Tue 07 → 2025-01-07
         let start = date(2025, 1, 4);
@@ -1061,9 +1115,9 @@ mod tests {
         );
     }
 
-    /// Edge case: message at 23:59 UTC on 2025-01-10 (Friday) is already
-    /// Saturday 00:59 CET in Berlin.  Saturday is a Werktag, so 1 WT after
-    /// Saturday is Monday (Sunday skipped).
+    /// Edge case: a message at 23:59 UTC on Friday 2025-01-10 is already
+    /// Saturday 00:59 CET in Berlin, so the count starts from the Saturday.
+    /// Saturday and Sunday are both skipped, putting 1 WT on the Monday.
     #[test]
     fn deadline_at_werktage_friday_night_utc_is_saturday_berlin() {
         use time::Time;

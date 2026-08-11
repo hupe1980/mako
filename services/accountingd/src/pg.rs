@@ -235,16 +235,25 @@ pub struct UpdateAccountRequest {
     pub billing_day: Option<i16>,
 }
 
+/// The lookup hash written alongside a new `accounts.iban`. `None` when the
+/// request carries no IBAN, so the `COALESCE` leaves the stored hash alone.
+fn account_iban_hash(iban: Option<&str>, iban_key: Option<&[u8; 32]>) -> Option<String> {
+    iban.map(|iban| crate::ledger::iban_hash(iban_key, iban))
+}
+
 pub async fn update_account(
     pool: &PgPool,
     malo_id: &str,
     lf_mp_id: &str,
+    iban_key: Option<&[u8; 32]>,
     req: UpdateAccountRequest,
 ) -> anyhow::Result<()> {
+    let iban_hash = account_iban_hash(req.iban.as_deref(), iban_key);
     sqlx::query(
         // add tenant parameter — previously missing, allowing cross-tenant modification.
         r"UPDATE accounts SET
               iban        = COALESCE($3, iban),
+              iban_hash   = COALESCE($7, iban_hash),
               mandatsref  = COALESCE($4, mandatsref),
               abschlag_ct = COALESCE($5, abschlag_ct),
               billing_day = COALESCE($6, billing_day),
@@ -257,6 +266,7 @@ pub async fn update_account(
     .bind(req.mandatsref)
     .bind(req.abschlag_ct)
     .bind(req.billing_day)
+    .bind(iban_hash)
     .execute(pool)
     .await
     .context("update_account")?;
@@ -270,11 +280,14 @@ pub async fn update_account_tenanted(
     malo_id: &str,
     lf_mp_id: &str,
     tenant: &str,
+    iban_key: Option<&[u8; 32]>,
     req: UpdateAccountRequest,
 ) -> anyhow::Result<()> {
+    let iban_hash = account_iban_hash(req.iban.as_deref(), iban_key);
     let rows_affected = sqlx::query(
         r"UPDATE accounts SET
               iban        = COALESCE($4, iban),
+              iban_hash   = COALESCE($8, iban_hash),
               mandatsref  = COALESCE($5, mandatsref),
               abschlag_ct = COALESCE($6, abschlag_ct),
               billing_day = COALESCE($7, billing_day),
@@ -288,6 +301,7 @@ pub async fn update_account_tenanted(
     .bind(req.mandatsref)
     .bind(req.abschlag_ct)
     .bind(req.billing_day)
+    .bind(iban_hash)
     .execute(executor)
     .await
     .context("update_account_tenanted")?
@@ -635,6 +649,7 @@ pub struct CreateMandateRequest {
 pub async fn create_mandate(
     pool: &PgPool,
     tenant: &str,
+    iban_key: Option<&[u8; 32]>,
     req: CreateMandateRequest,
 ) -> anyhow::Result<Uuid> {
     use time::format_description::well_known::Iso8601;
@@ -669,14 +684,17 @@ pub async fn create_mandate(
     .await
     .context("create_mandate")?;
 
-    // Link iban + mandatsref to account for fast lookup.
+    // Link iban + mandatsref to account for fast lookup. `iban_hash` is the key
+    // CAMT.054 matching resolves the account by, so it must be written here too.
     sqlx::query(
-        "UPDATE accounts SET iban = $3, mandatsref = $4, updated_at = now()
-         WHERE malo_id = $1 AND lf_mp_id = $2",
+        "UPDATE accounts SET iban = $4, iban_hash = $5, mandatsref = $6, updated_at = now()
+         WHERE malo_id = $1 AND lf_mp_id = $2 AND tenant = $3",
     )
     .bind(&req.malo_id)
     .bind(&req.lf_mp_id)
+    .bind(tenant)
     .bind(&req.iban)
+    .bind(crate::ledger::iban_hash(iban_key, &req.iban))
     .bind(&req.mandatsref)
     .execute(pool)
     .await

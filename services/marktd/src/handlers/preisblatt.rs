@@ -13,7 +13,7 @@ use mako_markt::{
     cloudevents::MarktEvent,
     repository::{
         PreisblattDienstleistungRepository, PreisblattHardwareRepository, PreisblattKaRepository,
-        PreisblattMessungRepository, PreisblattRepository, PreisblattSource, PriCatRepository as _,
+        PreisblattMessungRepository, PreisblattRepository, PreisblattSource,
     },
 };
 use mako_service::cedar::CedarEnforcer;
@@ -208,8 +208,6 @@ pub async fn get_preisblatt(
 )]
 #[allow(clippy::too_many_arguments)]
 pub async fn put_preisblatt(
-    Extension(repo): Extension<PreisblattRepoExt>,
-    Extension(pricat_repo): Extension<PriCatRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
     Extension(pool): Extension<sqlx::PgPool>,
@@ -317,106 +315,73 @@ pub async fn put_preisblatt(
 
     let data = req.data;
     let bo4e_version = req.bo4e_version;
-    match repo
-        .upsert(
-            &nb_mp_id,
-            data.clone(),
-            &bo4e_version,
-            PreisblattSource::Api,
-        )
-        .await
+
+    // The durable price sheet, its PRICAT version snapshot and the
+    // de.markt.pricat.published event commit in ONE transaction: a detached
+    // best-effort task let the two stores diverge and silently dropped the
+    // PRICAT 27003 dispatch to the LFs while the operator still saw 204.
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    if let Err(e) = PgPreisblattRepository::upsert_tx(
+        &mut tx,
+        &nb_mp_id,
+        &data,
+        &bo4e_version,
+        PreisblattSource::Api,
+    )
+    .await
     {
-        Ok(()) => {
-            // Phase 2: also store a versioned snapshot in pricat_versions and
-            // emit de.markt.pricat.published so ERP subscribers and the dispatch
-            // background task can react.
-            //
-            // This is best-effort: a failure here is logged but does NOT fail the
-            // API call — the preisblaetter record is already durably stored.
-            let nb_gln2 = nb_mp_id.clone();
-            let tenant2 = tenant_gln.clone();
-            let data2 = data.clone();
-            let bo4e2 = bo4e_version.clone();
-            let pool2 = pool.clone();
-            let notify2 = notify.clone();
-            tokio::spawn(async move {
-                // Extract validity dates from the BO4E payload.
-                let valid_from = data2
-                    .pointer("/gueltigkeit/startdatum")
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| {
-                        let parts: Vec<&str> = s.splitn(4, '-').collect();
-                        if parts.len() >= 3 {
-                            let y: i32 = parts[0].parse().ok()?;
-                            let m: u8 = parts[1].parse().ok()?;
-                            let d: u8 = parts[2].parse().ok()?;
-                            let month = time::Month::try_from(m).ok()?;
-                            time::Date::from_calendar_date(y, month, d).ok()
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
-
-                let valid_to = data2
-                    .pointer("/gueltigkeit/enddatum")
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| {
-                        let parts: Vec<&str> = s.splitn(4, '-').collect();
-                        if parts.len() >= 3 {
-                            let y: i32 = parts[0].parse().ok()?;
-                            let m: u8 = parts[1].parse().ok()?;
-                            let d: u8 = parts[2].parse().ok()?;
-                            let month = time::Month::try_from(m).ok()?;
-                            time::Date::from_calendar_date(y, month, d).ok()
-                        } else {
-                            None
-                        }
-                    });
-
-                match pricat_repo
-                    .upsert_version(
-                        &nb_gln2,
-                        &tenant2,
-                        valid_from,
-                        valid_to,
-                        data2,
-                        &bo4e2,
-                        PreisblattSource::Api,
-                    )
-                    .await
-                {
-                    Ok(version_id) => {
-                        // Emit de.markt.pricat.published so ERP webhook
-                        // subscribers and the obsd observability daemon are notified.
-                        let evt = MarktEvent::new(
-                            &tenant2,
-                            mako_events::markt::PRICAT_PUBLISHED,
-                            nb_gln2.clone(),
-                            serde_json::json!({
-                                "nb_mp_id": nb_gln2,
-                                "version_id": version_id,
-                                "valid_from": valid_from.to_string(),
-                            }),
-                        );
-                        if let Err(e) = crate::outbox::enqueue(&pool2, &evt, &notify2).await {
-                            tracing::error!(error = %e, "put_preisblatt: pricat.published enqueue failed");
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            nb_mp_id = %nb_gln2,
-                            error  = %e,
-                            "put_preisblatt: pricat_versions upsert failed (non-fatal)",
-                        );
-                    }
-                }
-            });
-
-            StatusCode::NO_CONTENT.into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
+
+    // `pricat_versions.valid_from` is NOT NULL — an open-started sheet
+    // (`preisblaetter.valid_from IS NULL`) is snapshotted as starting today in
+    // German civil time.
+    let valid_from = gueltigkeit_date(&data, "/gueltigkeit/startdatum")
+        .unwrap_or_else(super::malo::today_berlin);
+    let valid_to = gueltigkeit_date(&data, "/gueltigkeit/enddatum");
+
+    let version_id = match PgPriCatRepository::upsert_version_tx(
+        &mut tx,
+        &nb_mp_id,
+        &tenant_gln,
+        valid_from,
+        valid_to,
+        &data,
+        &bo4e_version,
+        PreisblattSource::Api,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    // Emit de.markt.pricat.published so ERP webhook subscribers, the obsd
+    // observability daemon and the PRICAT dispatch worker are notified.
+    let evt = MarktEvent::new(
+        &tenant_gln,
+        mako_events::markt::PRICAT_PUBLISHED,
+        nb_mp_id.clone(),
+        serde_json::json!({
+            "nb_mp_id": nb_mp_id,
+            "version_id": version_id,
+            "valid_from": valid_from.to_string(),
+        }),
+    );
+    if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt, &notify).await {
+        tracing::error!(error = %e, "put_preisblatt: pricat.published enqueue failed");
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+
+    StatusCode::NO_CONTENT.into_response()
 }
 
 // ── Helper ────────────────────────────────────────────────────────────────────
@@ -426,6 +391,18 @@ fn today_iso() -> String {
     let now = time::OffsetDateTime::now_utc();
     let d = now.date();
     format!("{:04}-{:02}-{:02}", d.year(), d.month() as u8, d.day())
+}
+
+/// Read a BO4E `Zeitraum` boundary (`gueltigkeit.startdatum` / `.enddatum`) as a
+/// civil date. Accepts a plain ISO date and the leading date of an ISO datetime,
+/// matching the `::date` cast the `preisblaetter` upsert applies to the same field.
+fn gueltigkeit_date(data: &serde_json::Value, pointer: &str) -> Option<time::Date> {
+    let s = data.pointer(pointer).and_then(|v| v.as_str())?;
+    time::Date::parse(
+        s.get(..10)?,
+        time::macros::format_description!("[year]-[month]-[day]"),
+    )
+    .ok()
 }
 
 // ── PreisblattMessung (MSB) — B5 ─────────────────────────────────────────────

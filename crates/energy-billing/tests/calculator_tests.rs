@@ -362,8 +362,9 @@ fn wasser_trinkwasser_carries_7_pct_and_public_abwasser_no_ust() {
     // Netto: Grundpreis 8.50 + Mengenpreis 30×2.10=63.00 + Schmutzwasser
     // 30×2.80=84.00 + Niederschlagswasser 100×1.20/12=10.00 → 165.50.
     assert_eq!(inv.netto_eur, dec!(165.50));
-    // USt only on the Trinkwasser block: 7 % × (8.50 + 63.00) = 5.005.
-    assert_eq!(inv.mwst_eur.round_dp(3), dec!(5.005));
+    // USt only on the Trinkwasser block: 7 % × (8.50 + 63.00) = 5.005, stated
+    // to the cent as every Steuerbetrag is (§14 Abs. 4 Nr. 8 UStG).
+    assert_eq!(inv.mwst_eur, dec!(5.01));
     // Exactly one 7 % tax position and no 19 % position.
     let tax: Vec<_> = inv
         .positions
@@ -5397,4 +5398,318 @@ fn sect14a_modul1_combines_with_modul3() {
         3,
         "and all three Modul 3 Tarifstufen alongside it"
     );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Regressions — see the individual test docs for the defect each one pins
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Build a context for an arbitrary period; `bill_full` is pinned to Jan 2026.
+fn ctx_for(from: time::Date, to: time::Date) -> BillingContext {
+    BillingContext {
+        malo_id: "51238696781".to_owned(),
+        lf_mp_id: "9900000000001".to_owned(),
+        rechnungsnummer: "TEST".to_owned(),
+        period: BillingPeriod::new(from, to).unwrap(),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates_2026(),
+        ..Default::default()
+    }
+}
+
+/// The Gas RLM Leistungspreis is quoted per kW **and month**, so an annual bill
+/// charges twelve of them. It used to charge exactly one.
+#[test]
+fn gas_rlm_leistungspreis_scales_with_the_billed_months() {
+    let tariff = j(r#"{
+        "category":"GAS",
+        "gas_arbeitspreis_ct_per_kwh_hs":8.0,
+        "gas_leistungspreis_ct_per_kw_month":30.0
+    }"#);
+    let quantities = Quantities {
+        gas: Some(GasMeterInput {
+            kwh_hs: Some(dec!(500000)),
+            spitzenleistung_kw: Some(dec!(50)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let ctx = ctx_for(date!(2026 - 01 - 01), date!(2026 - 12 - 31));
+    let invoice = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx, &quantities)
+        .unwrap();
+
+    let lp = invoice
+        .positions
+        .iter()
+        .find(|p| p.has_tag("gas_leistungspreis"))
+        .expect("Leistungspreis Gas position");
+    // 50 kW × 0.30 EUR/kW/Monat × 12 Monate = 180.00 EUR, not 15.00.
+    assert!(
+        (lp.net_eur - dec!(180)).abs() < dec!(0.60),
+        "annual Leistungspreis must be ~180.00 EUR, got {}",
+        lp.net_eur
+    );
+}
+
+/// A Stornorechnung is the exact negation of the original document — including
+/// the Abschlag netting. Brutto 1200 less 1000 paid reverses to −200, never −2200.
+#[test]
+fn cancellation_negates_the_abschlag_netting() {
+    let tariff =
+        j(r#"{"category":"STROM","grundpreis_ct_per_day":10.0,"arbeitspreis_ct_per_kwh":30.0}"#);
+    let abschlage = vec![AbschlagDeduction {
+        datum: date!(2026 - 01 - 15),
+        betrag_eur: dec!(50),
+        ust_satz: dec!(0.19),
+        beschreibung: Some("Abschlag Januar 2026".to_owned()),
+    }];
+    let build = |invoice_type: InvoiceType| {
+        let ctx = BillingContext {
+            abschlage: abschlage.clone(),
+            invoice_type,
+            ..ctx_for(date!(2026 - 01 - 01), date!(2026 - 01 - 31))
+        };
+        tariff
+            .build_engine(&no_grid(), &rates_2026())
+            .bill(ctx, &elec(dec!(200)))
+            .unwrap()
+    };
+
+    let original = build(InvoiceType::Final);
+    original.assert_valid();
+    assert!(original.abschlag_total_eur > dec!(0));
+
+    let storno = build(InvoiceType::Cancellation {
+        original_invoice_id: "INV-2026-001".to_owned(),
+    });
+    storno.assert_valid();
+    assert_eq!(storno.brutto_eur, -original.brutto_eur);
+    assert_eq!(storno.abschlag_total_eur, -original.abschlag_total_eur);
+    assert_eq!(storno.abschlag_ust_eur, -original.abschlag_ust_eur);
+    assert_eq!(
+        storno.zahlbetrag_eur, -original.zahlbetrag_eur,
+        "the Storno must credit −(brutto − Abschläge), not −(brutto + Abschläge)"
+    );
+}
+
+/// The minimum-invoice top-up used to return before the reversal pass, so a
+/// Storno of a topped-up invoice billed the customer instead of crediting them.
+#[test]
+fn cancellation_with_minimum_invoice_is_still_negated() {
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":5.0}"#);
+    let build = |invoice_type: InvoiceType| {
+        let ctx = BillingContext {
+            minimum_invoice_eur_brutto: Some(dec!(100.00)),
+            invoice_type,
+            ..ctx_for(date!(2026 - 01 - 01), date!(2026 - 01 - 31))
+        };
+        tariff
+            .build_engine(&no_grid(), &rates_2026())
+            .bill(ctx, &elec(dec!(10)))
+            .unwrap()
+    };
+
+    let original = build(InvoiceType::Initial);
+    original.assert_valid();
+    assert!(original.brutto_eur >= dec!(100.00));
+
+    let storno = build(InvoiceType::Cancellation {
+        original_invoice_id: "INV-2026-002".to_owned(),
+    });
+    storno.assert_valid();
+    assert_eq!(storno.brutto_eur, -original.brutto_eur);
+    assert!(storno.zahlbetrag_eur < dec!(0), "a Storno credits");
+    assert_eq!(
+        storno
+            .positions
+            .iter()
+            .filter(|p| p.has_tag("mindestbetrag"))
+            .count(),
+        1
+    );
+}
+
+/// §13b: the whole supply is invoiced net, and the injected Mindestbetrag is a
+/// supply position like any other — it must not attract 19 % on its own.
+#[test]
+fn minimum_invoice_topup_is_reverse_charged_under_sect13b() {
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":5.0}"#);
+    let ctx = BillingContext {
+        minimum_invoice_eur_brutto: Some(dec!(100.00)),
+        reverse_charge: true,
+        ..ctx_for(date!(2026 - 01 - 01), date!(2026 - 01 - 31))
+    };
+    let invoice = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx, &elec(dec!(10)))
+        .unwrap();
+    invoice.assert_valid();
+
+    assert_eq!(invoice.mwst_eur, dec!(0), "§13b invoices carry no VAT");
+    assert_eq!(
+        invoice.brutto_eur,
+        dec!(100.00),
+        "the gap is net under reverse charge, so brutto lands on the minimum"
+    );
+    let topup = invoice
+        .positions
+        .iter()
+        .find(|p| p.has_tag("mindestbetrag"))
+        .expect("Mindestbetrag position");
+    assert!(topup.is_reverse_charge());
+    let subtotals = invoice.tax_subtotals(dec!(0.19));
+    assert_eq!(subtotals.len(), 1);
+    assert_eq!(
+        subtotals[0].category,
+        energy_billing::VatCategory::ReverseCharge
+    );
+}
+
+/// The dynamic-tariff commodity Grundpreis is contract-clipped like every other
+/// Grundpreis: a mid-period move-in pays for its own days, not the full period.
+#[test]
+fn dynamic_grundpreis_is_prorated_to_the_contract_days() {
+    use std::collections::HashMap;
+    let tariff = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":20}"#);
+    let intervals = [DynamicInterval {
+        timestamp_utc: time::macros::datetime!(2026-01-20 13:00 UTC),
+        kwh: dec!(1),
+    }];
+    let mut prices = HashMap::new();
+    prices.insert(time::macros::datetime!(2026-01-20 13:00 UTC), dec!(25));
+    let quantities = Quantities {
+        dynamic_intervals: intervals.to_vec(),
+        dynamic_epex_prices: prices,
+        ..Default::default()
+    };
+    let ctx = BillingContext {
+        vertragsbeginn: Some(date!(2026 - 01 - 16)),
+        ..ctx_for(date!(2026 - 01 - 01), date!(2026 - 01 - 31))
+    };
+    let invoice = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx, &quantities)
+        .unwrap();
+
+    let gp = invoice
+        .positions
+        .iter()
+        .find(|p| p.description.starts_with("Grundpreis Strom"))
+        .expect("Grundpreis position");
+    // Jan 16..31 = 16 days × 0.20 EUR, not 31.
+    assert_eq!(gp.quantity, dec!(16));
+    assert_eq!(gp.net_eur, dec!(3.20));
+}
+
+/// The EEG-Gutschrift is a separate supply governed by the operator's own USt
+/// status. For a §19 Kleinunternehmer it is 0 %, so it must not net against the
+/// standard-rate consumption base — that understates the supplier's output VAT.
+#[test]
+fn eeg_gutschrift_kleinunternehmer_does_not_reduce_the_standard_rate_base() {
+    let base = r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0"#;
+    let quantities = Quantities {
+        electricity: Some(meter(dec!(1000))),
+        eeg_gutschrift_eur: Some(dec!(100)),
+        ..Default::default()
+    };
+
+    let regel = bill(&j(&format!("{base}}}")), quantities.clone());
+    let klein = bill(
+        &j(&format!(
+            "{base},\"eeg_gutschrift_kleinunternehmer_19_ustg\":true}}"
+        )),
+        quantities,
+    );
+    regel.assert_valid();
+    klein.assert_valid();
+
+    // Same net either way — only the taxable base differs.
+    assert_eq!(regel.netto_eur, klein.netto_eur);
+    // The Regelbesteuerung credit nets against the 19 % base; the §19 one does not.
+    assert_eq!(klein.mwst_eur - regel.mwst_eur, dec!(19.00));
+    let zero_rated: Vec<_> = klein
+        .tax_subtotals(dec!(0.19))
+        .into_iter()
+        .filter(|s| s.category == energy_billing::VatCategory::ZeroRated)
+        .collect();
+    assert_eq!(zero_rated.len(), 1, "the credit forms its own 0 % subtotal");
+    assert_eq!(zero_rated[0].taxable_base_eur, dec!(-100));
+}
+
+/// BO4E: "die Summe dieser Beträge ergibt den Wert für gesamtsteuer". Each
+/// Steuerbetrag is stated to the cent, so the total must be their sum — summing
+/// 5-dp tax layers and rounding once at the end lands a cent low.
+#[cfg(feature = "bo4e")]
+#[test]
+fn multi_rate_gesamtsteuer_equals_the_sum_of_the_stated_steuerbetraege() {
+    use energy_billing::{BillingPosition, Invoice};
+
+    // 19 % on 10.50 → 1.995 and 7 % on 7.50 → 0.525: both round up on their own
+    // (2.00 + 0.53 = 2.53) but sum to 2.52 before rounding.
+    let positions = vec![
+        BillingPosition::debit(
+            "Strom",
+            dec!(1),
+            "kWh",
+            dec!(10.50),
+            PositionCategory::Commodity,
+        ),
+        BillingPosition::debit(
+            "Fernwärme",
+            dec!(1),
+            "kWh",
+            dec!(7.50),
+            PositionCategory::Commodity,
+        )
+        .with_tax_rate(dec!(0.07)),
+    ];
+    let ctx = ctx_for(date!(2026 - 01 - 01), date!(2026 - 01 - 31));
+    let engine = BillingEngine::new()
+        .add(FixedPositions(positions))
+        .add(MwStProvider::new(dec!(0.19)));
+    let invoice: Invoice = engine.bill(ctx, &Quantities::default()).unwrap();
+    invoice.assert_valid();
+
+    let subtotal_sum: Decimal = invoice
+        .tax_subtotals(dec!(0.19))
+        .iter()
+        .map(|s| s.tax_amount_eur)
+        .sum();
+    assert_eq!(subtotal_sum, dec!(2.53));
+    assert_eq!(invoice.mwst_eur, subtotal_sum);
+
+    let json = invoice.to_rechnung_json();
+    let stated: Decimal = json["steuerbetraege"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            s["steuerwert"]
+                .as_str()
+                .unwrap()
+                .parse::<Decimal>()
+                .unwrap()
+        })
+        .sum();
+    assert_eq!(
+        json["gesamtsteuer"]["wert"].as_str().unwrap(),
+        stated.to_string()
+    );
+}
+
+/// A provider that emits a fixed position list — lets a test drive the engine's
+/// tax pass over exactly the base it cares about.
+struct FixedPositions(Vec<energy_billing::BillingPosition>);
+
+impl energy_billing::BillingProvider for FixedPositions {
+    fn bill(
+        &self,
+        _ctx: &BillingContext,
+        _quantities: &Quantities,
+        _prior: &[energy_billing::BillingPosition],
+    ) -> Result<Vec<energy_billing::BillingPosition>, energy_billing::EngineError> {
+        Ok(self.0.clone())
+    }
 }

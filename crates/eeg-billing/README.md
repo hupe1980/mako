@@ -75,29 +75,24 @@ receives the already-resolved AW from the caller.
 | `FlexibilitySurcharge` | §50a EEG 2023 | `kw × rate / 12` (monthly capacity payment) |
 | `SonstigeDirektvermarktung` | §21a EEG | EUR 0 — direct third-party sale, no NB payment; period recorded in settlement history |
 
-### §20 Abs. 3 EEG 2023 — Managementprämie
+### §23a EEG 2023 i.V.m. Anlage 1 — Gleitende Marktprämie
 
-**This library's implementation** computes the Managementprämie by **incorporating it into the AW** before the spread calculation. The implementation is based on this reading of §20 Abs. 3 EEG 2023:
-
-> *„Bei der Berechnung der Marktprämie ist der anzulegende Wert um 0,4 Cent pro Kilowattstunde zu erhöhen.“*
-
-Under this reading:
+Anlage 1 Nr. 3.1.2 (Monatsmarktwert) and Nr. 4.1.2 (Jahresmarktwert) give the
+whole formula:
 
 ```
-eff_AW = direktverm_aw_ct + managementpraemie_ct
-Marktprämie = max(0, eff_AW − EPEX) × kwh / 100
+MP = AW − MW          (Nr. 3.1.2)
 ```
 
-When `EPEX > eff_AW`, the total payment is **zero** — no guaranteed floor.
+with `AW` defined in Anlage 1 Nr. 1 as "der anzulegende Wert **unter
+Berücksichtigung der §§ 19 bis 54**" — so §36h, §51 and §§53b–54 all reach it —
+and floored at zero by Nr. 3.1.2 Satz 2.
 
-> ⚠ **This is one defensible interpretation. Verify before production use.**
-> The Managementprämie treatment has evolved across EEG versions and is subject to
-> evolving BNetzA guidance and bilateral contract terms. This implementation **must be
-> independently verified** against:
-> - the EEG version applicable to the specific plant (EEG 2017/2021/2023 differ),
-> - current BNetzA published guidance on §20 Abs. 3 EEG 2023, and
-> - the contractual framework between Netzbetreiber, Direktvermarkter, and operator.
-> Do not rely on this formula for settlement disputes without such verification.
+**There is no additive Managementprämie.** §20 EEG 2023 has no Absätze at all; it
+lists the three conditions under which the Marktprämie is payable. Since EEG 2014
+the marketing cost sits *inside* the anzulegender Wert, and its mirror image is
+the §53 Abs. 1 deduction of 0,4 ct (Solar, Wind) / 0,2 ct (everything else) that
+the **Einspeisevergütung** route takes off the same AW.
 
 ---
 
@@ -110,11 +105,11 @@ eeg-billing/src/
 ├── scheme.rs            SettlementScheme, TariffSource, Paragraph100Rule
 ├── technology.rs        ErzeugungsArt (19 variants), InbetriebnahmeTyp, RepoweringScope
 ├── version.rs           EegGesetz (8 variants), §51 thresholds and kW-exemption tables
-├── rates.rs             Static AW tables: solar PV (Solarpaket I), wind, biomasse, KWKG
+├── rates.rs             §48 AW tables: solar PV per §49 window, wind, biomasse, KWKG
 ├── foerderdauer.rs      foerderendedatum_eeg(), §52 Pflichtzahlung, §51a extension
 ├── foerderungsende.rs   FoerderendeGrund enum, SanktionStatus lifecycle
 │
-├── degression.rs        §23a quarterly solar PV degression — Quarter, DegressionTier
+├── degression.rs        §49 semi-annual solar AW degression — 1 % every 1 Feb / 1 Aug
 ├── direktverm.rs        §§20–22 — mandatory threshold, Ausschreibungspflicht, period model
 ├── negativpreis.rs      §51 per-interval negative-price derivation (version-aware runs)
 ├── reductions.rs        §52 Pflichtzahlungen — §52 Abs. 6 netting (a euro-level offset)
@@ -167,21 +162,20 @@ assert_eq!(out.settlement_eur, Some(dec!(40.55)));
 ```
 
 ```rust
-// §20 EEG 2023 — Direktvermarktung
-// eff_AW = 6.28 + 0.4 = 6.68 ct; EPEX = 4.50 ct
-// Marktprämie = (6.68 − 4.50) × 100,000 / 100 = 2,180 EUR
+// §23a EEG 2023 — Direktvermarktung
+// AW = 6.28 ct; Monatsmarktwert = 4.50 ct
+// Marktprämie = (6.28 − 4.50) × 100,000 / 100 = 1,780 EUR
 use eeg_billing::{SettleInput, SettlementScheme, calculate_settlement};
 use rust_decimal::dec;
 
 let out = calculate_settlement(&SettleInput {
     scheme: SettlementScheme::MarketPremium,
     einspeisemenge_kwh: Some(dec!(100_000)),
-    direktverm_aw_ct: Some(dec!(6.28)),    // statutory AW (before Managementprämie)
+    direktverm_aw_ct: Some(dec!(6.28)),    // statutory or tendered AW
     epex_avg_ct_kwh: Some(dec!(4.50)),
-    managementpraemie_ct: Some(dec!(0.4)), // §20 Abs. 3: incorporated into AW
     ..SettleInput::default()
 });
-// 2,180 EUR; see Managementprämie section for treatment caveats
+// 1,780 EUR
 ```
 
 ---
@@ -235,7 +229,6 @@ let out = calculate_settlement(&SettleInput {
     einspeisemenge_kwh: Some(dec!(10_000)),
     direktverm_aw_ct: Some(dec!(8.5)),
     epex_avg_ct_kwh: Some(dec!(1.5)), // ≤ 2 ct/kWh → §51b triggers
-    managementpraemie_ct: Some(dec!(0.4)),
     ..SettleInput::default()
 });
 assert_eq!(out.settlement_eur, Some(dec!(0)));
@@ -320,19 +313,21 @@ let r = apply_sect52_netting(settlement_eur, pflichtzahlung_eur);
 
 ---
 
-## §23a EEG 2023 — Quarterly solar PV degression
+## §49 EEG 2023 — Semi-annual solar degression
+
+The anzulegende Werte of §48 Abs. 1, 2 and 2a fall by a fixed **1 % every six
+months**, on 1 February and 1 August, from 01.02.2024. Each step compounds on the
+**unrounded** predecessor (§49 Satz 2); the 2-dp rounding is presentation only.
+The GW-keyed "atmender Deckel" of §49 EEG 2021 is gone.
 
 ```rust
-use eeg_billing::degression::{solar_ueberschuss_rate_for_quarter, DegressionTier, Quarter};
+use eeg_billing::rates::solar_pv_ueberschuss_aw_ct;
 use rust_decimal::dec;
+use time::macros::date;
 
-// 9 kWp, Q4 2024 (2 quarters after Solarpaket I), 1% tier → 8.51 × 0.99² = 8.34 ct
-let rate = solar_ueberschuss_rate_for_quarter(
-    Quarter { year: 2024, quarter: 4 },
-    dec!(9),
-    DegressionTier::Standard,
-);
-assert_eq!(rate, Some(dec!(8.34)));
+// 9 kWp roof, commissioned in the 1 Aug 2024 window:
+// §48 Abs. 2 Nr. 1 base 8.60 ct × 0.99² = 8.42886 → 8.43 ct gross AW.
+assert_eq!(solar_pv_ueberschuss_aw_ct(dec!(9), date!(2024-09-01)), Some(dec!(8.43)));
 ```
 
 ---
@@ -471,7 +466,7 @@ breakdown entry.
   0,1 ct/kWh, statutory-AW plants only), §53c (Stromsteuerbefreiung, capped at the
   §3 StromStG rate) and §54 (solar first-segment auctions, four Absätze)
 - §19 EInsMan curtailment compensation (separate position, §51 exempt)
-- §23a quarterly degression, §36h wind Korrekturfaktor
+- §49 semi-annual solar degression, §36h wind Korrekturfaktor
 - §24 **Zusammenfassung**: `sind_eine_anlage` decides the whole of Abs. 1 — the four
   cumulative conditions of Satz 1 and the Sätze 2–5 carve-outs (same
   Biogaserzeugungsanlage, Freifläche vs. building solar, differing
@@ -509,9 +504,12 @@ breakdown entry.
 | Topic | Source |
 |---|---|
 | EEG 2023 | BGBl. I Nr. 28, 10.01.2023 |
-| Solarpaket I | BGBl. I Nr. 107, 16.05.2024 (§48 rates, §51a) |
+| §48 Abs. 2 / 2a anzulegende Werte | Fassung vom 15.05.2024, kept in force by §101 Abs. 1 Satz 2 pending EU state-aid approval; cross-checked against the BNetzA "Anzulegende Werte für Solaranlagen" tables |
+| §49 Solardegression | fixed 1 % every six months from 01.02.2024, compounded unrounded (§49 Satz 2) |
+| §36h Korrekturfaktor | §36h Abs. 1 Satz 2 Stützwerte, linear interpolation (Satz 3), Satz 4 out-of-range rules |
 | KWKG 2023 | BGBl. I Nr. 59, 28.12.2023 |
-| §20 Abs. 3 Managementprämie | Incorporated into AW before spread (not a floor) — **verify against BNetzA guidance** |
+| §23a Marktprämie | `MP = AW − MW`, floored at zero (Anlage 1 Nr. 3.1.2) — no additive Managementprämie |
+| §51 Negativpreisregel | reduces the AW, so it reaches the Marktprämie; size test aggregated per §24 (§51 Abs. 2 Satz 2) |
 | §51 Bestandsschutz | §100 Abs. 1 Satz 4 EEG 2017 — boundary 2016-01-01 |
 | §51b mechanism | `verringert sich der anzulegende Wert auf null` — AW = 0 (§51b Satz 1 EEG 2023) |
 | §52 Pflichtzahlungen | €10/kW/month; §52 Abs. 3 retroactive €2/kW |
@@ -550,6 +548,6 @@ cargo test -p eeg-billing --all-features
 ```
 
 The regulatory showcase (`tests/regulatory_showcase.rs`) is executable documentation
-for every §§ rule, including the correct EEG 2023 Managementprämie formula,
+for every §§ rule, including the Anlage 1 Marktprämie formula,
 §51 version-specific thresholds, §52 Abs. 6 netting, §100 Übergangsregelung,
 and all settlement scheme edge cases.

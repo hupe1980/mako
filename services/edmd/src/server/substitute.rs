@@ -17,7 +17,15 @@ pub struct SubstituteRequest {
     /// Substitution method: `LinearInterpolation`, `PriorPeriodAverage`,
     /// `ZeroFill`, or `LastValueCarryForward`. Default: `PriorPeriodAverage`.
     pub method: Option<String>,
-    /// Number of prior-period days to use for `PriorPeriodAverage` (default: 7).
+    /// How far back to read reference data, in days (default: 7).
+    ///
+    /// **`PriorPeriodAverage` ignores anything past 7.** The Vergleichstag rule
+    /// averages the matching slot over `metering::substitute::REFERENCE_PERIOD_DAYS`
+    /// (= 7) preceding each gap, so a larger value adds no reference days to
+    /// that method. It is not rejected, because it still does something for the
+    /// others: it widens the window this handler reads, which is where the
+    /// bracketing values for `LinearInterpolation` and `LastValueCarryForward`
+    /// are found.
     pub prior_days: Option<u32>,
     /// Operator ID for audit trail.
     pub operator_id: Option<String>,
@@ -170,12 +178,13 @@ pub async fn run_substitute_values(
     };
 
     // Read the MaLo's existing intervals across the reference + gap + trailing
-    // window through the repository. meterstore owns the readings; `query` is
-    // version-resolved and tenant-scoped and returns only billable qualities, so a
-    // Faulty/Unknown slot reads as a gap — exactly what a § 60 Abs. 2 Ersatzwert
-    // may fill.
+    // window through the repository. `query` is version-resolved and
+    // tenant-scoped but does NOT filter quality, so the billable filter is
+    // applied here: a Faulty/Unknown slot must read as a gap — exactly what a
+    // § 60 Abs. 2 Ersatzwert may fill — and must never serve as reference data
+    // or bracket an interpolation.
     let prior_from = gap_from - time::Duration::days(prior_days);
-    let existing = match repo
+    let resolved = match repo
         .query(&TimeSeriesQuery {
             malo_id: malo_id.to_string(),
             from: prior_from,
@@ -191,6 +200,23 @@ pub async fn run_substitute_values(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
+    let existing: Vec<MeterRead> = resolved
+        .iter()
+        .filter(|r| r.quality.is_billable())
+        .cloned()
+        .collect();
+
+    // The reporting operator keys the meterstore version scope, and versions
+    // only supersede each other *within* a scope. A substitute filed under the
+    // tenant would therefore never displace the faulty row it replaces: both
+    // would stand and the slot would be counted twice. So it inherits the
+    // operator of the reading it stands in for — preferring one from inside the
+    // window, since that is the row being displaced.
+    let sender_mp_id = resolved
+        .iter()
+        .filter(|r| r.dtm_from >= gap_from && r.dtm_from < gap_to)
+        .find_map(|r| r.sender_mp_id.clone())
+        .or_else(|| resolved.iter().find_map(|r| r.sender_mp_id.clone()));
 
     // Prior-period reference: billable reads strictly before the gap.
     let prior_intervals: Vec<MeterInterval> = existing
@@ -299,19 +325,23 @@ pub async fn run_substitute_values(
             .into_response();
     }
 
-    // Store generated intervals and log them
-    let sparte = match req
-        .sparte
-        .as_deref()
-        .unwrap_or("STROM")
-        .to_uppercase()
-        .as_str()
-    {
-        "GAS" => metering::interval::Sparte::Gas,
-        "WAERME" | "WÄRME" => metering::interval::Sparte::Waerme,
-        "WASSER" => metering::interval::Sparte::Wasser,
-        _ => metering::interval::Sparte::Strom,
-    };
+    // Store generated intervals and log them. The Sparte is authoritative on
+    // the stored series the gap belongs to; the request value is only a
+    // fallback for a MaLo with no resolved reads in the window.
+    let sparte = resolved.first().map(|r| r.sparte).unwrap_or_else(|| {
+        match req
+            .sparte
+            .as_deref()
+            .unwrap_or("STROM")
+            .to_uppercase()
+            .as_str()
+        {
+            "GAS" => metering::interval::Sparte::Gas,
+            "WAERME" | "WÄRME" => metering::interval::Sparte::Waerme,
+            "WASSER" => metering::interval::Sparte::Wasser,
+            _ => metering::interval::Sparte::Strom,
+        }
+    });
 
     let reason_str = req
         .reason
@@ -403,9 +433,11 @@ pub async fn run_substitute_values(
             source: IngestionSource::AutoSubstitute,
             push_session: None,
             quality_warnings: substitute_warnings.get(&entry_idx).cloned(),
-            sender_mp_id: None,
+            sender_mp_id: sender_mp_id.clone(),
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: None,
+            // edmd's own output, not a delivery — arrival order is the order.
+            mscons_version: None,
         });
         audit.push((iv.from, iv.to, method_str, iv.value));
         stored += 1;

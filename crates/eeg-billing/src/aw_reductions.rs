@@ -10,7 +10,7 @@
 //! ermittelte anzulegende Wert verringert sich".
 //!
 //! The distinction is not cosmetic. The gleitende Marktprämie is
-//! `max(0, AW + Managementprämie − Marktwert)`, floored at zero. Subtracting a
+//! `max(0, AW − Marktwert)`, floored at zero. Subtracting a
 //! euro amount *after* that floor is a different number from reducing the AW
 //! *before* it: once the Marktwert is at or above the AW the premium is already
 //! zero, and a post-hoc deduction would push the settlement negative — charging

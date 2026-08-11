@@ -361,10 +361,19 @@ where
             return Ok(());
         }
 
-        let idx = usize::try_from(d.attempts)
-            .unwrap_or(0)
-            .min(self.config.backoff.len() - 1);
-        let delay = i64::try_from(self.config.backoff[idx].as_secs()).unwrap_or(i64::MAX);
+        // The last configured entry repeats; an empty backoff falls back to the
+        // poll interval rather than underflowing the index.
+        let idx = usize::try_from(d.attempts).unwrap_or(0);
+        let delay = self
+            .config
+            .backoff
+            .get(idx)
+            .or_else(|| self.config.backoff.last())
+            .map_or_else(
+                || self.config.poll_interval.as_secs(),
+                std::time::Duration::as_secs,
+            );
+        let delay = i64::try_from(delay).unwrap_or(i64::MAX);
         sqlx::query(
             "UPDATE event_delivery
                 SET attempts = $3,

@@ -44,8 +44,11 @@ CREATE TABLE submission_runs (
     period_from             DATE        NOT NULL,
     period_to               DATE        NOT NULL,
     -- Ascending version within (bilanzierungsgebiet_id, period). Sent as
-    -- MSCONS SG6 DTM+293, so the wire value derives from this timestamp.
-    version                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- MSCONS SG6 DTM+293 (format 304), which carries whole seconds and no more
+    -- — so the stored value is truncated to seconds. A microsecond-precision
+    -- version can never be matched again when the BIKO echoes it back in a
+    -- Datenstatus or Prüfmitteilung.
+    version                 TIMESTAMPTZ NOT NULL DEFAULT date_trunc('second', now()),
     -- Which settlement run this submission belongs to.
     abrechnungslauf         TEXT        NOT NULL DEFAULT 'BKA'
                             CHECK (abrechnungslauf IN ('BKA', 'KBKA')),
@@ -75,8 +78,11 @@ CREATE TABLE submission_runs (
     -- NUMERIC(18,5) serialized as TEXT for lossless audit trail
     total_kwh               TEXT,
     has_substituted         BOOLEAN     NOT NULL DEFAULT false,
+    -- Only the four states the service actually writes. 'aggregating' and
+    -- 'rejected' had no producer, so a reader filtering on them was reading a
+    -- state that could never occur.
     status                  TEXT        NOT NULL DEFAULT 'pending'
-                            CHECK (status IN ('pending','aggregating','submitted','acked','rejected','failed')),
+                            CHECK (status IN ('pending','submitted','acked','failed')),
     triggered_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
     submitted_at            TIMESTAMPTZ,
     acked_at                TIMESTAMPTZ,
@@ -112,7 +118,7 @@ COMMENT ON TABLE submission_runs IS
     'and arrives via IFTSTA 21003/21004.';
 
 CREATE INDEX sr_period    ON submission_runs (bilanzierungsgebiet_id, period_from, period_to);
-CREATE INDEX sr_status    ON submission_runs (status) WHERE status NOT IN ('acked','rejected');
+CREATE INDEX sr_status    ON submission_runs (status) WHERE status <> 'acked';
 CREATE INDEX sr_tenant    ON submission_runs (tenant);
 CREATE INDEX sr_triggered ON submission_runs (triggered_at DESC);
 

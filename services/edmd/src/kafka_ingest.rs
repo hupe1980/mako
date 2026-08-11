@@ -81,6 +81,10 @@ struct WireBatch {
     source: Option<String>,
     #[serde(default)]
     sender_mp_id: Option<String>,
+    /// MSCONS correction version this batch is delivered under (≥ 14 digits).
+    /// Present, it decides resolution; absent, arrival order does.
+    #[serde(default)]
+    mscons_version: Option<u128>,
     intervals: Vec<WireInterval>,
 }
 
@@ -327,6 +331,7 @@ async fn store_batch(
             sender_mp_id: batch.sender_mp_id.clone(),
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: None,
+            mscons_version: batch.mscons_version,
         });
     }
     if reads.is_empty() {

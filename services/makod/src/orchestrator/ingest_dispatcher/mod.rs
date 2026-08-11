@@ -17,7 +17,10 @@
 //!
 //! - **Spawn** (new process): the tenant receives an initiating message, e.g.
 //!   NB receives ORDERS 17115 Sperrauftrag from LF.  Uses `lookup_correlated`
-//!   by business key; if nothing found, spawns a fresh process and registers it.
+//!   by business key; if no *live* process is found, spawns a fresh one and
+//!   registers it.  The index is append-only, so "live" means the matched
+//!   process was replayed and still occupies the key — an entry left by a
+//!   finished process is retired, not resumed.
 //! - **Resume** (continue existing): e.g. NB receives ORDRSP 19118 from MSB.
 //!   Uses `lookup_correlated` by business key; returns [`IngestOutcome::Skipped`]
 //!   if no process is found (not an error — peer may have sent an orphan message).
@@ -111,6 +114,18 @@ pub enum IngestOutcome {
         reason: &'static str,
     },
 }
+
+/// Verdict on whether a process in the given state still occupies its business
+/// key — the ingest-side equivalent of
+/// [`mako_engine::workflow::OccupiesBusinessKey::occupies_business_key`].
+///
+/// A parameter rather than a `W::State: OccupiesBusinessKey` bound because only
+/// a handful of the ~45 workflow states dispatched here implement that trait,
+/// and the verdict is domain knowledge that belongs in the workflow's own crate
+/// — makod only *consumes* what a crate has already published (that trait, or an
+/// inherent `is_terminal()`). Families that publish neither pass `None` and keep
+/// the presence-based behaviour.
+type Occupancy<W> = fn(&<W as Workflow>::State) -> bool;
 
 // ── Dispatcher ────────────────────────────────────────────────────────────────
 
@@ -471,13 +486,56 @@ impl EdifactIngestDispatcher {
         W::State: serde::Serialize,
         Arc<SlateDbStore>: mako_engine::event_store::AtomicAppend,
     {
-        self.spawn_or_resume_keyed::<W>(key, workflow_name_static, cmd, fv, spawn_deadlines, &[])
-            .await
+        self.spawn_or_resume_keyed::<W>(
+            key,
+            workflow_name_static,
+            cmd,
+            fv,
+            spawn_deadlines,
+            &[],
+            None,
+        )
+        .await
+    }
+
+    /// [`spawn_or_resume`](Self::spawn_or_resume) with an occupancy verdict.
+    ///
+    /// Pass this wherever the message is *initiating* and the workflow's own
+    /// crate publishes a terminal-state verdict — either
+    /// [`mako_engine::workflow::OccupiesBusinessKey`] or an inherent
+    /// `is_terminal()`. See [`Occupancy`] for why it is a parameter rather than
+    /// a trait bound.
+    async fn spawn_or_resume_guarded<W>(
+        &self,
+        key: &str,
+        workflow_name_static: &'static str,
+        cmd: W::Command,
+        fv: &FormatVersion,
+        spawn_deadlines: &[(&'static str, time::OffsetDateTime)],
+        occupies: Occupancy<W>,
+    ) -> Result<IngestOutcome, EngineError>
+    where
+        W: Workflow + 'static,
+        W::Command: CommandPayload + Clone,
+        W::State: serde::Serialize,
+        Arc<SlateDbStore>: mako_engine::event_store::AtomicAppend,
+    {
+        self.spawn_or_resume_keyed::<W>(
+            key,
+            workflow_name_static,
+            cmd,
+            fv,
+            spawn_deadlines,
+            &[],
+            Some(occupies),
+        )
+        .await
     }
 
     /// [`spawn_or_resume`](Self::spawn_or_resume) that also indexes the process
     /// under `extra_keys` (e.g. an inbound ORDERS' Belegnummer) so a later
     /// LOC-less ORDRSP/ORDCHG can resume it by the echoed order reference.
+    #[allow(clippy::too_many_arguments)]
     async fn spawn_or_resume_keyed<W>(
         &self,
         key: &str,
@@ -486,6 +544,7 @@ impl EdifactIngestDispatcher {
         fv: &FormatVersion,
         spawn_deadlines: &[(&'static str, time::OffsetDateTime)],
         extra_keys: &[&str],
+        occupies: Option<Occupancy<W>>,
     ) -> Result<IngestOutcome, EngineError>
     where
         W: Workflow + 'static,
@@ -510,14 +569,23 @@ impl EdifactIngestDispatcher {
 
         // Filter for this workflow family specifically — there can be multiple
         // concurrent processes per key (e.g. active Lieferbeginn + Sperrung).
-        let matching: Vec<&ProcessIdentity> = identities
-            .iter()
+        let matching: Vec<ProcessIdentity> = identities
+            .into_iter()
             .filter(|id| id.workflow_id.name.as_ref() == workflow_name_static)
             .collect();
 
-        if let Some(first) = matching.first() {
+        let resume = match occupies {
+            Some(occupies) => {
+                self.find_occupying_process::<W>(&registry, key, matching, occupies)
+                    .await?
+            }
+            // No published verdict for this family — presence still means resume.
+            None => matching.into_iter().next(),
+        };
+
+        if let Some(identity) = resume {
             // Existing process — idempotent continuation.
-            let identity = (*first).clone();
+            let extra_identity = identity.clone();
             let process =
                 Process::<W, Arc<SlateDbStore>>::from_identity(Arc::clone(&self.store), identity);
             let process_id = process.process_id();
@@ -532,7 +600,7 @@ impl EdifactIngestDispatcher {
             // Register any additional correlation keys (e.g. the Belegnummer of
             // this inbound ORDERS) so a later LOC-less message can resume this
             // process by reference.
-            self.register_extra_keys(&registry, process_id, (*first).clone(), extra_keys)
+            self.register_extra_keys(&registry, process_id, extra_identity, extra_keys)
                 .await;
             return Ok(IngestOutcome::Dispatched {
                 workflow_name: workflow_name_static,
@@ -601,6 +669,58 @@ impl EdifactIngestDispatcher {
             workflow_name: workflow_name_static,
             process_id,
         })
+    }
+
+    /// Return the matched process that still occupies `key`, pruning the
+    /// correlation entries of those that have finished.
+    ///
+    /// The correlation index is **append-only** — `register_correlated` writes
+    /// on spawn and nothing removes the entry when the process ends — so an
+    /// entry proves a process once existed, never that one is still running.
+    /// Resuming on mere presence fed an *initiating* message into a settled
+    /// process, which every initiating command rejects outside its initial
+    /// state; the business key was then blocked forever, since no spawn could
+    /// ever happen again.
+    ///
+    /// This is the ingest-side twin of the commands-API duplicate guard, and
+    /// the prune is load-bearing for the same reason: `resume_by_key` and
+    /// `dispatch_to_process_keyed` resolve a key to a single process, so the
+    /// finished one must be gone before the replacement is registered.
+    /// A failed prune is logged, not propagated — the verdict is already known,
+    /// and the next message retries it.
+    async fn find_occupying_process<W>(
+        &self,
+        registry: &impl mako_engine::registry::ProcessRegistry,
+        key: &str,
+        candidates: Vec<ProcessIdentity>,
+        occupies: Occupancy<W>,
+    ) -> Result<Option<ProcessIdentity>, EngineError>
+    where
+        W: Workflow + 'static,
+    {
+        for identity in candidates {
+            let process = Process::<W, Arc<SlateDbStore>>::from_identity(
+                Arc::clone(&self.store),
+                identity.clone(),
+            );
+            let process_id = process.process_id();
+            if occupies(&process.state().await?) {
+                return Ok(Some(identity));
+            }
+            if let Err(e) = registry
+                .remove_correlated(self.tenant_id, key, process_id)
+                .await
+            {
+                tracing::warn!(
+                    key           = %key,
+                    workflow_name = %identity.workflow_id.name.as_ref(),
+                    process_id    = %process_id,
+                    error         = %e,
+                    "ingest dispatcher: could not retire the finished process's correlation entry",
+                );
+            }
+        }
+        Ok(None)
     }
 
     /// Register a process under additional correlation keys (best-effort).

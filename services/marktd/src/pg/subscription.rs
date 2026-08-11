@@ -24,19 +24,12 @@ const SELECT_COLS: &str =
 
 impl SubscriptionRepository for PgSubscriptionRepository {
     async fn upsert(&self, sub: Subscription) -> Result<i64, MdmError> {
-        let current: Option<i64> =
-            sqlx::query_scalar("SELECT version FROM subscriptions WHERE subscriber_id = $1")
-                .bind(&sub.subscriber_id)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| MdmError::Internal(e.to_string()))?;
-
-        let new_version = current.map_or(1, |v| v + 1);
-
-        sqlx::query(
+        // The version is bumped in SQL and returned: a read-then-write would let
+        // two concurrent PUTs settle on the same version, silently losing one.
+        let new_version: i64 = sqlx::query_scalar(
             r#"INSERT INTO subscriptions
                    (subscriber_id, webhook_url, webhook_secret, roles, event_types, sparten, active, version, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+               VALUES ($1, $2, $3, $4, $5, $6, $7, 1, now())
                ON CONFLICT (subscriber_id) DO UPDATE
                SET webhook_url    = EXCLUDED.webhook_url,
                    webhook_secret = EXCLUDED.webhook_secret,
@@ -44,8 +37,9 @@ impl SubscriptionRepository for PgSubscriptionRepository {
                    event_types    = EXCLUDED.event_types,
                    sparten        = EXCLUDED.sparten,
                    active         = EXCLUDED.active,
-                   version        = EXCLUDED.version,
-                   updated_at     = now()"#,
+                   version        = subscriptions.version + 1,
+                   updated_at     = now()
+               RETURNING version"#,
         )
         .bind(&sub.subscriber_id)
         .bind(&sub.webhook_url)
@@ -54,8 +48,7 @@ impl SubscriptionRepository for PgSubscriptionRepository {
         .bind(&sub.event_types)
         .bind(&sub.sparten)
         .bind(sub.active)
-        .bind(new_version)
-        .execute(&self.pool)
+        .fetch_one(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 

@@ -48,6 +48,34 @@ impl Daemon for Sperrd {
     }
 
     async fn build(cfg: Arc<config::SperrdConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
+        // Every mutating route here has a physical effect: `create` schedules a
+        // disconnection, `execute` and `fail` each put a real IFTSTA 21039 on
+        // the market. Serving them unauthenticated has to be asked for by name,
+        // never reached by leaving a section out of the config.
+        if cfg.oidc.is_none() && !cfg.allow_insecure_no_auth {
+            anyhow::bail!(
+                "no [oidc] section configured. The Sperrung routes create and confirm \
+                 physical disconnections and dispatch IFTSTA 21039 into the market, so \
+                 they are not served without token verification. Configure [oidc], or \
+                 set allow_insecure_no_auth = true to accept an unauthenticated \
+                 deployment."
+            );
+        }
+        if cfg.allow_insecure_no_auth {
+            tracing::warn!(
+                "sperrd: allow_insecure_no_auth is set — any caller that can open a socket \
+                 can order and confirm a Sperrung in this tenant's name"
+            );
+        }
+        let oidc = mako_service::oidc::OidcConfig::build_verifier(
+            cfg.oidc.as_ref(),
+            &ctx.http,
+            &cfg.tenant,
+            ctx.shutdown.clone(),
+        )
+        .await
+        .context("OIDC setup")?;
+
         let makod = Arc::new(MakodClient::new(
             &cfg.makod_url,
             SecretString::from(cfg.makod_api_key.clone()),
@@ -74,7 +102,8 @@ impl Daemon for Sperrd {
             )
             .layer(Extension(makod))
             .layer(Extension(config::Tenant(cfg.tenant.clone())))
-            .layer(Extension(ctx.pool().clone()));
+            .layer(Extension(ctx.pool().clone()))
+            .layer(Extension(oidc));
 
         let mcp_state = Arc::new(mcp_server::SperrdMcpState {
             pool: ctx.pool().clone(),

@@ -35,8 +35,10 @@
 //! type `"CONTRL"` which the [`OutboxWorker`] renders via
 //! `edifact_renderer::render_contrl` and delivers to the counterparty's AS4 endpoint.
 //!
-//! Failures are logged at `error` level and do NOT propagate to the caller —
-//! the HTTP / AS4 response is unaffected by CONTRL enqueue failures.
+//! An enqueue failure is logged at `error` level and returned to the caller,
+//! which dead-letters it (§ 147 AO): the 6h window is a regulatory obligation
+//! and nothing else retries the CONTRL. The HTTP / AS4 response itself is
+//! unaffected — the message was received either way.
 //!
 //! [`OutboxWorker`]: mako_engine::builder::OutboxWorker
 
@@ -45,6 +47,7 @@ use std::sync::Arc;
 use edi_energy::{AnyMessage, EdiEnergyMessage as _};
 use mako_engine::{
     deadline::Deadline,
+    error::EngineError,
     ids::{ConversationId, CorrelationId, EventId, ProcessId, StreamId, TenantId},
     outbox::OutboxMessage,
     store_slatedb::SlateDbStore,
@@ -132,12 +135,18 @@ impl ContrlAckService {
     /// UNB…UNZ interchange.  Syntax-error messages (parse failures) are not
     /// passed here — they should trigger a CONTRL Syntaxfehlermeldung (UCI=4)
     /// via a separate path (not yet implemented, tracked as part of F-033).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] when the atomic outbox+deadline write fails. The
+    /// caller must make that durable (dead-letter): the CONTRL is the only proof
+    /// of receipt the Gas sender gets, and nothing else would ever retry it.
     pub async fn emit_for_interchange(
         &self,
         messages: &[&AnyMessage],
         interchange_ref: &str,
         recipient_mp_id: &str,
-    ) {
+    ) -> Result<(), EngineError> {
         // ── Determine the interchange Sparte ───────────────────────────────────
         // The CONTRL Empfangsbestätigung obligation (CONTRL AHB 1.0 §2.3.1) is a
         // property of the *Übertragungsdatei*, keyed purely on Sparte — every
@@ -161,7 +170,7 @@ impl ContrlAckService {
         };
 
         if !is_gas_interchange {
-            return;
+            return Ok(());
         }
 
         // §2.2.2.2 exception: no CONTRL in response to CONTRL. APERAK is NOT
@@ -170,7 +179,7 @@ impl ContrlAckService {
         let ackable: Vec<&AnyMessage> =
             messages.iter().copied().filter(|m| !is_contrl(m)).collect();
         if ackable.is_empty() {
-            return;
+            return Ok(());
         }
 
         // Extract sender GLN (the CONTRL recipient) from the first message with one.
@@ -180,7 +189,7 @@ impl ContrlAckService {
                 "CONTRL ack: Gas interchange received but no sender GLN found \
                  in any message — Empfangsbestätigung NOT enqueued (regulatory gap)"
             );
-            return;
+            return Ok(());
         };
 
         // CONTRL sender = the own MP-ID the interchange was addressed to (the
@@ -260,6 +269,7 @@ impl ContrlAckService {
                     sender_mp_id = sender_mp_id.as_ref(),
                     "CONTRL ack: Empfangsbestätigung + 6h deadline enqueued atomically",
                 );
+                Ok(())
             }
             Err(e) => {
                 // Log at error: a missing CONTRL triggers §1.3 clarification
@@ -270,6 +280,7 @@ impl ContrlAckService {
                     "CONTRL ack: atomic outbox+deadline enqueue failed — regulatory \
                      6h CONTRL window at risk (CONTRL AHB 1.0 §1.2 / APERAK AHB 1.0 §1.2)",
                 );
+                Err(e)
             }
         }
     }

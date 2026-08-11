@@ -827,7 +827,7 @@ async fn get_zahlungsstatus(
 ///
 /// # § 147 AO / GoBD
 ///
-/// The receipt is written to `invoic_receipts` (direction=Outbound,
+/// The receipt is written to `invoic_receipts` (direction=outbound,
 /// outcome=Dispatched) in a single PostgreSQL transaction BEFORE the command
 /// is dispatched to `makod`.  A crash between persist and dispatch is
 /// recoverable; a crash before persist would break the § 147 AO audit trail.
@@ -1123,7 +1123,7 @@ async fn post_selbstausstellen(
     let row = pg::ReceiptRow {
         process_id,
         pid: 31006,
-        direction: "Outbound".to_owned(),
+        direction: pg::receipts::DIRECTION_OUTBOUND.to_owned(),
         sender_mp_id: state.tenant.clone(),
         receiver_gln: body.nb_mp_id.clone(),
         malo_id: Some(malo_id.clone()),
@@ -1375,7 +1375,7 @@ pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Rout
         makod,
         check_config: Arc::new(cfg.check_config()),
         inbound_secret: Arc::new(inbound_secret),
-        auto_dispute_threshold_eur_cents: cfg.auto_dispute_threshold_eur_cents(),
+        auto_dispute_threshold_raw: cfg.auto_dispute_threshold_raw(),
         pool: Some(pool.clone()),
         tenant: tenant.clone(),
         erp_webhook_url: cfg.erp.webhook_url.clone(),

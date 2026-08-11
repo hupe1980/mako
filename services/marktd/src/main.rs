@@ -390,412 +390,395 @@ async fn main() -> anyhow::Result<()> {
         ),
     });
     let inbound_path = cfg.webhook.inbound_path.clone();
-    let app =
-        Router::new()
-            .route("/health", get(health))
-            .route("/health/live", get(health))
-            .route("/health/ready", get(health_ready))
-            // MaLo
-            .route("/api/v1/malo", get(list_malo::<_, _, _, _, _>))
-            .route("/api/v1/malo/{id}", put(put_malo::<_, _, _, _, _>))
-            .route("/api/v1/malo/{id}", get(get_malo::<_, _, _, _, _>))
-            // Lastprofil derivation — SLP profile for NNE tariff zone + billingd (L7)
-            .route(
-                "/api/v1/malo/{id}/lastprofil",
-                get(get_malo_lastprofil::<_, _, _, _, _>),
-            )
-            // MeLo
-            .route("/api/v1/melo/{id}", put(put_melo::<_, _, _, _, _>))
-            .route("/api/v1/melo/{id}", get(get_melo::<_, _, _, _, _>))
-            .route(
-                "/api/v1/melos/{id}/standorteigenschaften",
-                get(get_melo_standorteigenschaften::<_, _, _, _, _>),
-            )
-            // Subscriptions
-            .route(
-                "/api/v1/subscriptions",
-                get(list_subscriptions::<_, _, _, _, _>),
-            )
-            .route(
-                "/api/v1/subscriptions/{id}",
-                put(put_subscription::<_, _, _, _, _>),
-            )
-            .route(
-                "/api/v1/subscriptions/{id}",
-                get(get_subscription::<_, _, _, _, _>),
-            )
-            .route(
-                "/api/v1/subscriptions/{id}/test",
-                post(test_subscription::<_, _, _, _, _>),
-            )
-            // Correlations
-            .route(
-                "/api/v1/correlations",
-                get(list_correlations::<_, _, _, _, _>),
-            )
-            .route(
-                "/api/v1/correlations/{id}",
-                get(get_correlation::<_, _, _, _, _>),
-            )
-            // Partners
-            // ESA consent registry (§49 Abs. 2 Nr. 9 MsbG)
-            .route(
-                "/api/v1/esa/einwilligungen",
-                axum::routing::post(grant_einwilligung).get(list_einwilligungen),
-            )
-            .route(
-                "/api/v1/esa/einwilligungen/{id}",
-                get(get_einwilligung).delete(revoke_einwilligung),
-            )
-            // §20b EnWG Netzzugangsplattform request registry
-            .route(
-                "/api/v1/netzzugang/antraege",
-                axum::routing::put(upsert_antrag).get(list_antraege),
-            )
-            .route("/api/v1/netzzugang/antraege/{id}", get(get_antrag))
-            .route(
-                "/api/v1/netzzugang/antraege/{id}/status",
-                axum::routing::patch(set_antrag_status),
-            )
-            // Gas MSB-Rahmenvertrag registry (GeLi Gas 3.0 Tenor 13–16)
-            .route(
-                "/api/v1/msb-rahmenvertraege-gas",
-                axum::routing::put(upsert_msb_rv_gas).get(list_msb_rv_gas),
-            )
-            .route("/api/v1/msb-rahmenvertraege-gas/{id}", get(get_msb_rv_gas))
-            .route(
-                "/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}",
-                put(put_framework).get(get_framework),
-            )
-            // Inbound-message gate: revoked consent / unestablished framework
-            // → allowed:false (the Ablehnung clearing case).
-            .route("/api/v1/esa/consent-check", get(consent_check))
-            .route("/api/v1/partners", get(list_partners::<_, _, _, _, _>))
-            .route(
-                "/api/v1/partners/{mp_id}",
-                put(put_partner::<_, _, _, _, _>),
-            )
-            .route(
-                "/api/v1/partners/{mp_id}",
-                get(get_partner::<_, _, _, _, _>),
-            )
-            // Price sheets (PreisblattNetznutzung)
-            .route(
-                "/api/v1/preisblaetter/{nb_mp_id}",
-                get(get_preisblatt).put(put_preisblatt),
-            )
-            // Price sheets (PreisblattMessung — MSB metering tariffs, B5)
-            .route(
-                "/api/v1/preisblaetter-messung/{msb_mp_id}",
-                get(get_preisblatt_messung).put(put_preisblatt_messung),
-            )
-            // Konzessionsabgabe price sheets (B3 — KAV §2)
-            .route(
-                "/api/v1/preisblaetter-ka/{nb_mp_id}",
-                get(get_preisblatt_ka).put(put_preisblatt_ka),
-            )
-            // MMMA Gas settlement prices (C18 — Trading Hub Europe, monthly)
-            .route("/api/v1/mmma-preise/gas", get(mmma_preise::list_mmma_gas))
-            .route(
-                "/api/v1/mmma-preise/gas/{year}/{month}",
-                get(mmma_preise::get_mmma_gas).put(mmma_preise::put_mmma_gas),
-            )
-            // MMM Strom settlement prices (C18 — VNB per GPKE (BK6-24-174) Teil 1 Kap. 8.4, monthly)
-            .route(
-                "/api/v1/mmm-preise/strom/{year}/{month}",
-                get(mmma_preise::get_mmm_strom).put(mmma_preise::put_mmm_strom),
-            )
-            // B12: Manual import trigger — immediately runs the monthly import cycle.
-            // Useful for catch-up after downtime or testing the configured import URLs.
-            .route(
-                "/api/v1/mmma-preise/import-trigger",
-                axum::routing::post(mmma_preise::post_import_trigger),
-            )
-            // MSB service price sheets (PreisblattDienstleistung)
-            .route(
-                "/api/v1/preisblaetter-dienstleistung/{msb_mp_id}",
-                get(get_preisblatt_dienstleistung).put(put_preisblatt_dienstleistung),
-            )
-            // MSB hardware rental price sheets (PreisblattHardware)
-            .route(
-                "/api/v1/preisblaetter-hardware/{msb_mp_id}",
-                get(get_preisblatt_hardware).put(put_preisblatt_hardware),
-            )
-            // B2: AS4 address lookup (Marktteilnehmer.makoadresse)
-            .route(
-                "/api/v1/partners/{mp_id}/as4-address",
-                get(get_as4_address::<_, _, _, _, _>),
-            )
-            // Typed BO4E Marktteilnehmer view of a stored partner
-            .route(
-                "/api/v1/partners/{mp_id}/marktteilnehmer",
-                get(get_partner_marktteilnehmer::<_, _, _, _, _>),
-            )
-            // PRICAT version history + manual dispatch (Phase 2)
-            .route("/api/v1/pricat/{nb_mp_id}/history", get(get_pricat_history))
-            .route(
-                "/api/v1/pricat/{nb_mp_id}/dispatch-log/{version_id}",
-                get(get_dispatch_log),
-            )
-            .route(
-                "/api/v1/pricat/{nb_mp_id}/dispatch",
-                post(post_pricat_dispatch),
-            )
-            // NB network contracts (typed: netzebene, bilanzierungsmethode, billing_schedule)
-            .route(
-                "/api/v1/nb-contracts/{id}",
-                get(get_nb_contract).put(put_nb_contract),
-            )
-            .route("/api/v1/nb-contracts", get(list_nb_contracts))
-            // VersorgungsStatus per MaLo (Phase 1) + history / point-in-time (Phase 3)
-            .route(
-                "/api/v1/versorgung/{malo_id}",
-                get(get_versorgungsstatus::<
-                    _,
-                    _,
-                    _,
-                    _,
-                    _,
-                    marktd::pg::PgVersorgungsStatusRepository,
-                >)
-                .put(
-                    put_versorgungsstatus::<
-                        _,
-                        _,
-                        _,
-                        _,
-                        _,
-                        marktd::pg::PgVersorgungsStatusRepository,
-                    >,
-                ),
-            )
-            .route(
-                "/api/v1/versorgung/{malo_id}/history",
-                get(get_versorgungsstatus_history::<
-                    _,
-                    _,
-                    _,
-                    _,
-                    _,
-                    marktd::pg::PgVersorgungsStatusRepository,
-                >),
-            )
-            // NB Energiemix authority (§42 EnWG — N8)
-            // NB publishes annual grid-area renewable mix; LFs use for Reststrommix disclosure.
-            .route(
-                "/api/v1/energiemix/{nb_mp_id}",
-                get(get_nb_energiemix).put(put_nb_energiemix),
-            )
-            .route(
-                "/api/v1/energiemix/{nb_mp_id}/history",
-                get(get_nb_energiemix_history),
-            )
-            // Netz-Element-Lokationen (Redispatch 2.0, Phase 3)
-            .route("/api/v1/nelo", get(list_nelos))
-            .route("/api/v1/nelo/{id}", get(get_nelo).put(put_nelo))
-            .route("/api/v1/tranche", get(list_tranchen))
-            .route("/api/v1/tranche/{id}", get(get_tranche).put(put_tranche))
-            // MaLo grid topology (NB STP, N7)
-            .route(
-                "/api/v1/malo/{id}/grid",
-                get(get_malo_grid).put(put_malo_grid),
-            )
-            // MaBiS-Zählpunkt per Bilanzierungsgebiet (mabis-syncd LOC+172)
-            .route("/api/v1/mabis-zp", get(list_mabis_zp))
-            .route(
-                "/api/v1/bilanzierungsgebiet/{eic}/mabis-zp",
-                get(get_mabis_zp).put(put_mabis_zp),
-            )
-            // Grundversorger Feststellung (§36 Abs. 2 EnWG — EoG gap closure)
-            .route(
-                "/api/v1/grundversorger/{nb_mp_id}",
-                get(get_grundversorger).put(put_grundversorger),
-            )
-            // Per-MeLo dated MSB timeline (WiM Teil 2 UC 4.1.1)
-            .route(
-                "/api/v1/melos/{melo_id}/msb",
-                get(get_melo_msb_at).put(put_melo_msb),
-            )
-            .route(
-                "/api/v1/melos/{melo_id}/msb/history",
-                get(get_melo_msb_history),
-            )
-            // BO4E Bilanzierung (BO #3) — first-class temporal balancing resource
-            .route(
-                "/api/v1/malo/{malo_id}/bilanzierung",
-                get(get_bilanzierung_at).put(put_bilanzierung),
-            )
-            .route(
-                "/api/v1/malo/{malo_id}/bilanzierung/history",
-                get(get_bilanzierung_history),
-            )
-            // SteuerbareRessource registry (B4b — WiM iMS Steuerungsauftrag)
-            .route(
-                "/api/v1/steuerbare-ressourcen/{sr_id}",
-                get(get_steuerbare_ressource).put(put_steuerbare_ressource),
-            )
-            // typed Konfigurationsprodukte sub-resource — used by makod before
-            // dispatching wim.steuerungsauftrag.bestaetigen to validate produktcode
-            .route(
-                "/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte",
-                get(get_konfigurationsprodukte).put(put_konfigurationsprodukte),
-            )
-            // individual product DELETE by produktcode
-            .route(
-                "/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte/{produktcode}",
-                axum::routing::delete(delete_konfigurationsprodukt),
-            )
-            // TechnischeRessource registry (B9 — EMobility/Redispatch 2.0)
-            .route(
-                "/api/v1/technische-ressourcen/{tr_id}",
-                get(get_technische_ressource).put(put_technische_ressource),
-            )
-            .route(
-                "/api/v1/malos/{malo_id}/technische-ressourcen",
-                get(list_technische_ressourcen_by_malo),
-            )
-            // Lokationszuordnung graph API (B5 — MaLo↔MeLo↔NeLo↔SR↔TR topology)
-            .route(
-                "/api/v1/lokationszuordnungen",
-                axum::routing::put(put_lokationszuordnung),
-            )
-            .route(
-                "/api/v1/lokationszuordnungen/{von_id}/{nach_id}",
-                axum::routing::delete(delete_lokationszuordnung),
-            )
-            .route("/api/v1/malos/{id}/lokationen", get(get_malo_lokationen))
-            .route("/api/v1/malos/{id}/buendel", get(get_malo_buendel))
-            .route("/api/v1/melos/{id}/lokationen", get(get_melo_lokationen))
-            // Device registry: Zähler + Geräte (B3 — WiM MSB/NB device handover)
-            .route("/api/v1/melos/{melo_id}/zaehler", get(list_zaehler))
-            .route(
-                "/api/v1/melos/{melo_id}/sharing-eligibility",
-                get(get_sharing_eligibility),
-            )
-            .route(
-                "/api/v1/zaehler/{zaehler_id}",
-                axum::routing::put(put_zaehler),
-            )
-            .route("/api/v1/zaehler/{zaehler_id}/geraete", get(list_geraete))
-            .route(
-                "/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}",
-                get(get_geraet),
-            )
-            .route(
-                "/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen",
-                get(get_geraet_konfigurationen).put(put_geraet_konfigurationen),
-            )
-            .route(
-                "/api/v1/zaehler/{zaehler_id}/zaehlwerke",
-                get(get_zaehlwerke),
-            )
-            .route(
-                "/api/v1/geraete/{geraet_id}",
-                axum::routing::put(put_geraet),
-            )
-            // ZaehlzeitRegister + ZaehlzeitSaison (iMSys TOU register definitions)
-            .route(
-                "/api/v1/zaehler/{zaehler_id}/register",
-                get(list_zaehler_register).put(put_zaehler_register),
-            )
-            .route(
-                "/api/v1/zaehler/{zaehler_id}/zaehlzeitdefinitionen",
-                get(get_zaehlzeitdefinitionen),
-            )
-            .route(
-                "/api/v1/zaehler-register/{register_id}/saisons",
-                get(list_zaehler_saisons).put(put_zaehler_saison),
-            )
-            .route(
-                "/api/v1/zaehler/{zaehler_id}/tariff-zone",
-                get(get_tariff_zone),
-            )
-            // Inbound makod events
-            .route(&inbound_path, post(ingest_event::<_, _, _, _, _>))
-            // Dead-letter queue admin (F-003 — § 147 AO / GoBD compliance)
-            .route("/admin/fanout/dlq", get(list_dlq))
-            .route(
-                "/admin/fanout/dlq/{event_id}/{subscriber_id}",
-                delete(delete_dlq_entry),
-            )
-            .route(
-                "/admin/fanout/dlq/{event_id}/{subscriber_id}/retry",
-                post(retry_dlq_entry),
-            )
-            // CloudEvent replay log admin (B11)
-            .route("/admin/events", get(list_event_log))
-            // Prometheus-compatible metrics (F-006)
-            .route("/metrics", get(metrics_handler))
-            // Swagger UI
-            .merge(swagger_ui())
-            // State + extensions
-            .with_state(state.clone())
-            .layer(Extension(verifier))
-            .layer(Extension(InboundWebhookSecret(inbound_secret)))
-            // Pool extension for idempotency check in ingest_event
-            .layer(Extension(pool.clone()))
-            // Preisblatt repository extension
-            .layer(Extension(preisblatt_repo))
-            // PreisblattMessung repository extension (B5 — MSB metering tariffs)
-            .layer(Extension(preisblatt_messung_repo))
-            // KA price sheet repository extension (B3)
-            .layer(Extension(preisblatt_ka_repo))
-            // MMMA Gas + MMM Strom settlement price repos (C18)
-            .layer(Extension(mmma_gas_repo))
-            .layer(Extension(mmm_strom_repo))
-            // B12: MMMA import config for manual trigger endpoint
-            .layer(Extension(Arc::new(cfg.mmma_import.clone())))
-            // MSB Dienstleistung + Hardware price sheet repos
-            .layer(Extension(preisblatt_dl_repo))
-            .layer(Extension(preisblatt_hw_repo))
-            // PRICAT version history + dispatch extension (Phase 2)
-            .layer(Extension(pricat_repo))
-            // NB contract repository extension
-            .layer(Extension(nb_contract_repo))
-            // VersorgungsStatus repository extension (Phase 1)
-            .layer(Extension(vs_repo))
-            // NeLo repository extension (Phase 3)
-            .layer(Extension(nelo_repo))
-            // Tranche repository extension (Stammdatenänderung object-generic apply)
-            .layer(Extension(tranche_repo))
-            // MaLo grid topology extension (N7)
-            .layer(Extension(malo_grid_repo))
-            .layer(Extension(mabis_zp_repo))
-            // Grundversorger Feststellung extension (§36 EnWG EoG)
-            .layer(Extension(grundversorger_repo))
-            // Per-MeLo dated MSB timeline extension (WiM Teil 2 UC 4.1.1)
-            .layer(Extension(melo_msb_repo))
-            // BO4E Bilanzierung temporal resource extension (BO #3)
-            .layer(Extension(bilanzierung_repo))
-            // SteuerbareRessource registry extension (B4b)
-            .layer(Extension(sr_repo))
-            // TechnischeRessource registry extension (B9)
-            .layer(Extension(tr_repo))
-            // Lokationszuordnung graph extension (B5)
-            .layer(Extension(lz_repo))
-            // Device registry extension (B3)
-            .layer(Extension(device_repo))
-            // ESA consent registry repo + makod client (for the 17008 wire)
-            .layer(Extension(einwilligung_repo))
-            .layer(Extension(netzzugang_repo))
-            .layer(Extension(msb_rv_gas_repo))
-            .layer(Extension(makod_client_ext))
-            // ZaehlzeitRegister + ZaehlzeitSaison (iMSys TOU)
-            .layer(Extension(zaehzeit_repo))
-            // Fan-out wake-up hint for handlers that emit CloudEvents without AppState.
-            // Paired with the global Extension(pool) layer above, handlers call
-            // marktd::outbox::enqueue(&pool, &evt, &notify).
-            .layer(Extension(notify.clone()))
-            // Cedar ABAC enforcer
-            .layer(Extension(cedar))
-            // Tenant GLN for handlers without AppState access (e.g. preisblatt)
-            .layer(Extension(TenantGln(cfg.makod.tenant.clone())))
-            // HTTP client extension for test_subscription direct delivery
-            .layer(Extension(http.clone()))
-            // Limit request bodies to 2 MiB to guard against accidental large payloads.
-            .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
-            // MCP server
-            .merge(marktd::mcp_server::router(mcp_state, shutdown.clone()));
+    let app = Router::new()
+        .route("/health", get(health))
+        .route("/health/live", get(health))
+        .route("/health/ready", get(health_ready))
+        // MaLo
+        .route("/api/v1/malo", get(list_malo::<_, _, _, _, _>))
+        .route("/api/v1/malo/{id}", put(put_malo::<_, _, _, _, _>))
+        .route("/api/v1/malo/{id}", get(get_malo::<_, _, _, _, _>))
+        // Lastprofil derivation — SLP profile for NNE tariff zone + billingd (L7)
+        .route(
+            "/api/v1/malo/{id}/lastprofil",
+            get(get_malo_lastprofil::<_, _, _, _, _>),
+        )
+        // MeLo
+        .route("/api/v1/melo/{id}", put(put_melo::<_, _, _, _, _>))
+        .route("/api/v1/melo/{id}", get(get_melo::<_, _, _, _, _>))
+        .route(
+            "/api/v1/melos/{id}/standorteigenschaften",
+            get(get_melo_standorteigenschaften::<_, _, _, _, _>),
+        )
+        // Subscriptions
+        .route(
+            "/api/v1/subscriptions",
+            get(list_subscriptions::<_, _, _, _, _>),
+        )
+        .route(
+            "/api/v1/subscriptions/{id}",
+            put(put_subscription::<_, _, _, _, _>),
+        )
+        .route(
+            "/api/v1/subscriptions/{id}",
+            get(get_subscription::<_, _, _, _, _>),
+        )
+        .route(
+            "/api/v1/subscriptions/{id}/test",
+            post(test_subscription::<_, _, _, _, _>),
+        )
+        // Correlations
+        .route(
+            "/api/v1/correlations",
+            get(list_correlations::<_, _, _, _, _>),
+        )
+        .route(
+            "/api/v1/correlations/{id}",
+            get(get_correlation::<_, _, _, _, _>),
+        )
+        // Partners
+        // ESA consent registry (§49 Abs. 2 Nr. 9 MsbG)
+        .route(
+            "/api/v1/esa/einwilligungen",
+            axum::routing::post(grant_einwilligung).get(list_einwilligungen),
+        )
+        .route(
+            "/api/v1/esa/einwilligungen/{id}",
+            get(get_einwilligung).delete(revoke_einwilligung),
+        )
+        // §20b EnWG Netzzugangsplattform request registry
+        .route(
+            "/api/v1/netzzugang/antraege",
+            axum::routing::put(upsert_antrag).get(list_antraege),
+        )
+        .route("/api/v1/netzzugang/antraege/{id}", get(get_antrag))
+        .route(
+            "/api/v1/netzzugang/antraege/{id}/status",
+            axum::routing::patch(set_antrag_status),
+        )
+        // Gas MSB-Rahmenvertrag registry (GeLi Gas 3.0 Tenor 13–16)
+        .route(
+            "/api/v1/msb-rahmenvertraege-gas",
+            axum::routing::put(upsert_msb_rv_gas).get(list_msb_rv_gas),
+        )
+        .route("/api/v1/msb-rahmenvertraege-gas/{id}", get(get_msb_rv_gas))
+        .route(
+            "/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}",
+            put(put_framework).get(get_framework),
+        )
+        // Inbound-message gate: revoked consent / unestablished framework
+        // → allowed:false (the Ablehnung clearing case).
+        .route("/api/v1/esa/consent-check", get(consent_check))
+        .route("/api/v1/partners", get(list_partners::<_, _, _, _, _>))
+        .route(
+            "/api/v1/partners/{mp_id}",
+            put(put_partner::<_, _, _, _, _>),
+        )
+        .route(
+            "/api/v1/partners/{mp_id}",
+            get(get_partner::<_, _, _, _, _>),
+        )
+        // Price sheets (PreisblattNetznutzung)
+        .route(
+            "/api/v1/preisblaetter/{nb_mp_id}",
+            get(get_preisblatt).put(put_preisblatt),
+        )
+        // Price sheets (PreisblattMessung — MSB metering tariffs, B5)
+        .route(
+            "/api/v1/preisblaetter-messung/{msb_mp_id}",
+            get(get_preisblatt_messung).put(put_preisblatt_messung),
+        )
+        // Konzessionsabgabe price sheets (B3 — KAV §2)
+        .route(
+            "/api/v1/preisblaetter-ka/{nb_mp_id}",
+            get(get_preisblatt_ka).put(put_preisblatt_ka),
+        )
+        // MMMA Gas settlement prices (C18 — Trading Hub Europe, monthly)
+        .route("/api/v1/mmma-preise/gas", get(mmma_preise::list_mmma_gas))
+        .route(
+            "/api/v1/mmma-preise/gas/{year}/{month}",
+            get(mmma_preise::get_mmma_gas).put(mmma_preise::put_mmma_gas),
+        )
+        // MMM Strom settlement prices (C18 — VNB per GPKE (BK6-24-174) Teil 1 Kap. 8.4, monthly)
+        .route(
+            "/api/v1/mmm-preise/strom/{year}/{month}",
+            get(mmma_preise::get_mmm_strom).put(mmma_preise::put_mmm_strom),
+        )
+        // B12: Manual import trigger — immediately runs the monthly import cycle.
+        // Useful for catch-up after downtime or testing the configured import URLs.
+        .route(
+            "/api/v1/mmma-preise/import-trigger",
+            axum::routing::post(mmma_preise::post_import_trigger),
+        )
+        // MSB service price sheets (PreisblattDienstleistung)
+        .route(
+            "/api/v1/preisblaetter-dienstleistung/{msb_mp_id}",
+            get(get_preisblatt_dienstleistung).put(put_preisblatt_dienstleistung),
+        )
+        // MSB hardware rental price sheets (PreisblattHardware)
+        .route(
+            "/api/v1/preisblaetter-hardware/{msb_mp_id}",
+            get(get_preisblatt_hardware).put(put_preisblatt_hardware),
+        )
+        // B2: AS4 address lookup (Marktteilnehmer.makoadresse)
+        .route(
+            "/api/v1/partners/{mp_id}/as4-address",
+            get(get_as4_address::<_, _, _, _, _>),
+        )
+        // Typed BO4E Marktteilnehmer view of a stored partner
+        .route(
+            "/api/v1/partners/{mp_id}/marktteilnehmer",
+            get(get_partner_marktteilnehmer::<_, _, _, _, _>),
+        )
+        // PRICAT version history + manual dispatch (Phase 2)
+        .route("/api/v1/pricat/{nb_mp_id}/history", get(get_pricat_history))
+        .route(
+            "/api/v1/pricat/{nb_mp_id}/dispatch-log/{version_id}",
+            get(get_dispatch_log),
+        )
+        .route(
+            "/api/v1/pricat/{nb_mp_id}/dispatch",
+            post(post_pricat_dispatch),
+        )
+        // NB network contracts (typed: netzebene, bilanzierungsmethode, billing_schedule)
+        .route(
+            "/api/v1/nb-contracts/{id}",
+            get(get_nb_contract).put(put_nb_contract),
+        )
+        .route("/api/v1/nb-contracts", get(list_nb_contracts))
+        // VersorgungsStatus per MaLo (Phase 1) + history / point-in-time (Phase 3)
+        .route(
+            "/api/v1/versorgung/{malo_id}",
+            get(get_versorgungsstatus::<_, _, _, _, _, marktd::pg::PgVersorgungsStatusRepository>)
+                .put(put_versorgungsstatus),
+        )
+        .route(
+            "/api/v1/versorgung/{malo_id}/history",
+            get(get_versorgungsstatus_history::<
+                _,
+                _,
+                _,
+                _,
+                _,
+                marktd::pg::PgVersorgungsStatusRepository,
+            >),
+        )
+        // NB Energiemix authority (§42 EnWG — N8)
+        // NB publishes annual grid-area renewable mix; LFs use for Reststrommix disclosure.
+        .route(
+            "/api/v1/energiemix/{nb_mp_id}",
+            get(get_nb_energiemix).put(put_nb_energiemix),
+        )
+        .route(
+            "/api/v1/energiemix/{nb_mp_id}/history",
+            get(get_nb_energiemix_history),
+        )
+        // Netz-Element-Lokationen (Redispatch 2.0, Phase 3)
+        .route("/api/v1/nelo", get(list_nelos))
+        .route("/api/v1/nelo/{id}", get(get_nelo).put(put_nelo))
+        .route("/api/v1/tranche", get(list_tranchen))
+        .route("/api/v1/tranche/{id}", get(get_tranche).put(put_tranche))
+        // MaLo grid topology (NB STP, N7)
+        .route(
+            "/api/v1/malo/{id}/grid",
+            get(get_malo_grid).put(put_malo_grid),
+        )
+        // MaBiS-Zählpunkt per Bilanzierungsgebiet (mabis-syncd LOC+172)
+        .route("/api/v1/mabis-zp", get(list_mabis_zp))
+        .route(
+            "/api/v1/bilanzierungsgebiet/{eic}/mabis-zp",
+            get(get_mabis_zp).put(put_mabis_zp),
+        )
+        // Grundversorger Feststellung (§36 Abs. 2 EnWG — EoG gap closure)
+        .route(
+            "/api/v1/grundversorger/{nb_mp_id}",
+            get(get_grundversorger).put(put_grundversorger),
+        )
+        // Per-MeLo dated MSB timeline (WiM Teil 2 UC 4.1.1)
+        .route(
+            "/api/v1/melos/{melo_id}/msb",
+            get(get_melo_msb_at).put(put_melo_msb),
+        )
+        .route(
+            "/api/v1/melos/{melo_id}/msb/history",
+            get(get_melo_msb_history),
+        )
+        // BO4E Bilanzierung (BO #3) — first-class temporal balancing resource
+        .route(
+            "/api/v1/malo/{malo_id}/bilanzierung",
+            get(get_bilanzierung_at).put(put_bilanzierung),
+        )
+        .route(
+            "/api/v1/malo/{malo_id}/bilanzierung/history",
+            get(get_bilanzierung_history),
+        )
+        // SteuerbareRessource registry (B4b — WiM iMS Steuerungsauftrag)
+        .route(
+            "/api/v1/steuerbare-ressourcen/{sr_id}",
+            get(get_steuerbare_ressource).put(put_steuerbare_ressource),
+        )
+        // typed Konfigurationsprodukte sub-resource — used by makod before
+        // dispatching wim.steuerungsauftrag.bestaetigen to validate produktcode
+        .route(
+            "/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte",
+            get(get_konfigurationsprodukte).put(put_konfigurationsprodukte),
+        )
+        // individual product DELETE by produktcode
+        .route(
+            "/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte/{produktcode}",
+            axum::routing::delete(delete_konfigurationsprodukt),
+        )
+        // TechnischeRessource registry (B9 — EMobility/Redispatch 2.0)
+        .route(
+            "/api/v1/technische-ressourcen/{tr_id}",
+            get(get_technische_ressource).put(put_technische_ressource),
+        )
+        .route(
+            "/api/v1/malos/{malo_id}/technische-ressourcen",
+            get(list_technische_ressourcen_by_malo),
+        )
+        // Lokationszuordnung graph API (B5 — MaLo↔MeLo↔NeLo↔SR↔TR topology)
+        .route(
+            "/api/v1/lokationszuordnungen",
+            axum::routing::put(put_lokationszuordnung),
+        )
+        .route(
+            "/api/v1/lokationszuordnungen/{von_id}/{nach_id}",
+            axum::routing::delete(delete_lokationszuordnung),
+        )
+        .route("/api/v1/malos/{id}/lokationen", get(get_malo_lokationen))
+        .route("/api/v1/malos/{id}/buendel", get(get_malo_buendel))
+        .route("/api/v1/melos/{id}/lokationen", get(get_melo_lokationen))
+        // Device registry: Zähler + Geräte (B3 — WiM MSB/NB device handover)
+        .route("/api/v1/melos/{melo_id}/zaehler", get(list_zaehler))
+        .route(
+            "/api/v1/melos/{melo_id}/sharing-eligibility",
+            get(get_sharing_eligibility),
+        )
+        .route(
+            "/api/v1/zaehler/{zaehler_id}",
+            axum::routing::put(put_zaehler),
+        )
+        .route("/api/v1/zaehler/{zaehler_id}/geraete", get(list_geraete))
+        .route(
+            "/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}",
+            get(get_geraet),
+        )
+        .route(
+            "/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen",
+            get(get_geraet_konfigurationen).put(put_geraet_konfigurationen),
+        )
+        .route(
+            "/api/v1/zaehler/{zaehler_id}/zaehlwerke",
+            get(get_zaehlwerke),
+        )
+        .route(
+            "/api/v1/geraete/{geraet_id}",
+            axum::routing::put(put_geraet),
+        )
+        // ZaehlzeitRegister + ZaehlzeitSaison (iMSys TOU register definitions)
+        .route(
+            "/api/v1/zaehler/{zaehler_id}/register",
+            get(list_zaehler_register).put(put_zaehler_register),
+        )
+        .route(
+            "/api/v1/zaehler/{zaehler_id}/zaehlzeitdefinitionen",
+            get(get_zaehlzeitdefinitionen),
+        )
+        .route(
+            "/api/v1/zaehler-register/{register_id}/saisons",
+            get(list_zaehler_saisons).put(put_zaehler_saison),
+        )
+        .route(
+            "/api/v1/zaehler/{zaehler_id}/tariff-zone",
+            get(get_tariff_zone),
+        )
+        // Inbound makod events
+        .route(&inbound_path, post(ingest_event::<_, _, _, _, _>))
+        // Dead-letter queue admin (F-003 — § 147 AO / GoBD compliance)
+        .route("/admin/fanout/dlq", get(list_dlq))
+        .route(
+            "/admin/fanout/dlq/{event_id}/{subscriber_id}",
+            delete(delete_dlq_entry),
+        )
+        .route(
+            "/admin/fanout/dlq/{event_id}/{subscriber_id}/retry",
+            post(retry_dlq_entry),
+        )
+        // CloudEvent replay log admin (B11)
+        .route("/admin/events", get(list_event_log))
+        // Prometheus-compatible metrics (F-006)
+        .route("/metrics", get(metrics_handler))
+        // Swagger UI
+        .merge(swagger_ui())
+        // State + extensions
+        .with_state(state.clone())
+        .layer(Extension(verifier))
+        .layer(Extension(InboundWebhookSecret(inbound_secret)))
+        // Pool extension for idempotency check in ingest_event
+        .layer(Extension(pool.clone()))
+        // Preisblatt repository extension
+        .layer(Extension(preisblatt_repo))
+        // PreisblattMessung repository extension (B5 — MSB metering tariffs)
+        .layer(Extension(preisblatt_messung_repo))
+        // KA price sheet repository extension (B3)
+        .layer(Extension(preisblatt_ka_repo))
+        // MMMA Gas + MMM Strom settlement price repos (C18)
+        .layer(Extension(mmma_gas_repo))
+        .layer(Extension(mmm_strom_repo))
+        // B12: MMMA import config for manual trigger endpoint
+        .layer(Extension(Arc::new(cfg.mmma_import.clone())))
+        // MSB Dienstleistung + Hardware price sheet repos
+        .layer(Extension(preisblatt_dl_repo))
+        .layer(Extension(preisblatt_hw_repo))
+        // PRICAT version history + dispatch extension (Phase 2)
+        .layer(Extension(pricat_repo))
+        // NB contract repository extension
+        .layer(Extension(nb_contract_repo))
+        // VersorgungsStatus repository extension (Phase 1)
+        .layer(Extension(vs_repo))
+        // NeLo repository extension (Phase 3)
+        .layer(Extension(nelo_repo))
+        // Tranche repository extension (Stammdatenänderung object-generic apply)
+        .layer(Extension(tranche_repo))
+        // MaLo grid topology extension (N7)
+        .layer(Extension(malo_grid_repo))
+        .layer(Extension(mabis_zp_repo))
+        // Grundversorger Feststellung extension (§36 EnWG EoG)
+        .layer(Extension(grundversorger_repo))
+        // Per-MeLo dated MSB timeline extension (WiM Teil 2 UC 4.1.1)
+        .layer(Extension(melo_msb_repo))
+        // BO4E Bilanzierung temporal resource extension (BO #3)
+        .layer(Extension(bilanzierung_repo))
+        // SteuerbareRessource registry extension (B4b)
+        .layer(Extension(sr_repo))
+        // TechnischeRessource registry extension (B9)
+        .layer(Extension(tr_repo))
+        // Lokationszuordnung graph extension (B5)
+        .layer(Extension(lz_repo))
+        // Device registry extension (B3)
+        .layer(Extension(device_repo))
+        // ESA consent registry repo + makod client (for the 17008 wire)
+        .layer(Extension(einwilligung_repo))
+        .layer(Extension(netzzugang_repo))
+        .layer(Extension(msb_rv_gas_repo))
+        .layer(Extension(makod_client_ext))
+        // ZaehlzeitRegister + ZaehlzeitSaison (iMSys TOU)
+        .layer(Extension(zaehzeit_repo))
+        // Fan-out wake-up hint for handlers that emit CloudEvents without AppState.
+        // Paired with the global Extension(pool) layer above, handlers call
+        // marktd::outbox::enqueue(&pool, &evt, &notify).
+        .layer(Extension(notify.clone()))
+        // Cedar ABAC enforcer
+        .layer(Extension(cedar))
+        // Tenant GLN for handlers without AppState access (e.g. preisblatt)
+        .layer(Extension(TenantGln(cfg.makod.tenant.clone())))
+        // HTTP client extension for test_subscription direct delivery
+        .layer(Extension(http.clone()))
+        // Limit request bodies to 2 MiB to guard against accidental large payloads.
+        .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
+        // MCP server
+        .merge(marktd::mcp_server::router(mcp_state, shutdown.clone()));
 
     // ── Listen ────────────────────────────────────────────────────────────────
     let addr: SocketAddr = cfg.http.addr.parse().context("parsing listen address")?;

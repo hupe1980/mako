@@ -328,7 +328,7 @@ from `edmd` or set a negative tenant override (advanced use case).
 `submission_target` selects where Summenzeitreihen are filed:
 
 ```toml
-submission_target = "biko-bilateral"   # default; "mabis-hub" is not yet implemented
+submission_target = "biko-bilateral"   # default; the only accepted value — "mabis-hub" refuses at startup
 ```
 
 BK6-24-210 will replace bilateral BIKO submission with a central **MaBiS-Hub**

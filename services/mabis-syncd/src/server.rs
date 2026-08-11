@@ -29,7 +29,7 @@ use mako_service::oidc::Claims;
 
 use crate::config::Config;
 use crate::pg;
-use crate::sync_engine::{SyncEngine, previous_month_period};
+use crate::sync_engine::{SyncEngine, berlin_date, previous_month_period};
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -78,6 +78,28 @@ pub fn router(state: ServerState) -> Router {
         .with_state(state)
 }
 
+/// Read an optional ISO-8601 period bound, defaulting only when it is absent.
+///
+/// A present-but-unparseable value is a 400, never the default: the caller named
+/// a period, and filing a different one is a binding submission they did not ask
+/// for.
+fn parse_period(v: &serde_json::Value, default: Date) -> Result<Date, String> {
+    let Some(s) = v.as_str() else {
+        return Ok(default);
+    };
+    Date::parse(s, &time::format_description::well_known::Iso8601::DATE)
+        .map_err(|e| format!("period must be an ISO-8601 date (YYYY-MM-DD): {s:?} — {e}"))
+}
+
+/// `400 Bad Request` carrying `msg`.
+fn bad_request(msg: impl Into<String>) -> axum::response::Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": msg.into() })),
+    )
+        .into_response()
+}
+
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// `POST /api/v1/sync` — trigger a manual aggregation run.
@@ -117,21 +139,23 @@ async fn trigger_sync(
     let as_of = body["as_of"].as_str().and_then(|s| {
         OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
     });
-    let today = OffsetDateTime::now_utc().date();
+    let today = berlin_date(OffsetDateTime::now_utc());
     let (default_from, default_to) = previous_month_period(today);
 
-    let period_from = body["period_from"]
-        .as_str()
-        .and_then(|s| {
-            time::Date::parse(s, &time::format_description::well_known::Iso8601::DATE).ok()
-        })
-        .unwrap_or(default_from);
-    let period_to = body["period_to"]
-        .as_str()
-        .and_then(|s| {
-            time::Date::parse(s, &time::format_description::well_known::Iso8601::DATE).ok()
-        })
-        .unwrap_or(default_to);
+    // A malformed date must not fall back to the default: silently filing the
+    // previous month under a caller-named period is a binding submission for a
+    // period nobody asked for.
+    let period_from = match parse_period(&body["period_from"], default_from) {
+        Ok(d) => d,
+        Err(msg) => return bad_request(msg),
+    };
+    let period_to = match parse_period(&body["period_to"], default_to) {
+        Ok(d) => d,
+        Err(msg) => return bad_request(msg),
+    };
+    if period_to < period_from {
+        return bad_request("period_to precedes period_from");
+    }
 
     let engine = state.engine.clone();
 
@@ -149,7 +173,6 @@ async fn trigger_sync(
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
             "status": "accepted",
-            "period_from": period_from.to_string(),
             "period_from": period_from.to_string(),
             "period_to": period_to.to_string(),
             "note": "aggregation started asynchronously — check GET /api/v1/runs for status",
@@ -282,10 +305,20 @@ async fn retry_run(
         }
     };
 
-    if !matches!(run.status.as_str(), "failed" | "pending") {
-        return (StatusCode::CONFLICT, Json(serde_json::json!({
-            "error": format!("run is in status {:?} — only failed/pending runs can be retried", run.status)
-        }))).into_response();
+    // Only a run that is known to have failed may be retried. 'pending' means
+    // the original attempt may still be aggregating, and a retry then files a
+    // second binding Summenzeitreihe for the same period.
+    if run.status != "failed" {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": format!(
+                    "run is in status {:?} — only a failed run can be retried",
+                    run.status
+                ),
+            })),
+        )
+            .into_response();
     }
 
     let period_from = run.period_from;

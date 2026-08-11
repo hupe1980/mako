@@ -139,6 +139,16 @@ fn due_periods(
     out
 }
 
+/// Whether a cadence produces a **settlement** invoice — one that must itemise
+/// and deduct the advance payments collected over the period (§40 Abs. 1 EnWG).
+///
+/// `JAEHRLICH` and every unrecognised cadence, which `due_period` also treats as
+/// a rolling year. Sub-annual cadences bill the period itself and collect no
+/// advances against it.
+fn settles_advances(zyklus: &str) -> bool {
+    !matches!(zyklus, "MONATLICH" | "VIERTELJAEHRLICH" | "HALBJAEHRLICH")
+}
+
 /// Clip a period to the component's supply window. `None` = nothing billable.
 fn clip(
     (from, to): (Date, Date),
@@ -216,11 +226,35 @@ async fn sweep(
     for cand in &candidates {
         lf_for_log.get_or_insert_with(|| cand.lf_mp_id.clone());
 
+        // §40 Abs. 1 EnWG: a Jahresrechnung must itemise the paid Abschläge and
+        // deduct them. Nothing reaching this worker carries them — the vertragd
+        // candidate has no Abschlag data and the postings live in accountingd,
+        // downstream of billingd — so an automated annual run would bill the
+        // whole year's gross with zero Vorauszahlungen. Refuse rather than emit
+        // a non-compliant document; the manual `/calculate` path supplies
+        // `abschlaege` and is unaffected.
+        let refuse_settlement =
+            settles_advances(&cand.abrechnungszyklus) && !cfg.billing_runs.jahresrechnung;
+        if refuse_settlement {
+            tracing::warn!(
+                malo_id = %cand.malo_id,
+                zyklus = %cand.abrechnungszyklus,
+                "billing-run: skipping annual settlement — the sweep cannot supply the paid \
+                 Abschläge (§40 Abs. 1 EnWG); bill via POST /api/v1/billing/{{malo_id}}/calculate \
+                 or set [billing_runs] jahresrechnung=true to emit anyway"
+            );
+            errors += 1;
+        }
+
         // Bill every completed period still missing a record — oldest first, so
         // invoices are created in chronological order and a worker that missed a
         // cycle catches up rather than skipping periods (§40c). `MONATLICH` looks
         // back 13 months; the bound also caps quarterly/half-yearly catch-up.
-        let periods = due_periods(&cand.abrechnungszyklus, today, cand.vertragsbeginn, 13);
+        let periods = if refuse_settlement {
+            Vec::new()
+        } else {
+            due_periods(&cand.abrechnungszyklus, today, cand.vertragsbeginn, 13)
+        };
         for period in periods.into_iter().rev() {
             let Some((from, to)) = clip(period, cand.lieferbeginn, cand.lieferende) else {
                 continue;

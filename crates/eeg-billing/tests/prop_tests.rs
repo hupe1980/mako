@@ -110,7 +110,6 @@ proptest! {
         let out = calculate_settlement(&SettleInput {
             scheme: SettlementScheme::MarketPremium {
                 direktverm_aw_ct: aw_ct,
-                managementpraemie_ct: Some(Decimal::ZERO),
                 wind_korrekturfaktor: None,
                 wind_standort: None,
             },
@@ -341,7 +340,6 @@ proptest! {
         let out_pricemissing = calculate_settlement(&SettleInput {
             scheme: SettlementScheme::MarketPremium {
                 direktverm_aw_ct: rate,
-                managementpraemie_ct: None,
                 wind_korrekturfaktor: None,
                 wind_standort: None,
             },

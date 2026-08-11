@@ -20,7 +20,7 @@ pub(super) fn cmd_geli_lieferende_anmelden<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(dispatch_geli_lf_anmeldung(s, p, 44002))
+    Box::pin(dispatch_geli_lf_anmeldung(s, p, 44004))
 }
 
 pub(super) fn cmd_geli_lieferbeginn_bestaetigen<'a>(

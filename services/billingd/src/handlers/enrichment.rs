@@ -504,12 +504,12 @@ mod gas_enrichment_tests {
         )
         .unwrap();
         assert_eq!(agg.netto_eur, dec!(30.03));
-        // 30.03 × 0.19, at the engine's 5-dp precision — cent rounding is a
-        // display concern, not a calculation one.
-        assert_eq!(agg.mwst_eur, dec!(5.7057), "VAT over the combined base");
-        assert_eq!(agg.brutto_eur, dec!(35.7357));
-        // The BG-23 breakdown rounds to cents (BT-117) over the combined
-        // base per rate — 30.03 × 0.19 = 5.7057 → 5.71. Had the aggregate
+        // 30.03 × 0.19 = 5.7057, stated to the cent per rate as every
+        // Steuerbetrag is — so the total and the BG-23 breakdown are the same
+        // number, not two that round apart.
+        assert_eq!(agg.mwst_eur, dec!(5.71), "VAT over the combined base");
+        assert_eq!(agg.brutto_eur, dec!(35.74));
+        // The BG-23 breakdown over the combined base per rate. Had the aggregate
         // summed the per-MaLo breakdowns instead, it would show 3 × 1.90.
         let steuer: rust_decimal::Decimal = json["steuerbetraege"]
             .as_array()

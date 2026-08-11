@@ -18,7 +18,7 @@ transition) that batch-era systems strain under. The domain layer is deliberatel
 from transport and format so that when the market moves — MaBiS-Hub, the EDIFACT→API
 target landscape, European harmonization — mako moves with a codegen run, not a rewrite.
 
-The workspace covers the full BDEW MaKo stack across four layers:
+The workspace covers the full BDEW MaKo stack across five layers:
 
 | Layer | What it is |
 |---|---|
@@ -108,7 +108,7 @@ flowchart LR
 | Crate / service | Purpose |
 |---|---|
 | `grid-billing` | Role-neutral German grid **settlement** engine — `settle_nne`, `settle_mmm`, `settle_msb`, `settle_gas_awh`, `reverse`, `correct`; returns `SettlementResult`/`InvoiceDocument`; every position carries `CalculationTrace` with `LegalReference`s (StromNEV §17/§21, GasNEV §14, KAV §2, §14a EnWG, ARegV) and `TariffSource`; `Sparte` drives Gas vs. Strom legal refs; `KaKundengruppe` annotates the KAV tier; regime turnovers enforced (`ensure_berechenbar` refuses AgNeS-era settlements); zero I/O; BO4E only via the opt-in `bo4e` feature (`grid_billing::bo4e::into_rechnung`) |
-| `eeg-billing` | Pure EEG/KWKG feed-in settlement library — `calculate_settlement` for all 10 settlement schemes (`SettlementScheme + TariffSource`, EEG 2000–2023 + KWKG 2023); §51 Negativpreisregel (version-aware: EEG 2017/2021/2023 thresholds + Bestandsschutz); §51a Verlängerungsanspruch; §52 Pflichtzahlungen (€10/kW) + §52 Abs. 6 Netting; §20 Abs. 3 Managementprämie; §23a quarterly degression; §36h Abs. 1/2 Wind Korrekturfaktor + Standortgüte re-eval; §39n Innovationsausschreibung feste Marktprämie; §51a Förderende-Verlängerung; §24 multi-block `CapacityBlock`; `SettlementPeriodState` lifecycle state machine; **§14 UStG Gutschrift** (opt-in `bo4e` feature → BO4E `Rechnung` with per-rate USt breakdown, VAT from declared `ust_status`); zero float money; no I/O |
+| `eeg-billing` | Pure EEG/KWKG feed-in settlement library — `calculate_settlement` for all 10 settlement schemes (`SettlementScheme + TariffSource`, EEG 2000–2023 + KWKG 2023); §51 Negativpreisregel (version-aware: EEG 2017/2021/2023 thresholds + Bestandsschutz); §51a Verlängerungsanspruch; §52 Pflichtzahlungen (€10/kW) + §52 Abs. 6 Netting; Anlage 1 gleitende Marktprämie (no additive Managementprämie); §49 semi-annual solar degression; §36h Abs. 1/2 Wind Korrekturfaktor + Standortgüte re-eval; §39n Innovationsausschreibung feste Marktprämie; §51a Förderende-Verlängerung; §24 multi-block `CapacityBlock`; `SettlementPeriodState` lifecycle state machine; **§14 UStG Gutschrift** (opt-in `bo4e` feature → BO4E `Rechnung` with per-rate USt breakdown, VAT from declared `ust_status`); zero float money; no I/O |
 | `energy-billing` | Retail energy billing engine (LF role) — `Product` typed enum (13 categories, serde-tagged); per-category typed structs (`ElectricityProduct`, `GasProduct`, …); `ControllableLoadProvider` for §14a; `BillingEngine.validate()` + `bill_batch()`; `Invoice.warnings`; §41a Abs. 1 iMSys guard; `Invoice::to_en16931` (EN 16931 model, opt-in `en16931` feature); `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label; RLM demand charge; §54 EnergieStG exemption; historic levy lookups; §41a EPEX; HT/NT ToU; zero I/O; rubo4e behind the opt-in `bo4e` feature (typed `Rechnung` bridge) |
 | `invoic-checker` | INVOIC plausibility — 6 checks (period validity, position arithmetic, document total, tariff match ToU-aware, tariff found, MMM settlement price check) |
 | `netz-checker` | NB Anmeldung validation — 6 deterministic checks, ERC A02/A05/A06/A07/E17 (EBD E_0622 / G_0011); no I/O |
@@ -528,32 +528,37 @@ mako/
 │   ├── energy-api/          # BDEW REST/WebSocket API client + Axum server (iMS)
 │   ├── mako-redispatch/     # Redispatch 2.0 process engine — 8 XML-document-driven workflows
 │   ├── redispatch-xml/      # Redispatch 2.0 XML/XSD parsing — all 9 document types
+│   ├── invoic-checker/      # INVOIC plausibility-check pipeline (LF side)
+│   ├── netz-checker/        # NB-side Anmeldung decision checks
+│   ├── energy-billing/      # LF consumption billing engine (§§40–41a EnWG)
+│   ├── grid-billing/        # NB grid-fee billing — NNE/KA/MMM, §14a, Entgeltregime
+│   ├── eeg-billing/         # EEG feed-in remuneration + Marktprämie
+│   ├── mako-events/         # CloudEvents type catalog + matches()
+│   ├── mako-markt/          # Market master-data domain (BO4E via rubo4e)
+│   ├── mako-obs/            # Observability projections
+│   ├── mako-plugin/         # WASM plugin host (Extism, opt-in)
 │   └── mako-service/        # Service SDK — load_config · DatabaseConfig · shutdown · OidcConfig · McpAuth · init_tracing_from_env · ServiceBuilder · CedarEnforcer · EventBus
 │
-├── services/
-│   ├── makod/               # Protocol daemon
-│   │   └── src/             # main.rs, startup.rs + seam folders:
-│   │                        # transport/    (as4_ingest, as4_sender, contrl_ack, webdienste, …)
-│   │                        # orchestrator/ (ingest_dispatcher/, commands_api/, adapters/,
-│   │                        #                edifact_renderer/, deadline_dispatch, netzzugang)
-│   │                        # api/          (edifact_api, admin/read APIs, mcp_server, openapi)
-│   │                        # core/         (config, cedar_authz, party_registry, malo_cache, …)
-│   │                        # CLI: --config, --data-dir, --as4-addr, --http-addr
-│   ├── marktd/              # Market Data Hub daemon
-│   │   └── src/             # main.rs, config.rs, handlers/, pg/, fanout.rs
-│   │                        # PostgreSQL · OIDC/JWT · OpenAPI 3.1 · EventBus fan-out
-│   │                        # CLI: --database-url, --tenant, --oidc-issuer, :8180
-│   ├── processd/            # Process Decision Engine
-│   │   └── src/             # nb_module.rs (netz-checker) + lf_module.rs (E_0624)
-│   │                        # Cedar ABAC · PostgreSQL · MCP server; :8580
-│   ├── invoicd/             # INVOIC plausibility-check daemon (LF role)
-│   │   ├── src/             # handler.rs, server.rs, config.rs, pg/receipts.rs
-│   │   │                    # invoic-checker pipeline · PostgreSQL receipt store
-│   │   │                    # CLI: --database-url, --makod-url, --marktd-url, :8280
-│   │   └── migrations/      # SQLx migrations (invoic_receipts table)
-│   ├── edmd/                # Energy Data Management daemon — meter reads · billing; :8380
-│   └── obsd/                # Observability daemon — projections · KPIs · §20 parity; :8480
+├── services/                # 17 daemons, one PostgreSQL schema each
+│   ├── makod/               # :8080 · protocol daemon — AS4 ingest, workflow dispatch, EDIFACT render
+│   ├── marktd/              # :8180 · master-data hub — BO4E store, MP-ID registry, event fan-out
+│   ├── invoicd/             # :8280 · INVOIC plausibility check (LF)
+│   ├── edmd/                # :8380 · energy data management — profiles, gap-fill, `?as_of` reads
+│   ├── obsd/                # :8480 · observability — projections, KPIs, Fristen tracking
+│   ├── processd/            # :8580 · process decision engine — STP checks, auto-responses
+│   ├── netzbilanzd/         # :8680 · NB billing — NNE/KA/MMM/MSB INVOIC, REMADV, Redispatch Kostenblatt
+│   ├── sperrd/              # :8780 · Sperrung execution tracking
+│   ├── mabis-syncd/         # :8880 · MaBiS Summenzeitreihen submission (BIKO)
+│   ├── tarifbd/             # :9080 · tariffs & products — §41a dynamic pricing, Preisblätter
+│   ├── einsd/               # :9180 · EEG remuneration — Marktprämie, Förderende alerts
+│   ├── billingd/            # :9280 · LF customer billing — invoices, Abschläge, XRechnung/ZUGFeRD payloads
+│   ├── accountingd/         # :9380 · sub-ledger (doubleentry) — Mahnwesen, §§41f/41g Sperr-Sequenz
+│   ├── portald/             # :9480 · customer portal API
+│   ├── agentd/              # :9580 · AI agent plane — 28 specialists over MCP, human oversight
+│   ├── vertragd/            # :9780 · contract lifecycle — Lieferverträge, GGV, Aggregatoren
+│   └── outputd/             # :9880 · document engine — Typst templates, ZUGFeRD carrier, publish gates
 │
+├── makotest/                # Python test toolkit (PyO3) — simulators, generators, pytest plugin
 ├── xtask/                   # Dev automation: codegen · validate · release-diff
 └── fuzz/                    # cargo-fuzz targets (1 373+ corpus entries)
 ```

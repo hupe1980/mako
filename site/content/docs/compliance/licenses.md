@@ -40,7 +40,6 @@ Each entry documents the rationale and the transitive path that introduced the l
 ### `0BSD` — Zero-Clause BSD
 
 **Status:** Approved  
-**Added:** this session  
 **Approval owner:** project maintainer (see deny.toml commit)
 
 **Rationale:**  

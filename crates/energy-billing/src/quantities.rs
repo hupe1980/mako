@@ -305,6 +305,51 @@ impl GgvNutzungsplan {
         Ok(())
     }
 
+    /// Validate that the plan allocates PV to exactly `tenants`, no more and no
+    /// less.
+    ///
+    /// Fractions summing to 1.0 says nothing about *who* they cover: a plan that
+    /// omits a tenant is internally consistent, and the omitted tenant silently
+    /// falls out of the allocation — billed as if their whole consumption were
+    /// self-consumed solar, with no grid residual and no Stromsteuer. §42b Abs. 1
+    /// EEG 2023 requires the Nutzungsplan to cover the community for the duration
+    /// of the contract, so a mismatch is a configuration error, not a default.
+    ///
+    /// A MaLo appearing twice is also rejected: the allocation is keyed on the
+    /// MaLo, so a duplicate entry loses one of the two shares.
+    pub fn validate_covers<'a>(
+        &self,
+        tenants: impl IntoIterator<Item = &'a str>,
+    ) -> Result<(), String> {
+        use std::collections::BTreeSet;
+        let mut planned: BTreeSet<&str> = BTreeSet::new();
+        for e in &self.0 {
+            if !planned.insert(e.malo_id.as_str()) {
+                return Err(format!(
+                    "GGV Nutzungsplan: MaLo {} appears more than once",
+                    e.malo_id
+                ));
+            }
+        }
+        let tenants: BTreeSet<&str> = tenants.into_iter().collect();
+        let missing: Vec<&str> = tenants.difference(&planned).copied().collect();
+        if !missing.is_empty() {
+            return Err(format!(
+                "GGV Nutzungsplan: no entry for {} — every tenant must be allocated \
+                 (§42b Abs. 1 EEG 2023)",
+                missing.join(", ")
+            ));
+        }
+        let extra: Vec<&str> = planned.difference(&tenants).copied().collect();
+        if !extra.is_empty() {
+            return Err(format!(
+                "GGV Nutzungsplan: {} is allocated PV but is not a tenant of this run",
+                extra.join(", ")
+            ));
+        }
+        Ok(())
+    }
+
     /// Allocate a generation quantity proportionally among tenants.
     ///
     /// Returns `(malo_id, allocated_kwh)` pairs.
@@ -795,6 +840,34 @@ mod tests {
                 })
                 .collect(),
         )
+    }
+
+    /// Fractions summing to 1.0 do not prove the plan covers the community: a
+    /// 3-entry plan for 4 tenants is internally consistent, and the omitted
+    /// tenant would silently be billed as pure Solar-Eigenverbrauch.
+    #[test]
+    fn validate_covers_rejects_a_tenant_missing_from_the_plan() {
+        let p = plan(&[("A", "0.5"), ("B", "0.3"), ("C", "0.2")]);
+        p.validate().expect("fractions sum to 1.0");
+        p.validate_covers(["A", "B", "C"]).expect("exact coverage");
+
+        let err = p
+            .validate_covers(["A", "B", "C", "D"])
+            .expect_err("D is not allocated");
+        assert!(err.contains('D'), "{err}");
+
+        let err = p
+            .validate_covers(["A", "B"])
+            .expect_err("C is not a tenant of this run");
+        assert!(err.contains('C'), "{err}");
+    }
+
+    /// The allocation is keyed on the MaLo, so a duplicated entry loses a share.
+    #[test]
+    fn validate_covers_rejects_a_duplicated_malo() {
+        let p = plan(&[("A", "0.5"), ("A", "0.3"), ("B", "0.2")]);
+        let err = p.validate_covers(["A", "B"]).expect_err("A appears twice");
+        assert!(err.contains("more than once"), "{err}");
     }
 
     /// Σ(allocated) must always equal total_kwh exactly.

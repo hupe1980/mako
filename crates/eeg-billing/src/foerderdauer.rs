@@ -200,38 +200,6 @@ pub fn kwk_eligible_kwh(
     }
 }
 
-/// Statutory §20 Abs. 3 EEG 2023 Managementprämie in ct/kWh.
-///
-/// Paid by the NB to the Direktvermarkter for market-integration administration.
-///
-/// | Plant capacity | Rate |
-/// |---|---|
-/// | ≤ 100 MW | 0.4 ct/kWh |
-/// | > 100 MW | 0.2 ct/kWh (§20 Abs. 3 Nr. 1 EEG 2023) |
-///
-/// Applies to `Direktvermarktung` and `Ausschreibung` models only.
-///
-/// # Example
-/// ```rust
-/// use eeg_billing::managementpraemie_ct;
-/// use rust_decimal::Decimal;
-/// use std::str::FromStr;
-///
-/// let standard = managementpraemie_ct(Decimal::from_str("2500").unwrap());    // 2.5 MW
-/// let large    = managementpraemie_ct(Decimal::from_str("110000").unwrap()); // 110 MW
-/// assert_eq!(standard, Decimal::from_str("0.4").unwrap());
-/// assert_eq!(large,    Decimal::from_str("0.2").unwrap());
-/// ```
-pub fn managementpraemie_ct(leistung_kwp: Decimal) -> Decimal {
-    // §20 Abs. 3 Nr. 1 EEG 2023: reduced to 0.2 ct/kWh for plants >100 MW
-    // 100 MW = 100 000 kWp
-    if leistung_kwp > Decimal::from(100_000u32) {
-        Decimal::new(2, 1) // 0.2
-    } else {
-        Decimal::new(4, 1) // 0.4
-    }
-}
-
 /// Compute the §8 Abs. 4 KWKG 2023 **calendar-year** Förderungsende for large CHP plants.
 ///
 /// # Legal basis
@@ -769,41 +737,43 @@ pub fn pflichtzahlung_verjaehrt_am(
 
 // ── §25 billing_days_fraction ─────────────────────────────────────────────────
 
-/// §25 Abs. 1 Satz 3 / §26 Abs. 1 EEG 2023 — Compute the partial-month billing
-/// fraction for the first commissioning month or the Förderendedatum expiry month.
+/// §25 Abs. 1 Satz 3 / §26 Abs. 1 EEG 2023 — the partial-month billing fraction
+/// for the **Förderende** month.
 ///
-/// Returns `Some(fraction)` when a plant is commissioned or decommissioned mid-month.
-/// Returns `None` for full billing months (the common case).
+/// Returns `Some(day / days_in_month)` when the Förderdauer ends part-way through
+/// the billing month, `None` for full months (the common case).
 ///
-/// ## Formula
+/// ## Why the commissioning month is *not* prorated
 ///
-/// - Commissioning mid-month (day > 1): `fraction = (last_day − day + 1) / days_in_month`
-/// - Förderendedatum mid-month (day < last): `fraction = day / days_in_month`
+/// Proration exists to cut a month's *entitlement* down to the eligible days. In
+/// the Förderende month the meter keeps running past the entitlement end, so the
+/// reading covers more than the plant may be paid for and must be narrowed. The
+/// commissioning month is the opposite case: §25 Abs. 1 Satz 3 starts the period
+/// at the Inbetriebnahme, and the meter only starts recording then — a plant
+/// commissioned on 15 June reports the 500 kWh it fed in from 15 June, already
+/// the partial month. Scaling that by 16/30 would bill a fraction of a fraction
+/// and underpay the operator by roughly half of their first month.
 ///
 /// ## Legal basis
 ///
-/// §25 Abs. 1 Satz 3 EEG 2023: "Beginn der Frist... ist der Zeitpunkt der Inbetriebnahme."
+/// §25 Abs. 1 Satz 3 EEG 2023: "Beginn der Frist… ist der Zeitpunkt der Inbetriebnahme."
 /// §26 Abs. 1 EEG 2023: monthly advance payments for the billing month.
 ///
 /// # Example
 ///
 /// ```rust
 /// use eeg_billing::foerderdauer::compute_billing_days_fraction;
+/// use rust_decimal::dec;
 /// use time::macros::date;
 ///
-/// // Plant commissioned June 15 → 16/30 eligible days
-/// let fraction = compute_billing_days_fraction(
-///     Some(date!(2024-06-15)),
-///     None,
-///     Some(date!(2024-06-01)),
-/// );
-/// assert!(fraction.is_some_and(|f| f > rust_decimal::Decimal::ZERO && f < rust_decimal::Decimal::ONE));
+/// // Förderende on 20 June → 20/30 of the month is still entitled.
+/// let fraction = compute_billing_days_fraction(Some(date!(2024-06-20)), Some(date!(2024-06-01)));
+/// assert_eq!(fraction, Some(dec!(20) / dec!(30)));
 ///
-/// // Full month → None
-/// assert!(compute_billing_days_fraction(None, None, Some(date!(2024-06-01))).is_none());
+/// // Full month → None.
+/// assert!(compute_billing_days_fraction(None, Some(date!(2024-06-01))).is_none());
 /// ```
 pub fn compute_billing_days_fraction(
-    inbetriebnahme: Option<Date>,
     foerderendedatum: Option<Date>,
     billing_date: Option<Date>,
 ) -> Option<rust_decimal::Decimal> {
@@ -811,18 +781,6 @@ pub fn compute_billing_days_fraction(
     let by = bd.year();
     let bm = bd.month();
     let days_in_month = bm.length(by) as i64;
-
-    // Check commissioning in current billing month
-    if let Some(ibn) = inbetriebnahme
-        && ibn.year() == by
-        && ibn.month() == bm
-        && ibn.day() > 1
-    {
-        let days_active = (days_in_month - ibn.day() as i64 + 1).max(0);
-        return Some(
-            rust_decimal::Decimal::from(days_active) / rust_decimal::Decimal::from(days_in_month),
-        );
-    }
 
     // Check Förderdauer expiry in current billing month
     if let Some(fed) = foerderendedatum

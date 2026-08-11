@@ -469,7 +469,7 @@ pub async fn kuendige_vertrag(
             ));
             dispatched += 1;
         } else {
-            let _ = update_komponente_status(&pool, k.id, "BEENDET", None, None, None, None).await;
+            let _ = crate::pg::end_komponente(&pool, k.id, input.lieferende).await;
         }
     }
     let _ = update_vertrag_status(
@@ -899,11 +899,11 @@ pub async fn tarifwechsel_vertrag(
             return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
         }
     }
-    if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-    }
-
-    // Update tarifbd product assignment — HTTP, OUTSIDE the tx (immediate branch only).
+    // Update the tarifbd product assignment (immediate branch only) BEFORE the
+    // commit. billingd prices from tarifbd, so a swallowed failure here left it
+    // billing the old tariff with the contract already switched — and nothing
+    // said so. On failure the transaction is dropped, the local change is not
+    // recorded, and the caller sees the disagreement.
     if !is_future && let Some(ref malo_id) = komp.malo_id {
         let url = format!(
             "{}/api/v1/customer/{}/product",
@@ -920,7 +920,29 @@ pub async fn tarifwechsel_vertrag(
         if let Some(ref k) = cfg.tarifbd_api_key {
             req = req.bearer_auth(k);
         }
-        let _ = req.json(&body).send().await;
+        let detail = match req.json(&body).send().await {
+            Ok(resp) if resp.status().is_success() => None,
+            Ok(resp) => Some(format!("tarifbd returned {}", resp.status())),
+            Err(e) => Some(format!("tarifbd unreachable: {e}")),
+        };
+        if let Some(detail) = detail {
+            tracing::error!(
+                komp_id = %input.komp_id, malo_id, %detail,
+                "vertragd: Tarifwechsel rolled back — tarifbd would keep pricing the old tariff"
+            );
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({
+                    "error": "tarifbd product assignment failed — Tarifwechsel not applied",
+                    "detail": detail,
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
     (
@@ -964,7 +986,23 @@ pub async fn post_cloud_event(
             return StatusCode::BAD_REQUEST.into_response();
         }
     };
-    let ce_id = ce.get("id").and_then(|v| v.as_str()).unwrap_or("");
+    // `id` is the inbox primary key. Defaulting it to "" made the first id-less
+    // event occupy that key and every later one look like its duplicate, so all
+    // of them were dropped in silence.
+    let Some(ce_id) = ce
+        .get("id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    else {
+        tracing::warn!("vertragd: inbound CloudEvent has no `id` — rejected");
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "CloudEvent `id` is required — it is the deduplication key",
+            })),
+        )
+            .into_response();
+    };
     let ce_type = ce.get("type").and_then(|v| v.as_str()).unwrap_or("");
     let is_new = match idempotent_event(&pool, ce_id, ce_type, &ce).await {
         Ok(b) => b,
@@ -1261,8 +1299,7 @@ async fn dispatch_lieferende(
         }
         match req.json(&body).send().await {
             Ok(resp) if resp.status().is_success() => {
-                let _ = update_komponente_status(&pool, komp_id, "BEENDET", None, None, None, None)
-                    .await;
+                let _ = crate::pg::end_komponente(&pool, komp_id, lieferende).await;
                 return;
             }
             Ok(resp) => {
@@ -2209,8 +2246,7 @@ pub async fn kuendige_rahmenvertrag_handler(
                 ));
                 dispatched += 1;
             } else {
-                let _ =
-                    update_komponente_status(&pool, k.id, "BEENDET", None, None, None, None).await;
+                let _ = crate::pg::end_komponente(&pool, k.id, input.lieferende).await;
             }
         }
         // Persist GEKÜNDIGT + de.vertrag.gekuendigt CloudEvent in ONE tx so an

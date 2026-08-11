@@ -544,8 +544,7 @@ pub struct SettleInput {
     ///
     /// Used for:
     /// - §27 EEG guard (threshold: 100 kWp)
-    /// - Automatic `managementpraemie_ct` when set to `None`
-    ///   (auto: 0.4 ct/kWh for ≤100 MW, 0.2 ct/kWh for >100 MW)
+    /// - §51 Abs. 2 kW exemption (aggregated per §24 when `capacity_blocks` is set)
     ///
     /// Ignored when `capacity_blocks` is non-empty.
     pub leistung_kwp: Option<Decimal>,
@@ -736,7 +735,7 @@ pub struct SettleOutput {
     ///
     /// Multi-component models produce multiple positions:
     /// - `Mieterstrom`: base Vergütung + §21 Abs. 3 Zuschlag
-    /// - `Direktvermarktung`/`Ausschreibung`: Gleitende Marktprämie + §20 Abs. 3 Managementprämie
+    /// - `Direktvermarktung`/`Ausschreibung`: Gleitende Marktprämie + §§53b–54 AW-Abzüge
     /// - `Flexibilitaet`: base Vergütung + §50 Flex-Prämie
     /// - Multi-block plants (§24 Anlagenerweiterung): one position per active block
     ///
@@ -841,7 +840,7 @@ pub struct SettlePosition {
     /// Human-readable description of this charge line.
     pub description: String,
 
-    /// Legal basis for audit trail (e.g. `"§21 EEG 2023"`, `"§20 Abs. 3 EEG 2023"`).
+    /// Legal basis for audit trail (e.g. `"§21 EEG 2023"`, `"§23a EEG 2023 i.V.m. Anlage 1"`).
     pub legal_basis: String,
 
     /// Energy quantity this position applies to (kWh).
@@ -892,8 +891,7 @@ impl SettlePosition {
             builder = builder.tag("kwkg");
         }
         builder = match self.legal_basis.as_str() {
-            b if b.starts_with("\u{00a7}20 Abs. 3") => builder.tag("managementpraemie"),
-            b if b.starts_with("\u{00a7}20") || b.starts_with("\u{00a7}\u{00a7}22a") => {
+            b if b.starts_with("\u{00a7}23a") || b.starts_with("\u{00a7}\u{00a7}22a") => {
                 builder.tag("marktpraemie")
             }
             "\u{00a7}21 Abs. 3 EEG 2023" => builder.tag("mieterstrom"),

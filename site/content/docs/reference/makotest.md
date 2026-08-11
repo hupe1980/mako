@@ -297,9 +297,9 @@ TR-03109 crypto — that would be a second implementation of something the gatew
 owns, and getting it subtly wrong would make tests disagree with reality exactly
 where they must not.
 
-`MaStRSim` and `UbaSim` are specified in the concept but deliberately unbuilt:
-neither integration exists in mako yet, and a simulator written before its
-consumer encodes guesses about an interface nobody has implemented.
+makotest ships no MaStR or UBA simulator: neither integration exists in mako, and
+a simulator without a consumer encodes guesses about an interface nobody
+implements.
 
 ---
 
@@ -389,17 +389,16 @@ Python symbols. CI exercises both paths.
 
 ---
 
-## Status
+## Scope
 
-Pre-1.0. Shipping: the Rust core (identifiers, Fristen, Prüfidentifikator
+makotest covers the Rust core (identifiers, Fristen, Prüfidentifikator
 introspection, the AHB answer table, EDIFACT build + interchange + validation),
 the EPEX generator, the Marktpartner / BIKO / iMSys simulators, hypothesis
 strategies, domain assertions and the pytest plugin.
 
-Not built: AS4 transport for the Marktpartner simulator — it is a plain object
-with `receive()`, so a transport layers on top rather than being a dependency of
-everyone who does not need one — the testcontainers harness, and the MaStR / UBA
-simulators.
+The Marktpartner simulator is a plain object with `receive()` and carries no AS4
+transport of its own: a transport layers on top of it, so it is never a
+dependency of the many tests that do not need one.
 
 The package version tracks `workspace.package.version` through Cargo.toml, so
 the wheel and the crates it binds can never report different versions.

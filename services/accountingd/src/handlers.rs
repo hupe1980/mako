@@ -69,6 +69,7 @@ pub async fn get_account(
 pub async fn put_account(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Extension(iban_key): Extension<Option<[u8; 32]>>,
     _claims: Claims,
     Path(malo_id): Path<String>,
     Query(q): Query<AccountQuery>,
@@ -76,7 +77,16 @@ pub async fn put_account(
 ) -> impl IntoResponse {
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
     let _ = upsert_account(&pool, &malo_id, &lf_mp_id, &cfg.tenant).await;
-    match update_account_tenanted(&pool, &malo_id, &lf_mp_id, &cfg.tenant, req).await {
+    match update_account_tenanted(
+        &pool,
+        &malo_id,
+        &lf_mp_id,
+        &cfg.tenant,
+        iban_key.as_ref(),
+        req,
+    )
+    .await
+    {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
     }
@@ -172,6 +182,7 @@ pub async fn put_abschlag(
             &malo_id,
             &cfg.tenant, // lf_mp_id defaults to tenant when not specified
             &cfg.tenant,
+            None,
             crate::pg::UpdateAccountRequest {
                 iban: None,
                 mandatsref: None,
@@ -1357,6 +1368,7 @@ pub struct DunningQuery {
 pub async fn post_mandate(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Extension(iban_key): Extension<Option<[u8; 32]>>,
     _claims: Claims,
     Json(req): Json<CreateMandateRequest>,
 ) -> impl IntoResponse {
@@ -1384,7 +1396,7 @@ pub async fn post_mandate(
         )
             .into_response();
     }
-    match create_mandate(&pool, &cfg.tenant, req).await {
+    match create_mandate(&pool, &cfg.tenant, iban_key.as_ref(), req).await {
         Ok(id) => (
             StatusCode::CREATED,
             Json(serde_json::json!({ "mandate_id": id })),
@@ -1842,6 +1854,41 @@ pub struct JahresabschlussQuery {
 /// nothing. Anything that needs to react to every Jahresabschluss must poll
 /// `jahresabschluss_runs`; there is no `de.accounting.jahresabschluss.*` type in
 /// the `mako-events` catalog.
+/// The year's Kontokorrent movements folded into the Jahresabschluss figures.
+///
+/// Every field is a signed Kontokorrent net (debit +, credit −) as produced by
+/// [`crate::ledger::PgLedger::year_kind_sums`], so the parts simply add up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JahresabschlussSums {
+    /// Billed debits: `RECHNUNG` + `STORNO` + `MAHNGEBUEHR` (§ 40 Abs. 1 EnWG —
+    /// the Jahresabrechnung reflects actual billed amounts, corrections included).
+    pub rechnung_sum: i64,
+    /// `ABSCHLAG` advance payments (credits, so negative).
+    pub abschlag_sum: i64,
+    /// Cash settled outside the Abschlag plan: `ZAHLUNG` (credit) net of
+    /// `BANKRUECKLAST` chargebacks (debit). Omitting these treated a customer who
+    /// paid an invoice directly as unpaid, and refunded a bounced Abschlag.
+    pub zahlung_sum: i64,
+    /// `> 0` Nachzahlung, `< 0` Erstattung, `0` ausgeglichen.
+    pub settlement_ct: i64,
+}
+
+impl JahresabschlussSums {
+    #[must_use]
+    pub fn from_kind_sums(sums: &std::collections::HashMap<String, i64>) -> Self {
+        let kind = |k: &str| sums.get(k).copied().unwrap_or(0);
+        let rechnung_sum = kind("RECHNUNG") + kind("STORNO") + kind("MAHNGEBUEHR");
+        let abschlag_sum = kind("ABSCHLAG");
+        let zahlung_sum = kind("ZAHLUNG") + kind("BANKRUECKLAST");
+        Self {
+            rechnung_sum,
+            abschlag_sum,
+            zahlung_sum,
+            settlement_ct: rechnung_sum + abschlag_sum + zahlung_sum,
+        }
+    }
+}
+
 pub async fn post_jahresabschluss(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
@@ -1873,19 +1920,12 @@ pub async fn post_jahresabschluss(
         Ok(s) => s,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
-    let kind = |k: &str| sums.get(k).copied().unwrap_or(0);
-
-    // Abschläge are credits (negative).
-    let abschlag_sum: i64 = kind("ABSCHLAG");
-
-    // All billed debits for the year (§40 Abs. 1 EnWG: the Jahresabrechnung must
-    // reflect actual billed amounts, including corrections/stornos and fees).
-    let rechnung_sum: i64 = kind("RECHNUNG") + kind("STORNO") + kind("MAHNGEBUEHR");
-
-    // settlement_ct > 0  → Nachzahlung (customer still owes)
-    // settlement_ct < 0  → Erstattung (customer overpaid → refund)
-    // settlement_ct == 0 → ausgeglichen
-    let settlement_ct = rechnung_sum + abschlag_sum;
+    let JahresabschlussSums {
+        rechnung_sum,
+        abschlag_sum,
+        zahlung_sum,
+        settlement_ct,
+    } = JahresabschlussSums::from_kind_sums(&sums);
     // New monthly Abschlag = actual annual billed ÷ 12 (§40 Abs. 1 EnWG).
     // Only update when there were actual Rechnungen this year; keep unchanged
     // for years with no billed amounts to avoid zeroing the Abschlag on empty years.
@@ -1909,6 +1949,7 @@ pub async fn post_jahresabschluss(
             "year": year,
             "rechnung_sum_ct": rechnung_sum,
             "abschlag_paid_ct": abschlag_sum,
+            "zahlung_net_ct": zahlung_sum,
             "settlement_ct": settlement_ct,
             "settlement_eur": format_ct_as_eur(settlement_ct),
             "new_monthly_abschlag_ct": new_abschlag_ct,
@@ -2056,7 +2097,9 @@ pub async fn post_jahresabschluss(
         &malo_id,
         billing_year_i16,
         rechnung_sum,
-        abschlag_sum,
+        // All credits received, so annual_bill + sum_abschlage == zahlbetrag holds
+        // in the persisted run.
+        abschlag_sum + zahlung_sum,
         settlement_ct,
         settlement_entry_id,
     )
@@ -2073,6 +2116,7 @@ pub async fn post_jahresabschluss(
             &malo_id,
             lf_mp_id,
             &cfg.tenant,
+            None,
             UpdateAccountRequest {
                 iban: None,
                 mandatsref: None,
@@ -2125,6 +2169,7 @@ pub async fn post_jahresabschluss(
         "year": year,
         "rechnung_sum_ct": rechnung_sum,
         "abschlag_paid_ct": abschlag_sum,
+        "zahlung_net_ct": zahlung_sum,
         "settlement_ct": settlement_ct,
         "settlement_eur": format_ct_as_eur(settlement_ct),
         "new_monthly_abschlag_ct": new_abschlag_ct,

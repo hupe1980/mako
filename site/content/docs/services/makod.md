@@ -41,6 +41,7 @@ Companion daemons complete the production stack:
 | `invoicd` | `:8280` | INVOIC plausibility, receipt persistence, REMADV auto-dispatch |
 | `edmd` | `:8380` | Meter-data store (MSCONS), time-series API, Mehr-/Mindermengen |
 | `obsd` | `:8480` | Business-process observability, BNetzA KPI reports, alerting |
+| `netzbilanzd` | `:8680` | NNE/MMM/MSB INVOIC generation |
 
 See the individual service READMEs for setup details.
 
@@ -486,7 +487,7 @@ irrelevant for a particular operator — reducing binary size and attack surface
 | `role-lf-gas` | `mako-geli-gas` (LF side): `geli-gas-stornierung-lf`, `geli-gas-sperrung-lf`, `geli-gas-mscons` |
 | `role-nb-strom` | `mako-gpke` (NB side): `gpke-supplier-change`, `gpke-sperrung`, `gpke-konfiguration`, `gpke-konfiguration-aenderung`, `gpke-neuanlage`, `gpke-partin`, `mako-wim` (NB side), **`mako-redispatch`** (Redispatch 2.0 is gated to NB Strom / ÜNB — LF and MSB deployments are out of scope per BK6-20-059/060/061) |
 | `role-nb-gas` | `mako-geli-gas` (GNB side): `geli-gas-supplier-change`, `geli-gas-sperrung-nb`, `geli-gas-stornierung`, `geli-gas-datenabruf`, `geli-gas-partin`, `geli-gas-sperrprozesse-invoic` |
-| `role-msb-strom` | `mako-wim`: `wim-device-change`, `wim-geraeteubernahme`, `wim-stammdaten`, `wim-preisanfrage`, `wim-rechnungsabwicklung`, `wim-preisliste`, `wim-invoic`, `wim-insrpt`, `wim-wertebestellung` |
+| `role-msb-strom` | `mako-wim`: `wim-device-change`, `wim-geraeteubernahme`, `wim-stammdaten`, `wim-preisanfrage`, `wim-rechnungsabwicklung`, `wim-preisliste`, `wim-invoic`, `wim-insrpt`, `wim-wertebestellung`, `wim-technik-aenderung`, `esa-wertebestellung` |
 | `role-msb-gas` | `mako-wim-gas`: all WiM Gas workflows |
 
 ### Composite flags
@@ -1345,9 +1346,9 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 |---------|-----------|--------|------|---------|
 | `gpke.lieferbeginn.anmelden` | `LF` | GPKE | 55001 | New supplier registers supply start |
 | `gpke.lieferbeginn.bestaetigen` | `NB` | GPKE | 55002/55003 | DSO accepts/rejects supply start |
-| `gpke.lieferende.anmelden` | `LF` | GPKE | 55002 | Old supplier registers supply end |
+| `gpke.lieferende.anmelden` | `LF` | GPKE | 55004 | Old supplier registers supply end (Abmeldung/Lieferende LF → NB) |
 | `gpke.lieferende.bestaetigen` | `NB` | GPKE | 55005/55006 | DSO accepts/rejects supply end |
-| `gpke.kuendigung.anmelden` | `LF` | GPKE | 55017 | LF cancels a Lieferbeginn Anmeldung |
+| `gpke.kuendigung.anmelden` | `LF` | GPKE | 55016 | LFN terminates the old supply contract (Kündigung LFN → LFA; 55017 is the Bestätigung) |
 | `gpke.eog.anmelden` | `NB` | GPKE | 55013 | NB assigns a contractless MaLo to the Grundversorger (§36/§38 EnWG gap closure) |
 | `geli.eog.anmelden` | `GNB` | GeLi Gas | 44013 | Gas twin of `gpke.eog.anmelden` — GNB registers a contractless Gas-MaLo into E/G |
 | `gpke.eog.bestaetigen` | `LF` | GPKE | 55014 | E/G confirms the EoG Zuordnung (Versorgungsart + Bilanzkreis) |
@@ -1361,7 +1362,7 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `gpke.abrechnung.ablehnen` | `NB` | GPKE | 31001/31002 | DSO disputes a Netznutzungsabrechnung |
 | `geli.lieferbeginn.anmelden` | `LFG` | GeLi Gas | 44001 | Gas supplier registers supply start |
 | `geli.lieferbeginn.bestaetigen` | `GNB` | GeLi Gas | 44002/44003 | Gas DSO accepts/rejects supply start |
-| `geli.lieferende.anmelden` | `LFG` | GeLi Gas | 44002 | Gas supplier registers supply end |
+| `geli.lieferende.anmelden` | `LFG` | GeLi Gas | 44004 | Gas supplier registers supply end (Abmeldung NN) |
 | `geli.lieferende.bestaetigen` | `GNB` | GeLi Gas | 44005/44006 | Gas DSO accepts/rejects supply end |
 | `wim.geraetewechsel.beauftragen` | `NB` or `MSB` | WiM | 55039/55042/55051/55168 | Commission a meter-device change |
 | `wim.geraetewechsel.bestaetigen` | `MSB` | WiM | 55039/55042/55051/55168 | MSB confirms physical device swap |
@@ -1376,8 +1377,8 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `mabis.summenzeitreihe.uebermitteln` | `NB` or `ÜNB` | MABIS | 13003 | File a Summenzeitreihe for one Bilanzierungsgebiet with the BIKO |
 | `gpke.vollzugsmeldung.empfangen` | `NB`/`LFN`/`LFA` | GPKE | 21024–21033 | Vollzugsmeldung received via REST (manual replay) |
 | `wim.iftsta.empfangen` | `NB`/`MSB` | WiM | 21009–21018 | WiM IFTSTA status received via REST (manual replay) |
-| `wim.gas.anmeldung.bestaetigen` | `NB`/`GNB` | WiM Gas | 44042–44053 | GNB accepts GMSB Anmeldung (positive APERAK within 10 WT) |
-| `wim.gas.anmeldung.ablehnen` | `NB`/`GNB` | WiM Gas | 44042–44053 | GNB rejects GMSB Anmeldung (negative APERAK within 10 WT) |
+| `wim.gas.anmeldung.bestaetigen` | `NB`/`GNB` | WiM Gas | 44042–44044 / 44051–44053 | GNB accepts GMSB Anmeldung (positive APERAK within 10 WT) |
+| `wim.gas.anmeldung.ablehnen` | `NB`/`GNB` | WiM Gas | 44042–44044 / 44051–44053 | GNB rejects GMSB Anmeldung (negative APERAK within 10 WT) |
 | `wim.gas.kuendigung.bestaetigen` | `NB`/`GNB` | WiM Gas | 44039–44041 | GNB accepts GMSB Kündigung |
 | `wim.gas.kuendigung.ablehnen` | `NB`/`GNB` | WiM Gas | 44039–44041 | GNB rejects GMSB Kündigung |
 | `wim.gas.stornierung.bestaetigen` | `NB`/`GNB` | WiM Gas | 44022–44024 | GNB sends positive APERAK 44023 to LF Stornierung |
@@ -1487,6 +1488,11 @@ never be the reason a long conversation stalls.
 | 55001, 55002, 55016 | spawn by MaLo | `gpke-supplier-change` — `ReceiveUtilmd` |
 | 55003–55006, 55017, 55018 | resume by MaLo | `gpke-lf-anmeldung` — `ReceiveAntwort` |
 | 44001–44021 | spawn by MaLo | `geli-gas-supplier-change` — `ReceiveUtilmd` |
+
+The table is **illustrative, not exhaustive** — further combined-role pairs
+(e.g. the `wim-rechnungsabwicklung` ORDERS 17005/17006 and ORDRSP 19009/19010
+exchange, or the ESA Wertebestellung handshake between `esa-wertebestellung`
+and `wim-wertebestellung`) follow the same spawn/resume pattern.
 
 **PIDs without a registered handler** — for example, ORDERS 17116 when no
 autonomous gMSB-side workflow is running — are **acknowledged immediately** with
@@ -1611,7 +1617,8 @@ stating something the sender did not say.
 by it, so it is set per Anwendungsfall rather than left at a default.
 
 **Summed series (13003, 13023).** Carries the identifying 3-tuple — `LOC+172`
-(MaBiS-Zählpunkt), `DTM+492` (Bilanzierungsmonat, `CCYYMM`) and `DTM+293`
+(the polymorphic **Meldepunkt** qualifier — it accepts either a MaLo or a MeLo;
+here it carries the MaBiS-Zählpunkt), `DTM+492` (Bilanzierungsmonat, `CCYYMM`) and `DTM+293`
 (Versionsangabe, `CCYYMMDDHHMMSSZZZ`) — then one `QTY` per settlement slot,
 each bounded by `DTM+163`/`DTM+164`. A quantity without those bounds has no time
 reference, so the receiver cannot place it on the grid.
@@ -1889,8 +1896,11 @@ across both sectors — so a Gas NN-Rechnung (31002), MMM (31005) or MSB-Rechnun
 
 When the recipient is a sparte-neutral party or not one of our own MP-IDs, makod
 falls back to a conservative message-level heuristic (an unambiguous Gas-only PID
-such as UTILMD G 44xxx / INVOIC 31003/31004/31007/31008/31010/31011, or a Gas
-UTILMD release track). The CONTRL and its 6h escalation deadline are written in one
+such as UTILMD G 44xxx / INVOIC 31003/31007/31008/31010/31011, or a Gas
+UTILMD release track). INVOIC **31004** is deliberately absent from that list: the
+Stornorechnung is the Sparte-neutral universal Storno of any INVOIC (INVOIC AHB
+§3.1.2) and is resolved by recipient MP-ID like the other Sparte-agnostic PIDs,
+never forced to Gas. The CONTRL and its 6h escalation deadline are written in one
 transaction (`enqueue_outbox_with_deadlines`), so a crash can never queue the
 acknowledgement without its deadline. The outbox worker **discharges** that
 deadline once the CONTRL is delivered, so it only ever escalates when the
