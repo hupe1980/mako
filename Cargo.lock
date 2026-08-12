@@ -25,6 +25,7 @@ dependencies = [
  "sqlx",
  "testcontainers",
  "testcontainers-modules",
+ "thiserror 2.0.20",
  "time",
  "tokio",
  "tokio-util",
@@ -10264,12 +10265,11 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "sepa"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dcc8b8323e8981402c325e950e76ba6d1ba7ec7657dad3eb676dc9c567add47f"
+checksum = "e1d99bb63b4908ba1730c6af3c2d1626e98192008343c12d57ac24827fd29256"
 dependencies = [
  "quick-xml 0.41.0",
- "serde_json",
  "thiserror 2.0.20",
  "time",
 ]

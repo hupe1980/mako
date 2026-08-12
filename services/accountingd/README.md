@@ -15,11 +15,17 @@ no SEPA collection.
 | **Aging analysis** | `GET /api/v1/aging` — receivables by 0–30d / 31–60d / 61–90d / >90d |
 | **Verzugszinsen** | `GET/POST /api/v1/accounts/{malo_id}/interest-charges` — §288 BGB B2C/B2B |
 | **Payment plans** | `GET/POST /api/v1/accounts/{malo_id}/payment-plans` — Zahlungsvereinbarung |
-| **SEPA mandates** | IBAN validated via **ISO 13616 mod-97** on PUT; `sepa_mandates` table (UNIQUE per tenant) |
-| **SEPA scheduler** | N-5 background worker generates **one pain.008 message per collection date** (one `PmtInf` group per SequenceType, mandatory Gläubiger-ID); persisted in `sepa_collection_runs` |
+| **SEPA mandates** | IBAN validated via **ISO 13616 mod-97 + the SWIFT registry's per-country BBAN structure** on PUT (mod-97 alone misses an `O` typed for a `0` about 99 % of the time it is the only error); `sepa_mandates` table (UNIQUE per tenant) |
+| **SEPA scheduler** | N-5 background worker generates **one pain.008 message per collection date** (one `PmtInf` group per SequenceType, mandatory Gläubiger-ID); persisted in `sepa_collection_runs` **with one `sepa_collection_entries` row per collected mandate** |
 | **SEPA Gläubiger-ID** | `creditor_id` config field (EPC AT-02); validated via `sepa::validate_creditor_id`; included as `<CdtrSchmeId>` |
+| **Structured `PstlAdr`** | ISO 20022 postal addresses on creditor **and** debtor, ahead of the EPC cut-over on **15 Nov 2026**; half-filled addresses are refused, `Ctry` is checked against ISO 3166, legacy DK schemas drop it rather than emit an XSD violation |
 | **FRST→RCUR transition** | Auto-transitions FRST mandate to RCUR after first successful collection |
-| **CAMT.054 import** | `POST /api/v1/payments/import` — deduplicated by `bank_transaction_id` (prevents re-import) |
+| **Bank statement import** | `POST /api/v1/payments/import/camt053` (end-of-day) · `.../camt054` (intraday notification) · `.../camt052` (intraday report) · `.../import` (flat JSON fallback) — one booking pipeline, one sign convention, deduplicated by the bank's own transaction reference. Only `Ntry/Sts = BOOK` posts: `INFO` is not a money movement and `PDNG` may still be dropped, and an append-only ledger cannot un-book either |
+| **Payment resolution** | Strongest evidence first — counterparty IBAN → `EndToEndId` → an exact Mandatsreferenz/MaLo-ID token in the Verwendungszweck. Matching on the IBAN alone loses every payment made from a spouse's or employer's account; whole-token matching (never substring) stops a stranger's payment landing on a customer. Ambiguous references resolve to nothing and are counted `unresolved` |
+| **Batch integrity** | A camt batch whose itemised details do not sum to the entry total is logged and counted — that difference is money booked at the bank reaching no customer account |
+| **ISO 20022 purpose** | `Purp/Cd` from the account's Sparte: `ELEC` / `GASB` / `WTER` / `ENRG`. Learned from `de.billing.rechnung.erstellt` |
+| **pain.002 ingestion** | `POST /api/v1/sepa/pain002` — applies the bank's status report to payouts *and* collections, including **Verification of Payee** (mandatory since 9 Oct 2025), which is stored on its own axis rather than mistaken for an acceptance |
+| **pain.007 reversal** | `POST /api/v1/sepa/reversals` — the creditor gives a settled collection back; `OrgnlTxRef` is restated from stored data (the DK subset makes it mandatory), one reversal per collection, `SEPA_STORNO` re-opens the receivable |
 | **IBAN encryption ready** | `iban_hash` is an app-computed **keyed BLAKE3** lookup key (no pgcrypto); `iban_encrypted` flag; CAMT.054 matching uses the hash even when the IBAN is ciphertext |
 | **Abschlag model** | ABSCHLAG booked as advance-payment **credit** (negative); full-cost Jahresrechnung as debit — the balance nets to the Nachzahlung/Erstattung |
 | **Mahnwesen** | Mahnstufe 1→2→3; auto-dunning worker (advisory-locked, opt-in) |
@@ -33,7 +39,8 @@ no SEPA collection.
 | **Audit proofs** | `GET /api/v1/entries/{id}/proof` returns an `O(log n)` Merkle inclusion proof (content hash + tree head) — an auditor can verify an entry is committed without this service |
 | **Offene-Posten (OP-Verwaltung)** | Authoritative open items via recorded **FIFO Zahlungszuordnung** (doubleentry clearing) — every post matches open credits against the oldest open debits, so `GET .../open-items` shows real residuals (§ 252 HGB). `POST .../clear` re-runs matching; `POST /api/v1/clearings/{id}/reset` releases a mis-assignment |
 | **Summen- und Saldenliste** | `GET /api/v1/trial-balance` — GL trial balance (§ 238 HGB): gross Soll/Haben turnover + Saldo per account, Σ debits = Σ credits (Kontokorrent leaves aggregated into one Debitoren line) |
-| **MCP** | 12 tools at `/mcp` |
+| **MCP** | 13 tools at `/mcp` (issuing a reversal is deliberately not one — `list_sepa_collections` is read-only, the reversal is an operator decision) |
+| **Metrics** | `accountingd_sepa_collections{status}` and `_open_ct` expose the collection lifecycle: a submitted count that only grows means bank replies are not arriving at all, which looks identical to "everything settled" from the ledger alone |
 | **Tests** | pure unit + integration tests + DB-backed scenario tests (`tests/db_scenarios.rs`, `just test-accountingd-db` — idempotency, netting, reconcile, **period seal + backdate rejection**, **Merkle inclusion proof against Postgres**) |
 | **Health** | `GET /health/live`, `GET /health/ready` |
 
@@ -45,20 +52,51 @@ no SEPA collection.
 
 ## IBAN validation
 
-Every SEPA mandate PUT validates the IBAN via the ISO 13616 mod-97 checksum algorithm.
-Malformed IBANs are rejected at the API boundary with HTTP 422.
+Every SEPA mandate PUT validates the IBAN via the ISO 13616 mod-97 checksum **and**
+the SWIFT IBAN Registry's per-character BBAN structure for the country. Mod-97 alone
+detects an altered character with probability 96/97 and never says which one, so an
+`O` typed for a `0` in a German account number passes it about 99 % of the time it is
+the only error. Malformed IBANs are rejected at the API boundary with HTTP 422.
 The validation logic is covered by unit tests (DE/GB/NL/AT/CH checksums) without a database.
 
 ## SEPA pain.008
 
-`POST /api/v1/sepa/run` returns a JSON array of XML batches — one per `SequenceType`.
-FRST and RCUR mandates are in separate batches (EPC SDD Core Rulebook §3.8 compliance).
-Each batch is stored in `sepa_collection_runs` for audit and ERP webhook replay.
+`POST /api/v1/sepa/run` returns **one pain.008 message** with one `PmtInf` group per
+`SequenceType` present — FRST and RCUR live in separate payment-information blocks of
+the same file (EPC SDD Core Rulebook §3.8), so a collection run is one bank submission
+and one audit row. Each run is stored in `sepa_collection_runs` for audit and ERP
+webhook replay, with one `sepa_collection_entries` row per collected mandate: the
+attribution key for pain.002 replies (`EndToEndId`), camt bookings (`Btch/PmtInfId`)
+and pain.007 reversals.
 
 The XML schema version defaults to the current EPC releases (`pain.008.001.08`,
 `pain.001.001.09`) and can be pinned per bank with the optional `pain008_schema` /
 `pain001_schema` config keys (e.g. `pain.008.001.02` for the pre-2023 version).
 Unknown values fail at startup rather than on a rejected batch.
+
+## Structured postal addresses — 15 November 2026
+
+Version 1.1 of the 2025 SEPA rulebooks, in force since 5 October 2025, ends the
+unstructured address on **15 November 2026** (version 1.0 said the 22nd; it moved to
+land with that year's Swift Standards MX release). From then a scheme message must
+carry `TwnNm` and `Ctry`. It is an *address* deadline, not a message-version one —
+`pain.001.001.09` and `pain.008.001.08` have been mandatory since 19 November 2023.
+
+```toml
+[creditor_address]
+street          = "Musterstraße"
+building_number = "12"
+post_code       = "10115"
+town            = "Berlin"
+country         = "DE"
+```
+
+The operator's block feeds `Cdtr/PstlAdr` in pain.008/pain.007 and `Dbtr/PstlAdr` in
+pain.001 — the same legal entity on both sides. A customer's own address lives on the
+mandate (`sepa_mandates.debtor_*`) for direct debits and on the account
+(`accounts.addr_*`) for anything accountingd pays out. A half-filled address is a hard
+error, not a silent omission: a street with no town and country is exactly the case
+the cut-over will surface.
 
 ## Emitted events
 
@@ -72,8 +110,11 @@ retry and dead-letter.
 | `de.accounting.sperrandrohung` | §41f Abs. 1 notice |
 | `de.accounting.sperrankuendigung` | §41f Abs. 5 notice |
 | `de.accounting.sperrauftrag` | Sperrauftrag handed to `sperrd` |
-| `de.accounting.payment.imported` | camt.054 credit booked (JSON or XML import) |
-| `de.accounting.bankruecklast` | camt.054 SEPA return booked |
+| `de.accounting.payment.imported` | a bank credit booked (camt.053, camt.054 or the flat import) |
+| `de.accounting.bankruecklast` | a SEPA return booked — a collection that **settled** and was then given back |
+| `de.accounting.sepa.collection-rejected` | pain.002 `RJCT` on a collection — the money never moved, so the receivable stays open and the mandate needs attention |
+| `de.accounting.sepa.reversal-issued` | a pain.007 gave a settled collection back |
+| `de.accounting.payee.verification-mismatch` | Verification of Payee reported anything but a clean match on an outgoing transfer |
 | `de.accounting.abschlag.posted` | Abschlagslauf posts the monthly advance payment |
 | `de.accounting.interest.charged` | Verzugszinsen booked (§288 BGB) |
 | `de.accounting.payment.due` | SEPA direct debit due date approaching |
@@ -117,6 +158,16 @@ erp_webhook_url       = "http://erp:8000/events"
 erp_hmac_secret       = "env:ACCOUNTINGD_INBOUND_HMAC_SECRET"
 dunning_auto_enabled  = true
 dunning_grace_days    = 30
+
+# Cdtr/PstlAdr on pain.008 + pain.007, Dbtr/PstlAdr on pain.001 — one legal
+# entity, one block. Optional until the EPC cut-over on 2026-11-15, but not
+# fillable halfway: street without town + country is a hard error.
+[creditor_address]
+street          = "Musterstraße"
+building_number = "12"
+post_code       = "10115"
+town            = "Berlin"
+country         = "DE"
 
 [database]
 url = "postgresql://accountingd:secret@db:5432/accountingd"

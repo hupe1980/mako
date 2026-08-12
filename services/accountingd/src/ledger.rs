@@ -113,7 +113,11 @@ impl Chart {
     #[must_use]
     fn contra(&self, entry_type: &str) -> AccountId {
         match entry_type {
-            "ZAHLUNG" | "ABSCHLAG" | "BANKRUECKLAST" => self.bank,
+            // SEPA_STORNO is a pain.007 reversal: the creditor hands a settled
+            // collection back, so the money leaves the bank account again and
+            // the receivable re-opens — the same two accounts as the collection
+            // it undoes, in the opposite direction.
+            "ZAHLUNG" | "ABSCHLAG" | "BANKRUECKLAST" | "SEPA_STORNO" => self.bank,
             "MAHNGEBUEHR" => self.mahnerloese,
             "EEG_GUTSCHRIFT" | "EEG_MARKTPRAEMIE" => self.eeg_aufwand,
             // Erstattung: zero the customer credit against a refund payable.

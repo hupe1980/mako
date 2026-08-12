@@ -871,6 +871,17 @@ pub struct PortalSepaRequest {
     /// Defaults to `FRST` for new mandates.
     #[serde(default = "default_sequence_type")]
     pub sequence_type: String,
+    /// The debtor's own postal address (`Dbtr/PstlAdr`), forwarded verbatim to
+    /// `accountingd`, which validates it.
+    ///
+    /// Optional until **15 November 2026**, when version 1.1 of the 2025 SEPA
+    /// rulebooks ends the unstructured address and the schemes begin requiring
+    /// `town` + `country` on every collection. Shape:
+    /// `{ "town", "country", "street", "building_number", "post_code",
+    /// "country_subdivision" }`. A half-filled address (a street with no town
+    /// and country) is refused rather than silently dropped.
+    #[serde(default)]
+    pub debtor_address: Option<serde_json::Value>,
 }
 
 fn default_sequence_type() -> String {
@@ -934,6 +945,7 @@ pub async fn put_portal_sepa(
         "mandatsref":   mandatsref,
         "sequence_type": req.sequence_type,
         "signed_at":    signed_at,
+        "debtor_address": req.debtor_address.unwrap_or_else(|| serde_json::json!({})),
     });
 
     // Proxy to accountingd — IBAN is validated there (mod-97 checksum).

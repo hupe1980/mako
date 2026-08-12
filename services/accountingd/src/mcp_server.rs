@@ -7,6 +7,7 @@
 //! | `list_ledger` | Ledger entries (debit/credit) for a MaLo |
 //! | `list_dunning` | Active dunning cases |
 //! | `list_overdue` | All accounts with overdue invoices |
+//! | `list_sepa_collections` | SEPA collections and their lifecycle (SUBMITTED → SETTLED/REJECTED/RETURNED/REVERSED) |
 //! | `suggest_payment_match` | AI payment reconciliation: match CAMT.054 to open Rechnungen |
 
 use axum::{
@@ -42,6 +43,11 @@ pub struct AccountingdMcpState {
     pub creditor_iban: Option<String>,
     pub creditor_name: Option<String>,
     pub creditor_id: Option<String>,
+    /// The operator's own `Cdtr/PstlAdr` — mandatory from 2026-11-15.
+    pub creditor_address: crate::sepa::AddressParts,
+    /// Keys the IBAN lookup hash, so a payment can be resolved by the
+    /// counterparty account the bank reported.
+    pub iban_key: Option<[u8; 32]>,
     /// pain.008 schema version to emit (validated from config at startup).
     pub pain008_schema: crate::sepa::DirectDebitSchema,
 }
@@ -99,21 +105,38 @@ pub struct ImportPaymentsParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct SepaCollectionParams {
+    /// Lifecycle filter: `SUBMITTED` | `SETTLED` | `REJECTED` | `RETURNED` | `REVERSED`.
+    pub status: Option<String>,
+    /// Restrict to one customer MaLo.
+    pub malo_id: Option<String>,
+    /// Maximum rows (default 100, capped at 1000).
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct OverdueParams {
     /// Minimum days overdue (default 1).
     pub days_overdue: Option<i64>,
 }
 
-/// Parameters for AI payment reconciliation (B14 / L7).
+/// Parameters for payment reconciliation.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct SuggestPaymentMatchParams {
     /// Payment amount in 1/100 EUR cents (e.g. 12500 = 125.00 EUR).
     pub amount_ct: i64,
     /// Payment reference / Verwendungszweck from the bank statement.
     pub reference: String,
+    /// Counterparty IBAN, when the bank reported one — the strongest evidence
+    /// of who paid, and the rung that resolves without any guessing.
+    pub iban: Option<String>,
+    /// `EndToEndId`, when the bank echoed one back.
+    pub end_to_end_id: Option<String>,
     /// Value date of the payment (YYYY-MM-DD).
     pub value_date: Option<String>,
-    /// Fuzzy tolerance: how many percent the amount may deviate (default 2 %).
+    /// Fuzzy tolerance for the fallback rung: how many percent the open balance
+    /// may deviate from the payment (default 2 %). Ignored when the reference
+    /// identifies the account outright.
     pub tolerance_pct: Option<f64>,
 }
 
@@ -242,6 +265,41 @@ impl AccountingdMcpHandler {
     }
 
     #[tool(
+        description = "List SEPA direct-debit collections and where each one stands. \
+Each entry is one mandate collected in a pain.008 run, with its Mandatsreferenz (= EndToEndId), \
+PmtInfId, amount and status: SUBMITTED (in flight), SETTLED (a bank booking or an accepted pain.002 \
+confirmed it), REJECTED (pain.002 RJCT — the money never moved, so the receivable is still open and \
+the mandate needs attention), RETURNED (a camt.054 Rückläufer after settlement) or REVERSED (the \
+creditor gave it back via pain.007). \
+Filter with `status` and/or `malo_id`. Use this to reconcile a collection run, to find the mandates \
+a rejection batch hit, or to pick the entry_id an operator needs for POST /api/v1/sepa/reversals — \
+issuing the reversal itself is an operator decision and is not exposed as a tool.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_sepa_collections(
+        &self,
+        Parameters(p): Parameters<SepaCollectionParams>,
+    ) -> Result<CallToolResult, McpError> {
+        match crate::pg::list_collection_entries(
+            &self.state.pool,
+            &self.state.tenant,
+            p.status.as_deref(),
+            p.malo_id.as_deref(),
+            p.limit.unwrap_or(100).clamp(1, 1000),
+        )
+        .await
+        {
+            Ok(entries) => ContentBlock::json(serde_json::json!({
+                "count":   entries.len(),
+                "entries": entries,
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
+    }
+
+    #[tool(
         description = "List all accounts with overdue invoices. Returns accounts with balance_ct > 0 and the oldest unpaid entry date.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
@@ -307,6 +365,7 @@ Also sets the SEPA billing_day (day of month for direct debit).",
                 mandatsref: None,
                 abschlag_ct: Some(p.abschlag_ct),
                 billing_day: p.billing_day,
+                address: Default::default(),
             },
         )
         .await
@@ -429,22 +488,27 @@ Only generates for MaLo accounts that have an IBAN + signed mandate (sequence_ty
                     .unwrap_or(&self.state.tenant);
                 let collection_date =
                     (time::OffsetDateTime::now_utc() + time::Duration::days(2)).date();
-                match build_pain_008(
-                    creditor_iban,
-                    creditor_name,
+                let creditor = crate::sepa::CreditorIdentity {
+                    iban: creditor_iban,
+                    name: creditor_name,
                     creditor_id,
+                    address: Some(&self.state.creditor_address),
+                };
+                match build_pain_008(
+                    &creditor,
                     collection_date,
                     &refs,
                     self.state.pain008_schema,
                 ) {
                     Ok(run) => ContentBlock::json(serde_json::json!({
                         "mandate_count": refs.len(),
+                        "msg_id": run.msg_id,
                         "collection_date": collection_date.to_string(),
                         "entry_count": run.entry_count,
                         "total_ct": run.total_ct,
                         "groups": run.groups,
                         "pain_008_xml": &run.xml,
-                        "hint": "Submit the XML to your bank / payment gateway — one message, one PmtInf group per SequenceType."
+                        "hint": "Submit the XML to your bank / payment gateway — one message, one PmtInf group per SequenceType. Persist it with POST /api/v1/sepa/run if the file is actually going to the bank."
                     }))
                     .map(|b| CallToolResult::success(vec![b]))
                     .map_err(|e| McpError::internal_error(e.message, None)),
@@ -666,11 +730,15 @@ aRAP (unbilled) cannot be computed here — requires GET edmd /api/v1/billing-pe
     // ── AI Payment Reconciliation (B14 / L7) ─────────────────────────────────
 
     #[tool(
-        description = "AI-assisted payment reconciliation: match an incoming CAMT.054 bank transfer against open Rechnungen. \
-Returns candidate accounts ranked by fuzzy amount + reference similarity. \
-powercloud claims >98% automated payment matching — this tool enables the same for mako. \
-For each candidate: account_id, malo_id, open_amount_ct, similarity_score, suggested_entry_type. \
-Use import_payments to confirm the match.",
+        description = "Reconcile an incoming bank transfer against open receivables. \
+Runs the same resolution ladder the camt importer uses, strongest evidence first: an exact \
+Mandatsreferenz, EndToEndId or MaLo-ID found as a whole token in the payment reference resolves \
+the account outright (confidence EXACT — no amount guessing involved). Only when nothing in the \
+reference identifies the payer does it fall back to ranking accounts by how close their open \
+balance is to the payment (confidence HIGH/MEDIUM/LOW). \
+Pass `iban` when the bank reported the counterparty account — that is the strongest evidence of all. \
+For each candidate: account_id, malo_id, open_balance_ct, matched_by, similarity_score. \
+Confirm with post_manual_booking or by importing the bank file.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn suggest_payment_match(
@@ -679,15 +747,75 @@ Use import_payments to confirm the match.",
     ) -> Result<CallToolResult, McpError> {
         use sqlx::Row;
 
+        // ── The exact rung ───────────────────────────────────────────────────
+        //
+        // If the reference names a customer, there is nothing to rank: the
+        // payer said who they are. The previous version of this tool went
+        // straight to fuzzy amount matching and scored a "reference substring"
+        // signal whose inputs were hardcoded to `None`, so two of its three
+        // reference branches were unreachable and the score it reported was
+        // amount proximity wearing a reference-matching label.
+        let iban_hash = p
+            .iban
+            .as_deref()
+            .map(|iban| crate::ledger::iban_hash(self.state.iban_key.as_ref(), iban));
+        if let Ok(Some(hit)) = crate::pg::resolve_account_for_payment(
+            &self.state.pool,
+            &self.state.tenant,
+            crate::pg::PaymentClues {
+                iban_hash: iban_hash.as_deref(),
+                end_to_end_id: p.end_to_end_id.as_deref(),
+                remittance: Some(&p.reference),
+            },
+        )
+        .await
+        {
+            let balance_ct: i64 = sqlx::query_scalar(
+                "SELECT balance_ct FROM accounts WHERE account_id = $1 AND tenant = $2",
+            )
+            .bind(hit.account_id)
+            .bind(&self.state.tenant)
+            .fetch_optional(&self.state.pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+            return ContentBlock::json(serde_json::json!({
+                "payment_amount_ct":  p.amount_ct,
+                "payment_amount_eur": crate::sepa::ct_to_eur_str(p.amount_ct),
+                "payment_reference":  p.reference,
+                "candidates_count":   1,
+                "candidates": [{
+                    "account_id":       hit.account_id,
+                    "malo_id":          hit.malo_id,
+                    "lf_mp_id":         hit.lf_mp_id,
+                    "open_balance_ct":  balance_ct,
+                    "open_balance_eur": crate::sepa::ct_to_eur_str(balance_ct),
+                    "matched_by":       hit.matched_by,
+                    "confidence":       "EXACT",
+                    "residual_ct":      balance_ct - p.amount_ct,
+                }],
+                "note": "The payment identifies its own account — no amount guessing was involved. \
+                         `residual_ct` is what stays open after booking it (0 = settles the balance exactly).",
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None));
+        }
+
+        // ── The fuzzy rung ───────────────────────────────────────────────────
+        //
+        // Nothing in the payment says who sent it, so all that is left is "who
+        // owes roughly this much". Ranked, never auto-booked.
         let tol_pct = p.tolerance_pct.unwrap_or(2.0);
         let tol_factor = 1.0 + tol_pct / 100.0;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
         let lo = (p.amount_ct as f64 / tol_factor) as i64;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
         let hi = (p.amount_ct as f64 * tol_factor) as i64;
 
-        // Find accounts whose open balance is within tolerance of the payment.
-        // We also return accounts where the most recent RECHNUNG amount is within range.
-        // Candidate matching is on the balance cache (the authoritative balance is
-        // the doubleentry ledger; this cache is refreshed from it on every post).
+        // Candidate matching is on the balance cache (the authoritative balance
+        // is the doubleentry ledger; this cache is refreshed from it on every
+        // post), so a set-based scan stays cheap.
         let rows = sqlx::query(
             r"SELECT a.account_id, a.malo_id, a.lf_mp_id, a.balance_ct
               FROM accounts a
@@ -704,80 +832,55 @@ Use import_payments to confirm the match.",
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let reference_lower = p.reference.to_lowercase();
-        let mut candidates: Vec<serde_json::Value> = rows
+        let candidates: Vec<serde_json::Value> = rows
             .iter()
             .map(|r| {
                 let account_id: uuid::Uuid = r.try_get("account_id").unwrap_or_default();
                 let malo_id: String = r.try_get("malo_id").unwrap_or_default();
                 let lf_mp_id: String = r.try_get("lf_mp_id").unwrap_or_default();
                 let balance_ct: i64 = r.try_get("balance_ct").unwrap_or_default();
-                let rechnung_ct: Option<i64> = None;
-                let ref_id: Option<String> = None;
-                let desc: Option<String> = None;
 
-                // Compute a naive similarity score based on:
-                //   - amount proximity (0–50 pts)
-                //   - reference substring match (0–50 pts)
-                let amount_score = if balance_ct == 0 {
+                // Amount proximity is the only signal here — the reference
+                // already failed to identify anyone. Scoring it as if it were
+                // two independent signals overstated the confidence.
+                #[allow(clippy::cast_precision_loss)]
+                let closeness = if p.amount_ct == 0 {
                     0.0_f64
                 } else {
-                    50.0 * (1.0 - (balance_ct - p.amount_ct).unsigned_abs() as f64 / p.amount_ct.unsigned_abs() as f64)
+                    1.0 - (balance_ct - p.amount_ct).unsigned_abs() as f64
+                        / p.amount_ct.unsigned_abs() as f64
                 };
-                let ref_score = {
-                    let malo_lower = malo_id.to_lowercase();
-                    let ref_lower = ref_id.as_deref().unwrap_or("").to_lowercase();
-                    let desc_lower = desc.as_deref().unwrap_or("").to_lowercase();
-                    // Check for MaLo ID, reference ID, or description substring
-                    if reference_lower.contains(&malo_lower) || malo_lower == reference_lower.as_str() {
-                        50.0
-                    } else if !ref_lower.is_empty() && reference_lower.contains(&ref_lower) {
-                        40.0
-                    } else if !desc_lower.is_empty() && reference_lower.contains(&desc_lower) {
-                        30.0
-                    } else {
-                        0.0
-                    }
-                };
-
-                let score = (amount_score + ref_score).min(100.0).round() as u32;
-                let confidence = if score >= 80 { "HIGH" } else if score >= 50 { "MEDIUM" } else { "LOW" };
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let score = (closeness.clamp(0.0, 1.0) * 100.0).round() as u32;
+                // No fuzzy match is ever HIGH: an amount that happens to line up
+                // is not evidence of who paid. The exact rung above is the only
+                // one safe to auto-book.
+                let confidence = if score >= 99 { "MEDIUM" } else { "LOW" };
 
                 serde_json::json!({
-                    "account_id": account_id,
-                    "malo_id": malo_id,
-                    "lf_mp_id": lf_mp_id,
-                    "open_balance_ct": balance_ct,
-                    "open_balance_eur": format!("{:.2}", balance_ct as f64 / 100.0),
-                    "latest_rechnung_ct": rechnung_ct,
-                    "latest_rechnung_eur": rechnung_ct.map(|c| format!("{:.2}", c as f64 / 100.0)),
+                    "account_id":       account_id,
+                    "malo_id":          malo_id,
+                    "lf_mp_id":         lf_mp_id,
+                    "open_balance_ct":  balance_ct,
+                    "open_balance_eur": crate::sepa::ct_to_eur_str(balance_ct),
+                    "matched_by":       "amount_proximity",
                     "similarity_score": score,
-                    "confidence": confidence,
-                    "action": format!("import_payments {{ malo_id: '{malo_id}', amount_ct: {}, reference: '{}' }}", p.amount_ct, p.reference),
+                    "confidence":       confidence,
+                    "residual_ct":      balance_ct - p.amount_ct,
                 })
             })
             .collect();
 
-        // Sort by similarity score descending.
-        candidates.sort_by(|a, b| {
-            b.get("similarity_score")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0)
-                .cmp(
-                    &a.get("similarity_score")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0),
-                )
-        });
-
         ContentBlock::json(serde_json::json!({
-            "payment_amount_ct": p.amount_ct,
-            "payment_amount_eur": format!("{:.2}", p.amount_ct as f64 / 100.0),
-            "payment_reference": p.reference,
-            "tolerance_pct": tol_pct,
-            "candidates_count": candidates.len(),
-            "candidates": candidates,
-            "note": "Candidates ranked by similarity_score. HIGH (>=80) = auto-match safe. MEDIUM/LOW = review. Confirm with import_payments.",
+            "payment_amount_ct":  p.amount_ct,
+            "payment_amount_eur": crate::sepa::ct_to_eur_str(p.amount_ct),
+            "payment_reference":  p.reference,
+            "tolerance_pct":      tol_pct,
+            "candidates_count":   candidates.len(),
+            "candidates":         candidates,
+            "note": "Nothing in the reference identified the payer, so these are ranked by amount \
+                     proximity alone — a coincidence, not evidence. Review before booking; ask the \
+                     customer to quote their Mandatsreferenz or MaLo-ID to make the next one exact.",
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))

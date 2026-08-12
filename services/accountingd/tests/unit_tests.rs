@@ -804,40 +804,63 @@ fn open_item_fifo_partial_first_debit() {
 
 // ── P1-4: GDPR anonymization field list ──────────────────────────────────────
 
+/// The anonymized-field list must name every PII column the sweep clears.
+///
+/// The old version of this test restated the list as a literal and compared it
+/// with an identical literal, so it passed for any list at all — including one
+/// that had silently shrunk. It now reads the real one out of `pg.rs` and
+/// checks it against the `UPDATE` statements beside it: a column added to the
+/// sweep without being declared (or declared without being cleared) fails here.
 #[test]
 fn gdpr_anonymization_fields_list_is_complete() {
-    // Document which fields are anonymized — this test ensures the list
-    // doesn't silently shrink if someone removes fields from the function.
-    let expected_fields = [
+    const PG_SRC: &str = include_str!("../src/pg.rs");
+
+    // The declared list, as `anonymize_account` writes it into the audit log.
+    let list_start = PG_SRC
+        .find("let anonymized_fields = serde_json::json!([")
+        .expect("anonymize_account declares its field list");
+    let list_end = PG_SRC[list_start..]
+        .find("]);")
+        .expect("the list is closed")
+        + list_start;
+    let declared: Vec<String> = PG_SRC[list_start..list_end]
+        .split('"')
+        .filter(|s| s.contains('.'))
+        .map(str::to_owned)
+        .collect();
+
+    for required in [
         "accounts.iban",
         "accounts.mandatsref",
         "accounts.zahlungsinformation",
         "accounts.vorauszahlung",
+        "accounts.addr_*",
         "sepa_mandates.iban",
         "sepa_mandates.kontoinhaber",
         "sepa_mandates.bic",
-    ];
-
-    // Verify via the JSON value used in pg.rs:
-    let fields_json = serde_json::json!([
-        "accounts.iban",
-        "accounts.mandatsref",
-        "accounts.zahlungsinformation",
-        "accounts.vorauszahlung",
-        "sepa_mandates.iban",
-        "sepa_mandates.kontoinhaber",
-        "sepa_mandates.bic"
-    ]);
-    let fields: Vec<String> = serde_json::from_value(fields_json).unwrap();
-    assert_eq!(
-        fields.len(),
-        expected_fields.len(),
-        "All PII fields must be listed"
-    );
-    for f in &expected_fields {
+        "sepa_mandates.debtor_*",
+    ] {
         assert!(
-            fields.contains(&f.to_string()),
-            "Field {f} must be in anonymization list"
+            declared.iter().any(|d| d == required),
+            "{required} must be in the anonymization list, got {declared:?}"
+        );
+    }
+
+    // Every declared field must actually be cleared. A postal address is
+    // personal data in its own right; the EPC structured-address cut-over made
+    // mako store one, so erasure has to reach it.
+    let sweep = &PG_SRC[list_end..];
+    for field in &declared {
+        let (table, column) = field.split_once('.').expect("table.column");
+        // A `*` suffix covers a column family (the six PstlAdr parts).
+        let needle = column.trim_end_matches('*');
+        assert!(
+            sweep.contains(&format!("UPDATE {table}")),
+            "{table} must be swept"
+        );
+        assert!(
+            sweep.contains(needle),
+            "{field} is declared anonymized but no UPDATE mentions {needle}"
         );
     }
 }

@@ -214,9 +214,25 @@ pub mod accounting {
     /// Androhung (4 Wochen) and Ankündigung (8 Werktage) Fristen have elapsed and
     /// no Abwendungsvereinbarung / Unverhältnismäßigkeit halted the sequence.
     pub const SPERRAUFTRAG: &str = "de.accounting.sperrauftrag";
-    /// ⚠ phantom: subscribed by agentd (`payment-agent`), no emitter yet
-    /// (tracked in ROADMAP). SEPA direct-debit return (Bankrücklastschrift).
+    /// SEPA direct-debit return (Bankrücklastschrift) — emitted by
+    /// `accountingd` when a camt.053/054 booking carries a return reason code
+    /// or debits the account, and subscribed by agentd's `payment-agent`.
     pub const BANKRUECKLAST: &str = "de.accounting.bankruecklast";
+    /// A pain.002 rejected a submitted direct-debit collection: the money will
+    /// never arrive, so the receivable stays open and the mandate needs
+    /// attention (`AC01` wrong IBAN, `MD01` no mandate, `AM04` no funds).
+    ///
+    /// Distinct from [`BANKRUECKLAST`], which is a collection that *settled*
+    /// and was then returned — a different reconciliation, and a different
+    /// R-transaction fee.
+    pub const SEPA_COLLECTION_REJECTED: &str = "de.accounting.sepa.collection-rejected";
+    /// The creditor gave a settled collection back via pain.007.
+    pub const SEPA_REVERSAL_ISSUED: &str = "de.accounting.sepa.reversal-issued";
+    /// Verification of Payee reported something other than a match for an
+    /// outgoing credit transfer. Mandatory for euro credit transfers since
+    /// 9 October 2025: executing after a `RVNM` no-match shifts liability to
+    /// the payer, so this is a decision an operator has to make.
+    pub const PAYEE_VERIFICATION_MISMATCH: &str = "de.accounting.payee.verification-mismatch";
 }
 
 /// MaBiS/Netzbilanzierung INVOIC events (`de.netzbilanz.*`), emitted by

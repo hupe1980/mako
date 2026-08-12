@@ -188,6 +188,7 @@ pub async fn put_abschlag(
                 mandatsref: None,
                 abschlag_ct: Some(ct),
                 billing_day: None,
+                address: Default::default(),
             },
         )
         .await
@@ -307,10 +308,33 @@ pub async fn ingest_webhook(
                     })
                 })
                 .unwrap_or(0);
-            let account_ok = upsert_account(&pool, malo_id, lf_mp_id, &cfg.tenant)
+            let account_id = upsert_account(&pool, malo_id, lf_mp_id, &cfg.tenant)
                 .await
-                .is_ok();
-            if account_ok && amount_ct != 0 {
+                .ok();
+
+            // Learn the commodity from the invoice. It drives the ISO 20022
+            // `Purp/Cd` on the next direct debit (`ELEC` / `GASB` / `WTER`) —
+            // what the debtor's statement and their accounting software read to
+            // categorise the collection. Best-effort: a failure here must never
+            // hold up the receivable.
+            if let Some(account_id) = account_id
+                && let Some(sparte) = data
+                    .and_then(|d| d.get("rechnung"))
+                    .and_then(|r| r.get("sparte"))
+                    .and_then(|v| v.as_str())
+                    .filter(|s| {
+                        matches!(
+                            *s,
+                            "STROM" | "GAS" | "FERNWAERME" | "NAHWAERME" | "WASSER" | "ABWASSER"
+                        )
+                    })
+                && let Err(e) =
+                    crate::pg::set_account_sparte(&pool, account_id, &cfg.tenant, sparte).await
+            {
+                tracing::warn!(error = %e, malo_id, "accountingd: could not record account Sparte");
+            }
+
+            if account_id.is_some() && amount_ct != 0 {
                 let record_id = data
                     .and_then(|d| d.get("record_id"))
                     .and_then(|v| v.as_str());
@@ -541,6 +565,16 @@ pub async fn ingest_webhook(
                     let _ = bank_bic; // carried in pain.001 only when present in the CE
 
                     if let Some((creditor_iban, creditor_name)) = creditor {
+                        // `Cdtr/PstlAdr` — the plant operator's own address.
+                        // BO4E's Zahlungsinformation COM carries no address, so
+                        // it comes from the account's master data.
+                        let creditor_address =
+                            crate::pg::fetch_account_by_id(&pool, account_id, &cfg.tenant)
+                                .await
+                                .ok()
+                                .flatten()
+                                .map(|a| a.postal_address())
+                                .unwrap_or_default();
                         create_eeg_payout_order(
                             &cfg,
                             &pool,
@@ -550,6 +584,7 @@ pub async fn ingest_webhook(
                                 amount_ct: amount_ct.unsigned_abs() as i64,
                                 creditor_iban: &creditor_iban,
                                 creditor_name: &creditor_name,
+                                creditor_address,
                                 tr_id: tr_id.as_deref(),
                                 billing_year,
                                 billing_month,
@@ -631,18 +666,27 @@ pub async fn ingest_webhook(
     }
 }
 
-/// `POST /api/v1/payments/import`  — ingest CAMT.054 bank statement (JSON array).
+/// `POST /api/v1/payments/import`  — ingest a **flat bank export** (JSON array).
 ///
-/// Each entry: `{ "iban": "...", "amount_eur": "155.42", "reference": "...", "date": "YYYY-MM-DD",
-///               "bank_transaction_id": "..." }`
+/// Each row: `{ "iban": "...", "amount_eur": "155.42", "reference": "...", "date": "YYYY-MM-DD",
+///             "bank_transaction_id": "...", "end_to_end_id": "...", "return_reason_code": "..." }`
 ///
-/// Uses `sepa::camt054::parse_simple_json` — **no f64 rounding errors**.
-/// Positive `amount_eur` → ZAHLUNG credit. Negative → BANKRUECKLAST debit.
+/// Parsed by [`crate::sepa::BankStatementEntry`] — amounts through
+/// `sepa::ct_from_eur_str` (integer ct, **no f64**), dates through
+/// `sepa::IsoDate`. The shape is accountingd's own import contract, not an ISO
+/// 20022 message: prefer `POST /api/v1/payments/import/camt054` wherever the
+/// bank offers real camt, because `EndToEndId`, the `Btch` block and return
+/// reason codes do not survive a flattening.
 ///
-/// ## CAMT.054 deduplication
+/// A row gives money back when it carries a `return_reason_code` **or** a
+/// negative `amount_eur` → `BANKRUECKLAST` debit; anything else is a `ZAHLUNG`
+/// credit. The sign is flipped into the ledger's open-items convention by
+/// `sepa::bank_to_ledger_ct`, the same single conversion the camt paths use.
 ///
-/// Each entry is checked against `bank_import_log` before processing.
-/// If `bank_transaction_id` is present and already imported, the entry is skipped
+/// ## Deduplication
+///
+/// Each row is checked against `bank_import_log` before processing.
+/// If `bank_transaction_id` is present and already imported, the row is skipped
 /// and counted as `deduplicated` — no duplicate ledger entries are created.
 /// When `bank_transaction_id` is absent, a stable hash of (iban+amount+date+reference)
 /// is used as the deduplication key.
@@ -659,57 +703,45 @@ pub async fn import_payments(
     let mut skipped = 0usize;
 
     for raw in &entries {
-        // sepa 0.5: parse_simple_json returns Result, naming the field and reason for a
-        // rejected row — a skipped bank import is now diagnosable, not silently dropped.
-        let entry = match sepa::camt054::parse_simple_json(raw) {
+        // Every rejection names the field and the reason, so a skipped bank row
+        // is diagnosable rather than silently dropped.
+        let entry = match crate::sepa::BankStatementEntry::parse(raw) {
             Ok(entry) => entry,
             Err(e) => {
-                tracing::warn!(error = %e, "accountingd: camt.054 JSON row rejected — skipping");
+                tracing::warn!(error = %e, "accountingd: bank export row rejected — skipping");
                 skipped += 1;
                 continue;
             }
         };
-        // sepa 0.5: value_date() is a validated `IsoDate` (the raw text is in value_date_raw).
-        let Some(date) = entry
-            .value_date()
-            .and_then(|iso| time::Date::try_from(iso).ok())
-        else {
-            skipped += 1;
-            continue;
-        };
+        let date = entry.date;
 
-        // ── CAMT.054 deduplication ───────────────────────────────────────────
-        // Derive a stable bank_transaction_id: use the one in the JSON if present,
-        // otherwise compute a deterministic hash from the entry's identifying fields.
-        let bank_txn_id = raw
-            .get("bank_transaction_id")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_owned())
-            .unwrap_or_else(|| {
-                // Fallback: hash (iban + amount + date + reference) for stability
-                let key = format!(
-                    "{}|{}|{}|{}",
-                    &entry.iban,
-                    entry.to_ledger_ct(),
-                    &entry.value_date_raw,
-                    &entry.reference
-                );
-                // Simple deterministic key (not cryptographic — only for dedup)
-                format!(
-                    "{:016x}",
-                    key.bytes().fold(0u64, |acc, b| {
-                        acc.wrapping_mul(1099511628211).wrapping_add(b as u64)
-                    })
-                )
-            });
+        // ── Deduplication ────────────────────────────────────────────────────
+        // Derive a stable bank_transaction_id: use the one in the row if present,
+        // otherwise compute a deterministic hash from the row's identifying fields.
+        let bank_txn_id = entry.bank_transaction_id.clone().unwrap_or_else(|| {
+            // Fallback: hash (iban + amount + date + reference) for stability
+            let key = format!(
+                "{}|{}|{}|{}",
+                entry.iban.as_str(),
+                entry.ledger_ct(),
+                date,
+                &entry.reference
+            );
+            // Simple deterministic key (not cryptographic — only for dedup)
+            format!(
+                "{:016x}",
+                key.bytes().fold(0u64, |acc, b| {
+                    acc.wrapping_mul(1099511628211).wrapping_add(u64::from(b))
+                })
+            )
+        });
 
         // Check deduplication log
         match crate::pg::bank_import_already_processed(&pool, &cfg.tenant, &bank_txn_id).await {
             Ok(true) => {
                 tracing::debug!(
                     bank_txn_id = %bank_txn_id,
-                    iban = %entry.iban,
-                    "accountingd: CAMT.054 entry already imported — skipping (dedup)"
+                    "accountingd: bank export row already imported — skipping (dedup)"
                 );
                 deduplicated += 1;
                 continue;
@@ -720,29 +752,35 @@ pub async fn import_payments(
             Ok(false) => {}
         }
 
-        // Resolve the customer by the app-computed IBAN lookup hash (keyed BLAKE3;
-        // replaces the pgcrypto digest()). Fetch malo/lf_mp for the Kontokorrent.
-        let iban_h = crate::ledger::iban_hash(iban_key.as_ref(), &entry.iban);
-        let account_row = sqlx::query(
-            "SELECT malo_id, lf_mp_id FROM accounts WHERE iban_hash = $1 AND tenant = $2 LIMIT 1",
+        // Resolve the customer. The counterparty IBAN (keyed BLAKE3 hash) is the
+        // strongest evidence, but it is not the only one — see
+        // `resolve_account_for_payment` for the ladder and why matching on the
+        // IBAN alone loses every payment made from a second account.
+        let iban_h = crate::ledger::iban_hash(iban_key.as_ref(), entry.iban.as_str());
+        let matched = crate::pg::resolve_account_for_payment(
+            &pool,
+            &cfg.tenant,
+            crate::pg::PaymentClues {
+                iban_hash: Some(&iban_h),
+                end_to_end_id: entry.end_to_end_id.as_deref(),
+                remittance: Some(entry.reference.as_str()),
+            },
         )
-        .bind(&iban_h)
-        .bind(&cfg.tenant)
-        .fetch_optional(&pool)
         .await;
 
-        if let Ok(Some(row)) = account_row {
-            let malo_id: String = row.try_get("malo_id").unwrap_or_default();
-            let lf_mp_id: String = row.try_get("lf_mp_id").unwrap_or_default();
-            if !malo_id.is_empty() {
-                let entry_type = if entry.is_return() {
+        if let Ok(Some(matched)) = matched {
+            let malo_id = matched.malo_id.clone();
+            let lf_mp_id = matched.lf_mp_id.clone();
+            {
+                let is_return = entry.is_return();
+                let entry_type = if is_return {
                     "BANKRUECKLAST"
                 } else {
                     "ZAHLUNG"
                 };
                 // Idempotency keyed on the bank transaction id — a re-import of the
-                // same CAMT.054 entry replays as a ledger no-op rather than
-                // double-booking (fixes the old non-transactional dedup race).
+                // same row replays as a ledger no-op rather than double-booking
+                // (fixes the old non-transactional dedup race).
                 let ledger_result = crate::pg::post_entry(
                     &ledger,
                     &pool,
@@ -750,7 +788,7 @@ pub async fn import_payments(
                     &malo_id,
                     &lf_mp_id,
                     entry_type,
-                    entry.to_ledger_ct(),
+                    entry.ledger_ct(),
                     &format!("bank:{bank_txn_id}"),
                     None,
                     Some(entry.reference.as_str()),
@@ -768,10 +806,12 @@ pub async fn import_payments(
                             &pool,
                             &cfg.tenant,
                             &bank_txn_id,
-                            entry.to_ledger_ct().abs(),
-                            Some(&entry.iban),
+                            entry.ledger_ct().abs(),
+                            Some(entry.iban.as_str()),
                             date,
                             Some(ledger_id),
+                            None,
+                            entry.end_to_end_id.as_deref(),
                         )
                         .await
                         {
@@ -782,13 +822,12 @@ pub async fn import_payments(
                         // drives agentd's payment-reconciliation agent, which
                         // never ran because nothing emitted it — a returned
                         // direct debit is precisely what it exists for.
-                        let is_return = entry.is_return();
                         let ce_type = if is_return {
                             mako_events::accounting::BANKRUECKLAST
                         } else {
                             mako_events::accounting::PAYMENT_IMPORTED
                         };
-                        let amount_ct = entry.to_ledger_ct().abs();
+                        let amount_ct = entry.ledger_ct().abs();
                         let ce = mako_service::CloudEvent::new(
                             mako_service::source("accountingd", &cfg.tenant),
                             ce_type,
@@ -803,6 +842,11 @@ pub async fn import_payments(
                                 "bank_txn_id":  bank_txn_id,
                                 "booking_date": date.to_string(),
                                 "ledger_id":    ledger_id.to_string(),
+                                // Which rung of the resolution ladder matched:
+                                // "iban" is the bank's own assertion, the others
+                                // are inferences a reconciliation agent may want
+                                // to review.
+                                "matched_by":   matched.matched_by,
                             }),
                         );
                         if let Err(e) = enqueue_ce(&pool, &ce).await {
@@ -818,8 +862,6 @@ pub async fn import_payments(
                         skipped += 1;
                     }
                 }
-            } else {
-                skipped += 1;
             }
         } else {
             skipped += 1;
@@ -849,14 +891,392 @@ async fn enqueue_ce(pool: &sqlx::PgPool, ce: &mako_service::CloudEvent) -> anyho
     Ok(())
 }
 
+/// Everything the shared camt importer needs, so camt.053 and camt.054 differ
+/// only in how the entries were parsed out of the document.
+struct CamtImportCtx {
+    pool: PgPool,
+    ledger: Arc<crate::ledger::PgLedger>,
+    iban_key: Option<[u8; 32]>,
+    cfg: Arc<AccountingdConfig>,
+}
+
+/// Counters returned by [`import_cash_entries`].
+#[derive(Default, serde::Serialize)]
+struct CamtImportResult {
+    accepted: usize,
+    deduplicated: usize,
+    skipped: usize,
+    total: usize,
+    /// Collections attributed back to a `sepa_collection_runs` group via the
+    /// bank's own `NtryDtls/Btch/PmtInfId`.
+    batches_matched: usize,
+    /// Transactions no rung of the resolution ladder could attribute to an
+    /// account. A persistently non-zero count is money sitting in the bank
+    /// account against a receivable that stays open — worth an alert, which is
+    /// why it is counted separately from the other `skipped` reasons.
+    unresolved: usize,
+    /// Batch bookings whose itemised details do not sum to the entry total.
+    /// Non-zero means the bank booked more (or less) than it itemised, and the
+    /// difference reaches no customer account.
+    unreconciled_batches: usize,
+    /// Entries the bank has not booked (`PDNG`, `INFO`, `FUTR`). Reported, not
+    /// posted — the normal and expected majority of an intraday camt.052.
+    not_booked: usize,
+}
+
+/// Book every transaction in a set of camt cash entries.
+///
+/// Shared by `camt.054` (Debit/Credit Notification) and `camt.053` (end-of-day
+/// statement): both carry the same `Ntry` structure, and the difference — a
+/// notification is intraday and a statement is the closing record — is about
+/// *when* the file arrives, not what booking it implies. Splitting the loop in
+/// two would leave two copies of the sign convention, the return detection and
+/// the deduplication key.
+///
+/// Batch-booked entries are expanded per `TxDtls`, so a batched SEPA collection
+/// books every underlying transaction. Returns (Rückläufer) become
+/// `BANKRUECKLAST` debits; ordinary credits become `ZAHLUNG`. Deduplication is
+/// keyed on `AcctSvcrRef` (disambiguated per detail by `EndToEndId`), falling
+/// back to a stable hash of the transaction fields.
+async fn import_cash_entries(
+    ctx: &CamtImportCtx,
+    entries: &[crate::sepa::CashEntry],
+) -> CamtImportResult {
+    let CamtImportCtx {
+        pool,
+        ledger,
+        iban_key,
+        cfg,
+    } = ctx;
+    let mut out = CamtImportResult::default();
+
+    for entry in entries {
+        // `Btch/PmtInfId` is the bank's own assertion of which submitted
+        // `PmtInf` group this booking aggregates — the element that matches a
+        // booked collection back to what was sent, without guessing from
+        // amounts and dates.
+        let batch_pmt_inf_id = entry
+            .batch
+            .as_ref()
+            .and_then(|b| b.payment_info_id.as_deref());
+
+        // ── Only a *booked* entry is a money movement ────────────────────────
+        //
+        // `Ntry/Sts` is not decoration. `INFO` is explicitly informational — the
+        // bank is telling you something, not moving money. `PDNG` has not
+        // settled and may still be amended or dropped; `FUTR` has not happened
+        // yet. Posting any of them into an append-only ledger books a payment
+        // that does not exist and cannot be un-booked — and the camt.053 that
+        // later carries the real entry has a different `AcctSvcrRef`, so the
+        // deduplication key does not save you.
+        //
+        // This is what makes the intraday camt.052 door safe: its entries are
+        // provisional by design, and the booked ones are exactly the subset that
+        // is not.
+        // An absent `Sts` parses as `Booked`, which is the right default — a
+        // bank that omits the element has booked the entry. So this skips only
+        // what the bank explicitly said is not settled.
+        if entry.status != crate::sepa::EntryStatus::Booked {
+            // `PDNG`, `INFO` and `FUTR` are the expected majority of an intraday
+            // file and are not worth a warning. A code outside the enumeration
+            // is a bank doing something this service has never seen, and
+            // declining to post it is a decision an operator should know about.
+            if matches!(entry.status, crate::sepa::EntryStatus::Other(_)) {
+                tracing::warn!(
+                    status = ?entry.status,
+                    account_servicer_ref = ?entry.account_servicer_ref,
+                    amount_ct = entry.signed_ct(),
+                    "accountingd: camt entry carries an unrecognised booking status — \
+                     not posted. If this bank uses the code for a settled booking, the \
+                     money is in the account and no ledger entry exists for it."
+                );
+            } else {
+                tracing::debug!(
+                    status = ?entry.status,
+                    account_servicer_ref = ?entry.account_servicer_ref,
+                    "accountingd: camt entry is not booked — reported, not posted"
+                );
+            }
+            out.total += 1;
+            out.not_booked += 1;
+            continue;
+        }
+
+        // A batch booking asserts that its details add up to the entry total.
+        // When they do not, the bank has itemised only part of what it booked —
+        // the rest is real money that will never reach a customer account, and
+        // it shows up nowhere unless someone says so. `details_reconcile()` is
+        // the crate's own check; the import continues (the itemised part is
+        // still correct) but the discrepancy is logged and counted.
+        if entry.batch_booked && !entry.details.is_empty() && !entry.details_reconcile() {
+            let itemised = entry.details_signed_sum_ct();
+            tracing::warn!(
+                account_servicer_ref = ?entry.account_servicer_ref,
+                payment_info_id = ?batch_pmt_inf_id,
+                entry_total_ct = entry.signed_ct(),
+                itemised_sum_ct = ?itemised,
+                detail_count = entry.details.len(),
+                batch_count = ?entry.batch.as_ref().and_then(|b| b.transaction_count),
+                "accountingd: camt batch booking does not reconcile with its itemised details \
+                 — the difference is money booked at the bank that reaches no customer account"
+            );
+            out.unreconciled_batches += 1;
+        }
+
+        // One import per transaction detail; entry-level fallback when the
+        // bank reported no TxDtls (single unbatched booking).
+        let details: Vec<Option<&crate::sepa::EntryDetail>> = if entry.details.is_empty() {
+            vec![None]
+        } else {
+            entry.details.iter().map(Some).collect()
+        };
+
+        for detail in details {
+            out.total += 1;
+            // `EntryDetail::signed_ct()` resolves the per-detail amount
+            // (TxDtls/Amt → AmtDtls → entry total only for a single-detail
+            // entry), signed by CdtDbtInd, and is `None` when the statement
+            // doesn't determine it — precisely when the obvious "reuse the entry
+            // total per detail" fallback would multiply a batch by its
+            // transaction count.
+            let signed_ct = match detail {
+                Some(d) => d.signed_ct(),
+                None => Some(entry.signed_ct()), // single unbatched booking
+            };
+            let Some(signed_ct) = signed_ct else {
+                tracing::warn!(
+                    "accountingd: camt batch detail has no determinable amount — skipping"
+                );
+                out.skipped += 1;
+                continue;
+            };
+            // A bank does not always report the counterparty IBAN — a cash
+            // deposit, a foreign transfer, a booking whose `RltdPties` block the
+            // bank omits. That used to end the import right here; the resolution
+            // ladder can still identify the payer from the reference, so an
+            // absent IBAN is now just one missing clue rather than a dead end.
+            let counterparty_iban = detail
+                .and_then(|d| d.counterparty_iban.as_deref())
+                .unwrap_or("");
+            let end_to_end_id = detail.and_then(|d| d.end_to_end_id.as_deref());
+            // `AddtlTxInf` / `AddtlNtryInf` carry the bank's own statement text;
+            // for an entry with no `NtryDtls` the latter is often the only
+            // remittance information in the file.
+            let reference = detail
+                .and_then(|d| {
+                    d.reference
+                        .as_deref()
+                        .or(d.end_to_end_id.as_deref())
+                        .or(d.additional_info.as_deref())
+                })
+                .or(entry.additional_info.as_deref())
+                .unwrap_or("camt import");
+            let Some(date) = entry
+                .value_date()
+                .or_else(|| entry.booking_date())
+                .and_then(|iso| time::Date::try_from(iso).ok())
+            else {
+                out.skipped += 1;
+                continue;
+            };
+
+            let bank_txn_id = entry
+                .account_servicer_ref
+                .clone()
+                .map(|r| {
+                    // A batched entry shares one AcctSvcrRef — disambiguate
+                    // per detail with the EndToEndId when present.
+                    match end_to_end_id {
+                        Some(e2e) => format!("{r}#{e2e}"),
+                        None => r,
+                    }
+                })
+                .unwrap_or_else(|| {
+                    let key = format!("{counterparty_iban}|{signed_ct}|{date}|{reference}");
+                    format!(
+                        "{:016x}",
+                        key.bytes().fold(0u64, |acc, b| {
+                            acc.wrapping_mul(1099511628211).wrapping_add(u64::from(b))
+                        })
+                    )
+                });
+
+            match crate::pg::bank_import_already_processed(pool, &cfg.tenant, &bank_txn_id).await {
+                Ok(true) => {
+                    out.deduplicated += 1;
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "accountingd: dedup check failed — processing entry anyway");
+                }
+                Ok(false) => {}
+            }
+
+            // The counterparty IBAN is the strongest evidence but not the only
+            // one — see `resolve_account_for_payment`.
+            let iban_h = (!counterparty_iban.is_empty())
+                .then(|| crate::ledger::iban_hash(iban_key.as_ref(), counterparty_iban));
+            let matched = crate::pg::resolve_account_for_payment(
+                pool,
+                &cfg.tenant,
+                crate::pg::PaymentClues {
+                    iban_hash: iban_h.as_deref(),
+                    end_to_end_id,
+                    remittance: Some(reference),
+                },
+            )
+            .await;
+            let Ok(Some(matched)) = matched else {
+                out.unresolved += 1;
+                out.skipped += 1;
+                continue;
+            };
+            let malo_id = matched.malo_id.clone();
+            let lf_mp_id = matched.lf_mp_id.clone();
+
+            // Per **detail**, not per entry: a batch booking mixes settled
+            // collections with returns, and `CashEntry::is_return` answers for
+            // the aggregate. Reading the aggregate here mislabelled the event
+            // for every transaction in a mixed batch.
+            let return_reason = detail.and_then(|d| d.return_reason_code.as_deref());
+            let is_return = return_reason.is_some() || signed_ct < 0;
+            let entry_type = if is_return {
+                "BANKRUECKLAST"
+            } else {
+                "ZAHLUNG"
+            };
+            // Bank-statement sign → ledger sign, through the one conversion
+            // every bank path shares: the ledger convention is positive =
+            // Forderung (debit), so an incoming payment (bank credit) REDUCES
+            // the receivable and a returned direct debit (bank debit) RE-OPENS
+            // it.
+            let ledger_ct = crate::sepa::bank_to_ledger_ct(signed_ct);
+            let description = match return_reason {
+                Some(code) => format!("camt Rückläufer ({code})"),
+                None => "camt Zahlungseingang".to_owned(),
+            };
+
+            match crate::pg::post_entry(
+                ledger,
+                pool,
+                &cfg.tenant,
+                &malo_id,
+                &lf_mp_id,
+                entry_type,
+                ledger_ct,
+                &format!("bank:{bank_txn_id}"),
+                None,
+                Some(reference),
+                date,
+                date,
+                Some(&description),
+                None,
+            )
+            .await
+            {
+                Ok(ledger_id) => {
+                    if let Err(e) = crate::pg::record_bank_import(
+                        pool,
+                        &cfg.tenant,
+                        &bank_txn_id,
+                        signed_ct.abs(),
+                        Some(counterparty_iban),
+                        date,
+                        Some(ledger_id),
+                        batch_pmt_inf_id,
+                        end_to_end_id,
+                    )
+                    .await
+                    {
+                        tracing::warn!(error = %e, "accountingd: bank_import_log insert failed");
+                    }
+
+                    // Close the loop on the collection this booking settles or
+                    // returns. The EndToEndId is accountingd's Mandatsreferenz,
+                    // so a booked collection stops being an open SUBMITTED row
+                    // and a Rückläufer is recorded as the R-transaction it is.
+                    if let Some(e2e) = end_to_end_id {
+                        match crate::pg::find_collection_entry_by_e2e(pool, &cfg.tenant, e2e).await
+                        {
+                            Ok(Some(collected)) => {
+                                let status = if is_return { "RETURNED" } else { "SETTLED" };
+                                if let Err(e) = crate::pg::set_collection_entry_status(
+                                    pool,
+                                    collected.entry_id,
+                                    status,
+                                    return_reason,
+                                )
+                                .await
+                                {
+                                    tracing::warn!(error = %e, "accountingd: collection entry status update failed");
+                                }
+                                if batch_pmt_inf_id.is_some_and(|p| p == collected.payment_info_id)
+                                {
+                                    out.batches_matched += 1;
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                tracing::warn!(error = %e, "accountingd: collection entry lookup failed");
+                            }
+                        }
+                    }
+
+                    let ce_type = if is_return {
+                        mako_events::accounting::BANKRUECKLAST
+                    } else {
+                        mako_events::accounting::PAYMENT_IMPORTED
+                    };
+                    let amount_ct = ledger_ct.abs();
+                    let ce = mako_service::CloudEvent::new(
+                        mako_service::source("accountingd", &cfg.tenant),
+                        ce_type,
+                        &malo_id,
+                        serde_json::json!({
+                            "malo_id":         malo_id,
+                            "lf_mp_id":        lf_mp_id,
+                            "amount_ct":       amount_ct,
+                            "amount_eur":      crate::sepa::ct_to_eur_str(amount_ct),
+                            "is_return":       is_return,
+                            "return_reason":   return_reason,
+                            "reference":       reference,
+                            "bank_txn_id":     bank_txn_id,
+                            "payment_info_id": batch_pmt_inf_id,
+                            "end_to_end_id":   end_to_end_id,
+                            "booking_date":    date.to_string(),
+                            "ledger_id":       ledger_id.to_string(),
+                            // Which rung of the resolution ladder matched:
+                            // "iban" is the bank's own assertion, the others are
+                            // inferences an agent may want to review.
+                            "matched_by":      matched.matched_by,
+                        }),
+                    );
+                    if let Err(e) = enqueue_ce(pool, &ce).await {
+                        tracing::warn!(error = %e, "accountingd: bank import CE enqueue failed");
+                    }
+                    out.accepted += 1;
+                }
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        "accountingd: ledger write FAILED — entry discarded; investigate DB health"
+                    );
+                    out.skipped += 1;
+                }
+            }
+        }
+    }
+    out
+}
+
 /// `POST /api/v1/payments/import/camt054` — ingest a **camt.054 XML document**
 /// exactly as the bank delivers it (Bank-to-Customer Debit/Credit Notification).
 ///
-/// Batch-booked entries are expanded per `TxDtls`, so a batched SEPA collection
-/// imports every underlying transaction. SEPA returns (Rückläufer) become
-/// `BANKRUECKLAST` debits; ordinary credits become `ZAHLUNG`. The same
-/// `bank_import_log` deduplication as the JSON import applies, keyed on
-/// `AcctSvcrRef` (falling back to a stable hash of the transaction fields).
+/// The booking rules are shared with the camt.053 statement import: batched
+/// entries are expanded per `TxDtls`, returns (Rückläufer) become
+/// `BANKRUECKLAST` debits and ordinary credits `ZAHLUNG`, and deduplication is
+/// keyed on `AcctSvcrRef` (disambiguated per detail by `EndToEndId`) with a
+/// stable hash of the transaction fields as the fallback.
 pub async fn import_payments_camt054(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
@@ -876,218 +1296,225 @@ pub async fn import_payments_camt054(
         }
     };
 
-    let mut accepted = 0usize;
-    let mut deduplicated = 0usize;
-    let mut skipped = 0usize;
-    let mut total = 0usize;
-
+    let ctx = CamtImportCtx {
+        pool,
+        ledger,
+        iban_key,
+        cfg,
+    };
+    let mut result = CamtImportResult::default();
+    let mut accounts = Vec::new();
     for notification in &doc.notifications {
-        for entry in &notification.entries {
-            // One import per transaction detail; entry-level fallback when the
-            // bank reported no TxDtls (single unbatched booking).
-            let details: Vec<Option<&crate::sepa::EntryDetail>> = if entry.details.is_empty() {
-                vec![None]
-            } else {
-                entry.details.iter().map(Some).collect()
-            };
-
-            for detail in details {
-                total += 1;
-                // sepa 0.5: `EntryDetail::signed_ct()` resolves the per-detail amount
-                // (TxDtls/Amt → AmtDtls → entry total only for a single-detail entry),
-                // signed by CdtDbtInd, and is `None` when the statement doesn't
-                // determine it — precisely when the old "reuse the entry total per
-                // detail" fallback would multiply a batch by its transaction count.
-                let signed_ct = match detail {
-                    Some(d) => d.signed_ct(),
-                    None => Some(entry.signed_ct()), // single unbatched booking
-                };
-                let Some(signed_ct) = signed_ct else {
-                    tracing::warn!(
-                        "accountingd: camt.054 batch detail has no determinable amount — skipping"
-                    );
-                    skipped += 1;
-                    continue;
-                };
-                let counterparty_iban = detail
-                    .and_then(|d| d.counterparty_iban.as_deref())
-                    .unwrap_or("");
-                if counterparty_iban.is_empty() {
-                    skipped += 1;
-                    continue;
-                }
-                let reference = detail
-                    .and_then(|d| d.reference.as_deref().or(d.end_to_end_id.as_deref()))
-                    .unwrap_or("camt.054 import");
-                // sepa 0.5: typed date accessors (raw text stays in *_raw).
-                let Some(date) = entry
-                    .value_date()
-                    .or_else(|| entry.booking_date())
-                    .and_then(|iso| time::Date::try_from(iso).ok())
-                else {
-                    skipped += 1;
-                    continue;
-                };
-
-                let bank_txn_id = entry
-                    .account_servicer_ref
-                    .clone()
-                    .map(|r| {
-                        // A batched entry shares one AcctSvcrRef — disambiguate
-                        // per detail with the EndToEndId when present.
-                        match detail.and_then(|d| d.end_to_end_id.as_deref()) {
-                            Some(e2e) => format!("{r}#{e2e}"),
-                            None => r,
-                        }
-                    })
-                    .unwrap_or_else(|| {
-                        let key = format!("{counterparty_iban}|{signed_ct}|{date}|{reference}");
-                        format!(
-                            "{:016x}",
-                            key.bytes().fold(0u64, |acc, b| {
-                                acc.wrapping_mul(1099511628211).wrapping_add(u64::from(b))
-                            })
-                        )
-                    });
-
-                match crate::pg::bank_import_already_processed(&pool, &cfg.tenant, &bank_txn_id)
-                    .await
-                {
-                    Ok(true) => {
-                        deduplicated += 1;
-                        continue;
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "accountingd: dedup check failed — processing entry anyway");
-                    }
-                    Ok(false) => {}
-                }
-
-                let iban_h = crate::ledger::iban_hash(iban_key.as_ref(), counterparty_iban);
-                let account_row = sqlx::query(
-                    "SELECT malo_id, lf_mp_id FROM accounts WHERE iban_hash = $1 AND tenant = $2 LIMIT 1",
-                )
-                .bind(&iban_h)
-                .bind(&cfg.tenant)
-                .fetch_optional(&pool)
-                .await;
-
-                let Ok(Some(row)) = account_row else {
-                    skipped += 1;
-                    continue;
-                };
-                let malo_id: String = row.try_get("malo_id").unwrap_or_default();
-                let lf_mp_id: String = row.try_get("lf_mp_id").unwrap_or_default();
-                if malo_id.is_empty() {
-                    skipped += 1;
-                    continue;
-                }
-
-                let is_return = detail
-                    .and_then(|d| d.return_reason_code.as_deref())
-                    .is_some();
-                let entry_type = if is_return || signed_ct < 0 {
-                    "BANKRUECKLAST"
-                } else {
-                    "ZAHLUNG"
-                };
-                // Bank-statement sign → ledger sign. The ledger convention is
-                // positive = Forderung (debit): an incoming payment (bank credit)
-                // REDUCES the receivable → negative ZAHLUNG; a returned direct
-                // debit (bank debit) RE-OPENS the receivable → positive
-                // BANKRUECKLAST. This is the negation of the camt CashEntry
-                // convention (matches the JSON path's `to_ledger_ct`).
-                let ledger_ct = -signed_ct;
-                let description = match detail.and_then(|d| d.return_reason_code.as_deref()) {
-                    Some(code) => format!("camt.054 Rückläufer ({code})"),
-                    None => "camt.054 Zahlungseingang".to_owned(),
-                };
-
-                match crate::pg::post_entry(
-                    &ledger,
-                    &pool,
-                    &cfg.tenant,
-                    &malo_id,
-                    &lf_mp_id,
-                    entry_type,
-                    ledger_ct,
-                    &format!("bank:{bank_txn_id}"),
-                    None,
-                    Some(reference),
-                    date,
-                    date,
-                    Some(&description),
-                    None,
-                )
-                .await
-                {
-                    Ok(ledger_id) => {
-                        if let Err(e) = crate::pg::record_bank_import(
-                            &pool,
-                            &cfg.tenant,
-                            &bank_txn_id,
-                            signed_ct.abs(),
-                            Some(counterparty_iban),
-                            date,
-                            Some(ledger_id),
-                        )
-                        .await
-                        {
-                            tracing::warn!(error = %e, "accountingd: bank_import_log insert failed");
-                        }
-
-                        // Announce the booking. `de.accounting.bankruecklast`
-                        // drives agentd's payment-reconciliation agent, which
-                        // never ran because nothing emitted it — a returned
-                        // direct debit is precisely what it exists for.
-                        let is_return = entry.is_return();
-                        let ce_type = if is_return {
-                            mako_events::accounting::BANKRUECKLAST
-                        } else {
-                            mako_events::accounting::PAYMENT_IMPORTED
-                        };
-                        let amount_ct = ledger_ct.abs();
-                        let ce = mako_service::CloudEvent::new(
-                            mako_service::source("accountingd", &cfg.tenant),
-                            ce_type,
-                            &malo_id,
-                            serde_json::json!({
-                                "malo_id":      malo_id,
-                                "lf_mp_id":     lf_mp_id,
-                                "amount_ct":    amount_ct,
-                                "amount_eur":   format!("{:.2}", amount_ct as f64 / 100.0),
-                                "is_return":    is_return,
-                                "reference":    reference,
-                                "bank_txn_id":  bank_txn_id,
-                                "booking_date": date.to_string(),
-                                "ledger_id":    ledger_id.to_string(),
-                            }),
-                        );
-                        if let Err(e) = enqueue_ce(&pool, &ce).await {
-                            tracing::warn!(error = %e, "accountingd: bank import CE enqueue failed");
-                        }
-                        accepted += 1;
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            error = %e,
-                            "accountingd: ledger write FAILED — entry discarded; investigate DB health"
-                        );
-                        skipped += 1;
-                    }
-                }
-            }
-        }
+        let r = import_cash_entries(&ctx, &notification.entries).await;
+        result.accepted += r.accepted;
+        result.deduplicated += r.deduplicated;
+        result.skipped += r.skipped;
+        result.total += r.total;
+        result.batches_matched += r.batches_matched;
+        result.unresolved += r.unresolved;
+        result.unreconciled_batches += r.unreconciled_batches;
+        result.not_booked += r.not_booked;
+        accounts.push(account_ref_json(&notification.account));
     }
 
     Json(serde_json::json!({
         "msg_id": doc.msg_id,
-        "accepted": accepted,
-        "deduplicated": deduplicated,
-        "skipped": skipped,
-        "total": total,
+        "accounts": accounts,
+        "accepted": result.accepted,
+        "deduplicated": result.deduplicated,
+        "skipped": result.skipped,
+        "unresolved": result.unresolved,
+        "not_booked": result.not_booked,
+        "unreconciled_batches": result.unreconciled_batches,
+        "batches_matched": result.batches_matched,
+        "total": result.total,
     }))
     .into_response()
+}
+
+/// `POST /api/v1/payments/import/camt052` — ingest a **camt.052 XML report**
+/// (Bank-to-Customer Account Report), the bank's intraday view.
+///
+/// The door for a bank that offers intraday reporting as camt.052 rather than
+/// camt.054 notifications — a common pairing with an end-of-day camt.053, and
+/// one mako had no way to read at all.
+///
+/// ## Provisional by design
+///
+/// camt.052 reports movements *during* the business day, and its entries are
+/// provisional: an entry that is `PDNG` now may be booked, amended or dropped by
+/// the time the statement arrives. An append-only ledger cannot un-book a
+/// posting, so only entries the bank has marked `BOOK` are posted here. The rest
+/// are counted as `not_booked` and reported back — normally the majority of an
+/// intraday file, and not an error.
+///
+/// The booked ones are safe to take early: the same transaction arriving again
+/// in the evening's camt.053 carries the same `AcctSvcrRef`, so the ledger
+/// idempotency key makes the second import a no-op.
+///
+/// Interim balances (`ITBD`) are returned rather than posted — a receivables
+/// ledger has no place to put a treasury figure.
+pub async fn import_payments_camt052(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Extension(iban_key): Extension<Option<[u8; 32]>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    body: String,
+) -> impl IntoResponse {
+    let doc = match crate::sepa::parse_camt052(&body) {
+        Ok(d) => d,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("camt.052 parse failed: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let ctx = CamtImportCtx {
+        pool,
+        ledger,
+        iban_key,
+        cfg,
+    };
+    let mut result = CamtImportResult::default();
+    let mut reports = Vec::new();
+    for report in &doc.reports {
+        let r = import_cash_entries(&ctx, &report.entries).await;
+        result.accepted += r.accepted;
+        result.deduplicated += r.deduplicated;
+        result.skipped += r.skipped;
+        result.total += r.total;
+        result.batches_matched += r.batches_matched;
+        result.unresolved += r.unresolved;
+        result.unreconciled_batches += r.unreconciled_batches;
+        result.not_booked += r.not_booked;
+        reports.push(serde_json::json!({
+            "report_id":        report.report_id,
+            "account":          account_ref_json(&report.account),
+            "from_date":        report.from_date,
+            "to_date":          report.to_date,
+            "net_movement_ct":  report.net_movement_ct(),
+            "balances":         balances_json(&report.balances),
+        }));
+    }
+
+    Json(serde_json::json!({
+        "msg_id": doc.msg_id,
+        "reports": reports,
+        "accepted": result.accepted,
+        "deduplicated": result.deduplicated,
+        "skipped": result.skipped,
+        "unresolved": result.unresolved,
+        "not_booked": result.not_booked,
+        "unreconciled_batches": result.unreconciled_batches,
+        "batches_matched": result.batches_matched,
+        "total": result.total,
+    }))
+    .into_response()
+}
+
+/// `POST /api/v1/payments/import/camt053` — ingest a **camt.053 XML statement**
+/// (Bank-to-Customer Statement), the end-of-day record of the operator's own
+/// account.
+///
+/// Bookings follow the same rules as the camt.054 import; what a statement adds
+/// is the balance set. The reported closing balance is
+/// returned alongside the import counters so an operator — or the reconciliation
+/// agent — can compare the bank's own closing figure against the ledger without
+/// a second request.
+///
+/// Running both imports is safe: `bank_import_log` and the ledger idempotency
+/// key are keyed on the bank's transaction reference, so a transaction notified
+/// intraday by camt.054 and again in the evening's camt.053 books once.
+pub async fn import_payments_camt053(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Extension(iban_key): Extension<Option<[u8; 32]>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    body: String,
+) -> impl IntoResponse {
+    let doc = match crate::sepa::parse_camt053(&body) {
+        Ok(d) => d,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("camt.053 parse failed: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let ctx = CamtImportCtx {
+        pool,
+        ledger,
+        iban_key,
+        cfg,
+    };
+    let mut result = CamtImportResult::default();
+    let mut statements = Vec::new();
+    for statement in &doc.statements {
+        let r = import_cash_entries(&ctx, &statement.entries).await;
+        result.accepted += r.accepted;
+        result.deduplicated += r.deduplicated;
+        result.skipped += r.skipped;
+        result.total += r.total;
+        result.batches_matched += r.batches_matched;
+        result.unresolved += r.unresolved;
+        result.unreconciled_batches += r.unreconciled_batches;
+        result.not_booked += r.not_booked;
+        statements.push(serde_json::json!({
+            "stmt_id":  statement.stmt_id,
+            "account":  account_ref_json(&statement.account),
+            "balances": balances_json(&statement.balances),
+        }));
+    }
+
+    Json(serde_json::json!({
+        "msg_id": doc.msg_id,
+        "statements": statements,
+        "accepted": result.accepted,
+        "deduplicated": result.deduplicated,
+        "skipped": result.skipped,
+        "unresolved": result.unresolved,
+        "not_booked": result.not_booked,
+        "unreconciled_batches": result.unreconciled_batches,
+        "batches_matched": result.batches_matched,
+        "total": result.total,
+    }))
+    .into_response()
+}
+
+/// Render a camt balance set for the response body.
+fn balances_json(balances: &[sepa::camt::StatementBalance]) -> Vec<serde_json::Value> {
+    balances
+        .iter()
+        .map(|b| {
+            serde_json::json!({
+                "type":      b.balance_type.as_code(),
+                "signed_ct": b.signed_ct(),
+                "currency":  b.currency,
+                "date":      b.date().map(|d| d.to_string()),
+            })
+        })
+        .collect()
+}
+
+/// Render an [`AccountRef`](crate::sepa::AccountRef) for the response body.
+///
+/// `Acct/Id` is a choice between an IBAN and a proprietary `Othr/Id`, so an
+/// account that is not IBAN-addressable stays distinguishable from one with no
+/// identifier at all.
+fn account_ref_json(account: &crate::sepa::AccountRef) -> serde_json::Value {
+    serde_json::json!({
+        "iban":         account.iban,
+        "other_id":     account.other_id,
+        "currency":     account.currency,
+        "servicer_bic": account.servicer_bic,
+    })
 }
 
 // ── Prometheus metrics ────────────────────────────────────────────────────────
@@ -1132,7 +1559,15 @@ pub async fn metrics(
          accountingd_sepa_runs_pending{{tenant=\"{t}\"}} {}\n\
          # HELP accountingd_sperrung_pending Mahnstufe-3 cases handed to sperrd.\n\
          # TYPE accountingd_sperrung_pending gauge\n\
-         accountingd_sperrung_pending{{tenant=\"{t}\"}} {}\n",
+         accountingd_sperrung_pending{{tenant=\"{t}\"}} {}\n\
+         # HELP accountingd_sepa_collections Direct-debit collections by lifecycle state.\n\
+         # TYPE accountingd_sepa_collections gauge\n\
+         accountingd_sepa_collections{{tenant=\"{t}\",status=\"submitted\"}} {}\n\
+         accountingd_sepa_collections{{tenant=\"{t}\",status=\"rejected\"}} {}\n\
+         accountingd_sepa_collections{{tenant=\"{t}\",status=\"returned\"}} {}\n\
+         # HELP accountingd_sepa_collections_open_ct Amount in ct collected but not yet confirmed by the bank.\n\
+         # TYPE accountingd_sepa_collections_open_ct gauge\n\
+         accountingd_sepa_collections_open_ct{{tenant=\"{t}\"}} {}\n",
         m.accounts_total,
         m.open_receivables_ct,
         m.credit_balances_ct,
@@ -1141,6 +1576,10 @@ pub async fn metrics(
         m.dunning_stufe3,
         m.sepa_runs_pending,
         m.sperrung_pending,
+        m.sepa_collections_open,
+        m.sepa_collections_rejected,
+        m.sepa_collections_returned,
+        m.sepa_collections_open_ct,
     );
     (
         StatusCode::OK,
@@ -1517,26 +1956,47 @@ pub async fn run_sepa(
         }
     };
 
-    match build_pain_008(
-        creditor_iban,
-        creditor_name,
+    let creditor = crate::sepa::CreditorIdentity {
+        iban: creditor_iban,
+        name: creditor_name,
         creditor_id,
-        collection_date,
-        &direct_debits,
-        dd_schema,
-    ) {
-        Ok(run) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                // One pain.008 message; FRST/RCUR/… are separate PmtInf groups inside it.
-                "collection_date": collection_date.to_string(),
-                "entry_count": run.entry_count,
-                "total_ct": run.total_ct,
-                "groups": run.groups,
-                "xml": &run.xml,
-            })),
-        )
-            .into_response(),
+        address: Some(&cfg.creditor_address),
+    };
+
+    match build_pain_008(&creditor, collection_date, &direct_debits, dd_schema) {
+        Ok(run) => {
+            // Archive the ad-hoc run exactly like the N-5 scheduler's. A
+            // pain.008 handed to a bank without an audit row is a collection
+            // nothing can later attribute, settle or reverse.
+            let run_id = match crate::pg::persist_sepa_collection(
+                &pool,
+                &cfg.tenant,
+                collection_date,
+                &run,
+            )
+            .await
+            {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    tracing::warn!(error = %e, "accountingd: /sepa/run — failed to persist sepa_collection_run");
+                    None
+                }
+            };
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    // One pain.008 message; FRST/RCUR/… are separate PmtInf groups inside it.
+                    "run_id": run_id.map(|id| id.to_string()),
+                    "msg_id": run.msg_id,
+                    "collection_date": collection_date.to_string(),
+                    "entry_count": run.entry_count,
+                    "total_ct": run.total_ct,
+                    "groups": run.groups,
+                    "xml": &run.xml,
+                })),
+            )
+                .into_response()
+        }
         Err(e) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({ "error": e.to_string() })),
@@ -2016,6 +2476,8 @@ pub async fn post_jahresabschluss(
                 };
                 let e2e = format!("REFUND-{malo_id}-{year}");
                 let customer_name = format!("Kunde {malo_id}");
+                // `Cdtr/PstlAdr` — on a refund the customer is the creditor.
+                let customer_address = acct.postal_address();
                 let ct_schema =
                     match crate::sepa::resolve_pain001_schema(cfg.pain001_schema.as_deref()) {
                         Ok(s) => s,
@@ -2027,10 +2489,22 @@ pub async fn post_jahresabschluss(
                                 .into_response();
                         }
                     };
+                // A refund leaves today: §40 EnWG gives no grace period for
+                // paying back what the customer overpaid.
                 match crate::sepa::build_pain_001(
-                    creditor_name,
-                    creditor_iban,
-                    &[(customer_iban, &customer_name, refund_ct, &e2e)],
+                    &crate::sepa::DebtorIdentity {
+                        iban: creditor_iban,
+                        name: creditor_name,
+                        address: Some(&cfg.creditor_address),
+                    },
+                    &[crate::sepa::CreditTransferItem {
+                        iban: customer_iban,
+                        name: &customer_name,
+                        amount_ct: refund_ct,
+                        end_to_end_ref: &e2e,
+                        address: Some(&customer_address),
+                    }],
+                    today,
                     false,
                     ct_schema,
                 ) {
@@ -2122,6 +2596,7 @@ pub async fn post_jahresabschluss(
                 mandatsref: None,
                 abschlag_ct: Some(new_abschlag_ct),
                 billing_day: None,
+                address: Default::default(),
             },
         )
         .await
@@ -3019,10 +3494,25 @@ pub async fn post_run_eeg_payouts(
                 continue;
             }
         };
+        // §25 Abs. 1 EEG 2023 — "unverzüglich nach Ende des Monats": the payout
+        // leaves today. The crate's default execution date is not something a
+        // payment date should be inherited from.
+        let execution_date = today.date();
+        let creditor_address = account.postal_address();
         let pain_xml = match build_pain_001(
-            debtor_name,
-            &debtor_iban,
-            &[(&creditor_iban, &creditor_name, amount_ct, &e2e_ref)],
+            &crate::sepa::DebtorIdentity {
+                iban: &debtor_iban,
+                name: debtor_name,
+                address: Some(&cfg.creditor_address),
+            },
+            &[crate::sepa::CreditTransferItem {
+                iban: &creditor_iban,
+                name: &creditor_name,
+                amount_ct,
+                end_to_end_ref: &e2e_ref,
+                address: Some(&creditor_address),
+            }],
+            execution_date,
             use_instant,
             ct_schema,
         ) {
@@ -3034,13 +3524,18 @@ pub async fn post_run_eeg_payouts(
             }
         };
 
-        // Insert payout order (idempotent via unique source_ce_id).
+        // Insert payout order (idempotent via unique source_ce_id). The creditor
+        // address is snapshotted alongside the IBAN and name: what was sent has
+        // to stay readable even after the account's master data moves on.
         let insert_result = sqlx::query(
             r"INSERT INTO eeg_payout_orders
                   (malo_id, account_id, billing_year, billing_month, amount_ct,
                    creditor_iban, creditor_name, payment_type, end_to_end_ref,
-                   pain001_xml, source_ce_id, tenant)
-              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                   pain001_xml, source_ce_id, tenant,
+                   creditor_town, creditor_country, creditor_street,
+                   creditor_building_number, creditor_post_code,
+                   creditor_country_subdivision)
+              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
               ON CONFLICT (end_to_end_ref) DO NOTHING",
         )
         .bind(&malo_id)
@@ -3055,6 +3550,12 @@ pub async fn post_run_eeg_payouts(
         .bind(&pain_xml)
         .bind(ce_id.as_deref())
         .bind(&cfg.tenant)
+        .bind(&creditor_address.town)
+        .bind(&creditor_address.country)
+        .bind(&creditor_address.street)
+        .bind(&creditor_address.building_number)
+        .bind(&creditor_address.post_code)
+        .bind(&creditor_address.country_subdivision)
         .execute(&pool)
         .await;
 
@@ -3203,6 +3704,723 @@ pub async fn put_eeg_payout_status(
     StatusCode::NO_CONTENT.into_response()
 }
 
+// ── pain.002 Payment Status Report ingestion ─────────────────────────────────
+
+/// `POST /api/v1/sepa/pain002` — ingest a **pain.002 XML** exactly as the bank
+/// delivers it (Customer Payment Status Report).
+///
+/// One document answers a whole submission, so it is applied to whatever it
+/// refers to, keyed by the reference the bank echoes back:
+///
+/// | The report is about | Matched on | Effect |
+/// |---|---|---|
+/// | a pain.001 EEG payout | `eeg_payout_orders.end_to_end_ref` | status, reason, `settled_at`, VoP outcome |
+/// | a pain.008 collection | `sepa_collection_entries.end_to_end_id` | `SETTLED` / `REJECTED` + a rejection event |
+///
+/// ## A rejected collection is not a Bankrücklastschrift
+///
+/// `RJCT` on a direct debit means the collection **never happened**: no money
+/// moved, so nothing is reversed. accountingd books a `ZAHLUNG` only when a camt
+/// booking confirms the money arrived, so posting a compensating
+/// `BANKRUECKLAST` here would credit a payment that was never received and then
+/// debit it back. The receivable simply stays open, the entry is marked
+/// `REJECTED`, and `de.accounting.sepa.collection-rejected` tells the ERP the
+/// mandate needs attention. A collection that settled and was *then* returned
+/// arrives as a camt.054 R-transaction and is the other event.
+///
+/// ## Verification of Payee
+///
+/// VoP has been mandatory for euro credit transfers since 9 October 2025 and its
+/// result arrives inside this same message. It is a **different axis** from
+/// acceptance: `RCVC` says a payee name matched, which is not a statement about
+/// whether the payment was taken. The outcome is stored in `vop_outcome` and
+/// leaves `pain002_status` alone; anything other than a match emits
+/// `de.accounting.payee.verification-mismatch`, because executing after a
+/// no-match shifts liability to the payer and that is an operator's decision.
+pub async fn import_pain002(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    body: String,
+) -> impl IntoResponse {
+    let doc = match crate::sepa::parse_pain002(&body) {
+        Ok(d) => d,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": format!("pain.002 parse failed: {e}") })),
+            )
+                .into_response();
+        }
+    };
+
+    let mut payouts_updated = 0usize;
+    let mut collections_updated = 0usize;
+    let mut unmatched = 0usize;
+    let mut verifications = 0usize;
+    let mut total = 0usize;
+
+    for pmt_inf in &doc.payment_info_statuses {
+        for tx in &pmt_inf.transactions {
+            total += 1;
+            // Both references are `0..1`; a bank may echo either. A report that
+            // names neither is unattributable and must not be guessed at.
+            let Some(reference) = tx
+                .original_end_to_end_id
+                .as_deref()
+                .or(tx.original_instruction_id.as_deref())
+            else {
+                unmatched += 1;
+                continue;
+            };
+            // A missing `TxSts` is not a status: the group status governs, and
+            // "no status at all" is not an acceptance.
+            let status = tx.status.as_ref().or(doc.group_status.as_ref());
+            let Some(status) = status else {
+                unmatched += 1;
+                continue;
+            };
+            let reason = tx.reason_codes.first().map(|r| r.as_code().to_owned());
+            // `StsRsnInf/AddtlInf` is unbounded and banks use it: a legal notice
+            // spans lines, and a VoP close-match name over 105 characters
+            // arrives split in two. Join before storing.
+            let additional_info = if tx.additional_info.is_empty() {
+                None
+            } else {
+                Some(tx.additional_info.join(" "))
+            };
+
+            match apply_pain002_status(
+                &pool,
+                &cfg,
+                reference,
+                status,
+                reason.as_deref(),
+                additional_info.as_deref(),
+            )
+            .await
+            {
+                Ok(Pain002Match::Payout) => payouts_updated += 1,
+                Ok(Pain002Match::Collection) => collections_updated += 1,
+                Ok(Pain002Match::None) => unmatched += 1,
+                Err(e) => {
+                    tracing::warn!(reference, error = %e, "accountingd: pain.002 status apply failed");
+                    unmatched += 1;
+                }
+            }
+            if status.is_verification() {
+                verifications += 1;
+            }
+        }
+    }
+
+    // ── Rejections the bank did not itemise ──────────────────────────────────
+    //
+    // A whole file or a whole `PmtInf` group can bounce with no per-transaction
+    // detail at all — a schema fault, a creditor identity the bank refuses, a
+    // collection date it will not accept. Reading only `TxInfAndSts` leaves
+    // every one of those collections sitting at `SUBMITTED` forever, waiting for
+    // money that is never coming.
+    //
+    // Only rejections are broadcast this way. A group-level *acceptance* is not
+    // settlement — `ACTC` says the file parsed — and the camt booking is what
+    // confirms a collection actually moved.
+    let mut bulk_rejected = 0usize;
+    if doc
+        .group_status
+        .as_ref()
+        .is_some_and(crate::sepa::PaymentStatus::is_rejected)
+    {
+        match crate::pg::reject_submitted_entries_of_run(
+            &pool,
+            &cfg.tenant,
+            &doc.original_msg_id,
+            "pain.002 GrpSts=RJCT",
+        )
+        .await
+        {
+            Ok(n) => bulk_rejected += n,
+            Err(e) => {
+                tracing::warn!(error = %e, "accountingd: group-level pain.002 rejection failed to apply");
+            }
+        }
+    } else {
+        for pmt_inf in &doc.payment_info_statuses {
+            // An itemised group has already been handled per transaction.
+            if !pmt_inf.transactions.is_empty() {
+                continue;
+            }
+            let (Some(status), Some(pmt_inf_id)) =
+                (&pmt_inf.status, &pmt_inf.original_payment_info_id)
+            else {
+                continue;
+            };
+            if !status.is_rejected() {
+                continue;
+            }
+            let reason = pmt_inf.rejection_reasons().first().map_or_else(
+                || "pain.002 PmtInfSts=RJCT".to_owned(),
+                |r| r.as_code().to_owned(),
+            );
+            match crate::pg::reject_submitted_entries_of_group(
+                &pool,
+                &cfg.tenant,
+                pmt_inf_id,
+                &reason,
+            )
+            .await
+            {
+                Ok(n) => bulk_rejected += n,
+                Err(e) => {
+                    tracing::warn!(error = %e, "accountingd: group-level pain.002 rejection failed to apply");
+                }
+            }
+        }
+    }
+
+    // `NbOfTxsPerSts` states counts per outcome for a whole file and itemises
+    // only the transactions needing attention — a VoP report on hundreds of
+    // payments may carry nothing else. Surface it rather than discard it.
+    let status_counts: Vec<serde_json::Value> = doc
+        .group_status_counts
+        .iter()
+        .chain(
+            doc.payment_info_statuses
+                .iter()
+                .flat_map(|p| &p.status_counts),
+        )
+        .map(|c| {
+            serde_json::json!({
+                "status":    c.status.as_code(),
+                "count":     c.count,
+                "total_ct":  c.total_ct,
+                "is_verification": c.status.is_verification(),
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "msg_id":              doc.msg_id,
+        "original_msg_id":     doc.original_msg_id,
+        "original_msg_type":   doc.original_msg_type.as_ref().map(ToString::to_string),
+        "group_status":        doc.group_status.as_ref().map(|s| s.as_code().to_owned()),
+        "fully_accepted":      doc.is_fully_accepted(),
+        "has_rejections":      doc.has_rejections(),
+        "status_counts":       status_counts,
+        "payouts_updated":     payouts_updated,
+        "collections_updated": collections_updated,
+        "bulk_rejected":       bulk_rejected,
+        "verifications":       verifications,
+        "unmatched":           unmatched,
+        "total":               total,
+    }))
+    .into_response()
+}
+
+/// What a pain.002 transaction status was attributed to.
+enum Pain002Match {
+    Payout,
+    Collection,
+    None,
+}
+
+/// Apply one pain.002 transaction status to whatever it refers to.
+async fn apply_pain002_status(
+    pool: &PgPool,
+    cfg: &AccountingdConfig,
+    reference: &str,
+    status: &crate::sepa::PaymentStatus,
+    reason: Option<&str>,
+    additional_info: Option<&str>,
+) -> anyhow::Result<Pain002Match> {
+    use crate::sepa::VerificationOutcome;
+
+    let verification = status.verification();
+    let vop_outcome = verification.map(|v| match v {
+        VerificationOutcome::Match => "MATCH",
+        VerificationOutcome::CloseMatch => "CLOSE_MATCH",
+        VerificationOutcome::NoMatch => "NO_MATCH",
+        VerificationOutcome::NotApplicable => "NOT_APPLICABLE",
+    });
+    // A verification status is not a payment status: writing `RCVC` into
+    // `pain002_status` would make a name check look like an acceptance.
+    let payment_status = if status.is_verification() {
+        None
+    } else {
+        Some(status.as_code())
+    };
+    // `ACSC` is the only status that means the money moved; the others that
+    // pass `is_accepted` are milestones on the way there. `settled_at` records
+    // the first of them, as it always has.
+    let settled_at = status.is_accepted().then(time::OffsetDateTime::now_utc);
+
+    let mut tx = pool.begin().await?;
+
+    // ── A pain.001 payout order ──────────────────────────────────────────────
+    let payout = sqlx::query(
+        r"UPDATE eeg_payout_orders
+          SET pain002_status  = COALESCE($1, pain002_status),
+              pain002_reason  = COALESCE($2, pain002_reason),
+              settled_at      = COALESCE($3, settled_at),
+              vop_outcome     = COALESCE($4, vop_outcome),
+              vop_name        = COALESCE($5, vop_name),
+              vop_reported_at = CASE WHEN $4 IS NULL THEN vop_reported_at ELSE now() END
+          WHERE end_to_end_ref = $6 AND tenant = $7
+          RETURNING payout_id, malo_id, amount_ct, payment_type",
+    )
+    .bind(payment_status)
+    .bind(reason)
+    .bind(settled_at)
+    .bind(vop_outcome)
+    .bind(additional_info.filter(|_| vop_outcome.is_some()))
+    .bind(reference)
+    .bind(&cfg.tenant)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    if let Some(row) = payout {
+        let payout_id: uuid::Uuid = row.try_get("payout_id")?;
+        let malo_id: String = row.try_get("malo_id")?;
+        let amount_ct: i64 = row.try_get("amount_ct")?;
+        let payment_type: String = row.try_get("payment_type")?;
+
+        if status.is_rejected() {
+            let ce = mako_service::CloudEvent::new(
+                mako_service::source("accountingd", &cfg.tenant),
+                mako_events::accounting::EEG_PAYOUT_REJECTED,
+                &malo_id,
+                serde_json::json!({
+                    "payout_id":      payout_id.to_string(),
+                    "malo_id":        malo_id,
+                    "end_to_end_ref": reference,
+                    "amount_ct":      amount_ct,
+                    "payment_type":   payment_type,
+                    "pain002_status": status.as_code(),
+                    "pain002_reason": reason,
+                    "additional_info": additional_info,
+                }),
+            );
+            mako_service::outbox::enqueue(&mut tx, &ce).await?;
+        }
+        // Anything but a clean match is an operator decision: after `RVNM`,
+        // executing the transfer moves liability to the payer.
+        if verification.is_some_and(|v| v != VerificationOutcome::Match) {
+            let ce = mako_service::CloudEvent::new(
+                mako_service::source("accountingd", &cfg.tenant),
+                mako_events::accounting::PAYEE_VERIFICATION_MISMATCH,
+                &malo_id,
+                serde_json::json!({
+                    "payout_id":      payout_id.to_string(),
+                    "malo_id":        malo_id,
+                    "end_to_end_ref": reference,
+                    "amount_ct":      amount_ct,
+                    "vop_outcome":    vop_outcome,
+                    // On a close match this is the name the payee's PSP holds.
+                    "vop_name":       additional_info,
+                    "reason_code":    reason,
+                }),
+            );
+            mako_service::outbox::enqueue(&mut tx, &ce).await?;
+        }
+        tx.commit().await?;
+        return Ok(Pain002Match::Payout);
+    }
+
+    // ── A pain.008 collection ────────────────────────────────────────────────
+    let Some(collected) =
+        crate::pg::find_collection_entry_by_e2e(pool, &cfg.tenant, reference).await?
+    else {
+        tx.rollback().await?;
+        return Ok(Pain002Match::None);
+    };
+
+    // A verification status says nothing about a collection's lifecycle.
+    if status.is_verification() {
+        tx.rollback().await?;
+        return Ok(Pain002Match::Collection);
+    }
+
+    let new_status = if status.is_rejected() {
+        "REJECTED"
+    } else if status.is_accepted() {
+        "SETTLED"
+    } else {
+        // PDNG and friends: still in flight, nothing to record yet.
+        tx.rollback().await?;
+        return Ok(Pain002Match::Collection);
+    };
+    crate::pg::set_collection_entry_status(&mut *tx, collected.entry_id, new_status, reason)
+        .await?;
+
+    if status.is_rejected()
+        && let Some(malo_id) = collected.malo_id.as_deref()
+    {
+        // No compensating ledger entry: the collection never settled, so the
+        // receivable was never reduced. See the handler's doc comment.
+        let ce = mako_service::CloudEvent::new(
+            mako_service::source("accountingd", &cfg.tenant),
+            mako_events::accounting::SEPA_COLLECTION_REJECTED,
+            malo_id,
+            serde_json::json!({
+                "malo_id":         malo_id,
+                "lf_mp_id":        collected.lf_mp_id,
+                "mandate_id":      collected.mandate_id.map(|id| id.to_string()),
+                "mandatsref":      collected.mandatsref,
+                "end_to_end_id":   collected.end_to_end_id,
+                "payment_info_id": collected.payment_info_id,
+                "amount_ct":       collected.amount_ct,
+                "collection_date": collected.collection_date.to_string(),
+                "reason_code":     reason,
+                "additional_info": additional_info,
+            }),
+        );
+        mako_service::outbox::enqueue(&mut tx, &ce).await?;
+    }
+
+    tx.commit().await?;
+    Ok(Pain002Match::Collection)
+}
+
+// ── pain.007 SEPA Direct Debit reversal ──────────────────────────────────────
+
+/// Request body for `POST /api/v1/sepa/reversals`.
+#[derive(Debug, serde::Deserialize)]
+pub struct CreateReversalRequest {
+    /// The collected entry to give back (`sepa_collection_entries.entry_id`).
+    pub collection_entry_id: uuid::Uuid,
+    /// ISO 20022 `ExternalReversalReason1Code`. Defaults to `MS02` — "no reason
+    /// specified by the customer", the code the DK's own reversal example
+    /// carries and what a creditor uses when it simply collected in error.
+    pub reason_code: Option<String>,
+    /// Partial reversal amount in ct. Absent reverses the whole collection;
+    /// more than was collected is refused.
+    pub reversed_amount_ct: Option<i64>,
+}
+
+/// `POST /api/v1/sepa/reversals` — build a **pain.007** giving a settled
+/// direct-debit collection back.
+///
+/// A reversal is the creditor's own correction — the Abschlag collected twice,
+/// or collected after the customer had already paid by transfer. It is the
+/// counterpart to a debtor-initiated refund (which arrives as camt.054) and to a
+/// reject (which arrives as pain.002 and never moved money at all).
+///
+/// Every field of `OrgnlTxRef` is restated from `sepa_collection_entries` and
+/// `sepa_mandates` rather than from the request body, so the reversal cannot
+/// disagree with what was collected. The DK technical validation subset makes
+/// that block — and the mandate inside it — mandatory, so the references-only
+/// form plain ISO permits is not one a German bank accepts.
+///
+/// The compensating `SEPA_STORNO` ledger entry re-opens the receivable: the
+/// money leaves the bank account again, so what the collection discharged is
+/// owed once more.
+pub async fn post_sepa_reversal(
+    claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Json(req): Json<CreateReversalRequest>,
+) -> impl IntoResponse {
+    let entry = match crate::pg::fetch_collection_entry(&pool, req.collection_entry_id, &cfg.tenant)
+        .await
+    {
+        Ok(Some(e)) => e,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": "collection entry not found" })),
+            )
+                .into_response();
+        }
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    // Only a *settled* collection can be reversed. A rejected one never moved
+    // money, and an already-returned or already-reversed one would refund twice.
+    if entry.status != "SETTLED" {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": format!(
+                    "collection is {} — only a SETTLED collection can be reversed \
+                     (a REJECTED one never moved money; a RETURNED or REVERSED one \
+                     has already been given back)",
+                    entry.status
+                ),
+                "status": entry.status,
+            })),
+        )
+            .into_response();
+    }
+
+    // The debtor identity lives on the mandate, so an erased mandate correctly
+    // makes the reversal impossible rather than built from a stale copy.
+    let (Some(debtor_iban), Some(signed_at)) =
+        (entry.debtor_iban.as_deref(), entry.mandate_signed_at)
+    else {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "the mandate behind this collection is gone (revoked and deleted, \
+                          or anonymised under GDPR Art. 17) — pain.007 needs its IBAN and \
+                          signature date in OrgnlTxRef"
+            })),
+        )
+            .into_response();
+    };
+
+    let (Some(creditor_iban), Some(creditor_id)) = (
+        cfg.creditor_iban.as_deref().filter(|s| !s.is_empty()),
+        cfg.creditor_id.as_deref().filter(|s| !s.is_empty()),
+    ) else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "creditor_iban and creditor_id (Gläubiger-ID) must both be \
+                          configured — a reversal restates the creditor identity the \
+                          collection carried"
+            })),
+        )
+            .into_response();
+    };
+    let creditor_name = cfg.creditor_name.as_deref().unwrap_or(&cfg.tenant);
+    let creditor = crate::sepa::CreditorIdentity {
+        iban: creditor_iban,
+        name: creditor_name,
+        creditor_id,
+        address: Some(&cfg.creditor_address),
+    };
+
+    let reason: crate::sepa::ReversalReason = req
+        .reason_code
+        .as_deref()
+        .unwrap_or("MS02")
+        .parse()
+        .unwrap_or(crate::sepa::ReversalReason::Ms02);
+    let reversed_amount_ct = req.reversed_amount_ct.unwrap_or(entry.amount_ct);
+    if reversed_amount_ct <= 0 || reversed_amount_ct > entry.amount_ct {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!(
+                    "reversed_amount_ct must be between 1 and the collected {} ct",
+                    entry.amount_ct
+                )
+            })),
+        )
+            .into_response();
+    }
+
+    let dd_schema = match crate::sepa::resolve_pain008_schema(cfg.pain008_schema.as_deref()) {
+        Ok(s) => s,
+        Err(e) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    let reversal_request = crate::sepa::ReversalRequest {
+        original_msg_id: &entry.msg_id,
+        original_payment_info_id: &entry.payment_info_id,
+        original_end_to_end_id: &entry.end_to_end_id,
+        original_amount_ct: entry.amount_ct,
+        reversed_amount_ct: (reversed_amount_ct != entry.amount_ct).then_some(reversed_amount_ct),
+        reason: reason.clone(),
+        mandate_ref: &entry.mandatsref,
+        mandate_signed_at: signed_at,
+        collection_date: entry.collection_date,
+        sequence_type: &entry.sequence_type,
+        debtor_name: entry.debtor_name.as_deref().unwrap_or("Kunde"),
+        debtor_iban,
+        debtor_bic: entry.debtor_bic.as_deref(),
+    };
+
+    let reversal = match crate::sepa::build_pain_007(&creditor, &[reversal_request], dd_schema) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    // The compensating ledger entry re-opens the receivable. Positive = Forderung.
+    let ledger_entry_id = match (entry.malo_id.as_deref(), entry.lf_mp_id.as_deref()) {
+        (Some(malo_id), Some(lf_mp_id)) => {
+            let today = time::OffsetDateTime::now_utc().date();
+            match crate::pg::post_entry(
+                &ledger,
+                &pool,
+                &cfg.tenant,
+                malo_id,
+                lf_mp_id,
+                "SEPA_STORNO",
+                reversed_amount_ct,
+                &format!("sepa-reversal:{}", entry.entry_id),
+                None,
+                Some(&entry.end_to_end_id),
+                today,
+                today,
+                Some(&format!(
+                    "pain.007 Storno der Einzugs vom {} ({})",
+                    entry.collection_date,
+                    reason.as_code()
+                )),
+                None,
+            )
+            .await
+            {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    tracing::error!(error = %e, "accountingd: SEPA_STORNO ledger post failed");
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "error": format!("reversal ledger post failed: {e}")
+                        })),
+                    )
+                        .into_response();
+                }
+            }
+        }
+        _ => None,
+    };
+
+    // Record the reversal, close the collected entry and announce it in one
+    // transaction: the unique index on `collection_entry_id` is what stops a
+    // second request refunding the same collection twice.
+    let mut tx = match pool.begin().await {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let reversal_id = match crate::pg::record_sepa_reversal(
+        &mut *tx,
+        &cfg.tenant,
+        &entry,
+        &reversal,
+        reversed_amount_ct,
+        reason.as_code(),
+        ledger_entry_id,
+        Some(claims.sub()),
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": format!("reversal already recorded for this collection: {e}")
+                })),
+            )
+                .into_response();
+        }
+    };
+    if let Err(e) = crate::pg::set_collection_entry_status(
+        &mut *tx,
+        entry.entry_id,
+        "REVERSED",
+        Some(reason.as_code()),
+    )
+    .await
+    {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+    if let Some(malo_id) = entry.malo_id.as_deref() {
+        let ce = mako_service::CloudEvent::new(
+            mako_service::source("accountingd", &cfg.tenant),
+            mako_events::accounting::SEPA_REVERSAL_ISSUED,
+            malo_id,
+            serde_json::json!({
+                "reversal_id":          reversal_id.to_string(),
+                "malo_id":              malo_id,
+                "lf_mp_id":             entry.lf_mp_id,
+                "mandatsref":           entry.mandatsref,
+                "original_msg_id":      entry.msg_id,
+                "original_end_to_end_id": entry.end_to_end_id,
+                "original_amount_ct":   entry.amount_ct,
+                "reversed_amount_ct":   reversed_amount_ct,
+                "reason_code":          reason.as_code(),
+                "ledger_id":            ledger_entry_id.map(|id| id.to_string()),
+            }),
+        );
+        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    }
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+
+    (
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "reversal_id":        reversal_id.to_string(),
+            "msg_id":             reversal.msg_id,
+            "payment_info_id":    reversal.payment_info_id,
+            "original_msg_id":    entry.msg_id,
+            "reversed_amount_ct": reversed_amount_ct,
+            "reason_code":        reason.as_code(),
+            "ledger_id":          ledger_entry_id.map(|id| id.to_string()),
+            "xml":                reversal.xml,
+        })),
+    )
+        .into_response()
+}
+
+/// `GET /api/v1/sepa/collections/{run_id}/entries` — what a collection run
+/// collected, and where each entry stands.
+///
+/// The list a reversal is chosen from: `entry_id` is what
+/// `POST /api/v1/sepa/reversals` takes, and `status` says whether the collection
+/// is still in flight (`SUBMITTED`), confirmed (`SETTLED`), refused before it
+/// moved (`REJECTED`), returned by the debtor (`RETURNED`) or already given back
+/// (`REVERSED`).
+pub async fn get_collection_entries(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(run_id): Path<uuid::Uuid>,
+) -> impl IntoResponse {
+    let rows = sqlx::query(
+        r"SELECT ce.entry_id, ce.mandatsref, ce.end_to_end_id, ce.payment_info_id,
+                 ce.sequence_type, ce.amount_ct, ce.status, ce.status_reason, ce.status_at,
+                 a.malo_id
+          FROM sepa_collection_entries ce
+          LEFT JOIN accounts a ON a.account_id = ce.account_id
+          WHERE ce.run_id = $1 AND ce.tenant = $2
+          ORDER BY ce.payment_info_id, ce.mandatsref",
+    )
+    .bind(run_id)
+    .bind(&cfg.tenant)
+    .fetch_all(&pool)
+    .await;
+
+    match rows {
+        Ok(rows) => Json(serde_json::json!({
+            "run_id": run_id.to_string(),
+            "entries": rows.iter().map(|r| serde_json::json!({
+                "entry_id":        r.try_get::<uuid::Uuid, _>("entry_id").ok().map(|i| i.to_string()),
+                "malo_id":         r.try_get::<Option<String>, _>("malo_id").ok().flatten(),
+                "mandatsref":      r.try_get::<String, _>("mandatsref").ok(),
+                "end_to_end_id":   r.try_get::<String, _>("end_to_end_id").ok(),
+                "payment_info_id": r.try_get::<String, _>("payment_info_id").ok(),
+                "sequence_type":   r.try_get::<String, _>("sequence_type").ok(),
+                "amount_ct":       r.try_get::<i64, _>("amount_ct").ok(),
+                "status":          r.try_get::<String, _>("status").ok(),
+                "status_reason":   r.try_get::<Option<String>, _>("status_reason").ok().flatten(),
+            })).collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
 /// Submit a pain.001 XML to the configured bank adapter and update `submitted_at`.
@@ -3260,6 +4478,8 @@ pub(crate) struct EegPayoutParams<'a> {
     pub amount_ct: i64,
     pub creditor_iban: &'a str,
     pub creditor_name: &'a str,
+    /// The plant operator's own `Cdtr/PstlAdr`, from `accounts.addr_*`.
+    pub creditor_address: crate::sepa::AddressParts,
     pub tr_id: Option<&'a str>,
     pub billing_year: i16,
     pub billing_month: i16,
@@ -3311,15 +4531,23 @@ pub(crate) async fn create_eeg_payout_order(
             return;
         }
     };
+    // §25 Abs. 1 EEG 2023 — "unverzüglich nach Ende des Monats": the payout
+    // leaves today rather than on a library default.
+    let execution_date = time::OffsetDateTime::now_utc().date();
     let pain_xml = match build_pain_001(
-        debtor_name,
-        debtor_iban,
-        &[(
-            params.creditor_iban,
-            params.creditor_name,
-            params.amount_ct,
-            &e2e_ref,
-        )],
+        &crate::sepa::DebtorIdentity {
+            iban: debtor_iban,
+            name: debtor_name,
+            address: Some(&cfg.creditor_address),
+        },
+        &[crate::sepa::CreditTransferItem {
+            iban: params.creditor_iban,
+            name: params.creditor_name,
+            amount_ct: params.amount_ct,
+            end_to_end_ref: &e2e_ref,
+            address: Some(&params.creditor_address),
+        }],
+        execution_date,
         use_instant,
         ct_schema,
     ) {
@@ -3334,8 +4562,11 @@ pub(crate) async fn create_eeg_payout_order(
         r"INSERT INTO eeg_payout_orders
               (malo_id, account_id, tr_id, billing_year, billing_month, amount_ct,
                creditor_iban, creditor_name, payment_type, end_to_end_ref,
-               pain001_xml, source_ce_id, tenant)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+               pain001_xml, source_ce_id, tenant,
+               creditor_town, creditor_country, creditor_street,
+               creditor_building_number, creditor_post_code,
+               creditor_country_subdivision)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
           ON CONFLICT (end_to_end_ref) DO NOTHING",
     )
     .bind(params.malo_id)
@@ -3351,6 +4582,12 @@ pub(crate) async fn create_eeg_payout_order(
     .bind(&pain_xml)
     .bind(params.source_ce_id)
     .bind(&cfg.tenant)
+    .bind(&params.creditor_address.town)
+    .bind(&params.creditor_address.country)
+    .bind(&params.creditor_address.street)
+    .bind(&params.creditor_address.building_number)
+    .bind(&params.creditor_address.post_code)
+    .bind(&params.creditor_address.country_subdivision)
     .execute(pool)
     .await;
 

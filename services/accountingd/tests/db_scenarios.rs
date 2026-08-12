@@ -38,6 +38,18 @@ fn uniq(prefix: &str) -> String {
     format!("{prefix}-{}", &Uuid::new_v4().simple().to_string()[..12])
 }
 
+/// A realistically shaped MaLo-ID: **11 digits, no separators** (BDEW).
+///
+/// `uniq("MALO")` produces a hyphenated string, which is fine as an opaque key
+/// but wrong for anything that parses the identifier — the free-text payment
+/// resolver compares whole normalised tokens, and a real MaLo-ID has nothing to
+/// normalise away.
+fn uniq_malo() -> String {
+    let hex = Uuid::new_v4().simple().to_string();
+    let digits: String = hex.chars().filter(char::is_ascii_digit).take(10).collect();
+    format!("5{digits:0<10}")
+}
+
 /// Duplicate CloudEvent delivery must book the receivable exactly once — the
 /// doubleentry idempotency key makes the redelivery a no-op returning the original.
 #[tokio::test]
@@ -1025,6 +1037,11 @@ async fn a_mandate_makes_the_account_findable_by_iban() {
             mandatsref: uniq("MND"),
             sequence_type: "FRST".to_owned(),
             signed_at: "2026-01-15".to_owned(),
+            debtor_address: accountingd::sepa::AddressParts {
+                town: Some("Berlin".to_owned()),
+                country: Some("DE".to_owned()),
+                ..Default::default()
+            },
         },
     )
     .await
@@ -1090,6 +1107,7 @@ async fn changing_the_iban_rekeys_the_lookup_hash() {
             mandatsref: None,
             abschlag_ct: None,
             billing_day: None,
+            address: Default::default(),
         },
     )
     .await
@@ -1122,6 +1140,7 @@ async fn changing_the_iban_rekeys_the_lookup_hash() {
             mandatsref: None,
             abschlag_ct: Some(9_900),
             billing_day: None,
+            address: Default::default(),
         },
     )
     .await
@@ -1203,4 +1222,643 @@ async fn settlement_counts_direct_payments_and_chargebacks() {
 
     // The old formula refunded 100.00 EUR here.
     assert_eq!(s.rechnung_sum + s.abschlag_sum, 10_000);
+}
+
+// ── SEPA collection lifecycle: pain.008 → pain.002 / camt → pain.007 ─────────
+
+/// Build a one-mandate collection run and persist it with its entries.
+///
+/// Returns `(run_id, entry, malo)`. The mandate carries a structured address so
+/// the emitted pain.008 also exercises the `PstlAdr` path end to end.
+async fn seed_collection(
+    pool: &PgPool,
+    collection_date: time::Date,
+    amount_ct: i64,
+) -> (Uuid, pg::CollectionEntryRow, String) {
+    let malo = uniq("MALO");
+    let mandatsref = uniq("MND");
+    pg::create_mandate(
+        pool,
+        TENANT,
+        None,
+        pg::CreateMandateRequest {
+            malo_id: malo.clone(),
+            lf_mp_id: "LF1".to_owned(),
+            iban: "DE89370400440532013000".to_owned(),
+            bic: Some("COBADEFFXXX".to_owned()),
+            kontoinhaber: Some("Erika Mustermann".to_owned()),
+            mandatsref: mandatsref.clone(),
+            sequence_type: "RCUR".to_owned(),
+            signed_at: "2024-01-15".to_owned(),
+            debtor_address: accountingd::sepa::AddressParts {
+                town: Some("Hamburg".to_owned()),
+                country: Some("DE".to_owned()),
+                street: Some("Deichstrasse".to_owned()),
+                building_number: Some("7".to_owned()),
+                post_code: Some("20459".to_owned()),
+                country_subdivision: None,
+            },
+        },
+    )
+    .await
+    .unwrap();
+
+    let mandates = pg::list_active_mandates(pool, TENANT, 100).await.unwrap();
+    let mandate = mandates
+        .into_iter()
+        .find(|m| m.mandatsref == mandatsref)
+        .expect("the mandate we just created");
+    let creditor_address = accountingd::sepa::AddressParts {
+        town: Some("Berlin".to_owned()),
+        country: Some("DE".to_owned()),
+        ..Default::default()
+    };
+    let run = accountingd::sepa::build_pain_008(
+        &accountingd::sepa::CreditorIdentity {
+            iban: "DE89370400440532013000",
+            name: "Test Energie GmbH",
+            creditor_id: "DE98ZZZ09999999999",
+            address: Some(&creditor_address),
+        },
+        collection_date,
+        &[(&mandate, amount_ct)],
+        Default::default(),
+    )
+    .expect("pain.008 builds");
+    assert!(
+        run.xml.contains("<TwnNm>Hamburg</TwnNm>"),
+        "the mandate's structured address reaches the wire"
+    );
+
+    let run_id = pg::persist_sepa_collection(pool, TENANT, collection_date, &run)
+        .await
+        .unwrap();
+    let entry = pg::find_collection_entry_by_e2e(pool, TENANT, &mandatsref)
+        .await
+        .unwrap()
+        .expect("the collected entry is persisted");
+    (run_id, entry, malo)
+}
+
+/// The run row is the archive; the entry rows are what attributes a bank reply.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn collection_run_persists_its_entries() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let d = date!(2026 - 07 - 25);
+    let (run_id, entry, malo) = seed_collection(&pool, d, 12_000).await;
+
+    assert_eq!(entry.run_id, run_id);
+    assert_eq!(entry.amount_ct, 12_000);
+    assert_eq!(entry.status, "SUBMITTED");
+    assert_eq!(entry.sequence_type, "RCUR");
+    assert_eq!(entry.collection_date, d);
+    assert_eq!(entry.msg_id, "DD-2026-07-25");
+    assert_eq!(entry.payment_info_id, "DD-2026-07-25-RCUR");
+    assert_eq!(entry.malo_id.as_deref(), Some(malo.as_str()));
+    // The IBAN is reached through the mandate, not duplicated onto the entry,
+    // so GDPR erasure keeps working from one place.
+    assert_eq!(entry.debtor_iban.as_deref(), Some("DE89370400440532013000"));
+    assert_eq!(entry.mandate_signed_at, Some(date!(2024 - 01 - 15)));
+
+    let listed = pg::list_collection_entries(&pool, TENANT, Some("SUBMITTED"), Some(&malo), 10)
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].entry_id, entry.entry_id);
+}
+
+/// Regenerating a run for the same collection date replaces its entries.
+///
+/// A stale entry from a superseded batch would claim a collection that is not in
+/// the file the bank received — and would then be reversible.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn regenerating_a_run_replaces_its_entries() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let d = date!(2026 - 08 - 10);
+    let (run_id, entry, _malo) = seed_collection(&pool, d, 5_000).await;
+
+    // A second mandate collected on the same date supersedes the first run.
+    let (run_id2, entry2, _malo2) = seed_collection(&pool, d, 7_000).await;
+    assert_eq!(run_id, run_id2, "one run per (tenant, collection_date)");
+
+    let rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM sepa_collection_entries WHERE run_id = $1")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, 1, "the superseded batch's entries are gone");
+    assert_eq!(entry2.amount_ct, 7_000);
+    assert!(
+        pg::fetch_collection_entry(&pool, entry.entry_id, TENANT)
+            .await
+            .unwrap()
+            .is_none(),
+        "the first run's entry no longer exists"
+    );
+}
+
+/// A status only advances out of `SUBMITTED` once.
+///
+/// A settled collection that is later returned is a separate R-transaction; a
+/// second pain.002 for an entry that already moved on must not rewrite history.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn collection_status_advances_once() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let (_run_id, entry, _malo) = seed_collection(&pool, date!(2026 - 09 - 05), 9_900).await;
+
+    assert!(
+        pg::set_collection_entry_status(&pool, entry.entry_id, "SETTLED", None)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !pg::set_collection_entry_status(&pool, entry.entry_id, "REJECTED", Some("AC01"))
+            .await
+            .unwrap(),
+        "a settled collection is not re-opened by a second report"
+    );
+    let after = pg::fetch_collection_entry(&pool, entry.entry_id, TENANT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.status, "SETTLED");
+}
+
+/// A settled collection can be reversed exactly once, and the reversal restates
+/// the original transaction reference from stored data.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn reversal_is_recorded_once_per_collection() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let d = date!(2026 - 10 - 02);
+    let (_run_id, entry, malo) = seed_collection(&pool, d, 12_000).await;
+    pg::set_collection_entry_status(&pool, entry.entry_id, "SETTLED", None)
+        .await
+        .unwrap();
+    let entry = pg::fetch_collection_entry(&pool, entry.entry_id, TENANT)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let creditor = accountingd::sepa::CreditorIdentity {
+        iban: "DE89370400440532013000",
+        name: "Test Energie GmbH",
+        creditor_id: "DE98ZZZ09999999999",
+        address: None,
+    };
+    let reversal = accountingd::sepa::build_pain_007(
+        &creditor,
+        &[accountingd::sepa::ReversalRequest {
+            original_msg_id: &entry.msg_id,
+            original_payment_info_id: &entry.payment_info_id,
+            original_end_to_end_id: &entry.end_to_end_id,
+            original_amount_ct: entry.amount_ct,
+            reversed_amount_ct: None,
+            reason: accountingd::sepa::ReversalReason::Am05,
+            mandate_ref: &entry.mandatsref,
+            mandate_signed_at: entry.mandate_signed_at.unwrap(),
+            collection_date: entry.collection_date,
+            sequence_type: &entry.sequence_type,
+            debtor_name: entry.debtor_name.as_deref().unwrap(),
+            debtor_iban: entry.debtor_iban.as_deref().unwrap(),
+            debtor_bic: entry.debtor_bic.as_deref(),
+        }],
+        Default::default(),
+    )
+    .expect("pain.007 builds from stored data alone");
+    assert!(reversal.xml.contains(&entry.msg_id));
+    assert!(reversal.xml.contains(&entry.mandatsref));
+
+    // The compensating entry re-opens the receivable: the money leaves the bank
+    // account again, so what the collection discharged is owed once more.
+    let ledger_id = pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        "SEPA_STORNO",
+        entry.amount_ct,
+        &format!("sepa-reversal:{}", entry.entry_id),
+        None,
+        Some(&entry.end_to_end_id),
+        d,
+        d,
+        Some("pain.007 Storno"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let id = pg::record_sepa_reversal(
+        &pool,
+        TENANT,
+        &entry,
+        &reversal,
+        entry.amount_ct,
+        "AM05",
+        Some(ledger_id),
+        Some("operator@example.test"),
+    )
+    .await
+    .unwrap();
+    assert!(!id.is_nil());
+
+    // The unique index on collection_entry_id is what stops a second request
+    // refunding the same collection twice.
+    assert!(
+        pg::record_sepa_reversal(
+            &pool,
+            TENANT,
+            &entry,
+            &reversal,
+            entry.amount_ct,
+            "AM05",
+            Some(ledger_id),
+            None,
+        )
+        .await
+        .is_err(),
+        "a second reversal of the same collection must be refused"
+    );
+
+    assert_eq!(
+        ledger.balance_ct("LF1", &malo).await.unwrap(),
+        12_000,
+        "the reversal re-opens the receivable"
+    );
+}
+
+/// `bank_import_log` keeps the bank's own batch attribution.
+///
+/// `Btch/PmtInfId` is what matches a booked collection back to the group that
+/// was submitted, without guessing from amounts and dates.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn bank_import_records_the_batch_attribution() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let txn = uniq("acctsvcr");
+    pg::record_bank_import(
+        &pool,
+        TENANT,
+        &txn,
+        12_000,
+        Some("DE89370400440532013000"),
+        date!(2026 - 07 - 27),
+        None,
+        Some("DD-2026-07-25-RCUR"),
+        Some("MND-000123"),
+    )
+    .await
+    .unwrap();
+
+    let (pmt_inf, e2e): (Option<String>, Option<String>) = sqlx::query_as(
+        "SELECT payment_info_id, end_to_end_id FROM bank_import_log \
+         WHERE tenant = $1 AND bank_transaction_id = $2",
+    )
+    .bind(TENANT)
+    .bind(&txn)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(pmt_inf.as_deref(), Some("DD-2026-07-25-RCUR"));
+    assert_eq!(e2e.as_deref(), Some("MND-000123"));
+}
+
+/// An account's postal address round-trips through the update path.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn account_postal_address_round_trips() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+    pg::update_account_tenanted(
+        &pool,
+        &malo,
+        "LF1",
+        TENANT,
+        None,
+        pg::UpdateAccountRequest {
+            iban: None,
+            mandatsref: None,
+            abschlag_ct: None,
+            billing_day: None,
+            address: accountingd::sepa::AddressParts {
+                town: Some("Leipzig".to_owned()),
+                country: Some("DE".to_owned()),
+                street: Some("Karl-Liebknecht-Strasse".to_owned()),
+                building_number: Some("3".to_owned()),
+                post_code: Some("04107".to_owned()),
+                country_subdivision: Some("SN".to_owned()),
+            },
+        },
+    )
+    .await
+    .unwrap();
+
+    let acct = pg::fetch_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap()
+        .unwrap();
+    let address = acct.postal_address();
+    assert_eq!(address.town.as_deref(), Some("Leipzig"));
+    assert_eq!(address.country.as_deref(), Some("DE"));
+    let postal = address
+        .to_postal_address()
+        .expect("a complete address builds")
+        .expect("some address");
+    assert_eq!(postal.town_name(), "Leipzig");
+    assert_eq!(postal.country(), "DE");
+
+    // An omitted part leaves the stored value alone — the same COALESCE shape
+    // every other field on this request has.
+    pg::update_account_tenanted(
+        &pool,
+        &malo,
+        "LF1",
+        TENANT,
+        None,
+        pg::UpdateAccountRequest {
+            iban: None,
+            mandatsref: None,
+            abschlag_ct: Some(4_200),
+            billing_day: None,
+            address: Default::default(),
+        },
+    )
+    .await
+    .unwrap();
+    let acct = pg::fetch_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(acct.abschlag_ct, 4_200);
+    assert_eq!(
+        acct.postal_address().town.as_deref(),
+        Some("Leipzig"),
+        "an unrelated update must not erase the address"
+    );
+}
+
+// ── Resolving an incoming payment to an account ──────────────────────────────
+
+/// The counterparty IBAN is the strongest evidence and is used first.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn payment_resolves_by_counterparty_iban() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let key = accountingd::ledger::iban_hash_key("test-secret");
+    let iban = "DE89370400440532013000";
+    let malo = uniq("MALO");
+    pg::create_mandate(
+        &pool,
+        TENANT,
+        Some(&key),
+        pg::CreateMandateRequest {
+            malo_id: malo.clone(),
+            lf_mp_id: "LF1".to_owned(),
+            iban: iban.to_owned(),
+            bic: None,
+            kontoinhaber: Some("Erika Mustermann".to_owned()),
+            mandatsref: uniq("MND"),
+            sequence_type: "FRST".to_owned(),
+            signed_at: "2026-01-15".to_owned(),
+            debtor_address: Default::default(),
+        },
+    )
+    .await
+    .unwrap();
+
+    let hit = pg::resolve_account_for_payment(
+        &pool,
+        TENANT,
+        pg::PaymentClues {
+            iban_hash: Some(&accountingd::ledger::iban_hash(Some(&key), iban)),
+            end_to_end_id: None,
+            remittance: None,
+        },
+    )
+    .await
+    .unwrap()
+    .expect("the mandate's IBAN resolves the account");
+    assert_eq!(hit.malo_id, malo);
+    assert_eq!(hit.matched_by, "iban");
+}
+
+/// A payment from an account nobody has on file still books, when the reference
+/// names the customer.
+///
+/// This is the single biggest reconciliation gap in a retail ledger: a customer
+/// paying from a spouse's, an employer's, or a second account produces a
+/// transaction with an unknown IBAN. Matching on the IBAN alone loses it, and
+/// the receivable stays open against someone who has already paid.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn payment_from_a_stranger_iban_resolves_by_reference() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let key = accountingd::ledger::iban_hash_key("test-secret");
+    let malo = uniq_malo();
+    let mandatsref = uniq("MND");
+    pg::create_mandate(
+        &pool,
+        TENANT,
+        Some(&key),
+        pg::CreateMandateRequest {
+            malo_id: malo.clone(),
+            lf_mp_id: "LF1".to_owned(),
+            iban: "DE89370400440532013000".to_owned(),
+            bic: None,
+            kontoinhaber: Some("Erika Mustermann".to_owned()),
+            mandatsref: mandatsref.clone(),
+            sequence_type: "RCUR".to_owned(),
+            signed_at: "2026-01-15".to_owned(),
+            debtor_address: Default::default(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // The spouse's account — a valid IBAN that hashes to nothing on file.
+    let stranger = accountingd::ledger::iban_hash(Some(&key), "DE02120300000000202051");
+    let hit = pg::resolve_account_for_payment(
+        &pool,
+        TENANT,
+        pg::PaymentClues {
+            iban_hash: Some(&stranger),
+            end_to_end_id: None,
+            remittance: Some(&format!("Abschlag Strom {mandatsref} Danke")),
+        },
+    )
+    .await
+    .unwrap()
+    .expect("the Mandatsreferenz in the reference identifies the account");
+    assert_eq!(hit.malo_id, malo);
+    assert_eq!(hit.matched_by, "remittance_token");
+
+    // The MaLo-ID works the same way.
+    let hit = pg::resolve_account_for_payment(
+        &pool,
+        TENANT,
+        pg::PaymentClues {
+            iban_hash: Some(&stranger),
+            end_to_end_id: None,
+            remittance: Some(&format!("Zahlung fuer {malo}")),
+        },
+    )
+    .await
+    .unwrap()
+    .expect("the MaLo-ID in the reference identifies the account");
+    assert_eq!(hit.malo_id, malo);
+}
+
+/// The free-text rung matches whole tokens only, never substrings.
+///
+/// A `LIKE '%…%'` scan would match a Mandatsreferenz that merely happens to be a
+/// prefix of another and book a stranger's payment onto a customer's account.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn reference_matching_is_exact_token_not_substring() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let mandatsref = uniq("MND");
+    pg::create_mandate(
+        &pool,
+        TENANT,
+        None,
+        pg::CreateMandateRequest {
+            malo_id: malo.clone(),
+            lf_mp_id: "LF1".to_owned(),
+            iban: "DE89370400440532013000".to_owned(),
+            bic: None,
+            kontoinhaber: None,
+            mandatsref: mandatsref.clone(),
+            sequence_type: "RCUR".to_owned(),
+            signed_at: "2026-01-15".to_owned(),
+            debtor_address: Default::default(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // A longer reference that *contains* the stored one as a prefix belongs to
+    // somebody else. A substring match would book this onto the wrong account.
+    let longer = format!("{mandatsref}9");
+    assert!(
+        pg::resolve_account_for_payment(
+            &pool,
+            TENANT,
+            pg::PaymentClues {
+                iban_hash: None,
+                end_to_end_id: None,
+                remittance: Some(&format!("Zahlung {longer}")),
+            },
+        )
+        .await
+        .unwrap()
+        .is_none(),
+        "a reference that merely contains the stored one must not match"
+    );
+}
+
+/// A reference naming two customers is not guessed at.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn ambiguous_reference_resolves_to_nothing() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let a = uniq_malo();
+    let b = uniq_malo();
+    for malo in [&a, &b] {
+        pg::upsert_account(&pool, malo, "LF1", TENANT)
+            .await
+            .unwrap();
+    }
+    assert!(
+        pg::resolve_account_for_payment(
+            &pool,
+            TENANT,
+            pg::PaymentClues {
+                iban_hash: None,
+                end_to_end_id: None,
+                remittance: Some(&format!("Sammelzahlung {a} {b}")),
+            },
+        )
+        .await
+        .unwrap()
+        .is_none(),
+        "two accounts named means neither can be booked"
+    );
+}
+
+/// A returned collection is attributed by the EndToEndId the bank echoes back,
+/// even when the debtor's stored IBAN has since changed.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn return_resolves_by_end_to_end_id() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let d = date!(2026 - 11 - 20);
+    let (_run_id, entry, malo) = seed_collection(&pool, d, 8_800).await;
+
+    let hit = pg::resolve_account_for_payment(
+        &pool,
+        TENANT,
+        pg::PaymentClues {
+            // The bank reported no counterparty IBAN at all.
+            iban_hash: None,
+            end_to_end_id: Some(&entry.end_to_end_id),
+            remittance: None,
+        },
+    )
+    .await
+    .unwrap()
+    .expect("the collection's EndToEndId identifies the account");
+    assert_eq!(hit.malo_id, malo);
+    assert_eq!(hit.matched_by, "end_to_end_id");
+}
+
+/// Tokenisation keeps whole identifiers and the separator-stripped whole text.
+#[test]
+fn remittance_tokens_cover_both_spellings() {
+    let tokens = pg::remittance_tokens("RF18 5390 0754 7034");
+    assert!(
+        tokens.contains(&"RF18539007547034".to_owned()),
+        "an RF reference keyed in groups must also be looked up whole: {tokens:?}"
+    );
+    // Fragments under four characters carry no identifying power.
+    assert!(!tokens.iter().any(|t| t.len() < 4));
+
+    // The two-word run is what matches a Mandatsreferenz stored as `MND-000123`.
+    let tokens = pg::remittance_tokens("Abschlag 07/2026 MND-000123, danke!");
+    assert!(tokens.contains(&"MND000123".to_owned()), "{tokens:?}");
+    assert!(tokens.contains(&"000123".to_owned()));
+    assert!(tokens.contains(&"ABSCHLAG".to_owned()));
+    // Runs longer than four words are sentences, not identifiers.
+    assert!(!tokens.contains(&"ABSCHLAG072026MND000123DANKE".to_owned()));
 }

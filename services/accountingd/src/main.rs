@@ -153,6 +153,19 @@ impl Daemon for Accountingd {
                 "/api/v1/payments/import/camt054",
                 post(handlers::import_payments_camt054),
             )
+            // camt.053 end-of-day statement — same booking rules, plus the
+            // bank's own closing balance for reconciliation.
+            .route(
+                "/api/v1/payments/import/camt053",
+                post(handlers::import_payments_camt053),
+            )
+            // camt.052 intraday report — the door for a bank that reports
+            // intraday as camt.052 rather than camt.054. Only booked entries
+            // post; the provisional ones are reported.
+            .route(
+                "/api/v1/payments/import/camt052",
+                post(handlers::import_payments_camt052),
+            )
             // ── Offene Posten ──────────────────────────────────────────────────────
             .route(
                 "/api/v1/accounts/{malo_id}/business-partner",
@@ -193,6 +206,18 @@ impl Daemon for Accountingd {
                 get(handlers::get_mandate).delete(handlers::delete_mandate),
             )
             .route("/api/v1/sepa/run", post(handlers::run_sepa))
+            // What a collection run collected, and where each entry stands —
+            // the list a reversal is chosen from.
+            .route(
+                "/api/v1/sepa/collections/{run_id}/entries",
+                get(handlers::get_collection_entries),
+            )
+            // pain.002 Payment Status Report — applies to whatever the bank's
+            // references point at (pain.001 payouts, pain.008 collections),
+            // including the Verification of Payee outcome.
+            .route("/api/v1/sepa/pain002", post(handlers::import_pain002))
+            // pain.007 reversal — the creditor giving a settled collection back.
+            .route("/api/v1/sepa/reversals", post(handlers::post_sepa_reversal))
             // ── §25 EEG 2023 — SEPA Credit Transfer payout pipeline ───────────────
             // GET  /api/v1/eeg/payouts             — list payout orders (?status=PDNG|ACCP|RJCT|CANC)
             // GET  /api/v1/eeg/payouts/{id}        — single order with pain.001 XML
@@ -294,6 +319,8 @@ impl Daemon for Accountingd {
             creditor_iban: cfg.creditor_iban.clone(),
             creditor_name: cfg.creditor_name.clone(),
             creditor_id: cfg.creditor_id.clone(),
+            creditor_address: cfg.creditor_address.clone(),
+            iban_key: iban_hash_key,
             pain008_schema,
         });
         let app = app.merge(mcp_server::router(mcp_state, ct.clone()));
@@ -509,10 +536,14 @@ impl Daemon for Accountingd {
                                 continue;
                             };
 
-                            let run = match accountingd::sepa::build_pain_008(
-                                creditor_iban,
-                                creditor_name,
+                            let creditor = accountingd::sepa::CreditorIdentity {
+                                iban: creditor_iban,
+                                name: creditor_name,
                                 creditor_id,
+                                address: Some(&cfg_sepa.creditor_address),
+                            };
+                            let run = match accountingd::sepa::build_pain_008(
+                                &creditor,
                                 target_date,
                                 &entries,
                                 pain008_schema,
@@ -537,9 +568,7 @@ impl Daemon for Accountingd {
                                     &pool_sepa,
                                     &cfg_sepa.tenant,
                                     target_date,
-                                    &batch.xml,
-                                    batch.total_ct,
-                                    batch.entry_count,
+                                    batch,
                                 )
                                 .await
                                 {

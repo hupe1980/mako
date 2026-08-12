@@ -108,8 +108,35 @@ pub struct AccountRow {
     pub abschlag_ct: i64,
     pub billing_day: i16,
     pub balance_ct: i64,
+    /// `PstlAdr` parts — see [`AccountRow::postal_address`].
+    pub addr_town: Option<String>,
+    pub addr_country: Option<String>,
+    pub addr_street: Option<String>,
+    pub addr_building_number: Option<String>,
+    pub addr_post_code: Option<String>,
+    pub addr_country_subdivision: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
+}
+
+impl AccountRow {
+    /// This counterparty's postal address.
+    ///
+    /// `Cdtr/PstlAdr` when accountingd pays the account (EEG Vergütung, a
+    /// Jahresabschluss-Erstattung), and the fallback for `Dbtr/PstlAdr` when a
+    /// mandate carries none. Mandatory from the EPC structured-address cut-over
+    /// on 15 November 2026; until then an empty set of parts emits no `PstlAdr`.
+    #[must_use]
+    pub fn postal_address(&self) -> crate::sepa::AddressParts {
+        crate::sepa::AddressParts {
+            town: self.addr_town.clone(),
+            country: self.addr_country.clone(),
+            street: self.addr_street.clone(),
+            building_number: self.addr_building_number.clone(),
+            post_code: self.addr_post_code.clone(),
+            country_subdivision: self.addr_country_subdivision.clone(),
+        }
+    }
 }
 
 pub async fn upsert_account(
@@ -170,6 +197,30 @@ pub async fn fetch_account_by_id(
         .fetch_optional(pool)
         .await
         .context("fetch_account_by_id")
+}
+
+/// Record the account's BO4E Sparte, learned from a billing CloudEvent.
+///
+/// Written only when it is not already known or when it changed: a
+/// Sparte-switch is real (a customer taking gas as well), but rewriting the
+/// column on every invoice would churn `updated_at` for nothing.
+pub async fn set_account_sparte(
+    executor: impl sqlx::PgExecutor<'_>,
+    account_id: Uuid,
+    tenant: &str,
+    sparte: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE accounts SET sparte = $3, updated_at = now() \
+         WHERE account_id = $1 AND tenant = $2 AND sparte IS DISTINCT FROM $3",
+    )
+    .bind(account_id)
+    .bind(tenant)
+    .bind(sparte)
+    .execute(executor)
+    .await
+    .context("set_account_sparte")?;
+    Ok(())
 }
 
 /// Link an account to its business partner (vertragd `kunden_nr`).
@@ -233,6 +284,10 @@ pub struct UpdateAccountRequest {
     pub mandatsref: Option<String>,
     pub abschlag_ct: Option<i64>,
     pub billing_day: Option<i16>,
+    /// Postal address (`PstlAdr`). Each part is `COALESCE`d, so an omitted part
+    /// leaves the stored value alone — the same shape as every other field here.
+    #[serde(default)]
+    pub address: crate::sepa::AddressParts,
 }
 
 /// The lookup hash written alongside a new `accounts.iban`. `None` when the
@@ -257,6 +312,12 @@ pub async fn update_account(
               mandatsref  = COALESCE($4, mandatsref),
               abschlag_ct = COALESCE($5, abschlag_ct),
               billing_day = COALESCE($6, billing_day),
+              addr_town            = COALESCE($8,  addr_town),
+              addr_country         = COALESCE($9,  addr_country),
+              addr_street          = COALESCE($10, addr_street),
+              addr_building_number = COALESCE($11, addr_building_number),
+              addr_post_code       = COALESCE($12, addr_post_code),
+              addr_country_subdivision = COALESCE($13, addr_country_subdivision),
               updated_at  = now()
           WHERE malo_id = $1 AND lf_mp_id = $2",
     )
@@ -267,6 +328,12 @@ pub async fn update_account(
     .bind(req.abschlag_ct)
     .bind(req.billing_day)
     .bind(iban_hash)
+    .bind(req.address.town)
+    .bind(req.address.country)
+    .bind(req.address.street)
+    .bind(req.address.building_number)
+    .bind(req.address.post_code)
+    .bind(req.address.country_subdivision)
     .execute(pool)
     .await
     .context("update_account")?;
@@ -291,6 +358,12 @@ pub async fn update_account_tenanted(
               mandatsref  = COALESCE($5, mandatsref),
               abschlag_ct = COALESCE($6, abschlag_ct),
               billing_day = COALESCE($7, billing_day),
+              addr_town            = COALESCE($9,  addr_town),
+              addr_country         = COALESCE($10, addr_country),
+              addr_street          = COALESCE($11, addr_street),
+              addr_building_number = COALESCE($12, addr_building_number),
+              addr_post_code       = COALESCE($13, addr_post_code),
+              addr_country_subdivision = COALESCE($14, addr_country_subdivision),
               updated_at  = now()
           WHERE malo_id = $1 AND lf_mp_id = $2 AND tenant = $3",
     )
@@ -302,6 +375,12 @@ pub async fn update_account_tenanted(
     .bind(req.abschlag_ct)
     .bind(req.billing_day)
     .bind(iban_hash)
+    .bind(req.address.town)
+    .bind(req.address.country)
+    .bind(req.address.street)
+    .bind(req.address.building_number)
+    .bind(req.address.post_code)
+    .bind(req.address.country_subdivision)
     .execute(executor)
     .await
     .context("update_account_tenanted")?
@@ -364,37 +443,540 @@ pub async fn record_jahresabschluss(
     Ok(())
 }
 
-/// Persist a SEPA pain.008 batch XML for audit and replay.
+/// Persist a SEPA pain.008 batch — the run row **and** what it collected.
 ///
-/// Inserts into `sepa_collection_runs`. If a run already exists for the same
-/// `(tenant, collection_date)`, returns that run's ID (idempotent).
+/// Inserts into `sepa_collection_runs` and one `sepa_collection_entries` row per
+/// mandate, in one transaction. If a run already exists for the same
+/// `(tenant, collection_date)` it is updated and its entries replaced, so a
+/// regenerated batch cannot leave a stale entry claiming to have been
+/// collected. Returns the run's ID.
+///
+/// The entry rows are what later attributes a bank reply: a pain.002 rejection
+/// names an `EndToEndId`, a camt booking names a `PmtInfId` in its `Btch` block,
+/// and a pain.007 reversal must restate the original amount and mandate exactly
+/// as submitted.
 pub async fn persist_sepa_collection(
     pool: &PgPool,
     tenant: &str,
     collection_date: time::Date,
-    pain008_xml: &str,
-    total_ct: i64,
-    mandate_count: usize,
+    run: &crate::sepa::Pain008Run,
 ) -> anyhow::Result<Uuid> {
+    let mut tx = pool
+        .begin()
+        .await
+        .context("persist_sepa_collection: begin")?;
     let row = sqlx::query(
         r"INSERT INTO sepa_collection_runs
-              (tenant, collection_date, pain008_xml, total_ct, mandate_count)
-          VALUES ($1, $2, $3, $4, $5)
+              (tenant, collection_date, msg_id, pain008_xml, total_ct, mandate_count)
+          VALUES ($1, $2, $3, $4, $5, $6)
           ON CONFLICT (tenant, collection_date) DO UPDATE
-          SET pain008_xml    = EXCLUDED.pain008_xml,
+          SET msg_id         = EXCLUDED.msg_id,
+              pain008_xml    = EXCLUDED.pain008_xml,
               total_ct       = EXCLUDED.total_ct,
               mandate_count  = EXCLUDED.mandate_count
           RETURNING run_id",
     )
     .bind(tenant)
     .bind(collection_date)
-    .bind(pain008_xml)
-    .bind(total_ct)
-    .bind(mandate_count as i32)
-    .fetch_one(pool)
+    .bind(&run.msg_id)
+    .bind(&run.xml)
+    .bind(run.total_ct)
+    .bind(i32::try_from(run.entry_count).unwrap_or(i32::MAX))
+    .fetch_one(&mut *tx)
     .await
     .context("persist_sepa_collection")?;
-    Ok(row.try_get("run_id")?)
+    let run_id: Uuid = row.try_get("run_id")?;
+
+    sqlx::query("DELETE FROM sepa_collection_entries WHERE run_id = $1")
+        .bind(run_id)
+        .execute(&mut *tx)
+        .await
+        .context("persist_sepa_collection: clear entries")?;
+
+    for entry in &run.entries {
+        let inserted = sqlx::query(
+            r"INSERT INTO sepa_collection_entries
+                  (run_id, tenant, mandate_id, account_id, mandatsref, end_to_end_id,
+                   payment_info_id, sequence_type, amount_ct)
+              SELECT $1, $2, sm.mandate_id, sm.account_id, $4, $5, $6, $7, $8
+              FROM sepa_mandates sm
+              WHERE sm.mandate_id = $3",
+        )
+        .bind(run_id)
+        .bind(tenant)
+        .bind(entry.mandate_id)
+        .bind(&entry.mandatsref)
+        .bind(&entry.mandatsref) // EndToEndId == Mandatsreferenz
+        .bind(&entry.payment_info_id)
+        .bind(&entry.sequence_type)
+        .bind(entry.amount_ct)
+        .execute(&mut *tx)
+        .await
+        .context("persist_sepa_collection: entry")?
+        .rows_affected();
+        // The mandate was read moments ago to build the file, so this only
+        // happens if it was deleted in between. Say so rather than leaving a
+        // collection in the XML with no row to attribute a bank reply to.
+        if inserted == 0 {
+            tracing::warn!(
+                mandate_id = %entry.mandate_id,
+                mandatsref = %entry.mandatsref,
+                "accountingd: collected mandate vanished between build and persist — \
+                 its bank replies will be unattributable"
+            );
+        }
+    }
+
+    tx.commit()
+        .await
+        .context("persist_sepa_collection: commit")?;
+    Ok(run_id)
+}
+
+/// One collected mandate, joined with everything a pain.007 reversal restates.
+///
+/// The IBAN, account holder and signature date come from `sepa_mandates` rather
+/// than being duplicated on the entry row, so GDPR Art. 17 erasure keeps working
+/// from one place — and a reversal for an erased mandate is correctly
+/// impossible rather than built from a stale copy.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct CollectionEntryRow {
+    pub entry_id: Uuid,
+    pub run_id: Uuid,
+    pub tenant: String,
+    pub mandate_id: Option<Uuid>,
+    pub account_id: Option<Uuid>,
+    pub mandatsref: String,
+    pub end_to_end_id: String,
+    pub payment_info_id: String,
+    pub sequence_type: String,
+    pub amount_ct: i64,
+    pub status: String,
+    pub status_reason: Option<String>,
+    /// From `sepa_collection_runs`.
+    pub msg_id: String,
+    pub collection_date: Date,
+    /// From `sepa_mandates` — `None` once the mandate row is gone.
+    pub debtor_iban: Option<String>,
+    pub debtor_bic: Option<String>,
+    pub debtor_name: Option<String>,
+    pub mandate_signed_at: Option<Date>,
+    pub malo_id: Option<String>,
+    pub lf_mp_id: Option<String>,
+}
+
+const COLLECTION_ENTRY_SELECT: &str = r"
+    SELECT ce.entry_id, ce.run_id, ce.tenant, ce.mandate_id, ce.account_id,
+           ce.mandatsref, ce.end_to_end_id, ce.payment_info_id, ce.sequence_type,
+           ce.amount_ct, ce.status, ce.status_reason,
+           r.msg_id, r.collection_date,
+           sm.iban          AS debtor_iban,
+           sm.bic           AS debtor_bic,
+           sm.kontoinhaber  AS debtor_name,
+           sm.signed_at     AS mandate_signed_at,
+           a.malo_id, a.lf_mp_id
+    FROM sepa_collection_entries ce
+    JOIN sepa_collection_runs r ON r.run_id = ce.run_id
+    LEFT JOIN sepa_mandates sm  ON sm.mandate_id = ce.mandate_id
+    LEFT JOIN accounts a        ON a.account_id = ce.account_id
+";
+
+/// Fetch one collected entry by its id.
+pub async fn fetch_collection_entry(
+    pool: &PgPool,
+    entry_id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<Option<CollectionEntryRow>> {
+    sqlx::query_as::<_, CollectionEntryRow>(&format!(
+        "{COLLECTION_ENTRY_SELECT} WHERE ce.entry_id = $1 AND ce.tenant = $2"
+    ))
+    .bind(entry_id)
+    .bind(tenant)
+    .fetch_optional(pool)
+    .await
+    .context("fetch_collection_entry")
+}
+
+/// Find the collected entry a bank reply refers to by its `EndToEndId`.
+///
+/// Newest first: the same Mandatsreferenz is reused every month, so a reply has
+/// to attach to the most recent collection that carried it.
+pub async fn find_collection_entry_by_e2e(
+    pool: &PgPool,
+    tenant: &str,
+    end_to_end_id: &str,
+) -> anyhow::Result<Option<CollectionEntryRow>> {
+    sqlx::query_as::<_, CollectionEntryRow>(&format!(
+        "{COLLECTION_ENTRY_SELECT} WHERE ce.tenant = $1 AND ce.end_to_end_id = $2 \
+         ORDER BY r.collection_date DESC LIMIT 1"
+    ))
+    .bind(tenant)
+    .bind(end_to_end_id)
+    .fetch_optional(pool)
+    .await
+    .context("find_collection_entry_by_e2e")
+}
+
+// ── Resolving an incoming payment to a customer account ──────────────────────
+
+/// The account an incoming bank transaction belongs to, and how it was found.
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountMatch {
+    pub account_id: Uuid,
+    pub malo_id: String,
+    pub lf_mp_id: String,
+    /// Which rung of the ladder matched — carried onto the CloudEvent so a
+    /// reconciliation agent can tell a bank-asserted match from an inferred one.
+    pub matched_by: &'static str,
+}
+
+/// Everything a bank transaction offers for identifying its payer.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PaymentClues<'a> {
+    /// The counterparty IBAN the bank reported, already hashed.
+    pub iban_hash: Option<&'a str>,
+    /// `EndToEndId` — for a collection accountingd sent, this is the
+    /// Mandatsreferenz coming straight back.
+    pub end_to_end_id: Option<&'a str>,
+    /// Verwendungszweck / `AddtlTxInf` — free text a human typed.
+    pub remittance: Option<&'a str>,
+}
+
+/// Resolve an incoming payment to the account that owes the money.
+///
+/// Matching on the counterparty IBAN alone is the single biggest reconciliation
+/// gap in a retail ledger: a customer paying from a spouse's account, an
+/// employer's, or a second account they never told anyone about produces a
+/// transaction with an IBAN nobody has on file. It books nowhere, and the
+/// receivable stays open against a customer who has already paid.
+///
+/// The ladder runs strongest-first, and every rung below the first is an
+/// *inference* — `matched_by` records which one, so a reconciliation agent can
+/// treat them differently:
+///
+/// | Rung | Evidence | Why it is trusted this much |
+/// |---|---|---|
+/// | `iban` | the bank says whose account it is | the payment instrument itself |
+/// | `end_to_end_id` | a reference accountingd generated and the bank echoed | machine-to-machine, no human typing |
+/// | `remittance_token` | an exact Mandatsreferenz or MaLo-ID inside the free text | a human copied it correctly |
+///
+/// The free-text rung is deliberately **exact-token**, never substring: the
+/// remittance is split on non-alphanumeric boundaries and the whole tokens are
+/// looked up against the unique indexes. A `LIKE '%…%'` scan would match a
+/// Mandatsreferenz that merely happens to be a prefix of another, and would
+/// book a stranger's payment onto a customer's account.
+pub async fn resolve_account_for_payment(
+    pool: &PgPool,
+    tenant: &str,
+    clues: PaymentClues<'_>,
+) -> anyhow::Result<Option<AccountMatch>> {
+    // ── 1. The counterparty IBAN, as the bank reported it ────────────────────
+    if let Some(hash) = clues.iban_hash {
+        let row = sqlx::query_as::<_, (Uuid, String, String)>(
+            "SELECT account_id, malo_id, lf_mp_id FROM accounts \
+             WHERE iban_hash = $1 AND tenant = $2 LIMIT 1",
+        )
+        .bind(hash)
+        .bind(tenant)
+        .fetch_optional(pool)
+        .await
+        .context("resolve_account_for_payment: iban")?;
+        if let Some((account_id, malo_id, lf_mp_id)) = row {
+            return Ok(Some(AccountMatch {
+                account_id,
+                malo_id,
+                lf_mp_id,
+                matched_by: "iban",
+            }));
+        }
+    }
+
+    // ── 2. The EndToEndId accountingd itself generated ───────────────────────
+    //
+    // A returned collection carries the Mandatsreferenz back verbatim, so this
+    // is exact — and it is the rung that catches a Rückläufer debited from an
+    // account whose IBAN has since changed.
+    if let Some(e2e) = clues.end_to_end_id.filter(|s| !s.trim().is_empty()) {
+        let row = sqlx::query_as::<_, (Uuid, String, String)>(
+            r"SELECT a.account_id, a.malo_id, a.lf_mp_id
+              FROM accounts a
+              WHERE a.tenant = $1
+                AND (a.account_id IN (SELECT account_id FROM sepa_collection_entries
+                                      WHERE tenant = $1 AND end_to_end_id = $2)
+                  OR a.account_id IN (SELECT account_id FROM sepa_mandates
+                                      WHERE tenant = $1 AND mandatsref = $2))
+              LIMIT 1",
+        )
+        .bind(tenant)
+        .bind(e2e.trim())
+        .fetch_optional(pool)
+        .await
+        .context("resolve_account_for_payment: end_to_end_id")?;
+        if let Some((account_id, malo_id, lf_mp_id)) = row {
+            return Ok(Some(AccountMatch {
+                account_id,
+                malo_id,
+                lf_mp_id,
+                matched_by: "end_to_end_id",
+            }));
+        }
+    }
+
+    // ── 3. An exact identifier a human typed into the Verwendungszweck ───────
+    let Some(text) = clues.remittance.filter(|s| !s.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let tokens = remittance_tokens(text);
+    if tokens.is_empty() {
+        return Ok(None);
+    }
+    let row = sqlx::query_as::<_, (Uuid, String, String)>(
+        r"SELECT DISTINCT a.account_id, a.malo_id, a.lf_mp_id
+          FROM accounts a
+          WHERE a.tenant = $1
+            AND (a.malo_id = ANY($2)
+              OR a.account_id IN (SELECT account_id FROM sepa_mandates
+                                  WHERE tenant = $1 AND mandatsref_norm = ANY($2)))
+          LIMIT 2",
+    )
+    .bind(tenant)
+    .bind(&tokens)
+    .fetch_all(pool)
+    .await
+    .context("resolve_account_for_payment: remittance")?;
+
+    // Two accounts matching means the text named two customers — a batch
+    // reference, or a token that is an identifier for one and noise for
+    // another. Booking either would be a guess.
+    match row.len() {
+        1 => {
+            let (account_id, malo_id, lf_mp_id) = row.into_iter().next().expect("len == 1");
+            Ok(Some(AccountMatch {
+                account_id,
+                malo_id,
+                lf_mp_id,
+                matched_by: "remittance_token",
+            }))
+        }
+        0 => Ok(None),
+        _ => {
+            tracing::warn!(
+                "accountingd: remittance text names more than one account — not guessing"
+            );
+            Ok(None)
+        }
+    }
+}
+
+/// The number of adjacent words a single identifier may have been broken into.
+///
+/// `MND-000123` splits into two, `RF18 5390 0754 7034` into four. Beyond that a
+/// run is a sentence, not an identifier, and every extra length multiplies the
+/// candidate list for nothing.
+const MAX_TOKEN_RUN: usize = 4;
+
+/// The minimum length a candidate must have to be worth looking up.
+///
+/// Below four characters a token carries no identifying power and only widens
+/// the lookup — `MND`, `Abs`, `07` match nothing anyone meant.
+const MIN_TOKEN_LEN: usize = 4;
+
+/// Split a Verwendungszweck into every whole identifier it could contain.
+///
+/// A customer keys an identifier back in however their bank's form lets them:
+/// `MND-000123`, `MND 000123`, `mnd000123`. Splitting on non-alphanumerics alone
+/// would produce `MND` and `000123` and match neither, so every **contiguous
+/// run** of up to four words is also joined and offered as a
+/// candidate. That is what makes `MND 000123` in the free text find the mandate
+/// stored as `MND-000123`, whose `mandatsref_norm` is `MND000123`.
+///
+/// The candidates are matched by **equality** against the normalised columns,
+/// never by `LIKE '%…%'`: a substring scan would match a Mandatsreferenz that
+/// merely happens to be a prefix of another and book a stranger's payment onto
+/// a customer's account.
+#[must_use]
+pub fn remittance_tokens(text: &str) -> Vec<String> {
+    let words: Vec<String> = text
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(str::to_ascii_uppercase)
+        .collect();
+
+    let mut out = Vec::new();
+    for start in 0..words.len() {
+        let mut joined = String::new();
+        for word in words.iter().skip(start).take(MAX_TOKEN_RUN) {
+            joined.push_str(word);
+            if joined.len() >= MIN_TOKEN_LEN {
+                out.push(joined.clone());
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// One collected mandate, flattened for a listing.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct CollectionEntrySummary {
+    pub entry_id: Uuid,
+    pub malo_id: Option<String>,
+    pub mandatsref: String,
+    pub end_to_end_id: String,
+    pub payment_info_id: String,
+    pub sequence_type: String,
+    pub amount_ct: i64,
+    pub status: String,
+    pub status_reason: Option<String>,
+    pub collection_date: Date,
+}
+
+/// Collections across all runs, newest first, optionally filtered.
+pub async fn list_collection_entries(
+    pool: &PgPool,
+    tenant: &str,
+    status: Option<&str>,
+    malo_id: Option<&str>,
+    limit: i64,
+) -> anyhow::Result<Vec<CollectionEntrySummary>> {
+    sqlx::query_as::<_, CollectionEntrySummary>(
+        r"SELECT ce.entry_id, a.malo_id, ce.mandatsref, ce.end_to_end_id,
+                 ce.payment_info_id, ce.sequence_type, ce.amount_ct,
+                 ce.status, ce.status_reason, r.collection_date
+          FROM sepa_collection_entries ce
+          JOIN sepa_collection_runs r ON r.run_id = ce.run_id
+          LEFT JOIN accounts a ON a.account_id = ce.account_id
+          WHERE ce.tenant = $1
+            AND ($2::text IS NULL OR ce.status = $2)
+            AND ($3::text IS NULL OR a.malo_id = $3)
+          ORDER BY r.collection_date DESC, ce.mandatsref
+          LIMIT $4",
+    )
+    .bind(tenant)
+    .bind(status)
+    .bind(malo_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("list_collection_entries")
+}
+
+/// Record the outcome the bank reported for a collected entry.
+///
+/// Only advances a `SUBMITTED` entry: a settled collection that is later
+/// returned is a separate R-transaction, and a second pain.002 for an entry that
+/// already moved on must not rewrite its history.
+pub async fn set_collection_entry_status(
+    executor: impl sqlx::PgExecutor<'_>,
+    entry_id: Uuid,
+    status: &str,
+    reason: Option<&str>,
+) -> anyhow::Result<bool> {
+    let r = sqlx::query(
+        "UPDATE sepa_collection_entries
+         SET status = $2, status_reason = $3, status_at = now()
+         WHERE entry_id = $1 AND status = 'SUBMITTED'",
+    )
+    .bind(entry_id)
+    .bind(status)
+    .bind(reason)
+    .execute(executor)
+    .await
+    .context("set_collection_entry_status")?;
+    Ok(r.rows_affected() > 0)
+}
+
+/// Mark every still-open collection of one submitted message as rejected.
+///
+/// A pain.002 can bounce a whole file with no per-transaction detail — a schema
+/// fault, a creditor identity the bank refuses, a collection date it will not
+/// accept. Without this every one of those collections sits at `SUBMITTED`
+/// forever, waiting for money that is never coming. `msg_id` is the
+/// `GrpHdr/MsgId` accountingd sent, which the report quotes as `OrgnlMsgId`.
+///
+/// Returns how many entries moved.
+pub async fn reject_submitted_entries_of_run(
+    pool: &PgPool,
+    tenant: &str,
+    msg_id: &str,
+    reason: &str,
+) -> anyhow::Result<usize> {
+    let r = sqlx::query(
+        "UPDATE sepa_collection_entries ce
+         SET status = 'REJECTED', status_reason = $3, status_at = now()
+         FROM sepa_collection_runs r
+         WHERE r.run_id = ce.run_id
+           AND ce.tenant = $1 AND r.msg_id = $2
+           AND ce.status = 'SUBMITTED'",
+    )
+    .bind(tenant)
+    .bind(msg_id)
+    .bind(reason)
+    .execute(pool)
+    .await
+    .context("reject_submitted_entries_of_run")?;
+    Ok(usize::try_from(r.rows_affected()).unwrap_or(usize::MAX))
+}
+
+/// The same, for one `PmtInf` group the bank rejected without itemising it.
+pub async fn reject_submitted_entries_of_group(
+    pool: &PgPool,
+    tenant: &str,
+    payment_info_id: &str,
+    reason: &str,
+) -> anyhow::Result<usize> {
+    let r = sqlx::query(
+        "UPDATE sepa_collection_entries
+         SET status = 'REJECTED', status_reason = $3, status_at = now()
+         WHERE tenant = $1 AND payment_info_id = $2 AND status = 'SUBMITTED'",
+    )
+    .bind(tenant)
+    .bind(payment_info_id)
+    .bind(reason)
+    .execute(pool)
+    .await
+    .context("reject_submitted_entries_of_group")?;
+    Ok(usize::try_from(r.rows_affected()).unwrap_or(usize::MAX))
+}
+
+/// Record a generated pain.007 reversal.
+#[allow(clippy::too_many_arguments)]
+pub async fn record_sepa_reversal(
+    executor: impl sqlx::PgExecutor<'_>,
+    tenant: &str,
+    entry: &CollectionEntryRow,
+    reversal: &crate::sepa::Pain007Reversal,
+    reversed_amount_ct: i64,
+    reason_code: &str,
+    ledger_entry_id: Option<Uuid>,
+    created_by: Option<&str>,
+) -> anyhow::Result<Uuid> {
+    let row = sqlx::query(
+        r"INSERT INTO sepa_reversals
+              (tenant, collection_entry_id, msg_id, original_msg_id,
+               original_payment_info_id, original_end_to_end_id,
+               original_amount_ct, reversed_amount_ct, reason_code,
+               pain007_xml, ledger_entry_id, created_by)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+          RETURNING reversal_id",
+    )
+    .bind(tenant)
+    .bind(entry.entry_id)
+    .bind(&reversal.msg_id)
+    .bind(&entry.msg_id)
+    .bind(&entry.payment_info_id)
+    .bind(&entry.end_to_end_id)
+    .bind(entry.amount_ct)
+    .bind(reversed_amount_ct)
+    .bind(reason_code)
+    .bind(&reversal.xml)
+    .bind(ledger_entry_id)
+    .bind(created_by)
+    .fetch_one(executor)
+    .await
+    .context("record_sepa_reversal")?;
+    Ok(row.try_get("reversal_id")?)
 }
 
 /// Atomically claim a SEPA collection run for dispatch.
@@ -630,8 +1212,36 @@ pub struct SepaMandateRow {
     pub sequence_type: String,
     pub signed_at: Date,
     pub revoked_at: Option<Date>,
+    /// The account's BO4E Sparte, joined in — drives the ISO 20022 `Purp/Cd`
+    /// on the collection. `None` for an account that has never been billed.
+    pub sparte: Option<String>,
+    /// `Dbtr/PstlAdr` parts — see [`SepaMandateRow::debtor_address`].
+    pub debtor_town: Option<String>,
+    pub debtor_country: Option<String>,
+    pub debtor_street: Option<String>,
+    pub debtor_building_number: Option<String>,
+    pub debtor_post_code: Option<String>,
+    pub debtor_country_subdivision: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
+}
+
+impl SepaMandateRow {
+    /// The debtor's postal address, as the pain.008 builder wants it.
+    ///
+    /// Mandatory from the EPC structured-address cut-over on 15 November 2026;
+    /// until then an empty set of parts emits no `PstlAdr` at all.
+    #[must_use]
+    pub fn debtor_address(&self) -> crate::sepa::AddressParts {
+        crate::sepa::AddressParts {
+            town: self.debtor_town.clone(),
+            country: self.debtor_country.clone(),
+            street: self.debtor_street.clone(),
+            building_number: self.debtor_building_number.clone(),
+            post_code: self.debtor_post_code.clone(),
+            country_subdivision: self.debtor_country_subdivision.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -644,6 +1254,10 @@ pub struct CreateMandateRequest {
     pub mandatsref: String,
     pub sequence_type: String,
     pub signed_at: String,
+    /// Debtor postal address (`Dbtr/PstlAdr`). Optional until 15 November 2026,
+    /// after which the EPC schemes require `town` + `country`.
+    #[serde(default)]
+    pub debtor_address: crate::sepa::AddressParts,
 }
 
 pub async fn create_mandate(
@@ -662,13 +1276,21 @@ pub async fn create_mandate(
         // ON CONFLICT uses (tenant, mandatsref) per the schema unique index,
         // not the old global UNIQUE (mandatsref). This prevents cross-tenant collisions.
         r"INSERT INTO sepa_mandates
-              (account_id, tenant, iban, bic, kontoinhaber, mandatsref, sequence_type, signed_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+              (account_id, tenant, iban, bic, kontoinhaber, mandatsref, sequence_type, signed_at,
+               debtor_town, debtor_country, debtor_street, debtor_building_number,
+               debtor_post_code, debtor_country_subdivision)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
           ON CONFLICT (tenant, mandatsref) DO UPDATE
           SET iban = EXCLUDED.iban, bic = EXCLUDED.bic,
               kontoinhaber = EXCLUDED.kontoinhaber,
               sequence_type = EXCLUDED.sequence_type,
               signed_at = EXCLUDED.signed_at,
+              debtor_town = EXCLUDED.debtor_town,
+              debtor_country = EXCLUDED.debtor_country,
+              debtor_street = EXCLUDED.debtor_street,
+              debtor_building_number = EXCLUDED.debtor_building_number,
+              debtor_post_code = EXCLUDED.debtor_post_code,
+              debtor_country_subdivision = EXCLUDED.debtor_country_subdivision,
               updated_at = now()
           RETURNING mandate_id",
     )
@@ -680,6 +1302,12 @@ pub async fn create_mandate(
     .bind(&req.mandatsref)
     .bind(&req.sequence_type)
     .bind(signed_at)
+    .bind(&req.debtor_address.town)
+    .bind(&req.debtor_address.country)
+    .bind(&req.debtor_address.street)
+    .bind(&req.debtor_address.building_number)
+    .bind(&req.debtor_address.post_code)
+    .bind(&req.debtor_address.country_subdivision)
     .fetch_one(pool)
     .await
     .context("create_mandate")?;
@@ -734,7 +1362,9 @@ pub async fn fetch_mandate(
     tenant: &str,
 ) -> anyhow::Result<Option<SepaMandateRow>> {
     sqlx::query_as::<_, SepaMandateRow>(
-        "SELECT * FROM sepa_mandates WHERE mandate_id = $1 AND tenant = $2",
+        "SELECT sm.*, a.sparte FROM sepa_mandates sm \
+         JOIN accounts a ON a.account_id = sm.account_id \
+         WHERE sm.mandate_id = $1 AND sm.tenant = $2",
     )
     .bind(mandate_id)
     .bind(tenant)
@@ -749,7 +1379,7 @@ pub async fn list_active_mandates(
     limit: i64,
 ) -> anyhow::Result<Vec<SepaMandateRow>> {
     sqlx::query_as::<_, SepaMandateRow>(
-        r"SELECT sm.* FROM sepa_mandates sm
+        r"SELECT sm.*, a.sparte FROM sepa_mandates sm
           JOIN accounts a ON a.account_id = sm.account_id
           WHERE sm.revoked_at IS NULL AND a.tenant = $1
           ORDER BY sm.updated_at DESC
@@ -848,11 +1478,18 @@ pub async fn list_accounts_with_mandates(
                  sm.tenant      AS sm_tenant,
                  sm.iban, sm.bic, sm.kontoinhaber,
                  sm.mandatsref, sm.sequence_type, sm.signed_at, sm.revoked_at,
+                 sm.debtor_town, sm.debtor_country, sm.debtor_street,
+                 sm.debtor_building_number, sm.debtor_post_code,
+                 sm.debtor_country_subdivision,
                  sm.updated_at  AS sm_updated_at,
+                 a.sparte,
                  a.account_id, a.malo_id, a.lf_mp_id, a.tenant,
                  a.iban         AS a_iban,
                  a.mandatsref   AS a_mandatsref,
                  a.abschlag_ct, a.billing_day, a.balance_ct,
+                 a.addr_town, a.addr_country, a.addr_street,
+                 a.addr_building_number, a.addr_post_code,
+                 a.addr_country_subdivision,
                  a.updated_at
           FROM sepa_mandates sm
           JOIN accounts a ON a.account_id = sm.account_id
@@ -879,6 +1516,13 @@ pub async fn list_accounts_with_mandates(
             sequence_type: r.try_get("sequence_type")?,
             signed_at: r.try_get("signed_at")?,
             revoked_at: r.try_get("revoked_at")?,
+            sparte: r.try_get("sparte")?,
+            debtor_town: r.try_get("debtor_town")?,
+            debtor_country: r.try_get("debtor_country")?,
+            debtor_street: r.try_get("debtor_street")?,
+            debtor_building_number: r.try_get("debtor_building_number")?,
+            debtor_post_code: r.try_get("debtor_post_code")?,
+            debtor_country_subdivision: r.try_get("debtor_country_subdivision")?,
             updated_at: r.try_get("sm_updated_at")?,
         };
         let account = AccountRow {
@@ -892,6 +1536,12 @@ pub async fn list_accounts_with_mandates(
             abschlag_ct: r.try_get("abschlag_ct")?,
             billing_day: r.try_get("billing_day")?,
             balance_ct: r.try_get("balance_ct")?,
+            addr_town: r.try_get("addr_town")?,
+            addr_country: r.try_get("addr_country")?,
+            addr_street: r.try_get("addr_street")?,
+            addr_building_number: r.try_get("addr_building_number")?,
+            addr_post_code: r.try_get("addr_post_code")?,
+            addr_country_subdivision: r.try_get("addr_country_subdivision")?,
             updated_at: r.try_get("updated_at")?,
         };
         out.push((mandate, account));
@@ -939,11 +1589,18 @@ pub async fn find_accounts_due_for_sepa(
                  sm.tenant      AS sm_tenant,
                  sm.iban, sm.bic, sm.kontoinhaber,
                  sm.mandatsref, sm.sequence_type, sm.signed_at, sm.revoked_at,
+                 sm.debtor_town, sm.debtor_country, sm.debtor_street,
+                 sm.debtor_building_number, sm.debtor_post_code,
+                 sm.debtor_country_subdivision,
                  sm.updated_at  AS sm_updated_at,
+                 a.sparte,
                  a.account_id, a.malo_id, a.lf_mp_id, a.tenant,
                  a.iban         AS a_iban,
                  a.mandatsref   AS a_mandatsref,
                  a.abschlag_ct, a.billing_day, a.balance_ct,
+                 a.addr_town, a.addr_country, a.addr_street,
+                 a.addr_building_number, a.addr_post_code,
+                 a.addr_country_subdivision,
                  a.updated_at
           FROM sepa_mandates sm
           JOIN accounts a ON a.account_id = sm.account_id
@@ -972,6 +1629,13 @@ pub async fn find_accounts_due_for_sepa(
             sequence_type: r.try_get("sequence_type")?,
             signed_at: r.try_get("signed_at")?,
             revoked_at: r.try_get("revoked_at")?,
+            sparte: r.try_get("sparte")?,
+            debtor_town: r.try_get("debtor_town")?,
+            debtor_country: r.try_get("debtor_country")?,
+            debtor_street: r.try_get("debtor_street")?,
+            debtor_building_number: r.try_get("debtor_building_number")?,
+            debtor_post_code: r.try_get("debtor_post_code")?,
+            debtor_country_subdivision: r.try_get("debtor_country_subdivision")?,
             updated_at: r.try_get("sm_updated_at")?,
         };
         let account = AccountRow {
@@ -985,6 +1649,12 @@ pub async fn find_accounts_due_for_sepa(
             abschlag_ct: r.try_get("abschlag_ct")?,
             billing_day: r.try_get("billing_day")?,
             balance_ct: r.try_get("balance_ct")?,
+            addr_town: r.try_get("addr_town")?,
+            addr_country: r.try_get("addr_country")?,
+            addr_street: r.try_get("addr_street")?,
+            addr_building_number: r.try_get("addr_building_number")?,
+            addr_post_code: r.try_get("addr_post_code")?,
+            addr_country_subdivision: r.try_get("addr_country_subdivision")?,
             updated_at: r.try_get("updated_at")?,
         };
         out.push((mandate, account));
@@ -1219,14 +1889,20 @@ pub async fn anonymize_account(
     }
 
     let anonymized_at = OffsetDateTime::now_utc();
+    // A postal address is personal data in its own right — the EPC cut-over
+    // made mako store one, so erasure has to reach it. The address *snapshots*
+    // on `eeg_payout_orders` are deliberately left alone: they are part of a
+    // Buchungsbeleg and carry the statutory retention the ledger entries do.
     let anonymized_fields = serde_json::json!([
         "accounts.iban",
         "accounts.mandatsref",
         "accounts.zahlungsinformation",
         "accounts.vorauszahlung",
+        "accounts.addr_*",
         "sepa_mandates.iban",
         "sepa_mandates.kontoinhaber",
-        "sepa_mandates.bic"
+        "sepa_mandates.bic",
+        "sepa_mandates.debtor_*"
     ]);
 
     let mut tx = pool.begin().await.context("anonymize: begin tx")?;
@@ -1238,6 +1914,12 @@ pub async fn anonymize_account(
              mandatsref         = NULL,
              zahlungsinformation = NULL,
              vorauszahlung      = NULL,
+             addr_town          = NULL,
+             addr_country       = NULL,
+             addr_street        = NULL,
+             addr_building_number = NULL,
+             addr_post_code     = NULL,
+             addr_country_subdivision = NULL,
              anonymized_at      = $3,
              updated_at         = $3
          WHERE account_id = $1 AND tenant = $2",
@@ -1255,6 +1937,12 @@ pub async fn anonymize_account(
          SET iban          = 'ANONYMIZED',
              kontoinhaber  = 'ANONYMIZED',
              bic           = NULL,
+             debtor_town   = NULL,
+             debtor_country = NULL,
+             debtor_street = NULL,
+             debtor_building_number = NULL,
+             debtor_post_code = NULL,
+             debtor_country_subdivision = NULL,
              updated_at    = $2
          WHERE account_id = $1",
     )
@@ -1380,6 +2068,20 @@ pub struct FinancialMetrics {
     pub dunning_stufe3: i64,
     pub sepa_runs_pending: i64,
     pub sperrung_pending: i64,
+    /// Collections submitted to the bank with no reply yet — no pain.002, no
+    /// camt booking. A number that only grows means bank replies are not
+    /// arriving at all, which looks identical to "everything settled" from the
+    /// ledger alone.
+    pub sepa_collections_open: i64,
+    /// Collections the bank refused (pain.002 `RJCT`). The money never moved,
+    /// so each one is a receivable still open against a mandate that needs
+    /// attention.
+    pub sepa_collections_rejected: i64,
+    /// Settled collections the debtor took back (camt R-transaction). Each
+    /// carries an R-transaction fee and re-opens the receivable.
+    pub sepa_collections_returned: i64,
+    /// Amount, in ct, sitting in `SUBMITTED` — the money in flight.
+    pub sepa_collections_open_ct: i64,
 }
 
 pub async fn financial_metrics(pool: &PgPool, tenant: &str) -> anyhow::Result<FinancialMetrics> {
@@ -1392,7 +2094,11 @@ pub async fn financial_metrics(pool: &PgPool, tenant: &str) -> anyhow::Result<Fi
             (SELECT COUNT(*) FROM dunning_cases WHERE tenant = $1 AND stufe = 2 AND resolved_at IS NULL)::bigint AS d2,
             (SELECT COUNT(*) FROM dunning_cases WHERE tenant = $1 AND stufe = 3 AND resolved_at IS NULL)::bigint AS d3,
             (SELECT COUNT(*) FROM sepa_collection_runs WHERE tenant = $1 AND dispatch_status = 'PENDING')::bigint AS sepa_pending,
-            (SELECT COUNT(*) FROM dunning_cases WHERE tenant = $1 AND stufe = 3 AND resolved_at IS NULL AND sperrauftrag_ce_id IS NOT NULL)::bigint AS sperrung_pending",
+            (SELECT COUNT(*) FROM dunning_cases WHERE tenant = $1 AND stufe = 3 AND resolved_at IS NULL AND sperrauftrag_ce_id IS NOT NULL)::bigint AS sperrung_pending,
+            (SELECT COUNT(*) FROM sepa_collection_entries WHERE tenant = $1 AND status = 'SUBMITTED')::bigint AS coll_open,
+            (SELECT COUNT(*) FROM sepa_collection_entries WHERE tenant = $1 AND status = 'REJECTED')::bigint AS coll_rejected,
+            (SELECT COUNT(*) FROM sepa_collection_entries WHERE tenant = $1 AND status = 'RETURNED')::bigint AS coll_returned,
+            (SELECT COALESCE(SUM(amount_ct), 0) FROM sepa_collection_entries WHERE tenant = $1 AND status = 'SUBMITTED')::bigint AS coll_open_ct",
     )
     .bind(tenant)
     .fetch_one(pool)
@@ -1407,6 +2113,10 @@ pub async fn financial_metrics(pool: &PgPool, tenant: &str) -> anyhow::Result<Fi
         dunning_stufe3: row.get("d3"),
         sepa_runs_pending: row.get("sepa_pending"),
         sperrung_pending: row.get("sperrung_pending"),
+        sepa_collections_open: row.get("coll_open"),
+        sepa_collections_rejected: row.get("coll_rejected"),
+        sepa_collections_returned: row.get("coll_returned"),
+        sepa_collections_open_ct: row.get("coll_open_ct"),
     })
 }
 
@@ -2503,6 +3213,7 @@ pub async fn bank_import_already_processed(
 /// Record a bank transaction import in the deduplication log.
 ///
 /// Uses `ON CONFLICT DO NOTHING` so concurrent calls are safe.
+#[allow(clippy::too_many_arguments)]
 pub async fn record_bank_import(
     pool: &PgPool,
     tenant: &str,
@@ -2511,11 +3222,14 @@ pub async fn record_bank_import(
     iban: Option<&str>,
     value_date: time::Date,
     ledger_entry_id: Option<Uuid>,
+    payment_info_id: Option<&str>,
+    end_to_end_id: Option<&str>,
 ) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO bank_import_log \
-         (tenant, bank_transaction_id, amount_ct, iban, value_date, ledger_entry_id) \
-         VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (tenant, bank_transaction_id) DO NOTHING",
+         (tenant, bank_transaction_id, amount_ct, iban, value_date, ledger_entry_id, \
+          payment_info_id, end_to_end_id) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (tenant, bank_transaction_id) DO NOTHING",
     )
     .bind(tenant)
     .bind(bank_transaction_id)
@@ -2523,6 +3237,8 @@ pub async fn record_bank_import(
     .bind(iban)
     .bind(value_date)
     .bind(ledger_entry_id)
+    .bind(payment_info_id)
+    .bind(end_to_end_id)
     .execute(pool)
     .await
     .context("record_bank_import")?;

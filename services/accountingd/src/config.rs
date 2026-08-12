@@ -158,6 +158,34 @@ pub struct AccountingdConfig {
     /// Absent → the crate default. An unknown value is a hard error at startup.
     pub pain001_schema: Option<String>,
 
+    /// The operator's own postal address (`[creditor_address]`).
+    ///
+    /// Emitted as `Cdtr/PstlAdr` in pain.008 and `Dbtr/PstlAdr` in pain.001 —
+    /// both are the same party, the LF's own legal entity, so one block
+    /// configures both sides.
+    ///
+    /// ## Mandatory from 15 November 2026
+    ///
+    /// Version 1.1 of the 2025 SEPA rulebooks, in force since 5 October 2025,
+    /// ends the unstructured address on that date (version 1.0 said the 22nd;
+    /// it moved to land with that year's Swift Standards MX release). `town`
+    /// and `country` are the two elements the schemes then require. Until the
+    /// cut-over the block may be omitted entirely — but not filled in halfway:
+    /// street or post code without town and country is a hard error, because
+    /// "we thought we sent the address" is exactly what the cut-over will
+    /// surface.
+    ///
+    /// ```toml
+    /// [creditor_address]
+    /// street          = "Musterstraße"
+    /// building_number = "12"
+    /// post_code       = "10115"
+    /// town            = "Berlin"
+    /// country         = "DE"
+    /// ```
+    #[serde(default)]
+    pub creditor_address: crate::sepa::AddressParts,
+
     /// Enable automatic Mahnwesen escalation.
     ///
     /// When `true`, the background dunning worker runs daily and automatically:

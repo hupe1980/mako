@@ -1,6 +1,6 @@
 +++
 title = "accountingd Operator Guide"
-description = "accountingd operator guide — Massenkontokorrent / Customer Account Ledger (LF role). Tamper-evident double-entry ledger (the doubleentry crate — Merkle proofs, period seals), per-Marktlokation Kontokorrent + GL contra chart (SKR 03/04-aligned), FIFO open-item management, camt.054 XML + JSON dedup import, SEPA pain.008 (multi-group single message, mandatory Gläubiger-ID) + pain.001 XML, Verzugszinsen §288 BGB, payment plans (Zahlungsvereinbarung), aging analysis, Mahnwesen automatic rule engine (Mahnstufe 1–3), OIDC/JWT auth, inbound HMAC verification, GDPR Art. 17 pseudonymization, balance reconciliation, EEG Gutschrift + Marktprämie ingest, Jahresabschluss §40 EnWG."
+description = "accountingd operator guide — Massenkontokorrent / Customer Account Ledger (LF role). Tamper-evident double-entry ledger (the doubleentry crate — Merkle proofs, period seals), per-Marktlokation Kontokorrent + GL contra chart (SKR 03/04-aligned), FIFO open-item management, camt.053 + camt.054 XML and flat-export dedup import, SEPA pain.008 (multi-group single message, mandatory Gläubiger-ID) + pain.001 + pain.007 reversal XML, pain.002 status ingestion with Verification of Payee, ISO 20022 structured postal addresses (EPC cut-over 2026-11-15), Verzugszinsen §288 BGB, payment plans (Zahlungsvereinbarung), aging analysis, Mahnwesen automatic rule engine (Mahnstufe 1–3), OIDC/JWT auth, inbound HMAC verification, GDPR Art. 17 pseudonymization, balance reconciliation, EEG Gutschrift + Marktprämie ingest, Jahresabschluss §40 EnWG."
 weight = 34
 [extra]
 mermaid = true
@@ -48,13 +48,14 @@ graph TB
 
     accountingd -->|"de.accounting.mahnung.issued (Mahnstufe 1–3)"| erp
     accountingd -->|"de.accounting.abschlag.posted (Abschlagslauf)"| erp
-    accountingd -->|"de.accounting.payment.imported / .bankruecklast (camt.054)"| erp
+    accountingd -->|"de.accounting.payment.imported / .bankruecklast (camt.053/054)"| erp
+    accountingd -->|"de.accounting.sepa.collection-rejected (pain.002 RJCT)<br/>de.accounting.sepa.reversal-issued (pain.007)<br/>de.accounting.payee.verification-mismatch (VoP)"| erp
     accountingd -->|"de.accounting.interest.charged (§288 BGB)"| erp
     accountingd -->|"de.accounting.sperrandrohung / .sperrankuendigung (§41f)"| erp
     accountingd -->|"POST /api/v1/sperr-orders (the order itself)<br/>+ de.accounting.sperrauftrag (announcement)"| sperrd
     accountingd -->|"de.accounting.eeg.payout.rejected (pain.002 RJCT)"| erp
     accountingd -->|"pain.001 XML (SCT Inst <10s / CORE D+1)"| bank
-    bank -->|"pain.002 ACCP/RJCT → PUT /eeg/payouts/{id}/status"| accountingd
+    bank -->|"pain.002 XML → POST /sepa/pain002 (status + VoP)"| accountingd
     accountingd -->|"GET /kontoauszug"| portald
 ```
 
@@ -90,9 +91,9 @@ The dunning engine operates in two modes: **automatic** (background worker) and 
 graph LR
     subgraph auto ["Auto-dunning worker (daily, dunning_auto_enabled=true)"]
         trigger["balance_ct > 0<br/>+ oldest RECHNUNG > grace_days<br/>+ no active dunning case"]
-        a1["Auto: Mahnstufe 1<br/>created + fee1 (\u20ac0)"]
-        a2["Auto: Mahnstufe 2<br/>+ fee2 (\u20ac5.00)"]
-        a3["Auto: Mahnstufe 3<br/>+ fee3 (\u20ac10.00)<br/>\u2192 opens \u00a741f Sperr-Sequenz"]
+        a1["Auto: Mahnstufe 1<br/>created + fee1 (€0)"]
+        a2["Auto: Mahnstufe 2<br/>+ fee2 (€5.00)"]
+        a3["Auto: Mahnstufe 3<br/>+ fee3 (€10.00)<br/>→ opens §41f Sperr-Sequenz"]
         trigger -->|"grade_days elapsed"| a1
         a1 -->|"due_date passed"| a2
         a2 -->|"due_date passed"| a3
@@ -157,8 +158,14 @@ for operator override (e.g. grace extensions, special B2B arrangements).
 | `POST` | `/api/v1/sepa/mandates` | Register SEPA mandate (IBAN validated via mod-97) — OIDC required |
 | `GET` | `/api/v1/sepa/mandates/{id}` | Fetch mandate |
 | `DELETE` | `/api/v1/sepa/mandates/{id}` | **Revoke mandate** (§58 ZAG) |
-| `POST` | `/api/v1/sepa/run` | Generate one pain.008 message (one `PmtInf` group per SequenceType, mandatory Gläubiger-ID) |
+| `POST` | `/api/v1/sepa/run` | Generate **and archive** one pain.008 message (one `PmtInf` group per SequenceType, mandatory Gläubiger-ID) |
+| `GET` | `/api/v1/sepa/collections/{run_id}/entries` | What a run collected, and where each entry stands (`SUBMITTED`/`SETTLED`/`REJECTED`/`RETURNED`/`REVERSED`) |
+| `POST` | `/api/v1/sepa/pain002` | Ingest a **pain.002 XML** status report — applies to payouts *and* collections, incl. Verification of Payee |
+| `POST` | `/api/v1/sepa/reversals` | Build a **pain.007** giving a settled collection back (creditor-initiated Storno) |
 | `POST` | `/api/v1/payments/import/camt054` | Ingest a camt.054 XML notification (batch-booked entries expanded per `TxDtls`; returns → `BANKRUECKLAST`) |
+| `POST` | `/api/v1/payments/import/camt053` | Ingest a camt.053 XML end-of-day statement (same booking rules, plus the bank's closing balance) |
+| `POST` | `/api/v1/payments/import/camt052` | Ingest a camt.052 XML intraday report — **booked entries only**, the provisional ones are reported not posted |
+| `POST` | `/api/v1/payments/import` | Ingest a **flat bank export** (JSON array) — accountingd's own contract, not an ISO 20022 message |
 | `GET` | `/api/v1/eeg/payouts` | List EEG payout orders (`?status=PDNG\|ACCP\|RJCT\|CANC`) |
 | `GET` | `/api/v1/eeg/payouts/{id}` | Single EEG payout with `pain001_xml` for audit |
 | `POST` | `/api/v1/eeg/payouts/run` | **Batch-generate** pain.001 for all unbatched `EEG_GUTSCHRIFT` entries |
@@ -329,6 +336,8 @@ until a webhook is set.)
 `GET /metrics` exposes Prometheus gauges queried live on scrape:
 `accountingd_open_receivables_ct`, `accountingd_credit_balances_ct`,
 `accountingd_dunning_open{stufe}`, `accountingd_sepa_runs_pending`,
+`accountingd_sepa_collections{status}` (submitted/rejected/returned),
+`accountingd_sepa_collections_open_ct`,
 `accountingd_sperrung_pending`, `accountingd_accounts_total`.
 
 ## Vorauszahlung (§40 Abs. 1 EnWG)
@@ -469,7 +478,7 @@ curl -X POST "http://accountingd:9380/api/v1/accounts/51238696780/anonymize" \
   -d '{ "requested_by": "operator-1", "legal_basis": "GDPR Art. 17 - customer request #42" }'
 ```
 
-**What is anonymized**: `accounts.iban` → `ANONYMIZED`, `mandatsref`/`zahlungsinformation`/`vorauszahlung` → `NULL`; `sepa_mandates.iban` → `ANONYMIZED`, `kontoinhaber` → `ANONYMIZED`, `bic` → `NULL`.
+**What is anonymized**: `accounts.iban` → `ANONYMIZED`, `mandatsref`/`zahlungsinformation`/`vorauszahlung`/`addr_*` → `NULL`; `sepa_mandates.iban` → `ANONYMIZED`, `kontoinhaber` → `ANONYMIZED`, `bic`/`debtor_*` → `NULL`. The postal address is personal data in its own right, and the EPC structured-address cut-over made mako store one, so erasure reaches it too. The address *snapshots* on `eeg_payout_orders` are deliberately left alone: they are part of a Buchungsbeleg and carry the same statutory retention as the ledger entries beside them.
 
 **What is preserved**: The entire double-entry ledger (amounts, dates, kinds, references) is
 untouched — it is immutable and append-only, and exempt from GDPR Art. 17 under Art. 17(3)(b)
@@ -482,9 +491,44 @@ The operation is idempotent — returns `409 Conflict` if already anonymized.
 
 ---
 
-## CAMT.054 payment import
+## Bank statement import
+
+Four doors, one booking pipeline:
+
+| Endpoint | Input | Use it when |
+|---|---|---|
+| `/api/v1/payments/import/camt053` | camt.053 XML | the bank delivers an end-of-day statement — the authoritative daily record, and the only one carrying a closing balance |
+| `/api/v1/payments/import/camt054` | camt.054 XML | the bank delivers intraday debit/credit notifications |
+| `/api/v1/payments/import/camt052` | camt.052 XML | the bank reports intraday as an account report instead of notifications |
+| `/api/v1/payments/import` | flat JSON array | there is no camt at all — an ERP feed or a CSV turned into JSON |
+
+Prefer camt wherever the bank offers it. `EndToEndId`, the `NtryDtls/Btch` block and
+return reason codes do not survive a flattening, and those three are what attribute a
+booking, match it back to a collection run, and tell a payment from a Rückläufer.
+
+Running several imports is safe: a transaction reported intraday and again in the
+evening's camt.053 books once, because the deduplication key is the bank's own
+transaction reference.
+
+### Only a booked entry is a money movement
+
+`Ntry/Sts` is not decoration. `INFO` is explicitly informational — the bank is telling
+you something, not moving money. `PDNG` has not settled and may still be amended or
+dropped; `FUTR` has not happened yet. Posting any of them into an append-only ledger
+books a payment that does not exist and **cannot be un-booked**, and the camt.053 that
+later carries the real entry has a different `AcctSvcrRef`, so the deduplication key
+does not save you.
+
+Only `BOOK` entries post. The rest are counted as `not_booked` in the response — which
+is what makes the intraday camt.052 door safe rather than reckless: its entries are
+provisional by design, and the booked ones are exactly the subset that is not.
 
 ```bash
+# The bank's own file, unmodified
+curl -X POST "http://accountingd:9380/api/v1/payments/import/camt053" \
+  -H "Content-Type: application/xml" --data-binary @statement.xml
+
+# The flat fallback
 curl -X POST "http://accountingd:9380/api/v1/payments/import" \
   -H "Content-Type: application/json" \
   -d '[{ "iban": "DE89 3704 0044 0532 0130 00", "amount_eur": "155.42",
@@ -492,13 +536,75 @@ curl -X POST "http://accountingd:9380/api/v1/payments/import" \
           "bank_transaction_id": "NTRY-REF-20260710-001" }]'
 ```
 
-Response: `{ "accepted": 1, "deduplicated": 0, "skipped": 0, "total": 1 }`
+Response: `{ "accepted": 1, "deduplicated": 0, "skipped": 0, "batches_matched": 0, "total": 1 }`
 
-### CAMT.054 deduplication
+### One sign convention
+
+A camt entry is signed from the bank's point of view (`CdtDbtInd`): positive is money
+arriving. accountingd's ledger is an open-items account where positive is a *Forderung*,
+so an incoming payment **reduces** the balance and a returned direct debit **re-opens** it.
+`sepa::bank_to_ledger_ct` is the single negation, and every path — flat JSON, camt.053,
+camt.054 — goes through it. The flat import used to carry its own opposite convention
+(the removed `sepa::camt054::parse_simple_json`); it no longer does.
+
+A row gives money back when it carries a return reason code **or** debits the account.
+The removed crate helper derived that from a field the flat format never carried, so it
+was always false: a negative amount booked as an ordinary `ZAHLUNG` with a positive
+ledger effect.
+
+### Resolving a payment to a customer
+
+Matching on the counterparty IBAN alone is the single biggest reconciliation gap in a
+retail ledger: a customer paying from a spouse's account, an employer's, or a second
+account they never mentioned produces a transaction with an IBAN nobody has on file.
+It books nowhere, and the receivable stays open against someone who has already paid.
+
+The ladder runs strongest-evidence-first, and `matched_by` on the response and the
+CloudEvent records which rung answered:
+
+| Rung | Evidence | Why it is trusted this much |
+|---|---|---|
+| `iban` | the bank says whose account it is | the payment instrument itself |
+| `end_to_end_id` | a reference accountingd generated and the bank echoed | machine-to-machine, no human typing |
+| `remittance_token` | an exact Mandatsreferenz or MaLo-ID in the free text | a human copied it correctly |
+
+The free-text rung matches **whole tokens**, never substrings. A `LIKE '%…%'` scan
+would match a Mandatsreferenz that merely happens to be a prefix of another and book a
+stranger's payment onto a customer's account. The Verwendungszweck is split on
+non-alphanumeric boundaries and every contiguous run of up to four words is also
+joined, so `MND 000123`, `MND-000123` and `mnd000123` all find the mandate stored as
+`MND-000123` — matched against `sepa_mandates.mandatsref_norm`, a generated column the
+database maintains so the two spellings cannot drift.
+
+A reference naming **two** customers resolves to nothing. Booking either would be a
+guess, and the transaction is counted `unresolved` instead — a counter worth alerting
+on, because a persistently non-zero value is money in the bank account against
+receivables that stay open.
+
+### Batch attribution
+
+`NtryDtls/Btch/PmtInfId` is the bank's own assertion of which submitted `PmtInf` group a
+booking aggregates — the element that matches a booked collection back to what was sent,
+without guessing from amounts and dates. It is stored on `bank_import_log` and counted as
+`batches_matched` in the response. A booking whose `EndToEndId` names a collected mandate
+also closes that `sepa_collection_entries` row: `SETTLED`, or `RETURNED` when the booking
+is an R-transaction.
+
+Batched entries are expanded per `TxDtls`, and a detail's return reason is read **per
+detail** rather than per entry — a batch booking mixes settled collections with returns,
+and the aggregate answer mislabels every transaction in a mixed batch.
+
+A batch booking asserts that its details add up to the entry total. When they do not,
+the bank itemised only part of what it booked, and the difference is real money that
+reaches no customer account. The import continues (the itemised part is still correct)
+but the discrepancy is logged and returned as `unreconciled_batches`.
+
+### Deduplication
 
 Every import entry is checked against `bank_import_log` before a ledger entry is created.
-The deduplication key is `bank_transaction_id` (from CAMT.054 `<NtryRef>` or `<EndToEndId>`).
-When that field is absent, a deterministic hash of `(iban|amount|date|reference)` is used.
+The deduplication key is `bank_transaction_id` (from camt `AcctSvcrRef`, disambiguated per
+detail by `EndToEndId`). When that field is absent, a deterministic hash of
+`(iban|amount|date|reference)` is used.
 
 Re-importing the same bank file (operator error, ERP retry) is safe — duplicates are
 counted as `deduplicated`, not `accepted`. Cross-tenant isolation: `bank_import_log` is
@@ -666,30 +772,91 @@ ledger table cannot give.
 
 ## SEPA payments
 
-`accountingd` uses the [`sepa`](https://crates.io/crates/sepa) crate (0.5) —
+`accountingd` uses the [`sepa`](https://crates.io/crates/sepa) crate (0.6) —
 schema defaults are the current SEPA releases (`pain.008.001.08`,
 `pain.001.001.09`) and can be pinned per bank via the `pain008_schema` /
 `pain001_schema` config keys (e.g. `pain.008.001.02` for banks still on the
-pre-2023 EPC version); dates flow through the crate's typed `IsoDate`, names are
-transliterated into the SEPA character set, and every message is validated
-before serialisation (`build()` returns a located `Err` — `PmtInf[1]/Tx[…]: …`
-— instead of emitting a bank-rejectable file):
+pre-2023 EPC version); dates flow through the crate's typed `IsoDate`, names and
+addresses are transliterated into the SEPA character set, and every message is
+validated before serialisation (`build()` returns a located `Err` —
+`PmtInf[1]/Tx[…]: …` — instead of emitting a bank-rejectable file). Generated
+output is checked in the crate's CI against the ISO schemas **and** the Deutsche
+Kreditwirtschaft's GBIC 5 technical validation subsets — a restriction of the ISO
+schema down to what German banks actually accept, so passing it is the harder
+test.
+
+The lifecycle is closed in both directions: every message accountingd sends has
+a reply it knows how to read, and every reply lands on the collection or payout
+it refers to.
 
 ```mermaid
 graph LR
-    subgraph out ["Outgoing payments"]
+    subgraph out ["Outgoing"]
         pain008["pain.008 SDD<br/>Direct Debit<br/>(N-5 scheduler + /sepa/run)"]
-        pain001["pain.001 SCT / SCT Inst<br/>EEG Verg\u00fctung + Erstattungen<br/>(/eeg/payouts/run, auto_payout)"]
+        pain001["pain.001 SCT / SCT Inst<br/>EEG Vergütung + Erstattungen<br/>(/eeg/payouts/run, auto_payout)"]
+        pain007["pain.007 SDD Reversal<br/>creditor gives a settled<br/>collection back<br/>(/sepa/reversals)"]
     end
     subgraph in ["Bank responses"]
-        pain002["pain.002 parser<br/>Payment Status Report<br/>(PUT /eeg/payouts/{id}/status)"]
-        camt053["camt.053 parser<br/>End-of-day statement<br/>(reconciliation)"]
-        camt054["camt.054 parser<br/>Debit/Credit notification<br/>(/payments/import/camt054)"]
+        pain002["pain.002<br/>Payment Status Report<br/>+ Verification of Payee<br/>(/sepa/pain002)"]
+        camt053["camt.053<br/>End-of-day statement<br/>(/payments/import/camt053)"]
+        camt054["camt.054<br/>Debit/Credit notification<br/>(/payments/import/camt054)"]
+        camt052["camt.052<br/>Intraday report<br/>booked entries only<br/>(/payments/import/camt052)"]
     end
+    entries["sepa_collection_entries<br/>SUBMITTED → SETTLED /<br/>REJECTED / RETURNED / REVERSED"]
     creditor["Creditor Identifier<br/>(EPC AT-02)"]
     creditor --> pain008
     creditor --> pain001
+    creditor --> pain007
+    pain008 --> entries
+    pain002 -->|EndToEndId| entries
+    camt054 -->|Btch/PmtInfId| entries
+    camt053 -->|Btch/PmtInfId| entries
+    camt052 -->|Btch/PmtInfId| entries
+    entries --> pain007
 ```
+
+### Structured postal addresses — the 15 November 2026 cut-over
+
+Version 1.0 of the 2025 SEPA rulebooks set the end of unstructured addresses at
+22 November 2026. **Version 1.1, in force since 5 October 2025, moved it to
+15 November 2026**, to land with that year's Swift Standards MX release. If your
+notes still say the 22nd, they are a rulebook version behind.
+
+It is an *address* deadline and not a message-version one: `pain.001.001.09` and
+`pain.008.001.08` have been mandatory since 19 November 2023, and nothing on the
+EPC roadmap moves SEPA past them. From the cut-over a scheme message must carry
+`TwnNm` and `Ctry`.
+
+accountingd stores an address on three parties and emits all of them:
+
+| Party | Element | Source |
+|---|---|---|
+| The operator (LF) | `Cdtr/PstlAdr` (pain.008, pain.007) · `Dbtr/PstlAdr` (pain.001) | `[creditor_address]` in `accountingd.toml` |
+| A customer paying by direct debit | `Dbtr/PstlAdr` (pain.008) | `sepa_mandates.debtor_*`, set at mandate registration |
+| A counterparty accountingd pays | `Cdtr/PstlAdr` (pain.001) | `accounts.addr_*` — BO4E's `Zahlungsinformation` COM has no address, so it cannot come from there |
+
+```toml
+[creditor_address]
+street          = "Musterstraße"
+building_number = "12"
+post_code       = "10115"
+town            = "Berlin"
+country         = "DE"
+```
+
+Three rules the XSD cannot express, and mako enforces:
+
+- **A half-filled address is an error, not an omission.** A street with no town
+  and country looks configured and emits nothing — exactly the failure the
+  cut-over will surface. `AddressParts::to_postal_address` refuses it.
+- **`Ctry` is checked against the ISO 3166 table**, not the XSD's `[A-Z]{2}`.
+  `ZZ` matches the pattern and addresses nothing.
+- **The legacy DK schemas carry no address.** `pain.008.003.02` and
+  `pain.001.003.03` have only `Ctry` and two `AdrLine`s in their
+  `PostalAddressSEPA`, so the `PstlAdr` is dropped with a warning rather than
+  emitted into an XSD that would reject it — an operator who pinned that schema
+  deliberately must still be able to collect. That stops being acceptable on
+  15 November 2026; move to the current schema before then.
 
 ### pain.008 Direct Debit
 
@@ -707,12 +874,14 @@ the same file, so a collection run is a single bank submission and a single
 Response shape:
 ```json
 {
+  "run_id": "9f1c…",
+  "msg_id": "DD-2026-07-25",
   "collection_date": "2026-07-25",
   "entry_count": 43,
   "total_ct": 320000,
   "groups": [
-    { "sequence_type": "FRST", "entry_count": 1,  "total_ct": 5000 },
-    { "sequence_type": "RCUR", "entry_count": 42, "total_ct": 315000 }
+    { "sequence_type": "FRST", "payment_info_id": "DD-2026-07-25-FRST", "entry_count": 1,  "total_ct": 5000 },
+    { "sequence_type": "RCUR", "payment_info_id": "DD-2026-07-25-RCUR", "entry_count": 42, "total_ct": 315000 }
   ],
   "xml": "<?xml version=\"1.0\"?>..."
 }
@@ -722,9 +891,43 @@ Key features of the pain.008 generator:
 - **Typed `SequenceType`**: FRST/RCUR/FNAL/OOFF dispatch per mandate
 - **Gläubiger-ID (EPC AT-02)**: `creditor_id` from config is validated via `sepa::validate_creditor_id` (correct EPC262-08 check digits) and included as `<CdtrSchmeId>` — **required**; a missing or invalid CI blocks the run (the EPC rulebook mandates it, banks reject without it)
 - **`Mandatsreferenz` = `EndToEndId`**: capped at 35 characters (Max35Text) — enforced at mandate registration and by a DB CHECK
-- **`with_description`**: Each entry carries `"Abschlag YYYY-MM"` as RemittanceInfo (`Ustrd`) — visible on debtor's bank statement
+- **Distinct `PmtInfId` per group** (`<MsgId>-<SEQ>`): the crate refuses a duplicate across groups, because it is the key a bank echoes in pain.002 and in a camt `Btch` block — two groups sharing one make a booking unattributable
+- **Structured `PstlAdr` on both sides** when configured — see the cut-over note above
+- **ISO 20022 `Purp/Cd`** derived from the account's Sparte: `ELEC` (Strom), `GASB` (Gas), `WTER` (Wasser/Abwasser), `ENRG` (Fern-/Nahwärme — ISO has no district-heating code). Informational, instructing no bank, but it is what the debtor's statement and their accounting software read to categorise the collection; an energy supplier's Lastschrift with no purpose is indistinguishable from any other on the statement. `STROM_UND_GAS` emits none — a combined supply is two purposes and picking either would be false. The Sparte is learned from `de.billing.rechnung.erstellt`
+- **`with_description`**: Each entry carries `"Abschlag YYYY-MM"` as RemittanceInfo (`Ustrd`) — visible on debtor's bank statement. The 140-character limit binds on the *transliterated* text, so 140 German characters cannot silently become 141 and lose their tail
 - **Hard error**: missing or invalid `creditor_iban` returns HTTP 503 (no silent placeholder IBAN)
 - **N-5 scheduler**: Background worker auto-generates and dispatches the pain.008 message 5 days before each `billing_day`; persisted once per collection date in `sepa_collection_runs` for audit and ERP replay
+
+#### What a run collected
+
+The run row stores the XML; `sepa_collection_entries` stores what is *in* it, one
+row per collected mandate, written in the same transaction. Without it a bank
+reply cannot be attributed: a pain.002 rejection names an `EndToEndId`, a camt
+booking names a `PmtInfId` in its `Btch` block, and a pain.007 reversal has to
+restate the original amount, mandate and collection date exactly as submitted.
+Re-parsing the archived XML for each of those would make the file the system of
+record.
+
+```bash
+curl "http://accountingd:9380/api/v1/sepa/collections/{run_id}/entries"
+```
+
+| `status` | Meaning |
+|---|---|
+| `SUBMITTED` | written when the pain.008 is generated |
+| `SETTLED` | an accepted pain.002 status, or a matching camt booking |
+| `REJECTED` | pain.002 `RJCT` — the collection never left the bank |
+| `RETURNED` | a camt Rückläufer after settlement (R-transaction) |
+| `REVERSED` | the creditor gave it back via pain.007 |
+
+The row holds **no IBAN or account holder** — both stay on `sepa_mandates` and
+are reached through `mandate_id`, so GDPR Art. 17 erasure keeps working from one
+place, and a reversal for an erased mandate is correctly impossible rather than
+built from a stale copy.
+
+Regenerating a run for the same collection date replaces its entries: a stale row
+from a superseded batch would claim a collection that is not in the file the bank
+received, and would then be reversible.
 
 To revoke a mandate (§58 ZAG — customer right to revoke before cut-off):
 ```bash
@@ -744,10 +947,21 @@ a SEPA Credit Transfer pain.001 and schedules payout to the plant operator.
 
 #### SCT Inst vs SCT CORE
 
-| Mode | TOML | XML schema | Settlement | Legal basis |
+| Mode | TOML | `LclInstrm` | Settlement | Legal basis |
 |---|---|---|---|---|
-| SCT Instant | `sepa_instant = true` | pain.001.001.09 | **<10 seconds** | EU Reg 2024/886 |
-| SCT CORE | `sepa_instant = false` | pain.001.003.03 | D+1 | SEPA SCT Rulebook |
+| SCT Instant | `sepa_instant = true` | `INST` | **<10 seconds** | EU Reg 2024/886 |
+| SCT CORE | `sepa_instant = false` | *(absent)* | D+1 | SEPA SCT Rulebook |
+
+The **schema version is config-driven** (`pain001_schema`), not chosen by this
+flag — `payment_type` on the order row is a label for the mode, not a message
+version. `pain.001.003.03` has no `LclInstrm` element at all, so requesting SCT
+Instant on that schema is refused with `UnsupportedBySchema` rather than emitting
+an element its own XSD forbids.
+
+The **execution date is always stated explicitly** (`ReqdExctnDt`). sepa 0.6
+changed the crate's own default from "five days out" — a pain.008
+pre-notification floor borrowed wholesale — to "today", and a payment date is not
+something to inherit from a library default.
 
 §25 Abs. 1 EEG 2023 mandates *"unverzüglich nach Ende des Monats"*. SCT Inst
 satisfies this more strongly than CORE, which becomes D+2 across weekends.
@@ -840,10 +1054,13 @@ curl -X PUT "http://accountingd:9380/api/v1/eeg/payouts/a1b2c3d4-.../status" \
 | `payment_type` | TEXT | `SCT_INST` or `SCT_CORE` |
 | `end_to_end_ref` | TEXT UNIQUE | ISO 20022 EndToEndId (`EEG-{malo}-{year}-{month}-{ce_short}`) |
 | `pain001_xml` | TEXT | Full pain.001 XML (audit + replay) |
-| `pain002_status` | TEXT? | `PDNG` \| `ACCP` \| `RJCT` \| `CANC` |
+| `creditor_town`, `creditor_country`, `creditor_street`, `creditor_building_number`, `creditor_post_code`, `creditor_country_subdivision` | TEXT? | `Cdtr/PstlAdr` **as sent** — snapshotted beside the IBAN and name, so a submitted file stays readable after the account's master data moves on |
+| `pain002_status` | TEXT? | The ISO status the bank reported, verbatim: `ACTC` \| `ACCP` \| `ACSP` \| `ACSC` \| `ACWC` \| `PART` \| `PDNG` \| `RJCT`, plus accountingd's own `CANC` |
 | `pain002_reason` | TEXT? | EPC reason code (e.g. `AC01` = invalid IBAN) |
+| `vop_outcome` | TEXT? | Verification of Payee, a **separate axis** from acceptance: `MATCH` \| `CLOSE_MATCH` \| `NO_MATCH` \| `NOT_APPLICABLE` |
+| `vop_name` | TEXT? | On `CLOSE_MATCH`, the payee name the payee's PSP holds (from `AddtlInf`) |
 | `submitted_at` | TIMESTAMPTZ? | When XML was POSTed to bank adapter |
-| `settled_at` | TIMESTAMPTZ? | When `ACCP` received (funds credited) |
+| `settled_at` | TIMESTAMPTZ? | Stamped on the first accepted status. `ACSC` is the only one that means the money actually moved, so this is a submission milestone, not a settlement proof |
 | `source_ce_id` | TEXT UNIQUE | Source `de.eeg.verguetung.berechnet` CE id — idempotency guard |
 
 #### `[eeg]` configuration
@@ -860,12 +1077,103 @@ bank_api_key     = "env:BANK_API_KEY"
 When `auto_payout = false` (default), operators trigger payouts manually via
 `POST /api/v1/eeg/payouts/run`.  The table always provides a full audit trail.
 
-### pain.002 + camt.053 parsers (sepa 0.5.0)
+### pain.002 Payment Status Report
 
-| Parser | Use case |
-|---|---|
-| `sepa::parse_pain002` | Bank rejection report → auto-create `BANKRUECKLAST` entries |
-| `sepa::parse_camt053` | End-of-day bank statement → full automated reconciliation |
+```bash
+curl -X POST "http://accountingd:9380/api/v1/sepa/pain002" \
+  -H "Content-Type: application/xml" --data-binary @status-report.xml
+```
+
+One document answers a whole submission, so it is applied to whatever it refers
+to, keyed by the reference the bank echoes back:
+
+| The report is about | Matched on | Effect |
+|---|---|---|
+| a pain.001 EEG payout | `eeg_payout_orders.end_to_end_ref` | status, reason, `settled_at`, VoP outcome |
+| a pain.008 collection | `sepa_collection_entries.end_to_end_id` | `SETTLED` / `REJECTED` + `de.accounting.sepa.collection-rejected` |
+
+Both `OrgnlEndToEndId` and `OrgnlInstrId` are `0..1`; either is accepted, and a
+report naming neither is counted `unmatched` rather than guessed at. A missing
+`TxSts` falls back to the group status — and *no status at all* is not an
+acceptance.
+
+`NbOfTxsPerSts` is surfaced in the response: a VoP report on hundreds of payments
+states counts per outcome and itemises only the ones needing attention, so the
+counts may be the only thing in the file.
+
+**A rejected collection is not a Bankrücklastschrift.** `RJCT` on a direct debit
+means the collection *never happened* — no money moved, so nothing is reversed.
+accountingd books a `ZAHLUNG` only when a camt booking confirms the money
+arrived, so posting a compensating `BANKRUECKLAST` here would credit a payment
+that was never received and then debit it back. The receivable simply stays open,
+the entry is marked `REJECTED`, and the event tells the ERP the mandate needs
+attention. A collection that settled and was *then* returned arrives as a camt
+R-transaction and is the other event, `de.accounting.bankruecklast`.
+
+The manual `PUT /api/v1/eeg/payouts/{id}/status` stays: a bank adapter that
+posts a decoded status without the XML still works.
+
+### Verification of Payee
+
+VoP has been mandatory for euro credit transfers since **9 October 2025** under
+the Instant Payments Regulation, and its result arrives inside the same pain.002.
+It reports on a **different axis** from acceptance: `RCVC` says a payee name
+matched, which is not a statement about whether the payment was taken.
+
+| Code | `vop_outcome` | What it means |
+|---|---|---|
+| `RCVC` | `MATCH` | the name matched — nothing to do |
+| `RVMC` | `CLOSE_MATCH` | the payee's actual name is in `AddtlInf`, stored in `vop_name` — show it and let the payer decide |
+| `RVNM` | `NO_MATCH` | executing anyway shifts liability to the payer |
+| `RVNA` | `NOT_APPLICABLE` | no answer, a timeout (`AB11`) or a PSP outside the scheme (`AG03`) |
+| `RVCM` | *(group level)* | the file contains mismatches; the per-payment codes are the four above |
+
+A verification status never lands in `pain002_status` — writing `RCVC` there
+would make a name check look like an acceptance. Anything other than a clean
+match emits `de.accounting.payee.verification-mismatch`, because releasing the
+payment after a no-match is an operator's decision, not a service's.
+
+### pain.007 — reversing a settled collection
+
+A reversal is the creditor's own correction: the Abschlag collected twice, or
+collected after the customer had already paid by transfer. It is the counterpart
+to a debtor-initiated refund (which arrives as camt.054) and to a reject (which
+arrives as pain.002 and never moved money at all).
+
+```bash
+# Pick the entry from the collection run, then give it back
+curl -X POST "http://accountingd:9380/api/v1/sepa/reversals" \
+  -H "Content-Type: application/json" \
+  -d '{ "collection_entry_id": "…", "reason_code": "AM05" }'
+```
+
+`reason_code` is an ISO 20022 `ExternalReversalReason1Code` and defaults to
+`MS02` — "no reason specified by the customer", the code the DK's own reversal
+example carries and what a creditor uses when it simply collected in error.
+`AM05` is a duplicate collection, `DUPL` a duplicate payment, `CUST` a
+customer-requested reversal. `reversed_amount_ct` reverses part of a collection;
+more than was collected is refused.
+
+Rules the endpoint enforces:
+
+- **Only a `SETTLED` collection can be reversed.** A `REJECTED` one never moved
+  money; a `RETURNED` or `REVERSED` one has already been given back.
+- **`OrgnlTxRef` is restated from stored data, never from the request body.**
+  Plain ISO permits a reversal carrying only references, but the DK technical
+  validation subset makes that block — and the mandate inside it — mandatory, so
+  the references-only form is not one a German bank accepts. Every field comes
+  out of `sepa_collection_entries` and `sepa_mandates`, so the reversal cannot
+  disagree with what was collected.
+- **One reversal per collection**, enforced by a unique index. A second attempt
+  is a correction, not a silent double refund.
+- **A `SEPA_STORNO` ledger entry re-opens the receivable**: the money leaves the
+  bank account again, so what the collection discharged is owed once more.
+- An erased mandate makes the reversal **impossible** rather than built from a
+  stale copy — `OrgnlTxRef` needs the debtor's IBAN and signature date.
+
+Issuing a reversal is an operator decision and is deliberately **not** an MCP
+tool; `list_sepa_collections` (read-only) is how an agent finds the entry an
+operator then acts on.
 
 ---
 
@@ -895,6 +1203,8 @@ key with different content is refused. The `/buchen` endpoint is idempotent when
 | `iban_hash` | App-computed **keyed BLAKE3** hash of the normalised IBAN — used for CAMT.054 matching even when the IBAN is encrypted (no pgcrypto) |
 | `iban_encrypted` | `false` (default) or `true` when column stores encrypted ciphertext |
 | `mandatsref` | Active SEPA mandate link (fast lookup) |
+| `sparte` | BO4E Sparte, learned from `de.billing.rechnung.erstellt` — drives the ISO 20022 `Purp/Cd` on the next collection |
+| `addr_town`, `addr_country`, `addr_street`, `addr_building_number`, `addr_post_code`, `addr_country_subdivision` | `PstlAdr` — `Cdtr/PstlAdr` when accountingd pays this account, and the fallback debtor address. Mandatory from the EPC cut-over on 2026-11-15 |
 | `vorauszahlung` | `rubo4e::current::Vorauszahlung` JSONB |
 | `zahlungsinformation` | `rubo4e::current::Zahlungsinformation` JSONB |
 | `anonymized_at` | GDPR Art. 17 timestamp — set when account is pseudonymized |
@@ -921,12 +1231,32 @@ are all properties of the doubleentry engine.
 | `revoked_at` | Set by `DELETE /api/v1/sepa/mandates/{id}` |
 | `created_at` | Mandate creation timestamp (audit trail) |
 | `first_collected_at` | Set on first successful collection → triggers FRST→RCUR auto-transition |
+| `debtor_town`, `debtor_country`, `debtor_street`, `debtor_building_number`, `debtor_post_code`, `debtor_country_subdivision` | `Dbtr/PstlAdr`. Nullable until the EPC cut-over on 2026-11-15; a half-filled address is refused at build time rather than silently emitting nothing |
+| `mandatsref_norm` | **Generated** (`upper(regexp_replace(mandatsref,'[^A-Za-z0-9]','','g'))`), indexed — resolves a payment whose Verwendungszweck spells the Mandatsreferenz differently. Database-maintained so the two spellings cannot drift |
 
 ### `sepa_collection_runs`
 
-One row per pain.008 batch run. Stores the full XML for audit and ERP webhook replay.
+One row per pain.008 batch run. Stores the full XML for audit and ERP webhook replay,
+plus the `msg_id` a pain.002 reply quotes in `OrgnlMsgId`.
 `dispatch_status`: `PENDING` → `DISPATCHED` → `FAILED`.
 `UNIQUE (tenant, collection_date)` prevents duplicate batches.
+
+### `sepa_collection_entries`
+
+One row per mandate collected in a run — the attribution key for pain.002 replies
+(`EndToEndId`), camt bookings (`Btch/PmtInfId`) and pain.007 reversals. Holds
+`mandatsref`, `end_to_end_id`, `payment_info_id`, `sequence_type`, `amount_ct` and
+a `status` (`SUBMITTED` → `SETTLED` / `REJECTED` / `RETURNED` / `REVERSED`).
+Deliberately holds **no IBAN**: that stays on `sepa_mandates`, reached through
+`mandate_id`, so GDPR erasure works from one place.
+
+### `sepa_reversals`
+
+One row per pain.007 reversal: the original message, group and `EndToEndId`, the
+collected and reversed amounts, the ISO reason code, the verbatim XML and the
+`SEPA_STORNO` ledger entry that re-opened the receivable.
+`UNIQUE (collection_entry_id)` is what stops a second request refunding the same
+collection twice.
 
 ### `interest_charges`
 
@@ -1047,6 +1377,19 @@ creditor_name         = "Muster Energie GmbH"
 # SEPA N-5 pre-notification window (default: 5 calendar days)
 sepa_pre_notification_days = 5
 
+# The operator's own postal address. Emitted as <Cdtr><PstlAdr> in pain.008 and
+# pain.007, and <Dbtr><PstlAdr> in pain.001 — the same legal entity on both
+# sides, so one block configures both. Optional until 2026-11-15, when version
+# 1.1 of the 2025 SEPA rulebooks ends the unstructured address and `town` +
+# `country` become mandatory. It may be omitted entirely, but not filled in
+# halfway: street or post code without town and country is a hard error.
+[creditor_address]
+street          = "Musterstraße"
+building_number = "12"
+post_code       = "10115"
+town            = "Berlin"
+country         = "DE"
+
 # §25 EEG 2023 — SEPA Credit Transfer payout pipeline
 [eeg]
 sepa_instant    = true                           # SCT Inst (<10s) vs SCT CORE (D+1)
@@ -1068,7 +1411,7 @@ url = "postgresql://accountingd:secret@db:5432/accountingd"
 
 ## MCP server
 
-`accountingd` exposes **12 tools** at `/mcp` (Streamable HTTP 2025-11-25):
+`accountingd` exposes **13 tools** at `/mcp` (Streamable HTTP 2025-11-25):
 
 | Tool | Description |
 |---|---|
@@ -1077,12 +1420,13 @@ url = "postgresql://accountingd:secret@db:5432/accountingd"
 | `list_dunning` | Active dunning cases |
 | `list_overdue` | Accounts with overdue invoices |
 | `update_abschlag` | Update monthly advance payment |
-| `import_payments` | Import CAMT.054 bank entries (deduplicated) |
-| `run_sepa_collection` | Generate pain.008 batches for all active mandates |
+| `import_payments` | Import flat bank-export entries (deduplicated) |
+| `run_sepa_collection` | Generate a pain.008 message for all active mandates (preview — `POST /api/v1/sepa/run` is what archives it) |
+| `list_sepa_collections` | Collections and their lifecycle: `SUBMITTED` / `SETTLED` / `REJECTED` / `RETURNED` / `REVERSED`, filterable by status and MaLo |
 | `trigger_jahresabschluss` | Run annual settlement (dry-run or commit) |
 | `run_abschlag_cycle` | Process Abschlagslauf for a specific billing day |
 | `compute_bilanzielle_abgrenzung` | pRAP/aRAP calculation for HGB §250 period close |
-| `suggest_payment_match` | AI payment reconciliation — match CAMT.054 to open Rechnungen |
+| `suggest_payment_match` | Reconcile an incoming transfer — exact resolution first, amount ranking only as a fallback |
 | `post_manual_booking` | Create an operator-authorised ledger entry |
 
 The `payment-reconciliation-agent` in `agentd` uses these tools for automated payment
