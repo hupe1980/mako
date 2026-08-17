@@ -271,8 +271,8 @@ mod tests {
                 vec![vec!["00001"], vec!["DELRES", "", "", "", "3.0"]],
             ),
             seg("BGM", vec![vec![""], vec!["DRES-001"], vec!["9"]]),
-            seg("NAD", vec![vec!["MS"], vec!["21X000000001370C"]]),
-            seg("NAD", vec![vec!["MR"], vec!["21X000000001368S"]]),
+            seg("NAD", vec![vec!["MS"], vec!["21X0000000013708"]]),
+            seg("NAD", vec![vec!["MR"], vec!["21X000000001368W"]]),
             seg("DTM", vec![vec!["137", "20260115", "102"]]),
             seg("RFF", vec![vec!["Z13", "DORD-001"]]),
             seg("STS", vec![vec!["Z01"]]),
@@ -287,8 +287,8 @@ mod tests {
                 vec![vec!["00001"], vec!["DELRES", "", "", "", "3.0"]],
             ),
             seg("BGM", vec![vec![""], vec!["DRES-002"], vec!["9"]]),
-            seg("NAD", vec![vec!["MS"], vec!["21X000000001370C"]]),
-            seg("NAD", vec![vec!["MR"], vec!["21X000000001368S"]]),
+            seg("NAD", vec![vec!["MS"], vec!["21X0000000013708"]]),
+            seg("NAD", vec![vec!["MR"], vec!["21X000000001368W"]]),
             seg("DTM", vec![vec!["137", "20260115", "102"]]),
             seg("RFF", vec![vec!["Z13", "DORD-002"]]),
             seg("STS", vec![vec!["Z03"]]),
@@ -309,8 +309,8 @@ mod tests {
     fn from_segments_accepted() {
         let msg = DeliveryResponseMessage::from_segments(accepted_segments());
         assert_eq!(msg.message_type(), DvgwMessageType::Delres);
-        assert_eq!(msg.sender_eic(), Some("21X000000001370C"));
-        assert_eq!(msg.receiver_eic(), Some("21X000000001368S"));
+        assert_eq!(msg.sender_eic(), Some("21X0000000013708"));
+        assert_eq!(msg.receiver_eic(), Some("21X000000001368W"));
         assert_eq!(msg.response_ref.as_deref(), Some("DRES-001"));
         assert_eq!(msg.order_ref.as_deref(), Some("DORD-001"));
         assert_eq!(msg.status, Some(DelresStatus::Accepted));

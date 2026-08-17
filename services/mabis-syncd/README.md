@@ -140,6 +140,38 @@ Incomplete coverage (slots no MaLo reported) is logged at `WARN` with the missin
 
 Triggering is separated from reading and restricted to the **NB** and **ÜNB** roles — the roles that aggregate a Bilanzierungsgebiet and have standing to file in the tenant's name. Read access is tenant-scoped because run history discloses which territories a tenant settles.
 
+## MCP server (read-only)
+
+`/mcp` on the same port — the agent plane's window into submission state.
+`agentd`'s `mabis-syncd-agent` was a submission monitor reading obsd's KPI
+report as a proxy for the table this server exposes. Filing a submission is
+**not** on MCP: it is a binding filing with the BIKO and stays behind the
+authenticated REST surface, where Cedar authorises a person.
+
+| Tool | Description |
+|---|---|
+| `get_submission_status` | Recent runs + failed / retry-exhausted / open-Korrekturbedarf counts |
+| `list_failed_submissions` | Failed runs, newest first, with `attempt_count` and `error_msg` |
+| `get_submission_run` | One run by UUID (version as RFC 3339) |
+| `list_korrekturbedarf` | Open negative Prüfmitteilungen (§9.8.1 obligations) |
+
+One prompt, `submission-triage`, carries the triage workflow — granted to the
+specialist as `context.prompts` rather than paraphrased into its manifest.
+
+Note for `agentd` deployments: agentplane refuses `-` in a `tool://` server
+component, so the grants and the `[mcp_servers]` key spell it `mabis_syncd`.
+
+## CloudEvents
+
+Emitted through the transactional outbox (persist-before-dispatch), drained to
+`erp_webhook_url` when configured. Both are failure signals — a healthy
+submission cycle is silent:
+
+| Type | When |
+|---|---|
+| `de.mabis.submission.failed` | An aggregation or BIKO submission failed; the row and the event commit in one transaction. Carries `run_id`, `bilanzierungsgebiet_id`, period, phase and `attempt_count` — at 3 the scheduler stops retrying. |
+| `de.mabis.korrekturbedarf.opened` | A negative Prüfmitteilung was recorded (§9.8.1): a corrected Summenzeitreihe is owed within the Clearing window. |
+
 ---
 
 ## Submission target — BIKO today, MaBiS-Hub later
@@ -207,6 +239,17 @@ audience = "api://mako-mabis-syncd"
 [schedule]
 erstaufschlag_werktag = 10   # Werktag after the Bilanzierungsmonat to submit on
 run_hour_utc          = 5    # 05:00 UTC = 06:00 CET / 07:00 CEST
+
+[mcp]                        # read-only MCP server at /mcp
+api_key = "env:MABIS_SYNCD_MCP_API_KEY"
+
+# Drains the de.mabis.* outbox (submission failures, Korrekturbedarf) —
+# persist-before-dispatch, retry + dead-letter, like every other service.
+# Point it at whatever should hear about a failed filing: the ERP, or
+# agentd's /webhook. Unset, the events are still enqueued but nothing
+# delivers them — and the startup log says so.
+erp_webhook_url = "http://erp:8000/events"
+erp_hmac_secret = "env:MABIS_SYNCD_ERP_HMAC_SECRET"
 ```
 
 Every value may be written as `env:VARNAME` and is resolved at startup. A referenced variable that is not set fails the process with the variable named — unresolved, the placeholder would be sent as the literal bearer token and every upstream call would 401.

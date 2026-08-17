@@ -100,7 +100,7 @@ pub struct UpsertRequest {
 
 #[derive(Serialize, ToSchema)]
 pub(crate) struct UpsertResponse {
-    #[schema(example = "10001234567")]
+    #[schema(example = "10001234558")]
     malo_id: String,
     #[schema(example = "2026-10-01T08:00:00Z")]
     updated_at: String,
@@ -108,7 +108,7 @@ pub(crate) struct UpsertResponse {
 
 #[derive(Serialize, ToSchema)]
 pub(crate) struct DeleteResponse {
-    #[schema(example = "10001234567")]
+    #[schema(example = "10001234558")]
     malo_id: String,
     deleted: bool,
 }

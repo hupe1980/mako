@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use axum::Router;
-use mabis_syncd::{config, server, sync_engine::SyncEngine};
+use mabis_syncd::{config, mcp_server, server, sync_engine::SyncEngine};
 use mako_service::{Daemon, ServiceContext};
 use tracing::info;
 
@@ -25,6 +25,11 @@ impl Daemon for MabisSyncd {
             .run(pool)
             .await
             .context("run mabis-syncd migrations")?;
+        // Transactional outbox: persist-before-dispatch table for the
+        // `de.mabis.*` CloudEvents (submission failures, Korrekturbedarf).
+        mako_service::outbox::ensure_schema(pool)
+            .await
+            .context("ensure event_outbox schema")?;
         Ok(())
     }
 
@@ -157,12 +162,45 @@ impl Daemon for MabisSyncd {
             });
         }
 
+        // ── Transactional-outbox drain worker ────────────────────────────
+        // Delivers persisted `de.mabis.*` CloudEvents (submission failures,
+        // Korrekturbedarf) to the configured webhook. Only spawned when one is
+        // configured — otherwise nothing would drain the outbox.
+        if let Some(url) = cfg.erp_webhook_url.clone() {
+            tokio::spawn(
+                mako_service::outbox::OutboxWorker::new(
+                    ctx.pool().clone(),
+                    url,
+                    cfg.erp_hmac_secret.clone().map(Into::into),
+                )
+                .run(ctx.shutdown.clone()),
+            );
+        } else {
+            tracing::warn!(
+                "mabis-syncd: erp_webhook_url not set — de.mabis.* events are enqueued \
+                 but nothing delivers them; a failed Summenzeitreihe submission will \
+                 not reach the agent plane or the ERP"
+            );
+        }
+
         let state = server::ServerState {
             pool: ctx.pool().clone(),
             engine,
             cfg: cfg.clone(),
         };
+
+        // ── MCP server (read-only) ───────────────────────────────────────
+        // The agent plane's window into submission state: without it,
+        // `mabis-syncd-agent` reads obsd's KPI report as a proxy for the
+        // submission table it is supposed to be monitoring.
+        let mcp_state = Arc::new(mcp_server::MabisMcpState {
+            pool: ctx.pool().clone(),
+            tenant: cfg.identity.tenant.clone(),
+            auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.identity.tenant),
+        });
+
         Ok(server::router(state)
+            .merge(mcp_server::router(mcp_state, ctx.shutdown.clone()))
             .layer(axum::Extension(cedar))
             .layer(axum::Extension(oidc)))
     }

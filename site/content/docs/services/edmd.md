@@ -27,14 +27,20 @@ Key responsibilities:
 
 The **domain calculation logic** is provided by the external [`metering`](https://github.com/hupe1980/metering) library crate (zero I/O, no async):
 
-> **`metering` 0.17 narrowed its scope**, and that moved a boundary. The crate
-> now states it computes *"energy and volume, not money"* with *"zero I/O, no
-> async, no clock"* — so the BSI TR-03109 **SMGW domain model** (gateway status,
-> certificate inventory, CLS channels) left it. Those are device administration,
-> not quantity calculations: they change without a single metered value
-> changing. They live in `edmd::smgw_model` now, next to the `smgw_sessions`
-> table and the two compliance sweeps that read them. The serde representation
-> is unchanged, so rows already stored deserialise untouched.
+> **Where the boundary runs.** `metering` computes *"energy and volume, not
+> money"*, with *"zero I/O, no async, no clock"* — so the BSI TR-03109 **SMGW
+> domain model** (gateway status, certificate inventory, CLS channels) is not
+> its business: those are device administration and change without a single
+> metered value changing. They live in `edmd::smgw_model`, next to the
+> `smgw_sessions` table and the two compliance sweeps that read them.
+>
+> Identifiers cross the boundary **typed**: `metering::MaloId` enforces the BDEW
+> Bildungsvorschrift — eleven digits, Codevergabestelle 1–9, and the
+> Anwendungshilfe check digit — at the parse. edmd's query types keep `String`
+> deliberately (they are built from HTTP parameters, and a counterparty-supplied
+> value must be *reportable* rather than un-representable), so the parse happens
+> at the store boundary and a malformed ID answers `400` with the reason instead
+> of failing opaquely inside a scan.
 
 
 | Function / Type | §-basis | Used in |
@@ -43,6 +49,29 @@ The **domain calculation logic** is provided by the external [`metering`](https:
 | `aggregate(intervals, AggregationConfig)` | § 12 StromNZV | `MeterBillingPeriod` |
 | `classify_messtyp(intervals, source)` | §3/§ 12 StromNZV, §41a EnWG | iMSys classification |
 | `compute_imbalance(actual, contracted)` | § 13 StromNZV | Mehr-/Mindermengensaldo |
+
+### The balancing day is not the calendar day
+
+A settlement period's boundary depends on the commodity. Electricity balances on
+the calendar day (00:00–00:00 Europe/Berlin); **gas balances on the Gastag,
+06:00–06:00** (GaBi Gas, following Art. 3 Nr. 6 VO (EU) 312/2014). Aggregating a
+gas Lastgang over calendar days books the 00:00–06:00 draw into the neighbouring
+Bilanzierungstag — six hours, *every day*, not only across a DST transition.
+
+So the read endpoints that aggregate a period take the commodity:
+
+| Endpoint | Parameter |
+|---|---|
+| `GET /api/v1/billing-period/{malo_id}` | `?sparte=strom` (default) · `gas` · `wasser` · `waerme` |
+| `GET /api/v1/deliveries/{malo_id}/imbalance/{year}/{month}` | `?sparte=strom` (default) · `gas` |
+
+Both boundaries resolve through `metering::calendar` against the Berlin zone
+rather than a fixed offset, so a period containing a DST transition is 23 or 25
+hours long as it should be. One consequence is worth knowing because the
+intuitive guess is wrong: the clocks change at 02:00/03:00 local, which is
+*before* 06:00 — so the long or short **Gastag is the one named after the
+Saturday**, while electricity's long day is the Sunday. Both are pinned by
+tests.
 | `score_intervals(intervals, config)` | — | Hampel quality scoring (A/B/C/F) |
 | `validate_intervals(intervals, config)` | § 60 Abs. 2 MsbG (Plausibilisierung) | V01–V10 validation engine |
 | `resample(intervals, config)` | § 13 StromNZV, MaBiS | Hourly/daily/monthly resampling |
@@ -904,7 +933,7 @@ endpoint accepts:
 
 ```json
 {
-  "malo_id": "51238696780",
+  "malo_id": "51238696012",
   "sparte": "STROM",
   "source": "IOT_PUSH",
   "intervals": [
@@ -1109,7 +1138,7 @@ contract — not a raw database dump — so ERP systems can consume it without
 parsing EDIFACT format-version details.
 
 ```bash
-curl -s "http://edmd:8380/api/v1/deliveries/10001234567?from=2026-01-01T00:00:00Z&to=2026-04-01T00:00:00Z" \
+curl -s "http://edmd:8380/api/v1/deliveries/10001234558?from=2026-01-01T00:00:00Z&to=2026-04-01T00:00:00Z" \
   -H "Authorization: Bearer <token>" | jq '.[0] | {
     obisKennzahl,
     menge_wert: .menge.wert,
@@ -1180,7 +1209,7 @@ generic time-series format used by API-Webdienste Strom consumers. Unlike
 structure). One `Zeitreihe` is returned per distinct OBIS register.
 
 ```bash
-curl -s "http://edmd:8380/api/v1/zeitreihe/10001234567?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z" \
+curl -s "http://edmd:8380/api/v1/zeitreihe/10001234558?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z" \
   -H "Authorization: Bearer <token>" | jq '.[0] | {
     bezeichnung,
     medium,
@@ -1195,7 +1224,7 @@ Response shape:
 ```json
 [
   {
-    "bezeichnung": "Zeitreihe MaLo 10001234567 OBIS 1-0:1.29.0",
+    "bezeichnung": "Zeitreihe MaLo 10001234558 OBIS 1-0:1.29.0",
     "medium":      "STROM",
     "messart":     "MITTELWERT",
     "einheit":     "KWH",
@@ -1232,7 +1261,7 @@ Readings are grouped by OBIS-Kennzahl — one `Lastgang` per distinct measuremen
 register.
 
 ```bash
-curl -s "http://edmd:8380/api/v1/lastgang/10001234567?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z" \
+curl -s "http://edmd:8380/api/v1/lastgang/10001234558?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z" \
   -H "Authorization: Bearer <token>" | jq '.[0] | {
     sparte,
     obis_kennzahl,
@@ -1526,7 +1555,7 @@ Routes: `POST /api/v1/virtual` · `GET /api/v1/virtual` ·
 curl -X POST http://edmd:8380/api/v1/virtual \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" -d '{
-    "virtual_malo_id": "10001234004",
+    "virtual_malo_id": "10001234095",
     "display_name":    "GGV MaLo2 — Wohnung 2",
     "sparte":          "STROM",
     "legal_basis":     "§42b EnWG Solarpaket I",
@@ -1544,7 +1573,7 @@ curl -X POST http://edmd:8380/api/v1/virtual \
 curl -X POST http://edmd:8380/api/v1/virtual \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" -d '{
-    "virtual_malo_id": "10001234004",
+    "virtual_malo_id": "10001234095",
     "display_name":    "GGV MaLo2 — proportional",
     "sparte":          "STROM",
     "legal_basis":     "§42b EnWG Solarpaket I",
@@ -1563,9 +1592,9 @@ curl -X POST http://edmd:8380/api/v1/virtual \
 
 ```bash
 # Net grid draw for tenant MaLo2 — computed live from plant + tenant consumption MeLos
-curl -s "http://edmd:8380/api/v1/virtual/10001234004/lastgang?from=2026-07-01T00:00:00Z&to=2026-07-02T00:00:00Z" \
+curl -s "http://edmd:8380/api/v1/virtual/10001234095/lastgang?from=2026-07-01T00:00:00Z&to=2026-07-02T00:00:00Z" \
   -H "Authorization: Bearer <token>" | jq '{
-    virtual_malo_id: "10001234004",
+    virtual_malo_id: "10001234095",
     first_interval: .[0].werte[0]
   }'
 ```
@@ -1686,11 +1715,11 @@ curl -s http://marktd:8180/api/v1/subscriptions/edmd \
 
 ```bash
 # BO4E Energiemenge — all meter readings for a MaLo (typed, ERP-consumable)
-curl -s "http://edmd:8380/api/v1/deliveries/10001234567?from=2026-01-01T00:00:00Z&to=2026-04-01T00:00:00Z" \
+curl -s "http://edmd:8380/api/v1/deliveries/10001234558?from=2026-01-01T00:00:00Z&to=2026-04-01T00:00:00Z" \
   -H "Authorization: Bearer <token>" | jq '.[0] | {obisKennzahl, menge_kwh: .menge.wert}'
 
 # Billing period for a MaLo (used by netzbilanzd)
-curl -s "http://edmd:8380/api/v1/billing-period/10001234567?from=2026-01-01&to=2026-03-31" \
+curl -s "http://edmd:8380/api/v1/billing-period/10001234558?from=2026-01-01&to=2026-03-31" \
   -H "Authorization: Bearer <token>" | jq '{
     spitzenleistung_kw,
     arbeitsmenge_kwh,
@@ -1699,15 +1728,15 @@ curl -s "http://edmd:8380/api/v1/billing-period/10001234567?from=2026-01-01&to=2
   }'
 
 # Mehr-/Mindermengensaldo for January 2026
-curl -s "http://edmd:8380/api/v1/imbalance/10001234567/2026/1" \
+curl -s "http://edmd:8380/api/v1/imbalance/10001234558/2026/1" \
   -H "Authorization: Bearer <token>" | jq .
 
 # BO4E Lastgang export — one object per OBIS register
-curl -s "http://edmd:8380/api/v1/lastgang/10001234567?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z" \
+curl -s "http://edmd:8380/api/v1/lastgang/10001234558?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z" \
   -H "Authorization: Bearer <token>" | jq '.[0] | {sparte, obis_kennzahl, zeit_intervall_laenge}'
 
 # BO4E Zeitreihe export — one object per OBIS register (medium/messart metadata)
-curl -s "http://edmd:8380/api/v1/zeitreihe/10001234567?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z" \
+curl -s "http://edmd:8380/api/v1/zeitreihe/10001234558?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z" \
   -H "Authorization: Bearer <token>" | jq '.[0] | {bezeichnung, medium, messart, einheit}'
 ```
 
@@ -1790,7 +1819,7 @@ cold tier never fills, since the watermark only advances when a cycle runs.
 **Typical MMM aggregation** (runs over the version-resolved, tier-split series):
 
 ```bash
-curl "http://edmd:8380/api/v1/archive/olap/10001234567?from=2023-01-01T00:00:00Z&to=2025-12-31T23:59:59Z" \
+curl "http://edmd:8380/api/v1/archive/olap/10001234558?from=2023-01-01T00:00:00Z&to=2025-12-31T23:59:59Z" \
   -H "Authorization: Bearer <token>" | jq '{total_kwh, read_count, from, to}'
 ```
 
@@ -1798,7 +1827,7 @@ Response:
 
 ```json
 {
-  "malo_id":    "10001234567",
+  "malo_id":    "10001234558",
   "total_kwh":  "123456.78900",
   "read_count": 105120,
   "from":       "2023-01-01 00:00:00 +00:00:00",
@@ -1827,7 +1856,7 @@ overhead in the consumer.
 
 ```bash
 # Request Arrow IPC stream from the Lastgang endpoint
-curl -s "http://edmd:8380/api/v1/lastgang/10001234567?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z" \
+curl -s "http://edmd:8380/api/v1/lastgang/10001234558?from=2026-01-01T00:00:00Z&to=2026-02-01T00:00:00Z" \
   -H "Authorization: Bearer <token>" \
   -H "Accept: application/vnd.apache.arrow.stream" \
   > reads.arrows
@@ -2006,14 +2035,14 @@ and graceful shutdown via `CancellationToken`. On each sweep:
 
 ```bash
 # Register or update a SMGW session (after BSI TR-03109-4 Admin session or GWA sync)
-curl -s -X PUT "http://edmd:8380/api/v1/smgw/10001234567" \
+curl -s -X PUT "http://edmd:8380/api/v1/smgw/10001234558" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
     "device_id":       "SMGW-2026-001",
     "firmware_version": "3.1.2",
     "msb_mp_id":       "9900000000003",
-    "malo_id":         "10001234567",
+    "malo_id":         "10001234558",
     "status":          "OPERATIONAL",
     "certificates": [
       {
@@ -2029,7 +2058,7 @@ curl -s -X PUT "http://edmd:8380/api/v1/smgw/10001234567" \
     "cls_channels": [
       {
         "channel_id":     "CLS-00042",
-        "malo_id":        "10001234567",
+        "malo_id":        "10001234558",
         "device_type":    "HEAT_PUMP",
         "max_power_kw":   "8.50",
         "channel_status": "ACTIVE",
@@ -2044,7 +2073,7 @@ curl -s -X PUT "http://edmd:8380/api/v1/smgw/10001234567" \
 # → 200 { "status": "accepted_with_compliance_issues", "issues": [...] } when issues detected
 
 # Get session + 10 most recent compliance events
-curl -s "http://edmd:8380/api/v1/smgw/10001234567" \
+curl -s "http://edmd:8380/api/v1/smgw/10001234558" \
   -H "Authorization: Bearer <token>" | jq '{gateway_status, recent_issues}'
 
 # Fleet overview (with 24-hour issue counts)
@@ -2068,10 +2097,10 @@ curl -s -X POST "http://edmd:8380/api/v1/smgw/compliance/scan" \
   "id":          "a1b2c3d4-...",
   "type":        "de.messwert.cls.compliance-issue",
   "source":      "urn:mako:edmd:tenant:9900000000003",
-  "subject":     "10001234567",
+  "subject":     "10001234558",
   "time":        "2026-07-18T05:00:00Z",
   "data": {
-    "malo_id":        "10001234567",
+    "malo_id":        "10001234558",
     "device_id":      "SMGW-2026-001",
     "issue_type":     "CERT_EXPIRING",
     "severity":       "WARNING",
@@ -2132,7 +2161,7 @@ meterstore's registry tables (`meterstore_subject_map` / `meterstore_erasures`)
 live in the same database, so all of the above commits or rolls back together.
 
 ```bash
-curl -X DELETE "http://edmd:8380/api/v1/gdpr/erasure/10001234567" \
+curl -X DELETE "http://edmd:8380/api/v1/gdpr/erasure/10001234558" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" -d '{
     "reason":        "Customer right-to-erasure request #2026-42",
@@ -2143,7 +2172,7 @@ curl -X DELETE "http://edmd:8380/api/v1/gdpr/erasure/10001234567" \
 Response `200 OK`:
 ```json
 {
-  "malo_id":          "10001234567",
+  "malo_id":          "10001234558",
   "status":           "erased",
   "subject_unlinked": true,
   "mechanism":        "meterstore subject-registry pseudonymisation (append-only tiers)",

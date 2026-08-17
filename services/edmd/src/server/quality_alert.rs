@@ -137,7 +137,7 @@ mod tests {
 
     fn alert<'a>(v: &'a BatchValidation, hampel: Option<serde_json::Value>) -> QualityAlert<'a> {
         QualityAlert {
-            malo_id: "51238696780",
+            malo_id: "51238696012",
             door: "test",
             correlation_id: "c",
             causation_id: "s",

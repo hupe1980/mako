@@ -6,6 +6,45 @@
 #[allow(unused_imports)]
 use super::*;
 
+/// A refusal, small enough to sit in an `Err` without carrying a whole response.
+struct Refusal {
+    status: StatusCode,
+    error: String,
+}
+
+impl Refusal {
+    fn into_response(self) -> axum::response::Response {
+        (
+            self.status,
+            Json(serde_json::json!({ "error": self.error })),
+        )
+            .into_response()
+    }
+}
+
+/// Parse a path MaLo-ID, answering `400` rather than failing inside the store.
+///
+/// `metering::MaloId` enforces the BDEW Bildungsvorschrift (eleven digits,
+/// Vergabestelle 1–9, Anwendungshilfe check digit). A value that cannot be a
+/// MaLo is a bad request, not a lookup that happened to find nothing.
+fn parse_malo(malo_id: &str) -> Result<metering::MaloId, Refusal> {
+    malo_id.parse().map_err(|e: metering::ParseError| Refusal {
+        status: StatusCode::BAD_REQUEST,
+        error: format!("{malo_id}: {e}"),
+    })
+}
+
+/// Open a series query for `malo`, answering `500` if the store refuses.
+fn open_series(
+    store: &meterstore::MeterStore,
+    malo: metering::MaloId,
+) -> Result<meterstore::SeriesQuery<'_>, Refusal> {
+    store.series(malo).map_err(|e| Refusal {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        error: e.to_string(),
+    })
+}
+
 // ── Archive endpoint handlers ─────────────────────────────────────────────────
 
 /// `GET /api/v1/archive/status`
@@ -91,10 +130,12 @@ pub(crate) async fn get_archive_olap(
 
     // MMM aggregation now runs against the version-resolved, tier-split series
     // meterstore hands back — the same numbers a settlement would reconcile.
-    match state
-        .repo
-        .store()
-        .series(malo_id.clone())
+    let query = match parse_malo(&malo_id).and_then(|m| open_series(state.repo.store(), m)) {
+        Ok(q) => q,
+        Err(refusal) => return refusal.into_response(),
+    };
+
+    match query
         .column_eq(
             "tenant",
             datafusion::scalar::ScalarValue::Utf8(Some(state.tenant.clone())),
@@ -288,10 +329,12 @@ pub(crate) async fn get_archive_timeseries(
         .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
         .unwrap_or_else(OffsetDateTime::now_utc);
 
-    match state
-        .repo
-        .store()
-        .series(malo_id.clone())
+    let query = match parse_malo(&malo_id).and_then(|m| open_series(state.repo.store(), m)) {
+        Ok(q) => q,
+        Err(refusal) => return refusal.into_response(),
+    };
+
+    match query
         .column_eq(
             "tenant",
             datafusion::scalar::ScalarValue::Utf8(Some(state.tenant.clone())),

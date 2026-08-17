@@ -700,7 +700,12 @@ impl EinsdMcpHandler {
             "mastr": {
                 "registriert": mastr_ok,
                 "nummer": r.try_get::<Option<String>, _>("mastr_nummer").unwrap_or(None),
-                "datum": r.try_get::<Option<time::Date>, _>("mastr_datum").unwrap_or(None),
+                // ISO 8601, not `time::Date`'s derived `[year, ordinal]` array —
+                // see the note in obsd's MCP server. A date a consumer cannot
+                // read must not look like one it can.
+                "datum": r.try_get::<Option<time::Date>, _>("mastr_datum")
+                    .unwrap_or(None)
+                    .map(|d| d.to_string()),
             },
             "penalty_risk": {
                 "monthly_eur": penalty_per_month,

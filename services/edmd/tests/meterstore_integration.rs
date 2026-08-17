@@ -123,7 +123,7 @@ fn kwh(s: &str) -> Decimal {
 fn validated(reads: Vec<MeterRead>) -> ValidatedReads {
     let malo = reads
         .first()
-        .map_or("51238696780", |r| r.malo_id.as_str())
+        .map_or("51238696012", |r| r.malo_id.as_str())
         .to_owned();
     ValidatedReads::validate(reads, "TEST", &malo).0
 }
@@ -172,7 +172,7 @@ async fn schema_check_constraints_reject_bad_data() {
     let bad_quality = sqlx::query(
         "INSERT INTO meter_billing_periods
            (malo_id, period_from, period_to, arbeitsmenge_kwh, quality, tenant)
-         VALUES ('51238696780','2026-01-01','2026-01-31', 1, 'BOGUS', 't')",
+         VALUES ('51238696012','2026-01-01','2026-01-31', 1, 'BOGUS', 't')",
     )
     .execute(&pool)
     .await;
@@ -185,7 +185,7 @@ async fn schema_check_constraints_reject_bad_data() {
     let bad_period = sqlx::query(
         "INSERT INTO meter_billing_periods
            (malo_id, period_from, period_to, arbeitsmenge_kwh, quality, tenant)
-         VALUES ('51238696780','2026-02-01','2026-01-01', 1, 'MEASURED', 't')",
+         VALUES ('51238696012','2026-02-01','2026-01-01', 1, 'MEASURED', 't')",
     )
     .execute(&pool)
     .await;
@@ -199,7 +199,7 @@ async fn schema_check_constraints_reject_bad_data() {
         "INSERT INTO meter_read_corrections
            (malo_id, dtm_from, dtm_to, original_kwh, original_quality,
             corrected_kwh, corrected_quality, reason, source, tenant)
-         VALUES ('51238696780', now(), now() - interval '1 hour',
+         VALUES ('51238696012', now(), now() - interval '1 hour',
                  1, 'MEASURED', 2, 'CORRECTED', 'r', 'OPERATOR', 't')",
     )
     .execute(&pool)
@@ -213,7 +213,7 @@ async fn schema_check_constraints_reject_bad_data() {
     sqlx::query(
         "INSERT INTO meter_billing_periods
            (malo_id, period_from, period_to, arbeitsmenge_kwh, quality, tenant)
-         VALUES ('51238696780','2026-01-01','2026-01-31', 1, 'SUBSTITUTED', 't')",
+         VALUES ('51238696012','2026-01-01','2026-01-31', 1, 'SUBSTITUTED', 't')",
     )
     .execute(&pool)
     .await
@@ -243,7 +243,7 @@ async fn reads_and_typ2_share_a_catalog_but_stay_isolated() {
     let t = OffsetDateTime::now_utc() - Duration::days(1);
     reads
         .store_reads(validated(vec![read(
-            "51238696780",
+            "51238696012",
             t,
             "3.5",
             Sparte::Strom,
@@ -252,7 +252,7 @@ async fn reads_and_typ2_share_a_catalog_but_stay_isolated() {
         .await
         .expect("store authoritative read");
     typ2.store_typ2_reads(&[Typ2Read {
-        malo_id: "51238696780".to_owned(),
+        malo_id: "51238696012".to_owned(),
         melo_id: None,
         dtm_from: t,
         dtm_to: t + Duration::minutes(15),
@@ -271,7 +271,7 @@ async fn reads_and_typ2_share_a_catalog_but_stay_isolated() {
 
     // The billing read sees only the authoritative value.
     let billing = reads
-        .query(&window("51238696780", t))
+        .query(&window("51238696012", t))
         .await
         .expect("query reads");
     assert_eq!(billing.len(), 1);
@@ -283,7 +283,7 @@ async fn reads_and_typ2_share_a_catalog_but_stay_isolated() {
 
     // The Typ-2 read sees only the Typ-2 value.
     let esa = typ2
-        .query_typ2(&window("51238696780", t))
+        .query_typ2(&window("51238696012", t))
         .await
         .expect("query typ2");
     assert_eq!(esa.len(), 1);
@@ -297,7 +297,7 @@ async fn ingest_roundtrip_preserves_gas_sparte() {
     let t = OffsetDateTime::now_utc() - Duration::days(1);
 
     repo.store_reads(validated(vec![read(
-        "51238696780",
+        "51238696012",
         t,
         "3.5",
         Sparte::Gas,
@@ -306,7 +306,7 @@ async fn ingest_roundtrip_preserves_gas_sparte() {
     .await
     .expect("store gas read");
 
-    let reads = repo.query(&window("51238696780", t)).await.expect("query");
+    let reads = repo.query(&window("51238696012", t)).await.expect("query");
     assert_eq!(reads.len(), 1, "the stored interval reads back");
     assert_eq!(
         reads[0].sparte,
@@ -327,7 +327,7 @@ async fn ingest_roundtrip_preserves_provenance() {
     let (repo, _pool, _pg, _wh) = setup().await;
     let t = OffsetDateTime::now_utc() - Duration::days(1);
 
-    let mut r = read("51238696780", t, "7.0", Sparte::Strom, "1-0:1.8.0");
+    let mut r = read("51238696012", t, "7.0", Sparte::Strom, "1-0:1.8.0");
     r.source = IngestionSource::DirectPush;
     r.sender_mp_id = Some("9988888888888".to_owned());
     r.allocation_version = "ESA-42".to_owned();
@@ -335,7 +335,7 @@ async fn ingest_roundtrip_preserves_provenance() {
         .await
         .expect("store read");
 
-    let reads = repo.query(&window("51238696780", t)).await.expect("query");
+    let reads = repo.query(&window("51238696012", t)).await.expect("query");
     assert_eq!(reads.len(), 1);
     assert_eq!(
         reads[0].source,
@@ -362,9 +362,9 @@ async fn billable_filter_excludes_faulty_from_aggregates() {
     let (repo, _pool, _pg, _wh) = setup().await;
     let t = OffsetDateTime::now_utc() - Duration::days(1);
 
-    let good = read("51238696780", t, "3.5", Sparte::Strom, "1-0:1.8.0");
+    let good = read("51238696012", t, "3.5", Sparte::Strom, "1-0:1.8.0");
     let mut bad = read(
-        "51238696780",
+        "51238696012",
         t + Duration::minutes(15),
         "9.0",
         Sparte::Strom,
@@ -381,7 +381,7 @@ async fn billable_filter_excludes_faulty_from_aggregates() {
     // depend on the hour it runs at.
     let day = metering::calendar::local_day(t);
     let report = repo
-        .imbalance("51238696780", day, day, "9910000000001")
+        .imbalance("51238696012", day, day, "9910000000001", Sparte::Strom)
         .await
         .expect("imbalance");
     assert_eq!(
@@ -401,21 +401,21 @@ async fn query_as_of_reconstructs_the_value_in_force() {
     let interval = OffsetDateTime::now_utc() - Duration::days(1);
 
     // Original delivered 3h ago.
-    let mut original = read("51238696780", interval, "3.5", Sparte::Strom, "1-0:1.8.0");
+    let mut original = read("51238696012", interval, "3.5", Sparte::Strom, "1-0:1.8.0");
     original.valid_from_tx = Some(OffsetDateTime::now_utc() - Duration::hours(3));
     repo.store_reads(validated(vec![original]))
         .await
         .expect("store original");
 
     // Correction delivered 1h ago (supersedes on current read).
-    let mut corrected = read("51238696780", interval, "4.0", Sparte::Strom, "1-0:1.8.0");
+    let mut corrected = read("51238696012", interval, "4.0", Sparte::Strom, "1-0:1.8.0");
     corrected.quality = QualityFlag::Corrected;
     corrected.valid_from_tx = Some(OffsetDateTime::now_utc() - Duration::hours(1));
     repo.store_reads(validated(vec![corrected]))
         .await
         .expect("store correction");
 
-    let q = window("51238696780", interval);
+    let q = window("51238696012", interval);
 
     // Current knowledge: the correction.
     let now_reads = repo.query(&q).await.expect("query");
@@ -449,7 +449,7 @@ async fn query_as_of_hides_an_interval_first_stored_later() {
     let (repo, _pool, _pg, _wh) = setup().await;
     let interval = OffsetDateTime::now_utc() - Duration::days(1);
 
-    let mut early = read("51238696780", interval, "3.5", Sparte::Strom, "1-0:1.8.0");
+    let mut early = read("51238696012", interval, "3.5", Sparte::Strom, "1-0:1.8.0");
     early.valid_from_tx = Some(OffsetDateTime::now_utc() - Duration::hours(3));
     repo.store_reads(validated(vec![early]))
         .await
@@ -458,7 +458,7 @@ async fn query_as_of_hides_an_interval_first_stored_later() {
     // A second interval, first stored 1h ago.
     let later_interval = interval + Duration::minutes(15);
     let mut late = read(
-        "51238696780",
+        "51238696012",
         later_interval,
         "9.0",
         Sparte::Strom,
@@ -469,7 +469,7 @@ async fn query_as_of_hides_an_interval_first_stored_later() {
         .await
         .expect("store late");
 
-    let q = window("51238696780", interval);
+    let q = window("51238696012", interval);
     let mid = OffsetDateTime::now_utc() - Duration::hours(2);
     let as_of_reads = repo.query_as_of(&q, mid).await.expect("query_as_of");
     assert_eq!(
@@ -493,14 +493,14 @@ async fn latest_read_returns_the_newest_interval() {
     let later = base + Duration::minutes(15);
 
     repo.store_reads(validated(vec![
-        read("51238696780", earlier, "1.0", Sparte::Strom, "1-0:1.8.0"),
-        read("51238696780", later, "2.0", Sparte::Strom, "1-0:1.8.0"),
+        read("51238696012", earlier, "1.0", Sparte::Strom, "1-0:1.8.0"),
+        read("51238696012", later, "2.0", Sparte::Strom, "1-0:1.8.0"),
     ]))
     .await
     .expect("store reads");
 
     let latest = repo
-        .latest_read("51238696780", "9910000000001")
+        .latest_read("51238696012", "9910000000001")
         .await
         .expect("latest_read")
         .expect("a reading exists");
@@ -516,7 +516,7 @@ async fn correction_supersedes_value_and_writes_audit_row() {
 
     // Store the original two hours "ago" (transaction time) so the correction,
     // stored now, is unambiguously the newer version on resolution.
-    let mut original = read("51238696780", t, "3.5", Sparte::Strom, "1-0:1.8.0");
+    let mut original = read("51238696012", t, "3.5", Sparte::Strom, "1-0:1.8.0");
     original.valid_from_tx = Some(OffsetDateTime::now_utc() - Duration::hours(2));
     repo.store_reads(validated(vec![original]))
         .await
@@ -524,7 +524,7 @@ async fn correction_supersedes_value_and_writes_audit_row() {
 
     let ids = repo
         .store_corrections(&[CorrectionRecord {
-            malo_id: "51238696780".to_owned(),
+            malo_id: "51238696012".to_owned(),
             obis_code: Some("1-0:1.8.0".to_owned()),
             dtm_from: t,
             dtm_to: t + Duration::minutes(15),
@@ -546,14 +546,14 @@ async fn correction_supersedes_value_and_writes_audit_row() {
     // The § 60 Abs. 6 immutable audit row was written.
     let audit_rows: i64 =
         sqlx::query_scalar("SELECT count(*) FROM meter_read_corrections WHERE malo_id = $1")
-            .bind("51238696780")
+            .bind("51238696012")
             .fetch_one(&pool)
             .await
             .expect("count audit rows");
     assert_eq!(audit_rows, 1, "an immutable correction audit row exists");
 
     // The corrected value now wins on read (latest-version-wins).
-    let reads = repo.query(&window("51238696780", t)).await.expect("query");
+    let reads = repo.query(&window("51238696012", t)).await.expect("query");
     assert_eq!(reads.len(), 1);
     assert_eq!(
         reads[0].quantity_kwh,
@@ -572,14 +572,14 @@ async fn ingest_overwrite_audit_row_covers_the_full_interval() {
     let (repo, pool, _pg, _wh) = setup().await;
     let t = OffsetDateTime::now_utc() - Duration::days(1);
 
-    let mut first = read("51238696780", t, "3.5", Sparte::Strom, "1-0:1.8.0");
+    let mut first = read("51238696012", t, "3.5", Sparte::Strom, "1-0:1.8.0");
     first.valid_from_tx = Some(OffsetDateTime::now_utc() - Duration::hours(2));
     repo.store_reads(validated(vec![first]))
         .await
         .expect("store first");
 
     // Same interval, newer transaction time, different value → overwrites.
-    let mut second = read("51238696780", t, "9.0", Sparte::Strom, "1-0:1.8.0");
+    let mut second = read("51238696012", t, "9.0", Sparte::Strom, "1-0:1.8.0");
     second.valid_from_tx = Some(OffsetDateTime::now_utc());
     repo.store_reads(validated(vec![second]))
         .await
@@ -588,7 +588,7 @@ async fn ingest_overwrite_audit_row_covers_the_full_interval() {
     let (dtm_from, dtm_to): (OffsetDateTime, OffsetDateTime) = sqlx::query_as(
         "SELECT dtm_from, dtm_to FROM meter_read_corrections WHERE malo_id = $1 AND source = 'MSCONS_UPDATE'",
     )
-    .bind("51238696780")
+    .bind("51238696012")
     .fetch_one(&pool)
     .await
     .expect("the overwrite wrote a § 60 Abs. 6 audit row");
@@ -607,7 +607,7 @@ async fn gdpr_erasure_unlinks_the_ingest_registered_subject() {
     let t = OffsetDateTime::now_utc() - Duration::days(1);
 
     repo.store_reads(validated(vec![read(
-        "51238696780",
+        "51238696012",
         t,
         "3.5",
         Sparte::Strom,
@@ -623,7 +623,7 @@ async fn gdpr_erasure_unlinks_the_ingest_registered_subject() {
 
     // The subject is qualified by tenant, so one tenant's erasure cannot unlink
     // another tenant's reading of the same MaLo.
-    let natural = edmd::store::subject_natural_id("9910000000001", "51238696780");
+    let natural = edmd::store::subject_natural_id("9910000000001", "51238696012");
 
     // Ingest registered the MaLo as an erasure subject.
     let subject = registry
@@ -660,9 +660,9 @@ async fn reads_are_scoped_to_their_tenant() {
     let t = OffsetDateTime::now_utc() - Duration::days(1);
 
     // The SAME MaLo under two tenants, one interval each.
-    let mut alpha = read("51238696780", t, "3.5", Sparte::Strom, "1-0:1.8.0");
+    let mut alpha = read("51238696012", t, "3.5", Sparte::Strom, "1-0:1.8.0");
     alpha.tenant = "9910000000001".to_owned();
-    let mut beta = read("51238696780", t, "9.9", Sparte::Strom, "1-0:1.8.0");
+    let mut beta = read("51238696012", t, "9.9", Sparte::Strom, "1-0:1.8.0");
     beta.tenant = "9920000000002".to_owned();
     repo.store_reads(validated(vec![alpha]))
         .await
@@ -672,7 +672,7 @@ async fn reads_are_scoped_to_their_tenant() {
         .expect("store beta");
 
     let q = |tenant: &str| TimeSeriesQuery {
-        malo_id: "51238696780".to_owned(),
+        malo_id: "51238696012".to_owned(),
         from: t - Duration::hours(1),
         to: t + Duration::hours(1),
         sparte: None,
@@ -722,7 +722,7 @@ async fn a_substitute_reproduces_the_same_slot_one_week_earlier() {
     use time::format_description::well_known::Rfc3339;
 
     let (repo, pool, _pg, _wh) = setup().await;
-    let malo = "51238696780";
+    let malo = "51238696012";
     let obis = "1-0:1.8.0";
 
     // A gap well in the past, so V08 (future timestamp) cannot fire on the
@@ -872,7 +872,7 @@ async fn a_short_gap_interpolates_between_its_real_brackets() {
     use time::format_description::well_known::Rfc3339;
 
     let (repo, pool, _pg, _wh) = setup().await;
-    let malo = "51238696780";
+    let malo = "51238696012";
     let obis = "1-0:1.8.0";
 
     // Brackets at T0 and T0+45min; the two slots between them are missing.
@@ -979,7 +979,7 @@ async fn a_billing_period_is_a_berlin_month_not_a_utc_one() {
     use time::macros::{date, datetime};
 
     let (repo, _pool, _pg, _wh) = setup().await;
-    let malo = "51238696780";
+    let malo = "51238696012";
     let obis = "1-0:1.8.0";
 
     let reads = vec![
@@ -1022,6 +1022,7 @@ async fn a_billing_period_is_a_berlin_month_not_a_utc_one() {
 
     let period = repo
         .billing_period(&BillingPeriodQuery {
+            sparte: Sparte::Strom,
             malo_id: malo.to_owned(),
             period_from: date!(2026 - 07 - 01),
             period_to: date!(2026 - 07 - 31),
@@ -1078,6 +1079,7 @@ async fn a_periods_quality_is_its_worst_contributor_by_severity_rank() {
 
     let period = repo
         .billing_period(&BillingPeriodQuery {
+            sparte: Sparte::Strom,
             malo_id: malo.to_owned(),
             period_from: date!(2026 - 07 - 01),
             period_to: date!(2026 - 07 - 31),
@@ -1110,7 +1112,7 @@ async fn a_faulty_slot_is_a_gap_a_substitute_may_fill() {
     use time::format_description::well_known::Rfc3339;
 
     let (repo, pool, _pg, _wh) = setup().await;
-    let malo = "51238696782";
+    let malo = "51238696129";
     let obis = "1-0:1.8.0";
 
     let gap_from = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("2026-01-01T00:00Z");

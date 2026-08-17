@@ -134,7 +134,7 @@ NAD+MS+9900111222333::293'\
 NAD+MR+9900444555666::293'\
 UNS+D'\
 NAD+DP+DE0001234567890::293'\
-LOC+172+12345678901'\
+LOC+172+12345678989'\
 DTM+163:20230101:102'\
 DTM+164:20230131:102'\
 LIN+1'\
@@ -182,7 +182,7 @@ fn mscons_time_series_within_delivery_point() {
     assert_eq!(dp.time_series.len(), 1, "one LOC group");
     let ts = &dp.time_series[0];
     assert_eq!(ts.loc.qualifier, "172");
-    assert_eq!(ts.loc.location_id.as_deref(), Some("12345678901"));
+    assert_eq!(ts.loc.location_id.as_deref(), Some("12345678989"));
     // DTM 163 and 164 collected.
     assert_eq!(ts.dtm.len(), 2);
     assert_eq!(ts.dtm[0].qualifier, "163");
@@ -376,7 +376,7 @@ RFF+TN:TREF001'\
 DTM+163:20230701:102'\
 IDE+Z01+DE0001234567890'\
 DTM+92:20230701:102'\
-LOC+172+12345678901'\
+LOC+172+12345678989'\
 RFF+Z13:11001'\
 UNT+11+MSG004'";
 
@@ -431,7 +431,7 @@ fn utilmd_transaction_dtm_and_loc() {
     assert_eq!(tx.dtm[0].qualifier, "92");
     let loc = tx.loc.as_ref().expect("LOC within transaction");
     assert_eq!(loc.qualifier, "172");
-    assert_eq!(loc.location_id.as_deref(), Some("12345678901"));
+    assert_eq!(loc.location_id.as_deref(), Some("12345678989"));
 }
 
 #[cfg(feature = "utilmd")]

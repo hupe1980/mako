@@ -213,13 +213,13 @@ All **17** daemons share a common operational model:
 - **OIDC/JWT** — asymmetric algorithm only; JWKS cached with background refresh; omit `[oidc]` for dev mode
 - **OpenTelemetry** — OTLP traces on all workflow commands, event appends, and webhook deliveries
 
-**MCP server** — a `POST|GET /mcp` endpoint (MCP Streamable HTTP, 2025-11-25) for
-LLM tooling — is exposed by **14 of the 17**: all except `mabis-syncd`, `outputd`
+**MCP server** — a `POST|GET /mcp` endpoint (MCP Streamable HTTP) for
+LLM tooling — is exposed by **15 of the 17**: all except `outputd`
 and `agentd`, which is the MCP *host* that calls the others.
 
 | Daemon | Port | Role | Config file |
 |--------|------|------|-------------|
-| `makod` | `:8080` / `:4080` / `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 67+ workflows, AS4 ingest, deadlines | `makod.toml` |
+| `makod` | `:8080` / `:4080` / `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 69 workflows, AS4 ingest, deadlines | `makod.toml` |
 | `marktd` | `:8180` | Market Data Hub — MaLo/MeLo/NeLo/TR/SR, Lokationszuordnung graph, preisblaetter, VersorgungsStatus, `event_log` replay, EventBus fan-out; **Geraet** typed konfigurationen sub-resource (16-variant `Konfigurationsparameter` enum, GIN-indexed); **Zaehlzeitdefinition** typed endpoint; ZaehlzeitRegister auto-population from WiM Stammdaten | `marktd.toml` |
 | `processd` | `:8580` | Process decision engine — NB STP (`netz-checker`) + LF E_0624 auto-response | `processd.toml` |
 | `invoicd` | `:8280` | INVOIC plausibility — REMADV, selbstausstellen, overdue-REMADV, § 147 AO / GoBD audit | `invoicd.toml` |

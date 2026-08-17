@@ -191,7 +191,7 @@ async fn lookup_unknown_malo_returns_empty() {
 
     let found = store
         .as_process_registry()
-        .lookup_correlated(tenant_id, "99999999999")
+        .lookup_correlated(tenant_id, "99999999044")
         .await
         .expect("lookup_correlated");
 
@@ -351,7 +351,7 @@ async fn register_correlated_is_idempotent() {
 async fn nb_lieferbeginn_bestaetigen_dispatches_to_supplier_change_workflow() {
     let state = make_state(&["NB"]).await;
     let tenant_id = state.tenant_id;
-    let malo_id = "51238696780";
+    let malo_id = "51238696012";
 
     // Simulate ingest dispatcher: spawn GpkeSupplierChangeWorkflow for this MaLo.
     let process_id = spawn_supplier_change(&state.store, tenant_id, malo_id, 55001).await;
@@ -393,7 +393,7 @@ async fn nb_lieferbeginn_bestaetigen_dispatches_to_supplier_change_workflow() {
 async fn nb_lieferbeginn_ablehnen_dispatches_to_supplier_change_workflow() {
     let state = make_state(&["NB"]).await;
     let tenant_id = state.tenant_id;
-    let malo_id = "51238696888";
+    let malo_id = "51238696806";
 
     let process_id = spawn_supplier_change(&state.store, tenant_id, malo_id, 55001).await;
 
@@ -431,7 +431,7 @@ async fn nb_lieferbeginn_ablehnen_dispatches_to_supplier_change_workflow() {
 async fn nb_lieferende_bestaetigen_dispatches_to_supplier_change_workflow() {
     let state = make_state(&["NB"]).await;
     let tenant_id = state.tenant_id;
-    let malo_id = "51238696977";
+    let malo_id = "51238696913";
 
     let process_id = spawn_supplier_change(&state.store, tenant_id, malo_id, 55004).await;
 
@@ -457,7 +457,7 @@ async fn nb_lieferende_bestaetigen_dispatches_to_supplier_change_workflow() {
 async fn nb_lieferende_ablehnen_dispatches_to_supplier_change_workflow() {
     let state = make_state(&["NB"]).await;
     let tenant_id = state.tenant_id;
-    let malo_id = "51238697878";
+    let malo_id = "51238697896";
 
     spawn_supplier_change(&state.store, tenant_id, malo_id, 55004).await;
 
@@ -482,7 +482,7 @@ async fn nb_lieferende_ablehnen_dispatches_to_supplier_change_workflow() {
 async fn nb_bestaetigen_unknown_malo_returns_process_not_found() {
     let state = make_state(&["NB"]).await;
 
-    let payload = serde_json::json!({ "malo_id": "99999999990" });
+    let payload = serde_json::json!({ "malo_id": "99999999945" });
     let err =
         makod::commands_api::dispatch_command(&state, "gpke.lieferbeginn.bestaetigen", &payload)
             .await

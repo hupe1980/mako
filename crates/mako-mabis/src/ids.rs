@@ -6,33 +6,47 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A Bilanzierungsgebiet (settlement zone) within the German electricity grid.
+/// Balance-group topology identifiers, validated by `rubo4e`.
 ///
-/// Each ÜNB / NB operates one or more Bilanzierungsgebiete. All MaLos within a
-/// Bilanzierungsgebiet belong to the same settlement pool for MaBiS.
+/// A Bilanzierungsgebiet and a Bilanzkreis are both 16-character EIC codes and
+/// look alike, but they are different objects and ENTSO-E types them
+/// differently: a **Bilanzkreis is a Party (`X`)** — it is held by a
+/// Bilanzkreisverantwortlicher, a market participant — while a
+/// **Bilanzierungsgebiet is an Area (`Y`)**, the grid region a Marktlokation
+/// balances in. The German codes are issued on that basis by Energie Codes und
+/// Services (EIC functions *Balance Group* and *Metering Grid Area*).
 ///
-/// Source: BK6-22-024 (MaBiS) — Bilanzierungsgebiet definitions; BDEW code list.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct BilanzierungsgebietId(pub String);
-
-impl std::fmt::Display for BilanzierungsgebietId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-/// A Bilanzkreis (balance group) within a Bilanzierungsgebiet.
+/// # Why these are validated rather than plain newtypes
 ///
-/// A BKV (Bilanzkreisverantwortlicher) holds one or more Bilanzkreise. Each MaLo
-/// is assigned to exactly one Bilanzkreis within its Bilanzierungsgebiet.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct BilanzkreisId(pub String);
-
-impl std::fmt::Display for BilanzkreisId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
+/// They were `pub String` newtypes: the *type* separated them, the *content*
+/// was unchecked, so a Bilanzkreis EIC in a Bilanzierungsgebiet field was
+/// representable and — because MSCONS SG6 carries both as free text under
+/// different `LOC` qualifiers — would have been accepted by the BIKO and filed
+/// against the wrong object. That is the failure this module's
+/// [`MabisZaehlpunktId`] documentation already calls out for `LOC+172`; it
+/// applied equally to `LOC+107` and `LOC+237` and was simply not enforced.
+///
+/// Validation belongs here rather than nowhere, because this is a value mako
+/// **produces**: it comes from mako's own `marktd` master data, not from a
+/// counterparty. The rule stated on [`MabisZaehlpunktId`] — parse what the
+/// system produces, keep what it receives representable — puts these on the
+/// parsing side.
+///
+/// Failing here is also the *cheap* failure, and the argument for leaving it
+/// unvalidated does not survive contact with the details:
+///
+/// * **It is not a choice between validating and filing.** The type decides
+///   what the value *is*; the call site decides what happens when it does not
+///   parse. `sync_engine` refuses that territory and names it — which is what
+///   it already did when a MaBiS-Zählpunkt could not be resolved, three lines
+///   away, for the same stated reason.
+/// * **A malformed EIC is not quietly accepted downstream.** The BIKO validates
+///   EICs too, so the realistic alternatives are a named refusal inside the
+///   submission window, or a rejection discovered later — and the window is
+///   still open in the first case.
+/// * **The configured fallback is checked at start-up**, so a deployment error
+///   surfaces at deploy rather than at 05:00 on the Erstaufschlag-Werktag.
+pub use rubo4e::identifiers::{BilanzierungsgebietId, BilanzkreisId};
 
 // ── MabisZaehlpunktId ─────────────────────────────────────────────────────────
 
@@ -138,7 +152,7 @@ mod zaehlpunkt_tests {
     /// The length check is what separates a Meldepunkt from a territory EIC.
     #[test]
     fn a_bilanzierungsgebiet_eic_is_not_a_meldepunkt() {
-        let err = MabisZaehlpunktId::new("11XSWISSGRIDBGX1").expect_err("must be refused");
+        let err = MabisZaehlpunktId::new("11XSWISSGRIDBGX8").expect_err("must be refused");
         assert_eq!(err.len, 16);
         assert!(err.to_string().contains("33"), "{err}");
     }
@@ -162,7 +176,7 @@ mod zaehlpunkt_tests {
             serde_json::from_str("\"DE0004030099000000000000000012345\"");
         assert!(ok.is_ok());
 
-        let bad: Result<MabisZaehlpunktId, _> = serde_json::from_str("\"11XSWISSGRIDBGX1\"");
+        let bad: Result<MabisZaehlpunktId, _> = serde_json::from_str("\"11XSWISSGRIDBGX8\"");
         let err = bad.expect_err("a territory EIC must not deserialize into a Meldepunkt");
         assert!(err.to_string().contains("33"), "{err}");
     }

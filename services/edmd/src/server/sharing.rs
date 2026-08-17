@@ -92,7 +92,7 @@ pub(crate) async fn get_sharing_allocation(
     let legal_basis: Option<String> = config_row.try_get("legal_basis").unwrap_or(None);
 
     // Extract source MaLo IDs from rule_json.
-    // Expected shape: { "source_malo_ids": ["11234567890"], "participant_malo_ids": ["11234567891", ...], "fractions": [...] }
+    // Expected shape: { "source_malo_ids": ["11234567873"], "participant_malo_ids": ["11234567089", ...], "fractions": [...] }
     let source_malo_ids: Vec<String> = rule_json
         .get("source_malo_ids")
         .and_then(|v| v.as_array())

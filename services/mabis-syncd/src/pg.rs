@@ -182,17 +182,28 @@ pub async fn mark_acked(
 }
 
 /// Mark a run as failed with an error message.
-pub async fn mark_failed(pool: &PgPool, id: Uuid, error_msg: &str) -> Result<(), sqlx::Error> {
-    sqlx::query(
+/// Mark a run failed inside the caller's transaction, returning the new
+/// `attempt_count` so the failure event can carry it.
+///
+/// Takes a connection rather than the pool because the failure row and the
+/// `de.mabis.submission.failed` outbox record must commit together: a failure
+/// nothing announces reads as a submission still pending, and an announcement
+/// of a failure that was never recorded is noise an operator cannot act on.
+pub async fn mark_failed(
+    conn: &mut sqlx::PgConnection,
+    id: Uuid,
+    error_msg: &str,
+) -> Result<i32, sqlx::Error> {
+    sqlx::query_scalar(
         "UPDATE submission_runs
             SET status = 'failed', error_msg = $2, attempt_count = attempt_count + 1
-          WHERE id = $1",
+          WHERE id = $1
+          RETURNING attempt_count",
     )
     .bind(id)
     .bind(error_msg)
-    .execute(pool)
-    .await?;
-    Ok(())
+    .fetch_one(conn)
+    .await
 }
 
 /// Log a MaLo contribution to a submission run.
@@ -229,6 +240,23 @@ pub async fn list_runs(
 ) -> Result<Vec<SubmissionRunRow>, sqlx::Error> {
     sqlx::query_as::<_, SubmissionRunRow>(
         "SELECT * FROM submission_runs WHERE tenant = $1 ORDER BY triggered_at DESC LIMIT $2",
+    )
+    .bind(tenant)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+/// List failed runs, newest first — the MCP surface's triage view.
+pub async fn list_failed_runs(
+    pool: &PgPool,
+    tenant: &str,
+    limit: i64,
+) -> Result<Vec<SubmissionRunRow>, sqlx::Error> {
+    sqlx::query_as::<_, SubmissionRunRow>(
+        "SELECT * FROM submission_runs
+          WHERE tenant = $1 AND status = 'failed'
+          ORDER BY triggered_at DESC LIMIT $2",
     )
     .bind(tenant)
     .bind(limit)
@@ -388,12 +416,15 @@ pub async fn settling_version(
 
 /// Record an inbound Prüfmitteilung (IFTSTA PID 21000/21001).
 ///
+/// Takes a connection so a negative Prüfmitteilung's record and the
+/// `de.mabis.korrekturbedarf.opened` outbox row commit in one transaction.
+///
 /// # Errors
 ///
 /// Propagates database errors.
 #[allow(clippy::too_many_arguments)]
 pub async fn record_pruefmitteilung(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     tenant: &str,
     bilanzierungsgebiet_id: &str,
     period_from: Date,
@@ -424,7 +455,7 @@ pub async fn record_pruefmitteilung(
     .bind(pid)
     .bind(begruendung)
     .bind(tenant)
-    .fetch_one(pool)
+    .fetch_one(conn)
     .await
 }
 

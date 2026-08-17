@@ -230,8 +230,8 @@ mod tests {
         let state = SchedlState::New;
         let cmd = SchedlCommand::ReceiveSchedule {
             synthetic_pid: 90031,
-            sender_eic: "21X000000001368S".to_owned(),
-            receiver_eic: "21X000000001369Q".to_owned(),
+            sender_eic: "21X000000001368W".to_owned(),
+            receiver_eic: "21X000000001369U".to_owned(),
             gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
             document_ref: make_ref(),
         };
@@ -249,8 +249,8 @@ mod tests {
         let state = SchedlState::New;
         let cmd = SchedlCommand::ReceiveSchedule {
             synthetic_pid: 90011, // wrong PID
-            sender_eic: "21X000000001368S".to_owned(),
-            receiver_eic: "21X000000001369Q".to_owned(),
+            sender_eic: "21X000000001368W".to_owned(),
+            receiver_eic: "21X000000001369U".to_owned(),
             gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
             document_ref: make_ref(),
         };
@@ -261,15 +261,15 @@ mod tests {
     fn duplicate_receive_returns_error() {
         let state = SchedlState::Received(SchedlData {
             synthetic_pid: 90031,
-            sender_eic: "21X000000001368S".to_owned(),
-            receiver_eic: "21X000000001369Q".to_owned(),
+            sender_eic: "21X000000001368W".to_owned(),
+            receiver_eic: "21X000000001369U".to_owned(),
             gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
             document_ref: make_ref(),
         });
         let cmd = SchedlCommand::ReceiveSchedule {
             synthetic_pid: 90031,
-            sender_eic: "21X000000001368S".to_owned(),
-            receiver_eic: "21X000000001369Q".to_owned(),
+            sender_eic: "21X000000001368W".to_owned(),
+            receiver_eic: "21X000000001369U".to_owned(),
             gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
             document_ref: make_ref(),
         };

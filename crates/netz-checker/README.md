@@ -46,7 +46,7 @@ use mako_markt::repository::VersorgungsStatusRecord;
 let anfrage = AnmeldungAnfrage {
     pid: 55001,
     process_id: uuid::Uuid::new_v4(),
-    malo_id: "51238696780".to_owned(),
+    malo_id: "51238696012".to_owned(),
     new_supplier_gln: "9900357000004".to_owned(),
     grid_operator_gln: "9900000000002".to_owned(),
     bilanzierungsgebiet: Some("11YB-TENNET-----W".to_owned()),
@@ -56,7 +56,7 @@ let anfrage = AnmeldungAnfrage {
 };
 
 let grid = MaloGridRecord {
-    malo_id: "51238696780".to_owned(),
+    malo_id: "51238696012".to_owned(),
     nb_mp_id: "9900000000002".to_owned(),
     bilanzierungsgebiet: Some("11YB-TENNET-----W".to_owned()),
     netzgebiet: None,

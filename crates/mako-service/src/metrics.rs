@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn normalise_replaces_digit_ids() {
-        let path = "/api/v1/malo/51238696780";
+        let path = "/api/v1/malo/51238696012";
         assert_eq!(normalise_path(path), "/api/v1/malo/{id}");
     }
 }

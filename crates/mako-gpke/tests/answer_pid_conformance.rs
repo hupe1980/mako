@@ -22,7 +22,7 @@ fn response_pid(anfrage: u32, accepted: bool) -> Option<u32> {
         Default::default(),
         &mako_gpke::wechselprozesse::SupplierChangeEvent::Initiated {
             pruefidentifikator: pid,
-            location_id: MaLo::new("10001234567"),
+            location_id: MaLo::new("10001234558"),
             new_supplier: MarktpartnerCode::new("4012345000009"),
             grid_operator: MarktpartnerCode::new("9900123456789"),
             document_date: "20261001".to_owned(),

@@ -650,7 +650,7 @@ impl Vertragsart {
 /// use rust_decimal::dec;
 ///
 /// let ctx = BillingContext {
-///     malo_id: "51238696780".to_owned(),
+///     malo_id: "51238696012".to_owned(),
 ///     lf_mp_id: "9900000000001".to_owned(),
 ///     rechnungsnummer: "R2026-001".to_owned(),
 ///     period: BillingPeriod::new(date!(2026-01-01), date!(2026-12-31)).unwrap(),

@@ -1661,7 +1661,7 @@ mod tests {
     fn base_nne() -> NneInput {
         NneInput {
             blindarbeit: None,
-            malo_id: "51238696780".into(),
+            malo_id: "51238696012".into(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
@@ -1688,7 +1688,7 @@ mod tests {
 
     fn base_msb() -> MsbInput {
         MsbInput {
-            malo_id: "51238696780".to_owned(),
+            malo_id: "51238696012".to_owned(),
             empfaenger: MsbRechnungsempfaenger {
                 rolle: MsbEmpfaengerRolle::Netzbetreiber,
                 mp_id: "9900357000004".to_owned(),
@@ -1705,7 +1705,7 @@ mod tests {
 
     fn base_mmm() -> MmmInput {
         MmmInput {
-            malo_id: "51238696780".into(),
+            malo_id: "51238696012".into(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
@@ -2023,7 +2023,7 @@ mod tests {
     #[test]
     fn over_consumption_is_a_mindermenge_charge() {
         let input = MmmInput {
-            malo_id: "51238696780".into(),
+            malo_id: "51238696012".into(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
@@ -2050,7 +2050,7 @@ mod tests {
     #[test]
     fn under_consumption_is_a_mehrmenge_credit() {
         let input = MmmInput {
-            malo_id: "51238696780".into(),
+            malo_id: "51238696012".into(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
@@ -2090,7 +2090,7 @@ mod tests {
     #[test]
     fn msb_grundgebuehr_only() {
         let input = MsbInput {
-            malo_id: "51238696780".into(),
+            malo_id: "51238696012".into(),
             empfaenger: MsbRechnungsempfaenger {
                 rolle: MsbEmpfaengerRolle::Netzbetreiber,
                 mp_id: "9900357000004".to_owned(),
@@ -2112,7 +2112,7 @@ mod tests {
     #[test]
     fn msb_with_messdienstleistung() {
         let input = MsbInput {
-            malo_id: "51238696780".into(),
+            malo_id: "51238696012".into(),
             empfaenger: MsbRechnungsempfaenger {
                 rolle: MsbEmpfaengerRolle::Netzbetreiber,
                 mp_id: "9900357000004".to_owned(),
@@ -2275,7 +2275,7 @@ mod tests {
     #[test]
     fn msb_has_msbg_reference() {
         let input = MsbInput {
-            malo_id: "51238696780".into(),
+            malo_id: "51238696012".into(),
             empfaenger: MsbRechnungsempfaenger {
                 rolle: MsbEmpfaengerRolle::Netzbetreiber,
                 mp_id: "9900357000004".to_owned(),
@@ -2539,7 +2539,7 @@ mod tests {
             (MsbEmpfaengerRolle::Energieserviceanbieter, "9905550000005"),
         ] {
             let input = MsbInput {
-                malo_id: "51238696780".into(),
+                malo_id: "51238696012".into(),
                 msb_mp_id: "9900999000001".into(),
                 empfaenger: MsbRechnungsempfaenger {
                     rolle,
@@ -2748,7 +2748,7 @@ mod tests {
     #[test]
     fn validate_msb_zero_months_is_error() {
         let input = MsbInput {
-            malo_id: "51238696780".into(),
+            malo_id: "51238696012".into(),
             empfaenger: MsbRechnungsempfaenger {
                 rolle: MsbEmpfaengerRolle::Netzbetreiber,
                 mp_id: "9900357000004".to_owned(),
@@ -2874,7 +2874,7 @@ mod tests {
     #[test]
     fn gas_awh_single_sperrung_arithmetic() {
         let input = GasAwhInput {
-            malo_id: "51238696780".into(),
+            malo_id: "51238696012".into(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
@@ -2898,7 +2898,7 @@ mod tests {
     #[test]
     fn gas_awh_multiple_actions_total_correct() {
         let input = GasAwhInput {
-            malo_id: "51238696780".into(),
+            malo_id: "51238696012".into(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
@@ -2928,7 +2928,7 @@ mod tests {
     #[test]
     fn gas_awh_empty_positions_rejected() {
         let input = GasAwhInput {
-            malo_id: "51238696780".into(),
+            malo_id: "51238696012".into(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 01 - 31)).unwrap(),
@@ -3013,7 +3013,7 @@ mod tests {
     #[test]
     fn a_2029_gas_awh_settlement_is_refused_under_agnes() {
         let input = GasAwhInput {
-            malo_id: "51238696780".into(),
+            malo_id: "51238696012".into(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2029 - 01 - 01), date!(2029 - 01 - 31)).unwrap(),
@@ -3135,7 +3135,7 @@ mod proptests {
         ) {
             let input = NneInput {
                 blindarbeit: None,
-                malo_id: "51238696780".into(),
+                malo_id: "51238696012".into(),
                 nb_mp_id: "9900357000004".to_owned(),
                 lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 12 - 31)).unwrap(),
@@ -3177,7 +3177,7 @@ mod proptests {
             let factor = Decimal::new(factor_pct as i64, 2);
             let base = NneInput {
                 blindarbeit: None,
-                malo_id: "51238696780".into(),
+                malo_id: "51238696012".into(),
                 nb_mp_id: "9900357000004".to_owned(),
                 lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2025 - 01 - 01), date!(2025 - 12 - 31)).unwrap(),
@@ -3243,7 +3243,7 @@ mod modul3_tests {
     fn base_nne() -> NneInput {
         NneInput {
             blindarbeit: None,
-            malo_id: "51238696780".into(),
+            malo_id: "51238696012".into(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".into(),
             period: SettlementPeriod::new(date!(2026 - 01 - 15), date!(2026 - 01 - 16)).unwrap(),

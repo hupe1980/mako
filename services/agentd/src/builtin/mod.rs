@@ -8,11 +8,10 @@
 //!
 //! ## Why the prompt is not here
 //!
-//! It used to be, as a `&'static str` per agent. A manifest is digest-covered:
-//! editing a procedure changes the digest, which is a version bump a reviewer
-//! sees in a diff. A Rust constant carries no such record, and keeping both
-//! would let them disagree about what the agent is — with the manifest being the
-//! copy the model actually reads.
+//! A manifest is digest-covered: editing a procedure changes the digest, which
+//! is a version bump a reviewer sees in a diff. A Rust constant carries no such
+//! record, and keeping both would let them disagree about what the agent is —
+//! with the manifest being the copy the model actually reads.
 //!
 //! ## Activation in agentd.toml
 //!
@@ -177,7 +176,6 @@ static BUILTIN_AGENTS: &[Specialist] = &[
         feature = "role-lf",
     ))]
     VPP_BILLING_AGENT,
-    // Gap-closers (added in audit pass)
     #[cfg(any(
         not(any(feature = "role-lf", feature = "role-nb", feature = "role-msb")),
         feature = "role-nb",
@@ -473,8 +471,12 @@ const REPLACEMENT_VALUE_AGENT: Specialist = Specialist {
 ))]
 const MABIS_SYNCD_AGENT: Specialist = Specialist {
     name: "mabis-syncd-agent",
-    specialty: "MaBiS Summenzeitreihe submission monitor. Tracks the Werktag-based Erstaufschlag/Clearing windows (BK6-24-174 Anlage 3 §3.10), detects failed aggregations, and diagnoses BIKO delivery issues.",
-    trigger_patterns: &[mako_events::messwert::READING_QUALITY_WARNING],
+    specialty: "MaBiS Summenzeitreihe submission monitor. Triages failed submissions and open Korrekturbedarf against the Werktag-based Erstaufschlag/Clearing windows (BK6-24-174 Anlage 3 §3.10), and checks whether a quality warning threatens Summenzeitreihe accuracy.",
+    trigger_patterns: &[
+        mako_events::mabis::SUBMISSION_FAILED,
+        mako_events::mabis::KORREKTURBEDARF_OPENED,
+        mako_events::messwert::READING_QUALITY_WARNING,
+    ],
 };
 
 #[cfg(any(
@@ -570,7 +572,7 @@ mod trigger_contract_tests {
     fn every_subscription_has_a_manifest() {
         let missing: Vec<&str> = all()
             .map(|d| d.name)
-            .filter(|n| !crate::plane::MANIFESTS.iter().any(|(m, _)| m == n))
+            .filter(|n| crate::plane::find_manifest(n).is_none())
             .collect();
         assert!(
             missing.is_empty(),
@@ -614,6 +616,15 @@ mod trigger_contract_tests {
                 !has("sperrd-agent"),
                 "an LF build must not contain the NB Sperrung specialist"
             );
+            // The wiring an LF deployment must provide follows the *compiled*
+            // specialists, not the embedded manifest set — `manifests![]` is
+            // not role-gated, so without the filter in `servers_named_in_grants`
+            // an LF deployment could not boot without an MCP endpoint for
+            // `sperrd`, a server only the NB Sperrung specialist grants.
+            assert!(
+                !crate::plane::tools::servers_named_in_grants().contains("sperrd"),
+                "an LF deployment must not be required to wire the NB-only sperrd endpoint"
+            );
         }
 
         #[cfg(all(feature = "role-nb", not(feature = "role-lf")))]
@@ -636,6 +647,56 @@ mod trigger_contract_tests {
             "the default build carries every specialist; update this count \
              deliberately when one is added or removed"
         );
+    }
+
+    /// Specialists with no event subscription, on purpose.
+    ///
+    /// An empty trigger array means the specialist can only be started by hand
+    /// (`POST /api/v1/run`) or by an external scheduler — a batch shape, not a
+    /// reactive one. That is a legitimate design for a monthly report, and a
+    /// silent bug for anything else: an unsubscribed specialist looks exactly
+    /// like one that ran and found nothing.
+    const MANUAL_ONLY: &[(&str, &str)] = &[
+        (
+            "jahresabrechnung-agent",
+            "annual Schlussabrechnung is a yearly batch an operator or scheduler starts; \
+             no CloudEvent marks 'twelve months have passed for this MaLo'",
+        ),
+        (
+            "regulatory-reporting-agent",
+            "the BNetzA Diskriminierungsbericht is an annual/quarterly report started \
+             by an operator; obsd emits no reporting-period event",
+        ),
+    ];
+
+    /// A specialist is subscribed, or its batch shape is declared here.
+    ///
+    /// A specialist cannot go silently unsubscribed: an empty trigger array is
+    /// refused unless the specialist is on [`MANUAL_ONLY`] with the reason —
+    /// and a listed specialist that *gains* a subscription must leave the list,
+    /// so the allowlist cannot rot into covering reactive agents.
+    #[test]
+    fn a_specialist_is_subscribed_or_declared_manual_only() {
+        for def in all() {
+            let listed = MANUAL_ONLY.iter().any(|(n, _)| *n == def.name);
+            if def.trigger_patterns.is_empty() {
+                assert!(
+                    listed,
+                    "{}: subscribes to nothing and is not declared manual-only — it can \
+                     never be triggered by an event, which reads as an agent that ran and \
+                     found nothing. Add trigger patterns, or add it to MANUAL_ONLY with \
+                     the reason it is a batch job.",
+                    def.name
+                );
+            } else {
+                assert!(
+                    !listed,
+                    "{}: is declared manual-only but subscribes to events — remove it \
+                     from MANUAL_ONLY so the list stays honest",
+                    def.name
+                );
+            }
+        }
     }
 
     /// Trigger patterns that deliberately match nothing in the catalog yet.
@@ -663,10 +724,10 @@ mod trigger_contract_tests {
     /// so this reads the manifest rather than a Rust constant — otherwise the
     /// guard would check a copy the model never sees.
     fn prompt_triggers(def: &Specialist) -> Vec<String> {
-        let Some((_, src)) = crate::plane::MANIFESTS.iter().find(|(n, _)| *n == def.name) else {
+        let Some(embedded) = crate::plane::find_manifest(def.name) else {
             return Vec::new();
         };
-        let manifest = crate::plane::parse_manifest(src).expect("manifest parses");
+        let manifest = embedded;
         let Some(identity) = manifest.spec.identity.as_ref() else {
             return Vec::new();
         };

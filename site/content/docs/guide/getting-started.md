@@ -86,12 +86,12 @@ docker compose ps   # wait until all containers are running
 Expected:
 
 ```
-NAME               IMAGE              STATUS         PORTS
-demo-postgres-1    postgres:17-alpine Up (healthy)   5432/tcp
-demo-webhook-1     python:3.12-alpine Up             0.0.0.0:8000->8000/tcp
-demo-marktd-1      marktd:dev         Up             0.0.0.0:8180->8180/tcp
-demo-processd-1    processd:dev       Up             0.0.0.0:8580->8580/tcp
-demo-makod-1       makod:dev          Up             0.0.0.0:8080->8080/tcp
+NAME                 IMAGE              STATUS         PORTS
+nb-stp-postgres-1    postgres:17-alpine Up (healthy)   5432/tcp
+nb-stp-webhook-1     python:3.12-alpine Up             0.0.0.0:8000->8000/tcp
+nb-stp-marktd-1      marktd:dev         Up             0.0.0.0:8180->8180/tcp
+nb-stp-processd-1    processd:dev       Up             0.0.0.0:8580->8580/tcp
+nb-stp-makod-1       makod:dev          Up             0.0.0.0:8080->8080/tcp
 ```
 
 **What happens at startup:**  
@@ -134,7 +134,7 @@ curl -s -X PUT http://localhost:8180/api/v1/preisblaetter/9900357000004 \
 ### 4b — MaLo + MaLo grid record
 
 ```bash
-MALO_ID=51238696780
+MALO_ID=51238696012
 
 # MaLo (NB=9900357000004, no active LF)
 curl -s -X PUT "http://localhost:8180/api/v1/malo/$MALO_ID" \
@@ -146,7 +146,7 @@ curl -s -X PUT "http://localhost:8180/api/v1/malo/$MALO_ID" \
 # MaLo grid record (netz-checker check 1)
 curl -s -X PUT "http://localhost:8180/api/v1/malo/$MALO_ID/grid" \
   -H "Content-Type: application/json" \
-  -d '{"nb_mp_id":"9900357000004","bilanzierungsgebiet":"11YN0------0STXC","netzgebiet":"DEMO-NZ-001","sparte":"STROM","source":"manual"}' \
+  -d '{"nb_mp_id":"9900357000004","bilanzierungsgebiet":"11YN0------0STXG","netzgebiet":"DEMO-NZ-001","sparte":"STROM","source":"manual"}' \
   -w "\nHTTP %{http_code}\n"
 # → HTTP 204
 ```
@@ -191,7 +191,7 @@ Expected response:
     "workflow": "gpke-supplier-change",
     "status": "routed",
     "process_id": "...",
-    "malo_id": "51238696780"
+    "malo_id": "51238696012"
   }]
 }
 ```
@@ -208,7 +208,7 @@ Within ~200 ms, `processd` receives the `de.mako.process.initiated` event from
 curl -s http://localhost:8580/api/v1/decisions | jq '.[] | {
   malo_id, decision, erc_code, decided_at
 }'
-# → {"malo_id":"51238696780","decision":"Accept","erc_code":null,"decided_at":"..."}
+# → {"malo_id":"51238696012","decision":"Accept","erc_code":null,"decided_at":"..."}
 ```
 
 With `NB_AUTO_ACCEPT=true` (set in the demo compose file), `Accept` automatically

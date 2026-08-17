@@ -65,7 +65,7 @@ DTM+137:20250115:102'\
 RFF+Z13:GAS-REF-001'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+Z19+52695662085::'\
+IDE+Z19+52695662076::'\
 UNT+8+MSG-001'\
 UNZ+1+GAS-2025-001'";
 
@@ -195,7 +195,7 @@ async fn end_to_end_lieferbeginn_gas_pipeline() {
     if validation_passed {
         match state {
             GasSupplierChangeState::ValidationPassed(data) => {
-                assert_eq!(data.malo_id, MaLo::new("52695662085"));
+                assert_eq!(data.malo_id, MaLo::new("52695662076"));
                 assert_eq!(data.pruefidentifikator.as_u32(), 44001);
             }
             other => panic!("state must be ValidationPassed after valid message; got {other:?}"),
@@ -225,7 +225,7 @@ async fn wrong_pid_returns_workflow_error() {
             pid: Pruefidentifikator::new(55001).unwrap(), // GPKE Strom PID — wrong for GeLi Gas
             sender: "4012345000023".into(),
             receiver: "9900357000004".into(),
-            malo_id: "52695662085".into(),
+            malo_id: "52695662076".into(),
             document_date: "20250115".to_owned(),
             process_date: String::new(),
             message_ref: "GAS-REF-001".into(),
@@ -263,7 +263,7 @@ DTM+137:20250115:102'\
 RFF+Z13:GAS-NEG-REF-001'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+Z19+52695662085::'\
+IDE+Z19+52695662076::'\
 UNT+8+MSG-001'\
 UNZ+1+GAS-NEG-001'";
 

@@ -102,7 +102,7 @@ pub struct ErpCommand {
     /// Example for `gpke.lieferbeginn.anmelden`:
     /// ```json
     /// {
-    ///   "malo_id":            "10001234567",
+    ///   "malo_id":            "10001234558",
     ///   "lieferbeginn_datum": "2026-10-01"
     /// }
     /// ```
@@ -112,7 +112,7 @@ pub struct ErpCommand {
     ///
     /// **Never include** `sender_party_id`, `receiver_party_id`, `pruefidentifikator`, or
     /// `message_ref` — these are engine-owned and will be ignored or rejected.
-    #[schema(value_type = Object, example = json!({"malo_id": "10001234567", "lieferbeginn_datum": "2026-10-01"}))]
+    #[schema(value_type = Object, example = json!({"malo_id": "10001234558", "lieferbeginn_datum": "2026-10-01"}))]
     pub payload: serde_json::Value,
 }
 

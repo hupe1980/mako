@@ -234,7 +234,7 @@ bdew-codes.de or codevergabe.dvgw-sc.de.
 **Key rule:** The same MaLo-ID identifies the location regardless of whether
 the grid was transferred to a new DSO — the NB keeps the ID.
 
-**Examples:** `51238696780`, `40130000551`
+**Examples:** `51238696012`, `40130000551`
 
 ---
 
@@ -415,7 +415,7 @@ use mako_engine::types::{
 
 // --- Market location (MaLo) ---
 // 11-digit numeric; first digit 4-9 = BDEW-issued, 1-3 = DVGW-issued
-let malo: MaLo = MaLo::new("51238696780");   // starts with 5 = BDEW
+let malo: MaLo = MaLo::new("51238696012");   // starts with 5 = BDEW
 
 // --- Metering location (MeLo) = Zählpunktbezeichnung ---
 // 33-char Strom (VDE-AR-N 4400) or 11-char Gas (DVGW G2000)
@@ -576,8 +576,9 @@ println!("Fully settled: {}",       balance.is_fully_settled());
 
 | Identifier | Format | Standard | Example |
 |---|---|---|---|
-| EIC (BKV / FNB / MGV) | 16 chars alphanumeric | ENTSO-E EIC code | `21X000000001368S` |
-| Bilanzkreis-EIC | 16 chars | ENTSO-E EIC code | `11YAPG4CTRDNZ--A` |
+| EIC (BKV / FNB / MGV) | 16 chars alphanumeric | ENTSO-E EIC code | `21X000000001368W` |
+| Bilanzkreis-EIC | 16 chars, object type `X` (Party) | ENTSO-E EIC code | `11XSUEDWESTSTRO8` |
+| Bilanzierungsgebiet-EIC | 16 chars, object type `Y` (Area) | ENTSO-E EIC code | `10YDE-EON------1` |
 | DVGW-Codenummer (NB) | 13 digits, starts `98` | DVGW registry | `9800357000001` |
 | BDEW-Codenummer (LF) | 13 digits, starts `99` | BDEW registry | `9900357000004` |
 | Gas Zählpunkt (MeLo) | 11 chars | DVGW G 2000 | `DE000123400M` |

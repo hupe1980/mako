@@ -55,9 +55,9 @@ const MSB: &str = "9900999000001";
 const NB: &str = "9900357000004";
 const LF: &str = "9900111000002";
 const ESA: &str = "9905550000005";
-const MALO: &str = "51238696780";
+const MALO: &str = "51238696012";
 const MALO_2: &str = "51238696781";
-const MALO_3: &str = "51238696782";
+const MALO_3: &str = "51238696129";
 
 /// A 31009 draft stores the MSB as sender and the NB / LF / ESA as recipient,
 /// and reads back the same way through both read paths.

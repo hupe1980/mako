@@ -43,7 +43,7 @@ use mako_engine::{ids::TenantId, store_slatedb::SlateDbStore};
 use makod::ingest_dispatcher::{EdifactIngestDispatcher, IngestOutcome};
 
 const OWN_MP: &str = "9900357000004";
-const LOC: &str = "51238696780";
+const LOC: &str = "51238696012";
 
 /// PIDs mako registers but deliberately does not receive, with the reason.
 ///

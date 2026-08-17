@@ -37,8 +37,8 @@ fn make_process() -> Process<GaBiGasNominationWorkflow, InMemoryEventStore> {
 fn send_nomination(synthetic_pid: u32) -> NominationCommand {
     NominationCommand::SendNomination {
         synthetic_pid,
-        sender_eic: "11XBKV-SENDTEST1".to_owned(),
-        receiver_eic: "11XFNB-RECVTEST2".to_owned(),
+        sender_eic: "11XBKV-SENDTESTU".to_owned(),
+        receiver_eic: "11XFNB-RECVTESTT".to_owned(),
         gas_day: mako_gabi_gas::GasDay::parse("2025-01-15").unwrap(),
         nomination_ref: MessageRef::new("NOMINT-2025-001"),
     }

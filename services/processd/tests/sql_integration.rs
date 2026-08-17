@@ -82,7 +82,7 @@ async fn approval_queue_enqueue_list_approve() {
                 ..ApprovalQueueEntry::pending(
                     process_id,
                     55001,
-                    Some("12345678901".to_owned()),
+                    Some("12345678989".to_owned()),
                     "test E_0624 event".to_owned(),
                     now + time::Duration::minutes(45),
                     "9900357000004".to_owned(),
@@ -175,7 +175,7 @@ async fn anmeldung_decisions_insert_and_list() {
         id: Uuid::new_v4(),
         process_id,
         pid: 55001,
-        malo_id: "12345678901".to_owned(),
+        malo_id: "12345678989".to_owned(),
         lf_mp_id: "9900100000001".to_owned(),
         decision: AnmeldungDecision::Accept,
         erc_code: None,

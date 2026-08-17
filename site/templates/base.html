@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   {%- set page_title = title | default(value=config.title) -%}
-  {%- if page.title -%}{%- set page_title = page.title ~ " · mako" -%}{%- elif section.title and section.title != "mako" -%}{%- set page_title = section.title ~ " · mako" -%}{%- endif -%}
+  {%- if page is defined and page.title -%}{%- set page_title = page.title ~ " · mako" -%}{%- elif section is defined and section.title and section.title != "mako" -%}{%- set page_title = section.title ~ " · mako" -%}{%- endif -%}
   {%- set page_desc = config.description -%}
-  {%- if page.description -%}{%- set page_desc = page.description -%}{%- elif section.description -%}{%- set page_desc = section.description -%}{%- endif -%}
+  {%- if page is defined and page.description -%}{%- set page_desc = page.description -%}{%- elif section is defined and section.description -%}{%- set page_desc = section.description -%}{%- endif -%}
   {%- set page_url = config.base_url -%}
-  {%- if page.permalink -%}{%- set page_url = page.permalink -%}{%- elif section.permalink -%}{%- set page_url = section.permalink -%}{%- endif -%}
+  {%- if page is defined and page.permalink -%}{%- set page_url = page.permalink -%}{%- elif section is defined and section.permalink -%}{%- set page_url = section.permalink -%}{%- endif -%}
 
   <title>{{ page_title }}</title>
   <meta name="description" content="{{ page_desc | striptags | truncate(length=300) }}">

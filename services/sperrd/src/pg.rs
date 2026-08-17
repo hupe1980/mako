@@ -451,13 +451,13 @@ mod tests {
     #[test]
     fn create_order_request_fields() {
         let req = CreateOrderRequest {
-            malo_id: "51238696780".to_owned(),
+            malo_id: "51238696012".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             order_type: "sperrung".to_owned(),
             process_id: Some("550e8400-e29b-41d4-a716-446655440000".to_owned()),
             planned_date: Some("2026-07-20".to_owned()),
         };
-        assert_eq!(req.malo_id, "51238696780");
+        assert_eq!(req.malo_id, "51238696012");
         assert_eq!(req.order_type, "sperrung");
         assert!(req.process_id.is_some());
     }

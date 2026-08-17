@@ -303,7 +303,7 @@ Content-Type: application/json
 
 {
   "tr_id":              "DE0123456789012345678901234567890",
-  "malo_id":            "51238696780",
+  "malo_id":            "51238696012",
   "eeg_gesetz":         2023,
   "inbetriebnahme":     "2024-06-01",
   "leistung_kwp":       9.8,
@@ -1248,7 +1248,7 @@ the credit against an actual document, not just an amount. Non-billable statuses
   "subject":     "TR-SOLAR-001",
   "data": {
     "tr_id":           "TR-SOLAR-001",
-    "malo_id":         "51238696780",
+    "malo_id":         "51238696012",
     "billing_year":    2026,
     "billing_month":   7,
     "settlement_model": "FEED_IN_TARIFF",

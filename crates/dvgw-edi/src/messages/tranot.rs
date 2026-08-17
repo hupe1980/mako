@@ -153,8 +153,8 @@ mod tests {
                 vec![vec!["00001"], vec!["TRANOT", "", "", "", "3.0"]],
             ),
             seg("BGM", vec![vec!["Z01"], vec!["TRAN-001"], vec!["9"]]),
-            seg("NAD", vec![vec!["MS"], vec!["21X000000001368S"]]),
-            seg("NAD", vec![vec!["MR"], vec!["21X000000001369Q"]]),
+            seg("NAD", vec![vec!["MS"], vec!["21X000000001368W"]]),
+            seg("NAD", vec![vec!["MR"], vec!["21X000000001369U"]]),
             seg("DTM", vec![vec!["2", "202601150600", "203"]]),
             seg("DTM", vec![vec!["3", "202601151800", "203"]]),
             seg(
@@ -174,8 +174,8 @@ mod tests {
     fn from_segments_extracts_core_fields() {
         let msg = TransportNotificationMessage::from_segments(minimal_segments());
         assert_eq!(msg.message_type(), DvgwMessageType::Tranot);
-        assert_eq!(msg.sender_eic(), Some("21X000000001368S"));
-        assert_eq!(msg.receiver_eic(), Some("21X000000001369Q"));
+        assert_eq!(msg.sender_eic(), Some("21X000000001368W"));
+        assert_eq!(msg.receiver_eic(), Some("21X000000001369U"));
         assert_eq!(msg.document_ref.as_deref(), Some("TRAN-001"));
         assert_eq!(msg.notification_type.as_deref(), Some("Z01"));
         assert_eq!(msg.period_start.as_deref(), Some("202601150600"));

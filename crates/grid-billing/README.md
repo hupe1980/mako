@@ -686,7 +686,7 @@ use time::macros::date;
 fn d(s: &str) -> Decimal { Decimal::from_str_exact(s).unwrap() }
 
 let settlement = settle_nne(&NneInput {
-    malo_id: "51238696780".into(),
+    malo_id: "51238696012".into(),
     nb_mp_id: "9900357000004".into(),
     lf_mp_id: "9900012345678".into(),
     // The delivery period is a validated pair — inverted bounds are unrepresentable.
@@ -861,7 +861,7 @@ use grid_billing::types::SettlementPeriod;
 use time::macros::date;
 
 let settlement = settle_gas_awh(&GasAwhInput {
-    malo_id: "51238696780".into(),
+    malo_id: "51238696012".into(),
     nb_mp_id: "9900357000004".into(),
     lf_mp_id: "9900012345678".into(),
     period: SettlementPeriod::new(date!(2026-01-01), date!(2026-01-31)).unwrap(),

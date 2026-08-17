@@ -252,7 +252,7 @@ pub async fn webhook(
         };
 
         for decision in &decisions {
-            emit_audit(&state2, decision).await;
+            record_decision(&state2, decision);
         }
     });
     StatusCode::ACCEPTED.into_response()
@@ -305,28 +305,21 @@ pub async fn manual_run(
         };
 
     for decision in &decisions {
-        emit_audit(&state, decision).await;
+        record_decision(&state, decision);
     }
     (StatusCode::OK, Json(decisions)).into_response()
 }
 
-async fn emit_audit(state: &AppState, decision: &AgentDecision) {
-    // Always push to the in-memory ring buffer (best-effort, never fails).
+/// Record what just happened in the in-memory view.
+///
+/// **This delivers nothing.** The decision reaches the ERP through the
+/// journal-backed outbox — a destination registered at admission, with a cursor
+/// that advances only on HTTP 2xx — so a receiver that is down for a deploy is
+/// caught up afterwards instead of having missed everything. Posting from here
+/// at request time would make `de.agent.decision.made` the one mako event that
+/// can be silently lost.
+fn record_decision(state: &AppState, decision: &AgentDecision) {
     state.decisions.push(decision.clone());
-
-    let Some(ref url) = state.cfg.audit_webhook_url else {
-        return;
-    };
-    let ce = decision.to_cloud_event(&state.cfg.tenant);
-    let secret = state
-        .secrets
-        .audit_hmac_secret
-        .as_ref()
-        .map(|s| s.expose_secret().as_bytes());
-    let client = mako_service::http::default_client();
-    if let Err(e) = mako_service::post_ce_with_retry(&client, url, &ce, secret).await {
-        tracing::warn!(error = %e, "audit webhook failed");
-    }
 }
 
 // ── GET /api/v1/decisions ─────────────────────────────────────────────────────
@@ -393,19 +386,16 @@ pub async fn agent_card(
     if !state.plane.router().routes().iter().any(|r| r.name == name) {
         return not_found().into_response();
     }
-    let Some(manifest) = crate::plane::MANIFESTS
-        .iter()
-        .find(|(n, _)| *n == name)
-        .and_then(|(_, src)| crate::plane::parse_manifest(src).ok())
-    else {
+    let Some(embedded) = crate::plane::find_manifest(&name) else {
         return not_found().into_response();
     };
+    let manifest = embedded;
 
     let url = format!(
         "{}/api/v1/run",
         state.cfg.public_base_url.trim_end_matches('/')
     );
-    match agentplane::peers::AgentCard::derive(&manifest, url) {
+    match agentplane::peers::AgentCard::derive(manifest, url) {
         Ok(card) => Json(card).into_response(),
         Err(e) => {
             tracing::warn!(agent = %name, error = %e, "agent card could not be derived");
@@ -428,10 +418,7 @@ pub async fn agent_card(
 pub async fn agents_catalog() -> impl IntoResponse {
     let catalog: Vec<serde_json::Value> = crate::builtin::all()
         .map(|def| {
-            let manifest = crate::plane::MANIFESTS
-                .iter()
-                .find(|(n, _)| *n == def.name)
-                .and_then(|(_, src)| crate::plane::parse_manifest(src).ok());
+            let manifest = crate::plane::find_manifest(def.name);
 
             let (model, max_turns, tools, approvals) =
                 manifest.as_ref().map_or((None, None, 0, 0), |m| {

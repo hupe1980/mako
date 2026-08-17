@@ -15,7 +15,7 @@ use mako_engine::{ids::TenantId, store_slatedb::SlateDbStore};
 use makod::ingest_dispatcher::{EdifactIngestDispatcher, IngestOutcome};
 
 const OWN_MP: &str = "9900357000004";
-const MALO: &str = "51238696780";
+const MALO: &str = "51238696012";
 
 /// A minimal QUOTES Angebot for `pid` carrying the MaLo in a LOC segment.
 fn quotes(pid: u32) -> String {

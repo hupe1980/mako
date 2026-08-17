@@ -15,7 +15,7 @@ mako consists of **17 independently deployable services**, each built as a self-
 - Cedar ABAC authorization
 - OIDC/JWT + API-key authentication  
 - OpenTelemetry traces and metrics
-- MCP server at `/mcp` (Streamable HTTP 2025-11-25) on 14 of the 17 services — all except mabis-syncd, outputd and agentd (the MCP host)
+- MCP server at `/mcp` (Streamable HTTP) on 15 of the 17 services — all except outputd and agentd (the MCP host)
 - Structured health endpoints (`/health`, `/health/ready`)
 
 All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)** — the shared SDK that provides `shutdown::token/serve` (SIGINT+SIGTERM graceful drain), `OidcConfig::build_verifier`, `McpAuth`+`McpAuthConfig`, `init_tracing_from_env`, `DatabaseConfig`, `HttpConfig`, `CedarEnforcer`, `EventBus`, and more. This means zero copy-pasted infrastructure code across the 17 daemons.
@@ -31,7 +31,7 @@ graph TB
     ext["BDEW Counterparty<br/>(NB · LF · MSB · BKV)"]
 
     subgraph protocol ["Protocol & Market Data"]
-        makod[":8080 makod<br/>EDIFACT runtime · 67+ workflows<br/>AS4 · SlateDB · MCP"]
+        makod[":8080 makod<br/>EDIFACT runtime · 69 workflows<br/>AS4 · SlateDB · MCP"]
         marktd[":8180 marktd<br/>MaLo/MeLo/NeLo · contracts<br/>VersorgungsStatus · EventBus"]
         processd[":8580 processd<br/>Anmeldung STP ≥95%<br/>LF E_0624 auto · §14a"]
     end
@@ -45,7 +45,7 @@ graph TB
     subgraph data ["Energy Data & Observability"]
         edmd[":8380 edmd<br/>MSCONS · iMSys direct push<br/>Hampel · V01–V10 · virtual meters"]
         obsd[":8480 obsd<br/>process projections · KPI<br/>§20 EnWG parity report"]
-        mabis[":8880 mabis-syncd<br/>MaBiS Summenzeitreihe<br/>MSCONS 13003 · 10. Werktag"]
+        mabis[":8880 mabis-syncd<br/>MaBiS Summenzeitreihe<br/>MSCONS 13003 · 10. Werktag · MCP"]
         einsd[":9180 einsd<br/>EEG/KWKG settlement<br/>10 schemes · §14 UStG Gutschrift"]
     end
 
@@ -80,7 +80,7 @@ graph TB
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [makod](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 67+ GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas workflows, AS4/REST/iMS |
+| [makod](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 69 GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas workflows, AS4/REST/iMS |
 | [marktd](@/docs/services/marktd.md) | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus, typed BO4E API, EventBus fan-out, MMMA monthly import worker |
 | [processd](@/docs/services/processd.md) | `:8580` | NB + LF + MSB | Process Decision Engine — Anmeldung STP ≥95%, LF E_0624 45-min auto-response, MSB REQOTE auto-response, §14a Steuerungsauftrag produktcode check |
 
@@ -97,7 +97,7 @@ graph TB
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [edmd](@/docs/services/edmd.md) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest, Hampel quality scoring, V01–V10 validation, virtual meters (§42b EnWG GGV), § 60 Abs. 2 MsbG Jahresprognose forecasting, Resampling, Ablesesteuerung (INSRPT auto-order), meterstore hot/cold tiering (PostgreSQL + Apache Iceberg) with cross-tier OLAP + a read-only Iceberg REST catalog; Cedar write actions role-gated (MSB/NB/admin); 15-tool MCP server |
-| [mabis-syncd](@/docs/services/mabis-syncd.md) | `:8880` | ÜNB/NB | MaBiS synchronisation — aggregates quarter-hourly Lastgang per Bilanzierungsgebiet via `SummenzeitreiheBuilder`, files with the BIKO as MSCONS 13003 on the 10. Werktag; records the BIKO-assigned Datenstatus and open Korrekturbedarf |
+| [mabis-syncd](@/docs/services/mabis-syncd.md) | `:8880` | ÜNB/NB | MaBiS synchronisation — aggregates quarter-hourly Lastgang per Bilanzierungsgebiet via `SummenzeitreiheBuilder`, files with the BIKO as MSCONS 13003 on the 10. Werktag; records the BIKO-assigned Datenstatus and open Korrekturbedarf; emits `de.mabis.*` failure events; 4-tool read-only MCP server |
 | [einsd](@/docs/services/einsd.md) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes; issues the **§14 UStG Gutschrift** (Gutschriftverfahren) per billable settlement as a BO4E `Rechnung` with per-rate USt breakdown; 18-tool MCP server |
 | [obsd](@/docs/services/obsd.md) | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, automated deadline computation (GPKE 24h/WiM 5WT/GeLi Gas 10WT), `completed_at` cycle-time tracking, `GET /api/v1/audit/bnetza-report`, 6-tool MCP server |
 

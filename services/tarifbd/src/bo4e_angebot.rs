@@ -163,14 +163,19 @@ fn teil(pos: &PositionCostBreakdown, lieferzeitraum: Option<&Zeitraum>) -> Angeb
     Angebotsteil {
         gesamtkostenangebotsteil: Some(eur(pos.total_netto_eur)),
         gesamtmengeangebotsteil: Some(menge(pos.jahresverbrauch_kwh, Mengeneinheit::Kwh)),
-        lieferstellenangebotsteil: pos.malo_id.as_ref().and_then(|id| {
-            rubo4e::identifiers::MaloId::new(id).ok().map(|malo| {
-                vec![Box::new(Marktlokation {
-                    marktlokations_id: Some(malo),
-                    sparte: sparte_from_str(&pos.sparte),
-                    ..Default::default()
-                })]
-            })
+        // The delivery point survives even when the id does not validate.
+        // `id` always carries the raw string; `marktlokationsId` is populated
+        // only when it passes the BDEW check digit, because that field asserts
+        // a well-formed MaLo-ID. Dropping the whole Lieferstelle on a malformed
+        // id would silently remove the delivery point from a B2B Angebot — the
+        // quotation would still be sent, describing no location.
+        lieferstellenangebotsteil: pos.malo_id.as_ref().map(|id| {
+            vec![Box::new(Marktlokation {
+                id: Some(id.clone()),
+                marktlokations_id: rubo4e::identifiers::MaloId::new(id).ok(),
+                sparte: sparte_from_str(&pos.sparte),
+                ..Default::default()
+            })]
         }),
         lieferzeitraum: lieferzeitraum.cloned(),
         positionen: Some(positionen),

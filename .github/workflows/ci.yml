@@ -258,7 +258,7 @@ jobs:
           /tmp/sdist-venv/bin/pip install --no-binary :all: sdist-out/*.tar.gz
           /tmp/sdist-venv/bin/python -c "
           import makotest
-          assert makotest.malo_from_base('5123869678') == '51238696780'
+          assert makotest.malo_from_base('5123869678') == '51238696012'
           assert makotest.add_werktage('2026-12-24', 2) == '2026-12-29'
           print('sdist OK', makotest.__version__)
           "

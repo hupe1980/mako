@@ -187,7 +187,7 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 - Redispatch 2.0 uses **CIM/IEC 62325 XML** documents — not EDIFACT (except IFTSTA)
 - IFTSTA status confirmations: PIDs 21037 (Ansicht NB) and 21038 (Ansicht BTR)
 - Handled by the `mako-redispatch` + `redispatch-xml` crates
-- See [Redispatch 2.0]({{ '/redispatch' | relative_url }}) for full documentation
+- XML document types are catalogued in the [PID reference](@/docs/regulatory/pid-reference.md#redispatch-2-0-xml-document-types-not-edifact-pids)
 
 **Regulatory context:** Mandatory since NABEG 2019, § 13 ff. EnWG.
 Covers renewable (EE) and combined heat-and-power (KWK) plants ≥ 100 kW,
@@ -298,7 +298,7 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 
 > **Redispatch 2.0 deadlines are separate** — they use UTC wall-clock hours, not Werktage:
 > 6 h (`AcknowledgementDocument`), 24 h (`StatusRequest`), and 5 min (Activation response).
-> See [Redispatch 2.0]({{ '/redispatch' | relative_url }}) for full deadline table.
+> The full deadline table is in the [PID reference](@/docs/regulatory/pid-reference.md#redispatch-2-0-xml-document-types-not-edifact-pids).
 
 ---
 

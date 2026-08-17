@@ -437,7 +437,7 @@ This links each database record to the exact calculation output for § 147 AO / 
 ## Triggering a billing run
 
 ```http
-POST /api/v1/billing/51238696780/calculate
+POST /api/v1/billing/51238696012/calculate
 Content-Type: application/json
 
 {
@@ -450,8 +450,8 @@ Content-Type: application/json
 ```
 
 `billingd` automatically fetches:
-1. Product from `tarifbd GET /api/v1/customer/51238696780/product`
-2. Meter data from `edmd GET /api/v1/billing-period/51238696780?from=...&to=...`
+1. Product from `tarifbd GET /api/v1/customer/51238696012/product`
+2. Meter data from `edmd GET /api/v1/billing-period/51238696012?from=...&to=...`
 3. NNE tariff from `marktd GET /api/v1/preisblaetter/{nb_mp_id}`
 4. KA tariff from `marktd GET /api/v1/preisblaetter-ka/{nb_mp_id}`
 
@@ -459,7 +459,7 @@ Content-Type: application/json
 or when the upstream service is temporarily unavailable:
 
 ```http
-POST /api/v1/billing/51238696780/calculate
+POST /api/v1/billing/51238696012/calculate
 Content-Type: application/json
 
 {
@@ -512,7 +512,7 @@ how low the EPEX price can go. Common configurations:
 from `edmd`'s `billing-period` endpoint with the static `arbeitspreis_ct_per_kwh`.
 
 ```http
-POST /api/v1/billing/51238696780/calculate
+POST /api/v1/billing/51238696012/calculate
 Content-Type: application/json
 
 {
@@ -873,7 +873,7 @@ Abrechnungsinformation (§40b Abs. 2 EnWG) as
 persisting a record or emitting a CloudEvent.
 
 ```http
-POST /api/v1/billing/51238696780/preview
+POST /api/v1/billing/51238696012/preview
 Content-Type: application/json
 
 {
@@ -962,7 +962,7 @@ curl -s -X PUT "http://vertragd:9780/api/v1/aggregatorvertraege/C0001234567890" 
   -H "Content-Type: application/json" \
   -d '{
     "vpp_id": "VPP-PORTFOLIO-001",
-    "malo_id": "51238696780",
+    "malo_id": "51238696012",
     "aggregator_mp_id": "9910000000002",
     "capacity_price_eur_per_kwh": "0.12",
     "vertragsbeginn": "2026-01-01",

@@ -14,7 +14,7 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: netzbilanz-agent
-  version: "1.0.0"
+  version: "1.1.0"
 spec:
   execution:
     kind: tool-calling
@@ -50,13 +50,17 @@ spec:
       - Mehr-/Mindermengenabrechnung: flag MMM drafts older than 2 months as OVERDUE.
       - Kostenblatt: before an MMM invoice dispatches, verify the period's Kostenblatt was fetched and reconciled; missing at dispatch time: WARNING KOSTENBLATT_MISSING.
 
-      ## OUTPUT FORMAT
-      ```
-      DRAFT_STATUS: [READY_TO_DISPATCH|NEEDS_REVIEW|BLOCKED]
-      POSITIONS_COUNT: [number]
-      TOTAL_BRUTTO_EUR: [amount]
-      BLOCKING_ISSUES: [list or NONE]
-      ```
+  # What this agent is in a multi-agent arrangement.
+  #
+  # MAST measures inter-agent misalignment at 36.9 % of observed multi-agent
+  # failures — a class that exists only if you choose it. Declaring the shape is
+  # how you choose not to: `single` means one agent, one context, many tools, and
+  # the inter-agent failure surface is structurally absent. `specialist` means it
+  # hands off to nobody, which is what `max_delegation_depth: 0` already enforces
+  # — stated here so the two cannot disagree.
+  topology:
+    mode: single
+    role: specialist
 
   capabilities:
     provides: [netzbilanz]
@@ -81,13 +85,107 @@ spec:
   # resolves itself, so the authority-bearing arguments keep the run input's own
   # labels and a named human approves the call before it leaves.
 
+  # Human-in-the-loop, beside the answer rather than in front of it.
+  #
+  # `approval: none` — this specialist cannot act, so there is nothing to gate.
+  # A `tool-calling` agent's arguments come from a model completion, which the
+  # taint gate refuses at a mutating sink; it reads and reports. `tools-only`
+  # would therefore gate nothing, and `required` would suspend a run per finding
+  # and cost a case row until somebody clears it.
+  #
+  # `triage` is the third mode agentplane 0.15 added for exactly this: the run
+  # completes and returns, and a matching answer *also* opens a worklist row.
+  # Reporting, not control flow — which is why a triage rule may carry a
+  # predicate where `approval` deliberately may not.
+  #
+  # Every `path` below is typed against this agent's own `output.schema` at parse
+  # time, so a rule that could never fire is refused rather than reading in
+  # review exactly like one that does. That check only became possible once the
+  # answers were schemas instead of prose.
+  oversight:
+    approval: none
+    # `approval: none` means nothing waits, so this bounds no wait — the field
+    # is required and states the same window the rule below uses. One figure
+    # written twice is cheaper than one field meaning two things.
+    deadline:
+      name: netzbilanz-blocked-review
+      kind: working-days
+      params: { n: 1 }
+    triage:
+      - name: netzbilanz-blocked
+        audience: [netzbilanz]
+        priority: urgent
+        summary: >-
+          A Bilanzkreis INVOIC cannot be dispatched. The MaBiS window closes on a fixed Werktag — this does not wait.
+        when:
+          - path: /draft_status
+            equals: "BLOCKED"
+        deadline:
+          name: netzbilanz-blocked-review
+          kind: working-days
+          params: { n: 1 }
+
   budgets:
     max_tokens: 200000
     max_steps: 36
     max_effects: 60
     max_wallclock_secs: 900
 
+  # The result contract. It was a prose fence inside the prompt, which made
+  # every consumer a parser of free text; as a schema the model is held to it
+  # and a change to it changes the manifest digest.
+  output:
+    schema:
+      type: object
+      additionalProperties: false
+      required:
+        - draft_status
+        - positions_count
+        - total_brutto_eur
+      properties:
+        draft_status:
+          type: string
+          enum:
+            - READY_TO_DISPATCH
+            - NEEDS_REVIEW
+            - BLOCKED
+        positions_count:
+          type: number
+        total_brutto_eur:
+          type: number
+        blocking_issues:
+          type: array
+          items:
+            type: string
+
+  # Knowledge, granted rather than copied.
+  #
+  # Every mako MCP server publishes step-by-step prompts for its own procedures —
+  # fifty of them across thirteen servers — and not one manifest reached a single
+  # one. Each specialist instead carried a hand-typed paraphrase in its
+  # `constraints`, which is a second copy of a procedure with nothing keeping the
+  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # changes when somebody remembers.
+  #
+  # A context grant is not a tool grant. Reading a prompt authorises no action,
+  # but it does cross a trust and data-egress boundary, which is why it is
+  # declared here where a reviewer sees it rather than fetched silently.
+  context:
+    prompts:
+      - server: netzbilanzd
+        name: nb-invoic-overview
+        max_input_sensitivity: internal
+        output_sensitivity: internal
+      - server: netzbilanzd
+        name: investigate-dispute
+        max_input_sensitivity: internal
+        output_sensitivity: internal
+
   tools:
+    - ref: tool://billingd/list_billing_records
+      mutates: false
+      max_sensitivity: internal
+      description: "list billing records via billingd"
     - ref: tool://netzbilanzd/list_nne_drafts
       mutates: false
       max_sensitivity: internal

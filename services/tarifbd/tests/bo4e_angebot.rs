@@ -43,7 +43,7 @@ fn scenario(
         jahreskosten_netto_eur: dec!(75400),
         jahreskosten_brutto_eur: dec!(89726),
         ersparnis_vs_basis_eur: None,
-        positionen_detail: vec![position(Some("51238696780"))],
+        positionen_detail: vec![position(Some("51238696012"))],
     }
 }
 
@@ -88,16 +88,23 @@ fn the_supply_point_is_a_typed_marktlokation() {
         .expect("Lieferstelle")[0];
     assert_eq!(
         malo.marktlokations_id.as_ref().map(AsRef::as_ref),
-        Some("51238696780")
+        Some("51238696012")
     );
     assert_eq!(malo.sparte, Some(rubo4e::current::Sparte::Strom));
 }
 
-/// An invalid MaLo-ID must not produce a Marktlokation carrying a bad key.
+/// An invalid MaLo-ID loses the *typed key*, never the delivery point.
+///
+/// `marktlokationsId` asserts a well-formed BDEW MaLo-ID, so a value that fails
+/// the check digit must not be published there. The Lieferstelle itself still
+/// belongs in the Angebot — dropping it would send a B2B quotation that
+/// describes no location at all, which is a worse answer than one whose id is
+/// untyped. `id` therefore always carries what the caller supplied.
 #[test]
-fn an_invalid_malo_id_yields_no_lieferstelle() {
+fn an_invalid_malo_id_keeps_the_lieferstelle_but_not_the_typed_key() {
     let mut s = scenario("Basis", true, None);
-    s.positionen_detail = vec![position(Some("51238696781"))]; // wrong check digit
+    // Wrong check digit under the BDEW Anwendungshilfe scheme.
+    s.positionen_detail = vec![position(Some("51238696782"))];
     let a = build_angebot(
         "AN-1",
         "ANGELEGT",
@@ -107,9 +114,19 @@ fn an_invalid_malo_id_yields_no_lieferstelle() {
         &[s],
     );
     let teil = &a.varianten.as_ref().unwrap()[0].teile.as_ref().unwrap()[0];
+    let lieferstellen = teil
+        .lieferstellenangebotsteil
+        .as_ref()
+        .expect("the delivery point survives a malformed id");
+    let malo = &lieferstellen[0];
+    assert_eq!(
+        malo.id.as_deref(),
+        Some("51238696782"),
+        "the raw value is preserved so the quotation still names a location"
+    );
     assert!(
-        teil.lieferstellenangebotsteil.is_none(),
-        "a failed check digit must not become a Marktlokation"
+        malo.marktlokations_id.is_none(),
+        "a failed check digit must not be published as a typed MaLo-ID"
     );
 }
 

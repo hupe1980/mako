@@ -26,7 +26,7 @@ fn werteanfrage() -> C {
         esa: mp("9905550000005"),
         msb: mp("9900357000004"),
         ebene: Lokationsebene::Marktlokation,
-        lokations_id: "51238696780".to_owned(),
+        lokations_id: "51238696012".to_owned(),
         message_ref: mref("ESA-WA-1"),
     }
 }
@@ -89,7 +89,7 @@ fn werteanfrage_emits_reqote_35002_and_arms_the_angebot_window() {
         ob.payload["pid"].as_u64(),
         Some(u64::from(ANFRAGE_PID.as_u32()))
     );
-    assert_eq!(ob.payload["location"].as_str(), Some("51238696780"));
+    assert_eq!(ob.payload["location"].as_str(), Some("51238696012"));
     assert!(
         out.deadlines
             .iter()

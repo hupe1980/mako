@@ -1,9 +1,9 @@
 //! The plane: event in, journaled agent run out.
 //!
-//! Replaces the hand-rolled orchestrator, session loop, registry, dead-letter
-//! queue, model providers and MCP client with `agentplane`. What survives from
-//! the old design is the part agentplane deliberately does not do: routing a
-//! CloudEvent type to the specialists that subscribe to it.
+//! `agentplane` owns the session loop, the registry, durable execution, the
+//! model providers and the MCP client. What agentd owns is the part agentplane
+//! deliberately does not do: routing a CloudEvent type to the specialists that
+//! subscribe to it.
 //!
 //! ## What runs where
 //!
@@ -12,9 +12,9 @@
 //!   bridge from a `de.*` CloudEvent to `runtime.run(capability, payload)`.
 //! * **The turn** — the runtime's tool-calling loop, driven entirely by the
 //!   manifest: prompt, model pair, tool grants, ceilings and result schema.
-//! * **Durability** — every model and tool call is a journaled effect. A crash
-//!   resumes from the last completed effect; the old `dlq` existed because a
-//!   failed session had nowhere to go.
+//! * **Durability** — every model and tool call is a journaled effect, so a
+//!   crash resumes from the last completed one. There is no dead-letter queue:
+//!   a failed run has somewhere to go, which is back into itself.
 //!
 //! ## Fan-out
 //!
@@ -35,7 +35,7 @@ use agentplane::runtime::{Agent, RunStatus, Runtime};
 use serde_json::Value;
 use tracing::{info, warn};
 
-use crate::plane::{MANIFESTS, parse_manifest};
+use crate::plane::{find_manifest, manifests};
 
 /// Which compiled specialists a deployment activates.
 ///
@@ -145,24 +145,22 @@ impl Router {
         }
 
         for def in crate::builtin::all().filter(|d| activated.includes(d.name)) {
-            let Some((_, src)) = MANIFESTS.iter().find(|(n, _)| *n == def.name) else {
+            let Some(embedded) = find_manifest(def.name) else {
                 problems.push(format!("{}: no manifest", def.name));
                 continue;
             };
-            match parse_manifest(src) {
-                Ok(m) => match m.spec.capabilities.provides.first() {
-                    Some(cap) => routes.push(Route {
-                        name: def.name,
-                        capability: cap.to_string(),
-                        triggers: def.trigger_patterns,
-                        plans: matches!(
-                            m.spec.execution.as_ref().map(|e| e.kind),
-                            Some(agentplane::manifest::ExecutionKind::Planned)
-                        ),
-                    }),
-                    None => problems.push(format!("{}: manifest provides no capability", def.name)),
-                },
-                Err(e) => problems.push(format!("{}: {e}", def.name)),
+            let m = embedded;
+            match m.spec.capabilities.provides.first() {
+                Some(cap) => routes.push(Route {
+                    name: def.name,
+                    capability: cap.to_string(),
+                    triggers: def.trigger_patterns,
+                    plans: matches!(
+                        m.spec.execution.as_ref().map(|e| e.kind),
+                        Some(agentplane::manifest::ExecutionKind::Planned)
+                    ),
+                }),
+                None => problems.push(format!("{}: manifest provides no capability", def.name)),
             }
         }
 
@@ -195,12 +193,10 @@ impl Router {
 
 /// What one specialist concluded, in the shape the CloudEvent carries.
 ///
-/// Every field is read off the run's own outcome. The three that used to be
-/// here and are not — `tool_calls`, `turns`, `handoff_to` — were always zero or
-/// `None` after the cutover: the runtime drives the turn loop, so agentd never
-/// saw a per-turn count, and there is no peer handoff to report. A field that
-/// is structurally always empty reads as "this agent called no tools", which is
-/// worse than not answering.
+/// Every field is read off the run's own outcome. There is deliberately no
+/// per-turn count and no handoff target: the runtime drives the turn loop and
+/// no specialist delegates, so either field would be structurally empty — and a
+/// zero that reads as "this agent called no tools" is worse than no field.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AgentDecision {
     pub agent_name: String,
@@ -250,6 +246,18 @@ pub struct Stores {
     pub tasks: Arc<dyn TaskStore>,
     pub timers: Arc<dyn TimerStore>,
     pub events: Arc<dyn EventStore>,
+    /// Where an outbox registration and its cursor live.
+    pub push: Arc<dyn agentplane::push::PushStore>,
+    /// Where `memory_formation` writes and `Recall` reads.
+    ///
+    /// Not optional: seven specialists declare `memory_formation`, and a
+    /// memory-forming agent on a plane without a memory store is a **build
+    /// refusal** — which is exactly how its absence was found. Every earlier
+    /// suite activated only `gabi-gas-agent` (no memory block), so the plane
+    /// assembled in tests and `enable_all` — the documented default — could
+    /// not boot. The all-specialist smoke test exists so a seam a manifest
+    /// declares can never again ship unwired.
+    pub memory: Arc<dyn agentplane::memory::MemoryStore>,
 }
 
 impl std::fmt::Debug for Stores {
@@ -281,17 +289,26 @@ impl Stores {
         Self::from_arc(Arc::new(store.for_tenant(tenant.clone())))
     }
 
-    /// One backend, five seams.
+    /// One backend, seven seams.
     fn from_arc<S>(store: Arc<S>) -> Self
     where
-        S: JournalStore + CaseStore + TaskStore + TimerStore + EventStore + 'static,
+        S: JournalStore
+            + CaseStore
+            + TaskStore
+            + TimerStore
+            + EventStore
+            + agentplane::push::PushStore
+            + agentplane::memory::MemoryStore
+            + 'static,
     {
         Self {
             journal: Arc::clone(&store) as Arc<dyn JournalStore>,
             cases: Arc::clone(&store) as Arc<dyn CaseStore>,
             tasks: Arc::clone(&store) as Arc<dyn TaskStore>,
             timers: Arc::clone(&store) as Arc<dyn TimerStore>,
-            events: store as Arc<dyn EventStore>,
+            events: Arc::clone(&store) as Arc<dyn EventStore>,
+            push: Arc::clone(&store) as Arc<dyn agentplane::push::PushStore>,
+            memory: store as Arc<dyn agentplane::memory::MemoryStore>,
         }
     }
 }
@@ -320,6 +337,12 @@ pub struct PlaneConfig<'a> {
     pub policy: Arc<dyn PolicyEngine>,
     /// Envelope encryption for everything written down, when configured.
     pub keyring: Option<Arc<dyn KeyRing>>,
+    /// Where a completed run's decision is delivered, durably.
+    ///
+    /// `None` leaves runs unwatched — the decision is still in the journal, but
+    /// nothing announces it. Configuring `audit_webhook_url` is what turns this
+    /// on.
+    pub outbox: Option<Arc<agentplane::push::Outbox>>,
 }
 
 /// The runtime and its routing table.
@@ -376,6 +399,10 @@ impl Plane {
             .tasks(stores.tasks)
             .timers(stores.timers)
             .events(stores.events)
+            // Where the seven memory-forming specialists write and recall.
+            // A manifest declaring `memory_formation` on a plane without this
+            // is refused at build — the refusal that found the seam missing.
+            .memory(stores.memory)
             // Werktage, resolved through mako's own BDEW holiday table — so an
             // agent's approval window and the regulatory window it guards
             // cannot disagree about when Karfreitag is.
@@ -389,17 +416,46 @@ impl Plane {
         for (name, client) in cfg.tool_servers {
             builder = builder.tool_server(name, client);
         }
+        // Registrations are made at **admission**, so no run exists unwatched,
+        // and delivery reads the run's own journal records past a cursor that
+        // advances only on 2xx. This replaces a fire-and-forget POST at request
+        // time: agentd was the one mako service emitting an event without
+        // persist-before-dispatch, in a system whose whole argument is that the
+        // journal is the plan of record.
+        if let Some(outbox) = cfg.outbox {
+            builder = builder.outbox(outbox);
+        }
         if let Some(keys) = cfg.keyring {
             // Seals the journal, case state, events and task proposals — done at
             // `build`, so registration order cannot lose the guarantee.
             builder = builder.keyring(keys);
         }
-        // Only activated specialists are registered. An agent the operator did
-        // not enable is not merely unrouted — it has no declaration in the
-        // runtime, so a run cannot address its capability by any other path.
-        for (name, src) in MANIFESTS.iter().filter(|(n, _)| cfg.activated.includes(n)) {
-            let m = Arc::new(parse_manifest(src).map_err(|e| format!("{name}: {e}"))?);
-            builder = builder.agent(Agent::new(&m));
+        // Only *compiled and activated* specialists are registered. An agent the
+        // operator did not enable is not merely unrouted — it has no declaration
+        // in the runtime, so a run cannot address its capability by any other
+        // path. The compiled-in filter matters in a role-scoped build: the
+        // `manifests![]` embedding is not role-gated, so without it an
+        // `enable_all` deployment of a `role-lf` binary would register the NB
+        // and MSB specialists as addressable capabilities — unrouted, but
+        // declared, with their grants counted as required wiring (§ 9 EnWG).
+        for (name, declaration) in manifests().iter().filter(|(name, _)| {
+            crate::builtin::find(name).is_some() && cfg.activated.includes(name)
+        }) {
+            let name = name.as_str();
+            let m = Arc::new(declaration.clone());
+            let mut agent = Agent::new(&m);
+            // A specialist whose work is computation carries a coded skill
+            // instead of an `execution` block. The manifest still governs it —
+            // same grants, same ceilings, same digest — but the conduct is Rust,
+            // so the thresholds are testable and no model is asked to subtract.
+            if name == crate::skills::DeadlineTriage::NAME {
+                // No wiring: `StepCtx::call_tool` dispatches through the plane's
+                // own catalogue, which `try_build` derived from these manifests
+                // and checked against them. A skill that carried its own could
+                // grant itself reach the declaration never described.
+                agent = agent.skill(crate::skills::DeadlineTriage::new());
+            }
+            builder = builder.agent(agent);
         }
 
         // `try_build`, not `build`: `build` panics on a wiring fault, and a
@@ -555,10 +611,15 @@ impl Plane {
 
         let (run_id, status, summary, tokens) = match outcome {
             Ok(o) => {
+                // The answer when there is one; the *reason* when there is not.
+                // A failed run with an empty summary reads as "the agent said
+                // nothing", when the truth is "the runtime refused, and said
+                // why" — and the why is the only actionable part.
                 let summary = o
                     .output
                     .as_ref()
                     .map(|t| t.peek().to_string())
+                    .or_else(|| o.reason().map(|r| r.into_owned()))
                     .unwrap_or_default();
                 (o.run_id.to_string(), o.status, summary, o.spend.tokens)
             }

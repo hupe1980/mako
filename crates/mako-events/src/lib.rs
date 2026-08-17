@@ -414,6 +414,24 @@ pub mod obs {
 /// (tracked in ROADMAP). Add constants here when `sperrd` starts emitting.
 pub mod sperr {}
 
+/// MaBiS Summenzeitreihe submission events (`de.mabis.*`), emitted by
+/// `mabis-syncd`.
+///
+/// Both are failure signals: a healthy submission cycle is silent, because the
+/// scheduled Erstaufschlag run filing on time is the normal case and an event
+/// per success would be noise nobody subscribes to.
+pub mod mabis {
+    /// A Summenzeitreihe aggregation or BIKO submission failed
+    /// (BK6-24-174 Anlage 3 §3.10). Carries the run id, the
+    /// Bilanzierungsgebiet, the period, the phase and `attempt_count` — after
+    /// three attempts the scheduler stops retrying and a human has to look.
+    pub const SUBMISSION_FAILED: &str = "de.mabis.submission.failed";
+    /// A negative Prüfmitteilung opened a Korrekturbedarf (§9.8.1): the BIKO
+    /// or a BKV objected to a filed Summenzeitreihe, and a corrected version
+    /// must be submitted within the Clearing window.
+    pub const KORREKTURBEDARF_OPENED: &str = "de.mabis.korrekturbedarf.opened";
+}
+
 /// Every concrete CloudEvents type in the catalog.
 #[must_use]
 pub fn all() -> &'static [&'static str] {
@@ -531,6 +549,9 @@ pub fn all() -> &'static [&'static str] {
         // de.obs.*
         obs::STP_PARITY_ALERT,
         obs::DEADLINE_APPROACHING,
+        // de.mabis.*
+        mabis::SUBMISSION_FAILED,
+        mabis::KORREKTURBEDARF_OPENED,
     ]
 }
 

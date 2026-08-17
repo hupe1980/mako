@@ -23,7 +23,7 @@ use makod::ingest_dispatcher::{EdifactIngestDispatcher, IngestOutcome};
 
 const OWN_MP: &str = "9900357000004";
 const SENDER_MP: &str = "4012345000023";
-const LOC: &str = "51238696780";
+const LOC: &str = "51238696012";
 
 async fn dispatcher() -> EdifactIngestDispatcher {
     let store = SlateDbStore::open_in_memory()

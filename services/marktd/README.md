@@ -283,7 +283,7 @@ date ranges in German local time (CET/CEST):
 
 ```json
 {
-  "malo_id": "51238696780",
+  "malo_id": "51238696012",
   "sparte": "STROM",
   "rollenzuordnung": [
     {
@@ -314,11 +314,11 @@ database but filtered server-side by the query.
 systems to detect contention before initiating a new process:
 
 ```
-GET /api/v1/correlations/51238696780
+GET /api/v1/correlations/51238696012
 
 [
   {
-    "malo_id":      "51238696780",
+    "malo_id":      "51238696012",
     "pid":          55001,
     "conv_id":      "018f3a2b-...",
     "initiated_at": "2026-07-01T08:00:00Z",

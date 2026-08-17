@@ -3,6 +3,21 @@
 #[allow(unused_imports)]
 use super::*;
 
+/// The commodity a settlement query balances on, from `?sparte=`.
+///
+/// Defaults to Strom, because that is the calendar-day case and the historic
+/// behaviour of these endpoints. `sparte=gas` selects the 06:00–06:00 Gastag —
+/// the boundary GaBi Gas settles on, and the one an aggregate must use or it
+/// carries six hours of the neighbouring day.
+fn sparte_of(raw: Option<&str>) -> crate::domain::Sparte {
+    match raw.map(str::to_ascii_lowercase).as_deref() {
+        Some("gas") => crate::domain::Sparte::Gas,
+        Some("wasser") => crate::domain::Sparte::Wasser,
+        Some("waerme" | "wärme") => crate::domain::Sparte::Waerme,
+        _ => crate::domain::Sparte::Strom,
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct DeliveryQueryParams {
     from: Option<String>,
@@ -59,11 +74,19 @@ pub(crate) async fn get_deliveries(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct ImbalanceParams {
+    /// `strom` (default) · `gas` — the MMM saldo aggregates over the
+    /// commodity's balancing day, and for Gas that is the 06:00 Gastag.
+    sparte: Option<String>,
+}
+
 pub(crate) async fn get_imbalance(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Path((malo_id, year, month)): Path<(String, i32, u8)>,
+    Query(params): Query<ImbalanceParams>,
 ) -> impl IntoResponse {
     use time::{Date, Month};
 
@@ -100,7 +123,13 @@ pub(crate) async fn get_imbalance(
 
     match state
         .repo
-        .imbalance(&malo_id, from, to, &state.tenant)
+        .imbalance(
+            &malo_id,
+            from,
+            to,
+            &state.tenant,
+            sparte_of(params.sparte.as_deref()),
+        )
         .await
     {
         Ok(report) => Json(serde_json::to_value(report).unwrap_or_default()).into_response(),
@@ -131,6 +160,9 @@ pub(crate) struct BillingPeriodParams {
     from: Option<String>,
     /// ISO 8601 date `YYYY-MM-DD` — end of billing period (inclusive).
     to: Option<String>,
+    /// `strom` (default) · `gas` · `wasser` · `waerme` — decides whether the
+    /// period runs on calendar days or on the Gastag.
+    sparte: Option<String>,
 }
 
 pub(crate) async fn get_billing_period(
@@ -200,6 +232,7 @@ pub(crate) async fn get_billing_period(
         period_from,
         period_to,
         tenant: state.tenant.clone(),
+        sparte: sparte_of(params.sparte.as_deref()),
     };
 
     match state.repo.billing_period(&q).await {

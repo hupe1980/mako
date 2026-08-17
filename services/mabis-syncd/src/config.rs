@@ -23,6 +23,16 @@ pub struct Config {
     pub submission_target: crate::submission::SubmissionTarget,
     #[serde(default)]
     pub schedule: ScheduleConfig,
+    /// Webhook that receives this service's `de.mabis.*` CloudEvents, drained
+    /// from the transactional outbox (persist-before-dispatch). Unset means the
+    /// events are still enqueued but nothing delivers them — set it wherever a
+    /// consumer (marktd fan-out, ERP, agentd) should hear about a failed
+    /// submission or an opened Korrekturbedarf.
+    #[serde(default)]
+    pub erp_webhook_url: Option<String>,
+    /// HMAC-SHA256 secret for signing outbound webhook deliveries.
+    #[serde(default)]
+    pub erp_hmac_secret: Option<String>,
     #[serde(default)]
     pub otel: OtelConfig,
     #[serde(default)]
@@ -166,6 +176,21 @@ pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {
     // submission: by then a run has aggregated a month of metering data and
     // consumed its version number.
     cfg.submission_target.ensure_supported()?;
+    // Same argument, one identifier along: the fallback Bilanzierungsgebiet is
+    // operator configuration, so a value that is not a Y-type EIC is a
+    // deployment error. Catching it here means it surfaces at start-up rather
+    // than at 05:00 on the Erstaufschlag-Werktag, when the submission window is
+    // the thing at stake.
+    rubo4e::identifiers::BilanzierungsgebietId::new(&cfg.identity.bilanzierungsgebiet_id).map_err(
+        |e| {
+            anyhow::anyhow!(
+                "identity.bilanzierungsgebiet_id `{}` is not a Bilanzierungsgebiet-EIC: {e}. \
+                 A Bilanzierungsgebiet is a 16-character EIC of ENTSO-E object type `Y` \
+                 (Area); a Bilanzkreis is type `X` (Party) and belongs in a different field.",
+                cfg.identity.bilanzierungsgebiet_id
+            )
+        },
+    )?;
     Ok(cfg)
 }
 
@@ -193,6 +218,12 @@ impl Config {
         self.identity.sender_mp_id = resolve_env(&self.identity.sender_mp_id)?;
         self.identity.receiver_mp_id = resolve_env(&self.identity.receiver_mp_id)?;
         self.identity.bilanzierungsgebiet_id = resolve_env(&self.identity.bilanzierungsgebiet_id)?;
+        if let Some(url) = &self.erp_webhook_url {
+            self.erp_webhook_url = Some(resolve_env(url)?);
+        }
+        if let Some(secret) = &self.erp_hmac_secret {
+            self.erp_hmac_secret = Some(resolve_env(secret)?);
+        }
         Ok(())
     }
 }

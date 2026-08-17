@@ -87,6 +87,9 @@ fn plane(provider: &Arc<FakeProvider>, tools: &Arc<CountingTools>) -> Plane {
     Plane::new(
         Stores::redb(store, &tenant),
         PlaneConfig {
+            // No outbox: this suite asserts on the plane's own state, not on
+            // what a receiver was told.
+            outbox: None,
             owner: "agentd-test",
             tenant: &tenant,
             activated: &Activation::named(vec![AGENT.to_owned()]),
@@ -102,10 +105,11 @@ fn plane(provider: &Arc<FakeProvider>, tools: &Arc<CountingTools>) -> Plane {
     .expect("the plane assembles")
 }
 
-/// The event: identifiers only, which is the rule `concepts/AGENTD.md` adopts.
+/// The event: identifiers only, which is the rule for agent inputs — a
+/// specialist is handed keys and reaches the rest through its granted tools.
 fn event() -> Value {
     json!({
-        "malo_id": "51238696780",
+        "malo_id": "51238696012",
         "pid": "13013",
         "mp_id": "9900357000004",
         "bilanzkreis_id": "THE0BFH012345678",

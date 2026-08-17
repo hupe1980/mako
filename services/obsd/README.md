@@ -113,7 +113,7 @@ Response:
   "family":        "gpke",
   "workflow_name": "GpkeLfAnmeldungWorkflow",
   "state":         "initiated",
-  "malo_id":       "51238696780",
+  "malo_id":       "51238696012",
   "partner_mp_id": "4012345000023",
   "mdm_role":      "LF",
   "deadline_at":   "2025-10-02T08:00:00Z",

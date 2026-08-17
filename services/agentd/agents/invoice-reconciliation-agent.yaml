@@ -14,7 +14,7 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: invoice-reconciliation-agent
-  version: "1.0.0"
+  version: "1.1.0"
 spec:
   execution:
     kind: tool-calling
@@ -35,20 +35,24 @@ spec:
       ## STEP-BY-STEP PROCEDURE
 
       1. Call invoicd `get_receipt` for disputed/overdue invoice details.
-      2. Call accountingd `get_open_items` for the MaLo to check outstanding balance.
+      2. Call accountingd `get_balance` for the outstanding balance, and `list_ledger`
+         for the entries behind it. (Open items are an HTTP endpoint, not a tool.)
       3. Cross-reference invoicd receipt against accountingd ledger entries.
       4. Check if a REMADV 33002 (partial payment) was received.
       5. For disputes: retrieve the original Rechnung from billingd and compare against disputed amount.
       6. Determine escalation level (reminder → fee → Sperrauftrag).
 
-      ## OUTPUT FORMAT
-      ```
-      RECONCILIATION_STATUS: [MATCHED|PARTIAL|OUTSTANDING|DISPUTED]
-      OUTSTANDING_EUR: [amount]
-      DAYS_OVERDUE: [number]
-      ESCALATION_LEVEL: [NONE|REMINDER|FEE|SPERR]
-      RECOMMENDED_ACTION: [specific step]
-      ```
+  # What this agent is in a multi-agent arrangement.
+  #
+  # MAST measures inter-agent misalignment at 36.9 % of observed multi-agent
+  # failures — a class that exists only if you choose it. Declaring the shape is
+  # how you choose not to: `single` means one agent, one context, many tools, and
+  # the inter-agent failure surface is structurally absent. `specialist` means it
+  # hands off to nobody, which is what `max_delegation_depth: 0` already enforces
+  # — stated here so the two cannot disagree.
+  topology:
+    mode: single
+    role: specialist
 
   capabilities:
     provides: [invoice.reconciliation]
@@ -73,13 +77,113 @@ spec:
   # resolves itself, so the authority-bearing arguments keep the run input's own
   # labels and a named human approves the call before it leaves.
 
+  # Human-in-the-loop, beside the answer rather than in front of it.
+  #
+  # `approval: none` — this specialist cannot act, so there is nothing to gate.
+  # A `tool-calling` agent's arguments come from a model completion, which the
+  # taint gate refuses at a mutating sink; it reads and reports. `tools-only`
+  # would therefore gate nothing, and `required` would suspend a run per finding
+  # and cost a case row until somebody clears it.
+  #
+  # `triage` is the third mode agentplane 0.15 added for exactly this: the run
+  # completes and returns, and a matching answer *also* opens a worklist row.
+  # Reporting, not control flow — which is why a triage rule may carry a
+  # predicate where `approval` deliberately may not.
+  #
+  # Every `path` below is typed against this agent's own `output.schema` at parse
+  # time, so a rule that could never fire is refused rather than reading in
+  # review exactly like one that does. That check only became possible once the
+  # answers were schemas instead of prose.
+  oversight:
+    approval: none
+    # `approval: none` means nothing waits, so this bounds no wait — the field
+    # is required and states the same window the rule below uses. One figure
+    # written twice is cheaper than one field meaning two things.
+    deadline:
+      name: invoice-escalation-review
+      kind: working-days
+      params: { n: 1 }
+    triage:
+      - name: invoice-escalation
+        audience: [credit-control]
+        priority: urgent
+        summary: >-
+          An unpaid invoice has reached the disconnection threshold. Review before the §41f sequence opens.
+        when:
+          - path: /escalation_level
+            equals: "SPERR"
+        deadline:
+          name: invoice-escalation-review
+          kind: working-days
+          params: { n: 1 }
+
   budgets:
     max_tokens: 200000
     max_steps: 45
     max_effects: 75
     max_wallclock_secs: 900
 
+  # The result contract. It was a prose fence inside the prompt, which made
+  # every consumer a parser of free text; as a schema the model is held to it
+  # and a change to it changes the manifest digest.
+  output:
+    schema:
+      type: object
+      additionalProperties: false
+      required:
+        - reconciliation_status
+        - outstanding_eur
+        - days_overdue
+      properties:
+        reconciliation_status:
+          type: string
+          enum:
+            - MATCHED
+            - PARTIAL
+            - OUTSTANDING
+            - DISPUTED
+        outstanding_eur:
+          type: number
+        days_overdue:
+          type: number
+        escalation_level:
+          type: string
+          enum:
+            - NONE
+            - REMINDER
+            - FEE
+            - SPERR
+        recommended_action:
+          type: string
+
+  # Knowledge, granted rather than copied.
+  #
+  # Every mako MCP server publishes step-by-step prompts for its own procedures —
+  # fifty of them across thirteen servers — and not one manifest reached a single
+  # one. Each specialist instead carried a hand-typed paraphrase in its
+  # `constraints`, which is a second copy of a procedure with nothing keeping the
+  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # changes when somebody remembers.
+  #
+  # A context grant is not a tool grant. Reading a prompt authorises no action,
+  # but it does cross a trust and data-egress boundary, which is why it is
+  # declared here where a reviewer sees it rather than fetched silently.
+  context:
+    prompts:
+      - server: invoicd
+        name: check-overdue-remadv
+        max_input_sensitivity: internal
+        output_sensitivity: internal
+      - server: invoicd
+        name: monthly-billing-review
+        max_input_sensitivity: internal
+        output_sensitivity: internal
+
   tools:
+    - ref: tool://accountingd/get_balance
+      mutates: false
+      max_sensitivity: internal
+      description: "get balance via accountingd"
     - ref: tool://invoicd/get_receipt
       mutates: false
       max_sensitivity: internal

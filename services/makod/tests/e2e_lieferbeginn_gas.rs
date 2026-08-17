@@ -59,7 +59,7 @@ use makod::adapters::geli_gas_registry;
 
 const LFN_GAS_ID: &str = "4012345000023"; // Gaslieferant (sender of UTILMD G)
 const GNB_ID: &str = "9900357000004"; // Gasnetzbetreiber (receiver)
-const MALO_GAS_ID: &str = "52695662085"; // Marktlokations-ID (Gas)
+const MALO_GAS_ID: &str = "52695662076"; // Marktlokations-ID (Gas)
 const FV: &str = "FV2025-10-01";
 
 // ── UTILMD G 44001 wire fixture ────────────────────────────────────────────────
@@ -77,7 +77,7 @@ DTM+137:20250115:102'\
 RFF+Z13:GAS-REF-001'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+Z19+52695662085::'\
+IDE+Z19+52695662076::'\
 UNT+8+MSG-001'\
 UNZ+1+GAS-2025-001'";
 

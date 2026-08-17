@@ -381,7 +381,7 @@ mod utilmd_transaction_tests {
             .pruefidentifikator(pid)
             .sender("4012345000023")
             .receiver("9900357000004")
-            .transaction(ObjectType::Marktlokation, "12345678901")
+            .transaction(ObjectType::Marktlokation, "12345678989")
             .reference("Z13", "55001")
             .done()
             .serialize()

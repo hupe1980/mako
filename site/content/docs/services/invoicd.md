@@ -145,7 +145,7 @@ INVOIC when `[erp] webhook_url` is configured.
   "subject": "<receipt_id>",
   "data": {
     "receipt_id": "550e8400-...",
-    "malo_id": "10001234567",
+    "malo_id": "10001234558",
     "pid": 31001,
     "sender_mp_id": "9904234560001",
     "pay_by": "2026-10-15",
@@ -231,13 +231,13 @@ Returns the payment status for all INVOIC receipts linked to a MaLo, with a
 summary of overdue / pending / settled counts.
 
 ```bash
-curl -s http://invoicd:8280/api/v1/zahlungsstatus/10001234567 \
+curl -s http://invoicd:8280/api/v1/zahlungsstatus/10001234558 \
   -H "Authorization: Bearer <token>" | jq .
 ```
 
 ```json
 {
-  "malo_id": "10001234567",
+  "malo_id": "10001234558",
   "overdue_count": 1,
   "pending_count": 2,
   "settled_count": 14,
@@ -396,7 +396,7 @@ curl -s http://marktd:8180/api/v1/subscriptions/invoicd \
 When the LF issues the invoice itself (INVOIC AHB Selbstausstellung selbstausgestellt), trigger via:
 
 ```bash
-curl -X POST http://invoicd:8280/api/v1/selbstausstellen/10001234567 \
+curl -X POST http://invoicd:8280/api/v1/selbstausstellen/10001234558 \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{

@@ -14,7 +14,7 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: grid-anomaly-agent
-  version: "1.0.0"
+  version: "1.1.0"
 spec:
   execution:
     kind: tool-calling
@@ -35,25 +35,64 @@ spec:
       ## PROCEDURE
 
       1. Extract `malo_id` from event payload.
-      2. Call marktd `get_malo_grid` for the current NB assignment (nb_mp_id, Bilanzierungsgebiet).
+      2. Call marktd `get_malo` — `netzebene`, `bilanzierungsgebiet` and the NB
+         assignment are fields on it. (`get_malo_grid` is an HTTP endpoint, not
+         an MCP tool; asking for it reaches nothing.)
       3. If no malo_grid record: MISSING — the NB-role grid PUT has not been provisioned for this MaLo.
       4. Check if marktd has a valid NB contract (Vertrag) for the NB MP-ID.
       5. Without a valid NB contract: NB STP processd `check_anmeldung` would fail check 5.
 
-      ## OUTPUT FORMAT
-      ```
-      GRID_STATUS: [OK|MISSING]
-      NB_MP_ID: [id or MISSING]
-      CONTRACT_STATUS: [VALID|MISSING|EXPIRED]
-      STP_IMPACT: [NONE|BLOCKING — processd check 5 would fail]
-      CORRECTION: [specific action]
-      ```
+  # What this agent is in a multi-agent arrangement.
+  #
+  # MAST measures inter-agent misalignment at 36.9 % of observed multi-agent
+  # failures — a class that exists only if you choose it. Declaring the shape is
+  # how you choose not to: `single` means one agent, one context, many tools, and
+  # the inter-agent failure surface is structurally absent. `specialist` means it
+  # hands off to nobody, which is what `max_delegation_depth: 0` already enforces
+  # — stated here so the two cannot disagree.
+  topology:
+    mode: single
+    role: specialist
 
   capabilities:
     provides: [grid.anomaly]
 
   models:
     privileged:  { provider: anthropic, model: claude-sonnet-5 }
+    # Reads the agent's own answer during memory formation — model output, and
+    # therefore untrusted. A model that cannot call a tool is what should read it.
+    quarantined: { provider: anthropic, model: claude-haiku-4-5-20251001 }
+
+  # Memory, bound to the party this run is about.
+  #
+  # `subject` is a **binding**, not a literal: `$correlation/malo` resolves to
+  # the Marktlokation this run was correlated on, so one declaration serves every
+  # customer without pooling their facts under one key.
+  #
+  # That distinction is not stylistic. A subject is the unit
+  # `MemoryStore::forget_subject` erases, so a literal subject here would mean
+  # one customer's history recalled into another customer's run, and a GDPR
+  # Art. 17 erasure naming one person unsatisfiable without destroying
+  # everybody's. Until agentplane 0.15 the declarative tier could only write a
+  # literal, which is why 26 specialists shipped with no memory at all.
+  #
+  # A binding that cannot resolve fails the run rather than falling back to a
+  # default — a memory filed under the wrong scope is worse than none.
+  #
+  # Formation reads the agent's own answer, which is model output and therefore
+  # untrusted, so it runs on the **quarantined** model.
+  memory_formation:
+    subject: "$correlation/malo"
+    purpose: >-
+      the NB assignment and contract faults already seen for this Marktlokation, so a known-missing grid record is recognised rather than re-diagnosed every time its master data changes
+    instruction: >-
+      Record at most three durable facts about THIS Marktlokation's grid assignment: whether a malo_grid record was missing, whether the NB contract was absent or expired, and the NB MP-ID involved. Record nothing about any other party.
+    max_items: 3
+    # Two years: long enough for a year-on-year pattern, short enough that a
+    # fact nobody has revisited expires instead of hardening into a standing
+    # instruction about a customer.
+    retention_seconds: 63113904
+    max_sensitivity: internal
 
   security:
     max_sensitivity_egress: internal
@@ -72,11 +111,107 @@ spec:
   # resolves itself, so the authority-bearing arguments keep the run input's own
   # labels and a named human approves the call before it leaves.
 
+  # Human-in-the-loop, beside the answer rather than in front of it.
+  #
+  # `approval: none` — this specialist cannot act, so there is nothing to gate.
+  # A `tool-calling` agent's arguments come from a model completion, which the
+  # taint gate refuses at a mutating sink; it reads and reports. `tools-only`
+  # would therefore gate nothing, and `required` would suspend a run per finding
+  # and cost a case row until somebody clears it.
+  #
+  # `triage` is the third mode agentplane 0.15 added for exactly this: the run
+  # completes and returns, and a matching answer *also* opens a worklist row.
+  # Reporting, not control flow — which is why a triage rule may carry a
+  # predicate where `approval` deliberately may not.
+  #
+  # Every `path` below is typed against this agent's own `output.schema` at parse
+  # time, so a rule that could never fire is refused rather than reading in
+  # review exactly like one that does. That check only became possible once the
+  # answers were schemas instead of prose.
+  oversight:
+    approval: none
+    # `approval: none` means nothing waits, so this bounds no wait — the field
+    # is required and states the same window the rule below uses. One figure
+    # written twice is cheaper than one field meaning two things.
+    deadline:
+      name: grid-assignment-review
+      kind: working-days
+      params: { n: 1 }
+    triage:
+      - name: grid-assignment
+        audience: [grid-operations]
+        priority: high
+        summary: >-
+          A MaLo has no NB grid assignment. Any NB STP Anmeldung for it fails processd check 5 until the grid PUT is provisioned.
+        when:
+          - path: /grid_status
+            equals: "MISSING"
+        deadline:
+          name: grid-assignment-review
+          kind: working-days
+          params: { n: 1 }
+
   budgets:
     max_tokens: 200000
     max_steps: 30
     max_effects: 50
     max_wallclock_secs: 900
+
+  # The result contract. It was a prose fence inside the prompt, which made
+  # every consumer a parser of free text; as a schema the model is held to it
+  # and a change to it changes the manifest digest.
+  output:
+    schema:
+      type: object
+      additionalProperties: false
+      required:
+        - grid_status
+        - nb_mp_id
+        - contract_status
+      properties:
+        grid_status:
+          type: string
+          enum:
+            - OK
+            - MISSING
+        nb_mp_id:
+          type: string
+        contract_status:
+          type: string
+          enum:
+            - VALID
+            - MISSING
+            - EXPIRED
+        stp_impact:
+          type: string
+          enum:
+            - NONE
+            - BLOCKING
+        correction:
+          type: string
+
+  # Knowledge, granted rather than copied.
+  #
+  # Every mako MCP server publishes step-by-step prompts for its own procedures —
+  # fifty of them across thirteen servers — and not one manifest reached a single
+  # one. Each specialist instead carried a hand-typed paraphrase in its
+  # `constraints`, which is a second copy of a procedure with nothing keeping the
+  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # changes when somebody remembers.
+  #
+  # A context grant is not a tool grant. Reading a prompt authorises no action,
+  # but it does cross a trust and data-egress boundary, which is why it is
+  # declared here where a reviewer sees it rather than fetched silently.
+  context:
+    prompts:
+      - server: marktd
+        name: grid-topology
+        max_input_sensitivity: internal
+        output_sensitivity: internal
+      - server: marktd
+        name: investigate-supply-gap
+        max_input_sensitivity: internal
+        output_sensitivity: internal
 
   tools:
     - ref: tool://marktd/get_malo

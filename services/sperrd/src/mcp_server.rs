@@ -202,13 +202,18 @@ impl SperrdMcpHandler {
 
         let overdue: Vec<serde_json::Value> = rows
             .iter()
-            .map(|r| serde_json::json!({
-                "id":            r.try_get::<String, _>("id").unwrap_or_default(),
-                "malo_id":       r.try_get::<String, _>("malo_id").unwrap_or_default(),
-                "lf_mp_id":      r.try_get::<String, _>("lf_mp_id").unwrap_or_default(),
-                "planned_date":  r.try_get::<Option<time::Date>, _>("planned_date").unwrap_or(None),
-                "days_overdue":  r.try_get::<Option<i32>, _>("days_overdue").unwrap_or(None),
-            }))
+            .map(|r| {
+                serde_json::json!({
+                    "id":            r.try_get::<String, _>("id").unwrap_or_default(),
+                    "malo_id":       r.try_get::<String, _>("malo_id").unwrap_or_default(),
+                    "lf_mp_id":      r.try_get::<String, _>("lf_mp_id").unwrap_or_default(),
+                    // ISO 8601, not `time::Date`'s derived `[year, ordinal]` array.
+                    "planned_date":  r.try_get::<Option<time::Date>, _>("planned_date")
+                        .unwrap_or(None)
+                        .map(|d| d.to_string()),
+                    "days_overdue":  r.try_get::<Option<i32>, _>("days_overdue").unwrap_or(None),
+                })
+            })
             .collect();
 
         ContentBlock::json(serde_json::json!({

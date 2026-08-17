@@ -184,7 +184,7 @@ for operator override (e.g. grace extensions, special B2B arrangements).
 For operator-authorised bookings not driven by CloudEvents:
 
 ```bash
-curl -X POST "http://accountingd:9380/api/v1/accounts/51238696780/buchen" \
+curl -X POST "http://accountingd:9380/api/v1/accounts/51238696012/buchen" \
   -H "Content-Type: application/json" \
   -d '{
     "entry_type":   "ZAHLUNG",
@@ -207,16 +207,16 @@ The annual settlement compares actual billed amounts against advance payments co
 
 ```bash
 # Preview (dry_run=true)
-curl "http://accountingd:9380/api/v1/jahresabschluss/51238696780?year=2025&dry_run=true"
+curl "http://accountingd:9380/api/v1/jahresabschluss/51238696012?year=2025&dry_run=true"
 
 # Commit
-curl -X POST "http://accountingd:9380/api/v1/jahresabschluss/51238696780?year=2025"
+curl -X POST "http://accountingd:9380/api/v1/jahresabschluss/51238696012?year=2025"
 ```
 
 Response:
 ```json
 {
-  "malo_id":                  "51238696780",
+  "malo_id":                  "51238696012",
   "year":                     2025,
   "rechnung_sum_ct":          120000,
   "abschlag_paid_ct":         -108000,
@@ -261,7 +261,7 @@ accounts. Linking them enables cross-MaLo balance and dunning:
 
 ```bash
 # Link an account to its business partner
-curl -X PUT ".../api/v1/accounts/51238696780/business-partner" \
+curl -X PUT ".../api/v1/accounts/51238696012/business-partner" \
   -H 'Content-Type: application/json' -d '{"kunden_nr":"K-100234"}'
 
 # Consolidated view
@@ -343,7 +343,7 @@ until a webhook is set.)
 ## Vorauszahlung (§40 Abs. 1 EnWG)
 
 ```bash
-curl -X PUT "http://accountingd:9380/api/v1/accounts/51238696780/vorauszahlung" \
+curl -X PUT "http://accountingd:9380/api/v1/accounts/51238696012/vorauszahlung" \
   -H "Content-Type: application/json" \
   -d '{
     "_typ": "VORAUSZAHLUNG",
@@ -376,7 +376,7 @@ Einzelbewertung of receivables, SAP-FI-CA "oldest-first"):
 
 ```json
 {
-  "malo_id": "51238696780",
+  "malo_id": "51238696012",
   "open_items": [
     { "entry_id": "…", "entry_type": "RECHNUNG", "amount_ct": 8000,
       "outstanding_ct": 0, "booking_date": "2026-05-15" },
@@ -415,10 +415,10 @@ cache from the ledger:
 
 ```bash
 # Check only
-curl -X POST "http://accountingd:9380/api/v1/accounts/51238696780/reconcile"
+curl -X POST "http://accountingd:9380/api/v1/accounts/51238696012/reconcile"
 
 # Detect + repair
-curl -X POST "http://accountingd:9380/api/v1/accounts/51238696780/reconcile?repair=true"
+curl -X POST "http://accountingd:9380/api/v1/accounts/51238696012/reconcile?repair=true"
 ```
 
 Response:
@@ -473,7 +473,7 @@ single-row ledger could not give.
 ## GDPR Art. 17 — Pseudonymization
 
 ```bash
-curl -X POST "http://accountingd:9380/api/v1/accounts/51238696780/anonymize" \
+curl -X POST "http://accountingd:9380/api/v1/accounts/51238696012/anonymize" \
   -H "Content-Type: application/json" \
   -d '{ "requested_by": "operator-1", "legal_basis": "GDPR Art. 17 - customer request #42" }'
 ```
@@ -658,7 +658,7 @@ statutory default interest per §288 BGB. `accountingd` calculates and books int
 as a `MAHNGEBUEHR` ledger entry:
 
 ```bash
-curl -X POST "http://accountingd:9380/api/v1/accounts/51238696780/interest-charges" \
+curl -X POST "http://accountingd:9380/api/v1/accounts/51238696012/interest-charges" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -682,7 +682,7 @@ Formula: `interest_ct = principal_ct × rate × days / 36500` (no float arithmet
 
 ```bash
 # List interest charges for an account
-curl "http://accountingd:9380/api/v1/accounts/51238696780/interest-charges"
+curl "http://accountingd:9380/api/v1/accounts/51238696012/interest-charges"
 ```
 
 ---
@@ -695,7 +695,7 @@ escalation at Mahnstufe 3 while the plan is `ACTIVE`.
 
 ```bash
 # Create a 3-month plan: 300 EUR split into 3 × 100 EUR
-curl -X POST "http://accountingd:9380/api/v1/accounts/51238696780/payment-plans" \
+curl -X POST "http://accountingd:9380/api/v1/accounts/51238696012/payment-plans" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -1020,7 +1020,7 @@ sequenceDiagram
 
 ```bash
 # List payout orders for a specific plant/month
-curl "http://accountingd:9380/api/v1/eeg/payouts?malo_id=51238696780&year=2026&month=7"
+curl "http://accountingd:9380/api/v1/eeg/payouts?malo_id=51238696012&year=2026&month=7"
 
 # Get single order with full pain.001 XML
 curl "http://accountingd:9380/api/v1/eeg/payouts/a1b2c3d4-..."

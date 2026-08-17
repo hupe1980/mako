@@ -14,7 +14,7 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: einsd-batch-agent
-  version: "1.0.0"
+  version: "1.1.0"
 spec:
   execution:
     kind: tool-calling
@@ -50,7 +50,7 @@ spec:
       1. Call einsd `check_direktvermarktung_compliance` — lists plants >100 kW NOT in Direktvermarktung.
       2. For each violation: calculate penalty exposure:
          - EEG 2023: §52 Abs. 3 Nr. 4: 10 EUR/kW/month from `mastr_violation_start`.
-         - EEG 2017: §52 old-regime (SanktionAlt) — use `fernsteuerbarkeit_violation_start`.
+         - EEG 2017: §52 old-regime (SanktionAlt) — read the `fernsteuerbarkeit_violation_start` field.
       3. Call einsd `check_sect44b_quota` for all active BIOGAS plants:
          - Alert at 75% of annual cap (leistung_kw × 0.45 × 8760 kWh).
          - Escalate at 90%.
@@ -69,17 +69,17 @@ spec:
       | No MaStR registration | §52 Abs. 1 | Full remuneration loss |
       §52 Abs. 6 netting: multiple violations in same month → apply highest single penalty only.
 
-      ## OUTPUT FORMAT
-      ```
-      BATCH_PERIOD: [YYYY-MM]
-      SETTLED_COUNT: [number]
-      NEEDS_REVIEW_COUNT: [number]
-      SECT52_VIOLATIONS: [count and total_monthly_exposure_eur]
-      SECT44B_ALERTS: [list of {plant_id, quota_pct} or NONE]
-      EXPIRING_FOERDERUNG_COUNT: [number in next 90 days]
-      NEGATIVE_PRICE_TRIGGERED_COUNT: [§51 count]
-      ACTION_REQUIRED: [YES/NO — list of specific actions]
-      ```
+  # What this agent is in a multi-agent arrangement.
+  #
+  # MAST measures inter-agent misalignment at 36.9 % of observed multi-agent
+  # failures — a class that exists only if you choose it. Declaring the shape is
+  # how you choose not to: `single` means one agent, one context, many tools, and
+  # the inter-agent failure surface is structurally absent. `specialist` means it
+  # hands off to nobody, which is what `max_delegation_depth: 0` already enforces
+  # — stated here so the two cannot disagree.
+  topology:
+    mode: single
+    role: specialist
 
   capabilities:
     provides: [einsd.batch]
@@ -109,6 +109,65 @@ spec:
     max_steps: 60
     max_effects: 100
     max_wallclock_secs: 900
+
+  # The result contract. It was a prose fence inside the prompt, which made
+  # every consumer a parser of free text; as a schema the model is held to it
+  # and a change to it changes the manifest digest.
+  output:
+    schema:
+      type: object
+      additionalProperties: false
+      required:
+        - batch_period
+        - settled_count
+        - needs_review_count
+      properties:
+        batch_period:
+          type: string
+        settled_count:
+          type: number
+        needs_review_count:
+          type: number
+        sect52_violations:
+          type: number
+        sect44b_alerts:
+          type: array
+          items:
+            type: object
+            properties:
+              plant_id:
+                type: string
+              quota_pct:
+                type: number
+        expiring_foerderung_count:
+          type: number
+        negative_price_triggered_count:
+          type: number
+        action_required:
+          type: string
+
+  # Knowledge, granted rather than copied.
+  #
+  # Every mako MCP server publishes step-by-step prompts for its own procedures —
+  # fifty of them across thirteen servers — and not one manifest reached a single
+  # one. Each specialist instead carried a hand-typed paraphrase in its
+  # `constraints`, which is a second copy of a procedure with nothing keeping the
+  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # changes when somebody remembers.
+  #
+  # A context grant is not a tool grant. Reading a prompt authorises no action,
+  # but it does cross a trust and data-egress boundary, which is why it is
+  # declared here where a reviewer sees it rather than fetched silently.
+  context:
+    prompts:
+      - server: einsd
+        name: settle-monthly
+        max_input_sensitivity: internal
+        output_sensitivity: internal
+      - server: einsd
+        name: ausschreibung-workflow
+        max_input_sensitivity: internal
+        output_sensitivity: internal
 
   tools:
     - ref: tool://einsd/list_plants

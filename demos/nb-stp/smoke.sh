@@ -259,7 +259,7 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
     GRID_JSON=$(jq -n \
         --arg mid "$SMOKE_MALO_ID" \
         --arg nb "9900357000004" \
-        '{"nb_mp_id": $nb, "bilanzierungsgebiet": "11YN0------0STXC", "netzgebiet": "DEMO-NZ-001", "sparte": "STROM", "source": "manual"}')
+        '{"nb_mp_id": $nb, "bilanzierungsgebiet": "11YN0------0STXG", "netzgebiet": "DEMO-NZ-001", "sparte": "STROM", "source": "manual"}')
     resp=$(marktd_put_json "/api/v1/malo/$SMOKE_MALO_ID/grid" "$GRID_JSON")
     code=$(status "$resp")
     [[ "$code" == "200" || "$code" == "201" || "$code" == "204" ]] || \
@@ -344,7 +344,7 @@ sed \
     -e "s/DEMO-2026-001/SMOKE-$SMOKE_RUN_ID/g" \
     -e "s/MSG-001/MSG-$SMOKE_RUN_ID/g" \
     -e "s/REF-2026-001/REF-$SMOKE_RUN_ID/g" \
-    -e "s/51238696780/$SMOKE_MALO_ID/g" \
+    -e "s/51238696012/$SMOKE_MALO_ID/g" \
     "$SCRIPT_DIR/fixtures/utilmd-55001.edi" > "$EDI_TMP"
 resp=$(post_edifact "$EDI_TMP")
 code=$(status "$resp")

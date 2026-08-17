@@ -191,8 +191,8 @@ mod tests {
                 vec![vec!["00001"], vec!["DELORD", "", "", "", "3.0"]],
             ),
             seg("BGM", vec![vec![""], vec!["DORD-001"], vec!["9"]]),
-            seg("NAD", vec![vec!["MS"], vec!["21X000000001368S"]]),
-            seg("NAD", vec![vec!["MR"], vec!["21X000000001370C"]]),
+            seg("NAD", vec![vec!["MS"], vec!["21X000000001368W"]]),
+            seg("NAD", vec![vec!["MR"], vec!["21X0000000013708"]]),
             seg("DTM", vec![vec!["137", "20260115", "102"]]),
             seg("UNT", vec![vec!["5"], vec!["00001"]]),
         ]
@@ -202,8 +202,8 @@ mod tests {
     fn from_segments_extracts_core_fields() {
         let msg = DeliveryOrderMessage::from_segments(minimal_segments());
         assert_eq!(msg.message_type(), DvgwMessageType::Delord);
-        assert_eq!(msg.sender_eic(), Some("21X000000001368S"));
-        assert_eq!(msg.receiver_eic(), Some("21X000000001370C"));
+        assert_eq!(msg.sender_eic(), Some("21X000000001368W"));
+        assert_eq!(msg.receiver_eic(), Some("21X0000000013708"));
         assert_eq!(msg.order_ref.as_deref(), Some("DORD-001"));
         assert_eq!(msg.gas_day.as_deref(), Some("20260115"));
     }

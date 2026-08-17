@@ -14,7 +14,7 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: sperrd-agent
-  version: "1.0.0"
+  version: "1.1.0"
 spec:
   execution:
     kind: tool-calling
@@ -42,16 +42,23 @@ spec:
       5. Diagnose cause: NB execution team delay, makod AS4 delivery issue, or wrong state.
 
       ## BK6-22-024 SLA
-      NB must execute Sperrung within contractual window (typically 5 Werktage from ORDERS receipt).
+      Sperrung must be executed within 2 Werktage of the ORDERS Bestelldatum —
+      the same window sperrd's own planned_date and overdue queries are built
+      on. An order past planned_date is overdue; at >= 2 Werktage overdue the
+      LF must additionally be notified. Do not classify against any other
+      window: sperrd computes the deadline, you diagnose why it was missed.
 
-      ## OUTPUT FORMAT
-      ```
-      SPERR_COMPLIANCE: [COMPLIANT|AT_RISK|BREACH]
-      OVERDUE_COUNT: [number]
-      MISSING_IFTSTA_COUNT: [number]
-      OLDEST_OVERDUE_DAYS: [number]
-      ACTION: [NONE|ESCALATE_OPERATOR|TRIGGER_IFTSTA]
-      ```
+  # What this agent is in a multi-agent arrangement.
+  #
+  # MAST measures inter-agent misalignment at 36.9 % of observed multi-agent
+  # failures — a class that exists only if you choose it. Declaring the shape is
+  # how you choose not to: `single` means one agent, one context, many tools, and
+  # the inter-agent failure surface is structurally absent. `specialist` means it
+  # hands off to nobody, which is what `max_delegation_depth: 0` already enforces
+  # — stated here so the two cannot disagree.
+  topology:
+    mode: single
+    role: specialist
 
   capabilities:
     provides: [sperrd]
@@ -76,11 +83,94 @@ spec:
   # resolves itself, so the authority-bearing arguments keep the run input's own
   # labels and a named human approves the call before it leaves.
 
+  # Human-in-the-loop, beside the answer rather than in front of it.
+  #
+  # `approval: none` — this specialist cannot act (a `tool-calling` agent's
+  # arguments come from a model completion, which the taint gate refuses at a
+  # mutating sink), so there is nothing to gate. `triage` opens a worklist row
+  # beside the returned answer instead. Every `path` is typed against this
+  # agent's own `output.schema` at parse time.
+  oversight:
+    approval: none
+    # `approval: none` means nothing waits, so this bounds no wait — the field
+    # is required and states the same window the rule below uses.
+    deadline:
+      name: sperr-compliance-review
+      kind: working-days
+      params: { n: 1 }
+    triage:
+      - name: sperr-compliance
+        audience: [credit-control]
+        priority: urgent
+        summary: >-
+          A §§41f/41g EnWG disconnection sequence is out of compliance — an overdue step or a missing IFTSTA. The sequence itself is accountingd's deterministic state machine; this row is the human check on it.
+        when:
+          - path: /sperr_compliance
+            equals: "BREACH"
+        deadline:
+          name: sperr-compliance-review
+          kind: working-days
+          params: { n: 1 }
+
   budgets:
     max_tokens: 200000
     max_steps: 30
     max_effects: 50
     max_wallclock_secs: 900
+
+  # The result contract. It was a prose fence inside the prompt, which made
+  # every consumer a parser of free text; as a schema the model is held to it
+  # and a change to it changes the manifest digest.
+  output:
+    schema:
+      type: object
+      additionalProperties: false
+      required:
+        - sperr_compliance
+        - overdue_count
+        - missing_iftsta_count
+      properties:
+        sperr_compliance:
+          type: string
+          enum:
+            - COMPLIANT
+            - AT_RISK
+            - BREACH
+        overdue_count:
+          type: number
+        missing_iftsta_count:
+          type: number
+        oldest_overdue_days:
+          type: number
+        action:
+          type: string
+          enum:
+            - NONE
+            - ESCALATE_OPERATOR
+            - TRIGGER_IFTSTA
+
+  # Knowledge, granted rather than copied.
+  #
+  # Every mako MCP server publishes step-by-step prompts for its own procedures —
+  # fifty of them across thirteen servers — and not one manifest reached a single
+  # one. Each specialist instead carried a hand-typed paraphrase in its
+  # `constraints`, which is a second copy of a procedure with nothing keeping the
+  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # changes when somebody remembers.
+  #
+  # A context grant is not a tool grant. Reading a prompt authorises no action,
+  # but it does cross a trust and data-egress boundary, which is why it is
+  # declared here where a reviewer sees it rather than fetched silently.
+  context:
+    prompts:
+      - server: sperrd
+        name: execute-sperrung
+        max_input_sensitivity: internal
+        output_sensitivity: internal
+      - server: sperrd
+        name: compliance-sweep
+        max_input_sensitivity: internal
+        output_sensitivity: internal
 
   tools:
     - ref: tool://sperrd/list_sperr_orders

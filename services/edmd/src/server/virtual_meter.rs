@@ -442,7 +442,7 @@ mod tests {
 
     fn read(from: OffsetDateTime, value: &str, obis: &str, quality: QualityFlag) -> MeterRead {
         MeterRead {
-            malo_id: "51238696780".to_owned(),
+            malo_id: "51238696012".to_owned(),
             melo_id: None,
             dtm_from: from,
             dtm_to: from + time::Duration::minutes(15),

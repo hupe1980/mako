@@ -12,7 +12,7 @@ The wire-format primitives come from the same Rust crates the platform runs, so
 
     >>> from makotest import malo_from_base, add_werktage
     >>> malo_from_base("5123869678")
-    '51238696780'
+    '51238696012'
     >>> add_werktage("2026-12-24", 2)   # skips Christmas + the weekend
     '2026-12-29'
 

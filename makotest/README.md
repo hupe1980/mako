@@ -13,7 +13,7 @@ AS4, REST, CloudEvents), so it can exercise any MaKo implementation.
 ```python
 from makotest import malo_from_base, deadline_at_werktage, validate_edifact
 
-malo_from_base("5123869678")      # '51238696780' — BDEW check digit applied
+malo_from_base("5123869678")      # '51238696012' — BDEW check digit applied
 
 # The instant a Frist expires — 17:00 Europe/Berlin on the due Werktag.
 deadline_at_werktage("2026-12-30T09:00:00Z", 1)

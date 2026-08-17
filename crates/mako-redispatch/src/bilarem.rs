@@ -214,7 +214,7 @@ mod tests {
     fn mitteilung(notice: Date, effective: Date) -> Zuordnungsmitteilung {
         Zuordnungsmitteilung {
             sr_id: "SR-1".into(),
-            redispatch_bilanzkreis: "11XRD-NB-00001-A".into(),
+            redispatch_bilanzkreis: "11XRD-NB-00001-L".into(),
             mitteilungsdatum: notice,
             wirksam_ab: effective,
         }

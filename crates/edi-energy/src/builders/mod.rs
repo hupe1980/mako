@@ -61,7 +61,7 @@
 //!     .sender("9900111222333")
 //!     .receiver("9900444555666")
 //!     .metering_point("DE0001234567890")
-//!         .location_id("12345678907")
+//!         .location_id("12345678088")
 //!         .quantity("220", "1000.500", "KWH")
 //!     .done()
 //!     .build()?;

@@ -90,12 +90,12 @@ fn mako_bestaetigt_event_is_confirmed() {
         "type": "de.mako.gpke.lieferbeginn.bestaetigt",
         "data": {
             "process_id": "test-proc-1",
-            "malo_id": "51238696780"
+            "malo_id": "51238696012"
         }
     });
     let outcome = parse_mako_outcome(&ce).expect("must parse");
     assert!(outcome.confirmed);
-    assert_eq!(outcome.malo_id.as_deref(), Some("51238696780"));
+    assert_eq!(outcome.malo_id.as_deref(), Some("51238696012"));
     assert!(outcome.erc_code.is_none());
 }
 
@@ -106,7 +106,7 @@ fn mako_abgelehnt_event_is_rejected_with_erc() {
         "type": "de.mako.gpke.lieferbeginn.abgelehnt", // synthetic — suffix matcher
         "data": {
             "process_id": "test-proc-2",
-            "malo_id": "51238696780",
+            "malo_id": "51238696012",
             "erc_code": "A02",
             "reason": "MaLo not in NB grid"
         }
@@ -350,7 +350,7 @@ fn wirksamkeit_one_day_after_guarantee_is_allowed() {
 fn completed_suffix_is_confirmed() {
     let ce = serde_json::json!({
         "type": "de.mako.geli.lieferbeginn.completed", // synthetic — suffix matcher
-        "data": { "process_id": "p-1", "malo_id": "51238696780" }
+        "data": { "process_id": "p-1", "malo_id": "51238696012" }
     });
     let outcome = parse_mako_outcome(&ce).expect("must parse");
     assert!(outcome.confirmed);
@@ -361,7 +361,7 @@ fn completed_suffix_is_confirmed() {
 fn abgelehnt_without_erc_has_no_erc() {
     let ce = serde_json::json!({
         "type": "de.mako.gpke.lieferbeginn.abgelehnt", // synthetic — suffix matcher
-        "data": { "malo_id": "51238696780" }
+        "data": { "malo_id": "51238696012" }
     });
     let outcome = parse_mako_outcome(&ce).expect("must parse");
     assert!(!outcome.confirmed);

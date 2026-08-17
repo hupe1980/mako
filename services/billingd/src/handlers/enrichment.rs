@@ -488,7 +488,7 @@ mod gas_enrichment_tests {
     #[test]
     fn aggregate_recomputes_vat_over_the_combined_base() {
         use rust_decimal::dec;
-        let parts: Vec<(String, Invoice)> = ["11111111111", "22222222222", "33333333333"]
+        let parts: Vec<(String, Invoice)> = ["11111111115", "22222222220", "33333333333"]
             .iter()
             .map(|m| sub_invoice(m, dec!(10.01)))
             .collect();
@@ -533,8 +533,8 @@ mod gas_enrichment_tests {
     fn aggregate_annotates_positions_with_their_malo() {
         use rust_decimal::dec;
         let parts = vec![
-            sub_invoice("11111111111", dec!(50)),
-            sub_invoice("22222222222", dec!(70)),
+            sub_invoice("11111111115", dec!(50)),
+            sub_invoice("22222222220", dec!(70)),
         ];
         let (_, json) = build_aggregate_invoice(
             "RV-2",
@@ -549,8 +549,8 @@ mod gas_enrichment_tests {
         .unwrap();
         let pos = json["rechnungspositionen"].as_array().unwrap();
         // 2 commodity positions annotated + 1 aggregate tax position without.
-        assert_eq!(pos[0]["marktlokationsId"], "11111111111");
-        assert_eq!(pos[1]["marktlokationsId"], "22222222222");
+        assert_eq!(pos[0]["marktlokationsId"], "11111111115");
+        assert_eq!(pos[1]["marktlokationsId"], "22222222220");
         let tax = pos
             .iter()
             .find(|p| p["kategorie"] == "Tax")

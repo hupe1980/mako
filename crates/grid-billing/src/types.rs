@@ -2173,7 +2173,7 @@ mod korrektur_grund_tests {
                 time::macros::date!(2026 - 01 - 31),
             ),
             sparte: Sparte::Strom,
-            malo_id: "51238696780".to_owned(),
+            malo_id: "51238696012".to_owned(),
             sender_mp_id: "9900000000001".to_owned(),
             recipient_mp_id: "9900000000002".to_owned(),
             positions: Vec::new(),

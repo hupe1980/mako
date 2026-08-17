@@ -880,7 +880,7 @@ mod tests {
             MakoAction::AdminMaloRead,
             &MaloResource {
                 tenant: "9900357000004",
-                malo_id: Some("10001234567")
+                malo_id: Some("10001234558")
             },
         ));
     }
@@ -926,7 +926,7 @@ forbid(
             MakoAction::AdminMaloWrite,
             &MaloResource {
                 tenant: "9900357000004",
-                malo_id: Some("10001234567")
+                malo_id: Some("10001234558")
             },
         ));
         // read still permitted by default policy
@@ -935,7 +935,7 @@ forbid(
             MakoAction::AdminMaloRead,
             &MaloResource {
                 tenant: "9900357000004",
-                malo_id: Some("10001234567")
+                malo_id: Some("10001234558")
             },
         ));
     }
@@ -1119,7 +1119,7 @@ unless {
                     action,
                     &MaloResource {
                         tenant: "9900357000004",
-                        malo_id: Some("10001234567"),
+                        malo_id: Some("10001234558"),
                     },
                 ),
                 "expected {action:?} to be denied",
@@ -1214,7 +1214,7 @@ permit(
                 MakoAction::AdminMaloDelete,
                 &MaloResource {
                     tenant: "9900357000004",
-                    malo_id: Some("10001234567"),
+                    malo_id: Some("10001234558"),
                 },
             ),
             "with the baseline present an unlisted principal still gets everything — \
@@ -1235,7 +1235,7 @@ permit(
                 MakoAction::AdminMaloDelete,
                 &MaloResource {
                     tenant: "9900357000004",
-                    malo_id: Some("10001234567"),
+                    malo_id: Some("10001234558"),
                 },
             ),
             "an unlisted principal must be denied once the baseline is dropped"

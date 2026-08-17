@@ -220,11 +220,43 @@ lets an estimate settle as a reading.
 │  POST /api/v1/pruefmitteilung   ← record Prüfmitteilung (IFTSTA 21000/1)   │
 │  GET  /api/v1/korrekturbedarf   ← negative Prüfmitteilungen, uncorrected   │
 │                                                                            │
+│  /mcp                           ← read-only MCP server (agent plane)      │
+│                                                                            │
 │  GET  /health/live                                                        │
 │  GET  /health/ready             ← PostgreSQL ping                         │
 │  GET  /metrics                  ← Prometheus metrics                      │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## MCP server and CloudEvents
+
+The `/mcp` surface is **read-only** — the agent plane's window into submission
+state. `agentd`'s `mabis-syncd-agent` used to read obsd's KPI report as a proxy
+for the submission table this server now exposes. Filing a submission stays off
+MCP deliberately: it is a binding filing with the BIKO, behind the
+authenticated REST surface where Cedar authorises a person.
+
+| Tool | Description |
+|---|---|
+| `get_submission_status` | Recent runs + failed / retry-exhausted / open-Korrekturbedarf counts |
+| `list_failed_submissions` | Failed runs, newest first, with `attempt_count` and `error_msg` |
+| `get_submission_run` | One run by UUID (version as RFC 3339) |
+| `list_korrekturbedarf` | Open negative Prüfmitteilungen (§9.8.1 obligations) |
+
+One prompt, `submission-triage`, carries the triage workflow. In `agentd`'s
+`[mcp_servers]` the key is spelled `mabis_syncd` — agentplane refuses `-` in a
+`tool://` server component.
+
+Two CloudEvents leave through the transactional outbox
+(persist-before-dispatch, drained to `erp_webhook_url`). Both are failure
+signals — a healthy submission cycle is silent:
+
+| Type | When |
+|---|---|
+| `de.mabis.submission.failed` | Aggregation or BIKO submission failed; carries `run_id`, `bilanzierungsgebiet_id`, period, phase, `attempt_count` (at 3 the scheduler stops retrying) |
+| `de.mabis.korrekturbedarf.opened` | A negative Prüfmitteilung was recorded — a corrected Summenzeitreihe is owed within the Clearing window |
 
 ---
 
@@ -389,6 +421,15 @@ audience = "api://mako-mabis-syncd"
 erstaufschlag_werktag = 10   # Werktag after the Bilanzierungsmonat to submit on
 run_hour_utc    = 5     # 05:00 UTC = 06:00 CET / 07:00 CEST
 
+[mcp]                   # read-only MCP server at /mcp
+api_key = "env:MABIS_SYNCD_MCP_API_KEY"
+
+# Drains the de.mabis.* outbox (submission failures, Korrekturbedarf) —
+# persist-before-dispatch, retry + dead-letter. Unset, events are enqueued
+# but nothing delivers them, and the startup log says so.
+erp_webhook_url = "http://erp:8000/events"
+erp_hmac_secret = "env:MABIS_SYNCD_ERP_HMAC_SECRET"
+
 # [otel]
 # endpoint = "http://otel-collector:4317"
 ```
@@ -468,7 +509,7 @@ curl http://mabis-syncd:8880/api/v1/runs \
 # Record the Datenstatus the BIKO assigned (IFTSTA 21003/21004)
 curl -X POST http://mabis-syncd:8880/api/v1/datenstatus \
   -H "Content-Type: application/json" \
-  -d '{ "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
+  -d '{ "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
         "period_from": "2026-05-01", "period_to": "2026-05-31",
         "version": "2026-06-15T05:00:00Z", "datenstatus": "Abrechnungsdaten" }'
 
@@ -476,11 +517,11 @@ curl -X POST http://mabis-syncd:8880/api/v1/datenstatus \
 # corrected Summenzeitreihe under a higher version.
 curl -X POST http://mabis-syncd:8880/api/v1/pruefmitteilung \
   -H "Content-Type: application/json" \
-  -d '{ "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
+  -d '{ "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
         "period_from": "2026-05-01", "period_to": "2026-05-31",
         "version": "2026-06-15T05:00:00Z", "positiv": false,
         "sender_mp_id": "9900077000006", "pid": 21000,
-        "begruendung": "Abweichung MaLo 51238696780" }'
+        "begruendung": "Abweichung MaLo 51238696012" }'
 
 # Open Korrekturbedarf — negative Prüfmitteilungen with no correction yet
 curl http://mabis-syncd:8880/api/v1/korrekturbedarf
@@ -529,7 +570,7 @@ use mako_mabis::{BilanzierungsgebietId, MABIS_SLOT, SummenzeitreiheBuilder};
 use metering::MeterInterval;
 
 let mut builder = SummenzeitreiheBuilder::new(
-    BilanzierungsgebietId("11YAPG4CTRDNZ--A".to_owned()),
+    BilanzierungsgebietId("11YAPG4CTRDNZ--P".to_owned()),
     period_from, period_to,
     version, // ascending timestamp; MSCONS SG6 DTM+293
     "9900357000004",  // sender (NB / ÜNB)

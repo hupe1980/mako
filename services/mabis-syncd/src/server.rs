@@ -31,6 +31,23 @@ use crate::config::Config;
 use crate::pg;
 use crate::sync_engine::{SyncEngine, berlin_date, previous_month_period};
 
+/// RFC 3339 for the wire — never `time`'s derived component array.
+///
+/// `OffsetDateTime`'s derived `Serialize` is `[y, ordinal, h, m, s, ns, ±h, ±m,
+/// ±s]`, which is `time`'s internal layout and round-trips only through `time`
+/// itself. It matters doubly for `version`: §3.8.2 identifies a Summenzeitreihe
+/// by it, `POST /api/v1/pruefmitteilung` *parses* it as RFC 3339 — so a consumer
+/// fed the array by a read endpoint cannot echo it back to the write endpoint.
+pub(crate) fn rfc3339(t: time::OffsetDateTime) -> Option<String> {
+    t.format(&time::format_description::well_known::Rfc3339)
+        .ok()
+}
+
+/// [`rfc3339`], lifted over the nullable columns.
+pub(crate) fn rfc3339_opt(t: Option<time::OffsetDateTime>) -> Option<String> {
+    t.and_then(rfc3339)
+}
+
 // ── State ─────────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -205,14 +222,14 @@ async fn list_runs(
                         "bilanzierungsgebiet_id": r.bilanzierungsgebiet_id,
                         "period_from": r.period_from.to_string(),
                         "period_to": r.period_to.to_string(),
-                        "version": r.version,
+                        "version": rfc3339(r.version),
                         "status": r.status,
                         "malo_count": r.malo_count,
                         "total_kwh": r.total_kwh,
                         "has_substituted": r.has_substituted,
-                        "triggered_at": r.triggered_at,
-                        "submitted_at": r.submitted_at,
-                        "acked_at": r.acked_at,
+                        "triggered_at": rfc3339(r.triggered_at),
+                        "submitted_at": rfc3339_opt(r.submitted_at),
+                        "acked_at": rfc3339_opt(r.acked_at),
                         "message_ref": r.message_ref,
                         "error_msg": r.error_msg,
                     })
@@ -248,15 +265,15 @@ async fn get_run(
             "bilanzierungsgebiet_id": r.bilanzierungsgebiet_id,
             "period_from": r.period_from.to_string(),
             "period_to": r.period_to.to_string(),
-            "version": r.version,
+            "version": rfc3339(r.version),
             "status": r.status,
             "malo_count": r.malo_count,
             "interval_count": r.interval_count,
             "total_kwh": r.total_kwh,
             "has_substituted": r.has_substituted,
-            "triggered_at": r.triggered_at,
-            "submitted_at": r.submitted_at,
-            "acked_at": r.acked_at,
+            "triggered_at": rfc3339(r.triggered_at),
+            "submitted_at": rfc3339_opt(r.submitted_at),
+            "acked_at": rfc3339_opt(r.acked_at),
             "message_ref": r.message_ref,
             "process_id": r.process_id,
             "error_msg": r.error_msg,
@@ -486,20 +503,55 @@ async fn post_pruefmitteilung(
             .into_response();
     };
 
-    match pg::record_pruefmitteilung(
-        &state.pool,
-        &state.cfg.identity.tenant,
-        &target.bilanzierungsgebiet_id,
-        target.period_from,
-        target.period_to,
-        target.version,
-        positiv,
-        body["sender_mp_id"].as_str().unwrap_or_default(),
-        body["pid"].as_i64().unwrap_or(0) as i32,
-        body["begruendung"].as_str(),
-    )
-    .await
-    {
+    // One transaction: the Prüfmitteilung record and — when it is negative —
+    // the `de.mabis.korrekturbedarf.opened` outbox row commit together, so a
+    // Korrekturbedarf cannot exist that nothing announced, and no announcement
+    // can outlive a rolled-back record.
+    let outcome = async {
+        let mut tx = state.pool.begin().await?;
+        let id = pg::record_pruefmitteilung(
+            &mut tx,
+            &state.cfg.identity.tenant,
+            &target.bilanzierungsgebiet_id,
+            target.period_from,
+            target.period_to,
+            target.version,
+            positiv,
+            body["sender_mp_id"].as_str().unwrap_or_default(),
+            body["pid"].as_i64().unwrap_or(0) as i32,
+            body["begruendung"].as_str(),
+        )
+        .await?;
+        if !positiv {
+            // The version rides the wire as RFC 3339, never as `time`'s derived
+            // component array (`xtask check-wire-timestamps`).
+            let version = target
+                .version
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default();
+            let ce = mako_service::CloudEvent::new(
+                mako_service::source("mabis-syncd", &state.cfg.identity.tenant),
+                mako_events::mabis::KORREKTURBEDARF_OPENED,
+                id.to_string(),
+                serde_json::json!({
+                    "pruefmitteilung_id": id.to_string(),
+                    "bilanzierungsgebiet_id": target.bilanzierungsgebiet_id,
+                    "period_from": target.period_from.to_string(),
+                    "period_to": target.period_to.to_string(),
+                    "version": version,
+                    "sender_mp_id": body["sender_mp_id"].as_str().unwrap_or_default(),
+                    "pid": body["pid"].as_i64().unwrap_or(0),
+                    "begruendung": body["begruendung"].as_str(),
+                }),
+            );
+            mako_service::outbox::enqueue(&mut tx, &ce).await?;
+        }
+        tx.commit().await?;
+        Ok::<_, sqlx::Error>(id)
+    }
+    .await;
+
+    match outcome {
         Ok(id) => (
             StatusCode::CREATED,
             Json(serde_json::json!({
@@ -544,7 +596,7 @@ async fn list_korrekturbedarf(
                         "bilanzierungsgebiet_id": gebiet,
                         "period_from": from.to_string(),
                         "period_to": to.to_string(),
-                        "version": version,
+                        "version": rfc3339(version),
                     })
                 })
                 .collect();

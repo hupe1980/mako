@@ -19,7 +19,7 @@ use makod::party_registry::MpIdRegistry;
 
 const GNB: &str = "9870000000009";
 const LFN: &str = "9871111111116";
-const MALO: &str = "51238696780";
+const MALO: &str = "51238696012";
 
 fn registry() -> MpIdRegistry {
     MpIdRegistry::from_config(&[
@@ -220,7 +220,7 @@ fn wim_stoerungsmeldung_renders_to_ahb_valid_insrpt() {
 #[test]
 fn summenzeitreihe_separates_meldepunkt_from_bilanzierungsgebiet() {
     const MABIS_ZP: &str = "DE0004030099000000000000000012345";
-    const BILANZIERUNGSGEBIET: &str = "11YAPG4CTRDNZ--A";
+    const BILANZIERUNGSGEBIET: &str = "11YAPG4CTRDNZ--P";
 
     let msg = outbox(
         "MSCONS",
@@ -262,7 +262,7 @@ fn summenzeitreihe_separates_meldepunkt_from_bilanzierungsgebiet() {
 /// and it is silent on the wire, so it has to fail before rendering.
 #[test]
 fn the_same_identifier_cannot_serve_as_both_loc_qualifiers() {
-    const BOTH: &str = "11YAPG4CTRDNZ--A";
+    const BOTH: &str = "11YAPG4CTRDNZ--P";
     let msg = outbox(
         "MSCONS",
         LFN,
@@ -298,7 +298,7 @@ fn the_rendered_summenzeitreihe_still_validates() {
         serde_json::json!({
             "pid": 13003,
             "mabis_zp_id": "DE0004030099000000000000000012345",
-            "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
+            "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
             "balancing_period": "202606",
             "version": "20260714050000+00",
             "sender_mp_id": GNB,

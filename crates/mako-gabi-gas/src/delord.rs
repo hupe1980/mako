@@ -448,8 +448,8 @@ mod tests {
     fn sent_state() -> DeliveryOrderState {
         DeliveryOrderState::OrderSent(DeliveryOrderData {
             synthetic_pid: 90061,
-            sender_eic: "21X000000001368S".to_owned(),
-            receiver_eic: "21X000000001370C".to_owned(),
+            sender_eic: "21X000000001368W".to_owned(),
+            receiver_eic: "21X0000000013708".to_owned(),
             gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
             quantity_kwh: rust_decimal::dec!(1000000),
             order_ref: make_order_ref(),
@@ -479,8 +479,8 @@ mod tests {
         let state = DeliveryOrderState::New;
         let cmd = DeliveryOrderCommand::SendDeliveryOrder {
             synthetic_pid: 90061,
-            sender_eic: "21X000000001368S".to_owned(),
-            receiver_eic: "21X000000001370C".to_owned(),
+            sender_eic: "21X000000001368W".to_owned(),
+            receiver_eic: "21X0000000013708".to_owned(),
             gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
             quantity_kwh: rust_decimal::dec!(1000000),
             order_ref: make_order_ref(),
@@ -568,8 +568,8 @@ mod tests {
     fn deadline_absorbed_when_already_terminal() {
         let state = DeliveryOrderState::Confirmed(DeliveryOrderData {
             synthetic_pid: 90061,
-            sender_eic: "21X000000001368S".to_owned(),
-            receiver_eic: "21X000000001370C".to_owned(),
+            sender_eic: "21X000000001368W".to_owned(),
+            receiver_eic: "21X0000000013708".to_owned(),
             gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
             quantity_kwh: rust_decimal::dec!(1000000),
             order_ref: make_order_ref(),
@@ -587,8 +587,8 @@ mod tests {
         let state = DeliveryOrderState::New;
         let cmd = DeliveryOrderCommand::SendDeliveryOrder {
             synthetic_pid: 90062, // wrong: DELRES PID used for send
-            sender_eic: "21X000000001368S".to_owned(),
-            receiver_eic: "21X000000001370C".to_owned(),
+            sender_eic: "21X000000001368W".to_owned(),
+            receiver_eic: "21X0000000013708".to_owned(),
             gas_day: crate::domain::GasDay::parse("2026-01-15").unwrap(),
             quantity_kwh: rust_decimal::dec!(500000),
             order_ref: make_order_ref(),

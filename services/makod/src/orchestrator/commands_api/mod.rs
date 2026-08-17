@@ -53,7 +53,7 @@
 //! {
 //!   "command": "gpke.lieferbeginn.anmelden",
 //!   "payload": {
-//!     "malo_id":            "10001234567",
+//!     "malo_id":            "10001234558",
 //!     "lieferbeginn_datum": "2026-10-01"
 //!   }
 //! }

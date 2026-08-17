@@ -662,7 +662,7 @@ every successful upsert so ERP subscribers can rebuild `Vertrag` caches without 
 
 ```json
 {
-  "malo_id":             "51238696780",
+  "malo_id":             "51238696012",
   "nb_mp_id":            "9900357000004",
   "sparte":              "STROM",
   "netzebene":           "NS",
@@ -690,8 +690,8 @@ fields (`vertragsart = NETZNUTZUNGSVERTRAG`, `vertragsstatus = AKTIV`).
 
 ```json
 {
-  "contract_id":         "nv-9900357000004-51238696780",
-  "malo_id":             "51238696780",
+  "contract_id":         "nv-9900357000004-51238696012",
+  "malo_id":             "51238696012",
   "nb_mp_id":            "9900357000004",
   "sparte":              "STROM",
   "netzebene":           "NS",
@@ -752,7 +752,7 @@ on the first `PUT /api/v1/malo`).
 
 ```bash
 # After a 55001 Anmeldung, verify the update:
-curl -s "http://marktd:8180/api/v1/malo/10001234567" \
+curl -s "http://marktd:8180/api/v1/malo/10001234558" \
   -H "Authorization: Bearer <token>" | jq '.bilanzierungsmethode, .fallgruppe'
 # → "SLP", null     (for a Strom SLP point)
 # → "RLM", "Z01"   (for a Gas RLM point with GaBi category Z01)
@@ -803,11 +803,11 @@ the raw `data` JSONB for backward compatibility:
 
 ```json
 {
-  "malo_id": "10001234567",
+  "malo_id": "10001234558",
   "sparte": "STROM",
   "version": 3,
   "netzebene": "NS",
-  "bilanzierungsgebiet": "11YDE-RWE-NETZ-Y",
+  "bilanzierungsgebiet": "11YDE-RWE-NETZ-1",
   "gasqualitaet": null,
   "energierichtung": "Einsp",
   "bilanzierungsmethode": "SLP",
@@ -889,7 +889,7 @@ X-Mako-Signature: sha256=<hmac-sha256-hex>
   "makopid":         55001,
   "makoworkflow":    "gpke-lieferbeginn",
   "marktrole":       "LF",
-  "data": { "_typ": "MARKTLOKATION", "marktlokationsId": "51238696780", ... }
+  "data": { "_typ": "MARKTLOKATION", "marktlokationsId": "51238696012", ... }
 }
 ```
 
@@ -983,14 +983,14 @@ Scrape via Prometheus `static_configs` or a `ServiceMonitor` in Kubernetes.
 Track which MaKo processes are currently running against a given MaLo:
 
 ```bash
-curl "http://localhost:8180/api/v1/correlations/51238696780" \
+curl "http://localhost:8180/api/v1/correlations/51238696012" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
 ```json
 [
   {
-    "malo_id":      "51238696780",
+    "malo_id":      "51238696012",
     "pid":          55001,
     "conv_id":      "018f3a2b-...",
     "initiated_at": "2026-07-01T08:00:00Z",
@@ -1189,7 +1189,7 @@ PUT  /api/v1/versorgung/{malo_id}
 
 ```json
 {
-  "malo_id": "51238696780",
+  "malo_id": "51238696012",
   "lieferstatus": "Beliefert",
   "lf_mp_id": "4012345000023",
   "lf_mp_id_next": null,
@@ -1214,7 +1214,7 @@ sequenceDiagram
     participant marktd
     participant PostgreSQL
 
-    ERP->>marktd: GET /api/v1/versorgung/51238696780?at=2025-07-01
+    ERP->>marktd: GET /api/v1/versorgung/51238696012?at=2025-07-01
     marktd->>PostgreSQL: SELECT * FROM versorgungsstatus_history<br/>WHERE malo_id=$1 AND tenant=$2<br/>AND (valid_from AT TIME ZONE 'Europe/Berlin')::date <= '2025-07-01'<br/>ORDER BY valid_from DESC LIMIT 1
     PostgreSQL-->>marktd: snapshot (LieferStatus, LF, NB, …)
     marktd-->>ERP: 200 OK + VersorgungsStatusResponse
@@ -1874,7 +1874,7 @@ Every `PUT /api/v1/melo/{melo_id}` call:
 ```json
 {
   "melo_id": "DE00056789000000000000000012345678",
-  "malo_id": "10001234567",
+  "malo_id": "10001234558",
   "version": 2,
   "netzebene_messung": "NS",
   "regelzone": "10YDE-EON------1",
@@ -1886,7 +1886,7 @@ To populate `regelzone` from a NIS export, include the BO4E path in the PUT body
 
 ```json
 {
-  "malo_id": "10001234567",
+  "malo_id": "10001234558",
   "data": {
     "_typ": "MESSLOKATION",
     "standorteigenschaften": {
@@ -1961,7 +1961,7 @@ BO4E `Lokationstyp` — `MALO`, `MELO`, `NELO`, `SR` (SteuerbareRessource), or `
 
 ```mermaid
 graph LR
-    MaLo["MaLo (51238696780)"] --> MeLo["MeLo (DE-MEL-001)"]
+    MaLo["MaLo (51238696012)"] --> MeLo["MeLo (DE-MEL-001)"]
     MeLo --> NeLo["NeLo (EIC 10XDE-…)"]
     MeLo --> SR["SR (C0001234567)"]
     MeLo --> TR["TR (T0001234567)"]
@@ -1974,10 +1974,10 @@ all reachable edges from the given MaLo, ordered by depth.
 
 ```http
 # Full graph from a MaLo (all edges regardless of validity)
-GET /api/v1/malo/51238696780/lokationen
+GET /api/v1/malo/51238696012/lokationen
 
 # Graph valid on a specific date (temporal filter)
-GET /api/v1/malo/51238696780/lokationen?at=2025-01-15
+GET /api/v1/malo/51238696012/lokationen?at=2025-01-15
 
 # Graph from a MeLo
 GET /api/v1/melos/DE-MEL-001/lokationen?at=2025-01-15
@@ -1990,7 +1990,7 @@ Response: `Vec<LokationszuordnungEdge>` ordered by `depth` (0 = direct edges fro
   {
     "id": "550e8400-e29b-41d4-a716-446655440000",
     "tenant": "9900357000004",
-    "von_id": "51238696780",
+    "von_id": "51238696012",
     "von_typ": "MALO",
     "nach_id": "DE-MEL-001",
     "nach_typ": "MELO",
@@ -2016,7 +2016,7 @@ incomplete mid-Einzug, so the endpoint reports `valid: false` with a
 
 ```json
 {
-  "malo_id": "51238696780",
+  "malo_id": "51238696012",
   "lokationsbuendelcode": "1S",
   "messlokationen": ["DE-MEL-001"],
   "netzlokationen": [],
@@ -2034,7 +2034,7 @@ PUT /api/v1/lokationszuordnungen
 Content-Type: application/json
 
 {
-  "von_id":    "51238696780",
+  "von_id":    "51238696012",
   "von_typ":   "MALO",
   "nach_id":   "DE-MEL-001",
   "nach_typ":  "MELO",
@@ -2044,7 +2044,7 @@ Content-Type: application/json
 }
 
 # Hard-delete an edge pair (all temporal variants)
-DELETE /api/v1/lokationszuordnungen/51238696780/DE-MEL-001
+DELETE /api/v1/lokationszuordnungen/51238696012/DE-MEL-001
 ```
 
 **Temporal succession:** Multiple edges between the same `(von_id, nach_id)` pair are
@@ -2075,7 +2075,7 @@ GET  /api/v1/malos/{malo_id}/technische-ressourcen
 ```json
 {
   "data":              { "_typ": "TechnischeRessource", ... },
-  "malo_id":           "51238696780",
+  "malo_id":           "51238696012",
   "melo_id":           "DE-MEL-001",
   "nutzung":           "STROMVERBRAUCHSART",
   "verbrauchsart":     "E_MOBILITAET",

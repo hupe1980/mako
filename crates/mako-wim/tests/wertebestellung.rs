@@ -39,7 +39,7 @@ fn anfrage() -> C {
         esa: mp("9900555000005"),
         msb: mp("9900357000004"),
         ebene: Lokationsebene::Marktlokation,
-        lokations_id: "51238696780".to_owned(),
+        lokations_id: "51238696012".to_owned(),
         message_ref: mref("REQ-1"),
         quittung: quittung(),
         consent_block: None,
@@ -100,7 +100,7 @@ fn full_ordering_handshake_reaches_authorised_delivery() {
         "UC 4.2 Vorbedingung: the MSB may deliver only after accepting the Bestellung"
     );
     let data = state.data().expect("process data");
-    assert_eq!(data.lokations_id, "51238696780");
+    assert_eq!(data.lokations_id, "51238696012");
     assert_eq!(data.ebene, Lokationsebene::Marktlokation);
 }
 
@@ -165,7 +165,7 @@ fn a_negative_zustellquittung_cannot_start_a_frist() {
         esa: mp("9900555000005"),
         msb: mp("9900357000004"),
         ebene: Lokationsebene::Marktlokation,
-        lokations_id: "51238696780".to_owned(),
+        lokations_id: "51238696012".to_owned(),
         message_ref: mref("REQ-NEG"),
         quittung: Zustellquittung::negative(datetime!(2026-03-02 09:00 UTC)),
         consent_block: None,
@@ -374,7 +374,7 @@ fn each_step_rejects_a_foreign_pid() {
         esa: mp("9900555000005"),
         msb: mp("9900357000004"),
         ebene: Lokationsebene::Marktlokation,
-        lokations_id: "51238696780".to_owned(),
+        lokations_id: "51238696012".to_owned(),
         message_ref: mref("REQ-X"),
         quittung: quittung(),
         consent_block: None,
@@ -634,7 +634,7 @@ fn a_blocked_consent_rejects_the_anfrage_with_a_quotes_ablehnung() {
         esa: mp("9900555000005"),
         msb: mp("9900357000004"),
         ebene: Lokationsebene::Marktlokation,
-        lokations_id: "51238696780".to_owned(),
+        lokations_id: "51238696012".to_owned(),
         message_ref: mref("REQ-BLOCKED"),
         quittung: quittung(),
         consent_block: Some("Einwilligung wurde widerrufen".to_owned()),

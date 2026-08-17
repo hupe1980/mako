@@ -11,11 +11,18 @@
 //     narrowed by adding a `forbid`-shaped exception elsewhere — it must be
 //     narrowed here, or written as a `forbid` (which always wins). The baseline
 //     permits below are deliberately paired with the forbids that bound them.
-//   * Cedar is **total**: a `when` clause reading an attribute the runtime never
-//     sends is simply unsatisfied, so a rule keyed on a misspelled attribute
-//     disappears silently. Every attribute used here is from agentplane's
-//     documented request shape; `tests/plane_policy.rs` runs each rule against a
-//     real request rather than one assembled to suit it.
+//   * A `when` clause reading an attribute the request does not carry is an
+//     **evaluation error**, and agentplane fails closed on those: the whole
+//     request is denied because "a rule that might have forbidden this call
+//     failed to evaluate". So a misspelled attribute is not a rule that
+//     silently disappears — it is a plane that denies everything. Guard every
+//     optional attribute with `context has <attr> && …`, and know which
+//     attributes are optional: `delegation_depth`/`owner`/`scope` exist only
+//     when a delegation chain does, `label` only on sinks. Since 0.17 the
+//     runtime also evaluates the compiled set against canonical requests at
+//     build time and refuses with `BuildError::PolicyUnevaluable` — so this
+//     class of mistake is a refusal to boot with the rule named, not a plane
+//     that quietly denies everything at its first run.
 //
 // The request shape, for reference:
 //
@@ -101,8 +108,16 @@ when { context.label.sensitivity == "secret" };
 // No specialist delegates. Every manifest declares `max_delegation_depth: 0`,
 // and mako's fan-out is one independent run per subscribing specialist rather
 // than a chain — so a request arriving with depth is a bug or an attempt.
+//
+// The `has` guard is load-bearing, not defensive style. `delegation_depth` is
+// merged into the context only when a delegation chain exists (0.16's
+// `merge_identity`), so an ordinary run's request simply lacks the attribute —
+// and a rule that errors on a missing attribute is treated by the engine as a
+// **fail-closed deny of the whole request**, which turned this guard into
+// "forbid everything" on every ordinary effect. A request that carries no
+// chain has depth 0 by construction; the rule fires only when one is present.
 forbid(principal, action == Action::"effect:perform", resource)
-when { context.delegation_depth >= 1 };
+when { context has delegation_depth && context.delegation_depth >= 1 };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Declassification
@@ -122,19 +137,40 @@ forbid(principal, action == Action::"data:release", resource);
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Here the principal is a person (their OIDC `sub`), and `context.roles` are the
-// `mako_roles` their IDP asserted. Four-eyes is enforced by agentplane's task
-// store — a proposer cannot approve their own action — so these rules decide
-// *eligibility*, not identity.
+// `mako_roles` their IDP asserted. Two layers decide what a caller may touch,
+// and this file is only the first:
+//
+//   * **Cedar (here)** decides *surface* eligibility — may this caller use the
+//     worklist at all.
+//   * **The task store** narrows per task: a caller sees and decides only tasks
+//     whose `candidate_roles` they hold, and four-eyes (a proposer cannot
+//     approve their own action) is enforced there too. A `metering` reviewer
+//     passing Cedar still cannot decide `gabi-gas-agent`'s dispatch — its task
+//     names `gas-operations`.
+//
+// The eligible set is therefore the union of every role the manifests name —
+// each `oversight.approvers` entry and each `triage[].audience` — plus the
+// `mako-operations` umbrella. This list previously named only two roles while
+// the manifests named ten: every triage row for the other eight audiences was
+// created into a worklist its own audience was refused at the door — an
+// oversight control that read as configured and could not be exercised.
+// `plane::policy` tests parse the manifests and fail when a manifest names a
+// role this file does not admit, so the two cannot drift apart again.
 
 // Reading the plane: what ran, what is waiting, what is on this case. Broad on
 // purpose — an operator who cannot see a stuck run pages somebody who can.
 permit(
   principal,
   action in [Action::"api:run.read", Action::"api:run.list", Action::"api:task.list",
-             Action::"api:task.read", Action::"api:case.read"],
+             Action::"api:task.read", Action::"api:case.read", Action::"api:case.list"],
   resource
 )
-when { context.roles.contains("mako-operations") || context.roles.contains("gas-operations") };
+when {
+  ["mako-operations", "gas-operations", "billing-operations", "billing-compliance",
+   "credit-control", "eeg-operations", "grid-operations", "marktkommunikation",
+   "metering", "netzbilanz", "regulatory"]
+    .containsAny(context.roles)
+};
 
 // Claiming and releasing a proposal: the same eligibility as reading, because a
 // reservation is not a decision and a queue nobody can claim duplicates work.
@@ -143,19 +179,32 @@ permit(
   action in [Action::"api:task.claim", Action::"api:task.release"],
   resource
 )
-when { context.roles.contains("mako-operations") || context.roles.contains("gas-operations") };
+when {
+  ["mako-operations", "gas-operations", "billing-operations", "billing-compliance",
+   "credit-control", "eeg-operations", "grid-operations", "marktkommunikation",
+   "metering", "netzbilanz", "regulatory"]
+    .containsAny(context.roles)
+};
 
-// Deciding: approving a mutating tool call dispatches a real market message.
-// The role names are the ones the manifests name in `oversight.approvers`, so a
-// reviewer eligible in the file is eligible here, and adding a role is one edit
-// in each place rather than a mismatch nobody notices until an approval sits
-// unanswered past its deadline.
+// Deciding. For an approval task this dispatches a real market message — and
+// the task store restricts it to the manifest's `oversight.approvers`. For a
+// triage row it closes the finding. Same verb, same surface; the store tells
+// them apart by `candidate_roles`.
 permit(principal, action == Action::"api:task.decide", resource)
-when { context.roles.contains("mako-operations") || context.roles.contains("gas-operations") };
+when {
+  ["mako-operations", "gas-operations", "billing-operations", "billing-compliance",
+   "credit-control", "eeg-operations", "grid-operations", "marktkommunikation",
+   "metering", "netzbilanz", "regulatory"]
+    .containsAny(context.roles)
+};
 
-// Stopping a run is an intervention: it is recorded with the actor's name and a
-// mandatory reason. Operations only.
-permit(principal, action == Action::"api:run.cancel", resource)
+// Interventions: stopping a run, and taking a claimed task over somebody's
+// reservation. Both are recorded with the actor's name; operations only.
+permit(
+  principal,
+  action in [Action::"api:run.cancel", Action::"api:task.takeover"],
+  resource
+)
 when { context.roles.contains("mako-operations") };
 
 // Event delivery wakes a suspended run. mako's services authenticate with their

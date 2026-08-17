@@ -351,7 +351,7 @@ POST /api/v1/billing/run
   "rechnungsnummer_prefix": "NNE-2026-01",
   "positions": [
     {
-      "malo_id":                  "51238696780",
+      "malo_id":                  "51238696012",
       "period_from":              "2026-01-01",
       "period_to":                "2026-01-31",
       "billing_type":             "nne_strom",
@@ -375,7 +375,7 @@ Response `201 Created`:
 ```json
 {
   "billing_type": "nne_strom",
-  "malo_id":      "51238696780",
+  "malo_id":      "51238696012",
   "period_from":  "2026-01-01",
   "period_to":    "2026-01-31",
   "arbeitsmenge_kwh":           "1000.000",

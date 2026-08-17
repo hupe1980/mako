@@ -51,7 +51,7 @@ use mako_geli_gas::{
 // NAD+MS = neuer Gaslieferant (sender)
 // NAD+MR = Gasnetzbetreiber (receiver)
 // IDE+Z19 = Marktlokation identifier (MaLo, not MeLo — key gas/electricity difference)
-// - MaLo ID: 52695662085 (11-char format, [A-Z0-9]{11})
+// - MaLo ID: 52695662076 (11-char format, [A-Z0-9]{11})
 const UTILMD_LIEFERBEGINN_GAS: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+GELI-2025-001'\
 UNH+MSG-001+UTILMD:D:11A:UN:G1.1'\
@@ -60,7 +60,7 @@ DTM+137:20250115:102'\
 RFF+Z13:GELI-REF-001'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+Z19+52695662085::'\
+IDE+Z19+52695662076::'\
 UNT+8+MSG-001'\
 UNZ+1+GELI-2025-001'";
 

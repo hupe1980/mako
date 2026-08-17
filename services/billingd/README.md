@@ -123,7 +123,7 @@ No handler assembles BO4E invoice JSON by hand:
 Engine failures answer with a structured body, not prose:
 
 ```json
-{ "error": { "code": "VALIDATION_BLOCKED", "context": "51238696780",
+{ "error": { "code": "VALIDATION_BLOCKED", "context": "51238696012",
              "message": "…", "warnings": [{ "code": "MODUL3_AND_FLAT_NNE", … }] } }
 ```
 

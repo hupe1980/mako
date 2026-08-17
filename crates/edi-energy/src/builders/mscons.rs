@@ -138,7 +138,7 @@ struct MsconsBuilderInner {
 ///     .sender("9900111222333")
 ///     .receiver("9900444555666")
 ///     .metering_point("DE0001234567890")
-///         .location_id("12345678907")
+///         .location_id("12345678088")
 ///         .quantity("220", "1000.500", "KWH")
 ///     .done()
 ///     .build()?;
@@ -626,7 +626,7 @@ mod summenzeitreihe_tests {
             .receiver("9900077000006")
             .pruefidentifikator(Pruefidentifikator::new(13003).expect("13003 is a valid PID"))
             .message_ref("SZR0001")
-            .metering_point("11YAPG4CTRDNZ--A")
+            .metering_point("11YAPG4CTRDNZ--P")
             .balancing_period("202606")
             .version("20260714050000+00")
             .quantity_for_period(

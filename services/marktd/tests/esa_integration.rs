@@ -57,10 +57,10 @@ async fn consent_lifecycle() {
     };
     let repo = PgEinwilligungRepository::new(pool);
 
-    let id = repo.grant(consent("AN-1", &["51238696780"])).await.unwrap();
+    let id = repo.grant(consent("AN-1", &["51238696012"])).await.unwrap();
     let active = repo.list_for_esa(TENANT, ESA).await.unwrap();
     assert_eq!(active.len(), 1);
-    assert_eq!(active[0].location_ids, vec!["51238696780".to_owned()]);
+    assert_eq!(active[0].location_ids, vec!["51238696012".to_owned()]);
     // Evidence is stored verbatim, never validated.
     assert_eq!(active[0].evidence_hash.as_deref(), Some("deadbeef"));
 
@@ -83,11 +83,11 @@ async fn new_grant_supersedes_active_consent() {
     };
     let repo = PgEinwilligungRepository::new(pool);
 
-    repo.grant(consent("AN-2", &["51238696780"])).await.unwrap();
+    repo.grant(consent("AN-2", &["51238696012"])).await.unwrap();
     // Second grant for the same (tenant, esa, Anschlussnutzer) must succeed by
     // superseding the first — the partial UNIQUE index stays satisfied.
     let id2 = repo
-        .grant(consent("AN-2", &["51238696780", "51238696781"]))
+        .grant(consent("AN-2", &["51238696012", "51238696781"]))
         .await
         .unwrap();
     let active = repo.list_for_esa(TENANT, ESA).await.unwrap();
@@ -106,7 +106,7 @@ async fn consent_check_gates_inbound_messages() {
         return;
     };
     let repo = PgEinwilligungRepository::new(pool);
-    let loc = "51238696780";
+    let loc = "51238696012";
     let msb_in = ConsentPerspective::MsbInbound;
     let esa_out = ConsentPerspective::EsaOutbound;
 
@@ -189,7 +189,7 @@ async fn consent_is_tenant_scoped() {
         return;
     };
     let repo = PgEinwilligungRepository::new(pool);
-    let id = repo.grant(consent("AN-3", &["51238696780"])).await.unwrap();
+    let id = repo.grant(consent("AN-3", &["51238696012"])).await.unwrap();
 
     assert!(repo.get("9900000000000", id).await.unwrap().is_none());
     assert!(repo.revoke("9900000000000", id).await.unwrap().is_none());

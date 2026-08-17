@@ -64,8 +64,13 @@ pub struct AgentdConfig {
 
     /// Audit CloudEvent webhook (marktd event_log).
     pub audit_webhook_url: Option<String>,
-    /// HMAC-SHA256 secret for signing outbound audit webhook events ("sha256=" prefix).
-    /// When set, every `de.agent.decision.made` POST carries an `X-Mako-Signature` header.
+    /// HMAC-SHA256 secret signing every `de.agent.decision.made` delivery.
+    ///
+    /// `X-Mako-Signature: sha256=HMAC(secret, body)` over the exact bytes
+    /// posted — the same convention every other mako outbound carries and every
+    /// mako receiver verifies. A signature authenticates the bytes, not their
+    /// freshness: the receiver deduplicates on the CloudEvent id, which mako
+    /// receivers already do.
     pub audit_hmac_secret: Option<SecretString>,
 
     /// HMAC-SHA256 secret for verifying **inbound** CloudEvent webhook signatures.
@@ -316,6 +321,7 @@ pub struct Secrets {
     /// Providers with `api_key` resolved, keyed as in `[providers.*]`.
     pub providers: HashMap<String, ProviderConfig>,
     pub mcp_api_key: SecretString,
+    /// HMAC secret signing outbound audit deliveries (`X-Mako-Signature`).
     pub audit_hmac_secret: Option<SecretString>,
     pub inbound_hmac_secret: Option<SecretString>,
     /// The Vault token, when a key ring is configured.

@@ -632,7 +632,7 @@ mod ingest_contract_tests {
             .map(|i| {
                 let from = start + time::Duration::minutes(15 * i as i64);
                 MeterRead {
-                    malo_id: "51238696780".to_owned(),
+                    malo_id: "51238696012".to_owned(),
                     melo_id: None,
                     dtm_from: from,
                     dtm_to: from + time::Duration::minutes(15),
@@ -659,7 +659,7 @@ mod ingest_contract_tests {
     /// rather than silently bypassing them.
     fn raised_v07(batch: Vec<MeterRead>) -> bool {
         let (_, report) =
-            crate::domain::validation::ValidatedReads::validate(batch, "TEST", "51238696780");
+            crate::domain::validation::ValidatedReads::validate(batch, "TEST", "51238696012");
         report.rules.iter().any(|r: &String| r.contains("V07"))
     }
 
@@ -838,7 +838,7 @@ mod ingest_contract_tests {
 /// {
 ///   "corrections": [
 ///     {
-///       "malo_id": "51238696780",
+///       "malo_id": "51238696012",
 ///       "dtm_from": "2026-06-01T00:00:00Z",
 ///       "dtm_to": "2026-06-01T00:15:00Z",
 ///       "original_kwh": "2.500",

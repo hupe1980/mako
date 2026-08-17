@@ -30,7 +30,7 @@
 //! ```rust
 //! use mako_engine::types::{MaLo, MarktpartnerCode};
 //!
-//! let malo:   MaLo             = MaLo::new("51238696780");
+//! let malo:   MaLo             = MaLo::new("51238696012");
 //! let sender: MarktpartnerCode = MarktpartnerCode::new("9900123456789");
 //! ```
 //!

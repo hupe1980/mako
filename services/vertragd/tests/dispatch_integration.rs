@@ -199,7 +199,7 @@ async fn the_bg7_buyer_resolves_from_the_kunde_behind_the_malo() {
 
     // An unknown MaLo is absent, not an error — billingd falls back to the stub.
     assert!(
-        pg::fetch_rechnungsempfaenger_by_malo(&pool, "99999999999", tenant)
+        pg::fetch_rechnungsempfaenger_by_malo(&pool, "99999999044", tenant)
             .await
             .expect("query succeeds")
             .is_none(),
@@ -384,7 +384,7 @@ fn agg_input(
     use std::str::FromStr as _;
     pg::UpsertAggregatorvertragInput {
         vpp_id: "VPP-1".to_owned(),
-        malo_id: "51238696780".to_owned(),
+        malo_id: "51238696012".to_owned(),
         aggregator_mp_id: "9900357000004".to_owned(),
         capacity_price_eur_per_kwh: rust_decimal::Decimal::from_str(price).unwrap(),
         vertragsbeginn: von,

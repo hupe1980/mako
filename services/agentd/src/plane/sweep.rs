@@ -99,3 +99,72 @@ pub fn spawn(runtime: Arc<Runtime>, every: Duration, shutdown: CancellationToken
         }
     });
 }
+
+/// Run the outbox delivery worker until shutdown.
+///
+/// Registering a destination is not what delivers to it. `Outbox` puts a run in
+/// front of a receiver at admission; this is the loop that reads the run's own
+/// journal records past a cursor, POSTs them, and advances the cursor **only on
+/// 2xx**.
+///
+/// That ordering is the whole guarantee. A crash after the POST and before the
+/// cursor moves re-delivers rather than loses — at-least-once, which is the
+/// honest contract for a webhook and the one every other mako service gets from
+/// its transactional outbox. A decision POSTed at request time
+/// and drop it on failure: the single outbound path in the system with no
+/// persist-before-dispatch.
+///
+/// A receiver that is down for a deploy is caught up afterwards. One that has
+/// gone away is abandoned after the retry ceiling and **reported**, because a
+/// registration nobody removes is a queue that only grows.
+pub fn spawn_delivery(
+    worker: Arc<agentplane::push::DeliveryWorker>,
+    every: Duration,
+    shutdown: CancellationToken,
+) {
+    /// Registrations handled per tick. Bounded so one saturated sweep cannot
+    /// hold the store for an unbounded time; a full batch is reported, and the
+    /// next tick continues.
+    const BATCH: usize = 256;
+
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(every);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => {
+                    info!("agent outbox worker stopping");
+                    return;
+                }
+                _ = ticker.tick() => {}
+            }
+
+            #[allow(clippy::cast_sign_loss)]
+            let now = time::OffsetDateTime::now_utc().unix_timestamp().max(0) as u64;
+            match worker.run_once(now, BATCH).await {
+                Ok(report) if report.deliveries == 0 && report.abandoned == 0 => {}
+                Ok(report) => {
+                    if report.abandoned > 0 {
+                        // A receiver past its retry ceiling. The decisions it
+                        // was owed are still in the journal; nothing will carry
+                        // them there again.
+                        warn!(
+                            deliveries = report.deliveries,
+                            abandoned = report.abandoned,
+                            retries = report.retries,
+                            "agent outbox abandoned a receiver that stayed unreachable"
+                        );
+                    } else {
+                        info!(
+                            deliveries = report.deliveries,
+                            completed = report.completed,
+                            saturated = report.saturated,
+                            "agent outbox delivered"
+                        );
+                    }
+                }
+                Err(e) => error!(error = %e, "agent outbox sweep failed"),
+            }
+        }
+    });
+}

@@ -178,8 +178,8 @@ mod tests {
                 vec![vec!["00001"], vec!["IMBNOT", "", "", "", "3.0"]],
             ),
             seg("BGM", vec![vec![""], vec!["IMBN-001"], vec!["9"]]),
-            seg("NAD", vec![vec!["MS"], vec!["21X000000001368S"]]),
-            seg("NAD", vec![vec!["MR"], vec!["21X000000001369Q"]]),
+            seg("NAD", vec![vec!["MS"], vec!["21X000000001368W"]]),
+            seg("NAD", vec![vec!["MR"], vec!["21X000000001369U"]]),
             seg("DTM", vec![vec!["137", "20260115", "102"]]),
             seg("UNT", vec![vec!["5"], vec!["00001"]]),
         ]
@@ -189,8 +189,8 @@ mod tests {
     fn from_segments_extracts_core_fields() {
         let msg = ImbalanceMessage::from_segments(minimal_segments());
         assert_eq!(msg.message_type(), DvgwMessageType::Imbnot);
-        assert_eq!(msg.sender_eic(), Some("21X000000001368S"));
-        assert_eq!(msg.receiver_eic(), Some("21X000000001369Q"));
+        assert_eq!(msg.sender_eic(), Some("21X000000001368W"));
+        assert_eq!(msg.receiver_eic(), Some("21X000000001369U"));
         assert_eq!(msg.document_ref.as_deref(), Some("IMBN-001"));
         assert_eq!(msg.gas_day.as_deref(), Some("20260115"));
     }

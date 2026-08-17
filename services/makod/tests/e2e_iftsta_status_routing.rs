@@ -23,7 +23,7 @@ use mako_engine::{ids::TenantId, store_slatedb::SlateDbStore};
 use makod::ingest_dispatcher::{EdifactIngestDispatcher, IngestOutcome};
 
 const OWN_MP: &str = "9900357000004";
-const LOCATION: &str = "51238696780";
+const LOCATION: &str = "51238696012";
 
 /// A minimal IFTSTA for `pid` carrying the addressed location in a LOC segment.
 fn iftsta(pid: u32) -> String {

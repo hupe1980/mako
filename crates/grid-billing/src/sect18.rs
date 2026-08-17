@@ -243,7 +243,7 @@ mod tests {
 
     fn base(period: SettlementPeriod) -> DezentraleEinspeisungInput {
         DezentraleEinspeisungInput {
-            malo_id: "51238696780".to_owned(),
+            malo_id: "51238696012".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             anlagenbetreiber_mp_id: "9900012345678".to_owned(),
             period,

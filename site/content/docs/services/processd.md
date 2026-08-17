@@ -259,7 +259,7 @@ Initiates a GPKE Lieferbeginn (UTILMD 55001) with **LFW24 Vorlauffrist validatio
 curl -X POST http://processd:8580/api/v1/start-supply \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
-  -d '{"malo_id": "10001234567", "lieferbeginn_datum": "2026-10-01"}'
+  -d '{"malo_id": "10001234558", "lieferbeginn_datum": "2026-10-01"}'
 ```
 
 | Field | Required | Notes |
@@ -291,7 +291,7 @@ curl -X POST http://processd:8580/api/v1/start-supply-gas \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "malo_id":    "10001234567",
+    "malo_id":    "10001234558",
     "zaehlpunkt": "DE00123456789012345678901234567890",
     "process_date": "20261001"
   }'
@@ -318,7 +318,7 @@ Request Abrechnungsbrennwert and Zustandszahl on-demand (ORDERS 17103):
 curl -X POST http://makod:8080/api/v1/commands \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
-  -d '{"command": "geli.gas.datenabruf.anfragen", "payload": {"malo_id": "10001234567"}}'
+  -d '{"command": "geli.gas.datenabruf.anfragen", "payload": {"malo_id": "10001234558"}}'
 ```
 
 The GNB responds with MSCONS 13007 (data delivery) or ORDRSP 19103 (rejection).

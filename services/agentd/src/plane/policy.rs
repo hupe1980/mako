@@ -195,6 +195,73 @@ mod tests {
         assert!(!permitted(&d), "an untrusted value was relabelled: {d:?}");
     }
 
+    /// Every role a manifest names can actually reach the worklist.
+    ///
+    /// The failure this exists to prevent shipped: 14 triage rules named nine
+    /// audiences (`netzbilanz`, `metering`, `credit-control`, …) while this
+    /// policy set admitted two roles — so twelve of the fourteen rules opened
+    /// rows into a worklist their own audience was refused at the door. An
+    /// oversight control that reads as configured and cannot be exercised is
+    /// worse than none, because review sees it and stops asking.
+    ///
+    /// The roles are read from the embedded manifests, not restated here: a new
+    /// audience in a manifest fails this test until the Cedar set admits it.
+    #[test]
+    fn every_role_the_manifests_name_can_reach_the_worklist() {
+        let mut roles: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for m in crate::plane::manifests().values() {
+            let Some(oversight) = m.spec.oversight.as_ref() else {
+                continue;
+            };
+            roles.extend(oversight.approvers.iter().cloned());
+            for rule in &oversight.triage {
+                roles.extend(rule.audience.iter().cloned());
+            }
+        }
+        assert!(
+            roles.len() >= 10,
+            "the manifests name a spread of audiences; parsing found only {roles:?}"
+        );
+
+        let engine = engine();
+        for role in &roles {
+            let context = json!({ "roles": [role], "tenant": "9900357000004" });
+            for action in [
+                "api:task.list",
+                "api:task.read",
+                "api:task.claim",
+                "api:task.release",
+                "api:task.decide",
+                "api:run.read",
+                "api:case.read",
+            ] {
+                let d = engine.authorize(&PolicyRequest {
+                    principal: "user:reviewer",
+                    action,
+                    resource: "*",
+                    context: &context,
+                });
+                assert!(
+                    permitted(&d),
+                    "role `{role}` is named by a manifest (approver or triage audience) but \
+                     the Cedar set refuses it `{action}` — its worklist rows exist and \
+                     nobody can ever see or decide them"
+                );
+            }
+        }
+
+        // The narrowing still narrows: a market role is not a reviewer, and
+        // per-task eligibility stays with the task store's candidate_roles.
+        let lf = json!({ "roles": ["LF"], "tenant": "9900357000004" });
+        let d = engine.authorize(&PolicyRequest {
+            principal: "user:mallory",
+            action: "api:task.decide",
+            resource: "*",
+            context: &lf,
+        });
+        assert!(!permitted(&d), "a market role must stay refused");
+    }
+
     /// The worklist answers an operator and refuses everybody else.
     ///
     /// Both halves matter: a surface nobody can reach is an oversight control

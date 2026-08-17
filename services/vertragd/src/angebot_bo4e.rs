@@ -198,7 +198,7 @@ mod tests {
                 waehrung: Some(Waehrungscode::Eur),
                 ..Default::default()
             }),
-            teile: Some(vec![teil("51238696780", months)]),
+            teile: Some(vec![teil("51238696012", months)]),
             ..Default::default()
         }
     }
@@ -252,7 +252,7 @@ mod tests {
         let a = read_accepted(&angebot(), Some(1)).expect("accepted");
         assert_eq!(a.supply_points.len(), 1);
         let sp = &a.supply_points[0];
-        assert_eq!(sp.malo_id.as_deref(), Some("51238696780"));
+        assert_eq!(sp.malo_id.as_deref(), Some("51238696012"));
         assert_eq!(sp.product_code.as_deref(), Some("STROM-B2B-24"));
         assert_eq!(sp.standort_bezeichnung.as_deref(), Some("Werk Nord"));
         assert_eq!(sp.jahresverbrauch_kwh, Some(dec!(250000)));

@@ -410,7 +410,7 @@ mod tests {
             serde_json::json!({
                 "pid": 13003_u32,
                 "mabis_zp_id": "DE0004030099000000000000000012345",
-                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
+                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
             }),
         );
         let result = render_to_wire_bytes(&msg, &test_registry("9900123456789"));
@@ -836,7 +836,7 @@ mod tests {
                 serde_json::json!({
                     "pid": pid,
                     "mabis_zp_id": "DE0004030099000000000000000012345",
-                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
+                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
                     "balancing_period": "202606",
                     "version": "20260714050000+00",
                     "intervals": [
@@ -922,7 +922,7 @@ mod tests {
             serde_json::json!({
                 "pid": 13021_u32,
                 "mabis_zp_id": "DE0004030099000000000000000012345",
-                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
+                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
                 "balancing_period": "202606",
                 "version": "20260714050000+00",
                 "intervals": [
@@ -947,7 +947,7 @@ mod tests {
             serde_json::json!({
                 "pid": 13023_u32,
                 "mabis_zp_id": "DE0004030099000000000000000012345",
-                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
+                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
                 "balancing_period": "202606",
                 "version": "20260714050000+00",
                 "intervals": [
@@ -973,7 +973,7 @@ mod tests {
                 "sender_mp_id": "9900357000004",
                 "receiver_mp_id": "9900077000006",
                 "mabis_zp_id": "DE0004030099000000000000000012345",
-                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--A",
+                "bilanzierungsgebiet_id": "11YAPG4CTRDNZ--P",
                 "balancing_period": "202606",
                 "version": "20260714050000+00",
                 "intervals": [

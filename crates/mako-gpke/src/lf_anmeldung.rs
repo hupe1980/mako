@@ -498,7 +498,7 @@ mod tests {
             pid: Pruefidentifikator::new(pid).unwrap(),
             sender: MarktpartnerCode::new("4012345000009"),
             receiver: MarktpartnerCode::new("9900123456789"),
-            location_id: MaLo::new("10001234567"),
+            location_id: MaLo::new("10001234558"),
             process_date: "2026-10-01".to_owned(),
             transaktionsgrund: None,
         }
@@ -535,7 +535,7 @@ mod tests {
     fn nb_acceptance_transitions_to_active() {
         let initiated_event = LfAnmeldungEvent::Initiated {
             pruefidentifikator: Pruefidentifikator::new(55001).unwrap(),
-            location_id: MaLo::new("10001234567"),
+            location_id: MaLo::new("10001234558"),
             sender: MarktpartnerCode::new("4012345000009"),
             receiver: MarktpartnerCode::new("9900123456789"),
             process_date: "2026-10-01".to_owned(),
@@ -567,7 +567,7 @@ mod tests {
     fn handle_antwort_emits_process_completed_for_marktd() {
         let initiated_event = LfAnmeldungEvent::Initiated {
             pruefidentifikator: Pruefidentifikator::new(55001).unwrap(),
-            location_id: MaLo::new("10001234567"),
+            location_id: MaLo::new("10001234558"),
             sender: MarktpartnerCode::new("4012345000009"),
             receiver: MarktpartnerCode::new("9900123456789"),
             process_date: "2026-10-01".to_owned(),
@@ -597,7 +597,7 @@ mod tests {
             );
             assert_eq!(
                 entry.payload["malo_id"].as_str().unwrap(),
-                "10001234567",
+                "10001234558",
                 "{response_pid}: marktd resolves the MaLo from the payload, not the CE subject",
             );
             assert_eq!(entry.payload["outcome"].as_str().unwrap(), outcome);
@@ -608,7 +608,7 @@ mod tests {
     fn nb_rejection_transitions_to_rejected() {
         let initiated_event = LfAnmeldungEvent::Initiated {
             pruefidentifikator: Pruefidentifikator::new(55001).unwrap(),
-            location_id: MaLo::new("10001234567"),
+            location_id: MaLo::new("10001234558"),
             sender: MarktpartnerCode::new("4012345000009"),
             receiver: MarktpartnerCode::new("9900123456789"),
             process_date: "2026-10-01".to_owned(),
@@ -639,7 +639,7 @@ mod tests {
         use mako_engine::ids::DeadlineId;
         let initiated_event = LfAnmeldungEvent::Initiated {
             pruefidentifikator: Pruefidentifikator::new(55001).unwrap(),
-            location_id: MaLo::new("10001234567"),
+            location_id: MaLo::new("10001234558"),
             sender: MarktpartnerCode::new("4012345000009"),
             receiver: MarktpartnerCode::new("9900123456789"),
             process_date: "2026-10-01".to_owned(),
@@ -660,7 +660,7 @@ mod tests {
         use mako_engine::ids::DeadlineId;
         let initiated_event = LfAnmeldungEvent::Initiated {
             pruefidentifikator: Pruefidentifikator::new(55001).unwrap(),
-            location_id: MaLo::new("10001234567"),
+            location_id: MaLo::new("10001234558"),
             sender: MarktpartnerCode::new("4012345000009"),
             receiver: MarktpartnerCode::new("9900123456789"),
             process_date: "2026-10-01".to_owned(),

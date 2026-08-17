@@ -26,7 +26,7 @@ use time::OffsetDateTime;
 const SCHEMA: &str = include_str!("../migrations/0001_initial.sql");
 const TENANT: &str = "9900357000004";
 const OTHER_TENANT: &str = "9900987654321";
-const EIC: &str = "11YAPG4CTRDNZ--A";
+const EIC: &str = "11YAPG4CTRDNZ--P";
 const ZP: &str = "DE0004030099000000000000000012345";
 
 async fn test_pool() -> Option<(PgPool, PgContainer)> {
@@ -150,7 +150,7 @@ async fn another_territorys_eic_is_rejected_as_a_meldepunkt() {
     let repo = PgMabisZpRepository::new(pool);
 
     // A different, well-formed 16-character EIC — passes `mabis_zp_not_the_gebiet`.
-    let other_territory_eic = "11XOTHERGRIDBGX2";
+    let other_territory_eic = "11XOTHERGRIDBGXY";
     assert_ne!(other_territory_eic, EIC);
     let err = repo.upsert(record(EIC, other_territory_eic, TENANT)).await;
     assert!(
@@ -220,9 +220,9 @@ async fn list_is_ordered_and_scoped() {
     let repo = PgMabisZpRepository::new(pool);
 
     for (eic, zp) in [
-        ("11YZZZZZZZZZZ--A", "DE0004030099000000000000000000003"),
-        ("11YAAAAAAAAAA--A", "DE0004030099000000000000000000001"),
-        ("11YMMMMMMMMMM--A", "DE0004030099000000000000000000002"),
+        ("11YZZZZZZZZZZ--1", "DE0004030099000000000000000000003"),
+        ("11YAAAAAAAAAA--H", "DE0004030099000000000000000000001"),
+        ("11YMMMMMMMMMM--X", "DE0004030099000000000000000000002"),
     ] {
         repo.upsert(record(eic, zp, TENANT)).await.expect("insert");
     }
@@ -231,7 +231,7 @@ async fn list_is_ordered_and_scoped() {
     let eics: Vec<&str> = all.iter().map(|r| r.bilanzierungsgebiet.as_str()).collect();
     assert_eq!(
         eics,
-        vec!["11YAAAAAAAAAA--A", "11YMMMMMMMMMM--A", "11YZZZZZZZZZZ--A"],
+        vec!["11YAAAAAAAAAA--H", "11YMMMMMMMMMM--X", "11YZZZZZZZZZZ--1"],
         "list must be ascending by Bilanzierungsgebiet"
     );
 }

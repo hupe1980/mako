@@ -45,7 +45,7 @@
 //! // number, no issue date, no Prüfidentifikator.
 //! let settlement = settle_nne(&NneInput {
 //!     blindarbeit: None,
-//!     malo_id: "51238696780".into(),
+//!     malo_id: "51238696012".into(),
 //!     nb_mp_id: "9900357000004".into(),
 //!     lf_mp_id: "9900012345678".into(),
 //!     period: SettlementPeriod::new(date!(2025-01-01), date!(2025-01-31))?,

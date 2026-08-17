@@ -22,7 +22,10 @@ Commands:
                         verify the count matches the claim in README.md. Exits 1 if the count
                         deviates by more than 2.
   check-release-coverage  Fail when no profile covers the current (or --date) date
+  check-prompt-tools  Refuse a procedure step naming a tool the agent cannot reach
   check-routes        Refuse axum 0.7 `/:param` route literals, which panic at startup
+  check-malo-ids       Refuse a MaLo-ID literal whose BDEW check digit is wrong
+  check-wire-timestamps  Refuse raw `time` values in JSON output (they serialise as component arrays)
                         under axum 0.8 (the fix is `/{param}`)
   check-tool-grants   Verify every agentd manifest tool grant names a real MCP tool and
                         agrees with that server's own `read_only_hint`
@@ -119,9 +122,12 @@ Exit codes:
 mod add_release;
 mod audit_ahb;
 mod bump_version;
+mod check_malo_ids;
+mod check_prompt_tools;
 mod check_release_coverage;
 mod check_routes;
 mod check_tool_grants;
+mod check_wire_timestamps;
 mod codegen;
 mod extract_docx;
 mod extract_pdf;
@@ -141,7 +147,10 @@ fn main() {
         Some("audit-ahb") => audit_ahb(),
         Some("check-bo4e-coverage") => check_bo4e_coverage(),
         Some("check-release-coverage") => check_release_coverage::check_release_coverage(),
+        Some("check-prompt-tools") => check_prompt_tools(),
         Some("check-routes") => check_routes(),
+        Some("check-malo-ids") => check_malo_ids(),
+        Some("check-wire-timestamps") => check_wire_timestamps(),
         Some("check-tool-grants") => check_tool_grants(),
         Some("codegen") => codegen(),
         Some("validate-extraction") => validate_extraction::validate_extraction(),
@@ -197,6 +206,28 @@ fn audit_ahb() {
 fn check_routes() {
     let (workspace_root, _) = workspace_info();
     if !check_routes::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_prompt_tools() {
+    let (workspace_root, _) = workspace_info();
+    if !check_prompt_tools::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_malo_ids() {
+    let workspace_root =
+        std::env::var("CARGO_MANIFEST_DIR").map_or_else(|_| ".".to_owned(), |d| format!("{d}/.."));
+    if !check_malo_ids::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_wire_timestamps() {
+    let (workspace_root, _) = workspace_info();
+    if !check_wire_timestamps::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

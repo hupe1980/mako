@@ -124,7 +124,7 @@ flowchart LR
 | `netzbilanzd` | `:8680` | NB | NNE/KA/MMM/MSB/AWH billing — generates INVOIC 31001/31002/31005/31009/31011, full REMADV lifecycle, §14a Modul 2 ToU, §42a GGV, 13-tool MCP server |
 | `sperrd` | `:8780` | NB | Sperrung execution tracking — IFTSTA 21039 auto-dispatch, `GET /stats` compliance snapshot, 5-tool MCP server |
 | `edmd` | `:8380` | All | Energy Data Management — built on the `metering` (computation) and `meterstore` (hot/cold storage) crates: MSCONS, iMSys direct push, Kafka batch ingest (optional per-message HMAC), Hampel quality scoring, V01–V10 validation, virtual meters (§42b GGV), § 60 Abs. 2 MsbG Jahresprognose **and Schätzwert-Bestätigungsschleife** (estimated-reading confirmation tracking with overdue escalation), §22 EnWG Netzverlust indicator, Iceberg/S3 OLAP, 15-tool MCP server |
-| `mabis-syncd` | `:8880` | ÜNB/NB | MaBiS Summenzeitreihen (MSCONS 13003) — aggregates per-MaLo Lastgang from edmd; submits to BIKO on the 10. Werktag; Erstaufschlag 1.–10. WT / Clearing 11.–30. WT / KBKA windows per BK6-24-174 Anlage 3 §3.10 |
+| `mabis-syncd` | `:8880` | ÜNB/NB | MaBiS Summenzeitreihen (MSCONS 13003) — aggregates per-MaLo Lastgang from edmd; submits to BIKO on the 10. Werktag; Erstaufschlag 1.–10. WT / Clearing 11.–30. WT / KBKA windows per BK6-24-174 Anlage 3 §3.10; emits `de.mabis.*` failure events through the transactional outbox; read-only MCP surface over submission state |
 | `einsd` | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes, §52 sanctions, §51 neg-price, 18 MCP tools + 6 prompts |
 | `obsd` | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, automated deadline computation, `GET /api/v1/audit/bnetza-report` |
 | `tarifbd` | `:9080` | LF | Product & Tariff Catalog — **14 categories** (STROM/GAS/WAERME/WASSER/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/SHARING §42c); OIDC/JWT auth; `product_status` DRAFT/PUBLISHED workflow; §42d comparison portal feed (ETag-cached, BO4E `Tarifinfo`); EPEX Spot for §41a; B2B Angebote ANGELEGT→ANGENOMMEN; **14-tool MCP server + 3 prompts** |
@@ -329,7 +329,7 @@ cargo add mako-markt --features testing
 use mako_markt::domain::{MaloId, MeloId, MarktpartnerId};
 
 // Validated identifiers — construction returns Err on malformed input
-let malo_id = MaloId::new("51238696780")?;
+let malo_id = MaloId::new("51238696012")?;
 let melo_id = MeloId::new("DE0001234567890123456789012345678")?;
 let mp_id   = "9900357000004".parse::<MarktpartnerId>()?;
 

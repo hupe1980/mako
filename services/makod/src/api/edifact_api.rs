@@ -214,7 +214,7 @@ pub struct MessageResult {
     /// Use this to correlate the ingest response with the corresponding
     /// command API call (`gpke.lieferbeginn.bestaetigen` etc.).
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schema(example = "51238696780")]
+    #[schema(example = "51238696012")]
     pub malo_id: Option<String>,
 
     /// Human-readable parse error, present only when `status == "parse_error"`.

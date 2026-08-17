@@ -1,13 +1,15 @@
-//! Step 1 of the agentplane migration: one specialist, run deterministically.
+//! The golden run: one specialist, end to end and deterministically.
 //!
-//! `agentd` today has 30 test functions and not one of them exercises an agent —
-//! every specialist needs a live model, a paid call and a non-deterministic
-//! answer, so the turn loop and all 28 procedures are untested by construction.
-//! This is the first test in the service that runs an agent end to end.
+//! A live model means a paid call and a non-deterministic answer, which is why
+//! an agent layer is usually the one part of a workspace that is untested.
+//! `FakeProvider` removes the excuse: this file runs the `planned` specialist
+//! through its real plan — privileged call, granted tool calls, quarantined
+//! parse — and then **replays it strictly**, asserting the replay genuinely
+//! replayed rather than silently re-executing.
 //!
-//! It also answers the question `concepts/AGENTD.md` §5d calls the one decision
-//! in the migration that cannot be revisited: **does a step's input land in a
-//! journal record (un-erasable) or in a blob (crypto-shreddable)?** The
+//! It also answers the one storage decision that cannot be revisited once
+//! personal data is written: **does a step's input land in a journal record
+//! (un-erasable) or in a blob (crypto-shreddable)?** The
 //! journal/blob split is by size and our personal data is small, so the answer
 //! decides whether GDPR Art. 17 erasure is reachable at all. It is asserted
 //! here, against a real store, rather than inferred from documentation.
@@ -22,7 +24,7 @@ use agentplane::testkit::FakeProvider;
 use agentplane::tools::{ToolCatalog, ToolClient, ToolError, ToolId, ToolSafety};
 use serde_json::{Value, json};
 
-use agentd::plane::{GABI_GAS_MANIFEST, parse_manifest};
+use agentd::plane::find_manifest;
 
 /// The one privileged call a `planned` agent makes: it returns a **plan**.
 ///
@@ -151,7 +153,7 @@ fn imbnot_event() -> serde_json::Value {
         "bilanzkreis_id": "THE0BFH012345678",
         "gas_day": "2026-08-06",
         "imbalance_kwh": -18450.75,
-        "malo_id": "51238696780",
+        "malo_id": "51238696012",
         "anschlussnutzer": "Musterbäckerei Schmidt GmbH",
         "adresse": "Mühlenweg 14, 26121 Oldenburg",
     })
@@ -186,7 +188,11 @@ fn scripted_answer() -> serde_json::Value {
 /// The agent runs, produces the declared shape, and replays without a model.
 #[tokio::test]
 async fn the_gabi_specialist_runs_and_replays_deterministically() {
-    let manifest = Arc::new(parse_manifest(GABI_GAS_MANIFEST).expect("manifest parses"));
+    let manifest = Arc::new(
+        find_manifest("gabi-gas-agent")
+            .expect("the GaBi Gas specialist is compiled in")
+            .clone(),
+    );
     let provider = FakeProvider::new();
     provider.will_answer(gabi_plan());
     provider.will_answer(parsed_answer());
@@ -242,7 +248,11 @@ async fn the_gabi_specialist_runs_and_replays_deterministically() {
 /// did not reach the model, the digest coverage would be decorative.
 #[tokio::test]
 async fn the_model_is_asked_with_the_manifests_own_procedure() {
-    let manifest = Arc::new(parse_manifest(GABI_GAS_MANIFEST).expect("manifest parses"));
+    let manifest = Arc::new(
+        find_manifest("gabi-gas-agent")
+            .expect("the GaBi Gas specialist is compiled in")
+            .clone(),
+    );
     let provider = FakeProvider::new();
     provider.will_answer(gabi_plan());
     provider.will_answer(parsed_answer());
@@ -307,8 +317,8 @@ async fn personal_data_in_a_step_input_reaches_the_journal() {
     assert!(
         dumped.contains("Musterbäckerei Schmidt") && dumped.contains("Mühlenweg 14"),
         "measured behaviour changed: personal data no longer appears inline in the journal. \
-         If agentplane now blobs step inputs, the reference-only rule in \
-         concepts/AGENTD.md §5d can be relaxed — check before doing so."
+         If agentplane now blobs step inputs, the rule that agent inputs carry \
+         references rather than payloads could be relaxed — check before doing so."
     );
 }
 
@@ -324,7 +334,7 @@ async fn a_reference_only_event_keeps_personal_data_out_of_the_journal() {
         "bilanzkreis_id": "THE0BFH012345678",
         "gas_day": "2026-08-06",
         "imbalance_kwh": -18450.75,
-        "malo_id": "51238696780",
+        "malo_id": "51238696012",
     });
     let dumped = run_and_dump_journal(reference_only).await;
 
@@ -349,7 +359,11 @@ async fn a_reference_only_event_keeps_personal_data_out_of_the_journal() {
 /// answerable.
 async fn run_and_dump_journal(event: serde_json::Value) -> String {
     let event = agentplane::core::Tainted::trusted(event);
-    let manifest = Arc::new(parse_manifest(GABI_GAS_MANIFEST).expect("manifest parses"));
+    let manifest = Arc::new(
+        find_manifest("gabi-gas-agent")
+            .expect("the GaBi Gas specialist is compiled in")
+            .clone(),
+    );
     let provider = FakeProvider::new();
     provider.will_answer(gabi_plan());
     provider.will_answer(parsed_answer());
@@ -452,7 +466,11 @@ fn every_subscribing_specialist_is_routed_not_just_the_first() {
 async fn a_key_ring_seals_personal_data_in_the_journal() {
     use agentplane::testkit::MemoryKeyRing;
 
-    let manifest = Arc::new(parse_manifest(GABI_GAS_MANIFEST).expect("manifest parses"));
+    let manifest = Arc::new(
+        find_manifest("gabi-gas-agent")
+            .expect("the GaBi Gas specialist is compiled in")
+            .clone(),
+    );
     let provider = FakeProvider::new();
     provider.will_answer(gabi_plan());
     provider.will_answer(parsed_answer());
@@ -491,7 +509,7 @@ async fn a_key_ring_seals_personal_data_in_the_journal() {
         !dumped.contains("Musterbäckerei Schmidt"),
         "with a key ring configured the customer name must not be readable in the raw \
          journal — if it is, the journal is not being sealed and `erase_case` cannot \
-         reach it (concepts/AGENTD.md §5d)"
+         reach it"
     );
     assert!(
         !dumped.contains("Mühlenweg 14"),

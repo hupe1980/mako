@@ -636,7 +636,7 @@ mod tests {
             &RechnungsabwicklungState::New,
             RechnungsabwicklungCommand::SendBeendigung {
                 counterparty: mcod("9900000000004"),
-                location_id: "51238696780".to_owned(),
+                location_id: "51238696012".to_owned(),
                 message_ref: mref("ORDERS-OUT-1"),
             },
         )

@@ -366,7 +366,7 @@ fn mscons_builder_metering_point_sub_builder() {
         .receiver("9900444555666")
         .document_date("20230901")
         .metering_point("DE0001234567890")
-        .location_id("12345678901")
+        .location_id("12345678989")
         .quantity("220", "1000.500", "KWH")
         .done()
         .build()
@@ -382,7 +382,7 @@ fn mscons_builder_metering_point_sub_builder() {
     assert_eq!(dp.time_series.len(), 1);
     let ts = &dp.time_series[0];
     assert_eq!(ts.loc.qualifier, "172");
-    assert_eq!(ts.loc.location_id.as_deref(), Some("12345678901"));
+    assert_eq!(ts.loc.location_id.as_deref(), Some("12345678989"));
     assert_eq!(ts.items.len(), 1);
     let qty = &ts.items[0].quantities[0];
     assert_eq!(qty.qty.qualifier, "220");

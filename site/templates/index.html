@@ -16,9 +16,9 @@
 
 <section class="stats">
   <div class="stats-inner">
-    <div><strong>422</strong><span>Prüfidentifikatoren geroutet</span></div>
-    <div><strong>17</strong><span>EDIFACT message types</span></div>
+    <div><strong>422</strong><span>Prüfidentifikatoren routed</span></div>
     <div><strong>69</strong><span>MaKo workflows</span></div>
+    <div><strong>17</strong><span>EDIFACT message types</span></div>
     <div><strong>17</strong><span>services</span></div>
     <div><strong>4</strong><span>market roles (NB·LF·MSB·ESA)</span></div>
   </div>
@@ -54,47 +54,113 @@ graph LR
     <p>The format layer is generated from the BDEW profiles, so an annual release is
       a codegen run rather than a rewrite. The domain layer never sees EDIFACT: it
       receives typed commands and emits typed events.</p>
+
+    <p>Two numbers describe the same catalogue from different sides:
+      <strong>422</strong> Prüfidentifikatoren are <em>routed</em> to a workflow, and
+      <strong>346</strong> additionally carry validated AHB segment rules. The gap is
+      a declared set of routed-without-rules PIDs, not an accident — and a release
+      that would shrink either number fails the build.</p>
   </div>
 </section>
 
 <section class="features section-pad alt">
   <div class="wrap">
-    <h2>One platform, five layers</h2>
+    <h2>The shape of the platform</h2>
+    <p>Seventeen services along one path: transport and protocol at the edge, master
+      data in the middle, settlement and billing at the end — each owning its own
+      data, talking over typed REST and CloudEvents.</p>
+
+    <pre class="mermaid">
+graph TB
+    subgraph edge["Edge — protocol"]
+      MAKOD["makod<br/>AS4 · EDIFACT · workflows"]
+      PROCESSD["processd<br/>STP decisions"]
+    end
+    subgraph core["Core — market data"]
+      MARKTD["marktd<br/>BO4E hub · fan-out"]
+      VERTRAGD["vertragd · tarifbd<br/>contracts · products"]
+      EDMD["edmd<br/>metering · SMGW"]
+    end
+    subgraph money["Settlement and billing"]
+      NETZ["netzbilanzd<br/>NNE · MMM"]
+      EINSD["einsd<br/>EEG · KWKG"]
+      BILLINGD["billingd · invoicd<br/>retail · EN 16931"]
+      ACCT["accountingd<br/>FI-CA ledger"]
+    end
+    subgraph ops["Operations"]
+      OBSD["obsd<br/>BNetzA KPIs · Fristen"]
+      AGENTD["agentd<br/>AI specialists"]
+      PORTALD["portald<br/>customer portal"]
+    end
+
+    PROCESSD --> MAKOD
+    MAKOD --> MARKTD
+    MARKTD --> VERTRAGD
+    MARKTD --> EDMD
+    EDMD --> NETZ
+    EDMD --> EINSD
+    EDMD --> BILLINGD
+    VERTRAGD --> BILLINGD
+    NETZ --> ACCT
+    BILLINGD --> ACCT
+    EINSD --> ACCT
+    PORTALD --> BILLINGD
+    OBSD -.->|"watches"| MAKOD
+    AGENTD -.->|"MCP reads"| MARKTD
+    AGENTD -.->|"MCP reads"| OBSD
+    </pre>
+  </div>
+</section>
+
+<section class="features section-pad">
+  <div class="wrap">
+    <h2>What you get</h2>
     <div class="card-grid">
       <div class="card">
         <h3>Protocol &amp; process</h3>
-        <p>Parse, validate and build all 17 EDI@Energy EDIFACT types; run every MaKo process as an event-sourced, replayable workflow over AS4/ebMS3 (BDEW AS4-Profil, sign+encrypt, signed receipts).</p>
+        <p>Parse, validate and build all 17 EDI@Energy EDIFACT types; run every MaKo process as an event-sourced, replayable workflow over AS4/ebMS3 — BDEW AS4-Profil, sign and encrypt, signed receipts, retry with duplicate elimination.</p>
+        <a class="card-count" href="{{ get_url(path='@/docs/services/makod.md') | safe }}">makod · processd →</a>
       </div>
       <div class="card">
         <h3>Market data</h3>
-        <p>A typed BO4E market-data hub — MaLo/MeLo, contracts, supply status, grid-operator registry — with a CloudEvents fan-out and OIDC/JWT security.</p>
+        <p>A typed BO4E market-data hub — MaLo/MeLo, contracts, supply status, device configuration, grid-operator registry — with durable CloudEvents fan-out and OIDC/JWT on every route.</p>
+        <a class="card-count" href="{{ get_url(path='@/docs/services/marktd.md') | safe }}">marktd · vertragd · tarifbd →</a>
       </div>
       <div class="card">
-        <h3>Settlement &amp; billing</h3>
-        <p>Role-neutral grid settlement (NNE/MMM/MSB), EEG/KWKG feed-in, and retail billing with EN 16931 e-invoicing — each position carrying a legal-reference calculation trace.</p>
+        <h3>Metering &amp; settlement</h3>
+        <p>Quarter-hourly metering with §60 MsbG substitute values and SMGW lifecycle; role-neutral grid settlement (NNE/MMM/MSB), EEG/KWKG feed-in and MaBiS Summenzeitreihen — each position carrying a legal-reference calculation trace.</p>
+        <a class="card-count" href="{{ get_url(path='@/docs/services/edmd.md') | safe }}">edmd · netzbilanzd · einsd →</a>
       </div>
       <div class="card">
-        <h3>Customer &amp; operations</h3>
-        <p>A tamper-evident FI-CA ledger, contracts &amp; tariff catalog, a customer portal, BNetzA KPI observability, and optional AI orchestration.</p>
+        <h3>Billing &amp; ledger</h3>
+        <p>Retail billing with EN 16931 e-invoicing (XRechnung, ZUGFeRD), SEPA collection and returns, and a hash-chained FI-CA ledger with § 147 AO period seals and Merkle inclusion proofs.</p>
+        <a class="card-count" href="{{ get_url(path='@/docs/services/billingd.md') | safe }}">billingd · invoicd · accountingd →</a>
+      </div>
+      <div class="card">
+        <h3>Operations &amp; oversight</h3>
+        <p>BNetzA KPI observability with Fristen tracking, a customer portal, and an agent plane whose every model and tool call is a journaled effect — advisory by construction, with a four-eyes worklist in front of anything that acts.</p>
+        <a class="card-count" href="{{ get_url(path='@/docs/services/agentd.md') | safe }}">obsd · portald · agentd →</a>
       </div>
       <div class="card">
         <h3>Testable from Python</h3>
         <p><a href="{{ get_url(path='@/docs/reference/makotest.md') | safe }}">makotest</a> binds the same Rust core the platform runs — BDEW check digits, the Werktag calendar, EDIFACT build and AHB validation — so a test and production can never disagree about what &ldquo;valid&rdquo; means.</p>
+        <a class="card-count" href="{{ get_url(path='@/docs/reference/makotest.md') | safe }}">makotest →</a>
       </div>
     </div>
   </div>
 </section>
 
-<section class="why section-pad">
+<section class="why section-pad alt">
   <div class="wrap why-grid">
     <div>
       <h2>Built for the regulatory pace</h2>
       <p>German market communication moves fast — LFW24, §14a, §41a dynamic tariffs, §42b/c energy sharing, the EDIFACT→API transition, the MaBiS-Hub cutover. mako’s domain layer is deliberately split from transport and format, so when the market moves, the platform moves with a codegen run — not a rewrite.</p>
       <ul class="check">
-        <li>Correct &amp; auditable: event-sourced processes, replayable state, GoBD/§146 AO period seals.</li>
-        <li>Every regulated process modeled — for every market role.</li>
-        <li>Validation that fails loudly: an unregistered Prüfidentifikator is reported, never quietly accepted.</li>
-        <li>Readable, verifiable, extensible: source you can audit and run.</li>
+        <li><strong>Auditable by construction</strong> — event-sourced processes, replayable state, hash-chained ledger with § 147 AO period seals.</li>
+        <li><strong>Every regulated process modeled</strong>, for every market role — and a role-scoped build contains only its own arm's code.</li>
+        <li><strong>Validation that fails loudly</strong> — an unregistered Prüfidentifikator is reported, never quietly accepted.</li>
+        <li><strong>Fristen that agree with each other</strong> — one BDEW Werktag calendar, from the APERAK clock to an agent's approval window.</li>
+        <li><strong>Readable, verifiable, extensible</strong> — source you can audit and run.</li>
       </ul>
     </div>
     <div>

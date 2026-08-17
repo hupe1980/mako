@@ -49,7 +49,7 @@ fn sect41a_dynamic_tariff_rejects_non_imsys_metering_mode() {
 
     let rates = RegulatoryRates::default();
     let ctx = BillingContext {
-        malo_id: "51238696780".into(),
+        malo_id: "51238696012".into(),
         lf_mp_id: "9900000000001".into(),
         rechnungsnummer: "R41B-TEST-001".into(),
         period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
@@ -767,7 +767,7 @@ fn sect40a_kilowattstundenpreis_brutto_includes_all_charges() {
     // Standard household: 500 kWh @ 30 ct/kWh + 0.11 ct KA + 2.05 ct Stromsteuer + 19% MwSt
     let rates = RegulatoryRates::default();
     let ctx = BillingContext {
-        malo_id: "51238696780".into(),
+        malo_id: "51238696012".into(),
         lf_mp_id: "9900000000001".into(),
         rechnungsnummer: "R40A-TEST-001".into(),
         period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
@@ -836,7 +836,7 @@ fn sect41_rechnung_json_contains_mandatory_fields() {
 
     let rates = RegulatoryRates::default();
     let ctx = BillingContext {
-        malo_id: "51238696780".into(),
+        malo_id: "51238696012".into(),
         lf_mp_id: "9900000000001".into(),
         rechnungsnummer: "R41-TEST-001".into(),
         period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
@@ -955,7 +955,7 @@ fn sect42c_energy_sharing_credit_reduces_effective_cost() {
 
     let rates = RegulatoryRates::default();
     let ctx = BillingContext {
-        malo_id: "51238696780".into(),
+        malo_id: "51238696012".into(),
         lf_mp_id: "9900000000001".into(),
         rechnungsnummer: "R42C-TEST-001".into(),
         period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
@@ -1061,7 +1061,7 @@ fn industrie_customer_stromsteuer_befreiung_removes_levy() {
 
     let rates = RegulatoryRates::default();
     let ctx = BillingContext {
-        malo_id: "51238696780".into(),
+        malo_id: "51238696012".into(),
         lf_mp_id: "9900000000001".into(),
         rechnungsnummer: "R-INDUSTRIE-001".into(),
         period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),

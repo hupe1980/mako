@@ -14,7 +14,7 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: tarifbd-agent
-  version: "1.0.0"
+  version: "1.1.0"
 spec:
   execution:
     kind: tool-calling
@@ -73,15 +73,17 @@ spec:
       - `co2Emission` (g CO₂/kWh) — mandatory per §42 Abs. 5 Nr. 1
       - `radioaktiverAbfall` (mg/kWh) — mandatory per §42 Abs. 5 Nr. 2
 
-      ## OUTPUT FORMAT
-      ```
-      CATALOG_STATUS: [VALID|WARNINGS|INVALID]
-      PRODUCT_CODE: [code or N/A]
-      §42_ENERGIEMIX_STATUS: [OK|MISSING|INCOMPLETE|STALE (>12 months)]
-      §41A_EPEX_STATUS: [OK|WARNING|CRITICAL|N/A]
-      ANGEBOT_FOLLOWUP: [description or N/A]
-      ISSUES: [list or NONE]
-      ```
+  # What this agent is in a multi-agent arrangement.
+  #
+  # MAST measures inter-agent misalignment at 36.9 % of observed multi-agent
+  # failures — a class that exists only if you choose it. Declaring the shape is
+  # how you choose not to: `single` means one agent, one context, many tools, and
+  # the inter-agent failure surface is structurally absent. `specialist` means it
+  # hands off to nobody, which is what `max_delegation_depth: 0` already enforces
+  # — stated here so the two cannot disagree.
+  topology:
+    mode: single
+    role: specialist
 
   capabilities:
     provides: [tarifbd]
@@ -111,6 +113,56 @@ spec:
     max_steps: 36
     max_effects: 60
     max_wallclock_secs: 900
+
+  # The result contract. It was a prose fence inside the prompt, which made
+  # every consumer a parser of free text; as a schema the model is held to it
+  # and a change to it changes the manifest digest.
+  output:
+    schema:
+      type: object
+      additionalProperties: false
+      required:
+        - catalog_status
+        - product_code
+        - angebot_followup
+      properties:
+        catalog_status:
+          type: string
+          enum:
+            - VALID
+            - WARNINGS
+            - INVALID
+        product_code:
+          type: string
+        angebot_followup:
+          type: string
+        issues:
+          type: array
+          items:
+            type: string
+
+  # Knowledge, granted rather than copied.
+  #
+  # Every mako MCP server publishes step-by-step prompts for its own procedures —
+  # fifty of them across thirteen servers — and not one manifest reached a single
+  # one. Each specialist instead carried a hand-typed paraphrase in its
+  # `constraints`, which is a second copy of a procedure with nothing keeping the
+  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # changes when somebody remembers.
+  #
+  # A context grant is not a tool grant. Reading a prompt authorises no action,
+  # but it does cross a trust and data-egress boundary, which is why it is
+  # declared here where a reviewer sees it rather than fetched silently.
+  context:
+    prompts:
+      - server: tarifbd
+        name: assign-product
+        max_input_sensitivity: internal
+        output_sensitivity: internal
+      - server: tarifbd
+        name: configure-41a-tariff
+        max_input_sensitivity: internal
+        output_sensitivity: internal
 
   tools:
     - ref: tool://tarifbd/list_products

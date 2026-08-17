@@ -15,7 +15,7 @@ use sqlx::PgPool;
 
 const SCHEMA: &str = include_str!("../migrations/0001_initial.sql");
 const TENANT: &str = "9900357000004";
-const MALO: &str = "51238696780"; // valid checksum
+const MALO: &str = "51238696012"; // valid checksum
 
 async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
     let (url, container) = pg_container().await?;
@@ -469,7 +469,7 @@ async fn bilanzierung_temporal_resource_resolves_by_point_in_time() {
         return;
     };
     let tenant = "9900000000002";
-    let malo = "51238696780";
+    let malo = "51238696012";
 
     let mk = |beginn, ende, bk: &str| BilanzierungRecord {
         malo_id: malo.to_owned(),
@@ -495,14 +495,14 @@ async fn bilanzierung_temporal_resource_resolves_by_point_in_time() {
     repo.upsert(&mk(
         datetime!(2024-01-01 00:00 UTC),
         Some(datetime!(2025-06-01 00:00 UTC)),
-        "11YWA-------BK-A",
+        "11XMAKO-BK-TEST9",
     ))
     .await
     .expect("upsert A");
     repo.upsert(&mk(
         datetime!(2025-06-01 00:00 UTC),
         None,
-        "11YWB-------BK-B",
+        "11XMAKO-BK-0002F",
     ))
     .await
     .expect("upsert B");
@@ -522,19 +522,19 @@ async fn bilanzierung_temporal_resource_resolves_by_point_in_time() {
         bk_at(&repo, tenant, malo, datetime!(2024-06-01 00:00 UTC))
             .await
             .as_deref(),
-        Some("11YWA-------BK-A")
+        Some("11XMAKO-BK-TEST9")
     );
     assert_eq!(
         bk_at(&repo, tenant, malo, datetime!(2025-07-01 00:00 UTC))
             .await
             .as_deref(),
-        Some("11YWB-------BK-B")
+        Some("11XMAKO-BK-0002F")
     );
     assert_eq!(
         bk_at(&repo, tenant, malo, datetime!(2025-06-01 00:00 UTC))
             .await
             .as_deref(),
-        Some("11YWB-------BK-B"),
+        Some("11XMAKO-BK-0002F"),
         "the switch instant resolves to the newer Bilanzierung (beginn inclusive)"
     );
     assert!(
@@ -548,13 +548,13 @@ async fn bilanzierung_temporal_resource_resolves_by_point_in_time() {
     repo.upsert(&mk(
         datetime!(2025-06-01 00:00 UTC),
         None,
-        "11YWC-------BK-C",
+        "11XMAKO-BK-0003D",
     ))
     .await
     .expect("re-upsert B");
     let hist = repo.history(tenant, malo).await.unwrap();
     assert_eq!(hist.len(), 2, "still two rows after same-key re-upsert");
-    assert_eq!(hist[0].bilanzkreis.as_deref(), Some("11YWC-------BK-C"));
+    assert_eq!(hist[0].bilanzkreis.as_deref(), Some("11XMAKO-BK-0003D"));
     assert_eq!(
         hist[1].bilanzierungsende,
         Some(datetime!(2025-06-01 00:00 UTC))
@@ -572,7 +572,7 @@ async fn bilanzierung_write_derives_the_malo_fallgruppe_column() {
         return;
     };
     let tenant = "9900000000002";
-    let malo = "51238696780";
+    let malo = "51238696012";
 
     // The MaLo (Marktlokation) must exist for the derive to land.
     sqlx::query("INSERT INTO malo (malo_id, sparte, data) VALUES ($1, 'GAS', '{}'::jsonb)")

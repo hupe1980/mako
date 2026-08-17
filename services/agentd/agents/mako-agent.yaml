@@ -14,7 +14,7 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: mako-agent
-  version: "1.0.0"
+  version: "1.1.0"
 spec:
   execution:
     kind: tool-calling
@@ -39,7 +39,7 @@ spec:
       ## STEP-BY-STEP PROCEDURE
 
       1. Extract `process_id`, `pid`, and `malo_id` from the CloudEvent payload.
-      2. Call makod `get_process_status` to get current workflow state.
+      2. Call makod `get_process` for the current workflow state.
       3. Call obsd `get_process` for full timeline and deadline status.
       4. Determine root cause:
          - APERAK BGM+313? → check NB rejection reason code (E01/E02/A05/A06/A97)
@@ -48,13 +48,25 @@ spec:
       5. For NB rejections: check marktd `get_malo_grid` and `get_malo` to verify master data completeness.
       6. Recommend corrective action.
 
-      ## OUTPUT FORMAT (always end with this block)
-      ```
-      STATUS: [RESOLVED|ACTIONABLE|ESCALATED]
-      ROOT_CAUSE: [one sentence]
-      CORRECTION: [specific action the operator should take]
-      LEGAL_BASIS: [§-reference if applicable]
-      ```
+  # What this agent is in a multi-agent arrangement.
+  #
+  # `specialist`, like every other manifest here, and the honest answer: mako
+  # routes events to specialists in **Rust**
+  # (`builtin::Specialist::trigger_patterns`), so no agent hands off to another
+  # and none has the authority to. This one is the triage desk in the sense that
+  # unrouted protocol problems land on it — not in the sense that it commands
+  # anybody.
+  #
+  # agentplane refuses `mode: single` with `role: orchestrator` outright, which
+  # is the right refusal: an orchestrator with nobody to orchestrate is a claim
+  # the file cannot back. Writing `orchestrator` here would have been exactly
+  # that, and the parser said so.
+  #
+  # MAST measures inter-agent misalignment at 36.9 % of observed multi-agent
+  # failures — a class that exists only if you choose it. mako has not.
+  topology:
+    mode: single
+    role: specialist
 
   capabilities:
     provides: [mako]
@@ -84,6 +96,59 @@ spec:
     max_steps: 36
     max_effects: 60
     max_wallclock_secs: 900
+
+  # The result contract. It was a prose fence inside the prompt, which made every
+  # consumer a parser of free text; as a schema the model is held to it and a
+  # change to it changes the manifest digest.
+  output:
+    schema:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - root_cause
+        - correction
+      properties:
+        status:
+          type: string
+          enum:
+            - RESOLVED
+            - ACTIONABLE
+            - ESCALATED
+        root_cause:
+          type: string
+          description: One sentence naming what actually went wrong.
+        correction:
+          type: string
+          description: The specific action the operator should take.
+        legal_basis:
+          type: string
+          description: >-
+            The §-reference the correction rests on, when there is one. GPKE,
+            EnWG, MsbG and the AHB are cited as the source states them.
+
+  # Knowledge, granted rather than copied.
+  #
+  # Every mako MCP server publishes step-by-step prompts for its own procedures —
+  # fifty of them across thirteen servers — and not one manifest reached a single
+  # one. Each specialist instead carried a hand-typed paraphrase in its
+  # `constraints`, which is a second copy of a procedure with nothing keeping the
+  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # changes when somebody remembers.
+  #
+  # A context grant is not a tool grant. Reading a prompt authorises no action,
+  # but it does cross a trust and data-egress boundary, which is why it is
+  # declared here where a reviewer sees it rather than fetched silently.
+  context:
+    prompts:
+      - server: processd
+        name: triage-nb-rejection
+        max_input_sensitivity: internal
+        output_sensitivity: internal
+      - server: obsd
+        name: investigate-aperak-violation
+        max_input_sensitivity: internal
+        output_sensitivity: internal
 
   tools:
     - ref: tool://makod/list_commands

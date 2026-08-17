@@ -597,7 +597,7 @@ mod werteanfrage_msb_tests {
     use super::{MsbResolution, plan_werteanfrage_msb};
     use crate::orchestrator::commands_api::types::DispatchError;
 
-    const MALO: &str = "51238696780"; // 11 chars → Marktlokation
+    const MALO: &str = "51238696012"; // 11 chars → Marktlokation
     const MELO: &str = "DE0001234567890123456789012345678"; // 33 chars → Messlokation
 
     fn date(s: &str) -> time::Date {

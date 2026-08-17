@@ -66,8 +66,8 @@ Validated with the BDEW alternating-weight check digit algorithm
 ```rust
 use mako_markt::domain::MaloId;
 
-let id = MaloId::new("51238696780")?;   // validates checksum
-println!("{id}");                        // "51238696780"
+let id = MaloId::new("51238696012")?;   // validates checksum
+println!("{id}");                        // "51238696012"
 ```
 
 ### `MeloId` — 33-character Messlokations-ID
@@ -199,11 +199,11 @@ use mako_markt::cloudevents::{MarktEvent, EventExtensions, compute_signature};
 let event = MarktEvent::new(
     "9900357000004",             // tenant GLN
     "de.markt.malo.updated",     // CloudEvents type
-    "51238696780",               // subject (MaLo-ID)
+    "51238696012",               // subject (MaLo-ID)
     serde_json::json!({ "_typ": "MARKTLOKATION", … }),
 )
 .with_extensions(EventExtensions {
-    marktmaloid: Some("51238696780".into()),
+    marktmaloid: Some("51238696012".into()),
     marktrole:   Some("NB".into()),
     ..Default::default()
 });

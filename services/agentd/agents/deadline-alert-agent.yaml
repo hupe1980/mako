@@ -1,227 +1,160 @@
-# APERAK deadline monitor. Detects processes approaching BDEW MaKo response windows (45 min Strom UTILMD, 3 WT Gas APERAK). Triggers operator alerts when SLAs are at risk.
+# APERAK / response-window deadline triage.
 #
-# Generated from the compiled specialist definition during the agentplane
-# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
-# own `read_only_hint` — the cutover inherited it from servers that declared
-# nothing, so 91 plain reads were marked mutating and would have stopped for an
-# approval on every call. The mutating grants are gone entirely, because a
-# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
+# ## This specialist runs no model, and that is declared
 #
-# Narrowing the read set further per specialist is domain review, not mechanical
-# work.
+# `models: {}` is agentplane's way of saying **no inference at all, on purpose**
+# — the thing that distinguishes a rules-only agent from one whose model wiring
+# somebody forgot. There is no `execution` block either, so the behaviour is a
+# registered skill: `agentd::skills::DeadlineTriage`.
+#
+# It used to be `execution: { kind: tool-calling }` with an eight-turn ceiling
+# and a 200 000-token budget, and its prompt asked a frontier model to
+# "classify by severity: < 30 min CRITICAL, < 2h WARNING, already overdue
+# BREACH" and to "identify the responsible market participant". That is a
+# subtraction, three comparisons, and reading `partner_mp_id` out of the JSON
+# obsd returned — per deadline event, at whatever rate mako's counterparties
+# approach their Fristen.
+#
+# Worse, it was untestable. "Is 29 minutes CRITICAL?" could only be answered by
+# calling the model, so a drifting threshold was invisible to CI — under BNetzA
+# monitoring, which is not where one wants to discover a threshold moved. The
+# bands now live in `skills/deadline.rs` and are pinned at every boundary.
+#
+# Nothing about the governance changed. The tool call is still a journaled
+# effect through the policy gate; the clock read is still an effect, so a replay
+# classifies against the instant the original run saw; this manifest still binds
+# the grant, the ceilings and the egress, and still carries a digest a reviewer
+# approves. Governance was never what the model was buying.
+#
+# ## One grant, because one tool is called
+#
+# This file used to grant 34 tools across obsd, makod and marktd — inherited
+# wholesale from the cutover, which handed every specialist its servers' full
+# read surface. A coded skill's reach is legible: it calls
+# `obsd/list_overdue_processes`, so that is what it may reach. Everything else
+# was authority nobody had reasoned about.
+#
 # Cross-cutting: present in every role-scoped build.
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: deadline-alert-agent
-  version: "1.0.0"
+  version: "2.2.0"
 spec:
-  execution:
-    kind: tool-calling
-    max_turns: 8
+  # No `execution`: the behaviour is `agentd::skills::DeadlineTriage`.
+  # No `oversight`: this specialist reads and reports, and oversight without
+  # execution is refused by agentplane rather than ignored.
 
   identity:
     role: >-
-      APERAK deadline monitor. Detects processes approaching BDEW MaKo response
-      windows (45 min Strom UTILMD, 3 WT Gas APERAK). Triggers operator alerts
-      when SLAs are at risk.
+      APERAK deadline triage. Classifies processes past or approaching their
+      BDEW MaKo response window (45 min Strom UTILMD, 3 WT Gas APERAK) by how
+      much time remains, and attributes each to the market participant that owes
+      the response.
     constraints: |
-      You are the deadline alert specialist for BDEW MaKo regulatory deadlines.
+      The procedure is code, not prose: agentd::skills::deadline.
 
-      ## DEADLINE RULES (APERAK AHB 1.0 §2.3 / §2.4.1)
-      - STROM UTILMD/ORDERS weekday: 45 minutes
-      - STROM UTILMD Saturday: Sonntag 12:00
-      - STROM other: next Werktag 12:00
-      - GAS Folgeprozesse: next Werktag 12:00
-      - GAS Initialprozesse: 3 Werktage
+      Severity bands, pinned by unit test at every boundary:
+        BREACH    the deadline has passed
+        CRITICAL  under 30 minutes remain
+        WARNING   under 2 hours remain
+        COMPLIANT more than 2 hours remain
 
-      ## TRIGGERED BY
-      - `de.obs.deadline.approaching` — a Frist is close to expiring
-      - `de.mako.aperak.timeout` — the APERAK deadline passed unanswered
-      - `de.mako.process.failed` — the process ended without a confirmation
+      The BDEW windows those deadlines come from (APERAK AHB 1.0 §2.3/§2.4.1 —
+      45 min Strom weekday, Sonntag 12:00 for Saturday, next Werktag 12:00
+      otherwise, 3 Werktage for Gas Initialprozesse) are obsd's to compute, via
+      the same mako-engine Werktage calendar this plane resolves approval
+      windows with. This specialist does not re-derive them; it reads
+      `deadline_at` and subtracts.
 
-      ## STEP-BY-STEP PROCEDURE
-
-      1. Call obsd `list_overdue_processes` to get all processes past their deadline.
-      2. For each overdue process, call obsd `get_process` for details.
-      3. Classify by severity:
-         - < 30 min remaining: CRITICAL
-         - < 2h remaining: WARNING
-         - Already overdue: BREACH
-      4. Identify the responsible market participant and likely cause.
-      5. Generate a structured alert for the operator dashboard.
-
-      ## OUTPUT FORMAT
-      ```
-      DEADLINE_STATUS: [CRITICAL|WARNING|BREACH|COMPLIANT]
-      OVERDUE_COUNT: [number]
-      CRITICAL_PROCESSES: [list of process_ids with deadline_utc]
-      RECOMMENDED_ACTION: [specific next step]
-      ```
+  # What this agent is in a multi-agent arrangement.
+  #
+  # MAST measures inter-agent misalignment at 36.9 % of observed multi-agent
+  # failures — a class that exists only if you choose it. Declaring the shape is
+  # how you choose not to: `single` means one agent, one context, many tools, and
+  # the inter-agent failure surface is structurally absent. `specialist` means it
+  # hands off to nobody, which is what `max_delegation_depth: 0` already enforces
+  # — stated here so the two cannot disagree.
+  topology:
+    mode: single
+    role: specialist
 
   capabilities:
     provides: [deadline.alert]
 
-  models:
-    privileged:  { provider: anthropic, model: claude-sonnet-5 }
+  # No inference. Stated, not omitted.
+  models: {}
 
   security:
     max_sensitivity_egress: internal
     max_delegation_depth: 0
     max_sensitivity_journaled: internal
 
-  # No `oversight` block, and no mutating tool grant: this specialist reads and
-  # reports. Both absences are the same fact — a `tool-calling` agent cannot
-  # dispatch a mutating call at all, because the arguments come from a model
-  # completion, which agentplane labels untrusted by construction, and its taint
-  # gate refuses a mutating sink with untrusted arguments. Declaring the grant
-  # anyway would read as an ability this agent does not have.
+  # A model-free specialist still needs ceilings: a tool server that hangs, or a
+  # projection that returns 200 rows every time, is bounded here.
   #
-  # Acting on a conclusion is a `planned` specialist's job — see
-  # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
-  # resolves itself, so the authority-bearing arguments keep the run input's own
-  # labels and a named human approves the call before it leaves.
-
+  # No `max_tokens`, deliberately — and it used to say `max_tokens: 0`, which
+  # read as "an agent that cannot infer must not be allowed to spend" and
+  # actually meant "refuse this agent's first tool call": the budget gate
+  # treats a zero ceiling as exhausted before any effect, tokens or not. The
+  # agent cannot spend a token regardless (`models: {}` — there is no model to
+  # ask); the ceilings that bind something are the ones below.
   budgets:
-    max_tokens: 200000
-    max_steps: 24
-    max_effects: 40
-    max_wallclock_secs: 900
+    max_steps: 4
+    max_effects: 8
+    max_wallclock_secs: 60
+
+  # The alert is machine-readable, because something has to act on it.
+  output:
+    schema:
+      type: object
+      additionalProperties: false
+      required: [deadline_status, overdue_count, processes]
+      properties:
+        deadline_status:
+          type: string
+          enum: [COMPLIANT, WARNING, CRITICAL, BREACH]
+          description: The worst severity in the set.
+        overdue_count:
+          type: integer
+          minimum: 0
+        unclassifiable:
+          type: integer
+          minimum: 0
+          description: >-
+            Rows whose `deadline_at` could not be read. Counted rather than
+            treated as compliant, so an obsd projection fault cannot hide behind
+            a green alert.
+        by_partner_mp_id:
+          type: object
+          description: Count of at-risk processes per responsible market partner.
+          additionalProperties:
+            type: integer
+        processes:
+          type: array
+          items:
+            type: object
+            required: [process_id, severity, remaining_secs]
+            properties:
+              process_id:    { type: string }
+              pid:           { type: integer }
+              state:         { type: string }
+              partner_mp_id: { type: string }
+              deadline_at:   { type: string }
+              remaining_secs:
+                type: integer
+                description: Negative once the Frist has passed.
+              severity:
+                type: string
+                enum: [COMPLIANT, WARNING, CRITICAL, BREACH]
+        trigger:
+          type: object
+          description: The event that caused this run, reported back for correlation.
 
   tools:
-    - ref: tool://obsd/get_process
-      mutates: false
-      max_sensitivity: internal
-      description: "get process via obsd"
+    # The one tool the skill calls. obsd computes the deadlines with mako's own
+    # BDEW calendar; this specialist classifies what it returns.
     - ref: tool://obsd/list_overdue_processes
       mutates: false
       max_sensitivity: internal
-      description: "list overdue processes via obsd"
-    - ref: tool://obsd/get_kpi_report
-      mutates: false
-      max_sensitivity: internal
-      description: "get kpi report via obsd"
-    - ref: tool://obsd/get_parity_report
-      mutates: false
-      max_sensitivity: internal
-      description: "get parity report via obsd"
-    - ref: tool://obsd/get_stp_rate
-      mutates: false
-      max_sensitivity: internal
-      description: "get stp rate via obsd"
-    - ref: tool://obsd/list_processes_by_family
-      mutates: false
-      max_sensitivity: internal
-      description: "list processes by family via obsd"
-    - ref: tool://makod/list_commands
-      mutates: false
-      max_sensitivity: internal
-      description: "list commands via makod"
-    - ref: tool://makod/get_malo
-      mutates: false
-      max_sensitivity: internal
-      description: "get malo via makod"
-    - ref: tool://makod/list_partners
-      mutates: false
-      max_sensitivity: internal
-      description: "list partners via makod"
-    - ref: tool://makod/get_partner
-      mutates: false
-      max_sensitivity: internal
-      description: "get partner via makod"
-    - ref: tool://makod/get_health
-      mutates: false
-      max_sensitivity: internal
-      description: "get health via makod"
-    - ref: tool://makod/get_process
-      mutates: false
-      max_sensitivity: internal
-      description: "get process via makod"
-    - ref: tool://makod/list_overdue_deadlines
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue deadlines via makod"
-    - ref: tool://makod/list_active_processes
-      mutates: false
-      max_sensitivity: internal
-      description: "list active processes via makod"
-    - ref: tool://makod/get_format_version_coverage
-      mutates: false
-      max_sensitivity: internal
-      description: "get format version coverage via makod"
-    - ref: tool://makod/get_outbox_status
-      mutates: false
-      max_sensitivity: internal
-      description: "get outbox status via makod"
-    - ref: tool://makod/list_dead_letters
-      mutates: false
-      max_sensitivity: internal
-      description: "list dead letters via makod"
-    - ref: tool://marktd/get_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get malo via marktd"
-    - ref: tool://marktd/list_partners
-      mutates: false
-      max_sensitivity: confidential
-      description: "list partners via marktd"
-    - ref: tool://marktd/get_preisblatt
-      mutates: false
-      max_sensitivity: confidential
-      description: "get preisblatt via marktd"
-    - ref: tool://marktd/get_versorgungsstatus
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus via marktd"
-    - ref: tool://marktd/get_nb_contract
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb contract via marktd"
-    - ref: tool://marktd/get_correlation
-      mutates: false
-      max_sensitivity: confidential
-      description: "get correlation via marktd"
-    - ref: tool://marktd/list_pricat_versions
-      mutates: false
-      max_sensitivity: confidential
-      description: "list pricat versions via marktd"
-    - ref: tool://marktd/list_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "list malo via marktd"
-    - ref: tool://marktd/get_melo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo via marktd"
-    - ref: tool://marktd/get_rollenzuordnung
-      mutates: false
-      max_sensitivity: confidential
-      description: "get rollenzuordnung via marktd"
-    - ref: tool://marktd/get_versorgungsstatus_history
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus history via marktd"
-    - ref: tool://marktd/get_nb_energiemix
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb energiemix via marktd"
-    - ref: tool://marktd/get_technische_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get technische ressource via marktd"
-    - ref: tool://marktd/get_steuerbare_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get steuerbare ressource via marktd"
-    - ref: tool://marktd/get_partner
-      mutates: false
-      max_sensitivity: confidential
-      description: "get partner via marktd"
-    - ref: tool://marktd/get_melo_standorteigenschaften
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo standorteigenschaften via marktd"
-    - ref: tool://marktd/get_versorgung_at
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgung at via marktd"
+      description: "Processes past their regulatory deadline, most urgent first."

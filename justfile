@@ -184,7 +184,7 @@ smoke-roles:
         ./target/debug/makod --config "$tmp/makod.toml" --allow-volatile --check
     done
 
-ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-routes check-tool-grants doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
+ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-routes check-wire-timestamps check-malo-ids check-prompt-tools check-tool-grants doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -379,6 +379,26 @@ check-release-coverage:
 # Verify the rubo4e::current active-type count matches the README.md claim (delta ≤ 2).
 check-bo4e-coverage:
     cargo xtask check-bo4e-coverage
+
+# Refuse a raw `time` value on a JSON wire: `OffsetDateTime` and `Date` derive
+# `Serialize` as their component array ([y, ordinal, h, m, s, ns, ±h, ±m, ±s]),
+# which is `time`'s internal layout and readable by nothing. Nine such fields
+# reached mako's MCP surface, including the `deadline_at` an agent was expected
+# to do arithmetic on.
+check-wire-timestamps:
+    cargo xtask check-wire-timestamps
+
+# Refuse a MaLo-ID literal whose BDEW check digit is wrong (metering/meterstore
+# validate it at the parse, so a bad fixture is refused by the storage layer)
+check-malo-ids:
+    cargo xtask check-malo-ids
+
+# Refuse a specialist procedure that tells a model to call a tool the manifest
+# does not grant. `check-tool-grants` validates the grant list; this validates
+# the prompt. An unknown tool name is reported back to the model as a failed
+# call rather than ending the run, so the step silently does not happen.
+check-prompt-tools:
+    cargo xtask check-prompt-tools
 
 # Refuse axum 0.7 `/:param` route literals. Under axum 0.8 they panic while the
 # router is built — i.e. at startup — so nothing in the test suite catches them.

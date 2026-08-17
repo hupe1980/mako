@@ -59,7 +59,7 @@ let bytes = UtilmdBuilder::new(releases::utilmd_fv20261001().clone())
     .document_code("E01")
     .document_date("20261001")
     // One SG4 transaction per metering-point / supply-point process
-    .transaction(ObjectType::Messlokation, "51238696780")
+    .transaction(ObjectType::Messlokation, "51238696012")
         .process_date("163", "20261001")      // delivery start
         .reference("Z13", "55001")            // per-transaction PID ref
         .done()

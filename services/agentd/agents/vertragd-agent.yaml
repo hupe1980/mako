@@ -14,7 +14,7 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: vertragd-agent
-  version: "1.0.0"
+  version: "1.1.0"
 spec:
   execution:
     kind: tool-calling
@@ -43,7 +43,7 @@ spec:
       2. Call vertragd `get_vertrag_status` — check all Vertragskomponenten.
       3. For ANGEMELDET > 5 WT (Strom) or 10 WT (Gas): call `find_stuck_workflows`.
       4. For ABGELEHNT: check ERC code (A02=MaLo not in NB grid, A05=LF not registered).
-         - A02: call marktd `get_malo_grid` to verify NB assignment.
+         - A02: call marktd `get_malo` to verify NB assignment.
          - A05: check lf_mp_id published in bdew-codes.de.
       5. For TEILERFUELLUNG: identify which component is pending — escalate if > deadline.
 
@@ -67,16 +67,17 @@ spec:
       Check stuck ANGEMELDET components for correlation with LF-affiliated vs. non-affiliated
       customer segments — report to obsd for BNetzA Diskriminierungsbericht.
 
-      ## OUTPUT FORMAT
-      ```
-      CONTRACT_STATUS: [AKTIV|GEKÜNDIGT|IN_BEARBEITUNG|ABGELAUFEN|ERROR]
-      MALO_ID: [id]
-      STUCK_COMPONENTS: [count or NONE]
-      PREISGARANTIE_ACTIVE: [YES until YYYY-MM-DD|NO|N/A]
-      EXPIRY_RISK: [contract/preisgarantie expiry date or NONE]
-      CORRECTION: [specific action]
-      REGULATORY_BASIS: [paragraph reference]
-      ```
+  # What this agent is in a multi-agent arrangement.
+  #
+  # MAST measures inter-agent misalignment at 36.9 % of observed multi-agent
+  # failures — a class that exists only if you choose it. Declaring the shape is
+  # how you choose not to: `single` means one agent, one context, many tools, and
+  # the inter-agent failure surface is structurally absent. `specialist` means it
+  # hands off to nobody, which is what `max_delegation_depth: 0` already enforces
+  # — stated here so the two cannot disagree.
+  topology:
+    mode: single
+    role: specialist
 
   capabilities:
     provides: [vertragd]
@@ -106,6 +107,52 @@ spec:
     max_steps: 45
     max_effects: 75
     max_wallclock_secs: 900
+
+  # The result contract. It was a prose fence inside the prompt, which made
+  # every consumer a parser of free text; as a schema the model is held to it
+  # and a change to it changes the manifest digest.
+  output:
+    schema:
+      type: object
+      additionalProperties: false
+      required:
+        - contract_status
+        - malo_id
+        - stuck_components
+      properties:
+        contract_status:
+          type: string
+        malo_id:
+          type: string
+        stuck_components:
+          type: number
+        preisgarantie_active:
+          type: string
+        expiry_risk:
+          type: string
+        correction:
+          type: string
+        regulatory_basis:
+          type: string
+
+  # Knowledge, granted rather than copied.
+  #
+  # Every mako MCP server publishes step-by-step prompts for its own procedures —
+  # fifty of them across thirteen servers — and not one manifest reached a single
+  # one. Each specialist instead carried a hand-typed paraphrase in its
+  # `constraints`, which is a second copy of a procedure with nothing keeping the
+  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # changes when somebody remembers.
+  #
+  # A context grant is not a tool grant. Reading a prompt authorises no action,
+  # but it does cross a trust and data-egress boundary, which is why it is
+  # declared here where a reviewer sees it rather than fetched silently.
+  context:
+    prompts:
+      - server: processd
+        name: trigger-lieferbeginn
+        max_input_sensitivity: internal
+        output_sensitivity: internal
 
   tools:
     - ref: tool://vertragd/get_vertrag_status

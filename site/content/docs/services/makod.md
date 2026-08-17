@@ -1061,7 +1061,7 @@ started with.
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `command` | string | ✓ | Dotted command name: `<domain>.<prozess>.<aktion>` — e.g. `gpke.lieferbeginn.anmelden` |
-| `payload` | object | ✓ | Command-specific payload, e.g. `{"malo_id": "10001234567", "lieferbeginn_datum": "2026-10-01"}` |
+| `payload` | object | ✓ | Command-specific payload, e.g. `{"malo_id": "10001234558", "lieferbeginn_datum": "2026-10-01"}` |
 | `marktrolle` | string | – | Marktrolle override (`LF`, `NB`, `MSB`, …); required for multi-role commands |
 | `idempotency_key` | string | – | Stable UUID for retry safety; a random UUID is generated when omitted |
 
@@ -1077,7 +1077,7 @@ started with.
 | `partner://{mp_id}` | Full partner record including AS4 URL, market roles, and channels |
 
 Clients that support MCP Resources can read these directly (e.g. drag-and-drop into
-a Claude conversation, or `@resource malo://10001234567` in VS Code Copilot Chat).
+a Claude conversation, or `@resource malo://10001234558` in VS Code Copilot Chat).
 
 ### Prompts
 
@@ -1249,7 +1249,7 @@ interchange and dispatches it over AS4.
 {
   "command": "gpke.lieferbeginn.anmelden",
   "payload": {
-    "malo_id":            "10001234567",
+    "malo_id":            "10001234558",
     "lieferbeginn_datum": "2026-10-01"
   }
 }
@@ -1508,7 +1508,7 @@ curl -X POST http://localhost:8080/api/v1/commands \
   -d '{
     "command": "gpke.sperrung.bestaetigen",
     "marktrolle": "NB",
-    "malo_id": "51238696780",
+    "malo_id": "51238696012",
     "payload": { "note": "Zähler gesperrt, Plombe gesetzt" }
   }'
 
@@ -1520,7 +1520,7 @@ curl -X POST http://localhost:8080/api/v1/commands \
   -d '{
     "command": "gpke.sperrung.fehlgeschlagen",
     "marktrolle": "NB",
-    "malo_id": "51238696780",
+    "malo_id": "51238696012",
     "payload": { "reason": "Zutritt verweigert" }
   }'
 ```

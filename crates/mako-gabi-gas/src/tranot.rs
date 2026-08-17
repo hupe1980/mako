@@ -266,8 +266,8 @@ mod tests {
         let state = TransportNotificationState::New;
         let cmd = TransportNotificationCommand::ReceiveTransportNotification {
             synthetic_pid: 90051,
-            sender_eic: "21X000000001368S".to_owned(),
-            receiver_eic: "21X000000001369Q".to_owned(),
+            sender_eic: "21X000000001368W".to_owned(),
+            receiver_eic: "21X000000001369U".to_owned(),
             period_start: "2026-01-15T06:00:00+01:00".to_owned(),
             period_end: Some("2026-01-15T18:00:00+01:00".to_owned()),
             notification_type: TransportNotificationType::CapacityRestriction,
@@ -287,8 +287,8 @@ mod tests {
         let state = TransportNotificationState::New;
         let cmd = TransportNotificationCommand::ReceiveTransportNotification {
             synthetic_pid: 90041, // wrong PID
-            sender_eic: "21X000000001368S".to_owned(),
-            receiver_eic: "21X000000001369Q".to_owned(),
+            sender_eic: "21X000000001368W".to_owned(),
+            receiver_eic: "21X000000001369U".to_owned(),
             period_start: "2026-01-15T06:00:00+01:00".to_owned(),
             period_end: None,
             notification_type: TransportNotificationType::ForceMajeure,

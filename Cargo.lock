@@ -146,9 +146,9 @@ dependencies = [
 
 [[package]]
 name = "agentplane"
-version = "0.14.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aca6d1eebcbd80377f61891c800e7f1544f0536c0f7369535a850bef4f77815d"
+checksum = "5ec308279f62b36a37d8c4b77c84d5e1e014e41b81a51e56e5e23fa9bbe584e4"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -163,6 +163,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "hex",
+ "hmac 0.13.0",
  "jsonschema",
  "rand 0.9.5",
  "rand_chacha 0.9.0",
@@ -173,7 +174,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "thiserror 2.0.20",
  "time",
  "tokio",
@@ -6618,11 +6619,15 @@ dependencies = [
  "anyhow",
  "axum",
  "mako-engine",
+ "mako-events",
  "mako-mabis",
  "mako-service",
  "metering",
  "reqwest 0.13.4",
+ "rmcp",
+ "rubo4e",
  "rust_decimal",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "sqlx",
@@ -6731,6 +6736,7 @@ dependencies = [
  "edi-energy",
  "mako-engine",
  "metering",
+ "rubo4e",
  "rust_decimal",
  "serde",
  "serde_json",
@@ -7047,9 +7053,9 @@ dependencies = [
 
 [[package]]
 name = "metering"
-version = "0.17.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29bf71576d379a8b0c3eedb631947c81779fd1d62f7dc6103728f9ec9830b0c6"
+checksum = "6da36a18cf64f4152bd454004f51948b3eb45e837e78ed6bb713a01d5335e058"
 dependencies = [
  "rust_decimal",
  "serde",
@@ -7061,9 +7067,9 @@ dependencies = [
 
 [[package]]
 name = "meterstore"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8bc5f918ddffeaf0e8aeeff6066d2c70851de8b6c0e07ec9366949dc0a346320"
+checksum = "9d20c5bb89d6bb1a65c91632b2c1929c09ad7d2f7b617884dac748e37acb6a22"
 dependencies = [
  "arrow",
  "async-stream",
@@ -9833,9 +9839,9 @@ dependencies = [
 
 [[package]]
 name = "rubo4e"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3fdffa43e89b1ea6c927ddcba9f8e4961344fd1408556a2a9863136268c60e4"
+checksum = "ac6027ad9f0e21cf5e1ab6ca732154c6cd919f4f2cef906e9a8960079ebc5e77"
 dependencies = [
  "garde",
  "indexmap 2.14.0",
@@ -13746,6 +13752,7 @@ dependencies = [
  "jsonschema",
  "lopdf",
  "quick-xml 0.40.1",
+ "rubo4e",
  "serde",
  "serde_json",
  "time",

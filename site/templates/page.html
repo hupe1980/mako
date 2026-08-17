@@ -1,9 +1,8 @@
 {% extends "base.html" %}
-{% import "macros.html" as macros %}
 
 {% block content %}
 <div class="docs-layout">
-  {{ macros::sidebar(current=page.permalink) }}
+  {% set current = page.permalink %}{% include "partials/sidebar.html" %}
 
   <article class="doc">
     <div class="doc-breadcrumb">

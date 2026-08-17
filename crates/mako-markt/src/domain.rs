@@ -123,13 +123,16 @@ mod tests {
 
     #[test]
     fn malo_id_valid() {
-        // Known-good MaLo-ID (checksum 0)
-        assert!("51238696780".parse::<MaloId>().is_ok());
+        // Valid under the BDEW Anwendungshilfe check digit.
+        assert!("51238696012".parse::<MaloId>().is_ok());
     }
 
     #[test]
     fn malo_id_wrong_checksum() {
-        assert!("51238696781".parse::<MaloId>().is_err());
+        // `…782` fails whichever check-digit scheme the identifier crate
+        // applies, so this asserts "a wrong check digit is refused" rather
+        // than pinning one implementation's arithmetic.
+        assert!("51238696782".parse::<MaloId>().is_err());
     }
 
     #[test]

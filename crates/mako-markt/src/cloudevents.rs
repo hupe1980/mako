@@ -327,11 +327,11 @@ mod tests {
         let orig = MarktEvent::new(
             "9900000000001",
             mako_events::markt::VERSORGUNG_BELIEFERT,
-            "51238696780",
+            "51238696012",
             serde_json::json!({"lieferstatus": "Beliefert"}),
         )
         .with_extensions(EventExtensions {
-            marktmaloid: Some("51238696780".into()),
+            marktmaloid: Some("51238696012".into()),
             marktrole: Some("LF".into()),
             makopid: Some(55003),
             ..Default::default()

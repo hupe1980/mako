@@ -25,7 +25,7 @@ use makod::ingest_dispatcher::{EdifactIngestDispatcher, IngestOutcome};
 
 const ESA_MP_ID: &str = "9905550000005";
 const MSB_MP_ID: &str = "9900357000004";
-const MALO_ID: &str = "51238696780"; // 11-digit Marktlokations-ID
+const MALO_ID: &str = "51238696012"; // 11-digit Marktlokations-ID
 
 /// Build a `CommandsApiState` over the shared store for one market role.
 fn command_state(

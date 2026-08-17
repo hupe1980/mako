@@ -1,0 +1,35 @@
+{# Docs sidebar: the docs landing link, then every subsection (weight-ordered)
+   with its pages.
+
+   Included rather than called as a Tera macro, and deliberately: Zola 0.23
+   replaced Tera 1 macros with Tera 2 components, so `{% import %}` +
+   `macros::sidebar(..)` builds on 0.22 and fails on 0.23. `{% include %}`
+   inherits the caller's context in both, so this partial works on either.
+
+   The caller sets `current` to the active permalink before including. #}
+{% set docs = get_section(path="docs/_index.md") %}
+<nav class="sidebar" aria-label="Documentation">
+  <a class="sidebar-home {% if current == docs.permalink %}active{% endif %}" href="{{ docs.permalink | safe }}">
+    {{ docs.title }}
+  </a>
+  {% for sub_path in docs.subsections %}
+    {% set sub = get_section(path=sub_path) %}
+    {# `sub.permalink in current` rather than the `starting_with` test: Tera 1
+       takes that test positionally and Tera 2 requires a named argument, while
+       string containment parses the same in both. A subsection permalink can
+       only occur inside a page permalink as its prefix, so this is the same
+       question. #}
+    <details class="sidebar-group" {% if sub.permalink in current %}open{% endif %}>
+      <summary>{{ sub.title }}</summary>
+      <ul>
+        {% for p in sub.pages %}
+          <li>
+            <a href="{{ p.permalink | safe }}" {% if current == p.permalink %}class="active" aria-current="page"{% endif %}>
+              {{ p.title }}
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    </details>
+  {% endfor %}
+</nav>

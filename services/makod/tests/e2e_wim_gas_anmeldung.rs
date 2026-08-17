@@ -55,7 +55,7 @@ use makod::adapters::wim_gas_anmeldung_registry;
 
 const MSBN_ID: &str = "4012345000023"; // Neuer Messstellenbetreiber Gas (sender)
 const NB_ID: &str = "9900357000004"; // Netzbetreiber (receiver)
-const MALO_GAS_ID: &str = "52695662085"; // Marktlokations-ID (Gas)
+const MALO_GAS_ID: &str = "52695662076"; // Marktlokations-ID (Gas)
 const FV: &str = "FV2025-10-01";
 
 // ── UTILMD G 44042 wire fixture ────────────────────────────────────────────────
@@ -76,7 +76,7 @@ DTM+137:20250115:102'\
 RFF+Z13:WG-REF-001'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+Z19+52695662085::'\
+IDE+Z19+52695662076::'\
 UNT+8+MSG-001'\
 UNZ+1+WG-2025-001'";
 

@@ -26,7 +26,7 @@ use makod::ingest_dispatcher::{EdifactIngestDispatcher, IngestOutcome};
 
 const NB_MP_ID: &str = "9900357000004";
 const LF_MP_ID: &str = "4012345000023";
-const MALO: &str = "51238696780";
+const MALO: &str = "51238696012";
 
 /// ORDERS 17115 Sperrauftrag (LF → NB) carrying the MaLo in LOC.
 ///

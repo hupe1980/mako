@@ -180,7 +180,7 @@ use mako_engine::{ids::MaloId, types::MarktpartnerCode};
 let cmd = GasSperrungLfCommand::InitiateSperrung {
     pid: Pruefidentifikator::new(17115).expect("Sperrauftrag"),
     gnb_gln: MarktpartnerCode::new("9900357000004"),
-    location_id: MaloId::parse("50123456785").expect("valid MaLo"),
+    location_id: MaloId::parse("50123456721").expect("valid MaLo"),
     message_ref: MessageRef::from("MSG-2025-001"),
 };
 let out = process.execute(cmd).await?;

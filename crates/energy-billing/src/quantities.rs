@@ -253,8 +253,8 @@ pub struct SolarMeterInput {
 /// use rust_decimal::dec;
 ///
 /// let plan = vec![
-///     GgvNutzungsplanEntry { malo_id: "51238696780".into(), fraction: dec!(0.45) },
-///     GgvNutzungsplanEntry { malo_id: "51238696780".into(), fraction: dec!(0.35) },
+///     GgvNutzungsplanEntry { malo_id: "51238696012".into(), fraction: dec!(0.45) },
+///     GgvNutzungsplanEntry { malo_id: "51238696012".into(), fraction: dec!(0.35) },
 ///     GgvNutzungsplanEntry { malo_id: "51238696799".into(), fraction: dec!(0.20) },
 /// ];
 /// let total: rust_decimal::Decimal = plan.iter().map(|e| e.fraction).sum();
@@ -995,7 +995,7 @@ pub struct AbschlagsplanEntry {
 /// use time::macros::date;
 ///
 /// let plan = Abschlagsplan::monthly_uniform(
-///     "51238696780",
+///     "51238696012",
 ///     date!(2026-01-01),
 ///     12,
 ///     dec!(1440.00), // annual brutto estimate
@@ -1136,7 +1136,7 @@ mod abschlagsplan_tests {
     #[test]
     fn monthly_uniform_crosses_year_boundary() {
         let plan = Abschlagsplan::monthly_uniform(
-            "51238696782",
+            "51238696129",
             date!(2025 - 07 - 01),
             12,
             dec!(1200.00),

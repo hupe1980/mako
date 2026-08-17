@@ -2,10 +2,10 @@
   "sparte": "STROM",
   "data": {
     "_typ": "MARKTLOKATION",
-    "marktlokationsId": "51238696780",
+    "marktlokationsId": "51238696012",
     "sparte": "STROM",
     "netzebene": "NSP",
-    "bilanzierungsgebiet": "11YN100000015097",
+    "bilanzierungsgebiet": "11YN10000001509R",
     "netzgebietsnr": "DE-D-NB9900357000004",
     "lokationsadresse": {
       "_typ": "ADRESSE",

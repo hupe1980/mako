@@ -409,7 +409,7 @@ mod tests {
             "makopid": 55001,
             "subject": "550e8400-e29b-41d4-a716-446655440000",
             "data": {
-                "malo_id": "51238696780",
+                "malo_id": "51238696012",
                 "new_supplier": "9900357000004",
                 "grid_operator": "9900000000001",
                 "bilanzierungsgebiet": "11YF-VATTENFALL-2",
@@ -420,7 +420,7 @@ mod tests {
         });
         let payload = AnmeldungPayload::parse(&event).expect("should parse");
         assert_eq!(payload.pid, 55001);
-        assert_eq!(payload.malo_id, "51238696780");
+        assert_eq!(payload.malo_id, "51238696012");
         assert_eq!(payload.new_supplier_gln, "9900357000004");
         assert_eq!(payload.grid_operator_gln, "9900000000001");
         assert_eq!(
@@ -445,7 +445,7 @@ mod tests {
             "makopid": 55001,
             "subject": "550e8400-e29b-41d4-a716-446655440000",
             "data": {
-                "malo_id": "51238696780",
+                "malo_id": "51238696012",
                 "new_supplier": "9900357000004",
                 "grid_operator": "9900000000001",
                 "process_date": "20261001",
@@ -485,7 +485,7 @@ mod tests {
         let event = serde_json::json!({
             "makopid": 55008, // E_0624 — LF PID, not NB
             "subject": "550e8400-e29b-41d4-a716-446655440002",
-            "data": { "malo_id": "51238696780", "new_supplier": "99x", "grid_operator": "99y", "process_date": "20261001" }
+            "data": { "malo_id": "51238696012", "new_supplier": "99x", "grid_operator": "99y", "process_date": "20261001" }
         });
         assert!(AnmeldungPayload::parse(&event).is_none());
     }
@@ -495,11 +495,11 @@ mod tests {
     #[test]
     fn accept_command_strom() {
         assert_eq!(
-            lieferbeginn_accept_command(55001, "51238696780"),
+            lieferbeginn_accept_command(55001, "51238696012"),
             "gpke.lieferbeginn.bestaetigen"
         );
         assert_eq!(
-            lieferbeginn_accept_command(55016, "51238696780"),
+            lieferbeginn_accept_command(55016, "51238696012"),
             "gpke.lieferbeginn.bestaetigen"
         );
     }
@@ -507,7 +507,7 @@ mod tests {
     #[test]
     fn accept_command_gas() {
         assert_eq!(
-            lieferbeginn_accept_command(44001, "51238696780"),
+            lieferbeginn_accept_command(44001, "51238696012"),
             "geli.lieferbeginn.bestaetigen"
         );
     }
@@ -515,7 +515,7 @@ mod tests {
     #[test]
     fn reject_command_strom() {
         assert_eq!(
-            lieferbeginn_reject_command(55001, "51238696780"),
+            lieferbeginn_reject_command(55001, "51238696012"),
             "gpke.lieferbeginn.ablehnen"
         );
     }
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn reject_command_gas() {
         assert_eq!(
-            lieferbeginn_reject_command(44001, "51238696780"),
+            lieferbeginn_reject_command(44001, "51238696012"),
             "geli.lieferbeginn.ablehnen"
         );
     }
@@ -538,7 +538,7 @@ mod tests {
             "makopid": 55001,
             "subject": "550e8400-e29b-41d4-a716-446655440003",
             "data": {
-                "malo_id": "51238696780",
+                "malo_id": "51238696012",
                 "new_supplier": own_mp_id, // affiliate!
                 "grid_operator": "9900000000001",
                 "process_date": "20261001"

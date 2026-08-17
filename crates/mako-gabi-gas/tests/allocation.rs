@@ -34,8 +34,8 @@ fn make_process() -> Process<GaBiGasAllocationWorkflow, InMemoryEventStore> {
 fn receive_alocat(synthetic_pid: u32, gas_day: &str) -> AllocationCommand {
     AllocationCommand::ReceiveAlocat {
         synthetic_pid,
-        sender_eic: "11XFNB-SENDTEST1".to_owned(),
-        receiver_eic: "11XBKV-RECVTEST2".to_owned(),
+        sender_eic: "11XFNB-SENDTESTE".to_owned(),
+        receiver_eic: "11XBKV-RECVTEST8".to_owned(),
         gas_day: GasDay::parse(gas_day).expect("valid gas day"),
         version: AllocationVersion::Initial,
         allocated_quantity: None,
@@ -52,8 +52,8 @@ fn receive_alocat_versioned(
 ) -> AllocationCommand {
     AllocationCommand::ReceiveAlocat {
         synthetic_pid,
-        sender_eic: "11XFNB-SENDTEST1".to_owned(),
-        receiver_eic: "11XBKV-RECVTEST2".to_owned(),
+        sender_eic: "11XFNB-SENDTESTE".to_owned(),
+        receiver_eic: "11XBKV-RECVTEST8".to_owned(),
         gas_day: GasDay::parse(gas_day).expect("valid gas day"),
         version,
         allocated_quantity: None,
@@ -280,8 +280,8 @@ async fn a_closed_window_enqueues_the_alocat_missing_notification() {
     // This string is the contract with `map_message_type_to_erp_event` in
     // makod; changing it silently drops the notification on the floor.
     assert_eq!(notice.message_type.as_ref(), "GabiFinalAllocationOverdue");
-    assert_eq!(notice.recipient.as_ref(), "11XBKV-RECVTEST2");
-    assert_eq!(notice.payload["sender_eic"], "11XFNB-SENDTEST1");
+    assert_eq!(notice.recipient.as_ref(), "11XBKV-RECVTEST8");
+    assert_eq!(notice.payload["sender_eic"], "11XFNB-SENDTESTE");
     assert_eq!(
         notice.payload["deadline_label"],
         FINAL_ALOCAT_DEADLINE_LABEL

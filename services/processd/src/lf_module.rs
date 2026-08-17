@@ -365,7 +365,7 @@ mod tests {
 
     fn make_vs(status: LieferStatus, lf_mp_id: Option<&str>) -> VersorgungsStatusRecord {
         VersorgungsStatusRecord {
-            malo_id: "51238696780".parse::<MaloId>().unwrap(),
+            malo_id: "51238696012".parse::<MaloId>().unwrap(),
             lieferstatus: status,
             lf_mp_id: lf_mp_id.map(ToOwned::to_owned),
             lf_mp_id_next: None,
@@ -385,7 +385,7 @@ mod tests {
     fn make_payload(scenario: E0624Scenario) -> E0624Payload {
         E0624Payload {
             process_id: Uuid::new_v4(),
-            malo_id: "51238696780".to_owned(),
+            malo_id: "51238696012".to_owned(),
             initiating_nb_gln: "9900000000001".to_owned(),
             lieferende_date: None,
             scenario,

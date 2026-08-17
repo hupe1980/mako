@@ -1,6 +1,6 @@
 +++
 title = "agentd Operator Guide"
-description = "agentd operator guide: 28 declarative specialist manifests run on the agentplane durable runtime. Journal-backed runs, a four-eyes worklist for mutating calls, per-MaLo cases as the erasure unit, role-scoped builds."
+description = "agentd operator guide: 28 specialist manifests on the agentplane durable runtime — 26 tool-calling, one planned, one model-free coded skill. Typed result schemas on all 28, MCP prompts granted as knowledge, memory bound per Marktlokation (operator-wide only where argued), journal-backed runs, a four-eyes worklist for mutating calls, per-MaLo cases as the erasure unit, role-scoped builds."
 weight = 38
 [extra]
 mermaid = true
@@ -74,7 +74,7 @@ The second property has a consequence that decides how a specialist is built:
 > resolves itself: they arrive carrying the run input's own labels, having never
 > passed through a model's context.
 
-So mako's 27 advisory specialists declare no mutating grant and no `oversight`
+So mako's 26 advisory specialists declare no mutating grant and no `oversight`
 block; both absences are the same fact, and `cargo xtask check-tool-grants`
 refuses a manifest that claims otherwise. Regaining dispatch for a specialist
 means converting it to `planned` — the shape `gabi-gas-agent` already has — not
@@ -159,8 +159,34 @@ in every deployment.
 
 ## Human oversight
 
-Declaring an approver is not the same as being able to approve. The worklist is
-agentplane's own operator surface, mounted at `/api/v1/oversight`:
+A person enters an agent's loop in one of two places, and the difference is
+whether the agent is about to *act* or has finished *reporting*.
+
+| | **Approval** — in front of the answer | **Triage** — beside the answer |
+|---|---|---|
+| Declared as | `approval: tools-only` + `requires_approval` on the grant | `approval: none` + `oversight.triage` rules |
+| What waits | the run suspends before the tool call | nothing; the run completes and returns |
+| Who is asked | `oversight.approvers` | the rule's `audience` |
+| When it fires | reaching a mutating tool | the answer matches a predicate over `output.schema` |
+| Used by | `gabi-gas-agent`, the one specialist that can dispatch | 14 specialists, on a terminal finding |
+
+Triage exists because most specialists **cannot** act: a `tool-calling` agent's
+arguments come out of a model completion, which the taint gate refuses at a
+mutating sink, so gating its answer would gate nothing while suspending a run
+per finding. A triage rule changes nothing about the run — same answer, same
+validation, same memories — and its only effect is a worklist row: a §40a EnWG
+billing violation, an EEG breach accruing penalty per month, a §20 parity
+deviation, a MaLo with no grid assignment, arrears at the §41f threshold.
+
+That asymmetry is deliberate: a triage rule may carry a predicate, `approval`
+may not. Reporting is the one place a declaration can carry a condition without
+becoming control flow. Every predicate `path` is typed against that agent's own
+`output.schema` at parse time, so a rule that could never fire is refused rather
+than reading in review exactly like one that works — and a specialist whose
+schema can report a terminal finding with nobody to tell fails a test.
+
+The worklist itself is agentplane's operator surface, mounted at
+`/api/v1/oversight`:
 
 | Route | The question it answers |
 |---|---|
@@ -185,6 +211,14 @@ convenience:
   all. Every other dev-mode relaxation in mako accepts an unauthenticated request
   and warns; an approval is the one place where that is a forged signature on a
   regulated dispatch rather than a relaxation.
+- **Every role a manifest names can actually reach the worklist.** Eligibility
+  is two layers: Cedar decides who may use the surface at all, the task store
+  narrows per task by `candidate_roles` — a `metering` reviewer who passes Cedar
+  still cannot decide `gabi-gas-agent`'s dispatch. The Cedar set admits the
+  union of every `oversight.approvers` entry and every `triage[].audience`, and
+  a test parses the manifests and fails when one names a role the policy does
+  not admit. Without that guard the two drift apart silently, and a worklist row
+  whose audience is refused at the door is worse than no row at all.
 - **Every route is authorized, not just authenticated.** Each one asks the
   plane's Cedar policy under an `api:` action — reading, claiming and deciding
   are separate verbs, and `POST /events` (the machine door for mako's own
@@ -262,15 +296,16 @@ Re-validating is also why the promotion is honest rather than convenient: an
 that cannot carry a payload is the whole justification, and it is checked at the
 boundary rather than assumed from an emitter's good behaviour.
 
-### Two shapes, and what each buys
+### Three shapes, and what each buys
 
-| | `tool-calling` (27 specialists) | `planned` (`gabi-gas-agent`) |
-|---|---|---|
-| Input | the whole payload, per-field labels | only the re-validated identifiers |
-| Control flow | the model chooses each next call | fixed before anything untrusted is read |
-| Untrusted material | read by the privileged model | read by the **quarantined** model in a `parse` step |
-| May dispatch a mutating call | **no** — model-written arguments are untrusted, and the taint gate refuses them | yes — `$input/…` references keep the input's labels |
-| Cost | the injection surface is real | cannot react to what it discovers mid-flight |
+| | `tool-calling` (26) | `planned` (`gabi-gas-agent`) | **coded skill** (`deadline-alert-agent`) |
+|---|---|---|---|
+| Input | the whole payload, per-field labels | only the re-validated identifiers | the whole payload, per-field labels |
+| Control flow | the model chooses each next call | fixed before anything untrusted is read | Rust |
+| Untrusted material | read by the privileged model | read by the **quarantined** model in a `parse` step | never read by a model |
+| May dispatch a mutating call | **no** — model-written arguments are untrusted, and the taint gate refuses them | yes — `$input/…` references keep the input's labels | no grant declared |
+| Model spend | up to the token budget, per event | one privileged call plus parses | **zero** — `models: {}`, and no token ceiling at all |
+| Cost | the injection surface is real | cannot react to what it discovers mid-flight | only fits work that is a total function of its inputs |
 
 A `planned` specialist makes one privileged call that reads its trusted input and
 emits a plan: which granted tools, in what order, with which arguments. The
@@ -286,10 +321,133 @@ model, under a declared schema and an extraction-only instruction. The only thin
 that step can say out of band is *not enough information*, which fails it rather
 than letting a guess stand.
 
-The other 27 declare **no quarantined model**, and that is deliberate. Under
-`tool-calling` with no memory formation nothing would ever select it, so
-declaring one would read as dual-model isolation while every call went to the
-privileged model. agentplane refuses that outright.
+#### The third shape: no model at all
+
+`deadline-alert-agent` declares `models: {}` — agentplane's spelling of *no
+inference, on purpose*, the thing that distinguishes a rules-only agent from one
+whose model wiring somebody forgot — and no `execution` block, so its behaviour
+is a registered skill in `agentd::skills`.
+
+Its whole procedure is a subtraction and three comparisons: read `deadline_at`
+and `partner_mp_id` from what `obsd` returned, subtract from the journaled
+clock, classify — `BREACH` past the Frist, `CRITICAL` under 30 minutes,
+`WARNING` under 2 hours, `COMPLIANT` beyond. A model would apply those bands at
+a per-event cost, under BNetzA monitoring, with no way to test *"is 29 minutes
+CRITICAL?"* except by calling it. In Rust the bands are four unit tests at every
+boundary, running without a network.
+
+**The governance is identical.** The tool call is still a journaled effect
+through the policy gate; the clock read is still an effect, so a replay
+classifies against the instant the original run saw; the manifest still binds
+the grants, ceilings, egress and digest. Governance was never what a model was
+buying — only judgement is.
+
+Least privilege is also legible here in a way it cannot be for a model: the
+skill calls exactly one tool, so it grants exactly one.
+
+A specialist belongs in `skills/` when its procedure is a total function of what
+the tools return — arithmetic, thresholds, field extraction, set logic. It does
+**not** when the task is judgement over open-ended input: a counterparty's
+free-text objection, an unfamiliar failure, an operator narrative. Those keep
+their models.
+
+> [!NOTE]
+> A model-free agent declares **no** `max_tokens`. A zero ceiling reads as
+> parsimony but means "exhausted before the first effect of any kind" — the
+> tool call included. The ceilings that bind it are `max_steps`, `max_effects`
+> and `max_wallclock_secs`.
+
+### Every answer is a shape
+
+All 28 specialists declare `output.schema`, and none states its result contract
+in prose. A fenced `## OUTPUT FORMAT` block inside a prompt is a contract in the
+one place nothing can enforce it: the model may or may not honour it, every
+consumer becomes a parser of free text, and a reworded heading is a silent
+break. As a schema the model is held to it, the runtime folds it into the effect
+key — so editing the schema reports divergence on replay rather than
+reinterpreting a stored answer — and it is covered by the manifest digest.
+
+Every schema is also **closed** (`additionalProperties: false`, pinned by a
+test): the model cannot pad the answer with fields nobody declared, so the
+declared shape is the whole shape — which also keeps a triage rule's `path`
+total over what the model can actually return.
+
+### Knowledge is granted, not copied
+
+mako's MCP servers publish **50 step-by-step prompts** for their own procedures.
+Not one manifest reached a single one; each specialist carried a hand-typed
+paraphrase in `constraints`, so the server's prompt and the agent's copy drifted
+apart the first time either changed — and the copy was what the model read.
+
+26 specialists now declare `context.prompts` against their own service. A context
+grant is not a tool grant: reading a prompt authorises no action, but it does
+cross a trust and data-egress boundary, so it is declared where a reviewer sees
+it. The two that grant none need none — one has no model, the other's control
+flow is fixed before anything untrusted is read.
+
+### Memory, scoped to the party the run is about
+
+`memory_formation.subject` is the unit `forget_subject` erases, so the scope of
+a subject is a GDPR decision. Seven specialists form memories, in two shapes:
+**five bind `$correlation/malo`** (`billing-anomaly`, `grid-anomaly`,
+`meter-data`, `msb-history`, `payment-reconciliation`) — the subject resolves
+per run to the Marktlokation the run was correlated on, so one customer's facts
+never surface in another's run and an Art. 17 erasure destroys exactly one
+person's pile — and **two carry a literal** (`compliance-agent`,
+`regulatory-reporting-agent`) because their subject genuinely is the operator
+itself: parity posture and BNetzA KPI history are one pile for every run by
+nature.
+
+A lint holds the line: a literal subject is refused unless it is one of the two
+operator-wide scopes, and a binding to a correlation namespace the labeller does
+not produce is refused too. A binding that cannot resolve **fails the run**
+rather than falling back — a memory filed under the wrong scope is worse than no
+memory. The other 21 specialists have no memory block, and the absence is argued
+in the files.
+
+The memory store is one of the seven seams the single backend supplies, wired at
+build: a plane that registers a memory-forming manifest without one refuses to
+start rather than failing after a run has already paid for its model calls.
+
+Formation reads the agent's own answer — model output, therefore untrusted — so
+every remembering specialist declares a **quarantined** model to do it. That is
+the one place besides a plan's `parse` steps where the declarative tier points a
+model at untrusted-derived content, and it is what makes the second model role
+mean something. Every other specialist declares no quarantined model on purpose:
+nothing would select it, so the declaration would read as dual-model isolation
+while one model did all the work — which agentplane refuses at parse.
+
+### Nobody delegates
+
+All 28 declare `topology: { mode: single, role: specialist }`. `mode: single` is
+one agent, one context, many tools — the inter-agent failure surface is
+structurally absent, which matters because MAST measures inter-agent misalignment
+at **36.9 %** of observed multi-agent failures. mako routes in Rust, so no agent
+hands off to another and none has the authority to. agentplane refuses
+`mode: single` with `role: orchestrator` outright: an orchestrator with nobody to
+orchestrate is a claim the file cannot back.
+
+## Build-time guards
+
+Four checks run in CI, and each closes a failure that is silent at runtime.
+
+| Guard | Refuses |
+|---|---|
+| `cargo xtask check-tool-grants` | A grant naming a tool no MCP server declares; a `mutates` flag that disagrees with the server's own `read_only_hint`; a mutating grant on a `tool-calling` agent, which could never dispatch it |
+| `cargo xtask check-prompt-tools` | A *procedure* instructing the model to call a tool the manifest never granted |
+| `cargo xtask check-wire-timestamps` | A `time` value reaching a JSON wire as its component array instead of RFC 3339 |
+| `plane::` unit tests | An unsubscribed specialist, an open answer schema, a memory subject that pools customers, a terminal finding no triage rule reports, a role a manifest names that the policy set does not admit |
+
+The prompt guard is the least obvious and the most necessary. agentplane reports
+an unknown tool name back to the model as a failed call rather than ending the
+run — deliberately, so the model can correct itself and never receives a tool it
+merely named. The consequence is that a procedure naming an ungranted tool does
+not crash: the model asks, is refused, improvises, and burns turns while the step
+silently does not happen. The check flags an *instruction* (`Call …` / `Use …`
+followed by a backticked `snake_case` name) that is not in that agent's `tools:`
+list, and deliberately ignores a name merely mentioned in prose — explaining that
+"without a valid NB contract, processd's `check_anmeldung` would fail check 5" is
+documentation, and flagging it would mean rewriting correct text.
 
 ---
 
@@ -391,7 +549,7 @@ discovery.
 | Specialist | Capability | Shape | Subscribes to |
 |---|---|---|---|
 | `mako-agent` | `mako` | `tool-calling` | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.mako.aperak.*` |
-| `deadline-alert-agent` | `deadline.alert` | `tool-calling` | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.obs.deadline.approaching` |
+| `deadline-alert-agent` | `deadline.alert` | **coded skill** (no model) | `de.mako.process.failed`, `de.mako.aperak.timeout`, `de.obs.deadline.approaching` |
 | `billing-agent` | `billing` | `tool-calling` | `de.invoic.receipt.disputed`, `de.accounting.mahnung.issued` |
 | `netzbilanz-agent` | `netzbilanz` | `tool-calling` | `de.netzbilanz.invoic.drafted`, `de.netzbilanz.invoic.dispatched`, `de.netzbilanz.invoic.dispatch-overdue` |
 | `invoice-reconciliation-agent` | `invoice.reconciliation` | `tool-calling` | `de.invoic.payment.overdue`, `de.invoic.receipt.*` |
@@ -413,7 +571,7 @@ discovery.
 | `portald-agent` | `portald` | `tool-calling` | `de.billing.rechnung.erstellt`, `de.eeg.anlage.foerderung-auslaufend`, `de.accounting.mahnung.issued`, `de.vertrag.*` |
 | `regulatory-reporting-agent` | `regulatory.reporting` | `tool-calling` | _manual / scheduled_ |
 | `replacement-value-agent` | `replacement.value` | `tool-calling` | `de.messwert.reading.quality.warning`, `de.mako.process.completed` |
-| `mabis-syncd-agent` | `mabis.syncd` | `tool-calling` | `de.messwert.reading.quality.warning` |
+| `mabis-syncd-agent` | `mabis.syncd` | `tool-calling` | `de.mabis.submission.failed`, `de.mabis.korrekturbedarf.opened`, `de.messwert.reading.quality.warning` |
 | `smgw-diagnostics-agent` | `smgw.diagnostics` | `tool-calling` | `de.messwert.cls.compliance-issue`, `de.messwert.smgw.cert.expiry-warning`, `de.messwert.reading.quality.warning`, `de.messwert.reading.direct.stored`, `de.mako.process.initiated`, `de.markt.geraet.konfiguration.updated` |
 | `vpp-billing-agent` | `vpp.billing` | `tool-calling` | `de.vpp.dispatch.confirmed`, `de.vpp.settlement.berechnet` |
 | `gabi-gas-agent` | `gabi.gas.balancing` | `planned` | `de.gabi.imbalance.*`, `de.gabi.alocat.missing`, `de.gabi.nomination.*`, `de.netzbilanz.invoic.drafted` |
@@ -517,11 +675,14 @@ enable_all = true
 # Every server a manifest grants a tool on must appear here. One that is missing
 # is a startup failure, not a specialist that fails at its first tool call.
 [mcp_servers]
-makod    = "http://makod:8080/mcp"
-marktd   = "http://marktd:8180/mcp"
-billingd = "http://billingd:9280/mcp"
-edmd     = "http://edmd:8380/mcp"
-obsd     = "http://obsd:8480/mcp"
+makod       = "http://makod:8080/mcp"
+marktd      = "http://marktd:8180/mcp"
+billingd    = "http://billingd:9280/mcp"
+edmd        = "http://edmd:8380/mcp"
+obsd        = "http://obsd:8480/mcp"
+# A key may not contain `-` (agentplane reserves hyphens in tool wire names),
+# so a hyphenated service is keyed with an underscore.
+mabis_syncd = "http://mabis-syncd:8880/mcp"
 # ... every MCP-exposing service
 mcp_api_key = "env:AGENTD_MCP_API_KEY"
 
@@ -579,7 +740,7 @@ curl -X POST http://agentd:9580/webhook \
     "type": "de.billing.rechnung.erstellt",
     "source": "urn:mako:billingd:tenant:9900357000004",
     "id": "123e4567-e89b-12d3-a456-426614174000",
-    "data": { "malo_id": "51238696780", "record_id": "..." }
+    "data": { "malo_id": "51238696012", "record_id": "..." }
   }'
 ```
 
@@ -591,7 +752,7 @@ curl -X POST http://agentd:9580/api/v1/run \
   -d '{
     "agent": "billing-anomaly-agent",
     "event_type": "manual.billing.dispute-analysis",
-    "input": { "malo_id": "51238696780", "note": "Invoice R2026-001 disputed" }
+    "input": { "malo_id": "51238696012", "note": "Invoice R2026-001 disputed" }
   }'
 ```
 
@@ -629,12 +790,35 @@ it is waiting for a human decision or an inbound event.
 
 ---
 
-## Audit webhook
+## Decision delivery
 
-Every decision is pushed to the ring buffer and, when configured, POSTed to an
-external sink:
+Every decision lands in the in-memory ring buffer that `GET /api/v1/decisions`
+serves. When a destination is configured it is *also* delivered durably, and
+that path is the one to depend on: **the journal is the outbox.**
+
+```mermaid
+graph LR
+    ADM["Run admitted"] -->|"registration"| REG[("push registration")]
+    RUN["Run reaches a<br/>terminal state"] --> JRN[("journal record")]
+    JRN --> W["Delivery worker"]
+    REG --> W
+    W -->|"POST + X-Mako-Signature"| RX["ERP / receiver"]
+    RX -->|"2xx"| CUR["cursor advances"]
+    RX -.->|"non-2xx"| W
+```
+
+The registration is made at **admission**, so no run exists unwatched, and the
+cursor advances **only on HTTP 2xx**. A crash between the POST and the cursor
+write re-delivers rather than loses; a receiver that is down for a deploy is
+caught up afterwards instead of having missed everything; one that has gone away
+is abandoned after the retry ceiling and reported, because a registration nobody
+removes is a queue that only grows. This is the same persist-before-dispatch
+discipline every other mako service applies to its transactional outbox.
 
 ```toml
 audit_webhook_url = "https://erp.example/hooks/agent-decisions"
-audit_hmac_secret = "env:AGENTD_AUDIT_HMAC"  # X-Mako-Signature (HMAC-SHA256)
+# X-Mako-Signature: sha256=HMAC(secret, body) over the exact bytes posted, the
+# convention every mako receiver already verifies. A signature authenticates the
+# bytes, not their freshness — the receiver deduplicates on the CloudEvent id.
+audit_hmac_secret = "env:AGENTD_AUDIT_HMAC"
 ```

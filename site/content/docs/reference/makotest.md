@@ -16,7 +16,7 @@ implementation.
 ```python
 from makotest import malo_from_base, deadline_at_werktage, validate_edifact
 
-malo_from_base("5123869678")    # '51238696780' — BDEW check digit applied
+malo_from_base("5123869678")    # '51238696012' — BDEW check digit applied
 deadline_at_werktage("2026-12-30T09:00:00Z", 1)
 # '2027-01-04T17:00:00+01:00' — one Werktag, five calendar days
 
@@ -73,13 +73,13 @@ path. Generate them instead:
 ```python
 from makotest import malo_from_base, malo_check_digit, malo_is_valid, melo_is_valid
 
-malo_from_base("5123869678")     # '51238696780'
+malo_from_base("5123869678")     # '51238696012'
 malo_check_digit("5123869678")   # 0
-malo_is_valid("51238696780")     # True
+malo_is_valid("51238696012")     # True
 malo_is_valid("51238696781")     # False — wrong check digit
 
 melo_is_valid("DE00014559929E00856996N5139699L01")   # True (33 chars)
-melo_is_valid("51238696780")                         # False — that is a MaLo
+melo_is_valid("51238696012")                         # False — that is a MaLo
 ```
 
 ---

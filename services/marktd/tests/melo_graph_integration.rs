@@ -30,8 +30,8 @@ use sqlx::PgPool;
 
 const SCHEMA: &str = include_str!("../migrations/0001_initial.sql");
 const TENANT: &str = "9900357000004";
-const MALO_A: &str = "51238696780";
-const MALO_B: &str = "10001234567";
+const MALO_A: &str = "51238696012";
+const MALO_B: &str = "10001234558";
 const MELO: &str = "DE0001234567890123456789012345678";
 
 async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
@@ -833,7 +833,7 @@ async fn tranche_patch_stammdaten_updates_typed_columns() {
             &tranche_id,
             TENANT,
             &TrancheStammdatenPatch {
-                bilanzierungsgebiet: Some("11YW-EXAMPLE-BG1".to_owned()),
+                bilanzierungsgebiet: Some("11YW-EXAMPLE-BGG".to_owned()),
                 netzebene: Some("NSP7".to_owned()),
                 energierichtung: Some("ENTNAHME".to_owned()),
             },
@@ -845,7 +845,7 @@ async fn tranche_patch_stammdaten_updates_typed_columns() {
     let after = repo.find(&tranche_id, TENANT).await.unwrap().unwrap();
     assert_eq!(
         after.bilanzierungsgebiet.as_deref(),
-        Some("11YW-EXAMPLE-BG1")
+        Some("11YW-EXAMPLE-BGG")
     );
     assert_eq!(after.netzebene.as_deref(), Some("NSP7"));
     assert_eq!(after.energierichtung.as_deref(), Some("ENTNAHME"));

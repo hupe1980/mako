@@ -13,6 +13,10 @@ categories   = ["data-structures"]
 [dependencies]
 mako-engine  = { workspace = true }
 metering     = { workspace = true, features = ["serde"] }
+# The validated BDEW/ENTSO-E identifier types. A Bilanzkreis (EIC type `X`)
+# and a Bilanzierungsgebiet (type `Y`) are told apart here rather than by
+# convention — MSCONS carries both as free text.
+rubo4e       = { workspace = true }
 rust_decimal = { workspace = true }
 serde        = { workspace = true }
 serde_json   = { workspace = true }

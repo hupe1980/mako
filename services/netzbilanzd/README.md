@@ -81,7 +81,7 @@ curl -X POST http://localhost:8680/api/v1/billing/run \
     "due_date": "2026-03-03",
     "rechnungsnummer_prefix": "NNE-2026-01",
     "positions": [{
-      "malo_id": "51238696780",
+      "malo_id": "51238696012",
       "period_from": "2026-01-01",
       "period_to": "2026-01-31",
       "billing_type": "nne_strom",

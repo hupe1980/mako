@@ -23,10 +23,12 @@ path = "src/main.rs"
 anyhow           = { workspace = true }
 axum             = { version = "0.8" }
 mako-engine      = { workspace = true }
+mako-events      = { workspace = true }
 mako-mabis       = { path = "../../crates/mako-mabis" }
 mako-service     = { workspace = true, features = ["otel", "oidc", "cedar"] }
 metering         = { workspace = true, features = ["serde"] }
 reqwest          = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+rubo4e           = { workspace = true }
 rust_decimal     = { workspace = true }
 serde            = { workspace = true }
 serde_json       = { workspace = true }
@@ -40,3 +42,5 @@ toml             = { version = "0.8", default-features = false, features = ["par
 tower-http       = { version = "0.6" }
 tracing          = "0.1"
 uuid             = { workspace = true }
+rmcp             = { workspace = true }
+schemars         = { workspace = true }

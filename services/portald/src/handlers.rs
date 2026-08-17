@@ -1007,7 +1007,7 @@ mod tests {
     /// Verify the Lastgang URL includes from/to query params when both are set.
     #[test]
     fn lastgang_url_with_date_range() {
-        let malo_id = "51238696780";
+        let malo_id = "51238696012";
         let from = "2026-01-01";
         let to = "2026-01-31";
         let path = format!("/api/v1/lastgang/{malo_id}?from={from}&to={to}");
@@ -1035,26 +1035,26 @@ mod tests {
     /// Verify MaLo ID path formatting is correct for all endpoints.
     #[test]
     fn portal_path_formats_are_correct() {
-        let malo_id = "51238696780";
+        let malo_id = "51238696012";
         assert_eq!(
             format!("/api/v1/accounts/{malo_id}/balance"),
-            "/api/v1/accounts/51238696780/balance"
+            "/api/v1/accounts/51238696012/balance"
         );
         assert_eq!(
             format!("/api/v1/accounts/{malo_id}/kontoauszug"),
-            "/api/v1/accounts/51238696780/kontoauszug"
+            "/api/v1/accounts/51238696012/kontoauszug"
         );
         assert_eq!(
             format!("/api/v1/accounts/{malo_id}/vorauszahlung"),
-            "/api/v1/accounts/51238696780/vorauszahlung"
+            "/api/v1/accounts/51238696012/vorauszahlung"
         );
         assert_eq!(
             format!("/api/v1/versorgung/{malo_id}"),
-            "/api/v1/versorgung/51238696780"
+            "/api/v1/versorgung/51238696012"
         );
         assert_eq!(
             format!("/api/v1/anlagen?malo_id={malo_id}"),
-            "/api/v1/anlagen?malo_id=51238696780"
+            "/api/v1/anlagen?malo_id=51238696012"
         );
     }
 

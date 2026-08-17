@@ -16,10 +16,10 @@ End-to-end demonstration of **EEG feed-in settlement** using `einsd` (plant regi
 
 ```
 ERP → PUT /api/v1/anlagen/TR0000000001          Register 9.8 kWp solar plant
-ERP → POST /api/v1/meter-reads/rlm/17835382035   Push June 2026 Einspeisemenge to edmd
+ERP → POST /api/v1/meter-reads/rlm/17835382008   Push June 2026 Einspeisemenge to edmd
 ERP → POST /api/v1/anlagen/TR0000000001/settle/2026/6
                                                   Trigger EEG settlement
-einsd → GET {edmd}/api/v1/billing-period/17835382035   Auto-fetch Einspeisemenge
+einsd → GET {edmd}/api/v1/billing-period/17835382008   Auto-fetch Einspeisemenge
 einsd → calculates Vergütung (8.11 ct/kWh × ~2880 kWh ≈ EUR 233.57)
 einsd → issues the §14 UStG Gutschrift (BO4E Rechnung + USt breakdown)
                                                   stored in settlement_receipts.rechnung_json
@@ -87,12 +87,12 @@ Expected output:
 ```
 ✓ einsd is ready
 ✓ edmd is ready
-✓ PUT /api/v1/malo/17835382035 → 201
+✓ PUT /api/v1/malo/17835382008 → 201
 ✓ PUT /api/v1/anlagen/TR0000000001 → 201  (plant registered)
 ✓ GET /api/v1/anlagen/TR0000000001 → status=aktiv  verguetungssatz_ct=8.11 ct/kWh
-✓ POST /api/v1/meter-reads/rlm/17835382035 → 200  stored=96 intervals
-✓ POST /api/v1/meter-reads/rlm/17835382035 → 200  (29 daily buckets, 2784 kWh)
-✓ GET /api/v1/billing-period/17835382035 → arbeitsmenge_kwh=2880.0
+✓ POST /api/v1/meter-reads/rlm/17835382008 → 200  stored=96 intervals
+✓ POST /api/v1/meter-reads/rlm/17835382008 → 200  (29 daily buckets, 2784 kWh)
+✓ GET /api/v1/billing-period/17835382008 → arbeitsmenge_kwh=2880.0
 ✓ POST /settle/2026/6 → 200
       settlement_eur=233.57  einspeisemenge_kwh=2880.0  status=calculated
 ✓ CloudEvent received: type=de.eeg.verguetung.berechnet
@@ -106,7 +106,7 @@ All EEG billing smoke tests passed.
 |---|---|
 | `http://localhost:9180/api/v1/anlagen/TR0000000001` | Plant registration details |
 | `http://localhost:9180/api/v1/anlagen/TR0000000001/settlements?year=2026&month=6` | Settlement receipt |
-| `http://localhost:8380/api/v1/billing-period/17835382035?from=2026-06-01&to=2026-07-01` | edmd billing period aggregate |
+| `http://localhost:8380/api/v1/billing-period/17835382008?from=2026-06-01&to=2026-07-01` | edmd billing period aggregate |
 | `http://localhost:9180/mcp` | einsd MCP server (18 tools) |
 | `http://localhost:8380/mcp` | edmd MCP server (15 tools) |
 | `http://localhost:8000/events` | ERP webhook event log |

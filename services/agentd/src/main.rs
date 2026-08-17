@@ -145,6 +145,43 @@ impl Daemon for Agentd {
         // `enable` name that matches nothing compiled in refuses to boot rather
         // than presenting as an agent that never fires.
         let activated = Activation::from_config(&cfg.bundled_agents);
+
+        // Durable delivery of a completed run's decision, on the journal's own
+        // cursor: registrations are made at admission so no run exists
+        // unwatched, and the cursor advances only on 2xx, so a receiver that is
+        // down for a deploy is caught up rather than having missed everything.
+        let journal_for_delivery = std::sync::Arc::clone(&stores.journal);
+        let push_store_for_delivery = std::sync::Arc::clone(&stores.push);
+        // Built once and handed to BOTH the outbox (which registers them at
+        // admission) and the sender (which signs deliveries). The sender takes
+        // the list rather than offering a setter, and that is the control: a
+        // sender built without the destinations would deliver unsigned, and
+        // only the receiver's refusal would ever show it.
+        let destinations: Vec<agentplane::push::Destination> = cfg
+            .audit_webhook_url
+            .as_ref()
+            .map(|url| {
+                let destination = agentplane::push::Destination::new("erp-audit", url);
+                // HMAC-SHA256 over the exact bytes posted, `sha256=<hex>` in
+                // X-Mako-Signature — the convention every mako receiver
+                // already verifies.
+                let destination = match secrets.audit_hmac_secret.as_ref() {
+                    Some(secret) => destination.signed_with(
+                        "X-Mako-Signature",
+                        agentplane::core::Secret::new(secrecy::ExposeSecret::expose_secret(secret)),
+                    ),
+                    None => destination,
+                };
+                vec![destination]
+            })
+            .unwrap_or_default();
+        let outbox = (!destinations.is_empty()).then(|| {
+            std::sync::Arc::new(agentplane::push::Outbox::new(
+                std::sync::Arc::clone(&stores.push),
+                destinations.clone(),
+            ))
+        });
+
         let plane = Plane::new(
             stores,
             PlaneConfig {
@@ -155,6 +192,7 @@ impl Daemon for Agentd {
                 tool_servers,
                 policy,
                 keyring,
+                outbox,
             },
         )
         .map_err(|e| anyhow::anyhow!("build agent plane: {e}"))?;
@@ -170,6 +208,35 @@ impl Daemon for Agentd {
             std::time::Duration::from_secs(cfg.sweep_interval_secs),
             ctx.shutdown.clone(),
         );
+
+        // ── The tick that makes a registration mean something ────────────
+        //
+        // `Outbox` puts a run in front of the receiver at admission; this loop
+        // is what carries the record there, advancing its cursor only on 2xx.
+        if let Some(url) = cfg.audit_webhook_url.as_deref() {
+            agentd::plane::sweep::spawn_delivery(
+                std::sync::Arc::new(agentplane::push::DeliveryWorker::new(
+                    journal_for_delivery,
+                    push_store_for_delivery,
+                    std::sync::Arc::new(agentplane::push::PushSender::for_operator_destinations(
+                        &destinations,
+                    )),
+                    std::sync::Arc::new(
+                        agentplane::push::RunCompleted::new(mako_service::source(
+                            "agentd",
+                            &cfg.tenant,
+                        ))
+                        .event_type(mako_events::agent::DECISION_MADE),
+                    ),
+                )),
+                std::time::Duration::from_secs(cfg.sweep_interval_secs),
+                ctx.shutdown.clone(),
+            );
+            info!(
+                url,
+                "agent decisions deliver through the journal-backed outbox"
+            );
+        }
 
         if secrets.inbound_hmac_secret.is_none() {
             warn!(

@@ -2,10 +2,10 @@
   "sparte": "STROM",
   "data": {
     "bo_typ": "MARKTLOKATION",
-    "marktlokations_id": "17835382035",
+    "marktlokations_id": "17835382008",
     "sparte": "STROM",
     "netzebene_messung": "NS",
-    "bilanzierungsgebiet": "11YN100000015097",
+    "bilanzierungsgebiet": "11YN10000001509R",
     "netzgebietsnummer": "DE-D-NB9900357000004",
     "lokationsadresse": {
       "bo_typ": "ADRESSE",

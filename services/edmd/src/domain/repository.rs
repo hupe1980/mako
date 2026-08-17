@@ -5,7 +5,7 @@ use rust_decimal::Decimal;
 use time::Date;
 
 use crate::domain::{
-    BillingPeriodQuery, ImbalanceReport, MeterBillingPeriod, MeterDataReceipt, MeterRead,
+    BillingPeriodQuery, ImbalanceReport, MeterBillingPeriod, MeterDataReceipt, MeterRead, Sparte,
     TimeSeriesQuery, Typ2Read, error::EdmError,
 };
 
@@ -54,6 +54,7 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
         from: Date,
         to: Date,
         tenant: &str,
+        sparte: Sparte,
     ) -> Result<ImbalanceReport, EdmError>;
 
     /// Return the most recent typed read for a MaLo.

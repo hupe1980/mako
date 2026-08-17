@@ -60,7 +60,7 @@ anyhow      = "1"
 dashmap     = "6"
 edifact-rs   = "~0.16"
 miette       = { version = "7", features = ["fancy-no-syscall"] }
-rubo4e       = { version = "0.8.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "schemars", "json", "strum", "builder"] }
+rubo4e       = { version = "0.9.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "schemars", "json", "strum", "builder"] }
 rust_decimal = { version = "1", features = ["db-postgres", "macros"] }
 billing      = { version = "0.13.0", features = ["serde"] }
 # EN 16931 semantic invoice model + business-rule validation (the `billing`
@@ -118,7 +118,7 @@ invoic-checker   = { path = "crates/invoic-checker",   version = "0.16" }
 netz-checker     = { path = "crates/netz-checker",     version = "0.16" }
 energy-billing   = { path = "crates/energy-billing",   version = "0.16" }
 dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.16" }
-metering         = { version = "0.17" }
+metering         = { version = "0.18" }
 sepa             = { version = "0.6.0" }
 # Immutable, tamper-evident double-entry ledger kernel (sibling repo). accountingd's
 # storage/accounting base. Domain-neutral by design — the BillingDocument→Entry and

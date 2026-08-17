@@ -540,7 +540,7 @@ mod tests {
         AnmeldungAnfrage {
             pid,
             process_id: Uuid::new_v4(),
-            malo_id: "51238696780".to_owned(),
+            malo_id: "51238696012".to_owned(),
             new_supplier_gln: "9900357000004".to_owned(),
             grid_operator_gln: "9900000000002".to_owned(),
             bilanzierungsgebiet: Some("11YB-TENNET-----W".to_owned()),
@@ -561,7 +561,7 @@ mod tests {
 
     fn make_grid() -> MaloGridRecord {
         MaloGridRecord {
-            malo_id: "51238696780".to_owned(),
+            malo_id: "51238696012".to_owned(),
             nb_mp_id: "9900000000002".to_owned(),
             bilanzierungsgebiet: Some("11YB-TENNET-----W".to_owned()),
             netzgebiet: None,
@@ -574,7 +574,7 @@ mod tests {
         lf_mp_id_next: Option<String>,
     ) -> VersorgungsStatusRecord {
         VersorgungsStatusRecord {
-            malo_id: "51238696780".parse().unwrap(),
+            malo_id: "51238696012".parse().unwrap(),
             lieferstatus: status,
             lf_mp_id,
             lf_mp_id_next,

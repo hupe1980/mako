@@ -5,9 +5,10 @@ base_url = "https://hupe1980.github.io/mako"
 title = "mako — German Energy Market Platform in Rust"
 description = """
 Open-source, full-stack German energy-market operations platform in Rust: BDEW \
-MaKo / EDI@Energy market communication (all 346 Prüfidentifikatoren), an \
-event-sourced process runtime, NNE/EEG settlement, retail billing, AS4 transport \
-and BO4E integration — every regulated process as a correct, auditable workflow."""
+MaKo / EDI@Energy market communication across every Prüfidentifikator in the \
+catalogue, an event-sourced process runtime, NNE/EEG settlement, retail billing, \
+AS4 transport and BO4E integration — every regulated process as a correct, \
+auditable workflow."""
 
 # Pretty URLs (/page/ → /page/index.html); no trailing-slash 404s on GitHub Pages.
 compile_sass = true

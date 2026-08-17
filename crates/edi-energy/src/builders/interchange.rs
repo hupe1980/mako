@@ -164,7 +164,7 @@ mod tests {
         assert_eq!(unb_qualifier("9900123456789"), "500");
         assert_eq!(unb_qualifier("9870123456789"), "502");
         assert_eq!(unb_qualifier("4012345000023"), "14");
-        assert_eq!(unb_qualifier("10XDE-EON-NETZ-I"), "500");
+        assert_eq!(unb_qualifier("10XDE-EON-NETZ-C"), "500");
     }
 
     #[test]

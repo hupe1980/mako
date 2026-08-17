@@ -43,7 +43,7 @@ def test_mscons_build_roundtrips_through_validation():
         pruefidentifikator=13003,
         sender="4012345000023",
         receiver="9900357000004",
-        metering_point="51238696780",
+        metering_point="51238696012",
         quantities=[("220", "1234.567", "KWH")],
         release="2.4c",
         document_date="20251101",
@@ -59,7 +59,7 @@ def test_builders_emit_a_message_not_an_interchange():
         pruefidentifikator=13003,
         sender="4012345000023",
         receiver="9900357000004",
-        metering_point="51238696780",
+        metering_point="51238696012",
         quantities=[("220", "100", "KWH")],
     )
     text = raw.decode("latin-1")
@@ -72,7 +72,7 @@ def test_interchange_envelope_makes_it_sendable():
         pruefidentifikator=13003,
         sender="4012345000023",
         receiver="9900357000004",
-        metering_point="51238696780",
+        metering_point="51238696012",
         quantities=[("220", "100", "KWH")],
     )
     wire = build_interchange(
@@ -96,7 +96,7 @@ def test_interchange_roundtrips_through_validation():
         pruefidentifikator=13003,
         sender="4012345000023",
         receiver="9900357000004",
-        metering_point="51238696780",
+        metering_point="51238696012",
         quantities=[("220", "1234.567", "KWH")],
         release="2.4c",
         document_date="20251101",
@@ -111,7 +111,7 @@ def test_unz_count_reflects_multiple_messages():
         pruefidentifikator=13003,
         sender="4012345000023",
         receiver="9900357000004",
-        metering_point="51238696780",
+        metering_point="51238696012",
         quantities=[("220", "100", "KWH")],
     )
     wire = build_interchange("4012345000023", "9900357000004", "R1", [msg, msg])
@@ -124,7 +124,7 @@ def test_obis_code_is_validated_not_passed_through():
             pruefidentifikator=13003,
             sender="4012345000023",
             receiver="9900357000004",
-            metering_point="51238696780",
+            metering_point="51238696012",
             quantities=[("220", "100", "KWH")],
             obis="not-an-obis-code",
         )

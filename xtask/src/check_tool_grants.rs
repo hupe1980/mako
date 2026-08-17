@@ -94,7 +94,13 @@ pub fn run(workspace_root: &Path) -> bool {
         for grant in parse_grants(&src) {
             grants += 1;
             let key = format!("{}/{}", grant.server, grant.tool);
-            let Some(read_only) = tools.get(&key) else {
+            // agentplane's ToolId refuses `-` in a server component (hyphens
+            // are reserved so the model-facing wire rendering stays injective),
+            // so a hyphenated service directory like `mabis-syncd` is granted
+            // as `mabis_syncd`. The inventory is keyed by directory name;
+            // fall back to the hyphen spelling before calling a grant missing.
+            let dir_key = format!("{}/{}", grant.server.replace('_', "-"), grant.tool);
+            let Some(read_only) = tools.get(&key).or_else(|| tools.get(&dir_key)) else {
                 if !PLANNED_TOOLS.iter().any(|(t, _)| *t == key) {
                     missing.push(format!("{name}: tool://{key} — no MCP server declares it"));
                 }

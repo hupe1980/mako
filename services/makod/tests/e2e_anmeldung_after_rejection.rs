@@ -29,7 +29,7 @@ const LF_MP_ID: &str = "9905550000005";
 const NB_MP_ID: &str = "9900357000004";
 /// Checksum-valid MaLo — `energy_api::MaloId` validates the check digit on
 /// deserialization, so an invented id is rejected before the test can run.
-const MALO_ID: &str = "51238696780";
+const MALO_ID: &str = "51238696012";
 
 fn command_state(store: &Arc<SlateDbStore>, tenant: TenantId) -> CommandsApiState {
     CommandsApiState {

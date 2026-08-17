@@ -65,7 +65,7 @@ fn receipt(process_id: Uuid, direction: &str) -> ReceiptRow {
         direction: direction.to_owned(),
         sender_mp_id: "9900357000004".to_owned(),
         receiver_gln: TENANT.to_owned(),
-        malo_id: Some("51238696780".to_owned()),
+        malo_id: Some("51238696012".to_owned()),
         rechnung: serde_json::json!({ "_typ": "RECHNUNG" }),
         bo4e_version: "202401.4.0".to_owned(),
         outcome: "Ok".to_owned(),

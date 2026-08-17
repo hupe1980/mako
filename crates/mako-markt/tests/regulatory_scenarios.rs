@@ -56,7 +56,7 @@ mod tests {
     #[tokio::test]
     async fn versorgungsstatus_initially_absent() {
         let repo = InMemoryVersorgungsStatusRepository::default();
-        let result = repo.find(&malo_id("51238696780"), "t1").await.unwrap();
+        let result = repo.find(&malo_id("51238696012"), "t1").await.unwrap();
         assert!(
             result.is_none(),
             "new MaLo should have no VersorgungsStatus"
@@ -70,7 +70,7 @@ mod tests {
         let repo = InMemoryVersorgungsStatusRepository::default();
         repo.upsert(
             vs_rec(
-                "51238696780",
+                "51238696012",
                 "t1",
                 LieferStatus::Unbeliefert,
                 None,
@@ -86,7 +86,7 @@ mod tests {
         .unwrap();
 
         let r = repo
-            .find(&malo_id("51238696780"), "t1")
+            .find(&malo_id("51238696012"), "t1")
             .await
             .unwrap()
             .unwrap();
@@ -110,7 +110,7 @@ mod tests {
         // 55001
         repo.upsert(
             vs_rec(
-                "51238696780",
+                "51238696012",
                 "t1",
                 LieferStatus::Unbeliefert,
                 None,
@@ -127,7 +127,7 @@ mod tests {
         // 55003 NB confirmation
         repo.upsert(
             vs_rec(
-                "51238696780",
+                "51238696012",
                 "t1",
                 LieferStatus::Beliefert,
                 Some("9910000000001"),
@@ -143,7 +143,7 @@ mod tests {
         .unwrap();
 
         let r = repo
-            .find(&malo_id("51238696780"), "t1")
+            .find(&malo_id("51238696012"), "t1")
             .await
             .unwrap()
             .unwrap();
@@ -163,7 +163,7 @@ mod tests {
         let repo = InMemoryVersorgungsStatusRepository::default();
         repo.upsert(
             vs_rec(
-                "51238696780",
+                "51238696012",
                 "t1",
                 LieferStatus::Beliefert,
                 Some("9910000000001"),
@@ -179,7 +179,7 @@ mod tests {
         .unwrap();
         repo.upsert(
             vs_rec(
-                "51238696780",
+                "51238696012",
                 "t1",
                 LieferStatus::Unbeliefert,
                 None,
@@ -195,7 +195,7 @@ mod tests {
         .unwrap();
 
         let r = repo
-            .find(&malo_id("51238696780"), "t1")
+            .find(&malo_id("51238696012"), "t1")
             .await
             .unwrap()
             .unwrap();
@@ -210,7 +210,7 @@ mod tests {
         let repo = InMemoryVersorgungsStatusRepository::default();
         repo.upsert(
             vs_rec(
-                "51238696780",
+                "51238696012",
                 "t1",
                 LieferStatus::Beliefert,
                 Some("9910000000001"),
@@ -229,7 +229,7 @@ mod tests {
         let result = repo
             .upsert(
                 vs_rec(
-                    "51238696780",
+                    "51238696012",
                     "t1",
                     LieferStatus::Unbeliefert,
                     None,
@@ -254,7 +254,7 @@ mod tests {
         // A second 55001 UTILMD would overwrite the first — GPKE NB must reject it
         // with A06 before that happens.
         let rec = vs_rec(
-            "51238696780",
+            "51238696012",
             "t1",
             LieferStatus::Unbeliefert,
             None,
@@ -472,7 +472,7 @@ mod geli_gas_tests {
 
     fn gas_malo() -> MaloId {
         // Valid MaLo-ID with correct BDEW alternating-weight checksum (digit = 0)
-        MaloId::try_from("51238696780").expect("valid Gas MaLo-ID")
+        MaloId::try_from("51238696012").expect("valid Gas MaLo-ID")
     }
 
     fn gas_vs_rec(

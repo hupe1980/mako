@@ -55,6 +55,47 @@ fn store_err(e: impl std::fmt::Display) -> EdmError {
     EdmError::Database(e.to_string())
 }
 
+/// Parse a MaLo-ID at the store boundary.
+///
+/// `metering::MaloId` enforces the BDEW Bildungsvorschrift — eleven digits, a
+/// Vergabestelle in 1–9, and the Anwendungshilfe check digit — so this is the
+/// point where a string stops being a string. edmd's own query types keep
+/// `String` deliberately: they are built from HTTP parameters and a
+/// counterparty-supplied value has to be *reportable*, not un-representable.
+/// Validating here rather than at construction means a malformed ID is one
+/// named refusal at the boundary that cares, instead of an opaque store error.
+fn malo(id: &str) -> Result<metering::MaloId, EdmError> {
+    id.parse()
+        .map_err(|e: metering::ParseError| EdmError::InvalidMaloId {
+            malo_id: id.to_owned(),
+            reason: e.to_string(),
+        })
+}
+
+/// The UTC window a settlement period covers, for one commodity.
+///
+/// The balancing day is **not** the calendar day for gas: a Gastag runs 06:00 to
+/// 06:00 Berlin (GaBi Gas, following Art. 3 Nr. 6 VO (EU) 312/2014), so a gas
+/// period aggregated over calendar days carries six hours of the wrong day —
+/// every day, not only across a DST transition. Electricity balances on the
+/// calendar day.
+///
+/// Both boundaries come from `metering::calendar`, which resolves them through
+/// the Berlin zone rather than a fixed offset, so a period containing a DST
+/// transition is 23 or 25 hours long as it should be.
+fn period_window(sparte: Sparte, from: Date, to: Date) -> (OffsetDateTime, OffsetDateTime) {
+    match sparte {
+        Sparte::Gas => (
+            metering::calendar::gas_day_start_utc(from),
+            metering::calendar::gas_day_end_utc(to),
+        ),
+        _ => (
+            metering::calendar::day_start_utc(from),
+            metering::calendar::day_end_utc(to),
+        ),
+    }
+}
+
 /// The identity column every store is keyed on. A reading is unique only *within*
 /// a tenant, so every series read is scoped by it — an unscoped read would fold
 /// two tenants' readings for one MaLo into a single series.
@@ -303,7 +344,8 @@ impl MeterStoreTimeSeriesRepository {
     ) -> Result<Vec<MeterRead>, EdmError> {
         let store = self.store.as_known_at(as_of).await.map_err(store_err)?;
         let resolved = store
-            .series(q.malo_id.clone())
+            .series(malo(&q.malo_id)?)
+            .map_err(store_err)?
             .column_eq(TENANT_COL, tenant_scope(&q.tenant))
             .range(q.from, q.to)
             .collect_resolved()
@@ -382,8 +424,20 @@ fn read_to_stored(r: &MeterRead) -> Result<StoredSeries, EdmError> {
         sender_mp_id: operator.clone(),
     };
     let mut series =
-        MeasurementSeries::new(r.malo_id.clone(), obis, vec![interval], source, recorded_at);
-    series.melo_id = r.melo_id.clone();
+        MeasurementSeries::new(malo(&r.malo_id)?, obis, vec![interval], source, recorded_at);
+    // A MeLo is optional on a reading; when present it must be a real
+    // Zählpunktbezeichnung, so a malformed one is refused here rather than
+    // stored as a string nobody can resolve.
+    series.melo_id = r
+        .melo_id
+        .as_deref()
+        .map(|m| {
+            m.parse::<metering::MeloId>()
+                .map_err(|e: metering::ParseError| {
+                    EdmError::Internal(format!("not a MeLo-ID: {m} ({e})"))
+                })
+        })
+        .transpose()?;
 
     let unit = match r.sparte {
         Sparte::Gas | Sparte::Wasser => MeasurementUnit::CubicMetre,
@@ -592,7 +646,8 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         // Single-meter typed read, version-resolved & tier-split by meterstore.
         let resolved = self
             .store
-            .series(q.malo_id.clone())
+            .series(malo(&q.malo_id)?)
+            .map_err(store_err)?
             .column_eq(TENANT_COL, tenant_scope(&q.tenant))
             .range(q.from, q.to)
             .collect_resolved()
@@ -633,18 +688,19 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         from: Date,
         to: Date,
         tenant: &str,
+        sparte: Sparte,
     ) -> Result<ImbalanceReport, EdmError> {
-        // Aggregate over the tier-split resolved series (§60 MMM); a Date range
-        // is a Berlin calendar period, so its UTC window comes from the calendar
-        // (23:00/22:00 UTC boundaries, DST-correct length).
-        let from_ts = metering::calendar::day_start_utc(from);
-        let to_ts = metering::calendar::day_end_utc(to);
+        // Aggregate over the tier-split resolved series (§60 MMM). The window
+        // is the commodity's balancing period: calendar days for Strom, the
+        // 06:00–06:00 Gastag for Gas.
+        let (from_ts, to_ts) = period_window(sparte, from, to);
         // Only billable qualities enter the MMM saldo — the FAULTY/UNKNOWN filter
         // is pushed into the scan (§60 Abs. 2 billable set) rather than applied
         // after materialising the series.
         let resolved = self
             .store
-            .series(malo_id.to_string())
+            .series(malo(malo_id)?)
+            .map_err(store_err)?
             .column_eq(TENANT_COL, tenant_scope(tenant))
             .range(from_ts, to_ts)
             .quality_in(&billable_qualities())
@@ -684,7 +740,8 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         // maximum in memory.
         let resolved = self
             .store
-            .series(malo_id.to_string())
+            .series(malo(malo_id)?)
+            .map_err(store_err)?
             .column_eq(TENANT_COL, tenant_scope(tenant))
             .latest_resolved()
             .await
@@ -738,15 +795,14 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             }));
         }
 
-        // 2. Fall back to on-the-fly aggregation from the resolved series. The
-        //    billing period is a Berlin calendar period (Liefermonat), so the UTC
-        //    window comes from the calendar.
-        let from_ts = metering::calendar::day_start_utc(q.period_from);
-        let to_ts = metering::calendar::day_end_utc(q.period_to);
+        // 2. Fall back to on-the-fly aggregation from the resolved series, over
+        //    the commodity's own balancing period (Gastag for Gas).
+        let (from_ts, to_ts) = period_window(q.sparte, q.period_from, q.period_to);
         // Billable qualities only (§60 Abs. 2), pushed into the scan.
         let resolved = self
             .store
-            .series(q.malo_id.clone())
+            .series(malo(&q.malo_id)?)
+            .map_err(store_err)?
             .column_eq(TENANT_COL, tenant_scope(&q.tenant))
             .range(from_ts, to_ts)
             .quality_in(&billable_qualities())
@@ -917,7 +973,8 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             //    it as the supersede it is.
             let (sparte, operator) = self
                 .store
-                .series(rec.malo_id.clone())
+                .series(malo(&rec.malo_id)?)
+                .map_err(store_err)?
                 .column_eq(TENANT_COL, tenant_scope(&rec.tenant))
                 .range(rec.dtm_from, rec.dtm_to)
                 .collect_resolved()
@@ -1032,8 +1089,20 @@ fn typ2_to_stored(r: &Typ2Read) -> Result<StoredSeries, EdmError> {
         sender_mp_id: operator,
     };
     let mut series =
-        MeasurementSeries::new(r.malo_id.clone(), obis, vec![interval], source, recorded_at);
-    series.melo_id = r.melo_id.clone();
+        MeasurementSeries::new(malo(&r.malo_id)?, obis, vec![interval], source, recorded_at);
+    // A MeLo is optional on a reading; when present it must be a real
+    // Zählpunktbezeichnung, so a malformed one is refused here rather than
+    // stored as a string nobody can resolve.
+    series.melo_id = r
+        .melo_id
+        .as_deref()
+        .map(|m| {
+            m.parse::<metering::MeloId>()
+                .map_err(|e: metering::ParseError| {
+                    EdmError::Internal(format!("not a MeLo-ID: {m} ({e})"))
+                })
+        })
+        .transpose()?;
     let unit = match r.sparte {
         Sparte::Gas | Sparte::Wasser => MeasurementUnit::CubicMetre,
         _ => MeasurementUnit::KiloWattHour,
@@ -1066,7 +1135,8 @@ impl Typ2Repository for MeterStoreTyp2Repository {
     async fn query_typ2(&self, q: &TimeSeriesQuery) -> Result<Vec<Typ2Read>, EdmError> {
         let resolved = self
             .store
-            .series(q.malo_id.clone())
+            .series(malo(&q.malo_id)?)
+            .map_err(store_err)?
             .column_eq(TENANT_COL, tenant_scope(&q.tenant))
             .range(q.from, q.to)
             .collect_resolved()
@@ -1122,8 +1192,8 @@ fn series_to_reads(resolved: &meterstore::ResolvedSeries, tenant: &str) -> Vec<M
         .intervals
         .iter()
         .map(|iv| MeterRead {
-            malo_id: series.malo_id.clone(),
-            melo_id: series.melo_id.clone(),
+            malo_id: series.malo_id.to_string(),
+            melo_id: series.melo_id.as_ref().map(ToString::to_string),
             dtm_from: iv.from,
             dtm_to: iv.to,
             quantity_kwh: iv.value,
@@ -1154,8 +1224,8 @@ fn series_to_typ2(resolved: &meterstore::ResolvedSeries, tenant: &str) -> Vec<Ty
         .intervals
         .iter()
         .map(|iv| Typ2Read {
-            malo_id: series.malo_id.clone(),
-            melo_id: series.melo_id.clone(),
+            malo_id: series.malo_id.to_string(),
+            melo_id: series.melo_id.as_ref().map(ToString::to_string),
             dtm_from: iv.from,
             dtm_to: iv.to,
             quantity_kwh: iv.value,
@@ -1292,5 +1362,69 @@ mod tests {
         let smallest_stated =
             version_of(Some(10_000_000_000_000), datetime!(2020-01-01 0:00 UTC)).expect("version");
         assert!(smallest_stated.get() > fallback.get());
+    }
+
+    /// Gas balances on the Gastag, electricity on the calendar day.
+    ///
+    /// The failure this pins is silent and daily: aggregating a gas Lastgang
+    /// over calendar days books the 00:00–06:00 draw into the neighbouring
+    /// Bilanzierungstag. Not a DST edge case — every day of the year, six hours
+    /// of it, on a settlement figure the BIKO reconciles.
+    #[test]
+    fn a_gas_period_runs_on_the_gastag_and_strom_on_the_calendar_day() {
+        use time::macros::{date, datetime};
+
+        let day = date!(2026 - 01 - 15);
+
+        let (from, to) = period_window(Sparte::Strom, day, day);
+        assert_eq!(
+            from,
+            datetime!(2026-01-14 23:00 UTC),
+            "Strom starts 00:00 Berlin"
+        );
+        assert_eq!(to, datetime!(2026-01-15 23:00 UTC));
+
+        let (from, to) = period_window(Sparte::Gas, day, day);
+        assert_eq!(
+            from,
+            datetime!(2026-01-15 5:00 UTC),
+            "Gas starts 06:00 Berlin"
+        );
+        assert_eq!(to, datetime!(2026-01-16 5:00 UTC));
+
+        // Six hours apart, which is the whole point.
+        assert_eq!(
+            (metering::calendar::gas_day_start_utc(day) - metering::calendar::day_start_utc(day))
+                .whole_hours(),
+            6
+        );
+    }
+
+    /// The long Gastag is the one named after the **Saturday**.
+    ///
+    /// The clocks change at 03:00 local on the Sunday, which lies *inside* the
+    /// gas day that began 06:00 on Saturday — so Saturday's Gastag is 25 hours
+    /// and Sunday's is a normal 24. A period keyed on the Sunday would be the
+    /// intuitive guess and the wrong one.
+    #[test]
+    fn the_long_gastag_belongs_to_the_saturday() {
+        use time::macros::date;
+
+        let saturday = date!(2026 - 10 - 24);
+        let sunday = date!(2026 - 10 - 25);
+
+        let (from, to) = period_window(Sparte::Gas, saturday, saturday);
+        assert_eq!(
+            (to - from).whole_hours(),
+            25,
+            "Saturday's Gastag is 25 hours"
+        );
+
+        let (from, to) = period_window(Sparte::Gas, sunday, sunday);
+        assert_eq!((to - from).whole_hours(), 24, "Sunday's is an ordinary day");
+
+        // Electricity's long day *is* the Sunday — the two calendars differ.
+        let (from, to) = period_window(Sparte::Strom, sunday, sunday);
+        assert_eq!((to - from).whole_hours(), 25);
     }
 }

@@ -64,6 +64,7 @@
 #![deny(unsafe_code)]
 
 pub mod config;
+pub mod mcp_server;
 pub mod pg;
 pub mod server;
 pub mod submission;

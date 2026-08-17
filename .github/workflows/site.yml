@@ -20,7 +20,11 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  ZOLA_VERSION: "0.22.1"
+  # 0.23 ported Zola from Tera 1 to Tera 2, which removed macros in favour of
+  # components. The templates avoid the constructs that differ between the two
+  # (no `{% import %}`/macro calls, no positionally-argued tests, every optional
+  # variable guarded with `is defined`), so they render on either engine.
+  ZOLA_VERSION: "0.23.2"
 
 jobs:
   build:

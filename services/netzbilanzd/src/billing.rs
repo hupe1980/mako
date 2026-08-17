@@ -562,7 +562,7 @@ mod tests {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
             blindarbeit: None,
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -608,7 +608,7 @@ mod tests {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
             blindarbeit: None,
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -669,7 +669,7 @@ mod tests {
     fn mmm_strom_mehrmengen() {
         use grid_billing::{MmmInput, settle_mmm};
         let input = MmmInput {
-            malo_id: "51238696780".to_owned(),
+            malo_id: "51238696012".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -699,7 +699,7 @@ mod tests {
     fn mmm_strom_mindermengen() {
         use grid_billing::{MmmInput, settle_mmm};
         let input = MmmInput {
-            malo_id: "51238696780".to_owned(),
+            malo_id: "51238696012".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -730,7 +730,7 @@ mod tests {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
             blindarbeit: None,
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -786,7 +786,7 @@ mod tests {
     fn msb_rechnung_grundgebuehr() {
         use grid_billing::{MsbInput, settle_msb};
         let input = MsbInput {
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             empfaenger: MsbRechnungsempfaenger {
                 rolle: MsbEmpfaengerRolle::Netzbetreiber,
                 mp_id: "9900357000004".to_owned(),
@@ -817,7 +817,7 @@ mod tests {
     /// Billing type guard: unknown billing_type returns an error.
     #[test]
     fn unknown_billing_type_is_error() {
-        let pos = make_nne_position("10001234567", "unknown_type", dec!(1000), dec!(28.5));
+        let pos = make_nne_position("10001234558", "unknown_type", dec!(1000), dec!(28.5));
         // Verify the string "unknown_type" would reach the error branch.
         assert!(matches!(pos.billing_type.as_str(), t if t == "unknown_type"));
     }
@@ -829,7 +829,7 @@ mod tests {
     fn mmm_strom_mehrmenge() {
         use grid_billing::{MmmInput, settle_mmm};
         let input = MmmInput {
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -858,7 +858,7 @@ mod tests {
     fn mmm_strom_mindermenge() {
         use grid_billing::{MmmInput, settle_mmm};
         let input = MmmInput {
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -886,7 +886,7 @@ mod tests {
     fn mmm_strom_balanced_zero() {
         use grid_billing::{MmmInput, settle_mmm};
         let input = MmmInput {
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -918,7 +918,7 @@ mod tests {
         // 600 kWh HT × 4.00 ct = 24.00 EUR; 400 kWh NT × 1.50 ct = 6.00 EUR; total 30.00 EUR
         let input = NneInput {
             blindarbeit: None,
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -980,7 +980,7 @@ mod tests {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
             blindarbeit: None,
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -1050,7 +1050,7 @@ mod tests {
         // 50 000 kWh × 3.80ct + 120 kW × 8.50 EUR/kW
         let input = NneInput {
             blindarbeit: None,
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -1106,7 +1106,7 @@ mod tests {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
             blindarbeit: None,
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -1155,7 +1155,7 @@ mod tests {
         // Simulate the billing.rs path: calculate NNE then override PID to 31011
         let input = NneInput {
             blindarbeit: None,
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -1204,7 +1204,7 @@ mod tests {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
             blindarbeit: None,
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -1249,7 +1249,7 @@ mod tests {
     fn msb_rechnung_single_month() {
         use grid_billing::{MsbInput, settle_msb};
         let input = MsbInput {
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             empfaenger: MsbRechnungsempfaenger {
                 rolle: MsbEmpfaengerRolle::Netzbetreiber,
                 mp_id: "9900357000004".to_owned(),
@@ -1286,7 +1286,7 @@ mod tests {
         };
         let input = NneInput {
             blindarbeit: None,
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -1338,7 +1338,7 @@ mod tests {
             InvoicCheckEngine, check::CheckConfig, tariff::InMemoryPreisblattStore,
         };
         let input = MmmInput {
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -1393,7 +1393,7 @@ mod tests {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
             blindarbeit: None,
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -1438,7 +1438,7 @@ mod tests {
         use grid_billing::{MmmInput, MsbInput, NneInput, settle_mmm, settle_msb, settle_nne};
         let base_nne = NneInput {
             blindarbeit: None,
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -1487,7 +1487,7 @@ mod tests {
         // MMM identifies itself by settlement type; the PID that routes it is
         // chosen when the document is built.
         let mmm_input = MmmInput {
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -1506,7 +1506,7 @@ mod tests {
 
         // msb_31009 → 31009
         let msb_input = MsbInput {
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             empfaenger: MsbRechnungsempfaenger {
                 rolle: MsbEmpfaengerRolle::Netzbetreiber,
                 mp_id: "9900357000004".to_owned(),
@@ -1541,7 +1541,7 @@ mod tests {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
             blindarbeit: None,
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -1601,7 +1601,7 @@ mod tests {
         // Residential: 1000 kWh × 28.50 ct + 1000 × 1.32 ct KA = 285.00 + 13.20 = 298.20
         let residential = NneInput {
             blindarbeit: None,
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -1685,7 +1685,7 @@ mod tests {
     fn mmm_billing_type_alias_consistent() {
         use grid_billing::{MmmInput, settle_mmm};
         let base = MmmInput {
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -1716,7 +1716,7 @@ mod tests {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
             blindarbeit: None,
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -1768,7 +1768,7 @@ mod tests {
         use grid_billing::{NneInput, settle_nne};
         let input = NneInput {
             blindarbeit: None,
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
             period: grid_billing::SettlementPeriod::new(
@@ -1811,7 +1811,7 @@ mod tests {
     fn msb_without_messdienstleistung() {
         use grid_billing::{MsbInput, settle_msb};
         let input = MsbInput {
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             empfaenger: MsbRechnungsempfaenger {
                 rolle: MsbEmpfaengerRolle::Netzbetreiber,
                 mp_id: "9900357000004".to_owned(),
@@ -1846,7 +1846,7 @@ mod tests {
             InvoicCheckEngine, check::CheckConfig, tariff::InMemoryPreisblattStore,
         };
         let input = MsbInput {
-            malo_id: "10001234567".to_owned(),
+            malo_id: "10001234558".to_owned(),
             empfaenger: MsbRechnungsempfaenger {
                 rolle: MsbEmpfaengerRolle::Netzbetreiber,
                 mp_id: "9900357000004".to_owned(),

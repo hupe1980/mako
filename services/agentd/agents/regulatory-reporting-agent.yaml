@@ -14,7 +14,7 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: regulatory-reporting-agent
-  version: "1.0.0"
+  version: "1.1.0"
 spec:
   execution:
     kind: tool-calling
@@ -33,27 +33,66 @@ spec:
 
       ## PROCEDURE
 
-      1. Call obsd `get_bnetza_report` for BNetzA Diskriminierungsbericht data.
+      1. Call obsd `get_kpi_report` (the BNetzA report is assembled from it) for BNetzA Diskriminierungsbericht data.
       2. Call obsd `get_kpi_report` for current KPI metrics.
       3. Call obsd `get_parity_report` for market-role parity comparison.
       4. Validate: STP rate ≥ 95% (§20 EnWG target).
       5. Identify any periods where parity deviation > 5% (reportable to BNetzA).
       6. Structure report for operator review and submission.
 
-      ## OUTPUT FORMAT
-      ```
-      REPORT_PERIOD: [YYYY-QN or YYYY-ANNUAL]
-      STP_RATE_PCT: [number]
-      PARITY_MAX_DEVIATION_PCT: [number]
-      BNETZA_SUBMISSION_REQUIRED: [YES|NO]
-      KPI_SUMMARY: [key metrics]
-      ```
+  # What this agent is in a multi-agent arrangement.
+  #
+  # MAST measures inter-agent misalignment at 36.9 % of observed multi-agent
+  # failures — a class that exists only if you choose it. Declaring the shape is
+  # how you choose not to: `single` means one agent, one context, many tools, and
+  # the inter-agent failure surface is structurally absent. `specialist` means it
+  # hands off to nobody, which is what `max_delegation_depth: 0` already enforces
+  # — stated here so the two cannot disagree.
+  topology:
+    mode: single
+    role: specialist
 
   capabilities:
     provides: [regulatory.reporting]
 
   models:
     privileged:  { provider: anthropic, model: claude-sonnet-5 }
+    # Reads the agent's own answer during memory formation — model output, and
+    # therefore untrusted. A model that cannot call a tool is what should be
+    # looking at it.
+    quarantined: { provider: anthropic, model: claude-haiku-4-5-20251001 }
+
+  # Memory: only where the subject is the operator itself.
+  #
+  # `subject` is a **literal** in this file, and `Recall` is keyed by it — there
+  # is no automatic per-case narrowing. A per-customer specialist declaring a
+  # fixed subject would therefore pool every customer's facts under one key and
+  # surface one customer's history inside another's run. That is not a feature
+  # with a caveat; it is a privacy defect, and it is why the twenty-six
+  # specialists that reason about a Marktlokation have **no** memory block. The
+  # absence is a decision, recorded here so it does not read as an oversight.
+  #
+  # This subject is the operator's own regulatory posture. It is not customer
+  # data, it is the same for every run, and a trend across runs is exactly what
+  # it is for.
+  #
+  # Formation reads the agent's own answer, which is model output and therefore
+  # untrusted — so it runs on the **quarantined** model. That is the one place
+  # besides a plan's `parse` steps where the declarative tier points a model at
+  # untrusted-derived content, and it is what makes the second model role mean
+  # something rather than decorate the file.
+  memory_formation:
+    subject: "bnetza-reporting-posture"
+    purpose: >-
+      Carry the operator's own KPI and submission history between reporting periods, so a quarter-on-quarter change is a comparison rather than a fresh calculation.
+    instruction: >-
+      Record at most three durable facts about the OPERATOR's own reporting position: the period, the headline STP rate, and whether a BNetzA submission was required. Record nothing about an individual customer, Marktlokation or counterparty.
+    max_items: 3
+    # Two reporting years. Long enough for a year-on-year comparison, short
+    # enough that a posture nobody has revisited expires instead of hardening
+    # into a standing instruction.
+    retention_seconds: 63113904
+    max_sensitivity: internal
 
   security:
     max_sensitivity_egress: internal
@@ -77,6 +116,51 @@ spec:
     max_steps: 45
     max_effects: 75
     max_wallclock_secs: 900
+
+  # The result contract. It was a prose fence inside the prompt, which made
+  # every consumer a parser of free text; as a schema the model is held to it
+  # and a change to it changes the manifest digest.
+  output:
+    schema:
+      type: object
+      additionalProperties: false
+      required:
+        - report_period
+        - stp_rate_pct
+        - parity_max_deviation_pct
+      properties:
+        report_period:
+          type: string
+        stp_rate_pct:
+          type: number
+        parity_max_deviation_pct:
+          type: number
+        bnetza_submission_required:
+          type: string
+          enum:
+            - YES
+            - NO
+        kpi_summary:
+          type: string
+
+  # Knowledge, granted rather than copied.
+  #
+  # Every mako MCP server publishes step-by-step prompts for its own procedures —
+  # fifty of them across thirteen servers — and not one manifest reached a single
+  # one. Each specialist instead carried a hand-typed paraphrase in its
+  # `constraints`, which is a second copy of a procedure with nothing keeping the
+  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # changes when somebody remembers.
+  #
+  # A context grant is not a tool grant. Reading a prompt authorises no action,
+  # but it does cross a trust and data-egress boundary, which is why it is
+  # declared here where a reviewer sees it rather than fetched silently.
+  context:
+    prompts:
+      - server: obsd
+        name: audit-kpi
+        max_input_sensitivity: internal
+        output_sensitivity: internal
 
   tools:
     - ref: tool://obsd/get_process

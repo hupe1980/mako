@@ -11,11 +11,13 @@ use energy_api::models::electricity::{IdentificationParameterId, LocationId, Mal
 /// request body is deserialized — not accepted and carried onward.
 #[test]
 fn a_bad_malo_check_digit_is_rejected_at_deserialization() {
-    // 51238696780 is valid; flipping the last digit breaks the check digit.
-    let ok: Result<MaloId, _> = serde_json::from_str(r#""51238696780""#);
+    // `…012` carries a correct check digit; `…782` carries one that is wrong
+    // under every scheme in circulation, so this test asserts the rule rather
+    // than one implementation's arithmetic.
+    let ok: Result<MaloId, _> = serde_json::from_str(r#""51238696012""#);
     assert!(ok.is_ok(), "valid MaLo-ID must deserialize: {ok:?}");
 
-    let bad: Result<MaloId, _> = serde_json::from_str(r#""51238696781""#);
+    let bad: Result<MaloId, _> = serde_json::from_str(r#""51238696782""#);
     assert!(
         bad.is_err(),
         "a wrong check digit must not deserialize into a MaloId"
@@ -49,11 +51,12 @@ fn melo_ids_enforce_their_shape() {
 /// still reaches the handler inside an otherwise-valid body.
 #[test]
 fn an_enclosing_request_body_fails_when_the_identifier_is_bad() {
-    let good = r#"{"maloId":"51238696780"}"#;
+    let good = r#"{"maloId":"51238696012"}"#;
     let parsed: Result<IdentificationParameterId, _> = serde_json::from_str(good);
     assert!(parsed.is_ok(), "valid body must parse: {parsed:?}");
 
-    let bad = r#"{"maloId":"51238696781"}"#;
+    // `…782` is a wrong check digit under the BDEW Anwendungshilfe scheme.
+    let bad = r#"{"maloId":"51238696782"}"#;
     let parsed: Result<IdentificationParameterId, _> = serde_json::from_str(bad);
     assert!(
         parsed.is_err(),
@@ -75,8 +78,8 @@ fn an_enclosing_request_body_fails_when_the_identifier_is_bad() {
 #[test]
 fn identification_parameter_id_matches_the_v1_wire_contract() {
     let json = serde_json::to_value(IdentificationParameterId {
-        malo_id: Some(MaloId::new("51238696780").unwrap()),
-        tranchen_ids: Some(vec!["12345678901".to_owned()]),
+        malo_id: Some(MaloId::new("51238696012").unwrap()),
+        tranchen_ids: Some(vec!["12345678989".to_owned()]),
         melo_ids: Some(vec![
             MeloId::new("DE0123456789012345678901234567890").unwrap(),
         ]),

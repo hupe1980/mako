@@ -431,7 +431,7 @@ mod tests {
             device_id: "SMGW-2026-001".to_owned(),
             firmware_version: "2.1.4".to_owned(),
             msb_mp_id: "9900357000004".to_owned(),
-            malo_id: "51238696780".to_owned(),
+            malo_id: "51238696012".to_owned(),
             status: GatewayStatus::Operational,
             certificates: vec![valid_cert(CertificateType::Tls)],
             cls_channels: Vec::new(),
@@ -519,7 +519,7 @@ mod tests {
     fn cls_channel_section_14a() {
         let channel = ClsChannel {
             channel_id: "CLS-01".to_owned(),
-            malo_id: "51238696780".to_owned(),
+            malo_id: "51238696012".to_owned(),
             device_type: ClsDeviceType::HeatPump,
             max_power_kw: dec!(8.5),
             channel_status: ClsChannelStatus::Active,

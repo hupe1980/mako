@@ -1445,7 +1445,7 @@ mod rechnung_json_tests {
     fn every_sect40_pflichtangabe_survives_the_typed_migration() {
         use time::macros::date;
         let ctx = BillingContext {
-            malo_id: "51238696780".to_owned(), // valid BDEW checksum
+            malo_id: "51238696012".to_owned(), // valid BDEW checksum
             lf_mp_id: "9900000000001".to_owned(),
             rechnungsnummer: "R40-PFLICHT-1".to_owned(),
             period: crate::BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31))
@@ -1521,7 +1521,7 @@ mod rechnung_json_tests {
                 .as_ref()
                 .and_then(|m| m.marktlokations_id.as_ref())
                 .map(|id| id.as_ref().to_owned()),
-            Some("51238696780".to_owned()),
+            Some("51238696012".to_owned()),
             "checksum-valid MaLo lands in the typed field"
         );
         assert_eq!(

@@ -14,7 +14,7 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: mabis-syncd-agent
-  version: "1.0.0"
+  version: "2.1.0"
 spec:
   execution:
     kind: tool-calling
@@ -29,6 +29,8 @@ spec:
       You are the MaBiS Summenzeitreihe submission specialist.
 
       ## TRIGGERED BY
+      - `de.mabis.submission.failed` — an aggregation or BIKO submission failed; the payload carries run_id, phase and attempt_count
+      - `de.mabis.korrekturbedarf.opened` — a negative Prüfmitteilung opened a §9.8.1 correction obligation
       - `de.messwert.reading.quality.warning` — quality issue may affect Summenzeitreihe accuracy
 
       ## MABIS WINDOWS (BK6-24-174 Anlage 3 §3.10, Werktage after month end)
@@ -37,22 +39,43 @@ spec:
       - After 30 Werktage: KBKA (korrigierte Bilanzkreisabrechnung)
       - mabis-syncd submits at 05:00 UTC on the configured Erstaufschlag-Werktag (default 10)
 
-      ## PROCEDURE
+      ## ON SUBMISSION FAILED
 
-      1. Call obsd `get_kpi_report` for MaBiS submission status.
-      2. For each active MaLo with BKV assignment: check last submission run.
-      3. If submission missing or failed: call edmd `get_billing_period` to verify data availability.
-      4. Check `attempt_count < 3` guard — after 3 failures, escalate.
-      5. Determine if BIKO acceptance was received.
+      1. Call mabis-syncd `get_submission_run` with the event's run_id for the full record.
+      2. Read `attempt_count`: below 3 the scheduler retries by itself — report PENDING, do not escalate.
+      3. At 3, triage `error_msg`: an aggregation error means edmd data is missing
+         (call edmd `get_billing_period` and `get_quality_warnings` to say which MaLos);
+         a submission error means the MSCONS never reached the BIKO (makod dispatch).
+      4. State which window is closing: within Erstaufschlag a retry still lands as
+         Abrechnungsdaten; after it, only as Prüfdaten.
 
-      ## OUTPUT FORMAT
-      ```
-      SUBMISSION_STATUS: [ON_TIME|OVERDUE|FAILED|PENDING]
-      SUBMISSION_TYPE: [VORLAEUFIG|ENDGUELTIG]
-      DEADLINE_UTC: [datetime]
-      FAILED_MALO_COUNT: [number]
-      ACTION: [NONE|RETRY|ESCALATE]
-      ```
+      ## ON KORREKTURBEDARF OPENED
+
+      1. Call mabis-syncd `list_korrekturbedarf` for every open obligation.
+      2. For the affected period, call mabis-syncd `get_submission_status` to see
+         whether a correcting run is already under way.
+      3. The correction itself is an operator action (POST /api/v1/sync with
+         corrects_run_id) — name the run, the Bilanzierungsgebiet and the Clearing
+         deadline in your answer.
+
+      ## ON QUALITY WARNING
+
+      1. Call mabis-syncd `get_submission_status` — a warning matters only if a
+         submission for the affected period is pending or recent.
+      2. Call edmd `get_summenzeitreihe` to check whether the affected MaLo's
+         intervals are substituted in the aggregate.
+
+  # What this agent is in a multi-agent arrangement.
+  #
+  # MAST measures inter-agent misalignment at 36.9 % of observed multi-agent
+  # failures — a class that exists only if you choose it. Declaring the shape is
+  # how you choose not to: `single` means one agent, one context, many tools, and
+  # the inter-agent failure surface is structurally absent. `specialist` means it
+  # hands off to nobody, which is what `max_delegation_depth: 0` already enforces
+  # — stated here so the two cannot disagree.
+  topology:
+    mode: single
+    role: specialist
 
   capabilities:
     provides: [mabis.syncd]
@@ -77,13 +100,123 @@ spec:
   # resolves itself, so the authority-bearing arguments keep the run input's own
   # labels and a named human approves the call before it leaves.
 
+  # Human-in-the-loop, beside the answer rather than in front of it.
+  #
+  # `approval: none` — this specialist cannot act, so there is nothing to gate.
+  # A `tool-calling` agent's arguments come from a model completion, which the
+  # taint gate refuses at a mutating sink; it reads and reports. `tools-only`
+  # would therefore gate nothing, and `required` would suspend a run per finding
+  # and cost a case row until somebody clears it.
+  #
+  # `triage` is the third mode agentplane 0.15 added for exactly this: the run
+  # completes and returns, and a matching answer *also* opens a worklist row.
+  # Reporting, not control flow — which is why a triage rule may carry a
+  # predicate where `approval` deliberately may not.
+  #
+  # Every `path` below is typed against this agent's own `output.schema` at parse
+  # time, so a rule that could never fire is refused rather than reading in
+  # review exactly like one that does. That check only became possible once the
+  # answers were schemas instead of prose.
+  oversight:
+    approval: none
+    # `approval: none` means nothing waits, so this bounds no wait — the field
+    # is required and states the same window the rule below uses. One figure
+    # written twice is cheaper than one field meaning two things.
+    deadline:
+      name: mabis-submission-review
+      kind: working-days
+      params: { n: 1 }
+    triage:
+      - name: mabis-submission
+        audience: [netzbilanz]
+        priority: urgent
+        summary: >-
+          A MaBiS submission failed or missed its window (BK6-24-174 Anlage 3 §3.10). The window is fixed Werktage after month end.
+        when:
+          - path: /submission_status
+            in: ["FAILED", "OVERDUE"]
+        deadline:
+          name: mabis-submission-review
+          kind: working-days
+          params: { n: 1 }
+
   budgets:
     max_tokens: 200000
     max_steps: 30
     max_effects: 50
     max_wallclock_secs: 900
 
+  # The result contract. It was a prose fence inside the prompt, which made
+  # every consumer a parser of free text; as a schema the model is held to it
+  # and a change to it changes the manifest digest.
+  output:
+    schema:
+      type: object
+      additionalProperties: false
+      required:
+        - submission_status
+        - submission_type
+        - deadline_utc
+      properties:
+        submission_status:
+          type: string
+          enum:
+            - ON_TIME
+            - OVERDUE
+            - FAILED
+            - PENDING
+        submission_type:
+          type: string
+          enum:
+            - VORLAEUFIG
+            - ENDGUELTIG
+        deadline_utc:
+          type: string
+        failed_malo_count:
+          type: number
+        action:
+          type: string
+          enum:
+            - NONE
+            - RETRY
+            - ESCALATE
+
+  # Knowledge, granted rather than copied.
+  #
+  # Every mako MCP server publishes step-by-step prompts for its own procedures —
+  # fifty of them across thirteen servers — and not one manifest reached a single
+  # one. Each specialist instead carried a hand-typed paraphrase in its
+  # `constraints`, which is a second copy of a procedure with nothing keeping the
+  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # changes when somebody remembers.
+  #
+  # A context grant is not a tool grant. Reading a prompt authorises no action,
+  # but it does cross a trust and data-egress boundary, which is why it is
+  # declared here where a reviewer sees it rather than fetched silently.
+  context:
+    prompts:
+      - server: mabis_syncd
+        name: submission-triage
+        max_input_sensitivity: internal
+        output_sensitivity: internal
+
   tools:
+    - ref: tool://mabis_syncd/get_submission_status
+      mutates: false
+      max_sensitivity: internal
+      description: "recent submission runs + failed / retry-exhausted / Korrekturbedarf counts"
+    - ref: tool://mabis_syncd/list_failed_submissions
+      mutates: false
+      max_sensitivity: internal
+      description: "failed Summenzeitreihe runs with attempt_count and error_msg"
+    - ref: tool://mabis_syncd/get_submission_run
+      mutates: false
+      max_sensitivity: internal
+      description: "one submission run by UUID"
+    - ref: tool://mabis_syncd/list_korrekturbedarf
+      mutates: false
+      max_sensitivity: internal
+      description: "open negative Prüfmitteilungen (§9.8.1 obligations)"
     - ref: tool://edmd/get_timeseries
       mutates: false
       max_sensitivity: internal

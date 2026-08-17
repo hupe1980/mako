@@ -27,19 +27,26 @@ use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use secrecy::ExposeSecret as _;
 
-/// Every tool server the embedded manifests actually grant.
+/// Every tool server the **compiled** specialists' manifests actually grant.
 ///
 /// Derived from the declarations rather than from `[mcp_servers]`, so the check
 /// below compares what the agents need against what the deployment wired —
 /// which is the direction that catches a missing server. The reverse direction
 /// (a wired server nothing grants) is merely unused, and is reported as such.
+///
+/// Filtered to the specialists in this build's subscription table, because the
+/// `manifests![]` embedding itself is not role-gated: a `role-lf` binary still
+/// carries the NB manifests as data. Without the filter, an LF deployment would
+/// be required to wire `sperrd`'s MCP endpoint — a server only the NB Sperrung
+/// specialist grants — which is exactly the cross-arm configuration § 9 EnWG
+/// role scoping exists to make impossible.
 #[must_use]
 pub fn servers_named_in_grants() -> BTreeSet<String> {
     let mut servers = BTreeSet::new();
-    for (_, src) in super::MANIFESTS {
-        let Ok(manifest) = super::parse_manifest(src) else {
+    for (name, manifest) in super::manifests() {
+        if crate::builtin::find(name).is_none() {
             continue;
-        };
+        }
         for grant in &manifest.spec.tools {
             if let Some(id) = agentplane::tools::ToolId::parse(&grant.reference) {
                 servers.insert(id.server);
@@ -131,17 +138,20 @@ mod tests {
     /// The manifests grant tools on servers, and we can name them.
     ///
     /// The list is what `[mcp_servers]` must cover, so an empty one would mean
-    /// the startup check below passes vacuously.
+    /// the startup check below passes vacuously. The count follows the
+    /// *compiled* specialists: a role-scoped build reaches fewer services, and
+    /// that narrowing is the point rather than a shortfall.
     #[test]
     fn the_manifests_name_the_servers_a_deployment_must_wire() {
         let servers = servers_named_in_grants();
+        #[cfg(not(any(feature = "role-lf", feature = "role-nb", feature = "role-msb")))]
         assert!(
             servers.len() >= 10,
             "28 specialists reach mako's services; got {servers:?}"
         );
         assert!(
             servers.contains("makod"),
-            "the protocol daemon is granted by several specialists"
+            "the cross-cutting protocol specialist grants makod in every build"
         );
     }
 

@@ -850,10 +850,10 @@ mod sender_extract_tests {
     /// A 16-char EIC is accepted.
     #[test]
     fn accepts_eic() {
-        let soap = br#"<eb:From><eb:PartyId>10XDE-EON-NETZ-I</eb:PartyId></eb:From>"#;
+        let soap = br#"<eb:From><eb:PartyId>10XDE-EON-NETZ-C</eb:PartyId></eb:From>"#;
         assert_eq!(
             extract_sender_mp_id(soap).as_deref(),
-            Some("10XDE-EON-NETZ-I")
+            Some("10XDE-EON-NETZ-C")
         );
     }
 }

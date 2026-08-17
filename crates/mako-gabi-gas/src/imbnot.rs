@@ -268,8 +268,8 @@ mod tests {
         let state = ImbalanceState::New;
         let cmd = ImbalanceCommand::ReceiveImbalanceNotification {
             synthetic_pid: 90041,
-            sender_eic: "21X000000001368S".to_owned(),
-            receiver_eic: "21X000000001369Q".to_owned(),
+            sender_eic: "21X000000001368W".to_owned(),
+            receiver_eic: "21X000000001369U".to_owned(),
             gas_day: GasDay::parse("2026-01-15").unwrap(),
             direction: ImbalanceDirection::Short,
             quantity_kwh: Some(rust_decimal::dec!(-15000)),
@@ -289,8 +289,8 @@ mod tests {
         let state = ImbalanceState::New;
         let cmd = ImbalanceCommand::ReceiveImbalanceNotification {
             synthetic_pid: 90031, // wrong PID
-            sender_eic: "21X000000001368S".to_owned(),
-            receiver_eic: "21X000000001369Q".to_owned(),
+            sender_eic: "21X000000001368W".to_owned(),
+            receiver_eic: "21X000000001369U".to_owned(),
             gas_day: GasDay::parse("2026-01-15").unwrap(),
             direction: ImbalanceDirection::Long,
             quantity_kwh: None,

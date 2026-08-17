@@ -241,7 +241,7 @@ stateDiagram-v2
 
 ```
 1.  Customer logs in → portald receives JWT
-2.  portald: GET vertragd /api/v1/kunden/authenticate?malo_id=51238696780
+2.  portald: GET vertragd /api/v1/kunden/authenticate?malo_id=51238696012
     (forwards the customer's Bearer token; vertragd verifies it via the same
      OIDC Claims check as every other endpoint)
     → { kunden_id, kundentyp, malo_id }   on 200, else a uniform 403

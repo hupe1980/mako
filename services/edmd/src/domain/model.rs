@@ -598,6 +598,14 @@ pub struct BillingPeriodQuery {
     pub period_to: Date,
     /// Tenant scope — mandatory; mirrors `TimeSeriesQuery`.
     pub tenant: String,
+    /// Which commodity, because it decides where the day *starts*.
+    ///
+    /// A Strom period runs 00:00–00:00 Berlin; a Gas period runs the Gastag,
+    /// 06:00–06:00 (GaBi Gas, Art. 3 Nr. 6 VO (EU) 312/2014). Aggregating gas
+    /// over calendar days books the 00:00–06:00 draw into the neighbouring
+    /// Bilanzierungstag — six hours, every day of the year, not only across a
+    /// DST transition.
+    pub sparte: Sparte,
 }
 
 // ── Correction domain types ───────────────────────────────────────────────────

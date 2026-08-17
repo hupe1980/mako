@@ -262,7 +262,15 @@ impl SyncEngine {
                 // submission as though it were a successful one.
                 let msg = "no MaLos discovered for the period — nothing to submit";
                 warn!(run_id = %run_id, "mabis-syncd: {msg}");
-                pg::mark_failed(&self.pool, run_id, msg).await.ok();
+                self.mark_failed_and_emit(
+                    run_id,
+                    period_from,
+                    period_to,
+                    abrechnungslauf,
+                    phase,
+                    msg,
+                )
+                .await;
                 anyhow::bail!("{msg}");
             }
             Ok(series) => {
@@ -315,14 +323,30 @@ impl SyncEngine {
                     }
                     Err(e) => {
                         warn!(run_id = %run_id, error = %e, "mabis-syncd: Summenzeitreihe submission failed");
-                        Self::mark_failed(&self.pool, run_id, &e.to_string()).await;
+                        self.mark_failed_and_emit(
+                            run_id,
+                            period_from,
+                            period_to,
+                            abrechnungslauf,
+                            phase,
+                            &e.to_string(),
+                        )
+                        .await;
                         return Err(e);
                     }
                 }
             }
             Err(e) => {
                 warn!(run_id = %run_id, error = %e, "mabis-syncd: aggregation failed");
-                Self::mark_failed(&self.pool, run_id, &e.to_string()).await;
+                self.mark_failed_and_emit(
+                    run_id,
+                    period_from,
+                    period_to,
+                    abrechnungslauf,
+                    phase,
+                    &e.to_string(),
+                )
+                .await;
                 return Err(e);
             }
         }
@@ -379,8 +403,21 @@ impl SyncEngine {
             // from a correct one.
             let mabis_zp = self.resolve_mabis_zp(gebiet).await?;
 
+            // The territory is a 16-character EIC of ENTSO-E object type `Y`
+            // (Area). A Bilanzkreis (`X`, Party) is the same length, so only the
+            // object type separates them, and `LOC+107` carries the value as
+            // free text — the BIKO would accept either. Refuse here, inside the
+            // submission window and naming the territory, rather than filing a
+            // series against an object that is not a Bilanzierungsgebiet.
+            let gebiet_id = BilanzierungsgebietId::new(gebiet).map_err(|e| {
+                anyhow::anyhow!(
+                    "Bilanzierungsgebiet {gebiet} (from marktd master data) is not a \
+                     Bilanzierungsgebiet-EIC: {e}"
+                )
+            })?;
+
             let mut builder = SummenzeitreiheBuilder::new(
-                BilanzierungsgebietId(gebiet.clone()),
+                gebiet_id,
                 mabis_zp,
                 from_ts,
                 to_ts,
@@ -439,13 +476,10 @@ impl SyncEngine {
             }
 
             let szr = builder.build();
-            // The identifiers reach MSCONS SG6 as free text, so a Meldepunkt that
-            // is really the territory EIC would parse, validate and be accepted —
-            // and the BIKO would file the series against the wrong point. There is
-            // no downstream check that catches it, so the run fails here.
-            szr.validate_identifiers().map_err(|e| {
-                anyhow::anyhow!("Summenzeitreihe for Bilanzierungsgebiet {gebiet}: {e}")
-            })?;
+            // The Meldepunkt/territory swap that used to be checked here is now
+            // refused at the parse: a Zählpunktbezeichnung is 33 characters and a
+            // Bilanzierungsgebiet is a 16-character Y-type EIC, so neither value
+            // can inhabit the other's type.
             // MaBiS settles against a gap-free grid, so an empty slot omits energy
             // rather than reporting zero for it. That under-reports the territory,
             // and the BIKO cannot tell a short series from a complete one — the
@@ -895,7 +929,7 @@ impl SyncEngine {
             "correlation_id": run_id.to_string(),
             "payload": {
                 "mabis_zp_id": summenzeitreihe.mabis_zp_id,
-                "bilanzierungsgebiet_id": summenzeitreihe.bilanzierungsgebiet_id.0,
+                "bilanzierungsgebiet_id": summenzeitreihe.bilanzierungsgebiet_id.as_ref(),
                 "balancing_period": fmt_edifact_month(summenzeitreihe.period_from),
                 "version": fmt_edifact_version(summenzeitreihe.version),
                 "sender_mp_id": summenzeitreihe.sender_mp_id,
@@ -910,7 +944,7 @@ impl SyncEngine {
 
         let idempotency_key = idempotency_key(
             run_id,
-            &summenzeitreihe.bilanzierungsgebiet_id.0,
+            summenzeitreihe.bilanzierungsgebiet_id.as_ref(),
             summenzeitreihe.version,
         );
 
@@ -946,15 +980,51 @@ impl SyncEngine {
         Ok((message_ref, process_id))
     }
 
-    /// Mark a run failed, logging rather than dropping a write error.
+    /// Mark a run failed and announce it, in one transaction.
     ///
-    /// Swallowing it left the run in `pending`, where the retry list picks it up
-    /// forever and nothing records why the submission never went out.
-    async fn mark_failed(pool: &sqlx::PgPool, run_id: Uuid, error_msg: &str) {
-        if let Err(e) = pg::mark_failed(pool, run_id, error_msg).await {
+    /// The failure row and the `de.mabis.submission.failed` outbox record
+    /// commit together (persist-before-dispatch): a failure nothing announces
+    /// reads as a submission still pending — which is exactly how this
+    /// service's failures were invisible to the agent plane before the event
+    /// existed. Write errors are logged rather than dropped; swallowing one
+    /// left the run in `pending`, where the retry list picks it up forever and
+    /// nothing records why the submission never went out.
+    async fn mark_failed_and_emit(
+        &self,
+        run_id: Uuid,
+        period_from: Date,
+        period_to: Date,
+        abrechnungslauf: pg::Abrechnungslauf,
+        phase: pg::SubmissionPhase,
+        error_msg: &str,
+    ) {
+        let result = async {
+            let mut tx = self.pool.begin().await?;
+            let attempt_count = pg::mark_failed(&mut tx, run_id, error_msg).await?;
+            let ce = mako_service::CloudEvent::new(
+                mako_service::source("mabis-syncd", &self.cfg.identity.tenant),
+                mako_events::mabis::SUBMISSION_FAILED,
+                run_id.to_string(),
+                serde_json::json!({
+                    "run_id": run_id.to_string(),
+                    "bilanzierungsgebiet_id": self.cfg.identity.bilanzierungsgebiet_id,
+                    "period_from": period_from.to_string(),
+                    "period_to": period_to.to_string(),
+                    "abrechnungslauf": abrechnungslauf.as_str(),
+                    "phase": phase.as_str(),
+                    "attempt_count": attempt_count,
+                    "error": error_msg,
+                }),
+            );
+            mako_service::outbox::enqueue(&mut tx, &ce).await?;
+            tx.commit().await
+        }
+        .await;
+        if let Err(e) = result {
             warn!(
                 run_id = %run_id, error = %e,
-                "mabis-syncd: could not record the run failure — the run stays in 'pending'"
+                "mabis-syncd: could not record the run failure — the run stays in 'pending' \
+                 and no de.mabis.submission.failed event was enqueued"
             );
         }
     }
@@ -1197,24 +1267,24 @@ mod idempotency_tests {
         let other_run = uuid::uuid!("3f1a5b6c-0d3e-4f50-8a91-b2c3d4e5f607");
         let version = datetime!(2026-07-14 05:07:09 UTC);
 
-        let key = idempotency_key(run, "11XBG-DEMO-----K", version);
+        let key = idempotency_key(run, "11XBG-DEMO-----9", version);
         assert_eq!(
             key,
-            idempotency_key(run, "11XBG-DEMO-----K", version),
+            idempotency_key(run, "11XBG-DEMO-----9", version),
             "a retry must reuse the key"
         );
         assert_eq!(
             key,
-            "mabis-szr-2f1a5b6c-0d3e-4f50-8a91-b2c3d4e5f607-11XBG-DEMO-----K-20260714050709+00"
+            "mabis-szr-2f1a5b6c-0d3e-4f50-8a91-b2c3d4e5f607-11XBG-DEMO-----9-20260714050709+00"
         );
 
         // Each territory files its own MSCONS, and each version is a distinct
         // filing — neither may share a key with another.
-        assert_ne!(key, idempotency_key(run, "11XBG-OTHER----5", version));
-        assert_ne!(key, idempotency_key(other_run, "11XBG-DEMO-----K", version));
+        assert_ne!(key, idempotency_key(run, "11XBG-OTHER----2", version));
+        assert_ne!(key, idempotency_key(other_run, "11XBG-DEMO-----9", version));
         assert_ne!(
             key,
-            idempotency_key(run, "11XBG-DEMO-----K", datetime!(2026-07-14 05:07:10 UTC))
+            idempotency_key(run, "11XBG-DEMO-----9", datetime!(2026-07-14 05:07:10 UTC))
         );
     }
 }

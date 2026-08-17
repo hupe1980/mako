@@ -16,6 +16,32 @@
 
 use std::sync::Arc;
 
+// ── Timestamps on the wire ────────────────────────────────────────────────────
+
+/// Render an instant as RFC 3339, the way every consumer expects to read one.
+///
+/// `time::OffsetDateTime`'s **derived** `Serialize` produces a nine-element
+/// array — `[2027,15,8,0,0,0,0,0,0]` is year 2027, ordinal day 15, 08:00:00 UTC.
+/// That is `time`'s internal component order, it is documented nowhere a
+/// consumer would look, and dropping one into a `json!` silently ships it.
+///
+/// It reached the MCP surface here, which is the worst place for it: these tools
+/// are read by operators and by agents reasoning about regulatory deadlines. An
+/// agent asked whether a Frist has passed was being handed an undocumented
+/// integer array and expected to do arithmetic on it.
+///
+/// A formatting failure yields `null` rather than a fabricated instant. A
+/// timestamp a consumer cannot read must not look like one it can.
+fn rfc3339(t: time::OffsetDateTime) -> Option<String> {
+    use time::format_description::well_known::Rfc3339;
+    t.format(&Rfc3339).ok()
+}
+
+/// [`rfc3339`] for an optional instant.
+fn rfc3339_opt(t: Option<time::OffsetDateTime>) -> Option<String> {
+    t.and_then(rfc3339)
+}
+
 use axum::{
     Router,
     middleware::{self, Next},
@@ -149,10 +175,10 @@ impl ObsdMcpHandler {
                 "malo_id": r.try_get::<Option<String>, _>("malo_id").unwrap_or(None),
                 "partner_mp_id": r.try_get::<Option<String>, _>("partner_mp_id").unwrap_or(None),
                 "mdm_role": r.try_get::<Option<String>, _>("mdm_role").unwrap_or(None),
-                "deadline_at": r.try_get::<Option<time::OffsetDateTime>, _>("deadline_at").unwrap_or(None),
+                "deadline_at": rfc3339_opt(r.try_get::<Option<time::OffsetDateTime>, _>("deadline_at").unwrap_or(None)),
                 "deadline_risk": r.try_get::<String, _>("deadline_risk").unwrap_or_default(),
-                "started_at": r.try_get::<time::OffsetDateTime, _>("started_at").ok(),
-                "last_event_at": r.try_get::<time::OffsetDateTime, _>("last_event_at").ok(),
+                "started_at": rfc3339_opt(r.try_get::<time::OffsetDateTime, _>("started_at").ok()),
+                "last_event_at": rfc3339_opt(r.try_get::<time::OffsetDateTime, _>("last_event_at").ok()),
                 "erc_code": r.try_get::<Option<String>, _>("erc_code").unwrap_or(None),
                 "initiator_is_affiliate": r.try_get::<bool, _>("initiator_is_affiliate").unwrap_or(false),
             }))
@@ -214,8 +240,8 @@ impl ObsdMcpHandler {
                         "pid": pid,
                         "state": state,
                         "partner_mp_id": partner_mp_id,
-                        "started_at": started_at,
-                        "deadline_at": deadline_at,
+                        "started_at": rfc3339(started_at),
+                        "deadline_at": rfc3339_opt(deadline_at),
                     })
                 },
             )
@@ -510,8 +536,8 @@ impl ObsdMcpHandler {
                 "state": r.try_get::<String, _>("state").unwrap_or_default(),
                 "malo_id": r.try_get::<Option<String>, _>("malo_id").unwrap_or(None),
                 "partner_mp_id": r.try_get::<Option<String>, _>("partner_mp_id").unwrap_or(None),
-                "started_at": r.try_get::<time::OffsetDateTime, _>("started_at").ok(),
-                "deadline_at": r.try_get::<Option<time::OffsetDateTime>, _>("deadline_at").unwrap_or(None),
+                "started_at": rfc3339_opt(r.try_get::<time::OffsetDateTime, _>("started_at").ok()),
+                "deadline_at": rfc3339_opt(r.try_get::<Option<time::OffsetDateTime>, _>("deadline_at").unwrap_or(None)),
                 "erc_code": r.try_get::<Option<String>, _>("erc_code").unwrap_or(None),
                 "deadline_risk": r.try_get::<String, _>("deadline_risk").unwrap_or_default(),
                 "initiator_is_affiliate": r.try_get::<bool, _>("initiator_is_affiliate").unwrap_or(false),

@@ -57,7 +57,7 @@ Register a new Sperrung or Entsperrung order.
 
 ```json
 {
-  "malo_id":      "51238696780",
+  "malo_id":      "51238696012",
   "lf_mp_id":     "9900012345678",
   "order_type":   "sperrung",
   "process_id":   "550e8400-e29b-41d4-a716-446655440000",

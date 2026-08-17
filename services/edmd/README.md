@@ -21,6 +21,8 @@
 | Arrow IPC | `Accept: application/vnd.apache.arrow.stream` on `GET /api/v1/lastgang` + `GET /api/v1/zeitreihe` — 10–50× throughput vs JSON for bulk reads |
 | Archive OLAP | `GET /api/v1/archive/status` · `GET /api/v1/archive/olap/{malo_id}` · `GET /api/v1/archive/portfolio` · `GET /api/v1/archive/timeseries/{malo_id}` · `POST /api/v1/query/sql` (DataFusion, JSON or Arrow IPC, over meterstore's resolved relation) |
 | Iceberg REST | `GET /api/v1/iceberg/v1/...` — read-only Iceberg REST catalog (meterstore's `CatalogFacade`, mounted by edmd, Cedar-gated by `read-archive-olap`; mutating routes → 405). DuckDB / Spark / Trino / PyIceberg attach for schema + table locations, then read Parquet from object storage with their own credentials |
+| Balancing day | Electricity balances on the calendar day, **gas on the Gastag (06:00–06:00)** — GaBi Gas, Art. 3 Nr. 6 VO (EU) 312/2014. `?sparte=` on `GET /api/v1/billing-period/{malo_id}` and the imbalance endpoint selects it; aggregating gas over calendar days would misbook six hours into the neighbouring Bilanzierungstag every day. The long/short Gastag is the one named after the **Saturday**, because the clocks change before 06:00 |
+| MaLo-IDs | `metering::MaloId` validates the BDEW check digit at the store boundary; a malformed ID answers `400` with the reason rather than failing inside a scan |
 | GDPR | `DELETE /api/v1/gdpr/erasure/{malo_id}` — Art. 17 pseudonymisation: destroys the MaLo's subject mapping in meterstore's registry and deletes the derived edmd tables, in one transaction. Readings survive in both tiers but become unattributable |
 | Auth | OIDC/JWT + Cedar ABAC — reads tenant-scoped, **writes role-gated** (`write-meter-reads` → MSB/admin; series mutation, reading orders, GDPR erasure → MSB/NB/admin; LF-role tokens are read-only; gates pinned by the `cedar_policy` test suite); **service-to-service keys** via `[[oidc.service_keys]]` for internal callers (einsd/billingd/vertragd/portald send an opaque Bearer key, not a JWT); webhook HMAC-SHA256 (`X-Mako-Signature`). Refuses to start without `[oidc]` unless `allow_insecure_no_auth = true` |
 | Rate limiting | Per-tenant and global GCRA buckets; `429` carries `Retry-After` |
@@ -160,7 +162,7 @@ Returns all typed meter reads for a Marktlokation within the given time range.
 Query parameters: `from`, `to` (ISO 8601, defaults to epoch / now).
 
 ```bash
-curl "http://localhost:8380/api/v1/deliveries/51238696780?from=2025-10-01T00:00:00Z&to=2026-10-01T00:00:00Z"
+curl "http://localhost:8380/api/v1/deliveries/51238696012?from=2025-10-01T00:00:00Z&to=2026-10-01T00:00:00Z"
 ```
 
 Response:
@@ -168,7 +170,7 @@ Response:
 ```json
 [
   {
-    "malo_id":      "51238696780",
+    "malo_id":      "51238696012",
     "melo_id":      "DE0001234567890123456789012345678",
     "dtm_from":     "2025-10-01T00:00:00Z",
     "dtm_to":       "2025-10-01T01:00:00Z",
@@ -188,7 +190,7 @@ billing years.
 Query parameters: `from`, `to` (ISO 8601).
 
 ```bash
-curl "http://localhost:8380/api/v1/archive/olap/51238696780?from=2022-01-01T00:00:00Z&to=2024-12-31T23:59:59Z" \
+curl "http://localhost:8380/api/v1/archive/olap/51238696012?from=2022-01-01T00:00:00Z&to=2024-12-31T23:59:59Z" \
   -H "Authorization: Bearer <token>"
 ```
 
@@ -196,7 +198,7 @@ Response:
 
 ```json
 {
-  "malo_id":    "51238696780",
+  "malo_id":    "51238696012",
   "total_kwh":  "98765.43200",
   "read_count": 105120,
   "from":       "2022-01-01 00:00:00 +00:00:00",
@@ -209,14 +211,14 @@ Response:
 Returns the Mehr-/Mindermengen imbalance report for a single billing month.
 
 ```bash
-curl "http://localhost:8380/api/v1/imbalance/51238696780/2025/10"
+curl "http://localhost:8380/api/v1/imbalance/51238696012/2025/10"
 ```
 
 Response:
 
 ```json
 {
-  "malo_id":     "51238696780",
+  "malo_id":     "51238696012",
   "year":        2025,
   "month":       10,
   "mehr_kwh":    "42.0",

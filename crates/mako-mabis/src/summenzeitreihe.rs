@@ -49,7 +49,7 @@ use time::{Duration, OffsetDateTime};
 /// The quarter-hourly slot length MaBiS settles electricity on.
 pub const MABIS_SLOT: Duration = Duration::minutes(15);
 
-// Re-export the topology ID types (defined in `crate::ids`).
+/// Re-export the topology ID types (defined in `crate::ids`).
 pub use crate::ids::BilanzierungsgebietId;
 pub use crate::ids::BilanzkreisId;
 pub use crate::ids::MabisZaehlpunktId;
@@ -200,7 +200,7 @@ impl Summenzeitreihe {
 ///
 /// ```rust,ignore
 /// let mut builder = SummenzeitreiheBuilder::new(
-///     BilanzierungsgebietId("11YAPG4CTRDNZ--A".to_owned()),
+///     BilanzierungsgebietId::new("11YAPG4CTRDNZ--P").expect("a Y-type EIC"),
 ///     period_from,
 ///     period_to,
 ///     version, // ascending timestamp, MSCONS SG6 DTM+293
@@ -372,6 +372,12 @@ impl SummenzeitreiheBuilder {
 
 #[cfg(test)]
 mod tests {
+    /// A Bilanzierungsgebiet EIC for tests — panics on a malformed one, which
+    /// is the point: a fixture that is not an EIC would not be a territory.
+    fn bg(code: &str) -> BilanzierungsgebietId {
+        BilanzierungsgebietId::new(code).expect("a valid Y-type Bilanzierungsgebiet EIC")
+    }
+
     use super::*;
     use metering::{MeterInterval, QualityFlag};
     use rust_decimal::dec;
@@ -403,7 +409,7 @@ mod tests {
     fn empty_builder_produces_empty_series() {
         let (from, to) = period();
         let builder = SummenzeitreiheBuilder::new(
-            BilanzierungsgebietId("TEST".to_owned()),
+            bg("11YMAKO-TEST-01U"),
             MabisZaehlpunktId::new("DE0004030099000000000000000012345").unwrap(),
             from,
             to,
@@ -423,7 +429,7 @@ mod tests {
         let iv_start = datetime!(2026-06-01 0:00 UTC);
 
         let mut builder = SummenzeitreiheBuilder::new(
-            BilanzierungsgebietId("TEST".to_owned()),
+            bg("11YMAKO-TEST-01U"),
             MabisZaehlpunktId::new("DE0004030099000000000000000012345").unwrap(),
             from,
             to,
@@ -457,7 +463,7 @@ mod tests {
         let in_period = datetime!(2026-06-01 0:00 UTC);
 
         let mut builder = SummenzeitreiheBuilder::new(
-            BilanzierungsgebietId("TEST".to_owned()),
+            bg("11YMAKO-TEST-01U"),
             MabisZaehlpunktId::new("DE0004030099000000000000000012345").unwrap(),
             from,
             to,
@@ -495,7 +501,7 @@ mod tests {
         let iv_start = datetime!(2026-06-15 12:00 UTC);
 
         let mut builder = SummenzeitreiheBuilder::new(
-            BilanzierungsgebietId("QUALITY_TEST".to_owned()),
+            bg("11YMAKO-QUALIT-5"),
             MabisZaehlpunktId::new("DE0004030099000000000000000012345").unwrap(),
             from,
             to,
@@ -519,7 +525,7 @@ mod tests {
     fn monthly_totals_uses_resample() {
         let (from, to) = period();
         let mut builder = SummenzeitreiheBuilder::new(
-            BilanzierungsgebietId("MONTHLY_TEST".to_owned()),
+            bg("11YMAKO-MONTHL-Q"),
             MabisZaehlpunktId::new("DE0004030099000000000000000012345").unwrap(),
             from,
             to,
@@ -551,7 +557,7 @@ mod tests {
     fn a_monthly_bucket_is_rejected_rather_than_settled_as_a_slot() {
         let (from, to) = period();
         let mut builder = SummenzeitreiheBuilder::new(
-            BilanzierungsgebietId("TEST".to_owned()),
+            bg("11YMAKO-TEST-01U"),
             MabisZaehlpunktId::new("DE0004030099000000000000000012345").unwrap(),
             from,
             to,
@@ -586,7 +592,7 @@ mod tests {
     fn a_partially_covered_period_reports_its_missing_slots() {
         let (from, to) = period();
         let mut builder = SummenzeitreiheBuilder::new(
-            BilanzierungsgebietId("TEST".to_owned()),
+            bg("11YMAKO-TEST-01U"),
             MabisZaehlpunktId::new("DE0004030099000000000000000012345").unwrap(),
             from,
             to,
@@ -615,56 +621,22 @@ mod tests {
 }
 
 // ── Identifier integrity ──────────────────────────────────────────────────────
-
-/// A Summenzeitreihe whose identifiers cannot be filed as they stand.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum IdentifierDefect {
-    /// The Meldepunkt and the Bilanzierungsgebiet carry the same value.
-    #[error(
-        "Meldepunkt and Bilanzierungsgebiet are both `{0}` — MSCONS SG6 gives each \
-         its own qualifier (LOC+172 vs LOC+107), and filing the territory EIC as \
-         the Meldepunkt misidentifies the series to the BIKO, which accepts it"
-    )]
-    MeldepunktIstBilanzierungsgebiet(String),
-}
-
-impl Summenzeitreihe {
-    /// Check the identifiers that reach the wire.
-    ///
-    /// # Why this exists separately from the schema
-    ///
-    /// `marktd` refuses a MaBiS-Zählpunkt equal to its Bilanzierungsgebiet with a
-    /// `CHECK` constraint, but that only protects rows written to *that* table. A
-    /// series assembled from any other source — a caller passing the territory EIC
-    /// straight through, a fixture, a replayed payload — reaches MSCONS rendering
-    /// without ever meeting the constraint.
-    ///
-    /// The failure is undetectable downstream: MSCONS SG6 carries the Meldepunkt
-    /// (`LOC+172`), the Bilanzierungsgebiet (`LOC+107`) and the Bilanzkreis
-    /// (`LOC+237`) as free text at the MIG level, so a swapped pair parses,
-    /// validates, and is accepted by the BIKO, which then files the series
-    /// against the wrong point.
-    ///
-    /// # Errors
-    ///
-    /// [`IdentifierDefect`] naming which identifier cannot be filed.
-    pub fn validate_identifiers(&self) -> Result<(), IdentifierDefect> {
-        // Absence and the 33-character shape are guaranteed by
-        // `MabisZaehlpunktId`'s constructor, which `Deserialize` also runs — a
-        // Summenzeitreihe cannot hold a malformed Meldepunkt in the first place.
-        //
-        // Equality survives as a runtime check because `BilanzierungsgebietId`
-        // is unvalidated: a caller that put a 33-character value there could
-        // still make the two match, and that is the substitution the BIKO
-        // cannot detect.
-        if self.mabis_zp_id.as_str() == self.bilanzierungsgebiet_id.0 {
-            return Err(IdentifierDefect::MeldepunktIstBilanzierungsgebiet(
-                self.mabis_zp_id.to_string(),
-            ));
-        }
-        Ok(())
-    }
-}
+// The identifier confusion this module exists to prevent is now
+// **unrepresentable**, not merely checked.
+//
+// MSCONS SG6 carries three `LOC` qualifiers as free text — `172` the
+// Meldepunkt, `107` the Bilanzierungsgebiet, `237` the Bilanzkreis — so a
+// message that files the territory EIC as the Meldepunkt parses, validates and
+// is accepted by the BIKO, which then settles against the wrong point.
+//
+// A `validate_identifiers()` method used to refuse that at build time, because
+// `BilanzierungsgebietId` was an unchecked `String` newtype and a caller could
+// put a 33-character Zählpunktbezeichnung in it. With the territory typed as a
+// 16-character Y-type EIC and the Meldepunkt as a 33-character
+// Zählpunktbezeichnung, the two cannot hold the same value — the check could
+// no longer fail, and a control that cannot fire is worse than none, because
+// review reads it as protection. The types are the protection now;
+// `identifier_tests` pins that.
 
 #[cfg(test)]
 mod identifier_tests {
@@ -672,9 +644,15 @@ mod identifier_tests {
 
     const ZP: &str = "DE0004030099000000000000000012345";
 
+    /// See the note on `tests::bg`: a fixture that is not an EIC is not a
+    /// territory, so the helper refuses rather than papering over it.
+    fn bg(code: &str) -> BilanzierungsgebietId {
+        BilanzierungsgebietId::new(code).expect("a valid Y-type Bilanzierungsgebiet EIC")
+    }
+
     fn series(mabis_zp_id: MabisZaehlpunktId, gebiet: &str) -> Summenzeitreihe {
         SummenzeitreiheBuilder::new(
-            BilanzierungsgebietId(gebiet.to_owned()),
+            bg(gebiet),
             mabis_zp_id,
             OffsetDateTime::UNIX_EPOCH,
             OffsetDateTime::UNIX_EPOCH + Duration::days(1),
@@ -696,28 +674,43 @@ mod identifier_tests {
     /// caller had already put it in a Summenzeitreihe.
     #[test]
     fn a_malformed_meldepunkt_cannot_reach_a_summenzeitreihe() {
-        assert!(MabisZaehlpunktId::new("11XSWISSGRIDBGX1").is_err());
+        assert!(MabisZaehlpunktId::new("11XSWISSGRIDBGX8").is_err());
         assert!(MabisZaehlpunktId::new("").is_err());
     }
 
-    /// Equality survives as a runtime check because `BilanzierungsgebietId` is
-    /// unvalidated: a caller that put a 33-character value there could still
-    /// make the two match, and that is the substitution the BIKO cannot detect.
+    /// The Meldepunkt/Bilanzierungsgebiet swap cannot be built.
+    ///
+    /// This replaces a runtime equality check. A Zählpunktbezeichnung is 33
+    /// characters and a Bilanzierungsgebiet is a 16-character EIC, so neither
+    /// can be parsed into the other's type — the substitution the BIKO cannot
+    /// detect is refused before a Summenzeitreihe exists.
     #[test]
-    fn a_meldepunkt_equal_to_its_territory_is_refused() {
-        let s = series(MabisZaehlpunktId::new(ZP).unwrap(), ZP);
-        let err = s.validate_identifiers().expect_err("must be refused");
-        assert!(matches!(
-            err,
-            IdentifierDefect::MeldepunktIstBilanzierungsgebiet(_)
-        ));
-        assert!(err.to_string().contains("LOC+172"), "{err}");
+    fn the_meldepunkt_territory_swap_is_unrepresentable() {
+        // A Meldepunkt offered as a territory: wrong length.
+        assert!(BilanzierungsgebietId::new(ZP).is_err());
+        // A territory offered as a Meldepunkt: also wrong length.
+        assert!(MabisZaehlpunktId::new("11YMAKO-TEST-01U").is_err());
     }
 
-    /// A proper Zählpunktbezeichnung against its own territory passes.
+    /// A Bilanzkreis is not a Bilanzierungsgebiet, and the EIC says so.
+    ///
+    /// ENTSO-E types a Bilanzkreis as a **Party** (`X`) — it is held by a
+    /// Bilanzkreisverantwortlicher — and a Bilanzierungsgebiet as an **Area**
+    /// (`Y`). Both are 16 characters, so length cannot separate them; the
+    /// object type can, and it is the only thing that can.
+    #[test]
+    fn a_bilanzkreis_is_refused_where_a_territory_belongs() {
+        // A published Bilanzkreis code (Party).
+        assert!(BilanzierungsgebietId::new("11XSUEDWESTSTRO8").is_err());
+        // …and the mirror: an area is not a balance group.
+        assert!(BilanzkreisId::new("11YMAKO-TEST-01U").is_err());
+    }
+
+    /// A proper Zählpunktbezeichnung against its own territory builds.
     #[test]
     fn a_well_formed_pair_is_accepted() {
-        let s = series(MabisZaehlpunktId::new(ZP).unwrap(), "11XSWISSGRIDBGX1");
-        assert!(s.validate_identifiers().is_ok());
+        let s = series(MabisZaehlpunktId::new(ZP).unwrap(), "11YMAKO-TEST-01U");
+        assert_eq!(s.mabis_zp_id.as_str(), ZP);
+        assert_eq!(s.bilanzierungsgebiet_id.as_ref(), "11YMAKO-TEST-01U");
     }
 }

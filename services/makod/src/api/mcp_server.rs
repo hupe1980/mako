@@ -158,7 +158,7 @@ pub struct SubmitCommandParams {
     /// | `geli.lieferende.anmelden` | `malo_id` (gas), `lieferende_datum` |
     /// | `wim.geraetewechsel.beauftragen` | `melo_id`, `process_date` (YYYYMMDD), `receiver_mp_id` |
     /// | `mabis.abrechnung.einleiten` | `bilanzierungsgebiet`, `abrechnungszeitraum_von`, `abrechnungszeitraum_bis` |
-    #[schemars(example = "{\"malo_id\": \"10001234567\", \"lieferbeginn_datum\": \"2026-10-01\"}")]
+    #[schemars(example = "{\"malo_id\": \"10001234558\", \"lieferbeginn_datum\": \"2026-10-01\"}")]
     pub payload: serde_json::Value,
 
     /// Optional stable UUID for idempotency.
@@ -172,7 +172,7 @@ pub struct SubmitCommandParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetMaloParams {
     /// 11-digit Marktlokations-ID.
-    #[schemars(description = "11-digit Marktlokations-ID, e.g. \"10001234567\"")]
+    #[schemars(description = "11-digit Marktlokations-ID, e.g. \"10001234558\"")]
     pub malo_id: String,
 }
 
