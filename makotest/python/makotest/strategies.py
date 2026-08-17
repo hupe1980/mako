@@ -101,8 +101,13 @@ def bilanzierungsgebiete() -> SearchStrategy[str]:
     The final character of a real EIC is an ISO check character, which is
     **not** computed here: mako carries Marktpartner and Bilanzierungsgebiet
     identifiers as unvalidated wire-boundary types, so nothing on the path
-    under test verifies it. Values are structurally shaped like the codes in
-    the wild (`10XDE-EON-NETZ--`) and will not survive a checksum validator.
+    under test verifies it.
+
+    Generated values are therefore structurally shaped like the codes in the
+    wild — `10XDE-EON-NETZ-C` is one, and its trailing `C` is the check
+    character — but their own final character is drawn at random and will not
+    survive a checksum validator. Feed one to something that does validate
+    (`rubo4e::identifiers`) and expect a refusal.
     """
     issuer = st.text(alphabet="0123456789", min_size=2, max_size=2)
     rest = st.text(

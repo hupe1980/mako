@@ -75,6 +75,30 @@ const DELIBERATE: &[(&str, &str)] = &[(
          pinning one implementation's behaviour",
 )];
 
+/// Every allowlisted identifier must still *fail* its check digit.
+///
+/// The allowlist exists so a fixture that is invalid on purpose can stay in the
+/// tree. That only works while it really is invalid — and "invalid" is a
+/// property of an arithmetic that has already been corrected under us once. An
+/// entry that quietly became valid would silently exempt a real MaLo from every
+/// check this guard makes, and the tests asserting rejection would be asserting
+/// nothing.
+fn deliberate_entries_that_are_actually_valid() -> Vec<Finding> {
+    DELIBERATE
+        .iter()
+        .filter(|(id, _)| id.len() == 11 && check_digit(&id[..10]).is_some_and(|c| id.ends_with(c)))
+        .map(|(id, reason)| Finding {
+            path: PathBuf::from("xtask/src/check_malo_ids.rs"),
+            line: 0,
+            message: format!(
+                "{id} is allowlisted as deliberately invalid but its check digit is \
+                 correct, so it is a valid MaLo-ID. Every test relying on it to be \
+                 refused now asserts nothing. Allowlist reason given: {reason}"
+            ),
+        })
+        .collect()
+}
+
 /// The BDEW check digit for the first ten digits, or `None` if `d10` is not ten
 /// ASCII digits.
 fn check_digit(d10: &str) -> Option<char> {
@@ -98,9 +122,21 @@ fn mentions_malo(line: &str) -> bool {
 /// Scan the workspace. Returns `true` when every MaLo literal validates.
 pub fn run(workspace_root: &Path) -> bool {
     let mut findings = Vec::new();
-    for dir in ["services", "crates", "demos", "xtask", "site/content"] {
+    // `makotest` is in the list because leaving it out is how the Python
+    // identifier tests rotted unnoticed through a check-digit correction: the
+    // bindings under test are the same `MaloId`, so a fixture there is exactly
+    // as wrong as one in a Rust test, and only CI said so.
+    for dir in [
+        "services",
+        "crates",
+        "demos",
+        "xtask",
+        "makotest",
+        "site/content",
+    ] {
         collect(&workspace_root.join(dir), &mut findings);
     }
+    findings.extend(deliberate_entries_that_are_actually_valid());
     findings.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
 
     if findings.is_empty() {
@@ -140,7 +176,7 @@ fn collect(dir: &Path, findings: &mut Vec<Finding>) {
         } else if path.extension().is_some_and(|e| {
             matches!(
                 e.to_str(),
-                Some("rs" | "json" | "yaml" | "yml" | "md" | "sh" | "sql" | "toml" | "edi")
+                Some("rs" | "py" | "json" | "yaml" | "yml" | "md" | "sh" | "sql" | "toml" | "edi")
             )
         }) {
             scan(&path, findings);

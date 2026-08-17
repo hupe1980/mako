@@ -1146,10 +1146,11 @@ impl<S: LedgerStore<P>> Ledger<S> {
     /// the balance-sheet date" — and a number read out of a table is not
     /// evidence for it. This answers it with two proofs that chain:
     ///
-    /// 1. the [`BalanceProof`] shows the balance sat in the trial balance the
-    ///    seal committed to, for some account *handle*;
-    /// 2. the [`AccountBindingProof`] shows that handle was bound to this
-    ///    customer's Kontokorrent at the same moment.
+    /// 1. the [`BalanceProof`](doubleentry::BalanceProof) shows the balance sat
+    ///    in the trial balance the seal committed to, for some account *handle*;
+    /// 2. the [`AccountBindingProof`](doubleentry::AccountBindingProof) shows
+    ///    that handle was bound to this customer's Kontokorrent at the same
+    ///    moment.
     ///
     /// Neither half is sufficient alone: without the binding the handles float,
     /// and re-registering the same accounts in a different order would leave

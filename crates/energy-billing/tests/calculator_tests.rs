@@ -1426,17 +1426,58 @@ fn rechnung_json_has_rechnungstyp_and_rechnungsersteller() {
     // (actual metered consumption billed to the end customer). Use
     // InvoiceType::AdvancePayment for ABSCHLAGSRECHNUNG (estimated advances).
     assert_eq!(obj["rechnungstyp"].as_str(), Some("ENDKUNDENRECHNUNG"));
-    // The delivery point is a typed Marktlokation. The test id fails the BDEW
-    // checksum on purpose, so it must appear as the generic `_id` while the
-    // validated `marktlokationsId` field stays absent — a wrong check digit
-    // must never masquerade as a valid MaLo-ID.
+    // The delivery point is a typed Marktlokation. This fixture is a real MaLo
+    // (5·1·2·3·8·6·9·6·7·8 weights to 79, and 80 − 79 = 1), so both the generic
+    // `_id` and the validated `marktlokationsId` carry it. The refusal path is
+    // pinned separately below.
     let malo = &obj["marktlokation"];
     assert_eq!(malo["_id"].as_str(), Some("51238696781"));
-    assert!(malo["marktlokationsId"].is_null());
+    assert_eq!(malo["marktlokationsId"].as_str(), Some("51238696781"));
     // Issuer: BO4E Geschaeftspartner has no Marktpartner-code field, so the
     // code rides as a ZusatzAttribut on rechnungsersteller.
     let ersteller = &obj["rechnungsersteller"];
     assert_eq!(zusatz_wert(ersteller, "marktpartnercode"), "9900000000001");
+}
+
+/// A subject id that fails the BDEW check digit must never reach
+/// `marktlokationsId`.
+///
+/// Aggregate and synthetic billing subjects flow through the same field as a
+/// real delivery point, so the raw string always rides as the generic `_id`
+/// while the typed field stays absent unless the checksum holds. A downstream
+/// consumer reading `marktlokationsId` is entitled to assume it addresses a
+/// Marktlokation that could exist.
+#[cfg(feature = "bo4e")]
+#[test]
+fn a_bad_check_digit_never_becomes_a_marktlokations_id() {
+    let (f, t) = period();
+    // Same base as the valid fixture, wrong check digit: 80 − 79 = 1, not 2.
+    let ctx = BillingContext {
+        malo_id: "51238696782".to_owned(),
+        lf_mp_id: "9900000000001".to_owned(),
+        rechnungsnummer: "TEST".to_owned(),
+        period: BillingPeriod::new(f, t).unwrap(),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates_2026(),
+        ..Default::default()
+    };
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":10}"#);
+    let r = tariff
+        .build_engine(&GridInput::default(), &rates_2026())
+        .bill(ctx, &elec(dec!(100)))
+        .unwrap();
+
+    let json_obj = r.to_rechnung_json();
+    let malo = &json_obj.as_object().unwrap()["marktlokation"];
+    assert_eq!(
+        malo["_id"].as_str(),
+        Some("51238696782"),
+        "the raw subject id is still carried, so nothing is lost"
+    );
+    assert!(
+        malo["marktlokationsId"].is_null(),
+        "but a wrong check digit must not masquerade as a validated MaLo-ID"
+    );
 }
 
 // ── KA / Konzessionsabgabe ────────────────────────────────────────────────────

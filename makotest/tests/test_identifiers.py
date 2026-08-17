@@ -11,15 +11,17 @@ def test_known_valid_malo_is_accepted():
 
 
 def test_check_digit_completes_a_base():
-    assert malo_from_base("5123869678") == "51238696012"
-    assert malo_check_digit("5123869678") == 0
+    # The base of the fixture above, so this file states one MaLo consistently:
+    # 5·1·2·3·8·6·9·6·0·1 weights to 58, and 60 − 58 = 2.
+    assert malo_from_base("5123869601") == "51238696012"
+    assert malo_check_digit("5123869601") == 2
 
 
 def test_wrong_check_digit_is_rejected():
     # Same base, every other check digit must fail — this is the whole point of
     # generating MaLos via `malo_from_base` instead of inventing 11 digits.
     for d in range(10):
-        candidate = f"5123869678{d}"
+        candidate = f"5123869601{d}"
         assert malo_is_valid(candidate) == (candidate == "51238696012")
 
 
