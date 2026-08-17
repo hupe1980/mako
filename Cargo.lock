@@ -3677,9 +3677,9 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
 name = "doubleentry"
-version = "0.2.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8dac931df95b5288b8fd7ec630aba2da6205e3117a1789e581b7fad7e703bdfd"
+checksum = "1311489a62440f9ae60c9ce922309aa05b00f1da4ca8aa31b87c6364a4a572f0"
 dependencies = [
  "blake3",
  "serde",

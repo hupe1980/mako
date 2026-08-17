@@ -360,6 +360,60 @@ async fn sealing_a_period_freezes_it() {
         backdated.is_err(),
         "a booking into a sealed period must be rejected"
     );
+
+    // The gap below the watermark is closed too. A seal claims its closing
+    // balances are exact — every entry booked on or before the period's last
+    // day and nothing else — so a date that merely happens to lie in no defined
+    // period must not stay bookable underneath it. Otherwise an ordinary
+    // booking restates a sealed balance while the seal, its proofs and the
+    // whole chain go on verifying byte for byte.
+    assert_eq!(
+        ledger.sealed_through(),
+        Some(date!(2020 - 01 - 31)),
+        "the books are closed through the sealed period's last day"
+    );
+    let into_undefined_gap = pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        "KORREKTUR",
+        100,
+        &uniq("k"),
+        None,
+        None,
+        // December 2019 — earlier than the seal and covered by no period at all.
+        date!(2019 - 12 - 15),
+        date!(2019 - 12 - 15),
+        None,
+        None,
+    )
+    .await;
+    assert!(
+        into_undefined_gap.is_err(),
+        "a date below the sealed watermark is closed even where no period covers it"
+    );
+
+    // Above the watermark the books stay open — a correction books forward.
+    pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        "KORREKTUR",
+        100,
+        &uniq("k"),
+        None,
+        None,
+        date!(2020 - 02 - 03),
+        date!(2020 - 02 - 03),
+        Some("Korrektur nach der Festschreibung"),
+        None,
+    )
+    .await
+    .expect("a correction books into an open period after the seal");
 }
 
 /// Tamper-evidence: a recorded entry is provably included under the current head,
@@ -407,8 +461,541 @@ async fn ledger_entry_is_provable() {
     let head = store.head().await.unwrap();
     let proof = store.prove_inclusion(index).await.unwrap();
     assert!(
-        proof.verify(&stored.content_hash, &head.root),
+        proof.verify(&stored.content_hash, &head),
         "the entry is committed to by the current Merkle head"
+    );
+
+    // The proof is evidence about one leaf of one tree size, and nothing else.
+    // Verification takes the whole head for that reason: a check against the
+    // root alone would let a genuine proof be re-presented as a proof of a
+    // different entry in a differently sized log, which is the difference
+    // between tamper-evidence and a formality.
+    let wrong_size = doubleentry::TreeHead {
+        size: head.size + 1,
+        root: head.root,
+    };
+    assert!(
+        !proof.verify(&stored.content_hash, &wrong_size),
+        "a proof must not verify against a head that states a different size"
+    );
+}
+
+/// § 147 AO / GoBD: a sealed period's **closing balance per customer** is
+/// provable, not merely reported.
+///
+/// The two proofs have to chain. The balance proof establishes what a handle
+/// held; the binding proof establishes whose account that handle was. Checked
+/// separately they would still admit the case a verifier actually cares about —
+/// a correct balance attributed to the wrong customer.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_sealed_period_proves_the_customer_balance() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+    // A dedicated 2019 window, so this seal cannot freeze other tests.
+    let d = date!(2019 - 06 - 10);
+    pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        "RECHNUNG",
+        9_900,
+        &uniq("ce"),
+        None,
+        None,
+        d,
+        d,
+        Some("Jahresrechnung"),
+        None,
+    )
+    .await
+    .unwrap();
+    pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        "ZAHLUNG",
+        -4_000,
+        &uniq("ce"),
+        None,
+        None,
+        d,
+        d,
+        Some("Teilzahlung"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let period = uniq("seal2019-06");
+    ledger
+        .seal_period(&period, date!(2019 - 06 - 01), date!(2019 - 06 - 30))
+        .await
+        .unwrap();
+
+    let proof = ledger
+        .prove_period_balance(&period, "LF1", &malo)
+        .await
+        .expect("a sealed period proves its balances")
+        .into_proven()
+        .expect("the customer had movement in the period");
+    assert!(proof.verify(), "the proof verifies against its own seal");
+
+    let net = proof.balance.balance.debits.to_minor() - proof.balance.balance.credits.to_minor();
+    assert_eq!(
+        net, 5_900,
+        "the proven balance is the ledger net (9 900 invoiced − 4 000 paid)"
+    );
+    assert_eq!(
+        proof.path().to_string(),
+        format!("Kontokorrent:LF1:{malo}"),
+        "the proven handle is bound to this customer's Kontokorrent"
+    );
+
+    // Entries appended after the seal must not move what the seal proves — the
+    // trial balance is rebuilt over the log prefix the seal names, not over the
+    // current log.
+    pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        "RECHNUNG",
+        7_777,
+        &uniq("ce"),
+        None,
+        None,
+        date!(2026 - 03 - 01),
+        date!(2026 - 03 - 01),
+        Some("nach der Festschreibung"),
+        None,
+    )
+    .await
+    .unwrap();
+    let again = ledger
+        .prove_period_balance(&period, "LF1", &malo)
+        .await
+        .expect("still provable after later postings")
+        .into_proven()
+        .expect("still proven");
+    assert!(again.verify(), "and still verifies");
+    assert_eq!(
+        again.balance.balance.debits.to_minor() - again.balance.balance.credits.to_minor(),
+        5_900,
+        "a later booking cannot change a sealed period's proven balance"
+    );
+
+    // Onboarding a new customer grows the account registry. The binding proof
+    // has to be built against the registry the seal committed to, not the live
+    // one — built against today's larger registry it has a longer path and
+    // verifies against nothing, which would make every balance in every closed
+    // period unprovable the moment the next customer signs up.
+    let newcomer = uniq("MALO");
+    pg::upsert_account(&pool, &newcomer, "LF1", TENANT)
+        .await
+        .unwrap();
+    pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &newcomer,
+        "LF1",
+        "RECHNUNG",
+        1_234,
+        &uniq("ce"),
+        None,
+        None,
+        date!(2026 - 03 - 02),
+        date!(2026 - 03 - 02),
+        Some("Neukunde nach der Festschreibung"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let after_onboarding = ledger
+        .prove_period_balance(&period, "LF1", &malo)
+        .await
+        .expect("a new customer must not break proofs for already-sealed periods")
+        .into_proven()
+        .expect("still proven after the registry grew");
+    assert!(
+        after_onboarding.verify(),
+        "the binding proof is built against the registry as the seal recorded it"
+    );
+    assert_eq!(
+        after_onboarding.path().to_string(),
+        format!("Kontokorrent:LF1:{malo}"),
+        "and still names the right customer"
+    );
+
+    // The newcomer had no account when the period closed, so there is nothing
+    // to prove about them — and a zero-balance proof must not be manufactured.
+    // That is an answer about intact books, not a failure, and it is a different
+    // answer from "was on the books but had no movement": collapsing the two
+    // would invite reading "not a customer yet" as "nothing happened".
+    let newcomer_outcome = ledger
+        .prove_period_balance(&period, "LF1", &newcomer)
+        .await
+        .expect("asking about a later customer is a well-formed question");
+    assert!(
+        matches!(
+            newcomer_outcome,
+            doubleentry::SealedBalanceOutcome::NotYetRegistered
+        ),
+        "a customer who did not exist at sealing time is not someone the seal can          speak about at all, which is not the same as having had no movement"
+    );
+}
+
+/// An account registered before a seal whose bookings all fall **after** the
+/// period has no row in its closing balance — and that is not a balance of zero.
+///
+/// A seal commits to *closing balances*, cumulative as of the period's last day,
+/// so a customer who was quiet during the period but active before it still has a
+/// row carrying the balance they brought in. The genuinely absent case is the one
+/// here: a customer onboarded in August, for books that close June afterwards.
+/// They are nameable — the registry had issued their handle by sealing time — and
+/// the period still says nothing about them.
+///
+/// That is a different answer from "was not a customer yet", which the sibling
+/// test covers, and collapsing the two would invite reading one as the other.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_account_booked_only_after_the_period_has_no_row() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let later = uniq("MALO");
+    let active = uniq("MALO");
+    for malo in [&later, &active] {
+        pg::upsert_account(&pool, malo, "LF1", TENANT)
+            .await
+            .unwrap();
+    }
+
+    pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &active,
+        "LF1",
+        "RECHNUNG",
+        2_000,
+        &uniq("ce"),
+        None,
+        None,
+        date!(2023 - 06 - 15),
+        date!(2023 - 06 - 15),
+        Some("in der Periode"),
+        None,
+    )
+    .await
+    .unwrap();
+    // Onboarded in August — registered before June is sealed, but with nothing
+    // booked on or before 30 June.
+    pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &later,
+        "LF1",
+        "RECHNUNG",
+        1_000,
+        &uniq("ce"),
+        None,
+        None,
+        date!(2023 - 08 - 05),
+        date!(2023 - 08 - 05),
+        Some("Neukunde im August"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    ledger
+        .seal_period("2023-06", date!(2023 - 06 - 01), date!(2023 - 06 - 30))
+        .await
+        .unwrap();
+
+    let outcome = ledger
+        .prove_period_balance("2023-06", "LF1", &later)
+        .await
+        .expect("a registered account is a well-formed question");
+    assert!(
+        matches!(outcome, doubleentry::SealedBalanceOutcome::NoRow),
+        "the handle was issued by sealing time, so the account is nameable — it \
+         simply has no row in June's closing balance, which is not a proven zero"
+    );
+    assert!(outcome.is_absent(), "nothing to prove, either way");
+
+    let proven = ledger
+        .prove_period_balance("2023-06", "LF1", &active)
+        .await
+        .unwrap()
+        .into_proven()
+        .expect("the active account did move");
+    assert!(proven.verify());
+    assert_eq!(
+        proven.balance.balance.debits.to_minor() - proven.balance.balance.credits.to_minor(),
+        2_000,
+        "and the August invoice is no part of June's closing balance"
+    );
+}
+
+/// The sealed watermark has to survive a restart.
+///
+/// It is held in an in-process calendar mirror, rebuilt from the period table on
+/// connect. If that rebuild dropped it, a service restart would silently reopen
+/// every gap below the last seal — and the first backdated booking after a
+/// deploy would restate a sealed closing balance with every proof still
+/// verifying.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_sealed_watermark_survives_a_restart() {
+    let Some((url, _pg)) = pg_container().await else {
+        return;
+    };
+    let pool = PgPool::connect(&url).await.unwrap();
+    sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+    mako_service::outbox::ensure_schema(&pool).await.unwrap();
+
+    let malo = uniq("MALO");
+    {
+        let ledger = PgLedger::connect(&url, TENANT).await.unwrap();
+        pg::upsert_account(&pool, &malo, "LF1", TENANT)
+            .await
+            .unwrap();
+        pg::post_entry(
+            &ledger,
+            &pool,
+            TENANT,
+            &malo,
+            "LF1",
+            "RECHNUNG",
+            5_000,
+            &uniq("ce"),
+            None,
+            None,
+            date!(2022 - 05 - 10),
+            date!(2022 - 05 - 10),
+            Some("vor der Festschreibung"),
+            None,
+        )
+        .await
+        .unwrap();
+        ledger
+            .seal_period("2022-05", date!(2022 - 05 - 01), date!(2022 - 05 - 31))
+            .await
+            .unwrap();
+    }
+
+    // Restart: a fresh process against the same database.
+    let restarted = PgLedger::connect(&url, TENANT).await.unwrap();
+    assert_eq!(
+        restarted.sealed_through(),
+        Some(date!(2022 - 05 - 31)),
+        "the watermark is rebuilt from the period table on connect"
+    );
+    let backdated = pg::post_entry(
+        &restarted,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        "KORREKTUR",
+        100,
+        &uniq("k"),
+        None,
+        None,
+        date!(2022 - 04 - 02),
+        date!(2022 - 04 - 02),
+        None,
+        None,
+    )
+    .await;
+    assert!(
+        backdated.is_err(),
+        "an undefined month below the watermark stays closed across a restart"
+    );
+    assert!(
+        restarted.verify_seals().await.is_ok(),
+        "and the seal chain still verifies"
+    );
+}
+
+/// A seal commits to the closing balance folded by **booking date**, not by log
+/// prefix — and the two differ in the ordinary case.
+///
+/// Nobody seals January on 31 January. The books close in February, by which
+/// time the log already holds February entries, so the prefix standing at the
+/// moment of sealing is not the period. Rebuilding the commitment the wrong way
+/// reproduces a different root and nothing is provable at all.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_period_sealed_after_later_bookings_still_proves_its_closing_balance() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+
+    // January: the period being closed.
+    pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        "RECHNUNG",
+        12_000,
+        &uniq("ce"),
+        None,
+        None,
+        date!(2021 - 01 - 15),
+        date!(2021 - 01 - 15),
+        Some("Januarrechnung"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    // February, booked *before* January is sealed — the normal state of affairs
+    // when the books close a few weeks in arrears.
+    pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        "RECHNUNG",
+        99_000,
+        &uniq("ce"),
+        None,
+        None,
+        date!(2021 - 02 - 10),
+        date!(2021 - 02 - 10),
+        Some("Februarrechnung — darf nicht in den Januar-Seal fallen"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    ledger
+        .seal_period("2021-01", date!(2021 - 01 - 01), date!(2021 - 01 - 31))
+        .await
+        .unwrap();
+
+    let proof = ledger
+        .prove_period_balance("2021-01", "LF1", &malo)
+        .await
+        .expect("the closing balance is rebuilt by booking date, so it matches the seal")
+        .into_proven()
+        .expect("January had movement");
+    assert!(proof.verify(), "and the proof verifies against the seal");
+    assert_eq!(
+        proof.balance.balance.debits.to_minor() - proof.balance.balance.credits.to_minor(),
+        12_000,
+        "the January seal proves the January closing balance — the February \
+         invoice sitting in the log ahead of it is not part of the period"
+    );
+}
+
+/// The append-only half of the evidence: an auditor who archived a head earlier
+/// can prove the journal has only grown since.
+///
+/// An inclusion proof alone says the ledger is self-consistent *now*, which a
+/// ledger rebuilt from scratch would also satisfy.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_journal_proves_it_is_append_only() {
+    use doubleentry::storage::LedgerStore;
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+    let d = date!(2026 - 04 - 01);
+
+    // The archive point must hold entries. Every log is consistent with the
+    // empty tree, so a proof taken against size 0 asserts nothing and could not
+    // detect a substituted head however it was checked.
+    for amount in [5_000_i64, 6_000] {
+        pg::post_entry(
+            &ledger,
+            &pool,
+            TENANT,
+            &malo,
+            "LF1",
+            "RECHNUNG",
+            amount,
+            &uniq("ce"),
+            None,
+            None,
+            d,
+            d,
+            Some("pre-archive"),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    let archived = ledger.store().head().await.unwrap();
+    assert!(archived.size > 0, "the auditor archived a non-empty log");
+    for amount in [1_000_i64, 2_000, 3_000] {
+        pg::post_entry(
+            &ledger,
+            &pool,
+            TENANT,
+            &malo,
+            "LF1",
+            "RECHNUNG",
+            amount,
+            &uniq("ce"),
+            None,
+            None,
+            d,
+            d,
+            Some("post-archive"),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    let (proof, then, now) = ledger.prove_append_only(archived.size).await.unwrap();
+    assert_eq!(
+        then, archived,
+        "the head the service reconstructs for that size is the one the auditor archived"
+    );
+    assert!(now.size >= archived.size + 3, "the log grew");
+    assert!(
+        proof.verify(&then, &now),
+        "the archived log is a prefix of the current one"
+    );
+
+    // The same proof must not vouch for a head it was not built against.
+    let forged = doubleentry::TreeHead {
+        size: now.size,
+        root: archived.root,
+    };
+    assert!(
+        !proof.verify(&then, &forged),
+        "a consistency proof must not verify against a substituted root"
     );
 }
 

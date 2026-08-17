@@ -273,6 +273,17 @@ impl Daemon for Accountingd {
                 "/api/v1/entries/{entry_id}/proof",
                 get(handlers::get_entry_proof),
             )
+            // Proves a customer's closing balance for a sealed period, not just
+            // that a booking exists — the question a Betriebsprüfung asks.
+            .route(
+                "/api/v1/periods/{period_id}/balance-proof",
+                get(handlers::get_period_balance_proof),
+            )
+            // Append-only evidence for an auditor holding an archived head.
+            .route(
+                "/api/v1/entries/consistency-proof",
+                get(handlers::get_consistency_proof),
+            )
             // ── Summen- und Saldenliste + Zahlungszuordnung (open-item clearing) ──
             .route("/api/v1/trial-balance", get(handlers::get_trial_balance))
             .route(

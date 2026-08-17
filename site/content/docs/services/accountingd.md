@@ -144,8 +144,10 @@ for operator override (e.g. grace extensions, special B2B arrangements).
 | `GET/POST` | `/api/v1/accounts/{malo_id}/payment-plans` | Zahlungsvereinbarung — list/create payment plans |
 | `GET` | `/api/v1/aging` | **Aging analysis** — receivables by 0–30d / 31–60d / 61–90d / >90d buckets |
 | `POST` | `/api/v1/periods/{period_id}/seal` | **Festschreibung** (GoBD / § 146 AO) — close + seal a period; body `{ "start", "end" }` |
-| `GET` | `/api/v1/periods/seals` | Seal history + chain verification (`chain_valid`) |
+| `GET` | `/api/v1/periods/seals` | Seal history + chain verification (`chain_valid`) and `sealed_through` — the date the books are closed through |
 | `GET` | `/api/v1/entries/{entry_id}/proof` | **Merkle inclusion proof** an entry is committed (content hash + tree head) |
+| `GET` | `/api/v1/periods/{period_id}/balance-proof` | **Balance proof** — what a customer's Kontokorrent closed at in a sealed period (§ 147 AO); query `malo_id`, `lf_mp_id` |
+| `GET` | `/api/v1/entries/consistency-proof` | **Consistency proof** the journal has only been appended to since `?since=<tree_size>` |
 | `POST` | `/api/v1/payments/import` | Ingest CAMT.054 bank statement (JSON array, deduplicated by `bank_transaction_id`) |
 | `GET` | `/api/v1/offene-posten` | Overdue accounts |
 | `GET` | `/api/v1/dunning` | Open dunning cases |
@@ -444,29 +446,135 @@ period contains and what they add up to, as chained BLAKE3 Merkle roots. A seale
 period is terminal — a backdated booking into it is refused, and a correction books
 into a later open period carrying its original date (§ 146 Abs. 4 AO).
 
+The closing balances a seal commits to are folded by **booking date**, not by how
+far the journal had grown when the seal was taken. Nobody closes January on
+31 January; by the time the books close, February entries are already in the log,
+and only the booking-date fold answers what the period actually ended at.
+
 ```bash
 # Seal January 2026 (Festschreibung)
 curl -X POST "http://accountingd:9380/api/v1/periods/2026-01/seal" \
   -H 'content-type: application/json' \
   -d '{"start":"2026-01-01","end":"2026-01-31"}'
-# → { "period":"2026-01", "seal_hash":"…", "tree_root":"…",
-#     "trial_balance_root":"…", "entry_count": 41234, "prev_seal":"…" }
+# → { "ledger":"…", "period":"2026-01", "seal_hash":"…",
+#     "tree_root":"…", "tree_size": 41234,
+#     "trial_balance_root":"…", "trial_balance_size": 8821,
+#     "accounts_root":"…", "accounts_size": 8823,
+#     "entry_count": 41234, "prev_seal":"…" }
 
 # The seal history, with chain verification
-curl "http://accountingd:9380/api/v1/periods/seals"        # → { count, chain_valid, seals:[…] }
+curl "http://accountingd:9380/api/v1/periods/seals"
+# → { count, chain_valid, sealed_through: "2026-01-31", seals:[…] }
 ```
+
+### `sealed_through` — the watermark, not the period list
+
+`sealed_through` is the greatest end date among sealed periods, and it is what
+decides whether a booking is accepted: **every date at or before it is closed,
+whether or not a period covers it.** A month the calendar never mentioned is not
+an opening to book through — it is a range already committed to.
+
+Without that rule a seal's claim is falsifiable by an ordinary write. Sealing
+January while an undefined December still accepted postings would let a routine
+booking restate January's cumulative closing balance, with the seal, its balance
+proofs and the whole chain going on verifying byte for byte.
+
+The consequence for operators: **seal periods in order, and expect everything
+below the watermark to close at once.** Sealing only audited years still shuts
+every earlier date. The watermark is rebuilt from the period table at start-up,
+so it survives a restart.
 
 Seals **chain**, so removing or reordering a sealed period breaks every seal after
-it — `chain_valid` catches that. Any single entry is independently provable:
+it — `chain_valid` catches that. The seal also names the **ledger** inside its own
+hash, so a seal from another deployment cannot be pushed onto this chain: two
+tenants with structurally identical books would otherwise produce byte-identical
+seals, and a seal handed to an auditor would not say whose books it attests to.
+
+Every Merkle root a seal publishes travels with the **size** of the tree it is the
+root of. That pairing is load-bearing rather than cosmetic — a root alone does not
+fix which tree it belongs to, so a proof checked against a bare root can be
+replayed against a different tree, and a genuine proof for one entry verifies
+unchanged as a proof for another.
+
+### Three questions an auditor can ask
 
 ```bash
+# 1. Is this booking in the books?
 curl "http://accountingd:9380/api/v1/entries/{entry_id}/proof"
 # → { content_hash, tree_size, tree_root, verified: true, proof: {…} }
+
+# 2. What did this customer owe at the balance-sheet date?
+curl "http://accountingd:9380/api/v1/periods/2026-01/balance-proof?malo_id=…&lf_mp_id=…"
+# → { balance_ct, debits_ct, credits_ct, account:"Kontokorrent:…",
+#     verified: true, seal: {…}, sealed_balance: {…} }
+#   …or { absent: true, reason: "no_row" | "not_yet_registered", detail: "…" }
+
+# 3. Has the journal only been appended to since I last looked?
+curl "http://accountingd:9380/api/v1/entries/consistency-proof?since=41234"
+# → { archived_size, archived_root, current_size, current_root,
+#     verified: true, vacuous: false, proof: {…} }
 ```
 
-The `O(log n)` inclusion proof lets an auditor confirm the entry is committed to by
-the current head **without access to this service** — the tamper-evidence the old
-single-row ledger could not give.
+All three are `O(log n)` and verifiable **without access to this service**.
+
+The **balance proof** is the one a Betriebsprüfung actually needs. An inclusion
+proof shows a booking exists; § 147 AO asks what an account closed at. The answer
+comes as two proofs that must be checked together, bundled in `sealed_balance`:
+
+- the balance proof shows the balance sat in the closing trial balance the seal
+  committed to — for some account *handle*;
+- the account-binding proof shows that handle was bound to this customer's
+  Kontokorrent at the same moment.
+
+Neither half suffices alone. Without the binding the handles float: re-registering
+the same accounts in a different order would leave every balance proof verifying
+while each referred to a different customer. The bundle is returned verbatim so a
+recipient can deserialise it and re-verify without this service in the loop; the
+flattened `balance_ct` and friends are for reading, `sealed_balance` is the
+evidence. A seal edited in transit fails to deserialise at all, so a recipient who
+never calls verify is not fooled either.
+
+Before answering, the service rebuilds the closing balance and requires it to
+reproduce the seal. If it does not, the books were restated beneath a
+Festschreibung: the request fails rather than returning a proof against a
+commitment computed on the spot, which would be internally consistent and
+evidence of nothing.
+
+### When there is nothing to prove
+
+Two replies carry no proof, and they are **different answers** — the response
+says which, because reading one as the other would misstate the customer's
+history:
+
+```jsonc
+{ "absent": true, "reason": "not_yet_registered" }  // was not on the books yet
+{ "absent": true, "reason": "no_row" }              // nameable, but the seal committed to no balance
+```
+
+Neither is a failure — the books are intact and the question simply has a
+negative reply — and neither is a balance of **zero**. An account with no row is
+one the seal committed nothing about, so a proof of zero must not be
+manufactured for it.
+
+A seal's trial balance holds **cumulative closing balances** as of the period's
+last day, not that period's turnover. So a customer who was quiet during the
+period but active before it still has a row, carrying the balance they brought
+in. `no_row` means nothing was booked on or before the period's last day at all —
+in practice, a customer onboarded in August for books that close June afterwards:
+nameable, because their handle existed when the seal was taken, and still outside
+everything the period committed to.
+
+The **consistency proof** is what makes the log append-only in the eyes of someone
+who was here before. An inclusion proof taken today shows only that the ledger is
+internally consistent *now* — a ledger rebuilt from scratch would satisfy it too.
+An auditor who archived `tree_size` and `tree_root` on an earlier visit checks the
+returned proof against the head they hold and the head returned now.
+
+Watch `vacuous`. Every log extends the empty tree, so a proof taken against an
+archive point of size 0 verifies against any root of the right size — correct
+mathematics, and a trap, because `verified: true` from a check that examined
+nothing looks exactly like a real verification. When `vacuous` is true the answer
+carries no information and the archive point needs to be a real one.
 
 ---
 
@@ -1460,5 +1568,16 @@ the doubleentry-backed ledger end-to-end against real PostgreSQL:
 - ABSCHLAG credit nets against RECHNUNG in the account balance
 - A conflicting idempotency key is refused
 - A payment clears its invoice and the trial balance still balances to zero
-- Sealing a period freezes it (Festschreibung / §146 AO)
-- Every entry is provable via a Merkle inclusion proof
+- Sealing a period freezes it (Festschreibung / §146 AO), and closes every earlier
+  date with it — including months no period ever covered
+- The sealed watermark survives a restart, so a redeploy cannot reopen the books
+- Every entry is provable via a Merkle inclusion proof, and that proof does **not**
+  verify against a head stating a different tree size
+- A sealed period proves each customer's closing balance, and a booking made after
+  the seal cannot change what it proves
+- The two ways to have nothing to prove stay distinct — not on the books yet, and
+  nameable but outside the seal's closing balance — and neither is a proven zero
+- A period sealed *after* later months were already booked still proves its own
+  closing balance — the fold is by booking date, not by log position
+- The journal proves it is append-only against an archived head, and the proof does
+  not verify against a substituted root

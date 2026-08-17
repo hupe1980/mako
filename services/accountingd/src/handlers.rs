@@ -3030,11 +3030,22 @@ pub struct SealPeriodRequest {
 
 fn seal_json(seal: &doubleentry::Seal) -> serde_json::Value {
     serde_json::json!({
+        "ledger": seal.ledger.as_str(),
         "period": seal.period.as_str(),
         "seal_hash": seal.seal_hash.to_string(),
         "tree_root": seal.tree_head.root.to_string(),
         "tree_size": seal.tree_head.size,
-        "trial_balance_root": seal.trial_balance_root.to_string(),
+        // Roots travel with their sizes. A Merkle root on its own does not fix
+        // which tree it is the root of, so a proof checked against a bare root
+        // can be replayed against a different tree; every commitment a seal
+        // publishes is therefore published as a (root, size) pair.
+        "trial_balance_root": seal.trial_balance.root.to_string(),
+        "trial_balance_size": seal.trial_balance.size,
+        // What the trial balance's account handles meant at sealing time.
+        // Without it the handles float and every balance in the seal could
+        // silently refer to a different account.
+        "accounts_root": seal.accounts.root.to_string(),
+        "accounts_size": seal.accounts.size,
         "entry_count": seal.entry_count,
         "first_index": seal.first_index,
         "last_index": seal.last_index,
@@ -3083,6 +3094,10 @@ pub async fn get_seals(
         "count": seals.len(),
         "chain_valid": verified.is_ok(),
         "verify_error": verified.err().map(|e| e.to_string()),
+        // The watermark, not the period list, decides what may still be booked:
+        // every date at or before it is sealed whether or not a period covers
+        // it. An operator asking "is February still open" needs this.
+        "sealed_through": ledger.sealed_through().map(|d| d.to_string()),
         "seals": seals.iter().map(seal_json).collect::<Vec<_>>(),
     }))
     .into_response()
@@ -3102,7 +3117,11 @@ pub async fn get_entry_proof(
         .await
     {
         Ok((content_hash, proof, head)) => {
-            let verified = proof.verify(&content_hash, &head.root);
+            // Against the whole head, never the bare root: a proof is only
+            // meaningful for a stated tree size. Checked against a root alone,
+            // a genuine proof for one leaf verifies unchanged as a proof for a
+            // different leaf of a differently sized log.
+            let verified = proof.verify(&content_hash, &head);
             Json(serde_json::json!({
                 "entry_id": entry_id,
                 "content_hash": content_hash.to_string(),
@@ -3114,6 +3133,164 @@ pub async fn get_entry_proof(
             .into_response()
         }
         Err(e) => (StatusCode::NOT_FOUND, e.to_string()).into_response(),
+    }
+}
+
+/// Query for `GET /api/v1/periods/{period_id}/balance-proof`.
+#[derive(Debug, serde::Deserialize)]
+pub struct BalanceProofQuery {
+    /// Marktlokation whose Kontokorrent balance is being proven.
+    pub malo_id: String,
+    /// The Lieferant the Kontokorrent belongs to.
+    pub lf_mp_id: String,
+}
+
+/// `GET /api/v1/periods/{period_id}/balance-proof` — proves what one customer's
+/// account closed at, for a sealed period.
+///
+/// The Betriebsprüfung question (§ 147 AO / GoBD) is not "is this booking in the
+/// books" but "what did this customer owe at the balance-sheet date". A figure
+/// read out of a table is not evidence for that; this returns the two chained
+/// Merkle proofs that are.
+pub async fn get_period_balance_proof(
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Path(period_id): Path<String>,
+    Query(q): Query<BalanceProofQuery>,
+) -> impl IntoResponse {
+    let outcome = match ledger
+        .prove_period_balance(&period_id, &q.lf_mp_id, &q.malo_id)
+        .await
+    {
+        Ok(o) => o,
+        Err(e) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    // Two ways to have nothing to prove, and they are different sentences. The
+    // books are intact in both, so neither is an error — but "had no movement
+    // that period" and "was not a customer yet" answer an auditor differently,
+    // and collapsing them would invite reading the second as the first.
+    let proof = match outcome {
+        doubleentry::SealedBalanceOutcome::Proven(proof) => *proof,
+        doubleentry::SealedBalanceOutcome::NoRow => {
+            return Json(serde_json::json!({
+                "period": period_id,
+                "malo_id": q.malo_id,
+                "lf_mp_id": q.lf_mp_id,
+                "absent": true,
+                "reason": "no_row",
+                // Absent is not zero. A seal's closing balances are cumulative
+                // as of the period's last day, so this means nothing was booked
+                // on or before that date — not merely that the period itself was
+                // quiet. There is nothing the seal committed to, and no proof
+                // may be manufactured.
+                "detail": "the account was nameable when the period closed but has \
+                           nothing booked on or before its last day, so the seal \
+                           committed to no balance for it — this is not a proven zero",
+            }))
+            .into_response();
+        }
+        doubleentry::SealedBalanceOutcome::NotYetRegistered => {
+            return Json(serde_json::json!({
+                "period": period_id,
+                "malo_id": q.malo_id,
+                "lf_mp_id": q.lf_mp_id,
+                "absent": true,
+                "reason": "not_yet_registered",
+                "detail": "the account did not exist when the period sealed — \
+                           a seal names the handles the registry had issued by then, \
+                           so it cannot speak about this account at all",
+            }))
+            .into_response();
+        }
+    };
+
+    // Verified here before it is published: handing out a proof that does not
+    // check is worse than returning nothing, because it looks like evidence.
+    if !proof.verify() {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": "constructed balance proof does not verify against its seal"
+            })),
+        )
+            .into_response();
+    }
+
+    let balance = &proof.balance.balance;
+    Json(serde_json::json!({
+        "period": period_id,
+        "malo_id": q.malo_id,
+        "lf_mp_id": q.lf_mp_id,
+        "account": proof.path().to_string(),
+        "debits_ct": balance.debits.to_minor(),
+        "credits_ct": balance.credits.to_minor(),
+        // Positive = the customer owes, negative = the customer is owed.
+        "balance_ct": balance.debits.to_minor() - balance.credits.to_minor(),
+        "verified": true,
+        "seal": seal_json(&proof.seal),
+        // The whole bundle, verbatim. A recipient deserialises this back into a
+        // `doubleentry::SealedBalance` and calls `verify()` themselves — the
+        // flattened fields above are for reading, this is the evidence. An
+        // edited seal fails to deserialise at all, so someone who never calls
+        // `verify` is not fooled either.
+        "sealed_balance": serde_json::to_value(&proof).unwrap_or(serde_json::Value::Null),
+    }))
+    .into_response()
+}
+
+/// Query for `GET /api/v1/entries/consistency-proof`.
+#[derive(Debug, serde::Deserialize)]
+pub struct ConsistencyQuery {
+    /// The tree size the auditor archived on an earlier visit.
+    pub since: u64,
+}
+
+/// `GET /api/v1/entries/consistency-proof?since=N` — proves the journal has only
+/// been appended to since it held `N` entries.
+///
+/// An inclusion proof on its own says the ledger is internally consistent *now*,
+/// which a rebuilt ledger would satisfy just as well. This is the half that makes
+/// the log append-only in the eyes of someone who was here before: they check it
+/// against the head they archived and the head returned here.
+pub async fn get_consistency_proof(
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Query(q): Query<ConsistencyQuery>,
+) -> impl IntoResponse {
+    match ledger.prove_append_only(q.since).await {
+        Ok((proof, then, now)) => {
+            let verified = proof.verify(&then, &now);
+            // Every log extends the empty tree, so a proof taken at size 0
+            // verifies against any root of the right size — correct mathematics
+            // and a trap, because `verified: true` from a check that examined
+            // nothing is indistinguishable from a real verification. Say so
+            // rather than let an auditor read reassurance into it.
+            let vacuous = proof.is_vacuous();
+            Json(serde_json::json!({
+                "archived_size": then.size,
+                "archived_root": then.root.to_string(),
+                "current_size": now.size,
+                "current_root": now.root.to_string(),
+                "verified": verified,
+                "vacuous": vacuous,
+                "vacuous_note": vacuous.then_some(
+                    "the archived head was the empty log; every log extends it, \
+                     so this proof examined nothing"
+                ),
+                "proof": serde_json::to_value(&proof).unwrap_or(serde_json::Value::Null),
+            }))
+            .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 

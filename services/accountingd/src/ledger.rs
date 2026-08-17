@@ -35,12 +35,12 @@ use doubleentry::clearing::{ClearedItem, Clearing, ClearingId, PostingRef};
 use doubleentry::entry::{Description, DocumentRef, LedgerPolicy, Provenance, SealContext};
 use doubleentry::period::{LedgerId, Period, PeriodCalendar, PeriodId, PeriodState};
 use doubleentry::posting::Direction;
-use doubleentry::seal::SealChain;
+use doubleentry::seal::{SealChain, SealedBalanceOutcome};
 use doubleentry::storage::postgres::PostgresStore;
-use doubleentry::storage::{Cursor, EntryBatch, LedgerStore, StatementPage};
+use doubleentry::storage::{Cursor, EntryBatch, LedgerStore, PostingCursor, StatementPage};
 use doubleentry::{
-    AccountRegistry, Amount, BalanceKey, Currency, Entry, EntryId, Hash, IdempotencyKey,
-    InclusionProof, Label, Layer, OpenItem, Seal, TreeHead,
+    AccountRegistry, Amount, BalanceKey, ConsistencyProof, Currency, Entry, EntryId, Hash,
+    IdempotencyKey, InclusionProof, Label, Layer, OpenItem, Seal, TreeHead,
 };
 
 /// EUR at 2-dp minor units (cents) — accountingd's only currency.
@@ -88,6 +88,29 @@ pub fn iban_hash(key: Option<&[u8; 32]>, iban: &str) -> String {
 ///
 /// These are the non-customer side of every entry. The customer side is a
 /// per-Marktlokation Kontokorrent registered lazily on first booking.
+///
+/// # No `BalanceLimit` on any of them
+///
+/// doubleentry can pin an account to one side of the ledger and reject in the
+/// append transaction any entry that would flip it. No account here takes one,
+/// and the reason differs per account rather than being an oversight:
+///
+/// - **Kontokorrent** is bidirectional by design — a credit balance is how an
+///   EEG operator or an overpaying customer is represented. A limit here would
+///   contradict the ledger's own model.
+/// - **Bank** looks like it qualifies (a chargeback always follows a
+///   collection), but only in steady state. The ledger starts empty at
+///   cut-over, so a `BANKRUECKLAST` for a collection made in the legacy system
+///   would be the first movement on the account and a limit would make a
+///   legitimate inbound bank event permanently unbookable, with no override.
+/// - **Erloese / Mahnerloese / EEG-Aufwand** are each one side of a partial
+///   view; a STORNO of a pre-migration invoice breaches them for the same
+///   reason.
+/// - **Erstattungen** is only ever credited — nothing discharges it here — so a
+///   `NoDebitBalance` limit would be true and could never fire.
+///
+/// The invariant that is actually worth enforcing (every entry balances) is
+/// structural and already unconditional.
 #[derive(Debug, Clone, Copy)]
 pub struct Chart {
     /// SKR 1200 — Bankguthaben. Debited by incoming payments, credited by chargebacks.
@@ -573,8 +596,26 @@ impl<S: LedgerStore<P>> Ledger<S> {
             currency: Currency::EUR,
             layer: Layer::Settled,
         };
+        self.all_open_items(key).await
+    }
+
+    /// Every open item on the account — the deliberately unbounded read.
+    ///
+    /// Both callers need completeness, not just the oldest few. Allocating a
+    /// payment across invoices and totalling what an account has outstanding are
+    /// each answered *wrongly* by a partial list: a payment larger than the first
+    /// page's residuals under-allocates, and a total comes out short.
+    ///
+    /// What a partial read would **not** break is the FIFO order itself — pages
+    /// come oldest first, so the first page is the oldest items and matching over
+    /// it is correct as far as it goes. The § 252 HGB risk here is incompleteness,
+    /// not mis-ordering.
+    ///
+    /// A per-Marktlokation Kontokorrent holds a handful of open invoices, so this
+    /// is one page in practice; it is written to be right when it is not.
+    async fn all_open_items(&self, key: BalanceKey) -> anyhow::Result<Vec<OpenItem<P>>> {
         self.store
-            .open_items(key)
+            .all_open_items(key)
             .await
             .map_err(|e| anyhow::anyhow!("open items: {e}"))
     }
@@ -586,7 +627,11 @@ impl<S: LedgerStore<P>> Ledger<S> {
         key: BalanceKey,
     ) -> anyhow::Result<std::collections::HashMap<PostingRef, (Date, u64, Option<String>)>> {
         let mut meta = std::collections::HashMap::new();
-        let mut cursor = Cursor::start();
+        // A posting cursor, not an entry cursor: one entry can put several lines
+        // on the same account, so a page boundary falling inside an entry would
+        // skip its remaining postings — invisibly, because the running balance
+        // stays consistent across the gap.
+        let mut cursor = PostingCursor::start();
         loop {
             let page = self
                 .store
@@ -641,11 +686,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
         let meta = self.posting_meta(key).await?;
         let sort_key = |p: &PostingRef| meta.get(p).map_or((Date::MIN, u64::MAX), |m| (m.0, m.1));
 
-        let open = self
-            .store
-            .open_items(key)
-            .await
-            .map_err(|e| anyhow::anyhow!("open items: {e}"))?;
+        let open = self.all_open_items(key).await?;
         let mut debits: Vec<(PostingRef, i64)> = open
             .iter()
             .filter(|i| i.direction == Direction::Debit && i.residual.to_minor() > 0)
@@ -701,6 +742,11 @@ impl<S: LedgerStore<P>> Ledger<S> {
                 id,
                 account,
                 currency: Currency::EUR,
+                // accountingd books only settled movements — it has no
+                // reservation layer. Naming it explicitly keeps a future
+                // reservation (a pending SEPA collection, say) from being
+                // netted against a booked payment.
+                layer: Layer::Settled,
                 cleared_on: on,
                 items,
             })
@@ -730,11 +776,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
             layer: Layer::Settled,
         };
         let meta = self.posting_meta(key).await?;
-        let open = self
-            .store
-            .open_items(key)
-            .await
-            .map_err(|e| anyhow::anyhow!("open items: {e}"))?;
+        let open = self.all_open_items(key).await?;
         let mut out: Vec<OpenReceivable> = open
             .iter()
             .filter(|i| i.direction == Direction::Debit && i.residual.to_minor() > 0)
@@ -822,7 +864,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
         &self,
         lf_mp_id: &str,
         malo_id: &str,
-        cursor: Cursor,
+        cursor: PostingCursor,
     ) -> anyhow::Result<StatementPage<P>> {
         let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
             return Ok(StatementPage {
@@ -863,7 +905,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
             currency: Currency::EUR,
             layer: Layer::Settled,
         };
-        let mut cursor = Cursor::start();
+        let mut cursor = PostingCursor::start();
         loop {
             let page = self
                 .store
@@ -908,7 +950,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
             currency: Currency::EUR,
             layer: Layer::Settled,
         };
-        let mut cursor = Cursor::start();
+        let mut cursor = PostingCursor::start();
         loop {
             let page = self
                 .store
@@ -1026,6 +1068,23 @@ impl<S: LedgerStore<P>> Ledger<S> {
             .map_err(|e| anyhow::anyhow!("read seals: {e}"))
     }
 
+    /// The date the books are closed through — the latest end date among sealed
+    /// periods, or `None` when nothing is sealed yet.
+    ///
+    /// This, and not the list of sealed periods, is what decides whether a
+    /// booking is accepted: every date at or before it is Sealed whether or not
+    /// a period covers it. A gap below the watermark is not an opening to book
+    /// through — it is a range already committed to — so an operator asking
+    /// "can I still book into February" needs this number rather than the
+    /// calendar.
+    #[must_use]
+    pub fn sealed_through(&self) -> Option<Date> {
+        self.calendar
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .sealed_through()
+    }
+
     /// Verifies the seal chain: every seal is self-consistent and commits to the
     /// prior one, so removing or reordering a sealed period breaks the chain.
     /// Returns the number of seals verified.
@@ -1034,7 +1093,10 @@ impl<S: LedgerStore<P>> Ledger<S> {
     ///
     /// Returns an error when a seal is inconsistent or the chain is broken.
     pub async fn verify_seals(&self) -> anyhow::Result<usize> {
-        let mut chain = SealChain::new();
+        // The chain is bound to this ledger's identity: a seal names the books
+        // it attests to inside its own hash, so a seal lifted from another
+        // deployment cannot be pushed onto ours.
+        let mut chain = SealChain::new(self.store.ledger().clone());
         for seal in self.seals().await? {
             chain
                 .push(seal)
@@ -1075,6 +1137,104 @@ impl<S: LedgerStore<P>> Ledger<S> {
             .map_err(|e| anyhow::anyhow!("inclusion proof: {e}"))?;
         Ok((stored.content_hash, proof, head))
     }
+
+    /// Proves that a **sealed period closed with a stated balance** for one
+    /// customer's Kontokorrent.
+    ///
+    /// [`Self::prove_entry`] answers "is this booking in the books". A
+    /// Betriebsprüfung asks the other question — "what did this customer owe at
+    /// the balance-sheet date" — and a number read out of a table is not
+    /// evidence for it. This answers it with two proofs that chain:
+    ///
+    /// 1. the [`BalanceProof`] shows the balance sat in the trial balance the
+    ///    seal committed to, for some account *handle*;
+    /// 2. the [`AccountBindingProof`] shows that handle was bound to this
+    ///    customer's Kontokorrent at the same moment.
+    ///
+    /// Neither half is sufficient alone: without the binding the handles float,
+    /// and re-registering the same accounts in a different order would leave
+    /// every balance proof verifying while referring to someone else's account.
+    ///
+    /// The closing balance is rebuilt **by booking date**, the way the seal
+    /// built it — not over a prefix of the log. Those differ in the ordinary
+    /// case: sealing January in February means the log already holds February
+    /// entries when the seal is taken, so a prefix-folded trial balance would
+    /// reproduce a different root and nothing would be provable at all.
+    ///
+    /// Three answers are possible and only one carries a proof. "No activity in
+    /// the period" and "not on the books yet" are both honest replies about
+    /// intact books, not failures, so they come back as
+    /// [`SealedBalanceOutcome`] variants rather than errors — and they are
+    /// different sentences to whoever asked.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the period is not sealed, the customer has no
+    /// Kontokorrent at all, or the rebuilt closing balance does not reproduce
+    /// the seal — which means the books were restated beneath a Festschreibung,
+    /// and there is then nothing honest to prove.
+    pub async fn prove_period_balance(
+        &self,
+        period_id: &str,
+        lf_mp_id: &str,
+        malo_id: &str,
+    ) -> anyhow::Result<SealedBalanceOutcome<P>> {
+        let id = PeriodId::new(period_id).map_err(|e| anyhow::anyhow!("period id: {e}"))?;
+        let Some(account) = self.resolve(lf_mp_id, malo_id)? else {
+            // Never booked at all, so not an account the registry can speak
+            // about either — the same answer the seal would give.
+            return Ok(SealedBalanceOutcome::NotYetRegistered);
+        };
+        let key = BalanceKey {
+            account,
+            currency: Currency::EUR,
+            layer: Layer::Settled,
+        };
+
+        // The whole recipe — find the seal, rebuild the closing balance as the
+        // seal built it, check the rebuild *against* the seal, prove the row,
+        // prove the binding at the registry size the seal recorded — lives in
+        // doubleentry so that this service and the ledger cannot drift on it.
+        // The check in the middle is the one that matters and the one nothing
+        // forces when it is assembled by hand.
+        self.store
+            .prove_sealed_balance(&id, key)
+            .await
+            .map_err(|e| anyhow::anyhow!("prove sealed balance: {e}"))
+    }
+
+    /// Proves the log has only ever been **appended to** since it had `old_size`
+    /// entries — that nothing recorded before then was altered or removed.
+    ///
+    /// An auditor who archived a head at an earlier visit checks the returned
+    /// proof against the head they hold and the head returned here. Without it,
+    /// a fresh inclusion proof says only that the ledger is internally
+    /// consistent *now*, which a rebuilt ledger would also satisfy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `old_size` exceeds the current log.
+    pub async fn prove_append_only(
+        &self,
+        old_size: u64,
+    ) -> anyhow::Result<(ConsistencyProof, TreeHead, TreeHead)> {
+        let now = self
+            .store
+            .head()
+            .await
+            .map_err(|e| anyhow::anyhow!("head: {e}"))?;
+        let then = self
+            .store
+            .head_at(old_size)
+            .await
+            .map_err(|e| anyhow::anyhow!("head at {old_size}: {e}"))?;
+        let proof = self
+            .store
+            .prove_consistency(old_size)
+            .await
+            .map_err(|e| anyhow::anyhow!("consistency proof: {e}"))?;
+        Ok((proof, then, now))
+    }
 }
 
 impl Ledger<PostgresStore<P>> {
@@ -1098,19 +1258,7 @@ impl Ledger<PostgresStore<P>> {
         let ledger = Self::load(store).await?;
         // Reconstruct the period calendar from storage so that sealed periods keep
         // rejecting backdated postings across restarts (Festschreibung).
-        let periods = ledger
-            .store
-            .periods()
-            .await
-            .map_err(|e| anyhow::anyhow!("load periods: {e}"))?;
-        {
-            let mut calendar = ledger.calendar.lock().unwrap_or_else(|e| e.into_inner());
-            for period in periods {
-                calendar
-                    .define(period)
-                    .map_err(|e| anyhow::anyhow!("restore period: {e}"))?;
-            }
-        }
+        ledger.refresh_calendar().await?;
         Ok(ledger)
     }
 
@@ -1129,45 +1277,54 @@ impl Ledger<PostgresStore<P>> {
         end: Date,
     ) -> anyhow::Result<Seal> {
         let id = PeriodId::new(period_id).map_err(|e| anyhow::anyhow!("period id: {e}"))?;
+        let period = Period::new(id.clone(), start, end)
+            .map_err(|e| anyhow::anyhow!("period range: {e}"))?;
 
-        // Work on a copy of the calendar — the std mutex is never held across the
-        // async seal. Define the period if new, then move it to Closing.
-        let mut working = self
-            .calendar
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        if working.get(&id).is_none() {
-            working
-                .define(
-                    Period::new(id.clone(), start, end)
-                        .map_err(|e| anyhow::anyhow!("period range: {e}"))?,
-                )
-                .map_err(|e| anyhow::anyhow!("define period: {e}"))?;
-        }
-        working
-            .transition(&id, PeriodState::Closing)
-            .map_err(|e| anyhow::anyhow!("close period: {e}"))?;
+        // The store owns period state. Defining is idempotent for an unchanged
+        // range, so a re-run of a close that failed verification does not need
+        // to know whether the period had been defined before.
         self.store
-            .define_period(&id, start, end, PeriodState::Closing)
+            .define_period(&period)
             .await
-            .map_err(|e| anyhow::anyhow!("persist closing period: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("define period: {e}"))?;
+        self.store
+            .transition_period(&id, PeriodState::Closing)
+            .await
+            .map_err(|e| anyhow::anyhow!("close period: {e}"))?;
 
-        // Seal — transitions `working` to Sealed and writes the seals row.
+        // Seals in the same storage transaction that advances the period to
+        // Sealed, so a seal is never recorded for a period the books still
+        // consider open.
         let seal = self
             .store
-            .seal_period(&id, &mut working)
+            .seal_period(&id)
             .await
             .map_err(|e| anyhow::anyhow!("seal period: {e}"))?;
 
-        // Persist the sealed state and adopt the working calendar so future posts
-        // see the period as sealed.
-        self.store
-            .define_period(&id, start, end, PeriodState::Sealed)
-            .await
-            .map_err(|e| anyhow::anyhow!("persist sealed period: {e}"))?;
-        *self.calendar.lock().unwrap_or_else(|e| e.into_inner()) = working;
+        self.refresh_calendar().await?;
         Ok(seal)
+    }
+
+    /// Re-reads the period calendar from storage into the in-process mirror that
+    /// [`Self::post`] validates against.
+    ///
+    /// The mirror is what makes a backdated booking into a sealed period fail
+    /// without a database round-trip per entry; storage stays the authority for
+    /// what is sealed.
+    ///
+    /// # Errors
+    ///
+    /// Propagates storage errors and an inconsistent stored calendar.
+    async fn refresh_calendar(&self) -> anyhow::Result<()> {
+        let periods = self
+            .store
+            .periods()
+            .await
+            .map_err(|e| anyhow::anyhow!("read periods: {e}"))?;
+        let calendar = PeriodCalendar::from_periods(periods)
+            .map_err(|e| anyhow::anyhow!("rebuild period calendar: {e}"))?;
+        *self.calendar.lock().unwrap_or_else(|e| e.into_inner()) = calendar;
+        Ok(())
     }
 }
 

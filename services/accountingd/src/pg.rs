@@ -1164,10 +1164,10 @@ pub async fn list_ledger(
     limit: i64,
 ) -> anyhow::Result<Vec<LedgerLine>> {
     use doubleentry::Direction;
-    use doubleentry::storage::Cursor;
+    use doubleentry::storage::PostingCursor;
     let cap = usize::try_from(limit.max(1)).unwrap_or(usize::MAX);
     let mut window: std::collections::VecDeque<LedgerLine> = std::collections::VecDeque::new();
-    let mut cursor = Cursor::start();
+    let mut cursor = PostingCursor::start();
     loop {
         let page = ledger.statement(lf_mp_id, malo_id, cursor).await?;
         for line in &page.lines {
